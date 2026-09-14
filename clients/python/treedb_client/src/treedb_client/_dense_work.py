@@ -201,15 +201,28 @@ class DenseScorePlaneProof:
         if values["completed"]:
             if values["route"] == "quantized_rerank":
                 if (
-                    values["exact_small_filter_score_calls"] != 0
+                    values["rerank_candidate_cap"] > values["normalized_candidate_width"]
+                    or values["live_shortlist_candidates"] > values["normalized_candidate_width"]
+                    or values["normalized_candidate_width"] > values["raw_candidate_width"]
+                    or values["exact_small_filter_score_calls"] != 0
                     or values["actual_rerank_candidates"] != values["exact_base_rerank_score_calls"]
                     or values["actual_rerank_candidates"] != min(values["live_shortlist_candidates"], values["rerank_candidate_cap"])
                 ):
                     raise ValueError("completed dense score-plane proof quantized rerank counters are inconsistent")
-            elif values["route"] in ("typed_empty", "typed_exact") and (
-                values["actual_rerank_candidates"] != 0 or values["exact_base_rerank_score_calls"] != 0
+            elif values["route"] == "typed_empty" and (
+                values["quantized_score_calls"] != 0
+                or values["exact_suffix_score_calls"] != 0
+                or values["exact_small_filter_score_calls"] != 0
+                or values["actual_rerank_candidates"] != 0
+                or values["exact_base_rerank_score_calls"] != 0
             ):
-                raise ValueError("completed dense score-plane proof typed rerank counters are inconsistent")
+                raise ValueError("completed dense score-plane proof typed-empty counters are inconsistent")
+            elif values["route"] == "typed_exact" and (
+                values["quantized_score_calls"] != 0
+                or values["actual_rerank_candidates"] != 0
+                or values["exact_base_rerank_score_calls"] != 0
+            ):
+                raise ValueError("completed dense score-plane proof typed-exact counters are inconsistent")
         return cls(**values, snapshot=snapshot)
 
 

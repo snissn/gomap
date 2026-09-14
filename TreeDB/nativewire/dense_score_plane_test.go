@@ -23,7 +23,7 @@ func TestDenseScorePlaneCodecOwnedAndStrict(t *testing.T) {
 		Route:         "quantized_rerank", QuantizedIndexName: "embedding.scalar_u8.public",
 		QuantizedCodec: collections.QuantizedVectorCodecScalarU8, QuantizedVersion: 1,
 		RequestedTopK: 2, RequestedEFSearch: 8, RequestedRerankCandidates: 0,
-		RawCandidateWidth: 2, RerankCandidateCap: 2, RawRetainedCandidates: 2, LiveShortlistCandidates: 2,
+		NormalizedCandidateWidth: 2, RawCandidateWidth: 2, RerankCandidateCap: 2, RawRetainedCandidates: 2, LiveShortlistCandidates: 2,
 		QuantizedScoreCalls: 4, ActualRerankCandidates: 2, ExactBaseRerankScoreCalls: 2,
 		Snapshot: collections.ColumnGraphQuerySnapshot{Available: true, SchemaHash: 11, SchemaGeneration: 3,
 			BaseManifest:    collections.ColumnGraphManifestWork{Generation: 5, Format: "tcs1", Version: 1, Checksum: 7},
@@ -168,6 +168,36 @@ func TestDenseQuantizedScorePlaneResponseRejectsUnsupportedRoute(t *testing.T) {
 		mutate(&candidate)
 		if err := validateDenseQuantizedScorePlaneResponse(work, &candidate, request, 0); err == nil {
 			t.Fatalf("invalid rerank counts accepted (%s): %+v", name, candidate)
+		}
+	}
+	for name, mutate := range map[string]func(*collections.ColumnGraphScorePlaneWork){
+		"cap exceeds normalized width":       func(p *collections.ColumnGraphScorePlaneWork) { p.RerankCandidateCap = 2 },
+		"shortlist exceeds normalized width": func(p *collections.ColumnGraphScorePlaneWork) { p.LiveShortlistCandidates = 2 },
+		"normalized exceeds raw width":       func(p *collections.ColumnGraphScorePlaneWork) { p.NormalizedCandidateWidth = 2 },
+	} {
+		candidate := *proof
+		candidate.NormalizedCandidateWidth, candidate.RawCandidateWidth = 1, 1
+		candidate.RerankCandidateCap, candidate.RawRetainedCandidates, candidate.LiveShortlistCandidates = 1, 1, 1
+		candidate.ActualRerankCandidates, candidate.ExactBaseRerankScoreCalls = 1, 1
+		mutate(&candidate)
+		if err := validateDenseQuantizedScorePlaneResponse(work, &candidate, request, 0); err == nil {
+			t.Fatalf("invalid candidate widths accepted (%s): %+v", name, candidate)
+		}
+	}
+	strictEmptyProof := *proof
+	strictEmptyProof.Route = "typed_empty"
+	strictEmptyWork := work
+	strictEmptyWork.Graph.Route = "typed_empty"
+	for name, mutate := range map[string]func(*collections.ColumnGraphScorePlaneWork){
+		"quantized work":    func(p *collections.ColumnGraphScorePlaneWork) { p.QuantizedScoreCalls = 1 },
+		"exact suffix work": func(p *collections.ColumnGraphScorePlaneWork) { p.ExactSuffixScoreCalls = 1 },
+		"small-filter work": func(p *collections.ColumnGraphScorePlaneWork) { p.ExactSmallFilterScoreCalls = 1 },
+	} {
+		candidate := strictEmptyProof
+		candidate.QuantizedScoreCalls, candidate.ExactSuffixScoreCalls, candidate.ExactSmallFilterScoreCalls = 0, 0, 0
+		mutate(&candidate)
+		if err := validateDenseQuantizedScorePlaneResponse(strictEmptyWork, &candidate, request, 0); err == nil {
+			t.Fatalf("typed-empty proof accepted %s: %+v", name, candidate)
 		}
 	}
 }

@@ -750,6 +750,38 @@ class TreeDBClientTests(unittest.TestCase):
                         quantized_index_name="embedding.scalar_u8.public", quantized_rerank_candidates=2,
                     )
                 capped_client.close()
+            for mutation in (
+                lambda item: item["score_plane"].update(rerank_candidate_cap=2),
+                lambda item: item["score_plane"].update(live_shortlist_candidates=2),
+                lambda item: item["score_plane"].update(normalized_candidate_width=2),
+            ):
+                invalid = copy.deepcopy(payload)
+                mutation(invalid)
+                with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, invalid, 0)}) as bad_server:
+                    bad_client = TreeDBClient(bad_server.base_url, timeout=1)
+                    with self.assertRaisesRegex(TreeDBProtocolError, "score-plane proof"):
+                        bad_client.query_by_embedding(
+                            "docs", [1, 0], 1, query_mode="quantized_rerank", quantized_index_name="embedding.scalar_u8.public"
+                        )
+                    bad_client.close()
+            for mutation in (
+                lambda item: item["score_plane"].update(route="typed_empty", quantized_score_calls=0, exact_suffix_score_calls=1),
+                lambda item: item["score_plane"].update(route="typed_empty", quantized_score_calls=0, exact_small_filter_score_calls=1),
+                lambda item: item["score_plane"].update(route="typed_empty", quantized_score_calls=1),
+            ):
+                invalid = copy.deepcopy(payload)
+                invalid["dense_work"]["graph"]["route"] = "typed_empty"
+                invalid["dense_work"]["graph"]["base_ann_scored"] = invalid["dense_work"]["graph"]["exact_base_scored"] = invalid["dense_work"]["graph"]["delta_scored"] = 0
+                invalid["documents"] = []
+                invalid["dense_work"]["output"].update(requested=0, fetched=0, output_bytes=0, json_reconstruction_rows=0, typed_column_rows=0)
+                mutation(invalid)
+                with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, invalid, 0)}) as bad_server:
+                    bad_client = TreeDBClient(bad_server.base_url, timeout=1)
+                    with self.assertRaisesRegex(TreeDBProtocolError, "score-plane proof"):
+                        bad_client.query_by_embedding(
+                            "docs", [1, 0], 1, query_mode="quantized_rerank", quantized_index_name="embedding.scalar_u8.public"
+                        )
+                    bad_client.close()
 
 
     def test_benchmark_lifecycle_and_vector_index_search_methods(self) -> None:

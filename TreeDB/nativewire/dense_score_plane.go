@@ -130,11 +130,22 @@ func denseScorePlaneRerankCountersMatch(proof *collections.ColumnGraphScorePlane
 	}
 	switch proof.Route {
 	case "quantized_rerank":
-		return proof.ExactSmallFilterScoreCalls == 0 &&
+		return proof.RerankCandidateCap <= proof.NormalizedCandidateWidth &&
+			proof.LiveShortlistCandidates <= proof.NormalizedCandidateWidth &&
+			proof.NormalizedCandidateWidth <= proof.RawCandidateWidth &&
+			proof.ExactSmallFilterScoreCalls == 0 &&
 			proof.ActualRerankCandidates == proof.ExactBaseRerankScoreCalls &&
 			proof.ActualRerankCandidates == minUint64(proof.LiveShortlistCandidates, proof.RerankCandidateCap)
-	case "typed_empty", "typed_exact":
-		return proof.ActualRerankCandidates == 0 && proof.ExactBaseRerankScoreCalls == 0
+	case "typed_empty":
+		return proof.QuantizedScoreCalls == 0 &&
+			proof.ExactSuffixScoreCalls == 0 &&
+			proof.ExactSmallFilterScoreCalls == 0 &&
+			proof.ActualRerankCandidates == 0 &&
+			proof.ExactBaseRerankScoreCalls == 0
+	case "typed_exact":
+		return proof.QuantizedScoreCalls == 0 &&
+			proof.ActualRerankCandidates == 0 &&
+			proof.ExactBaseRerankScoreCalls == 0
 	default:
 		return true
 	}

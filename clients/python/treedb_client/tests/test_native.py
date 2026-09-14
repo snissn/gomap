@@ -148,6 +148,53 @@ class NativeCodecTests(unittest.TestCase):
                     quantized_rerank_candidates=2,
                     ef_search=0,
                 )
+            for field, value in ((12, 2), (14, 2), (10, 2)):
+                width_values = list(values)
+                width_values[10] = 1
+                width_values[11] = 1
+                width_values[12] = 1
+                width_values[13] = 1
+                width_values[14] = 1
+                width_values[15] = 1
+                width_values[18] = 1
+                width_values[field] = value
+                width_plane = b"".join(_uint(value) for value in width_values) + b"\x00" + _bytes_for_test("embedding.scalar_u8.public") + _bytes_for_test("scalar_u8")
+                width_plane += b"\x01\x01\x01\x03" * 2
+                with self.assertRaises(TreeDBProtocolError):
+                    _dense_response(
+                        _section(102, _vector([b"a"])) + _section(103, _vector([b'{"id":"a"}'])) +
+                        _section(130, meta) + _section(134, raw_work) + _section(136, width_plane),
+                        1,
+                        version=3,
+                        query_mode="quantized_rerank",
+                        quantized_index_name="embedding.scalar_u8.public",
+                        quantized_rerank_candidates=0,
+                        ef_search=0,
+                    )
+            for field in (16, 19, 20):
+                route_values = list(values)
+                route_values[4] = 1  # typed_empty
+                route_values[16] = route_values[19] = route_values[20] = 0
+                route_values[field] = 1
+                route_plane = b"".join(_uint(value) for value in route_values) + b"\x00" + _bytes_for_test("embedding.scalar_u8.public") + _bytes_for_test("scalar_u8")
+                route_plane += b"\x01\x01\x01\x03" * 2
+                empty_work_values = list(work_values)
+                empty_work_values[2] = 1
+                empty_work_values[3] = 0
+                empty_work_values[31:38] = [0, 0, 0, 0, 0, 0, 0]
+                empty_work = b"".join(_uint(value) for value in empty_work_values)
+                empty_meta = bytes([3]) + b"\x00" * 4
+                with self.assertRaises(TreeDBProtocolError):
+                    _dense_response(
+                        _section(102, _vector([])) + _section(103, _vector([])) +
+                        _section(130, empty_meta) + _section(134, empty_work) + _section(136, route_plane),
+                        0,
+                        version=3,
+                        query_mode="quantized_rerank",
+                        quantized_index_name="embedding.scalar_u8.public",
+                        quantized_rerank_candidates=0,
+                        ef_search=0,
+                    )
             incomplete_values = list(values)
             incomplete_values[1] = 1  # available proof, incomplete execution, unavailable snapshot.
             incomplete_plane = b"".join(_uint(value) for value in incomplete_values) + b"\x00" + _bytes_for_test("embedding.scalar_u8.public") + _bytes_for_test("scalar_u8")
