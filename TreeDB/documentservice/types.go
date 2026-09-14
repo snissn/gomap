@@ -61,7 +61,11 @@ type IndexCapabilities struct {
 	QuantizedVectorSearch   bool `json:"quantized_vector_search"`
 	QuantizedRerank         bool `json:"quantized_rerank"`
 	ScalarU8QuantizedRerank bool `json:"scalar_u8_quantized_rerank"`
-	RabitQ1BitExperimental  bool `json:"rabitq_1bit_experimental"`
+	// TypedDenseQuantizedRerank is the explicit public capability for the
+	// command-64/v3 typed dense route. The older quantized capabilities describe
+	// the benchmark no-document route and must not be used for negotiation.
+	TypedDenseQuantizedRerank bool `json:"typed_dense_quantized_rerank"`
+	RabitQ1BitExperimental    bool `json:"rabitq_1bit_experimental"`
 }
 
 // ScalarFieldType selects the collection scalar index value type backing one
@@ -220,54 +224,61 @@ type FilterDocumentsResponse struct {
 // when one exists) or exact (bounded filtered scan). Declared scalar filters use
 // native_runtime ANN; unsupported fields and shapes fail closed.
 type DenseVectorSearchRequest struct {
-	ExpectedGeneration uint64    `json:"expected_generation,omitempty"`
-	QueryEmbedding     []float32 `json:"query_embedding"`
-	TopK               int       `json:"top_k"`
-	Route              Route     `json:"route,omitempty"`
-	EfSearch           int       `json:"ef_search,omitempty"`
-	Filter             *Filter   `json:"filter,omitempty"`
-	ReturnEmbedding    bool      `json:"return_embedding,omitempty"`
+	ExpectedGeneration        uint64                           `json:"expected_generation,omitempty"`
+	QueryEmbedding            []float32                        `json:"query_embedding"`
+	TopK                      int                              `json:"top_k"`
+	Route                     Route                            `json:"route,omitempty"`
+	EfSearch                  int                              `json:"ef_search,omitempty"`
+	QueryMode                 collections.VectorIndexQueryMode `json:"query_mode,omitempty"`
+	QuantizedIndexName        string                           `json:"quantized_index_name,omitempty"`
+	QuantizedRerankCandidates int                              `json:"quantized_rerank_candidates,omitempty"`
+	Filter                    *Filter                          `json:"filter,omitempty"`
+	ReturnEmbedding           bool                             `json:"return_embedding,omitempty"`
 }
 
 type DenseVectorSearchResponse struct {
-	DenseWork                               *DenseSearchWork                   `json:"dense_work,omitempty"`
-	ColumnGraphPreparedSearch               uint64                             `json:"column_graph_prepared_search,omitempty"`
-	ColumnGraphDeltaScored                  uint64                             `json:"column_graph_delta_scored,omitempty"`
-	Index                                   IndexInfo                          `json:"index"`
-	Documents                               []Document                         `json:"documents"`
-	Metric                                  Metric                             `json:"metric"`
-	Route                                   Route                              `json:"route,omitempty"`
-	Exact                                   bool                               `json:"exact"`
-	Candidates                              int                                `json:"candidates"`
-	NativeBasePlusLiveDelta                 bool                               `json:"native_base_plus_live_delta"`
-	ScalarFilterMembershipSource            string                             `json:"scalar_filter_membership_source"`
-	ScalarFilterPlan                        collections.NativeScalarFilterPlan `json:"scalar_filter_plan"`
-	ScalarFilterProbeIDs                    uint64                             `json:"scalar_filter_probe_ids"`
-	ScalarFilterProbeTruncated              uint64                             `json:"scalar_filter_probe_truncated"`
-	ScalarFilterCandidates                  uint64                             `json:"scalar_filter_candidates"`
-	ScalarFilterCandidateIDs                uint64                             `json:"scalar_filter_candidate_ids"`
-	ScalarFilterRetainedCandidateIDs        uint64                             `json:"scalar_filter_retained_candidate_ids"`
-	ScalarFilterRefinedCandidateIDs         uint64                             `json:"scalar_filter_refined_candidate_ids"`
-	ScalarFilterVisited                     uint64                             `json:"scalar_filter_visited"`
-	ScalarFilterScored                      uint64                             `json:"scalar_filter_scored"`
-	ScalarFilterAdmitted                    uint64                             `json:"scalar_filter_admitted"`
-	ScalarFilterExactScoring                bool                               `json:"scalar_filter_exact_scoring"`
-	ScalarFilterUnderfill                   bool                               `json:"scalar_filter_underfill"`
-	ScalarFilterPlanCacheHits               uint64                             `json:"scalar_filter_plan_cache_hits"`
-	ScalarFilterPlanCacheMisses             uint64                             `json:"scalar_filter_plan_cache_misses"`
-	ScalarFilterPlanCacheInvalidations      uint64                             `json:"scalar_filter_plan_cache_invalidations"`
-	ScalarFilterPlanCacheGenerationBypasses uint64                             `json:"scalar_filter_plan_cache_generation_bypasses"`
-	ScalarFilterPlanCacheEvictions          uint64                             `json:"scalar_filter_plan_cache_evictions"`
-	ScalarFilterPlanCacheEntries            uint64                             `json:"scalar_filter_plan_cache_entries"`
-	ScalarFilterPlanCacheRetainedBytes      uint64                             `json:"scalar_filter_plan_cache_retained_bytes"`
-	ScalarFilterUnbounded                   uint64                             `json:"scalar_filter_unbounded"`
-	ExactFallbacks                          uint64                             `json:"exact_fallbacks"`
-	FullDocumentScanFallbacks               uint64                             `json:"full_document_scan_fallbacks"`
-	AllowedIDMaterializationRows            uint64                             `json:"allowed_id_materialization_rows"`
-	PrimaryDocumentScans                    uint64                             `json:"primary_document_scans"`
-	DocumentMaterializationRows             uint64                             `json:"document_materialization_rows"`
-	VisibilityMismatchCount                 uint64                             `json:"visibility_mismatch_count"`
-	VisibilityRetryCount                    uint64                             `json:"visibility_retry_count"`
+	DenseWork *DenseSearchWork `json:"dense_work,omitempty"`
+	// ScorePlane is the separately versioned proof for an explicitly selected
+	// typed quantized score plane. It is deliberately a sibling of dense_work;
+	// dense_work-v1 remains byte/schema compatible for existing callers.
+	ScorePlane                              *collections.ColumnGraphScorePlaneWork `json:"score_plane,omitempty"`
+	ColumnGraphPreparedSearch               uint64                                 `json:"column_graph_prepared_search,omitempty"`
+	ColumnGraphDeltaScored                  uint64                                 `json:"column_graph_delta_scored,omitempty"`
+	Index                                   IndexInfo                              `json:"index"`
+	Documents                               []Document                             `json:"documents"`
+	Metric                                  Metric                                 `json:"metric"`
+	Route                                   Route                                  `json:"route,omitempty"`
+	Exact                                   bool                                   `json:"exact"`
+	Candidates                              int                                    `json:"candidates"`
+	NativeBasePlusLiveDelta                 bool                                   `json:"native_base_plus_live_delta"`
+	ScalarFilterMembershipSource            string                                 `json:"scalar_filter_membership_source"`
+	ScalarFilterPlan                        collections.NativeScalarFilterPlan     `json:"scalar_filter_plan"`
+	ScalarFilterProbeIDs                    uint64                                 `json:"scalar_filter_probe_ids"`
+	ScalarFilterProbeTruncated              uint64                                 `json:"scalar_filter_probe_truncated"`
+	ScalarFilterCandidates                  uint64                                 `json:"scalar_filter_candidates"`
+	ScalarFilterCandidateIDs                uint64                                 `json:"scalar_filter_candidate_ids"`
+	ScalarFilterRetainedCandidateIDs        uint64                                 `json:"scalar_filter_retained_candidate_ids"`
+	ScalarFilterRefinedCandidateIDs         uint64                                 `json:"scalar_filter_refined_candidate_ids"`
+	ScalarFilterVisited                     uint64                                 `json:"scalar_filter_visited"`
+	ScalarFilterScored                      uint64                                 `json:"scalar_filter_scored"`
+	ScalarFilterAdmitted                    uint64                                 `json:"scalar_filter_admitted"`
+	ScalarFilterExactScoring                bool                                   `json:"scalar_filter_exact_scoring"`
+	ScalarFilterUnderfill                   bool                                   `json:"scalar_filter_underfill"`
+	ScalarFilterPlanCacheHits               uint64                                 `json:"scalar_filter_plan_cache_hits"`
+	ScalarFilterPlanCacheMisses             uint64                                 `json:"scalar_filter_plan_cache_misses"`
+	ScalarFilterPlanCacheInvalidations      uint64                                 `json:"scalar_filter_plan_cache_invalidations"`
+	ScalarFilterPlanCacheGenerationBypasses uint64                                 `json:"scalar_filter_plan_cache_generation_bypasses"`
+	ScalarFilterPlanCacheEvictions          uint64                                 `json:"scalar_filter_plan_cache_evictions"`
+	ScalarFilterPlanCacheEntries            uint64                                 `json:"scalar_filter_plan_cache_entries"`
+	ScalarFilterPlanCacheRetainedBytes      uint64                                 `json:"scalar_filter_plan_cache_retained_bytes"`
+	ScalarFilterUnbounded                   uint64                                 `json:"scalar_filter_unbounded"`
+	ExactFallbacks                          uint64                                 `json:"exact_fallbacks"`
+	FullDocumentScanFallbacks               uint64                                 `json:"full_document_scan_fallbacks"`
+	AllowedIDMaterializationRows            uint64                                 `json:"allowed_id_materialization_rows"`
+	PrimaryDocumentScans                    uint64                                 `json:"primary_document_scans"`
+	DocumentMaterializationRows             uint64                                 `json:"document_materialization_rows"`
+	VisibilityMismatchCount                 uint64                                 `json:"visibility_mismatch_count"`
+	VisibilityRetryCount                    uint64                                 `json:"visibility_retry_count"`
 }
 
 // Route selects the dense search execution path.
@@ -605,6 +616,26 @@ func scalarU8QuantizedRerankCapabilityDeclared(def collections.VectorIndexDefini
 			codec = collections.QuantizedVectorCodecScalarU8
 		}
 		if codec == collections.QuantizedVectorCodecScalarU8 {
+			return true
+		}
+	}
+	return false
+}
+
+// typedDenseQuantizedRerankCapabilityDeclared is intentionally narrower than
+// the benchmark scalar-u8 capability. Q3 exposes only the legacy scalar-u8/v1
+// asset on the typed cosine float32 column_graph route; calibrated and other
+// codec declarations remain internal/unsupported for public negotiation.
+func typedDenseQuantizedRerankCapabilityDeclared(def collections.VectorIndexDefinition) bool {
+	if def.Strategy != collections.VectorIndexStrategyColumnGraph || def.Metric != collections.VectorMetricCosine || def.Encoding != collections.VectorIndexEncodingFloat32 {
+		return false
+	}
+	for _, q := range def.QuantizedIndexes {
+		codec := q.Codec
+		if codec == "" {
+			codec = collections.QuantizedVectorCodecScalarU8
+		}
+		if codec == collections.QuantizedVectorCodecScalarU8 && q.Version == 1 && scalarU8CalibrationDefinitionIsLegacy(q) {
 			return true
 		}
 	}

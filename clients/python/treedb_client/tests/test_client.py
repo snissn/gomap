@@ -1015,6 +1015,19 @@ class TreeDBClientTests(unittest.TestCase):
             with self.subTest(ef_search=value), self.assertRaisesRegex(InvalidRequestError, "ef_search"):
                 client.query_by_embedding("docs", [0.1], 1, route="ann", ef_search=value)
 
+    def test_typed_quantized_integer_validation_before_http(self) -> None:
+        client = TreeDBClient("http://127.0.0.1:9", timeout=1)
+        for value in (True, 1.5, "32", 1 << 63):
+            with self.subTest(rerank_candidates=value), self.assertRaisesRegex(InvalidRequestError, "quantized_rerank_candidates"):
+                client.query_by_embedding(
+                    "docs",
+                    [0.1, 0.2],
+                    1,
+                    query_mode="quantized_rerank",
+                    quantized_index_name="embedding.scalar_u8.fast",
+                    quantized_rerank_candidates=value,
+                )
+
     def test_keyword_and_hybrid_filter_bodies_serialize(self) -> None:
         routes = {
             ("POST", "/v1/indexes/docs/search/keyword"): (

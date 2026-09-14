@@ -95,7 +95,9 @@ exception is intentionally narrow: the same selected
 `SearchVectorIndexWithBufferReadView` route also admits
 `VectorIndexQueryModeQuantizedRerank` for one explicitly named **legacy**
 `scalar_u8` v1 plane. It does not admit `quantized_only`, calibrated scalar-u8,
-RaBitQ, BRQ, Hybrid, or wire/native entry points. Other unsupported controls are
+RaBitQ, BRQ, Hybrid, or the benchmark wire entry points. The Q3 public typed
+dense route is the separate command-64/v3 contract and carries its own
+capability and sibling score-plane proof. Other unsupported controls are
 rejected rather than ignored. For full documents use the returned read view,
 fetch from that **same view**, and close it after fetching. Do not open a fresh
 view between search and fetch: publication can change the current collection in

@@ -9,12 +9,26 @@ import (
 	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
 )
 
-// Only the typed v2 handler supplies this transport metadata. The original
+// Only the typed v2/v3 handler supplies this transport metadata. The original
 // error chain/code is preserved; v1 never emits details from a nested service error.
 type denseWorkError struct {
 	error
-	work documentservice.DenseSearchWork
+	work       documentservice.DenseSearchWork
+	scorePlane *collections.ColumnGraphScorePlaneWork
+	version    uint64
 }
+
+// DenseVectorSearchDecodeError preserves already-decoded owned proof when a
+// later response/result consistency check fails. Result byte slices remain
+// borrowed exactly as the response contract specifies.
+type DenseVectorSearchDecodeError struct {
+	Err        error
+	DenseWork  *documentservice.DenseSearchWork
+	ScorePlane *collections.ColumnGraphScorePlaneWork
+}
+
+func (e *DenseVectorSearchDecodeError) Error() string { return e.Err.Error() }
+func (e *DenseVectorSearchDecodeError) Unwrap() error { return e.Err }
 
 func (e *denseWorkError) Unwrap() error { return e.error }
 
@@ -115,11 +129,23 @@ func decodeDenseWork(raw []byte) (w documentservice.DenseSearchWork, err error) 
 }
 
 func decodeDenseWorkSection(sections []iwire.Section, typed bool) (documentservice.DenseSearchWork, error) {
-	var unavailable documentservice.DenseSearchWork
+	version := uint64(0)
 	if typed {
+		version = iwire.DenseVectorSearchTypedVersion
+	}
+	return decodeDenseWorkSectionVersion(sections, version)
+}
+
+func decodeDenseWorkSectionVersion(sections []iwire.Section, version uint64) (documentservice.DenseSearchWork, error) {
+	var unavailable documentservice.DenseSearchWork
+	if version >= iwire.DenseVectorSearchTypedVersion {
 		for _, section := range sections {
 			switch section.ID {
 			case iwire.SectionDocumentIDs, iwire.SectionDocuments, iwire.SectionDenseSearchResponse, iwire.SectionDenseSearchWork:
+			case iwire.SectionDenseSearchScorePlaneProof:
+				if version != iwire.DenseVectorSearchTypedQuantizedVersion {
+					return unavailable, protocolError(iwire.ErrUnsupportedFeature, "unknown critical dense response section")
+				}
 			default:
 				if section.Flags&iwire.SectionFlagCritical != 0 {
 					return unavailable, protocolError(iwire.ErrUnsupportedFeature, "unknown critical dense response section")
@@ -131,7 +157,7 @@ func decodeDenseWorkSection(sections []iwire.Section, typed bool) (documentservi
 	if err != nil {
 		return unavailable, err
 	}
-	if found != typed {
+	if found != (version >= iwire.DenseVectorSearchTypedVersion) {
 		return unavailable, protocolError(iwire.ErrMalformedFrame, "dense work section does not match command version")
 	}
 	if !found {
@@ -148,6 +174,15 @@ func denseServiceWork(err error) *documentservice.DenseSearchWork {
 	var serviceErr *documentservice.Error
 	if errors.As(err, &serviceErr) {
 		return serviceErr.DenseWork
+	}
+	return nil
+}
+
+func denseServiceScorePlane(err error) *collections.ColumnGraphScorePlaneWork {
+	var serviceErr *documentservice.Error
+	if errors.As(err, &serviceErr) && serviceErr.ScorePlane != nil {
+		owned := *serviceErr.ScorePlane
+		return &owned
 	}
 	return nil
 }

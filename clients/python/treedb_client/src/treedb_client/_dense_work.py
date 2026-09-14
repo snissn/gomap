@@ -113,6 +113,97 @@ class DenseGraphWork:
 
 
 @dataclass(frozen=True)
+class DenseScorePlaneProof:
+    """Owned, sibling proof for the typed dense quantized score plane."""
+
+    version: int
+    available: bool
+    completed: bool
+    requested_mode: str
+    effective_mode: str
+    route: str
+    reason: str
+    quantized_index_name: str
+    quantized_codec: str
+    quantized_version: int
+    quantized_config_hash: int
+    requested_top_k: int
+    requested_ef_search: int
+    requested_rerank_candidates: int
+    normalized_candidate_width: int
+    raw_candidate_width: int
+    rerank_candidate_cap: int
+    raw_retained_candidates: int
+    live_shortlist_candidates: int
+    actual_rerank_candidates: int
+    quantized_score_calls: int
+    quantized_code_bytes_read: int
+    exact_base_rerank_score_calls: int
+    exact_suffix_score_calls: int
+    exact_small_filter_score_calls: int
+    exact_base_vector_bytes_read: int
+    exact_suffix_vector_bytes_read: int
+    snapshot: DenseSnapshotWork
+
+    @classmethod
+    def from_dict(cls, data):
+        if not isinstance(data, dict):
+            raise ValueError("dense score-plane proof must be an object")
+        required = {
+            "version", "available", "completed", "requested_mode", "effective_mode", "route",
+            "requested_top_k", "requested_ef_search", "requested_rerank_candidates",
+            "normalized_candidate_width", "raw_candidate_width", "rerank_candidate_cap",
+            "raw_retained_candidates", "live_shortlist_candidates", "actual_rerank_candidates",
+            "quantized_score_calls", "quantized_code_bytes_read", "exact_base_rerank_score_calls",
+            "exact_suffix_score_calls", "exact_small_filter_score_calls", "exact_base_vector_bytes_read",
+            "exact_suffix_vector_bytes_read", "snapshot",
+        }
+        optional = {"reason", "quantized_index_name", "quantized_codec", "quantized_version", "quantized_config_hash"}
+        if set(data) - required - optional or not required <= set(data):
+            raise ValueError("dense score-plane proof fields are missing or unknown")
+        values = {}
+        for name in required - {"snapshot", "requested_mode", "effective_mode", "route"}:
+            value = data[name]
+            if name in {"available", "completed"}:
+                if type(value) is not bool:
+                    raise ValueError(f"dense score-plane {name} must be bool")
+            elif type(value) is not int or not 0 <= value < 1 << 64:
+                raise ValueError(f"dense score-plane {name} must be uint64")
+            values[name] = value
+        for name in ("requested_mode", "effective_mode", "route"):
+            if not isinstance(data[name], str):
+                raise ValueError(f"dense score-plane {name} must be a string")
+            values[name] = data[name]
+        for name in ("reason", "quantized_index_name", "quantized_codec"):
+            value = data.get(name, "")
+            if not isinstance(value, str):
+                raise ValueError(f"dense score-plane {name} must be a string")
+            values[name] = value
+        for name in ("quantized_version", "quantized_config_hash"):
+            value = data.get(name, 0)
+            if type(value) is not int or not 0 <= value < 1 << 64:
+                raise ValueError(f"dense score-plane {name} must be uint64")
+            values[name] = value
+        if values["quantized_version"] > 65535:
+            raise ValueError("dense score-plane quantized_version must be uint16")
+        if values["version"] != 1 or values["requested_mode"] not in ("exact", "quantized_rerank", "quantized_only") \
+                or values["effective_mode"] not in ("exact", "quantized_rerank", "quantized_only") \
+                or values["route"] not in ("", "typed_empty", "typed_exact", "quantized_rerank", "typed_hnsw"):
+            raise ValueError("unsupported dense score-plane proof")
+        if values["requested_mode"] == "quantized_rerank" or values["effective_mode"] == "quantized_rerank":
+            if not values["quantized_index_name"] or values["quantized_codec"] != "scalar_u8" or values["quantized_version"] != 1:
+                raise ValueError("dense score-plane proof requires the legacy scalar_u8/v1 codec")
+        snapshot = DenseSnapshotWork.from_dict(data["snapshot"])
+        if values["completed"] and (not values["available"] or not snapshot.available or not values["route"]):
+            raise ValueError("completed dense score-plane proof lacks captured work")
+        return cls(**values, snapshot=snapshot)
+
+
+def optional_dense_score_plane(data):
+    return None if data is None else DenseScorePlaneProof.from_dict(data)
+
+
+@dataclass(frozen=True)
 class DenseOutputWork:
     attempted: bool
     completed: bool

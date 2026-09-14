@@ -1,0 +1,148 @@
+package nativewire
+
+import (
+	"bytes"
+	"context"
+	"encoding/binary"
+	"errors"
+	"testing"
+	"time"
+
+	"github.com/snissn/gomap/TreeDB/collections"
+	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/documentservice"
+	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
+)
+
+func TestDenseScorePlaneCodecOwnedAndStrict(t *testing.T) {
+	proof := collections.ColumnGraphScorePlaneWork{
+		Version: 1, Available: true, Completed: true,
+		RequestedMode: collections.VectorIndexQueryModeQuantizedRerank,
+		EffectiveMode: collections.VectorIndexQueryModeQuantizedRerank,
+		Route:         "quantized_rerank", QuantizedIndexName: "embedding.scalar_u8.public",
+		QuantizedCodec: collections.QuantizedVectorCodecScalarU8, QuantizedVersion: 1,
+		RequestedTopK: 2, RequestedEFSearch: 8, RequestedRerankCandidates: 0,
+		QuantizedScoreCalls: 4, ActualRerankCandidates: 2,
+		Snapshot: collections.ColumnGraphQuerySnapshot{Available: true, SchemaHash: 11, SchemaGeneration: 3,
+			BaseManifest:    collections.ColumnGraphManifestWork{Generation: 5, Format: "tcs1", Version: 1, Checksum: 7},
+			CurrentManifest: collections.ColumnGraphManifestWork{Generation: 6, Format: "tcs1", Version: 1, Checksum: 8}},
+	}
+	raw, err := appendDenseScorePlane(nil, proof, iwire.DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := decodeDenseScorePlane(raw, iwire.DefaultLimits())
+	if err != nil || decoded != proof {
+		t.Fatalf("round trip decoded=%+v err=%v", decoded, err)
+	}
+	owned := decoded.QuantizedIndexName
+	clear(raw)
+	if decoded.QuantizedIndexName != owned || decoded.Snapshot.BaseManifest.Format != "tcs1" {
+		t.Fatal("score-plane proof borrowed encoded bytes")
+	}
+	for size := range len(raw) {
+		// raw was cleared above; use a fresh encoding for truncation.
+		candidate, err := appendDenseScorePlane(nil, proof, iwire.DefaultLimits())
+		if err != nil {
+			t.Fatal(err)
+		}
+		candidate = candidate[:size]
+		if _, err := decodeDenseScorePlane(candidate, iwire.DefaultLimits()); err == nil {
+			t.Fatalf("truncated score-plane proof accepted at %d", size)
+		}
+	}
+	bad := append([]byte(nil), raw...)
+	if len(bad) == 0 {
+		bad, _ = appendDenseScorePlane(nil, proof, iwire.DefaultLimits())
+	}
+	bad = append(bad, 0)
+	if _, err := decodeDenseScorePlane(bad, iwire.DefaultLimits()); err == nil {
+		t.Fatal("trailing score-plane proof accepted")
+	}
+	if !bytes.Equal(raw, make([]byte, len(raw))) {
+		t.Fatal("clear should only affect the encoded buffer")
+	}
+}
+
+func TestDenseTypedQuantizedNativePublicPath(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), CommandWAL: true, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mgr := collections.NewCollectionManager(db)
+	svc := documentservice.New(mgr)
+	server := NewServer(ServerOptions{Collections: mgr, Backend: db, DocumentService: svc})
+	t.Cleanup(func() { _ = server.Close(); _ = svc.Close(); _ = db.Close() })
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	info, err := svc.CreateIndex(ctx, documentservice.CreateIndexRequest{Name: "typed-q", Dimension: 2, TypedInput: true,
+		VectorIndexOptions: &documentservice.BenchmarkVectorIndexOptions{Strategy: collections.VectorIndexStrategyColumnGraph,
+			QuantizedIndexes: []documentservice.QuantizedIndexInfo{{Name: "embedding.scalar_u8.public", Codec: collections.QuantizedVectorCodecScalarU8}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.UpsertDocuments(ctx, info.Name, documentservice.UpsertDocumentsRequest{DeferVectorIndexRebuild: true, Documents: []documentservice.Document{{ID: "a", Content: "a", Embedding: []float32{1, 0}}, {ID: "b", Content: "b", Embedding: []float32{0, 1}}}}); err != nil {
+		t.Fatal(err)
+	}
+	options := collections.ColumnGraphServingOptions{
+		Publication:     collections.ColumnGraphPublicationLimits{Rows: 512, Tombstones: 512, ValueSlots: 4096, OwnedBytes: 16 << 20, EncodedOutputBytes: 16 << 20},
+		Owners:          collections.ColumnGraphReadOwnerLimits{Owners: 8, States: 8, StateBytes: 128 << 20, AssetBytes: 128 << 20, Cold: collections.ColumnGraphColdLimits{ManifestRecords: 4096, ManifestBytes: 8 << 20, AssetBytes: 64 << 20, DecodedTermBytes: 64 << 20}},
+		CandidateOutput: collections.ColumnGraphCandidateOutputLimits{Bytes: 1 << 30, AppenderAttempts: 4096},
+		Maintenance:     collections.ColumnGraphMaintenanceLimits{NativeEntries: 4096, ColumnSegments: 4096, ManifestRecords: 4096, LifecycleEntries: 4096, NativeBytes: 128 << 20, ColumnBytes: 64 << 20, ManifestBytes: 8 << 20, RetainedBytes: 256 << 20, PagerPages: 32768},
+		Filter:          collections.ColumnGraphFilterLimits{SourceIDs: 4096, SourceBytes: 4 << 20, RetainedBytes: 4 << 20, MappingWork: 100000, InspectedEntries: 4096}, FoldRows: 4096, SearchCandidates: 4096,
+	}
+	if _, err := svc.OptimizeIndex(ctx, info.Name, documentservice.OptimizeIndexRequest{ColumnGraphServing: &options}); err != nil {
+		t.Fatal(err)
+	}
+	client, cleanup, err := NewInProcessClient(ctx, server)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+	response, err := client.DenseVectorSearch(ctx, DenseVectorSearchRequest{TypedColumnGraph: true, Index: info.Name, Query: []float32{1, 0}, TopK: 1, QueryMode: collections.VectorIndexQueryModeQuantizedRerank, QuantizedIndexName: "embedding.scalar_u8.public", ExpectedGeneration: info.Generation})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !response.TypedColumnGraph || response.ScorePlane == nil || !response.ScorePlane.Completed || response.ScorePlane.QuantizedIndexName != "embedding.scalar_u8.public" || len(response.Results) != 1 {
+		t.Fatalf("native v3 response=%+v", response)
+	}
+	owned := response.ScorePlane
+	response2, err := client.DenseVectorSearch(ctx, DenseVectorSearchRequest{TypedColumnGraph: true, Index: info.Name, Query: []float32{0, 1}, TopK: 1, QueryMode: collections.VectorIndexQueryModeQuantizedRerank, QuantizedIndexName: "embedding.scalar_u8.public", ExpectedGeneration: info.Generation})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if owned == response2.ScorePlane || owned.QuantizedIndexName != "embedding.scalar_u8.public" {
+		t.Fatal("score-plane proof was reused or borrowed")
+	}
+	request := DenseVectorSearchRequest{TypedColumnGraph: true, Index: info.Name, Query: []float32{1, 0}, TopK: 1, QueryMode: collections.VectorIndexQueryModeQuantizedRerank, QuantizedIndexName: "embedding.scalar_u8.public", ExpectedGeneration: info.Generation}
+	payload, err := appendDenseVectorSearchRequest(nil, request, server.limits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sections := []iwire.Section{{ID: iwire.SectionDenseSearchRequest, Bytes: payload}, {ID: iwire.SectionDeadline, Bytes: binary.AppendUvarint(nil, uint64(time.Now().Add(time.Minute).UnixNano()))}}
+	qoptions, err := appendDenseQuantizedOptions(nil, request, server.limits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sections = append(sections, iwire.Section{ID: iwire.SectionDenseSearchQuantizedOptions, Bytes: qoptions})
+	serverLimits := server.limits
+	server.limits.MaxByteVectorBytes = 1
+	partial, err := server.handleVersionedDenseVectorSearch(ctx, &connState{}, iwire.DenseVectorSearchTypedQuantizedVersion, sections, nil)
+	server.limits = serverLimits
+	var observed *denseWorkError
+	if err == nil || len(partial) != 0 || !errors.As(err, &observed) || observed.scorePlane == nil || !observed.scorePlane.Completed {
+		t.Fatalf("quantized encoding error lost proof: partial=%d err=%v", len(partial), err)
+	}
+	var frame bytes.Buffer
+	if err := server.writeError(&frame, iwire.Header{}, err); err != nil {
+		t.Fatal(err)
+	}
+	_, body, err := readFrame(&frame, iwire.DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	remote, ok := decodeWireErrorVersion(body, iwire.DefaultLimits(), iwire.DenseVectorSearchTypedQuantizedVersion).(*WireError)
+	if !ok || remote.ScorePlane == nil || remote.ScorePlane.QuantizedIndexName != "embedding.scalar_u8.public" {
+		t.Fatalf("wire error lost score-plane proof: %+v", remote)
+	}
+}

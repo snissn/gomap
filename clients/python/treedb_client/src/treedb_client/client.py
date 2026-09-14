@@ -381,6 +381,9 @@ class TreeDBClient:
         *,
         route: Optional[str] = None,
         ef_search: Optional[int] = None,
+        query_mode: Optional[str] = None,
+        quantized_index_name: Optional[str] = None,
+        quantized_rerank_candidates: Optional[int] = None,
         return_embedding: bool = False,
         expected_generation: Optional[int] = None,
         index_info: Optional[IndexInfo] = None,
@@ -401,6 +404,32 @@ class TreeDBClient:
 
         if route is not None and route not in ("ann", "exact"):
             raise InvalidRequestError("invalid_request", f"unsupported dense search route {route!r}; use 'ann' or 'exact'")
+        top_k_value = _validate_binary_int_query_param(top_k, "top_k", minimum=1)
+        mode = "exact" if query_mode is None else query_mode
+        if not isinstance(mode, str) or mode.strip() == "":
+            raise InvalidRequestError("invalid_request", "query_mode must be a non-empty string when provided")
+        mode = mode.strip().lower()
+        if mode not in ("exact", "quantized_rerank"):
+            raise UnsupportedError("unsupported", f"unsupported dense query_mode {mode!r}")
+        if quantized_index_name is not None and (not isinstance(quantized_index_name, str) or not quantized_index_name):
+            raise InvalidRequestError("invalid_request", "quantized_index_name must be a non-empty string when provided")
+        rerank_value = 0 if quantized_rerank_candidates is None else _validate_binary_int_query_param(
+            quantized_rerank_candidates, "quantized_rerank_candidates", minimum=0
+        )
+        if mode == "exact" and (quantized_index_name is not None or quantized_rerank_candidates is not None):
+            raise InvalidRequestError("invalid_request", "exact dense search does not accept quantized options")
+        if mode == "quantized_rerank":
+            if not quantized_index_name:
+                raise InvalidRequestError("invalid_request", "quantized_rerank requires quantized_index_name")
+            if rerank_value and rerank_value < top_k_value:
+                raise InvalidRequestError("invalid_request", "quantized_rerank_candidates must be zero or at least top_k")
+            if index_info is not None:
+                if index_info.name != index or not index_info.capabilities.typed_dense_quantized_rerank:
+                    raise TreeDBConfigError("typed dense quantized rerank capability is unavailable")
+                selected = next((item for item in index_info.quantized_indexes if item.name == quantized_index_name), None)
+                if selected is None or selected.codec != "scalar_u8" or selected.version != 1 \
+                        or (selected.scalar_u8_calibration is not None and getattr(selected.scalar_u8_calibration, "mode", "") not in ("", "legacy")):
+                    raise TreeDBConfigError("typed dense quantized rerank requires the selected legacy scalar_u8/v1 index")
         ef_search_value = None
         if ef_search is not None:
             ef_search_value = _validate_binary_int_query_param(ef_search, "ef_search", minimum=0)
@@ -410,12 +439,37 @@ class TreeDBClient:
                     or index_info.vector_strategy != "column_graph" or index_info.metric != "cosine"
                     or index_info.generation <= 0 or len(query_embedding) != index_info.dimension):
                 raise TreeDBConfigError("native dense search requires matching selected typed IndexInfo")
+            if mode == "quantized_rerank":
+                if not index_info.capabilities.typed_dense_quantized_rerank:
+                    raise TreeDBConfigError("native dense quantized rerank capability is unavailable")
+                selected = next((item for item in index_info.quantized_indexes if item.name == quantized_index_name), None)
+                if selected is None or selected.codec != "scalar_u8" or selected.version != 1 \
+                        or (selected.scalar_u8_calibration is not None and getattr(selected.scalar_u8_calibration, "mode", "") not in ("", "legacy")):
+                    raise TreeDBConfigError("native dense quantized rerank requires the selected legacy scalar_u8/v1 index")
             if route not in (None, "ann") or (expected_generation is not None and expected_generation != index_info.generation):
                 raise TreeDBConfigError("native dense route or generation conflicts with IndexInfo")
-            payload = _dense_request(index, query_embedding, top_k, ef_search_value or 0, index_info.generation, return_embedding, normalize_filter(filter) if filter is not None else None)
+            version = 3 if mode == "quantized_rerank" else 2
+            payload = _dense_request(index, query_embedding, top_k_value, ef_search_value or 0, index_info.generation, return_embedding, normalize_filter(filter) if filter is not None else None)
             deadline = _uint(time.time_ns() + int(self.timeout * 1_000_000_000))
-            raw = self._native.command(64, 2, _section(129, payload) + _section(4, deadline), "dense_vector_search_versions")
-            ids, payloads, scores, candidates, work = _dense_response(raw, top_k)
+            sections = _section(129, payload) + _section(4, deadline)
+            if version == 3:
+                from ._native import _dense_quantized_options
+                sections += _section(135, _dense_quantized_options(mode, quantized_index_name, rerank_value))
+            raw = self._native.command(64, version, sections, "dense_vector_search_versions")
+            decoded = _dense_response(
+                raw,
+                top_k_value,
+                version=version,
+                query_mode=mode,
+                quantized_index_name=quantized_index_name,
+                quantized_rerank_candidates=rerank_value,
+                ef_search=ef_search_value or 0,
+            )
+            if version == 3:
+                ids, payloads, scores, candidates, work, score_plane = decoded
+            else:
+                ids, payloads, scores, candidates, work = decoded
+                score_plane = None
             documents = []
             for item_id, document_raw, score in zip(ids, payloads, scores):
                 try:
@@ -424,20 +478,27 @@ class TreeDBClient:
                         raise ValueError("document ID mismatch")
                     document.score = score
                 except (ValueError, KeyError, TypeError, OverflowError) as exc:
-                    raise TreeDBProtocolError("invalid native dense document", dense_work=work) from exc
+                    raise TreeDBProtocolError("invalid native dense document", dense_work=work, score_plane=score_plane) from exc
                 documents.append(document)
             return DenseVectorSearchResponse(index=index_info, documents=documents, metric=index_info.metric,
                                              exact=False, candidates=candidates, route="ann",
-                                             native_base_plus_live_delta=False, native_command_version=2, dense_work=work)
+                                             native_base_plus_live_delta=False, native_command_version=version, dense_work=work,
+                                             score_plane=score_plane)
         request: dict[str, Any] = {
             "query_embedding": [float(value) for value in query_embedding],
-            "top_k": top_k,
+            "top_k": top_k_value,
             "return_embedding": return_embedding,
         }
         if route is not None:
             request["route"] = route
         if ef_search_value is not None:
             request["ef_search"] = ef_search_value
+        if query_mode is not None:
+            request["query_mode"] = mode
+        if mode == "quantized_rerank":
+            request["quantized_index_name"] = quantized_index_name
+            if rerank_value:
+                request["quantized_rerank_candidates"] = rerank_value
         _add_filter(request, filter)
         _add_expected_generation(request, expected_generation)
         payload = self._request("POST", self._index_path(index, "search", "vector"), request, dense_proof=True)
@@ -703,7 +764,7 @@ class TreeDBClient:
             if isinstance(error, Mapping):
                 code = str(error.get("code", "internal"))
                 message = str(error.get("message", ""))
-                raise service_error_from_code(code, message, status_code=status_code, response_body=_body_to_text(body), dense_work=_error_dense_work(error) if dense_proof else None)
+                raise service_error_from_code(code, message, status_code=status_code, response_body=_body_to_text(body), dense_work=_error_dense_work(error) if dense_proof else None, score_plane=_error_score_plane(error) if dense_proof else None)
             raise TreeDBProtocolError("error envelope must contain an object", status_code=status_code, response_body=_body_to_text(body))
         return decoded
 
@@ -724,7 +785,7 @@ class TreeDBClient:
             )
         code = str(error.get("code", "internal"))
         message = str(error.get("message", ""))
-        return service_error_from_code(code, message, status_code=status_code, response_body=_body_to_text(body), dense_work=_error_dense_work(error) if dense_proof else None)
+        return service_error_from_code(code, message, status_code=status_code, response_body=_body_to_text(body), dense_work=_error_dense_work(error) if dense_proof else None, score_plane=_error_score_plane(error) if dense_proof else None)
 
 
 def _normalize_base_url(base_url: str) -> str:
@@ -844,6 +905,8 @@ def _validate_binary_int_query_param(value: Any, label: str, *, minimum: int) ->
         if minimum == 1:
             raise InvalidRequestError("invalid_request", f"{label} must be a positive integer")
         raise InvalidRequestError("invalid_request", f"{label} must be a non-negative integer")
+    if value >= 1 << 63:
+        raise InvalidRequestError("invalid_request", f"{label} is outside the native integer range")
     return value
 
 
@@ -972,7 +1035,7 @@ def _decode_json_body(body: bytes, *, status_code: int, dense_proof: bool = Fals
             nonlocal duplicate, proof_envelope
             # The root object is decoded last. Inspect pairs before duplicate
             # keys collapse, including overwritten proof-bearing error keys.
-            proof_envelope = any(key == "dense_work" or (key == "error" and isinstance(value, dict) and "dense_work" in value)
+            proof_envelope = any(key in ("dense_work", "score_plane") or (key == "error" and isinstance(value, dict) and ("dense_work" in value or "score_plane" in value))
                                  for key, value in pairs)
             out = {}
             for key, value in pairs:
@@ -998,6 +1061,14 @@ def _error_dense_work(error):
         return optional_dense_work(error.get("dense_work"))
     except (ValueError, TypeError, KeyError) as exc:
         raise TreeDBProtocolError("invalid dense error work proof") from exc
+
+
+def _error_score_plane(error):
+    from ._dense_work import optional_dense_score_plane
+    try:
+        return optional_dense_score_plane(error.get("score_plane"))
+    except (ValueError, TypeError, KeyError) as exc:
+        raise TreeDBProtocolError("invalid dense score-plane error proof") from exc
 
 
 def _body_to_text(body: bytes) -> str:

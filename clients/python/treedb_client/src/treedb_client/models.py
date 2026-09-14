@@ -7,7 +7,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional, TypeVar
 
-from ._dense_work import DenseSearchWork, optional_dense_work
+from ._dense_work import DenseScorePlaneProof, DenseSearchWork, optional_dense_score_plane, optional_dense_work
 from .errors import TreeDBProtocolError
 
 
@@ -188,6 +188,7 @@ class IndexCapabilities:
     quantized_vector_search: bool = False
     quantized_rerank: bool = False
     scalar_u8_quantized_rerank: bool = False
+    typed_dense_quantized_rerank: bool = False
     rabitq_1bit_experimental: bool = False
     extra: Dict[str, Any] = field(default_factory=dict)
 
@@ -210,6 +211,7 @@ class IndexCapabilities:
             "quantized_vector_search",
             "quantized_rerank",
             "scalar_u8_quantized_rerank",
+            "typed_dense_quantized_rerank",
             "rabitq_1bit_experimental",
         ]
         return cls(
@@ -244,6 +246,9 @@ class IndexCapabilities:
             scalar_u8_quantized_rerank=_as_bool(
                 data.get("scalar_u8_quantized_rerank", False), "index.capabilities.scalar_u8_quantized_rerank"
             ),
+            typed_dense_quantized_rerank=_as_bool(
+                data.get("typed_dense_quantized_rerank", False), "index.capabilities.typed_dense_quantized_rerank"
+            ),
             rabitq_1bit_experimental=_as_bool(
                 data.get("rabitq_1bit_experimental", False), "index.capabilities.rabitq_1bit_experimental"
             ),
@@ -268,6 +273,7 @@ class IndexCapabilities:
                 "quantized_vector_search": self.quantized_vector_search,
                 "quantized_rerank": self.quantized_rerank,
                 "scalar_u8_quantized_rerank": self.scalar_u8_quantized_rerank,
+                "typed_dense_quantized_rerank": self.typed_dense_quantized_rerank,
                 "rabitq_1bit_experimental": self.rabitq_1bit_experimental,
             },
             self.extra,
@@ -636,6 +642,7 @@ class DenseVectorSearchResponse:
     exact: bool
     candidates: int
     dense_work: Optional[DenseSearchWork] = None
+    score_plane: Optional[DenseScorePlaneProof] = None
     # Negotiated dispatch version, not measured execution-work evidence.
     native_command_version: int = 0
     # v1alpha2: execution route echo ("ann" | "exact"). Empty/absent means the
@@ -668,9 +675,11 @@ class DenseVectorSearchResponse:
     def from_dict(cls, data: Mapping[str, Any]) -> "DenseVectorSearchResponse":
         data = _as_mapping(data, "vector search response")
         work = optional_dense_work(data.get("dense_work"))
+        score_plane = optional_dense_score_plane(data.get("score_plane"))
         try:
             out = cls(
                 dense_work=work,
+                score_plane=score_plane,
                 index=IndexInfo.from_dict(data["index"]),
                 documents=[Document.from_dict(item) for item in data.get("documents", [])],
                 metric=_as_str(data["metric"], "metric"),
@@ -706,7 +715,7 @@ class DenseVectorSearchResponse:
                 raise ValueError("dense work does not match selected response")
             return out
         except (ValueError, TypeError, KeyError, OverflowError) as exc:
-            raise TreeDBProtocolError("invalid dense response document or metadata", dense_work=work) from exc
+            raise TreeDBProtocolError("invalid dense response document or metadata", dense_work=work, score_plane=score_plane) from exc
 
 
 @dataclass(frozen=True)

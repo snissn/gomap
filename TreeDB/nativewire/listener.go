@@ -161,6 +161,14 @@ func (e *localEndpoint) Write(p []byte) (int, error) {
 }
 
 func (e *localEndpoint) roundTrip(ctx context.Context, streamID uint64, typ iwire.FrameType, requestID uint64, body []byte, want iwire.FrameType, limits iwire.Limits, responseDst []byte, copyResponse bool, denseWorkAllowed bool) (iwire.Header, []byte, error) {
+	version := uint64(0)
+	if denseWorkAllowed {
+		version = iwire.DenseVectorSearchTypedVersion
+	}
+	return e.roundTripVersion(ctx, streamID, typ, requestID, body, want, limits, responseDst, copyResponse, version)
+}
+
+func (e *localEndpoint) roundTripVersion(ctx context.Context, streamID uint64, typ iwire.FrameType, requestID uint64, body []byte, want iwire.FrameType, limits iwire.Limits, responseDst []byte, copyResponse bool, denseVersion uint64) (iwire.Header, []byte, error) {
 	if e == nil {
 		return iwire.Header{}, nil, io.ErrClosedPipe
 	}
@@ -222,7 +230,7 @@ func (e *localEndpoint) roundTrip(ctx context.Context, streamID uint64, typ iwir
 	}
 	e.frame = retainSmallPayloadScratch(e.frame)
 	if header.Type == iwire.FrameError {
-		return header, response, decodeWireError(response, limits, denseWorkAllowed)
+		return header, response, decodeWireErrorVersion(response, limits, denseVersion)
 	}
 	if header.Type != want {
 		return header, response, protocolError(iwire.ErrMalformedFrame, "response frame type %d want %d", header.Type, want)

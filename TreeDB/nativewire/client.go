@@ -19,21 +19,22 @@ import (
 // response buffer. They remain valid until the next round trip on the same
 // client; callers that need to keep them longer must copy them.
 type Client struct {
-	conn                  net.Conn
-	local                 *localEndpoint
-	limits                iwire.Limits
-	nextReq               atomic.Uint64
-	catalogVersionPlusOne atomic.Uint64
-	mu                    sync.Mutex
-	requestBody           []byte
-	writeBody             []byte
-	readBody              []byte
-	vectorSections        []iwire.Section
-	denseRequest          []byte
-	denseIDs              [][]byte
-	denseDocuments        [][]byte
-	denseResults          []DenseVectorSearchResult
-	denseTypedNegotiated  bool
+	conn                          net.Conn
+	local                         *localEndpoint
+	limits                        iwire.Limits
+	nextReq                       atomic.Uint64
+	catalogVersionPlusOne         atomic.Uint64
+	mu                            sync.Mutex
+	requestBody                   []byte
+	writeBody                     []byte
+	readBody                      []byte
+	vectorSections                []iwire.Section
+	denseRequest                  []byte
+	denseIDs                      [][]byte
+	denseDocuments                [][]byte
+	denseResults                  []DenseVectorSearchResult
+	denseTypedNegotiated          bool
+	denseTypedQuantizedNegotiated bool
 }
 
 // NewClient returns a native-wire client that owns conn until Close.
@@ -75,6 +76,7 @@ func (c *Client) Hello(ctx context.Context) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.denseTypedNegotiated = false
+	c.denseTypedQuantizedNegotiated = false
 	_, response, err := c.roundTripLocked(ctx, iwire.FrameHello, nil, iwire.FrameHelloOK)
 	if err != nil {
 		return err
@@ -94,6 +96,9 @@ func (c *Client) Hello(ctx context.Context) error {
 	for _, version := range strings.Split(caps["dense_vector_search_versions"], ",") {
 		if version == "2" {
 			c.denseTypedNegotiated = true
+		}
+		if version == "3" {
+			c.denseTypedQuantizedNegotiated = true
 		}
 	}
 	return nil
@@ -167,13 +172,21 @@ func (c *Client) roundTripLocked(ctx context.Context, typ iwire.FrameType, body 
 }
 
 func (c *Client) roundTripLockedStream(ctx context.Context, streamID uint64, typ iwire.FrameType, body []byte, want iwire.FrameType, denseWorkAllowed bool) (iwire.Header, []byte, error) {
+	version := uint64(0)
+	if denseWorkAllowed {
+		version = iwire.DenseVectorSearchTypedVersion
+	}
+	return c.roundTripLockedStreamVersion(ctx, streamID, typ, body, want, version)
+}
+
+func (c *Client) roundTripLockedStreamVersion(ctx context.Context, streamID uint64, typ iwire.FrameType, body []byte, want iwire.FrameType, denseVersion uint64) (iwire.Header, []byte, error) {
 	if c == nil {
 		return iwire.Header{}, nil, io.ErrClosedPipe
 	}
 	c.clearBorrowedResponseViews()
 	c.readBody = retainSmallPayloadScratch(c.readBody)
 	if c.local != nil {
-		header, response, err := c.local.roundTrip(ctx, streamID, typ, c.nextReq.Add(1), body, want, c.limits, c.readBody, true, denseWorkAllowed)
+		header, response, err := c.local.roundTripVersion(ctx, streamID, typ, c.nextReq.Add(1), body, want, c.limits, c.readBody, true, denseVersion)
 		c.readBody = response[:0]
 		return header, response, err
 	}
@@ -215,7 +228,7 @@ func (c *Client) roundTripLockedStream(ctx context.Context, streamID uint64, typ
 		return header, response, c.closeOnProtocolError(protocolError(iwire.ErrMalformedFrame, "response request_id %d want %d", header.RequestID, requestID))
 	}
 	if header.Type == iwire.FrameError {
-		return header, response, c.closeOnProtocolError(decodeWireError(response, c.limits, denseWorkAllowed))
+		return header, response, c.closeOnProtocolError(decodeWireErrorVersion(response, c.limits, denseVersion))
 	}
 	if header.Type != want {
 		return header, response, c.closeOnProtocolError(protocolError(iwire.ErrMalformedFrame, "response frame type %d want %d", header.Type, want))
@@ -347,15 +360,27 @@ func (c *Client) closeOnProtocolError(err error) error {
 }
 
 func decodeWireError(body []byte, limits iwire.Limits, denseWorkAllowed bool) error {
+	version := uint64(0)
+	if denseWorkAllowed {
+		version = iwire.DenseVectorSearchTypedVersion
+	}
+	return decodeWireErrorVersion(body, limits, version)
+}
+
+func decodeWireErrorVersion(body []byte, limits iwire.Limits, denseVersion uint64) error {
 	sections, err := iwire.DecodeSections(body, limits)
 	if err != nil {
 		return err
 	}
 	for _, section := range sections {
+		denseWorkAllowed := denseVersion >= iwire.DenseVectorSearchTypedVersion
 		if section.ID == iwire.SectionDenseSearchWork && !denseWorkAllowed {
 			return protocolError(iwire.ErrMalformedFrame, "dense error work is unavailable for this call")
 		}
-		if denseWorkAllowed && section.ID != iwire.SectionError && section.ID != iwire.SectionDenseSearchWork && section.Flags&iwire.SectionFlagCritical != 0 {
+		if section.ID == iwire.SectionDenseSearchScorePlaneProof && denseVersion != iwire.DenseVectorSearchTypedQuantizedVersion {
+			return protocolError(iwire.ErrMalformedFrame, "dense score-plane proof is unavailable for this call")
+		}
+		if denseWorkAllowed && section.ID != iwire.SectionError && section.ID != iwire.SectionDenseSearchWork && section.ID != iwire.SectionDenseSearchScorePlaneProof && section.Flags&iwire.SectionFlagCritical != 0 {
 			return protocolError(iwire.ErrUnsupportedFeature, "unknown critical dense error section")
 		}
 	}
@@ -379,6 +404,18 @@ func decodeWireError(body []byte, limits iwire.Limits, denseWorkAllowed bool) er
 			return err
 		}
 		out.DenseWork = &work
+	}
+	if raw, found, err := singletonSection(sections, iwire.SectionDenseSearchScorePlaneProof); err != nil {
+		return err
+	} else if found {
+		if denseVersion != iwire.DenseVectorSearchTypedQuantizedVersion {
+			return protocolError(iwire.ErrMalformedFrame, "dense score-plane proof does not match command version")
+		}
+		proof, err := decodeDenseScorePlane(raw, limits)
+		if err != nil {
+			return err
+		}
+		out.ScorePlane = &proof
 	}
 	return out
 }

@@ -54,6 +54,76 @@ func TestServiceTypedInputOwnership(t *testing.T) {
 	}
 }
 
+func TestServiceTypedDenseQuantizedRerankPublicProof(t *testing.T) {
+	requireTypedServiceServingTest(t)
+	svc, db := newTestService(t)
+	defer db.Close()
+	defer svc.Close()
+	ctx := context.Background()
+	create := CreateIndexRequest{Name: "typed-quantized-public", Dimension: 2, TypedInput: true,
+		VectorIndexOptions: &BenchmarkVectorIndexOptions{Strategy: collections.VectorIndexStrategyColumnGraph, QuantizedIndexes: []QuantizedIndexInfo{{Name: "embedding.scalar_u8.public", Codec: collections.QuantizedVectorCodecScalarU8}}}}
+	info, err := svc.CreateIndex(ctx, create)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !info.Capabilities.TypedDenseQuantizedRerank {
+		t.Fatalf("typed quantized capability=%+v", info.Capabilities)
+	}
+	docs := []Document{{ID: "a", Content: "alpha", Embedding: []float32{1, 0}}, {ID: "b", Content: "beta", Embedding: []float32{0, 1}}}
+	if _, err := svc.UpsertDocuments(ctx, create.Name, UpsertDocumentsRequest{Documents: docs, DeferVectorIndexRebuild: true}); err != nil {
+		t.Fatal(err)
+	}
+	options := typedServiceTestOptions()
+	if _, err := svc.OptimizeIndex(ctx, create.Name, OptimizeIndexRequest{ColumnGraphServing: &options}); err != nil {
+		t.Fatal(err)
+	}
+	out, err := svc.SearchDenseVector(ctx, create.Name, DenseVectorSearchRequest{QueryEmbedding: []float32{1, 0}, TopK: 1, Route: RouteAnn, QueryMode: collections.VectorIndexQueryModeQuantizedRerank, QuantizedIndexName: "embedding.scalar_u8.public"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Documents) != 1 || out.ScorePlane == nil || !out.ScorePlane.Completed || out.ScorePlane.QuantizedIndexName != "embedding.scalar_u8.public" {
+		t.Fatalf("quantized public response=%+v", out)
+	}
+	var httpOut DenseVectorSearchResponse
+	postJSON(t, NewHandler(svc), "/v1/indexes/typed-quantized-public/search/vector", DenseVectorSearchRequest{
+		QueryEmbedding: []float32{1, 0}, TopK: 1, Route: RouteAnn,
+		QueryMode: collections.VectorIndexQueryModeQuantizedRerank, QuantizedIndexName: "embedding.scalar_u8.public",
+	}, http.StatusOK, &httpOut)
+	if len(httpOut.Documents) != 1 || httpOut.ScorePlane == nil || !httpOut.ScorePlane.Completed || httpOut.ScorePlane.QuantizedIndexName != "embedding.scalar_u8.public" {
+		t.Fatalf("quantized HTTP response=%+v", httpOut)
+	}
+	fp32, err := svc.SearchDenseVector(ctx, create.Name, DenseVectorSearchRequest{QueryEmbedding: []float32{1, 0}, TopK: 1, Route: RouteAnn})
+	if err != nil || fp32.ScorePlane != nil || fp32.DenseWork == nil {
+		t.Fatalf("default FP32 response=%+v err=%v", fp32, err)
+	}
+	encoded, err := json.Marshal(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var envelope map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &envelope); err != nil || len(envelope["score_plane"]) == 0 {
+		t.Fatalf("sibling score proof missing: %s err=%v", encoded, err)
+	}
+	if bytes.Contains(envelope["dense_work"], []byte("score_plane")) {
+		t.Fatalf("dense_work-v1 gained nested score proof: %s", envelope["dense_work"])
+	}
+	if _, err := svc.SearchDenseVector(ctx, create.Name, DenseVectorSearchRequest{QueryEmbedding: []float32{1, 0}, TopK: 1, Route: RouteExact, QueryMode: collections.VectorIndexQueryModeQuantizedRerank, QuantizedIndexName: "embedding.scalar_u8.public"}); ErrorCodeOf(err) != CodeUnsupported {
+		t.Fatalf("typed exact quantized route err=%v code=%s", err, ErrorCodeOf(err))
+	}
+	for name, request := range map[string]DenseVectorSearchRequest{
+		"unknown quantized index":       {QueryEmbedding: []float32{1, 0}, TopK: 1, QueryMode: collections.VectorIndexQueryModeQuantizedRerank, QuantizedIndexName: "missing.scalar_u8"},
+		"rerank candidates below top-k": {QueryEmbedding: []float32{1, 0}, TopK: 2, QueryMode: collections.VectorIndexQueryModeQuantizedRerank, QuantizedIndexName: "embedding.scalar_u8.public", QuantizedRerankCandidates: 1},
+		"quantized-only mode":           {QueryEmbedding: []float32{1, 0}, TopK: 1, QueryMode: collections.VectorIndexQueryModeQuantizedOnly, QuantizedIndexName: "embedding.scalar_u8.public"},
+		"exact with quantized name":     {QueryEmbedding: []float32{1, 0}, TopK: 1, QueryMode: collections.VectorIndexQueryModeExact, QuantizedIndexName: "embedding.scalar_u8.public"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := svc.SearchDenseVector(ctx, create.Name, request); err == nil {
+				t.Fatal("malformed or unsupported quantized request was accepted")
+			}
+		})
+	}
+}
+
 func typedServiceTestOptions() collections.ColumnGraphServingOptions {
 	return collections.ColumnGraphServingOptions{
 		Publication:     collections.ColumnGraphPublicationLimits{Rows: 512, Tombstones: 512, ValueSlots: 4096, OwnedBytes: 16 << 20, EncodedOutputBytes: 16 << 20},

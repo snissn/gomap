@@ -15,7 +15,7 @@ import (
 
 func TestDenseTypedVersionCapability(t *testing.T) {
 	registry := iwire.MustV1Registry()
-	for _, version := range []uint64{1, 2} {
+	for _, version := range []uint64{1, 2, 3} {
 		schema, ok := registry.LookupCommand(iwire.CommandDenseVectorSearch, version)
 		if !ok || !schema.LocalOnly || schema.Replicated || schema.Kind != iwire.CommandKindRead {
 			t.Fatalf("dense version %d must be registered as a local read: %+v", version, schema)
@@ -57,7 +57,7 @@ func TestDenseTypedVersionGoldenAndCrossVersionRejection(t *testing.T) {
 			candidate := bytes.Clone(meta)
 			candidate[0] = tag
 			_, _, _, _, err := decodeVersionedDenseVectorSearchResponse(version, ids, docs, candidate, 1, iwire.DefaultLimits(), nil, nil, nil)
-			want := (version == 1 && tag == 1) || (version == 2 && tag == 2)
+			want := (version == 1 && tag == 1) || (version == 2 && tag == 2) || (version == 3 && tag == 3)
 			if (err == nil) != want {
 				t.Fatalf("version=%d tag=%d err=%v", version, tag, err)
 			}

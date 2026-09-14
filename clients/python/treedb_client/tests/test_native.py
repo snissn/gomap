@@ -9,13 +9,54 @@ from unittest import mock
 import _support
 from treedb_client import TreeDBClient
 from treedb_client.errors import TreeDBConfigError, TreeDBProtocolError, TreeDBTimeoutError, TreeDBTransportError, UnsupportedError
-from treedb_client._native import _dense_work
+from treedb_client._native import _dense_work, _dense_quantized_options
 from treedb_client._dense_work import DenseSearchWork
 from treedb_client.client import _decode_json_body
 from treedb_client._native import _HEADER, _NativeConnection, _dense_request, _dense_response, _decode_vector, _read_uint, _section, _sections, _string_map, _uint, _vector, _typed_upsert_request, _typed_upsert_response
 
 
+def _bytes_for_test(value):
+    raw = value.encode("utf-8")
+    return _uint(len(raw)) + raw
+
+
 class NativeCodecTests(unittest.TestCase):
+    def test_typed_quantized_dense_uses_v3_and_owned_score_plane(self):
+        raw_work = bytes.fromhex((_support.REPO_ROOT / "TreeDB/nativewire/testdata/dense_work_v1.hex").read_text().strip())
+        work_values, work_offset = [], 0
+        for _ in range(38):
+            value, work_offset = _read_uint(raw_work, work_offset)
+            work_values.append(value)
+        work_values[34] = len(b'{"id":"a"}')
+        raw_work = b"".join(_uint(value) for value in work_values)
+        meta = bytes.fromhex("0301000001000000000000f03f")
+        values = [1, 3, 2, 2, 3, 1, 0, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 11, 1, 0, 0]
+        score_plane = b"".join(_uint(value) for value in values) + b"\x00" + _bytes_for_test("embedding.scalar_u8.public") + _bytes_for_test("scalar_u8")
+        score_plane += b"\x01\x01\x01\x00" * 2
+        body = _section(102, _vector([b"a"])) + _section(103, _vector([b'{"id":"a"}'])) + _section(130, meta) + _section(134, raw_work) + _section(136, score_plane)
+        info = SimpleNamespace(
+            name="a", dimension=2, generation=2, vector_strategy="column_graph", metric="cosine",
+            extra={"typed_input": True},
+            capabilities=SimpleNamespace(typed_dense_quantized_rerank=True),
+            quantized_indexes=[SimpleNamespace(name="embedding.scalar_u8.public", codec="scalar_u8", version=1, scalar_u8_calibration=None)],
+        )
+        client = TreeDBClient("http://127.0.0.1:1", native_address="127.0.0.1:2")
+        try:
+            def command(command_id, version, sections, capability):
+                self.assertEqual((command_id, version, capability), (64, 3, "dense_vector_search_versions"))
+                parsed = _sections(sections, {4, 129, 135})
+                self.assertIn(135, parsed)
+                self.assertEqual(parsed[135], _dense_quantized_options("quantized_rerank", "embedding.scalar_u8.public", 0))
+                return body
+            with mock.patch.object(client._native, "command", side_effect=command):
+                response = client.query_by_embedding("a", [1, 0], 1, query_mode="quantized_rerank",
+                                                     quantized_index_name="embedding.scalar_u8.public", index_info=info)
+            self.assertEqual(response.native_command_version, 3)
+            self.assertIsNotNone(response.score_plane)
+            self.assertEqual(response.score_plane.quantized_index_name, "embedding.scalar_u8.public")
+        finally:
+            client.close()
+
     def test_typed_upsert_golden_residual_and_validation(self):
         info = SimpleNamespace(dimension=2, generation=1, scalar_fields=[])
         row = {"id": "a", "content": "text", "embedding": [1, 0], "meta": {"extra": "owned"}}

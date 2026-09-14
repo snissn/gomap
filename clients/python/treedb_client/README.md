@@ -44,7 +44,11 @@ both listeners before database cleanup.
 
 `TreeDBClient(http_url, native_address="127.0.0.1:7121", timeout=10)` negotiates
 native capabilities lazily. `query_by_embedding(..., index_info=info)` uses
-dense 64/v2 only for caller-held selected typed `IndexInfo` returned by HTTP
+dense 64/v2 for the default FP32 path, or dense 64/v3 when
+`query_mode="quantized_rerank"` explicitly selects the negotiated legacy
+scalar-u8/v1 score plane. The separate `typed_dense_quantized_rerank` index
+capability is required; benchmark quantized capabilities do not imply it.
+Both versions require caller-held selected typed `IndexInfo` returned by HTTP
 create/open/ensure. Its generation is sent as the server guard; conflicting
 explicit generations fail. Create/build/admission and reopen re-admission
 remain explicit HTTP control operations. Dense results contain content/meta
@@ -95,8 +99,11 @@ HNSW branch, graph/filter work, captured schema/base/current identities and
 coverage, and full search-output materialization. Use
 `dataclasses.asdict(response.dense_work)` for JSON-ready evidence. Completion
 and availability flags scope counts; missing proof is `None`, never fabricated
-zero work. This proof is mandatory on native 64/v2 success and optional on HTTP
-for compatibility with older/unavailable routes.
+zero work. This proof is mandatory on native 64/v2 and 64/v3 success and
+optional on HTTP for compatibility with older/unavailable routes. Quantized
+v3 responses additionally expose sibling `response.score_plane`, owned
+versioned proof of the selected score plane; it is never inserted into the
+frozen `dense_work` graph.
 
 Existing service/protocol exceptions expose optional `.dense_work`. Service
 errors retain actual work prefixes without returning partial documents. A

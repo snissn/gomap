@@ -802,11 +802,15 @@ semantics; native wire changes only the transport representation.
 Command `64 dense_vector_search` is a LocalOnly read, never a deterministic
 mutation or command-WAL entry. Version 1 selects the cosine float32
 `native_runtime` service route. Version 2 selects the explicitly admitted,
-persisted typed-input `column_graph` service route. A mismatched strategy fails
-closed; neither version permits the legacy full-document scan route. Typed
-native filter planning may choose bounded exact scoring internally.
+persisted typed-input `column_graph` service route. Version 3 selects the same
+typed owner path with the explicitly negotiated legacy scalar-u8/v1 quantized
+rerank score plane. A mismatched strategy or capability fails closed; no
+version permits the legacy full-document scan route. Typed native filter
+planning may choose bounded exact scoring internally.
 
-Both versions require `deadline` (4) and `dense_search_request` (129). Request
+Versions 1 and 2 require `deadline` (4) and `dense_search_request` (129).
+Version 3 additionally requires the critical `dense_search_quantized_options`
+(135). Request
 payload order is: length-prefixed UTF-8 index name; uvarint top-K, efSearch and
 expected generation; one-byte return-embedding bool; uvarint dimensions then
 packed little-endian FP32 query; uvarint filter-leaf count then AND-conjoined
@@ -823,6 +827,18 @@ native-runtime bool byte (successful route `1`). Version 2 requires route tag
 `2`. Cross-version tags are rejected. Tag 2 identifies validated dispatch,
 **not measured execution-work evidence**. Version 2 additionally requires the
 critical `dense_search_work` section (134), independently versioned below.
+Version 3 requires route tag `3`, the same critical section 134, and the
+separately versioned critical `dense_search_score_plane_proof` section (136).
+Section 135 is encoded as version `1`, mode tag `1` (`quantized_rerank`), a
+length-prefixed UTF-8 quantized index name, and a bounded uvarint rerank
+candidate limit (zero selects the owner-normalized limit). It carries no
+codec/calibration declaration; those are capability- and index-metadata
+validated by the service. Section 136 is owned score-plane evidence and never
+extends section 134 or the v2 response schema. It includes version/flags,
+requested/effective mode and route tags, owned reason/name/codec strings,
+candidate/call/byte counters, and the captured base/current manifest and
+coverage snapshot. Missing, duplicate, stale, malformed, unsupported-codec,
+unknown-name, or out-of-bound options fail closed.
 Requested documents are fetched from the search's same read owner before
 release. Content/meta are returned; embedding echo is opt-in through the
 return-embedding bool (default false), as on HTTP. Stored FP32 embeddings are
@@ -866,10 +882,11 @@ Retained/growth bytes measure ordinal capacity, and scratch rows/ID bytes are
 logical peaks. Other work fields count actual producer work,
 including prefixes before an error. No per-request process snapshot is taken.
 
-The existing FrameError may also carry this same critical section beside its
-unchanged error section (2), only for 64/v2. Pre-service failures may omit it;
-omission means unavailable. A later native encoding failure preserves completed
-service/graph/output evidence. This completion does not certify wire delivery.
+The existing FrameError may also carry these critical sections beside its
+unchanged error section (2), for 64/v2 and 64/v3 respectively. Pre-service
+failures may omit unavailable evidence. A later native encoding failure
+preserves completed service/graph/output and score-plane prefixes. This
+completion does not certify wire delivery.
 Version 1 never emits or accepts section 134 and retains its response/error
 bytes. The Go response owns its fixed proof value independently of borrowed
 result documents; `WireError.DenseWork` is optional owned error detail.
@@ -879,6 +896,9 @@ set derived from registered command versions and an available standalone
 document service. `get_many_versions=1` similarly requires its registered
 standalone collection read implementation. `max_frame_size` reports the server
 frame bound. Missing capability is not support; new clients must fail closed.
+The document-service index capability `typed_dense_quantized_rerank` is a
+separate typed negotiation bit; benchmark `quantized_vector_search`,
+`quantized_rerank`, and `scalar_u8_quantized_rerank` do not imply it.
 These extensible capability-map entries do not change existing frame versions.
 GetMany (50/v1) remains unchanged: it is a batched transport over local per-ID
 reads, without an expected-generation guard or a batch-wide snapshot promise.
