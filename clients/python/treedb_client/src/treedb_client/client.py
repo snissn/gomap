@@ -464,6 +464,7 @@ class TreeDBClient:
                 quantized_index_name=quantized_index_name,
                 quantized_rerank_candidates=rerank_value,
                 ef_search=ef_search_value or 0,
+                query_dimension=len(query_embedding),
             )
             if version == 3:
                 ids, payloads, scores, candidates, work, score_plane = decoded
@@ -1017,6 +1018,8 @@ def _validate_http_dense_quantized_response(
 ) -> None:
     """Require the HTTP response proof for an explicitly selected public route."""
 
+    from ._dense_work import dense_score_plane_byte_counters_match
+
     proof = response.score_plane
     work = response.dense_work
     selected = next((item for item in response.index.quantized_indexes if item.name == quantized_index_name), None)
@@ -1034,6 +1037,8 @@ def _validate_http_dense_quantized_response(
         or expected_graph_route is None
         or work.graph.route != expected_graph_route
         or work.graph.snapshot != proof.snapshot
+        or len(response.documents) > top_k
+        or not dense_score_plane_byte_counters_match(proof, response.index.dimension)
         or not _dense_http_score_plane_counters_match_graph(work, proof, len(response.documents))
         or response.index.name != index
         or response.metric != "cosine"

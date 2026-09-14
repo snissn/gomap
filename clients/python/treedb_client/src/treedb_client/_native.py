@@ -348,7 +348,7 @@ def _dense_score_plane_matches_graph(work, score_plane, result_count):
 
 
 def _dense_response(body, top_k, version=2, *, query_mode=None, quantized_index_name=None,
-                    quantized_rerank_candidates=0, ef_search=None):
+                    quantized_rerank_candidates=0, ef_search=None, query_dimension=None):
     if version not in (1, 2, 3):
         raise TreeDBProtocolError(f"unsupported native dense response version {version}")
     known = {102, 103, 130, 134}
@@ -375,7 +375,7 @@ def _dense_response(body, top_k, version=2, *, query_mode=None, quantized_index_
     ids, docs = _decode_vector(sections[102], count), _decode_vector(sections[103], count)
     score_plane = None
     if version == 3:
-        from ._dense_work import DenseScorePlaneProof
+        from ._dense_work import DenseScorePlaneProof, dense_score_plane_byte_counters_match
         try:
             score_plane = DenseScorePlaneProof.from_dict(_dense_score_plane(sections[136]))
         except (ValueError, TypeError, KeyError, UnicodeError) as exc:
@@ -384,6 +384,7 @@ def _dense_response(body, top_k, version=2, *, query_mode=None, quantized_index_
                 or score_plane.requested_mode != (query_mode or "quantized_rerank")
                 or score_plane.effective_mode != "quantized_rerank"
                 or score_plane.route not in ("typed_empty", "typed_exact", "quantized_rerank")
+                or not dense_score_plane_byte_counters_match(score_plane, query_dimension)
                 or not _dense_score_plane_matches_graph(work, score_plane, count)
                 or (score_plane.route == "typed_empty" and count != 0)
                 or (score_plane.route == "quantized_rerank" and (

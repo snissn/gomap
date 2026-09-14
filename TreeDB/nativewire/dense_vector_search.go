@@ -218,7 +218,9 @@ func validateDenseQuantizedScorePlaneResponse(work documentservice.DenseSearchWo
 		!work.Completed || !work.Graph.Completed || graphRoute != expectedGraphRoute ||
 		proof.Snapshot != work.Graph.Snapshot ||
 		!denseScorePlaneRerankCountersMatch(proof) ||
+		!denseScorePlaneByteCountersMatch(proof, uint64(len(request.Query))) ||
 		!denseScorePlaneCountersMatchWork(work, proof, resultCount) ||
+		resultCount > request.TopK ||
 		(proof.Route == "typed_empty" && resultCount != 0) ||
 		(proof.Route == "quantized_rerank" && (proof.ActualRerankCandidates > proof.RerankCandidateCap ||
 			proof.LiveShortlistCandidates > proof.RawRetainedCandidates ||
@@ -244,6 +246,31 @@ func denseScorePlaneCountersMatchWork(work documentservice.DenseSearchWork, proo
 		exactBaseScoreCalls == work.Graph.ExactBaseScored &&
 		proof.ExactSuffixScoreCalls == work.Graph.DeltaScored &&
 		uint64(resultCount) <= exactBaseScoreCalls+proof.ExactSuffixScoreCalls
+}
+
+func denseScorePlaneByteCountersMatch(proof *collections.ColumnGraphScorePlaneWork, dimension uint64) bool {
+	if proof == nil || dimension == 0 {
+		return false
+	}
+	if proof.QuantizedScoreCalls > ^uint64(0)/dimension {
+		return false
+	}
+	if proof.QuantizedCodeBytesRead != proof.QuantizedScoreCalls*dimension {
+		return false
+	}
+	if dimension > ^uint64(0)/4 {
+		return false
+	}
+	bytesPerExact := dimension * 4
+	if proof.ExactSmallFilterScoreCalls > ^uint64(0)-proof.ExactBaseRerankScoreCalls {
+		return false
+	}
+	exactBaseCalls := proof.ExactBaseRerankScoreCalls + proof.ExactSmallFilterScoreCalls
+	if exactBaseCalls > ^uint64(0)/bytesPerExact || proof.ExactSuffixScoreCalls > ^uint64(0)/bytesPerExact {
+		return false
+	}
+	return proof.ExactBaseVectorBytesRead == exactBaseCalls*bytesPerExact &&
+		proof.ExactSuffixVectorBytesRead == proof.ExactSuffixScoreCalls*bytesPerExact
 }
 
 func (s *Server) handleDenseVectorSearch(ctx context.Context, state *connState, sections []iwire.Section, dst []byte) ([]byte, error) {

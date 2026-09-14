@@ -32,7 +32,7 @@ class NativeCodecTests(unittest.TestCase):
         work_values[34] = len(b'{"id":"a"}')
         raw_work = b"".join(_uint(value) for value in work_values)
         meta = bytes.fromhex("0301000001000000000000f03f")
-        values = [1, 7, 2, 2, 3, 1, 0, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 1, 1, 7, 1, 2, 2]
+        values = [1, 7, 2, 2, 3, 1, 0, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 2, 1, 0, 0, 8, 0, 7, 1, 2, 2]
         score_plane = b"".join(_uint(value) for value in values) + b"\x00" + _bytes_for_test("embedding.scalar_u8.public") + _bytes_for_test("scalar_u8")
         score_plane += b"\x01\x01\x01\x03" * 2
         body = _section(102, _vector([b"a"])) + _section(103, _vector([b'{"id":"a"}'])) + _section(130, meta) + _section(134, raw_work) + _section(136, score_plane)
@@ -72,6 +72,7 @@ class NativeCodecTests(unittest.TestCase):
                         quantized_index_name="embedding.scalar_u8.public",
                         quantized_rerank_candidates=0,
                         ef_search=0,
+                        query_dimension=2,
                     )
             wrong_work_values = list(work_values)
             wrong_work_values[2] = 2  # typed_exact contradicts the quantized rerank score plane.
@@ -86,7 +87,25 @@ class NativeCodecTests(unittest.TestCase):
                     quantized_index_name="embedding.scalar_u8.public",
                     quantized_rerank_candidates=0,
                     ef_search=0,
+                    query_dimension=2,
                 )
+            for field, value in ((17, 0), (21, 0), (22, 1)):
+                byte_values = list(values)
+                byte_values[field] = value
+                byte_plane = b"".join(_uint(value) for value in byte_values) + b"\x00" + _bytes_for_test("embedding.scalar_u8.public") + _bytes_for_test("scalar_u8")
+                byte_plane += b"\x01\x01\x01\x03" * 2
+                with self.assertRaises(TreeDBProtocolError):
+                    _dense_response(
+                        _section(102, _vector([b"a"])) + _section(103, _vector([b'{"id":"a"}'])) +
+                        _section(130, meta) + _section(134, raw_work) + _section(136, byte_plane),
+                        1,
+                        version=3,
+                        query_mode="quantized_rerank",
+                        quantized_index_name="embedding.scalar_u8.public",
+                        quantized_rerank_candidates=0,
+                        ef_search=0,
+                        query_dimension=2,
+                    )
             counter_values = list(values)
             counter_values[16] = 2  # contradict dense-work base_ann_scored=1.
             counter_plane = b"".join(_uint(value) for value in counter_values) + b"\x00" + _bytes_for_test("embedding.scalar_u8.public") + _bytes_for_test("scalar_u8")
@@ -101,6 +120,7 @@ class NativeCodecTests(unittest.TestCase):
                     quantized_index_name="embedding.scalar_u8.public",
                     quantized_rerank_candidates=0,
                     ef_search=0,
+                    query_dimension=2,
                 )
             overflow_docs = _vector([b"a", b"b"])
             overflow_payloads = _vector([b'{"id":"a"}', b'{"id":"b"}'])
@@ -114,6 +134,7 @@ class NativeCodecTests(unittest.TestCase):
                     quantized_index_name="embedding.scalar_u8.public",
                     quantized_rerank_candidates=0,
                     ef_search=0,
+                    query_dimension=2,
                 )
             inconsistent_values = list(values)
             inconsistent_values[18] = 0  # actual rerank is not backed by exact-base scoring.
@@ -130,6 +151,7 @@ class NativeCodecTests(unittest.TestCase):
                     quantized_index_name="embedding.scalar_u8.public",
                     quantized_rerank_candidates=0,
                     ef_search=0,
+                    query_dimension=2,
                 )
             capped_values = list(values)
             capped_values[9] = 2
@@ -147,6 +169,7 @@ class NativeCodecTests(unittest.TestCase):
                     quantized_index_name="embedding.scalar_u8.public",
                     quantized_rerank_candidates=2,
                     ef_search=0,
+                    query_dimension=2,
                 )
             for field, value in ((12, 2), (14, 2), (10, 2)):
                 width_values = list(values)
@@ -170,6 +193,7 @@ class NativeCodecTests(unittest.TestCase):
                         quantized_index_name="embedding.scalar_u8.public",
                         quantized_rerank_candidates=0,
                         ef_search=0,
+                        query_dimension=2,
                     )
             for field in (16, 19, 20):
                 route_values = list(values)
@@ -194,6 +218,7 @@ class NativeCodecTests(unittest.TestCase):
                         quantized_index_name="embedding.scalar_u8.public",
                         quantized_rerank_candidates=0,
                         ef_search=0,
+                        query_dimension=2,
                     )
             incomplete_values = list(values)
             incomplete_values[1] = 1  # available proof, incomplete execution, unavailable snapshot.

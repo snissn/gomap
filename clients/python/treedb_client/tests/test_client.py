@@ -674,11 +674,11 @@ class TreeDBClientTests(unittest.TestCase):
             "live_shortlist_candidates": 1,
             "actual_rerank_candidates": 1,
             "quantized_score_calls": 1,
-            "quantized_code_bytes_read": 1,
+            "quantized_code_bytes_read": 2,
             "exact_base_rerank_score_calls": 1,
             "exact_suffix_score_calls": 0,
             "exact_small_filter_score_calls": 0,
-            "exact_base_vector_bytes_read": 0,
+            "exact_base_vector_bytes_read": 8,
             "exact_suffix_vector_bytes_read": 0,
             "snapshot": snapshot,
         }
@@ -709,6 +709,9 @@ class TreeDBClientTests(unittest.TestCase):
                 lambda item: item.update(metric="l2"),
                 lambda item: item.update(score_plane={**score_plane, "quantized_score_calls": 2}),
                 lambda item: item.update(score_plane={**score_plane, "exact_base_rerank_score_calls": 0, "exact_small_filter_score_calls": 1}),
+                lambda item: item.update(score_plane={**score_plane, "quantized_code_bytes_read": 0}),
+                lambda item: item.update(score_plane={**score_plane, "exact_base_vector_bytes_read": 0}),
+                lambda item: item.update(score_plane={**score_plane, "exact_suffix_vector_bytes_read": 1}),
             ):
                 invalid = copy.deepcopy(payload)
                 mutation(invalid)

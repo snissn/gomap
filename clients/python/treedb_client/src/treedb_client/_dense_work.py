@@ -230,6 +230,18 @@ def optional_dense_score_plane(data):
     return None if data is None else DenseScorePlaneProof.from_dict(data)
 
 
+def dense_score_plane_byte_counters_match(proof, dimension):
+    if proof is None or type(dimension) is not int or dimension <= 0:
+        return False
+    exact_base_calls = proof.exact_base_rerank_score_calls + proof.exact_small_filter_score_calls
+    bytes_per_exact = dimension * 4
+    return (
+        proof.quantized_code_bytes_read == proof.quantized_score_calls * dimension
+        and proof.exact_base_vector_bytes_read == exact_base_calls * bytes_per_exact
+        and proof.exact_suffix_vector_bytes_read == proof.exact_suffix_score_calls * bytes_per_exact
+    )
+
+
 @dataclass(frozen=True)
 class DenseOutputWork:
     attempted: bool

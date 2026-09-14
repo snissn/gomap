@@ -98,9 +98,21 @@ func TestDenseQuantizedScorePlaneResponseRejectsUnsupportedRoute(t *testing.T) {
 	}
 	work := documentservice.DenseSearchWork{Completed: true, Graph: collections.ColumnGraphQueryWork{Available: true, Completed: true, Route: "typed_hnsw", BaseANNScored: 1}}
 	work.Graph.Snapshot = proof.Snapshot
-	request := DenseVectorSearchRequest{QueryMode: collections.VectorIndexQueryModeQuantizedRerank, QuantizedIndexName: proof.QuantizedIndexName, TopK: 1, EfSearch: 8}
+	proof.QuantizedCodeBytesRead = 2
+	request := DenseVectorSearchRequest{Query: []float32{1, 0}, QueryMode: collections.VectorIndexQueryModeQuantizedRerank, QuantizedIndexName: proof.QuantizedIndexName, TopK: 1, EfSearch: 8}
 	if err := validateDenseQuantizedScorePlaneResponse(work, proof, request, 0); err != nil {
 		t.Fatalf("valid public proof rejected: %v", err)
+	}
+	for name, mutate := range map[string]func(*collections.ColumnGraphScorePlaneWork){
+		"quantized bytes": func(p *collections.ColumnGraphScorePlaneWork) { p.QuantizedCodeBytesRead = 0 },
+		"exact base bytes": func(p *collections.ColumnGraphScorePlaneWork) { p.ExactBaseVectorBytesRead = 1 },
+		"exact suffix bytes": func(p *collections.ColumnGraphScorePlaneWork) { p.ExactSuffixVectorBytesRead = 1 },
+	} {
+		candidate := *proof
+		mutate(&candidate)
+		if err := validateDenseQuantizedScorePlaneResponse(work, &candidate, request, 0); err == nil {
+			t.Fatalf("invalid score-plane byte counters accepted (%s): %+v", name, candidate)
+		}
 	}
 	for _, mutate := range []func(*collections.ColumnGraphScorePlaneWork){
 		func(p *collections.ColumnGraphScorePlaneWork) { p.Route = "typed_hnsw" },
