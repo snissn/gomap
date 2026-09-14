@@ -322,7 +322,7 @@ def _dense_score_plane(raw):
     }
 
 
-def _dense_score_plane_matches_graph(work, score_plane, result_count):
+def _dense_score_plane_matches_graph(work, score_plane, top_k, result_count, filter_requested):
     expected = {
         "typed_empty": "typed_empty",
         "typed_exact": "typed_exact",
@@ -335,6 +335,9 @@ def _dense_score_plane_matches_graph(work, score_plane, result_count):
         and work.graph.completed
         and work.graph.route == expected
         and work.graph.snapshot == score_plane.snapshot
+        and work.graph.filter.attempted == filter_requested
+        and (not work.graph.filter.attempted or work.graph.filter.completed)
+        and (not filter_requested or result_count == min(top_k, work.graph.filter.eligible_rows))
         and (score_plane.route != "typed_empty" or (
             work.graph.filter.attempted and work.graph.filter.completed and work.graph.filter.eligible_rows == 0
         ))
@@ -361,7 +364,7 @@ def _dense_results_ordered(ids, scores):
 
 
 def _dense_response(body, top_k, version=2, *, query_mode=None, quantized_index_name=None,
-                    quantized_rerank_candidates=0, ef_search=None, query_dimension=None):
+                    quantized_rerank_candidates=0, ef_search=None, query_dimension=None, filter_requested=False):
     if version not in (1, 2, 3):
         raise TreeDBProtocolError(f"unsupported native dense response version {version}")
     known = {102, 103, 130, 134}
@@ -420,7 +423,7 @@ def _dense_response(body, top_k, version=2, *, query_mode=None, quantized_index_
                 or score_plane.effective_mode != "quantized_rerank"
                 or score_plane.route not in ("typed_empty", "typed_exact", "quantized_rerank")
                 or not dense_score_plane_byte_counters_match(score_plane, query_dimension)
-                or not _dense_score_plane_matches_graph(work, score_plane, count)
+                or not _dense_score_plane_matches_graph(work, score_plane, top_k, count, filter_requested)
                 or (score_plane.route == "typed_empty" and count != 0)
                 or (score_plane.route in ("typed_exact", "quantized_rerank") and count != min(top_k, score_plane.exact_base_rerank_score_calls + score_plane.exact_small_filter_score_calls + score_plane.exact_suffix_score_calls))
                 or (score_plane.route == "quantized_rerank" and (

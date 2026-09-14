@@ -120,6 +120,34 @@ func TestDenseQuantizedScorePlaneResponseRejectsUnsupportedRoute(t *testing.T) {
 	if err := validateDenseQuantizedScorePlaneResponse(work, proof, request, 0); err != nil {
 		t.Fatalf("valid public proof rejected: %v", err)
 	}
+	filteredRequest := request
+	filteredRequest.Filter = new(documentservice.Filter)
+	filteredProof := *proof
+	filteredProof.NormalizedCandidateWidth, filteredProof.RawCandidateWidth, filteredProof.RerankCandidateCap = 1, 1, 1
+	filteredProof.RawRetainedCandidates, filteredProof.LiveShortlistCandidates, filteredProof.ActualRerankCandidates = 1, 1, 1
+	filteredProof.ExactBaseRerankScoreCalls, filteredProof.ExactBaseVectorBytesRead = 1, 8
+	filteredWork := work
+	filteredWork.Graph.ExactBaseScored, filteredWork.Graph.BaseResultIDs = 1, 1
+	filteredWork.Graph.Filter = collections.ColumnGraphFilterWork{Attempted: true, Completed: true, EligibleRows: 1}
+	if err := validateDenseQuantizedScorePlaneResponse(filteredWork, &filteredProof, filteredRequest, 1); err != nil {
+		t.Fatalf("valid filtered public proof rejected: %v", err)
+	}
+	if err := validateDenseQuantizedScorePlaneResponse(work, proof, filteredRequest, 0); err == nil {
+		t.Fatal("filtered request accepted without filter work")
+	}
+	if err := validateDenseQuantizedScorePlaneResponse(filteredWork, &filteredProof, request, 1); err == nil {
+		t.Fatal("unfiltered request accepted with filter work")
+	}
+	underfilledRequest := filteredRequest
+	underfilledRequest.TopK = 2
+	underfilledProof := filteredProof
+	underfilledProof.RequestedTopK = 2
+	underfilledProof.NormalizedCandidateWidth, underfilledProof.RawCandidateWidth, underfilledProof.RerankCandidateCap = 2, 2, 2
+	underfilledWork := filteredWork
+	underfilledWork.Graph.Filter.EligibleRows = 2
+	if err := validateDenseQuantizedScorePlaneResponse(underfilledWork, &underfilledProof, underfilledRequest, 1); err == nil {
+		t.Fatal("filtered response underfilled captured eligible rows")
+	}
 	for name, mutate := range map[string]func(*collections.ColumnGraphScorePlaneWork){
 		"quantized bytes":    func(p *collections.ColumnGraphScorePlaneWork) { p.QuantizedCodeBytesRead = 0 },
 		"exact base bytes":   func(p *collections.ColumnGraphScorePlaneWork) { p.ExactBaseVectorBytesRead = 1 },
@@ -250,11 +278,16 @@ func TestDenseQuantizedScorePlaneResponseRejectsUnsupportedRoute(t *testing.T) {
 	strictEmptyProof.Route = "typed_empty"
 	strictEmptyProof.QuantizedScoreCalls = 0
 	strictEmptyProof.QuantizedCodeBytesRead = 0
+	strictEmptyProof.NormalizedCandidateWidth = 1
+	strictEmptyProof.RawCandidateWidth = 1
+	strictEmptyProof.RerankCandidateCap = 1
 	strictEmptyWork := work
 	strictEmptyWork.Graph.Route = "typed_empty"
 	strictEmptyWork.Graph.BaseANNScored = 0
 	strictEmptyWork.Graph.Filter = collections.ColumnGraphFilterWork{Attempted: true, Completed: true}
-	if err := validateDenseQuantizedScorePlaneResponse(strictEmptyWork, &strictEmptyProof, request, 0); err != nil {
+	emptyRequest := request
+	emptyRequest.Filter = new(documentservice.Filter)
+	if err := validateDenseQuantizedScorePlaneResponse(strictEmptyWork, &strictEmptyProof, emptyRequest, 0); err != nil {
 		t.Fatalf("valid typed-empty proof rejected: %v", err)
 	}
 	for name, mutate := range map[string]func(*collections.ColumnGraphFilterWork){
@@ -264,7 +297,7 @@ func TestDenseQuantizedScorePlaneResponseRejectsUnsupportedRoute(t *testing.T) {
 	} {
 		candidate := strictEmptyWork
 		mutate(&candidate.Graph.Filter)
-		if err := validateDenseQuantizedScorePlaneResponse(candidate, &strictEmptyProof, request, 0); err == nil {
+		if err := validateDenseQuantizedScorePlaneResponse(candidate, &strictEmptyProof, emptyRequest, 0); err == nil {
 			t.Fatalf("typed-empty proof accepted %s: %+v", name, candidate.Graph.Filter)
 		}
 	}
@@ -274,13 +307,10 @@ func TestDenseQuantizedScorePlaneResponseRejectsUnsupportedRoute(t *testing.T) {
 		"small-filter work":   func(p *collections.ColumnGraphScorePlaneWork) { p.ExactSmallFilterScoreCalls = 1 },
 		"retained candidates": func(p *collections.ColumnGraphScorePlaneWork) { p.RawRetainedCandidates = 1 },
 		"live shortlist":      func(p *collections.ColumnGraphScorePlaneWork) { p.LiveShortlistCandidates = 1 },
-		"nonzero plan": func(p *collections.ColumnGraphScorePlaneWork) {
-			p.NormalizedCandidateWidth, p.RawCandidateWidth, p.RerankCandidateCap = 1, 1, 1
-		},
 	} {
 		candidate := strictEmptyProof
 		mutate(&candidate)
-		if err := validateDenseQuantizedScorePlaneResponse(strictEmptyWork, &candidate, request, 0); err == nil {
+		if err := validateDenseQuantizedScorePlaneResponse(strictEmptyWork, &candidate, emptyRequest, 0); err == nil {
 			t.Fatalf("typed-empty proof accepted %s: %+v", name, candidate)
 		}
 	}

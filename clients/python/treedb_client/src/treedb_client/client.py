@@ -466,6 +466,7 @@ class TreeDBClient:
                 quantized_rerank_candidates=rerank_value,
                 ef_search=ef_search_value or 0,
                 query_dimension=len(query_embedding),
+                filter_requested=filter is not None,
             )
             if version == 3:
                 ids, payloads, scores, candidates, work, score_plane = decoded
@@ -515,6 +516,7 @@ class TreeDBClient:
                 quantized_index_name=quantized_index_name,
                 quantized_rerank_candidates=rerank_value,
                 expected_generation=expected_generation,
+                filter_requested=filter is not None,
             )
         elif response.score_plane is not None:
             raise TreeDBProtocolError(
@@ -1026,6 +1028,7 @@ def _validate_http_dense_quantized_response(
     quantized_index_name: str,
     quantized_rerank_candidates: int,
     expected_generation: Optional[int],
+    filter_requested: bool,
 ) -> None:
     """Require the HTTP response proof for an explicitly selected public route."""
 
@@ -1048,6 +1051,9 @@ def _validate_http_dense_quantized_response(
         or expected_graph_route is None
         or work.graph.route != expected_graph_route
         or work.graph.snapshot != proof.snapshot
+        or work.graph.filter.attempted != filter_requested
+        or (work.graph.filter.attempted and not work.graph.filter.completed)
+        or (filter_requested and len(response.documents) != min(top_k, work.graph.filter.eligible_rows))
         or len(response.documents) > top_k
         or response.candidates != len(response.documents)
         or len({document.id for document in response.documents}) != len(response.documents)
@@ -1066,6 +1072,10 @@ def _validate_http_dense_quantized_response(
         or not response.index.capabilities.typed_dense_quantized_rerank
         or response.route != "ann"
         or response.exact
+        or response.native_base_plus_live_delta
+        or response.exact_fallbacks != 0
+        or response.full_document_scan_fallbacks != 0
+        or response.primary_document_scans != 0
         or (proof.route == "typed_empty" and (
             len(response.documents) != 0
             or not work.graph.filter.attempted

@@ -730,7 +730,7 @@ func TestTypedGraphPublicScalarU8QuantizedRerankLiveSuffixAndRebuild(t *testing.
 	columns := []TypedColumnBatch{
 		{Name: "embedding", Float32Vectors: [][]float32{closer, farther, farther}},
 		{Name: "content", Strings: []string{"closer", "farther", "old"}},
-		{Name: "user", Strings: []string{"u", "u", "u"}},
+		{Name: "user", Strings: []string{"closer", "farther", "old"}},
 		{Name: "path", Strings: []string{"p", "p", "p"}},
 	}
 	if _, _, err := col.InsertTypedBatchWithStats(ids, retained, columns); err != nil {
@@ -745,16 +745,6 @@ func TestTypedGraphPublicScalarU8QuantizedRerankLiveSuffixAndRebuild(t *testing.
 	} else if err != nil {
 		t.Fatal(err)
 	}
-	replacement := []TypedColumnBatch{
-		{Name: "embedding", Float32Vectors: [][]float32{query}},
-		{Name: "content", Strings: []string{"new exact"}},
-		{Name: "user", Strings: []string{"u"}},
-		{Name: "path", Strings: []string{"p"}},
-	}
-	if _, err := col.ReplaceTypedBatch(ids[2:3], retained[2:3], replacement); err != nil {
-		t.Fatal(err)
-	}
-
 	search := func(filter *HybridScalarFilter) (VectorIndexSearchResponse, *CollectionReadView) {
 		t.Helper()
 		var buffer VectorIndexSearchBuffer
@@ -776,6 +766,26 @@ func TestTypedGraphPublicScalarU8QuantizedRerankLiveSuffixAndRebuild(t *testing.
 			t.Fatalf("filter=%+v typed quantized rerank returned no read view", filter)
 		}
 		return response, view
+	}
+	shadowedFilter := HybridScalarFilter{And: []HybridScalarFilter{
+		{IndexName: "path", Value: "p"},
+		{IndexName: "user", Value: "old"},
+	}}
+	warmFilter, warmFilterView := search(&shadowedFilter)
+	if len(warmFilter.Results) != 1 || string(warmFilter.Results[0].ID) != "replaced" {
+		t.Fatalf("warm base filter results=%+v", warmFilter.Results)
+	}
+	if err := warmFilterView.Close(); err != nil {
+		t.Fatal(err)
+	}
+	replacement := []TypedColumnBatch{
+		{Name: "embedding", Float32Vectors: [][]float32{query}},
+		{Name: "content", Strings: []string{"new exact"}},
+		{Name: "user", Strings: []string{"new"}},
+		{Name: "path", Strings: []string{"p"}},
+	}
+	if _, err := col.ReplaceTypedBatch(ids[2:3], retained[2:3], replacement); err != nil {
+		t.Fatal(err)
 	}
 	assertCurrent := func(stage string, response VectorIndexSearchResponse) {
 		t.Helper()
@@ -807,7 +817,19 @@ func TestTypedGraphPublicScalarU8QuantizedRerankLiveSuffixAndRebuild(t *testing.
 		t.Fatal(err)
 	}
 
-	filter := HybridScalarFilter{IndexName: "user", Value: "u"}
+	shadowed, shadowedView := search(&shadowedFilter)
+	shadowedWork := shadowed.Stats.ColumnGraphWork
+	shadowedProof := shadowedWork.ScorePlane
+	if len(shadowed.Results) != 0 || shadowedWork.Route != "typed_empty" ||
+		!shadowedWork.Filter.Attempted || !shadowedWork.Filter.Completed || shadowedWork.Filter.EligibleRows != 0 ||
+		shadowedProof.NormalizedCandidateWidth != 1 || shadowedProof.RawCandidateWidth != 1 || shadowedProof.RerankCandidateCap != 1 {
+		t.Fatalf("shadowed filtered-empty response=%+v work=%+v proof=%+v", shadowed, shadowedWork, shadowedProof)
+	}
+	if err := shadowedView.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	filter := HybridScalarFilter{IndexName: "path", Value: "p"}
 	filtered, filteredView := search(&filter)
 	assertCurrent("filtered suffix", filtered)
 	filteredWork := filtered.Stats.ColumnGraphWork

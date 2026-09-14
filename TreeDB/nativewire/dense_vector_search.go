@@ -262,13 +262,15 @@ func validateDenseQuantizedScorePlaneResponse(work documentservice.DenseSearchWo
 		(proof.Route != "typed_empty" && proof.Route != "typed_exact" && proof.Route != "quantized_rerank") ||
 		!work.Completed || !work.Graph.Completed || graphRoute != expectedGraphRoute ||
 		proof.Snapshot != work.Graph.Snapshot ||
+		work.Graph.Filter.Attempted != (request.Filter != nil) ||
+		(work.Graph.Filter.Attempted && !work.Graph.Filter.Completed) ||
+		(request.Filter != nil && (resultCount < 0 || uint64(resultCount) != minUint64(uint64(request.TopK), work.Graph.Filter.EligibleRows))) ||
 		!denseScorePlaneRerankCountersMatch(proof) ||
 		!denseScorePlaneByteCountersMatch(proof, uint64(len(request.Query))) ||
 		!denseScorePlaneCountersMatchWork(work, proof, resultCount) ||
 		((proof.Route == "typed_exact" || proof.Route == "quantized_rerank") && !denseExactResultCountMatchesTopK(proof, request.TopK, resultCount)) ||
 		resultCount > request.TopK ||
-		(proof.Route == "typed_empty" && (resultCount != 0 || !work.Graph.Filter.Attempted ||
-			!work.Graph.Filter.Completed || work.Graph.Filter.EligibleRows != 0)) ||
+		(proof.Route == "typed_empty" && (resultCount != 0 || !work.Graph.Filter.Attempted || work.Graph.Filter.EligibleRows != 0)) ||
 		(proof.Route == "quantized_rerank" && (proof.ActualRerankCandidates > proof.RerankCandidateCap ||
 			proof.LiveShortlistCandidates > proof.RawRetainedCandidates ||
 			proof.RawRetainedCandidates > proof.RawCandidateWidth ||
