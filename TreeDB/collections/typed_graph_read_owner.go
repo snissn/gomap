@@ -53,10 +53,14 @@ type typedGraphReadOwner struct {
 // quantized assets skipped; this attaches exactly one holder-owned legacy v1
 // code plane to the base reader without transferring resource ownership.
 func (o *typedGraphReadOwner) attachTypedGraphLegacyScalarU8QuantizedAsset(name string) error {
+	return o.attachTypedGraphLegacyScalarU8QuantizedAssetWithContext(context.Background(), name)
+}
+
+func (o *typedGraphReadOwner) attachTypedGraphLegacyScalarU8QuantizedAssetWithContext(ctx context.Context, name string) error {
 	if o == nil || o.closed || o.overlay == nil || o.overlay.base == nil || o.overlay.base.reader == nil || o.overlay.base.collection == nil {
 		return ErrVectorIndexSnapshotMismatch
 	}
-	return o.overlay.base.collection.requestAndAttachColumnVectorGraphSharedPreparedLegacyScalarU8Asset(o.overlay.base.reader, name)
+	return o.overlay.base.collection.requestAndAttachColumnVectorGraphSharedPreparedLegacyScalarU8AssetWithContext(ctx, o.overlay.base.reader, name)
 }
 
 // Like VectorIndexSearcher.Close, Close is idempotent, not concurrently callable

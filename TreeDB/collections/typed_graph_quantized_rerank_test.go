@@ -1,11 +1,13 @@
 package collections
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"os"
 	"testing"
+	"time"
 )
 
 func TestNormalizeTypedGraphQuantizedRerankPlan(t *testing.T) {
@@ -206,7 +208,7 @@ func TestTypedGraphPublicScalarU8QuantizedRerank(t *testing.T) {
 	if !proof.Available || !proof.Completed || proof.RequestedMode != VectorIndexQueryModeQuantizedRerank || proof.EffectiveMode != VectorIndexQueryModeQuantizedRerank || proof.Route != "quantized_rerank" || proof.QuantizedIndexName != "embedding.scalar_u8.legacy" {
 		t.Fatalf("typed quantized rerank score-plane proof=%+v", proof)
 	}
-	if proof.RawCandidateWidth != 3 || proof.RerankCandidateCap != 3 || proof.ActualRerankCandidates != response.Stats.QuantizedRerankCandidates || proof.ExactBaseRerankScoreCalls != response.Stats.QuantizedRerankExactScoreCalls || proof.ExactSuffixScoreCalls != 0 {
+	if proof.RawCandidateWidth != 3 || proof.RerankCandidateCap != 3 || proof.ActualRerankCandidates != response.Stats.QuantizedRerankCandidates || proof.ExactBaseRerankScoreCalls != response.Stats.QuantizedRerankExactScoreCalls || proof.ExactBaseVectorBytesRead == 0 || response.Stats.VectorBytesRead == 0 || proof.ExactSuffixScoreCalls != 0 {
 		t.Fatalf("typed quantized rerank score-plane counts=%+v stats=%+v", proof, response.Stats)
 	}
 	if err := view.Close(); err != nil {
@@ -256,7 +258,7 @@ func TestTypedGraphPublicScalarU8QuantizedRerank(t *testing.T) {
 	if filteredWork.Route != "typed_exact" || filteredWork.ExactBaseScored != 3 || filtered.Stats.SearchRouteQuantizedRerank != 1 || filtered.Stats.QuantizedScorerActive != 1 || filtered.Stats.QuantizedScoreCalls != 0 {
 		t.Fatalf("small filtered typed quantized rerank work=%+v stats=%+v", filteredWork, filtered.Stats)
 	}
-	if !filteredProof.Completed || filteredProof.Route != "typed_exact" || filteredProof.ExactSmallFilterScoreCalls != 3 || filteredProof.ExactBaseRerankScoreCalls != 0 || filteredProof.ExactSuffixScoreCalls != 0 {
+	if !filteredProof.Completed || filteredProof.Route != "typed_exact" || filteredProof.ExactSmallFilterScoreCalls != 3 || filteredProof.ExactBaseVectorBytesRead == 0 || filteredProof.ExactBaseRerankScoreCalls != 0 || filteredProof.ExactSuffixScoreCalls != 0 {
 		t.Fatalf("small filtered typed quantized rerank proof=%+v", filteredProof)
 	}
 }
@@ -785,10 +787,20 @@ func TestTypedGraphPublicScalarU8QuantizedRerankLiveSuffixAndRebuild(t *testing.
 		}
 	}
 
+	held, heldView := search(nil)
+	assertCurrent("held selected owner", held)
+	heldDocs, err := heldView.FetchDocumentsForVectorIndexSearchResults(held.Results, DocumentFetchOptions{})
+	if err != nil || len(heldDocs.Results) != len(held.Results) {
+		t.Fatalf("held selected owner fetch before rebuild: docs=%+v err=%v", heldDocs.Results, err)
+	}
+	heldWork := held.Stats.ColumnGraphWork
+	if heldWork.BaseShadowed == 0 || heldWork.DeltaScored != 1 || heldWork.ScorePlane.ExactSuffixScoreCalls != 1 || heldWork.ScorePlane.ExactSuffixVectorBytesRead == 0 {
+		t.Fatalf("held selected owner work=%+v proof=%+v", heldWork, heldWork.ScorePlane)
+	}
 	unfiltered, unfilteredView := search(nil)
 	assertCurrent("unfiltered suffix", unfiltered)
 	unfilteredWork := unfiltered.Stats.ColumnGraphWork
-	if unfilteredWork.BaseShadowed == 0 || unfilteredWork.DeltaScored != 1 || unfilteredWork.ScorePlane.ExactSuffixScoreCalls != 1 {
+	if unfilteredWork.BaseShadowed == 0 || unfilteredWork.DeltaScored != 1 || unfilteredWork.ScorePlane.ExactSuffixScoreCalls != 1 || unfilteredWork.ScorePlane.ExactSuffixVectorBytesRead == 0 {
 		t.Fatalf("unfiltered suffix work=%+v proof=%+v", unfilteredWork, unfilteredWork.ScorePlane)
 	}
 	if err := unfilteredView.Close(); err != nil {
@@ -799,7 +811,7 @@ func TestTypedGraphPublicScalarU8QuantizedRerankLiveSuffixAndRebuild(t *testing.
 	filtered, filteredView := search(&filter)
 	assertCurrent("filtered suffix", filtered)
 	filteredWork := filtered.Stats.ColumnGraphWork
-	if filteredWork.DeltaScored != 1 || filteredWork.ScorePlane.ExactSuffixScoreCalls != 1 {
+	if filteredWork.DeltaScored != 1 || filteredWork.ScorePlane.ExactSuffixScoreCalls != 1 || filteredWork.ScorePlane.ExactSuffixVectorBytesRead == 0 {
 		t.Fatalf("filtered suffix work=%+v proof=%+v", filteredWork, filteredWork.ScorePlane)
 	}
 	if err := filteredView.Close(); err != nil {
@@ -812,10 +824,112 @@ func TestTypedGraphPublicScalarU8QuantizedRerankLiveSuffixAndRebuild(t *testing.
 	if err := col.EnsureColumnGraphServing(context.Background(), "embedding_graph", serving); err != nil {
 		t.Fatal(err)
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	if err := col.db.VacuumIndexOnline(ctx); err != nil {
+		cancel()
+		t.Fatalf("selected owner vacuum: %v", err)
+	}
+	cancel()
+	heldDocsAfter, err := heldView.FetchDocumentsForVectorIndexSearchResults(held.Results, DocumentFetchOptions{})
+	if err != nil || len(heldDocsAfter.Results) != len(heldDocs.Results) {
+		t.Fatalf("held selected owner fetch after rebuild/vacuum: docs=%+v err=%v", heldDocsAfter.Results, err)
+	}
+	for i := range heldDocs.Results {
+		if !bytes.Equal(heldDocsAfter.Results[i].Document, heldDocs.Results[i].Document) {
+			t.Fatalf("held selected owner document changed at %d before=%q after=%q", i, heldDocs.Results[i].Document, heldDocsAfter.Results[i].Document)
+		}
+	}
+	if err := heldView.Close(); err != nil {
+		t.Fatalf("close held selected owner: %v", err)
+	}
 	afterRebuild, afterRebuildView := search(nil)
 	defer afterRebuildView.Close()
 	assertCurrent("rebuilt base", afterRebuild)
 	if afterRebuild.Stats.ColumnGraphDeltaScored != 0 || afterRebuild.Stats.ColumnGraphWork.ScorePlane.ExactSuffixScoreCalls != 0 {
 		t.Fatalf("rebuilt base retained stale suffix work: stats=%+v proof=%+v", afterRebuild.Stats, afterRebuild.Stats.ColumnGraphWork.ScorePlane)
+	}
+}
+
+func TestTypedGraphPublicScalarU8QuantizedRerankReopen(t *testing.T) {
+	requireTypedGraphPublicServingTest(t)
+	dir, db, col := openTypedMinimaCollectionMeta(t, func() CollectionMeta {
+		meta := typedMinimaCollectionMeta()
+		meta.VectorIndexes[0].QuantizedIndexes = []QuantizedVectorIndexDefinition{{Name: "embedding.scalar_u8.legacy"}}
+		return meta
+	}())
+	query := []float32{1, 0, 0, 0, 0, 0, 0, 0}
+	ids := [][]byte{[]byte("a"), []byte("b")}
+	retained := [][]byte{[]byte(`{"id":"a"}`), []byte(`{"id":"b"}`)}
+	columns := []TypedColumnBatch{
+		{Name: "embedding", Float32Vectors: [][]float32{query, {0, 1, 0, 0, 0, 0, 0, 0}}},
+		{Name: "content", Strings: []string{"before", "other"}},
+		{Name: "user", Strings: []string{"u", "u"}},
+		{Name: "path", Strings: []string{"p", "p"}},
+	}
+	if _, _, err := col.InsertTypedBatchWithStats(ids, retained, columns); err != nil {
+		db.Close()
+		t.Fatal(err)
+	}
+	if _, err := col.RebuildVectorIndex("embedding_graph"); err != nil {
+		db.Close()
+		t.Fatal(err)
+	}
+	serving := typedGraphPublicTestOptions()
+	if err := col.EnsureColumnGraphServing(context.Background(), "embedding_graph", serving); errors.Is(err, errColumnVectorGraphSharedPreparedSearchNotEligible) {
+		db.Close()
+		t.Skip("typed shared prepared holder is unavailable on this host")
+	} else if err != nil {
+		db.Close()
+		t.Fatal(err)
+	}
+	if err := db.Checkpoint(); err != nil {
+		db.Close()
+		t.Fatal(err)
+	}
+	// Leave this replacement after the checkpoint so reopening exercises the
+	// durable command-WAL/current-suffix path rather than only the base files.
+	if _, err := col.ReplaceTypedBatch(ids[:1], retained[:1], []TypedColumnBatch{
+		{Name: "embedding", Float32Vectors: [][]float32{query}},
+		{Name: "content", Strings: []string{"after-reopen"}},
+		{Name: "user", Strings: []string{"u"}},
+		{Name: "path", Strings: []string{"p"}},
+	}); err != nil {
+		db.Close()
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened := openTypedMinimaDB(t, dir)
+	defer reopened.Close()
+	reopenedCol, err := NewCollectionManager(reopened).OpenCollection("minima")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reopenedCol.EnsureColumnGraphServing(context.Background(), "embedding_graph", serving); err != nil {
+		t.Fatal(err)
+	}
+	var buffer VectorIndexSearchBuffer
+	response, view, err := reopenedCol.SearchVectorIndexWithBufferReadView(VectorIndexSearchOptions{
+		IndexName:                 "embedding_graph",
+		Query:                     query,
+		QueryMode:                 VectorIndexQueryModeQuantizedRerank,
+		QuantizedIndexName:        "embedding.scalar_u8.legacy",
+		QuantizedRerankCandidates: 2,
+		TopK:                      1,
+		EfSearch:                  2,
+		StatsMode:                 VectorIndexSearchStatsModeMinimal,
+	}, &buffer)
+	if err != nil || view == nil {
+		t.Fatalf("reopened selected search response=%+v view=%v err=%v", response, view, err)
+	}
+	defer view.Close()
+	if len(response.Results) != 1 || string(response.Results[0].ID) != "a" || response.Stats.SearchRouteQuantizedRerank != 1 || response.Stats.QuantizedScoreCalls == 0 {
+		t.Fatalf("reopened selected response=%+v", response)
+	}
+	docs, err := view.FetchDocumentsForVectorIndexSearchResults(response.Results, DocumentFetchOptions{})
+	if err != nil || len(docs.Results) != 1 || !bytes.Contains(docs.Results[0].Document, []byte("after-reopen")) {
+		t.Fatalf("reopened selected fetch docs=%+v err=%v", docs.Results, err)
 	}
 }

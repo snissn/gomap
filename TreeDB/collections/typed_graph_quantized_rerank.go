@@ -228,6 +228,7 @@ func typedGraphQuantizedRerankAppendDelta(ctx context.Context, v *typedGraphOver
 			return err
 		}
 		stats.DeltaScored++
+		proof.ExactSuffixVectorBytesRead += uint64(len(row.Values[v.vectorColumn].Float32Vector)) * 4
 		proof.ExactSuffixScoreCalls++
 		buffer.deltaResults = append(buffer.deltaResults, VectorIndexSearchResult{ID: row.ID, Score: score})
 		return nil
@@ -245,6 +246,13 @@ func typedGraphQuantizedRerankAppendExactBase(ctx context.Context, v *typedGraph
 	if !ok {
 		return ErrVectorIndexSnapshotMismatch
 	}
+	// The selected score plane rereads authoritative typed FP32 values for the
+	// bounded exact rerank. Keep logical byte accounting truthful; this is not a
+	// claim about a physical disk read or a stored norm fetch.
+	vectorBytes := uint64(len(vector)) * 4
+	stats.Base.VectorBytesRead += vectorBytes
+	stats.Base.CandidateFetches++
+	proof.ExactBaseVectorBytesRead += vectorBytes
 	id, ok := v.pack.documentIDForOrdinal(ordinal)
 	if !ok {
 		return ErrVectorIndexSnapshotMismatch
@@ -312,7 +320,7 @@ func (o *typedGraphReadOwner) searchScalarU8QuantizedRerankWithContext(ctx conte
 		return nil, stats, proof, err
 	}
 	proof = newTypedGraphQuantizedRerankScorePlane(opts, q)
-	if err := o.attachTypedGraphLegacyScalarU8QuantizedAsset(q.Name); err != nil {
+	if err := o.attachTypedGraphLegacyScalarU8QuantizedAssetWithContext(ctx, q.Name); err != nil {
 		v.base.reader.populateQuantizedAssetSearchStats(q.Name, &stats.Base)
 		return nil, stats, proof, err
 	}
