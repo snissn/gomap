@@ -127,7 +127,7 @@ var minimaMeasuredCommonConfigKeys = []string{
 }
 var minimaMeasuredTreeConfigKeys = []string{
 	"product_commit", "service_binary_sha256", "service_binary_vcs_revision", "service_binary_vcs_modified",
-	"vector_strategy", "transport", "control_transport", "ef_search", "column_graph_serving", "profile",
+	"vector_strategy", "transport", "control_transport", "ef_search", "ef_construction_requested", "column_graph_serving", "profile",
 	"startup_reopen_timeout_seconds", "shutdown_timeout_seconds", "block_profile_rate", "mutex_profile_fraction",
 }
 var minimaMeasuredQdrantConfigKeys = []string{

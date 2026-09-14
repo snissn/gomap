@@ -996,7 +996,7 @@ func TestMinimaMeasuredRejectsDoctoredJoinsAndLifetimeWork(t *testing.T) {
 			}
 		})
 	}
-	for _, key := range []string{"service_binary_sha256", "shared_runner_sha256", "client_sha256", "product_source_sha256", "harness_source_sha256", "comparator_binary_sha256", "column_graph_serving", "manifest_file_sha256"} {
+	for _, key := range []string{"service_binary_sha256", "shared_runner_sha256", "client_sha256", "product_source_sha256", "harness_source_sha256", "comparator_binary_sha256", "column_graph_serving", "ef_construction_requested", "manifest_file_sha256"} {
 		t.Run(key, func(t *testing.T) {
 			a := cloneMinimaArtifact(t, base)
 			a.Backends[0].Configuration[key] = strings.Repeat("e", 64)
