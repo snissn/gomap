@@ -53,11 +53,23 @@ class MatchedPerformanceTest(unittest.TestCase):
                 mock.patch.object(subject.native, "host_resource_identity", return_value={"boot_id": "new"}):
             with self.assertRaisesRegex(RuntimeError, "host resource identity"):
                 subject.validate_host_identity(plan)
+        environment = subject.python_environment()
+        self.assertEqual(json.loads(json.dumps(environment)), environment)
+
+        run = mock.Mock(failure="resource guard: over budget")
+        with self.assertRaisesRegex(RuntimeError, "over budget"):
+            subject.check_final_tree_resources(run, mock.Mock(is_alive=lambda: False))
+        run.check_resources.assert_called_once()
 
     def test_timed_window_runs_each_worker(self):
-        result, samples = subject.timed_window(lambda query: query, [0, 1], 2, .01)
+        result, samples = subject.timed_window(lambda query: query,
+            lambda value: self.assertIn(value, (0, 1)), [0, 1], 2, .01)
         self.assertGreater(result["qps"], 0)
         self.assertEqual(result["latency"]["count"], len(samples))
+        def reject(_):
+            raise RuntimeError("invalid response")
+        with self.assertRaisesRegex(RuntimeError, "invalid response"):
+            subject.timed_window(lambda query: query, reject, [0], 1, .001)
 
     def test_adapter_plan_and_mixed_overlap(self):
         plan = {"queries": 200, "qdrant_configuration": {

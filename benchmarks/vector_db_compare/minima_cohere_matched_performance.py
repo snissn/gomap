@@ -15,6 +15,7 @@ import platform
 import shutil
 import statistics
 import subprocess
+import sys
 import threading
 import time
 import urllib.parse
@@ -139,6 +140,21 @@ def validate_host_identity(plan):
         raise RuntimeError("campaign host resource identity drifted")
 
 
+def python_environment():
+    packages = sorted([distribution.metadata.get("Name") or "", distribution.version]
+                      for distribution in importlib.metadata.distributions())
+    return {"executable": str(Path(sys.executable).resolve()), "executable_sha256": digest(sys.executable),
+            "version": sys.version, "numpy": np.__version__, "packages": packages}
+
+
+def check_final_tree_resources(run, monitor):
+    if monitor and monitor.is_alive():
+        raise RuntimeError("resource guard did not stop")
+    run.check_resources()
+    if run.failure:
+        raise RuntimeError(run.failure)
+
+
 def frozen_plan(args):
     source = Path(__file__).resolve().parents[2]
     commit = repository_commit(source)
@@ -218,6 +234,7 @@ def frozen_plan(args):
         "mixed_queries_per_reader": 64, "mixed_write_batches": 8, "mixed_write_batch_rows": 256,
         "cpu_affinity": list(range(6)), "gomaxprocs": "6",
         "blas_threads": {"OPENBLAS_NUM_THREADS": "1", "OMP_NUM_THREADS": "1"},
+        "python_environment": python_environment(),
         "platform": platform.platform(), "host_resource_identity": native.host_resource_identity(),
         "metric_scope": {
             "query": "caller-visible public request only; correctness checks outside timed windows",
@@ -245,6 +262,8 @@ def validate_runtime(plan, expected_sha256, plan_path):
         raise RuntimeError("campaign source provenance drifted")
     if importlib.metadata.version("qdrant-client") != plan["qdrant_client_version"]:
         raise RuntimeError("Qdrant client version drifted")
+    if python_environment() != plan["python_environment"]:
+        raise RuntimeError("campaign Python environment drifted")
     validate_host_identity(plan)
     if sorted(os.sched_getaffinity(0)) != plan["cpu_affinity"]:
         raise RuntimeError("campaign CPU affinity drifted")
@@ -307,7 +326,7 @@ def acquire_campaign_lock(root):
     return handle
 
 
-def timed_window(call, query_ordinals, concurrency, seconds):
+def timed_window(call, validate, query_ordinals, concurrency, seconds):
     gate = threading.Barrier(concurrency + 1)
     stop_ns = [0]
 
@@ -317,8 +336,9 @@ def timed_window(call, query_ordinals, concurrency, seconds):
         while time.monotonic_ns() < stop_ns[0]:
             query = query_ordinals[index % len(query_ordinals)]
             started = time.monotonic_ns()
-            call(query)
+            value = call(query)
             ended = time.monotonic_ns()
+            validate(value)
             samples.append((started, ended))
             index += concurrency
         return samples
@@ -458,11 +478,13 @@ def run_treedb(plan, run_dir):
             "TreeDB", "initial-ready")
         initial_disk = native.existing.common.disk_bytes(run.output / "db")
         for query in EVALUATION_QUERIES:
-            tree_query(run, query, control)
-        single, _ = timed_window(lambda query: tree_query(run, query, control), EVALUATION_QUERIES, 1,
-                                 plan["query_window_seconds"])
-        concurrent, _ = timed_window(lambda query: tree_query(run, query, control), EVALUATION_QUERIES,
-                                     plan["query_concurrency"], plan["query_window_seconds"])
+            validate_tree_queries([tree_query(run, query, control)], run.info.generation)
+        validate = lambda response: validate_tree_queries([response], run.info.generation)
+        single, _ = timed_window(lambda query: tree_query(run, query, control), validate,
+                                 EVALUATION_QUERIES, 1, plan["query_window_seconds"])
+        concurrent, _ = timed_window(lambda query: tree_query(run, query, control), validate,
+                                     EVALUATION_QUERIES, plan["query_concurrency"],
+                                     plan["query_window_seconds"])
 
         prepared = []
         for index in range(plan["mixed_write_batches"]):
@@ -496,8 +518,7 @@ def run_treedb(plan, run_dir):
         run.controller.start(); run.ensure(); run.optimize("ensure")
         response = tree_query(run, EVALUATION_QUERIES[0], control)
         restart_ns = time.monotonic_ns() - restart_start
-        if not response.documents:
-            raise RuntimeError("TreeDB restart query returned no results")
+        validate_tree_queries([response], run.info.generation)
         validate_tree_updates(run, updated_rows)
         restart_rss = measured_rss(native.process_peak_at_boundary(
             run.controller.process.pid, run.controller._owned_identity, plan["cpu_affinity"]),
@@ -524,6 +545,11 @@ def run_treedb(plan, run_dir):
         run.cancel.set()
         if monitor:
             monitor.join(timeout=5)
+        try:
+            check_final_tree_resources(run, monitor)
+        except BaseException as exc:
+            result = {"schema": SCHEMA, "state": "failed", "backend": "treedb",
+                      "failure": result.get("failure") or f"final resource guard: {type(exc).__name__}: {exc}"}
         run.events.close()
     return result
 
@@ -655,8 +681,9 @@ def run_qdrant(plan, run_dir):
             run.server_pid, run.process_identity, plan["cpu_affinity"]), "Qdrant", "initial-ready")
         initial_disk = qdrant_rss.existing.disk_bytes(run.storage_path)
         for query in EVALUATION_QUERIES:
-            qdrant_query(run, run.client, query, control)
+            validate_qdrant_queries([qdrant_query(run, run.client, query, control)])
         single, _ = timed_window(lambda query: qdrant_query(run, run.client, query, control),
+                                 lambda response: validate_qdrant_queries([response]),
                                  EVALUATION_QUERIES, 1, plan["query_window_seconds"])
 
         clients = []
@@ -668,8 +695,9 @@ def run_qdrant(plan, run_dir):
                 with lock:
                     clients.append(local_clients.client)
             return qdrant_query(run, local_clients.client, query, control)
-        concurrent, _ = timed_window(concurrent_query, EVALUATION_QUERIES,
-                                     plan["query_concurrency"], plan["query_window_seconds"])
+        concurrent, _ = timed_window(concurrent_query, lambda response: validate_qdrant_queries([response]),
+                                     EVALUATION_QUERIES, plan["query_concurrency"],
+                                     plan["query_window_seconds"])
         for client in clients:
             client.close()
         clients.clear()
@@ -709,8 +737,7 @@ def run_qdrant(plan, run_dir):
         restart_start = time.monotonic_ns(); shutdown_disk = restart_qdrant(run)
         response = qdrant_query(run, run.client, EVALUATION_QUERIES[0], control)
         restart_ns = time.monotonic_ns() - restart_start
-        if not qdrant_ids(response):
-            raise RuntimeError("Qdrant restart query returned no results")
+        validate_qdrant_queries([response])
         validate_qdrant_updates(run, updated_rows)
         restart_rss = measured_rss(native.process_peak_at_boundary(
             run.server_pid, run.process_identity, plan["cpu_affinity"]), "Qdrant", "restart")
