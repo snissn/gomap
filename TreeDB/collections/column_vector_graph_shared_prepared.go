@@ -2,6 +2,7 @@ package collections
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"sort"
@@ -79,13 +80,13 @@ type columnVectorGraphLegacyScalarU8ZeroRowValidationCache struct {
 	descriptors []columnVectorGraphSharedPreparedLegacyScalarU8AssetDescriptor
 
 	mu      sync.Mutex
-	cond    *sync.Cond
 	entries []columnVectorGraphLegacyScalarU8ZeroRowValidationEntry
 }
 
 type columnVectorGraphLegacyScalarU8ZeroRowValidationEntry struct {
 	building  bool
 	completed bool
+	ready     chan struct{}
 }
 
 func newColumnVectorGraphLegacyScalarU8ZeroRowValidationCache(def VectorIndexDefinition, state columnVectorIndexStateSnapshot) *columnVectorGraphLegacyScalarU8ZeroRowValidationCache {
@@ -97,10 +98,12 @@ func newColumnVectorGraphLegacyScalarU8ZeroRowValidationCache(def VectorIndexDef
 		descriptors: descriptors,
 		entries:     make([]columnVectorGraphLegacyScalarU8ZeroRowValidationEntry, len(descriptors)),
 	}
+	for i := range cache.entries {
+		cache.entries[i].ready = make(chan struct{})
+	}
 	// Keep one fixed waiter primitive for every immutable publication. It
 	// serializes first validation without growing a name map, a code-plane cache,
 	// or a retry-generation allocation after read-owner admission.
-	cache.cond = sync.NewCond(&cache.mu)
 	return cache
 }
 
@@ -108,8 +111,22 @@ func newColumnVectorGraphLegacyScalarU8ZeroRowValidationCache(def VectorIndexDef
 // zero-row legacy plane. The caller supplies the existing asset loader so this
 // cache owns no collection, snapshot, reader, or resource lifetime.
 func (c *columnVectorGraphLegacyScalarU8ZeroRowValidationCache) validate(name string, definition QuantizedVectorIndexDefinition, validate func(columnVectorGraphSharedPreparedLegacyScalarU8AssetDescriptor) error) error {
+	return c.validateWithContext(context.Background(), name, definition, validate)
+}
+
+// validateWithContext keeps a public waiter cancellable while another request
+// performs the one bounded zero-row asset validation. The validation itself is
+// deliberately still single-flight; cancellation only abandons this caller,
+// leaving the immutable publication's result available to later callers.
+func (c *columnVectorGraphLegacyScalarU8ZeroRowValidationCache) validateWithContext(ctx context.Context, name string, definition QuantizedVectorIndexDefinition, validate func(columnVectorGraphSharedPreparedLegacyScalarU8AssetDescriptor) error) error {
 	if c == nil || name == "" || validate == nil {
 		return fmt.Errorf("%w: zero-row legacy scalar_u8 validation request is invalid", errColumnVectorGraphQuantizedAssetInvalid)
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	index := -1
 	for i, descriptor := range c.descriptors {
@@ -122,30 +139,45 @@ func (c *columnVectorGraphLegacyScalarU8ZeroRowValidationCache) validate(name st
 		return fmt.Errorf("%w: zero-row legacy scalar_u8 asset %q does not match immutable serving metadata", errColumnVectorGraphQuantizedAssetStale, name)
 	}
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	for {
 		entry := &c.entries[index]
 		if entry.completed {
+			c.mu.Unlock()
 			return nil
 		}
+		if entry.ready == nil {
+			entry.ready = make(chan struct{})
+		}
 		if entry.building {
-			c.cond.Wait()
+			ready := entry.ready
+			c.mu.Unlock()
+			select {
+			case <-ready:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+			c.mu.Lock()
 			continue
 		}
 		entry.building = true
+		entry.ready = make(chan struct{})
 		descriptor := c.descriptors[index]
 		c.mu.Unlock()
 
 		// Parsing and schema validation may read the immutable asset; never hold
 		// metadata synchronization while doing that I/O.
-		err := validate(descriptor)
+		err := ctx.Err()
+		if err == nil {
+			err = validate(descriptor)
+		}
 
 		c.mu.Lock()
 		entry.building = false
 		if err == nil {
 			entry.completed = true
 		}
-		c.cond.Broadcast()
+		close(entry.ready)
+		c.mu.Unlock()
 		return err
 	}
 }
@@ -424,10 +456,23 @@ func (h *columnVectorGraphSharedPreparedSearch) removeLegacyScalarU8AssetEntryLo
 // key, while descriptor equality prevents a same name from being attached to a
 // different declaration or physical resource identity.
 func (h *columnVectorGraphSharedPreparedSearch) acquireLegacyScalarU8Asset(descriptor columnVectorGraphSharedPreparedLegacyScalarU8AssetDescriptor, load func() (columnVectorGraphQuantizedAssetLoadStatus, error)) (columnVectorGraphQuantizedAssetLoadStatus, error) {
+	return h.acquireLegacyScalarU8AssetWithContext(context.Background(), descriptor, load)
+}
+
+// acquireLegacyScalarU8AssetWithContext coalesces immutable code-plane loads
+// without making a canceled public waiter retain its already-admitted owner.
+// A first loader remains single-flight; only the caller's wait is abandoned.
+func (h *columnVectorGraphSharedPreparedSearch) acquireLegacyScalarU8AssetWithContext(ctx context.Context, descriptor columnVectorGraphSharedPreparedLegacyScalarU8AssetDescriptor, load func() (columnVectorGraphQuantizedAssetLoadStatus, error)) (columnVectorGraphQuantizedAssetLoadStatus, error) {
 	if h == nil || descriptor.definition.Name == "" || load == nil {
 		return columnVectorGraphQuantizedAssetLoadStatus{}, fmt.Errorf("%w: shared legacy scalar_u8 asset request is invalid", errColumnVectorGraphQuantizedAssetInvalid)
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	for {
+		if err := ctx.Err(); err != nil {
+			return columnVectorGraphQuantizedAssetLoadStatus{}, err
+		}
 		h.legacyScalarU8Mu.Lock()
 		if h.legacyScalarU8Closed {
 			h.legacyScalarU8Mu.Unlock()
@@ -451,6 +496,14 @@ func (h *columnVectorGraphSharedPreparedSearch) acquireLegacyScalarU8Asset(descr
 			}
 			h.legacyScalarU8Entries = append(h.legacyScalarU8Entries, entry)
 			h.legacyScalarU8Mu.Unlock()
+			if err := ctx.Err(); err != nil {
+				h.legacyScalarU8Mu.Lock()
+				entry.status, entry.err, entry.building = columnVectorGraphQuantizedAssetLoadStatus{}, err, false
+				close(entry.ready)
+				h.removeLegacyScalarU8AssetEntryLocked(entry)
+				h.legacyScalarU8Mu.Unlock()
+				return columnVectorGraphQuantizedAssetLoadStatus{}, err
+			}
 
 			// Do not hold either the collection prepared-holder mutex or this
 			// holder mutex while mapping/parsing the requested code plane.
@@ -503,7 +556,11 @@ func (h *columnVectorGraphSharedPreparedSearch) acquireLegacyScalarU8Asset(descr
 		if entry.building {
 			ready := entry.ready
 			h.legacyScalarU8Mu.Unlock()
-			<-ready
+			select {
+			case <-ready:
+			case <-ctx.Done():
+				return columnVectorGraphQuantizedAssetLoadStatus{}, ctx.Err()
+			}
 			continue
 		}
 		status, err := entry.status, entry.err
@@ -630,8 +687,18 @@ func (r *columnVectorGraphPhysicalRowReader) attachSharedPreparedSearch(ref *col
 // to that reader. It is intentionally separate from exact holder readiness:
 // unavailable scalar assets must not poison exact search state.
 func (c *Collection) requestAndAttachColumnVectorGraphSharedPreparedLegacyScalarU8Asset(reader *columnVectorGraphPhysicalRowReader, name string) error {
+	return c.requestAndAttachColumnVectorGraphSharedPreparedLegacyScalarU8AssetWithContext(context.Background(), reader, name)
+}
+
+func (c *Collection) requestAndAttachColumnVectorGraphSharedPreparedLegacyScalarU8AssetWithContext(ctx context.Context, reader *columnVectorGraphPhysicalRowReader, name string) error {
 	if c == nil || c.db == nil || reader == nil || name == "" {
 		return fmt.Errorf("%w: shared legacy scalar_u8 asset request is invalid", ErrVectorIndexSearchUnavailable)
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	q, ok := findQuantizedVectorIndex(reader.def, name)
 	if !ok {
@@ -652,7 +719,7 @@ func (c *Collection) requestAndAttachColumnVectorGraphSharedPreparedLegacyScalar
 		if cache == nil {
 			return fmt.Errorf("%w: %w: column_graph %q quantized index %q has no zero-row scalar-u8 validation metadata", ErrVectorIndexSearchUnavailable, errColumnVectorGraphQuantizedAssetStale, reader.def.Name, name)
 		}
-		err := cache.validate(name, q, func(descriptor columnVectorGraphSharedPreparedLegacyScalarU8AssetDescriptor) error {
+		err := cache.validateWithContext(ctx, name, q, func(descriptor columnVectorGraphSharedPreparedLegacyScalarU8AssetDescriptor) error {
 			if !descriptor.assets.HasCodes || descriptor.assets.Codes.AssetID != columnVectorGraphQuantizedCodesAssetID(q) {
 				return fmt.Errorf("%w: quantized asset %q has no matching zero-row scalar_u8 code-plane identity", errColumnVectorGraphQuantizedAssetMissing, name)
 			}
@@ -686,7 +753,7 @@ func (c *Collection) requestAndAttachColumnVectorGraphSharedPreparedLegacyScalar
 	if !descriptor.assets.HasCodes || descriptor.assets.Codes.Role != columnVectorIndexStateAssetRoleQuantizedCodes || descriptor.assets.Codes.AssetID != wantAssetID {
 		return fmt.Errorf("%w: %w: column_graph %q quantized index %q has no matching scalar_u8 code-plane identity", ErrVectorIndexSearchUnavailable, errColumnVectorGraphQuantizedAssetMissing, reader.def.Name, name)
 	}
-	status, err := ref.holder.acquireLegacyScalarU8Asset(descriptor, func() (columnVectorGraphQuantizedAssetLoadStatus, error) {
+	status, err := ref.holder.acquireLegacyScalarU8AssetWithContext(ctx, descriptor, func() (columnVectorGraphQuantizedAssetLoadStatus, error) {
 		return loadColumnVectorGraphQuantizedAssetResourceStatus(c.db.ColumnAssetRootDir(), reader.catalog.meta.Name, *reader.catalog.meta.Options.ColumnStore, reader.def, reader.graph, descriptor.definition, descriptor.assets)
 	})
 	if err != nil {

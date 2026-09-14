@@ -1,9 +1,9 @@
 package collections
 
 import (
+	"context"
 	"errors"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -19,7 +19,6 @@ func TestColumnGraphLegacyScalarU8ZeroRowValidationCache(t *testing.T) {
 			descriptors: []columnVectorGraphSharedPreparedLegacyScalarU8AssetDescriptor{{definition: q}},
 			entries:     make([]columnVectorGraphLegacyScalarU8ZeroRowValidationEntry, 1),
 		}
-		cache.cond = sync.NewCond(&cache.mu)
 		return cache
 	}
 
@@ -318,5 +317,94 @@ func TestColumnGraphSharedPreparedLegacyScalarU8AssetCloseDuringLoad(t *testing.
 	resource.mu.Unlock()
 	if !closed {
 		t.Fatal("closed-during-load resource leaked")
+	}
+}
+
+func TestColumnGraphSharedPreparedLegacyScalarU8AssetWaiterCancellation(t *testing.T) {
+	holder := &columnVectorGraphSharedPreparedSearch{}
+	descriptor := columnVectorGraphSharedPreparedLegacyScalarU8AssetDescriptor{
+		definition: QuantizedVectorIndexDefinition{Name: "q", Codec: QuantizedVectorCodecScalarU8, Version: 1},
+	}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	resource := &columnVectorGraphQuantizedAssetResource{}
+	load := func() (columnVectorGraphQuantizedAssetLoadStatus, error) {
+		select {
+		case <-started:
+		default:
+			close(started)
+		}
+		<-release
+		return columnVectorGraphQuantizedAssetLoadStatus{
+			Definition:   descriptor.definition,
+			Asset:        descriptor.assets.Codes,
+			Prepared:     &quantizedasset.Prepared{},
+			resource:     resource,
+			ownsResource: true,
+		}, nil
+	}
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := holder.acquireLegacyScalarU8AssetWithContext(context.Background(), descriptor, load)
+		firstDone <- err
+	}()
+	<-started
+
+	ctx, cancel := context.WithCancel(context.Background())
+	secondDone := make(chan error, 1)
+	go func() {
+		_, err := holder.acquireLegacyScalarU8AssetWithContext(ctx, descriptor, load)
+		secondDone <- err
+	}()
+	cancel()
+	select {
+	case err := <-secondDone:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("canceled waiter err=%v want context.Canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("canceled waiter remained blocked behind first asset load")
+	}
+	close(release)
+	if err := <-firstDone; err != nil {
+		t.Fatalf("first asset load: %v", err)
+	}
+	if err := holder.close(); err != nil {
+		t.Fatalf("holder close: %v", err)
+	}
+}
+
+func TestColumnGraphLegacyScalarU8ZeroRowValidationWaiterCancellation(t *testing.T) {
+	q := QuantizedVectorIndexDefinition{Name: "q", Codec: QuantizedVectorCodecScalarU8, Version: 1}
+	cache := &columnVectorGraphLegacyScalarU8ZeroRowValidationCache{
+		descriptors: []columnVectorGraphSharedPreparedLegacyScalarU8AssetDescriptor{{definition: q}},
+		entries:     []columnVectorGraphLegacyScalarU8ZeroRowValidationEntry{{ready: make(chan struct{})}},
+	}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	validate := func(columnVectorGraphSharedPreparedLegacyScalarU8AssetDescriptor) error {
+		close(started)
+		<-release
+		return nil
+	}
+	firstDone := make(chan error, 1)
+	go func() { firstDone <- cache.validateWithContext(context.Background(), q.Name, q, validate) }()
+	<-started
+
+	ctx, cancel := context.WithCancel(context.Background())
+	secondDone := make(chan error, 1)
+	go func() { secondDone <- cache.validateWithContext(ctx, q.Name, q, validate) }()
+	cancel()
+	select {
+	case err := <-secondDone:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("canceled zero-row waiter err=%v want context.Canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("canceled zero-row waiter remained blocked behind validation")
+	}
+	close(release)
+	if err := <-firstDone; err != nil {
+		t.Fatalf("first zero-row validation: %v", err)
 	}
 }

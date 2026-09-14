@@ -58,6 +58,8 @@ type ColumnGraphScorePlaneWork struct {
 	ExactBaseRerankScoreCalls  uint64 `json:"exact_base_rerank_score_calls"`
 	ExactSuffixScoreCalls      uint64 `json:"exact_suffix_score_calls"`
 	ExactSmallFilterScoreCalls uint64 `json:"exact_small_filter_score_calls"`
+	ExactBaseVectorBytesRead   uint64 `json:"exact_base_vector_bytes_read"`
+	ExactSuffixVectorBytesRead uint64 `json:"exact_suffix_vector_bytes_read"`
 
 	Snapshot ColumnGraphQuerySnapshot `json:"snapshot"`
 }
