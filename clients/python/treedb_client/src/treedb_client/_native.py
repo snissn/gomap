@@ -355,7 +355,8 @@ def _dense_response(body, top_k, version=2, *, query_mode=None, quantized_index_
             score_plane = DenseScorePlaneProof.from_dict(_dense_score_plane(sections[136]))
         except (ValueError, TypeError, KeyError, UnicodeError) as exc:
             raise TreeDBProtocolError("invalid native dense score-plane proof", dense_work=work) from exc
-        if (score_plane.requested_mode != (query_mode or "quantized_rerank")
+        if (not score_plane.available or not score_plane.completed or not score_plane.snapshot.available
+                or score_plane.requested_mode != (query_mode or "quantized_rerank")
                 or score_plane.effective_mode != "quantized_rerank"
                 or score_plane.quantized_index_name != (quantized_index_name or score_plane.quantized_index_name)
                 or score_plane.requested_top_k != top_k

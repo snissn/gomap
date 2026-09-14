@@ -179,7 +179,7 @@ func (c *Client) DenseVectorSearch(ctx context.Context, request DenseVectorSearc
 	}
 	if err == nil && version == iwire.DenseVectorSearchTypedQuantizedVersion {
 		out.ScorePlane, err = decodeDenseScorePlaneSection(c.vectorSections, true, c.limits)
-		if err == nil && (out.ScorePlane == nil || out.ScorePlane.RequestedMode != request.QueryMode || out.ScorePlane.EffectiveMode != collections.VectorIndexQueryModeQuantizedRerank || out.ScorePlane.QuantizedIndexName != request.QuantizedIndexName || out.ScorePlane.RequestedTopK != uint64(request.TopK) || out.ScorePlane.RequestedEFSearch != uint64(request.EfSearch) || out.ScorePlane.RequestedRerankCandidates != uint64(request.QuantizedRerankCandidates)) {
+		if err == nil && (out.ScorePlane == nil || !out.ScorePlane.Available || !out.ScorePlane.Completed || !out.ScorePlane.Snapshot.Available || out.ScorePlane.RequestedMode != request.QueryMode || out.ScorePlane.EffectiveMode != collections.VectorIndexQueryModeQuantizedRerank || out.ScorePlane.QuantizedIndexName != request.QuantizedIndexName || out.ScorePlane.RequestedTopK != uint64(request.TopK) || out.ScorePlane.RequestedEFSearch != uint64(request.EfSearch) || out.ScorePlane.RequestedRerankCandidates != uint64(request.QuantizedRerankCandidates)) {
 			err = protocolError(iwire.ErrConsistencyUnavailable, "dense score-plane proof does not match the request")
 		}
 	}
