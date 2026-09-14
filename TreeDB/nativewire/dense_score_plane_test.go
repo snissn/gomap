@@ -192,6 +192,11 @@ func TestDenseQuantizedScorePlaneResponseRejectsUnsupportedRoute(t *testing.T) {
 			t.Fatalf("invalid rerank counts accepted (%s): %+v", name, candidate)
 		}
 	}
+	retainedWithoutScore := *proof
+	retainedWithoutScore.QuantizedScoreCalls, retainedWithoutScore.RawRetainedCandidates, retainedWithoutScore.RawCandidateWidth = 1, 2, 2
+	if err := validateDenseQuantizedScorePlaneResponse(work, &retainedWithoutScore, request, 0); err == nil {
+		t.Fatal("score-plane proof retained more candidates than quantized score calls")
+	}
 	for name, mutate := range map[string]func(*collections.ColumnGraphScorePlaneWork){
 		"cap exceeds normalized width":       func(p *collections.ColumnGraphScorePlaneWork) { p.RerankCandidateCap = 2 },
 		"shortlist exceeds normalized width": func(p *collections.ColumnGraphScorePlaneWork) { p.LiveShortlistCandidates = 2 },

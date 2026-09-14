@@ -715,6 +715,7 @@ class TreeDBClientTests(unittest.TestCase):
                 lambda item: item.update(score_plane={**score_plane, "quantized_config_hash": 1}),
                 lambda item: item.update(score_plane={**score_plane, "requested_ef_search": 1, "normalized_candidate_width": 2, "raw_candidate_width": 2, "rerank_candidate_cap": 2, "raw_retained_candidates": 2, "live_shortlist_candidates": 2, "actual_rerank_candidates": 2}),
                 lambda item: item.update(candidates=2),
+                lambda item: item.update(score_plane={**score_plane, "raw_retained_candidates": 2, "quantized_score_calls": 1}),
             ):
                 invalid = copy.deepcopy(payload)
                 mutation(invalid)
@@ -736,6 +737,17 @@ class TreeDBClientTests(unittest.TestCase):
                         quantized_index_name="embedding.scalar_u8.public",
                     )
                 dimension_client.close()
+            for bad_score in (None, float("nan")):
+                invalid_score = copy.deepcopy(payload)
+                invalid_score["documents"][0]["score"] = bad_score
+                with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, invalid_score, 0)}) as score_server:
+                    score_client = TreeDBClient(score_server.base_url, timeout=1)
+                    with self.assertRaisesRegex(TreeDBProtocolError, "score-plane proof"):
+                        score_client.query_by_embedding(
+                            "docs", [1, 0], 1, query_mode="quantized_rerank",
+                            quantized_index_name="embedding.scalar_u8.public",
+                        )
+                    score_client.close()
             overflow = copy.deepcopy(payload)
             overflow["documents"] = [
                 {"id": "a", "content": "alpha", "score": 1.0},

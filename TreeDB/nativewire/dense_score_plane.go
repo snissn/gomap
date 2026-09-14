@@ -140,6 +140,7 @@ func denseScorePlaneRerankCountersMatch(proof *collections.ColumnGraphScorePlane
 			}
 		}
 		return proof.RerankCandidateCap <= proof.NormalizedCandidateWidth &&
+			proof.RawRetainedCandidates <= proof.QuantizedScoreCalls &&
 			proof.LiveShortlistCandidates <= proof.NormalizedCandidateWidth &&
 			proof.NormalizedCandidateWidth <= proof.RawCandidateWidth &&
 			proof.ExactSmallFilterScoreCalls == 0 &&

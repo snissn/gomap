@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import http.client
 import json
+import math
 import socket
 import ssl
 import struct
@@ -1041,6 +1042,7 @@ def _validate_http_dense_quantized_response(
         or work.graph.snapshot != proof.snapshot
         or len(response.documents) > top_k
         or response.candidates != len(response.documents)
+        or any(document.score is None or not math.isfinite(document.score) for document in response.documents)
         or response.index.dimension != query_dimension
         or not dense_score_plane_byte_counters_match(proof, query_dimension)
         or not _dense_http_score_plane_counters_match_graph(work, proof, len(response.documents))
