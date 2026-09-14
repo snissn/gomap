@@ -21,6 +21,9 @@ it kept per-granule alpha explicit/opt-in and did not promote it as the default
 for new `scalar_u8` declarations. The #2864 optimization graph starts from the
 baseline/profile runbook in
 [`scalar-u8-alpha-optimization-2865.md`](scalar-u8-alpha-optimization-2865.md).
+The narrow mutable typed read-view extension in #4685 is specified below; it
+does not promote another codec, replace the existing buffered routes, or change
+the default exact behavior.
 
 ## User-visible query modes
 
@@ -100,9 +103,94 @@ prechecked against remaining allowance before dispatch. Cancellation, an
 exhausted allowance, or an unavailable/mismatched code asset fails closed and
 returns no partial successful shortlist.
 
-This internal collector does **not** make public mutable filtered quantized
-search available. In particular, it does not install a mutable mode, alter the
-existing exact or buffered quantized APIs, or claim Q2/Q3 rerank/public support.
+By itself, this internal collector does **not** make public mutable filtered
+quantized search available. Q2 composes it into only the selected typed
+read-view rerank path documented next; it still does not alter the existing
+exact or generic buffered quantized APIs, or claim Q3 transport/wire support.
+
+### Selected typed read-view legacy scalar-u8 rerank (#4685)
+
+#4685 admits one deliberately small mutable serving exception after normal typed
+serving admission: `Collection.SearchVectorIndexWithBufferReadView` may use
+`QueryMode=quantized_rerank` with a named **legacy** `scalar_u8` v1 declaration.
+The captured typed owner supplies one coherent immutable base, current suffix,
+filter plan, final IDs, and exact vector source. The route is cosine-only and
+uses the existing Q1 candidate collector for the immutable base; it does not
+open a standalone searcher or construct a new ANN/index lifecycle.
+
+This is not a general mutable quantized feature. Q2 does not admit
+`quantized_only`, calibrated scalar-u8, RaBitQ, BRQ, `SearchHybrid`,
+`native_runtime`, HTTP/native transport, new benchmark-only APIs, or a fallback
+to whole-document scan or full exact search. Existing exact and generic buffered
+quantized APIs retain their contracts. A selected asset that is absent, stale,
+corrupt, mismatched, closed, or otherwise unavailable fails the request; it
+never silently selects an exact route.
+
+The reader opens its ordinary exact sources with quantized assets skipped. For a
+nonempty base, its existing full-TVIS/base-identity shared prepared holder owns
+the mapped scalar code resource. First use of a named plane is serialized in
+that holder; admitted readers receive only non-owning status references. Thus
+requests borrow one immutable code plane while their owner is live, rather than
+reopening or copying the full code plane per query. Closing a reader does not
+close a resource still held by the shared holder, and a scalar-plane failure does
+not poison the exact holder.
+
+An empty base intentionally has no exact prepared holder, but it is not an asset
+validation bypass. Before a `TopK=0`, empty, or suffix-only shortcut, Q2 validates
+the selected zero-row legacy image against the immutable published declaration
+and asset identity. That validation is serialized and memoized with the serving
+metadata, while retaining neither the decoded image nor a prepared scorer or
+mapped handle. A valid zero-row plane is a nonempty typed-column image with zero
+code rows; missing, truncated, corrupt, or identity-mismatched images fail
+closed.
+
+Q2 keeps its request arithmetic explicit, overflow-checked, and separate from
+the work budget:
+
+- `A` is the immutable base candidate domain before shadows: all base rows when
+  unfiltered, or `plan.base.Count()` when filtered.
+- `S` is a conservative possible-shadow allowance: all current suffix rows when
+  unfiltered, or `len(plan.excludedBase)` when filtered.
+- `E0 = min(A, max(K, requested EF when nonzero, otherwise the index default))`.
+- `Rcap = min(A, E0, requested rerank candidates when nonzero, otherwise E0)`.
+  Request validation happens first: `K`/`EF` must be valid and a nonzero rerank
+  request must be at least `K`.
+- `C = min(A, E0 + S)` is the checked/preallocated **raw** immutable-candidate
+  width supplied to Q1. It is not a rerank expansion and does not enlarge
+  `Rcap`.
+- `D` is the eligible, nondeleted current-suffix count. `B` is the positive
+  typed `SearchCandidates` allowance, which bounds actual scalar base calls,
+  exact base reranks, and exact suffix scores.
+
+For a nonempty ANN request Q2 reserves `D + Rcap`, gives Q1
+`baseAllowance = B - D - Rcap`, and requires the strict condition
+`baseAllowance > C`. The strict spare is required because the Q1 collector
+rejects a traversal that spends its terminal scalar score; Q2 must not hide that
+failure by shrinking an explicit recall request. It collects at most `C` raw
+candidates, removes filter-ineligible and shadowed base rows afterwards, retains
+at most `E0` live rows, then exact-reranks at most `Rcap`. It does not refill or
+retry after visibility removal. A zero-base route still validates the selected
+asset and may exact-score the suffix only when `D <= B`.
+
+An eligible complete filter of at most 4,096 rows is intentionally a typed exact
+route, including current suffixes, rather than ANN evidence. It uses the same
+canonical final arithmetic and validates the selected scalar asset for a
+nonempty base, but performs no scalar traversal. Its actual live base plus
+suffix exact scores must fit `B`. Empty filters and `TopK=0` return after the
+appropriate selected-asset validation without reserving an ANN budget.
+
+Final scores on every Q2 branch (raw base rerank, exact small filter, and
+suffix) come from authoritative typed FP32 vectors, not the quantized estimate
+or the prepared pack's raw-dot scorer. Q2 computes FP64 inverse norms, calls
+`vectorops.CosineDistanceFloat32Normalized`, and returns
+`1 - float64(distance)`. This preserves the canonical stable close-angle order
+across base and suffix values while leaving pre-Q2 exact arithmetic unchanged.
+
+`ColumnGraphQueryWork.ScorePlane` is Q2's separately versioned owner-local
+proof: it records the normalized widths and actual scalar/exact work from the
+captured owner, rather than deriving evidence from request flags or process
+counters. Q2 keeps that proof internal to the selected Go serving route. Q3
+(#4686) owns any HTTP/native-wire schema or public transport exposure.
 
 ## Durable asset model
 

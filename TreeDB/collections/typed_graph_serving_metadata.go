@@ -4,6 +4,7 @@ import (
 	"context"
 	"reflect"
 	"slices"
+	"sync"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
@@ -18,6 +19,10 @@ type typedGraphServingBaseMetadata struct {
 	recordCount      int
 	bytes            int64
 	preparedKey      string
+	// Empty graphs do not have an exact shared holder. Keep their selected
+	// scalar-u8 payload validation with the immutable base metadata instead of
+	// pretending a zero-row code plane is already ready from its declaration.
+	zeroRowLegacyScalarU8Validation *columnVectorGraphLegacyScalarU8ZeroRowValidationCache
 }
 
 func (b *typedGraphServingBaseMetadata) openPhysicalReader(c *Collection, snap *backenddb.Snapshot, opts columnVectorGraphPhysicalRowReaderOptions) (*columnVectorGraphPhysicalRowReader, error) {
@@ -26,7 +31,14 @@ func (b *typedGraphServingBaseMetadata) openPhysicalReader(c *Collection, snap *
 	}
 	view := b.view
 	view.snapshot = snap
-	return c.openColumnVectorGraphPhysicalRowReaderWithBoundKey(snap, view.Catalog.meta.VectorIndexes[0], b.graph, view, opts, b.preparedKey)
+	reader, err := c.openColumnVectorGraphPhysicalRowReaderWithBoundKey(snap, view.Catalog.meta.VectorIndexes[0], b.graph, view, opts, b.preparedKey)
+	if err != nil {
+		return nil, err
+	}
+	if reader.RowCount() == 0 {
+		reader.zeroRowLegacyScalarU8Validation = b.zeroRowLegacyScalarU8Validation
+	}
+	return reader, nil
 }
 
 func (c *Collection) prepareTypedGraphServingMetadata(ctx context.Context, cold typedGraphColdLimits) error {
@@ -107,6 +119,9 @@ func prepareTypedGraphServingBaseMetadata(graph columnVectorGraphManifestSnapsho
 		return nil, err
 	}
 	metadata := &typedGraphServingBaseMetadata{graph: graph, view: view, materializerView: materializer, refs: refs, recordCount: len(view.graphOwnerRecords)}
+	if graph.RowCount == 0 && len(view.Catalog.meta.VectorIndexes) == 1 {
+		metadata.zeroRowLegacyScalarU8Validation = newColumnVectorGraphLegacyScalarU8ZeroRowValidationCache(view.Catalog.meta.VectorIndexes[0], view.VectorIndexState)
+	}
 	if columnVectorGraphSharedPreparedEligible(graph, view) {
 		if len(view.Catalog.meta.VectorIndexes) != 1 {
 			return nil, ErrVectorIndexSnapshotMismatch
@@ -208,6 +223,39 @@ func typedGraphServingMetadataBytes(b *typedGraphServingBaseMetadata, limit int6
 	} {
 		if !add(term.count, term.size) {
 			return 0, errTypedGraphOwnerBudget
+		}
+	}
+	if cache := b.zeroRowLegacyScalarU8Validation; cache != nil {
+		descriptors, entries := cache.retainedCapacities()
+		for _, term := range []struct {
+			count int
+			size  uintptr
+		}{
+			{1, reflect.TypeFor[columnVectorGraphLegacyScalarU8ZeroRowValidationCache]().Size()},
+			{1, reflect.TypeFor[sync.Cond]().Size()},
+			{descriptors, reflect.TypeFor[columnVectorGraphSharedPreparedLegacyScalarU8AssetDescriptor]().Size()},
+			{entries, reflect.TypeFor[columnVectorGraphLegacyScalarU8ZeroRowValidationEntry]().Size()},
+			{descriptors, reflect.TypeFor[ScalarU8CalibrationConfig]().Size()},
+		} {
+			if !add(term.count, term.size) {
+				return 0, errTypedGraphOwnerBudget
+			}
+		}
+		for _, descriptor := range cache.descriptors {
+			if !add(len(descriptor.definition.Name), 1) ||
+				!add(len(descriptor.definition.Codec), 1) ||
+				!add(len(descriptor.assets.Codes.Role), 1) ||
+				!add(len(descriptor.assets.Codes.AssetID), 1) ||
+				!add(len(descriptor.assets.Codes.LogicalType), 1) ||
+				!add(len(descriptor.assets.Codes.PhysicalEncoding), 1) ||
+				!add(len(descriptor.assets.Codes.Ref.Kind), 1) ||
+				!add(len(descriptor.assets.Codes.Ref.Namespace), 1) {
+				return 0, errTypedGraphOwnerBudget
+			}
+			if cfg := descriptor.definition.ScalarU8Calibration; cfg != nil &&
+				(!add(len(cfg.Mode), 1) || !add(len(cfg.Grouping), 1) || !add(len(cfg.AlphaPolicy.Name), 1)) {
+				return 0, errTypedGraphOwnerBudget
+			}
 		}
 	}
 	// Both decoded views originate in the same bounded manifest. Account their

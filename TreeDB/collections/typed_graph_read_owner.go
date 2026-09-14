@@ -48,6 +48,17 @@ type typedGraphReadOwner struct {
 	closed                        bool
 }
 
+// attachTypedGraphLegacyScalarU8QuantizedAsset is the Q2-only acquisition seam
+// for the private filtered scalar-u8 collector. Owner assembly keeps generic
+// quantized assets skipped; this attaches exactly one holder-owned legacy v1
+// code plane to the base reader without transferring resource ownership.
+func (o *typedGraphReadOwner) attachTypedGraphLegacyScalarU8QuantizedAsset(name string) error {
+	if o == nil || o.closed || o.overlay == nil || o.overlay.base == nil || o.overlay.base.reader == nil || o.overlay.base.collection == nil {
+		return ErrVectorIndexSnapshotMismatch
+	}
+	return o.overlay.base.collection.requestAndAttachColumnVectorGraphSharedPreparedLegacyScalarU8Asset(o.overlay.base.reader, name)
+}
+
 // Like VectorIndexSearcher.Close, Close is idempotent, not concurrently callable
 // with searches. Resource release never runs under the accounting mutex.
 func (o *typedGraphReadOwner) Close() error {
@@ -307,13 +318,17 @@ func (c *Collection) openTypedGraphReadOwnerWithContext(ctx context.Context, lim
 		if state.servingBase != nil {
 			recordCount = state.servingBase.recordCount
 		}
-		candidate.backingBytes, err = typedGraphCapturedBaseBackingBound(graph.RowCount, recordCount, graph.AdjacencyLayerCount, limits.StateBytes-candidate.descriptorBytes)
+		def := catalog.meta.VectorIndexes[0]
+		legacyScalarU8Assets := 0
+		if graph.RowCount > 0 {
+			legacyScalarU8Assets = columnVectorGraphSharedPreparedLegacyScalarU8AssetDescriptorCount(def)
+		}
+		candidate.backingBytes, err = typedGraphCapturedBaseBackingBoundWithLegacyScalarU8Assets(graph.RowCount, recordCount, graph.AdjacencyLayerCount, legacyScalarU8Assets, limits.StateBytes-candidate.descriptorBytes)
 		if err != nil {
 			return err
 		}
-		def := catalog.meta.VectorIndexes[0]
 		baseView.graphOwnerRecords = nil
-		readerOptions := columnVectorGraphPhysicalRowReaderOptions{admitSources: func(keyBytes int) error {
+		readerOptions := columnVectorGraphPhysicalRowReaderOptions{SkipQuantizedAssets: true, admitSources: func(keyBytes int) error {
 			if !addDescriptor(int64(keyBytes), 2) {
 				return errTypedGraphOwnerBudget
 			}

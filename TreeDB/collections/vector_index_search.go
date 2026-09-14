@@ -1148,7 +1148,7 @@ func (r vectorIndexSearchRouteStats) apply(stats *VectorIndexSearchStats) {
 func (c *Collection) SearchVectorIndex(opts VectorIndexSearchOptions) (VectorIndexSearchResponse, error) {
 	if c.typedGraphServingPolicy() != nil {
 		var buffer VectorIndexSearchBuffer
-		response, view, err := c.searchTypedGraphServing(opts, &buffer)
+		response, view, err := c.searchTypedGraphServing(opts, &buffer, false)
 		if err != nil {
 			return response, err
 		}
@@ -1344,7 +1344,7 @@ func (c *Collection) SearchVectorIndexWithBuffer(opts VectorIndexSearchOptions, 
 
 func (c *Collection) searchVectorIndexWithBuffer(opts VectorIndexSearchOptions, buffer *VectorIndexSearchBuffer, coverageLocked bool) (VectorIndexSearchResponse, error) {
 	if c.typedGraphServingPolicy() != nil {
-		response, view, err := c.searchTypedGraphServing(opts, buffer)
+		response, view, err := c.searchTypedGraphServing(opts, buffer, false)
 		if err != nil {
 			return response, err
 		}
