@@ -354,8 +354,8 @@ class QuantizedIndexInfo:
         raw_calibration = data.get("scalar_u8_calibration")
         return cls(
             name=_as_str(data["name"], "quantized index.name"),
-            codec=_as_optional_str_default(data.get("codec"), "quantized index.codec") or "scalar_u8",
-            version=_as_optional_int_default(data.get("version"), "quantized index.version") or 1,
+            codec=_as_optional_str_default(data.get("codec"), "quantized index.codec") if "codec" in data else "scalar_u8",
+            version=_as_optional_int_default(data.get("version"), "quantized index.version") if "version" in data else 1,
             scalar_u8_calibration=(
                 None if raw_calibration is None else ScalarU8CalibrationConfig.from_dict(raw_calibration)
             ),

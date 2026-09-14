@@ -722,6 +722,28 @@ class TreeDBClientTests(unittest.TestCase):
                         query_mode="quantized_rerank", quantized_index_name="embedding.scalar_u8.public",
                     )
                 underfilled_client.close()
+            over_scored_filter = copy.deepcopy(filtered_payload)
+            over_scored_filter["dense_work"]["graph"].update(base_ann_scored=2, exact_base_scored=2, base_result_ids=2)
+            over_scored_filter["score_plane"].update(
+                normalized_candidate_width=2,
+                raw_candidate_width=2,
+                rerank_candidate_cap=2,
+                raw_retained_candidates=2,
+                live_shortlist_candidates=2,
+                actual_rerank_candidates=2,
+                quantized_score_calls=2,
+                quantized_code_bytes_read=4,
+                exact_base_rerank_score_calls=2,
+                exact_base_vector_bytes_read=16,
+            )
+            with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, over_scored_filter, 0)}) as over_scored_server:
+                over_scored_client = TreeDBClient(over_scored_server.base_url, timeout=1)
+                with self.assertRaisesRegex(TreeDBProtocolError, "score-plane proof"):
+                    over_scored_client.query_by_embedding(
+                        "docs", [1, 0], 1, filter={"field": "meta.repo", "operator": "==", "value": "gomap"},
+                        query_mode="quantized_rerank", quantized_index_name="embedding.scalar_u8.public",
+                    )
+                over_scored_client.close()
             with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, payload, 0)}) as missing_filter_server:
                 missing_filter_client = TreeDBClient(missing_filter_server.base_url, timeout=1)
                 with self.assertRaisesRegex(TreeDBProtocolError, "score-plane proof"):
@@ -766,6 +788,8 @@ class TreeDBClientTests(unittest.TestCase):
                 lambda item: item.update(score_plane={**score_plane, "exact_base_vector_bytes_read": 0}),
                 lambda item: item.update(score_plane={**score_plane, "exact_suffix_vector_bytes_read": 1}),
                 lambda item: item.update(score_plane={**score_plane, "quantized_config_hash": 1}),
+                lambda item: item.update(index={**typed_index, "quantized_indexes": [{"name": "embedding.scalar_u8.public", "codec": "scalar_u8", "version": 0}]}),
+                lambda item: item.update(index={**typed_index, "quantized_indexes": [{"name": "embedding.scalar_u8.public", "codec": "", "version": 1}]}),
                 lambda item: item.update(score_plane={**score_plane, "requested_ef_search": 1, "normalized_candidate_width": 2, "raw_candidate_width": 2, "rerank_candidate_cap": 2, "raw_retained_candidates": 2, "live_shortlist_candidates": 2, "actual_rerank_candidates": 2}),
                 lambda item: item.update(candidates=2),
                 lambda item: item.update(score_plane={**score_plane, "raw_retained_candidates": 2, "quantized_score_calls": 1}),

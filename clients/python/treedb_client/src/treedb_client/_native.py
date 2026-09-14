@@ -328,6 +328,11 @@ def _dense_score_plane_matches_graph(work, score_plane, top_k, result_count, fil
         "typed_exact": "typed_exact",
         "quantized_rerank": "typed_hnsw",
     }.get(score_plane.route)
+    exact_score_calls = (
+        score_plane.exact_base_rerank_score_calls
+        + score_plane.exact_small_filter_score_calls
+        + score_plane.exact_suffix_score_calls
+    )
     return (
         expected is not None
         and work.completed
@@ -338,6 +343,10 @@ def _dense_score_plane_matches_graph(work, score_plane, top_k, result_count, fil
         and work.graph.filter.attempted == filter_requested
         and (not work.graph.filter.attempted or work.graph.filter.completed)
         and (not filter_requested or result_count == min(top_k, work.graph.filter.eligible_rows))
+        and (not filter_requested or (
+            exact_score_calls <= work.graph.filter.eligible_rows
+            and (score_plane.route != "typed_exact" or exact_score_calls == work.graph.filter.eligible_rows)
+        ))
         and (score_plane.route != "typed_empty" or (
             work.graph.filter.attempted and work.graph.filter.completed and work.graph.filter.eligible_rows == 0
         ))

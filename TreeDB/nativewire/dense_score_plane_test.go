@@ -148,6 +148,31 @@ func TestDenseQuantizedScorePlaneResponseRejectsUnsupportedRoute(t *testing.T) {
 	if err := validateDenseQuantizedScorePlaneResponse(underfilledWork, &underfilledProof, underfilledRequest, 1); err == nil {
 		t.Fatal("filtered response underfilled captured eligible rows")
 	}
+	overScoredProof := filteredProof
+	overScoredProof.NormalizedCandidateWidth, overScoredProof.RawCandidateWidth, overScoredProof.RerankCandidateCap = 2, 2, 2
+	overScoredProof.RawRetainedCandidates, overScoredProof.LiveShortlistCandidates, overScoredProof.ActualRerankCandidates = 2, 2, 2
+	overScoredProof.QuantizedScoreCalls, overScoredProof.QuantizedCodeBytesRead = 2, 4
+	overScoredProof.ExactBaseRerankScoreCalls, overScoredProof.ExactBaseVectorBytesRead = 2, 16
+	overScoredWork := filteredWork
+	overScoredWork.Graph.BaseANNScored, overScoredWork.Graph.ExactBaseScored, overScoredWork.Graph.BaseResultIDs = 2, 2, 2
+	if err := validateDenseQuantizedScorePlaneResponse(overScoredWork, &overScoredProof, filteredRequest, 1); err == nil {
+		t.Fatal("filtered response exact-scored beyond captured eligible rows")
+	}
+	underScoredExactProof := filteredProof
+	underScoredExactProof.Route = "typed_exact"
+	underScoredExactProof.QuantizedScoreCalls, underScoredExactProof.QuantizedCodeBytesRead = 0, 0
+	underScoredExactProof.RawRetainedCandidates, underScoredExactProof.LiveShortlistCandidates = 0, 0
+	underScoredExactProof.ActualRerankCandidates, underScoredExactProof.ExactBaseRerankScoreCalls = 0, 0
+	underScoredExactProof.ExactBaseVectorBytesRead = 0
+	underScoredExactProof.ExactSuffixScoreCalls, underScoredExactProof.ExactSuffixVectorBytesRead = 1, 8
+	underScoredExactWork := filteredWork
+	underScoredExactWork.Graph.Route = "typed_exact"
+	underScoredExactWork.Graph.BaseANNScored, underScoredExactWork.Graph.ExactBaseScored = 0, 0
+	underScoredExactWork.Graph.BaseResultIDs, underScoredExactWork.Graph.DeltaScored = 0, 1
+	underScoredExactWork.Graph.Filter.EligibleRows = 2
+	if err := validateDenseQuantizedScorePlaneResponse(underScoredExactWork, &underScoredExactProof, filteredRequest, 1); err == nil {
+		t.Fatal("filtered typed-exact response did not score every eligible row")
+	}
 	for name, mutate := range map[string]func(*collections.ColumnGraphScorePlaneWork){
 		"quantized bytes":    func(p *collections.ColumnGraphScorePlaneWork) { p.QuantizedCodeBytesRead = 0 },
 		"exact base bytes":   func(p *collections.ColumnGraphScorePlaneWork) { p.ExactBaseVectorBytesRead = 1 },

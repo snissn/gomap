@@ -265,6 +265,7 @@ func validateDenseQuantizedScorePlaneResponse(work documentservice.DenseSearchWo
 		work.Graph.Filter.Attempted != (request.Filter != nil) ||
 		(work.Graph.Filter.Attempted && !work.Graph.Filter.Completed) ||
 		(request.Filter != nil && (resultCount < 0 || uint64(resultCount) != minUint64(uint64(request.TopK), work.Graph.Filter.EligibleRows))) ||
+		(request.Filter != nil && !denseFilteredExactScoreCallsMatchWork(work, proof)) ||
 		!denseScorePlaneRerankCountersMatch(proof) ||
 		!denseScorePlaneByteCountersMatch(proof, uint64(len(request.Query))) ||
 		!denseScorePlaneCountersMatchWork(work, proof, resultCount) ||
@@ -312,6 +313,19 @@ func denseScorePlaneCountersMatchWork(work documentservice.DenseSearchWork, proo
 		work.Graph.BaseResultIDs == exactBaseScoreCalls &&
 		proof.ExactSuffixScoreCalls == work.Graph.DeltaScored &&
 		uint64(resultCount) <= exactBaseScoreCalls+proof.ExactSuffixScoreCalls
+}
+
+func denseFilteredExactScoreCallsMatchWork(work documentservice.DenseSearchWork, proof *collections.ColumnGraphScorePlaneWork) bool {
+	if proof == nil || proof.ExactSmallFilterScoreCalls > ^uint64(0)-proof.ExactBaseRerankScoreCalls {
+		return false
+	}
+	exactScoreCalls := proof.ExactBaseRerankScoreCalls + proof.ExactSmallFilterScoreCalls
+	if proof.ExactSuffixScoreCalls > ^uint64(0)-exactScoreCalls {
+		return false
+	}
+	exactScoreCalls += proof.ExactSuffixScoreCalls
+	return exactScoreCalls <= work.Graph.Filter.EligibleRows &&
+		(proof.Route != "typed_exact" || exactScoreCalls == work.Graph.Filter.EligibleRows)
 }
 
 func denseScorePlaneByteCountersMatch(proof *collections.ColumnGraphScorePlaneWork, dimension uint64) bool {
