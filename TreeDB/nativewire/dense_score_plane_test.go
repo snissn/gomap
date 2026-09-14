@@ -104,8 +104,8 @@ func TestDenseQuantizedScorePlaneResponseRejectsUnsupportedRoute(t *testing.T) {
 		t.Fatalf("valid public proof rejected: %v", err)
 	}
 	for name, mutate := range map[string]func(*collections.ColumnGraphScorePlaneWork){
-		"quantized bytes": func(p *collections.ColumnGraphScorePlaneWork) { p.QuantizedCodeBytesRead = 0 },
-		"exact base bytes": func(p *collections.ColumnGraphScorePlaneWork) { p.ExactBaseVectorBytesRead = 1 },
+		"quantized bytes":    func(p *collections.ColumnGraphScorePlaneWork) { p.QuantizedCodeBytesRead = 0 },
+		"exact base bytes":   func(p *collections.ColumnGraphScorePlaneWork) { p.ExactBaseVectorBytesRead = 1 },
 		"exact suffix bytes": func(p *collections.ColumnGraphScorePlaneWork) { p.ExactSuffixVectorBytesRead = 1 },
 	} {
 		candidate := *proof
