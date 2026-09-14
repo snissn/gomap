@@ -713,6 +713,7 @@ class TreeDBClientTests(unittest.TestCase):
                 lambda item: item.update(score_plane={**score_plane, "exact_base_vector_bytes_read": 0}),
                 lambda item: item.update(score_plane={**score_plane, "exact_suffix_vector_bytes_read": 1}),
                 lambda item: item.update(score_plane={**score_plane, "quantized_config_hash": 1}),
+                lambda item: item.update(score_plane={**score_plane, "requested_ef_search": 1, "normalized_candidate_width": 2, "raw_candidate_width": 2, "rerank_candidate_cap": 2, "raw_retained_candidates": 2, "live_shortlist_candidates": 2, "actual_rerank_candidates": 2}),
             ):
                 invalid = copy.deepcopy(payload)
                 mutation(invalid)
@@ -723,6 +724,17 @@ class TreeDBClientTests(unittest.TestCase):
                             "docs", [1, 0], 1, query_mode="quantized_rerank", quantized_index_name="embedding.scalar_u8.public"
                         )
                     bad_client.close()
+            wrong_dimension = copy.deepcopy(payload)
+            wrong_dimension["index"]["dimension"] = 1
+            wrong_dimension["score_plane"].update(quantized_code_bytes_read=1, exact_base_vector_bytes_read=4)
+            with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, wrong_dimension, 0)}) as dimension_server:
+                dimension_client = TreeDBClient(dimension_server.base_url, timeout=1)
+                with self.assertRaisesRegex(TreeDBProtocolError, "score-plane proof"):
+                    dimension_client.query_by_embedding(
+                        "docs", [1, 0], 1, query_mode="quantized_rerank",
+                        quantized_index_name="embedding.scalar_u8.public",
+                    )
+                dimension_client.close()
             overflow = copy.deepcopy(payload)
             overflow["documents"] = [
                 {"id": "a", "content": "alpha", "score": 1.0},

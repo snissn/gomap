@@ -510,6 +510,7 @@ class TreeDBClient:
                 index=index,
                 top_k=top_k_value,
                 ef_search=ef_search_value or 0,
+                query_dimension=len(request["query_embedding"]),
                 quantized_index_name=quantized_index_name,
                 quantized_rerank_candidates=rerank_value,
             )
@@ -1013,6 +1014,7 @@ def _validate_http_dense_quantized_response(
     index: str,
     top_k: int,
     ef_search: int,
+    query_dimension: int,
     quantized_index_name: str,
     quantized_rerank_candidates: int,
 ) -> None:
@@ -1038,7 +1040,8 @@ def _validate_http_dense_quantized_response(
         or work.graph.route != expected_graph_route
         or work.graph.snapshot != proof.snapshot
         or len(response.documents) > top_k
-        or not dense_score_plane_byte_counters_match(proof, response.index.dimension)
+        or response.index.dimension != query_dimension
+        or not dense_score_plane_byte_counters_match(proof, query_dimension)
         or not _dense_http_score_plane_counters_match_graph(work, proof, len(response.documents))
         or response.index.name != index
         or response.metric != "cosine"

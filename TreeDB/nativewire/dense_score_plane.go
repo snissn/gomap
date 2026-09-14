@@ -130,6 +130,15 @@ func denseScorePlaneRerankCountersMatch(proof *collections.ColumnGraphScorePlane
 	}
 	switch proof.Route {
 	case "quantized_rerank":
+		if proof.RequestedEFSearch != 0 {
+			effectiveWidth := proof.RequestedTopK
+			if proof.RequestedEFSearch > effectiveWidth {
+				effectiveWidth = proof.RequestedEFSearch
+			}
+			if proof.NormalizedCandidateWidth > effectiveWidth {
+				return false
+			}
+		}
 		return proof.RerankCandidateCap <= proof.NormalizedCandidateWidth &&
 			proof.LiveShortlistCandidates <= proof.NormalizedCandidateWidth &&
 			proof.NormalizedCandidateWidth <= proof.RawCandidateWidth &&

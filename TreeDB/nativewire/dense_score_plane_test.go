@@ -90,6 +90,11 @@ func TestDenseScorePlaneCodecOwnedAndStrict(t *testing.T) {
 	if _, err := appendDenseScorePlane(nil, inconsistentRerank, iwire.DefaultLimits()); err == nil {
 		t.Fatal("completed quantized rerank proof with inconsistent exact counters accepted")
 	}
+	efBounded := proof
+	efBounded.RequestedTopK, efBounded.RequestedEFSearch = 1, 1
+	if _, err := appendDenseScorePlane(nil, efBounded, iwire.DefaultLimits()); err == nil {
+		t.Fatal("completed quantized rerank proof exceeded the explicit EF width")
+	}
 }
 
 func TestDenseQuantizedScorePlaneResponseRejectsUnsupportedRoute(t *testing.T) {
