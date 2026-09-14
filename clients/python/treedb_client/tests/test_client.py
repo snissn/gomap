@@ -870,7 +870,7 @@ class TreeDBClientTests(unittest.TestCase):
             )
             impossible_empty_plan["score_plane"].update(
                 route="typed_empty", requested_ef_search=1,
-                normalized_candidate_width=100, raw_candidate_width=100, rerank_candidate_cap=100,
+                normalized_candidate_width=1, raw_candidate_width=1, rerank_candidate_cap=1,
                 raw_retained_candidates=0, live_shortlist_candidates=0, actual_rerank_candidates=0,
                 quantized_score_calls=0, quantized_code_bytes_read=0,
                 exact_base_rerank_score_calls=0, exact_suffix_score_calls=0, exact_small_filter_score_calls=0,

@@ -153,7 +153,10 @@ func denseScorePlaneRerankCountersMatch(proof *collections.ColumnGraphScorePlane
 			proof.ActualRerankCandidates == proof.ExactBaseRerankScoreCalls &&
 			proof.ActualRerankCandidates == minUint64(proof.LiveShortlistCandidates, proof.RerankCandidateCap)
 	case "typed_empty":
-		return proof.QuantizedScoreCalls == 0 &&
+		return proof.NormalizedCandidateWidth == 0 &&
+			proof.RawCandidateWidth == 0 &&
+			proof.RerankCandidateCap == 0 &&
+			proof.QuantizedScoreCalls == 0 &&
 			proof.ExactSuffixScoreCalls == 0 &&
 			proof.ExactSmallFilterScoreCalls == 0 &&
 			proof.RawRetainedCandidates == 0 &&

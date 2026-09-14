@@ -251,6 +251,9 @@ func TestDenseQuantizedScorePlaneResponseRejectsUnsupportedRoute(t *testing.T) {
 		"small-filter work":   func(p *collections.ColumnGraphScorePlaneWork) { p.ExactSmallFilterScoreCalls = 1 },
 		"retained candidates": func(p *collections.ColumnGraphScorePlaneWork) { p.RawRetainedCandidates = 1 },
 		"live shortlist":      func(p *collections.ColumnGraphScorePlaneWork) { p.LiveShortlistCandidates = 1 },
+		"nonzero plan": func(p *collections.ColumnGraphScorePlaneWork) {
+			p.NormalizedCandidateWidth, p.RawCandidateWidth, p.RerankCandidateCap = 1, 1, 1
+		},
 	} {
 		candidate := strictEmptyProof
 		candidate.QuantizedScoreCalls, candidate.ExactSuffixScoreCalls, candidate.ExactSmallFilterScoreCalls = 0, 0, 0

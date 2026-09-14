@@ -216,7 +216,10 @@ class DenseScorePlaneProof:
                 ):
                     raise ValueError("completed dense score-plane proof quantized rerank counters are inconsistent")
             elif values["route"] == "typed_empty" and (
-                values["quantized_score_calls"] != 0
+                values["normalized_candidate_width"] != 0
+                or values["raw_candidate_width"] != 0
+                or values["rerank_candidate_cap"] != 0
+                or values["quantized_score_calls"] != 0
                 or values["exact_suffix_score_calls"] != 0
                 or values["exact_small_filter_score_calls"] != 0
                 or values["raw_retained_candidates"] != 0

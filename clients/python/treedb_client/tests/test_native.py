@@ -358,6 +358,27 @@ class NativeCodecTests(unittest.TestCase):
                     ef_search=1,
                     query_dimension=2,
                 )
+            empty_plan_work_values = list(shortcut_work_values)
+            empty_plan_work_values[2], empty_plan_work_values[6] = 1, 0
+            empty_plan_work_values[31:38] = [0, 0, 0, 0, 0, 0, 0]
+            empty_plan_values = list(shortcut_proof_values)
+            empty_plan_values[4] = 1  # typed_empty
+            empty_plan_values[10:13] = [1, 1, 1]  # common bounds pass, but the empty route must be zero.
+            empty_plan_values[19], empty_plan_values[22] = 0, 0
+            empty_plan = b"".join(_uint(value) for value in empty_plan_values) + b"\x00" + _bytes_for_test("embedding.scalar_u8.public") + _bytes_for_test("scalar_u8")
+            empty_plan += b"\x01\x01\x01\x03" * 2
+            with self.assertRaises(TreeDBProtocolError):
+                _dense_response(
+                    _section(102, _vector([])) + _section(103, _vector([])) +
+                    _section(130, bytes([3, 0, 0, 0, 0])) + _section(134, b"".join(_uint(value) for value in empty_plan_work_values)) + _section(136, empty_plan),
+                    1,
+                    version=3,
+                    query_mode="quantized_rerank",
+                    quantized_index_name="embedding.scalar_u8.public",
+                    quantized_rerank_candidates=0,
+                    ef_search=1,
+                    query_dimension=2,
+                )
             incomplete_values = list(values)
             incomplete_values[1] = 1  # available proof, incomplete execution, unavailable snapshot.
             incomplete_plane = b"".join(_uint(value) for value in incomplete_values) + b"\x00" + _bytes_for_test("embedding.scalar_u8.public") + _bytes_for_test("scalar_u8")
