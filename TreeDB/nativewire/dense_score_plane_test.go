@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"math"
+	"net"
 	"testing"
 	"time"
 
@@ -295,6 +297,93 @@ func TestDenseV3ResultsHaveUniqueIDs(t *testing.T) {
 	}
 	if denseV3ResultsHaveUniqueIDs([]DenseVectorSearchResult{{ID: []byte("a")}, {ID: []byte("a")}}) {
 		t.Fatal("duplicate result IDs accepted")
+	}
+}
+
+func TestDenseV3ResultDecodeErrorsPreserveOwnedProofs(t *testing.T) {
+	proof := collections.ColumnGraphScorePlaneWork{
+		Version: 1, Available: true, Completed: true,
+		RequestedMode: collections.VectorIndexQueryModeQuantizedRerank,
+		EffectiveMode: collections.VectorIndexQueryModeQuantizedRerank,
+		Route:         "quantized_rerank", QuantizedIndexName: "embedding.scalar_u8.public",
+		QuantizedCodec: collections.QuantizedVectorCodecScalarU8, QuantizedVersion: 1,
+		RequestedTopK: 1, RequestedEFSearch: 8,
+		NormalizedCandidateWidth: 1, RawCandidateWidth: 1, RerankCandidateCap: 1,
+		RawRetainedCandidates: 1, LiveShortlistCandidates: 1, ActualRerankCandidates: 1,
+		QuantizedScoreCalls: 1, QuantizedCodeBytesRead: 2,
+		ExactBaseRerankScoreCalls: 1, ExactBaseVectorBytesRead: 8,
+		Snapshot: collections.ColumnGraphQuerySnapshot{Available: true, SchemaHash: 7, SchemaGeneration: 2},
+	}
+	work := documentservice.DenseSearchWork{
+		Version: 1, Completed: true,
+		Graph: collections.ColumnGraphQueryWork{
+			Available: true, Completed: true, Route: "typed_hnsw", BaseANNScored: 1, BaseResultIDs: 1,
+			Snapshot: proof.Snapshot,
+		},
+		Output: documentservice.DenseSearchOutputWork{Attempted: true, Completed: true, Requested: 1, Fetched: 1, OutputBytes: 2},
+	}
+	workRaw, err := appendDenseWork(nil, work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proofRaw, err := appendDenseScorePlane(nil, proof, iwire.DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	responseFor := func(meta []byte) []byte {
+		t.Helper()
+		var body []byte
+		for _, section := range []iwire.Section{
+			{ID: iwire.SectionDocumentIDs, Bytes: iwire.AppendByteVector(nil, []byte("a"))},
+			{ID: iwire.SectionDocuments, Bytes: iwire.AppendByteVector(nil, []byte("{}"))},
+			{ID: iwire.SectionDenseSearchResponse, Bytes: meta},
+			{ID: iwire.SectionDenseSearchWork, Flags: iwire.SectionFlagCritical, Bytes: workRaw},
+			{ID: iwire.SectionDenseSearchScorePlaneProof, Flags: iwire.SectionFlagCritical, Bytes: proofRaw},
+		} {
+			body, err = iwire.AppendSection(body, section)
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		return body
+	}
+	validScore := binary.LittleEndian.AppendUint64(nil, math.Float64bits(1))
+	for name, meta := range map[string][]byte{
+		"candidate count": append([]byte{3, 0, 0, 0, 1}, validScore...),
+		"nonfinite score": append([]byte{3, 1, 0, 0, 1}, binary.LittleEndian.AppendUint64(nil, math.Float64bits(math.NaN()))...),
+	} {
+		t.Run(name, func(t *testing.T) {
+			clientConn, serverConn := net.Pipe()
+			client := NewClient(clientConn)
+			client.denseTypedQuantizedNegotiated = true
+			response := responseFor(meta)
+			errCh := make(chan error, 1)
+			go func() {
+				header, _, serveErr := readFrame(serverConn, iwire.DefaultLimits())
+				if serveErr == nil {
+					serveErr = writeFrame(serverConn, iwire.Header{Type: iwire.FrameResponse, RequestID: header.RequestID}, response)
+				}
+				errCh <- serveErr
+			}()
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			_, gotErr := client.DenseVectorSearch(ctx, DenseVectorSearchRequest{
+				TypedColumnGraph: true, Index: "docs", Query: []float32{1, 0}, TopK: 1, EfSearch: 8,
+				QueryMode: collections.VectorIndexQueryModeQuantizedRerank, QuantizedIndexName: proof.QuantizedIndexName,
+			})
+			cancel()
+			_ = client.Close()
+			_ = serverConn.Close()
+			if serveErr := <-errCh; serveErr != nil {
+				t.Fatal(serveErr)
+			}
+			var decodeErr *DenseVectorSearchDecodeError
+			if !errors.As(gotErr, &decodeErr) || decodeErr.DenseWork == nil || decodeErr.ScorePlane == nil {
+				t.Fatalf("decode error lost proofs: %v", gotErr)
+			}
+			if *decodeErr.DenseWork != work || *decodeErr.ScorePlane != proof {
+				t.Fatalf("decode error proofs changed: work=%+v score_plane=%+v", decodeErr.DenseWork, decodeErr.ScorePlane)
+			}
+		})
 	}
 }
 

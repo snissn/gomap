@@ -149,44 +149,54 @@ func (c *Client) DenseVectorSearch(ctx context.Context, request DenseVectorSearc
 	if err != nil {
 		return DenseVectorSearchResponse{}, err
 	}
-	meta, ok, err := singletonSection(c.vectorSections, iwire.SectionDenseSearchResponse)
-	if err != nil || !ok {
-		if err == nil {
+	var out DenseVectorSearchResponse
+	var workErr, scorePlaneErr error
+	out.DenseWork, workErr = decodeDenseWorkSectionVersion(c.vectorSections, version)
+	if version == iwire.DenseVectorSearchTypedQuantizedVersion {
+		out.ScorePlane, scorePlaneErr = decodeDenseScorePlaneSection(c.vectorSections, true, c.limits)
+	}
+	if workErr != nil {
+		err = workErr
+	} else if scorePlaneErr != nil {
+		err = scorePlaneErr
+	}
+	var meta, ids, docs []byte
+	if err == nil {
+		var ok bool
+		meta, ok, err = singletonSection(c.vectorSections, iwire.SectionDenseSearchResponse)
+		if err == nil && !ok {
 			err = protocolError(iwire.ErrMalformedFrame, "dense search response metadata missing")
 		}
-		return DenseVectorSearchResponse{}, err
 	}
-	ids, ok, err := singletonSection(c.vectorSections, iwire.SectionDocumentIDs)
-	if err != nil || !ok {
-		if err == nil {
+	if err == nil {
+		var ok bool
+		ids, ok, err = singletonSection(c.vectorSections, iwire.SectionDocumentIDs)
+		if err == nil && !ok {
 			err = protocolError(iwire.ErrMalformedFrame, "dense search response ids missing")
 		}
-		return DenseVectorSearchResponse{}, err
 	}
-	docs, ok, err := singletonSection(c.vectorSections, iwire.SectionDocuments)
-	if err != nil || !ok {
-		if err == nil {
+	if err == nil {
+		var ok bool
+		docs, ok, err = singletonSection(c.vectorSections, iwire.SectionDocuments)
+		if err == nil && !ok {
 			err = protocolError(iwire.ErrMalformedFrame, "dense search response documents missing")
 		}
-		return DenseVectorSearchResponse{}, err
 	}
-	var out DenseVectorSearchResponse
-	out, c.denseIDs, c.denseDocuments, c.denseResults, err = decodeVersionedDenseVectorSearchResponse(
-		version, ids, docs, meta, request.TopK, c.limits, c.denseIDs, c.denseDocuments, c.denseResults,
-	)
 	if err == nil {
-		out.DenseWork, err = decodeDenseWorkSectionVersion(c.vectorSections, version)
+		var decodedOut DenseVectorSearchResponse
+		decodedOut, c.denseIDs, c.denseDocuments, c.denseResults, err = decodeVersionedDenseVectorSearchResponse(
+			version, ids, docs, meta, request.TopK, c.limits, c.denseIDs, c.denseDocuments, c.denseResults,
+		)
+		decodedOut.DenseWork, decodedOut.ScorePlane = out.DenseWork, out.ScorePlane
+		out = decodedOut
 	}
 	if err == nil && version == iwire.DenseVectorSearchTypedQuantizedVersion {
-		out.ScorePlane, err = decodeDenseScorePlaneSection(c.vectorSections, true, c.limits)
-		if err == nil {
-			if !denseV3CandidateCountMatchesRows(out.Candidates, len(out.Results)) {
-				err = protocolError(iwire.ErrConsistencyUnavailable, "dense v3 candidate count does not match returned rows")
-			} else if !denseV3ResultsHaveUniqueIDs(out.Results) {
-				err = protocolError(iwire.ErrConsistencyUnavailable, "dense v3 results contain duplicate IDs")
-			} else {
-				err = validateDenseQuantizedScorePlaneResponse(out.DenseWork, out.ScorePlane, request, len(out.Results))
-			}
+		if !denseV3CandidateCountMatchesRows(out.Candidates, len(out.Results)) {
+			err = protocolError(iwire.ErrConsistencyUnavailable, "dense v3 candidate count does not match returned rows")
+		} else if !denseV3ResultsHaveUniqueIDs(out.Results) {
+			err = protocolError(iwire.ErrConsistencyUnavailable, "dense v3 results contain duplicate IDs")
+		} else {
+			err = validateDenseQuantizedScorePlaneResponse(out.DenseWork, out.ScorePlane, request, len(out.Results))
 		}
 	}
 	if err == nil && version >= iwire.DenseVectorSearchTypedVersion {

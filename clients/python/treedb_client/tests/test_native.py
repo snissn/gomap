@@ -2,6 +2,7 @@ import unittest
 import socket
 import json
 import copy
+import struct
 from dataclasses import asdict, FrozenInstanceError
 from types import SimpleNamespace
 from unittest import mock
@@ -181,19 +182,26 @@ class NativeCodecTests(unittest.TestCase):
                     ef_search=0,
                     query_dimension=2,
                 )
-            candidate_meta = bytes([3, 2, 0, 0, 1]) + meta[5:]
-            with self.assertRaises(TreeDBProtocolError):
-                _dense_response(
-                    _section(102, _vector([b"a"])) + _section(103, _vector([b'{"id":"a"}'])) +
-                    _section(130, candidate_meta) + _section(134, raw_work) + _section(136, score_plane),
-                    1,
-                    version=3,
-                    query_mode="quantized_rerank",
-                    quantized_index_name="embedding.scalar_u8.public",
-                    quantized_rerank_candidates=0,
-                    ef_search=0,
-                    query_dimension=2,
-                )
+            invalid_result_meta = {
+                "candidate count": bytes([3, 2, 0, 0, 1]) + meta[5:],
+                "nonfinite score": bytes([3, 1, 0, 0, 1]) + struct.pack("<d", float("nan")),
+            }
+            for name, candidate_meta in invalid_result_meta.items():
+                with self.subTest(name=name), self.assertRaises(TreeDBProtocolError) as caught:
+                    _dense_response(
+                        _section(102, _vector([b"a"])) + _section(103, _vector([b'{"id":"a"}'])) +
+                        _section(130, candidate_meta) + _section(134, raw_work) + _section(136, score_plane),
+                        1,
+                        version=3,
+                        query_mode="quantized_rerank",
+                        quantized_index_name="embedding.scalar_u8.public",
+                        quantized_rerank_candidates=0,
+                        ef_search=0,
+                        query_dimension=2,
+                    )
+                self.assertEqual(caught.exception.dense_work, _dense_work(raw_work))
+                self.assertIsNotNone(caught.exception.score_plane)
+                self.assertEqual(caught.exception.score_plane.quantized_index_name, "embedding.scalar_u8.public")
             exact_work_values = list(work_values)
             exact_work_values[2], exact_work_values[3], exact_work_values[6], exact_work_values[7], exact_work_values[9] = 2, 0, 1, 0, 0
             exact_work_values[31:38] = [0, 0, 0, 0, 0, 0, 0]

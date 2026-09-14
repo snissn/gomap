@@ -138,21 +138,6 @@ func decodeDenseWorkSection(sections []iwire.Section, typed bool) (documentservi
 
 func decodeDenseWorkSectionVersion(sections []iwire.Section, version uint64) (documentservice.DenseSearchWork, error) {
 	var unavailable documentservice.DenseSearchWork
-	if version >= iwire.DenseVectorSearchTypedVersion {
-		for _, section := range sections {
-			switch section.ID {
-			case iwire.SectionDocumentIDs, iwire.SectionDocuments, iwire.SectionDenseSearchResponse, iwire.SectionDenseSearchWork:
-			case iwire.SectionDenseSearchScorePlaneProof:
-				if version != iwire.DenseVectorSearchTypedQuantizedVersion {
-					return unavailable, protocolError(iwire.ErrUnsupportedFeature, "unknown critical dense response section")
-				}
-			default:
-				if section.Flags&iwire.SectionFlagCritical != 0 {
-					return unavailable, protocolError(iwire.ErrUnsupportedFeature, "unknown critical dense response section")
-				}
-			}
-		}
-	}
 	raw, found, err := singletonSection(sections, iwire.SectionDenseSearchWork)
 	if err != nil {
 		return unavailable, err
@@ -166,6 +151,21 @@ func decodeDenseWorkSectionVersion(sections []iwire.Section, version uint64) (do
 	work, err := decodeDenseWork(raw)
 	if err != nil {
 		return unavailable, err
+	}
+	if version >= iwire.DenseVectorSearchTypedVersion {
+		for _, section := range sections {
+			switch section.ID {
+			case iwire.SectionDocumentIDs, iwire.SectionDocuments, iwire.SectionDenseSearchResponse, iwire.SectionDenseSearchWork:
+			case iwire.SectionDenseSearchScorePlaneProof:
+				if version != iwire.DenseVectorSearchTypedQuantizedVersion {
+					return work, protocolError(iwire.ErrUnsupportedFeature, "unknown critical dense response section")
+				}
+			default:
+				if section.Flags&iwire.SectionFlagCritical != 0 {
+					return work, protocolError(iwire.ErrUnsupportedFeature, "unknown critical dense response section")
+				}
+			}
+		}
 	}
 	return work, nil
 }

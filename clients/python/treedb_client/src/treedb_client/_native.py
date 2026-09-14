@@ -356,33 +356,51 @@ def _dense_response(body, top_k, version=2, *, query_mode=None, quantized_index_
     if version == 3:
         known.add(136)
     sections = _sections(body, known)
-    required = {102, 103, 130, 134} | ({136} if version == 3 else set())
-    if not required <= sections.keys():
-        raise TreeDBProtocolError("native dense response sections missing")
-    work = _dense_work(sections[134])
-    meta = sections[130]
-    expected_tag = 3 if version == 3 else 2
-    if not meta or meta[0] != expected_tag:
-        raise TreeDBProtocolError("typed dense v2 route tag missing")
-    candidates, offset = _read_uint(meta, 1)
-    exact, offset = _read_uint(meta, offset)
-    scan, offset = _read_uint(meta, offset)
-    count, offset = _read_uint(meta, offset)
-    if exact or scan or count > top_k or candidates < count or (version == 3 and candidates != count) or len(meta) - offset != count * 8:
-        raise TreeDBProtocolError("native dense response bounds or route mismatch")
-    scores = struct.unpack(f"<{count}d", meta[offset:])
-    if not all(math.isfinite(score) for score in scores):
-        raise TreeDBProtocolError("native dense response has nonfinite score")
-    ids, docs = _decode_vector(sections[102], count), _decode_vector(sections[103], count)
-    if version == 3 and len(set(ids)) != len(ids):
-        raise TreeDBProtocolError("native dense response has duplicate IDs", dense_work=work)
+    work = None
     score_plane = None
-    if version == 3:
+    if version == 3 and 136 in sections:
         from ._dense_work import DenseScorePlaneProof, dense_score_plane_byte_counters_match
         try:
             score_plane = DenseScorePlaneProof.from_dict(_dense_score_plane(sections[136]))
-        except (ValueError, TypeError, KeyError, UnicodeError) as exc:
-            raise TreeDBProtocolError("invalid native dense score-plane proof", dense_work=work) from exc
+        except (TreeDBProtocolError, ValueError, TypeError, KeyError, UnicodeError) as exc:
+            score_plane_error = exc
+        else:
+            score_plane_error = None
+    else:
+        score_plane_error = None
+    if 134 in sections:
+        try:
+            work = _dense_work(sections[134])
+        except TreeDBProtocolError as exc:
+            raise TreeDBProtocolError("invalid native dense work proof", score_plane=score_plane) from exc
+    required = {102, 103, 130, 134} | ({136} if version == 3 else set())
+    if not required <= sections.keys():
+        raise TreeDBProtocolError("native dense response sections missing", dense_work=work, score_plane=score_plane)
+    if score_plane_error is not None:
+        raise TreeDBProtocolError("invalid native dense score-plane proof", dense_work=work) from score_plane_error
+    meta = sections[130]
+    expected_tag = 3 if version == 3 else 2
+    if not meta or meta[0] != expected_tag:
+        raise TreeDBProtocolError("typed dense v2 route tag missing", dense_work=work, score_plane=score_plane)
+    try:
+        candidates, offset = _read_uint(meta, 1)
+        exact, offset = _read_uint(meta, offset)
+        scan, offset = _read_uint(meta, offset)
+        count, offset = _read_uint(meta, offset)
+    except TreeDBProtocolError as exc:
+        raise TreeDBProtocolError("invalid native dense response metadata", dense_work=work, score_plane=score_plane) from exc
+    if exact or scan or count > top_k or candidates < count or (version == 3 and candidates != count) or len(meta) - offset != count * 8:
+        raise TreeDBProtocolError("native dense response bounds or route mismatch", dense_work=work, score_plane=score_plane)
+    scores = struct.unpack(f"<{count}d", meta[offset:])
+    if not all(math.isfinite(score) for score in scores):
+        raise TreeDBProtocolError("native dense response has nonfinite score", dense_work=work, score_plane=score_plane)
+    try:
+        ids, docs = _decode_vector(sections[102], count), _decode_vector(sections[103], count)
+    except TreeDBProtocolError as exc:
+        raise TreeDBProtocolError("invalid native dense result vectors", dense_work=work, score_plane=score_plane) from exc
+    if version == 3 and len(set(ids)) != len(ids):
+        raise TreeDBProtocolError("native dense response has duplicate IDs", dense_work=work, score_plane=score_plane)
+    if version == 3:
         if (not score_plane.available or not score_plane.completed or not score_plane.snapshot.available
                 or score_plane.requested_mode != (query_mode or "quantized_rerank")
                 or score_plane.effective_mode != "quantized_rerank"
