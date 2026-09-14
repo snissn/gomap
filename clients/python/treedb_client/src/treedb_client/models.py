@@ -758,10 +758,12 @@ class ColumnGraphBuildTiming:
     namespace_sync_nanos: int = 0
     namespace_sync_count: int = 0
     publication_nanos: int = 0
+    construction_decisions: Optional[Dict[str, Dict[str, Any]]] = None
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "ColumnGraphBuildTiming":
         data = _as_mapping(data, "column graph build timing")
+        decisions = data.get("construction_decisions")
         return cls(
             total_nanos=_as_optional_int_default(data.get("total_nanos"), "column graph build timing.total_nanos"),
             snapshot_nanos=_as_optional_int_default(data.get("snapshot_nanos"), "column graph build timing.snapshot_nanos"),
@@ -781,7 +783,47 @@ class ColumnGraphBuildTiming:
             namespace_sync_nanos=_as_optional_int_default(data.get("namespace_sync_nanos"), "column graph build timing.namespace_sync_nanos"),
             namespace_sync_count=_as_optional_int_default(data.get("namespace_sync_count"), "column graph build timing.namespace_sync_count"),
             publication_nanos=_as_optional_int_default(data.get("publication_nanos"), "column graph build timing.publication_nanos"),
+            construction_decisions=None if decisions is None else _construction_decisions(decisions),
         )
+
+
+def _construction_decisions(value: Any) -> Dict[str, Dict[str, Any]]:
+    data = _as_mapping(value, "column graph construction decisions")
+    _reject_unknown(data, ["planning", "reciprocal"], "column graph construction decisions")
+    scalar_fields = (
+        "digest_xor", "digest_sum", "decisions", "accepted", "rejected",
+        "direct_exact_fp32_rows", "direct_exact_fp32_calls", "indexed_exact_fp32_rows",
+        "indexed_exact_fp32_calls", "approximate_score_rows", "approximate_score_calls",
+        "exact_fp32_dimensions", "diversity_predicates", "diversity_candidates",
+        "diversity_comparisons_requested", "diversity_comparisons_executed", "unique_row_pairs",
+        "repeated_row_pairs", "row_pair_replacements", "active_wall_nanos",
+    )
+    histogram_fields = (
+        "candidate_count_histogram", "selected_count_histogram", "diversity_early_exit_histogram",
+        "reciprocal_group_histogram", "prune_survivor_histogram",
+    )
+    out: Dict[str, Dict[str, Any]] = {}
+    for phase_name in ("planning", "reciprocal"):
+        phase = _as_mapping(data.get(phase_name), f"construction decisions.{phase_name}")
+        _reject_unknown(phase, [*scalar_fields, "saturated", *histogram_fields], f"construction decisions.{phase_name}")
+        parsed: Dict[str, Any] = {}
+        for field_name in scalar_fields:
+            parsed[field_name] = _as_int(phase.get(field_name), f"construction decisions.{phase_name}.{field_name}")
+            if parsed[field_name] < 0:
+                raise ValueError(f"construction decisions.{phase_name}.{field_name} cannot be negative")
+        parsed["saturated"] = _as_bool(phase.get("saturated"), f"construction decisions.{phase_name}.saturated")
+        for field_name in histogram_fields:
+            histogram = phase.get(field_name)
+            if isinstance(histogram, (str, bytes, bytearray)) or not isinstance(histogram, Sequence) or len(histogram) != 16:
+                raise ValueError(f"construction decisions.{phase_name}.{field_name} must contain 16 counters")
+            parsed[field_name] = [
+                _as_int(item, f"construction decisions.{phase_name}.{field_name}[{position}]")
+                for position, item in enumerate(histogram)
+            ]
+            if any(item < 0 for item in parsed[field_name]):
+                raise ValueError(f"construction decisions.{phase_name}.{field_name} cannot contain negative counters")
+        out[phase_name] = parsed
+    return out
 
 
 @dataclass(frozen=True)
