@@ -327,6 +327,11 @@ func (c *Collection) openTypedGraphReadOwnerWithContext(ctx context.Context, lim
 		if err != nil {
 			return err
 		}
+		readerAttachmentBytes, err := typedGraphLegacyScalarU8ReaderAttachmentBackingBound(legacyScalarU8Assets, limits.StateBytes-candidate.descriptorBytes-candidate.backingBytes)
+		if err != nil {
+			return err
+		}
+		candidate.backingBytes += readerAttachmentBytes
 		baseView.graphOwnerRecords = nil
 		readerOptions := columnVectorGraphPhysicalRowReaderOptions{SkipQuantizedAssets: true, admitSources: func(keyBytes int) error {
 			if !addDescriptor(int64(keyBytes), 2) {

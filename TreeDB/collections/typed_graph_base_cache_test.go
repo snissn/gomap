@@ -170,6 +170,45 @@ func TestTypedGraphCapturedBaseBackingBoundReservesLegacyScalarU8PreparedMetadat
 	}
 }
 
+func TestTypedGraphLegacyScalarU8ReaderAttachmentBackingBound(t *testing.T) {
+	for _, tc := range []struct {
+		pointerBytes uintptr
+		want         uintptr
+		ok           bool
+	}{
+		{pointerBytes: 8, want: 768, ok: true},
+		{pointerBytes: 4, want: 2 << 10, ok: true},
+		{pointerBytes: 16, want: 0, ok: false},
+	} {
+		got, ok := typedGraphLegacyScalarU8ReaderAttachmentBoundForPointerBytes(tc.pointerBytes)
+		if got != tc.want || ok != tc.ok {
+			t.Fatalf("pointer bytes=%d got=(%d,%t) want=(%d,%t)", tc.pointerBytes, got, ok, tc.want, tc.ok)
+		}
+	}
+	if reflect.TypeFor[*columnVectorGraphPhysicalRowReader]().Size() == 8 {
+		if got, want := reflect.TypeFor[columnVectorGraphQuantizedAssetLoadStatus]().Size(), uintptr(344); got != want {
+			t.Fatalf("quantized status size=%d want=%d; update reader attachment bound", got, want)
+		}
+	}
+	one, err := typedGraphLegacyScalarU8ReaderAttachmentBackingBound(1, 1<<30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	two, err := typedGraphLegacyScalarU8ReaderAttachmentBackingBound(2, 1<<30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := two, 2*one; got != want {
+		t.Fatalf("two planes=%d want=%d", got, want)
+	}
+	if got, err := typedGraphLegacyScalarU8ReaderAttachmentBackingBound(2, two); err != nil || got != two {
+		t.Fatalf("exact budget got=%d err=%v want=%d", got, err, two)
+	}
+	if _, err := typedGraphLegacyScalarU8ReaderAttachmentBackingBound(2, two-1); !errors.Is(err, errTypedGraphOwnerBudget) {
+		t.Fatalf("one byte short err=%v", err)
+	}
+}
+
 func TestTypedGraphCapturedBaseCacheCrossManagerAndFailure(t *testing.T) {
 	requireTypedGraphPreparedHolderTest(t)
 	col, fixture, _, _, _, _ := openTypedGraphQualityFixture(t, 128)

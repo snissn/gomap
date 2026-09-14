@@ -5,6 +5,7 @@ import (
 	"errors"
 	"reflect"
 	"sync"
+	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/internal/quantizedasset"
 )
@@ -241,6 +242,43 @@ func typedGraphCapturedBaseBackingBound(rows, records, layers int, limit int64) 
 // 1.26's 64-bit hchan is 112 bytes; this bound covers the channel allocation on
 // both known pointer widths without exposing runtime internals here.
 const typedGraphLegacyScalarU8EntryReadyChannelBackingBound uintptr = 128
+
+const (
+	// The reader starts with an empty quantizedAssetStatus map. A Q2 attachment
+	// fills its first group and stores an indirect
+	// columnVectorGraphQuantizedAssetLoadStatus value. This includes that map
+	// header/group plus its first value allocation on Go 1.26 amd64.
+	typedGraphLegacyScalarU8ReaderAttachment64BitBound uintptr = 768
+
+	// Keep a separately conservative future 32-bit bound: the map layout and
+	// value indirection threshold differ from amd64.
+	typedGraphLegacyScalarU8ReaderAttachment32BitBound uintptr = 2 << 10
+)
+
+func typedGraphLegacyScalarU8ReaderAttachmentBoundForPointerBytes(pointerBytes uintptr) (uintptr, bool) {
+	switch pointerBytes {
+	case 8:
+		return typedGraphLegacyScalarU8ReaderAttachment64BitBound, true
+	case 4:
+		return typedGraphLegacyScalarU8ReaderAttachment32BitBound, true
+	default:
+		return 0, false
+	}
+}
+
+func typedGraphLegacyScalarU8ReaderAttachmentBackingBound(legacyScalarU8Assets int, limit int64) (int64, error) {
+	if legacyScalarU8Assets < 0 || limit < 0 {
+		return 0, errTypedGraphOwnerBudget
+	}
+	if legacyScalarU8Assets == 0 {
+		return 0, nil
+	}
+	perPlane, bounded := typedGraphLegacyScalarU8ReaderAttachmentBoundForPointerBytes(unsafe.Sizeof(uintptr(0)))
+	if !bounded || int64(legacyScalarU8Assets) > limit/int64(perPlane) {
+		return 0, errTypedGraphOwnerBudget
+	}
+	return int64(legacyScalarU8Assets) * int64(perPlane), nil
+}
 
 func typedGraphCapturedBaseBackingBoundWithLegacyScalarU8Assets(rows, records, layers, legacyScalarU8Assets int, limit int64) (int64, error) {
 	var total int64
