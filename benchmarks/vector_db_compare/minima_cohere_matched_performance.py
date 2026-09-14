@@ -38,6 +38,7 @@ PAIR_ORDER = [["treedb", "qdrant"], ["qdrant", "treedb"], ["treedb", "qdrant"]]
 HARNESS_PATHS = ("benchmarks/vector_db_compare", "clients/python/treedb_client")
 PRODUCT_PATHS = ("TreeDB", "cmd/treedb-document-service", "go.mod", "go.sum", "internal")
 SOURCE_PATHS = HARNESS_PATHS + PRODUCT_PATHS
+THREAD_ENVIRONMENT = {"GOMAXPROCS": "6", "OPENBLAS_NUM_THREADS": "1", "OMP_NUM_THREADS": "1"}
 
 
 def canonical(value):
@@ -173,6 +174,41 @@ def check_final_tree_resources(run, monitor):
         raise RuntimeError(run.failure)
 
 
+def validate_thread_environment():
+    if any(os.environ.get(key) != value for key, value in THREAD_ENVIRONMENT.items()):
+        raise RuntimeError("campaign requires GOMAXPROCS=6 and one BLAS thread")
+
+
+def check_qdrant_resources(run, started):
+    rss = 0
+    for pid in (os.getpid(), run.process.pid if run.process else None):
+        if pid is not None:
+            try:
+                for line in Path(f"/proc/{pid}/status").read_text().splitlines():
+                    if line.startswith("VmRSS:"):
+                        rss += int(line.split()[1]) * 1024
+            except FileNotFoundError:
+                pass
+    if (shutil.disk_usage(run.output).free < run.plan["minimum_free_bytes"]
+            or qdrant_rss.existing.disk_bytes(run.output) > run.plan["maximum_output_bytes"]
+            or rss > run.plan["maximum_combined_rss_bytes"]
+            or time.monotonic() - started > run.plan["wall_limit_s"]):
+        raise RuntimeError("frozen Qdrant disk/RAM/wall budget exceeded")
+
+
+def guard_qdrant_resources(run, started, cancel, failures):
+    while not cancel.wait(1):
+        try:
+            check_qdrant_resources(run, started)
+        except BaseException as exc:
+            failures.append(f"resource guard: {exc}")
+            process = run.process
+            if (process and process.poll() is None
+                    and qdrant_rss.existing.linux_process_identity(process.pid) == run.process_identity):
+                process.terminate()
+            return
+
+
 def frozen_plan(args):
     source = Path(__file__).resolve().parents[2]
     commit = repository_commit(source)
@@ -180,6 +216,7 @@ def frozen_plan(args):
     dataset, _, files, query_count = native.dataset_identity(args.dataset, ROWS)
     if query_count != 200 or sorted(os.sched_getaffinity(0)) != list(range(6)):
         raise RuntimeError("freeze requires the 200-query fixture and CPU affinity 0-5")
+    validate_thread_environment()
     service, qdrant = args.service_bin.resolve(), args.qdrant_bin.resolve()
     serving = args.serving.resolve()
     for path in (service, qdrant, serving, args.control_evidence.resolve()):
@@ -288,9 +325,7 @@ def validate_runtime(plan, expected_sha256, plan_path):
     validate_host_identity(plan)
     if sorted(os.sched_getaffinity(0)) != plan["cpu_affinity"]:
         raise RuntimeError("campaign CPU affinity drifted")
-    if os.environ.get("GOMAXPROCS") != "6" or any(
-            os.environ.get(key) != value for key, value in plan["blas_threads"].items()):
-        raise RuntimeError("campaign thread environment drifted")
+    validate_thread_environment()
     for key, hash_key in (("service_bin", "service_sha256"), ("qdrant_bin", "qdrant_sha256"),
                           ("serving_path", "serving_sha256"), ("control_evidence", "control_evidence_sha256")):
         if digest(plan[key]) != plan[hash_key]:
@@ -587,6 +622,8 @@ def run_treedb(plan, run_dir):
     finally:
         try:
             run.clients.close()
+            if result.get("state") == "complete":
+                native.validate_shutdowns(run.controller.lifetimes, 2)
         except BaseException as exc:
             result = {"schema": SCHEMA, "state": "failed", "backend": "treedb",
                       "failure": failure or f"shutdown: {type(exc).__name__}: {exc}"}
@@ -609,6 +646,8 @@ def qdrant_plan(plan, run_dir):
         "url": "http://127.0.0.1:17733", "collection": "minima_cohere",
         "operation_timeout_s": 600, "startup_timeout_s": 120,
         "optimizer_timeout_s": 2700, "poll_interval_s": .25,
+        "minimum_free_bytes": 10 << 30, "maximum_output_bytes": 12 << 30,
+        "maximum_combined_rss_bytes": 26 << 30, "wall_limit_s": 3600,
         "initial_upload_hnsw": config["initial_upload_hnsw"],
         "initial_upload_optimizers": config["initial_upload_optimizers"],
         "production_hnsw": config["production_hnsw"],
@@ -691,9 +730,13 @@ def run_qdrant(plan, run_dir):
     local = qdrant_plan(plan, run_dir)
     factory = lambda: QdrantClient(url=local["url"], timeout=local["operation_timeout_s"], prefer_grpc=False)
     run = qdrant_rss.Run(local, factory, models)
-    failure = None
-    started = time.monotonic_ns()
+    failure, monitor = None, None
+    guard_cancel, guard_failures = threading.Event(), []
+    started_at, started = time.monotonic(), time.monotonic_ns()
     try:
+        monitor = threading.Thread(target=guard_qdrant_resources,
+                                   args=(run, started_at, guard_cancel, guard_failures), daemon=True)
+        monitor.start()
         phase = {}
         mark = time.monotonic_ns(); run.start_server(); phase["service_start_ns"] = time.monotonic_ns() - mark
         run.validate_fresh()
@@ -803,6 +846,18 @@ def run_qdrant(plan, run_dir):
         failure = f"{type(exc).__name__}: {exc}"
         result = {"schema": SCHEMA, "state": "failed", "backend": "qdrant", "failure": failure}
     finally:
+        guard_cancel.set()
+        if monitor:
+            monitor.join(timeout=5)
+        try:
+            if monitor and monitor.is_alive():
+                raise RuntimeError("Qdrant resource guard did not stop")
+            check_qdrant_resources(run, started_at)
+            if guard_failures:
+                raise RuntimeError(guard_failures[0])
+        except BaseException as exc:
+            result = {"schema": SCHEMA, "state": "failed", "backend": "qdrant",
+                      "failure": result.get("failure") or f"final resource guard: {type(exc).__name__}: {exc}"}
         try:
             if run.client:
                 run.client.close()
@@ -810,7 +865,7 @@ def run_qdrant(plan, run_dir):
                 run.stop_server()
         except BaseException as exc:
             result = {"schema": SCHEMA, "state": "failed", "backend": "qdrant",
-                      "failure": failure or f"shutdown: {type(exc).__name__}: {exc}"}
+                      "failure": result.get("failure") or f"shutdown: {type(exc).__name__}: {exc}"}
     return result
 
 

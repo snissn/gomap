@@ -70,6 +70,12 @@ class MatchedPerformanceTest(unittest.TestCase):
         environment = subject.python_environment()
         self.assertEqual(json.loads(json.dumps(environment)), environment)
 
+        with mock.patch.dict(subject.os.environ, subject.THREAD_ENVIRONMENT, clear=False):
+            subject.validate_thread_environment()
+            subject.os.environ["GOMAXPROCS"] = "1"
+            with self.assertRaisesRegex(RuntimeError, "GOMAXPROCS=6"):
+                subject.validate_thread_environment()
+
         run = mock.Mock(failure="resource guard: over budget")
         with self.assertRaisesRegex(RuntimeError, "over budget"):
             subject.check_final_tree_resources(run, mock.Mock(is_alive=lambda: False))
@@ -111,6 +117,15 @@ class MatchedPerformanceTest(unittest.TestCase):
         }}
         self.assertEqual(subject.qdrant_plan(plan, Path("/tmp/run"))["queries"], 200)
         self.assertEqual(subject.tree_plan(plan, Path("/tmp/run"))["treedb_go_runtime"], runtime)
+
+        with tempfile.TemporaryDirectory() as directory:
+            limits = {"minimum_free_bytes": 0, "maximum_output_bytes": 1 << 40,
+                      "maximum_combined_rss_bytes": 1 << 40, "wall_limit_s": 60}
+            run = SimpleNamespace(output=Path(directory), process=None, plan=limits)
+            subject.check_qdrant_resources(run, subject.time.monotonic())
+            limits["wall_limit_s"] = -1
+            with self.assertRaisesRegex(RuntimeError, "Qdrant disk/RAM/wall budget"):
+                subject.check_qdrant_resources(run, subject.time.monotonic())
 
         writer_started, reader_seen = threading.Event(), threading.Event()
         def read(query):
