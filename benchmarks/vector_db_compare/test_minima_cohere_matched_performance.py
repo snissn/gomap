@@ -150,22 +150,35 @@ class MatchedPerformanceTest(unittest.TestCase):
             "initial_upload_hnsw": {}, "initial_upload_optimizers": {},
             "production_hnsw": {}, "production_optimizers": {},
         }}
-        self.assertEqual(subject.qdrant_plan(plan, Path("/tmp/run"))["queries"], 200)
+        qdrant_plan = subject.qdrant_plan(plan, Path("/tmp/run"))
+        self.assertEqual(qdrant_plan["queries"], 200)
+        self.assertEqual(qdrant_plan["resource_guard"], {
+            "poll_interval_s": 1, "wall_limit_s": 3600,
+            "minimum_free_bytes": 10 << 30, "maximum_owned_bytes": 12 << 30,
+            "maximum_combined_rss_bytes": 26 << 30,
+        })
         self.assertEqual(subject.tree_plan(plan, Path("/tmp/run"))["treedb_go_runtime"], runtime)
 
         with tempfile.TemporaryDirectory() as directory:
-            limits = {"minimum_free_bytes": 0, "maximum_output_bytes": 1 << 40,
+            limits = {"minimum_free_bytes": 0, "maximum_owned_bytes": 1 << 40,
                       "maximum_combined_rss_bytes": 1 << 40, "wall_limit_s": 60}
-            run = SimpleNamespace(output=Path(directory), process=None, plan=limits,
-                                  resource_lock=threading.Lock(), combined_peak_rss_bytes=0)
-            subject.check_qdrant_resources(run, subject.time.monotonic())
+            run = SimpleNamespace(
+                output=Path(directory), process=None, server_pid=None, cleaning_up=False,
+                harness_identity="harness", plan={"resource_guard": limits},
+                resource_lock=threading.Lock(), combined_peak_rss_bytes=0,
+            )
+            memory = {"VmRSS": 100, "VmHWM": 200}
+            with mock.patch.object(subject, "qdrant_process_memory", return_value=memory):
+                subject.check_qdrant_resources(run, subject.time.monotonic())
             self.assertGreater(run.combined_peak_rss_bytes, 0)
             limits["maximum_combined_rss_bytes"] = 1
-            with self.assertRaisesRegex(RuntimeError, "Qdrant disk/RAM/wall budget"):
+            with mock.patch.object(subject, "qdrant_process_memory", return_value=memory), \
+                    self.assertRaisesRegex(RuntimeError, "Qdrant disk/RAM/wall budget"):
                 subject.check_qdrant_resources(run, subject.time.monotonic())
             limits["maximum_combined_rss_bytes"] = 1 << 40
             limits["wall_limit_s"] = -1
-            with self.assertRaisesRegex(RuntimeError, "Qdrant disk/RAM/wall budget"):
+            with mock.patch.object(subject, "qdrant_process_memory", return_value=memory), \
+                    self.assertRaisesRegex(RuntimeError, "Qdrant disk/RAM/wall budget"):
                 subject.check_qdrant_resources(run, subject.time.monotonic())
 
         class CancelAfterThreeChecks:
@@ -174,14 +187,19 @@ class MatchedPerformanceTest(unittest.TestCase):
                 self.calls += 1
                 return self.calls == 3
         process = mock.Mock(pid=17)
-        process.poll.side_effect = [None, 0]
-        guarded = SimpleNamespace(process=process, process_identity="owned")
+        process.poll.return_value = None
+        guarded = SimpleNamespace(
+            process=process, server_pid=17, process_identity="owned",
+            server_pgid=19, harness_pgid=19, cleaning_up=False,
+            resource_lock=threading.Lock(),
+        )
         failures = []
         with mock.patch.object(subject, "check_qdrant_resources", side_effect=RuntimeError("over")), \
-                mock.patch.object(subject.qdrant_rss.existing, "linux_process_identity", return_value="owned"):
+                mock.patch.object(subject.qdrant_rss.existing, "linux_process_identity", return_value="owned"), \
+                mock.patch.object(subject.os, "getpgid", return_value=19):
             cancel = CancelAfterThreeChecks()
             subject.guard_qdrant_resources(guarded, 0, cancel, failures)
-        self.assertEqual((cancel.calls, failures), (3, ["resource guard: over"]))
+        self.assertEqual((cancel.calls, failures), (1, ["resource guard: over"]))
         process.terminate.assert_called_once()
 
         tree_process = mock.Mock(pid=18)
@@ -213,6 +231,85 @@ class MatchedPerformanceTest(unittest.TestCase):
         self.assertEqual(subject.mixed_read_state(25, 35, [
             (10, 20, None, [1]), (30, 40, None, [2]), (50, 60, None, [3]),
         ]), ({1}, {2}))
+
+    def test_qdrant_resource_monitor_rejects_process_and_identity_drift(self):
+        process = mock.Mock(pid=17, returncode=3)
+        run = SimpleNamespace(
+            process=process, server_pid=17, process_identity="17:11",
+            server_pgid=19, harness_pgid=19, harness_identity="6:10",
+            cleaning_up=False, resource_lock=threading.Lock(),
+            combined_peak_rss_bytes=0, output=Path("/tmp"),
+            plan={"resource_guard": {"minimum_free_bytes": 0, "maximum_owned_bytes": 1 << 40,
+                  "maximum_combined_rss_bytes": 1 << 40, "wall_limit_s": 60}},
+        )
+        process.poll.return_value = 3
+        with mock.patch.object(subject, "qdrant_process_memory", return_value={"VmRSS": 1, "VmHWM": 1}), \
+                self.assertRaisesRegex(RuntimeError, "exited during resource monitoring"):
+            subject.check_qdrant_resources(run, subject.time.monotonic())
+        process.poll.return_value = None
+        with mock.patch.object(subject.os, "getpgid", return_value=20), \
+                mock.patch.object(subject, "qdrant_process_memory", return_value={"VmRSS": 1, "VmHWM": 1}), \
+                self.assertRaisesRegex(RuntimeError, "identity or process group changed"):
+            subject.check_qdrant_resources(run, subject.time.monotonic())
+
+        status = "VmRSS:\t10 kB\nVmHWM:\t20 kB\n"
+        with mock.patch.object(subject.Path, "read_text", return_value=status), \
+                mock.patch.object(subject.qdrant_rss.existing, "linux_process_identity",
+                                  side_effect=["17:11", "17:12"]), \
+                self.assertRaisesRegex(RuntimeError, "changed across"):
+            subject.qdrant_process_memory(17, "17:11")
+
+    def test_qdrant_auxiliary_clients_all_close_after_one_failure(self):
+        clients = [mock.Mock(), mock.Mock(), mock.Mock()]
+        clients[1].close.side_effect = RuntimeError("close failed")
+        owned = list(clients)
+        with self.assertRaisesRegex(RuntimeError, "close failed"):
+            subject.close_qdrant_clients(owned)
+        self.assertEqual(owned, [])
+        for client in clients:
+            client.close.assert_called_once_with()
+
+    def test_qdrant_failure_still_runs_owned_cleanup(self):
+        fake_run = SimpleNamespace(
+            resource_lock=threading.Lock(), combined_peak_rss_bytes=0, cleaning_up=False,
+            start_server=mock.Mock(side_effect=RuntimeError("launch failed")),
+            cleanup_owned=mock.Mock(return_value={"status": "clean", "failure": None}),
+        )
+        monitor = mock.Mock()
+        monitor.is_alive.return_value = False
+        qdrant_module = SimpleNamespace(QdrantClient=object, models=object)
+        plan = {"qdrant_configuration": {
+            "initial_upload_hnsw": {}, "initial_upload_optimizers": {},
+            "production_hnsw": {}, "production_optimizers": {},
+        }}
+        with tempfile.TemporaryDirectory() as directory, \
+                mock.patch.dict(subject.sys.modules, {"qdrant_client": qdrant_module}), \
+                mock.patch.object(subject.qdrant_rss, "Run", return_value=fake_run) as construct, \
+                mock.patch.object(subject.threading, "Thread", return_value=monitor), \
+                mock.patch.object(subject, "check_qdrant_resources") as resources:
+            run_dir = Path(directory) / "run"
+            result = subject.run_qdrant(plan, run_dir)
+        self.assertEqual(result["state"], "failed")
+        self.assertIn("launch failed", result["failure"])
+        self.assertIn("resource_guard", construct.call_args.args[0])
+        fake_run.cleanup_owned.assert_called_once_with()
+        self.assertTrue(fake_run.cleaning_up)
+        self.assertEqual(resources.call_count, 2)
+
+    def test_qdrant_constructor_failure_retains_a_result_directory(self):
+        qdrant_module = SimpleNamespace(QdrantClient=object, models=object)
+        plan = {"qdrant_configuration": {
+            "initial_upload_hnsw": {}, "initial_upload_optimizers": {},
+            "production_hnsw": {}, "production_optimizers": {},
+        }}
+        with tempfile.TemporaryDirectory() as directory, \
+                mock.patch.dict(subject.sys.modules, {"qdrant_client": qdrant_module}), \
+                mock.patch.object(subject.qdrant_rss, "Run", side_effect=RuntimeError("identity unavailable")):
+            run_dir = Path(directory) / "run"
+            result = subject.run_qdrant(plan, run_dir)
+            self.assertTrue(run_dir.is_dir())
+        self.assertEqual(result["state"], "failed")
+        self.assertIn("identity unavailable", result["failure"])
 
     def test_lock_order_and_result_provenance_fail_closed(self):
         plan = {"pair_order": [["treedb", "qdrant"]], "campaign_commit": "c",

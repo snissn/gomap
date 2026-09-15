@@ -506,8 +506,14 @@ class Run:
                         )
                 else:
                     try:
+                        if (self.server_pid != self.process.pid
+                                or self.server_pgid != self.harness_pgid
+                                or os.getpgid(self.process.pid) != self.harness_pgid):
+                            raise RuntimeError(
+                                "owned Qdrant identity or process group changed during resource monitoring",
+                            )
                         server = self.current_rss(self.process.pid, self.process_identity)
-                    except RuntimeError:
+                    except (OSError, RuntimeError):
                         # TERM may land between the identity/read/identity checks.
                         # That is expected only while this owner is synchronously
                         # cleaning up; poll must prove the exact child has exited.
@@ -553,12 +559,22 @@ class Run:
                     self.resource_failure = f"resource guard: {type(exc).__name__}: {exc}"
                     self.guard_summary["failure"] = self.resource_failure
             if self.resource_failure:
-                process = self.process
-                if (process is not None and process.poll() is None and self.process_identity
-                        and existing.linux_process_identity(process.pid) == self.process_identity
-                        and os.getpgid(process.pid) == self.harness_pgid):
-                    process.terminate()
-                    self.guard_termination_sent = True
+                with self.resource_lock:
+                    process = self.process
+                    try:
+                        exact_owner = (
+                            process is not None and process.poll() is None
+                            and not self.cleaning_up
+                            and self.server_pid == process.pid and self.process_identity
+                            and existing.linux_process_identity(process.pid) == self.process_identity
+                            and self.server_pgid == self.harness_pgid
+                            and os.getpgid(process.pid) == self.harness_pgid
+                        )
+                    except OSError:
+                        exact_owner = False
+                    if exact_owner:
+                        process.terminate()
+                        self.guard_termination_sent = True
                 return
 
     def raise_resource_failure(self):
@@ -581,41 +597,50 @@ class Run:
                 raise TimeoutError("Qdrant full query-ready boundary exceeded optimizer timeout")
             time.sleep(self.poll_interval)
 
-    def start_server(self):
-        if self.storage_path.exists():
-            raise RuntimeError("owned Qdrant storage path already exists")
-        self.storage_path.parent.mkdir(parents=True, exist_ok=True)
-        self.server_log = (self.output / "qdrant.log").open("xb")
+    def _start_server(self, reuse_storage):
+        if reuse_storage:
+            if not self.storage_path.is_dir() or not self.server_log_path.is_file():
+                raise RuntimeError("owned Qdrant restart storage or log is unavailable")
+        else:
+            if self.storage_path.exists():
+                raise RuntimeError("owned Qdrant storage path already exists")
+            self.storage_path.parent.mkdir(parents=True, exist_ok=True)
+        self.server_log = self.server_log_path.open("ab" if reuse_storage else "xb")
         parsed = urllib.parse.urlparse(self.plan["url"])
         env = {key: os.environ[key] for key in ("HOME", "PATH", "TMPDIR", "TZ") if key in os.environ}
         env.update(QDRANT__SERVICE__HOST="127.0.0.1", QDRANT__SERVICE__HTTP_PORT=str(parsed.port),
                    QDRANT__STORAGE__STORAGE_PATH=str(self.storage_path))
-        with self.resource_lock:
-            process = subprocess.Popen([self.plan["qdrant_bin"]], stdin=subprocess.DEVNULL,
-                                       stdout=self.server_log, stderr=subprocess.STDOUT,
-                                       cwd=self.output, env=env)
-            try:
-                process_identity = existing.linux_process_identity(process.pid)
-                if not process_identity:
-                    raise RuntimeError(
-                        "owned Qdrant process identity is unavailable immediately after launch",
-                    )
-                server_pgid = os.getpgid(process.pid)
-                if server_pgid != self.harness_pgid:
-                    raise RuntimeError("owned Qdrant did not remain in the harness process group")
-                process_command_identity = existing.server_process_identity(process.pid)
-            except BaseException:
-                if process.poll() is None:
-                    process.terminate()
-                    try:
-                        process.wait(timeout=30)
-                    except subprocess.TimeoutExpired:
-                        process.kill()
-                        process.wait(timeout=10)
-                raise
-            self.process, self.server_pid = process, process.pid
-            self.process_identity, self.server_pgid = process_identity, server_pgid
-            self.process_command_identity = process_command_identity
+        try:
+            with self.resource_lock:
+                process = subprocess.Popen([self.plan["qdrant_bin"]], stdin=subprocess.DEVNULL,
+                                           stdout=self.server_log, stderr=subprocess.STDOUT,
+                                           cwd=self.output, env=env)
+                try:
+                    process_identity = existing.linux_process_identity(process.pid)
+                    if not process_identity:
+                        raise RuntimeError(
+                            "owned Qdrant process identity is unavailable immediately after launch",
+                        )
+                    server_pgid = os.getpgid(process.pid)
+                    if server_pgid != self.harness_pgid:
+                        raise RuntimeError("owned Qdrant did not remain in the harness process group")
+                    process_command_identity = existing.server_process_identity(process.pid)
+                except BaseException:
+                    if process.poll() is None:
+                        process.terminate()
+                        try:
+                            process.wait(timeout=30)
+                        except subprocess.TimeoutExpired:
+                            process.kill()
+                            process.wait(timeout=10)
+                    raise
+                self.process, self.server_pid = process, process.pid
+                self.process_identity, self.server_pgid = process_identity, server_pgid
+                self.process_command_identity = process_command_identity
+        except BaseException:
+            self.server_log.close()
+            self.server_log = None
+            raise
         deadline, last = time.monotonic() + self.plan["startup_timeout_s"], None
         while time.monotonic() < deadline:
             if self.process.poll() is not None:
@@ -636,54 +661,94 @@ class Run:
             time.sleep(self.plan["poll_interval_s"])
         raise TimeoutError(f"owned Qdrant startup exceeded timeout: {last}")
 
+    def start_server(self):
+        self._start_server(False)
+
+    def restart_server(self):
+        try:
+            cleanup = self.cleanup_owned()
+            if cleanup["status"] != "clean":
+                raise RuntimeError(cleanup["failure"])
+            shutdown_owned_bytes = existing.disk_bytes(self.storage_path)
+            with self.resource_lock:
+                self.client = self.process = self.process_identity = self.process_command_identity = None
+                self.server_pid = self.server_pgid = None
+                self.server_log = None
+            self._start_server(True)
+            return shutdown_owned_bytes
+        finally:
+            with self.resource_lock:
+                self.cleaning_up = False
+
     def cleanup_owned(self):
-        cleanup = {
-            "schema": "treedb_owned_qdrant_cleanup/v1", "status": "failed",
-            "process_identity": self.process_identity or "",
-            "harness_pgid": self.harness_pgid, "server_pgid": self.server_pgid,
-            "term_sent": False, "kill_sent": False, "exit_code": None,
-            "client_closed": False, "log_closed": False, "failure": None,
-        }
+        with self.resource_lock:
+            self.cleaning_up = True
+            process, client, server_log = self.process, self.client, self.server_log
+            server_pid, process_identity = self.server_pid, self.process_identity
+            server_pgid, harness_pgid = self.server_pgid, self.harness_pgid
+            cleanup = {
+                "schema": "treedb_owned_qdrant_cleanup/v1", "status": "failed",
+                "process_identity": process_identity or "",
+                "harness_pgid": harness_pgid, "server_pgid": server_pgid,
+                "term_sent": False, "kill_sent": False, "exit_code": None,
+                "client_closed": False, "log_closed": False, "failure": None,
+            }
+
+        def owner_unchanged():
+            return (
+                self.process is process and self.server_pid == server_pid
+                and self.process_identity == process_identity and self.server_pgid == server_pgid
+                and self.harness_pgid == harness_pgid
+            )
+
         failures = []
         try:
-            if self.client is not None:
-                self.client.close()
+            if client is not None:
+                client.close()
             cleanup["client_closed"] = True
         except BaseException as exc:
             failures.append(f"client close: {type(exc).__name__}: {exc}")
         try:
-            if self.process is None:
-                failures.append("owned Qdrant was never launched")
-            elif self.process.poll() is not None:
-                cleanup["exit_code"] = self.process.returncode
-                failures.append(f"owned Qdrant exited before cleanup with {self.process.returncode}")
-            elif (not self.process_identity
-                    or existing.linux_process_identity(self.server_pid) != self.process_identity
-                    or os.getpgid(self.server_pid) != self.harness_pgid):
-                failures.append("owned Qdrant identity or process group changed; refusing to signal")
-            else:
-                self.process.terminate()
-                cleanup["term_sent"] = True
+            with self.resource_lock:
+                if not owner_unchanged():
+                    failures.append("owned Qdrant ownership changed during cleanup")
+                elif process is None:
+                    failures.append("owned Qdrant was never launched")
+                elif process.poll() is not None:
+                    cleanup["exit_code"] = process.returncode
+                    failures.append(f"owned Qdrant exited before cleanup with {process.returncode}")
+                elif (server_pid != process.pid or not process_identity
+                        or existing.linux_process_identity(server_pid) != process_identity
+                        or server_pgid != harness_pgid or os.getpgid(server_pid) != harness_pgid):
+                    failures.append("owned Qdrant identity or process group changed; refusing to signal")
+                else:
+                    process.terminate()
+                    cleanup["term_sent"] = True
+            if cleanup["term_sent"]:
                 try:
-                    self.process.wait(timeout=30)
+                    process.wait(timeout=30)
                 except subprocess.TimeoutExpired:
-                    if (existing.linux_process_identity(self.server_pid) != self.process_identity
-                            or os.getpgid(self.server_pid) != self.harness_pgid):
-                        failures.append("owned Qdrant identity changed; refusing forced shutdown")
-                    else:
-                        self.process.kill()
-                        cleanup["kill_sent"] = True
-                        self.process.wait(timeout=10)
+                    with self.resource_lock:
+                        if (not owner_unchanged()
+                                or existing.linux_process_identity(server_pid) != process_identity
+                                or server_pgid != harness_pgid
+                                or os.getpgid(server_pid) != harness_pgid):
+                            failures.append("owned Qdrant identity changed; refusing forced shutdown")
+                        else:
+                            process.kill()
+                            cleanup["kill_sent"] = True
+                    if cleanup["kill_sent"]:
+                        process.wait(timeout=10)
                         failures.append("owned Qdrant required forced shutdown")
-                cleanup["exit_code"] = self.process.returncode
-                if self.process.returncode != 0:
-                    failures.append(f"owned Qdrant shutdown exited with {self.process.returncode}")
+                cleanup["exit_code"] = process.returncode
+                if process.returncode != 0:
+                    failures.append(f"owned Qdrant shutdown exited with {process.returncode}")
         except BaseException as exc:
             failures.append(f"server cleanup: {type(exc).__name__}: {exc}")
         finally:
             try:
-                if self.server_log is not None:
-                    self.server_log.close()
+                if server_log is not None:
+                    server_log.close()
                 cleanup["log_closed"] = True
             except BaseException as exc:
                 failures.append(f"server log close: {type(exc).__name__}: {exc}")

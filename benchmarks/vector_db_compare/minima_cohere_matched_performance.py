@@ -18,7 +18,6 @@ import subprocess
 import sys
 import threading
 import time
-import urllib.parse
 
 import numpy as np
 
@@ -200,27 +199,62 @@ def validate_thread_environment():
         raise RuntimeError("campaign requires GOMAXPROCS=6 and one BLAS thread")
 
 
+def qdrant_process_memory(pid, expected_identity):
+    before = qdrant_rss.existing.linux_process_identity(pid)
+    if before != expected_identity:
+        raise RuntimeError("Qdrant resource process identity changed before /proc read")
+    try:
+        status = Path(f"/proc/{pid}/status").read_text(encoding="utf-8")
+    except OSError as exc:
+        raise RuntimeError("Qdrant resource /proc status is unavailable") from exc
+    if qdrant_rss.existing.linux_process_identity(pid) != before:
+        raise RuntimeError("Qdrant resource process identity changed across /proc read")
+    values = {}
+    for line in status.splitlines():
+        if line.startswith("VmRSS:") or line.startswith("VmHWM:"):
+            name, value, unit = line.split()
+            if unit != "kB" or int(value) < 0:
+                raise RuntimeError("Qdrant resource RSS value is invalid")
+            values[name.removesuffix(":")] = int(value) * 1024
+    if set(values) != {"VmRSS", "VmHWM"}:
+        raise RuntimeError("Qdrant resource RSS values are unavailable")
+    return values
+
+
 def check_qdrant_resources(run, started):
-    rss, peak_rss = 0, 0
-    for pid in (os.getpid(), run.process.pid if run.process else None):
-        if pid is not None:
-            try:
-                for line in Path(f"/proc/{pid}/status").read_text().splitlines():
-                    if line.startswith("VmRSS:"):
-                        rss += int(line.split()[1]) * 1024
-                    elif line.startswith("VmHWM:"):
-                        peak_rss += int(line.split()[1]) * 1024
-            except FileNotFoundError:
-                pass
     with run.resource_lock:
+        harness = qdrant_process_memory(os.getpid(), run.harness_identity)
+        server = None
+        process = run.process
+        if process is not None:
+            if process.poll() is not None:
+                if not run.cleaning_up:
+                    raise RuntimeError(f"owned Qdrant exited during resource monitoring with {process.returncode}")
+            else:
+                try:
+                    if (run.server_pid != process.pid or not run.process_identity
+                            or run.server_pgid != run.harness_pgid
+                            or os.getpgid(process.pid) != run.harness_pgid):
+                        raise RuntimeError(
+                            "owned Qdrant identity or process group changed during resource monitoring",
+                        )
+                    server = qdrant_process_memory(process.pid, run.process_identity)
+                except (OSError, RuntimeError):
+                    if not run.cleaning_up or process.poll() is None:
+                        raise
+        elif run.server_pid is not None and not run.cleaning_up:
+            raise RuntimeError("owned Qdrant disappeared during resource monitoring")
+        rss = harness["VmRSS"] + (server["VmRSS"] if server else 0)
+        peak_rss = harness["VmHWM"] + (server["VmHWM"] if server else 0)
         run.combined_peak_rss_bytes = max(run.combined_peak_rss_bytes, peak_rss)
         combined_peak_rss = run.combined_peak_rss_bytes
-    if (shutil.disk_usage(run.output).free < run.plan["minimum_free_bytes"]
-            or qdrant_rss.existing.disk_bytes(run.output) > run.plan["maximum_output_bytes"]
-            or rss > run.plan["maximum_combined_rss_bytes"]
-            or combined_peak_rss > run.plan["maximum_combined_rss_bytes"]
-            or time.monotonic() - started > run.plan["wall_limit_s"]):
-        raise RuntimeError("frozen Qdrant disk/RAM/wall budget exceeded")
+        guard = run.plan["resource_guard"]
+        if (shutil.disk_usage(run.output).free < guard["minimum_free_bytes"]
+                or qdrant_rss.existing.disk_bytes(run.output) > guard["maximum_owned_bytes"]
+                or rss > guard["maximum_combined_rss_bytes"]
+                or combined_peak_rss > guard["maximum_combined_rss_bytes"]
+                or time.monotonic() - started > guard["wall_limit_s"]):
+            raise RuntimeError("frozen Qdrant disk/RAM/wall budget exceeded")
 
 
 def guard_qdrant_resources(run, started, cancel, failures):
@@ -231,10 +265,22 @@ def guard_qdrant_resources(run, started, cancel, failures):
             except BaseException as exc:
                 failures.append(f"resource guard: {exc}")
         if failures:
-            process = run.process
-            if (process and process.poll() is None
-                    and qdrant_rss.existing.linux_process_identity(process.pid) == run.process_identity):
-                process.terminate()
+            with run.resource_lock:
+                process = run.process
+                try:
+                    exact_owner = (
+                        process is not None and process.poll() is None
+                        and not run.cleaning_up
+                        and run.server_pid == process.pid and run.process_identity
+                        and qdrant_rss.existing.linux_process_identity(process.pid) == run.process_identity
+                        and run.server_pgid == run.harness_pgid
+                        and os.getpgid(process.pid) == run.harness_pgid
+                    )
+                except OSError:
+                    exact_owner = False
+                if exact_owner:
+                    process.terminate()
+            return
 
 
 def frozen_plan(args):
@@ -688,13 +734,17 @@ def run_treedb(plan, run_dir):
 
 def qdrant_plan(plan, run_dir):
     config = plan["qdrant_configuration"]
+    resource_guard = {
+        "poll_interval_s": 1, "wall_limit_s": 3600,
+        "minimum_free_bytes": 10 << 30, "maximum_owned_bytes": 12 << 30,
+        "maximum_combined_rss_bytes": 26 << 30,
+    }
     return {
         **plan, "run_dir": str(run_dir), "storage_path": str(run_dir / "storage"),
         "url": "http://127.0.0.1:17733", "collection": "minima_cohere",
         "operation_timeout_s": 600, "startup_timeout_s": 120,
         "optimizer_timeout_s": 2700, "poll_interval_s": .25,
-        "minimum_free_bytes": 10 << 30, "maximum_output_bytes": 12 << 30,
-        "maximum_combined_rss_bytes": 26 << 30, "wall_limit_s": 3600,
+        "resource_guard": resource_guard,
         "initial_upload_hnsw": config["initial_upload_hnsw"],
         "initial_upload_optimizers": config["initial_upload_optimizers"],
         "production_hnsw": config["production_hnsw"],
@@ -763,48 +813,33 @@ def validate_qdrant_updates(run, rows):
 
 
 def restart_qdrant(run):
-    run.client.close(); run.stop_server()
-    shutdown_disk = qdrant_rss.existing.disk_bytes(run.storage_path)
-    run.process = None
-    run.server_log = run.server_log_path.open("ab")
-    parsed = urllib.parse.urlparse(run.plan["url"])
-    env = {key: os.environ[key] for key in ("HOME", "PATH", "TMPDIR", "TZ") if key in os.environ}
-    env.update(QDRANT__SERVICE__HOST="127.0.0.1", QDRANT__SERVICE__HTTP_PORT=str(parsed.port),
-               QDRANT__STORAGE__STORAGE_PATH=str(run.storage_path))
-    run.process = subprocess.Popen([run.plan["qdrant_bin"]], stdin=subprocess.DEVNULL,
-        stdout=run.server_log, stderr=subprocess.STDOUT, cwd=run.output, env=env, start_new_session=True)
-    run.server_pid = run.process.pid
-    deadline, last = time.monotonic() + run.plan["startup_timeout_s"], None
-    while time.monotonic() < deadline:
-        if run.process.poll() is not None:
-            raise RuntimeError(f"owned Qdrant exited during restart with {run.process.returncode}")
+    shutdown_disk = run.restart_server()
+    run.wait_ready(ROWS, "profile_restart_ready")
+    return shutdown_disk
+
+
+def close_qdrant_clients(clients):
+    failures = []
+    while clients:
+        client = clients.pop()
         try:
-            identity = qdrant_rss.existing.linux_process_identity(run.server_pid)
-            info = qdrant_rss.existing.server_info(run.plan["url"], "")
-            if (identity and info.get("version") == run.plan["qdrant_server_version"]
-                    and Path(f"/proc/{run.server_pid}/exe").resolve() == Path(run.plan["qdrant_bin"])
-                    and qdrant_rss.existing.server_process_owns_endpoint(run.server_pid, run.plan["url"])):
-                run.process_identity = identity
-                run.process_command_identity = qdrant_rss.existing.server_process_identity(run.server_pid)
-                run.client = run.client_factory()
-                run.wait_ready(ROWS, "profile_restart_ready")
-                return shutdown_disk
-        except Exception as exc:
-            last = exc
-        time.sleep(run.plan["poll_interval_s"])
-    raise TimeoutError(f"Qdrant restart exceeded timeout: {last}")
+            client.close()
+        except BaseException as exc:
+            failures.append(f"{type(exc).__name__}: {exc}")
+    if failures:
+        raise RuntimeError("auxiliary Qdrant client close: " + "; ".join(failures))
 
 
 def run_qdrant(plan, run_dir):
     from qdrant_client import QdrantClient, models
     local = qdrant_plan(plan, run_dir)
     factory = lambda: QdrantClient(url=local["url"], timeout=local["operation_timeout_s"], prefer_grpc=False)
-    run = qdrant_rss.Run(local, factory, models)
-    run.resource_lock, run.combined_peak_rss_bytes = threading.Lock(), 0
-    failure, monitor = None, None
+    run, monitor, clients = None, None, []
     guard_cancel, guard_failures = threading.Event(), []
     started_at, started = time.monotonic(), time.monotonic_ns()
     try:
+        run = qdrant_rss.Run(local, factory, models)
+        run.combined_peak_rss_bytes = 0
         monitor = threading.Thread(target=guard_qdrant_resources,
                                    args=(run, started_at, guard_cancel, guard_failures), daemon=True)
         monitor.start()
@@ -848,7 +883,6 @@ def run_qdrant(plan, run_dir):
                                  lambda response: validate_qdrant_queries([response]),
                                  MEASUREMENT_QUERIES, 1, plan["query_window_seconds"])
 
-        clients = []
         lock = threading.Lock()
         local_clients = threading.local()
         def concurrent_query(query):
@@ -860,9 +894,7 @@ def run_qdrant(plan, run_dir):
         concurrent, _ = timed_window(concurrent_query, lambda response: validate_qdrant_queries([response]),
                                      MEASUREMENT_QUERIES, plan["query_concurrency"],
                                      plan["query_window_seconds"])
-        for client in clients:
-            client.close()
-        clients.clear()
+        close_qdrant_clients(clients)
 
         prepared = []
         for index in range(plan["mixed_write_batches"]):
@@ -888,11 +920,7 @@ def run_qdrant(plan, run_dir):
         post_mixed_ready = time.monotonic_ns()
         run.wait_ready(ROWS, "profile_post_mixed_ready")
         phase["post_mixed_ann_ready_ns"] = time.monotonic_ns() - post_mixed_ready
-        for client in clients:
-            try:
-                client.close()
-            except Exception:
-                pass
+        close_qdrant_clients(clients)
         extended_rss = measured_rss(native.process_peak_at_boundary(
             run.server_pid, run.process_identity, plan["cpu_affinity"]), "Qdrant", "extended-live")
         final_live_disk = qdrant_rss.existing.disk_bytes(run.storage_path)
@@ -916,31 +944,46 @@ def run_qdrant(plan, run_dir):
                                 "restart_peak_rss": restart_rss, "initial_ready_disk_bytes": initial_disk,
                                 "final_live_disk_bytes": final_live_disk, "shutdown_disk_bytes": shutdown_disk}}
     except BaseException as exc:
-        failure = f"{type(exc).__name__}: {exc}"
-        result = {"schema": SCHEMA, "state": "failed", "backend": "qdrant", "failure": failure}
+        if run is None:
+            Path(run_dir).mkdir(parents=True, exist_ok=True)
+        result = {"schema": SCHEMA, "state": "failed", "backend": "qdrant",
+                  "failure": f"{type(exc).__name__}: {exc}"}
     finally:
+        lifecycle_failures = []
+        try:
+            close_qdrant_clients(clients)
+        except BaseException as exc:
+            lifecycle_failures.append(str(exc))
+        cleanup = None
+        if run is not None:
+            try:
+                check_qdrant_resources(run, started_at)
+            except BaseException as exc:
+                lifecycle_failures.append(f"final live resource guard: {type(exc).__name__}: {exc}")
+            run.cleaning_up = True
+            try:
+                cleanup = run.cleanup_owned()
+            except BaseException as exc:
+                lifecycle_failures.append(f"owned Qdrant cleanup: {type(exc).__name__}: {exc}")
+            try:
+                check_qdrant_resources(run, started_at)
+            except BaseException as exc:
+                lifecycle_failures.append(f"cleanup resource guard: {type(exc).__name__}: {exc}")
         guard_cancel.set()
         if monitor:
             monitor.join(timeout=5)
-        try:
-            if monitor and monitor.is_alive():
-                raise RuntimeError("Qdrant resource guard did not stop")
-            check_qdrant_resources(run, started_at)
-            if guard_failures:
-                raise RuntimeError(guard_failures[0])
-            if result.get("state") == "complete":
-                result["resources"]["combined_lifetime_peak_rss_bytes"] = run.combined_peak_rss_bytes
-        except BaseException as exc:
+        if monitor and monitor.is_alive():
+            lifecycle_failures.append("Qdrant resource guard did not stop")
+        lifecycle_failures.extend(guard_failures)
+        if cleanup is not None and cleanup["status"] != "clean":
+            lifecycle_failures.append(cleanup["failure"] or "owned Qdrant cleanup failed")
+        if lifecycle_failures:
+            prior = result.get("failure")
+            lifecycle = "; ".join(lifecycle_failures)
             result = {"schema": SCHEMA, "state": "failed", "backend": "qdrant",
-                      "failure": result.get("failure") or f"final resource guard: {type(exc).__name__}: {exc}"}
-        try:
-            if run.client:
-                run.client.close()
-            if run.process and run.process.poll() is None:
-                run.stop_server()
-        except BaseException as exc:
-            result = {"schema": SCHEMA, "state": "failed", "backend": "qdrant",
-                      "failure": result.get("failure") or f"shutdown: {type(exc).__name__}: {exc}"}
+                      "failure": f"{prior}; lifecycle: {lifecycle}" if prior else f"lifecycle: {lifecycle}"}
+        elif result.get("state") == "complete":
+            result["resources"]["combined_lifetime_peak_rss_bytes"] = run.combined_peak_rss_bytes
     return result
 
 

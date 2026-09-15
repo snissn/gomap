@@ -599,6 +599,7 @@ class CohereQdrantRSSDiagnosticTests(unittest.TestCase):
             run.output = Path(temporary) / "run"
             run.output.mkdir()
             run.storage_path = Path(temporary) / "storage"
+            run.server_log_path = run.output / "qdrant.log"
             run.client_factory = object
             run.harness_pgid = 44
             run.resource_lock = threading.Lock()
@@ -650,6 +651,7 @@ class CohereQdrantRSSDiagnosticTests(unittest.TestCase):
             run.output = Path(temporary) / "run"
             run.output.mkdir()
             run.storage_path = Path(temporary) / "storage"
+            run.server_log_path = run.output / "qdrant.log"
             run.harness_pgid = 44
             run.resource_lock = threading.Lock()
             run.process = run.process_identity = run.process_command_identity = None
@@ -668,15 +670,43 @@ class CohereQdrantRSSDiagnosticTests(unittest.TestCase):
             process.terminate.assert_called_once_with()
             process.wait.assert_called_once_with(timeout=30)
             self.assertIsNone(run.process)
-            run.server_log.close()
+            self.assertIsNone(run.server_log)
+
+    def test_owned_qdrant_restart_uses_shared_launcher_after_clean_shutdown(self):
+        run = qdrant_rss.Run.__new__(qdrant_rss.Run)
+        run.resource_lock = threading.Lock()
+        run.cleaning_up = False
+        run.storage_path = Path("/owned/storage")
+        run.client = run.process = run.process_identity = run.process_command_identity = object()
+        run.server_pid = run.server_pgid = 7
+        run.server_log = object()
+        def clean():
+            run.cleaning_up = True
+            return {"status": "clean", "failure": None}
+        run.cleanup_owned = MagicMock(side_effect=clean)
+
+        def launch(reuse_storage):
+            self.assertTrue(reuse_storage)
+            self.assertTrue(run.cleaning_up)
+            self.assertIsNone(run.process)
+            self.assertIsNone(run.process_identity)
+            self.assertIsNone(run.server_pgid)
+
+        with patch.object(qdrant_rss.existing, "disk_bytes", return_value=123), \
+                patch.object(run, "_start_server", side_effect=launch) as start:
+            self.assertEqual(run.restart_server(), 123)
+        run.cleanup_owned.assert_called_once_with()
+        start.assert_called_once_with(True)
+        self.assertFalse(run.cleaning_up)
 
     def test_owned_qdrant_rejects_nonzero_shutdown(self):
         run = qdrant_rss.Run.__new__(qdrant_rss.Run)
-        run.process = MagicMock(returncode=1)
+        run.process = MagicMock(pid=7, returncode=1)
         run.process.poll.return_value = None
         run.process_identity, run.server_log = "7:11", None
         run.server_pid, run.server_pgid, run.harness_pgid = 7, 10, 10
         run.client = None
+        run.resource_lock = threading.Lock()
         with self.assertRaisesRegex(RuntimeError, "shutdown exited with 1"):
             with patch.object(qdrant_rss.existing, "linux_process_identity", return_value="7:11"), \
                     patch.object(qdrant_rss.os, "getpgid", return_value=10):
@@ -705,6 +735,7 @@ class CohereQdrantRSSDiagnosticTests(unittest.TestCase):
                                  "cleanup_sample": None}
             run.process = MagicMock(pid=7)
             run.process.poll.return_value = None
+            run.server_pid, run.server_pgid, run.harness_pgid = 7, 10, 10
             run.process_identity = "7:11"
             samples = [
                 {"pid": 6, "process_identity": "6:10", "current_rss_bytes": 100},
@@ -712,6 +743,7 @@ class CohereQdrantRSSDiagnosticTests(unittest.TestCase):
             ]
             with patch.object(qdrant_rss.Run, "current_rss", side_effect=samples), \
                     patch.object(qdrant_rss.existing, "disk_bytes", return_value=50), \
+                    patch.object(qdrant_rss.os, "getpgid", return_value=10), \
                     patch.object(qdrant_rss.shutil, "disk_usage",
                                  return_value=MagicMock(free=1000)):
                 run.check_resources()
@@ -721,6 +753,13 @@ class CohereQdrantRSSDiagnosticTests(unittest.TestCase):
             self.assertEqual(sample["server"]["process_identity"], "7:11")
             self.assertEqual(run.guard_summary["sample_count"], 1)
             self.assertEqual(run.guard_summary["minimum_free_bytes_observed"], 1000)
+
+            run.server_pgid = 11
+            with patch.object(qdrant_rss.Run, "current_rss", side_effect=samples), \
+                    patch.object(qdrant_rss.os, "getpgid", return_value=10), \
+                    self.assertRaisesRegex(RuntimeError, "identity or process group changed"):
+                run.check_resources()
+            run.server_pgid = 10
 
             run.cleaning_up = True
             run.process.poll.return_value = 0
@@ -741,6 +780,7 @@ class CohereQdrantRSSDiagnosticTests(unittest.TestCase):
             with patch.object(qdrant_rss.Run, "current_rss",
                               side_effect=exiting_current_rss), \
                     patch.object(qdrant_rss.existing, "disk_bytes", return_value=50), \
+                    patch.object(qdrant_rss.os, "getpgid", return_value=10), \
                     patch.object(qdrant_rss.shutil, "disk_usage",
                                  return_value=MagicMock(free=1000)):
                 run.check_resources()
@@ -752,14 +792,17 @@ class CohereQdrantRSSDiagnosticTests(unittest.TestCase):
             run.plan["resource_guard"]["maximum_combined_rss_bytes"] = 1
             with patch.object(qdrant_rss.Run, "current_rss", side_effect=samples), \
                     patch.object(qdrant_rss.existing, "disk_bytes", return_value=50), \
+                    patch.object(qdrant_rss.os, "getpgid", return_value=10), \
                     patch.object(qdrant_rss.shutil, "disk_usage",
                                  return_value=MagicMock(free=1000)), \
                     self.assertRaisesRegex(RuntimeError, "disk/RAM/wall budget"):
                 run.check_resources()
 
     def test_qdrant_resource_guard_signals_only_the_exact_owned_lifetime(self):
-        for observed, expected_calls in (("7:11", 1), ("7:12", 0)):
-            with self.subTest(observed=observed):
+        for observed, stored_pgid, actual_pgid, expected_calls in (
+                ("7:11", 10, 10, 1), ("7:12", 10, 10, 0), ("7:11", 11, 10, 0),
+                ("7:11", 10, 11, 0)):
+            with self.subTest(observed=observed, stored_pgid=stored_pgid, actual_pgid=actual_pgid):
                 run = qdrant_rss.Run.__new__(qdrant_rss.Run)
                 run.cancel = MagicMock()
                 run.cancel.wait.side_effect = [False, True]
@@ -767,15 +810,18 @@ class CohereQdrantRSSDiagnosticTests(unittest.TestCase):
                 run.plan = {"resource_guard": {"poll_interval_s": 1}}
                 run.guard_summary = {"failure": None}
                 run.guard_termination_sent = False
+                run.cleaning_up = False
                 run.harness_pgid = 10
                 run.process_identity = "7:11"
                 run.process = MagicMock(pid=7)
+                run.server_pid, run.server_pgid = 7, stored_pgid
+                run.resource_lock = threading.Lock()
                 run.process.poll.return_value = None
                 with patch.object(run, "check_resources",
                                   side_effect=RuntimeError("budget")), \
                         patch.object(qdrant_rss.existing, "linux_process_identity",
                                      return_value=observed), \
-                        patch.object(qdrant_rss.os, "getpgid", return_value=10):
+                        patch.object(qdrant_rss.os, "getpgid", return_value=actual_pgid):
                     run.guard_resources()
                 self.assertIn("resource guard", run.resource_failure)
                 self.assertEqual(run.process.terminate.call_count, expected_calls)
@@ -803,6 +849,7 @@ class CohereQdrantRSSDiagnosticTests(unittest.TestCase):
         run.process.wait.side_effect = subprocess.TimeoutExpired("qdrant", 30)
         run.server_pid, run.process_identity = 7, "7:11"
         run.harness_pgid = run.server_pgid = 10
+        run.resource_lock = threading.Lock()
         with patch.object(qdrant_rss.existing, "linux_process_identity",
                          side_effect=["7:11", "7:12"]), \
                 patch.object(qdrant_rss.os, "getpgid", return_value=10):
@@ -825,6 +872,7 @@ class CohereQdrantRSSDiagnosticTests(unittest.TestCase):
                     run.process.wait.side_effect = [subprocess.TimeoutExpired("qdrant", 30), None]
                 run.server_pid, run.process_identity = 7, "7:11"
                 run.harness_pgid = run.server_pgid = 10
+                run.resource_lock = threading.Lock()
                 with patch.object(qdrant_rss.existing, "linux_process_identity",
                                   return_value="7:11"), \
                         patch.object(qdrant_rss.os, "getpgid", return_value=10):
@@ -835,6 +883,77 @@ class CohereQdrantRSSDiagnosticTests(unittest.TestCase):
                 self.assertEqual(run.process.kill.call_count, int(forced))
                 self.assertTrue(cleanup["client_closed"])
                 self.assertTrue(cleanup["log_closed"])
+
+    def test_qdrant_cleanup_still_terminates_when_client_close_fails(self):
+        run = qdrant_rss.Run.__new__(qdrant_rss.Run)
+        run.client, run.server_log = MagicMock(), MagicMock()
+        run.client.close.side_effect = RuntimeError("client stuck")
+        run.process = MagicMock(pid=7, returncode=0)
+        run.process.poll.return_value = None
+        run.process.wait.return_value = None
+        run.server_pid, run.process_identity = 7, "7:11"
+        run.harness_pgid = run.server_pgid = 10
+        run.resource_lock = threading.Lock()
+        with patch.object(qdrant_rss.existing, "linux_process_identity", return_value="7:11"), \
+                patch.object(qdrant_rss.os, "getpgid", return_value=10):
+            cleanup = run.cleanup_owned()
+        self.assertEqual(cleanup["status"], "failed")
+        self.assertIn("client close", cleanup["failure"])
+        run.process.terminate.assert_called_once_with()
+        run.process.wait.assert_called_once_with(timeout=30)
+        run.server_log.close.assert_called_once_with()
+
+    def test_qdrant_cleanup_wait_remains_visible_to_resource_monitor(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            run = qdrant_rss.Run.__new__(qdrant_rss.Run)
+            run.output = Path(temporary)
+            run.started = qdrant_rss.time.monotonic()
+            run.plan = {"resource_guard": {
+                "poll_interval_s": 1, "minimum_free_bytes": 0,
+                "maximum_owned_bytes": 1000, "maximum_combined_rss_bytes": 500,
+                "wall_limit_s": 60,
+            }}
+            run.harness_identity = "6:10"
+            run.client, run.server_log = None, MagicMock()
+            run.process = MagicMock(pid=7, returncode=0)
+            run.process.poll.return_value = None
+            run.server_pid, run.process_identity = 7, "7:11"
+            run.harness_pgid = run.server_pgid = 10
+            run.resource_lock = threading.Lock()
+            run.cleaning_up = False
+            run.guard_summary = {
+                "sample_count": 0, "max_combined_current_rss_bytes": 0,
+                "max_owned_bytes": 0, "minimum_free_bytes_observed": None,
+                "first_sample": None, "last_sample": None, "cleanup_sample": None,
+            }
+            wait_started, release_wait = threading.Event(), threading.Event()
+            cleanup = []
+
+            def wait_for_exit(timeout):
+                self.assertEqual(timeout, 30)
+                wait_started.set()
+                self.assertTrue(release_wait.wait(5))
+
+            run.process.wait.side_effect = wait_for_exit
+            samples = [
+                {"pid": 6, "process_identity": "6:10", "current_rss_bytes": 100},
+                {"pid": 7, "process_identity": "7:11", "current_rss_bytes": 600},
+            ]
+            with patch.object(qdrant_rss.existing, "linux_process_identity", return_value="7:11"), \
+                    patch.object(qdrant_rss.os, "getpgid", return_value=10), \
+                    patch.object(qdrant_rss.Run, "current_rss", side_effect=samples), \
+                    patch.object(qdrant_rss.existing, "disk_bytes", return_value=0), \
+                    patch.object(qdrant_rss.shutil, "disk_usage", return_value=MagicMock(free=1000)):
+                worker = threading.Thread(target=lambda: cleanup.append(run.cleanup_owned()))
+                worker.start()
+                self.assertTrue(wait_started.wait(1))
+                with self.assertRaisesRegex(RuntimeError, "disk/RAM/wall budget"):
+                    run.check_resources()
+                release_wait.set()
+                worker.join(timeout=1)
+            self.assertFalse(worker.is_alive())
+            self.assertEqual(cleanup[0]["status"], "clean")
+            self.assertEqual(run.guard_summary["cleanup_sample"]["combined_current_rss_bytes"], 700)
 
     def test_qdrant_resource_envelope_is_frozen(self):
         self.assertEqual(qdrant_rss.RESOURCE_GUARD, {
