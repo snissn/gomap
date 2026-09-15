@@ -69,6 +69,52 @@ func TestFilterMissingFieldDoesNotMatch(t *testing.T) {
 	}
 }
 
+func TestFilterMatchesDocumentUsesServiceSemantics(t *testing.T) {
+	doc := Document{ID: "doc-1", Content: "hello", Meta: map[string]any{
+		"tenant": "a",
+		"rank":   42.0,
+		"nested": map[string]any{"tags": []any{"go", "database"}},
+	}}
+	for name, filter := range map[string]*Filter{
+		"ID":          {Field: "id", Operator: "==", Value: "doc-1"},
+		"content":     {Field: "content", Operator: "==", Value: "hello"},
+		"nested meta": {Field: "meta.nested.tags", Operator: "in", Value: []any{"database"}},
+		"numeric":     {Field: "rank", Operator: ">=", Value: int64(42)},
+		"boolean": {Operator: "AND", Conditions: []Filter{
+			{Field: "tenant", Operator: "==", Value: "a"},
+			{Operator: "NOT", Conditions: []Filter{{Field: "rank", Operator: "<", Value: 42}}},
+		}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := filter.Validate(); err != nil {
+				t.Fatal(err)
+			}
+			matched, err := filter.MatchesDocument(doc)
+			if err != nil || !matched {
+				t.Fatalf("match=%v err=%v", matched, err)
+			}
+		})
+	}
+	for name, filter := range map[string]*Filter{
+		"wrong tenant":  {Field: "tenant", Operator: "==", Value: "b"},
+		"missing field": {Field: "missing", Operator: "!=", Value: "x"},
+		"wrong type":    {Field: "rank", Operator: ">", Value: "1"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := filter.Validate(); err != nil {
+				t.Fatal(err)
+			}
+			matched, err := filter.MatchesDocument(doc)
+			if matched || (name != "wrong type" && err != nil) || (name == "wrong type" && err == nil) {
+				t.Fatalf("match=%v err=%v", matched, err)
+			}
+		})
+	}
+	if err := (&Filter{Operator: "NOT"}).Validate(); err == nil {
+		t.Fatal("malformed filter validated")
+	}
+}
+
 func TestFilterRejectsMalformedShapes(t *testing.T) {
 	tests := []struct {
 		name   string

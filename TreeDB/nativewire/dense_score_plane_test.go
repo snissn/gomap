@@ -617,6 +617,11 @@ func TestDenseV3ResultDocumentsMatchRequest(t *testing.T) {
 	withoutEmbedding := DenseVectorSearchRequest{Query: []float32{1, 0}}
 	withEmbedding := withoutEmbedding
 	withEmbedding.ReturnEmbedding = true
+	filtered := withoutEmbedding
+	filtered.Filter = &documentservice.Filter{Operator: "AND", Conditions: []documentservice.Filter{
+		{Field: "meta.tenant", Operator: "==", Value: "a"},
+		{Field: "meta.rank", Operator: ">=", Value: int64(2)},
+	}}
 	for name, candidate := range map[string]struct {
 		result  DenseVectorSearchResult
 		request DenseVectorSearchRequest
@@ -624,6 +629,9 @@ func TestDenseV3ResultDocumentsMatchRequest(t *testing.T) {
 	}{
 		"omitted embedding":     {DenseVectorSearchResult{ID: []byte("a"), Document: []byte(`{"id":"a","content":"alpha","meta":{"kind":"test"}}`)}, withoutEmbedding, true},
 		"requested embedding":   {DenseVectorSearchResult{ID: []byte("a"), Document: []byte(`{"id":"a","embedding":[1,0]}`)}, withEmbedding, true},
+		"matching filter":       {DenseVectorSearchResult{ID: []byte("a"), Document: []byte(`{"id":"a","meta":{"tenant":"a","rank":2}}`)}, filtered, true},
+		"mismatched filter":     {DenseVectorSearchResult{ID: []byte("a"), Document: []byte(`{"id":"a","meta":{"tenant":"b","rank":2}}`)}, filtered, false},
+		"missing filter field":  {DenseVectorSearchResult{ID: []byte("a"), Document: []byte(`{"id":"a","meta":{"tenant":"a"}}`)}, filtered, false},
 		"mismatched ID":         {DenseVectorSearchResult{ID: []byte("a"), Document: []byte(`{"id":"b"}`)}, withoutEmbedding, false},
 		"null content":          {DenseVectorSearchResult{ID: []byte("a"), Document: []byte(`{"id":"a","content":null}`)}, withoutEmbedding, false},
 		"malformed JSON":        {DenseVectorSearchResult{ID: []byte("a"), Document: []byte(`{"id":`)}, withoutEmbedding, false},
@@ -1427,17 +1435,17 @@ func TestDenseV3ResultDecodeErrorsPreserveOwnedProofs(t *testing.T) {
 		},
 	}
 	var err error
-	proofRaw, err := appendDenseScorePlane(nil, proof, iwire.DefaultLimits())
-	if err != nil {
-		t.Fatal(err)
-	}
-	responseFor := func(meta, id, document []byte) ([]byte, documentservice.DenseSearchWork) {
+	responseFor := func(meta, id, document []byte, responseWork documentservice.DenseSearchWork, responseProof collections.ColumnGraphScorePlaneWork) ([]byte, documentservice.DenseSearchWork) {
 		t.Helper()
-		candidateWork := work
+		candidateWork := responseWork
 		candidateWork.Output.OutputBytes = uint64(len(document))
 		workRaw, workErr := appendDenseWork(nil, candidateWork)
 		if workErr != nil {
 			t.Fatal(workErr)
+		}
+		candidateProofRaw, proofErr := appendDenseScorePlane(nil, responseProof, iwire.DefaultLimits())
+		if proofErr != nil {
+			t.Fatal(proofErr)
 		}
 		var body []byte
 		for _, section := range []iwire.Section{
@@ -1445,7 +1453,7 @@ func TestDenseV3ResultDecodeErrorsPreserveOwnedProofs(t *testing.T) {
 			{ID: iwire.SectionDocuments, Bytes: iwire.AppendByteVector(nil, document)},
 			{ID: iwire.SectionDenseSearchResponse, Bytes: meta},
 			{ID: iwire.SectionDenseSearchWork, Flags: iwire.SectionFlagCritical, Bytes: workRaw},
-			{ID: iwire.SectionDenseSearchScorePlaneProof, Flags: iwire.SectionFlagCritical, Bytes: proofRaw},
+			{ID: iwire.SectionDenseSearchScorePlaneProof, Flags: iwire.SectionFlagCritical, Bytes: candidateProofRaw},
 		} {
 			body, err = iwire.AppendSection(body, section)
 			if err != nil {
@@ -1460,12 +1468,12 @@ func TestDenseV3ResultDecodeErrorsPreserveOwnedProofs(t *testing.T) {
 		TypedColumnGraph: true, Index: "docs", Query: []float32{1, 0}, TopK: 1, EfSearch: 8,
 		QueryMode: collections.VectorIndexQueryModeQuantizedRerank, QuantizedIndexName: proof.QuantizedIndexName,
 	}
-	roundTrip := func(meta, id, document []byte, request DenseVectorSearchRequest) (DenseVectorSearchResponse, error, documentservice.DenseSearchWork) {
+	roundTripWithEvidence := func(meta, id, document []byte, request DenseVectorSearchRequest, responseWork documentservice.DenseSearchWork, responseProof collections.ColumnGraphScorePlaneWork) (DenseVectorSearchResponse, error, documentservice.DenseSearchWork) {
 		t.Helper()
 		clientConn, serverConn := net.Pipe()
 		client := NewClient(clientConn)
 		client.denseTypedQuantizedNegotiated = true
-		response, expectedWork := responseFor(meta, id, document)
+		response, expectedWork := responseFor(meta, id, document, responseWork, responseProof)
 		errCh := make(chan error, 1)
 		go func() {
 			header, _, serveErr := readFrame(serverConn, iwire.DefaultLimits())
@@ -1483,6 +1491,9 @@ func TestDenseV3ResultDecodeErrorsPreserveOwnedProofs(t *testing.T) {
 			t.Fatal(serveErr)
 		}
 		return out, gotErr, expectedWork
+	}
+	roundTrip := func(meta, id, document []byte, request DenseVectorSearchRequest) (DenseVectorSearchResponse, error, documentservice.DenseSearchWork) {
+		return roundTripWithEvidence(meta, id, document, request, work, proof)
 	}
 	assertOwnedProofs := func(gotErr error, expectedWork documentservice.DenseSearchWork) {
 		t.Helper()
@@ -1532,6 +1543,32 @@ func TestDenseV3ResultDecodeErrorsPreserveOwnedProofs(t *testing.T) {
 			if candidate.valid {
 				if gotErr != nil || len(out.Results) != 1 || !bytes.Equal(out.Results[0].Document, candidate.document) {
 					t.Fatalf("valid document rejected: response=%+v err=%v", out, gotErr)
+				}
+				return
+			}
+			assertOwnedProofs(gotErr, expectedWork)
+		})
+	}
+
+	filteredRequest := baseRequest
+	filteredRequest.Filter = &documentservice.Filter{Field: "meta.tenant", Operator: "==", Value: "a"}
+	filteredWork := work
+	filteredWork.Graph.BaseCandidates = 1
+	filteredWork.Graph.Filter = collections.ColumnGraphFilterWork{
+		Attempted: true, Completed: true, EligibleRows: 4097,
+	}
+	for name, document := range map[string][]byte{
+		"matching":    []byte(`{"id":"a","meta":{"tenant":"a"}}`),
+		"mismatching": []byte(`{"id":"a","meta":{"tenant":"b"}}`),
+		"missing":     []byte(`{"id":"a"}`),
+	} {
+		t.Run("filtered document "+name, func(t *testing.T) {
+			out, gotErr, expectedWork := roundTripWithEvidence(
+				validMeta, []byte("a"), document, filteredRequest, filteredWork, proof,
+			)
+			if name == "matching" {
+				if gotErr != nil || len(out.Results) != 1 || !bytes.Equal(out.Results[0].Document, document) {
+					t.Fatalf("matching filtered document rejected: response=%+v err=%v", out, gotErr)
 				}
 				return
 			}

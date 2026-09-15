@@ -130,7 +130,9 @@ caller-selected `quantized_rerank` request; exact requests reject them while
 retaining any independently valid dense-work proof. Successful typed quantized
 HTTP responses also bind their materialized-row count to returned/proven rows
 and reject legacy scalar-filter or visibility telemetry; typed filter work is
-carried by `dense_work.graph.filter`.
+carried by `dense_work.graph.filter`. On filtered typed quantized responses, the
+client also evaluates the exact requested filter against every decoded native or
+HTTP document; producer work counts alone do not prove result membership.
 Dense HTTP proof-bearing envelopes also reject duplicate keys; unrelated
 envelope extension fields retain their existing compatibility. Retained proofs
 remain valid after later requests, mutations and connection close. GetMany's ordinary list return

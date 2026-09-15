@@ -1408,6 +1408,7 @@ class TreeDBClientTests(unittest.TestCase):
             filtered_payload = copy.deepcopy(payload)
             filtered_payload["dense_work"]["graph"]["base_candidates"] = 1
             filtered_payload["dense_work"]["graph"]["filter"].update(attempted=True, completed=True, eligible_rows=4097)
+            filtered_payload["documents"][0]["meta"] = {"repo": "gomap"}
             with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, filtered_payload, 0)}) as filtered_server:
                 filtered_client = TreeDBClient(filtered_server.base_url, timeout=1)
                 filtered_result = filtered_client.query_by_embedding(
@@ -1416,6 +1417,24 @@ class TreeDBClientTests(unittest.TestCase):
                 )
                 self.assertEqual(filtered_result.documents[0].id, "a")
                 filtered_client.close()
+            for name, meta in (("mismatching", {"repo": "other"}), ("missing", {})):
+                hostile_filtered_payload = copy.deepcopy(filtered_payload)
+                hostile_filtered_payload["documents"][0]["meta"] = meta
+                with self.subTest(http_filter_result=name), \
+                     FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, hostile_filtered_payload, 0)}) as hostile_server:
+                    hostile_client = TreeDBClient(hostile_server.base_url, timeout=1)
+                    with self.assertRaisesRegex(
+                        TreeDBProtocolError, "does not satisfy the request filter"
+                    ) as caught:
+                        hostile_client.query_by_embedding(
+                            "docs", [1, 0], 1,
+                            filter={"field": "meta.repo", "operator": "==", "value": "gomap"},
+                            query_mode="quantized_rerank",
+                            quantized_index_name="embedding.scalar_u8.public",
+                        )
+                    self.assertIsNotNone(caught.exception.dense_work)
+                    self.assertIsNotNone(caught.exception.score_plane)
+                    hostile_client.close()
             filtered_underreported = copy.deepcopy(filtered_payload)
             filtered_underreported["dense_work"]["graph"]["base_candidates"] = 0
             with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, filtered_underreported, 0)}) as filtered_server:

@@ -261,6 +261,9 @@ func denseV3ResultsHaveValidIDs(results []DenseVectorSearchResult) bool {
 }
 
 func denseV3ResultDocumentsMatchRequest(results []DenseVectorSearchResult, request DenseVectorSearchRequest) bool {
+	if err := request.Filter.Validate(); err != nil {
+		return false
+	}
 	for _, result := range results {
 		document, ok := decodeDenseV3ResultDocument(result.Document)
 		if !ok {
@@ -273,15 +276,19 @@ func denseV3ResultDocumentsMatchRequest(results []DenseVectorSearchResult, reque
 			if document.Embedding != nil {
 				return false
 			}
-			continue
-		}
-		if len(document.Embedding) != len(request.Query) {
-			return false
-		}
-		for _, value := range document.Embedding {
-			if math.IsNaN(float64(value)) || math.IsInf(float64(value), 0) {
+		} else {
+			if len(document.Embedding) != len(request.Query) {
 				return false
 			}
+			for _, value := range document.Embedding {
+				if math.IsNaN(float64(value)) || math.IsInf(float64(value), 0) {
+					return false
+				}
+			}
+		}
+		matches, err := request.Filter.MatchesDocument(document)
+		if err != nil || !matches {
+			return false
 		}
 	}
 	return true

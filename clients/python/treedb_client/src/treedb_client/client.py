@@ -25,7 +25,7 @@ from .errors import (
     UnsupportedError,
     service_error_from_code,
 )
-from .filters import FilterLike, InvalidFilterError, normalize_filter
+from .filters import FilterLike, InvalidFilterError, _document_matches_filter, normalize_filter
 from .models import (
     BenchmarkVectorIndexOptions,
     BenchmarkVectorSearchIDsResponse,
@@ -433,6 +433,8 @@ class TreeDBClient:
         ef_search_value = None
         if ef_search is not None:
             ef_search_value = _validate_binary_int_query_param(ef_search, "ef_search", minimum=0)
+        normalized_filter = normalize_filter(filter)
+        filter_requested = normalized_filter is not None
         if self._native is not None:
             from ._native import _dense_request, _dense_response, _section, _uint
             if (index_info is None or index_info.name != index or index_info.extra.get("typed_input") is not True
@@ -448,7 +450,7 @@ class TreeDBClient:
             if route not in (None, "ann") or (expected_generation is not None and expected_generation != index_info.generation):
                 raise TreeDBConfigError("native dense route or generation conflicts with IndexInfo")
             version = 3 if mode == "quantized_rerank" else 2
-            payload = _dense_request(index, query_embedding, top_k_value, ef_search_value or 0, index_info.generation, return_embedding, normalize_filter(filter) if filter is not None else None)
+            payload = _dense_request(index, query_embedding, top_k_value, ef_search_value or 0, index_info.generation, return_embedding, normalized_filter)
             deadline = _uint(time.time_ns() + int(self.timeout * 1_000_000_000))
             sections = _section(129, payload) + _section(4, deadline)
             if version == 3:
@@ -466,7 +468,7 @@ class TreeDBClient:
                     ef_search=ef_search_value or 0,
                     query_dimension=len(query_embedding),
                     expected_generation=index_info.generation,
-                    filter_requested=filter is not None,
+                    filter_requested=filter_requested,
                 )
             except Exception as exc:
                 if mode == "quantized_rerank":
@@ -474,7 +476,7 @@ class TreeDBClient:
                         exc, query_mode=mode, quantized_index_name=quantized_index_name,
                         top_k=top_k_value, ef_search=ef_search_value or 0,
                         rerank_candidates=rerank_value, query_dimension=len(query_embedding),
-                        expected_generation=index_info.generation, filter_requested=filter is not None,
+                        expected_generation=index_info.generation, filter_requested=filter_requested,
                     )
                 raise
             if version == 3:
@@ -500,6 +502,14 @@ class TreeDBClient:
                     dense_work=work,
                     score_plane=score_plane,
                 )
+            if version == 3 and not all(
+                _document_matches_filter(document, normalized_filter) for document in documents
+            ):
+                raise TreeDBProtocolError(
+                    "native dense document does not satisfy the request filter",
+                    dense_work=work,
+                    score_plane=score_plane,
+                )
             return DenseVectorSearchResponse(index=index_info, documents=documents, metric=index_info.metric,
                                              exact=False, candidates=candidates, route="ann",
                                              native_base_plus_live_delta=False, native_command_version=version, dense_work=work,
@@ -519,7 +529,8 @@ class TreeDBClient:
             request["quantized_index_name"] = quantized_index_name
             if rerank_value:
                 request["quantized_rerank_candidates"] = rerank_value
-        _add_filter(request, filter)
+        if normalized_filter is not None:
+            request["filter"] = normalized_filter
         _add_expected_generation(request, expected_generation)
         try:
             payload = self._request(
@@ -540,9 +551,17 @@ class TreeDBClient:
                     quantized_index_name=quantized_index_name,
                     quantized_rerank_candidates=rerank_value,
                     expected_generation=expected_generation,
-                    filter_requested=filter is not None,
+                    filter_requested=filter_requested,
                     return_embedding=return_embedding,
                 )
+                if not all(
+                    _document_matches_filter(document, normalized_filter) for document in response.documents
+                ):
+                    raise TreeDBProtocolError(
+                        "dense HTTP document does not satisfy the request filter",
+                        dense_work=response.dense_work,
+                        score_plane=response.score_plane,
+                    )
             elif response.score_plane is not None:
                 raise TreeDBProtocolError(
                     "dense HTTP exact response unexpectedly includes a score-plane proof",
@@ -562,7 +581,7 @@ class TreeDBClient:
                     exc, query_mode=mode, quantized_index_name=quantized_index_name,
                     top_k=top_k_value, ef_search=ef_search_value or 0,
                     rerank_candidates=rerank_value, query_dimension=len(request["query_embedding"]),
-                    expected_generation=expected_generation, filter_requested=filter is not None,
+                    expected_generation=expected_generation, filter_requested=filter_requested,
                 )
             raise
         return response

@@ -50,8 +50,8 @@ class NativeCodecTests(unittest.TestCase):
 
         score_plane = score_plane_bytes(values)
 
-        def response_body(document, *, work_critical=True, score_critical=True):
-            response_work_values = list(work_values)
+        def response_body(document, *, work_critical=True, score_critical=True, candidate_work_values=None):
+            response_work_values = list(work_values if candidate_work_values is None else candidate_work_values)
             response_work_values[34] = len(document)
             return (
                 _section(102, _vector([b"a"])) + _section(103, _vector([document]))
@@ -97,6 +97,37 @@ class NativeCodecTests(unittest.TestCase):
                     return_embedding=True,
                 )
             self.assertEqual(embedded_response.documents[0].embedding, [1.0, 0.0])
+            filtered_work_values = list(work_values)
+            filtered_work_values[1] |= (1 << 3) | (1 << 4)
+            filtered_work_values[4] = 1
+            filtered_work_values[10] = 4097
+            request_filter = {"field": "meta.tenant", "operator": "==", "value": "a"}
+            filtered_body = response_body(
+                b'{"id":"a","meta":{"tenant":"a"}}',
+                candidate_work_values=filtered_work_values,
+            )
+            with mock.patch.object(client._native, "command", return_value=filtered_body):
+                filtered_response = client.query_by_embedding(
+                    "a", [1, 0], 1, filter=request_filter, query_mode="quantized_rerank",
+                    quantized_index_name="embedding.scalar_u8.public", index_info=info,
+                )
+            self.assertEqual(filtered_response.documents[0].meta, {"tenant": "a"})
+            for name, document in (
+                ("mismatching", b'{"id":"a","meta":{"tenant":"b"}}'),
+                ("missing", b'{"id":"a"}'),
+            ):
+                hostile_filtered_body = response_body(
+                    document, candidate_work_values=filtered_work_values,
+                )
+                with self.subTest(native_filter_result=name), \
+                     mock.patch.object(client._native, "command", return_value=hostile_filtered_body), \
+                     self.assertRaisesRegex(TreeDBProtocolError, "does not satisfy the request filter") as caught:
+                    client.query_by_embedding(
+                        "a", [1, 0], 1, filter=request_filter, query_mode="quantized_rerank",
+                        quantized_index_name="embedding.scalar_u8.public", index_info=info,
+                    )
+                self.assertIsNotNone(caught.exception.dense_work)
+                self.assertIsNotNone(caught.exception.score_plane)
             for name, candidate_body, return_embedding in (
                 ("unrequested", embedded_body, False),
                 ("missing", body, True),

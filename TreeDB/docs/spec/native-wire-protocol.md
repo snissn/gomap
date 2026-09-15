@@ -919,7 +919,9 @@ groups contain zero values. Successful responses require completed graph and
 output, fetched=requested=result count, no missing rows, retained payload
 fetches=JSON reconstruction rows=result count, typed column rows no greater
 than result count, and output bytes equal the sum of materialized document byte
-lengths. Output bytes exclude framing and HTTP JSON encoding.
+lengths. When a filter was requested, every decoded result document must also
+satisfy that exact filter; filter-work cardinality alone is not result-membership
+proof. Output bytes exclude framing and HTTP JSON encoding.
 
 The snapshot comes from the actual acquired owner, including base/current
 manifest identities and coverage, and remains owned after owner close or client

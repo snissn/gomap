@@ -134,6 +134,15 @@ func matchFilter(filter *Filter, doc Document) (bool, error) {
 	return filter.match(doc)
 }
 
+// MatchesDocument reports whether doc satisfies f. The caller must first call
+// Validate once before matching a result set.
+func (f *Filter) MatchesDocument(doc Document) (bool, error) {
+	if f == nil {
+		return true, nil
+	}
+	return f.match(doc)
+}
+
 func (f *Filter) match(doc Document) (bool, error) {
 	op, err := normalizeFilterOperator(f.Operator)
 	if err != nil {
