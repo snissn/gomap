@@ -30,6 +30,18 @@ type closeCountingUnsafeIterator struct {
 	err    error
 }
 
+type trailingErrorUnsafeIterator struct {
+	iterator.UnsafeIterator
+	err error
+}
+
+func (it *trailingErrorUnsafeIterator) Error() error {
+	if err := it.UnsafeIterator.Error(); err != nil {
+		return err
+	}
+	return it.err
+}
+
 func (it *closeCountingUnsafeIterator) Valid() bool { return false }
 func (it *closeCountingUnsafeIterator) Next()       {}
 func (it *closeCountingUnsafeIterator) Seek([]byte) {}
@@ -512,6 +524,68 @@ func TestPublishOrderedRootDeltaGroupsWithoutCommandWALAvoidCandidateScan(t *tes
 			if got := readCollectionRootValue(t, reopened, maintenanceTestCollectionRootKey, []byte("doc/p")); !bytes.Equal(got, []byte("value-0")) {
 				t.Fatalf("reopened collection value=%q want value-0", got)
 			}
+		})
+	}
+}
+
+func TestPublishOrderedRootDeltaGroupSystemMaterializationErrorReleasesConsumedPendingPointer(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		publish func(*DB, OrderedRootGroupSystemBuilder) error
+	}{
+		{
+			name: "iterator",
+			publish: func(db *DB, buildSystem OrderedRootGroupSystemBuilder) error {
+				_, _, err := db.PublishOrderedRootDeltaGroupWithSystemDeltaBuilder(nil, buildSystem)
+				return err
+			},
+		},
+		{
+			name: "optimistic-batch",
+			publish: func(db *DB, buildSystem OrderedRootGroupSystemBuilder) error {
+				_, _, err := db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder(nil, buildSystem)
+				return err
+			},
+		},
+		{
+			name: "serialized-batch",
+			publish: func(db *DB, buildSystem OrderedRootGroupSystemBuilder) error {
+				_, _, err := db.PublishOrderedRootDeltaBatchGroupWithPreflightAndSystemDeltaBuilder(nil, func() error { return nil }, buildSystem)
+				return err
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			db, err := Open(Options{Dir: t.TempDir()})
+			if err != nil {
+				t.Fatalf("open db: %v", err)
+			}
+			defer closeNoErr(t, db)
+
+			if _, err := db.PublishSystemRootIterator(mustFrozenSystemMemtable(t, "system/seed", "1").NewIterator(nil, nil)); err != nil {
+				t.Fatalf("seed system root: %v", err)
+			}
+			ptr := page.ValuePtr{FileID: page.ValueLogFileID(91), Offset: 17, Length: 23}
+			db.protectPendingValueLogAppendPtrs([]page.ValuePtr{ptr, ptr})
+			wantErr := errors.New("system iterator failed after pointer")
+			err = test.publish(db, func([]uint64) (iterator.UnsafeIterator, error) {
+				return &trailingErrorUnsafeIterator{
+					UnsafeIterator: mustFrozenSystemPointerMemtable(t, "system/pointer", ptr).NewIterator(nil, nil),
+					err:            wantErr,
+				}, nil
+			})
+			if !errors.Is(err, wantErr) {
+				t.Fatalf("publish error=%v want %v", err, wantErr)
+			}
+
+			db.pendingValueLogAppendMu.Lock()
+			ptrRefs := db.pendingValueLogAppendPtrRefs[ptr]
+			fileRefs := db.pendingValueLogAppendFileIDRefs[ptr.FileID]
+			db.pendingValueLogAppendMu.Unlock()
+			if ptrRefs != 1 || fileRefs != 1 {
+				t.Fatalf("pending refs after failed materialization ptr=%d file=%d want 1/1", ptrRefs, fileRefs)
+			}
+			db.ReleaseValueLogValues([]page.ValuePtr{ptr})
 		})
 	}
 }

@@ -2876,7 +2876,9 @@ func (db *DB) publishOrderedRootDeltaGroupWithSystemDeltaBuilderWithMaintenanceP
 	var baseDescriptorEntries []collectionEntry
 	var systemDelta *batch.Batch
 	if trackValueLogRefs {
-		systemDelta, err = orderedRootDeltaBatchFromIterator(iter)
+		ptrCollector, collectedIter := newPendingValueLogAppendPtrCollectingIterator(iter)
+		ptrCollectors = append(ptrCollectors, ptrCollector)
+		systemDelta, err = orderedRootDeltaBatchFromIterator(collectedIter)
 		_ = iter.Close()
 		if err != nil {
 			return 0, nil, fmt.Errorf("treedb: ordered root system delta base=%d: %w", baseSystemRoot, err)
@@ -2888,8 +2890,12 @@ func (db *DB) publishOrderedRootDeltaGroupWithSystemDeltaBuilderWithMaintenanceP
 		iter = newOrderedRootDeltaBatchIterator(systemDelta, true)
 	}
 	phaseStart = time.Now()
-	ptrCollector, collectedIter := newPendingValueLogAppendPtrCollectingIterator(iter)
-	ptrCollectors = append(ptrCollectors, ptrCollector)
+	collectedIter := iter
+	if !trackValueLogRefs {
+		var ptrCollector *pendingValueLogAppendPtrCollectingIterator
+		ptrCollector, collectedIter = newPendingValueLogAppendPtrCollectingIterator(iter)
+		ptrCollectors = append(ptrCollectors, ptrCollector)
+	}
 	rootID, rootRetired, metrics, systemTouched, systemRefDelta, err := db.publishOrderedRootDeltaIteratorWithValueLogRefs(baseSystemRoot, collectedIter, systemOpts, baseSeq, trackValueLogRefs, trackValueLogRefs)
 	phaseStats.systemApplyNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 	phaseStats.systemApplyCalls++
@@ -3312,16 +3318,16 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 	}()
 
 	rootIDs = make([]uint64, len(ordered))
-	var optimisticSystemDeltaReleaseEntries []batch.Entry
+	var systemPtrCollectors []*pendingValueLogAppendPtrCollectingIterator
 	defer func() {
-		if retrySerialized {
-			db.releasePendingValueLogAppendFileIDsFromEntries(optimisticSystemDeltaReleaseEntries)
-			return
+		if !retrySerialized {
+			for idx := range ordered {
+				db.releasePendingValueLogAppendFileIDsFromBatch(ordered[idx].Delta)
+			}
 		}
-		for idx := range ordered {
-			db.releasePendingValueLogAppendFileIDsFromBatch(ordered[idx].Delta)
+		for _, collector := range systemPtrCollectors {
+			db.releasePendingValueLogAppendPtrCollector(collector)
 		}
-		db.releasePendingValueLogAppendFileIDsFromEntries(optimisticSystemDeltaReleaseEntries)
 	}()
 	systemOpts := systemRootOrderedPublishOptions(db).withSpanNativeRoute(OrderedRootSpanNativeRouteSystemDeltaBuilderPublish, "ordered-root delta group system delta apply")
 	var nonSystemRetired []uint64
@@ -3378,12 +3384,13 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 		if iter == nil {
 			return 0, nil, false, errors.New("nil system root delta iterator")
 		}
-		systemDelta, err := orderedRootDeltaBatchFromIterator(iter)
+		ptrCollector, collectedIter := newPendingValueLogAppendPtrCollectingIterator(iter)
+		systemPtrCollectors = append(systemPtrCollectors, ptrCollector)
+		systemDelta, err := orderedRootDeltaBatchFromIterator(collectedIter)
 		_ = iter.Close()
 		if err != nil {
 			return 0, nil, false, err
 		}
-		optimisticSystemDeltaReleaseEntries = append(optimisticSystemDeltaReleaseEntries, systemDelta.OrderedEntries()...)
 		var baseDescriptorEntries []collectionEntry
 		if orderedRootDeltaMayChangeCollectionRootDescriptors(systemDelta) {
 			baseDescriptorEntries, _ = vacuumCollectCollectionEntriesFromRoot(context.Background(), idx.pager, db.valueLogManager, systemBaseRoot)
@@ -3758,7 +3765,9 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(
 	var systemDelta *batch.Batch
 	if trackValueLogRefs {
 		var convertErr error
-		systemDelta, convertErr = orderedRootDeltaBatchFromIterator(iter)
+		ptrCollector, collectedIter := newPendingValueLogAppendPtrCollectingIterator(iter)
+		ptrCollectors = append(ptrCollectors, ptrCollector)
+		systemDelta, convertErr = orderedRootDeltaBatchFromIterator(collectedIter)
 		_ = iter.Close()
 		if convertErr != nil {
 			return 0, nil, fmt.Errorf("treedb: ordered root system delta base=%d: %w", baseSystemRoot, convertErr)
@@ -3770,8 +3779,12 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(
 		iter = newOrderedRootDeltaBatchIterator(systemDelta, true)
 	}
 	phaseStart = time.Now()
-	ptrCollector, collectedIter := newPendingValueLogAppendPtrCollectingIterator(iter)
-	ptrCollectors = append(ptrCollectors, ptrCollector)
+	collectedIter := iter
+	if !trackValueLogRefs {
+		var ptrCollector *pendingValueLogAppendPtrCollectingIterator
+		ptrCollector, collectedIter = newPendingValueLogAppendPtrCollectingIterator(iter)
+		ptrCollectors = append(ptrCollectors, ptrCollector)
+	}
 	rootID, rootRetired, metrics, systemTouched, systemRefDelta, err := db.publishOrderedRootDeltaIteratorWithValueLogRefs(baseSystemRoot, collectedIter, systemOpts, baseSeq, trackValueLogRefs, trackValueLogRefs)
 	phaseStats.systemApplyNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 	phaseStats.systemApplyCalls++
