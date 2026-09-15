@@ -38,6 +38,100 @@ func TestDenseWorkGoldenStrictOwnershipAndAllocations(t *testing.T) {
 	if allocs := testing.AllocsPerRun(100, func() { _, err = decodeDenseWork(raw) }); err != nil || allocs != 0 {
 		t.Fatalf("proof decode allocs=%g err=%v", allocs, err)
 	}
+	reversedCoverage := w
+	reversedCoverage.Graph.Snapshot.BaseCoverageLSN, reversedCoverage.Graph.Snapshot.CurrentCoverageLSN = 100, 1
+	if _, err := appendDenseWork(nil, reversedCoverage); err == nil {
+		t.Fatal("dense work with reversed snapshot coverage accepted")
+	}
+	reversedManifest := w
+	reversedManifest.Graph.Snapshot.BaseManifest.Generation = reversedManifest.Graph.Snapshot.CurrentManifest.Generation + 1
+	if _, err := appendDenseWork(nil, reversedManifest); err == nil {
+		t.Fatal("dense work with reversed snapshot manifest generation accepted")
+	}
+	equalGenerationDifferentIdentity := w
+	equalGenerationDifferentIdentity.Graph.Snapshot.CurrentManifest.Generation = equalGenerationDifferentIdentity.Graph.Snapshot.BaseManifest.Generation
+	equalGenerationDifferentIdentity.Graph.Snapshot.CurrentManifest.Checksum = equalGenerationDifferentIdentity.Graph.Snapshot.BaseManifest.Checksum + 1
+	if _, err := appendDenseWork(nil, equalGenerationDifferentIdentity); err == nil {
+		t.Fatal("dense work with different identities at one manifest generation accepted")
+	}
+	normalizedEqualIdentity := w
+	normalizedEqualIdentity.Graph.Snapshot.CurrentManifest = normalizedEqualIdentity.Graph.Snapshot.BaseManifest
+	normalizedEqualIdentity.Graph.Snapshot.CurrentManifest.Format = ""
+	normalizedEqualIdentity.Graph.Snapshot.CurrentCoverageLSN = normalizedEqualIdentity.Graph.Snapshot.BaseCoverageLSN
+	if _, err := appendDenseWork(nil, normalizedEqualIdentity); err != nil {
+		t.Fatalf("dense work rejected a normalized legacy manifest format: %v", err)
+	}
+	hostileIdentityRaw, err := appendDenseWork(nil, normalizedEqualIdentity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, off := 0, 0; i < 38; i++ {
+		_, size := binary.Uvarint(hostileIdentityRaw[off:])
+		if size <= 0 {
+			t.Fatal("valid dense-work fixture has an invalid uvarint")
+		}
+		if i == 30 {
+			if size != 1 || normalizedEqualIdentity.Graph.Snapshot.BaseManifest.Checksum >= 127 {
+				t.Fatal("dense-work fixture no longer has a one-byte manifest checksum")
+			}
+			hostileIdentityRaw[off] = byte(normalizedEqualIdentity.Graph.Snapshot.BaseManifest.Checksum + 1)
+		}
+		off += size
+	}
+	if _, err := decodeDenseWork(hostileIdentityRaw); err == nil {
+		t.Fatal("dense-work decoder accepted different identities at one manifest generation")
+	}
+	equalIdentityDifferentCoverage := w
+	equalIdentityDifferentCoverage.Graph.Snapshot.CurrentManifest = equalIdentityDifferentCoverage.Graph.Snapshot.BaseManifest
+	equalIdentityDifferentCoverage.Graph.Snapshot.CurrentCoverageLSN = equalIdentityDifferentCoverage.Graph.Snapshot.BaseCoverageLSN + 1
+	if _, err := appendDenseWork(nil, equalIdentityDifferentCoverage); err == nil {
+		t.Fatal("dense work with different coverage for one manifest identity accepted")
+	}
+	unchangedPrefixWithSuffixWork := normalizedEqualIdentity
+	unchangedPrefixWithSuffixWork.Completed = false
+	unchangedPrefixWithSuffixWork.Graph.Completed = false
+	unchangedPrefixWithSuffixWork.Graph.DeltaScored = 1
+	unchangedPrefixWithSuffixWork.Output = documentservice.DenseSearchOutputWork{}
+	if _, err := appendDenseWork(nil, unchangedPrefixWithSuffixWork); err == nil {
+		t.Fatal("incomplete dense work with an unchanged manifest and suffix scores accepted")
+	}
+	unchangedPrefixWithShadowedBase := unchangedPrefixWithSuffixWork
+	unchangedPrefixWithShadowedBase.Graph.DeltaScored = 0
+	unchangedPrefixWithShadowedBase.Graph.BaseShadowed = 1
+	if _, err := appendDenseWork(nil, unchangedPrefixWithShadowedBase); err == nil {
+		t.Fatal("incomplete dense work with an unchanged manifest and shadowed base accepted")
+	}
+	for name, mutate := range map[string]func(*collections.ColumnGraphQuerySnapshot){
+		"schema hash":       func(s *collections.ColumnGraphQuerySnapshot) { s.SchemaHash = 0 },
+		"schema generation": func(s *collections.ColumnGraphQuerySnapshot) { s.SchemaGeneration = 0 },
+		"base coverage LSN": func(s *collections.ColumnGraphQuerySnapshot) { s.BaseCoverageLSN = 0 },
+	} {
+		t.Run("missing "+name, func(t *testing.T) {
+			candidate := w
+			mutate(&candidate.Graph.Snapshot)
+			if _, err := appendDenseWork(nil, candidate); err == nil {
+				t.Fatalf("dense work with zero %s accepted", name)
+			}
+		})
+	}
+	for name, mutate := range map[string]func(*collections.ColumnGraphManifestWork){
+		"generation": func(m *collections.ColumnGraphManifestWork) { m.Generation = 0 },
+		"version":    func(m *collections.ColumnGraphManifestWork) { m.Version = 0 },
+		"checksum":   func(m *collections.ColumnGraphManifestWork) { m.Checksum = 0 },
+	} {
+		t.Run("incomplete manifest "+name, func(t *testing.T) {
+			candidate := w
+			mutate(&candidate.Graph.Snapshot.CurrentManifest)
+			if _, err := appendDenseWork(nil, candidate); err == nil {
+				t.Fatalf("dense work with zero manifest %s accepted", name)
+			}
+		})
+	}
+	unsupportedManifestVersion := w
+	unsupportedManifestVersion.Graph.Snapshot.CurrentManifest.Version = 2
+	if _, err := appendDenseWork(nil, unsupportedManifestVersion); err == nil {
+		t.Fatal("dense work with unsupported manifest version accepted")
+	}
 	for size := range len(raw) {
 		if _, err := decodeDenseWork(raw[:size]); err == nil {
 			t.Fatalf("truncated proof accepted at %d", size)
@@ -49,6 +143,13 @@ func TestDenseWorkGoldenStrictOwnershipAndAllocations(t *testing.T) {
 		}
 	}
 	section := iwire.Section{ID: iwire.SectionDenseSearchWork, Bytes: raw}
+	if _, err := decodeDenseWorkSection([]iwire.Section{section}, true); err == nil {
+		t.Fatal("noncritical dense work proof accepted")
+	}
+	section.Flags = iwire.SectionFlagCritical
+	if decoded, err := decodeDenseWorkSection([]iwire.Section{section}, true); err != nil || decoded != w {
+		t.Fatalf("critical dense work proof rejected: %+v err=%v", decoded, err)
+	}
 	for _, sections := range [][]iwire.Section{nil, {section, section}, {section, {ID: 999, Flags: iwire.SectionFlagCritical}}} {
 		if _, err := decodeDenseWorkSection(sections, true); err == nil {
 			t.Fatal("missing/duplicate proof accepted")

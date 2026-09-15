@@ -263,6 +263,17 @@ class IndexModelTests(unittest.TestCase):
                 }
             )
 
+    def test_quantized_index_defaults_only_when_metadata_is_absent(self) -> None:
+        defaulted = QuantizedIndexInfo.from_dict({"name": "embedding.scalar_u8.default"})
+        explicit_zero = QuantizedIndexInfo.from_dict(
+            {"name": "embedding.scalar_u8.invalid", "codec": "", "version": 0}
+        )
+
+        self.assertEqual(defaulted.codec, "scalar_u8")
+        self.assertEqual(defaulted.version, 1)
+        self.assertEqual(explicit_zero.codec, "")
+        self.assertEqual(explicit_zero.version, 0)
+
     def test_benchmark_vector_options_preserve_explicit_zero_values(self) -> None:
         options = BenchmarkVectorIndexOptions.from_dict({"m": 0, "ef_construction": 0, "ef_search": 0})
 

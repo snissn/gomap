@@ -30,15 +30,43 @@ type DenseSearchOutputWork struct {
 }
 
 func withDenseSearchWork(err error, work *DenseSearchWork) error {
-	if err == nil || work == nil {
+	return withDenseSearchWorkAndScorePlane(err, work, nil)
+}
+
+// withDenseSearchWorkAndScorePlane preserves the selected score-plane proof
+// when an error happens after the raw search has completed (for example while
+// decoding one returned document). Both proofs are copied so the error never
+// retains response buffers or an owner-local value.
+func withDenseSearchWorkAndScorePlane(err error, work *DenseSearchWork, scorePlane *collections.ColumnGraphScorePlaneWork) error {
+	if err == nil || (work == nil && scorePlane == nil) {
 		return err
 	}
-	owned := *work
-	owned.Completed = false
-	out := &Error{Code: ErrorCodeOf(err), Message: err.Error(), Err: err, DenseWork: &owned}
+	var ownedWork *DenseSearchWork
+	if work != nil {
+		copy := *work
+		copy.Completed = false
+		ownedWork = &copy
+	}
+	out := &Error{Code: ErrorCodeOf(err), Message: err.Error(), Err: err, DenseWork: ownedWork}
+	if ownedWork != nil && (ownedWork.Graph.ScorePlane.Available || ownedWork.Graph.ScorePlane.Version != 0) {
+		plane := ownedWork.Graph.ScorePlane
+		out.ScorePlane = &plane
+	}
+	if scorePlane != nil {
+		plane := *scorePlane
+		out.ScorePlane = &plane
+	}
 	var original *Error
 	if errors.As(err, &original) {
 		out.Message = original.Message
+		if out.DenseWork == nil && original.DenseWork != nil {
+			workCopy := *original.DenseWork
+			out.DenseWork = &workCopy
+		}
+		if out.ScorePlane == nil && original.ScorePlane != nil {
+			plane := *original.ScorePlane
+			out.ScorePlane = &plane
+		}
 	}
 	return out
 }

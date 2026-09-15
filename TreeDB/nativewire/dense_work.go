@@ -9,12 +9,26 @@ import (
 	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
 )
 
-// Only the typed v2 handler supplies this transport metadata. The original
+// Only the typed v2/v3 handler supplies this transport metadata. The original
 // error chain/code is preserved; v1 never emits details from a nested service error.
 type denseWorkError struct {
 	error
-	work documentservice.DenseSearchWork
+	work       documentservice.DenseSearchWork
+	scorePlane *collections.ColumnGraphScorePlaneWork
+	version    uint64
 }
+
+// DenseVectorSearchDecodeError preserves already-decoded owned proof when a
+// sibling proof or later response/result consistency check fails. Result byte
+// slices remain borrowed exactly as the response contract specifies.
+type DenseVectorSearchDecodeError struct {
+	Err        error
+	DenseWork  *documentservice.DenseSearchWork
+	ScorePlane *collections.ColumnGraphScorePlaneWork
+}
+
+func (e *DenseVectorSearchDecodeError) Error() string { return e.Err.Error() }
+func (e *DenseVectorSearchDecodeError) Unwrap() error { return e.Err }
 
 func (e *denseWorkError) Unwrap() error { return e.error }
 
@@ -30,14 +44,48 @@ func denseWorkRouteTag(route string) uint64 {
 	return 0
 }
 
+func denseManifestWorkComplete(m collections.ColumnGraphManifestWork) bool {
+	return m.Generation != 0 && m.Version == 1 && m.Checksum != 0
+}
+
+func denseManifestWorkIdentityEqual(a, b collections.ColumnGraphManifestWork) bool {
+	// The stored manifest identity normalizes the legacy empty format to tcs1.
+	// Preserve that public spelling while comparing the actual identity.
+	if a.Format == "" {
+		a.Format = "tcs1"
+	}
+	if b.Format == "" {
+		b.Format = "tcs1"
+	}
+	return a == b
+}
+
+func denseSnapshotConsistent(s collections.ColumnGraphQuerySnapshot) bool {
+	if !s.Available {
+		return s == (collections.ColumnGraphQuerySnapshot{})
+	}
+	return s.SchemaHash != 0 &&
+		s.SchemaGeneration != 0 &&
+		s.BaseCoverageLSN != 0 &&
+		s.CurrentCoverageLSN >= s.BaseCoverageLSN &&
+		denseManifestWorkComplete(s.BaseManifest) &&
+		denseManifestWorkComplete(s.CurrentManifest) &&
+		s.CurrentManifest.Generation >= s.BaseManifest.Generation &&
+		(s.CurrentManifest.Generation != s.BaseManifest.Generation ||
+			(denseManifestWorkIdentityEqual(s.BaseManifest, s.CurrentManifest) &&
+				s.CurrentCoverageLSN == s.BaseCoverageLSN))
+}
+
 func validateDenseWork(w documentservice.DenseSearchWork) error {
 	g, f, s, o := w.Graph, w.Graph.Filter, w.Graph.Snapshot, w.Output
 	bad := w.Version != 1 || (g.Route != "" && denseWorkRouteTag(g.Route) == 0)
 	bad = bad || (!g.Available && g != (collections.ColumnGraphQueryWork{}))
 	bad = bad || (!f.Attempted && f != (collections.ColumnGraphFilterWork{}))
-	bad = bad || (!s.Available && s != (collections.ColumnGraphQuerySnapshot{}))
+	bad = bad || !denseSnapshotConsistent(s)
 	bad = bad || (!o.Attempted && o != (documentservice.DenseSearchOutputWork{}))
 	bad = bad || (g.Completed && (!g.Available || !s.Available || g.Route == "" || (f.Attempted && !f.Completed)))
+	bad = bad || (s.Available && s.CurrentManifest.Generation == s.BaseManifest.Generation &&
+		(g.DeltaScored != 0 || g.BaseShadowed != 0))
 	bad = bad || o.Fetched > o.Requested || o.Missing > o.Requested-o.Fetched
 	bad = bad || (w.Completed && (!g.Completed || !o.Completed || o.Missing != 0 || o.Fetched != o.Requested))
 	for _, m := range []collections.ColumnGraphManifestWork{s.BaseManifest, s.CurrentManifest} {
@@ -115,31 +163,51 @@ func decodeDenseWork(raw []byte) (w documentservice.DenseSearchWork, err error) 
 }
 
 func decodeDenseWorkSection(sections []iwire.Section, typed bool) (documentservice.DenseSearchWork, error) {
-	var unavailable documentservice.DenseSearchWork
+	version := uint64(0)
 	if typed {
-		for _, section := range sections {
-			switch section.ID {
-			case iwire.SectionDocumentIDs, iwire.SectionDocuments, iwire.SectionDenseSearchResponse, iwire.SectionDenseSearchWork:
-			default:
-				if section.Flags&iwire.SectionFlagCritical != 0 {
-					return unavailable, protocolError(iwire.ErrUnsupportedFeature, "unknown critical dense response section")
-				}
-			}
-		}
+		version = iwire.DenseVectorSearchTypedVersion
 	}
+	return decodeDenseWorkSectionVersion(sections, version)
+}
+
+func decodeDenseWorkSectionVersion(sections []iwire.Section, version uint64) (documentservice.DenseSearchWork, error) {
+	var unavailable documentservice.DenseSearchWork
 	raw, found, err := singletonSection(sections, iwire.SectionDenseSearchWork)
 	if err != nil {
 		return unavailable, err
 	}
-	if found != typed {
+	if found != (version >= iwire.DenseVectorSearchTypedVersion) {
 		return unavailable, protocolError(iwire.ErrMalformedFrame, "dense work section does not match command version")
 	}
 	if !found {
 		return unavailable, nil
 	}
+	for _, section := range sections {
+		if section.ID == iwire.SectionDenseSearchWork && section.Flags != iwire.SectionFlagCritical {
+			return unavailable, protocolError(iwire.ErrMalformedFrame, "dense work section must be critical")
+		}
+	}
 	work, err := decodeDenseWork(raw)
 	if err != nil {
 		return unavailable, err
+	}
+	if version >= iwire.DenseVectorSearchTypedVersion {
+		for _, section := range sections {
+			switch section.ID {
+			case iwire.SectionDocumentIDs, iwire.SectionDocuments, iwire.SectionDenseSearchResponse, iwire.SectionDenseSearchWork:
+			case iwire.SectionDenseSearchScorePlaneProof:
+				if version != iwire.DenseVectorSearchTypedQuantizedVersion {
+					return work, protocolError(iwire.ErrUnsupportedFeature, "unknown critical dense response section")
+				}
+				if section.Flags != iwire.SectionFlagCritical {
+					return work, protocolError(iwire.ErrMalformedFrame, "dense score-plane proof section must be critical")
+				}
+			default:
+				if section.Flags&iwire.SectionFlagCritical != 0 {
+					return work, protocolError(iwire.ErrUnsupportedFeature, "unknown critical dense response section")
+				}
+			}
+		}
 	}
 	return work, nil
 }
@@ -152,12 +220,23 @@ func denseServiceWork(err error) *documentservice.DenseSearchWork {
 	return nil
 }
 
+func denseServiceScorePlane(err error) *collections.ColumnGraphScorePlaneWork {
+	var serviceErr *documentservice.Error
+	if errors.As(err, &serviceErr) && serviceErr.ScorePlane != nil {
+		owned := *serviceErr.ScorePlane
+		return &owned
+	}
+	return nil
+}
+
 func validateDenseWorkResults(work documentservice.DenseSearchWork, results []DenseVectorSearchResult) error {
 	bytes := uint64(0)
 	for _, result := range results {
 		bytes += uint64(len(result.Document))
 	}
-	if !work.Completed || work.Output.Fetched != uint64(len(results)) || work.Output.OutputBytes != bytes {
+	rows := uint64(len(results))
+	if !work.Completed || work.Output.Fetched != rows || work.Output.OutputBytes != bytes ||
+		work.Output.RetainedPayloadFetches != rows || work.Output.JSONReconstructionRows != rows || work.Output.TypedColumnRows > rows {
 		return protocolError(iwire.ErrMalformedFrame, "dense work does not match response documents")
 	}
 	return nil

@@ -679,7 +679,9 @@ Response:
 Omit `route` (or use `route=ann`) to select the compatible vector-index route.
 ANN responses report `route=ann` and `exact=false`. Declared scalar filters are
 supported by `native_runtime` and selected typed `column_graph`; unsupported
-shapes fail closed. Selected executed empty/exact/HNSW behavior is reported in
+shapes fail closed. Typed clients validate every decoded result document against
+the requested filter rather than treating filter-work counts as membership proof.
+Selected executed empty/exact/HNSW behavior is reported in
 `dense_work.graph.route`, independently of the top-level route tag.
 
 Legacy `column_graph` indexes with persisted update/delete parts report

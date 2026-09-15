@@ -44,9 +44,19 @@ both listeners before database cleanup.
 
 `TreeDBClient(http_url, native_address="127.0.0.1:7121", timeout=10)` negotiates
 native capabilities lazily. `query_by_embedding(..., index_info=info)` uses
-dense 64/v2 only for caller-held selected typed `IndexInfo` returned by HTTP
+dense 64/v2 for the default FP32 path, or dense 64/v3 when
+`query_mode="quantized_rerank"` explicitly selects the negotiated legacy
+scalar-u8/v1 score plane. The separate `typed_dense_quantized_rerank` index
+capability is required; benchmark quantized capabilities do not imply it.
+Both versions require caller-held selected typed `IndexInfo` returned by HTTP
 create/open/ensure. Its generation is sent as the server guard; conflicting
-explicit generations fail. Create/build/admission and reopen re-admission
+explicit generations fail. For v3, omitted or zero `ef_search` is resolved from
+that `IndexInfo` and sent as a positive value so `score_plane.requested_ef_search`
+authenticates the candidate-width bound. Raw v3 clients must likewise send a
+positive EF; zero/default resolution is not deferred across the native wire.
+HTTP success proofs instead bind an omitted EF to the returned index's positive
+`vector_ef_search`; a wider error prefix is retained only when generation-bound
+caller `IndexInfo` authenticates the same default. Create/build/admission and reopen re-admission
 remain explicit HTTP control operations. Dense results contain content/meta
 from the same search owner and are Python-owned after return. Embedding echo is
 opt-in with `return_embedding=True` on either HTTP or native; the default is
@@ -95,8 +105,11 @@ HNSW branch, graph/filter work, captured schema/base/current identities and
 coverage, and full search-output materialization. Use
 `dataclasses.asdict(response.dense_work)` for JSON-ready evidence. Completion
 and availability flags scope counts; missing proof is `None`, never fabricated
-zero work. This proof is mandatory on native 64/v2 success and optional on HTTP
-for compatibility with older/unavailable routes.
+zero work. This proof is mandatory on native 64/v2 and 64/v3 success and
+optional on HTTP for compatibility with older/unavailable routes. Quantized
+v3 responses additionally expose sibling `response.score_plane`, owned
+versioned proof of the selected score plane; it is never inserted into the
+frozen `dense_work` graph.
 
 Existing service/protocol exceptions expose optional `.dense_work`. Service
 errors retain actual work prefixes without returning partial documents. A
@@ -104,6 +117,38 @@ native encoding or client document-decoding error after completed service work
 preserves those producer completion flags; they do not mean delivery succeeded.
 Malformed proof is rejected without attaching it as trustworthy detail. Proof
 objects reject missing/unknown fields, invalid types and out-of-range integers.
+Available snapshots require a nonzero schema generation and base/current
+coverage LSN, plus nonzero generation and checksum in both base and current
+manifest identities; the manifest version is exactly 1 and current manifest
+generation cannot precede the captured base. Empty manifest format retains its
+legacy `tcs1` meaning. Equal generations require equal normalized identities
+and coverage LSNs, and that unchanged frontier cannot report delta/shadow,
+suffix-score, suffix-byte, or raw-width shadow-allowance work. The captured vector schema
+generation may be below a newer aggregate vector/text index generation, never
+above it. If a malformed native or HTTP score-plane
+proof accompanies valid dense work, the protocol error retains that
+independently decoded `.dense_work` while leaving `.score_plane` unset; the
+inverse sibling failure likewise preserves a valid `.score_plane`.
+Quantized v3 results also require valid UTF-8, nonempty, untrimmed, unique
+document IDs, using Go `unicode.IsSpace` boundary semantics to match service
+write admission on native and HTTP responses. Malformed native error metadata
+or an unknown critical error sibling cannot erase independently decoded valid
+proofs. HTTP response-encoding failures preserve the completed service proofs
+in their error envelope. HTTP error score-plane proofs are accepted only for a
+caller-selected `quantized_rerank` request; exact requests reject them while
+retaining any independently valid dense-work proof. Successful typed quantized
+HTTP responses also bind their materialized-row count to returned/proven rows
+and reject legacy scalar-filter or visibility telemetry; typed filter work is
+carried by `dense_work.graph.filter`. On filtered typed quantized responses, the
+client also evaluates the exact requested filter against every decoded native or
+HTTP document, preserving integral metadata precision for equality, range, and
+membership operators; producer work counts alone do not prove result membership.
+Native v3 document JSON rejects duplicate fields at the top level and
+recursively throughout metadata before model conversion, matching the Go
+consumer contract. Selected HTTP proof envelopes reject the same ambiguity.
+When embedding echo is requested on the selected quantized path, native v3 and
+HTTP consumers also recompute the FP32 cosine score and bind it to the returned
+embedding within the documented rounding tolerance.
 Dense HTTP proof-bearing envelopes also reject duplicate keys; unrelated
 envelope extension fields retain their existing compatibility. Retained proofs
 remain valid after later requests, mutations and connection close. GetMany's ordinary list return

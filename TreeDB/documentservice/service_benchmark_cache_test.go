@@ -391,6 +391,81 @@ func BenchmarkServiceDenseNativeRuntimeVisibilityOverhead(b *testing.B) {
 	})
 }
 
+// BenchmarkServiceDenseTypedQuantizedPublicPath measures the public full-document
+// service boundary for the Q3 mode. The two sub-benchmarks share the same
+// admitted typed owner and fixture so the quantized result includes the proof
+// and final document fetch cost, while the exact sub-benchmark is the FP32
+// guardrail.
+func BenchmarkServiceDenseTypedQuantizedPublicPath(b *testing.B) {
+	requireTypedServiceServingTest(b)
+	svc, db := newTestService(b)
+	defer db.Close()
+	defer svc.Close()
+	ctx := context.Background()
+	const (
+		indexName = "dense_typed_quantized_public"
+		rows      = 4096
+		dimension = 8
+		quantized = "embedding.scalar_u8.public"
+	)
+	if _, err := svc.CreateIndex(ctx, CreateIndexRequest{
+		Name:       indexName,
+		Dimension:  dimension,
+		Metric:     MetricCosine,
+		TypedInput: true,
+		VectorIndexOptions: &BenchmarkVectorIndexOptions{
+			Strategy: collections.VectorIndexStrategyColumnGraph,
+			M:        8,
+			EfSearch: 100,
+			QuantizedIndexes: []QuantizedIndexInfo{{
+				Name:  quantized,
+				Codec: collections.QuantizedVectorCodecScalarU8,
+			}},
+		},
+	}); err != nil {
+		b.Fatal(err)
+	}
+	docs := make([]Document, rows)
+	for i := range docs {
+		docs[i] = Document{ID: fmt.Sprintf("doc-%04d", i), Content: fmt.Sprintf("content-%04d", i), Embedding: []float32{1, float32(i%17) + 1, 0, 0, 0, 0, 0, 0}}
+	}
+	loadBenchmarkDocsDeferred(b, svc, indexName, docs)
+	if _, err := svc.OptimizeIndex(ctx, indexName, OptimizeIndexRequest{ColumnGraphServing: func() *collections.ColumnGraphServingOptions {
+		opts := typedServiceTestOptions()
+		return &opts
+	}()}); err != nil {
+		b.Fatal(err)
+	}
+	base := DenseVectorSearchRequest{QueryEmbedding: []float32{1, 1, 0, 0, 0, 0, 0, 0}, TopK: 10, EfSearch: 100, Route: RouteAnn}
+	quantizedReq := base
+	quantizedReq.QueryMode = collections.VectorIndexQueryModeQuantizedRerank
+	quantizedReq.QuantizedIndexName = quantized
+
+	for name, req := range map[string]DenseVectorSearchRequest{"fp32": base, "quantized_rerank": quantizedReq} {
+		req := req
+		b.Run(name, func(b *testing.B) {
+			b.ReportAllocs()
+			b.ResetTimer()
+			for b.Loop() {
+				response, err := svc.SearchDenseVector(ctx, indexName, req)
+				if err != nil {
+					b.Fatal(err)
+				}
+				if len(response.Documents) != req.TopK || response.DenseWork == nil || !response.DenseWork.Completed {
+					b.Fatalf("incomplete dense response: documents=%d work=%+v", len(response.Documents), response.DenseWork)
+				}
+				if name == "quantized_rerank" && (response.ScorePlane == nil || !response.ScorePlane.Completed) {
+					b.Fatalf("quantized response missing score-plane proof: %+v", response.ScorePlane)
+				}
+				if name == "fp32" && response.ScorePlane != nil {
+					b.Fatalf("fp32 response unexpectedly carried score-plane proof: %+v", response.ScorePlane)
+				}
+				denseNativeBenchmarkResultCount = len(response.Documents)
+			}
+		})
+	}
+}
+
 func TestServiceBenchmarkVectorSearchCacheInvalidatesOnLifecycleEvents(t *testing.T) {
 	svc, db := newTestService(t)
 	defer db.Close()

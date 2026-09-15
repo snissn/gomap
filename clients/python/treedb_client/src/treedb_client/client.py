@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import http.client
 import json
+import math
 import socket
 import ssl
 import struct
@@ -24,7 +25,7 @@ from .errors import (
     UnsupportedError,
     service_error_from_code,
 )
-from .filters import FilterLike, InvalidFilterError, normalize_filter
+from .filters import FilterLike, InvalidFilterError, _document_matches_filter, normalize_filter
 from .models import (
     BenchmarkVectorIndexOptions,
     BenchmarkVectorSearchIDsResponse,
@@ -381,6 +382,9 @@ class TreeDBClient:
         *,
         route: Optional[str] = None,
         ef_search: Optional[int] = None,
+        query_mode: Optional[str] = None,
+        quantized_index_name: Optional[str] = None,
+        quantized_rerank_candidates: Optional[int] = None,
         return_embedding: bool = False,
         expected_generation: Optional[int] = None,
         index_info: Optional[IndexInfo] = None,
@@ -401,47 +405,209 @@ class TreeDBClient:
 
         if route is not None and route not in ("ann", "exact"):
             raise InvalidRequestError("invalid_request", f"unsupported dense search route {route!r}; use 'ann' or 'exact'")
+        top_k_value = _validate_binary_int_query_param(top_k, "top_k", minimum=1)
+        mode = "exact" if query_mode is None else query_mode
+        if not isinstance(mode, str) or mode.strip() == "":
+            raise InvalidRequestError("invalid_request", "query_mode must be a non-empty string when provided")
+        mode = mode.strip().lower()
+        if mode not in ("exact", "quantized_rerank"):
+            raise UnsupportedError("unsupported", f"unsupported dense query_mode {mode!r}")
+        if quantized_index_name is not None and (not isinstance(quantized_index_name, str) or not quantized_index_name):
+            raise InvalidRequestError("invalid_request", "quantized_index_name must be a non-empty string when provided")
+        rerank_value = 0 if quantized_rerank_candidates is None else _validate_binary_int_query_param(
+            quantized_rerank_candidates, "quantized_rerank_candidates", minimum=0
+        )
+        if mode == "exact" and (quantized_index_name is not None or quantized_rerank_candidates is not None):
+            raise InvalidRequestError("invalid_request", "exact dense search does not accept quantized options")
+        if mode == "quantized_rerank":
+            if not quantized_index_name:
+                raise InvalidRequestError("invalid_request", "quantized_rerank requires quantized_index_name")
+            if rerank_value and rerank_value < top_k_value:
+                raise InvalidRequestError("invalid_request", "quantized_rerank_candidates must be zero or at least top_k")
+            if index_info is not None:
+                if index_info.name != index or not index_info.capabilities.typed_dense_quantized_rerank:
+                    raise TreeDBConfigError("typed dense quantized rerank capability is unavailable")
+                selected = next((item for item in index_info.quantized_indexes if item.name == quantized_index_name), None)
+                if not _is_legacy_scalar_u8_v1_index(selected):
+                    raise TreeDBConfigError("typed dense quantized rerank requires the selected legacy scalar_u8/v1 index")
+                if type(index_info.vector_ef_search) is not int or not 0 < index_info.vector_ef_search < 1 << 63:
+                    raise TreeDBConfigError("typed dense quantized rerank requires a positive IndexInfo vector_ef_search")
         ef_search_value = None
         if ef_search is not None:
             ef_search_value = _validate_binary_int_query_param(ef_search, "ef_search", minimum=0)
+        normalized_filter = normalize_filter(filter)
+        filter_requested = normalized_filter is not None
         if self._native is not None:
             from ._native import _dense_request, _dense_response, _section, _uint
             if (index_info is None or index_info.name != index or index_info.extra.get("typed_input") is not True
                     or index_info.vector_strategy != "column_graph" or index_info.metric != "cosine"
                     or index_info.generation <= 0 or len(query_embedding) != index_info.dimension):
                 raise TreeDBConfigError("native dense search requires matching selected typed IndexInfo")
+            if mode == "quantized_rerank":
+                if not index_info.capabilities.typed_dense_quantized_rerank:
+                    raise TreeDBConfigError("native dense quantized rerank capability is unavailable")
+                selected = next((item for item in index_info.quantized_indexes if item.name == quantized_index_name), None)
+                if not _is_legacy_scalar_u8_v1_index(selected):
+                    raise TreeDBConfigError("native dense quantized rerank requires the selected legacy scalar_u8/v1 index")
+                if ef_search_value in (None, 0):
+                    ef_search_value = index_info.vector_ef_search
+                if type(ef_search_value) is not int or not 0 < ef_search_value < 1 << 63:
+                    raise TreeDBConfigError("native dense quantized rerank requires a positive IndexInfo vector_ef_search")
             if route not in (None, "ann") or (expected_generation is not None and expected_generation != index_info.generation):
                 raise TreeDBConfigError("native dense route or generation conflicts with IndexInfo")
-            payload = _dense_request(index, query_embedding, top_k, ef_search_value or 0, index_info.generation, return_embedding, normalize_filter(filter) if filter is not None else None)
+            version = 3 if mode == "quantized_rerank" else 2
+            payload = _dense_request(index, query_embedding, top_k_value, ef_search_value or 0, index_info.generation, return_embedding, normalized_filter)
             deadline = _uint(time.time_ns() + int(self.timeout * 1_000_000_000))
-            raw = self._native.command(64, 2, _section(129, payload) + _section(4, deadline), "dense_vector_search_versions")
-            ids, payloads, scores, candidates, work = _dense_response(raw, top_k)
+            sections = _section(129, payload) + _section(4, deadline)
+            if version == 3:
+                from ._native import _dense_quantized_options
+                sections += _section(135, _dense_quantized_options(mode, quantized_index_name, rerank_value))
+            try:
+                raw = self._native.command(64, version, sections, "dense_vector_search_versions")
+                decoded = _dense_response(
+                    raw,
+                    top_k_value,
+                    version=version,
+                    query_mode=mode,
+                    quantized_index_name=quantized_index_name,
+                    quantized_rerank_candidates=rerank_value,
+                    ef_search=ef_search_value or 0,
+                    query_dimension=len(query_embedding),
+                    expected_generation=index_info.generation,
+                    filter_requested=filter_requested,
+                )
+            except Exception as exc:
+                if mode == "quantized_rerank":
+                    _validate_dense_failure_proofs(
+                        exc, query_mode=mode, quantized_index_name=quantized_index_name,
+                        top_k=top_k_value, ef_search=ef_search_value or 0,
+                        rerank_candidates=rerank_value, query_dimension=len(query_embedding),
+                        expected_generation=index_info.generation, filter_requested=filter_requested,
+                    )
+                raise
+            if version == 3:
+                ids, payloads, scores, candidates, work, score_plane = decoded
+            else:
+                ids, payloads, scores, candidates, work = decoded
+                score_plane = None
             documents = []
             for item_id, document_raw, score in zip(ids, payloads, scores):
                 try:
-                    document = Document.from_dict(json.loads(document_raw))
+                    document = Document.from_dict(
+                        _decode_native_dense_document_json(document_raw, reject_duplicates=version == 3)
+                    )
                     if document.id.encode("utf-8") != item_id:
                         raise ValueError("document ID mismatch")
+                    if document.score is not None:
+                        raise ValueError("document score must use the native result envelope")
                     document.score = score
                 except (ValueError, KeyError, TypeError, OverflowError) as exc:
-                    raise TreeDBProtocolError("invalid native dense document", dense_work=work) from exc
+                    raise TreeDBProtocolError("invalid native dense document", dense_work=work, score_plane=score_plane) from exc
                 documents.append(document)
+            if not _dense_document_embeddings_match(documents, return_embedding, len(query_embedding)):
+                raise TreeDBProtocolError(
+                    "native dense documents do not match return_embedding",
+                    dense_work=work,
+                    score_plane=score_plane,
+                )
+            if version == 3 and return_embedding and not _dense_embedding_scores_match_query(
+                documents, query_embedding
+            ):
+                raise TreeDBProtocolError(
+                    "native dense scores do not match returned embeddings",
+                    dense_work=work,
+                    score_plane=score_plane,
+                )
+            if version == 3 and not all(
+                _document_matches_filter(document, normalized_filter) for document in documents
+            ):
+                raise TreeDBProtocolError(
+                    "native dense document does not satisfy the request filter",
+                    dense_work=work,
+                    score_plane=score_plane,
+                )
             return DenseVectorSearchResponse(index=index_info, documents=documents, metric=index_info.metric,
                                              exact=False, candidates=candidates, route="ann",
-                                             native_base_plus_live_delta=False, native_command_version=2, dense_work=work)
+                                             native_base_plus_live_delta=False, native_command_version=version, dense_work=work,
+                                             score_plane=score_plane)
         request: dict[str, Any] = {
             "query_embedding": [float(value) for value in query_embedding],
-            "top_k": top_k,
+            "top_k": top_k_value,
             "return_embedding": return_embedding,
         }
         if route is not None:
             request["route"] = route
         if ef_search_value is not None:
             request["ef_search"] = ef_search_value
-        _add_filter(request, filter)
+        if query_mode is not None:
+            request["query_mode"] = mode
+        if mode == "quantized_rerank":
+            request["quantized_index_name"] = quantized_index_name
+            if rerank_value:
+                request["quantized_rerank_candidates"] = rerank_value
+        if normalized_filter is not None:
+            request["filter"] = normalized_filter
         _add_expected_generation(request, expected_generation)
-        payload = self._request("POST", self._index_path(index, "search", "vector"), request, dense_proof=True)
-        return _parse_response("vector search response", DenseVectorSearchResponse.from_dict, payload)
+        try:
+            payload = self._request(
+                "POST",
+                self._index_path(index, "search", "vector"),
+                request,
+                dense_proof=True,
+                dense_score_plane=mode == "quantized_rerank",
+            )
+            response = _parse_response("vector search response", DenseVectorSearchResponse.from_dict, payload)
+            if mode == "quantized_rerank":
+                _validate_http_dense_quantized_response(
+                    response,
+                    index=index,
+                    top_k=top_k_value,
+                    ef_search=ef_search_value or 0,
+                    query_embedding=request["query_embedding"],
+                    query_dimension=len(request["query_embedding"]),
+                    quantized_index_name=quantized_index_name,
+                    quantized_rerank_candidates=rerank_value,
+                    expected_generation=expected_generation,
+                    filter_requested=filter_requested,
+                    return_embedding=return_embedding,
+                )
+                if not all(
+                    _document_matches_filter(document, normalized_filter) for document in response.documents
+                ):
+                    raise TreeDBProtocolError(
+                        "dense HTTP document does not satisfy the request filter",
+                        dense_work=response.dense_work,
+                        score_plane=response.score_plane,
+                    )
+            elif response.score_plane is not None:
+                raise TreeDBProtocolError(
+                    "dense HTTP exact response unexpectedly includes a score-plane proof",
+                    dense_work=response.dense_work,
+                    score_plane=response.score_plane,
+                )
+            elif not _dense_document_embeddings_match(
+                response.documents, return_embedding, len(request["query_embedding"])
+            ):
+                raise TreeDBProtocolError(
+                    "dense HTTP documents do not match return_embedding",
+                    dense_work=response.dense_work,
+                )
+        except Exception as exc:
+            if mode == "quantized_rerank":
+                _validate_dense_failure_proofs(
+                    exc, query_mode=mode, quantized_index_name=quantized_index_name,
+                    top_k=top_k_value, ef_search=ef_search_value or 0,
+                    rerank_candidates=rerank_value, query_dimension=len(request["query_embedding"]),
+                    expected_generation=expected_generation, filter_requested=filter_requested,
+                    default_ef_search=(
+                        index_info.vector_ef_search
+                        if index_info is not None
+                        and expected_generation == index_info.generation
+                        else None
+                    ),
+                )
+            raise
+        return response
 
     def search_vector_index(
         self,
@@ -599,7 +765,14 @@ class TreeDBClient:
         return f"/v1/indexes/{encoded}"
 
     def _request(
-        self, method: str, path: str, body: Optional[Mapping[str, Any]] = None, *, retry_broken_connection: bool = False, dense_proof: bool = False
+        self,
+        method: str,
+        path: str,
+        body: Optional[Mapping[str, Any]] = None,
+        *,
+        retry_broken_connection: bool = False,
+        dense_proof: bool = False,
+        dense_score_plane: bool = False,
     ) -> Any:
         data: Optional[bytes] = None
         headers = {"Accept": "application/json"}
@@ -609,7 +782,15 @@ class TreeDBClient:
             except (TypeError, ValueError) as exc:
                 raise InvalidRequestError("invalid_request", f"request payload is not JSON-serializable: {exc}") from exc
             headers["Content-Type"] = "application/json"
-        return self._send_request(method, path, data, headers, retry_broken_connection=retry_broken_connection, dense_proof=dense_proof)
+        return self._send_request(
+            method,
+            path,
+            data,
+            headers,
+            retry_broken_connection=retry_broken_connection,
+            dense_proof=dense_proof,
+            dense_score_plane=dense_score_plane,
+        )
 
     def _request_bytes(
         self,
@@ -627,7 +808,15 @@ class TreeDBClient:
         return self._send_request(method, path, body, headers, retry_broken_connection=retry_broken_connection)
 
     def _send_request(
-        self, method: str, path: str, data: Optional[bytes], headers: Mapping[str, str], *, retry_broken_connection: bool = False, dense_proof: bool = False
+        self,
+        method: str,
+        path: str,
+        data: Optional[bytes],
+        headers: Mapping[str, str],
+        *,
+        retry_broken_connection: bool = False,
+        dense_proof: bool = False,
+        dense_score_plane: bool = False,
     ) -> Any:
         url = self.base_url + path
         if not retry_broken_connection or self._benchmark_uses_proxy:
@@ -636,7 +825,12 @@ class TreeDBClient:
                 try:
                     with self._opener.open(request, timeout=self.timeout) as response:
                         response_body = response.read()
-                        return self._decode_success(response.getcode(), response_body, dense_proof=dense_proof)
+                        return self._decode_success(
+                            response.getcode(),
+                            response_body,
+                            dense_proof=dense_proof,
+                            dense_score_plane=dense_score_plane,
+                        )
                 except urllib.error.HTTPError as exc:
                     try:
                         try:
@@ -649,7 +843,12 @@ class TreeDBClient:
                             raise TreeDBTransportError(f"TreeDB request to {url} failed: {read_exc}") from read_exc
                     finally:
                         exc.close()
-                    raise self._decode_error(exc.code, response_body, dense_proof=dense_proof) from None
+                    raise self._decode_error(
+                        exc.code,
+                        response_body,
+                        dense_proof=dense_proof,
+                        dense_score_plane=dense_score_plane,
+                    ) from None
                 except urllib.error.URLError as exc:
                     if retry_broken_connection and attempt == 0 and _is_broken_connection(exc.reason):
                         continue
@@ -669,8 +868,18 @@ class TreeDBClient:
                 try:
                     response_body = response.read()
                     if 200 <= response.status < 300:
-                        return self._decode_success(response.status, response_body, dense_proof=dense_proof)
-                    raise self._decode_error(response.status, response_body, dense_proof=dense_proof)
+                        return self._decode_success(
+                            response.status,
+                            response_body,
+                            dense_proof=dense_proof,
+                            dense_score_plane=dense_score_plane,
+                        )
+                    raise self._decode_error(
+                        response.status,
+                        response_body,
+                        dense_proof=dense_proof,
+                        dense_score_plane=dense_score_plane,
+                    )
                 finally:
                     response.close()
             except (
@@ -696,19 +905,44 @@ class TreeDBClient:
                 self._connection.close()
                 raise TreeDBTransportError(f"TreeDB request to {url} failed: {exc}") from exc
 
-    def _decode_success(self, status_code: int, body: bytes, *, dense_proof: bool = False) -> Any:
-        decoded = _decode_json_body(body, status_code=status_code, dense_proof=dense_proof)
+    def _decode_success(
+        self,
+        status_code: int,
+        body: bytes,
+        *,
+        dense_proof: bool = False,
+        dense_score_plane: bool = False,
+    ) -> Any:
+        decoded = _decode_json_body(
+            body, status_code=status_code, dense_proof=dense_proof,
+            dense_score_plane=dense_score_plane,
+        )
         if isinstance(decoded, Mapping) and "error" in decoded:
             error = decoded.get("error")
             if isinstance(error, Mapping):
                 code = str(error.get("code", "internal"))
                 message = str(error.get("message", ""))
-                raise service_error_from_code(code, message, status_code=status_code, response_body=_body_to_text(body), dense_work=_error_dense_work(error) if dense_proof else None)
+                work, score_plane = (
+                    _error_dense_proofs(error, score_plane_allowed=dense_score_plane)
+                    if dense_proof
+                    else (None, None)
+                )
+                raise service_error_from_code(code, message, status_code=status_code, response_body=_body_to_text(body), dense_work=work, score_plane=score_plane)
             raise TreeDBProtocolError("error envelope must contain an object", status_code=status_code, response_body=_body_to_text(body))
         return decoded
 
-    def _decode_error(self, status_code: int, body: bytes, *, dense_proof: bool = False) -> Exception:
-        decoded = _decode_json_body(body, status_code=status_code, dense_proof=dense_proof)
+    def _decode_error(
+        self,
+        status_code: int,
+        body: bytes,
+        *,
+        dense_proof: bool = False,
+        dense_score_plane: bool = False,
+    ) -> Exception:
+        decoded = _decode_json_body(
+            body, status_code=status_code, dense_proof=dense_proof,
+            dense_score_plane=dense_score_plane,
+        )
         if not isinstance(decoded, Mapping):
             return TreeDBProtocolError(
                 f"TreeDB service returned HTTP {status_code} with a non-object JSON body",
@@ -724,7 +958,12 @@ class TreeDBClient:
             )
         code = str(error.get("code", "internal"))
         message = str(error.get("message", ""))
-        return service_error_from_code(code, message, status_code=status_code, response_body=_body_to_text(body), dense_work=_error_dense_work(error) if dense_proof else None)
+        work, score_plane = (
+            _error_dense_proofs(error, score_plane_allowed=dense_score_plane)
+            if dense_proof
+            else (None, None)
+        )
+        return service_error_from_code(code, message, status_code=status_code, response_body=_body_to_text(body), dense_work=work, score_plane=score_plane)
 
 
 def _normalize_base_url(base_url: str) -> str:
@@ -844,6 +1083,8 @@ def _validate_binary_int_query_param(value: Any, label: str, *, minimum: int) ->
         if minimum == 1:
             raise InvalidRequestError("invalid_request", f"{label} must be a positive integer")
         raise InvalidRequestError("invalid_request", f"{label} must be a non-negative integer")
+    if value >= 1 << 63:
+        raise InvalidRequestError("invalid_request", f"{label} is outside the native integer range")
     return value
 
 
@@ -933,6 +1174,412 @@ def _parse_response(
     return _parse_mapping(label, parser, _expect_mapping(payload, label))
 
 
+def _validate_http_dense_quantized_response(
+    response: DenseVectorSearchResponse,
+    *,
+    index: str,
+    top_k: int,
+    ef_search: int,
+    query_embedding: Sequence[float],
+    query_dimension: int,
+    quantized_index_name: str,
+    quantized_rerank_candidates: int,
+    expected_generation: Optional[int],
+    filter_requested: bool,
+    return_embedding: bool,
+) -> None:
+    """Require the HTTP response proof for an explicitly selected public route."""
+
+    from ._dense_work import (
+        dense_cosine_scores_valid,
+        dense_document_ids_valid,
+        dense_quantized_response_work_matches,
+    )
+
+    proof = response.score_plane
+    work = response.dense_work
+    selected = next((item for item in response.index.quantized_indexes if item.name == quantized_index_name), None)
+    expected_graph_route = {
+        "typed_empty": "typed_empty",
+        "typed_exact": "typed_exact",
+        "quantized_rerank": "typed_hnsw",
+    }.get(proof.route if proof is not None else "")
+    if (
+        proof is None
+        or work is None
+        or not work.completed
+        or not work.graph.available
+        or not work.graph.completed
+        or expected_graph_route is None
+        or work.graph.route != expected_graph_route
+        or work.graph.snapshot != proof.snapshot
+        or work.graph.filter.attempted != filter_requested
+        or (work.graph.filter.attempted and not work.graph.filter.completed)
+        or (filter_requested and len(response.documents) != min(top_k, work.graph.filter.eligible_rows))
+        or len(response.documents) > top_k
+        or response.candidates != len(response.documents)
+        or not dense_document_ids_valid(document.id for document in response.documents)
+        or any(document.score is None for document in response.documents)
+        or not dense_cosine_scores_valid(document.score for document in response.documents)
+        or not _dense_http_results_ordered(response.documents)
+        or not _dense_document_embeddings_match(response.documents, return_embedding, query_dimension)
+        or (return_embedding and not _dense_embedding_scores_match_query(response.documents, query_embedding))
+        or response.index.dimension != query_dimension
+        or type(response.index.generation) is not int
+        or not 0 < response.index.generation < 1 << 64
+        or type(response.index.vector_ef_search) is not int
+        or not 0 < response.index.vector_ef_search < 1 << 63
+        or not _dense_score_plane_request_matches(
+            proof,
+            query_mode="quantized_rerank",
+            quantized_index_name=quantized_index_name,
+            top_k=top_k,
+            ef_search=ef_search,
+            rerank_candidates=quantized_rerank_candidates,
+            query_dimension=query_dimension,
+            expected_generation=response.index.generation,
+            require_completed_bytes=True,
+            default_ef_search=response.index.vector_ef_search,
+        )
+        or not dense_quantized_response_work_matches(
+            work, proof, top_k, len(response.documents), filter_requested
+        )
+        or response.index.name != index
+        or (expected_generation is not None and response.index.generation != expected_generation)
+        or response.metric != "cosine"
+        or response.metric != response.index.metric
+        or response.index.metric != "cosine"
+        or response.index.vector_strategy != "column_graph"
+        or response.index.extra.get("typed_input") is not True
+        or not response.index.capabilities.typed_dense_quantized_rerank
+        or response.route != "ann"
+        or response.exact
+        or response.native_base_plus_live_delta
+        or response.exact_fallbacks != 0
+        or response.full_document_scan_fallbacks != 0
+        or response.primary_document_scans != 0
+        or response.document_materialization_rows != len(response.documents)
+        or response.scalar_filter_membership_source != ""
+        or response.scalar_filter_plan != ""
+        or response.scalar_filter_exact_scoring
+        or response.scalar_filter_underfill
+        or any((
+            response.scalar_filter_probe_ids,
+            response.scalar_filter_probe_truncated,
+            response.scalar_filter_candidates,
+            response.scalar_filter_candidate_ids,
+            response.scalar_filter_retained_candidate_ids,
+            response.scalar_filter_refined_candidate_ids,
+            response.scalar_filter_visited,
+            response.scalar_filter_scored,
+            response.scalar_filter_admitted,
+            response.scalar_filter_unbounded,
+            response.allowed_id_materialization_rows,
+            response.visibility_mismatch_count,
+            response.visibility_retry_count,
+        ))
+        or (proof.route == "typed_empty" and (
+            len(response.documents) != 0
+            or not work.graph.filter.attempted
+            or not work.graph.filter.completed
+            or work.graph.filter.eligible_rows != 0
+        ))
+        or (proof.route in ("typed_exact", "quantized_rerank") and len(response.documents) != min(top_k, proof.exact_base_rerank_score_calls + proof.exact_small_filter_score_calls + proof.exact_suffix_score_calls))
+        or (proof.route == "quantized_rerank" and (
+            proof.actual_rerank_candidates > proof.rerank_candidate_cap
+            or proof.live_shortlist_candidates > proof.raw_retained_candidates
+            or proof.raw_retained_candidates > proof.raw_candidate_width
+            or proof.actual_rerank_candidates > proof.live_shortlist_candidates
+            or (quantized_rerank_candidates and proof.rerank_candidate_cap > quantized_rerank_candidates)
+        ))
+        or not proof.available
+        or not proof.completed
+        or not proof.snapshot.available
+        or proof.route not in ("typed_empty", "typed_exact", "quantized_rerank")
+        or not _is_legacy_scalar_u8_v1_index(selected)
+    ):
+        raise TreeDBProtocolError(
+            "dense HTTP score-plane proof does not match the request",
+            dense_work=response.dense_work,
+            score_plane=proof,
+        )
+
+
+def _dense_score_plane_request_matches(
+    proof: Any,
+    *,
+    query_mode: str,
+    quantized_index_name: Optional[str],
+    top_k: int,
+    ef_search: int,
+    rerank_candidates: int,
+    query_dimension: int,
+    expected_generation: Optional[int],
+    require_completed_bytes: bool,
+    default_ef_search: Optional[int] = None,
+) -> bool:
+    from ._dense_work import dense_score_plane_byte_counters_match
+
+    if ef_search == 0:
+        # A completed HTTP response authenticates the selected index default.
+        # Failure prefixes without generation-bound IndexInfo can prove only
+        # the TopK floor, so wider evidence fails closed rather than trusting a
+        # peer-supplied default.
+        resolved_ef_search = top_k if default_ef_search is None else default_ef_search
+    else:
+        resolved_ef_search = ef_search
+
+    return bool(
+        proof is not None
+        and proof.requested_mode == query_mode
+        and proof.effective_mode == "quantized_rerank"
+        and proof.quantized_index_name == quantized_index_name
+        and proof.quantized_codec == "scalar_u8"
+        and proof.quantized_version == 1
+        and proof.quantized_config_hash == 0
+        and proof.requested_top_k == top_k
+        and proof.requested_ef_search == ef_search
+        and type(resolved_ef_search) is int
+        and 0 < resolved_ef_search < 1 << 63
+        and proof.normalized_candidate_width <= max(top_k, resolved_ef_search)
+        and proof.requested_rerank_candidates == rerank_candidates
+        and (
+            expected_generation is None
+            or (
+                type(expected_generation) is int
+                and 0 < expected_generation < 1 << 64
+                and (
+                    not proof.snapshot.available
+                    or proof.snapshot.schema_generation <= expected_generation
+                )
+            )
+        )
+        and (
+            not require_completed_bytes
+            or dense_score_plane_byte_counters_match(proof, query_dimension)
+        )
+    )
+
+
+def _dense_work_requires_score_plane(work: Any) -> bool:
+    if work is None:
+        return False
+    # Availability, snapshot, and filter evidence can all exist before the
+    # selected quantized search establishes its score-plane owner.
+    graph, output = work.graph, work.output
+    return bool(
+        work.completed or graph.completed or graph.route
+        or graph.base_ann_scored or graph.base_candidates or graph.base_edges
+        or graph.delta_scored or graph.exact_base_scored or graph.base_shadowed or graph.base_result_ids
+        or output.attempted or output.completed or output.requested or output.fetched or output.missing
+        or output.output_bytes or output.retained_payload_fetches or output.json_reconstruction_rows or output.typed_column_rows
+    )
+
+
+def _validate_dense_failure_proofs(
+    error: Exception,
+    *,
+    query_mode: str,
+    quantized_index_name: Optional[str],
+    top_k: int,
+    ef_search: int,
+    rerank_candidates: int,
+    query_dimension: int,
+    expected_generation: Optional[int],
+    filter_requested: bool,
+    default_ef_search: Optional[int] = None,
+) -> None:
+    """Reject decoded failure evidence that cannot belong to this request.
+
+    Error proofs are prefixes, so successful result-count and byte invariants
+    apply only when both producer proofs report completion. Request identity,
+    sibling score counters, available snapshots, and observed filter work
+    remain bindable on failures.
+    """
+
+    from ._dense_work import (
+        dense_completed_graph_result_count,
+        dense_failure_score_counters_match_graph,
+        dense_failure_output_matches_completed_graph,
+        dense_quantized_completed_graph_matches,
+        dense_score_plane_prefix_route_matches_graph,
+    )
+
+    work = getattr(error, "dense_work", None)
+    proof = getattr(error, "score_plane", None)
+    if work is None and proof is None:
+        return
+
+    mismatch = (proof is not None and work is None) or (proof is None and _dense_work_requires_score_plane(work))
+    if proof is not None:
+        mismatch = mismatch or not _dense_score_plane_request_matches(
+            proof,
+            query_mode=query_mode,
+            quantized_index_name=quantized_index_name,
+            top_k=top_k,
+            ef_search=ef_search,
+            rerank_candidates=rerank_candidates,
+            query_dimension=query_dimension,
+            expected_generation=expected_generation,
+            require_completed_bytes=proof.completed,
+            default_ef_search=default_ef_search,
+        )
+
+    if work is not None:
+        graph = work.graph
+        if (
+            graph.snapshot.available
+            and expected_generation is not None
+            and graph.snapshot.schema_generation > expected_generation
+        ):
+            mismatch = True
+        if graph.filter.attempted and not filter_requested:
+            mismatch = True
+        if proof is not None:
+            if (
+                not proof.available
+                or not graph.available
+                or not proof.snapshot.available
+                or not graph.snapshot.available
+                or graph.snapshot != proof.snapshot
+                or proof.completed != graph.completed
+                or not dense_score_plane_prefix_route_matches_graph(graph.route, proof.route)
+                or not dense_failure_score_counters_match_graph(graph, proof)
+                or (work.completed and (not graph.completed or not work.output.completed))
+            ):
+                mismatch = True
+            # The producer creates a score-plane proof only after successful
+            # filter preparation, so a proof-bearing filtered failure must own
+            # completed filter evidence from the same graph owner.
+            if filter_requested and (not graph.filter.attempted or not graph.filter.completed):
+                mismatch = True
+            if graph.completed and proof.completed:
+                result_count = dense_completed_graph_result_count(proof, top_k)
+                if (
+                    result_count is None
+                    or not dense_quantized_completed_graph_matches(work, proof, top_k, result_count, filter_requested)
+                    or not dense_failure_output_matches_completed_graph(work.output, result_count)
+                ):
+                    mismatch = True
+            elif any(vars(work.output).values()):
+                mismatch = True
+    if mismatch:
+        raise TreeDBProtocolError(
+            "dense score-plane proof does not match the request on error",
+            status_code=getattr(error, "status_code", None),
+            response_body=getattr(error, "response_body", None),
+            dense_work=work,
+            score_plane=proof,
+        ) from error
+
+
+def _dense_http_results_ordered(documents: Sequence[Document]) -> bool:
+    for previous, current in zip(documents, documents[1:]):
+        if previous.score is None or current.score is None:
+            return False
+        try:
+            previous_id = previous.id.encode("utf-8", errors="strict")
+            current_id = current.id.encode("utf-8", errors="strict")
+        except UnicodeError:
+            return False
+        if previous.score < current.score or (previous.score == current.score and previous_id >= current_id):
+            return False
+    return True
+
+
+def _dense_document_embeddings_match(
+    documents: Sequence[Document], return_embedding: bool, dimension: int
+) -> bool:
+    if any(document.embedding_f32_le_b64 is not None for document in documents):
+        return False
+    if not return_embedding:
+        return all(document.embedding is None for document in documents)
+    return all(
+        document.embedding is not None
+        and len(document.embedding) == dimension
+        and all(math.isfinite(value) for value in document.embedding)
+        for document in documents
+    )
+
+
+def _dense_embedding_scores_match_query(
+    documents: Sequence[Document], query_embedding: Sequence[float]
+) -> bool:
+    def as_float32(value: Any) -> float:
+        return struct.unpack("<f", struct.pack("<f", float(value)))[0]
+
+    try:
+        query = [as_float32(value) for value in query_embedding]
+    except (OverflowError, TypeError, ValueError, struct.error):
+        return False
+    query_norm = math.fsum(value * value for value in query)
+    if not query or not math.isfinite(query_norm) or query_norm == 0:
+        return False
+    query_inv_norm = 1 / math.sqrt(query_norm)
+    for document in documents:
+        if document.embedding is None or document.score is None or len(document.embedding) != len(query):
+            return False
+        try:
+            embedding = [as_float32(value) for value in document.embedding]
+        except (OverflowError, TypeError, ValueError, struct.error):
+            return False
+        embedding_norm = math.fsum(value * value for value in embedding)
+        if not math.isfinite(embedding_norm) or embedding_norm == 0:
+            return False
+        embedding_inv_norm = 1 / math.sqrt(embedding_norm)
+        squared = math.fsum(
+            (query[i] * query_inv_norm - embedding[i] * embedding_inv_norm) ** 2
+            for i in range(len(query))
+        )
+        expected = 1 - as_float32(0.5 * squared)
+        if not math.isfinite(document.score) or abs(document.score - expected) > 1e-6:
+            return False
+    return True
+
+
+def _decode_native_dense_document_json(payload: bytes, *, reject_duplicates: bool) -> Any:
+    if not reject_duplicates:
+        return json.loads(payload)
+
+    class ObjectPairs(list):
+        pass
+
+    decoded = json.loads(payload, object_pairs_hook=ObjectPairs)
+
+    def collapse(value: Any) -> Any:
+        if isinstance(value, ObjectPairs):
+            out = {}
+            for key, item in value:
+                if key in out:
+                    raise ValueError("duplicate field in native dense document")
+                out[key] = collapse(item)
+            return out
+        if isinstance(value, list):
+            return [collapse(item) for item in value]
+        return value
+
+    return collapse(decoded)
+
+
+def _is_legacy_scalar_u8_v1_index(selected: Any) -> bool:
+    if selected is None or selected.codec != "scalar_u8" or selected.version != 1:
+        return False
+    calibration = selected.scalar_u8_calibration
+    if calibration is None:
+        return True
+
+    def field(value: Any, name: str, default: Any) -> Any:
+        return value.get(name, default) if isinstance(value, Mapping) else getattr(value, name, default)
+
+    policy = field(calibration, "alpha_policy", None)
+    return (
+        field(calibration, "mode", "") in ("", "legacy")
+        and field(calibration, "grouping", "") == ""
+        and field(policy, "name", "") == ""
+        and field(policy, "quantile_ppm", 0) == 0
+    )
+
+
 def _parse_benchmark_vector_search_response(
     payload: Any, response_format: Optional[str]
 ) -> Union[BenchmarkVectorSearchResponse, BenchmarkVectorSearchIDsResponse]:
@@ -960,30 +1607,82 @@ def _expect_mapping(payload: Any, label: str) -> Mapping[str, Any]:
     return payload
 
 
-def _decode_json_body(body: bytes, *, status_code: int, dense_proof: bool = False) -> Any:
+def _decode_json_body(
+    body: bytes, *, status_code: int, dense_proof: bool = False,
+    dense_score_plane: bool = False,
+) -> Any:
     text = _body_to_text(body)
     try:
         if not dense_proof:
             return json.loads(text) if text else {}
-        duplicate = False
-        proof_envelope = False
+        class DecodedObject(dict):
+            def __init__(self, pairs):
+                super().__init__()
+                self.pairs = pairs
+                self.duplicate_keys = set()
+                for key, value in pairs:
+                    if key in self:
+                        self.duplicate_keys.add(key)
+                    self[key] = value
 
-        def object_pairs(pairs):
-            nonlocal duplicate, proof_envelope
-            # The root object is decoded last. Inspect pairs before duplicate
-            # keys collapse, including overwritten proof-bearing error keys.
-            proof_envelope = any(key == "dense_work" or (key == "error" and isinstance(value, dict) and "dense_work" in value)
-                                 for key, value in pairs)
-            out = {}
-            for key, value in pairs:
-                duplicate |= key in out
-                out[key] = value
-            return out
+        def has_duplicates(value: Any) -> bool:
+            if isinstance(value, DecodedObject):
+                return bool(value.duplicate_keys) or any(has_duplicates(item) for item in value.values())
+            if isinstance(value, list):
+                return any(has_duplicates(item) for item in value)
+            return False
 
-        decoded = json.loads(text, object_pairs_hook=object_pairs) if text else {}
-        if isinstance(decoded, dict) and proof_envelope and duplicate:
-            raise TreeDBProtocolError("duplicate field in dense proof envelope", status_code=status_code, response_body=text)
-        return decoded
+        def collapse(value: Any) -> Any:
+            if isinstance(value, DecodedObject):
+                return {key: collapse(item) for key, item in value.items()}
+            if isinstance(value, list):
+                return [collapse(item) for item in value]
+            return value
+
+        def declares_proof(value: Any) -> bool:
+            return isinstance(value, DecodedObject) and any(
+                key in ("dense_work", "score_plane") for key, _ in value.pairs
+            )
+
+        def unique_proof(value: Any, key: str, parser: Callable[[Any], Any]) -> Any:
+            if (
+                not isinstance(value, DecodedObject)
+                or key not in value
+                or key in value.duplicate_keys
+                or has_duplicates(value[key])
+            ):
+                return None
+            try:
+                return parser(value[key])
+            except (KeyError, TypeError, ValueError):
+                return None
+
+        decoded = json.loads(text, object_pairs_hook=DecodedObject) if text else {}
+        proof_envelope = declares_proof(decoded) or (
+            isinstance(decoded, DecodedObject)
+            and any(key == "error" and declares_proof(value) for key, value in decoded.pairs)
+        )
+        if proof_envelope and has_duplicates(decoded):
+            proof_owner = decoded
+            if (
+                isinstance(decoded, DecodedObject)
+                and "error" in decoded
+                and "error" not in decoded.duplicate_keys
+                and isinstance(decoded["error"], DecodedObject)
+            ):
+                proof_owner = decoded["error"]
+            from ._dense_work import optional_dense_score_plane, optional_dense_work
+            work = unique_proof(proof_owner, "dense_work", optional_dense_work)
+            score_plane = (
+                unique_proof(proof_owner, "score_plane", optional_dense_score_plane)
+                if dense_score_plane
+                else None
+            )
+            raise TreeDBProtocolError(
+                "duplicate field in dense proof envelope", status_code=status_code,
+                response_body=text, dense_work=work, score_plane=score_plane,
+            )
+        return collapse(decoded)
     except json.JSONDecodeError as exc:
         raise TreeDBProtocolError(
             f"TreeDB service returned malformed JSON for HTTP {status_code}: {exc}",
@@ -992,12 +1691,28 @@ def _decode_json_body(body: bytes, *, status_code: int, dense_proof: bool = Fals
         ) from exc
 
 
-def _error_dense_work(error):
-    from ._dense_work import optional_dense_work
+def _error_dense_proofs(error, *, score_plane_allowed):
+    from ._dense_work import optional_dense_score_plane, optional_dense_work
+    work = score_plane = None
+    work_error = score_plane_error = None
     try:
-        return optional_dense_work(error.get("dense_work"))
+        work = optional_dense_work(error.get("dense_work"))
     except (ValueError, TypeError, KeyError) as exc:
-        raise TreeDBProtocolError("invalid dense error work proof") from exc
+        work_error = exc
+    raw_score_plane = error.get("score_plane")
+    unexpected_score_plane = raw_score_plane is not None and not score_plane_allowed
+    if raw_score_plane is not None and score_plane_allowed:
+        try:
+            score_plane = optional_dense_score_plane(raw_score_plane)
+        except (ValueError, TypeError, KeyError) as exc:
+            score_plane_error = exc
+    if work_error is not None:
+        raise TreeDBProtocolError("invalid dense error work proof", score_plane=score_plane) from work_error
+    if unexpected_score_plane:
+        raise TreeDBProtocolError("dense HTTP exact error unexpectedly includes a score-plane proof", dense_work=work)
+    if score_plane_error is not None:
+        raise TreeDBProtocolError("invalid dense score-plane error proof", dense_work=work) from score_plane_error
+    return work, score_plane
 
 
 def _body_to_text(body: bytes) -> str:

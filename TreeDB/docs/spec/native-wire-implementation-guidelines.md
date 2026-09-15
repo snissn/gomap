@@ -179,7 +179,9 @@ fixture or a new command version unless the old fixture intentionally documents
 a pre-alpha break.
 
 The unreleased selected dense 64/v2 response additionally requires versioned
-section 134, shared with its existing error envelope. Keep its fixed proof owned
+section 134, shared with its existing error envelope. Public typed quantized
+rerank uses 64/v3 with required sections 135 and 136; section 136 is a sibling
+score-plane proof, never an extension of the frozen section 134 layout. Keep its fixed proof owned
 across buffer reuse, propagate actual local error prefixes and captured owner
 identity, and preserve completed service work on later transport encoding errors.
 Do not sample process counters per request. Shared Go/Python golden, strict

@@ -211,7 +211,7 @@ func (s *Service) searchDenseVectorNative(ctx context.Context, col *collections.
 	for _, result := range raw.Results {
 		doc, err := decodeStoredDocument(result.ID, result.Document)
 		if err != nil {
-			return DenseVectorSearchResponse{}, withDenseSearchWork(err, raw.DenseWork)
+			return DenseVectorSearchResponse{}, withDenseSearchWorkAndScorePlane(err, raw.DenseWork, raw.ScorePlane)
 		}
 		if !req.ReturnEmbedding {
 			doc.Embedding = nil
@@ -232,7 +232,8 @@ type RawDenseVectorResult struct {
 // RawDenseVectorSearchResponse reuses caller-provided result storage when
 // supplied; each ID and Document is response-owned.
 type RawDenseVectorSearchResponse struct {
-	DenseWork *DenseSearchWork
+	DenseWork  *DenseSearchWork
+	ScorePlane *collections.ColumnGraphScorePlaneWork
 	// TypedColumnGraph identifies the validated selected route, not a work proof.
 	TypedColumnGraph          bool
 	Results                   []RawDenseVectorResult
@@ -247,10 +248,19 @@ type RawDenseVectorSearchResponse struct {
 	attempts                  int
 }
 
+func denseScorePlaneForResponse(plane collections.ColumnGraphScorePlaneWork, selected bool) *collections.ColumnGraphScorePlaneWork {
+	if !selected || !plane.Available {
+		return nil
+	}
+	owned := plane
+	return &owned
+}
+
 func (r RawDenseVectorSearchResponse) response(docs []Document) DenseVectorSearchResponse {
 	stats := r.searchStats
 	return DenseVectorSearchResponse{
 		DenseWork:                               r.DenseWork,
+		ScorePlane:                              r.ScorePlane,
 		Index:                                   r.info,
 		ColumnGraphPreparedSearch:               stats.SearchRouteColumnGraphPrepared,
 		ColumnGraphDeltaScored:                  stats.ColumnGraphDeltaScored,
@@ -310,6 +320,11 @@ func (s *Service) SearchDenseVectorNativeRawInto(ctx context.Context, index stri
 	if req.EfSearch < 0 {
 		return RawDenseVectorSearchResponse{}, serviceError(CodeInvalidRequest, "ef_search must be non-negative")
 	}
+	if normalized, err := normalizeDenseQueryOptions(&req, info); err != nil {
+		return RawDenseVectorSearchResponse{}, err
+	} else {
+		req.QueryMode = normalized
+	}
 	route, err := resolveDenseSearchRoute(req, info)
 	if err != nil {
 		return RawDenseVectorSearchResponse{}, err
@@ -364,7 +379,7 @@ func (s *Service) searchDenseVectorNativeRawLocked(ctx context.Context, col *col
 		if err := ctxErr(ctx); err != nil {
 			return RawDenseVectorSearchResponse{}, err
 		}
-		search, view, err := col.SearchVectorIndexWithBufferReadView(collections.VectorIndexSearchOptions{Context: ctx, IndexName: defaultVectorIndexName, Query: req.QueryEmbedding, QueryMode: collections.VectorIndexQueryModeExact, TopK: req.TopK, EfSearch: req.EfSearch, StatsMode: collections.VectorIndexSearchStatsModeProduction, DeclaredScalarFilter: scalarFilter}, buffer)
+		search, view, err := col.SearchVectorIndexWithBufferReadView(collections.VectorIndexSearchOptions{Context: ctx, IndexName: defaultVectorIndexName, Query: req.QueryEmbedding, QueryMode: req.QueryMode, QuantizedIndexName: req.QuantizedIndexName, QuantizedRerankCandidates: req.QuantizedRerankCandidates, TopK: req.TopK, EfSearch: req.EfSearch, StatsMode: collections.VectorIndexSearchStatsModeProduction, DeclaredScalarFilter: scalarFilter}, buffer)
 		if proof != nil {
 			proof.Graph = search.Stats.ColumnGraphWork
 		}
@@ -382,6 +397,12 @@ func (s *Service) searchDenseVectorNativeRawLocked(ctx context.Context, col *col
 		if err := validate(search); err != nil {
 			_ = view.Close()
 			return RawDenseVectorSearchResponse{}, err
+		}
+		if info.TypedInput && req.QueryMode == collections.VectorIndexQueryModeQuantizedRerank {
+			if err := validateDenseTypedQuantizedVectorSearchRoute(search, req, info.Generation, info.VectorEfSearch); err != nil {
+				_ = view.Close()
+				return RawDenseVectorSearchResponse{}, err
+			}
 		}
 		if s.denseVectorNativeAfterSearch != nil {
 			if err := s.denseVectorNativeAfterSearch(attempt, search); err != nil {
@@ -430,6 +451,7 @@ func (s *Service) searchDenseVectorNativeRawLocked(ctx context.Context, col *col
 		}
 		out := RawDenseVectorSearchResponse{
 			TypedColumnGraph:          info.TypedInput,
+			ScorePlane:                denseScorePlaneForResponse(search.Stats.ColumnGraphWork.ScorePlane, info.TypedInput && req.QueryMode == collections.VectorIndexQueryModeQuantizedRerank),
 			Results:                   dst,
 			Route:                     RouteAnn,
 			Candidates:                len(search.Results),
@@ -456,6 +478,36 @@ func (s *Service) searchDenseVectorNativeRawLocked(ctx context.Context, col *col
 func validateDenseTypedVectorSearchRoute(response collections.VectorIndexSearchResponse) error {
 	if response.Strategy != collections.VectorIndexStrategyColumnGraph || response.Path != collections.VectorIndexSearchPathColumnGraphNativeReader || response.Stats.SearchRouteColumnGraphPrepared != 1 || response.Stats.SearchRouteNativeRuntime != 0 || response.Stats.DocumentsFetched != 0 {
 		return serviceError(CodeIndexUnavailable, "typed graph search left the admitted no-document route")
+	}
+	return nil
+}
+
+func validateDenseTypedQuantizedVectorSearchRoute(response collections.VectorIndexSearchResponse, req DenseVectorSearchRequest, serviceGeneration uint64, indexEFSearch int) error {
+	proof := response.Stats.ColumnGraphWork.ScorePlane
+	if !proof.Available || !proof.Completed || !proof.Snapshot.Available || proof.RequestedMode != collections.VectorIndexQueryModeQuantizedRerank || proof.EffectiveMode != collections.VectorIndexQueryModeQuantizedRerank {
+		return serviceError(CodeIndexUnavailable, "typed quantized dense search did not produce a completed quantized score-plane proof")
+	}
+	if serviceGeneration == 0 || proof.Snapshot.SchemaGeneration > serviceGeneration {
+		return serviceError(CodeIndexUnavailable, "typed quantized dense search snapshot exceeds the admitted service generation")
+	}
+	if proof.QuantizedIndexName != req.QuantizedIndexName || proof.QuantizedCodec != collections.QuantizedVectorCodecScalarU8 || proof.QuantizedVersion != 1 || proof.RequestedTopK != uint64(req.TopK) || proof.RequestedEFSearch != uint64(req.EfSearch) || proof.RequestedRerankCandidates != uint64(req.QuantizedRerankCandidates) {
+		return serviceError(CodeIndexUnavailable, "typed quantized dense search score-plane proof does not match the request")
+	}
+	resolvedEFSearch := req.EfSearch
+	if resolvedEFSearch == 0 {
+		resolvedEFSearch = indexEFSearch
+	}
+	if resolvedEFSearch <= 0 || proof.NormalizedCandidateWidth > uint64(max(req.TopK, resolvedEFSearch)) {
+		return serviceError(CodeIndexUnavailable, "typed quantized dense search candidate width exceeds the resolved ef_search")
+	}
+	if proof.Route != "typed_empty" && proof.Route != "typed_exact" && proof.Route != "quantized_rerank" {
+		return serviceErrorf(CodeIndexUnavailable, "typed quantized dense search used unsupported route %q", proof.Route)
+	}
+	if proof.Route == "quantized_rerank" && proof.QuantizedScoreCalls == 0 {
+		return serviceError(CodeIndexUnavailable, "typed quantized dense search did not record quantized score calls")
+	}
+	if response.Stats.DocumentsFetched != 0 || response.Stats.DocumentBytes != 0 || response.Stats.DocumentOutputBytes != 0 {
+		return serviceError(CodeIndexUnavailable, "typed quantized dense search left the no-document scoring route")
 	}
 	return nil
 }

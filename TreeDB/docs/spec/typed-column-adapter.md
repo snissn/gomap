@@ -277,8 +277,10 @@ actual graph/filter/output work and the acquired owner's schema, base/current
 manifest identities and coverage. Error prefixes preserve acquired identity;
 unavailable proof never certifies zero. This uses the existing search owner and
 materializer stats without another authority registry or per-request process
-snapshot. Native 64/v2 and HTTP/Python carry the same proof; separate GetMany
-continues to work without graph admission and retains process phase accounting.
+snapshot. Native 64/v2 and HTTP/Python carry the same proof. Public typed
+quantized rerank uses 64/v3 and a sibling score-plane proof while the frozen
+dense-work shape remains unchanged; separate GetMany continues to work without
+graph admission and retains process phase accounting.
 
 See [Minima native execution](minima-native-execution.md) for the required path
 proof and [storage format](storage-format.md) for typed command bytes.

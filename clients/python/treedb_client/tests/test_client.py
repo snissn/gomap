@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import base64
+import copy
+from dataclasses import asdict, replace
 import http.client
 import json
 import os
@@ -33,6 +35,14 @@ from treedb_client import (
     TreeDBTransportError,
     UnsupportedError,
 )
+from treedb_client.client import (
+    _dense_document_embeddings_match,
+    _dense_embedding_scores_match_query,
+    _dense_http_results_ordered,
+    _dense_work_requires_score_plane,
+    _is_legacy_scalar_u8_v1_index,
+)
+from treedb_client._dense_work import DenseScorePlaneProof, dense_quantized_response_work_matches
 
 
 SAMPLE_INDEX = {
@@ -105,7 +115,7 @@ class FixtureHandler(BaseHTTPRequestHandler):
         )
         if delay:
             time.sleep(delay)
-        raw = json.dumps(payload).encode("utf-8")
+        raw = payload if isinstance(payload, bytes) else json.dumps(payload).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(raw)))
@@ -155,6 +165,69 @@ def json_body(record: dict[str, Any]) -> Any:
 
 
 class TreeDBClientTests(unittest.TestCase):
+    def test_dense_http_ordering_rejects_unencodable_tie_id(self) -> None:
+        documents = [Document(id="a", score=1.0), Document(id="\ud800", score=1.0)]
+        self.assertFalse(_dense_http_results_ordered(documents))
+
+    def test_dense_embedding_echo_matches_request(self) -> None:
+        omitted = [Document(id="a")]
+        included = [Document(id="a", embedding=[1.0, 0.0])]
+        self.assertTrue(_dense_document_embeddings_match(omitted, False, 2))
+        self.assertTrue(_dense_document_embeddings_match(included, True, 2))
+        self.assertFalse(_dense_document_embeddings_match(included, False, 2))
+        self.assertFalse(_dense_document_embeddings_match(omitted, True, 2))
+        self.assertFalse(_dense_document_embeddings_match(
+            [Document(id="a", embedding=[1.0])], True, 2,
+        ))
+        self.assertFalse(_dense_document_embeddings_match(
+            [Document(id="a", embedding=[float("inf"), 0.0])], True, 2,
+        ))
+        self.assertFalse(_dense_document_embeddings_match(
+            [Document(id="a", embedding_f32_le_b64="AACAPwAAAAA=")], False, 2,
+        ))
+        self.assertFalse(_dense_document_embeddings_match(
+            [Document(id="a", embedding=[1.0, 0.0], embedding_f32_le_b64="AACAPwAAAAA=")], True, 2,
+        ))
+
+    def test_dense_embedding_scores_match_query(self) -> None:
+        self.assertTrue(_dense_embedding_scores_match_query([
+            Document(id="same", embedding=[1, 0], score=1),
+            Document(id="orthogonal", embedding=[0, 1], score=0),
+            Document(id="opposite", embedding=[-1, 0], score=-1),
+        ], [1, 0]))
+        self.assertTrue(_dense_embedding_scores_match_query([
+            Document(id="rounded", embedding=[1, 0], score=1 - 0.5e-6),
+        ], [1, 0]))
+        for name, document in (
+            ("mismatched score", Document(id="a", embedding=[1, 0], score=0)),
+            ("outside tolerance", Document(id="a", embedding=[1, 0], score=1 - 2e-6)),
+            ("zero embedding", Document(id="a", embedding=[0, 0], score=0)),
+            ("non-FP32 embedding", Document(id="a", embedding=[3.5e38, 0], score=1)),
+            ("missing score", Document(id="a", embedding=[1, 0])),
+        ):
+            with self.subTest(name=name):
+                self.assertFalse(_dense_embedding_scores_match_query([document], [1, 0]))
+        self.assertFalse(_dense_embedding_scores_match_query([
+            Document(id="a", embedding=[1, 0], score=0),
+        ], [0, 0]))
+
+    def test_selected_quantized_index_requires_legacy_calibration(self) -> None:
+        selected = QuantizedIndexInfo(name="embedding.scalar_u8.public")
+        self.assertTrue(_is_legacy_scalar_u8_v1_index(selected))
+        self.assertTrue(_is_legacy_scalar_u8_v1_index(QuantizedIndexInfo(
+            name=selected.name,
+            scalar_u8_calibration={"mode": "legacy"},
+        )))
+        for calibration in (
+            {"mode": "legacy", "grouping": "per_granule"},
+            {"mode": "legacy", "alpha_policy": {"name": "quantile", "quantile_ppm": 999000}},
+        ):
+            with self.subTest(calibration=calibration):
+                self.assertFalse(_is_legacy_scalar_u8_v1_index(QuantizedIndexInfo(
+                    name=selected.name,
+                    scalar_u8_calibration=calibration,
+                )))
+
     def test_vector_index_proxy_selection_preserves_urllib_and_bypass_uses_direct_connection(self) -> None:
         response = {"index": SAMPLE_INDEX, "results": [], "metric": "cosine", "vector_index_name": "embedding", "query_mode": "exact", "no_documents": True, "stats": {}, "diagnostics": {}}
 
@@ -574,6 +647,1724 @@ class TreeDBClientTests(unittest.TestCase):
             filter_body = json_body(server.records[1])
             self.assertEqual(filter_body["after_id"], "before")
             self.assertTrue(filter_body["cursor_page"])
+
+    def test_http_quantized_query_requires_completed_matching_score_plane(self) -> None:
+        payload = {
+            "index": SAMPLE_INDEX,
+            "metric": "cosine",
+            "exact": False,
+            "candidates": 1,
+            "route": "ann",
+            "documents": [{"id": "a", "content": "alpha", "score": 1.0}],
+        }
+        with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, payload, 0)}) as server:
+            client = TreeDBClient(server.base_url, timeout=1)
+            with self.assertRaisesRegex(TreeDBProtocolError, "score-plane proof"):
+                client.query_by_embedding(
+                    "docs",
+                    [1, 0],
+                    1,
+                    query_mode="quantized_rerank",
+                    quantized_index_name="embedding.scalar_u8.fast",
+                )
+
+    def test_http_quantized_query_binds_outer_response_and_dense_work(self) -> None:
+        typed_index = copy.deepcopy(SAMPLE_INDEX)
+        typed_index["typed_input"] = True
+        typed_index["quantized_indexes"] = [{"name": "embedding.scalar_u8.public", "codec": "scalar_u8", "version": 1}]
+        typed_index["capabilities"]["typed_dense_quantized_rerank"] = True
+        manifest = {"generation": 1, "format": "", "version": 1, "checksum": 3}
+        snapshot = {
+            "available": True,
+            "schema_hash": 1,
+            "schema_generation": 1,
+            "base_manifest": manifest,
+            "current_manifest": manifest,
+            "base_coverage_lsn": 1,
+            "current_coverage_lsn": 1,
+        }
+        dense_work = {
+            "version": 1,
+            "completed": True,
+            "graph": {
+                "available": True,
+                "completed": True,
+                "route": "typed_hnsw",
+                "base_ann_scored": 1,
+                "base_candidates": 0,
+                "base_edges": 0,
+                "delta_scored": 0,
+                "exact_base_scored": 1,
+                "base_shadowed": 0,
+                "base_result_ids": 1,
+                "filter": {
+                    "attempted": False,
+                    "completed": False,
+                    "eligible_rows": 0,
+                    "source_ids": 0,
+                    "source_bytes": 0,
+                    "inspected_entries": 0,
+                    "mapping_work_charged": 0,
+                    "retained_bytes": 0,
+                    "scratch_id_bytes": 0,
+                    "scratch_rows": 0,
+                    "ordinal_growth_peak_bytes": 0,
+                },
+                "snapshot": snapshot,
+            },
+            "output": {
+                "attempted": True,
+                "completed": True,
+                "requested": 1,
+                "fetched": 1,
+                "missing": 0,
+                "output_bytes": 1,
+                "retained_payload_fetches": 1,
+                "json_reconstruction_rows": 1,
+                "typed_column_rows": 1,
+            },
+        }
+        score_plane = {
+            "version": 1,
+            "available": True,
+            "completed": True,
+            "requested_mode": "quantized_rerank",
+            "effective_mode": "quantized_rerank",
+            "route": "quantized_rerank",
+            "reason": "",
+            "quantized_index_name": "embedding.scalar_u8.public",
+            "quantized_codec": "scalar_u8",
+            "quantized_version": 1,
+            "quantized_config_hash": 0,
+            "requested_top_k": 1,
+            "requested_ef_search": 0,
+            "requested_rerank_candidates": 0,
+            "normalized_candidate_width": 1,
+            "raw_candidate_width": 1,
+            "rerank_candidate_cap": 1,
+            "raw_retained_candidates": 1,
+            "live_shortlist_candidates": 1,
+            "actual_rerank_candidates": 1,
+            "quantized_score_calls": 1,
+            "quantized_code_bytes_read": 2,
+            "exact_base_rerank_score_calls": 1,
+            "exact_suffix_score_calls": 0,
+            "exact_small_filter_score_calls": 0,
+            "exact_base_vector_bytes_read": 8,
+            "exact_suffix_vector_bytes_read": 0,
+            "snapshot": snapshot,
+        }
+        payload = {
+            "index": typed_index,
+            "metric": "cosine",
+            "exact": False,
+            "candidates": 1,
+            "document_materialization_rows": 1,
+            "route": "ann",
+            "documents": [{"id": "a", "content": "alpha", "score": 1.0}],
+            "dense_work": dense_work,
+            "score_plane": score_plane,
+        }
+        with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, payload, 0)}) as server:
+            client = TreeDBClient(server.base_url, timeout=1)
+            result = client.query_by_embedding(
+                "docs", [1, 0], 1, query_mode="quantized_rerank", quantized_index_name="embedding.scalar_u8.public",
+                expected_generation=1,
+            )
+            self.assertEqual(result.documents[0].id, "a")
+            default_width_boundary = copy.deepcopy(payload)
+            default_width_boundary["score_plane"].update(
+                normalized_candidate_width=64,
+                raw_candidate_width=64,
+                rerank_candidate_cap=64,
+            )
+            with mock.patch.object(client, "_request", return_value=default_width_boundary):
+                boundary = client.query_by_embedding(
+                    "docs", [1, 0], 1, query_mode="quantized_rerank",
+                    quantized_index_name="embedding.scalar_u8.public",
+                )
+            self.assertEqual(boundary.score_plane.normalized_candidate_width, 64)
+            explicit_ef = copy.deepcopy(payload)
+            explicit_ef["score_plane"]["requested_ef_search"] = 8
+            with mock.patch.object(client, "_request", return_value=explicit_ef):
+                explicit = client.query_by_embedding(
+                    "docs", [1, 0], 1, ef_search=8, query_mode="quantized_rerank",
+                    quantized_index_name="embedding.scalar_u8.public",
+                )
+            self.assertEqual(explicit.score_plane.requested_ef_search, 8)
+            default_width_overflow = copy.deepcopy(payload)
+            default_width_overflow["score_plane"].update(
+                normalized_candidate_width=65,
+                raw_candidate_width=65,
+                rerank_candidate_cap=65,
+            )
+            zero_index_default = copy.deepcopy(payload)
+            zero_index_default["index"]["vector_ef_search"] = 0
+            for name, candidate in (
+                ("width above index default", default_width_overflow),
+                ("nonpositive index default", zero_index_default),
+            ):
+                with self.subTest(http_default_ef=name), \
+                     mock.patch.object(client, "_request", return_value=candidate), \
+                     self.assertRaisesRegex(TreeDBProtocolError, "score-plane proof"):
+                    client.query_by_embedding(
+                        "docs", [1, 0], 1, query_mode="quantized_rerank",
+                        quantized_index_name="embedding.scalar_u8.public",
+                    )
+            embedded_payload = copy.deepcopy(payload)
+            embedded_payload["documents"][0]["embedding"] = [1, 0]
+            with mock.patch.object(client, "_request", return_value=embedded_payload):
+                embedded_result = client.query_by_embedding(
+                    "docs", [1, 0], 1, query_mode="quantized_rerank",
+                    quantized_index_name="embedding.scalar_u8.public", return_embedding=True,
+                )
+            self.assertEqual(embedded_result.documents[0].embedding, [1.0, 0.0])
+            wrong_dimension_embedding = copy.deepcopy(embedded_payload)
+            wrong_dimension_embedding["documents"][0]["embedding"] = [1]
+            nonfinite_embedding = copy.deepcopy(embedded_payload)
+            nonfinite_embedding["documents"][0]["embedding"] = [float("nan"), 0]
+            mismatched_embedding_score = copy.deepcopy(embedded_payload)
+            mismatched_embedding_score["documents"][0]["embedding"] = [0, 1]
+            zero_embedding = copy.deepcopy(embedded_payload)
+            zero_embedding["documents"][0]["embedding"] = [0, 0]
+            compact_embedding = copy.deepcopy(payload)
+            compact_embedding["documents"][0]["embedding_f32_le_b64"] = "AACAPwAAAAA="
+            for name, candidate, return_embedding in (
+                ("unrequested", embedded_payload, False),
+                ("missing", payload, True),
+                ("wrong dimension", wrong_dimension_embedding, True),
+                ("nonfinite", nonfinite_embedding, True),
+                ("mismatched score", mismatched_embedding_score, True),
+                ("zero vector", zero_embedding, True),
+                ("write-only compact", compact_embedding, False),
+            ):
+                with self.subTest(embedding_echo=name), \
+                     mock.patch.object(client, "_request", return_value=candidate), \
+                     self.assertRaisesRegex(TreeDBProtocolError, "score-plane proof"):
+                    client.query_by_embedding(
+                        "docs", [1, 0], 1, query_mode="quantized_rerank",
+                        quantized_index_name="embedding.scalar_u8.public",
+                        return_embedding=return_embedding,
+                    )
+            pre_owner_filter = replace(
+                result.dense_work.graph.filter,
+                attempted=True, completed=True, eligible_rows=1, source_ids=1, source_bytes=1,
+                inspected_entries=1, mapping_work_charged=1, retained_bytes=1, scratch_id_bytes=1,
+                scratch_rows=1, ordinal_growth_peak_bytes=1,
+            )
+            pre_owner_graph = replace(
+                result.dense_work.graph,
+                completed=False, route="", base_ann_scored=0, base_candidates=0, base_edges=0,
+                delta_scored=0, exact_base_scored=0, base_shadowed=0, base_result_ids=0,
+                filter=pre_owner_filter,
+            )
+            pre_owner_output = replace(
+                result.dense_work.output,
+                attempted=False, completed=False, requested=0, fetched=0, missing=0, output_bytes=0,
+                retained_payload_fetches=0, json_reconstruction_rows=0, typed_column_rows=0,
+            )
+            pre_owner = replace(result.dense_work, completed=False, graph=pre_owner_graph, output=pre_owner_output)
+            self.assertFalse(_dense_work_requires_score_plane(pre_owner))
+            execution_signals = [
+                ("service completed", replace(pre_owner, completed=True)),
+                ("graph completed", replace(pre_owner, graph=replace(pre_owner.graph, completed=True))),
+                ("output attempted", replace(pre_owner, output=replace(pre_owner.output, attempted=True))),
+                ("output completed", replace(pre_owner, output=replace(pre_owner.output, completed=True))),
+            ]
+            execution_signals.extend(
+                (f"route {route}", replace(pre_owner, graph=replace(pre_owner.graph, route=route)))
+                for route in ("typed_empty", "typed_exact", "typed_hnsw")
+            )
+            execution_signals.extend(
+                (field, replace(pre_owner, graph=replace(pre_owner.graph, **{field: 1})))
+                for field in (
+                    "base_ann_scored", "base_candidates", "base_edges", "delta_scored",
+                    "exact_base_scored", "base_shadowed", "base_result_ids",
+                )
+            )
+            execution_signals.extend(
+                (field, replace(pre_owner, output=replace(pre_owner.output, **{field: 1})))
+                for field in (
+                    "requested", "fetched", "missing", "output_bytes", "retained_payload_fetches",
+                    "json_reconstruction_rows", "typed_column_rows",
+                )
+            )
+            for name, candidate in execution_signals:
+                with self.subTest(score_plane_execution_signal=name):
+                    self.assertTrue(_dense_work_requires_score_plane(candidate))
+            hostile_unfiltered = copy.deepcopy(payload)
+            hostile_unfiltered["dense_work"]["graph"].update(
+                base_ann_scored=2, base_candidates=0, exact_base_scored=2, base_result_ids=2,
+            )
+            hostile_unfiltered["score_plane"].update(
+                normalized_candidate_width=2,
+                raw_candidate_width=2,
+                rerank_candidate_cap=2,
+                raw_retained_candidates=2,
+                live_shortlist_candidates=2,
+                actual_rerank_candidates=2,
+                quantized_score_calls=2,
+                quantized_code_bytes_read=4,
+                exact_base_rerank_score_calls=2,
+                exact_base_vector_bytes_read=16,
+            )
+            with mock.patch.object(client, "_request", return_value=hostile_unfiltered):
+                expanded = client.query_by_embedding(
+                    "docs", [1, 0], 1, query_mode="quantized_rerank",
+                    quantized_index_name="embedding.scalar_u8.public",
+                )
+            self.assertTrue(dense_quantized_response_work_matches(
+                expanded.dense_work, expanded.score_plane, 1, 1, False
+            ))
+            self.assertFalse(dense_quantized_response_work_matches(
+                replace(expanded.dense_work, output=replace(expanded.dense_work.output, output_bytes=0)),
+                expanded.score_plane, 1, 1, False,
+            ))
+            self.assertFalse(dense_quantized_response_work_matches(
+                replace(expanded.dense_work, graph=replace(expanded.dense_work.graph, base_candidates=1)),
+                expanded.score_plane, 1, 1, False,
+            ))
+            zero_nonempty_output = copy.deepcopy(payload)
+            zero_nonempty_output["dense_work"]["output"]["output_bytes"] = 0
+            with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, zero_nonempty_output, 0)}) as hostile_server:
+                hostile_client = TreeDBClient(hostile_server.base_url, timeout=1)
+                with self.assertRaisesRegex(TreeDBProtocolError, "score-plane proof"):
+                    hostile_client.query_by_embedding(
+                        "docs", [1, 0], 1, query_mode="quantized_rerank",
+                        quantized_index_name="embedding.scalar_u8.public",
+                    )
+                hostile_client.close()
+            hostile_unfiltered["dense_work"]["graph"]["base_candidates"] = 1
+            with mock.patch.object(client, "_request", return_value=hostile_unfiltered), \
+                 self.assertRaisesRegex(TreeDBProtocolError, "score-plane proof"):
+                client.query_by_embedding(
+                    "docs", [1, 0], 1, query_mode="quantized_rerank",
+                    quantized_index_name="embedding.scalar_u8.public",
+                )
+            for name, field, value in (
+                ("missing materialization row", "document_materialization_rows", 0),
+                ("excess materialization row", "document_materialization_rows", 2),
+                ("legacy membership source", "scalar_filter_membership_source", "bounded_complete_set"),
+                ("legacy filter plan", "scalar_filter_plan", "complete_exact"),
+                ("legacy probe IDs", "scalar_filter_probe_ids", 1),
+                ("legacy truncated probes", "scalar_filter_probe_truncated", 1),
+                ("legacy candidates", "scalar_filter_candidates", 1),
+                ("legacy candidate IDs", "scalar_filter_candidate_ids", 1),
+                ("legacy retained IDs", "scalar_filter_retained_candidate_ids", 1),
+                ("legacy refined IDs", "scalar_filter_refined_candidate_ids", 1),
+                ("legacy visited", "scalar_filter_visited", 1),
+                ("legacy scored", "scalar_filter_scored", 1),
+                ("legacy admitted", "scalar_filter_admitted", 1),
+                ("legacy exact scoring", "scalar_filter_exact_scoring", True),
+                ("legacy underfill", "scalar_filter_underfill", True),
+                ("legacy unbounded", "scalar_filter_unbounded", 1),
+                ("legacy materialization", "allowed_id_materialization_rows", 1),
+                ("typed visibility mismatch", "visibility_mismatch_count", 1),
+                ("typed visibility retry", "visibility_retry_count", 1),
+            ):
+                invalid_outer = copy.deepcopy(payload)
+                invalid_outer[field] = value
+                with self.subTest(outer_diagnostic=name), mock.patch.object(client, "_request", return_value=invalid_outer):
+                    with self.assertRaisesRegex(TreeDBProtocolError, "score-plane proof"):
+                        client.query_by_embedding(
+                            "docs", [1, 0], 1, query_mode="quantized_rerank",
+                            quantized_index_name="embedding.scalar_u8.public",
+                        )
+            malformed_score = copy.deepcopy(payload)
+            malformed_score["score_plane"]["version"] = 2
+            with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, malformed_score, 0)}) as malformed_score_server:
+                malformed_score_client = TreeDBClient(malformed_score_server.base_url, timeout=1)
+                with self.assertRaisesRegex(TreeDBProtocolError, "score-plane proof") as caught:
+                    malformed_score_client.query_by_embedding(
+                        "docs", [1, 0], 1, query_mode="quantized_rerank",
+                        quantized_index_name="embedding.scalar_u8.public",
+                    )
+                self.assertEqual(caught.exception.dense_work, result.dense_work)
+                self.assertIsNone(caught.exception.score_plane)
+                malformed_score_client.close()
+            malformed_work = copy.deepcopy(payload)
+            malformed_work["dense_work"]["version"] = 2
+            with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, malformed_work, 0)}) as malformed_work_server:
+                malformed_work_client = TreeDBClient(malformed_work_server.base_url, timeout=1)
+                with self.assertRaisesRegex(TreeDBProtocolError, "proof does not match the request") as caught:
+                    malformed_work_client.query_by_embedding(
+                        "docs", [1, 0], 1, query_mode="quantized_rerank",
+                        quantized_index_name="embedding.scalar_u8.public",
+                    )
+                self.assertIsNone(caught.exception.dense_work)
+                self.assertEqual(caught.exception.score_plane, result.score_plane)
+                malformed_work_client.close()
+            malformed_error_score = {
+                "error": {"code": "index_unavailable", "message": "budget", "dense_work": dense_work,
+                          "score_plane": malformed_score["score_plane"]}
+            }
+            with self.assertRaisesRegex(TreeDBProtocolError, "score-plane error proof") as caught:
+                client._decode_error(
+                    503,
+                    json.dumps(malformed_error_score).encode(),
+                    dense_proof=True,
+                    dense_score_plane=True,
+                )
+            self.assertEqual(caught.exception.dense_work, result.dense_work)
+            self.assertIsNone(caught.exception.score_plane)
+            malformed_error_work = {
+                "error": {"code": "index_unavailable", "message": "budget", "dense_work": malformed_work["dense_work"],
+                          "score_plane": score_plane}
+            }
+            with self.assertRaisesRegex(TreeDBProtocolError, "work proof") as caught:
+                client._decode_success(
+                    200,
+                    json.dumps(malformed_error_work).encode(),
+                    dense_proof=True,
+                    dense_score_plane=True,
+                )
+            self.assertIsNone(caught.exception.dense_work)
+            self.assertEqual(caught.exception.score_plane, result.score_plane)
+            error_payload = {
+                "error": {
+                    "code": "index_unavailable",
+                    "message": "budget",
+                    "dense_work": dense_work,
+                    "score_plane": score_plane,
+                }
+            }
+            for status in (200, 503):
+                with self.subTest(error_status=status, query_mode="exact"):
+                    with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (status, error_payload, 0)}) as error_server:
+                        error_client = TreeDBClient(error_server.base_url, timeout=1)
+                        with self.assertRaisesRegex(TreeDBProtocolError, "exact error unexpectedly includes") as caught:
+                            error_client.query_by_embedding("docs", [1, 0], 1, query_mode="exact")
+                        self.assertIsNotNone(caught.exception.dense_work)
+                        self.assertIsNone(caught.exception.score_plane)
+                        error_client.close()
+                with self.subTest(error_status=status, query_mode="quantized_rerank"):
+                    with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (status, error_payload, 0)}) as error_server:
+                        error_client = TreeDBClient(error_server.base_url, timeout=1)
+                        with self.assertRaises(IndexUnavailableError) as caught:
+                            error_client.query_by_embedding(
+                                "docs",
+                                [1, 0],
+                                1,
+                                query_mode="quantized_rerank",
+                                quantized_index_name="embedding.scalar_u8.public",
+                            )
+                        self.assertIsNotNone(caught.exception.dense_work)
+                        self.assertIsNotNone(caught.exception.score_plane)
+                        error_client.close()
+            wide_default_error = copy.deepcopy(error_payload)
+            wide_default_error["error"]["score_plane"].update(
+                normalized_candidate_width=2,
+                raw_candidate_width=2,
+                rerank_candidate_cap=2,
+            )
+            with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (503, wide_default_error, 0)}) as error_server:
+                error_client = TreeDBClient(error_server.base_url, timeout=1)
+                with self.assertRaisesRegex(TreeDBProtocolError, "proof does not match the request"):
+                    error_client.query_by_embedding(
+                        "docs", [1, 0], 1, query_mode="quantized_rerank",
+                        quantized_index_name="embedding.scalar_u8.public",
+                    )
+                with self.assertRaises(IndexUnavailableError) as caught:
+                    error_client.query_by_embedding(
+                        "docs", [1, 0], 1, query_mode="quantized_rerank",
+                        quantized_index_name="embedding.scalar_u8.public",
+                        index_info=result.index,
+                        expected_generation=result.index.generation,
+                    )
+                self.assertEqual(caught.exception.score_plane.normalized_candidate_width, 2)
+                error_client.close()
+            work_only_cases = [("pre-owner", pre_owner, False)]
+            work_only_cases.extend(
+                (route, replace(pre_owner, graph=replace(pre_owner.graph, route=route)), True)
+                for route in ("typed_empty", "typed_exact", "typed_hnsw")
+            )
+            work_only_cases.extend((
+                ("route-empty score", replace(pre_owner, graph=replace(pre_owner.graph, base_ann_scored=1)), True),
+                ("output attempted", replace(pre_owner, output=replace(pre_owner.output, attempted=True)), True),
+            ))
+            for status in (200, 503):
+                for name, candidate, rejected in work_only_cases:
+                    work_only_payload = {
+                        "error": {"code": "index_unavailable", "message": "budget", "dense_work": asdict(candidate)},
+                    }
+                    with self.subTest(work_only_error_status=status, work_only=name), \
+                         FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (status, work_only_payload, 0)}) as error_server:
+                        error_client = TreeDBClient(error_server.base_url, timeout=1)
+                        expected = "proof does not match the request" if rejected else "index_unavailable"
+                        error_type = TreeDBProtocolError if rejected else IndexUnavailableError
+                        with self.assertRaisesRegex(error_type, expected) as caught:
+                            error_client.query_by_embedding(
+                                "docs", [1, 0], 1,
+                                filter={"field": "meta.repo", "operator": "==", "value": "gomap"},
+                                query_mode="quantized_rerank", quantized_index_name="embedding.scalar_u8.public",
+                            )
+                        self.assertEqual(caught.exception.dense_work, candidate)
+                        self.assertIsNone(caught.exception.score_plane)
+                        error_client.close()
+            proof_only_error_payload = copy.deepcopy(error_payload)
+            del proof_only_error_payload["error"]["dense_work"]
+            for status in (200, 503):
+                with self.subTest(proof_only_error_status=status), \
+                     FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (status, proof_only_error_payload, 0)}) as error_server:
+                    error_client = TreeDBClient(error_server.base_url, timeout=1)
+                    with self.assertRaisesRegex(TreeDBProtocolError, "proof does not match the request") as caught:
+                        error_client.query_by_embedding(
+                            "docs", [1, 0], 1, query_mode="quantized_rerank",
+                            quantized_index_name="embedding.scalar_u8.public",
+                        )
+                    self.assertIsNone(caught.exception.dense_work)
+                    self.assertEqual(caught.exception.score_plane, result.score_plane)
+                    error_client.close()
+            mismatched_error_payload = copy.deepcopy(error_payload)
+            mismatched_error_payload["error"]["score_plane"]["quantized_index_name"] = "embedding.scalar_u8.other"
+            for status in (200, 503):
+                with self.subTest(mismatched_error_status=status), \
+                     FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (status, mismatched_error_payload, 0)}) as error_server:
+                    error_client = TreeDBClient(error_server.base_url, timeout=1)
+                    with self.assertRaisesRegex(TreeDBProtocolError, "proof does not match the request") as caught:
+                        error_client.query_by_embedding(
+                            "docs", [1, 0], 1, query_mode="quantized_rerank",
+                            quantized_index_name="embedding.scalar_u8.public",
+                        )
+                    self.assertIsNotNone(caught.exception.dense_work)
+                    self.assertIsNotNone(caught.exception.score_plane)
+                    error_client.close()
+            empty_manifest = replace(
+                result.score_plane.snapshot.base_manifest,
+                generation=0, format="", version=0, checksum=0,
+            )
+            unavailable_snapshot = replace(
+                result.score_plane.snapshot,
+                available=False, schema_hash=0, schema_generation=0,
+                base_manifest=empty_manifest, current_manifest=empty_manifest,
+                base_coverage_lsn=0, current_coverage_lsn=0,
+            )
+            unavailable_graph = replace(
+                result.dense_work.graph,
+                available=False, completed=False, route="",
+                base_ann_scored=0, base_candidates=0, base_edges=0, delta_scored=0,
+                exact_base_scored=0, base_shadowed=0, base_result_ids=0,
+                snapshot=unavailable_snapshot,
+            )
+            for name, changed_proof, changed_work, request in (
+                ("mode", replace(result.score_plane, requested_mode="exact"), result.dense_work, {}),
+                ("proof unavailable", replace(result.score_plane, available=False), result.dense_work, {}),
+                ("graph unavailable", result.score_plane,
+                    replace(result.dense_work, graph=unavailable_graph), {}),
+                ("proof snapshot unavailable", replace(result.score_plane, snapshot=unavailable_snapshot),
+                    result.dense_work, {}),
+                ("graph snapshot unavailable", result.score_plane,
+                    replace(result.dense_work, graph=replace(result.dense_work.graph, snapshot=unavailable_snapshot)), {}),
+                ("index name", replace(result.score_plane, quantized_index_name="embedding.scalar_u8.other"), result.dense_work, {}),
+                ("top k", replace(result.score_plane, requested_top_k=2), result.dense_work, {}),
+                ("EF", replace(result.score_plane, requested_ef_search=2), result.dense_work, {}),
+                ("rerank limit", replace(result.score_plane, requested_rerank_candidates=2), result.dense_work, {}),
+                ("future generation", replace(result.score_plane,
+                    snapshot=replace(result.score_plane.snapshot, schema_generation=2)), result.dense_work,
+                    {"expected_generation": 1}),
+                ("sibling snapshot", replace(result.score_plane,
+                    snapshot=replace(result.score_plane.snapshot, schema_hash=2)), result.dense_work, {}),
+                ("unexpected filter", result.score_plane, replace(result.dense_work,
+                    graph=replace(result.dense_work.graph, filter=replace(
+                        result.dense_work.graph.filter, attempted=True, completed=True, eligible_rows=4097))), {}),
+                ("missing requested filter work", result.score_plane, result.dense_work,
+                    {"filter": {"field": "meta.repo", "operator": "==", "value": "gomap"}}),
+            ):
+                error = IndexUnavailableError(
+                    "index_unavailable", "budget", dense_work=changed_work, score_plane=changed_proof,
+                )
+                with self.subTest(error_request_binding=name), \
+                     mock.patch.object(client, "_request", side_effect=error), \
+                     self.assertRaisesRegex(TreeDBProtocolError, "proof does not match the request") as caught:
+                    client.query_by_embedding(
+                        "docs", [1, 0], 1, query_mode="quantized_rerank",
+                        quantized_index_name="embedding.scalar_u8.public", **request,
+                    )
+                self.assertIsNotNone(caught.exception.dense_work)
+                self.assertIsNotNone(caught.exception.score_plane)
+
+            partial_proof = replace(
+                result.score_plane, completed=False, reason="scoring interrupted",
+                quantized_code_bytes_read=0, exact_base_vector_bytes_read=0,
+            )
+            partial_work = replace(
+                result.dense_work, completed=False,
+                graph=replace(result.dense_work.graph, completed=False),
+                output=replace(
+                    result.dense_work.output,
+                    attempted=False, completed=False, requested=0, fetched=0, missing=0, output_bytes=0,
+                    retained_payload_fetches=0, json_reconstruction_rows=0, typed_column_rows=0,
+                ),
+            )
+            missing_reason_proof = asdict(partial_proof)
+            missing_reason_proof["reason"] = ""
+            with self.assertRaisesRegex(ValueError, "incomplete dense score-plane proof has no reason"):
+                DenseScorePlaneProof.from_dict(missing_reason_proof)
+            missing_reason_error = {
+                "error": {
+                    "code": "index_unavailable",
+                    "message": "budget",
+                    "dense_work": asdict(partial_work),
+                    "score_plane": missing_reason_proof,
+                }
+            }
+            for status in (200, 503):
+                decoder = client._decode_success if status == 200 else client._decode_error
+                with self.subTest(missing_reason_status=status), \
+                     self.assertRaisesRegex(TreeDBProtocolError, "score-plane error proof") as caught:
+                    decoder(
+                        status,
+                        json.dumps(missing_reason_error).encode(),
+                        dense_proof=True,
+                        dense_score_plane=True,
+                    )
+                self.assertEqual(caught.exception.dense_work, partial_work)
+                self.assertIsNone(caught.exception.score_plane)
+            partial_error = IndexUnavailableError(
+                "index_unavailable", "budget", dense_work=partial_work, score_plane=partial_proof,
+            )
+            with mock.patch.object(client, "_request", side_effect=partial_error), \
+                 self.assertRaises(IndexUnavailableError) as caught:
+                client.query_by_embedding(
+                    "docs", [1, 0], 1, query_mode="quantized_rerank",
+                    quantized_index_name="embedding.scalar_u8.public",
+                )
+            self.assertIs(caught.exception, partial_error)
+
+            post_search = replace(
+                result.dense_work,
+                completed=False,
+                output=replace(
+                    result.dense_work.output,
+                    attempted=False, completed=False, requested=0, fetched=0, missing=0, output_bytes=0,
+                    retained_payload_fetches=0, json_reconstruction_rows=0, typed_column_rows=0,
+                ),
+            )
+            partial_fetch = replace(
+                post_search,
+                output=replace(post_search.output, attempted=True, requested=1, retained_payload_fetches=1, typed_column_rows=1),
+            )
+            completed_fetch_missing = replace(
+                post_search,
+                output=replace(post_search.output, attempted=True, completed=True, requested=1, missing=1),
+            )
+            for name, candidate in (
+                ("post-search before fetch", post_search),
+                ("partial fetch", partial_fetch),
+                ("completed fetch missing", completed_fetch_missing),
+            ):
+                error = IndexUnavailableError(
+                    "index_unavailable", name, dense_work=candidate, score_plane=result.score_plane,
+                )
+                with self.subTest(valid_completion_prefix=name), mock.patch.object(client, "_request", side_effect=error), \
+                     self.assertRaises(IndexUnavailableError) as caught:
+                    client.query_by_embedding(
+                        "docs", [1, 0], 1, query_mode="quantized_rerank",
+                        quantized_index_name="embedding.scalar_u8.public",
+                    )
+                self.assertIs(caught.exception, error)
+
+            proof_incomplete = replace(result.score_plane, completed=False, reason="scoring interrupted")
+
+            def with_advanced_frontier(candidate_work, candidate_proof):
+                snapshot = candidate_proof.snapshot
+                if snapshot.current_manifest.generation != snapshot.base_manifest.generation:
+                    return candidate_work, candidate_proof
+                advanced = replace(
+                    snapshot,
+                    current_manifest=replace(
+                        snapshot.current_manifest,
+                        generation=snapshot.current_manifest.generation + 1,
+                        checksum=snapshot.current_manifest.checksum + 1,
+                    ),
+                    current_coverage_lsn=snapshot.current_coverage_lsn + 1,
+                )
+                return (
+                    replace(candidate_work, graph=replace(candidate_work.graph, snapshot=advanced)),
+                    replace(candidate_proof, snapshot=advanced),
+                )
+
+            def incomplete_prefix(graph_route):
+                candidate_work, candidate_proof = partial_work, partial_proof
+                if graph_route in ("", "typed_empty"):
+                    candidate_work = replace(candidate_work, graph=replace(
+                        candidate_work.graph, route=graph_route,
+                        base_ann_scored=0, base_candidates=0, base_edges=0, delta_scored=0,
+                        exact_base_scored=0, base_shadowed=0, base_result_ids=0,
+                    ))
+                    candidate_proof = replace(
+                        candidate_proof, route="quantized_rerank" if not graph_route else "typed_empty",
+                        raw_retained_candidates=0, live_shortlist_candidates=0, actual_rerank_candidates=0,
+                        quantized_score_calls=0, quantized_code_bytes_read=0,
+                        exact_base_rerank_score_calls=0, exact_small_filter_score_calls=0,
+                        exact_suffix_score_calls=0, exact_base_vector_bytes_read=0,
+                        exact_suffix_vector_bytes_read=0,
+                    )
+                elif graph_route == "typed_exact":
+                    candidate_work = replace(candidate_work, graph=replace(
+                        candidate_work.graph, route="typed_exact", base_ann_scored=0,
+                        exact_base_scored=0, base_result_ids=0, delta_scored=1,
+                    ))
+                    candidate_proof = replace(
+                        candidate_proof, route="typed_exact", quantized_score_calls=0,
+                        raw_retained_candidates=0, live_shortlist_candidates=0, actual_rerank_candidates=0,
+                        quantized_code_bytes_read=0, exact_base_rerank_score_calls=0,
+                        exact_small_filter_score_calls=0, exact_suffix_score_calls=1,
+                        exact_base_vector_bytes_read=0, exact_suffix_vector_bytes_read=8,
+                    )
+                    candidate_work, candidate_proof = with_advanced_frontier(
+                        candidate_work, candidate_proof
+                    )
+                return candidate_work, candidate_proof
+
+            prefixes = {route: incomplete_prefix(route) for route in ("", "typed_empty", "typed_exact", "typed_hnsw")}
+            prefixes["typed_hnsw"] = with_advanced_frontier(*prefixes["typed_hnsw"])
+            zero_width_work, zero_width_proof = prefixes["typed_exact"]
+            zero_width_proof = replace(
+                zero_width_proof,
+                normalized_candidate_width=0, raw_candidate_width=0, rerank_candidate_cap=0,
+            )
+            prefixes["typed_exact_zero_width"] = (zero_width_work, zero_width_proof)
+            for route, (candidate_work, candidate_proof) in prefixes.items():
+                error = IndexUnavailableError(
+                    "index_unavailable", "valid prefix", dense_work=candidate_work, score_plane=candidate_proof,
+                )
+                with self.subTest(valid_counter_prefix=route), mock.patch.object(client, "_request", side_effect=error), \
+                     self.assertRaises(IndexUnavailableError) as caught:
+                    client.query_by_embedding(
+                        "docs", [1, 0], 1, query_mode="quantized_rerank",
+                        quantized_index_name="embedding.scalar_u8.public",
+                    )
+                self.assertIs(caught.exception, error)
+
+            def counter_failure(candidate_work, candidate_proof, field):
+                if field == "quantized":
+                    return candidate_work, replace(
+                        candidate_proof, quantized_score_calls=candidate_proof.quantized_score_calls + 1)
+                if field == "exact base":
+                    return replace(candidate_work, graph=replace(
+                        candidate_work.graph, exact_base_scored=candidate_work.graph.exact_base_scored + 1)), candidate_proof
+                if field == "base result IDs":
+                    return replace(candidate_work, graph=replace(
+                        candidate_work.graph, base_result_ids=candidate_work.graph.base_result_ids + 1)), candidate_proof
+                if field == "suffix":
+                    candidate_work, candidate_proof = with_advanced_frontier(
+                        candidate_work, candidate_proof
+                    )
+                    return candidate_work, replace(
+                        candidate_proof, exact_suffix_score_calls=candidate_proof.exact_suffix_score_calls + 1)
+                return candidate_work, replace(
+                    candidate_proof, exact_base_rerank_score_calls=(1 << 64) - 1,
+                    exact_small_filter_score_calls=1)
+
+            counter_prefix_failures = tuple(
+                (f"prefix counters {route or 'empty'} {field}", *counter_failure(*prefixes[route], field))
+                for route in ("", "typed_exact", "typed_hnsw")
+                for field in ("quantized", "exact base", "base result IDs", "suffix", "overflow")
+            )
+            prefix_work, prefix_proof = prefixes["typed_hnsw"]
+            zero_width_work, zero_width_proof = prefixes["typed_exact_zero_width"]
+            prefix_shape_failures = (
+                ("prefix shape base candidates exceed quantized calls", replace(
+                    prefix_work, graph=replace(
+                        prefix_work.graph, base_candidates=prefix_proof.quantized_score_calls + 1)), prefix_proof),
+                ("prefix shape rerank cap does not match plan", prefix_work, replace(
+                    prefix_proof, rerank_candidate_cap=prefix_proof.rerank_candidate_cap - 1)),
+                ("prefix shape normalized width exceeds explicit EF", prefix_work, replace(
+                    prefix_proof, normalized_candidate_width=9, raw_candidate_width=9, rerank_candidate_cap=8)),
+                ("prefix shape normalized width exceeds raw width", prefix_work, replace(
+                    prefix_proof, raw_candidate_width=prefix_proof.raw_candidate_width - 1)),
+                ("prefix shape raw retained exceeds quantized calls", prefix_work, replace(
+                    prefix_proof, raw_candidate_width=3, raw_retained_candidates=3)),
+                ("prefix shape raw retained exceeds raw width", replace(
+                    prefix_work, graph=replace(prefix_work.graph, base_ann_scored=3)), replace(
+                        prefix_proof, quantized_score_calls=3, raw_retained_candidates=3)),
+                ("prefix shape live shortlist exceeds raw retained", prefix_work, replace(
+                    prefix_proof, normalized_candidate_width=3, raw_candidate_width=3,
+                    rerank_candidate_cap=3, live_shortlist_candidates=3)),
+                ("prefix shape live shortlist exceeds normalized width", replace(
+                    prefix_work, graph=replace(prefix_work.graph, base_ann_scored=3)), replace(
+                        prefix_proof, quantized_score_calls=3, raw_candidate_width=3,
+                        raw_retained_candidates=3, live_shortlist_candidates=3)),
+                ("prefix shape actual rerank exceeds shortlist", replace(
+                    prefix_work, graph=replace(
+                        prefix_work.graph, base_ann_scored=3, exact_base_scored=3, base_result_ids=3)), replace(
+                            prefix_proof, normalized_candidate_width=3, raw_candidate_width=3,
+                            rerank_candidate_cap=3, raw_retained_candidates=3, quantized_score_calls=3,
+                            actual_rerank_candidates=3, exact_base_rerank_score_calls=3)),
+                ("prefix shape actual rerank exceeds cap", replace(
+                    prefix_work, graph=replace(prefix_work.graph, exact_base_scored=3, base_result_ids=3)), replace(
+                        prefix_proof, actual_rerank_candidates=3, exact_base_rerank_score_calls=3)),
+                ("prefix shape actual rerank differs from exact base calls", replace(
+                    prefix_work, graph=replace(prefix_work.graph, exact_base_scored=0, base_result_ids=0)), replace(
+                        prefix_proof, exact_base_rerank_score_calls=0)),
+                ("zero-width prefix raw candidate width", zero_width_work, replace(
+                    zero_width_proof, raw_candidate_width=1)),
+                ("zero-width prefix base scoring", replace(
+                    zero_width_work, graph=replace(
+                        zero_width_work.graph, delta_scored=0, exact_base_scored=1, base_result_ids=1)), replace(
+                            zero_width_proof, exact_suffix_score_calls=0, exact_small_filter_score_calls=1)),
+                ("zero-width prefix base shadowing", replace(
+                    zero_width_work, graph=replace(zero_width_work.graph, base_shadowed=1)), zero_width_proof),
+            )
+            route_empty_incomplete, route_empty_proof = prefixes[""]
+            completion_prefix_failures = (
+                ("proof complete graph incomplete", replace(post_search, graph=replace(post_search.graph, completed=False)), result.score_plane),
+                ("graph complete proof incomplete", post_search, proof_incomplete),
+                ("route", replace(post_search, graph=replace(post_search.graph, route="typed_exact")), result.score_plane),
+                ("snapshot", post_search, replace(result.score_plane, snapshot=replace(result.score_plane.snapshot, schema_hash=2))),
+                ("filter ownership", replace(post_search, graph=replace(post_search.graph, filter=pre_owner_filter)), result.score_plane),
+                ("graph counters", replace(post_search, graph=replace(post_search.graph, base_ann_scored=2)), result.score_plane),
+                ("planning counters", post_search, replace(result.score_plane, rerank_candidate_cap=0)),
+                ("byte counters", post_search, replace(result.score_plane, quantized_code_bytes_read=1)),
+                ("output requested", replace(post_search, output=replace(post_search.output, attempted=True)), result.score_plane),
+                ("fetched beyond retained", replace(post_search, output=replace(post_search.output, attempted=True, requested=1, fetched=1, json_reconstruction_rows=1)), result.score_plane),
+                ("retained plus missing", replace(post_search, output=replace(post_search.output, attempted=True, requested=1, missing=1, retained_payload_fetches=1)), result.score_plane),
+                ("JSON rows", replace(post_search, output=replace(post_search.output, attempted=True, requested=1, fetched=1, retained_payload_fetches=1)), result.score_plane),
+                ("typed rows", replace(post_search, output=replace(post_search.output, attempted=True, requested=1, typed_column_rows=1)), result.score_plane),
+                ("bytes before fetch", replace(post_search, output=replace(post_search.output, attempted=True, requested=1, output_bytes=1)), result.score_plane),
+                ("completed partial output", replace(post_search, output=replace(post_search.output, attempted=True, completed=True, requested=1)), result.score_plane),
+                ("outer complete before output", replace(post_search, completed=True), result.score_plane),
+                ("proof unavailable", partial_work, replace(partial_proof, available=False)),
+                ("graph unavailable", replace(partial_work, graph=unavailable_graph), partial_proof),
+                ("proof snapshot unavailable", partial_work, replace(partial_proof, snapshot=unavailable_snapshot)),
+                ("graph snapshot unavailable", replace(
+                    partial_work, graph=replace(partial_work.graph, snapshot=unavailable_snapshot)), partial_proof),
+                ("incomplete route", replace(post_search, graph=replace(post_search.graph, completed=False, route="typed_exact")), proof_incomplete),
+                ("empty graph typed-empty proof", route_empty_incomplete, replace(proof_incomplete, route="typed_empty")),
+                ("empty graph typed-exact proof", route_empty_incomplete, replace(proof_incomplete, route="typed_exact")),
+            ) + counter_prefix_failures + prefix_shape_failures
+            for name, candidate_work, candidate_proof in completion_prefix_failures:
+                error = IndexUnavailableError(
+                    "index_unavailable", name, dense_work=candidate_work, score_plane=candidate_proof,
+                )
+                with self.subTest(invalid_completion_prefix=name), mock.patch.object(client, "_request", side_effect=error), \
+                     self.assertRaisesRegex(TreeDBProtocolError, "proof does not match the request") as caught:
+                    client.query_by_embedding(
+                        "docs", [1, 0], 1, query_mode="quantized_rerank",
+                        quantized_index_name="embedding.scalar_u8.public",
+                    )
+                self.assertEqual(caught.exception.dense_work, candidate_work)
+                self.assertEqual(caught.exception.score_plane, candidate_proof)
+
+            route_empty_error = IndexUnavailableError(
+                "index_unavailable", "route empty", dense_work=route_empty_incomplete, score_plane=route_empty_proof,
+            )
+            with mock.patch.object(client, "_request", side_effect=route_empty_error), \
+                 self.assertRaises(IndexUnavailableError) as caught:
+                client.query_by_embedding(
+                    "docs", [1, 0], 1, query_mode="quantized_rerank",
+                    quantized_index_name="embedding.scalar_u8.public",
+                )
+            self.assertIs(caught.exception, route_empty_error)
+
+            completion_prefix_by_name = {
+                name: (candidate_work, candidate_proof)
+                for name, candidate_work, candidate_proof in completion_prefix_failures
+            }
+            http_failure_names = (
+                "proof complete graph incomplete", "graph complete proof incomplete", "route", "snapshot",
+                "byte counters", "output requested", "proof unavailable", "graph unavailable",
+                "proof snapshot unavailable", "graph snapshot unavailable", "incomplete route",
+                "empty graph typed-empty proof", "empty graph typed-exact proof",
+                "prefix counters empty quantized", "prefix counters typed_exact exact base",
+                "prefix counters typed_hnsw suffix", "prefix counters typed_hnsw overflow",
+            ) + tuple(name for name, _, _ in prefix_shape_failures)
+            http_completion_cases = (
+                ("post-search before fetch", post_search, result.score_plane, False),
+                ("partial fetch", partial_fetch, result.score_plane, False),
+                ("completed fetch missing", completed_fetch_missing, result.score_plane, False),
+            ) + tuple(
+                (name, *completion_prefix_by_name[name], True)
+                for name in http_failure_names
+            )
+            for status in (200, 503):
+                for name, candidate_work, candidate_proof, rejected in http_completion_cases:
+                    error_payload = {"error": {
+                        "code": "index_unavailable", "message": name,
+                        "dense_work": asdict(candidate_work), "score_plane": asdict(candidate_proof),
+                    }}
+                    with self.subTest(http_completion_status=status, completion_prefix=name), \
+                         FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (status, error_payload, 0)}) as error_server:
+                        error_client = TreeDBClient(error_server.base_url, timeout=1)
+                        error_type = TreeDBProtocolError if rejected else IndexUnavailableError
+                        expected = "proof does not match the request" if rejected else "index_unavailable"
+                        with self.assertRaisesRegex(error_type, expected) as caught:
+                            error_client.query_by_embedding(
+                                "docs", [1, 0], 1, query_mode="quantized_rerank",
+                                quantized_index_name="embedding.scalar_u8.public",
+                            )
+                        self.assertEqual(caught.exception.dense_work, candidate_work)
+                        self.assertEqual(caught.exception.score_plane, candidate_proof)
+                        error_client.close()
+
+            for proof_name, field in (
+                ("dense_work", "manifest identity"),
+                ("dense_work", "coverage"),
+                ("dense_work", "delta score"),
+                ("dense_work", "shadowed base"),
+                ("score_plane", "manifest identity"),
+                ("score_plane", "coverage"),
+                ("score_plane", "suffix score"),
+                ("score_plane", "suffix bytes"),
+                ("score_plane", "shadow allowance"),
+            ):
+                hostile_error = {
+                    "error": {
+                        "code": "index_unavailable",
+                        "message": "hostile unchanged frontier",
+                        "dense_work": asdict(result.dense_work),
+                        "score_plane": asdict(result.score_plane),
+                    }
+                }
+                target = hostile_error["error"][proof_name]
+                snapshot = target["graph"]["snapshot"] if proof_name == "dense_work" else target["snapshot"]
+                if field == "manifest identity":
+                    snapshot["current_manifest"]["checksum"] += 1
+                elif field == "coverage":
+                    snapshot["current_coverage_lsn"] += 1
+                elif field == "delta score":
+                    target["graph"]["delta_scored"] = 1
+                elif field == "shadowed base":
+                    target["graph"]["base_shadowed"] = 1
+                elif field == "suffix score":
+                    target["exact_suffix_score_calls"] = 1
+                elif field == "suffix bytes":
+                    target["exact_suffix_vector_bytes_read"] = 8
+                else:
+                    target["raw_candidate_width"] = target["normalized_candidate_width"] + 1
+                with self.subTest(http_unchanged_error=(proof_name, field)), \
+                     FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (503, hostile_error, 0)}) as hostile_server:
+                    hostile_client = TreeDBClient(hostile_server.base_url, timeout=1)
+                    with self.assertRaisesRegex(
+                            TreeDBProtocolError, "dense score-plane proof does not match the request on error") as caught:
+                        hostile_client.query_by_embedding(
+                            "docs", [1, 0], 1, query_mode="quantized_rerank",
+                            quantized_index_name="embedding.scalar_u8.public",
+                        )
+                    if proof_name == "dense_work":
+                        self.assertIsNone(caught.exception.dense_work)
+                        self.assertEqual(caught.exception.score_plane, result.score_plane)
+                    else:
+                        self.assertEqual(caught.exception.dense_work, result.dense_work)
+                        self.assertIsNone(caught.exception.score_plane)
+                    hostile_client.close()
+
+            completed_work_only_error = IndexUnavailableError(
+                "index_unavailable", "budget", dense_work=result.dense_work,
+            )
+            with mock.patch.object(client, "_request", side_effect=completed_work_only_error), \
+                 self.assertRaisesRegex(TreeDBProtocolError, "proof does not match the request") as caught:
+                client.query_by_embedding(
+                    "docs", [1, 0], 1, query_mode="quantized_rerank",
+                    quantized_index_name="embedding.scalar_u8.public",
+                )
+            self.assertEqual(caught.exception.dense_work, result.dense_work)
+            self.assertIsNone(caught.exception.score_plane)
+
+            malformed = TreeDBProtocolError(
+                "malformed success", dense_work=result.dense_work,
+                score_plane=replace(result.score_plane, requested_top_k=2),
+            )
+            with mock.patch.object(client, "_request", side_effect=malformed), \
+                 self.assertRaisesRegex(TreeDBProtocolError, "proof does not match the request"):
+                client.query_by_embedding(
+                    "docs", [1, 0], 1, query_mode="quantized_rerank",
+                    quantized_index_name="embedding.scalar_u8.public",
+                )
+            filtered_payload = copy.deepcopy(payload)
+            filtered_payload["dense_work"]["graph"]["base_candidates"] = 1
+            filtered_payload["dense_work"]["graph"]["filter"].update(attempted=True, completed=True, eligible_rows=4097)
+            filtered_payload["documents"][0]["meta"] = {"repo": "gomap"}
+            with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, filtered_payload, 0)}) as filtered_server:
+                filtered_client = TreeDBClient(filtered_server.base_url, timeout=1)
+                filtered_result = filtered_client.query_by_embedding(
+                    "docs", [1, 0], 1, filter={"field": "meta.repo", "operator": "==", "value": "gomap"},
+                    query_mode="quantized_rerank", quantized_index_name="embedding.scalar_u8.public",
+                )
+                self.assertEqual(filtered_result.documents[0].id, "a")
+                filtered_client.close()
+            raw_filtered = json.dumps(filtered_payload, separators=(",", ":")).encode("utf-8")
+            duplicate_filter_field = raw_filtered.replace(
+                b'"meta":{"repo":"gomap"}',
+                b'"meta":{"repo":"other","repo":"gomap"}',
+                1,
+            )
+            nested_payload = copy.deepcopy(filtered_payload)
+            nested_payload["documents"][0]["meta"]["items"] = [{"rank": 2}]
+            duplicate_nested_field = json.dumps(nested_payload, separators=(",", ":")).encode("utf-8").replace(
+                b'"rank":2', b'"rank":1,"rank":2', 1,
+            )
+            for name, raw_payload in (
+                ("filter field", duplicate_filter_field),
+                ("nested list object", duplicate_nested_field),
+            ):
+                with self.subTest(http_duplicate_metadata_field=name), \
+                     FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, raw_payload, 0)}) as hostile_server:
+                    hostile_client = TreeDBClient(hostile_server.base_url, timeout=1)
+                    with self.assertRaisesRegex(
+                        TreeDBProtocolError, "duplicate field in dense proof envelope"
+                    ) as caught:
+                        hostile_client.query_by_embedding(
+                            "docs", [1, 0], 1,
+                            filter={"field": "meta.repo", "operator": "==", "value": "gomap"},
+                            query_mode="quantized_rerank",
+                            quantized_index_name="embedding.scalar_u8.public",
+                        )
+                    self.assertIsNotNone(caught.exception.dense_work)
+                    self.assertIsNotNone(caught.exception.score_plane)
+                    hostile_client.close()
+            for name, meta in (("mismatching", {"repo": "other"}), ("missing", {})):
+                hostile_filtered_payload = copy.deepcopy(filtered_payload)
+                hostile_filtered_payload["documents"][0]["meta"] = meta
+                with self.subTest(http_filter_result=name), \
+                     FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, hostile_filtered_payload, 0)}) as hostile_server:
+                    hostile_client = TreeDBClient(hostile_server.base_url, timeout=1)
+                    with self.assertRaisesRegex(
+                        TreeDBProtocolError, "does not satisfy the request filter"
+                    ) as caught:
+                        hostile_client.query_by_embedding(
+                            "docs", [1, 0], 1,
+                            filter={"field": "meta.repo", "operator": "==", "value": "gomap"},
+                            query_mode="quantized_rerank",
+                            quantized_index_name="embedding.scalar_u8.public",
+                        )
+                    self.assertIsNotNone(caught.exception.dense_work)
+                    self.assertIsNotNone(caught.exception.score_plane)
+                    hostile_client.close()
+            numeric_filtered_payload = copy.deepcopy(filtered_payload)
+            numeric_filtered_payload["documents"][0]["meta"] = {"number": (1 << 53) + 1}
+            with FixtureServer({
+                ("POST", "/v1/indexes/docs/search/vector"): (200, numeric_filtered_payload, 0),
+            }) as hostile_server:
+                hostile_client = TreeDBClient(hostile_server.base_url, timeout=1)
+                with self.assertRaisesRegex(
+                    TreeDBProtocolError, "does not satisfy the request filter"
+                ) as caught:
+                    hostile_client.query_by_embedding(
+                        "docs", [1, 0], 1,
+                        filter={"field": "meta.number", "operator": "==", "value": 1 << 53},
+                        query_mode="quantized_rerank",
+                        quantized_index_name="embedding.scalar_u8.public",
+                    )
+                self.assertIsNotNone(caught.exception.dense_work)
+                self.assertIsNotNone(caught.exception.score_plane)
+                hostile_client.close()
+            filtered_underreported = copy.deepcopy(filtered_payload)
+            filtered_underreported["dense_work"]["graph"]["base_candidates"] = 0
+            with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, filtered_underreported, 0)}) as filtered_server:
+                filtered_client = TreeDBClient(filtered_server.base_url, timeout=1)
+                with self.assertRaisesRegex(TreeDBProtocolError, "score-plane proof"):
+                    filtered_client.query_by_embedding(
+                        "docs", [1, 0], 1,
+                        filter={"field": "meta.repo", "operator": "==", "value": "gomap"},
+                        query_mode="quantized_rerank", quantized_index_name="embedding.scalar_u8.public",
+                    )
+                filtered_client.close()
+            filtered_exact = copy.deepcopy(filtered_payload)
+            filtered_exact["dense_work"]["graph"].update(
+                route="typed_exact", base_ann_scored=0, base_candidates=0,
+                exact_base_scored=1, base_result_ids=1,
+            )
+            filtered_exact["dense_work"]["graph"]["filter"]["eligible_rows"] = 1
+            filtered_exact["score_plane"].update(
+                route="typed_exact", raw_retained_candidates=0, live_shortlist_candidates=0,
+                actual_rerank_candidates=0, quantized_score_calls=0, quantized_code_bytes_read=0,
+                exact_base_rerank_score_calls=0, exact_small_filter_score_calls=1,
+                exact_base_vector_bytes_read=8,
+            )
+            with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, filtered_exact, 0)}) as filtered_exact_server:
+                filtered_exact_client = TreeDBClient(filtered_exact_server.base_url, timeout=1)
+                self.assertEqual(
+                    filtered_exact_client.query_by_embedding(
+                        "docs", [1, 0], 1,
+                        filter={"field": "meta.repo", "operator": "==", "value": "gomap"},
+                        query_mode="quantized_rerank",
+                        quantized_index_name="embedding.scalar_u8.public",
+                    ).documents[0].id,
+                    "a",
+                )
+                filtered_exact_client.close()
+            zero_width_filtered_exact = copy.deepcopy(filtered_exact)
+            zero_width_filtered_exact["dense_work"]["graph"].update(
+                delta_scored=1, exact_base_scored=0, base_shadowed=0, base_result_ids=0,
+            )
+            zero_width_filtered_exact["score_plane"].update(
+                normalized_candidate_width=0, raw_candidate_width=0, rerank_candidate_cap=0,
+                exact_small_filter_score_calls=0, exact_base_vector_bytes_read=0,
+                exact_suffix_score_calls=1, exact_suffix_vector_bytes_read=8,
+            )
+            for target in (
+                zero_width_filtered_exact["dense_work"]["graph"]["snapshot"],
+                zero_width_filtered_exact["score_plane"]["snapshot"],
+            ):
+                target["current_manifest"] = {
+                    **target["base_manifest"],
+                    "generation": target["base_manifest"]["generation"] + 1,
+                    "checksum": target["base_manifest"]["checksum"] + 1,
+                }
+                target["current_coverage_lsn"] = target["base_coverage_lsn"] + 1
+            with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, zero_width_filtered_exact, 0)}) as zero_width_server:
+                zero_width_client = TreeDBClient(zero_width_server.base_url, timeout=1)
+                self.assertEqual(
+                    zero_width_client.query_by_embedding(
+                        "docs", [1, 0], 1,
+                        filter={"field": "meta.repo", "operator": "==", "value": "gomap"},
+                        query_mode="quantized_rerank",
+                        quantized_index_name="embedding.scalar_u8.public",
+                    ).documents[0].id,
+                    "a",
+                )
+                zero_width_client.close()
+            zero_width_hostiles = []
+            zero_width_raw = copy.deepcopy(zero_width_filtered_exact)
+            zero_width_raw["score_plane"]["raw_candidate_width"] = 1
+            zero_width_hostiles.append(("raw candidate width", zero_width_raw))
+            zero_width_base_score = copy.deepcopy(zero_width_filtered_exact)
+            zero_width_base_score["dense_work"]["graph"].update(
+                delta_scored=0, exact_base_scored=1, base_result_ids=1,
+            )
+            zero_width_base_score["score_plane"].update(
+                exact_small_filter_score_calls=1, exact_base_vector_bytes_read=8,
+                exact_suffix_score_calls=0, exact_suffix_vector_bytes_read=0,
+            )
+            zero_width_hostiles.append(("base scoring", zero_width_base_score))
+            zero_width_shadow = copy.deepcopy(zero_width_filtered_exact)
+            zero_width_shadow["dense_work"]["graph"]["base_shadowed"] = 1
+            zero_width_hostiles.append(("base shadowing", zero_width_shadow))
+            for name, hostile in zero_width_hostiles:
+                if name != "base shadowing":
+                    with self.subTest(zero_width_parser=name), self.assertRaises(ValueError):
+                        DenseScorePlaneProof.from_dict(hostile["score_plane"])
+                with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, hostile, 0)}) as hostile_server:
+                    hostile_client = TreeDBClient(hostile_server.base_url, timeout=1)
+                    with self.subTest(zero_width=name), self.assertRaisesRegex(TreeDBProtocolError, "score-plane proof"):
+                        hostile_client.query_by_embedding(
+                            "docs", [1, 0], 1,
+                            filter={"field": "meta.repo", "operator": "==", "value": "gomap"},
+                            query_mode="quantized_rerank",
+                            quantized_index_name="embedding.scalar_u8.public",
+                        )
+                    hostile_client.close()
+            oversized_filtered_exact = copy.deepcopy(filtered_exact)
+            oversized_filtered_exact["dense_work"]["graph"]["filter"]["eligible_rows"] = 4097
+            with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, oversized_filtered_exact, 0)}) as oversized_server:
+                oversized_client = TreeDBClient(oversized_server.base_url, timeout=1)
+                with self.assertRaisesRegex(TreeDBProtocolError, "score-plane proof"):
+                    oversized_client.query_by_embedding(
+                        "docs", [1, 0], 1,
+                        filter={"field": "meta.repo", "operator": "==", "value": "gomap"},
+                        query_mode="quantized_rerank",
+                        quantized_index_name="embedding.scalar_u8.public",
+                    )
+                oversized_client.close()
+            underfilled_filter = copy.deepcopy(filtered_payload)
+            underfilled_filter["dense_work"]["graph"]["filter"]["eligible_rows"] = 2
+            underfilled_filter["score_plane"].update(
+                requested_top_k=2, normalized_candidate_width=2, raw_candidate_width=2, rerank_candidate_cap=2,
+            )
+            with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, underfilled_filter, 0)}) as underfilled_server:
+                underfilled_client = TreeDBClient(underfilled_server.base_url, timeout=1)
+                with self.assertRaisesRegex(TreeDBProtocolError, "score-plane proof"):
+                    underfilled_client.query_by_embedding(
+                        "docs", [1, 0], 2, filter={"field": "meta.repo", "operator": "==", "value": "gomap"},
+                        query_mode="quantized_rerank", quantized_index_name="embedding.scalar_u8.public",
+                    )
+                underfilled_client.close()
+            over_scored_filter = copy.deepcopy(filtered_payload)
+            over_scored_filter["dense_work"]["graph"].update(
+                route="typed_exact", base_ann_scored=0, exact_base_scored=2, base_result_ids=2
+            )
+            over_scored_filter["dense_work"]["graph"]["filter"]["eligible_rows"] = 1
+            over_scored_filter["score_plane"].update(
+                route="typed_exact",
+                raw_retained_candidates=0,
+                live_shortlist_candidates=0,
+                actual_rerank_candidates=0,
+                quantized_score_calls=0,
+                quantized_code_bytes_read=0,
+                exact_base_rerank_score_calls=0,
+                exact_small_filter_score_calls=2,
+                exact_base_vector_bytes_read=16,
+            )
+            with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, over_scored_filter, 0)}) as over_scored_server:
+                over_scored_client = TreeDBClient(over_scored_server.base_url, timeout=1)
+                with self.assertRaisesRegex(TreeDBProtocolError, "score-plane proof"):
+                    over_scored_client.query_by_embedding(
+                        "docs", [1, 0], 1, filter={"field": "meta.repo", "operator": "==", "value": "gomap"},
+                        query_mode="quantized_rerank", quantized_index_name="embedding.scalar_u8.public",
+                    )
+                over_scored_client.close()
+            with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, payload, 0)}) as missing_filter_server:
+                missing_filter_client = TreeDBClient(missing_filter_server.base_url, timeout=1)
+                with self.assertRaisesRegex(TreeDBProtocolError, "score-plane proof"):
+                    missing_filter_client.query_by_embedding(
+                        "docs", [1, 0], 1, filter={"field": "meta.repo", "operator": "==", "value": "gomap"},
+                        query_mode="quantized_rerank", quantized_index_name="embedding.scalar_u8.public",
+                    )
+                missing_filter_client.close()
+            stale_generation = copy.deepcopy(payload)
+            stale_generation["index"]["generation"] = 2
+            with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, stale_generation, 0)}) as stale_server:
+                stale_client = TreeDBClient(stale_server.base_url, timeout=1)
+                with self.assertRaisesRegex(TreeDBProtocolError, "score-plane proof"):
+                    stale_client.query_by_embedding(
+                        "docs", [1, 0], 1, query_mode="quantized_rerank",
+                        quantized_index_name="embedding.scalar_u8.public", expected_generation=1,
+                    )
+                stale_client.close()
+            with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, payload, 0)}) as exact_proof_server:
+                exact_proof_client = TreeDBClient(exact_proof_server.base_url, timeout=1)
+                with self.assertRaisesRegex(TreeDBProtocolError, "score-plane proof"):
+                    exact_proof_client.query_by_embedding("docs", [1, 0], 1, query_mode="exact")
+                exact_proof_client.close()
+            reversed_coverage = copy.deepcopy(payload)
+            reversed_snapshot = {**snapshot, "base_coverage_lsn": 100, "current_coverage_lsn": 1}
+            reversed_coverage["dense_work"]["graph"]["snapshot"] = reversed_snapshot
+            reversed_coverage["score_plane"]["snapshot"] = copy.deepcopy(reversed_snapshot)
+            with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, reversed_coverage, 0)}) as reversed_server:
+                reversed_client = TreeDBClient(reversed_server.base_url, timeout=1)
+                with self.assertRaisesRegex(TreeDBProtocolError, "snapshot coverage"):
+                    reversed_client.query_by_embedding(
+                        "docs", [1, 0], 1, query_mode="quantized_rerank",
+                        quantized_index_name="embedding.scalar_u8.public",
+                    )
+                reversed_client.close()
+            reversed_manifest = copy.deepcopy(payload)
+            reversed_manifest_snapshot = copy.deepcopy(snapshot)
+            reversed_manifest_snapshot["base_manifest"] = {**manifest, "generation": 2}
+            reversed_manifest_snapshot["current_manifest"] = {**manifest, "generation": 1}
+            reversed_manifest["dense_work"]["graph"]["snapshot"] = reversed_manifest_snapshot
+            reversed_manifest["score_plane"]["snapshot"] = copy.deepcopy(reversed_manifest_snapshot)
+            with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, reversed_manifest, 0)}) as reversed_server:
+                reversed_client = TreeDBClient(reversed_server.base_url, timeout=1)
+                with self.assertRaisesRegex(TreeDBProtocolError, "manifest generation"):
+                    reversed_client.query_by_embedding(
+                        "docs", [1, 0], 1, query_mode="quantized_rerank",
+                        quantized_index_name="embedding.scalar_u8.public",
+                    )
+                reversed_client.close()
+            for proof_name in ("dense_work", "score_plane"):
+                mismatched_identity = copy.deepcopy(payload)
+                if proof_name == "dense_work":
+                    target = copy.deepcopy(mismatched_identity[proof_name]["graph"]["snapshot"])
+                    mismatched_identity[proof_name]["graph"]["snapshot"] = target
+                else:
+                    target = copy.deepcopy(mismatched_identity[proof_name]["snapshot"])
+                    mismatched_identity[proof_name]["snapshot"] = target
+                target["current_manifest"] = copy.deepcopy(target["base_manifest"])
+                target["current_manifest"]["checksum"] += 1
+                with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, mismatched_identity, 0)}) as identity_server:
+                    identity_client = TreeDBClient(identity_server.base_url, timeout=1)
+                    with self.subTest(equal_generation_manifest_identity=proof_name), self.assertRaisesRegex(
+                            TreeDBProtocolError, "score-plane proof"):
+                        identity_client.query_by_embedding(
+                            "docs", [1, 0], 1, query_mode="quantized_rerank",
+                            quantized_index_name="embedding.scalar_u8.public",
+                        )
+                    identity_client.close()
+            for proof_name in ("dense_work", "score_plane"):
+                mismatched_coverage = copy.deepcopy(payload)
+                if proof_name == "dense_work":
+                    target = copy.deepcopy(mismatched_coverage[proof_name]["graph"]["snapshot"])
+                    mismatched_coverage[proof_name]["graph"]["snapshot"] = target
+                else:
+                    target = copy.deepcopy(mismatched_coverage[proof_name]["snapshot"])
+                    mismatched_coverage[proof_name]["snapshot"] = target
+                target["current_manifest"] = copy.deepcopy(target["base_manifest"])
+                target["current_coverage_lsn"] = target["base_coverage_lsn"] + 1
+                with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, mismatched_coverage, 0)}) as coverage_server:
+                    coverage_client = TreeDBClient(coverage_server.base_url, timeout=1)
+                    with self.subTest(equal_manifest_coverage=proof_name), self.assertRaisesRegex(
+                            TreeDBProtocolError, "score-plane proof"):
+                        coverage_client.query_by_embedding(
+                            "docs", [1, 0], 1, query_mode="quantized_rerank",
+                            quantized_index_name="embedding.scalar_u8.public",
+                        )
+                    coverage_client.close()
+            for proof_name, field, value in (
+                ("dense_work", "delta_scored", 1),
+                ("dense_work", "base_shadowed", 1),
+                ("score_plane", "exact_suffix_score_calls", 1),
+                ("score_plane", "exact_suffix_vector_bytes_read", 8),
+                ("score_plane", "raw_candidate_width", 2),
+            ):
+                unchanged_frontier_work = copy.deepcopy(payload)
+                target = (
+                    unchanged_frontier_work[proof_name]["graph"]
+                    if proof_name == "dense_work"
+                    else unchanged_frontier_work[proof_name]
+                )
+                target[field] = value
+                with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, unchanged_frontier_work, 0)}) as frontier_server:
+                    frontier_client = TreeDBClient(frontier_server.base_url, timeout=1)
+                    with self.subTest(unchanged_manifest_work=(proof_name, field)), self.assertRaisesRegex(
+                            TreeDBProtocolError, "score-plane proof"):
+                        frontier_client.query_by_embedding(
+                            "docs", [1, 0], 1, query_mode="quantized_rerank",
+                            quantized_index_name="embedding.scalar_u8.public",
+                        )
+                    frontier_client.close()
+            newer_aggregate = copy.deepcopy(payload)
+            newer_aggregate["index"]["generation"] = 2
+            with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, newer_aggregate, 0)}) as aggregate_server:
+                aggregate_client = TreeDBClient(aggregate_server.base_url, timeout=1)
+                aggregate_result = aggregate_client.query_by_embedding(
+                    "docs", [1, 0], 1, query_mode="quantized_rerank",
+                    quantized_index_name="embedding.scalar_u8.public",
+                )
+                self.assertEqual(aggregate_result.index.generation, 2)
+                aggregate_client.close()
+            newer_snapshot_generation = copy.deepcopy(payload)
+            newer_snapshot_generation["dense_work"]["graph"]["snapshot"]["schema_generation"] = 2
+            newer_snapshot_generation["score_plane"]["snapshot"]["schema_generation"] = 2
+            with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, newer_snapshot_generation, 0)}) as generation_server:
+                generation_client = TreeDBClient(generation_server.base_url, timeout=1)
+                with self.assertRaisesRegex(TreeDBProtocolError, "score-plane proof"):
+                    generation_client.query_by_embedding(
+                        "docs", [1, 0], 1, query_mode="quantized_rerank",
+                        quantized_index_name="embedding.scalar_u8.public",
+                    )
+                generation_client.close()
+            for invalid_generation in (0, -1, 1 << 64):
+                invalid_index_generation = copy.deepcopy(payload)
+                invalid_index_generation["index"]["generation"] = invalid_generation
+                with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, invalid_index_generation, 0)}) as generation_server:
+                    generation_client = TreeDBClient(generation_server.base_url, timeout=1)
+                    with self.subTest(invalid_index_generation=invalid_generation), self.assertRaisesRegex(TreeDBProtocolError, "score-plane proof"):
+                        generation_client.query_by_embedding(
+                            "docs", [1, 0], 1, query_mode="quantized_rerank",
+                            quantized_index_name="embedding.scalar_u8.public",
+                        )
+                    generation_client.close()
+            for field in ("schema_hash", "schema_generation", "base_coverage_lsn"):
+                missing_snapshot_identity = copy.deepcopy(payload)
+                missing_snapshot_identity["dense_work"]["graph"]["snapshot"][field] = 0
+                missing_snapshot_identity["score_plane"]["snapshot"][field] = 0
+                with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, missing_snapshot_identity, 0)}) as identity_server:
+                    identity_client = TreeDBClient(identity_server.base_url, timeout=1)
+                    with self.subTest(missing_snapshot_identity=field), self.assertRaises(TreeDBProtocolError):
+                        identity_client.query_by_embedding(
+                            "docs", [1, 0], 1, query_mode="quantized_rerank",
+                            quantized_index_name="embedding.scalar_u8.public",
+                        )
+                    identity_client.close()
+            for field in ("generation", "version", "checksum"):
+                incomplete_manifest = copy.deepcopy(payload)
+                incomplete_manifest["dense_work"]["graph"]["snapshot"]["base_manifest"][field] = 0
+                incomplete_manifest["score_plane"]["snapshot"]["base_manifest"][field] = 0
+                with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, incomplete_manifest, 0)}) as manifest_server:
+                    manifest_client = TreeDBClient(manifest_server.base_url, timeout=1)
+                    with self.subTest(incomplete_manifest=field), self.assertRaises(TreeDBProtocolError):
+                        manifest_client.query_by_embedding(
+                            "docs", [1, 0], 1, query_mode="quantized_rerank",
+                            quantized_index_name="embedding.scalar_u8.public",
+                        )
+                    manifest_client.close()
+            unsupported_manifest = copy.deepcopy(payload)
+            unsupported_manifest["dense_work"]["graph"]["snapshot"]["base_manifest"]["version"] = 2
+            unsupported_manifest["score_plane"]["snapshot"]["base_manifest"]["version"] = 2
+            with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, unsupported_manifest, 0)}) as manifest_server:
+                manifest_client = TreeDBClient(manifest_server.base_url, timeout=1)
+                with self.assertRaises(TreeDBProtocolError):
+                    manifest_client.query_by_embedding(
+                        "docs", [1, 0], 1, query_mode="quantized_rerank",
+                        quantized_index_name="embedding.scalar_u8.public",
+                    )
+                manifest_client.close()
+            for name, item_id in (
+                ("empty", ""),
+                ("whitespace only", " \t"),
+                ("leading whitespace", " a"),
+                ("trailing whitespace", "a "),
+                ("Unicode whitespace", "\u2000a"),
+                ("lone surrogate", "\ud800"),
+            ):
+                invalid_id = copy.deepcopy(payload)
+                invalid_id["documents"][0]["id"] = item_id
+                with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, invalid_id, 0)}) as invalid_id_server:
+                    invalid_id_client = TreeDBClient(invalid_id_server.base_url, timeout=1)
+                    with self.subTest(invalid_id=name), self.assertRaisesRegex(TreeDBProtocolError, "score-plane proof") as caught:
+                        invalid_id_client.query_by_embedding(
+                            "docs", [1, 0], 1, query_mode="quantized_rerank",
+                            quantized_index_name="embedding.scalar_u8.public",
+                        )
+                    self.assertIsNotNone(caught.exception.dense_work)
+                    self.assertIsNotNone(caught.exception.score_plane)
+                    invalid_id_client.close()
+            boundary_id = copy.deepcopy(payload)
+            boundary_id["documents"][0]["id"] = "\x1ca"
+            with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, boundary_id, 0)}) as boundary_server:
+                boundary_client = TreeDBClient(boundary_server.base_url, timeout=1)
+                boundary_result = boundary_client.query_by_embedding(
+                    "docs", [1, 0], 1, query_mode="quantized_rerank",
+                    quantized_index_name="embedding.scalar_u8.public",
+                )
+                self.assertEqual(boundary_result.documents[0].id, "\x1ca")
+                boundary_client.close()
+            for mutation in (
+                lambda item: item.update(exact=True),
+                lambda item: item.update(dense_work={**dense_work, "graph": {**dense_work["graph"], "route": "typed_exact"}}),
+                lambda item: item.update(score_plane={**score_plane, "snapshot": {**snapshot, "schema_hash": 2}}),
+                lambda item: item.update(
+                    dense_work={**dense_work, "graph": {**dense_work["graph"], "route": "typed_empty"}},
+                    score_plane={**score_plane, "route": "typed_empty"},
+                ),
+                lambda item: item.update(metric="l2"),
+                lambda item: item.update(native_base_plus_live_delta=True),
+                lambda item: item.update(exact_fallbacks=1),
+                lambda item: item.update(full_document_scan_fallbacks=1),
+                lambda item: item.update(primary_document_scans=1),
+                lambda item: item.update(dense_work={**dense_work, "graph": {**dense_work["graph"], "filter": {**dense_work["graph"]["filter"], "attempted": True, "completed": True, "eligible_rows": 1}}}),
+                lambda item: item.update(score_plane={**score_plane, "quantized_score_calls": 2}),
+                lambda item: item.update(dense_work={**dense_work, "graph": {**dense_work["graph"], "base_candidates": 2}}),
+                lambda item: item.update(dense_work={**dense_work, "graph": {**dense_work["graph"], "base_edges": 1}}),
+                lambda item: item.update(dense_work={**dense_work, "graph": {**dense_work["graph"], "base_shadowed": 1}}),
+                lambda item: item.update(score_plane={**score_plane, "exact_base_rerank_score_calls": 0, "exact_small_filter_score_calls": 1}),
+                lambda item: item.update(score_plane={**score_plane, "reason": "stale error"}),
+                lambda item: item.update(score_plane={
+                    **score_plane,
+                    "normalized_candidate_width": 0,
+                    "raw_candidate_width": 0,
+                    "rerank_candidate_cap": 0,
+                    "raw_retained_candidates": 0,
+                    "live_shortlist_candidates": 0,
+                    "actual_rerank_candidates": 0,
+                    "exact_base_rerank_score_calls": 0,
+                    "exact_base_vector_bytes_read": 0,
+                }),
+                lambda item: item.update(score_plane={**score_plane, "quantized_code_bytes_read": 0}),
+                lambda item: item.update(score_plane={**score_plane, "exact_base_vector_bytes_read": 0}),
+                lambda item: item.update(score_plane={**score_plane, "exact_suffix_vector_bytes_read": 1}),
+                lambda item: item.update(score_plane={**score_plane, "quantized_config_hash": 1}),
+                lambda item: item.update(index={**typed_index, "quantized_indexes": [{"name": "embedding.scalar_u8.public", "codec": "scalar_u8", "version": 0}]}),
+                lambda item: item.update(index={**typed_index, "quantized_indexes": [{"name": "embedding.scalar_u8.public", "codec": "", "version": 1}]}),
+                lambda item: item.update(score_plane={**score_plane, "requested_ef_search": 1, "normalized_candidate_width": 2, "raw_candidate_width": 2, "rerank_candidate_cap": 2, "raw_retained_candidates": 2, "live_shortlist_candidates": 2, "actual_rerank_candidates": 2}),
+                lambda item: item.update(candidates=2),
+                lambda item: item.update(score_plane={**score_plane, "raw_retained_candidates": 2, "quantized_score_calls": 1}),
+                lambda item: item.update(dense_work={**dense_work, "graph": {**dense_work["graph"], "base_result_ids": 0}}),
+                lambda item: item.update(dense_work={**dense_work, "output": {**dense_work["output"], "retained_payload_fetches": 0}}),
+                lambda item: item.update(dense_work={**dense_work, "output": {**dense_work["output"], "json_reconstruction_rows": 0}}),
+                lambda item: item.update(dense_work={**dense_work, "output": {**dense_work["output"], "typed_column_rows": 2}}),
+                lambda item: item.update(index={
+                    **typed_index,
+                    "quantized_indexes": [{
+                        "name": "embedding.scalar_u8.public",
+                        "codec": "scalar_u8",
+                        "version": 1,
+                        "scalar_u8_calibration": {"mode": "legacy", "grouping": "per_granule"},
+                    }],
+                }),
+                lambda item: item.update(index={
+                    **typed_index,
+                    "quantized_indexes": [{
+                        "name": "embedding.scalar_u8.public",
+                        "codec": "scalar_u8",
+                        "version": 1,
+                        "scalar_u8_calibration": {
+                            "mode": "legacy",
+                            "alpha_policy": {"name": "quantile", "quantile_ppm": 999000},
+                        },
+                    }],
+                }),
+                lambda item: item.update(
+                    dense_work={**dense_work, "graph": {**dense_work["graph"], "route": "typed_exact"}},
+                    score_plane={**score_plane, "route": "typed_exact", "quantized_score_calls": 0, "raw_retained_candidates": 1,
+                                 "live_shortlist_candidates": 0, "actual_rerank_candidates": 0, "exact_base_rerank_score_calls": 0},
+                ),
+                lambda item: item.update(
+                    dense_work={**dense_work, "graph": {**dense_work["graph"], "route": "typed_empty"}},
+                    score_plane={**score_plane, "route": "typed_empty", "quantized_score_calls": 0, "raw_retained_candidates": 0,
+                                 "live_shortlist_candidates": 1, "actual_rerank_candidates": 0, "exact_base_rerank_score_calls": 0,
+                                 "exact_suffix_score_calls": 0, "exact_small_filter_score_calls": 0},
+                ),
+            ):
+                invalid = copy.deepcopy(payload)
+                mutation(invalid)
+                with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, invalid, 0)}) as bad_server:
+                    bad_client = TreeDBClient(bad_server.base_url, timeout=1)
+                    with self.assertRaisesRegex(TreeDBProtocolError, "score-plane proof"):
+                        bad_client.query_by_embedding(
+                            "docs", [1, 0], 1, query_mode="quantized_rerank", quantized_index_name="embedding.scalar_u8.public"
+                        )
+                    bad_client.close()
+            wrong_dimension = copy.deepcopy(payload)
+            wrong_dimension["index"]["dimension"] = 1
+            wrong_dimension["score_plane"].update(quantized_code_bytes_read=1, exact_base_vector_bytes_read=4)
+            with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, wrong_dimension, 0)}) as dimension_server:
+                dimension_client = TreeDBClient(dimension_server.base_url, timeout=1)
+                with self.assertRaisesRegex(TreeDBProtocolError, "score-plane proof"):
+                    dimension_client.query_by_embedding(
+                        "docs", [1, 0], 1, query_mode="quantized_rerank",
+                        quantized_index_name="embedding.scalar_u8.public",
+                    )
+                dimension_client.close()
+            for bad_score in (None, float("nan"), -100, 100):
+                invalid_score = copy.deepcopy(payload)
+                invalid_score["documents"][0]["score"] = bad_score
+                with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, invalid_score, 0)}) as score_server:
+                    score_client = TreeDBClient(score_server.base_url, timeout=1)
+                    with self.assertRaisesRegex(TreeDBProtocolError, "score-plane proof"):
+                        score_client.query_by_embedding(
+                            "docs", [1, 0], 1, query_mode="quantized_rerank",
+                            quantized_index_name="embedding.scalar_u8.public",
+                        )
+                    score_client.close()
+            duplicate = copy.deepcopy(payload)
+            duplicate["documents"] = [copy.deepcopy(payload["documents"][0]), copy.deepcopy(payload["documents"][0])]
+            duplicate["candidates"] = 2
+            duplicate["document_materialization_rows"] = 2
+            duplicate["dense_work"]["graph"].update(base_ann_scored=2, exact_base_scored=2, base_result_ids=2)
+            duplicate["dense_work"]["output"].update(requested=2, fetched=2, output_bytes=2, retained_payload_fetches=2, json_reconstruction_rows=2, typed_column_rows=2)
+            duplicate["score_plane"].update(
+                requested_top_k=2,
+                normalized_candidate_width=2,
+                raw_candidate_width=2,
+                rerank_candidate_cap=2,
+                raw_retained_candidates=2,
+                live_shortlist_candidates=2,
+                actual_rerank_candidates=2,
+                quantized_score_calls=2,
+                quantized_code_bytes_read=4,
+                exact_base_rerank_score_calls=2,
+                exact_base_vector_bytes_read=16,
+            )
+            with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, duplicate, 0)}) as duplicate_server:
+                duplicate_client = TreeDBClient(duplicate_server.base_url, timeout=1)
+                with self.assertRaisesRegex(TreeDBProtocolError, "score-plane proof"):
+                    duplicate_client.query_by_embedding(
+                        "docs", [1, 0], 2, query_mode="quantized_rerank",
+                        quantized_index_name="embedding.scalar_u8.public",
+                    )
+                duplicate_client.close()
+            for name, documents in (
+                ("ascending score", [
+                    {"id": "a", "content": "alpha", "score": 0.1},
+                    {"id": "b", "content": "beta", "score": 0.9},
+                ]),
+                ("descending ID tie", [
+                    {"id": "b", "content": "beta", "score": 0.5},
+                    {"id": "a", "content": "alpha", "score": 0.5},
+                ]),
+            ):
+                out_of_order = copy.deepcopy(duplicate)
+                out_of_order["documents"] = documents
+                with self.subTest(name=name), FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, out_of_order, 0)}) as order_server:
+                    order_client = TreeDBClient(order_server.base_url, timeout=1)
+                    with self.assertRaisesRegex(TreeDBProtocolError, "score-plane proof"):
+                        order_client.query_by_embedding(
+                            "docs", [1, 0], 2, query_mode="quantized_rerank",
+                            quantized_index_name="embedding.scalar_u8.public",
+                        )
+                    order_client.close()
+            under_cap = copy.deepcopy(duplicate)
+            under_cap["score_plane"]["rerank_candidate_cap"] = 1
+            with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, under_cap, 0)}) as under_cap_server:
+                under_cap_client = TreeDBClient(under_cap_server.base_url, timeout=1)
+                with self.assertRaisesRegex(TreeDBProtocolError, "score-plane proof"):
+                    under_cap_client.query_by_embedding(
+                        "docs", [1, 0], 2, query_mode="quantized_rerank",
+                        quantized_index_name="embedding.scalar_u8.public",
+                    )
+                under_cap_client.close()
+            underfill = copy.deepcopy(duplicate)
+            underfill["documents"] = [copy.deepcopy(duplicate["documents"][0])]
+            underfill["candidates"] = 1
+            underfill["document_materialization_rows"] = 1
+            underfill["dense_work"]["output"].update(requested=1, fetched=1, output_bytes=1, retained_payload_fetches=1, json_reconstruction_rows=1, typed_column_rows=1)
+            with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, underfill, 0)}) as underfill_server:
+                underfill_client = TreeDBClient(underfill_server.base_url, timeout=1)
+                with self.assertRaisesRegex(TreeDBProtocolError, "score-plane proof"):
+                    underfill_client.query_by_embedding(
+                        "docs", [1, 0], 2, query_mode="quantized_rerank",
+                        quantized_index_name="embedding.scalar_u8.public",
+                    )
+                underfill_client.close()
+            exact_route = copy.deepcopy(payload)
+            exact_route["dense_work"]["graph"].update(
+                route="typed_exact", base_ann_scored=0, base_candidates=0, delta_scored=1,
+                exact_base_scored=0, base_shadowed=0, base_result_ids=0,
+            )
+            exact_route["score_plane"].update(
+                route="typed_exact", normalized_candidate_width=0, raw_candidate_width=0,
+                rerank_candidate_cap=0, raw_retained_candidates=0, live_shortlist_candidates=0,
+                actual_rerank_candidates=0, quantized_score_calls=0, quantized_code_bytes_read=0,
+                exact_base_rerank_score_calls=0, exact_base_vector_bytes_read=0,
+                exact_suffix_score_calls=1,
+                exact_suffix_vector_bytes_read=8,
+            )
+            for target in (
+                exact_route["dense_work"]["graph"]["snapshot"],
+                exact_route["score_plane"]["snapshot"],
+            ):
+                target["current_manifest"] = {
+                    **target["base_manifest"],
+                    "generation": target["base_manifest"]["generation"] + 1,
+                    "checksum": target["base_manifest"]["checksum"] + 1,
+                }
+                target["current_coverage_lsn"] = target["base_coverage_lsn"] + 1
+            with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, exact_route, 0)}) as exact_server:
+                exact_client = TreeDBClient(exact_server.base_url, timeout=1)
+                self.assertEqual(
+                    exact_client.query_by_embedding(
+                        "docs", [1, 0], 1, query_mode="quantized_rerank",
+                        quantized_index_name="embedding.scalar_u8.public",
+                    ).documents[0].id,
+                    "a",
+                )
+                exact_client.close()
+            exact_mutations = []
+            exact_with_plan = copy.deepcopy(exact_route)
+            exact_with_plan["score_plane"].update(
+                normalized_candidate_width=1, raw_candidate_width=1, rerank_candidate_cap=1,
+            )
+            exact_mutations.append(exact_with_plan)
+            exact_with_small_filter = copy.deepcopy(exact_route)
+            exact_with_small_filter["dense_work"]["graph"].update(exact_base_scored=1, base_result_ids=1)
+            exact_with_small_filter["score_plane"].update(
+                exact_small_filter_score_calls=1, exact_base_vector_bytes_read=8,
+            )
+            exact_mutations.append(exact_with_small_filter)
+            exact_with_shadow = copy.deepcopy(exact_route)
+            exact_with_shadow["dense_work"]["graph"]["base_shadowed"] = 1
+            exact_mutations.append(exact_with_shadow)
+            for invalid_exact in exact_mutations:
+                with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, invalid_exact, 0)}) as exact_server:
+                    exact_client = TreeDBClient(exact_server.base_url, timeout=1)
+                    with self.assertRaisesRegex(TreeDBProtocolError, "score-plane proof"):
+                        exact_client.query_by_embedding(
+                            "docs", [1, 0], 1, query_mode="quantized_rerank",
+                            quantized_index_name="embedding.scalar_u8.public",
+                        )
+                    exact_client.close()
+            valid_empty = copy.deepcopy(payload)
+            valid_empty["documents"] = []
+            valid_empty["candidates"] = 0
+            valid_empty["document_materialization_rows"] = 0
+            valid_empty["dense_work"]["graph"].update(
+                route="typed_empty", base_ann_scored=0, base_candidates=0, base_edges=0,
+                delta_scored=0, exact_base_scored=0, base_shadowed=0, base_result_ids=0,
+                filter={**dense_work["graph"]["filter"], "attempted": True, "completed": True, "eligible_rows": 0},
+            )
+            valid_empty["dense_work"]["output"].update(
+                requested=0, fetched=0, missing=0, output_bytes=0, retained_payload_fetches=0,
+                json_reconstruction_rows=0, typed_column_rows=0,
+            )
+            valid_empty["score_plane"].update(
+                route="typed_empty", normalized_candidate_width=1, raw_candidate_width=1,
+                rerank_candidate_cap=1, raw_retained_candidates=0, live_shortlist_candidates=0,
+                actual_rerank_candidates=0, quantized_score_calls=0, quantized_code_bytes_read=0,
+                exact_base_rerank_score_calls=0, exact_suffix_score_calls=0, exact_small_filter_score_calls=0,
+                exact_base_vector_bytes_read=0, exact_suffix_vector_bytes_read=0,
+            )
+            with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, valid_empty, 0)}) as empty_server:
+                empty_client = TreeDBClient(empty_server.base_url, timeout=1)
+                empty_result = empty_client.query_by_embedding(
+                    "docs", [1, 0], 1, filter={"field": "meta.repo", "operator": "==", "value": "gomap"},
+                    query_mode="quantized_rerank",
+                    quantized_index_name="embedding.scalar_u8.public",
+                )
+                self.assertEqual(empty_result.documents, [])
+                self.assertTrue(dense_quantized_response_work_matches(
+                    empty_result.dense_work, empty_result.score_plane, 1, 0, True,
+                ))
+                self.assertFalse(dense_quantized_response_work_matches(
+                    replace(empty_result.dense_work, output=replace(empty_result.dense_work.output, output_bytes=1)),
+                    empty_result.score_plane, 1, 0, True,
+                ))
+                empty_client.close()
+            nonzero_empty_output = copy.deepcopy(valid_empty)
+            nonzero_empty_output["dense_work"]["output"]["output_bytes"] = 1
+            with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, nonzero_empty_output, 0)}) as hostile_server:
+                hostile_client = TreeDBClient(hostile_server.base_url, timeout=1)
+                with self.assertRaisesRegex(TreeDBProtocolError, "score-plane proof"):
+                    hostile_client.query_by_embedding(
+                        "docs", [1, 0], 1, filter={"field": "meta.repo", "operator": "==", "value": "gomap"},
+                        query_mode="quantized_rerank",
+                        quantized_index_name="embedding.scalar_u8.public",
+                    )
+                hostile_client.close()
+            for filter_patch in (
+                {"attempted": False, "completed": False},
+                {"attempted": True, "completed": False},
+                {"attempted": True, "completed": True, "eligible_rows": 1},
+            ):
+                invalid_empty = copy.deepcopy(valid_empty)
+                invalid_empty["dense_work"]["graph"]["filter"].update(filter_patch)
+                with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, invalid_empty, 0)}) as empty_server:
+                    empty_client = TreeDBClient(empty_server.base_url, timeout=1)
+                    with self.assertRaises(TreeDBProtocolError):
+                        empty_client.query_by_embedding(
+                            "docs", [1, 0], 1, filter={"field": "meta.repo", "operator": "==", "value": "gomap"},
+                            query_mode="quantized_rerank",
+                            quantized_index_name="embedding.scalar_u8.public",
+                        )
+                    empty_client.close()
+            overflow = copy.deepcopy(payload)
+            overflow["documents"] = [
+                {"id": "a", "content": "alpha", "score": 1.0},
+                {"id": "b", "content": "beta", "score": 0.5},
+            ]
+            overflow["document_materialization_rows"] = 2
+            overflow["dense_work"]["output"].update(requested=2, fetched=2, output_bytes=2, retained_payload_fetches=2, json_reconstruction_rows=2, typed_column_rows=2)
+            with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, overflow, 0)}) as overflow_server:
+                overflow_client = TreeDBClient(overflow_server.base_url, timeout=1)
+                with self.assertRaisesRegex(TreeDBProtocolError, "score-plane proof"):
+                    overflow_client.query_by_embedding(
+                        "docs", [1, 0], 2, query_mode="quantized_rerank",
+                        quantized_index_name="embedding.scalar_u8.public",
+                    )
+                overflow_client.close()
+            capped = copy.deepcopy(payload)
+            capped["score_plane"].update(
+                requested_rerank_candidates=2,
+                rerank_candidate_cap=3,
+                raw_candidate_width=3,
+                raw_retained_candidates=3,
+                live_shortlist_candidates=3,
+                actual_rerank_candidates=3,
+            )
+            with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, capped, 0)}) as capped_server:
+                capped_client = TreeDBClient(capped_server.base_url, timeout=1)
+                with self.assertRaisesRegex(TreeDBProtocolError, "score-plane proof"):
+                    capped_client.query_by_embedding(
+                        "docs", [1, 0], 1, query_mode="quantized_rerank",
+                        quantized_index_name="embedding.scalar_u8.public", quantized_rerank_candidates=2,
+                    )
+                capped_client.close()
+            for mutation in (
+                lambda item: item["score_plane"].update(rerank_candidate_cap=2),
+                lambda item: item["score_plane"].update(live_shortlist_candidates=2),
+                lambda item: item["score_plane"].update(normalized_candidate_width=2),
+            ):
+                invalid = copy.deepcopy(payload)
+                mutation(invalid)
+                with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, invalid, 0)}) as bad_server:
+                    bad_client = TreeDBClient(bad_server.base_url, timeout=1)
+                    with self.assertRaisesRegex(TreeDBProtocolError, "score-plane proof"):
+                        bad_client.query_by_embedding(
+                            "docs", [1, 0], 1, query_mode="quantized_rerank", quantized_index_name="embedding.scalar_u8.public"
+                        )
+                    bad_client.close()
+            for mutation in (
+                lambda item: item["score_plane"].update(route="typed_empty", quantized_score_calls=0, exact_suffix_score_calls=1),
+                lambda item: item["score_plane"].update(route="typed_empty", quantized_score_calls=0, exact_small_filter_score_calls=1),
+                lambda item: item["score_plane"].update(route="typed_empty", quantized_score_calls=1),
+            ):
+                invalid = copy.deepcopy(payload)
+                invalid["dense_work"]["graph"]["route"] = "typed_empty"
+                invalid["dense_work"]["graph"]["base_ann_scored"] = invalid["dense_work"]["graph"]["exact_base_scored"] = invalid["dense_work"]["graph"]["delta_scored"] = 0
+                invalid["documents"] = []
+                invalid["document_materialization_rows"] = 0
+                invalid["dense_work"]["output"].update(requested=0, fetched=0, output_bytes=0, retained_payload_fetches=0, json_reconstruction_rows=0, typed_column_rows=0)
+                mutation(invalid)
+                with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, invalid, 0)}) as bad_server:
+                    bad_client = TreeDBClient(bad_server.base_url, timeout=1)
+                    with self.assertRaisesRegex(TreeDBProtocolError, "score-plane proof"):
+                        bad_client.query_by_embedding(
+                            "docs", [1, 0], 1, query_mode="quantized_rerank", quantized_index_name="embedding.scalar_u8.public"
+                        )
+                    bad_client.close()
 
 
     def test_benchmark_lifecycle_and_vector_index_search_methods(self) -> None:
@@ -1014,6 +2805,19 @@ class TreeDBClientTests(unittest.TestCase):
         for value in (-1, True, 1.5, "64"):
             with self.subTest(ef_search=value), self.assertRaisesRegex(InvalidRequestError, "ef_search"):
                 client.query_by_embedding("docs", [0.1], 1, route="ann", ef_search=value)
+
+    def test_typed_quantized_integer_validation_before_http(self) -> None:
+        client = TreeDBClient("http://127.0.0.1:9", timeout=1)
+        for value in (True, 1.5, "32", 1 << 63):
+            with self.subTest(rerank_candidates=value), self.assertRaisesRegex(InvalidRequestError, "quantized_rerank_candidates"):
+                client.query_by_embedding(
+                    "docs",
+                    [0.1, 0.2],
+                    1,
+                    query_mode="quantized_rerank",
+                    quantized_index_name="embedding.scalar_u8.fast",
+                    quantized_rerank_candidates=value,
+                )
 
     def test_keyword_and_hybrid_filter_bodies_serialize(self) -> None:
         routes = {

@@ -319,6 +319,10 @@ route locally using the existing request/response framing. Like 64/v1 it is
 LocalOnly, not a distributed or deterministic-entry contract. The v2 route tag
 does not complete measured typed-work/phase evidence qualification.
 
+Public typed legacy scalar-u8 rerank is the separate LocalOnly 64/v3 contract;
+it requires the typed capability and sibling score-plane proof and does not
+alter the distributed/deterministic command model.
+
 Implement richer single-node reads only after the core read/write and cursor
 model is stable:
 

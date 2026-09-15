@@ -22,10 +22,11 @@ var ErrServerClosed = errors.New("nativewire: server is closed")
 
 // WireError is an error response decoded from a remote native-wire peer.
 type WireError struct {
-	DenseWork *documentservice.DenseSearchWork
-	Code      iwire.ErrorCode
-	Retryable bool
-	Message   string
+	DenseWork  *documentservice.DenseSearchWork
+	ScorePlane *collections.ColumnGraphScorePlaneWork
+	Code       iwire.ErrorCode
+	Retryable  bool
+	Message    string
 }
 
 func (e *WireError) Error() string {

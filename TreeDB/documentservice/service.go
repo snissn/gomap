@@ -919,6 +919,11 @@ func (s *Service) SearchDenseVector(ctx context.Context, index string, req Dense
 	if req.EfSearch < 0 {
 		return DenseVectorSearchResponse{}, serviceError(CodeInvalidRequest, "ef_search must be non-negative")
 	}
+	if normalized, err := normalizeDenseQueryOptions(&req, info); err != nil {
+		return DenseVectorSearchResponse{}, err
+	} else {
+		req.QueryMode = normalized
+	}
 	if route == RouteAnn {
 		return s.searchDenseVectorAnn(ctx, col, info, req)
 	}
@@ -998,6 +1003,60 @@ func resolveDenseSearchRoute(req DenseVectorSearchRequest, info IndexInfo) (Rout
 	default:
 		return "", serviceErrorf(CodeInvalidRequest, "unsupported dense search route %q; use \"ann\" or \"exact\"", req.Route)
 	}
+}
+
+// normalizeDenseQueryOptions is the public typed-dense negotiation boundary.
+// It deliberately does not inherit the benchmark validator: benchmark
+// quantized-only and non-legacy codecs are not public typed capabilities.
+func normalizeDenseQueryOptions(req *DenseVectorSearchRequest, info IndexInfo) (collections.VectorIndexQueryMode, error) {
+	if req == nil {
+		return collections.VectorIndexQueryModeExact, serviceError(CodeInvalidRequest, "nil dense vector search request")
+	}
+	mode := collections.VectorIndexQueryMode(strings.TrimSpace(strings.ToLower(string(req.QueryMode))))
+	if mode == "" {
+		mode = collections.VectorIndexQueryModeExact
+	}
+	if req.QuantizedRerankCandidates < 0 {
+		return "", serviceError(CodeInvalidRequest, "quantized_rerank_candidates must be non-negative")
+	}
+	if mode == collections.VectorIndexQueryModeExact {
+		if req.QuantizedIndexName != "" || req.QuantizedRerankCandidates != 0 {
+			return "", serviceError(CodeInvalidRequest, "exact dense vector search does not accept quantized_index_name or quantized_rerank_candidates")
+		}
+		return mode, nil
+	}
+	if !info.TypedInput {
+		return "", serviceError(CodeUnsupported, "quantized dense vector search requires typed input")
+	}
+	if mode != collections.VectorIndexQueryModeQuantizedRerank {
+		return "", serviceErrorf(CodeUnsupported, "typed dense vector query_mode %q is unsupported", mode)
+	}
+	if req.QuantizedIndexName == "" {
+		return "", serviceError(CodeInvalidRequest, "quantized_rerank dense vector search requires quantized_index_name")
+	}
+	if !info.Capabilities.TypedDenseQuantizedRerank {
+		return "", serviceError(CodeUnsupported, "typed dense quantized rerank capability is unavailable")
+	}
+	if req.QuantizedRerankCandidates != 0 && req.QuantizedRerankCandidates < req.TopK {
+		return "", serviceErrorf(CodeInvalidRequest, "quantized_rerank_candidates=%d must be zero or at least top_k=%d", req.QuantizedRerankCandidates, req.TopK)
+	}
+	// The public metadata is the only service-owned declaration exposed here;
+	// require an exact legacy scalar-u8/v1 match before handing the request to
+	// the collection owner. Unknown names and unsupported codecs fail closed.
+	for _, q := range info.QuantizedIndexes {
+		if q.Name != req.QuantizedIndexName {
+			continue
+		}
+		codec := q.Codec
+		if codec == "" {
+			codec = collections.QuantizedVectorCodecScalarU8
+		}
+		if codec != collections.QuantizedVectorCodecScalarU8 || q.Version != 1 || q.ScalarU8Calibration != nil && q.ScalarU8Calibration.Mode != "" && q.ScalarU8Calibration.Mode != collections.ScalarU8CalibrationModeLegacy {
+			return "", serviceErrorf(CodeUnsupported, "typed dense quantized index %q is not the supported scalar_u8/v1 legacy asset", q.Name)
+		}
+		return mode, nil
+	}
+	return "", serviceErrorf(CodeInvalidRequest, "unknown quantized_index_name %q", req.QuantizedIndexName)
 }
 
 // ResetIndex creates a missing benchmark index or clears an existing compatible
@@ -1712,8 +1771,10 @@ func indexInfoFromMeta(meta collections.CollectionMeta) (IndexInfo, error) {
 	}
 	hybridSearch := vectorDef.Strategy == collections.VectorIndexStrategyColumnGraph && vectorDef.Metric == collections.VectorMetricCosine && vectorDef.Encoding == collections.VectorIndexEncodingFloat32
 	scalarFields := scalarFieldsFromCollectionIndexes(meta.Indexes)
+	typedInput := serviceUsesTypedInput(meta)
 	capabilities := indexCapabilities(vectorDef, hybridSearch)
-	if serviceUsesTypedInput(meta) {
+	if typedInput {
+		capabilities.TypedDenseQuantizedRerank = typedDenseQuantizedRerankCapabilityDeclared(vectorDef)
 		// The selected native planner may choose bounded exact scoring, but the
 		// separate public document-scan route is intentionally unavailable.
 		capabilities.ExactDenseScoring = false
@@ -1726,7 +1787,7 @@ func indexInfoFromMeta(meta collections.CollectionMeta) (IndexInfo, error) {
 	capabilities.KeywordMetadataFilters = len(scalarFields) > 0
 	capabilities.HybridMetadataFilters = len(scalarFields) > 0
 	return IndexInfo{
-		TypedInput:           serviceUsesTypedInput(meta),
+		TypedInput:           typedInput,
 		Name:                 meta.Name,
 		Dimension:            vectorDef.Dimensions,
 		Metric:               metric,

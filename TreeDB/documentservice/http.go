@@ -198,7 +198,7 @@ func (h *Handler) serveSearchOperation(w http.ResponseWriter, r *http.Request, i
 			writeError(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, res)
+		writeDenseVectorSearchJSON(w, res)
 	case "keyword":
 		var req KeywordSearchRequest
 		if !h.decodeJSON(w, r, maxBodyBytes, &req) {
@@ -286,6 +286,26 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
+	_, _ = w.Write(append(payload, '\n'))
+}
+
+func writeDenseVectorSearchJSON(w http.ResponseWriter, response DenseVectorSearchResponse) {
+	payload, err := json.Marshal(response)
+	if err != nil {
+		out := &Error{Code: CodeInternal, Message: "failed to encode response", Err: err}
+		if response.DenseWork != nil {
+			work := *response.DenseWork
+			out.DenseWork = &work
+		}
+		if response.ScorePlane != nil {
+			proof := *response.ScorePlane
+			out.ScorePlane = &proof
+		}
+		writeError(w, out)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(append(payload, '\n'))
 }
 
