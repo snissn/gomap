@@ -750,7 +750,12 @@ class TreeDBClientTests(unittest.TestCase):
                           "score_plane": malformed_score["score_plane"]}
             }
             with self.assertRaisesRegex(TreeDBProtocolError, "score-plane error proof") as caught:
-                client._decode_error(503, json.dumps(malformed_error_score).encode(), dense_proof=True)
+                client._decode_error(
+                    503,
+                    json.dumps(malformed_error_score).encode(),
+                    dense_proof=True,
+                    dense_score_plane=True,
+                )
             self.assertEqual(caught.exception.dense_work, result.dense_work)
             self.assertIsNone(caught.exception.score_plane)
             malformed_error_work = {
@@ -758,9 +763,45 @@ class TreeDBClientTests(unittest.TestCase):
                           "score_plane": score_plane}
             }
             with self.assertRaisesRegex(TreeDBProtocolError, "work proof") as caught:
-                client._decode_success(200, json.dumps(malformed_error_work).encode(), dense_proof=True)
+                client._decode_success(
+                    200,
+                    json.dumps(malformed_error_work).encode(),
+                    dense_proof=True,
+                    dense_score_plane=True,
+                )
             self.assertIsNone(caught.exception.dense_work)
             self.assertEqual(caught.exception.score_plane, result.score_plane)
+            error_payload = {
+                "error": {
+                    "code": "index_unavailable",
+                    "message": "budget",
+                    "dense_work": dense_work,
+                    "score_plane": score_plane,
+                }
+            }
+            for status in (200, 503):
+                with self.subTest(error_status=status, query_mode="exact"):
+                    with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (status, error_payload, 0)}) as error_server:
+                        error_client = TreeDBClient(error_server.base_url, timeout=1)
+                        with self.assertRaisesRegex(TreeDBProtocolError, "exact error unexpectedly includes") as caught:
+                            error_client.query_by_embedding("docs", [1, 0], 1, query_mode="exact")
+                        self.assertIsNotNone(caught.exception.dense_work)
+                        self.assertIsNone(caught.exception.score_plane)
+                        error_client.close()
+                with self.subTest(error_status=status, query_mode="quantized_rerank"):
+                    with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (status, error_payload, 0)}) as error_server:
+                        error_client = TreeDBClient(error_server.base_url, timeout=1)
+                        with self.assertRaises(IndexUnavailableError) as caught:
+                            error_client.query_by_embedding(
+                                "docs",
+                                [1, 0],
+                                1,
+                                query_mode="quantized_rerank",
+                                quantized_index_name="embedding.scalar_u8.public",
+                            )
+                        self.assertIsNotNone(caught.exception.dense_work)
+                        self.assertIsNotNone(caught.exception.score_plane)
+                        error_client.close()
             filtered_payload = copy.deepcopy(payload)
             filtered_payload["dense_work"]["graph"]["filter"].update(attempted=True, completed=True, eligible_rows=4097)
             with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, filtered_payload, 0)}) as filtered_server:

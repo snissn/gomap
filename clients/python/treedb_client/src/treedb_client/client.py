@@ -503,7 +503,13 @@ class TreeDBClient:
                 request["quantized_rerank_candidates"] = rerank_value
         _add_filter(request, filter)
         _add_expected_generation(request, expected_generation)
-        payload = self._request("POST", self._index_path(index, "search", "vector"), request, dense_proof=True)
+        payload = self._request(
+            "POST",
+            self._index_path(index, "search", "vector"),
+            request,
+            dense_proof=True,
+            dense_score_plane=mode == "quantized_rerank",
+        )
         response = _parse_response("vector search response", DenseVectorSearchResponse.from_dict, payload)
         if mode == "quantized_rerank":
             _validate_http_dense_quantized_response(
@@ -681,7 +687,14 @@ class TreeDBClient:
         return f"/v1/indexes/{encoded}"
 
     def _request(
-        self, method: str, path: str, body: Optional[Mapping[str, Any]] = None, *, retry_broken_connection: bool = False, dense_proof: bool = False
+        self,
+        method: str,
+        path: str,
+        body: Optional[Mapping[str, Any]] = None,
+        *,
+        retry_broken_connection: bool = False,
+        dense_proof: bool = False,
+        dense_score_plane: bool = False,
     ) -> Any:
         data: Optional[bytes] = None
         headers = {"Accept": "application/json"}
@@ -691,7 +704,15 @@ class TreeDBClient:
             except (TypeError, ValueError) as exc:
                 raise InvalidRequestError("invalid_request", f"request payload is not JSON-serializable: {exc}") from exc
             headers["Content-Type"] = "application/json"
-        return self._send_request(method, path, data, headers, retry_broken_connection=retry_broken_connection, dense_proof=dense_proof)
+        return self._send_request(
+            method,
+            path,
+            data,
+            headers,
+            retry_broken_connection=retry_broken_connection,
+            dense_proof=dense_proof,
+            dense_score_plane=dense_score_plane,
+        )
 
     def _request_bytes(
         self,
@@ -709,7 +730,15 @@ class TreeDBClient:
         return self._send_request(method, path, body, headers, retry_broken_connection=retry_broken_connection)
 
     def _send_request(
-        self, method: str, path: str, data: Optional[bytes], headers: Mapping[str, str], *, retry_broken_connection: bool = False, dense_proof: bool = False
+        self,
+        method: str,
+        path: str,
+        data: Optional[bytes],
+        headers: Mapping[str, str],
+        *,
+        retry_broken_connection: bool = False,
+        dense_proof: bool = False,
+        dense_score_plane: bool = False,
     ) -> Any:
         url = self.base_url + path
         if not retry_broken_connection or self._benchmark_uses_proxy:
@@ -718,7 +747,12 @@ class TreeDBClient:
                 try:
                     with self._opener.open(request, timeout=self.timeout) as response:
                         response_body = response.read()
-                        return self._decode_success(response.getcode(), response_body, dense_proof=dense_proof)
+                        return self._decode_success(
+                            response.getcode(),
+                            response_body,
+                            dense_proof=dense_proof,
+                            dense_score_plane=dense_score_plane,
+                        )
                 except urllib.error.HTTPError as exc:
                     try:
                         try:
@@ -731,7 +765,12 @@ class TreeDBClient:
                             raise TreeDBTransportError(f"TreeDB request to {url} failed: {read_exc}") from read_exc
                     finally:
                         exc.close()
-                    raise self._decode_error(exc.code, response_body, dense_proof=dense_proof) from None
+                    raise self._decode_error(
+                        exc.code,
+                        response_body,
+                        dense_proof=dense_proof,
+                        dense_score_plane=dense_score_plane,
+                    ) from None
                 except urllib.error.URLError as exc:
                     if retry_broken_connection and attempt == 0 and _is_broken_connection(exc.reason):
                         continue
@@ -751,8 +790,18 @@ class TreeDBClient:
                 try:
                     response_body = response.read()
                     if 200 <= response.status < 300:
-                        return self._decode_success(response.status, response_body, dense_proof=dense_proof)
-                    raise self._decode_error(response.status, response_body, dense_proof=dense_proof)
+                        return self._decode_success(
+                            response.status,
+                            response_body,
+                            dense_proof=dense_proof,
+                            dense_score_plane=dense_score_plane,
+                        )
+                    raise self._decode_error(
+                        response.status,
+                        response_body,
+                        dense_proof=dense_proof,
+                        dense_score_plane=dense_score_plane,
+                    )
                 finally:
                     response.close()
             except (
@@ -778,19 +827,37 @@ class TreeDBClient:
                 self._connection.close()
                 raise TreeDBTransportError(f"TreeDB request to {url} failed: {exc}") from exc
 
-    def _decode_success(self, status_code: int, body: bytes, *, dense_proof: bool = False) -> Any:
+    def _decode_success(
+        self,
+        status_code: int,
+        body: bytes,
+        *,
+        dense_proof: bool = False,
+        dense_score_plane: bool = False,
+    ) -> Any:
         decoded = _decode_json_body(body, status_code=status_code, dense_proof=dense_proof)
         if isinstance(decoded, Mapping) and "error" in decoded:
             error = decoded.get("error")
             if isinstance(error, Mapping):
                 code = str(error.get("code", "internal"))
                 message = str(error.get("message", ""))
-                work, score_plane = _error_dense_proofs(error) if dense_proof else (None, None)
+                work, score_plane = (
+                    _error_dense_proofs(error, score_plane_allowed=dense_score_plane)
+                    if dense_proof
+                    else (None, None)
+                )
                 raise service_error_from_code(code, message, status_code=status_code, response_body=_body_to_text(body), dense_work=work, score_plane=score_plane)
             raise TreeDBProtocolError("error envelope must contain an object", status_code=status_code, response_body=_body_to_text(body))
         return decoded
 
-    def _decode_error(self, status_code: int, body: bytes, *, dense_proof: bool = False) -> Exception:
+    def _decode_error(
+        self,
+        status_code: int,
+        body: bytes,
+        *,
+        dense_proof: bool = False,
+        dense_score_plane: bool = False,
+    ) -> Exception:
         decoded = _decode_json_body(body, status_code=status_code, dense_proof=dense_proof)
         if not isinstance(decoded, Mapping):
             return TreeDBProtocolError(
@@ -807,7 +874,11 @@ class TreeDBClient:
             )
         code = str(error.get("code", "internal"))
         message = str(error.get("message", ""))
-        work, score_plane = _error_dense_proofs(error) if dense_proof else (None, None)
+        work, score_plane = (
+            _error_dense_proofs(error, score_plane_allowed=dense_score_plane)
+            if dense_proof
+            else (None, None)
+        )
         return service_error_from_code(code, message, status_code=status_code, response_body=_body_to_text(body), dense_work=work, score_plane=score_plane)
 
 
@@ -1215,7 +1286,7 @@ def _decode_json_body(body: bytes, *, status_code: int, dense_proof: bool = Fals
         ) from exc
 
 
-def _error_dense_proofs(error):
+def _error_dense_proofs(error, *, score_plane_allowed):
     from ._dense_work import optional_dense_score_plane, optional_dense_work
     work = score_plane = None
     work_error = score_plane_error = None
@@ -1223,12 +1294,17 @@ def _error_dense_proofs(error):
         work = optional_dense_work(error.get("dense_work"))
     except (ValueError, TypeError, KeyError) as exc:
         work_error = exc
-    try:
-        score_plane = optional_dense_score_plane(error.get("score_plane"))
-    except (ValueError, TypeError, KeyError) as exc:
-        score_plane_error = exc
+    raw_score_plane = error.get("score_plane")
+    unexpected_score_plane = raw_score_plane is not None and not score_plane_allowed
+    if raw_score_plane is not None and score_plane_allowed:
+        try:
+            score_plane = optional_dense_score_plane(raw_score_plane)
+        except (ValueError, TypeError, KeyError) as exc:
+            score_plane_error = exc
     if work_error is not None:
         raise TreeDBProtocolError("invalid dense error work proof", score_plane=score_plane) from work_error
+    if unexpected_score_plane:
+        raise TreeDBProtocolError("dense HTTP exact error unexpectedly includes a score-plane proof", dense_work=work)
     if score_plane_error is not None:
         raise TreeDBProtocolError("invalid dense score-plane error proof", dense_work=work) from score_plane_error
     return work, score_plane
