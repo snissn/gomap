@@ -90,6 +90,45 @@ reopen measurements reuse the relevant population's frozen coordinate; the
 lifecycle empty probe reuses the all-rows coordinate. There is no
 same-coordinate graph retry or post-selection retuning.
 
+For every overlap/lifecycle request, the validator derives live base rows `B`,
+shadowed original rows `S`, and live suffix rows `D` from the authored whole-batch
+state. Exact suffix work must equal `D`. A filtered request may use either the
+request-local current-postings plan over `B` or the cached immutable-base plan
+over `B+S`; candidate widths and observed shadow work must match that same plan.
+Unfiltered search has only the immutable-base alternative. This distinction also
+preserves the producer's suffix-only exact route when a current filtered plan has
+no base rows, even if its live suffix is larger than the normal exact threshold.
+
+The full SQ8 diagnostic also emits one
+`treedb_cohere_768_sq8_paired_query/v1` event after quality selection and before
+any mutation. It warms one batch, then runs five measured repetitions of queries
+0..19 (all four queries in the 512-row smoke) at the frozen all-rows `(E,R=E)`
+coordinate. Each repetition runs one complete native-v2 FP32/exact batch and
+one complete native-v3 scalar-u8 rerank batch over the identical frozen query
+list; which arm batch runs first alternates by repetition. Both use the same public
+`query_by_embedding` method, collection, immutable code-declared graph, query,
+filter, TopK and full-document output. Every call must carry the same producer
+snapshot; its raw public-call timers, result projections and dense/score-plane
+work are retained. These calls reuse already-observed queries and cannot select
+or retune a coordinate. They are not added to the strict RSS selection ledger;
+`--rss-only` still stops at its original quality-gated population boundary.
+
+Each arm of every measured repetition is separately bracketed by a drained diagnostics snapshot and
+the owned Linux process CPU clock. The packet retains raw Go `TotalAlloc` and
+`Mallocs` endpoints and normalized deltas, current heap endpoints, server CPU,
+client harness CPU, total DB bytes with WAL included, and the aggregate
+installed/base/owner typed-graph asset gauges. These Go totals are process-wide
+phase deltas and include diagnostics endpoint handling; they are not claimed as
+an allocation profile for an individual query. Scalar-u8 logical code size is
+reported as 768 bytes/vector and its row-count product. The public score-plane
+reports logical bytes read and the diagnostics endpoint reports only aggregate
+graph assets, so the physical selected SQ8 TVIS length is explicitly
+`producer_unavailable` (`actual_quantized_tvis_bytes: null`), never inferred by
+subtraction or reported as zero. Internal `VectorIndexSearchStats` owns
+mapped/heap-copy quantized asset counters, but the current public
+dense-work/score-plane transport does not carry them. Obtaining that split would require a separate
+reviewed product-observability contract.
+
 With `--rss-only`, the output uses
 `treedb_cohere_768_sq8_rss_boundary/v1`. It preserves the v3 workload and process
 RSS boundary while adding a distinct representation declaration and every

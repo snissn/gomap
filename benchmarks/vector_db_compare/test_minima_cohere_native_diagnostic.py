@@ -94,6 +94,106 @@ def quantized_index_info():
     })
 
 
+def plain(value):
+    if isinstance(value, dict):
+        return {key: plain(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [plain(item) for item in value]
+    if hasattr(value, "__dict__"):
+        return {key: plain(item) for key, item in vars(value).items()}
+    return value
+
+
+def paired_record(mode, sequence, query=0, ef=32, phase=None, started_ns=None):
+    response = quantized_response(500000, ef)
+    dense = plain(response.dense_work)
+    if mode == "exact":
+        dense["graph"].update(
+            base_ann_scored=ef * 2, base_candidates=ef, base_edges=ef,
+            delta_scored=0, exact_base_scored=0, base_shadowed=0,
+            base_result_ids=10,
+        )
+    results = [
+        {"id": f"row-{row:06d}", "content": f"minima-cohere:{row}",
+         "meta": {"user_id": f"{(row * 7919) % 500000:06d}",
+                  "fpath": f"/cohere/{row // 256:06d}.txt"}, "score": 1.0}
+        for row in range(10)
+    ]
+    record = {
+        "request_sequence": sequence, "phase": phase or f"paired_{mode}", "eligible": 500000,
+        "query": query, "request_mode": mode, "requested_ef_search": ef,
+        "requested_rerank_candidates": ef if mode == "quantized_rerank" else None,
+        "command_version": 3 if mode == "quantized_rerank" else 2,
+        "expected_generation": 7, "filter": None,
+        "started_monotonic_ns": started_ns if started_ns is not None else sequence * 10,
+        "ended_monotonic_ns": (started_ns if started_ns is not None else sequence * 10) + 1,
+        "duration_ns": 1, "outcome": "success", "results": results,
+        "recall": 1.0, "ndcg_at_10": 1.0, "dense_work": dense,
+    }
+    if mode == "quantized_rerank":
+        record["score_plane"] = plain(response.score_plane)
+    return record
+
+
+def paired_endpoint(counter, records):
+    works = [diagnostic.dense_contract.DenseSearchWork.from_dict(record["dense_work"])
+             for record in records]
+    graph_total = lambda field: sum(getattr(work.graph, field) for work in works)
+    output_total = lambda field: sum(getattr(work.output, field) for work in works)
+    calls = len(works)
+    return {
+        "availability": "measured", "captured_monotonic_ns": counter * 1000,
+        "pid": 11, "linux_process_identity": "11:owner",
+        "generation": 7,
+        "work": {"pid": 11, "schema_version": "treedb-work-v1", "scope": "process",
+                 "origin_kind": "go_package_init", "origin_unix_nano": 1,
+                 "snapshot_unix_nano": counter,
+                 "memory": {"total_alloc": counter * 1000, "mallocs": counter * 100,
+                            "heap_alloc": 100, "heap_sys": 200, "sys": 300, "num_gc": 1},
+                 "graph": {
+                     "requests": {"attempts": calls, "completed": calls, "errors": 0},
+                     "filters": {"attempts": 0, "completed": 0, "errors": 0},
+                     "empty": 0, "exact": 0, "hnsw": calls,
+                     **{field: graph_total(field) for field in (
+                         "base_ann_scored", "base_candidates", "base_edges", "delta_scored",
+                         "exact_base_scored", "base_shadowed", "base_result_ids",
+                     )},
+                 },
+                 "output": {"search": {
+                     "attempts": calls, "completed": calls, "errors": 0,
+                     **{field: output_total(field) for field in (
+                         "requested", "fetched", "missing", "output_bytes",
+                         "retained_payload_fetches", "json_reconstruction_rows",
+                         "typed_column_rows",
+                     )},
+                 }}},
+        "server_cpu": {"availability": "measured", "pid": 11,
+                       "linux_process_identity": "11:owner", "cpu_ns": counter * 10000,
+                       "source": "/proc/<pid>/stat utime+stime and SC_CLK_TCK",
+                       "scope": "owned_process_lifetime_through_sample"},
+        "client_cpu_ns": counter * 100000,
+        "drained_pending": {"pending_docs": 0, "pending_bytes": 0},
+        "typed_graph": {
+            "index": "embedding", "publication_present": True,
+            "publication_unchanged": True, "serving_ready": True,
+            "invalid": False, "reconciling": False, "base_present": True,
+            "base_manifest": {"generation": 1, "format": "tcs1", "version": 1,
+                              "checksum": 1},
+            "current_manifest": {"generation": 1, "format": "tcs1", "version": 1,
+                                 "checksum": 1},
+            "base_coverage_lsn": 1, "current_coverage_lsn": 1,
+            "base_rows": 500000, "suffix_rows": 0, "suffix_tombstones": 0,
+            "suffix_value_slots": 0, "suffix_payload_bytes": 0,
+            "installed_asset_bytes": 300, "base_asset_bytes": 200,
+            "owner_asset_bytes": 0,
+            "debt": {"rows": 0, "tombstones": 0, "value_slots": 0, "bytes": 0},
+            "pending": {"rows": 0, "tombstones": 0,
+                        "value_slots": 0, "bytes": 0},
+        },
+        "total_db_bytes_including_wal": 1000,
+    }
+
+
 class NativeCohereDiagnosticTests(unittest.TestCase):
     def test_diagnostic_rejects_superset_exports_before_reading_payloads(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -421,6 +521,8 @@ class NativeCohereDiagnosticTests(unittest.TestCase):
             run.emit = Mock()
             response = quantized_response(16, 32, filter_requested=False)
             response.native_command_version = 3 if mode == "quantized" else 2
+            if mode == "exact":
+                response.score_plane = None
             response.documents = []
             for row in range(10):
                 document = diagnostic.make_document(vectors, row, 16)
@@ -437,6 +539,20 @@ class NativeCohereDiagnosticTests(unittest.TestCase):
         self.assertNotIn("query_mode", exact_native.query_by_embedding.call_args.kwargs)
         self.assertNotIn("quantized_rerank_candidates", exact_native.query_by_embedding.call_args.kwargs)
 
+        # The SQ8-declared collection can issue a native-v2 FP32 control through
+        # the same public method without creating a second graph or profile.
+        paired, paired_response, paired_native = runner("quantized")
+        paired_response.native_command_version = 2
+        paired_response.score_plane = None
+        paired_ledger = []
+        with patch.object(diagnostic, "asdict", side_effect=lambda value: vars(value)):
+            paired.search("paired_exact", 16, 32, 0,
+                          request_mode="exact", request_ledger=paired_ledger)
+        self.assertEqual(paired_ledger[0]["request_mode"], "exact")
+        self.assertEqual(paired_ledger[0]["command_version"], 2)
+        self.assertIsNone(paired_ledger[0]["requested_rerank_candidates"])
+        self.assertNotIn("query_mode", paired_native.query_by_embedding.call_args.kwargs)
+
         quantized, response, native = runner("quantized")
         with patch.object(diagnostic, "asdict", side_effect=lambda value: vars(value)), \
                 patch.object(diagnostic, "validate_quantized_response") as validate:
@@ -446,6 +562,16 @@ class NativeCohereDiagnosticTests(unittest.TestCase):
         validate.assert_called_once_with(response, 16, 16, 32, False, 7)
         self.assertEqual(quantized.quantized_requests[0]["outcome"], "success")
         self.assertEqual(len(quantized.quantized_requests[0]["results"]), 10)
+
+        # Concurrent full projections may linearize before or after the one
+        # authored replacement batch; lifecycle validation still enforces that
+        # every returned row belongs to one whole reachable state.
+        concurrent, concurrent_response, _ = runner("quantized")
+        concurrent_response.documents[0].content += ":updated"
+        with patch.object(diagnostic, "asdict", side_effect=lambda value: vars(value)), \
+                patch.object(diagnostic, "validate_quantized_response"), \
+                patch.object(concurrent, "validate_quantized_lifecycle"):
+            concurrent.search("overlap", 16, 32, 0, writer_active=True)
 
         for mutation in ("duplicate", "nonfinite", "projection"):
             with self.subTest(mutation=mutation):
@@ -494,6 +620,109 @@ class NativeCohereDiagnosticTests(unittest.TestCase):
                 self.assertRaisesRegex(RuntimeError, "typed-exact.*frozen eligible truth"):
             exact_rank.search("post_reopen_curve", 16, 32, 0)
         self.assertEqual(exact_rank.quantized_requests[-1]["outcome"], "error")
+
+    def test_paired_query_packet_binds_owner_order_raw_resources_and_unavailable_tvis(self):
+        timing = {**diagnostic.paired_timing_plan(1), "queries": [0]}
+        plan = {
+            "rows": 500000, "paired_timing": timing,
+            "representation_arm": diagnostic.quantized_representation_arm(),
+            "rss_controls": [32],
+        }
+        sequence = 1
+        clock = 1
+        completed_records = []
+
+        def batch(kind, repetition):
+            nonlocal sequence, clock
+            order = diagnostic.paired_batch_arm_order(kind, repetition)
+            arms, common_owner = {}, None
+            for mode in order:
+                phase = diagnostic.paired_phase(kind, repetition, mode)
+                before = None
+                if kind == "measured":
+                    before = paired_endpoint(clock, completed_records)
+                    clock += 1
+                records = [paired_record(mode, sequence, phase=phase,
+                                         started_ns=clock * 1000)]
+                sequence += 1
+                clock += 1
+                completed_records.extend(records)
+                owner = diagnostic.paired_snapshot_from_record(
+                    records[0], mode, phase, 0, 32, 500000,
+                )
+                self.assertIsNotNone(owner)
+                common_owner = common_owner or owner
+                arm = {"mode": mode, "queries": [0], "requests": records}
+                if kind == "measured":
+                    after = paired_endpoint(clock, completed_records)
+                    clock += 1
+                    arm["resources"] = {
+                    "before": before, "after": after,
+                    "delta": diagnostic.paired_resource_delta(before, after, records),
+                    }
+                arms[mode] = arm
+            return {"batch_kind": kind, "repetition": repetition, "queries": [0],
+                    "arm_order": order, "common_owner": common_owner, "arms": arms}
+
+        warmup = batch("warmup", -1)
+        repetitions = [batch("measured", repetition) for repetition in range(5)]
+        artifact = {
+            "schema": diagnostic.PAIRED_QUERY_ARTIFACT_SCHEMA, "status": "complete",
+            "collection": "minima_cohere", "rows": 500000, "dimensions": 768,
+            "top_k": 10, "eligible": 500000,
+            "representation_arm": diagnostic.quantized_representation_arm(),
+            "timing_plan": timing, "selected_coordinate": {"ef_search": 32, "rerank_candidates": 32},
+            "warmup": warmup, "repetitions": repetitions,
+            "storage_attribution": {
+                "total_db_bytes_including_wal": 1000,
+                "wal_boundary": "included_in_total_db_bytes; no subtraction",
+                "aggregate_typed_graph_asset_bytes": {
+                    "installed_asset_bytes": 300, "base_asset_bytes": 200,
+                    "owner_asset_bytes": 0,
+                },
+                "logical_sq8_code_bytes_per_vector": 768,
+                "logical_sq8_code_bytes": 500000 * 768,
+                "actual_quantized_tvis_bytes": None,
+                "actual_quantized_tvis_bytes_availability": "producer_unavailable",
+                "actual_quantized_tvis_bytes_producer": (
+                    "internal VectorIndexSearchStats has physical counters but the public "
+                    "DenseSearchWork and score_plane transport omit them"
+                ),
+            },
+        }
+        self.assertTrue(diagnostic.paired_query_artifact_valid(artifact, plan))
+        for name, mutate in {
+            "owner": lambda value: value["repetitions"][0]["common_owner"].update(
+                schema_hash=2),
+            "order": lambda value: value["repetitions"][0]["arm_order"].reverse(),
+            "sequence": lambda value: value["repetitions"][0]["arms"]["exact"]["requests"][0].update(
+                request_sequence=99),
+            "exact_mode": lambda value: value["repetitions"][0]["arms"]["exact"]["requests"][0].update(
+                command_version=3),
+            "exact_work": lambda value: value["repetitions"][0]["arms"]["exact"]["requests"][0][
+                "dense_work"]["graph"].update(base_ann_scored=0),
+            "sq8_mode": lambda value: value["repetitions"][0]["arms"]["quantized_rerank"]["requests"][0].update(
+                requested_rerank_candidates=16),
+            "sq8_work": lambda value: value["repetitions"][0]["arms"]["quantized_rerank"]["requests"][0][
+                "score_plane"].update(exact_suffix_score_calls=1,
+                                      exact_suffix_vector_bytes_read=768 * 4),
+            "timing": lambda value: value["repetitions"][0]["arms"]["exact"]["requests"][0].update(
+                duration_ns=2),
+            "allocation": lambda value: value["repetitions"][0]["arms"]["exact"]["resources"]["delta"].update(
+                total_alloc_bytes=0),
+            "graph_counter": lambda value: value["repetitions"][0]["arms"]["exact"]["resources"][
+                "after"]["work"]["graph"].update(base_ann_scored=999),
+            "pending": lambda value: value["repetitions"][0]["arms"]["exact"]["resources"][
+                "after"]["typed_graph"]["pending"].update(rows=1),
+            "physical_inference": lambda value: value["storage_attribution"].update(
+                actual_quantized_tvis_bytes=384000000),
+            "total_disk": lambda value: value["storage_attribution"].update(
+                total_db_bytes_including_wal=999),
+        }.items():
+            with self.subTest(name=name):
+                changed = copy.deepcopy(artifact)
+                mutate(changed)
+                self.assertFalse(diagnostic.paired_query_artifact_valid(changed, plan))
 
     def test_quantized_overlap_projection_requires_one_reachable_atomic_batch_state(self):
         def document(row, updated):
@@ -586,6 +815,9 @@ class NativeCohereDiagnosticTests(unittest.TestCase):
         changed = quantized_response()
         changed.documents = [document(row, row in (0, 1)) for row in range(10)]
         changed.score_plane.raw_candidate_width = 130
+        changed.score_plane.exact_suffix_score_calls = 2
+        changed.score_plane.exact_suffix_vector_bytes_read = 2 * 768 * 4
+        changed.dense_work.graph.delta_scored = 2
         owner(changed, 1)
         overlap_record = {"started_monotonic_ns": 10, "ended_monotonic_ns": 20}
         state = run.validate_quantized_lifecycle(changed, overlap_record, True, 500000, 128)
@@ -607,6 +839,84 @@ class NativeCohereDiagnosticTests(unittest.TestCase):
         self.assertEqual(diagnostic.quantized_state_widths(state, 500000, 500000, 128),
                          (128, 130, 128, 2))
 
+        # Filtered requests may legally prepare against the current postings or
+        # bind the cached immutable-base filter. Both must carry the same B/D
+        # split, while widths and shadow accounting stay paired to one plan.
+        filtered_current = quantized_response(4097)
+        filtered_current.documents = [document(row, row in (0, 1)) for row in range(10)]
+        filtered_current.score_plane.exact_suffix_score_calls = 1
+        filtered_current.score_plane.exact_suffix_vector_bytes_read = 768 * 4
+        filtered_current.dense_work.graph.delta_scored = 1
+        filtered_current.score_plane.raw_candidate_width = 128
+        owner(filtered_current, 1)
+        diagnostic.validate_quantized_response(filtered_current, 500000, 4097, 128, True, 7)
+        state = run.validate_quantized_lifecycle(
+            filtered_current, dict(overlap_record), True, 4097, 128, True,
+        )
+        self.assertEqual(diagnostic.quantized_state_work(state, 500000, 4097, 128, True), (
+            4096, 1, ((128, 128, 128, 0, 4096), (128, 129, 128, 1, 4097)),
+        ))
+
+        filtered_cached = copy.deepcopy(filtered_current)
+        filtered_cached.score_plane.raw_candidate_width = 129
+        filtered_cached.dense_work.graph.base_shadowed = 1
+        run.validate_quantized_lifecycle(
+            filtered_cached, dict(overlap_record), True, 4097, 128, True,
+        )
+        wrong_pair = copy.deepcopy(filtered_current)
+        wrong_pair.dense_work.graph.base_shadowed = 1
+        with self.assertRaisesRegex(RuntimeError, "one exact projection/width/owner"):
+            run.validate_quantized_lifecycle(
+                wrong_pair, dict(overlap_record), True, 4097, 128, True,
+            )
+        wrong_suffix = copy.deepcopy(filtered_cached)
+        wrong_suffix.score_plane.exact_suffix_score_calls = 0
+        wrong_suffix.score_plane.exact_suffix_vector_bytes_read = 0
+        wrong_suffix.dense_work.graph.delta_scored = 0
+        with self.assertRaisesRegex(RuntimeError, "one exact projection/width/owner"):
+            run.validate_quantized_lifecycle(
+                wrong_suffix, dict(overlap_record), True, 4097, 128, True,
+            )
+
+        # A current filter can become suffix-only even above the normal typed
+        # exact threshold. The producer then labels the zero-base plan exact;
+        # the cached immutable-base alternative remains an ANN plan.
+        matching_rows = frozenset(
+            row for row in range(500000) if (row * 7919) % 500000 < 5000
+        )
+        suffix_only_state = {
+            "updated": matching_rows, "touched": matching_rows,
+            "deleted": frozenset(), "owner_advance": 1, "folded": False,
+        }
+        suffix_only = quantized_response(5000)
+        suffix_only.documents = [document(row, row in matching_rows) for row in range(10)]
+        suffix_only.score_plane.route = "typed_exact"
+        suffix_only.score_plane.normalized_candidate_width = 0
+        suffix_only.score_plane.raw_candidate_width = 0
+        suffix_only.score_plane.rerank_candidate_cap = 0
+        suffix_only.score_plane.raw_retained_candidates = 0
+        suffix_only.score_plane.live_shortlist_candidates = 0
+        suffix_only.score_plane.actual_rerank_candidates = 0
+        suffix_only.score_plane.quantized_score_calls = 0
+        suffix_only.score_plane.quantized_code_bytes_read = 0
+        suffix_only.score_plane.exact_base_rerank_score_calls = 0
+        suffix_only.score_plane.exact_small_filter_score_calls = 0
+        suffix_only.score_plane.exact_suffix_score_calls = 5000
+        suffix_only.score_plane.exact_base_vector_bytes_read = 0
+        suffix_only.score_plane.exact_suffix_vector_bytes_read = 5000 * 768 * 4
+        suffix_only.dense_work.graph.route = "typed_exact"
+        suffix_only.dense_work.graph.base_ann_scored = 0
+        suffix_only.dense_work.graph.base_candidates = 0
+        suffix_only.dense_work.graph.exact_base_scored = 0
+        suffix_only.dense_work.graph.base_result_ids = 0
+        suffix_only.dense_work.graph.delta_scored = 5000
+        owner(suffix_only, 1)
+        diagnostic.validate_quantized_response(suffix_only, 500000, 5000, 128, True, 7)
+        self.assertTrue(diagnostic.quantized_response_matches_state(
+            suffix_only, suffix_only_state, 500000, 5000, 128,
+            run.quantized_initial_snapshot, True,
+        ))
+
         mixed = copy.deepcopy(changed)
         mixed.documents[1].content = "minima-cohere:1"
         with self.assertRaisesRegex(RuntimeError, "one exact projection/width/owner"):
@@ -623,6 +933,9 @@ class NativeCohereDiagnosticTests(unittest.TestCase):
         run.quantized_folded = True
         folded = copy.deepcopy(changed)
         folded.score_plane.raw_candidate_width = 128
+        folded.score_plane.exact_suffix_score_calls = 0
+        folded.score_plane.exact_suffix_vector_bytes_read = 0
+        folded.dense_work.graph.delta_scored = 0
         owner(folded, 1, folded=True)
         folded_record = {"started_monotonic_ns": 30, "ended_monotonic_ns": 31}
         state = run.validate_quantized_lifecycle(folded, folded_record, False, 500000, 128)

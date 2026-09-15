@@ -110,7 +110,8 @@ def validate(actual, expected):
         else:
             validate(actual[key], nested)
 validate(value, shape)
-assert 5 <= width < 1 << 63
+if not 5 <= width < 1 << 63:
+    raise ValueError("EF must satisfy TopK <= EF < 2**63")
 ' "$TREEDB_COLUMN_GRAPH_SERVING" "$TREEDB_EF_SEARCH"; then
 		printf '%s\n' 'quantized Minima requires a nonempty JSON object for TREEDB_COLUMN_GRAPH_SERVING' >&2
 		exit 2

@@ -144,7 +144,10 @@ for fixture in bounded-50k:50000 bounded-250k:250000 bounded-500k:500000 bounded
 	[[ ! -f "$bounded_dir/qdrant_backend.json" ]]
 	grep -qx -- '--strategy' "$TMP/$mode-args"
 	grep -qx -- "$expected_rows" "$TMP/$mode-rows"
-	! grep -q -- '^--query-mode$\|^--quantized-index-name$\|^--quantized-rerank-candidates$' "$TMP/$mode-args"
+	if grep -q -- '^--query-mode$\|^--quantized-index-name$\|^--quantized-rerank-candidates$' "$TMP/$mode-args"; then
+		printf 'bounded %s forwarded quantized options\n' "$mode" >&2
+		exit 1
+	fi
 done
 
 printf '%s\n' '{"Publication":{"Rows":1,"Tombstones":1,"ValueSlots":1,"OwnedBytes":1,"EncodedOutputBytes":1},"Owners":{"Owners":1,"States":1,"StateBytes":1,"AssetBytes":1,"Cold":{"ManifestRecords":1,"ManifestBytes":1,"AssetBytes":1,"DecodedTermBytes":1}},"CandidateOutput":{"Bytes":1,"AppenderAttempts":1},"Maintenance":{"NativeEntries":1,"ColumnSegments":1,"ManifestRecords":1,"LifecycleEntries":1,"NativeBytes":1,"ColumnBytes":1,"ManifestBytes":1,"RetainedBytes":1,"PagerPages":1},"Filter":{"SourceIDs":1,"SourceBytes":1,"RetainedBytes":1,"MappingWork":1,"InspectedEntries":1},"FoldRows":1,"SearchCandidates":1048576}' >"$TMP/quantized-serving.json"
@@ -222,8 +225,8 @@ for hostile in representative wrong_strategy wrong_transport wrong_name missing_
 	native_overflow) extra+=(TREEDB_EF_SEARCH=9223372036854775808 TREEDB_QUANTIZED_RERANK_CANDIDATES=9223372036854775808) ;;
 	cached_profile) extra+=(TREEDB_PROFILE=cached) ;;
 	exact_with_options) extra+=(TREEDB_QUERY_MODE=exact) ;;
-	existing_data) mkdir -p "$hostile_run/db"; extra+=(TREEDB_DATA_DIR="$hostile_run/db") ;;
-	existing_output) mkdir -p "$hostile_run/tmp"; printf '{}\n' >"$hostile_run/result.json"; extra+=(TREEDB_EVIDENCE="$hostile_run/result.json") ;;
+	existing_data) mkdir -p "$TMP/quantized-existing-data/db"; extra+=(TREEDB_DATA_DIR="$TMP/quantized-existing-data/db") ;;
+	existing_output) mkdir -p "$TMP/quantized-existing-output"; printf '{}\n' >"$TMP/quantized-existing-output/result.json"; extra+=(TREEDB_EVIDENCE="$TMP/quantized-existing-output/result.json") ;;
 	dirty_run) mkdir -p "$hostile_run"; printf 'retained\n' >"$hostile_run/retained.txt" ;;
 	esac
 	set +e

@@ -223,6 +223,7 @@ def _sq8_request_valid(row):
             and row["requested_rerank_candidates"] == row["requested_ef_search"]
             and native.same_json(row.get("lifecycle_state"), {
                 "owner_advance": 0, "folded": False, "shadow_allowance": 0,
+                "live_base": 500000, "live_suffix": 0,
             })
             and proof.version == 1 and proof.available and proof.completed and not proof.reason
             and proof.requested_mode == "quantized_rerank"

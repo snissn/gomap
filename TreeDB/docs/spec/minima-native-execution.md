@@ -325,6 +325,30 @@ complete width/shadow alternative and, independently, the exact live-base and
 suffix score counts. A suffix-only exact result may therefore have zero base
 candidate widths without weakening its result or score-work proof.
 
+The 768D full SQ8 Cohere diagnostic adds a separate same-owner query packet; it
+does not change the bounded application artifact or the RSS population
+boundary. After selection and before mutation, one warm batch and five measured
+repetitions reuse up to the first 20 observed queries at the frozen all-rows
+coordinate. Native-v2 exact/FP32 and native-v3 scalar-u8 rerank calls share the
+same public client method, collection, query/filter/TopK/output shape and
+immutable code-declared graph snapshot. First-arm order alternates by repetition
+across complete per-arm batches over the same query list. Raw call intervals,
+both work records and complete result
+projections are retained; the paired packet rejects owner, order, route,
+generation, counter or projection drift.
+
+Each arm batch is separately bracketed only after synchronous work and publication
+gauges drain. It records the owned server CPU clock, client-harness CPU, raw Go
+`TotalAlloc`/`Mallocs` and heap endpoints, normalized phase deltas, aggregate
+typed-graph asset gauges and total database bytes with WAL included. Internal
+`VectorIndexSearchStats` has mapped/heap-copy quantized asset counters, but the
+public dense-work/score-plane transport does not carry them and the diagnostics
+endpoint exposes only aggregate graph assets. The selected quantized TVIS
+physical length is therefore not publicly produced: that field
+is retained as null with `producer_unavailable`, alongside the truthful logical
+scalar-u8 size of 768 bytes/vector. Aggregate asset subtraction is not a valid
+replacement for a missing physical-asset producer.
+
 M0's bounded-50k baseline exposed a concrete regression target: 1,000 eligible
 `broad_10pct` IDs, zero returned IDs, `complete_finite_ann`, 2,064 visited/scored.
 The existing runtime exact cap is 512; larger complete sets do not receive the

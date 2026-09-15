@@ -191,6 +191,22 @@ observation. The SQ8 row has no `accept`/`investigate` state and cannot revise t
 historical M5 result. The two TreeDB arms and Qdrant must each use a distinct
 owned process and backend directory.
 
+For query-path attribution, run the same SQ8 plan without `--rss-only` in its
+own fresh directory. After the all-rows coordinate is frozen and before any
+mutation, that full diagnostic retains one warm batch plus five order-balanced
+repetitions of native-v2 FP32 and native-v3 SQ8 calls against the same
+code-declared graph owner. Each arm is a separately bracketed complete batch
+over the same queries, and first-arm order alternates by repetition. The paired
+packet records raw call timings and work, per-arm server/client CPU,
+process-wide Go allocation endpoints/deltas, current heap,
+aggregate typed-graph assets and total DB bytes including WAL. It explicitly
+marks the SQ8-only physical TVIS length producer-unavailable: internal
+`VectorIndexSearchStats` has physical asset counters, but neither the public
+dense-work/score-plane transport nor the diagnostics endpoint exposes that
+split, so it must
+not be inferred from aggregate assets. The paired calls are outside the strict
+RSS population and selection ledger and do not alter its boundary.
+
 ## Retained evidence gate
 
 Land the reviewed harness before expensive retained collection. Freeze the exact

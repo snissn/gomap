@@ -30,12 +30,15 @@ from treedb_client import _dense_work as dense_contract
 SCHEMA = "treedb_minima_cohere_native_diagnostic/v2"
 RSS_ARTIFACT_SCHEMA = "treedb_cohere_768_rss_boundary/v3"
 QUANTIZED_RSS_ARTIFACT_SCHEMA = "treedb_cohere_768_sq8_rss_boundary/v1"
+PAIRED_QUERY_ARTIFACT_SCHEMA = "treedb_cohere_768_sq8_paired_query/v1"
 QUANTIZED_PROFILE_NAME = "minima_sq8"
 RSS_RECALL_TARGET = .90
 RSS_CONTROLS = [32, 64, 128, 256, 512, 1024, 2048]
 RSS_CALIBRATION_QUERIES = list(range(100))
 RSS_REVALIDATION_QUERIES = list(range(100, 200))
 RSS_SELECTION_PROTOCOL = "lowest_control_passing_both_fixed_query_sets/v1"
+PAIRED_TIMING_REPETITIONS = 5
+PAIRED_TIMING_QUERY_COUNT = 20
 GIB = 1 << 30
 FROZEN_JSON_MAX_BYTES = 1 << 20
 EVIDENCE_JSON_MAX_BYTES = 64 << 20
@@ -55,6 +58,19 @@ def quantized_representation_arm():
         "quantized_config_hash": 0,
         "vector_m": 16,
         "requested_rerank_policy": "R=E_at_each_predeclared_coordinate",
+    }
+
+
+def paired_timing_plan(query_count):
+    if type(query_count) is not int or query_count <= 0:
+        raise ValueError("paired timing requires available queries")
+    return {
+        "schema": "treedb_cohere_paired_timing_plan/v1",
+        "warmup_batches": 1,
+        "measured_repetitions": PAIRED_TIMING_REPETITIONS,
+        "queries": list(range(min(PAIRED_TIMING_QUERY_COUNT, query_count))),
+        "arm_order": "alternate_first_complete_arm_batch_by_repetition",
+        "comparison": "native_v2_fp32_vs_native_v3_scalar_u8_rerank_on_one_immutable_code_declared_graph",
     }
 
 
@@ -187,10 +203,12 @@ def select_quantized_cohorts(search, truth, eligible_counts, rows, controls,
 
 def validate_quantized_response(response, rows, eligible, ef, filter_requested, generation):
     work, proof = getattr(response, "dense_work", None), getattr(response, "score_plane", None)
-    expected_route = ("typed_empty" if eligible == 0 else "typed_exact"
-                      if filter_requested and eligible <= 4096 else "quantized_rerank")
     try:
-        expected_width = min(eligible, max(10, ef))
+        live_eligible = work.graph.filter.eligible_rows if filter_requested else rows
+        expected_route = ("typed_empty" if filter_requested and live_eligible == 0 else
+                          "typed_exact" if filter_requested
+                          and (live_eligible <= 4096 or proof.normalized_candidate_width == 0) else
+                          "quantized_rerank")
         exact_calls = (proof.exact_base_rerank_score_calls + proof.exact_small_filter_score_calls
                        + proof.exact_suffix_score_calls)
         route_work_valid = {
@@ -202,9 +220,9 @@ def validate_quantized_response(response, rows, eligible, ef, filter_requested, 
             ),
             "typed_exact": (
                 proof.quantized_score_calls == 0 and proof.exact_base_rerank_score_calls == 0
-                and exact_calls == eligible and proof.raw_retained_candidates == 0
+                and exact_calls == live_eligible and proof.raw_retained_candidates == 0
                 and proof.live_shortlist_candidates == 0 and proof.actual_rerank_candidates == 0
-                and work.graph.base_candidates == 0 and work.graph.base_shadowed == 0
+                and work.graph.base_candidates == 0
             ),
             "quantized_rerank": (
                 proof.quantized_score_calls > 0
@@ -243,14 +261,14 @@ def validate_quantized_response(response, rows, eligible, ef, filter_requested, 
             and proof.requested_top_k == 10
             and proof.requested_ef_search == ef
             and proof.requested_rerank_candidates == ef
-            and proof.normalized_candidate_width == expected_width
+            and proof.normalized_candidate_width <= min(rows, max(10, ef))
             and proof.normalized_candidate_width <= proof.raw_candidate_width
-            and proof.raw_candidate_width <= eligible
-            and proof.rerank_candidate_cap == min(eligible, expected_width, ef)
+            and proof.raw_candidate_width <= rows
+            and proof.rerank_candidate_cap == min(proof.normalized_candidate_width, ef)
             and existing.quantized_snapshot_valid(proof.snapshot, generation)
             and work.graph.snapshot == proof.snapshot
             and route_work_valid
-            and (not filter_requested or work.graph.filter.eligible_rows == eligible)
+            and (not filter_requested or 0 <= live_eligible <= eligible)
             and ((filter_requested
                   and proof.raw_retained_candidates <= work.graph.base_candidates
                   and work.graph.base_candidates <= proof.quantized_score_calls)
@@ -386,38 +404,100 @@ def quantized_snapshot_matches_state(snapshot, initial, state):
         return False
 
 
-def quantized_state_widths(state, rows, eligible, ef):
+def quantized_state_work(state, rows, eligible, ef, filter_requested):
+    """Derive live base/suffix work and every legal producer plan for one state."""
     try:
         if (type(rows) is not int or rows <= 0 or type(eligible) is not int
                 or not 0 <= eligible <= rows or type(ef) is not int or ef <= 0
                 or type(state["owner_advance"]) is not int or state["owner_advance"] < 0
-                or type(state["folded"]) is not bool):
+                or type(state["folded"]) is not bool or type(filter_requested) is not bool):
             return None
         if any(type(ordinal) is not int or not 0 <= ordinal < rows
                for values in (state["updated"], state["touched"], state["deleted"])
                for ordinal in values):
             return None
-        shadowed = 0 if state["folded"] else sum(
-            1 for row in state["touched"] if row < rows and (row * 7919) % rows < eligible
-        )
-        effective = min(eligible, max(10, ef))
-        return effective, min(eligible, effective + shadowed), min(eligible, effective, ef), shadowed
+        touched, deleted = frozenset(state["touched"]), frozenset(state["deleted"])
+        if not deleted <= touched:
+            return None
+        matches = lambda row: not filter_requested or (row * 7919) % rows < eligible
+        base_domain = rows if not filter_requested else eligible
+        shadowed = sum(1 for row in touched if matches(row))
+        live_suffix = sum(1 for row in touched - deleted if matches(row))
+        if shadowed > base_domain:
+            return None
+        live_base = base_domain - shadowed
+        live_eligible = live_base + live_suffix
+
+        def plan(domain, shadow_allowance):
+            effective = min(domain, max(10, ef))
+            return (effective, min(domain, effective + shadow_allowance),
+                    min(domain, effective, ef), shadow_allowance, domain)
+
+        if state["folded"]:
+            live_base, live_suffix = live_eligible, 0
+            plans = (plan(live_eligible, 0),)
+        elif filter_requested:
+            # A request-local current filter contains B only; a cached immutable-
+            # base filter contains B+S and binds S as its shadow allowance.
+            plans = tuple(dict.fromkeys((plan(live_base, 0), plan(base_domain, shadowed))))
+        else:
+            # Unfiltered graph search always uses the immutable base domain.
+            plans = (plan(base_domain, shadowed),)
+        return live_base, live_suffix, plans
     except (KeyError, TypeError):
         return None
 
 
-def quantized_response_matches_state(response, state, rows, eligible, ef, initial_snapshot):
-    widths = quantized_state_widths(state, rows, eligible, ef)
-    if widths is None:
+def quantized_state_widths(state, rows, eligible, ef):
+    """Compatibility view of the immutable-base plan used by older fixtures."""
+    work = quantized_state_work(state, rows, eligible, ef, eligible != rows)
+    return None if work is None else work[2][-1][:4]
+
+
+def quantized_response_state_plans(response, state, rows, eligible, ef, filter_requested):
+    work = quantized_state_work(state, rows, eligible, ef, filter_requested)
+    if work is None:
+        return []
+    live_base, live_suffix, plans = work
+    live_eligible = live_base + live_suffix
+    try:
+        proof, graph = response.score_plane, response.dense_work.graph
+        if (proof.exact_suffix_score_calls != live_suffix
+                or (filter_requested and graph.filter.eligible_rows != live_eligible)):
+            return []
+        observed = (proof.normalized_candidate_width, proof.raw_candidate_width,
+                    proof.rerank_candidate_cap)
+        matched = []
+        for plan in plans:
+            route = ("typed_empty" if filter_requested and live_eligible == 0 else
+                     "typed_exact" if filter_requested
+                     and (live_eligible <= 4096 or plan[4] == 0) else
+                     "quantized_rerank")
+            if (proof.route != route or observed != plan[:3]
+                    or (route == "typed_exact" and proof.exact_small_filter_score_calls != live_base)
+                    or (route != "typed_exact" and proof.exact_small_filter_score_calls != 0)):
+                continue
+            if ((route == "typed_empty" and graph.base_shadowed == 0)
+                    or (route == "typed_exact" and graph.base_shadowed == plan[3])
+                    or (route == "quantized_rerank" and graph.base_shadowed <= plan[3])):
+                matched.append(plan)
+        return matched
+    except (AttributeError, KeyError, TypeError, ValueError):
+        return []
+
+
+def quantized_response_matches_state(response, state, rows, eligible, ef, initial_snapshot,
+                                     filter_requested=None):
+    if filter_requested is None:
+        filter_requested = eligible != rows
+    plans = quantized_response_state_plans(
+        response, state, rows, eligible, ef, filter_requested,
+    )
+    if not plans:
         return False
-    effective, raw, rerank_cap, shadow_allowance = widths
     try:
         return (
-            (response.score_plane.normalized_candidate_width,
-             response.score_plane.raw_candidate_width,
-             response.score_plane.rerank_candidate_cap) == (effective, raw, rerank_cap)
-            and response.dense_work.graph.base_shadowed <= shadow_allowance
-            and quantized_snapshot_matches_state(response.score_plane.snapshot, initial_snapshot, state)
+            quantized_snapshot_matches_state(response.score_plane.snapshot, initial_snapshot, state)
             and quantized_response_projection_matches_state(response.documents, state)
         )
     except (AttributeError, KeyError, TypeError, ValueError):
@@ -718,7 +798,7 @@ def rss_comparison_contract_valid(contract):
             and contract["rss_scope"]
                 == "server_process_lifetime_VmHWM_including_resident_mappings"
         )
-    except (KeyError, TypeError, ValueError):
+    except (KeyError, RuntimeError, TypeError, ValueError):
         return False
 
 
@@ -837,10 +917,13 @@ def prepare(args):
             vector_m=16,
             representation_arm=quantized_representation_arm(),
             quantized_coordinate_policy="ordered_ef_grid_with_requested_rerank_candidates_equal_ef",
+            paired_timing=(None if rss_only else paired_timing_plan(query_count)),
             query_usage=("observed fixed sets 0..99 and 100..199 both select every >4096 cohort; "
-                         "all rows is selected once as the unfiltered cohort; filtered <=4096 is typed-exact correctness"
+                         "all rows is selected once as the unfiltered cohort; filtered <=4096 is typed-exact correctness; "
+                         "after selection, paired timing reuses frozen observed queries without retuning"
                          if args.rows == 500000 else
-                         "four observed queries select the unfiltered 512-row cohort; smaller filtered cohorts are typed-exact"),
+                         "four observed queries select the unfiltered 512-row cohort; smaller filtered cohorts are typed-exact; "
+                         "paired smoke timing reuses the same four observed queries without retuning"),
         )
     return plan
 
@@ -871,6 +954,463 @@ def validate_shutdowns(lifetimes, expected_count):
                 or exited.get("availability") != "measured"
                 or exited.get("linux_process_identity") != lifetime["linux_process_identity"]):
             raise RuntimeError("owned service did not complete a clean verified shutdown")
+
+
+def process_cpu_endpoint(pid, expected_identity):
+    """Read one owned Linux process CPU total without rounding to whole seconds."""
+    result = {
+        "availability": "unavailable", "pid": pid, "linux_process_identity": expected_identity,
+        "cpu_ns": None, "source": "/proc/<pid>/stat utime+stime and SC_CLK_TCK",
+        "scope": "owned_process_lifetime_through_sample",
+    }
+    try:
+        before = existing.common.linux_process_identity(pid)
+        raw = Path(f"/proc/{pid}/stat").read_text(encoding="ascii")
+        close = raw.rfind(")")
+        fields = raw[close + 2:].split()
+        ticks, hz = int(fields[11]) + int(fields[12]), os.sysconf("SC_CLK_TCK")
+        after = existing.common.linux_process_identity(pid)
+        if (close <= 0 or before != expected_identity or after != expected_identity
+                or type(hz) is not int or hz <= 0 or ticks < 0):
+            raise RuntimeError("owned process identity or CPU clock changed")
+        result.update(availability="measured", cpu_ns=ticks * 1_000_000_000 // hz)
+    except (IndexError, OSError, RuntimeError, TypeError, ValueError) as exc:
+        result["reason"] = f"{type(exc).__name__}: {exc}"
+    return result
+
+
+def paired_resource_delta(before, after, records):
+    """Validate same-lifetime endpoints and expose raw and per-call phase deltas."""
+    try:
+        if not isinstance(records, list) or not records:
+            raise ValueError("paired resource delta requires retained calls")
+        calls = len(records)
+        modes = {record["request_mode"] for record in records}
+        work_records = [dense_contract.DenseSearchWork.from_dict(record["dense_work"])
+                        for record in records]
+        if len(modes) != 1:
+            raise ValueError("paired resource delta spans more than one request arm")
+        before_work, after_work = before["work"], after["work"]
+        before_cpu, after_cpu = before["server_cpu"], after["server_cpu"]
+        if (before["availability"] != "measured" or after["availability"] != "measured"
+                or type(before["captured_monotonic_ns"]) is not int
+                or type(after["captured_monotonic_ns"]) is not int
+                or before["captured_monotonic_ns"] >= after["captured_monotonic_ns"]
+                or type(before["pid"]) is not int or before["pid"] <= 0
+                or before["pid"] != after["pid"]
+                or before["pid"] != before_work["pid"] or after["pid"] != after_work["pid"]
+                or not isinstance(before["linux_process_identity"], str)
+                or not before["linux_process_identity"]
+                or before["linux_process_identity"] != after["linux_process_identity"]
+                or before_work["schema_version"] != "treedb-work-v1"
+                or after_work["schema_version"] != "treedb-work-v1"
+                or before_work["scope"] != "process" or after_work["scope"] != "process"
+                or before_work["origin_kind"] != "go_package_init"
+                or after_work["origin_kind"] != "go_package_init"
+                or before_work["origin_unix_nano"] != after_work["origin_unix_nano"]
+                or type(before_work["snapshot_unix_nano"]) is not int
+                or type(after_work["snapshot_unix_nano"]) is not int
+                or before_work["snapshot_unix_nano"] > after_work["snapshot_unix_nano"]
+                or before_cpu["availability"] != "measured" or after_cpu["availability"] != "measured"
+                or before_cpu["pid"] != after_cpu["pid"]
+                or before_cpu["pid"] != before["pid"]
+                or before_cpu["linux_process_identity"] != after_cpu["linux_process_identity"]
+                or before_cpu["linux_process_identity"] != before["linux_process_identity"]
+                or before_cpu["source"] != "/proc/<pid>/stat utime+stime and SC_CLK_TCK"
+                or after_cpu["source"] != before_cpu["source"]
+                or before_cpu["scope"] != "owned_process_lifetime_through_sample"
+                or after_cpu["scope"] != before_cpu["scope"]
+                or before_cpu["cpu_ns"] is None or after_cpu["cpu_ns"] is None):
+            raise ValueError("paired endpoints do not share one measured process lifetime")
+        if (type(before["generation"]) is not int or before["generation"] <= 0
+                or before["generation"] != after["generation"]
+                or not same_json(before["typed_graph"], after["typed_graph"])
+                or type(before["total_db_bytes_including_wal"]) is not int
+                or before["total_db_bytes_including_wal"] <= 0
+                or before["total_db_bytes_including_wal"] != after["total_db_bytes_including_wal"]
+                or any(type(value) is not int or value != 0
+                       for endpoint in (before, after)
+                       for value in endpoint["drained_pending"].values())
+                or any(type(endpoint["typed_graph"]["pending"][name]) is not int
+                       or endpoint["typed_graph"]["pending"][name] != 0
+                       for endpoint in (before, after)
+                       for name in ("rows", "tombstones", "value_slots", "bytes"))):
+            raise ValueError("paired endpoint graph was not stable and drained")
+        if any(type(value) is not int or value < 0 for endpoint in (before, after)
+               for value in (
+                   endpoint["work"]["memory"]["total_alloc"],
+                   endpoint["work"]["memory"]["mallocs"],
+                   endpoint["work"]["memory"]["heap_alloc"],
+                   endpoint["client_cpu_ns"], endpoint["server_cpu"]["cpu_ns"],
+               )):
+            raise ValueError("paired resource endpoint counters are not nonnegative integers")
+        total_alloc = after_work["memory"]["total_alloc"] - before_work["memory"]["total_alloc"]
+        mallocs = after_work["memory"]["mallocs"] - before_work["memory"]["mallocs"]
+        server_cpu = after_cpu["cpu_ns"] - before_cpu["cpu_ns"]
+        client_cpu = after["client_cpu_ns"] - before["client_cpu_ns"]
+        if min(total_alloc, mallocs, server_cpu, client_cpu) < 0:
+            raise ValueError("paired cumulative resource counter moved backwards")
+        before_graph, after_graph = before_work["graph"], after_work["graph"]
+        before_output, after_output = before_work["output"]["search"], after_work["output"]["search"]
+        if (after_graph["requests"]["attempts"] - before_graph["requests"]["attempts"] != calls
+                or after_graph["requests"]["completed"]
+                    - before_graph["requests"]["completed"] != calls
+                or after_graph["requests"]["errors"] != before_graph["requests"]["errors"]
+                or after_graph["hnsw"] - before_graph["hnsw"] != calls
+                or after_graph["empty"] != before_graph["empty"]
+                or after_graph["exact"] != before_graph["exact"]
+                or not same_json(after_graph["filters"], before_graph["filters"])
+                or after_output["attempts"] - before_output["attempts"] != calls
+                or after_output["completed"] - before_output["completed"] != calls
+                or after_output["errors"] != before_output["errors"]):
+            raise ValueError("paired endpoints do not bind one completed HNSW call per record")
+        graph_fields = {
+            "base_ann_scored": "base_ann_scored", "base_candidates": "base_candidates",
+            "base_edges": "base_edges", "delta_scored": "delta_scored",
+            "exact_base_scored": "exact_base_scored", "base_shadowed": "base_shadowed",
+            "base_result_ids": "base_result_ids",
+        }
+        for counter, field in graph_fields.items():
+            expected = sum(getattr(work.graph, field) for work in work_records)
+            if after_graph[counter] - before_graph[counter] != expected:
+                raise ValueError(f"paired graph {counter} delta differs from retained call work")
+        output_fields = {
+            "requested": "requested", "fetched": "fetched", "missing": "missing",
+            "output_bytes": "output_bytes",
+            "retained_payload_fetches": "retained_payload_fetches",
+            "json_reconstruction_rows": "json_reconstruction_rows",
+            "typed_column_rows": "typed_column_rows",
+        }
+        for counter, field in output_fields.items():
+            expected = sum(getattr(work.output, field) for work in work_records)
+            if after_output[counter] - before_output[counter] != expected:
+                raise ValueError(f"paired output {counter} delta differs from retained call work")
+        return {
+            "availability": "measured",
+            "scope": ("one drained synchronous arm batch bracketed by process-wide Go runtime totals; "
+                      "diagnostic endpoint handling is included in allocation endpoints"),
+            "calls": calls,
+            "request_mode": next(iter(modes)),
+            "producer_counter_binding": "exact_sum_of_retained_dense_work",
+            "server_cpu_ns": server_cpu,
+            "server_cpu_ns_per_call": server_cpu / calls,
+            "client_harness_cpu_ns": client_cpu,
+            "client_harness_cpu_ns_per_call": client_cpu / calls,
+            "total_alloc_bytes": total_alloc,
+            "total_alloc_bytes_per_call": total_alloc / calls,
+            "mallocs": mallocs,
+            "mallocs_per_call": mallocs / calls,
+            "heap_alloc_bytes_before": before_work["memory"]["heap_alloc"],
+            "heap_alloc_bytes_after": after_work["memory"]["heap_alloc"],
+        }
+    except (AttributeError, KeyError, TypeError, ValueError) as exc:
+        raise RuntimeError(f"paired resource endpoints are invalid: {exc}") from exc
+
+
+def paired_batch_arm_order(batch_kind, repetition):
+    if batch_kind == "warmup" and repetition == -1:
+        return ["exact", "quantized_rerank"]
+    if batch_kind != "measured" or type(repetition) is not int or repetition < 0:
+        return None
+    return (["exact", "quantized_rerank"] if repetition % 2 == 0
+            else ["quantized_rerank", "exact"])
+
+
+def paired_phase(batch_kind, repetition, mode):
+    order = paired_batch_arm_order(batch_kind, repetition)
+    if order is None or mode not in order:
+        return None
+    batch = "warmup" if batch_kind == "warmup" else f"measured_r{repetition}"
+    return f"paired_{batch}_{mode}"
+
+
+def paired_snapshot_from_record(record, mode, expected_phase, expected_query, selected, rows):
+    """Revalidate one retained public call instead of trusting runtime admission."""
+    try:
+        quantized = mode == "quantized_rerank"
+        if (mode not in ("exact", "quantized_rerank")
+                or record["outcome"] != "success" or record.get("error")
+                or record["phase"] != expected_phase
+                or record["request_mode"] != mode
+                or record["query"] != expected_query
+                or record["eligible"] != rows or record["filter"] is not None
+                or record["requested_ef_search"] != selected
+                or type(record["expected_generation"]) is not int
+                or record["expected_generation"] <= 0
+                or type(record["recall"]) not in (int, float)
+                or type(record["ndcg_at_10"]) not in (int, float)
+                or not math.isfinite(record["recall"])
+                or not math.isfinite(record["ndcg_at_10"])
+                or not 0 <= record["recall"] <= 1
+                or not 0 <= record["ndcg_at_10"] <= 1):
+            return None
+        work = dense_contract.DenseSearchWork.from_dict(record["dense_work"])
+        if (not work.completed or not work.graph.completed or not work.graph.snapshot.available
+                or work.graph.route != "typed_hnsw" or not work.output.attempted
+                or not work.output.completed
+                or work.output.requested != 10 or len(record["results"]) != 10
+                or work.output.fetched != len(record["results"]) or work.output.missing != 0
+                or work.output.retained_payload_fetches != 10
+                or work.output.json_reconstruction_rows != 10
+                or work.output.typed_column_rows > 10 or work.output.output_bytes <= 0
+                or any(vars(work.graph.filter).values())
+                or work.graph.snapshot.base_manifest != work.graph.snapshot.current_manifest
+                or work.graph.snapshot.base_coverage_lsn != work.graph.snapshot.current_coverage_lsn
+                or not existing.quantized_snapshot_valid(
+                    work.graph.snapshot, record["expected_generation"],
+                )
+                or type(record["started_monotonic_ns"]) is not int
+                or type(record["ended_monotonic_ns"]) is not int
+                or type(record["duration_ns"]) is not int or record["duration_ns"] <= 0
+                or record["ended_monotonic_ns"] - record["started_monotonic_ns"] != record["duration_ns"]):
+            return None
+        if quantized:
+            proof = dense_contract.DenseScorePlaneProof.from_dict(record["score_plane"])
+            if (record["command_version"] != 3
+                    or record["requested_rerank_candidates"] != selected
+                    or not proof.completed or proof.requested_mode != "quantized_rerank"
+                    or proof.effective_mode != "quantized_rerank"
+                    or proof.route != "quantized_rerank" or proof.reason
+                    or proof.quantized_index_name != QUANTIZED_PROFILE_NAME
+                    or proof.quantized_codec != "scalar_u8" or proof.quantized_version != 1
+                    or proof.quantized_config_hash != 0
+                    or proof.requested_top_k != 10
+                    or proof.requested_ef_search != selected
+                    or proof.requested_rerank_candidates != selected
+                    or proof.quantized_score_calls <= 0
+                    or proof.quantized_code_bytes_read <= 0
+                    or not 10 <= proof.actual_rerank_candidates <= selected
+                    or proof.actual_rerank_candidates != proof.exact_base_rerank_score_calls
+                    or proof.exact_suffix_score_calls != 0
+                    or proof.exact_small_filter_score_calls != 0
+                    or work.graph.delta_scored != 0 or work.graph.base_shadowed != 0
+                    or work.graph.base_candidates != 0
+                    or not dense_contract.dense_score_plane_byte_counters_match(proof, 768)
+                    or not dense_contract.dense_quantized_response_work_matches(
+                        work, proof, 10, 10, False,
+                    )):
+                return None
+            snapshot = proof.snapshot
+        else:
+            if (record["command_version"] != 2
+                    or record.get("score_plane") is not None
+                    or record["requested_rerank_candidates"] is not None
+                    or work.graph.base_ann_scored <= 0
+                    or not 0 < work.graph.base_candidates <= work.graph.base_ann_scored
+                    or work.graph.base_edges <= 0 or work.graph.delta_scored != 0
+                    or work.graph.exact_base_scored != 0 or work.graph.base_shadowed != 0
+                    or work.graph.base_result_ids != 10):
+                return None
+            snapshot = work.graph.snapshot
+        return quantized_snapshot_identity(snapshot)
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def paired_results_valid(record, rows):
+    try:
+        ids, scores = [], []
+        for result in record["results"]:
+            if set(result) != {"id", "content", "meta", "score"}:
+                return False
+            identifier = result["id"]
+            if not isinstance(identifier, str) or not identifier.startswith("row-"):
+                return False
+            row = int(identifier.removeprefix("row-"))
+            score = result["score"]
+            if (identifier != f"row-{row:06d}" or not 0 <= row < rows
+                    or result["content"] != f"minima-cohere:{row}"
+                    or result["meta"] != {
+                        "user_id": f"{(row * 7919) % rows:06d}",
+                        "fpath": f"/cohere/{row // 256:06d}.txt",
+                    }
+                    or type(score) not in (int, float) or not math.isfinite(score)
+                    or not -1.000001 <= score <= 1.000001):
+                return False
+            ids.append(identifier)
+            scores.append(score)
+        return (len(ids) == 10 and len(set(ids)) == len(ids)
+                and list(zip((-score for score in scores), ids))
+                    == sorted(zip((-score for score in scores), ids)))
+    except (KeyError, TypeError, ValueError):
+        return False
+
+
+def paired_typed_graph_matches_owner(graph, owner, rows):
+    """Bind aggregate asset/storage gauges to the immutable per-call owner."""
+    try:
+        zero_debt = {"rows": 0, "tombstones": 0, "value_slots": 0, "bytes": 0}
+        return (
+            graph["index"] == "embedding"
+            and graph["publication_present"] is True
+            and graph["publication_unchanged"] is True
+            and graph["serving_ready"] is True
+            and graph["invalid"] is False and graph["reconciling"] is False
+            and graph["base_present"] is True
+            and graph["base_manifest"] == owner["base_manifest"]
+            and graph["current_manifest"] == owner["current_manifest"]
+            and graph["base_coverage_lsn"] == owner["base_coverage_lsn"]
+            and graph["current_coverage_lsn"] == owner["current_coverage_lsn"]
+            and graph["base_rows"] == rows
+            and graph["suffix_rows"] == 0 and graph["suffix_tombstones"] == 0
+            and graph["suffix_value_slots"] == 0 and graph["suffix_payload_bytes"] == 0
+            and graph["debt"] == zero_debt and graph["pending"] == zero_debt
+            and type(graph["installed_asset_bytes"]) is int
+            and graph["installed_asset_bytes"] >= 0
+            and type(graph["base_asset_bytes"]) is int and graph["base_asset_bytes"] > 0
+            and type(graph["owner_asset_bytes"]) is int and graph["owner_asset_bytes"] >= 0
+        )
+    except (KeyError, TypeError):
+        return False
+
+
+def paired_query_artifact_valid(artifact, plan):
+    """Fail-closed reusable validator for the same-owner repeated query packet."""
+    try:
+        timing = plan["paired_timing"]
+        repetitions = artifact["repetitions"]
+        queries = timing["queries"]
+        selected = artifact["selected_coordinate"]
+        if (timing["schema"] != "treedb_cohere_paired_timing_plan/v1"
+                or timing["warmup_batches"] != 1
+                or timing["measured_repetitions"] != PAIRED_TIMING_REPETITIONS
+                or timing["arm_order"] != "alternate_first_complete_arm_batch_by_repetition"
+                or not isinstance(queries, list) or not queries
+                or queries != list(range(len(queries)))
+                or len(queries) > PAIRED_TIMING_QUERY_COUNT
+                or artifact["schema"] != PAIRED_QUERY_ARTIFACT_SCHEMA
+                or artifact["status"] != "complete"
+                or artifact["collection"] != "minima_cohere"
+                or artifact["rows"] != plan["rows"] or artifact["dimensions"] != 768
+                or artifact["top_k"] != 10 or artifact["eligible"] != plan["rows"]
+                or not same_json(artifact["representation_arm"], plan["representation_arm"])
+                or not same_json(artifact["timing_plan"], timing)
+                or type(selected["ef_search"]) is not int
+                or selected["ef_search"] not in plan["rss_controls"]
+                or selected != {"ef_search": selected["ef_search"],
+                                "rerank_candidates": selected["ef_search"]}
+                or len(repetitions) != timing["measured_repetitions"]):
+            return False
+        expected_owner = None
+        expected_sequence = 1
+        endpoint_identity = None
+        prior_endpoint = None
+        prior_request_end = None
+        for batch_index, batch in enumerate([artifact["warmup"], *repetitions]):
+            kind = "warmup" if batch_index == 0 else "measured"
+            repetition = batch_index - 1
+            expected_order = paired_batch_arm_order(kind, repetition)
+            if (batch["batch_kind"] != kind
+                    or batch["repetition"] != batch_index - 1
+                    or batch["queries"] != queries or batch["arm_order"] != expected_order
+                    or set(batch["arms"]) != {"exact", "quantized_rerank"}):
+                return False
+            batch_owners = set()
+            for mode in expected_order:
+                arm = batch["arms"][mode]
+                if (arm["mode"] != mode or arm["queries"] != queries
+                        or len(arm["requests"]) != len(queries)):
+                    return False
+                if batch_index == 0:
+                    if set(arm) != {"mode", "queries", "requests"}:
+                        return False
+                else:
+                    if set(arm) != {"mode", "queries", "requests", "resources"}:
+                        return False
+                    resources = arm["resources"]
+                    recomputed = paired_resource_delta(
+                        resources["before"], resources["after"], arm["requests"],
+                    )
+                    if (resources["delta"]["availability"] != "measured"
+                            or resources["delta"]["calls"] != len(queries)
+                            or not same_json(resources["delta"], recomputed)):
+                        return False
+                    for endpoint in (resources["before"], resources["after"]):
+                        current_identity = {
+                            "pid": endpoint["pid"],
+                            "linux_process_identity": endpoint["linux_process_identity"],
+                            "generation": endpoint["generation"],
+                            "origin_unix_nano": endpoint["work"]["origin_unix_nano"],
+                            "typed_graph": endpoint["typed_graph"],
+                            "total_db_bytes_including_wal": endpoint["total_db_bytes_including_wal"],
+                        }
+                        if endpoint_identity is None:
+                            endpoint_identity = current_identity
+                        elif not same_json(endpoint_identity, current_identity):
+                            return False
+                        if prior_endpoint is not None:
+                            counters = (
+                                endpoint["work"]["memory"]["total_alloc"],
+                                endpoint["work"]["memory"]["mallocs"],
+                                endpoint["server_cpu"]["cpu_ns"], endpoint["client_cpu_ns"],
+                            )
+                            prior_counters = (
+                                prior_endpoint["work"]["memory"]["total_alloc"],
+                                prior_endpoint["work"]["memory"]["mallocs"],
+                                prior_endpoint["server_cpu"]["cpu_ns"],
+                                prior_endpoint["client_cpu_ns"],
+                            )
+                            if (endpoint["captured_monotonic_ns"] <= prior_endpoint["captured_monotonic_ns"]
+                                    or any(current < prior for current, prior
+                                           in zip(counters, prior_counters))):
+                                return False
+                        prior_endpoint = endpoint
+                phase = paired_phase(kind, repetition, mode)
+                for position, record in enumerate(arm["requests"]):
+                    owner = paired_snapshot_from_record(
+                        record, mode, phase, queries[position], selected["ef_search"], plan["rows"],
+                    )
+                    if (record["request_sequence"] != expected_sequence
+                            or not paired_results_valid(record, plan["rows"])
+                            or owner is None
+                            or (prior_request_end is not None
+                                and record["started_monotonic_ns"] < prior_request_end)):
+                        return False
+                    prior_request_end = record["ended_monotonic_ns"]
+                    expected_sequence += 1
+                    batch_owners.add(canonical(owner))
+                    if expected_owner is None:
+                        expected_owner = owner
+                    elif not same_json(expected_owner, owner):
+                        return False
+                if batch_index > 0:
+                    resources = arm["resources"]
+                    if (resources["before"]["captured_monotonic_ns"]
+                            >= arm["requests"][0]["started_monotonic_ns"]
+                            or resources["after"]["captured_monotonic_ns"]
+                            <= arm["requests"][-1]["ended_monotonic_ns"]):
+                        return False
+            if len(batch_owners) != 1 or not same_json(batch["common_owner"], expected_owner):
+                return False
+        storage = artifact["storage_attribution"]
+        final_mode = repetitions[-1]["arm_order"][-1]
+        final_endpoint = repetitions[-1]["arms"][final_mode]["resources"]["after"]
+        logical = plan["rows"] * 768
+        return (
+            paired_typed_graph_matches_owner(
+                final_endpoint["typed_graph"], expected_owner, plan["rows"],
+            )
+            and storage["actual_quantized_tvis_bytes"] is None
+            and storage["actual_quantized_tvis_bytes_availability"] == "producer_unavailable"
+            and storage["logical_sq8_code_bytes_per_vector"] == 768
+            and storage["logical_sq8_code_bytes"] == logical
+            and type(storage["total_db_bytes_including_wal"]) is int
+            and storage["total_db_bytes_including_wal"] > 0
+            and storage["total_db_bytes_including_wal"]
+                == final_endpoint["total_db_bytes_including_wal"]
+            and storage["wal_boundary"] == "included_in_total_db_bytes; no subtraction"
+            and all(type(storage["aggregate_typed_graph_asset_bytes"][name]) is int
+                    and storage["aggregate_typed_graph_asset_bytes"][name]
+                        >= (1 if name == "base_asset_bytes" else 0)
+                    and storage["aggregate_typed_graph_asset_bytes"][name]
+                        == final_endpoint["typed_graph"][name]
+                    for name in ("installed_asset_bytes", "base_asset_bytes", "owner_asset_bytes"))
+            and isinstance(storage["actual_quantized_tvis_bytes_producer"], str)
+            and "VectorIndexSearchStats" in storage["actual_quantized_tvis_bytes_producer"]
+            and "public" in storage["actual_quantized_tvis_bytes_producer"]
+        )
+    except (KeyError, RuntimeError, TypeError, ValueError):
+        return False
 
 
 class Run:
@@ -912,12 +1452,13 @@ class Run:
         self.quantized_requests = []
         self.quantized_quality = {}
         self.selected_efs = {}
+        self.paired_query_artifact = None
 
     def emit(self, event, **fields):
         with self.lock:
             self.events.write(canonical({"event": event, **fields}).decode())
 
-    def timed(self, phase, call, **fields):
+    def timed(self, phase, call, *, timing_evidence=None, **fields):
         if self.failure:
             raise RuntimeError(self.failure)
         start = time.monotonic_ns()
@@ -928,6 +1469,9 @@ class Run:
                       outcome="error", error=f"{type(exc).__name__}: {exc}", **fields)
             raise
         end = time.monotonic_ns()
+        if timing_evidence is not None:
+            timing_evidence.update(started_monotonic_ns=start, ended_monotonic_ns=end,
+                                   duration_ns=end - start)
         self.emit("call", phase=phase, start_ns=start, end_ns=end, duration_ns=end - start, outcome="completed", **fields)
         return result
 
@@ -1046,7 +1590,10 @@ class Run:
                 "folded": self.quantized_folded,
             }]
 
-    def validate_quantized_lifecycle(self, response, record, writer_active, eligible, ef):
+    def validate_quantized_lifecycle(self, response, record, writer_active, eligible, ef,
+                                     filter_requested=None):
+        if filter_requested is None:
+            filter_requested = eligible != self.plan["rows"]
         states = self.quantized_allowed_states(
             writer_active, record["started_monotonic_ns"], record["ended_monotonic_ns"],
         )
@@ -1065,22 +1612,26 @@ class Run:
             for state in states:
                 key = (state["owner_advance"], state["folded"])
                 prior = self.quantized_owner_snapshots.get(key)
-                if ((prior is None or same_json(prior, snapshot))
-                        and quantized_response_matches_state(
-                            response, state, self.plan["rows"], eligible, ef, initial,
-                        )):
-                    matched.append(state)
+                plans = quantized_response_state_plans(
+                    response, state, self.plan["rows"], eligible, ef, filter_requested,
+                )
+                if (plans and (prior is None or same_json(prior, snapshot))
+                        and quantized_snapshot_matches_state(
+                            response.score_plane.snapshot, initial, state,
+                        ) and quantized_response_projection_matches_state(response.documents, state)):
+                    matched.append((state, plans))
             if len(matched) != 1:
                 raise RuntimeError("quantized response does not identify one exact projection/width/owner lifecycle state")
             if self.quantized_initial_snapshot is None:
                 self.quantized_initial_snapshot = initial
-            state = matched[0]
+            state, plans = matched[0]
             self.quantized_owner_snapshots[(state["owner_advance"], state["folded"])] = snapshot
+        work = quantized_state_work(state, self.plan["rows"], eligible, ef, filter_requested)
+        live_base, live_suffix, _ = work
         record["lifecycle_state"] = {
             "owner_advance": state["owner_advance"], "folded": state["folded"],
-            "shadow_allowance": quantized_state_widths(
-                state, self.plan["rows"], eligible, ef,
-            )[3],
+            "shadow_allowance": max(plan[3] for plan in plans),
+            "live_base": live_base, "live_suffix": live_suffix,
         }
         return state
 
@@ -1122,30 +1673,52 @@ class Run:
                     window.update(ended_monotonic_ns=time.monotonic_ns(), success=True)
         return response
 
-    def search(self, phase, eligible, ef, query, writer_active=False, query_filter=None):
-        quantized = self.plan.get("query_mode") == "quantized_rerank"
+    def search(self, phase, eligible, ef, query, writer_active=False, query_filter=None,
+               request_mode=None, request_ledger=None):
+        configured_quantized = self.plan.get("query_mode") == "quantized_rerank"
+        request_mode = ("quantized_rerank" if configured_quantized else "exact") \
+            if request_mode is None else request_mode
+        if request_mode not in ("exact", "quantized_rerank") \
+                or (request_mode == "quantized_rerank" and not configured_quantized) \
+                or (request_mode == "exact" and request_ledger is not None and not configured_quantized):
+            raise ValueError("request mode is outside the frozen collection arm")
+        quantized = request_mode == "quantized_rerank"
         selected_filter = predicate(self.plan["rows"], eligible) if query_filter is None else query_filter
         record = None
-        if quantized:
+        if quantized or request_ledger is not None:
+            ledger = self.quantized_requests if request_ledger is None else request_ledger
             with self.lock:
                 record = {
-                    "request_sequence": len(self.quantized_requests) + 1,
+                    "request_sequence": len(ledger) + 1,
                     "phase": phase, "eligible": eligible, "query": query,
-                    "requested_ef_search": ef, "requested_rerank_candidates": ef,
-                    "command_version": 3, "expected_generation": self.info.generation,
+                    "requested_ef_search": ef,
+                    "requested_rerank_candidates": ef if quantized else None,
+                    "command_version": 3 if quantized else 2,
+                    "expected_generation": self.info.generation,
                     "started_monotonic_ns": time.monotonic_ns(), "outcome": "error", "results": [],
                 }
-                self.quantized_requests.append(record)
+                if request_ledger is not None:
+                    record.update(request_mode=request_mode, filter=selected_filter)
+                ledger.append(record)
         response = None
         try:
+            call_timing = {}
             response = self.timed(phase, lambda: self.clients.native.query_by_embedding(
                 "minima_cohere", self.queries[query].tolist(), 10, selected_filter,
                 route="ann", ef_search=ef, index_info=self.info,
                 **({"query_mode": "quantized_rerank", "quantized_index_name": QUANTIZED_PROFILE_NAME,
                     "quantized_rerank_candidates": ef} if quantized else {})),
-                eligible=eligible, ef=ef, query=query, writer_active=writer_active)
+                timing_evidence=call_timing, eligible=eligible, ef=ef, query=query,
+                writer_active=writer_active, request_mode=request_mode)
             if record is not None:
-                record["ended_monotonic_ns"] = time.monotonic_ns()
+                if not call_timing:
+                    ended = time.monotonic_ns()
+                    call_timing.update(
+                        started_monotonic_ns=record["started_monotonic_ns"],
+                        ended_monotonic_ns=ended,
+                        duration_ns=ended - record["started_monotonic_ns"],
+                    )
+                record.update(call_timing)
                 proof = getattr(response, "dense_work", None)
                 score_plane = getattr(response, "score_plane", None)
                 if proof is not None:
@@ -1156,6 +1729,7 @@ class Run:
                 validate_quantized_response(response, self.plan["rows"], eligible, ef,
                                             selected_filter is not None, self.info.generation)
             if ((not quantized and response.native_command_version != 2)
+                or (not quantized and getattr(response, "score_plane", None) is not None)
                 or response.index.generation != self.info.generation
                 or response.index.vector_strategy != "column_graph" or response.route != "ann"
                 or response.exact_fallbacks or response.full_document_scan_fallbacks or response.dense_work is None):
@@ -1166,32 +1740,39 @@ class Run:
             ids = [doc.id for doc in response.documents]
             if len(ids) != min(10, eligible) or len(set(ids)) != len(ids):
                 raise RuntimeError("unexpected search result cardinality")
-            results = [] if quantized else None
-            scores = [] if quantized else None
+            results = [] if record is not None else None
+            scores = []
             for doc in response.documents:
                 row = int(doc.id.removeprefix("row-"))
                 if not 0 <= row < self.plan["rows"] or (row * 7919) % self.plan["rows"] >= eligible:
                     raise RuntimeError("cross-filter search result")
                 if doc.meta.get("user_id") != f"{(row * 7919) % self.plan['rows']:06d}" or doc.score is None:
                     raise RuntimeError("missing scalar/score projection")
+                expected_meta = {"user_id": f"{(row * 7919) % self.plan['rows']:06d}",
+                                 "fpath": f"/cohere/{row // 256:06d}.txt"}
+                base_content = f"minima-cohere:{row}"
+                expected_content = ({base_content, base_content + ":updated"}
+                                    if quantized and writer_active else
+                                    {base_content + (":updated" if row in self.updated else "")})
+                if doc.meta != expected_meta or doc.content not in expected_content:
+                    raise RuntimeError("search result omitted or changed a full document projection")
                 # Correctness-only scoring is outside the public API timer.
                 vector = np.asarray(self.vectors[row], dtype=np.float64)
                 query_vector = np.asarray(self.queries[query], dtype=np.float64)
                 score = np.dot(vector, query_vector) / (np.linalg.norm(vector) * np.linalg.norm(query_vector))
                 if not math.isfinite(doc.score) or abs(score - doc.score) > 2e-5:
                     raise RuntimeError("returned score differs from independent full-vector cosine")
-                if quantized:
-                    expected_meta = {"user_id": f"{(row * 7919) % self.plan['rows']:06d}",
-                                     "fpath": f"/cohere/{row // 256:06d}.txt"}
-                    if doc.meta != expected_meta:
-                        raise RuntimeError("quantized result omitted or changed a full document projection")
-                    scores.append(float(doc.score))
+                scores.append(float(doc.score))
+                if record is not None:
                     results.append({"id": doc.id, "content": doc.content,
                                     "meta": doc.meta, "score": float(doc.score)})
             if quantized:
-                self.validate_quantized_lifecycle(response, record, writer_active, eligible, ef)
-            if quantized and list(zip((-score for score in scores), ids)) != sorted(zip((-score for score in scores), ids)):
-                raise RuntimeError("quantized results are not canonically ordered by score then ID")
+                self.validate_quantized_lifecycle(
+                    response, record, writer_active, eligible, ef,
+                    selected_filter is not None,
+                )
+            if list(zip((-score for score in scores), ids)) != sorted(zip((-score for score in scores), ids)):
+                raise RuntimeError("results are not canonically ordered by score then ID")
             truth = [] if eligible == 0 else self.truth[str(eligible)][query]
             if (quantized and response.score_plane.route in ("typed_exact", "typed_empty")
                     and ids != truth):
@@ -1201,10 +1782,11 @@ class Run:
             event = {"phase": phase, "eligible": eligible, "ef": ef, "query": query, "ids": ids,
                      "recall": recall, "ndcg_at_10": ndcg, "writer_active": writer_active,
                      "dense_work": record["dense_work"] if quantized else asdict(response.dense_work)}
+            if record is not None:
+                record.update(outcome="success", results=results, recall=recall, ndcg_at_10=ndcg)
             if quantized:
                 event["rerank_candidates"] = ef
                 event["score_plane"] = record["score_plane"]
-                record.update(outcome="success", results=results, recall=recall, ndcg_at_10=ndcg)
             self.emit("search_result", **event)
             return response
         except BaseException as exc:
@@ -1217,7 +1799,7 @@ class Run:
                     if value is not None and name not in record:
                         record[name] = asdict(value)
                 record["error"] = f"{type(exc).__name__}: {exc}"
-                self.emit("quantized_request", request=record)
+                self.emit("search_request_failure", request=record)
             raise
 
     def check_documents(self, docs, expected_ids):
@@ -1328,6 +1910,150 @@ class Run:
             raise RuntimeError("public full-state count mismatch")
         self.emit("full_state_verified", rows=seen, vectors_checked=seen, normalized_full_vector_tolerance=1e-6)
 
+    def paired_resource_endpoint(self):
+        """Capture one drained, same-owner endpoint around a paired query batch."""
+        pid = self.controller.pid
+        identity = self.controller._owned_identity
+        before_identity = existing.common.linux_process_identity(pid)
+        captured = self.controller.stats_snapshot()
+        after_identity = existing.common.linux_process_identity(pid)
+        try:
+            snapshot = captured["snapshot"]
+            work = snapshot["work"]
+            typed_graph = snapshot["last_opened_index"]["typed_graph"]
+            pending = {
+                key: int(snapshot.get("collections", {}).get(key, "0"))
+                for key in (
+                    "treedb.collections.write_domain.pending_docs",
+                    "treedb.collections.write_domain.pending_bytes",
+                    "treedb.collections.write_domain.pending_root_runs",
+                    "treedb.collections.write_domain.pending_indexed_flush_units",
+                    "treedb.collections.write_domain.pending_indexed_publication_bytes",
+                )
+            }
+            typed_pending = typed_graph["pending"]
+            if (captured["status"] != "captured" or before_identity != identity
+                    or after_identity != identity or work["pid"] != pid
+                    or work["schema_version"] != "treedb-work-v1" or work["scope"] != "process"
+                    or work["origin_kind"] != "go_package_init"
+                    or snapshot["last_opened_index"]["name"] != "minima_cohere"
+                    or snapshot["last_opened_index"]["generation"] != self.info.generation
+                    or any(pending.values())
+                    or any(typed_pending[name] != 0 for name in (
+                        "rows", "tombstones", "value_slots", "bytes",
+                    ))):
+                raise RuntimeError("diagnostic endpoint is not one drained owned graph")
+            cpu = process_cpu_endpoint(pid, identity)
+            if cpu["availability"] != "measured":
+                raise RuntimeError("owned server CPU endpoint is unavailable")
+            return {
+                "availability": "measured",
+                "captured_monotonic_ns": captured["captured_monotonic_ns"],
+                "pid": pid, "linux_process_identity": identity,
+                "generation": self.info.generation,
+                "work": work, "server_cpu": cpu,
+                "client_cpu_ns": time.process_time_ns(),
+                "drained_pending": pending,
+                "typed_graph": typed_graph,
+                "total_db_bytes_including_wal": existing.common.disk_bytes(self.output / "db"),
+            }
+        except (KeyError, TypeError, ValueError, RuntimeError) as exc:
+            raise RuntimeError(f"paired resource endpoint unavailable: {exc}") from exc
+
+    def paired_query_batch(self, batch_kind, repetition, ledger):
+        timing = self.plan["paired_timing"]
+        queries = timing["queries"]
+        arm_order = paired_batch_arm_order(batch_kind, repetition)
+        if arm_order is None:
+            raise RuntimeError("paired query batch identity is invalid")
+        arms, common_owner = {}, None
+        for mode in arm_order:
+            before = self.paired_resource_endpoint() if batch_kind == "measured" else None
+            records = []
+            phase = paired_phase(batch_kind, repetition, mode)
+            for query in queries:
+                prior = len(ledger)
+                self.search(
+                    phase, self.plan["rows"],
+                    self.selected_efs[str(self.plan["rows"])], query,
+                    request_mode=mode, request_ledger=ledger,
+                )
+                if len(ledger) != prior + 1:
+                    raise RuntimeError("paired query did not produce exactly one call record")
+                record = ledger[-1]
+                owner = paired_snapshot_from_record(
+                    record, mode, phase, query,
+                    self.selected_efs[str(self.plan["rows"])], self.plan["rows"],
+                )
+                if owner is None or (common_owner is not None and not same_json(owner, common_owner)):
+                    raise RuntimeError("paired exact/SQ8 calls did not bind one immutable graph owner")
+                common_owner = owner
+                records.append(record)
+            after = self.paired_resource_endpoint() if batch_kind == "measured" else None
+            arm = {"mode": mode, "queries": list(queries), "requests": records}
+            if before is not None and after is not None:
+                arm["resources"] = {
+                    "before": before, "after": after,
+                    "delta": paired_resource_delta(before, after, records),
+                }
+            arms[mode] = arm
+        return {
+            "batch_kind": batch_kind, "repetition": repetition,
+            "queries": list(queries), "arm_order": arm_order,
+            "common_owner": common_owner, "arms": arms,
+        }
+
+    def paired_query_timing(self):
+        if self.plan.get("query_mode") != "quantized_rerank" or self.plan.get("rss_only"):
+            raise RuntimeError("paired query timing requires the full SQ8 diagnostic")
+        timing = self.plan.get("paired_timing")
+        if not same_json(timing, paired_timing_plan(self.plan["queries"])):
+            raise RuntimeError("paired timing plan is not the frozen contract")
+        selected = self.selected_efs.get(str(self.plan["rows"]))
+        if type(selected) is not int or selected not in self.plan["rss_controls"]:
+            raise RuntimeError("paired timing requires a frozen all-rows coordinate")
+        ledger = []
+        warmup = self.paired_query_batch("warmup", -1, ledger)
+        repetitions = [
+            self.paired_query_batch("measured", repetition, ledger)
+            for repetition in range(timing["measured_repetitions"])
+        ]
+        final_mode = repetitions[-1]["arm_order"][-1]
+        endpoint = repetitions[-1]["arms"][final_mode]["resources"]["after"]
+        typed_graph = endpoint["typed_graph"]
+        artifact = {
+            "schema": PAIRED_QUERY_ARTIFACT_SCHEMA, "status": "complete",
+            "collection": "minima_cohere", "rows": self.plan["rows"],
+            "dimensions": 768, "top_k": 10, "eligible": self.plan["rows"],
+            "representation_arm": self.plan["representation_arm"],
+            "timing_plan": timing,
+            "selected_coordinate": {"ef_search": selected, "rerank_candidates": selected},
+            "warmup": warmup, "repetitions": repetitions,
+            "storage_attribution": {
+                "total_db_bytes_including_wal": endpoint["total_db_bytes_including_wal"],
+                "wal_boundary": "included_in_total_db_bytes; no subtraction",
+                "aggregate_typed_graph_asset_bytes": {
+                    name: typed_graph[name] for name in (
+                        "installed_asset_bytes", "base_asset_bytes", "owner_asset_bytes",
+                    )
+                },
+                "logical_sq8_code_bytes_per_vector": 768,
+                "logical_sq8_code_bytes": self.plan["rows"] * 768,
+                "actual_quantized_tvis_bytes": None,
+                "actual_quantized_tvis_bytes_availability": "producer_unavailable",
+                "actual_quantized_tvis_bytes_producer": (
+                    "internal VectorIndexSearchStats exposes QuantizedAssetMappedBytes and "
+                    "QuantizedAssetHeapCopyBytes, but the public DenseSearchWork/score_plane transport "
+                    "does not carry them; diagnostics typed_graph exposes only aggregate graph assets"
+                ),
+            },
+        }
+        if not paired_query_artifact_valid(artifact, self.plan):
+            raise RuntimeError("paired query artifact failed its independent contract validator")
+        self.paired_query_artifact = artifact
+        self.emit("paired_query_timing", artifact=artifact)
+        return artifact
+
     def rss_boundary(self):
         truth = self.truth[str(self.plan["rows"])]
 
@@ -1375,7 +2101,9 @@ class Run:
             artifact["observed_execution"] = {
                 "schema": "treedb_cohere_sq8_execution/v1",
                 "native_command_version": 3,
-                "requests": self.quantized_requests,
+                # Freeze this strict selection ledger before any later full-run
+                # diagnostic call can append to a different evidence packet.
+                "requests": json.loads(canonical(self.quantized_requests)),
             }
             artifact["readiness"]["effective_index"] = self.info.to_dict()
         return artifact
@@ -1430,6 +2158,7 @@ class Run:
                 self.selected_efs = {eligible: row["selected_coordinate"]["ef_search"]
                                      for eligible, row in self.quantized_quality.items()}
                 # Selection is now frozen. Later diagnostic/lifecycle calls only reuse these coordinates.
+                self.paired_query_timing()
                 for eligible in self.plan["eligible_counts"]:
                     for query in range(self.plan["queries"]):
                         self.search("fixed_coordinate_curve", eligible, self.selected_efs[str(eligible)], query)
