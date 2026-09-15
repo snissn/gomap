@@ -36,6 +36,7 @@ from treedb_client import (
     UnsupportedError,
 )
 from treedb_client.client import _dense_http_results_ordered, _is_legacy_scalar_u8_v1_index
+from treedb_client._dense_work import dense_quantized_response_work_matches
 
 
 SAMPLE_INDEX = {
@@ -642,7 +643,7 @@ class TreeDBClientTests(unittest.TestCase):
                 "completed": True,
                 "route": "typed_hnsw",
                 "base_ann_scored": 1,
-                "base_candidates": 1,
+                "base_candidates": 0,
                 "base_edges": 0,
                 "delta_scored": 0,
                 "exact_base_scored": 1,
@@ -723,6 +724,41 @@ class TreeDBClientTests(unittest.TestCase):
                 expected_generation=1,
             )
             self.assertEqual(result.documents[0].id, "a")
+            hostile_unfiltered = copy.deepcopy(payload)
+            hostile_unfiltered["dense_work"]["graph"].update(
+                base_ann_scored=2, base_candidates=0, exact_base_scored=2, base_result_ids=2,
+            )
+            hostile_unfiltered["score_plane"].update(
+                normalized_candidate_width=2,
+                raw_candidate_width=2,
+                rerank_candidate_cap=2,
+                raw_retained_candidates=2,
+                live_shortlist_candidates=2,
+                actual_rerank_candidates=2,
+                quantized_score_calls=2,
+                quantized_code_bytes_read=4,
+                exact_base_rerank_score_calls=2,
+                exact_base_vector_bytes_read=16,
+            )
+            with mock.patch.object(client, "_request", return_value=hostile_unfiltered):
+                expanded = client.query_by_embedding(
+                    "docs", [1, 0], 1, query_mode="quantized_rerank",
+                    quantized_index_name="embedding.scalar_u8.public",
+                )
+            self.assertTrue(dense_quantized_response_work_matches(
+                expanded.dense_work, expanded.score_plane, 1, 1, False
+            ))
+            self.assertFalse(dense_quantized_response_work_matches(
+                replace(expanded.dense_work, graph=replace(expanded.dense_work.graph, base_candidates=1)),
+                expanded.score_plane, 1, 1, False,
+            ))
+            hostile_unfiltered["dense_work"]["graph"]["base_candidates"] = 1
+            with mock.patch.object(client, "_request", return_value=hostile_unfiltered), \
+                 self.assertRaisesRegex(TreeDBProtocolError, "score-plane proof"):
+                client.query_by_embedding(
+                    "docs", [1, 0], 1, query_mode="quantized_rerank",
+                    quantized_index_name="embedding.scalar_u8.public",
+                )
             for name, field, value in (
                 ("missing materialization row", "document_materialization_rows", 0),
                 ("excess materialization row", "document_materialization_rows", 2),
@@ -935,6 +971,7 @@ class TreeDBClientTests(unittest.TestCase):
                     quantized_index_name="embedding.scalar_u8.public",
                 )
             filtered_payload = copy.deepcopy(payload)
+            filtered_payload["dense_work"]["graph"]["base_candidates"] = 1
             filtered_payload["dense_work"]["graph"]["filter"].update(attempted=True, completed=True, eligible_rows=4097)
             with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, filtered_payload, 0)}) as filtered_server:
                 filtered_client = TreeDBClient(filtered_server.base_url, timeout=1)
@@ -943,6 +980,17 @@ class TreeDBClientTests(unittest.TestCase):
                     query_mode="quantized_rerank", quantized_index_name="embedding.scalar_u8.public",
                 )
                 self.assertEqual(filtered_result.documents[0].id, "a")
+                filtered_client.close()
+            filtered_underreported = copy.deepcopy(filtered_payload)
+            filtered_underreported["dense_work"]["graph"]["base_candidates"] = 0
+            with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, filtered_underreported, 0)}) as filtered_server:
+                filtered_client = TreeDBClient(filtered_server.base_url, timeout=1)
+                with self.assertRaisesRegex(TreeDBProtocolError, "score-plane proof"):
+                    filtered_client.query_by_embedding(
+                        "docs", [1, 0], 1,
+                        filter={"field": "meta.repo", "operator": "==", "value": "gomap"},
+                        query_mode="quantized_rerank", quantized_index_name="embedding.scalar_u8.public",
+                    )
                 filtered_client.close()
             filtered_exact = copy.deepcopy(filtered_payload)
             filtered_exact["dense_work"]["graph"].update(

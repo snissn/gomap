@@ -262,6 +262,12 @@ filter of at most 4,096 rows is intentionally the typed exact route (still with
 selected-asset validation for a nonempty base), and its actual live base plus
 suffix exact scores must fit `B`; the 4,097 boundary goes through ANN.
 
+The completed public proof keeps Q1's minimal-stat distinction explicit.
+Unfiltered scalar-u8 traversal canonically suppresses `base_candidates` to
+zero. Filtered traversal records the admitted layer-0 candidate count, which
+must be at least the score plane's `raw_retained_candidates`; in both cases it
+cannot exceed `base_ann_scored`.
+
 Q2's final base and suffix ordering uses raw authoritative FP32 vectors with
 FP64 inverse norms and `vectorops.CosineDistanceFloat32Normalized`, returning
 `1 - float64(distance)`. It must not substitute a packed raw dot or rounded

@@ -180,6 +180,22 @@ func TestDenseQuantizedScorePlaneResponseRejectsUnsupportedRoute(t *testing.T) {
 	if err := validateDenseQuantizedScorePlaneResponse(work, proof, request, 0); err != nil {
 		t.Fatalf("valid public proof rejected: %v", err)
 	}
+	unfilteredCandidates := *proof
+	unfilteredCandidates.NormalizedCandidateWidth, unfilteredCandidates.RawCandidateWidth = 2, 2
+	unfilteredCandidates.RerankCandidateCap, unfilteredCandidates.RawRetainedCandidates = 2, 2
+	unfilteredCandidates.LiveShortlistCandidates, unfilteredCandidates.ActualRerankCandidates = 1, 1
+	unfilteredCandidates.QuantizedScoreCalls, unfilteredCandidates.QuantizedCodeBytesRead = 2, 4
+	unfilteredCandidates.ExactBaseRerankScoreCalls, unfilteredCandidates.ExactBaseVectorBytesRead = 1, 8
+	unfilteredCandidateWork := work
+	unfilteredCandidateWork.Graph.BaseANNScored = 2
+	unfilteredCandidateWork.Graph.ExactBaseScored, unfilteredCandidateWork.Graph.BaseResultIDs = 1, 1
+	if err := validateDenseQuantizedScorePlaneResponse(unfilteredCandidateWork, &unfilteredCandidates, request, 1); err != nil {
+		t.Fatalf("valid expanded unfiltered public proof rejected: %v", err)
+	}
+	unfilteredCandidateWork.Graph.BaseCandidates = 1
+	if err := validateDenseQuantizedScorePlaneResponse(unfilteredCandidateWork, &unfilteredCandidates, request, 1); err == nil {
+		t.Fatal("unfiltered quantized proof accepted a suppressed base-candidate count")
+	}
 	newerAggregate := request
 	newerAggregate.ExpectedGeneration = proof.Snapshot.SchemaGeneration + 1
 	if err := validateDenseQuantizedScorePlaneResponse(work, proof, newerAggregate, 0); err != nil {
@@ -217,11 +233,16 @@ func TestDenseQuantizedScorePlaneResponseRejectsUnsupportedRoute(t *testing.T) {
 	filteredProof.RawRetainedCandidates, filteredProof.LiveShortlistCandidates, filteredProof.ActualRerankCandidates = 1, 1, 1
 	filteredProof.ExactBaseRerankScoreCalls, filteredProof.ExactBaseVectorBytesRead = 1, 8
 	filteredWork := work
-	filteredWork.Graph.BaseShadowed = 0
+	filteredWork.Graph.BaseCandidates, filteredWork.Graph.BaseShadowed = 1, 0
 	filteredWork.Graph.ExactBaseScored, filteredWork.Graph.BaseResultIDs = 1, 1
 	filteredWork.Graph.Filter = collections.ColumnGraphFilterWork{Attempted: true, Completed: true, EligibleRows: denseTypedScalarExactLimit + 1}
 	if err := validateDenseQuantizedScorePlaneResponse(filteredWork, &filteredProof, filteredRequest, 1); err != nil {
 		t.Fatalf("valid filtered public proof rejected: %v", err)
+	}
+	filteredUnderreported := filteredWork
+	filteredUnderreported.Graph.BaseCandidates = 0
+	if err := validateDenseQuantizedScorePlaneResponse(filteredUnderreported, &filteredProof, filteredRequest, 1); err == nil {
+		t.Fatal("filtered quantized proof retained more candidates than graph work reported")
 	}
 	if err := validateDenseQuantizedScorePlaneResponse(work, proof, filteredRequest, 0); err == nil {
 		t.Fatal("filtered request accepted without filter work")

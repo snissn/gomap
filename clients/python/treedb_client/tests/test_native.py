@@ -61,6 +61,35 @@ class NativeCodecTests(unittest.TestCase):
             self.assertEqual(response.native_command_version, 3)
             self.assertIsNotNone(response.score_plane)
             self.assertEqual(response.score_plane.quantized_index_name, "embedding.scalar_u8.public")
+            hostile_work_values = list(work_values)
+            hostile_work_values[3:5] = [2, 0]
+            hostile_work_values[7], hostile_work_values[9] = 2, 2
+            hostile_plane_values = list(values)
+            hostile_plane_values[10:16] = [2, 2, 2, 2, 2, 2]
+            hostile_plane_values[16:18] = [2, 4]
+            hostile_plane_values[18], hostile_plane_values[21] = 2, 16
+            hostile_plane = b"".join(_uint(value) for value in hostile_plane_values) + b"\x00" + _bytes_for_test("embedding.scalar_u8.public") + _bytes_for_test("scalar_u8")
+            hostile_plane += b"\x01\x01\x01\x03" * 2
+            hostile_body = (
+                _section(102, _vector([b"a"])) + _section(103, _vector([b'{"id":"a"}'])) +
+                _section(130, meta) + _section(134, b"".join(_uint(value) for value in hostile_work_values)) +
+                _section(136, hostile_plane)
+            )
+            _dense_response(
+                hostile_body, 1, version=3, query_mode="quantized_rerank",
+                quantized_index_name="embedding.scalar_u8.public", quantized_rerank_candidates=0,
+                ef_search=0, query_dimension=2,
+            )
+            hostile_work_values[4] = 1
+            with self.assertRaisesRegex(TreeDBProtocolError, "score-plane proof"):
+                _dense_response(
+                    _section(102, _vector([b"a"])) + _section(103, _vector([b'{"id":"a"}'])) +
+                    _section(130, meta) + _section(134, b"".join(_uint(value) for value in hostile_work_values)) +
+                    _section(136, hostile_plane),
+                    1, version=3, query_mode="quantized_rerank",
+                    quantized_index_name="embedding.scalar_u8.public", quantized_rerank_candidates=0,
+                    ef_search=0, query_dimension=2,
+                )
             proof_only_payload = _section(2, _uint(1) + b"\x00" + _bytes_for_test("native error")) + _section(136, score_plane)
             proof_only_client = TreeDBClient("http://127.0.0.1:1", native_address="127.0.0.1:2")
             proof_only_client._native.socket = mock.Mock()
@@ -162,6 +191,7 @@ class NativeCodecTests(unittest.TestCase):
                     )
             filtered_work_values = list(work_values)
             filtered_work_values[1] |= (1 << 3) | (1 << 4)
+            filtered_work_values[4] = 1
             filtered_work_values[10] = 4097
             filtered_body = (
                 _section(102, _vector([b"a"])) + _section(103, _vector([b'{"id":"a"}'])) +

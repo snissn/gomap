@@ -425,7 +425,13 @@ func denseScorePlaneCountersMatchWork(work documentservice.DenseSearchWork, proo
 			return false
 		}
 	case "quantized_rerank":
-		if filterRequested && work.Graph.Filter.EligibleRows <= denseTypedScalarExactLimit {
+		// Minimal traversal suppresses BaseCandidates without a filter; filtered
+		// traversal reports the candidate set that must cover every retained row.
+		if filterRequested {
+			if work.Graph.Filter.EligibleRows <= denseTypedScalarExactLimit || proof.RawRetainedCandidates > work.Graph.BaseCandidates {
+				return false
+			}
+		} else if work.Graph.BaseCandidates != 0 {
 			return false
 		}
 		if work.Graph.BaseShadowed > proof.RawRetainedCandidates ||

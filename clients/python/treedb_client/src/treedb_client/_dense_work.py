@@ -397,8 +397,11 @@ def dense_quantized_response_work_matches(work, proof, top_k, result_count, filt
                 or graph.filter.eligible_rows <= _DENSE_TYPED_SCALAR_EXACT_LIMIT
             )
         )
+    # Minimal traversal suppresses base_candidates only for unfiltered work.
     return (
         (not filter_requested or graph.filter.eligible_rows > _DENSE_TYPED_SCALAR_EXACT_LIMIT)
+        and ((filter_requested and proof.raw_retained_candidates <= graph.base_candidates)
+             or (not filter_requested and graph.base_candidates == 0))
         and graph.base_shadowed <= proof.raw_retained_candidates
         and proof.live_shortlist_candidates
         == min(proof.normalized_candidate_width, proof.raw_retained_candidates - graph.base_shadowed)
