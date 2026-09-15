@@ -52,7 +52,8 @@ func denseSnapshotConsistent(s collections.ColumnGraphQuerySnapshot) bool {
 	if !s.Available {
 		return s == (collections.ColumnGraphQuerySnapshot{})
 	}
-	return s.SchemaGeneration != 0 &&
+	return s.SchemaHash != 0 &&
+		s.SchemaGeneration != 0 &&
 		s.BaseCoverageLSN != 0 &&
 		s.CurrentCoverageLSN >= s.BaseCoverageLSN &&
 		denseManifestWorkComplete(s.BaseManifest) &&

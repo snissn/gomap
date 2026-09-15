@@ -488,6 +488,8 @@ class TreeDBClient:
                     document = Document.from_dict(json.loads(document_raw))
                     if document.id.encode("utf-8") != item_id:
                         raise ValueError("document ID mismatch")
+                    if document.score is not None:
+                        raise ValueError("document score must use the native result envelope")
                     document.score = score
                 except (ValueError, KeyError, TypeError, OverflowError) as exc:
                     raise TreeDBProtocolError("invalid native dense document", dense_work=work, score_plane=score_plane) from exc
@@ -1420,6 +1422,8 @@ def _dense_http_results_ordered(documents: Sequence[Document]) -> bool:
 def _dense_document_embeddings_match(
     documents: Sequence[Document], return_embedding: bool, dimension: int
 ) -> bool:
+    if any(document.embedding_f32_le_b64 is not None for document in documents):
+        return False
     if not return_embedding:
         return all(document.embedding is None for document in documents)
     return all(

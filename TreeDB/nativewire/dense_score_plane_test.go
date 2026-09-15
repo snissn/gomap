@@ -132,6 +132,7 @@ func TestDenseScorePlaneCodecOwnedAndStrict(t *testing.T) {
 		t.Fatal("score-plane proof with reversed snapshot manifest generation accepted")
 	}
 	for name, mutate := range map[string]func(*collections.ColumnGraphQuerySnapshot){
+		"schema hash":       func(s *collections.ColumnGraphQuerySnapshot) { s.SchemaHash = 0 },
 		"schema generation": func(s *collections.ColumnGraphQuerySnapshot) { s.SchemaGeneration = 0 },
 		"base coverage LSN": func(s *collections.ColumnGraphQuerySnapshot) { s.BaseCoverageLSN = 0 },
 	} {
@@ -173,7 +174,7 @@ func TestDenseQuantizedScorePlaneResponseRejectsUnsupportedRoute(t *testing.T) {
 		RequestedTopK: 1, RequestedEFSearch: 8,
 		NormalizedCandidateWidth: 1, RawCandidateWidth: 1, RerankCandidateCap: 1,
 		RawRetainedCandidates: 1, QuantizedScoreCalls: 1,
-		Snapshot: collections.ColumnGraphQuerySnapshot{Available: true, SchemaGeneration: 1,
+		Snapshot: collections.ColumnGraphQuerySnapshot{Available: true, SchemaHash: 1, SchemaGeneration: 1,
 			BaseManifest:    collections.ColumnGraphManifestWork{Generation: 1, Format: "tcs1", Version: 1, Checksum: 3},
 			CurrentManifest: collections.ColumnGraphManifestWork{Generation: 1, Format: "tcs1", Version: 1, Checksum: 3},
 			BaseCoverageLSN: 1, CurrentCoverageLSN: 1},
@@ -576,6 +577,38 @@ func TestDenseV3ResultsHaveValidIDs(t *testing.T) {
 	}
 }
 
+func TestDenseV3ResultDocumentsMatchRequest(t *testing.T) {
+	withoutEmbedding := DenseVectorSearchRequest{Query: []float32{1, 0}}
+	withEmbedding := withoutEmbedding
+	withEmbedding.ReturnEmbedding = true
+	for name, candidate := range map[string]struct {
+		result  DenseVectorSearchResult
+		request DenseVectorSearchRequest
+		valid   bool
+	}{
+		"omitted embedding":     {DenseVectorSearchResult{ID: []byte("a"), Document: []byte(`{"id":"a","content":"alpha","meta":{"kind":"test"}}`)}, withoutEmbedding, true},
+		"requested embedding":   {DenseVectorSearchResult{ID: []byte("a"), Document: []byte(`{"id":"a","embedding":[1,0]}`)}, withEmbedding, true},
+		"mismatched ID":         {DenseVectorSearchResult{ID: []byte("a"), Document: []byte(`{"id":"b"}`)}, withoutEmbedding, false},
+		"malformed JSON":        {DenseVectorSearchResult{ID: []byte("a"), Document: []byte(`{"id":`)}, withoutEmbedding, false},
+		"invalid UTF-8":         {DenseVectorSearchResult{ID: []byte("a"), Document: []byte{'{', '"', 'i', 'd', '"', ':', '"', 0xff, '"', '}'}}, withoutEmbedding, false},
+		"unknown field":         {DenseVectorSearchResult{ID: []byte("a"), Document: []byte(`{"id":"a","future":1}`)}, withoutEmbedding, false},
+		"inner score":           {DenseVectorSearchResult{ID: []byte("a"), Document: []byte(`{"id":"a","score":1}`)}, withoutEmbedding, false},
+		"compact embedding":     {DenseVectorSearchResult{ID: []byte("a"), Document: []byte(`{"id":"a","embedding_f32_le_b64":"AACAPwAAAAA="}`)}, withoutEmbedding, false},
+		"unrequested embedding": {DenseVectorSearchResult{ID: []byte("a"), Document: []byte(`{"id":"a","embedding":[1,0]}`)}, withoutEmbedding, false},
+		"empty embedding":       {DenseVectorSearchResult{ID: []byte("a"), Document: []byte(`{"id":"a","embedding":[]}`)}, withoutEmbedding, false},
+		"missing embedding":     {DenseVectorSearchResult{ID: []byte("a"), Document: []byte(`{"id":"a"}`)}, withEmbedding, false},
+		"wrong embedding size":  {DenseVectorSearchResult{ID: []byte("a"), Document: []byte(`{"id":"a","embedding":[1]}`)}, withEmbedding, false},
+		"overflowing embedding": {DenseVectorSearchResult{ID: []byte("a"), Document: []byte(`{"id":"a","embedding":[3.5e38,0]}`)}, withEmbedding, false},
+		"trailing JSON value":   {DenseVectorSearchResult{ID: []byte("a"), Document: []byte(`{"id":"a"}{}`)}, withoutEmbedding, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := denseV3ResultDocumentsMatchRequest([]DenseVectorSearchResult{candidate.result}, candidate.request); got != candidate.valid {
+				t.Fatalf("document validation=%v, want %v", got, candidate.valid)
+			}
+		})
+	}
+}
+
 func TestDenseV3ResultsHaveCosineScores(t *testing.T) {
 	if !denseV3ResultsHaveCosineScores([]DenseVectorSearchResult{
 		{Score: -1 - denseCosineScoreTolerance},
@@ -704,7 +737,7 @@ func TestDenseV3FailureProofBindsRequestWithoutRetainingRemoteError(t *testing.T
 		QuantizedIndexName: "embedding.scalar_u8.public", QuantizedRerankCandidates: 8,
 		ExpectedGeneration: 2,
 	}
-	snapshot := collections.ColumnGraphQuerySnapshot{Available: true, SchemaGeneration: 2,
+	snapshot := collections.ColumnGraphQuerySnapshot{Available: true, SchemaHash: 1, SchemaGeneration: 2,
 		BaseManifest:    collections.ColumnGraphManifestWork{Generation: 1, Format: "tcs1", Version: 1, Checksum: 3},
 		CurrentManifest: collections.ColumnGraphManifestWork{Generation: 1, Format: "tcs1", Version: 1, Checksum: 3},
 		BaseCoverageLSN: 1, CurrentCoverageLSN: 1}
@@ -1305,25 +1338,32 @@ func TestDenseV3ResultDecodeErrorsPreserveOwnedProofs(t *testing.T) {
 	work := documentservice.DenseSearchWork{
 		Version: 1, Completed: true,
 		Graph: collections.ColumnGraphQueryWork{
-			Available: true, Completed: true, Route: "typed_hnsw", BaseANNScored: 1, BaseResultIDs: 1,
+			Available: true, Completed: true, Route: "typed_hnsw", BaseANNScored: 1,
+			ExactBaseScored: 1, BaseResultIDs: 1,
 			Snapshot: proof.Snapshot,
 		},
-		Output: documentservice.DenseSearchOutputWork{Attempted: true, Completed: true, Requested: 1, Fetched: 1, OutputBytes: 2},
+		Output: documentservice.DenseSearchOutputWork{
+			Attempted: true, Completed: true, Requested: 1, Fetched: 1,
+			RetainedPayloadFetches: 1, JSONReconstructionRows: 1, TypedColumnRows: 1,
+		},
 	}
-	workRaw, err := appendDenseWork(nil, work)
-	if err != nil {
-		t.Fatal(err)
-	}
+	var err error
 	proofRaw, err := appendDenseScorePlane(nil, proof, iwire.DefaultLimits())
 	if err != nil {
 		t.Fatal(err)
 	}
-	responseFor := func(meta, id []byte) []byte {
+	responseFor := func(meta, id, document []byte) ([]byte, documentservice.DenseSearchWork) {
 		t.Helper()
+		candidateWork := work
+		candidateWork.Output.OutputBytes = uint64(len(document))
+		workRaw, workErr := appendDenseWork(nil, candidateWork)
+		if workErr != nil {
+			t.Fatal(workErr)
+		}
 		var body []byte
 		for _, section := range []iwire.Section{
 			{ID: iwire.SectionDocumentIDs, Bytes: iwire.AppendByteVector(nil, id)},
-			{ID: iwire.SectionDocuments, Bytes: iwire.AppendByteVector(nil, []byte("{}"))},
+			{ID: iwire.SectionDocuments, Bytes: iwire.AppendByteVector(nil, document)},
 			{ID: iwire.SectionDenseSearchResponse, Bytes: meta},
 			{ID: iwire.SectionDenseSearchWork, Flags: iwire.SectionFlagCritical, Bytes: workRaw},
 			{ID: iwire.SectionDenseSearchScorePlaneProof, Flags: iwire.SectionFlagCritical, Bytes: proofRaw},
@@ -1333,9 +1373,48 @@ func TestDenseV3ResultDecodeErrorsPreserveOwnedProofs(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		return body
+		return body, candidateWork
 	}
 	validScore := binary.LittleEndian.AppendUint64(nil, math.Float64bits(1))
+	validMeta := append([]byte{3, 1, 0, 0, 1}, validScore...)
+	baseRequest := DenseVectorSearchRequest{
+		TypedColumnGraph: true, Index: "docs", Query: []float32{1, 0}, TopK: 1, EfSearch: 8,
+		QueryMode: collections.VectorIndexQueryModeQuantizedRerank, QuantizedIndexName: proof.QuantizedIndexName,
+	}
+	roundTrip := func(meta, id, document []byte, request DenseVectorSearchRequest) (DenseVectorSearchResponse, error, documentservice.DenseSearchWork) {
+		t.Helper()
+		clientConn, serverConn := net.Pipe()
+		client := NewClient(clientConn)
+		client.denseTypedQuantizedNegotiated = true
+		response, expectedWork := responseFor(meta, id, document)
+		errCh := make(chan error, 1)
+		go func() {
+			header, _, serveErr := readFrame(serverConn, iwire.DefaultLimits())
+			if serveErr == nil {
+				serveErr = writeFrame(serverConn, iwire.Header{Type: iwire.FrameResponse, RequestID: header.RequestID}, response)
+			}
+			errCh <- serveErr
+		}()
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		out, gotErr := client.DenseVectorSearch(ctx, request)
+		cancel()
+		_ = client.Close()
+		_ = serverConn.Close()
+		if serveErr := <-errCh; serveErr != nil {
+			t.Fatal(serveErr)
+		}
+		return out, gotErr, expectedWork
+	}
+	assertOwnedProofs := func(gotErr error, expectedWork documentservice.DenseSearchWork) {
+		t.Helper()
+		var decodeErr *DenseVectorSearchDecodeError
+		if !errors.As(gotErr, &decodeErr) || decodeErr.DenseWork == nil || decodeErr.ScorePlane == nil {
+			t.Fatalf("decode error lost proofs: %v", gotErr)
+		}
+		if *decodeErr.DenseWork != expectedWork || *decodeErr.ScorePlane != proof {
+			t.Fatalf("decode error proofs changed: work=%+v score_plane=%+v", decodeErr.DenseWork, decodeErr.ScorePlane)
+		}
+	}
 	for name, candidate := range map[string]struct{ meta, id []byte }{
 		"candidate count":    {append([]byte{3, 0, 0, 0, 1}, validScore...), []byte("a")},
 		"nonfinite score":    {append([]byte{3, 1, 0, 0, 1}, binary.LittleEndian.AppendUint64(nil, math.Float64bits(math.NaN()))...), []byte("a")},
@@ -1345,62 +1424,42 @@ func TestDenseV3ResultDecodeErrorsPreserveOwnedProofs(t *testing.T) {
 		"trailing-space ID":  {append([]byte{3, 1, 0, 0, 1}, validScore...), []byte("a ")},
 	} {
 		t.Run(name, func(t *testing.T) {
-			clientConn, serverConn := net.Pipe()
-			client := NewClient(clientConn)
-			client.denseTypedQuantizedNegotiated = true
-			response := responseFor(candidate.meta, candidate.id)
-			errCh := make(chan error, 1)
-			go func() {
-				header, _, serveErr := readFrame(serverConn, iwire.DefaultLimits())
-				if serveErr == nil {
-					serveErr = writeFrame(serverConn, iwire.Header{Type: iwire.FrameResponse, RequestID: header.RequestID}, response)
-				}
-				errCh <- serveErr
-			}()
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-			_, gotErr := client.DenseVectorSearch(ctx, DenseVectorSearchRequest{
-				TypedColumnGraph: true, Index: "docs", Query: []float32{1, 0}, TopK: 1, EfSearch: 8,
-				QueryMode: collections.VectorIndexQueryModeQuantizedRerank, QuantizedIndexName: proof.QuantizedIndexName,
-			})
-			cancel()
-			_ = client.Close()
-			_ = serverConn.Close()
-			if serveErr := <-errCh; serveErr != nil {
-				t.Fatal(serveErr)
-			}
-			var decodeErr *DenseVectorSearchDecodeError
-			if !errors.As(gotErr, &decodeErr) || decodeErr.DenseWork == nil || decodeErr.ScorePlane == nil {
-				t.Fatalf("decode error lost proofs: %v", gotErr)
-			}
-			if *decodeErr.DenseWork != work || *decodeErr.ScorePlane != proof {
-				t.Fatalf("decode error proofs changed: work=%+v score_plane=%+v", decodeErr.DenseWork, decodeErr.ScorePlane)
-			}
+			_, gotErr, expectedWork := roundTrip(candidate.meta, candidate.id, []byte(`{"id":"a"}`), baseRequest)
+			assertOwnedProofs(gotErr, expectedWork)
 		})
 	}
 
-	clientConn, serverConn := net.Pipe()
-	client := NewClient(clientConn)
-	client.denseTypedQuantizedNegotiated = true
-	response := responseFor(append([]byte{3, 0, 0, 0, 1}, validScore...), []byte("a"))
-	errCh := make(chan error, 1)
-	go func() {
-		header, _, serveErr := readFrame(serverConn, iwire.DefaultLimits())
-		if serveErr == nil {
-			serveErr = writeFrame(serverConn, iwire.Header{Type: iwire.FrameResponse, RequestID: header.RequestID}, response)
-		}
-		errCh <- serveErr
-	}()
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	_, gotErr := client.DenseVectorSearch(ctx, DenseVectorSearchRequest{
-		TypedColumnGraph: true, Index: "docs", Query: []float32{1, 0}, TopK: 1, EfSearch: 9,
-		QueryMode: collections.VectorIndexQueryModeQuantizedRerank, QuantizedIndexName: proof.QuantizedIndexName,
-	})
-	cancel()
-	_ = client.Close()
-	_ = serverConn.Close()
-	if serveErr := <-errCh; serveErr != nil {
-		t.Fatal(serveErr)
+	for name, candidate := range map[string]struct {
+		document        []byte
+		returnEmbedding bool
+		valid           bool
+	}{
+		"omitted embedding":     {[]byte(`{"id":"a","content":"alpha"}`), false, true},
+		"requested embedding":   {[]byte(`{"id":"a","embedding":[1,0]}`), true, true},
+		"mismatched ID":         {[]byte(`{"id":"b"}`), false, false},
+		"unrequested embedding": {[]byte(`{"id":"a","embedding":[1,0]}`), false, false},
+		"missing embedding":     {[]byte(`{"id":"a"}`), true, false},
+		"wrong embedding size":  {[]byte(`{"id":"a","embedding":[1]}`), true, false},
+		"overflowing embedding": {[]byte(`{"id":"a","embedding":[3.5e38,0]}`), true, false},
+		"compact embedding":     {[]byte(`{"id":"a","embedding_f32_le_b64":"AACAPwAAAAA="}`), false, false},
+	} {
+		t.Run("document "+name, func(t *testing.T) {
+			request := baseRequest
+			request.ReturnEmbedding = candidate.returnEmbedding
+			out, gotErr, expectedWork := roundTrip(validMeta, []byte("a"), candidate.document, request)
+			if candidate.valid {
+				if gotErr != nil || len(out.Results) != 1 || !bytes.Equal(out.Results[0].Document, candidate.document) {
+					t.Fatalf("valid document rejected: response=%+v err=%v", out, gotErr)
+				}
+				return
+			}
+			assertOwnedProofs(gotErr, expectedWork)
+		})
 	}
+
+	mismatchedRequest := baseRequest
+	mismatchedRequest.EfSearch = 9
+	_, gotErr, _ := roundTrip(append([]byte{3, 0, 0, 0, 1}, validScore...), []byte("a"), []byte(`{"id":"a"}`), mismatchedRequest)
 	if !strings.Contains(gotErr.Error(), "failure proof does not match the request") {
 		t.Fatalf("malformed success retained request-mismatched proof: %v", gotErr)
 	}
@@ -1408,7 +1467,7 @@ func TestDenseV3ResultDecodeErrorsPreserveOwnedProofs(t *testing.T) {
 
 func TestDenseV3WireErrorMalformedProofPreservesSibling(t *testing.T) {
 	snapshot := collections.ColumnGraphQuerySnapshot{
-		Available: true, SchemaGeneration: 1,
+		Available: true, SchemaHash: 1, SchemaGeneration: 1,
 		BaseManifest: collections.ColumnGraphManifestWork{
 			Generation: 1, Format: "tcs1", Version: 1, Checksum: 3,
 		},

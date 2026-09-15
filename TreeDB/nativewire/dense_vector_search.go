@@ -200,6 +200,8 @@ func (c *Client) DenseVectorSearch(ctx context.Context, request DenseVectorSearc
 			err = protocolError(iwire.ErrConsistencyUnavailable, "dense v3 candidate count does not match returned rows")
 		} else if !denseV3ResultsHaveValidIDs(out.Results) {
 			err = protocolError(iwire.ErrConsistencyUnavailable, "dense v3 results contain invalid or duplicate IDs")
+		} else if !denseV3ResultDocumentsMatchRequest(out.Results, request) {
+			err = protocolError(iwire.ErrConsistencyUnavailable, "dense v3 result documents do not match the request")
 		} else if !denseV3ResultsHaveCosineScores(out.Results) {
 			err = protocolError(iwire.ErrConsistencyUnavailable, "dense v3 results contain an invalid cosine score")
 		} else if !denseV3ResultsOrdered(out.Results) {
@@ -254,6 +256,41 @@ func denseV3ResultsHaveValidIDs(results []DenseVectorSearchResult) bool {
 			return false
 		}
 		seen[key] = struct{}{}
+	}
+	return true
+}
+
+func denseV3ResultDocumentsMatchRequest(results []DenseVectorSearchResult, request DenseVectorSearchRequest) bool {
+	for _, result := range results {
+		if !utf8.Valid(result.Document) {
+			return false
+		}
+		var document documentservice.Document
+		decoder := json.NewDecoder(bytes.NewReader(result.Document))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&document); err != nil {
+			return false
+		}
+		if err := decoder.Decode(&struct{}{}); err != io.EOF {
+			return false
+		}
+		if document.ID != string(result.ID) || document.Score != nil || document.EmbeddingF32LEBase64 != "" {
+			return false
+		}
+		if !request.ReturnEmbedding {
+			if document.Embedding != nil {
+				return false
+			}
+			continue
+		}
+		if len(document.Embedding) != len(request.Query) {
+			return false
+		}
+		for _, value := range document.Embedding {
+			if math.IsNaN(float64(value)) || math.IsInf(float64(value), 0) {
+				return false
+			}
+		}
 	}
 	return true
 }

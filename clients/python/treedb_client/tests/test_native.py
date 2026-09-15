@@ -94,6 +94,7 @@ class NativeCodecTests(unittest.TestCase):
                 ("missing", body, True),
                 ("wrong dimension", response_body(b'{"id":"a","embedding":[1]}'), True),
                 ("nonfinite", response_body(b'{"id":"a","embedding":[NaN,0]}'), True),
+                ("write-only compact", response_body(b'{"id":"a","embedding_f32_le_b64":"AACAPwAAAAA="}'), False),
             ):
                 with self.subTest(native_embedding_echo=name), \
                      mock.patch.object(client._native, "command", return_value=candidate_body), \
@@ -105,6 +106,14 @@ class NativeCodecTests(unittest.TestCase):
                     )
                 self.assertIsNotNone(caught.exception.dense_work)
                 self.assertIsNotNone(caught.exception.score_plane)
+            with mock.patch.object(client._native, "command", return_value=response_body(b'{"id":"a","score":0.5}')), \
+                 self.assertRaisesRegex(TreeDBProtocolError, "invalid native dense document") as caught:
+                client.query_by_embedding(
+                    "a", [1, 0], 1, query_mode="quantized_rerank",
+                    quantized_index_name="embedding.scalar_u8.public", index_info=info,
+                )
+            self.assertIsNotNone(caught.exception.dense_work)
+            self.assertIsNotNone(caught.exception.score_plane)
             hostile_work_values = list(work_values)
             hostile_work_values[3:5] = [2, 0]
             hostile_work_values[7], hostile_work_values[9] = 2, 2
@@ -129,6 +138,19 @@ class NativeCodecTests(unittest.TestCase):
                     _section(102, _vector([b"a"])) + _section(103, _vector([b'{"id":"a"}'])) +
                     _section(130, meta) + _section(134, b"".join(_uint(value) for value in hostile_work_values)) +
                     _section(136, hostile_plane),
+                    1, version=3, query_mode="quantized_rerank",
+                    quantized_index_name="embedding.scalar_u8.public", quantized_rerank_candidates=0,
+                    ef_search=0, query_dimension=2,
+                )
+            zero_hash_work_values = list(work_values)
+            zero_hash_work_values[19] = 0
+            zero_hash_plane_values = list(values)
+            zero_hash_plane_values[23] = 0
+            with self.assertRaises(TreeDBProtocolError):
+                _dense_response(
+                    _section(102, _vector([b"a"])) + _section(103, _vector([b'{"id":"a"}'])) +
+                    _section(130, meta) + _section(134, b"".join(_uint(value) for value in zero_hash_work_values)) +
+                    _section(136, score_plane_bytes(zero_hash_plane_values)),
                     1, version=3, query_mode="quantized_rerank",
                     quantized_index_name="embedding.scalar_u8.public", quantized_rerank_candidates=0,
                     ef_search=0, query_dimension=2,
@@ -972,6 +994,7 @@ class NativeCodecTests(unittest.TestCase):
                        lambda d: d["graph"].update(base_edges=-1), lambda d: d["graph"].update(base_edges=1 << 64),
                        lambda d: d["output"].pop("missing"), lambda d: d["graph"].update(route="ann"),
                        lambda d: d["graph"]["snapshot"].update(base_coverage_lsn=100, current_coverage_lsn=1),
+                       lambda d: d["graph"]["snapshot"].update(schema_hash=0),
                        lambda d: d["graph"]["snapshot"].update(schema_generation=0),
                        lambda d: d["graph"]["snapshot"].update(base_coverage_lsn=0),
                        lambda d: d["graph"]["snapshot"]["base_manifest"].update(generation=0),

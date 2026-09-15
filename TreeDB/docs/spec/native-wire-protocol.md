@@ -845,12 +845,11 @@ deriving snapshot availability from the outer proof bit. Missing, duplicate, sta
 unknown-name, or out-of-bound options fail closed.
 
 Every available section-134 or section-136 snapshot requires a nonzero acquired
-vector schema generation, nonzero base/current coverage LSNs with current not
+vector schema hash and generation, nonzero base/current coverage LSNs with current not
 behind base, and nonzero generation/checksum identities for both manifests,
 with manifest version exactly 1 and current manifest generation not behind the
-captured base manifest generation. Schema hash remains the producer's full
-uint64 value; zero is not a reserved wire sentinel. An unavailable snapshot is
-the exact zero value.
+captured base manifest generation. An unavailable snapshot is the exact zero
+value.
 
 Completed public v3 proofs use this producer/consumer route matrix. `E`, `C`,
 and `R` denote normalized candidate width, raw candidate width, and rerank cap.
@@ -885,6 +884,10 @@ release. Content/meta are returned; embedding echo is opt-in through the
 return-embedding bool (default false), as on HTTP. Stored FP32 embeddings are
 reconstructed as JSON numbers, not packed result vectors. Command 64 packs the
 query and command 65 packs ingest vectors; document response sections remain JSON.
+Version-3 consumers decode each JSON document before exposure, require its `id`
+to equal the corresponding section-102 ID, reject response-only/write-only or
+unknown top-level fields, and require a finite, dimension-matched `embedding`
+exactly when return-embedding is true.
 
 Section 134 version 1 contains exactly 38 minimal uint64 uvarints, in this order:
 

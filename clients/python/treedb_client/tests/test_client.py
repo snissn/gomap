@@ -181,6 +181,12 @@ class TreeDBClientTests(unittest.TestCase):
         self.assertFalse(_dense_document_embeddings_match(
             [Document(id="a", embedding=[float("inf"), 0.0])], True, 2,
         ))
+        self.assertFalse(_dense_document_embeddings_match(
+            [Document(id="a", embedding_f32_le_b64="AACAPwAAAAA=")], False, 2,
+        ))
+        self.assertFalse(_dense_document_embeddings_match(
+            [Document(id="a", embedding=[1.0, 0.0], embedding_f32_le_b64="AACAPwAAAAA=")], True, 2,
+        ))
 
     def test_selected_quantized_index_requires_legacy_calibration(self) -> None:
         selected = QuantizedIndexInfo(name="embedding.scalar_u8.public")
@@ -755,11 +761,14 @@ class TreeDBClientTests(unittest.TestCase):
             wrong_dimension_embedding["documents"][0]["embedding"] = [1]
             nonfinite_embedding = copy.deepcopy(embedded_payload)
             nonfinite_embedding["documents"][0]["embedding"] = [float("nan"), 0]
+            compact_embedding = copy.deepcopy(payload)
+            compact_embedding["documents"][0]["embedding_f32_le_b64"] = "AACAPwAAAAA="
             for name, candidate, return_embedding in (
                 ("unrequested", embedded_payload, False),
                 ("missing", payload, True),
                 ("wrong dimension", wrong_dimension_embedding, True),
                 ("nonfinite", nonfinite_embedding, True),
+                ("write-only compact", compact_embedding, False),
             ):
                 with self.subTest(embedding_echo=name), \
                      mock.patch.object(client, "_request", return_value=candidate), \
@@ -1557,7 +1566,7 @@ class TreeDBClientTests(unittest.TestCase):
                             quantized_index_name="embedding.scalar_u8.public",
                         )
                     generation_client.close()
-            for field in ("schema_generation", "base_coverage_lsn"):
+            for field in ("schema_hash", "schema_generation", "base_coverage_lsn"):
                 missing_snapshot_identity = copy.deepcopy(payload)
                 missing_snapshot_identity["dense_work"]["graph"]["snapshot"][field] = 0
                 missing_snapshot_identity["score_plane"]["snapshot"][field] = 0
