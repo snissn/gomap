@@ -921,7 +921,10 @@ output attempted, output completed. Other bits are invalid. Route tags are
 Manifest format tags are `0` empty and `1` `tcs1`; manifest version fits uint16.
 Every available snapshot carries complete base and current manifest identities:
 generation, version, and checksum are nonzero (the empty format tag retains its
-canonical `tcs1` compatibility meaning).
+canonical `tcs1` compatibility meaning). Equal manifest generations require
+equal normalized identities and coverage LSNs. That unchanged frontier has no
+delta scores or shadowed base rows, no suffix score calls or bytes, and no raw
+candidate-width shadow allowance.
 Unknown versions/tags, missing or duplicate sections, nonminimal/overflowing
 integers, truncation and trailing bytes fail closed. Unavailable/unattempted
 groups contain zero values. Successful responses require completed graph and

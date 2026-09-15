@@ -48,6 +48,18 @@ func denseManifestWorkComplete(m collections.ColumnGraphManifestWork) bool {
 	return m.Generation != 0 && m.Version == 1 && m.Checksum != 0
 }
 
+func denseManifestWorkIdentityEqual(a, b collections.ColumnGraphManifestWork) bool {
+	// The stored manifest identity normalizes the legacy empty format to tcs1.
+	// Preserve that public spelling while comparing the actual identity.
+	if a.Format == "" {
+		a.Format = "tcs1"
+	}
+	if b.Format == "" {
+		b.Format = "tcs1"
+	}
+	return a == b
+}
+
 func denseSnapshotConsistent(s collections.ColumnGraphQuerySnapshot) bool {
 	if !s.Available {
 		return s == (collections.ColumnGraphQuerySnapshot{})
@@ -58,7 +70,10 @@ func denseSnapshotConsistent(s collections.ColumnGraphQuerySnapshot) bool {
 		s.CurrentCoverageLSN >= s.BaseCoverageLSN &&
 		denseManifestWorkComplete(s.BaseManifest) &&
 		denseManifestWorkComplete(s.CurrentManifest) &&
-		s.CurrentManifest.Generation >= s.BaseManifest.Generation
+		s.CurrentManifest.Generation >= s.BaseManifest.Generation &&
+		(s.CurrentManifest.Generation != s.BaseManifest.Generation ||
+			(denseManifestWorkIdentityEqual(s.BaseManifest, s.CurrentManifest) &&
+				s.CurrentCoverageLSN == s.BaseCoverageLSN))
 }
 
 func validateDenseWork(w documentservice.DenseSearchWork) error {
@@ -69,6 +84,8 @@ func validateDenseWork(w documentservice.DenseSearchWork) error {
 	bad = bad || !denseSnapshotConsistent(s)
 	bad = bad || (!o.Attempted && o != (documentservice.DenseSearchOutputWork{}))
 	bad = bad || (g.Completed && (!g.Available || !s.Available || g.Route == "" || (f.Attempted && !f.Completed)))
+	bad = bad || (s.Available && s.CurrentManifest.Generation == s.BaseManifest.Generation &&
+		(g.DeltaScored != 0 || g.BaseShadowed != 0))
 	bad = bad || o.Fetched > o.Requested || o.Missing > o.Requested-o.Fetched
 	bad = bad || (w.Completed && (!g.Completed || !o.Completed || o.Missing != 0 || o.Fetched != o.Requested))
 	for _, m := range []collections.ColumnGraphManifestWork{s.BaseManifest, s.CurrentManifest} {

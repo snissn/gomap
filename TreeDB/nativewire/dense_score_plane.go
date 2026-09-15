@@ -115,6 +115,11 @@ func validateDenseScorePlane(proof collections.ColumnGraphScorePlaneWork) error 
 	if !denseSnapshotConsistent(proof.Snapshot) {
 		return protocolError(iwire.ErrConsistencyUnavailable, "dense score-plane snapshot is inconsistent")
 	}
+	if proof.Snapshot.Available && proof.Snapshot.CurrentManifest.Generation == proof.Snapshot.BaseManifest.Generation &&
+		(proof.ExactSuffixScoreCalls != 0 || proof.ExactSuffixVectorBytesRead != 0 ||
+			proof.RawCandidateWidth != proof.NormalizedCandidateWidth) {
+		return protocolError(iwire.ErrConsistencyUnavailable, "dense score-plane unchanged snapshot carries suffix work")
+	}
 	if proof.Completed && (!proof.Available || !proof.Snapshot.Available || proof.Route == "" || proof.Reason != "") {
 		return protocolError(iwire.ErrConsistencyUnavailable, "completed dense score-plane proof is incomplete")
 	}

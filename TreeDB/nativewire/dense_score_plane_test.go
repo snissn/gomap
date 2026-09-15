@@ -132,6 +132,52 @@ func TestDenseScorePlaneCodecOwnedAndStrict(t *testing.T) {
 	if _, err := appendDenseScorePlane(nil, reversedManifest, iwire.DefaultLimits()); err == nil {
 		t.Fatal("score-plane proof with reversed snapshot manifest generation accepted")
 	}
+	equalGenerationDifferentIdentity := proof
+	equalGenerationDifferentIdentity.Snapshot.CurrentManifest.Generation = equalGenerationDifferentIdentity.Snapshot.BaseManifest.Generation
+	if _, err := appendDenseScorePlane(nil, equalGenerationDifferentIdentity, iwire.DefaultLimits()); err == nil {
+		t.Fatal("score-plane proof with different identities at one manifest generation accepted")
+	}
+	normalizedEqualIdentity := proof
+	normalizedEqualIdentity.Snapshot.CurrentManifest = normalizedEqualIdentity.Snapshot.BaseManifest
+	normalizedEqualIdentity.Snapshot.CurrentManifest.Format = ""
+	normalizedEqualIdentity.Snapshot.CurrentCoverageLSN = normalizedEqualIdentity.Snapshot.BaseCoverageLSN
+	if _, err := appendDenseScorePlane(nil, normalizedEqualIdentity, iwire.DefaultLimits()); err != nil {
+		t.Fatalf("score-plane proof rejected a normalized legacy manifest format: %v", err)
+	}
+	hostileIdentityRaw, err := appendDenseScorePlane(nil, proof, iwire.DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Manifest identities are the final eight one-byte values in this fixture.
+	hostileIdentityRaw[len(hostileIdentityRaw)-4] = byte(proof.Snapshot.BaseManifest.Generation)
+	if _, err := decodeDenseScorePlane(hostileIdentityRaw, iwire.DefaultLimits()); err == nil {
+		t.Fatal("score-plane decoder accepted different identities at one manifest generation")
+	}
+	equalIdentityDifferentCoverage := proof
+	equalIdentityDifferentCoverage.Snapshot.CurrentManifest = equalIdentityDifferentCoverage.Snapshot.BaseManifest
+	equalIdentityDifferentCoverage.Snapshot.CurrentCoverageLSN = equalIdentityDifferentCoverage.Snapshot.BaseCoverageLSN + 1
+	if _, err := appendDenseScorePlane(nil, equalIdentityDifferentCoverage, iwire.DefaultLimits()); err == nil {
+		t.Fatal("score-plane proof with different coverage for one manifest identity accepted")
+	}
+	unchangedPrefixWithSuffixWork := normalizedEqualIdentity
+	unchangedPrefixWithSuffixWork.Completed = false
+	unchangedPrefixWithSuffixWork.Reason = "incomplete"
+	unchangedPrefixWithSuffixWork.ExactSuffixScoreCalls = 1
+	if _, err := appendDenseScorePlane(nil, unchangedPrefixWithSuffixWork, iwire.DefaultLimits()); err == nil {
+		t.Fatal("incomplete score-plane proof with an unchanged manifest and suffix scores accepted")
+	}
+	unchangedPrefixWithSuffixBytes := unchangedPrefixWithSuffixWork
+	unchangedPrefixWithSuffixBytes.ExactSuffixScoreCalls = 0
+	unchangedPrefixWithSuffixBytes.ExactSuffixVectorBytesRead = 8
+	if _, err := appendDenseScorePlane(nil, unchangedPrefixWithSuffixBytes, iwire.DefaultLimits()); err == nil {
+		t.Fatal("incomplete score-plane proof with an unchanged manifest and suffix bytes accepted")
+	}
+	unchangedPrefixWithShadowAllowance := unchangedPrefixWithSuffixWork
+	unchangedPrefixWithShadowAllowance.ExactSuffixScoreCalls = 0
+	unchangedPrefixWithShadowAllowance.RawCandidateWidth++
+	if _, err := appendDenseScorePlane(nil, unchangedPrefixWithShadowAllowance, iwire.DefaultLimits()); err == nil {
+		t.Fatal("incomplete score-plane proof with an unchanged manifest and shadow allowance accepted")
+	}
 	for name, mutate := range map[string]func(*collections.ColumnGraphQuerySnapshot){
 		"schema hash":       func(s *collections.ColumnGraphQuerySnapshot) { s.SchemaHash = 0 },
 		"schema generation": func(s *collections.ColumnGraphQuerySnapshot) { s.SchemaGeneration = 0 },
@@ -1184,6 +1230,13 @@ func TestDenseV3FailureProofCompletedGraphPrefixes(t *testing.T) {
 	prefixPair := func(graphRoute string) (documentservice.DenseSearchWork, collections.ColumnGraphScorePlaneWork) {
 		candidateWork, candidateProof := matchingIncompleteWork, matchingIncompleteProof
 		candidateWork.Graph.Route = graphRoute
+		if graphRoute == "typed_exact" || graphRoute == "typed_hnsw" {
+			advanced := snapshot
+			advanced.CurrentManifest.Generation = 2
+			advanced.CurrentManifest.Checksum = 4
+			advanced.CurrentCoverageLSN = 2
+			candidateWork.Graph.Snapshot, candidateProof.Snapshot = advanced, advanced
+		}
 		switch graphRoute {
 		case "", "typed_empty":
 			candidateWork.Graph.BaseANNScored, candidateWork.Graph.ExactBaseScored = 0, 0

@@ -12,7 +12,7 @@ import _support
 from treedb_client import TreeDBClient
 from treedb_client.errors import TreeDBConfigError, TreeDBProtocolError, TreeDBTimeoutError, TreeDBTransportError, UnsupportedError
 from treedb_client._native import _dense_work, _dense_quantized_options, _dense_score_plane
-from treedb_client._dense_work import DenseSearchWork, dense_document_ids_valid
+from treedb_client._dense_work import DenseScorePlaneProof, DenseSearchWork, dense_document_ids_valid
 from treedb_client.client import _decode_json_body
 from treedb_client._native import _HEADER, _NativeConnection, _dense_request, _dense_response, _decode_vector, _read_uint, _section, _sections, _string_map, _uint, _vector, _typed_upsert_request, _typed_upsert_response
 
@@ -39,13 +39,13 @@ class NativeCodecTests(unittest.TestCase):
         meta = bytes.fromhex("0301000001000000000000f03f")
         values = [1, 7, 2, 2, 3, 1, 0, 1, 64, 0, 1, 1, 1, 1, 1, 1, 1, 2, 1, 0, 0, 8, 0, 7, 1, 2, 2]
 
-        def score_plane_bytes(candidate_values, reason=""):
+        def score_plane_bytes(candidate_values, reason="", manifests=None):
             return (
                 b"".join(_uint(value) for value in candidate_values)
                 + _bytes_for_test(reason)
                 + _bytes_for_test("embedding.scalar_u8.public")
                 + _bytes_for_test("scalar_u8")
-                + b"\x01\x01\x01\x03" * 2
+                + (b"\x01\x01\x01\x03" * 2 if manifests is None else manifests)
             )
 
         score_plane = score_plane_bytes(values)
@@ -87,6 +87,10 @@ class NativeCodecTests(unittest.TestCase):
             self.assertEqual(response.native_command_version, 3)
             self.assertIsNotNone(response.score_plane)
             self.assertEqual(response.score_plane.quantized_index_name, "embedding.scalar_u8.public")
+            incomplete_plane = asdict(response.score_plane)
+            incomplete_plane.update(completed=False, reason="incomplete", exact_suffix_score_calls=1)
+            with self.assertRaisesRegex(ValueError, "unchanged dense score-plane"):
+                DenseScorePlaneProof.from_dict(incomplete_plane)
             invalid_default_info = copy.copy(info)
             invalid_default_info.vector_ef_search = 0
             with self.assertRaisesRegex(TreeDBConfigError, "positive IndexInfo vector_ef_search"):
@@ -275,6 +279,39 @@ class NativeCodecTests(unittest.TestCase):
                     quantized_index_name="embedding.scalar_u8.public", quantized_rerank_candidates=0,
                     ef_search=64, query_dimension=2,
                 )
+            for name, mutate in (
+                ("different identity", lambda work: work.__setitem__(30, work[26] + 1)),
+                ("different coverage", lambda work: work.__setitem__(22, work[21] + 1)),
+                ("delta score", lambda work: work.__setitem__(6, 1)),
+                ("shadowed base", lambda work: work.__setitem__(8, 1)),
+            ):
+                hostile_work = list(work_values)
+                mutate(hostile_work)
+                with self.subTest(native_unchanged_work=name), self.assertRaises(TreeDBProtocolError):
+                    _dense_response(
+                        _section(102, _vector([b"a"])) + _section(103, _vector([b'{"id":"a"}'])) +
+                        _section(130, meta) + _section(134, b"".join(_uint(value) for value in hostile_work)) +
+                        _section(136, score_plane),
+                        1, version=3, query_mode="quantized_rerank",
+                        quantized_index_name="embedding.scalar_u8.public", quantized_rerank_candidates=0,
+                        ef_search=64, query_dimension=2,
+                    )
+            for name, candidate_values, manifests in (
+                ("different identity", values, b"\x01\x01\x01\x03\x01\x01\x01\x04"),
+                ("different coverage", [*values[:26], values[25] + 1], None),
+                ("suffix score", [*values[:19], 1, *values[20:]], None),
+                ("suffix bytes", [*values[:22], 8, *values[23:]], None),
+                ("shadow allowance", [*values[:11], values[10] + 1, *values[12:]], None),
+            ):
+                with self.subTest(native_unchanged_score_plane=name), self.assertRaises(TreeDBProtocolError):
+                    _dense_response(
+                        _section(102, _vector([b"a"])) + _section(103, _vector([b'{"id":"a"}'])) +
+                        _section(130, meta) + _section(134, raw_work) +
+                        _section(136, score_plane_bytes(candidate_values, manifests=manifests)),
+                        1, version=3, query_mode="quantized_rerank",
+                        quantized_index_name="embedding.scalar_u8.public", quantized_rerank_candidates=0,
+                        ef_search=64, query_dimension=2,
+                    )
             native_error = _section(2, _uint(1) + b"\x00" + _bytes_for_test("native error"))
             pre_owner_values = list(work_values)
             pre_owner_values[1] = (1 << 1) | (1 << 3) | (1 << 4) | (1 << 5)
@@ -388,11 +425,18 @@ class NativeCodecTests(unittest.TestCase):
             def prefix_shape_case(name, work_updates=(), proof_updates=(), ef_search=64):
                 candidate_work = list(graph_incomplete_values)
                 candidate_proof = list(proof_incomplete_values)
+                # Preserve an actual suffix frontier so these cases continue
+                # isolating their intended prefix-counter relation.
+                candidate_work[22] = candidate_work[21] + 1
+                candidate_work[27] = candidate_work[23] + 1
+                candidate_work[30] = candidate_work[26] + 1
+                candidate_proof[26] = candidate_proof[25] + 1
                 for index, value in work_updates:
                     candidate_work[index] = value
                 for index, value in proof_updates:
                     candidate_proof[index] = value
-                return name, candidate_work, score_plane_bytes(candidate_proof, "incomplete"), True, ef_search
+                manifests = b"\x01\x01\x01\x03\x02\x01\x01\x04"
+                return name, candidate_work, score_plane_bytes(candidate_proof, "incomplete", manifests), True, ef_search
 
             native_prefix_shape_cases = (
                 prefix_shape_case("prefix shape base candidates exceed quantized calls", work_updates=((4, 2),)),
@@ -623,17 +667,23 @@ class NativeCodecTests(unittest.TestCase):
             zero_width_work_values[2] = 2  # typed_exact
             zero_width_work_values[3:10] = [0, 0, 0, 1, 0, 0, 0]
             zero_width_work_values[10] = 1
+            zero_width_work_values[22] = zero_width_work_values[21] + 1
+            zero_width_work_values[27] = zero_width_work_values[23] + 1
+            zero_width_work_values[30] = zero_width_work_values[26] + 1
             zero_width_values = list(values)
             zero_width_values[4] = 2  # typed_exact
             zero_width_values[10:19] = [0] * 9
             zero_width_values[19:23] = [1, 0, 0, 8]
+            zero_width_values[26] = zero_width_values[25] + 1
 
             def zero_width_body(candidate_work, candidate_proof):
                 return (
                     _section(102, _vector([b"a"])) + _section(103, _vector([b'{"id":"a"}']))
                     + _section(130, meta)
                     + _section(134, b"".join(_uint(value) for value in candidate_work))
-                    + _section(136, score_plane_bytes(candidate_proof))
+                    + _section(136, score_plane_bytes(
+                        candidate_proof, manifests=b"\x01\x01\x01\x03\x02\x01\x01\x04"
+                    ))
                 )
 
             _dense_response(
@@ -1159,6 +1209,18 @@ class NativeCodecTests(unittest.TestCase):
                        lambda d: d["graph"]["snapshot"].update(schema_hash=0),
                        lambda d: d["graph"]["snapshot"].update(schema_generation=0),
                        lambda d: d["graph"]["snapshot"].update(base_coverage_lsn=0),
+                       lambda d: d["graph"]["snapshot"]["current_manifest"].update(
+                           generation=d["graph"]["snapshot"]["base_manifest"]["generation"],
+                           checksum=d["graph"]["snapshot"]["base_manifest"]["checksum"] + 1,
+                       ),
+                       lambda d: (
+                           d["graph"]["snapshot"].update(
+                               current_manifest=copy.deepcopy(d["graph"]["snapshot"]["base_manifest"]),
+                               current_coverage_lsn=d["graph"]["snapshot"]["base_coverage_lsn"] + 1,
+                           )
+                       ),
+                       lambda d: d["graph"].update(delta_scored=1),
+                       lambda d: d["graph"].update(base_shadowed=1),
                        lambda d: d["graph"]["snapshot"]["base_manifest"].update(generation=0),
                        lambda d: d["graph"]["snapshot"]["base_manifest"].update(version=0),
                        lambda d: d["graph"]["snapshot"]["base_manifest"].update(version=2),
@@ -1166,6 +1228,25 @@ class NativeCodecTests(unittest.TestCase):
             candidate = copy.deepcopy(asdict(work))
             action(candidate)
             with self.assertRaises((ValueError, TypeError)):
+                DenseSearchWork.from_dict(candidate)
+        normalized_identity = copy.deepcopy(asdict(work))
+        normalized_identity["graph"]["snapshot"]["current_manifest"] = copy.deepcopy(
+            normalized_identity["graph"]["snapshot"]["base_manifest"]
+        )
+        normalized_identity["graph"]["snapshot"]["current_manifest"]["format"] = ""
+        DenseSearchWork.from_dict(normalized_identity)
+        incomplete_work = copy.deepcopy(asdict(work))
+        incomplete_work["completed"] = False
+        incomplete_work["graph"]["completed"] = False
+        incomplete_work["output"] = {
+            name: False if type(value) is bool else 0
+            for name, value in incomplete_work["output"].items()
+        }
+        for field in ("delta_scored", "base_shadowed"):
+            candidate = copy.deepcopy(incomplete_work)
+            candidate["graph"][field] = 1
+            with self.subTest(incomplete_unchanged_work=field), self.assertRaisesRegex(
+                    ValueError, "unchanged dense graph"):
                 DenseSearchWork.from_dict(candidate)
         envelope = json.dumps({"error": {"code": "index_unavailable", "message": "budget", "dense_work": asdict(work)}}).encode()
         client = TreeDBClient("http://127.0.0.1:1")

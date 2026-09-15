@@ -70,6 +70,21 @@ class DenseSnapshotWork:
             raise ValueError("dense snapshot coverage is reversed")
         if values["available"] and current.generation < base.generation:
             raise ValueError("dense snapshot manifest generation is reversed")
+        if values["available"] and current.generation == base.generation and (
+                base.generation,
+                base.format or "tcs1",
+                base.version,
+                base.checksum,
+        ) != (
+                current.generation,
+                current.format or "tcs1",
+                current.version,
+                current.checksum,
+        ):
+            raise ValueError("equal dense snapshot manifest generations have different identities")
+        if (values["available"] and current.generation == base.generation
+                and values["current_coverage_lsn"] != values["base_coverage_lsn"]):
+            raise ValueError("equal dense snapshot manifest identities have different coverage")
         return cls(**values, base_manifest=base, current_manifest=current)
 
 
@@ -123,6 +138,9 @@ class DenseGraphWork:
             raise ValueError("unavailable dense graph carries work")
         if values["completed"] and (not snapshot.available or not values["route"] or (filter.attempted and not filter.completed)):
             raise ValueError("completed dense graph lacks captured work")
+        if (snapshot.available and snapshot.current_manifest.generation == snapshot.base_manifest.generation
+                and (values["delta_scored"] or values["base_shadowed"])):
+            raise ValueError("unchanged dense graph snapshot carries suffix work")
         return cls(**values, filter=filter, snapshot=snapshot)
 
 
@@ -217,6 +235,10 @@ class DenseScorePlaneProof:
             raise ValueError("completed dense score-plane proof lacks captured work")
         if values["available"] and not values["completed"] and not values["reason"]:
             raise ValueError("incomplete dense score-plane proof has no reason")
+        if (snapshot.available and snapshot.current_manifest.generation == snapshot.base_manifest.generation
+                and (values["exact_suffix_score_calls"] or values["exact_suffix_vector_bytes_read"]
+                     or values["raw_candidate_width"] != values["normalized_candidate_width"])):
+            raise ValueError("unchanged dense score-plane snapshot carries suffix work")
         if values["completed"] and values["route"] == "quantized_rerank" and values["quantized_score_calls"] == 0:
             raise ValueError("completed quantized rerank proof has no quantized score calls")
         if values["completed"]:

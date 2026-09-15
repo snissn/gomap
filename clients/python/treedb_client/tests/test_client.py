@@ -1266,6 +1266,24 @@ class TreeDBClientTests(unittest.TestCase):
 
             proof_incomplete = replace(result.score_plane, completed=False, reason="scoring interrupted")
 
+            def with_advanced_frontier(candidate_work, candidate_proof):
+                snapshot = candidate_proof.snapshot
+                if snapshot.current_manifest.generation != snapshot.base_manifest.generation:
+                    return candidate_work, candidate_proof
+                advanced = replace(
+                    snapshot,
+                    current_manifest=replace(
+                        snapshot.current_manifest,
+                        generation=snapshot.current_manifest.generation + 1,
+                        checksum=snapshot.current_manifest.checksum + 1,
+                    ),
+                    current_coverage_lsn=snapshot.current_coverage_lsn + 1,
+                )
+                return (
+                    replace(candidate_work, graph=replace(candidate_work.graph, snapshot=advanced)),
+                    replace(candidate_proof, snapshot=advanced),
+                )
+
             def incomplete_prefix(graph_route):
                 candidate_work, candidate_proof = partial_work, partial_proof
                 if graph_route in ("", "typed_empty"):
@@ -1294,9 +1312,13 @@ class TreeDBClientTests(unittest.TestCase):
                         exact_small_filter_score_calls=0, exact_suffix_score_calls=1,
                         exact_base_vector_bytes_read=0, exact_suffix_vector_bytes_read=8,
                     )
+                    candidate_work, candidate_proof = with_advanced_frontier(
+                        candidate_work, candidate_proof
+                    )
                 return candidate_work, candidate_proof
 
             prefixes = {route: incomplete_prefix(route) for route in ("", "typed_empty", "typed_exact", "typed_hnsw")}
+            prefixes["typed_hnsw"] = with_advanced_frontier(*prefixes["typed_hnsw"])
             zero_width_work, zero_width_proof = prefixes["typed_exact"]
             zero_width_proof = replace(
                 zero_width_proof,
@@ -1326,6 +1348,9 @@ class TreeDBClientTests(unittest.TestCase):
                     return replace(candidate_work, graph=replace(
                         candidate_work.graph, base_result_ids=candidate_work.graph.base_result_ids + 1)), candidate_proof
                 if field == "suffix":
+                    candidate_work, candidate_proof = with_advanced_frontier(
+                        candidate_work, candidate_proof
+                    )
                     return candidate_work, replace(
                         candidate_proof, exact_suffix_score_calls=candidate_proof.exact_suffix_score_calls + 1)
                 return candidate_work, replace(
@@ -1473,6 +1498,58 @@ class TreeDBClientTests(unittest.TestCase):
                         self.assertEqual(caught.exception.score_plane, candidate_proof)
                         error_client.close()
 
+            for proof_name, field in (
+                ("dense_work", "manifest identity"),
+                ("dense_work", "coverage"),
+                ("dense_work", "delta score"),
+                ("dense_work", "shadowed base"),
+                ("score_plane", "manifest identity"),
+                ("score_plane", "coverage"),
+                ("score_plane", "suffix score"),
+                ("score_plane", "suffix bytes"),
+                ("score_plane", "shadow allowance"),
+            ):
+                hostile_error = {
+                    "error": {
+                        "code": "index_unavailable",
+                        "message": "hostile unchanged frontier",
+                        "dense_work": asdict(result.dense_work),
+                        "score_plane": asdict(result.score_plane),
+                    }
+                }
+                target = hostile_error["error"][proof_name]
+                snapshot = target["graph"]["snapshot"] if proof_name == "dense_work" else target["snapshot"]
+                if field == "manifest identity":
+                    snapshot["current_manifest"]["checksum"] += 1
+                elif field == "coverage":
+                    snapshot["current_coverage_lsn"] += 1
+                elif field == "delta score":
+                    target["graph"]["delta_scored"] = 1
+                elif field == "shadowed base":
+                    target["graph"]["base_shadowed"] = 1
+                elif field == "suffix score":
+                    target["exact_suffix_score_calls"] = 1
+                elif field == "suffix bytes":
+                    target["exact_suffix_vector_bytes_read"] = 8
+                else:
+                    target["raw_candidate_width"] = target["normalized_candidate_width"] + 1
+                with self.subTest(http_unchanged_error=(proof_name, field)), \
+                     FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (503, hostile_error, 0)}) as hostile_server:
+                    hostile_client = TreeDBClient(hostile_server.base_url, timeout=1)
+                    with self.assertRaisesRegex(
+                            TreeDBProtocolError, "dense score-plane proof does not match the request on error") as caught:
+                        hostile_client.query_by_embedding(
+                            "docs", [1, 0], 1, query_mode="quantized_rerank",
+                            quantized_index_name="embedding.scalar_u8.public",
+                        )
+                    if proof_name == "dense_work":
+                        self.assertIsNone(caught.exception.dense_work)
+                        self.assertEqual(caught.exception.score_plane, result.score_plane)
+                    else:
+                        self.assertEqual(caught.exception.dense_work, result.dense_work)
+                        self.assertIsNone(caught.exception.score_plane)
+                    hostile_client.close()
+
             completed_work_only_error = IndexUnavailableError(
                 "index_unavailable", "budget", dense_work=result.dense_work,
             )
@@ -1617,6 +1694,16 @@ class TreeDBClientTests(unittest.TestCase):
                 exact_small_filter_score_calls=0, exact_base_vector_bytes_read=0,
                 exact_suffix_score_calls=1, exact_suffix_vector_bytes_read=8,
             )
+            for target in (
+                zero_width_filtered_exact["dense_work"]["graph"]["snapshot"],
+                zero_width_filtered_exact["score_plane"]["snapshot"],
+            ):
+                target["current_manifest"] = {
+                    **target["base_manifest"],
+                    "generation": target["base_manifest"]["generation"] + 1,
+                    "checksum": target["base_manifest"]["checksum"] + 1,
+                }
+                target["current_coverage_lsn"] = target["base_coverage_lsn"] + 1
             with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, zero_width_filtered_exact, 0)}) as zero_width_server:
                 zero_width_client = TreeDBClient(zero_width_server.base_url, timeout=1)
                 self.assertEqual(
@@ -1757,6 +1844,67 @@ class TreeDBClientTests(unittest.TestCase):
                         quantized_index_name="embedding.scalar_u8.public",
                     )
                 reversed_client.close()
+            for proof_name in ("dense_work", "score_plane"):
+                mismatched_identity = copy.deepcopy(payload)
+                if proof_name == "dense_work":
+                    target = copy.deepcopy(mismatched_identity[proof_name]["graph"]["snapshot"])
+                    mismatched_identity[proof_name]["graph"]["snapshot"] = target
+                else:
+                    target = copy.deepcopy(mismatched_identity[proof_name]["snapshot"])
+                    mismatched_identity[proof_name]["snapshot"] = target
+                target["current_manifest"] = copy.deepcopy(target["base_manifest"])
+                target["current_manifest"]["checksum"] += 1
+                with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, mismatched_identity, 0)}) as identity_server:
+                    identity_client = TreeDBClient(identity_server.base_url, timeout=1)
+                    with self.subTest(equal_generation_manifest_identity=proof_name), self.assertRaisesRegex(
+                            TreeDBProtocolError, "score-plane proof"):
+                        identity_client.query_by_embedding(
+                            "docs", [1, 0], 1, query_mode="quantized_rerank",
+                            quantized_index_name="embedding.scalar_u8.public",
+                        )
+                    identity_client.close()
+            for proof_name in ("dense_work", "score_plane"):
+                mismatched_coverage = copy.deepcopy(payload)
+                if proof_name == "dense_work":
+                    target = copy.deepcopy(mismatched_coverage[proof_name]["graph"]["snapshot"])
+                    mismatched_coverage[proof_name]["graph"]["snapshot"] = target
+                else:
+                    target = copy.deepcopy(mismatched_coverage[proof_name]["snapshot"])
+                    mismatched_coverage[proof_name]["snapshot"] = target
+                target["current_manifest"] = copy.deepcopy(target["base_manifest"])
+                target["current_coverage_lsn"] = target["base_coverage_lsn"] + 1
+                with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, mismatched_coverage, 0)}) as coverage_server:
+                    coverage_client = TreeDBClient(coverage_server.base_url, timeout=1)
+                    with self.subTest(equal_manifest_coverage=proof_name), self.assertRaisesRegex(
+                            TreeDBProtocolError, "score-plane proof"):
+                        coverage_client.query_by_embedding(
+                            "docs", [1, 0], 1, query_mode="quantized_rerank",
+                            quantized_index_name="embedding.scalar_u8.public",
+                        )
+                    coverage_client.close()
+            for proof_name, field, value in (
+                ("dense_work", "delta_scored", 1),
+                ("dense_work", "base_shadowed", 1),
+                ("score_plane", "exact_suffix_score_calls", 1),
+                ("score_plane", "exact_suffix_vector_bytes_read", 8),
+                ("score_plane", "raw_candidate_width", 2),
+            ):
+                unchanged_frontier_work = copy.deepcopy(payload)
+                target = (
+                    unchanged_frontier_work[proof_name]["graph"]
+                    if proof_name == "dense_work"
+                    else unchanged_frontier_work[proof_name]
+                )
+                target[field] = value
+                with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, unchanged_frontier_work, 0)}) as frontier_server:
+                    frontier_client = TreeDBClient(frontier_server.base_url, timeout=1)
+                    with self.subTest(unchanged_manifest_work=(proof_name, field)), self.assertRaisesRegex(
+                            TreeDBProtocolError, "score-plane proof"):
+                        frontier_client.query_by_embedding(
+                            "docs", [1, 0], 1, query_mode="quantized_rerank",
+                            quantized_index_name="embedding.scalar_u8.public",
+                        )
+                    frontier_client.close()
             newer_aggregate = copy.deepcopy(payload)
             newer_aggregate["index"]["generation"] = 2
             with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, newer_aggregate, 0)}) as aggregate_server:
@@ -2045,6 +2193,16 @@ class TreeDBClientTests(unittest.TestCase):
                 exact_suffix_score_calls=1,
                 exact_suffix_vector_bytes_read=8,
             )
+            for target in (
+                exact_route["dense_work"]["graph"]["snapshot"],
+                exact_route["score_plane"]["snapshot"],
+            ):
+                target["current_manifest"] = {
+                    **target["base_manifest"],
+                    "generation": target["base_manifest"]["generation"] + 1,
+                    "checksum": target["base_manifest"]["checksum"] + 1,
+                }
+                target["current_coverage_lsn"] = target["base_coverage_lsn"] + 1
             with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, exact_route, 0)}) as exact_server:
                 exact_client = TreeDBClient(exact_server.base_url, timeout=1)
                 self.assertEqual(

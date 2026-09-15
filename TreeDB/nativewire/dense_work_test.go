@@ -48,6 +48,59 @@ func TestDenseWorkGoldenStrictOwnershipAndAllocations(t *testing.T) {
 	if _, err := appendDenseWork(nil, reversedManifest); err == nil {
 		t.Fatal("dense work with reversed snapshot manifest generation accepted")
 	}
+	equalGenerationDifferentIdentity := w
+	equalGenerationDifferentIdentity.Graph.Snapshot.CurrentManifest.Generation = equalGenerationDifferentIdentity.Graph.Snapshot.BaseManifest.Generation
+	equalGenerationDifferentIdentity.Graph.Snapshot.CurrentManifest.Checksum = equalGenerationDifferentIdentity.Graph.Snapshot.BaseManifest.Checksum + 1
+	if _, err := appendDenseWork(nil, equalGenerationDifferentIdentity); err == nil {
+		t.Fatal("dense work with different identities at one manifest generation accepted")
+	}
+	normalizedEqualIdentity := w
+	normalizedEqualIdentity.Graph.Snapshot.CurrentManifest = normalizedEqualIdentity.Graph.Snapshot.BaseManifest
+	normalizedEqualIdentity.Graph.Snapshot.CurrentManifest.Format = ""
+	normalizedEqualIdentity.Graph.Snapshot.CurrentCoverageLSN = normalizedEqualIdentity.Graph.Snapshot.BaseCoverageLSN
+	if _, err := appendDenseWork(nil, normalizedEqualIdentity); err != nil {
+		t.Fatalf("dense work rejected a normalized legacy manifest format: %v", err)
+	}
+	hostileIdentityRaw, err := appendDenseWork(nil, normalizedEqualIdentity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, off := 0, 0; i < 38; i++ {
+		_, size := binary.Uvarint(hostileIdentityRaw[off:])
+		if size <= 0 {
+			t.Fatal("valid dense-work fixture has an invalid uvarint")
+		}
+		if i == 30 {
+			if size != 1 || normalizedEqualIdentity.Graph.Snapshot.BaseManifest.Checksum >= 127 {
+				t.Fatal("dense-work fixture no longer has a one-byte manifest checksum")
+			}
+			hostileIdentityRaw[off] = byte(normalizedEqualIdentity.Graph.Snapshot.BaseManifest.Checksum + 1)
+		}
+		off += size
+	}
+	if _, err := decodeDenseWork(hostileIdentityRaw); err == nil {
+		t.Fatal("dense-work decoder accepted different identities at one manifest generation")
+	}
+	equalIdentityDifferentCoverage := w
+	equalIdentityDifferentCoverage.Graph.Snapshot.CurrentManifest = equalIdentityDifferentCoverage.Graph.Snapshot.BaseManifest
+	equalIdentityDifferentCoverage.Graph.Snapshot.CurrentCoverageLSN = equalIdentityDifferentCoverage.Graph.Snapshot.BaseCoverageLSN + 1
+	if _, err := appendDenseWork(nil, equalIdentityDifferentCoverage); err == nil {
+		t.Fatal("dense work with different coverage for one manifest identity accepted")
+	}
+	unchangedPrefixWithSuffixWork := normalizedEqualIdentity
+	unchangedPrefixWithSuffixWork.Completed = false
+	unchangedPrefixWithSuffixWork.Graph.Completed = false
+	unchangedPrefixWithSuffixWork.Graph.DeltaScored = 1
+	unchangedPrefixWithSuffixWork.Output = documentservice.DenseSearchOutputWork{}
+	if _, err := appendDenseWork(nil, unchangedPrefixWithSuffixWork); err == nil {
+		t.Fatal("incomplete dense work with an unchanged manifest and suffix scores accepted")
+	}
+	unchangedPrefixWithShadowedBase := unchangedPrefixWithSuffixWork
+	unchangedPrefixWithShadowedBase.Graph.DeltaScored = 0
+	unchangedPrefixWithShadowedBase.Graph.BaseShadowed = 1
+	if _, err := appendDenseWork(nil, unchangedPrefixWithShadowedBase); err == nil {
+		t.Fatal("incomplete dense work with an unchanged manifest and shadowed base accepted")
+	}
 	for name, mutate := range map[string]func(*collections.ColumnGraphQuerySnapshot){
 		"schema hash":       func(s *collections.ColumnGraphQuerySnapshot) { s.SchemaHash = 0 },
 		"schema generation": func(s *collections.ColumnGraphQuerySnapshot) { s.SchemaGeneration = 0 },

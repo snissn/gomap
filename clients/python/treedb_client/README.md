@@ -120,7 +120,10 @@ objects reject missing/unknown fields, invalid types and out-of-range integers.
 Available snapshots require a nonzero schema generation and base/current
 coverage LSN, plus nonzero generation and checksum in both base and current
 manifest identities; the manifest version is exactly 1 and current manifest
-generation cannot precede the captured base. The captured vector schema
+generation cannot precede the captured base. Empty manifest format retains its
+legacy `tcs1` meaning. Equal generations require equal normalized identities
+and coverage LSNs, and that unchanged frontier cannot report delta/shadow,
+suffix-score, suffix-byte, or raw-width shadow-allowance work. The captured vector schema
 generation may be below a newer aggregate vector/text index generation, never
 above it. If a malformed native or HTTP score-plane
 proof accompanies valid dense work, the protocol error retains that
