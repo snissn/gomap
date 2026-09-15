@@ -24,6 +24,11 @@ TREEDB_COLLECTION=${TREEDB_COLLECTION:-gomap_minima_${RANDOM}_$$}
 TREEDB_PROFILE=${TREEDB_PROFILE:-command_wal_durable}
 TREEDB_STRATEGY=${TREEDB_STRATEGY:-native_runtime}
 TREEDB_EF_SEARCH=${TREEDB_EF_SEARCH:-128}
+TREEDB_QUERY_MODE=${TREEDB_QUERY_MODE:-exact}
+TREEDB_QUANTIZED_INDEX_NAME=${TREEDB_QUANTIZED_INDEX_NAME:-}
+TREEDB_QUANTIZED_RERANK_CANDIDATES=${TREEDB_QUANTIZED_RERANK_CANDIDATES:-}
+TREEDB_QUANTIZED_PLAN=${TREEDB_QUANTIZED_PLAN:-}
+MINIMA_EXPECTED_QUANTIZED_PLAN_SHA256=${MINIMA_EXPECTED_QUANTIZED_PLAN_SHA256:-}
 TREEDB_OPERATION_TIMEOUT=${TREEDB_OPERATION_TIMEOUT:-120}
 TREEDB_STARTUP_TIMEOUT=${TREEDB_STARTUP_TIMEOUT:-3600}
 TREEDB_DIAGNOSTICS_DIR=${TREEDB_DIAGNOSTICS_DIR:-}
@@ -40,9 +45,113 @@ TREEDB_SERVICE_BIN=${TREEDB_SERVICE_BIN:-$RUN_DIR/bin/treedb-document-service}
 MINIMA_COMPARATOR_BIN=${MINIMA_COMPARATOR_BIN:-$RUN_DIR/bin/treedb-rag-benchmark}
 treedb_measured_args=()
 comparator_measured_args=()
+treedb_quantized_args=()
+comparator_quantized_args=()
 if [[ "$TREEDB_OPERATION_TIMEOUT" != "120" ]]; then
 	printf 'TREEDB_OPERATION_TIMEOUT must be exactly 120 for Minima validation, got %q\n' \
 		"$TREEDB_OPERATION_TIMEOUT" >&2
+	exit 2
+fi
+if [[ "$TREEDB_QUERY_MODE" == exact ]]; then
+	if [[ -n "$TREEDB_QUANTIZED_INDEX_NAME" || -n "$TREEDB_QUANTIZED_RERANK_CANDIDATES" ||
+		-n "$TREEDB_QUANTIZED_PLAN" || -n "$MINIMA_EXPECTED_QUANTIZED_PLAN_SHA256" ]]; then
+		printf '%s\n' 'TREEDB_QUERY_MODE=exact does not accept quantized options' >&2
+		exit 2
+	fi
+elif [[ "$TREEDB_QUERY_MODE" == quantized_rerank ]]; then
+	if [[ ! "$MODE" =~ ^bounded-(50k|250k|500k|1000k)$ ||
+		"$TREEDB_STRATEGY" != column_graph || "${TREEDB_TRANSPORT:-}" != native ||
+		"$TREEDB_PROFILE" != command_wal_durable ||
+		-z "${TREEDB_COLUMN_GRAPH_SERVING:-}" || ! -f "$TREEDB_COLUMN_GRAPH_SERVING" ||
+		-z "$TREEDB_QUANTIZED_PLAN" || ! -f "$TREEDB_QUANTIZED_PLAN" ||
+		! "$MINIMA_EXPECTED_QUANTIZED_PLAN_SHA256" =~ ^[0-9a-f]{64}$ ||
+		-z "${TREEDB_NATIVE_ADDRESS:-}" || "$TREEDB_QUANTIZED_INDEX_NAME" != minima_sq8 ||
+		! "$TREEDB_EF_SEARCH" =~ ^[1-9][0-9]*$ ||
+		! "$TREEDB_QUANTIZED_RERANK_CANDIDATES" =~ ^[1-9][0-9]*$ ||
+		"$TREEDB_QUANTIZED_RERANK_CANDIDATES" != "$TREEDB_EF_SEARCH" ]]; then
+		printf '%s\n' 'quantized Minima requires bounded mode, command_wal_durable, column_graph/native, reviewed plan+SHA pin, serving/native address, minima_sq8, and TopK <= R=EF in the native integer range' >&2
+		exit 2
+	fi
+	if ! "$PYTHON" -c '
+import json, sys
+raw = open(sys.argv[1], "rb").read((1 << 20) + 1)
+if len(raw) > 1 << 20:
+    raise ValueError("serving JSON exceeds 1 MiB")
+def strict_object(pairs):
+    value = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValueError("duplicate key")
+        value[key] = item
+    return value
+def reject_constant(value):
+    raise ValueError("nonfinite " + value)
+value = json.loads(raw.decode("utf-8"), object_pairs_hook=strict_object,
+                   parse_constant=reject_constant)
+width = int(sys.argv[2])
+shape = {
+    "Publication": {key: None for key in ("Rows", "Tombstones", "ValueSlots", "OwnedBytes", "EncodedOutputBytes")},
+    "Owners": {**{key: None for key in ("Owners", "States", "StateBytes", "AssetBytes")},
+               "Cold": {key: None for key in ("ManifestRecords", "ManifestBytes", "AssetBytes", "DecodedTermBytes")}},
+    "CandidateOutput": {key: None for key in ("Bytes", "AppenderAttempts")},
+    "Maintenance": {key: None for key in ("NativeEntries", "ColumnSegments", "ManifestRecords",
+                                             "LifecycleEntries", "NativeBytes", "ColumnBytes",
+                                             "ManifestBytes", "RetainedBytes", "PagerPages")},
+    "Filter": {key: None for key in ("SourceIDs", "SourceBytes", "RetainedBytes", "MappingWork", "InspectedEntries")},
+    "FoldRows": None, "SearchCandidates": None,
+}
+def validate(actual, expected):
+    if type(actual) is not dict or set(actual) != set(expected):
+        raise ValueError("serving schema mismatch")
+    for key, nested in expected.items():
+        if nested is None:
+            if type(actual[key]) is not int or actual[key] <= 0:
+                raise ValueError("serving limits must be positive integers")
+        else:
+            validate(actual[key], nested)
+validate(value, shape)
+assert 5 <= width < 1 << 63
+' "$TREEDB_COLUMN_GRAPH_SERVING" "$TREEDB_EF_SEARCH"; then
+		printf '%s\n' 'quantized Minima requires a nonempty JSON object for TREEDB_COLUMN_GRAPH_SERVING' >&2
+		exit 2
+	fi
+	plan_bytes=$(wc -c <"$TREEDB_QUANTIZED_PLAN")
+	if ((plan_bytes > 1048576)); then
+		printf '%s\n' 'quantized Minima plan exceeds 1 MiB' >&2
+		exit 2
+	fi
+	read -r actual_plan_sha256 _ < <(sha256sum -- "$TREEDB_QUANTIZED_PLAN")
+	if [[ "$actual_plan_sha256" != "$MINIMA_EXPECTED_QUANTIZED_PLAN_SHA256" ]]; then
+		printf '%s\n' 'quantized Minima plan bytes do not match the reviewed SHA-256 pin' >&2
+		exit 2
+	fi
+	if [[ -e "$RUN_DIR" ]]; then
+		if [[ ! -d "$RUN_DIR" || -n "$(find "$RUN_DIR" -mindepth 1 -maxdepth 1 ! -name tmp -print -quit)" ||
+			( -e "$RUN_DIR/tmp" && ( ! -d "$RUN_DIR/tmp" || -n "$(find "$RUN_DIR/tmp" -mindepth 1 -print -quit)" ) ) ]]; then
+			printf '%s\n' 'quantized Minima requires a fresh RUN_DIR (an empty tmp/ child is allowed)' >&2
+			exit 2
+		fi
+	fi
+	for destination in "$MANIFEST_PATH" "$TREEDB_EVIDENCE" "$OUTPUT_PATH" "$REPORT_PATH" "$TREEDB_DATA_DIR" "$RUN_DIR/bin"; do
+		if [[ -e "$destination" ]]; then
+			printf 'quantized Minima destination already exists: %s\n' "$destination" >&2
+			exit 2
+		fi
+	done
+	treedb_quantized_args=(
+		--transport native --native-address "$TREEDB_NATIVE_ADDRESS"
+		--column-graph-serving "$TREEDB_COLUMN_GRAPH_SERVING"
+		--quantized-plan "$TREEDB_QUANTIZED_PLAN"
+		--expected-quantized-plan-sha256 "$MINIMA_EXPECTED_QUANTIZED_PLAN_SHA256"
+		--query-mode quantized_rerank --quantized-index-name minima_sq8
+		--quantized-rerank-candidates "$TREEDB_QUANTIZED_RERANK_CANDIDATES"
+	)
+	comparator_quantized_args=(
+		-minima-quantized-plan "$TREEDB_QUANTIZED_PLAN"
+		-minima-expected-quantized-plan-sha256 "$MINIMA_EXPECTED_QUANTIZED_PLAN_SHA256"
+	)
+else
+	printf 'unsupported TREEDB_QUERY_MODE=%s (use exact or quantized_rerank)\n' "$TREEDB_QUERY_MODE" >&2
 	exit 2
 fi
 
@@ -129,8 +238,11 @@ bounded-50k|bounded-250k|bounded-500k|bounded-1000k)
 		--data-dir "$TREEDB_DATA_DIR" --collection "$TREEDB_COLLECTION" --profile "$TREEDB_PROFILE" \
 		--strategy "$TREEDB_STRATEGY" --operation-timeout "$TREEDB_OPERATION_TIMEOUT" \
 		--startup-timeout 120 --ef-search "$TREEDB_EF_SEARCH" \
+		${treedb_quantized_args[@]+"${treedb_quantized_args[@]}"} \
 		${treedb_diagnostic_args[@]+"${treedb_diagnostic_args[@]}"}
-	"$RUN_DIR/bin/treedb-rag-benchmark" -workload=minima -validate-minima-artifact "$TREEDB_EVIDENCE" -minima-expected-commit "$(git rev-parse HEAD)"
+	"$RUN_DIR/bin/treedb-rag-benchmark" -workload=minima -validate-minima-artifact "$TREEDB_EVIDENCE" \
+		-minima-expected-commit "$(git rev-parse HEAD)" \
+		${comparator_quantized_args[@]+"${comparator_quantized_args[@]}"}
 	exit 0
 	;;
 representative|measured)

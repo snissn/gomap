@@ -275,6 +275,56 @@ selected-codec score. `ColumnGraphQueryWork.ScorePlane` remains the owner-local
 source; Q3 (#4686) exposes a separately versioned sibling score-plane proof on
 the public HTTP/native/Python response and never extends `dense_work-v1`.
 
+### Q4 bounded SQ8 harness contract
+
+Q4 (#4687) exposes this route only through an explicit benchmark profile named
+`minima_sq8`: legacy `scalar_u8` version 1, native command 64/v3,
+`query_mode=quantized_rerank`, and positive requested rerank width `R` equal to
+the selected query EF. The ordinary default remains exact/native-v2 and creates
+no quantized index. The frozen `treedb_rag_application/minima_measured_v1`
+schema and its allocations, validators and acceptance verdict are unchanged.
+
+The application lane accepts only a bounded-v2 manifest, typed
+`column_graph` over native transport, `command_wal_durable`, explicit serving
+limits, an immutable reviewed `treedb_minima_quantized_plan/v1` plus external
+SHA-256 pin, and fresh owned data/evidence destinations. The plan binds the
+bounded manifest schema/fixture/config and semantic hashes, the complete SQ8
+profile, fixed graph `M=16`, construction EF, serving limits, transport and durability. Plan
+construction is exclusive of execution; the Python runner and Go validator
+consume the same exact bytes and reject semantic or digest drift. It emits the separate
+`treedb_rag_application/minima_quantized_diagnostic_v1` schema with
+`state=partial`, `passing=false` and `readiness_recommendation=not_evaluated`;
+that envelope can neither qualify M5 nor carry a measured-v1 freeze or verdict.
+Legacy and measured schemas reject quantized profile or request-ledger fields,
+including explicit empty fields.
+
+Every public search records one phase- and lifetime-attributed request interval,
+the native-v3 result projection, `dense_work`, and its sibling score-plane
+proof. The validator joins concurrent calls to their timed/reindex traces and
+accepts only a complete pre- or post-operation state. It derives the exact
+publication-causing mutation count for each such state: a successful identical
+upsert is a no-op and does not count; a mixed batch counts once and only its
+changed/new rows extend the overlay shadow allowance. Current manifest generation
+and coverage LSN must advance by exactly the publication count, all queries at
+one count share one owner identity, the pre-fold base remains the initial build,
+and the synchronous pre-close fold promotes current to base without changing
+logical generation or coverage. Pre-close, post-reopen and final folded
+snapshots must be identical. Empty and filtered
+populations at or below 4,096 must use their actual typed-empty/typed-exact
+route and exact canonical FP32 rank. Every nonempty unfiltered population, and
+every larger filtered population, must prove bounded scalar-u8 traversal plus
+exact FP32 rerank; their returned
+IDs may be approximate, but every result must be a live, filter-matching,
+canonically scored full document from the same allowed state. Generation,
+manifest coverage, route, candidate/rerank caps, score/vector byte counts,
+output counts and requested fields are all bound to the same captured owner.
+Filtered planning accepts either a current-postings selection or the cached
+immutable-base selection bound to the same owner. The former omits shadowed base
+ordinals while the latter retains them in its raw width; the validator binds the
+complete width/shadow alternative and, independently, the exact live-base and
+suffix score counts. A suffix-only exact result may therefore have zero base
+candidate widths without weakening its result or score-work proof.
+
 M0's bounded-50k baseline exposed a concrete regression target: 1,000 eligible
 `broad_10pct` IDs, zero returned IDs, `complete_finite_ann`, 2,064 visited/scored.
 The existing runtime exact cap is 512; larger complete sets do not receive the

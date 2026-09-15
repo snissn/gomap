@@ -2,8 +2,65 @@
 
 For the separate Minima client/service lifecycle benchmark, use the
 [Minima runbook](../../TreeDB/docs/benchmarks/treedb_rag_benchmark_runbook.md#minima-native-path-development-4614).
-Its bounded 50K/250K modes are diagnostics, not full qualification or evidence
-that mutable `column_graph` is already supported.
+Its bounded 50K/250K/500K/1000K modes are diagnostics, not full qualification
+or evidence that mutable `column_graph` is already supported.
+
+For the opt-in bounded Minima SQ8 diagnostic, start from a clean committed
+checkout on a writable fast mount, set `MINIMA_SERVING_LIMITS` to a reviewed
+nonempty serving-limits JSON object, freeze and review the independent launch
+plan, and use a fresh output packet. The packet
+may contain only the pre-created empty `tmp/` child before launch; its manifest,
+binaries, database and evidence paths must not exist:
+
+```sh
+mountpoint -q /mnt/fast4tb && test -w /mnt/fast4tb
+MINIMA_SERVING_LIMITS=/mnt/fast4tb/reviewed/minima-serving.json
+test -s "$MINIMA_SERVING_LIMITS"
+MINIMA_REVIEW=/mnt/fast4tb/reviewed/minima-sq8-50k
+mkdir -p "$MINIMA_REVIEW"
+GOWORK=off go build -o "$MINIMA_REVIEW/treedb-rag-benchmark" ./TreeDB/cmd/treedb_rag_benchmark
+"$MINIMA_REVIEW/treedb-rag-benchmark" -workload=minima \
+  -dump-minima-manifest "$MINIMA_REVIEW/manifest.json" -minima-bounded-total-rows 50000
+PYTHONPATH=clients/python/treedb_client/src python3 \
+  benchmarks/vector_db_compare/minima_treedb_runner.py \
+  --manifest "$MINIMA_REVIEW/manifest.json" \
+  --strategy column_graph --transport native --profile command_wal_durable \
+  --column-graph-serving "$MINIMA_SERVING_LIMITS" --ef-construction 32 \
+  --query-mode quantized_rerank --quantized-index-name minima_sq8 \
+  --ef-search 64 --quantized-rerank-candidates 64 \
+  --write-quantized-plan "$MINIMA_REVIEW/plan.json"
+MINIMA_PLAN_SHA=$(sha256sum "$MINIMA_REVIEW/plan.json" | awk '{print $1}')
+# Review plan.json, then retain this digest outside the run packet.
+MINIMA_RUN=$(mktemp -d /mnt/fast4tb/gomap-minima-sq8-XXXXXX)
+mkdir -p "$MINIMA_RUN/tmp"
+TMPDIR="$MINIMA_RUN/tmp" GOWORK=off RUN_DIR="$MINIMA_RUN" MODE=bounded-50k \
+  TREEDB_PROFILE=command_wal_durable \
+  TREEDB_STRATEGY=column_graph TREEDB_TRANSPORT=native \
+  TREEDB_NATIVE_ADDRESS=127.0.0.1:17122 \
+  TREEDB_COLUMN_GRAPH_SERVING="$MINIMA_SERVING_LIMITS" \
+  TREEDB_QUANTIZED_PLAN="$MINIMA_REVIEW/plan.json" \
+  MINIMA_EXPECTED_QUANTIZED_PLAN_SHA256="$MINIMA_PLAN_SHA" \
+  TREEDB_QUERY_MODE=quantized_rerank \
+  TREEDB_QUANTIZED_INDEX_NAME=minima_sq8 \
+  TREEDB_EF_SEARCH=64 TREEDB_QUANTIZED_RERANK_CANDIDATES=64 \
+  scripts/bench_minima_qualification.sh
+```
+
+The wrapper performs freshness, plan-pin, serving-JSON and profile checks before it builds
+a binary or writes a manifest. This path accepts only a frozen bounded-v2
+manifest, native `column_graph`, the
+legacy `minima_sq8` scalar-u8/v1 index, positive `R=EF`, and
+`command_wal_durable`. The canonical plan binds the bounded manifest identity,
+complete quantized profile, fixed graph `M=16`, construction EF, serving limits, transport and
+durability before execution; both the runner and Go artifact validator consume
+the same externally pinned bytes. Direct runner launches also require that both the data
+directory and output path do not already exist. The emitted
+`treedb_rag_application/minima_quantized_diagnostic_v1` artifact is bounded,
+diagnostic-only evidence: each native v3 response retains its owned graph and
+score-plane proof, filtered exact/empty routes at or below 4,096 rows are checked against
+one operation-valid state, and larger approximate responses must contain live
+canonical documents from one operation-valid state. Reuse neither a run packet,
+database nor output artifact across runs.
 
 This benchmark compares persistent database-tier ANN search:
 

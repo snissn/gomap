@@ -11,9 +11,140 @@ import numpy as np
 
 import minima_cohere_native_diagnostic as native
 import minima_cohere_qdrant_rss_diagnostic as qdrant_rss
+from test_minima_cohere_native_diagnostic import quantized_response
+
+
+def plain(value):
+    if isinstance(value, dict):
+        return {key: plain(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [plain(item) for item in value]
+    if hasattr(value, "__dict__"):
+        return {key: plain(item) for key, item in vars(value).items()}
+    return value
+
+
+def sq8_quality():
+    truth = [[f"row-{rank:06d}" for rank in range(10)] for _ in range(200)]
+    quality = native._coordinate_rows(native.calibrate_ann_control(
+        lambda _control, query: truth[query], truth, [32],
+        native.RSS_CALIBRATION_QUERIES, native.RSS_REVALIDATION_QUERIES, native.RSS_RECALL_TARGET,
+    ))
+    quality.update(control_name="ef_search", exact_mode=False)
+    return quality
+
+
+def fp32_quality(control_name):
+    truth = [[f"row-{rank:06d}" for rank in range(10)] for _ in range(200)]
+    quality = native.calibrate_ann_control(
+        lambda _control, query: truth[query], truth, native.RSS_CONTROLS,
+        native.RSS_CALIBRATION_QUERIES, native.RSS_REVALIDATION_QUERIES,
+        native.RSS_RECALL_TARGET,
+    )
+    quality.update(control_name=control_name, exact_mode=False)
+    if control_name == "hnsw_ef":
+        quality.update(exact_correctness_reference_recall_at_10=1.0,
+                       exact_correctness_reference_timing="after_rss_boundary")
+    return quality
+
+
+def tree_provenance():
+    return {
+        "harness_commit": "a" * 40, "harness_source_sha256": "b" * 64,
+        "harness_trees": {"benchmarks": "c" * 40}, "product_commit": "d" * 40,
+        "product_trees": {"TreeDB": "e" * 40}, "service_sha256": "f" * 64,
+        "dataset_manifest_sha256": "1" * 64,
+        "dataset_files_sha256": {"documents": "2" * 64}, "serving_sha256": "3" * 64,
+    }
+
+
+def rss_contract():
+    return native.rss_comparison_contract({
+        "rows": 500000, "dimensions": 768, "top_k": 10, "batch_size": 256,
+        "dataset_manifest_sha256": "4" * 64,
+        "dataset_files_sha256": {
+            "documents": "5" * 64, "queries": "6" * 64, "truth": "7" * 64,
+        },
+        "cpu_affinity": [0, 1], "host_memory_bytes": 1 << 30,
+        "treedb_go_runtime": {"GOMAXPROCS": "2", "GOGC": "100", "GOMEMLIMIT": ""},
+        "host_resource_identity": {
+            "machine_id": "machine", "boot_id": "boot", "page_size_bytes": 4096,
+            "numa_mems": "0", "cgroup_membership": "0::/", "cgroup_limits": {},
+        },
+        "platform": "test-platform", "rss_recall_target": native.RSS_RECALL_TARGET,
+        "rss_controls": native.RSS_CONTROLS,
+        "rss_calibration_queries": native.RSS_CALIBRATION_QUERIES,
+        "rss_revalidation_queries": native.RSS_REVALIDATION_QUERIES,
+    })
+
+
+def construction_contract():
+    return native.construction_calibration_contract(128)
+
+
+def rss_sample(pid, rss_bytes):
+    return {
+        "availability": "measured", "bytes": rss_bytes, "pid": pid,
+        "process_identity": f"{pid}:{pid * 10}",
+        "source": "/proc/<pid>/status:VmHWM", "scope": "process_lifetime_through_sample",
+    }
+
+
+def sq8_build_evidence():
+    fields = qdrant_rss._COLUMN_GRAPH_BUILD_FIELDS - {"construction_decisions"}
+    return {**{field: 1 for field in fields}, "construction_decisions": None}
+
+
+def sq8_effective_index():
+    return {
+        "name": "minima_cohere", "dimension": 768, "metric": "cosine", "generation": 7,
+        "contract_version": native.existing.SERVICE_CONTRACT,
+        "embedding_field": "embedding", "vector_index_name": "embedding",
+        "vector_strategy": "column_graph", "vector_m": 16, "vector_ef_construction": 128,
+        "text_field": "content", "text_index_name": "content",
+        "document_type": "treedb_document_service_v1", "typed_input": True,
+        "vector_ef_search": 64,
+        "capabilities": {
+            "dense_vector_search": True, "exact_dense_scoring": False,
+            "metadata_filters": True, "keyword_search": True, "hybrid_search": True,
+            "keyword_metadata_filters": True, "hybrid_metadata_filters": True,
+            "benchmark_lifecycle": True, "vector_index_maintenance": True,
+            "no_document_vector_search": True, "column_graph_vector_search": True,
+            "exact_column_graph_search": True, "quantized_vector_search": True,
+            "quantized_rerank": True, "scalar_u8_quantized_rerank": True,
+            "typed_dense_quantized_rerank": True, "rabitq_1bit_experimental": False,
+        },
+        "quantized_indexes": [{"name": "minima_sq8", "codec": "scalar_u8", "version": 1}],
+        "scalar_fields": [
+            {"field": "meta.fpath", "index_name": "meta_fpath", "value_type": "string"},
+            {"field": "meta.user_id", "index_name": "meta_user_id", "value_type": "string"},
+        ],
+    }
+
+
+def sq8_request(query=0):
+    response = quantized_response(500000, 32)
+    return {
+        "request_sequence": query + 1, "phase": "rss_quality", "eligible": 500000, "query": query,
+        "requested_ef_search": 32, "requested_rerank_candidates": 32,
+        "command_version": 3, "expected_generation": 7,
+        "started_monotonic_ns": query * 2 + 1, "ended_monotonic_ns": query * 2 + 2,
+        "outcome": "success", "recall": 1.0, "ndcg_at_10": 1.0,
+        "lifecycle_state": {"owner_advance": 0, "folded": False, "shadow_allowance": 0},
+        "dense_work": plain(response.dense_work), "score_plane": plain(response.score_plane),
+        "results": [{"id": f"row-{row:06d}", "content": f"minima-cohere:{row}",
+                     "meta": {"user_id": f"{(row * 7919) % 500000:06d}",
+                              "fpath": f"/cohere/{row // 256:06d}.txt"}, "score": 1.0}
+                    for row in range(10)],
+    }
 
 
 class CohereQdrantRSSDiagnosticTests(unittest.TestCase):
+    def test_frozen_plan_comparison_is_type_exact(self):
+        qdrant_rss.validate_plan({"version": 1}, {"version": 1})
+        with self.assertRaisesRegex(ValueError, "frozen Qdrant RSS plan differs"):
+            qdrant_rss.validate_plan({"version": True}, {"version": 1})
+
     def test_comparison_contract_binds_treedb_go_runtime(self):
         with patch.dict(qdrant_rss.os.environ,
                         {"GOMAXPROCS": "6", "GOGC": "75", "GOMEMLIMIT": "12GiB",
@@ -87,16 +218,38 @@ class CohereQdrantRSSDiagnosticTests(unittest.TestCase):
         self.assertFalse(qdrant_rss.ready_snapshot(changed, 500000))
         with self.assertRaisesRegex(RuntimeError, "query-ready"):
             qdrant_rss.validate_ready_snapshot(changed, 500000)
+        for path in ("points", "m", "dimension"):
+            with self.subTest(type_drift=path):
+                changed = copy.deepcopy(ready)
+                if path == "points":
+                    changed["points_count"] = 500000.0
+                elif path == "m":
+                    changed["config"]["hnsw_config"]["m"] = 16.0
+                else:
+                    changed["config"]["params"]["vectors"]["size"] = 768.0
+                self.assertFalse(qdrant_rss.ready_snapshot(changed, 500000))
 
     def test_comparison_accepts_only_matched_calibrated_artifacts(self):
-        contract = {"schema": "cohere-rss/v1", "rows": 500000, "dimensions": 768,
-                    "dataset_files_sha256": {"documents": "a" * 64}, "cpu_affinity": [0, 1]}
+        contract = rss_contract()
+        self.assertTrue(native.rss_comparison_contract_valid(contract))
+        for mutation in ("rows_type", "cpu_type", "page_type", "control_type"):
+            with self.subTest(contract_type_drift=mutation):
+                changed_contract = copy.deepcopy(contract)
+                if mutation == "rows_type":
+                    changed_contract["rows"] = 500000.0
+                elif mutation == "cpu_type":
+                    changed_contract["cpu_affinity"][0] = False
+                elif mutation == "page_type":
+                    changed_contract["host_resource_identity"]["page_size_bytes"] = 4096.0
+                else:
+                    changed_contract["ann_controls"]["treedb_ef_search"][0] = 32.0
+                self.assertFalse(native.rss_comparison_contract_valid(changed_contract))
         tree = {"schema": native.RSS_ARTIFACT_SCHEMA, "state": "calibrated", "backend": "treedb",
-                "comparison_contract": contract, "quality": {"revalidation": {"passed": True}},
-                "rss": {"availability": "measured", "bytes": 100, "process_identity": "1:1"},
+                "comparison_contract": contract, "quality": fp32_quality("ef_search"),
+                "rss": rss_sample(1, 100), "reasons": [],
                 "provenance": {"harness_commit": "a" * 40, "harness_trees": {"benchmarks": "b" * 40}}}
         qdrant = {**copy.deepcopy(tree), "backend": "qdrant",
-                  "rss": {"availability": "measured", "bytes": 120, "process_identity": "2:2"}}
+                  "quality": fp32_quality("hnsw_ef"), "rss": rss_sample(2, 120)}
         decision = qdrant_rss.compare_artifacts(tree, qdrant)
         self.assertEqual(decision["state"], "accept")
         self.assertEqual(decision["delta_bytes"], -20)
@@ -107,18 +260,229 @@ class CohereQdrantRSSDiagnosticTests(unittest.TestCase):
         self.assertEqual(decision["state"], "investigate")
         self.assertEqual(decision["delta_bytes"], 20)
 
-        for mutation in ("contract", "rss", "quality", "provenance"):
+        for mutation in (
+            "contract", "rss", "rss_source", "rss_scope", "rss_pid", "quality",
+            "quality_missing_curve", "quality_control_order", "quality_mean", "quality_ndcg_type",
+            "provenance", "reasons",
+        ):
             with self.subTest(mutation=mutation):
                 changed = copy.deepcopy(qdrant)
                 if mutation == "contract":
                     changed["comparison_contract"]["rows"] += 1
                 elif mutation == "rss":
                     changed["rss"]["availability"] = "unavailable"
+                elif mutation == "rss_source":
+                    changed["rss"]["source"] = "/proc/self/status:VmHWM"
+                elif mutation == "rss_scope":
+                    changed["rss"]["scope"] = "point_sample"
+                elif mutation == "rss_pid":
+                    changed["rss"]["pid"] = 3
                 elif mutation == "quality":
                     changed["quality"]["revalidation"]["passed"] = False
-                else:
+                elif mutation == "quality_missing_curve":
+                    changed["quality"]["revalidation"]["curve"] = []
+                elif mutation == "quality_control_order":
+                    changed["quality"]["calibration"]["curve"][0]["control"] = 64
+                elif mutation == "quality_mean":
+                    changed["quality"]["calibration"]["curve"][0]["mean_recall_at_10"] = 0.0
+                elif mutation == "quality_ndcg_type":
+                    changed["quality"]["revalidation"]["curve"][0]["per_query_ndcg_at_10"][0] = True
+                elif mutation == "provenance":
                     changed["provenance"]["harness_commit"] = "c" * 40
+                else:
+                    changed["reasons"] = ["retained failure"]
                 self.assertEqual(qdrant_rss.compare_artifacts(tree, changed)["state"], "uncalibrated")
+
+    def test_three_arm_envelope_nests_original_decision_and_never_promotes_sq8(self):
+        contract = rss_contract()
+        provenance = tree_provenance()
+        tree = {"schema": native.RSS_ARTIFACT_SCHEMA, "state": "calibrated", "backend": "treedb",
+                "comparison_contract": contract, "quality": fp32_quality("ef_search"),
+                "rss": rss_sample(1, 100), "reasons": [],
+                "provenance": provenance, "construction_calibration_contract": construction_contract()}
+        qdrant = {**copy.deepcopy(tree), "backend": "qdrant",
+                  "quality": fp32_quality("hnsw_ef"), "rss": rss_sample(2, 120)}
+        sq8 = {**copy.deepcopy(tree), "schema": native.QUANTIZED_RSS_ARTIFACT_SCHEMA,
+               "quality": sq8_quality(),
+               "rss": rss_sample(3, 80),
+               "representation_arm": native.quantized_representation_arm(),
+               "readiness": {"graph_action": "build", "successful_ann_queries": 200,
+                             "column_graph_build": sq8_build_evidence(),
+                             "effective_index": sq8_effective_index()},
+               "observed_execution": {"schema": "treedb_cohere_sq8_execution/v1",
+                                      "native_command_version": 3,
+                                      "requests": [sq8_request(query) for query in range(200)]}}
+        expected = qdrant_rss.compare_artifacts(tree, qdrant)
+        envelope = qdrant_rss.compare_three_arms(tree, qdrant, sq8)
+        self.assertEqual(envelope["fp32_treedb_vs_fp32_qdrant"], expected)
+        self.assertEqual(envelope["sq8_treedb_vs_fp32_qdrant"]["state"], "quality_matched_observation")
+        self.assertNotIn(envelope["sq8_treedb_vs_fp32_qdrant"]["state"], ("accept", "investigate"))
+        self.assertNotIn("recommendation", envelope["sq8_treedb_vs_fp32_qdrant"])
+        self.assertNotIn("m5", str(envelope).lower())
+        vectors = np.zeros((10, 768), dtype=np.float32)
+        vectors[:, 0] = 1
+        queries = np.zeros((200, 768), dtype=np.float32)
+        queries[:, 0] = 1
+        truth = [[f"row-{row:06d}" for row in range(10)] for _ in range(200)]
+        self.assertTrue(qdrant_rss.sq8_results_match_dataset(sq8, vectors, queries, truth))
+        wrong_score = copy.deepcopy(sq8)
+        wrong_score["observed_execution"]["requests"][0]["results"][0]["score"] = .5
+        self.assertFalse(qdrant_rss.sq8_results_match_dataset(wrong_score, vectors, queries, truth))
+        wrong_ndcg = copy.deepcopy(sq8)
+        wrong_ndcg["quality"]["calibration"]["curve"][0]["per_query_ndcg_at_10"] = [0.0] * 100
+        wrong_ndcg["quality"]["calibration"]["curve"][0]["mean_ndcg_at_10"] = 0.0
+        wrong_ndcg["quality"]["revalidation"]["curve"][0]["per_query_ndcg_at_10"] = [0.0] * 100
+        wrong_ndcg["quality"]["revalidation"]["curve"][0]["mean_ndcg_at_10"] = 0.0
+        self.assertFalse(qdrant_rss.sq8_results_match_dataset(wrong_ndcg, vectors, queries, truth))
+        self.assertEqual(
+            qdrant_rss.compare_three_arms(tree, qdrant, wrong_ndcg)["sq8_treedb_vs_fp32_qdrant"]["state"],
+            "unavailable",
+        )
+
+        for mutation in (
+            "profile", "request_r", "missing_work", "stale_owner", "proof_unavailable",
+            "success_error", "zero_duration", "zero_output", "base_below_retained",
+            "base_above_scores",
+            "readiness_generation", "readiness_capability", "readiness_capability_type",
+            "readiness_indexes", "readiness_typed_input", "readiness_vector_ef_type",
+            "readiness_scalar_identity", "readiness_scalar_index_type", "readiness_index_name_type",
+            "quality_control", "quality_exact", "construction", "product_provenance",
+            "fabricated_selection", "rss_source", "rss_scope", "rss_pid", "retained_reasons",
+            "fake_build", "missing_reason", "missing_config_hash", "candidate_width", "raw_width",
+            "rerank_cap", "suffix_work", "delta_work", "shadow_work", "snapshot_drift",
+            "snapshot_not_initial", "zero_schema_hash", "representation_version_type",
+            "request_command_type", "eligible_type", "readiness_dimension_type", "readiness_m_type",
+            "quality_coordinate_type", "execution_version_type", "successful_count_type", "request_ndcg",
+            "lifecycle_state",
+        ):
+            with self.subTest(mutation=mutation):
+                changed = copy.deepcopy(sq8)
+                if mutation == "profile":
+                    changed["representation_arm"]["requested_rerank_policy"] = "R=64"
+                elif mutation == "request_r":
+                    changed["observed_execution"]["requests"][0]["requested_rerank_candidates"] = 16
+                elif mutation == "missing_work":
+                    del changed["observed_execution"]["requests"][0]["score_plane"]
+                elif mutation == "stale_owner":
+                    changed["observed_execution"]["requests"][0]["score_plane"]["snapshot"]["schema_generation"] = 8
+                elif mutation == "proof_unavailable":
+                    changed["observed_execution"]["requests"][0]["score_plane"]["available"] = False
+                elif mutation == "success_error":
+                    changed["observed_execution"]["requests"][0]["error"] = "retained failure"
+                elif mutation == "zero_duration":
+                    row = changed["observed_execution"]["requests"][0]
+                    row["ended_monotonic_ns"] = row["started_monotonic_ns"]
+                elif mutation == "zero_output":
+                    changed["observed_execution"]["requests"][0]["dense_work"]["output"]["output_bytes"] = 0
+                elif mutation == "base_below_retained":
+                    changed["observed_execution"]["requests"][0]["dense_work"]["graph"]["base_candidates"] = 1
+                elif mutation == "base_above_scores":
+                    changed["observed_execution"]["requests"][0]["dense_work"]["graph"]["base_candidates"] = 65
+                elif mutation == "readiness_generation":
+                    changed["readiness"]["effective_index"]["generation"] = 999
+                elif mutation == "readiness_capability":
+                    changed["readiness"]["effective_index"]["capabilities"]["typed_dense_quantized_rerank"] = False
+                elif mutation == "readiness_capability_type":
+                    changed["readiness"]["effective_index"]["capabilities"]["dense_vector_search"] = "true"
+                elif mutation == "readiness_indexes":
+                    changed["readiness"]["effective_index"]["quantized_indexes"] = []
+                elif mutation == "readiness_typed_input":
+                    changed["readiness"]["effective_index"]["typed_input"] = False
+                elif mutation == "readiness_vector_ef_type":
+                    changed["readiness"]["effective_index"]["vector_ef_search"] = "64"
+                elif mutation == "readiness_scalar_identity":
+                    changed["readiness"]["effective_index"]["scalar_fields"][1]["index_name"] = "meta_fpath"
+                elif mutation == "readiness_scalar_index_type":
+                    changed["readiness"]["effective_index"]["scalar_fields"][0]["index_name"] = 1
+                elif mutation == "readiness_index_name_type":
+                    changed["readiness"]["effective_index"]["name"] = 1
+                elif mutation == "quality_control":
+                    changed["quality"]["control_name"] = "candidate_cap"
+                elif mutation == "quality_exact":
+                    changed["quality"]["exact_mode"] = True
+                elif mutation == "construction":
+                    changed["construction_calibration_contract"]["ef_construction"] = 64
+                elif mutation == "product_provenance":
+                    changed["provenance"]["product_commit"] = "0" * 40
+                elif mutation == "fabricated_selection":
+                    changed["quality"]["calibration"]["curve"].insert(
+                        0, copy.deepcopy(changed["quality"]["calibration"]["curve"][0]),
+                    )
+                elif mutation == "rss_source":
+                    changed["rss"]["source"] = "/proc/self/status:VmHWM"
+                elif mutation == "rss_scope":
+                    changed["rss"]["scope"] = "point_sample"
+                elif mutation == "rss_pid":
+                    changed["rss"]["pid"] = 4
+                elif mutation == "retained_reasons":
+                    changed["reasons"] = ["retained failure"]
+                elif mutation == "fake_build":
+                    changed["readiness"]["column_graph_build"] = {"completed": True}
+                elif mutation == "missing_reason":
+                    del changed["observed_execution"]["requests"][0]["score_plane"]["reason"]
+                elif mutation == "missing_config_hash":
+                    del changed["observed_execution"]["requests"][0]["score_plane"]["quantized_config_hash"]
+                elif mutation == "candidate_width":
+                    changed["observed_execution"]["requests"][0]["score_plane"]["normalized_candidate_width"] -= 1
+                elif mutation == "raw_width":
+                    changed["observed_execution"]["requests"][0]["score_plane"]["raw_candidate_width"] += 1
+                elif mutation == "rerank_cap":
+                    changed["observed_execution"]["requests"][0]["score_plane"]["rerank_candidate_cap"] -= 1
+                elif mutation == "suffix_work":
+                    changed["observed_execution"]["requests"][0]["score_plane"]["exact_suffix_score_calls"] = 1
+                elif mutation == "delta_work":
+                    changed["observed_execution"]["requests"][0]["dense_work"]["graph"]["delta_scored"] = 1
+                elif mutation == "shadow_work":
+                    changed["observed_execution"]["requests"][0]["dense_work"]["graph"]["base_shadowed"] = 1
+                elif mutation == "snapshot_drift":
+                    row = changed["observed_execution"]["requests"][-1]
+                    row["score_plane"]["snapshot"]["base_coverage_lsn"] += 1
+                    row["score_plane"]["snapshot"]["current_coverage_lsn"] += 1
+                    row["dense_work"]["graph"]["snapshot"] = copy.deepcopy(row["score_plane"]["snapshot"])
+                elif mutation == "snapshot_not_initial":
+                    for snapshot_owner in ("score_plane", "dense_work"):
+                        snapshot = (changed["observed_execution"]["requests"][0][snapshot_owner]["snapshot"]
+                                    if snapshot_owner == "score_plane"
+                                    else changed["observed_execution"]["requests"][0][snapshot_owner]["graph"]["snapshot"])
+                        snapshot["current_coverage_lsn"] += 1
+                elif mutation == "zero_schema_hash":
+                    row = changed["observed_execution"]["requests"][0]
+                    row["score_plane"]["snapshot"]["schema_hash"] = 0
+                    row["dense_work"]["graph"]["snapshot"]["schema_hash"] = 0
+                elif mutation == "representation_version_type":
+                    changed["representation_arm"]["version"] = 1.0
+                elif mutation == "request_command_type":
+                    changed["observed_execution"]["requests"][0]["command_version"] = 3.0
+                elif mutation == "eligible_type":
+                    changed["observed_execution"]["requests"][0]["eligible"] = 500000.0
+                elif mutation == "readiness_dimension_type":
+                    changed["readiness"]["effective_index"]["dimension"] = 768.0
+                elif mutation == "readiness_m_type":
+                    changed["readiness"]["effective_index"]["vector_m"] = True
+                elif mutation == "quality_coordinate_type":
+                    changed["quality"]["selected_coordinate"]["ef_search"] = 32.0
+                elif mutation == "execution_version_type":
+                    changed["observed_execution"]["native_command_version"] = 3.0
+                elif mutation == "successful_count_type":
+                    changed["readiness"]["successful_ann_queries"] = 200.0
+                elif mutation == "request_ndcg":
+                    changed["observed_execution"]["requests"][0]["ndcg_at_10"] = 0.0
+                else:
+                    changed["observed_execution"]["requests"][0]["lifecycle_state"]["owner_advance"] = 1
+                rejected = qdrant_rss.compare_three_arms(tree, qdrant, changed)
+                self.assertEqual(rejected["fp32_treedb_vs_fp32_qdrant"], expected)
+                self.assertEqual(rejected["sq8_treedb_vs_fp32_qdrant"]["state"], "unavailable")
+
+        coordinated_tree, coordinated_qdrant, coordinated_sq8 = (
+            copy.deepcopy(tree), copy.deepcopy(qdrant), copy.deepcopy(sq8),
+        )
+        for artifact in (coordinated_tree, coordinated_qdrant, coordinated_sq8):
+            artifact["comparison_contract"]["rows"] = 500000.0
+        coordinated = qdrant_rss.compare_three_arms(
+            coordinated_tree, coordinated_qdrant, coordinated_sq8,
+        )
+        self.assertEqual(coordinated["fp32_treedb_vs_fp32_qdrant"]["state"], "uncalibrated")
+        self.assertEqual(coordinated["sq8_treedb_vs_fp32_qdrant"]["state"], "unavailable")
 
     def test_peak_rss_rejects_process_drift(self):
         measured = {"availability": "measured", "bytes": 4096, "process_identity": "7:11"}

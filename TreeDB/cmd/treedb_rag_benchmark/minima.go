@@ -932,6 +932,13 @@ func minimaIntervalsOverlap(firstStart, firstEnd, secondStart, secondEnd int64) 
 }
 
 func validateMinimaObservedTimedExecution(observed minimaTimedExecutionTrace, manifest *minimaManifest) error {
+	return validateMinimaObservedTimedExecutionMode(observed, manifest, true)
+}
+
+// Quantized searches above the typed lookup limit are approximate. Their
+// request ledger validates snapshot-specific liveness and quality separately,
+// while the legacy and measured paths continue to require frozen exact ranks.
+func validateMinimaObservedTimedExecutionMode(observed minimaTimedExecutionTrace, manifest *minimaManifest, exactRanks bool) error {
 	plan := manifest.Operations[3].TimedPlan
 	queries := minimaQueryMap(manifest)
 	if len(observed.Rounds) != len(plan.Rounds) || len(observed.Queries) != plan.QueryCount {
@@ -963,12 +970,17 @@ func validateMinimaObservedTimedExecution(observed minimaTimedExecutionTrace, ma
 		if !ok || !query.ResultCaptured {
 			return fmt.Errorf("timed query %d result was not captured", query.Ordinal)
 		}
-		if _, _, err := validateMinimaRanking(
-			query.ActualIDs, query.ActualScores,
-			oracle.InitialOracleIDs, oracle.InitialOracleScores,
-			manifest.Config.OrderTolerance, manifest.Config.ScoreTolerance,
-		); err != nil {
-			return fmt.Errorf("timed query %d does not match its frozen oracle: %w", query.Ordinal, err)
+		if len(query.ActualIDs) != len(query.ActualScores) {
+			return fmt.Errorf("timed query %d result cardinality mismatch", query.Ordinal)
+		}
+		if exactRanks {
+			if _, _, err := validateMinimaRanking(
+				query.ActualIDs, query.ActualScores,
+				oracle.InitialOracleIDs, oracle.InitialOracleScores,
+				manifest.Config.OrderTolerance, manifest.Config.ScoreTolerance,
+			); err != nil {
+				return fmt.Errorf("timed query %d does not match its frozen oracle: %w", query.Ordinal, err)
+			}
 		}
 		writer := observed.Rounds[query.Round]
 		if minimaIntervalsOverlap(
@@ -1063,6 +1075,10 @@ func minimaReindexExecutionDigest(observed minimaReindexExecutionTrace) string {
 }
 
 func validateMinimaObservedReindexExecution(observed minimaReindexExecutionTrace, manifest *minimaManifest) error {
+	return validateMinimaObservedReindexExecutionMode(observed, manifest, true)
+}
+
+func validateMinimaObservedReindexExecutionMode(observed minimaReindexExecutionTrace, manifest *minimaManifest, exactRanks bool) error {
 	expected := minimaExpectedReindexExecution(manifest)
 	queries := minimaQueryMap(manifest)
 	if len(observed.Operations) != len(expected.Operations) {
@@ -1098,20 +1114,25 @@ func validateMinimaObservedReindexExecution(observed minimaReindexExecutionTrace
 			if !ok || !query.ResultCaptured {
 				return fmt.Errorf("reindex operation %d reader %d result was not captured", operation.OperationOrdinal, query.Reader)
 			}
-			var preIDs, postIDs []string
-			var preScores, postScores []float64
-			switch operation.Mutation {
-			case "delete_by_user_id_and_fpath":
-				preIDs, preScores = oracle.InitialOracleIDs, oracle.InitialOracleScores
-			case "replacement_insert":
-				postIDs, postScores = oracle.FinalOracleIDs, oracle.FinalOracleScores
-			default:
-				return fmt.Errorf("reindex operation %d has unsupported mutation", operation.OperationOrdinal)
+			if len(query.ActualIDs) != len(query.ActualScores) {
+				return fmt.Errorf("reindex operation %d reader %d result cardinality mismatch", operation.OperationOrdinal, query.Reader)
 			}
-			_, _, preErr := validateMinimaRanking(query.ActualIDs, query.ActualScores, preIDs, preScores, manifest.Config.OrderTolerance, manifest.Config.ScoreTolerance)
-			_, _, postErr := validateMinimaRanking(query.ActualIDs, query.ActualScores, postIDs, postScores, manifest.Config.OrderTolerance, manifest.Config.ScoreTolerance)
-			if preErr != nil && postErr != nil {
-				return fmt.Errorf("reindex operation %d reader %d returned an impossible mixed mutation state", operation.OperationOrdinal, query.Reader)
+			if exactRanks {
+				var preIDs, postIDs []string
+				var preScores, postScores []float64
+				switch operation.Mutation {
+				case "delete_by_user_id_and_fpath":
+					preIDs, preScores = oracle.InitialOracleIDs, oracle.InitialOracleScores
+				case "replacement_insert":
+					postIDs, postScores = oracle.FinalOracleIDs, oracle.FinalOracleScores
+				default:
+					return fmt.Errorf("reindex operation %d has unsupported mutation", operation.OperationOrdinal)
+				}
+				_, _, preErr := validateMinimaRanking(query.ActualIDs, query.ActualScores, preIDs, preScores, manifest.Config.OrderTolerance, manifest.Config.ScoreTolerance)
+				_, _, postErr := validateMinimaRanking(query.ActualIDs, query.ActualScores, postIDs, postScores, manifest.Config.OrderTolerance, manifest.Config.ScoreTolerance)
+				if preErr != nil && postErr != nil {
+					return fmt.Errorf("reindex operation %d reader %d returned an impossible mixed mutation state", operation.OperationOrdinal, query.Reader)
+				}
 			}
 			seenReaders[query.Reader] = true
 		}
@@ -1283,20 +1304,31 @@ type minimaScenarioEvidence struct {
 }
 
 type minimaArtifact struct {
-	FreezeSHA256    string                              `json:"freeze_sha256,omitempty"`
-	Schema          string                              `json:"schema"`
-	State           string                              `json:"state"`
-	Passing         bool                                `json:"passing"`
-	Manifest        minimaManifest                      `json:"manifest"`
-	Backends        []minimaBackendEvidence             `json:"backends"`
-	Scenarios       []minimaScenarioEvidence            `json:"scenarios"`
-	Failures        []string                            `json:"failures"`
-	Recommendation  string                              `json:"readiness_recommendation"`
-	RawEvidence     map[string]minimaRawBackendEvidence `json:"backend_raw_evidence"`
-	NativePathProof *minimaNativePathProof              `json:"native_path_proof,omitempty"`
+	FreezeSHA256        string                              `json:"freeze_sha256,omitempty"`
+	QuantizedPlanSHA256 string                              `json:"quantized_plan_sha256,omitempty"`
+	Schema              string                              `json:"schema"`
+	State               string                              `json:"state"`
+	Passing             bool                                `json:"passing"`
+	Manifest            minimaManifest                      `json:"manifest"`
+	Backends            []minimaBackendEvidence             `json:"backends"`
+	Scenarios           []minimaScenarioEvidence            `json:"scenarios"`
+	Failures            []string                            `json:"failures"`
+	Recommendation      string                              `json:"readiness_recommendation"`
+	RawEvidence         map[string]minimaRawBackendEvidence `json:"backend_raw_evidence"`
+	NativePathProof     *minimaNativePathProof              `json:"native_path_proof,omitempty"`
+	QuantizedProfile    *minimaQuantizedProfile             `json:"quantized_profile,omitempty"`
 }
 
 func validateMinimaArtifact(artifact *minimaArtifact, trusted ...*minimaMeasuredFreeze) error {
+	if artifact != nil && artifact.Schema == minimaQuantizedArtifactSchema {
+		if len(trusted) == 1 && trusted[0] != nil {
+			return fmt.Errorf("trusted measured freeze cannot validate a quantized diagnostic")
+		}
+		return validateMinimaQuantizedArtifact(artifact, nil)
+	}
+	if artifact != nil && artifact.QuantizedPlanSHA256 != "" {
+		return fmt.Errorf("minima artifact: nonquantized schema cannot carry a quantized plan")
+	}
 	if len(trusted) == 1 && trusted[0] != nil && (artifact == nil || artifact.Schema != minimaMeasuredSchema) {
 		return fmt.Errorf("trusted measured freeze requires measured artifact schema")
 	}
@@ -1309,6 +1341,14 @@ func validateMinimaArtifact(artifact *minimaArtifact, trusted ...*minimaMeasured
 	}
 	if artifact == nil || (artifact.Schema != minimaArtifactSchema && artifact.Schema != minimaBoundedArtifactSchema) {
 		return fmt.Errorf("minima artifact: missing schema")
+	}
+	if artifact.QuantizedProfile != nil {
+		return fmt.Errorf("minima artifact: nonquantized schema cannot carry a quantized profile")
+	}
+	for _, raw := range artifact.RawEvidence {
+		if len(raw.QuantizedRequestEvidence) != 0 {
+			return fmt.Errorf("minima artifact: nonquantized schema cannot carry quantized request evidence")
+		}
 	}
 	if artifact.Schema == minimaBoundedArtifactSchema {
 		if artifact.Manifest.Schema != minimaBoundedManifestSchema || artifact.State != "partial" || artifact.Passing {
@@ -1431,9 +1471,26 @@ func validateMinimaArtifact(artifact *minimaArtifact, trusted ...*minimaMeasured
 	return validateMinimaRawEvidence(artifact, backends)
 }
 
+func validateMinimaArtifactTrusted(artifact *minimaArtifact, freeze *minimaMeasuredFreeze, plan *minimaQuantizedPlan) error {
+	if plan != nil {
+		if freeze != nil || artifact == nil || artifact.Schema != minimaQuantizedArtifactSchema {
+			return fmt.Errorf("trusted quantized plan requires a quantized diagnostic artifact")
+		}
+		return validateMinimaQuantizedArtifact(artifact, plan)
+	}
+	if freeze != nil {
+		return validateMinimaArtifact(artifact, freeze)
+	}
+	return validateMinimaArtifact(artifact)
+}
+
 // Shared by full comparisons and completed single-backend bounded diagnostics.
 // Counts, traces and hashes are derived from the supplied validated manifest.
 func validateMinimaBackendLifecycle(backend minimaBackendEvidence, manifest *minimaManifest) error {
+	return validateMinimaBackendLifecycleMode(backend, manifest, true)
+}
+
+func validateMinimaBackendLifecycleMode(backend minimaBackendEvidence, manifest *minimaManifest, exactRanks bool) error {
 	if backend.ServerVersion == "" || backend.ClientVersion == "" || backend.Durability == "" || len(backend.Configuration) == 0 || len(backend.Environment) == 0 {
 		return fmt.Errorf("minima artifact: %s missing environment/version/durability/config", backend.Name)
 	}
@@ -1462,10 +1519,10 @@ func validateMinimaBackendLifecycle(backend minimaBackendEvidence, manifest *min
 		backend.Operations.ReindexExecutionSHA256 != observedReindexDigest {
 		return fmt.Errorf("minima artifact: %s missing or incomplete observed operation execution evidence", backend.Name)
 	}
-	if err := validateMinimaObservedTimedExecution(observedTimedTrace, manifest); err != nil {
+	if err := validateMinimaObservedTimedExecutionMode(observedTimedTrace, manifest, exactRanks); err != nil {
 		return fmt.Errorf("minima artifact: %s: %w", backend.Name, err)
 	}
-	if err := validateMinimaObservedReindexExecution(observedReindexTrace, manifest); err != nil {
+	if err := validateMinimaObservedReindexExecutionMode(observedReindexTrace, manifest, exactRanks); err != nil {
 		return fmt.Errorf("minima artifact: %s: %w", backend.Name, err)
 	}
 	if !backend.Reopen.Attempted || !backend.Reopen.CommittedParity || backend.Reopen.ResultManifestHash != manifest.ExpectedStateSHA256 {

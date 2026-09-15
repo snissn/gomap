@@ -20,13 +20,158 @@ import minima_qdrant_runner as common
 import minima_treedb_runner as runner
 import minima_treedb_probe as probe
 import minima_treedb_probe_analyze as probe_analyze
-from treedb_client import DenseSearchWork, TreeDBProtocolError, TreeDBServiceError
+from treedb_client import DenseScorePlaneProof, DenseSearchWork, IndexInfo, TreeDBProtocolError, TreeDBServiceError
 from treedb_client._native import _dense_work
 
 
 def public_dense_work() -> DenseSearchWork:
     golden = Path(__file__).parents[2] / "TreeDB/nativewire/testdata/dense_work_v1.hex"
     return _dense_work(bytes.fromhex(golden.read_text()))
+
+
+def quantized_small_filter_proof(work: DenseSearchWork, *, top_k: int = 5,
+                                 ef_search: int = 64,
+                                 rerank_candidates: int = 64) -> tuple[DenseSearchWork, DenseScorePlaneProof]:
+    graph = replace(work.graph, base_result_ids=1)
+    work = replace(work, graph=graph)
+    proof = DenseScorePlaneProof.from_dict({
+        "version": 1, "available": True, "completed": True,
+        "requested_mode": "quantized_rerank", "effective_mode": "quantized_rerank",
+        "route": "typed_exact", "reason": "", "quantized_index_name": "minima_sq8",
+        "quantized_codec": "scalar_u8", "quantized_version": 1, "quantized_config_hash": 0,
+        "requested_top_k": top_k, "requested_ef_search": ef_search,
+        "requested_rerank_candidates": rerank_candidates,
+        "normalized_candidate_width": 1, "raw_candidate_width": 1,
+        "rerank_candidate_cap": 1, "raw_retained_candidates": 0,
+        "live_shortlist_candidates": 0, "actual_rerank_candidates": 0,
+        "quantized_score_calls": 0, "quantized_code_bytes_read": 0,
+        "exact_base_rerank_score_calls": 0, "exact_suffix_score_calls": 0,
+        "exact_small_filter_score_calls": 1, "exact_base_vector_bytes_read": 8,
+        "exact_suffix_vector_bytes_read": 0, "snapshot": asdict(graph.snapshot),
+    })
+    return work, proof
+
+
+def quantized_route_proof(route: str, eligible: int, result_count: int, *,
+                          dimension: int = 2, ef_search: int = 64,
+                          base_candidates: int = 64) -> tuple[DenseSearchWork, DenseScorePlaneProof]:
+    work = public_dense_work()
+    if route == "quantized_rerank":
+        quantized_calls, retained, exact_calls, graph_route = ef_search, result_count, result_count, "typed_hnsw"
+        widths = (ef_search, ef_search, ef_search)
+    else:
+        quantized_calls, retained, exact_calls = 0, 0, eligible if route == "typed_exact" else 0
+        graph_route = route
+        effective_width = min(eligible, max(5, ef_search))
+        widths = (effective_width, effective_width,
+                  min(eligible, effective_width, ef_search))
+        base_candidates = 0
+    graph = replace(
+        work.graph, route=graph_route, base_ann_scored=quantized_calls,
+        base_candidates=base_candidates, exact_base_scored=exact_calls,
+        base_result_ids=exact_calls,
+        filter=replace(work.graph.filter, eligible_rows=eligible),
+    )
+    output = replace(
+        work.output, requested=result_count, fetched=result_count,
+        output_bytes=1 if result_count else 0, retained_payload_fetches=result_count,
+        json_reconstruction_rows=result_count, typed_column_rows=result_count,
+    )
+    work = replace(work, graph=graph, output=output)
+    proof = DenseScorePlaneProof.from_dict({
+        "version": 1, "available": True, "completed": True,
+        "requested_mode": "quantized_rerank", "effective_mode": "quantized_rerank",
+        "route": route, "reason": "", "quantized_index_name": "minima_sq8",
+        "quantized_codec": "scalar_u8", "quantized_version": 1, "quantized_config_hash": 0,
+        "requested_top_k": 5, "requested_ef_search": ef_search,
+        "requested_rerank_candidates": ef_search,
+        "normalized_candidate_width": widths[0], "raw_candidate_width": widths[1],
+        "rerank_candidate_cap": widths[2], "raw_retained_candidates": retained,
+        "live_shortlist_candidates": retained, "actual_rerank_candidates": retained,
+        "quantized_score_calls": quantized_calls,
+        "quantized_code_bytes_read": quantized_calls * dimension,
+        "exact_base_rerank_score_calls": retained if route == "quantized_rerank" else 0,
+        "exact_suffix_score_calls": 0,
+        "exact_small_filter_score_calls": exact_calls if route == "typed_exact" else 0,
+        "exact_base_vector_bytes_read": exact_calls * dimension * 4,
+        "exact_suffix_vector_bytes_read": 0, "snapshot": asdict(graph.snapshot),
+    })
+    return work, proof
+
+
+def quantized_index_info(data: dict[str, object] | None = None) -> IndexInfo:
+    value = {
+        "typed_input": True,
+        "name": "owned",
+        "dimension": 2,
+        "metric": "cosine",
+        "generation": 1,
+        "contract_version": runner.SERVICE_CONTRACT,
+        "embedding_field": "embedding",
+        "vector_index_name": "embedding",
+        "vector_strategy": "column_graph",
+        "vector_m": 16,
+        "vector_ef_construction": 32,
+        "vector_ef_search": 64,
+        "quantized_indexes": [{"name": "minima_sq8", "codec": "scalar_u8", "version": 1}],
+        "scalar_fields": [
+            {"field": "meta.fpath", "index_name": "meta_fpath", "value_type": "string"},
+            {"field": "meta.user_id", "index_name": "meta_user_id", "value_type": "string"},
+        ],
+        "text_field": "content",
+        "text_index_name": "content",
+        "document_type": "treedb_document_service_v1",
+        "capabilities": copy.deepcopy(runner.QUANTIZED_INDEX_CAPABILITIES),
+    }
+    return IndexInfo.from_dict(value if data is None else data)
+
+
+def quantized_manifest(mixed_eligible: int = 1) -> dict[str, object]:
+    mixed = {
+        "name": "mixed", "corpus_rows": mixed_eligible + 1,
+        "eligible_start": 0, "eligible_rows": mixed_eligible,
+        "filter": "user_id+fpath", "user_id": "u", "fpath": "/a",
+        "broad_start": 0, "broad_rows": mixed_eligible,
+        "narrow_start": 0, "narrow_rows": mixed_eligible,
+    }
+    small = {
+        "name": "small", "corpus_rows": 4, "eligible_start": 0, "eligible_rows": 3,
+        "filter": "user_id", "user_id": "small-user", "fpath": "",
+    }
+    originals = [common.generated_document(mixed, ordinal) for ordinal in range(mixed_eligible)]
+    replacements = [
+        {**document, "id": f"minima/mixed/replacement/{ordinal:06d}",
+         "content": f"replacement:{ordinal}"}
+        for ordinal, document in enumerate(originals)
+    ]
+    update = {**common.generated_document(small, 0), "content": "updated"}
+    operations = [
+        {"name": name, "target": "all", "effect": "none"}
+        for name in common.OPERATION_NAMES
+    ]
+    operations[1].update(effect="insert", insert_ranges=[
+        {"scenario": "mixed", "start": 0, "rows": mixed_eligible},
+        {"scenario": "small", "start": 0, "rows": 3},
+    ])
+    operations[3].update(effect="insert", insert_ranges=[
+        {"scenario": "mixed", "start": mixed_eligible, "rows": 1},
+        {"scenario": "small", "start": 3, "rows": 1},
+    ])
+    operations[4].update(target="mixed", effect="delete", filter={"user_id": "u", "fpath": "/a"},
+                         ids=[row["id"] for row in originals])
+    operations[5].update(target="mixed", effect="insert", documents=replacements)
+    operations[7].update(target="small", effect="update", documents=[update])
+    operations[9].update(target="small", effect="delete",
+                         ids=[common.generated_document(small, 1)["id"]])
+    return {
+        "schema": common.BOUNDED_MANIFEST_SCHEMA,
+        "config": {"top_k": 5, "batch_size": 3, "lookup_limit": 4096,
+                   "score_tolerance": 1e-6, "dimension": 2},
+        "corpora": [mixed, small],
+        "queries": [{"scenario": spec["name"], "vector": [1.0, 0.0]}
+                    for spec in (mixed, small)],
+        "operations": operations,
+    }
 
 
 class FakeClient:
@@ -302,8 +447,15 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
         workload = object.__new__(runner.TreeDBMinimaRunner)
         workload.client = client or FakeClient(response)
         workload.strategy, workload.transport = "native_runtime", "http"
+        workload.query_mode = "exact"
+        workload.quantized_index_name = None
+        workload.quantized_rerank_candidates = None
+        workload.quantized_requests = None
+        workload._quantized_request_lock = None
+        workload._quantized_active_timed_round = None
         workload.collection = "owned"
-        workload.config = {"top_k": 5, "batch_size": 3}
+        workload.config = {"top_k": 5, "batch_size": 3, "lookup_limit": 4096,
+                           "score_tolerance": 1e-6}
         workload.ef_search = 64
         workload.ef_construction = 32
         workload.specs = {"mixed": {"name": "mixed", "filter": "user_id+fpath", "user_id": "u", "fpath": "/a"}}
@@ -355,6 +507,143 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
                 runner.main()
         load.assert_not_called()
         controller.assert_not_called()
+
+    def test_quantized_mode_rejects_incompatible_runner_before_loading_or_launching(self) -> None:
+        args = SimpleNamespace(
+            strategy="native_runtime", transport="http", query_mode="quantized_rerank",
+            quantized_index_name="minima_sq8", quantized_rerank_candidates=64,
+            ef_search=64, measured=False, legacy_diagnostic_control=False,
+            column_graph_serving=None,
+        )
+        with mock.patch.object(runner, "parse_args", return_value=args), \
+             mock.patch.object(common, "load_manifest") as load, \
+             mock.patch.object(runner, "ServiceController") as controller:
+            with self.assertRaisesRegex(SystemExit, "quantized.*column_graph.*native"):
+                runner.main()
+        load.assert_not_called()
+        controller.assert_not_called()
+
+    def test_quantized_launch_requires_fresh_paths_and_durable_profile_before_loading(self) -> None:
+        for hostile in ("profile", "data_dir", "output", "small"):
+            with self.subTest(hostile=hostile), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                args = SimpleNamespace(
+                    strategy="column_graph", transport="native", query_mode="quantized_rerank",
+                    quantized_index_name="minima_sq8", quantized_rerank_candidates=64,
+                    ef_search=64, measured=False, legacy_diagnostic_control=False,
+                    diagnostic_resume_scenario=None, profile="command_wal_durable",
+                    small=False,
+                    data_dir=root / "data", output=root / "result.json",
+                    column_graph_serving=root / "serving.json",
+                    quantized_plan=root / "plan.json",
+                    expected_quantized_plan_sha256="a" * 64,
+                )
+                args.quantized_plan.write_text("{}", encoding="utf-8")
+                if hostile == "profile":
+                    args.profile = "cached"
+                elif hostile == "small":
+                    args.small = True
+                else:
+                    getattr(args, hostile).mkdir() if hostile == "data_dir" else args.output.touch()
+                with mock.patch.object(runner, "parse_args", return_value=args), \
+                     mock.patch.object(common, "load_manifest") as load, \
+                     mock.patch.object(runner, "ServiceController") as controller:
+                    with self.assertRaises(SystemExit):
+                        runner.main()
+                load.assert_not_called()
+                controller.assert_not_called()
+
+    def test_quantized_plan_is_exclusive_strict_and_launch_bound(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest = {
+                "schema": common.BOUNDED_MANIFEST_SCHEMA, "fixture": "bounded-50k",
+                "config": {"top_k": 5, "dimension": 8},
+                "corpus_sha256": "1" * 64, "query_sha256": "2" * 64,
+                "operation_sha256": "3" * 64, "expected_state_sha256": "4" * 64,
+            }
+            serving = {"publication": {"rows": 1}, "fold_rows": 1}
+            args = SimpleNamespace(
+                strategy="column_graph", transport="native", profile="command_wal_durable",
+                ef_construction=32, quantized_index_name="minima_sq8", ef_search=64,
+                quantized_rerank_candidates=64,
+            )
+            expected = runner.quantized_plan(manifest, serving, args)
+            self.assertEqual(expected["vector_m"], 16)
+            path = root / "plan.json"
+            digest = runner.write_quantized_plan(path, expected)
+            self.assertEqual(runner.load_quantized_plan(path, digest, expected), digest)
+            with self.assertRaisesRegex(SystemExit, "destination already exists"):
+                runner.write_quantized_plan(path, expected)
+            changed_args = copy.copy(args)
+            changed_args.ef_search = changed_args.quantized_rerank_candidates = 65
+            with self.assertRaisesRegex(SystemExit, "launch configuration"):
+                runner.load_quantized_plan(
+                    path, digest, runner.quantized_plan(manifest, serving, changed_args))
+            with self.assertRaisesRegex(SystemExit, "lowercase"):
+                runner.load_quantized_plan(path, "A" * 64, expected)
+            duplicate = root / "duplicate.json"
+            duplicate.write_text('{"manifest":{"schema":"a","schema":"b"}}', encoding="utf-8")
+            duplicate_digest = runner.hashlib.sha256(duplicate.read_bytes()).hexdigest()
+            with self.assertRaisesRegex(SystemExit, "duplicate key"):
+                runner.load_quantized_plan(duplicate, duplicate_digest, expected)
+            mistyped = root / "mistyped.json"
+            mistyped_plan = copy.deepcopy(expected)
+            mistyped_plan["quantized_profile"]["version"] = True
+            mistyped.write_bytes(json.dumps(
+                mistyped_plan, sort_keys=True, separators=(",", ":"), allow_nan=False,
+            ).encode("utf-8") + b"\n")
+            mistyped_digest = runner.hashlib.sha256(mistyped.read_bytes()).hexdigest()
+            with self.assertRaisesRegex(SystemExit, "launch configuration"):
+                runner.load_quantized_plan(mistyped, mistyped_digest, expected)
+            oversized = root / "oversized.json"
+            oversized.write_bytes(b"x" * (runner.QUANTIZED_PLAN_MAX_BYTES + 1))
+            with self.assertRaisesRegex(SystemExit, "exceeds 1 MiB"):
+                runner.load_quantized_plan(
+                    oversized, runner.hashlib.sha256(oversized.read_bytes()).hexdigest(), expected)
+
+    def test_quantized_launch_requires_reviewed_plan_pair(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            base = dict(
+                query_mode="quantized_rerank", strategy="column_graph", transport="native",
+                quantized_index_name="minima_sq8", quantized_rerank_candidates=64, ef_search=64,
+                measured=False, legacy_diagnostic_control=False, small=False,
+                diagnostic_resume_scenario=None, profile="command_wal_durable",
+                data_dir=root / "data", output=root / "output.json", write_quantized_plan=None,
+            )
+            for plan, pin in ((None, None), (root / "missing.json", "a" * 64)):
+                with self.subTest(plan=plan), self.assertRaisesRegex(SystemExit, "reviewed quantized plan"):
+                    runner.validate_quantized_launch(SimpleNamespace(
+                        **base, quantized_plan=plan, expected_quantized_plan_sha256=pin))
+
+    def test_exact_constructor_keeps_quantized_capture_unallocated(self) -> None:
+        controller = SimpleNamespace(
+            native_address=None, binary=Path("service"), url="http://127.0.0.1:1",
+            data_dir=Path("data"), pid=1, start=mock.Mock(),
+        )
+        with mock.patch.object(runner, "repository_commit", return_value="a" * 40), \
+             mock.patch.object(runner, "service_binary_build_provenance",
+                               return_value=("a" * 40, "false")), \
+             mock.patch.object(runner, "file_sha256", return_value="f" * 64):
+            workload = runner.TreeDBMinimaRunner(
+                quantized_manifest(), controller=controller, collection="owned",
+                operation_timeout=1, ef_search=64,
+            )
+        self.assertIsNone(workload.quantized_requests)
+        self.assertIsNone(workload._quantized_request_lock)
+        controller.start.assert_called_once_with()
+
+    def test_exact_launch_keeps_legacy_profile_and_existing_path_behavior(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            output = root / "result.json"
+            output.touch()
+            runner.validate_quantized_launch(SimpleNamespace(
+                query_mode="exact", quantized_index_name=None,
+                quantized_rerank_candidates=None, profile="cached",
+                data_dir=root, output=output,
+            ))
 
     def test_repository_commit_binds_head_after_clean_status(self) -> None:
         commit = "a" * 40
@@ -1760,10 +2049,56 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
         self.assertEqual(diagnostics["ef_construction_requested"], 32)
         self.assertEqual(diagnostics["ef_construction_effective"], 32)
 
+        workload.query_mode = "quantized_rerank"
+        workload.quantized_index_name = "minima_sq8"
+        workload.quantized_rerank_candidates = 64
+        workload.quantized_requests = [{"operation_name": "query", "command_version": 3}]
+        workload.manifest = {"schema": common.BOUNDED_MANIFEST_SCHEMA}
+        workload.index_info = SimpleNamespace(vector_ef_construction=32)
+        quantized_artifact = {
+            "schema": common.BOUNDED_ARTIFACT_SCHEMA,
+            "backends": [{"configuration": {}}], "scenarios": [],
+            "backend_raw_evidence": {"qdrant": {"resource_measurement": resource}},
+        }
+        with mock.patch.object(common.QdrantMinimaRunner, "artifact", return_value=quantized_artifact):
+            result = workload.artifact()
+        self.assertEqual(result["schema"], runner.QUANTIZED_ARTIFACT_SCHEMA)
+        self.assertFalse(result["passing"])
+        self.assertEqual(result["readiness_recommendation"], "not_evaluated")
+        configuration = result["backends"][0]["configuration"]
+        self.assertEqual(configuration["query_mode"], "quantized_rerank")
+        self.assertEqual(configuration["quantized_index_name"], "minima_sq8")
+        self.assertEqual(configuration["quantized_rerank_candidates"], "64")
+        self.assertEqual(result["backend_raw_evidence"]["treedb"]["quantized_request_evidence"],
+                         workload.quantized_requests)
+
 
 class MinimaTypedRunnerTest(unittest.TestCase):
     workload = MinimaTreeDBRunnerTest.workload
     response = MinimaTreeDBRunnerTest.response
+
+    def quantized_workload(self, manifest: dict[str, object]) -> runner.TreeDBMinimaRunner:
+        workload = self.workload(self.response())
+        workload.manifest = manifest
+        workload.config = manifest["config"]
+        workload.specs = {row["name"]: row for row in manifest["corpora"]}
+        workload.queries = {row["scenario"]: row for row in manifest["queries"]}
+        workload.mutation_vectors = {
+            row["id"]: row["vector"]
+            for operation in manifest["operations"] for row in operation.get("documents", [])
+        }
+        workload.strategy, workload.transport = "column_graph", "native"
+        workload.query_mode = "quantized_rerank"
+        workload.quantized_index_name = "minima_sq8"
+        workload.quantized_rerank_candidates = workload.ef_search
+        workload.quantized_requests = []
+        workload._quantized_request_lock = runner.threading.Lock()
+        workload.index_info = SimpleNamespace(generation=1)
+        workload._quantized_candidate_counts = {}
+        workload._quantized_state_works = {}
+        workload._quantized_exact_rankings = {}
+        workload._prepare_quantized_validation_states()
+        return workload
 
     def test_column_graph_rejects_nonpositive_construction_ef_before_start(self) -> None:
         with self.assertRaisesRegex(ValueError, "positive integer"):
@@ -1839,6 +2174,9 @@ class MinimaTypedRunnerTest(unittest.TestCase):
         self.assertEqual(control.optimize_index.call_args.kwargs["column_graph_action"], "build")
         self.assertEqual(workload.search("query", "mixed"), (["d"], [1.]))
         self.assertIs(native.query_by_embedding.call_args.kwargs["index_info"], info)
+        self.assertNotIn("query_mode", native.query_by_embedding.call_args.kwargs)
+        self.assertNotIn("quantized_index_name", native.query_by_embedding.call_args.kwargs)
+        self.assertNotIn("quantized_rerank_candidates", native.query_by_embedding.call_args.kwargs)
         control.query_by_embedding.assert_not_called()
         fetched = workload.retrieve("retrieve", "mixed", ["d", "missing", "d"])
         self.assertEqual([row.payload["id"] for row in fetched], ["d", "d"])
@@ -1848,6 +2186,386 @@ class MinimaTypedRunnerTest(unittest.TestCase):
         native.query_by_embedding.return_value = self.response(index=info, native_command_version=1)
         with self.assertRaisesRegex(RuntimeError, "left required native route"):
             workload.search("wrong_dispatch", "mixed")
+
+    def test_quantized_runner_requires_exact_effective_index_metadata(self) -> None:
+        workload = self.quantized_workload(quantized_manifest())
+        workload.config.update(dimension=2, metric="cosine")
+        workload.client = mock.Mock()
+        valid = quantized_index_info()
+        workload.client.ensure_index.return_value = valid
+        workload.ensure_compatible()
+        self.assertEqual(workload.effective_collection, valid.to_dict())
+
+        mutations = {
+            "scalar_index_swap": lambda value: (
+                value["scalar_fields"][0].update(index_name="meta_user_id"),
+                value["scalar_fields"][1].update(index_name="meta_fpath"),
+            ),
+            "scalar_index_duplicate": lambda value: value["scalar_fields"][1].update(
+                index_name="meta_fpath"),
+            "vector_ef_search": lambda value: value.update(vector_ef_search=65),
+            "vector_identity": lambda value: value.update(vector_index_name="other"),
+            "text_identity": lambda value: value.update(text_index_name="other"),
+            "required_capability": lambda value: value["capabilities"].update(
+                exact_column_graph_search=False),
+            "forbidden_capability": lambda value: value["capabilities"].update(
+                exact_dense_scoring=True),
+            "unknown_capability": lambda value: value["capabilities"].update(unknown=True),
+        }
+        for name, mutate in mutations.items():
+            with self.subTest(name=name):
+                changed = copy.deepcopy(valid.to_dict())
+                mutate(changed)
+                workload.client.ensure_index.return_value = quantized_index_info(changed)
+                with self.assertRaisesRegex(RuntimeError, "effective index metadata"):
+                    workload.ensure_compatible()
+
+    def test_quantized_runner_declares_profile_and_freezes_each_public_call_proof(self) -> None:
+        work, proof = quantized_small_filter_proof(public_dense_work())
+        manifest = quantized_manifest()
+        document = common.generated_document(manifest["corpora"][0], 0)
+        score = common.document_score(document)
+        info = quantized_index_info()
+        response = self.response(
+            native_base_plus_live_delta=False, native_command_version=3, index=info,
+            dense_work=work, score_plane=proof,
+        )
+        response.documents = [SimpleNamespace(
+            id=document["id"], content=document["content"], score=score,
+            meta={"user_id": document["user_id"], "fpath": document["fpath"]},
+        )]
+        workload = self.workload(response)
+        workload.manifest = manifest
+        workload.specs = {"mixed": manifest["corpora"][0]}
+        workload.queries = {"mixed": manifest["queries"][0]}
+        workload.mutation_vectors = {}
+        workload.strategy, workload.transport = "column_graph", "native"
+        workload.query_mode = "quantized_rerank"
+        workload.quantized_index_name = "minima_sq8"
+        workload.quantized_rerank_candidates = 64
+        workload.quantized_requests = []
+        workload._quantized_request_lock = runner.threading.Lock()
+        workload.config.update(dimension=2, metric="cosine")
+        workload.column_graph_serving = {"SearchCandidates": 4096}
+        workload.index_info = info
+        native = mock.Mock()
+        native.query_by_embedding.return_value = response
+        workload.clients = SimpleNamespace(native=native)
+        workload.client = mock.Mock()
+
+        interval = {}
+        self.assertEqual(workload.search("warmup_search", "mixed", interval), ([document["id"]], [score]))
+        kwargs = native.query_by_embedding.call_args.kwargs
+        self.assertEqual(kwargs["query_mode"], "quantized_rerank")
+        self.assertEqual(kwargs["quantized_index_name"], "minima_sq8")
+        self.assertEqual(kwargs["quantized_rerank_candidates"], 64)
+        self.assertEqual(kwargs["ef_search"], 64)
+        self.assertIs(kwargs["index_info"], info)
+        self.assertEqual(len(workload.quantized_requests), 1)
+        request = workload.quantized_requests[0]
+        self.assertEqual(request["started_monotonic_ns"], interval["started_monotonic_ns"])
+        self.assertEqual(request["ended_monotonic_ns"], interval["ended_monotonic_ns"])
+        self.assertEqual(request["request_sequence"], interval["request_sequence"])
+        self.assertEqual(request["command_version"], 3)
+        self.assertEqual(request["expected_generation"], 1)
+        self.assertEqual(request["results"], [
+            {"id": document["id"], "content": document["content"],
+             "user_id": "u", "fpath": "/a", "score": score},
+        ])
+        self.assertEqual(request["dense_work"], asdict(work))
+        self.assertEqual(request["score_plane"], asdict(proof))
+
+        response.documents[0].meta["unexpected"] = "copied"
+        with self.assertRaisesRegex(RuntimeError, "requested full document field"):
+            workload.search("warmup_search", "mixed")
+        del response.documents[0].meta["unexpected"]
+
+        control = mock.Mock()
+        control.ensure_index.return_value = info
+        workload.client = control
+        workload.ensure_compatible()
+        declaration = control.ensure_index.call_args.kwargs["vector_index_options"]
+        self.assertEqual(declaration["quantized_indexes"], [
+            {"name": "minima_sq8", "codec": "scalar_u8", "version": 1},
+        ])
+        self.assertEqual(declaration["m"], 16)
+
+        incompatible = info.to_dict()
+        incompatible["quantized_indexes"][0]["scalar_u8_calibration"] = {"mode": "unexpected"}
+        control.ensure_index.return_value = quantized_index_info(incompatible)
+        with self.assertRaisesRegex(RuntimeError, "effective index metadata"):
+            workload.ensure_compatible()
+
+    def test_quantized_exact_lifecycle_states_require_one_whole_projection(self) -> None:
+        workload = self.quantized_workload(quantized_manifest(mixed_eligible=2))
+        rounds = len(workload.manifest["operations"][3]["insert_ranges"])
+        self.assertEqual(workload._quantized_allowed_states("warmup_search"), (0,))
+        workload._quantized_active_timed_round = 1
+        self.assertEqual(workload._quantized_allowed_states("timed_search_with_batch_insert"), (1, 2))
+        self.assertEqual(workload._quantized_allowed_states(
+            "reindex_delete_by_user_and_fpath_while_reading"), (rounds, rounds + 1))
+        self.assertEqual(workload._quantized_allowed_states(
+            "reindex_replacement_insert_while_reading"), (rounds + 1, rounds + 2))
+        self.assertEqual(workload._quantized_allowed_states("reindex_visibility_probe"), (rounds + 2,))
+        self.assertEqual(workload._quantized_allowed_states("update_visibility_probe"), (rounds + 3,))
+        for operation in ("delete_visibility_probe", "preclose_reopen_baseline",
+                          "post_reopen_parity", "final_manifest_and_oracle_comparison"):
+            self.assertEqual(workload._quantized_allowed_states(operation), (rounds + 4,))
+
+        initial = workload._quantized_exact_results("mixed", rounds)
+        empty = workload._quantized_exact_results("mixed", rounds + 1)
+        final_mixed = workload._quantized_exact_results("mixed", rounds + 2)
+        updated = workload._quantized_exact_results("small", rounds + 3)
+        final_small = workload._quantized_exact_results("small", rounds + 4)
+        self.assertIs(initial, workload._quantized_exact_results("mixed", rounds))
+        self.assertIs(updated, workload._quantized_exact_results("small", rounds + 3))
+        self.assertEqual(len(initial), 2)
+        self.assertEqual(empty, [])
+        self.assertEqual(len(final_mixed), 2)
+        self.assertTrue(all(row["content"].startswith("replacement:") for row in final_mixed))
+        self.assertEqual(updated[0]["content"], "updated")
+        self.assertNotIn("minima/small/000001", [row["id"] for row in final_small])
+        self.assertEqual(workload._quantized_state_work("mixed", rounds + 1, False), (
+            0, 0, ((0, 0, 0, 0), (2, 2, 2, 2)),
+        ))
+        self.assertEqual(workload._quantized_state_work("mixed", rounds + 2, False), (
+            0, 2, ((0, 0, 0, 0), (2, 2, 2, 2)),
+        ))
+        self.assertEqual(workload._quantized_state_work("small", rounds + 3, False), (
+            2, 1, ((2, 2, 2, 0), (3, 3, 3, 1)),
+        ))
+        self.assertEqual(workload._quantized_state_work("small", rounds + 4, False), (
+            1, 1, ((1, 1, 1, 0), (3, 3, 3, 2)),
+        ))
+        self.assertEqual(workload._quantized_state_work("small", rounds + 4, True), (
+            2, 0, ((2, 2, 2, 0),),
+        ))
+
+        _, empty_proof = quantized_route_proof("typed_empty", 0, 0)
+        self.assertTrue(workload._quantized_results_match_state(
+            "mixed", rounds + 1, "typed_empty", [], empty_proof, False, 0, 0))
+        cached_empty = replace(
+            empty_proof, normalized_candidate_width=2, raw_candidate_width=2,
+            rerank_candidate_cap=2,
+        )
+        self.assertTrue(workload._quantized_results_match_state(
+            "mixed", rounds + 1, "typed_empty", [], cached_empty, False, 0, 0))
+        impossible_empty = replace(
+            empty_proof, normalized_candidate_width=1, raw_candidate_width=1,
+            rerank_candidate_cap=1,
+        )
+        self.assertFalse(workload._quantized_results_match_state(
+            "mixed", rounds + 1, "typed_empty", [], impossible_empty, False, 0, 0))
+
+        _, replacement_proof = quantized_route_proof("typed_exact", len(final_mixed), len(final_mixed))
+        replacement_proof = replace(
+            replacement_proof, normalized_candidate_width=0, raw_candidate_width=0,
+            rerank_candidate_cap=0, exact_small_filter_score_calls=0,
+            exact_suffix_score_calls=len(final_mixed), exact_base_vector_bytes_read=0,
+            exact_suffix_vector_bytes_read=len(final_mixed) * workload.config["dimension"] * 4,
+        )
+        self.assertTrue(workload._quantized_results_match_state(
+            "mixed", rounds + 2, "typed_exact", final_mixed, replacement_proof,
+            False, len(final_mixed), 0))
+        self.assertFalse(workload._quantized_results_match_state(
+            "mixed", rounds + 2, "typed_exact", final_mixed,
+            replace(replacement_proof, exact_small_filter_score_calls=len(final_mixed),
+                    exact_suffix_score_calls=0),
+            False, len(final_mixed), 0))
+        self.assertFalse(workload._quantized_results_match_state(
+            "mixed", rounds + 2, "typed_exact", final_mixed, replacement_proof,
+            False, len(final_mixed) - 1, 0))
+
+        updated_results = workload._quantized_exact_results("small", rounds + 3)
+        _, updated_proof = quantized_route_proof("typed_exact", 3, 3)
+        updated_proof = replace(
+            updated_proof, normalized_candidate_width=2, raw_candidate_width=2,
+            rerank_candidate_cap=2, exact_small_filter_score_calls=2,
+            exact_suffix_score_calls=1, exact_base_vector_bytes_read=16,
+            exact_suffix_vector_bytes_read=8,
+        )
+        self.assertTrue(workload._quantized_results_match_state(
+            "small", rounds + 3, "typed_exact", updated_results, updated_proof,
+            False, 3, 0))
+        self.assertFalse(workload._quantized_results_match_state(
+            "small", rounds + 3, "typed_exact", updated_results,
+            replace(updated_proof, normalized_candidate_width=3,
+                    raw_candidate_width=3, rerank_candidate_cap=3),
+            False, 3, 0))
+        self.assertFalse(workload._quantized_results_match_state(
+            "small", rounds + 3, "typed_exact", updated_results, updated_proof,
+            False, 3, 1))
+
+        mixed_projection = [initial[0], final_mixed[1]]
+        _, initial_proof = quantized_route_proof("typed_exact", len(initial), len(initial))
+        _, final_proof = quantized_route_proof("typed_exact", len(final_mixed), len(final_mixed))
+        self.assertFalse(workload._quantized_results_match_state(
+            "mixed", rounds, "typed_exact", mixed_projection, initial_proof,
+            False, len(initial), 0))
+        self.assertFalse(workload._quantized_results_match_state(
+            "mixed", rounds + 2, "typed_exact", mixed_projection, final_proof,
+            False, len(final_mixed), 0))
+
+        timed_manifest = quantized_manifest(mixed_eligible=2)
+        timed_spec = timed_manifest["corpora"][0]
+        timed_spec.update(filter="user_id", eligible_rows=3, broad_rows=3, narrow_rows=3)
+        timed = self.quantized_workload(timed_manifest)
+        timed_results = timed._quantized_exact_results("mixed", 1)
+        self.assertEqual(timed._quantized_state_work("mixed", 1, False), (
+            2, 1, ((2, 2, 2, 0),),
+        ))
+        _, timed_proof = quantized_route_proof("typed_exact", 3, 3)
+        timed_proof = replace(
+            timed_proof, normalized_candidate_width=2, raw_candidate_width=2,
+            rerank_candidate_cap=2, exact_small_filter_score_calls=2,
+            exact_suffix_score_calls=1, exact_base_vector_bytes_read=16,
+            exact_suffix_vector_bytes_read=8,
+        )
+        self.assertTrue(timed._quantized_results_match_state(
+            "mixed", 1, "typed_exact", timed_results, timed_proof, False, 3, 0))
+        self.assertFalse(timed._quantized_results_match_state(
+            "mixed", 1, "typed_exact", timed_results,
+            replace(timed_proof, exact_small_filter_score_calls=3, exact_suffix_score_calls=0),
+            False, 3, 0))
+
+    def test_quantized_owner_snapshots_follow_exact_command_count_and_fold(self) -> None:
+        workload = self.quantized_workload(quantized_manifest())
+        initial = public_dense_work().graph.snapshot
+        rounds = len(workload.manifest["operations"][3]["insert_ranges"])
+
+        def snapshot_at(advance: int, *, folded: bool = False, checksum_drift: int = 0):
+            current = replace(
+                initial.current_manifest,
+                generation=initial.current_manifest.generation + advance,
+                checksum=initial.current_manifest.checksum + advance + checksum_drift,
+            )
+            return replace(
+                initial,
+                current_manifest=current,
+                current_coverage_lsn=initial.current_coverage_lsn + advance,
+                **({"base_manifest": current,
+                    "base_coverage_lsn": initial.current_coverage_lsn + advance}
+                   if folded else {}),
+            )
+
+        self.assertTrue(workload._quantized_snapshot_matches_state(
+            initial, 0, False, "warmup_search"))
+        self.assertFalse(runner.quantized_snapshot_valid(
+            replace(initial, schema_hash=0), workload.index_info.generation))
+        self.assertFalse(workload._quantized_snapshot_matches_state(
+            initial, 1, False, "timed_search_with_batch_insert"))
+        advanced = snapshot_at(1)
+        self.assertTrue(workload._quantized_snapshot_matches_state(
+            advanced, 1, False, "timed_search_with_batch_insert"))
+        self.assertFalse(workload._quantized_snapshot_matches_state(
+            replace(advanced, schema_hash=advanced.schema_hash + 1),
+            1, False, "timed_search_with_batch_insert"))
+        self.assertFalse(workload._quantized_snapshot_matches_state(
+            snapshot_at(1, checksum_drift=1), 1, False, "timed_search_with_batch_insert"))
+        final_advance = rounds + 4
+        self.assertFalse(workload._quantized_snapshot_matches_state(
+            snapshot_at(final_advance), final_advance, True, "preclose_reopen_baseline"))
+        folded = snapshot_at(final_advance, folded=True)
+        self.assertTrue(workload._quantized_snapshot_matches_state(
+            folded, final_advance, True, "preclose_reopen_baseline"))
+        self.assertTrue(workload._quantized_snapshot_matches_state(
+            folded, final_advance, True, "post_reopen_parity"))
+        self.assertFalse(workload._quantized_snapshot_matches_state(
+            snapshot_at(final_advance, folded=True, checksum_drift=1),
+            final_advance, True, "final_manifest_and_oracle_comparison"))
+
+    def test_quantized_over_limit_results_must_be_live_with_canonical_projection(self) -> None:
+        workload = self.quantized_workload(quantized_manifest(mixed_eligible=4097))
+        results = workload._quantized_exact_results("mixed", 0)[:5]
+        work, proof = quantized_route_proof("quantized_rerank", 4097, 5)
+        response = SimpleNamespace(
+            dense_work=work, score_plane=proof, native_command_version=3,
+            index=SimpleNamespace(generation=1),
+        )
+        self.assertEqual(workload._validate_quantized_response(
+            response, "warmup_search", "mixed", (0,), results), 0)
+        changed = copy.deepcopy(results)
+        changed[0]["content"] = "stale"
+        with self.assertRaisesRegex(RuntimeError, "exact result/owner lifecycle state"):
+            workload._validate_quantized_response(response, "warmup_search", "mixed", (0,), changed)
+
+    def test_quantized_route_counters_and_output_bytes_fail_closed(self) -> None:
+        workload = self.quantized_workload(quantized_manifest())
+        results = workload._quantized_exact_results("mixed", 0)
+        work, proof = quantized_route_proof("typed_exact", 1, 1)
+        response = SimpleNamespace(dense_work=work, score_plane=proof, native_command_version=3,
+                                   index=SimpleNamespace(generation=1))
+        self.assertEqual(workload._validate_quantized_response(
+            response, "warmup_search", "mixed", (0,), results), 0)
+        for label, changed_work, changed_proof in (
+            ("exact retained", work, replace(proof, raw_retained_candidates=1)),
+            ("nonempty bytes", replace(work, output=replace(work.output, output_bytes=0)), proof),
+            ("proof unavailable", work, replace(proof, available=False)),
+            ("proof incomplete", work, replace(proof, completed=False)),
+            ("proof reason", work, replace(proof, reason="unavailable")),
+            ("wrong codec", work, replace(proof, quantized_codec="other")),
+            ("output unattempted", replace(work, output=replace(work.output, attempted=False)), proof),
+        ):
+            with self.subTest(label=label), self.assertRaisesRegex(RuntimeError, "route/work contract"):
+                workload._validate_quantized_response(
+                    SimpleNamespace(dense_work=changed_work, score_plane=changed_proof,
+                                    native_command_version=3, index=SimpleNamespace(generation=1)),
+                    "warmup_search", "mixed", (0,), results,
+                )
+
+        large = self.quantized_workload(quantized_manifest(mixed_eligible=4097))
+        large_results = large._quantized_exact_results("mixed", 0)[:5]
+        work, proof = quantized_route_proof("quantized_rerank", 4097, 5, base_candidates=4)
+        with self.assertRaisesRegex(RuntimeError, "route/work contract"):
+            large._validate_quantized_response(
+                SimpleNamespace(dense_work=work, score_plane=proof, native_command_version=3,
+                                index=SimpleNamespace(generation=1)),
+                "warmup_search", "mixed", (0,), large_results,
+            )
+        work, proof = quantized_route_proof("quantized_rerank", 4097, 5)
+        proof = replace(proof, actual_rerank_candidates=4)
+        with self.assertRaisesRegex(RuntimeError, "route/work contract"):
+            large._validate_quantized_response(
+                SimpleNamespace(dense_work=work, score_plane=proof, native_command_version=3,
+                                index=SimpleNamespace(generation=1)),
+                "warmup_search", "mixed", (0,), large_results,
+            )
+
+    def test_quantized_validation_failure_preserves_nonempty_response_projection(self) -> None:
+        manifest = quantized_manifest()
+        document = common.generated_document(manifest["corpora"][0], 0)
+        score = common.document_score(document)
+        work, proof = quantized_small_filter_proof(public_dense_work())
+        info = quantized_index_info()
+        response = self.response(
+            native_base_plus_live_delta=False, native_command_version=3, index=info,
+            dense_work=work, score_plane=proof,
+        )
+        response.documents = [SimpleNamespace(
+            id=document["id"], content=document["content"], score=score,
+            meta={"user_id": document["user_id"], "fpath": document["fpath"]},
+        )]
+        workload = self.quantized_workload(manifest)
+        workload.index_info = info
+        native = mock.Mock()
+        native.query_by_embedding.return_value = response
+        workload.clients = SimpleNamespace(native=native)
+        workload.client = mock.Mock()
+        with mock.patch.object(
+            workload, "_validate_quantized_response",
+            side_effect=RuntimeError("rejected completed response"),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "rejected completed response"):
+                workload.search("warmup_search", "mixed")
+        record = workload.quantized_requests[0]
+        self.assertEqual(record["outcome"], "error")
+        self.assertEqual(record["result_count"], 1)
+        self.assertEqual(record["results"], [{
+            "id": document["id"], "content": document["content"],
+            "user_id": document["user_id"], "fpath": document["fpath"], "score": score,
+        }])
+        self.assertEqual(record["dense_work"], asdict(work))
+        self.assertEqual(record["score_plane"], asdict(proof))
 
 
 class MinimaMeasuredRunnerTest(unittest.TestCase):

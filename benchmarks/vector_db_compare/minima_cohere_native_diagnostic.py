@@ -25,15 +25,425 @@ import time
 import numpy as np
 
 import minima_treedb_runner as existing
+from treedb_client import _dense_work as dense_contract
 
 SCHEMA = "treedb_minima_cohere_native_diagnostic/v2"
 RSS_ARTIFACT_SCHEMA = "treedb_cohere_768_rss_boundary/v3"
+QUANTIZED_RSS_ARTIFACT_SCHEMA = "treedb_cohere_768_sq8_rss_boundary/v1"
+QUANTIZED_PROFILE_NAME = "minima_sq8"
 RSS_RECALL_TARGET = .90
 RSS_CONTROLS = [32, 64, 128, 256, 512, 1024, 2048]
 RSS_CALIBRATION_QUERIES = list(range(100))
 RSS_REVALIDATION_QUERIES = list(range(100, 200))
 RSS_SELECTION_PROTOCOL = "lowest_control_passing_both_fixed_query_sets/v1"
 GIB = 1 << 30
+FROZEN_JSON_MAX_BYTES = 1 << 20
+EVIDENCE_JSON_MAX_BYTES = 64 << 20
+
+
+def quantized_representation_arm():
+    return {
+        "schema": "treedb_cohere_quantized_representation/v1",
+        "source_vectors": "fp32",
+        "query_vectors": "fp32",
+        "truth_scores": "canonical_fp32_cosine",
+        "query_mode": "quantized_rerank",
+        "quantized_index_name": QUANTIZED_PROFILE_NAME,
+        "codec": "scalar_u8",
+        "version": 1,
+        "calibration": "legacy",
+        "quantized_config_hash": 0,
+        "vector_m": 16,
+        "requested_rerank_policy": "R=E_at_each_predeclared_coordinate",
+    }
+
+
+def validate_quantized_options(query_mode, index_name, rss_only, rows):
+    if query_mode == "exact":
+        if index_name is not None:
+            raise ValueError("exact Cohere mode does not accept a quantized index")
+        return
+    if query_mode != "quantized_rerank" or index_name != QUANTIZED_PROFILE_NAME:
+        raise ValueError("quantized Cohere mode requires the minima_sq8 profile")
+    if rss_only and rows != 500000:
+        raise ValueError("quantized RSS requires the frozen 500000-row export")
+
+
+def _coordinate_rows(quality):
+    for split in ("calibration", "revalidation"):
+        for row in quality[split]["curve"]:
+            row.update(ef_search=row["control"], rerank_candidates=row["control"])
+    selected = quality["selected_control"]
+    quality["selected_coordinate"] = None if selected is None else {
+        "ef_search": selected, "rerank_candidates": selected,
+    }
+    return quality
+
+
+def fixed_set_quality_valid(quality, controls=RSS_CONTROLS,
+                            calibration_queries=RSS_CALIBRATION_QUERIES,
+                            revalidation_queries=RSS_REVALIDATION_QUERIES,
+                            target=RSS_RECALL_TARGET, *, quantized_coordinates=False):
+    """Validate the shared lowest-coordinate/two-fixed-set quality contract."""
+    try:
+        calibration = quality["calibration"]
+        revalidation = quality["revalidation"]
+        first, second = calibration["curve"], revalidation["curve"]
+        selected = quality["selected_control"]
+        split_keys = ({"queries", "curve"}, {"queries", "curve", "passed"})
+        row_keys = {"control", "mean_recall_at_10", "mean_ndcg_at_10",
+                    "per_query", "per_query_ndcg_at_10"}
+        if quantized_coordinates:
+            row_keys |= {"ef_search", "rerank_candidates"}
+        if (quality["selection_protocol"] != RSS_SELECTION_PROTOCOL
+                or not same_json(quality["target_mean_recall_at_10"], target)
+                or not isinstance(calibration, dict) or not isinstance(revalidation, dict)
+                or set(calibration) != split_keys[0] or set(revalidation) != split_keys[1]
+                or not same_json(calibration["queries"], list(calibration_queries))
+                or not same_json(revalidation["queries"], list(revalidation_queries))
+                or revalidation["passed"] is not True
+                or not first or len(first) != len(second)
+                or not same_json([row["control"] for row in first], controls[:len(first)])
+                or not same_json([row["control"] for row in second], controls[:len(second)])
+                or selected != first[-1]["control"]
+                or type(selected) is not int
+                or (quantized_coordinates and not same_json(quality["selected_coordinate"], {
+                        "ef_search": selected, "rerank_candidates": selected,
+                    }))):
+            return False
+        for left, right in zip(first, second):
+            control = left["control"]
+            if (type(control) is not int or type(right["control"]) is not int
+                    or right["control"] != control or set(left) != row_keys or set(right) != row_keys):
+                return False
+            if quantized_coordinates and (
+                    any(type(row[name]) is not int for row in (left, right)
+                        for name in ("ef_search", "rerank_candidates"))
+                    or left["ef_search"] != control or left["rerank_candidates"] != control
+                    or right["ef_search"] != control or right["rerank_candidates"] != control):
+                return False
+            for row, queries in ((left, calibration_queries), (right, revalidation_queries)):
+                recalls = row["per_query"]
+                ndcgs = row["per_query_ndcg_at_10"]
+                if (type(row["mean_recall_at_10"]) not in (int, float)
+                        or type(row["mean_ndcg_at_10"]) not in (int, float)
+                        or len(recalls) != len(queries) or len(ndcgs) != len(queries)
+                        or not all(type(value) in (int, float) and math.isfinite(value) and 0 <= value <= 1
+                                   for value in recalls + ndcgs)
+                        or not math.isclose(row["mean_recall_at_10"], sum(recalls) / len(recalls),
+                                            rel_tol=0.0, abs_tol=1e-12)
+                        or not math.isclose(row["mean_ndcg_at_10"], sum(ndcgs) / len(ndcgs),
+                                            rel_tol=0.0, abs_tol=1e-12)):
+                    return False
+        if any(left["mean_recall_at_10"] >= target and right["mean_recall_at_10"] >= target
+               for left, right in zip(first[:-1], second[:-1])):
+            return False
+        return first[-1]["mean_recall_at_10"] >= target and second[-1]["mean_recall_at_10"] >= target
+    except (KeyError, TypeError, ValueError, ZeroDivisionError):
+        return False
+
+
+def quantized_quality_valid(quality, controls=RSS_CONTROLS,
+                            calibration_queries=RSS_CALIBRATION_QUERIES,
+                            revalidation_queries=RSS_REVALIDATION_QUERIES,
+                            target=RSS_RECALL_TARGET):
+    return fixed_set_quality_valid(
+        quality, controls, calibration_queries, revalidation_queries, target,
+        quantized_coordinates=True,
+    )
+
+
+def select_quantized_cohorts(search, truth, eligible_counts, rows, controls,
+                             calibration_queries, revalidation_queries, target):
+    """Select each ANN cohort independently; small filtered cohorts stay exact."""
+    quality = {}
+    queries = list(calibration_queries) + list(revalidation_queries)
+    if not queries or max(queries) >= len(next(iter(truth.values()))):
+        raise ValueError("quantized Cohere fixed query sets exceed the frozen oracle")
+    for eligible in sorted(eligible_counts, key=lambda value: (value != rows, value)):
+        expected = truth[str(eligible)]
+        if eligible <= 4096 and eligible != rows:
+            control = controls[0]
+            per_query = [search(eligible, control, query) == expected[query] for query in queries]
+            quality[str(eligible)] = {
+                "selection_protocol": "typed_exact_correctness_at_first_predeclared_coordinate/v1",
+                "target_mean_recall_at_10": 1.0,
+                "selected_control": control if all(per_query) else None,
+                "selected_coordinate": ({"ef_search": control, "rerank_candidates": control}
+                                        if all(per_query) else None),
+                "calibration": {"queries": list(calibration_queries), "curve": []},
+                "revalidation": {"queries": list(revalidation_queries), "curve": [],
+                                 "passed": all(per_query)},
+                "exact_query_matches": per_query,
+            }
+            continue
+        selected = calibrate_ann_control(
+            lambda control, query, eligible=eligible: search(eligible, control, query),
+            expected, controls, calibration_queries, revalidation_queries, target,
+        )
+        quality[str(eligible)] = _coordinate_rows(selected)
+    return quality
+
+
+def validate_quantized_response(response, rows, eligible, ef, filter_requested, generation):
+    work, proof = getattr(response, "dense_work", None), getattr(response, "score_plane", None)
+    expected_route = ("typed_empty" if eligible == 0 else "typed_exact"
+                      if filter_requested and eligible <= 4096 else "quantized_rerank")
+    try:
+        expected_width = min(eligible, max(10, ef))
+        exact_calls = (proof.exact_base_rerank_score_calls + proof.exact_small_filter_score_calls
+                       + proof.exact_suffix_score_calls)
+        route_work_valid = {
+            "typed_empty": (
+                proof.quantized_score_calls == 0 and exact_calls == 0
+                and proof.raw_retained_candidates == 0 and proof.live_shortlist_candidates == 0
+                and proof.actual_rerank_candidates == 0 and work.graph.base_candidates == 0
+                and work.graph.base_shadowed == 0 and work.output.output_bytes == 0
+            ),
+            "typed_exact": (
+                proof.quantized_score_calls == 0 and proof.exact_base_rerank_score_calls == 0
+                and exact_calls == eligible and proof.raw_retained_candidates == 0
+                and proof.live_shortlist_candidates == 0 and proof.actual_rerank_candidates == 0
+                and work.graph.base_candidates == 0 and work.graph.base_shadowed == 0
+            ),
+            "quantized_rerank": (
+                proof.quantized_score_calls > 0
+                and proof.raw_retained_candidates <= proof.quantized_score_calls
+                and work.graph.base_shadowed <= proof.raw_retained_candidates
+                and proof.live_shortlist_candidates
+                    == min(proof.normalized_candidate_width,
+                           proof.raw_retained_candidates - work.graph.base_shadowed)
+                and proof.actual_rerank_candidates
+                    == min(proof.live_shortlist_candidates, proof.rerank_candidate_cap)
+                and proof.actual_rerank_candidates == proof.exact_base_rerank_score_calls
+            ),
+        }[expected_route]
+        valid = (
+            type(rows) is int and rows > 0 and type(eligible) is int and 0 <= eligible <= rows
+            and type(ef) is int and ef > 0 and type(filter_requested) is bool
+            and type(generation) is int and generation > 0
+            and response.native_command_version == 3
+            and response.index.generation == generation
+            and response.index.vector_strategy == "column_graph"
+            and response.route == "ann"
+            and response.exact_fallbacks == 0
+            and response.full_document_scan_fallbacks == 0
+            and work is not None and proof is not None
+            and work.version == 1 and work.completed
+            and work.graph.available and work.graph.completed
+            and work.output.attempted and work.output.completed and work.output.missing == 0
+            and work.output.requested == len(response.documents)
+            and proof.version == 1 and proof.available and proof.completed
+            and proof.requested_mode == "quantized_rerank"
+            and proof.effective_mode == "quantized_rerank"
+            and proof.route == expected_route and not proof.reason
+            and proof.quantized_index_name == QUANTIZED_PROFILE_NAME
+            and proof.quantized_codec == "scalar_u8" and proof.quantized_version == 1
+            and proof.quantized_config_hash == 0
+            and proof.requested_top_k == 10
+            and proof.requested_ef_search == ef
+            and proof.requested_rerank_candidates == ef
+            and proof.normalized_candidate_width == expected_width
+            and proof.normalized_candidate_width <= proof.raw_candidate_width
+            and proof.raw_candidate_width <= eligible
+            and proof.rerank_candidate_cap == min(eligible, expected_width, ef)
+            and existing.quantized_snapshot_valid(proof.snapshot, generation)
+            and work.graph.snapshot == proof.snapshot
+            and route_work_valid
+            and (not filter_requested or work.graph.filter.eligible_rows == eligible)
+            and ((filter_requested
+                  and proof.raw_retained_candidates <= work.graph.base_candidates
+                  and work.graph.base_candidates <= proof.quantized_score_calls)
+                 or (not filter_requested and work.graph.base_candidates == 0))
+            and ((len(response.documents) == 0 and work.output.output_bytes == 0)
+                 or (len(response.documents) > 0 and work.output.output_bytes > 0))
+            and dense_contract.dense_score_plane_byte_counters_match(proof, 768)
+            and dense_contract.dense_quantized_response_work_matches(
+                work, proof, 10, len(response.documents), filter_requested,
+            )
+        )
+    except (AttributeError, TypeError, ValueError):
+        valid = False
+    if not valid:
+        raise RuntimeError("quantized proof does not bind the Cohere request and current producer owner")
+
+
+def quantized_upsert_state(state, rows, updated):
+    """Apply one authored upsert, advancing its owner only when content changes."""
+    try:
+        rows = frozenset(rows)
+        if (not rows or any(type(row) is not int or row < 0 for row in rows)
+                or type(updated) is not bool
+                or type(state["owner_advance"]) is not int or state["owner_advance"] < 0
+                or type(state["folded"]) is not bool):
+            return None
+        current_updated = frozenset(state["updated"])
+        current_touched = frozenset(state["touched"])
+        current_deleted = frozenset(state["deleted"])
+        changed = frozenset(
+            row for row in rows
+            if row in current_deleted or ((row in current_updated) != updated)
+        )
+        published = bool(changed)
+        return {
+            "updated": ((current_updated | rows) if updated else (current_updated - rows)),
+            "touched": current_touched | changed,
+            "deleted": current_deleted - rows,
+            "owner_advance": state["owner_advance"] + int(published),
+            "folded": state["folded"],
+        }
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def quantized_lifecycle_states(initial_updated, initial_touched, initial_deleted,
+                               initial_advance, mutation_windows,
+                               request_start_ns, request_end_ns, folded=False):
+    """Enumerate whole-batch states that can linearize inside one query interval."""
+    if (type(initial_advance) is not int or initial_advance < 0
+            or type(request_start_ns) is not int or type(request_end_ns) is not int
+            or request_start_ns > request_end_ns or type(folded) is not bool):
+        return []
+    states = [{
+        "updated": frozenset(initial_updated), "touched": frozenset(initial_touched),
+        "deleted": frozenset(initial_deleted), "owner_advance": initial_advance,
+        "folded": folded,
+    }]
+    mandatory_prefix = 0
+    try:
+        ordered_windows = sorted(mutation_windows, key=lambda item: item["started_monotonic_ns"])
+    except (KeyError, TypeError, ValueError):
+        return []
+    for window in ordered_windows:
+        try:
+            started, ended, success = (window["started_monotonic_ns"],
+                                       window.get("ended_monotonic_ns"), window.get("success"))
+            rows = frozenset(window["rows"])
+            updated, published = window["updated"], window["published"]
+            if (type(started) is not int or started < 0
+                    or (ended is not None and (type(ended) is not int or ended < started))
+                    or (success is not None and type(success) is not bool) or not rows
+                    or any(type(row) is not int or row < 0 for row in rows)
+                    or type(updated) is not bool or type(published) is not bool
+                    or ((ended is None) != (success is None))):
+                return []
+            if started > request_end_ns:
+                break
+            if success is False:
+                continue
+            prior = states[-1]
+            current = quantized_upsert_state(prior, rows, updated)
+            if current is None or (current["owner_advance"] != prior["owner_advance"]) != published:
+                return []
+            if published:
+                states.append(current)
+            if (published and success is True and ended is not None
+                    and ended <= request_start_ns):
+                mandatory_prefix = len(states) - 1
+        except (KeyError, TypeError, ValueError):
+            return []
+    return states[mandatory_prefix:]
+
+
+def quantized_snapshot_identity(snapshot):
+    try:
+        manifest = lambda value: {
+            "generation": value.generation, "format": value.format,
+            "version": value.version, "checksum": value.checksum,
+        }
+        return {
+            "schema_hash": snapshot.schema_hash,
+            "schema_generation": snapshot.schema_generation,
+            "base_manifest": manifest(snapshot.base_manifest),
+            "current_manifest": manifest(snapshot.current_manifest),
+            "base_coverage_lsn": snapshot.base_coverage_lsn,
+            "current_coverage_lsn": snapshot.current_coverage_lsn,
+        }
+    except (AttributeError, TypeError):
+        return None
+
+
+def quantized_snapshot_matches_state(snapshot, initial, state):
+    current = quantized_snapshot_identity(snapshot)
+    if current is None or initial is None:
+        return False
+    try:
+        generation = initial["current_manifest"]["generation"] + state["owner_advance"]
+        coverage = initial["current_coverage_lsn"] + state["owner_advance"]
+        valid = (
+            generation < 1 << 64 and coverage < 1 << 64
+            and current["schema_hash"] == initial["schema_hash"]
+            and current["schema_generation"] == initial["schema_generation"]
+            and current["current_manifest"]["generation"] == generation
+            and current["current_coverage_lsn"] == coverage
+        )
+        if state["folded"]:
+            return valid and current["base_manifest"] == current["current_manifest"] \
+                and current["base_coverage_lsn"] == current["current_coverage_lsn"]
+        return valid and current["base_manifest"] == initial["base_manifest"] \
+            and current["base_coverage_lsn"] == initial["base_coverage_lsn"]
+    except (KeyError, TypeError):
+        return False
+
+
+def quantized_state_widths(state, rows, eligible, ef):
+    try:
+        if (type(rows) is not int or rows <= 0 or type(eligible) is not int
+                or not 0 <= eligible <= rows or type(ef) is not int or ef <= 0
+                or type(state["owner_advance"]) is not int or state["owner_advance"] < 0
+                or type(state["folded"]) is not bool):
+            return None
+        if any(type(ordinal) is not int or not 0 <= ordinal < rows
+               for values in (state["updated"], state["touched"], state["deleted"])
+               for ordinal in values):
+            return None
+        shadowed = 0 if state["folded"] else sum(
+            1 for row in state["touched"] if row < rows and (row * 7919) % rows < eligible
+        )
+        effective = min(eligible, max(10, ef))
+        return effective, min(eligible, effective + shadowed), min(eligible, effective, ef), shadowed
+    except (KeyError, TypeError):
+        return None
+
+
+def quantized_response_matches_state(response, state, rows, eligible, ef, initial_snapshot):
+    widths = quantized_state_widths(state, rows, eligible, ef)
+    if widths is None:
+        return False
+    effective, raw, rerank_cap, shadow_allowance = widths
+    try:
+        return (
+            (response.score_plane.normalized_candidate_width,
+             response.score_plane.raw_candidate_width,
+             response.score_plane.rerank_candidate_cap) == (effective, raw, rerank_cap)
+            and response.dense_work.graph.base_shadowed <= shadow_allowance
+            and quantized_snapshot_matches_state(response.score_plane.snapshot, initial_snapshot, state)
+            and quantized_response_projection_matches_state(response.documents, state)
+        )
+    except (AttributeError, KeyError, TypeError, ValueError):
+        return False
+
+
+def quantized_projection_matches_update_states(
+        documents, initial_updated, mutation_windows, request_start_ns, request_end_ns):
+    """Compatibility helper for focused atomic-projection tests."""
+    return any(quantized_response_projection_matches_state(documents, state)
+               for state in quantized_lifecycle_states(
+                   initial_updated, (), (), 0, mutation_windows, request_start_ns, request_end_ns,
+               ))
+
+
+def quantized_response_projection_matches_state(documents, state):
+    try:
+        return all(
+            document.content == f"minima-cohere:{int(document.id.removeprefix('row-'))}"
+            + (":updated" if int(document.id.removeprefix("row-")) in state["updated"] else "")
+            and document.id == f"row-{int(document.id.removeprefix('row-')):06d}"
+            and int(document.id.removeprefix("row-")) not in state["deleted"]
+            for document in documents
+        )
+    except (AttributeError, KeyError, TypeError, ValueError):
+        return False
 
 
 def digest(path):
@@ -46,6 +456,54 @@ def digest(path):
 
 def canonical(value):
     return (json.dumps(value, sort_keys=True, allow_nan=False, separators=(",", ":")) + "\n").encode()
+
+
+def same_json(left, right):
+    try:
+        return canonical(left) == canonical(right)
+    except (TypeError, ValueError):
+        return False
+
+
+def strict_json_object(path, label, maximum_bytes=FROZEN_JSON_MAX_BYTES):
+    try:
+        with Path(path).open("rb") as stream:
+            raw = stream.read(maximum_bytes + 1)
+        if len(raw) > maximum_bytes:
+            raise ValueError(f"{label} exceeds {maximum_bytes} bytes")
+
+        def reject_duplicates(pairs):
+            result = {}
+            for key, value in pairs:
+                if key in result:
+                    raise ValueError(f"{label} contains duplicate key {key!r}")
+                result[key] = value
+            return result
+
+        def reject_constant(value):
+            raise ValueError(f"{label} contains nonfinite {value}")
+
+        value = json.loads(raw.decode("utf-8"), object_pairs_hook=reject_duplicates,
+                           parse_constant=reject_constant)
+        if not isinstance(value, dict) or not value:
+            raise ValueError(f"{label} must be a nonempty JSON object")
+        return value, raw
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"invalid {label}: {exc}") from exc
+
+
+def bytes_digest(raw):
+    return hashlib.sha256(raw).hexdigest()
+
+
+def write_frozen_json(path, value, label):
+    raw = canonical(value)
+    if len(raw) > FROZEN_JSON_MAX_BYTES:
+        raise ValueError(f"{label} exceeds {FROZEN_JSON_MAX_BYTES} bytes")
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    with Path(path).open("xb") as stream:
+        stream.write(raw)
+    return bytes_digest(raw)
 
 
 def counts(rows):
@@ -194,6 +652,76 @@ def rss_comparison_contract(plan):
     }
 
 
+def rss_comparison_contract_valid(contract):
+    """Validate the immutable matched-RSS contract without trusting a sibling arm."""
+    try:
+        sha256_valid = lambda value: (
+            isinstance(value, str) and len(value) == 64
+            and all(character in "0123456789abcdef" for character in value)
+        )
+        expected_keys = {
+            "schema", "rows", "dimensions", "metric", "top_k",
+            "dataset_manifest_sha256", "dataset_files_sha256", "logical_ids", "document",
+            "scalar_indexes", "query_filter", "batch_size", "durability_visibility",
+            "cpu_affinity", "host_memory_bytes", "treedb_go_runtime",
+            "host_resource_identity", "platform", "quality_metric", "quality_target",
+            "quality_selection_protocol", "ann_controls", "calibration_queries",
+            "revalidation_queries", "rss_boundary", "rss_scope",
+        }
+        hashes = contract["dataset_files_sha256"]
+        affinity = contract["cpu_affinity"]
+        host = contract["host_resource_identity"]
+        runtime = contract["treedb_go_runtime"]
+        return (
+            isinstance(contract, dict) and set(contract) == expected_keys
+            and contract["schema"] == "cohere_500k_768d_matched_rss/v3"
+            and all(type(contract[name]) is int for name in (
+                "rows", "dimensions", "top_k", "batch_size", "host_memory_bytes",
+            ))
+            and (contract["rows"], contract["dimensions"], contract["top_k"],
+                 contract["batch_size"]) == (500000, 768, 10, 256)
+            and contract["host_memory_bytes"] > 0
+            and contract["metric"] == "cosine"
+            and sha256_valid(contract["dataset_manifest_sha256"])
+            and isinstance(hashes, dict) and set(hashes) == {"documents", "queries", "truth"}
+            and all(sha256_valid(value) for value in hashes.values())
+            and same_json(contract["scalar_indexes"], ["meta.fpath:string", "meta.user_id:string"])
+            and isinstance(affinity, list) and affinity
+            and all(type(cpu) is int and cpu >= 0 for cpu in affinity)
+            and affinity == sorted(set(affinity))
+            and isinstance(runtime, dict) and set(runtime) == {"GOMAXPROCS", "GOGC", "GOMEMLIMIT"}
+            and all(isinstance(value, str) for value in runtime.values())
+            and isinstance(host, dict)
+            and set(host) == {"machine_id", "boot_id", "page_size_bytes", "numa_mems",
+                              "cgroup_membership", "cgroup_limits"}
+            and all(isinstance(host[name], str) and host[name]
+                    for name in ("machine_id", "boot_id", "numa_mems", "cgroup_membership"))
+            and type(host["page_size_bytes"]) is int and host["page_size_bytes"] > 0
+            and isinstance(host["cgroup_limits"], dict)
+            and all(isinstance(key, str) and isinstance(value, str)
+                    for key, value in host["cgroup_limits"].items())
+            and isinstance(contract["platform"], str) and contract["platform"]
+            and same_json(contract["quality_target"], RSS_RECALL_TARGET)
+            and contract["quality_selection_protocol"] == RSS_SELECTION_PROTOCOL
+            and same_json(contract["ann_controls"], {
+                "treedb_ef_search": RSS_CONTROLS, "qdrant_hnsw_ef": RSS_CONTROLS,
+            })
+            and same_json(contract["calibration_queries"], RSS_CALIBRATION_QUERIES)
+            and same_json(contract["revalidation_queries"], RSS_REVALIDATION_QUERIES)
+            and contract["logical_ids"] == "row-<six-digit-ordinal>"
+            and contract["document"] == "id, content, FP32 embedding, nested meta.user_id and meta.fpath"
+            and contract["query_filter"] == "none (all 500000 rows eligible)"
+            and contract["durability_visibility"] == "durable_and_visible_before_ack"
+            and contract["quality_metric"] == "mean_recall_at_10"
+            and contract["rss_boundary"]
+                == "fresh_server_and_backend_through_initial_ann_ready_and_quality_gated_query"
+            and contract["rss_scope"]
+                == "server_process_lifetime_VmHWM_including_resident_mappings"
+        )
+    except (KeyError, TypeError, ValueError):
+        return False
+
+
 def treedb_service_environment(plan):
     child = {key: os.environ[key] for key in ("HOME", "PATH", "TMPDIR", "TZ") if key in os.environ}
     child.update({key: value for key, value in plan["treedb_go_runtime"].items() if value})
@@ -254,25 +782,27 @@ def finalize_rss_artifact(artifact, failure):
 def prepare(args):
     source = Path(__file__).resolve().parents[2]
     validate_imports(source)
+    query_mode = getattr(args, "query_mode", "exact")
+    quantized_index_name = getattr(args, "quantized_index_name", None)
+    rss_only = getattr(args, "rss_only", False)
+    validate_quantized_options(query_mode, quantized_index_name, rss_only, args.rows)
     harness = existing.repository_commit()
     dataset, manifest, files, query_count = dataset_identity(args.dataset, args.rows)
-    rss_only = getattr(args, "rss_only", False)
     if rss_only and args.rows != 500000:
         raise ValueError("matched RSS mode requires the frozen 500000-row export")
     existing.service_binary_build_provenance(args.service_bin, args.product_commit)
     root_tree = lambda path: subprocess.check_output(["git", "rev-parse", "HEAD:" + path], cwd=source, text=True).strip()
     product_tree = lambda path: subprocess.check_output(["git", "rev-parse", args.product_commit + ":" + path], cwd=source, text=True).strip()
-    serving = json.loads(args.serving.read_text())
-    if not isinstance(serving, dict) or not serving:
-        raise ValueError("explicit column_graph serving limits required")
-    return {"schema": SCHEMA, "qualification": "not_evaluated", "mode": "smoke" if args.rows == 512 else "diagnostic",
+    serving, serving_raw = strict_json_object(args.serving, "column_graph serving limits")
+    plan = {"schema": SCHEMA, "qualification": "not_evaluated", "mode": "smoke" if args.rows == 512 else "diagnostic",
             "harness_commit": harness, "harness_source_sha256": digest(Path(__file__)),
             "harness_trees": {path: root_tree(path) for path in ("benchmarks/vector_db_compare", "clients/python/treedb_client")},
             "product_commit": args.product_commit, "service_bin": str(args.service_bin.resolve()),
             "product_trees": {path: product_tree(path) for path in ("TreeDB", "cmd/treedb-document-service", "internal", "go.mod", "go.sum")},
             "service_sha256": digest(args.service_bin), "dataset": str(dataset),
             "dataset_manifest_sha256": digest(dataset / "manifest.json"), "dataset_files_sha256": files,
-            "serving": serving, "serving_sha256": digest(args.serving), "serving_path": str(args.serving.resolve()),
+            "serving": serving, "serving_sha256": bytes_digest(serving_raw),
+            "serving_path": str(args.serving.resolve()),
             "run_dir": str(args.run_dir.resolve()), "rows": args.rows, "dimensions": 768, "queries": query_count,
             "top_k": 10, "batch_size": 256, "efs": [128, 256, 512, 1024, 2048], "overlap_ef": 512,
             "rss_only": rss_only, "rss_recall_target": RSS_RECALL_TARGET,
@@ -300,16 +830,30 @@ def prepare(args):
                             "both fixed sets select the control; neither is a holdout" if rss_only
                             else "diagnostic queries, not final holdout"),
             "infrastructure": "INFRASTRUCTURE_UNAVAILABLE: runner: shared workstation, serialized quiet window; persistent cache and local artifact storage"}
+    if query_mode == "quantized_rerank":
+        plan.update(
+            query_mode=query_mode,
+            quantized_index_name=quantized_index_name,
+            vector_m=16,
+            representation_arm=quantized_representation_arm(),
+            quantized_coordinate_policy="ordered_ef_grid_with_requested_rerank_candidates_equal_ef",
+            query_usage=("observed fixed sets 0..99 and 100..199 both select every >4096 cohort; "
+                         "all rows is selected once as the unfiltered cohort; filtered <=4096 is typed-exact correctness"
+                         if args.rows == 500000 else
+                         "four observed queries select the unfiltered 512-row cohort; smaller filtered cohorts are typed-exact"),
+        )
+    return plan
 
 
 def validate_plan(plan, expected):
-    if plan != expected:
+    if canonical(plan) != canonical(expected):
         raise ValueError("frozen plan differs from current source/binary/dataset/configuration/environment")
 
 
 def validate_imports(source):
     for imported, directory in ((existing, "benchmarks/vector_db_compare"),
                                 (existing.common, "benchmarks/vector_db_compare"),
+                                (dense_contract, "clients/python/treedb_client/src"),
                                 (existing.TreeDBClient, "clients/python/treedb_client/src")):
         if not Path(inspect.getfile(imported)).resolve().is_relative_to(source / directory):
             raise ValueError("imported runner/client is outside the frozen source tree")
@@ -335,7 +879,7 @@ class Run:
         self.output = Path(plan["run_dir"])
         self.output.mkdir(parents=True, exist_ok=False)  # Never reuse or overwrite a prior run.
         self.events = (self.output / "events.jsonl").open("x", buffering=1)
-        self.lock, self.cancel = threading.Lock(), threading.Event()
+        self.lock, self.overlap_lock, self.cancel = threading.Lock(), threading.Lock(), threading.Event()
         self.failure = None
         self.controller = existing.ServiceController(Path(plan["service_bin"]), plan["url"], self.output / "db",
             "command_wal_durable", 600, 120, diagnostics_url=plan["diagnostics_url"],
@@ -352,8 +896,22 @@ class Run:
             if len(self.truth[str(eligible)]) != plan["queries"]:
                 raise ValueError("oracle query cardinality mismatch")
         self.updated = set()
+        self.overlap_initial = frozenset()
+        self.overlap_initial_touched = frozenset()
+        self.overlap_initial_deleted = frozenset()
+        self.overlap_initial_advance = 0
+        self.overlap_batches = []
+        self.quantized_touched = set()
+        self.quantized_deleted = set()
+        self.quantized_owner_advance = 0
+        self.quantized_folded = False
+        self.quantized_initial_snapshot = None
+        self.quantized_owner_snapshots = {}
         self.info = None
         self.initial_graph_build = None
+        self.quantized_requests = []
+        self.quantized_quality = {}
+        self.selected_efs = {}
 
     def emit(self, event, **fields):
         with self.lock:
@@ -406,61 +964,261 @@ class Run:
                     os.kill(process.pid, signal.SIGTERM)
 
     def ensure(self):
+        vector_index_options = {"strategy": "column_graph", "ef_construction": self.plan["ef_construction"]}
+        if self.plan.get("query_mode") == "quantized_rerank":
+            vector_index_options["m"] = self.plan["vector_m"]
+            vector_index_options["quantized_indexes"] = [{
+                "name": self.plan["quantized_index_name"], "codec": "scalar_u8", "version": 1,
+            }]
         info = self.clients.ensure_index("minima_cohere", 768, "cosine", typed_input=True,
             scalar_fields=[{"field": "meta.user_id", "value_type": "string"}, {"field": "meta.fpath", "value_type": "string"}],
-            vector_index_options={"strategy": "column_graph", "ef_construction": self.plan["ef_construction"]})
-        if (info.dimension != 768 or info.metric != "cosine" or info.vector_strategy != "column_graph"
-                or info.vector_m != 16 or info.vector_ef_construction != self.plan["ef_construction"]
+            vector_index_options=vector_index_options)
+        if (info.name != "minima_cohere" or info.dimension != 768 or info.metric != "cosine"
+                or info.contract_version != existing.SERVICE_CONTRACT
+                or info.embedding_field != "embedding" or info.vector_index_name != "embedding"
+                or info.text_field != "content" or info.text_index_name != "content"
+                or info.document_type != "treedb_document_service_v1"
+                or info.vector_strategy != "column_graph"
+                or info.vector_m != (self.plan["vector_m"] if self.plan.get("query_mode") == "quantized_rerank" else 16)
+                or info.vector_ef_construction != self.plan["ef_construction"]
                 or info.extra.get("typed_input") is not True
                 or {(f.field, f.value_type) for f in info.scalar_fields} != {("meta.user_id", "string"), ("meta.fpath", "string")}):
             raise RuntimeError("public collection schema differs from frozen typed schema")
+        if self.plan.get("query_mode") == "quantized_rerank":
+            if not existing.quantized_effective_index_valid(
+                    info, "minima_cohere", 768, "cosine", self.plan["ef_construction"]):
+                raise RuntimeError("public collection quantized profile differs from frozen minima_sq8")
+            self.emit("quantized_index", observed=info.to_dict())
         self.info = info
         return info
 
     def optimize(self, action):
-        return self.clients.optimize_index("minima_cohere", column_graph_action=action,
+        result = self.clients.optimize_index("minima_cohere", column_graph_action=action,
             column_graph_serving=self.plan["serving"] if action in ("build", "ensure") else None,
             expected_generation=self.info.generation)
+        if action == "fold" and self.plan.get("query_mode") == "quantized_rerank":
+            with self.overlap_lock:
+                self.quantized_folded = True
+        return result
 
-    def upsert(self, rows, phase, updated=False):
+    def record_quantized_delete(self, rows):
+        if self.plan.get("query_mode") != "quantized_rerank":
+            return
+        with self.overlap_lock:
+            self.quantized_owner_advance += 1
+            self.quantized_touched.update(rows)
+            self.quantized_deleted.update(rows)
+            self.updated.difference_update(rows)
+
+    def _quantized_upsert_state_locked(self, rows, updated):
+        prior = {
+            "updated": frozenset(self.updated),
+            "touched": frozenset(self.quantized_touched),
+            "deleted": frozenset(self.quantized_deleted),
+            "owner_advance": self.quantized_owner_advance,
+            "folded": self.quantized_folded,
+        }
+        current = quantized_upsert_state(prior, rows, updated)
+        if current is None:
+            raise RuntimeError("invalid authored quantized upsert transition")
+        return prior, current
+
+    def _apply_quantized_upsert_state_locked(self, state):
+        self.updated = set(state["updated"])
+        self.quantized_touched = set(state["touched"])
+        self.quantized_deleted = set(state["deleted"])
+        self.quantized_owner_advance = state["owner_advance"]
+
+    def quantized_allowed_states(self, writer_active, request_start_ns, request_end_ns):
+        with self.overlap_lock:
+            if writer_active:
+                return quantized_lifecycle_states(
+                    self.overlap_initial, self.overlap_initial_touched,
+                    self.overlap_initial_deleted, self.overlap_initial_advance,
+                    [dict(window) for window in self.overlap_batches],
+                    request_start_ns, request_end_ns,
+                )
+            return [{
+                "updated": frozenset(self.updated),
+                "touched": frozenset(self.quantized_touched),
+                "deleted": frozenset(self.quantized_deleted),
+                "owner_advance": self.quantized_owner_advance,
+                "folded": self.quantized_folded,
+            }]
+
+    def validate_quantized_lifecycle(self, response, record, writer_active, eligible, ef):
+        states = self.quantized_allowed_states(
+            writer_active, record["started_monotonic_ns"], record["ended_monotonic_ns"],
+        )
+        snapshot = quantized_snapshot_identity(response.score_plane.snapshot)
+        if snapshot is None:
+            raise RuntimeError("quantized response omitted its lifecycle owner identity")
+        with self.overlap_lock:
+            initial = self.quantized_initial_snapshot
+            if initial is None:
+                if (len(states) != 1 or states[0]["owner_advance"] != 0 or states[0]["folded"]
+                        or snapshot["base_manifest"] != snapshot["current_manifest"]
+                        or snapshot["base_coverage_lsn"] != snapshot["current_coverage_lsn"]):
+                    raise RuntimeError("quantized response did not establish one initial graph owner")
+                initial = snapshot
+            matched = []
+            for state in states:
+                key = (state["owner_advance"], state["folded"])
+                prior = self.quantized_owner_snapshots.get(key)
+                if ((prior is None or same_json(prior, snapshot))
+                        and quantized_response_matches_state(
+                            response, state, self.plan["rows"], eligible, ef, initial,
+                        )):
+                    matched.append(state)
+            if len(matched) != 1:
+                raise RuntimeError("quantized response does not identify one exact projection/width/owner lifecycle state")
+            if self.quantized_initial_snapshot is None:
+                self.quantized_initial_snapshot = initial
+            state = matched[0]
+            self.quantized_owner_snapshots[(state["owner_advance"], state["folded"])] = snapshot
+        record["lifecycle_state"] = {
+            "owner_advance": state["owner_advance"], "folded": state["folded"],
+            "shadow_allowance": quantized_state_widths(
+                state, self.plan["rows"], eligible, ef,
+            )[3],
+        }
+        return state
+
+    def upsert(self, rows, phase, updated=False, record_quantized=False, record_overlap=False):
         batch = [make_document(self.vectors, row, self.plan["rows"], updated) for row in rows]
-        response = self.timed(phase, lambda: self.clients.native.upsert_documents("minima_cohere", batch, index_info=self.info),
-                              first_row=rows[0], rows=len(rows))
-        if response.upserted != len(rows) or response.ids != [d["id"] for d in batch]:
-            raise RuntimeError("public upsert completion mismatch")
+        window, expected_state = None, None
+        if record_quantized or record_overlap:
+            with self.overlap_lock:
+                prior, expected_state = self._quantized_upsert_state_locked(rows, updated)
+                published = expected_state["owner_advance"] != prior["owner_advance"]
+                if record_overlap:
+                    window = {
+                        "started_monotonic_ns": time.monotonic_ns(), "ended_monotonic_ns": None,
+                        "rows": tuple(rows), "updated": updated,
+                        "published": published, "success": None,
+                    }
+                    self.overlap_batches.append(window)
+        try:
+            response = self.timed(
+                phase,
+                lambda: self.clients.native.upsert_documents(
+                    "minima_cohere", batch, index_info=self.info),
+                first_row=rows[0], rows=len(rows),
+            )
+            if response.upserted != len(rows) or response.ids != [d["id"] for d in batch]:
+                raise RuntimeError("public upsert completion mismatch")
+        except BaseException:
+            if window is not None:
+                with self.overlap_lock:
+                    window.update(ended_monotonic_ns=time.monotonic_ns(), success=False)
+            raise
+        if expected_state is not None:
+            with self.overlap_lock:
+                prior, current = self._quantized_upsert_state_locked(rows, updated)
+                if current != expected_state:
+                    raise RuntimeError("authored quantized upsert state changed during the single-writer call")
+                self._apply_quantized_upsert_state_locked(current)
+                if window is not None:
+                    window.update(ended_monotonic_ns=time.monotonic_ns(), success=True)
         return response
 
-    def search(self, phase, eligible, ef, query, writer_active=False):
-        response = self.timed(phase, lambda: self.clients.native.query_by_embedding("minima_cohere", self.queries[query].tolist(), 10,
-            predicate(self.plan["rows"], eligible), route="ann", ef_search=ef, index_info=self.info),
-            eligible=eligible, ef=ef, query=query, writer_active=writer_active)
-        if (response.native_command_version != 2 or response.index.generation != self.info.generation
+    def search(self, phase, eligible, ef, query, writer_active=False, query_filter=None):
+        quantized = self.plan.get("query_mode") == "quantized_rerank"
+        selected_filter = predicate(self.plan["rows"], eligible) if query_filter is None else query_filter
+        record = None
+        if quantized:
+            with self.lock:
+                record = {
+                    "request_sequence": len(self.quantized_requests) + 1,
+                    "phase": phase, "eligible": eligible, "query": query,
+                    "requested_ef_search": ef, "requested_rerank_candidates": ef,
+                    "command_version": 3, "expected_generation": self.info.generation,
+                    "started_monotonic_ns": time.monotonic_ns(), "outcome": "error", "results": [],
+                }
+                self.quantized_requests.append(record)
+        response = None
+        try:
+            response = self.timed(phase, lambda: self.clients.native.query_by_embedding(
+                "minima_cohere", self.queries[query].tolist(), 10, selected_filter,
+                route="ann", ef_search=ef, index_info=self.info,
+                **({"query_mode": "quantized_rerank", "quantized_index_name": QUANTIZED_PROFILE_NAME,
+                    "quantized_rerank_candidates": ef} if quantized else {})),
+                eligible=eligible, ef=ef, query=query, writer_active=writer_active)
+            if record is not None:
+                record["ended_monotonic_ns"] = time.monotonic_ns()
+                proof = getattr(response, "dense_work", None)
+                score_plane = getattr(response, "score_plane", None)
+                if proof is not None:
+                    record["dense_work"] = asdict(proof)
+                if score_plane is not None:
+                    record["score_plane"] = asdict(score_plane)
+            if quantized:
+                validate_quantized_response(response, self.plan["rows"], eligible, ef,
+                                            selected_filter is not None, self.info.generation)
+            if ((not quantized and response.native_command_version != 2)
+                or response.index.generation != self.info.generation
                 or response.index.vector_strategy != "column_graph" or response.route != "ann"
                 or response.exact_fallbacks or response.full_document_scan_fallbacks or response.dense_work is None):
-            raise RuntimeError("search left the required producer-backed native typed route")
-        if eligible != self.plan["rows"] and (not response.dense_work.graph.filter.completed
-                                               or response.dense_work.graph.filter.eligible_rows != eligible):
-            raise RuntimeError("producer scalar-filter membership differs from declared population")
-        ids = [doc.id for doc in response.documents]
-        if len(ids) != min(10, eligible) or len(set(ids)) != len(ids):
-            raise RuntimeError("unexpected search result cardinality")
-        for doc in response.documents:
-            row = int(doc.id.removeprefix("row-"))
-            if not 0 <= row < self.plan["rows"] or (row * 7919) % self.plan["rows"] >= eligible:
-                raise RuntimeError("cross-filter search result")
-            if doc.meta.get("user_id") != f"{(row * 7919) % self.plan['rows']:06d}" or doc.score is None:
-                raise RuntimeError("missing scalar/score projection")
-            # Correctness-only scoring is outside the public API timer.
-            vector = np.asarray(self.vectors[row], dtype=np.float64)
-            query_vector = np.asarray(self.queries[query], dtype=np.float64)
-            score = np.dot(vector, query_vector) / (np.linalg.norm(vector) * np.linalg.norm(query_vector))
-            if not math.isfinite(doc.score) or abs(score - doc.score) > 2e-5:
-                raise RuntimeError("returned score differs from independent full-vector cosine")
-        truth = self.truth[str(eligible)][query]
-        self.emit("search_result", phase=phase, eligible=eligible, ef=ef, query=query, ids=ids,
-                  recall=len(set(ids) & set(truth)) / len(truth), writer_active=writer_active,
-                  dense_work=asdict(response.dense_work))
-        return response
+                raise RuntimeError("search left the required producer-backed native typed route")
+            if eligible != self.plan["rows"] and (not response.dense_work.graph.filter.completed
+                                                   or response.dense_work.graph.filter.eligible_rows != eligible):
+                raise RuntimeError("producer scalar-filter membership differs from declared population")
+            ids = [doc.id for doc in response.documents]
+            if len(ids) != min(10, eligible) or len(set(ids)) != len(ids):
+                raise RuntimeError("unexpected search result cardinality")
+            results = [] if quantized else None
+            scores = [] if quantized else None
+            for doc in response.documents:
+                row = int(doc.id.removeprefix("row-"))
+                if not 0 <= row < self.plan["rows"] or (row * 7919) % self.plan["rows"] >= eligible:
+                    raise RuntimeError("cross-filter search result")
+                if doc.meta.get("user_id") != f"{(row * 7919) % self.plan['rows']:06d}" or doc.score is None:
+                    raise RuntimeError("missing scalar/score projection")
+                # Correctness-only scoring is outside the public API timer.
+                vector = np.asarray(self.vectors[row], dtype=np.float64)
+                query_vector = np.asarray(self.queries[query], dtype=np.float64)
+                score = np.dot(vector, query_vector) / (np.linalg.norm(vector) * np.linalg.norm(query_vector))
+                if not math.isfinite(doc.score) or abs(score - doc.score) > 2e-5:
+                    raise RuntimeError("returned score differs from independent full-vector cosine")
+                if quantized:
+                    expected_meta = {"user_id": f"{(row * 7919) % self.plan['rows']:06d}",
+                                     "fpath": f"/cohere/{row // 256:06d}.txt"}
+                    if doc.meta != expected_meta:
+                        raise RuntimeError("quantized result omitted or changed a full document projection")
+                    scores.append(float(doc.score))
+                    results.append({"id": doc.id, "content": doc.content,
+                                    "meta": doc.meta, "score": float(doc.score)})
+            if quantized:
+                self.validate_quantized_lifecycle(response, record, writer_active, eligible, ef)
+            if quantized and list(zip((-score for score in scores), ids)) != sorted(zip((-score for score in scores), ids)):
+                raise RuntimeError("quantized results are not canonically ordered by score then ID")
+            truth = [] if eligible == 0 else self.truth[str(eligible)][query]
+            if (quantized and response.score_plane.route in ("typed_exact", "typed_empty")
+                    and ids != truth):
+                raise RuntimeError("typed-exact quantized result rank differs from frozen eligible truth")
+            recall = len(set(ids) & set(truth)) / len(truth) if truth else (1.0 if not ids else 0.0)
+            ndcg = binary_ndcg(ids, truth) if truth else (1.0 if not ids else 0.0)
+            event = {"phase": phase, "eligible": eligible, "ef": ef, "query": query, "ids": ids,
+                     "recall": recall, "ndcg_at_10": ndcg, "writer_active": writer_active,
+                     "dense_work": record["dense_work"] if quantized else asdict(response.dense_work)}
+            if quantized:
+                event["rerank_candidates"] = ef
+                event["score_plane"] = record["score_plane"]
+                record.update(outcome="success", results=results, recall=recall, ndcg_at_10=ndcg)
+            self.emit("search_result", **event)
+            return response
+        except BaseException as exc:
+            if record is not None:
+                record.setdefault("ended_monotonic_ns", time.monotonic_ns())
+                for name in ("dense_work", "score_plane"):
+                    value = getattr(response, name, None) if response is not None else None
+                    if value is None:
+                        value = getattr(exc, name, None)
+                    if value is not None and name not in record:
+                        record[name] = asdict(value)
+                record["error"] = f"{type(exc).__name__}: {exc}"
+                self.emit("quantized_request", request=record)
+            raise
 
     def check_documents(self, docs, expected_ids):
         if [None if doc is None else doc.id for doc in docs] != expected_ids:
@@ -485,13 +1243,23 @@ class Run:
                 raise RuntimeError("public materialization full-vector mismatch")
 
     def overlap(self):
+        quantized = self.plan.get("query_mode") == "quantized_rerank"
+        if quantized:
+            with self.overlap_lock:
+                self.overlap_initial = frozenset(self.updated)
+                self.overlap_initial_touched = frozenset(self.quantized_touched)
+                self.overlap_initial_deleted = frozenset(self.quantized_deleted)
+                self.overlap_initial_advance = self.quantized_owner_advance
+                self.overlap_batches.clear()
         barrier = threading.Barrier(5)
         active = threading.Event()
         active.set()
         def reader(worker):
             barrier.wait(timeout=30)
             for n in range(64):
-                self.search("overlap_search", self.plan["overlap_eligible"], self.plan["overlap_ef"],
+                eligible = self.plan["overlap_eligible"]
+                ef = self.selected_efs.get(str(eligible), self.plan["overlap_ef"])
+                self.search("overlap_search", eligible, ef,
                             (n * 4 + worker) % self.plan["queries"], active.is_set())
         def writer():
             barrier.wait(timeout=30)
@@ -499,8 +1267,13 @@ class Run:
                 for n in range(8):
                     start = (self.plan["rows"] - 256 * (n + 1)) % self.plan["rows"]
                     rows = list(range(start, start + 256))
-                    self.upsert(rows, "overlap_replace", updated=True)
-                    self.updated.update(rows)
+                    self.upsert(rows, "overlap_replace", updated=True,
+                                record_quantized=quantized,
+                                record_overlap=quantized)
+                    if not quantized:
+                        with self.lock:
+                            self.updated.update(rows)
+                            self.overlap_batches.append((time.monotonic_ns(), frozenset(rows)))
             finally:
                 active.clear()
         with ThreadPoolExecutor(max_workers=5) as pool:
@@ -511,21 +1284,30 @@ class Run:
     def lifecycle(self):
         rows = list(range(256))
         ids = [f"row-{row:06d}" for row in rows]
-        self.updated.update(rows)
-        self.upsert(rows, "explicit_update", updated=True)
+        quantized = self.plan.get("query_mode") == "quantized_rerank"
+        self.upsert(rows, "explicit_update", updated=True, record_quantized=quantized)
+        if not quantized:
+            self.updated.update(rows)
         docs = self.timed("native_get_many", lambda: self.clients.native.get_many("minima_cohere", ids, index_info=self.info))
         self.check_documents(docs, ids)
         deleted = self.timed("http_delete_file", lambda: self.clients.delete_by_filter("minima_cohere",
             {"field": "meta.fpath", "operator": "==", "value": "/cohere/000000.txt"}, expected_generation=self.info.generation))
         if deleted.deleted != len(rows):
             raise RuntimeError("file delete cardinality mismatch")
+        self.record_quantized_delete(rows)
         docs = self.timed("native_deleted_visibility", lambda: self.clients.native.get_many("minima_cohere", ids, index_info=self.info))
         self.check_documents(docs, [None] * len(ids))
-        self.upsert(rows, "reindex_replacement", updated=True)
+        self.upsert(rows, "reindex_replacement", updated=True, record_quantized=quantized)
         docs = self.timed("native_reinsert_visibility", lambda: self.clients.native.get_many("minima_cohere", ids, index_info=self.info))
         self.check_documents(docs, ids)
-        response = self.timed("empty_user", lambda: self.clients.native.query_by_embedding("minima_cohere", self.queries[0].tolist(), 10,
-            {"field": "meta.user_id", "operator": "==", "value": "missing-user"}, route="ann", ef_search=512, index_info=self.info))
+        empty_filter = {"field": "meta.user_id", "operator": "==", "value": "missing-user"}
+        if self.plan.get("query_mode") == "quantized_rerank":
+            response = self.search("empty_user", 0, self.selected_efs[str(self.plan["rows"])], 0,
+                                   query_filter=empty_filter)
+        else:
+            response = self.timed("empty_user", lambda: self.clients.native.query_by_embedding(
+                "minima_cohere", self.queries[0].tolist(), 10, empty_filter,
+                route="ann", ef_search=512, index_info=self.info))
         if response.documents:
             raise RuntimeError("empty-user query returned documents")
 
@@ -557,6 +1339,9 @@ class Run:
             search, truth, self.plan["rss_controls"], self.plan["rss_calibration_queries"],
             self.plan["rss_revalidation_queries"], self.plan["rss_recall_target"],
         )
+        quantized = self.plan.get("query_mode") == "quantized_rerank"
+        if quantized:
+            quality = _coordinate_rows(quality)
         process = self.controller.process
         rss = process_peak_at_boundary(
             process.pid if process else None, self.controller._owned_identity, self.plan["cpu_affinity"],
@@ -567,7 +1352,8 @@ class Run:
         if rss.get("availability") != "measured":
             reasons.append("TreeDB server VmHWM unavailable or process drifted")
         artifact = {
-            "schema": RSS_ARTIFACT_SCHEMA, "state": "calibrated" if not reasons else "uncalibrated",
+            "schema": QUANTIZED_RSS_ARTIFACT_SCHEMA if quantized else RSS_ARTIFACT_SCHEMA,
+            "state": "calibrated" if not reasons else "uncalibrated",
             "backend": "treedb", "comparison_contract": rss_comparison_contract(self.plan),
             "construction_calibration_contract": self.plan["construction_calibration_contract"],
             "quality": {**quality, "control_name": "ef_search", "exact_mode": False},
@@ -584,6 +1370,14 @@ class Run:
                 "serving_sha256",
             )},
         }
+        if quantized:
+            artifact["representation_arm"] = quantized_representation_arm()
+            artifact["observed_execution"] = {
+                "schema": "treedb_cohere_sq8_execution/v1",
+                "native_command_version": 3,
+                "requests": self.quantized_requests,
+            }
+            artifact["readiness"]["effective_index"] = self.info.to_dict()
         return artifact
 
     def execute(self):
@@ -605,6 +1399,52 @@ class Run:
                 rss_artifact = self.rss_boundary()
                 if rss_artifact["reasons"]:
                     raise RuntimeError("; ".join(rss_artifact["reasons"]))
+            elif self.plan.get("query_mode") == "quantized_rerank":
+                cold_populations = set()
+
+                def quality_search(eligible, ef, query):
+                    phase = "predicate_first_quality_query" if eligible not in cold_populations else "quality_selection"
+                    cold_populations.add(eligible)
+                    return [doc.id for doc in self.search(phase, eligible, ef, query).documents]
+
+                if self.plan["rows"] == 500000:
+                    self.quantized_quality = select_quantized_cohorts(
+                        quality_search,
+                        self.truth, self.plan["eligible_counts"], self.plan["rows"], self.plan["rss_controls"],
+                        self.plan["rss_calibration_queries"], self.plan["rss_revalidation_queries"],
+                        self.plan["rss_recall_target"],
+                    )
+                else:
+                    smoke_queries = list(range(self.plan["queries"]))
+                    self.quantized_quality = select_quantized_cohorts(
+                        quality_search,
+                        self.truth, self.plan["eligible_counts"], self.plan["rows"], self.plan["rss_controls"],
+                        smoke_queries[:2], smoke_queries[2:], 1.0,
+                    )
+                failed_cohorts = [eligible for eligible, row in self.quantized_quality.items()
+                                  if row["selected_coordinate"] is None
+                                  or row["revalidation"].get("passed") is not True]
+                self.emit("quantized_quality", cohorts=self.quantized_quality)
+                if failed_cohorts:
+                    raise RuntimeError("quantized fixed-set quality failed for cohorts " + ",".join(failed_cohorts))
+                self.selected_efs = {eligible: row["selected_coordinate"]["ef_search"]
+                                     for eligible, row in self.quantized_quality.items()}
+                # Selection is now frozen. Later diagnostic/lifecycle calls only reuse these coordinates.
+                for eligible in self.plan["eligible_counts"]:
+                    for query in range(self.plan["queries"]):
+                        self.search("fixed_coordinate_curve", eligible, self.selected_efs[str(eligible)], query)
+                self.overlap()
+                self.lifecycle()
+                self.timed("pre_close_fold", lambda: self.optimize("fold"))
+                self.timed("close", self.clients.close)
+                validate_shutdowns(self.controller.lifetimes, 1)
+                self.timed("reopen", self.controller.start)
+                self.timed("idempotent_ensure", self.ensure)
+                self.timed("reopen_graph_ensure", lambda: self.optimize("ensure"))
+                for eligible in self.plan["eligible_counts"]:
+                    for query in range(self.plan["queries"]):
+                        self.search("post_reopen_curve", eligible, self.selected_efs[str(eligible)], query)
+                self.timed("verification_only_full_scroll", self.scroll)
             else:
                 # Cache-cold means first request for this predicate, not OS/disk-cold.
                 for eligible in self.plan["eligible_counts"]:
@@ -628,6 +1468,11 @@ class Run:
                 raise RuntimeError(self.failure)
         except BaseException as exc:
             failed = f"{type(exc).__name__}: {exc}"
+            if self.plan.get("query_mode") == "quantized_rerank" and self.quantized_requests:
+                last = self.quantized_requests[-1]
+                if last.get("outcome") == "error" and "error" not in last:
+                    last["error"] = failed
+                self.emit("quantized_failure_evidence", requests=self.quantized_requests)
             self.emit("failure", error=failed)
         finally:
             try:
@@ -668,6 +1513,8 @@ def main():
     parser.add_argument("--run-dir", required=True, type=Path)
     parser.add_argument("--rows", type=int, choices=[512, 500000], default=500000)
     parser.add_argument("--rss-only", action="store_true")
+    parser.add_argument("--query-mode", choices=("exact", "quantized_rerank"), default="exact")
+    parser.add_argument("--quantized-index-name")
     parser.add_argument("--ef-construction", type=int, choices=(32, 64, 96, 128), default=128)
     parser.add_argument("--construction-decisions", action="store_true")
     parser.add_argument("--url", default="http://127.0.0.1:17420")
@@ -676,14 +1523,11 @@ def main():
     args = parser.parse_args()
     plan = prepare(args)
     if args.freeze:
-        args.freeze.parent.mkdir(parents=True, exist_ok=True)
-        with args.freeze.open("xb") as stream:
-            stream.write(canonical(plan))
-        print(digest(args.freeze), args.freeze)
+        print(write_frozen_json(args.freeze, plan, "frozen Cohere run plan"), args.freeze)
         return 0
-    if not args.expected_plan_sha256 or digest(args.run) != args.expected_plan_sha256:
+    frozen, frozen_raw = strict_json_object(args.run, "frozen Cohere run plan")
+    if not args.expected_plan_sha256 or bytes_digest(frozen_raw) != args.expected_plan_sha256:
         raise ValueError("externally pinned plan hash required")
-    frozen = json.loads(args.run.read_text())
     validate_plan(frozen, plan)
     if shutil.disk_usage(args.run_dir.parent).free < plan["minimum_free_bytes"] + GIB:
         raise RuntimeError("insufficient disk headroom before starting service")

@@ -283,6 +283,7 @@ type minimaRawBatchCorrelationContract struct {
 type minimaRawBackendEvidence struct {
 	SetupInterval                     *minimaMeasuredInterval                 `json:"setup_interval,omitempty"`
 	RequestEvidence                   []minimaMeasuredRequest                 `json:"request_evidence,omitempty"`
+	QuantizedRequestEvidence          []minimaQuantizedRequest                `json:"quantized_request_evidence,omitempty"`
 	ProcessLifetimes                  []minimaProcessLifetime                 `json:"process_lifetimes,omitempty"`
 	PhaseLatencyDistributions         map[string]minimaRawLatencyDistribution `json:"phase_latency_distributions,omitempty"`
 	Events                            []json.RawMessage                       `json:"events,omitempty"`
@@ -421,6 +422,15 @@ func readMinimaArtifact(path string) (minimaArtifact, error) {
 	}
 	if artifact.Schema == minimaMeasuredSchema {
 		if err := minimaMeasuredPresence(raw); err != nil {
+			return artifact, err
+		}
+	}
+	if artifact.Schema == minimaQuantizedArtifactSchema {
+		if err := minimaQuantizedPresence(raw); err != nil {
+			return artifact, err
+		}
+	} else if artifact.Schema != minimaMeasuredSchema {
+		if err := minimaNonQuantizedPresence(raw); err != nil {
 			return artifact, err
 		}
 	}
@@ -1165,7 +1175,7 @@ func validateMinimaRawEvidence(artifact *minimaArtifact, backends map[string]min
 			if raw.ServiceLog.Path == "" || raw.ServiceLog.Tail == "" || raw.ServiceLog.MaxTailBytes != 64<<10 {
 				return fmt.Errorf("minima artifact: TreeDB bounded service log evidence missing")
 			}
-			if artifact.Schema != minimaMeasuredSchema && len(raw.NativeRouteResponses) != len(artifact.Manifest.Corpora) {
+			if artifact.Schema != minimaMeasuredSchema && artifact.Schema != minimaQuantizedArtifactSchema && len(raw.NativeRouteResponses) != len(artifact.Manifest.Corpora) {
 				return fmt.Errorf("minima artifact: TreeDB raw route responses are incomplete")
 			}
 			if err := validateMinimaTreeDBProvenance(backend); err != nil {
@@ -1219,7 +1229,7 @@ func validateMinimaRawEvidence(artifact *minimaArtifact, backends map[string]min
 				row.Resource.DiskBytes != resource.DiskBytes {
 				return fmt.Errorf("minima artifact: %s scenario resource summary does not match raw measurement", name)
 			}
-			if name == "treedb" && artifact.Schema != minimaMeasuredSchema {
+			if name == "treedb" && artifact.Schema != minimaMeasuredSchema && artifact.Schema != minimaQuantizedArtifactSchema {
 				if err := validateMinimaNativeRouteResponse(raw.NativeRouteResponses, row); err != nil {
 					return err
 				}
