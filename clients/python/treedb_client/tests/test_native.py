@@ -61,6 +61,20 @@ class NativeCodecTests(unittest.TestCase):
             self.assertEqual(response.native_command_version, 3)
             self.assertIsNotNone(response.score_plane)
             self.assertEqual(response.score_plane.quantized_index_name, "embedding.scalar_u8.public")
+            proof_only_payload = _section(2, _uint(1) + b"\x00" + _bytes_for_test("native error")) + _section(136, score_plane)
+            proof_only_client = TreeDBClient("http://127.0.0.1:1", native_address="127.0.0.1:2")
+            proof_only_client._native.socket = mock.Mock()
+            proof_only_client._native.capabilities["dense_vector_search_versions"] = "3"
+            proof_only_header = _HEADER.pack(b"TDB1", 40, 1, 0, 6, 0, 0, 1, len(proof_only_payload))
+            with mock.patch.object(proof_only_client._native, "_read", side_effect=(proof_only_header, proof_only_payload)), \
+                 self.assertRaisesRegex(TreeDBProtocolError, "proof does not match the request") as caught:
+                proof_only_client.query_by_embedding(
+                    "a", [1, 0], 1, query_mode="quantized_rerank",
+                    quantized_index_name="embedding.scalar_u8.public", index_info=info,
+                )
+            self.assertIsNone(caught.exception.dense_work)
+            self.assertEqual(caught.exception.score_plane, response.score_plane)
+            proof_only_client.close()
             for name, changed in (
                 ("index name", replace(response.score_plane, quantized_index_name="embedding.scalar_u8.other")),
                 ("top k", replace(response.score_plane, requested_top_k=2)),

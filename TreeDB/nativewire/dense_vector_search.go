@@ -341,7 +341,7 @@ func validateDenseQuantizedFailureProof(err error, request DenseVectorSearchRequ
 	if work == nil && proof == nil {
 		return err
 	}
-	mismatch := false
+	mismatch := proof != nil && work == nil
 	if proof != nil && !denseScorePlaneRequestMatches(proof, request, proof.Completed) {
 		mismatch = true
 	}
@@ -367,8 +367,6 @@ func validateDenseQuantizedFailureProof(err error, request DenseVectorSearchRequ
 				}
 			}
 		}
-	} else if proof != nil && request.Filter != nil {
-		mismatch = true
 	}
 	if !mismatch {
 		return err

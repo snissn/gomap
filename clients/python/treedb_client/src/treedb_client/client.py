@@ -1303,9 +1303,9 @@ def _validate_dense_failure_proofs(
     if work is None and proof is None:
         return
 
-    mismatch = False
+    mismatch = proof is not None and work is None
     if proof is not None:
-        mismatch = not _dense_score_plane_request_matches(
+        mismatch = mismatch or not _dense_score_plane_request_matches(
             proof,
             query_mode=query_mode,
             quantized_index_name=quantized_index_name,
@@ -1339,9 +1339,6 @@ def _validate_dense_failure_proofs(
                 work, proof, top_k, work.output.fetched, filter_requested
             ):
                 mismatch = True
-    elif proof is not None and filter_requested:
-        mismatch = True
-
     if mismatch:
         raise TreeDBProtocolError(
             "dense score-plane proof does not match the request on error",

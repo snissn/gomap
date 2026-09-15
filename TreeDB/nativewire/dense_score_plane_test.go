@@ -621,6 +621,18 @@ func TestDenseV3FailureProofBindsRequestWithoutRetainingRemoteError(t *testing.T
 	if got := validateDenseQuantizedFailureProof(preOwner, filteredBeforeOwner); got != preOwner {
 		t.Fatalf("filtered failure before score-plane ownership changed: %v", got)
 	}
+	workOnly := &WireError{Code: iwire.ErrInternal, Message: "work-only", DenseWork: &work}
+	if got := validateDenseQuantizedFailureProof(workOnly, request); got != workOnly {
+		t.Fatalf("unfiltered work-only failure changed: %v", got)
+	}
+	proofOnly := &WireError{Code: iwire.ErrInternal, Message: "proof-only", ScorePlane: &proof}
+	got := validateDenseQuantizedFailureProof(proofOnly, request)
+	var proofOnlyDecode *DenseVectorSearchDecodeError
+	var proofOnlyRemote *WireError
+	if !errors.As(got, &proofOnlyDecode) || proofOnlyDecode.DenseWork != nil || proofOnlyDecode.ScorePlane == nil || *proofOnlyDecode.ScorePlane != proof ||
+		!strings.Contains(got.Error(), "failure proof does not match the request") || errors.As(got, &proofOnlyRemote) {
+		t.Fatalf("unfiltered proof-only failure was not rejected with diagnostic plane: %v", got)
+	}
 
 	mutations := map[string]func(*documentservice.DenseSearchWork, *collections.ColumnGraphScorePlaneWork){
 		"mode": func(_ *documentservice.DenseSearchWork, p *collections.ColumnGraphScorePlaneWork) {
@@ -669,7 +681,7 @@ func TestDenseV3FailureProofBindsRequestWithoutRetainingRemoteError(t *testing.T
 	}
 	filtered := request
 	filtered.Filter = &documentservice.Filter{Field: "meta.user_id", Operator: "==", Value: "u"}
-	got := validateDenseQuantizedFailureProof(remote, filtered)
+	got = validateDenseQuantizedFailureProof(remote, filtered)
 	if !strings.Contains(got.Error(), "failure proof does not match the request") {
 		t.Fatalf("proof-bearing filtered failure omitted completed filter evidence: %v", got)
 	}
@@ -684,39 +696,54 @@ func TestDenseV3FailureProofBindsRequestWithoutRetainingRemoteError(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	var frameError []byte
-	for _, section := range []iwire.Section{
-		{ID: iwire.SectionError, Bytes: appendErrorPayload(nil, iwire.ErrInternal, false, "original")},
-		{ID: iwire.SectionDenseSearchWork, Flags: iwire.SectionFlagCritical, Bytes: workRaw},
-		{ID: iwire.SectionDenseSearchScorePlaneProof, Flags: iwire.SectionFlagCritical, Bytes: proofRaw},
+	validProofRaw, err := appendDenseScorePlane(nil, proof, iwire.DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, sections := range map[string][]iwire.Section{
+		"mismatched pair": {
+			{ID: iwire.SectionDenseSearchWork, Flags: iwire.SectionFlagCritical, Bytes: workRaw},
+			{ID: iwire.SectionDenseSearchScorePlaneProof, Flags: iwire.SectionFlagCritical, Bytes: proofRaw},
+		},
+		"proof only": {
+			{ID: iwire.SectionDenseSearchScorePlaneProof, Flags: iwire.SectionFlagCritical, Bytes: validProofRaw},
+		},
 	} {
-		frameError, err = iwire.AppendSection(frameError, section)
-		if err != nil {
-			t.Fatal(err)
-		}
-	}
-	clientConn, serverConn := net.Pipe()
-	client := NewClient(clientConn)
-	client.denseTypedQuantizedNegotiated = true
-	errCh := make(chan error, 1)
-	go func() {
-		header, _, serveErr := readFrame(serverConn, iwire.DefaultLimits())
-		if serveErr == nil {
-			serveErr = writeFrame(serverConn, iwire.Header{Type: iwire.FrameError, RequestID: header.RequestID}, frameError)
-		}
-		errCh <- serveErr
-	}()
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	_, got = client.DenseVectorSearch(ctx, request)
-	cancel()
-	_ = client.Close()
-	_ = serverConn.Close()
-	if serveErr := <-errCh; serveErr != nil {
-		t.Fatal(serveErr)
-	}
-	var retainedRemote *WireError
-	if !strings.Contains(got.Error(), "failure proof does not match the request") || errors.As(got, &retainedRemote) {
-		t.Fatalf("public FrameError did not reject request-mismatched evidence: %v", got)
+		t.Run("FrameError "+name, func(t *testing.T) {
+			frameSections := append([]iwire.Section{{ID: iwire.SectionError, Bytes: appendErrorPayload(nil, iwire.ErrInternal, false, "original")}}, sections...)
+			var frameError []byte
+			for _, section := range frameSections {
+				frameError, err = iwire.AppendSection(frameError, section)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			clientConn, serverConn := net.Pipe()
+			client := NewClient(clientConn)
+			client.denseTypedQuantizedNegotiated = true
+			errCh := make(chan error, 1)
+			go func() {
+				header, _, serveErr := readFrame(serverConn, iwire.DefaultLimits())
+				if serveErr == nil {
+					serveErr = writeFrame(serverConn, iwire.Header{Type: iwire.FrameError, RequestID: header.RequestID}, frameError)
+				}
+				errCh <- serveErr
+			}()
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			_, got = client.DenseVectorSearch(ctx, request)
+			cancel()
+			_ = client.Close()
+			_ = serverConn.Close()
+			if serveErr := <-errCh; serveErr != nil {
+				t.Fatal(serveErr)
+			}
+			var decoded *DenseVectorSearchDecodeError
+			var retainedRemote *WireError
+			if !strings.Contains(got.Error(), "failure proof does not match the request") || !errors.As(got, &decoded) ||
+				decoded.ScorePlane == nil || (name == "proof only" && (decoded.DenseWork != nil || *decoded.ScorePlane != proof)) || errors.As(got, &retainedRemote) {
+				t.Fatalf("public FrameError did not reject %s evidence with diagnostics: %v", name, got)
+			}
+		})
 	}
 }
 

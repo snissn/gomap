@@ -768,7 +768,7 @@ class TreeDBClientTests(unittest.TestCase):
             malformed_work["dense_work"]["version"] = 2
             with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, malformed_work, 0)}) as malformed_work_server:
                 malformed_work_client = TreeDBClient(malformed_work_server.base_url, timeout=1)
-                with self.assertRaisesRegex(TreeDBProtocolError, "work proof") as caught:
+                with self.assertRaisesRegex(TreeDBProtocolError, "proof does not match the request") as caught:
                     malformed_work_client.query_by_embedding(
                         "docs", [1, 0], 1, query_mode="quantized_rerank",
                         quantized_index_name="embedding.scalar_u8.public",
@@ -833,6 +833,20 @@ class TreeDBClientTests(unittest.TestCase):
                         self.assertIsNotNone(caught.exception.dense_work)
                         self.assertIsNotNone(caught.exception.score_plane)
                         error_client.close()
+            proof_only_error_payload = copy.deepcopy(error_payload)
+            del proof_only_error_payload["error"]["dense_work"]
+            for status in (200, 503):
+                with self.subTest(proof_only_error_status=status), \
+                     FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (status, proof_only_error_payload, 0)}) as error_server:
+                    error_client = TreeDBClient(error_server.base_url, timeout=1)
+                    with self.assertRaisesRegex(TreeDBProtocolError, "proof does not match the request") as caught:
+                        error_client.query_by_embedding(
+                            "docs", [1, 0], 1, query_mode="quantized_rerank",
+                            quantized_index_name="embedding.scalar_u8.public",
+                        )
+                    self.assertIsNone(caught.exception.dense_work)
+                    self.assertEqual(caught.exception.score_plane, result.score_plane)
+                    error_client.close()
             mismatched_error_payload = copy.deepcopy(error_payload)
             mismatched_error_payload["error"]["score_plane"]["quantized_index_name"] = "embedding.scalar_u8.other"
             for status in (200, 503):
@@ -898,6 +912,17 @@ class TreeDBClientTests(unittest.TestCase):
                     quantized_index_name="embedding.scalar_u8.public",
                 )
             self.assertIs(caught.exception, partial_error)
+
+            work_only_error = IndexUnavailableError(
+                "index_unavailable", "budget", dense_work=result.dense_work,
+            )
+            with mock.patch.object(client, "_request", side_effect=work_only_error), \
+                 self.assertRaises(IndexUnavailableError) as caught:
+                client.query_by_embedding(
+                    "docs", [1, 0], 1, query_mode="quantized_rerank",
+                    quantized_index_name="embedding.scalar_u8.public",
+                )
+            self.assertIs(caught.exception, work_only_error)
 
             malformed = TreeDBProtocolError(
                 "malformed success", dense_work=result.dense_work,
