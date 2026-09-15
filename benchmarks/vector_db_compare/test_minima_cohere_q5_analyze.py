@@ -66,27 +66,30 @@ def bounded_manifest():
         "sparse_over_limit": (12000, 4097), "mixed_broad_narrow": (10000, 5),
         "empty_user": (128, 0), "empty_file": (128, 0),
     }
+    queries = []
+    for name, (_, eligible) in populations.items():
+        ids = (FROZEN_LEGACY_IDS if name == "broad_10pct"
+               else ([] if eligible == 0 else [f"minima/{name}/000000"]))
+        scores = [0.9] * len(ids)
+        queries.append({
+            "scenario": name,
+            "initial_oracle_ids": list(ids), "initial_oracle_scores": list(scores),
+            "final_oracle_ids": list(ids), "final_oracle_scores": list(scores),
+        })
     return {
         "schema": "treedb_rag_minima_manifest/v2", "fixture": "bounded-50k",
         "config": {
             "dimension": 8, "top_k": 5, "batch_size": 256, "lookup_limit": 4096,
             "warmup_queries": 32, "timed_queries": 1024,
             "reader_concurrency": 4, "writer_concurrency": 1,
-            "score_tolerance": 0.000001,
+            "order_tolerance": 0, "score_tolerance": 0.000001,
         },
         "corpora": [
             {"name": name, "corpus_rows": rows, "eligible_rows": eligible,
              "selectivity": eligible / rows}
             for name, (rows, eligible) in populations.items()
         ],
-        "queries": [
-            {"scenario": name,
-             "initial_oracle_ids": (FROZEN_LEGACY_IDS if name == "broad_10pct"
-                                    else ([] if eligible == 0 else [f"minima/{name}/000000"])),
-             "initial_oracle_scores": ([0.9] * 5 if name == "broad_10pct"
-                                       else ([] if eligible == 0 else [0.9]))}
-            for name, (_, eligible) in populations.items()
-        ],
+        "queries": queries,
         "operations": [],
         "corpus_sha256": "1" * 64, "query_sha256": "2" * 64,
         "operation_sha256": "3" * 64, "expected_state_sha256": "4" * 64,
@@ -199,10 +202,17 @@ def known_legacy_failure_artifact(manifest, service, service_sha):
             "expected_matches": population[name]["eligible_rows"],
             "selectivity": population[name]["selectivity"],
             "initial_oracle_ids": expected, "initial_actual_ids": actual,
+            "initial_oracle_scores": expected_scores,
             "initial_actual_scores": actual_scores,
+            "final_oracle_ids": query["final_oracle_ids"],
+            "final_oracle_scores": query["final_oracle_scores"],
+            "order_tolerance": manifest["config"]["order_tolerance"],
+            "score_tolerance": manifest["config"]["score_tolerance"],
             "actual_ids": [], "actual_scores": [], "reopen_ids": [], "reopen_parity": True,
-            "errors": 0, "timeouts": 0, "recall": 0.0 if mismatch else 1.0,
-            "overlap": 0.0 if mismatch else 1.0, "route": route,
+            "errors": 0, "timeouts": 0,
+            "recall": 1.0 if query["final_oracle_ids"] == [] else 0.0,
+            "overlap": 1.0 if query["final_oracle_ids"] == [] else 0.0,
+            "route": route,
             "correctness": {
                 "cross_user_results": 0, "stale_delete_ids": 0,
                 "stale_insert_ids": 0, "stale_update_ids": 0,
@@ -554,9 +564,36 @@ class Q5AnalyzeTest(unittest.TestCase):
         artifact = known_legacy_failure_artifact(manifest, service, "a" * 64)
         backend = artifact["backends"][0]
         self.assertTrue(analyzer._known_legacy_baseline_failure(artifact, backend))
+
+        def drift_tolerance(row, field, value):
+            row["manifest"]["config"][field] = value
+            for scenario in row["scenarios"]:
+                scenario[field] = value
+
         mutations = {
             "extra failure": lambda row: row["failures"].append("timeout"),
-            "wrong IDs": lambda row: row["scenarios"][3].update(initial_actual_ids=["other"]),
+            "wrong actual IDs": lambda row: row["scenarios"][3].update(
+                initial_actual_ids=["other"]),
+            "wrong declared initial IDs": lambda row: row["scenarios"][0].update(
+                initial_oracle_ids=["other"]),
+            "wrong declared initial scores": lambda row: row["scenarios"][0].update(
+                initial_oracle_scores=[0.8]),
+            "wrong declared final IDs": lambda row: row["scenarios"][0].update(
+                final_oracle_ids=["other"]),
+            "wrong declared final scores": lambda row: row["scenarios"][0].update(
+                final_oracle_scores=[0.8]),
+            "wrong order tolerance": lambda row: row["scenarios"][0].update(
+                order_tolerance=1),
+            "boolean order tolerance": lambda row: row["scenarios"][0].update(
+                order_tolerance=False),
+            "wrong score tolerance": lambda row: row["scenarios"][0].update(
+                score_tolerance=0.1),
+            "coordinated order tolerance drift": lambda row: drift_tolerance(
+                row, "order_tolerance", 1),
+            "coordinated score tolerance drift": lambda row: drift_tolerance(
+                row, "score_tolerance", 0.1),
+            "wrong recall summary": lambda row: row["scenarios"][0].update(recall=1.0),
+            "wrong overlap summary": lambda row: row["scenarios"][6].update(overlap=0.0),
             "wrong plan": lambda row: row["scenarios"][3]["route"].update(plan="complete_exact"),
             "cleanup claim": lambda row: row["backend_raw_evidence"]["treedb"].update(
                 final_scroll_state={"match": True}),

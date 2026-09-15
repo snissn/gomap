@@ -1319,20 +1319,28 @@ def _known_legacy_baseline_failure(artifact, backend):
             or set(routes) != set(names) or set(population) != set(names)
             or set(route_contracts) != set(names)):
         return False
-    tolerance = artifact.get("manifest", {}).get("config", {}).get("score_tolerance")
-    if not isinstance(tolerance, (int, float)) or not math.isfinite(tolerance) or tolerance < 0:
+    manifest_config = artifact.get("manifest", {}).get("config", {})
+    order_tolerance = manifest_config.get("order_tolerance")
+    score_tolerance = manifest_config.get("score_tolerance")
+    if (type(order_tolerance) is not int or order_tolerance != 0
+            or type(score_tolerance) not in (int, float)
+            or not math.isfinite(score_tolerance) or score_tolerance != 0.000001):
         return False
     for query, row, event in zip(queries, scenarios, events):
         name = query.get("scenario")
         expected = query.get("initial_oracle_ids")
         expected_scores = query.get("initial_oracle_scores")
+        final_expected = query.get("final_oracle_ids")
+        final_expected_scores = query.get("final_oracle_scores")
         actual = row.get("initial_actual_ids")
         actual_scores = row.get("initial_actual_scores")
         mismatch = name == "broad_10pct"
         scores_valid = (
-            isinstance(expected_scores, list) and isinstance(actual_scores, list)
-            and all(type(value) in (int, float) and math.isfinite(value)
-                    for value in (*expected_scores, *actual_scores))
+            isinstance(expected_scores, list) and isinstance(final_expected_scores, list)
+            and isinstance(actual_scores, list)
+            and all(type(value) in (int, float) and math.isfinite(value) for value in (
+                *expected_scores, *final_expected_scores, *actual_scores,
+            ))
         )
         deltas = ([] if mismatch and actual_scores == [] else
                   [abs(left - right) for left, right in zip(expected_scores, actual_scores)]
@@ -1340,14 +1348,27 @@ def _known_legacy_baseline_failure(artifact, backend):
         maximum_delta = max(deltas, default=0.0) if deltas is not None else None
         observed_delta = event.get("maximum_score_delta")
         corpus = population[name]
-        if (not isinstance(expected, list) or not isinstance(expected_scores, list)
+        final_summary = 1.0 if final_expected == [] else 0.0
+        if (not isinstance(expected, list) or not isinstance(final_expected, list)
+                or not scores_valid or len(expected) != len(expected_scores)
+                or len(final_expected) != len(final_expected_scores)
                 or row.get("backend") != "treedb"
                 or row.get("initial_oracle_ids") != expected
+                or row.get("initial_oracle_scores") != expected_scores
+                or row.get("final_oracle_ids") != final_expected
+                or row.get("final_oracle_scores") != final_expected_scores
+                or type(row.get("order_tolerance")) is not int
+                or row.get("order_tolerance") != order_tolerance
+                or type(row.get("score_tolerance")) not in (int, float)
+                or row.get("score_tolerance") != score_tolerance
                 or row.get("corpus_rows") != corpus.get("corpus_rows")
                 or row.get("expected_matches") != corpus.get("eligible_rows")
                 or row.get("selectivity") != corpus.get("selectivity")
                 or row.get("errors") != 0 or row.get("timeouts") != 0
                 or row.get("actual_ids") != [] or row.get("actual_scores") != []
+                or type(row.get("recall")) not in (int, float)
+                or type(row.get("overlap")) not in (int, float)
+                or row.get("recall") != final_summary or row.get("overlap") != final_summary
                 or row.get("reopen_ids") != [] or row.get("reopen_parity") is not True
                 or row.get("correctness") != {
                     "cross_user_results": 0, "stale_delete_ids": 0,
@@ -1365,7 +1386,7 @@ def _known_legacy_baseline_failure(artifact, backend):
                 or event.get("actual_ids") != actual
                 or event.get("match") is not (not mismatch)
                 or maximum_delta is None or not math.isfinite(maximum_delta)
-                or maximum_delta > tolerance
+                or maximum_delta > score_tolerance
                 or type(observed_delta) not in (int, float) or not math.isfinite(observed_delta)
                 or not math.isclose(observed_delta, maximum_delta,
                                     rel_tol=0, abs_tol=1e-12)
@@ -1373,8 +1394,7 @@ def _known_legacy_baseline_failure(artifact, backend):
                                   or actual_scores != []))
                 or (not mismatch and (actual != expected or len(actual_scores) != len(expected)))):
             return False
-    broad = scenarios[names.index("broad_10pct")]
-    return (broad.get("recall"), broad.get("overlap")) == (0.0, 0.0)
+    return True
 
 
 def validate_bounded_artifacts(packet, paths, runner=default_validator_runner):
