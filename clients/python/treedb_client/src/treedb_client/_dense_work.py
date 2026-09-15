@@ -322,9 +322,62 @@ def _go_unicode_space(value):
     )
 
 
-def dense_quantized_response_work_matches(work, proof, top_k, result_count, filter_requested):
-    """Bind the public quantized response to one producer-owned route model."""
+def dense_score_plane_route_matches_graph(graph_route, proof_route):
+    expected_route = {
+        "typed_empty": "typed_empty",
+        "typed_exact": "typed_exact",
+        "quantized_rerank": "typed_hnsw",
+    }.get(proof_route)
+    return expected_route is not None and graph_route == expected_route
 
+
+def dense_completed_graph_result_count(proof, top_k):
+    if proof is None or not proof.completed or type(top_k) is not int or top_k < 0:
+        return None
+    if proof.route == "typed_empty":
+        return 0
+    if proof.route not in ("typed_exact", "quantized_rerank"):
+        return None
+    return min(top_k, proof.exact_base_rerank_score_calls + proof.exact_small_filter_score_calls + proof.exact_suffix_score_calls)
+
+
+def dense_score_plane_rerank_counters_match(proof):
+    if proof is None or not proof.completed:
+        return False
+    if proof.requested_ef_search and proof.normalized_candidate_width > max(proof.requested_top_k, proof.requested_ef_search):
+        return False
+    expected_cap = min(proof.normalized_candidate_width, proof.requested_rerank_candidates or proof.normalized_candidate_width)
+    if (
+        proof.rerank_candidate_cap != expected_cap
+        or proof.live_shortlist_candidates > proof.normalized_candidate_width
+        or proof.normalized_candidate_width > proof.raw_candidate_width
+    ):
+        return False
+    if proof.route == "quantized_rerank":
+        return (
+            proof.normalized_candidate_width != 0
+            and proof.raw_candidate_width != 0
+            and proof.rerank_candidate_cap != 0
+            and proof.raw_retained_candidates <= proof.quantized_score_calls
+            and proof.exact_small_filter_score_calls == 0
+            and proof.actual_rerank_candidates == proof.exact_base_rerank_score_calls
+            and proof.actual_rerank_candidates == min(proof.live_shortlist_candidates, proof.rerank_candidate_cap)
+        )
+    if proof.route == "typed_empty":
+        return not any((
+            proof.quantized_score_calls, proof.exact_suffix_score_calls, proof.exact_small_filter_score_calls,
+            proof.raw_retained_candidates, proof.live_shortlist_candidates, proof.actual_rerank_candidates,
+            proof.exact_base_rerank_score_calls,
+        ))
+    if proof.route == "typed_exact":
+        return not any((
+            proof.quantized_score_calls, proof.raw_retained_candidates, proof.live_shortlist_candidates,
+            proof.actual_rerank_candidates, proof.exact_base_rerank_score_calls,
+        ))
+    return False
+
+
+def dense_quantized_completed_graph_matches(work, proof, top_k, result_count, filter_requested):
     if (
         work is None
         or proof is None
@@ -333,23 +386,19 @@ def dense_quantized_response_work_matches(work, proof, top_k, result_count, filt
         or type(result_count) is not int
         or result_count < 0
         or type(filter_requested) is not bool
+        or not proof.available
+        or not proof.completed
+        or not proof.snapshot.available
+        or not dense_score_plane_rerank_counters_match(proof)
     ):
         return False
-    expected_route = {
-        "typed_empty": "typed_empty",
-        "typed_exact": "typed_exact",
-        "quantized_rerank": "typed_hnsw",
-    }.get(proof.route)
     graph = work.graph
-    output = work.output
     exact_base_calls = proof.exact_base_rerank_score_calls + proof.exact_small_filter_score_calls
     exact_score_calls = exact_base_calls + proof.exact_suffix_score_calls
     if (
-        expected_route is None
-        or not work.completed
-        or not graph.available
+        not graph.available
         or not graph.completed
-        or graph.route != expected_route
+        or not dense_score_plane_route_matches_graph(graph.route, proof.route)
         or graph.snapshot != proof.snapshot
         or graph.filter.attempted != filter_requested
         or (graph.filter.attempted and not graph.filter.completed)
@@ -366,10 +415,6 @@ def dense_quantized_response_work_matches(work, proof, top_k, result_count, filt
         or graph.base_result_ids != exact_base_calls
         or proof.exact_suffix_score_calls != graph.delta_scored
         or result_count > exact_score_calls
-        or output.fetched != result_count
-        or output.retained_payload_fetches != result_count
-        or output.json_reconstruction_rows != result_count
-        or output.typed_column_rows > result_count
     ):
         return False
     if proof.route == "typed_empty":
@@ -405,6 +450,41 @@ def dense_quantized_response_work_matches(work, proof, top_k, result_count, filt
         and graph.base_shadowed <= proof.raw_retained_candidates
         and proof.live_shortlist_candidates
         == min(proof.normalized_candidate_width, proof.raw_retained_candidates - graph.base_shadowed)
+    )
+
+
+def dense_failure_output_matches_completed_graph(output, result_count):
+    if output is None or type(result_count) is not int or result_count < 0:
+        return False
+    if not output.attempted:
+        return not any(vars(output).values())
+    if (
+        output.requested != result_count
+        or output.fetched + output.missing > output.requested
+        or output.retained_payload_fetches + output.missing > result_count
+        or output.fetched > output.retained_payload_fetches
+        or output.json_reconstruction_rows != output.fetched
+        or output.typed_column_rows > output.retained_payload_fetches
+        or (output.fetched == 0 and output.output_bytes != 0)
+    ):
+        return False
+    return not output.completed or (
+        output.retained_payload_fetches + output.missing == result_count
+        and output.fetched == output.retained_payload_fetches
+    )
+
+
+def dense_quantized_response_work_matches(work, proof, top_k, result_count, filter_requested):
+    """Bind the public quantized response to one producer-owned route model."""
+
+    if not dense_quantized_completed_graph_matches(work, proof, top_k, result_count, filter_requested) or not work.completed:
+        return False
+    output = work.output
+    return (
+        output.fetched == result_count
+        and output.retained_payload_fetches == result_count
+        and output.json_reconstruction_rows == result_count
+        and output.typed_column_rows <= result_count
     )
 
 

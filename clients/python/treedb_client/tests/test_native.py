@@ -141,6 +141,57 @@ class NativeCodecTests(unittest.TestCase):
             self.assertIsNone(caught.exception.dense_work)
             self.assertEqual(caught.exception.score_plane, response.score_plane)
             proof_only_client.close()
+
+            post_search_values = list(work_values)
+            post_search_values[1] &= ~((1 << 0) | (1 << 6) | (1 << 7))
+            post_search_values[31:38] = [0] * 7
+            partial_fetch_values = list(post_search_values)
+            partial_fetch_values[1] |= 1 << 6
+            partial_fetch_values[31], partial_fetch_values[35], partial_fetch_values[37] = 1, 1, 1
+            completed_missing_values = list(post_search_values)
+            completed_missing_values[1] |= (1 << 6) | (1 << 7)
+            completed_missing_values[31], completed_missing_values[33] = 1, 1
+            graph_incomplete_values = list(post_search_values)
+            graph_incomplete_values[1] &= ~(1 << 2)
+            proof_incomplete = bytearray(score_plane)
+            proof_incomplete[1] &= ~(1 << 1)
+            wrong_route_values = list(post_search_values)
+            wrong_route_values[2] = 2
+            requested_mismatch_values = list(post_search_values)
+            requested_mismatch_values[1] |= 1 << 6
+            incomplete_route_values = list(graph_incomplete_values)
+            incomplete_route_values[2] = 2
+            wrong_bytes = bytearray(score_plane)
+            wrong_bytes[17] -= 1
+            native_completion_cases = (
+                ("post-search before fetch", post_search_values, score_plane, False),
+                ("partial fetch", partial_fetch_values, score_plane, False),
+                ("completed fetch missing", completed_missing_values, score_plane, False),
+                ("proof complete graph incomplete", graph_incomplete_values, score_plane, True),
+                ("graph complete proof incomplete", post_search_values, bytes(proof_incomplete), True),
+                ("route", wrong_route_values, score_plane, True),
+                ("requested", requested_mismatch_values, score_plane, True),
+                ("incomplete route", incomplete_route_values, bytes(proof_incomplete), True),
+                ("bytes", post_search_values, bytes(wrong_bytes), True),
+            )
+            for name, candidate_work, candidate_proof, rejected in native_completion_cases:
+                candidate_work_raw = b"".join(_uint(value) for value in candidate_work)
+                candidate_payload = native_error + _section(134, candidate_work_raw) + _section(136, candidate_proof)
+                completion_client = TreeDBClient("http://127.0.0.1:1", native_address="127.0.0.1:2")
+                completion_client._native.socket = mock.Mock()
+                completion_client._native.capabilities["dense_vector_search_versions"] = "3"
+                candidate_header = _HEADER.pack(b"TDB1", 40, 1, 0, 6, 0, 0, 1, len(candidate_payload))
+                expected = "proof does not match the request" if rejected else "native error"
+                with self.subTest(native_completion_prefix=name), \
+                     mock.patch.object(completion_client._native, "_read", side_effect=(candidate_header, candidate_payload)), \
+                     self.assertRaisesRegex(TreeDBProtocolError, expected) as caught:
+                    completion_client.query_by_embedding(
+                        "a", [1, 0], 1, query_mode="quantized_rerank",
+                        quantized_index_name="embedding.scalar_u8.public", index_info=info,
+                    )
+                self.assertEqual(caught.exception.dense_work, _dense_work(candidate_work_raw))
+                self.assertEqual(caught.exception.score_plane, type(response.score_plane).from_dict(_dense_score_plane(candidate_proof)))
+                completion_client.close()
             for name, changed in (
                 ("index name", replace(response.score_plane, quantized_index_name="embedding.scalar_u8.other")),
                 ("top k", replace(response.score_plane, requested_top_k=2)),

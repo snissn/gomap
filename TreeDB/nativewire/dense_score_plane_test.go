@@ -896,6 +896,203 @@ func TestDenseV3FailureProofBindsRequestWithoutRetainingRemoteError(t *testing.T
 	}
 }
 
+func TestDenseV3FailureProofCompletedGraphPrefixes(t *testing.T) {
+	request := DenseVectorSearchRequest{
+		TypedColumnGraph: true, Index: "docs", Query: []float32{1, 0}, TopK: 2, EfSearch: 8,
+		QueryMode: collections.VectorIndexQueryModeQuantizedRerank, QuantizedIndexName: "embedding.scalar_u8.public",
+		QuantizedRerankCandidates: 8, ExpectedGeneration: 2,
+	}
+	snapshot := collections.ColumnGraphQuerySnapshot{
+		Available: true, SchemaHash: 7, SchemaGeneration: 2,
+		BaseManifest:    collections.ColumnGraphManifestWork{Generation: 1, Format: "tcs1", Version: 1, Checksum: 3},
+		CurrentManifest: collections.ColumnGraphManifestWork{Generation: 1, Format: "tcs1", Version: 1, Checksum: 3},
+		BaseCoverageLSN: 1, CurrentCoverageLSN: 1,
+	}
+	proof := collections.ColumnGraphScorePlaneWork{
+		Version: 1, Available: true, Completed: true,
+		RequestedMode: collections.VectorIndexQueryModeQuantizedRerank, EffectiveMode: collections.VectorIndexQueryModeQuantizedRerank,
+		Route: "quantized_rerank", QuantizedIndexName: request.QuantizedIndexName,
+		QuantizedCodec: collections.QuantizedVectorCodecScalarU8, QuantizedVersion: 1,
+		RequestedTopK: 2, RequestedEFSearch: 8, RequestedRerankCandidates: 8,
+		NormalizedCandidateWidth: 2, RawCandidateWidth: 2, RerankCandidateCap: 2,
+		RawRetainedCandidates: 2, LiveShortlistCandidates: 2, ActualRerankCandidates: 2,
+		QuantizedScoreCalls: 2, QuantizedCodeBytesRead: 4,
+		ExactBaseRerankScoreCalls: 2, ExactBaseVectorBytesRead: 16,
+		Snapshot: snapshot,
+	}
+	work := documentservice.DenseSearchWork{Version: 1, Graph: collections.ColumnGraphQueryWork{
+		Available: true, Completed: true, Route: "typed_hnsw", BaseANNScored: 2,
+		ExactBaseScored: 2, BaseResultIDs: 2, Snapshot: snapshot,
+	}}
+	partialFetch := work
+	partialFetch.Output = documentservice.DenseSearchOutputWork{
+		Attempted: true, Requested: 2, Fetched: 1, OutputBytes: 2,
+		RetainedPayloadFetches: 1, JSONReconstructionRows: 1, TypedColumnRows: 1,
+	}
+	completedFetchWithMissing := partialFetch
+	completedFetchWithMissing.Output.Completed = true
+	completedFetchWithMissing.Output.Missing = 1
+
+	for name, candidate := range map[string]documentservice.DenseSearchWork{
+		"post-search before fetch": work,
+		"partial fetch":            partialFetch,
+		"completed fetch missing":  completedFetchWithMissing,
+	} {
+		t.Run("valid "+name, func(t *testing.T) {
+			remote := &WireError{Code: iwire.ErrInternal, Message: name, DenseWork: &candidate, ScorePlane: &proof}
+			if got := validateDenseQuantizedFailureProof(remote, request); got != remote {
+				t.Fatalf("valid outer-incomplete prefix changed: %v", got)
+			}
+		})
+	}
+
+	reject := func(t *testing.T, candidateWork documentservice.DenseSearchWork, candidateProof collections.ColumnGraphScorePlaneWork) {
+		t.Helper()
+		remote := &WireError{Code: iwire.ErrInternal, Message: "invalid", DenseWork: &candidateWork, ScorePlane: &candidateProof}
+		got := validateDenseQuantizedFailureProof(remote, request)
+		var decoded *DenseVectorSearchDecodeError
+		var retainedRemote *WireError
+		if !errors.As(got, &decoded) || decoded.DenseWork == nil || decoded.ScorePlane == nil ||
+			*decoded.DenseWork != candidateWork || *decoded.ScorePlane != candidateProof || errors.As(got, &retainedRemote) {
+			t.Fatalf("invalid completion prefix retained authenticated error or lost diagnostics: %v", got)
+		}
+	}
+
+	invalid := []struct {
+		name   string
+		mutate func(*documentservice.DenseSearchWork, *collections.ColumnGraphScorePlaneWork)
+	}{
+		{"proof complete graph incomplete", func(w *documentservice.DenseSearchWork, _ *collections.ColumnGraphScorePlaneWork) {
+			w.Graph.Completed = false
+		}},
+		{"graph complete proof incomplete", func(_ *documentservice.DenseSearchWork, p *collections.ColumnGraphScorePlaneWork) {
+			p.Completed = false
+			p.Reason = "incomplete"
+		}},
+		{"route", func(w *documentservice.DenseSearchWork, _ *collections.ColumnGraphScorePlaneWork) {
+			w.Graph.Route = "typed_exact"
+		}},
+		{"snapshot", func(_ *documentservice.DenseSearchWork, p *collections.ColumnGraphScorePlaneWork) {
+			p.Snapshot.SchemaHash++
+		}},
+		{"filter ownership", func(w *documentservice.DenseSearchWork, _ *collections.ColumnGraphScorePlaneWork) {
+			w.Graph.Filter = collections.ColumnGraphFilterWork{Attempted: true, Completed: true, EligibleRows: 2}
+		}},
+		{"graph counters", func(w *documentservice.DenseSearchWork, _ *collections.ColumnGraphScorePlaneWork) {
+			w.Graph.BaseANNScored++
+		}},
+		{"planning counters", func(_ *documentservice.DenseSearchWork, p *collections.ColumnGraphScorePlaneWork) {
+			p.RerankCandidateCap--
+		}},
+		{"byte counters", func(_ *documentservice.DenseSearchWork, p *collections.ColumnGraphScorePlaneWork) {
+			p.QuantizedCodeBytesRead--
+		}},
+		{"output requested", func(w *documentservice.DenseSearchWork, _ *collections.ColumnGraphScorePlaneWork) {
+			w.Output = documentservice.DenseSearchOutputWork{Attempted: true, Requested: 1}
+		}},
+		{"fetched beyond retained", func(w *documentservice.DenseSearchWork, _ *collections.ColumnGraphScorePlaneWork) {
+			w.Output = documentservice.DenseSearchOutputWork{Attempted: true, Requested: 2, Fetched: 1, JSONReconstructionRows: 1}
+		}},
+		{"retained plus missing", func(w *documentservice.DenseSearchWork, _ *collections.ColumnGraphScorePlaneWork) {
+			w.Output = documentservice.DenseSearchOutputWork{Attempted: true, Requested: 2, Missing: 1, RetainedPayloadFetches: 2}
+		}},
+		{"JSON rows", func(w *documentservice.DenseSearchWork, _ *collections.ColumnGraphScorePlaneWork) {
+			w.Output = documentservice.DenseSearchOutputWork{Attempted: true, Requested: 2, Fetched: 1, RetainedPayloadFetches: 1}
+		}},
+		{"typed rows", func(w *documentservice.DenseSearchWork, _ *collections.ColumnGraphScorePlaneWork) {
+			w.Output = documentservice.DenseSearchOutputWork{Attempted: true, Requested: 2, TypedColumnRows: 1}
+		}},
+		{"bytes before fetch", func(w *documentservice.DenseSearchWork, _ *collections.ColumnGraphScorePlaneWork) {
+			w.Output = documentservice.DenseSearchOutputWork{Attempted: true, Requested: 2, OutputBytes: 1}
+		}},
+		{"completed partial output", func(w *documentservice.DenseSearchWork, _ *collections.ColumnGraphScorePlaneWork) {
+			w.Output = documentservice.DenseSearchOutputWork{Attempted: true, Completed: true, Requested: 2, Fetched: 1, RetainedPayloadFetches: 1, JSONReconstructionRows: 1}
+		}},
+		{"outer complete before output", func(w *documentservice.DenseSearchWork, _ *collections.ColumnGraphScorePlaneWork) { w.Completed = true }},
+	}
+	for _, mutation := range invalid {
+		t.Run("invalid "+mutation.name, func(t *testing.T) {
+			candidateWork, candidateProof := work, proof
+			mutation.mutate(&candidateWork, &candidateProof)
+			reject(t, candidateWork, candidateProof)
+		})
+	}
+
+	matchingIncompleteWork, matchingIncompleteProof := work, proof
+	matchingIncompleteWork.Graph.Completed = false
+	matchingIncompleteProof.Completed = false
+	matchingIncompleteProof.Reason = "scoring interrupted"
+	for _, routes := range []struct{ graph, proof string }{
+		{"typed_empty", "typed_empty"},
+		{"typed_exact", "typed_exact"},
+		{"typed_hnsw", "quantized_rerank"},
+	} {
+		t.Run("valid incomplete route "+routes.graph, func(t *testing.T) {
+			candidateWork, candidateProof := matchingIncompleteWork, matchingIncompleteProof
+			candidateWork.Graph.Route, candidateProof.Route = routes.graph, routes.proof
+			matching := &WireError{Code: iwire.ErrInternal, Message: "partial", DenseWork: &candidateWork, ScorePlane: &candidateProof}
+			if got := validateDenseQuantizedFailureProof(matching, request); got != matching {
+				t.Fatalf("matching incomplete route prefix changed: %v", got)
+			}
+		})
+	}
+	mismatchedIncompleteWork := matchingIncompleteWork
+	mismatchedIncompleteWork.Graph.Route = "typed_exact"
+	reject(t, mismatchedIncompleteWork, matchingIncompleteProof)
+
+	frameCase := func(t *testing.T, candidateWork documentservice.DenseSearchWork, candidateProof collections.ColumnGraphScorePlaneWork, valid bool) {
+		t.Helper()
+		workRaw, err := appendDenseWork(nil, candidateWork)
+		if err != nil {
+			t.Fatal(err)
+		}
+		proofRaw, err := appendDenseScorePlane(nil, candidateProof, iwire.DefaultLimits())
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := denseV3FrameErrorForTest(t, request,
+			iwire.Section{ID: iwire.SectionDenseSearchWork, Flags: iwire.SectionFlagCritical, Bytes: workRaw},
+			iwire.Section{ID: iwire.SectionDenseSearchScorePlaneProof, Flags: iwire.SectionFlagCritical, Bytes: proofRaw})
+		if valid {
+			var retainedRemote *WireError
+			if !errors.As(got, &retainedRemote) {
+				t.Fatalf("valid FrameError prefix was de-authenticated: %v", got)
+			}
+			return
+		}
+		var decoded *DenseVectorSearchDecodeError
+		var retainedRemote *WireError
+		if !errors.As(got, &decoded) || decoded.DenseWork == nil || decoded.ScorePlane == nil || errors.As(got, &retainedRemote) {
+			t.Fatalf("invalid FrameError prefix retained authenticated error or lost diagnostics: %v", got)
+		}
+	}
+	for name, candidate := range map[string]documentservice.DenseSearchWork{
+		"post-search before fetch": work,
+		"partial fetch":            partialFetch,
+		"completed fetch missing":  completedFetchWithMissing,
+	} {
+		t.Run("FrameError valid "+name, func(t *testing.T) { frameCase(t, candidate, proof, true) })
+	}
+	for _, mutation := range []struct {
+		name   string
+		mutate func(*documentservice.DenseSearchWork, *collections.ColumnGraphScorePlaneWork)
+	}{
+		invalid[0], invalid[1], invalid[2], invalid[3], invalid[5], invalid[7], invalid[8],
+		{"incomplete route", func(w *documentservice.DenseSearchWork, p *collections.ColumnGraphScorePlaneWork) {
+			w.Graph.Completed = false
+			w.Graph.Route = "typed_exact"
+			p.Completed = false
+			p.Reason = "scoring interrupted"
+		}},
+	} {
+		t.Run("FrameError invalid "+mutation.name, func(t *testing.T) {
+			candidateWork, candidateProof := work, proof
+			mutation.mutate(&candidateWork, &candidateProof)
+			frameCase(t, candidateWork, candidateProof, false)
+		})
+	}
+}
+
 func TestDenseV3ResultDecodeErrorsPreserveOwnedProofs(t *testing.T) {
 	proof := collections.ColumnGraphScorePlaneWork{
 		Version: 1, Available: true, Completed: true,

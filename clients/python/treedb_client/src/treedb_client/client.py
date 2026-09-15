@@ -1311,7 +1311,12 @@ def _validate_dense_failure_proofs(
     available snapshots, and observed filter work remain bindable on failures.
     """
 
-    from ._dense_work import dense_quantized_response_work_matches
+    from ._dense_work import (
+        dense_completed_graph_result_count,
+        dense_failure_output_matches_completed_graph,
+        dense_quantized_completed_graph_matches,
+        dense_score_plane_route_matches_graph,
+    )
 
     work = getattr(error, "dense_work", None)
     proof = getattr(error, "score_plane", None)
@@ -1343,6 +1348,12 @@ def _validate_dense_failure_proofs(
         if graph.filter.attempted and not filter_requested:
             mismatch = True
         if proof is not None:
+            if (
+                proof.completed != graph.completed
+                or (graph.route and not dense_score_plane_route_matches_graph(graph.route, proof.route))
+                or (work.completed and (not graph.completed or not work.output.completed))
+            ):
+                mismatch = True
             if graph.snapshot.available and proof.snapshot.available and graph.snapshot != proof.snapshot:
                 mismatch = True
             # The producer creates a score-plane proof only after successful
@@ -1350,9 +1361,15 @@ def _validate_dense_failure_proofs(
             # completed filter evidence from the same graph owner.
             if filter_requested and (not graph.filter.attempted or not graph.filter.completed):
                 mismatch = True
-            if work.completed and proof.completed and not dense_quantized_response_work_matches(
-                work, proof, top_k, work.output.fetched, filter_requested
-            ):
+            if graph.completed and proof.completed:
+                result_count = dense_completed_graph_result_count(proof, top_k)
+                if (
+                    result_count is None
+                    or not dense_quantized_completed_graph_matches(work, proof, top_k, result_count, filter_requested)
+                    or not dense_failure_output_matches_completed_graph(work.output, result_count)
+                ):
+                    mismatch = True
+            elif any(vars(work.output).values()):
                 mismatch = True
     if mismatch:
         raise TreeDBProtocolError(

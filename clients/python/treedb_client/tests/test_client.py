@@ -1010,7 +1010,11 @@ class TreeDBClientTests(unittest.TestCase):
             partial_work = replace(
                 result.dense_work, completed=False,
                 graph=replace(result.dense_work.graph, completed=False),
-                output=replace(result.dense_work.output, completed=False),
+                output=replace(
+                    result.dense_work.output,
+                    attempted=False, completed=False, requested=0, fetched=0, missing=0, output_bytes=0,
+                    retained_payload_fetches=0, json_reconstruction_rows=0, typed_column_rows=0,
+                ),
             )
             partial_error = IndexUnavailableError(
                 "index_unavailable", "budget", dense_work=partial_work, score_plane=partial_proof,
@@ -1022,6 +1026,123 @@ class TreeDBClientTests(unittest.TestCase):
                     quantized_index_name="embedding.scalar_u8.public",
                 )
             self.assertIs(caught.exception, partial_error)
+
+            post_search = replace(
+                result.dense_work,
+                completed=False,
+                output=replace(
+                    result.dense_work.output,
+                    attempted=False, completed=False, requested=0, fetched=0, missing=0, output_bytes=0,
+                    retained_payload_fetches=0, json_reconstruction_rows=0, typed_column_rows=0,
+                ),
+            )
+            partial_fetch = replace(
+                post_search,
+                output=replace(post_search.output, attempted=True, requested=1, retained_payload_fetches=1, typed_column_rows=1),
+            )
+            completed_fetch_missing = replace(
+                post_search,
+                output=replace(post_search.output, attempted=True, completed=True, requested=1, missing=1),
+            )
+            for name, candidate in (
+                ("post-search before fetch", post_search),
+                ("partial fetch", partial_fetch),
+                ("completed fetch missing", completed_fetch_missing),
+            ):
+                error = IndexUnavailableError(
+                    "index_unavailable", name, dense_work=candidate, score_plane=result.score_plane,
+                )
+                with self.subTest(valid_completion_prefix=name), mock.patch.object(client, "_request", side_effect=error), \
+                     self.assertRaises(IndexUnavailableError) as caught:
+                    client.query_by_embedding(
+                        "docs", [1, 0], 1, query_mode="quantized_rerank",
+                        quantized_index_name="embedding.scalar_u8.public",
+                    )
+                self.assertIs(caught.exception, error)
+
+            proof_incomplete = replace(result.score_plane, completed=False, reason="scoring interrupted")
+            completion_prefix_failures = (
+                ("proof complete graph incomplete", replace(post_search, graph=replace(post_search.graph, completed=False)), result.score_plane),
+                ("graph complete proof incomplete", post_search, proof_incomplete),
+                ("route", replace(post_search, graph=replace(post_search.graph, route="typed_exact")), result.score_plane),
+                ("snapshot", post_search, replace(result.score_plane, snapshot=replace(result.score_plane.snapshot, schema_hash=2))),
+                ("filter ownership", replace(post_search, graph=replace(post_search.graph, filter=pre_owner_filter)), result.score_plane),
+                ("graph counters", replace(post_search, graph=replace(post_search.graph, base_ann_scored=2)), result.score_plane),
+                ("planning counters", post_search, replace(result.score_plane, rerank_candidate_cap=0)),
+                ("byte counters", post_search, replace(result.score_plane, quantized_code_bytes_read=1)),
+                ("output requested", replace(post_search, output=replace(post_search.output, attempted=True)), result.score_plane),
+                ("fetched beyond retained", replace(post_search, output=replace(post_search.output, attempted=True, requested=1, fetched=1, json_reconstruction_rows=1)), result.score_plane),
+                ("retained plus missing", replace(post_search, output=replace(post_search.output, attempted=True, requested=1, missing=1, retained_payload_fetches=1)), result.score_plane),
+                ("JSON rows", replace(post_search, output=replace(post_search.output, attempted=True, requested=1, fetched=1, retained_payload_fetches=1)), result.score_plane),
+                ("typed rows", replace(post_search, output=replace(post_search.output, attempted=True, requested=1, typed_column_rows=1)), result.score_plane),
+                ("bytes before fetch", replace(post_search, output=replace(post_search.output, attempted=True, requested=1, output_bytes=1)), result.score_plane),
+                ("completed partial output", replace(post_search, output=replace(post_search.output, attempted=True, completed=True, requested=1)), result.score_plane),
+                ("outer complete before output", replace(post_search, completed=True), result.score_plane),
+                ("incomplete route", replace(post_search, graph=replace(post_search.graph, completed=False, route="typed_exact")), proof_incomplete),
+            )
+            for name, candidate_work, candidate_proof in completion_prefix_failures:
+                error = IndexUnavailableError(
+                    "index_unavailable", name, dense_work=candidate_work, score_plane=candidate_proof,
+                )
+                with self.subTest(invalid_completion_prefix=name), mock.patch.object(client, "_request", side_effect=error), \
+                     self.assertRaisesRegex(TreeDBProtocolError, "proof does not match the request") as caught:
+                    client.query_by_embedding(
+                        "docs", [1, 0], 1, query_mode="quantized_rerank",
+                        quantized_index_name="embedding.scalar_u8.public",
+                    )
+                self.assertEqual(caught.exception.dense_work, candidate_work)
+                self.assertEqual(caught.exception.score_plane, candidate_proof)
+
+            route_empty_incomplete = replace(
+                post_search,
+                graph=replace(
+                    post_search.graph,
+                    completed=False, route="", base_ann_scored=0, base_candidates=0, base_edges=0,
+                    delta_scored=0, exact_base_scored=0, base_shadowed=0, base_result_ids=0,
+                ),
+            )
+            route_empty_error = IndexUnavailableError(
+                "index_unavailable", "route empty", dense_work=route_empty_incomplete, score_plane=proof_incomplete,
+            )
+            with mock.patch.object(client, "_request", side_effect=route_empty_error), \
+                 self.assertRaises(IndexUnavailableError) as caught:
+                client.query_by_embedding(
+                    "docs", [1, 0], 1, query_mode="quantized_rerank",
+                    quantized_index_name="embedding.scalar_u8.public",
+                )
+            self.assertIs(caught.exception, route_empty_error)
+
+            http_completion_cases = (
+                ("post-search before fetch", post_search, result.score_plane, False),
+                ("partial fetch", partial_fetch, result.score_plane, False),
+                ("completed fetch missing", completed_fetch_missing, result.score_plane, False),
+                ("proof complete graph incomplete", completion_prefix_failures[0][1], completion_prefix_failures[0][2], True),
+                ("graph complete proof incomplete", completion_prefix_failures[1][1], completion_prefix_failures[1][2], True),
+                ("route", completion_prefix_failures[2][1], completion_prefix_failures[2][2], True),
+                ("snapshot", completion_prefix_failures[3][1], completion_prefix_failures[3][2], True),
+                ("byte counters", completion_prefix_failures[7][1], completion_prefix_failures[7][2], True),
+                ("output requested", completion_prefix_failures[8][1], completion_prefix_failures[8][2], True),
+                ("incomplete route", completion_prefix_failures[-1][1], completion_prefix_failures[-1][2], True),
+            )
+            for status in (200, 503):
+                for name, candidate_work, candidate_proof, rejected in http_completion_cases:
+                    error_payload = {"error": {
+                        "code": "index_unavailable", "message": name,
+                        "dense_work": asdict(candidate_work), "score_plane": asdict(candidate_proof),
+                    }}
+                    with self.subTest(http_completion_status=status, completion_prefix=name), \
+                         FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (status, error_payload, 0)}) as error_server:
+                        error_client = TreeDBClient(error_server.base_url, timeout=1)
+                        error_type = TreeDBProtocolError if rejected else IndexUnavailableError
+                        expected = "proof does not match the request" if rejected else "index_unavailable"
+                        with self.assertRaisesRegex(error_type, expected) as caught:
+                            error_client.query_by_embedding(
+                                "docs", [1, 0], 1, query_mode="quantized_rerank",
+                                quantized_index_name="embedding.scalar_u8.public",
+                            )
+                        self.assertEqual(caught.exception.dense_work, candidate_work)
+                        self.assertEqual(caught.exception.score_plane, candidate_proof)
+                        error_client.close()
 
             completed_work_only_error = IndexUnavailableError(
                 "index_unavailable", "budget", dense_work=result.dense_work,
