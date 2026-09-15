@@ -11,10 +11,52 @@ import minima_cohere_q5_analyze as analyzer
 
 
 COMMIT = "a" * 40
+FROZEN_LEGACY_FAILURES = [
+    "initial exact oracle mismatch for broad_10pct",
+    "RuntimeError: timed query 3 does not match its frozen oracle",
+]
+FROZEN_LEGACY_IDS = [f"minima/broad_10pct/{ordinal:06d}" for ordinal in range(1000, 1005)]
+FROZEN_LEGACY_ROUTE_DEFINITIONS = {
+    "small": ("complete_exact", "bounded_complete_set", 16, 16, 16, 16, 16, 5, 16),
+    "all_match": ("vector_aligned_ann", "vector_aligned_scalar",
+                  4096, 32, 32, 2080, 2064, 5, 32),
+    "over_limit_4097": ("vector_aligned_ann", "vector_aligned_scalar",
+                        4096, 32, 32, 2080, 2064, 5, 32),
+    "broad_10pct": ("complete_finite_ann", "bounded_complete_set",
+                    1000, 1000, 1000, 2064, 2064, 0, 1000),
+    "sparse_over_limit": ("vector_aligned_ann", "vector_aligned_scalar",
+                          4096, 32, 32, 2080, 2064, 5, 32),
+    "mixed_broad_narrow": ("mixed_refined", "bounded_candidate_refinement",
+                           4101, 5, 5, 5, 5, 5, 5),
+    "empty_user": ("complete_exact", "bounded_complete_set", 0, 0, 0, 0, 0, 0, 0),
+    "empty_file": ("complete_exact", "bounded_complete_set", 16, 0, 0, 0, 0, 0, 0),
+}
 
 
 def canonical(value):
     return json.dumps(value, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+
+
+def frozen_legacy_routes():
+    routes = {}
+    for name, (plan, membership, probe, candidates, retained, visited, scored,
+               admitted, allowed) in FROZEN_LEGACY_ROUTE_DEFINITIONS.items():
+        routes[name] = ({
+            "identity": "native_base_plus_live_delta", "declared_scalar_filtering": True,
+            "native_base_plus_live_delta": True, "full_document_scan_fallbacks": 0,
+            "scalar_filter_unbounded": 0, "probe_ids": probe, "candidate_ids": candidates,
+            "retained_candidate_ids": retained, "refined_candidate_ids": retained,
+            "membership_source": membership, "plan": plan,
+            "allowed_id_materialization_rows": allowed, "primary_document_scans": 0,
+            "visited_candidates": visited, "scored_candidates": scored,
+            "admitted_candidates": admitted,
+        }, {
+            "membership_source": membership, "plan": plan, "probe_ids": probe,
+            "candidates": scored, "candidate_ids": candidates, "retained": retained,
+            "refined": retained, "visited": visited, "scored": scored,
+            "admitted": admitted, "visibility_mismatches": 0, "visibility_retries": 0,
+        })
+    return routes
 
 
 def bounded_manifest():
@@ -25,7 +67,7 @@ def bounded_manifest():
         "empty_user": (128, 0), "empty_file": (128, 0),
     }
     return {
-        "schema": analyzer.BOUNDED_MANIFEST_SCHEMA, "fixture": "bounded-50k",
+        "schema": "treedb_rag_minima_manifest/v2", "fixture": "bounded-50k",
         "config": {
             "dimension": 8, "top_k": 5, "batch_size": 256, "lookup_limit": 4096,
             "warmup_queries": 32, "timed_queries": 1024,
@@ -39,7 +81,7 @@ def bounded_manifest():
         ],
         "queries": [
             {"scenario": name,
-             "initial_oracle_ids": (analyzer.LEGACY_BASELINE_IDS if name == "broad_10pct"
+             "initial_oracle_ids": (FROZEN_LEGACY_IDS if name == "broad_10pct"
                                     else ([] if eligible == 0 else [f"minima/{name}/000000"])),
              "initial_oracle_scores": ([0.9] * 5 if name == "broad_10pct"
                                        else ([] if eligible == 0 else [0.9]))}
@@ -120,7 +162,8 @@ def clean_bounded_artifact(role, manifest, service, service_sha, plan_sha=None):
 
 def known_legacy_failure_artifact(manifest, service, service_sha):
     artifact = clean_bounded_artifact("exact", manifest, service, service_sha)
-    artifact["failures"] = list(analyzer.LEGACY_BASELINE_FAILURES)
+    artifact["schema"] = "treedb_rag_application/minima_diagnostic_v1"
+    artifact["failures"] = list(FROZEN_LEGACY_FAILURES)
     artifact["native_path_proof"] = {
         "schema": "treedb_minima_native_path_proof/v1", "strategy": "native_runtime",
         "availability": "unavailable", "counters": None,
@@ -142,7 +185,7 @@ def known_legacy_failure_artifact(manifest, service, service_sha):
     }
     scenarios, events, routes = [], [], {}
     population = {row["name"]: row for row in manifest["corpora"]}
-    route_contracts = analyzer._legacy_baseline_routes()
+    route_contracts = frozen_legacy_routes()
     for query in manifest["queries"]:
         name = query["scenario"]
         expected, expected_scores = query["initial_oracle_ids"], query["initial_oracle_scores"]
@@ -482,7 +525,7 @@ class Q5AnalyzeTest(unittest.TestCase):
             )))
             baseline = analyzer.validate_bounded_artifacts(packet, paths, calls.append)
             self.assertEqual(
-                baseline["classification"], analyzer.LEGACY_BASELINE_CLASSIFICATION,
+                baseline["classification"], "known_legacy_complete_finite_ann_failure",
             )
             self.assertFalse(baseline["lifecycle_claim_available"])
             self.assertFalse(baseline["latency_claim_available"])
@@ -494,6 +537,18 @@ class Q5AnalyzeTest(unittest.TestCase):
                 analyzer.validate_bounded_artifacts(packet, paths, calls.append)
 
     def test_frozen_legacy_baseline_failure_is_narrow_and_uses_real_raw_key(self):
+        self.assertEqual(analyzer.BOUNDED_MANIFEST_SCHEMA, "treedb_rag_minima_manifest/v2")
+        self.assertEqual(
+            analyzer.BOUNDED_ARTIFACT_SCHEMA,
+            "treedb_rag_application/minima_diagnostic_v1",
+        )
+        self.assertEqual(
+            analyzer.LEGACY_BASELINE_CLASSIFICATION,
+            "known_legacy_complete_finite_ann_failure",
+        )
+        self.assertEqual(analyzer.LEGACY_BASELINE_FAILURES, FROZEN_LEGACY_FAILURES)
+        self.assertEqual(analyzer.LEGACY_BASELINE_IDS, FROZEN_LEGACY_IDS)
+        self.assertEqual(analyzer._legacy_baseline_routes(), frozen_legacy_routes())
         manifest = bounded_manifest()
         service = Path("/packet/service")
         artifact = known_legacy_failure_artifact(manifest, service, "a" * 64)
