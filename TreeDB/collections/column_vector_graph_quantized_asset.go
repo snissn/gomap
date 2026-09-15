@@ -1627,28 +1627,28 @@ func recordColumnVectorGraphQuantizedAssetErrorStats(stats *columnVectorGraphNat
 }
 
 func validateColumnVectorGraphQuantizedAssetLoadInputs(rootDir, collection string, cfg ColumnStoreConfig, def VectorIndexDefinition, graph columnVectorGraphManifestSnapshot, q QuantizedVectorIndexDefinition, asset columnVectorIndexStateAssetSnapshot) error {
-	return validateColumnVectorGraphQuantizedAssetSetLoadInputs(rootDir, collection, cfg, def, graph, q, columnVectorGraphQuantizedAssetSet{Codes: asset, HasCodes: true})
+	return validateColumnVectorGraphQuantizedAssetSetLoadInputs(rootDir, collection, cfg, def, graph, q, columnVectorGraphQuantizedAssetSet{Codes: asset, HasCodes: true}, true)
 }
 
-func validateColumnVectorGraphQuantizedAssetSetLoadInputs(rootDir, collection string, cfg ColumnStoreConfig, def VectorIndexDefinition, graph columnVectorGraphManifestSnapshot, q QuantizedVectorIndexDefinition, assets columnVectorGraphQuantizedAssetSet) error {
+func validateColumnVectorGraphQuantizedAssetSetLoadInputs(rootDir, collection string, cfg ColumnStoreConfig, def VectorIndexDefinition, graph columnVectorGraphManifestSnapshot, q QuantizedVectorIndexDefinition, assets columnVectorGraphQuantizedAssetSet, requireAvailable bool) error {
 	if !assets.HasCodes {
 		return fmt.Errorf("%w: quantized asset %q codes are missing", errColumnVectorGraphQuantizedAssetMissing, q.Name)
 	}
-	if err := validateColumnVectorGraphQuantizedOneAssetLoadInput(rootDir, collection, cfg, def, graph, q, assets.Codes, columnVectorIndexStateAssetRoleQuantizedCodes, graph.RowCount); err != nil {
+	if err := validateColumnVectorGraphQuantizedOneAssetLoadInput(rootDir, collection, cfg, def, graph, q, assets.Codes, columnVectorIndexStateAssetRoleQuantizedCodes, graph.RowCount, requireAvailable); err != nil {
 		return err
 	}
 	if q.Codec == QuantizedVectorCodecScalarU8 && !scalarU8CalibrationIsLegacy(q) {
 		if !assets.HasAlpha {
 			return fmt.Errorf("%w: quantized asset %q scalar_u8 alpha metadata is missing", errColumnVectorGraphQuantizedAssetMissing, q.Name)
 		}
-		if err := validateColumnVectorGraphQuantizedOneAssetLoadInput(rootDir, collection, cfg, def, graph, q, assets.Alpha, columnVectorIndexStateAssetRoleQuantizedAlpha, 0); err != nil {
+		if err := validateColumnVectorGraphQuantizedOneAssetLoadInput(rootDir, collection, cfg, def, graph, q, assets.Alpha, columnVectorIndexStateAssetRoleQuantizedAlpha, 0, requireAvailable); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func validateColumnVectorGraphQuantizedOneAssetLoadInput(rootDir, collection string, cfg ColumnStoreConfig, def VectorIndexDefinition, graph columnVectorGraphManifestSnapshot, q QuantizedVectorIndexDefinition, asset columnVectorIndexStateAssetSnapshot, role string, expectedRows int) error {
+func validateColumnVectorGraphQuantizedOneAssetLoadInput(rootDir, collection string, cfg ColumnStoreConfig, def VectorIndexDefinition, graph columnVectorGraphManifestSnapshot, q QuantizedVectorIndexDefinition, asset columnVectorIndexStateAssetSnapshot, role string, expectedRows int, requireAvailable bool) error {
 	if asset.Role != role {
 		return fmt.Errorf("%w: quantized asset %q role=%q want %q", errColumnVectorGraphQuantizedAssetStale, q.Name, asset.Role, role)
 	}
@@ -1670,8 +1670,14 @@ func validateColumnVectorGraphQuantizedOneAssetLoadInput(rootDir, collection str
 	} else if asset.RowCount < 0 || (graph.RowCount > 0 && asset.RowCount == 0) || asset.RowCount > graph.RowCount {
 		return fmt.Errorf("%w: quantized asset %q role=%q row_count=%d invalid for graph row_count=%d", errColumnVectorGraphQuantizedAssetStale, q.Name, role, asset.RowCount, graph.RowCount)
 	}
-	if err := validateColumnVectorIndexStateAssetRefAvailable(rootDir, asset); err != nil {
-		return fmt.Errorf("%w: quantized asset %q role=%q unavailable: %v", errColumnVectorGraphQuantizedAssetMissing, q.Name, role, err)
+	var availabilityErr error
+	if requireAvailable {
+		availabilityErr = validateColumnVectorIndexStateAssetRefAvailable(rootDir, asset)
+	} else {
+		availabilityErr = validateColumnAssetRefForPlan(asset.Ref)
+	}
+	if availabilityErr != nil {
+		return fmt.Errorf("%w: quantized asset %q role=%q unavailable: %v", errColumnVectorGraphQuantizedAssetMissing, q.Name, role, availabilityErr)
 	}
 	return nil
 }
@@ -1681,7 +1687,7 @@ func loadColumnVectorGraphQuantizedAsset(rootDir, collection string, cfg ColumnS
 }
 
 func loadColumnVectorGraphQuantizedAssetSet(rootDir, collection string, cfg ColumnStoreConfig, def VectorIndexDefinition, graph columnVectorGraphManifestSnapshot, q QuantizedVectorIndexDefinition, assets columnVectorGraphQuantizedAssetSet) (*quantizedasset.Prepared, error) {
-	if err := validateColumnVectorGraphQuantizedAssetSetLoadInputs(rootDir, collection, cfg, def, graph, q, assets); err != nil {
+	if err := validateColumnVectorGraphQuantizedAssetSetLoadInputs(rootDir, collection, cfg, def, graph, q, assets, true); err != nil {
 		return nil, err
 	}
 	codeRaw, err := readColumnPhysicalAssetFromManager(rootDir, assets.Codes.Ref)
@@ -1763,7 +1769,7 @@ func loadColumnVectorGraphQuantizedAssetResourceStatus(rootDir, collection strin
 
 func loadColumnVectorGraphQuantizedAssetResourceStatusWithSourceAccess(ctx context.Context, rootDir, collection string, cfg ColumnStoreConfig, def VectorIndexDefinition, graph columnVectorGraphManifestSnapshot, q QuantizedVectorIndexDefinition, assets columnVectorGraphQuantizedAssetSet, access *columnVectorGraphSourceAccess) (columnVectorGraphQuantizedAssetLoadStatus, error) {
 	status := columnVectorGraphQuantizedAssetLoadStatus{Definition: q, Asset: assets.Codes}
-	if err := validateColumnVectorGraphQuantizedAssetSetLoadInputs(rootDir, collection, cfg, def, graph, q, assets); err != nil {
+	if err := validateColumnVectorGraphQuantizedAssetSetLoadInputs(rootDir, collection, cfg, def, graph, q, assets, access == nil); err != nil {
 		status.Err = err
 		status.Health = columnVectorGraphQuantizedAssetHealthFromError(err)
 		return status, err

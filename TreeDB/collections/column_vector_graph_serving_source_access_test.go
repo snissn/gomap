@@ -187,6 +187,37 @@ func TestTypedGraphServingPackedSourcesUseOneSegmentPool(t *testing.T) {
 				_ = owner.Close()
 				t.Fatal("serving holder did not retain its single source-access capability")
 			}
+			queryInvNorm, err := columnVectorGraphInvNorm(query)
+			if err != nil {
+				_ = owner.Close()
+				t.Fatal(err)
+			}
+			source := columnVectorGraphSearchSource{
+				reader:                       owner.overlay.base.reader,
+				dims:                         holder.preparedSearch.dims,
+				typedVectorSource:            holder.typedVectorSource,
+				preparedVector:               holder.preparedSearch.vector,
+				preparedScoreReady:           true,
+				preparedScoreIdentityMapping: holder.preparedSearch.vectorIdentityMapping,
+				preparedNorm:                 holder.preparedSearch.norm,
+			}
+			var sourceStats columnVectorGraphNativeSearchStats
+			if _, handled, err := source.scorePreparedOrdinal(nil, query, queryInvNorm, 0, &sourceStats); err != nil || !handled {
+				_ = owner.Close()
+				t.Fatalf("prepared source score handled=%v err=%v", handled, err)
+			}
+			requireColumnVectorGraphPreparedHolderSourceStats(t, sourceStats, mode.isMapped)
+			var combinedStats columnVectorGraphNativeSearchStats
+			if _, err := holder.preparedSearch.scoreOrdinal(nil, query, queryInvNorm, 0, &combinedStats); err != nil {
+				_ = owner.Close()
+				t.Fatal(err)
+			}
+			requireColumnVectorGraphPreparedHolderSourceStats(t, combinedStats, mode.isMapped)
+			minimalCounters := newColumnVectorGraphPreparedMinimalSearchCounters(holder.preparedSearch)
+			minimalCounters.recordPreparedScore(0, false, true)
+			var minimalStats columnVectorGraphNativeSearchStats
+			minimalCounters.publish(&minimalStats)
+			requireColumnVectorGraphPreparedHolderSourceStats(t, minimalStats, mode.isMapped)
 			gotSemantics := snapshotColumnVectorGraphSourceSemantics(t, holder, rows)
 			if !reflect.DeepEqual(gotSemantics, wantSemantics) {
 				_ = owner.Close()
@@ -261,6 +292,22 @@ func TestTypedGraphServingPackedSourcesUseOneSegmentPool(t *testing.T) {
 			}
 			requireTypedGraphServingFoundationReleased(t, col)
 		})
+	}
+}
+
+func requireColumnVectorGraphPreparedHolderSourceStats(t testing.TB, stats columnVectorGraphNativeSearchStats, mapped bool) {
+	t.Helper()
+	if stats.PreparedScoreCalls != 1 || stats.CandidateFetches != 1 || stats.VectorPreparedDirectViews != 1 || stats.NormPreparedDirectViews != 1 {
+		t.Fatalf("prepared source stats=%+v", stats)
+	}
+	if mapped {
+		if stats.VectorDirectViews != 1 || stats.VectorMmapDirectViews != 1 || stats.VectorHeapCopyTypedViews != 0 || stats.NormDirectViews != 1 || stats.NormMmapDirectViews != 1 || stats.NormHeapCopyTypedViews != 0 {
+			t.Fatalf("mapped prepared source stats=%+v", stats)
+		}
+		return
+	}
+	if stats.VectorDirectViews != 0 || stats.VectorMmapDirectViews != 0 || stats.VectorHeapCopyTypedViews != 1 || stats.NormDirectViews != 0 || stats.NormMmapDirectViews != 0 || stats.NormHeapCopyTypedViews != 1 {
+		t.Fatalf("fallback prepared source stats=%+v", stats)
 	}
 }
 
@@ -659,6 +706,85 @@ func TestTypedGraphServingLazyScalarU8UsesSharedSegmentPool(t *testing.T) {
 				t.Fatalf("lazy scalar-u8 final close did not reconcile: %+v", final)
 			}
 		})
+	}
+}
+
+func TestTypedGraphServingLazyScalarU8SurvivesOriginalPathRetirement(t *testing.T) {
+	requireTypedGraphPreparedHolderTest(t)
+	fixture := openTypedGraphServingScalarU8SourceFixture(t)
+	defer func() {
+		if err := fixture.db.Close(); err != nil {
+			t.Errorf("db close: %v", err)
+		}
+	}()
+	installColumnServingLeaseHooks(t, func() {
+		columnServingSegmentLeaseHooks.Lock()
+		columnServingSegmentLeaseHooks.mmap = func(*os.File, int64) ([]byte, error) { return nil, errColumnServingLeaseInjected }
+		columnServingSegmentLeaseHooks.Unlock()
+	})
+	anchor, err := fixture.col.openTypedGraphReadOwner(fixture.limits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	holder := typedGraphServingScalarU8Holder(t, anchor)
+	if len(holder.legacyScalarU8Entries) != 0 {
+		_ = anchor.Close()
+		t.Fatal("serving holder loaded the lazy scalar-u8 plane during construction")
+	}
+	rootDir := fixture.col.db.ColumnAssetRootDir()
+	_, retained, source, err := readColumnVectorGraphQuantizedAssetResourceBytesWithSourceAccess(context.Background(), rootDir, fixture.codes, holder.servingSourceAccess)
+	if err != nil {
+		_ = anchor.Close()
+		t.Fatal(err)
+	}
+	if source != mappedresource.SourceHeapCopy {
+		_ = retained.close()
+		_ = anchor.Close()
+		t.Fatalf("retained scalar-u8 source=%q want heap-copy", source)
+	}
+	codesPath, err := columnAssetSegmentPath(fixture.col.db.ColumnAssetRootDir(), fixture.codes)
+	if err != nil {
+		_ = retained.close()
+		_ = anchor.Close()
+		t.Fatal(err)
+	}
+	retiredPath := codesPath + ".retired"
+	if err := os.Rename(codesPath, retiredPath); err != nil {
+		_ = retained.close()
+		_ = anchor.Close()
+		t.Fatal(err)
+	}
+	restored := false
+	defer func() {
+		if !restored {
+			if err := os.Rename(retiredPath, codesPath); err != nil {
+				t.Errorf("restore retired segment: %v", err)
+			}
+		}
+	}()
+
+	var buffer VectorIndexSearchBuffer
+	response, view, err := fixture.col.SearchVectorIndexWithBufferReadView(fixture.selected, &buffer)
+	if view != nil {
+		err = errors.Join(err, view.Close())
+	}
+	if err != nil || len(response.Results) != 2 || response.Stats.QuantizedScorerActive != 1 || response.Stats.QuantizedAssetHeapCopy != 1 {
+		_ = retained.close()
+		_ = anchor.Close()
+		t.Fatalf("retired-path scalar-u8 response=%+v err=%v", response, err)
+	}
+	if err := os.Rename(retiredPath, codesPath); err != nil {
+		_ = retained.close()
+		_ = anchor.Close()
+		t.Fatal(err)
+	}
+	restored = true
+	if err := retained.close(); err != nil {
+		_ = anchor.Close()
+		t.Fatal(err)
+	}
+	if err := anchor.Close(); err != nil {
+		t.Fatal(err)
 	}
 }
 

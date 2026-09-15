@@ -120,7 +120,6 @@ type DocumentMaterializationStats struct {
 	AssetReadAtFallbacks uint64
 	AssetFileOpens       uint64
 	AssetFileCloses      uint64
-	AssetServingBorrows  uint64
 	AssetActiveHandles   int64
 }
 
@@ -613,7 +612,6 @@ func addDocumentMaterializerAssetCounterDeltas(stats *DocumentMaterializationSta
 	stats.AssetReadAtFallbacks += deltaUint64(before.readAtFallbacks, after.readAtFallbacks)
 	stats.AssetFileOpens += deltaUint64(before.fileOpens, after.fileOpens)
 	stats.AssetFileCloses += deltaUint64(before.fileCloses, after.fileCloses)
-	stats.AssetServingBorrows += deltaUint64(before.servingBorrows, after.servingBorrows)
 	stats.AssetActiveHandles = after.activeHandles
 }
 
@@ -1653,7 +1651,6 @@ func addDocumentMaterializationStatsToVectorStats(dst *VectorIndexSearchStats, s
 	dst.DocumentAssetReadAtFallbacks += src.AssetReadAtFallbacks
 	dst.DocumentAssetFileOpens += src.AssetFileOpens
 	dst.DocumentAssetFileCloses += src.AssetFileCloses
-	dst.DocumentAssetServingBorrows += src.AssetServingBorrows
 	dst.DocumentAssetActiveHandles = src.AssetActiveHandles
 	return nil
 }

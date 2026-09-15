@@ -137,9 +137,10 @@ func TestTypedGraphLifecyclePublicMutationAndReopen(t *testing.T) {
 							t.Fatal(err)
 						}
 						fetched, fetchErr := view.FetchDocumentsForVectorIndexSearchResults(response.Results, DocumentFetchOptions{})
+						viewAssets := view.assetCounters()
 						closeErr := view.Close()
 						baseDocument := operation == "delete"
-						wrongAssetRoute := (baseDocument && fetched.Stats.AssetServingBorrows == 0) || (!baseDocument && fetched.Stats.AssetFileOpens == 0)
+						wrongAssetRoute := (baseDocument && viewAssets.servingBorrows == 0) || (!baseDocument && fetched.Stats.AssetFileOpens == 0)
 						if fetchErr != nil || closeErr != nil || len(fetched.Results) != 1 || string(fetched.Results[0].ID) != wantID || wrongAssetRoute {
 							t.Fatalf("public recovered results=%+v stats=%+v fetch=%v close=%v", fetched.Results, fetched.Stats, fetchErr, closeErr)
 						}

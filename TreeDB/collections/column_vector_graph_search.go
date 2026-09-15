@@ -926,6 +926,7 @@ func (d *columnVectorGraphNativeSearchDebugCounters) recordExactCandidateOrder(o
 type columnVectorGraphPreparedMinimalSearchCounters struct {
 	dims                  int
 	vectorIdentityMapping bool
+	view                  *columnVectorGraphPreparedSearchView
 
 	ScoreBatches                        uint64
 	OrdinalsGrouped                     uint64
@@ -935,6 +936,10 @@ type columnVectorGraphPreparedMinimalSearchCounters struct {
 	ScoreBatchOptimizedCalls            uint64
 	ScoreBatchScalarFallbackCalls       uint64
 	PreparedScoreCalls                  uint64
+	VectorMmapDirectViews               uint64
+	VectorHeapCopyTypedViews            uint64
+	NormMmapDirectViews                 uint64
+	NormHeapCopyTypedViews              uint64
 	AdjacencyBytesRead                  uint64
 	ExpansionFetches                    uint64
 	AdjacencyExpansions                 uint64
@@ -948,7 +953,7 @@ func newColumnVectorGraphPreparedMinimalSearchCounters(view *columnVectorGraphPr
 	if view == nil {
 		return nil
 	}
-	return &columnVectorGraphPreparedMinimalSearchCounters{dims: view.dims, vectorIdentityMapping: view.vectorIdentityMapping}
+	return &columnVectorGraphPreparedMinimalSearchCounters{dims: view.dims, vectorIdentityMapping: view.vectorIdentityMapping, view: view}
 }
 
 func (c *columnVectorGraphPreparedMinimalSearchCounters) recordPreparedScores(count int, optimized bool, scalarFallback bool) {
@@ -972,12 +977,58 @@ func (c *columnVectorGraphPreparedMinimalSearchCounters) recordPreparedScores(co
 	c.PreparedScoreCalls += count64
 }
 
+func (c *columnVectorGraphPreparedMinimalSearchCounters) recordPreparedSourceStats(ordinals []int) {
+	if c == nil || c.view == nil || len(ordinals) == 0 {
+		return
+	}
+	count := uint64(len(ordinals))
+	if c.view.norm.source != nil {
+		switch c.view.norm.source.outcome {
+		case columnVectorGraphInvNormStateOutcomeMmapDirect:
+			c.NormMmapDirectViews += count
+		case columnVectorGraphInvNormStateOutcomeHeapCopyTypedView:
+			c.NormHeapCopyTypedViews += count
+		}
+	}
+	if part := c.view.vector.singlePart; part != nil {
+		switch part.outcome {
+		case columnVectorGraphTypedColumnVectorOutcomeMmapDirect:
+			c.VectorMmapDirectViews += count
+		case columnVectorGraphTypedColumnVectorOutcomeHeapCopyTypedView:
+			c.VectorHeapCopyTypedViews += count
+		}
+		return
+	}
+	for _, ordinal := range ordinals {
+		outcome, ok := c.view.vector.outcomeForOrdinal(ordinal)
+		if !ok {
+			continue
+		}
+		switch outcome {
+		case columnVectorGraphTypedColumnVectorOutcomeMmapDirect:
+			c.VectorMmapDirectViews++
+		case columnVectorGraphTypedColumnVectorOutcomeHeapCopyTypedView:
+			c.VectorHeapCopyTypedViews++
+		}
+	}
+}
+
+func (c *columnVectorGraphPreparedMinimalSearchCounters) recordPreparedScore(ordinal int, optimized bool, scalarFallback bool) {
+	c.recordPreparedScores(1, optimized, scalarFallback)
+	c.recordPreparedSourceStats([]int{ordinal})
+}
+
+func (c *columnVectorGraphPreparedMinimalSearchCounters) recordPreparedScoreBatch(ordinals []int, optimized bool, scalarFallback bool) {
+	c.recordPreparedScores(len(ordinals), optimized, scalarFallback)
+	c.recordPreparedSourceStats(ordinals)
+}
+
 func (p *columnVectorGraphSearchPlan) recordPreparedMinimalScoreBatch(counters *columnVectorGraphPreparedMinimalSearchCounters, ordinals []int) {
 	if counters == nil || len(ordinals) == 0 {
 		return
 	}
 	if p == nil || p.preparedSearch == nil || !p.scoreBatchMode.indexedEnabled() || len(ordinals) <= 1 {
-		counters.recordPreparedScores(len(ordinals), false, true)
+		counters.recordPreparedScoreBatch(ordinals, false, true)
 		return
 	}
 	p.preparedSearch.recordIndexedScoreBatchMinimalCounters(counters, ordinals)
@@ -1031,16 +1082,18 @@ func (c *columnVectorGraphPreparedMinimalSearchCounters) publish(stats *columnVe
 	stats.AdjacencyMmapDirectViews += c.AdjacencyMmapDirectViews
 	stats.AdjacencyPreparedCSRDirectViews += c.AdjacencyPreparedCSRDirectViews
 	stats.AdjacencyPreparedCSRMmapDirectViews += c.AdjacencyPreparedCSRMmapDirectViews
-	stats.VectorDirectViews += c.PreparedScoreCalls
-	stats.VectorMmapDirectViews += c.PreparedScoreCalls
+	stats.VectorDirectViews += c.VectorMmapDirectViews
+	stats.VectorMmapDirectViews += c.VectorMmapDirectViews
+	stats.VectorHeapCopyTypedViews += c.VectorHeapCopyTypedViews
 	stats.VectorPreparedDirectViews += c.PreparedScoreCalls
 	if c.vectorIdentityMapping {
 		stats.VectorPreparedIdentityMappings += c.PreparedScoreCalls
 	} else {
 		stats.VectorPreparedRowRefMappings += c.PreparedScoreCalls
 	}
-	stats.NormDirectViews += c.PreparedScoreCalls
-	stats.NormMmapDirectViews += c.PreparedScoreCalls
+	stats.NormDirectViews += c.NormMmapDirectViews
+	stats.NormMmapDirectViews += c.NormMmapDirectViews
+	stats.NormHeapCopyTypedViews += c.NormHeapCopyTypedViews
 	stats.NormPreparedDirectViews += c.PreparedScoreCalls
 }
 
@@ -2101,7 +2154,7 @@ func (r *columnVectorGraphPhysicalRowReader) greedyNearestAtLayer(plan *columnVe
 		debugCounters.recordScore(columnVectorGraphNativeSearchScoreContextUpperEntry, best)
 	}
 	if preparedMinimal != nil {
-		preparedMinimal.recordPreparedScores(1, false, true)
+		preparedMinimal.recordPreparedScore(best, false, true)
 	}
 	changed := true
 	for changed {
@@ -2181,7 +2234,7 @@ func (r *columnVectorGraphPhysicalRowReader) greedyNearestAtLayer(plan *columnVe
 				debugCounters.recordScore(columnVectorGraphNativeSearchScoreContextUpperNeighbor, neighborOrdinal)
 			}
 			if preparedMinimal != nil {
-				preparedMinimal.recordPreparedScores(1, false, true)
+				preparedMinimal.recordPreparedScore(neighborOrdinal, false, true)
 			}
 			if score > bestScore || (score == bestScore && neighborOrdinal < best) {
 				best = neighborOrdinal
@@ -2366,7 +2419,7 @@ func (r *columnVectorGraphPhysicalRowReader) scoreAndPushFrontierVisited(plan *c
 		debugCounters.recordScore(scoreContext, ordinal)
 	}
 	if preparedMinimal != nil {
-		preparedMinimal.recordPreparedScores(1, false, true)
+		preparedMinimal.recordPreparedScore(ordinal, false, true)
 	}
 	(*visitedCandidates)++
 	candidate := columnVectorGraphSearchCandidate{

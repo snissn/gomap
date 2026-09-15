@@ -870,6 +870,7 @@ func BenchmarkTypedGraphPublicServing(b *testing.B) {
 }
 
 func TestTypedGraphPublicEnsureCancellationAndFailedAdmission(t *testing.T) {
+	requireTypedGraphPublicServingTest(t)
 	col, base, ids, retained, columns, _ := openTypedGraphQualityFixture(t, 8)
 	defer base.Close()
 	root, err := canonicalVectorPartitionStorageRootV1(col.db.Dir())
@@ -959,8 +960,9 @@ func TestTypedGraphPublicNoWriteVacuumOwner(t *testing.T) {
 		if err != nil {
 			return "", err
 		}
-		if len(response.Results) != 3 || docs.Stats.DocumentsMissing != 0 || docs.Stats.DocumentsFetched != 3 || docs.Stats.AssetServingBorrows == 0 {
-			return "", fmt.Errorf("incomplete results=%d fetched=%d missing=%d serving_borrows=%d", len(response.Results), docs.Stats.DocumentsFetched, docs.Stats.DocumentsMissing, docs.Stats.AssetServingBorrows)
+		servingBorrows := view.assetCounters().servingBorrows
+		if len(response.Results) != 3 || docs.Stats.DocumentsMissing != 0 || docs.Stats.DocumentsFetched != 3 || servingBorrows == 0 {
+			return "", fmt.Errorf("incomplete results=%d fetched=%d missing=%d serving_borrows=%d", len(response.Results), docs.Stats.DocumentsFetched, docs.Stats.DocumentsMissing, servingBorrows)
 		}
 		lastAccess, lastKey = typedGraphServingViewAccessForTest(t, view)
 		signature := ""

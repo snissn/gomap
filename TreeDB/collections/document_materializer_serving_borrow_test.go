@@ -367,11 +367,12 @@ func TestTypedGraphPublicMaterializerBorrowsServingHolder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	viewAssets := view.assetCounters()
 	access, err := view.materializerServingSourceAccess()
 	if err != nil || access == nil || view.rowAssetReadCache == nil || view.typedColumnAssetReadCache == nil || view.rowAssetReadCache.servingSourceAccess != access || view.typedColumnAssetReadCache.servingSourceAccess != access {
 		t.Fatalf("materializer caches do not share holder access: access=%p row=%p typed=%p err=%v", access, view.rowAssetReadCache, view.typedColumnAssetReadCache, err)
 	}
-	if documents.Stats.AssetServingBorrows < 2 || documents.Stats.AssetMmapHits != 0 || documents.Stats.AssetReadAtFallbacks != 0 || documents.Stats.AssetFileOpens != 0 {
+	if viewAssets.servingBorrows < 2 || documents.Stats.AssetMmapHits != 0 || documents.Stats.AssetReadAtFallbacks != 0 || documents.Stats.AssetFileOpens != 0 {
 		t.Fatalf("base-only materializer physical routing stats=%+v", documents.Stats)
 	}
 	manager := view.assetManager
@@ -401,7 +402,8 @@ func TestTypedGraphPublicMaterializerBorrowsServingHolder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want.Stats.AssetServingBorrows != 0 || want.Stats.AssetFileOpens == 0 || !reflect.DeepEqual(documents.Results, want.Results) {
+	plainAssets := plain.assetCounters()
+	if plainAssets.servingBorrows != 0 || want.Stats.AssetFileOpens == 0 || !reflect.DeepEqual(documents.Results, want.Results) {
 		t.Fatalf("generic materializer route/results stats=%+v equal=%t", want.Stats, reflect.DeepEqual(documents.Results, want.Results))
 	}
 	if err := plain.Close(); err != nil {
@@ -418,7 +420,8 @@ func TestTypedGraphPublicMaterializerBorrowsServingHolder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if forcedDocs.Stats.AssetServingBorrows != 0 || forcedDocs.Stats.AssetReadAtFallbacks == 0 || forcedDocs.Stats.AssetFileOpens == 0 || !reflect.DeepEqual(documents.Results, forcedDocs.Results) {
+	forcedAssets := forced.assetCounters()
+	if forcedAssets.servingBorrows != 0 || forcedDocs.Stats.AssetReadAtFallbacks == 0 || forcedDocs.Stats.AssetFileOpens == 0 || !reflect.DeepEqual(documents.Results, forcedDocs.Results) {
 		t.Fatalf("forced local route/results stats=%+v equal=%t", forcedDocs.Stats, reflect.DeepEqual(documents.Results, forcedDocs.Results))
 	}
 	if err := forced.Close(); err != nil {
@@ -471,7 +474,7 @@ func TestTypedGraphPublicMaterializerMixedBaseSuffixParityAndOldView(t *testing.
 			t.Fatalf("%s cache did not split base borrows from suffix-local reads: %+v", name, cache)
 		}
 	}
-	if got.Stats.AssetServingBorrows == 0 || got.Stats.AssetMmapHits == 0 {
+	if view.assetCounters().servingBorrows == 0 || got.Stats.AssetMmapHits == 0 {
 		_ = view.Close()
 		t.Fatalf("mixed route stats=%+v", got.Stats)
 	}
@@ -482,8 +485,9 @@ func TestTypedGraphPublicMaterializerMixedBaseSuffixParityAndOldView(t *testing.
 		t.Fatal(err)
 	}
 	want, wantErr := plain.FetchDocumentsByID(ids, DocumentFetchOptions{})
+	plainAssets := plain.assetCounters()
 	plainCloseErr := plain.Close()
-	if wantErr != nil || plainCloseErr != nil || want.Stats.AssetServingBorrows != 0 || !reflect.DeepEqual(got.Results, want.Results) {
+	if wantErr != nil || plainCloseErr != nil || plainAssets.servingBorrows != 0 || !reflect.DeepEqual(got.Results, want.Results) {
 		_ = view.Close()
 		t.Fatalf("mixed serving/local parity fetch=%v close=%v generic_stats=%+v equal=%t", wantErr, plainCloseErr, want.Stats, reflect.DeepEqual(got.Results, want.Results))
 	}
@@ -553,6 +557,7 @@ func TestTypedGraphPublicConcurrentMaterializersShareOnlyHolderBacking(t *testin
 		documents                  DocumentFetchResponse
 		rowCache, typedColumnCache *columnPhysicalAssetReadCache
 		access                     *columnVectorGraphSourceAccess
+		servingBorrows             uint64
 		activeAfterClose           int64
 		err                        error
 	}
@@ -573,12 +578,13 @@ func TestTypedGraphPublicConcurrentMaterializersShareOnlyHolderBacking(t *testin
 			documents, fetchErr := read.FetchDocumentsByID(ids, DocumentFetchOptions{})
 			borrowed, borrowErr := read.materializerServingSourceAccess()
 			rowCache, typedCache, manager := read.rowAssetReadCache, read.typedColumnAssetReadCache, read.assetManager
+			servingBorrows := read.assetCounters().servingBorrows
 			closeErr := read.Close()
 			var active int64
 			if manager != nil {
 				active = manager.Stats().ActiveHandles
 			}
-			results <- result{documents: documents, rowCache: rowCache, typedColumnCache: typedCache, access: borrowed, activeAfterClose: active, err: errors.Join(fetchErr, borrowErr, closeErr)}
+			results <- result{documents: documents, rowCache: rowCache, typedColumnCache: typedCache, access: borrowed, servingBorrows: servingBorrows, activeAfterClose: active, err: errors.Join(fetchErr, borrowErr, closeErr)}
 		}()
 	}
 	ready.Wait()
@@ -587,7 +593,7 @@ func TestTypedGraphPublicConcurrentMaterializersShareOnlyHolderBacking(t *testin
 	typedCaches := make(map[*columnPhysicalAssetReadCache]struct{}, callers)
 	for range callers {
 		got := <-results
-		if got.err != nil || got.access != access || got.rowCache == nil || got.typedColumnCache == nil || got.rowCache == got.typedColumnCache || got.activeAfterClose != 0 || got.documents.Stats.AssetServingBorrows < 2 || got.documents.Stats.AssetFileOpens != 0 || !reflect.DeepEqual(got.documents.Results, want.Results) {
+		if got.err != nil || got.access != access || got.rowCache == nil || got.typedColumnCache == nil || got.rowCache == got.typedColumnCache || got.activeAfterClose != 0 || got.servingBorrows < 2 || got.documents.Stats.AssetFileOpens != 0 || !reflect.DeepEqual(got.documents.Results, want.Results) {
 			_ = anchor.Close()
 			t.Fatalf("concurrent materializer result=%+v err=%v access=%p active=%d equal=%t", got.documents.Stats, got.err, got.access, got.activeAfterClose, reflect.DeepEqual(got.documents.Results, want.Results))
 		}
@@ -674,8 +680,9 @@ func TestTypedGraphPublicMaterializerDBCloseRetainsHolderUntilViewClose(t *testi
 		t.Fatal(err)
 	}
 	documents, fetchErr := reopenedView.FetchDocumentsByID(ids, DocumentFetchOptions{})
+	reopenedAssets := reopenedView.assetCounters()
 	closeErr := reopenedView.Close()
-	if fetchErr != nil || closeErr != nil || len(documents.Results) != len(ids) || documents.Stats.AssetServingBorrows == 0 {
+	if fetchErr != nil || closeErr != nil || len(documents.Results) != len(ids) || reopenedAssets.servingBorrows == 0 {
 		t.Fatalf("reopened materializer results=%d stats=%+v fetch=%v close=%v", len(documents.Results), documents.Stats, fetchErr, closeErr)
 	}
 }

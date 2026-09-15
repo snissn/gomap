@@ -205,21 +205,21 @@ func (v *columnVectorGraphPreparedSearchView) recordIndexedScoreBatchMinimalCoun
 		return
 	}
 	if v == nil || !v.ready() || len(ordinals) <= 1 {
-		counters.recordPreparedScores(len(ordinals), false, true)
+		counters.recordPreparedScoreBatch(ordinals, false, true)
 		return
 	}
 	if v.vector.singlePart != nil {
 		optimized := v.indexedScoreBatchOptimizedEligible(len(ordinals))
-		counters.recordPreparedScores(len(ordinals), optimized, !optimized)
+		counters.recordPreparedScoreBatch(ordinals, optimized, !optimized)
 		return
 	}
 	for _, ordinal := range ordinals {
 		if ordinal < 0 || ordinal >= len(v.norm.values) {
-			counters.recordPreparedScores(len(ordinals), false, true)
+			counters.recordPreparedScoreBatch(ordinals, false, true)
 			return
 		}
 		if _, _, ok := v.vector.locationForOrdinal(ordinal); !ok {
-			counters.recordPreparedScores(len(ordinals), false, true)
+			counters.recordPreparedScoreBatch(ordinals, false, true)
 			return
 		}
 	}
@@ -235,7 +235,7 @@ func (v *columnVectorGraphPreparedSearchView) recordIndexedScoreBatchMinimalCoun
 		}
 		runLen := runEnd - runStart
 		optimized := vectorops.DotFloat32IndexedOptimizedEligible(runLen, v.dims)
-		counters.recordPreparedScores(runLen, optimized, !optimized)
+		counters.recordPreparedScoreBatch(ordinals[runStart:runEnd], optimized, !optimized)
 		runStart = runEnd
 	}
 }
@@ -418,7 +418,7 @@ func (v *columnVectorGraphPreparedSearchView) scoreOrdinal(plan *columnVectorGra
 	}
 	if stats != nil {
 		recordColumnVectorGraphScoreBatchStats(stats, 1, false, true)
-		v.recordScoreStats(stats, plan, 1)
+		v.recordScoreStats(stats, plan, ordinal)
 		v.recordMappingStats(stats, ordinal)
 	}
 	return score, nil
@@ -573,7 +573,7 @@ func (v *columnVectorGraphPreparedSearchView) scoreOrdinalsScalar(plan *columnVe
 	}
 	if stats != nil {
 		recordColumnVectorGraphScoreBatchStats(stats, len(ordinals), false, true)
-		v.recordScoreStats(stats, plan, len(ordinals))
+		v.recordScoreStats(stats, plan, ordinals...)
 		v.recordMappingStatsCount(stats, len(ordinals))
 	}
 	return dst, nil
@@ -672,7 +672,7 @@ func (v *columnVectorGraphPreparedSearchView) scoreOrdinalsIndexed(plan *columnV
 		}
 		stats.ScoreBatchOptimizedCalls += optimizedCalls
 		stats.ScoreBatchScalarFallbackCalls += scalarFallbackCalls
-		v.recordScoreStats(stats, plan, len(ordinals))
+		v.recordScoreStats(stats, plan, ordinals...)
 		v.recordMappingStatsCount(stats, len(ordinals))
 	}
 	return dst, true, nil
@@ -741,7 +741,7 @@ func (v *columnVectorGraphPreparedSearchView) scoreOrdinalsIndexedSinglePart(pla
 		}
 		if stats != nil {
 			recordColumnVectorGraphScoreBatchStats(stats, len(ordinals), false, true)
-			v.recordScoreStats(stats, plan, len(ordinals))
+			v.recordScoreStats(stats, plan, ordinals...)
 			v.recordMappingStatsCount(stats, len(ordinals))
 		}
 		return dst, true, nil
@@ -793,7 +793,7 @@ func (v *columnVectorGraphPreparedSearchView) scoreOrdinalsIndexedSinglePart(pla
 		} else {
 			stats.ScoreBatchScalarFallbackCalls++
 		}
-		v.recordScoreStats(stats, plan, len(ordinals))
+		v.recordScoreStats(stats, plan, ordinals...)
 		v.recordMappingStatsCount(stats, len(ordinals))
 	}
 	return dst, true, nil
@@ -813,7 +813,8 @@ func (v *columnVectorGraphPreparedSearchView) scorePreparedDot(query []float32, 
 	return score, nil
 }
 
-func (v *columnVectorGraphPreparedSearchView) recordScoreStats(stats *columnVectorGraphNativeSearchStats, plan *columnVectorGraphSearchPlan, count int) {
+func (v *columnVectorGraphPreparedSearchView) recordScoreStats(stats *columnVectorGraphNativeSearchStats, plan *columnVectorGraphSearchPlan, ordinals ...int) {
+	count := len(ordinals)
 	if stats == nil || count <= 0 {
 		return
 	}
@@ -823,11 +824,19 @@ func (v *columnVectorGraphPreparedSearchView) recordScoreStats(stats *columnVect
 	stats.CandidateFetches += uint64(count)
 	stats.VectorBytesRead += uint64(count * v.dims * 4)
 	stats.NormBytesRead += uint64(count * 4)
-	stats.VectorDirectViews += uint64(count)
-	stats.VectorMmapDirectViews += uint64(count)
+	if v.vector.singlePart != nil {
+		recordColumnVectorGraphPreparedVectorOutcomeStats(stats, v.vector.singlePart.outcome, uint64(count))
+	} else {
+		for _, ordinal := range ordinals {
+			if outcome, ok := v.vector.outcomeForOrdinal(ordinal); ok {
+				recordColumnVectorGraphPreparedVectorOutcomeStats(stats, outcome, 1)
+			}
+		}
+	}
 	stats.VectorPreparedDirectViews += uint64(count)
-	stats.NormDirectViews += uint64(count)
-	stats.NormMmapDirectViews += uint64(count)
+	if v.norm.source != nil {
+		recordColumnVectorGraphPreparedNormOutcomeStats(stats, v.norm.source.outcome, uint64(count))
+	}
 	stats.NormPreparedDirectViews += uint64(count)
 	if plan != nil {
 		stats.BlockViewHits = plan.hits

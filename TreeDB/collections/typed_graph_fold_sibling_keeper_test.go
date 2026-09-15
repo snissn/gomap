@@ -199,7 +199,7 @@ func TestTypedGraphFoldRetiresSiblingKeepers(t *testing.T) {
 				}
 			}()
 			before, err := held.FetchDocumentsForVectorIndexSearchResults(response.Results, DocumentFetchOptions{})
-			if err != nil || len(before.Results) != 1 || before.Stats.AssetServingBorrows == 0 {
+			if err != nil || len(before.Results) != 1 || held.assetCounters().servingBorrows == 0 {
 				t.Fatalf("old fetch=%+v stats=%+v error=%v", before.Results, before.Stats, err)
 			}
 			oldDocument := bytes.Clone(before.Results[0].Document)
@@ -234,8 +234,9 @@ func TestTypedGraphFoldRetiresSiblingKeepers(t *testing.T) {
 			}
 			suffixDocs, fetchErr := suffixView.FetchDocumentsByID(ids, DocumentFetchOptions{})
 			suffixAccess, suffixKey := typedGraphServingViewAccessForTest(t, suffixView)
+			suffixAssets := suffixView.assetCounters()
 			closeErr := suffixView.Close()
-			if fetchErr != nil || closeErr != nil || suffixAccess != oldAccess || suffixKey != oldKey || suffixDocs.Stats.AssetServingBorrows == 0 || suffixDocs.Stats.AssetFileOpens == 0 {
+			if fetchErr != nil || closeErr != nil || suffixAccess != oldAccess || suffixKey != oldKey || suffixAssets.servingBorrows == 0 || suffixDocs.Stats.AssetFileOpens == 0 {
 				t.Fatalf("suffix-only holder reuse stats=%+v fetch=%v close=%v same_access=%t same_key=%t", suffixDocs.Stats, fetchErr, closeErr, suffixAccess == oldAccess, suffixKey == oldKey)
 			}
 			var unlisted int
@@ -297,8 +298,9 @@ func TestTypedGraphFoldRetiresSiblingKeepers(t *testing.T) {
 			}
 			foldedDocs, fetchErr := foldedView.FetchDocumentsByID(ids, DocumentFetchOptions{})
 			newAccess, newKey := typedGraphServingViewAccessForTest(t, foldedView)
+			foldedAssets := foldedView.assetCounters()
 			closeErr = foldedView.Close()
-			if fetchErr != nil || closeErr != nil || len(folded.Results) != 1 || len(foldedDocs.Results) != len(ids) || newAccess == oldAccess || newAccess.pool != newPool || newKey != foldedKey || newKey == oldKey || foldedDocs.Stats.AssetServingBorrows == 0 {
+			if fetchErr != nil || closeErr != nil || len(folded.Results) != 1 || len(foldedDocs.Results) != len(ids) || newAccess == oldAccess || newAccess.pool != newPool || newKey != foldedKey || newKey == oldKey || foldedAssets.servingBorrows == 0 {
 				t.Fatalf("folded holder identity/results=%d/%d stats=%+v fetch=%v close=%v", len(folded.Results), len(foldedDocs.Results), foldedDocs.Stats, fetchErr, closeErr)
 			}
 			var oldOnly, newOnly bool
