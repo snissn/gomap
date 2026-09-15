@@ -915,6 +915,8 @@ func TestTypedGraphPublicNoWriteVacuumOwner(t *testing.T) {
 	if err := col.EnsureColumnGraphServing(context.Background(), index, typedGraphPublicTestOptions()); err != nil {
 		t.Fatal(err)
 	}
+	var lastAccess *columnVectorGraphSourceAccess
+	var lastKey columnVectorGraphSharedPreparedSearchKey
 	search := func() (string, error) {
 		var buffer VectorIndexSearchBuffer
 		response, view, err := col.SearchVectorIndexWithBufferReadView(VectorIndexSearchOptions{IndexName: index, Query: columns[0].Float32Vectors[0], TopK: 3, EfSearch: 8, StatsMode: VectorIndexSearchStatsModeProduction, DeclaredScalarFilter: &HybridScalarFilter{IndexName: "path", Value: "source"}}, &buffer)
@@ -926,9 +928,10 @@ func TestTypedGraphPublicNoWriteVacuumOwner(t *testing.T) {
 		if err != nil {
 			return "", err
 		}
-		if len(response.Results) != 3 || docs.Stats.DocumentsMissing != 0 || docs.Stats.DocumentsFetched != 3 {
-			return "", fmt.Errorf("incomplete results=%d fetched=%d missing=%d", len(response.Results), docs.Stats.DocumentsFetched, docs.Stats.DocumentsMissing)
+		if len(response.Results) != 3 || docs.Stats.DocumentsMissing != 0 || docs.Stats.DocumentsFetched != 3 || docs.Stats.AssetServingBorrows == 0 {
+			return "", fmt.Errorf("incomplete results=%d fetched=%d missing=%d serving_borrows=%d", len(response.Results), docs.Stats.DocumentsFetched, docs.Stats.DocumentsMissing, docs.Stats.AssetServingBorrows)
 		}
+		lastAccess, lastKey = typedGraphServingViewAccessForTest(t, view)
 		signature := ""
 		for i, hit := range response.Results {
 			signature += fmt.Sprintf("%q:%g:%q;", hit.ID, hit.Score, docs.Results[i].Document)
@@ -939,6 +942,8 @@ func TestTypedGraphPublicNoWriteVacuumOwner(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	beforeVacuumAccess, beforeVacuumKey := lastAccess, lastKey
+	beforeVacuumPhysical := requireTypedGraphServingPoolReservationsForTest(t, &col.collectionSchemaCoordinator().typedGraphPhysical, beforeVacuumAccess.pool)
 	// Keep a real read owner across relocation and a subsequent accepted write.
 	var heldBuffer VectorIndexSearchBuffer
 	heldResponse, held, err := col.SearchVectorIndexWithBufferReadView(VectorIndexSearchOptions{IndexName: index, Query: columns[0].Float32Vectors[0], TopK: 3, EfSearch: 8, StatsMode: VectorIndexSearchStatsModeProduction}, &heldBuffer)
@@ -949,6 +954,10 @@ func TestTypedGraphPublicNoWriteVacuumOwner(t *testing.T) {
 	oldDocs, err := held.FetchDocumentsForVectorIndexSearchResults(heldResponse.Results, DocumentFetchOptions{})
 	if err != nil {
 		t.Fatal(err)
+	}
+	heldAccess, heldKey := typedGraphServingViewAccessForTest(t, held)
+	if heldAccess != beforeVacuumAccess || heldKey != beforeVacuumKey {
+		t.Fatal("held pre-vacuum view did not reuse the installed exact-base holder")
 	}
 	before := col.collectionSchemaCoordinator().typedPublication.Load()
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -963,8 +972,15 @@ func TestTypedGraphPublicNoWriteVacuumOwner(t *testing.T) {
 	if got != want {
 		t.Fatalf("changed result/document signature got=%s want=%s", got, want)
 	}
+	if lastAccess != beforeVacuumAccess || lastKey != beforeVacuumKey {
+		t.Fatal("coordinate-only vacuum replaced the exact-base holder identity")
+	}
+	afterVacuumPhysical := requireTypedGraphServingPoolReservationsForTest(t, &col.collectionSchemaCoordinator().typedGraphPhysical, beforeVacuumAccess.pool)
+	if afterVacuumPhysical != beforeVacuumPhysical {
+		t.Fatalf("coordinate-only vacuum changed physical resources before=%+v after=%+v", beforeVacuumPhysical, afterVacuumPhysical)
+	}
 	after := col.collectionSchemaCoordinator().typedPublication.Load()
-	if after == before || after.catalog.pager == before.catalog.pager || before.servingBase == after.servingBase {
+	if after == before || after.catalog.pager == before.catalog.pager || before.servingBase == after.servingBase || after.servingBase.refsDigest != beforeVacuumKey.refsDigest {
 		t.Fatal("vacuum did not replace immutable publication coordinates")
 	}
 	changed := []TypedColumnBatch{{Name: "embedding", Float32Vectors: columns[0].Float32Vectors[:1]}, {Name: "content", Strings: []string{"after-vacuum"}}, {Name: "user", Strings: []string{"new"}}, {Name: "path", Strings: []string{"source"}}}

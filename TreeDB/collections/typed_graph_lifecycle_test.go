@@ -138,8 +138,10 @@ func TestTypedGraphLifecyclePublicMutationAndReopen(t *testing.T) {
 						}
 						fetched, fetchErr := view.FetchDocumentsForVectorIndexSearchResults(response.Results, DocumentFetchOptions{})
 						closeErr := view.Close()
-						if fetchErr != nil || closeErr != nil || len(fetched.Results) != 1 || string(fetched.Results[0].ID) != wantID {
-							t.Fatalf("public recovered results=%+v fetch=%v close=%v", fetched.Results, fetchErr, closeErr)
+						baseDocument := operation == "delete"
+						wrongAssetRoute := (baseDocument && fetched.Stats.AssetServingBorrows == 0) || (!baseDocument && fetched.Stats.AssetFileOpens == 0)
+						if fetchErr != nil || closeErr != nil || len(fetched.Results) != 1 || string(fetched.Results[0].ID) != wantID || wrongAssetRoute {
+							t.Fatalf("public recovered results=%+v stats=%+v fetch=%v close=%v", fetched.Results, fetched.Stats, fetchErr, closeErr)
 						}
 						if operation != "delete" && !bytes.Contains(fetched.Results[0].Document, []byte(`"content":"changed"`)) {
 							t.Fatalf("stale document: %s", fetched.Results[0].Document)
