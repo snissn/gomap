@@ -43,6 +43,30 @@ func (a *columnVectorGraphSourceAccess) context(ctx context.Context) context.Con
 	return context.Background()
 }
 
+// authorizesMaterializerAsset classifies one exact parent without touching a
+// segment backing. False means the request-local cache may use its unchanged
+// FileID path; an authorized parent must subsequently borrow and fail closed on
+// any pool error.
+func (a *columnVectorGraphSourceAccess) authorizesMaterializerAsset(rootDir string, parent ColumnAssetRef) (bool, error) {
+	if a == nil || a.pool == nil {
+		return false, ErrVectorIndexSnapshotMismatch
+	}
+	_, authorized, err := a.pool.authorizedRefIndex(rootDir, parent)
+	return authorized, err
+}
+
+// withMaterializerAsset borrows the full exact parent without using the
+// builder's request context, which may have been canceled after holder
+// publication. Materializer cancellation remains checked at its established
+// batch boundaries; the physical read itself has always been synchronous.
+func (a *columnVectorGraphSourceAccess) withMaterializerAsset(rootDir string, parent ColumnAssetRef, scope mappedresource.Scope, fn func(columnServingBorrowedRange) error) error {
+	if a == nil || a.pool == nil {
+		return ErrVectorIndexSnapshotMismatch
+	}
+	key := mappedResourceKeyForColumnAssetRef(parent)
+	return a.pool.withBorrowedRange(context.Background(), rootDir, parent, 0, parent.Length, key, scope, fn)
+}
+
 // acquireRange authorizes the exact parent before the pool performs any
 // FileID lookup, then transfers the ordinary mappedresource handle to the
 // existing source owner. The logical key still names only the requested

@@ -252,9 +252,11 @@ type columnServingRangeHandle struct {
 }
 
 // columnServingBorrowedRange exists only for the duration of a
-// withBorrowedRange callback. A materializer may use the mapped view directly
-// during that callback or ReadAt into request-owned scratch. It must not retain
-// file, bytes, or identity beyond the callback.
+// withBorrowedRange callback. It must never escape or be retained. A
+// materializer may retain only Bytes() when its read view owns the enclosing
+// serving-holder capability: that view closes its caches and logical handles
+// before releasing the holder/pool. Descriptor fallback always uses ReadAt
+// into request-owned scratch.
 type columnServingBorrowedRange struct {
 	bytes          []byte
 	file           *os.File
@@ -699,16 +701,30 @@ func (s *columnServingSegmentLeaseSet) matchesAuthority(rootDir, namespace strin
 	return true
 }
 
-func (s *columnServingSegmentLeaseSet) authorize(rootDir string, parent ColumnAssetRef) (*columnServingSegmentLease, *columnServingRefFallback, error) {
+// authorizedRefIndex performs the complete exact-parent authority decision.
+// It deliberately does not inspect the segment inventory: mapped prefix or
+// FileID co-location is storage, never authority.
+func (s *columnServingSegmentLeaseSet) authorizedRefIndex(rootDir string, parent ColumnAssetRef) (int, bool, error) {
 	if s == nil {
-		return nil, nil, errColumnServingSegmentUnauthorized
+		return 0, false, errColumnServingSegmentUnauthorized
+	}
+	if err := validateColumnAssetRefForPlan(parent); err != nil {
+		return 0, false, err
 	}
 	rootDir, err := normalizeColumnServingRoot(rootDir)
 	if err != nil || rootDir != s.rootDir || parent.Namespace != s.namespace {
-		return nil, nil, fmt.Errorf("%w: root or namespace mismatch", errColumnServingSegmentUnauthorized)
+		return 0, false, fmt.Errorf("%w: root or namespace mismatch", errColumnServingSegmentUnauthorized)
 	}
 	i := sort.Search(len(s.refs), func(i int) bool { return compareColumnAssetRefs(s.refs[i], parent) >= 0 })
-	if i == len(s.refs) || compareColumnAssetRefs(s.refs[i], parent) != 0 {
+	return i, i < len(s.refs) && compareColumnAssetRefs(s.refs[i], parent) == 0, nil
+}
+
+func (s *columnServingSegmentLeaseSet) authorize(rootDir string, parent ColumnAssetRef) (*columnServingSegmentLease, *columnServingRefFallback, error) {
+	i, authorized, err := s.authorizedRefIndex(rootDir, parent)
+	if err != nil {
+		return nil, nil, err
+	}
+	if !authorized {
 		return nil, nil, fmt.Errorf("%w: ref=%+v", errColumnServingSegmentUnauthorized, parent)
 	}
 	if i >= len(s.fallbacks) {
@@ -1480,7 +1496,9 @@ func (s *columnServingSegmentLeaseSet) acquireRange(ctx context.Context, rootDir
 // withBorrowedRange is the synchronous setup/materializer physical seam. It
 // never populates a pool-owned ref fallback. The callback executes while a pool
 // use protects either the exact mapped slice or the shared segment descriptor
-// and identity; any ReadAt destination remains callback/request-owned.
+// and identity; any ReadAt destination remains callback/request-owned. Only a
+// materializer structurally nested inside a holder capability may retain the
+// mapped slice after the callback, and only until its cache closes.
 func (s *columnServingSegmentLeaseSet) withBorrowedRange(ctx context.Context, rootDir string, parent ColumnAssetRef, relativeOffset, length int64, key mappedresource.Key, scope mappedresource.Scope, fn func(columnServingBorrowedRange) error) error {
 	if fn == nil {
 		return errors.New("collections: serving segment borrowed range callback is required")

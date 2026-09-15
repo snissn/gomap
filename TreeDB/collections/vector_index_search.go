@@ -296,6 +296,10 @@ type VectorIndexSearchStats struct {
 	DocumentAssetFileOpens uint64 `json:"document_asset_file_opens,omitempty"`
 	// DocumentAssetFileCloses counts materializer asset segment file closes.
 	DocumentAssetFileCloses uint64 `json:"document_asset_file_closes,omitempty"`
+	// DocumentAssetServingBorrows counts exact base-asset reads borrowed from the
+	// typed serving holder. These do not relabel request-local mmap, ReadAt, or
+	// file-open counters.
+	DocumentAssetServingBorrows uint64 `json:"document_asset_serving_borrows,omitempty"`
 	// DocumentAssetActiveHandles is the current active mappedresource handle count held by the materializer read view.
 	DocumentAssetActiveHandles int64 `json:"document_asset_active_handles,omitempty"`
 
