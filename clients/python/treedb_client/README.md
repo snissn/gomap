@@ -50,7 +50,13 @@ scalar-u8/v1 score plane. The separate `typed_dense_quantized_rerank` index
 capability is required; benchmark quantized capabilities do not imply it.
 Both versions require caller-held selected typed `IndexInfo` returned by HTTP
 create/open/ensure. Its generation is sent as the server guard; conflicting
-explicit generations fail. Create/build/admission and reopen re-admission
+explicit generations fail. For v3, omitted or zero `ef_search` is resolved from
+that `IndexInfo` and sent as a positive value so `score_plane.requested_ef_search`
+authenticates the candidate-width bound. Raw v3 clients must likewise send a
+positive EF; zero/default resolution is not deferred across the native wire.
+HTTP success proofs instead bind an omitted EF to the returned index's positive
+`vector_ef_search`; a wider error prefix is retained only when generation-bound
+caller `IndexInfo` authenticates the same default. Create/build/admission and reopen re-admission
 remain explicit HTTP control operations. Dense results contain content/meta
 from the same search owner and are Python-owned after return. Embedding echo is
 opt-in with `return_embedding=True` on either HTTP or native; the default is

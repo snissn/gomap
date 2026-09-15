@@ -818,6 +818,11 @@ leaves. Each leaf contains a length-prefixed field, one-byte operator
 (`1 ==`, `2 >`, `3 >=`, `4 <`, `5 <=`), and a typed value: `1` UTF-8 string,
 `2` bool, `3` signed zigzag int64, or `4` little-endian float64. Existing bounds
 include 16 filter levels and 64 leaves; unsupported operators fail closed.
+Version 3 requires a positive efSearch. A caller using the index default resolves
+it from generation-bound index metadata before encoding, so the score-plane
+`requested_ef_search` is the authenticated candidate-width bound; raw zero is
+rejected by both the native client and server. Versions 1 and 2 retain their
+existing zero/default behavior.
 
 Response sections are ordered IDs (102), requested JSON documents (103), and
 `dense_search_response` (130). The metadata payload contains one route byte,
@@ -868,7 +873,7 @@ quantized calls equal graph base-ANN scoring, exact base calls equal graph
 exact-base/result-ID counts, and exact suffix calls equal graph delta scoring.
 Every completed or incomplete proof pair also preserves the producer prefix
 bounds: graph base candidates do not exceed quantized calls; `R = min(E,
-requested rerank candidates or E)`; explicit EF bounds `E`; retained candidates
+requested rerank candidates or E)`; the positive v3 EF bounds `E`; retained candidates
 do not exceed quantized calls or `C`; live candidates do not exceed retained
 candidates or `E`; and actual reranks do not exceed live candidates or `R` and
 equal completed exact-base rerank calls. A zero `E` additionally requires zero

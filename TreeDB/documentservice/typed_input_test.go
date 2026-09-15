@@ -154,15 +154,24 @@ func TestValidateDenseTypedQuantizedVectorSearchRouteBindsServiceGeneration(t *t
 	}
 	response := collections.VectorIndexSearchResponse{Stats: collections.VectorIndexSearchStats{ColumnGraphWork: collections.ColumnGraphQueryWork{ScorePlane: proof}}}
 	request := DenseVectorSearchRequest{TopK: 1, QueryMode: collections.VectorIndexQueryModeQuantizedRerank, QuantizedIndexName: proof.QuantizedIndexName}
-	if err := validateDenseTypedQuantizedVectorSearchRoute(response, request, 2); err != nil {
+	if err := validateDenseTypedQuantizedVectorSearchRoute(response, request, 2, 64); err != nil {
 		t.Fatalf("newer aggregate service generation rejected: %v", err)
 	}
-	if err := validateDenseTypedQuantizedVectorSearchRoute(response, request, 0); err == nil {
+	if err := validateDenseTypedQuantizedVectorSearchRoute(response, request, 0, 64); err == nil {
 		t.Fatal("zero service generation accepted")
 	}
 	response.Stats.ColumnGraphWork.ScorePlane.Snapshot.SchemaGeneration = 3
-	if err := validateDenseTypedQuantizedVectorSearchRoute(response, request, 2); err == nil {
+	if err := validateDenseTypedQuantizedVectorSearchRoute(response, request, 2, 64); err == nil {
 		t.Fatal("snapshot newer than service generation accepted")
+	}
+	response.Stats.ColumnGraphWork.ScorePlane.Snapshot.SchemaGeneration = 1
+	response.Stats.ColumnGraphWork.ScorePlane.NormalizedCandidateWidth = 65
+	if err := validateDenseTypedQuantizedVectorSearchRoute(response, request, 2, 64); err == nil {
+		t.Fatal("candidate width above the resolved index default was accepted")
+	}
+	response.Stats.ColumnGraphWork.ScorePlane.NormalizedCandidateWidth = 1
+	if err := validateDenseTypedQuantizedVectorSearchRoute(response, request, 2, 0); err == nil {
+		t.Fatal("zero persisted index default was accepted")
 	}
 }
 

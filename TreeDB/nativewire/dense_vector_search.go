@@ -125,6 +125,13 @@ func (c *Client) DenseVectorSearch(ctx context.Context, request DenseVectorSearc
 		{ID: iwire.SectionDeadline, Bytes: binary.AppendUvarint(nil, uint64(deadline.UnixNano()))},
 	}
 	if version == iwire.DenseVectorSearchTypedQuantizedVersion {
+		// The selected v3 proof must bind the candidate width to a concrete
+		// request value. Zero means "use the index default" to the service, but
+		// the native response does not carry authenticated index metadata. Native
+		// callers therefore resolve the positive default before encoding.
+		if request.EfSearch == 0 {
+			return DenseVectorSearchResponse{}, protocolError(iwire.ErrInvalidCommand, "typed dense quantized search requires an explicit positive ef_search")
+		}
 		options, optionsErr := appendDenseQuantizedOptions(nil, request, c.limits)
 		if optionsErr != nil {
 			return DenseVectorSearchResponse{}, optionsErr
@@ -820,6 +827,9 @@ func (s *Server) handleVersionedDenseVectorSearch(ctx context.Context, state *co
 		request.QueryMode = options.QueryMode
 		request.QuantizedIndexName = options.QuantizedIndexName
 		request.QuantizedRerankCandidates = options.QuantizedRerankCandidates
+		if request.EfSearch == 0 {
+			return nil, protocolError(iwire.ErrInvalidCommand, "typed dense quantized search requires an explicit positive ef_search")
+		}
 	}
 	response, err := s.documentService.SearchDenseVectorNativeRawInto(ctx, request.Index, documentservice.DenseVectorSearchRequest{
 		ExpectedGeneration:        request.ExpectedGeneration,

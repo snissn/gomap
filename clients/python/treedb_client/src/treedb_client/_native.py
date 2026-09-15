@@ -441,6 +441,7 @@ def _dense_response(body, top_k, version=2, *, query_mode=None, quantized_index_
                 or score_plane.quantized_index_name != (quantized_index_name or score_plane.quantized_index_name)
                 or score_plane.requested_top_k != top_k
                 or (ef_search is not None and score_plane.requested_ef_search != ef_search)
+                or (ef_search is not None and score_plane.normalized_candidate_width > max(top_k, ef_search))
                 or score_plane.requested_rerank_candidates != quantized_rerank_candidates):
             raise TreeDBProtocolError("native dense score-plane proof does not match the request", dense_work=work, score_plane=score_plane)
     if not work.completed or work.output.fetched != count or work.output.output_bytes != sum(map(len, docs)):

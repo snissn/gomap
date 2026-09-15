@@ -772,6 +772,45 @@ class TreeDBClientTests(unittest.TestCase):
                 expected_generation=1,
             )
             self.assertEqual(result.documents[0].id, "a")
+            default_width_boundary = copy.deepcopy(payload)
+            default_width_boundary["score_plane"].update(
+                normalized_candidate_width=64,
+                raw_candidate_width=64,
+                rerank_candidate_cap=64,
+            )
+            with mock.patch.object(client, "_request", return_value=default_width_boundary):
+                boundary = client.query_by_embedding(
+                    "docs", [1, 0], 1, query_mode="quantized_rerank",
+                    quantized_index_name="embedding.scalar_u8.public",
+                )
+            self.assertEqual(boundary.score_plane.normalized_candidate_width, 64)
+            explicit_ef = copy.deepcopy(payload)
+            explicit_ef["score_plane"]["requested_ef_search"] = 8
+            with mock.patch.object(client, "_request", return_value=explicit_ef):
+                explicit = client.query_by_embedding(
+                    "docs", [1, 0], 1, ef_search=8, query_mode="quantized_rerank",
+                    quantized_index_name="embedding.scalar_u8.public",
+                )
+            self.assertEqual(explicit.score_plane.requested_ef_search, 8)
+            default_width_overflow = copy.deepcopy(payload)
+            default_width_overflow["score_plane"].update(
+                normalized_candidate_width=65,
+                raw_candidate_width=65,
+                rerank_candidate_cap=65,
+            )
+            zero_index_default = copy.deepcopy(payload)
+            zero_index_default["index"]["vector_ef_search"] = 0
+            for name, candidate in (
+                ("width above index default", default_width_overflow),
+                ("nonpositive index default", zero_index_default),
+            ):
+                with self.subTest(http_default_ef=name), \
+                     mock.patch.object(client, "_request", return_value=candidate), \
+                     self.assertRaisesRegex(TreeDBProtocolError, "score-plane proof"):
+                    client.query_by_embedding(
+                        "docs", [1, 0], 1, query_mode="quantized_rerank",
+                        quantized_index_name="embedding.scalar_u8.public",
+                    )
             embedded_payload = copy.deepcopy(payload)
             embedded_payload["documents"][0]["embedding"] = [1, 0]
             with mock.patch.object(client, "_request", return_value=embedded_payload):
@@ -1012,6 +1051,28 @@ class TreeDBClientTests(unittest.TestCase):
                         self.assertIsNotNone(caught.exception.dense_work)
                         self.assertIsNotNone(caught.exception.score_plane)
                         error_client.close()
+            wide_default_error = copy.deepcopy(error_payload)
+            wide_default_error["error"]["score_plane"].update(
+                normalized_candidate_width=2,
+                raw_candidate_width=2,
+                rerank_candidate_cap=2,
+            )
+            with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (503, wide_default_error, 0)}) as error_server:
+                error_client = TreeDBClient(error_server.base_url, timeout=1)
+                with self.assertRaisesRegex(TreeDBProtocolError, "proof does not match the request"):
+                    error_client.query_by_embedding(
+                        "docs", [1, 0], 1, query_mode="quantized_rerank",
+                        quantized_index_name="embedding.scalar_u8.public",
+                    )
+                with self.assertRaises(IndexUnavailableError) as caught:
+                    error_client.query_by_embedding(
+                        "docs", [1, 0], 1, query_mode="quantized_rerank",
+                        quantized_index_name="embedding.scalar_u8.public",
+                        index_info=result.index,
+                        expected_generation=result.index.generation,
+                    )
+                self.assertEqual(caught.exception.score_plane.normalized_candidate_width, 2)
+                error_client.close()
             work_only_cases = [("pre-owner", pre_owner, False)]
             work_only_cases.extend(
                 (route, replace(pre_owner, graph=replace(pre_owner.graph, route=route)), True)

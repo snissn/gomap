@@ -37,7 +37,7 @@ class NativeCodecTests(unittest.TestCase):
         work_values[34] = len(b'{"id":"a"}')
         raw_work = b"".join(_uint(value) for value in work_values)
         meta = bytes.fromhex("0301000001000000000000f03f")
-        values = [1, 7, 2, 2, 3, 1, 0, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 2, 1, 0, 0, 8, 0, 7, 1, 2, 2]
+        values = [1, 7, 2, 2, 3, 1, 0, 1, 64, 0, 1, 1, 1, 1, 1, 1, 1, 2, 1, 0, 0, 8, 0, 7, 1, 2, 2]
 
         def score_plane_bytes(candidate_values, reason=""):
             return (
@@ -62,7 +62,7 @@ class NativeCodecTests(unittest.TestCase):
 
         body = response_body(b'{"id":"a"}')
         info = SimpleNamespace(
-            name="a", dimension=2, generation=2, vector_strategy="column_graph", metric="cosine",
+            name="a", dimension=2, generation=2, vector_strategy="column_graph", metric="cosine", vector_ef_search=64,
             extra={"typed_input": True},
             capabilities=SimpleNamespace(typed_dense_quantized_rerank=True),
             quantized_indexes=[SimpleNamespace(name="embedding.scalar_u8.public", codec="scalar_u8", version=1, scalar_u8_calibration=None)],
@@ -74,6 +74,12 @@ class NativeCodecTests(unittest.TestCase):
                 parsed = _sections(sections, {4, 129, 135}, {135})
                 self.assertIn(135, parsed)
                 self.assertEqual(parsed[135], _dense_quantized_options("quantized_rerank", "embedding.scalar_u8.public", 0))
+                request_offset = 0
+                index_len, request_offset = _read_uint(parsed[129], request_offset)
+                request_offset += index_len
+                _, request_offset = _read_uint(parsed[129], request_offset)  # top_k
+                resolved_ef, request_offset = _read_uint(parsed[129], request_offset)
+                self.assertEqual(resolved_ef, info.vector_ef_search)
                 return body
             with mock.patch.object(client._native, "command", side_effect=command):
                 response = client.query_by_embedding("a", [1, 0], 1, query_mode="quantized_rerank",
@@ -81,6 +87,13 @@ class NativeCodecTests(unittest.TestCase):
             self.assertEqual(response.native_command_version, 3)
             self.assertIsNotNone(response.score_plane)
             self.assertEqual(response.score_plane.quantized_index_name, "embedding.scalar_u8.public")
+            invalid_default_info = copy.copy(info)
+            invalid_default_info.vector_ef_search = 0
+            with self.assertRaisesRegex(TreeDBConfigError, "positive IndexInfo vector_ef_search"):
+                client.query_by_embedding(
+                    "a", [1, 0], 1, query_mode="quantized_rerank",
+                    quantized_index_name="embedding.scalar_u8.public", index_info=invalid_default_info,
+                )
             with self.assertRaisesRegex(TreeDBProtocolError, "not critical"):
                 _sections(_section(135, b"", critical=False), {135}, {135})
             for name, candidate_body in (
@@ -237,7 +250,7 @@ class NativeCodecTests(unittest.TestCase):
             _dense_response(
                 hostile_body, 1, version=3, query_mode="quantized_rerank",
                 quantized_index_name="embedding.scalar_u8.public", quantized_rerank_candidates=0,
-                ef_search=0, query_dimension=2,
+                ef_search=64, query_dimension=2,
             )
             hostile_work_values[4] = 1
             with self.assertRaisesRegex(TreeDBProtocolError, "score-plane proof"):
@@ -247,7 +260,7 @@ class NativeCodecTests(unittest.TestCase):
                     _section(136, hostile_plane),
                     1, version=3, query_mode="quantized_rerank",
                     quantized_index_name="embedding.scalar_u8.public", quantized_rerank_candidates=0,
-                    ef_search=0, query_dimension=2,
+                    ef_search=64, query_dimension=2,
                 )
             zero_hash_work_values = list(work_values)
             zero_hash_work_values[19] = 0
@@ -260,7 +273,7 @@ class NativeCodecTests(unittest.TestCase):
                     _section(136, score_plane_bytes(zero_hash_plane_values)),
                     1, version=3, query_mode="quantized_rerank",
                     quantized_index_name="embedding.scalar_u8.public", quantized_rerank_candidates=0,
-                    ef_search=0, query_dimension=2,
+                    ef_search=64, query_dimension=2,
                 )
             native_error = _section(2, _uint(1) + b"\x00" + _bytes_for_test("native error"))
             pre_owner_values = list(work_values)
@@ -366,13 +379,13 @@ class NativeCodecTests(unittest.TestCase):
                     + _section(136, bytes(missing_reason_proof)),
                     1, version=3, query_mode="quantized_rerank",
                     quantized_index_name="embedding.scalar_u8.public", quantized_rerank_candidates=0,
-                    ef_search=0, query_dimension=2,
+                    ef_search=64, query_dimension=2,
                 )
             self.assertEqual(caught.exception.dense_work, _dense_work(
                 b"".join(_uint(value) for value in graph_incomplete_values)
             ))
             self.assertIsNone(caught.exception.score_plane)
-            def prefix_shape_case(name, work_updates=(), proof_updates=(), ef_search=0):
+            def prefix_shape_case(name, work_updates=(), proof_updates=(), ef_search=64):
                 candidate_work = list(graph_incomplete_values)
                 candidate_proof = list(proof_incomplete_values)
                 for index, value in work_updates:
@@ -491,7 +504,7 @@ class NativeCodecTests(unittest.TestCase):
                     _section(136, reversed_plane),
                     1, version=3, query_mode="quantized_rerank",
                     quantized_index_name="embedding.scalar_u8.public", quantized_rerank_candidates=0,
-                    ef_search=0, query_dimension=2,
+                    ef_search=64, query_dimension=2,
                 )
             reversed_manifest_work_values = list(work_values)
             reversed_manifest_work_values[23], reversed_manifest_work_values[27] = 2, 1
@@ -503,7 +516,7 @@ class NativeCodecTests(unittest.TestCase):
                     _section(136, reversed_manifest_plane),
                     1, version=3, query_mode="quantized_rerank",
                     quantized_index_name="embedding.scalar_u8.public", quantized_rerank_candidates=0,
-                    ef_search=0, query_dimension=2, expected_generation=2,
+                    ef_search=64, query_dimension=2, expected_generation=2,
                 )
             newer_generation_work_values = list(work_values)
             newer_generation_work_values[20] = 3
@@ -518,7 +531,7 @@ class NativeCodecTests(unittest.TestCase):
                     _section(136, newer_generation_plane),
                     1, version=3, query_mode="quantized_rerank",
                     quantized_index_name="embedding.scalar_u8.public", quantized_rerank_candidates=0,
-                    ef_search=0, query_dimension=2, expected_generation=2,
+                    ef_search=64, query_dimension=2, expected_generation=2,
                 )
             boundary_document = b'{"id":"\\u001ca"}'
             boundary_work_values = list(work_values)
@@ -529,7 +542,7 @@ class NativeCodecTests(unittest.TestCase):
                 _section(136, score_plane),
                 1, version=3, query_mode="quantized_rerank",
                 quantized_index_name="embedding.scalar_u8.public", quantized_rerank_candidates=0,
-                ef_search=0, query_dimension=2, expected_generation=2,
+                ef_search=64, query_dimension=2, expected_generation=2,
             )
             self.assertEqual(boundary[0], [b"\x1ca"])
             for name, offset in (("generation", -8), ("version", -6), ("checksum", -5)):
@@ -542,7 +555,7 @@ class NativeCodecTests(unittest.TestCase):
                         _section(136, bytes(incomplete_manifest_plane)),
                         1, version=3, query_mode="quantized_rerank",
                         quantized_index_name="embedding.scalar_u8.public", quantized_rerank_candidates=0,
-                        ef_search=0, query_dimension=2,
+                        ef_search=64, query_dimension=2,
                     )
             filtered_work_values = list(work_values)
             filtered_work_values[1] |= (1 << 3) | (1 << 4)
@@ -556,19 +569,19 @@ class NativeCodecTests(unittest.TestCase):
             _dense_response(
                 filtered_body, 1, version=3, query_mode="quantized_rerank",
                 quantized_index_name="embedding.scalar_u8.public", quantized_rerank_candidates=0,
-                ef_search=0, query_dimension=2, filter_requested=True,
+                ef_search=64, query_dimension=2, filter_requested=True,
             )
             with self.assertRaises(TreeDBProtocolError):
                 _dense_response(
                     body, 1, version=3, query_mode="quantized_rerank",
                     quantized_index_name="embedding.scalar_u8.public", quantized_rerank_candidates=0,
-                    ef_search=0, query_dimension=2, filter_requested=True,
+                    ef_search=64, query_dimension=2, filter_requested=True,
                 )
             with self.assertRaises(TreeDBProtocolError):
                 _dense_response(
                     filtered_body, 1, version=3, query_mode="quantized_rerank",
                     quantized_index_name="embedding.scalar_u8.public", quantized_rerank_candidates=0,
-                    ef_search=0, query_dimension=2,
+                    ef_search=64, query_dimension=2,
                 )
             underfilled_work_values = list(filtered_work_values)
             underfilled_work_values[10] = 2
@@ -584,7 +597,7 @@ class NativeCodecTests(unittest.TestCase):
                     _section(136, underfilled_plane),
                     2, version=3, query_mode="quantized_rerank",
                     quantized_index_name="embedding.scalar_u8.public", quantized_rerank_candidates=0,
-                    ef_search=0, query_dimension=2, filter_requested=True,
+                    ef_search=64, query_dimension=2, filter_requested=True,
                 )
             over_scored_work_values = list(filtered_work_values)
             over_scored_work_values[2] = 2  # typed_exact
@@ -604,7 +617,7 @@ class NativeCodecTests(unittest.TestCase):
                     _section(136, over_scored_plane),
                     1, version=3, query_mode="quantized_rerank",
                     quantized_index_name="embedding.scalar_u8.public", quantized_rerank_candidates=0,
-                    ef_search=0, query_dimension=2, filter_requested=True,
+                    ef_search=64, query_dimension=2, filter_requested=True,
                 )
             zero_width_work_values = list(filtered_work_values)
             zero_width_work_values[2] = 2  # typed_exact
@@ -627,7 +640,7 @@ class NativeCodecTests(unittest.TestCase):
                 zero_width_body(zero_width_work_values, zero_width_values),
                 1, version=3, query_mode="quantized_rerank",
                 quantized_index_name="embedding.scalar_u8.public", quantized_rerank_candidates=0,
-                ef_search=0, query_dimension=2, filter_requested=True,
+                ef_search=64, query_dimension=2, filter_requested=True,
             )
             zero_width_hostiles = []
             nonzero_raw = list(zero_width_values)
@@ -646,7 +659,7 @@ class NativeCodecTests(unittest.TestCase):
                         zero_width_body(candidate_work, candidate_proof),
                         1, version=3, query_mode="quantized_rerank",
                         quantized_index_name="embedding.scalar_u8.public", quantized_rerank_candidates=0,
-                        ef_search=0, query_dimension=2, filter_requested=True,
+                        ef_search=64, query_dimension=2, filter_requested=True,
                     )
             for route_tag, score_calls in ((4, 1), (3, 0)):  # typed_hnsw and zero-work rerank proofs are invalid.
                 invalid_values = list(values)
@@ -663,7 +676,7 @@ class NativeCodecTests(unittest.TestCase):
                         query_mode="quantized_rerank",
                         quantized_index_name="embedding.scalar_u8.public",
                         quantized_rerank_candidates=0,
-                        ef_search=0,
+                        ef_search=64,
                         query_dimension=2,
                     )
             hash_values = list(values)
@@ -679,7 +692,7 @@ class NativeCodecTests(unittest.TestCase):
                     query_mode="quantized_rerank",
                     quantized_index_name="embedding.scalar_u8.public",
                     quantized_rerank_candidates=0,
-                    ef_search=0,
+                    ef_search=64,
                     query_dimension=2,
                 )
             underfill_work_values = list(work_values)
@@ -693,7 +706,7 @@ class NativeCodecTests(unittest.TestCase):
                     query_mode="quantized_rerank",
                     quantized_index_name="embedding.scalar_u8.public",
                     quantized_rerank_candidates=0,
-                    ef_search=0,
+                    ef_search=64,
                     query_dimension=2,
                 )
 
@@ -708,7 +721,7 @@ class NativeCodecTests(unittest.TestCase):
                     query_mode="quantized_rerank",
                     quantized_index_name="embedding.scalar_u8.public",
                     quantized_rerank_candidates=0,
-                    ef_search=0,
+                    ef_search=64,
                     query_dimension=2,
                 )
             wrong_work_values = list(work_values)
@@ -723,7 +736,7 @@ class NativeCodecTests(unittest.TestCase):
                     query_mode="quantized_rerank",
                     quantized_index_name="embedding.scalar_u8.public",
                     quantized_rerank_candidates=0,
-                    ef_search=0,
+                    ef_search=64,
                     query_dimension=2,
                 )
             for field, value in ((17, 0), (21, 0), (22, 1)):
@@ -740,7 +753,7 @@ class NativeCodecTests(unittest.TestCase):
                         query_mode="quantized_rerank",
                         quantized_index_name="embedding.scalar_u8.public",
                         quantized_rerank_candidates=0,
-                        ef_search=0,
+                        ef_search=64,
                         query_dimension=2,
                     )
             counter_values = list(values)
@@ -756,7 +769,7 @@ class NativeCodecTests(unittest.TestCase):
                     query_mode="quantized_rerank",
                     quantized_index_name="embedding.scalar_u8.public",
                     quantized_rerank_candidates=0,
-                    ef_search=0,
+                    ef_search=64,
                     query_dimension=2,
                 )
             candidate_work_values = list(work_values)
@@ -770,7 +783,7 @@ class NativeCodecTests(unittest.TestCase):
                     query_mode="quantized_rerank",
                     quantized_index_name="embedding.scalar_u8.public",
                     quantized_rerank_candidates=0,
-                    ef_search=0,
+                    ef_search=64,
                     query_dimension=2,
                 )
             overflow_docs = _vector([b"a", b"b"])
@@ -784,7 +797,7 @@ class NativeCodecTests(unittest.TestCase):
                     query_mode="quantized_rerank",
                     quantized_index_name="embedding.scalar_u8.public",
                     quantized_rerank_candidates=0,
-                    ef_search=0,
+                    ef_search=64,
                     query_dimension=2,
                 )
             invalid_result_meta = {
@@ -802,7 +815,7 @@ class NativeCodecTests(unittest.TestCase):
                         query_mode="quantized_rerank",
                         quantized_index_name="embedding.scalar_u8.public",
                         quantized_rerank_candidates=0,
-                        ef_search=0,
+                        ef_search=64,
                         query_dimension=2,
                     )
                 self.assertEqual(caught.exception.dense_work, _dense_work(raw_work))
@@ -824,7 +837,7 @@ class NativeCodecTests(unittest.TestCase):
                         query_mode="quantized_rerank",
                         quantized_index_name="embedding.scalar_u8.public",
                         quantized_rerank_candidates=0,
-                        ef_search=0,
+                        ef_search=64,
                         query_dimension=2,
                     )
                 self.assertIsNotNone(caught.exception.dense_work)
@@ -852,7 +865,7 @@ class NativeCodecTests(unittest.TestCase):
                         query_mode="quantized_rerank",
                         quantized_index_name="embedding.scalar_u8.public",
                         quantized_rerank_candidates=0,
-                        ef_search=0,
+                        ef_search=64,
                         query_dimension=2,
                     )
                 self.assertIsNotNone(caught.exception.dense_work)
@@ -874,7 +887,7 @@ class NativeCodecTests(unittest.TestCase):
                     query_mode="quantized_rerank",
                     quantized_index_name="embedding.scalar_u8.public",
                     quantized_rerank_candidates=0,
-                    ef_search=0,
+                    ef_search=64,
                     query_dimension=2,
                 )
             inconsistent_values = list(values)
@@ -891,7 +904,7 @@ class NativeCodecTests(unittest.TestCase):
                     query_mode="quantized_rerank",
                     quantized_index_name="embedding.scalar_u8.public",
                     quantized_rerank_candidates=0,
-                    ef_search=0,
+                    ef_search=64,
                     query_dimension=2,
                 )
             capped_values = list(values)
@@ -909,7 +922,7 @@ class NativeCodecTests(unittest.TestCase):
                     query_mode="quantized_rerank",
                     quantized_index_name="embedding.scalar_u8.public",
                     quantized_rerank_candidates=2,
-                    ef_search=0,
+                    ef_search=64,
                     query_dimension=2,
                 )
             for field, value in ((12, 2), (14, 2), (10, 2)):
@@ -933,7 +946,7 @@ class NativeCodecTests(unittest.TestCase):
                         query_mode="quantized_rerank",
                         quantized_index_name="embedding.scalar_u8.public",
                         quantized_rerank_candidates=0,
-                        ef_search=0,
+                        ef_search=64,
                         query_dimension=2,
                     )
             for field in (16, 19, 20):
@@ -958,7 +971,7 @@ class NativeCodecTests(unittest.TestCase):
                         query_mode="quantized_rerank",
                         quantized_index_name="embedding.scalar_u8.public",
                         quantized_rerank_candidates=0,
-                        ef_search=0,
+                        ef_search=64,
                         query_dimension=2,
                     )
             empty_values = list(values)
@@ -981,7 +994,7 @@ class NativeCodecTests(unittest.TestCase):
                 query_mode="quantized_rerank",
                 quantized_index_name="embedding.scalar_u8.public",
                 quantized_rerank_candidates=0,
-                ef_search=0,
+                ef_search=64,
                 query_dimension=2,
                 filter_requested=True,
             )
@@ -1000,7 +1013,7 @@ class NativeCodecTests(unittest.TestCase):
                         query_mode="quantized_rerank",
                         quantized_index_name="embedding.scalar_u8.public",
                         quantized_rerank_candidates=0,
-                        ef_search=0,
+                        ef_search=64,
                         query_dimension=2,
                         filter_requested=True,
                     )

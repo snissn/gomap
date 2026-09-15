@@ -1843,7 +1843,10 @@ func TestDenseTypedQuantizedNativePublicPath(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer cleanup()
-	response, err := client.DenseVectorSearch(ctx, DenseVectorSearchRequest{TypedColumnGraph: true, Index: info.Name, Query: []float32{1, 0}, TopK: 1, QueryMode: collections.VectorIndexQueryModeQuantizedRerank, QuantizedIndexName: "embedding.scalar_u8.public", ExpectedGeneration: info.Generation})
+	if _, err := client.DenseVectorSearch(ctx, DenseVectorSearchRequest{TypedColumnGraph: true, Index: info.Name, Query: []float32{1, 0}, TopK: 1, QueryMode: collections.VectorIndexQueryModeQuantizedRerank, QuantizedIndexName: "embedding.scalar_u8.public", ExpectedGeneration: info.Generation}); nativeCodeOf(err) != iwire.ErrInvalidCommand {
+		t.Fatalf("native v3 zero/default ef_search was not rejected before dispatch: %v", err)
+	}
+	response, err := client.DenseVectorSearch(ctx, DenseVectorSearchRequest{TypedColumnGraph: true, Index: info.Name, Query: []float32{1, 0}, TopK: 1, EfSearch: info.VectorEfSearch, QueryMode: collections.VectorIndexQueryModeQuantizedRerank, QuantizedIndexName: "embedding.scalar_u8.public", ExpectedGeneration: info.Generation})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1851,14 +1854,14 @@ func TestDenseTypedQuantizedNativePublicPath(t *testing.T) {
 		t.Fatalf("native v3 response=%+v", response)
 	}
 	owned := response.ScorePlane
-	response2, err := client.DenseVectorSearch(ctx, DenseVectorSearchRequest{TypedColumnGraph: true, Index: info.Name, Query: []float32{0, 1}, TopK: 1, QueryMode: collections.VectorIndexQueryModeQuantizedRerank, QuantizedIndexName: "embedding.scalar_u8.public", ExpectedGeneration: info.Generation})
+	response2, err := client.DenseVectorSearch(ctx, DenseVectorSearchRequest{TypedColumnGraph: true, Index: info.Name, Query: []float32{0, 1}, TopK: 1, EfSearch: info.VectorEfSearch, QueryMode: collections.VectorIndexQueryModeQuantizedRerank, QuantizedIndexName: "embedding.scalar_u8.public", ExpectedGeneration: info.Generation})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if owned == response2.ScorePlane || owned.QuantizedIndexName != "embedding.scalar_u8.public" {
 		t.Fatal("score-plane proof was reused or borrowed")
 	}
-	request := DenseVectorSearchRequest{TypedColumnGraph: true, Index: info.Name, Query: []float32{1, 0}, TopK: 1, QueryMode: collections.VectorIndexQueryModeQuantizedRerank, QuantizedIndexName: "embedding.scalar_u8.public", ExpectedGeneration: info.Generation}
+	request := DenseVectorSearchRequest{TypedColumnGraph: true, Index: info.Name, Query: []float32{1, 0}, TopK: 1, EfSearch: info.VectorEfSearch, QueryMode: collections.VectorIndexQueryModeQuantizedRerank, QuantizedIndexName: "embedding.scalar_u8.public", ExpectedGeneration: info.Generation}
 	payload, err := appendDenseVectorSearchRequest(nil, request, server.limits)
 	if err != nil {
 		t.Fatal(err)
@@ -1873,6 +1876,17 @@ func TestDenseTypedQuantizedNativePublicPath(t *testing.T) {
 		t.Fatalf("noncritical quantized options accepted: %v", err)
 	}
 	sections[len(sections)-1].Flags = iwire.SectionFlagCritical
+	zeroRequest := request
+	zeroRequest.EfSearch = 0
+	zeroPayload, err := appendDenseVectorSearchRequest(nil, zeroRequest, server.limits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	zeroSections := append([]iwire.Section(nil), sections...)
+	zeroSections[0].Bytes = zeroPayload
+	if _, err := server.handleVersionedDenseVectorSearch(ctx, &connState{}, iwire.DenseVectorSearchTypedQuantizedVersion, zeroSections, nil); nativeCodeOf(err) != iwire.ErrInvalidCommand {
+		t.Fatalf("raw native v3 zero/default ef_search was accepted: %v", err)
+	}
 	serverLimits := server.limits
 	server.limits.MaxByteVectorBytes = 1
 	partial, err := server.handleVersionedDenseVectorSearch(ctx, &connState{}, iwire.DenseVectorSearchTypedQuantizedVersion, sections, nil)

@@ -399,7 +399,7 @@ func (s *Service) searchDenseVectorNativeRawLocked(ctx context.Context, col *col
 			return RawDenseVectorSearchResponse{}, err
 		}
 		if info.TypedInput && req.QueryMode == collections.VectorIndexQueryModeQuantizedRerank {
-			if err := validateDenseTypedQuantizedVectorSearchRoute(search, req, info.Generation); err != nil {
+			if err := validateDenseTypedQuantizedVectorSearchRoute(search, req, info.Generation, info.VectorEfSearch); err != nil {
 				_ = view.Close()
 				return RawDenseVectorSearchResponse{}, err
 			}
@@ -482,7 +482,7 @@ func validateDenseTypedVectorSearchRoute(response collections.VectorIndexSearchR
 	return nil
 }
 
-func validateDenseTypedQuantizedVectorSearchRoute(response collections.VectorIndexSearchResponse, req DenseVectorSearchRequest, serviceGeneration uint64) error {
+func validateDenseTypedQuantizedVectorSearchRoute(response collections.VectorIndexSearchResponse, req DenseVectorSearchRequest, serviceGeneration uint64, indexEFSearch int) error {
 	proof := response.Stats.ColumnGraphWork.ScorePlane
 	if !proof.Available || !proof.Completed || !proof.Snapshot.Available || proof.RequestedMode != collections.VectorIndexQueryModeQuantizedRerank || proof.EffectiveMode != collections.VectorIndexQueryModeQuantizedRerank {
 		return serviceError(CodeIndexUnavailable, "typed quantized dense search did not produce a completed quantized score-plane proof")
@@ -492,6 +492,13 @@ func validateDenseTypedQuantizedVectorSearchRoute(response collections.VectorInd
 	}
 	if proof.QuantizedIndexName != req.QuantizedIndexName || proof.QuantizedCodec != collections.QuantizedVectorCodecScalarU8 || proof.QuantizedVersion != 1 || proof.RequestedTopK != uint64(req.TopK) || proof.RequestedEFSearch != uint64(req.EfSearch) || proof.RequestedRerankCandidates != uint64(req.QuantizedRerankCandidates) {
 		return serviceError(CodeIndexUnavailable, "typed quantized dense search score-plane proof does not match the request")
+	}
+	resolvedEFSearch := req.EfSearch
+	if resolvedEFSearch == 0 {
+		resolvedEFSearch = indexEFSearch
+	}
+	if resolvedEFSearch <= 0 || proof.NormalizedCandidateWidth > uint64(max(req.TopK, resolvedEFSearch)) {
+		return serviceError(CodeIndexUnavailable, "typed quantized dense search candidate width exceeds the resolved ef_search")
 	}
 	if proof.Route != "typed_empty" && proof.Route != "typed_exact" && proof.Route != "quantized_rerank" {
 		return serviceErrorf(CodeIndexUnavailable, "typed quantized dense search used unsupported route %q", proof.Route)

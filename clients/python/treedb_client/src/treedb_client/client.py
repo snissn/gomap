@@ -430,6 +430,8 @@ class TreeDBClient:
                 selected = next((item for item in index_info.quantized_indexes if item.name == quantized_index_name), None)
                 if not _is_legacy_scalar_u8_v1_index(selected):
                     raise TreeDBConfigError("typed dense quantized rerank requires the selected legacy scalar_u8/v1 index")
+                if type(index_info.vector_ef_search) is not int or not 0 < index_info.vector_ef_search < 1 << 63:
+                    raise TreeDBConfigError("typed dense quantized rerank requires a positive IndexInfo vector_ef_search")
         ef_search_value = None
         if ef_search is not None:
             ef_search_value = _validate_binary_int_query_param(ef_search, "ef_search", minimum=0)
@@ -447,6 +449,10 @@ class TreeDBClient:
                 selected = next((item for item in index_info.quantized_indexes if item.name == quantized_index_name), None)
                 if not _is_legacy_scalar_u8_v1_index(selected):
                     raise TreeDBConfigError("native dense quantized rerank requires the selected legacy scalar_u8/v1 index")
+                if ef_search_value in (None, 0):
+                    ef_search_value = index_info.vector_ef_search
+                if type(ef_search_value) is not int or not 0 < ef_search_value < 1 << 63:
+                    raise TreeDBConfigError("native dense quantized rerank requires a positive IndexInfo vector_ef_search")
             if route not in (None, "ann") or (expected_generation is not None and expected_generation != index_info.generation):
                 raise TreeDBConfigError("native dense route or generation conflicts with IndexInfo")
             version = 3 if mode == "quantized_rerank" else 2
@@ -593,6 +599,12 @@ class TreeDBClient:
                     top_k=top_k_value, ef_search=ef_search_value or 0,
                     rerank_candidates=rerank_value, query_dimension=len(request["query_embedding"]),
                     expected_generation=expected_generation, filter_requested=filter_requested,
+                    default_ef_search=(
+                        index_info.vector_ef_search
+                        if index_info is not None
+                        and expected_generation == index_info.generation
+                        else None
+                    ),
                 )
             raise
         return response
@@ -1215,6 +1227,8 @@ def _validate_http_dense_quantized_response(
         or response.index.dimension != query_dimension
         or type(response.index.generation) is not int
         or not 0 < response.index.generation < 1 << 64
+        or type(response.index.vector_ef_search) is not int
+        or not 0 < response.index.vector_ef_search < 1 << 63
         or not _dense_score_plane_request_matches(
             proof,
             query_mode="quantized_rerank",
@@ -1225,6 +1239,7 @@ def _validate_http_dense_quantized_response(
             query_dimension=query_dimension,
             expected_generation=response.index.generation,
             require_completed_bytes=True,
+            default_ef_search=response.index.vector_ef_search,
         )
         or not dense_quantized_response_work_matches(
             work, proof, top_k, len(response.documents), filter_requested
@@ -1301,8 +1316,18 @@ def _dense_score_plane_request_matches(
     query_dimension: int,
     expected_generation: Optional[int],
     require_completed_bytes: bool,
+    default_ef_search: Optional[int] = None,
 ) -> bool:
     from ._dense_work import dense_score_plane_byte_counters_match
+
+    if ef_search == 0:
+        # A completed HTTP response authenticates the selected index default.
+        # Failure prefixes without generation-bound IndexInfo can prove only
+        # the TopK floor, so wider evidence fails closed rather than trusting a
+        # peer-supplied default.
+        resolved_ef_search = top_k if default_ef_search is None else default_ef_search
+    else:
+        resolved_ef_search = ef_search
 
     return bool(
         proof is not None
@@ -1314,6 +1339,9 @@ def _dense_score_plane_request_matches(
         and proof.quantized_config_hash == 0
         and proof.requested_top_k == top_k
         and proof.requested_ef_search == ef_search
+        and type(resolved_ef_search) is int
+        and 0 < resolved_ef_search < 1 << 63
+        and proof.normalized_candidate_width <= max(top_k, resolved_ef_search)
         and proof.requested_rerank_candidates == rerank_candidates
         and (
             expected_generation is None
@@ -1359,6 +1387,7 @@ def _validate_dense_failure_proofs(
     query_dimension: int,
     expected_generation: Optional[int],
     filter_requested: bool,
+    default_ef_search: Optional[int] = None,
 ) -> None:
     """Reject decoded failure evidence that cannot belong to this request.
 
@@ -1393,6 +1422,7 @@ def _validate_dense_failure_proofs(
             query_dimension=query_dimension,
             expected_generation=expected_generation,
             require_completed_bytes=proof.completed,
+            default_ef_search=default_ef_search,
         )
 
     if work is not None:
