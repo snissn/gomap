@@ -38,8 +38,17 @@ class NativeCodecTests(unittest.TestCase):
         raw_work = b"".join(_uint(value) for value in work_values)
         meta = bytes.fromhex("0301000001000000000000f03f")
         values = [1, 7, 2, 2, 3, 1, 0, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 2, 1, 0, 0, 8, 0, 7, 1, 2, 2]
-        score_plane = b"".join(_uint(value) for value in values) + b"\x00" + _bytes_for_test("embedding.scalar_u8.public") + _bytes_for_test("scalar_u8")
-        score_plane += b"\x01\x01\x01\x03" * 2
+
+        def score_plane_bytes(candidate_values, reason=""):
+            return (
+                b"".join(_uint(value) for value in candidate_values)
+                + _bytes_for_test(reason)
+                + _bytes_for_test("embedding.scalar_u8.public")
+                + _bytes_for_test("scalar_u8")
+                + b"\x01\x01\x01\x03" * 2
+            )
+
+        score_plane = score_plane_bytes(values)
 
         def response_body(document):
             response_work_values = list(work_values)
@@ -103,8 +112,7 @@ class NativeCodecTests(unittest.TestCase):
             hostile_plane_values[10:16] = [2, 2, 2, 2, 2, 2]
             hostile_plane_values[16:18] = [2, 4]
             hostile_plane_values[18], hostile_plane_values[21] = 2, 16
-            hostile_plane = b"".join(_uint(value) for value in hostile_plane_values) + b"\x00" + _bytes_for_test("embedding.scalar_u8.public") + _bytes_for_test("scalar_u8")
-            hostile_plane += b"\x01\x01\x01\x03" * 2
+            hostile_plane = score_plane_bytes(hostile_plane_values)
             hostile_body = (
                 _section(102, _vector([b"a"])) + _section(103, _vector([b'{"id":"a"}'])) +
                 _section(130, meta) + _section(134, b"".join(_uint(value) for value in hostile_work_values)) +
@@ -190,13 +198,7 @@ class NativeCodecTests(unittest.TestCase):
             graph_incomplete_values[1] &= ~(1 << 2)
             proof_incomplete_values = list(values)
             proof_incomplete_values[1] &= ~(1 << 1)
-            proof_incomplete = bytearray(
-                b"".join(_uint(value) for value in proof_incomplete_values)
-                + _bytes_for_test("incomplete")
-                + _bytes_for_test("embedding.scalar_u8.public")
-                + _bytes_for_test("scalar_u8")
-                + b"\x01\x01\x01\x03" * 2
-            )
+            proof_incomplete = bytearray(score_plane_bytes(proof_incomplete_values, "incomplete"))
             wrong_route_values = list(post_search_values)
             wrong_route_values[2] = 2
             requested_mismatch_values = list(post_search_values)
@@ -241,25 +243,75 @@ class NativeCodecTests(unittest.TestCase):
                 b"".join(_uint(value) for value in graph_incomplete_values)
             ))
             self.assertIsNone(caught.exception.score_plane)
-            native_completion_cases = (
-                ("post-search before fetch", post_search_values, score_plane, False),
-                ("partial fetch", partial_fetch_values, score_plane, False),
-                ("completed fetch missing", completed_missing_values, score_plane, False),
-                ("proof complete graph incomplete", graph_incomplete_values, score_plane, True),
-                ("graph complete proof incomplete", post_search_values, bytes(proof_incomplete), True),
-                ("route", wrong_route_values, score_plane, True),
-                ("requested", requested_mismatch_values, score_plane, True),
-                ("proof unavailable", post_search_values, bytes(proof_unavailable), True),
-                ("graph unavailable", graph_unavailable_values, bytes(proof_incomplete), True),
-                ("proof snapshot unavailable", post_search_values, proof_snapshot_unavailable, True),
-                ("graph snapshot unavailable", graph_snapshot_unavailable_values, bytes(proof_incomplete), True),
-                ("incomplete sibling score counters", graph_incomplete_values, bytes(sibling_counter_proof), True),
-                ("incomplete route", incomplete_route_values, bytes(proof_incomplete), True),
-                ("empty graph typed-empty proof", empty_graph_typed_empty[0], bytes(empty_graph_typed_empty[1]), True),
-                ("empty graph typed-exact proof", empty_graph_typed_exact[0], bytes(empty_graph_typed_exact[1]), True),
-                ("bytes", post_search_values, bytes(wrong_bytes), True),
+            def prefix_shape_case(name, work_updates=(), proof_updates=(), ef_search=0):
+                candidate_work = list(graph_incomplete_values)
+                candidate_proof = list(proof_incomplete_values)
+                for index, value in work_updates:
+                    candidate_work[index] = value
+                for index, value in proof_updates:
+                    candidate_proof[index] = value
+                return name, candidate_work, score_plane_bytes(candidate_proof, "incomplete"), True, ef_search
+
+            native_prefix_shape_cases = (
+                prefix_shape_case("prefix shape base candidates exceed quantized calls", work_updates=((4, 2),)),
+                prefix_shape_case("prefix shape rerank cap does not match plan", proof_updates=((12, 0),)),
+                prefix_shape_case(
+                    "prefix shape normalized width exceeds explicit EF",
+                    proof_updates=((8, 1), (10, 2), (11, 2), (12, 2)), ef_search=1,
+                ),
+                prefix_shape_case(
+                    "prefix shape normalized width exceeds raw width",
+                    proof_updates=((10, 2), (12, 2)),
+                ),
+                prefix_shape_case(
+                    "prefix shape raw retained exceeds quantized calls",
+                    proof_updates=((11, 2), (13, 2)),
+                ),
+                prefix_shape_case(
+                    "prefix shape raw retained exceeds raw width",
+                    work_updates=((3, 2),), proof_updates=((13, 2), (16, 2)),
+                ),
+                prefix_shape_case(
+                    "prefix shape live shortlist exceeds raw retained",
+                    proof_updates=((10, 2), (11, 2), (12, 2), (14, 2)),
+                ),
+                prefix_shape_case(
+                    "prefix shape live shortlist exceeds normalized width",
+                    work_updates=((3, 2),), proof_updates=((11, 2), (13, 2), (14, 2), (16, 2)),
+                ),
+                prefix_shape_case(
+                    "prefix shape actual rerank exceeds shortlist",
+                    work_updates=((3, 2), (7, 2), (9, 2)),
+                    proof_updates=((10, 2), (11, 2), (12, 2), (13, 2), (15, 2), (16, 2), (18, 2)),
+                ),
+                prefix_shape_case(
+                    "prefix shape actual rerank exceeds cap",
+                    work_updates=((7, 2), (9, 2)), proof_updates=((15, 2), (18, 2)),
+                ),
+                prefix_shape_case(
+                    "prefix shape actual rerank differs from exact base calls",
+                    work_updates=((7, 0), (9, 0)), proof_updates=((18, 0),),
+                ),
             )
-            for name, candidate_work, candidate_proof, rejected in native_completion_cases:
+            native_completion_cases = (
+                ("post-search before fetch", post_search_values, score_plane, False, 0),
+                ("partial fetch", partial_fetch_values, score_plane, False, 0),
+                ("completed fetch missing", completed_missing_values, score_plane, False, 0),
+                ("proof complete graph incomplete", graph_incomplete_values, score_plane, True, 0),
+                ("graph complete proof incomplete", post_search_values, bytes(proof_incomplete), True, 0),
+                ("route", wrong_route_values, score_plane, True, 0),
+                ("requested", requested_mismatch_values, score_plane, True, 0),
+                ("proof unavailable", post_search_values, bytes(proof_unavailable), True, 0),
+                ("graph unavailable", graph_unavailable_values, bytes(proof_incomplete), True, 0),
+                ("proof snapshot unavailable", post_search_values, proof_snapshot_unavailable, True, 0),
+                ("graph snapshot unavailable", graph_snapshot_unavailable_values, bytes(proof_incomplete), True, 0),
+                ("incomplete sibling score counters", graph_incomplete_values, bytes(sibling_counter_proof), True, 0),
+                ("incomplete route", incomplete_route_values, bytes(proof_incomplete), True, 0),
+                ("empty graph typed-empty proof", empty_graph_typed_empty[0], bytes(empty_graph_typed_empty[1]), True, 0),
+                ("empty graph typed-exact proof", empty_graph_typed_exact[0], bytes(empty_graph_typed_exact[1]), True, 0),
+                ("bytes", post_search_values, bytes(wrong_bytes), True, 0),
+            ) + native_prefix_shape_cases
+            for name, candidate_work, candidate_proof, rejected, candidate_ef_search in native_completion_cases:
                 candidate_work_raw = b"".join(_uint(value) for value in candidate_work)
                 candidate_payload = native_error + _section(134, candidate_work_raw) + _section(136, candidate_proof)
                 completion_client = TreeDBClient("http://127.0.0.1:1", native_address="127.0.0.1:2")
@@ -273,6 +325,7 @@ class NativeCodecTests(unittest.TestCase):
                     completion_client.query_by_embedding(
                         "a", [1, 0], 1, query_mode="quantized_rerank",
                         quantized_index_name="embedding.scalar_u8.public", index_info=info,
+                        ef_search=candidate_ef_search,
                     )
                 self.assertEqual(caught.exception.dense_work, _dense_work(candidate_work_raw))
                 self.assertEqual(caught.exception.score_plane, type(response.score_plane).from_dict(_dense_score_plane(candidate_proof)))

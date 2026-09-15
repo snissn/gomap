@@ -1071,6 +1071,8 @@ func TestDenseV3FailureProofCompletedGraphPrefixes(t *testing.T) {
 			candidateWork.Graph.BaseResultIDs, candidateWork.Graph.DeltaScored = 0, 0
 			candidateProof.QuantizedScoreCalls, candidateProof.ExactBaseRerankScoreCalls = 0, 0
 			candidateProof.ExactSmallFilterScoreCalls, candidateProof.ExactSuffixScoreCalls = 0, 0
+			candidateProof.RawRetainedCandidates, candidateProof.LiveShortlistCandidates = 0, 0
+			candidateProof.ActualRerankCandidates = 0
 			candidateProof.QuantizedCodeBytesRead, candidateProof.ExactBaseVectorBytesRead = 0, 0
 			candidateProof.Route = "typed_empty"
 			if graphRoute == "" {
@@ -1081,6 +1083,8 @@ func TestDenseV3FailureProofCompletedGraphPrefixes(t *testing.T) {
 			candidateWork.Graph.BaseResultIDs, candidateWork.Graph.DeltaScored = 0, 1
 			candidateProof.QuantizedScoreCalls, candidateProof.ExactBaseRerankScoreCalls = 0, 0
 			candidateProof.ExactSmallFilterScoreCalls, candidateProof.ExactSuffixScoreCalls = 0, 1
+			candidateProof.RawRetainedCandidates, candidateProof.LiveShortlistCandidates = 0, 0
+			candidateProof.ActualRerankCandidates = 0
 			candidateProof.QuantizedCodeBytesRead, candidateProof.ExactBaseVectorBytesRead = 0, 0
 			candidateProof.ExactSuffixVectorBytesRead = 8
 			candidateProof.Route = "typed_exact"
@@ -1135,6 +1139,58 @@ func TestDenseV3FailureProofCompletedGraphPrefixes(t *testing.T) {
 				reject(t, candidateWork, candidateProof)
 			})
 		}
+	}
+	prefixShapeMutations := []struct {
+		name   string
+		mutate func(*documentservice.DenseSearchWork, *collections.ColumnGraphScorePlaneWork)
+	}{
+		{"base candidates exceed quantized calls", func(w *documentservice.DenseSearchWork, p *collections.ColumnGraphScorePlaneWork) {
+			w.Graph.BaseCandidates = p.QuantizedScoreCalls + 1
+		}},
+		{"rerank cap does not match plan", func(_ *documentservice.DenseSearchWork, p *collections.ColumnGraphScorePlaneWork) {
+			p.RerankCandidateCap--
+		}},
+		{"normalized width exceeds explicit EF", func(_ *documentservice.DenseSearchWork, p *collections.ColumnGraphScorePlaneWork) {
+			p.NormalizedCandidateWidth, p.RawCandidateWidth, p.RerankCandidateCap = 9, 9, 8
+		}},
+		{"normalized width exceeds raw width", func(_ *documentservice.DenseSearchWork, p *collections.ColumnGraphScorePlaneWork) {
+			p.RawCandidateWidth--
+		}},
+		{"raw retained exceeds quantized calls", func(_ *documentservice.DenseSearchWork, p *collections.ColumnGraphScorePlaneWork) {
+			p.RawCandidateWidth, p.RawRetainedCandidates = 3, 3
+		}},
+		{"raw retained exceeds raw width", func(w *documentservice.DenseSearchWork, p *collections.ColumnGraphScorePlaneWork) {
+			w.Graph.BaseANNScored, p.QuantizedScoreCalls, p.RawRetainedCandidates = 3, 3, 3
+		}},
+		{"live shortlist exceeds raw retained", func(_ *documentservice.DenseSearchWork, p *collections.ColumnGraphScorePlaneWork) {
+			p.NormalizedCandidateWidth, p.RawCandidateWidth, p.RerankCandidateCap = 3, 3, 3
+			p.LiveShortlistCandidates = 3
+		}},
+		{"live shortlist exceeds normalized width", func(w *documentservice.DenseSearchWork, p *collections.ColumnGraphScorePlaneWork) {
+			w.Graph.BaseANNScored, p.QuantizedScoreCalls = 3, 3
+			p.RawCandidateWidth, p.RawRetainedCandidates, p.LiveShortlistCandidates = 3, 3, 3
+		}},
+		{"actual rerank exceeds shortlist", func(w *documentservice.DenseSearchWork, p *collections.ColumnGraphScorePlaneWork) {
+			w.Graph.BaseANNScored, w.Graph.ExactBaseScored, w.Graph.BaseResultIDs = 3, 3, 3
+			p.NormalizedCandidateWidth, p.RawCandidateWidth, p.RerankCandidateCap = 3, 3, 3
+			p.RawRetainedCandidates, p.QuantizedScoreCalls = 3, 3
+			p.ActualRerankCandidates, p.ExactBaseRerankScoreCalls = 3, 3
+		}},
+		{"actual rerank exceeds cap", func(w *documentservice.DenseSearchWork, p *collections.ColumnGraphScorePlaneWork) {
+			w.Graph.ExactBaseScored, w.Graph.BaseResultIDs = 3, 3
+			p.ActualRerankCandidates, p.ExactBaseRerankScoreCalls = 3, 3
+		}},
+		{"actual rerank differs from exact base calls", func(w *documentservice.DenseSearchWork, p *collections.ColumnGraphScorePlaneWork) {
+			w.Graph.ExactBaseScored, w.Graph.BaseResultIDs = 1, 1
+			p.ExactBaseRerankScoreCalls = 1
+		}},
+	}
+	for _, mutation := range prefixShapeMutations {
+		candidateWork, candidateProof := prefixes["typed_hnsw"].work, prefixes["typed_hnsw"].proof
+		mutation.mutate(&candidateWork, &candidateProof)
+		t.Run("invalid incomplete prefix shape "+mutation.name, func(t *testing.T) {
+			reject(t, candidateWork, candidateProof)
+		})
 	}
 	mismatchedIncompleteWork := matchingIncompleteWork
 	mismatchedIncompleteWork.Graph.Route = "typed_exact"
@@ -1217,6 +1273,13 @@ func TestDenseV3FailureProofCompletedGraphPrefixes(t *testing.T) {
 		t.Run("FrameError invalid "+example.name, func(t *testing.T) {
 			candidateWork, candidateProof := prefixes[example.route].work, prefixes[example.route].proof
 			counterMutations[example.mutation].mutate(&candidateWork, &candidateProof)
+			frameCase(t, candidateWork, candidateProof, false)
+		})
+	}
+	for _, mutation := range prefixShapeMutations {
+		t.Run("FrameError invalid incomplete prefix shape "+mutation.name, func(t *testing.T) {
+			candidateWork, candidateProof := prefixes["typed_hnsw"].work, prefixes["typed_hnsw"].proof
+			mutation.mutate(&candidateWork, &candidateProof)
 			frameCase(t, candidateWork, candidateProof, false)
 		})
 	}

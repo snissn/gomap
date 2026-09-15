@@ -1177,6 +1177,7 @@ class TreeDBClientTests(unittest.TestCase):
                     ))
                     candidate_proof = replace(
                         candidate_proof, route="quantized_rerank" if not graph_route else "typed_empty",
+                        raw_retained_candidates=0, live_shortlist_candidates=0, actual_rerank_candidates=0,
                         quantized_score_calls=0, quantized_code_bytes_read=0,
                         exact_base_rerank_score_calls=0, exact_small_filter_score_calls=0,
                         exact_suffix_score_calls=0, exact_base_vector_bytes_read=0,
@@ -1189,6 +1190,7 @@ class TreeDBClientTests(unittest.TestCase):
                     ))
                     candidate_proof = replace(
                         candidate_proof, route="typed_exact", quantized_score_calls=0,
+                        raw_retained_candidates=0, live_shortlist_candidates=0, actual_rerank_candidates=0,
                         quantized_code_bytes_read=0, exact_base_rerank_score_calls=0,
                         exact_small_filter_score_calls=0, exact_suffix_score_calls=1,
                         exact_base_vector_bytes_read=0, exact_suffix_vector_bytes_read=8,
@@ -1230,6 +1232,42 @@ class TreeDBClientTests(unittest.TestCase):
                 for route in ("", "typed_exact", "typed_hnsw")
                 for field in ("quantized", "exact base", "base result IDs", "suffix", "overflow")
             )
+            prefix_work, prefix_proof = prefixes["typed_hnsw"]
+            prefix_shape_failures = (
+                ("prefix shape base candidates exceed quantized calls", replace(
+                    prefix_work, graph=replace(
+                        prefix_work.graph, base_candidates=prefix_proof.quantized_score_calls + 1)), prefix_proof),
+                ("prefix shape rerank cap does not match plan", prefix_work, replace(
+                    prefix_proof, rerank_candidate_cap=prefix_proof.rerank_candidate_cap - 1)),
+                ("prefix shape normalized width exceeds explicit EF", prefix_work, replace(
+                    prefix_proof, normalized_candidate_width=9, raw_candidate_width=9, rerank_candidate_cap=8)),
+                ("prefix shape normalized width exceeds raw width", prefix_work, replace(
+                    prefix_proof, raw_candidate_width=prefix_proof.raw_candidate_width - 1)),
+                ("prefix shape raw retained exceeds quantized calls", prefix_work, replace(
+                    prefix_proof, raw_candidate_width=3, raw_retained_candidates=3)),
+                ("prefix shape raw retained exceeds raw width", replace(
+                    prefix_work, graph=replace(prefix_work.graph, base_ann_scored=3)), replace(
+                        prefix_proof, quantized_score_calls=3, raw_retained_candidates=3)),
+                ("prefix shape live shortlist exceeds raw retained", prefix_work, replace(
+                    prefix_proof, normalized_candidate_width=3, raw_candidate_width=3,
+                    rerank_candidate_cap=3, live_shortlist_candidates=3)),
+                ("prefix shape live shortlist exceeds normalized width", replace(
+                    prefix_work, graph=replace(prefix_work.graph, base_ann_scored=3)), replace(
+                        prefix_proof, quantized_score_calls=3, raw_candidate_width=3,
+                        raw_retained_candidates=3, live_shortlist_candidates=3)),
+                ("prefix shape actual rerank exceeds shortlist", replace(
+                    prefix_work, graph=replace(
+                        prefix_work.graph, base_ann_scored=3, exact_base_scored=3, base_result_ids=3)), replace(
+                            prefix_proof, normalized_candidate_width=3, raw_candidate_width=3,
+                            rerank_candidate_cap=3, raw_retained_candidates=3, quantized_score_calls=3,
+                            actual_rerank_candidates=3, exact_base_rerank_score_calls=3)),
+                ("prefix shape actual rerank exceeds cap", replace(
+                    prefix_work, graph=replace(prefix_work.graph, exact_base_scored=3, base_result_ids=3)), replace(
+                        prefix_proof, actual_rerank_candidates=3, exact_base_rerank_score_calls=3)),
+                ("prefix shape actual rerank differs from exact base calls", replace(
+                    prefix_work, graph=replace(prefix_work.graph, exact_base_scored=0, base_result_ids=0)), replace(
+                        prefix_proof, exact_base_rerank_score_calls=0)),
+            )
             route_empty_incomplete, route_empty_proof = prefixes[""]
             completion_prefix_failures = (
                 ("proof complete graph incomplete", replace(post_search, graph=replace(post_search.graph, completed=False)), result.score_plane),
@@ -1256,7 +1294,7 @@ class TreeDBClientTests(unittest.TestCase):
                 ("incomplete route", replace(post_search, graph=replace(post_search.graph, completed=False, route="typed_exact")), proof_incomplete),
                 ("empty graph typed-empty proof", route_empty_incomplete, replace(proof_incomplete, route="typed_empty")),
                 ("empty graph typed-exact proof", route_empty_incomplete, replace(proof_incomplete, route="typed_exact")),
-            ) + counter_prefix_failures
+            ) + counter_prefix_failures + prefix_shape_failures
             for name, candidate_work, candidate_proof in completion_prefix_failures:
                 error = IndexUnavailableError(
                     "index_unavailable", name, dense_work=candidate_work, score_plane=candidate_proof,
@@ -1285,20 +1323,21 @@ class TreeDBClientTests(unittest.TestCase):
                 name: (candidate_work, candidate_proof)
                 for name, candidate_work, candidate_proof in completion_prefix_failures
             }
+            http_failure_names = (
+                "proof complete graph incomplete", "graph complete proof incomplete", "route", "snapshot",
+                "byte counters", "output requested", "proof unavailable", "graph unavailable",
+                "proof snapshot unavailable", "graph snapshot unavailable", "incomplete route",
+                "empty graph typed-empty proof", "empty graph typed-exact proof",
+                "prefix counters empty quantized", "prefix counters typed_exact exact base",
+                "prefix counters typed_hnsw suffix", "prefix counters typed_hnsw overflow",
+            ) + tuple(name for name, _, _ in prefix_shape_failures)
             http_completion_cases = (
                 ("post-search before fetch", post_search, result.score_plane, False),
                 ("partial fetch", partial_fetch, result.score_plane, False),
                 ("completed fetch missing", completed_fetch_missing, result.score_plane, False),
             ) + tuple(
                 (name, *completion_prefix_by_name[name], True)
-                for name in (
-                    "proof complete graph incomplete", "graph complete proof incomplete", "route", "snapshot",
-                    "byte counters", "output requested", "proof unavailable", "graph unavailable",
-                    "proof snapshot unavailable", "graph snapshot unavailable", "incomplete route",
-                    "empty graph typed-empty proof", "empty graph typed-exact proof",
-                    "prefix counters empty quantized", "prefix counters typed_exact exact base",
-                    "prefix counters typed_hnsw suffix", "prefix counters typed_hnsw overflow",
-                )
+                for name in http_failure_names
             )
             for status in (200, 503):
                 for name, candidate_work, candidate_proof, rejected in http_completion_cases:

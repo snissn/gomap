@@ -224,8 +224,14 @@ class DenseScorePlaneProof:
             if (
                 (values["requested_ef_search"] != 0 and values["normalized_candidate_width"] > max(values["requested_top_k"], values["requested_ef_search"]))
                 or values["rerank_candidate_cap"] != expected_cap
-                or values["live_shortlist_candidates"] > values["normalized_candidate_width"]
                 or values["normalized_candidate_width"] > values["raw_candidate_width"]
+                or values["raw_retained_candidates"] > values["quantized_score_calls"]
+                or values["raw_retained_candidates"] > values["raw_candidate_width"]
+                or values["live_shortlist_candidates"] > values["raw_retained_candidates"]
+                or values["live_shortlist_candidates"] > values["normalized_candidate_width"]
+                or values["actual_rerank_candidates"] > values["live_shortlist_candidates"]
+                or values["actual_rerank_candidates"] > values["rerank_candidate_cap"]
+                or values["actual_rerank_candidates"] != values["exact_base_rerank_score_calls"]
             ):
                 raise ValueError("completed dense score-plane proof planning counters are inconsistent")
             if values["route"] == "quantized_rerank":
@@ -233,9 +239,7 @@ class DenseScorePlaneProof:
                     values["normalized_candidate_width"] == 0
                     or values["raw_candidate_width"] == 0
                     or values["rerank_candidate_cap"] == 0
-                    or values["raw_retained_candidates"] > values["quantized_score_calls"]
                     or values["exact_small_filter_score_calls"] != 0
-                    or values["actual_rerank_candidates"] != values["exact_base_rerank_score_calls"]
                     or values["actual_rerank_candidates"] != min(values["live_shortlist_candidates"], values["rerank_candidate_cap"])
                 ):
                     raise ValueError("completed dense score-plane proof quantized rerank counters are inconsistent")
@@ -344,6 +348,8 @@ def dense_failure_score_counters_match_graph(graph, proof):
     exact_base_calls = proof.exact_base_rerank_score_calls + proof.exact_small_filter_score_calls
     return (
         exact_base_calls < 1 << 64
+        and dense_score_plane_prefix_candidate_counters_match(proof)
+        and graph.base_candidates <= proof.quantized_score_calls
         and proof.quantized_score_calls == graph.base_ann_scored
         and exact_base_calls == graph.exact_base_scored
         and exact_base_calls == graph.base_result_ids
@@ -364,23 +370,14 @@ def dense_completed_graph_result_count(proof, top_k):
 def dense_score_plane_rerank_counters_match(proof):
     if proof is None or not proof.completed:
         return False
-    if proof.requested_ef_search and proof.normalized_candidate_width > max(proof.requested_top_k, proof.requested_ef_search):
-        return False
-    expected_cap = min(proof.normalized_candidate_width, proof.requested_rerank_candidates or proof.normalized_candidate_width)
-    if (
-        proof.rerank_candidate_cap != expected_cap
-        or proof.live_shortlist_candidates > proof.normalized_candidate_width
-        or proof.normalized_candidate_width > proof.raw_candidate_width
-    ):
+    if not dense_score_plane_prefix_candidate_counters_match(proof):
         return False
     if proof.route == "quantized_rerank":
         return (
             proof.normalized_candidate_width != 0
             and proof.raw_candidate_width != 0
             and proof.rerank_candidate_cap != 0
-            and proof.raw_retained_candidates <= proof.quantized_score_calls
             and proof.exact_small_filter_score_calls == 0
-            and proof.actual_rerank_candidates == proof.exact_base_rerank_score_calls
             and proof.actual_rerank_candidates == min(proof.live_shortlist_candidates, proof.rerank_candidate_cap)
         )
     if proof.route == "typed_empty":
@@ -395,6 +392,25 @@ def dense_score_plane_rerank_counters_match(proof):
             proof.actual_rerank_candidates, proof.exact_base_rerank_score_calls,
         ))
     return False
+
+
+def dense_score_plane_prefix_candidate_counters_match(proof):
+    if proof is None:
+        return False
+    if proof.requested_ef_search and proof.normalized_candidate_width > max(proof.requested_top_k, proof.requested_ef_search):
+        return False
+    expected_cap = min(proof.normalized_candidate_width, proof.requested_rerank_candidates or proof.normalized_candidate_width)
+    return not (
+        proof.rerank_candidate_cap != expected_cap
+        or proof.normalized_candidate_width > proof.raw_candidate_width
+        or proof.raw_retained_candidates > proof.quantized_score_calls
+        or proof.raw_retained_candidates > proof.raw_candidate_width
+        or proof.live_shortlist_candidates > proof.raw_retained_candidates
+        or proof.live_shortlist_candidates > proof.normalized_candidate_width
+        or proof.actual_rerank_candidates > proof.live_shortlist_candidates
+        or proof.actual_rerank_candidates > proof.rerank_candidate_cap
+        or proof.actual_rerank_candidates != proof.exact_base_rerank_score_calls
+    )
 
 
 def dense_quantized_completed_graph_matches(work, proof, top_k, result_count, filter_requested):

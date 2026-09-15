@@ -296,7 +296,9 @@ func denseScorePlanePrefixRouteMatchesGraph(graphRoute, proofRoute string) bool 
 }
 
 func denseFailureScoreCountersMatchGraph(graph collections.ColumnGraphQueryWork, proof *collections.ColumnGraphScorePlaneWork) bool {
-	if proof == nil || proof.ExactSmallFilterScoreCalls > ^uint64(0)-proof.ExactBaseRerankScoreCalls {
+	if proof == nil || !denseScorePlanePrefixCandidateCountersMatch(proof) ||
+		graph.BaseCandidates > proof.QuantizedScoreCalls ||
+		proof.ExactSmallFilterScoreCalls > ^uint64(0)-proof.ExactBaseRerankScoreCalls {
 		return false
 	}
 	exactBaseScoreCalls := proof.ExactBaseRerankScoreCalls + proof.ExactSmallFilterScoreCalls

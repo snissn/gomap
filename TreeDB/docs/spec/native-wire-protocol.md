@@ -865,8 +865,15 @@ For every route, completed proofs have an empty reason and available incomplete
 proofs have a nonempty producer error reason. Graph base-edge work is zero,
 quantized calls equal graph base-ANN scoring, exact base calls equal graph
 exact-base/result-ID counts, and exact suffix calls equal graph delta scoring.
-Graph base candidates may be lower than quantized calls because public minimal
-stats do not require that optional count. Returned exact cosine scores are
+Every completed or incomplete proof pair also preserves the producer prefix
+bounds: graph base candidates do not exceed quantized calls; `R = min(E,
+requested rerank candidates or E)`; explicit EF bounds `E`; retained candidates
+do not exceed quantized calls or `C`; live candidates do not exceed retained
+candidates or `E`; and actual reranks do not exceed live candidates or `R` and
+equal completed exact-base rerank calls. Graph base candidates may be lower than
+quantized calls because public minimal stats do not require that optional count.
+These prefix bounds intentionally do not infer byte equalities or a
+base-shadowed relation before completion. Returned exact cosine scores are
 finite and within `[-1.000001, 1.000001]`, allowing only bounded FP32 rounding.
 Returned IDs are valid UTF-8, nonempty, free of leading or trailing Unicode
 White_Space as defined by Go `unicode.IsSpace`, and unique, matching

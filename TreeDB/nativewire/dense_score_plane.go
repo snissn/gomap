@@ -134,22 +134,7 @@ func denseScorePlaneRerankCountersMatch(proof *collections.ColumnGraphScorePlane
 	if proof == nil || !proof.Completed {
 		return true
 	}
-	if proof.RequestedEFSearch != 0 {
-		effectiveWidth := proof.RequestedTopK
-		if proof.RequestedEFSearch > effectiveWidth {
-			effectiveWidth = proof.RequestedEFSearch
-		}
-		if proof.NormalizedCandidateWidth > effectiveWidth {
-			return false
-		}
-	}
-	expectedCap := proof.NormalizedCandidateWidth
-	if proof.RequestedRerankCandidates != 0 && proof.RequestedRerankCandidates < expectedCap {
-		expectedCap = proof.RequestedRerankCandidates
-	}
-	if proof.RerankCandidateCap != expectedCap ||
-		proof.LiveShortlistCandidates > proof.NormalizedCandidateWidth ||
-		proof.NormalizedCandidateWidth > proof.RawCandidateWidth {
+	if !denseScorePlanePrefixCandidateCountersMatch(proof) {
 		return false
 	}
 	switch proof.Route {
@@ -157,9 +142,7 @@ func denseScorePlaneRerankCountersMatch(proof *collections.ColumnGraphScorePlane
 		return proof.NormalizedCandidateWidth != 0 &&
 			proof.RawCandidateWidth != 0 &&
 			proof.RerankCandidateCap != 0 &&
-			proof.RawRetainedCandidates <= proof.QuantizedScoreCalls &&
 			proof.ExactSmallFilterScoreCalls == 0 &&
-			proof.ActualRerankCandidates == proof.ExactBaseRerankScoreCalls &&
 			proof.ActualRerankCandidates == minUint64(proof.LiveShortlistCandidates, proof.RerankCandidateCap)
 	case "typed_empty":
 		return proof.QuantizedScoreCalls == 0 &&
@@ -178,6 +161,37 @@ func denseScorePlaneRerankCountersMatch(proof *collections.ColumnGraphScorePlane
 	default:
 		return true
 	}
+}
+
+func denseScorePlanePrefixCandidateCountersMatch(proof *collections.ColumnGraphScorePlaneWork) bool {
+	if proof == nil {
+		return false
+	}
+	if proof.RequestedEFSearch != 0 {
+		effectiveWidth := proof.RequestedTopK
+		if proof.RequestedEFSearch > effectiveWidth {
+			effectiveWidth = proof.RequestedEFSearch
+		}
+		if proof.NormalizedCandidateWidth > effectiveWidth {
+			return false
+		}
+	}
+	expectedCap := proof.NormalizedCandidateWidth
+	if proof.RequestedRerankCandidates != 0 && proof.RequestedRerankCandidates < expectedCap {
+		expectedCap = proof.RequestedRerankCandidates
+	}
+	if proof.RerankCandidateCap != expectedCap ||
+		proof.NormalizedCandidateWidth > proof.RawCandidateWidth ||
+		proof.RawRetainedCandidates > proof.QuantizedScoreCalls ||
+		proof.RawRetainedCandidates > proof.RawCandidateWidth ||
+		proof.LiveShortlistCandidates > proof.RawRetainedCandidates ||
+		proof.LiveShortlistCandidates > proof.NormalizedCandidateWidth ||
+		proof.ActualRerankCandidates > proof.LiveShortlistCandidates ||
+		proof.ActualRerankCandidates > proof.RerankCandidateCap ||
+		proof.ActualRerankCandidates != proof.ExactBaseRerankScoreCalls {
+		return false
+	}
+	return true
 }
 
 func minUint64(a, b uint64) uint64 {
