@@ -153,6 +153,19 @@ class NativeCodecTests(unittest.TestCase):
                 )
             self.assertIsNotNone(caught.exception.dense_work)
             self.assertIsNotNone(caught.exception.score_plane)
+            for name, document in (
+                ("hidden ID", b'{"id":"b","id":"a"}'),
+                ("hidden embedding", b'{"id":"a","embedding":[1,0],"embedding":null}'),
+            ):
+                with self.subTest(native_duplicate_document_field=name), \
+                     mock.patch.object(client._native, "command", return_value=response_body(document)), \
+                     self.assertRaisesRegex(TreeDBProtocolError, "invalid native dense document") as caught:
+                    client.query_by_embedding(
+                        "a", [1, 0], 1, query_mode="quantized_rerank",
+                        quantized_index_name="embedding.scalar_u8.public", index_info=info,
+                    )
+                self.assertIsNotNone(caught.exception.dense_work)
+                self.assertIsNotNone(caught.exception.score_plane)
             hostile_work_values = list(work_values)
             hostile_work_values[3:5] = [2, 0]
             hostile_work_values[7], hostile_work_values[9] = 2, 2

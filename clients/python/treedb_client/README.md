@@ -133,6 +133,8 @@ and reject legacy scalar-filter or visibility telemetry; typed filter work is
 carried by `dense_work.graph.filter`. On filtered typed quantized responses, the
 client also evaluates the exact requested filter against every decoded native or
 HTTP document; producer work counts alone do not prove result membership.
+Native v3 document JSON rejects duplicate exact top-level fields before model
+conversion, matching the Go consumer contract.
 Dense HTTP proof-bearing envelopes also reject duplicate keys; unrelated
 envelope extension fields retain their existing compatibility. Retained proofs
 remain valid after later requests, mutations and connection close. GetMany's ordinary list return

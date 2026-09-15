@@ -487,7 +487,9 @@ class TreeDBClient:
             documents = []
             for item_id, document_raw, score in zip(ids, payloads, scores):
                 try:
-                    document = Document.from_dict(json.loads(document_raw))
+                    document = Document.from_dict(
+                        _decode_native_dense_document_json(document_raw, reject_duplicates=version == 3)
+                    )
                     if document.id.encode("utf-8") != item_id:
                         raise ValueError("document ID mismatch")
                     if document.score is not None:
@@ -1451,6 +1453,31 @@ def _dense_document_embeddings_match(
         and all(math.isfinite(value) for value in document.embedding)
         for document in documents
     )
+
+
+def _decode_native_dense_document_json(payload: bytes, *, reject_duplicates: bool) -> Any:
+    if not reject_duplicates:
+        return json.loads(payload)
+
+    class ObjectPairs(list):
+        pass
+
+    decoded = json.loads(payload, object_pairs_hook=ObjectPairs)
+    if isinstance(decoded, ObjectPairs):
+        seen = set()
+        for key, _ in decoded:
+            if key in seen:
+                raise ValueError("duplicate top-level field in native dense document")
+            seen.add(key)
+
+    def collapse(value: Any) -> Any:
+        if isinstance(value, ObjectPairs):
+            return {key: collapse(item) for key, item in value}
+        if isinstance(value, list):
+            return [collapse(item) for item in value]
+        return value
+
+    return collapse(decoded)
 
 
 def _is_legacy_scalar_u8_v1_index(selected: Any) -> bool:
