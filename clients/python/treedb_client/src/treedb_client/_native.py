@@ -344,6 +344,7 @@ def _dense_response(body, top_k, version=2, *, query_mode=None, quantized_index_
         from ._dense_work import (
             DenseScorePlaneProof,
             dense_cosine_scores_valid,
+            dense_document_ids_valid,
             dense_quantized_response_work_matches,
             dense_score_plane_byte_counters_match,
         )
@@ -387,8 +388,8 @@ def _dense_response(body, top_k, version=2, *, query_mode=None, quantized_index_
         ids, docs = _decode_vector(sections[102], count), _decode_vector(sections[103], count)
     except TreeDBProtocolError as exc:
         raise TreeDBProtocolError("invalid native dense result vectors", dense_work=work, score_plane=score_plane) from exc
-    if version == 3 and len(set(ids)) != len(ids):
-        raise TreeDBProtocolError("native dense response has duplicate IDs", dense_work=work, score_plane=score_plane)
+    if version == 3 and not dense_document_ids_valid(ids):
+        raise TreeDBProtocolError("native dense response has invalid or duplicate IDs", dense_work=work, score_plane=score_plane)
     if version == 3 and not _dense_results_ordered(ids, scores):
         raise TreeDBProtocolError("native dense response is not in score and ID order", dense_work=work, score_plane=score_plane)
     if version == 3:

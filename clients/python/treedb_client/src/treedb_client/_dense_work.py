@@ -282,6 +282,21 @@ def dense_cosine_scores_valid(scores):
     )
 
 
+def dense_document_ids_valid(ids):
+    """Match producer ID admission and require uniqueness across result rows."""
+    seen = set()
+    for value in ids:
+        if isinstance(value, bytes):
+            try:
+                value = value.decode("utf-8")
+            except UnicodeError:
+                return False
+        if not isinstance(value, str) or not value or value.strip() != value or value in seen:
+            return False
+        seen.add(value)
+    return True
+
+
 def dense_quantized_response_work_matches(work, proof, top_k, result_count, filter_requested):
     """Bind the public quantized response to one producer-owned route model."""
 

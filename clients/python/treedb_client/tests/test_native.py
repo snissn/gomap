@@ -307,6 +307,27 @@ class NativeCodecTests(unittest.TestCase):
                 self.assertEqual(caught.exception.dense_work, _dense_work(raw_work))
                 self.assertIsNotNone(caught.exception.score_plane)
                 self.assertEqual(caught.exception.score_plane.quantized_index_name, "embedding.scalar_u8.public")
+            for name, item_id in (
+                ("empty", b""),
+                ("whitespace only", b" \t"),
+                ("leading whitespace", b" a"),
+                ("trailing whitespace", b"a "),
+                ("invalid UTF-8", b"\xff"),
+            ):
+                with self.subTest(invalid_id=name), self.assertRaises(TreeDBProtocolError) as caught:
+                    _dense_response(
+                        _section(102, _vector([item_id])) + _section(103, _vector([b'{}'])) +
+                        _section(130, meta) + _section(134, raw_work) + _section(136, score_plane),
+                        1,
+                        version=3,
+                        query_mode="quantized_rerank",
+                        quantized_index_name="embedding.scalar_u8.public",
+                        quantized_rerank_candidates=0,
+                        ef_search=0,
+                        query_dimension=2,
+                    )
+                self.assertIsNotNone(caught.exception.dense_work)
+                self.assertIsNotNone(caught.exception.score_plane)
             ordered_work_values = list(work_values)
             ordered_work_values[3] = ordered_work_values[7] = ordered_work_values[9] = 2
             ordered_work_values[31:38] = [2, 2, 0, 4, 2, 2, 2]

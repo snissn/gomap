@@ -194,8 +194,8 @@ func (c *Client) DenseVectorSearch(ctx context.Context, request DenseVectorSearc
 	if err == nil && version == iwire.DenseVectorSearchTypedQuantizedVersion {
 		if !denseV3CandidateCountMatchesRows(out.Candidates, len(out.Results)) {
 			err = protocolError(iwire.ErrConsistencyUnavailable, "dense v3 candidate count does not match returned rows")
-		} else if !denseV3ResultsHaveUniqueIDs(out.Results) {
-			err = protocolError(iwire.ErrConsistencyUnavailable, "dense v3 results contain duplicate IDs")
+		} else if !denseV3ResultsHaveValidIDs(out.Results) {
+			err = protocolError(iwire.ErrConsistencyUnavailable, "dense v3 results contain invalid or duplicate IDs")
 		} else if !denseV3ResultsHaveCosineScores(out.Results) {
 			err = protocolError(iwire.ErrConsistencyUnavailable, "dense v3 results contain an invalid cosine score")
 		} else if !denseV3ResultsOrdered(out.Results) {
@@ -235,9 +235,12 @@ func denseV3CandidateCountMatchesRows(candidates, resultCount int) bool {
 	return candidates >= 0 && resultCount >= 0 && candidates == resultCount
 }
 
-func denseV3ResultsHaveUniqueIDs(results []DenseVectorSearchResult) bool {
+func denseV3ResultsHaveValidIDs(results []DenseVectorSearchResult) bool {
 	seen := make(map[string]struct{}, len(results))
 	for _, result := range results {
+		if len(result.ID) == 0 || !utf8.Valid(result.ID) || !bytes.Equal(bytes.TrimSpace(result.ID), result.ID) {
+			return false
+		}
 		key := string(result.ID)
 		if _, exists := seen[key]; exists {
 			return false

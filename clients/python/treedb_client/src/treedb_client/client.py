@@ -1032,6 +1032,7 @@ def _validate_http_dense_quantized_response(
 
     from ._dense_work import (
         dense_cosine_scores_valid,
+        dense_document_ids_valid,
         dense_quantized_response_work_matches,
         dense_score_plane_byte_counters_match,
     )
@@ -1058,7 +1059,7 @@ def _validate_http_dense_quantized_response(
         or (filter_requested and len(response.documents) != min(top_k, work.graph.filter.eligible_rows))
         or len(response.documents) > top_k
         or response.candidates != len(response.documents)
-        or len({document.id for document in response.documents}) != len(response.documents)
+        or not dense_document_ids_valid(document.id for document in response.documents)
         or any(document.score is None for document in response.documents)
         or not dense_cosine_scores_valid(document.score for document in response.documents)
         or not _dense_http_results_ordered(response.documents)

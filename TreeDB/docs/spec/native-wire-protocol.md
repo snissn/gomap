@@ -859,6 +859,8 @@ exact-base/result-ID counts, and exact suffix calls equal graph delta scoring.
 Graph base candidates may be lower than quantized calls because public minimal
 stats do not require that optional count. Returned exact cosine scores are
 finite and within `[-1.000001, 1.000001]`, allowing only bounded FP32 rounding.
+Returned IDs are valid UTF-8, nonempty, free of leading or trailing Unicode
+whitespace, and unique, matching document-service write admission.
 
 Requested documents are fetched from the search's same read owner before
 release. Content/meta are returned; embedding echo is opt-in through the

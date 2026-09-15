@@ -492,12 +492,21 @@ func TestDenseWorkResultsBindOutputDiagnostics(t *testing.T) {
 	}
 }
 
-func TestDenseV3ResultsHaveUniqueIDs(t *testing.T) {
-	if !denseV3ResultsHaveUniqueIDs([]DenseVectorSearchResult{{ID: []byte("a")}, {ID: []byte("b")}}) {
-		t.Fatal("unique result IDs rejected")
+func TestDenseV3ResultsHaveValidIDs(t *testing.T) {
+	if !denseV3ResultsHaveValidIDs([]DenseVectorSearchResult{{ID: []byte("a")}, {ID: []byte("b")}}) {
+		t.Fatal("valid unique result IDs rejected")
 	}
-	if denseV3ResultsHaveUniqueIDs([]DenseVectorSearchResult{{ID: []byte("a")}, {ID: []byte("a")}}) {
-		t.Fatal("duplicate result IDs accepted")
+	for name, results := range map[string][]DenseVectorSearchResult{
+		"duplicate":           {{ID: []byte("a")}, {ID: []byte("a")}},
+		"empty":               {{ID: nil}},
+		"whitespace only":     {{ID: []byte(" \t")}},
+		"leading whitespace":  {{ID: []byte(" a")}},
+		"trailing whitespace": {{ID: []byte("a ")}},
+		"invalid UTF-8":       {{ID: []byte{0xff}}},
+	} {
+		if denseV3ResultsHaveValidIDs(results) {
+			t.Fatalf("invalid %s result ID accepted", name)
+		}
 	}
 }
 
@@ -566,11 +575,11 @@ func TestDenseV3ResultDecodeErrorsPreserveOwnedProofs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	responseFor := func(meta []byte) []byte {
+	responseFor := func(meta, id []byte) []byte {
 		t.Helper()
 		var body []byte
 		for _, section := range []iwire.Section{
-			{ID: iwire.SectionDocumentIDs, Bytes: iwire.AppendByteVector(nil, []byte("a"))},
+			{ID: iwire.SectionDocumentIDs, Bytes: iwire.AppendByteVector(nil, id)},
 			{ID: iwire.SectionDocuments, Bytes: iwire.AppendByteVector(nil, []byte("{}"))},
 			{ID: iwire.SectionDenseSearchResponse, Bytes: meta},
 			{ID: iwire.SectionDenseSearchWork, Flags: iwire.SectionFlagCritical, Bytes: workRaw},
@@ -584,16 +593,19 @@ func TestDenseV3ResultDecodeErrorsPreserveOwnedProofs(t *testing.T) {
 		return body
 	}
 	validScore := binary.LittleEndian.AppendUint64(nil, math.Float64bits(1))
-	for name, meta := range map[string][]byte{
-		"candidate count":    append([]byte{3, 0, 0, 0, 1}, validScore...),
-		"nonfinite score":    append([]byte{3, 1, 0, 0, 1}, binary.LittleEndian.AppendUint64(nil, math.Float64bits(math.NaN()))...),
-		"out-of-range score": append([]byte{3, 1, 0, 0, 1}, binary.LittleEndian.AppendUint64(nil, math.Float64bits(100))...),
+	for name, candidate := range map[string]struct{ meta, id []byte }{
+		"candidate count":    {append([]byte{3, 0, 0, 0, 1}, validScore...), []byte("a")},
+		"nonfinite score":    {append([]byte{3, 1, 0, 0, 1}, binary.LittleEndian.AppendUint64(nil, math.Float64bits(math.NaN()))...), []byte("a")},
+		"out-of-range score": {append([]byte{3, 1, 0, 0, 1}, binary.LittleEndian.AppendUint64(nil, math.Float64bits(100))...), []byte("a")},
+		"empty ID":           {append([]byte{3, 1, 0, 0, 1}, validScore...), nil},
+		"leading-space ID":   {append([]byte{3, 1, 0, 0, 1}, validScore...), []byte(" a")},
+		"trailing-space ID":  {append([]byte{3, 1, 0, 0, 1}, validScore...), []byte("a ")},
 	} {
 		t.Run(name, func(t *testing.T) {
 			clientConn, serverConn := net.Pipe()
 			client := NewClient(clientConn)
 			client.denseTypedQuantizedNegotiated = true
-			response := responseFor(meta)
+			response := responseFor(candidate.meta, candidate.id)
 			errCh := make(chan error, 1)
 			go func() {
 				header, _, serveErr := readFrame(serverConn, iwire.DefaultLimits())

@@ -847,6 +847,22 @@ class TreeDBClientTests(unittest.TestCase):
                             quantized_index_name="embedding.scalar_u8.public",
                         )
                     manifest_client.close()
+            for name, item_id in (
+                ("empty", ""),
+                ("whitespace only", " \t"),
+                ("leading whitespace", " a"),
+                ("trailing whitespace", "a "),
+            ):
+                invalid_id = copy.deepcopy(payload)
+                invalid_id["documents"][0]["id"] = item_id
+                with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, invalid_id, 0)}) as invalid_id_server:
+                    invalid_id_client = TreeDBClient(invalid_id_server.base_url, timeout=1)
+                    with self.subTest(invalid_id=name), self.assertRaisesRegex(TreeDBProtocolError, "score-plane proof"):
+                        invalid_id_client.query_by_embedding(
+                            "docs", [1, 0], 1, query_mode="quantized_rerank",
+                            quantized_index_name="embedding.scalar_u8.public",
+                        )
+                    invalid_id_client.close()
             for mutation in (
                 lambda item: item.update(exact=True),
                 lambda item: item.update(dense_work={**dense_work, "graph": {**dense_work["graph"], "route": "typed_exact"}}),
