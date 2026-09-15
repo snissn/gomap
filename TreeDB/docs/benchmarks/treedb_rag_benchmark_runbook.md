@@ -60,6 +60,16 @@ A completed bounded artifact must still prove its manifest operations, timed
 reader/writer overlap, reindex/reopen, and final-state scroll. Diagnostic-only
 status prevents full qualification; it does not excuse missing lifecycle work.
 
+The Q5 packet consumer has one narrower historical-control disposition. It may
+retain either that clean completed 50K `native_runtime` lifecycle control or the
+exact #4617 failure described under **M0 baseline limitation** below. The latter
+must have only the `broad_10pct` initial-oracle failure, the frozen expected IDs,
+zero results, `complete_finite_ann`, `bounded_complete_set`, and exactly 2,064
+visited/scored candidates with no scan fallback. It is failed recall evidence,
+not lifecycle or latency evidence. No timeout, cleanup/provenance failure,
+additional mismatch, different row count, or changed route is equivalent. The
+SQ8 bounded control remains clean-completion-only.
+
 The historical shell lane defaults to `native_runtime` for baseline reproduction.
 The Python runner also supports explicit `--strategy column_graph` with declared
 typed input and native binary hot-path transport. Supply

@@ -357,6 +357,14 @@ fixture. M2/M4 must test 512/513/1000/4096/4097 allow-set cardinalities, dispers
 eligible nodes, and base/overlay mutations; passing the larger baseline does not
 discharge the small-set regression.
 
+Q5 may classify only this exact Go-validated failure as
+`known_legacy_complete_finite_ann_failure` for its historical `native_runtime`
+control. That classification is not a completed baseline and supplies no
+lifecycle, latency, or representation-comparison claim. Its SQ8 bounded sibling
+must complete cleanly, and same-graph exact/SQ8 attribution remains the paired
+full diagnostic. Any neighboring partial artifact or additional failure is
+invalid rather than another accepted legacy outcome.
+
 The historical Python search call returns full client documents, then separately
 retrieves the winning IDs one by one via `filter_documents`. Search latency
 therefore already includes top-K materialization and response decoding; the
