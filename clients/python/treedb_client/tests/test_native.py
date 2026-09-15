@@ -11,7 +11,7 @@ import _support
 from treedb_client import TreeDBClient
 from treedb_client.errors import TreeDBConfigError, TreeDBProtocolError, TreeDBTimeoutError, TreeDBTransportError, UnsupportedError
 from treedb_client._native import _dense_work, _dense_quantized_options, _dense_score_plane
-from treedb_client._dense_work import DenseSearchWork
+from treedb_client._dense_work import DenseSearchWork, dense_document_ids_valid
 from treedb_client.client import _decode_json_body
 from treedb_client._native import _HEADER, _NativeConnection, _dense_request, _dense_response, _decode_vector, _read_uint, _section, _sections, _string_map, _uint, _vector, _typed_upsert_request, _typed_upsert_response
 
@@ -75,6 +75,45 @@ class NativeCodecTests(unittest.TestCase):
                     quantized_index_name="embedding.scalar_u8.public", quantized_rerank_candidates=0,
                     ef_search=0, query_dimension=2,
                 )
+            reversed_manifest_work_values = list(work_values)
+            reversed_manifest_work_values[23], reversed_manifest_work_values[27] = 2, 1
+            reversed_manifest_plane = score_plane[:-8] + b"\x02\x01\x01\x03\x01\x01\x01\x03"
+            with self.assertRaises(TreeDBProtocolError):
+                _dense_response(
+                    _section(102, _vector([b"a"])) + _section(103, _vector([b'{"id":"a"}'])) +
+                    _section(130, meta) + _section(134, b"".join(_uint(value) for value in reversed_manifest_work_values)) +
+                    _section(136, reversed_manifest_plane),
+                    1, version=3, query_mode="quantized_rerank",
+                    quantized_index_name="embedding.scalar_u8.public", quantized_rerank_candidates=0,
+                    ef_search=0, query_dimension=2, expected_generation=2,
+                )
+            newer_generation_work_values = list(work_values)
+            newer_generation_work_values[20] = 3
+            newer_generation_values = list(values)
+            newer_generation_values[24] = 3
+            newer_generation_plane = b"".join(_uint(value) for value in newer_generation_values) + b"\x00" + _bytes_for_test("embedding.scalar_u8.public") + _bytes_for_test("scalar_u8")
+            newer_generation_plane += b"\x01\x01\x01\x03" * 2
+            with self.assertRaises(TreeDBProtocolError):
+                _dense_response(
+                    _section(102, _vector([b"a"])) + _section(103, _vector([b'{"id":"a"}'])) +
+                    _section(130, meta) + _section(134, b"".join(_uint(value) for value in newer_generation_work_values)) +
+                    _section(136, newer_generation_plane),
+                    1, version=3, query_mode="quantized_rerank",
+                    quantized_index_name="embedding.scalar_u8.public", quantized_rerank_candidates=0,
+                    ef_search=0, query_dimension=2, expected_generation=2,
+                )
+            boundary_document = b'{"id":"\\u001ca"}'
+            boundary_work_values = list(work_values)
+            boundary_work_values[34] = len(boundary_document)
+            boundary = _dense_response(
+                _section(102, _vector([b"\x1ca"])) + _section(103, _vector([boundary_document])) +
+                _section(130, meta) + _section(134, b"".join(_uint(value) for value in boundary_work_values)) +
+                _section(136, score_plane),
+                1, version=3, query_mode="quantized_rerank",
+                quantized_index_name="embedding.scalar_u8.public", quantized_rerank_candidates=0,
+                ef_search=0, query_dimension=2, expected_generation=2,
+            )
+            self.assertEqual(boundary[0], [b"\x1ca"])
             for name, offset in (("generation", -8), ("version", -6), ("checksum", -5)):
                 incomplete_manifest_plane = bytearray(score_plane)
                 incomplete_manifest_plane[offset] = 0
@@ -196,6 +235,7 @@ class NativeCodecTests(unittest.TestCase):
                     ef_search=0,
                     query_dimension=2,
                 )
+
             base_id_values = list(work_values)
             base_id_values[9] = 0
             with self.assertRaises(TreeDBProtocolError):
@@ -538,6 +578,17 @@ class NativeCodecTests(unittest.TestCase):
         finally:
             client.close()
 
+    def test_dense_document_ids_match_go_trim_space_and_utf8(self):
+        self.assertTrue(dense_document_ids_valid(["a", b"b"]))
+        for codepoint in range(0x1C, 0x20):
+            separator = chr(codepoint)
+            with self.subTest(go_non_space=hex(codepoint)):
+                self.assertTrue(dense_document_ids_valid([separator + "a", "a" + separator]))
+        for value in ("", " a", "a ", "\u2000a", "a\u3000", "\ud800", b"\xff"):
+            with self.subTest(value=value):
+                self.assertFalse(dense_document_ids_valid([value]))
+        self.assertFalse(dense_document_ids_valid(["a", b"a"]))
+
     def test_typed_upsert_golden_residual_and_validation(self):
         info = SimpleNamespace(dimension=2, generation=1, scalar_fields=[])
         row = {"id": "a", "content": "text", "embedding": [1, 0], "meta": {"extra": "owned"}}
@@ -670,6 +721,7 @@ class NativeCodecTests(unittest.TestCase):
         for name, work_raw, plane_raw, want_work, want_plane in (
             ("score plane", raw, b"\x01", work, None),
             ("dense work", b"\x01", valid_plane, None, proof),
+            ("both proofs", b"\x01", b"\x01", None, None),
         ):
             payload = _section(2, error_payload) + _section(134, work_raw) + _section(136, plane_raw)
             connection = _NativeConnection("127.0.0.1:2", 1)
@@ -680,6 +732,23 @@ class NativeCodecTests(unittest.TestCase):
             self.assertEqual(caught.exception.dense_work, want_work)
             self.assertEqual(caught.exception.score_plane, want_plane)
             self.assertIsInstance(caught.exception.__cause__, TreeDBProtocolError)
+
+        proof_sections = _section(134, raw) + _section(136, valid_plane)
+        unknown_critical = _uint(999) + _uint(1) + _uint(0)
+        for name, payload in (
+            ("missing error metadata", proof_sections),
+            ("duplicate error metadata", _section(2, error_payload) * 2 + proof_sections),
+            ("invalid retry flag", _section(2, _uint(1) + b"\x02\x00") + proof_sections),
+            ("truncated error metadata", _section(2, b"") + proof_sections),
+            ("unknown critical sibling", _section(2, error_payload) + proof_sections + unknown_critical),
+        ):
+            connection = _NativeConnection("127.0.0.1:2", 1)
+            connection.socket = mock.Mock()
+            header = _HEADER.pack(b"TDB1", 40, 1, 0, 6, 0, 0, 1, len(payload))
+            with self.subTest(malformed_error=name), mock.patch.object(connection, "_read", side_effect=(header, payload)), self.assertRaises(TreeDBProtocolError) as caught:
+                connection._round_trip(1, b"", 2, 10**12, dense_proof=True, dense_version=3)
+            self.assertEqual(caught.exception.dense_work, work)
+            self.assertEqual(caught.exception.score_plane, proof)
 
         # Existing exceptions retain decoded proof if client document parsing fails.
         body = _section(102, _vector([b"a"])) + _section(103, _vector([b"{}"])) + _section(130, bytes.fromhex("0201000001000000000000f03f")) + _section(134, raw)

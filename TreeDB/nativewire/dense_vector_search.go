@@ -276,6 +276,7 @@ func validateDenseQuantizedScorePlaneResponse(work documentservice.DenseSearchWo
 	}
 	if proof == nil || !proof.Available || !proof.Completed || !proof.Snapshot.Available ||
 		proof.RequestedMode != request.QueryMode || proof.EffectiveMode != collections.VectorIndexQueryModeQuantizedRerank ||
+		(request.ExpectedGeneration != 0 && proof.Snapshot.SchemaGeneration > request.ExpectedGeneration) ||
 		(proof.Route != "typed_empty" && proof.Route != "typed_exact" && proof.Route != "quantized_rerank") ||
 		!work.Completed || !work.Graph.Completed || graphRoute != expectedGraphRoute ||
 		proof.Snapshot != work.Graph.Snapshot ||

@@ -53,6 +53,22 @@ def _section(section_id, value):
     return _uint(section_id) + b"\x00" + _bytes(value)
 
 
+def _section_items(body):
+    result = []
+    offset = 0
+    count = 0
+    while offset < len(body):
+        section_id, offset = _read_uint(body, offset)
+        flags, offset = _read_uint(body, offset)
+        size, offset = _read_uint(body, offset)
+        count += 1
+        if count > 64 or flags & ~1 or size > len(body) - offset:
+            raise TreeDBProtocolError("invalid native section bounds or flags")
+        result.append((section_id, flags, body[offset:offset + size]))
+        offset += size
+    return result
+
+
 def _sections(body, known):
     result = {}
     offset = 0
@@ -331,7 +347,8 @@ def _dense_results_ordered(ids, scores):
 
 
 def _dense_response(body, top_k, version=2, *, query_mode=None, quantized_index_name=None,
-                    quantized_rerank_candidates=0, ef_search=None, query_dimension=None, filter_requested=False):
+                    quantized_rerank_candidates=0, ef_search=None, query_dimension=None,
+                    expected_generation=None, filter_requested=False):
     if version not in (1, 2, 3):
         raise TreeDBProtocolError(f"unsupported native dense response version {version}")
     known = {102, 103, 130, 134}
@@ -396,6 +413,11 @@ def _dense_response(body, top_k, version=2, *, query_mode=None, quantized_index_
         if (not score_plane.available or not score_plane.completed or not score_plane.snapshot.available
                 or score_plane.requested_mode != (query_mode or "quantized_rerank")
                 or score_plane.effective_mode != "quantized_rerank"
+                or (expected_generation is not None and (
+                    type(expected_generation) is not int
+                    or not 0 < expected_generation < 1 << 64
+                    or score_plane.snapshot.schema_generation > expected_generation
+                ))
                 or score_plane.route not in ("typed_empty", "typed_exact", "quantized_rerank")
                 or not dense_score_plane_byte_counters_match(score_plane, query_dimension)
                 or not dense_quantized_response_work_matches(
@@ -488,34 +510,49 @@ class _NativeConnection:
                 known.add(134)
                 if dense_version == 3:
                     known.add(136)
-            sections = _sections(payload, known)
-            if 134 in sections and not dense_proof:
-                raise TreeDBProtocolError("unexpected native dense error work")
-            if 2 not in sections:
-                raise TreeDBProtocolError("native error section missing")
-            error = sections[2]
-            code, offset = _read_uint(error, 0)
-            if offset >= len(error) or error[offset] > 1:
-                raise TreeDBProtocolError("invalid native error retry flag")
-            size, offset = _read_uint(error, offset + 1)
-            if size != len(error) - offset:
-                raise TreeDBProtocolError("invalid native error message")
+            sections = {}
+            duplicates = set()
+            section_error = None
+            for section_id, section_flags, section_value in _section_items(payload):
+                if section_id in sections:
+                    duplicates.add(section_id)
+                    if section_error is None:
+                        section_error = TreeDBProtocolError("duplicate native section")
+                    continue
+                if section_id not in known and section_flags & 1 and section_error is None:
+                    section_error = TreeDBProtocolError("unknown critical native section")
+                sections[section_id] = section_value
             work = score_plane = None
             work_error = score_plane_error = None
-            if 134 in sections:
+            if dense_proof and 134 in sections and 134 not in duplicates:
                 try:
                     work = _dense_work(sections[134])
                 except TreeDBProtocolError as exc:
                     work_error = exc
-            if 136 in sections:
-                if dense_version != 3:
-                    score_plane_error = TreeDBProtocolError("unexpected native dense score-plane proof")
-                else:
-                    from ._dense_work import DenseScorePlaneProof
-                    try:
-                        score_plane = DenseScorePlaneProof.from_dict(_dense_score_plane(sections[136]))
-                    except (ValueError, TypeError, KeyError, UnicodeError, TreeDBProtocolError) as exc:
-                        score_plane_error = exc
+            if dense_version == 3 and 136 in sections and 136 not in duplicates:
+                from ._dense_work import DenseScorePlaneProof
+                try:
+                    score_plane = DenseScorePlaneProof.from_dict(_dense_score_plane(sections[136]))
+                except (ValueError, TypeError, KeyError, UnicodeError, TreeDBProtocolError) as exc:
+                    score_plane_error = exc
+            if section_error is not None:
+                raise TreeDBProtocolError(str(section_error), dense_work=work, score_plane=score_plane) from section_error
+            if 134 in sections and not dense_proof:
+                raise TreeDBProtocolError("unexpected native dense error work", score_plane=score_plane)
+            if 2 not in sections:
+                raise TreeDBProtocolError("native error section missing", dense_work=work, score_plane=score_plane)
+            error = sections[2]
+            try:
+                code, offset = _read_uint(error, 0)
+                if offset >= len(error) or error[offset] > 1:
+                    raise TreeDBProtocolError("invalid native error retry flag")
+                size, offset = _read_uint(error, offset + 1)
+                if size != len(error) - offset:
+                    raise TreeDBProtocolError("invalid native error message")
+            except TreeDBProtocolError as exc:
+                raise TreeDBProtocolError(str(exc), dense_work=work, score_plane=score_plane) from exc
+            if 136 in sections and dense_version != 3:
+                raise TreeDBProtocolError("unexpected native dense score-plane proof", dense_work=work)
             if work_error is not None:
                 raise TreeDBProtocolError("invalid native dense work proof", score_plane=score_plane) from work_error
             if score_plane_error is not None:

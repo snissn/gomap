@@ -43,6 +43,11 @@ func TestDenseWorkGoldenStrictOwnershipAndAllocations(t *testing.T) {
 	if _, err := appendDenseWork(nil, reversedCoverage); err == nil {
 		t.Fatal("dense work with reversed snapshot coverage accepted")
 	}
+	reversedManifest := w
+	reversedManifest.Graph.Snapshot.BaseManifest.Generation = reversedManifest.Graph.Snapshot.CurrentManifest.Generation + 1
+	if _, err := appendDenseWork(nil, reversedManifest); err == nil {
+		t.Fatal("dense work with reversed snapshot manifest generation accepted")
+	}
 	for name, mutate := range map[string]func(*collections.ColumnGraphQuerySnapshot){
 		"schema generation": func(s *collections.ColumnGraphQuerySnapshot) { s.SchemaGeneration = 0 },
 		"base coverage LSN": func(s *collections.ColumnGraphQuerySnapshot) { s.BaseCoverageLSN = 0 },

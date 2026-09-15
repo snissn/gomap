@@ -120,6 +120,11 @@ func TestDenseScorePlaneCodecOwnedAndStrict(t *testing.T) {
 	if _, err := appendDenseScorePlane(nil, reversedCoverage, iwire.DefaultLimits()); err == nil {
 		t.Fatal("score-plane proof with reversed snapshot coverage accepted")
 	}
+	reversedManifest := proof
+	reversedManifest.Snapshot.BaseManifest.Generation = reversedManifest.Snapshot.CurrentManifest.Generation + 1
+	if _, err := appendDenseScorePlane(nil, reversedManifest, iwire.DefaultLimits()); err == nil {
+		t.Fatal("score-plane proof with reversed snapshot manifest generation accepted")
+	}
 	for name, mutate := range map[string]func(*collections.ColumnGraphQuerySnapshot){
 		"schema generation": func(s *collections.ColumnGraphQuerySnapshot) { s.SchemaGeneration = 0 },
 		"base coverage LSN": func(s *collections.ColumnGraphQuerySnapshot) { s.BaseCoverageLSN = 0 },
@@ -173,6 +178,20 @@ func TestDenseQuantizedScorePlaneResponseRejectsUnsupportedRoute(t *testing.T) {
 	if err := validateDenseQuantizedScorePlaneResponse(work, proof, request, 0); err != nil {
 		t.Fatalf("valid public proof rejected: %v", err)
 	}
+	newerAggregate := request
+	newerAggregate.ExpectedGeneration = proof.Snapshot.SchemaGeneration + 1
+	if err := validateDenseQuantizedScorePlaneResponse(work, proof, newerAggregate, 0); err != nil {
+		t.Fatalf("aggregate generation newer than vector generation rejected: %v", err)
+	}
+	newerSnapshot := *proof
+	newerSnapshot.Snapshot.SchemaGeneration++
+	newerSnapshotWork := work
+	newerSnapshotWork.Graph.Snapshot = newerSnapshot.Snapshot
+	request.ExpectedGeneration = proof.Snapshot.SchemaGeneration
+	if err := validateDenseQuantizedScorePlaneResponse(newerSnapshotWork, &newerSnapshot, request, 0); err == nil {
+		t.Fatal("snapshot newer than the admitted generation was accepted")
+	}
+	request.ExpectedGeneration = 0
 	for name, candidate := range map[string]documentservice.DenseSearchWork{
 		"base edge work": func() documentservice.DenseSearchWork {
 			candidate := work
@@ -512,7 +531,7 @@ func TestDenseWorkResultsBindOutputDiagnostics(t *testing.T) {
 }
 
 func TestDenseV3ResultsHaveValidIDs(t *testing.T) {
-	if !denseV3ResultsHaveValidIDs([]DenseVectorSearchResult{{ID: []byte("a")}, {ID: []byte("b")}}) {
+	if !denseV3ResultsHaveValidIDs([]DenseVectorSearchResult{{ID: []byte("a")}, {ID: []byte("b")}, {ID: []byte("\x1cc")}}) {
 		t.Fatal("valid unique result IDs rejected")
 	}
 	for name, results := range map[string][]DenseVectorSearchResult{
@@ -698,6 +717,7 @@ func TestDenseV3WireErrorMalformedProofPreservesSibling(t *testing.T) {
 	}{
 		{"malformed score plane", workRaw, []byte{1}, true, false},
 		{"malformed dense work", []byte{1}, proofRaw, false, true},
+		{"both proofs malformed", []byte{1}, []byte{1}, false, false},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			var body []byte
@@ -724,6 +744,71 @@ func TestDenseV3WireErrorMalformedProofPreservesSibling(t *testing.T) {
 			}
 			if nativeCodeOf(got) != iwire.ErrMalformedFrame {
 				t.Fatalf("malformed proof code=%d", nativeCodeOf(got))
+			}
+		})
+	}
+	malformedRetry := binary.AppendUvarint(nil, uint64(iwire.ErrInternal))
+	malformedRetry = append(malformedRetry, 2, 0)
+	validError := appendErrorPayload(nil, iwire.ErrInternal, false, "original")
+	for _, tt := range []struct {
+		name     string
+		sections []iwire.Section
+		wantCode iwire.ErrorCode
+	}{
+		{
+			name: "missing error metadata",
+			sections: []iwire.Section{
+				{ID: iwire.SectionDenseSearchWork, Flags: iwire.SectionFlagCritical, Bytes: workRaw},
+				{ID: iwire.SectionDenseSearchScorePlaneProof, Flags: iwire.SectionFlagCritical, Bytes: proofRaw},
+			},
+			wantCode: iwire.ErrMalformedFrame,
+		},
+		{
+			name: "duplicate error metadata",
+			sections: []iwire.Section{
+				{ID: iwire.SectionError, Bytes: validError},
+				{ID: iwire.SectionError, Bytes: validError},
+				{ID: iwire.SectionDenseSearchWork, Flags: iwire.SectionFlagCritical, Bytes: workRaw},
+				{ID: iwire.SectionDenseSearchScorePlaneProof, Flags: iwire.SectionFlagCritical, Bytes: proofRaw},
+			},
+			wantCode: iwire.ErrInvalidCommand,
+		},
+		{
+			name: "malformed error metadata",
+			sections: []iwire.Section{
+				{ID: iwire.SectionError, Bytes: malformedRetry},
+				{ID: iwire.SectionDenseSearchWork, Flags: iwire.SectionFlagCritical, Bytes: workRaw},
+				{ID: iwire.SectionDenseSearchScorePlaneProof, Flags: iwire.SectionFlagCritical, Bytes: proofRaw},
+			},
+			wantCode: iwire.ErrMalformedFrame,
+		},
+		{
+			name: "unknown critical sibling",
+			sections: []iwire.Section{
+				{ID: iwire.SectionError, Bytes: validError},
+				{ID: iwire.SectionDenseSearchWork, Flags: iwire.SectionFlagCritical, Bytes: workRaw},
+				{ID: iwire.SectionDenseSearchScorePlaneProof, Flags: iwire.SectionFlagCritical, Bytes: proofRaw},
+				{ID: 999, Flags: iwire.SectionFlagCritical},
+			},
+			wantCode: iwire.ErrUnsupportedFeature,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var body []byte
+			for _, section := range tt.sections {
+				var err error
+				body, err = iwire.AppendSection(body, section)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			got := decodeWireErrorVersion(body, iwire.DefaultLimits(), iwire.DenseVectorSearchTypedQuantizedVersion)
+			var decodeErr *DenseVectorSearchDecodeError
+			if !errors.As(got, &decodeErr) || decodeErr.DenseWork == nil || decodeErr.ScorePlane == nil {
+				t.Fatalf("malformed error envelope lost proofs: %v", got)
+			}
+			if *decodeErr.DenseWork != work || *decodeErr.ScorePlane != proof || nativeCodeOf(got) != tt.wantCode {
+				t.Fatalf("malformed error envelope changed proofs or code: %v", got)
 			}
 		})
 	}

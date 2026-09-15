@@ -68,6 +68,8 @@ class DenseSnapshotWork:
             raise ValueError("available dense snapshot has no coverage")
         if values["available"] and values["current_coverage_lsn"] < values["base_coverage_lsn"]:
             raise ValueError("dense snapshot coverage is reversed")
+        if values["available"] and current.generation < base.generation:
+            raise ValueError("dense snapshot manifest generation is reversed")
         return cls(**values, base_manifest=base, current_manifest=current)
 
 
@@ -295,10 +297,29 @@ def dense_document_ids_valid(ids):
                 value = value.decode("utf-8")
             except UnicodeError:
                 return False
-        if not isinstance(value, str) or not value or value.strip() != value or value in seen:
+        elif isinstance(value, str):
+            try:
+                value.encode("utf-8", errors="strict")
+            except UnicodeError:
+                return False
+        else:
+            return False
+        if not value:
+            return False
+        if _go_unicode_space(value[0]) or _go_unicode_space(value[-1]) or value in seen:
             return False
         seen.add(value)
     return True
+
+
+def _go_unicode_space(value):
+    """Mirror unicode.IsSpace, which backs Go strings.TrimSpace."""
+    codepoint = ord(value)
+    return (
+        codepoint in (0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x20, 0x85, 0xA0, 0x1680,
+                      0x2028, 0x2029, 0x202F, 0x205F, 0x3000)
+        or 0x2000 <= codepoint <= 0x200A
+    )
 
 
 def dense_quantized_response_work_matches(work, proof, top_k, result_count, filter_requested):

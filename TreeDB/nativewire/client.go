@@ -372,49 +372,58 @@ func decodeWireErrorVersion(body []byte, limits iwire.Limits, denseVersion uint6
 	if err != nil {
 		return err
 	}
+	denseWorkAllowed := denseVersion >= iwire.DenseVectorSearchTypedVersion
+	out := new(WireError)
+	var workErr, scoreErr error
+	if denseWorkAllowed {
+		workRaw, workFound, candidateErr := singletonSection(sections, iwire.SectionDenseSearchWork)
+		workErr = candidateErr
+		if workErr == nil && workFound {
+			decoded, candidateErr := decodeDenseWork(workRaw)
+			workErr = candidateErr
+			if workErr == nil {
+				out.DenseWork = &decoded
+			}
+		}
+	}
+	if denseVersion == iwire.DenseVectorSearchTypedQuantizedVersion {
+		scoreRaw, scoreFound, candidateErr := singletonSection(sections, iwire.SectionDenseSearchScorePlaneProof)
+		scoreErr = candidateErr
+		if scoreErr == nil && scoreFound {
+			decoded, candidateErr := decodeDenseScorePlane(scoreRaw, limits)
+			scoreErr = candidateErr
+			if scoreErr == nil {
+				out.ScorePlane = &decoded
+			}
+		}
+	}
+	withProofs := func(candidate error) error {
+		if candidate == nil || (out.DenseWork == nil && out.ScorePlane == nil) {
+			return candidate
+		}
+		return &DenseVectorSearchDecodeError{Err: candidate, DenseWork: out.DenseWork, ScorePlane: out.ScorePlane}
+	}
 	for _, section := range sections {
-		denseWorkAllowed := denseVersion >= iwire.DenseVectorSearchTypedVersion
 		if section.ID == iwire.SectionDenseSearchWork && !denseWorkAllowed {
-			return protocolError(iwire.ErrMalformedFrame, "dense error work is unavailable for this call")
+			return withProofs(protocolError(iwire.ErrMalformedFrame, "dense error work is unavailable for this call"))
 		}
 		if section.ID == iwire.SectionDenseSearchScorePlaneProof && denseVersion != iwire.DenseVectorSearchTypedQuantizedVersion {
-			return protocolError(iwire.ErrMalformedFrame, "dense score-plane proof is unavailable for this call")
+			return withProofs(protocolError(iwire.ErrMalformedFrame, "dense score-plane proof is unavailable for this call"))
 		}
 		if denseWorkAllowed && section.ID != iwire.SectionError && section.ID != iwire.SectionDenseSearchWork && section.ID != iwire.SectionDenseSearchScorePlaneProof && section.Flags&iwire.SectionFlagCritical != 0 {
-			return protocolError(iwire.ErrUnsupportedFeature, "unknown critical dense error section")
+			return withProofs(protocolError(iwire.ErrUnsupportedFeature, "unknown critical dense error section"))
 		}
 	}
 	payload, ok, err := singletonSection(sections, iwire.SectionError)
 	if err != nil {
-		return err
+		return withProofs(err)
 	}
 	if !ok {
-		return protocolError(iwire.ErrMalformedFrame, "error frame missing error section")
+		return withProofs(protocolError(iwire.ErrMalformedFrame, "error frame missing error section"))
 	}
 	code, retryable, message, err := decodeErrorPayload(payload)
 	if err != nil {
-		return err
-	}
-	out := &WireError{Code: code, Retryable: retryable, Message: message}
-	workRaw, workFound, workErr := singletonSection(sections, iwire.SectionDenseSearchWork)
-	if workErr == nil && workFound {
-		work, err := decodeDenseWork(workRaw)
-		workErr = err
-		if workErr == nil {
-			out.DenseWork = &work
-		}
-	}
-	scoreRaw, scoreFound, scoreErr := singletonSection(sections, iwire.SectionDenseSearchScorePlaneProof)
-	if scoreErr == nil && scoreFound {
-		if denseVersion != iwire.DenseVectorSearchTypedQuantizedVersion {
-			scoreErr = protocolError(iwire.ErrMalformedFrame, "dense score-plane proof does not match command version")
-		} else {
-			proof, err := decodeDenseScorePlane(scoreRaw, limits)
-			scoreErr = err
-			if scoreErr == nil {
-				out.ScorePlane = &proof
-			}
-		}
+		return withProofs(err)
 	}
 	if workErr != nil {
 		return &DenseVectorSearchDecodeError{Err: workErr, ScorePlane: out.ScorePlane}
@@ -422,6 +431,7 @@ func decodeWireErrorVersion(body []byte, limits iwire.Limits, denseVersion uint6
 	if scoreErr != nil {
 		return &DenseVectorSearchDecodeError{Err: scoreErr, DenseWork: out.DenseWork}
 	}
+	out.Code, out.Retryable, out.Message = code, retryable, message
 	return out
 }
 

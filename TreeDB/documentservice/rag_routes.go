@@ -399,7 +399,7 @@ func (s *Service) searchDenseVectorNativeRawLocked(ctx context.Context, col *col
 			return RawDenseVectorSearchResponse{}, err
 		}
 		if info.TypedInput && req.QueryMode == collections.VectorIndexQueryModeQuantizedRerank {
-			if err := validateDenseTypedQuantizedVectorSearchRoute(search, req); err != nil {
+			if err := validateDenseTypedQuantizedVectorSearchRoute(search, req, info.Generation); err != nil {
 				_ = view.Close()
 				return RawDenseVectorSearchResponse{}, err
 			}
@@ -482,10 +482,13 @@ func validateDenseTypedVectorSearchRoute(response collections.VectorIndexSearchR
 	return nil
 }
 
-func validateDenseTypedQuantizedVectorSearchRoute(response collections.VectorIndexSearchResponse, req DenseVectorSearchRequest) error {
+func validateDenseTypedQuantizedVectorSearchRoute(response collections.VectorIndexSearchResponse, req DenseVectorSearchRequest, serviceGeneration uint64) error {
 	proof := response.Stats.ColumnGraphWork.ScorePlane
-	if !proof.Available || !proof.Completed || proof.RequestedMode != collections.VectorIndexQueryModeQuantizedRerank || proof.EffectiveMode != collections.VectorIndexQueryModeQuantizedRerank {
+	if !proof.Available || !proof.Completed || !proof.Snapshot.Available || proof.RequestedMode != collections.VectorIndexQueryModeQuantizedRerank || proof.EffectiveMode != collections.VectorIndexQueryModeQuantizedRerank {
 		return serviceError(CodeIndexUnavailable, "typed quantized dense search did not produce a completed quantized score-plane proof")
+	}
+	if serviceGeneration == 0 || proof.Snapshot.SchemaGeneration > serviceGeneration {
+		return serviceError(CodeIndexUnavailable, "typed quantized dense search snapshot exceeds the admitted service generation")
 	}
 	if proof.QuantizedIndexName != req.QuantizedIndexName || proof.QuantizedCodec != collections.QuantizedVectorCodecScalarU8 || proof.QuantizedVersion != 1 || proof.RequestedTopK != uint64(req.TopK) || proof.RequestedEFSearch != uint64(req.EfSearch) || proof.RequestedRerankCandidates != uint64(req.QuantizedRerankCandidates) {
 		return serviceError(CodeIndexUnavailable, "typed quantized dense search score-plane proof does not match the request")

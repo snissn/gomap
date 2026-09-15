@@ -113,13 +113,19 @@ Malformed proof is rejected without attaching it as trustworthy detail. Proof
 objects reject missing/unknown fields, invalid types and out-of-range integers.
 Available snapshots require a nonzero schema generation and base/current
 coverage LSN, plus nonzero generation and checksum in both base and current
-manifest identities; the manifest version is exactly 1. If a malformed native
-or HTTP score-plane
+manifest identities; the manifest version is exactly 1 and current manifest
+generation cannot precede the captured base. The captured vector schema
+generation may be below a newer aggregate vector/text index generation, never
+above it. If a malformed native or HTTP score-plane
 proof accompanies valid dense work, the protocol error retains that
 independently decoded `.dense_work` while leaving `.score_plane` unset; the
 inverse sibling failure likewise preserves a valid `.score_plane`.
 Quantized v3 results also require valid UTF-8, nonempty, untrimmed, unique
-document IDs, matching service write admission on native and HTTP responses.
+document IDs, using Go `unicode.IsSpace` boundary semantics to match service
+write admission on native and HTTP responses. Malformed native error metadata
+or an unknown critical error sibling cannot erase independently decoded valid
+proofs. HTTP response-encoding failures preserve the completed service proofs
+in their error envelope.
 Dense HTTP proof-bearing envelopes also reject duplicate keys; unrelated
 envelope extension fields retain their existing compatibility. Retained proofs
 remain valid after later requests, mutations and connection close. GetMany's ordinary list return

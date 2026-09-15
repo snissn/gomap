@@ -48,20 +48,30 @@ func denseManifestWorkComplete(m collections.ColumnGraphManifestWork) bool {
 	return m.Generation != 0 && m.Version == 1 && m.Checksum != 0
 }
 
+func denseSnapshotConsistent(s collections.ColumnGraphQuerySnapshot) bool {
+	if !s.Available {
+		return s == (collections.ColumnGraphQuerySnapshot{})
+	}
+	return s.SchemaGeneration != 0 &&
+		s.BaseCoverageLSN != 0 &&
+		s.CurrentCoverageLSN >= s.BaseCoverageLSN &&
+		denseManifestWorkComplete(s.BaseManifest) &&
+		denseManifestWorkComplete(s.CurrentManifest) &&
+		s.CurrentManifest.Generation >= s.BaseManifest.Generation
+}
+
 func validateDenseWork(w documentservice.DenseSearchWork) error {
 	g, f, s, o := w.Graph, w.Graph.Filter, w.Graph.Snapshot, w.Output
 	bad := w.Version != 1 || (g.Route != "" && denseWorkRouteTag(g.Route) == 0)
 	bad = bad || (!g.Available && g != (collections.ColumnGraphQueryWork{}))
 	bad = bad || (!f.Attempted && f != (collections.ColumnGraphFilterWork{}))
-	bad = bad || (!s.Available && s != (collections.ColumnGraphQuerySnapshot{}))
-	bad = bad || (s.Available && (s.SchemaGeneration == 0 || s.BaseCoverageLSN == 0 || s.CurrentCoverageLSN < s.BaseCoverageLSN))
+	bad = bad || !denseSnapshotConsistent(s)
 	bad = bad || (!o.Attempted && o != (documentservice.DenseSearchOutputWork{}))
 	bad = bad || (g.Completed && (!g.Available || !s.Available || g.Route == "" || (f.Attempted && !f.Completed)))
 	bad = bad || o.Fetched > o.Requested || o.Missing > o.Requested-o.Fetched
 	bad = bad || (w.Completed && (!g.Completed || !o.Completed || o.Missing != 0 || o.Fetched != o.Requested))
 	for _, m := range []collections.ColumnGraphManifestWork{s.BaseManifest, s.CurrentManifest} {
 		bad = bad || (m.Format != "" && m.Format != "tcs1")
-		bad = bad || (s.Available && !denseManifestWorkComplete(m))
 	}
 	if bad {
 		return protocolError(iwire.ErrMalformedFrame, "invalid dense work proof")

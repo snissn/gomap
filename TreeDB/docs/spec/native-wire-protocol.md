@@ -847,9 +847,10 @@ unknown-name, or out-of-bound options fail closed.
 Every available section-134 or section-136 snapshot requires a nonzero acquired
 vector schema generation, nonzero base/current coverage LSNs with current not
 behind base, and nonzero generation/checksum identities for both manifests,
-with manifest version exactly 1. Schema hash remains the producer's full uint64
-value; zero is not a reserved wire sentinel. An unavailable snapshot is the
-exact zero value.
+with manifest version exactly 1 and current manifest generation not behind the
+captured base manifest generation. Schema hash remains the producer's full
+uint64 value; zero is not a reserved wire sentinel. An unavailable snapshot is
+the exact zero value.
 
 Completed public v3 proofs use this producer/consumer route matrix. `E`, `C`,
 and `R` denote normalized candidate width, raw candidate width, and rerank cap.
@@ -867,7 +868,9 @@ Graph base candidates may be lower than quantized calls because public minimal
 stats do not require that optional count. Returned exact cosine scores are
 finite and within `[-1.000001, 1.000001]`, allowing only bounded FP32 rounding.
 Returned IDs are valid UTF-8, nonempty, free of leading or trailing Unicode
-whitespace, and unique, matching document-service write admission.
+White_Space as defined by Go `unicode.IsSpace`, and unique, matching
+document-service write admission. In particular, the C0 information separators
+U+001C through U+001F are not whitespace in this contract.
 
 Requested documents are fetched from the search's same read owner before
 release. Content/meta are returned; embedding echo is opt-in through the
@@ -908,7 +911,10 @@ manifest identities and coverage, and remains owned after owner close or client
 buffer reuse. It is not the requested generation or a later diagnostics read.
 Current coverage LSN is never lower than base coverage LSN.
 Schema generation is the acquired vector definition's generation; the service's
-expected-generation guard can also include a newer text-index generation.
+aggregate generation may be higher when it includes a newer text-index
+generation, but it is never lower. A native response binds this upper bound to
+the admitted nonzero expected generation; HTTP binds it to the returned
+positive uint64 index generation.
 Filter cardinality is final only on completed preparation; mapping work is an
 admitted composite bound: ordinal mapping, submitted secondary point requests,
 and temporary encoded-prefix/key payload bounds for selective string EQ AND.
@@ -928,6 +934,9 @@ bytes. The Go response owns its fixed proof value independently of borrowed
 result documents; `WireError.DenseWork` is optional owned error detail. If
 either proof section is malformed, clients reject it while preserving the
 independently decoded valid sibling on the protocol error.
+After section framing is safe, missing, duplicate, or malformed error metadata
+and unknown critical error siblings likewise cannot erase independently valid
+section-134 or section-136 proof.
 
 Hello capabilities advertise `dense_vector_search_versions` as a comma-separated
 set derived from registered command versions and an available standalone

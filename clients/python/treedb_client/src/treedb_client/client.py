@@ -464,6 +464,7 @@ class TreeDBClient:
                 quantized_rerank_candidates=rerank_value,
                 ef_search=ef_search_value or 0,
                 query_dimension=len(query_embedding),
+                expected_generation=index_info.generation,
                 filter_requested=filter is not None,
             )
             if version == 3:
@@ -1066,6 +1067,9 @@ def _validate_http_dense_quantized_response(
         or not dense_cosine_scores_valid(document.score for document in response.documents)
         or not _dense_http_results_ordered(response.documents)
         or response.index.dimension != query_dimension
+        or type(response.index.generation) is not int
+        or not 0 < response.index.generation < 1 << 64
+        or proof.snapshot.schema_generation > response.index.generation
         or not dense_score_plane_byte_counters_match(proof, query_dimension)
         or not dense_quantized_response_work_matches(
             work, proof, top_k, len(response.documents), filter_requested
@@ -1123,7 +1127,12 @@ def _dense_http_results_ordered(documents: Sequence[Document]) -> bool:
     for previous, current in zip(documents, documents[1:]):
         if previous.score is None or current.score is None:
             return False
-        if previous.score < current.score or (previous.score == current.score and previous.id.encode("utf-8") >= current.id.encode("utf-8")):
+        try:
+            previous_id = previous.id.encode("utf-8", errors="strict")
+            current_id = current.id.encode("utf-8", errors="strict")
+        except UnicodeError:
+            return False
+        if previous.score < current.score or (previous.score == current.score and previous_id >= current_id):
             return False
     return True
 

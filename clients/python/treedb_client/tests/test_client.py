@@ -34,7 +34,7 @@ from treedb_client import (
     TreeDBTransportError,
     UnsupportedError,
 )
-from treedb_client.client import _is_legacy_scalar_u8_v1_index
+from treedb_client.client import _dense_http_results_ordered, _is_legacy_scalar_u8_v1_index
 
 
 SAMPLE_INDEX = {
@@ -157,6 +157,10 @@ def json_body(record: dict[str, Any]) -> Any:
 
 
 class TreeDBClientTests(unittest.TestCase):
+    def test_dense_http_ordering_rejects_unencodable_tie_id(self) -> None:
+        documents = [Document(id="a", score=1.0), Document(id="\ud800", score=1.0)]
+        self.assertFalse(_dense_http_results_ordered(documents))
+
     def test_selected_quantized_index_requires_legacy_calibration(self) -> None:
         selected = QuantizedIndexInfo(name="embedding.scalar_u8.public")
         self.assertTrue(_is_legacy_scalar_u8_v1_index(selected))
@@ -875,6 +879,52 @@ class TreeDBClientTests(unittest.TestCase):
                         quantized_index_name="embedding.scalar_u8.public",
                     )
                 reversed_client.close()
+            reversed_manifest = copy.deepcopy(payload)
+            reversed_manifest_snapshot = copy.deepcopy(snapshot)
+            reversed_manifest_snapshot["base_manifest"] = {**manifest, "generation": 2}
+            reversed_manifest_snapshot["current_manifest"] = {**manifest, "generation": 1}
+            reversed_manifest["dense_work"]["graph"]["snapshot"] = reversed_manifest_snapshot
+            reversed_manifest["score_plane"]["snapshot"] = copy.deepcopy(reversed_manifest_snapshot)
+            with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, reversed_manifest, 0)}) as reversed_server:
+                reversed_client = TreeDBClient(reversed_server.base_url, timeout=1)
+                with self.assertRaisesRegex(TreeDBProtocolError, "manifest generation"):
+                    reversed_client.query_by_embedding(
+                        "docs", [1, 0], 1, query_mode="quantized_rerank",
+                        quantized_index_name="embedding.scalar_u8.public",
+                    )
+                reversed_client.close()
+            newer_aggregate = copy.deepcopy(payload)
+            newer_aggregate["index"]["generation"] = 2
+            with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, newer_aggregate, 0)}) as aggregate_server:
+                aggregate_client = TreeDBClient(aggregate_server.base_url, timeout=1)
+                aggregate_result = aggregate_client.query_by_embedding(
+                    "docs", [1, 0], 1, query_mode="quantized_rerank",
+                    quantized_index_name="embedding.scalar_u8.public",
+                )
+                self.assertEqual(aggregate_result.index.generation, 2)
+                aggregate_client.close()
+            newer_snapshot_generation = copy.deepcopy(payload)
+            newer_snapshot_generation["dense_work"]["graph"]["snapshot"]["schema_generation"] = 2
+            newer_snapshot_generation["score_plane"]["snapshot"]["schema_generation"] = 2
+            with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, newer_snapshot_generation, 0)}) as generation_server:
+                generation_client = TreeDBClient(generation_server.base_url, timeout=1)
+                with self.assertRaisesRegex(TreeDBProtocolError, "score-plane proof"):
+                    generation_client.query_by_embedding(
+                        "docs", [1, 0], 1, query_mode="quantized_rerank",
+                        quantized_index_name="embedding.scalar_u8.public",
+                    )
+                generation_client.close()
+            for invalid_generation in (0, -1, 1 << 64):
+                invalid_index_generation = copy.deepcopy(payload)
+                invalid_index_generation["index"]["generation"] = invalid_generation
+                with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, invalid_index_generation, 0)}) as generation_server:
+                    generation_client = TreeDBClient(generation_server.base_url, timeout=1)
+                    with self.subTest(invalid_index_generation=invalid_generation), self.assertRaisesRegex(TreeDBProtocolError, "score-plane proof"):
+                        generation_client.query_by_embedding(
+                            "docs", [1, 0], 1, query_mode="quantized_rerank",
+                            quantized_index_name="embedding.scalar_u8.public",
+                        )
+                    generation_client.close()
             for field in ("schema_generation", "base_coverage_lsn"):
                 missing_snapshot_identity = copy.deepcopy(payload)
                 missing_snapshot_identity["dense_work"]["graph"]["snapshot"][field] = 0
@@ -915,17 +965,31 @@ class TreeDBClientTests(unittest.TestCase):
                 ("whitespace only", " \t"),
                 ("leading whitespace", " a"),
                 ("trailing whitespace", "a "),
+                ("Unicode whitespace", "\u2000a"),
+                ("lone surrogate", "\ud800"),
             ):
                 invalid_id = copy.deepcopy(payload)
                 invalid_id["documents"][0]["id"] = item_id
                 with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, invalid_id, 0)}) as invalid_id_server:
                     invalid_id_client = TreeDBClient(invalid_id_server.base_url, timeout=1)
-                    with self.subTest(invalid_id=name), self.assertRaisesRegex(TreeDBProtocolError, "score-plane proof"):
+                    with self.subTest(invalid_id=name), self.assertRaisesRegex(TreeDBProtocolError, "score-plane proof") as caught:
                         invalid_id_client.query_by_embedding(
                             "docs", [1, 0], 1, query_mode="quantized_rerank",
                             quantized_index_name="embedding.scalar_u8.public",
                         )
+                    self.assertIsNotNone(caught.exception.dense_work)
+                    self.assertIsNotNone(caught.exception.score_plane)
                     invalid_id_client.close()
+            boundary_id = copy.deepcopy(payload)
+            boundary_id["documents"][0]["id"] = "\x1ca"
+            with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, boundary_id, 0)}) as boundary_server:
+                boundary_client = TreeDBClient(boundary_server.base_url, timeout=1)
+                boundary_result = boundary_client.query_by_embedding(
+                    "docs", [1, 0], 1, query_mode="quantized_rerank",
+                    quantized_index_name="embedding.scalar_u8.public",
+                )
+                self.assertEqual(boundary_result.documents[0].id, "\x1ca")
+                boundary_client.close()
             for mutation in (
                 lambda item: item.update(exact=True),
                 lambda item: item.update(dense_work={**dense_work, "graph": {**dense_work["graph"], "route": "typed_exact"}}),

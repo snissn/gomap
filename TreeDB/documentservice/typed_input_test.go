@@ -124,6 +124,38 @@ func TestServiceTypedDenseQuantizedRerankPublicProof(t *testing.T) {
 	}
 }
 
+func TestValidateDenseTypedQuantizedVectorSearchRouteBindsServiceGeneration(t *testing.T) {
+	proof := collections.ColumnGraphScorePlaneWork{
+		Version: 1, Available: true, Completed: true,
+		RequestedMode:       collections.VectorIndexQueryModeQuantizedRerank,
+		EffectiveMode:       collections.VectorIndexQueryModeQuantizedRerank,
+		Route:               "quantized_rerank",
+		QuantizedIndexName:  "embedding.scalar_u8.public",
+		QuantizedCodec:      collections.QuantizedVectorCodecScalarU8,
+		QuantizedVersion:    1,
+		RequestedTopK:       1,
+		QuantizedScoreCalls: 1,
+		Snapshot: collections.ColumnGraphQuerySnapshot{
+			Available: true, SchemaGeneration: 1,
+			BaseManifest:    collections.ColumnGraphManifestWork{Generation: 1, Format: "tcs1", Version: 1, Checksum: 1},
+			CurrentManifest: collections.ColumnGraphManifestWork{Generation: 1, Format: "tcs1", Version: 1, Checksum: 1},
+			BaseCoverageLSN: 1, CurrentCoverageLSN: 1,
+		},
+	}
+	response := collections.VectorIndexSearchResponse{Stats: collections.VectorIndexSearchStats{ColumnGraphWork: collections.ColumnGraphQueryWork{ScorePlane: proof}}}
+	request := DenseVectorSearchRequest{TopK: 1, QueryMode: collections.VectorIndexQueryModeQuantizedRerank, QuantizedIndexName: proof.QuantizedIndexName}
+	if err := validateDenseTypedQuantizedVectorSearchRoute(response, request, 2); err != nil {
+		t.Fatalf("newer aggregate service generation rejected: %v", err)
+	}
+	if err := validateDenseTypedQuantizedVectorSearchRoute(response, request, 0); err == nil {
+		t.Fatal("zero service generation accepted")
+	}
+	response.Stats.ColumnGraphWork.ScorePlane.Snapshot.SchemaGeneration = 3
+	if err := validateDenseTypedQuantizedVectorSearchRoute(response, request, 2); err == nil {
+		t.Fatal("snapshot newer than service generation accepted")
+	}
+}
+
 func typedServiceTestOptions() collections.ColumnGraphServingOptions {
 	return collections.ColumnGraphServingOptions{
 		Publication:     collections.ColumnGraphPublicationLimits{Rows: 512, Tombstones: 512, ValueSlots: 4096, OwnedBytes: 16 << 20, EncodedOutputBytes: 16 << 20},

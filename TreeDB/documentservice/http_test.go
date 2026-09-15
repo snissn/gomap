@@ -164,6 +164,30 @@ func TestHTTPWriteJSONEncodeErrorKeepsErrorShape(t *testing.T) {
 	}
 	assertHTTPErrorCode(t, rr.Body.Bytes(), CodeInternal)
 }
+
+func TestHTTPDenseVectorEncodeErrorPreservesCompletedProofs(t *testing.T) {
+	score := math.NaN()
+	response := DenseVectorSearchResponse{
+		Documents:  []Document{{ID: "a", Score: &score}},
+		DenseWork:  &DenseSearchWork{Version: 1, Completed: true},
+		ScorePlane: &collections.ColumnGraphScorePlaneWork{Version: 1, Available: true, Completed: true},
+	}
+	rr := httptest.NewRecorder()
+	writeDenseVectorSearchJSON(rr, response)
+	if rr.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	var envelope struct {
+		Error Error `json:"error"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if envelope.Error.Code != CodeInternal || envelope.Error.DenseWork == nil || !envelope.Error.DenseWork.Completed || envelope.Error.ScorePlane == nil || !envelope.Error.ScorePlane.Completed {
+		t.Fatalf("encoding error lost completed proof: %+v", envelope.Error)
+	}
+}
+
 func TestFormatErrorChainIncludesWrappedRootCause(t *testing.T) {
 	root := errors.New("slab rotation failed")
 	got := formatErrorChain(wrapServiceError(CodeInternal, "insert documents failed", root))
