@@ -108,6 +108,70 @@ also fetches stored embeddings; the historical runner normalizes retrieval to
 payload fields and its HTTP retrieve loop omits embedding echo. Explicitly
 match/document projections when comparing these operations.
 
+### Bounded scalar-u8 rerank diagnostic (#4687)
+
+The SQ8 application arm is a separate opt-in bounded diagnostic. It does not
+modify the exact/native-v2 default or the measured-v1 workflow below. Use a
+clean committed standalone checkout, a reviewed nonempty serving-limits JSON
+object, an independently frozen and reviewed launch plan, native transport,
+and a fresh packet whose only pre-created child is an
+empty `tmp/` directory:
+
+```sh
+mountpoint -q /mnt/fast4tb && test -w /mnt/fast4tb
+MINIMA_SERVING_LIMITS=/mnt/fast4tb/reviewed/minima-serving.json
+test -s "$MINIMA_SERVING_LIMITS"
+MINIMA_REVIEW=/mnt/fast4tb/reviewed/minima-sq8-50k
+mkdir -p "$MINIMA_REVIEW"
+GOWORK=off go build -o "$MINIMA_REVIEW/treedb-rag-benchmark" ./TreeDB/cmd/treedb_rag_benchmark
+"$MINIMA_REVIEW/treedb-rag-benchmark" -workload=minima \
+  -dump-minima-manifest "$MINIMA_REVIEW/manifest.json" -minima-bounded-total-rows 50000
+PYTHONPATH=clients/python/treedb_client/src python3 \
+  benchmarks/vector_db_compare/minima_treedb_runner.py \
+  --manifest "$MINIMA_REVIEW/manifest.json" \
+  --strategy column_graph --transport native --profile command_wal_durable \
+  --column-graph-serving "$MINIMA_SERVING_LIMITS" --ef-construction 32 \
+  --query-mode quantized_rerank --quantized-index-name minima_sq8 \
+  --ef-search 64 --quantized-rerank-candidates 64 \
+  --write-quantized-plan "$MINIMA_REVIEW/plan.json"
+MINIMA_PLAN_SHA=$(sha256sum "$MINIMA_REVIEW/plan.json" | awk '{print $1}')
+# Review plan.json before retaining this digest as the external execution pin.
+MINIMA_SQ8_RUN=$(mktemp -d /mnt/fast4tb/gomap-minima-sq8-XXXXXX)
+mkdir -p "$MINIMA_SQ8_RUN/tmp"
+TMPDIR="$MINIMA_SQ8_RUN/tmp" GOWORK=off \
+  RUN_DIR="$MINIMA_SQ8_RUN" MODE=bounded-50k \
+  TREEDB_PROFILE=command_wal_durable \
+  TREEDB_STRATEGY=column_graph TREEDB_TRANSPORT=native \
+  TREEDB_NATIVE_ADDRESS=127.0.0.1:17122 \
+  TREEDB_COLUMN_GRAPH_SERVING="$MINIMA_SERVING_LIMITS" \
+  TREEDB_QUANTIZED_PLAN="$MINIMA_REVIEW/plan.json" \
+  MINIMA_EXPECTED_QUANTIZED_PLAN_SHA256="$MINIMA_PLAN_SHA" \
+  TREEDB_QUERY_MODE=quantized_rerank \
+  TREEDB_QUANTIZED_INDEX_NAME=minima_sq8 \
+  TREEDB_EF_SEARCH=64 TREEDB_QUANTIZED_RERANK_CANDIDATES=64 \
+  scripts/bench_minima_qualification.sh
+```
+
+The wrapper validates the profile, exact plan bytes and external pin, serving
+JSON, `R=EF`, and all owned
+destinations before building or dumping a manifest. The emitted
+`treedb_rag_application/minima_quantized_diagnostic_v1` envelope is always
+nonqualifying. Its validator joins every native-v3 public call to the lifecycle
+trace and one allowed operation state. The plan binds the bounded manifest
+identity, quantized profile, fixed graph `M=16`, construction EF, serving limits, transport and
+durability before the database or output exists. The validator requires exact rank for typed-empty and
+filtered typed-exact populations through 4,096, and requires live canonical FP32 full
+documents plus consistent scalar-u8/rerank work for larger populations. Owner
+manifest generation and coverage advance by the exact number of completed
+mutation commands; one identity is required at each advance, and the synchronous
+pre-close fold must be identical across pre-close, reopen and final evidence. A
+missing or mismatched owner, route, generation, counter, output field, phase,
+or restart/mutation state fails the artifact. Preserve failed packets; do not
+reuse a directory or overwrite evidence.
+
+This addition does not change unified-bench or benchprof artifact names,
+profile-directory defaults, parsers, or producer-consumer contracts.
+
 ### Measured collection and trusted comparison
 
 The separate `treedb_rag_application/minima_measured_v1` envelope records actual

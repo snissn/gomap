@@ -17,6 +17,10 @@ from typing import Optional
 
 import _support
 from treedb_client import Document, TreeDBClient, TreeDBClientError
+from treedb_client._dense_work import (
+    dense_quantized_response_work_matches,
+    dense_score_plane_byte_counters_match,
+)
 
 
 def _free_addr() -> str:
@@ -288,6 +292,104 @@ class TreeDBClientIntegrationTests(unittest.TestCase):
                         self.assertEqual(native.get_many("typed", ["2"], index_info=info), [None])
             finally:
                 reopened.stop()
+
+    @unittest.skipUnless(sys.platform.startswith("linux"), "selected serving fixture requires Linux namespace authority and mmap")
+    def test_quantized_column_graph_public_native_smoke(self) -> None:
+        """Cross the 4,096 cutoff through the real public native-v3 route."""
+        with tempfile.TemporaryDirectory(prefix="treedb_quantized_client_") as data_dir:
+            service = TreeDBServiceProcess(_support.REPO_ROOT, data_dir, native=True)
+            limits = {
+                "Publication": {"Rows": 8192, "Tombstones": 8192, "ValueSlots": 16384,
+                                "OwnedBytes": 64 << 20, "EncodedOutputBytes": 64 << 20},
+                "Owners": {"Owners": 8, "States": 8, "StateBytes": 256 << 20, "AssetBytes": 256 << 20,
+                           "Cold": {"ManifestRecords": 8192, "ManifestBytes": 16 << 20,
+                                    "AssetBytes": 128 << 20, "DecodedTermBytes": 128 << 20}},
+                "CandidateOutput": {"Bytes": 1 << 30, "AppenderAttempts": 16384},
+                "Maintenance": {"NativeEntries": 16384, "ColumnSegments": 8192, "ManifestRecords": 8192,
+                                "LifecycleEntries": 16384, "NativeBytes": 256 << 20, "ColumnBytes": 128 << 20,
+                                "ManifestBytes": 16 << 20, "RetainedBytes": 512 << 20, "PagerPages": 65536},
+                "Filter": {"SourceIDs": 8192, "SourceBytes": 8 << 20, "RetainedBytes": 8 << 20,
+                           "MappingWork": 1_000_000, "InspectedEntries": 8192},
+                "FoldRows": 8192, "SearchCandidates": 16384,
+            }
+            declarations = [{"field": "meta.user_id", "value_type": "string"},
+                            {"field": "meta.fpath", "value_type": "string"}]
+            try:
+                service.start()
+                with closing(TreeDBClient(service.base_url, timeout=30)) as control:
+                    info = control.ensure_index(
+                        "quantized", 2, "cosine", scalar_fields=declarations, typed_input=True,
+                        vector_index_options={
+                            "strategy": "column_graph", "m": 16, "ef_construction": 32,
+                            "quantized_indexes": [{"name": "minima_sq8", "codec": "scalar_u8", "version": 1}],
+                        },
+                    )
+                    self.assertTrue(info.capabilities.typed_dense_quantized_rerank)
+                    self.assertEqual(
+                        [(row.name, row.codec, row.version, row.scalar_u8_calibration)
+                         for row in info.quantized_indexes],
+                        [("minima_sq8", "scalar_u8", 1, None)],
+                    )
+                    self.assertEqual(
+                        [(row.field, row.index_name, row.value_type) for row in info.scalar_fields],
+                        [("meta.fpath", "meta_fpath", "string"),
+                         ("meta.user_id", "meta_user_id", "string")],
+                    )
+                    with closing(TreeDBClient(service.base_url, timeout=30, native_address=service.native_addr)) as native:
+                        for start in range(0, 4097, 256):
+                            rows = [
+                                Document(
+                                    id=f"row-{ordinal:06d}", content=f"content-{ordinal}",
+                                    embedding=[1.0, ordinal / 8192.0],
+                                    meta={"user_id": "owner", "fpath": f"/rows/{ordinal // 256:03d}"},
+                                )
+                                for ordinal in range(start, min(start + 256, 4097))
+                            ]
+                            self.assertEqual(native.upsert_documents("quantized", rows, index_info=info).upserted,
+                                             len(rows))
+                    control.optimize_index("quantized", column_graph_serving=limits)
+                    with closing(TreeDBClient(service.base_url, timeout=30, native_address=service.native_addr)) as native:
+                        response = native.query_by_embedding(
+                            "quantized", [1.0, 0.0], 5,
+                            {"field": "meta.user_id", "operator": "==", "value": "owner"},
+                            route="ann", ef_search=64, query_mode="quantized_rerank",
+                            quantized_index_name="minima_sq8", quantized_rerank_candidates=64,
+                            index_info=info,
+                        )
+                        unfiltered = native.query_by_embedding(
+                            "quantized", [1.0, 0.0], 5, route="ann", ef_search=64,
+                            query_mode="quantized_rerank", quantized_index_name="minima_sq8",
+                            quantized_rerank_candidates=64, index_info=info,
+                        )
+                    self.assertEqual(response.native_command_version, 3)
+                    self.assertEqual(len(response.documents), 5)
+                    work, proof = response.dense_work, response.score_plane
+                    self.assertIsNotNone(work)
+                    self.assertIsNotNone(proof)
+                    self.assertEqual((work.graph.route, proof.route), ("typed_hnsw", "quantized_rerank"))
+                    self.assertGreater(proof.quantized_score_calls, 0)
+                    self.assertGreater(proof.exact_base_rerank_score_calls, 0)
+                    self.assertTrue(dense_score_plane_byte_counters_match(proof, 2))
+                    self.assertTrue(dense_quantized_response_work_matches(work, proof, 5, 5, True))
+                    self.assertLessEqual(proof.raw_retained_candidates, work.graph.base_candidates)
+                    self.assertLessEqual(work.graph.base_candidates, proof.quantized_score_calls)
+                    unfiltered_work, unfiltered_proof = unfiltered.dense_work, unfiltered.score_plane
+                    self.assertEqual((unfiltered_work.graph.route, unfiltered_proof.route),
+                                     ("typed_hnsw", "quantized_rerank"))
+                    self.assertEqual(unfiltered_work.graph.base_candidates, 0)
+                    self.assertLessEqual(unfiltered_proof.raw_retained_candidates,
+                                         unfiltered_proof.quantized_score_calls)
+                    self.assertTrue(dense_quantized_response_work_matches(
+                        unfiltered_work, unfiltered_proof, 5, 5, False,
+                    ))
+                    for document in response.documents:
+                        ordinal = int(document.id.removeprefix("row-"))
+                        self.assertEqual(document.content, f"content-{ordinal}")
+                        self.assertEqual(document.meta["user_id"], "owner")
+                        expected = 1.0 / (1.0 + (ordinal / 8192.0) ** 2) ** 0.5
+                        self.assertAlmostEqual(document.score, expected, places=6)
+            finally:
+                service.stop()
 
     def test_service_round_trip_and_reopen_smoke(self) -> None:
         with tempfile.TemporaryDirectory(prefix="treedb_client_integration_") as data_dir:

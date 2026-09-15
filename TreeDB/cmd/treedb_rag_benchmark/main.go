@@ -41,6 +41,8 @@ func main() {
 		minimaRecommendation = flag.String("minima-recommendation", "ready_with_alpha_limitations", "readiness recommendation for a clean validated comparison")
 		minimaFreezePath     = flag.String("minima-freeze", "", "reviewed measured freeze bytes")
 		minimaExpectedFreeze = flag.String("minima-expected-freeze-sha256", "", "externally pinned measured freeze SHA256")
+		minimaQuantizedPlan  = flag.String("minima-quantized-plan", "", "reviewed quantized diagnostic plan bytes")
+		minimaExpectedPlan   = flag.String("minima-expected-quantized-plan-sha256", "", "externally pinned quantized plan SHA256")
 		minimaExpectedCommit = flag.String("minima-expected-commit", "", "full expected merged commit for completed TreeDB/final Minima evidence")
 		cellWorker           = flag.Bool("cell-worker", false, "serve long-lived JSON-line cell requests for per-cell interleaving")
 	)
@@ -52,14 +54,14 @@ func main() {
 	cfg.Workload = strings.TrimSpace(*workload)
 	switch cfg.Workload {
 	case "application":
-		if hasMinimaFlag(*dumpMinima, *validateMinima, *minimaTree, *minimaQdrant, *minimaOutput, *minimaReport, *minimaExpectedCommit, *minimaFreezePath, *minimaExpectedFreeze) {
+		if hasMinimaFlag(*dumpMinima, *validateMinima, *minimaTree, *minimaQdrant, *minimaOutput, *minimaReport, *minimaExpectedCommit, *minimaFreezePath, *minimaExpectedFreeze, *minimaQuantizedPlan, *minimaExpectedPlan) {
 			fmt.Fprintln(os.Stderr, "treedb_rag_benchmark: Minima flags require -workload=minima")
 			os.Exit(2)
 		}
 	case "minima":
 		if *dumpMinima != "" {
-			if hasMinimaFlag(*minimaFreezePath, *minimaExpectedFreeze) {
-				fmt.Fprintln(os.Stderr, "treedb_rag_benchmark: a measured freeze consumes existing manifest bytes; it cannot generate a manifest")
+			if hasMinimaFlag(*minimaFreezePath, *minimaExpectedFreeze, *minimaQuantizedPlan, *minimaExpectedPlan) {
+				fmt.Fprintln(os.Stderr, "treedb_rag_benchmark: trusted freezes/plans consume existing manifest bytes; they cannot generate a manifest")
 				os.Exit(2)
 			}
 			if err := writeMinimaManifestRows(*dumpMinima, *minimaBoundedRows); err != nil {
@@ -88,10 +90,19 @@ func main() {
 			fmt.Fprintln(os.Stderr, freezeErr)
 			os.Exit(1)
 		}
+		quantizedPlan, planErr := loadMinimaQuantizedPlan(*minimaQuantizedPlan, *minimaExpectedPlan)
+		if planErr != nil {
+			fmt.Fprintln(os.Stderr, planErr)
+			os.Exit(1)
+		}
+		if quantizedPlan != nil && *validateMinima == "" {
+			fmt.Fprintln(os.Stderr, "treedb_rag_benchmark: trusted quantized plans are valid only with -validate-minima-artifact")
+			os.Exit(2)
+		}
 		if *validateMinima != "" {
 			artifact, err := readMinimaArtifact(*validateMinima)
 			if err == nil {
-				err = validateMinimaArtifact(&artifact, freeze)
+				err = validateMinimaArtifactTrusted(&artifact, freeze, quantizedPlan)
 			}
 			if err == nil {
 				required := artifact.State != "partial"

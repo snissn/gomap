@@ -1080,6 +1080,12 @@ func TestMinimaMeasuredReadRejectsMissingNullAndDuplicatePresence(t *testing.T) 
 			t.Fatalf("accepted replacement %s", pair[1])
 		}
 	}
+	for _, field := range []string{`"quantized_plan_sha256":"",`, `"quantized_profile":null,`} {
+		changed := strings.Replace(string(raw), "{", "{"+field, 1)
+		if err := minimaMeasuredPresence([]byte(changed)); err == nil {
+			t.Fatalf("accepted explicit measured field %s", field)
+		}
+	}
 	if err := minimaMeasuredJSON([]byte(`{"a":"one","a":"two"}`), reflect.TypeFor[map[string]string](), "configuration"); err == nil {
 		t.Fatal("collapsed duplicate config key")
 	}

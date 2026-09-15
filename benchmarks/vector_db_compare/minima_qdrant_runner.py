@@ -2011,6 +2011,12 @@ class QdrantMinimaRunner:
             and all(abs(a - b) <= self.config["score_tolerance"] for a, b in zip(left[1], right[1], strict=True))
         )
 
+    def query_result_admissible(self, scenario: str, result: tuple[list[str], list[float]],
+                                oracles: tuple[tuple[list[str], list[float]], ...]) -> bool:
+        """Decide whether an in-flight query can represent a declared state."""
+        del scenario
+        return any(self.results_match(result, oracle) for oracle in oracles)
+
     def retrieve(self, operation: str, scenario: str, ids: list[str]) -> list[Any]:
         assert self.client is not None
         record = None
@@ -2121,9 +2127,9 @@ class QdrantMinimaRunner:
                             interval: dict[str, int] = {}
                             ids, scores = self.search(operation["name"], scenario, interval)
                             query = self.queries[scenario]
-                            if not self.results_match(
-                                (ids, scores),
-                                (query["initial_oracle_ids"], query["initial_oracle_scores"]),
+                            if not self.query_result_admissible(
+                                scenario, (ids, scores),
+                                ((query["initial_oracle_ids"], query["initial_oracle_scores"]),),
                             ):
                                 raise RuntimeError(f"timed query {query_ordinal} does not match its frozen oracle")
                             query_observations[query_ordinal] = {
@@ -2244,7 +2250,7 @@ class QdrantMinimaRunner:
                     if operation["effect"] == "delete"
                     else (([], []), (query["final_oracle_ids"], query["final_oracle_scores"]))
                 )
-                if not any(self.results_match((ids, scores), oracle) for oracle in oracles):
+                if not self.query_result_admissible(assignment["scenario"], (ids, scores), oracles):
                     raise RuntimeError(
                         f"concurrent mutation reader returned impossible mixed state for operation {operation['ordinal']}"
                     )
