@@ -237,15 +237,9 @@ func TestColumnAssetRowIndexCacheBudgetAndProofIndependence(t *testing.T) {
 		}
 	}
 	before := workstats.Read().RowIndexCache
-	used := map[int]bool{columnAssetVerifiedChecksumCacheIndex(key): true}
-	for i := uint64(2); len(used) < 4; i++ {
+	for i := uint64(2); i <= 4; i++ {
 		next := key
 		next.partID = i
-		slot := columnAssetVerifiedChecksumCacheIndex(next)
-		if used[slot] {
-			continue
-		}
-		used[slot] = true
 		storeColumnAssetRowIndex(next, &columnAssetVerifiedRowIndex{version: 6, offsets: make([]int, tableRows)})
 	}
 	after := workstats.Read().RowIndexCache
@@ -264,22 +258,78 @@ func TestColumnAssetRowIndexCacheBudgetAndProofIndependence(t *testing.T) {
 	if final.RetainedBytes != after.RetainedBytes || final.OversizedBypasses != after.OversizedBypasses+1 {
 		t.Fatalf("oversized before=%+v after=%+v", after, final)
 	}
-	// A collision from the existing checksum-only path releases memo residency.
-	for candidate := uint64(2); ; candidate++ {
-		other := ref
-		other.PartID = candidate
-		otherKey := columnAssetVerifiedChecksumKeyForRef("memo-root", other, identity)
-		if columnAssetVerifiedChecksumCacheIndex(otherKey) != columnAssetVerifiedChecksumCacheIndex(key) {
-			continue
+	// These part IDs collided in the former direct-mapped cache. A checksum
+	// proof for one resource must not evict the other's row memo.
+	other := ref
+	other.PartID = 15758
+	storeColumnAssetRowIndex(key, &columnAssetVerifiedRowIndex{offsets: []int{42}})
+	previous := workstats.Read().RowIndexCache
+	columnAssetVerifiedChecksumCacheStore("memo-root", other, identity)
+	current := workstats.Read().RowIndexCache
+	if current.Entries != previous.Entries || current.RetainedBytes != previous.RetainedBytes || current.Evictions != previous.Evictions {
+		t.Fatalf("collision before=%+v after=%+v", previous, current)
+	}
+	if got := lookupColumnAssetRowIndex(key, 0, 0, columnPhysicalAssetScanHeader{RowCount: 1}); got == nil || got.offsets[0] != 42 {
+		t.Fatal("checksum-only collision discarded row memo")
+	}
+}
+
+func TestColumnAssetRowIndexCacheBoundedExactKeyResidency(t *testing.T) {
+	resetColumnAssetVerifiedChecksumCacheForTest(t)
+	identity := columnAssetVerifiedChecksumFileIdentity{valid: true, dev: 1, ino: 2, size: 3, modTimeUnixNano: 4}
+	ref := ColumnAssetRef{Kind: ColumnAssetKindTCS1PartImage, Namespace: "memo", Generation: 1, PartID: 1, FileID: 1, Length: 3, Checksum: 5}
+	base := columnAssetVerifiedChecksumKeyForRef("memo-root", ref, identity)
+	before := workstats.Read().RowIndexCache
+	for _, partID := range []uint64{1, 15758} {
+		key := base
+		key.partID = partID
+		storeColumnAssetRowIndex(key, &columnAssetVerifiedRowIndex{version: 6, offsets: []int{int(partID)}})
+	}
+	for _, partID := range []uint64{1, 15758} {
+		key := base
+		key.partID = partID
+		if got := lookupColumnAssetRowIndex(key, 6, 0, columnPhysicalAssetScanHeader{RowCount: 1}); got == nil || got.offsets[0] != int(partID) {
+			t.Fatalf("part %d memo=%v", partID, got)
 		}
-		storeColumnAssetRowIndex(key, &columnAssetVerifiedRowIndex{offsets: []int{42}})
-		previous := workstats.Read().RowIndexCache
-		columnAssetVerifiedChecksumCacheStore("memo-root", other, identity)
-		current := workstats.Read().RowIndexCache
-		if current.Entries+1 != previous.Entries || current.RetainedBytes >= previous.RetainedBytes {
-			t.Fatalf("collision before=%+v after=%+v", previous, current)
-		}
-		break
+	}
+	columnAssetVerifiedChecksumCacheStore("memo-root", ref, identity)
+	collidingRef := ref
+	collidingRef.PartID = 15758
+	columnAssetVerifiedChecksumCacheStore("memo-root", collidingRef, identity)
+	if !columnAssetVerifiedChecksumCacheContains("memo-root", ref, identity) || !columnAssetVerifiedChecksumCacheContains("memo-root", collidingRef, identity) {
+		t.Fatal("former direct collision pair did not retain both checksum proofs")
+	}
+	afterCollision := workstats.Read().RowIndexCache
+	if afterCollision.Entries != before.Entries+2 || afterCollision.Evictions != before.Evictions || afterCollision.Builds != before.Builds || afterCollision.Hits != before.Hits+2 {
+		t.Fatalf("old direct collision before=%+v after=%+v", before, afterCollision)
+	}
+
+	for partID := uint64(2); partID < columnAssetVerifiedChecksumCacheSlots; partID++ {
+		key := base
+		key.partID = partID
+		storeColumnAssetRowIndex(key, &columnAssetVerifiedRowIndex{version: 6, offsets: []int{int(partID)}})
+	}
+	full := workstats.Read().RowIndexCache
+	if full.Entries != before.Entries+columnAssetVerifiedChecksumCacheSlots || len(columnAssetVerifiedChecksumCache.entriesByKey) != columnAssetVerifiedChecksumCacheSlots {
+		t.Fatalf("full cache before=%+v after=%+v indexed=%d", before, full, len(columnAssetVerifiedChecksumCache.entriesByKey))
+	}
+	overflow := base
+	overflow.partID = columnAssetVerifiedChecksumCacheSlots
+	storeColumnAssetRowIndex(overflow, &columnAssetVerifiedRowIndex{version: 6, offsets: []int{int(overflow.partID)}})
+	afterOverflow := workstats.Read().RowIndexCache
+	if afterOverflow.Entries != full.Entries || afterOverflow.Evictions != full.Evictions+1 || len(columnAssetVerifiedChecksumCache.entriesByKey) != columnAssetVerifiedChecksumCacheSlots {
+		t.Fatalf("overflow before=%+v after=%+v indexed=%d", full, afterOverflow, len(columnAssetVerifiedChecksumCache.entriesByKey))
+	}
+	if got := lookupColumnAssetRowIndex(overflow, 6, 0, columnPhysicalAssetScanHeader{RowCount: 1}); got == nil || got.offsets[0] != int(overflow.partID) {
+		t.Fatalf("overflow memo=%v", got)
+	}
+	first := base
+	first.partID = 1
+	if got := lookupColumnAssetRowIndex(first, 6, 0, columnPhysicalAssetScanHeader{RowCount: 1}); got != nil {
+		t.Fatal("bounded replacement retained first entry")
+	}
+	if columnAssetVerifiedChecksumCacheContains("memo-root", ref, identity) {
+		t.Fatal("bounded replacement retained first checksum proof")
 	}
 }
 
@@ -303,6 +353,29 @@ func TestColumnAssetRowIndexCacheConcurrentOwnership(t *testing.T) {
 	wg.Wait()
 	if got := workstats.Read().RowIndexCache; got.RetainedBytes > got.ByteLimit {
 		t.Fatalf("budget=%+v", got)
+	}
+}
+
+func TestColumnAssetVerifiedChecksumCacheConcurrentReplacement(t *testing.T) {
+	resetColumnAssetVerifiedChecksumCacheForTest(t)
+	identity := columnAssetVerifiedChecksumFileIdentity{valid: true, dev: 1, ino: 2, size: 3, modTimeUnixNano: 4}
+	var wg sync.WaitGroup
+	for worker := range 8 {
+		wg.Go(func() {
+			root := fmt.Sprint(worker)
+			for i := range 1024 {
+				ref := ColumnAssetRef{Kind: ColumnAssetKindTCS1PartImage, Namespace: "memo", Generation: 1, PartID: uint64(worker*1024 + i), FileID: 1, Length: 3, Checksum: 5}
+				columnAssetVerifiedChecksumCacheStore(root, ref, identity)
+				_ = columnAssetVerifiedChecksumCacheContains(root, ref, identity)
+			}
+		})
+	}
+	wg.Wait()
+	columnAssetVerifiedChecksumCache.Lock()
+	entries := len(columnAssetVerifiedChecksumCache.entriesByKey)
+	columnAssetVerifiedChecksumCache.Unlock()
+	if entries != columnAssetVerifiedChecksumCacheSlots {
+		t.Fatalf("entries=%d", entries)
 	}
 }
 
