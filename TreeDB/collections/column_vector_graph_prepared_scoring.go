@@ -35,6 +35,10 @@ type columnVectorGraphPreparedNormView struct {
 }
 
 func prepareColumnVectorGraphPreparedVectorView(source *columnVectorGraphTypedColumnVectorSource, rowCount, dims int) (columnVectorGraphPreparedVectorView, typeddecode.Reason, string, bool) {
+	return prepareColumnVectorGraphPreparedVectorViewWithHolderFallback(source, rowCount, dims, false)
+}
+
+func prepareColumnVectorGraphPreparedVectorViewWithHolderFallback(source *columnVectorGraphTypedColumnVectorSource, rowCount, dims int, allowHolderFallback bool) (columnVectorGraphPreparedVectorView, typeddecode.Reason, string, bool) {
 	if source == nil {
 		return columnVectorGraphPreparedVectorView{}, "", "", false
 	}
@@ -58,8 +62,8 @@ func prepareColumnVectorGraphPreparedVectorView(source *columnVectorGraphTypedCo
 		if part == nil {
 			return columnVectorGraphPreparedVectorView{}, typeddecode.ReasonValidationFailed, fmt.Sprintf("typed-column vector source ordinal=%d has nil part", ordinal), false
 		}
-		if part.outcome != columnVectorGraphTypedColumnVectorOutcomeMmapDirect {
-			return columnVectorGraphPreparedVectorView{}, typeddecode.ReasonHandleSourceUnsupported, fmt.Sprintf("typed-column vector source part generation=%d part_id=%d outcome=%s is not mmap_direct", part.generation, part.partID, part.outcome), false
+		if part.outcome != columnVectorGraphTypedColumnVectorOutcomeMmapDirect && (!allowHolderFallback || part.outcome != columnVectorGraphTypedColumnVectorOutcomeHeapCopyTypedView) {
+			return columnVectorGraphPreparedVectorView{}, typeddecode.ReasonHandleSourceUnsupported, fmt.Sprintf("typed-column vector source part generation=%d part_id=%d outcome=%s is not an admitted prepared source", part.generation, part.partID, part.outcome), false
 		}
 		if part.handle == nil || part.handle.Released() {
 			return columnVectorGraphPreparedVectorView{}, typeddecode.ReasonStaleHandle, fmt.Sprintf("typed-column vector source part generation=%d part_id=%d handle is stale", part.generation, part.partID), false
@@ -118,13 +122,17 @@ func prepareColumnVectorGraphPreparedVectorView(source *columnVectorGraphTypedCo
 }
 
 func prepareColumnVectorGraphPreparedNormView(source *columnVectorGraphInvNormStateSource, rowCount int) (columnVectorGraphPreparedNormView, typeddecode.Reason, bool) {
+	return prepareColumnVectorGraphPreparedNormViewWithHolderFallback(source, rowCount, false)
+}
+
+func prepareColumnVectorGraphPreparedNormViewWithHolderFallback(source *columnVectorGraphInvNormStateSource, rowCount int, allowHolderFallback bool) (columnVectorGraphPreparedNormView, typeddecode.Reason, bool) {
 	if source == nil {
 		return columnVectorGraphPreparedNormView{}, "", false
 	}
 	if source.closed || (source.handle != nil && source.handle.Released()) {
 		return columnVectorGraphPreparedNormView{}, typeddecode.ReasonStaleHandle, false
 	}
-	if source.outcome != columnVectorGraphInvNormStateOutcomeMmapDirect {
+	if source.outcome != columnVectorGraphInvNormStateOutcomeMmapDirect && (!allowHolderFallback || source.outcome != columnVectorGraphInvNormStateOutcomeHeapCopyTypedView) {
 		return columnVectorGraphPreparedNormView{}, typeddecode.ReasonHandleSourceUnsupported, false
 	}
 	if source.rows != rowCount || len(source.values) != rowCount {
@@ -193,6 +201,14 @@ func (v columnVectorGraphPreparedVectorView) locationForOrdinal(ordinal int) (*c
 	return part, row, true
 }
 
+func (v columnVectorGraphPreparedVectorView) outcomeForOrdinal(ordinal int) (columnVectorGraphTypedColumnVectorOutcome, bool) {
+	part, _, ok := v.locationForOrdinal(ordinal)
+	if !ok {
+		return columnVectorGraphTypedColumnVectorOutcomeUnknown, false
+	}
+	return part.outcome, true
+}
+
 func (v columnVectorGraphPreparedNormView) ready() bool {
 	return v.rows >= 0 && v.source != nil && len(v.values) == v.rows
 }
@@ -227,6 +243,7 @@ func (s *columnVectorGraphSearchSource) scorePreparedOrdinal(plan *columnVectorG
 	}
 
 	var vector []float32
+	var vectorOutcome columnVectorGraphTypedColumnVectorOutcome
 	identityMapping := false
 	if vectorView.singlePart != nil {
 		if vectorView.singlePart.handle == nil || vectorView.singlePart.handle.Released() {
@@ -239,6 +256,7 @@ func (s *columnVectorGraphSearchSource) scorePreparedOrdinal(plan *columnVectorG
 		}
 		start := row * vectorView.dims
 		vector = vectorView.values[start : start+vectorView.dims]
+		vectorOutcome = vectorView.singlePart.outcome
 	} else {
 		partIndex := int(vectorView.partIndexByOrdinal[ordinal])
 		part := vectorView.parts[partIndex]
@@ -248,6 +266,7 @@ func (s *columnVectorGraphSearchSource) scorePreparedOrdinal(plan *columnVectorG
 		row := int(vectorView.rowIndexByOrdinal[ordinal])
 		start := row * vectorView.dims
 		vector = part.values[start : start+vectorView.dims]
+		vectorOutcome = part.outcome
 	}
 	invNorm := normView.values[ordinal]
 
@@ -259,16 +278,14 @@ func (s *columnVectorGraphSearchSource) scorePreparedOrdinal(plan *columnVectorG
 		stats.CandidateFetches++
 		stats.VectorBytesRead += uint64(vectorView.dims) * 4
 		stats.NormBytesRead += 4
-		stats.VectorDirectViews++
-		stats.VectorMmapDirectViews++
+		recordColumnVectorGraphPreparedVectorOutcomeStats(stats, vectorOutcome, 1)
 		stats.VectorPreparedDirectViews++
 		if identityMapping {
 			stats.VectorPreparedIdentityMappings++
 		} else {
 			stats.VectorPreparedRowRefMappings++
 		}
-		stats.NormDirectViews++
-		stats.NormMmapDirectViews++
+		recordColumnVectorGraphPreparedNormOutcomeStats(stats, normView.source.outcome, 1)
 		stats.NormPreparedDirectViews++
 		if plan != nil {
 			stats.BlockViewHits = plan.hits
@@ -290,4 +307,30 @@ func (s *columnVectorGraphSearchSource) scorePreparedOrdinal(plan *columnVectorG
 		return 0, true, fmt.Errorf("collections: column_graph %q candidate ordinal=%d cosine score is not finite", s.reader.def.Name, ordinal)
 	}
 	return score, true, nil
+}
+
+func recordColumnVectorGraphPreparedVectorOutcomeStats(stats *columnVectorGraphNativeSearchStats, outcome columnVectorGraphTypedColumnVectorOutcome, count uint64) {
+	if stats == nil || count == 0 {
+		return
+	}
+	switch outcome {
+	case columnVectorGraphTypedColumnVectorOutcomeMmapDirect:
+		stats.VectorDirectViews += count
+		stats.VectorMmapDirectViews += count
+	case columnVectorGraphTypedColumnVectorOutcomeHeapCopyTypedView:
+		stats.VectorHeapCopyTypedViews += count
+	}
+}
+
+func recordColumnVectorGraphPreparedNormOutcomeStats(stats *columnVectorGraphNativeSearchStats, outcome columnVectorGraphInvNormStateOutcome, count uint64) {
+	if stats == nil || count == 0 {
+		return
+	}
+	switch outcome {
+	case columnVectorGraphInvNormStateOutcomeMmapDirect:
+		stats.NormDirectViews += count
+		stats.NormMmapDirectViews += count
+	case columnVectorGraphInvNormStateOutcomeHeapCopyTypedView:
+		stats.NormHeapCopyTypedViews += count
+	}
 }

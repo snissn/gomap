@@ -62,6 +62,7 @@ func TestTypedGraphCapturedCacheCanceledWaiterPreservesBuilder(t *testing.T) {
 		t.Fatal(err)
 	}
 	limits := typedGraphOverlapLimits()
+	installTypedGraphServingStateForInternalTest(t, col, index, limits)
 	entered, release := make(chan struct{}), make(chan struct{})
 	var once sync.Once
 	collectionVectorIndexPreparedSearchBuildHookForTest.mu.Lock()

@@ -2633,6 +2633,7 @@ type columnPhysicalAssetReadCache struct {
 	readAtFallbacks        uint64
 	fileOpens              uint64
 	fileCloses             uint64
+	servingBorrows         uint64
 	// trustCachedVerifyFileIdentity lets explicit prepared lifetimes reuse the
 	// identity captured when the segment reader was opened. Default read caches
 	// keep refreshing identity so existing fail-closed tests and non-prepared
@@ -2643,6 +2644,11 @@ type columnPhysicalAssetReadCache struct {
 	resourceScope   mappedresource.Scope
 	resourceReason  string
 	resourceHandles []*mappedresource.Handle
+
+	// servingSourceAccess is non-owning and is installed only on the two
+	// request-local materializer caches of a read view that owns the matching
+	// typed serving-holder capability. Cache close therefore precedes pool close.
+	servingSourceAccess *columnVectorGraphSourceAccess
 }
 
 type columnPhysicalAssetSegmentReader struct {
@@ -2694,11 +2700,36 @@ func (c *columnPhysicalAssetReadCache) useMappedResourceManager(manager *mappedr
 	return nil
 }
 
+func (c *columnPhysicalAssetReadCache) useServingSourceAccess(access *columnVectorGraphSourceAccess) error {
+	if c == nil {
+		return errors.New("collections: nil column physical asset read cache")
+	}
+	if c.servingSourceAccess != nil {
+		if c.servingSourceAccess != access {
+			return ErrVectorIndexSnapshotMismatch
+		}
+		return nil
+	}
+	if access == nil {
+		return nil
+	}
+	if access.pool == nil || !c.returnViews || c.resourceManager == nil {
+		return ErrVectorIndexSnapshotMismatch
+	}
+	rootDir, err := normalizeColumnServingRoot(c.rootDir)
+	if err != nil || rootDir != access.pool.rootDir || c.namespace != access.pool.namespace {
+		return ErrVectorIndexSnapshotMismatch
+	}
+	c.servingSourceAccess = access
+	return nil
+}
+
 type columnPhysicalAssetReadCacheLifecycleStats struct {
 	MmapHits        uint64
 	ReadAtFallbacks uint64
 	FileOpens       uint64
 	FileCloses      uint64
+	ServingBorrows  uint64
 	ActiveHandles   int64
 }
 
@@ -2711,6 +2742,7 @@ func (c *columnPhysicalAssetReadCache) lifecycleStats() columnPhysicalAssetReadC
 		ReadAtFallbacks: c.readAtFallbacks,
 		FileOpens:       c.fileOpens,
 		FileCloses:      c.fileCloses,
+		ServingBorrows:  c.servingBorrows,
 	}
 	if c.resourceManager != nil {
 		stats.ActiveHandles = c.resourceManager.Stats().ActiveHandles
@@ -2816,16 +2848,26 @@ func (c *columnPhysicalAssetReadCache) read(ref ColumnAssetRef, dst []byte) ([]b
 		return nil, errors.New("collections: nil column physical asset read cache")
 	}
 	c.hasVerifiedRowIndexKey = false
+	if err := validateColumnAssetRefForPlan(ref); err != nil {
+		return nil, err
+	}
 	if ref.Namespace != c.namespace {
 		return nil, fmt.Errorf("collections: column physical asset ref namespace=%q want %q", ref.Namespace, c.namespace)
-	}
-	reader, err := c.fileForRef(ref)
-	if err != nil {
-		return nil, err
 	}
 	if c.lastView {
 		dst = nil
 		c.lastView = false
+	}
+	borrow, err := c.shouldBorrowServingAsset(ref)
+	if err != nil {
+		return nil, err
+	}
+	if borrow {
+		return c.readServingAsset(ref, dst)
+	}
+	reader, err := c.fileForRef(ref)
+	if err != nil {
+		return nil, err
 	}
 	if c.returnViews {
 		if raw, ok, err := reader.readView(ref); err != nil {
@@ -2871,14 +2913,85 @@ func (c *columnPhysicalAssetReadCache) read(ref ColumnAssetRef, dst []byte) ([]b
 	return raw, nil
 }
 
+func (c *columnPhysicalAssetReadCache) shouldBorrowServingAsset(ref ColumnAssetRef) (bool, error) {
+	if c == nil || c.servingSourceAccess == nil || c.forceReadAtFallback {
+		return false, nil
+	}
+	return c.servingSourceAccess.authorizesMaterializerAsset(c.rootDir, ref)
+}
+
+func (c *columnPhysicalAssetReadCache) readServingAsset(ref ColumnAssetRef, dst []byte) ([]byte, error) {
+	if c == nil || c.servingSourceAccess == nil {
+		return nil, ErrVectorIndexSnapshotMismatch
+	}
+	// The logical handle keeps its existing request scope. The ephemeral
+	// physical borrow scope names the exact parent's generation for the pool's
+	// containment validation; it owns no resource independently.
+	borrowScope := c.resourceScope
+	borrowScope.Generation = ref.Generation
+	var raw []byte
+	err := c.servingSourceAccess.withMaterializerAsset(c.rootDir, ref, borrowScope, func(borrowed columnServingBorrowedRange) error {
+		c.servingBorrows++
+		identity := borrowed.Identity()
+		if view := borrowed.Bytes(); view != nil {
+			raw = view
+			if err := c.verifyReadChecksumWithIdentity(raw, ref, identity); err != nil {
+				return err
+			}
+			if _, err := c.trackResourceRead(ref, raw, mappedresource.SourceMapped, ""); err != nil {
+				return err
+			}
+			c.lastView = true
+			c.rememberVerifiedRowIndexReadWithIdentity(ref, identity)
+			return nil
+		}
+		if ref.Length > int64(maxCollectionInt) {
+			return fmt.Errorf("collections: column physical asset length=%d overflows int", ref.Length)
+		}
+		if cap(dst) < int(ref.Length) {
+			if cap(c.scratch) < int(ref.Length) {
+				if c.scratch != nil {
+					putColumnPhysicalAssetReadScratch(c.scratch)
+				}
+				c.scratch = getColumnPhysicalAssetReadScratch(int(ref.Length))
+			}
+			dst = c.scratch
+		}
+		raw = dst[:int(ref.Length)]
+		n, err := borrowed.ReadAt(raw)
+		if err != nil && err != io.EOF {
+			return err
+		}
+		if n != len(raw) {
+			return io.ErrUnexpectedEOF
+		}
+		if err := c.verifyReadChecksumWithIdentity(raw, ref, identity); err != nil {
+			return err
+		}
+		if _, err := c.trackResourceRead(ref, raw, mappedresource.SourceHeapCopy, mappedresource.FallbackReadAt); err != nil {
+			return err
+		}
+		c.rememberVerifiedRowIndexReadWithIdentity(ref, identity)
+		return nil
+	})
+	return raw, err
+}
+
 // Capture only the identity of the opened reader that supplied the verified
 // bytes. A failed, unchecked or subsequent read cannot authorize memo reuse.
 func (c *columnPhysicalAssetReadCache) rememberVerifiedRowIndexRead(ref ColumnAssetRef, reader *columnPhysicalAssetSegmentReader) {
-	if (c.readIntegrity != ColumnAssetReadIntegrityVerify && c.readIntegrity != ColumnAssetReadIntegrityCachedVerify) || !c.verifyChecksum || !reader.identity.valid {
+	if reader == nil {
+		return
+	}
+	c.rememberVerifiedRowIndexReadWithIdentity(ref, reader.identity)
+}
+
+func (c *columnPhysicalAssetReadCache) rememberVerifiedRowIndexReadWithIdentity(ref ColumnAssetRef, identity columnAssetVerifiedChecksumFileIdentity) {
+	if (c.readIntegrity != ColumnAssetReadIntegrityVerify && c.readIntegrity != ColumnAssetReadIntegrityCachedVerify) || !c.verifyChecksum || !identity.valid {
 		return
 	}
 	c.verifiedRowIndexRef = ref
-	c.verifiedRowIndexKey = columnAssetVerifiedChecksumKeyForRef(c.rootDir, ref, reader.identity)
+	c.verifiedRowIndexKey = columnAssetVerifiedChecksumKeyForRef(c.rootDir, ref, identity)
 	c.hasVerifiedRowIndexKey = true
 }
 
@@ -2993,7 +3106,14 @@ func (c *columnPhysicalAssetReadCache) verifyReadChecksum(raw []byte, ref Column
 			reader.identity = fileIdentity
 		}
 	}
-	return verifyColumnPhysicalAssetReadChecksumWithIntegrityForSegment(raw, ref, c.verifyChecksum, c.readIntegrity, c.rootDir, fileIdentity)
+	return c.verifyReadChecksumWithIdentity(raw, ref, fileIdentity)
+}
+
+func (c *columnPhysicalAssetReadCache) verifyReadChecksumWithIdentity(raw []byte, ref ColumnAssetRef, identity columnAssetVerifiedChecksumFileIdentity) error {
+	if c == nil {
+		return errors.New("collections: nil column physical asset read cache")
+	}
+	return verifyColumnPhysicalAssetReadChecksumWithIntegrityForSegment(raw, ref, c.verifyChecksum, c.readIntegrity, c.rootDir, identity)
 }
 
 func (c *columnPhysicalAssetReadCache) trackResourceRead(ref ColumnAssetRef, raw []byte, source mappedresource.Source, fallback mappedresource.FallbackReason) (*mappedresource.Handle, error) {
@@ -3147,6 +3267,15 @@ func putColumnPhysicalAssetReadScratch(scratch []byte) {
 func (c *columnPhysicalAssetReadCache) fileForRef(ref ColumnAssetRef) (*columnPhysicalAssetSegmentReader, error) {
 	if err := validateColumnAssetRefForPlan(ref); err != nil {
 		return nil, err
+	}
+	// Defense in depth for every current/future fileForRef caller: exact base
+	// authority is decided before either FileID cache is consulted. read handles
+	// the authorized case through the pool; no direct caller may silently open a
+	// private reader for it.
+	if borrow, err := c.shouldBorrowServingAsset(ref); err != nil {
+		return nil, err
+	} else if borrow {
+		return nil, errors.New("collections: serving-authorized materializer asset requires pooled borrow")
 	}
 	if c.file != nil && c.fileID == ref.FileID {
 		c.hits++

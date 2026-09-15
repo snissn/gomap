@@ -743,7 +743,8 @@ func (p *collectionVectorIndexPreparedSearch) readyForCurrentSearch() bool {
 	}
 	switch p.family {
 	case collectionVectorIndexPreparedSearchFamilyCapturedBase:
-		return p.capturedBase != nil && p.capturedBase.ref != nil && p.capturedBase.ref.holder.ready()
+		ref := p.capturedBase.holderRef()
+		return ref != nil && ref.holder.ready()
 	case collectionVectorIndexPreparedSearchFamilyQuantized:
 		if p.searcher == nil || p.searcher.closed || p.searcher.snapshot == nil {
 			return false
@@ -1105,8 +1106,8 @@ func (p *collectionVectorIndexPreparedSearch) stats() mappedresource.Stats {
 	if p.pack != nil && p.pack.manager != nil {
 		add(p.pack.manager.Stats())
 	}
-	if p.capturedBase != nil && p.capturedBase.ref != nil {
-		add(p.capturedBase.ref.holder.stats())
+	if ref := p.capturedBase.holderRef(); ref != nil {
+		add(ref.holder.stats())
 	}
 	if p.searcher != nil && p.searcher.reader != nil {
 		reader := p.searcher.reader

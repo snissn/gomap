@@ -37,7 +37,8 @@ func TestTypedGraphPublicEnsureKeepsNewHandleBase(t *testing.T) {
 		}
 	}
 	prepared := other.columnVectorGraphSharedPreparedSearchCacheSnapshot()
-	if prepared.Entries != 1 || prepared.CacheBuilds != 1 || prepared.Refs != 1 || prepared.Opens == 0 {
+	physical := coord.typedGraphPhysical.snapshot()
+	if prepared.Entries != 1 || prepared.CacheBuilds != 1 || prepared.Refs != 1 || prepared.Opens != 0 || physical.totalOpens == 0 {
 		t.Fatalf("new handle Ensure did not retain one prepared base: %+v", prepared)
 	}
 	query := VectorIndexSearchOptions{IndexName: base.indexName, Query: columns[0].Float32Vectors[0], TopK: 1, EfSearch: 16, StatsMode: VectorIndexSearchStatsModeMinimal, DeclaredScalarFilter: &HybridScalarFilter{IndexName: "path", Value: "keeper-path"}}

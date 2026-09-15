@@ -65,13 +65,14 @@ part of query-ready time and peak memory; it is not retroactively covered by
 ongoing-work admission. This route supports the selected string/FP32 schema,
 not every schema illustrated elsewhere in this guide.
 
-The complete selected lifecycle also requires mmap-direct prepared graph views
-and exact relative namespace authority for destructive asset maintenance.
-Windows currently provides neither capability: ordinary typed read-at fallback
-is still available, but is not evidence for this prepared serving lifecycle.
-Do not ignore admission or maintenance errors to claim the optimized route is
-ready. Unsupported destructive maintenance deletes nothing and does not renew
-the attempted-work allowance.
+The complete selected lifecycle requires either mmap-direct prepared graph views
+or admitted descriptor-backed holder fallback, plus exact relative namespace
+authority for destructive asset maintenance. Windows currently lacks that
+namespace authority: ordinary typed read-at fallback is still available, but is
+not evidence for this prepared serving lifecycle. Do not ignore admission or
+maintenance errors to claim the optimized route is ready. Unsupported
+destructive maintenance deletes nothing and does not renew the attempted-work
+allowance.
 
 An empty built graph can be ensured and searched (zero results), then receive
 typed inserts. Deleting all rows and folding back to an empty base is also
@@ -80,13 +81,32 @@ search cache holder; admission, same-owner fetch lifetime, and positive limits
 still apply. See `TestTypedGraphPublicEmptyLifecycle`.
 
 Supply positive `ColumnGraphServingOptions` limits for publication, owners and
-cold discovery, candidate output, maintenance, filtering, fold rows, and search
-candidates. Zero is not an automatic default. Size these from workload evidence;
-the runnable `TestTypedGraphPublicSameOwnerServing` fixture shows all limit
-groups and the full lifecycle. Configuration is process-local, shared across
-collection handles, and immutable until DB close. Reapply the same explicit
-policy after reopen. A failed setup can leave that policy selected with writes
-and queries fenced; fix the cause and retry setup, not a different fallback.
+cold discovery, **owner physical resources**, candidate output, maintenance,
+filtering, fold rows, and search candidates. In particular,
+`Owners.Physical.{segments,descriptors,mapped_bytes,fallback_bytes,inventory_bytes}`
+is mandatory and independent of logical `Owners.AssetBytes` and
+`Owners.StateBytes`; zero is not an automatic default.
+
+Size the physical group for every holder generation that `Owners` permits to
+overlap. One holder admits its complete exact base closure before opening any
+OS resource: `segments` is the number of distinct segment `FileID`s,
+`descriptors` conservatively allows one fallback descriptor per segment,
+`mapped_bytes` is the sum of page-rounded maximum authorized prefix ends,
+and `fallback_bytes` is the sum of unique exact base-ref lengths. The latter is
+an authorized holder-source fallback ceiling: materializer-only refs can make it
+conservative, while request-local materializer copies are not holder fallback
+live bytes. `inventory_bytes` is a deterministic modeled charge for retained
+holder/ref/segment/guardian/cache-entry metadata, not measured heap or RSS.
+Live and in-flight resources are accounted separately, and old/new holders on
+sibling collection handles or generations add until each holder actually
+closes.
+
+Size all groups from workload evidence; the runnable
+`TestTypedGraphPublicSameOwnerServing` fixture shows the full lifecycle.
+Configuration is process-local, shared across collection handles, and immutable
+until DB close. Reapply the same explicit policy after reopen. A failed setup can
+leave that policy selected with writes and queries fenced; fix the cause and
+retry setup, not a different fallback.
 
 For ordinary selected serving, search with explicit
 `QueryMode: VectorIndexQueryModeExact` and
@@ -221,6 +241,11 @@ Final prepared-cache warming in Ensure and Fold honors the caller context while
 waiting for the storage barrier or another cache builder. Canceling a waiter
 does not cancel or invalidate another caller's builder. Cancellation is not a
 rollback of earlier successful publication or maintenance work.
+On a serving-holder cache miss, the first caller constructs synchronously from
+an independently acquired current snapshot and exact-base guardian pin. If that
+caller is canceled after construction starts, it observes cancellation only
+after the build has completed or fully rolled back; later waiters remain
+promptly cancelable and do not cancel the shared builder.
 Cold manifest-budget preflights also retain that context and check it every
 256 records and at scan completion. This does not promise preemption inside
 every subsequent synchronous decoder operation.

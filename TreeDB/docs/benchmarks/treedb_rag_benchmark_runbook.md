@@ -69,6 +69,17 @@ fail before service launch. The runner builds/adopts the graph after initial
 load, folds before close, and ensures existing graph assets after reopen; it
 does not substitute an exact document scan or recreate an in-memory runtime.
 
+The retained bounded-500K closure used to size the active serving packet has
+3,911 exact base refs totaling 3,277,982,150 bytes; its 101 segment files total
+3,277,986,056 bytes. That is about 3.278 GB of mapped/fallback potential per
+holder, not the configured 32 GiB logical `AssetBytes` ceiling. With
+`Owners=8`, the packet therefore declares independent 32 GiB mapped and
+fallback ceilings (enough for roughly eight to ten overlapping holders), 32,768
+segment/descriptor slots, and 1 GiB of deterministic modeled inventory
+headroom. Recompute these values from the regenerated exact base closure when
+the fixture or holder-overlap policy changes; do not copy test constants or
+derive physical limits from logical asset limits.
+
 For this development lane, invoke the Python runner directly with the same
 manifest, service binary and source provenance as the baseline:
 

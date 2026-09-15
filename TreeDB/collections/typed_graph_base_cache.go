@@ -10,12 +10,11 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/quantizedasset"
 )
 
-// No snapshot, catalog or suffix is retained here. Ref owns immutable prepared
-// mappings; pin protects the complete captured typed closure. Both are released
-// by the existing collection cache lifecycle, outside its mutex.
+// No snapshot, catalog or suffix is retained here. The serving capability owns
+// both the immutable holder ref and the exact-base lifecycle pin; they cannot
+// be acquired or released independently.
 type typedGraphCapturedBaseResources struct {
-	ref              *columnVectorGraphSharedPreparedSearchRef
-	pin              *ColumnAssetLifecyclePinSet
+	capability       *typedGraphServingHolderCapability
 	accounting       *typedGraphReadOwnerAccounting
 	backgroundCtx    context.Context
 	backgroundCancel context.CancelFunc
@@ -38,9 +37,8 @@ func (r *typedGraphCapturedBaseResources) Close() error {
 	}
 	r.background.Wait()
 	clear(r.filters[:])
-	err := r.ref.release()
-	err = errors.Join(err, r.pin.Close())
-	r.ref, r.pin = nil, nil
+	err := r.capability.Close()
+	r.capability = nil
 	if a := r.accounting; a != nil {
 		a.Lock()
 		a.baseOwners--
@@ -55,6 +53,13 @@ func (r *typedGraphCapturedBaseResources) Close() error {
 		r.accounting = nil
 	}
 	return err
+}
+
+func (r *typedGraphCapturedBaseResources) holderRef() *columnVectorGraphSharedPreparedSearchRef {
+	if r == nil || r.capability == nil {
+		return nil
+	}
+	return r.capability.ref
 }
 
 func (r *typedGraphCapturedBaseResources) reserve(a *typedGraphReadOwnerAccounting, limits typedGraphReadOwnerLimits) error {
@@ -94,7 +99,7 @@ func (c *Collection) acquireTypedGraphCapturedBaseCacheWithContext(ctx context.C
 	if err := ValidateIndexName(index); err != nil {
 		return nil, err
 	}
-	if limits.Owners <= 0 || limits.States <= 0 || limits.StateBytes <= 0 || limits.AssetBytes <= 0 || limits.Cold.ManifestRecords <= 0 || limits.Cold.ManifestBytes <= 0 || limits.Cold.AssetBytes <= 0 || limits.Cold.DecodedTermBytes <= 0 {
+	if !typedGraphReadOwnerLimitsValid(limits) {
 		return nil, ErrVectorIndexSnapshotMismatch
 	}
 	prepared, _, _, err := c.acquireCollectionVectorIndexPreparedSearchSlot(VectorIndexSearchOptions{IndexName: index, Context: ctx}, collectionVectorIndexPreparedSearchCacheSlot{family: collectionVectorIndexPreparedSearchFamilyCapturedBase, indexName: index}, func() (*collectionVectorIndexPreparedSearch, VectorIndexSearchResponse, error) {
@@ -120,108 +125,94 @@ func (c *Collection) acquireTypedGraphCapturedBaseCacheWithContext(ctx context.C
 }
 
 func (c *Collection) openTypedGraphCapturedBaseCache(ctx context.Context, index string, limits typedGraphReadOwnerLimits) (prepared *collectionVectorIndexPreparedSearch, err error) {
-	err = WithVectorPartitionStorageBarrierWithContextV1(ctx, c.db.Dir(), func() (err error) {
-		snap := c.db.AcquireSnapshot()
-		if snap == nil {
-			return ErrVectorIndexSnapshotMismatch
-		}
-		defer func() { err = errors.Join(err, snap.Close()) }()
-		catalog, err := loadCollectionCatalog(snap, c.collectionName())
-		if err != nil {
-			return err
-		}
-		if catalog == nil || catalog.typedGraphBase == nil || len(catalog.meta.VectorIndexes) != 1 || catalog.meta.VectorIndexes[0].Name != index || !typedGraphBaseSchemaMatches(catalog.typedGraphBase.meta, catalog.meta) {
-			return ErrVectorIndexSnapshotMismatch
-		}
-		base := catalog.typedGraphBase
-		if err := validateTypedGraphColdManifestBudget(ctx, snap, base.roots[collectionColumnManifestRootName(catalog.meta.Name)], limits.Cold); err != nil {
-			return err
-		}
-		graph, view, err := base.readerView(c, snap)
-		if err != nil {
-			return err
-		}
-		// Per decoded working term, not a claimed total Go heap bound. Metadata
-		// pre-scan and physical extents have separate caps before mapping.
-		for _, term := range [][2]int64{{int64(graph.Dimensions), 4}, {1, int64(reflect.TypeFor[DocumentRowRef]().Size())}, {int64(graph.M), 8}} {
-			if term[0] <= 0 || term[0] > limits.Cold.DecodedTermBytes/term[1] || graph.RowCount < 0 || int64(graph.RowCount) > limits.Cold.DecodedTermBytes/(term[0]*term[1]) {
-				return errTypedGraphOverlayFoldNeeded
-			}
-		}
-		refs, err := typedGraphOwnerRefs(view.graphOwnerRecords, view.Config.ActiveManifest.Generation, view.AssetNamespace, graph, view.VectorIndexState)
-		if err != nil {
-			return err
-		}
-		backgroundCtx, backgroundCancel := context.WithCancel(context.Background())
-		r := &typedGraphCapturedBaseResources{backgroundCtx: backgroundCtx, backgroundCancel: backgroundCancel}
-		defer func() {
-			if err != nil {
-				err = errors.Join(err, r.Close())
-			}
-		}()
-		for _, ref := range refs {
-			if ref.Length <= 0 || ref.Length > limits.Cold.AssetBytes-r.assetBytes {
-				return errTypedGraphOverlayFoldNeeded
-			}
-			r.assetBytes += ref.Length
-			if int64(len(ref.Namespace)) > limits.StateBytes-r.descriptorBytes {
-				return errTypedGraphOwnerBudget
-			}
-			r.descriptorBytes += int64(len(ref.Namespace))
-		}
-		// Exact retained slice capacity plus conservatively repeated namespace
-		// bytes. This is lease metadata, NOT total holder/Go allocator residency.
-		fixed := int64(reflect.TypeFor[typedGraphCapturedBaseResources]().Size() + reflect.TypeFor[ColumnAssetLifecyclePinSet]().Size() + reflect.TypeFor[collectionVectorIndexPreparedSearch]().Size())
-		refSize := int64(reflect.TypeFor[ColumnAssetRef]().Size())
-		if fixed > limits.StateBytes-r.descriptorBytes || int64(cap(refs)) > (limits.StateBytes-r.descriptorBytes-fixed)/refSize {
-			return errTypedGraphOwnerBudget
-		}
-		r.descriptorBytes += fixed + int64(cap(refs))*refSize
-		var legacyScalarU8Descriptors []columnVectorGraphSharedPreparedLegacyScalarU8AssetDescriptor
-		if graph.RowCount > 0 {
-			// The shared holder transfers this descriptor shape beyond the
-			// decoded view that produced it. Construct the same descriptor
-			// shape for admission before opening any source.
-			legacyScalarU8Descriptors = columnVectorGraphSharedPreparedLegacyScalarU8AssetDescriptors(catalog.meta.VectorIndexes[0], view.VectorIndexState)
-		}
-		r.backingBytes, err = typedGraphCapturedBaseBackingBoundWithLegacyScalarU8Assets(graph.RowCount, len(view.graphOwnerRecords), graph.AdjacencyLayerCount, legacyScalarU8Descriptors, limits.StateBytes-r.descriptorBytes)
-		if err != nil {
-			return err
-		}
-		coord := c.collectionSchemaCoordinator()
-		if coord == nil {
-			return ErrVectorIndexSnapshotMismatch
-		}
-		view.graphOwnerRecords = nil
-		reader, err := c.openColumnVectorGraphPhysicalRowReaderFromView(snap, catalog.meta.VectorIndexes[0], graph, view, columnVectorGraphPhysicalRowReaderOptions{SkipQuantizedAssets: true, admitSources: func(keyBytes int) error {
-			// A hit may retain both the original holder key and this ref key.
-			if int64(keyBytes) > (limits.StateBytes-r.descriptorBytes)/2 {
-				return errTypedGraphOwnerBudget
-			}
-			r.descriptorBytes += 2 * int64(keyBytes)
-			if err := r.reserve(&coord.typedGraphOwners, limits); err != nil {
-				return err
-			}
-			var pinErr error
-			r.pin, pinErr = c.acquireColumnAssetLifecyclePinSetOwned(ColumnAssetLifecyclePinSetOptions{Source: ColumnAssetLifecyclePinSourcePreparedQuery, Owner: "typed_graph_captured_base_cache", Refs: refs})
-			return pinErr
-		}})
-		if err != nil {
-			return err
-		}
-		defer func() { err = errors.Join(err, reader.Close()) }()
-		if reader.sharedPreparedSearch == nil {
-			return errColumnVectorGraphSharedPreparedSearchNotEligible
-		}
-		r.ref = reader.detachSharedPreparedSearch()
-		prepared = &collectionVectorIndexPreparedSearch{family: collectionVectorIndexPreparedSearchFamilyCapturedBase, collection: c, indexName: index, commitSeq: snapshotCommitSeq(snap), systemRoot: snapshotSystemRoot(snap), capturedBase: r}
-		return nil
-	})
-	if err != nil && prepared != nil {
-		err = errors.Join(err, prepared.Close())
-		prepared = nil
+	if ctx == nil {
+		ctx = context.Background()
 	}
-	return prepared, err
+	if c == nil || c.db == nil || c.db.IsClosing() || !typedGraphReadOwnerLimitsValid(limits) {
+		return nil, ErrVectorIndexSnapshotMismatch
+	}
+	coord := c.collectionSchemaCoordinator()
+	if coord == nil {
+		return nil, ErrVectorIndexSnapshotMismatch
+	}
+	state := coord.typedPublication.Load()
+	policy := coord.typedGraphServing.Load()
+	// Initial Ensure warms and physically admits this holder before publishing
+	// servingAdmitted. The installed policy plus immutable metadata is the only
+	// unadmitted entry point. Once admitted, the installed state is sufficient
+	// authority for this package-private seam; a present policy must still match.
+	// Public requests independently require both the policy and servingAdmitted.
+	if state == nil || state.invalid || state.servingBase == nil ||
+		(!state.servingAdmitted && (policy == nil || policy.index != index || policy.options.Owners != limits)) ||
+		(policy != nil && (policy.index != index || policy.options.Owners != limits)) {
+		return nil, ErrVectorIndexSnapshotMismatch
+	}
+	base := state.servingBase
+	if base.preparedKey == "" || base.graph.RowCount <= 0 || base.view.Catalog == nil || len(base.view.Catalog.meta.VectorIndexes) != 1 || base.view.Catalog.meta.VectorIndexes[0].Name != index {
+		return nil, errColumnVectorGraphSharedPreparedSearchNotEligible
+	}
+	graph, refs := base.graph, base.refs
+	// Per decoded working term, not a claimed total Go heap bound. Installed
+	// metadata already passed the cold manifest decoder; this separately bounds
+	// the holder's known retained source shapes before any physical admission.
+	for _, term := range [][2]int64{{int64(graph.Dimensions), 4}, {1, int64(reflect.TypeFor[DocumentRowRef]().Size())}, {int64(graph.M), 8}} {
+		if term[0] <= 0 || term[0] > limits.Cold.DecodedTermBytes/term[1] || graph.RowCount < 0 || int64(graph.RowCount) > limits.Cold.DecodedTermBytes/(term[0]*term[1]) {
+			return nil, errTypedGraphOverlayFoldNeeded
+		}
+	}
+	backgroundCtx, backgroundCancel := context.WithCancel(context.Background())
+	r := &typedGraphCapturedBaseResources{backgroundCtx: backgroundCtx, backgroundCancel: backgroundCancel}
+	defer func() {
+		if err != nil {
+			err = errors.Join(err, r.Close())
+		}
+	}()
+	for _, ref := range refs {
+		if ref.Length <= 0 || ref.Length > limits.Cold.AssetBytes-r.assetBytes {
+			return nil, errTypedGraphOverlayFoldNeeded
+		}
+		r.assetBytes += ref.Length
+		if int64(len(ref.Namespace)) > limits.StateBytes-r.descriptorBytes {
+			return nil, errTypedGraphOwnerBudget
+		}
+		r.descriptorBytes += int64(len(ref.Namespace))
+	}
+	// Logical StateBytes covers this keeper's capability/ref/pin wrapper. The
+	// holder/cache entry, exact guardian, authority copy, and segment table are
+	// separately charged once in Physical.InventoryBytes.
+	fixed := int64(reflect.TypeFor[typedGraphCapturedBaseResources]().Size() +
+		reflect.TypeFor[typedGraphServingHolderCapability]().Size() +
+		reflect.TypeFor[columnVectorGraphSharedPreparedSearchRef]().Size() +
+		reflect.TypeFor[ColumnAssetLifecyclePinSet]().Size() +
+		reflect.TypeFor[collectionVectorIndexPreparedSearch]().Size())
+	refSize := int64(reflect.TypeFor[ColumnAssetRef]().Size())
+	if fixed > limits.StateBytes-r.descriptorBytes || int64(len(refs)) > (limits.StateBytes-r.descriptorBytes-fixed)/refSize {
+		return nil, errTypedGraphOwnerBudget
+	}
+	r.descriptorBytes += fixed + int64(len(refs))*refSize
+	legacyScalarU8Descriptors := columnVectorGraphSharedPreparedLegacyScalarU8AssetDescriptors(base.view.Catalog.meta.VectorIndexes[0], base.view.VectorIndexState)
+	r.backingBytes, err = typedGraphCapturedBaseBackingBoundWithLegacyScalarU8Assets(graph.RowCount, base.recordCount, graph.AdjacencyLayerCount, legacyScalarU8Descriptors, limits.StateBytes-r.descriptorBytes)
+	if err != nil {
+		return nil, err
+	}
+	// A hit retains one key in the wrapper in addition to the cache's key.
+	if int64(len(base.preparedKey)) > (limits.StateBytes-r.descriptorBytes)/2 {
+		return nil, errTypedGraphOwnerBudget
+	}
+	r.descriptorBytes += 2 * int64(len(base.preparedKey))
+	if err := r.reserve(&coord.typedGraphOwners, limits); err != nil {
+		return nil, err
+	}
+	var commitSeq, systemRoot uint64
+	r.capability, commitSeq, systemRoot, err = base.acquireServingHolder(ctx, c, refs, "typed_graph_captured_base_cache", limits.Physical)
+	if err != nil {
+		return nil, err
+	}
+	prepared = &collectionVectorIndexPreparedSearch{
+		family: collectionVectorIndexPreparedSearchFamilyCapturedBase, collection: c,
+		indexName: index, commitSeq: commitSeq, systemRoot: systemRoot, capturedBase: r,
+	}
+	return prepared, nil
 }
 
 // Bounds retained source structs and explicit Go slice backing before mapping.

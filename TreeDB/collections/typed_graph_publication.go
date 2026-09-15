@@ -237,6 +237,10 @@ type typedGraphPublicationState struct {
 	servingBase              *typedGraphServingBaseMetadata
 	servingMaterializer      columnPhysicalScanSnapshotView
 	servingRefs              []ColumnAssetRef
+	servingBaseRefsDigest    [32]byte
+	servingBaseRefsCount     int
+	servingPinBytes          int64
+	servingOwnerRefBytes     int64
 	servingMetadataBytes     int64
 	servingAdmitted          bool
 	catalog                  *collectionCatalog

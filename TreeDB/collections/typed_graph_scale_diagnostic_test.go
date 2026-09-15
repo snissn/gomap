@@ -175,7 +175,7 @@ func TestTypedGraphScaleDiagnostic(t *testing.T) {
 	}
 	opts := typedGraphPublicTestOptions()
 	opts.Publication = ColumnGraphPublicationLimits{Rows: 4096, Tombstones: 4096, ValueSlots: 16384, OwnedBytes: 128 << 20, EncodedOutputBytes: 128 << 20}
-	opts.Owners = ColumnGraphReadOwnerLimits{Owners: 16, States: 16, StateBytes: 2 << 30, AssetBytes: 16 << 30, Cold: ColumnGraphColdLimits{ManifestRecords: 32768, ManifestBytes: 64 << 20, AssetBytes: 8 << 30, DecodedTermBytes: 2 << 30}}
+	opts.Owners = ColumnGraphReadOwnerLimits{Owners: 16, States: 16, StateBytes: 2 << 30, AssetBytes: 16 << 30, Cold: ColumnGraphColdLimits{ManifestRecords: 32768, ManifestBytes: 64 << 20, AssetBytes: 8 << 30, DecodedTermBytes: 2 << 30}, Physical: ColumnGraphPhysicalResourceLimits{Segments: 32768, Descriptors: 32768, MappedBytes: 32 << 30, FallbackBytes: 32 << 30, InventoryBytes: 1 << 30}}
 	opts.Filter = ColumnGraphFilterLimits{SourceIDs: manifest.Rows + 4096, SourceBytes: 64 << 20, RetainedBytes: 64 << 20, MappingWork: 128 << 20, InspectedEntries: manifest.Rows * 4}
 	opts.CandidateOutput.Bytes = 8 << 30
 	opts.FoldRows = manifest.Rows + 4096

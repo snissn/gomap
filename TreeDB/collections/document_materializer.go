@@ -410,7 +410,37 @@ type documentMaterializerAssetCounters struct {
 	readAtFallbacks uint64
 	fileOpens       uint64
 	fileCloses      uint64
+	servingBorrows  uint64
 	activeHandles   int64
+}
+
+// materializerServingSourceAccess returns the one non-owning pool access held
+// by a public typed-serving read view. The view's typedGraphOwner owns the
+// complete serving capability and closes both materializer caches before that
+// capability, so no per-read pool ref is needed. Zero-row serving has no
+// physical holder and deliberately keeps its established local materializer.
+func (v *CollectionReadView) materializerServingSourceAccess() (*columnVectorGraphSourceAccess, error) {
+	if v == nil || v.typedGraphOwner == nil {
+		return nil, nil
+	}
+	owner := v.typedGraphOwner
+	if owner.closed || owner.overlay == nil || owner.overlay.current != v || owner.overlay.base == nil || owner.overlay.base.reader == nil {
+		return nil, ErrVectorIndexSnapshotMismatch
+	}
+	reader := owner.overlay.base.reader
+	if reader.RowCount() == 0 && reader.sharedServingHolder == nil && reader.sharedPreparedSearch == nil {
+		return nil, nil
+	}
+	capability := reader.sharedServingHolder
+	if capability == nil || capability.pin == nil || capability.ref == nil || reader.sharedPreparedSearch != capability.ref {
+		return nil, ErrVectorIndexSnapshotMismatch
+	}
+	ref := capability.ref
+	holder := ref.holder
+	if ref.key.family != columnVectorGraphSharedPreparedSearchKeyServing || holder == nil || holder.key != ref.key || holder.servingSegments == nil || holder.servingSourceAccess == nil || holder.servingSourceAccess.pool != holder.servingSegments {
+		return nil, ErrVectorIndexSnapshotMismatch
+	}
+	return holder.servingSourceAccess, nil
 }
 
 func (v *CollectionReadView) ensureAssetReadCaches(cfg ColumnStoreConfig, rowIntegrity ColumnAssetReadIntegrity) error {
@@ -426,7 +456,15 @@ func (v *CollectionReadView) ensureAssetReadCaches(cfg ColumnStoreConfig, rowInt
 	}
 	rootDir := v.collection.db.ColumnAssetRootDir()
 	namespace := cfg.AssetManager.Namespace
-	if v.rowAssetReadCache == nil || v.rowAssetReadIntegrity != rowIntegrity || v.rowAssetReadCache.namespace != namespace {
+	servingAccess, err := v.materializerServingSourceAccess()
+	if err != nil {
+		return err
+	}
+	if v.rowAssetReadCache != nil && v.rowAssetReadIntegrity == rowIntegrity && v.rowAssetReadCache.namespace == namespace {
+		if err := v.rowAssetReadCache.useServingSourceAccess(servingAccess); err != nil {
+			return err
+		}
+	} else {
 		if v.rowAssetReadCache != nil {
 			v.clearDerivedRowFetchCaches()
 			if err := v.rowAssetReadCache.close(); err != nil {
@@ -446,10 +484,18 @@ func (v *CollectionReadView) ensureAssetReadCaches(cfg ColumnStoreConfig, rowInt
 			_ = readCache.close()
 			return err
 		}
+		if err := readCache.useServingSourceAccess(servingAccess); err != nil {
+			_ = readCache.close()
+			return err
+		}
 		v.rowAssetReadCache = &readCache
 		v.rowAssetReadIntegrity = rowIntegrity
 	}
-	if v.typedColumnAssetReadCache == nil || v.typedColumnAssetReadCache.namespace != namespace {
+	if v.typedColumnAssetReadCache != nil && v.typedColumnAssetReadCache.namespace == namespace {
+		if err := v.typedColumnAssetReadCache.useServingSourceAccess(servingAccess); err != nil {
+			return err
+		}
+	} else {
 		if v.typedColumnAssetReadCache != nil {
 			v.typedColumnReconstructionCache = nil
 			if err := v.typedColumnAssetReadCache.close(); err != nil {
@@ -466,6 +512,10 @@ func (v *CollectionReadView) ensureAssetReadCaches(cfg ColumnStoreConfig, rowInt
 		readCache.forceReadAtFallback = v.forceAssetReadAtFallbackForTest
 		readCache.trustCachedVerifyFileIdentity = true
 		if err := readCache.useMappedResourceManager(v.assetManager, v.assetScope(cfg, "typed-column document materializer"), "document materializer typed-column asset read"); err != nil {
+			_ = readCache.close()
+			return err
+		}
+		if err := readCache.useServingSourceAccess(servingAccess); err != nil {
 			_ = readCache.close()
 			return err
 		}
@@ -526,6 +576,7 @@ func (v *CollectionReadView) assetCounters() documentMaterializerAssetCounters {
 		out.readAtFallbacks += stats.ReadAtFallbacks
 		out.fileOpens += stats.FileOpens
 		out.fileCloses += stats.FileCloses
+		out.servingBorrows += stats.ServingBorrows
 	}
 	if v.typedColumnAssetReadCache != nil {
 		stats := v.typedColumnAssetReadCache.lifecycleStats()
@@ -533,6 +584,7 @@ func (v *CollectionReadView) assetCounters() documentMaterializerAssetCounters {
 		out.readAtFallbacks += stats.ReadAtFallbacks
 		out.fileOpens += stats.FileOpens
 		out.fileCloses += stats.FileCloses
+		out.servingBorrows += stats.ServingBorrows
 	}
 	if v.assetManager != nil {
 		out.activeHandles = v.assetManager.Stats().ActiveHandles
@@ -549,6 +601,7 @@ func (c *documentMaterializerAssetCounters) addReadCache(readCache *columnPhysic
 	c.readAtFallbacks += stats.ReadAtFallbacks
 	c.fileOpens += stats.FileOpens
 	c.fileCloses += stats.FileCloses
+	c.servingBorrows += stats.ServingBorrows
 }
 
 func addDocumentMaterializerAssetCounterDeltas(stats *DocumentMaterializationStats, before, after documentMaterializerAssetCounters) {
@@ -1009,6 +1062,10 @@ func (v *CollectionReadView) loadPointRowBlock(view columnPhysicalScanSnapshotVi
 	if v.pointRowBlocks == nil {
 		v.pointRowBlocks = make(map[documentRowPartKey]*columnPhysicalRowReaderBlock)
 	}
+	// A mapped raw slice may belong to the serving pool. This cache is nested
+	// under the read view: clearDerivedRowFetchCaches and the request's logical
+	// handles close before typedGraphOwner.Close releases the holder/pool.
+	// Retain no borrowed reader object here.
 	v.pointRowBlocks[key] = block
 	return block, nil
 }

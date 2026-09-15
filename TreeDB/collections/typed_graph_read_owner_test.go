@@ -27,7 +27,7 @@ func TestTypedGraphReadOwnerPublishedSuffix(t *testing.T) {
 	if err := col.Flush(); err != nil {
 		t.Fatal(err)
 	}
-	owner, err := col.openTypedGraphReadOwner(typedGraphReadOwnerLimits{Owners: 4, States: 2, StateBytes: 8 << 20, AssetBytes: 16 << 20, Cold: cold})
+	owner, err := col.openTypedGraphReadOwner(typedGraphReadOwnerLimits{Owners: 4, States: 2, StateBytes: 8 << 20, AssetBytes: 16 << 20, Cold: cold, Physical: typedGraphTestPhysicalLimits()})
 	if err != nil {
 		t.Fatalf("coherent owner after accepted typed replacement: %v", err)
 	}
@@ -120,7 +120,7 @@ func TestTypedGraphReadOwnerStateObjectCharge(t *testing.T) {
 
 func TestTypedGraphReadOwnerOtherManagerPendingAndInstallGap(t *testing.T) {
 	col, _, ids, retained, columns, _ := openTypedGraphQualityFixture(t, 32)
-	limits := typedGraphReadOwnerLimits{Owners: 4, States: 4, StateBytes: 8 << 20, AssetBytes: 16 << 20, Cold: typedGraphColdLimits{ManifestRecords: 1024, ManifestBytes: 1 << 20, AssetBytes: 8 << 20, DecodedTermBytes: 8 << 20}}
+	limits := typedGraphReadOwnerLimits{Owners: 4, States: 4, StateBytes: 8 << 20, AssetBytes: 16 << 20, Cold: typedGraphColdLimits{ManifestRecords: 1024, ManifestBytes: 1 << 20, AssetBytes: 8 << 20, DecodedTermBytes: 8 << 20}, Physical: typedGraphTestPhysicalLimits()}
 	if err := col.reconcileTypedGraphPublication(typedGraphPublicationLimits{Rows: 64, Tombstones: 64, ValueSlots: 256, OwnedBytes: 1 << 20}, limits.Cold); err != nil {
 		t.Fatal(err)
 	}
@@ -232,7 +232,7 @@ func TestTypedGraphReadOwnerSmallBase(t *testing.T) {
 			if _, err := col.RebuildVectorIndex("embedding_graph"); err != nil {
 				t.Fatal(err)
 			}
-			limits := typedGraphReadOwnerLimits{Owners: 2, States: 2, StateBytes: 1 << 20, AssetBytes: 8 << 20, Cold: typedGraphColdLimits{ManifestRecords: 128, ManifestBytes: 128 << 10, AssetBytes: 4 << 20, DecodedTermBytes: 4 << 20}}
+			limits := typedGraphReadOwnerLimits{Owners: 2, States: 2, StateBytes: 1 << 20, AssetBytes: 8 << 20, Cold: typedGraphColdLimits{ManifestRecords: 128, ManifestBytes: 128 << 10, AssetBytes: 4 << 20, DecodedTermBytes: 4 << 20}, Physical: typedGraphTestPhysicalLimits()}
 			if err := col.reconcileTypedGraphPublication(typedGraphPublicationLimits{Rows: 8, Tombstones: 8, ValueSlots: 32, OwnedBytes: 4096}, limits.Cold); err != nil {
 				t.Fatal(err)
 			}
@@ -334,7 +334,7 @@ func TestTypedGraphReadOwnerReopenRetirementAndLimits(t *testing.T) {
 		t.Fatal(err)
 	}
 	publication := typedGraphPublicationLimits{Rows: 64, Tombstones: 64, ValueSlots: 256, OwnedBytes: 1 << 20}
-	limits := typedGraphReadOwnerLimits{Owners: 3, States: 2, StateBytes: 8 << 20, AssetBytes: 16 << 20, Cold: typedGraphColdLimits{ManifestRecords: 1024, ManifestBytes: 1 << 20, AssetBytes: 8 << 20, DecodedTermBytes: 8 << 20}}
+	limits := typedGraphReadOwnerLimits{Owners: 3, States: 2, StateBytes: 8 << 20, AssetBytes: 16 << 20, Cold: typedGraphColdLimits{ManifestRecords: 1024, ManifestBytes: 1 << 20, AssetBytes: 8 << 20, DecodedTermBytes: 8 << 20}, Physical: typedGraphTestPhysicalLimits()}
 	if owner, err := col.openTypedGraphReadOwner(limits); owner != nil || !errors.Is(err, ErrVectorIndexSnapshotMismatch) {
 		t.Fatalf("Open silently bootstrapped: %v", err)
 	}

@@ -26,7 +26,14 @@ func mmapColumnPhysicalAssetFile(file *os.File) ([]byte, error) {
 	if size <= 0 || size > int64(maxCollectionInt) {
 		return nil, os.ErrInvalid
 	}
-	return syscall.Mmap(fd, 0, int(size), syscall.PROT_READ, syscall.MAP_SHARED)
+	return mmapColumnPhysicalAssetFilePrefix(file, size)
+}
+
+func mmapColumnPhysicalAssetFilePrefix(file *os.File, size int64) ([]byte, error) {
+	if file == nil || size <= 0 || size > int64(maxCollectionInt) {
+		return nil, os.ErrInvalid
+	}
+	return syscall.Mmap(int(file.Fd()), 0, int(size), syscall.PROT_READ, syscall.MAP_SHARED)
 }
 
 func columnAssetVerifiedChecksumFileIdentityFromFile(file *os.File) columnAssetVerifiedChecksumFileIdentity {

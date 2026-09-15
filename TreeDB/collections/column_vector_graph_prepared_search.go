@@ -16,6 +16,11 @@ import (
 type columnVectorGraphPreparedSearchView struct {
 	rows int
 	dims int
+	// allowHolderFallback is set only while a serving holder is assembled
+	// through its exact-base source capability. It permits direct typed views
+	// over pool-owned, checksummed parent buffers; generic prepared readers keep
+	// the historical mmap-only contract.
+	allowHolderFallback bool
 
 	vector                columnVectorGraphPreparedVectorView
 	norm                  columnVectorGraphPreparedNormView
@@ -28,19 +33,21 @@ type columnVectorGraphPreparedSearchView struct {
 
 // maybePrepareColumnVectorGraphPreparedSearchView admits the #2045 combined
 // prepared route only when every required current-format state is already
-// mmap_direct. Non-mmap resource/platform fallbacks keep reader.preparedSearch
-// nil so the existing counted source/compatibility path remains available;
-// nil, stale, or malformed prerequisites intentionally fall through to
-// prepareColumnVectorGraphPreparedSearchView so current-format corruption still
-// fails closed.
+// mmap_direct, except for serving holders whose exact-base capability owns a
+// validated parent-buffer fallback. Generic non-mmap resource/platform
+// fallbacks keep reader.preparedSearch nil so the existing counted
+// source/compatibility path remains available; nil, stale, or malformed
+// prerequisites intentionally fall through to preparation so current-format
+// corruption still fails closed.
 func maybePrepareColumnVectorGraphPreparedSearchView(reader *columnVectorGraphPhysicalRowReader) error {
-	if !columnVectorGraphPreparedSearchMmapPrerequisitesPresent(reader) {
+	allowHolderFallback := reader != nil && reader.sourceAccess != nil
+	if !allowHolderFallback && !columnVectorGraphPreparedSearchMmapPrerequisitesPresent(reader) {
 		if reader != nil {
 			reader.preparedSearch = nil
 		}
 		return nil
 	}
-	preparedSearch, err := prepareColumnVectorGraphPreparedSearchView(reader)
+	preparedSearch, err := prepareColumnVectorGraphPreparedSearchViewWithHolderFallback(reader, allowHolderFallback)
 	if err != nil {
 		return err
 	}
@@ -132,6 +139,10 @@ func columnVectorGraphPreparedSearchAdjacencyMmapPrerequisitePresent(group *colu
 }
 
 func prepareColumnVectorGraphPreparedSearchView(reader *columnVectorGraphPhysicalRowReader) (*columnVectorGraphPreparedSearchView, error) {
+	return prepareColumnVectorGraphPreparedSearchViewWithHolderFallback(reader, false)
+}
+
+func prepareColumnVectorGraphPreparedSearchViewWithHolderFallback(reader *columnVectorGraphPhysicalRowReader, allowHolderFallback bool) (*columnVectorGraphPreparedSearchView, error) {
 	if reader == nil {
 		return nil, errNilColumnVectorGraphPhysicalRowReader
 	}
@@ -145,20 +156,21 @@ func prepareColumnVectorGraphPreparedSearchView(reader *columnVectorGraphPhysica
 	if rows <= 0 {
 		return &columnVectorGraphPreparedSearchView{rows: rows, dims: reader.def.Dimensions}, nil
 	}
-	vector, reason, description, ok := prepareColumnVectorGraphPreparedVectorView(reader.typedVectorSource, rows, reader.def.Dimensions)
+	vector, reason, description, ok := prepareColumnVectorGraphPreparedVectorViewWithHolderFallback(reader.typedVectorSource, rows, reader.def.Dimensions, allowHolderFallback)
 	if !ok {
 		if description != "" {
 			return nil, fmt.Errorf("base vector prepared view unavailable reason=%s: %s", reason, description)
 		}
 		return nil, fmt.Errorf("base vector prepared view unavailable reason=%s", reason)
 	}
-	norm, normReason, ok := prepareColumnVectorGraphPreparedNormView(reader.invNormSource, rows)
+	norm, normReason, ok := prepareColumnVectorGraphPreparedNormViewWithHolderFallback(reader.invNormSource, rows, allowHolderFallback)
 	if !ok {
 		return nil, fmt.Errorf("inverse-norm prepared view unavailable reason=%s", normReason)
 	}
 	view := &columnVectorGraphPreparedSearchView{
 		rows:                  rows,
 		dims:                  reader.def.Dimensions,
+		allowHolderFallback:   allowHolderFallback,
 		vector:                vector,
 		norm:                  norm,
 		adjacency:             reader.adjacencyLayerSources,
@@ -193,21 +205,21 @@ func (v *columnVectorGraphPreparedSearchView) recordIndexedScoreBatchMinimalCoun
 		return
 	}
 	if v == nil || !v.ready() || len(ordinals) <= 1 {
-		counters.recordPreparedScores(len(ordinals), false, true)
+		counters.recordPreparedScoreBatch(ordinals, false, true)
 		return
 	}
 	if v.vector.singlePart != nil {
 		optimized := v.indexedScoreBatchOptimizedEligible(len(ordinals))
-		counters.recordPreparedScores(len(ordinals), optimized, !optimized)
+		counters.recordPreparedScoreBatch(ordinals, optimized, !optimized)
 		return
 	}
 	for _, ordinal := range ordinals {
 		if ordinal < 0 || ordinal >= len(v.norm.values) {
-			counters.recordPreparedScores(len(ordinals), false, true)
+			counters.recordPreparedScoreBatch(ordinals, false, true)
 			return
 		}
 		if _, _, ok := v.vector.locationForOrdinal(ordinal); !ok {
-			counters.recordPreparedScores(len(ordinals), false, true)
+			counters.recordPreparedScoreBatch(ordinals, false, true)
 			return
 		}
 	}
@@ -223,7 +235,7 @@ func (v *columnVectorGraphPreparedSearchView) recordIndexedScoreBatchMinimalCoun
 		}
 		runLen := runEnd - runStart
 		optimized := vectorops.DotFloat32IndexedOptimizedEligible(runLen, v.dims)
-		counters.recordPreparedScores(runLen, optimized, !optimized)
+		counters.recordPreparedScoreBatch(ordinals[runStart:runEnd], optimized, !optimized)
 		runStart = runEnd
 	}
 }
@@ -250,19 +262,19 @@ func (v *columnVectorGraphPreparedSearchView) validateLive() error {
 	if err := v.validateNormLive(); err != nil {
 		return err
 	}
-	if err := validateColumnVectorGraphPreparedSearchAdjacency(v.adjacency, v.rows); err != nil {
+	if err := validateColumnVectorGraphPreparedSearchAdjacencyWithHolderFallback(v.adjacency, v.rows, v.allowHolderFallback); err != nil {
 		return err
 	}
 	if v.rowRefs == nil || !v.rowRefs.preparedViewActive() {
 		return errors.New("row-ref prepared view is not active")
 	}
-	if !v.rowRefs.forwardMmapDirect() {
+	if !v.rowRefs.forwardMmapDirect() && !v.allowHolderFallback {
 		return errors.New("row-ref prepared forward view is not mmap_direct")
 	}
 	if v.documentIDs == nil || !v.documentIDs.preparedViewActive() {
 		return errors.New("document-id prepared bytes view is not active")
 	}
-	if !v.documentIDsMmapDirect {
+	if !v.documentIDsMmapDirect && !v.allowHolderFallback {
 		return errors.New("document-id prepared bytes view is not mmap_direct")
 	}
 	return nil
@@ -280,8 +292,8 @@ func (v *columnVectorGraphPreparedSearchView) validateVectorLive() error {
 		if part.handle == nil || part.handle.Released() {
 			return fmt.Errorf("base vector prepared single-part handle is stale: %w", errColumnVectorGraphManifestMismatch)
 		}
-		if part.outcome != columnVectorGraphTypedColumnVectorOutcomeMmapDirect {
-			return fmt.Errorf("base vector prepared single-part outcome=%s want mmap_direct", part.outcome)
+		if part.outcome != columnVectorGraphTypedColumnVectorOutcomeMmapDirect && (!v.allowHolderFallback || part.outcome != columnVectorGraphTypedColumnVectorOutcomeHeapCopyTypedView) {
+			return fmt.Errorf("base vector prepared single-part outcome=%s is not an admitted prepared source", part.outcome)
 		}
 		if part.rows < 0 || part.rows > maxCollectionInt/v.dims {
 			return fmt.Errorf("base vector prepared single-part rows=%d dims=%d overflows rows*dims", part.rows, v.dims)
@@ -312,8 +324,8 @@ func (v *columnVectorGraphPreparedSearchView) validateVectorLive() error {
 		if part == nil || part.handle == nil || part.handle.Released() {
 			return fmt.Errorf("base vector prepared part[%d] handle is stale", i)
 		}
-		if part.outcome != columnVectorGraphTypedColumnVectorOutcomeMmapDirect {
-			return fmt.Errorf("base vector prepared part[%d] outcome=%s want mmap_direct", i, part.outcome)
+		if part.outcome != columnVectorGraphTypedColumnVectorOutcomeMmapDirect && (!v.allowHolderFallback || part.outcome != columnVectorGraphTypedColumnVectorOutcomeHeapCopyTypedView) {
+			return fmt.Errorf("base vector prepared part[%d] outcome=%s is not an admitted prepared source", i, part.outcome)
 		}
 		if len(part.values) != part.rows*v.dims {
 			return fmt.Errorf("base vector prepared part[%d] values=%d want rows*dims=%d", i, len(part.values), part.rows*v.dims)
@@ -332,13 +344,17 @@ func (v *columnVectorGraphPreparedSearchView) validateNormLive() error {
 	if v.norm.source == nil || v.norm.source.closed || (v.norm.source.handle != nil && v.norm.source.handle.Released()) {
 		return errors.New("inverse-norm prepared handle is stale")
 	}
-	if v.norm.source.outcome != columnVectorGraphInvNormStateOutcomeMmapDirect {
-		return fmt.Errorf("inverse-norm prepared outcome=%s want mmap_direct", v.norm.source.outcome)
+	if v.norm.source.outcome != columnVectorGraphInvNormStateOutcomeMmapDirect && (!v.allowHolderFallback || v.norm.source.outcome != columnVectorGraphInvNormStateOutcomeHeapCopyTypedView) {
+		return fmt.Errorf("inverse-norm prepared outcome=%s is not an admitted prepared source", v.norm.source.outcome)
 	}
 	return nil
 }
 
 func validateColumnVectorGraphPreparedSearchAdjacency(group *columnVectorGraphAdjacencyDirectSources, rows int) error {
+	return validateColumnVectorGraphPreparedSearchAdjacencyWithHolderFallback(group, rows, false)
+}
+
+func validateColumnVectorGraphPreparedSearchAdjacencyWithHolderFallback(group *columnVectorGraphAdjacencyDirectSources, rows int, allowHolderFallback bool) error {
 	if group == nil || group.closed || !group.allLayers || group.layerCount() == 0 {
 		return errors.New("adjacency prepared CSR view is not active for all layers")
 	}
@@ -346,7 +362,7 @@ func validateColumnVectorGraphPreparedSearchAdjacency(group *columnVectorGraphAd
 		if err := group.pack.validateLive(); err != nil {
 			return err
 		}
-		if group.pack.Header.Rows != rows || group.pack.status != columnHNSWSearchPackPreparedStatusDirect {
+		if group.pack.Header.Rows != rows || (group.pack.status != columnHNSWSearchPackPreparedStatusDirect && (!allowHolderFallback || group.pack.status != columnHNSWSearchPackPreparedStatusHeap)) {
 			return errors.New("adjacency pack rows/mapping mismatch")
 		}
 		return nil
@@ -358,8 +374,8 @@ func validateColumnVectorGraphPreparedSearchAdjacency(group *columnVectorGraphAd
 		if source.rows != rows || len(source.offsets) != rows+1 {
 			return fmt.Errorf("adjacency prepared CSR layer %d rows/offsets=(%d,%d) want (%d,%d)", layer, source.rows, len(source.offsets), rows, rows+1)
 		}
-		if source.outcome != columnVectorGraphLayer0AdjacencySourceOutcomePreparedCSRMmapDirect {
-			return fmt.Errorf("adjacency prepared CSR layer %d outcome=%s want prepared_csr_mmap_direct", layer, source.outcome)
+		if source.outcome != columnVectorGraphLayer0AdjacencySourceOutcomePreparedCSRMmapDirect && (!allowHolderFallback || source.outcome != columnVectorGraphLayer0AdjacencySourceOutcomeTypedListHeapCopyTypedView) {
+			return fmt.Errorf("adjacency prepared CSR layer %d outcome=%s is not an admitted prepared source", layer, source.outcome)
 		}
 		if source.offsetsHandle == nil || source.valuesHandle == nil || source.offsetsHandle.Released() || source.valuesHandle.Released() {
 			return fmt.Errorf("adjacency prepared CSR layer %d handle is stale", layer)
@@ -402,7 +418,7 @@ func (v *columnVectorGraphPreparedSearchView) scoreOrdinal(plan *columnVectorGra
 	}
 	if stats != nil {
 		recordColumnVectorGraphScoreBatchStats(stats, 1, false, true)
-		v.recordScoreStats(stats, plan, 1)
+		v.recordScoreStats(stats, plan, ordinal)
 		v.recordMappingStats(stats, ordinal)
 	}
 	return score, nil
@@ -557,7 +573,7 @@ func (v *columnVectorGraphPreparedSearchView) scoreOrdinalsScalar(plan *columnVe
 	}
 	if stats != nil {
 		recordColumnVectorGraphScoreBatchStats(stats, len(ordinals), false, true)
-		v.recordScoreStats(stats, plan, len(ordinals))
+		v.recordScoreStats(stats, plan, ordinals...)
 		v.recordMappingStatsCount(stats, len(ordinals))
 	}
 	return dst, nil
@@ -656,7 +672,7 @@ func (v *columnVectorGraphPreparedSearchView) scoreOrdinalsIndexed(plan *columnV
 		}
 		stats.ScoreBatchOptimizedCalls += optimizedCalls
 		stats.ScoreBatchScalarFallbackCalls += scalarFallbackCalls
-		v.recordScoreStats(stats, plan, len(ordinals))
+		v.recordScoreStats(stats, plan, ordinals...)
 		v.recordMappingStatsCount(stats, len(ordinals))
 	}
 	return dst, true, nil
@@ -725,7 +741,7 @@ func (v *columnVectorGraphPreparedSearchView) scoreOrdinalsIndexedSinglePart(pla
 		}
 		if stats != nil {
 			recordColumnVectorGraphScoreBatchStats(stats, len(ordinals), false, true)
-			v.recordScoreStats(stats, plan, len(ordinals))
+			v.recordScoreStats(stats, plan, ordinals...)
 			v.recordMappingStatsCount(stats, len(ordinals))
 		}
 		return dst, true, nil
@@ -777,7 +793,7 @@ func (v *columnVectorGraphPreparedSearchView) scoreOrdinalsIndexedSinglePart(pla
 		} else {
 			stats.ScoreBatchScalarFallbackCalls++
 		}
-		v.recordScoreStats(stats, plan, len(ordinals))
+		v.recordScoreStats(stats, plan, ordinals...)
 		v.recordMappingStatsCount(stats, len(ordinals))
 	}
 	return dst, true, nil
@@ -797,7 +813,8 @@ func (v *columnVectorGraphPreparedSearchView) scorePreparedDot(query []float32, 
 	return score, nil
 }
 
-func (v *columnVectorGraphPreparedSearchView) recordScoreStats(stats *columnVectorGraphNativeSearchStats, plan *columnVectorGraphSearchPlan, count int) {
+func (v *columnVectorGraphPreparedSearchView) recordScoreStats(stats *columnVectorGraphNativeSearchStats, plan *columnVectorGraphSearchPlan, ordinals ...int) {
+	count := len(ordinals)
 	if stats == nil || count <= 0 {
 		return
 	}
@@ -807,11 +824,19 @@ func (v *columnVectorGraphPreparedSearchView) recordScoreStats(stats *columnVect
 	stats.CandidateFetches += uint64(count)
 	stats.VectorBytesRead += uint64(count * v.dims * 4)
 	stats.NormBytesRead += uint64(count * 4)
-	stats.VectorDirectViews += uint64(count)
-	stats.VectorMmapDirectViews += uint64(count)
+	if v.vector.singlePart != nil {
+		recordColumnVectorGraphPreparedVectorOutcomeStats(stats, v.vector.singlePart.outcome, uint64(count))
+	} else {
+		for _, ordinal := range ordinals {
+			if outcome, ok := v.vector.outcomeForOrdinal(ordinal); ok {
+				recordColumnVectorGraphPreparedVectorOutcomeStats(stats, outcome, 1)
+			}
+		}
+	}
 	stats.VectorPreparedDirectViews += uint64(count)
-	stats.NormDirectViews += uint64(count)
-	stats.NormMmapDirectViews += uint64(count)
+	if v.norm.source != nil {
+		recordColumnVectorGraphPreparedNormOutcomeStats(stats, v.norm.source.outcome, uint64(count))
+	}
 	stats.NormPreparedDirectViews += uint64(count)
 	if plan != nil {
 		stats.BlockViewHits = plan.hits
@@ -856,6 +881,21 @@ func (v *columnVectorGraphPreparedSearchView) maxAdjacencyLayerForOrdinal(ordina
 func (v *columnVectorGraphPreparedSearchView) adjacencyLayerForOrdinal(ordinal int, layer int) ([]uint32, columnVectorGraphLayer0AdjacencySourceOutcome, error) {
 	if v == nil || v.adjacency == nil {
 		return nil, columnVectorGraphLayer0AdjacencySourceOutcomeUnknown, errors.New("collections: column_graph prepared adjacency view is unavailable")
+	}
+	if v.allowHolderFallback {
+		neighbors, outcome, reason, ok := v.adjacency.Neighbors(layer, ordinal)
+		if !ok {
+			return nil, columnVectorGraphLayer0AdjacencySourceOutcomeUnknown, fmt.Errorf("collections: column_graph prepared adjacency ordinal=%d layer=%d unavailable reason=%s", ordinal, layer, reason)
+		}
+		switch outcome {
+		case columnVectorGraphLayer0AdjacencySourceOutcomeMmapDirect,
+			columnVectorGraphLayer0AdjacencySourceOutcomeHeapCopyTypedView,
+			columnVectorGraphLayer0AdjacencySourceOutcomePreparedCSRMmapDirect,
+			columnVectorGraphLayer0AdjacencySourceOutcomeTypedListHeapCopyTypedView:
+			return neighbors, outcome, nil
+		default:
+			return nil, columnVectorGraphLayer0AdjacencySourceOutcomeUnknown, fmt.Errorf("collections: column_graph prepared adjacency ordinal=%d layer=%d outcome=%s is not an admitted holder source", ordinal, layer, outcome)
+		}
 	}
 	neighbors, reason, ok := v.adjacency.preparedCSRNeighbors(layer, ordinal)
 	if !ok {

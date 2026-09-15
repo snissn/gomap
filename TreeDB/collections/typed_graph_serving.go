@@ -6,6 +6,7 @@ import (
 	"time"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/workstats"
 )
 
@@ -23,6 +24,7 @@ type ColumnGraphServingOptions struct {
 
 type ColumnGraphPublicationLimits = typedGraphPublicationLimits
 type ColumnGraphReadOwnerLimits = typedGraphReadOwnerLimits
+type ColumnGraphPhysicalResourceLimits = typedGraphPhysicalResourceLimits
 type ColumnGraphColdLimits = typedGraphColdLimits
 type ColumnGraphCandidateOutputLimits = typedGraphFoldAssetLimits
 type ColumnGraphMaintenanceLimits = typedGraphWorkEpochLimits
@@ -73,7 +75,7 @@ func (c *Collection) EnsureColumnGraphServing(ctx context.Context, index string,
 		return err
 	}
 	p, o, f, m := opts.Publication, opts.Owners, opts.Filter, opts.Maintenance
-	if p.Rows <= 0 || p.Tombstones <= 0 || p.ValueSlots <= 0 || p.OwnedBytes <= 0 || p.EncodedOutputBytes <= 0 || o.Owners <= 0 || o.States <= 0 || o.StateBytes <= 0 || o.AssetBytes <= 0 || o.Cold.ManifestRecords <= 0 || o.Cold.ManifestBytes <= 0 || o.Cold.AssetBytes <= 0 || o.Cold.DecodedTermBytes <= 0 || opts.CandidateOutput.Bytes <= 0 || opts.CandidateOutput.AppenderAttempts <= 0 || opts.FoldRows <= 0 || opts.SearchCandidates <= 0 || f.SourceIDs <= 0 || f.SourceBytes <= 0 || f.RetainedBytes <= 0 || f.MappingWork <= 0 || f.InspectedEntries <= 0 || m.NativeEntries <= 0 || m.ColumnSegments <= 0 || m.ManifestRecords <= 0 || m.LifecycleEntries <= 0 || m.NativeBytes <= 0 || m.ColumnBytes <= 0 || m.ManifestBytes <= 0 || m.RetainedBytes <= 0 || m.PagerPages == 0 {
+	if p.Rows <= 0 || p.Tombstones <= 0 || p.ValueSlots <= 0 || p.OwnedBytes <= 0 || p.EncodedOutputBytes <= 0 || !typedGraphReadOwnerLimitsValid(o) || opts.CandidateOutput.Bytes <= 0 || opts.CandidateOutput.AppenderAttempts <= 0 || opts.FoldRows <= 0 || opts.SearchCandidates <= 0 || f.SourceIDs <= 0 || f.SourceBytes <= 0 || f.RetainedBytes <= 0 || f.MappingWork <= 0 || f.InspectedEntries <= 0 || m.NativeEntries <= 0 || m.ColumnSegments <= 0 || m.ManifestRecords <= 0 || m.LifecycleEntries <= 0 || m.NativeBytes <= 0 || m.ColumnBytes <= 0 || m.ManifestBytes <= 0 || m.RetainedBytes <= 0 || m.PagerPages == 0 {
 		return errTypedGraphSearchBudget
 	}
 	coord := c.collectionSchemaCoordinator()
@@ -92,6 +94,9 @@ func (c *Collection) EnsureColumnGraphServing(ctx context.Context, index string,
 		if old := coord.typedGraphServing.Load(); old == nil || *old != *policy {
 			return ErrConcurrentMutation
 		}
+	}
+	if !rootpublication.StableRelativeNamespaceSupported() {
+		return errors.Join(errColumnVectorGraphSharedPreparedSearchNotEligible, rootpublication.ErrNamespacePersistenceUnsupported)
 	}
 	before := coord.typedPublication.Load()
 	wasReady := before != nil && before.servingAdmitted && !before.invalid && before.servingBase != nil
@@ -252,9 +257,10 @@ func (c *Collection) invalidateTypedGraphStaleBaseKeeper(index string) {
 	c.vectorBufferedSearchMu.Unlock()
 	if old != nil {
 		old.mu.RLock()
-		stale := false
-		if state := coord.typedPublication.Load(); state != nil && !state.invalid && state.servingAdmitted && state.servingBase != nil && !old.closed && old.capturedBase != nil && old.capturedBase.ref != nil {
-			stale = state.servingBase.graph.RowCount == 0 || state.servingBase.preparedKey != old.capturedBase.ref.key
+		stale := true
+		if state := coord.typedPublication.Load(); state != nil && !state.invalid && state.servingAdmitted && state.servingBase != nil && !old.closed && old.capturedBase != nil && old.capturedBase.holderRef() != nil {
+			currentKey, err := state.servingBase.servingPreparedSearchKey(c)
+			stale = state.servingBase.graph.RowCount == 0 || err != nil || currentKey != old.capturedBase.holderRef().key
 		}
 		old.mu.RUnlock()
 		if stale {
@@ -369,12 +375,15 @@ func (c *Collection) searchTypedGraphServing(opts VectorIndexSearchOptions, buff
 	}
 	response.IndexName, response.Strategy, response.Path = p.index, VectorIndexStrategyColumnGraph, VectorIndexSearchPathColumnGraphNativeReader
 	response.Stats = vectorIndexSearchStatsFromInternal(stats.Base, owner.overlay.base.reader.Stats())
+	// Preserve the logical pack source diagnostics captured when this exact
+	// holder was assembled. The serving route may use either its mmap view or
+	// its admitted pool-owned parent fallback, but that physical choice does not
+	// change the selected typed prepared-search algorithm.
+	owner.overlay.base.routeStats.apply(&response.Stats)
 	response.Stats.ColumnGraphOwnerAcquireNanos = acquired.Nanoseconds()
 	response.Stats.ColumnGraphDeltaScored = uint64(stats.DeltaScored)
 	response.Stats.SearchRouteColumnGraphPrepared = 1
-	if stats.PackMmapDirect {
-		response.Stats.HNSWSearchPackMmapDirect = 1
-	}
+	response.Stats.SearchRouteColumnGraphFallback = 0
 	if stats.Route == "typed_hnsw" {
 		response.Stats.SearchRouteHNSWSearchPack = 1
 	}

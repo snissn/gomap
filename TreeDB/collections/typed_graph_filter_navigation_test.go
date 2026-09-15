@@ -134,6 +134,7 @@ func TestTypedGraphFilterNavigationReducesDispersedTraversal(t *testing.T) {
 	if err := col.reconcileTypedGraphPublication(typedGraphPublicationLimits{Rows: 512, Tombstones: 512, ValueSlots: 2048, OwnedBytes: 8 << 20}, owners.Cold); err != nil {
 		t.Fatal(err)
 	}
+	installTypedGraphServingStateForInternalTest(t, col, "embedding_graph", owners)
 	keeper, err := col.acquireTypedGraphCapturedBaseCache("embedding_graph", owners)
 	if err != nil {
 		t.Fatal(err)

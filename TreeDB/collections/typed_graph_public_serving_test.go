@@ -101,7 +101,7 @@ func TestTypedGraphPublicEnsureStaleCapturedKeeper(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("stale ensure blocked")
 	}
-	if !rejected.closed || resources.accounting != nil || resources.pin != nil || resources.ref != nil {
+	if !rejected.closed || resources.accounting != nil || resources.capability != nil {
 		t.Fatal("rejected captured keeper retained its pin/accounting")
 	}
 	accounting.Lock()
@@ -140,18 +140,19 @@ func requireTypedGraphPublicServingTest(t testing.TB) {
 	requireColumnAssetExactDestructiveGCTest(t)
 }
 
-func TestTypedGraphPublicUnsupportedPreparedAdmission(t *testing.T) {
-	if columnGraphTypedColumnMmapDirectViewSupportedForTest() {
-		t.Skip("exercises hosts without mmap_direct prepared holders")
+func TestTypedGraphPublicUnsupportedLifecycleAdmission(t *testing.T) {
+	if rootpublication.StableRelativeNamespaceSupported() {
+		t.Skip("exercises hosts without exact relative namespace authority")
 	}
 	col, base, ids, retained, columns, _ := openTypedGraphQualityFixture(t, 8)
 	defer base.Close()
-	if err := col.EnsureColumnGraphServing(context.Background(), base.indexName, typedGraphPublicTestOptions()); !errors.Is(err, errColumnVectorGraphSharedPreparedSearchNotEligible) {
-		t.Fatalf("unsupported prepared admission: %v", err)
+	err := col.EnsureColumnGraphServing(context.Background(), base.indexName, typedGraphPublicTestOptions())
+	if !errors.Is(err, errColumnVectorGraphSharedPreparedSearchNotEligible) || !errors.Is(err, rootpublication.ErrNamespacePersistenceUnsupported) {
+		t.Fatalf("unsupported lifecycle admission: %v", err)
 	}
 	coord := col.collectionSchemaCoordinator()
 	if state := coord.typedPublication.Load(); state != nil && state.servingAdmitted {
-		t.Fatal("unsupported prepared holder admitted serving")
+		t.Fatal("unsupported lifecycle admitted serving")
 	}
 	seq, system := dbCommitSeqAndSystemRoot(col.db)
 	changed := []TypedColumnBatch{{Name: "embedding", Float32Vectors: columns[0].Float32Vectors[:1]}, {Name: "content", Strings: []string{"reject"}}, {Name: "user", Strings: []string{"reject"}}, {Name: "path", Strings: []string{"reject"}}}
@@ -165,7 +166,37 @@ func TestTypedGraphPublicUnsupportedPreparedAdmission(t *testing.T) {
 	account.Lock()
 	defer account.Unlock()
 	if account.baseOwners != 0 || account.baseAssetBytes != 0 || account.baseDescriptorBytes != 0 || account.baseBackingBytes != 0 {
-		t.Fatal("unsupported prepared holder retained accounting")
+		t.Fatal("unsupported lifecycle retained accounting")
+	}
+}
+
+func TestTypedGraphPublicDescriptorFallbackAdmission(t *testing.T) {
+	requireColumnAssetExactDestructiveGCTest(t)
+	col, base, ids, _, columns, _ := openTypedGraphQualityFixture(t, 8)
+	defer base.Close()
+	installColumnServingLeaseHooks(t, func() {
+		columnServingSegmentLeaseHooks.Lock()
+		columnServingSegmentLeaseHooks.mmap = func(*os.File, int64) ([]byte, error) {
+			return nil, errColumnServingLeaseInjected
+		}
+		columnServingSegmentLeaseHooks.Unlock()
+	})
+	if err := col.EnsureColumnGraphServing(context.Background(), base.indexName, typedGraphPublicTestOptions()); err != nil {
+		t.Fatal(err)
+	}
+	stats, available := col.ColumnGraphServingSnapshot()
+	if !available || !stats.ServingReady || stats.Physical.FallbackSegments == 0 || stats.Physical.DescriptorsLive == 0 || stats.Physical.MappedBackings != 0 || stats.Physical.MappedBytes != 0 {
+		t.Fatalf("descriptor fallback serving stats=%+v available=%t", stats, available)
+	}
+	var buffer VectorIndexSearchBuffer
+	response, view, err := col.SearchVectorIndexWithBufferReadView(VectorIndexSearchOptions{IndexName: base.indexName, Query: columns[0].Float32Vectors[0], TopK: 1, EfSearch: 8, StatsMode: VectorIndexSearchStatsModeMinimal}, &buffer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer view.Close()
+	docs, err := view.FetchDocumentsForVectorIndexSearchResults(response.Results, DocumentFetchOptions{})
+	if err != nil || len(docs.Results) != 1 || !bytes.Equal(docs.Results[0].ID, ids[0]) {
+		t.Fatalf("descriptor fallback documents=%+v err=%v", docs.Results, err)
 	}
 }
 
@@ -839,6 +870,7 @@ func BenchmarkTypedGraphPublicServing(b *testing.B) {
 }
 
 func TestTypedGraphPublicEnsureCancellationAndFailedAdmission(t *testing.T) {
+	requireTypedGraphPublicServingTest(t)
 	col, base, ids, retained, columns, _ := openTypedGraphQualityFixture(t, 8)
 	defer base.Close()
 	root, err := canonicalVectorPartitionStorageRootV1(col.db.Dir())
@@ -915,6 +947,8 @@ func TestTypedGraphPublicNoWriteVacuumOwner(t *testing.T) {
 	if err := col.EnsureColumnGraphServing(context.Background(), index, typedGraphPublicTestOptions()); err != nil {
 		t.Fatal(err)
 	}
+	var lastAccess *columnVectorGraphSourceAccess
+	var lastKey columnVectorGraphSharedPreparedSearchKey
 	search := func() (string, error) {
 		var buffer VectorIndexSearchBuffer
 		response, view, err := col.SearchVectorIndexWithBufferReadView(VectorIndexSearchOptions{IndexName: index, Query: columns[0].Float32Vectors[0], TopK: 3, EfSearch: 8, StatsMode: VectorIndexSearchStatsModeProduction, DeclaredScalarFilter: &HybridScalarFilter{IndexName: "path", Value: "source"}}, &buffer)
@@ -926,9 +960,11 @@ func TestTypedGraphPublicNoWriteVacuumOwner(t *testing.T) {
 		if err != nil {
 			return "", err
 		}
-		if len(response.Results) != 3 || docs.Stats.DocumentsMissing != 0 || docs.Stats.DocumentsFetched != 3 {
-			return "", fmt.Errorf("incomplete results=%d fetched=%d missing=%d", len(response.Results), docs.Stats.DocumentsFetched, docs.Stats.DocumentsMissing)
+		servingBorrows := view.assetCounters().servingBorrows
+		if len(response.Results) != 3 || docs.Stats.DocumentsMissing != 0 || docs.Stats.DocumentsFetched != 3 || servingBorrows == 0 {
+			return "", fmt.Errorf("incomplete results=%d fetched=%d missing=%d serving_borrows=%d", len(response.Results), docs.Stats.DocumentsFetched, docs.Stats.DocumentsMissing, servingBorrows)
 		}
+		lastAccess, lastKey = typedGraphServingViewAccessForTest(t, view)
 		signature := ""
 		for i, hit := range response.Results {
 			signature += fmt.Sprintf("%q:%g:%q;", hit.ID, hit.Score, docs.Results[i].Document)
@@ -939,6 +975,8 @@ func TestTypedGraphPublicNoWriteVacuumOwner(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	beforeVacuumAccess, beforeVacuumKey := lastAccess, lastKey
+	beforeVacuumPhysical := requireTypedGraphServingPoolReservationsForTest(t, &col.collectionSchemaCoordinator().typedGraphPhysical, beforeVacuumAccess.pool)
 	// Keep a real read owner across relocation and a subsequent accepted write.
 	var heldBuffer VectorIndexSearchBuffer
 	heldResponse, held, err := col.SearchVectorIndexWithBufferReadView(VectorIndexSearchOptions{IndexName: index, Query: columns[0].Float32Vectors[0], TopK: 3, EfSearch: 8, StatsMode: VectorIndexSearchStatsModeProduction}, &heldBuffer)
@@ -949,6 +987,10 @@ func TestTypedGraphPublicNoWriteVacuumOwner(t *testing.T) {
 	oldDocs, err := held.FetchDocumentsForVectorIndexSearchResults(heldResponse.Results, DocumentFetchOptions{})
 	if err != nil {
 		t.Fatal(err)
+	}
+	heldAccess, heldKey := typedGraphServingViewAccessForTest(t, held)
+	if heldAccess != beforeVacuumAccess || heldKey != beforeVacuumKey {
+		t.Fatal("held pre-vacuum view did not reuse the installed exact-base holder")
 	}
 	before := col.collectionSchemaCoordinator().typedPublication.Load()
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -963,8 +1005,15 @@ func TestTypedGraphPublicNoWriteVacuumOwner(t *testing.T) {
 	if got != want {
 		t.Fatalf("changed result/document signature got=%s want=%s", got, want)
 	}
+	if lastAccess != beforeVacuumAccess || lastKey != beforeVacuumKey {
+		t.Fatal("coordinate-only vacuum replaced the exact-base holder identity")
+	}
+	afterVacuumPhysical := requireTypedGraphServingPoolReservationsForTest(t, &col.collectionSchemaCoordinator().typedGraphPhysical, beforeVacuumAccess.pool)
+	if afterVacuumPhysical != beforeVacuumPhysical {
+		t.Fatalf("coordinate-only vacuum changed physical resources before=%+v after=%+v", beforeVacuumPhysical, afterVacuumPhysical)
+	}
 	after := col.collectionSchemaCoordinator().typedPublication.Load()
-	if after == before || after.catalog.pager == before.catalog.pager || before.servingBase == after.servingBase {
+	if after == before || after.catalog.pager == before.catalog.pager || before.servingBase == after.servingBase || after.servingBase.refsDigest != beforeVacuumKey.refsDigest {
 		t.Fatal("vacuum did not replace immutable publication coordinates")
 	}
 	changed := []TypedColumnBatch{{Name: "embedding", Float32Vectors: columns[0].Float32Vectors[:1]}, {Name: "content", Strings: []string{"after-vacuum"}}, {Name: "user", Strings: []string{"new"}}, {Name: "path", Strings: []string{"source"}}}

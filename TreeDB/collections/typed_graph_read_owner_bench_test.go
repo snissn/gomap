@@ -16,7 +16,7 @@ func BenchmarkTypedGraphReadOwner(b *testing.B) {
 			if err := fixtureBase.Close(); err != nil {
 				b.Fatal(err)
 			}
-			limits := typedGraphReadOwnerLimits{Owners: 4, States: 4, StateBytes: 16 << 20, AssetBytes: 64 << 20, Cold: typedGraphColdLimits{ManifestRecords: 4096, ManifestBytes: 4 << 20, AssetBytes: 32 << 20, DecodedTermBytes: 32 << 20}}
+			limits := typedGraphReadOwnerLimits{Owners: 4, States: 4, StateBytes: 16 << 20, AssetBytes: 64 << 20, Cold: typedGraphColdLimits{ManifestRecords: 4096, ManifestBytes: 4 << 20, AssetBytes: 32 << 20, DecodedTermBytes: 32 << 20}, Physical: typedGraphTestPhysicalLimits()}
 			if err := col.reconcileTypedGraphPublication(typedGraphPublicationLimits{Rows: 512, Tombstones: 512, ValueSlots: 2048, OwnedBytes: 8 << 20}, limits.Cold); err != nil {
 				b.Fatal(err)
 			}

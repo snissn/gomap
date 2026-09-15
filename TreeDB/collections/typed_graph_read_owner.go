@@ -24,6 +24,22 @@ type typedGraphReadOwnerLimits struct {
 	Owners, States         int
 	StateBytes, AssetBytes int64
 	Cold                   typedGraphColdLimits
+	Physical               typedGraphPhysicalResourceLimits
+}
+
+// Physical limits are distinct from logical AssetBytes/StateBytes. Segments,
+// Descriptors, MappedBytes, and FallbackBytes admit one holder's complete
+// authorized potential and all overlapping holders collection-wide;
+// InventoryBytes limits a deterministic modeled charge for retained exact-ref,
+// segment, guardian, and holder-cache metadata. It is intentionally independent
+// of StateBytes and is not a measurement or hard bound of Go heap/RSS because
+// allocator-class and shared map-bucket slack are outside the model.
+type typedGraphPhysicalResourceLimits struct {
+	Segments       int   `json:"segments"`
+	Descriptors    int   `json:"descriptors"`
+	MappedBytes    int64 `json:"mapped_bytes"`
+	FallbackBytes  int64 `json:"fallback_bytes"`
+	InventoryBytes int64 `json:"inventory_bytes"`
 }
 
 type typedGraphReadOwnerAccounting struct {
@@ -125,6 +141,72 @@ func (o *typedGraphReadOwner) reserve(a *typedGraphReadOwnerAccounting, limits t
 	return nil
 }
 
+type typedGraphReadOwnerServingOpen struct {
+	candidate *typedGraphReadOwner
+	base      *VectorIndexSearcher
+	snapshot  *backenddb.Snapshot
+	catalog   *collectionCatalog
+	state     *typedGraphPublicationState
+	metadata  *typedGraphServingBaseMetadata
+	baseView  columnPhysicalScanSnapshotView
+	def       VectorIndexDefinition
+}
+
+// finishTypedGraphReadOwnerOpen binds request-local state after the immutable
+// base reader exists. For serving owners this runs after the storage barrier is
+// released: the snapshot fixes catalog/current-row visibility and the already
+// registered complete lifecycle pin protects every referenced asset.
+func (c *Collection) finishTypedGraphReadOwnerOpen(open *typedGraphReadOwnerServingOpen) error {
+	if c == nil || open == nil || open.candidate == nil || open.base == nil || open.snapshot == nil || open.catalog == nil || open.state == nil || open.base.reader == nil {
+		return ErrVectorIndexSnapshotMismatch
+	}
+	base, snap, state := open.base, open.snapshot, open.state
+	config := &open.baseView.FullConfig
+	base.catalog, base.indexName, base.strategy = open.baseView.Catalog, open.def.Name, open.def.Strategy
+	base.readerLast = base.reader.Stats()
+	base.routeStats = vectorIndexSearchRouteStatsForColumnGraphReader(base.reader)
+	view := open.candidate.overlay
+	view.current = newCollectionReadViewAtSnapshot(c, snap, open.catalog, false, "")
+	var eligible bool
+	view.pack, _, eligible = base.hnswSearchPackSearchWithBufferRoute(columnVectorGraphNativeSearchQueryModeExact, columnVectorGraphNativeSearchStatsModeMinimal)
+	if !eligible {
+		return errColumnHNSWSearchPackSearchUnavailable
+	}
+	for i, column := range config.Columns {
+		if column.Path == open.def.Field {
+			view.vectorColumn = i
+			break
+		}
+	}
+	if view.vectorColumn < 0 || len(state.rows) != len(state.invNorms) {
+		return ErrVectorIndexSnapshotMismatch
+	}
+	view.rows, view.invNorms = state.rows, state.invNorms
+	view.sourceRows, view.sourceTombstones, view.sourceBytes = state.physicalRows, state.tombstones, state.installedAssetBytes
+	if state.servingBase != nil {
+		prepared := state.servingMaterializer
+		token, ok := snap.StateToken()
+		if !ok {
+			return backenddb.ErrClosed
+		}
+		prepared.Catalog, prepared.snapshot = open.catalog, snap
+		prepared.FullConfig = *config
+		prepared.CommitSeq, prepared.SystemRoot = token.CommitSeq, token.SystemRootPageID
+		prepared.Diagnostics.ManifestRootName = open.catalog.columnManifestRootName
+		if prepared.Diagnostics.ManifestRootName == "" && config.ManifestRoot != nil {
+			prepared.Diagnostics.ManifestRootName = config.ManifestRoot.Name
+		}
+		if prepared.Diagnostics.ManifestRootName == "" {
+			prepared.Diagnostics.ManifestRootName = collectionColumnManifestRootName(open.catalog.meta.Name)
+		}
+		prepared.Diagnostics.ManifestRoot = open.catalog.rootID(prepared.Diagnostics.ManifestRootName)
+		view.current.columnSnapshotView = &prepared
+		view.current.preparedMaterializer = &state.servingMaterializer
+	}
+	snap.DetachForegroundRead()
+	return nil
+}
+
 // Open consumes already installed derived state. It never bootstraps, decodes a
 // suffix or repairs an invalid state. Public admission additionally requires
 // ready metadata on this exact installed state, never the cold fallback below.
@@ -138,10 +220,13 @@ func (c *Collection) openTypedGraphReadOwner(limits typedGraphReadOwnerLimits) (
 }
 
 func (c *Collection) openTypedGraphReadOwnerWithContext(ctx context.Context, limits typedGraphReadOwnerLimits) (owner *typedGraphReadOwner, err error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if c == nil || c.db == nil || c.db.IsClosing() || limits.Owners <= 0 || limits.States <= 0 || limits.StateBytes <= 0 || limits.AssetBytes <= 0 || limits.Cold.ManifestRecords <= 0 || limits.Cold.ManifestBytes <= 0 || limits.Cold.AssetBytes <= 0 || limits.Cold.DecodedTermBytes <= 0 {
+	if c == nil || c.db == nil || c.db.IsClosing() || !typedGraphReadOwnerLimitsValid(limits) {
 		return nil, ErrVectorIndexSnapshotMismatch
 	}
 	coord := c.collectionSchemaCoordinator()
@@ -151,12 +236,14 @@ func (c *Collection) openTypedGraphReadOwnerWithContext(ctx context.Context, lim
 	typedGraphOwnerAfterSnapshotHook.RLock()
 	afterDrain := typedGraphOwnerAfterSnapshotHook.afterDrain
 	afterCapture := typedGraphOwnerAfterSnapshotHook.afterCapture
+	beforeServingOpen := typedGraphOwnerAfterSnapshotHook.beforeServingOpen
 	typedGraphOwnerAfterSnapshotHook.RUnlock()
 	if afterDrain != nil {
 		afterDrain(c)
 	}
 	var drain, retry bool
 	var changed <-chan struct{}
+	var pendingServing *typedGraphReadOwnerServingOpen
 	capture := func() (err error) {
 		before := coord.typedPublication.Load()
 		snap := c.db.AcquireSnapshot()
@@ -263,7 +350,18 @@ func (c *Collection) openTypedGraphReadOwnerWithContext(ctx context.Context, lim
 			}
 		}
 		cfg := catalog.meta.Options.ColumnStore
+		// The compact installed serving metadata does not retain the complete
+		// catalog config. Carry the current validated value in this request-local
+		// view across the storage barrier for materializer attachment.
+		baseView.FullConfig = *cfg
 		refs := state.servingRefs
+		var servingKey columnVectorGraphSharedPreparedSearchKey
+		if state.servingBase != nil && state.servingBase.preparedKey != "" {
+			servingKey, err = state.servingBase.servingPreparedSearchKey(c)
+			if err != nil || state.servingBaseRefsDigest != servingKey.refsDigest || state.servingBaseRefsCount != servingKey.refsCount || len(refs) < servingKey.refsCount {
+				return ErrVectorIndexSnapshotMismatch
+			}
+		}
 		if state.servingBase == nil {
 			refs, err = typedGraphOwnerRefs(baseView.graphOwnerRecords, baseView.Config.ActiveManifest.Generation, baseView.AssetNamespace, graph, baseView.VectorIndexState)
 			if err != nil {
@@ -283,11 +381,18 @@ func (c *Collection) openTypedGraphReadOwnerWithContext(ctx context.Context, lim
 				refs = slices.Compact(refs)
 			}
 		}
-		for _, ref := range refs {
-			if ref.Length <= 0 || ref.Length > limits.Cold.AssetBytes-candidate.assetBytes {
+		if state.servingBase != nil {
+			if state.servingPinBytes <= 0 || state.servingPinBytes > limits.Cold.AssetBytes {
 				return errTypedGraphOverlayFoldNeeded
 			}
-			candidate.assetBytes += int64(ref.Length)
+			candidate.assetBytes = state.servingPinBytes
+		} else {
+			for _, ref := range refs {
+				if ref.Length <= 0 || ref.Length > limits.Cold.AssetBytes-candidate.assetBytes {
+					return errTypedGraphOverlayFoldNeeded
+				}
+				candidate.assetBytes += int64(ref.Length)
+			}
 		}
 		// Per-owner duplicate charging keeps a shared holder covered after the
 		// snapshot-free keeper closes. No holder identity registry is required.
@@ -300,22 +405,28 @@ func (c *Collection) openTypedGraphReadOwnerWithContext(ctx context.Context, lim
 			candidate.descriptorBytes += n * int64(size)
 			return true
 		}
-		for _, ref := range refs {
-			if !addDescriptor(int64(len(ref.Namespace)), 1) {
+		if state.servingBase != nil {
+			if !addDescriptor(state.servingOwnerRefBytes, 1) {
 				return errTypedGraphOwnerBudget
+			}
+		} else {
+			for _, ref := range refs {
+				if !addDescriptor(int64(len(ref.Namespace)), 1) {
+					return errTypedGraphOwnerBudget
+				}
 			}
 		}
 		for _, size := range []uintptr{
 			reflect.TypeFor[typedGraphReadOwner]().Size(), reflect.TypeFor[typedGraphOverlaySearch]().Size(),
 			reflect.TypeFor[VectorIndexSearcher]().Size(), reflect.TypeFor[CollectionReadView]().Size(),
 			reflect.TypeFor[columnVectorGraphPhysicalRowReader]().Size(), reflect.TypeFor[columnVectorGraphSharedPreparedSearchRef]().Size(),
-			reflect.TypeFor[ColumnAssetLifecyclePinSet]().Size(),
+			reflect.TypeFor[ColumnAssetLifecyclePinSet]().Size(), reflect.TypeFor[typedGraphServingHolderCapability]().Size(),
 		} {
 			if !addDescriptor(1, size) {
 				return errTypedGraphOwnerBudget
 			}
 		}
-		if !addDescriptor(int64(cap(refs)), reflect.TypeFor[ColumnAssetRef]().Size()) {
+		if state.servingBase == nil && !addDescriptor(int64(cap(refs)), reflect.TypeFor[ColumnAssetRef]().Size()) {
 			return errTypedGraphOwnerBudget
 		}
 		recordCount := len(baseView.graphOwnerRecords)
@@ -340,7 +451,7 @@ func (c *Collection) openTypedGraphReadOwnerWithContext(ctx context.Context, lim
 		}
 		candidate.backingBytes += readerAttachmentBytes
 		baseView.graphOwnerRecords = nil
-		readerOptions := columnVectorGraphPhysicalRowReaderOptions{SkipQuantizedAssets: true, admitSources: func(keyBytes int) error {
+		admit := func(keyBytes int) error {
 			if !addDescriptor(int64(keyBytes), 2) {
 				return errTypedGraphOwnerBudget
 			}
@@ -348,10 +459,33 @@ func (c *Collection) openTypedGraphReadOwnerWithContext(ctx context.Context, lim
 				return err
 			}
 			var pinErr error
-			base.lifecyclePin, pinErr = c.acquireColumnAssetLifecyclePinSetOwned(ColumnAssetLifecyclePinSetOptions{Source: ColumnAssetLifecyclePinSourcePreparedQuery, Owner: "typed_graph_read_owner", Refs: refs})
+			if servingKey.valid() {
+				base.lifecyclePin, pinErr = c.acquireTypedGraphServingLifecyclePin(state, servingKey, "typed_graph_read_owner")
+			} else {
+				ownedRefs := append([]ColumnAssetRef(nil), refs...)
+				base.lifecyclePin, pinErr = c.acquireColumnAssetLifecyclePinSetOwned(ColumnAssetLifecyclePinSetOptions{Source: ColumnAssetLifecyclePinSourcePreparedQuery, Owner: "typed_graph_read_owner", Refs: ownedRefs})
+			}
 			return pinErr
-		}}
+		}
+		readerOptions := columnVectorGraphPhysicalRowReaderOptions{SkipQuantizedAssets: true, admitSources: admit}
 		if state.servingBase != nil {
+			if state.servingBase.preparedKey != "" {
+				if err := admit(len(state.servingBase.preparedKey)); err != nil {
+					return err
+				}
+				// Source construction cannot nest the non-reentrant storage barrier.
+				// Carry only the pinned snapshot/state plan outside this capture; the
+				// cache-miss builder will acquire and validate its own snapshot.
+				pendingServing = &typedGraphReadOwnerServingOpen{
+					candidate: candidate, base: base, snapshot: snap, catalog: catalog,
+					state: state, metadata: state.servingBase, baseView: baseView,
+					def: def,
+				}
+				return nil
+			}
+			// A zero-row base has no eligible shared prepared holder. Preserve
+			// its established empty reader and immutable zero-row quantized
+			// validation cache; suffix rows are served by the overlay above it.
 			base.reader, err = state.servingBase.openPhysicalReader(c, snap, readerOptions)
 		} else {
 			base.reader, err = c.openColumnVectorGraphPhysicalRowReaderFromView(snap, def, graph, baseView, readerOptions)
@@ -359,50 +493,12 @@ func (c *Collection) openTypedGraphReadOwnerWithContext(ctx context.Context, lim
 		if err != nil {
 			return err
 		}
-		base.catalog, base.indexName, base.strategy = baseView.Catalog, def.Name, def.Strategy
-		base.readerLast = base.reader.Stats()
-		base.routeStats = vectorIndexSearchRouteStatsForColumnGraphReader(base.reader)
-		view := candidate.overlay
-		view.current = newCollectionReadViewAtSnapshot(c, snap, catalog, false, "")
-		var eligible bool
-		view.pack, _, eligible = base.hnswSearchPackSearchWithBufferRoute(columnVectorGraphNativeSearchQueryModeExact, columnVectorGraphNativeSearchStatsModeMinimal)
-		if !eligible {
-			return errColumnHNSWSearchPackSearchUnavailable
+		if err := c.finishTypedGraphReadOwnerOpen(&typedGraphReadOwnerServingOpen{
+			candidate: candidate, base: base, snapshot: snap, catalog: catalog,
+			state: state, baseView: baseView, def: def,
+		}); err != nil {
+			return err
 		}
-		for i, column := range cfg.Columns {
-			if column.Path == def.Field {
-				view.vectorColumn = i
-				break
-			}
-		}
-		if view.vectorColumn < 0 || len(state.rows) != len(state.invNorms) {
-			return ErrVectorIndexSnapshotMismatch
-		}
-		view.rows, view.invNorms = state.rows, state.invNorms
-		view.sourceRows, view.sourceTombstones, view.sourceBytes = state.physicalRows, state.tombstones, state.installedAssetBytes
-		// state.matches admitted the exact current catalog and roots. Publication
-		// prepared complete immutable materializer metadata for that same frontier.
-		if state.servingBase != nil {
-			prepared := state.servingMaterializer
-			token, ok := snap.StateToken()
-			if !ok {
-				return backenddb.ErrClosed
-			}
-			prepared.Catalog, prepared.snapshot = catalog, snap
-			prepared.FullConfig = *cfg
-			prepared.CommitSeq, prepared.SystemRoot = token.CommitSeq, token.SystemRootPageID
-			prepared.Diagnostics.ManifestRootName = catalog.columnManifestRootName
-			if prepared.Diagnostics.ManifestRootName == "" && cfg.ManifestRoot != nil {
-				prepared.Diagnostics.ManifestRootName = cfg.ManifestRoot.Name
-			}
-			if prepared.Diagnostics.ManifestRootName == "" {
-				prepared.Diagnostics.ManifestRootName = collectionColumnManifestRootName(catalog.meta.Name)
-			}
-			prepared.Diagnostics.ManifestRoot = catalog.rootID(prepared.Diagnostics.ManifestRootName)
-			view.current.columnSnapshotView = &prepared
-			view.current.preparedMaterializer = &state.servingMaterializer
-		}
-		snap.DetachForegroundRead()
 		owner = candidate
 		return nil
 	}
@@ -422,9 +518,47 @@ func (c *Collection) openTypedGraphReadOwnerWithContext(ctx context.Context, lim
 		} else {
 			unlockSchema = c.lockCollectionSchemaRead()
 		}
-		retry, changed = false, nil
+		retry, changed, pendingServing = false, nil, nil
 		err = WithVectorPartitionStorageBarrierWithContextV1(ctx, c.db.Dir(), capture)
 		unlockSchema()
+		if err != nil && pendingServing != nil {
+			err = errors.Join(err, pendingServing.candidate.Close())
+			pendingServing = nil
+		}
+		if err == nil && pendingServing != nil {
+			open := pendingServing
+			// Test-only observation at the exact admitted-request/independent-
+			// builder boundary. No schema or storage lock is held here, so a fold
+			// may replace the captured base and exercise the transparent retry.
+			if beforeServingOpen != nil {
+				beforeServingOpen(c)
+			}
+			// Transfer the complete caller pin to the capability before opening.
+			pin := open.base.lifecyclePin
+			open.base.lifecyclePin = nil
+			open.base.reader, err = open.metadata.openServingPhysicalReaderWithOwnedPin(ctx, c, open.snapshot, pin, limits.Physical, columnVectorGraphPhysicalRowReaderOptions{SkipQuantizedAssets: true})
+			if err == nil {
+				err = c.finishTypedGraphReadOwnerOpen(open)
+			}
+			if err != nil {
+				openErr := err
+				closeErr := open.candidate.Close()
+				if errors.Is(openErr, errTypedGraphServingCurrentKeyChanged) && closeErr == nil {
+					// A first holder miss deliberately rebuilds from independently
+					// captured current metadata. If a fold replaced the captured
+					// request key after admission, discard that fully pinned request
+					// and transparently recapture. An old-key holder hit never enters
+					// the builder handshake and remains valid for its pinned owner.
+					retry = true
+					err = ErrVectorIndexSnapshotMismatch
+				} else {
+					err = errors.Join(openErr, closeErr)
+				}
+			} else {
+				owner = open.candidate
+			}
+			pendingServing = nil
+		}
 		if drain {
 			continue
 		}

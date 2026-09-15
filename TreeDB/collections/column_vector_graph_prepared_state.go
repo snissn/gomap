@@ -26,12 +26,12 @@ func columnVectorGraphDirectViewExpectation(expectedRole, actualRole string, col
 }
 
 func acquireColumnVectorGraphPreparedStateSection(rootDir, collection, scopeID, scopeReason, acquireReason string, ref ColumnAssetRef, imageVersion uint16, section typedcolumn.ColumnPartImageSection, checksum uint32, manager *mappedresource.Manager) (*mappedresource.Handle, mappedresource.Key, error) {
+	return acquireColumnVectorGraphPreparedStateSectionWithSourceAccess(nil, rootDir, collection, scopeID, scopeReason, acquireReason, ref, imageVersion, section, checksum, manager)
+}
+
+func acquireColumnVectorGraphPreparedStateSectionWithSourceAccess(access *columnVectorGraphSourceAccess, rootDir, collection, scopeID, scopeReason, acquireReason string, ref ColumnAssetRef, imageVersion uint16, section typedcolumn.ColumnPartImageSection, checksum uint32, manager *mappedresource.Manager) (*mappedresource.Handle, mappedresource.Key, error) {
 	if manager == nil {
 		return nil, mappedresource.Key{}, errors.New("collections: column_graph prepared state requires mappedresource manager")
-	}
-	path, err := columnAssetSegmentPath(rootDir, ref)
-	if err != nil {
-		return nil, mappedresource.Key{}, err
 	}
 	sectionOffset, err := columnVectorGraphTypedColumnSectionOffset(ref, section)
 	if err != nil {
@@ -57,14 +57,24 @@ func acquireColumnVectorGraphPreparedStateSection(rootDir, collection, scopeID, 
 		},
 	}
 	scope := mappedresource.Scope{Kind: mappedresource.ScopeColumnPartReader, ID: scopeID, Collection: collection, Namespace: ref.Namespace, Generation: ref.Generation, Reason: scopeReason}
-	handle, err := manager.AcquireFileRange(key, scope, path, mappedresource.AcquireOptions{
+	opts := mappedresource.AcquireOptions{
 		Reason:         acquireReason,
 		ValidationMode: mappedresource.ValidationVerify,
 		PreferMapped:   true,
 		AllowHeapCopy:  true,
 		ResourceRoot:   rootDir,
-		ResourcePath:   path,
-	})
+	}
+	var handle *mappedresource.Handle
+	if access != nil {
+		handle, err = access.acquireRange(nil, rootDir, ref, manager, key, scope, opts)
+	} else {
+		path, pathErr := columnAssetSegmentPath(rootDir, ref)
+		if pathErr != nil {
+			return nil, key, pathErr
+		}
+		opts.ResourcePath = path
+		handle, err = manager.AcquireFileRange(key, scope, path, opts)
+	}
 	if err != nil {
 		return nil, key, err
 	}
