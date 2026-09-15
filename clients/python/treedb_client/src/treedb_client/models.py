@@ -674,8 +674,20 @@ class DenseVectorSearchResponse:
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "DenseVectorSearchResponse":
         data = _as_mapping(data, "vector search response")
-        work = optional_dense_work(data.get("dense_work"))
-        score_plane = optional_dense_score_plane(data.get("score_plane"))
+        work = score_plane = None
+        work_error = score_plane_error = None
+        try:
+            work = optional_dense_work(data.get("dense_work"))
+        except (ValueError, TypeError, KeyError) as exc:
+            work_error = exc
+        try:
+            score_plane = optional_dense_score_plane(data.get("score_plane"))
+        except (ValueError, TypeError, KeyError) as exc:
+            score_plane_error = exc
+        if work_error is not None:
+            raise TreeDBProtocolError(f"invalid dense response work proof: {work_error}", score_plane=score_plane) from work_error
+        if score_plane_error is not None:
+            raise TreeDBProtocolError(f"invalid dense response score-plane proof: {score_plane_error}", dense_work=work) from score_plane_error
         try:
             out = cls(
                 dense_work=work,

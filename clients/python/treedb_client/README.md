@@ -112,9 +112,10 @@ preserves those producer completion flags; they do not mean delivery succeeded.
 Malformed proof is rejected without attaching it as trustworthy detail. Proof
 objects reject missing/unknown fields, invalid types and out-of-range integers.
 Available snapshots require nonzero generation, version and checksum in both
-base and current manifest identities. If a malformed native score-plane proof
-follows valid dense work, the protocol error retains that independently decoded
-`.dense_work` while leaving `.score_plane` unset.
+base and current manifest identities. If a malformed native or HTTP score-plane
+proof accompanies valid dense work, the protocol error retains that
+independently decoded `.dense_work` while leaving `.score_plane` unset; the
+inverse sibling failure likewise preserves a valid `.score_plane`.
 Quantized v3 results also require valid UTF-8, nonempty, untrimmed, unique
 document IDs, matching service write admission on native and HTTP responses.
 Dense HTTP proof-bearing envelopes also reject duplicate keys; unrelated

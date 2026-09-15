@@ -717,6 +717,46 @@ class TreeDBClientTests(unittest.TestCase):
                 expected_generation=1,
             )
             self.assertEqual(result.documents[0].id, "a")
+            malformed_score = copy.deepcopy(payload)
+            malformed_score["score_plane"]["version"] = 2
+            with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, malformed_score, 0)}) as malformed_score_server:
+                malformed_score_client = TreeDBClient(malformed_score_server.base_url, timeout=1)
+                with self.assertRaisesRegex(TreeDBProtocolError, "score-plane proof") as caught:
+                    malformed_score_client.query_by_embedding(
+                        "docs", [1, 0], 1, query_mode="quantized_rerank",
+                        quantized_index_name="embedding.scalar_u8.public",
+                    )
+                self.assertEqual(caught.exception.dense_work, result.dense_work)
+                self.assertIsNone(caught.exception.score_plane)
+                malformed_score_client.close()
+            malformed_work = copy.deepcopy(payload)
+            malformed_work["dense_work"]["version"] = 2
+            with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, malformed_work, 0)}) as malformed_work_server:
+                malformed_work_client = TreeDBClient(malformed_work_server.base_url, timeout=1)
+                with self.assertRaisesRegex(TreeDBProtocolError, "work proof") as caught:
+                    malformed_work_client.query_by_embedding(
+                        "docs", [1, 0], 1, query_mode="quantized_rerank",
+                        quantized_index_name="embedding.scalar_u8.public",
+                    )
+                self.assertIsNone(caught.exception.dense_work)
+                self.assertEqual(caught.exception.score_plane, result.score_plane)
+                malformed_work_client.close()
+            malformed_error_score = {
+                "error": {"code": "index_unavailable", "message": "budget", "dense_work": dense_work,
+                          "score_plane": malformed_score["score_plane"]}
+            }
+            with self.assertRaisesRegex(TreeDBProtocolError, "score-plane error proof") as caught:
+                client._decode_error(503, json.dumps(malformed_error_score).encode(), dense_proof=True)
+            self.assertEqual(caught.exception.dense_work, result.dense_work)
+            self.assertIsNone(caught.exception.score_plane)
+            malformed_error_work = {
+                "error": {"code": "index_unavailable", "message": "budget", "dense_work": malformed_work["dense_work"],
+                          "score_plane": score_plane}
+            }
+            with self.assertRaisesRegex(TreeDBProtocolError, "work proof") as caught:
+                client._decode_success(200, json.dumps(malformed_error_work).encode(), dense_proof=True)
+            self.assertIsNone(caught.exception.dense_work)
+            self.assertEqual(caught.exception.score_plane, result.score_plane)
             filtered_payload = copy.deepcopy(payload)
             filtered_payload["dense_work"]["graph"]["filter"].update(attempted=True, completed=True, eligible_rows=4097)
             with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, filtered_payload, 0)}) as filtered_server:

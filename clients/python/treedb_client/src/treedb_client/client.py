@@ -784,7 +784,8 @@ class TreeDBClient:
             if isinstance(error, Mapping):
                 code = str(error.get("code", "internal"))
                 message = str(error.get("message", ""))
-                raise service_error_from_code(code, message, status_code=status_code, response_body=_body_to_text(body), dense_work=_error_dense_work(error) if dense_proof else None, score_plane=_error_score_plane(error) if dense_proof else None)
+                work, score_plane = _error_dense_proofs(error) if dense_proof else (None, None)
+                raise service_error_from_code(code, message, status_code=status_code, response_body=_body_to_text(body), dense_work=work, score_plane=score_plane)
             raise TreeDBProtocolError("error envelope must contain an object", status_code=status_code, response_body=_body_to_text(body))
         return decoded
 
@@ -805,7 +806,8 @@ class TreeDBClient:
             )
         code = str(error.get("code", "internal"))
         message = str(error.get("message", ""))
-        return service_error_from_code(code, message, status_code=status_code, response_body=_body_to_text(body), dense_work=_error_dense_work(error) if dense_proof else None, score_plane=_error_score_plane(error) if dense_proof else None)
+        work, score_plane = _error_dense_proofs(error) if dense_proof else (None, None)
+        return service_error_from_code(code, message, status_code=status_code, response_body=_body_to_text(body), dense_work=work, score_plane=score_plane)
 
 
 def _normalize_base_url(base_url: str) -> str:
@@ -1204,20 +1206,23 @@ def _decode_json_body(body: bytes, *, status_code: int, dense_proof: bool = Fals
         ) from exc
 
 
-def _error_dense_work(error):
-    from ._dense_work import optional_dense_work
+def _error_dense_proofs(error):
+    from ._dense_work import optional_dense_score_plane, optional_dense_work
+    work = score_plane = None
+    work_error = score_plane_error = None
     try:
-        return optional_dense_work(error.get("dense_work"))
+        work = optional_dense_work(error.get("dense_work"))
     except (ValueError, TypeError, KeyError) as exc:
-        raise TreeDBProtocolError("invalid dense error work proof") from exc
-
-
-def _error_score_plane(error):
-    from ._dense_work import optional_dense_score_plane
+        work_error = exc
     try:
-        return optional_dense_score_plane(error.get("score_plane"))
+        score_plane = optional_dense_score_plane(error.get("score_plane"))
     except (ValueError, TypeError, KeyError) as exc:
-        raise TreeDBProtocolError("invalid dense score-plane error proof") from exc
+        score_plane_error = exc
+    if work_error is not None:
+        raise TreeDBProtocolError("invalid dense error work proof", score_plane=score_plane) from work_error
+    if score_plane_error is not None:
+        raise TreeDBProtocolError("invalid dense score-plane error proof", dense_work=work) from score_plane_error
+    return work, score_plane
 
 
 def _body_to_text(body: bytes) -> str:
