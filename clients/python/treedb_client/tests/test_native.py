@@ -2,6 +2,7 @@ import unittest
 import socket
 import json
 import copy
+from dataclasses import replace
 import struct
 from dataclasses import asdict, FrozenInstanceError
 from types import SimpleNamespace
@@ -60,6 +61,25 @@ class NativeCodecTests(unittest.TestCase):
             self.assertEqual(response.native_command_version, 3)
             self.assertIsNotNone(response.score_plane)
             self.assertEqual(response.score_plane.quantized_index_name, "embedding.scalar_u8.public")
+            for name, changed in (
+                ("index name", replace(response.score_plane, quantized_index_name="embedding.scalar_u8.other")),
+                ("top k", replace(response.score_plane, requested_top_k=2)),
+                ("EF", replace(response.score_plane, requested_ef_search=1)),
+                ("rerank limit", replace(response.score_plane, requested_rerank_candidates=2)),
+                ("future generation", replace(response.score_plane,
+                    snapshot=replace(response.score_plane.snapshot, schema_generation=3))),
+            ):
+                failure = TreeDBProtocolError("native error", dense_work=response.dense_work, score_plane=changed)
+                with self.subTest(native_error_request_binding=name), \
+                     mock.patch.object(client._native, "command", side_effect=failure), \
+                     self.assertRaisesRegex(TreeDBProtocolError, "proof does not match the request") as caught:
+                    client.query_by_embedding(
+                        "a", [1, 0], 1, query_mode="quantized_rerank",
+                        quantized_index_name="embedding.scalar_u8.public", index_info=info,
+                        expected_generation=2,
+                    )
+                self.assertIsNotNone(caught.exception.dense_work)
+                self.assertIsNotNone(caught.exception.score_plane)
             reversed_work_values = list(work_values)
             reversed_work_values[21:23] = [100, 1]
             reversed_plane_values = list(values)

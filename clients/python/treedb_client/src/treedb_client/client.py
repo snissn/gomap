@@ -454,19 +454,29 @@ class TreeDBClient:
             if version == 3:
                 from ._native import _dense_quantized_options
                 sections += _section(135, _dense_quantized_options(mode, quantized_index_name, rerank_value))
-            raw = self._native.command(64, version, sections, "dense_vector_search_versions")
-            decoded = _dense_response(
-                raw,
-                top_k_value,
-                version=version,
-                query_mode=mode,
-                quantized_index_name=quantized_index_name,
-                quantized_rerank_candidates=rerank_value,
-                ef_search=ef_search_value or 0,
-                query_dimension=len(query_embedding),
-                expected_generation=index_info.generation,
-                filter_requested=filter is not None,
-            )
+            try:
+                raw = self._native.command(64, version, sections, "dense_vector_search_versions")
+                decoded = _dense_response(
+                    raw,
+                    top_k_value,
+                    version=version,
+                    query_mode=mode,
+                    quantized_index_name=quantized_index_name,
+                    quantized_rerank_candidates=rerank_value,
+                    ef_search=ef_search_value or 0,
+                    query_dimension=len(query_embedding),
+                    expected_generation=index_info.generation,
+                    filter_requested=filter is not None,
+                )
+            except Exception as exc:
+                if mode == "quantized_rerank":
+                    _validate_dense_failure_proofs(
+                        exc, query_mode=mode, quantized_index_name=quantized_index_name,
+                        top_k=top_k_value, ef_search=ef_search_value or 0,
+                        rerank_candidates=rerank_value, query_dimension=len(query_embedding),
+                        expected_generation=index_info.generation, filter_requested=filter is not None,
+                    )
+                raise
             if version == 3:
                 ids, payloads, scores, candidates, work, score_plane = decoded
             else:
@@ -503,32 +513,42 @@ class TreeDBClient:
                 request["quantized_rerank_candidates"] = rerank_value
         _add_filter(request, filter)
         _add_expected_generation(request, expected_generation)
-        payload = self._request(
-            "POST",
-            self._index_path(index, "search", "vector"),
-            request,
-            dense_proof=True,
-            dense_score_plane=mode == "quantized_rerank",
-        )
-        response = _parse_response("vector search response", DenseVectorSearchResponse.from_dict, payload)
-        if mode == "quantized_rerank":
-            _validate_http_dense_quantized_response(
-                response,
-                index=index,
-                top_k=top_k_value,
-                ef_search=ef_search_value or 0,
-                query_dimension=len(request["query_embedding"]),
-                quantized_index_name=quantized_index_name,
-                quantized_rerank_candidates=rerank_value,
-                expected_generation=expected_generation,
-                filter_requested=filter is not None,
+        try:
+            payload = self._request(
+                "POST",
+                self._index_path(index, "search", "vector"),
+                request,
+                dense_proof=True,
+                dense_score_plane=mode == "quantized_rerank",
             )
-        elif response.score_plane is not None:
-            raise TreeDBProtocolError(
-                "dense HTTP exact response unexpectedly includes a score-plane proof",
-                dense_work=response.dense_work,
-                score_plane=response.score_plane,
-            )
+            response = _parse_response("vector search response", DenseVectorSearchResponse.from_dict, payload)
+            if mode == "quantized_rerank":
+                _validate_http_dense_quantized_response(
+                    response,
+                    index=index,
+                    top_k=top_k_value,
+                    ef_search=ef_search_value or 0,
+                    query_dimension=len(request["query_embedding"]),
+                    quantized_index_name=quantized_index_name,
+                    quantized_rerank_candidates=rerank_value,
+                    expected_generation=expected_generation,
+                    filter_requested=filter is not None,
+                )
+            elif response.score_plane is not None:
+                raise TreeDBProtocolError(
+                    "dense HTTP exact response unexpectedly includes a score-plane proof",
+                    dense_work=response.dense_work,
+                    score_plane=response.score_plane,
+                )
+        except Exception as exc:
+            if mode == "quantized_rerank":
+                _validate_dense_failure_proofs(
+                    exc, query_mode=mode, quantized_index_name=quantized_index_name,
+                    top_k=top_k_value, ef_search=ef_search_value or 0,
+                    rerank_candidates=rerank_value, query_dimension=len(request["query_embedding"]),
+                    expected_generation=expected_generation, filter_requested=filter is not None,
+                )
+            raise
         return response
 
     def search_vector_index(
@@ -1108,7 +1128,6 @@ def _validate_http_dense_quantized_response(
         dense_cosine_scores_valid,
         dense_document_ids_valid,
         dense_quantized_response_work_matches,
-        dense_score_plane_byte_counters_match,
     )
 
     proof = response.score_plane
@@ -1140,8 +1159,17 @@ def _validate_http_dense_quantized_response(
         or response.index.dimension != query_dimension
         or type(response.index.generation) is not int
         or not 0 < response.index.generation < 1 << 64
-        or proof.snapshot.schema_generation > response.index.generation
-        or not dense_score_plane_byte_counters_match(proof, query_dimension)
+        or not _dense_score_plane_request_matches(
+            proof,
+            query_mode="quantized_rerank",
+            quantized_index_name=quantized_index_name,
+            top_k=top_k,
+            ef_search=ef_search,
+            rerank_candidates=quantized_rerank_candidates,
+            query_dimension=query_dimension,
+            expected_generation=response.index.generation,
+            require_completed_bytes=True,
+        )
         or not dense_quantized_response_work_matches(
             work, proof, top_k, len(response.documents), filter_requested
         )
@@ -1196,22 +1224,132 @@ def _validate_http_dense_quantized_response(
         or not proof.available
         or not proof.completed
         or not proof.snapshot.available
-        or proof.requested_mode != "quantized_rerank"
-        or proof.effective_mode != "quantized_rerank"
         or proof.route not in ("typed_empty", "typed_exact", "quantized_rerank")
-        or proof.quantized_index_name != quantized_index_name
-        or proof.quantized_codec != "scalar_u8"
-        or proof.quantized_version != 1
         or not _is_legacy_scalar_u8_v1_index(selected)
-        or proof.requested_top_k != top_k
-        or proof.requested_ef_search != ef_search
-        or proof.requested_rerank_candidates != quantized_rerank_candidates
     ):
         raise TreeDBProtocolError(
             "dense HTTP score-plane proof does not match the request",
             dense_work=response.dense_work,
             score_plane=proof,
         )
+
+
+def _dense_score_plane_request_matches(
+    proof: Any,
+    *,
+    query_mode: str,
+    quantized_index_name: Optional[str],
+    top_k: int,
+    ef_search: int,
+    rerank_candidates: int,
+    query_dimension: int,
+    expected_generation: Optional[int],
+    require_completed_bytes: bool,
+) -> bool:
+    from ._dense_work import dense_score_plane_byte_counters_match
+
+    return bool(
+        proof is not None
+        and proof.requested_mode == query_mode
+        and proof.effective_mode == "quantized_rerank"
+        and proof.quantized_index_name == quantized_index_name
+        and proof.quantized_codec == "scalar_u8"
+        and proof.quantized_version == 1
+        and proof.quantized_config_hash == 0
+        and proof.requested_top_k == top_k
+        and proof.requested_ef_search == ef_search
+        and proof.requested_rerank_candidates == rerank_candidates
+        and (
+            expected_generation is None
+            or (
+                type(expected_generation) is int
+                and 0 < expected_generation < 1 << 64
+                and (
+                    not proof.snapshot.available
+                    or proof.snapshot.schema_generation <= expected_generation
+                )
+            )
+        )
+        and (
+            not require_completed_bytes
+            or dense_score_plane_byte_counters_match(proof, query_dimension)
+        )
+    )
+
+
+def _validate_dense_failure_proofs(
+    error: Exception,
+    *,
+    query_mode: str,
+    quantized_index_name: Optional[str],
+    top_k: int,
+    ef_search: int,
+    rerank_candidates: int,
+    query_dimension: int,
+    expected_generation: Optional[int],
+    filter_requested: bool,
+) -> None:
+    """Reject decoded failure evidence that cannot belong to this request.
+
+    Error proofs are prefixes, so successful result-count and byte invariants
+    apply only when both producer proofs report completion. Request identity,
+    available snapshots, and observed filter work remain bindable on failures.
+    """
+
+    from ._dense_work import dense_quantized_response_work_matches
+
+    work = getattr(error, "dense_work", None)
+    proof = getattr(error, "score_plane", None)
+    if work is None and proof is None:
+        return
+
+    mismatch = False
+    if proof is not None:
+        mismatch = not _dense_score_plane_request_matches(
+            proof,
+            query_mode=query_mode,
+            quantized_index_name=quantized_index_name,
+            top_k=top_k,
+            ef_search=ef_search,
+            rerank_candidates=rerank_candidates,
+            query_dimension=query_dimension,
+            expected_generation=expected_generation,
+            require_completed_bytes=proof.completed,
+        )
+
+    if work is not None:
+        graph = work.graph
+        if (
+            graph.snapshot.available
+            and expected_generation is not None
+            and graph.snapshot.schema_generation > expected_generation
+        ):
+            mismatch = True
+        if graph.filter.attempted and not filter_requested:
+            mismatch = True
+        if proof is not None:
+            if graph.snapshot.available and proof.snapshot.available and graph.snapshot != proof.snapshot:
+                mismatch = True
+            # The producer creates a score-plane proof only after successful
+            # filter preparation, so a proof-bearing filtered failure must own
+            # completed filter evidence from the same graph owner.
+            if filter_requested and (not graph.filter.attempted or not graph.filter.completed):
+                mismatch = True
+            if work.completed and proof.completed and not dense_quantized_response_work_matches(
+                work, proof, top_k, work.output.fetched, filter_requested
+            ):
+                mismatch = True
+    elif proof is not None and filter_requested:
+        mismatch = True
+
+    if mismatch:
+        raise TreeDBProtocolError(
+            "dense score-plane proof does not match the request on error",
+            status_code=getattr(error, "status_code", None),
+            response_body=getattr(error, "response_body", None),
+            dense_work=work,
+            score_plane=proof,
+        ) from error
 
 
 def _dense_http_results_ordered(documents: Sequence[Document]) -> bool:

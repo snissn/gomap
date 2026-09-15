@@ -7,6 +7,7 @@ import (
 	"errors"
 	"math"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -163,6 +164,7 @@ func TestDenseQuantizedScorePlaneResponseRejectsUnsupportedRoute(t *testing.T) {
 		RequestedMode: collections.VectorIndexQueryModeQuantizedRerank,
 		EffectiveMode: collections.VectorIndexQueryModeQuantizedRerank,
 		Route:         "quantized_rerank", QuantizedIndexName: "embedding.scalar_u8.public",
+		QuantizedCodec: collections.QuantizedVectorCodecScalarU8, QuantizedVersion: 1,
 		RequestedTopK: 1, RequestedEFSearch: 8,
 		NormalizedCandidateWidth: 1, RawCandidateWidth: 1, RerankCandidateCap: 1,
 		RawRetainedCandidates: 1, QuantizedScoreCalls: 1,
@@ -581,6 +583,143 @@ func TestDenseV3ResultsOrdered(t *testing.T) {
 	}
 }
 
+func TestDenseV3FailureProofBindsRequestWithoutRetainingRemoteError(t *testing.T) {
+	request := DenseVectorSearchRequest{
+		TypedColumnGraph: true, Index: "docs", Query: []float32{1, 0}, TopK: 1, EfSearch: 8,
+		QueryMode:          collections.VectorIndexQueryModeQuantizedRerank,
+		QuantizedIndexName: "embedding.scalar_u8.public", QuantizedRerankCandidates: 8,
+		ExpectedGeneration: 2,
+	}
+	snapshot := collections.ColumnGraphQuerySnapshot{Available: true, SchemaGeneration: 2,
+		BaseManifest:    collections.ColumnGraphManifestWork{Generation: 1, Format: "tcs1", Version: 1, Checksum: 3},
+		CurrentManifest: collections.ColumnGraphManifestWork{Generation: 1, Format: "tcs1", Version: 1, Checksum: 3},
+		BaseCoverageLSN: 1, CurrentCoverageLSN: 1}
+	proof := collections.ColumnGraphScorePlaneWork{
+		Version: 1, Available: true, RequestedMode: request.QueryMode,
+		EffectiveMode: collections.VectorIndexQueryModeQuantizedRerank, Route: "quantized_rerank",
+		Reason: "incomplete", QuantizedIndexName: request.QuantizedIndexName,
+		QuantizedCodec: collections.QuantizedVectorCodecScalarU8, QuantizedVersion: 1,
+		RequestedTopK: uint64(request.TopK), RequestedEFSearch: uint64(request.EfSearch),
+		RequestedRerankCandidates: uint64(request.QuantizedRerankCandidates), Snapshot: snapshot,
+	}
+	work := documentservice.DenseSearchWork{Version: 1, Graph: collections.ColumnGraphQueryWork{
+		Available: true, Filter: collections.ColumnGraphFilterWork{}, Snapshot: snapshot,
+	}}
+	remote := &WireError{Code: iwire.ErrInternal, Message: "original", DenseWork: &work, ScorePlane: &proof}
+	if got := validateDenseQuantizedFailureProof(remote, request); got != remote {
+		t.Fatalf("matching failure proof changed: %v", got)
+	}
+	partialProof := proof
+	partialProof.QuantizedScoreCalls = 1 // Prefix counters need not yet have matching byte charges.
+	partial := &WireError{Code: iwire.ErrInternal, Message: "partial", DenseWork: &work, ScorePlane: &partialProof}
+	if got := validateDenseQuantizedFailureProof(partial, request); got != partial {
+		t.Fatalf("valid partial failure proof changed: %v", got)
+	}
+	filteredBeforeOwner := request
+	filteredBeforeOwner.Filter = &documentservice.Filter{Field: "meta.user_id", Operator: "==", Value: "u"}
+	preOwner := &WireError{Code: iwire.ErrInternal, Message: "pre-owner", DenseWork: &work}
+	if got := validateDenseQuantizedFailureProof(preOwner, filteredBeforeOwner); got != preOwner {
+		t.Fatalf("filtered failure before score-plane ownership changed: %v", got)
+	}
+
+	mutations := map[string]func(*documentservice.DenseSearchWork, *collections.ColumnGraphScorePlaneWork){
+		"mode": func(_ *documentservice.DenseSearchWork, p *collections.ColumnGraphScorePlaneWork) {
+			p.RequestedMode = collections.VectorIndexQueryModeQuantizedOnly
+		},
+		"unavailable identity": func(_ *documentservice.DenseSearchWork, p *collections.ColumnGraphScorePlaneWork) {
+			p.Available = false
+			p.RequestedTopK++
+		},
+		"name": func(_ *documentservice.DenseSearchWork, p *collections.ColumnGraphScorePlaneWork) {
+			p.QuantizedIndexName = "other"
+		},
+		"top k": func(_ *documentservice.DenseSearchWork, p *collections.ColumnGraphScorePlaneWork) { p.RequestedTopK++ },
+		"EF": func(_ *documentservice.DenseSearchWork, p *collections.ColumnGraphScorePlaneWork) {
+			p.RequestedEFSearch++
+		},
+		"rerank": func(_ *documentservice.DenseSearchWork, p *collections.ColumnGraphScorePlaneWork) {
+			p.RequestedRerankCandidates++
+		},
+		"generation": func(w *documentservice.DenseSearchWork, p *collections.ColumnGraphScorePlaneWork) {
+			w.Graph.Snapshot.SchemaGeneration++
+			p.Snapshot.SchemaGeneration++
+		},
+		"snapshot": func(_ *documentservice.DenseSearchWork, p *collections.ColumnGraphScorePlaneWork) {
+			p.Snapshot.SchemaHash++
+		},
+		"filter": func(w *documentservice.DenseSearchWork, _ *collections.ColumnGraphScorePlaneWork) {
+			w.Graph.Filter.Attempted, w.Graph.Filter.Completed = true, true
+		},
+	}
+	for name, mutate := range mutations {
+		t.Run(name, func(t *testing.T) {
+			candidateWork, candidateProof := work, proof
+			mutate(&candidateWork, &candidateProof)
+			candidate := &WireError{Code: iwire.ErrInternal, Message: "original", DenseWork: &candidateWork, ScorePlane: &candidateProof}
+			got := validateDenseQuantizedFailureProof(candidate, request)
+			var decoded *DenseVectorSearchDecodeError
+			if !errors.As(got, &decoded) || decoded.DenseWork == nil || decoded.ScorePlane == nil || !strings.Contains(got.Error(), "failure proof does not match the request") {
+				t.Fatalf("mismatched proof was not rejected with retained diagnostics: %v", got)
+			}
+			var retainedRemote *WireError
+			if errors.As(got, &retainedRemote) {
+				t.Fatalf("rejected proof retained the remote service error: %v", got)
+			}
+		})
+	}
+	filtered := request
+	filtered.Filter = &documentservice.Filter{Field: "meta.user_id", Operator: "==", Value: "u"}
+	got := validateDenseQuantizedFailureProof(remote, filtered)
+	if !strings.Contains(got.Error(), "failure proof does not match the request") {
+		t.Fatalf("proof-bearing filtered failure omitted completed filter evidence: %v", got)
+	}
+
+	workRaw, err := appendDenseWork(nil, work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mismatchedProof := proof
+	mismatchedProof.QuantizedIndexName = "embedding.scalar_u8.other"
+	proofRaw, err := appendDenseScorePlane(nil, mismatchedProof, iwire.DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var frameError []byte
+	for _, section := range []iwire.Section{
+		{ID: iwire.SectionError, Bytes: appendErrorPayload(nil, iwire.ErrInternal, false, "original")},
+		{ID: iwire.SectionDenseSearchWork, Flags: iwire.SectionFlagCritical, Bytes: workRaw},
+		{ID: iwire.SectionDenseSearchScorePlaneProof, Flags: iwire.SectionFlagCritical, Bytes: proofRaw},
+	} {
+		frameError, err = iwire.AppendSection(frameError, section)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	clientConn, serverConn := net.Pipe()
+	client := NewClient(clientConn)
+	client.denseTypedQuantizedNegotiated = true
+	errCh := make(chan error, 1)
+	go func() {
+		header, _, serveErr := readFrame(serverConn, iwire.DefaultLimits())
+		if serveErr == nil {
+			serveErr = writeFrame(serverConn, iwire.Header{Type: iwire.FrameError, RequestID: header.RequestID}, frameError)
+		}
+		errCh <- serveErr
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	_, got = client.DenseVectorSearch(ctx, request)
+	cancel()
+	_ = client.Close()
+	_ = serverConn.Close()
+	if serveErr := <-errCh; serveErr != nil {
+		t.Fatal(serveErr)
+	}
+	var retainedRemote *WireError
+	if !strings.Contains(got.Error(), "failure proof does not match the request") || errors.As(got, &retainedRemote) {
+		t.Fatalf("public FrameError did not reject request-mismatched evidence: %v", got)
+	}
+}
+
 func TestDenseV3ResultDecodeErrorsPreserveOwnedProofs(t *testing.T) {
 	proof := collections.ColumnGraphScorePlaneWork{
 		Version: 1, Available: true, Completed: true,
@@ -672,6 +811,33 @@ func TestDenseV3ResultDecodeErrorsPreserveOwnedProofs(t *testing.T) {
 				t.Fatalf("decode error proofs changed: work=%+v score_plane=%+v", decodeErr.DenseWork, decodeErr.ScorePlane)
 			}
 		})
+	}
+
+	clientConn, serverConn := net.Pipe()
+	client := NewClient(clientConn)
+	client.denseTypedQuantizedNegotiated = true
+	response := responseFor(append([]byte{3, 0, 0, 0, 1}, validScore...), []byte("a"))
+	errCh := make(chan error, 1)
+	go func() {
+		header, _, serveErr := readFrame(serverConn, iwire.DefaultLimits())
+		if serveErr == nil {
+			serveErr = writeFrame(serverConn, iwire.Header{Type: iwire.FrameResponse, RequestID: header.RequestID}, response)
+		}
+		errCh <- serveErr
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	_, gotErr := client.DenseVectorSearch(ctx, DenseVectorSearchRequest{
+		TypedColumnGraph: true, Index: "docs", Query: []float32{1, 0}, TopK: 1, EfSearch: 9,
+		QueryMode: collections.VectorIndexQueryModeQuantizedRerank, QuantizedIndexName: proof.QuantizedIndexName,
+	})
+	cancel()
+	_ = client.Close()
+	_ = serverConn.Close()
+	if serveErr := <-errCh; serveErr != nil {
+		t.Fatal(serveErr)
+	}
+	if !strings.Contains(gotErr.Error(), "failure proof does not match the request") {
+		t.Fatalf("malformed success retained request-mismatched proof: %v", gotErr)
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"io"
 	"math"
 	"strings"
@@ -137,6 +138,9 @@ func (c *Client) DenseVectorSearch(ctx context.Context, request DenseVectorSearc
 	c.denseRequest = retainSmallPayloadScratch(payload)
 	c.requestBody = retainSmallPayloadScratch(body)
 	if err != nil {
+		if version == iwire.DenseVectorSearchTypedQuantizedVersion {
+			err = validateDenseQuantizedFailureProof(err, request)
+		}
 		return DenseVectorSearchResponse{}, err
 	}
 	decoded := false
@@ -214,7 +218,11 @@ func (c *Client) DenseVectorSearch(ctx context.Context, request DenseVectorSearc
 			owned := out.DenseWork
 			work = &owned
 		}
-		return DenseVectorSearchResponse{}, &DenseVectorSearchDecodeError{Err: err, DenseWork: work, ScorePlane: out.ScorePlane}
+		failure := &DenseVectorSearchDecodeError{Err: err, DenseWork: work, ScorePlane: out.ScorePlane}
+		if version == iwire.DenseVectorSearchTypedQuantizedVersion {
+			return DenseVectorSearchResponse{}, validateDenseQuantizedFailureProof(failure, request)
+		}
+		return DenseVectorSearchResponse{}, failure
 	}
 	return out, err
 }
@@ -275,8 +283,7 @@ func validateDenseQuantizedScorePlaneResponse(work documentservice.DenseSearchWo
 		expectedGraphRoute = "typed_hnsw"
 	}
 	if proof == nil || !proof.Available || !proof.Completed || !proof.Snapshot.Available ||
-		proof.RequestedMode != request.QueryMode || proof.EffectiveMode != collections.VectorIndexQueryModeQuantizedRerank ||
-		(request.ExpectedGeneration != 0 && proof.Snapshot.SchemaGeneration > request.ExpectedGeneration) ||
+		!denseScorePlaneRequestMatches(proof, request, true) ||
 		(proof.Route != "typed_empty" && proof.Route != "typed_exact" && proof.Route != "quantized_rerank") ||
 		!work.Completed || !work.Graph.Completed || graphRoute != expectedGraphRoute ||
 		proof.Snapshot != work.Graph.Snapshot ||
@@ -284,7 +291,6 @@ func validateDenseQuantizedScorePlaneResponse(work documentservice.DenseSearchWo
 		(work.Graph.Filter.Attempted && !work.Graph.Filter.Completed) ||
 		(request.Filter != nil && (resultCount < 0 || uint64(resultCount) != minUint64(uint64(request.TopK), work.Graph.Filter.EligibleRows))) ||
 		!denseScorePlaneRerankCountersMatch(proof) ||
-		!denseScorePlaneByteCountersMatch(proof, uint64(len(request.Query))) ||
 		!denseScorePlaneCountersMatchWork(work, proof, resultCount, request.Filter != nil) ||
 		((proof.Route == "typed_exact" || proof.Route == "quantized_rerank") && !denseExactResultCountMatchesTopK(proof, request.TopK, resultCount)) ||
 		resultCount > request.TopK ||
@@ -293,12 +299,86 @@ func validateDenseQuantizedScorePlaneResponse(work documentservice.DenseSearchWo
 			proof.LiveShortlistCandidates > proof.RawRetainedCandidates ||
 			proof.RawRetainedCandidates > proof.RawCandidateWidth ||
 			proof.ActualRerankCandidates > proof.LiveShortlistCandidates ||
-			(request.QuantizedRerankCandidates != 0 && proof.RerankCandidateCap > uint64(request.QuantizedRerankCandidates)))) ||
-		proof.QuantizedIndexName != request.QuantizedIndexName || proof.RequestedTopK != uint64(request.TopK) ||
-		proof.RequestedEFSearch != uint64(request.EfSearch) || proof.RequestedRerankCandidates != uint64(request.QuantizedRerankCandidates) {
+			(request.QuantizedRerankCandidates != 0 && proof.RerankCandidateCap > uint64(request.QuantizedRerankCandidates)))) {
 		return protocolError(iwire.ErrConsistencyUnavailable, "dense score-plane proof does not match the request")
 	}
 	return nil
+}
+
+func denseScorePlaneRequestMatches(proof *collections.ColumnGraphScorePlaneWork, request DenseVectorSearchRequest, completedBytes bool) bool {
+	if proof == nil || request.TopK < 0 || request.EfSearch < 0 || request.QuantizedRerankCandidates < 0 ||
+		proof.RequestedMode != request.QueryMode ||
+		proof.EffectiveMode != collections.VectorIndexQueryModeQuantizedRerank ||
+		proof.QuantizedIndexName != request.QuantizedIndexName ||
+		proof.QuantizedCodec != collections.QuantizedVectorCodecScalarU8 || proof.QuantizedVersion != 1 ||
+		proof.QuantizedConfigHash != 0 || proof.RequestedTopK != uint64(request.TopK) ||
+		proof.RequestedEFSearch != uint64(request.EfSearch) ||
+		proof.RequestedRerankCandidates != uint64(request.QuantizedRerankCandidates) ||
+		(request.ExpectedGeneration != 0 && proof.Snapshot.Available && proof.Snapshot.SchemaGeneration > request.ExpectedGeneration) {
+		return false
+	}
+	return !completedBytes || denseScorePlaneByteCountersMatch(proof, uint64(len(request.Query)))
+}
+
+func denseFailureProofs(err error) (*documentservice.DenseSearchWork, *collections.ColumnGraphScorePlaneWork) {
+	var decoded *DenseVectorSearchDecodeError
+	if errors.As(err, &decoded) {
+		return decoded.DenseWork, decoded.ScorePlane
+	}
+	var remote *WireError
+	if errors.As(err, &remote) {
+		return remote.DenseWork, remote.ScorePlane
+	}
+	return nil, nil
+}
+
+// validateDenseQuantizedFailureProof binds any decoded failure evidence to the
+// public request. Failure proofs are prefixes: request identity and captured
+// owner/filter state remain authoritative, while result-count relations apply
+// only to a pair of completed proofs.
+func validateDenseQuantizedFailureProof(err error, request DenseVectorSearchRequest) error {
+	work, proof := denseFailureProofs(err)
+	if work == nil && proof == nil {
+		return err
+	}
+	mismatch := false
+	if proof != nil && !denseScorePlaneRequestMatches(proof, request, proof.Completed) {
+		mismatch = true
+	}
+	if work != nil {
+		graph := work.Graph
+		if graph.Snapshot.Available && request.ExpectedGeneration != 0 && graph.Snapshot.SchemaGeneration > request.ExpectedGeneration {
+			mismatch = true
+		}
+		if graph.Filter.Attempted && request.Filter == nil {
+			mismatch = true
+		}
+		if proof != nil {
+			if graph.Snapshot.Available && proof.Snapshot.Available && graph.Snapshot != proof.Snapshot {
+				mismatch = true
+			}
+			if request.Filter != nil && (!graph.Filter.Attempted || !graph.Filter.Completed) {
+				mismatch = true
+			}
+			if work.Completed && proof.Completed {
+				fetched := work.Output.Fetched
+				if uint64(int(fetched)) != fetched || validateDenseQuantizedScorePlaneResponse(*work, proof, request, int(fetched)) != nil {
+					mismatch = true
+				}
+			}
+		}
+	} else if proof != nil && request.Filter != nil {
+		mismatch = true
+	}
+	if !mismatch {
+		return err
+	}
+	// Do not wrap the remote WireError: callers must not continue to classify a
+	// request-mismatched proof as an authenticated service error.
+	return &DenseVectorSearchDecodeError{
+		Err:       protocolError(iwire.ErrConsistencyUnavailable, "dense failure proof does not match the request"),
+		DenseWork: work, ScorePlane: proof,
+	}
 }
 
 func denseExactResultCountMatchesTopK(proof *collections.ColumnGraphScorePlaneWork, topK, resultCount int) bool {
