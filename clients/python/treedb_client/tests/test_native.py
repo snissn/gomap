@@ -657,17 +657,26 @@ class NativeCodecTests(unittest.TestCase):
         finally:
             client.close()
 
-        # A malformed sibling score-plane cannot erase already owned dense work.
+        # Malformed proof siblings cannot erase independently owned valid proof.
         error_payload = _uint(1) + b"\x00" + _bytes_for_test("original")
-        payload = _section(2, error_payload) + _section(134, raw) + _section(136, b"\x01")
-        connection = _NativeConnection("127.0.0.1:2", 1)
-        connection.socket = mock.Mock()
-        header = _HEADER.pack(b"TDB1", 40, 1, 0, 6, 0, 0, 1, len(payload))
-        with mock.patch.object(connection, "_read", side_effect=(header, payload)), self.assertRaises(TreeDBProtocolError) as caught:
-            connection._round_trip(1, b"", 2, 10**12, dense_proof=True, dense_version=3)
-        self.assertEqual(caught.exception.dense_work, work)
-        self.assertIsNone(caught.exception.score_plane)
-        self.assertIsInstance(caught.exception.__cause__, TreeDBProtocolError)
+        proof_values = [1, 1, 2, 2, 0, 1, 0] + [0] * 20
+        valid_plane = b"".join(map(_uint, proof_values)) + _bytes_for_test("incomplete")
+        valid_plane += _bytes_for_test("embedding.scalar_u8.public") + _bytes_for_test("scalar_u8") + b"\x00" * 8
+        from treedb_client._dense_work import DenseScorePlaneProof
+        proof = DenseScorePlaneProof.from_dict(_dense_score_plane(valid_plane))
+        for name, work_raw, plane_raw, want_work, want_plane in (
+            ("score plane", raw, b"\x01", work, None),
+            ("dense work", b"\x01", valid_plane, None, proof),
+        ):
+            payload = _section(2, error_payload) + _section(134, work_raw) + _section(136, plane_raw)
+            connection = _NativeConnection("127.0.0.1:2", 1)
+            connection.socket = mock.Mock()
+            header = _HEADER.pack(b"TDB1", 40, 1, 0, 6, 0, 0, 1, len(payload))
+            with self.subTest(malformed=name), mock.patch.object(connection, "_read", side_effect=(header, payload)), self.assertRaises(TreeDBProtocolError) as caught:
+                connection._round_trip(1, b"", 2, 10**12, dense_proof=True, dense_version=3)
+            self.assertEqual(caught.exception.dense_work, want_work)
+            self.assertEqual(caught.exception.score_plane, want_plane)
+            self.assertIsInstance(caught.exception.__cause__, TreeDBProtocolError)
 
         # Existing exceptions retain decoded proof if client document parsing fails.
         body = _section(102, _vector([b"a"])) + _section(103, _vector([b"{}"])) + _section(130, bytes.fromhex("0201000001000000000000f03f")) + _section(134, raw)

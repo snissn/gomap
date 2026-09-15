@@ -636,7 +636,7 @@ func TestDenseV3ResultDecodeErrorsPreserveOwnedProofs(t *testing.T) {
 	}
 }
 
-func TestDenseV3WireErrorMalformedScorePlanePreservesDenseWork(t *testing.T) {
+func TestDenseV3WireErrorMalformedProofPreservesSibling(t *testing.T) {
 	snapshot := collections.ColumnGraphQuerySnapshot{
 		Available: true,
 		BaseManifest: collections.ColumnGraphManifestWork{
@@ -657,24 +657,54 @@ func TestDenseV3WireErrorMalformedScorePlanePreservesDenseWork(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var body []byte
-	for _, section := range []iwire.Section{
-		{ID: iwire.SectionError, Bytes: appendErrorPayload(nil, iwire.ErrInternal, false, "original")},
-		{ID: iwire.SectionDenseSearchWork, Flags: iwire.SectionFlagCritical, Bytes: workRaw},
-		{ID: iwire.SectionDenseSearchScorePlaneProof, Flags: iwire.SectionFlagCritical, Bytes: []byte{1}},
+	proof := collections.ColumnGraphScorePlaneWork{
+		Version: 1, Available: true,
+		RequestedMode:      collections.VectorIndexQueryModeQuantizedRerank,
+		EffectiveMode:      collections.VectorIndexQueryModeQuantizedRerank,
+		Reason:             "incomplete",
+		QuantizedIndexName: "embedding.scalar_u8.public",
+		QuantizedCodec:     collections.QuantizedVectorCodecScalarU8,
+		QuantizedVersion:   1,
+	}
+	proofRaw, err := appendDenseScorePlane(nil, proof, iwire.DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tt := range []struct {
+		name                string
+		workRaw, proofRaw   []byte
+		wantWork, wantProof bool
+	}{
+		{"malformed score plane", workRaw, []byte{1}, true, false},
+		{"malformed dense work", []byte{1}, proofRaw, false, true},
 	} {
-		body, err = iwire.AppendSection(body, section)
-		if err != nil {
-			t.Fatal(err)
-		}
-	}
-	got := decodeWireErrorVersion(body, iwire.DefaultLimits(), iwire.DenseVectorSearchTypedQuantizedVersion)
-	var decodeErr *DenseVectorSearchDecodeError
-	if !errors.As(got, &decodeErr) || decodeErr.DenseWork == nil || decodeErr.ScorePlane != nil {
-		t.Fatalf("malformed score-plane error lost valid dense work: %v", got)
-	}
-	if *decodeErr.DenseWork != work || nativeCodeOf(got) != iwire.ErrMalformedFrame {
-		t.Fatalf("malformed score-plane error changed proof or code: %+v code=%d", decodeErr.DenseWork, nativeCodeOf(got))
+		t.Run(tt.name, func(t *testing.T) {
+			var body []byte
+			for _, section := range []iwire.Section{
+				{ID: iwire.SectionError, Bytes: appendErrorPayload(nil, iwire.ErrInternal, false, "original")},
+				{ID: iwire.SectionDenseSearchWork, Flags: iwire.SectionFlagCritical, Bytes: tt.workRaw},
+				{ID: iwire.SectionDenseSearchScorePlaneProof, Flags: iwire.SectionFlagCritical, Bytes: tt.proofRaw},
+			} {
+				body, err = iwire.AppendSection(body, section)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			got := decodeWireErrorVersion(body, iwire.DefaultLimits(), iwire.DenseVectorSearchTypedQuantizedVersion)
+			var decodeErr *DenseVectorSearchDecodeError
+			if !errors.As(got, &decodeErr) || (decodeErr.DenseWork != nil) != tt.wantWork || (decodeErr.ScorePlane != nil) != tt.wantProof {
+				t.Fatalf("malformed proof lost valid sibling: %v", got)
+			}
+			if tt.wantWork && *decodeErr.DenseWork != work {
+				t.Fatalf("dense work changed: %+v", decodeErr.DenseWork)
+			}
+			if tt.wantProof && *decodeErr.ScorePlane != proof {
+				t.Fatalf("score plane changed: %+v", decodeErr.ScorePlane)
+			}
+			if nativeCodeOf(got) != iwire.ErrMalformedFrame {
+				t.Fatalf("malformed proof code=%d", nativeCodeOf(got))
+			}
+		})
 	}
 }
 

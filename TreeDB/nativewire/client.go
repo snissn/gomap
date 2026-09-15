@@ -396,26 +396,31 @@ func decodeWireErrorVersion(body []byte, limits iwire.Limits, denseVersion uint6
 		return err
 	}
 	out := &WireError{Code: code, Retryable: retryable, Message: message}
-	if raw, found, err := singletonSection(sections, iwire.SectionDenseSearchWork); err != nil {
-		return err
-	} else if found {
-		work, err := decodeDenseWork(raw)
-		if err != nil {
-			return err
+	workRaw, workFound, workErr := singletonSection(sections, iwire.SectionDenseSearchWork)
+	if workErr == nil && workFound {
+		work, err := decodeDenseWork(workRaw)
+		workErr = err
+		if workErr == nil {
+			out.DenseWork = &work
 		}
-		out.DenseWork = &work
 	}
-	if raw, found, err := singletonSection(sections, iwire.SectionDenseSearchScorePlaneProof); err != nil {
-		return &DenseVectorSearchDecodeError{Err: err, DenseWork: out.DenseWork}
-	} else if found {
+	scoreRaw, scoreFound, scoreErr := singletonSection(sections, iwire.SectionDenseSearchScorePlaneProof)
+	if scoreErr == nil && scoreFound {
 		if denseVersion != iwire.DenseVectorSearchTypedQuantizedVersion {
-			return &DenseVectorSearchDecodeError{Err: protocolError(iwire.ErrMalformedFrame, "dense score-plane proof does not match command version"), DenseWork: out.DenseWork}
+			scoreErr = protocolError(iwire.ErrMalformedFrame, "dense score-plane proof does not match command version")
+		} else {
+			proof, err := decodeDenseScorePlane(scoreRaw, limits)
+			scoreErr = err
+			if scoreErr == nil {
+				out.ScorePlane = &proof
+			}
 		}
-		proof, err := decodeDenseScorePlane(raw, limits)
-		if err != nil {
-			return &DenseVectorSearchDecodeError{Err: err, DenseWork: out.DenseWork}
-		}
-		out.ScorePlane = &proof
+	}
+	if workErr != nil {
+		return &DenseVectorSearchDecodeError{Err: workErr, ScorePlane: out.ScorePlane}
+	}
+	if scoreErr != nil {
+		return &DenseVectorSearchDecodeError{Err: scoreErr, DenseWork: out.DenseWork}
 	}
 	return out
 }

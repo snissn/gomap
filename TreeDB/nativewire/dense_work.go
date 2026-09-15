@@ -19,8 +19,8 @@ type denseWorkError struct {
 }
 
 // DenseVectorSearchDecodeError preserves already-decoded owned proof when a
-// later response/result consistency check fails. Result byte slices remain
-// borrowed exactly as the response contract specifies.
+// sibling proof or later response/result consistency check fails. Result byte
+// slices remain borrowed exactly as the response contract specifies.
 type DenseVectorSearchDecodeError struct {
 	Err        error
 	DenseWork  *documentservice.DenseSearchWork

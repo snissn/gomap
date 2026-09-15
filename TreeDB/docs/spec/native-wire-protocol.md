@@ -918,10 +918,9 @@ preserves completed service/graph/output and score-plane prefixes. This
 completion does not certify wire delivery.
 Version 1 never emits or accepts section 134 and retains its response/error
 bytes. The Go response owns its fixed proof value independently of borrowed
-result documents; `WireError.DenseWork` is optional owned error detail. If a
-later sibling score-plane section is malformed, clients reject that section
-while preserving the independently decoded dense-work detail on the protocol
-error.
+result documents; `WireError.DenseWork` is optional owned error detail. If
+either proof section is malformed, clients reject it while preserving the
+independently decoded valid sibling on the protocol error.
 
 Hello capabilities advertise `dense_vector_search_versions` as a comma-separated
 set derived from registered command versions and an available standalone

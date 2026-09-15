@@ -500,16 +500,26 @@ class _NativeConnection:
             size, offset = _read_uint(error, offset + 1)
             if size != len(error) - offset:
                 raise TreeDBProtocolError("invalid native error message")
-            work = _dense_work(sections[134]) if 134 in sections else None
-            score_plane = None
+            work = score_plane = None
+            work_error = score_plane_error = None
+            if 134 in sections:
+                try:
+                    work = _dense_work(sections[134])
+                except TreeDBProtocolError as exc:
+                    work_error = exc
             if 136 in sections:
                 if dense_version != 3:
-                    raise TreeDBProtocolError("unexpected native dense score-plane proof", dense_work=work)
-                from ._dense_work import DenseScorePlaneProof
-                try:
-                    score_plane = DenseScorePlaneProof.from_dict(_dense_score_plane(sections[136]))
-                except (ValueError, TypeError, KeyError, UnicodeError, TreeDBProtocolError) as exc:
-                    raise TreeDBProtocolError("invalid native dense score-plane proof", dense_work=work) from exc
+                    score_plane_error = TreeDBProtocolError("unexpected native dense score-plane proof")
+                else:
+                    from ._dense_work import DenseScorePlaneProof
+                    try:
+                        score_plane = DenseScorePlaneProof.from_dict(_dense_score_plane(sections[136]))
+                    except (ValueError, TypeError, KeyError, UnicodeError, TreeDBProtocolError) as exc:
+                        score_plane_error = exc
+            if work_error is not None:
+                raise TreeDBProtocolError("invalid native dense work proof", score_plane=score_plane) from work_error
+            if score_plane_error is not None:
+                raise TreeDBProtocolError("invalid native dense score-plane proof", dense_work=work) from score_plane_error
             raise TreeDBProtocolError(f"native error {code}: {error[offset:].decode('utf-8', errors='replace')}", dense_work=work, score_plane=score_plane)
         if kind != response_type:
             raise TreeDBProtocolError("unexpected native response frame")
