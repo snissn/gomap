@@ -1159,6 +1159,26 @@ def _validate_http_dense_quantized_response(
         or response.exact_fallbacks != 0
         or response.full_document_scan_fallbacks != 0
         or response.primary_document_scans != 0
+        or response.document_materialization_rows != len(response.documents)
+        or response.scalar_filter_membership_source != ""
+        or response.scalar_filter_plan != ""
+        or response.scalar_filter_exact_scoring
+        or response.scalar_filter_underfill
+        or any((
+            response.scalar_filter_probe_ids,
+            response.scalar_filter_probe_truncated,
+            response.scalar_filter_candidates,
+            response.scalar_filter_candidate_ids,
+            response.scalar_filter_retained_candidate_ids,
+            response.scalar_filter_refined_candidate_ids,
+            response.scalar_filter_visited,
+            response.scalar_filter_scored,
+            response.scalar_filter_admitted,
+            response.scalar_filter_unbounded,
+            response.allowed_id_materialization_rows,
+            response.visibility_mismatch_count,
+            response.visibility_retry_count,
+        ))
         or (proof.route == "typed_empty" and (
             len(response.documents) != 0
             or not work.graph.filter.attempted

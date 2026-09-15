@@ -84,6 +84,16 @@ func TestServiceTypedDenseQuantizedRerankPublicProof(t *testing.T) {
 	if len(out.Documents) != 1 || out.ScorePlane == nil || !out.ScorePlane.Completed || out.ScorePlane.QuantizedIndexName != "embedding.scalar_u8.public" {
 		t.Fatalf("quantized public response=%+v", out)
 	}
+	if out.DocumentMaterializationRows != uint64(len(out.Documents)) ||
+		out.ScalarFilterMembershipSource != "" || out.ScalarFilterPlan != "" ||
+		out.ScalarFilterProbeIDs != 0 || out.ScalarFilterProbeTruncated != 0 ||
+		out.ScalarFilterCandidates != 0 || out.ScalarFilterCandidateIDs != 0 ||
+		out.ScalarFilterRetainedCandidateIDs != 0 || out.ScalarFilterRefinedCandidateIDs != 0 ||
+		out.ScalarFilterVisited != 0 || out.ScalarFilterScored != 0 || out.ScalarFilterAdmitted != 0 ||
+		out.ScalarFilterExactScoring || out.ScalarFilterUnderfill || out.ScalarFilterUnbounded != 0 ||
+		out.AllowedIDMaterializationRows != 0 || out.VisibilityMismatchCount != 0 || out.VisibilityRetryCount != 0 {
+		t.Fatalf("quantized public response carried contradictory outer work: %+v", out)
+	}
 	var httpOut DenseVectorSearchResponse
 	postJSON(t, NewHandler(svc), "/v1/indexes/typed-quantized-public/search/vector", DenseVectorSearchRequest{
 		QueryEmbedding: []float32{1, 0}, TopK: 1, Route: RouteAnn,

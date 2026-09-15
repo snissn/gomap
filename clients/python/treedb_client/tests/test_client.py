@@ -709,6 +709,7 @@ class TreeDBClientTests(unittest.TestCase):
             "metric": "cosine",
             "exact": False,
             "candidates": 1,
+            "document_materialization_rows": 1,
             "route": "ann",
             "documents": [{"id": "a", "content": "alpha", "score": 1.0}],
             "dense_work": dense_work,
@@ -721,6 +722,35 @@ class TreeDBClientTests(unittest.TestCase):
                 expected_generation=1,
             )
             self.assertEqual(result.documents[0].id, "a")
+            for name, field, value in (
+                ("missing materialization row", "document_materialization_rows", 0),
+                ("excess materialization row", "document_materialization_rows", 2),
+                ("legacy membership source", "scalar_filter_membership_source", "bounded_complete_set"),
+                ("legacy filter plan", "scalar_filter_plan", "complete_exact"),
+                ("legacy probe IDs", "scalar_filter_probe_ids", 1),
+                ("legacy truncated probes", "scalar_filter_probe_truncated", 1),
+                ("legacy candidates", "scalar_filter_candidates", 1),
+                ("legacy candidate IDs", "scalar_filter_candidate_ids", 1),
+                ("legacy retained IDs", "scalar_filter_retained_candidate_ids", 1),
+                ("legacy refined IDs", "scalar_filter_refined_candidate_ids", 1),
+                ("legacy visited", "scalar_filter_visited", 1),
+                ("legacy scored", "scalar_filter_scored", 1),
+                ("legacy admitted", "scalar_filter_admitted", 1),
+                ("legacy exact scoring", "scalar_filter_exact_scoring", True),
+                ("legacy underfill", "scalar_filter_underfill", True),
+                ("legacy unbounded", "scalar_filter_unbounded", 1),
+                ("legacy materialization", "allowed_id_materialization_rows", 1),
+                ("typed visibility mismatch", "visibility_mismatch_count", 1),
+                ("typed visibility retry", "visibility_retry_count", 1),
+            ):
+                invalid_outer = copy.deepcopy(payload)
+                invalid_outer[field] = value
+                with self.subTest(outer_diagnostic=name), mock.patch.object(client, "_request", return_value=invalid_outer):
+                    with self.assertRaisesRegex(TreeDBProtocolError, "score-plane proof"):
+                        client.query_by_embedding(
+                            "docs", [1, 0], 1, query_mode="quantized_rerank",
+                            quantized_index_name="embedding.scalar_u8.public",
+                        )
             malformed_score = copy.deepcopy(payload)
             malformed_score["score_plane"]["version"] = 2
             with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, malformed_score, 0)}) as malformed_score_server:
@@ -1142,6 +1172,7 @@ class TreeDBClientTests(unittest.TestCase):
             duplicate = copy.deepcopy(payload)
             duplicate["documents"] = [copy.deepcopy(payload["documents"][0]), copy.deepcopy(payload["documents"][0])]
             duplicate["candidates"] = 2
+            duplicate["document_materialization_rows"] = 2
             duplicate["dense_work"]["graph"].update(base_ann_scored=2, exact_base_scored=2, base_result_ids=2)
             duplicate["dense_work"]["output"].update(requested=2, fetched=2, output_bytes=2, retained_payload_fetches=2, json_reconstruction_rows=2, typed_column_rows=2)
             duplicate["score_plane"].update(
@@ -1198,6 +1229,7 @@ class TreeDBClientTests(unittest.TestCase):
             underfill = copy.deepcopy(duplicate)
             underfill["documents"] = [copy.deepcopy(duplicate["documents"][0])]
             underfill["candidates"] = 1
+            underfill["document_materialization_rows"] = 1
             underfill["dense_work"]["output"].update(requested=1, fetched=1, output_bytes=1, retained_payload_fetches=1, json_reconstruction_rows=1, typed_column_rows=1)
             with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, underfill, 0)}) as underfill_server:
                 underfill_client = TreeDBClient(underfill_server.base_url, timeout=1)
@@ -1257,6 +1289,7 @@ class TreeDBClientTests(unittest.TestCase):
             valid_empty = copy.deepcopy(payload)
             valid_empty["documents"] = []
             valid_empty["candidates"] = 0
+            valid_empty["document_materialization_rows"] = 0
             valid_empty["dense_work"]["graph"].update(
                 route="typed_empty", base_ann_scored=0, base_candidates=0, base_edges=0,
                 delta_scored=0, exact_base_scored=0, base_shadowed=0, base_result_ids=0,
@@ -1305,6 +1338,7 @@ class TreeDBClientTests(unittest.TestCase):
                 {"id": "a", "content": "alpha", "score": 1.0},
                 {"id": "b", "content": "beta", "score": 0.5},
             ]
+            overflow["document_materialization_rows"] = 2
             overflow["dense_work"]["output"].update(requested=2, fetched=2, output_bytes=2, retained_payload_fetches=2, json_reconstruction_rows=2, typed_column_rows=2)
             with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, overflow, 0)}) as overflow_server:
                 overflow_client = TreeDBClient(overflow_server.base_url, timeout=1)
@@ -1354,6 +1388,7 @@ class TreeDBClientTests(unittest.TestCase):
                 invalid["dense_work"]["graph"]["route"] = "typed_empty"
                 invalid["dense_work"]["graph"]["base_ann_scored"] = invalid["dense_work"]["graph"]["exact_base_scored"] = invalid["dense_work"]["graph"]["delta_scored"] = 0
                 invalid["documents"] = []
+                invalid["document_materialization_rows"] = 0
                 invalid["dense_work"]["output"].update(requested=0, fetched=0, output_bytes=0, retained_payload_fetches=0, json_reconstruction_rows=0, typed_column_rows=0)
                 mutation(invalid)
                 with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, invalid, 0)}) as bad_server:

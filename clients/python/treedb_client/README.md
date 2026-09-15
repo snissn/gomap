@@ -127,7 +127,10 @@ or an unknown critical error sibling cannot erase independently decoded valid
 proofs. HTTP response-encoding failures preserve the completed service proofs
 in their error envelope. HTTP error score-plane proofs are accepted only for a
 caller-selected `quantized_rerank` request; exact requests reject them while
-retaining any independently valid dense-work proof.
+retaining any independently valid dense-work proof. Successful typed quantized
+HTTP responses also bind their materialized-row count to returned/proven rows
+and reject legacy scalar-filter or visibility telemetry; typed filter work is
+carried by `dense_work.graph.filter`.
 Dense HTTP proof-bearing envelopes also reject duplicate keys; unrelated
 envelope extension fields retain their existing compatibility. Retained proofs
 remain valid after later requests, mutations and connection close. GetMany's ordinary list return
