@@ -971,10 +971,32 @@ class TreeDBClientTests(unittest.TestCase):
                     self.assertIsNotNone(caught.exception.dense_work)
                     self.assertIsNotNone(caught.exception.score_plane)
                     error_client.close()
+            empty_manifest = replace(
+                result.score_plane.snapshot.base_manifest,
+                generation=0, format="", version=0, checksum=0,
+            )
+            unavailable_snapshot = replace(
+                result.score_plane.snapshot,
+                available=False, schema_hash=0, schema_generation=0,
+                base_manifest=empty_manifest, current_manifest=empty_manifest,
+                base_coverage_lsn=0, current_coverage_lsn=0,
+            )
+            unavailable_graph = replace(
+                result.dense_work.graph,
+                available=False, completed=False, route="",
+                base_ann_scored=0, base_candidates=0, base_edges=0, delta_scored=0,
+                exact_base_scored=0, base_shadowed=0, base_result_ids=0,
+                snapshot=unavailable_snapshot,
+            )
             for name, changed_proof, changed_work, request in (
                 ("mode", replace(result.score_plane, requested_mode="exact"), result.dense_work, {}),
-                ("unavailable does not bypass identity", replace(result.score_plane,
-                    available=False, requested_top_k=2), result.dense_work, {}),
+                ("proof unavailable", replace(result.score_plane, available=False), result.dense_work, {}),
+                ("graph unavailable", result.score_plane,
+                    replace(result.dense_work, graph=unavailable_graph), {}),
+                ("proof snapshot unavailable", replace(result.score_plane, snapshot=unavailable_snapshot),
+                    result.dense_work, {}),
+                ("graph snapshot unavailable", result.score_plane,
+                    replace(result.dense_work, graph=replace(result.dense_work.graph, snapshot=unavailable_snapshot)), {}),
                 ("index name", replace(result.score_plane, quantized_index_name="embedding.scalar_u8.other"), result.dense_work, {}),
                 ("top k", replace(result.score_plane, requested_top_k=2), result.dense_work, {}),
                 ("EF", replace(result.score_plane, requested_ef_search=2), result.dense_work, {}),
@@ -1061,6 +1083,14 @@ class TreeDBClientTests(unittest.TestCase):
                 self.assertIs(caught.exception, error)
 
             proof_incomplete = replace(result.score_plane, completed=False, reason="scoring interrupted")
+            route_empty_incomplete = replace(
+                post_search,
+                graph=replace(
+                    post_search.graph,
+                    completed=False, route="", base_ann_scored=0, base_candidates=0, base_edges=0,
+                    delta_scored=0, exact_base_scored=0, base_shadowed=0, base_result_ids=0,
+                ),
+            )
             completion_prefix_failures = (
                 ("proof complete graph incomplete", replace(post_search, graph=replace(post_search.graph, completed=False)), result.score_plane),
                 ("graph complete proof incomplete", post_search, proof_incomplete),
@@ -1078,7 +1108,14 @@ class TreeDBClientTests(unittest.TestCase):
                 ("bytes before fetch", replace(post_search, output=replace(post_search.output, attempted=True, requested=1, output_bytes=1)), result.score_plane),
                 ("completed partial output", replace(post_search, output=replace(post_search.output, attempted=True, completed=True, requested=1)), result.score_plane),
                 ("outer complete before output", replace(post_search, completed=True), result.score_plane),
+                ("proof unavailable", partial_work, replace(partial_proof, available=False)),
+                ("graph unavailable", replace(partial_work, graph=unavailable_graph), partial_proof),
+                ("proof snapshot unavailable", partial_work, replace(partial_proof, snapshot=unavailable_snapshot)),
+                ("graph snapshot unavailable", replace(
+                    partial_work, graph=replace(partial_work.graph, snapshot=unavailable_snapshot)), partial_proof),
                 ("incomplete route", replace(post_search, graph=replace(post_search.graph, completed=False, route="typed_exact")), proof_incomplete),
+                ("empty graph typed-empty proof", route_empty_incomplete, replace(proof_incomplete, route="typed_empty")),
+                ("empty graph typed-exact proof", route_empty_incomplete, replace(proof_incomplete, route="typed_exact")),
             )
             for name, candidate_work, candidate_proof in completion_prefix_failures:
                 error = IndexUnavailableError(
@@ -1093,14 +1130,6 @@ class TreeDBClientTests(unittest.TestCase):
                 self.assertEqual(caught.exception.dense_work, candidate_work)
                 self.assertEqual(caught.exception.score_plane, candidate_proof)
 
-            route_empty_incomplete = replace(
-                post_search,
-                graph=replace(
-                    post_search.graph,
-                    completed=False, route="", base_ann_scored=0, base_candidates=0, base_edges=0,
-                    delta_scored=0, exact_base_scored=0, base_shadowed=0, base_result_ids=0,
-                ),
-            )
             route_empty_error = IndexUnavailableError(
                 "index_unavailable", "route empty", dense_work=route_empty_incomplete, score_plane=proof_incomplete,
             )
@@ -1112,17 +1141,22 @@ class TreeDBClientTests(unittest.TestCase):
                 )
             self.assertIs(caught.exception, route_empty_error)
 
+            completion_prefix_by_name = {
+                name: (candidate_work, candidate_proof)
+                for name, candidate_work, candidate_proof in completion_prefix_failures
+            }
             http_completion_cases = (
                 ("post-search before fetch", post_search, result.score_plane, False),
                 ("partial fetch", partial_fetch, result.score_plane, False),
                 ("completed fetch missing", completed_fetch_missing, result.score_plane, False),
-                ("proof complete graph incomplete", completion_prefix_failures[0][1], completion_prefix_failures[0][2], True),
-                ("graph complete proof incomplete", completion_prefix_failures[1][1], completion_prefix_failures[1][2], True),
-                ("route", completion_prefix_failures[2][1], completion_prefix_failures[2][2], True),
-                ("snapshot", completion_prefix_failures[3][1], completion_prefix_failures[3][2], True),
-                ("byte counters", completion_prefix_failures[7][1], completion_prefix_failures[7][2], True),
-                ("output requested", completion_prefix_failures[8][1], completion_prefix_failures[8][2], True),
-                ("incomplete route", completion_prefix_failures[-1][1], completion_prefix_failures[-1][2], True),
+            ) + tuple(
+                (name, *completion_prefix_by_name[name], True)
+                for name in (
+                    "proof complete graph incomplete", "graph complete proof incomplete", "route", "snapshot",
+                    "byte counters", "output requested", "proof unavailable", "graph unavailable",
+                    "proof snapshot unavailable", "graph snapshot unavailable", "incomplete route",
+                    "empty graph typed-empty proof", "empty graph typed-exact proof",
+                )
             )
             for status in (200, 503):
                 for name, candidate_work, candidate_proof, rejected in http_completion_cases:

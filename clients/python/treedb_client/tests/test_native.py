@@ -161,8 +161,26 @@ class NativeCodecTests(unittest.TestCase):
             requested_mismatch_values[1] |= 1 << 6
             incomplete_route_values = list(graph_incomplete_values)
             incomplete_route_values[2] = 2
+            empty_graph_typed_empty = (list(graph_incomplete_values), bytearray(proof_incomplete))
+            empty_graph_typed_empty[0][2], empty_graph_typed_empty[1][4] = 0, 1
+            empty_graph_typed_exact = (list(graph_incomplete_values), bytearray(proof_incomplete))
+            empty_graph_typed_exact[0][2], empty_graph_typed_exact[1][4] = 0, 2
             wrong_bytes = bytearray(score_plane)
             wrong_bytes[17] -= 1
+            proof_unavailable = bytearray(proof_incomplete)
+            proof_unavailable[1] &= ~(1 << 0)
+            graph_unavailable_values = [1] + [0] * 37
+            proof_snapshot_unavailable_values = list(values)
+            proof_snapshot_unavailable_values[1] &= ~((1 << 1) | (1 << 2))
+            proof_snapshot_unavailable_values[23:27] = [0] * 4
+            proof_snapshot_unavailable = (
+                b"".join(_uint(value) for value in proof_snapshot_unavailable_values)
+                + b"\x00" + _bytes_for_test("embedding.scalar_u8.public") + _bytes_for_test("scalar_u8")
+                + b"\x00" * 8
+            )
+            graph_snapshot_unavailable_values = list(graph_incomplete_values)
+            graph_snapshot_unavailable_values[1] &= ~(1 << 5)
+            graph_snapshot_unavailable_values[19:31] = [0] * 12
             native_completion_cases = (
                 ("post-search before fetch", post_search_values, score_plane, False),
                 ("partial fetch", partial_fetch_values, score_plane, False),
@@ -171,7 +189,13 @@ class NativeCodecTests(unittest.TestCase):
                 ("graph complete proof incomplete", post_search_values, bytes(proof_incomplete), True),
                 ("route", wrong_route_values, score_plane, True),
                 ("requested", requested_mismatch_values, score_plane, True),
+                ("proof unavailable", post_search_values, bytes(proof_unavailable), True),
+                ("graph unavailable", graph_unavailable_values, bytes(proof_incomplete), True),
+                ("proof snapshot unavailable", post_search_values, proof_snapshot_unavailable, True),
+                ("graph snapshot unavailable", graph_snapshot_unavailable_values, bytes(proof_incomplete), True),
                 ("incomplete route", incomplete_route_values, bytes(proof_incomplete), True),
+                ("empty graph typed-empty proof", empty_graph_typed_empty[0], bytes(empty_graph_typed_empty[1]), True),
+                ("empty graph typed-exact proof", empty_graph_typed_exact[0], bytes(empty_graph_typed_exact[1]), True),
                 ("bytes", post_search_values, bytes(wrong_bytes), True),
             )
             for name, candidate_work, candidate_proof, rejected in native_completion_cases:

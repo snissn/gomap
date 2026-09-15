@@ -1315,7 +1315,7 @@ def _validate_dense_failure_proofs(
         dense_completed_graph_result_count,
         dense_failure_output_matches_completed_graph,
         dense_quantized_completed_graph_matches,
-        dense_score_plane_route_matches_graph,
+        dense_score_plane_prefix_route_matches_graph,
     )
 
     work = getattr(error, "dense_work", None)
@@ -1349,12 +1349,15 @@ def _validate_dense_failure_proofs(
             mismatch = True
         if proof is not None:
             if (
-                proof.completed != graph.completed
-                or (graph.route and not dense_score_plane_route_matches_graph(graph.route, proof.route))
+                not proof.available
+                or not graph.available
+                or not proof.snapshot.available
+                or not graph.snapshot.available
+                or graph.snapshot != proof.snapshot
+                or proof.completed != graph.completed
+                or not dense_score_plane_prefix_route_matches_graph(graph.route, proof.route)
                 or (work.completed and (not graph.completed or not work.output.completed))
             ):
-                mismatch = True
-            if graph.snapshot.available and proof.snapshot.available and graph.snapshot != proof.snapshot:
                 mismatch = True
             # The producer creates a score-plane proof only after successful
             # filter preparation, so a proof-bearing filtered failure must own

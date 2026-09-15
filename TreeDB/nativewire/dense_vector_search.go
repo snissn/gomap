@@ -288,6 +288,13 @@ func denseScorePlaneRouteMatchesGraph(graphRoute, proofRoute string) bool {
 	}
 }
 
+func denseScorePlanePrefixRouteMatchesGraph(graphRoute, proofRoute string) bool {
+	if graphRoute == "" {
+		return proofRoute == "quantized_rerank"
+	}
+	return denseScorePlaneRouteMatchesGraph(graphRoute, proofRoute)
+}
+
 func denseQuantizedCompletedGraphMatches(work documentservice.DenseSearchWork, proof *collections.ColumnGraphScorePlaneWork, request DenseVectorSearchRequest, resultCount int) bool {
 	if proof == nil || !proof.Available || !proof.Completed || !proof.Snapshot.Available ||
 		!denseScorePlaneRequestMatches(proof, request, true) ||
@@ -411,12 +418,11 @@ func validateDenseQuantizedFailureProof(err error, request DenseVectorSearchRequ
 			mismatch = true
 		}
 		if proof != nil {
-			if proof.Completed != graph.Completed ||
-				(graph.Route != "" && !denseScorePlaneRouteMatchesGraph(graph.Route, proof.Route)) ||
+			if !proof.Available || !graph.Available ||
+				!proof.Snapshot.Available || !graph.Snapshot.Available || graph.Snapshot != proof.Snapshot ||
+				proof.Completed != graph.Completed ||
+				!denseScorePlanePrefixRouteMatchesGraph(graph.Route, proof.Route) ||
 				(work.Completed && (!graph.Completed || !work.Output.Completed)) {
-				mismatch = true
-			}
-			if graph.Snapshot.Available && proof.Snapshot.Available && graph.Snapshot != proof.Snapshot {
 				mismatch = true
 			}
 			if request.Filter != nil && (!graph.Filter.Attempted || !graph.Filter.Completed) {

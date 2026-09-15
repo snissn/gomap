@@ -331,6 +331,11 @@ def dense_score_plane_route_matches_graph(graph_route, proof_route):
     return expected_route is not None and graph_route == expected_route
 
 
+def dense_score_plane_prefix_route_matches_graph(graph_route, proof_route):
+    return (proof_route == "quantized_rerank" if not graph_route
+            else dense_score_plane_route_matches_graph(graph_route, proof_route))
+
+
 def dense_completed_graph_result_count(proof, top_k):
     if proof is None or not proof.completed or type(top_k) is not int or top_k < 0:
         return None

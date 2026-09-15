@@ -783,9 +783,17 @@ func TestDenseV3FailureProofBindsRequestWithoutRetainingRemoteError(t *testing.T
 		"mode": func(_ *documentservice.DenseSearchWork, p *collections.ColumnGraphScorePlaneWork) {
 			p.RequestedMode = collections.VectorIndexQueryModeQuantizedOnly
 		},
-		"unavailable identity": func(_ *documentservice.DenseSearchWork, p *collections.ColumnGraphScorePlaneWork) {
+		"proof unavailable": func(_ *documentservice.DenseSearchWork, p *collections.ColumnGraphScorePlaneWork) {
 			p.Available = false
-			p.RequestedTopK++
+		},
+		"graph unavailable": func(w *documentservice.DenseSearchWork, _ *collections.ColumnGraphScorePlaneWork) {
+			w.Graph = collections.ColumnGraphQueryWork{}
+		},
+		"proof snapshot unavailable": func(_ *documentservice.DenseSearchWork, p *collections.ColumnGraphScorePlaneWork) {
+			p.Snapshot = collections.ColumnGraphQuerySnapshot{}
+		},
+		"graph snapshot unavailable": func(w *documentservice.DenseSearchWork, _ *collections.ColumnGraphScorePlaneWork) {
+			w.Graph.Snapshot = collections.ColumnGraphQuerySnapshot{}
 		},
 		"name": func(_ *documentservice.DenseSearchWork, p *collections.ColumnGraphScorePlaneWork) {
 			p.QuantizedIndexName = "other"
@@ -861,6 +869,31 @@ func TestDenseV3FailureProofBindsRequestWithoutRetainingRemoteError(t *testing.T
 			if !strings.Contains(got.Error(), "failure proof does not match the request") || !errors.As(got, &decoded) ||
 				decoded.ScorePlane == nil || (name == "proof only" && (decoded.DenseWork != nil || *decoded.ScorePlane != proof)) || errors.As(got, &retainedRemote) {
 				t.Fatalf("public FrameError did not reject %s evidence with diagnostics: %v", name, got)
+			}
+		})
+	}
+	for _, name := range []string{
+		"proof unavailable", "graph unavailable", "proof snapshot unavailable", "graph snapshot unavailable",
+	} {
+		t.Run("FrameError "+name, func(t *testing.T) {
+			candidateWork, candidateProof := work, proof
+			mutations[name](&candidateWork, &candidateProof)
+			candidateWorkRaw, err := appendDenseWork(nil, candidateWork)
+			if err != nil {
+				t.Fatal(err)
+			}
+			candidateProofRaw, err := appendDenseScorePlane(nil, candidateProof, iwire.DefaultLimits())
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := denseV3FrameErrorForTest(t, request,
+				iwire.Section{ID: iwire.SectionDenseSearchWork, Flags: iwire.SectionFlagCritical, Bytes: candidateWorkRaw},
+				iwire.Section{ID: iwire.SectionDenseSearchScorePlaneProof, Flags: iwire.SectionFlagCritical, Bytes: candidateProofRaw})
+			var decoded *DenseVectorSearchDecodeError
+			var retainedRemote *WireError
+			if !errors.As(got, &decoded) || decoded.DenseWork == nil || decoded.ScorePlane == nil ||
+				!strings.Contains(got.Error(), "failure proof does not match the request") || errors.As(got, &retainedRemote) {
+				t.Fatalf("public FrameError retained impossible proof-bearing availability state: %v", got)
 			}
 		})
 	}
@@ -1023,6 +1056,7 @@ func TestDenseV3FailureProofCompletedGraphPrefixes(t *testing.T) {
 	matchingIncompleteProof.Completed = false
 	matchingIncompleteProof.Reason = "scoring interrupted"
 	for _, routes := range []struct{ graph, proof string }{
+		{"", "quantized_rerank"},
 		{"typed_empty", "typed_empty"},
 		{"typed_exact", "typed_exact"},
 		{"typed_hnsw", "quantized_rerank"},
@@ -1039,6 +1073,11 @@ func TestDenseV3FailureProofCompletedGraphPrefixes(t *testing.T) {
 	mismatchedIncompleteWork := matchingIncompleteWork
 	mismatchedIncompleteWork.Graph.Route = "typed_exact"
 	reject(t, mismatchedIncompleteWork, matchingIncompleteProof)
+	for _, route := range []string{"typed_empty", "typed_exact"} {
+		candidateWork, candidateProof := matchingIncompleteWork, matchingIncompleteProof
+		candidateWork.Graph.Route, candidateProof.Route = "", route
+		reject(t, candidateWork, candidateProof)
+	}
 
 	frameCase := func(t *testing.T, candidateWork documentservice.DenseSearchWork, candidateProof collections.ColumnGraphScorePlaneWork, valid bool) {
 		t.Helper()
@@ -1083,6 +1122,14 @@ func TestDenseV3FailureProofCompletedGraphPrefixes(t *testing.T) {
 			w.Graph.Route = "typed_exact"
 			p.Completed = false
 			p.Reason = "scoring interrupted"
+		}},
+		{"empty graph typed-empty proof", func(w *documentservice.DenseSearchWork, p *collections.ColumnGraphScorePlaneWork) {
+			w.Graph.Completed, w.Graph.Route = false, ""
+			p.Completed, p.Route, p.Reason = false, "typed_empty", "scoring interrupted"
+		}},
+		{"empty graph typed-exact proof", func(w *documentservice.DenseSearchWork, p *collections.ColumnGraphScorePlaneWork) {
+			w.Graph.Completed, w.Graph.Route = false, ""
+			p.Completed, p.Route, p.Reason = false, "typed_exact", "scoring interrupted"
 		}},
 	} {
 		t.Run("FrameError invalid "+mutation.name, func(t *testing.T) {
