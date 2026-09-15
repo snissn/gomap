@@ -897,6 +897,12 @@ func TestDenseV3FailureProofBindsRequestWithoutRetainingRemoteError(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err := decodeDenseScorePlaneSection([]iwire.Section{{ID: iwire.SectionDenseSearchScorePlaneProof, Bytes: validProofRaw}}, true, iwire.DefaultLimits()); err == nil {
+		t.Fatal("noncritical dense score-plane proof accepted")
+	}
+	if decoded, err := decodeDenseScorePlaneSection([]iwire.Section{{ID: iwire.SectionDenseSearchScorePlaneProof, Flags: iwire.SectionFlagCritical, Bytes: validProofRaw}}, true, iwire.DefaultLimits()); err != nil || *decoded != proof {
+		t.Fatalf("critical dense score-plane proof rejected: %+v err=%v", decoded, err)
+	}
 	for name, sections := range map[string][]iwire.Section{
 		"mismatched pair": {
 			{ID: iwire.SectionDenseSearchWork, Flags: iwire.SectionFlagCritical, Bytes: workRaw},
@@ -1580,6 +1586,24 @@ func TestDenseV3WireErrorMalformedProofPreservesSibling(t *testing.T) {
 			wantCode: iwire.ErrMalformedFrame,
 		},
 		{
+			name: "noncritical dense work",
+			sections: []iwire.Section{
+				{ID: iwire.SectionError, Bytes: validError},
+				{ID: iwire.SectionDenseSearchWork, Bytes: workRaw},
+				{ID: iwire.SectionDenseSearchScorePlaneProof, Flags: iwire.SectionFlagCritical, Bytes: proofRaw},
+			},
+			wantCode: iwire.ErrMalformedFrame,
+		},
+		{
+			name: "noncritical score plane",
+			sections: []iwire.Section{
+				{ID: iwire.SectionError, Bytes: validError},
+				{ID: iwire.SectionDenseSearchWork, Flags: iwire.SectionFlagCritical, Bytes: workRaw},
+				{ID: iwire.SectionDenseSearchScorePlaneProof, Bytes: proofRaw},
+			},
+			wantCode: iwire.ErrMalformedFrame,
+		},
+		{
 			name: "unknown critical sibling",
 			sections: []iwire.Section{
 				{ID: iwire.SectionError, Bytes: validError},
@@ -1684,6 +1708,10 @@ func TestDenseTypedQuantizedNativePublicPath(t *testing.T) {
 		t.Fatal(err)
 	}
 	sections = append(sections, iwire.Section{ID: iwire.SectionDenseSearchQuantizedOptions, Bytes: qoptions})
+	if _, err := server.handleVersionedDenseVectorSearch(ctx, &connState{}, iwire.DenseVectorSearchTypedQuantizedVersion, sections, nil); nativeCodeOf(err) != iwire.ErrInvalidCommand {
+		t.Fatalf("noncritical quantized options accepted: %v", err)
+	}
+	sections[len(sections)-1].Flags = iwire.SectionFlagCritical
 	serverLimits := server.limits
 	server.limits.MaxByteVectorBytes = 1
 	partial, err := server.handleVersionedDenseVectorSearch(ctx, &connState{}, iwire.DenseVectorSearchTypedQuantizedVersion, sections, nil)

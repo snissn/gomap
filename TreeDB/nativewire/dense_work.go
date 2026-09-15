@@ -165,6 +165,11 @@ func decodeDenseWorkSectionVersion(sections []iwire.Section, version uint64) (do
 	if !found {
 		return unavailable, nil
 	}
+	for _, section := range sections {
+		if section.ID == iwire.SectionDenseSearchWork && section.Flags != iwire.SectionFlagCritical {
+			return unavailable, protocolError(iwire.ErrMalformedFrame, "dense work section must be critical")
+		}
+	}
 	work, err := decodeDenseWork(raw)
 	if err != nil {
 		return unavailable, err
@@ -176,6 +181,9 @@ func decodeDenseWorkSectionVersion(sections []iwire.Section, version uint64) (do
 			case iwire.SectionDenseSearchScorePlaneProof:
 				if version != iwire.DenseVectorSearchTypedQuantizedVersion {
 					return work, protocolError(iwire.ErrUnsupportedFeature, "unknown critical dense response section")
+				}
+				if section.Flags != iwire.SectionFlagCritical {
+					return work, protocolError(iwire.ErrMalformedFrame, "dense score-plane proof section must be critical")
 				}
 			default:
 				if section.Flags&iwire.SectionFlagCritical != 0 {

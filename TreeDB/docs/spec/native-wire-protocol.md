@@ -843,6 +843,8 @@ captured snapshot is available; all other flag bits are invalid. This keeps
 incomplete error prefixes distinguishable from completed proofs without
 deriving snapshot availability from the outer proof bit. Missing, duplicate, stale, malformed, unsupported-codec,
 unknown-name, or out-of-bound options fail closed.
+Sections 134, 135, and 136 carry the section critical flag whenever present;
+consumers reject a required instance whose critical flag is absent.
 
 Every available section-134 or section-136 snapshot requires a nonzero acquired
 vector schema hash and generation, nonzero base/current coverage LSNs with current not

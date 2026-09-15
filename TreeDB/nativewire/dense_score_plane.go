@@ -330,6 +330,11 @@ func decodeDenseScorePlaneSection(sections []iwire.Section, required bool, limit
 		}
 		return nil, nil
 	}
+	for _, section := range sections {
+		if section.ID == iwire.SectionDenseSearchScorePlaneProof && section.Flags != iwire.SectionFlagCritical {
+			return nil, protocolError(iwire.ErrMalformedFrame, "dense score-plane proof section must be critical")
+		}
+	}
 	proof, err := decodeDenseScorePlane(raw, limits)
 	if err != nil {
 		return nil, err

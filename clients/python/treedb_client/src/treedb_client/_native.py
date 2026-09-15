@@ -14,6 +14,7 @@ from .errors import TreeDBConfigError, TreeDBProtocolError, TreeDBTimeoutError, 
 
 _HEADER = struct.Struct("<4sHHHHIQQQ")
 _MAX_FRAME = 16 << 20
+_CRITICAL_SECTION_IDS = frozenset((134, 135, 136))
 
 
 def _uint(value):
@@ -49,8 +50,10 @@ def _bytes(value):
     return _uint(len(value)) + value
 
 
-def _section(section_id, value):
-    return _uint(section_id) + b"\x00" + _bytes(value)
+def _section(section_id, value, *, critical=None):
+    if critical is None:
+        critical = section_id in _CRITICAL_SECTION_IDS
+    return _uint(section_id) + _uint(1 if critical else 0) + _bytes(value)
 
 
 def _section_items(body):
@@ -69,7 +72,7 @@ def _section_items(body):
     return result
 
 
-def _sections(body, known):
+def _sections(body, known, required_critical=()):
     result = {}
     offset = 0
     count = 0
@@ -84,6 +87,8 @@ def _sections(body, known):
             raise TreeDBProtocolError("duplicate native section")
         if section_id not in known and flags & 1:
             raise TreeDBProtocolError("unknown critical native section")
+        if section_id in required_critical and flags != 1:
+            raise TreeDBProtocolError("required native section is not critical")
         result[section_id] = body[offset:offset + size]
         offset += size
     return result
@@ -354,7 +359,8 @@ def _dense_response(body, top_k, version=2, *, query_mode=None, quantized_index_
     known = {102, 103, 130, 134}
     if version == 3:
         known.add(136)
-    sections = _sections(body, known)
+    required_critical = {134} | ({136} if version == 3 else set())
+    sections = _sections(body, known, required_critical)
     work = None
     score_plane = None
     if version == 3 and 136 in sections:
@@ -521,6 +527,12 @@ class _NativeConnection:
                     continue
                 if section_id not in known and section_flags & 1 and section_error is None:
                     section_error = TreeDBProtocolError("unknown critical native section")
+                required_critical = (
+                    section_id == 134 and dense_proof
+                    or section_id == 136 and dense_version == 3
+                )
+                if required_critical and section_flags != 1 and section_error is None:
+                    section_error = TreeDBProtocolError("required native section is not critical")
                 sections[section_id] = section_value
             work = score_plane = None
             work_error = score_plane_error = None

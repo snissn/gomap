@@ -90,6 +90,13 @@ func TestDenseWorkGoldenStrictOwnershipAndAllocations(t *testing.T) {
 		}
 	}
 	section := iwire.Section{ID: iwire.SectionDenseSearchWork, Bytes: raw}
+	if _, err := decodeDenseWorkSection([]iwire.Section{section}, true); err == nil {
+		t.Fatal("noncritical dense work proof accepted")
+	}
+	section.Flags = iwire.SectionFlagCritical
+	if decoded, err := decodeDenseWorkSection([]iwire.Section{section}, true); err != nil || decoded != w {
+		t.Fatalf("critical dense work proof rejected: %+v err=%v", decoded, err)
+	}
 	for _, sections := range [][]iwire.Section{nil, {section, section}, {section, {ID: 999, Flags: iwire.SectionFlagCritical}}} {
 		if _, err := decodeDenseWorkSection(sections, true); err == nil {
 			t.Fatal("missing/duplicate proof accepted")

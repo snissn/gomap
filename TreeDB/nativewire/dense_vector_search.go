@@ -128,7 +128,7 @@ func (c *Client) DenseVectorSearch(ctx context.Context, request DenseVectorSearc
 		if optionsErr != nil {
 			return DenseVectorSearchResponse{}, optionsErr
 		}
-		requestSections = append(requestSections, iwire.Section{ID: iwire.SectionDenseSearchQuantizedOptions, Bytes: options})
+		requestSections = append(requestSections, iwire.Section{ID: iwire.SectionDenseSearchQuantizedOptions, Flags: iwire.SectionFlagCritical, Bytes: options})
 	}
 	body, err := appendVersionedCommandRequestBody(c.requestBody[:0], iwire.CommandDenseVectorSearch, version, requestSections...)
 	if err != nil {
@@ -715,6 +715,11 @@ func (s *Server) handleVersionedDenseVectorSearch(ctx context.Context, state *co
 				optionsErr = protocolError(iwire.ErrInvalidCommand, "dense quantized options missing")
 			}
 			return nil, optionsErr
+		}
+		for _, section := range sections {
+			if section.ID == iwire.SectionDenseSearchQuantizedOptions && section.Flags != iwire.SectionFlagCritical {
+				return nil, protocolError(iwire.ErrInvalidCommand, "dense quantized options section must be critical")
+			}
 		}
 		options, optionsErr := decodeDenseQuantizedOptions(optionsRaw, s.limits)
 		if optionsErr != nil {

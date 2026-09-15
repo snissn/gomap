@@ -50,14 +50,14 @@ class NativeCodecTests(unittest.TestCase):
 
         score_plane = score_plane_bytes(values)
 
-        def response_body(document):
+        def response_body(document, *, work_critical=True, score_critical=True):
             response_work_values = list(work_values)
             response_work_values[34] = len(document)
             return (
                 _section(102, _vector([b"a"])) + _section(103, _vector([document]))
                 + _section(130, meta)
-                + _section(134, b"".join(_uint(value) for value in response_work_values))
-                + _section(136, score_plane)
+                + _section(134, b"".join(_uint(value) for value in response_work_values), critical=work_critical)
+                + _section(136, score_plane, critical=score_critical)
             )
 
         body = response_body(b'{"id":"a"}')
@@ -71,7 +71,7 @@ class NativeCodecTests(unittest.TestCase):
         try:
             def command(command_id, version, sections, capability):
                 self.assertEqual((command_id, version, capability), (64, 3, "dense_vector_search_versions"))
-                parsed = _sections(sections, {4, 129, 135})
+                parsed = _sections(sections, {4, 129, 135}, {135})
                 self.assertIn(135, parsed)
                 self.assertEqual(parsed[135], _dense_quantized_options("quantized_rerank", "embedding.scalar_u8.public", 0))
                 return body
@@ -81,6 +81,14 @@ class NativeCodecTests(unittest.TestCase):
             self.assertEqual(response.native_command_version, 3)
             self.assertIsNotNone(response.score_plane)
             self.assertEqual(response.score_plane.quantized_index_name, "embedding.scalar_u8.public")
+            with self.assertRaisesRegex(TreeDBProtocolError, "not critical"):
+                _sections(_section(135, b"", critical=False), {135}, {135})
+            for name, candidate_body in (
+                ("work", response_body(b'{"id":"a"}', work_critical=False)),
+                ("score plane", response_body(b'{"id":"a"}', score_critical=False)),
+            ):
+                with self.subTest(noncritical_response=name), self.assertRaisesRegex(TreeDBProtocolError, "not critical"):
+                    _dense_response(candidate_body, 1, version=3)
             embedded_body = response_body(b'{"id":"a","embedding":[1,0]}')
             with mock.patch.object(client._native, "command", return_value=embedded_body):
                 embedded_response = client.query_by_embedding(
@@ -1045,6 +1053,18 @@ class NativeCodecTests(unittest.TestCase):
             self.assertEqual(caught.exception.dense_work, want_work)
             self.assertEqual(caught.exception.score_plane, want_plane)
             self.assertIsInstance(caught.exception.__cause__, TreeDBProtocolError)
+
+        for name, payload in (
+            ("dense work", _section(2, error_payload) + _section(134, raw, critical=False) + _section(136, valid_plane)),
+            ("score plane", _section(2, error_payload) + _section(134, raw) + _section(136, valid_plane, critical=False)),
+        ):
+            connection = _NativeConnection("127.0.0.1:2", 1)
+            connection.socket = mock.Mock()
+            header = _HEADER.pack(b"TDB1", 40, 1, 0, 6, 0, 0, 1, len(payload))
+            with self.subTest(noncritical_error=name), mock.patch.object(connection, "_read", side_effect=(header, payload)), self.assertRaisesRegex(TreeDBProtocolError, "not critical") as caught:
+                connection._round_trip(1, b"", 2, 10**12, dense_proof=True, dense_version=3)
+            self.assertEqual(caught.exception.dense_work, work)
+            self.assertEqual(caught.exception.score_plane, proof)
 
         proof_sections = _section(134, raw) + _section(136, valid_plane)
         unknown_critical = _uint(999) + _uint(1) + _uint(0)

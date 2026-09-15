@@ -407,8 +407,14 @@ func decodeWireErrorVersion(body []byte, limits iwire.Limits, denseVersion uint6
 		if section.ID == iwire.SectionDenseSearchWork && !denseWorkAllowed {
 			return withProofs(protocolError(iwire.ErrMalformedFrame, "dense error work is unavailable for this call"))
 		}
+		if section.ID == iwire.SectionDenseSearchWork && denseWorkAllowed && section.Flags != iwire.SectionFlagCritical {
+			return withProofs(protocolError(iwire.ErrMalformedFrame, "dense error work section must be critical"))
+		}
 		if section.ID == iwire.SectionDenseSearchScorePlaneProof && denseVersion != iwire.DenseVectorSearchTypedQuantizedVersion {
 			return withProofs(protocolError(iwire.ErrMalformedFrame, "dense score-plane proof is unavailable for this call"))
+		}
+		if section.ID == iwire.SectionDenseSearchScorePlaneProof && denseVersion == iwire.DenseVectorSearchTypedQuantizedVersion && section.Flags != iwire.SectionFlagCritical {
+			return withProofs(protocolError(iwire.ErrMalformedFrame, "dense error score-plane proof section must be critical"))
 		}
 		if denseWorkAllowed && section.ID != iwire.SectionError && section.ID != iwire.SectionDenseSearchWork && section.ID != iwire.SectionDenseSearchScorePlaneProof && section.Flags&iwire.SectionFlagCritical != 0 {
 			return withProofs(protocolError(iwire.ErrUnsupportedFeature, "unknown critical dense error section"))
