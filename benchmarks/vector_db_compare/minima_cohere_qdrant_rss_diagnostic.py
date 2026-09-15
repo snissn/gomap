@@ -8,7 +8,10 @@ import inspect
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
+import sys
+import threading
 import time
 import urllib.parse
 
@@ -19,25 +22,13 @@ import minima_qdrant_runner as existing
 
 SCHEMA = native.RSS_ARTIFACT_SCHEMA
 CONTROLS = native.RSS_CONTROLS
-
-_SQ8_SCORE_PLANE_IDENTITY_FIELDS = {
-    "reason", "quantized_index_name", "quantized_codec", "quantized_version", "quantized_config_hash",
+RESOURCE_GUARD = {
+    "poll_interval_s": 1,
+    "wall_limit_s": 2700,
+    "minimum_free_bytes": 10 << 30,
+    "maximum_owned_bytes": 11 << 30,
+    "maximum_combined_rss_bytes": 24 << 30,
 }
-_COLUMN_GRAPH_BUILD_FIELDS = {
-    "total_nanos", "snapshot_nanos", "row_extraction_nanos", "adjacency_build_nanos",
-    "locality_remap_nanos", "asset_preparation_nanos", "inv_norm_preparation_nanos",
-    "adjacency_state_preparation_nanos", "row_ref_preparation_nanos",
-    "document_id_preparation_nanos", "quantized_preparation_nanos",
-    "search_pack_preparation_nanos", "manifest_finalization_nanos", "file_sync_nanos",
-    "file_sync_count", "namespace_sync_nanos", "namespace_sync_count", "publication_nanos",
-    "construction_decisions",
-}
-_COLUMN_GRAPH_BUILD_POSITIVE_NANOS = {
-    "total_nanos", "snapshot_nanos", "row_extraction_nanos", "adjacency_build_nanos",
-    "asset_preparation_nanos", "quantized_preparation_nanos", "search_pack_preparation_nanos",
-    "manifest_finalization_nanos", "publication_nanos",
-}
-
 
 def qdrant_point(document):
     return {
@@ -76,46 +67,101 @@ def validate_ready_snapshot(snapshot, rows):
 
 
 def _process_peak_rss_valid(rss):
-    try:
-        pid = rss["pid"]
-        identity = rss["process_identity"]
-        identity_pid, start = identity.split(":")
+    return native.process_peak_rss_valid(rss)
+
+
+def _boundary_storage_valid(storage):
+    return native.boundary_storage_valid(storage)
+
+
+def _qdrant_resource_guard_valid(guard):
+    def process_valid(process):
         return (
-            rss["availability"] == "measured"
-            and type(rss["bytes"]) is int and rss["bytes"] > 0
-            and type(pid) is int and pid > 0
-            and identity_pid == str(pid) and start == str(int(start)) and int(start) > 0
-            and rss["source"] == "/proc/<pid>/status:VmHWM"
-            and rss["scope"] == "process_lifetime_through_sample"
+            isinstance(process, dict)
+            and type(process.get("pid")) is int and process["pid"] > 0
+            and native.linux_process_identity_valid(
+                process.get("process_identity"), process["pid"],
+            )
+            and type(process.get("current_rss_bytes")) is int
+            and process["current_rss_bytes"] > 0
         )
-    except (KeyError, TypeError, ValueError, AttributeError):
-        return False
 
-
-def _column_graph_build_valid(build):
-    if not isinstance(build, dict) or set(build) != _COLUMN_GRAPH_BUILD_FIELDS:
-        return False
-    numeric_fields = _COLUMN_GRAPH_BUILD_FIELDS - {"construction_decisions"}
-    if any(type(build[field]) is not int or build[field] < 0 for field in numeric_fields):
-        return False
-    return (
-        all(build[field] > 0 for field in _COLUMN_GRAPH_BUILD_POSITIVE_NANOS)
-        and build["file_sync_count"] > 0
-        and build["namespace_sync_count"] > 0
-        and (build["construction_decisions"] is None or isinstance(build["construction_decisions"], dict))
-    )
-
-
-def _sq8_requests_share_initial_owner(requests):
-    try:
-        snapshots = [row["score_plane"]["snapshot"] for row in requests]
-        owner = snapshots[0]
+    def sample_valid(sample, server_required):
+        server = sample.get("server") if isinstance(sample, dict) else None
         return (
-            all(native.same_json(snapshot, owner) for snapshot in snapshots)
-            and native.same_json(owner["base_manifest"], owner["current_manifest"])
-            and owner["base_coverage_lsn"] == owner["current_coverage_lsn"]
+            isinstance(sample, dict)
+            and type(sample.get("elapsed_s")) in (int, float) and sample["elapsed_s"] >= 0
+            and type(sample.get("free_bytes")) is int and sample["free_bytes"] >= 0
+            and type(sample.get("owned_bytes")) is int and sample["owned_bytes"] >= 0
+            and type(sample.get("combined_current_rss_bytes")) is int
+            and sample["combined_current_rss_bytes"] > 0
+            and process_valid(sample.get("harness"))
+            and (process_valid(server) if server_required else server is None or process_valid(server))
+            and sample["combined_current_rss_bytes"]
+                == sample["harness"]["current_rss_bytes"] + (
+                    0 if server is None else server["current_rss_bytes"])
         )
-    except (KeyError, TypeError, IndexError):
+
+    try:
+        limits = guard["limits"]
+        first, last, cleanup = (
+            guard["first_sample"], guard["last_sample"], guard["cleanup_sample"],
+        )
+        return (
+            isinstance(guard, dict)
+            and guard.get("schema") == "treedb_cohere_qdrant_resource_guard/v1"
+            and guard.get("scope") == "harness_start_through_owned_process_cleanup"
+            and guard.get("status") == "passed" and guard.get("failure") is None
+            and native.same_json(limits, RESOURCE_GUARD)
+            and type(guard.get("sample_count")) is int and guard["sample_count"] >= 3
+            and type(guard.get("max_combined_current_rss_bytes")) is int
+            and guard["max_combined_current_rss_bytes"] > 0
+            and guard["max_combined_current_rss_bytes"] <= limits["maximum_combined_rss_bytes"]
+            and type(guard.get("max_owned_bytes")) is int and guard["max_owned_bytes"] >= 0
+            and guard["max_owned_bytes"] <= limits["maximum_owned_bytes"]
+            and type(guard.get("minimum_free_bytes_observed")) is int
+            and guard["minimum_free_bytes_observed"] >= limits["minimum_free_bytes"]
+            and sample_valid(first, False) and first["server"] is None
+            and sample_valid(last, True)
+            and sample_valid(cleanup, False) and cleanup["server"] is None
+            and first["elapsed_s"] <= last["elapsed_s"] <= cleanup["elapsed_s"]
+            and len({first["harness"]["process_identity"],
+                     last["harness"]["process_identity"],
+                     cleanup["harness"]["process_identity"]}) == 1
+            and guard["minimum_free_bytes_observed"] <= min(
+                first["free_bytes"], last["free_bytes"], cleanup["free_bytes"])
+            and cleanup["elapsed_s"] <= limits["wall_limit_s"]
+            and guard["max_combined_current_rss_bytes"] >= max(
+                first["combined_current_rss_bytes"], last["combined_current_rss_bytes"],
+                cleanup["combined_current_rss_bytes"])
+            and guard["max_owned_bytes"] >= max(
+                first["owned_bytes"], last["owned_bytes"], cleanup["owned_bytes"])
+        )
+    except (KeyError, TypeError):
+        return False
+
+
+def _qdrant_cleanup_valid(cleanup):
+    try:
+        identity_pid, start = cleanup["process_identity"].split(":")
+        return (
+            isinstance(cleanup, dict)
+            and cleanup.get("schema") == "treedb_owned_qdrant_cleanup/v1"
+            and cleanup.get("status") == "clean"
+            and isinstance(cleanup.get("process_identity"), str)
+            and cleanup["process_identity"]
+            and identity_pid == str(int(identity_pid)) and int(identity_pid) > 0
+            and start == str(int(start)) and int(start) > 0
+            and type(cleanup.get("harness_pgid")) is int and cleanup["harness_pgid"] > 0
+            and cleanup.get("server_pgid") == cleanup["harness_pgid"]
+            and cleanup.get("term_sent") is True
+            and cleanup.get("kill_sent") is False
+            and cleanup.get("exit_code") == 0
+            and cleanup.get("client_closed") is True
+            and cleanup.get("log_closed") is True
+            and cleanup.get("failure") is None
+        )
+    except (KeyError, TypeError, ValueError, IndexError):
         return False
 
 
@@ -157,6 +203,24 @@ def compare_artifacts(treedb, qdrant):
         rss = artifact.get("rss", {})
         if not _process_peak_rss_valid(rss):
             reasons.append(f"{backend} server VmHWM is unavailable")
+        if not _boundary_storage_valid(artifact.get("storage")):
+            reasons.append(f"{backend} initial-ready storage boundary is unavailable")
+        if backend == "qdrant":
+            if not _qdrant_resource_guard_valid(artifact.get("resource_guard")):
+                reasons.append("qdrant resource guard did not pass")
+            if not _qdrant_cleanup_valid(artifact.get("cleanup")):
+                reasons.append("qdrant owned cleanup did not complete cleanly")
+            try:
+                identities = {
+                    artifact["rss"]["process_identity"],
+                    artifact["provenance"]["process_identity"],
+                    artifact["resource_guard"]["last_sample"]["server"]["process_identity"],
+                    artifact["cleanup"]["process_identity"],
+                }
+                if len(identities) != 1:
+                    raise ValueError("Qdrant evidence spans multiple process identities")
+            except (KeyError, TypeError, ValueError):
+                reasons.append("qdrant guard, RSS, provenance, and cleanup identities differ")
     if not native.same_json(treedb.get("comparison_contract"), qdrant.get("comparison_contract")):
         reasons.append("TreeDB and Qdrant comparison contracts differ")
     tree_provenance, qdrant_provenance = treedb.get("provenance", {}), qdrant.get("provenance", {})
@@ -180,256 +244,24 @@ def compare_artifacts(treedb, qdrant):
     }
 
 
-def _sq8_request_valid(row):
-    try:
-        if not _SQ8_SCORE_PLANE_IDENTITY_FIELDS <= set(row["score_plane"]):
-            return False
-        work = native.dense_contract.DenseSearchWork.from_dict(row["dense_work"])
-        proof = native.dense_contract.DenseScorePlaneProof.from_dict(row["score_plane"])
-        results = row["results"]
-        ids = [result["id"] for result in results]
-        scores = [result["score"] for result in results]
-        generation = row["expected_generation"]
-        projections_match = True
-        for result in results:
-            identifier = result["id"]
-            if not isinstance(identifier, str) or not identifier.startswith("row-"):
-                projections_match = False
-                break
-            ordinal = int(identifier.removeprefix("row-"))
-            projections_match = projections_match and (
-                identifier == f"row-{ordinal:06d}"
-                and 0 <= ordinal < 500000
-                and result["content"] == f"minima-cohere:{ordinal}"
-                and result["meta"] == {
-                    "user_id": f"{(ordinal * 7919) % 500000:06d}",
-                    "fpath": f"/cohere/{ordinal // 256:06d}.txt",
-                }
-            )
-        return (
-            type(row["request_sequence"]) is int and row["request_sequence"] > 0
-            and row["outcome"] == "success" and not row.get("error") and row["phase"] == "rss_quality"
-            and type(row["eligible"]) is int and row["eligible"] == 500000
-            and type(row["query"]) is int and 0 <= row["query"] < 200
-            and type(row["command_version"]) is int and row["command_version"] == 3
-            and type(row["started_monotonic_ns"]) is int
-            and type(row["ended_monotonic_ns"]) is int
-            and row["ended_monotonic_ns"] > row["started_monotonic_ns"]
-            and type(generation) is int and generation > 0
-            and type(row["requested_ef_search"]) is int
-            and type(row["requested_rerank_candidates"]) is int
-            and row["requested_ef_search"] in native.RSS_CONTROLS
-            and row["requested_ef_search"] >= 10
-            and row["requested_rerank_candidates"] == row["requested_ef_search"]
-            and native.same_json(row.get("lifecycle_state"), {
-                "owner_advance": 0, "folded": False, "shadow_allowance": 0,
-                "live_base": 500000, "live_suffix": 0,
-            })
-            and proof.version == 1 and proof.available and proof.completed and not proof.reason
-            and proof.requested_mode == "quantized_rerank"
-            and proof.effective_mode == "quantized_rerank" and proof.route == "quantized_rerank"
-            and proof.quantized_index_name == native.QUANTIZED_PROFILE_NAME
-            and proof.quantized_codec == "scalar_u8" and proof.quantized_version == 1
-            and proof.quantized_config_hash == 0 and proof.requested_top_k == 10
-            and proof.requested_ef_search == row["requested_ef_search"]
-            and proof.requested_rerank_candidates == row["requested_rerank_candidates"]
-            and native.existing.quantized_snapshot_valid(proof.snapshot, generation)
-            and work.graph.snapshot == proof.snapshot
-            and work.graph.base_candidates == 0
-            and work.graph.delta_scored == 0 and work.graph.base_shadowed == 0
-            and proof.normalized_candidate_width == row["requested_ef_search"]
-            and proof.raw_candidate_width == proof.normalized_candidate_width
-            and proof.rerank_candidate_cap == row["requested_rerank_candidates"]
-            and proof.raw_retained_candidates <= proof.raw_candidate_width
-            and proof.raw_retained_candidates <= proof.quantized_score_calls
-            and proof.exact_suffix_score_calls == 0
-            and proof.live_shortlist_candidates == min(
-                proof.normalized_candidate_width,
-                proof.raw_retained_candidates - work.graph.base_shadowed)
-            and proof.actual_rerank_candidates == min(
-                proof.live_shortlist_candidates, proof.rerank_candidate_cap)
-            and proof.actual_rerank_candidates == proof.exact_base_rerank_score_calls
-            and work.output.output_bytes > 0
-            and native.dense_contract.dense_score_plane_byte_counters_match(proof, 768)
-            and native.dense_contract.dense_quantized_response_work_matches(work, proof, 10, len(results), False)
-            and len(results) == 10 and len(ids) == len(set(ids))
-            and projections_match
-            and all(type(score) in (int, float) and native.math.isfinite(score)
-                    and -1.000001 <= score <= 1.000001 for score in scores)
-            and type(row["recall"]) in (int, float) and native.math.isfinite(row["recall"])
-            and 0 <= row["recall"] <= 1
-            and type(row["ndcg_at_10"]) in (int, float) and native.math.isfinite(row["ndcg_at_10"])
-            and 0 <= row["ndcg_at_10"] <= 1
-            and list(zip((-score for score in scores), ids)) == sorted(zip((-score for score in scores), ids))
-        )
-    except (KeyError, TypeError, ValueError, AttributeError):
-        return False
-
-
-def _sq8_effective_index_valid(index, construction, requests):
-    try:
-        expected_keys = {
-            "name", "dimension", "metric", "generation", "contract_version",
-            "embedding_field", "vector_index_name", "vector_strategy", "vector_m",
-            "vector_ef_construction", "vector_ef_search", "quantized_indexes",
-            "scalar_fields", "text_field", "text_index_name", "document_type",
-            "capabilities", "typed_input",
-        }
-        expected_capabilities = native.existing.QUANTIZED_INDEX_CAPABILITIES
-        quantized = index["quantized_indexes"]
-        scalar = index["scalar_fields"]
-        generations = {row["expected_generation"] for row in requests}
-        return (
-            isinstance(index, dict) and set(index) == expected_keys
-            and index["name"] == "minima_cohere" and type(index["dimension"]) is int
-            and index["dimension"] == 768
-            and index["metric"] == "cosine" and index["contract_version"] == native.existing.SERVICE_CONTRACT
-            and index["embedding_field"] == "embedding" and index["vector_index_name"] == "embedding"
-            and index["vector_strategy"] == "column_graph" and type(index["vector_m"]) is int
-            and index["vector_m"] == 16 and type(index["vector_ef_construction"]) is int
-            and index["vector_ef_construction"] == construction["ef_construction"]
-            and type(index["vector_ef_search"]) is int and index["vector_ef_search"] == 64
-            and index["text_field"] == "content" and index["text_index_name"] == "content"
-            and index["document_type"] == "treedb_document_service_v1"
-            and index["typed_input"] is True
-            and native.same_json(index["capabilities"], expected_capabilities)
-            and type(index["generation"]) is int and generations == {index["generation"]}
-            and native.same_json(quantized, [{
-                "name": native.QUANTIZED_PROFILE_NAME, "codec": "scalar_u8", "version": 1,
-            }])
-            and native.same_json(scalar, [
-                {"field": "meta.fpath", "index_name": "meta_fpath", "value_type": "string"},
-                {"field": "meta.user_id", "index_name": "meta_user_id", "value_type": "string"},
-            ])
-        )
-    except (KeyError, TypeError, ValueError):
-        return False
-
-
-def sq8_results_match_dataset(sq8, vectors, queries, truth):
-    """Recheck retained IDs, quality curves and FP32 scores without copying the corpus."""
-    try:
-        observed = {}
-        for record in sq8["observed_execution"]["requests"]:
-            query = record["query"]
-            expected_ids = truth[query]
-            ids = [result["id"] for result in record["results"]]
-            recall = len(set(ids) & set(expected_ids)) / len(expected_ids)
-            ndcg = native.binary_ndcg(ids, expected_ids)
-            if (not native.math.isclose(record["recall"], recall, rel_tol=0.0, abs_tol=1e-12)
-                    or not native.math.isclose(record["ndcg_at_10"], ndcg,
-                                               rel_tol=0.0, abs_tol=1e-12)):
-                return False
-            observed[(record["requested_ef_search"], query)] = (recall, ndcg)
-            query_vector = np.asarray(queries[query], dtype=np.float64)
-            query_norm = np.linalg.norm(query_vector)
-            if not native.math.isfinite(query_norm) or query_norm <= 0:
-                return False
-            for result in record["results"]:
-                row = int(result["id"].removeprefix("row-"))
-                vector = np.asarray(vectors[row], dtype=np.float64)
-                vector_norm = np.linalg.norm(vector)
-                if not native.math.isfinite(vector_norm) or vector_norm <= 0:
-                    return False
-                score = np.dot(vector, query_vector) / (vector_norm * query_norm)
-                if not native.math.isfinite(score) or abs(score - result["score"]) > 2e-5:
-                    return False
-        for split in ("calibration", "revalidation"):
-            quality_split = sq8["quality"][split]
-            for coordinate in quality_split["curve"]:
-                control = coordinate["control"]
-                expected = [observed[(control, query)] for query in quality_split["queries"]]
-                if (not native.same_json(coordinate["per_query"], [row[0] for row in expected])
-                        or not native.same_json(coordinate["per_query_ndcg_at_10"],
-                                                [row[1] for row in expected])):
-                    return False
-        return True
-    except (KeyError, TypeError, ValueError, IndexError, ZeroDivisionError):
-        return False
-
-
 def _sq8_artifact_reasons(sq8, fp32_treedb, fp32_qdrant):
-    reasons = []
-    if (sq8.get("schema") != native.QUANTIZED_RSS_ARTIFACT_SCHEMA
-            or sq8.get("backend") != "treedb" or sq8.get("state") != "calibrated"
-            or sq8.get("reasons") != []):
-        reasons.append("TreeDB SQ8 artifact is not calibrated")
-    quality = sq8.get("quality", {})
-    if (not native.quantized_quality_valid(quality)
-            or quality.get("control_name") != "ef_search" or quality.get("exact_mode") is not False):
-        reasons.append("TreeDB SQ8 fixed-set quality missed the target")
-    rss = sq8.get("rss", {})
-    if not _process_peak_rss_valid(rss):
-        reasons.append("TreeDB SQ8 server VmHWM is unavailable")
-    if (not native.rss_comparison_contract_valid(sq8.get("comparison_contract"))
-            or not native.same_json(sq8.get("comparison_contract"), fp32_treedb.get("comparison_contract")) \
-            or not native.same_json(sq8.get("comparison_contract"), fp32_qdrant.get("comparison_contract"))):
-        reasons.append("TreeDB SQ8 workload/RSS contract differs from the FP32 arms")
-    if not native.same_json(sq8.get("representation_arm"), native.quantized_representation_arm()):
-        reasons.append("TreeDB SQ8 representation declaration differs from minima_sq8")
-    provenance = sq8.get("provenance", {})
-    fp32_provenance = fp32_treedb.get("provenance", {})
-    common_provenance = (
-        "harness_commit", "harness_source_sha256", "harness_trees", "product_commit", "product_trees",
-        "service_sha256", "dataset_manifest_sha256", "dataset_files_sha256", "serving_sha256",
+    fp32_decisions = ((fp32_treedb.get("readiness") or {}).get("column_graph_build") or {}).get(
+        "construction_decisions",
     )
-    if any(not provenance.get(key)
-           or not native.same_json(provenance.get(key), fp32_provenance.get(key))
-           for key in common_provenance):
-        reasons.append("TreeDB SQ8 provenance differs from the FP32 TreeDB arm")
-    construction = sq8.get("construction_calibration_contract", {})
-    construction_ef = construction.get("ef_construction")
-    if (type(construction_ef) is not int or construction_ef not in (32, 64, 96, 128)
-            or not native.same_json(
-                construction, native.construction_calibration_contract(construction_ef))
-            or not native.same_json(construction, fp32_treedb.get("construction_calibration_contract"))
-            ):
-        reasons.append("TreeDB SQ8 construction contract differs from the FP32 TreeDB arm")
-    execution = sq8.get("observed_execution", {})
-    requests = execution.get("requests", [])
-    if (execution.get("schema") != "treedb_cohere_sq8_execution/v1"
-            or type(execution.get("native_command_version")) is not int
-            or execution.get("native_command_version") != 3
-            or not requests or any(not _sq8_request_valid(row) for row in requests)
-            or not _sq8_requests_share_initial_owner(requests)):
-        reasons.append("TreeDB SQ8 artifact lacks complete per-call native-v3 R=E proof")
-    else:
-        try:
-            quality = sq8["quality"]
-            expected = {}
-            for split in ("calibration", "revalidation"):
-                queries = quality[split]["queries"]
-                for coordinate in quality[split]["curve"]:
-                    for query, recall, ndcg in zip(
-                            queries, coordinate["per_query"], coordinate["per_query_ndcg_at_10"]):
-                        expected[(coordinate["control"], query)] = (recall, ndcg)
-            observed = {(row["requested_ef_search"], row["query"]):
-                        (row["recall"], row["ndcg_at_10"]) for row in requests}
-            expected_order = [
-                (coordinate["control"], query)
-                for coordinate in quality["calibration"]["curve"]
-                for query in quality["calibration"]["queries"] + quality["revalidation"]["queries"]
-            ]
-            matches = ([row["request_sequence"] for row in requests] == list(range(1, len(requests) + 1))
-                       and [(row["requested_ef_search"], row["query"]) for row in requests] == expected_order
-                       and len(observed) == len(requests) and set(observed) == set(expected)
-                       and all(all(native.math.isclose(left, right, rel_tol=0.0, abs_tol=1e-12)
-                                   for left, right in zip(observed[key], value))
-                               for key, value in expected.items()))
-        except (KeyError, TypeError, ValueError):
-            matches = False
-        if not matches:
-            reasons.append("TreeDB SQ8 per-call evidence differs from the fixed-grid quality curves")
-    readiness = sq8.get("readiness", {})
-    effective_index = readiness.get("effective_index", {})
-    if (readiness.get("graph_action") != "build"
-            or type(readiness.get("successful_ann_queries")) is not int
-            or readiness.get("successful_ann_queries") != len(requests)
-            or not _column_graph_build_valid(readiness.get("column_graph_build"))
-            or not _sq8_effective_index_valid(effective_index, construction, requests)):
-        reasons.append("TreeDB SQ8 effective collection metadata does not bind the request owner")
-    if rss.get("process_identity") in {
-        fp32_treedb.get("rss", {}).get("process_identity"), fp32_qdrant.get("rss", {}).get("process_identity"),
+    reasons = native.sq8_rss_artifact_reasons(sq8, {
+        "comparison_contract": fp32_treedb.get("comparison_contract"),
+        "provenance": fp32_treedb.get("provenance"),
+        "construction_calibration_contract": fp32_treedb.get(
+            "construction_calibration_contract"),
+        "construction_decisions": fp32_decisions is not None,
+    })
+    if not native.same_json(
+            sq8.get("comparison_contract"), fp32_qdrant.get("comparison_contract")):
+        reasons.append("TreeDB SQ8 workload/RSS contract differs from Qdrant")
+    rss_identity = sq8.get("rss", {}).get("process_identity")
+    if rss_identity in {
+        fp32_treedb.get("rss", {}).get("process_identity"),
+        fp32_qdrant.get("rss", {}).get("process_identity"),
     }:
         reasons.append("TreeDB SQ8 process identity is not a fresh resource arm")
     return reasons
@@ -484,6 +316,13 @@ def validate_imports(source):
             raise ValueError("imported RSS dependency is outside the frozen source tree")
 
 
+def validate_storage_containment(run_dir, storage_path):
+    run_dir, storage_path = Path(run_dir).resolve(), Path(storage_path).resolve()
+    if storage_path == run_dir or not storage_path.is_relative_to(run_dir):
+        raise ValueError("Qdrant storage must be a strict descendant of the owned run directory")
+    return run_dir, storage_path
+
+
 def prepare(args):
     source = Path(__file__).resolve().parents[2]
     validate_imports(source)
@@ -498,7 +337,8 @@ def prepare(args):
     parsed = urllib.parse.urlparse(args.url)
     if parsed.scheme != "http" or parsed.hostname != "127.0.0.1" or parsed.port is None:
         raise ValueError("Qdrant URL must name an explicit 127.0.0.1 HTTP port")
-    if args.storage_path.exists() or args.run_dir.exists():
+    run_dir, storage_path = validate_storage_containment(args.run_dir, args.storage_path)
+    if storage_path.exists() or run_dir.exists():
         raise ValueError("Qdrant storage and run directories must not exist before the owned launch")
     if importlib.metadata.version("qdrant-client") != existing.CLIENT_VERSION:
         raise RuntimeError(f"qdrant-client must be exactly {existing.CLIENT_VERSION}")
@@ -510,17 +350,23 @@ def prepare(args):
         "benchmarks/vector_db_compare", "clients/python/treedb_client",
     )}
     contract = comparison_contract(native.digest(dataset / "manifest.json"), files, affinity)
+    construction = tree.get("construction_calibration_contract", {})
+    construction_ef = construction.get("ef_construction")
     if (tree.get("schema") != SCHEMA or tree.get("backend") != "treedb" or tree.get("state") != "calibrated"
             or tree.get("reasons") != []
             or not fp32_quality_valid(tree.get("quality"), "ef_search")
             or not native.same_json(tree.get("comparison_contract"), contract)
             or not native.rss_comparison_contract_valid(tree.get("comparison_contract"))
             or not _process_peak_rss_valid(tree.get("rss", {}))
+            or not _boundary_storage_valid(tree.get("storage"))
+            or type(construction_ef) is not int or construction_ef not in (32, 64, 96, 128)
+            or not native.same_json(
+                construction, native.construction_calibration_contract(construction_ef))
             or tree.get("provenance", {}).get("harness_commit") != harness
             or not native.same_json(tree.get("provenance", {}).get("harness_trees"), harness_trees)):
         raise RuntimeError("TreeDB RSS artifact quality, contract, or harness provenance is not current")
     plan = {
-        "schema": "treedb_cohere_qdrant_rss_plan/v3", "harness_commit": harness,
+        "schema": "treedb_cohere_qdrant_rss_plan/v4_guarded", "harness_commit": harness,
         "harness_source_sha256": native.digest(Path(__file__)),
         "harness_trees": harness_trees,
         "dataset": str(dataset), "dataset_manifest_sha256": native.digest(dataset / "manifest.json"),
@@ -529,12 +375,16 @@ def prepare(args):
         "comparison_contract": contract, "qdrant_bin": str(binary),
         "qdrant_bin_sha256": native.digest(binary), "qdrant_server_version": existing.SERVER_VERSION,
         "qdrant_client_version": existing.CLIENT_VERSION,
-        "storage_path": str(args.storage_path.resolve()), "url": args.url, "collection": args.collection,
-        "run_dir": str(args.run_dir.resolve()), "cpu_affinity": affinity,
+        "storage_path": str(storage_path), "url": args.url, "collection": args.collection,
+        "run_dir": str(run_dir), "cpu_affinity": affinity,
         "batch_size": 256, "rows": 500000, "queries": query_count, "dimensions": 768, "top_k": 10,
         "controls": CONTROLS, "operation_timeout_s": args.operation_timeout,
         "startup_timeout_s": args.startup_timeout,
         "optimizer_timeout_s": args.optimizer_timeout, "poll_interval_s": args.poll_interval,
+        "resource_guard": dict(RESOURCE_GUARD),
+        "python": sys.version, "numpy": np.__version__, "platform": native.platform.platform(),
+        "blas_threads": {key: os.environ.get(key, "")
+                         for key in ("OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS")},
         "production_hnsw": existing.PRODUCTION_HNSW_CONFIG,
         "production_optimizers": existing.PRODUCTION_OPTIMIZERS_CONFIG,
         "initial_upload_hnsw": existing.INITIAL_UPLOAD_HNSW_CONFIG,
@@ -552,11 +402,14 @@ def prepare(args):
             raise RuntimeError("TreeDB SQ8 artifact is not a current complete representation arm")
         vectors = np.memmap(dataset / "documents.f32", mode="r", dtype="<f4", shape=(500000, 768))
         queries = np.memmap(dataset / "queries.f32", mode="r", dtype="<f4", shape=(query_count, 768))
-        truth = json.loads((dataset / "truth.json").read_text())["500000"]
-        if not sq8_results_match_dataset(sq8, vectors, queries, truth):
+        truth, _ = native.strict_json_object(
+            dataset / "truth.json", "frozen truth", native.EVIDENCE_JSON_MAX_BYTES,
+        )
+        truth = truth["500000"]
+        if not native.sq8_results_match_dataset(sq8, vectors, queries, truth):
             raise RuntimeError("TreeDB SQ8 results differ from frozen IDs, recall, or canonical FP32 scores")
         plan.update(
-            schema="treedb_cohere_qdrant_rss_plan/v4_three_arm",
+            schema="treedb_cohere_qdrant_rss_plan/v5_three_arm_guarded",
             treedb_sq8_artifact=str(sq8_path.resolve()),
             treedb_sq8_artifact_sha256=native.bytes_digest(sq8_raw),
         )
@@ -576,7 +429,11 @@ class Run:
         self.plan, self.client_factory, self.models = plan, client_factory, models
         self.api_key = api_key
         self.client = self.process = self.process_identity = self.process_command_identity = None
-        self.server_pid = None
+        self.server_pid = self.server_pgid = None
+        self.harness_identity = existing.linux_process_identity(os.getpid())
+        self.harness_pgid = os.getpgid(os.getpid())
+        if not self.harness_identity:
+            raise RuntimeError("harness Linux process identity is unavailable")
         self.server_log = None
         self.output = Path(plan["run_dir"])
         self.output.mkdir(parents=True, exist_ok=False)
@@ -585,8 +442,26 @@ class Run:
         self.optimizer_timeout = plan["optimizer_timeout_s"]
         self.poll_interval = plan["poll_interval_s"]
         self.storage_path = Path(plan["storage_path"])
+        if self.storage_path == self.output or not self.storage_path.is_relative_to(self.output):
+            raise RuntimeError("Qdrant storage escaped the owned run directory")
         self.resource_server_name = "Qdrant"
         self.server_log_path = self.output / "qdrant.log"
+        self.cancel = threading.Event()
+        self.resource_lock = threading.Lock()
+        self.resource_failure = None
+        self.started = None
+        self.guard_summary = {
+            "schema": "treedb_cohere_qdrant_resource_guard/v1",
+            "scope": "harness_start_through_owned_process_cleanup",
+            "status": "running", "sample_count": 0,
+            "max_combined_current_rss_bytes": 0, "max_owned_bytes": 0,
+            "minimum_free_bytes_observed": None,
+            "first_sample": None, "last_sample": None, "cleanup_sample": None,
+            "failure": None,
+            "limits": dict(plan["resource_guard"]),
+        }
+        self.guard_termination_sent = False
+        self.cleaning_up = False
         self.config = {"scalar_fields": ["meta.user_id", "meta.fpath"]}
         self.readiness_evidence = []
         data = Path(plan["dataset"])
@@ -594,7 +469,104 @@ class Run:
         self.queries = np.memmap(
             data / "queries.f32", mode="r", dtype="<f4", shape=(plan["queries"], 768),
         )
-        self.truth = json.loads((data / "truth.json").read_text())["500000"]
+        truth, _ = native.strict_json_object(
+            data / "truth.json", "frozen truth", native.EVIDENCE_JSON_MAX_BYTES,
+        )
+        self.truth = truth["500000"]
+
+    @staticmethod
+    def current_rss(pid, expected_identity):
+        if type(pid) is not int or pid <= 0 or not expected_identity:
+            raise RuntimeError("resource sample lacks an owned process identity")
+        before = existing.linux_process_identity(pid)
+        if before != expected_identity:
+            raise RuntimeError("resource sample process identity changed before /proc read")
+        try:
+            status = Path(f"/proc/{pid}/status").read_text(encoding="utf-8")
+        except OSError as exc:
+            raise RuntimeError("resource sample /proc status is unavailable") from exc
+        after = existing.linux_process_identity(pid)
+        if after != before:
+            raise RuntimeError("resource sample process identity changed across /proc read")
+        for line in status.splitlines():
+            if line.startswith("VmRSS:"):
+                _, value, unit = line.split()
+                if unit == "kB" and int(value) >= 0:
+                    return {"pid": pid, "process_identity": before, "current_rss_bytes": int(value) * 1024}
+        raise RuntimeError("resource sample current RSS is unavailable")
+
+    def check_resources(self):
+        if self.started is None:
+            return
+        with self.resource_lock:
+            harness = self.current_rss(os.getpid(), self.harness_identity)
+            server = None
+            if self.process is not None:
+                if self.process.poll() is not None:
+                    if not self.cleaning_up:
+                        raise RuntimeError(
+                            f"owned Qdrant exited during resource monitoring with {self.process.returncode}",
+                        )
+                else:
+                    try:
+                        server = self.current_rss(self.process.pid, self.process_identity)
+                    except RuntimeError:
+                        # TERM may land between the identity/read/identity checks.
+                        # That is expected only while this owner is synchronously
+                        # cleaning up; poll must prove the exact child has exited.
+                        if not self.cleaning_up or self.process.poll() is None:
+                            raise
+            owned_bytes = existing.disk_bytes(self.output)
+            free_bytes = shutil.disk_usage(self.output).free
+            combined_rss = harness["current_rss_bytes"] + (
+                server["current_rss_bytes"] if server is not None else 0)
+            elapsed = time.monotonic() - self.started
+            sample = {
+                "elapsed_s": elapsed, "free_bytes": free_bytes, "owned_bytes": owned_bytes,
+                "combined_current_rss_bytes": combined_rss,
+                "harness": harness, "server": server,
+            }
+            summary = self.guard_summary
+            summary["sample_count"] += 1
+            summary["max_combined_current_rss_bytes"] = max(
+                summary["max_combined_current_rss_bytes"], combined_rss)
+            summary["max_owned_bytes"] = max(summary["max_owned_bytes"], owned_bytes)
+            observed_free = summary["minimum_free_bytes_observed"]
+            summary["minimum_free_bytes_observed"] = (
+                free_bytes if observed_free is None else min(observed_free, free_bytes)
+            )
+            summary["first_sample"] = summary["first_sample"] or sample
+            if self.cleaning_up:
+                summary["cleanup_sample"] = sample
+            else:
+                summary["last_sample"] = sample
+            guard = self.plan["resource_guard"]
+            if (free_bytes < guard["minimum_free_bytes"]
+                    or owned_bytes > guard["maximum_owned_bytes"]
+                    or combined_rss > guard["maximum_combined_rss_bytes"]
+                    or elapsed > guard["wall_limit_s"]):
+                raise RuntimeError("frozen Qdrant disk/RAM/wall budget exceeded")
+
+    def guard_resources(self):
+        while not self.cancel.wait(self.plan["resource_guard"]["poll_interval_s"]):
+            if self.resource_failure is None:
+                try:
+                    self.check_resources()
+                except BaseException as exc:
+                    self.resource_failure = f"resource guard: {type(exc).__name__}: {exc}"
+                    self.guard_summary["failure"] = self.resource_failure
+            if self.resource_failure:
+                process = self.process
+                if (process is not None and process.poll() is None and self.process_identity
+                        and existing.linux_process_identity(process.pid) == self.process_identity
+                        and os.getpgid(process.pid) == self.harness_pgid):
+                    process.terminate()
+                    self.guard_termination_sent = True
+                return
+
+    def raise_resource_failure(self):
+        if self.resource_failure:
+            raise RuntimeError(self.resource_failure)
 
     def wait_ready(self, rows, phase, production=True):
         deadline = time.monotonic() + self.optimizer_timeout
@@ -625,20 +597,28 @@ class Run:
             env["QDRANT__SERVICE__API_KEY"] = self.api_key
         self.process = subprocess.Popen([self.plan["qdrant_bin"]], stdin=subprocess.DEVNULL,
                                         stdout=self.server_log, stderr=subprocess.STDOUT,
-                                        cwd=self.output, env=env, start_new_session=True)
+                                        cwd=self.output, env=env)
         self.server_pid = self.process.pid
+        self.process_identity = existing.linux_process_identity(self.server_pid)
+        if not self.process_identity:
+            raise RuntimeError("owned Qdrant process identity is unavailable immediately after launch")
+        self.server_pgid = os.getpgid(self.server_pid)
+        if self.server_pgid != self.harness_pgid:
+            raise RuntimeError("owned Qdrant did not remain in the harness process group")
+        self.process_command_identity = existing.server_process_identity(self.server_pid)
         deadline, last = time.monotonic() + self.plan["startup_timeout_s"], None
         while time.monotonic() < deadline:
             if self.process.poll() is not None:
                 raise RuntimeError(f"owned Qdrant exited during startup with {self.process.returncode}")
             try:
-                identity = existing.linux_process_identity(self.server_pid)
                 info = existing.server_info(self.plan["url"], self.api_key)
-                if (identity and info.get("version") == self.plan["qdrant_server_version"]
+                if (existing.linux_process_identity(self.server_pid) == self.process_identity
+                        and os.getpgid(self.server_pid) == self.harness_pgid
+                        and info.get("version") == self.plan["qdrant_server_version"]
                         and Path(f"/proc/{self.server_pid}/exe").resolve() == Path(self.plan["qdrant_bin"])
                         and existing.server_process_owns_endpoint(self.server_pid, self.plan["url"])):
-                    self.process_identity = identity
-                    self.process_command_identity = existing.server_process_identity(self.server_pid)
+                    if existing.server_process_identity(self.server_pid) != self.process_command_identity:
+                        raise RuntimeError("owned Qdrant command identity changed during startup")
                     self.client = self.client_factory()
                     return
             except Exception as exc:
@@ -646,31 +626,74 @@ class Run:
             time.sleep(self.plan["poll_interval_s"])
         raise TimeoutError(f"owned Qdrant startup exceeded timeout: {last}")
 
-    def stop_server(self):
-        if self.process is None:
-            return
-        if self.process.poll() is not None:
-            raise RuntimeError(f"owned Qdrant exited before shutdown with {self.process.returncode}")
-        if (self.process_identity is not None
-                and existing.linux_process_identity(self.server_pid) != self.process_identity):
-            raise RuntimeError("owned Qdrant identity changed; refusing to signal")
-        self.process.terminate()
+    def cleanup_owned(self):
+        cleanup = {
+            "schema": "treedb_owned_qdrant_cleanup/v1", "status": "failed",
+            "process_identity": self.process_identity or "",
+            "harness_pgid": self.harness_pgid, "server_pgid": self.server_pgid,
+            "term_sent": False, "kill_sent": False, "exit_code": None,
+            "client_closed": False, "log_closed": False, "failure": None,
+        }
+        failures = []
         try:
-            self.process.wait(timeout=30)
-        except subprocess.TimeoutExpired:
-            self.process.kill()
-            self.process.wait(timeout=10)
-            raise RuntimeError("owned Qdrant required forced shutdown")
-        if self.server_log:
-            self.server_log.close()
-        if self.process.returncode != 0:
-            raise RuntimeError(f"owned Qdrant shutdown exited with {self.process.returncode}")
+            if self.client is not None:
+                self.client.close()
+            cleanup["client_closed"] = True
+        except BaseException as exc:
+            failures.append(f"client close: {type(exc).__name__}: {exc}")
+        try:
+            if self.process is None:
+                failures.append("owned Qdrant was never launched")
+            elif self.process.poll() is not None:
+                cleanup["exit_code"] = self.process.returncode
+                failures.append(f"owned Qdrant exited before cleanup with {self.process.returncode}")
+            elif (not self.process_identity
+                    or existing.linux_process_identity(self.server_pid) != self.process_identity
+                    or os.getpgid(self.server_pid) != self.harness_pgid):
+                failures.append("owned Qdrant identity or process group changed; refusing to signal")
+            else:
+                self.process.terminate()
+                cleanup["term_sent"] = True
+                try:
+                    self.process.wait(timeout=30)
+                except subprocess.TimeoutExpired:
+                    if (existing.linux_process_identity(self.server_pid) != self.process_identity
+                            or os.getpgid(self.server_pid) != self.harness_pgid):
+                        failures.append("owned Qdrant identity changed; refusing forced shutdown")
+                    else:
+                        self.process.kill()
+                        cleanup["kill_sent"] = True
+                        self.process.wait(timeout=10)
+                        failures.append("owned Qdrant required forced shutdown")
+                cleanup["exit_code"] = self.process.returncode
+                if self.process.returncode != 0:
+                    failures.append(f"owned Qdrant shutdown exited with {self.process.returncode}")
+        except BaseException as exc:
+            failures.append(f"server cleanup: {type(exc).__name__}: {exc}")
+        finally:
+            try:
+                if self.server_log is not None:
+                    self.server_log.close()
+                cleanup["log_closed"] = True
+            except BaseException as exc:
+                failures.append(f"server log close: {type(exc).__name__}: {exc}")
+        cleanup["failure"] = "; ".join(failures) if failures else None
+        if not failures:
+            cleanup["status"] = "clean"
+        return cleanup
+
+    def stop_server(self):
+        """Compatibility entry point retained for focused ownership tests."""
+        cleanup = self.cleanup_owned()
+        if cleanup["status"] != "clean":
+            raise RuntimeError(cleanup["failure"])
 
     def validate_fresh(self):
         identity = existing.linux_process_identity(self.server_pid)
         collections = getattr(self.client.get_collections(), "collections", None)
         collection_dir = self.storage_path / "collections"
-        if (identity != self.process_identity or sorted(os.sched_getaffinity(self.server_pid)) != self.plan["cpu_affinity"]
+        if (identity != self.process_identity or os.getpgid(self.server_pid) != self.harness_pgid
+                or sorted(os.sched_getaffinity(self.server_pid)) != self.plan["cpu_affinity"]
                 or collections is None or collections or (collection_dir.exists() and any(collection_dir.iterdir()))):
             raise RuntimeError("Qdrant process/backend is not fresh or changed before load")
         peak = native.process_peak_at_boundary(self.server_pid, identity, self.plan["cpu_affinity"])
@@ -735,9 +758,14 @@ class Run:
         return ids
 
     def execute(self):
-        artifact = None
-        tree = None
+        artifact, tree, monitor = None, None, None
+        storage = {"availability": "unavailable", "owned_bytes_at_rss_boundary": None,
+                   "scope": "backend_owned_directory_at_initial_ready_quality_boundary"}
         try:
+            self.started = time.monotonic()
+            self.check_resources()
+            monitor = threading.Thread(target=self.guard_resources, daemon=True)
+            monitor.start()
             self.start_server()
             baseline = self.validate_fresh()
             tree, tree_raw = native.strict_json_object(
@@ -749,16 +777,33 @@ class Run:
                 raise RuntimeError("TreeDB RSS artifact does not match the Qdrant plan")
             self.create()
             readiness = self.load()
+            self.raise_resource_failure()
+            quality_requests = []
+
+            def quality_search(control, query):
+                ids = self.search(control, query)
+                quality_requests.append({
+                    "request_sequence": len(quality_requests) + 1,
+                    "control": control, "query": query, "ids": ids,
+                })
+                return ids
+
             quality = native.calibrate_ann_control(
-                lambda control, query: self.search(control, query), self.truth, self.plan["controls"],
+                quality_search, self.truth, self.plan["controls"],
                 native.RSS_CALIBRATION_QUERIES, native.RSS_REVALIDATION_QUERIES, native.RSS_RECALL_TARGET,
             )
             rss = native.process_peak_at_boundary(
                 self.server_pid, self.process_identity, self.plan["cpu_affinity"],
             )
+            storage = {
+                "availability": "measured",
+                "owned_bytes_at_rss_boundary": existing.disk_bytes(self.storage_path),
+                "scope": "backend_owned_directory_at_initial_ready_quality_boundary",
+            }
             # Keep the exact correctness reference outside the sampled ANN RSS boundary.
             exact_ids = self.search(self.plan["controls"][-1], 0, exact=True)
-            if set(exact_ids) != set(self.truth[0]):
+            self.raise_resource_failure()
+            if exact_ids != self.truth[0]:
                 raise RuntimeError("Qdrant exact correctness reference differs from exhaustive truth")
             reasons = []
             if not quality["revalidation"]["passed"]:
@@ -775,7 +820,12 @@ class Run:
                 "quality": {**quality, "control_name": "hnsw_ef", "exact_mode": False,
                             "exact_correctness_reference_recall_at_10": 1.0,
                             "exact_correctness_reference_timing": "after_rss_boundary"},
-                "rss": rss, "reasons": reasons, "readiness": readiness,
+                "observed_quality": {
+                    "schema": "cohere_500k_768d_quality_observations/v1",
+                    "control_name": "hnsw_ef", "requests": quality_requests,
+                    "exact_reference": {"query": 0, "ids": exact_ids},
+                },
+                "rss": rss, "storage": storage, "reasons": reasons, "readiness": readiness,
                 "fresh_start_peak_rss": baseline,
                 "durability_visibility": "Qdrant 1.19.0 upsert wait=true",
                 "physical_id_mapping": "uuid5(logical row-*); payload id preserves the matched logical ID",
@@ -788,9 +838,12 @@ class Run:
                     "dataset_files_sha256", "treedb_artifact_sha256",
                 )},
             }
+            if "treedb_sq8_artifact_sha256" in self.plan:
+                artifact["provenance"]["treedb_sq8_artifact_sha256"] = (
+                    self.plan["treedb_sq8_artifact_sha256"]
+                )
             artifact["provenance"].update(process_identity=self.process_identity,
                                           process_command_identity=self.process_command_identity)
-            comparison = compare_artifacts(tree, artifact)
         except BaseException as exc:
             reason = f"{type(exc).__name__}: {exc}"
             artifact = artifact or {"schema": SCHEMA, "backend": "qdrant",
@@ -798,24 +851,50 @@ class Run:
                                     "quality": {"revalidation": {"passed": False}},
                                     "rss": {"availability": "unavailable", "bytes": None,
                                             "process_identity": self.process_identity or ""},
+                                    "storage": storage,
                                     "readiness": self.readiness_evidence[-1] if self.readiness_evidence else {}}
             artifact["state"] = "uncalibrated"
             artifact.setdefault("reasons", []).append(reason)
-            comparison = {"state": "uncalibrated", "reasons": artifact["reasons"]}
         finally:
+            if self.resource_failure is None:
+                try:
+                    self.check_resources()
+                except BaseException as exc:
+                    self.resource_failure = f"final resource guard: {type(exc).__name__}: {exc}"
+                    self.guard_summary["failure"] = self.resource_failure
+            self.cleaning_up = True
+            cleanup = self.cleanup_owned()
             try:
-                if self.client:
-                    self.client.close()
+                self.check_resources()
             except BaseException as exc:
+                if self.resource_failure is None:
+                    self.resource_failure = f"cleanup resource guard: {type(exc).__name__}: {exc}"
+                    self.guard_summary["failure"] = self.resource_failure
+            self.cancel.set()
+            if monitor is not None:
+                monitor.join(timeout=5)
+                if monitor.is_alive() and self.resource_failure is None:
+                    self.resource_failure = "resource guard did not stop"
+                    self.guard_summary["failure"] = self.resource_failure
+            self.guard_summary["status"] = (
+                "passed" if self.resource_failure is None and not self.guard_termination_sent
+                and monitor is not None and not monitor.is_alive() else "failed"
+            )
+            artifact["resource_guard"] = self.guard_summary
+            artifact["cleanup"] = cleanup
+            lifecycle_failures = []
+            if not _qdrant_resource_guard_valid(self.guard_summary):
+                lifecycle_failures.append(self.resource_failure or "resource guard did not pass")
+            if not _qdrant_cleanup_valid(cleanup):
+                lifecycle_failures.append(cleanup["failure"] or "owned cleanup did not complete cleanly")
+            if not _boundary_storage_valid(artifact.get("storage")):
+                lifecycle_failures.append("initial-ready storage boundary is unavailable")
+            artifact.setdefault("reasons", []).extend(
+                reason for reason in lifecycle_failures if reason not in artifact.get("reasons", []))
+            if artifact["reasons"]:
                 artifact["state"] = "uncalibrated"
-                artifact.setdefault("reasons", []).append(f"client close: {type(exc).__name__}: {exc}")
-                comparison = {"state": "uncalibrated", "reasons": artifact["reasons"]}
-            try:
-                self.stop_server()
-            except BaseException as exc:
-                artifact["state"] = "uncalibrated"
-                artifact.setdefault("reasons", []).append(f"server stop: {type(exc).__name__}: {exc}")
-                comparison = {"state": "uncalibrated", "reasons": artifact["reasons"]}
+        comparison = (compare_artifacts(tree, artifact) if tree is not None else
+                      {"state": "uncalibrated", "reasons": artifact["reasons"]})
         (self.output / "qdrant-rss.json").write_bytes(native.canonical(artifact))
         (self.output / "comparison.json").write_bytes(native.canonical(comparison))
         three_arm = None

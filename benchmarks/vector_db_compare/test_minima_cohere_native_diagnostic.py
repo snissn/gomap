@@ -195,6 +195,156 @@ def paired_endpoint(counter, records):
 
 
 class NativeCohereDiagnosticTests(unittest.TestCase):
+    def test_full_sq8_requires_one_pinned_prior_rss_decision(self):
+        sha = "a" * 64
+        diagnostic.validate_quantized_options("quantized_rerank", "minima_sq8", False, 500000,
+                                              Path("rss.json"), sha)
+        for path, digest in ((None, None), (Path("rss.json"), None), (None, sha)):
+            with self.subTest(path=path, digest=digest), \
+                    self.assertRaisesRegex(ValueError, "requires one pinned"):
+                diagnostic.validate_quantized_options(
+                    "quantized_rerank", "minima_sq8", False, 500000, path, digest,
+                )
+        for rows, rss_only in ((512, False), (500000, True)):
+            for path, digest in ((Path("rss.json"), sha), (Path("rss.json"), None), (None, sha)):
+                with self.subTest(rows=rows, rss_only=rss_only, path=path, digest=digest), \
+                        self.assertRaisesRegex(ValueError, "requires one pinned"):
+                    diagnostic.validate_quantized_options(
+                        "quantized_rerank", "minima_sq8", rss_only, rows, path, digest,
+                    )
+        with self.assertRaisesRegex(ValueError, "lowercase hexadecimal"):
+            diagnostic.validate_quantized_options(
+                "quantized_rerank", "minima_sq8", False, 500000, Path("rss.json"), "A" * 64,
+            )
+
+    def test_locked_sq8_rss_artifact_binds_provenance_requests_and_coordinate(self):
+        quality_truth = [[f"row-{rank:06d}" for rank in range(10)] for _ in range(200)]
+        quality = diagnostic._coordinate_rows(diagnostic.calibrate_ann_control(
+            lambda _control, query: quality_truth[query], quality_truth, [32],
+            diagnostic.RSS_CALIBRATION_QUERIES, diagnostic.RSS_REVALIDATION_QUERIES,
+            diagnostic.RSS_RECALL_TARGET,
+        ))
+        quality.update(control_name="ef_search", exact_mode=False)
+        provenance = {
+            "harness_commit": "a" * 40, "harness_source_sha256": "b" * 64,
+            "harness_trees": {"benchmarks": "c" * 40}, "product_commit": "d" * 40,
+            "product_trees": {"TreeDB": "e" * 40}, "service_sha256": "f" * 64,
+            "dataset_manifest_sha256": "1" * 64,
+            "dataset_files_sha256": {
+                "documents": "2" * 64, "queries": "3" * 64, "truth": "4" * 64,
+            },
+            "serving_sha256": "5" * 64,
+        }
+        plan = {
+            **provenance, "rows": 500000, "dimensions": 768, "top_k": 10, "batch_size": 256,
+            "cpu_affinity": [0, 1], "host_memory_bytes": 1 << 30,
+            "treedb_go_runtime": {"GOMAXPROCS": "2", "GOGC": "", "GOMEMLIMIT": ""},
+            "host_resource_identity": {
+                "machine_id": "machine", "boot_id": "boot", "page_size_bytes": 4096,
+                "numa_mems": "0", "cgroup_membership": "0::/", "cgroup_limits": {},
+                "cpu_model": "test CPU", "cpu_features": ["avx2", "sse2"],
+            },
+            "platform": "test", "rss_recall_target": diagnostic.RSS_RECALL_TARGET,
+            "rss_controls": diagnostic.RSS_CONTROLS,
+            "rss_calibration_queries": diagnostic.RSS_CALIBRATION_QUERIES,
+            "rss_revalidation_queries": diagnostic.RSS_REVALIDATION_QUERIES,
+            "ef_construction": 32,
+        }
+        requests = [{
+            "request_sequence": sequence, "phase": "rss_quality", "eligible": 500000,
+            "query": query, "requested_ef_search": 32, "requested_rerank_candidates": 32,
+            "command_version": 3, "outcome": "success",
+        } for sequence, query in enumerate(range(200), 1)]
+        artifact = {
+            "schema": diagnostic.QUANTIZED_RSS_ARTIFACT_SCHEMA, "state": "calibrated",
+            "backend": "treedb", "reasons": [], "quality": quality,
+            "comparison_contract": diagnostic.rss_comparison_contract(plan),
+            "representation_arm": diagnostic.quantized_representation_arm(),
+            "construction_calibration_contract": diagnostic.construction_calibration_contract(32),
+            "provenance": provenance,
+            "rss": {"process_identity": "41:99"},
+            "readiness": {"graph_action": "build", "successful_ann_queries": len(requests),
+                          "effective_index": quantized_index_info().to_dict()},
+            "observed_execution": {"schema": "treedb_cohere_sq8_execution/v1",
+                                   "native_command_version": 3, "requests": requests},
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "rss.json"
+            path.write_bytes(diagnostic.canonical(artifact))
+            sha = diagnostic.digest(path)
+            validator = lambda value, _plan: ([] if diagnostic.same_json(value, artifact)
+                                               else ["mutated intrinsic evidence"])
+            with patch.object(diagnostic, "sq8_rss_artifact_reasons", side_effect=validator), \
+                    patch.object(diagnostic, "sq8_artifact_matches_plan_dataset", return_value=True):
+                selection = diagnostic.locked_sq8_rss_selection(path, sha, plan)
+            self.assertEqual(selection["selected_coordinate"], {
+                "ef_search": 32, "rerank_candidates": 32,
+            })
+            self.assertEqual(selection["source_process_identity"], "41:99")
+            self.assertNotIn("quality_sha256", selection)
+            for mutation in ("hash", "provenance", "request", "coordinate"):
+                with self.subTest(mutation=mutation):
+                    changed = copy.deepcopy(artifact)
+                    expected = sha
+                    if mutation == "hash":
+                        expected = "0" * 64
+                    elif mutation == "provenance":
+                        changed["provenance"]["service_sha256"] = "0" * 64
+                    elif mutation == "request":
+                        changed["observed_execution"]["requests"][0]["requested_rerank_candidates"] = 16
+                    else:
+                        changed["quality"]["selected_coordinate"]["ef_search"] = 64
+                    path = Path(directory) / f"{mutation}.json"
+                    path.write_bytes(diagnostic.canonical(changed))
+                    if mutation != "hash":
+                        expected = diagnostic.digest(path)
+                    with patch.object(diagnostic, "sq8_rss_artifact_reasons", side_effect=validator), \
+                            patch.object(diagnostic, "sq8_artifact_matches_plan_dataset", return_value=True), \
+                            self.assertRaisesRegex(ValueError, "prior TreeDB SQ8 RSS"):
+                        diagnostic.locked_sq8_rss_selection(path, expected, plan)
+
+    def test_locked_control_confirms_both_sets_once_without_retuning(self):
+        truth = [[f"row-{query}-{rank}" for rank in range(10)] for query in range(4)]
+        calls = []
+
+        def search(control, query):
+            calls.append((control, query))
+            return truth[query]
+
+        result = diagnostic.evaluate_locked_quantized_control(
+            search, truth,
+            {"schema": "treedb_cohere_sq8_coordinate_lock/v1",
+             "selected_coordinate": {"ef_search": 64, "rerank_candidates": 64}},
+            [0, 1], [2, 3], .9,
+        )
+        self.assertEqual(calls, [(64, 0), (64, 1), (64, 2), (64, 3)])
+        self.assertTrue(result["passed"])
+        self.assertEqual(result["selection_protocol"],
+                         "prior_sq8_rss_coordinate_revalidated_on_fresh_graph/v1")
+        self.assertEqual(result["fixed_sets"]["queries_0_99"]["per_query_recall"], [1.0, 1.0])
+        failed = diagnostic.evaluate_locked_quantized_control(
+            lambda _control, query: truth[query][:-2] + [f"miss-{query}-0", f"miss-{query}-1"],
+            truth,
+            {"selected_coordinate": {"ef_search": 64, "rerank_candidates": 64}},
+            [0, 1], [2, 3], .9,
+        )
+        self.assertFalse(failed["passed"])
+
+    def test_coordinate_lock_consumption_requires_a_distinct_fresh_owner(self):
+        lock = {
+            "artifact_sha256": "a" * 64, "source_process_identity": "7:11",
+            "selected_coordinate": {"ef_search": 64, "rerank_candidates": 64},
+        }
+        event = diagnostic.coordinate_lock_consumption_event(lock, "8:12")
+        self.assertEqual(event, {
+            "source_artifact_sha256": "a" * 64,
+            "source_process_identity": "7:11", "fresh_process_identity": "8:12",
+            "coordinate": {"ef_search": 64, "rerank_candidates": 64},
+        })
+        for identity in (None, "", "7:11"):
+            with self.subTest(identity=identity), self.assertRaisesRegex(RuntimeError, "fresh graph"):
+                diagnostic.coordinate_lock_consumption_event(lock, identity)
+
     def test_diagnostic_rejects_superset_exports_before_reading_payloads(self):
         with tempfile.TemporaryDirectory() as directory:
             dataset = Path(directory)
@@ -246,6 +396,9 @@ class NativeCohereDiagnosticTests(unittest.TestCase):
             path.write_text('{"value":NaN}', encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "nonfinite"):
                 diagnostic.strict_json_object(path, "reviewed fixture")
+            path.write_text('{"value":1e999}', encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "nonfinite"):
+                diagnostic.strict_json_object(path, "reviewed fixture")
             path.write_bytes(b"x" * 9)
             with self.assertRaisesRegex(ValueError, "exceeds 8 bytes"):
                 diagnostic.strict_json_object(path, "reviewed fixture", 8)
@@ -286,7 +439,44 @@ class NativeCohereDiagnosticTests(unittest.TestCase):
         self.assertEqual(diagnostic.quantized_representation_arm()["requested_rerank_policy"],
                          "R=E_at_each_predeclared_coordinate")
 
+    def test_sq8_quality_order_uses_scores_recomputed_from_frozen_vectors(self):
+        vectors = np.zeros((2, 768), dtype=np.float32)
+        queries = np.zeros((1, 768), dtype=np.float32)
+        vectors[0, 0] = queries[0, 0] = 1
+        vectors[1, :2] = (1, .004)
+        request = {
+            "query": 0, "requested_ef_search": 32,
+            "results": [
+                {"id": "row-000001", "score": 1.0},
+                {"id": "row-000000", "score": .999999},
+            ],
+            "recall": 1.0, "ndcg_at_10": 1.0,
+        }
+        curve = [{
+            "control": 32, "per_query": [1.0],
+            "per_query_ndcg_at_10": [1.0],
+        }]
+        artifact = {
+            "observed_execution": {"requests": [request]},
+            "quality": {
+                "calibration": {"queries": [0], "curve": copy.deepcopy(curve)},
+                "revalidation": {"queries": [0], "curve": copy.deepcopy(curve)},
+            },
+        }
+        correct = copy.deepcopy(artifact)
+        correct["observed_execution"]["requests"][0]["results"] = [
+            {"id": "row-000000", "score": 1.0},
+            {"id": "row-000001", "score": float(1 / np.sqrt(1 + .004 ** 2))},
+        ]
+        self.assertTrue(diagnostic.sq8_results_match_dataset(
+            correct, vectors, queries, [["row-000000", "row-000001"]],
+        ))
+        self.assertFalse(diagnostic.sq8_results_match_dataset(
+            artifact, vectors, queries, [["row-000000", "row-000001"]],
+        ))
+
     def test_quantized_cli_contract_is_opt_in_and_has_no_fixed_r(self):
+        self.assertEqual(diagnostic.DEFAULT_EF_CONSTRUCTION, 32)
         diagnostic.validate_quantized_options("exact", None, False, 500000)
         diagnostic.validate_quantized_options("quantized_rerank", "minima_sq8", False, 512)
         diagnostic.validate_quantized_options("quantized_rerank", "minima_sq8", True, 500000)
@@ -538,6 +728,16 @@ class NativeCohereDiagnosticTests(unittest.TestCase):
             exact.search("exact", 16, 32, 0)
         self.assertNotIn("query_mode", exact_native.query_by_embedding.call_args.kwargs)
         self.assertNotIn("quantized_rerank_candidates", exact_native.query_by_embedding.call_args.kwargs)
+
+        fp32, _, fp32_native = runner("exact")
+        fp32_ledger = []
+        with patch.object(diagnostic, "asdict", side_effect=lambda value: vars(value)):
+            fp32.search("rss_quality", 16, 32, 0, request_ledger=fp32_ledger)
+        self.assertEqual(fp32_ledger[0]["request_mode"], "exact")
+        self.assertEqual(fp32_ledger[0]["command_version"], 2)
+        self.assertEqual([row["id"] for row in fp32_ledger[0]["results"]],
+                         [f"row-{row:06d}" for row in range(10)])
+        self.assertNotIn("query_mode", fp32_native.query_by_embedding.call_args.kwargs)
 
         # The SQ8-declared collection can issue a native-v2 FP32 control through
         # the same public method without creating a second graph or profile.

@@ -14,7 +14,7 @@ It is not a bare HNSW microbenchmark. The protocol's producer work record is
 retained separately after each search timer.
 
 The declared 500K workload uses 200 existing diagnostic queries, an independent
-float64 cosine top-10 oracle, EF128/256/512/1024/2048, and eligible populations
+float64 cosine top-10 oracle, EF32/64/128/256/512/1024/2048, and eligible populations
 4096/4097/5000/50000/500000. Scalar labels are synthetic, dispersed unique ranks
 with range predicates, **not** a categorical tenant posting-list benchmark.
 First-predicate timings are predicate-cache-cold, not OS-cache-cold. Each curve
@@ -48,7 +48,8 @@ python benchmarks/vector_db_compare/minima_cohere_native_diagnostic.py \
   --freeze /mnt/fast4tb/TASK/plan.json --run-dir /mnt/fast4tb/TASK/run \
   --dataset /mnt/fast4tb/gomap-768-lanes-20260911/scale-data \
   --service-bin /mnt/fast4tb/TASK/treedb-document-service \
-  --product-commit FULL_PRODUCT_COMMIT --serving /mnt/fast4tb/TASK/serving.json
+  --product-commit FULL_PRODUCT_COMMIT --serving /mnt/fast4tb/TASK/serving.json \
+  --ef-construction 32
 ```
 
 Repeat those same arguments/environment using `--run PLAN` instead of
@@ -58,7 +59,8 @@ CPU affinity, GOMAXPROCS and Python/NumPy versions. The run directory must not
 already exist. Set `GOWORK=off GOMAXPROCS=6 PYTHONDONTWRITEBYTECODE=1`, an explicit
 fastmount `TMPDIR`, and client/harness `PYTHONPATH`; use `taskset -c 0-5` on this
 workstation. Set `OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1` to keep independent
-oracle checks single-threaded. Existing benchmark Python with NumPy is sufficient.
+oracle checks single-threaded. Construction EF defaults to and is frozen at 32
+for this candidate workload. Existing benchmark Python with NumPy is sufficient.
 
 Use `--rows 512` for the bounded
 public lifecycle smoke. It uses the real prefix and independently computes a
@@ -81,14 +83,32 @@ The exact default still creates
 no quantized index and sends the existing native-v2 request.
 
 For the 500K diagnostic, query sets 0..99 and 100..199 are both observed and both
-must reach mean recall@10 >= 0.90 at a coordinate. The unfiltered population and
-each filtered population above 4096 select independently; failed lower
-coordinates remain in the artifact. Filtered populations at or below 4096 are
-typed-exact/empty correctness cases; a nonempty unfiltered population remains
-the quantized-rerank route. After selection, fixed curves, overlap and
-reopen measurements reuse the relevant population's frozen coordinate; the
-lifecycle empty probe reuses the all-rows coordinate. There is no
-same-coordinate graph retry or post-selection retuning.
+must reach mean recall@10 >= 0.90 at a coordinate. The all-row coordinate is not
+selected again: the full run requires `--all-rows-sq8-rss-artifact` and
+`--expected-all-rows-sq8-rss-artifact-sha256`, completely validates that prior
+SQ8 RSS packet against the frozen dataset/runtime/provenance, and binds its
+selected `(E,R=E)` into the new plan. On a distinct fresh service lifetime it
+emits `coordinate_lock_consumed` bound to the first owned service lifetime,
+executes exactly queries 0..199 once at that
+coordinate with phase `locked_all_rows_revalidation`, and stops without trying
+another EF if either fixed set misses the target. Each filtered population above
+4096 still selects independently; failed lower coordinates remain in the
+artifact. Filtered populations at or below 4096 are typed-exact/empty correctness
+cases; a nonempty unfiltered population remains the quantized-rerank route. After
+selection, fixed curves, overlap and reopen measurements reuse the relevant
+population's frozen coordinate; the lifecycle empty probe reuses the all-rows
+coordinate. There is no same-coordinate graph retry, all-row `quality_selection`,
+or post-selection retuning. The consumer revalidates the complete prior RSS
+artifact against the full plan—not merely its hash and selected coordinate—and
+requires the later paired exact/SQ8 calls to retain the locked revalidation's
+same graph owner.
+
+Both initial-ready FP32 RSS producers retain a compact, ordered per-query ID
+ledger in addition to their aggregate quality curves. The Q5 consumer rebuilds
+TreeDB `ef_search` and Qdrant `hnsw_ef` recall/NDCG from those IDs and frozen
+truth, rejects missing/repeated/reordered coordinate-query calls, and requires
+the post-boundary Qdrant exact reference IDs to equal canonical truth in order.
+The SQ8 RSS arm keeps its richer native-v3 result/score/proof ledger.
 
 For every overlap/lifecycle request, the validator derives live base rows `B`,
 shadowed original rows `S`, and live suffix rows `D` from the authored whole-batch
@@ -137,10 +157,25 @@ truth and returned scores remain FP32; scalar-u8 is only the server-side derived
 candidate score plane.
 
 `events.jsonl` preserves successes and failures; `terminal.lifecycle_complete`
-is true only after full verification and clean owned-process shutdown. Its
-qualification remains `not_evaluated`, regardless of recall or timing. Preserve
-all failed runs and producer identities; no silent reruns or reuse of a mutated
-DB. The service log and wait4 process-lifetime peaks are retained alongside it.
+is true only after full verification and clean owned-process shutdown. A consumer
+treats smoke and full logs as complete execution ledgers rather than coverage
+supersets: one service/schema setup, every ordered 256-row initial ingest, one
+initial graph build, quality selection, paired batches, fixed-coordinate curves,
+overlap, typed-empty lifecycle, reopen curves, and final verification must each
+have the producer-defined multiplicity. Every deterministic search is adjacent
+to its public-call receipt except for interleaved resource samples. Only overlap
+event order is flexible; its query multiset and matching public-call receipts
+remain exact, and any unknown or additional call invalidates the run. A completed
+SQ8 producer reports `producer_gates_passed`. A frozen quality miss reports
+`valid_unqualified`, stops before timing/mutation, and remains valid scientific
+evidence only when its error names the independently recomputed failed cohort keys
+in producer order, rather than authorizing another coordinate or graph attempt.
+Other failures remain invalid. Final-state assurance is deliberately limited to
+the reviewed producer's exhaustive semantic comparison of every ordered ID,
+payload and normalized 768D vector after reopen; it is `producer_attested`, not
+an independently reconstructed cryptographic state commitment. Preserve all
+failed runs and producer identities; no silent reruns or reuse of a mutated DB.
+The service log and wait4 process-lifetime peaks are retained alongside it.
 
 Tiny source checks (no service or collection):
 

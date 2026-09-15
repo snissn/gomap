@@ -32,6 +32,7 @@ RSS_ARTIFACT_SCHEMA = "treedb_cohere_768_rss_boundary/v3"
 QUANTIZED_RSS_ARTIFACT_SCHEMA = "treedb_cohere_768_sq8_rss_boundary/v1"
 PAIRED_QUERY_ARTIFACT_SCHEMA = "treedb_cohere_768_sq8_paired_query/v1"
 QUANTIZED_PROFILE_NAME = "minima_sq8"
+DEFAULT_EF_CONSTRUCTION = 32
 RSS_RECALL_TARGET = .90
 RSS_CONTROLS = [32, 64, 128, 256, 512, 1024, 2048]
 RSS_CALIBRATION_QUERIES = list(range(100))
@@ -42,6 +43,27 @@ PAIRED_TIMING_QUERY_COUNT = 20
 GIB = 1 << 30
 FROZEN_JSON_MAX_BYTES = 1 << 20
 EVIDENCE_JSON_MAX_BYTES = 64 << 20
+_SQ8_SCORE_PLANE_IDENTITY_FIELDS = {
+    "reason", "quantized_index_name", "quantized_codec", "quantized_version", "quantized_config_hash",
+}
+_COLUMN_GRAPH_BUILD_FIELDS = {
+    "total_nanos", "snapshot_nanos", "row_extraction_nanos", "adjacency_build_nanos",
+    "locality_remap_nanos", "asset_preparation_nanos", "inv_norm_preparation_nanos",
+    "adjacency_state_preparation_nanos", "row_ref_preparation_nanos",
+    "document_id_preparation_nanos", "quantized_preparation_nanos",
+    "search_pack_preparation_nanos", "manifest_finalization_nanos", "file_sync_nanos",
+    "file_sync_count", "namespace_sync_nanos", "namespace_sync_count", "publication_nanos",
+    "construction_decisions",
+}
+_COLUMN_GRAPH_BUILD_POSITIVE_NANOS = {
+    "total_nanos", "snapshot_nanos", "row_extraction_nanos", "adjacency_build_nanos",
+    "asset_preparation_nanos", "quantized_preparation_nanos", "search_pack_preparation_nanos",
+    "manifest_finalization_nanos", "publication_nanos",
+}
+
+
+class QualityUnqualified(RuntimeError):
+    """Structurally valid evidence that misses a frozen quality gate."""
 
 
 def quantized_representation_arm():
@@ -74,15 +96,24 @@ def paired_timing_plan(query_count):
     }
 
 
-def validate_quantized_options(query_mode, index_name, rss_only, rows):
+def validate_quantized_options(query_mode, index_name, rss_only, rows,
+                               sq8_rss_artifact=None, expected_sq8_rss_sha256=None):
     if query_mode == "exact":
-        if index_name is not None:
-            raise ValueError("exact Cohere mode does not accept a quantized index")
+        if index_name is not None or sq8_rss_artifact is not None or expected_sq8_rss_sha256 is not None:
+            raise ValueError("exact Cohere mode does not accept quantized inputs")
         return
     if query_mode != "quantized_rerank" or index_name != QUANTIZED_PROFILE_NAME:
         raise ValueError("quantized Cohere mode requires the minima_sq8 profile")
     if rss_only and rows != 500000:
         raise ValueError("quantized RSS requires the frozen 500000-row export")
+    locked_full = rows == 500000 and not rss_only
+    lock_inputs = (sq8_rss_artifact is not None, expected_sq8_rss_sha256 is not None)
+    if locked_full != all(lock_inputs) or (not locked_full and any(lock_inputs)):
+        raise ValueError("full 500000-row SQ8 diagnostic requires one pinned prior SQ8 RSS artifact")
+    if expected_sq8_rss_sha256 is not None and (
+            not isinstance(expected_sq8_rss_sha256, str) or len(expected_sq8_rss_sha256) != 64
+            or any(character not in "0123456789abcdef" for character in expected_sq8_rss_sha256)):
+        raise ValueError("prior SQ8 RSS artifact SHA-256 must be lowercase hexadecimal")
 
 
 def _coordinate_rows(quality):
@@ -167,6 +198,419 @@ def quantized_quality_valid(quality, controls=RSS_CONTROLS,
         quality, controls, calibration_queries, revalidation_queries, target,
         quantized_coordinates=True,
     )
+
+
+def linux_process_identity_valid(identity, expected_pid=None):
+    try:
+        identity_pid, start = identity.split(":")
+        pid = int(identity_pid)
+        return (
+            identity_pid == str(pid) and pid > 0
+            and start == str(int(start)) and int(start) > 0
+            and (expected_pid is None or pid == expected_pid)
+        )
+    except (AttributeError, TypeError, ValueError):
+        return False
+
+
+def process_peak_rss_valid(rss):
+    try:
+        pid = rss["pid"]
+        return (
+            rss["availability"] == "measured"
+            and type(rss["bytes"]) is int and rss["bytes"] > 0
+            and type(pid) is int and pid > 0
+            and linux_process_identity_valid(rss["process_identity"], pid)
+            and rss["source"] == "/proc/<pid>/status:VmHWM"
+            and rss["scope"] == "process_lifetime_through_sample"
+        )
+    except (KeyError, TypeError, ValueError, AttributeError):
+        return False
+
+
+def boundary_storage_valid(storage):
+    return (
+        isinstance(storage, dict)
+        and storage.get("availability") == "measured"
+        and type(storage.get("owned_bytes_at_rss_boundary")) is int
+        and storage["owned_bytes_at_rss_boundary"] > 0
+        and storage.get("scope") == "backend_owned_directory_at_initial_ready_quality_boundary"
+    )
+
+
+def column_graph_build_valid(build):
+    if not isinstance(build, dict) or set(build) != _COLUMN_GRAPH_BUILD_FIELDS:
+        return False
+    numeric = _COLUMN_GRAPH_BUILD_FIELDS - {"construction_decisions"}
+    return (
+        all(type(build[field]) is int and build[field] >= 0 for field in numeric)
+        and all(build[field] > 0 for field in _COLUMN_GRAPH_BUILD_POSITIVE_NANOS)
+        and build["file_sync_count"] > 0 and build["namespace_sync_count"] > 0
+        and (build["construction_decisions"] is None
+             or isinstance(build["construction_decisions"], dict))
+    )
+
+
+def sq8_requests_share_initial_owner(requests):
+    try:
+        snapshots = [row["score_plane"]["snapshot"] for row in requests]
+        owner = snapshots[0]
+        return (
+            all(same_json(snapshot, owner) for snapshot in snapshots)
+            and same_json(owner["base_manifest"], owner["current_manifest"])
+            and owner["base_coverage_lsn"] == owner["current_coverage_lsn"]
+        )
+    except (KeyError, TypeError, IndexError):
+        return False
+
+
+def sq8_request_valid(row):
+    try:
+        if not _SQ8_SCORE_PLANE_IDENTITY_FIELDS <= set(row["score_plane"]):
+            return False
+        work = dense_contract.DenseSearchWork.from_dict(row["dense_work"])
+        proof = dense_contract.DenseScorePlaneProof.from_dict(row["score_plane"])
+        results = row["results"]
+        ids = [result["id"] for result in results]
+        scores = [result["score"] for result in results]
+        generation = row["expected_generation"]
+        projections_match = True
+        for result in results:
+            identifier = result["id"]
+            if not isinstance(identifier, str) or not identifier.startswith("row-"):
+                projections_match = False
+                break
+            ordinal = int(identifier.removeprefix("row-"))
+            projections_match = projections_match and (
+                identifier == f"row-{ordinal:06d}" and 0 <= ordinal < 500000
+                and result["content"] == f"minima-cohere:{ordinal}"
+                and result["meta"] == {
+                    "user_id": f"{(ordinal * 7919) % 500000:06d}",
+                    "fpath": f"/cohere/{ordinal // 256:06d}.txt",
+                }
+            )
+        return (
+            type(row["request_sequence"]) is int and row["request_sequence"] > 0
+            and row["outcome"] == "success" and not row.get("error")
+            and row["phase"] == "rss_quality"
+            and type(row["eligible"]) is int and row["eligible"] == 500000
+            and type(row["query"]) is int and 0 <= row["query"] < 200
+            and type(row["command_version"]) is int and row["command_version"] == 3
+            and type(row["started_monotonic_ns"]) is int
+            and type(row["ended_monotonic_ns"]) is int
+            and row["ended_monotonic_ns"] > row["started_monotonic_ns"]
+            and type(row["duration_ns"]) is int and row["duration_ns"] > 0
+            and row["duration_ns"] == row["ended_monotonic_ns"] - row["started_monotonic_ns"]
+            and type(generation) is int and generation > 0
+            and type(row["requested_ef_search"]) is int
+            and row["requested_ef_search"] in RSS_CONTROLS
+            and row["requested_ef_search"] >= 10
+            and type(row["requested_rerank_candidates"]) is int
+            and row["requested_rerank_candidates"] == row["requested_ef_search"]
+            and same_json(row.get("lifecycle_state"), {
+                "owner_advance": 0, "folded": False, "shadow_allowance": 0,
+                "live_base": 500000, "live_suffix": 0,
+            })
+            and proof.version == 1 and proof.available and proof.completed and not proof.reason
+            and proof.requested_mode == "quantized_rerank"
+            and proof.effective_mode == "quantized_rerank" and proof.route == "quantized_rerank"
+            and proof.quantized_index_name == QUANTIZED_PROFILE_NAME
+            and proof.quantized_codec == "scalar_u8" and proof.quantized_version == 1
+            and proof.quantized_config_hash == 0 and proof.requested_top_k == 10
+            and proof.requested_ef_search == row["requested_ef_search"]
+            and proof.requested_rerank_candidates == row["requested_rerank_candidates"]
+            and existing.quantized_snapshot_valid(proof.snapshot, generation)
+            and work.graph.snapshot == proof.snapshot
+            and work.graph.base_candidates == 0 and work.graph.delta_scored == 0
+            and work.graph.base_shadowed == 0
+            and proof.normalized_candidate_width == row["requested_ef_search"]
+            and proof.raw_candidate_width == proof.normalized_candidate_width
+            and proof.rerank_candidate_cap == row["requested_rerank_candidates"]
+            and proof.raw_retained_candidates <= proof.raw_candidate_width
+            and proof.raw_retained_candidates <= proof.quantized_score_calls
+            and proof.exact_suffix_score_calls == 0
+            and proof.live_shortlist_candidates == min(
+                proof.normalized_candidate_width,
+                proof.raw_retained_candidates - work.graph.base_shadowed)
+            and proof.actual_rerank_candidates == min(
+                proof.live_shortlist_candidates, proof.rerank_candidate_cap)
+            and proof.actual_rerank_candidates == proof.exact_base_rerank_score_calls
+            and work.output.output_bytes > 0
+            and dense_contract.dense_score_plane_byte_counters_match(proof, 768)
+            and dense_contract.dense_quantized_response_work_matches(
+                work, proof, 10, len(results), False)
+            and len(results) == 10 and len(ids) == len(set(ids)) and projections_match
+            and all(type(score) in (int, float) and math.isfinite(score)
+                    and -1.000001 <= score <= 1.000001 for score in scores)
+            and type(row["recall"]) in (int, float) and math.isfinite(row["recall"])
+            and 0 <= row["recall"] <= 1
+            and type(row["ndcg_at_10"]) in (int, float) and math.isfinite(row["ndcg_at_10"])
+            and 0 <= row["ndcg_at_10"] <= 1
+            and list(zip((-score for score in scores), ids))
+            == sorted(zip((-score for score in scores), ids))
+        )
+    except (KeyError, TypeError, ValueError, AttributeError):
+        return False
+
+
+def sq8_effective_index_valid(index, construction, requests):
+    try:
+        expected_keys = {
+            "name", "dimension", "metric", "generation", "contract_version",
+            "embedding_field", "vector_index_name", "vector_strategy", "vector_m",
+            "vector_ef_construction", "vector_ef_search", "quantized_indexes",
+            "scalar_fields", "text_field", "text_index_name", "document_type",
+            "capabilities", "typed_input",
+        }
+        generations = {row["expected_generation"] for row in requests}
+        return (
+            isinstance(index, dict) and set(index) == expected_keys
+            and index["name"] == "minima_cohere"
+            and type(index["dimension"]) is int and index["dimension"] == 768
+            and index["metric"] == "cosine"
+            and index["contract_version"] == existing.SERVICE_CONTRACT
+            and index["embedding_field"] == "embedding"
+            and index["vector_index_name"] == "embedding"
+            and index["vector_strategy"] == "column_graph"
+            and type(index["vector_m"]) is int and index["vector_m"] == 16
+            and type(index["vector_ef_construction"]) is int
+            and index["vector_ef_construction"] == construction["ef_construction"]
+            and type(index["vector_ef_search"]) is int and index["vector_ef_search"] == 64
+            and index["text_field"] == "content" and index["text_index_name"] == "content"
+            and index["document_type"] == "treedb_document_service_v1"
+            and index["typed_input"] is True
+            and same_json(index["capabilities"], existing.QUANTIZED_INDEX_CAPABILITIES)
+            and type(index["generation"]) is int and generations == {index["generation"]}
+            and same_json(index["quantized_indexes"], [{
+                "name": QUANTIZED_PROFILE_NAME, "codec": "scalar_u8", "version": 1,
+            }])
+            and same_json(index["scalar_fields"], [
+                {"field": "meta.fpath", "index_name": "meta_fpath", "value_type": "string"},
+                {"field": "meta.user_id", "index_name": "meta_user_id", "value_type": "string"},
+            ])
+        )
+    except (KeyError, TypeError, ValueError):
+        return False
+
+
+def sq8_results_match_dataset(sq8, vectors, queries, truth):
+    """Recompute retained quality and canonical FP32 scores from frozen inputs."""
+    try:
+        observed = {}
+        for record in sq8["observed_execution"]["requests"]:
+            query = record["query"]
+            expected_ids = truth[query]
+            ids = [result["id"] for result in record["results"]]
+            recall = len(set(ids) & set(expected_ids)) / len(expected_ids)
+            ndcg = binary_ndcg(ids, expected_ids)
+            if (not math.isclose(record["recall"], recall, rel_tol=0.0, abs_tol=1e-12)
+                    or not math.isclose(record["ndcg_at_10"], ndcg,
+                                        rel_tol=0.0, abs_tol=1e-12)):
+                return False
+            key = (record["requested_ef_search"], query)
+            if key in observed:
+                return False
+            observed[key] = (recall, ndcg)
+            query_vector = np.asarray(queries[query], dtype=np.float64)
+            query_norm = np.linalg.norm(query_vector)
+            if not math.isfinite(query_norm) or query_norm <= 0:
+                return False
+            scores = []
+            for result in record["results"]:
+                row = int(result["id"].removeprefix("row-"))
+                vector = np.asarray(vectors[row], dtype=np.float64)
+                vector_norm = np.linalg.norm(vector)
+                if not math.isfinite(vector_norm) or vector_norm <= 0:
+                    return False
+                score = np.dot(vector, query_vector) / (vector_norm * query_norm)
+                if not math.isfinite(score) or abs(score - result["score"]) > 2e-5:
+                    return False
+                scores.append(score)
+            if list(zip((-score for score in scores), ids)) != sorted(
+                    zip((-score for score in scores), ids)):
+                return False
+        for split in ("calibration", "revalidation"):
+            quality_split = sq8["quality"][split]
+            for coordinate in quality_split["curve"]:
+                expected = [observed[(coordinate["control"], query)]
+                            for query in quality_split["queries"]]
+                if (not same_json(coordinate["per_query"], [row[0] for row in expected])
+                        or not same_json(coordinate["per_query_ndcg_at_10"],
+                                         [row[1] for row in expected])):
+                    return False
+        return True
+    except (KeyError, TypeError, ValueError, IndexError, ZeroDivisionError):
+        return False
+
+
+def sq8_rss_artifact_reasons(artifact, plan):
+    """Validate one intrinsic SQ8 RSS producer against a prospective consumer plan."""
+    reasons = []
+    quality = artifact.get("quality", {})
+    if (artifact.get("schema") != QUANTIZED_RSS_ARTIFACT_SCHEMA
+            or artifact.get("backend") != "treedb" or artifact.get("state") != "calibrated"
+            or artifact.get("reasons") != []):
+        reasons.append("TreeDB SQ8 artifact is not calibrated")
+    if (not quantized_quality_valid(quality)
+            or quality.get("control_name") != "ef_search" or quality.get("exact_mode") is not False):
+        reasons.append("TreeDB SQ8 fixed-set quality missed the target")
+    rss = artifact.get("rss", {})
+    if not process_peak_rss_valid(rss):
+        reasons.append("TreeDB SQ8 server VmHWM is unavailable")
+    if not boundary_storage_valid(artifact.get("storage")):
+        reasons.append("TreeDB SQ8 initial-ready storage boundary is unavailable")
+    expected_contract = (plan.get("comparison_contract") if "comparison_contract" in plan
+                         else rss_comparison_contract(plan))
+    if (not rss_comparison_contract_valid(artifact.get("comparison_contract"))
+            or not same_json(artifact.get("comparison_contract"), expected_contract)):
+        reasons.append("TreeDB SQ8 workload/RSS contract differs from the consumer plan")
+    if not same_json(artifact.get("representation_arm"), quantized_representation_arm()):
+        reasons.append("TreeDB SQ8 representation declaration differs from minima_sq8")
+    provenance = artifact.get("provenance", {})
+    expected_provenance = plan.get("provenance", plan)
+    provenance_keys = (
+        "harness_commit", "harness_source_sha256", "harness_trees", "product_commit",
+        "product_trees", "service_sha256", "dataset_manifest_sha256",
+        "dataset_files_sha256", "serving_sha256",
+    )
+    if any(not provenance.get(key)
+           or not same_json(provenance.get(key), expected_provenance.get(key))
+           for key in provenance_keys):
+        reasons.append("TreeDB SQ8 provenance differs from the consumer plan")
+    construction = artifact.get("construction_calibration_contract", {})
+    expected_construction = (plan.get("construction_calibration_contract")
+                             if "construction_calibration_contract" in plan
+                             else construction_calibration_contract(plan["ef_construction"]))
+    if not same_json(construction, expected_construction):
+        reasons.append("TreeDB SQ8 construction contract differs from the consumer plan")
+    execution = artifact.get("observed_execution", {})
+    requests = execution.get("requests", [])
+    if (execution.get("schema") != "treedb_cohere_sq8_execution/v1"
+            or type(execution.get("native_command_version")) is not int
+            or execution.get("native_command_version") != 3
+            or not requests or any(not sq8_request_valid(row) for row in requests)
+            or not sq8_requests_share_initial_owner(requests)):
+        reasons.append("TreeDB SQ8 artifact lacks complete per-call native-v3 R=E proof")
+    else:
+        try:
+            expected = {}
+            for split in ("calibration", "revalidation"):
+                queries = quality[split]["queries"]
+                for coordinate in quality[split]["curve"]:
+                    for query, recall, ndcg in zip(
+                            queries, coordinate["per_query"],
+                            coordinate["per_query_ndcg_at_10"]):
+                        expected[(coordinate["control"], query)] = (recall, ndcg)
+            observed = {(row["requested_ef_search"], row["query"]):
+                        (row["recall"], row["ndcg_at_10"]) for row in requests}
+            expected_order = [
+                (coordinate["control"], query)
+                for coordinate in quality["calibration"]["curve"]
+                for query in quality["calibration"]["queries"] + quality["revalidation"]["queries"]
+            ]
+            matches = (
+                [row["request_sequence"] for row in requests]
+                == list(range(1, len(requests) + 1))
+                and [(row["requested_ef_search"], row["query"]) for row in requests]
+                == expected_order
+                and len(observed) == len(requests) and set(observed) == set(expected)
+                and all(all(math.isclose(left, right, rel_tol=0.0, abs_tol=1e-12)
+                            for left, right in zip(observed[key], value))
+                        for key, value in expected.items())
+            )
+        except (KeyError, TypeError, ValueError):
+            matches = False
+        if not matches:
+            reasons.append("TreeDB SQ8 per-call evidence differs from the fixed-grid quality curves")
+    readiness = artifact.get("readiness", {})
+    if (readiness.get("graph_action") != "build"
+            or type(readiness.get("successful_ann_queries")) is not int
+            or readiness.get("successful_ann_queries") != len(requests)
+            or not column_graph_build_valid(readiness.get("column_graph_build"))
+            or (((readiness.get("column_graph_build") or {}).get("construction_decisions")
+                 is not None) != bool(plan.get("construction_decisions")))
+            or not sq8_effective_index_valid(
+                readiness.get("effective_index", {}), construction, requests)):
+        reasons.append("TreeDB SQ8 effective collection metadata does not bind the request owner")
+    return reasons
+
+
+def sq8_artifact_matches_plan_dataset(artifact, plan):
+    dataset = Path(plan["dataset"])
+    vectors = np.memmap(dataset / "documents.f32", mode="r", dtype="<f4", shape=(500000, 768))
+    queries = np.memmap(
+        dataset / "queries.f32", mode="r", dtype="<f4", shape=(plan["queries"], 768),
+    )
+    truth, _ = strict_json_object(dataset / "truth.json", "frozen truth", EVIDENCE_JSON_MAX_BYTES)
+    truth = truth["500000"]
+    return sq8_results_match_dataset(artifact, vectors, queries, truth)
+
+
+def locked_sq8_rss_selection(path, expected_sha256, plan):
+    """Validate and bind the prior resource arm that owns the all-row decision."""
+    artifact, raw = strict_json_object(path, "prior TreeDB SQ8 RSS artifact", EVIDENCE_JSON_MAX_BYTES)
+    if bytes_digest(raw) != expected_sha256:
+        raise ValueError("prior TreeDB SQ8 RSS artifact differs from its external SHA-256 pin")
+    reasons = sq8_rss_artifact_reasons(artifact, plan)
+    if not sq8_artifact_matches_plan_dataset(artifact, plan):
+        reasons.append("TreeDB SQ8 results differ from frozen IDs, quality, or canonical FP32 scores")
+    if reasons:
+        raise ValueError("prior TreeDB SQ8 RSS artifact is not a complete current all-row decision: "
+                         + "; ".join(reasons))
+    selected = artifact["quality"]["selected_coordinate"]
+    return {
+        "schema": "treedb_cohere_sq8_coordinate_lock/v1",
+        "artifact_path": str(Path(path).resolve()), "artifact_sha256": expected_sha256,
+        "artifact_schema": artifact["schema"],
+        "source_process_identity": artifact["rss"]["process_identity"],
+        "selected_coordinate": dict(selected),
+    }
+
+
+def evaluate_locked_quantized_control(search, truth, selection, calibration_queries,
+                                       revalidation_queries, target):
+    """Confirm one prior-selected coordinate on a fresh graph without retuning it."""
+    control = selection["selected_coordinate"]["ef_search"]
+
+    def metrics(queries):
+        recalls, ndcgs = [], []
+        for query in queries:
+            expected = truth[query]
+            actual = search(control, query)
+            if len(actual) != len(expected) or len(set(actual)) != len(actual):
+                raise RuntimeError("locked SQ8 result cardinality differs from exact truth")
+            recalls.append(len(set(actual) & set(expected)) / len(expected))
+            ndcgs.append(binary_ndcg(actual, expected))
+        return {
+            "queries": list(queries),
+            "mean_recall_at_10": sum(recalls) / len(recalls),
+            "mean_ndcg_at_10": sum(ndcgs) / len(ndcgs),
+            "per_query_recall": recalls, "per_query_ndcg_at_10": ndcgs,
+        }
+
+    first, second = metrics(calibration_queries), metrics(revalidation_queries)
+    passed = first["mean_recall_at_10"] >= target and second["mean_recall_at_10"] >= target
+    return {
+        "schema": "treedb_cohere_sq8_locked_all_rows_confirmation/v1",
+        "selection_protocol": "prior_sq8_rss_coordinate_revalidated_on_fresh_graph/v1",
+        "coordinate": {"ef_search": control, "rerank_candidates": control},
+        "fixed_sets": {"queries_0_99": first, "queries_100_199": second},
+        "target_mean_recall_at_10": target, "passed": passed,
+    }
+
+
+def coordinate_lock_consumption_event(coordinate_lock, fresh_identity):
+    source_identity = coordinate_lock.get("source_process_identity")
+    if (not linux_process_identity_valid(source_identity)
+            or not linux_process_identity_valid(fresh_identity)
+            or fresh_identity == source_identity):
+        raise RuntimeError("full SQ8 diagnostic did not create a fresh graph owner")
+    return {
+        "source_artifact_sha256": coordinate_lock["artifact_sha256"],
+        "source_process_identity": coordinate_lock["source_process_identity"],
+        "fresh_process_identity": fresh_identity,
+        "coordinate": coordinate_lock["selected_coordinate"],
+    }
 
 
 def select_quantized_cohorts(search, truth, eligible_counts, rows, controls,
@@ -563,8 +1007,14 @@ def strict_json_object(path, label, maximum_bytes=FROZEN_JSON_MAX_BYTES):
         def reject_constant(value):
             raise ValueError(f"{label} contains nonfinite {value}")
 
+        def reject_nonfinite_float(value):
+            number = float(value)
+            if not math.isfinite(number):
+                raise ValueError(f"{label} contains nonfinite {value}")
+            return number
+
         value = json.loads(raw.decode("utf-8"), object_pairs_hook=reject_duplicates,
-                           parse_constant=reject_constant)
+                           parse_constant=reject_constant, parse_float=reject_nonfinite_float)
         if not isinstance(value, dict) or not value:
             raise ValueError(f"{label} must be a nonempty JSON object")
         return value, raw
@@ -629,7 +1079,7 @@ def quantiles(values):
 
 def dataset_identity(dataset, rows):
     dataset = Path(dataset).resolve()
-    manifest = json.loads((dataset / "manifest.json").read_text())
+    manifest, _ = strict_json_object(dataset / "manifest.json", "dataset manifest")
     if (manifest.get("dimensions"), manifest.get("top_k"), manifest.get("exact_train_query_overlap")) != (768, 10, 0):
         raise ValueError("expected the existing real 768D top-10 nonoverlapping diagnostic export")
     if rows not in (512, 500000) or rows > manifest["rows"] or math.gcd(rows, 7919) != 1:
@@ -773,9 +1223,14 @@ def rss_comparison_contract_valid(contract):
             and all(isinstance(value, str) for value in runtime.values())
             and isinstance(host, dict)
             and set(host) == {"machine_id", "boot_id", "page_size_bytes", "numa_mems",
-                              "cgroup_membership", "cgroup_limits"}
+                              "cgroup_membership", "cgroup_limits", "cpu_model",
+                              "cpu_features"}
             and all(isinstance(host[name], str) and host[name]
-                    for name in ("machine_id", "boot_id", "numa_mems", "cgroup_membership"))
+                    for name in ("machine_id", "boot_id", "numa_mems", "cgroup_membership",
+                                 "cpu_model"))
+            and isinstance(host["cpu_features"], list) and host["cpu_features"]
+            and host["cpu_features"] == sorted(set(host["cpu_features"]))
+            and all(isinstance(feature, str) and feature for feature in host["cpu_features"])
             and type(host["page_size_bytes"]) is int and host["page_size_bytes"] > 0
             and isinstance(host["cgroup_limits"], dict)
             and all(isinstance(key, str) and isinstance(value, str)
@@ -811,6 +1266,11 @@ def treedb_service_environment(plan):
 def host_resource_identity():
     cgroup = Path("/proc/self/cgroup").read_text().strip()
     status = dict(line.split(":", 1) for line in Path("/proc/self/status").read_text().splitlines() if ":" in line)
+    cpu = {key.strip(): value.strip()
+           for line in Path("/proc/cpuinfo").read_text().split("\n\n", 1)[0].splitlines()
+           if ":" in line for key, value in [line.split(":", 1)]}
+    cpu_model = (cpu.get("model name") or cpu.get("Processor") or "").strip()
+    cpu_features = sorted(set((cpu.get("flags") or cpu.get("Features") or "").split()))
     unified = next((line.split("::", 1)[1] for line in cgroup.splitlines() if line.startswith("0::")), None)
     limits = {}
     if unified is not None:
@@ -831,8 +1291,10 @@ def host_resource_identity():
         "boot_id": Path("/proc/sys/kernel/random/boot_id").read_text().strip(),
         "page_size_bytes": os.sysconf("SC_PAGE_SIZE"), "numa_mems": status.get("Mems_allowed_list", "").strip(),
         "cgroup_membership": cgroup, "cgroup_limits": limits,
+        "cpu_model": cpu_model, "cpu_features": cpu_features,
     }
-    if not identity["machine_id"] or not identity["boot_id"] or not identity["numa_mems"]:
+    if (not identity["machine_id"] or not identity["boot_id"] or not identity["numa_mems"]
+            or not identity["cpu_model"] or not identity["cpu_features"]):
         raise RuntimeError("host resource identity is incomplete")
     return identity
 
@@ -865,7 +1327,12 @@ def prepare(args):
     query_mode = getattr(args, "query_mode", "exact")
     quantized_index_name = getattr(args, "quantized_index_name", None)
     rss_only = getattr(args, "rss_only", False)
-    validate_quantized_options(query_mode, quantized_index_name, rss_only, args.rows)
+    sq8_rss_artifact = getattr(args, "all_rows_sq8_rss_artifact", None)
+    expected_sq8_rss_sha256 = getattr(args, "expected_all_rows_sq8_rss_artifact_sha256", None)
+    validate_quantized_options(
+        query_mode, quantized_index_name, rss_only, args.rows,
+        sq8_rss_artifact, expected_sq8_rss_sha256,
+    )
     harness = existing.repository_commit()
     dataset, manifest, files, query_count = dataset_identity(args.dataset, args.rows)
     if rss_only and args.rows != 500000:
@@ -919,12 +1386,17 @@ def prepare(args):
             quantized_coordinate_policy="ordered_ef_grid_with_requested_rerank_candidates_equal_ef",
             paired_timing=(None if rss_only else paired_timing_plan(query_count)),
             query_usage=("observed fixed sets 0..99 and 100..199 both select every >4096 cohort; "
-                         "all rows is selected once as the unfiltered cohort; filtered <=4096 is typed-exact correctness; "
+                         "the prior RSS-selected all-row coordinate is revalidated once on the fresh graph; "
+                         "filtered <=4096 is typed-exact correctness; "
                          "after selection, paired timing reuses frozen observed queries without retuning"
                          if args.rows == 500000 else
                          "four observed queries select the unfiltered 512-row cohort; smaller filtered cohorts are typed-exact; "
                          "paired smoke timing reuses the same four observed queries without retuning"),
         )
+        if args.rows == 500000 and not rss_only:
+            plan["all_rows_coordinate_lock"] = locked_sq8_rss_selection(
+                sq8_rss_artifact, expected_sq8_rss_sha256, plan,
+            )
     return plan
 
 
@@ -1430,8 +1902,12 @@ class Run:
         data = Path(plan["dataset"])
         self.vectors = np.memmap(data / "documents.f32", mode="r", dtype="<f4", shape=(plan["rows"], 768))
         self.queries = np.memmap(data / "queries.f32", mode="r", dtype="<f4", shape=(plan["queries"], 768))
-        self.truth = (json.loads((data / "truth.json").read_text()) if plan["mode"] == "diagnostic"
-                      else exact_truth(self.vectors, self.queries, plan["eligible_counts"]))
+        if plan["mode"] == "diagnostic":
+            self.truth, _ = strict_json_object(
+                data / "truth.json", "frozen truth", EVIDENCE_JSON_MAX_BYTES,
+            )
+        else:
+            self.truth = exact_truth(self.vectors, self.queries, plan["eligible_counts"])
         for eligible in plan["eligible_counts"]:
             if len(self.truth[str(eligible)]) != plan["queries"]:
                 raise ValueError("oracle query cardinality mismatch")
@@ -1679,8 +2155,7 @@ class Run:
         request_mode = ("quantized_rerank" if configured_quantized else "exact") \
             if request_mode is None else request_mode
         if request_mode not in ("exact", "quantized_rerank") \
-                or (request_mode == "quantized_rerank" and not configured_quantized) \
-                or (request_mode == "exact" and request_ledger is not None and not configured_quantized):
+                or (request_mode == "quantized_rerank" and not configured_quantized):
             raise ValueError("request mode is outside the frozen collection arm")
         quantized = request_mode == "quantized_rerank"
         selected_filter = predicate(self.plan["rows"], eligible) if query_filter is None else query_filter
@@ -2056,9 +2531,14 @@ class Run:
 
     def rss_boundary(self):
         truth = self.truth[str(self.plan["rows"])]
+        fp32_requests = []
 
         def search(ef, query):
-            response = self.search("rss_quality", self.plan["rows"], ef, query)
+            response = self.search(
+                "rss_quality", self.plan["rows"], ef, query,
+                request_ledger=None if self.plan.get("query_mode") == "quantized_rerank"
+                else fp32_requests,
+            )
             return [document.id for document in response.documents]
 
         quality = calibrate_ann_control(
@@ -2072,18 +2552,25 @@ class Run:
         rss = process_peak_at_boundary(
             process.pid if process else None, self.controller._owned_identity, self.plan["cpu_affinity"],
         )
+        storage = {
+            "availability": "measured",
+            "owned_bytes_at_rss_boundary": existing.common.disk_bytes(self.output / "db"),
+            "scope": "backend_owned_directory_at_initial_ready_quality_boundary",
+        }
         reasons = []
         if not quality["revalidation"]["passed"]:
             reasons.append("no TreeDB EF passed both fixed recall query sets")
         if rss.get("availability") != "measured":
             reasons.append("TreeDB server VmHWM unavailable or process drifted")
+        if not boundary_storage_valid(storage):
+            reasons.append("TreeDB initial-ready storage boundary unavailable")
         artifact = {
             "schema": QUANTIZED_RSS_ARTIFACT_SCHEMA if quantized else RSS_ARTIFACT_SCHEMA,
             "state": "calibrated" if not reasons else "uncalibrated",
             "backend": "treedb", "comparison_contract": rss_comparison_contract(self.plan),
             "construction_calibration_contract": self.plan["construction_calibration_contract"],
             "quality": {**quality, "control_name": "ef_search", "exact_mode": False},
-            "rss": rss, "reasons": reasons,
+            "rss": rss, "storage": storage, "reasons": reasons,
             "readiness": {"graph_action": "build", "successful_ann_queries": sum(
                 len(row["per_query"]) for row in quality["calibration"]["curve"]
             ) + sum(len(row["per_query"]) for row in quality["revalidation"]["curve"]),
@@ -2106,6 +2593,21 @@ class Run:
                 "requests": json.loads(canonical(self.quantized_requests)),
             }
             artifact["readiness"]["effective_index"] = self.info.to_dict()
+        else:
+            artifact["observed_quality"] = {
+                "schema": "cohere_500k_768d_quality_observations/v1",
+                "control_name": "ef_search",
+                "requests": [
+                    {
+                        "request_sequence": record["request_sequence"],
+                        "control": record["requested_ef_search"],
+                        "query": record["query"],
+                        "ids": [result["id"] for result in record["results"]],
+                    }
+                    for record in fp32_requests
+                ],
+                "exact_reference": None,
+            }
         return artifact
 
     def execute(self):
@@ -2113,7 +2615,7 @@ class Run:
         monitor = threading.Thread(target=self.guard, daemon=True)
         self.emit("plan", plan=self.plan)
         monitor.start()
-        failed, rss_artifact = None, None
+        failed, rss_artifact, qualification = None, None, "not_evaluated"
         try:
             self.timed("service_start", self.controller.start)
             self.timed("schema_ensure", self.ensure)
@@ -2136,12 +2638,32 @@ class Run:
                     return [doc.id for doc in self.search(phase, eligible, ef, query).documents]
 
                 if self.plan["rows"] == 500000:
-                    self.quantized_quality = select_quantized_cohorts(
-                        quality_search,
-                        self.truth, self.plan["eligible_counts"], self.plan["rows"], self.plan["rss_controls"],
+                    all_rows = str(self.plan["rows"])
+                    coordinate_lock = self.plan["all_rows_coordinate_lock"]
+                    self.emit("coordinate_lock_consumed", **coordinate_lock_consumption_event(
+                        coordinate_lock, self.controller._owned_identity,
+                    ))
+                    self.quantized_quality[all_rows] = evaluate_locked_quantized_control(
+                        lambda control, query: [doc.id for doc in self.search(
+                            "locked_all_rows_revalidation", self.plan["rows"], control, query,
+                        ).documents],
+                        self.truth[all_rows], coordinate_lock,
                         self.plan["rss_calibration_queries"], self.plan["rss_revalidation_queries"],
                         self.plan["rss_recall_target"],
                     )
+                    self.emit("locked_all_rows_quality", **self.quantized_quality[all_rows])
+                    if not self.quantized_quality[all_rows]["passed"]:
+                        self.emit("quantized_quality", cohorts=self.quantized_quality)
+                        raise QualityUnqualified(
+                            "quantized fixed-set quality failed for cohorts " + all_rows,
+                        )
+                    self.quantized_quality.update(select_quantized_cohorts(
+                        quality_search, self.truth,
+                        [eligible for eligible in self.plan["eligible_counts"] if eligible != self.plan["rows"]],
+                        self.plan["rows"], self.plan["rss_controls"],
+                        self.plan["rss_calibration_queries"], self.plan["rss_revalidation_queries"],
+                        self.plan["rss_recall_target"],
+                    ))
                 else:
                     smoke_queries = list(range(self.plan["queries"]))
                     self.quantized_quality = select_quantized_cohorts(
@@ -2149,14 +2671,20 @@ class Run:
                         self.truth, self.plan["eligible_counts"], self.plan["rows"], self.plan["rss_controls"],
                         smoke_queries[:2], smoke_queries[2:], 1.0,
                     )
-                failed_cohorts = [eligible for eligible, row in self.quantized_quality.items()
-                                  if row["selected_coordinate"] is None
-                                  or row["revalidation"].get("passed") is not True]
+                failed_cohorts = [
+                    eligible for eligible, row in self.quantized_quality.items()
+                    if ((row.get("coordinate") if "coordinate" in row else row.get("selected_coordinate")) is None
+                        or (row.get("passed") if "passed" in row
+                            else row.get("revalidation", {}).get("passed")) is not True)
+                ]
                 self.emit("quantized_quality", cohorts=self.quantized_quality)
                 if failed_cohorts:
-                    raise RuntimeError("quantized fixed-set quality failed for cohorts " + ",".join(failed_cohorts))
-                self.selected_efs = {eligible: row["selected_coordinate"]["ef_search"]
-                                     for eligible, row in self.quantized_quality.items()}
+                    raise QualityUnqualified(
+                        "quantized fixed-set quality failed for cohorts " + ",".join(failed_cohorts))
+                self.selected_efs = {
+                    eligible: (row.get("coordinate") or row["selected_coordinate"])["ef_search"]
+                    for eligible, row in self.quantized_quality.items()
+                }
                 # Selection is now frozen. Later diagnostic/lifecycle calls only reuse these coordinates.
                 self.paired_query_timing()
                 for eligible in self.plan["eligible_counts"]:
@@ -2174,6 +2702,7 @@ class Run:
                     for query in range(self.plan["queries"]):
                         self.search("post_reopen_curve", eligible, self.selected_efs[str(eligible)], query)
                 self.timed("verification_only_full_scroll", self.scroll)
+                qualification = "producer_gates_passed"
             else:
                 # Cache-cold means first request for this predicate, not OS/disk-cold.
                 for eligible in self.plan["eligible_counts"]:
@@ -2197,31 +2726,45 @@ class Run:
                 raise RuntimeError(self.failure)
         except BaseException as exc:
             failed = f"{type(exc).__name__}: {exc}"
-            if self.plan.get("query_mode") == "quantized_rerank" and self.quantized_requests:
+            if isinstance(exc, QualityUnqualified):
+                qualification = "valid_unqualified"
+            if (not isinstance(exc, QualityUnqualified)
+                    and self.plan.get("query_mode") == "quantized_rerank"
+                    and self.quantized_requests):
                 last = self.quantized_requests[-1]
                 if last.get("outcome") == "error" and "error" not in last:
                     last["error"] = failed
                 self.emit("quantized_failure_evidence", requests=self.quantized_requests)
             self.emit("failure", error=failed)
         finally:
+            finalization_failures = []
             try:
                 self.clients.close()
-                validate_shutdowns(self.controller.lifetimes, 1 if self.plan["rss_only"] else 2)
+                expected_lifetimes = 1 if (self.plan["rss_only"]
+                                           or qualification == "valid_unqualified") else 2
+                validate_shutdowns(self.controller.lifetimes, expected_lifetimes)
             except BaseException as exc:
-                failed = failed or f"shutdown: {exc}"
+                finalization_failures.append(f"shutdown: {type(exc).__name__}: {exc}")
             self.cancel.set()
             monitor.join(timeout=5)
-            failed = failed or self.failure
+            if self.failure and self.failure not in (failed or ""):
+                finalization_failures.append(self.failure)
             try:
                 if monitor.is_alive():
                     raise RuntimeError("resource guard did not stop")
                 self.check_resources()
             except BaseException as exc:
-                failed = failed or f"final resource guard: {exc}"
+                finalization_failures.append(
+                    f"final resource guard: {type(exc).__name__}: {exc}",
+                )
+            if finalization_failures:
+                self.emit("finalization_failure", errors=finalization_failures)
+                failed = "; ".join(([failed] if failed else []) + finalization_failures)
+                qualification = "invalid"
             if rss_artifact is not None:
                 rss_artifact = finalize_rss_artifact(rss_artifact, failed)
                 self.emit("rss_boundary", artifact=rss_artifact)
-            self.emit("terminal", lifecycle_complete=failed is None, qualification="not_evaluated", error=failed,
+            self.emit("terminal", lifecycle_complete=failed is None, qualification=qualification, error=failed,
                       process_lifetimes=self.controller.lifetimes, final_disk_bytes=existing.common.disk_bytes(self.output / "db"))
             self.events.close()
             if rss_artifact is not None:
@@ -2244,7 +2787,14 @@ def main():
     parser.add_argument("--rss-only", action="store_true")
     parser.add_argument("--query-mode", choices=("exact", "quantized_rerank"), default="exact")
     parser.add_argument("--quantized-index-name")
-    parser.add_argument("--ef-construction", type=int, choices=(32, 64, 96, 128), default=128)
+    parser.add_argument("--all-rows-sq8-rss-artifact", type=Path,
+                        help="prior calibrated SQ8 RSS artifact that owns the 500K all-row coordinate")
+    parser.add_argument("--expected-all-rows-sq8-rss-artifact-sha256",
+                        help="external SHA-256 pin for --all-rows-sq8-rss-artifact")
+    parser.add_argument(
+        "--ef-construction", type=int, choices=(32, 64, 96, 128),
+        default=DEFAULT_EF_CONSTRUCTION,
+    )
     parser.add_argument("--construction-decisions", action="store_true")
     parser.add_argument("--url", default="http://127.0.0.1:17420")
     parser.add_argument("--native-address", default="127.0.0.1:17422")
