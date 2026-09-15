@@ -44,6 +44,11 @@ unreachable assets. Unchanged admitted-state ensure is idempotent and does not
 renew attempted-work debt. A race at final state admission fails explicitly; no
 blind retry installs stale metadata.
 
+Admission fails closed with `ErrNamespacePersistenceUnsupported` where exact
+relative namespace authority is unavailable. Descriptor-backed holder fallback
+removes the mmap-direct requirement; it does not replace the namespace authority
+required by renewal and destructive maintenance.
+
 The first caller for a missing serving holder builds synchronously from an
 independently acquired current snapshot and exact-base guardian pin. Once that
 build starts, cancellation is reported only after construction completes or

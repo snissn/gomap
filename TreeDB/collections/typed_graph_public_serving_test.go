@@ -140,18 +140,53 @@ func requireTypedGraphPublicServingTest(t testing.TB) {
 	requireColumnAssetExactDestructiveGCTest(t)
 }
 
-func TestTypedGraphPublicPortableFallbackAdmission(t *testing.T) {
-	if columnGraphTypedColumnMmapDirectViewSupportedForTest() {
-		t.Skip("exercises the portable non-mmap serving path")
+func TestTypedGraphPublicUnsupportedLifecycleAdmission(t *testing.T) {
+	if rootpublication.StableRelativeNamespaceSupported() {
+		t.Skip("exercises hosts without exact relative namespace authority")
 	}
+	col, base, ids, retained, columns, _ := openTypedGraphQualityFixture(t, 8)
+	defer base.Close()
+	err := col.EnsureColumnGraphServing(context.Background(), base.indexName, typedGraphPublicTestOptions())
+	if !errors.Is(err, errColumnVectorGraphSharedPreparedSearchNotEligible) || !errors.Is(err, rootpublication.ErrNamespacePersistenceUnsupported) {
+		t.Fatalf("unsupported lifecycle admission: %v", err)
+	}
+	coord := col.collectionSchemaCoordinator()
+	if state := coord.typedPublication.Load(); state != nil && state.servingAdmitted {
+		t.Fatal("unsupported lifecycle admitted serving")
+	}
+	seq, system := dbCommitSeqAndSystemRoot(col.db)
+	changed := []TypedColumnBatch{{Name: "embedding", Float32Vectors: columns[0].Float32Vectors[:1]}, {Name: "content", Strings: []string{"reject"}}, {Name: "user", Strings: []string{"reject"}}, {Name: "path", Strings: []string{"reject"}}}
+	if _, err := col.ReplaceTypedBatch(ids[:1], retained[:1], changed); !errors.Is(err, ErrVectorIndexSnapshotMismatch) {
+		t.Fatalf("unsupported admission allowed mutation: %v", err)
+	}
+	if next, root := dbCommitSeqAndSystemRoot(col.db); next != seq || root != system {
+		t.Fatal("rejected write changed authority")
+	}
+	account := &coord.typedGraphOwners
+	account.Lock()
+	defer account.Unlock()
+	if account.baseOwners != 0 || account.baseAssetBytes != 0 || account.baseDescriptorBytes != 0 || account.baseBackingBytes != 0 {
+		t.Fatal("unsupported lifecycle retained accounting")
+	}
+}
+
+func TestTypedGraphPublicDescriptorFallbackAdmission(t *testing.T) {
+	requireTypedGraphPublicServingTest(t)
 	col, base, ids, _, columns, _ := openTypedGraphQualityFixture(t, 8)
 	defer base.Close()
+	installColumnServingLeaseHooks(t, func() {
+		columnServingSegmentLeaseHooks.Lock()
+		columnServingSegmentLeaseHooks.mmap = func(*os.File, int64) ([]byte, error) {
+			return nil, errColumnServingLeaseInjected
+		}
+		columnServingSegmentLeaseHooks.Unlock()
+	})
 	if err := col.EnsureColumnGraphServing(context.Background(), base.indexName, typedGraphPublicTestOptions()); err != nil {
 		t.Fatal(err)
 	}
 	stats, available := col.ColumnGraphServingSnapshot()
 	if !available || !stats.ServingReady || stats.Physical.FallbackSegments == 0 || stats.Physical.DescriptorsLive == 0 || stats.Physical.MappedBackings != 0 || stats.Physical.MappedBytes != 0 {
-		t.Fatalf("portable fallback serving stats=%+v available=%t", stats, available)
+		t.Fatalf("descriptor fallback serving stats=%+v available=%t", stats, available)
 	}
 	var buffer VectorIndexSearchBuffer
 	response, view, err := col.SearchVectorIndexWithBufferReadView(VectorIndexSearchOptions{IndexName: base.indexName, Query: columns[0].Float32Vectors[0], TopK: 1, EfSearch: 8, StatsMode: VectorIndexSearchStatsModeMinimal}, &buffer)
@@ -161,11 +196,7 @@ func TestTypedGraphPublicPortableFallbackAdmission(t *testing.T) {
 	defer view.Close()
 	docs, err := view.FetchDocumentsForVectorIndexSearchResults(response.Results, DocumentFetchOptions{})
 	if err != nil || len(docs.Results) != 1 || !bytes.Equal(docs.Results[0].ID, ids[0]) {
-		t.Fatalf("portable fallback documents=%+v err=%v", docs.Results, err)
-	}
-	stats, available = col.ColumnGraphServingSnapshot()
-	if !available || stats.Physical.TotalFallbacks == 0 || stats.Physical.TotalBuildFailures != 0 || stats.Physical.QuarantinedHolders != 0 {
-		t.Fatalf("portable fallback completion stats=%+v available=%t", stats, available)
+		t.Fatalf("descriptor fallback documents=%+v err=%v", docs.Results, err)
 	}
 }
 

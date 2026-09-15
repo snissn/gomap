@@ -6,6 +6,7 @@ import (
 	"time"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/workstats"
 )
 
@@ -93,6 +94,9 @@ func (c *Collection) EnsureColumnGraphServing(ctx context.Context, index string,
 		if old := coord.typedGraphServing.Load(); old == nil || *old != *policy {
 			return ErrConcurrentMutation
 		}
+	}
+	if !rootpublication.StableRelativeNamespaceSupported() {
+		return errors.Join(errColumnVectorGraphSharedPreparedSearchNotEligible, rootpublication.ErrNamespacePersistenceUnsupported)
 	}
 	before := coord.typedPublication.Load()
 	wasReady := before != nil && before.servingAdmitted && !before.invalid && before.servingBase != nil

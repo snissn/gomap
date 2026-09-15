@@ -65,13 +65,14 @@ part of query-ready time and peak memory; it is not retroactively covered by
 ongoing-work admission. This route supports the selected string/FP32 schema,
 not every schema illustrated elsewhere in this guide.
 
-The complete selected lifecycle also requires mmap-direct prepared graph views
-and exact relative namespace authority for destructive asset maintenance.
-Windows currently provides neither capability: ordinary typed read-at fallback
-is still available, but is not evidence for this prepared serving lifecycle.
-Do not ignore admission or maintenance errors to claim the optimized route is
-ready. Unsupported destructive maintenance deletes nothing and does not renew
-the attempted-work allowance.
+The complete selected lifecycle requires either mmap-direct prepared graph views
+or admitted descriptor-backed holder fallback, plus exact relative namespace
+authority for destructive asset maintenance. Windows currently lacks that
+namespace authority: ordinary typed read-at fallback is still available, but is
+not evidence for this prepared serving lifecycle. Do not ignore admission or
+maintenance errors to claim the optimized route is ready. Unsupported
+destructive maintenance deletes nothing and does not renew the attempted-work
+allowance.
 
 An empty built graph can be ensured and searched (zero results), then receive
 typed inserts. Deleting all rows and folding back to an empty base is also
