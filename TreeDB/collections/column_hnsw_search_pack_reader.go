@@ -71,8 +71,12 @@ type columnHNSWSearchPackPreparedView struct {
 }
 
 func (c *Collection) openColumnHNSWSearchPackPreparedViewForReader(collection string, cfg ColumnStoreConfig, def VectorIndexDefinition, graph columnVectorGraphManifestSnapshot, state columnVectorIndexStateSnapshot) (*columnHNSWSearchPackPreparedView, columnHNSWSearchPackPreparedStatus, uint64, error) {
+	return c.openColumnHNSWSearchPackPreparedViewForReaderWithSourceAccess(collection, cfg, def, graph, state, nil)
+}
+
+func (c *Collection) openColumnHNSWSearchPackPreparedViewForReaderWithSourceAccess(collection string, cfg ColumnStoreConfig, def VectorIndexDefinition, graph columnVectorGraphManifestSnapshot, state columnVectorIndexStateSnapshot, access *columnVectorGraphSourceAccess) (*columnHNSWSearchPackPreparedView, columnHNSWSearchPackPreparedStatus, uint64, error) {
 	start := time.Now()
-	view, status, err := c.openColumnHNSWSearchPackPreparedViewForReaderNoTimer(collection, cfg, def, graph, state)
+	view, status, err := c.openColumnHNSWSearchPackPreparedViewForReaderNoTimerWithSourceAccess(collection, cfg, def, graph, state, access)
 	elapsedNanos := time.Since(start).Nanoseconds()
 	if elapsedNanos < 0 {
 		elapsedNanos = 0
@@ -90,6 +94,10 @@ func (c *Collection) openColumnHNSWSearchPackPreparedViewForReader(collection st
 }
 
 func (c *Collection) openColumnHNSWSearchPackPreparedViewForReaderNoTimer(collection string, cfg ColumnStoreConfig, def VectorIndexDefinition, graph columnVectorGraphManifestSnapshot, state columnVectorIndexStateSnapshot) (*columnHNSWSearchPackPreparedView, columnHNSWSearchPackPreparedStatus, error) {
+	return c.openColumnHNSWSearchPackPreparedViewForReaderNoTimerWithSourceAccess(collection, cfg, def, graph, state, nil)
+}
+
+func (c *Collection) openColumnHNSWSearchPackPreparedViewForReaderNoTimerWithSourceAccess(collection string, cfg ColumnStoreConfig, def VectorIndexDefinition, graph columnVectorGraphManifestSnapshot, state columnVectorIndexStateSnapshot, access *columnVectorGraphSourceAccess) (*columnHNSWSearchPackPreparedView, columnHNSWSearchPackPreparedStatus, error) {
 	asset, found, err := findColumnHNSWSearchPackStateAsset(state)
 	if err != nil {
 		return nil, columnHNSWSearchPackPreparedStatusInvalid, err
@@ -103,10 +111,6 @@ func (c *Collection) openColumnHNSWSearchPackPreparedViewForReaderNoTimer(collec
 	if err := validateColumnHNSWSearchPackStateAssetIfPresentWithMode(c.db.ColumnAssetRootDir(), cfg, def, graph, state, false); err != nil {
 		return nil, columnHNSWSearchPackPreparedStatusInvalid, err
 	}
-	path, err := columnAssetSegmentPath(c.db.ColumnAssetRootDir(), asset.Ref)
-	if err != nil {
-		return nil, columnHNSWSearchPackPreparedStatusInvalid, err
-	}
 	manager := mappedresource.NewManager()
 	key := columnHNSWSearchPackMappedResourceKey(asset)
 	scope := mappedresource.Scope{
@@ -117,14 +121,24 @@ func (c *Collection) openColumnHNSWSearchPackPreparedViewForReaderNoTimer(collec
 		Generation: graph.BaseManifestGeneration,
 		Reason:     "hnsw_search_pack_v1 prepared view",
 	}
-	handle, err := manager.AcquireFileRange(key, scope, path, mappedresource.AcquireOptions{
+	opts := mappedresource.AcquireOptions{
 		Reason:         "hnsw_search_pack_v1 prepared view",
 		ValidationMode: mappedresource.ValidationVerify,
 		PreferMapped:   true,
 		AllowHeapCopy:  true,
 		ResourceRoot:   c.db.ColumnAssetRootDir(),
-		ResourcePath:   path,
-	})
+	}
+	var handle *mappedresource.Handle
+	if access != nil {
+		handle, err = access.acquireRange(nil, c.db.ColumnAssetRootDir(), asset.Ref, manager, key, scope, opts)
+	} else {
+		path, pathErr := columnAssetSegmentPath(c.db.ColumnAssetRootDir(), asset.Ref)
+		if pathErr != nil {
+			return nil, columnHNSWSearchPackPreparedStatusInvalid, pathErr
+		}
+		opts.ResourcePath = path
+		handle, err = manager.AcquireFileRange(key, scope, path, opts)
+	}
 	if err != nil {
 		return nil, columnHNSWSearchPackPreparedStatusInvalid, err
 	}

@@ -84,7 +84,11 @@ type columnVectorGraphPhysicalRowReader struct {
 	// sharedPreparedSearch is only its non-owning holder alias for existing
 	// immutable search paths; release always goes through the capability so the
 	// holder ref and complete caller lifecycle pin cannot be separated.
-	sharedServingHolder                 *typedGraphServingHolderCapability
+	sharedServingHolder *typedGraphServingHolderCapability
+	// sourceAccess is non-nil only while constructing a serving holder. It is
+	// transferred to that holder for lazy selected resources and never exposed
+	// to generic prepared readers or request-local source paths.
+	sourceAccess                        *columnVectorGraphSourceAccess
 	sharedPreparedLegacyScalarU8Assets  []columnVectorGraphSharedPreparedLegacyScalarU8AssetDescriptor
 	zeroRowLegacyScalarU8Validation     *columnVectorGraphLegacyScalarU8ZeroRowValidationCache
 	adjacencyLayerSources               *columnVectorGraphAdjacencyDirectSources
@@ -147,10 +151,15 @@ func (c *Collection) openColumnVectorGraphPhysicalRowReaderFromView(snap *backen
 // boundary with the current installed servingBase selected by their independent
 // snapshot handshake; generic callers use it from their ordinary view path.
 func (c *Collection) buildColumnVectorGraphSharedPreparedSearchFromView(snap *backenddb.Snapshot, def VectorIndexDefinition, graph columnVectorGraphManifestSnapshot, view columnPhysicalScanSnapshotView) (*columnVectorGraphSharedPreparedSearch, error) {
+	return c.buildColumnVectorGraphSharedPreparedSearchFromViewWithSourceAccess(snap, def, graph, view, nil)
+}
+
+func (c *Collection) buildColumnVectorGraphSharedPreparedSearchFromViewWithSourceAccess(snap *backenddb.Snapshot, def VectorIndexDefinition, graph columnVectorGraphManifestSnapshot, view columnPhysicalScanSnapshotView, access *columnVectorGraphSourceAccess) (*columnVectorGraphSharedPreparedSearch, error) {
 	buildReader := &columnVectorGraphPhysicalRowReader{
 		def:                                def,
 		graph:                              graph,
 		catalog:                            view.Catalog,
+		sourceAccess:                       access,
 		quantizedAssetStatus:               make(map[string]columnVectorGraphQuantizedAssetLoadStatus),
 		skipQuantizedAssets:                true,
 		sharedPreparedLegacyScalarU8Assets: columnVectorGraphSharedPreparedLegacyScalarU8AssetDescriptors(def, view.VectorIndexState),
@@ -287,14 +296,15 @@ func (c *Collection) prepareColumnVectorGraphPhysicalRowReaderSourcesAtSnapshot(
 			return fmt.Errorf("collections: column_graph %q missing vector-index state record: %w", def.Name, errColumnVectorGraphManifestMismatch)
 		}
 		// Open once; omitted metadata sources borrow this reader/holder-owned pack.
-		pack, packStatus, packOpenNanos, packErr := c.openColumnHNSWSearchPackPreparedViewForReader(catalog.meta.Name, *baseCfg, def, graph, state)
+		access := graphReader.sourceAccess
+		pack, packStatus, packOpenNanos, packErr := c.openColumnHNSWSearchPackPreparedViewForReaderWithSourceAccess(catalog.meta.Name, *baseCfg, def, graph, state, access)
 		graphReader.hnswSearchPack = pack
 		graphReader.hnswSearchPackStatus = packStatus
 		graphReader.hnswSearchPackOpenNanos = packOpenNanos
 		if packErr != nil {
 			graphReader.hnswSearchPackStatus = columnHNSWSearchPackPreparedStatusInvalid
 		}
-		if sources, _, sourceErr := c.openColumnVectorGraphAdjacencyStateSourcesForReader(catalog.meta.Name, *baseCfg, def, graph, state); sourceErr != nil {
+		if sources, _, sourceErr := c.openColumnVectorGraphAdjacencyStateSourcesForReaderWithSourceAccess(catalog.meta.Name, *baseCfg, def, graph, state, access); sourceErr != nil {
 			return sourceErr
 		} else if sources != nil {
 			graphReader.adjacencyLayerSources = sources
@@ -310,7 +320,7 @@ func (c *Collection) prepareColumnVectorGraphPhysicalRowReaderSourcesAtSnapshot(
 			return errors.Join(fmt.Errorf("collections: column_graph %q missing vector-index adjacency state source: %w", def.Name, errColumnVectorGraphManifestMismatch), packErr)
 		}
 		if _, ok := findColumnVectorGraphInvNormStateAsset(state); ok {
-			source, fallbackReason, sourceErr := c.openColumnVectorGraphInvNormStateSourceForReader(catalog.meta.Name, *baseCfg, def, graph, state)
+			source, fallbackReason, sourceErr := c.openColumnVectorGraphInvNormStateSourceForReaderWithSourceAccess(catalog.meta.Name, *baseCfg, def, graph, state, access)
 			if sourceErr != nil {
 				return sourceErr
 			}
@@ -324,7 +334,7 @@ func (c *Collection) prepareColumnVectorGraphPhysicalRowReaderSourcesAtSnapshot(
 			if recordsErr != nil {
 				return recordsErr
 			}
-			source, sourceErr := c.openColumnVectorGraphRowRefStateSourceForReader(catalog.meta.Name, *baseCfg, def, graph, state, records, pack)
+			source, sourceErr := c.openColumnVectorGraphRowRefStateSourceForReaderWithSourceAccess(catalog.meta.Name, *baseCfg, def, graph, state, records, pack, access)
 			if sourceErr != nil {
 				return sourceErr
 			}
@@ -333,7 +343,7 @@ func (c *Collection) prepareColumnVectorGraphPhysicalRowReaderSourcesAtSnapshot(
 			graphReader.rowRefStateUnavailable = true
 		}
 		if columnVectorGraphDocumentIDStatePresent(state) {
-			source, fallbackReason, sourceErr := c.openColumnVectorGraphDocumentIDStateSourceForReader(catalog.meta.Name, *baseCfg, def, graph, state)
+			source, fallbackReason, sourceErr := c.openColumnVectorGraphDocumentIDStateSourceForReaderWithSourceAccess(catalog.meta.Name, *baseCfg, def, graph, state, access)
 			if sourceErr != nil {
 				graphReader.documentIDStateFallbackReason = fallbackReason
 				if graphReader.documentIDStateFallbackReason == "" {

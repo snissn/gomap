@@ -13,7 +13,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
 )
 
-var errColumnVectorGraphSharedPreparedSearchNotEligible = errors.New("collections: column_graph shared prepared search requires an mmap-direct prepared view")
+var errColumnVectorGraphSharedPreparedSearchNotEligible = errors.New("collections: column_graph shared prepared search requires an admitted direct prepared view")
 
 // columnVectorGraphSharedPreparedSearch is the local #1735 seam for immutable
 // prepared column_graph state. It is intentionally a collection-scoped,
@@ -73,6 +73,7 @@ type columnVectorGraphSharedPreparedSearch struct {
 	adjacencyLayerSources *columnVectorGraphAdjacencyDirectSources
 	preparedSearch        *columnVectorGraphPreparedSearchView
 	servingSegments       *columnServingSegmentLeaseSet
+	servingSourceAccess   *columnVectorGraphSourceAccess
 
 	// legacyScalarU8Assets is immutable holder identity metadata captured with
 	// the same vector-index state that produced key. It is deliberately only a
@@ -425,6 +426,7 @@ func newColumnVectorGraphSharedPreparedSearchFromReader(reader *columnVectorGrap
 		hnswSearchPackNanos:   reader.hnswSearchPackOpenNanos,
 		adjacencyLayerSources: reader.adjacencyLayerSources,
 		preparedSearch:        reader.preparedSearch,
+		servingSourceAccess:   reader.sourceAccess,
 		legacyScalarU8Assets:  reader.sharedPreparedLegacyScalarU8Assets,
 	}
 	if !holder.ready() {
@@ -440,6 +442,7 @@ func newColumnVectorGraphSharedPreparedSearchFromReader(reader *columnVectorGrap
 	reader.adjacencyLayerSources = nil
 	reader.layer0AdjacencySource = nil
 	reader.preparedSearch = nil
+	reader.sourceAccess = nil
 	reader.sharedPreparedLegacyScalarU8Assets = nil
 	return holder, nil
 }
@@ -574,6 +577,9 @@ func (h *columnVectorGraphSharedPreparedSearch) acquireLegacyScalarU8AssetWithCo
 			// Do not hold either the collection prepared-holder mutex or this
 			// holder mutex while mapping/parsing the requested code plane.
 			status, err := load()
+			if err == nil {
+				err = ctx.Err()
+			}
 			if err == nil && !columnVectorGraphSharedPreparedLegacyScalarU8AssetStatusReady(status, descriptor) {
 				err = fmt.Errorf("%w: shared legacy scalar_u8 asset %q did not produce a ready resource", errColumnVectorGraphQuantizedAssetInvalid, descriptor.definition.Name)
 			}
@@ -644,7 +650,7 @@ func (h *columnVectorGraphSharedPreparedSearch) acquireLegacyScalarU8AssetWithCo
 func (h *columnVectorGraphSharedPreparedSearch) ready() bool {
 	// Combined readiness includes any borrowed pack and persisted inverse.
 	// Pack presence alone cannot admit the native counted-source fallback.
-	return h != nil && h.typedVectorSource != nil && h.invNormSource != nil && h.rowRefSource != nil && h.documentIDSource != nil && h.adjacencyLayerSources != nil && h.preparedSearch != nil && h.preparedSearch.ready() && (h.key.family != columnVectorGraphSharedPreparedSearchKeyServing || h.servingSegments != nil)
+	return h != nil && h.typedVectorSource != nil && h.invNormSource != nil && h.rowRefSource != nil && h.documentIDSource != nil && h.adjacencyLayerSources != nil && h.preparedSearch != nil && h.preparedSearch.ready() && (h.key.family != columnVectorGraphSharedPreparedSearchKeyServing || (h.servingSegments != nil && h.servingSourceAccess != nil && h.servingSourceAccess.pool == h.servingSegments))
 }
 
 func (h *columnVectorGraphSharedPreparedSearch) close() error {
@@ -709,6 +715,7 @@ func (h *columnVectorGraphSharedPreparedSearch) close() error {
 		closeErr = errors.Join(closeErr, h.hnswSearchPack.Close())
 		h.hnswSearchPack = nil
 	}
+	h.servingSourceAccess = nil
 	if h.servingSegments != nil {
 		closeErr = errors.Join(closeErr, h.servingSegments.Close())
 		if !h.servingSegments.cleanupRetained() {
@@ -845,8 +852,12 @@ func (c *Collection) requestAndAttachColumnVectorGraphSharedPreparedLegacyScalar
 	if !descriptor.assets.HasCodes || descriptor.assets.Codes.Role != columnVectorIndexStateAssetRoleQuantizedCodes || descriptor.assets.Codes.AssetID != wantAssetID {
 		return fmt.Errorf("%w: %w: column_graph %q quantized index %q has no matching scalar_u8 code-plane identity", ErrVectorIndexSearchUnavailable, errColumnVectorGraphQuantizedAssetMissing, reader.def.Name, name)
 	}
+	access := ref.holder.servingSourceAccess
+	if ref.key.family == columnVectorGraphSharedPreparedSearchKeyServing && (access == nil || access.pool != ref.holder.servingSegments) {
+		return fmt.Errorf("%w: %w: column_graph %q quantized index %q has no serving source capability", ErrVectorIndexSearchUnavailable, errColumnVectorGraphQuantizedAssetClosed, reader.def.Name, name)
+	}
 	status, err := ref.holder.acquireLegacyScalarU8AssetWithContext(ctx, descriptor, func() (columnVectorGraphQuantizedAssetLoadStatus, error) {
-		return loadColumnVectorGraphQuantizedAssetResourceStatus(c.db.ColumnAssetRootDir(), reader.catalog.meta.Name, *reader.catalog.meta.Options.ColumnStore, reader.def, reader.graph, descriptor.definition, descriptor.assets)
+		return loadColumnVectorGraphQuantizedAssetResourceStatusWithSourceAccess(ctx, c.db.ColumnAssetRootDir(), reader.catalog.meta.Name, *reader.catalog.meta.Options.ColumnStore, reader.def, reader.graph, descriptor.definition, descriptor.assets, access)
 	})
 	if err != nil {
 		return fmt.Errorf("%w: column_graph %q quantized index %q shared scalar_u8 code plane: %w", ErrVectorIndexSearchUnavailable, reader.def.Name, name, err)

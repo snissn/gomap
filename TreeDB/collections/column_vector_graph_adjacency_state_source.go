@@ -13,16 +13,24 @@ import (
 const columnVectorGraphAdjacencyStateSourceScopeID = "column-vector-graph-adjacency-state"
 
 func (c *Collection) openColumnVectorGraphAdjacencyStateSourcesForReader(collection string, cfg ColumnStoreConfig, def VectorIndexDefinition, graph columnVectorGraphManifestSnapshot, state columnVectorIndexStateSnapshot) (*columnVectorGraphAdjacencyDirectSources, typeddecode.Reason, error) {
+	return c.openColumnVectorGraphAdjacencyStateSourcesForReaderWithSourceAccess(collection, cfg, def, graph, state, nil)
+}
+
+func (c *Collection) openColumnVectorGraphAdjacencyStateSourcesForReaderWithSourceAccess(collection string, cfg ColumnStoreConfig, def VectorIndexDefinition, graph columnVectorGraphManifestSnapshot, state columnVectorIndexStateSnapshot, access *columnVectorGraphSourceAccess) (*columnVectorGraphAdjacencyDirectSources, typeddecode.Reason, error) {
 	if c == nil {
 		return nil, typeddecode.ReasonValidationFailed, errCollectionNil
 	}
 	if c.db == nil {
 		return nil, typeddecode.ReasonValidationFailed, errCollectionDBNil
 	}
-	return openColumnVectorGraphAdjacencyStateSourcesFromRoot(c.db.ColumnAssetRootDir(), collection, cfg, def, graph, state)
+	return openColumnVectorGraphAdjacencyStateSourcesFromRootWithSourceAccess(c.db.ColumnAssetRootDir(), collection, cfg, def, graph, state, access)
 }
 
 func openColumnVectorGraphAdjacencyStateSourcesFromRoot(rootDir, collection string, cfg ColumnStoreConfig, def VectorIndexDefinition, graph columnVectorGraphManifestSnapshot, state columnVectorIndexStateSnapshot) (*columnVectorGraphAdjacencyDirectSources, typeddecode.Reason, error) {
+	return openColumnVectorGraphAdjacencyStateSourcesFromRootWithSourceAccess(rootDir, collection, cfg, def, graph, state, nil)
+}
+
+func openColumnVectorGraphAdjacencyStateSourcesFromRootWithSourceAccess(rootDir, collection string, cfg ColumnStoreConfig, def VectorIndexDefinition, graph columnVectorGraphManifestSnapshot, state columnVectorIndexStateSnapshot, access *columnVectorGraphSourceAccess) (*columnVectorGraphAdjacencyDirectSources, typeddecode.Reason, error) {
 	if !columnVectorIndexStateDefinitionParametersMatch(&state, &def) || !columnVectorIndexStateMatchesGraph(state, graph) {
 		return nil, typeddecode.ReasonValidationFailed, fmt.Errorf("collections: column_graph %q adjacency state identity mismatch", def.Name)
 	}
@@ -35,7 +43,7 @@ func openColumnVectorGraphAdjacencyStateSourcesFromRoot(rootDir, collection stri
 	}
 	group := &columnVectorGraphAdjacencyDirectSources{sources: make([]*columnVectorGraphLayer0AdjacencyDirectSource, 0, len(assets)), allLayers: true}
 	for layer, asset := range assets {
-		source, sourceReason, sourceErr := newColumnVectorGraphAdjacencyStateDirectSourceFromRoot(rootDir, collection, cfg, def, graph, state, asset, layer)
+		source, sourceReason, sourceErr := newColumnVectorGraphAdjacencyStateDirectSourceFromRootWithSourceAccess(rootDir, collection, cfg, def, graph, state, asset, layer, access)
 		if sourceErr != nil {
 			_ = group.Close()
 			if sourceReason == "" {
@@ -103,6 +111,10 @@ func columnVectorGraphAdjacencyStateAssetsByLayer(state columnVectorIndexStateSn
 }
 
 func newColumnVectorGraphAdjacencyStateDirectSourceFromRoot(rootDir, collection string, cfg ColumnStoreConfig, def VectorIndexDefinition, graph columnVectorGraphManifestSnapshot, state columnVectorIndexStateSnapshot, asset columnVectorIndexStateAssetSnapshot, layer int) (*columnVectorGraphLayer0AdjacencyDirectSource, typeddecode.Reason, error) {
+	return newColumnVectorGraphAdjacencyStateDirectSourceFromRootWithSourceAccess(rootDir, collection, cfg, def, graph, state, asset, layer, nil)
+}
+
+func newColumnVectorGraphAdjacencyStateDirectSourceFromRootWithSourceAccess(rootDir, collection string, cfg ColumnStoreConfig, def VectorIndexDefinition, graph columnVectorGraphManifestSnapshot, state columnVectorIndexStateSnapshot, asset columnVectorIndexStateAssetSnapshot, layer int, access *columnVectorGraphSourceAccess) (*columnVectorGraphLayer0AdjacencyDirectSource, typeddecode.Reason, error) {
 	if asset.Role != columnVectorIndexStateAssetRoleAdjacency || asset.AssetID != columnVectorIndexStateAdjacencyAssetID(layer) || asset.LogicalType != columnVectorIndexStateLogicalTypeUint32List || asset.PhysicalEncoding != columnVectorIndexStateEncodingRawUint32List {
 		return nil, typeddecode.ReasonValidationFailed, fmt.Errorf("collections: column_graph %q adjacency state layer %d asset contract mismatch role=%q id=%q logical=%q physical=%q", def.Name, layer, asset.Role, asset.AssetID, asset.LogicalType, asset.PhysicalEncoding)
 	}
@@ -116,13 +128,28 @@ func newColumnVectorGraphAdjacencyStateDirectSourceFromRoot(rootDir, collection 
 	if asset.SourceSchemaHash != sourceCfg.SchemaHash {
 		return nil, typeddecode.ReasonValidationFailed, fmt.Errorf("collections: column_graph %q adjacency state layer %d schema_hash=%d want %d", def.Name, layer, asset.SourceSchemaHash, sourceCfg.SchemaHash)
 	}
-	if err := validateColumnVectorIndexStateAssetRefAvailable(rootDir, asset); err != nil {
-		return nil, typeddecode.ReasonValidationFailed, err
+	if access == nil {
+		if err := validateColumnVectorIndexStateAssetRefAvailable(rootDir, asset); err != nil {
+			return nil, typeddecode.ReasonValidationFailed, err
+		}
 	}
-	raw, err := readColumnPhysicalAssetFromManager(rootDir, asset.Ref)
+	var source *columnVectorGraphLayer0AdjacencyDirectSource
+	var reason typeddecode.Reason
+	err = withColumnVectorGraphSourceAsset(access, nil, rootDir, asset.Ref, fmt.Sprintf("column_graph adjacency state layer %d setup", layer), func(raw []byte) error {
+		var buildErr error
+		source, reason, buildErr = newColumnVectorGraphAdjacencyStateDirectSourceFromRaw(rootDir, collection, def, state, asset, layer, sourceCfg, adapterColumn, raw, access)
+		return buildErr
+	})
 	if err != nil {
-		return nil, typeddecode.ReasonValidationFailed, err
+		if reason == "" {
+			reason = typeddecode.ReasonValidationFailed
+		}
+		return nil, reason, err
 	}
+	return source, reason, nil
+}
+
+func newColumnVectorGraphAdjacencyStateDirectSourceFromRaw(rootDir, collection string, def VectorIndexDefinition, state columnVectorIndexStateSnapshot, asset columnVectorIndexStateAssetSnapshot, layer int, sourceCfg ColumnStoreConfig, adapterColumn typedColumnAdapterColumn, raw []byte, access *columnVectorGraphSourceAccess) (*columnVectorGraphLayer0AdjacencyDirectSource, typeddecode.Reason, error) {
 	if int64(len(raw)) != asset.AssetBytes || int64(len(raw)) != asset.Ref.Length {
 		return nil, typeddecode.ReasonPayloadLengthMismatch, fmt.Errorf("collections: column_graph %q adjacency state layer %d bytes=%d manifest=%d ref=%d", def.Name, layer, len(raw), asset.AssetBytes, asset.Ref.Length)
 	}
@@ -195,11 +222,11 @@ func newColumnVectorGraphAdjacencyStateDirectSourceFromRoot(rootDir, collection 
 	if err != nil {
 		return nil, typeddecode.ReasonValidationFailed, err
 	}
-	offsetsHandle, err := acquireColumnVectorGraphAdjacencyStateSection(rootDir, collection, asset.Ref, image.Version, offsetsSection, offsetsChecksum, manager, fmt.Sprintf("layer %d offsets", layer))
+	offsetsHandle, err := acquireColumnVectorGraphAdjacencyStateSectionWithSourceAccess(access, rootDir, collection, asset.Ref, image.Version, offsetsSection, offsetsChecksum, manager, fmt.Sprintf("layer %d offsets", layer))
 	if err != nil {
 		return nil, typeddecode.ReasonValidationFailed, err
 	}
-	valuesHandle, err := acquireColumnVectorGraphAdjacencyStateSection(rootDir, collection, asset.Ref, image.Version, valuesSection, valuesChecksum, manager, fmt.Sprintf("layer %d values", layer))
+	valuesHandle, err := acquireColumnVectorGraphAdjacencyStateSectionWithSourceAccess(access, rootDir, collection, asset.Ref, image.Version, valuesSection, valuesChecksum, manager, fmt.Sprintf("layer %d values", layer))
 	if err != nil {
 		releaseErr := offsetsHandle.Release()
 		return nil, typeddecode.ReasonValidationFailed, errors.Join(err, releaseErr)
@@ -224,7 +251,7 @@ func newColumnVectorGraphAdjacencyStateDirectSourceFromRoot(rootDir, collection 
 		ValuesHandle:       valuesHandle,
 		Manager:            manager,
 	}
-	source, reason, err := columnVectorGraphPreparedCSRAdjacencyDirectSourceFromHandles(manager, layer, state.RowCount, valuesSection.Length/4, graphReq, directReq, offsetsHandle, valuesHandle)
+	source, reason, err := columnVectorGraphPreparedCSRAdjacencyDirectSourceFromHandlesWithScratch(manager, layer, state.RowCount, valuesSection.Length/4, graphReq, directReq, offsetsHandle, valuesHandle, access == nil)
 	if err != nil {
 		releaseErr := errors.Join(offsetsHandle.Release(), valuesHandle.Release())
 		return nil, reason, errors.Join(err, releaseErr)
@@ -260,26 +287,36 @@ func columnVectorGraphAdjacencyStateSectionKey(ref ColumnAssetRef, imageVersion 
 }
 
 func acquireColumnVectorGraphAdjacencyStateSection(rootDir, collection string, ref ColumnAssetRef, imageVersion uint16, section typedcolumn.ColumnPartImageSection, checksum uint32, manager *mappedresource.Manager, label string) (*mappedresource.Handle, error) {
+	return acquireColumnVectorGraphAdjacencyStateSectionWithSourceAccess(nil, rootDir, collection, ref, imageVersion, section, checksum, manager, label)
+}
+
+func acquireColumnVectorGraphAdjacencyStateSectionWithSourceAccess(access *columnVectorGraphSourceAccess, rootDir, collection string, ref ColumnAssetRef, imageVersion uint16, section typedcolumn.ColumnPartImageSection, checksum uint32, manager *mappedresource.Manager, label string) (*mappedresource.Handle, error) {
 	if manager == nil {
 		return nil, errors.New("collections: column_graph adjacency state requires mappedresource manager")
-	}
-	path, err := columnAssetSegmentPath(rootDir, ref)
-	if err != nil {
-		return nil, err
 	}
 	key, err := columnVectorGraphAdjacencyStateSectionKey(ref, imageVersion, section, checksum)
 	if err != nil {
 		return nil, err
 	}
 	scope := mappedresource.Scope{Kind: mappedresource.ScopeColumnPartReader, ID: columnVectorGraphAdjacencyStateSourceScopeID, Collection: collection, Namespace: ref.Namespace, Generation: ref.Generation, Reason: "column_graph adjacency state"}
-	handle, err := manager.AcquireFileRange(key, scope, path, mappedresource.AcquireOptions{
+	opts := mappedresource.AcquireOptions{
 		Reason:         "column_graph adjacency state " + label,
 		ValidationMode: mappedresource.ValidationVerify,
 		PreferMapped:   true,
 		AllowHeapCopy:  true,
 		ResourceRoot:   rootDir,
-		ResourcePath:   path,
-	})
+	}
+	var handle *mappedresource.Handle
+	if access != nil {
+		handle, err = access.acquireRange(nil, rootDir, ref, manager, key, scope, opts)
+	} else {
+		path, pathErr := columnAssetSegmentPath(rootDir, ref)
+		if pathErr != nil {
+			return nil, pathErr
+		}
+		opts.ResourcePath = path
+		handle, err = manager.AcquireFileRange(key, scope, path, opts)
+	}
 	if err != nil {
 		return nil, err
 	}

@@ -299,16 +299,24 @@ func validateColumnVectorGraphInvNormStateAssetIfPresent(rootDir, collection str
 }
 
 func (c *Collection) openColumnVectorGraphInvNormStateSourceForReader(collection string, cfg ColumnStoreConfig, def VectorIndexDefinition, graph columnVectorGraphManifestSnapshot, state columnVectorIndexStateSnapshot) (*columnVectorGraphInvNormStateSource, typeddecode.Reason, error) {
+	return c.openColumnVectorGraphInvNormStateSourceForReaderWithSourceAccess(collection, cfg, def, graph, state, nil)
+}
+
+func (c *Collection) openColumnVectorGraphInvNormStateSourceForReaderWithSourceAccess(collection string, cfg ColumnStoreConfig, def VectorIndexDefinition, graph columnVectorGraphManifestSnapshot, state columnVectorIndexStateSnapshot, access *columnVectorGraphSourceAccess) (*columnVectorGraphInvNormStateSource, typeddecode.Reason, error) {
 	if c == nil {
 		return nil, typeddecode.ReasonValidationFailed, errCollectionNil
 	}
 	if c.db == nil {
 		return nil, typeddecode.ReasonValidationFailed, errCollectionDBNil
 	}
-	return newColumnVectorGraphInvNormStateSourceFromRoot(c.db.ColumnAssetRootDir(), collection, cfg, def, graph, state)
+	return newColumnVectorGraphInvNormStateSourceFromRootWithSourceAccess(c.db.ColumnAssetRootDir(), collection, cfg, def, graph, state, access)
 }
 
 func newColumnVectorGraphInvNormStateSourceFromRoot(rootDir, collection string, cfg ColumnStoreConfig, def VectorIndexDefinition, graph columnVectorGraphManifestSnapshot, state columnVectorIndexStateSnapshot) (*columnVectorGraphInvNormStateSource, typeddecode.Reason, error) {
+	return newColumnVectorGraphInvNormStateSourceFromRootWithSourceAccess(rootDir, collection, cfg, def, graph, state, nil)
+}
+
+func newColumnVectorGraphInvNormStateSourceFromRootWithSourceAccess(rootDir, collection string, cfg ColumnStoreConfig, def VectorIndexDefinition, graph columnVectorGraphManifestSnapshot, state columnVectorIndexStateSnapshot, access *columnVectorGraphSourceAccess) (*columnVectorGraphInvNormStateSource, typeddecode.Reason, error) {
 	asset, ok := findColumnVectorGraphInvNormStateAsset(state)
 	if !ok {
 		return nil, "", nil
@@ -329,13 +337,28 @@ func newColumnVectorGraphInvNormStateSourceFromRoot(rootDir, collection string, 
 	if asset.SourceSchemaHash != sourceCfg.SchemaHash {
 		return nil, typeddecode.ReasonValidationFailed, fmt.Errorf("collections: column_graph %q inv_norm state schema_hash=%d want %d", def.Name, asset.SourceSchemaHash, sourceCfg.SchemaHash)
 	}
-	if err := validateColumnVectorGraphAssetRefAvailable(rootDir, asset.Ref); err != nil {
-		return nil, typeddecode.ReasonValidationFailed, err
+	if access == nil {
+		if err := validateColumnVectorGraphAssetRefAvailable(rootDir, asset.Ref); err != nil {
+			return nil, typeddecode.ReasonValidationFailed, err
+		}
 	}
-	raw, err := readColumnPhysicalAssetFromManager(rootDir, asset.Ref)
+	var source *columnVectorGraphInvNormStateSource
+	var reason typeddecode.Reason
+	err = withColumnVectorGraphSourceAsset(access, nil, rootDir, asset.Ref, "column_graph inv_norm state setup", func(raw []byte) error {
+		var buildErr error
+		source, reason, buildErr = newColumnVectorGraphInvNormStateSourceFromRaw(rootDir, collection, def, state, asset, sourceCfg, adapterColumn, raw, access)
+		return buildErr
+	})
 	if err != nil {
-		return nil, typeddecode.ReasonValidationFailed, err
+		if reason == "" {
+			reason = typeddecode.ReasonValidationFailed
+		}
+		return nil, reason, err
 	}
+	return source, reason, nil
+}
+
+func newColumnVectorGraphInvNormStateSourceFromRaw(rootDir, collection string, def VectorIndexDefinition, state columnVectorIndexStateSnapshot, asset columnVectorIndexStateAssetSnapshot, sourceCfg ColumnStoreConfig, adapterColumn typedColumnAdapterColumn, raw []byte, access *columnVectorGraphSourceAccess) (*columnVectorGraphInvNormStateSource, typeddecode.Reason, error) {
 	if int64(len(raw)) != asset.AssetBytes || int64(len(raw)) != asset.Ref.Length {
 		return nil, typeddecode.ReasonPayloadLengthMismatch, fmt.Errorf("collections: column_graph %q inv_norm state bytes=%d manifest=%d ref=%d", def.Name, len(raw), asset.AssetBytes, asset.Ref.Length)
 	}
@@ -374,7 +397,7 @@ func newColumnVectorGraphInvNormStateSourceFromRoot(rootDir, collection string, 
 		return nil, typeddecode.ReasonValidationFailed, err
 	}
 	manager := mappedresource.NewManager()
-	handle, err := acquireColumnVectorGraphInvNormStateSection(rootDir, collection, asset.Ref, image.Version, section, page.Checksum(sectionBytes), manager)
+	handle, err := acquireColumnVectorGraphInvNormStateSectionWithSourceAccess(access, rootDir, collection, asset.Ref, image.Version, section, page.Checksum(sectionBytes), manager)
 	if err != nil {
 		return nil, typeddecode.ReasonValidationFailed, err
 	}
@@ -401,12 +424,15 @@ func newColumnVectorGraphInvNormStateSourceFromRoot(rootDir, collection string, 
 	if err != nil {
 		return nil, fallbackReason, err
 	}
+	if access != nil && outcome == columnVectorGraphInvNormStateOutcomeScratchDecode {
+		return nil, fallbackReason, fmt.Errorf("collections: serving inv_norm source requires a pool-backed typed view; scratch decode reason=%s", fallbackReason)
+	}
 	source := &columnVectorGraphInvNormStateSource{rows: asset.RowCount, values: values, outcome: outcome, fallbackReason: fallbackReason, manager: manager, handle: retained}
 	if err := validateColumnVectorGraphInvNormValues(def.Name, values, asset.RowCount); err != nil {
 		_ = source.Close()
 		return nil, typeddecode.ReasonValidationFailed, err
 	}
-	if prepared, _, ok := prepareColumnVectorGraphPreparedNormView(source, asset.RowCount); ok {
+	if prepared, _, ok := prepareColumnVectorGraphPreparedNormViewWithHolderFallback(source, asset.RowCount, access != nil); ok {
 		source.prepared = prepared
 	}
 	if outcome == columnVectorGraphInvNormStateOutcomeScratchDecode {
@@ -495,12 +521,12 @@ func columnVectorGraphInvNormStateByteLen(rows int) (int, error) {
 }
 
 func acquireColumnVectorGraphInvNormStateSection(rootDir, collection string, ref ColumnAssetRef, imageVersion uint16, section typedcolumn.ColumnPartImageSection, checksum uint32, manager *mappedresource.Manager) (*mappedresource.Handle, error) {
+	return acquireColumnVectorGraphInvNormStateSectionWithSourceAccess(nil, rootDir, collection, ref, imageVersion, section, checksum, manager)
+}
+
+func acquireColumnVectorGraphInvNormStateSectionWithSourceAccess(access *columnVectorGraphSourceAccess, rootDir, collection string, ref ColumnAssetRef, imageVersion uint16, section typedcolumn.ColumnPartImageSection, checksum uint32, manager *mappedresource.Manager) (*mappedresource.Handle, error) {
 	if manager == nil {
 		return nil, errors.New("collections: column_graph inv_norm state requires mappedresource manager")
-	}
-	path, err := columnAssetSegmentPath(rootDir, ref)
-	if err != nil {
-		return nil, err
 	}
 	sectionOffset, err := columnVectorGraphTypedColumnSectionOffset(ref, section)
 	if err != nil {
@@ -526,14 +552,24 @@ func acquireColumnVectorGraphInvNormStateSection(rootDir, collection string, ref
 		},
 	}
 	scope := mappedresource.Scope{Kind: mappedresource.ScopeColumnPartReader, ID: columnVectorGraphInvNormStateScopeID, Collection: collection, Namespace: ref.Namespace, Generation: ref.Generation, Reason: "column_graph inv_norm state"}
-	handle, err := manager.AcquireFileRange(key, scope, path, mappedresource.AcquireOptions{
+	opts := mappedresource.AcquireOptions{
 		Reason:         "column_graph inv_norm state section",
 		ValidationMode: mappedresource.ValidationVerify,
 		PreferMapped:   true,
 		AllowHeapCopy:  true,
 		ResourceRoot:   rootDir,
-		ResourcePath:   path,
-	})
+	}
+	var handle *mappedresource.Handle
+	if access != nil {
+		handle, err = access.acquireRange(nil, rootDir, ref, manager, key, scope, opts)
+	} else {
+		path, pathErr := columnAssetSegmentPath(rootDir, ref)
+		if pathErr != nil {
+			return nil, pathErr
+		}
+		opts.ResourcePath = path
+		handle, err = manager.AcquireFileRange(key, scope, path, opts)
+	}
 	if err != nil {
 		return nil, err
 	}

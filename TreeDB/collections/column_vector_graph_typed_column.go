@@ -120,6 +120,12 @@ func (c *Collection) newColumnVectorGraphTypedColumnVectorSource(catalog *collec
 	if reader == nil {
 		return nil, errNilColumnVectorGraphPhysicalRowReader
 	}
+	if reader.sourceAccess != nil && reader.rowRefSource == nil {
+		// Serving holders never scan physical row images to rediscover vector
+		// locations. Their installed base closure must include authoritative
+		// row-ref state, and a missing source fails closed before that legacy path.
+		return nil, fmt.Errorf("collections: column_graph %q serving typed-column vector source requires row-ref state", graph.IndexName)
+	}
 	if graph.BaseManifestGeneration != manifest.Generation || graph.BaseManifestGeneration != cfg.ActiveManifest.Generation || graph.BaseSchemaHash != cfg.SchemaHash {
 		return nil, fmt.Errorf("collections: column_graph %q typed-column vector source stale graph/base identity", graph.IndexName)
 	}
@@ -231,7 +237,7 @@ func (c *Collection) newColumnVectorGraphTypedColumnVectorSource(catalog *collec
 		if !ok {
 			return nil, fmt.Errorf("collections: column_graph %q typed-column vector source missing physical rows for generation=%d", graph.IndexName, generation)
 		}
-		part, decodedBytes, loadErr := c.loadColumnVectorGraphTypedColumnVectorPart(catalog.meta.Name, cfg, typedRef, physicalRows, field, adapterColumn, source.manager)
+		part, decodedBytes, loadErr := c.loadColumnVectorGraphTypedColumnVectorPartWithSourceAccess(catalog.meta.Name, cfg, typedRef, physicalRows, field, adapterColumn, source.manager, reader.sourceAccess)
 		if loadErr != nil {
 			return nil, fmt.Errorf("collections: column_graph %q typed-column vector source load generation=%d part_id=%d: %w", graph.IndexName, typedRef.Ref.Generation, typedRef.Ref.PartID, loadErr)
 		}
@@ -250,7 +256,7 @@ func (c *Collection) newColumnVectorGraphTypedColumnVectorSource(catalog *collec
 		}
 		locations[ordinal].part = part
 	}
-	if prepared, _, _, ok := prepareColumnVectorGraphPreparedVectorView(source, graph.RowCount, graph.Dimensions); ok {
+	if prepared, _, _, ok := prepareColumnVectorGraphPreparedVectorViewWithHolderFallback(source, graph.RowCount, graph.Dimensions, reader.sourceAccess != nil); ok {
 		source.prepared = prepared
 	}
 	source.captureResourceStats()
@@ -406,6 +412,10 @@ func (c *Collection) columnVectorGraphTypedColumnPhysicalLocations(collection st
 }
 
 func (c *Collection) loadColumnVectorGraphTypedColumnVectorPart(collection string, cfg ColumnStoreConfig, typedRef columnManifestAssetRefForScan, physicalRows int, field TypedStorageField, adapterColumn typedColumnAdapterColumn, manager *mappedresource.Manager) (*columnVectorGraphTypedColumnVectorPart, uint64, error) {
+	return c.loadColumnVectorGraphTypedColumnVectorPartWithSourceAccess(collection, cfg, typedRef, physicalRows, field, adapterColumn, manager, nil)
+}
+
+func (c *Collection) loadColumnVectorGraphTypedColumnVectorPartWithSourceAccess(collection string, cfg ColumnStoreConfig, typedRef columnManifestAssetRefForScan, physicalRows int, field TypedStorageField, adapterColumn typedColumnAdapterColumn, manager *mappedresource.Manager, access *columnVectorGraphSourceAccess) (*columnVectorGraphTypedColumnVectorPart, uint64, error) {
 	if typedRef.Ref.Kind != ColumnAssetKindTCS1TypedColumnPart {
 		return nil, 0, fmt.Errorf("typed ref kind=%q want %q", typedRef.Ref.Kind, ColumnAssetKindTCS1TypedColumnPart)
 	}
@@ -414,6 +424,16 @@ func (c *Collection) loadColumnVectorGraphTypedColumnVectorPart(collection strin
 	}
 	if typedRef.Rows != physicalRows {
 		return nil, 0, fmt.Errorf("typed_column_part rows=%d physical_rows=%d", typedRef.Rows, physicalRows)
+	}
+	if access != nil {
+		var part *columnVectorGraphTypedColumnVectorPart
+		var decodedBytes uint64
+		err := access.withAsset(nil, c.db.ColumnAssetRootDir(), typedRef.Ref, "column_graph typed-column vector part setup", func(raw []byte) error {
+			var buildErr error
+			part, decodedBytes, buildErr = c.loadColumnVectorGraphTypedColumnVectorPartFromRaw(collection, cfg, typedRef, field, adapterColumn, manager, raw, access)
+			return buildErr
+		})
+		return part, decodedBytes, err
 	}
 	readCache, err := newColumnPhysicalAssetReadCacheWithIntegrity(c.db.ColumnAssetRootDir(), cfg.AssetManager.Namespace, ColumnAssetReadIntegrityVerify)
 	if err != nil {
@@ -427,6 +447,10 @@ func (c *Collection) loadColumnVectorGraphTypedColumnVectorPart(collection strin
 	if err != nil {
 		return nil, 0, err
 	}
+	return c.loadColumnVectorGraphTypedColumnVectorPartFromRaw(collection, cfg, typedRef, field, adapterColumn, manager, raw, nil)
+}
+
+func (c *Collection) loadColumnVectorGraphTypedColumnVectorPartFromRaw(collection string, cfg ColumnStoreConfig, typedRef columnManifestAssetRefForScan, field TypedStorageField, adapterColumn typedColumnAdapterColumn, manager *mappedresource.Manager, raw []byte, access *columnVectorGraphSourceAccess) (*columnVectorGraphTypedColumnVectorPart, uint64, error) {
 	image, err := typedcolumn.ParseColumnPartImage(raw)
 	if err != nil {
 		return nil, 0, err
@@ -464,9 +488,12 @@ func (c *Collection) loadColumnVectorGraphTypedColumnVectorPart(collection strin
 		return nil, 0, err
 	}
 	sectionChecksum := page.Checksum(sectionBytes)
-	values, handle, outcome, fallbackReason, err := c.acquireColumnVectorGraphTypedColumnDenseVectorValues(collection, typedRef.Ref, image.Version, section, certColumn, sectionChecksum, typedRef.Rows, adapterColumn.Definition.FixedWidthElements, field, manager)
+	values, handle, outcome, fallbackReason, err := c.acquireColumnVectorGraphTypedColumnDenseVectorValuesWithSourceAccess(collection, typedRef.Ref, image.Version, section, certColumn, sectionChecksum, typedRef.Rows, adapterColumn.Definition.FixedWidthElements, field, manager, access)
 	if err != nil {
 		return nil, 0, err
+	}
+	if access != nil && outcome == columnVectorGraphTypedColumnVectorOutcomeScratchDecode {
+		return nil, 0, fmt.Errorf("collections: serving typed-column vector source requires a pool-backed typed view; scratch decode reason=%s", fallbackReason)
 	}
 	decodedBytes := uint64(image.ManifestBytes)
 	if outcome == columnVectorGraphTypedColumnVectorOutcomeScratchDecode {
@@ -586,12 +613,12 @@ func columnVectorGraphTypedColumnDenseByteLen(rows, dims int) (int, error) {
 }
 
 func (c *Collection) acquireColumnVectorGraphTypedColumnDenseVectorValues(collection string, ref ColumnAssetRef, imageVersion uint16, section typedcolumn.ColumnPartImageSection, certColumn typedcolumn.ColumnPartLayoutContractColumn, sectionChecksum uint32, rows, dims int, field TypedStorageField, manager *mappedresource.Manager) ([]float32, *mappedresource.Handle, columnVectorGraphTypedColumnVectorOutcome, typeddecode.Reason, error) {
+	return c.acquireColumnVectorGraphTypedColumnDenseVectorValuesWithSourceAccess(collection, ref, imageVersion, section, certColumn, sectionChecksum, rows, dims, field, manager, nil)
+}
+
+func (c *Collection) acquireColumnVectorGraphTypedColumnDenseVectorValuesWithSourceAccess(collection string, ref ColumnAssetRef, imageVersion uint16, section typedcolumn.ColumnPartImageSection, certColumn typedcolumn.ColumnPartLayoutContractColumn, sectionChecksum uint32, rows, dims int, field TypedStorageField, manager *mappedresource.Manager, access *columnVectorGraphSourceAccess) ([]float32, *mappedresource.Handle, columnVectorGraphTypedColumnVectorOutcome, typeddecode.Reason, error) {
 	if manager == nil {
 		return nil, nil, columnVectorGraphTypedColumnVectorOutcomeUnknown, "", errors.New("nil mappedresource manager")
-	}
-	path, err := columnAssetSegmentPath(c.db.ColumnAssetRootDir(), ref)
-	if err != nil {
-		return nil, nil, columnVectorGraphTypedColumnVectorOutcomeUnknown, "", err
 	}
 	sectionOffset, err := columnVectorGraphTypedColumnSectionOffset(ref, section)
 	if err != nil {
@@ -616,7 +643,17 @@ func (c *Collection) acquireColumnVectorGraphTypedColumnDenseVectorValues(collec
 		},
 	}
 	scope := mappedresource.Scope{Kind: mappedresource.ScopeColumnPartReader, ID: columnVectorGraphTypedColumnVectorScopeID, Collection: collection, Namespace: ref.Namespace, Generation: ref.Generation, Reason: "column_graph typed-column vector source"}
-	handle, err := manager.AcquireFileRange(key, scope, path, mappedresource.AcquireOptions{Reason: "column_graph typed-column dense vector section", ValidationMode: mappedresource.ValidationVerify, PreferMapped: true, AllowHeapCopy: true})
+	opts := mappedresource.AcquireOptions{Reason: "column_graph typed-column dense vector section", ValidationMode: mappedresource.ValidationVerify, PreferMapped: true, AllowHeapCopy: true}
+	var handle *mappedresource.Handle
+	if access != nil {
+		handle, err = access.acquireRange(nil, c.db.ColumnAssetRootDir(), ref, manager, key, scope, opts)
+	} else {
+		path, pathErr := columnAssetSegmentPath(c.db.ColumnAssetRootDir(), ref)
+		if pathErr != nil {
+			return nil, nil, columnVectorGraphTypedColumnVectorOutcomeUnknown, "", pathErr
+		}
+		handle, err = manager.AcquireFileRange(key, scope, path, opts)
+	}
 	if err != nil {
 		return nil, nil, columnVectorGraphTypedColumnVectorOutcomeUnknown, "", err
 	}

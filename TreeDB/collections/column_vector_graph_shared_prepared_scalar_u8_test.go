@@ -267,6 +267,74 @@ func TestColumnGraphSharedPreparedLegacyScalarU8AssetFailureRetries(t *testing.T
 	}
 }
 
+func TestColumnGraphSharedPreparedLegacyScalarU8AssetFirstLoaderCancellationClosesBeforeRetry(t *testing.T) {
+	holder := &columnVectorGraphSharedPreparedSearch{}
+	descriptor := columnVectorGraphSharedPreparedLegacyScalarU8AssetDescriptor{
+		definition: QuantizedVectorIndexDefinition{Name: "q", Codec: QuantizedVectorCodecScalarU8, Version: 1},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	firstResource := &columnVectorGraphQuantizedAssetResource{}
+	_, err := holder.acquireLegacyScalarU8AssetWithContext(ctx, descriptor, func() (columnVectorGraphQuantizedAssetLoadStatus, error) {
+		// Model cancellation racing immediately after the physical resource and
+		// prepared view were constructed. The single-flight seam owns the
+		// completed status until it either publishes or closes it.
+		cancel()
+		return columnVectorGraphQuantizedAssetLoadStatus{
+			Definition:   descriptor.definition,
+			Asset:        descriptor.assets.Codes,
+			Prepared:     &quantizedasset.Prepared{},
+			resource:     firstResource,
+			ownsResource: true,
+		}, nil
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled first loader err=%v want context.Canceled", err)
+	}
+	firstResource.mu.Lock()
+	firstClosed := firstResource.closed
+	firstResource.mu.Unlock()
+	if !firstClosed {
+		t.Fatal("canceled first loader leaked its completed resource")
+	}
+
+	holder.legacyScalarU8Mu.Lock()
+	entries := len(holder.legacyScalarU8Entries)
+	var retained bool
+	for _, entry := range holder.legacyScalarU8Entries[:cap(holder.legacyScalarU8Entries)] {
+		retained = retained || entry != nil
+	}
+	holder.legacyScalarU8Mu.Unlock()
+	if entries != 0 || retained {
+		t.Fatalf("canceled first loader retained entry: len=%d backing_retained=%v", entries, retained)
+	}
+
+	secondResource := &columnVectorGraphQuantizedAssetResource{}
+	status, err := holder.acquireLegacyScalarU8AssetWithContext(context.Background(), descriptor, func() (columnVectorGraphQuantizedAssetLoadStatus, error) {
+		return columnVectorGraphQuantizedAssetLoadStatus{
+			Definition:   descriptor.definition,
+			Asset:        descriptor.assets.Codes,
+			Prepared:     &quantizedasset.Prepared{},
+			resource:     secondResource,
+			ownsResource: true,
+		}, nil
+	})
+	if err != nil {
+		t.Fatalf("retry after canceled first loader: %v", err)
+	}
+	if status.resource != secondResource || !status.ownsResource {
+		t.Fatalf("retry status=%+v", status)
+	}
+	if err := holder.close(); err != nil {
+		t.Fatalf("holder close: %v", err)
+	}
+	secondResource.mu.Lock()
+	secondClosed := secondResource.closed
+	secondResource.mu.Unlock()
+	if !secondClosed {
+		t.Fatal("holder close did not release successful retry resource")
+	}
+}
+
 func TestColumnGraphSharedPreparedLegacyScalarU8AssetCloseDuringLoad(t *testing.T) {
 	holder := &columnVectorGraphSharedPreparedSearch{}
 	descriptor := columnVectorGraphSharedPreparedLegacyScalarU8AssetDescriptor{

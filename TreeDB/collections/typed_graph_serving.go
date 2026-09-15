@@ -371,12 +371,15 @@ func (c *Collection) searchTypedGraphServing(opts VectorIndexSearchOptions, buff
 	}
 	response.IndexName, response.Strategy, response.Path = p.index, VectorIndexStrategyColumnGraph, VectorIndexSearchPathColumnGraphNativeReader
 	response.Stats = vectorIndexSearchStatsFromInternal(stats.Base, owner.overlay.base.reader.Stats())
+	// Preserve the logical pack source diagnostics captured when this exact
+	// holder was assembled. The serving route may use either its mmap view or
+	// its admitted pool-owned parent fallback, but that physical choice does not
+	// change the selected typed prepared-search algorithm.
+	owner.overlay.base.routeStats.apply(&response.Stats)
 	response.Stats.ColumnGraphOwnerAcquireNanos = acquired.Nanoseconds()
 	response.Stats.ColumnGraphDeltaScored = uint64(stats.DeltaScored)
 	response.Stats.SearchRouteColumnGraphPrepared = 1
-	if stats.PackMmapDirect {
-		response.Stats.HNSWSearchPackMmapDirect = 1
-	}
+	response.Stats.SearchRouteColumnGraphFallback = 0
 	if stats.Route == "typed_hnsw" {
 		response.Stats.SearchRouteHNSWSearchPack = 1
 	}

@@ -316,7 +316,11 @@ func (c *Collection) buildColumnVectorGraphServingPreparedSearchFromBase(snap *b
 	}
 	view := base.view
 	view.snapshot = snap
-	return c.buildColumnVectorGraphSharedPreparedSearchFromView(snap, view.Catalog.meta.VectorIndexes[0], base.graph, view)
+	access, err := newColumnVectorGraphServingSourceAccess(context.Background(), pool)
+	if err != nil {
+		return nil, err
+	}
+	return c.buildColumnVectorGraphSharedPreparedSearchFromViewWithSourceAccess(snap, view.Catalog.meta.VectorIndexes[0], base.graph, view, access)
 }
 
 func (c *Collection) buildColumnVectorGraphServingPreparedSearch(

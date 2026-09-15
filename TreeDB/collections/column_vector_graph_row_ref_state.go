@@ -458,13 +458,17 @@ func columnVectorGraphRowRefStatePresent(state columnVectorIndexStateSnapshot) b
 }
 
 func (c *Collection) openColumnVectorGraphRowRefStateSourceForReader(collection string, cfg ColumnStoreConfig, def VectorIndexDefinition, graph columnVectorGraphManifestSnapshot, state columnVectorIndexStateSnapshot, records []columnManifestRecord, pack *columnHNSWSearchPackPreparedView) (*columnVectorGraphRowRefStateSource, error) {
+	return c.openColumnVectorGraphRowRefStateSourceForReaderWithSourceAccess(collection, cfg, def, graph, state, records, pack, nil)
+}
+
+func (c *Collection) openColumnVectorGraphRowRefStateSourceForReaderWithSourceAccess(collection string, cfg ColumnStoreConfig, def VectorIndexDefinition, graph columnVectorGraphManifestSnapshot, state columnVectorIndexStateSnapshot, records []columnManifestRecord, pack *columnHNSWSearchPackPreparedView, access *columnVectorGraphSourceAccess) (*columnVectorGraphRowRefStateSource, error) {
 	if c == nil {
 		return nil, errCollectionNil
 	}
 	if c.db == nil {
 		return nil, errCollectionDBNil
 	}
-	return newColumnVectorGraphRowRefStateSourceFromRootWithPack(c.db.ColumnAssetRootDir(), collection, cfg, def, graph, state, records, pack)
+	return newColumnVectorGraphRowRefStateSourceFromRootWithPackAndSourceAccess(c.db.ColumnAssetRootDir(), collection, cfg, def, graph, state, records, pack, access)
 }
 
 func newColumnVectorGraphRowRefStateSourceFromRoot(rootDir, collection string, cfg ColumnStoreConfig, def VectorIndexDefinition, graph columnVectorGraphManifestSnapshot, state columnVectorIndexStateSnapshot, records []columnManifestRecord) (*columnVectorGraphRowRefStateSource, error) {
@@ -472,6 +476,10 @@ func newColumnVectorGraphRowRefStateSourceFromRoot(rootDir, collection string, c
 }
 
 func newColumnVectorGraphRowRefStateSourceFromRootWithPack(rootDir, collection string, cfg ColumnStoreConfig, def VectorIndexDefinition, graph columnVectorGraphManifestSnapshot, state columnVectorIndexStateSnapshot, records []columnManifestRecord, pack *columnHNSWSearchPackPreparedView) (*columnVectorGraphRowRefStateSource, error) {
+	return newColumnVectorGraphRowRefStateSourceFromRootWithPackAndSourceAccess(rootDir, collection, cfg, def, graph, state, records, pack, nil)
+}
+
+func newColumnVectorGraphRowRefStateSourceFromRootWithPackAndSourceAccess(rootDir, collection string, cfg ColumnStoreConfig, def VectorIndexDefinition, graph columnVectorGraphManifestSnapshot, state columnVectorIndexStateSnapshot, records []columnManifestRecord, pack *columnHNSWSearchPackPreparedView, access *columnVectorGraphSourceAccess) (*columnVectorGraphRowRefStateSource, error) {
 	assets, found, err := columnVectorGraphRowRefStateAssetsByField(state)
 	if err != nil || !found {
 		return nil, err
@@ -507,7 +515,7 @@ func newColumnVectorGraphRowRefStateSourceFromRootWithPack(rootDir, collection s
 		if _, present := assets[field]; !present {
 			continue
 		}
-		view, mmapDirect, err := openColumnVectorGraphRowRefStateFieldDirectView(rootDir, collection, cfg, def, state, assets[field], field, manager)
+		view, mmapDirect, err := openColumnVectorGraphRowRefStateFieldDirectViewWithSourceAccess(rootDir, collection, cfg, def, state, assets[field], field, manager, access)
 		if err != nil {
 			return nil, fmt.Errorf("collections: column_graph %q row-ref state %s: %w", def.Name, field, err)
 		}
@@ -599,6 +607,10 @@ func (s *columnVectorGraphRowRefStateSource) setFieldView(field columnVectorGrap
 }
 
 func openColumnVectorGraphRowRefStateFieldDirectView(rootDir, collection string, cfg ColumnStoreConfig, def VectorIndexDefinition, state columnVectorIndexStateSnapshot, asset columnVectorIndexStateAssetSnapshot, field columnVectorGraphRowRefStateField, manager *mappedresource.Manager) (typeddecode.PreparedInt64DirectView, bool, error) {
+	return openColumnVectorGraphRowRefStateFieldDirectViewWithSourceAccess(rootDir, collection, cfg, def, state, asset, field, manager, nil)
+}
+
+func openColumnVectorGraphRowRefStateFieldDirectViewWithSourceAccess(rootDir, collection string, cfg ColumnStoreConfig, def VectorIndexDefinition, state columnVectorIndexStateSnapshot, asset columnVectorIndexStateAssetSnapshot, field columnVectorGraphRowRefStateField, manager *mappedresource.Manager, access *columnVectorGraphSourceAccess) (typeddecode.PreparedInt64DirectView, bool, error) {
 	sourceCfg, adapterColumn, err := columnVectorGraphRowRefStateColumnStoreConfig(collection, cfg, def, field)
 	if err != nil {
 		return typeddecode.PreparedInt64DirectView{}, false, err
@@ -606,13 +618,25 @@ func openColumnVectorGraphRowRefStateFieldDirectView(rootDir, collection string,
 	if asset.SourceSchemaHash != sourceCfg.SchemaHash {
 		return typeddecode.PreparedInt64DirectView{}, false, fmt.Errorf("schema_hash=%d want %d", asset.SourceSchemaHash, sourceCfg.SchemaHash)
 	}
-	if err := validateColumnVectorIndexStateAssetRefAvailable(rootDir, asset); err != nil {
-		return typeddecode.PreparedInt64DirectView{}, false, err
+	if access == nil {
+		if err := validateColumnVectorIndexStateAssetRefAvailable(rootDir, asset); err != nil {
+			return typeddecode.PreparedInt64DirectView{}, false, err
+		}
 	}
-	raw, err := readColumnPhysicalAssetFromManager(rootDir, asset.Ref)
+	var view typeddecode.PreparedInt64DirectView
+	var mmapDirect bool
+	err = withColumnVectorGraphSourceAsset(access, nil, rootDir, asset.Ref, "column_graph row-ref state "+string(field)+" setup", func(raw []byte) error {
+		var buildErr error
+		view, mmapDirect, buildErr = openColumnVectorGraphRowRefStateFieldDirectViewFromRaw(rootDir, collection, state, asset, field, manager, sourceCfg, adapterColumn, raw, access)
+		return buildErr
+	})
 	if err != nil {
 		return typeddecode.PreparedInt64DirectView{}, false, err
 	}
+	return view, mmapDirect, nil
+}
+
+func openColumnVectorGraphRowRefStateFieldDirectViewFromRaw(rootDir, collection string, state columnVectorIndexStateSnapshot, asset columnVectorIndexStateAssetSnapshot, field columnVectorGraphRowRefStateField, manager *mappedresource.Manager, sourceCfg ColumnStoreConfig, adapterColumn typedColumnAdapterColumn, raw []byte, access *columnVectorGraphSourceAccess) (typeddecode.PreparedInt64DirectView, bool, error) {
 	if int64(len(raw)) != asset.AssetBytes || int64(len(raw)) != asset.Ref.Length {
 		return typeddecode.PreparedInt64DirectView{}, false, fmt.Errorf("bytes=%d manifest=%d ref=%d", len(raw), asset.AssetBytes, asset.Ref.Length)
 	}
@@ -647,7 +671,7 @@ func openColumnVectorGraphRowRefStateFieldDirectView(rootDir, collection string,
 	if err != nil {
 		return typeddecode.PreparedInt64DirectView{}, false, err
 	}
-	handle, key, err := acquireColumnVectorGraphPreparedStateSection(rootDir, collection, columnVectorGraphRowRefStateScopeID, "column_graph row-ref state", "column_graph row-ref state "+string(field), asset.Ref, image.Version, section, page.Checksum(sectionBytes), manager)
+	handle, key, err := acquireColumnVectorGraphPreparedStateSectionWithSourceAccess(access, rootDir, collection, columnVectorGraphRowRefStateScopeID, "column_graph row-ref state", "column_graph row-ref state "+string(field), asset.Ref, image.Version, section, page.Checksum(sectionBytes), manager)
 	if err != nil {
 		return typeddecode.PreparedInt64DirectView{}, false, err
 	}
@@ -663,7 +687,7 @@ func openColumnVectorGraphRowRefStateFieldDirectView(rootDir, collection string,
 	if status.Direct() {
 		return view, true, nil
 	}
-	view, fallbackErr := columnVectorGraphRowRefStatePreparedViewFromFallbackHandle(expectation, manager, handle, state.RowCount, status)
+	view, fallbackErr := columnVectorGraphRowRefStatePreparedViewFromFallbackHandleWithScratch(expectation, manager, handle, state.RowCount, status, access == nil)
 	if fallbackErr == nil {
 		return view, false, nil
 	}
@@ -672,6 +696,10 @@ func openColumnVectorGraphRowRefStateFieldDirectView(rootDir, collection string,
 }
 
 func columnVectorGraphRowRefStatePreparedViewFromFallbackHandle(expectation typeddecode.GraphDirectViewExpectation, manager *mappedresource.Manager, handle *mappedresource.Handle, rows int, directStatus typeddecode.Status) (typeddecode.PreparedInt64DirectView, error) {
+	return columnVectorGraphRowRefStatePreparedViewFromFallbackHandleWithScratch(expectation, manager, handle, rows, directStatus, true)
+}
+
+func columnVectorGraphRowRefStatePreparedViewFromFallbackHandleWithScratch(expectation typeddecode.GraphDirectViewExpectation, manager *mappedresource.Manager, handle *mappedresource.Handle, rows int, directStatus typeddecode.Status, allowScratch bool) (typeddecode.PreparedInt64DirectView, error) {
 	if !columnVectorGraphPreparedStateDirectFallbackAllowed(directStatus) {
 		return typeddecode.PreparedInt64DirectView{}, fmt.Errorf("direct-view certification failed: %s", directStatus.String())
 	}
@@ -681,6 +709,9 @@ func columnVectorGraphRowRefStatePreparedViewFromFallbackHandle(expectation type
 	}
 	if !columnVectorGraphPreparedStateDirectFallbackAllowed(status) {
 		return typeddecode.PreparedInt64DirectView{}, errors.Join(fmt.Errorf("direct-view certification failed: %s", directStatus.String()), fmt.Errorf("heap typed-view fallback failed: %s", status.String()))
+	}
+	if !allowScratch {
+		return typeddecode.PreparedInt64DirectView{}, errors.Join(fmt.Errorf("direct-view certification failed: %s", directStatus.String()), fmt.Errorf("serving holder heap typed-view fallback failed: %s", status.String()))
 	}
 	decoded, err := decodeColumnVectorGraphRowRefStateInt64Values(handle.Bytes(), rows)
 	if err != nil {

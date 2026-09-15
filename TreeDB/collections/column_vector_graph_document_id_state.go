@@ -326,16 +326,24 @@ func validateColumnVectorGraphDocumentIDStateAssetPayload(rootDir, collection st
 }
 
 func (c *Collection) openColumnVectorGraphDocumentIDStateSourceForReader(collection string, cfg ColumnStoreConfig, def VectorIndexDefinition, graph columnVectorGraphManifestSnapshot, state columnVectorIndexStateSnapshot) (*columnVectorGraphDocumentIDStateSource, typeddecode.Reason, error) {
+	return c.openColumnVectorGraphDocumentIDStateSourceForReaderWithSourceAccess(collection, cfg, def, graph, state, nil)
+}
+
+func (c *Collection) openColumnVectorGraphDocumentIDStateSourceForReaderWithSourceAccess(collection string, cfg ColumnStoreConfig, def VectorIndexDefinition, graph columnVectorGraphManifestSnapshot, state columnVectorIndexStateSnapshot, access *columnVectorGraphSourceAccess) (*columnVectorGraphDocumentIDStateSource, typeddecode.Reason, error) {
 	if c == nil {
 		return nil, typeddecode.ReasonValidationFailed, errCollectionNil
 	}
 	if c.db == nil {
 		return nil, typeddecode.ReasonValidationFailed, errCollectionDBNil
 	}
-	return newColumnVectorGraphDocumentIDStateSourceFromRoot(c.db.ColumnAssetRootDir(), collection, cfg, def, graph, state)
+	return newColumnVectorGraphDocumentIDStateSourceFromRootWithSourceAccess(c.db.ColumnAssetRootDir(), collection, cfg, def, graph, state, access)
 }
 
 func newColumnVectorGraphDocumentIDStateSourceFromRoot(rootDir, collection string, cfg ColumnStoreConfig, def VectorIndexDefinition, graph columnVectorGraphManifestSnapshot, state columnVectorIndexStateSnapshot) (*columnVectorGraphDocumentIDStateSource, typeddecode.Reason, error) {
+	return newColumnVectorGraphDocumentIDStateSourceFromRootWithSourceAccess(rootDir, collection, cfg, def, graph, state, nil)
+}
+
+func newColumnVectorGraphDocumentIDStateSourceFromRootWithSourceAccess(rootDir, collection string, cfg ColumnStoreConfig, def VectorIndexDefinition, graph columnVectorGraphManifestSnapshot, state columnVectorIndexStateSnapshot, access *columnVectorGraphSourceAccess) (*columnVectorGraphDocumentIDStateSource, typeddecode.Reason, error) {
 	asset, found, err := findColumnVectorGraphDocumentIDStateAsset(state)
 	if err != nil {
 		return nil, typeddecode.ReasonValidationFailed, err
@@ -359,21 +367,32 @@ func newColumnVectorGraphDocumentIDStateSourceFromRoot(rootDir, collection strin
 	if asset.SourceSchemaHash != sourceCfg.SchemaHash {
 		return nil, typeddecode.ReasonValidationFailed, fmt.Errorf("collections: column_graph %q document-id state schema_hash=%d want %d", def.Name, asset.SourceSchemaHash, sourceCfg.SchemaHash)
 	}
-	if err := validateColumnVectorGraphAssetRefAvailable(rootDir, asset.Ref); err != nil {
-		return nil, typeddecode.ReasonValidationFailed, err
+	if access == nil {
+		if err := validateColumnVectorGraphAssetRefAvailable(rootDir, asset.Ref); err != nil {
+			return nil, typeddecode.ReasonValidationFailed, err
+		}
 	}
-	raw, err := readColumnPhysicalAssetFromManager(rootDir, asset.Ref)
+	var source *columnVectorGraphDocumentIDStateSource
+	var reason typeddecode.Reason
+	err = withColumnVectorGraphSourceAsset(access, nil, rootDir, asset.Ref, "column_graph document-id state setup", func(raw []byte) error {
+		var buildErr error
+		source, reason, buildErr = newColumnVectorGraphDocumentIDStateSourceFromRawImageWithSourceAccess(rootDir, collection, def, sourceCfg, adapterColumn, state, asset, raw, access)
+		return buildErr
+	})
 	if err != nil {
-		return nil, typeddecode.ReasonValidationFailed, err
-	}
-	source, reason, err := newColumnVectorGraphDocumentIDStateSourceFromRawImage(rootDir, collection, def, sourceCfg, adapterColumn, state, asset, raw)
-	if err != nil {
+		if reason == "" {
+			reason = typeddecode.ReasonValidationFailed
+		}
 		return nil, reason, err
 	}
-	return source, "", nil
+	return source, reason, nil
 }
 
 func newColumnVectorGraphDocumentIDStateSourceFromRawImage(rootDir, collection string, def VectorIndexDefinition, sourceCfg ColumnStoreConfig, adapterColumn typedColumnAdapterColumn, state columnVectorIndexStateSnapshot, asset columnVectorIndexStateAssetSnapshot, raw []byte) (*columnVectorGraphDocumentIDStateSource, typeddecode.Reason, error) {
+	return newColumnVectorGraphDocumentIDStateSourceFromRawImageWithSourceAccess(rootDir, collection, def, sourceCfg, adapterColumn, state, asset, raw, nil)
+}
+
+func newColumnVectorGraphDocumentIDStateSourceFromRawImageWithSourceAccess(rootDir, collection string, def VectorIndexDefinition, sourceCfg ColumnStoreConfig, adapterColumn typedColumnAdapterColumn, state columnVectorIndexStateSnapshot, asset columnVectorIndexStateAssetSnapshot, raw []byte, access *columnVectorGraphSourceAccess) (*columnVectorGraphDocumentIDStateSource, typeddecode.Reason, error) {
 	if int64(len(raw)) != asset.AssetBytes || int64(len(raw)) != asset.Ref.Length {
 		return nil, typeddecode.ReasonPayloadLengthMismatch, fmt.Errorf("collections: column_graph %q document-id state bytes=%d manifest=%d ref=%d", def.Name, len(raw), asset.AssetBytes, asset.Ref.Length)
 	}
@@ -419,11 +438,11 @@ func newColumnVectorGraphDocumentIDStateSourceFromRawImage(rootDir, collection s
 		return nil, typeddecode.ReasonValidationFailed, fmt.Errorf("collections: column_graph %q document-id state logical/type/encoding=(%q,%s,%s) want (%q,%s,%s)", def.Name, certColumn.LogicalType, certColumn.Type, certColumn.Encoding, columnVectorIndexStateLogicalTypeBytes, typedcolumn.ColumnTypeBytes, typedcolumn.EncodingRawBytesOffsets)
 	}
 	manager := mappedresource.NewManager()
-	offsetsHandle, offsetsKey, err := acquireColumnVectorGraphPreparedStateSection(rootDir, collection, columnVectorGraphDocumentIDStateScopeID, "column_graph document-id state", "column_graph document-id state offsets", asset.Ref, image.Version, offsetsSection, page.Checksum(offsetsRaw), manager)
+	offsetsHandle, offsetsKey, err := acquireColumnVectorGraphPreparedStateSectionWithSourceAccess(access, rootDir, collection, columnVectorGraphDocumentIDStateScopeID, "column_graph document-id state", "column_graph document-id state offsets", asset.Ref, image.Version, offsetsSection, page.Checksum(offsetsRaw), manager)
 	if err != nil {
 		return nil, typeddecode.ReasonValidationFailed, err
 	}
-	valuesHandle, valuesKey, err := acquireColumnVectorGraphPreparedStateSection(rootDir, collection, columnVectorGraphDocumentIDStateScopeID, "column_graph document-id state", "column_graph document-id state values", asset.Ref, image.Version, valuesSection, page.Checksum(valuesRaw), manager)
+	valuesHandle, valuesKey, err := acquireColumnVectorGraphPreparedStateSectionWithSourceAccess(access, rootDir, collection, columnVectorGraphDocumentIDStateScopeID, "column_graph document-id state", "column_graph document-id state values", asset.Ref, image.Version, valuesSection, page.Checksum(valuesRaw), manager)
 	if err != nil {
 		releaseErr := offsetsHandle.Release()
 		return nil, typeddecode.ReasonValidationFailed, errors.Join(err, releaseErr)
@@ -442,7 +461,7 @@ func newColumnVectorGraphDocumentIDStateSourceFromRawImage(rootDir, collection s
 	})
 	if !status.Direct() {
 		var fallbackErr error
-		view, fallbackErr = columnVectorGraphDocumentIDStatePreparedViewFromFallbackHandles(expectation, certColumn, offsetsSection, valuesSection, offsetsHandle, valuesHandle, manager, state.RowCount, status)
+		view, fallbackErr = columnVectorGraphDocumentIDStatePreparedViewFromFallbackHandlesWithScratch(expectation, certColumn, offsetsSection, valuesSection, offsetsHandle, valuesHandle, manager, state.RowCount, status, access == nil)
 		if fallbackErr != nil {
 			releaseErr := errors.Join(offsetsHandle.Release(), valuesHandle.Release())
 			return nil, status.Reason, errors.Join(fallbackErr, releaseErr)
@@ -458,6 +477,10 @@ func newColumnVectorGraphDocumentIDStateSourceFromRawImage(rootDir, collection s
 }
 
 func columnVectorGraphDocumentIDStatePreparedViewFromFallbackHandles(expectation typeddecode.GraphDirectViewExpectation, certColumn typedcolumn.ColumnPartLayoutContractColumn, offsetsSection, valuesSection typedcolumn.ColumnPartImageSection, offsetsHandle, valuesHandle *mappedresource.Handle, manager *mappedresource.Manager, rows int, directStatus typeddecode.Status) (typeddecode.PreparedBytesDirectView, error) {
+	return columnVectorGraphDocumentIDStatePreparedViewFromFallbackHandlesWithScratch(expectation, certColumn, offsetsSection, valuesSection, offsetsHandle, valuesHandle, manager, rows, directStatus, true)
+}
+
+func columnVectorGraphDocumentIDStatePreparedViewFromFallbackHandlesWithScratch(expectation typeddecode.GraphDirectViewExpectation, certColumn typedcolumn.ColumnPartLayoutContractColumn, offsetsSection, valuesSection typedcolumn.ColumnPartImageSection, offsetsHandle, valuesHandle *mappedresource.Handle, manager *mappedresource.Manager, rows int, directStatus typeddecode.Status, allowScratch bool) (typeddecode.PreparedBytesDirectView, error) {
 	if !columnVectorGraphPreparedStateDirectFallbackAllowed(directStatus) {
 		return typeddecode.PreparedBytesDirectView{}, fmt.Errorf("document-id state direct-view certification failed: %s", directStatus.String())
 	}
@@ -468,6 +491,9 @@ func columnVectorGraphDocumentIDStatePreparedViewFromFallbackHandles(expectation
 	}
 	if !columnVectorGraphPreparedStateDirectFallbackAllowed(status) {
 		return typeddecode.PreparedBytesDirectView{}, errors.Join(fmt.Errorf("document-id state direct-view certification failed: %s", directStatus.String()), fmt.Errorf("document-id state heap typed-view fallback failed: %s", status.String()))
+	}
+	if !allowScratch {
+		return typeddecode.PreparedBytesDirectView{}, errors.Join(fmt.Errorf("document-id state direct-view certification failed: %s", directStatus.String()), fmt.Errorf("serving holder heap typed-view fallback failed: %s", status.String()))
 	}
 	decoded, err := typedcolumn.DecodeRawBytesOffsetsFallback(nil, nil, offsetsHandle.Bytes(), valuesHandle.Bytes(), rows)
 	if err != nil {

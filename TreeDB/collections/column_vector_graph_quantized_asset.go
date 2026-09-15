@@ -1,6 +1,7 @@
 package collections
 
 import (
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -1757,13 +1758,22 @@ func prepareColumnVectorGraphQuantizedAssetFromImages(def VectorIndexDefinition,
 }
 
 func loadColumnVectorGraphQuantizedAssetResourceStatus(rootDir, collection string, cfg ColumnStoreConfig, def VectorIndexDefinition, graph columnVectorGraphManifestSnapshot, q QuantizedVectorIndexDefinition, assets columnVectorGraphQuantizedAssetSet) (columnVectorGraphQuantizedAssetLoadStatus, error) {
+	return loadColumnVectorGraphQuantizedAssetResourceStatusWithSourceAccess(context.Background(), rootDir, collection, cfg, def, graph, q, assets, nil)
+}
+
+func loadColumnVectorGraphQuantizedAssetResourceStatusWithSourceAccess(ctx context.Context, rootDir, collection string, cfg ColumnStoreConfig, def VectorIndexDefinition, graph columnVectorGraphManifestSnapshot, q QuantizedVectorIndexDefinition, assets columnVectorGraphQuantizedAssetSet, access *columnVectorGraphSourceAccess) (columnVectorGraphQuantizedAssetLoadStatus, error) {
 	status := columnVectorGraphQuantizedAssetLoadStatus{Definition: q, Asset: assets.Codes}
 	if err := validateColumnVectorGraphQuantizedAssetSetLoadInputs(rootDir, collection, cfg, def, graph, q, assets); err != nil {
 		status.Err = err
 		status.Health = columnVectorGraphQuantizedAssetHealthFromError(err)
 		return status, err
 	}
-	raw, resource, source, err := readColumnVectorGraphQuantizedAssetResourceBytes(rootDir, assets.Codes.Ref)
+	if access != nil && (q.Codec != QuantizedVectorCodecScalarU8 || q.Version != 1 || !scalarU8CalibrationIsLegacy(q) || assets.HasAlpha) {
+		status.Err = fmt.Errorf("%w: quantized asset %q is not an eligible holder-owned legacy scalar_u8 code plane", errColumnVectorGraphQuantizedAssetInvalid, q.Name)
+		status.Health = columnVectorGraphQuantizedAssetHealthInvalid
+		return status, status.Err
+	}
+	raw, resource, source, err := readColumnVectorGraphQuantizedAssetResourceBytesWithSourceAccess(ctx, rootDir, assets.Codes.Ref, access)
 	if err != nil {
 		status.Err = fmt.Errorf("%w: quantized asset %q read: %v", errColumnVectorGraphQuantizedAssetInvalid, q.Name, err)
 		status.Health = columnVectorGraphQuantizedAssetHealthInvalid
@@ -1783,6 +1793,13 @@ func loadColumnVectorGraphQuantizedAssetResourceStatus(rootDir, collection strin
 		status.Err = fmt.Errorf("%w: quantized asset %q parse typed-column image: %v", errColumnVectorGraphQuantizedAssetInvalid, q.Name, err)
 		status.Health = columnVectorGraphQuantizedAssetHealthInvalid
 		return status, status.Err
+	}
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			status.Err = err
+			status.Health = columnVectorGraphQuantizedAssetHealthClosed
+			return status, err
+		}
 	}
 	var alphaImage typedcolumn.ColumnPartImage
 	if assets.HasAlpha {
@@ -1804,6 +1821,13 @@ func loadColumnVectorGraphQuantizedAssetResourceStatus(rootDir, collection strin
 		status.Err = err
 		status.Health = columnVectorGraphQuantizedAssetHealthFromError(err)
 		return status, err
+	}
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			status.Err = err
+			status.Health = columnVectorGraphQuantizedAssetHealthClosed
+			return status, err
+		}
 	}
 	status.Prepared = prepared
 	lookup, err := columnVectorGraphScalarU8AlphaLookupFromPrepared(q, prepared)
@@ -1832,6 +1856,32 @@ func loadColumnVectorGraphQuantizedAssetResourceStatus(rootDir, collection strin
 }
 
 func readColumnVectorGraphQuantizedAssetResourceBytes(rootDir string, ref ColumnAssetRef) ([]byte, *columnVectorGraphQuantizedAssetResource, mappedresource.Source, error) {
+	return readColumnVectorGraphQuantizedAssetResourceBytesWithSourceAccess(context.Background(), rootDir, ref, nil)
+}
+
+func readColumnVectorGraphQuantizedAssetResourceBytesWithSourceAccess(ctx context.Context, rootDir string, ref ColumnAssetRef, access *columnVectorGraphSourceAccess) ([]byte, *columnVectorGraphQuantizedAssetResource, mappedresource.Source, error) {
+	manager := mappedresource.NewManager()
+	scope := mappedresource.Scope{Kind: mappedresource.ScopePreparedSearch, ID: fmt.Sprintf("column-graph-quantized-%s-%d-%d-%d", ref.Namespace, ref.Generation, ref.PartID, ref.FileID), Namespace: ref.Namespace, Generation: ref.Generation, Reason: "column_graph quantized asset"}
+	key := mappedResourceKeyForColumnAssetRef(ref)
+	opts := mappedresource.AcquireOptions{Reason: "column_graph quantized asset", ValidationMode: mappedResourceValidationModeForColumnAssetIntegrity(ColumnAssetReadIntegrityVerify), PreferMapped: true, AllowHeapCopy: true, ResourceRoot: rootDir}
+	if access != nil {
+		handle, err := access.acquireRange(ctx, rootDir, ref, manager, key, scope, opts)
+		if err != nil {
+			return nil, nil, "", err
+		}
+		raw := handle.Bytes()
+		if err := verifyColumnPhysicalAssetReadChecksum(raw, ref, true); err != nil {
+			_ = handle.Release()
+			return nil, nil, "", err
+		}
+		if ctx != nil {
+			if err := ctx.Err(); err != nil {
+				_ = handle.Release()
+				return nil, nil, "", err
+			}
+		}
+		return raw, &columnVectorGraphQuantizedAssetResource{manager: manager, handle: handle}, handle.Source(), nil
+	}
 	readCache, err := newColumnPhysicalAssetReadCache(rootDir, ref.Namespace)
 	if err != nil {
 		return nil, nil, "", err
@@ -1843,10 +1893,6 @@ func readColumnVectorGraphQuantizedAssetResourceBytes(rootDir string, ref Column
 		_ = readCache.close()
 		return nil, nil, "", err
 	}
-	manager := mappedresource.NewManager()
-	scope := mappedresource.Scope{Kind: mappedresource.ScopePreparedSearch, ID: fmt.Sprintf("column-graph-quantized-%s-%d-%d-%d", ref.Namespace, ref.Generation, ref.PartID, ref.FileID), Namespace: ref.Namespace, Generation: ref.Generation, Reason: "column_graph quantized asset"}
-	key := mappedResourceKeyForColumnAssetRef(ref)
-	opts := mappedresource.AcquireOptions{Reason: "column_graph quantized asset", ValidationMode: mappedResourceValidationModeForColumnAssetIntegrity(ColumnAssetReadIntegrityVerify), ResourceRoot: rootDir}
 	if raw, ok, err := reader.readView(ref); err != nil {
 		_ = readCache.close()
 		return nil, nil, "", err

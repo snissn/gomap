@@ -287,6 +287,10 @@ func columnVectorGraphTypedListAdjacencyDirectSourceFromHandles(manager *mappedr
 }
 
 func columnVectorGraphPreparedCSRAdjacencyDirectSourceFromHandles(manager *mappedresource.Manager, layer int, rows int, valuesCount int, req typeddecode.GraphUint32ListDirectViewRequest, fallbackReq typeddecode.Uint32OffsetsListDirectViewRequest, offsetsHandle *mappedresource.Handle, valuesHandle *mappedresource.Handle) (*columnVectorGraphLayer0AdjacencyDirectSource, typeddecode.Reason, error) {
+	return columnVectorGraphPreparedCSRAdjacencyDirectSourceFromHandlesWithScratch(manager, layer, rows, valuesCount, req, fallbackReq, offsetsHandle, valuesHandle, true)
+}
+
+func columnVectorGraphPreparedCSRAdjacencyDirectSourceFromHandlesWithScratch(manager *mappedresource.Manager, layer int, rows int, valuesCount int, req typeddecode.GraphUint32ListDirectViewRequest, fallbackReq typeddecode.Uint32OffsetsListDirectViewRequest, offsetsHandle *mappedresource.Handle, valuesHandle *mappedresource.Handle, allowScratch bool) (*columnVectorGraphLayer0AdjacencyDirectSource, typeddecode.Reason, error) {
 	view, status := typeddecode.CertifyGraphUint32ListDirectView(req)
 	if status.Direct() {
 		if len(view.Values) != valuesCount {
@@ -296,7 +300,7 @@ func columnVectorGraphPreparedCSRAdjacencyDirectSourceFromHandles(manager *mappe
 		return &columnVectorGraphLayer0AdjacencyDirectSource{layer: layer, rows: rows, offsets: view.Offsets, values: view.Values, outcome: columnVectorGraphLayer0AdjacencySourceOutcomePreparedCSRMmapDirect, manager: manager, offsetsHandle: view.OffsetsHandle, valuesHandle: view.ValuesHandle}, "", nil
 	}
 	if columnVectorGraphPreparedCSRAdjacencyFallbackAllowed(status) {
-		return columnVectorGraphTypedListAdjacencyDirectSourceFromHandles(manager, layer, rows, valuesCount, fallbackReq, offsetsHandle, valuesHandle)
+		return columnVectorGraphAdjacencyDirectSourceFromHandles(manager, layer, rows, valuesCount, fallbackReq, offsetsHandle, valuesHandle, columnVectorGraphLayer0AdjacencySourceOutcomeTypedListMmapDirect, columnVectorGraphLayer0AdjacencySourceOutcomeTypedListHeapCopyTypedView, columnVectorGraphLayer0AdjacencySourceOutcomeTypedListScratchDecode, allowScratch, "vector-index state adjacency")
 	}
 	return nil, status.Reason, fmt.Errorf("collections: vector-index state prepared CSR adjacency layer %d certification: %s", layer, status.String())
 }

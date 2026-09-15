@@ -35,6 +35,10 @@ type columnVectorGraphPreparedNormView struct {
 }
 
 func prepareColumnVectorGraphPreparedVectorView(source *columnVectorGraphTypedColumnVectorSource, rowCount, dims int) (columnVectorGraphPreparedVectorView, typeddecode.Reason, string, bool) {
+	return prepareColumnVectorGraphPreparedVectorViewWithHolderFallback(source, rowCount, dims, false)
+}
+
+func prepareColumnVectorGraphPreparedVectorViewWithHolderFallback(source *columnVectorGraphTypedColumnVectorSource, rowCount, dims int, allowHolderFallback bool) (columnVectorGraphPreparedVectorView, typeddecode.Reason, string, bool) {
 	if source == nil {
 		return columnVectorGraphPreparedVectorView{}, "", "", false
 	}
@@ -58,8 +62,8 @@ func prepareColumnVectorGraphPreparedVectorView(source *columnVectorGraphTypedCo
 		if part == nil {
 			return columnVectorGraphPreparedVectorView{}, typeddecode.ReasonValidationFailed, fmt.Sprintf("typed-column vector source ordinal=%d has nil part", ordinal), false
 		}
-		if part.outcome != columnVectorGraphTypedColumnVectorOutcomeMmapDirect {
-			return columnVectorGraphPreparedVectorView{}, typeddecode.ReasonHandleSourceUnsupported, fmt.Sprintf("typed-column vector source part generation=%d part_id=%d outcome=%s is not mmap_direct", part.generation, part.partID, part.outcome), false
+		if part.outcome != columnVectorGraphTypedColumnVectorOutcomeMmapDirect && (!allowHolderFallback || part.outcome != columnVectorGraphTypedColumnVectorOutcomeHeapCopyTypedView) {
+			return columnVectorGraphPreparedVectorView{}, typeddecode.ReasonHandleSourceUnsupported, fmt.Sprintf("typed-column vector source part generation=%d part_id=%d outcome=%s is not an admitted prepared source", part.generation, part.partID, part.outcome), false
 		}
 		if part.handle == nil || part.handle.Released() {
 			return columnVectorGraphPreparedVectorView{}, typeddecode.ReasonStaleHandle, fmt.Sprintf("typed-column vector source part generation=%d part_id=%d handle is stale", part.generation, part.partID), false
@@ -118,13 +122,17 @@ func prepareColumnVectorGraphPreparedVectorView(source *columnVectorGraphTypedCo
 }
 
 func prepareColumnVectorGraphPreparedNormView(source *columnVectorGraphInvNormStateSource, rowCount int) (columnVectorGraphPreparedNormView, typeddecode.Reason, bool) {
+	return prepareColumnVectorGraphPreparedNormViewWithHolderFallback(source, rowCount, false)
+}
+
+func prepareColumnVectorGraphPreparedNormViewWithHolderFallback(source *columnVectorGraphInvNormStateSource, rowCount int, allowHolderFallback bool) (columnVectorGraphPreparedNormView, typeddecode.Reason, bool) {
 	if source == nil {
 		return columnVectorGraphPreparedNormView{}, "", false
 	}
 	if source.closed || (source.handle != nil && source.handle.Released()) {
 		return columnVectorGraphPreparedNormView{}, typeddecode.ReasonStaleHandle, false
 	}
-	if source.outcome != columnVectorGraphInvNormStateOutcomeMmapDirect {
+	if source.outcome != columnVectorGraphInvNormStateOutcomeMmapDirect && (!allowHolderFallback || source.outcome != columnVectorGraphInvNormStateOutcomeHeapCopyTypedView) {
 		return columnVectorGraphPreparedNormView{}, typeddecode.ReasonHandleSourceUnsupported, false
 	}
 	if source.rows != rowCount || len(source.values) != rowCount {

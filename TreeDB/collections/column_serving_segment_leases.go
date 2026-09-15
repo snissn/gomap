@@ -305,6 +305,15 @@ func (h *columnServingRangeHandle) Source() mappedresource.Source {
 	return h.handle.Source()
 }
 
+func (h *columnServingRangeHandle) takeMappedResourceHandle() *mappedresource.Handle {
+	if h == nil {
+		return nil
+	}
+	handle := h.handle
+	h.handle = nil
+	return handle
+}
+
 func (h *columnServingRangeHandle) Release() error {
 	if h == nil {
 		return nil
@@ -1468,10 +1477,10 @@ func (s *columnServingSegmentLeaseSet) acquireRange(ctx context.Context, rootDir
 	return &columnServingRangeHandle{handle: handle}, nil
 }
 
-// withBorrowedRange is the materializer-only physical seam. It never populates
-// a pool-owned ref fallback. The callback executes while a pool use protects
-// either the exact mapped slice or the shared segment descriptor and identity;
-// any ReadAt destination and retained logical handle remain request-owned.
+// withBorrowedRange is the synchronous setup/materializer physical seam. It
+// never populates a pool-owned ref fallback. The callback executes while a pool
+// use protects either the exact mapped slice or the shared segment descriptor
+// and identity; any ReadAt destination remains callback/request-owned.
 func (s *columnServingSegmentLeaseSet) withBorrowedRange(ctx context.Context, rootDir string, parent ColumnAssetRef, relativeOffset, length int64, key mappedresource.Key, scope mappedresource.Scope, fn func(columnServingBorrowedRange) error) error {
 	if fn == nil {
 		return errors.New("collections: serving segment borrowed range callback is required")
