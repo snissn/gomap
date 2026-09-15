@@ -21,6 +21,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/storagemaintenance"
+	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -351,6 +352,158 @@ func TestPublishOrderedRootDeltaGroupWithCommandWALContextOuterLeafReplacementAv
 	defer closeNoErr(t, reopen)
 	if got := readCollectionRootValue(t, reopen, maintenanceTestCollectionRootKey, []byte("doc/p")); !bytes.Equal(got, []byte("value-1")) {
 		t.Fatalf("reopened collection value=%q want value-1", got)
+	}
+}
+
+func TestPublishOrderedRootDeltaGroupsWithoutCommandWALAvoidCandidateScan(t *testing.T) {
+	for _, test := range []struct {
+		name              string
+		iterator          bool
+		serialized        bool
+		outerLeafLog      bool
+		invalidateTracker bool
+		wantScans         int64
+	}{
+		{name: "optimistic-pager"},
+		{name: "serialized-pager", serialized: true},
+		{name: "optimistic-value-log-leaves", outerLeafLog: true},
+		{name: "serialized-value-log-leaves", serialized: true, outerLeafLog: true},
+		{name: "invalid-tracker-falls-back", serialized: true, outerLeafLog: true, invalidateTracker: true, wantScans: 1},
+		{name: "iterator-pager", iterator: true},
+		{name: "iterator-value-log-leaves", iterator: true, outerLeafLog: true},
+		{name: "iterator-invalid-tracker-falls-back", iterator: true, outerLeafLog: true, invalidateTracker: true, wantScans: 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			dir := t.TempDir()
+			opts := Options{
+				Dir:                        dir,
+				Durability:                 DurabilityWALOffRelaxed,
+				DisableBackgroundPrune:     true,
+				IndexOuterLeavesInValueLog: test.outerLeafLog,
+			}
+			db, err := Open(opts)
+			if err != nil {
+				t.Fatalf("open: %v", err)
+			}
+			var leafLog *rewriteWriter
+			if test.outerLeafLog {
+				leafLog = newRewriteWriter(ValueLogDirPath(dir), 0, 0, 64<<20)
+				leafLog.ConfigureLeafLog(LeafLogDirPath(dir), rewriteLeafLogLaneID, 0)
+				db.SetLeafPageLog(leafLog)
+			}
+
+			oldPtr := appendPointersInNewSegment(t, dir, 0, 1, 710_000, 1, func(int) []byte { return []byte("value-0") })[0]
+			newPtr := appendPointersInNewSegment(t, dir, 0, 2, 720_000, 1, func(int) []byte { return []byte("value-1") })[0]
+			if err := db.RefreshValueLogSet(); err != nil {
+				t.Fatalf("refresh value-log set: %v", err)
+			}
+			publish := func(baseRoot uint64, ptr page.ValuePtr, inlineValue []byte, deleteValue bool) uint64 {
+				t.Helper()
+				buildSystem := func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+					return mustFrozenRawMemtable(t, maintenanceTestCollectionRootKey, encodeMaintenanceRootID(rootIDs[0])).NewIterator(nil, nil), nil
+				}
+				if test.iterator {
+					delta, deltaErr := memtable.NewWithCapacityMode(0, memtable.ModeHashSorted)
+					if deltaErr != nil {
+						t.Fatalf("new delta table: %v", deltaErr)
+					}
+					switch {
+					case deleteValue:
+						delta.Delete([]byte("doc/p"))
+					case inlineValue != nil:
+						delta.Set([]byte("doc/p"), inlineValue)
+					default:
+						delta.SetEntry([]byte("doc/p"), nil, ptr, node.FlagPointer)
+					}
+					delta.Freeze()
+					input := []OrderedRootDeltaPublishInput{{BaseRoot: baseRoot, Iter: delta.NewIterator(nil, nil)}}
+					if test.outerLeafLog {
+						input[0].StoragePolicy = OrderedRootStorageValueLogLeaves
+					}
+					var rootIDs []uint64
+					if test.serialized {
+						_, rootIDs, err = db.PublishOrderedRootDeltaGroupWithPreflightAndSystemDeltaBuilder(input, func() error { return nil }, buildSystem)
+					} else {
+						_, rootIDs, err = db.PublishOrderedRootDeltaGroupWithSystemDeltaBuilder(input, buildSystem)
+					}
+					if err != nil {
+						t.Fatalf("publish base root %d: %v", baseRoot, err)
+					}
+					return rootIDs[0]
+				}
+				delta := batch.New(nil, orderedRootDeltaBatchInlineThreshold)
+				switch {
+				case deleteValue:
+					err = delta.Delete([]byte("doc/p"))
+				case inlineValue != nil:
+					err = delta.Set([]byte("doc/p"), inlineValue)
+				default:
+					err = delta.SetPointer([]byte("doc/p"), ptr)
+				}
+				if err != nil {
+					t.Fatalf("build delta: %v", err)
+				}
+				defer delta.Close()
+				input := []OrderedRootDeltaBatchPublishInput{{BaseRoot: baseRoot, Delta: delta}}
+				if test.outerLeafLog {
+					input[0].StoragePolicy = OrderedRootStorageValueLogLeaves
+				}
+				var rootIDs []uint64
+				if test.serialized {
+					_, rootIDs, err = db.PublishOrderedRootDeltaBatchGroupWithPreflightAndSystemDeltaBuilder(input, func() error { return nil }, buildSystem)
+				} else {
+					_, rootIDs, err = db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder(input, buildSystem)
+				}
+				if err != nil {
+					t.Fatalf("publish base root %d: %v", baseRoot, err)
+				}
+				return rootIDs[0]
+			}
+
+			root := publish(0, oldPtr, nil, false)
+			primeValueLogRefTracker(t, db)
+			if test.invalidateTracker {
+				db.valueLogRefTracker.invalidate()
+			}
+			var scans atomic.Int64
+			db.testScanCandidateExternalReferencesHook = func() { scans.Add(1) }
+			root = publish(root, newPtr, nil, false)
+			assertValueLogRefTrackerMatchesFullScan(t, db)
+			root = publish(root, page.ValuePtr{}, []byte("inline-value"), false)
+			assertValueLogRefTrackerMatchesFullScan(t, db)
+			root = publish(root, newPtr, nil, false)
+			assertValueLogRefTrackerMatchesFullScan(t, db)
+			root = publish(root, page.ValuePtr{}, nil, true)
+			assertValueLogRefTrackerMatchesFullScan(t, db)
+			_ = publish(root, oldPtr, nil, false)
+			assertValueLogRefTrackerMatchesFullScan(t, db)
+			db.testScanCandidateExternalReferencesHook = nil
+			if got := scans.Load(); got != test.wantScans {
+				t.Fatalf("candidate dependency scans=%d want %d", got, test.wantScans)
+			}
+
+			if leafLog != nil {
+				if err := leafLog.Sync(); err != nil {
+					t.Fatalf("sync leaf log: %v", err)
+				}
+			}
+			if err := db.Close(); err != nil {
+				t.Fatalf("close: %v", err)
+			}
+			if leafLog != nil {
+				if err := leafLog.Close(); err != nil {
+					t.Fatalf("close leaf log: %v", err)
+				}
+			}
+			reopened, err := Open(opts)
+			if err != nil {
+				t.Fatalf("reopen: %v", err)
+			}
+			defer closeNoErr(t, reopened)
+			if got := readCollectionRootValue(t, reopened, maintenanceTestCollectionRootKey, []byte("doc/p")); !bytes.Equal(got, []byte("value-0")) {
+				t.Fatalf("reopened collection value=%q want value-0", got)
+			}
+		})
 	}
 }
 
