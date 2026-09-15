@@ -90,7 +90,44 @@ class NativeCodecTests(unittest.TestCase):
                     quantized_index_name="embedding.scalar_u8.public", quantized_rerank_candidates=0,
                     ef_search=0, query_dimension=2,
                 )
-            proof_only_payload = _section(2, _uint(1) + b"\x00" + _bytes_for_test("native error")) + _section(136, score_plane)
+            native_error = _section(2, _uint(1) + b"\x00" + _bytes_for_test("native error"))
+            pre_owner_values = list(work_values)
+            pre_owner_values[1] = (1 << 1) | (1 << 3) | (1 << 4) | (1 << 5)
+            pre_owner_values[2:10] = [0] * 8
+            pre_owner_values[10:19] = [1] * 9
+            pre_owner_values[31:38] = [0] * 7
+            native_work_only_cases = [("pre-owner", pre_owner_values, False)]
+            for route, tag in (("typed_empty", 1), ("typed_exact", 2), ("typed_hnsw", 3)):
+                candidate = list(pre_owner_values)
+                candidate[2] = tag
+                native_work_only_cases.append((route, candidate, True))
+            scored = list(pre_owner_values)
+            scored[3] = 1
+            native_work_only_cases.append(("route-empty score", scored, True))
+            output_attempted = list(pre_owner_values)
+            output_attempted[1] |= 1 << 6
+            native_work_only_cases.append(("output attempted", output_attempted, True))
+            for name, candidate, rejected in native_work_only_cases:
+                candidate_raw = b"".join(_uint(value) for value in candidate)
+                candidate_payload = native_error + _section(134, candidate_raw)
+                work_only_client = TreeDBClient("http://127.0.0.1:1", native_address="127.0.0.1:2")
+                work_only_client._native.socket = mock.Mock()
+                work_only_client._native.capabilities["dense_vector_search_versions"] = "3"
+                candidate_header = _HEADER.pack(b"TDB1", 40, 1, 0, 6, 0, 0, 1, len(candidate_payload))
+                expected = "proof does not match the request" if rejected else "native error"
+                with self.subTest(native_work_only=name), \
+                     mock.patch.object(work_only_client._native, "_read", side_effect=(candidate_header, candidate_payload)), \
+                     self.assertRaisesRegex(TreeDBProtocolError, expected) as caught:
+                    work_only_client.query_by_embedding(
+                        "a", [1, 0], 1,
+                        filter={"field": "meta.repo", "operator": "==", "value": "gomap"},
+                        query_mode="quantized_rerank", quantized_index_name="embedding.scalar_u8.public", index_info=info,
+                    )
+                self.assertEqual(caught.exception.dense_work, _dense_work(candidate_raw))
+                self.assertIsNone(caught.exception.score_plane)
+                work_only_client.close()
+
+            proof_only_payload = native_error + _section(136, score_plane)
             proof_only_client = TreeDBClient("http://127.0.0.1:1", native_address="127.0.0.1:2")
             proof_only_client._native.socket = mock.Mock()
             proof_only_client._native.capabilities["dense_vector_search_versions"] = "3"

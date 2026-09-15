@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import base64
 import copy
-from dataclasses import replace
+from dataclasses import asdict, replace
 import http.client
 import json
 import os
@@ -35,7 +35,7 @@ from treedb_client import (
     TreeDBTransportError,
     UnsupportedError,
 )
-from treedb_client.client import _dense_http_results_ordered, _is_legacy_scalar_u8_v1_index
+from treedb_client.client import _dense_http_results_ordered, _dense_work_requires_score_plane, _is_legacy_scalar_u8_v1_index
 from treedb_client._dense_work import dense_quantized_response_work_matches
 
 
@@ -724,6 +724,52 @@ class TreeDBClientTests(unittest.TestCase):
                 expected_generation=1,
             )
             self.assertEqual(result.documents[0].id, "a")
+            pre_owner_filter = replace(
+                result.dense_work.graph.filter,
+                attempted=True, completed=True, eligible_rows=1, source_ids=1, source_bytes=1,
+                inspected_entries=1, mapping_work_charged=1, retained_bytes=1, scratch_id_bytes=1,
+                scratch_rows=1, ordinal_growth_peak_bytes=1,
+            )
+            pre_owner_graph = replace(
+                result.dense_work.graph,
+                completed=False, route="", base_ann_scored=0, base_candidates=0, base_edges=0,
+                delta_scored=0, exact_base_scored=0, base_shadowed=0, base_result_ids=0,
+                filter=pre_owner_filter,
+            )
+            pre_owner_output = replace(
+                result.dense_work.output,
+                attempted=False, completed=False, requested=0, fetched=0, missing=0, output_bytes=0,
+                retained_payload_fetches=0, json_reconstruction_rows=0, typed_column_rows=0,
+            )
+            pre_owner = replace(result.dense_work, completed=False, graph=pre_owner_graph, output=pre_owner_output)
+            self.assertFalse(_dense_work_requires_score_plane(pre_owner))
+            execution_signals = [
+                ("service completed", replace(pre_owner, completed=True)),
+                ("graph completed", replace(pre_owner, graph=replace(pre_owner.graph, completed=True))),
+                ("output attempted", replace(pre_owner, output=replace(pre_owner.output, attempted=True))),
+                ("output completed", replace(pre_owner, output=replace(pre_owner.output, completed=True))),
+            ]
+            execution_signals.extend(
+                (f"route {route}", replace(pre_owner, graph=replace(pre_owner.graph, route=route)))
+                for route in ("typed_empty", "typed_exact", "typed_hnsw")
+            )
+            execution_signals.extend(
+                (field, replace(pre_owner, graph=replace(pre_owner.graph, **{field: 1})))
+                for field in (
+                    "base_ann_scored", "base_candidates", "base_edges", "delta_scored",
+                    "exact_base_scored", "base_shadowed", "base_result_ids",
+                )
+            )
+            execution_signals.extend(
+                (field, replace(pre_owner, output=replace(pre_owner.output, **{field: 1})))
+                for field in (
+                    "requested", "fetched", "missing", "output_bytes", "retained_payload_fetches",
+                    "json_reconstruction_rows", "typed_column_rows",
+                )
+            )
+            for name, candidate in execution_signals:
+                with self.subTest(score_plane_execution_signal=name):
+                    self.assertTrue(_dense_work_requires_score_plane(candidate))
             hostile_unfiltered = copy.deepcopy(payload)
             hostile_unfiltered["dense_work"]["graph"].update(
                 base_ann_scored=2, base_candidates=0, exact_base_scored=2, base_result_ids=2,
@@ -869,6 +915,34 @@ class TreeDBClientTests(unittest.TestCase):
                         self.assertIsNotNone(caught.exception.dense_work)
                         self.assertIsNotNone(caught.exception.score_plane)
                         error_client.close()
+            work_only_cases = [("pre-owner", pre_owner, False)]
+            work_only_cases.extend(
+                (route, replace(pre_owner, graph=replace(pre_owner.graph, route=route)), True)
+                for route in ("typed_empty", "typed_exact", "typed_hnsw")
+            )
+            work_only_cases.extend((
+                ("route-empty score", replace(pre_owner, graph=replace(pre_owner.graph, base_ann_scored=1)), True),
+                ("output attempted", replace(pre_owner, output=replace(pre_owner.output, attempted=True)), True),
+            ))
+            for status in (200, 503):
+                for name, candidate, rejected in work_only_cases:
+                    work_only_payload = {
+                        "error": {"code": "index_unavailable", "message": "budget", "dense_work": asdict(candidate)},
+                    }
+                    with self.subTest(work_only_error_status=status, work_only=name), \
+                         FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (status, work_only_payload, 0)}) as error_server:
+                        error_client = TreeDBClient(error_server.base_url, timeout=1)
+                        expected = "proof does not match the request" if rejected else "index_unavailable"
+                        error_type = TreeDBProtocolError if rejected else IndexUnavailableError
+                        with self.assertRaisesRegex(error_type, expected) as caught:
+                            error_client.query_by_embedding(
+                                "docs", [1, 0], 1,
+                                filter={"field": "meta.repo", "operator": "==", "value": "gomap"},
+                                query_mode="quantized_rerank", quantized_index_name="embedding.scalar_u8.public",
+                            )
+                        self.assertEqual(caught.exception.dense_work, candidate)
+                        self.assertIsNone(caught.exception.score_plane)
+                        error_client.close()
             proof_only_error_payload = copy.deepcopy(error_payload)
             del proof_only_error_payload["error"]["dense_work"]
             for status in (200, 503):
@@ -949,16 +1023,17 @@ class TreeDBClientTests(unittest.TestCase):
                 )
             self.assertIs(caught.exception, partial_error)
 
-            work_only_error = IndexUnavailableError(
+            completed_work_only_error = IndexUnavailableError(
                 "index_unavailable", "budget", dense_work=result.dense_work,
             )
-            with mock.patch.object(client, "_request", side_effect=work_only_error), \
-                 self.assertRaises(IndexUnavailableError) as caught:
+            with mock.patch.object(client, "_request", side_effect=completed_work_only_error), \
+                 self.assertRaisesRegex(TreeDBProtocolError, "proof does not match the request") as caught:
                 client.query_by_embedding(
                     "docs", [1, 0], 1, query_mode="quantized_rerank",
                     quantized_index_name="embedding.scalar_u8.public",
                 )
-            self.assertIs(caught.exception, work_only_error)
+            self.assertEqual(caught.exception.dense_work, result.dense_work)
+            self.assertIsNone(caught.exception.score_plane)
 
             malformed = TreeDBProtocolError(
                 "malformed success", dense_work=result.dense_work,

@@ -604,6 +604,94 @@ func TestDenseV3ResultsOrdered(t *testing.T) {
 	}
 }
 
+func TestDenseWorkRequiresScorePlaneCoversEveryExecutionSignal(t *testing.T) {
+	preOwner := documentservice.DenseSearchWork{Version: 1, Graph: collections.ColumnGraphQueryWork{
+		Available: true,
+		Filter: collections.ColumnGraphFilterWork{
+			Attempted: true, Completed: true, EligibleRows: 1, SourceIDs: 1, SourceBytes: 1,
+			InspectedEntries: 1, MappingWorkCharged: 1, RetainedBytes: 1, ScratchIDBytes: 1,
+			ScratchRows: 1, OrdinalGrowthPeakBytes: 1,
+		},
+		Snapshot: collections.ColumnGraphQuerySnapshot{
+			Available: true, SchemaHash: 1, SchemaGeneration: 1,
+			BaseManifest:    collections.ColumnGraphManifestWork{Generation: 1, Format: "tcs1", Version: 1, Checksum: 1},
+			CurrentManifest: collections.ColumnGraphManifestWork{Generation: 1, Format: "tcs1", Version: 1, Checksum: 1},
+			BaseCoverageLSN: 1, CurrentCoverageLSN: 1,
+		},
+	}}
+	if denseWorkRequiresScorePlane(&preOwner) {
+		t.Fatal("snapshot/filter-only pre-owner work requires a score-plane proof")
+	}
+	mutations := []struct {
+		name   string
+		mutate func(*documentservice.DenseSearchWork)
+	}{
+		{"service completed", func(w *documentservice.DenseSearchWork) { w.Completed = true }},
+		{"graph completed", func(w *documentservice.DenseSearchWork) { w.Graph.Completed = true }},
+		{"typed empty route", func(w *documentservice.DenseSearchWork) { w.Graph.Route = "typed_empty" }},
+		{"typed exact route", func(w *documentservice.DenseSearchWork) { w.Graph.Route = "typed_exact" }},
+		{"typed hnsw route", func(w *documentservice.DenseSearchWork) { w.Graph.Route = "typed_hnsw" }},
+		{"base ANN scored", func(w *documentservice.DenseSearchWork) { w.Graph.BaseANNScored = 1 }},
+		{"base candidates", func(w *documentservice.DenseSearchWork) { w.Graph.BaseCandidates = 1 }},
+		{"base edges", func(w *documentservice.DenseSearchWork) { w.Graph.BaseEdges = 1 }},
+		{"delta scored", func(w *documentservice.DenseSearchWork) { w.Graph.DeltaScored = 1 }},
+		{"exact base scored", func(w *documentservice.DenseSearchWork) { w.Graph.ExactBaseScored = 1 }},
+		{"base shadowed", func(w *documentservice.DenseSearchWork) { w.Graph.BaseShadowed = 1 }},
+		{"base result IDs", func(w *documentservice.DenseSearchWork) { w.Graph.BaseResultIDs = 1 }},
+		{"output attempted", func(w *documentservice.DenseSearchWork) { w.Output.Attempted = true }},
+		{"output completed", func(w *documentservice.DenseSearchWork) { w.Output.Completed = true }},
+		{"output requested", func(w *documentservice.DenseSearchWork) { w.Output.Requested = 1 }},
+		{"output fetched", func(w *documentservice.DenseSearchWork) { w.Output.Fetched = 1 }},
+		{"output missing", func(w *documentservice.DenseSearchWork) { w.Output.Missing = 1 }},
+		{"output bytes", func(w *documentservice.DenseSearchWork) { w.Output.OutputBytes = 1 }},
+		{"retained payload fetches", func(w *documentservice.DenseSearchWork) { w.Output.RetainedPayloadFetches = 1 }},
+		{"JSON reconstruction rows", func(w *documentservice.DenseSearchWork) { w.Output.JSONReconstructionRows = 1 }},
+		{"typed column rows", func(w *documentservice.DenseSearchWork) { w.Output.TypedColumnRows = 1 }},
+	}
+	for _, mutation := range mutations {
+		t.Run(mutation.name, func(t *testing.T) {
+			candidate := preOwner
+			mutation.mutate(&candidate)
+			if !denseWorkRequiresScorePlane(&candidate) {
+				t.Fatal("execution signal did not require a score-plane proof")
+			}
+		})
+	}
+}
+
+func denseV3FrameErrorForTest(t *testing.T, request DenseVectorSearchRequest, sections ...iwire.Section) error {
+	t.Helper()
+	frameSections := append([]iwire.Section{{ID: iwire.SectionError, Bytes: appendErrorPayload(nil, iwire.ErrInternal, false, "original")}}, sections...)
+	var frameError []byte
+	for _, section := range frameSections {
+		var err error
+		frameError, err = iwire.AppendSection(frameError, section)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	clientConn, serverConn := net.Pipe()
+	client := NewClient(clientConn)
+	client.denseTypedQuantizedNegotiated = true
+	errCh := make(chan error, 1)
+	go func() {
+		header, _, err := readFrame(serverConn, iwire.DefaultLimits())
+		if err == nil {
+			err = writeFrame(serverConn, iwire.Header{Type: iwire.FrameError, RequestID: header.RequestID}, frameError)
+		}
+		errCh <- err
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	_, got := client.DenseVectorSearch(ctx, request)
+	cancel()
+	_ = client.Close()
+	_ = serverConn.Close()
+	if err := <-errCh; err != nil {
+		t.Fatal(err)
+	}
+	return got
+}
+
 func TestDenseV3FailureProofBindsRequestWithoutRetainingRemoteError(t *testing.T) {
 	request := DenseVectorSearchRequest{
 		TypedColumnGraph: true, Index: "docs", Query: []float32{1, 0}, TopK: 1, EfSearch: 8,
@@ -638,7 +726,13 @@ func TestDenseV3FailureProofBindsRequestWithoutRetainingRemoteError(t *testing.T
 	}
 	filteredBeforeOwner := request
 	filteredBeforeOwner.Filter = &documentservice.Filter{Field: "meta.user_id", Operator: "==", Value: "u"}
-	preOwner := &WireError{Code: iwire.ErrInternal, Message: "pre-owner", DenseWork: &work}
+	preOwnerWork := work
+	preOwnerWork.Graph.Filter = collections.ColumnGraphFilterWork{
+		Attempted: true, Completed: true, EligibleRows: 1, SourceIDs: 1, SourceBytes: 1,
+		InspectedEntries: 1, MappingWorkCharged: 1, RetainedBytes: 1, ScratchIDBytes: 1,
+		ScratchRows: 1, OrdinalGrowthPeakBytes: 1,
+	}
+	preOwner := &WireError{Code: iwire.ErrInternal, Message: "pre-owner", DenseWork: &preOwnerWork}
 	if got := validateDenseQuantizedFailureProof(preOwner, filteredBeforeOwner); got != preOwner {
 		t.Fatalf("filtered failure before score-plane ownership changed: %v", got)
 	}
@@ -653,6 +747,36 @@ func TestDenseV3FailureProofBindsRequestWithoutRetainingRemoteError(t *testing.T
 	if !errors.As(got, &proofOnlyDecode) || proofOnlyDecode.DenseWork != nil || proofOnlyDecode.ScorePlane == nil || *proofOnlyDecode.ScorePlane != proof ||
 		!strings.Contains(got.Error(), "failure proof does not match the request") || errors.As(got, &proofOnlyRemote) {
 		t.Fatalf("unfiltered proof-only failure was not rejected with diagnostic plane: %v", got)
+	}
+
+	typedEmptyWork, typedExactWork, typedHNSWWork := work, work, work
+	typedEmptyWork.Graph.Route = "typed_empty"
+	typedExactWork.Graph.Route = "typed_exact"
+	typedHNSWWork.Graph.Route = "typed_hnsw"
+	scoredWork, outputWork := work, work
+	scoredWork.Graph.BaseANNScored = 1
+	outputWork.Output.Attempted = true
+	executedWork := []struct {
+		name string
+		work documentservice.DenseSearchWork
+	}{
+		{"typed_empty", typedEmptyWork},
+		{"typed_exact", typedExactWork},
+		{"typed_hnsw", typedHNSWWork},
+		{"route-empty score", scoredWork},
+		{"output attempted", outputWork},
+	}
+	for _, candidate := range executedWork {
+		t.Run("direct work-only "+candidate.name, func(t *testing.T) {
+			remote := &WireError{Code: iwire.ErrInternal, Message: "work-only", DenseWork: &candidate.work}
+			got := validateDenseQuantizedFailureProof(remote, request)
+			var decoded *DenseVectorSearchDecodeError
+			var retainedRemote *WireError
+			if !errors.As(got, &decoded) || decoded.DenseWork == nil || *decoded.DenseWork != candidate.work || decoded.ScorePlane != nil ||
+				!strings.Contains(got.Error(), "failure proof does not match the request") || errors.As(got, &retainedRemote) {
+				t.Fatalf("executed work-only proof was not de-authenticated with retained work: %v", got)
+			}
+		})
 	}
 
 	mutations := map[string]func(*documentservice.DenseSearchWork, *collections.ColumnGraphScorePlaneWork){
@@ -731,38 +855,42 @@ func TestDenseV3FailureProofBindsRequestWithoutRetainingRemoteError(t *testing.T
 		},
 	} {
 		t.Run("FrameError "+name, func(t *testing.T) {
-			frameSections := append([]iwire.Section{{ID: iwire.SectionError, Bytes: appendErrorPayload(nil, iwire.ErrInternal, false, "original")}}, sections...)
-			var frameError []byte
-			for _, section := range frameSections {
-				frameError, err = iwire.AppendSection(frameError, section)
-				if err != nil {
-					t.Fatal(err)
-				}
-			}
-			clientConn, serverConn := net.Pipe()
-			client := NewClient(clientConn)
-			client.denseTypedQuantizedNegotiated = true
-			errCh := make(chan error, 1)
-			go func() {
-				header, _, serveErr := readFrame(serverConn, iwire.DefaultLimits())
-				if serveErr == nil {
-					serveErr = writeFrame(serverConn, iwire.Header{Type: iwire.FrameError, RequestID: header.RequestID}, frameError)
-				}
-				errCh <- serveErr
-			}()
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-			_, got = client.DenseVectorSearch(ctx, request)
-			cancel()
-			_ = client.Close()
-			_ = serverConn.Close()
-			if serveErr := <-errCh; serveErr != nil {
-				t.Fatal(serveErr)
-			}
+			got := denseV3FrameErrorForTest(t, request, sections...)
 			var decoded *DenseVectorSearchDecodeError
 			var retainedRemote *WireError
 			if !strings.Contains(got.Error(), "failure proof does not match the request") || !errors.As(got, &decoded) ||
 				decoded.ScorePlane == nil || (name == "proof only" && (decoded.DenseWork != nil || *decoded.ScorePlane != proof)) || errors.As(got, &retainedRemote) {
 				t.Fatalf("public FrameError did not reject %s evidence with diagnostics: %v", name, got)
+			}
+		})
+	}
+	preOwnerRaw, err := appendDenseWork(nil, preOwnerWork)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Run("FrameError work-only pre-owner", func(t *testing.T) {
+		got := denseV3FrameErrorForTest(t, filteredBeforeOwner, iwire.Section{
+			ID: iwire.SectionDenseSearchWork, Flags: iwire.SectionFlagCritical, Bytes: preOwnerRaw,
+		})
+		var retainedRemote *WireError
+		if !errors.As(got, &retainedRemote) || retainedRemote.DenseWork == nil || *retainedRemote.DenseWork != preOwnerWork || retainedRemote.ScorePlane != nil {
+			t.Fatalf("public FrameError changed valid pre-owner work-only evidence: %v", got)
+		}
+	})
+	for _, candidate := range executedWork {
+		t.Run("FrameError work-only "+candidate.name, func(t *testing.T) {
+			workRaw, err := appendDenseWork(nil, candidate.work)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := denseV3FrameErrorForTest(t, request, iwire.Section{
+				ID: iwire.SectionDenseSearchWork, Flags: iwire.SectionFlagCritical, Bytes: workRaw,
+			})
+			var decoded *DenseVectorSearchDecodeError
+			var retainedRemote *WireError
+			if !errors.As(got, &decoded) || decoded.DenseWork == nil || *decoded.DenseWork != candidate.work || decoded.ScorePlane != nil ||
+				!strings.Contains(got.Error(), "failure proof does not match the request") || errors.As(got, &retainedRemote) {
+				t.Fatalf("public FrameError retained authenticated executed work-only evidence: %v", got)
 			}
 		})
 	}

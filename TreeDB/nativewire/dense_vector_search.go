@@ -332,6 +332,20 @@ func denseFailureProofs(err error) (*documentservice.DenseSearchWork, *collectio
 	return nil, nil
 }
 
+func denseWorkRequiresScorePlane(work *documentservice.DenseSearchWork) bool {
+	if work == nil {
+		return false
+	}
+	// Availability, snapshot, and filter evidence can all exist before the
+	// selected quantized search establishes its score-plane owner.
+	graph, output := work.Graph, work.Output
+	return work.Completed || graph.Completed || graph.Route != "" ||
+		graph.BaseANNScored != 0 || graph.BaseCandidates != 0 || graph.BaseEdges != 0 ||
+		graph.DeltaScored != 0 || graph.ExactBaseScored != 0 || graph.BaseShadowed != 0 || graph.BaseResultIDs != 0 ||
+		output.Attempted || output.Completed || output.Requested != 0 || output.Fetched != 0 || output.Missing != 0 ||
+		output.OutputBytes != 0 || output.RetainedPayloadFetches != 0 || output.JSONReconstructionRows != 0 || output.TypedColumnRows != 0
+}
+
 // validateDenseQuantizedFailureProof binds any decoded failure evidence to the
 // public request. Failure proofs are prefixes: request identity and captured
 // owner/filter state remain authoritative, while result-count relations apply
@@ -341,7 +355,7 @@ func validateDenseQuantizedFailureProof(err error, request DenseVectorSearchRequ
 	if work == nil && proof == nil {
 		return err
 	}
-	mismatch := proof != nil && work == nil
+	mismatch := (proof != nil && work == nil) || (proof == nil && denseWorkRequiresScorePlane(work))
 	if proof != nil && !denseScorePlaneRequestMatches(proof, request, proof.Completed) {
 		mismatch = true
 	}

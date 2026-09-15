@@ -1277,6 +1277,21 @@ def _dense_score_plane_request_matches(
     )
 
 
+def _dense_work_requires_score_plane(work: Any) -> bool:
+    if work is None:
+        return False
+    # Availability, snapshot, and filter evidence can all exist before the
+    # selected quantized search establishes its score-plane owner.
+    graph, output = work.graph, work.output
+    return bool(
+        work.completed or graph.completed or graph.route
+        or graph.base_ann_scored or graph.base_candidates or graph.base_edges
+        or graph.delta_scored or graph.exact_base_scored or graph.base_shadowed or graph.base_result_ids
+        or output.attempted or output.completed or output.requested or output.fetched or output.missing
+        or output.output_bytes or output.retained_payload_fetches or output.json_reconstruction_rows or output.typed_column_rows
+    )
+
+
 def _validate_dense_failure_proofs(
     error: Exception,
     *,
@@ -1303,7 +1318,7 @@ def _validate_dense_failure_proofs(
     if work is None and proof is None:
         return
 
-    mismatch = proof is not None and work is None
+    mismatch = (proof is not None and work is None) or (proof is None and _dense_work_requires_score_plane(work))
     if proof is not None:
         mismatch = mismatch or not _dense_score_plane_request_matches(
             proof,
