@@ -115,7 +115,7 @@ class FixtureHandler(BaseHTTPRequestHandler):
         )
         if delay:
             time.sleep(delay)
-        raw = json.dumps(payload).encode("utf-8")
+        raw = payload if isinstance(payload, bytes) else json.dumps(payload).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(raw)))
@@ -1446,6 +1446,36 @@ class TreeDBClientTests(unittest.TestCase):
                 )
                 self.assertEqual(filtered_result.documents[0].id, "a")
                 filtered_client.close()
+            raw_filtered = json.dumps(filtered_payload, separators=(",", ":")).encode("utf-8")
+            duplicate_filter_field = raw_filtered.replace(
+                b'"meta":{"repo":"gomap"}',
+                b'"meta":{"repo":"other","repo":"gomap"}',
+                1,
+            )
+            nested_payload = copy.deepcopy(filtered_payload)
+            nested_payload["documents"][0]["meta"]["items"] = [{"rank": 2}]
+            duplicate_nested_field = json.dumps(nested_payload, separators=(",", ":")).encode("utf-8").replace(
+                b'"rank":2', b'"rank":1,"rank":2', 1,
+            )
+            for name, raw_payload in (
+                ("filter field", duplicate_filter_field),
+                ("nested list object", duplicate_nested_field),
+            ):
+                with self.subTest(http_duplicate_metadata_field=name), \
+                     FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, raw_payload, 0)}) as hostile_server:
+                    hostile_client = TreeDBClient(hostile_server.base_url, timeout=1)
+                    with self.assertRaisesRegex(
+                        TreeDBProtocolError, "duplicate field in dense proof envelope"
+                    ) as caught:
+                        hostile_client.query_by_embedding(
+                            "docs", [1, 0], 1,
+                            filter={"field": "meta.repo", "operator": "==", "value": "gomap"},
+                            query_mode="quantized_rerank",
+                            quantized_index_name="embedding.scalar_u8.public",
+                        )
+                    self.assertIsNotNone(caught.exception.dense_work)
+                    self.assertIsNotNone(caught.exception.score_plane)
+                    hostile_client.close()
             for name, meta in (("mismatching", {"repo": "other"}), ("missing", {})):
                 hostile_filtered_payload = copy.deepcopy(filtered_payload)
                 hostile_filtered_payload["documents"][0]["meta"] = meta

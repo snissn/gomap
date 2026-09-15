@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"math"
 	"net"
@@ -629,38 +630,62 @@ func TestDenseV3ResultDocumentsMatchRequest(t *testing.T) {
 		request DenseVectorSearchRequest
 		valid   bool
 	}{
-		"omitted embedding":     {DenseVectorSearchResult{ID: []byte("a"), Document: []byte(`{"id":"a","content":"alpha","meta":{"kind":"test"}}`)}, withoutEmbedding, true},
-		"requested embedding":   {DenseVectorSearchResult{ID: []byte("a"), Score: 1 - denseCosineScoreTolerance/2, Document: []byte(`{"id":"a","embedding":[1,0]}`)}, withEmbedding, true},
-		"orthogonal embedding":  {DenseVectorSearchResult{ID: []byte("a"), Score: 0, Document: []byte(`{"id":"a","embedding":[0,1]}`)}, withEmbedding, true},
-		"mismatched score":      {DenseVectorSearchResult{ID: []byte("a"), Score: 0, Document: []byte(`{"id":"a","embedding":[1,0]}`)}, withEmbedding, false},
-		"outside tolerance":     {DenseVectorSearchResult{ID: []byte("a"), Score: 1 - 2*denseCosineScoreTolerance, Document: []byte(`{"id":"a","embedding":[1,0]}`)}, withEmbedding, false},
-		"zero query":            {DenseVectorSearchResult{ID: []byte("a"), Score: 0, Document: []byte(`{"id":"a","embedding":[1,0]}`)}, zeroQuery, false},
-		"zero embedding":        {DenseVectorSearchResult{ID: []byte("a"), Score: 0, Document: []byte(`{"id":"a","embedding":[0,0]}`)}, withEmbedding, false},
-		"matching filter":       {DenseVectorSearchResult{ID: []byte("a"), Document: []byte(`{"id":"a","meta":{"tenant":"a","rank":2}}`)}, filtered, true},
-		"mismatched filter":     {DenseVectorSearchResult{ID: []byte("a"), Document: []byte(`{"id":"a","meta":{"tenant":"b","rank":2}}`)}, filtered, false},
-		"missing filter field":  {DenseVectorSearchResult{ID: []byte("a"), Document: []byte(`{"id":"a","meta":{"tenant":"a"}}`)}, filtered, false},
-		"mismatched ID":         {DenseVectorSearchResult{ID: []byte("a"), Document: []byte(`{"id":"b"}`)}, withoutEmbedding, false},
-		"null content":          {DenseVectorSearchResult{ID: []byte("a"), Document: []byte(`{"id":"a","content":null}`)}, withoutEmbedding, false},
-		"malformed JSON":        {DenseVectorSearchResult{ID: []byte("a"), Document: []byte(`{"id":`)}, withoutEmbedding, false},
-		"invalid UTF-8":         {DenseVectorSearchResult{ID: []byte("a"), Document: []byte{'{', '"', 'i', 'd', '"', ':', '"', 0xff, '"', '}'}}, withoutEmbedding, false},
-		"unknown field":         {DenseVectorSearchResult{ID: []byte("a"), Document: []byte(`{"id":"a","future":1}`)}, withoutEmbedding, false},
-		"case-variant ID":       {DenseVectorSearchResult{ID: []byte("a"), Document: []byte(`{"ID":"a"}`)}, withoutEmbedding, false},
-		"duplicate ID":          {DenseVectorSearchResult{ID: []byte("a"), Document: []byte(`{"id":"b","id":"a"}`)}, withoutEmbedding, false},
-		"hidden embedding":      {DenseVectorSearchResult{ID: []byte("a"), Document: []byte(`{"id":"a","embedding":[1,0],"embedding":null}`)}, withoutEmbedding, false},
-		"inner score":           {DenseVectorSearchResult{ID: []byte("a"), Document: []byte(`{"id":"a","score":1}`)}, withoutEmbedding, false},
-		"compact embedding":     {DenseVectorSearchResult{ID: []byte("a"), Document: []byte(`{"id":"a","embedding_f32_le_b64":"AACAPwAAAAA="}`)}, withoutEmbedding, false},
-		"unrequested embedding": {DenseVectorSearchResult{ID: []byte("a"), Document: []byte(`{"id":"a","embedding":[1,0]}`)}, withoutEmbedding, false},
-		"empty embedding":       {DenseVectorSearchResult{ID: []byte("a"), Document: []byte(`{"id":"a","embedding":[]}`)}, withoutEmbedding, false},
-		"missing embedding":     {DenseVectorSearchResult{ID: []byte("a"), Document: []byte(`{"id":"a"}`)}, withEmbedding, false},
-		"wrong embedding size":  {DenseVectorSearchResult{ID: []byte("a"), Document: []byte(`{"id":"a","embedding":[1]}`)}, withEmbedding, false},
-		"overflowing embedding": {DenseVectorSearchResult{ID: []byte("a"), Document: []byte(`{"id":"a","embedding":[3.5e38,0]}`)}, withEmbedding, false},
-		"trailing JSON value":   {DenseVectorSearchResult{ID: []byte("a"), Document: []byte(`{"id":"a"}{}`)}, withoutEmbedding, false},
+		"omitted embedding":       {DenseVectorSearchResult{ID: []byte("a"), Document: []byte(`{"id":"a","content":"alpha","meta":{"kind":"test"}}`)}, withoutEmbedding, true},
+		"requested embedding":     {DenseVectorSearchResult{ID: []byte("a"), Score: 1 - denseCosineScoreTolerance/2, Document: []byte(`{"id":"a","embedding":[1,0]}`)}, withEmbedding, true},
+		"orthogonal embedding":    {DenseVectorSearchResult{ID: []byte("a"), Score: 0, Document: []byte(`{"id":"a","embedding":[0,1]}`)}, withEmbedding, true},
+		"mismatched score":        {DenseVectorSearchResult{ID: []byte("a"), Score: 0, Document: []byte(`{"id":"a","embedding":[1,0]}`)}, withEmbedding, false},
+		"outside tolerance":       {DenseVectorSearchResult{ID: []byte("a"), Score: 1 - 2*denseCosineScoreTolerance, Document: []byte(`{"id":"a","embedding":[1,0]}`)}, withEmbedding, false},
+		"zero query":              {DenseVectorSearchResult{ID: []byte("a"), Score: 0, Document: []byte(`{"id":"a","embedding":[1,0]}`)}, zeroQuery, false},
+		"zero embedding":          {DenseVectorSearchResult{ID: []byte("a"), Score: 0, Document: []byte(`{"id":"a","embedding":[0,0]}`)}, withEmbedding, false},
+		"matching filter":         {DenseVectorSearchResult{ID: []byte("a"), Document: []byte(`{"id":"a","meta":{"tenant":"a","rank":2}}`)}, filtered, true},
+		"mismatched filter":       {DenseVectorSearchResult{ID: []byte("a"), Document: []byte(`{"id":"a","meta":{"tenant":"b","rank":2}}`)}, filtered, false},
+		"duplicate filter field":  {DenseVectorSearchResult{ID: []byte("a"), Document: []byte(`{"id":"a","meta":{"tenant":"b","tenant":"a","rank":2}}`)}, filtered, false},
+		"escaped duplicate field": {DenseVectorSearchResult{ID: []byte("a"), Document: []byte(`{"id":"a","meta":{"tenant":"b","\u0074enant":"a","rank":2}}`)}, filtered, false},
+		"duplicate nested field":  {DenseVectorSearchResult{ID: []byte("a"), Document: []byte(`{"id":"a","meta":{"items":[{"rank":1,"rank":2}]}}`)}, withoutEmbedding, false},
+		"missing filter field":    {DenseVectorSearchResult{ID: []byte("a"), Document: []byte(`{"id":"a","meta":{"tenant":"a"}}`)}, filtered, false},
+		"mismatched ID":           {DenseVectorSearchResult{ID: []byte("a"), Document: []byte(`{"id":"b"}`)}, withoutEmbedding, false},
+		"null content":            {DenseVectorSearchResult{ID: []byte("a"), Document: []byte(`{"id":"a","content":null}`)}, withoutEmbedding, false},
+		"malformed JSON":          {DenseVectorSearchResult{ID: []byte("a"), Document: []byte(`{"id":`)}, withoutEmbedding, false},
+		"invalid UTF-8":           {DenseVectorSearchResult{ID: []byte("a"), Document: []byte{'{', '"', 'i', 'd', '"', ':', '"', 0xff, '"', '}'}}, withoutEmbedding, false},
+		"unknown field":           {DenseVectorSearchResult{ID: []byte("a"), Document: []byte(`{"id":"a","future":1}`)}, withoutEmbedding, false},
+		"case-variant ID":         {DenseVectorSearchResult{ID: []byte("a"), Document: []byte(`{"ID":"a"}`)}, withoutEmbedding, false},
+		"duplicate ID":            {DenseVectorSearchResult{ID: []byte("a"), Document: []byte(`{"id":"b","id":"a"}`)}, withoutEmbedding, false},
+		"hidden embedding":        {DenseVectorSearchResult{ID: []byte("a"), Document: []byte(`{"id":"a","embedding":[1,0],"embedding":null}`)}, withoutEmbedding, false},
+		"inner score":             {DenseVectorSearchResult{ID: []byte("a"), Document: []byte(`{"id":"a","score":1}`)}, withoutEmbedding, false},
+		"compact embedding":       {DenseVectorSearchResult{ID: []byte("a"), Document: []byte(`{"id":"a","embedding_f32_le_b64":"AACAPwAAAAA="}`)}, withoutEmbedding, false},
+		"unrequested embedding":   {DenseVectorSearchResult{ID: []byte("a"), Document: []byte(`{"id":"a","embedding":[1,0]}`)}, withoutEmbedding, false},
+		"empty embedding":         {DenseVectorSearchResult{ID: []byte("a"), Document: []byte(`{"id":"a","embedding":[]}`)}, withoutEmbedding, false},
+		"missing embedding":       {DenseVectorSearchResult{ID: []byte("a"), Document: []byte(`{"id":"a"}`)}, withEmbedding, false},
+		"wrong embedding size":    {DenseVectorSearchResult{ID: []byte("a"), Document: []byte(`{"id":"a","embedding":[1]}`)}, withEmbedding, false},
+		"overflowing embedding":   {DenseVectorSearchResult{ID: []byte("a"), Document: []byte(`{"id":"a","embedding":[3.5e38,0]}`)}, withEmbedding, false},
+		"trailing JSON value":     {DenseVectorSearchResult{ID: []byte("a"), Document: []byte(`{"id":"a"}{}`)}, withoutEmbedding, false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if got := denseV3ResultDocumentsMatchRequest([]DenseVectorSearchResult{candidate.result}, candidate.request); got != candidate.valid {
 				t.Fatalf("document validation=%v, want %v", got, candidate.valid)
 			}
 		})
+	}
+}
+
+func TestDecodeDenseV3ResultDocumentPreservesMetadataShape(t *testing.T) {
+	document, ok := decodeDenseV3ResultDocument([]byte(
+		`{"id":"a","meta":{"empty":[],"nested":{"rank":9007199254740993}}}`,
+	))
+	if !ok {
+		t.Fatal("valid nested metadata rejected")
+	}
+	empty, ok := document.Meta["empty"].([]any)
+	if !ok || empty == nil || len(empty) != 0 {
+		t.Fatalf("empty metadata array changed shape: %#v", document.Meta["empty"])
+	}
+	nested, ok := document.Meta["nested"].(map[string]any)
+	if !ok {
+		t.Fatalf("nested metadata object changed shape: %#v", document.Meta["nested"])
+	}
+	rank, ok := nested["rank"].(json.Number)
+	if !ok || rank.String() != "9007199254740993" {
+		t.Fatalf("integral metadata precision changed: %#v", nested["rank"])
 	}
 }
 
@@ -1567,9 +1592,10 @@ func TestDenseV3ResultDecodeErrorsPreserveOwnedProofs(t *testing.T) {
 		Attempted: true, Completed: true, EligibleRows: 4097,
 	}
 	for name, document := range map[string][]byte{
-		"matching":    []byte(`{"id":"a","meta":{"tenant":"a"}}`),
-		"mismatching": []byte(`{"id":"a","meta":{"tenant":"b"}}`),
-		"missing":     []byte(`{"id":"a"}`),
+		"matching":             []byte(`{"id":"a","meta":{"tenant":"a"}}`),
+		"mismatching":          []byte(`{"id":"a","meta":{"tenant":"b"}}`),
+		"duplicate last match": []byte(`{"id":"a","meta":{"tenant":"b","tenant":"a"}}`),
+		"missing":              []byte(`{"id":"a"}`),
 	} {
 		t.Run("filtered document "+name, func(t *testing.T) {
 			out, gotErr, expectedWork := roundTripWithEvidence(

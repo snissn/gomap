@@ -134,8 +134,9 @@ carried by `dense_work.graph.filter`. On filtered typed quantized responses, the
 client also evaluates the exact requested filter against every decoded native or
 HTTP document, preserving integral metadata precision for equality, range, and
 membership operators; producer work counts alone do not prove result membership.
-Native v3 document JSON rejects duplicate exact top-level fields before model
-conversion, matching the Go consumer contract.
+Native v3 document JSON rejects duplicate fields at the top level and
+recursively throughout metadata before model conversion, matching the Go
+consumer contract. Selected HTTP proof envelopes reject the same ambiguity.
 When embedding echo is requested on the selected quantized path, native v3 and
 HTTP consumers also recompute the FP32 cosine score and bind it to the returned
 embedding within the documented rounding tolerance.

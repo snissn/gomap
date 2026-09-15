@@ -142,6 +142,23 @@ class NativeCodecTests(unittest.TestCase):
                     )
                 self.assertIsNotNone(caught.exception.dense_work)
                 self.assertIsNotNone(caught.exception.score_plane)
+            for name, document in (
+                ("filter field", b'{"id":"a","meta":{"tenant":"b","tenant":"a"}}'),
+                ("escaped filter field", b'{"id":"a","meta":{"tenant":"b","\\u0074enant":"a"}}'),
+                ("nested list object", b'{"id":"a","meta":{"items":[{"rank":1,"rank":2}],"tenant":"a"}}'),
+            ):
+                with self.subTest(native_duplicate_metadata_field=name), \
+                     mock.patch.object(
+                         client._native, "command",
+                         return_value=response_body(document, candidate_work_values=filtered_work_values),
+                     ), \
+                     self.assertRaisesRegex(TreeDBProtocolError, "invalid native dense document") as caught:
+                    client.query_by_embedding(
+                        "a", [1, 0], 1, filter=request_filter, query_mode="quantized_rerank",
+                        quantized_index_name="embedding.scalar_u8.public", index_info=info,
+                    )
+                self.assertIsNotNone(caught.exception.dense_work)
+                self.assertIsNotNone(caught.exception.score_plane)
             numeric_filter = {"field": "meta.rank", "operator": "==", "value": 1 << 53}
             for name, document, accepted in (
                 ("matching", b'{"id":"a","meta":{"rank":9007199254740992}}', True),
@@ -1145,6 +1162,12 @@ class NativeCodecTests(unittest.TestCase):
             duplicate = envelope.replace(b'"version": 1', b'"version": 1, "version": 1')
             with self.assertRaises(TreeDBProtocolError):
                 client._decode_error(503, duplicate, dense_proof=True)
+            duplicate_message = envelope.replace(
+                b'"message": "budget"', b'"message": "old", "message": "budget"'
+            )
+            with self.assertRaises(TreeDBProtocolError) as caught:
+                client._decode_error(503, duplicate_message, dense_proof=True)
+            self.assertEqual(caught.exception.dense_work, work)
             self.assertEqual(_decode_json_body(b'{"legacy":1,"legacy":2}', status_code=200), {"legacy": 2})
             with mock.patch("treedb_client.client.json.loads", wraps=json.loads) as parse:
                 self.assertEqual(client._decode_success(200, b'{"legacy":1,"legacy":2}'), {"legacy": 2})

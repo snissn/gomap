@@ -361,7 +361,17 @@ func decodeDenseV3ResultDocument(raw []byte) (documentservice.Document, bool) {
 		case "embedding":
 			err = decoder.Decode(&document.Embedding)
 		case "meta":
-			err = decoder.Decode(&document.Meta)
+			var value any
+			value, ok = decodeDenseV3UniqueJSONValue(decoder)
+			if !ok {
+				return documentservice.Document{}, false
+			}
+			if value != nil {
+				document.Meta, ok = value.(map[string]any)
+				if !ok {
+					return documentservice.Document{}, false
+				}
+			}
 		default:
 			return documentservice.Document{}, false
 		}
@@ -377,6 +387,51 @@ func decodeDenseV3ResultDocument(raw []byte) (documentservice.Document, bool) {
 		return documentservice.Document{}, false
 	}
 	return document, true
+}
+
+func decodeDenseV3UniqueJSONValue(decoder *json.Decoder) (any, bool) {
+	token, err := decoder.Token()
+	if err != nil {
+		return nil, false
+	}
+	delim, composite := token.(json.Delim)
+	if !composite {
+		return token, true
+	}
+	switch delim {
+	case '{':
+		object := make(map[string]any)
+		for decoder.More() {
+			keyToken, err := decoder.Token()
+			key, ok := keyToken.(string)
+			if err != nil || !ok {
+				return nil, false
+			}
+			if _, duplicate := object[key]; duplicate {
+				return nil, false
+			}
+			value, ok := decodeDenseV3UniqueJSONValue(decoder)
+			if !ok {
+				return nil, false
+			}
+			object[key] = value
+		}
+		closing, err := decoder.Token()
+		return object, err == nil && closing == json.Delim('}')
+	case '[':
+		array := make([]any, 0)
+		for decoder.More() {
+			value, ok := decodeDenseV3UniqueJSONValue(decoder)
+			if !ok {
+				return nil, false
+			}
+			array = append(array, value)
+		}
+		closing, err := decoder.Token()
+		return array, err == nil && closing == json.Delim(']')
+	default:
+		return nil, false
+	}
 }
 
 func denseV3ResultsOrdered(results []DenseVectorSearchResult) bool {

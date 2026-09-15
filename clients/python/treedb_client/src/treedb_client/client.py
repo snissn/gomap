@@ -901,7 +901,10 @@ class TreeDBClient:
         dense_proof: bool = False,
         dense_score_plane: bool = False,
     ) -> Any:
-        decoded = _decode_json_body(body, status_code=status_code, dense_proof=dense_proof)
+        decoded = _decode_json_body(
+            body, status_code=status_code, dense_proof=dense_proof,
+            dense_score_plane=dense_score_plane,
+        )
         if isinstance(decoded, Mapping) and "error" in decoded:
             error = decoded.get("error")
             if isinstance(error, Mapping):
@@ -924,7 +927,10 @@ class TreeDBClient:
         dense_proof: bool = False,
         dense_score_plane: bool = False,
     ) -> Exception:
-        decoded = _decode_json_body(body, status_code=status_code, dense_proof=dense_proof)
+        decoded = _decode_json_body(
+            body, status_code=status_code, dense_proof=dense_proof,
+            dense_score_plane=dense_score_plane,
+        )
         if not isinstance(decoded, Mapping):
             return TreeDBProtocolError(
                 f"TreeDB service returned HTTP {status_code} with a non-object JSON body",
@@ -1509,16 +1515,15 @@ def _decode_native_dense_document_json(payload: bytes, *, reject_duplicates: boo
         pass
 
     decoded = json.loads(payload, object_pairs_hook=ObjectPairs)
-    if isinstance(decoded, ObjectPairs):
-        seen = set()
-        for key, _ in decoded:
-            if key in seen:
-                raise ValueError("duplicate top-level field in native dense document")
-            seen.add(key)
 
     def collapse(value: Any) -> Any:
         if isinstance(value, ObjectPairs):
-            return {key: collapse(item) for key, item in value}
+            out = {}
+            for key, item in value:
+                if key in out:
+                    raise ValueError("duplicate field in native dense document")
+                out[key] = collapse(item)
+            return out
         if isinstance(value, list):
             return [collapse(item) for item in value]
         return value
@@ -1572,30 +1577,82 @@ def _expect_mapping(payload: Any, label: str) -> Mapping[str, Any]:
     return payload
 
 
-def _decode_json_body(body: bytes, *, status_code: int, dense_proof: bool = False) -> Any:
+def _decode_json_body(
+    body: bytes, *, status_code: int, dense_proof: bool = False,
+    dense_score_plane: bool = False,
+) -> Any:
     text = _body_to_text(body)
     try:
         if not dense_proof:
             return json.loads(text) if text else {}
-        duplicate = False
-        proof_envelope = False
+        class DecodedObject(dict):
+            def __init__(self, pairs):
+                super().__init__()
+                self.pairs = pairs
+                self.duplicate_keys = set()
+                for key, value in pairs:
+                    if key in self:
+                        self.duplicate_keys.add(key)
+                    self[key] = value
 
-        def object_pairs(pairs):
-            nonlocal duplicate, proof_envelope
-            # The root object is decoded last. Inspect pairs before duplicate
-            # keys collapse, including overwritten proof-bearing error keys.
-            proof_envelope = any(key in ("dense_work", "score_plane") or (key == "error" and isinstance(value, dict) and ("dense_work" in value or "score_plane" in value))
-                                 for key, value in pairs)
-            out = {}
-            for key, value in pairs:
-                duplicate |= key in out
-                out[key] = value
-            return out
+        def has_duplicates(value: Any) -> bool:
+            if isinstance(value, DecodedObject):
+                return bool(value.duplicate_keys) or any(has_duplicates(item) for item in value.values())
+            if isinstance(value, list):
+                return any(has_duplicates(item) for item in value)
+            return False
 
-        decoded = json.loads(text, object_pairs_hook=object_pairs) if text else {}
-        if isinstance(decoded, dict) and proof_envelope and duplicate:
-            raise TreeDBProtocolError("duplicate field in dense proof envelope", status_code=status_code, response_body=text)
-        return decoded
+        def collapse(value: Any) -> Any:
+            if isinstance(value, DecodedObject):
+                return {key: collapse(item) for key, item in value.items()}
+            if isinstance(value, list):
+                return [collapse(item) for item in value]
+            return value
+
+        def declares_proof(value: Any) -> bool:
+            return isinstance(value, DecodedObject) and any(
+                key in ("dense_work", "score_plane") for key, _ in value.pairs
+            )
+
+        def unique_proof(value: Any, key: str, parser: Callable[[Any], Any]) -> Any:
+            if (
+                not isinstance(value, DecodedObject)
+                or key not in value
+                or key in value.duplicate_keys
+                or has_duplicates(value[key])
+            ):
+                return None
+            try:
+                return parser(value[key])
+            except (KeyError, TypeError, ValueError):
+                return None
+
+        decoded = json.loads(text, object_pairs_hook=DecodedObject) if text else {}
+        proof_envelope = declares_proof(decoded) or (
+            isinstance(decoded, DecodedObject)
+            and any(key == "error" and declares_proof(value) for key, value in decoded.pairs)
+        )
+        if proof_envelope and has_duplicates(decoded):
+            proof_owner = decoded
+            if (
+                isinstance(decoded, DecodedObject)
+                and "error" in decoded
+                and "error" not in decoded.duplicate_keys
+                and isinstance(decoded["error"], DecodedObject)
+            ):
+                proof_owner = decoded["error"]
+            from ._dense_work import optional_dense_score_plane, optional_dense_work
+            work = unique_proof(proof_owner, "dense_work", optional_dense_work)
+            score_plane = (
+                unique_proof(proof_owner, "score_plane", optional_dense_score_plane)
+                if dense_score_plane
+                else None
+            )
+            raise TreeDBProtocolError(
+                "duplicate field in dense proof envelope", status_code=status_code,
+                response_body=text, dense_work=work, score_plane=score_plane,
+            )
+        return collapse(decoded)
     except json.JSONDecodeError as exc:
         raise TreeDBProtocolError(
             f"TreeDB service returned malformed JSON for HTTP {status_code}: {exc}",

@@ -890,7 +890,8 @@ query and command 65 packs ingest vectors; document response sections remain JSO
 Version-3 consumers decode each JSON document before exposure, require unique
 exactly named top-level fields and an `id` equal to the corresponding
 section-102 ID, reject response-only/write-only or unknown top-level fields,
-preserve integral metadata precision while checking the requested filter,
+require unique keys recursively throughout metadata, preserve integral metadata
+precision while checking the requested filter,
 and require a finite, dimension-matched `embedding` exactly when
 return-embedding is true. When that embedding is present, consumers recompute
 the FP32 cosine score and require it to match the result-envelope score within
