@@ -224,6 +224,25 @@ func TestColumnGraphServingPhysicalLimitsJSONRoundTrip(t *testing.T) {
 	}
 }
 
+func TestCreateIndexRejectsIncompleteServingBeforeMutation(t *testing.T) {
+	svc, db := newTestService(t)
+	defer db.Close()
+	defer svc.Close()
+	options := typedServiceTestOptions()
+	options.Owners.Physical = collections.ColumnGraphPhysicalResourceLimits{}
+	req := CreateIndexRequest{
+		Name: "invalid-serving", Dimension: 8, TypedInput: true,
+		VectorIndexOptions: &BenchmarkVectorIndexOptions{Strategy: collections.VectorIndexStrategyColumnGraph},
+		ColumnGraphServing: &options,
+	}
+	if _, err := svc.CreateIndex(context.Background(), req); ErrorCodeOf(err) != CodeInvalidRequest {
+		t.Fatalf("incomplete serving error=%v code=%s", err, ErrorCodeOf(err))
+	}
+	if _, err := svc.OpenIndex(context.Background(), req.Name); err == nil {
+		t.Fatal("invalid serving request created the index before rejection")
+	}
+}
+
 func requireTypedServiceServingTest(t testing.TB) {
 	t.Helper()
 	// Exact namespace support and column asset mmap share the supported Unix
@@ -275,8 +294,19 @@ func TestServiceTypedInputServingLifecycle(t *testing.T) {
 	}
 	missingPhysical := options
 	missingPhysical.Owners.Physical = collections.ColumnGraphPhysicalResourceLimits{}
-	if _, err := svc.OptimizeIndex(ctx, create.Name, OptimizeIndexRequest{ColumnGraphAction: "ensure", ColumnGraphServing: &missingPhysical}); err == nil {
-		t.Fatal("missing explicit physical limits accepted")
+	if _, err := svc.OptimizeIndex(ctx, create.Name, OptimizeIndexRequest{ColumnGraphServing: &missingPhysical}); ErrorCodeOf(err) != CodeInvalidRequest {
+		t.Fatalf("missing explicit physical limits error=%v code=%s", err, ErrorCodeOf(err))
+	}
+	invalidCol, _, err := svc.openIndex(ctx, create.Name, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	status, err := invalidCol.VectorIndexStatus("embedding")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Loaded {
+		t.Fatal("invalid serving request rebuilt the graph before rejection")
 	}
 	if _, err := svc.OptimizeIndex(ctx, create.Name, OptimizeIndexRequest{ColumnGraphServing: &options}); err != nil {
 		t.Fatal(err)

@@ -89,7 +89,8 @@ func minimaQuantizedTestServingJSON(t *testing.T) string {
 	options := collections.ColumnGraphServingOptions{
 		Publication: collections.ColumnGraphPublicationLimits{Rows: 1, Tombstones: 1, ValueSlots: 1, OwnedBytes: 1, EncodedOutputBytes: 1},
 		Owners: collections.ColumnGraphReadOwnerLimits{Owners: 1, States: 1, StateBytes: 1, AssetBytes: 1,
-			Cold: collections.ColumnGraphColdLimits{ManifestRecords: 1, ManifestBytes: 1, AssetBytes: 1, DecodedTermBytes: 1}},
+			Cold:     collections.ColumnGraphColdLimits{ManifestRecords: 1, ManifestBytes: 1, AssetBytes: 1, DecodedTermBytes: 1},
+			Physical: collections.ColumnGraphPhysicalResourceLimits{Segments: 1, Descriptors: 1, MappedBytes: 1, FallbackBytes: 1, InventoryBytes: 1}},
 		CandidateOutput: collections.ColumnGraphCandidateOutputLimits{Bytes: 1, AppenderAttempts: 1},
 		Maintenance: collections.ColumnGraphMaintenanceLimits{NativeEntries: 1, ColumnSegments: 1, ManifestRecords: 1,
 			LifecycleEntries: 1, NativeBytes: 1, ColumnBytes: 1, ManifestBytes: 1, RetainedBytes: 1, PagerPages: 1},
@@ -101,6 +102,25 @@ func minimaQuantizedTestServingJSON(t *testing.T) string {
 		t.Fatal(err)
 	}
 	return string(raw)
+}
+
+func TestMinimaQuantizedServingRequiresPhysicalLimits(t *testing.T) {
+	raw := minimaQuantizedTestServingJSON(t)
+	if _, err := minimaQuantizedServingOptions(raw); err != nil {
+		t.Fatal(err)
+	}
+	var value map[string]any
+	if err := json.Unmarshal([]byte(raw), &value); err != nil {
+		t.Fatal(err)
+	}
+	delete(value["Owners"].(map[string]any), "Physical")
+	withoutPhysical, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := minimaQuantizedServingOptions(string(withoutPhysical)); err == nil {
+		t.Fatal("serving options without owner physical limits accepted")
+	}
 }
 
 func minimaQuantizedTestPlan(t *testing.T, manifest minimaManifest, profile minimaQuantizedProfile) minimaQuantizedPlan {

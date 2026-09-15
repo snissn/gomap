@@ -826,6 +826,13 @@ def _first_jsonl(path):
         events.close()
 
 
+def validate_serving_configuration(serving):
+    try:
+        native.existing.validate_column_graph_serving(serving)
+    except ValueError as exc:
+        raise EvidenceError(f"invalid frozen TreeDB serving configuration: {exc}") from exc
+
+
 def validate_plans(packet, paths):
     manifest_sha = packet["files"][packet["dataset"]["manifest"]]["sha256"]
     hashes = _dataset_hashes(packet)
@@ -834,6 +841,7 @@ def validate_plans(packet, paths):
         paths[packet["inputs"]["serving"]], "frozen TreeDB serving configuration",
         MAX_PACKET_BYTES,
     )
+    validate_serving_configuration(serving)
     native_roles = PLAN_KINDS - {"qdrant_fp32_rss"}
     for role in native_roles:
         plan = read_json(paths[packet["plans"][role]], f"{role} frozen plan", MAX_PACKET_BYTES)

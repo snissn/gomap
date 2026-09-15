@@ -101,8 +101,12 @@ run once after the RSS sample as a correctness reference and is never used as
 the ANN latency, quality, or RSS boundary.
 
 First freeze and run TreeDB from a clean committed checkout and an exact clean
-service binary. `SERVING_JSON` is the already reviewed column-graph serving
-configuration. The result is `TREE_RUN/rss.json`.
+service binary. Review `SERVING_JSON` against that combined candidate after any
+serving-contract change. It must use the exact `ColumnGraphServingOptions`
+schema, including positive `Owners.Physical` `segments`, `descriptors`,
+`mapped_bytes`, `fallback_bytes`, and `inventory_bytes` limits; freeze and run
+both reject incomplete or extra fields before starting a service. The result is
+`TREE_RUN/rss.json`.
 
 ```sh
 taskset -c 0-5 python benchmarks/vector_db_compare/minima_cohere_native_diagnostic.py \

@@ -10,6 +10,52 @@ import minima_cohere_matched_performance as subject
 
 
 class MatchedPerformanceTest(unittest.TestCase):
+    def test_runtime_serving_preflight_binds_file_to_frozen_plan(self):
+        def populated(shape):
+            return {key: 1 if nested is None else populated(nested)
+                    for key, nested in shape.items()}
+
+        serving = populated(subject.native.existing.COLUMN_GRAPH_SERVING_SHAPE)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "serving.json"
+            path.write_text(json.dumps(serving))
+            plan = {
+                "schema": subject.PLAN_SCHEMA, "pair_order": subject.PAIR_ORDER,
+                "harness_sha256": "hash", "campaign_commit": "head", "source_trees": {},
+                "qdrant_client_version": "1.19.0", "python_environment": {},
+                "cpu_affinity": list(range(6)), "service_bin": str(root / "service"),
+                "service_sha256": "hash", "qdrant_bin": str(root / "qdrant"),
+                "qdrant_sha256": "hash", "serving_path": str(path),
+                "serving_sha256": "hash", "serving": serving,
+                "control_evidence": str(root / "control.json"),
+                "control_evidence_sha256": "hash", "dataset": str(root / "dataset"),
+                "dataset_manifest_sha256": "hash",
+                "dataset_files_sha256": {name: "hash" for name in ("documents", "queries", "truth")},
+            }
+            patches = (
+                mock.patch.object(subject, "digest", return_value="hash"),
+                mock.patch.object(subject, "repository_commit", return_value="head"),
+                mock.patch.object(subject, "repository_trees", return_value={}),
+                mock.patch.object(subject, "python_environment", return_value={}),
+                mock.patch.object(subject, "validate_host_identity"),
+                mock.patch.object(subject, "validate_thread_environment"),
+                mock.patch.object(subject, "go_binary_commit", return_value="head"),
+                mock.patch.object(subject.native, "validate_imports"),
+                mock.patch.object(subject.qdrant_rss, "validate_imports"),
+                mock.patch.object(subject.importlib.metadata, "version", return_value="1.19.0"),
+                mock.patch.object(subject.os, "sched_getaffinity", return_value=set(range(6))),
+            )
+            with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], \
+                    patches[6], patches[7], patches[8], patches[9], patches[10]:
+                subject.validate_runtime(plan, "hash", root / "plan.json")
+                plan["serving"] = {**serving, "SearchCandidates": 2}
+                with self.assertRaisesRegex(RuntimeError, "serving file differs"):
+                    subject.validate_runtime(plan, "hash", root / "plan.json")
+                plan["serving"] = {"SearchCandidates": 1}
+                with self.assertRaises(ValueError):
+                    subject.validate_runtime(plan, "hash", root / "plan.json")
+
     def test_distribution_uses_nearest_rank_percentiles(self):
         self.assertEqual(subject.distribution([4, 1, 3, 2]), {
             "count": 4, "mean_ns": 2.5, "p50_ns": 2, "p95_ns": 4, "p99_ns": 4, "max_ns": 4,

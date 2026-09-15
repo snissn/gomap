@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"reflect"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -132,6 +133,42 @@ func typedGraphPublicTestOptions() ColumnGraphServingOptions {
 	opts.Owners.StateBytes = 128 << 20
 	opts.Maintenance.RetainedBytes = 256 << 20
 	return opts
+}
+
+func TestValidateColumnGraphServingOptionsCoversEveryLimit(t *testing.T) {
+	valid := typedGraphPublicTestOptions()
+	if err := ValidateColumnGraphServingOptions(valid); err != nil {
+		t.Fatal(err)
+	}
+	type limitField struct {
+		index []int
+		name  string
+	}
+	var fields []limitField
+	var visit func(reflect.Type, []int, string)
+	visit = func(typ reflect.Type, prefix []int, name string) {
+		for i := range typ.NumField() {
+			field := typ.Field(i)
+			index := append(append([]int(nil), prefix...), i)
+			fieldName := field.Name
+			if name != "" {
+				fieldName = name + "." + fieldName
+			}
+			if field.Type.Kind() == reflect.Struct {
+				visit(field.Type, index, fieldName)
+				continue
+			}
+			fields = append(fields, limitField{index: index, name: fieldName})
+		}
+	}
+	visit(reflect.TypeFor[ColumnGraphServingOptions](), nil, "")
+	for _, field := range fields {
+		invalid := valid
+		reflect.ValueOf(&invalid).Elem().FieldByIndex(field.index).SetZero()
+		if err := ValidateColumnGraphServingOptions(invalid); !errors.Is(err, ErrColumnGraphSearchBudget) {
+			t.Errorf("zero %s: %v", field.name, err)
+		}
+	}
 }
 
 func requireTypedGraphPublicServingTest(t testing.TB) {

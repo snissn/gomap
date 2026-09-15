@@ -1193,15 +1193,7 @@ func minimaQuantizedServingOptions(raw string) (collections.ColumnGraphServingOp
 	if err := json.Unmarshal([]byte(raw), &options); err != nil {
 		return options, err
 	}
-	p, o, f, m := options.Publication, options.Owners, options.Filter, options.Maintenance
-	if p.Rows <= 0 || p.Tombstones <= 0 || p.ValueSlots <= 0 || p.OwnedBytes <= 0 || p.EncodedOutputBytes <= 0 ||
-		o.Owners <= 0 || o.States <= 0 || o.StateBytes <= 0 || o.AssetBytes <= 0 ||
-		o.Cold.ManifestRecords <= 0 || o.Cold.ManifestBytes <= 0 || o.Cold.AssetBytes <= 0 || o.Cold.DecodedTermBytes <= 0 ||
-		options.CandidateOutput.Bytes <= 0 || options.CandidateOutput.AppenderAttempts <= 0 ||
-		options.FoldRows <= 0 || options.SearchCandidates <= 0 ||
-		f.SourceIDs <= 0 || f.SourceBytes <= 0 || f.RetainedBytes <= 0 || f.MappingWork <= 0 || f.InspectedEntries <= 0 ||
-		m.NativeEntries <= 0 || m.ColumnSegments <= 0 || m.ManifestRecords <= 0 || m.LifecycleEntries <= 0 ||
-		m.NativeBytes <= 0 || m.ColumnBytes <= 0 || m.ManifestBytes <= 0 || m.RetainedBytes <= 0 || m.PagerPages == 0 {
+	if err := collections.ValidateColumnGraphServingOptions(options); err != nil {
 		return options, fmt.Errorf("minima quantized: column_graph serving limits are incomplete")
 	}
 	return options, nil

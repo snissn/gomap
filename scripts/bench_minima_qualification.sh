@@ -47,6 +47,53 @@ treedb_measured_args=()
 comparator_measured_args=()
 treedb_quantized_args=()
 comparator_quantized_args=()
+
+validate_column_graph_serving() {
+	"$PYTHON" -c '
+import json, sys
+raw = open(sys.argv[1], "rb").read((1 << 20) + 1)
+if len(raw) > 1 << 20:
+    raise ValueError("serving JSON exceeds 1 MiB")
+def strict_object(pairs):
+    value = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValueError("duplicate key")
+        value[key] = item
+    return value
+def reject_constant(value):
+    raise ValueError("nonfinite " + value)
+value = json.loads(raw.decode("utf-8"), object_pairs_hook=strict_object,
+                   parse_constant=reject_constant)
+shape = {
+    "Publication": {key: None for key in ("Rows", "Tombstones", "ValueSlots", "OwnedBytes", "EncodedOutputBytes")},
+    "Owners": {**{key: None for key in ("Owners", "States", "StateBytes", "AssetBytes")},
+               "Cold": {key: None for key in ("ManifestRecords", "ManifestBytes", "AssetBytes", "DecodedTermBytes")},
+               "Physical": {key: None for key in ("segments", "descriptors", "mapped_bytes",
+                                                    "fallback_bytes", "inventory_bytes")}},
+    "CandidateOutput": {key: None for key in ("Bytes", "AppenderAttempts")},
+    "Maintenance": {key: None for key in ("NativeEntries", "ColumnSegments", "ManifestRecords",
+                                             "LifecycleEntries", "NativeBytes", "ColumnBytes",
+                                             "ManifestBytes", "RetainedBytes", "PagerPages")},
+    "Filter": {key: None for key in ("SourceIDs", "SourceBytes", "RetainedBytes", "MappingWork", "InspectedEntries")},
+    "FoldRows": None, "SearchCandidates": None,
+}
+def validate(actual, expected):
+    if type(actual) is not dict or set(actual) != set(expected):
+        raise ValueError("serving schema mismatch")
+    for key, nested in expected.items():
+        if nested is None:
+            limit = 1 << (64 if key == "PagerPages" else 63)
+            if type(actual[key]) is not int or not 0 < actual[key] < limit:
+                raise ValueError("serving limits must be positive Go-compatible integers")
+        else:
+            validate(actual[key], nested)
+validate(value, shape)
+if len(sys.argv) == 3 and not 5 <= int(sys.argv[2]) < 1 << 63:
+    raise ValueError("EF must satisfy TopK <= EF < 2**63")
+' "$@"
+}
+
 if [[ "$TREEDB_OPERATION_TIMEOUT" != "120" ]]; then
 	printf 'TREEDB_OPERATION_TIMEOUT must be exactly 120 for Minima validation, got %q\n' \
 		"$TREEDB_OPERATION_TIMEOUT" >&2
@@ -72,48 +119,8 @@ elif [[ "$TREEDB_QUERY_MODE" == quantized_rerank ]]; then
 		printf '%s\n' 'quantized Minima requires bounded mode, command_wal_durable, column_graph/native, reviewed plan+SHA pin, serving/native address, minima_sq8, and TopK <= R=EF in the native integer range' >&2
 		exit 2
 	fi
-	if ! "$PYTHON" -c '
-import json, sys
-raw = open(sys.argv[1], "rb").read((1 << 20) + 1)
-if len(raw) > 1 << 20:
-    raise ValueError("serving JSON exceeds 1 MiB")
-def strict_object(pairs):
-    value = {}
-    for key, item in pairs:
-        if key in value:
-            raise ValueError("duplicate key")
-        value[key] = item
-    return value
-def reject_constant(value):
-    raise ValueError("nonfinite " + value)
-value = json.loads(raw.decode("utf-8"), object_pairs_hook=strict_object,
-                   parse_constant=reject_constant)
-width = int(sys.argv[2])
-shape = {
-    "Publication": {key: None for key in ("Rows", "Tombstones", "ValueSlots", "OwnedBytes", "EncodedOutputBytes")},
-    "Owners": {**{key: None for key in ("Owners", "States", "StateBytes", "AssetBytes")},
-               "Cold": {key: None for key in ("ManifestRecords", "ManifestBytes", "AssetBytes", "DecodedTermBytes")}},
-    "CandidateOutput": {key: None for key in ("Bytes", "AppenderAttempts")},
-    "Maintenance": {key: None for key in ("NativeEntries", "ColumnSegments", "ManifestRecords",
-                                             "LifecycleEntries", "NativeBytes", "ColumnBytes",
-                                             "ManifestBytes", "RetainedBytes", "PagerPages")},
-    "Filter": {key: None for key in ("SourceIDs", "SourceBytes", "RetainedBytes", "MappingWork", "InspectedEntries")},
-    "FoldRows": None, "SearchCandidates": None,
-}
-def validate(actual, expected):
-    if type(actual) is not dict or set(actual) != set(expected):
-        raise ValueError("serving schema mismatch")
-    for key, nested in expected.items():
-        if nested is None:
-            if type(actual[key]) is not int or actual[key] <= 0:
-                raise ValueError("serving limits must be positive integers")
-        else:
-            validate(actual[key], nested)
-validate(value, shape)
-if not 5 <= width < 1 << 63:
-    raise ValueError("EF must satisfy TopK <= EF < 2**63")
-' "$TREEDB_COLUMN_GRAPH_SERVING" "$TREEDB_EF_SEARCH"; then
-		printf '%s\n' 'quantized Minima requires a nonempty JSON object for TREEDB_COLUMN_GRAPH_SERVING' >&2
+	if ! validate_column_graph_serving "$TREEDB_COLUMN_GRAPH_SERVING" "$TREEDB_EF_SEARCH"; then
+		printf '%s\n' 'quantized Minima requires the exact positive-integer ColumnGraphServingOptions schema' >&2
 		exit 2
 	fi
 	plan_bytes=$(wc -c <"$TREEDB_QUANTIZED_PLAN")
@@ -195,6 +202,7 @@ if [[ "$MODE" == measured ]]; then
 		printf '%s\n' 'MODE=measured requires supplied MANIFEST_PATH, MINIMA_FREEZE, MINIMA_EXPECTED_FREEZE_SHA256, prebuilt TREEDB_SERVICE_BIN/MINIMA_COMPARATOR_BIN and pinned VENV.' >&2
 		exit 2
 	fi
+	PYTHON="$VENV/bin/python"
 	if [[ -e "$RUN_DIR" && ( ! -d "$RUN_DIR" || -n "$(find "$RUN_DIR" -mindepth 1 -maxdepth 1 -print -quit)" ) ]]; then
 		printf '%s\n' 'MODE=measured requires a fresh empty RUN_DIR; retained evidence must not be overwritten.' >&2
 		exit 2
@@ -211,7 +219,10 @@ if [[ "$MODE" == measured ]]; then
 		printf '%s\n' 'Measured TreeDB requires TREEDB_STRATEGY=column_graph, explicit TREEDB_TRANSPORT and TREEDB_COLUMN_GRAPH_SERVING; native also requires TREEDB_NATIVE_ADDRESS.' >&2
 		exit 2
 	fi
-	PYTHON="$VENV/bin/python"
+	if ! validate_column_graph_serving "$TREEDB_COLUMN_GRAPH_SERVING"; then
+		printf '%s\n' 'Measured TreeDB requires the exact positive-integer ColumnGraphServingOptions schema' >&2
+		exit 2
+	fi
 	treedb_measured_args=(--measured --freeze "$MINIMA_FREEZE"
 		--expected-freeze-sha256 "$MINIMA_EXPECTED_FREEZE_SHA256" --comparator-bin "$MINIMA_COMPARATOR_BIN"
 		--transport "$TREEDB_TRANSPORT" --column-graph-serving "$TREEDB_COLUMN_GRAPH_SERVING"

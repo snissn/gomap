@@ -300,6 +300,8 @@ def frozen_plan(args):
             raise ValueError(f"missing campaign input: {path}")
     if go_binary_commit(service) != commit:
         raise RuntimeError("TreeDB binary does not match campaign commit")
+    serving_config, _ = native.strict_json_object(serving, "column_graph serving limits")
+    native.existing.validate_column_graph_serving(serving_config)
     version = subprocess.check_output([str(qdrant), "--version"], text=True).strip()
     if version != "qdrant 1.19.0" or importlib.metadata.version("qdrant-client") != "1.19.0":
         raise RuntimeError("Qdrant server and client must both be 1.19.0")
@@ -351,7 +353,7 @@ def frozen_plan(args):
             "production_hnsw": qdrant_rss.existing.PRODUCTION_HNSW_CONFIG,
             "production_optimizers": qdrant_rss.existing.PRODUCTION_OPTIMIZERS_CONFIG,
         },
-        "serving": json.loads(serving.read_text()), "serving_path": str(serving),
+        "serving": serving_config, "serving_path": str(serving),
         "serving_sha256": digest(serving), "run_root": str(args.run_root.resolve()),
         "control_evidence": str(args.control_evidence.resolve()),
         "control_evidence_sha256": digest(args.control_evidence),
@@ -403,6 +405,13 @@ def validate_runtime(plan, expected_sha256, plan_path):
     if sorted(os.sched_getaffinity(0)) != plan["cpu_affinity"]:
         raise RuntimeError("campaign CPU affinity drifted")
     validate_thread_environment()
+    serving, _ = native.strict_json_object(
+        Path(plan["serving_path"]), "column_graph serving limits",
+    )
+    native.existing.validate_column_graph_serving(serving)
+    native.existing.validate_column_graph_serving(plan["serving"])
+    if not native.same_json(serving, plan["serving"]):
+        raise RuntimeError("campaign serving file differs from the frozen plan")
     for key, hash_key in (("service_bin", "service_sha256"), ("qdrant_bin", "qdrant_sha256"),
                           ("serving_path", "serving_sha256"), ("control_evidence", "control_evidence_sha256")):
         if digest(plan[key]) != plan[hash_key]:
