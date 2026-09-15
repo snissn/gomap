@@ -76,7 +76,7 @@ func TestTypedGraphPublicEnsureLateSiblingKeeper(t *testing.T) {
 				t.Fatal("fixture already registered sibling before its first warm completed")
 			}
 			resources := keeper.capturedBase
-			oldKey := resources.ref.key
+			oldKey := resources.holderRef().key.logical
 			changed := []TypedColumnBatch{{Name: "embedding", Float32Vectors: columns[0].Float32Vectors[:1]}, {Name: "content", Strings: []string{"late-sibling-update"}}, {Name: "user", Strings: []string{"new"}}, {Name: "path", Strings: []string{"new"}}}
 			if _, err := col.ReplaceTypedBatch(ids[:1], retained[:1], changed); err != nil {
 				t.Fatal(err)
@@ -110,7 +110,7 @@ func TestTypedGraphPublicEnsureLateSiblingKeeper(t *testing.T) {
 			entry := sibling.vectorBufferedSearch[slot]
 			sibling.vectorBufferedSearchMu.Unlock()
 			if fold {
-				if entry != nil || !keeper.closed || resources.accounting != nil || resources.pin != nil || resources.ref != nil {
+				if entry != nil || !keeper.closed || resources.accounting != nil || resources.capability != nil {
 					t.Fatal("late first warm retained an obsolete keeper after nonempty fold")
 				}
 				accounting.Lock()
@@ -119,7 +119,7 @@ func TestTypedGraphPublicEnsureLateSiblingKeeper(t *testing.T) {
 				if !exact {
 					t.Fatal("late cleanup did not release exactly its own accounted keeper")
 				}
-			} else if entry == nil || entry.prepared != keeper || keeper.closed || resources.ref == nil {
+			} else if entry == nil || entry.prepared != keeper || keeper.closed || resources.holderRef() == nil {
 				t.Fatal("suffix-only advance discarded its still-current keeper")
 			}
 			after, err := held.FetchDocumentsForVectorIndexSearchResults(response.Results, DocumentFetchOptions{})

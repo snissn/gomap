@@ -58,28 +58,33 @@ var (
 // The reader is not concurrency-safe. Parallel native search uses one reader
 // and one scratch per worker over immutable bound graph state.
 type columnVectorGraphPhysicalRowReader struct {
-	def                                 VectorIndexDefinition
-	graph                               columnVectorGraphManifestSnapshot
-	catalog                             *collectionCatalog
-	reader                              *columnPhysicalRowReader
-	typedVectorSource                   *columnVectorGraphTypedColumnVectorSource
-	typedVectorFallbackReason           string
-	invNormSource                       *columnVectorGraphInvNormStateSource
-	invNormStateUnavailable             bool
-	invNormStateFallbackReason          typeddecode.Reason
-	rowRefSource                        *columnVectorGraphRowRefStateSource
-	rowRefStateUnavailable              bool
-	rowRefStateFallbackReason           typeddecode.Reason
-	documentIDSource                    *columnVectorGraphDocumentIDStateSource
-	documentIDStateFallbackReason       typeddecode.Reason
-	quantizedAssetStatus                map[string]columnVectorGraphQuantizedAssetLoadStatus
-	useResourceQuantizedAssets          bool
-	skipQuantizedAssets                 bool
-	hnswSearchPack                      *columnHNSWSearchPackPreparedView
-	hnswSearchPackStatus                columnHNSWSearchPackPreparedStatus
-	hnswSearchPackOpenNanos             uint64
-	preparedSearch                      *columnVectorGraphPreparedSearchView
-	sharedPreparedSearch                *columnVectorGraphSharedPreparedSearchRef
+	def                           VectorIndexDefinition
+	graph                         columnVectorGraphManifestSnapshot
+	catalog                       *collectionCatalog
+	reader                        *columnPhysicalRowReader
+	typedVectorSource             *columnVectorGraphTypedColumnVectorSource
+	typedVectorFallbackReason     string
+	invNormSource                 *columnVectorGraphInvNormStateSource
+	invNormStateUnavailable       bool
+	invNormStateFallbackReason    typeddecode.Reason
+	rowRefSource                  *columnVectorGraphRowRefStateSource
+	rowRefStateUnavailable        bool
+	rowRefStateFallbackReason     typeddecode.Reason
+	documentIDSource              *columnVectorGraphDocumentIDStateSource
+	documentIDStateFallbackReason typeddecode.Reason
+	quantizedAssetStatus          map[string]columnVectorGraphQuantizedAssetLoadStatus
+	useResourceQuantizedAssets    bool
+	skipQuantizedAssets           bool
+	hnswSearchPack                *columnHNSWSearchPackPreparedView
+	hnswSearchPackStatus          columnHNSWSearchPackPreparedStatus
+	hnswSearchPackOpenNanos       uint64
+	preparedSearch                *columnVectorGraphPreparedSearchView
+	sharedPreparedSearch          *columnVectorGraphSharedPreparedSearchRef
+	// sharedServingHolder is the owning serving capability. When non-nil,
+	// sharedPreparedSearch is only its non-owning holder alias for existing
+	// immutable search paths; release always goes through the capability so the
+	// holder ref and complete caller lifecycle pin cannot be separated.
+	sharedServingHolder                 *typedGraphServingHolderCapability
 	sharedPreparedLegacyScalarU8Assets  []columnVectorGraphSharedPreparedLegacyScalarU8AssetDescriptor
 	zeroRowLegacyScalarU8Validation     *columnVectorGraphLegacyScalarU8ZeroRowValidationCache
 	adjacencyLayerSources               *columnVectorGraphAdjacencyDirectSources
@@ -136,6 +141,37 @@ func (c *Collection) openColumnVectorGraphPhysicalRowReaderFromView(snap *backen
 	return c.openColumnVectorGraphPhysicalRowReaderWithBoundKey(snap, def, graph, view, opts, key)
 }
 
+// buildColumnVectorGraphSharedPreparedSearchFromView constructs one immutable
+// holder directly from an already validated snapshot/view. It deliberately
+// does not re-enter either prepared-holder cache. Serving callers use this
+// boundary with the current installed servingBase selected by their independent
+// snapshot handshake; generic callers use it from their ordinary view path.
+func (c *Collection) buildColumnVectorGraphSharedPreparedSearchFromView(snap *backenddb.Snapshot, def VectorIndexDefinition, graph columnVectorGraphManifestSnapshot, view columnPhysicalScanSnapshotView) (*columnVectorGraphSharedPreparedSearch, error) {
+	buildReader := &columnVectorGraphPhysicalRowReader{
+		def:                                def,
+		graph:                              graph,
+		catalog:                            view.Catalog,
+		quantizedAssetStatus:               make(map[string]columnVectorGraphQuantizedAssetLoadStatus),
+		skipQuantizedAssets:                true,
+		sharedPreparedLegacyScalarU8Assets: columnVectorGraphSharedPreparedLegacyScalarU8AssetDescriptors(def, view.VectorIndexState),
+	}
+	success := false
+	defer func() {
+		if !success {
+			_ = buildReader.Close()
+		}
+	}()
+	if err := c.prepareColumnVectorGraphPhysicalRowReaderSourcesAtSnapshot(buildReader, snap, view); err != nil {
+		return nil, err
+	}
+	holder, err := newColumnVectorGraphSharedPreparedSearchFromReader(buildReader)
+	if err != nil {
+		return nil, err
+	}
+	success = true
+	return holder, nil
+}
+
 func columnVectorGraphSharedPreparedEligible(graph columnVectorGraphManifestSnapshot, view columnPhysicalScanSnapshotView) bool {
 	return !columnVectorGraphManifestHasPhysicalAsset(graph) && graph.RowCount > 0 && view.Catalog != nil && view.VectorIndexStateFound && view.AssetNamespace != ""
 }
@@ -186,29 +222,7 @@ func (c *Collection) openColumnVectorGraphPhysicalRowReaderWithBoundKey(snap *ba
 	}
 	if sharedEligible {
 		shared, err := c.acquireColumnVectorGraphSharedPreparedSearch(key, func() (*columnVectorGraphSharedPreparedSearch, error) {
-			buildReader := &columnVectorGraphPhysicalRowReader{
-				def:                                def,
-				graph:                              graph,
-				catalog:                            catalog,
-				quantizedAssetStatus:               make(map[string]columnVectorGraphQuantizedAssetLoadStatus),
-				skipQuantizedAssets:                true,
-				sharedPreparedLegacyScalarU8Assets: columnVectorGraphSharedPreparedLegacyScalarU8AssetDescriptors(def, view.VectorIndexState),
-			}
-			success := false
-			defer func() {
-				if !success {
-					_ = buildReader.Close()
-				}
-			}()
-			if err := c.prepareColumnVectorGraphPhysicalRowReaderSourcesAtSnapshot(buildReader, snap, view); err != nil {
-				return nil, err
-			}
-			holder, err := newColumnVectorGraphSharedPreparedSearchFromReader(buildReader)
-			if err != nil {
-				return nil, err
-			}
-			success = true
-			return holder, nil
+			return c.buildColumnVectorGraphSharedPreparedSearchFromView(snap, def, graph, view)
 		})
 		if err != nil {
 			if errors.Is(err, errColumnVectorGraphSharedPreparedSearchNotEligible) {

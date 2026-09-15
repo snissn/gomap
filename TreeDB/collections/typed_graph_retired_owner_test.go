@@ -22,11 +22,12 @@ func testTypedGraphRetiredOwnerCharge(t *testing.T, rows int) {
 	if err := col.reconcileTypedGraphPublication(typedGraphPublicationLimits{Rows: 512, Tombstones: 512, ValueSlots: 2048, OwnedBytes: 8 << 20}, limits.Cold); err != nil {
 		t.Fatal(err)
 	}
+	installTypedGraphServingStateForInternalTest(t, col, "embedding_graph", limits)
 	keeper, err := col.acquireTypedGraphCapturedBaseCache("embedding_graph", limits)
 	if err != nil {
 		t.Fatal(err)
 	}
-	holder := keeper.capturedBase.ref.holder
+	holder := keeper.capturedBase.holderRef().holder
 	owner, err := col.openTypedGraphReadOwner(limits)
 	if err != nil {
 		t.Fatal(err)
@@ -50,6 +51,7 @@ func testTypedGraphRetiredOwnerCharge(t *testing.T, rows int) {
 		t.Fatal(err)
 	}
 	limits.StateBytes = retained
+	setTypedGraphServingPolicyForInternalTest(t, col, "embedding_graph", limits)
 	first, err := col.openTypedGraphReadOwner(limits)
 	if err != nil {
 		t.Fatal(err)

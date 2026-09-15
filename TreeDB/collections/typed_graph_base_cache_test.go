@@ -19,6 +19,7 @@ func TestTypedGraphCapturedBaseCache(t *testing.T) {
 	if err := col.reconcileTypedGraphPublication(typedGraphPublicationLimits{Rows: 512, Tombstones: 512, ValueSlots: 2048, OwnedBytes: 8 << 20}, limits.Cold); err != nil {
 		t.Fatal(err)
 	}
+	installTypedGraphServingStateForInternalTest(t, col, "embedding_graph", limits)
 	keeper, err := col.acquireTypedGraphCapturedBaseCache("embedding_graph", limits)
 	if err != nil {
 		t.Fatal(err)
@@ -27,7 +28,7 @@ func TestTypedGraphCapturedBaseCache(t *testing.T) {
 		t.Fatal("keeper must contain only base resources")
 	}
 	initial := col.columnVectorGraphSharedPreparedSearchCacheSnapshot()
-	holder := keeper.capturedBase.ref.holder
+	holder := keeper.capturedBase.holderRef().holder
 	checkTypedGraphCapturedBacking(t, keeper.capturedBase)
 	tighter := limits
 	tighter.AssetBytes--
@@ -39,7 +40,7 @@ func TestTypedGraphCapturedBaseCache(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if owner.overlay.base.reader.sharedPreparedSearch.holder != keeper.capturedBase.ref.holder {
+		if owner.overlay.base.reader.sharedPreparedSearch.holder != keeper.capturedBase.holderRef().holder {
 			t.Fatal("different holder")
 		}
 		if err := owner.Close(); err != nil {
@@ -60,7 +61,7 @@ func TestTypedGraphCapturedBaseCache(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if keeper.capturedBase.ref.holder != holder {
+	if keeper.capturedBase.holderRef().holder != holder {
 		t.Fatal("suffix refresh rebuilt base")
 	}
 	old, err := col.openTypedGraphReadOwner(limits)
@@ -71,14 +72,16 @@ func TestTypedGraphCapturedBaseCache(t *testing.T) {
 	if len(old.overlay.rows) != 1 {
 		t.Fatal("lost suffix")
 	}
+	disableTypedGraphServingPolicyForInternalRebuild(t, col)
 	if _, err := col.RebuildVectorIndex("embedding_graph"); err != nil {
 		t.Fatal(err)
 	}
+	installTypedGraphServingStateForInternalTest(t, col, "embedding_graph", limits)
 	keeper, err = col.acquireTypedGraphCapturedBaseCache("embedding_graph", limits)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if keeper.capturedBase.ref.holder == holder {
+	if keeper.capturedBase.holderRef().holder == holder {
 		t.Fatal("cutover reused stale base")
 	}
 	var buffer VectorIndexSearchBuffer
@@ -104,7 +107,7 @@ func TestTypedGraphCapturedBaseCache(t *testing.T) {
 
 func checkTypedGraphCapturedBacking(t testing.TB, r *typedGraphCapturedBaseResources) {
 	t.Helper()
-	h := r.ref.holder
+	h := r.holderRef().holder
 	v := h.typedVectorSource
 	if cap(v.parts) != len(v.parts) {
 		t.Fatalf("part capacity=%d length=%d", cap(v.parts), len(v.parts))
@@ -288,6 +291,7 @@ func TestTypedGraphCapturedBaseCacheCrossManagerAndFailure(t *testing.T) {
 	}
 	limits := typedGraphOverlapLimits()
 	limits.Owners = 2
+	installTypedGraphServingStateForInternalTest(t, col, "embedding_graph", limits)
 	first, err := col.acquireTypedGraphCapturedBaseCache("embedding_graph", limits)
 	if err != nil {
 		t.Fatal(err)
@@ -300,7 +304,7 @@ func TestTypedGraphCapturedBaseCacheCrossManagerAndFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if first.capturedBase.ref.holder == second.capturedBase.ref.holder {
+	if first.capturedBase.holderRef().holder == second.capturedBase.holderRef().holder {
 		t.Fatal("unexpected cross-manager holder sharing")
 	}
 	third, err := NewCollectionManager(col.db).OpenCollection("minima")
@@ -326,6 +330,7 @@ func TestTypedGraphCapturedBaseCacheCrossManagerAndFailure(t *testing.T) {
 	if err := emptyFixture.Close(); err != nil {
 		t.Fatal(err)
 	}
+	installTypedGraphServingStateForInternalTest(t, empty, "embedding_graph", limits)
 	if p, err := empty.acquireTypedGraphCapturedBaseCache("embedding_graph", limits); p != nil || !errors.Is(err, errColumnVectorGraphSharedPreparedSearchNotEligible) {
 		t.Fatalf("empty p=%v err=%v", p, err)
 	}
@@ -344,12 +349,15 @@ func TestTypedGraphCapturedBaseCacheConcurrentAndBudget(t *testing.T) {
 		t.Fatal(err)
 	}
 	limits := typedGraphOverlapLimits()
+	installTypedGraphServingStateForInternalTest(t, col, "embedding_graph", limits)
 	tiny := limits
 	tiny.AssetBytes = 1
+	setTypedGraphServingPolicyForInternalTest(t, col, "embedding_graph", tiny)
 	before := col.columnVectorGraphSharedPreparedSearchCacheSnapshot()
 	if _, err := col.acquireTypedGraphCapturedBaseCache("embedding_graph", tiny); !errors.Is(err, errTypedGraphOwnerBudget) {
 		t.Fatalf("tiny: %v", err)
 	}
+	setTypedGraphServingPolicyForInternalTest(t, col, "embedding_graph", limits)
 	if after := col.columnVectorGraphSharedPreparedSearchCacheSnapshot(); after.CacheBuilds != before.CacheBuilds {
 		t.Fatal("mapped before budget rejection")
 	}

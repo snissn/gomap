@@ -438,7 +438,7 @@ type Collection struct {
 	vectorIndexesMu             sync.RWMutex
 	vectorIndexes               map[string]*VectorIndex
 	vectorPreparedSearchMu      sync.Mutex
-	vectorPreparedSearch        map[string]*columnVectorGraphSharedPreparedSearchCacheEntry
+	vectorPreparedSearch        map[columnVectorGraphSharedPreparedSearchKey]*columnVectorGraphSharedPreparedSearchCacheEntry
 	vectorPreparedSearchHits    uint64
 	vectorPreparedSearchMisses  uint64
 	vectorPreparedSearchWaits   uint64

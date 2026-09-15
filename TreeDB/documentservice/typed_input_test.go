@@ -57,10 +57,49 @@ func TestServiceTypedInputOwnership(t *testing.T) {
 func typedServiceTestOptions() collections.ColumnGraphServingOptions {
 	return collections.ColumnGraphServingOptions{
 		Publication:     collections.ColumnGraphPublicationLimits{Rows: 512, Tombstones: 512, ValueSlots: 4096, OwnedBytes: 16 << 20, EncodedOutputBytes: 16 << 20},
-		Owners:          collections.ColumnGraphReadOwnerLimits{Owners: 8, States: 8, StateBytes: 128 << 20, AssetBytes: 128 << 20, Cold: collections.ColumnGraphColdLimits{ManifestRecords: 4096, ManifestBytes: 8 << 20, AssetBytes: 64 << 20, DecodedTermBytes: 64 << 20}},
+		Owners:          collections.ColumnGraphReadOwnerLimits{Owners: 8, States: 8, StateBytes: 128 << 20, AssetBytes: 128 << 20, Cold: collections.ColumnGraphColdLimits{ManifestRecords: 4096, ManifestBytes: 8 << 20, AssetBytes: 64 << 20, DecodedTermBytes: 64 << 20}, Physical: collections.ColumnGraphPhysicalResourceLimits{Segments: 4096, Descriptors: 4096, MappedBytes: 1 << 30, FallbackBytes: 1 << 30, InventoryBytes: 64 << 20}},
 		CandidateOutput: collections.ColumnGraphCandidateOutputLimits{Bytes: 1 << 30, AppenderAttempts: 4096},
 		Maintenance:     collections.ColumnGraphMaintenanceLimits{NativeEntries: 4096, ColumnSegments: 4096, ManifestRecords: 4096, LifecycleEntries: 4096, NativeBytes: 128 << 20, ColumnBytes: 64 << 20, ManifestBytes: 8 << 20, RetainedBytes: 256 << 20, PagerPages: 32768},
 		Filter:          collections.ColumnGraphFilterLimits{SourceIDs: 4096, SourceBytes: 4 << 20, RetainedBytes: 4 << 20, MappingWork: 100000, InspectedEntries: 4096}, FoldRows: 4096, SearchCandidates: 4096,
+	}
+}
+
+func TestColumnGraphServingPhysicalLimitsJSONRoundTrip(t *testing.T) {
+	want := typedServiceTestOptions()
+	encoded, err := json.Marshal(want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded collections.ColumnGraphServingOptions
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded.Owners.Physical != want.Owners.Physical {
+		t.Fatalf("physical limits round trip got=%+v want=%+v JSON=%s", decoded.Owners.Physical, want.Owners.Physical, encoded)
+	}
+	var object map[string]any
+	if err := json.Unmarshal(encoded, &object); err != nil {
+		t.Fatal(err)
+	}
+	owners, ok := object["Owners"].(map[string]any)
+	if !ok {
+		t.Fatalf("owners JSON shape=%T", object["Owners"])
+	}
+	physical, ok := owners["Physical"].(map[string]any)
+	if !ok || len(physical) != 5 || physical["segments"] == nil || physical["descriptors"] == nil || physical["mapped_bytes"] == nil || physical["fallback_bytes"] == nil || physical["inventory_bytes"] == nil {
+		t.Fatalf("physical JSON shape=%+v", owners["Physical"])
+	}
+	delete(owners, "Physical")
+	omitted, err := json.Marshal(object)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var without collections.ColumnGraphServingOptions
+	if err := json.Unmarshal(omitted, &without); err != nil {
+		t.Fatal(err)
+	}
+	if without.Owners.Physical != (collections.ColumnGraphPhysicalResourceLimits{}) {
+		t.Fatalf("omitted physical limits did not remain zero: %+v", without.Owners.Physical)
 	}
 }
 
@@ -112,6 +151,11 @@ func TestServiceTypedInputServingLifecycle(t *testing.T) {
 	options.SearchCandidates = 1
 	if _, err := svc.OptimizeIndex(ctx, create.Name, OptimizeIndexRequest{}); ErrorCodeOf(err) != CodeInvalidRequest {
 		t.Fatalf("missing limits accepted: %v", err)
+	}
+	missingPhysical := options
+	missingPhysical.Owners.Physical = collections.ColumnGraphPhysicalResourceLimits{}
+	if _, err := svc.OptimizeIndex(ctx, create.Name, OptimizeIndexRequest{ColumnGraphServing: &missingPhysical}); err == nil {
+		t.Fatal("missing explicit physical limits accepted")
 	}
 	if _, err := svc.OptimizeIndex(ctx, create.Name, OptimizeIndexRequest{ColumnGraphServing: &options}); err != nil {
 		t.Fatal(err)

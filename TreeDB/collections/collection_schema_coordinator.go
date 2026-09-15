@@ -2,6 +2,7 @@ package collections
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 
@@ -15,6 +16,7 @@ type chunkLifecycleLock struct {
 type collectionSchemaCoordinator struct {
 	typedGraphFoldActive    atomic.Bool // one unpublished candidate per collection, across managers
 	typedGraphOwners        typedGraphReadOwnerAccounting
+	typedGraphPhysical      typedGraphPhysicalResourceLedger
 	typedPublication        atomic.Pointer[typedGraphPublicationState]
 	typedGraphServing       atomic.Pointer[typedGraphServingPolicy]
 	typedPublicationDebtMu  sync.Mutex
@@ -202,17 +204,28 @@ func collectionDBSchemaCoordinatorForDB(db *backenddb.DB) *collectionDBSchemaCoo
 		}
 		return !loaded
 	}, func() error {
+		type namedCoordinator struct {
+			name  string
+			value *collectionSchemaCoordinator
+		}
 		coord.mu.Lock()
-		for _, collection := range coord.collections {
+		collections := make([]namedCoordinator, 0, len(coord.collections))
+		for name, collection := range coord.collections {
+			collections = append(collections, namedCoordinator{name: name, value: collection})
+		}
+		coord.mu.Unlock()
+		var closeErr error
+		for _, named := range collections {
+			collection := named.value
 			collection.typedPublicationDebtMu.Lock()
 			collection.typedPublicationClosed = true
 			collection.wakeTypedGraphPublicationWaitersLocked()
 			collection.typedPublicationDebtMu.Unlock()
+			closeErr = errors.Join(closeErr, collection.typedGraphPhysical.closeForDB(db, db.ColumnAssetRootDir(), named.name))
 		}
-		coord.mu.Unlock()
 		unregisterRelocation()
 		collectionSchemaCoordinators.Delete(db)
-		return nil
+		return closeErr
 	}); !ok {
 		return nil
 	}

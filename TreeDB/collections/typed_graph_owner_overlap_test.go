@@ -2,12 +2,59 @@ package collections
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"testing"
 )
 
 func typedGraphOverlapLimits() typedGraphReadOwnerLimits {
-	return typedGraphReadOwnerLimits{Owners: 4, States: 4, StateBytes: 16 << 20, AssetBytes: 64 << 20, Cold: typedGraphColdLimits{ManifestRecords: 4096, ManifestBytes: 4 << 20, AssetBytes: 32 << 20, DecodedTermBytes: 32 << 20}}
+	return typedGraphReadOwnerLimits{Owners: 4, States: 4, StateBytes: 16 << 20, AssetBytes: 64 << 20, Cold: typedGraphColdLimits{ManifestRecords: 4096, ManifestBytes: 4 << 20, AssetBytes: 32 << 20, DecodedTermBytes: 32 << 20}, Physical: typedGraphTestPhysicalLimits()}
+}
+
+func typedGraphTestPhysicalLimits() typedGraphPhysicalResourceLimits {
+	return typedGraphPhysicalResourceLimits{Segments: 4096, Descriptors: 4096, MappedBytes: 1 << 30, FallbackBytes: 1 << 30, InventoryBytes: 64 << 20}
+}
+
+// installTypedGraphServingStateForInternalTest isolates tests of the private
+// keeper/owner seams from Ensure's own warm-up. Production reaches this state
+// only through EnsureColumnGraphServing.
+func installTypedGraphServingStateForInternalTest(t testing.TB, col *Collection, index string, limits typedGraphReadOwnerLimits) {
+	t.Helper()
+	if err := col.reconcileTypedGraphPublication(typedGraphPublicationLimits{Rows: 512, Tombstones: 512, ValueSlots: 2048, OwnedBytes: 8 << 20}, limits.Cold); err != nil {
+		t.Fatal(err)
+	}
+	if err := col.prepareTypedGraphServingMetadata(context.Background(), limits.Cold); err != nil {
+		t.Fatal(err)
+	}
+	coord := col.collectionSchemaCoordinator()
+	state := coord.typedPublication.Load()
+	if state == nil || state.invalid || state.servingBase == nil {
+		t.Fatal("serving metadata was not installed")
+	}
+	ready := *state
+	ready.servingAdmitted = true
+	coord.typedPublication.Store(&ready)
+	setTypedGraphServingPolicyForInternalTest(t, col, index, limits)
+}
+
+func setTypedGraphServingPolicyForInternalTest(t testing.TB, col *Collection, index string, limits typedGraphReadOwnerLimits) {
+	t.Helper()
+	coord := col.collectionSchemaCoordinator()
+	if coord == nil {
+		t.Fatal("missing schema coordinator")
+	}
+	opts := typedGraphPublicTestOptions()
+	opts.Owners = limits
+	coord.typedGraphServing.Store(&typedGraphServingPolicy{index: index, options: opts})
+}
+
+func disableTypedGraphServingPolicyForInternalRebuild(t testing.TB, col *Collection) {
+	t.Helper()
+	coord := col.collectionSchemaCoordinator()
+	if coord == nil {
+		t.Fatal("missing schema coordinator")
+	}
+	coord.typedGraphServing.Store(nil)
 }
 
 func requireTypedGraphPreparedHolderTest(t testing.TB) {

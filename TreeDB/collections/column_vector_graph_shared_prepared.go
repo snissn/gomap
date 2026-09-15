@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"sync"
 
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
 )
 
@@ -21,8 +22,46 @@ var errColumnVectorGraphSharedPreparedSearchNotEligible = errors.New("collection
 // includes graph/vector-index/base-manifest identity so a future DB-wide
 // mapped-resource manager can replace the backing owner without changing search
 // semantics.
+type columnVectorGraphSharedPreparedSearchKeyFamily uint8
+
+const (
+	columnVectorGraphSharedPreparedSearchKeyGeneric columnVectorGraphSharedPreparedSearchKeyFamily = iota + 1
+	columnVectorGraphSharedPreparedSearchKeyServing
+)
+
+// The serving family is deliberately typed and comparable. Its closure digest
+// is binary, not a concatenated display string, and its DB pointer prevents a
+// reopened database at the same path from sharing process-local authority.
+type columnVectorGraphSharedPreparedSearchKey struct {
+	family     columnVectorGraphSharedPreparedSearchKeyFamily
+	db         *backenddb.DB
+	assetRoot  string
+	collection string
+	namespace  string
+	logical    string
+	refsDigest [32]byte
+	refsCount  int
+}
+
+func genericColumnVectorGraphSharedPreparedSearchKey(logical string) columnVectorGraphSharedPreparedSearchKey {
+	return columnVectorGraphSharedPreparedSearchKey{family: columnVectorGraphSharedPreparedSearchKeyGeneric, logical: logical}
+}
+
+func (k columnVectorGraphSharedPreparedSearchKey) valid() bool {
+	switch k.family {
+	case columnVectorGraphSharedPreparedSearchKeyGeneric:
+		return k.logical != "" && k.db == nil && k.assetRoot == "" && k.collection == "" && k.namespace == "" && k.refsDigest == [32]byte{} && k.refsCount == 0
+	case columnVectorGraphSharedPreparedSearchKeyServing:
+		// A SHA-256 digest may legitimately be all zero bits. Non-empty exact
+		// authority is represented independently by refsCount.
+		return k.db != nil && k.assetRoot != "" && k.collection != "" && k.namespace != "" && k.logical != "" && k.refsCount > 0
+	default:
+		return false
+	}
+}
+
 type columnVectorGraphSharedPreparedSearch struct {
-	key string
+	key columnVectorGraphSharedPreparedSearchKey
 
 	typedVectorSource     *columnVectorGraphTypedColumnVectorSource
 	invNormSource         *columnVectorGraphInvNormStateSource
@@ -33,6 +72,7 @@ type columnVectorGraphSharedPreparedSearch struct {
 	hnswSearchPackNanos   uint64
 	adjacencyLayerSources *columnVectorGraphAdjacencyDirectSources
 	preparedSearch        *columnVectorGraphPreparedSearchView
+	servingSegments       *columnServingSegmentLeaseSet
 
 	// legacyScalarU8Assets is immutable holder identity metadata captured with
 	// the same vector-index state that produced key. It is deliberately only a
@@ -200,17 +240,20 @@ func (c *columnVectorGraphLegacyScalarU8ZeroRowValidationCache) retainedCapaciti
 
 type columnVectorGraphSharedPreparedSearchRef struct {
 	collection *Collection
-	key        string
+	key        columnVectorGraphSharedPreparedSearchKey
 	holder     *columnVectorGraphSharedPreparedSearch
 	once       sync.Once
 }
 
 type columnVectorGraphSharedPreparedSearchCacheEntry struct {
-	ready    chan struct{}
-	building bool
-	holder   *columnVectorGraphSharedPreparedSearch
-	err      error
-	refs     int
+	ready         chan struct{}
+	building      bool
+	serving       bool
+	holder        *columnVectorGraphSharedPreparedSearch
+	err           error
+	refs          int
+	waiters       int
+	servingLimits typedGraphPhysicalResourceLimits
 }
 
 type columnVectorGraphSharedPreparedSearchCacheSnapshot struct {
@@ -236,19 +279,29 @@ type columnVectorGraphSharedPreparedSearchCacheSnapshot struct {
 }
 
 func (c *Collection) acquireColumnVectorGraphSharedPreparedSearch(key string, build func() (*columnVectorGraphSharedPreparedSearch, error)) (*columnVectorGraphSharedPreparedSearchRef, error) {
+	return c.acquireColumnVectorGraphSharedPreparedSearchWithContext(context.Background(), genericColumnVectorGraphSharedPreparedSearchKey(key), build)
+}
+
+func (c *Collection) acquireColumnVectorGraphSharedPreparedSearchWithContext(ctx context.Context, key columnVectorGraphSharedPreparedSearchKey, build func() (*columnVectorGraphSharedPreparedSearch, error)) (*columnVectorGraphSharedPreparedSearchRef, error) {
 	if c == nil {
 		return nil, errCollectionNil
 	}
-	if key == "" {
+	if !key.valid() {
 		return nil, errors.New("collections: column_graph shared prepared search key is empty")
 	}
 	if build == nil {
 		return nil, errors.New("collections: column_graph shared prepared search build function is nil")
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	for {
 		c.vectorPreparedSearchMu.Lock()
 		if c.vectorPreparedSearch == nil {
-			c.vectorPreparedSearch = make(map[string]*columnVectorGraphSharedPreparedSearchCacheEntry)
+			c.vectorPreparedSearch = make(map[columnVectorGraphSharedPreparedSearchKey]*columnVectorGraphSharedPreparedSearchCacheEntry)
 		}
 		entry := c.vectorPreparedSearch[key]
 		if entry == nil {
@@ -288,7 +341,11 @@ func (c *Collection) acquireColumnVectorGraphSharedPreparedSearch(key string, bu
 		if entry.building {
 			c.vectorPreparedSearchWaits++
 			c.vectorPreparedSearchMu.Unlock()
-			<-ready
+			select {
+			case <-ready:
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
 			continue
 		}
 		if entry.err != nil {
@@ -319,7 +376,7 @@ func (r *columnVectorGraphSharedPreparedSearchRef) release() error {
 	var closeErr error
 	r.once.Do(func() {
 		c := r.collection
-		if c == nil || r.key == "" {
+		if c == nil || !r.key.valid() {
 			return
 		}
 		var holder *columnVectorGraphSharedPreparedSearch
@@ -329,14 +386,14 @@ func (r *columnVectorGraphSharedPreparedSearchRef) release() error {
 			if entry.refs > 0 {
 				entry.refs--
 			}
-			if entry.refs == 0 && !entry.building {
+			if entry.refs == 0 && entry.waiters == 0 && !entry.building {
 				holder = entry.holder
 				delete(c.vectorPreparedSearch, r.key)
 			}
 		}
 		c.vectorPreparedSearchMu.Unlock()
 		if holder != nil {
-			closeErr = holder.close()
+			closeErr = c.closeColumnVectorGraphSharedPreparedSearchHolder(holder)
 		}
 	})
 	return closeErr
@@ -587,7 +644,7 @@ func (h *columnVectorGraphSharedPreparedSearch) acquireLegacyScalarU8AssetWithCo
 func (h *columnVectorGraphSharedPreparedSearch) ready() bool {
 	// Combined readiness includes any borrowed pack and persisted inverse.
 	// Pack presence alone cannot admit the native counted-source fallback.
-	return h != nil && h.typedVectorSource != nil && h.invNormSource != nil && h.rowRefSource != nil && h.documentIDSource != nil && h.adjacencyLayerSources != nil && h.preparedSearch != nil && h.preparedSearch.ready()
+	return h != nil && h.typedVectorSource != nil && h.invNormSource != nil && h.rowRefSource != nil && h.documentIDSource != nil && h.adjacencyLayerSources != nil && h.preparedSearch != nil && h.preparedSearch.ready() && (h.key.family != columnVectorGraphSharedPreparedSearchKeyServing || h.servingSegments != nil)
 }
 
 func (h *columnVectorGraphSharedPreparedSearch) close() error {
@@ -621,56 +678,71 @@ func (h *columnVectorGraphSharedPreparedSearch) close() error {
 				status = entry.status
 				h.legacyScalarU8Mu.Unlock()
 			}
-			if err := status.close(); err != nil && closeErr == nil {
-				closeErr = err
-			}
+			closeErr = errors.Join(closeErr, status.close())
 		}
 	}
+	// The prepared view is non-owning and may point into every source below.
+	// Make it unreachable before releasing any logical source handle.
+	h.preparedSearch = nil
+	if h.adjacencyLayerSources != nil {
+		closeErr = errors.Join(closeErr, h.adjacencyLayerSources.Close())
+		h.adjacencyLayerSources = nil
+	}
+	if h.documentIDSource != nil {
+		closeErr = errors.Join(closeErr, h.documentIDSource.Close())
+		h.documentIDSource = nil
+	}
+	if h.rowRefSource != nil {
+		closeErr = errors.Join(closeErr, h.rowRefSource.Close())
+		h.rowRefSource = nil
+	}
 	if h.typedVectorSource != nil {
-		if err := h.typedVectorSource.Close(); err != nil && closeErr == nil {
-			closeErr = err
-		}
+		closeErr = errors.Join(closeErr, h.typedVectorSource.Close())
 		h.typedVectorSource = nil
 	}
 	if h.invNormSource != nil {
-		if err := h.invNormSource.Close(); err != nil && closeErr == nil {
-			closeErr = err
-		}
+		closeErr = errors.Join(closeErr, h.invNormSource.Close())
 		h.invNormSource = nil
 	}
-	if h.rowRefSource != nil {
-		if err := h.rowRefSource.Close(); err != nil && closeErr == nil {
-			closeErr = err
-		}
-		h.rowRefSource = nil
-	}
-	if h.documentIDSource != nil {
-		if err := h.documentIDSource.Close(); err != nil && closeErr == nil {
-			closeErr = err
-		}
-		h.documentIDSource = nil
-	}
+	// Pack is an owning source beneath prepared/adjacency borrowers.
 	if h.hnswSearchPack != nil {
-		if err := h.hnswSearchPack.Close(); err != nil && closeErr == nil {
-			closeErr = err
-		}
+		closeErr = errors.Join(closeErr, h.hnswSearchPack.Close())
 		h.hnswSearchPack = nil
 	}
-	if h.adjacencyLayerSources != nil {
-		if err := h.adjacencyLayerSources.Close(); err != nil && closeErr == nil {
-			closeErr = err
+	if h.servingSegments != nil {
+		closeErr = errors.Join(closeErr, h.servingSegments.Close())
+		if !h.servingSegments.cleanupRetained() {
+			h.servingSegments = nil
 		}
-		h.adjacencyLayerSources = nil
 	}
-	h.preparedSearch = nil
 	return closeErr
+}
+
+func (h *columnVectorGraphSharedPreparedSearch) detachRetainedServingSegments() *columnServingSegmentLeaseSet {
+	if h == nil || h.servingSegments == nil || !h.servingSegments.cleanupRetained() {
+		return nil
+	}
+	set := h.servingSegments
+	h.servingSegments = nil
+	return set
+}
+
+func (c *Collection) closeColumnVectorGraphSharedPreparedSearchHolder(holder *columnVectorGraphSharedPreparedSearch) error {
+	var err error
+	if holder != nil {
+		err = holder.close()
+		if retained := holder.detachRetainedServingSegments(); retained != nil {
+			return errors.Join(err, retained.ledger.quarantine(retained, nil, err))
+		}
+	}
+	return err
 }
 
 func (r *columnVectorGraphPhysicalRowReader) attachSharedPreparedSearch(ref *columnVectorGraphSharedPreparedSearchRef) error {
 	if r == nil {
 		return errNilColumnVectorGraphPhysicalRowReader
 	}
-	if ref == nil || ref.holder == nil || !ref.holder.ready() {
+	if ref == nil || !ref.key.valid() || ref.holder == nil || !ref.holder.ready() {
 		return errors.New("collections: column_graph shared prepared search ref is not ready")
 	}
 	h := ref.holder
@@ -687,6 +759,17 @@ func (r *columnVectorGraphPhysicalRowReader) attachSharedPreparedSearch(ref *col
 		r.layer0AdjacencySource = h.adjacencyLayerSources.sources[0]
 	}
 	r.preparedSearch = h.preparedSearch
+	return nil
+}
+
+func (r *columnVectorGraphPhysicalRowReader) attachServingPreparedSearch(capability *typedGraphServingHolderCapability) error {
+	if capability == nil || capability.ref == nil || capability.ref.key.family != columnVectorGraphSharedPreparedSearchKeyServing {
+		return errors.New("collections: column_graph serving prepared capability is not ready")
+	}
+	if err := r.attachSharedPreparedSearch(capability.ref); err != nil {
+		return err
+	}
+	r.sharedServingHolder = capability
 	return nil
 }
 
@@ -751,7 +834,7 @@ func (c *Collection) requestAndAttachColumnVectorGraphSharedPreparedLegacyScalar
 		return nil
 	}
 	ref := reader.sharedPreparedSearch
-	if ref == nil || ref.holder == nil || ref.key == "" || ref.key != ref.holder.key || !ref.holder.ready() {
+	if ref == nil || ref.holder == nil || !ref.key.valid() || ref.key != ref.holder.key || !ref.holder.ready() {
 		return fmt.Errorf("%w: %w: column_graph %q quantized index %q requires a live shared prepared holder", ErrVectorIndexSearchUnavailable, errColumnVectorGraphQuantizedAssetClosed, reader.def.Name, name)
 	}
 	descriptor, ok := ref.holder.legacyScalarU8AssetDescriptor(name, q)
@@ -784,11 +867,27 @@ func (c *Collection) requestAndAttachColumnVectorGraphSharedPreparedLegacyScalar
 }
 
 func (r *columnVectorGraphPhysicalRowReader) releaseSharedPreparedSearch() error {
+	if r != nil && r.sharedServingHolder != nil {
+		capability := r.sharedServingHolder
+		r.sharedServingHolder = nil
+		r.detachSharedPreparedSearchAlias()
+		return capability.Close()
+	}
 	return r.detachSharedPreparedSearch().release()
 }
 
 // Transfer only the immutable resource ref, never the reader's catalog/snapshot.
 func (r *columnVectorGraphPhysicalRowReader) detachSharedPreparedSearch() *columnVectorGraphSharedPreparedSearchRef {
+	if r != nil && r.sharedServingHolder != nil {
+		return nil
+	}
+	return r.detachSharedPreparedSearchAlias()
+}
+
+// detachSharedPreparedSearchAlias clears non-owning source aliases. A serving
+// caller must separately transfer or close sharedServingHolder; this helper is
+// also used by the generic owning-ref path above.
+func (r *columnVectorGraphPhysicalRowReader) detachSharedPreparedSearchAlias() *columnVectorGraphSharedPreparedSearchRef {
 	if r == nil || r.sharedPreparedSearch == nil {
 		return nil
 	}

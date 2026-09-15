@@ -2,6 +2,10 @@ package collections
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
+	"errors"
+	"fmt"
 	"reflect"
 	"slices"
 	"sync"
@@ -19,6 +23,7 @@ type typedGraphServingBaseMetadata struct {
 	recordCount      int
 	bytes            int64
 	preparedKey      string
+	refsDigest       [32]byte
 	// Empty graphs do not have an exact shared holder. Keep their selected
 	// scalar-u8 payload validation with the immutable base metadata instead of
 	// pretending a zero-row code plane is already ready from its declaration.
@@ -37,6 +42,38 @@ func (b *typedGraphServingBaseMetadata) openPhysicalReader(c *Collection, snap *
 	}
 	if reader.RowCount() == 0 {
 		reader.zeroRowLegacyScalarU8Validation = b.zeroRowLegacyScalarU8Validation
+	}
+	return reader, nil
+}
+
+// openServingPhysicalReaderWithOwnedPin is the serving-only reader boundary.
+// It starts from installed immutable metadata, consumes a caller pin acquired
+// with the caller snapshot, and attaches only the typed serving capability.
+// The holder cache-miss builder independently rebinds current metadata before
+// constructing sources; this request snapshot is never captured by the build.
+func (b *typedGraphServingBaseMetadata) openServingPhysicalReaderWithOwnedPin(ctx context.Context, c *Collection, snap *backenddb.Snapshot, pin *ColumnAssetLifecyclePinSet, limits typedGraphPhysicalResourceLimits, opts columnVectorGraphPhysicalRowReaderOptions) (*columnVectorGraphPhysicalRowReader, error) {
+	if b == nil || c == nil || snap == nil || pin == nil || b.view.Catalog == nil || len(b.view.Catalog.meta.VectorIndexes) != 1 || b.preparedKey == "" || !columnVectorGraphSharedPreparedEligible(b.graph, b.view) {
+		return nil, errors.Join(ErrVectorIndexSnapshotMismatch, pin.Close())
+	}
+	def := b.view.Catalog.meta.VectorIndexes[0]
+	reader := &columnVectorGraphPhysicalRowReader{
+		def:                        def,
+		graph:                      b.graph,
+		catalog:                    b.view.Catalog,
+		quantizedAssetStatus:       make(map[string]columnVectorGraphQuantizedAssetLoadStatus),
+		useResourceQuantizedAssets: opts.UseResourceQuantizedAssets,
+		skipQuantizedAssets:        opts.SkipQuantizedAssets,
+	}
+	capability, err := b.acquireServingHolderWithOwnedPin(ctx, c, pin, limits)
+	if err != nil {
+		_ = reader.Close()
+		return nil, err
+	}
+	if err := reader.attachServingPreparedSearch(capability); err != nil {
+		return nil, errors.Join(err, capability.Close(), reader.Close())
+	}
+	if !reader.skipQuantizedAssets {
+		c.prepareColumnVectorGraphQuantizedAssetsForReader(reader, b.view)
 	}
 	return reader, nil
 }
@@ -118,7 +155,11 @@ func prepareTypedGraphServingBaseMetadata(graph columnVectorGraphManifestSnapsho
 	if err != nil {
 		return nil, err
 	}
-	metadata := &typedGraphServingBaseMetadata{graph: graph, view: view, materializerView: materializer, refs: refs, recordCount: len(view.graphOwnerRecords)}
+	refsDigest, err := digestTypedGraphServingBaseRefs(refs)
+	if err != nil {
+		return nil, err
+	}
+	metadata := &typedGraphServingBaseMetadata{graph: graph, view: view, materializerView: materializer, refs: refs, refsDigest: refsDigest, recordCount: len(view.graphOwnerRecords)}
 	if graph.RowCount == 0 && len(view.Catalog.meta.VectorIndexes) == 1 {
 		metadata.zeroRowLegacyScalarU8Validation = newColumnVectorGraphLegacyScalarU8ZeroRowValidationCache(view.Catalog.meta.VectorIndexes[0], view.VectorIndexState)
 	}
@@ -139,6 +180,70 @@ func prepareTypedGraphServingBaseMetadata(graph columnVectorGraphManifestSnapsho
 	metadata.view.graphOwnerRecords = nil
 	metadata.view.CommitSeq, metadata.view.SystemRoot = 0, 0
 	return metadata, nil
+}
+
+func digestTypedGraphServingBaseRefs(refs []ColumnAssetRef) ([32]byte, error) {
+	if len(refs) == 0 {
+		return [32]byte{}, nil
+	}
+	h := sha256.New()
+	var encoded [8]byte
+	writeUint64 := func(value uint64) {
+		binary.BigEndian.PutUint64(encoded[:], value)
+		_, _ = h.Write(encoded[:])
+	}
+	writeString := func(value string) {
+		writeUint64(uint64(len(value)))
+		_, _ = h.Write([]byte(value))
+	}
+	writeUint64(uint64(len(refs)))
+	for i, ref := range refs {
+		if err := validateColumnAssetRefForPlan(ref); err != nil {
+			return [32]byte{}, fmt.Errorf("collections: serving base digest ref[%d]: %w", i, err)
+		}
+		if i > 0 && compareColumnAssetRefs(refs[i-1], ref) >= 0 {
+			return [32]byte{}, errors.New("collections: serving base digest requires strictly sorted unique refs")
+		}
+		writeString(string(ref.Kind))
+		writeString(ref.Namespace)
+		writeUint64(ref.Generation)
+		writeUint64(ref.PartID)
+		writeUint64(uint64(ref.FileID))
+		writeUint64(uint64(ref.Offset))
+		writeUint64(uint64(ref.Length))
+		writeUint64(uint64(ref.Checksum))
+	}
+	var digest [32]byte
+	copy(digest[:], h.Sum(nil))
+	return digest, nil
+}
+
+func (b *typedGraphServingBaseMetadata) servingPreparedSearchKey(c *Collection) (columnVectorGraphSharedPreparedSearchKey, error) {
+	if b == nil || c == nil || c.db == nil || b.preparedKey == "" || len(b.refs) == 0 || b.view.Catalog == nil || b.view.Catalog.meta.Name != c.collectionName() || b.view.AssetNamespace == "" {
+		return columnVectorGraphSharedPreparedSearchKey{}, ErrVectorIndexSnapshotMismatch
+	}
+	root, err := normalizeColumnServingRoot(c.db.ColumnAssetRootDir())
+	if err != nil {
+		return columnVectorGraphSharedPreparedSearchKey{}, err
+	}
+	refsDigest, err := digestTypedGraphServingBaseRefs(b.refs)
+	if err != nil || refsDigest != b.refsDigest {
+		return columnVectorGraphSharedPreparedSearchKey{}, ErrVectorIndexSnapshotMismatch
+	}
+	key := columnVectorGraphSharedPreparedSearchKey{
+		family:     columnVectorGraphSharedPreparedSearchKeyServing,
+		db:         c.db,
+		assetRoot:  root,
+		collection: b.view.Catalog.meta.Name,
+		namespace:  b.view.AssetNamespace,
+		logical:    b.preparedKey,
+		refsDigest: refsDigest,
+		refsCount:  len(b.refs),
+	}
+	if !key.valid() {
+		return columnVectorGraphSharedPreparedSearchKey{}, ErrVectorIndexSnapshotMismatch
+	}
+	return key, nil
 }
 
 // Full materializer metadata is decoded while the real captured records are

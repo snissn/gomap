@@ -104,9 +104,10 @@ func typedGraphOwnerRefs(records []columnManifestRecord, generation uint64, name
 
 var typedGraphOwnerAfterSnapshotHook struct {
 	sync.RWMutex
-	fn           func(*Collection)
-	afterDrain   func(*Collection)
-	afterCapture func(*Collection)
+	fn                func(*Collection)
+	afterDrain        func(*Collection)
+	afterCapture      func(*Collection)
+	beforeServingOpen func(*Collection)
 }
 
 func runTypedGraphOwnerAfterSnapshotHook(c *Collection) {

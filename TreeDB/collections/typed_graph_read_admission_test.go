@@ -162,7 +162,7 @@ func TestTypedGraphReadOwnerRejectsInvalidOrphanedBufferedReceipt(t *testing.T) 
 	if _, err := col.RebuildVectorIndex("embedding_graph"); err != nil {
 		t.Fatal(err)
 	}
-	limits := typedGraphReadOwnerLimits{Owners: 2, States: 2, StateBytes: 1 << 20, AssetBytes: 8 << 20, Cold: typedGraphColdLimits{ManifestRecords: 128, ManifestBytes: 128 << 10, AssetBytes: 4 << 20, DecodedTermBytes: 4 << 20}}
+	limits := typedGraphReadOwnerLimits{Owners: 2, States: 2, StateBytes: 1 << 20, AssetBytes: 8 << 20, Cold: typedGraphColdLimits{ManifestRecords: 128, ManifestBytes: 128 << 10, AssetBytes: 4 << 20, DecodedTermBytes: 4 << 20}, Physical: typedGraphTestPhysicalLimits()}
 	if err := col.reconcileTypedGraphPublication(typedGraphPublicationLimits{Rows: 8, Tombstones: 8, ValueSlots: 32, OwnedBytes: 4096, EncodedOutputBytes: 1 << 20}, limits.Cold); err != nil {
 		t.Fatal(err)
 	}

@@ -23,6 +23,7 @@ func TestTypedGraphFilterKeeper(t *testing.T) {
 	if err := col.reconcileTypedGraphPublication(typedGraphPublicationLimits{Rows: 512, Tombstones: 512, ValueSlots: 2048, OwnedBytes: 8 << 20}, owners.Cold); err != nil {
 		t.Fatal(err)
 	}
+	installTypedGraphServingStateForInternalTest(t, col, "embedding_graph", owners)
 	keeper, err := col.acquireTypedGraphCapturedBaseCache("embedding_graph", owners)
 	if err != nil {
 		t.Fatal(err)
@@ -261,6 +262,7 @@ func TestTypedGraphFilterKeeperWaitAndAdmission(t *testing.T) {
 	if err := col.reconcileTypedGraphPublication(typedGraphPublicationLimits{Rows: 512, Tombstones: 512, ValueSlots: 2048, OwnedBytes: 8 << 20}, limits.Cold); err != nil {
 		t.Fatal(err)
 	}
+	installTypedGraphServingStateForInternalTest(t, col, "embedding_graph", limits)
 	keeper, err := col.acquireTypedGraphCapturedBaseCache("embedding_graph", limits)
 	if err != nil {
 		t.Fatal(err)
@@ -347,6 +349,7 @@ func TestTypedGraphFilterKeeperCutoffAndRebuild(t *testing.T) {
 	if err := col.reconcileTypedGraphPublication(pub, owners.Cold); err != nil {
 		t.Fatal(err)
 	}
+	installTypedGraphServingStateForInternalTest(t, col, "embedding_graph", owners)
 	keeper, err := col.acquireTypedGraphCapturedBaseCache("embedding_graph", owners)
 	if err != nil {
 		t.Fatal(err)
@@ -427,12 +430,14 @@ func TestTypedGraphFilterKeeperCutoffAndRebuild(t *testing.T) {
 		t.Fatal(err)
 	}
 	query(4097, false)
+	disableTypedGraphServingPolicyForInternalRebuild(t, col)
 	if _, err := col.RebuildVectorIndex("embedding_graph"); err != nil {
 		t.Fatal(err)
 	}
 	if err := col.reconcileTypedGraphPublication(pub, owners.Cold); err != nil {
 		t.Fatal(err)
 	}
+	installTypedGraphServingStateForInternalTest(t, col, "embedding_graph", owners)
 	if _, err := col.acquireTypedGraphCapturedBaseCache("embedding_graph", owners); err != nil {
 		t.Fatal(err)
 	}

@@ -30,7 +30,8 @@ func (c *Collection) borrowTypedGraphFilterKeeper(owner *typedGraphReadOwner, in
 		return nil
 	}
 	ref := owner.overlay.base.reader.sharedPreparedSearch
-	if p.closed || p.capturedBase == nil || p.capturedBase.ref == nil || ref == nil || ref.holder != p.capturedBase.ref.holder || owner.accounting != p.capturedBase.accounting {
+	keeperRef := p.capturedBase.holderRef()
+	if p.closed || keeperRef == nil || ref == nil || ref.holder != keeperRef.holder || owner.accounting != p.capturedBase.accounting {
 		p.mu.RUnlock()
 		return nil
 	}
@@ -130,7 +131,11 @@ func prepareTypedGraphServingFilter(ctx context.Context, keeper *collectionVecto
 	}
 	// Detached plans contain only owned immutable selections and predicates, never
 	// a request searcher, snapshot, catalog, suffix or current materializer.
-	candidate.holder = r.ref.holder
+	ref := r.holderRef()
+	if ref == nil {
+		return nil, ErrVectorIndexSnapshotMismatch
+	}
+	candidate.holder = ref.holder
 	candidate.plan.overlay = nil
 	plan, err := bindTypedGraphServingFilter(ctx, candidate, overlay, limits, &work)
 	if err != nil {
@@ -222,10 +227,11 @@ func startTypedGraphFilterNavigationBuild(keeper *collectionVectorIndexPreparedS
 		return
 	}
 	r := keeper.capturedBase
-	if r == nil || r.ref == nil || r.backgroundCtx == nil || r.backgroundCtx.Err() != nil {
+	ref := r.holderRef()
+	if ref == nil || r.backgroundCtx == nil || r.backgroundCtx.Err() != nil {
 		return
 	}
-	holder := r.ref.holder
+	holder := ref.holder
 	if holder == nil || !holder.ready() || base.holder != holder || holder.hnswSearchPack == nil {
 		return
 	}

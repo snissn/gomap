@@ -101,7 +101,7 @@ func TestTypedGraphPublicEnsureStaleCapturedKeeper(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("stale ensure blocked")
 	}
-	if !rejected.closed || resources.accounting != nil || resources.pin != nil || resources.ref != nil {
+	if !rejected.closed || resources.accounting != nil || resources.capability != nil {
 		t.Fatal("rejected captured keeper retained its pin/accounting")
 	}
 	accounting.Lock()

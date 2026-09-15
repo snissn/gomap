@@ -19,17 +19,36 @@ Offline initialization remains part of query-ready/load time and peak evidence;
 ongoing-work limits do not retroactively budget it.
 
 `ColumnGraphServingOptions` requires positive publication, owner, cold metadata,
-candidate-output, maintenance-inventory and scalar-filter limit groups, plus
-fold-row/search-candidate limits. These expose existing admission mechanisms,
-not a second quota/cache. Encoded bytes are attempted work per renewable epoch,
-not physical disk size. Native file/pager residual ceilings remain separate.
-Zero does not request an unbounded default. Policy is process-local, shared by
-all collection managers on the DB, immutable until DB close, and must be reapplied
-after reopen. Failed setup gates queries and new writes rather than restoring
-feature-off writes. Ensure performs bounded cold reconciliation and maintenance
-and may reclaim unreachable assets. Unchanged admitted-state ensure is idempotent
-and does not renew attempted-work debt. A race at final state admission fails
-explicitly; no blind retry installs stale metadata.
+owner-physical, candidate-output, maintenance-inventory and scalar-filter limit
+groups, plus fold-row/search-candidate limits. `Owners.Physical` is an explicit
+resource budget rather than a value derived from logical `AssetBytes` or
+`StateBytes`: for each holder, segment potential is distinct `FileID`s,
+descriptor potential is one fallback descriptor per segment, mapped potential
+is the sum of page-rounded authorized-prefix ends, and holder-source fallback
+potential is the sum of unique exact base-ref lengths. The fallback sum is a
+conservative authorized ceiling when the closure includes materializer-only
+refs; request-local materializer copies are excluded from holder fallback live
+bytes. `InventoryBytes` is a deterministic modeled metadata admission charge,
+not exact heap/RSS. The DB/collection coordinator adds reservations across
+collection handles and old/new generations until actual close, so configure the
+limits for the overlap admitted by `Owners`.
+
+These expose distinct admission mechanisms, not a second logical asset cache.
+Encoded bytes are attempted work per renewable epoch, not physical disk size.
+Native file/pager residual ceilings remain separate. Zero does not request an
+unbounded default. Policy is process-local, shared by all collection managers on
+the DB, immutable until DB close, and must be reapplied after reopen. Failed
+setup gates queries and new writes rather than restoring feature-off writes.
+Ensure performs bounded cold reconciliation and maintenance and may reclaim
+unreachable assets. Unchanged admitted-state ensure is idempotent and does not
+renew attempted-work debt. A race at final state admission fails explicitly; no
+blind retry installs stale metadata.
+
+The first caller for a missing serving holder builds synchronously from an
+independently acquired current snapshot and exact-base guardian pin. Once that
+build starts, cancellation is reported only after construction completes or
+fully rolls back. Concurrent later waiters may cancel promptly without
+canceling or poisoning the shared build.
 
 Configured folds prepare next-base metadata from the same producer records and
 retain only post-capture owned suffix rows before physical publication. Exact

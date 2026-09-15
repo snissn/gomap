@@ -326,7 +326,7 @@ func openTypedWrite768Diagnostic(t *testing.T, preload, writeRows int) (string, 
 	capacity := max(1024, preload+writeRows)
 	opts := typedGraphPublicTestOptions()
 	opts.Publication = publication
-	opts.Owners = typedGraphReadOwnerLimits{Owners: 16, States: 16, StateBytes: 512 << 20, AssetBytes: 1 << 30, Cold: cold}
+	opts.Owners = typedGraphReadOwnerLimits{Owners: 16, States: 16, StateBytes: 512 << 20, AssetBytes: 1 << 30, Cold: cold, Physical: typedGraphPhysicalResourceLimits{Segments: 4096, Descriptors: 4096, MappedBytes: 2 << 30, FallbackBytes: 2 << 30, InventoryBytes: 128 << 20}}
 	opts.Filter = typedGraphFilterLimits{SourceIDs: capacity, SourceBytes: 64 << 20, RetainedBytes: 64 << 20, MappingWork: 128 << 20, InspectedEntries: capacity * 4}
 	opts.CandidateOutput = typedGraphFoldAssetLimits{Bytes: 1 << 30, AppenderAttempts: 4096}
 	opts.Maintenance = typedGraphWorkEpochLimits{NativeEntries: 4096, ColumnSegments: 4096, ManifestRecords: 4096, LifecycleEntries: 4096, NativeBytes: 1 << 30, ColumnBytes: 1 << 30, ManifestBytes: 64 << 20, RetainedBytes: 512 << 20, PagerPages: 1 << 18}
