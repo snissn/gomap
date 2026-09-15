@@ -171,7 +171,7 @@ func TestTypedGraphPublicUnsupportedLifecycleAdmission(t *testing.T) {
 }
 
 func TestTypedGraphPublicDescriptorFallbackAdmission(t *testing.T) {
-	requireTypedGraphPublicServingTest(t)
+	requireColumnAssetExactDestructiveGCTest(t)
 	col, base, ids, _, columns, _ := openTypedGraphQualityFixture(t, 8)
 	defer base.Close()
 	installColumnServingLeaseHooks(t, func() {
