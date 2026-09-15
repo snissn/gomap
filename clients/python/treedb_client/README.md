@@ -111,8 +111,10 @@ native encoding or client document-decoding error after completed service work
 preserves those producer completion flags; they do not mean delivery succeeded.
 Malformed proof is rejected without attaching it as trustworthy detail. Proof
 objects reject missing/unknown fields, invalid types and out-of-range integers.
-Available snapshots require nonzero generation, version and checksum in both
-base and current manifest identities. If a malformed native or HTTP score-plane
+Available snapshots require a nonzero schema generation and base/current
+coverage LSN, plus nonzero generation and checksum in both base and current
+manifest identities; the manifest version is exactly 1. If a malformed native
+or HTTP score-plane
 proof accompanies valid dense work, the protocol error retains that
 independently decoded `.dense_work` while leaving `.score_plane` unset; the
 inverse sibling failure likewise preserves a valid `.score_plane`.

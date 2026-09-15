@@ -43,6 +43,18 @@ func TestDenseWorkGoldenStrictOwnershipAndAllocations(t *testing.T) {
 	if _, err := appendDenseWork(nil, reversedCoverage); err == nil {
 		t.Fatal("dense work with reversed snapshot coverage accepted")
 	}
+	for name, mutate := range map[string]func(*collections.ColumnGraphQuerySnapshot){
+		"schema generation": func(s *collections.ColumnGraphQuerySnapshot) { s.SchemaGeneration = 0 },
+		"base coverage LSN": func(s *collections.ColumnGraphQuerySnapshot) { s.BaseCoverageLSN = 0 },
+	} {
+		t.Run("missing "+name, func(t *testing.T) {
+			candidate := w
+			mutate(&candidate.Graph.Snapshot)
+			if _, err := appendDenseWork(nil, candidate); err == nil {
+				t.Fatalf("dense work with zero %s accepted", name)
+			}
+		})
+	}
 	for name, mutate := range map[string]func(*collections.ColumnGraphManifestWork){
 		"generation": func(m *collections.ColumnGraphManifestWork) { m.Generation = 0 },
 		"version":    func(m *collections.ColumnGraphManifestWork) { m.Version = 0 },
@@ -55,6 +67,11 @@ func TestDenseWorkGoldenStrictOwnershipAndAllocations(t *testing.T) {
 				t.Fatalf("dense work with zero manifest %s accepted", name)
 			}
 		})
+	}
+	unsupportedManifestVersion := w
+	unsupportedManifestVersion.Graph.Snapshot.CurrentManifest.Version = 2
+	if _, err := appendDenseWork(nil, unsupportedManifestVersion); err == nil {
+		t.Fatal("dense work with unsupported manifest version accepted")
 	}
 	for size := range len(raw) {
 		if _, err := decodeDenseWork(raw[:size]); err == nil {

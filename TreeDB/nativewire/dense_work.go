@@ -45,7 +45,7 @@ func denseWorkRouteTag(route string) uint64 {
 }
 
 func denseManifestWorkComplete(m collections.ColumnGraphManifestWork) bool {
-	return m.Generation != 0 && m.Version != 0 && m.Checksum != 0
+	return m.Generation != 0 && m.Version == 1 && m.Checksum != 0
 }
 
 func validateDenseWork(w documentservice.DenseSearchWork) error {
@@ -54,7 +54,7 @@ func validateDenseWork(w documentservice.DenseSearchWork) error {
 	bad = bad || (!g.Available && g != (collections.ColumnGraphQueryWork{}))
 	bad = bad || (!f.Attempted && f != (collections.ColumnGraphFilterWork{}))
 	bad = bad || (!s.Available && s != (collections.ColumnGraphQuerySnapshot{}))
-	bad = bad || (s.Available && s.CurrentCoverageLSN < s.BaseCoverageLSN)
+	bad = bad || (s.Available && (s.SchemaGeneration == 0 || s.BaseCoverageLSN == 0 || s.CurrentCoverageLSN < s.BaseCoverageLSN))
 	bad = bad || (!o.Attempted && o != (documentservice.DenseSearchOutputWork{}))
 	bad = bad || (g.Completed && (!g.Available || !s.Available || g.Route == "" || (f.Attempted && !f.Completed)))
 	bad = bad || o.Fetched > o.Requested || o.Missing > o.Requested-o.Fetched

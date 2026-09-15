@@ -844,6 +844,13 @@ incomplete error prefixes distinguishable from completed proofs without
 deriving snapshot availability from the outer proof bit. Missing, duplicate, stale, malformed, unsupported-codec,
 unknown-name, or out-of-bound options fail closed.
 
+Every available section-134 or section-136 snapshot requires a nonzero acquired
+vector schema generation, nonzero base/current coverage LSNs with current not
+behind base, and nonzero generation/checksum identities for both manifests,
+with manifest version exactly 1. Schema hash remains the producer's full uint64
+value; zero is not a reserved wire sentinel. An unavailable snapshot is the
+exact zero value.
+
 Completed public v3 proofs use this producer/consumer route matrix. `E`, `C`,
 and `R` denote normalized candidate width, raw candidate width, and rerank cap.
 

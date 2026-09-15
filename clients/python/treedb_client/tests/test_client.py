@@ -875,6 +875,18 @@ class TreeDBClientTests(unittest.TestCase):
                         quantized_index_name="embedding.scalar_u8.public",
                     )
                 reversed_client.close()
+            for field in ("schema_generation", "base_coverage_lsn"):
+                missing_snapshot_identity = copy.deepcopy(payload)
+                missing_snapshot_identity["dense_work"]["graph"]["snapshot"][field] = 0
+                missing_snapshot_identity["score_plane"]["snapshot"][field] = 0
+                with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, missing_snapshot_identity, 0)}) as identity_server:
+                    identity_client = TreeDBClient(identity_server.base_url, timeout=1)
+                    with self.subTest(missing_snapshot_identity=field), self.assertRaises(TreeDBProtocolError):
+                        identity_client.query_by_embedding(
+                            "docs", [1, 0], 1, query_mode="quantized_rerank",
+                            quantized_index_name="embedding.scalar_u8.public",
+                        )
+                    identity_client.close()
             for field in ("generation", "version", "checksum"):
                 incomplete_manifest = copy.deepcopy(payload)
                 incomplete_manifest["dense_work"]["graph"]["snapshot"]["base_manifest"][field] = 0
@@ -887,6 +899,17 @@ class TreeDBClientTests(unittest.TestCase):
                             quantized_index_name="embedding.scalar_u8.public",
                         )
                     manifest_client.close()
+            unsupported_manifest = copy.deepcopy(payload)
+            unsupported_manifest["dense_work"]["graph"]["snapshot"]["base_manifest"]["version"] = 2
+            unsupported_manifest["score_plane"]["snapshot"]["base_manifest"]["version"] = 2
+            with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, unsupported_manifest, 0)}) as manifest_server:
+                manifest_client = TreeDBClient(manifest_server.base_url, timeout=1)
+                with self.assertRaises(TreeDBProtocolError):
+                    manifest_client.query_by_embedding(
+                        "docs", [1, 0], 1, query_mode="quantized_rerank",
+                        quantized_index_name="embedding.scalar_u8.public",
+                    )
+                manifest_client.close()
             for name, item_id in (
                 ("empty", ""),
                 ("whitespace only", " \t"),

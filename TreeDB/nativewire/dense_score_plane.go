@@ -116,7 +116,7 @@ func validateDenseScorePlane(proof collections.ColumnGraphScorePlaneWork) error 
 		}
 	}
 	if (!proof.Snapshot.Available && proof.Snapshot != (collections.ColumnGraphQuerySnapshot{})) ||
-		(proof.Snapshot.Available && proof.Snapshot.CurrentCoverageLSN < proof.Snapshot.BaseCoverageLSN) {
+		(proof.Snapshot.Available && (proof.Snapshot.SchemaGeneration == 0 || proof.Snapshot.BaseCoverageLSN == 0 || proof.Snapshot.CurrentCoverageLSN < proof.Snapshot.BaseCoverageLSN)) {
 		return protocolError(iwire.ErrConsistencyUnavailable, "dense score-plane snapshot is inconsistent")
 	}
 	if proof.Completed && (!proof.Available || !proof.Snapshot.Available || proof.Route == "" || proof.Reason != "") {

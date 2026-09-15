@@ -29,7 +29,8 @@ func TestDenseScorePlaneCodecOwnedAndStrict(t *testing.T) {
 		QuantizedScoreCalls: 4, ActualRerankCandidates: 2, ExactBaseRerankScoreCalls: 2,
 		Snapshot: collections.ColumnGraphQuerySnapshot{Available: true, SchemaHash: 11, SchemaGeneration: 3,
 			BaseManifest:    collections.ColumnGraphManifestWork{Generation: 5, Format: "tcs1", Version: 1, Checksum: 7},
-			CurrentManifest: collections.ColumnGraphManifestWork{Generation: 6, Format: "tcs1", Version: 1, Checksum: 8}},
+			CurrentManifest: collections.ColumnGraphManifestWork{Generation: 6, Format: "tcs1", Version: 1, Checksum: 8},
+			BaseCoverageLSN: 5, CurrentCoverageLSN: 6},
 	}
 	raw, err := appendDenseScorePlane(nil, proof, iwire.DefaultLimits())
 	if err != nil {
@@ -119,6 +120,18 @@ func TestDenseScorePlaneCodecOwnedAndStrict(t *testing.T) {
 	if _, err := appendDenseScorePlane(nil, reversedCoverage, iwire.DefaultLimits()); err == nil {
 		t.Fatal("score-plane proof with reversed snapshot coverage accepted")
 	}
+	for name, mutate := range map[string]func(*collections.ColumnGraphQuerySnapshot){
+		"schema generation": func(s *collections.ColumnGraphQuerySnapshot) { s.SchemaGeneration = 0 },
+		"base coverage LSN": func(s *collections.ColumnGraphQuerySnapshot) { s.BaseCoverageLSN = 0 },
+	} {
+		t.Run("missing "+name, func(t *testing.T) {
+			candidate := proof
+			mutate(&candidate.Snapshot)
+			if _, err := appendDenseScorePlane(nil, candidate, iwire.DefaultLimits()); err == nil {
+				t.Fatalf("score-plane proof with zero %s accepted", name)
+			}
+		})
+	}
 	for name, mutate := range map[string]func(*collections.ColumnGraphManifestWork){
 		"generation": func(m *collections.ColumnGraphManifestWork) { m.Generation = 0 },
 		"version":    func(m *collections.ColumnGraphManifestWork) { m.Version = 0 },
@@ -132,6 +145,11 @@ func TestDenseScorePlaneCodecOwnedAndStrict(t *testing.T) {
 			}
 		})
 	}
+	unsupportedManifestVersion := proof
+	unsupportedManifestVersion.Snapshot.BaseManifest.Version = 2
+	if _, err := appendDenseScorePlane(nil, unsupportedManifestVersion, iwire.DefaultLimits()); err == nil {
+		t.Fatal("score-plane proof with unsupported manifest version accepted")
+	}
 }
 
 func TestDenseQuantizedScorePlaneResponseRejectsUnsupportedRoute(t *testing.T) {
@@ -143,9 +161,10 @@ func TestDenseQuantizedScorePlaneResponseRejectsUnsupportedRoute(t *testing.T) {
 		RequestedTopK: 1, RequestedEFSearch: 8,
 		NormalizedCandidateWidth: 1, RawCandidateWidth: 1, RerankCandidateCap: 1,
 		RawRetainedCandidates: 1, QuantizedScoreCalls: 1,
-		Snapshot: collections.ColumnGraphQuerySnapshot{Available: true,
+		Snapshot: collections.ColumnGraphQuerySnapshot{Available: true, SchemaGeneration: 1,
 			BaseManifest:    collections.ColumnGraphManifestWork{Generation: 1, Format: "tcs1", Version: 1, Checksum: 3},
-			CurrentManifest: collections.ColumnGraphManifestWork{Generation: 1, Format: "tcs1", Version: 1, Checksum: 3}},
+			CurrentManifest: collections.ColumnGraphManifestWork{Generation: 1, Format: "tcs1", Version: 1, Checksum: 3},
+			BaseCoverageLSN: 1, CurrentCoverageLSN: 1},
 	}
 	work := documentservice.DenseSearchWork{Completed: true, Graph: collections.ColumnGraphQueryWork{Available: true, Completed: true, Route: "typed_hnsw", BaseANNScored: 1, BaseShadowed: 1}}
 	work.Graph.Snapshot = proof.Snapshot
@@ -557,7 +576,8 @@ func TestDenseV3ResultDecodeErrorsPreserveOwnedProofs(t *testing.T) {
 		ExactBaseRerankScoreCalls: 1, ExactBaseVectorBytesRead: 8,
 		Snapshot: collections.ColumnGraphQuerySnapshot{Available: true, SchemaHash: 7, SchemaGeneration: 2,
 			BaseManifest:    collections.ColumnGraphManifestWork{Generation: 1, Format: "tcs1", Version: 1, Checksum: 3},
-			CurrentManifest: collections.ColumnGraphManifestWork{Generation: 1, Format: "tcs1", Version: 1, Checksum: 3}},
+			CurrentManifest: collections.ColumnGraphManifestWork{Generation: 1, Format: "tcs1", Version: 1, Checksum: 3},
+			BaseCoverageLSN: 1, CurrentCoverageLSN: 1},
 	}
 	work := documentservice.DenseSearchWork{
 		Version: 1, Completed: true,
@@ -638,13 +658,14 @@ func TestDenseV3ResultDecodeErrorsPreserveOwnedProofs(t *testing.T) {
 
 func TestDenseV3WireErrorMalformedProofPreservesSibling(t *testing.T) {
 	snapshot := collections.ColumnGraphQuerySnapshot{
-		Available: true,
+		Available: true, SchemaGeneration: 1,
 		BaseManifest: collections.ColumnGraphManifestWork{
 			Generation: 1, Format: "tcs1", Version: 1, Checksum: 3,
 		},
 		CurrentManifest: collections.ColumnGraphManifestWork{
 			Generation: 1, Format: "tcs1", Version: 1, Checksum: 3,
 		},
+		BaseCoverageLSN: 1, CurrentCoverageLSN: 1,
 	}
 	work := documentservice.DenseSearchWork{
 		Version: 1,

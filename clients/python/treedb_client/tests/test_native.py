@@ -631,8 +631,11 @@ class NativeCodecTests(unittest.TestCase):
                        lambda d: d["graph"].update(base_edges=-1), lambda d: d["graph"].update(base_edges=1 << 64),
                        lambda d: d["output"].pop("missing"), lambda d: d["graph"].update(route="ann"),
                        lambda d: d["graph"]["snapshot"].update(base_coverage_lsn=100, current_coverage_lsn=1),
+                       lambda d: d["graph"]["snapshot"].update(schema_generation=0),
+                       lambda d: d["graph"]["snapshot"].update(base_coverage_lsn=0),
                        lambda d: d["graph"]["snapshot"]["base_manifest"].update(generation=0),
                        lambda d: d["graph"]["snapshot"]["base_manifest"].update(version=0),
+                       lambda d: d["graph"]["snapshot"]["base_manifest"].update(version=2),
                        lambda d: d["graph"]["snapshot"]["base_manifest"].update(checksum=0)):
             candidate = copy.deepcopy(asdict(work))
             action(candidate)
