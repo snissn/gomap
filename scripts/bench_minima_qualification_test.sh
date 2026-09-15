@@ -150,7 +150,7 @@ for fixture in bounded-50k:50000 bounded-250k:250000 bounded-500k:500000 bounded
 	fi
 done
 
-printf '%s\n' '{"Publication":{"Rows":1,"Tombstones":1,"ValueSlots":1,"OwnedBytes":1,"EncodedOutputBytes":1},"Owners":{"Owners":1,"States":1,"StateBytes":1,"AssetBytes":1,"Cold":{"ManifestRecords":1,"ManifestBytes":1,"AssetBytes":1,"DecodedTermBytes":1}},"CandidateOutput":{"Bytes":1,"AppenderAttempts":1},"Maintenance":{"NativeEntries":1,"ColumnSegments":1,"ManifestRecords":1,"LifecycleEntries":1,"NativeBytes":1,"ColumnBytes":1,"ManifestBytes":1,"RetainedBytes":1,"PagerPages":1},"Filter":{"SourceIDs":1,"SourceBytes":1,"RetainedBytes":1,"MappingWork":1,"InspectedEntries":1},"FoldRows":1,"SearchCandidates":1048576}' >"$TMP/quantized-serving.json"
+printf '%s\n' '{"Publication":{"Rows":1,"Tombstones":1,"ValueSlots":1,"OwnedBytes":1,"EncodedOutputBytes":1},"Owners":{"Owners":1,"States":1,"StateBytes":1,"AssetBytes":1,"Cold":{"ManifestRecords":1,"ManifestBytes":1,"AssetBytes":1,"DecodedTermBytes":1},"Physical":{"segments":1,"descriptors":1,"mapped_bytes":1,"fallback_bytes":1,"inventory_bytes":1}},"CandidateOutput":{"Bytes":1,"AppenderAttempts":1},"Maintenance":{"NativeEntries":1,"ColumnSegments":1,"ManifestRecords":1,"LifecycleEntries":1,"NativeBytes":1,"ColumnBytes":1,"ManifestBytes":1,"RetainedBytes":1,"PagerPages":1},"Filter":{"SourceIDs":1,"SourceBytes":1,"RetainedBytes":1,"MappingWork":1,"InspectedEntries":1},"FoldRows":1,"SearchCandidates":1048576}' >"$TMP/quantized-serving.json"
 printf '{}\n' >"$TMP/quantized-plan.json"
 quantized_plan_sha=$(sha256sum "$TMP/quantized-plan.json" | awk '{print $1}')
 quantized_env=(env -u MINIMA_WALL_SECONDS PATH="$FAKE_BIN:$PATH" PYTHON="$FAKE_BIN/python"
@@ -188,10 +188,15 @@ printf '{"a":1,"a":2}\n' >"$TMP/quantized-duplicate-serving.json"
 printf '{"a":NaN}\n' >"$TMP/quantized-nonfinite-serving.json"
 printf '{"SearchCandidates":64}\n' >"$TMP/quantized-incomplete-serving.json"
 sed 's/"Rows":1/"Rows":true/' "$TMP/quantized-serving.json" >"$TMP/quantized-bool-serving.json"
+sed 's/"Rows":1/"Rows":9223372036854775808/' "$TMP/quantized-serving.json" >"$TMP/quantized-signed-overflow-serving.json"
+sed 's/"PagerPages":1/"PagerPages":18446744073709551616/' "$TMP/quantized-serving.json" >"$TMP/quantized-pager-overflow-serving.json"
+sed 's/,"Physical":{"segments":1,"descriptors":1,"mapped_bytes":1,"fallback_bytes":1,"inventory_bytes":1}//' \
+	"$TMP/quantized-serving.json" >"$TMP/quantized-missing-physical-serving.json"
 dd if=/dev/zero of="$TMP/quantized-oversized-serving.json" bs=1048577 count=1 status=none
 dd if=/dev/zero of="$TMP/quantized-oversized-plan.json" bs=1048577 count=1 status=none
 for hostile in representative wrong_strategy wrong_transport wrong_name missing_serving empty_serving malformed_serving array_serving \
-	duplicate_serving nonfinite_serving incomplete_serving bool_serving oversized_serving \
+	duplicate_serving nonfinite_serving incomplete_serving missing_physical_serving bool_serving \
+	signed_overflow_serving pager_overflow_serving oversized_serving \
 	missing_plan missing_plan_file oversized_plan bad_plan_pin wrong_plan_digest \
 	uppercase_plan_pin missing_address nonnumeric_ef nonnumeric_r unequal_r below_topk native_overflow cached_profile \
 	exact_with_options existing_data existing_output dirty_run; do
@@ -209,7 +214,10 @@ for hostile in representative wrong_strategy wrong_transport wrong_name missing_
 	duplicate_serving) extra+=(TREEDB_COLUMN_GRAPH_SERVING="$TMP/quantized-duplicate-serving.json") ;;
 	nonfinite_serving) extra+=(TREEDB_COLUMN_GRAPH_SERVING="$TMP/quantized-nonfinite-serving.json") ;;
 	incomplete_serving) extra+=(TREEDB_COLUMN_GRAPH_SERVING="$TMP/quantized-incomplete-serving.json") ;;
+	missing_physical_serving) extra+=(TREEDB_COLUMN_GRAPH_SERVING="$TMP/quantized-missing-physical-serving.json") ;;
 	bool_serving) extra+=(TREEDB_COLUMN_GRAPH_SERVING="$TMP/quantized-bool-serving.json") ;;
+	signed_overflow_serving) extra+=(TREEDB_COLUMN_GRAPH_SERVING="$TMP/quantized-signed-overflow-serving.json") ;;
+	pager_overflow_serving) extra+=(TREEDB_COLUMN_GRAPH_SERVING="$TMP/quantized-pager-overflow-serving.json") ;;
 	oversized_serving) extra+=(TREEDB_COLUMN_GRAPH_SERVING="$TMP/quantized-oversized-serving.json") ;;
 	missing_plan) extra+=(TREEDB_QUANTIZED_PLAN=) ;;
 	missing_plan_file) extra+=(TREEDB_QUANTIZED_PLAN="$TMP/missing-plan.json") ;;
@@ -283,7 +291,7 @@ cp "$RUN_DIR/bin/treedb-rag-benchmark" "$TMP/comparator"
 cp "$RUN_DIR/bin/treedb-document-service" "$TMP/service"
 printf '{"schema":"treedb_minima_manifest/v2","fixture":"bounded-50000"}\n' >"$TMP/supplied-manifest"
 printf '{}\n' >"$TMP/freeze"
-printf '{}\n' >"$TMP/serving"
+cp "$TMP/quantized-serving.json" "$TMP/serving"
 manifest_before=$(cat "$TMP/supplied-manifest")
 measured_env=(env PATH="$FAKE_BIN:$PATH" MODE=measured
 	TREEDB_COLLECTION=frozen_treedb QDRANT_COLLECTION=frozen_qdrant
@@ -292,6 +300,19 @@ measured_env=(env PATH="$FAKE_BIN:$PATH" MODE=measured
 	TREEDB_SERVICE_BIN="$TMP/service" MINIMA_COMPARATOR_BIN="$TMP/comparator"
 	TREEDB_STRATEGY=column_graph TREEDB_TRANSPORT=native TREEDB_NATIVE_ADDRESS=127.0.0.1:17122
 	TREEDB_COLUMN_GRAPH_SERVING="$TMP/serving")
+
+# Exact measured mode must reject contract drift before launching either backend.
+set +e
+"${measured_env[@]}" TREEDB_COLUMN_GRAPH_SERVING="$TMP/quantized-missing-physical-serving.json" \
+	RUN_DIR="$TMP/measured-incomplete-serving" MINIMA_WALL_SECONDS=10 \
+	FAKE_PYTHON_CALLS="$TMP/measured-incomplete-serving.calls" \
+	"$REPO/scripts/bench_minima_qualification.sh" >"$TMP/measured-incomplete-serving.log" 2>&1
+measured_incomplete_status=$?
+set -e
+[[ "$measured_incomplete_status" == 2 ]]
+grep -q 'exact positive-integer ColumnGraphServingOptions schema' "$TMP/measured-incomplete-serving.log"
+[[ ! -e "$TMP/measured-incomplete-serving.calls" ]]
+
 # Collection names are part of the exact frozen configuration.
 for collection in TREEDB_COLLECTION QDRANT_COLLECTION; do
 	set +e

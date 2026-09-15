@@ -82,6 +82,52 @@ PHASE_CLASSIFICATIONS = {
     "post_reopen": "production_path",
     "final_state_scroll_artifact_work": "qualification_only",
 }
+
+COLUMN_GRAPH_SERVING_SHAPE = {
+    "Publication": {key: None for key in (
+        "Rows", "Tombstones", "ValueSlots", "OwnedBytes", "EncodedOutputBytes",
+    )},
+    "Owners": {
+        **{key: None for key in ("Owners", "States", "StateBytes", "AssetBytes")},
+        "Cold": {key: None for key in (
+            "ManifestRecords", "ManifestBytes", "AssetBytes", "DecodedTermBytes",
+        )},
+        "Physical": {key: None for key in (
+            "segments", "descriptors", "mapped_bytes", "fallback_bytes", "inventory_bytes",
+        )},
+    },
+    "CandidateOutput": {key: None for key in ("Bytes", "AppenderAttempts")},
+    "Maintenance": {key: None for key in (
+        "NativeEntries", "ColumnSegments", "ManifestRecords", "LifecycleEntries",
+        "NativeBytes", "ColumnBytes", "ManifestBytes", "RetainedBytes", "PagerPages",
+    )},
+    "Filter": {key: None for key in (
+        "SourceIDs", "SourceBytes", "RetainedBytes", "MappingWork", "InspectedEntries",
+    )},
+    "FoldRows": None,
+    "SearchCandidates": None,
+}
+
+
+def validate_column_graph_serving(value: Any) -> None:
+    """Validate the exact explicit 64-bit service admission schema before launch."""
+    def validate(actual: Any, expected: dict[str, Any], path: str) -> None:
+        if type(actual) is not dict or set(actual) != set(expected):
+            raise ValueError(f"{path} schema mismatch")
+        for key, nested in expected.items():
+            item = actual[key]
+            child = f"{path}.{key}"
+            if nested is None:
+                limit = (1 << 64) if child == "column_graph_serving.Maintenance.PagerPages" else NATIVE_INTEGER_LIMIT
+                if type(item) is not int or not 0 < item < limit:
+                    width = "unsigned" if limit == 1 << 64 else "signed"
+                    raise ValueError(f"{child} must be a positive {width} 64-bit integer")
+            else:
+                validate(item, nested, child)
+
+    validate(value, COLUMN_GRAPH_SERVING_SHAPE, "column_graph_serving")
+
+
 DIAGNOSTIC_PROFILE_ENDPOINTS = {
     "cpu": ("/debug/pprof/profile", "cpu.pprof"),
     "goroutine": ("/debug/pprof/goroutine?debug=2", "goroutine.txt"),
@@ -810,6 +856,8 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
             raise ValueError("legacy Minima baseline requires HTTP transport")
         if strategy == "column_graph" and not column_graph_serving:
             raise ValueError("column_graph requires explicit serving limits")
+        if strategy == "column_graph":
+            validate_column_graph_serving(column_graph_serving)
         if self.transport == "native" and not controller.native_address:
             raise ValueError("native Minima transport requires an explicit listener")
         self.query_mode = query_mode
@@ -2612,6 +2660,10 @@ def main() -> int:
         if args.column_graph_serving is None:
             raise SystemExit("column_graph requires --column-graph-serving with explicit limits")
         serving, _ = _strict_json_object(args.column_graph_serving, "column_graph serving limits")
+        try:
+            validate_column_graph_serving(serving)
+        except ValueError as exc:
+            raise SystemExit(f"invalid column_graph serving limits: {exc}") from exc
     transport = getattr(args, "transport", None) or ("native" if args.strategy == "column_graph" else "http")
     manifest = common.load_manifest(args.manifest)
     validate_quantized_launch(args, manifest)

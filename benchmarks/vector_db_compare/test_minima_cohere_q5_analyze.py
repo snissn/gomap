@@ -18,6 +18,36 @@ def canonical(value):
 
 
 class Q5AnalyzeTest(unittest.TestCase):
+    def test_packet_serving_configuration_requires_current_physical_limits(self):
+        serving = {
+            "Publication": {key: 1 for key in (
+                "Rows", "Tombstones", "ValueSlots", "OwnedBytes", "EncodedOutputBytes",
+            )},
+            "Owners": {
+                **{key: 1 for key in ("Owners", "States", "StateBytes", "AssetBytes")},
+                "Cold": {key: 1 for key in (
+                    "ManifestRecords", "ManifestBytes", "AssetBytes", "DecodedTermBytes",
+                )},
+                "Physical": {key: 1 for key in (
+                    "segments", "descriptors", "mapped_bytes", "fallback_bytes", "inventory_bytes",
+                )},
+            },
+            "CandidateOutput": {"Bytes": 1, "AppenderAttempts": 1},
+            "Maintenance": {key: 1 for key in (
+                "NativeEntries", "ColumnSegments", "ManifestRecords", "LifecycleEntries",
+                "NativeBytes", "ColumnBytes", "ManifestBytes", "RetainedBytes", "PagerPages",
+            )},
+            "Filter": {key: 1 for key in (
+                "SourceIDs", "SourceBytes", "RetainedBytes", "MappingWork", "InspectedEntries",
+            )},
+            "FoldRows": 1,
+            "SearchCandidates": 1,
+        }
+        analyzer.validate_serving_configuration(serving)
+        del serving["Owners"]["Physical"]
+        with self.assertRaisesRegex(analyzer.EvidenceError, "invalid frozen TreeDB serving"):
+            analyzer.validate_serving_configuration(serving)
+
     @staticmethod
     def _append_construction_calls(events, rows):
         def append(phase, **fields):

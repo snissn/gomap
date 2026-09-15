@@ -1344,6 +1344,7 @@ def prepare(args):
     ).strip()
     product_tree = lambda path: subprocess.check_output(["git", "rev-parse", args.product_commit + ":" + path], cwd=source, text=True).strip()
     serving, serving_raw = strict_json_object(args.serving, "column_graph serving limits")
+    existing.validate_column_graph_serving(serving)
     plan = {"schema": SCHEMA, "qualification": "not_evaluated", "mode": "smoke" if args.rows == 512 else "diagnostic",
             "harness_commit": harness, "harness_source_sha256": digest(Path(__file__)),
             "harness_trees": {path: root_tree(path) for path in HARNESS_TREE_PATHS},
@@ -1444,8 +1445,8 @@ def producer_harness_commit(source, candidate_commit):
     return commit
 
 
-def validate_shutdowns(lifetimes, expected_count):
-    if len(lifetimes) != expected_count:
+def validate_shutdowns(lifetimes, expected_count=None):
+    if expected_count is not None and len(lifetimes) != expected_count:
         raise RuntimeError("owned service lifetime count mismatch")
     for lifetime in lifetimes:
         terminal, exited = lifetime.get("terminal_work", {}), lifetime.get("exit", {})
@@ -1456,6 +1457,12 @@ def validate_shutdowns(lifetimes, expected_count):
                 or exited.get("availability") != "measured"
                 or exited.get("linux_process_identity") != lifetime["linux_process_identity"]):
             raise RuntimeError("owned service did not complete a clean verified shutdown")
+
+
+def expected_shutdown_lifetimes(plan, failed, qualification):
+    if failed is not None and qualification != "valid_unqualified":
+        return None
+    return 1 if plan["rss_only"] or qualification == "valid_unqualified" else 2
 
 
 def process_cpu_endpoint(pid, expected_identity):
@@ -2257,7 +2264,7 @@ class Run:
                                  "fpath": f"/cohere/{row // 256:06d}.txt"}
                 base_content = f"minima-cohere:{row}"
                 expected_content = ({base_content, base_content + ":updated"}
-                                    if quantized and writer_active else
+                                    if writer_active else
                                     {base_content + (":updated" if row in self.updated else "")})
                 if doc.meta != expected_meta or doc.content not in expected_content:
                     raise RuntimeError("search result omitted or changed a full document projection")
@@ -2271,6 +2278,16 @@ class Run:
                 if record is not None:
                     results.append({"id": doc.id, "content": doc.content,
                                     "meta": doc.meta, "score": float(doc.score)})
+            if not quantized and writer_active:
+                states = self.quantized_allowed_states(
+                    True, call_timing["started_monotonic_ns"],
+                    call_timing["ended_monotonic_ns"],
+                )
+                if not any(quantized_response_projection_matches_state(
+                        response.documents, state) for state in states):
+                    raise RuntimeError(
+                        "exact response projection does not match one whole reachable mutation state",
+                    )
             if quantized:
                 self.validate_quantized_lifecycle(
                     response, record, writer_active, eligible, ef,
@@ -2331,13 +2348,12 @@ class Run:
 
     def overlap(self):
         quantized = self.plan.get("query_mode") == "quantized_rerank"
-        if quantized:
-            with self.overlap_lock:
-                self.overlap_initial = frozenset(self.updated)
-                self.overlap_initial_touched = frozenset(self.quantized_touched)
-                self.overlap_initial_deleted = frozenset(self.quantized_deleted)
-                self.overlap_initial_advance = self.quantized_owner_advance
-                self.overlap_batches.clear()
+        with self.overlap_lock:
+            self.overlap_initial = frozenset(self.updated)
+            self.overlap_initial_touched = frozenset(self.quantized_touched)
+            self.overlap_initial_deleted = frozenset(self.quantized_deleted)
+            self.overlap_initial_advance = self.quantized_owner_advance
+            self.overlap_batches.clear()
         barrier = threading.Barrier(5)
         active = threading.Event()
         active.set()
@@ -2356,11 +2372,7 @@ class Run:
                     rows = list(range(start, start + 256))
                     self.upsert(rows, "overlap_replace", updated=True,
                                 record_quantized=quantized,
-                                record_overlap=quantized)
-                    if not quantized:
-                        with self.lock:
-                            self.updated.update(rows)
-                            self.overlap_batches.append((time.monotonic_ns(), frozenset(rows)))
+                                record_overlap=True)
             finally:
                 active.clear()
         with ThreadPoolExecutor(max_workers=5) as pool:
@@ -2770,8 +2782,9 @@ class Run:
             finalization_failures = []
             try:
                 self.clients.close()
-                expected_lifetimes = 1 if (self.plan["rss_only"]
-                                           or qualification == "valid_unqualified") else 2
+                expected_lifetimes = expected_shutdown_lifetimes(
+                    self.plan, failed, qualification,
+                )
                 validate_shutdowns(self.controller.lifetimes, expected_lifetimes)
             except BaseException as exc:
                 finalization_failures.append(f"shutdown: {type(exc).__name__}: {exc}")
