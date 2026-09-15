@@ -1308,11 +1308,13 @@ def _validate_dense_failure_proofs(
 
     Error proofs are prefixes, so successful result-count and byte invariants
     apply only when both producer proofs report completion. Request identity,
-    available snapshots, and observed filter work remain bindable on failures.
+    sibling score counters, available snapshots, and observed filter work
+    remain bindable on failures.
     """
 
     from ._dense_work import (
         dense_completed_graph_result_count,
+        dense_failure_score_counters_match_graph,
         dense_failure_output_matches_completed_graph,
         dense_quantized_completed_graph_matches,
         dense_score_plane_prefix_route_matches_graph,
@@ -1356,6 +1358,7 @@ def _validate_dense_failure_proofs(
                 or graph.snapshot != proof.snapshot
                 or proof.completed != graph.completed
                 or not dense_score_plane_prefix_route_matches_graph(graph.route, proof.route)
+                or not dense_failure_score_counters_match_graph(graph, proof)
                 or (work.completed and (not graph.completed or not work.output.completed))
             ):
                 mismatch = True

@@ -181,6 +181,8 @@ class NativeCodecTests(unittest.TestCase):
             graph_snapshot_unavailable_values = list(graph_incomplete_values)
             graph_snapshot_unavailable_values[1] &= ~(1 << 5)
             graph_snapshot_unavailable_values[19:31] = [0] * 12
+            sibling_counter_proof = bytearray(proof_incomplete)
+            sibling_counter_proof[16] += 1
             native_completion_cases = (
                 ("post-search before fetch", post_search_values, score_plane, False),
                 ("partial fetch", partial_fetch_values, score_plane, False),
@@ -193,6 +195,7 @@ class NativeCodecTests(unittest.TestCase):
                 ("graph unavailable", graph_unavailable_values, bytes(proof_incomplete), True),
                 ("proof snapshot unavailable", post_search_values, proof_snapshot_unavailable, True),
                 ("graph snapshot unavailable", graph_snapshot_unavailable_values, bytes(proof_incomplete), True),
+                ("incomplete sibling score counters", graph_incomplete_values, bytes(sibling_counter_proof), True),
                 ("incomplete route", incomplete_route_values, bytes(proof_incomplete), True),
                 ("empty graph typed-empty proof", empty_graph_typed_empty[0], bytes(empty_graph_typed_empty[1]), True),
                 ("empty graph typed-exact proof", empty_graph_typed_exact[0], bytes(empty_graph_typed_exact[1]), True),

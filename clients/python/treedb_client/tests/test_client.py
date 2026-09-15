@@ -1083,14 +1083,71 @@ class TreeDBClientTests(unittest.TestCase):
                 self.assertIs(caught.exception, error)
 
             proof_incomplete = replace(result.score_plane, completed=False, reason="scoring interrupted")
-            route_empty_incomplete = replace(
-                post_search,
-                graph=replace(
-                    post_search.graph,
-                    completed=False, route="", base_ann_scored=0, base_candidates=0, base_edges=0,
-                    delta_scored=0, exact_base_scored=0, base_shadowed=0, base_result_ids=0,
-                ),
+
+            def incomplete_prefix(graph_route):
+                candidate_work, candidate_proof = partial_work, partial_proof
+                if graph_route in ("", "typed_empty"):
+                    candidate_work = replace(candidate_work, graph=replace(
+                        candidate_work.graph, route=graph_route,
+                        base_ann_scored=0, base_candidates=0, base_edges=0, delta_scored=0,
+                        exact_base_scored=0, base_shadowed=0, base_result_ids=0,
+                    ))
+                    candidate_proof = replace(
+                        candidate_proof, route="quantized_rerank" if not graph_route else "typed_empty",
+                        quantized_score_calls=0, quantized_code_bytes_read=0,
+                        exact_base_rerank_score_calls=0, exact_small_filter_score_calls=0,
+                        exact_suffix_score_calls=0, exact_base_vector_bytes_read=0,
+                        exact_suffix_vector_bytes_read=0,
+                    )
+                elif graph_route == "typed_exact":
+                    candidate_work = replace(candidate_work, graph=replace(
+                        candidate_work.graph, route="typed_exact", base_ann_scored=0,
+                        exact_base_scored=0, base_result_ids=0, delta_scored=1,
+                    ))
+                    candidate_proof = replace(
+                        candidate_proof, route="typed_exact", quantized_score_calls=0,
+                        quantized_code_bytes_read=0, exact_base_rerank_score_calls=0,
+                        exact_small_filter_score_calls=0, exact_suffix_score_calls=1,
+                        exact_base_vector_bytes_read=0, exact_suffix_vector_bytes_read=8,
+                    )
+                return candidate_work, candidate_proof
+
+            prefixes = {route: incomplete_prefix(route) for route in ("", "typed_empty", "typed_exact", "typed_hnsw")}
+            for route, (candidate_work, candidate_proof) in prefixes.items():
+                error = IndexUnavailableError(
+                    "index_unavailable", "valid prefix", dense_work=candidate_work, score_plane=candidate_proof,
+                )
+                with self.subTest(valid_counter_prefix=route), mock.patch.object(client, "_request", side_effect=error), \
+                     self.assertRaises(IndexUnavailableError) as caught:
+                    client.query_by_embedding(
+                        "docs", [1, 0], 1, query_mode="quantized_rerank",
+                        quantized_index_name="embedding.scalar_u8.public",
+                    )
+                self.assertIs(caught.exception, error)
+
+            def counter_failure(candidate_work, candidate_proof, field):
+                if field == "quantized":
+                    return candidate_work, replace(
+                        candidate_proof, quantized_score_calls=candidate_proof.quantized_score_calls + 1)
+                if field == "exact base":
+                    return replace(candidate_work, graph=replace(
+                        candidate_work.graph, exact_base_scored=candidate_work.graph.exact_base_scored + 1)), candidate_proof
+                if field == "base result IDs":
+                    return replace(candidate_work, graph=replace(
+                        candidate_work.graph, base_result_ids=candidate_work.graph.base_result_ids + 1)), candidate_proof
+                if field == "suffix":
+                    return candidate_work, replace(
+                        candidate_proof, exact_suffix_score_calls=candidate_proof.exact_suffix_score_calls + 1)
+                return candidate_work, replace(
+                    candidate_proof, exact_base_rerank_score_calls=(1 << 64) - 1,
+                    exact_small_filter_score_calls=1)
+
+            counter_prefix_failures = tuple(
+                (f"prefix counters {route or 'empty'} {field}", *counter_failure(*prefixes[route], field))
+                for route in ("", "typed_exact", "typed_hnsw")
+                for field in ("quantized", "exact base", "base result IDs", "suffix", "overflow")
             )
+            route_empty_incomplete, route_empty_proof = prefixes[""]
             completion_prefix_failures = (
                 ("proof complete graph incomplete", replace(post_search, graph=replace(post_search.graph, completed=False)), result.score_plane),
                 ("graph complete proof incomplete", post_search, proof_incomplete),
@@ -1116,7 +1173,7 @@ class TreeDBClientTests(unittest.TestCase):
                 ("incomplete route", replace(post_search, graph=replace(post_search.graph, completed=False, route="typed_exact")), proof_incomplete),
                 ("empty graph typed-empty proof", route_empty_incomplete, replace(proof_incomplete, route="typed_empty")),
                 ("empty graph typed-exact proof", route_empty_incomplete, replace(proof_incomplete, route="typed_exact")),
-            )
+            ) + counter_prefix_failures
             for name, candidate_work, candidate_proof in completion_prefix_failures:
                 error = IndexUnavailableError(
                     "index_unavailable", name, dense_work=candidate_work, score_plane=candidate_proof,
@@ -1131,7 +1188,7 @@ class TreeDBClientTests(unittest.TestCase):
                 self.assertEqual(caught.exception.score_plane, candidate_proof)
 
             route_empty_error = IndexUnavailableError(
-                "index_unavailable", "route empty", dense_work=route_empty_incomplete, score_plane=proof_incomplete,
+                "index_unavailable", "route empty", dense_work=route_empty_incomplete, score_plane=route_empty_proof,
             )
             with mock.patch.object(client, "_request", side_effect=route_empty_error), \
                  self.assertRaises(IndexUnavailableError) as caught:
@@ -1156,6 +1213,8 @@ class TreeDBClientTests(unittest.TestCase):
                     "byte counters", "output requested", "proof unavailable", "graph unavailable",
                     "proof snapshot unavailable", "graph snapshot unavailable", "incomplete route",
                     "empty graph typed-empty proof", "empty graph typed-exact proof",
+                    "prefix counters empty quantized", "prefix counters typed_exact exact base",
+                    "prefix counters typed_hnsw suffix", "prefix counters typed_hnsw overflow",
                 )
             )
             for status in (200, 503):

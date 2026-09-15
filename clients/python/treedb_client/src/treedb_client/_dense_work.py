@@ -336,6 +336,19 @@ def dense_score_plane_prefix_route_matches_graph(graph_route, proof_route):
             else dense_score_plane_route_matches_graph(graph_route, proof_route))
 
 
+def dense_failure_score_counters_match_graph(graph, proof):
+    if graph is None or proof is None:
+        return False
+    exact_base_calls = proof.exact_base_rerank_score_calls + proof.exact_small_filter_score_calls
+    return (
+        exact_base_calls < 1 << 64
+        and proof.quantized_score_calls == graph.base_ann_scored
+        and exact_base_calls == graph.exact_base_scored
+        and exact_base_calls == graph.base_result_ids
+        and proof.exact_suffix_score_calls == graph.delta_scored
+    )
+
+
 def dense_completed_graph_result_count(proof, top_k):
     if proof is None or not proof.completed or type(top_k) is not int or top_k < 0:
         return None

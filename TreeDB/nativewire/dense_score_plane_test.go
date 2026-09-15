@@ -720,7 +720,9 @@ func TestDenseV3FailureProofBindsRequestWithoutRetainingRemoteError(t *testing.T
 	}
 	partialProof := proof
 	partialProof.QuantizedScoreCalls = 1 // Prefix counters need not yet have matching byte charges.
-	partial := &WireError{Code: iwire.ErrInternal, Message: "partial", DenseWork: &work, ScorePlane: &partialProof}
+	partialWork := work
+	partialWork.Graph.BaseANNScored = 1
+	partial := &WireError{Code: iwire.ErrInternal, Message: "partial", DenseWork: &partialWork, ScorePlane: &partialProof}
 	if got := validateDenseQuantizedFailureProof(partial, request); got != partial {
 		t.Fatalf("valid partial failure proof changed: %v", got)
 	}
@@ -1055,20 +1057,79 @@ func TestDenseV3FailureProofCompletedGraphPrefixes(t *testing.T) {
 	matchingIncompleteWork.Graph.Completed = false
 	matchingIncompleteProof.Completed = false
 	matchingIncompleteProof.Reason = "scoring interrupted"
-	for _, routes := range []struct{ graph, proof string }{
-		{"", "quantized_rerank"},
-		{"typed_empty", "typed_empty"},
-		{"typed_exact", "typed_exact"},
-		{"typed_hnsw", "quantized_rerank"},
-	} {
-		t.Run("valid incomplete route "+routes.graph, func(t *testing.T) {
-			candidateWork, candidateProof := matchingIncompleteWork, matchingIncompleteProof
-			candidateWork.Graph.Route, candidateProof.Route = routes.graph, routes.proof
+	prefixPair := func(graphRoute string) (documentservice.DenseSearchWork, collections.ColumnGraphScorePlaneWork) {
+		candidateWork, candidateProof := matchingIncompleteWork, matchingIncompleteProof
+		candidateWork.Graph.Route = graphRoute
+		switch graphRoute {
+		case "", "typed_empty":
+			candidateWork.Graph.BaseANNScored, candidateWork.Graph.ExactBaseScored = 0, 0
+			candidateWork.Graph.BaseResultIDs, candidateWork.Graph.DeltaScored = 0, 0
+			candidateProof.QuantizedScoreCalls, candidateProof.ExactBaseRerankScoreCalls = 0, 0
+			candidateProof.ExactSmallFilterScoreCalls, candidateProof.ExactSuffixScoreCalls = 0, 0
+			candidateProof.QuantizedCodeBytesRead, candidateProof.ExactBaseVectorBytesRead = 0, 0
+			candidateProof.Route = "typed_empty"
+			if graphRoute == "" {
+				candidateProof.Route = "quantized_rerank"
+			}
+		case "typed_exact":
+			candidateWork.Graph.BaseANNScored, candidateWork.Graph.ExactBaseScored = 0, 0
+			candidateWork.Graph.BaseResultIDs, candidateWork.Graph.DeltaScored = 0, 1
+			candidateProof.QuantizedScoreCalls, candidateProof.ExactBaseRerankScoreCalls = 0, 0
+			candidateProof.ExactSmallFilterScoreCalls, candidateProof.ExactSuffixScoreCalls = 0, 1
+			candidateProof.QuantizedCodeBytesRead, candidateProof.ExactBaseVectorBytesRead = 0, 0
+			candidateProof.ExactSuffixVectorBytesRead = 8
+			candidateProof.Route = "typed_exact"
+		case "typed_hnsw":
+			candidateProof.Route = "quantized_rerank"
+		}
+		return candidateWork, candidateProof
+	}
+	prefixes := map[string]struct {
+		work  documentservice.DenseSearchWork
+		proof collections.ColumnGraphScorePlaneWork
+	}{}
+	for _, graphRoute := range []string{"", "typed_empty", "typed_exact", "typed_hnsw"} {
+		candidateWork, candidateProof := prefixPair(graphRoute)
+		prefixes[graphRoute] = struct {
+			work  documentservice.DenseSearchWork
+			proof collections.ColumnGraphScorePlaneWork
+		}{candidateWork, candidateProof}
+		t.Run("valid incomplete route "+graphRoute, func(t *testing.T) {
 			matching := &WireError{Code: iwire.ErrInternal, Message: "partial", DenseWork: &candidateWork, ScorePlane: &candidateProof}
 			if got := validateDenseQuantizedFailureProof(matching, request); got != matching {
 				t.Fatalf("matching incomplete route prefix changed: %v", got)
 			}
 		})
+	}
+	matchingIncompleteWork, matchingIncompleteProof = prefixes["typed_hnsw"].work, prefixes["typed_hnsw"].proof
+	counterMutations := []struct {
+		name   string
+		mutate func(*documentservice.DenseSearchWork, *collections.ColumnGraphScorePlaneWork)
+	}{
+		{"quantized", func(_ *documentservice.DenseSearchWork, p *collections.ColumnGraphScorePlaneWork) {
+			p.QuantizedScoreCalls++
+		}},
+		{"exact base", func(w *documentservice.DenseSearchWork, _ *collections.ColumnGraphScorePlaneWork) {
+			w.Graph.ExactBaseScored++
+		}},
+		{"base result IDs", func(w *documentservice.DenseSearchWork, _ *collections.ColumnGraphScorePlaneWork) {
+			w.Graph.BaseResultIDs++
+		}},
+		{"suffix", func(_ *documentservice.DenseSearchWork, p *collections.ColumnGraphScorePlaneWork) {
+			p.ExactSuffixScoreCalls++
+		}},
+		{"exact sum overflow", func(_ *documentservice.DenseSearchWork, p *collections.ColumnGraphScorePlaneWork) {
+			p.ExactBaseRerankScoreCalls, p.ExactSmallFilterScoreCalls = ^uint64(0), 1
+		}},
+	}
+	for _, graphRoute := range []string{"", "typed_exact", "typed_hnsw"} {
+		for _, mutation := range counterMutations {
+			candidateWork, candidateProof := prefixes[graphRoute].work, prefixes[graphRoute].proof
+			mutation.mutate(&candidateWork, &candidateProof)
+			t.Run("invalid incomplete counters "+graphRoute+" "+mutation.name, func(t *testing.T) {
+				reject(t, candidateWork, candidateProof)
+			})
+		}
 	}
 	mismatchedIncompleteWork := matchingIncompleteWork
 	mismatchedIncompleteWork.Graph.Route = "typed_exact"
@@ -1135,6 +1196,22 @@ func TestDenseV3FailureProofCompletedGraphPrefixes(t *testing.T) {
 		t.Run("FrameError invalid "+mutation.name, func(t *testing.T) {
 			candidateWork, candidateProof := work, proof
 			mutation.mutate(&candidateWork, &candidateProof)
+			frameCase(t, candidateWork, candidateProof, false)
+		})
+	}
+	for _, example := range []struct {
+		name     string
+		route    string
+		mutation int
+	}{
+		{"empty quantized counter", "", 0},
+		{"typed exact exact-base counter", "typed_exact", 1},
+		{"typed hnsw suffix counter", "typed_hnsw", 3},
+		{"typed hnsw exact-sum overflow", "typed_hnsw", 4},
+	} {
+		t.Run("FrameError invalid "+example.name, func(t *testing.T) {
+			candidateWork, candidateProof := prefixes[example.route].work, prefixes[example.route].proof
+			counterMutations[example.mutation].mutate(&candidateWork, &candidateProof)
 			frameCase(t, candidateWork, candidateProof, false)
 		})
 	}

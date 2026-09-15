@@ -295,6 +295,17 @@ func denseScorePlanePrefixRouteMatchesGraph(graphRoute, proofRoute string) bool 
 	return denseScorePlaneRouteMatchesGraph(graphRoute, proofRoute)
 }
 
+func denseFailureScoreCountersMatchGraph(graph collections.ColumnGraphQueryWork, proof *collections.ColumnGraphScorePlaneWork) bool {
+	if proof == nil || proof.ExactSmallFilterScoreCalls > ^uint64(0)-proof.ExactBaseRerankScoreCalls {
+		return false
+	}
+	exactBaseScoreCalls := proof.ExactBaseRerankScoreCalls + proof.ExactSmallFilterScoreCalls
+	return proof.QuantizedScoreCalls == graph.BaseANNScored &&
+		exactBaseScoreCalls == graph.ExactBaseScored &&
+		exactBaseScoreCalls == graph.BaseResultIDs &&
+		proof.ExactSuffixScoreCalls == graph.DeltaScored
+}
+
 func denseQuantizedCompletedGraphMatches(work documentservice.DenseSearchWork, proof *collections.ColumnGraphScorePlaneWork, request DenseVectorSearchRequest, resultCount int) bool {
 	if proof == nil || !proof.Available || !proof.Completed || !proof.Snapshot.Available ||
 		!denseScorePlaneRequestMatches(proof, request, true) ||
@@ -398,8 +409,9 @@ func denseFailureOutputMatchesCompletedGraph(output documentservice.DenseSearchO
 
 // validateDenseQuantizedFailureProof binds any decoded failure evidence to the
 // public request. Failure proofs are prefixes: request identity and captured
-// owner/filter state remain authoritative, while result-count relations apply
-// only to a pair of completed proofs.
+// owner/filter state and already-emitted sibling score counters remain
+// authoritative, while result-count and byte relations apply only to a pair
+// of completed proofs.
 func validateDenseQuantizedFailureProof(err error, request DenseVectorSearchRequest) error {
 	work, proof := denseFailureProofs(err)
 	if work == nil && proof == nil {
@@ -422,6 +434,7 @@ func validateDenseQuantizedFailureProof(err error, request DenseVectorSearchRequ
 				!proof.Snapshot.Available || !graph.Snapshot.Available || graph.Snapshot != proof.Snapshot ||
 				proof.Completed != graph.Completed ||
 				!denseScorePlanePrefixRouteMatchesGraph(graph.Route, proof.Route) ||
+				!denseFailureScoreCountersMatchGraph(graph, proof) ||
 				(work.Completed && (!graph.Completed || !work.Output.Completed)) {
 				mismatch = true
 			}
