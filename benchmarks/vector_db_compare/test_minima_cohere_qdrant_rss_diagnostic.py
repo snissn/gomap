@@ -2,8 +2,10 @@
 import copy
 import os
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -70,6 +72,7 @@ def rss_contract():
         "host_resource_identity": {
             "machine_id": "machine", "boot_id": "boot", "page_size_bytes": 4096,
             "numa_mems": "0", "cgroup_membership": "0::/", "cgroup_limits": {},
+            "cpu_model": "test CPU", "cpu_features": ["avx2", "sse2"],
         },
         "platform": "test-platform", "rss_recall_target": native.RSS_RECALL_TARGET,
         "rss_controls": native.RSS_CONTROLS,
@@ -90,8 +93,46 @@ def rss_sample(pid, rss_bytes):
     }
 
 
+def storage_sample(size=4096):
+    return {
+        "availability": "measured", "owned_bytes_at_rss_boundary": size,
+        "scope": "backend_owned_directory_at_initial_ready_quality_boundary",
+    }
+
+
+def qdrant_guard():
+    sample = {
+        "elapsed_s": 1.0, "free_bytes": 20 << 30, "owned_bytes": 4096,
+        "combined_current_rss_bytes": 8192,
+        "harness": {"pid": 1, "process_identity": "1:10", "current_rss_bytes": 4096},
+        "server": {"pid": 2, "process_identity": "2:20", "current_rss_bytes": 4096},
+    }
+    cleanup = copy.deepcopy(sample)
+    cleanup.update(elapsed_s=2.0, combined_current_rss_bytes=4096, server=None)
+    first = copy.deepcopy(cleanup)
+    first["elapsed_s"] = 0.0
+    return {
+        "schema": "treedb_cohere_qdrant_resource_guard/v1", "status": "passed",
+        "scope": "harness_start_through_owned_process_cleanup",
+        "sample_count": 3, "max_combined_current_rss_bytes": 8192,
+        "max_owned_bytes": 4096, "minimum_free_bytes_observed": 20 << 30,
+        "first_sample": first, "last_sample": sample,
+        "cleanup_sample": cleanup,
+        "failure": None, "limits": copy.deepcopy(qdrant_rss.RESOURCE_GUARD),
+    }
+
+
+def qdrant_cleanup():
+    return {
+        "schema": "treedb_owned_qdrant_cleanup/v1", "status": "clean",
+        "process_identity": "2:20", "harness_pgid": 10, "server_pgid": 10,
+        "term_sent": True, "kill_sent": False, "exit_code": 0,
+        "client_closed": True, "log_closed": True, "failure": None,
+    }
+
+
 def sq8_build_evidence():
-    fields = qdrant_rss._COLUMN_GRAPH_BUILD_FIELDS - {"construction_decisions"}
+    fields = native._COLUMN_GRAPH_BUILD_FIELDS - {"construction_decisions"}
     return {**{field: 1 for field in fields}, "construction_decisions": None}
 
 
@@ -129,6 +170,7 @@ def sq8_request(query=0):
         "requested_ef_search": 32, "requested_rerank_candidates": 32,
         "command_version": 3, "expected_generation": 7,
         "started_monotonic_ns": query * 2 + 1, "ended_monotonic_ns": query * 2 + 2,
+        "duration_ns": 1,
         "outcome": "success", "recall": 1.0, "ndcg_at_10": 1.0,
         "lifecycle_state": {"owner_advance": 0, "folded": False, "shadow_allowance": 0,
                             "live_base": 500000, "live_suffix": 0},
@@ -141,6 +183,50 @@ def sq8_request(query=0):
 
 
 class CohereQdrantRSSDiagnosticTests(unittest.TestCase):
+    def test_producer_source_identity_does_not_trust_imported_checker(self):
+        dirty = MagicMock(
+            returncode=0,
+            stdout="?? benchmarks/vector_db_compare/shadow_runner.py\n",
+        )
+        revision = MagicMock(returncode=0, stdout="a" * 40 + "\n")
+        with patch.object(qdrant_rss.native.existing, "repository_commit",
+                          return_value="a" * 40) as imported_checker, \
+                patch.object(qdrant_rss.subprocess, "run",
+                             side_effect=[dirty, revision]):
+            with self.assertRaisesRegex(RuntimeError, "clean committed harness"):
+                qdrant_rss.producer_harness_commit(Path("/candidate"))
+        imported_checker.assert_not_called()
+
+    def test_qdrant_tree_source_provenance_requires_one_candidate(self):
+        head = "a" * 40
+        trees = {path: "tree-" + path for path in qdrant_rss.HARNESS_TREE_PATHS}
+        tree = {"provenance": {
+            "harness_commit": head, "product_commit": head, "harness_trees": trees,
+        }}
+        self.assertTrue(qdrant_rss.tree_source_provenance_valid(tree, head, trees))
+        mutations = {
+            "harness": {**tree["provenance"], "harness_commit": "b" * 40},
+            "product": {**tree["provenance"], "product_commit": "b" * 40},
+            "trees": {**tree["provenance"], "harness_trees": {}},
+        }
+        for name, provenance in mutations.items():
+            with self.subTest(name=name):
+                self.assertFalse(qdrant_rss.tree_source_provenance_valid(
+                    {"provenance": provenance}, head, trees,
+                ))
+
+    def test_qdrant_storage_is_strictly_owned_by_the_run_directory(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            run = Path(temporary) / "run"
+            self.assertEqual(
+                qdrant_rss.validate_storage_containment(run, run / "storage"),
+                (run.resolve(), (run / "storage").resolve()),
+            )
+            for storage in (run, Path(temporary) / "sibling"):
+                with self.subTest(storage=storage), \
+                        self.assertRaisesRegex(ValueError, "strict descendant"):
+                    qdrant_rss.validate_storage_containment(run, storage)
+
     def test_frozen_plan_comparison_is_type_exact(self):
         qdrant_rss.validate_plan({"version": 1}, {"version": 1})
         with self.assertRaisesRegex(ValueError, "frozen Qdrant RSS plan differs"):
@@ -159,6 +245,8 @@ class CohereQdrantRSSDiagnosticTests(unittest.TestCase):
         self.assertTrue(contract["host_resource_identity"]["machine_id"])
         self.assertTrue(contract["host_resource_identity"]["boot_id"])
         self.assertGreater(contract["host_resource_identity"]["page_size_bytes"], 0)
+        self.assertTrue(contract["host_resource_identity"]["cpu_model"])
+        self.assertTrue(contract["host_resource_identity"]["cpu_features"])
         self.assertNotIn("relative_ndcg_max_absolute_loss", contract)
         self.assertNotIn("relative_ndcg_control_ef_construction", contract)
 
@@ -247,10 +335,12 @@ class CohereQdrantRSSDiagnosticTests(unittest.TestCase):
                 self.assertFalse(native.rss_comparison_contract_valid(changed_contract))
         tree = {"schema": native.RSS_ARTIFACT_SCHEMA, "state": "calibrated", "backend": "treedb",
                 "comparison_contract": contract, "quality": fp32_quality("ef_search"),
-                "rss": rss_sample(1, 100), "reasons": [],
+                "rss": rss_sample(1, 100), "storage": storage_sample(), "reasons": [],
                 "provenance": {"harness_commit": "a" * 40, "harness_trees": {"benchmarks": "b" * 40}}}
         qdrant = {**copy.deepcopy(tree), "backend": "qdrant",
-                  "quality": fp32_quality("hnsw_ef"), "rss": rss_sample(2, 120)}
+                  "quality": fp32_quality("hnsw_ef"), "rss": rss_sample(2, 120),
+                  "resource_guard": qdrant_guard(), "cleanup": qdrant_cleanup()}
+        qdrant["provenance"]["process_identity"] = "2:20"
         decision = qdrant_rss.compare_artifacts(tree, qdrant)
         self.assertEqual(decision["state"], "accept")
         self.assertEqual(decision["delta_bytes"], -20)
@@ -264,7 +354,8 @@ class CohereQdrantRSSDiagnosticTests(unittest.TestCase):
         for mutation in (
             "contract", "rss", "rss_source", "rss_scope", "rss_pid", "quality",
             "quality_missing_curve", "quality_control_order", "quality_mean", "quality_ndcg_type",
-            "provenance", "reasons",
+            "provenance", "reasons", "storage", "guard", "guard_limit",
+            "guard_identity", "cleanup", "cleanup_identity", "cleanup_identity_type",
         ):
             with self.subTest(mutation=mutation):
                 changed = copy.deepcopy(qdrant)
@@ -290,8 +381,22 @@ class CohereQdrantRSSDiagnosticTests(unittest.TestCase):
                     changed["quality"]["revalidation"]["curve"][0]["per_query_ndcg_at_10"][0] = True
                 elif mutation == "provenance":
                     changed["provenance"]["harness_commit"] = "c" * 40
-                else:
+                elif mutation == "reasons":
                     changed["reasons"] = ["retained failure"]
+                elif mutation == "storage":
+                    changed["storage"]["owned_bytes_at_rss_boundary"] = 0
+                elif mutation == "guard":
+                    changed["resource_guard"]["status"] = "failed"
+                elif mutation == "guard_limit":
+                    changed["resource_guard"]["limits"]["wall_limit_s"] += 1
+                elif mutation == "guard_identity":
+                    changed["resource_guard"]["last_sample"]["server"]["process_identity"] = "3:30"
+                elif mutation == "cleanup":
+                    changed["cleanup"]["kill_sent"] = True
+                elif mutation == "cleanup_identity_type":
+                    changed["cleanup"]["process_identity"] = None
+                else:
+                    changed["cleanup"]["process_identity"] = "3:30"
                 self.assertEqual(qdrant_rss.compare_artifacts(tree, changed)["state"], "uncalibrated")
 
     def test_three_arm_envelope_nests_original_decision_and_never_promotes_sq8(self):
@@ -299,10 +404,12 @@ class CohereQdrantRSSDiagnosticTests(unittest.TestCase):
         provenance = tree_provenance()
         tree = {"schema": native.RSS_ARTIFACT_SCHEMA, "state": "calibrated", "backend": "treedb",
                 "comparison_contract": contract, "quality": fp32_quality("ef_search"),
-                "rss": rss_sample(1, 100), "reasons": [],
+                "rss": rss_sample(1, 100), "storage": storage_sample(), "reasons": [],
                 "provenance": provenance, "construction_calibration_contract": construction_contract()}
         qdrant = {**copy.deepcopy(tree), "backend": "qdrant",
-                  "quality": fp32_quality("hnsw_ef"), "rss": rss_sample(2, 120)}
+                  "quality": fp32_quality("hnsw_ef"), "rss": rss_sample(2, 120),
+                  "resource_guard": qdrant_guard(), "cleanup": qdrant_cleanup()}
+        qdrant["provenance"]["process_identity"] = "2:20"
         sq8 = {**copy.deepcopy(tree), "schema": native.QUANTIZED_RSS_ARTIFACT_SCHEMA,
                "quality": sq8_quality(),
                "rss": rss_sample(3, 80),
@@ -325,16 +432,16 @@ class CohereQdrantRSSDiagnosticTests(unittest.TestCase):
         queries = np.zeros((200, 768), dtype=np.float32)
         queries[:, 0] = 1
         truth = [[f"row-{row:06d}" for row in range(10)] for _ in range(200)]
-        self.assertTrue(qdrant_rss.sq8_results_match_dataset(sq8, vectors, queries, truth))
+        self.assertTrue(native.sq8_results_match_dataset(sq8, vectors, queries, truth))
         wrong_score = copy.deepcopy(sq8)
         wrong_score["observed_execution"]["requests"][0]["results"][0]["score"] = .5
-        self.assertFalse(qdrant_rss.sq8_results_match_dataset(wrong_score, vectors, queries, truth))
+        self.assertFalse(native.sq8_results_match_dataset(wrong_score, vectors, queries, truth))
         wrong_ndcg = copy.deepcopy(sq8)
         wrong_ndcg["quality"]["calibration"]["curve"][0]["per_query_ndcg_at_10"] = [0.0] * 100
         wrong_ndcg["quality"]["calibration"]["curve"][0]["mean_ndcg_at_10"] = 0.0
         wrong_ndcg["quality"]["revalidation"]["curve"][0]["per_query_ndcg_at_10"] = [0.0] * 100
         wrong_ndcg["quality"]["revalidation"]["curve"][0]["mean_ndcg_at_10"] = 0.0
-        self.assertFalse(qdrant_rss.sq8_results_match_dataset(wrong_ndcg, vectors, queries, truth))
+        self.assertFalse(native.sq8_results_match_dataset(wrong_ndcg, vectors, queries, truth))
         self.assertEqual(
             qdrant_rss.compare_three_arms(tree, qdrant, wrong_ndcg)["sq8_treedb_vs_fp32_qdrant"]["state"],
             "unavailable",
@@ -342,12 +449,13 @@ class CohereQdrantRSSDiagnosticTests(unittest.TestCase):
 
         for mutation in (
             "profile", "request_r", "missing_work", "stale_owner", "proof_unavailable",
-            "success_error", "zero_duration", "zero_output", "base_below_retained",
+            "success_error", "zero_duration", "duration_mismatch", "zero_output", "base_below_retained",
             "base_above_scores",
             "readiness_generation", "readiness_capability", "readiness_capability_type",
             "readiness_indexes", "readiness_typed_input", "readiness_vector_ef_type",
             "readiness_scalar_identity", "readiness_scalar_index_type", "readiness_index_name_type",
-            "quality_control", "quality_exact", "construction", "product_provenance",
+            "quality_control", "quality_exact", "construction", "construction_mode",
+            "product_provenance",
             "fabricated_selection", "rss_source", "rss_scope", "rss_pid", "retained_reasons",
             "fake_build", "missing_reason", "missing_config_hash", "candidate_width", "raw_width",
             "rerank_cap", "suffix_work", "delta_work", "shadow_work", "snapshot_drift",
@@ -373,6 +481,8 @@ class CohereQdrantRSSDiagnosticTests(unittest.TestCase):
                 elif mutation == "zero_duration":
                     row = changed["observed_execution"]["requests"][0]
                     row["ended_monotonic_ns"] = row["started_monotonic_ns"]
+                elif mutation == "duration_mismatch":
+                    changed["observed_execution"]["requests"][0]["duration_ns"] = 2
                 elif mutation == "zero_output":
                     changed["observed_execution"]["requests"][0]["dense_work"]["output"]["output_bytes"] = 0
                 elif mutation == "base_below_retained":
@@ -403,6 +513,8 @@ class CohereQdrantRSSDiagnosticTests(unittest.TestCase):
                     changed["quality"]["exact_mode"] = True
                 elif mutation == "construction":
                     changed["construction_calibration_contract"]["ef_construction"] = 64
+                elif mutation == "construction_mode":
+                    changed["readiness"]["column_graph_build"]["construction_decisions"] = {}
                 elif mutation == "product_provenance":
                     changed["provenance"]["product_commit"] = "0" * 40
                 elif mutation == "fabricated_selection":
@@ -513,39 +625,413 @@ class CohereQdrantRSSDiagnosticTests(unittest.TestCase):
             self.assertEqual(run.wait_ready(500000, "initial"), {"poll": 1})
         self.assertEqual(wait.call_count, 2)
 
-    def test_owned_qdrant_readiness_uses_configured_api_key(self):
+    def test_owned_qdrant_startup_is_atomic_and_unauthenticated(self):
         with tempfile.TemporaryDirectory() as temporary:
             run = qdrant_rss.Run.__new__(qdrant_rss.Run)
             run.output = Path(temporary) / "run"
             run.output.mkdir()
             run.storage_path = Path(temporary) / "storage"
-            run.api_key = "secret"
+            run.server_log_path = run.output / "qdrant.log"
             run.client_factory = object
+            run.harness_pgid = 44
+            run.resource_lock = threading.Lock()
+            run.resource_failure = None
             run.plan = {
                 "url": "http://127.0.0.1:6333", "qdrant_bin": str(Path(sys.executable).resolve()),
                 "qdrant_server_version": "1.19.0", "startup_timeout_s": 1, "poll_interval_s": 0,
             }
             process = MagicMock(pid=os.getpid())
             process.poll.return_value = None
-            with patch.dict(qdrant_rss.os.environ, {"QDRANT__CLUSTER__ENABLED": "true"}), \
-                    patch.object(qdrant_rss.subprocess, "Popen", return_value=process) as launch, \
+            process.wait.return_value = 0
+
+            def launch_process(*_args, **_kwargs):
+                self.assertTrue(run.resource_lock.locked())
+                return process
+
+            with patch.dict(qdrant_rss.os.environ, {
+                        "QDRANT_API_KEY": "ambient-client-secret",
+                        "QDRANT__SERVICE__API_KEY": "ambient-server-secret",
+                        "QDRANT__CLUSTER__ENABLED": "true",
+                    }), \
+                    patch.object(qdrant_rss.subprocess, "Popen",
+                                 side_effect=launch_process) as launch, \
                     patch.object(qdrant_rss.existing, "linux_process_identity", return_value="1:1"), \
                     patch.object(qdrant_rss.existing, "server_info", return_value={"version": "1.19.0"}) as info, \
                     patch.object(qdrant_rss.existing, "server_process_owns_endpoint", return_value=True), \
-                    patch.object(qdrant_rss.existing, "server_process_identity", return_value="qdrant"):
+                    patch.object(qdrant_rss.existing, "server_process_identity", return_value="qdrant"), \
+                    patch.object(qdrant_rss.os, "getpgid", return_value=44):
                 run.start_server()
-            info.assert_called_once_with(run.plan["url"], "secret")
+            info.assert_called_once_with(run.plan["url"], "")
+            self.assertIs(run.process, process)
+            self.assertEqual(run.process_identity, "1:1")
+            self.assertEqual(run.server_pgid, 44)
             self.assertNotIn("QDRANT__CLUSTER__ENABLED", launch.call_args.kwargs["env"])
-            self.assertEqual(launch.call_args.kwargs["env"]["QDRANT__SERVICE__API_KEY"], "secret")
+            self.assertNotIn("QDRANT_API_KEY", launch.call_args.kwargs["env"])
+            self.assertNotIn("QDRANT__SERVICE__API_KEY", launch.call_args.kwargs["env"])
+            self.assertNotIn("start_new_session", launch.call_args.kwargs)
             run.server_log.close()
+
+    def test_main_rejects_ambient_qdrant_credentials_before_argument_processing(self):
+        for variable in qdrant_rss.QDRANT_CREDENTIAL_ENV:
+            with self.subTest(variable=variable), \
+                    patch.dict(qdrant_rss.os.environ, {variable: "secret"}, clear=True), \
+                    self.assertRaisesRegex(ValueError, variable):
+                qdrant_rss.main()
+
+    def test_owned_qdrant_reaps_child_when_identity_capture_fails(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            run = qdrant_rss.Run.__new__(qdrant_rss.Run)
+            run.output = Path(temporary) / "run"
+            run.output.mkdir()
+            run.storage_path = Path(temporary) / "storage"
+            run.server_log_path = run.output / "qdrant.log"
+            run.harness_pgid = 44
+            run.resource_lock = threading.Lock()
+            run.resource_failure = None
+            run.process = run.process_identity = run.process_command_identity = None
+            run.server_pid = run.server_pgid = None
+            run.plan = {
+                "url": "http://127.0.0.1:6333",
+                "qdrant_bin": str(Path(sys.executable).resolve()),
+            }
+            process = MagicMock(pid=os.getpid())
+            process.poll.return_value = None
+            process.wait.return_value = 0
+            with patch.object(qdrant_rss.subprocess, "Popen", return_value=process), \
+                    patch.object(qdrant_rss.existing, "linux_process_identity", return_value=None), \
+                    self.assertRaisesRegex(RuntimeError, "identity is unavailable"):
+                run.start_server()
+            process.terminate.assert_called_once_with()
+            process.wait.assert_called_once_with(timeout=30)
+            self.assertIsNone(run.process)
+            self.assertIsNone(run.server_log)
+
+    def test_owned_qdrant_restart_uses_shared_launcher_after_clean_shutdown(self):
+        run = qdrant_rss.Run.__new__(qdrant_rss.Run)
+        run.resource_lock = threading.Lock()
+        run.cleaning_up = False
+        run.resource_failure = None
+        run.storage_path = Path("/owned/storage")
+        run.client = run.process = run.process_identity = run.process_command_identity = object()
+        run.server_pid = run.server_pgid = 7
+        run.server_log = object()
+        def clean():
+            run.cleaning_up = True
+            return {"status": "clean", "failure": None}
+        run.cleanup_owned = MagicMock(side_effect=clean)
+
+        def launch(reuse_storage):
+            self.assertTrue(reuse_storage)
+            self.assertFalse(run.cleaning_up)
+            self.assertIsNone(run.process)
+            self.assertIsNone(run.process_identity)
+            self.assertIsNone(run.server_pgid)
+
+        with patch.object(qdrant_rss.existing, "disk_bytes", return_value=123), \
+                patch.object(run, "_start_server", side_effect=launch) as start:
+            self.assertEqual(run.restart_server(), 123)
+        run.cleanup_owned.assert_called_once_with()
+        start.assert_called_once_with(True)
+        self.assertFalse(run.cleaning_up)
+
+    def test_restart_guard_failure_during_cleanup_vetoes_relaunch(self):
+        run = qdrant_rss.Run.__new__(qdrant_rss.Run)
+        run.resource_lock = threading.Lock()
+        run.cleaning_up = False
+        run.resource_failure = None
+        run.guard_summary = {"failure": None}
+        run.storage_path = Path("/owned/storage")
+
+        def clean_with_guard_failure():
+            run.cleaning_up = True
+            run.record_resource_failure("resource guard: over budget during shutdown")
+            return {"status": "clean", "failure": None}
+
+        run.cleanup_owned = MagicMock(side_effect=clean_with_guard_failure)
+        with patch.object(qdrant_rss.existing, "disk_bytes", return_value=123), \
+                patch.object(run, "_start_server") as start:
+            with self.assertRaisesRegex(RuntimeError, "refusing Qdrant restart"):
+                run.restart_server()
+        start.assert_not_called()
+        self.assertFalse(run.cleaning_up)
 
     def test_owned_qdrant_rejects_nonzero_shutdown(self):
         run = qdrant_rss.Run.__new__(qdrant_rss.Run)
-        run.process = MagicMock(returncode=1)
+        run.process = MagicMock(pid=7, returncode=1)
         run.process.poll.return_value = None
-        run.process_identity, run.server_log = None, None
+        run.process_identity, run.server_log = "7:11", None
+        run.server_pid, run.server_pgid, run.harness_pgid = 7, 10, 10
+        run.client = None
+        run.resource_lock = threading.Lock()
         with self.assertRaisesRegex(RuntimeError, "shutdown exited with 1"):
-            run.stop_server()
+            with patch.object(qdrant_rss.existing, "linux_process_identity", return_value="7:11"), \
+                    patch.object(qdrant_rss.os, "getpgid", return_value=10):
+                run.stop_server()
+
+    def test_qdrant_resource_guard_is_continuous_bounded_and_identity_owned(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            run = qdrant_rss.Run.__new__(qdrant_rss.Run)
+            run.output = root / "run"
+            run.output.mkdir()
+            run.storage_path = run.output / "storage"
+            run.storage_path.mkdir()
+            run.started = qdrant_rss.time.monotonic()
+            run.plan = {"resource_guard": {
+                "poll_interval_s": 1, "minimum_free_bytes": 10,
+                "maximum_owned_bytes": 100, "maximum_combined_rss_bytes": 500,
+                "wall_limit_s": 60,
+            }}
+            run.harness_identity = "6:10"
+            run.resource_lock = qdrant_rss.threading.Lock()
+            run.cleaning_up = False
+            run.guard_summary = {"sample_count": 0, "max_combined_current_rss_bytes": 0,
+                                 "max_owned_bytes": 0, "minimum_free_bytes_observed": None,
+                                 "first_sample": None, "last_sample": None,
+                                 "cleanup_sample": None}
+            run.process = MagicMock(pid=7)
+            run.process.poll.return_value = None
+            run.server_pid, run.server_pgid, run.harness_pgid = 7, 10, 10
+            run.process_identity = "7:11"
+            samples = [
+                {"pid": 6, "process_identity": "6:10", "current_rss_bytes": 100},
+                {"pid": 7, "process_identity": "7:11", "current_rss_bytes": 200},
+            ]
+            with patch.object(qdrant_rss.Run, "current_rss", side_effect=samples), \
+                    patch.object(qdrant_rss.existing, "disk_bytes", return_value=50), \
+                    patch.object(qdrant_rss.os, "getpgid", return_value=10), \
+                    patch.object(qdrant_rss.shutil, "disk_usage",
+                                 return_value=MagicMock(free=1000)):
+                run.check_resources()
+            sample = run.guard_summary["last_sample"]
+            self.assertEqual(sample["combined_current_rss_bytes"], 300)
+            self.assertEqual(sample["owned_bytes"], 50)
+            self.assertEqual(sample["server"]["process_identity"], "7:11")
+            self.assertEqual(run.guard_summary["sample_count"], 1)
+            self.assertEqual(run.guard_summary["minimum_free_bytes_observed"], 1000)
+
+            run.server_pgid = 11
+            with patch.object(qdrant_rss.Run, "current_rss", side_effect=samples), \
+                    patch.object(qdrant_rss.os, "getpgid", return_value=10), \
+                    self.assertRaisesRegex(RuntimeError, "identity or process group changed"):
+                run.check_resources()
+            run.server_pgid = 10
+
+            run.cleaning_up = True
+            run.process.poll.return_value = 0
+            with patch.object(qdrant_rss.Run, "current_rss", return_value=samples[0]), \
+                    patch.object(qdrant_rss.existing, "disk_bytes", return_value=50), \
+                    patch.object(qdrant_rss.shutil, "disk_usage",
+                                 return_value=MagicMock(free=1000)):
+                run.check_resources()
+            self.assertIsNone(run.guard_summary["cleanup_sample"]["server"])
+            self.assertEqual(run.guard_summary["cleanup_sample"]["combined_current_rss_bytes"], 100)
+
+            run.process.poll.side_effect = [None, 0]
+            def exiting_current_rss(_pid, identity):
+                if identity == "6:10":
+                    return samples[0]
+                raise RuntimeError("exited during read")
+
+            with patch.object(qdrant_rss.Run, "current_rss",
+                              side_effect=exiting_current_rss), \
+                    patch.object(qdrant_rss.existing, "disk_bytes", return_value=50), \
+                    patch.object(qdrant_rss.os, "getpgid", return_value=10), \
+                    patch.object(qdrant_rss.shutil, "disk_usage",
+                                 return_value=MagicMock(free=1000)):
+                run.check_resources()
+            self.assertIsNone(run.guard_summary["cleanup_sample"]["server"])
+
+            run.cleaning_up = False
+            run.process.poll.side_effect = None
+            run.process.poll.return_value = None
+            run.plan["resource_guard"]["maximum_combined_rss_bytes"] = 1
+            with patch.object(qdrant_rss.Run, "current_rss", side_effect=samples), \
+                    patch.object(qdrant_rss.existing, "disk_bytes", return_value=50), \
+                    patch.object(qdrant_rss.os, "getpgid", return_value=10), \
+                    patch.object(qdrant_rss.shutil, "disk_usage",
+                                 return_value=MagicMock(free=1000)), \
+                    self.assertRaisesRegex(RuntimeError, "disk/RAM/wall budget"):
+                run.check_resources()
+
+    def test_qdrant_resource_guard_signals_only_the_exact_owned_lifetime(self):
+        for observed, stored_pgid, actual_pgid, expected_calls in (
+                ("7:11", 10, 10, 1), ("7:12", 10, 10, 0), ("7:11", 11, 10, 0),
+                ("7:11", 10, 11, 0)):
+            with self.subTest(observed=observed, stored_pgid=stored_pgid, actual_pgid=actual_pgid):
+                run = qdrant_rss.Run.__new__(qdrant_rss.Run)
+                run.cancel = MagicMock()
+                run.cancel.wait.side_effect = [False, True]
+                run.resource_failure = None
+                run.plan = {"resource_guard": {"poll_interval_s": 1}}
+                run.guard_summary = {"failure": None}
+                run.guard_termination_sent = False
+                run.cleaning_up = False
+                run.harness_pgid = 10
+                run.process_identity = "7:11"
+                run.process = MagicMock(pid=7)
+                run.server_pid, run.server_pgid = 7, stored_pgid
+                run.resource_lock = threading.Lock()
+                run.process.poll.return_value = None
+                with patch.object(run, "check_resources",
+                                  side_effect=RuntimeError("budget")), \
+                        patch.object(qdrant_rss.existing, "linux_process_identity",
+                                     return_value=observed), \
+                        patch.object(qdrant_rss.os, "getpgid", return_value=actual_pgid):
+                    run.guard_resources()
+                self.assertIn("resource guard", run.resource_failure)
+                self.assertEqual(run.process.terminate.call_count, expected_calls)
+                self.assertEqual(run.guard_termination_sent, expected_calls == 1)
+
+    def test_qdrant_current_rss_requires_stable_owned_identity(self):
+        status = "Name:\tqdrant\nVmRSS:\t123 kB\n"
+        with patch.object(qdrant_rss.Path, "read_text", return_value=status), \
+                patch.object(qdrant_rss.existing, "linux_process_identity",
+                             side_effect=["7:11", "7:11"]):
+            self.assertEqual(qdrant_rss.Run.current_rss(7, "7:11"), {
+                "pid": 7, "process_identity": "7:11", "current_rss_bytes": 123 * 1024,
+            })
+        with patch.object(qdrant_rss.Path, "read_text", return_value=status), \
+                patch.object(qdrant_rss.existing, "linux_process_identity",
+                             side_effect=["7:11", "7:12"]), \
+                self.assertRaisesRegex(RuntimeError, "changed across"):
+            qdrant_rss.Run.current_rss(7, "7:11")
+
+    def test_qdrant_cleanup_rechecks_identity_before_forced_shutdown(self):
+        run = qdrant_rss.Run.__new__(qdrant_rss.Run)
+        run.client, run.server_log = MagicMock(), MagicMock()
+        run.process = MagicMock(pid=7, returncode=None)
+        run.process.poll.return_value = None
+        run.process.wait.side_effect = subprocess.TimeoutExpired("qdrant", 30)
+        run.server_pid, run.process_identity = 7, "7:11"
+        run.harness_pgid = run.server_pgid = 10
+        run.resource_lock = threading.Lock()
+        with patch.object(qdrant_rss.existing, "linux_process_identity",
+                         side_effect=["7:11", "7:12"]), \
+                patch.object(qdrant_rss.os, "getpgid", return_value=10):
+            cleanup = run.cleanup_owned()
+        self.assertEqual(cleanup["status"], "failed")
+        self.assertTrue(cleanup["term_sent"])
+        self.assertFalse(cleanup["kill_sent"])
+        self.assertIn("refusing forced shutdown", cleanup["failure"])
+        run.process.kill.assert_not_called()
+        run.server_log.close.assert_called_once()
+
+    def test_qdrant_cleanup_records_clean_term_and_rejects_forced_kill(self):
+        for forced in (False, True):
+            with self.subTest(forced=forced):
+                run = qdrant_rss.Run.__new__(qdrant_rss.Run)
+                run.client, run.server_log = MagicMock(), MagicMock()
+                run.process = MagicMock(pid=7, returncode=(-9 if forced else 0))
+                run.process.poll.return_value = None
+                if forced:
+                    run.process.wait.side_effect = [subprocess.TimeoutExpired("qdrant", 30), None]
+                run.server_pid, run.process_identity = 7, "7:11"
+                run.harness_pgid = run.server_pgid = 10
+                run.resource_lock = threading.Lock()
+                with patch.object(qdrant_rss.existing, "linux_process_identity",
+                                  return_value="7:11"), \
+                        patch.object(qdrant_rss.os, "getpgid", return_value=10):
+                    cleanup = run.cleanup_owned()
+                self.assertEqual(cleanup["status"], "failed" if forced else "clean")
+                self.assertTrue(cleanup["term_sent"])
+                self.assertEqual(cleanup["kill_sent"], forced)
+                self.assertEqual(run.process.kill.call_count, int(forced))
+                self.assertTrue(cleanup["client_closed"])
+                self.assertTrue(cleanup["log_closed"])
+
+    def test_qdrant_cleanup_still_terminates_when_client_close_fails(self):
+        run = qdrant_rss.Run.__new__(qdrant_rss.Run)
+        run.client, run.server_log = MagicMock(), MagicMock()
+        run.client.close.side_effect = RuntimeError("client stuck")
+        run.process = MagicMock(pid=7, returncode=0)
+        run.process.poll.return_value = None
+        run.process.wait.return_value = None
+        run.server_pid, run.process_identity = 7, "7:11"
+        run.harness_pgid = run.server_pgid = 10
+        run.resource_lock = threading.Lock()
+        with patch.object(qdrant_rss.existing, "linux_process_identity", return_value="7:11"), \
+                patch.object(qdrant_rss.os, "getpgid", return_value=10):
+            cleanup = run.cleanup_owned()
+        self.assertEqual(cleanup["status"], "failed")
+        self.assertIn("client close", cleanup["failure"])
+        run.process.terminate.assert_called_once_with()
+        run.process.wait.assert_called_once_with(timeout=30)
+        run.server_log.close.assert_called_once_with()
+
+    def test_qdrant_cleanup_wait_remains_visible_to_resource_monitor(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            run = qdrant_rss.Run.__new__(qdrant_rss.Run)
+            run.output = Path(temporary)
+            run.started = qdrant_rss.time.monotonic()
+            run.plan = {"resource_guard": {
+                "poll_interval_s": 1, "minimum_free_bytes": 0,
+                "maximum_owned_bytes": 1000, "maximum_combined_rss_bytes": 500,
+                "wall_limit_s": 60,
+            }}
+            run.harness_identity = "6:10"
+            run.client, run.server_log = None, MagicMock()
+            run.process = MagicMock(pid=7, returncode=0)
+            run.process.poll.return_value = None
+            run.server_pid, run.process_identity = 7, "7:11"
+            run.harness_pgid = run.server_pgid = 10
+            run.resource_lock = threading.Lock()
+            run.cleaning_up = False
+            run.guard_summary = {
+                "sample_count": 0, "max_combined_current_rss_bytes": 0,
+                "max_owned_bytes": 0, "minimum_free_bytes_observed": None,
+                "first_sample": None, "last_sample": None, "cleanup_sample": None,
+            }
+            wait_started, release_wait = threading.Event(), threading.Event()
+            cleanup = []
+
+            def wait_for_exit(timeout):
+                self.assertEqual(timeout, 30)
+                wait_started.set()
+                self.assertTrue(release_wait.wait(5))
+
+            run.process.wait.side_effect = wait_for_exit
+            samples = [
+                {"pid": 6, "process_identity": "6:10", "current_rss_bytes": 100},
+                {"pid": 7, "process_identity": "7:11", "current_rss_bytes": 600},
+            ]
+            with patch.object(qdrant_rss.existing, "linux_process_identity", return_value="7:11"), \
+                    patch.object(qdrant_rss.os, "getpgid", return_value=10), \
+                    patch.object(qdrant_rss.Run, "current_rss", side_effect=samples), \
+                    patch.object(qdrant_rss.existing, "disk_bytes", return_value=0), \
+                    patch.object(qdrant_rss.shutil, "disk_usage", return_value=MagicMock(free=1000)):
+                worker = threading.Thread(target=lambda: cleanup.append(run.cleanup_owned()))
+                worker.start()
+                self.assertTrue(wait_started.wait(1))
+                with self.assertRaisesRegex(RuntimeError, "disk/RAM/wall budget"):
+                    run.check_resources()
+                release_wait.set()
+                worker.join(timeout=1)
+            self.assertFalse(worker.is_alive())
+            self.assertEqual(cleanup[0]["status"], "clean")
+            self.assertEqual(run.guard_summary["cleanup_sample"]["combined_current_rss_bytes"], 700)
+
+    def test_qdrant_resource_envelope_is_frozen(self):
+        self.assertEqual(qdrant_rss.RESOURCE_GUARD, {
+            "poll_interval_s": 1, "wall_limit_s": 2700,
+            "minimum_free_bytes": 10 << 30, "maximum_owned_bytes": 11 << 30,
+            "maximum_combined_rss_bytes": 24 << 30,
+        })
+
+    def test_qdrant_guard_rejects_identity_and_time_drift(self):
+        guard = qdrant_guard()
+        self.assertTrue(qdrant_rss._qdrant_resource_guard_valid(guard))
+        for mutate in (
+                lambda value: value["last_sample"]["harness"].update(process_identity="1:not-a-start"),
+                lambda value: value["last_sample"].update(elapsed_s=-0.5),
+                lambda value: value["last_sample"].update(combined_current_rss_bytes=1),
+                lambda value: value["cleanup_sample"].update(elapsed_s=2701),
+                lambda value: value["cleanup_sample"].update(server=value["last_sample"]["server"]),
+                lambda value: value.update(minimum_free_bytes_observed=1),
+                lambda value: value.update(sample_count=1)):
+            changed = copy.deepcopy(guard)
+            mutate(changed)
+            self.assertFalse(qdrant_rss._qdrant_resource_guard_valid(changed))
 
 
 if __name__ == "__main__":

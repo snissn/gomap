@@ -108,18 +108,23 @@ configuration. The result is `TREE_RUN/rss.json`.
 taskset -c 0-5 python benchmarks/vector_db_compare/minima_cohere_native_diagnostic.py \
   --freeze "$TREE_PLAN" --dataset "$COHERE_EXPORT" --rows 500000 --rss-only \
   --service-bin "$TREE_SERVICE" --product-commit "$TREE_COMMIT" \
-  --serving "$SERVING_JSON" --run-dir "$TREE_RUN"
+  --serving "$SERVING_JSON" --run-dir "$TREE_RUN" --ef-construction 32
 TREE_PLAN_SHA=$(sha256sum "$TREE_PLAN" | awk '{print $1}')
 taskset -c 0-5 python benchmarks/vector_db_compare/minima_cohere_native_diagnostic.py \
   --run "$TREE_PLAN" --expected-plan-sha256 "$TREE_PLAN_SHA" \
   --dataset "$COHERE_EXPORT" --rows 500000 --rss-only \
   --service-bin "$TREE_SERVICE" --product-commit "$TREE_COMMIT" \
-  --serving "$SERVING_JSON" --run-dir "$TREE_RUN"
+  --serving "$SERVING_JSON" --run-dir "$TREE_RUN" --ef-construction 32
 ```
 
 Then use the repository's pinned `qdrant-client==1.19.0` Python environment.
 The run owns a fresh standalone Qdrant 1.19.0 process and requires both
 `QDRANT_STORAGE` and `QDRANT_RUN` not to exist before launch.
+`QDRANT_STORAGE` must be a strict descendant of `QDRANT_RUN` (for example,
+`QDRANT_RUN/storage`) so one owned root covers the database, logs and evidence.
+This evidence arm is deliberately unauthenticated: unset `QDRANT_API_KEY` and
+`QDRANT__SERVICE__API_KEY`. The producer rejects either non-empty credential
+before freezing or running, and the command-receipt grammar has no API-key option.
 
 ```sh
 taskset -c 0-5 "$QDRANT_PYTHON" benchmarks/vector_db_compare/minima_cohere_qdrant_rss_diagnostic.py \
@@ -134,12 +139,25 @@ taskset -c 0-5 "$QDRANT_PYTHON" benchmarks/vector_db_compare/minima_cohere_qdran
   --url "http://127.0.0.1:$QDRANT_PORT" --run-dir "$QDRANT_RUN"
 ```
 
-`comparison.json` says `accept` when TreeDB server-process `VmHWM` is no greater
+`comparison.json` is a new, current-candidate 500K mirror-bounded FP32/Qdrant
+control; it is not a replay or reclassification of #4672. It says `accept` when
+TreeDB server-process `VmHWM` is no greater
 than Qdrant's and recommends stopping RSS work for this initial-ready workload.
 Otherwise it reports the TreeDB-minus-Qdrant byte delta and ratio as `investigate`. Missing `VmHWM`, PID
 drift, nonempty backends, readiness/quality failures, or mismatched frozen
 artifacts produce `uncalibrated`. Qdrant readiness requires green/OK optimizer
 state, exact and indexed vector counts of 500,000, and both scalar indexes.
+Its frozen one-second resource guard enforces the 45-minute wall limit, 10 GiB
+free reserve, 11 GiB owned-root cap and 24 GiB simultaneous harness-plus-server
+RSS cap from harness start through identity-owned cleanup. The final guard
+sample is taken after the owned server exits and still enforces wall, free-space,
+owned-byte, and surviving-harness RSS limits. Qdrant remains in the harness process group, while internal TERM and
+any forced KILL are PID/start-time checked separately. The comparison is not
+computed until the guard summary, initial-ready storage size, client closure,
+server exit and log closure are final; a forced exit, prior exit, identity drift,
+or failed cleanup invalidates the measurement.
+A guard failure observed during restart cleanup is sticky and vetoes any
+replacement launch; the replacement is monitor-owned again before publication.
 This comparison does not replace or retroactively pass the historical 2.5M x 8D
 M5 contract; fold and restart RSS remain separately reported there.
 
@@ -168,14 +186,14 @@ taskset -c 0-5 python benchmarks/vector_db_compare/minima_cohere_native_diagnost
   --freeze "$SQ8_PLAN" --run-dir "$SQ8_RUN" \
   --dataset "$COHERE_EXPORT" --service-bin "$TREE_SERVICE" \
   --product-commit "$TREE_COMMIT" --serving "$SERVING_JSON" \
-  --rows 500000 --rss-only \
+  --rows 500000 --rss-only --ef-construction 32 \
   --query-mode quantized_rerank --quantized-index-name minima_sq8
 SQ8_PLAN_SHA=$(sha256sum "$SQ8_PLAN" | awk '{print $1}')
 taskset -c 0-5 python benchmarks/vector_db_compare/minima_cohere_native_diagnostic.py \
   --run "$SQ8_PLAN" --expected-plan-sha256 "$SQ8_PLAN_SHA" \
   --run-dir "$SQ8_RUN" --dataset "$COHERE_EXPORT" \
   --service-bin "$TREE_SERVICE" --product-commit "$TREE_COMMIT" \
-  --serving "$SERVING_JSON" --rows 500000 --rss-only \
+  --serving "$SERVING_JSON" --rows 500000 --rss-only --ef-construction 32 \
   --query-mode quantized_rerank --quantized-index-name minima_sq8
 ```
 
@@ -183,17 +201,22 @@ taskset -c 0-5 python benchmarks/vector_db_compare/minima_cohere_native_diagnost
 run directory, database, or service lifetime.
 
 Pass that artifact as `--treedb-sq8-artifact SQ8_RUN/rss.json` when freezing and
-running the Qdrant harness. `comparison.json` remains the original FP32
-TreeDB-versus-FP32-Qdrant decision. The additional
+running the Qdrant harness. `comparison.json` remains the new mirror-bounded FP32
+TreeDB-versus-FP32-Qdrant control for these exact current artifacts. The additional
 `three-arm-comparison.json` nests that decision unchanged and reports SQ8
 TreeDB-versus-FP32 Qdrant only as a quality-matched, different-representation
 observation. The SQ8 row has no `accept`/`investigate` state and cannot revise the
 historical M5 result. The two TreeDB arms and Qdrant must each use a distinct
 owned process and backend directory.
 
-For query-path attribution, run the same SQ8 plan without `--rss-only` in its
-own fresh directory. After the all-rows coordinate is frozen and before any
-mutation, that full diagnostic retains one warm batch plus five order-balanced
+For query-path attribution, freeze a separate full SQ8 plan in its own fresh
+directory and pass the prior SQ8 RSS artifact plus its external hash using
+`--all-rows-sq8-rss-artifact` and
+`--expected-all-rows-sq8-rss-artifact-sha256`. The full plan consumes the prior
+all-row decision and starts a graph owner whose PID/start-time differs from the
+RSS source. It revalidates that one coordinate on both fixed sets and never
+reruns the all-row grid. After that revalidation and before any mutation, the
+full diagnostic retains one warm batch plus five order-balanced
 repetitions of native-v2 FP32 and native-v3 SQ8 calls against the same
 code-declared graph owner. Each arm is a separately bracketed complete batch
 over the same queries, and first-arm order alternates by repetition. The paired
@@ -214,6 +237,9 @@ measured runtime commit and harness commit/blobs, and identify their dependency
 order. A runtime change, harness change, changed dataset digest, or materially
 different environment invalidates affected comparisons. Old diagnostic results
 remain historical; never relabel them as measurements of a new runtime head.
+At both freeze and run, each Q5 producer independently rejects tracked or
+untracked changes anywhere in the benchmark or Python-client harness trees;
+the clean-source decision is not delegated to an imported runner or client.
 
 An artifact-only descendant may carry retained evidence only after verifying its
 diff contains exclusively the declared evidence paths, no runtime/harness changes,
@@ -223,3 +249,146 @@ the descendant's different tree hash. Explicitly report missing dedicated runner
 persistent cache, or durable artifact storage as
 `INFRASTRUCTURE_UNAVAILABLE: <runner|cache|storage>: <reason>` with the actual
 fallback. Local focused smoke tests are not retained performance acceptance.
+
+For Q5's bounded ordinary-mutable controls, keep the existing Go validator
+boundary intact. Completed exact bounded evidence uses `native_runtime` as an
+application-lifecycle control. Completed SQ8 bounded evidence uses the pinned
+quantized plan and `column_graph`. Those two bounded rows are not a
+representation-matched exact-versus-SQ8 comparison; same-graph query-only
+attribution comes from the full diagnostic's paired native-v2/native-v3 packet.
+Do not relax the bounded exact validator to admit `column_graph` under the old
+schema.
+
+### Q5 packet analysis
+
+Freeze the evidence consumer before collection. A Q5 packet uses schema
+`treedb_cohere_q5_packet/v1` and is itself pinned by an external SHA-256. Its
+`candidate_commit` is the exact 40-character merged runtime/harness commit and
+`declared_quality_outcome` is `pass` or `miss`. `tradeoff_review` uses schema
+`treedb_cohere_q5_tradeoff_review/v1` and records `disposition`, nonempty
+`rationale`, and nullable `authority`. A passing quality result may declare
+`no_material_regression`, `unaccepted_material_regression`, or
+`owner_accepted_material_regression`; the last requires an explicit authority.
+A quality miss must use `not_reached_after_quality_miss`. The packet directory is an
+immutable inventory: every entry in `files` has exactly `path`, `sha256`, and
+`bytes`; resolved entries must be regular files, paths are relative descendants;
+and each path and digest has exactly
+one semantic role.
+
+The `dataset` map has `manifest`, `documents`, `queries`, and `truth`. The
+`inputs` map has `bounded_validator_binary`, `bounded_sq8_plan`,
+`treedb_service_binary`, `serving`, and `qdrant_binary`; each is a distinct
+inventory role. Native plans must bind the exact service and serving hashes,
+and the Qdrant plan must bind the exact Qdrant executable hash. The consumer
+also resolves the candidate's harness/product Git tree IDs and requires both
+Go executables to report Go 1.26, `-trimpath`, the exact candidate VCS revision,
+and `vcs.modified=false`; their parsed build settings are retained in the
+analysis. The matched RSS contract also freezes the CPU model and sorted
+feature flags in addition to affinity, cgroup, memory, platform, and Go runtime. The
+consumer refuses a dirty/different harness or Python-client tree and records
+the candidate SHA-256 of every local module actually imported by the analysis. The
+`plans` map retains the exact frozen plans for `smoke_exact`, `smoke_sq8`,
+`treedb_fp32_rss`, `treedb_sq8_rss`, `qdrant_fp32_rss`, and
+`full_sq8_events`. The consumer checks native event plans byte-semantically and
+binds each RSS artifact back to its plan. The Qdrant plan must be the guarded
+three-arm schema, retain both TreeDB input hashes, and copy both hashes into
+the Qdrant artifact provenance. It also fixes 500K rows, 200 queries, 768
+dimensions, top-10, 256-row ingestion, the complete control grid, and the exact
+initial-upload and production HNSW/optimizer configurations; the artifact must
+repeat those four configurations byte-semantically. The
+`arms` map has exactly:
+
+```text
+smoke_exact smoke_sq8 bounded_exact bounded_sq8
+treedb_fp32_rss treedb_sq8_rss qdrant_fp32_rss
+fp32_comparison three_arm_comparison full_sq8_events command_receipts
+```
+
+Build both Go inputs once from the clean candidate checkout into the durable
+campaign root, never into the source tree. Set `GO` to the absolute Go 1.26
+executable and `Q5_ROOT` to the absolute durable campaign root; use that same
+tool for the build and metadata inspection:
+
+```sh
+GOWORK=off "$GO" build -trimpath -o "$Q5_ROOT/bin/treedb-document-service" \
+  ./cmd/treedb-document-service
+GOWORK=off "$GO" build -trimpath -o "$Q5_ROOT/bin/treedb-rag-benchmark" \
+  ./TreeDB/cmd/treedb_rag_benchmark
+"$GO" version -m "$Q5_ROOT/bin/treedb-document-service"
+"$GO" version -m "$Q5_ROOT/bin/treedb-rag-benchmark"
+```
+
+Do not collect if either metadata record lacks the candidate revision,
+`vcs.modified=false`, or `-trimpath=true`; the packet consumer enforces the
+same boundary independently.
+
+`command_receipts` uses schema `treedb_cohere_q5_command_receipts/v1`, repeats
+the candidate and dataset hashes, and has one `runs` entry for every arm above
+except the two comparison files and the receipt itself. Every entry records
+`run_argv`, absolute `cwd`, the complete controlled environment, four-digit
+octal `umask`, UTC start/end timestamps, exit code, output SHA-256, and nullable
+freeze fields. Plan-backed arms additionally require `freeze_argv`, a zero
+freeze exit, and their plan SHA-256; bounded arms set those three fields to
+null and must record the exact inventoried Go validator command, artifact path,
+candidate commit, and, for SQ8, quantized plan path and external plan hash. A
+plan-backed freeze and run use the same closed, role-specific option grammar
+outside `--freeze` versus `--run` plus `--expected-plan-sha256`. Both must use
+an exact `taskset -c/--cpu-list` prefix matching the plan's observed affinity,
+then the recorded Python interpreter and reviewed script; duplicate, unknown,
+or inapplicable options are rejected. Each command explicitly names every workload control: dataset, run directory,
+row/mode/construction settings, reserved ports, and time controls. Native arms
+must name the inventoried service and serving configuration; the full SQ8 arm
+must name the inventoried prior SQ8 artifact and its hash; the Qdrant arm must
+name the inventoried Qdrant binary and both TreeDB artifacts. The plan paths and
+content hashes must resolve back to those unique packet roles, and each plan's
+owned output path must be the inventoried result. Qdrant's top-level dataset,
+workload, control grid, platform, and CPU-affinity values must exactly equal its
+matched-RSS comparison contract. Run argv must consume the plan
+with its exact external hash. API-key-bearing or content-identical
+outside-inventory substitutions are not valid campaign commands. Use a deliberate
+`env -i` wrapper and explicitly record even empty `GOGC`,
+`GOMEMLIMIT`, and `GODEBUG`; the consumer requires the runtime, locale,
+temporary-directory, hashing, and BLAS controls rather than inheriting an
+unknown shell. Set `TZ=UTC`, `LANG=C.UTF-8`, `LC_ALL=C.UTF-8`, `GOWORK=off`,
+`PYTHONHASHSEED=0`, `PYTHONDONTWRITEBYTECODE=1`, both BLAS thread variables to
+`1`, and a positive explicit `GOMAXPROCS`; each plan must repeat the recorded Go
+runtime and BLAS values. All runs exit zero except a declared, structurally valid frozen
+quality miss, whose `full_sq8_events` producer exits one. The receipt preserves
+reproducibility; the consumer separately validates the output semantics and
+never treats the receipt as correctness evidence.
+
+Set `PYTHON` to the absolute interpreter used by the frozen plans. Run the
+consumer once into a new output path:
+
+```sh
+Q5_PACKET_SHA=$(sha256sum "$Q5_PACKET" | awk '{print $1}')
+PATH="$(dirname "$GO"):/usr/bin:/bin" \
+PYTHONPATH=benchmarks/vector_db_compare:clients/python/treedb_client/src \
+  OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 \
+  "$PYTHON" benchmarks/vector_db_compare/minima_cohere_q5_analyze.py \
+  --packet "$Q5_PACKET" --expected-packet-sha256 "$Q5_PACKET_SHA" \
+  --output "$Q5_ANALYSIS"
+```
+
+The consumer returns `qualified`, `valid_unqualified`, or `invalid`. Passing
+quality is not sufficient for `qualified`: the reviewed tradeoff must be either
+non-material or explicitly accepted by the issue owner. It
+independently reconstructs fixed-set quality from retained ordered IDs and the
+pinned truth for TreeDB FP32, TreeDB SQ8, and Qdrant FP32; it also requires the
+Qdrant exact reference to preserve canonical truth order. It verifies the one
+prior SQ8 RSS coordinate was consumed on a fresh
+owner whose identity is the first retained service lifetime without an all-row
+retune, rebuilds every filtered selection in producer order, revalidates the
+pinned RSS artifact against the full plan, binds paired calls to the locked graph
+owner, and validates exact smoke/full ledgers for construction, selection, paired
+batches, fixed curves, overlap (as a concurrency-order-independent multiset), typed-empty
+lifecycle, reopen curves, and final verification. It cross-binds paired log rows
+to their embedded artifact, validates paired native evidence with median/MAD
+aggregation, recomputes every retained paired-call ID, recall/NDCG, canonical
+FP32 score and score/ID order from the frozen vectors, and
+recomputes both RSS comparisons. `valid_unqualified` is only the exact typed
+quality-miss path before timing/mutation, including the exact ordered failed-cohort
+error; cleanup, guard, provenance, schema, an unknown/additional public call, or
+evidence defects are `invalid`. Final state is reported only as the reviewed
+producer's exhaustive semantic attestation with
+`independently_recomputed:false` and `digest_claim:false`.
