@@ -891,7 +891,9 @@ Version-3 consumers decode each JSON document before exposure, require unique
 exactly named top-level fields and an `id` equal to the corresponding
 section-102 ID, reject response-only/write-only or unknown top-level fields,
 and require a finite, dimension-matched `embedding` exactly when
-return-embedding is true.
+return-embedding is true. When that embedding is present, consumers recompute
+the FP32 cosine score and require it to match the result-envelope score within
+`1e-6` absolute tolerance.
 
 Section 134 version 1 contains exactly 38 minimal uint64 uvarints, in this order:
 

@@ -617,6 +617,8 @@ func TestDenseV3ResultDocumentsMatchRequest(t *testing.T) {
 	withoutEmbedding := DenseVectorSearchRequest{Query: []float32{1, 0}}
 	withEmbedding := withoutEmbedding
 	withEmbedding.ReturnEmbedding = true
+	zeroQuery := withEmbedding
+	zeroQuery.Query = []float32{0, 0}
 	filtered := withoutEmbedding
 	filtered.Filter = &documentservice.Filter{Operator: "AND", Conditions: []documentservice.Filter{
 		{Field: "meta.tenant", Operator: "==", Value: "a"},
@@ -628,7 +630,12 @@ func TestDenseV3ResultDocumentsMatchRequest(t *testing.T) {
 		valid   bool
 	}{
 		"omitted embedding":     {DenseVectorSearchResult{ID: []byte("a"), Document: []byte(`{"id":"a","content":"alpha","meta":{"kind":"test"}}`)}, withoutEmbedding, true},
-		"requested embedding":   {DenseVectorSearchResult{ID: []byte("a"), Document: []byte(`{"id":"a","embedding":[1,0]}`)}, withEmbedding, true},
+		"requested embedding":   {DenseVectorSearchResult{ID: []byte("a"), Score: 1 - denseCosineScoreTolerance/2, Document: []byte(`{"id":"a","embedding":[1,0]}`)}, withEmbedding, true},
+		"orthogonal embedding":  {DenseVectorSearchResult{ID: []byte("a"), Score: 0, Document: []byte(`{"id":"a","embedding":[0,1]}`)}, withEmbedding, true},
+		"mismatched score":      {DenseVectorSearchResult{ID: []byte("a"), Score: 0, Document: []byte(`{"id":"a","embedding":[1,0]}`)}, withEmbedding, false},
+		"outside tolerance":     {DenseVectorSearchResult{ID: []byte("a"), Score: 1 - 2*denseCosineScoreTolerance, Document: []byte(`{"id":"a","embedding":[1,0]}`)}, withEmbedding, false},
+		"zero query":            {DenseVectorSearchResult{ID: []byte("a"), Score: 0, Document: []byte(`{"id":"a","embedding":[1,0]}`)}, zeroQuery, false},
+		"zero embedding":        {DenseVectorSearchResult{ID: []byte("a"), Score: 0, Document: []byte(`{"id":"a","embedding":[0,0]}`)}, withEmbedding, false},
 		"matching filter":       {DenseVectorSearchResult{ID: []byte("a"), Document: []byte(`{"id":"a","meta":{"tenant":"a","rank":2}}`)}, filtered, true},
 		"mismatched filter":     {DenseVectorSearchResult{ID: []byte("a"), Document: []byte(`{"id":"a","meta":{"tenant":"b","rank":2}}`)}, filtered, false},
 		"missing filter field":  {DenseVectorSearchResult{ID: []byte("a"), Document: []byte(`{"id":"a","meta":{"tenant":"a"}}`)}, filtered, false},
@@ -1535,6 +1542,8 @@ func TestDenseV3ResultDecodeErrorsPreserveOwnedProofs(t *testing.T) {
 		"duplicate ID":           {[]byte(`{"id":"b","id":"a"}`), false, false},
 		"hidden embedding":       {[]byte(`{"id":"a","embedding":[1,0],"embedding":null}`), false, false},
 		"case-variant embedding": {[]byte(`{"id":"a","Embedding":[1,0]}`), false, false},
+		"mismatched score":       {[]byte(`{"id":"a","embedding":[0,1]}`), true, false},
+		"zero embedding":         {[]byte(`{"id":"a","embedding":[0,0]}`), true, false},
 	} {
 		t.Run("document "+name, func(t *testing.T) {
 			request := baseRequest

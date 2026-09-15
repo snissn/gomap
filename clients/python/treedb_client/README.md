@@ -135,6 +135,9 @@ client also evaluates the exact requested filter against every decoded native or
 HTTP document; producer work counts alone do not prove result membership.
 Native v3 document JSON rejects duplicate exact top-level fields before model
 conversion, matching the Go consumer contract.
+When embedding echo is requested on the selected quantized path, native v3 and
+HTTP consumers also recompute the FP32 cosine score and bind it to the returned
+embedding within the documented rounding tolerance.
 Dense HTTP proof-bearing envelopes also reject duplicate keys; unrelated
 envelope extension fields retain their existing compatibility. Retained proofs
 remain valid after later requests, mutations and connection close. GetMany's ordinary list return

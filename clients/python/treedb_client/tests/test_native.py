@@ -97,6 +97,20 @@ class NativeCodecTests(unittest.TestCase):
                     return_embedding=True,
                 )
             self.assertEqual(embedded_response.documents[0].embedding, [1.0, 0.0])
+            for name, document in (
+                ("mismatched score", b'{"id":"a","embedding":[0,1]}'),
+                ("zero vector", b'{"id":"a","embedding":[0,0]}'),
+            ):
+                with self.subTest(native_embedding_score=name), \
+                     mock.patch.object(client._native, "command", return_value=response_body(document)), \
+                     self.assertRaisesRegex(TreeDBProtocolError, "scores do not match returned embeddings") as caught:
+                    client.query_by_embedding(
+                        "a", [1, 0], 1, query_mode="quantized_rerank",
+                        quantized_index_name="embedding.scalar_u8.public", index_info=info,
+                        return_embedding=True,
+                    )
+                self.assertIsNotNone(caught.exception.dense_work)
+                self.assertIsNotNone(caught.exception.score_plane)
             filtered_work_values = list(work_values)
             filtered_work_values[1] |= (1 << 3) | (1 << 4)
             filtered_work_values[4] = 1

@@ -15,6 +15,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/collections"
 	"github.com/snissn/gomap/TreeDB/documentservice"
 	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
+	"github.com/snissn/gomap/TreeDB/internal/vectorops"
 )
 
 const (
@@ -285,6 +286,9 @@ func denseV3ResultDocumentsMatchRequest(results []DenseVectorSearchResult, reque
 					return false
 				}
 			}
+			if !denseV3EmbeddingScoreMatches(request.Query, document.Embedding, result.Score) {
+				return false
+			}
 		}
 		matches, err := request.Filter.MatchesDocument(document)
 		if err != nil || !matches {
@@ -292,6 +296,29 @@ func denseV3ResultDocumentsMatchRequest(results []DenseVectorSearchResult, reque
 		}
 	}
 	return true
+}
+
+func denseV3EmbeddingScoreMatches(query, embedding []float32, score float64) bool {
+	if len(query) == 0 || len(query) != len(embedding) || math.IsNaN(score) || math.IsInf(score, 0) {
+		return false
+	}
+	var queryNorm, embeddingNorm float64
+	for i := range query {
+		q, d := float64(query[i]), float64(embedding[i])
+		if math.IsNaN(q) || math.IsInf(q, 0) || math.IsNaN(d) || math.IsInf(d, 0) {
+			return false
+		}
+		queryNorm += q * q
+		embeddingNorm += d * d
+	}
+	if queryNorm == 0 || embeddingNorm == 0 {
+		return false
+	}
+	distance := vectorops.CosineDistanceFloat32Normalized(
+		query, embedding, 1/math.Sqrt(queryNorm), 1/math.Sqrt(embeddingNorm),
+	)
+	expected := 1 - float64(distance)
+	return math.Abs(score-expected) <= denseCosineScoreTolerance
 }
 
 func decodeDenseV3ResultDocument(raw []byte) (documentservice.Document, bool) {

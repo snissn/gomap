@@ -504,6 +504,14 @@ class TreeDBClient:
                     dense_work=work,
                     score_plane=score_plane,
                 )
+            if version == 3 and return_embedding and not _dense_embedding_scores_match_query(
+                documents, query_embedding
+            ):
+                raise TreeDBProtocolError(
+                    "native dense scores do not match returned embeddings",
+                    dense_work=work,
+                    score_plane=score_plane,
+                )
             if version == 3 and not all(
                 _document_matches_filter(document, normalized_filter) for document in documents
             ):
@@ -549,6 +557,7 @@ class TreeDBClient:
                     index=index,
                     top_k=top_k_value,
                     ef_search=ef_search_value or 0,
+                    query_embedding=request["query_embedding"],
                     query_dimension=len(request["query_embedding"]),
                     quantized_index_name=quantized_index_name,
                     quantized_rerank_candidates=rerank_value,
@@ -1153,6 +1162,7 @@ def _validate_http_dense_quantized_response(
     index: str,
     top_k: int,
     ef_search: int,
+    query_embedding: Sequence[float],
     query_dimension: int,
     quantized_index_name: str,
     quantized_rerank_candidates: int,
@@ -1195,6 +1205,7 @@ def _validate_http_dense_quantized_response(
         or not dense_cosine_scores_valid(document.score for document in response.documents)
         or not _dense_http_results_ordered(response.documents)
         or not _dense_document_embeddings_match(response.documents, return_embedding, query_dimension)
+        or (return_embedding and not _dense_embedding_scores_match_query(response.documents, query_embedding))
         or response.index.dimension != query_dimension
         or type(response.index.generation) is not int
         or not 0 < response.index.generation < 1 << 64
@@ -1453,6 +1464,41 @@ def _dense_document_embeddings_match(
         and all(math.isfinite(value) for value in document.embedding)
         for document in documents
     )
+
+
+def _dense_embedding_scores_match_query(
+    documents: Sequence[Document], query_embedding: Sequence[float]
+) -> bool:
+    def as_float32(value: Any) -> float:
+        return struct.unpack("<f", struct.pack("<f", float(value)))[0]
+
+    try:
+        query = [as_float32(value) for value in query_embedding]
+    except (OverflowError, TypeError, ValueError, struct.error):
+        return False
+    query_norm = math.fsum(value * value for value in query)
+    if not query or not math.isfinite(query_norm) or query_norm == 0:
+        return False
+    query_inv_norm = 1 / math.sqrt(query_norm)
+    for document in documents:
+        if document.embedding is None or document.score is None or len(document.embedding) != len(query):
+            return False
+        try:
+            embedding = [as_float32(value) for value in document.embedding]
+        except (OverflowError, TypeError, ValueError, struct.error):
+            return False
+        embedding_norm = math.fsum(value * value for value in embedding)
+        if not math.isfinite(embedding_norm) or embedding_norm == 0:
+            return False
+        embedding_inv_norm = 1 / math.sqrt(embedding_norm)
+        squared = math.fsum(
+            (query[i] * query_inv_norm - embedding[i] * embedding_inv_norm) ** 2
+            for i in range(len(query))
+        )
+        expected = 1 - as_float32(0.5 * squared)
+        if not math.isfinite(document.score) or abs(document.score - expected) > 1e-6:
+            return False
+    return True
 
 
 def _decode_native_dense_document_json(payload: bytes, *, reject_duplicates: bool) -> Any:

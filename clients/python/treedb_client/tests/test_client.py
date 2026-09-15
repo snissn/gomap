@@ -37,6 +37,7 @@ from treedb_client import (
 )
 from treedb_client.client import (
     _dense_document_embeddings_match,
+    _dense_embedding_scores_match_query,
     _dense_http_results_ordered,
     _dense_work_requires_score_plane,
     _is_legacy_scalar_u8_v1_index,
@@ -187,6 +188,28 @@ class TreeDBClientTests(unittest.TestCase):
         self.assertFalse(_dense_document_embeddings_match(
             [Document(id="a", embedding=[1.0, 0.0], embedding_f32_le_b64="AACAPwAAAAA=")], True, 2,
         ))
+
+    def test_dense_embedding_scores_match_query(self) -> None:
+        self.assertTrue(_dense_embedding_scores_match_query([
+            Document(id="same", embedding=[1, 0], score=1),
+            Document(id="orthogonal", embedding=[0, 1], score=0),
+            Document(id="opposite", embedding=[-1, 0], score=-1),
+        ], [1, 0]))
+        self.assertTrue(_dense_embedding_scores_match_query([
+            Document(id="rounded", embedding=[1, 0], score=1 - 0.5e-6),
+        ], [1, 0]))
+        for name, document in (
+            ("mismatched score", Document(id="a", embedding=[1, 0], score=0)),
+            ("outside tolerance", Document(id="a", embedding=[1, 0], score=1 - 2e-6)),
+            ("zero embedding", Document(id="a", embedding=[0, 0], score=0)),
+            ("non-FP32 embedding", Document(id="a", embedding=[3.5e38, 0], score=1)),
+            ("missing score", Document(id="a", embedding=[1, 0])),
+        ):
+            with self.subTest(name=name):
+                self.assertFalse(_dense_embedding_scores_match_query([document], [1, 0]))
+        self.assertFalse(_dense_embedding_scores_match_query([
+            Document(id="a", embedding=[1, 0], score=0),
+        ], [0, 0]))
 
     def test_selected_quantized_index_requires_legacy_calibration(self) -> None:
         selected = QuantizedIndexInfo(name="embedding.scalar_u8.public")
@@ -761,6 +784,10 @@ class TreeDBClientTests(unittest.TestCase):
             wrong_dimension_embedding["documents"][0]["embedding"] = [1]
             nonfinite_embedding = copy.deepcopy(embedded_payload)
             nonfinite_embedding["documents"][0]["embedding"] = [float("nan"), 0]
+            mismatched_embedding_score = copy.deepcopy(embedded_payload)
+            mismatched_embedding_score["documents"][0]["embedding"] = [0, 1]
+            zero_embedding = copy.deepcopy(embedded_payload)
+            zero_embedding["documents"][0]["embedding"] = [0, 0]
             compact_embedding = copy.deepcopy(payload)
             compact_embedding["documents"][0]["embedding_f32_le_b64"] = "AACAPwAAAAA="
             for name, candidate, return_embedding in (
@@ -768,6 +795,8 @@ class TreeDBClientTests(unittest.TestCase):
                 ("missing", payload, True),
                 ("wrong dimension", wrong_dimension_embedding, True),
                 ("nonfinite", nonfinite_embedding, True),
+                ("mismatched score", mismatched_embedding_score, True),
+                ("zero vector", zero_embedding, True),
                 ("write-only compact", compact_embedding, False),
             ):
                 with self.subTest(embedding_echo=name), \
