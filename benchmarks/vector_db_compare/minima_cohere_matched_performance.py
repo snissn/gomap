@@ -263,7 +263,9 @@ def guard_qdrant_resources(run, started, cancel, failures):
             try:
                 check_qdrant_resources(run, started)
             except BaseException as exc:
-                failures.append(f"resource guard: {exc}")
+                failure = f"resource guard: {exc}"
+                run.record_resource_failure(failure)
+                failures.append(failure)
         if failures:
             with run.resource_lock:
                 process = run.process
@@ -960,7 +962,6 @@ def run_qdrant(plan, run_dir):
                 check_qdrant_resources(run, started_at)
             except BaseException as exc:
                 lifecycle_failures.append(f"final live resource guard: {type(exc).__name__}: {exc}")
-            run.cleaning_up = True
             try:
                 cleanup = run.cleanup_owned()
             except BaseException as exc:

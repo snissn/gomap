@@ -1,5 +1,6 @@
 """Small fail-closed checks; no service, protected holdout or corpus collection."""
 import copy
+import subprocess
 import tempfile
 from pathlib import Path
 from types import SimpleNamespace
@@ -348,15 +349,40 @@ class NativeCohereDiagnosticTests(unittest.TestCase):
     def test_diagnostic_rejects_superset_exports_before_reading_payloads(self):
         with tempfile.TemporaryDirectory() as directory:
             dataset = Path(directory)
-            args = SimpleNamespace(dataset=dataset, rows=500000)
+            args = SimpleNamespace(dataset=dataset, rows=500000, product_commit="a" * 40)
             for rows, queries in ((500001, 200), (500000, 201)):
                 with self.subTest(rows=rows, queries=queries):
                     manifest = {"dimensions": 768, "top_k": 10, "exact_train_query_overlap": 0,
                                 "rows": rows, "query_count": queries}
                     (dataset / "manifest.json").write_bytes(diagnostic.canonical(manifest))
-                    with patch.object(diagnostic.existing, "repository_commit", return_value="a" * 40):
+                    with patch.object(diagnostic, "producer_harness_commit", return_value="a" * 40):
                         with self.assertRaisesRegex(ValueError, "exactly 500000 exported rows and 200 queries"):
                             diagnostic.prepare(args)
+
+    def test_producer_source_identity_does_not_trust_imported_checker(self):
+        dirty = Mock(
+            returncode=0,
+            stdout=" M clients/python/treedb_client/src/treedb_client/client.py\n",
+        )
+        revision = Mock(returncode=0, stdout="a" * 40 + "\n")
+        with patch.object(diagnostic.existing, "repository_commit",
+                          return_value="a" * 40) as imported_checker, \
+                patch.object(diagnostic.subprocess, "run",
+                             side_effect=[dirty, revision]):
+            with self.assertRaisesRegex(RuntimeError, "clean committed harness"):
+                diagnostic.producer_harness_commit(Path("/candidate"), "a" * 40)
+        imported_checker.assert_not_called()
+
+        clean = Mock(returncode=0, stdout="")
+        revision = Mock(returncode=0, stdout="b" * 40 + "\n")
+        with patch.object(diagnostic.subprocess, "run", side_effect=[clean, revision]):
+            with self.assertRaisesRegex(RuntimeError, "differs from the candidate"):
+                diagnostic.producer_harness_commit(Path("/candidate"), "a" * 40)
+
+        with patch.object(diagnostic.subprocess, "run",
+                          side_effect=subprocess.TimeoutExpired("git", 30)):
+            with self.assertRaisesRegex(RuntimeError, "source identity is unavailable"):
+                diagnostic.producer_harness_commit(Path("/candidate"), "a" * 40)
 
     def test_real_dimension_independent_oracle_and_scalar_membership(self):
         vectors = np.zeros((16, 768), dtype=np.float32)

@@ -191,7 +191,7 @@ class MatchedPerformanceTest(unittest.TestCase):
         guarded = SimpleNamespace(
             process=process, server_pid=17, process_identity="owned",
             server_pgid=19, harness_pgid=19, cleaning_up=False,
-            resource_lock=threading.Lock(),
+            resource_lock=threading.Lock(), record_resource_failure=mock.Mock(),
         )
         failures = []
         with mock.patch.object(subject, "check_qdrant_resources", side_effect=RuntimeError("over")), \
@@ -200,6 +200,7 @@ class MatchedPerformanceTest(unittest.TestCase):
             cancel = CancelAfterThreeChecks()
             subject.guard_qdrant_resources(guarded, 0, cancel, failures)
         self.assertEqual((cancel.calls, failures), (1, ["resource guard: over"]))
+        guarded.record_resource_failure.assert_called_once_with("resource guard: over")
         process.terminate.assert_called_once()
 
         tree_process = mock.Mock(pid=18)
@@ -293,7 +294,6 @@ class MatchedPerformanceTest(unittest.TestCase):
         self.assertIn("launch failed", result["failure"])
         self.assertIn("resource_guard", construct.call_args.args[0])
         fake_run.cleanup_owned.assert_called_once_with()
-        self.assertTrue(fake_run.cleaning_up)
         self.assertEqual(resources.call_count, 2)
 
     def test_qdrant_constructor_failure_retains_a_result_directory(self):

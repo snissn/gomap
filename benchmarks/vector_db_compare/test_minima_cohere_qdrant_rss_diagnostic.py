@@ -183,6 +183,38 @@ def sq8_request(query=0):
 
 
 class CohereQdrantRSSDiagnosticTests(unittest.TestCase):
+    def test_producer_source_identity_does_not_trust_imported_checker(self):
+        dirty = MagicMock(
+            returncode=0,
+            stdout="?? benchmarks/vector_db_compare/shadow_runner.py\n",
+        )
+        revision = MagicMock(returncode=0, stdout="a" * 40 + "\n")
+        with patch.object(qdrant_rss.native.existing, "repository_commit",
+                          return_value="a" * 40) as imported_checker, \
+                patch.object(qdrant_rss.subprocess, "run",
+                             side_effect=[dirty, revision]):
+            with self.assertRaisesRegex(RuntimeError, "clean committed harness"):
+                qdrant_rss.producer_harness_commit(Path("/candidate"))
+        imported_checker.assert_not_called()
+
+    def test_qdrant_tree_source_provenance_requires_one_candidate(self):
+        head = "a" * 40
+        trees = {path: "tree-" + path for path in qdrant_rss.HARNESS_TREE_PATHS}
+        tree = {"provenance": {
+            "harness_commit": head, "product_commit": head, "harness_trees": trees,
+        }}
+        self.assertTrue(qdrant_rss.tree_source_provenance_valid(tree, head, trees))
+        mutations = {
+            "harness": {**tree["provenance"], "harness_commit": "b" * 40},
+            "product": {**tree["provenance"], "product_commit": "b" * 40},
+            "trees": {**tree["provenance"], "harness_trees": {}},
+        }
+        for name, provenance in mutations.items():
+            with self.subTest(name=name):
+                self.assertFalse(qdrant_rss.tree_source_provenance_valid(
+                    {"provenance": provenance}, head, trees,
+                ))
+
     def test_qdrant_storage_is_strictly_owned_by_the_run_directory(self):
         with tempfile.TemporaryDirectory() as temporary:
             run = Path(temporary) / "run"
@@ -603,6 +635,7 @@ class CohereQdrantRSSDiagnosticTests(unittest.TestCase):
             run.client_factory = object
             run.harness_pgid = 44
             run.resource_lock = threading.Lock()
+            run.resource_failure = None
             run.plan = {
                 "url": "http://127.0.0.1:6333", "qdrant_bin": str(Path(sys.executable).resolve()),
                 "qdrant_server_version": "1.19.0", "startup_timeout_s": 1, "poll_interval_s": 0,
@@ -654,6 +687,7 @@ class CohereQdrantRSSDiagnosticTests(unittest.TestCase):
             run.server_log_path = run.output / "qdrant.log"
             run.harness_pgid = 44
             run.resource_lock = threading.Lock()
+            run.resource_failure = None
             run.process = run.process_identity = run.process_command_identity = None
             run.server_pid = run.server_pgid = None
             run.plan = {
@@ -676,6 +710,7 @@ class CohereQdrantRSSDiagnosticTests(unittest.TestCase):
         run = qdrant_rss.Run.__new__(qdrant_rss.Run)
         run.resource_lock = threading.Lock()
         run.cleaning_up = False
+        run.resource_failure = None
         run.storage_path = Path("/owned/storage")
         run.client = run.process = run.process_identity = run.process_command_identity = object()
         run.server_pid = run.server_pgid = 7
@@ -687,7 +722,7 @@ class CohereQdrantRSSDiagnosticTests(unittest.TestCase):
 
         def launch(reuse_storage):
             self.assertTrue(reuse_storage)
-            self.assertTrue(run.cleaning_up)
+            self.assertFalse(run.cleaning_up)
             self.assertIsNone(run.process)
             self.assertIsNone(run.process_identity)
             self.assertIsNone(run.server_pgid)
@@ -697,6 +732,27 @@ class CohereQdrantRSSDiagnosticTests(unittest.TestCase):
             self.assertEqual(run.restart_server(), 123)
         run.cleanup_owned.assert_called_once_with()
         start.assert_called_once_with(True)
+        self.assertFalse(run.cleaning_up)
+
+    def test_restart_guard_failure_during_cleanup_vetoes_relaunch(self):
+        run = qdrant_rss.Run.__new__(qdrant_rss.Run)
+        run.resource_lock = threading.Lock()
+        run.cleaning_up = False
+        run.resource_failure = None
+        run.guard_summary = {"failure": None}
+        run.storage_path = Path("/owned/storage")
+
+        def clean_with_guard_failure():
+            run.cleaning_up = True
+            run.record_resource_failure("resource guard: over budget during shutdown")
+            return {"status": "clean", "failure": None}
+
+        run.cleanup_owned = MagicMock(side_effect=clean_with_guard_failure)
+        with patch.object(qdrant_rss.existing, "disk_bytes", return_value=123), \
+                patch.object(run, "_start_server") as start:
+            with self.assertRaisesRegex(RuntimeError, "refusing Qdrant restart"):
+                run.restart_server()
+        start.assert_not_called()
         self.assertFalse(run.cleaning_up)
 
     def test_owned_qdrant_rejects_nonzero_shutdown(self):

@@ -30,6 +30,7 @@ RESOURCE_GUARD = {
     "maximum_combined_rss_bytes": 24 << 30,
 }
 QDRANT_CREDENTIAL_ENV = ("QDRANT_API_KEY", "QDRANT__SERVICE__API_KEY")
+HARNESS_TREE_PATHS = ("benchmarks/vector_db_compare", "clients/python/treedb_client")
 
 
 def qdrant_point(document):
@@ -314,6 +315,40 @@ def validate_imports(source):
             raise ValueError("imported RSS dependency is outside the frozen source tree")
 
 
+def producer_harness_commit(source):
+    """Bind producer imports to one clean committed harness tree."""
+    # This must not delegate to native/existing: those imports are evidence
+    # dependencies whose cleanliness this top-level producer must establish.
+    try:
+        status = subprocess.run(
+            ["git", "status", "--porcelain", "--untracked-files=all", "--",
+             *HARNESS_TREE_PATHS],
+            cwd=source, text=True, capture_output=True, timeout=30, check=False,
+        )
+        revision = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=source, text=True,
+            capture_output=True, timeout=30, check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise RuntimeError("producer harness source identity is unavailable") from exc
+    commit = revision.stdout.strip()
+    if status.returncode or status.stdout:
+        raise RuntimeError("producer requires clean committed harness source trees")
+    if (revision.returncode or len(commit) != 40
+            or any(character not in "0123456789abcdef" for character in commit)):
+        raise RuntimeError("producer could not bind an exact harness commit")
+    return commit
+
+
+def tree_source_provenance_valid(tree, harness, harness_trees):
+    provenance = tree.get("provenance", {}) if isinstance(tree, dict) else {}
+    return (
+        provenance.get("harness_commit") == harness
+        and provenance.get("product_commit") == harness
+        and provenance.get("harness_trees") == harness_trees
+    )
+
+
 def validate_storage_containment(run_dir, storage_path):
     run_dir, storage_path = Path(run_dir).resolve(), Path(storage_path).resolve()
     if storage_path == run_dir or not storage_path.is_relative_to(run_dir):
@@ -324,7 +359,7 @@ def validate_storage_containment(run_dir, storage_path):
 def prepare(args):
     source = Path(__file__).resolve().parents[2]
     validate_imports(source)
-    harness = native.existing.repository_commit()
+    harness = producer_harness_commit(source)
     dataset, _, files, query_count = native.dataset_identity(args.dataset, 500000)
     tree, tree_raw = native.strict_json_object(
         args.treedb_artifact, "TreeDB RSS artifact", native.EVIDENCE_JSON_MAX_BYTES,
@@ -342,11 +377,9 @@ def prepare(args):
         raise RuntimeError(f"qdrant-client must be exactly {existing.CLIENT_VERSION}")
     affinity = sorted(os.sched_getaffinity(0))
     root_tree = lambda path: subprocess.check_output(
-        ["git", "rev-parse", "HEAD:" + path], cwd=source, text=True,
+        ["git", "rev-parse", harness + ":" + path], cwd=source, text=True,
     ).strip()
-    harness_trees = {path: root_tree(path) for path in (
-        "benchmarks/vector_db_compare", "clients/python/treedb_client",
-    )}
+    harness_trees = {path: root_tree(path) for path in HARNESS_TREE_PATHS}
     contract = comparison_contract(native.digest(dataset / "manifest.json"), files, affinity)
     construction = tree.get("construction_calibration_contract", {})
     construction_ef = construction.get("ef_construction")
@@ -360,8 +393,7 @@ def prepare(args):
             or type(construction_ef) is not int or construction_ef not in (32, 64, 96, 128)
             or not native.same_json(
                 construction, native.construction_calibration_contract(construction_ef))
-            or tree.get("provenance", {}).get("harness_commit") != harness
-            or not native.same_json(tree.get("provenance", {}).get("harness_trees"), harness_trees)):
+            or not tree_source_provenance_valid(tree, harness, harness_trees)):
         raise RuntimeError("TreeDB RSS artifact quality, contract, or harness provenance is not current")
     plan = {
         "schema": "treedb_cohere_qdrant_rss_plan/v4_guarded", "harness_commit": harness,
@@ -556,8 +588,9 @@ class Run:
                 try:
                     self.check_resources()
                 except BaseException as exc:
-                    self.resource_failure = f"resource guard: {type(exc).__name__}: {exc}"
-                    self.guard_summary["failure"] = self.resource_failure
+                    self.record_resource_failure(
+                        f"resource guard: {type(exc).__name__}: {exc}",
+                    )
             if self.resource_failure:
                 with self.resource_lock:
                     process = self.process
@@ -576,6 +609,14 @@ class Run:
                         process.terminate()
                         self.guard_termination_sent = True
                 return
+
+    def record_resource_failure(self, failure):
+        """Publish the first sticky guard failure under the launch/owner lock."""
+        with self.resource_lock:
+            if self.resource_failure is None:
+                self.resource_failure = failure
+                self.guard_summary["failure"] = failure
+            return self.resource_failure
 
     def raise_resource_failure(self):
         if self.resource_failure:
@@ -612,6 +653,10 @@ class Run:
                    QDRANT__STORAGE__STORAGE_PATH=str(self.storage_path))
         try:
             with self.resource_lock:
+                if self.resource_failure:
+                    raise RuntimeError(
+                        "refusing Qdrant launch after " + self.resource_failure,
+                    )
                 process = subprocess.Popen([self.plan["qdrant_bin"]], stdin=subprocess.DEVNULL,
                                            stdout=self.server_log, stderr=subprocess.STDOUT,
                                            cwd=self.output, env=env)
@@ -671,9 +716,16 @@ class Run:
                 raise RuntimeError(cleanup["failure"])
             shutdown_owned_bytes = existing.disk_bytes(self.storage_path)
             with self.resource_lock:
+                if self.resource_failure:
+                    raise RuntimeError(
+                        "refusing Qdrant restart after " + self.resource_failure,
+                    )
                 self.client = self.process = self.process_identity = self.process_command_identity = None
                 self.server_pid = self.server_pgid = None
                 self.server_log = None
+                # The old owner is gone and the ownership tuple is empty. Re-arm
+                # monitoring before publishing any replacement process.
+                self.cleaning_up = False
             self._start_server(True)
             return shutdown_owned_bytes
         finally:
@@ -935,16 +987,17 @@ class Run:
                 try:
                     self.check_resources()
                 except BaseException as exc:
-                    self.resource_failure = f"final resource guard: {type(exc).__name__}: {exc}"
-                    self.guard_summary["failure"] = self.resource_failure
-            self.cleaning_up = True
+                    self.record_resource_failure(
+                        f"final resource guard: {type(exc).__name__}: {exc}",
+                    )
             cleanup = self.cleanup_owned()
             try:
                 self.check_resources()
             except BaseException as exc:
                 if self.resource_failure is None:
-                    self.resource_failure = f"cleanup resource guard: {type(exc).__name__}: {exc}"
-                    self.guard_summary["failure"] = self.resource_failure
+                    self.record_resource_failure(
+                        f"cleanup resource guard: {type(exc).__name__}: {exc}",
+                    )
             self.cancel.set()
             if monitor is not None:
                 monitor.join(timeout=5)

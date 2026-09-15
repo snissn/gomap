@@ -42,7 +42,11 @@ owned service; it does not retry or weaken caps. Whole-run guards are approximat
 one-second samples, not hard filesystem quotas. A dedicated runner is unavailable:
 collection uses a serialized quiet window on the shared workstation.
 
-Freeze with a clean reviewed harness checkout and unmodified product binary:
+Freeze with a clean reviewed harness checkout and unmodified product binary.
+Both the native and Qdrant producers independently reject tracked or untracked
+changes beneath `benchmarks/vector_db_compare` and `clients/python/treedb_client`
+at freeze and run time; this attestation does not trust an imported runner or
+client module to certify its own bytes:
 
 ```sh
 python benchmarks/vector_db_compare/minima_cohere_native_diagnostic.py \

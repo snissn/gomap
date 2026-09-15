@@ -156,6 +156,8 @@ any forced KILL are PID/start-time checked separately. The comparison is not
 computed until the guard summary, initial-ready storage size, client closure,
 server exit and log closure are final; a forced exit, prior exit, identity drift,
 or failed cleanup invalidates the measurement.
+A guard failure observed during restart cleanup is sticky and vetoes any
+replacement launch; the replacement is monitor-owned again before publication.
 This comparison does not replace or retroactively pass the historical 2.5M x 8D
 M5 contract; fold and restart RSS remain separately reported there.
 
@@ -235,6 +237,9 @@ measured runtime commit and harness commit/blobs, and identify their dependency
 order. A runtime change, harness change, changed dataset digest, or materially
 different environment invalidates affected comparisons. Old diagnostic results
 remain historical; never relabel them as measurements of a new runtime head.
+At both freeze and run, each Q5 producer independently rejects tracked or
+untracked changes anywhere in the benchmark or Python-client harness trees;
+the clean-source decision is not delegated to an imported runner or client.
 
 An artifact-only descendant may carry retained evidence only after verifying its
 diff contains exclusively the declared evidence paths, no runtime/harness changes,

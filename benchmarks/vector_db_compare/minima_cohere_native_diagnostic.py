@@ -43,6 +43,7 @@ PAIRED_TIMING_QUERY_COUNT = 20
 GIB = 1 << 30
 FROZEN_JSON_MAX_BYTES = 1 << 20
 EVIDENCE_JSON_MAX_BYTES = 64 << 20
+HARNESS_TREE_PATHS = ("benchmarks/vector_db_compare", "clients/python/treedb_client")
 _SQ8_SCORE_PLANE_IDENTITY_FIELDS = {
     "reason", "quantized_index_name", "quantized_codec", "quantized_version", "quantized_config_hash",
 }
@@ -1333,17 +1334,19 @@ def prepare(args):
         query_mode, quantized_index_name, rss_only, args.rows,
         sq8_rss_artifact, expected_sq8_rss_sha256,
     )
-    harness = existing.repository_commit()
+    harness = producer_harness_commit(source, args.product_commit)
     dataset, manifest, files, query_count = dataset_identity(args.dataset, args.rows)
     if rss_only and args.rows != 500000:
         raise ValueError("matched RSS mode requires the frozen 500000-row export")
     existing.service_binary_build_provenance(args.service_bin, args.product_commit)
-    root_tree = lambda path: subprocess.check_output(["git", "rev-parse", "HEAD:" + path], cwd=source, text=True).strip()
+    root_tree = lambda path: subprocess.check_output(
+        ["git", "rev-parse", harness + ":" + path], cwd=source, text=True,
+    ).strip()
     product_tree = lambda path: subprocess.check_output(["git", "rev-parse", args.product_commit + ":" + path], cwd=source, text=True).strip()
     serving, serving_raw = strict_json_object(args.serving, "column_graph serving limits")
     plan = {"schema": SCHEMA, "qualification": "not_evaluated", "mode": "smoke" if args.rows == 512 else "diagnostic",
             "harness_commit": harness, "harness_source_sha256": digest(Path(__file__)),
-            "harness_trees": {path: root_tree(path) for path in ("benchmarks/vector_db_compare", "clients/python/treedb_client")},
+            "harness_trees": {path: root_tree(path) for path in HARNESS_TREE_PATHS},
             "product_commit": args.product_commit, "service_bin": str(args.service_bin.resolve()),
             "product_trees": {path: product_tree(path) for path in ("TreeDB", "cmd/treedb-document-service", "internal", "go.mod", "go.sum")},
             "service_sha256": digest(args.service_bin), "dataset": str(dataset),
@@ -1412,6 +1415,33 @@ def validate_imports(source):
                                 (existing.TreeDBClient, "clients/python/treedb_client/src")):
         if not Path(inspect.getfile(imported)).resolve().is_relative_to(source / directory):
             raise ValueError("imported runner/client is outside the frozen source tree")
+
+
+def producer_harness_commit(source, candidate_commit):
+    """Bind producer imports to one clean committed harness tree."""
+    # Keep this check in the top-level producer: an imported runner cannot
+    # independently attest that its own bytes match the recorded commit.
+    try:
+        status = subprocess.run(
+            ["git", "status", "--porcelain", "--untracked-files=all", "--",
+             *HARNESS_TREE_PATHS],
+            cwd=source, text=True, capture_output=True, timeout=30, check=False,
+        )
+        revision = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=source, text=True,
+            capture_output=True, timeout=30, check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise RuntimeError("producer harness source identity is unavailable") from exc
+    commit = revision.stdout.strip()
+    if status.returncode or status.stdout:
+        raise RuntimeError("producer requires clean committed harness source trees")
+    if (revision.returncode or len(commit) != 40
+            or any(character not in "0123456789abcdef" for character in commit)):
+        raise RuntimeError("producer could not bind an exact harness commit")
+    if commit != candidate_commit:
+        raise RuntimeError("producer harness HEAD differs from the candidate commit")
+    return commit
 
 
 def validate_shutdowns(lifetimes, expected_count):
