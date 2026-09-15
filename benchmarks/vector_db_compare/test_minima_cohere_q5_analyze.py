@@ -507,6 +507,9 @@ class Q5AnalyzeTest(unittest.TestCase):
                 final_scroll_state={"match": True}),
             "other mismatch": lambda row: row["backend_raw_evidence"]["treedb"]["events"][0].update(
                 match=False),
+            "bad score": lambda row: row["scenarios"][0].update(initial_actual_scores=[None]),
+            "bad score delta": lambda row: row["backend_raw_evidence"]["treedb"]["events"][0].update(
+                maximum_score_delta=None),
             "wrong raw key": lambda row: row.update(
                 raw_evidence=row.pop("backend_raw_evidence")),
         }

@@ -1329,11 +1329,16 @@ def _known_legacy_baseline_failure(artifact, backend):
         actual = row.get("initial_actual_ids")
         actual_scores = row.get("initial_actual_scores")
         mismatch = name == "broad_10pct"
+        scores_valid = (
+            isinstance(expected_scores, list) and isinstance(actual_scores, list)
+            and all(type(value) in (int, float) and math.isfinite(value)
+                    for value in (*expected_scores, *actual_scores))
+        )
         deltas = ([] if mismatch and actual_scores == [] else
                   [abs(left - right) for left, right in zip(expected_scores, actual_scores)]
-                  if isinstance(expected_scores, list) and isinstance(actual_scores, list)
-                  and len(expected_scores) == len(actual_scores) else None)
+                  if scores_valid and len(expected_scores) == len(actual_scores) else None)
         maximum_delta = max(deltas, default=0.0) if deltas is not None else None
+        observed_delta = event.get("maximum_score_delta")
         corpus = population[name]
         if (not isinstance(expected, list) or not isinstance(expected_scores, list)
                 or row.get("backend") != "treedb"
@@ -1361,7 +1366,8 @@ def _known_legacy_baseline_failure(artifact, backend):
                 or event.get("match") is not (not mismatch)
                 or maximum_delta is None or not math.isfinite(maximum_delta)
                 or maximum_delta > tolerance
-                or not math.isclose(event.get("maximum_score_delta", math.inf), maximum_delta,
+                or type(observed_delta) not in (int, float) or not math.isfinite(observed_delta)
+                or not math.isclose(observed_delta, maximum_delta,
                                     rel_tol=0, abs_tol=1e-12)
                 or (mismatch and (expected != LEGACY_BASELINE_IDS or actual != []
                                   or actual_scores != []))
