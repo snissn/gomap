@@ -499,10 +499,13 @@ def dense_quantized_response_work_matches(work, proof, top_k, result_count, filt
         return False
     output = work.output
     return (
-        output.fetched == result_count
+        output.completed
+        and dense_failure_output_matches_completed_graph(output, result_count)
+        and output.fetched == result_count
         and output.retained_payload_fetches == result_count
         and output.json_reconstruction_rows == result_count
         and output.typed_column_rows <= result_count
+        and (output.output_bytes == 0) == (result_count == 0)
     )
 
 

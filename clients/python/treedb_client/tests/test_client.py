@@ -795,9 +795,23 @@ class TreeDBClientTests(unittest.TestCase):
                 expanded.dense_work, expanded.score_plane, 1, 1, False
             ))
             self.assertFalse(dense_quantized_response_work_matches(
+                replace(expanded.dense_work, output=replace(expanded.dense_work.output, output_bytes=0)),
+                expanded.score_plane, 1, 1, False,
+            ))
+            self.assertFalse(dense_quantized_response_work_matches(
                 replace(expanded.dense_work, graph=replace(expanded.dense_work.graph, base_candidates=1)),
                 expanded.score_plane, 1, 1, False,
             ))
+            zero_nonempty_output = copy.deepcopy(payload)
+            zero_nonempty_output["dense_work"]["output"]["output_bytes"] = 0
+            with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, zero_nonempty_output, 0)}) as hostile_server:
+                hostile_client = TreeDBClient(hostile_server.base_url, timeout=1)
+                with self.assertRaisesRegex(TreeDBProtocolError, "score-plane proof"):
+                    hostile_client.query_by_embedding(
+                        "docs", [1, 0], 1, query_mode="quantized_rerank",
+                        quantized_index_name="embedding.scalar_u8.public",
+                    )
+                hostile_client.close()
             hostile_unfiltered["dense_work"]["graph"]["base_candidates"] = 1
             with mock.patch.object(client, "_request", return_value=hostile_unfiltered), \
                  self.assertRaisesRegex(TreeDBProtocolError, "score-plane proof"):
@@ -1747,15 +1761,31 @@ class TreeDBClientTests(unittest.TestCase):
             )
             with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, valid_empty, 0)}) as empty_server:
                 empty_client = TreeDBClient(empty_server.base_url, timeout=1)
-                self.assertEqual(
-                    empty_client.query_by_embedding(
+                empty_result = empty_client.query_by_embedding(
+                    "docs", [1, 0], 1, filter={"field": "meta.repo", "operator": "==", "value": "gomap"},
+                    query_mode="quantized_rerank",
+                    quantized_index_name="embedding.scalar_u8.public",
+                )
+                self.assertEqual(empty_result.documents, [])
+                self.assertTrue(dense_quantized_response_work_matches(
+                    empty_result.dense_work, empty_result.score_plane, 1, 0, True,
+                ))
+                self.assertFalse(dense_quantized_response_work_matches(
+                    replace(empty_result.dense_work, output=replace(empty_result.dense_work.output, output_bytes=1)),
+                    empty_result.score_plane, 1, 0, True,
+                ))
+                empty_client.close()
+            nonzero_empty_output = copy.deepcopy(valid_empty)
+            nonzero_empty_output["dense_work"]["output"]["output_bytes"] = 1
+            with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, nonzero_empty_output, 0)}) as hostile_server:
+                hostile_client = TreeDBClient(hostile_server.base_url, timeout=1)
+                with self.assertRaisesRegex(TreeDBProtocolError, "score-plane proof"):
+                    hostile_client.query_by_embedding(
                         "docs", [1, 0], 1, filter={"field": "meta.repo", "operator": "==", "value": "gomap"},
                         query_mode="quantized_rerank",
                         quantized_index_name="embedding.scalar_u8.public",
-                    ).documents,
-                    [],
-                )
-                empty_client.close()
+                    )
+                hostile_client.close()
             for filter_patch in (
                 {"attempted": False, "completed": False},
                 {"attempted": True, "completed": False},
