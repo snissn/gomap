@@ -40,7 +40,18 @@ class NativeCodecTests(unittest.TestCase):
         values = [1, 7, 2, 2, 3, 1, 0, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 2, 1, 0, 0, 8, 0, 7, 1, 2, 2]
         score_plane = b"".join(_uint(value) for value in values) + b"\x00" + _bytes_for_test("embedding.scalar_u8.public") + _bytes_for_test("scalar_u8")
         score_plane += b"\x01\x01\x01\x03" * 2
-        body = _section(102, _vector([b"a"])) + _section(103, _vector([b'{"id":"a"}'])) + _section(130, meta) + _section(134, raw_work) + _section(136, score_plane)
+
+        def response_body(document):
+            response_work_values = list(work_values)
+            response_work_values[34] = len(document)
+            return (
+                _section(102, _vector([b"a"])) + _section(103, _vector([document]))
+                + _section(130, meta)
+                + _section(134, b"".join(_uint(value) for value in response_work_values))
+                + _section(136, score_plane)
+            )
+
+        body = response_body(b'{"id":"a"}')
         info = SimpleNamespace(
             name="a", dimension=2, generation=2, vector_strategy="column_graph", metric="cosine",
             extra={"typed_input": True},
@@ -61,6 +72,30 @@ class NativeCodecTests(unittest.TestCase):
             self.assertEqual(response.native_command_version, 3)
             self.assertIsNotNone(response.score_plane)
             self.assertEqual(response.score_plane.quantized_index_name, "embedding.scalar_u8.public")
+            embedded_body = response_body(b'{"id":"a","embedding":[1,0]}')
+            with mock.patch.object(client._native, "command", return_value=embedded_body):
+                embedded_response = client.query_by_embedding(
+                    "a", [1, 0], 1, query_mode="quantized_rerank",
+                    quantized_index_name="embedding.scalar_u8.public", index_info=info,
+                    return_embedding=True,
+                )
+            self.assertEqual(embedded_response.documents[0].embedding, [1.0, 0.0])
+            for name, candidate_body, return_embedding in (
+                ("unrequested", embedded_body, False),
+                ("missing", body, True),
+                ("wrong dimension", response_body(b'{"id":"a","embedding":[1]}'), True),
+                ("nonfinite", response_body(b'{"id":"a","embedding":[NaN,0]}'), True),
+            ):
+                with self.subTest(native_embedding_echo=name), \
+                     mock.patch.object(client._native, "command", return_value=candidate_body), \
+                     self.assertRaisesRegex(TreeDBProtocolError, "return_embedding") as caught:
+                    client.query_by_embedding(
+                        "a", [1, 0], 1, query_mode="quantized_rerank",
+                        quantized_index_name="embedding.scalar_u8.public", index_info=info,
+                        return_embedding=return_embedding,
+                    )
+                self.assertIsNotNone(caught.exception.dense_work)
+                self.assertIsNotNone(caught.exception.score_plane)
             hostile_work_values = list(work_values)
             hostile_work_values[3:5] = [2, 0]
             hostile_work_values[7], hostile_work_values[9] = 2, 2
@@ -153,8 +188,15 @@ class NativeCodecTests(unittest.TestCase):
             completed_missing_values[31], completed_missing_values[33] = 1, 1
             graph_incomplete_values = list(post_search_values)
             graph_incomplete_values[1] &= ~(1 << 2)
-            proof_incomplete = bytearray(score_plane)
-            proof_incomplete[1] &= ~(1 << 1)
+            proof_incomplete_values = list(values)
+            proof_incomplete_values[1] &= ~(1 << 1)
+            proof_incomplete = bytearray(
+                b"".join(_uint(value) for value in proof_incomplete_values)
+                + _bytes_for_test("incomplete")
+                + _bytes_for_test("embedding.scalar_u8.public")
+                + _bytes_for_test("scalar_u8")
+                + b"\x01\x01\x01\x03" * 2
+            )
             wrong_route_values = list(post_search_values)
             wrong_route_values[2] = 2
             requested_mismatch_values = list(post_search_values)
@@ -175,7 +217,7 @@ class NativeCodecTests(unittest.TestCase):
             proof_snapshot_unavailable_values[23:27] = [0] * 4
             proof_snapshot_unavailable = (
                 b"".join(_uint(value) for value in proof_snapshot_unavailable_values)
-                + b"\x00" + _bytes_for_test("embedding.scalar_u8.public") + _bytes_for_test("scalar_u8")
+                + _bytes_for_test("incomplete") + _bytes_for_test("embedding.scalar_u8.public") + _bytes_for_test("scalar_u8")
                 + b"\x00" * 8
             )
             graph_snapshot_unavailable_values = list(graph_incomplete_values)
@@ -183,6 +225,22 @@ class NativeCodecTests(unittest.TestCase):
             graph_snapshot_unavailable_values[19:31] = [0] * 12
             sibling_counter_proof = bytearray(proof_incomplete)
             sibling_counter_proof[16] += 1
+            missing_reason_proof = bytearray(score_plane)
+            missing_reason_proof[1] &= ~(1 << 1)
+            with self.assertRaisesRegex(TreeDBProtocolError, "invalid native dense score-plane proof") as caught:
+                _dense_response(
+                    _section(102, _vector([b"a"])) + _section(103, _vector([b'{"id":"a"}']))
+                    + _section(130, meta)
+                    + _section(134, b"".join(_uint(value) for value in graph_incomplete_values))
+                    + _section(136, bytes(missing_reason_proof)),
+                    1, version=3, query_mode="quantized_rerank",
+                    quantized_index_name="embedding.scalar_u8.public", quantized_rerank_candidates=0,
+                    ef_search=0, query_dimension=2,
+                )
+            self.assertEqual(caught.exception.dense_work, _dense_work(
+                b"".join(_uint(value) for value in graph_incomplete_values)
+            ))
+            self.assertIsNone(caught.exception.score_plane)
             native_completion_cases = (
                 ("post-search before fetch", post_search_values, score_plane, False),
                 ("partial fetch", partial_fetch_values, score_plane, False),

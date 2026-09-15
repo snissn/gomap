@@ -35,8 +35,13 @@ from treedb_client import (
     TreeDBTransportError,
     UnsupportedError,
 )
-from treedb_client.client import _dense_http_results_ordered, _dense_work_requires_score_plane, _is_legacy_scalar_u8_v1_index
-from treedb_client._dense_work import dense_quantized_response_work_matches
+from treedb_client.client import (
+    _dense_document_embeddings_match,
+    _dense_http_results_ordered,
+    _dense_work_requires_score_plane,
+    _is_legacy_scalar_u8_v1_index,
+)
+from treedb_client._dense_work import DenseScorePlaneProof, dense_quantized_response_work_matches
 
 
 SAMPLE_INDEX = {
@@ -162,6 +167,20 @@ class TreeDBClientTests(unittest.TestCase):
     def test_dense_http_ordering_rejects_unencodable_tie_id(self) -> None:
         documents = [Document(id="a", score=1.0), Document(id="\ud800", score=1.0)]
         self.assertFalse(_dense_http_results_ordered(documents))
+
+    def test_dense_embedding_echo_matches_request(self) -> None:
+        omitted = [Document(id="a")]
+        included = [Document(id="a", embedding=[1.0, 0.0])]
+        self.assertTrue(_dense_document_embeddings_match(omitted, False, 2))
+        self.assertTrue(_dense_document_embeddings_match(included, True, 2))
+        self.assertFalse(_dense_document_embeddings_match(included, False, 2))
+        self.assertFalse(_dense_document_embeddings_match(omitted, True, 2))
+        self.assertFalse(_dense_document_embeddings_match(
+            [Document(id="a", embedding=[1.0])], True, 2,
+        ))
+        self.assertFalse(_dense_document_embeddings_match(
+            [Document(id="a", embedding=[float("inf"), 0.0])], True, 2,
+        ))
 
     def test_selected_quantized_index_requires_legacy_calibration(self) -> None:
         selected = QuantizedIndexInfo(name="embedding.scalar_u8.public")
@@ -724,6 +743,32 @@ class TreeDBClientTests(unittest.TestCase):
                 expected_generation=1,
             )
             self.assertEqual(result.documents[0].id, "a")
+            embedded_payload = copy.deepcopy(payload)
+            embedded_payload["documents"][0]["embedding"] = [1, 0]
+            with mock.patch.object(client, "_request", return_value=embedded_payload):
+                embedded_result = client.query_by_embedding(
+                    "docs", [1, 0], 1, query_mode="quantized_rerank",
+                    quantized_index_name="embedding.scalar_u8.public", return_embedding=True,
+                )
+            self.assertEqual(embedded_result.documents[0].embedding, [1.0, 0.0])
+            wrong_dimension_embedding = copy.deepcopy(embedded_payload)
+            wrong_dimension_embedding["documents"][0]["embedding"] = [1]
+            nonfinite_embedding = copy.deepcopy(embedded_payload)
+            nonfinite_embedding["documents"][0]["embedding"] = [float("nan"), 0]
+            for name, candidate, return_embedding in (
+                ("unrequested", embedded_payload, False),
+                ("missing", payload, True),
+                ("wrong dimension", wrong_dimension_embedding, True),
+                ("nonfinite", nonfinite_embedding, True),
+            ):
+                with self.subTest(embedding_echo=name), \
+                     mock.patch.object(client, "_request", return_value=candidate), \
+                     self.assertRaisesRegex(TreeDBProtocolError, "score-plane proof"):
+                    client.query_by_embedding(
+                        "docs", [1, 0], 1, query_mode="quantized_rerank",
+                        quantized_index_name="embedding.scalar_u8.public",
+                        return_embedding=return_embedding,
+                    )
             pre_owner_filter = replace(
                 result.dense_work.graph.filter,
                 attempted=True, completed=True, eligible_rows=1, source_ids=1, source_bytes=1,
@@ -1052,6 +1097,30 @@ class TreeDBClientTests(unittest.TestCase):
                     retained_payload_fetches=0, json_reconstruction_rows=0, typed_column_rows=0,
                 ),
             )
+            missing_reason_proof = asdict(partial_proof)
+            missing_reason_proof["reason"] = ""
+            with self.assertRaisesRegex(ValueError, "incomplete dense score-plane proof has no reason"):
+                DenseScorePlaneProof.from_dict(missing_reason_proof)
+            missing_reason_error = {
+                "error": {
+                    "code": "index_unavailable",
+                    "message": "budget",
+                    "dense_work": asdict(partial_work),
+                    "score_plane": missing_reason_proof,
+                }
+            }
+            for status in (200, 503):
+                decoder = client._decode_success if status == 200 else client._decode_error
+                with self.subTest(missing_reason_status=status), \
+                     self.assertRaisesRegex(TreeDBProtocolError, "score-plane error proof") as caught:
+                    decoder(
+                        status,
+                        json.dumps(missing_reason_error).encode(),
+                        dense_proof=True,
+                        dense_score_plane=True,
+                    )
+                self.assertEqual(caught.exception.dense_work, partial_work)
+                self.assertIsNone(caught.exception.score_plane)
             partial_error = IndexUnavailableError(
                 "index_unavailable", "budget", dense_work=partial_work, score_plane=partial_proof,
             )

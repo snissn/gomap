@@ -861,8 +861,9 @@ and `R` denote normalized candidate width, raw candidate width, and rerank cap.
 | `typed_exact` | Without a filter, the base domain is empty. A filter has positive eligibility; with a nonzero `E`, eligible rows are at most 4096. | Unfiltered `E/C/R`, small-filter calls, and base-shadowed are zero. Filtered total exact calls equal eligible rows. Result count is `min(top-K, total exact calls)`. |
 | `quantized_rerank` | A filtered route has more than 4096 eligible rows. | `E/C/R` are positive; small-filter calls are zero; base-shadowed is no greater than raw retained; live shortlist is `min(E, raw retained - base shadowed)`; actual rerank is `min(live shortlist, R)`. Result count is `min(top-K, total exact calls)`. |
 
-For every route, completed proofs have an empty reason, graph base-edge work is
-zero, quantized calls equal graph base-ANN scoring, exact base calls equal graph
+For every route, completed proofs have an empty reason and available incomplete
+proofs have a nonempty producer error reason. Graph base-edge work is zero,
+quantized calls equal graph base-ANN scoring, exact base calls equal graph
 exact-base/result-ID counts, and exact suffix calls equal graph delta scoring.
 Graph base candidates may be lower than quantized calls because public minimal
 stats do not require that optional count. Returned exact cosine scores are

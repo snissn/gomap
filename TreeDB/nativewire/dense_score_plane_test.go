@@ -70,6 +70,7 @@ func TestDenseScorePlaneCodecOwnedAndStrict(t *testing.T) {
 	}
 	incomplete := proof
 	incomplete.Completed = false
+	incomplete.Reason = "incomplete"
 	incomplete.Snapshot = collections.ColumnGraphQuerySnapshot{}
 	incompleteRaw, err := appendDenseScorePlane(nil, incomplete, iwire.DefaultLimits())
 	if err != nil {
@@ -78,6 +79,10 @@ func TestDenseScorePlaneCodecOwnedAndStrict(t *testing.T) {
 	incompleteDecoded, err := decodeDenseScorePlane(incompleteRaw, iwire.DefaultLimits())
 	if err != nil || !incompleteDecoded.Available || incompleteDecoded.Completed || incompleteDecoded.Snapshot.Available {
 		t.Fatalf("incomplete score-plane flags were not preserved: %+v err=%v", incompleteDecoded, err)
+	}
+	incomplete.Reason = ""
+	if err := validateDenseScorePlane(incomplete); err == nil {
+		t.Fatal("available incomplete score-plane proof without a reason accepted")
 	}
 	noQuantizedWork := proof
 	noQuantizedWork.QuantizedScoreCalls = 0

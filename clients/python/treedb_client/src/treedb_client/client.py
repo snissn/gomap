@@ -492,6 +492,12 @@ class TreeDBClient:
                 except (ValueError, KeyError, TypeError, OverflowError) as exc:
                     raise TreeDBProtocolError("invalid native dense document", dense_work=work, score_plane=score_plane) from exc
                 documents.append(document)
+            if not _dense_document_embeddings_match(documents, return_embedding, len(query_embedding)):
+                raise TreeDBProtocolError(
+                    "native dense documents do not match return_embedding",
+                    dense_work=work,
+                    score_plane=score_plane,
+                )
             return DenseVectorSearchResponse(index=index_info, documents=documents, metric=index_info.metric,
                                              exact=False, candidates=candidates, route="ann",
                                              native_base_plus_live_delta=False, native_command_version=version, dense_work=work,
@@ -533,12 +539,20 @@ class TreeDBClient:
                     quantized_rerank_candidates=rerank_value,
                     expected_generation=expected_generation,
                     filter_requested=filter is not None,
+                    return_embedding=return_embedding,
                 )
             elif response.score_plane is not None:
                 raise TreeDBProtocolError(
                     "dense HTTP exact response unexpectedly includes a score-plane proof",
                     dense_work=response.dense_work,
                     score_plane=response.score_plane,
+                )
+            elif not _dense_document_embeddings_match(
+                response.documents, return_embedding, len(request["query_embedding"])
+            ):
+                raise TreeDBProtocolError(
+                    "dense HTTP documents do not match return_embedding",
+                    dense_work=response.dense_work,
                 )
         except Exception as exc:
             if mode == "quantized_rerank":
@@ -1121,6 +1135,7 @@ def _validate_http_dense_quantized_response(
     quantized_rerank_candidates: int,
     expected_generation: Optional[int],
     filter_requested: bool,
+    return_embedding: bool,
 ) -> None:
     """Require the HTTP response proof for an explicitly selected public route."""
 
@@ -1156,6 +1171,7 @@ def _validate_http_dense_quantized_response(
         or any(document.score is None for document in response.documents)
         or not dense_cosine_scores_valid(document.score for document in response.documents)
         or not _dense_http_results_ordered(response.documents)
+        or not _dense_document_embeddings_match(response.documents, return_embedding, query_dimension)
         or response.index.dimension != query_dimension
         or type(response.index.generation) is not int
         or not 0 < response.index.generation < 1 << 64
@@ -1399,6 +1415,19 @@ def _dense_http_results_ordered(documents: Sequence[Document]) -> bool:
         if previous.score < current.score or (previous.score == current.score and previous_id >= current_id):
             return False
     return True
+
+
+def _dense_document_embeddings_match(
+    documents: Sequence[Document], return_embedding: bool, dimension: int
+) -> bool:
+    if not return_embedding:
+        return all(document.embedding is None for document in documents)
+    return all(
+        document.embedding is not None
+        and len(document.embedding) == dimension
+        and all(math.isfinite(value) for value in document.embedding)
+        for document in documents
+    )
 
 
 def _is_legacy_scalar_u8_v1_index(selected: Any) -> bool:

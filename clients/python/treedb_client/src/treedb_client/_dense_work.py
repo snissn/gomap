@@ -215,6 +215,8 @@ class DenseScorePlaneProof:
             or values["reason"]
         ):
             raise ValueError("completed dense score-plane proof lacks captured work")
+        if values["available"] and not values["completed"] and not values["reason"]:
+            raise ValueError("incomplete dense score-plane proof has no reason")
         if values["completed"] and values["route"] == "quantized_rerank" and values["quantized_score_calls"] == 0:
             raise ValueError("completed quantized rerank proof has no quantized score calls")
         if values["completed"]:

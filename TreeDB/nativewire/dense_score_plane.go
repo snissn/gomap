@@ -118,6 +118,9 @@ func validateDenseScorePlane(proof collections.ColumnGraphScorePlaneWork) error 
 	if proof.Completed && (!proof.Available || !proof.Snapshot.Available || proof.Route == "" || proof.Reason != "") {
 		return protocolError(iwire.ErrConsistencyUnavailable, "completed dense score-plane proof is incomplete")
 	}
+	if proof.Available && !proof.Completed && proof.Reason == "" {
+		return protocolError(iwire.ErrConsistencyUnavailable, "incomplete dense score-plane proof has no reason")
+	}
 	if proof.Completed && proof.Route == "quantized_rerank" && proof.QuantizedScoreCalls == 0 {
 		return protocolError(iwire.ErrConsistencyUnavailable, "completed quantized rerank proof has no quantized score calls")
 	}
