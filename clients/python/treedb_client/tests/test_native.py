@@ -142,6 +142,30 @@ class NativeCodecTests(unittest.TestCase):
                     )
                 self.assertIsNotNone(caught.exception.dense_work)
                 self.assertIsNotNone(caught.exception.score_plane)
+            numeric_filter = {"field": "meta.rank", "operator": "==", "value": 1 << 53}
+            for name, document, accepted in (
+                ("matching", b'{"id":"a","meta":{"rank":9007199254740992}}', True),
+                ("adjacent", b'{"id":"a","meta":{"rank":9007199254740993}}', False),
+            ):
+                candidate_body = response_body(document, candidate_work_values=filtered_work_values)
+                with self.subTest(native_large_integer_filter=name), \
+                     mock.patch.object(client._native, "command", return_value=candidate_body):
+                    if accepted:
+                        result = client.query_by_embedding(
+                            "a", [1, 0], 1, filter=numeric_filter, query_mode="quantized_rerank",
+                            quantized_index_name="embedding.scalar_u8.public", index_info=info,
+                        )
+                        self.assertEqual(result.documents[0].meta["rank"], 1 << 53)
+                    else:
+                        with self.assertRaisesRegex(
+                            TreeDBProtocolError, "does not satisfy the request filter"
+                        ) as caught:
+                            client.query_by_embedding(
+                                "a", [1, 0], 1, filter=numeric_filter, query_mode="quantized_rerank",
+                                quantized_index_name="embedding.scalar_u8.public", index_info=info,
+                            )
+                        self.assertIsNotNone(caught.exception.dense_work)
+                        self.assertIsNotNone(caught.exception.score_plane)
             for name, candidate_body, return_embedding in (
                 ("unrequested", embedded_body, False),
                 ("missing", body, True),

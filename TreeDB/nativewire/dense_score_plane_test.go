@@ -1585,6 +1585,26 @@ func TestDenseV3ResultDecodeErrorsPreserveOwnedProofs(t *testing.T) {
 		})
 	}
 
+	numericRequest := baseRequest
+	numericRequest.Filter = &documentservice.Filter{Field: "meta.rank", Operator: "==", Value: int64(9007199254740992)}
+	for name, document := range map[string][]byte{
+		"matching":   []byte(`{"id":"a","meta":{"rank":9007199254740992}}`),
+		"mismatched": []byte(`{"id":"a","meta":{"rank":9007199254740993}}`),
+	} {
+		t.Run("large integer filter "+name, func(t *testing.T) {
+			out, gotErr, expectedWork := roundTripWithEvidence(
+				validMeta, []byte("a"), document, numericRequest, filteredWork, proof,
+			)
+			if name == "matching" {
+				if gotErr != nil || len(out.Results) != 1 {
+					t.Fatalf("matching integer document rejected: response=%+v err=%v", out, gotErr)
+				}
+				return
+			}
+			assertOwnedProofs(gotErr, expectedWork)
+		})
+	}
+
 	mismatchedRequest := baseRequest
 	mismatchedRequest.EfSearch = 9
 	_, gotErr, _ := roundTrip(append([]byte{3, 0, 0, 0, 1}, validScore...), []byte("a"), []byte(`{"id":"a"}`), mismatchedRequest)

@@ -132,7 +132,8 @@ HTTP responses also bind their materialized-row count to returned/proven rows
 and reject legacy scalar-filter or visibility telemetry; typed filter work is
 carried by `dense_work.graph.filter`. On filtered typed quantized responses, the
 client also evaluates the exact requested filter against every decoded native or
-HTTP document; producer work counts alone do not prove result membership.
+HTTP document, preserving integral metadata precision for equality, range, and
+membership operators; producer work counts alone do not prove result membership.
 Native v3 document JSON rejects duplicate exact top-level fields before model
 conversion, matching the Go consumer contract.
 When embedding echo is requested on the selected quantized path, native v3 and

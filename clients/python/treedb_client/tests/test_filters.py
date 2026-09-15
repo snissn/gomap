@@ -101,6 +101,24 @@ class FilterConversionTests(unittest.TestCase):
             with self.subTest(rejected=filter_value):
                 self.assertFalse(_document_matches_filter(document, normalize_filter(filter_value)))
 
+    def test_response_document_matching_preserves_integer_precision(self) -> None:
+        lower = 1 << 53
+        document = Document(id="large", meta={"number": lower + 1})
+        for name, filter_value, want in (
+            ("exact", {"field": "number", "operator": "==", "value": lower + 1}, True),
+            ("adjacent integer", {"field": "number", "operator": "==", "value": lower}, False),
+            ("adjacent float", {"field": "number", "operator": "==", "value": float(lower)}, False),
+            ("greater", {"field": "number", "operator": ">", "value": lower}, True),
+            ("not less", {"field": "number", "operator": "<", "value": lower + 1}, False),
+            ("membership", {"field": "number", "operator": "in", "value": [lower, lower + 1]}, True),
+            ("adjacent membership", {"field": "number", "operator": "in", "value": [lower]}, False),
+            ("not in", {"field": "number", "operator": "not in", "value": [lower]}, True),
+        ):
+            with self.subTest(name=name):
+                self.assertEqual(
+                    _document_matches_filter(document, normalize_filter(filter_value)), want,
+                )
+
 
 if __name__ == "__main__":
     unittest.main()

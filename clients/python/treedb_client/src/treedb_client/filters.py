@@ -145,14 +145,12 @@ def _document_filter_field(document: Any, field: str) -> tuple[bool, Any]:
     return True, current
 
 
-def _finite_number(value: Any) -> Optional[float]:
+def _finite_number(value: Any) -> Optional[Union[int, float]]:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
-    try:
-        converted = float(value)
-    except OverflowError:
-        return None
-    return converted if math.isfinite(converted) else None
+    if isinstance(value, int):
+        return value
+    return value if math.isfinite(value) else None
 
 
 def _filter_values_equal(left: Any, right: Any) -> bool:

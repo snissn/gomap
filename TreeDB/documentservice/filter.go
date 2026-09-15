@@ -255,19 +255,11 @@ func isComparableFilterValue(value any) bool {
 }
 
 func compareFilterValues(left, right any) (int, error) {
-	if lf, ok := numberAsFloat64(left); ok {
-		rf, ok := numberAsFloat64(right)
-		if !ok {
-			return 0, serviceErrorf(CodeInvalidRequest, "cannot compare numeric field to non-numeric filter value")
-		}
-		switch {
-		case lf < rf:
-			return -1, nil
-		case lf > rf:
-			return 1, nil
-		default:
-			return 0, nil
-		}
+	if comparison, ok := compareFilterNumbers(left, right); ok {
+		return comparison, nil
+	}
+	if _, ok := numberAsFloat64(left); ok {
+		return 0, serviceErrorf(CodeInvalidRequest, "cannot compare numeric field to non-numeric filter value")
 	}
 	ls, lok := left.(string)
 	rs, rok := right.(string)
@@ -278,12 +270,115 @@ func compareFilterValues(left, right any) (int, error) {
 }
 
 func valuesEqual(left, right any) bool {
-	if lf, ok := numberAsFloat64(left); ok {
-		if rf, ok := numberAsFloat64(right); ok {
-			return lf == rf
-		}
+	if comparison, ok := compareFilterNumbers(left, right); ok {
+		return comparison == 0
 	}
 	return reflect.DeepEqual(left, right)
+}
+
+func compareFilterNumbers(left, right any) (int, bool) {
+	leftInteger, leftIsInteger := filterInt64Value(left)
+	rightInteger, rightIsInteger := filterInt64Value(right)
+	if leftIsInteger && rightIsInteger {
+		return compareInt64(leftInteger, rightInteger), true
+	}
+	leftFloat, leftIsNumber := numberAsFloat64(left)
+	rightFloat, rightIsNumber := numberAsFloat64(right)
+	if !leftIsNumber || !rightIsNumber {
+		return 0, false
+	}
+	if leftIsInteger {
+		return compareInt64ToFloat64(leftInteger, rightFloat), true
+	}
+	if rightIsInteger {
+		return -compareInt64ToFloat64(rightInteger, leftFloat), true
+	}
+	switch {
+	case leftFloat < rightFloat:
+		return -1, true
+	case leftFloat > rightFloat:
+		return 1, true
+	default:
+		return 0, true
+	}
+}
+
+func filterInt64Value(value any) (int64, bool) {
+	switch v := value.(type) {
+	case json.Number:
+		if integer, err := v.Int64(); err == nil {
+			return integer, true
+		}
+		floating, err := v.Float64()
+		if err != nil {
+			return 0, false
+		}
+		return filterInt64Value(floating)
+	case float64:
+		if !finiteFloat(v) || math.Trunc(v) != v || v < -0x1p63 || v >= 0x1p63 {
+			return 0, false
+		}
+		return int64(v), true
+	case float32:
+		return filterInt64Value(float64(v))
+	case int:
+		return int64(v), true
+	case int8:
+		return int64(v), true
+	case int16:
+		return int64(v), true
+	case int32:
+		return int64(v), true
+	case int64:
+		return v, true
+	case uint:
+		if uint64(v) <= uint64(^uint64(0)>>1) {
+			return int64(v), true
+		}
+	case uint8:
+		return int64(v), true
+	case uint16:
+		return int64(v), true
+	case uint32:
+		return int64(v), true
+	case uint64:
+		if v <= uint64(^uint64(0)>>1) {
+			return int64(v), true
+		}
+	}
+	return 0, false
+}
+
+func compareInt64(left, right int64) int {
+	switch {
+	case left < right:
+		return -1
+	case left > right:
+		return 1
+	default:
+		return 0
+	}
+}
+
+func compareInt64ToFloat64(integer int64, floating float64) int {
+	if floating < -0x1p63 {
+		return 1
+	}
+	if floating >= 0x1p63 {
+		return -1
+	}
+	truncated := int64(floating)
+	if comparison := compareInt64(integer, truncated); comparison != 0 {
+		return comparison
+	}
+	switch {
+	case float64(truncated) < floating:
+		return -1
+	case float64(truncated) > floating:
+		return 1
+	default:
+		return 0
+	}
 }
 
 func valueInList(value any, list []any) bool {

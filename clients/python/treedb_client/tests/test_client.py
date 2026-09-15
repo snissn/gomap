@@ -1464,6 +1464,24 @@ class TreeDBClientTests(unittest.TestCase):
                     self.assertIsNotNone(caught.exception.dense_work)
                     self.assertIsNotNone(caught.exception.score_plane)
                     hostile_client.close()
+            numeric_filtered_payload = copy.deepcopy(filtered_payload)
+            numeric_filtered_payload["documents"][0]["meta"] = {"number": (1 << 53) + 1}
+            with FixtureServer({
+                ("POST", "/v1/indexes/docs/search/vector"): (200, numeric_filtered_payload, 0),
+            }) as hostile_server:
+                hostile_client = TreeDBClient(hostile_server.base_url, timeout=1)
+                with self.assertRaisesRegex(
+                    TreeDBProtocolError, "does not satisfy the request filter"
+                ) as caught:
+                    hostile_client.query_by_embedding(
+                        "docs", [1, 0], 1,
+                        filter={"field": "meta.number", "operator": "==", "value": 1 << 53},
+                        query_mode="quantized_rerank",
+                        quantized_index_name="embedding.scalar_u8.public",
+                    )
+                self.assertIsNotNone(caught.exception.dense_work)
+                self.assertIsNotNone(caught.exception.score_plane)
+                hostile_client.close()
             filtered_underreported = copy.deepcopy(filtered_payload)
             filtered_underreported["dense_work"]["graph"]["base_candidates"] = 0
             with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, filtered_underreported, 0)}) as filtered_server:

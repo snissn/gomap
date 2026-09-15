@@ -1,6 +1,9 @@
 package documentservice
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+)
 
 func TestFilterBooleanOperatorsAndMetadataPaths(t *testing.T) {
 	doc := Document{ID: "doc-1", Content: "hello", Meta: map[string]any{
@@ -112,6 +115,34 @@ func TestFilterMatchesDocumentUsesServiceSemantics(t *testing.T) {
 	}
 	if err := (&Filter{Operator: "NOT"}).Validate(); err == nil {
 		t.Fatal("malformed filter validated")
+	}
+}
+
+func TestFilterMatchesDocumentPreservesInt64Precision(t *testing.T) {
+	const lower int64 = 9007199254740992
+	doc := Document{ID: "large", Meta: map[string]any{"number": json.Number("9007199254740993")}}
+	for name, candidate := range map[string]struct {
+		filter Filter
+		want   bool
+	}{
+		"exact":               {Filter{Field: "number", Operator: "==", Value: lower + 1}, true},
+		"adjacent integer":    {Filter{Field: "number", Operator: "==", Value: lower}, false},
+		"adjacent float":      {Filter{Field: "number", Operator: "==", Value: float64(lower)}, false},
+		"greater":             {Filter{Field: "number", Operator: ">", Value: lower}, true},
+		"not less":            {Filter{Field: "number", Operator: "<", Value: lower + 1}, false},
+		"membership":          {Filter{Field: "number", Operator: "in", Value: []any{lower, lower + 1}}, true},
+		"adjacent membership": {Filter{Field: "number", Operator: "in", Value: []any{lower}}, false},
+		"not in":              {Filter{Field: "number", Operator: "not in", Value: []any{lower}}, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := candidate.filter.Validate(); err != nil {
+				t.Fatal(err)
+			}
+			got, err := candidate.filter.MatchesDocument(doc)
+			if err != nil || got != candidate.want {
+				t.Fatalf("match=%v err=%v want %v", got, err, candidate.want)
+			}
+		})
 	}
 }
 

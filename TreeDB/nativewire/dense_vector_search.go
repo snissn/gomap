@@ -326,6 +326,7 @@ func decodeDenseV3ResultDocument(raw []byte) (documentservice.Document, bool) {
 		return documentservice.Document{}, false
 	}
 	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
 	opening, err := decoder.Token()
 	if err != nil || opening != json.Delim('{') {
 		return documentservice.Document{}, false
