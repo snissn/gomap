@@ -122,6 +122,9 @@ The run owns a fresh standalone Qdrant 1.19.0 process and requires both
 `QDRANT_STORAGE` and `QDRANT_RUN` not to exist before launch.
 `QDRANT_STORAGE` must be a strict descendant of `QDRANT_RUN` (for example,
 `QDRANT_RUN/storage`) so one owned root covers the database, logs and evidence.
+This evidence arm is deliberately unauthenticated: unset `QDRANT_API_KEY` and
+`QDRANT__SERVICE__API_KEY`. The producer rejects either non-empty credential
+before freezing or running, and the command-receipt grammar has no API-key option.
 
 ```sh
 taskset -c 0-5 "$QDRANT_PYTHON" benchmarks/vector_db_compare/minima_cohere_qdrant_rss_diagnostic.py \

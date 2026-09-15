@@ -475,7 +475,7 @@ class Q5AnalyzeTest(unittest.TestCase):
             for mutation in (
                     "exit", "environment", "environment_extra", "environment_value",
                     "environment_path", "plan", "argv", "matching_extra",
-                    "missing_input", "duplicate", "affinity"):
+                    "missing_input", "duplicate", "affinity", "qdrant_api_key"):
                 changed = copy.deepcopy(receipts)
                 if mutation == "exit":
                     changed["runs"]["full_sq8_events"]["exit_code"] = 0
@@ -511,6 +511,11 @@ class Q5AnalyzeTest(unittest.TestCase):
                 elif mutation == "affinity":
                     changed["runs"]["smoke_exact"]["freeze_argv"][2] = "1-5"
                     changed["runs"]["smoke_exact"]["run_argv"][2] = "1-5"
+                elif mutation == "qdrant_api_key":
+                    for command in ("freeze_argv", "run_argv"):
+                        changed["runs"]["qdrant_fp32_rss"][command].extend([
+                            "--api-key", "secret",
+                        ])
                 else:
                     changed["runs"]["smoke_exact"]["plan_sha256"] = "f" * 64
                 path.write_bytes(canonical(changed))
@@ -1345,18 +1350,22 @@ class Q5AnalyzeTest(unittest.TestCase):
                     mock.patch.object(analyzer, "validate_full_sq8_log",
                                       return_value=(False, None, None)):
                 result = analyzer.analyze(path, pin, lambda _: None)
-            self.assertEqual(result["state"], "valid_unqualified", result)
-            assurance = result["final_state_assurance"]
-            self.assertFalse(assurance["producer_attested"])
-            self.assertFalse(assurance["independently_recomputed"])
-            self.assertFalse(assurance["digest_claim"])
-            self.assertEqual(assurance["availability"], "not_reached_after_frozen_quality_miss")
+                self.assertEqual(result["state"], "valid_unqualified", result)
+                assurance = result["final_state_assurance"]
+                self.assertFalse(assurance["producer_attested"])
+                self.assertFalse(assurance["independently_recomputed"])
+                self.assertFalse(assurance["digest_claim"])
+                self.assertEqual(
+                    assurance["availability"], "not_reached_after_frozen_quality_miss",
+                )
 
-            packet["declared_quality_outcome"] = "pass"
-            raw = canonical(packet)
-            path.write_bytes(raw)
-            result = analyzer.analyze(path, hashlib.sha256(raw).hexdigest(), lambda _: None)
-            self.assertEqual(result["state"], "invalid")
+                packet["declared_quality_outcome"] = "pass"
+                raw = canonical(packet)
+                path.write_bytes(raw)
+                result = analyzer.analyze(
+                    path, hashlib.sha256(raw).hexdigest(), lambda _: None,
+                )
+                self.assertEqual(result["state"], "invalid")
 
 
 if __name__ == "__main__":

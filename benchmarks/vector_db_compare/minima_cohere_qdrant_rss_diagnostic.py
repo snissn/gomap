@@ -29,6 +29,8 @@ RESOURCE_GUARD = {
     "maximum_owned_bytes": 11 << 30,
     "maximum_combined_rss_bytes": 24 << 30,
 }
+QDRANT_CREDENTIAL_ENV = ("QDRANT_API_KEY", "QDRANT__SERVICE__API_KEY")
+
 
 def qdrant_point(document):
     return {
@@ -143,15 +145,11 @@ def _qdrant_resource_guard_valid(guard):
 
 def _qdrant_cleanup_valid(cleanup):
     try:
-        identity_pid, start = cleanup["process_identity"].split(":")
         return (
             isinstance(cleanup, dict)
             and cleanup.get("schema") == "treedb_owned_qdrant_cleanup/v1"
             and cleanup.get("status") == "clean"
-            and isinstance(cleanup.get("process_identity"), str)
-            and cleanup["process_identity"]
-            and identity_pid == str(int(identity_pid)) and int(identity_pid) > 0
-            and start == str(int(start)) and int(start) > 0
+            and native.linux_process_identity_valid(cleanup.get("process_identity"))
             and type(cleanup.get("harness_pgid")) is int and cleanup["harness_pgid"] > 0
             and cleanup.get("server_pgid") == cleanup["harness_pgid"]
             and cleanup.get("term_sent") is True
@@ -425,9 +423,8 @@ class Run:
     optimization_snapshot = existing.QdrantMinimaRunner.optimization_snapshot
     server_log_snapshot = existing.QdrantMinimaRunner.server_log_snapshot
 
-    def __init__(self, plan, client_factory, models, api_key=""):
+    def __init__(self, plan, client_factory, models):
         self.plan, self.client_factory, self.models = plan, client_factory, models
-        self.api_key = api_key
         self.client = self.process = self.process_identity = self.process_command_identity = None
         self.server_pid = self.server_pgid = None
         self.harness_identity = existing.linux_process_identity(os.getpid())
@@ -593,25 +590,38 @@ class Run:
         env = {key: os.environ[key] for key in ("HOME", "PATH", "TMPDIR", "TZ") if key in os.environ}
         env.update(QDRANT__SERVICE__HOST="127.0.0.1", QDRANT__SERVICE__HTTP_PORT=str(parsed.port),
                    QDRANT__STORAGE__STORAGE_PATH=str(self.storage_path))
-        if self.api_key:
-            env["QDRANT__SERVICE__API_KEY"] = self.api_key
-        self.process = subprocess.Popen([self.plan["qdrant_bin"]], stdin=subprocess.DEVNULL,
-                                        stdout=self.server_log, stderr=subprocess.STDOUT,
-                                        cwd=self.output, env=env)
-        self.server_pid = self.process.pid
-        self.process_identity = existing.linux_process_identity(self.server_pid)
-        if not self.process_identity:
-            raise RuntimeError("owned Qdrant process identity is unavailable immediately after launch")
-        self.server_pgid = os.getpgid(self.server_pid)
-        if self.server_pgid != self.harness_pgid:
-            raise RuntimeError("owned Qdrant did not remain in the harness process group")
-        self.process_command_identity = existing.server_process_identity(self.server_pid)
+        with self.resource_lock:
+            process = subprocess.Popen([self.plan["qdrant_bin"]], stdin=subprocess.DEVNULL,
+                                       stdout=self.server_log, stderr=subprocess.STDOUT,
+                                       cwd=self.output, env=env)
+            try:
+                process_identity = existing.linux_process_identity(process.pid)
+                if not process_identity:
+                    raise RuntimeError(
+                        "owned Qdrant process identity is unavailable immediately after launch",
+                    )
+                server_pgid = os.getpgid(process.pid)
+                if server_pgid != self.harness_pgid:
+                    raise RuntimeError("owned Qdrant did not remain in the harness process group")
+                process_command_identity = existing.server_process_identity(process.pid)
+            except BaseException:
+                if process.poll() is None:
+                    process.terminate()
+                    try:
+                        process.wait(timeout=30)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        process.wait(timeout=10)
+                raise
+            self.process, self.server_pid = process, process.pid
+            self.process_identity, self.server_pgid = process_identity, server_pgid
+            self.process_command_identity = process_command_identity
         deadline, last = time.monotonic() + self.plan["startup_timeout_s"], None
         while time.monotonic() < deadline:
             if self.process.poll() is not None:
                 raise RuntimeError(f"owned Qdrant exited during startup with {self.process.returncode}")
             try:
-                info = existing.server_info(self.plan["url"], self.api_key)
+                info = existing.server_info(self.plan["url"], "")
                 if (existing.linux_process_identity(self.server_pid) == self.process_identity
                         and os.getpgid(self.server_pid) == self.harness_pgid
                         and info.get("version") == self.plan["qdrant_server_version"]
@@ -926,6 +936,12 @@ class Run:
 
 
 def main():
+    credentials = [key for key in QDRANT_CREDENTIAL_ENV if os.environ.get(key)]
+    if credentials:
+        raise ValueError(
+            "Q5 Qdrant RSS evidence requires an unauthenticated environment; unset "
+            + ", ".join(credentials),
+        )
     parser = argparse.ArgumentParser(description=__doc__)
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--freeze", type=Path)
@@ -937,7 +953,6 @@ def main():
     parser.add_argument("--qdrant-bin", required=True, type=Path)
     parser.add_argument("--storage-path", required=True, type=Path)
     parser.add_argument("--url", required=True)
-    parser.add_argument("--api-key", default=os.environ.get("QDRANT_API_KEY", ""))
     parser.add_argument("--collection", default="minima_cohere_rss")
     parser.add_argument("--run-dir", required=True, type=Path)
     parser.add_argument("--operation-timeout", type=int, default=600)
@@ -954,9 +969,9 @@ def main():
         raise ValueError("externally pinned Qdrant RSS plan hash required")
     validate_plan(frozen, plan)
     from qdrant_client import QdrantClient, models
-    factory = lambda: QdrantClient(url=args.url, api_key=args.api_key or None,
-                                   timeout=args.operation_timeout, prefer_grpc=False)
-    return Run(plan, factory, models, args.api_key).execute()
+    factory = lambda: QdrantClient(url=args.url, timeout=args.operation_timeout,
+                                   prefer_grpc=False)
+    return Run(plan, factory, models).execute()
 
 
 if __name__ == "__main__":

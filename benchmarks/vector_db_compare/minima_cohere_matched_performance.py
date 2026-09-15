@@ -780,7 +780,7 @@ def restart_qdrant(run):
             raise RuntimeError(f"owned Qdrant exited during restart with {run.process.returncode}")
         try:
             identity = qdrant_rss.existing.linux_process_identity(run.server_pid)
-            info = qdrant_rss.existing.server_info(run.plan["url"], run.api_key)
+            info = qdrant_rss.existing.server_info(run.plan["url"], "")
             if (identity and info.get("version") == run.plan["qdrant_server_version"]
                     and Path(f"/proc/{run.server_pid}/exe").resolve() == Path(run.plan["qdrant_bin"])
                     and qdrant_rss.existing.server_process_owns_endpoint(run.server_pid, run.plan["url"])):

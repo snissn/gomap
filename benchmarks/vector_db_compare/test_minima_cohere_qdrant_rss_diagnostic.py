@@ -5,6 +5,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -322,7 +323,7 @@ class CohereQdrantRSSDiagnosticTests(unittest.TestCase):
             "contract", "rss", "rss_source", "rss_scope", "rss_pid", "quality",
             "quality_missing_curve", "quality_control_order", "quality_mean", "quality_ndcg_type",
             "provenance", "reasons", "storage", "guard", "guard_limit",
-            "guard_identity", "cleanup", "cleanup_identity",
+            "guard_identity", "cleanup", "cleanup_identity", "cleanup_identity_type",
         ):
             with self.subTest(mutation=mutation):
                 changed = copy.deepcopy(qdrant)
@@ -360,6 +361,8 @@ class CohereQdrantRSSDiagnosticTests(unittest.TestCase):
                     changed["resource_guard"]["last_sample"]["server"]["process_identity"] = "3:30"
                 elif mutation == "cleanup":
                     changed["cleanup"]["kill_sent"] = True
+                elif mutation == "cleanup_identity_type":
+                    changed["cleanup"]["process_identity"] = None
                 else:
                     changed["cleanup"]["process_identity"] = "3:30"
                 self.assertEqual(qdrant_rss.compare_artifacts(tree, changed)["state"], "uncalibrated")
@@ -590,33 +593,81 @@ class CohereQdrantRSSDiagnosticTests(unittest.TestCase):
             self.assertEqual(run.wait_ready(500000, "initial"), {"poll": 1})
         self.assertEqual(wait.call_count, 2)
 
-    def test_owned_qdrant_readiness_uses_configured_api_key(self):
+    def test_owned_qdrant_startup_is_atomic_and_unauthenticated(self):
         with tempfile.TemporaryDirectory() as temporary:
             run = qdrant_rss.Run.__new__(qdrant_rss.Run)
             run.output = Path(temporary) / "run"
             run.output.mkdir()
             run.storage_path = Path(temporary) / "storage"
-            run.api_key = "secret"
             run.client_factory = object
             run.harness_pgid = 44
+            run.resource_lock = threading.Lock()
             run.plan = {
                 "url": "http://127.0.0.1:6333", "qdrant_bin": str(Path(sys.executable).resolve()),
                 "qdrant_server_version": "1.19.0", "startup_timeout_s": 1, "poll_interval_s": 0,
             }
             process = MagicMock(pid=os.getpid())
             process.poll.return_value = None
-            with patch.dict(qdrant_rss.os.environ, {"QDRANT__CLUSTER__ENABLED": "true"}), \
-                    patch.object(qdrant_rss.subprocess, "Popen", return_value=process) as launch, \
+            process.wait.return_value = 0
+
+            def launch_process(*_args, **_kwargs):
+                self.assertTrue(run.resource_lock.locked())
+                return process
+
+            with patch.dict(qdrant_rss.os.environ, {
+                        "QDRANT_API_KEY": "ambient-client-secret",
+                        "QDRANT__SERVICE__API_KEY": "ambient-server-secret",
+                        "QDRANT__CLUSTER__ENABLED": "true",
+                    }), \
+                    patch.object(qdrant_rss.subprocess, "Popen",
+                                 side_effect=launch_process) as launch, \
                     patch.object(qdrant_rss.existing, "linux_process_identity", return_value="1:1"), \
                     patch.object(qdrant_rss.existing, "server_info", return_value={"version": "1.19.0"}) as info, \
                     patch.object(qdrant_rss.existing, "server_process_owns_endpoint", return_value=True), \
                     patch.object(qdrant_rss.existing, "server_process_identity", return_value="qdrant"), \
                     patch.object(qdrant_rss.os, "getpgid", return_value=44):
                 run.start_server()
-            info.assert_called_once_with(run.plan["url"], "secret")
+            info.assert_called_once_with(run.plan["url"], "")
+            self.assertIs(run.process, process)
+            self.assertEqual(run.process_identity, "1:1")
+            self.assertEqual(run.server_pgid, 44)
             self.assertNotIn("QDRANT__CLUSTER__ENABLED", launch.call_args.kwargs["env"])
-            self.assertEqual(launch.call_args.kwargs["env"]["QDRANT__SERVICE__API_KEY"], "secret")
+            self.assertNotIn("QDRANT_API_KEY", launch.call_args.kwargs["env"])
+            self.assertNotIn("QDRANT__SERVICE__API_KEY", launch.call_args.kwargs["env"])
             self.assertNotIn("start_new_session", launch.call_args.kwargs)
+            run.server_log.close()
+
+    def test_main_rejects_ambient_qdrant_credentials_before_argument_processing(self):
+        for variable in qdrant_rss.QDRANT_CREDENTIAL_ENV:
+            with self.subTest(variable=variable), \
+                    patch.dict(qdrant_rss.os.environ, {variable: "secret"}, clear=True), \
+                    self.assertRaisesRegex(ValueError, variable):
+                qdrant_rss.main()
+
+    def test_owned_qdrant_reaps_child_when_identity_capture_fails(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            run = qdrant_rss.Run.__new__(qdrant_rss.Run)
+            run.output = Path(temporary) / "run"
+            run.output.mkdir()
+            run.storage_path = Path(temporary) / "storage"
+            run.harness_pgid = 44
+            run.resource_lock = threading.Lock()
+            run.process = run.process_identity = run.process_command_identity = None
+            run.server_pid = run.server_pgid = None
+            run.plan = {
+                "url": "http://127.0.0.1:6333",
+                "qdrant_bin": str(Path(sys.executable).resolve()),
+            }
+            process = MagicMock(pid=os.getpid())
+            process.poll.return_value = None
+            process.wait.return_value = 0
+            with patch.object(qdrant_rss.subprocess, "Popen", return_value=process), \
+                    patch.object(qdrant_rss.existing, "linux_process_identity", return_value=None), \
+                    self.assertRaisesRegex(RuntimeError, "identity is unavailable"):
+                run.start_server()
+            process.terminate.assert_called_once_with()
+            process.wait.assert_called_once_with(timeout=30)
+            self.assertIsNone(run.process)
             run.server_log.close()
 
     def test_owned_qdrant_rejects_nonzero_shutdown(self):
