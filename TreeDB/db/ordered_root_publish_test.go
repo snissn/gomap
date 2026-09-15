@@ -361,15 +361,19 @@ func TestPublishOrderedRootDeltaGroupsWithoutCommandWALAvoidCandidateScan(t *tes
 		iterator          bool
 		serialized        bool
 		outerLeafLog      bool
+		omitDescriptor    bool
 		invalidateTracker bool
 		wantScans         int64
 	}{
 		{name: "optimistic-pager"},
 		{name: "serialized-pager", serialized: true},
+		{name: "optimistic-omitted-descriptor-falls-back", omitDescriptor: true, wantScans: 5},
+		{name: "serialized-omitted-descriptor-falls-back", serialized: true, omitDescriptor: true, wantScans: 5},
 		{name: "optimistic-value-log-leaves", outerLeafLog: true},
 		{name: "serialized-value-log-leaves", serialized: true, outerLeafLog: true},
 		{name: "invalid-tracker-falls-back", serialized: true, outerLeafLog: true, invalidateTracker: true, wantScans: 1},
 		{name: "iterator-pager", iterator: true},
+		{name: "iterator-omitted-descriptor-falls-back", iterator: true, omitDescriptor: true, wantScans: 5},
 		{name: "iterator-value-log-leaves", iterator: true, outerLeafLog: true},
 		{name: "iterator-invalid-tracker-falls-back", iterator: true, outerLeafLog: true, invalidateTracker: true, wantScans: 1},
 	} {
@@ -397,11 +401,16 @@ func TestPublishOrderedRootDeltaGroupsWithoutCommandWALAvoidCandidateScan(t *tes
 			if err := db.RefreshValueLogSet(); err != nil {
 				t.Fatalf("refresh value-log set: %v", err)
 			}
+			publications := 0
 			publish := func(baseRoot uint64, ptr page.ValuePtr, inlineValue []byte, deleteValue bool) uint64 {
 				t.Helper()
 				buildSystem := func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+					if test.omitDescriptor && publications > 0 {
+						return mustFrozenRawMemtable(t, "system/metadata", strconv.Itoa(publications)).NewIterator(nil, nil), nil
+					}
 					return mustFrozenRawMemtable(t, maintenanceTestCollectionRootKey, encodeMaintenanceRootID(rootIDs[0])).NewIterator(nil, nil), nil
 				}
+				defer func() { publications++ }()
 				if test.iterator {
 					delta, deltaErr := memtable.NewWithCapacityMode(0, memtable.ModeHashSorted)
 					if deltaErr != nil {

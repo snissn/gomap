@@ -1336,6 +1336,18 @@ func orderedRootCollectionDescriptorTransitionsCoveredByDelta(
 	)
 }
 
+func orderedRootTransitionsChanged(baseRoots, newRoots []uint64) bool {
+	if len(baseRoots) != len(newRoots) {
+		return true
+	}
+	for i := range baseRoots {
+		if baseRoots[i] != newRoots[i] {
+			return true
+		}
+	}
+	return false
+}
+
 func orderedRootRangeOverlapsPrefix(start, end, prefix, prefixEnd []byte) bool {
 	return (len(end) == 0 || bytes.Compare(end, prefix) > 0) &&
 		(len(start) == 0 || len(prefixEnd) == 0 || bytes.Compare(start, prefixEnd) < 0)
@@ -2891,11 +2903,11 @@ func (db *DB) publishOrderedRootDeltaGroupWithSystemDeltaBuilderWithMaintenanceP
 		if systemRefDelta == nil {
 			exactValueLogRefDelta = false
 		} else {
-			if systemRefDelta.requiresCandidateProjection {
-				baseRoots := make([]uint64, len(ordered))
-				for idx := range ordered {
-					baseRoots[idx] = ordered[idx].BaseRoot
-				}
+			baseRoots := make([]uint64, len(ordered))
+			for idx := range ordered {
+				baseRoots[idx] = ordered[idx].BaseRoot
+			}
+			if systemRefDelta.requiresCandidateProjection || orderedRootTransitionsChanged(baseRoots, rootIDs) {
 				if orderedRootCollectionDescriptorTransitionsCoveredByDelta(baseDescriptorEntries, systemDelta, userRoot, baseSystemRoot, rootID, baseRoots, rootIDs) {
 					systemRefDelta.requiresCandidateProjection = false
 				} else {
@@ -3413,11 +3425,11 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 			exactValueLogRefDelta = false
 		} else {
 			systemRefDelta.requiresCandidateProjection = false
-			if orderedRootDeltaMayChangeCollectionRootDescriptors(systemDelta) {
-				baseRoots := make([]uint64, len(ordered))
-				for orderedIdx := range ordered {
-					baseRoots[orderedIdx] = ordered[orderedIdx].BaseRoot
-				}
+			baseRoots := make([]uint64, len(ordered))
+			for orderedIdx := range ordered {
+				baseRoots[orderedIdx] = ordered[orderedIdx].BaseRoot
+			}
+			if orderedRootDeltaMayChangeCollectionRootDescriptors(systemDelta) || orderedRootTransitionsChanged(baseRoots, rootIDs) {
 				if !orderedRootCollectionDescriptorTransitionsCoveredByDelta(baseDescriptorEntries, systemDelta, baseUserRoot, systemBaseRoot, rootID, baseRoots, rootIDs) {
 					exactValueLogRefDelta = false
 				}
@@ -3773,11 +3785,11 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(
 		if systemRefDelta == nil {
 			exactValueLogRefDelta = false
 		} else {
-			if systemRefDelta.requiresCandidateProjection {
-				baseRoots := make([]uint64, len(ordered))
-				for idx := range ordered {
-					baseRoots[idx] = ordered[idx].BaseRoot
-				}
+			baseRoots := make([]uint64, len(ordered))
+			for idx := range ordered {
+				baseRoots[idx] = ordered[idx].BaseRoot
+			}
+			if systemRefDelta.requiresCandidateProjection || orderedRootTransitionsChanged(baseRoots, rootIDs) {
 				if orderedRootCollectionDescriptorTransitionsCoveredByDelta(baseDescriptorEntries, systemDelta, userRoot, baseSystemRoot, rootID, baseRoots, rootIDs) {
 					systemRefDelta.requiresCandidateProjection = false
 				} else {
