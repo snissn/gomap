@@ -16,6 +16,9 @@ var errTypedGraphServingCurrentKeyChanged = errors.New("collections: typed graph
 // minted only after publication or snapshot validation and is checked against
 // the live registry on every holder acquisition.
 type typedGraphServingPinProof struct {
+	// key deliberately omits key.db so a quarantined cleanup guardian cannot
+	// retain a closed DB. dbID preserves the instance identity, and live use
+	// still requires the caller's DB pointer to resolve to that exact ID.
 	key  columnVectorGraphSharedPreparedSearchKey
 	id   uint64
 	dbID uint64
@@ -85,6 +88,7 @@ func (p *ColumnAssetLifecyclePinSet) bindTypedGraphServingKey(key columnVectorGr
 	if !ok || dbID == 0 || record.Scope.dbID != dbID || record.Scope.collection != key.collection || record.Scope.namespace != key.namespace || record.Source != p.source {
 		return ErrVectorIndexSnapshotMismatch
 	}
+	key.db = nil
 	p.servingProof = typedGraphServingPinProof{key: key, id: p.id, dbID: dbID}
 	return nil
 }
@@ -96,7 +100,9 @@ func (p *ColumnAssetLifecyclePinSet) authorizesTypedGraphServingKey(key columnVe
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	proof := p.servingProof
-	if p.closed || p.id == 0 || p.source != ColumnAssetLifecyclePinSourcePreparedQuery || proof.key != key || proof.id != p.id || proof.dbID == 0 {
+	keyIdentity := key
+	keyIdentity.db = nil
+	if p.closed || p.id == 0 || p.source != ColumnAssetLifecyclePinSourcePreparedQuery || proof.key != keyIdentity || proof.id != p.id || proof.dbID == 0 {
 		return false
 	}
 	columnAssetLifecycleProcessPins.Lock()

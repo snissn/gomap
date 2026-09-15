@@ -62,6 +62,17 @@ func TestTypedGraphServingHolderRequiresLiveCertifiedPin(t *testing.T) {
 	if !live.authorizesTypedGraphServingKey(key) {
 		t.Fatal("fresh certified pin is not authorized")
 	}
+	live.mu.Lock()
+	proofDB := live.servingProof.key.db
+	live.mu.Unlock()
+	if proofDB != nil {
+		t.Fatal("certified pin proof retained the backend DB")
+	}
+	wrongDBKey := key
+	wrongDBKey.db = new(backenddb.DB)
+	if live.authorizesTypedGraphServingKey(wrongDBKey) {
+		t.Fatal("certified pin authorized a different backend DB")
+	}
 	copyRefs := live.Refs()
 	copyRefs[0].Checksum++
 	if !live.authorizesTypedGraphServingKey(key) {
