@@ -182,6 +182,7 @@ func denseScorePlanePrefixCandidateCountersMatch(proof *collections.ColumnGraphS
 	}
 	if proof.RerankCandidateCap != expectedCap ||
 		proof.NormalizedCandidateWidth > proof.RawCandidateWidth ||
+		(proof.NormalizedCandidateWidth == 0 && (proof.RawCandidateWidth != 0 || proof.ExactSmallFilterScoreCalls != 0)) ||
 		proof.RawRetainedCandidates > proof.QuantizedScoreCalls ||
 		proof.RawRetainedCandidates > proof.RawCandidateWidth ||
 		proof.LiveShortlistCandidates > proof.RawRetainedCandidates ||

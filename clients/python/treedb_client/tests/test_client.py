@@ -1207,6 +1207,12 @@ class TreeDBClientTests(unittest.TestCase):
                 return candidate_work, candidate_proof
 
             prefixes = {route: incomplete_prefix(route) for route in ("", "typed_empty", "typed_exact", "typed_hnsw")}
+            zero_width_work, zero_width_proof = prefixes["typed_exact"]
+            zero_width_proof = replace(
+                zero_width_proof,
+                normalized_candidate_width=0, raw_candidate_width=0, rerank_candidate_cap=0,
+            )
+            prefixes["typed_exact_zero_width"] = (zero_width_work, zero_width_proof)
             for route, (candidate_work, candidate_proof) in prefixes.items():
                 error = IndexUnavailableError(
                     "index_unavailable", "valid prefix", dense_work=candidate_work, score_plane=candidate_proof,
@@ -1242,6 +1248,7 @@ class TreeDBClientTests(unittest.TestCase):
                 for field in ("quantized", "exact base", "base result IDs", "suffix", "overflow")
             )
             prefix_work, prefix_proof = prefixes["typed_hnsw"]
+            zero_width_work, zero_width_proof = prefixes["typed_exact_zero_width"]
             prefix_shape_failures = (
                 ("prefix shape base candidates exceed quantized calls", replace(
                     prefix_work, graph=replace(
@@ -1276,6 +1283,14 @@ class TreeDBClientTests(unittest.TestCase):
                 ("prefix shape actual rerank differs from exact base calls", replace(
                     prefix_work, graph=replace(prefix_work.graph, exact_base_scored=0, base_result_ids=0)), replace(
                         prefix_proof, exact_base_rerank_score_calls=0)),
+                ("zero-width prefix raw candidate width", zero_width_work, replace(
+                    zero_width_proof, raw_candidate_width=1)),
+                ("zero-width prefix base scoring", replace(
+                    zero_width_work, graph=replace(
+                        zero_width_work.graph, delta_scored=0, exact_base_scored=1, base_result_ids=1)), replace(
+                            zero_width_proof, exact_suffix_score_calls=0, exact_small_filter_score_calls=1)),
+                ("zero-width prefix base shadowing", replace(
+                    zero_width_work, graph=replace(zero_width_work.graph, base_shadowed=1)), zero_width_proof),
             )
             route_empty_incomplete, route_empty_proof = prefixes[""]
             completion_prefix_failures = (
@@ -1436,6 +1451,57 @@ class TreeDBClientTests(unittest.TestCase):
                     "a",
                 )
                 filtered_exact_client.close()
+            zero_width_filtered_exact = copy.deepcopy(filtered_exact)
+            zero_width_filtered_exact["dense_work"]["graph"].update(
+                delta_scored=1, exact_base_scored=0, base_shadowed=0, base_result_ids=0,
+            )
+            zero_width_filtered_exact["score_plane"].update(
+                normalized_candidate_width=0, raw_candidate_width=0, rerank_candidate_cap=0,
+                exact_small_filter_score_calls=0, exact_base_vector_bytes_read=0,
+                exact_suffix_score_calls=1, exact_suffix_vector_bytes_read=8,
+            )
+            with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, zero_width_filtered_exact, 0)}) as zero_width_server:
+                zero_width_client = TreeDBClient(zero_width_server.base_url, timeout=1)
+                self.assertEqual(
+                    zero_width_client.query_by_embedding(
+                        "docs", [1, 0], 1,
+                        filter={"field": "meta.repo", "operator": "==", "value": "gomap"},
+                        query_mode="quantized_rerank",
+                        quantized_index_name="embedding.scalar_u8.public",
+                    ).documents[0].id,
+                    "a",
+                )
+                zero_width_client.close()
+            zero_width_hostiles = []
+            zero_width_raw = copy.deepcopy(zero_width_filtered_exact)
+            zero_width_raw["score_plane"]["raw_candidate_width"] = 1
+            zero_width_hostiles.append(("raw candidate width", zero_width_raw))
+            zero_width_base_score = copy.deepcopy(zero_width_filtered_exact)
+            zero_width_base_score["dense_work"]["graph"].update(
+                delta_scored=0, exact_base_scored=1, base_result_ids=1,
+            )
+            zero_width_base_score["score_plane"].update(
+                exact_small_filter_score_calls=1, exact_base_vector_bytes_read=8,
+                exact_suffix_score_calls=0, exact_suffix_vector_bytes_read=0,
+            )
+            zero_width_hostiles.append(("base scoring", zero_width_base_score))
+            zero_width_shadow = copy.deepcopy(zero_width_filtered_exact)
+            zero_width_shadow["dense_work"]["graph"]["base_shadowed"] = 1
+            zero_width_hostiles.append(("base shadowing", zero_width_shadow))
+            for name, hostile in zero_width_hostiles:
+                if name != "base shadowing":
+                    with self.subTest(zero_width_parser=name), self.assertRaises(ValueError):
+                        DenseScorePlaneProof.from_dict(hostile["score_plane"])
+                with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, hostile, 0)}) as hostile_server:
+                    hostile_client = TreeDBClient(hostile_server.base_url, timeout=1)
+                    with self.subTest(zero_width=name), self.assertRaisesRegex(TreeDBProtocolError, "score-plane proof"):
+                        hostile_client.query_by_embedding(
+                            "docs", [1, 0], 1,
+                            filter={"field": "meta.repo", "operator": "==", "value": "gomap"},
+                            query_mode="quantized_rerank",
+                            quantized_index_name="embedding.scalar_u8.public",
+                        )
+                    hostile_client.close()
             oversized_filtered_exact = copy.deepcopy(filtered_exact)
             oversized_filtered_exact["dense_work"]["graph"]["filter"]["eligible_rows"] = 4097
             with FixtureServer({("POST", "/v1/indexes/docs/search/vector"): (200, oversized_filtered_exact, 0)}) as oversized_server:

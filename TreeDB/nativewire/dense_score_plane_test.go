@@ -294,6 +294,42 @@ func TestDenseQuantizedScorePlaneResponseRejectsUnsupportedRoute(t *testing.T) {
 	if err := validateDenseQuantizedScorePlaneResponse(underScoredExactWork, &underScoredExactProof, filteredRequest, 1); err == nil {
 		t.Fatal("filtered typed-exact response did not score every eligible row")
 	}
+	zeroWidthExactProof := underScoredExactProof
+	zeroWidthExactProof.NormalizedCandidateWidth, zeroWidthExactProof.RawCandidateWidth, zeroWidthExactProof.RerankCandidateCap = 0, 0, 0
+	zeroWidthExactWork := underScoredExactWork
+	zeroWidthExactWork.Graph.BaseCandidates = 0
+	zeroWidthExactWork.Graph.Filter.EligibleRows = 1
+	if err := validateDenseQuantizedScorePlaneResponse(zeroWidthExactWork, &zeroWidthExactProof, filteredRequest, 1); err != nil {
+		t.Fatalf("valid filtered zero-width suffix-only proof rejected: %v", err)
+	}
+	for name, mutate := range map[string]func(*documentservice.DenseSearchWork, *collections.ColumnGraphScorePlaneWork){
+		"raw candidate width": func(_ *documentservice.DenseSearchWork, p *collections.ColumnGraphScorePlaneWork) {
+			p.RawCandidateWidth = 1
+		},
+		"base scoring": func(w *documentservice.DenseSearchWork, p *collections.ColumnGraphScorePlaneWork) {
+			w.Graph.DeltaScored, w.Graph.ExactBaseScored, w.Graph.BaseResultIDs = 0, 1, 1
+			p.ExactSuffixScoreCalls, p.ExactSuffixVectorBytesRead = 0, 0
+			p.ExactSmallFilterScoreCalls, p.ExactBaseVectorBytesRead = 1, 8
+		},
+		"base shadowing": func(w *documentservice.DenseSearchWork, _ *collections.ColumnGraphScorePlaneWork) {
+			w.Graph.BaseShadowed = 1
+		},
+	} {
+		candidateWork, candidateProof := zeroWidthExactWork, zeroWidthExactProof
+		mutate(&candidateWork, &candidateProof)
+		if name != "base shadowing" {
+			if _, err := appendDenseScorePlane(nil, candidateProof, iwire.DefaultLimits()); err == nil {
+				t.Fatalf("score-plane encoder accepted zero-width %s", name)
+			}
+		}
+		if err := validateDenseQuantizedScorePlaneResponse(candidateWork, &candidateProof, filteredRequest, 1); err == nil {
+			t.Fatalf("filtered zero-width typed-exact proof accepted %s", name)
+		}
+		remote := &WireError{Code: iwire.ErrInternal, Message: name, DenseWork: &candidateWork, ScorePlane: &candidateProof}
+		if got := validateDenseQuantizedFailureProof(remote, filteredRequest); got == remote {
+			t.Fatalf("filtered zero-width failure proof accepted %s", name)
+		}
+	}
 	for name, mutate := range map[string]func(*collections.ColumnGraphScorePlaneWork){
 		"quantized bytes":    func(p *collections.ColumnGraphScorePlaneWork) { p.QuantizedCodeBytesRead = 0 },
 		"exact base bytes":   func(p *collections.ColumnGraphScorePlaneWork) { p.ExactBaseVectorBytesRead = 1 },
@@ -1235,6 +1271,32 @@ func TestDenseV3FailureProofCompletedGraphPrefixes(t *testing.T) {
 			reject(t, candidateWork, candidateProof)
 		})
 	}
+	zeroWidthPrefixWork, zeroWidthPrefixProof := prefixes["typed_exact"].work, prefixes["typed_exact"].proof
+	zeroWidthPrefixProof.NormalizedCandidateWidth, zeroWidthPrefixProof.RawCandidateWidth, zeroWidthPrefixProof.RerankCandidateCap = 0, 0, 0
+	zeroWidthRemote := &WireError{Code: iwire.ErrInternal, DenseWork: &zeroWidthPrefixWork, ScorePlane: &zeroWidthPrefixProof}
+	if got := validateDenseQuantizedFailureProof(zeroWidthRemote, request); got != zeroWidthRemote {
+		t.Fatalf("valid zero-width incomplete prefix rejected: %v", got)
+	}
+	zeroWidthPrefixMutations := []struct {
+		name   string
+		mutate func(*documentservice.DenseSearchWork, *collections.ColumnGraphScorePlaneWork)
+	}{
+		{"raw candidate width", func(_ *documentservice.DenseSearchWork, p *collections.ColumnGraphScorePlaneWork) {
+			p.RawCandidateWidth = 1
+		}},
+		{"base scoring", func(w *documentservice.DenseSearchWork, p *collections.ColumnGraphScorePlaneWork) {
+			w.Graph.DeltaScored, w.Graph.ExactBaseScored, w.Graph.BaseResultIDs = 0, 1, 1
+			p.ExactSuffixScoreCalls, p.ExactSmallFilterScoreCalls = 0, 1
+		}},
+		{"base shadowing", func(w *documentservice.DenseSearchWork, _ *collections.ColumnGraphScorePlaneWork) {
+			w.Graph.BaseShadowed = 1
+		}},
+	}
+	for _, mutation := range zeroWidthPrefixMutations {
+		candidateWork, candidateProof := zeroWidthPrefixWork, zeroWidthPrefixProof
+		mutation.mutate(&candidateWork, &candidateProof)
+		t.Run("invalid incomplete zero-width "+mutation.name, func(t *testing.T) { reject(t, candidateWork, candidateProof) })
+	}
 	mismatchedIncompleteWork := matchingIncompleteWork
 	mismatchedIncompleteWork.Graph.Route = "typed_exact"
 	reject(t, mismatchedIncompleteWork, matchingIncompleteProof)
@@ -1322,6 +1384,13 @@ func TestDenseV3FailureProofCompletedGraphPrefixes(t *testing.T) {
 	for _, mutation := range prefixShapeMutations {
 		t.Run("FrameError invalid incomplete prefix shape "+mutation.name, func(t *testing.T) {
 			candidateWork, candidateProof := prefixes["typed_hnsw"].work, prefixes["typed_hnsw"].proof
+			mutation.mutate(&candidateWork, &candidateProof)
+			frameCase(t, candidateWork, candidateProof, false)
+		})
+	}
+	for _, mutation := range zeroWidthPrefixMutations {
+		t.Run("FrameError invalid incomplete zero-width "+mutation.name, func(t *testing.T) {
+			candidateWork, candidateProof := zeroWidthPrefixWork, zeroWidthPrefixProof
 			mutation.mutate(&candidateWork, &candidateProof)
 			frameCase(t, candidateWork, candidateProof, false)
 		})

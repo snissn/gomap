@@ -507,6 +507,48 @@ class NativeCodecTests(unittest.TestCase):
                     quantized_index_name="embedding.scalar_u8.public", quantized_rerank_candidates=0,
                     ef_search=0, query_dimension=2, filter_requested=True,
                 )
+            zero_width_work_values = list(filtered_work_values)
+            zero_width_work_values[2] = 2  # typed_exact
+            zero_width_work_values[3:10] = [0, 0, 0, 1, 0, 0, 0]
+            zero_width_work_values[10] = 1
+            zero_width_values = list(values)
+            zero_width_values[4] = 2  # typed_exact
+            zero_width_values[10:19] = [0] * 9
+            zero_width_values[19:23] = [1, 0, 0, 8]
+
+            def zero_width_body(candidate_work, candidate_proof):
+                return (
+                    _section(102, _vector([b"a"])) + _section(103, _vector([b'{"id":"a"}']))
+                    + _section(130, meta)
+                    + _section(134, b"".join(_uint(value) for value in candidate_work))
+                    + _section(136, score_plane_bytes(candidate_proof))
+                )
+
+            _dense_response(
+                zero_width_body(zero_width_work_values, zero_width_values),
+                1, version=3, query_mode="quantized_rerank",
+                quantized_index_name="embedding.scalar_u8.public", quantized_rerank_candidates=0,
+                ef_search=0, query_dimension=2, filter_requested=True,
+            )
+            zero_width_hostiles = []
+            nonzero_raw = list(zero_width_values)
+            nonzero_raw[11] = 1
+            zero_width_hostiles.append(("raw candidate width", zero_width_work_values, nonzero_raw))
+            base_scored_work, base_scored_proof = list(zero_width_work_values), list(zero_width_values)
+            base_scored_work[6], base_scored_work[7], base_scored_work[9] = 0, 1, 1
+            base_scored_proof[19:23] = [0, 1, 8, 0]
+            zero_width_hostiles.append(("base scoring", base_scored_work, base_scored_proof))
+            base_shadowed = list(zero_width_work_values)
+            base_shadowed[8] = 1
+            zero_width_hostiles.append(("base shadowing", base_shadowed, zero_width_values))
+            for name, candidate_work, candidate_proof in zero_width_hostiles:
+                with self.subTest(zero_width=name), self.assertRaises(TreeDBProtocolError):
+                    _dense_response(
+                        zero_width_body(candidate_work, candidate_proof),
+                        1, version=3, query_mode="quantized_rerank",
+                        quantized_index_name="embedding.scalar_u8.public", quantized_rerank_candidates=0,
+                        ef_search=0, query_dimension=2, filter_requested=True,
+                    )
             for route_tag, score_calls in ((4, 1), (3, 0)):  # typed_hnsw and zero-work rerank proofs are invalid.
                 invalid_values = list(values)
                 invalid_values[4] = route_tag

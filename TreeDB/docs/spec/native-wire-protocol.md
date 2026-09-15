@@ -859,7 +859,7 @@ and `R` denote normalized candidate width, raw candidate width, and rerank cap.
 | Score-plane route | Filter/cardinality | Planning and scoring invariants |
 |---|---|---|
 | `typed_empty` | A completed filter is required and eligible rows are zero | Result and all score/retained/live/actual counters are zero. `E/C/R` may be nonzero because planning can precede removal of shadowed filter matches. |
-| `typed_exact` | Without a filter, the base domain is empty. A filter has positive eligibility; with a nonzero `E`, eligible rows are at most 4096. | Unfiltered `E/C/R`, small-filter calls, and base-shadowed are zero. Filtered total exact calls equal eligible rows. Result count is `min(top-K, total exact calls)`. |
+| `typed_exact` | Without a filter, the base domain is empty. A filter has positive eligibility; with a nonzero `E`, eligible rows are at most 4096. | Whenever `E` is zero, `C`, small-filter calls, and base-shadowed are zero, so exact work is suffix-only. Filtered total exact calls equal eligible rows. Result count is `min(top-K, total exact calls)`. |
 | `quantized_rerank` | A filtered route has more than 4096 eligible rows. | `E/C/R` are positive; small-filter calls are zero; base-shadowed is no greater than raw retained; live shortlist is `min(E, raw retained - base shadowed)`; actual rerank is `min(live shortlist, R)`. Result count is `min(top-K, total exact calls)`. |
 
 For every route, completed proofs have an empty reason and available incomplete
@@ -871,10 +871,11 @@ bounds: graph base candidates do not exceed quantized calls; `R = min(E,
 requested rerank candidates or E)`; explicit EF bounds `E`; retained candidates
 do not exceed quantized calls or `C`; live candidates do not exceed retained
 candidates or `E`; and actual reranks do not exceed live candidates or `R` and
-equal completed exact-base rerank calls. Graph base candidates may be lower than
+equal completed exact-base rerank calls. A zero `E` additionally requires zero
+`C`, small-filter calls, and graph base-shadowed work. Graph base candidates may be lower than
 quantized calls because public minimal stats do not require that optional count.
 These prefix bounds intentionally do not infer byte equalities or a
-base-shadowed relation before completion. Returned exact cosine scores are
+nonzero-width base-shadowed relation before completion. Returned exact cosine scores are
 finite and within `[-1.000001, 1.000001]`, allowing only bounded FP32 rounding.
 Returned IDs are valid UTF-8, nonempty, free of leading or trailing Unicode
 White_Space as defined by Go `unicode.IsSpace`, and unique, matching

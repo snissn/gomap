@@ -225,6 +225,10 @@ class DenseScorePlaneProof:
                 (values["requested_ef_search"] != 0 and values["normalized_candidate_width"] > max(values["requested_top_k"], values["requested_ef_search"]))
                 or values["rerank_candidate_cap"] != expected_cap
                 or values["normalized_candidate_width"] > values["raw_candidate_width"]
+                or (
+                    values["normalized_candidate_width"] == 0
+                    and (values["raw_candidate_width"] != 0 or values["exact_small_filter_score_calls"] != 0)
+                )
                 or values["raw_retained_candidates"] > values["quantized_score_calls"]
                 or values["raw_retained_candidates"] > values["raw_candidate_width"]
                 or values["live_shortlist_candidates"] > values["raw_retained_candidates"]
@@ -350,6 +354,7 @@ def dense_failure_score_counters_match_graph(graph, proof):
         exact_base_calls < 1 << 64
         and dense_score_plane_prefix_candidate_counters_match(proof)
         and graph.base_candidates <= proof.quantized_score_calls
+        and (proof.normalized_candidate_width != 0 or graph.base_shadowed == 0)
         and proof.quantized_score_calls == graph.base_ann_scored
         and exact_base_calls == graph.exact_base_scored
         and exact_base_calls == graph.base_result_ids
@@ -403,6 +408,10 @@ def dense_score_plane_prefix_candidate_counters_match(proof):
     return not (
         proof.rerank_candidate_cap != expected_cap
         or proof.normalized_candidate_width > proof.raw_candidate_width
+        or (
+            proof.normalized_candidate_width == 0
+            and (proof.raw_candidate_width != 0 or proof.exact_small_filter_score_calls != 0)
+        )
         or proof.raw_retained_candidates > proof.quantized_score_calls
         or proof.raw_retained_candidates > proof.raw_candidate_width
         or proof.live_shortlist_candidates > proof.raw_retained_candidates
@@ -440,6 +449,7 @@ def dense_quantized_completed_graph_matches(work, proof, top_k, result_count, fi
         or (graph.filter.attempted and not graph.filter.completed)
         or (filter_requested and result_count != min(top_k, graph.filter.eligible_rows))
         or graph.base_edges != 0
+        or (proof.normalized_candidate_width == 0 and graph.base_shadowed != 0)
         or (not filter_requested and proof.exact_small_filter_score_calls != 0)
         or (filter_requested and (
             exact_score_calls > graph.filter.eligible_rows

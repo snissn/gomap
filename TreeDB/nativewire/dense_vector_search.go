@@ -384,6 +384,7 @@ func denseScorePlanePrefixRouteMatchesGraph(graphRoute, proofRoute string) bool 
 func denseFailureScoreCountersMatchGraph(graph collections.ColumnGraphQueryWork, proof *collections.ColumnGraphScorePlaneWork) bool {
 	if proof == nil || !denseScorePlanePrefixCandidateCountersMatch(proof) ||
 		graph.BaseCandidates > proof.QuantizedScoreCalls ||
+		(proof.NormalizedCandidateWidth == 0 && graph.BaseShadowed != 0) ||
 		proof.ExactSmallFilterScoreCalls > ^uint64(0)-proof.ExactBaseRerankScoreCalls {
 		return false
 	}
@@ -577,7 +578,8 @@ func denseScorePlaneCountersMatchWork(work documentservice.DenseSearchWork, proo
 		return false
 	}
 	exactScoreCalls := exactBaseScoreCalls + proof.ExactSuffixScoreCalls
-	if work.Graph.BaseEdges != 0 || (!filterRequested && proof.ExactSmallFilterScoreCalls != 0) ||
+	if work.Graph.BaseEdges != 0 || (proof.NormalizedCandidateWidth == 0 && work.Graph.BaseShadowed != 0) ||
+		(!filterRequested && proof.ExactSmallFilterScoreCalls != 0) ||
 		(filterRequested && (exactScoreCalls > work.Graph.Filter.EligibleRows ||
 			(proof.Route == "typed_exact" && exactScoreCalls != work.Graph.Filter.EligibleRows))) {
 		return false
