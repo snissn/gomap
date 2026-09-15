@@ -49,6 +49,54 @@ func requireTypedGraphServingFoundationReleased(t testing.TB, col *Collection) {
 	requireColumnServingLedgerEmpty(t, &col.collectionSchemaCoordinator().typedGraphPhysical)
 }
 
+func TestTypedGraphServingHolderRequiresLiveCertifiedPin(t *testing.T) {
+	requireTypedGraphPreparedHolderTest(t)
+	col, fixture, _, _, _, _ := openTypedGraphQualityFixture(t, 128)
+	if err := fixture.Close(); err != nil {
+		t.Fatal(err)
+	}
+	limits := typedGraphOverlapLimits()
+	installTypedGraphServingStateForInternalTest(t, col, "embedding_graph", limits)
+	state := col.collectionSchemaCoordinator().typedPublication.Load()
+	key, live := acquireTypedGraphServingCallerPinForTest(t, col, state, "serving-holder-live-proof")
+	if !live.authorizesTypedGraphServingKey(key) {
+		t.Fatal("fresh certified pin is not authorized")
+	}
+	copyRefs := live.Refs()
+	copyRefs[0].Checksum++
+	if !live.authorizesTypedGraphServingKey(key) {
+		t.Fatal("mutating the defensive Refs result changed registered authority")
+	}
+	columnAssetLifecycleProcessPins.Lock()
+	delete(columnAssetLifecycleProcessPins.pins, live.ID())
+	columnAssetLifecycleProcessPins.Unlock()
+	if live.authorizesTypedGraphServingKey(key) {
+		t.Fatal("pin remained authorized after registry removal")
+	}
+	if capability, err := state.servingBase.acquireServingHolderWithOwnedPin(context.Background(), col, live, limits.Physical); capability != nil || !errors.Is(err, ErrVectorIndexSnapshotMismatch) {
+		if capability != nil {
+			_ = capability.Close()
+		}
+		t.Fatalf("removed registry pin capability=%v err=%v", capability, err)
+	}
+
+	uncertified, err := col.AcquireColumnAssetLifecyclePinSet(ColumnAssetLifecyclePinSetOptions{
+		Source: ColumnAssetLifecyclePinSourcePreparedQuery,
+		Owner:  "serving-holder-uncertified",
+		Refs:   state.servingRefs,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if capability, err := state.servingBase.acquireServingHolderWithOwnedPin(context.Background(), col, uncertified, limits.Physical); capability != nil || !errors.Is(err, ErrVectorIndexSnapshotMismatch) {
+		if capability != nil {
+			_ = capability.Close()
+		}
+		t.Fatalf("uncertified pin capability=%v err=%v", capability, err)
+	}
+	requireTypedGraphServingFoundationReleased(t, col)
+}
+
 func TestTypedGraphServingHolderCapabilityPairsCallerPinsThroughCancellation(t *testing.T) {
 	requireTypedGraphPreparedHolderTest(t)
 	col, fixture, _, _, _, _ := openTypedGraphQualityFixture(t, 128)
@@ -352,6 +400,12 @@ func TestTypedGraphStaleBaseKeeperUsesCompleteNonGraphClosureKey(t *testing.T) {
 	changedState := *oldState
 	changedState.servingBase = &changedBase
 	coord.typedPublication.Store(&changedState)
+	if owner, err := col.openTypedGraphReadOwner(limits); owner != nil || !errors.Is(err, ErrVectorIndexSnapshotMismatch) {
+		if owner != nil {
+			_ = owner.Close()
+		}
+		t.Fatalf("changed base inherited obsolete closure certificate owner=%v err=%v", owner, err)
+	}
 	col.invalidateTypedGraphStaleBaseKeeper("embedding_graph")
 
 	slot := collectionVectorIndexPreparedSearchCacheSlot{family: collectionVectorIndexPreparedSearchFamilyCapturedBase, indexName: "embedding_graph"}

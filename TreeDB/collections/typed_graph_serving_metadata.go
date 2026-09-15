@@ -226,10 +226,6 @@ func (b *typedGraphServingBaseMetadata) servingPreparedSearchKey(c *Collection) 
 	if err != nil {
 		return columnVectorGraphSharedPreparedSearchKey{}, err
 	}
-	refsDigest, err := digestTypedGraphServingBaseRefs(b.refs)
-	if err != nil || refsDigest != b.refsDigest {
-		return columnVectorGraphSharedPreparedSearchKey{}, ErrVectorIndexSnapshotMismatch
-	}
 	key := columnVectorGraphSharedPreparedSearchKey{
 		family:     columnVectorGraphSharedPreparedSearchKeyServing,
 		db:         c.db,
@@ -237,7 +233,7 @@ func (b *typedGraphServingBaseMetadata) servingPreparedSearchKey(c *Collection) 
 		collection: b.view.Catalog.meta.Name,
 		namespace:  b.view.AssetNamespace,
 		logical:    b.preparedKey,
-		refsDigest: refsDigest,
+		refsDigest: b.refsDigest,
 		refsCount:  len(b.refs),
 	}
 	if !key.valid() {
@@ -478,6 +474,11 @@ func typedGraphMaterializerMetadataBytes(m columnPhysicalScanSnapshotView, limit
 
 func (s *typedGraphPublicationState) prepareServingRefs(records []columnManifestRecord, meta CollectionMeta, cold typedGraphColdLimits) error {
 	if s.servingBase == nil {
+		s.servingRefs = nil
+		s.servingBaseRefsDigest = [32]byte{}
+		s.servingBaseRefsCount = 0
+		s.servingPinBytes = 0
+		s.servingOwnerRefBytes = 0
 		return nil
 	}
 	if len(records) > cold.ManifestRecords || columnManifestRecordsBytes(records) > cold.ManifestBytes {
@@ -497,6 +498,11 @@ func (s *typedGraphPublicationState) prepareServingRefs(records []columnManifest
 	n := int64(cap(refs)) * int64(reflect.TypeFor[ColumnAssetRef]().Size())
 	if n < 0 || n > cold.DecodedTermBytes-b.bytes {
 		return errTypedGraphOwnerBudget
+	}
+	pinBytes, ownerRefBytes := int64(0), n
+	for _, ref := range refs {
+		pinBytes = addColumnAssetReachabilityBytes(pinBytes, positiveColumnAssetReachabilityLength(ref.Length))
+		ownerRefBytes = addColumnAssetReachabilityBytes(ownerRefBytes, int64(len(ref.Namespace)))
 	}
 	materializer := b.materializerView
 	if !collectionMetaValuesEqual(b.view.Catalog.meta, meta) {
@@ -520,7 +526,12 @@ func (s *typedGraphPublicationState) prepareServingRefs(records []columnManifest
 	materializer.CommitSeq, materializer.SystemRoot = 0, 0
 	materializer.Diagnostics.ManifestRoot = 0
 	s.servingMaterializer = materializer
-	s.servingRefs, s.servingMetadataBytes = refs, n+b.bytes
+	s.servingRefs = refs
+	s.servingBaseRefsDigest = b.refsDigest
+	s.servingBaseRefsCount = len(b.refs)
+	s.servingPinBytes = pinBytes
+	s.servingOwnerRefBytes = ownerRefBytes
+	s.servingMetadataBytes = n + b.bytes
 	return nil
 }
 

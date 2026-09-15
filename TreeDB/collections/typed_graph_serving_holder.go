@@ -11,6 +11,16 @@ import (
 
 var errTypedGraphServingCurrentKeyChanged = errors.New("collections: typed graph serving key changed during holder acquisition")
 
+// typedGraphServingPinProof certifies that one registered lifecycle pin owns a
+// publication closure containing the exact base closure named by key. It is
+// minted only after publication or snapshot validation and is checked against
+// the live registry on every holder acquisition.
+type typedGraphServingPinProof struct {
+	key  columnVectorGraphSharedPreparedSearchKey
+	id   uint64
+	dbID uint64
+}
+
 func typedGraphServingCurrentKeyChanged() error {
 	return errors.Join(errTypedGraphServingCurrentKeyChanged, ErrVectorIndexSnapshotMismatch)
 }
@@ -57,6 +67,69 @@ func typedGraphServingPinContainsBase(baseRefs, pinRefs []ColumnAssetRef) error 
 		}
 	}
 	return nil
+}
+
+func (p *ColumnAssetLifecyclePinSet) bindTypedGraphServingKey(key columnVectorGraphSharedPreparedSearchKey) error {
+	if p == nil || !key.valid() || key.family != columnVectorGraphSharedPreparedSearchKeyServing {
+		return ErrVectorIndexSnapshotMismatch
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.closed || p.id == 0 || p.source != ColumnAssetLifecyclePinSourcePreparedQuery || p.servingProof != (typedGraphServingPinProof{}) {
+		return ErrVectorIndexSnapshotMismatch
+	}
+	columnAssetLifecycleProcessPins.Lock()
+	defer columnAssetLifecycleProcessPins.Unlock()
+	dbID := columnAssetLifecycleProcessPins.dbIDs[key.db]
+	record, ok := columnAssetLifecycleProcessPins.pins[p.id]
+	if !ok || dbID == 0 || record.Scope.dbID != dbID || record.Scope.collection != key.collection || record.Scope.namespace != key.namespace || record.Source != p.source {
+		return ErrVectorIndexSnapshotMismatch
+	}
+	p.servingProof = typedGraphServingPinProof{key: key, id: p.id, dbID: dbID}
+	return nil
+}
+
+func (p *ColumnAssetLifecyclePinSet) authorizesTypedGraphServingKey(key columnVectorGraphSharedPreparedSearchKey) bool {
+	if p == nil || !key.valid() || key.family != columnVectorGraphSharedPreparedSearchKeyServing {
+		return false
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	proof := p.servingProof
+	if p.closed || p.id == 0 || p.source != ColumnAssetLifecyclePinSourcePreparedQuery || proof.key != key || proof.id != p.id || proof.dbID == 0 {
+		return false
+	}
+	columnAssetLifecycleProcessPins.Lock()
+	defer columnAssetLifecycleProcessPins.Unlock()
+	record, ok := columnAssetLifecycleProcessPins.pins[p.id]
+	return ok && columnAssetLifecycleProcessPins.dbIDs[key.db] == proof.dbID && record.Scope.dbID == proof.dbID && record.Scope.collection == key.collection && record.Scope.namespace == key.namespace && record.Source == p.source
+}
+
+// acquireTypedGraphServingLifecyclePin registers the immutable publication
+// closure without cloning or revalidating it on every request. prepareServingRefs
+// established both the complete-base certificate and cached byte charge before
+// the state became visible; arbitrary lifecycle-pin callers cannot enter here.
+func (c *Collection) acquireTypedGraphServingLifecyclePin(state *typedGraphPublicationState, key columnVectorGraphSharedPreparedSearchKey, owner string) (*ColumnAssetLifecyclePinSet, error) {
+	if c == nil || c.db == nil || state == nil || !state.servingAdmitted || state.servingBase == nil || owner == "" || key.db != c.db || key.collection != c.collectionName() || key.namespace == "" || state.servingBaseRefsDigest != key.refsDigest || state.servingBaseRefsCount != key.refsCount || len(state.servingRefs) < key.refsCount || state.servingPinBytes <= 0 {
+		return nil, ErrVectorIndexSnapshotMismatch
+	}
+	current, err := state.servingBase.servingPreparedSearchKey(c)
+	if err != nil || current != key {
+		return nil, ErrVectorIndexSnapshotMismatch
+	}
+	opts := ColumnAssetLifecyclePinSetOptions{Source: ColumnAssetLifecyclePinSourcePreparedQuery, Owner: owner, Refs: state.servingRefs}
+	scope, err := c.columnAssetLifecyclePinSetScope(opts)
+	if err != nil || scope.collection != key.collection || scope.namespace != key.namespace {
+		return nil, ErrVectorIndexSnapshotMismatch
+	}
+	pin, err := c.registerColumnAssetLifecyclePinSetOwned(opts, scope, state.servingPinBytes)
+	if err != nil {
+		return nil, err
+	}
+	if err := pin.bindTypedGraphServingKey(key); err != nil {
+		return nil, errors.Join(err, pin.Close())
+	}
+	return pin, nil
 }
 
 // typedGraphServingHolderBuild is intentionally supplied a builder-owned DB
@@ -123,15 +196,15 @@ func (b *typedGraphServingBaseMetadata) acquireServingHolderWithOwnedPinAndBuild
 }
 
 func (b *typedGraphServingBaseMetadata) acquireServingHolderWithOwnedPinAndBuildMode(ctx context.Context, c *Collection, pin *ColumnAssetLifecyclePinSet, limits typedGraphPhysicalResourceLimits, admissionBuild bool, build typedGraphServingHolderBuild) (*typedGraphServingHolderCapability, error) {
-	if b == nil || c == nil || c.db == nil || pin == nil || pin.Source() != ColumnAssetLifecyclePinSourcePreparedQuery || build == nil {
+	if b == nil || c == nil || c.db == nil || c.db.IsClosing() || pin == nil || build == nil {
 		return nil, errors.Join(ErrVectorIndexSnapshotMismatch, pin.Close())
 	}
 	key, err := b.servingPreparedSearchKey(c)
 	if err != nil {
 		return nil, errors.Join(err, pin.Close())
 	}
-	if err := typedGraphServingPinContainsBase(b.refs, pin.Refs()); err != nil {
-		return nil, errors.Join(err, pin.Close())
+	if !pin.authorizesTypedGraphServingKey(key) {
+		return nil, errors.Join(ErrVectorIndexSnapshotMismatch, pin.Close())
 	}
 	ref, err := c.acquireColumnVectorGraphServingPreparedSearch(ctx, key, limits, admissionBuild, build)
 	if err != nil {
@@ -292,6 +365,10 @@ func (c *Collection) acquireColumnVectorGraphServingPinnedSnapshot(ctx context.C
 		if typedGraphServingPinContainsBase(latest.servingBase.refs, ownedRefs) != nil {
 			_ = guard.Close()
 			return ErrVectorIndexSnapshotMismatch
+		}
+		if bindErr := guard.bindTypedGraphServingKey(key); bindErr != nil {
+			_ = guard.Close()
+			return bindErr
 		}
 		snap, base, pin = candidate, latest.servingBase, guard
 		cleanupCandidate = false

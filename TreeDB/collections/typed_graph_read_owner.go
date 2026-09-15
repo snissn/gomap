@@ -355,6 +355,13 @@ func (c *Collection) openTypedGraphReadOwnerWithContext(ctx context.Context, lim
 		// view across the storage barrier for materializer attachment.
 		baseView.FullConfig = *cfg
 		refs := state.servingRefs
+		var servingKey columnVectorGraphSharedPreparedSearchKey
+		if state.servingBase != nil && state.servingBase.preparedKey != "" {
+			servingKey, err = state.servingBase.servingPreparedSearchKey(c)
+			if err != nil || state.servingBaseRefsDigest != servingKey.refsDigest || state.servingBaseRefsCount != servingKey.refsCount || len(refs) < servingKey.refsCount {
+				return ErrVectorIndexSnapshotMismatch
+			}
+		}
 		if state.servingBase == nil {
 			refs, err = typedGraphOwnerRefs(baseView.graphOwnerRecords, baseView.Config.ActiveManifest.Generation, baseView.AssetNamespace, graph, baseView.VectorIndexState)
 			if err != nil {
@@ -374,11 +381,18 @@ func (c *Collection) openTypedGraphReadOwnerWithContext(ctx context.Context, lim
 				refs = slices.Compact(refs)
 			}
 		}
-		for _, ref := range refs {
-			if ref.Length <= 0 || ref.Length > limits.Cold.AssetBytes-candidate.assetBytes {
+		if state.servingBase != nil {
+			if state.servingPinBytes <= 0 || state.servingPinBytes > limits.Cold.AssetBytes {
 				return errTypedGraphOverlayFoldNeeded
 			}
-			candidate.assetBytes += int64(ref.Length)
+			candidate.assetBytes = state.servingPinBytes
+		} else {
+			for _, ref := range refs {
+				if ref.Length <= 0 || ref.Length > limits.Cold.AssetBytes-candidate.assetBytes {
+					return errTypedGraphOverlayFoldNeeded
+				}
+				candidate.assetBytes += int64(ref.Length)
+			}
 		}
 		// Per-owner duplicate charging keeps a shared holder covered after the
 		// snapshot-free keeper closes. No holder identity registry is required.
@@ -391,9 +405,15 @@ func (c *Collection) openTypedGraphReadOwnerWithContext(ctx context.Context, lim
 			candidate.descriptorBytes += n * int64(size)
 			return true
 		}
-		for _, ref := range refs {
-			if !addDescriptor(int64(len(ref.Namespace)), 1) {
+		if state.servingBase != nil {
+			if !addDescriptor(state.servingOwnerRefBytes, 1) {
 				return errTypedGraphOwnerBudget
+			}
+		} else {
+			for _, ref := range refs {
+				if !addDescriptor(int64(len(ref.Namespace)), 1) {
+					return errTypedGraphOwnerBudget
+				}
 			}
 		}
 		for _, size := range []uintptr{
@@ -406,7 +426,7 @@ func (c *Collection) openTypedGraphReadOwnerWithContext(ctx context.Context, lim
 				return errTypedGraphOwnerBudget
 			}
 		}
-		if !addDescriptor(int64(cap(refs)), reflect.TypeFor[ColumnAssetRef]().Size()) {
+		if state.servingBase == nil && !addDescriptor(int64(cap(refs)), reflect.TypeFor[ColumnAssetRef]().Size()) {
 			return errTypedGraphOwnerBudget
 		}
 		recordCount := len(baseView.graphOwnerRecords)
@@ -438,9 +458,13 @@ func (c *Collection) openTypedGraphReadOwnerWithContext(ctx context.Context, lim
 			if err := candidate.reserve(&coord.typedGraphOwners, limits); err != nil {
 				return err
 			}
-			ownedRefs := append([]ColumnAssetRef(nil), refs...)
 			var pinErr error
-			base.lifecyclePin, pinErr = c.acquireColumnAssetLifecyclePinSetOwned(ColumnAssetLifecyclePinSetOptions{Source: ColumnAssetLifecyclePinSourcePreparedQuery, Owner: "typed_graph_read_owner", Refs: ownedRefs})
+			if servingKey.valid() {
+				base.lifecyclePin, pinErr = c.acquireTypedGraphServingLifecyclePin(state, servingKey, "typed_graph_read_owner")
+			} else {
+				ownedRefs := append([]ColumnAssetRef(nil), refs...)
+				base.lifecyclePin, pinErr = c.acquireColumnAssetLifecyclePinSetOwned(ColumnAssetLifecyclePinSetOptions{Source: ColumnAssetLifecyclePinSourcePreparedQuery, Owner: "typed_graph_read_owner", Refs: ownedRefs})
+			}
 			return pinErr
 		}
 		readerOptions := columnVectorGraphPhysicalRowReaderOptions{SkipQuantizedAssets: true, admitSources: admit}

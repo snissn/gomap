@@ -56,13 +56,14 @@ type ColumnAssetLifecyclePinSetOptions struct {
 // ColumnAssetLifecyclePinSet is a process-local lease over a caller-supplied set
 // of column asset refs. Close releases report visibility and GC/rewrite protection.
 type ColumnAssetLifecyclePinSet struct {
-	mu     sync.Mutex
-	id     uint64
-	source ColumnAssetLifecyclePinSource
-	owner  string
-	reason string
-	refs   []ColumnAssetRef
-	closed bool
+	mu           sync.Mutex
+	id           uint64
+	source       ColumnAssetLifecyclePinSource
+	owner        string
+	reason       string
+	refs         []ColumnAssetRef
+	servingProof typedGraphServingPinProof
+	closed       bool
 }
 
 type columnAssetLifecyclePinScope struct {
@@ -134,6 +135,7 @@ func (p *ColumnAssetLifecyclePinSet) Close() error {
 	p.closed = true
 	id := p.id
 	p.id = 0
+	p.servingProof = typedGraphServingPinProof{}
 	p.mu.Unlock()
 	if id == 0 {
 		return nil
@@ -158,27 +160,12 @@ func (c *Collection) AcquireColumnAssetLifecyclePinSet(opts ColumnAssetLifecycle
 // After transfer it is immutable and shared by the registry and returned lease;
 // the caller must neither retain nor mutate it. Public admission clones first.
 func (c *Collection) acquireColumnAssetLifecyclePinSetOwned(opts ColumnAssetLifecyclePinSetOptions) (*ColumnAssetLifecyclePinSet, error) {
-	if c == nil {
-		return nil, errCollectionNil
-	}
-	if c.db == nil {
-		return nil, errCollectionDBNil
-	}
-	if err := validateColumnAssetLifecyclePinSource(opts.Source); err != nil {
+	scope, err := c.columnAssetLifecyclePinSetScope(opts)
+	if err != nil {
 		return nil, err
 	}
-	if opts.Owner == "" {
-		return nil, errors.New("collections: column asset lifecycle pin set owner is required")
-	}
-	refs := opts.Refs
-	// One immutable owned slice is shared by the lease and registry. Caller
-	// input, Refs(), and report snapshots remain defensive-copy boundaries.
-	scope := c.columnAssetLifecycleScope()
-	if scope.namespace == "" {
-		return nil, errors.New("collections: column asset lifecycle pin set requires collection asset namespace")
-	}
 	var bytes int64
-	for _, ref := range refs {
+	for _, ref := range opts.Refs {
 		if err := validateColumnAssetRefForPlan(ref); err != nil {
 			return nil, fmt.Errorf("collections: column asset lifecycle pin set ref: %w", err)
 		}
@@ -187,6 +174,37 @@ func (c *Collection) acquireColumnAssetLifecyclePinSetOwned(opts ColumnAssetLife
 		}
 		bytes = addColumnAssetReachabilityBytes(bytes, positiveColumnAssetReachabilityLength(ref.Length))
 	}
+	return c.registerColumnAssetLifecyclePinSetOwned(opts, scope, bytes)
+}
+
+func (c *Collection) columnAssetLifecyclePinSetScope(opts ColumnAssetLifecyclePinSetOptions) (columnAssetLifecyclePinScope, error) {
+	if c == nil {
+		return columnAssetLifecyclePinScope{}, errCollectionNil
+	}
+	if c.db == nil {
+		return columnAssetLifecyclePinScope{}, errCollectionDBNil
+	}
+	if err := validateColumnAssetLifecyclePinSource(opts.Source); err != nil {
+		return columnAssetLifecyclePinScope{}, err
+	}
+	if opts.Owner == "" {
+		return columnAssetLifecyclePinScope{}, errors.New("collections: column asset lifecycle pin set owner is required")
+	}
+	scope := c.columnAssetLifecycleScope()
+	if scope.namespace == "" {
+		return columnAssetLifecyclePinScope{}, errors.New("collections: column asset lifecycle pin set requires collection asset namespace")
+	}
+	return scope, nil
+}
+
+// registerColumnAssetLifecyclePinSetOwned consumes refs whose validation and
+// reachability charge were already established by its caller. The ordinary
+// owned acquisition above is the general validation boundary; typed serving
+// also calls this from its publication-bound private constructor.
+func (c *Collection) registerColumnAssetLifecyclePinSetOwned(opts ColumnAssetLifecyclePinSetOptions, scope columnAssetLifecyclePinScope, bytes int64) (*ColumnAssetLifecyclePinSet, error) {
+	refs := opts.Refs
+	// One immutable slice is shared by the lease and registry. Caller input,
+	// Refs(), and report snapshots remain defensive-copy boundaries.
 	record := columnAssetLifecyclePinSetRecord{
 		Scope:      scope,
 		Collection: scope.collection,
