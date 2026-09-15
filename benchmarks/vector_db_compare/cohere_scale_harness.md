@@ -255,10 +255,15 @@ persistent cache, or durable artifact storage as
 fallback. Local focused smoke tests are not retained performance acceptance.
 
 For Q5's bounded ordinary-mutable controls, keep the existing Go validator
-boundary intact. Completed exact bounded evidence uses `native_runtime` as an
-application-lifecycle control. Completed SQ8 bounded evidence uses the pinned
-quantized plan and `column_graph`. Those two bounded rows are not a
-representation-matched exact-versus-SQ8 comparison; same-graph query-only
+boundary intact. The exact bounded `native_runtime` baseline is either a clean
+completed application-lifecycle control or the one exact failed regression
+already frozen by #4617: bounded-50K `broad_10pct`, 1,000 eligible IDs, no
+returned IDs, `complete_finite_ann`, and 2,064 visited/scored candidates. The
+failed form contributes no lifecycle, latency, or comparison claim; any other
+partial or failure is invalid. Completed SQ8 bounded evidence uses the pinned
+quantized plan and `column_graph` and must always complete cleanly. Those two
+bounded rows are not a representation-matched exact-versus-SQ8 comparison;
+same-graph query-only
 attribution comes from the full diagnostic's paired native-v2/native-v3 packet.
 Do not relax the bounded exact validator to admit `column_graph` under the old
 schema.
@@ -266,7 +271,7 @@ schema.
 ### Q5 packet analysis
 
 Freeze the evidence consumer before collection. A Q5 packet uses schema
-`treedb_cohere_q5_packet/v1` and is itself pinned by an external SHA-256. Its
+`treedb_cohere_q5_packet/v2` and is itself pinned by an external SHA-256. Its
 `candidate_commit` is the exact 40-character merged runtime/harness commit and
 `declared_quality_outcome` is `pass` or `miss`. `tradeoff_review` uses schema
 `treedb_cohere_q5_tradeoff_review/v1` and records `disposition`, nonempty
@@ -280,9 +285,12 @@ and each path and digest has exactly
 one semantic role.
 
 The `dataset` map has `manifest`, `documents`, `queries`, and `truth`. The
-`inputs` map has `bounded_validator_binary`, `bounded_sq8_plan`,
-`treedb_service_binary`, `serving`, and `qdrant_binary`; each is a distinct
-inventory role. Native plans must bind the exact service and serving hashes,
+`inputs` map has `bounded_validator_binary`, `bounded_manifest`,
+`bounded_sq8_plan`, `treedb_service_binary`, `serving`, and `qdrant_binary`;
+each is a distinct inventory role. The two bounded artifacts must contain the
+inventoried manifest byte-semantically, and the reviewed SQ8 plan must bind its
+schema, fixture, config, semantic hashes, profile, serving limits and launch
+controls. Native plans must bind the exact service and serving hashes,
 and the Qdrant plan must bind the exact Qdrant executable hash. The consumer
 also resolves the candidate's harness/product Git tree IDs and requires both
 Go executables to report Go 1.26, `-trimpath`, the exact candidate VCS revision,
@@ -326,7 +334,7 @@ Do not collect if either metadata record lacks the candidate revision,
 `vcs.modified=false`, or `-trimpath=true`; the packet consumer enforces the
 same boundary independently.
 
-`command_receipts` uses schema `treedb_cohere_q5_command_receipts/v1`, repeats
+`command_receipts` uses schema `treedb_cohere_q5_command_receipts/v2`, repeats
 the candidate and dataset hashes, and has one `runs` entry for every arm above
 except the two comparison files and the receipt itself. Every entry records
 `run_argv`, absolute `cwd`, the complete controlled environment, four-digit
@@ -334,8 +342,22 @@ octal `umask`, UTC start/end timestamps, exit code, output SHA-256, and nullable
 freeze fields. Plan-backed arms additionally require `freeze_argv`, a zero
 freeze exit, and their plan SHA-256; bounded arms set those three fields to
 null and must record the exact inventoried Go validator command, artifact path,
-candidate commit, and, for SQ8, quantized plan path and external plan hash. A
-plan-backed freeze and run use the same closed, role-specific option grammar
+candidate commit, and, for SQ8, quantized plan path and external plan hash.
+
+A separate `preparations` map has exactly `bounded_exact` and `bounded_sq8`.
+Each preparation records one controlled environment/cwd/umask plus two ordered
+producer commands with UTC timestamps, exit code and output SHA-256. Exact
+records the 50K manifest dump followed by the `native_runtime` producer. SQ8
+records the exclusive plan freeze followed by the plan-pinned `column_graph`
+producer. The output hashes must be the uniquely inventoried manifest, plan and
+artifacts. The exact producer exits zero for a clean completion or one only for
+the exact #4617 classification; both Go validator receipts still exit zero.
+SQ8 freeze, producer and validator all exit zero. Unknown options, missing
+commands, a second failure, or an uncontrolled environment invalidates the
+packet. Receipt timestamps must preserve exact production, exact validation,
+SQ8 production and SQ8 validation in that dependency order.
+
+A plan-backed freeze and run use the same closed, role-specific option grammar
 outside `--freeze` versus `--run` plus `--expected-plan-sha256`. Both must use
 an exact `taskset -c/--cpu-list` prefix matching the plan's observed affinity,
 then the recorded Python interpreter and reviewed script; duplicate, unknown,
@@ -356,10 +378,16 @@ temporary-directory, hashing, and BLAS controls rather than inheriting an
 unknown shell. Set `TZ=UTC`, `LANG=C.UTF-8`, `LC_ALL=C.UTF-8`, `GOWORK=off`,
 `PYTHONHASHSEED=0`, `PYTHONDONTWRITEBYTECODE=1`, both BLAS thread variables to
 `1`, and a positive explicit `GOMAXPROCS`; each plan must repeat the recorded Go
-runtime and BLAS values. All runs exit zero except a declared, structurally valid frozen
-quality miss, whose `full_sq8_events` producer exits one. The receipt preserves
+runtime and BLAS values. All other runs exit zero except a declared,
+structurally valid frozen quality miss, whose `full_sq8_events` producer exits
+one. The receipt preserves
 reproducibility; the consumer separately validates the output semantics and
 never treats the receipt as correctness evidence.
+
+The consumer emits `treedb_cohere_q5_analysis/v2` and retains the bounded
+baseline classification explicitly. `known_legacy_complete_finite_ann_failure`
+is an accepted input classification, not a passing control: its lifecycle and
+latency availability fields are false and the limitations list names #4617.
 
 Set `PYTHON` to the absolute interpreter used by the frozen plans. Run the
 consumer once into a new output path:
