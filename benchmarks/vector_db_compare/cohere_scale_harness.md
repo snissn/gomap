@@ -143,6 +143,70 @@ state, exact and indexed vector counts of 500,000, and both scalar indexes.
 This comparison does not replace or retroactively pass the historical 2.5M x 8D
 M5 contract; fold and restart RSS remain separately reported there.
 
+### Separate SQ8 representation row
+
+Run TreeDB a second time with a fresh owned directory and process, adding
+`--query-mode quantized_rerank --quantized-index-name minima_sq8` to the TreeDB
+freeze and run commands. Its `rss.json` has the separate
+`treedb_cohere_768_sq8_rss_boundary/v1` schema. The ordered control coordinate is
+always `(E, requested R=E)`; both fixed 100-query sets participate in selection.
+Build/code preparation, all failed lower coordinates and calibration remain
+inside the sampled process-lifetime `VmHWM` boundary.
+The SQ8 arm explicitly creates and validates the fixed `M=16` graph shape; it
+does not inherit an ambient collection default.
+
+Keep the SQ8 freeze and run identities distinct from the FP32 arm. For example,
+using the same immutable dataset, service, product commit, serving JSON and
+environment as the earlier TreeDB commands:
+
+```sh
+SQ8_TASK=/mnt/fast4tb/cohere-sq8
+SQ8_PLAN="$SQ8_TASK/plan.json"
+SQ8_RUN="$SQ8_TASK/run"
+mkdir -p "$SQ8_TASK"
+taskset -c 0-5 python benchmarks/vector_db_compare/minima_cohere_native_diagnostic.py \
+  --freeze "$SQ8_PLAN" --run-dir "$SQ8_RUN" \
+  --dataset "$COHERE_EXPORT" --service-bin "$TREE_SERVICE" \
+  --product-commit "$TREE_COMMIT" --serving "$SERVING_JSON" \
+  --rows 500000 --rss-only \
+  --query-mode quantized_rerank --quantized-index-name minima_sq8
+SQ8_PLAN_SHA=$(sha256sum "$SQ8_PLAN" | awk '{print $1}')
+taskset -c 0-5 python benchmarks/vector_db_compare/minima_cohere_native_diagnostic.py \
+  --run "$SQ8_PLAN" --expected-plan-sha256 "$SQ8_PLAN_SHA" \
+  --run-dir "$SQ8_RUN" --dataset "$COHERE_EXPORT" \
+  --service-bin "$TREE_SERVICE" --product-commit "$TREE_COMMIT" \
+  --serving "$SERVING_JSON" --rows 500000 --rss-only \
+  --query-mode quantized_rerank --quantized-index-name minima_sq8
+```
+
+`SQ8_RUN` must not exist before the run. Do not reuse the FP32 plan digest,
+run directory, database, or service lifetime.
+
+Pass that artifact as `--treedb-sq8-artifact SQ8_RUN/rss.json` when freezing and
+running the Qdrant harness. `comparison.json` remains the original FP32
+TreeDB-versus-FP32-Qdrant decision. The additional
+`three-arm-comparison.json` nests that decision unchanged and reports SQ8
+TreeDB-versus-FP32 Qdrant only as a quality-matched, different-representation
+observation. The SQ8 row has no `accept`/`investigate` state and cannot revise the
+historical M5 result. The two TreeDB arms and Qdrant must each use a distinct
+owned process and backend directory.
+
+For query-path attribution, run the same SQ8 plan without `--rss-only` in its
+own fresh directory. After the all-rows coordinate is frozen and before any
+mutation, that full diagnostic retains one warm batch plus five order-balanced
+repetitions of native-v2 FP32 and native-v3 SQ8 calls against the same
+code-declared graph owner. Each arm is a separately bracketed complete batch
+over the same queries, and first-arm order alternates by repetition. The paired
+packet records raw call timings and work, per-arm server/client CPU,
+process-wide Go allocation endpoints/deltas, current heap,
+aggregate typed-graph assets and total DB bytes including WAL. It explicitly
+marks the SQ8-only physical TVIS length producer-unavailable: internal
+`VectorIndexSearchStats` has physical asset counters, but neither the public
+dense-work/score-plane transport nor the diagnostics endpoint exposes that
+split, so it must
+not be inferred from aggregate assets. The paired calls are outside the strict
+RSS population and selection ledger and do not alter its boundary.
+
 ## Retained evidence gate
 
 Land the reviewed harness before expensive retained collection. Freeze the exact

@@ -32,6 +32,9 @@ if [[ "$out" == *treedb-rag-benchmark ]]; then
 	cat >"$out" <<'PROGRAM'
 #!/usr/bin/env bash
 set -euo pipefail
+if [[ -n "${FAKE_COMPARATOR_ARGS:-}" ]]; then
+	printf '%s\n' "$@" >"$FAKE_COMPARATOR_ARGS"
+fi
 manifest=""
 output=""
 report=""
@@ -83,7 +86,14 @@ cat >"$FAKE_BIN/python" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 case "$1" in
-  -c) echo 19333; exit 0 ;;
+  -c)
+	if [[ "$2" == *"json.load"* ]]; then
+		python3 "$@"
+	else
+		echo 19333
+	fi
+	exit 0
+	;;
   -) cat >/dev/null; exit 0 ;;
 esac
 if [[ -n "${FAKE_PYTHON_CALLS:-}" ]]; then
@@ -134,6 +144,99 @@ for fixture in bounded-50k:50000 bounded-250k:250000 bounded-500k:500000 bounded
 	[[ ! -f "$bounded_dir/qdrant_backend.json" ]]
 	grep -qx -- '--strategy' "$TMP/$mode-args"
 	grep -qx -- "$expected_rows" "$TMP/$mode-rows"
+	if grep -q -- '^--query-mode$\|^--quantized-index-name$\|^--quantized-rerank-candidates$' "$TMP/$mode-args"; then
+		printf 'bounded %s forwarded quantized options\n' "$mode" >&2
+		exit 1
+	fi
+done
+
+printf '%s\n' '{"Publication":{"Rows":1,"Tombstones":1,"ValueSlots":1,"OwnedBytes":1,"EncodedOutputBytes":1},"Owners":{"Owners":1,"States":1,"StateBytes":1,"AssetBytes":1,"Cold":{"ManifestRecords":1,"ManifestBytes":1,"AssetBytes":1,"DecodedTermBytes":1}},"CandidateOutput":{"Bytes":1,"AppenderAttempts":1},"Maintenance":{"NativeEntries":1,"ColumnSegments":1,"ManifestRecords":1,"LifecycleEntries":1,"NativeBytes":1,"ColumnBytes":1,"ManifestBytes":1,"RetainedBytes":1,"PagerPages":1},"Filter":{"SourceIDs":1,"SourceBytes":1,"RetainedBytes":1,"MappingWork":1,"InspectedEntries":1},"FoldRows":1,"SearchCandidates":1048576}' >"$TMP/quantized-serving.json"
+printf '{}\n' >"$TMP/quantized-plan.json"
+quantized_plan_sha=$(sha256sum "$TMP/quantized-plan.json" | awk '{print $1}')
+quantized_env=(env -u MINIMA_WALL_SECONDS PATH="$FAKE_BIN:$PATH" PYTHON="$FAKE_BIN/python"
+	MODE=bounded-50k TREEDB_QUERY_MODE=quantized_rerank TREEDB_STRATEGY=column_graph
+	TREEDB_TRANSPORT=native TREEDB_NATIVE_ADDRESS=127.0.0.1:17122
+	TREEDB_COLUMN_GRAPH_SERVING="$TMP/quantized-serving.json" TREEDB_EF_SEARCH=64
+	TREEDB_QUANTIZED_INDEX_NAME=minima_sq8 TREEDB_QUANTIZED_RERANK_CANDIDATES=64
+	TREEDB_QUANTIZED_PLAN="$TMP/quantized-plan.json"
+	MINIMA_EXPECTED_QUANTIZED_PLAN_SHA256="$quantized_plan_sha")
+mkdir -p "$TMP/quantized-valid/tmp" "$TMP/quantized-diagnostics"
+"${quantized_env[@]}" RUN_DIR="$TMP/quantized-valid" FAKE_PYTHON_ARGS="$TMP/quantized-args" \
+	FAKE_COMPARATOR_ARGS="$TMP/quantized-validator-args" \
+	TREEDB_DIAGNOSTICS_DIR="$TMP/quantized-diagnostics" \
+	"$REPO/scripts/bench_minima_qualification.sh" >/dev/null 2>&1
+for pair in '--query-mode:quantized_rerank' '--quantized-index-name:minima_sq8' \
+	'--quantized-rerank-candidates:64' '--transport:native' \
+	"--native-address:127.0.0.1:17122" "--column-graph-serving:$TMP/quantized-serving.json" \
+	"--quantized-plan:$TMP/quantized-plan.json" \
+	"--expected-quantized-plan-sha256:$quantized_plan_sha" \
+	"--diagnostics-dir:$TMP/quantized-diagnostics"; do
+	flag=${pair%%:*}
+	value=${pair#*:}
+	[[ "$(grep -cx -- "$flag" "$TMP/quantized-args")" == 1 ]]
+	grep -qx -- "$value" "$TMP/quantized-args"
+done
+grep -qx -- '-minima-quantized-plan' "$TMP/quantized-validator-args"
+grep -qx -- "$TMP/quantized-plan.json" "$TMP/quantized-validator-args"
+grep -qx -- '-minima-expected-quantized-plan-sha256' "$TMP/quantized-validator-args"
+grep -qx -- "$quantized_plan_sha" "$TMP/quantized-validator-args"
+
+printf '\n' >"$TMP/quantized-empty-serving.json"
+printf '{' >"$TMP/quantized-malformed-serving.json"
+printf '[]\n' >"$TMP/quantized-array-serving.json"
+printf '{"a":1,"a":2}\n' >"$TMP/quantized-duplicate-serving.json"
+printf '{"a":NaN}\n' >"$TMP/quantized-nonfinite-serving.json"
+printf '{"SearchCandidates":64}\n' >"$TMP/quantized-incomplete-serving.json"
+sed 's/"Rows":1/"Rows":true/' "$TMP/quantized-serving.json" >"$TMP/quantized-bool-serving.json"
+dd if=/dev/zero of="$TMP/quantized-oversized-serving.json" bs=1048577 count=1 status=none
+dd if=/dev/zero of="$TMP/quantized-oversized-plan.json" bs=1048577 count=1 status=none
+for hostile in representative wrong_strategy wrong_transport wrong_name missing_serving empty_serving malformed_serving array_serving \
+	duplicate_serving nonfinite_serving incomplete_serving bool_serving oversized_serving \
+	missing_plan missing_plan_file oversized_plan bad_plan_pin wrong_plan_digest \
+	uppercase_plan_pin missing_address nonnumeric_ef nonnumeric_r unequal_r below_topk native_overflow cached_profile \
+	exact_with_options existing_data existing_output dirty_run; do
+	extra=()
+	hostile_run="$TMP/quantized-$hostile"
+	case "$hostile" in
+	representative) extra+=(MODE=representative) ;;
+	wrong_strategy) extra+=(TREEDB_STRATEGY=native_runtime) ;;
+	wrong_transport) extra+=(TREEDB_TRANSPORT=http) ;;
+	wrong_name) extra+=(TREEDB_QUANTIZED_INDEX_NAME=other) ;;
+	missing_serving) extra+=(TREEDB_COLUMN_GRAPH_SERVING=) ;;
+	empty_serving) extra+=(TREEDB_COLUMN_GRAPH_SERVING="$TMP/quantized-empty-serving.json") ;;
+	malformed_serving) extra+=(TREEDB_COLUMN_GRAPH_SERVING="$TMP/quantized-malformed-serving.json") ;;
+	array_serving) extra+=(TREEDB_COLUMN_GRAPH_SERVING="$TMP/quantized-array-serving.json") ;;
+	duplicate_serving) extra+=(TREEDB_COLUMN_GRAPH_SERVING="$TMP/quantized-duplicate-serving.json") ;;
+	nonfinite_serving) extra+=(TREEDB_COLUMN_GRAPH_SERVING="$TMP/quantized-nonfinite-serving.json") ;;
+	incomplete_serving) extra+=(TREEDB_COLUMN_GRAPH_SERVING="$TMP/quantized-incomplete-serving.json") ;;
+	bool_serving) extra+=(TREEDB_COLUMN_GRAPH_SERVING="$TMP/quantized-bool-serving.json") ;;
+	oversized_serving) extra+=(TREEDB_COLUMN_GRAPH_SERVING="$TMP/quantized-oversized-serving.json") ;;
+	missing_plan) extra+=(TREEDB_QUANTIZED_PLAN=) ;;
+	missing_plan_file) extra+=(TREEDB_QUANTIZED_PLAN="$TMP/missing-plan.json") ;;
+	oversized_plan) extra+=(TREEDB_QUANTIZED_PLAN="$TMP/quantized-oversized-plan.json") ;;
+	bad_plan_pin) extra+=(MINIMA_EXPECTED_QUANTIZED_PLAN_SHA256=bad) ;;
+	wrong_plan_digest) extra+=(MINIMA_EXPECTED_QUANTIZED_PLAN_SHA256="$(printf '2%.0s' {1..64})") ;;
+	uppercase_plan_pin) extra+=(MINIMA_EXPECTED_QUANTIZED_PLAN_SHA256="$(printf 'A%.0s' {1..64})") ;;
+	missing_address) extra+=(TREEDB_NATIVE_ADDRESS=) ;;
+	nonnumeric_ef) extra+=(TREEDB_EF_SEARCH=x) ;;
+	nonnumeric_r) extra+=(TREEDB_QUANTIZED_RERANK_CANDIDATES=x) ;;
+	unequal_r) extra+=(TREEDB_QUANTIZED_RERANK_CANDIDATES=32) ;;
+	below_topk) extra+=(TREEDB_EF_SEARCH=1 TREEDB_QUANTIZED_RERANK_CANDIDATES=1) ;;
+	native_overflow) extra+=(TREEDB_EF_SEARCH=9223372036854775808 TREEDB_QUANTIZED_RERANK_CANDIDATES=9223372036854775808) ;;
+	cached_profile) extra+=(TREEDB_PROFILE=cached) ;;
+	exact_with_options) extra+=(TREEDB_QUERY_MODE=exact) ;;
+	existing_data) mkdir -p "$TMP/quantized-existing-data/db"; extra+=(TREEDB_DATA_DIR="$TMP/quantized-existing-data/db") ;;
+	existing_output) mkdir -p "$TMP/quantized-existing-output"; printf '{}\n' >"$TMP/quantized-existing-output/result.json"; extra+=(TREEDB_EVIDENCE="$TMP/quantized-existing-output/result.json") ;;
+	dirty_run) mkdir -p "$hostile_run"; printf 'retained\n' >"$hostile_run/retained.txt" ;;
+	esac
+	set +e
+	"${quantized_env[@]}" "${extra[@]}" RUN_DIR="$hostile_run" \
+		FAKE_GO_INVOKED="$TMP/quantized-$hostile.build" \
+		"$REPO/scripts/bench_minima_qualification.sh" >"$TMP/quantized-$hostile.log" 2>&1
+	hostile_status=$?
+	set -e
+	[[ "$hostile_status" == 2 ]]
+	[[ ! -e "$TMP/quantized-$hostile.build" ]]
 done
 
 set +e

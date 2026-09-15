@@ -10,6 +10,7 @@ import argparse
 import hashlib
 import ipaddress
 import json
+import math
 import os
 from pathlib import Path
 import platform
@@ -25,6 +26,10 @@ import urllib.request
 
 import minima_qdrant_runner as common
 from treedb_client import TreeDBClient
+from treedb_client._dense_work import (
+    dense_quantized_response_work_matches,
+    dense_score_plane_byte_counters_match,
+)
 
 CLIENT_VERSION = "0.1.0"
 SERVICE_CONTRACT = "treedb-document-service/v1alpha2"
@@ -32,6 +37,33 @@ SERVICE_LOG_TAIL_BYTES = 64 << 10
 DIAGNOSTICS_STATS_PATH = "/debug/treedb/stats"
 DIAGNOSTIC_CAPTURE_BYTES = 32 << 20
 DIAGNOSTIC_STATS_BYTES = 4 << 20
+QUANTIZED_ARTIFACT_SCHEMA = "treedb_rag_application/minima_quantized_diagnostic_v1"
+QUANTIZED_PROFILE_NAME = "minima_sq8"
+QUANTIZED_PLAN_SCHEMA = "treedb_minima_quantized_plan/v1"
+QUANTIZED_PLAN_MAX_BYTES = 1 << 20
+QUANTIZED_VECTOR_M = 16
+QUANTIZED_VECTOR_EF_SEARCH = 64
+QUANTIZED_INDEX_CAPABILITIES = {
+    "dense_vector_search": True,
+    "exact_dense_scoring": False,
+    "metadata_filters": True,
+    "keyword_search": True,
+    "hybrid_search": True,
+    "keyword_metadata_filters": True,
+    "hybrid_metadata_filters": True,
+    "benchmark_lifecycle": True,
+    "vector_index_maintenance": True,
+    "no_document_vector_search": True,
+    "column_graph_vector_search": True,
+    "exact_column_graph_search": True,
+    "quantized_vector_search": True,
+    "quantized_rerank": True,
+    "scalar_u8_quantized_rerank": True,
+    "typed_dense_quantized_rerank": True,
+    "rabitq_1bit_experimental": False,
+}
+MINIMA_TOP_K = 5
+NATIVE_INTEGER_LIMIT = 1 << 63
 STATE_SCROLL_PAGE_SIZE = 8192
 COMPACT_BATCH_CORRELATION_MAX_BYTES = 2048
 BATCH_CORRELATION_SCHEMA = "treedb-minima-upsert-batch-correlations/v1"
@@ -58,6 +90,154 @@ DIAGNOSTIC_PROFILE_ENDPOINTS = {
     "trace": ("/debug/pprof/trace", "trace.out"),
     "stats": (DIAGNOSTICS_STATS_PATH, "stats.json"),
 }
+
+
+def quantized_profile(index_name: str | None, ef_search: int,
+                      rerank_candidates: int | None) -> dict[str, Any]:
+    return {
+        "schema": "treedb_minima_quantized_profile/v1", "name": QUANTIZED_PROFILE_NAME,
+        "query_mode": "quantized_rerank", "index_name": index_name,
+        "codec": "scalar_u8", "version": 1, "calibration": "legacy",
+        "quantized_config_hash": 0, "requested_ef_search": ef_search,
+        "requested_rerank_candidates": rerank_candidates, "native_command_version": 3,
+    }
+
+
+def quantized_plan(manifest: dict[str, Any], serving: dict[str, Any], args: argparse.Namespace) -> dict[str, Any]:
+    return {
+        "schema": QUANTIZED_PLAN_SCHEMA,
+        "manifest": {
+            "schema": manifest["schema"], "fixture": manifest.get("fixture", ""),
+            "config": manifest["config"], "corpus_sha256": manifest["corpus_sha256"],
+            "query_sha256": manifest["query_sha256"], "operation_sha256": manifest["operation_sha256"],
+            "expected_state_sha256": manifest["expected_state_sha256"],
+        },
+        "quantized_profile": quantized_profile(
+            args.quantized_index_name, args.ef_search, args.quantized_rerank_candidates),
+        "vector_strategy": args.strategy, "transport": args.transport or "native",
+        "durability_profile": args.profile, "vector_m": QUANTIZED_VECTOR_M,
+        "ef_construction": args.ef_construction,
+        "serving": serving,
+    }
+
+
+def _strict_json_object(path: Path, label: str) -> tuple[dict[str, Any], bytes]:
+    try:
+        with path.open("rb") as source:
+            raw = source.read(QUANTIZED_PLAN_MAX_BYTES + 1)
+        if len(raw) > QUANTIZED_PLAN_MAX_BYTES:
+            raise ValueError(f"{label} exceeds 1 MiB")
+
+        def object_without_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+            value: dict[str, Any] = {}
+            for key, item in pairs:
+                if key in value:
+                    raise ValueError(f"{label} contains a duplicate key")
+                value[key] = item
+            return value
+
+        def reject_constant(value: str) -> None:
+            raise ValueError(f"{label} contains nonfinite {value}")
+
+        value = json.loads(raw.decode("utf-8"), object_pairs_hook=object_without_duplicates,
+                           parse_constant=reject_constant)
+        if not isinstance(value, dict) or not value:
+            raise ValueError(f"{label} must be a nonempty JSON object")
+        return value, raw
+    except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
+        raise SystemExit(f"invalid {label}: {exc}") from exc
+
+
+def _sha256_pin_valid(value: Any) -> bool:
+    return isinstance(value, str) and len(value) == 64 and all(character in "0123456789abcdef" for character in value)
+
+
+def write_quantized_plan(path: Path, plan: dict[str, Any]) -> str:
+    raw = json.dumps(plan, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8") + b"\n"
+    if len(raw) > QUANTIZED_PLAN_MAX_BYTES:
+        raise SystemExit("quantized plan exceeds 1 MiB")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with path.open("xb") as destination:
+            destination.write(raw)
+    except FileExistsError as exc:
+        raise SystemExit("quantized plan destination already exists") from exc
+    return hashlib.sha256(raw).hexdigest()
+
+
+def load_quantized_plan(path: Path, expected_sha256: str, expected: dict[str, Any]) -> str:
+    if not _sha256_pin_valid(expected_sha256):
+        raise SystemExit("quantized plan requires an external lowercase SHA-256 pin")
+    plan, raw = _strict_json_object(path, "quantized plan")
+    digest = hashlib.sha256(raw).hexdigest()
+    if digest != expected_sha256:
+        raise SystemExit("quantized plan bytes do not match the external SHA-256 pin")
+    encoded = lambda value: json.dumps(
+        value, sort_keys=True, separators=(",", ":"), allow_nan=False,
+    ).encode("utf-8")
+    if encoded(plan) != encoded(expected):
+        raise SystemExit("quantized plan does not match the manifest and launch configuration")
+    return digest
+
+
+def quantized_widths_valid(ef_search: Any, rerank_candidates: Any, top_k: Any = MINIMA_TOP_K) -> bool:
+    return (type(top_k) is int and top_k > 0
+            and type(ef_search) is int and type(rerank_candidates) is int
+            and top_k <= ef_search == rerank_candidates < NATIVE_INTEGER_LIMIT)
+
+
+def quantized_snapshot_valid(snapshot: Any, generation: int) -> bool:
+    def manifest_valid(manifest: Any) -> bool:
+        return (manifest.generation > 0 and manifest.format == "tcs1"
+                and manifest.version == 1 and manifest.checksum != 0)
+
+    try:
+        return (
+            snapshot.available and snapshot.schema_generation == generation
+            and snapshot.schema_hash != 0
+            and manifest_valid(snapshot.base_manifest) and manifest_valid(snapshot.current_manifest)
+            and snapshot.base_coverage_lsn > 0
+            and snapshot.current_coverage_lsn >= snapshot.base_coverage_lsn
+            and snapshot.current_manifest.generation >= snapshot.base_manifest.generation
+        )
+    except (AttributeError, TypeError):
+        return False
+
+
+def quantized_effective_index_valid(info: Any, collection: str, dimension: int,
+                                    metric: str, ef_construction: int) -> bool:
+    """Bind the selected arm to the complete create/open metadata producer."""
+    try:
+        actual = info.to_dict()
+        generation = actual["generation"]
+        expected = {
+            "typed_input": True,
+            "name": collection,
+            "dimension": dimension,
+            "metric": metric,
+            "generation": generation,
+            "contract_version": SERVICE_CONTRACT,
+            "embedding_field": "embedding",
+            "vector_index_name": "embedding",
+            "vector_strategy": "column_graph",
+            "vector_m": QUANTIZED_VECTOR_M,
+            "vector_ef_construction": ef_construction,
+            "vector_ef_search": QUANTIZED_VECTOR_EF_SEARCH,
+            "quantized_indexes": [{
+                "name": QUANTIZED_PROFILE_NAME, "codec": "scalar_u8", "version": 1,
+            }],
+            "scalar_fields": [
+                {"field": "meta.fpath", "index_name": "meta_fpath", "value_type": "string"},
+                {"field": "meta.user_id", "index_name": "meta_user_id", "value_type": "string"},
+            ],
+            "text_field": "content",
+            "text_index_name": "content",
+            "document_type": "treedb_document_service_v1",
+            "capabilities": QUANTIZED_INDEX_CAPABILITIES,
+        }
+        return type(generation) is int and 0 < generation < 1 << 64 and actual == expected
+    except (AttributeError, KeyError, TypeError, ValueError):
+        return False
 
 
 def scalar_filter(spec: dict[str, Any]) -> dict[str, Any]:
@@ -617,7 +797,9 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
                  diagnostics_dir: Path | None = None,
                  diagnostic_slow_seconds: float = 30, diagnostic_profile_seconds: int = 5,
                  diagnostic_capture_timeout: float = 10, strategy: str = "native_runtime",
-                 transport: str | None = None, column_graph_serving: dict[str, Any] | None = None) -> None:
+                 transport: str | None = None, column_graph_serving: dict[str, Any] | None = None,
+                 query_mode: str = "exact", quantized_index_name: str | None = None,
+                 quantized_rerank_candidates: int | None = None) -> None:
         self.strategy = strategy
         self.transport = transport or ("native" if strategy == "column_graph" else "http")
         if strategy not in ("native_runtime", "column_graph") or self.transport not in ("http", "native"):
@@ -630,6 +812,22 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
             raise ValueError("column_graph requires explicit serving limits")
         if self.transport == "native" and not controller.native_address:
             raise ValueError("native Minima transport requires an explicit listener")
+        self.query_mode = query_mode
+        self.quantized_index_name = quantized_index_name
+        self.quantized_rerank_candidates = quantized_rerank_candidates
+        if query_mode == "exact":
+            if quantized_index_name is not None or quantized_rerank_candidates is not None:
+                raise ValueError("exact Minima mode does not accept quantized options")
+        elif query_mode != "quantized_rerank":
+            raise ValueError("unsupported Minima query mode")
+        elif (strategy != "column_graph" or self.transport != "native"
+              or manifest.get("schema") != common.BOUNDED_MANIFEST_SCHEMA):
+            raise ValueError("quantized Minima requires bounded column_graph native execution")
+        elif quantized_index_name != QUANTIZED_PROFILE_NAME:
+            raise ValueError(f"quantized Minima requires index {QUANTIZED_PROFILE_NAME!r}")
+        elif not quantized_widths_valid(
+                ef_search, quantized_rerank_candidates, manifest.get("config", {}).get("top_k")):
+            raise ValueError("quantized Minima requires TopK <= R=EF within the native integer range")
         self.column_graph_serving = column_graph_serving
         self.index_info = None
         self._graph_built = False
@@ -659,6 +857,18 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
                          resource_server_name="TreeDB")
         self.clients, self.ef_search, self.ef_construction = clients, ef_search, ef_construction
         self.route_evidence: dict[str, Any] = {}
+        self.quantized_requests: list[dict[str, Any]] | None = [] if query_mode == "quantized_rerank" else None
+        self._quantized_request_lock = threading.Lock() if query_mode == "quantized_rerank" else None
+        self._quantized_active_timed_round: int | None = None
+        self._quantized_initial_snapshot: dict[str, Any] | None = None
+        self._quantized_owner_snapshots: dict[tuple[int, bool], dict[str, Any]] = {}
+        self._quantized_candidate_counts: dict[tuple[str, int], int] = {}
+        self._quantized_state_works: dict[
+            tuple[str, int, bool], tuple[int, int, tuple[tuple[int, int, int, int], ...]]
+        ] = {}
+        self._quantized_exact_rankings: dict[tuple[str, int], list[dict[str, Any]]] = {}
+        if query_mode == "quantized_rerank":
+            self._prepare_quantized_validation_states()
         self.diagnostics_dir = diagnostics_dir
         self.diagnostic_slow_seconds = diagnostic_slow_seconds
         self.diagnostic_profile_seconds = diagnostic_profile_seconds
@@ -966,6 +1176,11 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
         vector_index_options = {"strategy": self.strategy}
         if self.strategy == "column_graph":
             vector_index_options["ef_construction"] = self.ef_construction
+        if getattr(self, "query_mode", "exact") == "quantized_rerank":
+            vector_index_options["m"] = QUANTIZED_VECTOR_M
+            vector_index_options["quantized_indexes"] = [{
+                "name": self.quantized_index_name, "codec": "scalar_u8", "version": 1,
+            }]
         info = self.client.ensure_index(
             self.collection, self.config["dimension"], self.config["metric"],
             scalar_fields=[{"field": "meta.user_id", "value_type": "string"},
@@ -983,6 +1198,11 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
             raise RuntimeError("TreeDB column_graph index lacks authoritative typed input")
         if self.strategy == "column_graph" and info.vector_ef_construction != self.ef_construction:
             raise RuntimeError("TreeDB column_graph effective ef_construction differs from the requested value")
+        if getattr(self, "query_mode", "exact") == "quantized_rerank":
+            if not quantized_effective_index_valid(
+                    info, self.collection, self.config["dimension"], self.config["metric"],
+                    self.ef_construction):
+                raise RuntimeError("TreeDB Minima quantized effective index metadata differs from the selected arm")
         self.index_info = info
         self.effective_collection = info.to_dict()
 
@@ -1116,6 +1336,9 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
     def upsert(self, operation: str, scenario: str, documents: list[dict[str, Any]], wait_ready: bool = True,
                on_writer_start: Callable[[], None] | None = None) -> None:
         assert self.client is not None
+        if (getattr(self, "query_mode", "exact") == "quantized_rerank"
+                and operation == "timed_search_with_batch_insert"):
+            on_writer_start = self._quantized_timed_writer_start(scenario, documents, on_writer_start)
         batch_size = self.config["batch_size"]
         for local_start in range(0, len(documents), batch_size):
             source_batch = documents[local_start:local_start + batch_size]
@@ -1407,14 +1630,402 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
             self.diagnostic_resume.setdefault("state", "failed")
             self.diagnostic_resume["error"] = f"{type(exc).__name__}: {exc}"
             raise
+    def _quantized_timed_writer_start(
+        self, scenario: str, documents: list[dict[str, Any]],
+        callback: Callable[[], None] | None,
+    ) -> Callable[[], None]:
+        identifiers = [row["id"] for row in documents]
+        for round_ordinal, insertion in enumerate(self.manifest["operations"][3]["insert_ranges"]):
+            expected = [
+                f"minima/{scenario}/{ordinal:06d}"
+                for ordinal in range(insertion["start"], insertion["start"] + insertion["rows"])
+            ] if insertion["scenario"] == scenario else []
+            if identifiers == expected:
+                break
+        else:
+            raise RuntimeError("quantized timed insert does not match its frozen round")
+
+        def started() -> None:
+            assert self._quantized_request_lock is not None
+            with self._quantized_request_lock:
+                self._quantized_active_timed_round = round_ordinal
+            if callback is not None:
+                callback()
+
+        return started
+
+    def _quantized_allowed_states(self, operation: str) -> tuple[int, ...]:
+        timed_rounds = len(self.manifest["operations"][3]["insert_ranges"])
+        if operation in ("warmup_search", "small_initial_oracle"):
+            return (0,)
+        if operation == "timed_search_with_batch_insert":
+            if self._quantized_active_timed_round is None:
+                raise RuntimeError("quantized timed query has no active insertion round")
+            return (self._quantized_active_timed_round, self._quantized_active_timed_round + 1)
+        if operation == "reindex_delete_by_user_and_fpath_while_reading":
+            return (timed_rounds, timed_rounds + 1)
+        if operation == "reindex_replacement_insert_while_reading":
+            return (timed_rounds + 1, timed_rounds + 2)
+        if operation == "reindex_visibility_probe":
+            return (timed_rounds + 2,)
+        if operation == "update_visibility_probe":
+            return (timed_rounds + 3,)
+        if operation in (
+            "delete_visibility_probe", "empty_user_and_file_probes", "preclose_reopen_baseline",
+            "post_reopen_parity", "final_manifest_and_oracle_comparison", "small_preclose",
+            "small_reopen", "small_final_oracle",
+        ):
+            return (timed_rounds + 4,)
+        raise RuntimeError(f"quantized query has no declared lifecycle state for {operation!r}")
+
+    def _quantized_base_document(self, identifier: str, timed_rounds: int) -> dict[str, Any] | None:
+        parts = identifier.split("/")
+        if len(parts) != 3 or parts[0] != "minima" or parts[1] not in self.specs:
+            return None
+        try:
+            ordinal = int(parts[2])
+        except ValueError:
+            return None
+        if parts[2] != f"{ordinal:06d}":
+            return None
+        live_ranges = [*self.manifest["operations"][1]["insert_ranges"],
+                       *self.manifest["operations"][3]["insert_ranges"][:timed_rounds]]
+        if not any(
+            row["scenario"] == parts[1] and row["start"] <= ordinal < row["start"] + row["rows"]
+            for row in live_ranges
+        ):
+            return None
+        return common.generated_document(self.specs[parts[1]], ordinal)
+
+    def _quantized_document_at_state(self, identifier: str, state: int) -> dict[str, Any] | None:
+        timed_rounds = len(self.manifest["operations"][3]["insert_ranges"])
+        document = self._quantized_base_document(identifier, min(state, timed_rounds))
+        filtered_delete = self.manifest["operations"][4]
+        if state >= timed_rounds + 1 and document is not None:
+            filt = filtered_delete["filter"]
+            if (document["user_id"] == filt["user_id"]
+                    and document["fpath"] == filt["fpath"]):
+                document = None
+        replacement = self.manifest["operations"][5]
+        if state >= timed_rounds + 2:
+            document = next((dict(row) for row in replacement.get("documents", [])
+                             if row["id"] == identifier), document)
+        update = self.manifest["operations"][7]
+        if state >= timed_rounds + 3 and document is not None:
+            document = next((dict(row) for row in update.get("documents", [])
+                             if row["id"] == identifier), document)
+        if state >= timed_rounds + 4 and identifier in self.manifest["operations"][9].get("ids", []):
+            return None
+        return document
+
+    def _quantized_candidate_count(self, scenario: str, state: int) -> int:
+        if not hasattr(self, "_quantized_candidate_counts"):
+            self._quantized_candidate_counts = {}
+        key = (scenario, state)
+        if key in self._quantized_candidate_counts:
+            return self._quantized_candidate_counts[key]
+        spec = self.specs[scenario]
+        timed_rounds = len(self.manifest["operations"][3]["insert_ranges"])
+        eligible_start = spec["eligible_start"]
+        eligible_end = eligible_start + spec["eligible_rows"]
+        ranges = [*self.manifest["operations"][1]["insert_ranges"],
+                  *self.manifest["operations"][3]["insert_ranges"][:min(state, timed_rounds)]]
+        count = sum(
+            max(0, min(eligible_end, row["start"] + row["rows"]) - max(eligible_start, row["start"]))
+            for row in ranges if row["scenario"] == scenario
+        )
+        mutation_ids = {
+            row["id"] for operation in self.manifest["operations"][4:10]
+            for row in operation.get("documents", [])
+        } | {
+            identifier for operation in self.manifest["operations"][4:10]
+            for identifier in operation.get("ids", [])
+        }
+        for identifier in mutation_ids:
+            before = self._quantized_base_document(identifier, min(state, timed_rounds))
+            after = self._quantized_document_at_state(identifier, state)
+            count += int(after is not None and common.matches(after, spec))
+            count -= int(before is not None and common.matches(before, spec))
+        self._quantized_candidate_counts[key] = count
+        return count
+
+    def _quantized_state_work(
+        self, scenario: str, state: int, folded: bool,
+    ) -> tuple[int, int, tuple[tuple[int, int, int, int], ...]]:
+        """Return live base/suffix rows and legal (E0,C,Rcap,shadow) plans."""
+        if not hasattr(self, "_quantized_state_works"):
+            self._quantized_state_works = {}
+        key = (scenario, state, folded)
+        if key in self._quantized_state_works:
+            return self._quantized_state_works[key]
+        eligible = self._quantized_candidate_count(scenario, state)
+        if folded:
+            live_base, live_suffix, shadowed_base = eligible, 0, 0
+        else:
+            initial_base = self._quantized_candidate_count(scenario, 0)
+            timed_rounds = len(self.manifest["operations"][3]["insert_ranges"])
+            touched: set[str] = set()
+            for threshold, operation in (
+                (timed_rounds + 1, self.manifest["operations"][4]),
+                (timed_rounds + 2, self.manifest["operations"][5]),
+                (timed_rounds + 3, self.manifest["operations"][7]),
+                (timed_rounds + 4, self.manifest["operations"][9]),
+            ):
+                if state >= threshold:
+                    touched.update(operation.get("ids", ()))
+                    touched.update(row["id"] for row in operation.get("documents", ()))
+            shadowed_base = sum(
+                1 for identifier in touched
+                if (document := self._quantized_base_document(identifier, 0)) is not None
+                and common.matches(document, self.specs[scenario])
+            )
+            live_base = initial_base - shadowed_base
+            live_suffix = eligible - live_base
+            if live_base < 0 or live_suffix < 0:
+                raise RuntimeError("quantized lifecycle state has impossible base/suffix counts")
+
+        def plan(base_domain: int, shadow_allowance: int) -> tuple[int, int, int, int]:
+            effective_ef = min(base_domain, max(self.config["top_k"], self.ef_search))
+            raw_width = min(base_domain, effective_ef + shadow_allowance)
+            rerank_cap = min(base_domain, effective_ef, self.quantized_rerank_candidates)
+            return effective_ef, raw_width, rerank_cap, shadow_allowance
+
+        # The producer may bind a cached immutable-base selection or prepare
+        # against current scalar postings. Both describe the same B/D state,
+        # but the cached plan retains the S shadowed original ordinals.
+        plans = tuple(dict.fromkeys((
+            plan(live_base, 0),
+            plan(live_base + shadowed_base, shadowed_base),
+        )))
+        work = live_base, live_suffix, plans
+        self._quantized_state_works[key] = work
+        return work
+
+    def _quantized_exact_results(self, scenario: str, state: int) -> list[dict[str, Any]]:
+        if not hasattr(self, "_quantized_exact_rankings"):
+            self._quantized_exact_rankings = {}
+        key = (scenario, state)
+        if key in self._quantized_exact_rankings:
+            return self._quantized_exact_rankings[key]
+        spec = self.specs[scenario]
+        candidates: dict[str, dict[str, Any]] = {}
+        for ordinal in range(spec["eligible_start"], spec["eligible_start"] + spec["eligible_rows"]):
+            identifier = f"minima/{scenario}/{ordinal:06d}"
+            document = self._quantized_document_at_state(identifier, state)
+            if document is not None and common.matches(document, spec):
+                candidates[identifier] = document
+        for operation in self.manifest["operations"][4:10]:
+            for row in operation.get("documents", []):
+                document = self._quantized_document_at_state(row["id"], state)
+                if document is not None and common.matches(document, spec):
+                    candidates[row["id"]] = document
+        ranked = sorted(candidates.values(), key=lambda row: (-common.document_score(row), row["id"]))
+        results = [
+            {"id": row["id"], "content": row["content"], "user_id": row["user_id"],
+             "fpath": row["fpath"], "score": common.document_score(row)}
+            for row in ranked[:self.config["top_k"]]
+        ]
+        self._quantized_exact_rankings[key] = results
+        return results
+
+    def _prepare_quantized_validation_states(self) -> None:
+        """Build the bounded immutable state/truth matrix outside query timing."""
+        final_state = len(self.manifest["operations"][3]["insert_ranges"]) + 4
+        for scenario in self.specs:
+            for state in range(final_state + 1):
+                eligible = self._quantized_candidate_count(scenario, state)
+                self._quantized_state_work(scenario, state, False)
+                if eligible <= self.config["lookup_limit"]:
+                    self._quantized_exact_results(scenario, state)
+            self._quantized_state_work(scenario, final_state, True)
+
+    def _quantized_results_match_state(
+        self, scenario: str, state: int, route: str, results: list[dict[str, Any]],
+        proof: DenseScorePlaneProof, folded: bool, eligible_rows: int, base_shadowed: int,
+    ) -> bool:
+        candidate_count = self._quantized_candidate_count(scenario, state)
+        try:
+            live_base, live_suffix, plans = self._quantized_state_work(scenario, state, folded)
+        except RuntimeError:
+            return False
+        expected_route = (
+            "typed_empty" if candidate_count == 0 else
+            "typed_exact" if candidate_count <= self.config["lookup_limit"] else
+            "quantized_rerank"
+        )
+        observed_plan = (proof.normalized_candidate_width, proof.raw_candidate_width,
+                         proof.rerank_candidate_cap)
+        plan_matches = any(
+            observed_plan == plan[:3]
+            and (
+                (route == "typed_empty" and base_shadowed == 0)
+                or (route == "typed_exact" and base_shadowed == plan[3])
+                or (route == "quantized_rerank" and base_shadowed <= plan[3])
+            )
+            for plan in plans
+        )
+        if (route != expected_route or eligible_rows != candidate_count
+                or candidate_count != live_base + live_suffix
+                or len(results) != min(self.config["top_k"], candidate_count)
+                or proof.exact_suffix_score_calls != live_suffix
+                or (route == "typed_exact" and proof.exact_small_filter_score_calls != live_base)
+                or (route != "typed_exact" and proof.exact_small_filter_score_calls != 0)
+                or not plan_matches):
+            return False
+        if route in ("typed_empty", "typed_exact"):
+            expected = self._quantized_exact_results(scenario, state)
+            return len(results) == len(expected) and all(
+                actual["id"] == wanted["id"]
+                and actual["content"] == wanted["content"]
+                and actual["user_id"] == wanted["user_id"]
+                and actual["fpath"] == wanted["fpath"]
+                and abs(actual["score"] - wanted["score"]) <= self.config["score_tolerance"]
+                for actual, wanted in zip(results, expected, strict=True)
+            )
+        for actual in results:
+            document = self._quantized_document_at_state(actual["id"], state)
+            if (document is None or not common.matches(document, self.specs[scenario])
+                    or actual["content"] != document["content"]
+                    or actual["user_id"] != document["user_id"]
+                    or actual["fpath"] != document["fpath"]
+                    or abs(actual["score"] - common.document_score(document)) > self.config["score_tolerance"]):
+                return False
+        return True
+
+    def _quantized_snapshot_matches_state(self, snapshot: Any, state: int, folded: bool,
+                                          operation: str) -> bool:
+        raw = asdict(snapshot)
+        if operation == "warmup_search":
+            if raw["base_manifest"] != raw["current_manifest"] \
+                    or raw["base_coverage_lsn"] != raw["current_coverage_lsn"]:
+                return False
+            if getattr(self, "_quantized_initial_snapshot", None) is None:
+                self._quantized_initial_snapshot = raw
+            elif raw != self._quantized_initial_snapshot:
+                return False
+        initial = getattr(self, "_quantized_initial_snapshot", None)
+        if initial is None:
+            return False
+        try:
+            generation = initial["current_manifest"]["generation"] + state
+            coverage = initial["current_coverage_lsn"] + state
+            valid = (
+                state >= 0 and generation < (1 << 64) and coverage < (1 << 64)
+                and raw["schema_hash"] == initial["schema_hash"]
+                and raw["schema_generation"] == initial["schema_generation"]
+                and raw["current_manifest"]["generation"] == generation
+                and raw["current_coverage_lsn"] == coverage
+            )
+            if folded:
+                valid = valid and raw["base_manifest"] == raw["current_manifest"] \
+                    and raw["base_coverage_lsn"] == raw["current_coverage_lsn"]
+            else:
+                valid = valid and raw["base_manifest"] == initial["base_manifest"] \
+                    and raw["base_coverage_lsn"] == initial["base_coverage_lsn"]
+        except (KeyError, TypeError):
+            return False
+        if not valid:
+            return False
+        key = (state, folded)
+        snapshots = getattr(self, "_quantized_owner_snapshots", None)
+        if snapshots is None:
+            snapshots = self._quantized_owner_snapshots = {}
+        prior = snapshots.get(key)
+        if prior is not None and prior != raw:
+            return False
+        snapshots[key] = raw
+        return True
+
+    def _validate_quantized_response(
+        self, response: Any, operation: str, scenario: str, states: tuple[int, ...],
+        results: list[dict[str, Any]],
+    ) -> int:
+        work, proof = response.dense_work, response.score_plane
+        graph, output = work.graph, work.output
+        exact_route = proof.route in ("typed_empty", "typed_exact")
+        zero_rerank = (
+            proof.raw_retained_candidates == 0 and proof.live_shortlist_candidates == 0
+            and proof.actual_rerank_candidates == 0 and proof.exact_base_rerank_score_calls == 0
+        )
+        quantized_route = proof.route == "quantized_rerank"
+        valid = (
+            response.native_command_version == 3
+            and response.index.generation == self.index_info.generation
+            and work.version == 1 and work.completed and graph.available and graph.completed
+            and output.attempted and output.completed and output.missing == 0
+            and proof.version == 1 and proof.available and proof.completed and not proof.reason
+            and proof.requested_mode == "quantized_rerank" and proof.effective_mode == "quantized_rerank"
+            and proof.quantized_codec == "scalar_u8" and proof.quantized_version == 1
+            and proof.quantized_config_hash == 0
+            and quantized_snapshot_valid(proof.snapshot, self.index_info.generation)
+            and graph.snapshot == proof.snapshot
+            and proof.quantized_index_name == self.quantized_index_name
+            and proof.requested_top_k == self.config["top_k"]
+            and proof.requested_ef_search == self.ef_search
+            and proof.requested_rerank_candidates == self.quantized_rerank_candidates
+            and dense_score_plane_byte_counters_match(proof, self.config["dimension"])
+            and dense_quantized_response_work_matches(
+                work, proof, self.config["top_k"], len(results), True,
+            )
+            and (not exact_route or (proof.quantized_score_calls == 0 and zero_rerank))
+            and (not quantized_route or (
+                proof.raw_retained_candidates <= proof.quantized_score_calls
+                and proof.actual_rerank_candidates == min(
+                    proof.live_shortlist_candidates, proof.rerank_candidate_cap)
+                and proof.actual_rerank_candidates == proof.exact_base_rerank_score_calls
+            ))
+            and proof.raw_retained_candidates <= graph.base_candidates <= proof.quantized_score_calls
+            and ((output.output_bytes > 0) == bool(results))
+        )
+        if not valid:
+            raise RuntimeError("TreeDB quantized response violated its owned route/work contract")
+        folded = operation in (
+            "preclose_reopen_baseline", "post_reopen_parity", "final_manifest_and_oracle_comparison",
+        )
+        with self._quantized_request_lock:
+            matched = [
+                state for state in states
+                if self._quantized_results_match_state(
+                    scenario, state, proof.route, results, proof, folded,
+                    graph.filter.eligible_rows, graph.base_shadowed,
+                )
+                and self._quantized_snapshot_matches_state(proof.snapshot, state, folded, operation)
+            ]
+        if len(matched) != 1:
+            raise RuntimeError("TreeDB quantized response does not identify one exact result/owner lifecycle state")
+        return matched[0]
+
     def search(self, operation: str, scenario: str, interval: dict[str, int] | None = None) -> tuple[list[str], list[float]]:
         assert self.client is not None
         spec, query = self.specs[scenario], self.queries[scenario]
         measured = getattr(self, "measured", False)
+        quantized = getattr(self, "query_mode", "exact") == "quantized_rerank"
         owned: dict[str, Any] | None = {} if measured else None
-        outer = interval if interval is not None else {} if measured else None
+        quantized_record: dict[str, Any] | None = None
+        allowed_states: tuple[int, ...] = ()
+        if quantized:
+            assert self.quantized_requests is not None and self._quantized_request_lock is not None
+            with self._quantized_request_lock:
+                allowed_states = self._quantized_allowed_states(operation)
+                request_start = time.monotonic_ns()
+                quantized_record = {
+                    "operation_name": operation, "scenario": scenario,
+                    "request_sequence": len(self.quantized_requests) + 1,
+                    "phase": getattr(self, "_phase_name", None) or "unstarted",
+                    "lifetime_ordinal": getattr(self, "lifetime_ordinal", 0),
+                    "started_monotonic_ns": request_start, "outcome": "error",
+                    "transport": self.transport, "command_version": 3,
+                    "expected_generation": self.index_info.generation,
+                    "result_count": 0, "results": [],
+                }
+                self.quantized_requests.append(quantized_record)
+        outer = interval if interval is not None else {} if measured else quantized_record
         if outer is not None:
-            outer["started_monotonic_ns"] = time.monotonic_ns()
+            outer.setdefault(
+                "started_monotonic_ns",
+                quantized_record["started_monotonic_ns"]
+                if quantized_record is not None else time.monotonic_ns(),
+            )
         failure = None
         response = None
         def query_request() -> Any:
@@ -1422,14 +2033,23 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
             return client.query_by_embedding(
                 self.collection, query["vector"], self.config["top_k"], scalar_filter(spec),
                 route="ann", ef_search=self.ef_search,
-                **({"index_info": self.index_info} if self.transport == "native" else {}))
+                **({"index_info": self.index_info} if self.transport == "native" else {}),
+                **({"query_mode": "quantized_rerank",
+                    "quantized_index_name": self.quantized_index_name,
+                    "quantized_rerank_candidates": self.quantized_rerank_candidates}
+                   if quantized else {}))
         try:
             response = self.evidence.call(operation, "search", scenario, query_request, record=owned)
         except BaseException as exc:
             failure = exc
         finally:
+            request_end = time.monotonic_ns()
             if outer is not None:
-                outer["ended_monotonic_ns"] = time.monotonic_ns()
+                outer["ended_monotonic_ns"] = request_end
+            if quantized_record is not None:
+                quantized_record["ended_monotonic_ns"] = request_end
+                if interval is not None:
+                    interval["request_sequence"] = quantized_record["request_sequence"]
         # Ordinary client selection, request and response decoding are inside the
         # outer timer. Owned proof normalization deliberately begins after it.
         try:
@@ -1446,6 +2066,14 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
                     owned["dense_work"] = asdict(proof)
                 if response is not None:
                     owned["result_count"] = len(response.documents)
+            if quantized_record is not None:
+                proof_owner = failure if failure is not None else response
+                proof = getattr(proof_owner, "dense_work", None)
+                score_plane = getattr(proof_owner, "score_plane", None)
+                if proof is not None:
+                    quantized_record["dense_work"] = asdict(proof)
+                if score_plane is not None:
+                    quantized_record["score_plane"] = asdict(score_plane)
             if failure is not None:
                 raise failure
             selected = response.native_base_plus_live_delta
@@ -1453,18 +2081,43 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
                 selected = (not response.native_base_plus_live_delta
                             and response.index.vector_strategy == "column_graph"
                             and response.index.generation == self.index_info.generation
-                            and (self.transport != "native" or response.native_command_version == 2))
+                            and (self.transport != "native" or response.native_command_version == (3 if quantized else 2)))
             if response.route != "ann" or not selected or response.exact_fallbacks != 0 or response.full_document_scan_fallbacks != 0:
                 raise RuntimeError(f"TreeDB query left required native route: {response!r}")
+            if quantized and (response.dense_work is None or response.score_plane is None
+                              or response.score_plane.snapshot.schema_generation != self.index_info.generation):
+                raise RuntimeError("TreeDB quantized query omitted current owned work proof")
             self.route_evidence[scenario] = response
             started, ids, scores = time.monotonic_ns(), [], []
+            results: list[dict[str, Any]] | None = [] if quantized else None
             for document in response.documents:
-                if document.meta.get("user_id") != spec.get("user_id") or (spec["filter"] == "user_id+fpath" and document.meta.get("fpath") != spec.get("fpath")):
+                user_id, fpath = document.meta.get("user_id"), document.meta.get("fpath")
+                if user_id != spec.get("user_id") or (spec["filter"] == "user_id+fpath" and fpath != spec.get("fpath")):
                     self.evidence.cross_user[scenario] += 1
+                if quantized and (not isinstance(document.content, str) or not document.content
+                                  or set(document.meta) != {"user_id", "fpath"}
+                                  or not isinstance(user_id, str) or not isinstance(fpath, str)):
+                    raise RuntimeError("TreeDB quantized result omitted a requested full document field")
                 ids.append(document.id)
                 if document.score is None:
                     raise RuntimeError("TreeDB ANN result omitted score")
-                scores.append(float(document.score))
+                score = float(document.score)
+                if quantized:
+                    if not math.isfinite(score):
+                        raise RuntimeError("TreeDB quantized result score is not finite")
+                    assert results is not None
+                    results.append({"id": document.id, "content": document.content,
+                                    "user_id": user_id, "fpath": fpath, "score": score})
+                scores.append(score)
+            if quantized and (len(ids) != len(set(ids))
+                              or list(zip((-score for score in scores), ids))
+                              != sorted(zip((-score for score in scores), ids))):
+                raise RuntimeError("TreeDB quantized results are duplicated or unstably ordered")
+            if quantized_record is not None:
+                assert results is not None
+                quantized_record.update(result_count=len(results), results=results)
+                self._validate_quantized_response(response, operation, scenario, allowed_states, results)
+                quantized_record["outcome"] = "success"
             ended = time.monotonic_ns()
             self.evidence.samples.append({"operation": operation, "scenario": scenario, "category": "decode",
                                           "start_nanos": started, "end_nanos": ended, "duration_nanos": ended - started})
@@ -1473,7 +2126,35 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
         except BaseException as exc:
             if measured:
                 owned.update(outcome="error", error=f"{type(exc).__name__}: {exc}")
+            if quantized_record is not None:
+                quantized_record.update(outcome="error", error=f"{type(exc).__name__}: {exc}")
             raise
+
+    def compare_oracle(self, phase: str, scenario: str,
+                       result: tuple[list[str], list[float]]) -> bool:
+        if getattr(self, "query_mode", "exact") != "quantized_rerank":
+            return super().compare_oracle(phase, scenario, result)
+        ids, _ = result
+        expected = self.queries[scenario][f"{phase}_oracle_ids"]
+        intersection = len(set(ids) & set(expected))
+        exact_required = self.specs[scenario]["eligible_rows"] <= self.config["lookup_limit"]
+        match = ids == expected
+        self.evidence.events.append({
+            "operation": f"{phase}_quantized_quality", "scenario": scenario,
+            "kind": "quantized_quality", "exact_required": exact_required,
+            "exact_match": match, "recall": intersection / len(expected) if expected else (1.0 if not ids else 0.0),
+            "actual_ids": ids, "expected_ids": expected,
+        })
+        if exact_required and not match:
+            self.evidence.failures.append(f"{phase} typed-exact mismatch for {scenario}")
+        return match
+
+    def query_result_admissible(self, scenario: str, result: tuple[list[str], list[float]],
+                                oracles: tuple[tuple[list[str], list[float]], ...]) -> bool:
+        if (getattr(self, "query_mode", "exact") == "quantized_rerank"
+                and self.specs[scenario]["eligible_rows"] > self.config["lookup_limit"]):
+            return True  # search() already proved projection, filter, ordering and FP32 scores.
+        return super().query_result_admissible(scenario, result, oracles)
 
     def retrieve(self, operation: str, scenario: str, ids: list[str]) -> list[Any]:
         assert self.client is not None
@@ -1644,6 +2325,14 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
                 "availability": "unavailable", "counters": None,
                 "reason": "typed public dispatch diagnostic only; phase and replay producer evidence is not yet captured",
             }
+        quantized = getattr(self, "query_mode", "exact") == "quantized_rerank"
+        if quantized:
+            artifact.update(schema=QUANTIZED_ARTIFACT_SCHEMA, state="partial", passing=False,
+                            readiness_recommendation="not_evaluated")
+            artifact.pop("freeze_sha256", None)
+            artifact.pop("native_path_proof", None)
+            artifact["quantized_profile"] = quantized_profile(
+                self.quantized_index_name, self.ef_search, self.quantized_rerank_candidates)
         resource = artifact["backend_raw_evidence"]["qdrant"]["resource_measurement"]
         self._artifact_resource_end = resource["end"]
         backend = artifact["backends"][0]
@@ -1662,6 +2351,14 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
                               "metric": self.config["metric"], "scalar_fields": "meta.user_id,meta.fpath",
                               "vector_strategy": self.strategy, "transport": self.transport,
                               "control_transport": "http", "ef_search": str(self.ef_search),
+                              **({"query_mode": "quantized_rerank",
+                                  "quantized_profile": QUANTIZED_PROFILE_NAME,
+                                  "vector_m": str(QUANTIZED_VECTOR_M),
+                                  "quantized_index_name": self.quantized_index_name,
+                                  "quantized_codec": "scalar_u8", "quantized_version": "1",
+                                  "quantized_calibration": "legacy", "quantized_config_hash": "0",
+                                  "quantized_rerank_candidates": str(self.quantized_rerank_candidates),
+                                  "native_command_version": "3"} if quantized else {}),
                               **({"ef_construction_requested": str(self.ef_construction),
                                   **({"ef_construction_effective": str(self.index_info.vector_ef_construction)}
                                      if self.index_info is not None else {})}
@@ -1710,9 +2407,12 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
                                "allocation_availability": "unavailable", "rss_bytes": resource["rss_bytes"],
                                "cpu_seconds": resource["cpu_seconds"], "disk_bytes": resource["disk_bytes"]}
             if self.strategy == "column_graph":
-                row["route"] = {"identity": "typed_column_graph_dispatch",
+                row["route"] = {"identity": "typed_column_graph_quantized_rerank" if quantized else "typed_column_graph_dispatch",
                                 "native_command_version": route.native_command_version,
-                                "work_counters_availability": "unavailable"}
+                                "work_counters_availability": "measured" if quantized else "unavailable",
+                                **({"membership_source": "captured_typed_scalar",
+                                    "plan": route.dense_work.graph.route}
+                                   if quantized and route.dense_work is not None else {})}
                 row["visibility"] = {"generation_consistent": route.index.generation == self.index_info.generation}
         raw = artifact["backend_raw_evidence"].pop("qdrant")
         artifact["backend_raw_evidence"]["treedb"] = raw
@@ -1738,6 +2438,9 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
                            "generation": value.index.generation, "work_counters_availability": "unavailable"}
                 for scenario, value in self.route_evidence.items()
             }
+        if quantized:
+            raw.pop("native_route_responses", None)
+            raw["quantized_request_evidence"] = self.quantized_requests
         raw["service_log"] = self.controller.log_evidence()
         raw["upsert_batch_correlations"] = self.batch_correlations
         raw["upsert_batch_correlation_contract"] = self._batch_correlation_contract()
@@ -1789,21 +2492,28 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--native-address", default="127.0.0.1:17122")
     parser.add_argument("--column-graph-serving", type=Path, help="explicit JSON serving limits for column_graph")
     parser.add_argument("--manifest", type=Path, required=True)
+    parser.add_argument("--quantized-plan", type=Path, help="reviewed quantized diagnostic plan bytes")
+    parser.add_argument("--expected-quantized-plan-sha256", help="external SHA-256 pin for --quantized-plan")
+    parser.add_argument("--write-quantized-plan", type=Path,
+                        help="write a canonical quantized diagnostic plan exclusively and exit")
     parser.add_argument("--measured", action="store_true")
     parser.add_argument("--legacy-diagnostic-control", action="store_true",
                         help="keep ordinary proof decoding/resources; disable only added measured capture")
     parser.add_argument("--freeze", type=Path)
     parser.add_argument("--expected-freeze-sha256")
     parser.add_argument("--comparator-bin", type=Path)
-    parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--service-bin", type=Path, required=True)
+    parser.add_argument("--output", type=Path)
+    parser.add_argument("--service-bin", type=Path)
     parser.add_argument("--url", default="http://127.0.0.1:17120")
-    parser.add_argument("--data-dir", type=Path, required=True)
-    parser.add_argument("--collection", required=True)
+    parser.add_argument("--data-dir", type=Path)
+    parser.add_argument("--collection")
     parser.add_argument("--profile", default="command_wal_durable")
     parser.add_argument("--operation-timeout", type=float, default=120)
     parser.add_argument("--startup-timeout", type=float, default=120)
     parser.add_argument("--ef-search", type=int, default=128)
+    parser.add_argument("--query-mode", choices=("exact", "quantized_rerank"), default="exact")
+    parser.add_argument("--quantized-index-name")
+    parser.add_argument("--quantized-rerank-candidates", type=int)
     parser.add_argument("--ef-construction", type=int, default=32,
                         help="column_graph construction EF (default: 32; ignored by native_runtime)")
     parser.add_argument("--small", action="store_true", help="run the real small-scenario lifecycle and emit validated partial evidence")
@@ -1815,6 +2525,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--diagnostic-resume-scenario")
     parser.add_argument("--diagnostic-resume-start", type=int)
     args = parser.parse_args()
+    execution_fields = (args.output, args.service_bin, args.data_dir, args.collection)
+    if args.write_quantized_plan is None and any(value is None for value in execution_fields):
+        parser.error("execution requires --output, --service-bin, --data-dir, and --collection")
+    if args.write_quantized_plan is not None and any(value is not None for value in execution_fields):
+        parser.error("--write-quantized-plan does not accept execution destinations")
     resume_flags = (args.diagnostic_resume_scenario is not None, args.diagnostic_resume_start is not None)
     if any(resume_flags) and not all(resume_flags):
         parser.error("diagnostic resume requires both --diagnostic-resume-scenario and --diagnostic-resume-start")
@@ -1826,25 +2541,89 @@ def parse_args() -> argparse.Namespace:
         parser.error("diagnostic durations must be positive")
     if args.strategy == "column_graph" and args.ef_construction <= 0:
         parser.error("--ef-construction must be positive for column_graph")
+    if args.query_mode == "exact" and (args.quantized_index_name is not None
+                                       or args.quantized_rerank_candidates is not None):
+        parser.error("exact mode does not accept quantized options")
+    if args.query_mode == "quantized_rerank" and (
+        args.strategy != "column_graph" or args.transport not in (None, "native")
+        or args.quantized_index_name != QUANTIZED_PROFILE_NAME
+        or not quantized_widths_valid(args.ef_search, args.quantized_rerank_candidates)
+    ):
+        parser.error("quantized mode requires column_graph native, minima_sq8, and TopK <= R=EF within the native integer range")
     return args
+
+
+def validate_quantized_launch(args: argparse.Namespace, manifest: dict[str, Any] | None = None) -> None:
+    mode = getattr(args, "query_mode", "exact")
+    name = getattr(args, "quantized_index_name", None)
+    candidates = getattr(args, "quantized_rerank_candidates", None)
+    plan_path = getattr(args, "quantized_plan", None)
+    plan_pin = getattr(args, "expected_quantized_plan_sha256", None)
+    write_plan = getattr(args, "write_quantized_plan", None)
+    if mode == "exact":
+        if name is not None or candidates is not None or plan_path is not None or plan_pin is not None or write_plan is not None:
+            raise SystemExit("exact mode does not accept quantized options or plans")
+        return
+    if (mode != "quantized_rerank" or args.strategy != "column_graph"
+            or getattr(args, "transport", None) not in (None, "native")
+            or name != QUANTIZED_PROFILE_NAME
+            or not quantized_widths_valid(
+                args.ef_search, candidates,
+                MINIMA_TOP_K if manifest is None else manifest.get("config", {}).get("top_k"))):
+        raise SystemExit("quantized Minima requires column_graph native, minima_sq8, and TopK <= R=EF within the native integer range")
+    if getattr(args, "measured", False) or getattr(args, "legacy_diagnostic_control", False):
+        raise SystemExit("quantized Minima cannot use measured-v1 or its legacy control")
+    if getattr(args, "small", False):
+        raise SystemExit("quantized Minima requires the complete bounded lifecycle")
+    if getattr(args, "diagnostic_resume_scenario", None) is not None:
+        raise SystemExit("quantized Minima cannot use diagnostic resume")
+    if getattr(args, "profile", "command_wal_durable") != "command_wal_durable":
+        raise SystemExit("quantized Minima requires profile command_wal_durable")
+    if write_plan is not None:
+        if plan_path is not None or plan_pin is not None:
+            raise SystemExit("quantized plan construction cannot also consume a quantized plan")
+        if Path(write_plan).exists():
+            raise SystemExit("quantized plan destination already exists")
+    else:
+        if plan_path is None or not Path(plan_path).is_file() or not _sha256_pin_valid(plan_pin):
+            raise SystemExit("quantized Minima requires a reviewed quantized plan and external lowercase SHA-256 pin")
+        for label, value in (("data directory", getattr(args, "data_dir", None)),
+                             ("output", getattr(args, "output", None))):
+            if value is not None and Path(value).exists():
+                raise SystemExit(f"quantized Minima requires a fresh {label}")
+    if manifest is not None and manifest.get("schema") != common.BOUNDED_MANIFEST_SCHEMA:
+        raise SystemExit("quantized Minima requires a bounded manifest")
 
 
 def main() -> int:
     args = parse_args()
     for name, default in (("measured", False), ("legacy_diagnostic_control", False),
                           ("ef_construction", 32),
-                          ("freeze", None), ("expected_freeze_sha256", None), ("comparator_bin", None)):
+                          ("query_mode", "exact"), ("quantized_index_name", None),
+                          ("quantized_rerank_candidates", None),
+                          ("freeze", None), ("expected_freeze_sha256", None), ("comparator_bin", None),
+                          ("quantized_plan", None), ("expected_quantized_plan_sha256", None),
+                          ("write_quantized_plan", None)):
         if not hasattr(args, name):
             setattr(args, name, default)
+    validate_quantized_launch(args)
     serving = None
     if args.strategy == "column_graph":
         if args.column_graph_serving is None:
             raise SystemExit("column_graph requires --column-graph-serving with explicit limits")
-        serving = json.loads(args.column_graph_serving.read_text(encoding="utf-8"))
-        if not isinstance(serving, dict) or not serving:
-            raise SystemExit("column_graph serving limits must be a nonempty JSON object")
+        serving, _ = _strict_json_object(args.column_graph_serving, "column_graph serving limits")
     transport = getattr(args, "transport", None) or ("native" if args.strategy == "column_graph" else "http")
     manifest = common.load_manifest(args.manifest)
+    validate_quantized_launch(args, manifest)
+    expected_quantized_plan = quantized_plan(manifest, serving, args) if args.query_mode == "quantized_rerank" else None
+    if args.write_quantized_plan is not None:
+        digest = write_quantized_plan(args.write_quantized_plan, expected_quantized_plan)
+        print(f"quantized plan SHA-256: {digest}")
+        return 0
+    quantized_plan_sha256 = (
+        load_quantized_plan(args.quantized_plan, args.expected_quantized_plan_sha256, expected_quantized_plan)
+        if expected_quantized_plan is not None else ""
+    )
     freeze = common.load_measured_freeze(args.freeze, args.expected_freeze_sha256, args.manifest, manifest)
     measured = args.measured and not args.legacy_diagnostic_control
     if args.measured and (freeze is None or args.comparator_bin is None or args.strategy != "column_graph"):
@@ -1873,6 +2652,8 @@ def main() -> int:
             diagnostic_profile_seconds=args.diagnostic_profile_seconds,
             diagnostic_capture_timeout=args.diagnostic_capture_timeout,
             strategy=args.strategy, transport=transport, column_graph_serving=serving,
+            query_mode=args.query_mode, quantized_index_name=args.quantized_index_name,
+            quantized_rerank_candidates=args.quantized_rerank_candidates,
         )
         if args.measured:
             runner.configure_measurement(freeze, source, "treedb")
@@ -1889,11 +2670,15 @@ def main() -> int:
         if runner is not None:
             runner.evidence.failures.append(f"{type(exc).__name__}: {exc}")
         else:
-            artifact = {"schema": common.MEASURED_SCHEMA if measured else common.BOUNDED_ARTIFACT_SCHEMA,
+            artifact = {"schema": common.MEASURED_SCHEMA if measured else
+                        QUANTIZED_ARTIFACT_SCHEMA if args.query_mode == "quantized_rerank" else common.BOUNDED_ARTIFACT_SCHEMA,
                         "state": "partial", "passing": False, "manifest": manifest,
                         "backends": [], "scenarios": [], "backend_raw_evidence": {},
                         "failures": [f"constructor failed: {type(exc).__name__}: {exc}"],
                         "readiness_recommendation": "not_evaluated"}
+            if args.query_mode == "quantized_rerank":
+                artifact["quantized_profile"] = quantized_profile(
+                    args.quantized_index_name, args.ef_search, args.quantized_rerank_candidates)
             if freeze is not None:
                 artifact["freeze_sha256"] = freeze["sha256"]
         exit_code = 1
@@ -1904,13 +2689,19 @@ def main() -> int:
             if not isinstance(artifact, dict) or not isinstance(artifact.get("failures", []), list):
                 raise RuntimeError("artifact construction returned an invalid envelope")
         except BaseException as exc:
-            artifact = {"schema": common.MEASURED_SCHEMA if measured else common.BOUNDED_ARTIFACT_SCHEMA,
+            retained = ({} if args.query_mode == "quantized_rerank" else
+                        {"treedb": common.retained_partial_evidence(runner)})
+            artifact = {"schema": common.MEASURED_SCHEMA if measured else
+                        QUANTIZED_ARTIFACT_SCHEMA if args.query_mode == "quantized_rerank" else common.BOUNDED_ARTIFACT_SCHEMA,
                         "state": "partial", "passing": False, "manifest": manifest,
                         "backends": [], "scenarios": [],
-                        "backend_raw_evidence": {"treedb": common.retained_partial_evidence(runner)},
+                        "backend_raw_evidence": retained,
                         "failures": [*(runner.evidence.failures if runner is not None else []),
                                      f"artifact construction failed: {type(exc).__name__}: {exc}"],
                         "readiness_recommendation": "not_evaluated"}
+            if args.query_mode == "quantized_rerank":
+                artifact["quantized_profile"] = quantized_profile(
+                    args.quantized_index_name, args.ef_search, args.quantized_rerank_candidates)
             if freeze is not None:
                 artifact["freeze_sha256"] = freeze["sha256"]
             exit_code = 1
@@ -1925,6 +2716,8 @@ def main() -> int:
             raw["process_lifetimes"] = controller.lifetimes
         if args.legacy_diagnostic_control:
             artifact["measurement_control"] = "legacy_diagnostics_without_added_measured_capture"
+        if args.query_mode == "quantized_rerank":
+            artifact["quantized_plan_sha256"] = quantized_plan_sha256
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(json.dumps(artifact, indent=2, sort_keys=True, allow_nan=False) + "\n", encoding="utf-8")
     return exit_code

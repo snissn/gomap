@@ -505,6 +505,12 @@ func minimaMeasuredPresence(raw []byte) error {
 	if _, ok := top["native_path_proof"]; ok {
 		return errors.New("historical native_path_proof is forbidden under measured schema")
 	}
+	if _, ok := top["quantized_profile"]; ok {
+		return errors.New("quantized profile is forbidden under measured schema")
+	}
+	if _, ok := top["quantized_plan_sha256"]; ok {
+		return errors.New("quantized plan is forbidden under measured schema")
+	}
 	backends, err := minimaMeasuredObject(top["backend_raw_evidence"])
 	if err != nil {
 		return err
@@ -513,6 +519,9 @@ func minimaMeasuredPresence(raw []byte) error {
 		fields, err := minimaMeasuredObject(rawBackend)
 		if err != nil {
 			return err
+		}
+		if _, ok := fields["quantized_request_evidence"]; ok {
+			return errors.New("quantized request evidence is forbidden under measured schema")
 		}
 		if err := minimaMeasuredJSON(fields["setup_interval"], reflect.TypeFor[minimaMeasuredInterval](), name+".setup_interval"); err != nil {
 			return err
