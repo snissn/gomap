@@ -540,6 +540,7 @@ func openTypedGraphServingScalarU8SourceFixture(t testing.TB) typedGraphServingS
 		t.Fatal(err)
 	}
 	limits := typedGraphOverlapLimits()
+	limits.Owners = 16
 	installTypedGraphServingStateForInternalTest(t, col, "embedding_graph", limits)
 	state := col.collectionSchemaCoordinator().typedPublication.Load()
 	if state == nil || state.servingBase == nil {

@@ -275,7 +275,7 @@ func TestServiceTypedInputServingLifecycle(t *testing.T) {
 	}
 	missingPhysical := options
 	missingPhysical.Owners.Physical = collections.ColumnGraphPhysicalResourceLimits{}
-	if _, err := svc.OptimizeIndex(ctx, create.Name, OptimizeIndexRequest{ColumnGraphServing: &missingPhysical}); err == nil {
+	if _, err := svc.OptimizeIndex(ctx, create.Name, OptimizeIndexRequest{ColumnGraphAction: "ensure", ColumnGraphServing: &missingPhysical}); err == nil {
 		t.Fatal("missing explicit physical limits accepted")
 	}
 	if _, err := svc.OptimizeIndex(ctx, create.Name, OptimizeIndexRequest{ColumnGraphServing: &options}); err != nil {
