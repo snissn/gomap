@@ -140,32 +140,32 @@ func requireTypedGraphPublicServingTest(t testing.TB) {
 	requireColumnAssetExactDestructiveGCTest(t)
 }
 
-func TestTypedGraphPublicUnsupportedPreparedAdmission(t *testing.T) {
+func TestTypedGraphPublicPortableFallbackAdmission(t *testing.T) {
 	if columnGraphTypedColumnMmapDirectViewSupportedForTest() {
-		t.Skip("exercises hosts without mmap_direct prepared holders")
+		t.Skip("exercises the portable non-mmap serving path")
 	}
-	col, base, ids, retained, columns, _ := openTypedGraphQualityFixture(t, 8)
+	col, base, ids, _, columns, _ := openTypedGraphQualityFixture(t, 8)
 	defer base.Close()
-	if err := col.EnsureColumnGraphServing(context.Background(), base.indexName, typedGraphPublicTestOptions()); !errors.Is(err, errColumnVectorGraphSharedPreparedSearchNotEligible) {
-		t.Fatalf("unsupported prepared admission: %v", err)
+	if err := col.EnsureColumnGraphServing(context.Background(), base.indexName, typedGraphPublicTestOptions()); err != nil {
+		t.Fatal(err)
 	}
-	coord := col.collectionSchemaCoordinator()
-	if state := coord.typedPublication.Load(); state != nil && state.servingAdmitted {
-		t.Fatal("unsupported prepared holder admitted serving")
+	stats, available := col.ColumnGraphServingSnapshot()
+	if !available || !stats.ServingReady || stats.Physical.FallbackSegments == 0 || stats.Physical.DescriptorsLive == 0 || stats.Physical.MappedBackings != 0 || stats.Physical.MappedBytes != 0 {
+		t.Fatalf("portable fallback serving stats=%+v available=%t", stats, available)
 	}
-	seq, system := dbCommitSeqAndSystemRoot(col.db)
-	changed := []TypedColumnBatch{{Name: "embedding", Float32Vectors: columns[0].Float32Vectors[:1]}, {Name: "content", Strings: []string{"reject"}}, {Name: "user", Strings: []string{"reject"}}, {Name: "path", Strings: []string{"reject"}}}
-	if _, err := col.ReplaceTypedBatch(ids[:1], retained[:1], changed); !errors.Is(err, ErrVectorIndexSnapshotMismatch) {
-		t.Fatalf("unsupported admission allowed mutation: %v", err)
+	var buffer VectorIndexSearchBuffer
+	response, view, err := col.SearchVectorIndexWithBufferReadView(VectorIndexSearchOptions{IndexName: base.indexName, Query: columns[0].Float32Vectors[0], TopK: 1, EfSearch: 8, StatsMode: VectorIndexSearchStatsModeMinimal}, &buffer)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if next, root := dbCommitSeqAndSystemRoot(col.db); next != seq || root != system {
-		t.Fatal("rejected write changed authority")
+	defer view.Close()
+	docs, err := view.FetchDocumentsForVectorIndexSearchResults(response.Results, DocumentFetchOptions{})
+	if err != nil || len(docs.Results) != 1 || !bytes.Equal(docs.Results[0].ID, ids[0]) {
+		t.Fatalf("portable fallback documents=%+v err=%v", docs.Results, err)
 	}
-	account := &coord.typedGraphOwners
-	account.Lock()
-	defer account.Unlock()
-	if account.baseOwners != 0 || account.baseAssetBytes != 0 || account.baseDescriptorBytes != 0 || account.baseBackingBytes != 0 {
-		t.Fatal("unsupported prepared holder retained accounting")
+	stats, available = col.ColumnGraphServingSnapshot()
+	if !available || stats.Physical.TotalFallbacks == 0 || stats.Physical.TotalBuildFailures != 0 || stats.Physical.QuarantinedHolders != 0 {
+		t.Fatalf("portable fallback completion stats=%+v available=%t", stats, available)
 	}
 }
 
