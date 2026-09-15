@@ -69,6 +69,8 @@ var columnAssetSegmentAllocationCaches [columnAssetSegmentWriteLockStripes]colum
 var columnAssetVerifiedChecksumCache = struct {
 	sync.Mutex
 	entries           [columnAssetVerifiedChecksumCacheSlots]columnAssetVerifiedChecksumEntry
+	entriesByKey      map[columnAssetVerifiedChecksumKey]*columnAssetVerifiedChecksumEntry
+	entryEvictNext    int
 	rowIndexBytes     uint64
 	rowIndexEntries   uint64
 	rowIndexEvictNext int
@@ -129,11 +131,32 @@ func publishColumnAssetRowIndexResidencyLocked() {
 	workstats.RowIndexCache.Entries.Store(columnAssetVerifiedChecksumCache.rowIndexEntries)
 }
 
+func columnAssetVerifiedChecksumEntryForStoreLocked(key columnAssetVerifiedChecksumKey) *columnAssetVerifiedChecksumEntry {
+	if columnAssetVerifiedChecksumCache.entriesByKey == nil {
+		columnAssetVerifiedChecksumCache.entriesByKey = make(map[columnAssetVerifiedChecksumKey]*columnAssetVerifiedChecksumEntry, columnAssetVerifiedChecksumCacheSlots)
+	}
+	if entry := columnAssetVerifiedChecksumCache.entriesByKey[key]; entry != nil {
+		return entry
+	}
+	var entry *columnAssetVerifiedChecksumEntry
+	if len(columnAssetVerifiedChecksumCache.entriesByKey) < columnAssetVerifiedChecksumCacheSlots {
+		entry = &columnAssetVerifiedChecksumCache.entries[len(columnAssetVerifiedChecksumCache.entriesByKey)]
+	} else {
+		entry = &columnAssetVerifiedChecksumCache.entries[columnAssetVerifiedChecksumCache.entryEvictNext]
+		columnAssetVerifiedChecksumCache.entryEvictNext = (columnAssetVerifiedChecksumCache.entryEvictNext + 1) % columnAssetVerifiedChecksumCacheSlots
+		delete(columnAssetVerifiedChecksumCache.entriesByKey, entry.key)
+		evictColumnAssetRowIndexLocked(entry)
+	}
+	*entry = columnAssetVerifiedChecksumEntry{key: key}
+	columnAssetVerifiedChecksumCache.entriesByKey[key] = entry
+	return entry
+}
+
 func lookupColumnAssetRowIndex(key columnAssetVerifiedChecksumKey, version uint16, rowsOffset int, header columnPhysicalAssetScanHeader) *columnAssetVerifiedRowIndex {
 	columnAssetVerifiedChecksumCache.Lock()
-	entry := &columnAssetVerifiedChecksumCache.entries[columnAssetVerifiedChecksumCacheIndex(key)]
+	entry := columnAssetVerifiedChecksumCache.entriesByKey[key]
 	var rowIndex *columnAssetVerifiedRowIndex
-	if entry.key == key && entry.rowIndex.matches(version, rowsOffset, header) {
+	if entry != nil && entry.rowIndex.matches(version, rowsOffset, header) {
 		rowIndex = entry.rowIndex
 	}
 	columnAssetVerifiedChecksumCache.Unlock()
@@ -153,13 +176,14 @@ func storeColumnAssetRowIndex(key columnAssetVerifiedChecksumKey, rowIndex *colu
 	}
 	columnAssetVerifiedChecksumCache.Lock()
 	defer columnAssetVerifiedChecksumCache.Unlock()
-	entry := &columnAssetVerifiedChecksumCache.entries[columnAssetVerifiedChecksumCacheIndex(key)]
-	if entry.key == key && entry.rowIndex.matches(rowIndex.version, rowIndex.rowsOffset, columnPhysicalAssetScanHeader{SchemaHash: rowIndex.schemaHash, Operation: rowIndex.operation, RowCount: len(rowIndex.offsets)}) {
+	entry := columnAssetVerifiedChecksumCache.entriesByKey[key]
+	if entry != nil && entry.rowIndex.matches(rowIndex.version, rowIndex.rowsOffset, columnPhysicalAssetScanHeader{SchemaHash: rowIndex.schemaHash, Operation: rowIndex.operation, RowCount: len(rowIndex.offsets)}) {
 		return entry.rowIndex
 	}
-	evictColumnAssetRowIndexLocked(entry)
-	if entry.key != key {
-		*entry = columnAssetVerifiedChecksumEntry{key: key}
+	if entry == nil {
+		entry = columnAssetVerifiedChecksumEntryForStoreLocked(key)
+	} else {
+		evictColumnAssetRowIndexLocked(entry)
 	}
 	for columnAssetVerifiedChecksumCache.rowIndexBytes > columnAssetRowIndexCacheMaxBytes-bytes {
 		victim := &columnAssetVerifiedChecksumCache.entries[columnAssetVerifiedChecksumCache.rowIndexEvictNext]
@@ -2550,11 +2574,11 @@ func columnAssetVerifiedChecksumCacheContains(rootDir string, ref ColumnAssetRef
 		return false
 	}
 	key := columnAssetVerifiedChecksumKeyForRef(rootDir, ref, fileIdentity)
-	idx := columnAssetVerifiedChecksumCacheIndex(key)
 	columnAssetVerifiedChecksumCache.Lock()
-	entry := columnAssetVerifiedChecksumCache.entries[idx]
+	entry := columnAssetVerifiedChecksumCache.entriesByKey[key]
+	valid := entry != nil && entry.valid
 	columnAssetVerifiedChecksumCache.Unlock()
-	return entry.valid && entry.key == key
+	return valid
 }
 
 func columnAssetVerifiedChecksumCacheStore(rootDir string, ref ColumnAssetRef, fileIdentity columnAssetVerifiedChecksumFileIdentity) {
@@ -2562,15 +2586,10 @@ func columnAssetVerifiedChecksumCacheStore(rootDir string, ref ColumnAssetRef, f
 		return
 	}
 	key := columnAssetVerifiedChecksumKeyForRef(rootDir, ref, fileIdentity)
-	idx := columnAssetVerifiedChecksumCacheIndex(key)
 	columnAssetVerifiedChecksumCache.Lock()
-	entry := &columnAssetVerifiedChecksumCache.entries[idx]
-	if entry.key != key {
-		evictColumnAssetRowIndexLocked(entry)
-		*entry = columnAssetVerifiedChecksumEntry{key: key}
-		publishColumnAssetRowIndexResidencyLocked()
-	}
+	entry := columnAssetVerifiedChecksumEntryForStoreLocked(key)
 	entry.valid = true
+	publishColumnAssetRowIndexResidencyLocked()
 	columnAssetVerifiedChecksumCache.Unlock()
 }
 
@@ -2590,40 +2609,6 @@ func columnAssetVerifiedChecksumKeyForRef(rootDir string, ref ColumnAssetRef, fi
 		fileSize:   fileIdentity.size,
 		fileModNS:  fileIdentity.modTimeUnixNano,
 	}
-}
-
-func columnAssetVerifiedChecksumCacheIndex(key columnAssetVerifiedChecksumKey) int {
-	h := uint64(1469598103934665603)
-	h = columnAssetVerifiedChecksumCacheHashString(h, key.rootDir)
-	h = columnAssetVerifiedChecksumCacheHashString(h, string(key.kind))
-	h = columnAssetVerifiedChecksumCacheHashString(h, key.namespace)
-	h = columnAssetVerifiedChecksumCacheHashUint64(h, key.generation)
-	h = columnAssetVerifiedChecksumCacheHashUint64(h, key.partID)
-	h = columnAssetVerifiedChecksumCacheHashUint64(h, uint64(key.fileID))
-	h = columnAssetVerifiedChecksumCacheHashUint64(h, uint64(key.offset))
-	h = columnAssetVerifiedChecksumCacheHashUint64(h, uint64(key.length))
-	h = columnAssetVerifiedChecksumCacheHashUint64(h, uint64(key.checksum))
-	h = columnAssetVerifiedChecksumCacheHashUint64(h, key.fileDev)
-	h = columnAssetVerifiedChecksumCacheHashUint64(h, key.fileIno)
-	h = columnAssetVerifiedChecksumCacheHashUint64(h, uint64(key.fileSize))
-	h = columnAssetVerifiedChecksumCacheHashUint64(h, uint64(key.fileModNS))
-	return int(h % columnAssetVerifiedChecksumCacheSlots)
-}
-
-func columnAssetVerifiedChecksumCacheHashString(h uint64, s string) uint64 {
-	for i := 0; i < len(s); i++ {
-		h ^= uint64(s[i])
-		h *= 1099511628211
-	}
-	return h
-}
-
-func columnAssetVerifiedChecksumCacheHashUint64(h uint64, v uint64) uint64 {
-	for i := 0; i < 8; i++ {
-		h ^= uint64(byte(v >> (i * 8)))
-		h *= 1099511628211
-	}
-	return h
 }
 
 type columnPhysicalAssetReadCache struct {

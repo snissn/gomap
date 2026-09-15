@@ -1568,6 +1568,8 @@ func resetColumnAssetVerifiedChecksumCacheForTest(t *testing.T) {
 	reset := func() {
 		columnAssetVerifiedChecksumCache.Lock()
 		columnAssetVerifiedChecksumCache.entries = [columnAssetVerifiedChecksumCacheSlots]columnAssetVerifiedChecksumEntry{}
+		columnAssetVerifiedChecksumCache.entriesByKey = nil
+		columnAssetVerifiedChecksumCache.entryEvictNext = 0
 		columnAssetVerifiedChecksumCache.rowIndexBytes = 0
 		columnAssetVerifiedChecksumCache.rowIndexEntries = 0
 		columnAssetVerifiedChecksumCache.rowIndexEvictNext = 0
