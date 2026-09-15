@@ -802,11 +802,15 @@ semantics; native wire changes only the transport representation.
 Command `64 dense_vector_search` is a LocalOnly read, never a deterministic
 mutation or command-WAL entry. Version 1 selects the cosine float32
 `native_runtime` service route. Version 2 selects the explicitly admitted,
-persisted typed-input `column_graph` service route. A mismatched strategy fails
-closed; neither version permits the legacy full-document scan route. Typed
-native filter planning may choose bounded exact scoring internally.
+persisted typed-input `column_graph` service route. Version 3 selects the same
+typed owner path with the explicitly negotiated legacy scalar-u8/v1 quantized
+rerank score plane. A mismatched strategy or capability fails closed; no
+version permits the legacy full-document scan route. Typed native filter
+planning may choose bounded exact scoring internally.
 
-Both versions require `deadline` (4) and `dense_search_request` (129). Request
+Versions 1 and 2 require `deadline` (4) and `dense_search_request` (129).
+Version 3 additionally requires the critical `dense_search_quantized_options`
+(135). Request
 payload order is: length-prefixed UTF-8 index name; uvarint top-K, efSearch and
 expected generation; one-byte return-embedding bool; uvarint dimensions then
 packed little-endian FP32 query; uvarint filter-leaf count then AND-conjoined
@@ -814,6 +818,11 @@ leaves. Each leaf contains a length-prefixed field, one-byte operator
 (`1 ==`, `2 >`, `3 >=`, `4 <`, `5 <=`), and a typed value: `1` UTF-8 string,
 `2` bool, `3` signed zigzag int64, or `4` little-endian float64. Existing bounds
 include 16 filter levels and 64 leaves; unsupported operators fail closed.
+Version 3 requires a positive efSearch. A caller using the index default resolves
+it from generation-bound index metadata before encoding, so the score-plane
+`requested_ef_search` is the authenticated candidate-width bound; raw zero is
+rejected by both the native client and server. Versions 1 and 2 retain their
+existing zero/default behavior.
 
 Response sections are ordered IDs (102), requested JSON documents (103), and
 `dense_search_response` (130). The metadata payload contains one route byte,
@@ -823,11 +832,75 @@ native-runtime bool byte (successful route `1`). Version 2 requires route tag
 `2`. Cross-version tags are rejected. Tag 2 identifies validated dispatch,
 **not measured execution-work evidence**. Version 2 additionally requires the
 critical `dense_search_work` section (134), independently versioned below.
+Version 3 requires route tag `3`, the same critical section 134, and the
+separately versioned critical `dense_search_score_plane_proof` section (136).
+Section 135 is encoded as version `1`, mode tag `1` (`quantized_rerank`), a
+length-prefixed UTF-8 quantized index name, and a bounded uvarint rerank
+candidate limit (zero selects the owner-normalized limit). It carries no
+codec/calibration declaration; those are capability- and index-metadata
+validated by the service. Section 136 is owned score-plane evidence and never
+extends section 134 or the v2 response schema. It includes version/flags,
+requested/effective mode and route tags, owned reason/name/codec strings,
+candidate/call/byte counters, and the captured base/current manifest and
+coverage snapshot. In section-136 version 1, flag bit 0 means score-plane
+available, bit 1 means execution completed, and bit 2 independently means the
+captured snapshot is available; all other flag bits are invalid. This keeps
+incomplete error prefixes distinguishable from completed proofs without
+deriving snapshot availability from the outer proof bit. Missing, duplicate, stale, malformed, unsupported-codec,
+unknown-name, or out-of-bound options fail closed.
+Sections 134, 135, and 136 carry the section critical flag whenever present;
+consumers reject a required instance whose critical flag is absent.
+
+Every available section-134 or section-136 snapshot requires a nonzero acquired
+vector schema hash and generation, nonzero base/current coverage LSNs with current not
+behind base, and nonzero generation/checksum identities for both manifests,
+with manifest version exactly 1 and current manifest generation not behind the
+captured base manifest generation. An unavailable snapshot is the exact zero
+value.
+
+Completed public v3 proofs use this producer/consumer route matrix. `E`, `C`,
+and `R` denote normalized candidate width, raw candidate width, and rerank cap.
+
+| Score-plane route | Filter/cardinality | Planning and scoring invariants |
+|---|---|---|
+| `typed_empty` | A completed filter is required and eligible rows are zero | Result and all score/retained/live/actual counters are zero. `E/C/R` may be nonzero because planning can precede removal of shadowed filter matches. |
+| `typed_exact` | Without a filter, the base domain is empty. A filter has positive eligibility; with a nonzero `E`, eligible rows are at most 4096. | Whenever `E` is zero, `C`, small-filter calls, and base-shadowed are zero, so exact work is suffix-only. Filtered total exact calls equal eligible rows. Result count is `min(top-K, total exact calls)`. |
+| `quantized_rerank` | A filtered route has more than 4096 eligible rows. | `E/C/R` are positive; small-filter calls are zero; base-shadowed is no greater than raw retained; live shortlist is `min(E, raw retained - base shadowed)`; actual rerank is `min(live shortlist, R)`. Result count is `min(top-K, total exact calls)`. |
+
+For every route, completed proofs have an empty reason and available incomplete
+proofs have a nonempty producer error reason. Graph base-edge work is zero,
+quantized calls equal graph base-ANN scoring, exact base calls equal graph
+exact-base/result-ID counts, and exact suffix calls equal graph delta scoring.
+Every completed or incomplete proof pair also preserves the producer prefix
+bounds: graph base candidates do not exceed quantized calls; `R = min(E,
+requested rerank candidates or E)`; the positive v3 EF bounds `E`; retained candidates
+do not exceed quantized calls or `C`; live candidates do not exceed retained
+candidates or `E`; and actual reranks do not exceed live candidates or `R` and
+equal completed exact-base rerank calls. A zero `E` additionally requires zero
+`C`, small-filter calls, and graph base-shadowed work. Graph base candidates may be lower than
+quantized calls because public minimal stats do not require that optional count.
+These prefix bounds intentionally do not infer byte equalities or a
+nonzero-width base-shadowed relation before completion. Returned exact cosine scores are
+finite and within `[-1.000001, 1.000001]`, allowing only bounded FP32 rounding.
+Returned IDs are valid UTF-8, nonempty, free of leading or trailing Unicode
+White_Space as defined by Go `unicode.IsSpace`, and unique, matching
+document-service write admission. In particular, the C0 information separators
+U+001C through U+001F are not whitespace in this contract.
+
 Requested documents are fetched from the search's same read owner before
 release. Content/meta are returned; embedding echo is opt-in through the
 return-embedding bool (default false), as on HTTP. Stored FP32 embeddings are
 reconstructed as JSON numbers, not packed result vectors. Command 64 packs the
 query and command 65 packs ingest vectors; document response sections remain JSON.
+Version-3 consumers decode each JSON document before exposure, require unique
+exactly named top-level fields and an `id` equal to the corresponding
+section-102 ID, reject response-only/write-only or unknown top-level fields,
+require unique keys recursively throughout metadata, preserve integral metadata
+precision while checking the requested filter,
+and require a finite, dimension-matched `embedding` exactly when
+return-embedding is true. When that embedding is present, consumers recompute
+the FP32 cosine score and require it to match the result-envelope score within
+`1e-6` absolute tolerance.
 
 Section 134 version 1 contains exactly 38 minimal uint64 uvarints, in this order:
 
@@ -846,17 +919,31 @@ completed, filter attempted, filter completed, captured snapshot available,
 output attempted, output completed. Other bits are invalid. Route tags are
 `0` no executed branch, `1` typed empty, `2` typed exact, `3` typed HNSW.
 Manifest format tags are `0` empty and `1` `tcs1`; manifest version fits uint16.
+Every available snapshot carries complete base and current manifest identities:
+generation, version, and checksum are nonzero (the empty format tag retains its
+canonical `tcs1` compatibility meaning). Equal manifest generations require
+equal normalized identities and coverage LSNs. That unchanged frontier has no
+delta scores or shadowed base rows, no suffix score calls or bytes, and no raw
+candidate-width shadow allowance.
 Unknown versions/tags, missing or duplicate sections, nonminimal/overflowing
 integers, truncation and trailing bytes fail closed. Unavailable/unattempted
 groups contain zero values. Successful responses require completed graph and
-output, fetched=requested=result count, no missing rows, and output bytes equal
-the sum of materialized document byte lengths. Output bytes exclude framing.
+output, fetched=requested=result count, no missing rows, retained payload
+fetches=JSON reconstruction rows=result count, typed column rows no greater
+than result count, and output bytes equal the sum of materialized document byte
+lengths. When a filter was requested, every decoded result document must also
+satisfy that exact filter; filter-work cardinality alone is not result-membership
+proof. Output bytes exclude framing and HTTP JSON encoding.
 
 The snapshot comes from the actual acquired owner, including base/current
 manifest identities and coverage, and remains owned after owner close or client
 buffer reuse. It is not the requested generation or a later diagnostics read.
+Current coverage LSN is never lower than base coverage LSN.
 Schema generation is the acquired vector definition's generation; the service's
-expected-generation guard can also include a newer text-index generation.
+aggregate generation may be higher when it includes a newer text-index
+generation, but it is never lower. A native response binds this upper bound to
+the admitted nonzero expected generation; HTTP binds it to the returned
+positive uint64 index generation.
 Filter cardinality is final only on completed preparation; mapping work is an
 admitted composite bound: ordinal mapping, submitted secondary point requests,
 and temporary encoded-prefix/key payload bounds for selective string EQ AND.
@@ -866,19 +953,28 @@ Retained/growth bytes measure ordinal capacity, and scratch rows/ID bytes are
 logical peaks. Other work fields count actual producer work,
 including prefixes before an error. No per-request process snapshot is taken.
 
-The existing FrameError may also carry this same critical section beside its
-unchanged error section (2), only for 64/v2. Pre-service failures may omit it;
-omission means unavailable. A later native encoding failure preserves completed
-service/graph/output evidence. This completion does not certify wire delivery.
+The existing FrameError may also carry these critical sections beside its
+unchanged error section (2), for 64/v2 and 64/v3 respectively. Pre-service
+failures may omit unavailable evidence. A later native encoding failure
+preserves completed service/graph/output and score-plane prefixes. This
+completion does not certify wire delivery.
 Version 1 never emits or accepts section 134 and retains its response/error
 bytes. The Go response owns its fixed proof value independently of borrowed
-result documents; `WireError.DenseWork` is optional owned error detail.
+result documents; `WireError.DenseWork` is optional owned error detail. If
+either proof section is malformed, clients reject it while preserving the
+independently decoded valid sibling on the protocol error.
+After section framing is safe, missing, duplicate, or malformed error metadata
+and unknown critical error siblings likewise cannot erase independently valid
+section-134 or section-136 proof.
 
 Hello capabilities advertise `dense_vector_search_versions` as a comma-separated
 set derived from registered command versions and an available standalone
 document service. `get_many_versions=1` similarly requires its registered
 standalone collection read implementation. `max_frame_size` reports the server
 frame bound. Missing capability is not support; new clients must fail closed.
+The document-service index capability `typed_dense_quantized_rerank` is a
+separate typed negotiation bit; benchmark `quantized_vector_search`,
+`quantized_rerank`, and `scalar_u8_quantized_rerank` do not imply it.
 These extensible capability-map entries do not change existing frame versions.
 GetMany (50/v1) remains unchanged: it is a batched transport over local per-ID
 reads, without an expected-generation guard or a batch-wide snapshot promise.

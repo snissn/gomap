@@ -878,7 +878,7 @@ func (s *Server) writeHelloOK(w io.Writer, header iwire.Header, state *connState
 			caps["typed_document_upsert_versions"] = "1"
 		}
 		var versions []string
-		for _, version := range []uint64{iwire.DenseVectorSearchLegacyVersion, iwire.DenseVectorSearchTypedVersion} {
+		for _, version := range []uint64{iwire.DenseVectorSearchLegacyVersion, iwire.DenseVectorSearchTypedVersion, iwire.DenseVectorSearchTypedQuantizedVersion} {
 			if _, ok := s.registry.LookupCommand(iwire.CommandDenseVectorSearch, version); ok {
 				versions = append(versions, strconv.FormatUint(version, 10))
 			}
@@ -953,7 +953,11 @@ func (s *Server) writeError(w io.Writer, request iwire.Header, err error) error 
 		if proofErr != nil {
 			return proofErr
 		}
-		if err := s.checkResponseSectionCount(2); err != nil {
+		sectionCount := 2
+		if observed.version == iwire.DenseVectorSearchTypedQuantizedVersion && observed.scorePlane != nil {
+			sectionCount++
+		}
+		if err := s.checkResponseSectionCount(sectionCount); err != nil {
 			return err
 		}
 		if err := s.checkResponseSectionLen("dense work", len(proof)); err != nil {
@@ -965,6 +969,23 @@ func (s *Server) writeError(w io.Writer, request iwire.Header, err error) error 
 		}
 		if err := s.checkResponseBodyLen(uint64(len(body))); err != nil {
 			return err
+		}
+		if observed.version == iwire.DenseVectorSearchTypedQuantizedVersion && observed.scorePlane != nil {
+			var proofScratch [2048]byte
+			proof, proofErr := appendDenseScorePlane(proofScratch[:0], *observed.scorePlane, s.limits)
+			if proofErr != nil {
+				return proofErr
+			}
+			if err := s.checkResponseSectionLen("dense score-plane proof", len(proof)); err != nil {
+				return err
+			}
+			body, proofErr = iwire.AppendSection(body, iwire.Section{ID: iwire.SectionDenseSearchScorePlaneProof, Flags: iwire.SectionFlagCritical, Bytes: proof})
+			if proofErr != nil {
+				return proofErr
+			}
+			if err := s.checkResponseBodyLen(uint64(len(body))); err != nil {
+				return err
+			}
 		}
 	}
 	s.counters.incErrorsTotal()

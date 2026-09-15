@@ -31,11 +31,13 @@ class TreeDBProtocolError(TreeDBClientError):
         status_code: Optional[int] = None,
         response_body: Optional[str] = None,
         dense_work=None,
+        score_plane=None,
     ) -> None:
         super().__init__(message)
         self.status_code = status_code
         self.response_body = response_body
         self.dense_work = dense_work
+        self.score_plane = score_plane
 
 
 class TreeDBServiceError(TreeDBClientError):
@@ -51,6 +53,7 @@ class TreeDBServiceError(TreeDBClientError):
         status_code: Optional[int] = None,
         response_body: Optional[str] = None,
         dense_work=None,
+        score_plane=None,
     ) -> None:
         super().__init__(f"{code}: {message}" if message else code)
         self.code = code
@@ -58,6 +61,7 @@ class TreeDBServiceError(TreeDBClientError):
         self.status_code = status_code
         self.response_body = response_body
         self.dense_work = dense_work
+        self.score_plane = score_plane
 
 
 class InvalidRequestError(TreeDBServiceError):
@@ -116,8 +120,9 @@ def service_error_from_code(
     status_code: Optional[int] = None,
     response_body: Optional[str] = None,
     dense_work=None,
+    score_plane=None,
 ) -> TreeDBServiceError:
     """Build the narrowest exception class for a TreeDB service error code."""
 
     cls = ERROR_CLASS_BY_CODE.get(code, TreeDBServiceError)
-    return cls(code, message, status_code=status_code, response_body=response_body, dense_work=dense_work)
+    return cls(code, message, status_code=status_code, response_body=response_body, dense_work=dense_work, score_plane=score_plane)

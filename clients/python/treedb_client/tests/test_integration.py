@@ -26,6 +26,23 @@ def _free_addr() -> str:
     return f"{host}:{port}"
 
 
+def _dense_work_without_filter_materialization(work):
+    """Compare route semantics while ignoring cache-cold physical filter work."""
+
+    filter_work = replace(
+        work.graph.filter,
+        source_ids=0,
+        source_bytes=0,
+        inspected_entries=0,
+        mapping_work_charged=0,
+        retained_bytes=0,
+        scratch_id_bytes=0,
+        scratch_rows=0,
+        ordinal_growth_peak_bytes=0,
+    )
+    return replace(work, graph=replace(work.graph, filter=filter_work))
+
+
 class TreeDBServiceProcess:
     def __init__(self, repo_root: Path, data_dir: str, *, native: bool = False) -> None:
         self.repo_root = repo_root
@@ -215,7 +232,10 @@ class TreeDBClientIntegrationTests(unittest.TestCase):
                     self.assertEqual(response.documents[0].id, "0")
                     self.assertEqual(response.documents[0].content, "text 0")
                     self.assertEqual(response.documents[0].embedding, [1.0, 0.0])
-                    self.assertEqual(asdict(response.dense_work), retained_proof)
+                    self.assertEqual(
+                        _dense_work_without_filter_materialization(response.dense_work),
+                        _dense_work_without_filter_materialization(proof),
+                    )
                     changed = Document(id="0", content="replacement", embedding=[0, 1],
                                        meta={"user_id": "changed", "fpath": "new/path"})
                     with closing(TreeDBClient(service.base_url, timeout=10, native_address=service.native_addr)) as writer:
@@ -258,7 +278,10 @@ class TreeDBClientIntegrationTests(unittest.TestCase):
                         self.assertEqual(latest.documents[0].content, "replacement")
                         self.assertEqual(latest.documents[0].meta["fpath"], "new/path")
                         self.assertTrue(latest.dense_work.completed)
-                        self.assertEqual(latest.dense_work, response.dense_work)
+                        self.assertEqual(
+                            _dense_work_without_filter_materialization(latest.dense_work),
+                            _dense_work_without_filter_materialization(response.dense_work),
+                        )
                         self.assertNotEqual(latest.dense_work.graph.snapshot.current_manifest,
                                             proof.graph.snapshot.current_manifest)
                         self.assertEqual(asdict(proof), retained_proof)

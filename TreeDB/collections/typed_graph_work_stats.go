@@ -22,13 +22,15 @@ type ColumnGraphQueryWork struct {
 	// ScorePlane is a separately versioned selected-score-plane proof. The
 	// original graph-work fields intentionally retain their v1 meanings for
 	// existing callers; Q3 owns any wire exposure of this owned evidence.
-	ScorePlane ColumnGraphScorePlaneWork `json:"score_plane"`
+	// Q3 transport exposes this as a sibling proof on the service response;
+	// keep dense_work-v1's JSON graph shape frozen for existing clients.
+	ScorePlane ColumnGraphScorePlaneWork `json:"-"`
 }
 
 // ColumnGraphScorePlaneWork is owner-local evidence for an explicitly selected
 // score plane. It is populated from the captured owner and actual calls, never
-// from request flags or process-wide counters. Version 1 is intentionally
-// internal until the Q3 transport contract is introduced.
+// from request flags or process-wide counters. Version 1 is exposed by the
+// separately versioned Q3 public transport proof.
 type ColumnGraphScorePlaneWork struct {
 	Version   uint16 `json:"version"`
 	Available bool   `json:"available"`

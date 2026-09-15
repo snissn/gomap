@@ -53,12 +53,16 @@ Schema mutation, fold, reconciliation and vacuum retain exclusive admission;
 existing owner and asset pins keep previously admitted readers coherent.
 
 The ordinary Python client and benchmark runner select this lifecycle through
-HTTP controls and native 64/v2 dense, 65/v1 typed upsert and 50/v2 GetMany.
-Selected dense HTTP/native responses expose versioned owned `dense_work`:
+HTTP controls and native 64/v2 FP32 dense, 64/v3 typed legacy scalar-u8
+quantized rerank, 65/v1 typed upsert and 50/v2 GetMany. Selected dense
+HTTP/native responses expose versioned owned `dense_work`:
 executed graph/filter work, captured owner identities/coverage and requested
 output materialization, including service error prefixes. Dispatch tags alone
 remain insufficient. Process-lifetime diagnostics cover indexed JSON, replay,
 scans and separate GetMany work; per-query proofs do not sample process totals.
+The v3 quantized response carries a sibling score-plane proof and requires the
+separate `typed_dense_quantized_rerank` capability; benchmark quantized
+capabilities do not negotiate this public path.
 The final artifact validator and workload qualification remain separate gates;
 this product contract does not certify final phase evidence or performance.
 
@@ -258,12 +262,18 @@ filter of at most 4,096 rows is intentionally the typed exact route (still with
 selected-asset validation for a nonempty base), and its actual live base plus
 suffix exact scores must fit `B`; the 4,097 boundary goes through ANN.
 
+The completed public proof keeps Q1's minimal-stat distinction explicit.
+Unfiltered scalar-u8 traversal canonically suppresses `base_candidates` to
+zero. Filtered traversal records the admitted layer-0 candidate count, which
+must be at least the score plane's `raw_retained_candidates`; in both cases it
+cannot exceed `base_ann_scored`.
+
 Q2's final base and suffix ordering uses raw authoritative FP32 vectors with
 FP64 inverse norms and `vectorops.CosineDistanceFloat32Normalized`, returning
 `1 - float64(distance)`. It must not substitute a packed raw dot or rounded
-selected-codec score. `ColumnGraphQueryWork.ScorePlane` captures the versioned
-Q2 normalized widths and actual work within the owner-local Go evidence; Q3
-(#4686), not Q2, owns any transport/wire representation of that proof.
+selected-codec score. `ColumnGraphQueryWork.ScorePlane` remains the owner-local
+source; Q3 (#4686) exposes a separately versioned sibling score-plane proof on
+the public HTTP/native/Python response and never extends `dense_work-v1`.
 
 M0's bounded-50k baseline exposed a concrete regression target: 1,000 eligible
 `broad_10pct` IDs, zero returned IDs, `complete_finite_ann`, 2,064 visited/scored.

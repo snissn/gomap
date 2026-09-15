@@ -201,14 +201,14 @@ func TestTypedGraphPublicScalarU8QuantizedRerank(t *testing.T) {
 		t.Fatalf("typed quantized rerank shortlist stats=%+v", response.Stats)
 	}
 	work := response.Stats.ColumnGraphWork
-	if !work.Completed || work.Route != "typed_hnsw" || work.BaseANNScored != response.Stats.QuantizedScoreCalls {
+	if !work.Completed || work.Route != "typed_hnsw" || work.BaseANNScored != response.Stats.QuantizedScoreCalls || work.BaseEdges != 0 {
 		t.Fatalf("typed quantized rerank graph work=%+v stats=%+v", work, response.Stats)
 	}
 	proof := work.ScorePlane
 	if !proof.Available || !proof.Completed || proof.RequestedMode != VectorIndexQueryModeQuantizedRerank || proof.EffectiveMode != VectorIndexQueryModeQuantizedRerank || proof.Route != "quantized_rerank" || proof.QuantizedIndexName != "embedding.scalar_u8.legacy" {
 		t.Fatalf("typed quantized rerank score-plane proof=%+v", proof)
 	}
-	if proof.RawCandidateWidth != 3 || proof.RerankCandidateCap != 3 || proof.ActualRerankCandidates != response.Stats.QuantizedRerankCandidates || proof.ExactBaseRerankScoreCalls != response.Stats.QuantizedRerankExactScoreCalls || proof.ExactBaseVectorBytesRead == 0 || response.Stats.VectorBytesRead == 0 || proof.ExactSuffixScoreCalls != 0 {
+	if proof.NormalizedCandidateWidth == 0 || proof.RawCandidateWidth != 3 || proof.RerankCandidateCap != 3 || work.BaseShadowed > proof.RawRetainedCandidates || proof.LiveShortlistCandidates != min(proof.NormalizedCandidateWidth, proof.RawRetainedCandidates-work.BaseShadowed) || proof.ActualRerankCandidates != response.Stats.QuantizedRerankCandidates || proof.ExactBaseRerankScoreCalls != response.Stats.QuantizedRerankExactScoreCalls || proof.ExactBaseVectorBytesRead == 0 || response.Stats.VectorBytesRead == 0 || proof.ExactSuffixScoreCalls != 0 || proof.ExactSmallFilterScoreCalls != 0 {
 		t.Fatalf("typed quantized rerank score-plane counts=%+v stats=%+v", proof, response.Stats)
 	}
 	if err := view.Close(); err != nil {
@@ -552,7 +552,8 @@ func TestTypedGraphPublicScalarU8QuantizedRerankZeroBaseAssetValidation(t *testi
 		}
 		defer view.Close()
 		assertNoZeroRowHolder(t, view, "valid suffix-only")
-		if len(response.Results) != 1 || string(response.Results[0].ID) != "suffix" || response.Stats.SearchRouteQuantizedRerank != 1 || response.Stats.ColumnGraphWork.Route != "typed_exact" || response.Stats.ColumnGraphWork.ScorePlane.ExactSuffixScoreCalls != 1 || response.Stats.QuantizedScoreCalls != 0 {
+		proof := response.Stats.ColumnGraphWork.ScorePlane
+		if len(response.Results) != 1 || string(response.Results[0].ID) != "suffix" || response.Stats.SearchRouteQuantizedRerank != 1 || response.Stats.ColumnGraphWork.Route != "typed_exact" || proof.ExactSuffixScoreCalls != 1 || response.Stats.QuantizedScoreCalls != 0 || proof.NormalizedCandidateWidth != 0 || proof.RawCandidateWidth != 0 || proof.RerankCandidateCap != 0 || proof.ExactSmallFilterScoreCalls != 0 || response.Stats.ColumnGraphWork.BaseShadowed != 0 || response.Stats.ColumnGraphWork.BaseEdges != 0 {
 			t.Fatalf("valid suffix-only selected response=%+v work=%+v", response, response.Stats.ColumnGraphWork)
 		}
 		if cacheAfter := f.col.columnVectorGraphSharedPreparedSearchCacheSnapshot(); cacheAfter != cacheBefore {
@@ -730,7 +731,7 @@ func TestTypedGraphPublicScalarU8QuantizedRerankLiveSuffixAndRebuild(t *testing.
 	columns := []TypedColumnBatch{
 		{Name: "embedding", Float32Vectors: [][]float32{closer, farther, farther}},
 		{Name: "content", Strings: []string{"closer", "farther", "old"}},
-		{Name: "user", Strings: []string{"u", "u", "u"}},
+		{Name: "user", Strings: []string{"closer", "farther", "old"}},
 		{Name: "path", Strings: []string{"p", "p", "p"}},
 	}
 	if _, _, err := col.InsertTypedBatchWithStats(ids, retained, columns); err != nil {
@@ -745,16 +746,6 @@ func TestTypedGraphPublicScalarU8QuantizedRerankLiveSuffixAndRebuild(t *testing.
 	} else if err != nil {
 		t.Fatal(err)
 	}
-	replacement := []TypedColumnBatch{
-		{Name: "embedding", Float32Vectors: [][]float32{query}},
-		{Name: "content", Strings: []string{"new exact"}},
-		{Name: "user", Strings: []string{"u"}},
-		{Name: "path", Strings: []string{"p"}},
-	}
-	if _, err := col.ReplaceTypedBatch(ids[2:3], retained[2:3], replacement); err != nil {
-		t.Fatal(err)
-	}
-
 	search := func(filter *HybridScalarFilter) (VectorIndexSearchResponse, *CollectionReadView) {
 		t.Helper()
 		var buffer VectorIndexSearchBuffer
@@ -776,6 +767,26 @@ func TestTypedGraphPublicScalarU8QuantizedRerankLiveSuffixAndRebuild(t *testing.
 			t.Fatalf("filter=%+v typed quantized rerank returned no read view", filter)
 		}
 		return response, view
+	}
+	shadowedFilter := HybridScalarFilter{And: []HybridScalarFilter{
+		{IndexName: "path", Value: "p"},
+		{IndexName: "user", Value: "old"},
+	}}
+	warmFilter, warmFilterView := search(&shadowedFilter)
+	if len(warmFilter.Results) != 1 || string(warmFilter.Results[0].ID) != "replaced" {
+		t.Fatalf("warm base filter results=%+v", warmFilter.Results)
+	}
+	if err := warmFilterView.Close(); err != nil {
+		t.Fatal(err)
+	}
+	replacement := []TypedColumnBatch{
+		{Name: "embedding", Float32Vectors: [][]float32{query}},
+		{Name: "content", Strings: []string{"new exact"}},
+		{Name: "user", Strings: []string{"new"}},
+		{Name: "path", Strings: []string{"p"}},
+	}
+	if _, err := col.ReplaceTypedBatch(ids[2:3], retained[2:3], replacement); err != nil {
+		t.Fatal(err)
 	}
 	assertCurrent := func(stage string, response VectorIndexSearchResponse) {
 		t.Helper()
@@ -807,7 +818,21 @@ func TestTypedGraphPublicScalarU8QuantizedRerankLiveSuffixAndRebuild(t *testing.
 		t.Fatal(err)
 	}
 
-	filter := HybridScalarFilter{IndexName: "user", Value: "u"}
+	shadowed, shadowedView := search(&shadowedFilter)
+	shadowedWork := shadowed.Stats.ColumnGraphWork
+	shadowedProof := shadowedWork.ScorePlane
+	if len(shadowed.Results) != 0 || shadowedWork.Route != "typed_empty" ||
+		!shadowedWork.Filter.Attempted || !shadowedWork.Filter.Completed || shadowedWork.Filter.EligibleRows != 0 ||
+		shadowedProof.NormalizedCandidateWidth != 1 || shadowedProof.RawCandidateWidth != 1 || shadowedProof.RerankCandidateCap != 1 ||
+		shadowedWork.BaseShadowed != 0 || shadowedWork.BaseEdges != 0 || shadowedProof.QuantizedScoreCalls != 0 ||
+		shadowedProof.RawRetainedCandidates != 0 || shadowedProof.LiveShortlistCandidates != 0 || shadowedProof.ActualRerankCandidates != 0 {
+		t.Fatalf("shadowed filtered-empty response=%+v work=%+v proof=%+v", shadowed, shadowedWork, shadowedProof)
+	}
+	if err := shadowedView.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	filter := HybridScalarFilter{IndexName: "path", Value: "p"}
 	filtered, filteredView := search(&filter)
 	assertCurrent("filtered suffix", filtered)
 	filteredWork := filtered.Stats.ColumnGraphWork

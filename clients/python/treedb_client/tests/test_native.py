@@ -2,6 +2,8 @@ import unittest
 import socket
 import json
 import copy
+from dataclasses import replace
+import struct
 from dataclasses import asdict, FrozenInstanceError
 from types import SimpleNamespace
 from unittest import mock
@@ -9,13 +11,1108 @@ from unittest import mock
 import _support
 from treedb_client import TreeDBClient
 from treedb_client.errors import TreeDBConfigError, TreeDBProtocolError, TreeDBTimeoutError, TreeDBTransportError, UnsupportedError
-from treedb_client._native import _dense_work
-from treedb_client._dense_work import DenseSearchWork
+from treedb_client._native import _dense_work, _dense_quantized_options, _dense_score_plane
+from treedb_client._dense_work import DenseScorePlaneProof, DenseSearchWork, dense_document_ids_valid
 from treedb_client.client import _decode_json_body
 from treedb_client._native import _HEADER, _NativeConnection, _dense_request, _dense_response, _decode_vector, _read_uint, _section, _sections, _string_map, _uint, _vector, _typed_upsert_request, _typed_upsert_response
 
 
+def _bytes_for_test(value):
+    raw = value.encode("utf-8")
+    return _uint(len(raw)) + raw
+
+
 class NativeCodecTests(unittest.TestCase):
+    def test_typed_quantized_dense_uses_v3_and_owned_score_plane(self):
+        raw_work = bytes.fromhex((_support.REPO_ROOT / "TreeDB/nativewire/testdata/dense_work_v1.hex").read_text().strip())
+        work_values, work_offset = [], 0
+        for _ in range(38):
+            value, work_offset = _read_uint(raw_work, work_offset)
+            work_values.append(value)
+        work_values[2] = 3  # the public quantized rerank score plane uses typed_hnsw work.
+        work_values[3] = 1  # dense-work base ANN scoring equals the quantized score calls.
+        work_values[9] = 1  # dense-work base result IDs equal exact-base score calls.
+        work_values[1] &= ~((1 << 3) | (1 << 4))
+        work_values[10:19] = [0] * 9  # the baseline request has no declared filter.
+        work_values[34] = len(b'{"id":"a"}')
+        raw_work = b"".join(_uint(value) for value in work_values)
+        meta = bytes.fromhex("0301000001000000000000f03f")
+        values = [1, 7, 2, 2, 3, 1, 0, 1, 64, 0, 1, 1, 1, 1, 1, 1, 1, 2, 1, 0, 0, 8, 0, 7, 1, 2, 2]
+
+        def score_plane_bytes(candidate_values, reason="", manifests=None):
+            return (
+                b"".join(_uint(value) for value in candidate_values)
+                + _bytes_for_test(reason)
+                + _bytes_for_test("embedding.scalar_u8.public")
+                + _bytes_for_test("scalar_u8")
+                + (b"\x01\x01\x01\x03" * 2 if manifests is None else manifests)
+            )
+
+        score_plane = score_plane_bytes(values)
+
+        def response_body(document, *, work_critical=True, score_critical=True, candidate_work_values=None):
+            response_work_values = list(work_values if candidate_work_values is None else candidate_work_values)
+            response_work_values[34] = len(document)
+            return (
+                _section(102, _vector([b"a"])) + _section(103, _vector([document]))
+                + _section(130, meta)
+                + _section(134, b"".join(_uint(value) for value in response_work_values), critical=work_critical)
+                + _section(136, score_plane, critical=score_critical)
+            )
+
+        body = response_body(b'{"id":"a"}')
+        info = SimpleNamespace(
+            name="a", dimension=2, generation=2, vector_strategy="column_graph", metric="cosine", vector_ef_search=64,
+            extra={"typed_input": True},
+            capabilities=SimpleNamespace(typed_dense_quantized_rerank=True),
+            quantized_indexes=[SimpleNamespace(name="embedding.scalar_u8.public", codec="scalar_u8", version=1, scalar_u8_calibration=None)],
+        )
+        client = TreeDBClient("http://127.0.0.1:1", native_address="127.0.0.1:2")
+        try:
+            def command(command_id, version, sections, capability):
+                self.assertEqual((command_id, version, capability), (64, 3, "dense_vector_search_versions"))
+                parsed = _sections(sections, {4, 129, 135}, {135})
+                self.assertIn(135, parsed)
+                self.assertEqual(parsed[135], _dense_quantized_options("quantized_rerank", "embedding.scalar_u8.public", 0))
+                request_offset = 0
+                index_len, request_offset = _read_uint(parsed[129], request_offset)
+                request_offset += index_len
+                _, request_offset = _read_uint(parsed[129], request_offset)  # top_k
+                resolved_ef, request_offset = _read_uint(parsed[129], request_offset)
+                self.assertEqual(resolved_ef, info.vector_ef_search)
+                return body
+            with mock.patch.object(client._native, "command", side_effect=command):
+                response = client.query_by_embedding("a", [1, 0], 1, query_mode="quantized_rerank",
+                                                     quantized_index_name="embedding.scalar_u8.public", index_info=info)
+            self.assertEqual(response.native_command_version, 3)
+            self.assertIsNotNone(response.score_plane)
+            self.assertEqual(response.score_plane.quantized_index_name, "embedding.scalar_u8.public")
+            incomplete_plane = asdict(response.score_plane)
+            incomplete_plane.update(completed=False, reason="incomplete", exact_suffix_score_calls=1)
+            with self.assertRaisesRegex(ValueError, "unchanged dense score-plane"):
+                DenseScorePlaneProof.from_dict(incomplete_plane)
+            invalid_default_info = copy.copy(info)
+            invalid_default_info.vector_ef_search = 0
+            with self.assertRaisesRegex(TreeDBConfigError, "positive IndexInfo vector_ef_search"):
+                client.query_by_embedding(
+                    "a", [1, 0], 1, query_mode="quantized_rerank",
+                    quantized_index_name="embedding.scalar_u8.public", index_info=invalid_default_info,
+                )
+            with self.assertRaisesRegex(TreeDBProtocolError, "not critical"):
+                _sections(_section(135, b"", critical=False), {135}, {135})
+            for name, candidate_body in (
+                ("work", response_body(b'{"id":"a"}', work_critical=False)),
+                ("score plane", response_body(b'{"id":"a"}', score_critical=False)),
+            ):
+                with self.subTest(noncritical_response=name), self.assertRaisesRegex(TreeDBProtocolError, "not critical"):
+                    _dense_response(candidate_body, 1, version=3)
+            embedded_body = response_body(b'{"id":"a","embedding":[1,0]}')
+            with mock.patch.object(client._native, "command", return_value=embedded_body):
+                embedded_response = client.query_by_embedding(
+                    "a", [1, 0], 1, query_mode="quantized_rerank",
+                    quantized_index_name="embedding.scalar_u8.public", index_info=info,
+                    return_embedding=True,
+                )
+            self.assertEqual(embedded_response.documents[0].embedding, [1.0, 0.0])
+            for name, document in (
+                ("mismatched score", b'{"id":"a","embedding":[0,1]}'),
+                ("zero vector", b'{"id":"a","embedding":[0,0]}'),
+            ):
+                with self.subTest(native_embedding_score=name), \
+                     mock.patch.object(client._native, "command", return_value=response_body(document)), \
+                     self.assertRaisesRegex(TreeDBProtocolError, "scores do not match returned embeddings") as caught:
+                    client.query_by_embedding(
+                        "a", [1, 0], 1, query_mode="quantized_rerank",
+                        quantized_index_name="embedding.scalar_u8.public", index_info=info,
+                        return_embedding=True,
+                    )
+                self.assertIsNotNone(caught.exception.dense_work)
+                self.assertIsNotNone(caught.exception.score_plane)
+            filtered_work_values = list(work_values)
+            filtered_work_values[1] |= (1 << 3) | (1 << 4)
+            filtered_work_values[4] = 1
+            filtered_work_values[10] = 4097
+            request_filter = {"field": "meta.tenant", "operator": "==", "value": "a"}
+            filtered_body = response_body(
+                b'{"id":"a","meta":{"tenant":"a"}}',
+                candidate_work_values=filtered_work_values,
+            )
+            with mock.patch.object(client._native, "command", return_value=filtered_body):
+                filtered_response = client.query_by_embedding(
+                    "a", [1, 0], 1, filter=request_filter, query_mode="quantized_rerank",
+                    quantized_index_name="embedding.scalar_u8.public", index_info=info,
+                )
+            self.assertEqual(filtered_response.documents[0].meta, {"tenant": "a"})
+            for name, document in (
+                ("mismatching", b'{"id":"a","meta":{"tenant":"b"}}'),
+                ("missing", b'{"id":"a"}'),
+            ):
+                hostile_filtered_body = response_body(
+                    document, candidate_work_values=filtered_work_values,
+                )
+                with self.subTest(native_filter_result=name), \
+                     mock.patch.object(client._native, "command", return_value=hostile_filtered_body), \
+                     self.assertRaisesRegex(TreeDBProtocolError, "does not satisfy the request filter") as caught:
+                    client.query_by_embedding(
+                        "a", [1, 0], 1, filter=request_filter, query_mode="quantized_rerank",
+                        quantized_index_name="embedding.scalar_u8.public", index_info=info,
+                    )
+                self.assertIsNotNone(caught.exception.dense_work)
+                self.assertIsNotNone(caught.exception.score_plane)
+            for name, document in (
+                ("filter field", b'{"id":"a","meta":{"tenant":"b","tenant":"a"}}'),
+                ("escaped filter field", b'{"id":"a","meta":{"tenant":"b","\\u0074enant":"a"}}'),
+                ("nested list object", b'{"id":"a","meta":{"items":[{"rank":1,"rank":2}],"tenant":"a"}}'),
+            ):
+                with self.subTest(native_duplicate_metadata_field=name), \
+                     mock.patch.object(
+                         client._native, "command",
+                         return_value=response_body(document, candidate_work_values=filtered_work_values),
+                     ), \
+                     self.assertRaisesRegex(TreeDBProtocolError, "invalid native dense document") as caught:
+                    client.query_by_embedding(
+                        "a", [1, 0], 1, filter=request_filter, query_mode="quantized_rerank",
+                        quantized_index_name="embedding.scalar_u8.public", index_info=info,
+                    )
+                self.assertIsNotNone(caught.exception.dense_work)
+                self.assertIsNotNone(caught.exception.score_plane)
+            numeric_filter = {"field": "meta.rank", "operator": "==", "value": 1 << 53}
+            for name, document, accepted in (
+                ("matching", b'{"id":"a","meta":{"rank":9007199254740992}}', True),
+                ("adjacent", b'{"id":"a","meta":{"rank":9007199254740993}}', False),
+            ):
+                candidate_body = response_body(document, candidate_work_values=filtered_work_values)
+                with self.subTest(native_large_integer_filter=name), \
+                     mock.patch.object(client._native, "command", return_value=candidate_body):
+                    if accepted:
+                        result = client.query_by_embedding(
+                            "a", [1, 0], 1, filter=numeric_filter, query_mode="quantized_rerank",
+                            quantized_index_name="embedding.scalar_u8.public", index_info=info,
+                        )
+                        self.assertEqual(result.documents[0].meta["rank"], 1 << 53)
+                    else:
+                        with self.assertRaisesRegex(
+                            TreeDBProtocolError, "does not satisfy the request filter"
+                        ) as caught:
+                            client.query_by_embedding(
+                                "a", [1, 0], 1, filter=numeric_filter, query_mode="quantized_rerank",
+                                quantized_index_name="embedding.scalar_u8.public", index_info=info,
+                            )
+                        self.assertIsNotNone(caught.exception.dense_work)
+                        self.assertIsNotNone(caught.exception.score_plane)
+            for name, candidate_body, return_embedding in (
+                ("unrequested", embedded_body, False),
+                ("missing", body, True),
+                ("wrong dimension", response_body(b'{"id":"a","embedding":[1]}'), True),
+                ("nonfinite", response_body(b'{"id":"a","embedding":[NaN,0]}'), True),
+                ("write-only compact", response_body(b'{"id":"a","embedding_f32_le_b64":"AACAPwAAAAA="}'), False),
+            ):
+                with self.subTest(native_embedding_echo=name), \
+                     mock.patch.object(client._native, "command", return_value=candidate_body), \
+                     self.assertRaisesRegex(TreeDBProtocolError, "return_embedding") as caught:
+                    client.query_by_embedding(
+                        "a", [1, 0], 1, query_mode="quantized_rerank",
+                        quantized_index_name="embedding.scalar_u8.public", index_info=info,
+                        return_embedding=return_embedding,
+                    )
+                self.assertIsNotNone(caught.exception.dense_work)
+                self.assertIsNotNone(caught.exception.score_plane)
+            with mock.patch.object(client._native, "command", return_value=response_body(b'{"id":"a","score":0.5}')), \
+                 self.assertRaisesRegex(TreeDBProtocolError, "invalid native dense document") as caught:
+                client.query_by_embedding(
+                    "a", [1, 0], 1, query_mode="quantized_rerank",
+                    quantized_index_name="embedding.scalar_u8.public", index_info=info,
+                )
+            self.assertIsNotNone(caught.exception.dense_work)
+            self.assertIsNotNone(caught.exception.score_plane)
+            for name, document in (
+                ("hidden ID", b'{"id":"b","id":"a"}'),
+                ("hidden embedding", b'{"id":"a","embedding":[1,0],"embedding":null}'),
+            ):
+                with self.subTest(native_duplicate_document_field=name), \
+                     mock.patch.object(client._native, "command", return_value=response_body(document)), \
+                     self.assertRaisesRegex(TreeDBProtocolError, "invalid native dense document") as caught:
+                    client.query_by_embedding(
+                        "a", [1, 0], 1, query_mode="quantized_rerank",
+                        quantized_index_name="embedding.scalar_u8.public", index_info=info,
+                    )
+                self.assertIsNotNone(caught.exception.dense_work)
+                self.assertIsNotNone(caught.exception.score_plane)
+            hostile_work_values = list(work_values)
+            hostile_work_values[3:5] = [2, 0]
+            hostile_work_values[7], hostile_work_values[9] = 2, 2
+            hostile_plane_values = list(values)
+            hostile_plane_values[10:16] = [2, 2, 2, 2, 2, 2]
+            hostile_plane_values[16:18] = [2, 4]
+            hostile_plane_values[18], hostile_plane_values[21] = 2, 16
+            hostile_plane = score_plane_bytes(hostile_plane_values)
+            hostile_body = (
+                _section(102, _vector([b"a"])) + _section(103, _vector([b'{"id":"a"}'])) +
+                _section(130, meta) + _section(134, b"".join(_uint(value) for value in hostile_work_values)) +
+                _section(136, hostile_plane)
+            )
+            _dense_response(
+                hostile_body, 1, version=3, query_mode="quantized_rerank",
+                quantized_index_name="embedding.scalar_u8.public", quantized_rerank_candidates=0,
+                ef_search=64, query_dimension=2,
+            )
+            hostile_work_values[4] = 1
+            with self.assertRaisesRegex(TreeDBProtocolError, "score-plane proof"):
+                _dense_response(
+                    _section(102, _vector([b"a"])) + _section(103, _vector([b'{"id":"a"}'])) +
+                    _section(130, meta) + _section(134, b"".join(_uint(value) for value in hostile_work_values)) +
+                    _section(136, hostile_plane),
+                    1, version=3, query_mode="quantized_rerank",
+                    quantized_index_name="embedding.scalar_u8.public", quantized_rerank_candidates=0,
+                    ef_search=64, query_dimension=2,
+                )
+            zero_hash_work_values = list(work_values)
+            zero_hash_work_values[19] = 0
+            zero_hash_plane_values = list(values)
+            zero_hash_plane_values[23] = 0
+            with self.assertRaises(TreeDBProtocolError):
+                _dense_response(
+                    _section(102, _vector([b"a"])) + _section(103, _vector([b'{"id":"a"}'])) +
+                    _section(130, meta) + _section(134, b"".join(_uint(value) for value in zero_hash_work_values)) +
+                    _section(136, score_plane_bytes(zero_hash_plane_values)),
+                    1, version=3, query_mode="quantized_rerank",
+                    quantized_index_name="embedding.scalar_u8.public", quantized_rerank_candidates=0,
+                    ef_search=64, query_dimension=2,
+                )
+            for name, mutate in (
+                ("different identity", lambda work: work.__setitem__(30, work[26] + 1)),
+                ("different coverage", lambda work: work.__setitem__(22, work[21] + 1)),
+                ("delta score", lambda work: work.__setitem__(6, 1)),
+                ("shadowed base", lambda work: work.__setitem__(8, 1)),
+            ):
+                hostile_work = list(work_values)
+                mutate(hostile_work)
+                with self.subTest(native_unchanged_work=name), self.assertRaises(TreeDBProtocolError):
+                    _dense_response(
+                        _section(102, _vector([b"a"])) + _section(103, _vector([b'{"id":"a"}'])) +
+                        _section(130, meta) + _section(134, b"".join(_uint(value) for value in hostile_work)) +
+                        _section(136, score_plane),
+                        1, version=3, query_mode="quantized_rerank",
+                        quantized_index_name="embedding.scalar_u8.public", quantized_rerank_candidates=0,
+                        ef_search=64, query_dimension=2,
+                    )
+            for name, candidate_values, manifests in (
+                ("different identity", values, b"\x01\x01\x01\x03\x01\x01\x01\x04"),
+                ("different coverage", [*values[:26], values[25] + 1], None),
+                ("suffix score", [*values[:19], 1, *values[20:]], None),
+                ("suffix bytes", [*values[:22], 8, *values[23:]], None),
+                ("shadow allowance", [*values[:11], values[10] + 1, *values[12:]], None),
+            ):
+                with self.subTest(native_unchanged_score_plane=name), self.assertRaises(TreeDBProtocolError):
+                    _dense_response(
+                        _section(102, _vector([b"a"])) + _section(103, _vector([b'{"id":"a"}'])) +
+                        _section(130, meta) + _section(134, raw_work) +
+                        _section(136, score_plane_bytes(candidate_values, manifests=manifests)),
+                        1, version=3, query_mode="quantized_rerank",
+                        quantized_index_name="embedding.scalar_u8.public", quantized_rerank_candidates=0,
+                        ef_search=64, query_dimension=2,
+                    )
+            native_error = _section(2, _uint(1) + b"\x00" + _bytes_for_test("native error"))
+            pre_owner_values = list(work_values)
+            pre_owner_values[1] = (1 << 1) | (1 << 3) | (1 << 4) | (1 << 5)
+            pre_owner_values[2:10] = [0] * 8
+            pre_owner_values[10:19] = [1] * 9
+            pre_owner_values[31:38] = [0] * 7
+            native_work_only_cases = [("pre-owner", pre_owner_values, False)]
+            for route, tag in (("typed_empty", 1), ("typed_exact", 2), ("typed_hnsw", 3)):
+                candidate = list(pre_owner_values)
+                candidate[2] = tag
+                native_work_only_cases.append((route, candidate, True))
+            scored = list(pre_owner_values)
+            scored[3] = 1
+            native_work_only_cases.append(("route-empty score", scored, True))
+            output_attempted = list(pre_owner_values)
+            output_attempted[1] |= 1 << 6
+            native_work_only_cases.append(("output attempted", output_attempted, True))
+            for name, candidate, rejected in native_work_only_cases:
+                candidate_raw = b"".join(_uint(value) for value in candidate)
+                candidate_payload = native_error + _section(134, candidate_raw)
+                work_only_client = TreeDBClient("http://127.0.0.1:1", native_address="127.0.0.1:2")
+                work_only_client._native.socket = mock.Mock()
+                work_only_client._native.capabilities["dense_vector_search_versions"] = "3"
+                candidate_header = _HEADER.pack(b"TDB1", 40, 1, 0, 6, 0, 0, 1, len(candidate_payload))
+                expected = "proof does not match the request" if rejected else "native error"
+                with self.subTest(native_work_only=name), \
+                     mock.patch.object(work_only_client._native, "_read", side_effect=(candidate_header, candidate_payload)), \
+                     self.assertRaisesRegex(TreeDBProtocolError, expected) as caught:
+                    work_only_client.query_by_embedding(
+                        "a", [1, 0], 1,
+                        filter={"field": "meta.repo", "operator": "==", "value": "gomap"},
+                        query_mode="quantized_rerank", quantized_index_name="embedding.scalar_u8.public", index_info=info,
+                    )
+                self.assertEqual(caught.exception.dense_work, _dense_work(candidate_raw))
+                self.assertIsNone(caught.exception.score_plane)
+                work_only_client.close()
+
+            proof_only_payload = native_error + _section(136, score_plane)
+            proof_only_client = TreeDBClient("http://127.0.0.1:1", native_address="127.0.0.1:2")
+            proof_only_client._native.socket = mock.Mock()
+            proof_only_client._native.capabilities["dense_vector_search_versions"] = "3"
+            proof_only_header = _HEADER.pack(b"TDB1", 40, 1, 0, 6, 0, 0, 1, len(proof_only_payload))
+            with mock.patch.object(proof_only_client._native, "_read", side_effect=(proof_only_header, proof_only_payload)), \
+                 self.assertRaisesRegex(TreeDBProtocolError, "proof does not match the request") as caught:
+                proof_only_client.query_by_embedding(
+                    "a", [1, 0], 1, query_mode="quantized_rerank",
+                    quantized_index_name="embedding.scalar_u8.public", index_info=info,
+                )
+            self.assertIsNone(caught.exception.dense_work)
+            self.assertEqual(caught.exception.score_plane, response.score_plane)
+            proof_only_client.close()
+
+            post_search_values = list(work_values)
+            post_search_values[1] &= ~((1 << 0) | (1 << 6) | (1 << 7))
+            post_search_values[31:38] = [0] * 7
+            partial_fetch_values = list(post_search_values)
+            partial_fetch_values[1] |= 1 << 6
+            partial_fetch_values[31], partial_fetch_values[35], partial_fetch_values[37] = 1, 1, 1
+            completed_missing_values = list(post_search_values)
+            completed_missing_values[1] |= (1 << 6) | (1 << 7)
+            completed_missing_values[31], completed_missing_values[33] = 1, 1
+            graph_incomplete_values = list(post_search_values)
+            graph_incomplete_values[1] &= ~(1 << 2)
+            proof_incomplete_values = list(values)
+            proof_incomplete_values[1] &= ~(1 << 1)
+            proof_incomplete = bytearray(score_plane_bytes(proof_incomplete_values, "incomplete"))
+            wrong_route_values = list(post_search_values)
+            wrong_route_values[2] = 2
+            requested_mismatch_values = list(post_search_values)
+            requested_mismatch_values[1] |= 1 << 6
+            incomplete_route_values = list(graph_incomplete_values)
+            incomplete_route_values[2] = 2
+            empty_graph_typed_empty = (list(graph_incomplete_values), bytearray(proof_incomplete))
+            empty_graph_typed_empty[0][2], empty_graph_typed_empty[1][4] = 0, 1
+            empty_graph_typed_exact = (list(graph_incomplete_values), bytearray(proof_incomplete))
+            empty_graph_typed_exact[0][2], empty_graph_typed_exact[1][4] = 0, 2
+            wrong_bytes = bytearray(score_plane)
+            wrong_bytes[17] -= 1
+            proof_unavailable = bytearray(proof_incomplete)
+            proof_unavailable[1] &= ~(1 << 0)
+            graph_unavailable_values = [1] + [0] * 37
+            proof_snapshot_unavailable_values = list(values)
+            proof_snapshot_unavailable_values[1] &= ~((1 << 1) | (1 << 2))
+            proof_snapshot_unavailable_values[23:27] = [0] * 4
+            proof_snapshot_unavailable = (
+                b"".join(_uint(value) for value in proof_snapshot_unavailable_values)
+                + _bytes_for_test("incomplete") + _bytes_for_test("embedding.scalar_u8.public") + _bytes_for_test("scalar_u8")
+                + b"\x00" * 8
+            )
+            graph_snapshot_unavailable_values = list(graph_incomplete_values)
+            graph_snapshot_unavailable_values[1] &= ~(1 << 5)
+            graph_snapshot_unavailable_values[19:31] = [0] * 12
+            sibling_counter_proof = bytearray(proof_incomplete)
+            sibling_counter_proof[16] += 1
+            missing_reason_proof = bytearray(score_plane)
+            missing_reason_proof[1] &= ~(1 << 1)
+            with self.assertRaisesRegex(TreeDBProtocolError, "invalid native dense score-plane proof") as caught:
+                _dense_response(
+                    _section(102, _vector([b"a"])) + _section(103, _vector([b'{"id":"a"}']))
+                    + _section(130, meta)
+                    + _section(134, b"".join(_uint(value) for value in graph_incomplete_values))
+                    + _section(136, bytes(missing_reason_proof)),
+                    1, version=3, query_mode="quantized_rerank",
+                    quantized_index_name="embedding.scalar_u8.public", quantized_rerank_candidates=0,
+                    ef_search=64, query_dimension=2,
+                )
+            self.assertEqual(caught.exception.dense_work, _dense_work(
+                b"".join(_uint(value) for value in graph_incomplete_values)
+            ))
+            self.assertIsNone(caught.exception.score_plane)
+            def prefix_shape_case(name, work_updates=(), proof_updates=(), ef_search=64):
+                candidate_work = list(graph_incomplete_values)
+                candidate_proof = list(proof_incomplete_values)
+                # Preserve an actual suffix frontier so these cases continue
+                # isolating their intended prefix-counter relation.
+                candidate_work[22] = candidate_work[21] + 1
+                candidate_work[27] = candidate_work[23] + 1
+                candidate_work[30] = candidate_work[26] + 1
+                candidate_proof[26] = candidate_proof[25] + 1
+                for index, value in work_updates:
+                    candidate_work[index] = value
+                for index, value in proof_updates:
+                    candidate_proof[index] = value
+                manifests = b"\x01\x01\x01\x03\x02\x01\x01\x04"
+                return name, candidate_work, score_plane_bytes(candidate_proof, "incomplete", manifests), True, ef_search
+
+            native_prefix_shape_cases = (
+                prefix_shape_case("prefix shape base candidates exceed quantized calls", work_updates=((4, 2),)),
+                prefix_shape_case("prefix shape rerank cap does not match plan", proof_updates=((12, 0),)),
+                prefix_shape_case(
+                    "prefix shape normalized width exceeds explicit EF",
+                    proof_updates=((8, 1), (10, 2), (11, 2), (12, 2)), ef_search=1,
+                ),
+                prefix_shape_case(
+                    "prefix shape normalized width exceeds raw width",
+                    proof_updates=((10, 2), (12, 2)),
+                ),
+                prefix_shape_case(
+                    "prefix shape raw retained exceeds quantized calls",
+                    proof_updates=((11, 2), (13, 2)),
+                ),
+                prefix_shape_case(
+                    "prefix shape raw retained exceeds raw width",
+                    work_updates=((3, 2),), proof_updates=((13, 2), (16, 2)),
+                ),
+                prefix_shape_case(
+                    "prefix shape live shortlist exceeds raw retained",
+                    proof_updates=((10, 2), (11, 2), (12, 2), (14, 2)),
+                ),
+                prefix_shape_case(
+                    "prefix shape live shortlist exceeds normalized width",
+                    work_updates=((3, 2),), proof_updates=((11, 2), (13, 2), (14, 2), (16, 2)),
+                ),
+                prefix_shape_case(
+                    "prefix shape actual rerank exceeds shortlist",
+                    work_updates=((3, 2), (7, 2), (9, 2)),
+                    proof_updates=((10, 2), (11, 2), (12, 2), (13, 2), (15, 2), (16, 2), (18, 2)),
+                ),
+                prefix_shape_case(
+                    "prefix shape actual rerank exceeds cap",
+                    work_updates=((7, 2), (9, 2)), proof_updates=((15, 2), (18, 2)),
+                ),
+                prefix_shape_case(
+                    "prefix shape actual rerank differs from exact base calls",
+                    work_updates=((7, 0), (9, 0)), proof_updates=((18, 0),),
+                ),
+            )
+            native_completion_cases = (
+                ("post-search before fetch", post_search_values, score_plane, False, 0),
+                ("partial fetch", partial_fetch_values, score_plane, False, 0),
+                ("completed fetch missing", completed_missing_values, score_plane, False, 0),
+                ("proof complete graph incomplete", graph_incomplete_values, score_plane, True, 0),
+                ("graph complete proof incomplete", post_search_values, bytes(proof_incomplete), True, 0),
+                ("route", wrong_route_values, score_plane, True, 0),
+                ("requested", requested_mismatch_values, score_plane, True, 0),
+                ("proof unavailable", post_search_values, bytes(proof_unavailable), True, 0),
+                ("graph unavailable", graph_unavailable_values, bytes(proof_incomplete), True, 0),
+                ("proof snapshot unavailable", post_search_values, proof_snapshot_unavailable, True, 0),
+                ("graph snapshot unavailable", graph_snapshot_unavailable_values, bytes(proof_incomplete), True, 0),
+                ("incomplete sibling score counters", graph_incomplete_values, bytes(sibling_counter_proof), True, 0),
+                ("incomplete route", incomplete_route_values, bytes(proof_incomplete), True, 0),
+                ("empty graph typed-empty proof", empty_graph_typed_empty[0], bytes(empty_graph_typed_empty[1]), True, 0),
+                ("empty graph typed-exact proof", empty_graph_typed_exact[0], bytes(empty_graph_typed_exact[1]), True, 0),
+                ("bytes", post_search_values, bytes(wrong_bytes), True, 0),
+            ) + native_prefix_shape_cases
+            for name, candidate_work, candidate_proof, rejected, candidate_ef_search in native_completion_cases:
+                candidate_work_raw = b"".join(_uint(value) for value in candidate_work)
+                candidate_payload = native_error + _section(134, candidate_work_raw) + _section(136, candidate_proof)
+                completion_client = TreeDBClient("http://127.0.0.1:1", native_address="127.0.0.1:2")
+                completion_client._native.socket = mock.Mock()
+                completion_client._native.capabilities["dense_vector_search_versions"] = "3"
+                candidate_header = _HEADER.pack(b"TDB1", 40, 1, 0, 6, 0, 0, 1, len(candidate_payload))
+                expected = "proof does not match the request" if rejected else "native error"
+                with self.subTest(native_completion_prefix=name), \
+                     mock.patch.object(completion_client._native, "_read", side_effect=(candidate_header, candidate_payload)), \
+                     self.assertRaisesRegex(TreeDBProtocolError, expected) as caught:
+                    completion_client.query_by_embedding(
+                        "a", [1, 0], 1, query_mode="quantized_rerank",
+                        quantized_index_name="embedding.scalar_u8.public", index_info=info,
+                        ef_search=candidate_ef_search,
+                    )
+                self.assertEqual(caught.exception.dense_work, _dense_work(candidate_work_raw))
+                self.assertEqual(caught.exception.score_plane, type(response.score_plane).from_dict(_dense_score_plane(candidate_proof)))
+                completion_client.close()
+            for name, changed in (
+                ("index name", replace(response.score_plane, quantized_index_name="embedding.scalar_u8.other")),
+                ("top k", replace(response.score_plane, requested_top_k=2)),
+                ("EF", replace(response.score_plane, requested_ef_search=1)),
+                ("rerank limit", replace(response.score_plane, requested_rerank_candidates=2)),
+                ("future generation", replace(response.score_plane,
+                    snapshot=replace(response.score_plane.snapshot, schema_generation=3))),
+            ):
+                failure = TreeDBProtocolError("native error", dense_work=response.dense_work, score_plane=changed)
+                with self.subTest(native_error_request_binding=name), \
+                     mock.patch.object(client._native, "command", side_effect=failure), \
+                     self.assertRaisesRegex(TreeDBProtocolError, "proof does not match the request") as caught:
+                    client.query_by_embedding(
+                        "a", [1, 0], 1, query_mode="quantized_rerank",
+                        quantized_index_name="embedding.scalar_u8.public", index_info=info,
+                        expected_generation=2,
+                    )
+                self.assertIsNotNone(caught.exception.dense_work)
+                self.assertIsNotNone(caught.exception.score_plane)
+            reversed_work_values = list(work_values)
+            reversed_work_values[21:23] = [100, 1]
+            reversed_plane_values = list(values)
+            reversed_plane_values[25:27] = [100, 1]
+            reversed_plane = b"".join(_uint(value) for value in reversed_plane_values) + b"\x00" + _bytes_for_test("embedding.scalar_u8.public") + _bytes_for_test("scalar_u8")
+            reversed_plane += b"\x01\x01\x01\x03" * 2
+            with self.assertRaises(TreeDBProtocolError):
+                _dense_response(
+                    _section(102, _vector([b"a"])) + _section(103, _vector([b'{"id":"a"}'])) +
+                    _section(130, meta) + _section(134, b"".join(_uint(value) for value in reversed_work_values)) +
+                    _section(136, reversed_plane),
+                    1, version=3, query_mode="quantized_rerank",
+                    quantized_index_name="embedding.scalar_u8.public", quantized_rerank_candidates=0,
+                    ef_search=64, query_dimension=2,
+                )
+            reversed_manifest_work_values = list(work_values)
+            reversed_manifest_work_values[23], reversed_manifest_work_values[27] = 2, 1
+            reversed_manifest_plane = score_plane[:-8] + b"\x02\x01\x01\x03\x01\x01\x01\x03"
+            with self.assertRaises(TreeDBProtocolError):
+                _dense_response(
+                    _section(102, _vector([b"a"])) + _section(103, _vector([b'{"id":"a"}'])) +
+                    _section(130, meta) + _section(134, b"".join(_uint(value) for value in reversed_manifest_work_values)) +
+                    _section(136, reversed_manifest_plane),
+                    1, version=3, query_mode="quantized_rerank",
+                    quantized_index_name="embedding.scalar_u8.public", quantized_rerank_candidates=0,
+                    ef_search=64, query_dimension=2, expected_generation=2,
+                )
+            newer_generation_work_values = list(work_values)
+            newer_generation_work_values[20] = 3
+            newer_generation_values = list(values)
+            newer_generation_values[24] = 3
+            newer_generation_plane = b"".join(_uint(value) for value in newer_generation_values) + b"\x00" + _bytes_for_test("embedding.scalar_u8.public") + _bytes_for_test("scalar_u8")
+            newer_generation_plane += b"\x01\x01\x01\x03" * 2
+            with self.assertRaises(TreeDBProtocolError):
+                _dense_response(
+                    _section(102, _vector([b"a"])) + _section(103, _vector([b'{"id":"a"}'])) +
+                    _section(130, meta) + _section(134, b"".join(_uint(value) for value in newer_generation_work_values)) +
+                    _section(136, newer_generation_plane),
+                    1, version=3, query_mode="quantized_rerank",
+                    quantized_index_name="embedding.scalar_u8.public", quantized_rerank_candidates=0,
+                    ef_search=64, query_dimension=2, expected_generation=2,
+                )
+            boundary_document = b'{"id":"\\u001ca"}'
+            boundary_work_values = list(work_values)
+            boundary_work_values[34] = len(boundary_document)
+            boundary = _dense_response(
+                _section(102, _vector([b"\x1ca"])) + _section(103, _vector([boundary_document])) +
+                _section(130, meta) + _section(134, b"".join(_uint(value) for value in boundary_work_values)) +
+                _section(136, score_plane),
+                1, version=3, query_mode="quantized_rerank",
+                quantized_index_name="embedding.scalar_u8.public", quantized_rerank_candidates=0,
+                ef_search=64, query_dimension=2, expected_generation=2,
+            )
+            self.assertEqual(boundary[0], [b"\x1ca"])
+            for name, offset in (("generation", -8), ("version", -6), ("checksum", -5)):
+                incomplete_manifest_plane = bytearray(score_plane)
+                incomplete_manifest_plane[offset] = 0
+                with self.subTest(incomplete_manifest=name), self.assertRaises(TreeDBProtocolError):
+                    _dense_response(
+                        _section(102, _vector([b"a"])) + _section(103, _vector([b'{"id":"a"}'])) +
+                        _section(130, meta) + _section(134, raw_work) +
+                        _section(136, bytes(incomplete_manifest_plane)),
+                        1, version=3, query_mode="quantized_rerank",
+                        quantized_index_name="embedding.scalar_u8.public", quantized_rerank_candidates=0,
+                        ef_search=64, query_dimension=2,
+                    )
+            filtered_work_values = list(work_values)
+            filtered_work_values[1] |= (1 << 3) | (1 << 4)
+            filtered_work_values[4] = 1
+            filtered_work_values[10] = 4097
+            filtered_body = (
+                _section(102, _vector([b"a"])) + _section(103, _vector([b'{"id":"a"}'])) +
+                _section(130, meta) + _section(134, b"".join(_uint(value) for value in filtered_work_values)) +
+                _section(136, score_plane)
+            )
+            _dense_response(
+                filtered_body, 1, version=3, query_mode="quantized_rerank",
+                quantized_index_name="embedding.scalar_u8.public", quantized_rerank_candidates=0,
+                ef_search=64, query_dimension=2, filter_requested=True,
+            )
+            with self.assertRaises(TreeDBProtocolError):
+                _dense_response(
+                    body, 1, version=3, query_mode="quantized_rerank",
+                    quantized_index_name="embedding.scalar_u8.public", quantized_rerank_candidates=0,
+                    ef_search=64, query_dimension=2, filter_requested=True,
+                )
+            with self.assertRaises(TreeDBProtocolError):
+                _dense_response(
+                    filtered_body, 1, version=3, query_mode="quantized_rerank",
+                    quantized_index_name="embedding.scalar_u8.public", quantized_rerank_candidates=0,
+                    ef_search=64, query_dimension=2,
+                )
+            underfilled_work_values = list(filtered_work_values)
+            underfilled_work_values[10] = 2
+            underfilled_values = list(values)
+            underfilled_values[7] = 2
+            underfilled_values[10:13] = [2, 2, 2]
+            underfilled_plane = b"".join(_uint(value) for value in underfilled_values) + b"\x00" + _bytes_for_test("embedding.scalar_u8.public") + _bytes_for_test("scalar_u8")
+            underfilled_plane += b"\x01\x01\x01\x03" * 2
+            with self.assertRaises(TreeDBProtocolError):
+                _dense_response(
+                    _section(102, _vector([b"a"])) + _section(103, _vector([b'{"id":"a"}'])) +
+                    _section(130, meta) + _section(134, b"".join(_uint(value) for value in underfilled_work_values)) +
+                    _section(136, underfilled_plane),
+                    2, version=3, query_mode="quantized_rerank",
+                    quantized_index_name="embedding.scalar_u8.public", quantized_rerank_candidates=0,
+                    ef_search=64, query_dimension=2, filter_requested=True,
+                )
+            over_scored_work_values = list(filtered_work_values)
+            over_scored_work_values[2] = 2  # typed_exact
+            over_scored_work_values[3] = 0
+            over_scored_work_values[7] = over_scored_work_values[9] = 2
+            over_scored_work_values[10] = 1
+            over_scored_values = list(values)
+            over_scored_values[4] = 2  # typed_exact
+            over_scored_values[13:19] = [0, 0, 0, 0, 0, 0]
+            over_scored_values[20], over_scored_values[21] = 2, 16
+            over_scored_plane = b"".join(_uint(value) for value in over_scored_values) + b"\x00" + _bytes_for_test("embedding.scalar_u8.public") + _bytes_for_test("scalar_u8")
+            over_scored_plane += b"\x01\x01\x01\x03" * 2
+            with self.assertRaises(TreeDBProtocolError):
+                _dense_response(
+                    _section(102, _vector([b"a"])) + _section(103, _vector([b'{"id":"a"}'])) +
+                    _section(130, meta) + _section(134, b"".join(_uint(value) for value in over_scored_work_values)) +
+                    _section(136, over_scored_plane),
+                    1, version=3, query_mode="quantized_rerank",
+                    quantized_index_name="embedding.scalar_u8.public", quantized_rerank_candidates=0,
+                    ef_search=64, query_dimension=2, filter_requested=True,
+                )
+            zero_width_work_values = list(filtered_work_values)
+            zero_width_work_values[2] = 2  # typed_exact
+            zero_width_work_values[3:10] = [0, 0, 0, 1, 0, 0, 0]
+            zero_width_work_values[10] = 1
+            zero_width_work_values[22] = zero_width_work_values[21] + 1
+            zero_width_work_values[27] = zero_width_work_values[23] + 1
+            zero_width_work_values[30] = zero_width_work_values[26] + 1
+            zero_width_values = list(values)
+            zero_width_values[4] = 2  # typed_exact
+            zero_width_values[10:19] = [0] * 9
+            zero_width_values[19:23] = [1, 0, 0, 8]
+            zero_width_values[26] = zero_width_values[25] + 1
+
+            def zero_width_body(candidate_work, candidate_proof):
+                return (
+                    _section(102, _vector([b"a"])) + _section(103, _vector([b'{"id":"a"}']))
+                    + _section(130, meta)
+                    + _section(134, b"".join(_uint(value) for value in candidate_work))
+                    + _section(136, score_plane_bytes(
+                        candidate_proof, manifests=b"\x01\x01\x01\x03\x02\x01\x01\x04"
+                    ))
+                )
+
+            _dense_response(
+                zero_width_body(zero_width_work_values, zero_width_values),
+                1, version=3, query_mode="quantized_rerank",
+                quantized_index_name="embedding.scalar_u8.public", quantized_rerank_candidates=0,
+                ef_search=64, query_dimension=2, filter_requested=True,
+            )
+            zero_width_hostiles = []
+            nonzero_raw = list(zero_width_values)
+            nonzero_raw[11] = 1
+            zero_width_hostiles.append(("raw candidate width", zero_width_work_values, nonzero_raw))
+            base_scored_work, base_scored_proof = list(zero_width_work_values), list(zero_width_values)
+            base_scored_work[6], base_scored_work[7], base_scored_work[9] = 0, 1, 1
+            base_scored_proof[19:23] = [0, 1, 8, 0]
+            zero_width_hostiles.append(("base scoring", base_scored_work, base_scored_proof))
+            base_shadowed = list(zero_width_work_values)
+            base_shadowed[8] = 1
+            zero_width_hostiles.append(("base shadowing", base_shadowed, zero_width_values))
+            for name, candidate_work, candidate_proof in zero_width_hostiles:
+                with self.subTest(zero_width=name), self.assertRaises(TreeDBProtocolError):
+                    _dense_response(
+                        zero_width_body(candidate_work, candidate_proof),
+                        1, version=3, query_mode="quantized_rerank",
+                        quantized_index_name="embedding.scalar_u8.public", quantized_rerank_candidates=0,
+                        ef_search=64, query_dimension=2, filter_requested=True,
+                    )
+            for route_tag, score_calls in ((4, 1), (3, 0)):  # typed_hnsw and zero-work rerank proofs are invalid.
+                invalid_values = list(values)
+                invalid_values[4] = route_tag
+                invalid_values[16] = score_calls
+                invalid_plane = b"".join(_uint(value) for value in invalid_values) + b"\x00" + _bytes_for_test("embedding.scalar_u8.public") + _bytes_for_test("scalar_u8")
+                invalid_plane += b"\x01\x01\x01\x03" * 2
+                with self.assertRaises(TreeDBProtocolError):
+                    _dense_response(
+                        _section(102, _vector([b"a"])) + _section(103, _vector([b'{"id":"a"}'])) +
+                        _section(130, meta) + _section(134, raw_work) + _section(136, invalid_plane),
+                        1,
+                        version=3,
+                        query_mode="quantized_rerank",
+                        quantized_index_name="embedding.scalar_u8.public",
+                        quantized_rerank_candidates=0,
+                        ef_search=64,
+                        query_dimension=2,
+                    )
+            hash_values = list(values)
+            hash_values[6] = 1
+            hash_plane = b"".join(_uint(value) for value in hash_values) + b"\x00" + _bytes_for_test("embedding.scalar_u8.public") + _bytes_for_test("scalar_u8")
+            hash_plane += b"\x01\x01\x01\x03" * 2
+            with self.assertRaises(TreeDBProtocolError):
+                _dense_response(
+                    _section(102, _vector([b"a"])) + _section(103, _vector([b'{"id":"a"}'])) +
+                    _section(130, meta) + _section(134, raw_work) + _section(136, hash_plane),
+                    1,
+                    version=3,
+                    query_mode="quantized_rerank",
+                    quantized_index_name="embedding.scalar_u8.public",
+                    quantized_rerank_candidates=0,
+                    ef_search=64,
+                    query_dimension=2,
+                )
+            underfill_work_values = list(work_values)
+            underfill_work_values[31:38] = [0, 0, 0, 0, 0, 0, 0]
+            with self.assertRaises(TreeDBProtocolError):
+                _dense_response(
+                    _section(102, _vector([])) + _section(103, _vector([])) +
+                    _section(130, bytes([3, 0, 0, 0, 0])) + _section(134, b"".join(_uint(value) for value in underfill_work_values)) + _section(136, score_plane),
+                    1,
+                    version=3,
+                    query_mode="quantized_rerank",
+                    quantized_index_name="embedding.scalar_u8.public",
+                    quantized_rerank_candidates=0,
+                    ef_search=64,
+                    query_dimension=2,
+                )
+
+            base_id_values = list(work_values)
+            base_id_values[9] = 0
+            with self.assertRaises(TreeDBProtocolError):
+                _dense_response(
+                    _section(102, _vector([b"a"])) + _section(103, _vector([b'{"id":"a"}'])) +
+                    _section(130, meta) + _section(134, b"".join(_uint(value) for value in base_id_values)) + _section(136, score_plane),
+                    1,
+                    version=3,
+                    query_mode="quantized_rerank",
+                    quantized_index_name="embedding.scalar_u8.public",
+                    quantized_rerank_candidates=0,
+                    ef_search=64,
+                    query_dimension=2,
+                )
+            wrong_work_values = list(work_values)
+            wrong_work_values[2] = 2  # typed_exact contradicts the quantized rerank score plane.
+            wrong_work = b"".join(_uint(value) for value in wrong_work_values)
+            with self.assertRaises(TreeDBProtocolError):
+                _dense_response(
+                    _section(102, _vector([b"a"])) + _section(103, _vector([b'{"id":"a"}'])) +
+                    _section(130, meta) + _section(134, wrong_work) + _section(136, score_plane),
+                    1,
+                    version=3,
+                    query_mode="quantized_rerank",
+                    quantized_index_name="embedding.scalar_u8.public",
+                    quantized_rerank_candidates=0,
+                    ef_search=64,
+                    query_dimension=2,
+                )
+            for field, value in ((17, 0), (21, 0), (22, 1)):
+                byte_values = list(values)
+                byte_values[field] = value
+                byte_plane = b"".join(_uint(value) for value in byte_values) + b"\x00" + _bytes_for_test("embedding.scalar_u8.public") + _bytes_for_test("scalar_u8")
+                byte_plane += b"\x01\x01\x01\x03" * 2
+                with self.assertRaises(TreeDBProtocolError):
+                    _dense_response(
+                        _section(102, _vector([b"a"])) + _section(103, _vector([b'{"id":"a"}'])) +
+                        _section(130, meta) + _section(134, raw_work) + _section(136, byte_plane),
+                        1,
+                        version=3,
+                        query_mode="quantized_rerank",
+                        quantized_index_name="embedding.scalar_u8.public",
+                        quantized_rerank_candidates=0,
+                        ef_search=64,
+                        query_dimension=2,
+                    )
+            counter_values = list(values)
+            counter_values[16] = 2  # contradict dense-work base_ann_scored=1.
+            counter_plane = b"".join(_uint(value) for value in counter_values) + b"\x00" + _bytes_for_test("embedding.scalar_u8.public") + _bytes_for_test("scalar_u8")
+            counter_plane += b"\x01\x01\x01\x03" * 2
+            with self.assertRaises(TreeDBProtocolError):
+                _dense_response(
+                    _section(102, _vector([b"a"])) + _section(103, _vector([b'{"id":"a"}'])) +
+                    _section(130, meta) + _section(134, raw_work) + _section(136, counter_plane),
+                    1,
+                    version=3,
+                    query_mode="quantized_rerank",
+                    quantized_index_name="embedding.scalar_u8.public",
+                    quantized_rerank_candidates=0,
+                    ef_search=64,
+                    query_dimension=2,
+                )
+            candidate_work_values = list(work_values)
+            candidate_work_values[4] = 2  # base candidates cannot exceed quantized score calls.
+            with self.assertRaises(TreeDBProtocolError):
+                _dense_response(
+                    _section(102, _vector([b"a"])) + _section(103, _vector([b'{"id":"a"}'])) +
+                    _section(130, meta) + _section(134, b"".join(_uint(value) for value in candidate_work_values)) + _section(136, score_plane),
+                    1,
+                    version=3,
+                    query_mode="quantized_rerank",
+                    quantized_index_name="embedding.scalar_u8.public",
+                    quantized_rerank_candidates=0,
+                    ef_search=64,
+                    query_dimension=2,
+                )
+            overflow_docs = _vector([b"a", b"b"])
+            overflow_payloads = _vector([b'{"id":"a"}', b'{"id":"b"}'])
+            with self.assertRaises(TreeDBProtocolError):
+                _dense_response(
+                    _section(102, overflow_docs) + _section(103, overflow_payloads) +
+                    _section(130, meta) + _section(134, raw_work) + _section(136, score_plane),
+                    2,
+                    version=3,
+                    query_mode="quantized_rerank",
+                    quantized_index_name="embedding.scalar_u8.public",
+                    quantized_rerank_candidates=0,
+                    ef_search=64,
+                    query_dimension=2,
+                )
+            invalid_result_meta = {
+                "candidate count": bytes([3, 2, 0, 0, 1]) + meta[5:],
+                "nonfinite score": bytes([3, 1, 0, 0, 1]) + struct.pack("<d", float("nan")),
+                "out-of-range score": bytes([3, 1, 0, 0, 1]) + struct.pack("<d", 100),
+            }
+            for name, candidate_meta in invalid_result_meta.items():
+                with self.subTest(name=name), self.assertRaises(TreeDBProtocolError) as caught:
+                    _dense_response(
+                        _section(102, _vector([b"a"])) + _section(103, _vector([b'{"id":"a"}'])) +
+                        _section(130, candidate_meta) + _section(134, raw_work) + _section(136, score_plane),
+                        1,
+                        version=3,
+                        query_mode="quantized_rerank",
+                        quantized_index_name="embedding.scalar_u8.public",
+                        quantized_rerank_candidates=0,
+                        ef_search=64,
+                        query_dimension=2,
+                    )
+                self.assertEqual(caught.exception.dense_work, _dense_work(raw_work))
+                self.assertIsNotNone(caught.exception.score_plane)
+                self.assertEqual(caught.exception.score_plane.quantized_index_name, "embedding.scalar_u8.public")
+            for name, item_id in (
+                ("empty", b""),
+                ("whitespace only", b" \t"),
+                ("leading whitespace", b" a"),
+                ("trailing whitespace", b"a "),
+                ("invalid UTF-8", b"\xff"),
+            ):
+                with self.subTest(invalid_id=name), self.assertRaises(TreeDBProtocolError) as caught:
+                    _dense_response(
+                        _section(102, _vector([item_id])) + _section(103, _vector([b'{}'])) +
+                        _section(130, meta) + _section(134, raw_work) + _section(136, score_plane),
+                        1,
+                        version=3,
+                        query_mode="quantized_rerank",
+                        quantized_index_name="embedding.scalar_u8.public",
+                        quantized_rerank_candidates=0,
+                        ef_search=64,
+                        query_dimension=2,
+                    )
+                self.assertIsNotNone(caught.exception.dense_work)
+                self.assertIsNotNone(caught.exception.score_plane)
+            ordered_work_values = list(work_values)
+            ordered_work_values[3] = ordered_work_values[7] = ordered_work_values[9] = 2
+            ordered_work_values[31:38] = [2, 2, 0, 4, 2, 2, 2]
+            ordered_plane_values = list(values)
+            for index in (7, 10, 11, 12, 13, 14, 15, 16, 18):
+                ordered_plane_values[index] = 2
+            ordered_plane_values[17], ordered_plane_values[21] = 4, 16
+            ordered_plane = b"".join(_uint(value) for value in ordered_plane_values) + b"\x00" + _bytes_for_test("embedding.scalar_u8.public") + _bytes_for_test("scalar_u8")
+            ordered_plane += b"\x01\x01\x01\x03" * 2
+            for name, ids, scores in (
+                ("ascending score", [b"a", b"b"], (0.1, 0.9)),
+                ("descending ID tie", [b"b", b"a"], (0.5, 0.5)),
+            ):
+                out_of_order_meta = bytes([3, 2, 0, 0, 2]) + struct.pack("<2d", *scores)
+                with self.subTest(name=name), self.assertRaises(TreeDBProtocolError) as caught:
+                    _dense_response(
+                        _section(102, _vector(ids)) + _section(103, _vector([b"{}", b"{}"])) +
+                        _section(130, out_of_order_meta) + _section(134, b"".join(_uint(value) for value in ordered_work_values)) + _section(136, ordered_plane),
+                        2,
+                        version=3,
+                        query_mode="quantized_rerank",
+                        quantized_index_name="embedding.scalar_u8.public",
+                        quantized_rerank_candidates=0,
+                        ef_search=64,
+                        query_dimension=2,
+                    )
+                self.assertIsNotNone(caught.exception.dense_work)
+                self.assertIsNotNone(caught.exception.score_plane)
+            exact_work_values = list(work_values)
+            exact_work_values[2], exact_work_values[3], exact_work_values[6], exact_work_values[7], exact_work_values[9] = 2, 0, 1, 0, 0
+            exact_work_values[31:38] = [0, 0, 0, 0, 0, 0, 0]
+            exact_work = b"".join(_uint(value) for value in exact_work_values)
+            exact_values = list(values)
+            exact_values[4], exact_values[16], exact_values[17], exact_values[18], exact_values[19], exact_values[20], exact_values[22] = 2, 0, 0, 0, 1, 0, 8
+            exact_plane = b"".join(_uint(value) for value in exact_values) + b"\x00" + _bytes_for_test("embedding.scalar_u8.public") + _bytes_for_test("scalar_u8")
+            exact_plane += b"\x01\x01\x01\x03" * 2
+            with self.assertRaises(TreeDBProtocolError):
+                _dense_response(
+                    _section(102, _vector([])) + _section(103, _vector([])) +
+                    _section(130, bytes([3, 0, 0, 0, 0])) + _section(134, exact_work) + _section(136, exact_plane),
+                    1,
+                    version=3,
+                    query_mode="quantized_rerank",
+                    quantized_index_name="embedding.scalar_u8.public",
+                    quantized_rerank_candidates=0,
+                    ef_search=64,
+                    query_dimension=2,
+                )
+            inconsistent_values = list(values)
+            inconsistent_values[18] = 0  # actual rerank is not backed by exact-base scoring.
+            inconsistent_values[20] = 1
+            inconsistent_plane = b"".join(_uint(value) for value in inconsistent_values) + b"\x00" + _bytes_for_test("embedding.scalar_u8.public") + _bytes_for_test("scalar_u8")
+            inconsistent_plane += b"\x01\x01\x01\x03" * 2
+            with self.assertRaises(TreeDBProtocolError):
+                _dense_response(
+                    _section(102, _vector([b"a"])) + _section(103, _vector([b'{"id":"a"}'])) +
+                    _section(130, meta) + _section(134, raw_work) + _section(136, inconsistent_plane),
+                    1,
+                    version=3,
+                    query_mode="quantized_rerank",
+                    quantized_index_name="embedding.scalar_u8.public",
+                    quantized_rerank_candidates=0,
+                    ef_search=64,
+                    query_dimension=2,
+                )
+            capped_values = list(values)
+            capped_values[9] = 2
+            capped_values[12] = 3
+            capped_values[15] = 3
+            capped_plane = b"".join(_uint(value) for value in capped_values) + b"\x00" + _bytes_for_test("embedding.scalar_u8.public") + _bytes_for_test("scalar_u8")
+            capped_plane += b"\x01\x01\x01\x03" * 2
+            with self.assertRaises(TreeDBProtocolError):
+                _dense_response(
+                    _section(102, _vector([b"a"])) + _section(103, _vector([b'{"id":"a"}'])) +
+                    _section(130, meta) + _section(134, raw_work) + _section(136, capped_plane),
+                    1,
+                    version=3,
+                    query_mode="quantized_rerank",
+                    quantized_index_name="embedding.scalar_u8.public",
+                    quantized_rerank_candidates=2,
+                    ef_search=64,
+                    query_dimension=2,
+                )
+            for field, value in ((12, 2), (14, 2), (10, 2)):
+                width_values = list(values)
+                width_values[10] = 1
+                width_values[11] = 1
+                width_values[12] = 1
+                width_values[13] = 1
+                width_values[14] = 1
+                width_values[15] = 1
+                width_values[18] = 1
+                width_values[field] = value
+                width_plane = b"".join(_uint(value) for value in width_values) + b"\x00" + _bytes_for_test("embedding.scalar_u8.public") + _bytes_for_test("scalar_u8")
+                width_plane += b"\x01\x01\x01\x03" * 2
+                with self.assertRaises(TreeDBProtocolError):
+                    _dense_response(
+                        _section(102, _vector([b"a"])) + _section(103, _vector([b'{"id":"a"}'])) +
+                        _section(130, meta) + _section(134, raw_work) + _section(136, width_plane),
+                        1,
+                        version=3,
+                        query_mode="quantized_rerank",
+                        quantized_index_name="embedding.scalar_u8.public",
+                        quantized_rerank_candidates=0,
+                        ef_search=64,
+                        query_dimension=2,
+                    )
+            for field in (16, 19, 20):
+                route_values = list(values)
+                route_values[4] = 1  # typed_empty
+                route_values[16] = route_values[19] = route_values[20] = 0
+                route_values[field] = 1
+                route_plane = b"".join(_uint(value) for value in route_values) + b"\x00" + _bytes_for_test("embedding.scalar_u8.public") + _bytes_for_test("scalar_u8")
+                route_plane += b"\x01\x01\x01\x03" * 2
+                empty_work_values = list(work_values)
+                empty_work_values[2] = 1
+                empty_work_values[3] = 0
+                empty_work_values[31:38] = [0, 0, 0, 0, 0, 0, 0]
+                empty_work = b"".join(_uint(value) for value in empty_work_values)
+                empty_meta = bytes([3]) + b"\x00" * 4
+                with self.assertRaises(TreeDBProtocolError):
+                    _dense_response(
+                        _section(102, _vector([])) + _section(103, _vector([])) +
+                        _section(130, empty_meta) + _section(134, empty_work) + _section(136, route_plane),
+                        0,
+                        version=3,
+                        query_mode="quantized_rerank",
+                        quantized_index_name="embedding.scalar_u8.public",
+                        quantized_rerank_candidates=0,
+                        ef_search=64,
+                        query_dimension=2,
+                    )
+            empty_values = list(values)
+            empty_values[4] = 1  # typed_empty
+            empty_values[10:23] = [0] * 13
+            empty_values[10:13] = [1, 1, 1]  # planning precedes removal of shadowed filter matches.
+            empty_plane = b"".join(_uint(value) for value in empty_values) + b"\x00" + _bytes_for_test("embedding.scalar_u8.public") + _bytes_for_test("scalar_u8")
+            empty_plane += b"\x01\x01\x01\x03" * 2
+            valid_empty_work_values = list(work_values)
+            valid_empty_work_values[1] |= (1 << 3) | (1 << 4)
+            valid_empty_work_values[2] = 1
+            valid_empty_work_values[3:19] = [0] * 16
+            valid_empty_work_values[31:38] = [0] * 7
+            valid_empty_work = b"".join(_uint(value) for value in valid_empty_work_values)
+            _dense_response(
+                _section(102, _vector([])) + _section(103, _vector([])) +
+                _section(130, bytes([3]) + b"\x00" * 4) + _section(134, valid_empty_work) + _section(136, empty_plane),
+                1,
+                version=3,
+                query_mode="quantized_rerank",
+                quantized_index_name="embedding.scalar_u8.public",
+                quantized_rerank_candidates=0,
+                ef_search=64,
+                query_dimension=2,
+                filter_requested=True,
+            )
+            for filter_flags, eligible_rows in ((0, 0), (1 << 3, 0), ((1 << 3) | (1 << 4), 1)):
+                invalid_empty_work_values = list(valid_empty_work_values)
+                invalid_empty_work_values[1] &= ~((1 << 3) | (1 << 4))
+                invalid_empty_work_values[1] |= filter_flags
+                invalid_empty_work_values[10] = eligible_rows
+                with self.assertRaises(TreeDBProtocolError):
+                    _dense_response(
+                        _section(102, _vector([])) + _section(103, _vector([])) +
+                        _section(130, bytes([3]) + b"\x00" * 4) +
+                        _section(134, b"".join(_uint(value) for value in invalid_empty_work_values)) + _section(136, empty_plane),
+                        1,
+                        version=3,
+                        query_mode="quantized_rerank",
+                        quantized_index_name="embedding.scalar_u8.public",
+                        quantized_rerank_candidates=0,
+                        ef_search=64,
+                        query_dimension=2,
+                        filter_requested=True,
+                    )
+            shortcut_work_values = list(work_values)
+            shortcut_work_values[2] = 2
+            shortcut_work_values[3] = shortcut_work_values[7] = shortcut_work_values[9] = 0
+            shortcut_work_values[6] = 1
+            shortcut_proof_values = list(values)
+            shortcut_proof_values[4] = 2  # typed_exact
+            shortcut_proof_values[8] = 1  # explicit EF bound
+            shortcut_proof_values[10:13] = [100, 100, 100]
+            shortcut_proof_values[13:19] = [0, 0, 0, 0, 0, 0]
+            shortcut_proof_values[19:23] = [1, 0, 0, 8]
+            shortcut_plane = b"".join(_uint(value) for value in shortcut_proof_values) + b"\x00" + _bytes_for_test("embedding.scalar_u8.public") + _bytes_for_test("scalar_u8")
+            shortcut_plane += b"\x01\x01\x01\x03" * 2
+            with self.assertRaises(TreeDBProtocolError):
+                _dense_response(
+                    _section(102, _vector([b"a"])) + _section(103, _vector([b'{"id":"a"}'])) +
+                    _section(130, meta) + _section(134, b"".join(_uint(value) for value in shortcut_work_values)) + _section(136, shortcut_plane),
+                    1,
+                    version=3,
+                    query_mode="quantized_rerank",
+                    quantized_index_name="embedding.scalar_u8.public",
+                    quantized_rerank_candidates=0,
+                    ef_search=1,
+                    query_dimension=2,
+                )
+            incomplete_values = list(values)
+            incomplete_values[1] = 1  # available proof, incomplete execution, unavailable snapshot.
+            incomplete_plane = b"".join(_uint(value) for value in incomplete_values) + b"\x00" + _bytes_for_test("embedding.scalar_u8.public") + _bytes_for_test("scalar_u8")
+            incomplete_plane += b"\x00" * 8
+            parsed_incomplete = _dense_score_plane(incomplete_plane)
+            self.assertTrue(parsed_incomplete["available"])
+            self.assertFalse(parsed_incomplete["completed"])
+            self.assertFalse(parsed_incomplete["snapshot"]["available"])
+        finally:
+            client.close()
+
+    def test_dense_document_ids_match_go_trim_space_and_utf8(self):
+        self.assertTrue(dense_document_ids_valid(["a", b"b"]))
+        for codepoint in range(0x1C, 0x20):
+            separator = chr(codepoint)
+            with self.subTest(go_non_space=hex(codepoint)):
+                self.assertTrue(dense_document_ids_valid([separator + "a", "a" + separator]))
+        for value in ("", " a", "a ", "\u2000a", "a\u3000", "\ud800", b"\xff"):
+            with self.subTest(value=value):
+                self.assertFalse(dense_document_ids_valid([value]))
+        self.assertFalse(dense_document_ids_valid(["a", b"a"]))
+
     def test_typed_upsert_golden_residual_and_validation(self):
         info = SimpleNamespace(dimension=2, generation=1, scalar_fields=[])
         row = {"id": "a", "content": "text", "embedding": [1, 0], "meta": {"extra": "owned"}}
@@ -107,10 +1204,49 @@ class NativeCodecTests(unittest.TestCase):
                 _dense_work(candidate)
         for action in (lambda d: d.pop("version"), lambda d: d.update(extra=0), lambda d: d.update(version=True),
                        lambda d: d["graph"].update(base_edges=-1), lambda d: d["graph"].update(base_edges=1 << 64),
-                       lambda d: d["output"].pop("missing"), lambda d: d["graph"].update(route="ann")):
+                       lambda d: d["output"].pop("missing"), lambda d: d["graph"].update(route="ann"),
+                       lambda d: d["graph"]["snapshot"].update(base_coverage_lsn=100, current_coverage_lsn=1),
+                       lambda d: d["graph"]["snapshot"].update(schema_hash=0),
+                       lambda d: d["graph"]["snapshot"].update(schema_generation=0),
+                       lambda d: d["graph"]["snapshot"].update(base_coverage_lsn=0),
+                       lambda d: d["graph"]["snapshot"]["current_manifest"].update(
+                           generation=d["graph"]["snapshot"]["base_manifest"]["generation"],
+                           checksum=d["graph"]["snapshot"]["base_manifest"]["checksum"] + 1,
+                       ),
+                       lambda d: (
+                           d["graph"]["snapshot"].update(
+                               current_manifest=copy.deepcopy(d["graph"]["snapshot"]["base_manifest"]),
+                               current_coverage_lsn=d["graph"]["snapshot"]["base_coverage_lsn"] + 1,
+                           )
+                       ),
+                       lambda d: d["graph"].update(delta_scored=1),
+                       lambda d: d["graph"].update(base_shadowed=1),
+                       lambda d: d["graph"]["snapshot"]["base_manifest"].update(generation=0),
+                       lambda d: d["graph"]["snapshot"]["base_manifest"].update(version=0),
+                       lambda d: d["graph"]["snapshot"]["base_manifest"].update(version=2),
+                       lambda d: d["graph"]["snapshot"]["base_manifest"].update(checksum=0)):
             candidate = copy.deepcopy(asdict(work))
             action(candidate)
             with self.assertRaises((ValueError, TypeError)):
+                DenseSearchWork.from_dict(candidate)
+        normalized_identity = copy.deepcopy(asdict(work))
+        normalized_identity["graph"]["snapshot"]["current_manifest"] = copy.deepcopy(
+            normalized_identity["graph"]["snapshot"]["base_manifest"]
+        )
+        normalized_identity["graph"]["snapshot"]["current_manifest"]["format"] = ""
+        DenseSearchWork.from_dict(normalized_identity)
+        incomplete_work = copy.deepcopy(asdict(work))
+        incomplete_work["completed"] = False
+        incomplete_work["graph"]["completed"] = False
+        incomplete_work["output"] = {
+            name: False if type(value) is bool else 0
+            for name, value in incomplete_work["output"].items()
+        }
+        for field in ("delta_scored", "base_shadowed"):
+            candidate = copy.deepcopy(incomplete_work)
+            candidate["graph"][field] = 1
+            with self.subTest(incomplete_unchanged_work=field), self.assertRaisesRegex(
+                    ValueError, "unchanged dense graph"):
                 DenseSearchWork.from_dict(candidate)
         envelope = json.dumps({"error": {"code": "index_unavailable", "message": "budget", "dense_work": asdict(work)}}).encode()
         client = TreeDBClient("http://127.0.0.1:1")
@@ -120,6 +1256,12 @@ class NativeCodecTests(unittest.TestCase):
             duplicate = envelope.replace(b'"version": 1', b'"version": 1, "version": 1')
             with self.assertRaises(TreeDBProtocolError):
                 client._decode_error(503, duplicate, dense_proof=True)
+            duplicate_message = envelope.replace(
+                b'"message": "budget"', b'"message": "old", "message": "budget"'
+            )
+            with self.assertRaises(TreeDBProtocolError) as caught:
+                client._decode_error(503, duplicate_message, dense_proof=True)
+            self.assertEqual(caught.exception.dense_work, work)
             self.assertEqual(_decode_json_body(b'{"legacy":1,"legacy":2}', status_code=200), {"legacy": 2})
             with mock.patch("treedb_client.client.json.loads", wraps=json.loads) as parse:
                 self.assertEqual(client._decode_success(200, b'{"legacy":1,"legacy":2}'), {"legacy": 2})
@@ -130,6 +1272,57 @@ class NativeCodecTests(unittest.TestCase):
                 self.assertNotIn("object_pairs_hook", parse.call_args.kwargs)
         finally:
             client.close()
+
+        # Malformed proof siblings cannot erase independently owned valid proof.
+        error_payload = _uint(1) + b"\x00" + _bytes_for_test("original")
+        proof_values = [1, 1, 2, 2, 0, 1, 0] + [0] * 20
+        valid_plane = b"".join(map(_uint, proof_values)) + _bytes_for_test("incomplete")
+        valid_plane += _bytes_for_test("embedding.scalar_u8.public") + _bytes_for_test("scalar_u8") + b"\x00" * 8
+        from treedb_client._dense_work import DenseScorePlaneProof
+        proof = DenseScorePlaneProof.from_dict(_dense_score_plane(valid_plane))
+        for name, work_raw, plane_raw, want_work, want_plane in (
+            ("score plane", raw, b"\x01", work, None),
+            ("dense work", b"\x01", valid_plane, None, proof),
+            ("both proofs", b"\x01", b"\x01", None, None),
+        ):
+            payload = _section(2, error_payload) + _section(134, work_raw) + _section(136, plane_raw)
+            connection = _NativeConnection("127.0.0.1:2", 1)
+            connection.socket = mock.Mock()
+            header = _HEADER.pack(b"TDB1", 40, 1, 0, 6, 0, 0, 1, len(payload))
+            with self.subTest(malformed=name), mock.patch.object(connection, "_read", side_effect=(header, payload)), self.assertRaises(TreeDBProtocolError) as caught:
+                connection._round_trip(1, b"", 2, 10**12, dense_proof=True, dense_version=3)
+            self.assertEqual(caught.exception.dense_work, want_work)
+            self.assertEqual(caught.exception.score_plane, want_plane)
+            self.assertIsInstance(caught.exception.__cause__, TreeDBProtocolError)
+
+        for name, payload in (
+            ("dense work", _section(2, error_payload) + _section(134, raw, critical=False) + _section(136, valid_plane)),
+            ("score plane", _section(2, error_payload) + _section(134, raw) + _section(136, valid_plane, critical=False)),
+        ):
+            connection = _NativeConnection("127.0.0.1:2", 1)
+            connection.socket = mock.Mock()
+            header = _HEADER.pack(b"TDB1", 40, 1, 0, 6, 0, 0, 1, len(payload))
+            with self.subTest(noncritical_error=name), mock.patch.object(connection, "_read", side_effect=(header, payload)), self.assertRaisesRegex(TreeDBProtocolError, "not critical") as caught:
+                connection._round_trip(1, b"", 2, 10**12, dense_proof=True, dense_version=3)
+            self.assertEqual(caught.exception.dense_work, work)
+            self.assertEqual(caught.exception.score_plane, proof)
+
+        proof_sections = _section(134, raw) + _section(136, valid_plane)
+        unknown_critical = _uint(999) + _uint(1) + _uint(0)
+        for name, payload in (
+            ("missing error metadata", proof_sections),
+            ("duplicate error metadata", _section(2, error_payload) * 2 + proof_sections),
+            ("invalid retry flag", _section(2, _uint(1) + b"\x02\x00") + proof_sections),
+            ("truncated error metadata", _section(2, b"") + proof_sections),
+            ("unknown critical sibling", _section(2, error_payload) + proof_sections + unknown_critical),
+        ):
+            connection = _NativeConnection("127.0.0.1:2", 1)
+            connection.socket = mock.Mock()
+            header = _HEADER.pack(b"TDB1", 40, 1, 0, 6, 0, 0, 1, len(payload))
+            with self.subTest(malformed_error=name), mock.patch.object(connection, "_read", side_effect=(header, payload)), self.assertRaises(TreeDBProtocolError) as caught:
+                connection._round_trip(1, b"", 2, 10**12, dense_proof=True, dense_version=3)
+            self.assertEqual(caught.exception.dense_work, work)
+            self.assertEqual(caught.exception.score_plane, proof)
 
         # Existing exceptions retain decoded proof if client document parsing fails.
         body = _section(102, _vector([b"a"])) + _section(103, _vector([b"{}"])) + _section(130, bytes.fromhex("0201000001000000000000f03f")) + _section(134, raw)

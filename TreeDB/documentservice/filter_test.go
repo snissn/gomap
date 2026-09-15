@@ -1,6 +1,9 @@
 package documentservice
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+)
 
 func TestFilterBooleanOperatorsAndMetadataPaths(t *testing.T) {
 	doc := Document{ID: "doc-1", Content: "hello", Meta: map[string]any{
@@ -66,6 +69,80 @@ func TestFilterMissingFieldDoesNotMatch(t *testing.T) {
 	}
 	if ok {
 		t.Fatal("missing field matched != filter; missing fields should fail closed")
+	}
+}
+
+func TestFilterMatchesDocumentUsesServiceSemantics(t *testing.T) {
+	doc := Document{ID: "doc-1", Content: "hello", Meta: map[string]any{
+		"tenant": "a",
+		"rank":   42.0,
+		"nested": map[string]any{"tags": []any{"go", "database"}},
+	}}
+	for name, filter := range map[string]*Filter{
+		"ID":          {Field: "id", Operator: "==", Value: "doc-1"},
+		"content":     {Field: "content", Operator: "==", Value: "hello"},
+		"nested meta": {Field: "meta.nested.tags", Operator: "in", Value: []any{"database"}},
+		"numeric":     {Field: "rank", Operator: ">=", Value: int64(42)},
+		"boolean": {Operator: "AND", Conditions: []Filter{
+			{Field: "tenant", Operator: "==", Value: "a"},
+			{Operator: "NOT", Conditions: []Filter{{Field: "rank", Operator: "<", Value: 42}}},
+		}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := filter.Validate(); err != nil {
+				t.Fatal(err)
+			}
+			matched, err := filter.MatchesDocument(doc)
+			if err != nil || !matched {
+				t.Fatalf("match=%v err=%v", matched, err)
+			}
+		})
+	}
+	for name, filter := range map[string]*Filter{
+		"wrong tenant":  {Field: "tenant", Operator: "==", Value: "b"},
+		"missing field": {Field: "missing", Operator: "!=", Value: "x"},
+		"wrong type":    {Field: "rank", Operator: ">", Value: "1"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := filter.Validate(); err != nil {
+				t.Fatal(err)
+			}
+			matched, err := filter.MatchesDocument(doc)
+			if matched || (name != "wrong type" && err != nil) || (name == "wrong type" && err == nil) {
+				t.Fatalf("match=%v err=%v", matched, err)
+			}
+		})
+	}
+	if err := (&Filter{Operator: "NOT"}).Validate(); err == nil {
+		t.Fatal("malformed filter validated")
+	}
+}
+
+func TestFilterMatchesDocumentPreservesInt64Precision(t *testing.T) {
+	const lower int64 = 9007199254740992
+	doc := Document{ID: "large", Meta: map[string]any{"number": json.Number("9007199254740993")}}
+	for name, candidate := range map[string]struct {
+		filter Filter
+		want   bool
+	}{
+		"exact":               {Filter{Field: "number", Operator: "==", Value: lower + 1}, true},
+		"adjacent integer":    {Filter{Field: "number", Operator: "==", Value: lower}, false},
+		"adjacent float":      {Filter{Field: "number", Operator: "==", Value: float64(lower)}, false},
+		"greater":             {Filter{Field: "number", Operator: ">", Value: lower}, true},
+		"not less":            {Filter{Field: "number", Operator: "<", Value: lower + 1}, false},
+		"membership":          {Filter{Field: "number", Operator: "in", Value: []any{lower, lower + 1}}, true},
+		"adjacent membership": {Filter{Field: "number", Operator: "in", Value: []any{lower}}, false},
+		"not in":              {Filter{Field: "number", Operator: "not in", Value: []any{lower}}, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := candidate.filter.Validate(); err != nil {
+				t.Fatal(err)
+			}
+			got, err := candidate.filter.MatchesDocument(doc)
+			if err != nil || got != candidate.want {
+				t.Fatalf("match=%v err=%v want %v", got, err, candidate.want)
+			}
+		})
 	}
 }
 
