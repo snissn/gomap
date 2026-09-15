@@ -589,9 +589,13 @@ func TestDenseV3ResultDocumentsMatchRequest(t *testing.T) {
 		"omitted embedding":     {DenseVectorSearchResult{ID: []byte("a"), Document: []byte(`{"id":"a","content":"alpha","meta":{"kind":"test"}}`)}, withoutEmbedding, true},
 		"requested embedding":   {DenseVectorSearchResult{ID: []byte("a"), Document: []byte(`{"id":"a","embedding":[1,0]}`)}, withEmbedding, true},
 		"mismatched ID":         {DenseVectorSearchResult{ID: []byte("a"), Document: []byte(`{"id":"b"}`)}, withoutEmbedding, false},
+		"null content":          {DenseVectorSearchResult{ID: []byte("a"), Document: []byte(`{"id":"a","content":null}`)}, withoutEmbedding, false},
 		"malformed JSON":        {DenseVectorSearchResult{ID: []byte("a"), Document: []byte(`{"id":`)}, withoutEmbedding, false},
 		"invalid UTF-8":         {DenseVectorSearchResult{ID: []byte("a"), Document: []byte{'{', '"', 'i', 'd', '"', ':', '"', 0xff, '"', '}'}}, withoutEmbedding, false},
 		"unknown field":         {DenseVectorSearchResult{ID: []byte("a"), Document: []byte(`{"id":"a","future":1}`)}, withoutEmbedding, false},
+		"case-variant ID":       {DenseVectorSearchResult{ID: []byte("a"), Document: []byte(`{"ID":"a"}`)}, withoutEmbedding, false},
+		"duplicate ID":          {DenseVectorSearchResult{ID: []byte("a"), Document: []byte(`{"id":"b","id":"a"}`)}, withoutEmbedding, false},
+		"hidden embedding":      {DenseVectorSearchResult{ID: []byte("a"), Document: []byte(`{"id":"a","embedding":[1,0],"embedding":null}`)}, withoutEmbedding, false},
 		"inner score":           {DenseVectorSearchResult{ID: []byte("a"), Document: []byte(`{"id":"a","score":1}`)}, withoutEmbedding, false},
 		"compact embedding":     {DenseVectorSearchResult{ID: []byte("a"), Document: []byte(`{"id":"a","embedding_f32_le_b64":"AACAPwAAAAA="}`)}, withoutEmbedding, false},
 		"unrequested embedding": {DenseVectorSearchResult{ID: []byte("a"), Document: []byte(`{"id":"a","embedding":[1,0]}`)}, withoutEmbedding, false},
@@ -1434,14 +1438,17 @@ func TestDenseV3ResultDecodeErrorsPreserveOwnedProofs(t *testing.T) {
 		returnEmbedding bool
 		valid           bool
 	}{
-		"omitted embedding":     {[]byte(`{"id":"a","content":"alpha"}`), false, true},
-		"requested embedding":   {[]byte(`{"id":"a","embedding":[1,0]}`), true, true},
-		"mismatched ID":         {[]byte(`{"id":"b"}`), false, false},
-		"unrequested embedding": {[]byte(`{"id":"a","embedding":[1,0]}`), false, false},
-		"missing embedding":     {[]byte(`{"id":"a"}`), true, false},
-		"wrong embedding size":  {[]byte(`{"id":"a","embedding":[1]}`), true, false},
-		"overflowing embedding": {[]byte(`{"id":"a","embedding":[3.5e38,0]}`), true, false},
-		"compact embedding":     {[]byte(`{"id":"a","embedding_f32_le_b64":"AACAPwAAAAA="}`), false, false},
+		"omitted embedding":      {[]byte(`{"id":"a","content":"alpha"}`), false, true},
+		"requested embedding":    {[]byte(`{"id":"a","embedding":[1,0]}`), true, true},
+		"mismatched ID":          {[]byte(`{"id":"b"}`), false, false},
+		"unrequested embedding":  {[]byte(`{"id":"a","embedding":[1,0]}`), false, false},
+		"missing embedding":      {[]byte(`{"id":"a"}`), true, false},
+		"wrong embedding size":   {[]byte(`{"id":"a","embedding":[1]}`), true, false},
+		"overflowing embedding":  {[]byte(`{"id":"a","embedding":[3.5e38,0]}`), true, false},
+		"compact embedding":      {[]byte(`{"id":"a","embedding_f32_le_b64":"AACAPwAAAAA="}`), false, false},
+		"duplicate ID":           {[]byte(`{"id":"b","id":"a"}`), false, false},
+		"hidden embedding":       {[]byte(`{"id":"a","embedding":[1,0],"embedding":null}`), false, false},
+		"case-variant embedding": {[]byte(`{"id":"a","Embedding":[1,0]}`), false, false},
 	} {
 		t.Run("document "+name, func(t *testing.T) {
 			request := baseRequest

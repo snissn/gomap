@@ -262,19 +262,11 @@ func denseV3ResultsHaveValidIDs(results []DenseVectorSearchResult) bool {
 
 func denseV3ResultDocumentsMatchRequest(results []DenseVectorSearchResult, request DenseVectorSearchRequest) bool {
 	for _, result := range results {
-		if !utf8.Valid(result.Document) {
+		document, ok := decodeDenseV3ResultDocument(result.Document)
+		if !ok {
 			return false
 		}
-		var document documentservice.Document
-		decoder := json.NewDecoder(bytes.NewReader(result.Document))
-		decoder.DisallowUnknownFields()
-		if err := decoder.Decode(&document); err != nil {
-			return false
-		}
-		if err := decoder.Decode(&struct{}{}); err != io.EOF {
-			return false
-		}
-		if document.ID != string(result.ID) || document.Score != nil || document.EmbeddingF32LEBase64 != "" {
+		if document.ID != string(result.ID) {
 			return false
 		}
 		if !request.ReturnEmbedding {
@@ -293,6 +285,63 @@ func denseV3ResultDocumentsMatchRequest(results []DenseVectorSearchResult, reque
 		}
 	}
 	return true
+}
+
+func decodeDenseV3ResultDocument(raw []byte) (documentservice.Document, bool) {
+	if !utf8.Valid(raw) {
+		return documentservice.Document{}, false
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	opening, err := decoder.Token()
+	if err != nil || opening != json.Delim('{') {
+		return documentservice.Document{}, false
+	}
+	var document documentservice.Document
+	seen := make(map[string]struct{}, 4)
+	for decoder.More() {
+		fieldToken, err := decoder.Token()
+		field, ok := fieldToken.(string)
+		if err != nil || !ok {
+			return documentservice.Document{}, false
+		}
+		if _, duplicate := seen[field]; duplicate {
+			return documentservice.Document{}, false
+		}
+		seen[field] = struct{}{}
+		switch field {
+		case "id":
+			var value *string
+			if err = decoder.Decode(&value); err == nil && value != nil {
+				document.ID = *value
+			} else {
+				return documentservice.Document{}, false
+			}
+		case "content":
+			var value *string
+			if err = decoder.Decode(&value); err == nil && value != nil {
+				document.Content = *value
+			} else {
+				return documentservice.Document{}, false
+			}
+		case "embedding":
+			err = decoder.Decode(&document.Embedding)
+		case "meta":
+			err = decoder.Decode(&document.Meta)
+		default:
+			return documentservice.Document{}, false
+		}
+		if err != nil {
+			return documentservice.Document{}, false
+		}
+	}
+	closing, err := decoder.Token()
+	if err != nil || closing != json.Delim('}') {
+		return documentservice.Document{}, false
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return documentservice.Document{}, false
+	}
+	return document, true
 }
 
 func denseV3ResultsOrdered(results []DenseVectorSearchResult) bool {

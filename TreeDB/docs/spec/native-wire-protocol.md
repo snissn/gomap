@@ -884,10 +884,11 @@ release. Content/meta are returned; embedding echo is opt-in through the
 return-embedding bool (default false), as on HTTP. Stored FP32 embeddings are
 reconstructed as JSON numbers, not packed result vectors. Command 64 packs the
 query and command 65 packs ingest vectors; document response sections remain JSON.
-Version-3 consumers decode each JSON document before exposure, require its `id`
-to equal the corresponding section-102 ID, reject response-only/write-only or
-unknown top-level fields, and require a finite, dimension-matched `embedding`
-exactly when return-embedding is true.
+Version-3 consumers decode each JSON document before exposure, require unique
+exactly named top-level fields and an `id` equal to the corresponding
+section-102 ID, reject response-only/write-only or unknown top-level fields,
+and require a finite, dimension-matched `embedding` exactly when
+return-embedding is true.
 
 Section 134 version 1 contains exactly 38 minimal uint64 uvarints, in this order:
 
