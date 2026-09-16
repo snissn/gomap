@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -785,8 +786,10 @@ func TestVectorIndexPartitionLiveFirstBindingCheckpointCommandWALReplayV1(t *tes
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
+	crashRaceOptions := "GORACE=" + strings.TrimSpace(os.Getenv("GORACE")+" atexit_sleep_ms=0")
 	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestVectorIndexPartitionLiveFirstBindingCheckpointCommandWALReplayV1$")
 	cmd.Env = append(os.Environ(),
+		crashRaceOptions,
 		"GOMAP_VECTOR_PARTITION_LIVE_CRASH_DIR="+dir,
 		"GOMAP_VECTOR_PARTITION_LIVE_GENERATION="+strconv.FormatUint(manifest.Generation, 10),
 	)
@@ -819,6 +822,7 @@ func TestVectorIndexPartitionLiveFirstBindingCheckpointCommandWALReplayV1(t *tes
 
 	checkpointCmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestVectorIndexPartitionLiveFirstBindingCheckpointCommandWALReplayV1$")
 	checkpointCmd.Env = append(os.Environ(),
+		crashRaceOptions,
 		"GOMAP_VECTOR_PARTITION_LIVE_CRASH_DIR="+dir,
 		"GOMAP_VECTOR_PARTITION_LIVE_CHECKPOINT_CRASH=1",
 		"GOMAP_VECTOR_PARTITION_LIVE_PREOPEN_LSN="+strconv.FormatUint(maxReplayedLSN, 10),
