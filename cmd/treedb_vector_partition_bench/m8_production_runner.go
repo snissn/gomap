@@ -2828,7 +2828,7 @@ func m8WarmProductionTopologyV1(ctx context.Context, coordinator *nativewire.Vec
 	// production result, including runs with no user-configured warmup or only
 	// low-probe measured rows.
 	requestCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	response, err := coordinator.Search(requestCtx, m8ProductionRequestV1(assets, m8Query32V1(queries[0]), "m8-endpoint-preflight", len(assets.manifest.Placements), efSearch, cfg.topK, cfg.m8CoordinatorLimits.MaxCandidateBytes))
+	response, err := coordinator.Search(requestCtx, m8ProductionExhaustiveRequestV1(assets, m8Query32V1(queries[0]), "m8-endpoint-preflight", efSearch, cfg.topK, cfg.m8CoordinatorLimits.MaxCandidateBytes))
 	cancel()
 	if err != nil {
 		return boundary, fmt.Errorf("M8 exhaustive endpoint preflight: %w", err)
@@ -3522,7 +3522,7 @@ func m8ProductionRequestV1(assets *m8ProductionMultiGroupAssetsV1, query []float
 	if candidateBytesLimit == 0 {
 		candidateBytesLimit = nativewire.DefaultVectorPartitionCoordinatorLimitsV1().MaxCandidateBytes
 	}
-	mergePacks := max(probes, int(assets.manifest.PartitionCount))
+	mergePacks := min(int(assets.manifest.PartitionCount), nativewire.DefaultVectorPartitionCoordinatorLimitsV1().MaxSelectedPartitions)
 	return nativewire.VectorPartitionCoordinatorRequestV1{
 		Version: nativewire.VectorPartitionCoordinatorVersionV1, RequestID: requestID, CancellationID: requestID + "-cancel",
 		Database: "default", Catalog: "default", Collection: assets.manifest.Collection, IndexName: assets.manifest.IndexName,
@@ -3532,6 +3532,10 @@ func m8ProductionRequestV1(assets *m8ProductionMultiGroupAssetsV1, query []float
 		TopK: topK, EfSearch: efSearch, DeadlineUnixNano: time.Now().Add(30 * time.Second).UnixNano(), RequestBytesLimit: 4 << 20,
 		CandidateBytesLimit: candidateBytesLimit, ResponseBytesLimit: 64 << 20, MergeEntriesLimit: mergePacks * topK,
 	}
+}
+
+func m8ProductionExhaustiveRequestV1(assets *m8ProductionMultiGroupAssetsV1, query []float32, requestID string, efSearch, topK int, candidateBytesLimit uint64) nativewire.VectorPartitionCoordinatorRequestV1 {
+	return m8ProductionRequestV1(assets, query, requestID, int(assets.manifest.DomainCount), efSearch, topK, candidateBytesLimit)
 }
 
 func m8ProductionApproximateRequestV1(assets *m8ProductionMultiGroupAssetsV1, query []float32, requestID string, probes, efSearch, topK, routerCandidates int, candidateBytesLimit uint64) nativewire.VectorPartitionCoordinatorRequestV1 {
@@ -3564,7 +3568,7 @@ func m8RunUnavailableGroupV1(ctx context.Context, topology *nativewire.VectorPar
 	requestCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 	started := time.Now()
-	response, err := topology.Coordinator().Search(requestCtx, m8ProductionRequestV1(assets, m8Query32V1(query64), "m8-unavailable-group", len(assets.manifest.Placements), 4096, topK, candidateBytesLimit))
+	response, err := topology.Coordinator().Search(requestCtx, m8ProductionExhaustiveRequestV1(assets, m8Query32V1(query64), "m8-unavailable-group", 4096, topK, candidateBytesLimit))
 	result.ResourceBoundary.WallClockNanos = uint64(time.Since(started))
 	if err != nil {
 		result.Error = err.Error()
