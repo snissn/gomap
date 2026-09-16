@@ -684,6 +684,9 @@ func (m *VectorPartitionManifestV1) canonicalizeWithContextV1(ctx context.Contex
 		m.DomainPacks = []VectorPartitionDomainPackV1{}
 	}
 	if m.DomainCount == 0 && len(m.DomainPacks) == 0 && m.PartitionCount > 0 {
+		if int64(m.PartitionCount) > int64(DefaultVectorPartitionManifestLimits().MaxPartitions) {
+			return fmt.Errorf("%w: partition cap", ErrVectorPartitionManifestInvalid)
+		}
 		m.DomainCount = m.PartitionCount
 		m.DomainPacks = make([]VectorPartitionDomainPackV1, m.PartitionCount)
 		for id := range m.PartitionCount {
@@ -1097,7 +1100,7 @@ func preflightVectorPartitionManifestWithContextV1(ctx context.Context, m Vector
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if len(m.DomainPacks) > l.MaxPartitions || len(m.Placements) > l.MaxPartitions || len(m.Assets) > l.MaxAssets || len(m.Memberships) > l.MaxMemberships || len(m.OverlapMemberships) > l.MaxMemberships || len(m.Representatives) > l.MaxMemberships || totalMembershipsVPM(m.Memberships, m.OverlapMemberships, m.Representatives) > l.totalMembershipLimit() {
+	if int64(m.PartitionCount) > int64(l.MaxPartitions) || len(m.DomainPacks) > l.MaxPartitions || len(m.Placements) > l.MaxPartitions || len(m.Assets) > l.MaxAssets || len(m.Memberships) > l.MaxMemberships || len(m.OverlapMemberships) > l.MaxMemberships || len(m.Representatives) > l.MaxMemberships || totalMembershipsVPM(m.Memberships, m.OverlapMemberships, m.Representatives) > l.totalMembershipLimit() {
 		return fmt.Errorf("%w: list cap", ErrVectorPartitionManifestInvalid)
 	}
 	for _, s := range []string{m.Format, m.State, m.Collection, m.IndexName, m.IndexDefinitionDigest, m.IntegrityDigest, m.BalancePolicy, m.ReadySetDigest} {

@@ -29,6 +29,15 @@ func TestM8RowCountersTrackTruePerRequestMaximaV1(t *testing.T) {
 	}
 }
 
+func TestM8ConfiguredProbesUseLogicalDomainCountV1(t *testing.T) {
+	if err := m8ValidateConfiguredDomainProbesV1([]int{1}, 1); err != nil {
+		t.Fatalf("one logical-domain probe: %v", err)
+	}
+	if err := m8ValidateConfiguredDomainProbesV1([]int{2}, 1); err == nil {
+		t.Fatal("accepted physical-pack probe count above logical domains")
+	}
+}
+
 func TestM8ObservedResourceMaximaUseRecordedMaximaNotAveragesV1(t *testing.T) {
 	rows := []m8ProductionRowV1{{
 		Samples: 2, RPCs: 10, RequestBytes: 1000, CandidateBytes: 2000, ResponseBytes: 3000,

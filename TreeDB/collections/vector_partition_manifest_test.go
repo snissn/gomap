@@ -27,6 +27,18 @@ func requireVectorPartitionPersistenceV1(t testing.TB) {
 	}
 }
 
+func TestVectorPartitionManifestLegacyDomainFallbackRejectsOversizedPartitionCountV1(t *testing.T) {
+	m := testVectorPartitionManifestV1()
+	m.PartitionCount = ^uint32(0)
+	m.DomainCount, m.DomainPacks = 0, nil
+	if _, err := EncodeVectorPartitionManifestV1(m); !errors.Is(err, ErrVectorPartitionManifestInvalid) {
+		t.Fatalf("encode oversized legacy mapping err=%v", err)
+	}
+	if err := m.canonicalizeWithContextV1(t.Context()); !errors.Is(err, ErrVectorPartitionManifestInvalid) {
+		t.Fatalf("canonicalize oversized legacy mapping err=%v", err)
+	}
+}
+
 func TestVerifyVectorPartitionAssetsWithContextV1RejectsCanceledOpen(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

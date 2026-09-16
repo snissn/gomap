@@ -433,6 +433,9 @@ func runM8ProductionSingleVariantV1(cfg config, fixture fixtureManifest, vectors
 		return fmt.Errorf("open M8 production assets: %w", err)
 	}
 	defer func() { runErr = errors.Join(runErr, assets.Close()) }()
+	if err := m8ValidateConfiguredDomainProbesV1(cfg.probes, assets.manifest.DomainCount); err != nil {
+		return err
+	}
 	if assets.descriptor != nil && (len(cfg.overlaps) != 1 || cfg.overlaps[0] != assets.descriptor.OverlapRatio) {
 		return fmt.Errorf("M8 configured overlap does not match retained variant %s", assets.descriptor.VariantID)
 	}
@@ -3512,6 +3515,13 @@ func m8RunBoundedWorkV1(count, concurrency int, run func(int)) {
 
 func m8ProductionRouterCandidateBudgetV1(assets *m8ProductionMultiGroupAssetsV1) int {
 	return max(1, int(assets.status.Representatives))
+}
+
+func m8ValidateConfiguredDomainProbesV1(probes []int, domains uint32) error {
+	if err := validateProbesWithinPartitionsV1(probes, int(domains)); err != nil {
+		return fmt.Errorf("M8 probes must be within %d logical domains: %w", domains, err)
+	}
+	return nil
 }
 
 func m8ProductionApproximateRouterCandidateBudgetV1(assets *m8ProductionMultiGroupAssetsV1, requested int) int {
