@@ -159,7 +159,7 @@ func (l *leafLaneCountingLog) MarkLeafPageLogSegmentsRegistered(segments []LeafP
 	observer.MarkLeafPageLogSegmentsRegistered(segments)
 }
 
-func (l *leafLaneCountingLog) setLeafPageLogSeqAllocator(seqAlloc *leafLogSeqAllocator) {
+func (l *leafLaneCountingLog) setLeafPageLogSeqAllocator(seqAlloc LeafPageLogSequenceReserver) {
 	if l == nil || l.inner == nil {
 		return
 	}

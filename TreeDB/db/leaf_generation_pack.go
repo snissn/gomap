@@ -21,6 +21,7 @@ const leafGenerationPackDefaultMinReclaimPerByteCopiedPPM = 10000
 const leafGenerationPackDefaultLeafFrameK = 16
 
 var leafGenerationPackRIDStartScanner = nextRewriteRIDStartFromSet
+var makeLeafGenerationPackStagingDirFn = os.MkdirTemp
 var removeLeafGenerationPackStagingDirFn = func(path string) error {
 	return removePersistentTree(filepath.Dir(path), path, durabilitycut.ResourceOuterLeaf)
 }
@@ -326,12 +327,15 @@ func (db *DB) leafGenerationPackLocked(ctx context.Context, opts LeafGenerationP
 		sourceValueIDs[page.ValueLogFileID(rawID)] = struct{}{}
 	}
 
-	seqAlloc, ridAlloc := db.leafGenerationPackAllocators(leafStartSeq, nextRID, opts.ReserveRIDs)
+	seqAlloc, ridAlloc, err := db.leafGenerationPackAllocators(leafStartSeq, nextRID, opts.ReserveRIDs)
+	if err != nil {
+		return stats, err
+	}
 	const maxCopyAttempts = 2
 	for attempt := 1; attempt <= maxCopyAttempts; attempt++ {
 		stats.CopyAttempts++
 		attemptStarted := time.Now()
-		stagingDir, err := os.MkdirTemp(layout.leafVLogDir, ".leaf-pack-copy-")
+		stagingDir, err := makeLeafGenerationPackStagingDirFn(layout.leafVLogDir, ".leaf-pack-copy-")
 		if err != nil {
 			return stats, err
 		}
@@ -417,24 +421,34 @@ func (db *DB) leafGenerationPackLocked(ctx context.Context, opts LeafGenerationP
 	return stats, errLeafGenerationPackPublishConflict
 }
 
-func (db *DB) leafGenerationPackAllocators(leafStartSeq uint32, nextRID uint64, reserveRIDs func(int) (uint64, error)) (*leafLogSeqAllocator, *rewriteRIDAllocator) {
-	seqAlloc := newLeafLogSeqAllocator(leafStartSeq)
+func (db *DB) leafGenerationPackAllocators(leafStartSeq uint32, nextRID uint64, reserveRIDs func(int) (uint64, error)) (LeafPageLogSequenceReserver, *rewriteRIDAllocator, error) {
+	var seqAlloc LeafPageLogSequenceReserver = newLeafLogSeqAllocator(leafStartSeq)
 	ridAlloc := newRewriteRIDAllocator(nextRID, reserveRIDs)
 	if db == nil {
-		return seqAlloc, ridAlloc
+		return seqAlloc, ridAlloc, nil
 	}
 	db.writeMu.RLock()
-	group, ok := db.leafPageLog.(*leafPageLogLaneGroup)
-	if ok && group != nil {
-		if group.seqAlloc != nil {
-			seqAlloc = group.seqAlloc
-		}
+	owner := db.leafPageLog
+	reserver, hasReserver := leafPageLogSequenceReserver(owner)
+	if hasReserver {
+		seqAlloc = reserver
+	}
+	if group, ok := owner.(*leafPageLogLaneGroup); ok && group != nil {
 		if reserveRIDs == nil && group.ridAlloc != nil {
 			ridAlloc = group.ridAlloc
 		}
 	}
+	if !hasReserver {
+		concurrent, isConcurrent := owner.(LeafPageConcurrentAppendLog)
+		if !isConcurrent || !concurrent.ConcurrentLeafPageAppends() {
+			db.writeMu.RUnlock()
+			return seqAlloc, ridAlloc, nil
+		}
+		db.writeMu.RUnlock()
+		return nil, nil, fmt.Errorf("leaf generation pack: concurrent leaf-page-log owner %T does not support sequence reservation", owner)
+	}
 	db.writeMu.RUnlock()
-	return seqAlloc, ridAlloc
+	return seqAlloc, ridAlloc, nil
 }
 
 func selectedLeafGenerationPackPlan(selection LeafGenerationPackSelection) LeafGenerationPlan {

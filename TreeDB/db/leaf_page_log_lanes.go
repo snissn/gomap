@@ -16,7 +16,7 @@ type leafPageLogLaneCloner interface {
 }
 
 type leafPageLogSeqAllocatorSetter interface {
-	setLeafPageLogSeqAllocator(*leafLogSeqAllocator)
+	setLeafPageLogSeqAllocator(LeafPageLogSequenceReserver)
 }
 
 type leafPageLogSeqFloorProvider interface {
@@ -39,13 +39,21 @@ func newLeafLogSeqAllocator(start uint32) *leafLogSeqAllocator {
 }
 
 func (a *leafLogSeqAllocator) Next() (uint32, error) {
+	return a.ReserveLeafPageLogSequence(0)
+}
+
+func (a *leafLogSeqAllocator) ReserveLeafPageLogSequence(floor uint32) (uint32, error) {
 	if a == nil {
 		return 0, errors.New("leaf log sequence allocator unavailable")
 	}
 	for {
 		current := a.next.Load()
-		next := current + 1
-		if next <= current {
+		base := current
+		if floor > base {
+			base = floor
+		}
+		next := base + 1
+		if next <= base {
 			return 0, fmt.Errorf("leaf log sequence space exhausted")
 		}
 		if _, err := valuelog.EncodeFileID(rewriteLeafLogLaneID, next); err != nil {
@@ -99,7 +107,11 @@ func wrapLeafPageLogWithLaneSelection(log LeafPageLog) LeafPageLog {
 		return group
 	}
 	group := &leafPageLogLaneGroup{lanes: []LeafPageLog{log}, laneLocks: []*sync.Mutex{newLeafPageLogLaneLock()}}
-	if cloner, ok := log.(leafPageLogLaneCloner); ok {
+	cloner, canClone := log.(leafPageLogLaneCloner)
+	if wrapped, ok := log.(*leafPageLogWithRecordLengthHints); ok {
+		_, canClone = wrapped.inner.(leafPageLogLaneCloner)
+	}
+	if canClone {
 		group.cloner = cloner
 		group.seqAlloc = newLeafLogSeqAllocator(leafPageLogMaxSeq(log))
 		if setter, ok := log.(leafPageLogSeqAllocatorSetter); ok {
@@ -294,6 +306,45 @@ func (g *leafPageLogLaneGroup) LeafPageLogLaneAny(workerIndex int) (any, bool) {
 
 func (g *leafPageLogLaneGroup) ConcurrentLeafPageAppends() bool { return g != nil }
 
+func (g *leafPageLogLaneGroup) ReserveLeafPageLogSequence(floor uint32) (uint32, error) {
+	reserver, ok := leafPageLogSequenceReserver(g)
+	if !ok {
+		return 0, errors.New("leaf page log sequence reservation unavailable")
+	}
+	return reserver.ReserveLeafPageLogSequence(floor)
+}
+
+func leafPageLogSequenceReserver(log LeafPageLog) (LeafPageLogSequenceReserver, bool) {
+	if log == nil {
+		return nil, false
+	}
+	if wrapped, ok := log.(*leafPageLogWithRecordLengthHints); ok {
+		return leafPageLogSequenceReserver(wrapped.inner)
+	}
+	if group, ok := log.(*leafPageLogLaneGroup); ok {
+		if group == nil {
+			return nil, false
+		}
+		if group.seqAlloc != nil {
+			return group.seqAlloc, true
+		}
+		lanes, _ := group.snapshotLanesAndLocks()
+		var owner LeafPageLog
+		for _, lane := range lanes {
+			if lane == nil {
+				continue
+			}
+			if owner != nil {
+				return nil, false
+			}
+			owner = lane
+		}
+		return leafPageLogSequenceReserver(owner)
+	}
+	reserver, ok := log.(LeafPageLogSequenceReserver)
+	return reserver, ok
+}
+
 func (g *leafPageLogLaneGroup) leafPageLogLane(workerIndex int) (LeafPageLog, bool) {
 	return g.LeafPageLogLane(workerIndex)
 }
@@ -313,6 +364,13 @@ func (g *leafPageLogLaneGroup) defaultLane() LeafPageLog {
 type leafPageLogLaneHandle struct {
 	group *leafPageLogLaneGroup
 	index int
+}
+
+func (h *leafPageLogLaneHandle) ReserveLeafPageLogSequence(floor uint32) (uint32, error) {
+	if h == nil || h.group == nil {
+		return 0, errors.New("leaf page log sequence reservation unavailable")
+	}
+	return h.group.ReserveLeafPageLogSequence(floor)
 }
 
 func (h *leafPageLogLaneHandle) AppendLeafPage(leafPage []byte) (page.LeafLogPtr, error) {
@@ -686,7 +744,7 @@ func (l *leafPageLogWithRecordLengthHints) Close() error {
 	return closer.Close()
 }
 
-func (l *leafPageLogWithRecordLengthHints) setLeafPageLogSeqAllocator(seqAlloc *leafLogSeqAllocator) {
+func (l *leafPageLogWithRecordLengthHints) setLeafPageLogSeqAllocator(seqAlloc LeafPageLogSequenceReserver) {
 	if l == nil || l.inner == nil {
 		return
 	}
@@ -695,6 +753,17 @@ func (l *leafPageLogWithRecordLengthHints) setLeafPageLogSeqAllocator(seqAlloc *
 		return
 	}
 	setter.setLeafPageLogSeqAllocator(seqAlloc)
+}
+
+func (l *leafPageLogWithRecordLengthHints) ReserveLeafPageLogSequence(floor uint32) (uint32, error) {
+	if l == nil || l.inner == nil {
+		return 0, errors.New("leaf page log sequence reservation unavailable")
+	}
+	reserver, ok := l.inner.(LeafPageLogSequenceReserver)
+	if !ok {
+		return 0, fmt.Errorf("leaf page log %T does not support sequence reservation", l.inner)
+	}
+	return reserver.ReserveLeafPageLogSequence(floor)
 }
 
 func (l *leafPageLogWithRecordLengthHints) leafPageLogSeqFloor() uint32 {

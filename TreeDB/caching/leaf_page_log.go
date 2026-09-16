@@ -24,6 +24,7 @@ var _ backenddb.LeafPagePreparedStableLog = (*cachingLeafPageLog)(nil)
 var _ backenddb.LeafPagePreparedStableBatchLog = (*cachingLeafPageLog)(nil)
 var _ backenddb.LeafPagePreparedChildRefStableBatchLog = (*cachingLeafPageLog)(nil)
 var _ backenddb.LeafPageLogCompactStorageHandoff = (*cachingLeafPageLog)(nil)
+var _ backenddb.LeafPageLogSequenceReserver = (*cachingLeafPageLog)(nil)
 
 var compactLeafLogPayloadScratchPool sync.Pool
 var compactLeafLogPayloadScratchPtrRefPool sync.Pool
@@ -649,6 +650,13 @@ func (l *cachingLeafPageLog) AdvanceCompactStorageLeafPageLogSeqAtLeast(seq uint
 		return nil
 	}
 	return l.db.advanceCompactStorageLeafPageLogSeqAtLeast(seq)
+}
+
+func (l *cachingLeafPageLog) ReserveLeafPageLogSequence(floor uint32) (uint32, error) {
+	if l == nil || l.db == nil {
+		return 0, errWALUnavailable
+	}
+	return l.db.reserveLeafLogAppendSequence(floor)
 }
 
 // CurrentValueLogSegment reports the lane's current writable value-log segment.
