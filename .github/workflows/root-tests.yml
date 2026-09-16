@@ -57,6 +57,13 @@ jobs:
           PYTHONDONTWRITEBYTECODE: "1"
         run: python3 .github/scripts/test_root_ci_headroom.py
 
+      - name: Python native client
+        if: ${{ matrix.name == 'ubuntu-latest-2' }}
+        working-directory: clients/python/treedb_client
+        run: |
+          PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python3 -m unittest discover -s tests
+          TREEDB_CLIENT_RUN_INTEGRATION=1 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python3 -m unittest discover -s tests -k test_native_public_listener_and_client_capability
+
       - name: Docs check
         if: ${{ matrix.run_docs_check }}
         run: make docs-check
