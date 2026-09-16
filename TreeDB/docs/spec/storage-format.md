@@ -2546,6 +2546,27 @@ maintenance, including by publishing a meta-only delta when document metadata
 changed but vector values did not. Older coverage versions are not migrated in
 this pre-alpha format; the index must be rebuilt.
 
+For a standalone ready vector-partition generation, `meta` may also contain the
+optional `partition_live` object at version `1`. It is part of the same atomic
+native-runtime snapshot, not a sidecar or a second mutation log. The object
+persists the immutable partition binding (index-definition digest, source
+identity, partition generation, pack-to-domain mapping, and canonical
+representatives covering every mapped domain) separately from the mutable live
+revision and exact source
+coverage. It also persists the cutover count, stable-ID ownership/tombstones,
+and one nested vector-index snapshot per nonempty logical-domain delta.
+
+Open validates the V1 tag, exact parent source coverage, bounded owner and node
+counts, complete domain mappings and representatives, canonical unique owners,
+nondecreasing domain/vector representative order, no nested live overlays, and
+a bidirectional match between every nondeleted owner and every current delta
+row. Missing, duplicate, orphaned, cross-domain, stale, or malformed live
+state fails closed as an invalid vector-index snapshot; it is never repaired by
+scanning immutable packs on the search path. A newly published immutable
+partition generation replaces the old live object with an empty binding in one
+durable snapshot. This is a pre-alpha format addition: old experimental
+directories may require rebuild, and no migration format is provided.
+
 Column-enabled collection metadata is stored inside the canonical collection
 metadata JSON under `options.column_store`. It is production-facing
 control-plane state, not a sidecar hint. Current normalized fields are:

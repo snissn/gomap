@@ -47,12 +47,15 @@ An `exact_partition_union_v1` result is conformant only when all of these hold:
    document.
 4. Scores use the canonical FP32 cosine contract. Global dedupe keeps the best score per stable ID and final top-k ordering is `(score descending, stable ID bytewise ascending)`. Equal-score ties and duplicate arrival order therefore
    cannot change the answer.
-5. M1 lifecycle authority is the only generation authority. A relevant
-   committed insert, delete, embedding replacement, index-definition change, or
-   source-snapshot replacement means mutation invalidates the derived generation
-   for future V1 requests. Rebuild and READY activation are required before a
-   new generation can serve. A pin accepted before the transition may finish
-   against that one immutable generation; no request may mix generations.
+5. M1 lifecycle authority is the only immutable-generation authority. Without
+   the standalone live-delta extension below, a relevant committed insert,
+   delete, embedding replacement, index-definition change, or source-snapshot
+   replacement means mutation invalidates the derived generation for future V1
+   requests. With the extension, the exact immutable manifest remains fixed and
+   is serveable only while the registered `VectorIndex` proves matching live
+   revision and source coverage for that manifest. A pin accepted before either
+   a live revision or immutable-generation transition may finish against its
+   captured composite view; no request may mix identities.
 6. The coordinator and shard service are all-or-error. Missing owner, stale or
    mixed proof/identity, unavailable partition, corrupt asset, cancellation, or
    failed search returns an error and an empty response; no partial top-k is
@@ -102,19 +105,77 @@ V1 shard and coordinator responses are IDs/scores-only. Stable IDs and owned FP3
 Document materialization is an optional caller-side operation after V1 returns;
 it has no snapshot, placement, or all-or-error guarantee from this contract.
 
+## Standalone live-delta extension
+
+The production standalone collection adapter may keep one active immutable M1
+base searchable across acknowledged document mutations by binding it to the
+collection's already registered `VectorIndex`. This is not a second mutable
+index. The same index owns the immutable-manifest binding, monotonically
+increasing live revision, exact source-generation coverage, per-logical-domain
+deltas, stable-ID ownership/tombstones, and captured composite search views.
+The extension is deliberately absent from replicated/Raft lifecycle serving;
+requests with no standalone live binding retain the immutable V1 behavior.
+
+The binding preserves the immutable base identity
+`(collection, index-definition digest, source identity, partition generation,
+domain-pack mapping)`. Live revision and coverage are distinct proof fields and
+must never rewrite that identity. A standalone request pins one combined
+identity before fanout and sends the same revision and coverage to every shard.
+A shard with a live-bound lease rejects a request that omits or mismatches that
+identity. Cold authority reacquisition may accept a newer current collection
+source only when the durable binding and recovered/replayed overlay cover it
+exactly; unrelated database state-token changes do not invalidate that proof.
+Missing, stale, partial, or corrupt coverage fails closed.
+
+An acknowledged insert, embedding replacement, delete, or logical-domain move
+publishes ownership, tombstones, all affected domain views, live revision, and
+source coverage atomically. The mutation is immediately searchable in memory;
+it does not require a vector snapshot per write. The first live binding is
+durably published before overlay mutations are admitted, and ordinary
+checkpoint plus command-WAL replay reconstructs later acknowledged changes on
+reopen. Snapshot restore validates both directions of ownership: every live
+owner names one current delta row, and every current delta row has exactly one
+matching nondeleted owner. Mapping, representative, revision, coverage, or
+ownership mismatch rejects the whole live state.
+
+Search applies live tombstones and ownership to base candidate eligibility,
+before native HNSW top-k admission; stale base rows may navigate but cannot be
+selected. Each selected logical domain searches its live delta exactly once,
+even when the domain expands to physical packs in several owner groups. The
+base and delta results use the existing deterministic stable-ID merge and score
+ordering. Per-domain nodes are capacity bounded. Repeated-update tombstones are
+compacted by atomically replacing domain indexes built from live nondeleted
+owners; pins retain the retired view until release. Publishing a newer exact
+immutable manifest similarly installs an empty overlay and retires the old
+generation without invalidating its already captured pins.
+
+Preflight includes the bounded live-delta candidate and scratch requirements
+before coordinator budgets are distributed. Search time includes base and
+delta traversal. Counters separately report base/delta candidate work,
+base/delta returned-result contribution, logical domains searched, cutovers,
+request-path rebuilds, and exact fallbacks. A healthy live request performs no
+request-path reconciliation scan or exact fallback and reuses warmed immutable
+packs across mutations.
+
 ## Historical evidence ownership
 
 Issue #3999 is historical scoped HNSW evidence, not the current owner of the broad all-partition exactness gate. Its closed result may describe measured partition-local HNSW recall and remaining limitations, but it does not convert HNSW into an exact oracle or waive an exact-union failure. #4013 owns this V1 contract and its classification/admission wording; performance qualification remains outside this issue (including #4015 and the production lanes).
 
 ## Excluded behavior
 
-V1 excludes online deltas, live repartitioning, serving replicas, distributed
-document fetch, multi-host qualification, and any mutation-freshness promise.
-It is snapshot-bound and fail-closed rather than eventually refreshed.
+V1 excludes live repartitioning, live-delta serving under replicated/Raft
+lifecycle authority, distributed document fetch, multi-host qualification, and
+eventually consistent coverage. The standalone extension provides only the
+acknowledged mutation freshness and exact fail-closed identity described above;
+all other serving remains immutable snapshot-bound.
 
 ## Verification admission
 
 `TestDocsVectorPartitionV1CorrectnessAndApproximationContract` guards this
-frozen boundary. It complements the exact-union, HNSW-route, lifecycle,
-source-identity, response-proof, and all-or-error executable tests in the M1
-through M6 packages; it is not a substitute for them.
+frozen boundary. `TestVectorIndexPartitionLive*` covers the owner/persistence/
+cutover lifecycle, and
+`TestVectorPartitionLiveProductionCoordinatorMutationAndColdReloadV1` covers
+the public production generation-source-to-shard-to-coordinator path. They
+complement the exact-union, HNSW-route, lifecycle, source-identity,
+response-proof, and all-or-error executable tests in the M1 through M6
+packages; documentation is not a substitute for them.

@@ -2572,7 +2572,7 @@ func (c *Collection) openVectorPartitionLocalSearcherForOfflineAssetWithContextV
 			return nil, ErrVectorPartitionSearchUnavailable
 		}
 	}
-	return c.openVectorPartitionLocalSearcherForPreparedPartitionWithContextV1(ctx, index, manifest.Generation, asset.PartitionID, manifest.IndexDefinitionDigest, manifest.SourceGeneration, manifest.SourceChecksum, manifest.SourceSchemaHash, &asset, members, home, overlap, true, expectedVariant)
+	return c.openVectorPartitionLocalSearcherForPreparedPartitionWithContextV1(ctx, index, manifest.Generation, asset.PartitionID, manifest.IndexDefinitionDigest, manifest.SourceGeneration, manifest.SourceChecksum, manifest.SourceSchemaHash, &asset, members, home, overlap, true, expectedVariant, false)
 }
 
 // OpenVectorPartitionLocalSearcherForGenerationWithContextV1 is the
@@ -2640,7 +2640,7 @@ func (c *Collection) OpenVectorPartitionLocalSearcherForGenerationWithContextV1(
 	searcher, err := c.openVectorPartitionLocalSearcherForPreparedPartitionWithContextV1(
 		ctx, index, generation, partition,
 		m.IndexDefinitionDigest, m.SourceGeneration, m.SourceChecksum, m.SourceSchemaHash,
-		asset, members, home, overlap, false, "",
+		asset, members, home, overlap, false, "", false,
 	)
 	if err != nil {
 		return nil, err
@@ -2656,6 +2656,17 @@ func (c *Collection) OpenVectorPartitionLocalSearcherForGenerationWithContextV1(
 // the searcher without lifecycle I/O, while avoiding another manifest decode
 // and membership scan for every partition in one cold routed request.
 func (c *Collection) OpenVectorPartitionLocalSearcherForGenerationSearchPlanWithContextV1(ctx context.Context, index string, generation uint64, partition uint32, plan *VectorPartitionGenerationSearchOpenPlanV1, generationPin *VectorPartitionReaderPinV1) (*VectorPartitionLocalSearcherV1, error) {
+	return c.openVectorPartitionLocalSearcherForGenerationSearchPlanWithContextV1(ctx, index, generation, partition, plan, generationPin, false)
+}
+
+// OpenVectorPartitionLocalSearcherForGenerationLiveSearchPlanWithContextV1
+// prepares the stable-ID eligibility table needed by standalone live-delta
+// serving. Immutable and replicated generation opens deliberately omit it.
+func (c *Collection) OpenVectorPartitionLocalSearcherForGenerationLiveSearchPlanWithContextV1(ctx context.Context, index string, generation uint64, partition uint32, plan *VectorPartitionGenerationSearchOpenPlanV1, generationPin *VectorPartitionReaderPinV1) (*VectorPartitionLocalSearcherV1, error) {
+	return c.openVectorPartitionLocalSearcherForGenerationSearchPlanWithContextV1(ctx, index, generation, partition, plan, generationPin, true)
+}
+
+func (c *Collection) openVectorPartitionLocalSearcherForGenerationSearchPlanWithContextV1(ctx context.Context, index string, generation uint64, partition uint32, plan *VectorPartitionGenerationSearchOpenPlanV1, generationPin *VectorPartitionReaderPinV1, prepareStableIDOrdinals bool) (*VectorPartitionLocalSearcherV1, error) {
 	if c == nil || c.db == nil {
 		return nil, ErrVectorPartitionSearchUnavailable
 	}
@@ -2689,7 +2700,7 @@ func (c *Collection) OpenVectorPartitionLocalSearcherForGenerationSearchPlanWith
 	searcher, err := c.openVectorPartitionLocalSearcherForPreparedPartitionWithContextV1(
 		ctx, index, generation, partition,
 		plan.indexDefinitionDigest, plan.sourceGeneration, plan.sourceChecksum, plan.sourceSchemaHash,
-		asset, members, home, overlap, false, "",
+		asset, members, home, overlap, false, "", prepareStableIDOrdinals,
 	)
 	if err != nil {
 		return nil, err
@@ -2714,6 +2725,7 @@ func (c *Collection) openVectorPartitionLocalSearcherForPreparedPartitionWithCon
 	overlap int,
 	allowOfflineNative bool,
 	expectedGraphVariant VectorPartitionLocalGraphVariantV1,
+	prepareStableIDOrdinals bool,
 ) (*VectorPartitionLocalSearcherV1, error) {
 	def, ok := findVectorIndex(c.meta.VectorIndexes, index)
 	if !ok || indexDefinitionDigest != VectorIndexDefinitionDigestV1(def) || def.Metric != VectorMetricCosine || def.Encoding != VectorIndexEncodingFloat32 {
@@ -2913,7 +2925,23 @@ func (c *Collection) openVectorPartitionLocalSearcherForPreparedPartitionWithCon
 		_ = view.Close()
 		return nil, fmt.Errorf("%w: stable ID bounds", ErrVectorPartitionSearchUnavailable)
 	}
-	s := &VectorPartitionLocalSearcherV1{asset: VectorPartitionSearchAssetV1{Generation: generation, PartitionID: partition, Dimensions: view.Header.Dimensions}, prepared: view, opened: 1, homeMemberships: home, overlapMemberships: overlap, packBytes: uint64(asset.Ref.Length), mappedBytes: view.mappedBytes, heapBytes: view.heapCopyBytes, openNanos: view.openNanos, searchRoute: VectorPartitionSearchRouteHNSWSearchPackV1, maxStableIDBytes: maxStableIDBytes}
+	var stableIDOrdinals map[string]int
+	var stableIDOrdinalBytes uint64
+	if prepareStableIDOrdinals {
+		stableIDOrdinals, err = vectorPartitionPreparedStableIDOrdinalsV1(view)
+		if err != nil {
+			_ = view.Close()
+			return nil, fmt.Errorf("%w: stable ID ordinals", ErrVectorPartitionSearchUnavailable)
+		}
+		// Charge two conservative 64-byte map buckets per entry in addition to
+		// the key backing bytes. This bounds bucket, overflow, and load-factor
+		// overhead without depending on runtime internals.
+		stableIDOrdinalBytes = uint64(len(stableIDOrdinals)) * 128
+		for id := range stableIDOrdinals {
+			stableIDOrdinalBytes += uint64(len(id))
+		}
+	}
+	s := &VectorPartitionLocalSearcherV1{asset: VectorPartitionSearchAssetV1{Generation: generation, PartitionID: partition, Dimensions: view.Header.Dimensions}, prepared: view, opened: 1, homeMemberships: home, overlapMemberships: overlap, packBytes: uint64(asset.Ref.Length), mappedBytes: view.mappedBytes, heapBytes: view.heapCopyBytes, openNanos: view.openNanos, searchRoute: VectorPartitionSearchRouteHNSWSearchPackV1, maxStableIDBytes: maxStableIDBytes, stableIDOrdinals: stableIDOrdinals, stableIDOrdinalBytes: stableIDOrdinalBytes}
 	return s, nil
 }
 

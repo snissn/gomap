@@ -694,7 +694,7 @@ func TestVectorPartitionShardSearchLeaderGroupLocalReturnsOracleAndProofV1(t *te
 	if got := response.Partials[1].Neighbors; len(got) != 2 || got[0].ID != "d" || got[1].ID != "e" {
 		t.Fatalf("partition 1 neighbors=%+v", got)
 	}
-	if response.Candidates != 5 || response.ResponseBytes != 580 || response.Timing.ReadIndexApplyNanos == 0 {
+	if response.Candidates != 5 || response.ResponseBytes != 668 || response.Timing.ReadIndexApplyNanos == 0 {
 		t.Fatalf("response accounting=%+v", response)
 	}
 	if coordinator.callCount() != 1 {

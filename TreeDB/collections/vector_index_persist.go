@@ -1017,19 +1017,20 @@ type vectorIndexPersistSnapshot struct {
 }
 
 type vectorIndexPersistMeta struct {
-	Name                            string              `json:"name"`
-	Field                           string              `json:"field"`
-	Metric                          VectorMetric        `json:"metric"`
-	Encoding                        VectorIndexEncoding `json:"encoding"`
-	Dimensions                      int                 `json:"dimensions"`
-	M                               int                 `json:"m"`
-	EfConstruction                  int                 `json:"ef_construction"`
-	EfSearch                        int                 `json:"ef_search"`
-	RebuildDeletedRatio             float64             `json:"rebuild_deleted_ratio"`
-	Entry                           int                 `json:"entry"`
-	MaxLevel                        int                 `json:"max_level"`
-	SourceDocumentGenerationVersion int                 `json:"source_document_generation_version"`
-	SourceDocumentGeneration        uint64              `json:"source_document_generation"`
+	Name                            string                             `json:"name"`
+	Field                           string                             `json:"field"`
+	Metric                          VectorMetric                       `json:"metric"`
+	Encoding                        VectorIndexEncoding                `json:"encoding"`
+	Dimensions                      int                                `json:"dimensions"`
+	M                               int                                `json:"m"`
+	EfConstruction                  int                                `json:"ef_construction"`
+	EfSearch                        int                                `json:"ef_search"`
+	RebuildDeletedRatio             float64                            `json:"rebuild_deleted_ratio"`
+	Entry                           int                                `json:"entry"`
+	MaxLevel                        int                                `json:"max_level"`
+	SourceDocumentGenerationVersion int                                `json:"source_document_generation_version"`
+	SourceDocumentGeneration        uint64                             `json:"source_document_generation"`
+	PartitionLive                   *vectorIndexPartitionLivePersistV1 `json:"partition_live,omitempty"`
 }
 
 type vectorIndexPersistNode struct {
@@ -1075,6 +1076,7 @@ func (idx *VectorIndex) persistSnapshot() (vectorIndexPersistSnapshot, uint64) {
 			MaxLevel:                        idx.maxLevel,
 			SourceDocumentGenerationVersion: vectorIndexDocumentGenerationVersion,
 			SourceDocumentGeneration:        idx.sourceDocumentGeneration,
+			PartitionLive:                   idx.partitionLivePersistLocked(),
 		},
 		Nodes: make([]vectorIndexPersistNode, len(idx.nodes)),
 		DocMap: vectorIndexPersistDocMap{
@@ -1293,6 +1295,7 @@ func (idx *VectorIndex) persistMetaLocked() vectorIndexPersistMeta {
 		MaxLevel:                        idx.maxLevel,
 		SourceDocumentGenerationVersion: vectorIndexDocumentGenerationVersion,
 		SourceDocumentGeneration:        idx.sourceDocumentGeneration,
+		PartitionLive:                   idx.partitionLivePersistLocked(),
 	}
 }
 
@@ -1718,6 +1721,11 @@ func (idx *VectorIndex) loadPersistSnapshot(snapshot vectorIndexPersistSnapshot)
 		idx.mutationSeq = 0
 		idx.sourceDocumentGeneration = snapshot.Meta.SourceDocumentGeneration
 		idx.sourceDocumentRootsValid = true
+		partitionLive, reason := idx.restorePartitionLiveV1(snapshot.Meta.PartitionLive, snapshot.Meta.SourceDocumentGeneration)
+		if reason != "" {
+			return reason
+		}
+		idx.partitionLive = partitionLive
 		idx.publishSearchViewLocked(true)
 		return ""
 	}
@@ -1844,6 +1852,11 @@ func (idx *VectorIndex) loadPersistSnapshot(snapshot vectorIndexPersistSnapshot)
 	idx.mutationSeq = 0
 	idx.sourceDocumentGeneration = snapshot.Meta.SourceDocumentGeneration
 	idx.sourceDocumentRootsValid = true
+	partitionLive, reason := idx.restorePartitionLiveV1(snapshot.Meta.PartitionLive, snapshot.Meta.SourceDocumentGeneration)
+	if reason != "" {
+		return reason
+	}
+	idx.partitionLive = partitionLive
 	idx.publishSearchViewLocked(true)
 	return ""
 }

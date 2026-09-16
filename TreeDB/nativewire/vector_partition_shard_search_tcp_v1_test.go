@@ -66,7 +66,7 @@ func TestVectorPartitionShardSearchTCPBinaryFrameRoundTripV1(t *testing.T) {
 	frames := []vectorPartitionShardSearchTCPFrameV1{
 		{Request: &request}, {Response: &response}, {Error: &vectorPartitionShardSearchTCPErrorV1{Code: VectorPartitionShardSearchErrorNotLeaderV1, GroupID: "group-a", LeaderHint: "node-b", Message: "moved"}}, {Probe: &vectorPartitionShardEndpointProbeV1{Version: 1}}, {ProbeResponse: &identity},
 	}
-	wantBytes := []int{470, 368, 37, 10, 952}
+	wantBytes := []int{490, 456, 37, 10, 952}
 	for i, frame := range frames {
 		raw, err := appendVectorPartitionShardSearchTCPFrameBodyV1(nil, frame)
 		if err != nil {
@@ -236,7 +236,7 @@ func TestVectorPartitionShardSearchTCPBinaryBenchmarkWireSizesV1(t *testing.T) {
 		}
 	}
 	response := VectorPartitionShardSearchResponseV1{Version: VectorPartitionShardSearchVersionV1, RequestID: "benchmark", Partials: partials}
-	want := []int{352, 739}
+	want := []int{372, 827}
 	for i, frame := range []vectorPartitionShardSearchTCPFrameV1{{Request: &request}, {Response: &response}} {
 		raw, err := appendVectorPartitionShardSearchTCPFrameBodyV1(nil, frame)
 		if err != nil {

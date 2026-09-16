@@ -412,6 +412,7 @@ type VectorIndex struct {
 	frozenPrefixIndexedDotBatches    uint64
 	frozenPrefixHeapRowStores        uint64
 	liveDelta                        *VectorIndex
+	partitionLive                    *vectorIndexPartitionLiveStateV1
 	scalarDefinitions                []IndexDefinition
 	scalarRuntimes                   []indexRuntime
 	scalarColumns                    map[string]vectorIndexScalarColumn
@@ -2259,10 +2260,19 @@ func (idx *VectorIndex) insertStoredDocumentWithAcknowledgment(materializer *Sto
 	}
 	if document == nil {
 		idx.mu.Lock()
+		if err := idx.preflightVectorPartitionMutationLocked(documentID, nil); err != nil {
+			idx.mu.Unlock()
+			return err
+		}
 		if idx.liveDeltaActiveLocked() {
 			idx.tombstoneLiveDocumentLocked(documentID)
 		} else {
 			idx.tombstoneDocumentIDLocked(documentID)
+		}
+		if err := idx.reconcileVectorPartitionMutationLocked(documentID, nil); err != nil {
+			idx.invalidateVectorPartitionLiveLocked()
+			idx.mu.Unlock()
+			return err
 		}
 		if acknowledge {
 			idx.acknowledgeSearchViewStateLocked()
@@ -2276,10 +2286,19 @@ func (idx *VectorIndex) insertStoredDocumentWithAcknowledgment(materializer *Sto
 	}
 	if !ok {
 		idx.mu.Lock()
+		if err := idx.preflightVectorPartitionMutationLocked(documentID, nil); err != nil {
+			idx.mu.Unlock()
+			return err
+		}
 		if idx.liveDeltaActiveLocked() {
 			idx.tombstoneLiveDocumentLocked(documentID)
 		} else {
 			idx.tombstoneDocumentIDLocked(documentID)
+		}
+		if err := idx.reconcileVectorPartitionMutationLocked(documentID, nil); err != nil {
+			idx.invalidateVectorPartitionLiveLocked()
+			idx.mu.Unlock()
+			return err
 		}
 		if acknowledge {
 			idx.acknowledgeSearchViewStateLocked()
@@ -2292,7 +2311,17 @@ func (idx *VectorIndex) insertStoredDocumentWithAcknowledgment(materializer *Sto
 		return fmt.Errorf("collections: native scalar fields in document %q: %w", documentID, err)
 	}
 	idx.mu.Lock()
+	if err := idx.preflightVectorPartitionMutationLocked(documentID, vector); err != nil {
+		idx.mu.Unlock()
+		return err
+	}
 	err = idx.insertVectorWithNativeScalarLocked(documentID, vector, scalarRow)
+	if err == nil {
+		err = idx.reconcileVectorPartitionMutationLocked(documentID, vector)
+		if err != nil {
+			idx.invalidateVectorPartitionLiveLocked()
+		}
+	}
 	if err == nil && acknowledge {
 		idx.acknowledgeSearchViewStateLocked()
 	}
@@ -2338,7 +2367,10 @@ func (idx *VectorIndex) insertStoredDocumentsUnpublished(materializer *StoredDoc
 	}
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
-	if hasVector && len(idx.scalarDefinitions) == 0 {
+	if err := idx.preflightVectorPartitionMutationBatchLocked(documentIDs, vectors); err != nil {
+		return err
+	}
+	if hasVector && len(idx.scalarDefinitions) == 0 && idx.partitionLive == nil {
 		if idx.liveDeltaActiveLocked() {
 			return idx.insertLiveVectorBatchLocked(documentIDs, vectors)
 		}
@@ -2346,15 +2378,26 @@ func (idx *VectorIndex) insertStoredDocumentsUnpublished(materializer *StoredDoc
 	}
 	liveDelta := idx.liveDeltaActiveLocked()
 	for i := range documentIDs {
+		if err := idx.preflightVectorPartitionMutationLocked(documentIDs[i], vectors[i]); err != nil {
+			return err
+		}
 		if vectors[i] == nil {
 			if liveDelta {
 				idx.tombstoneLiveDocumentLocked(documentIDs[i])
 			} else {
 				idx.tombstoneDocumentIDLocked(documentIDs[i])
 			}
+			if err := idx.reconcileVectorPartitionMutationLocked(documentIDs[i], nil); err != nil {
+				idx.invalidateVectorPartitionLiveLocked()
+				return err
+			}
 			continue
 		}
 		if err := idx.insertVectorWithNativeScalarLocked(documentIDs[i], vectors[i], scalarRows[i]); err != nil {
+			return err
+		}
+		if err := idx.reconcileVectorPartitionMutationLocked(documentIDs[i], vectors[i]); err != nil {
+			idx.invalidateVectorPartitionLiveLocked()
 			return err
 		}
 	}
@@ -3310,6 +3353,13 @@ func (idx *VectorIndex) recordSourceDocumentStateLocked(generation uint64, state
 	idx.sourceDocumentGeneration = generation
 	idx.sourceDocumentState = state
 	idx.sourceDocumentStateValid = true
+	if idx.partitionLive != nil && !idx.partitionLive.invalid {
+		if idx.partitionLive.coverage != generation {
+			idx.partitionLive.coverage = generation
+			idx.mutationSeq++
+			idx.markVectorMetaDirtyLocked()
+		}
+	}
 	idx.acknowledgeSearchViewStateLocked()
 	if changed {
 		idx.searchViewCurrent.Store(false)

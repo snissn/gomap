@@ -38,10 +38,14 @@ That policy means:
    locally when pinned;
 4. all returned partitions were searched from that exact pin.
 
-It does **not** mean "latest committed vector mutation." Vector generation
-publication is asynchronous from arbitrary document mutations. Requests that
-claim latest-vector, follower-stale, lease, or another consistency policy fail
-with `unsupported_consistency`.
+For immutable and replicated-lifecycle requests it does **not** mean "latest
+committed vector mutation." Vector generation publication is asynchronous from
+arbitrary document mutations. A standalone collection may additionally supply
+the #4324 live binding: the request then names one live revision and exact
+source coverage captured with the immutable generation, and the shard rejects
+an omitted or mismatched live identity. Requests that claim latest-vector,
+follower-stale, lease, or another consistency policy still fail with
+`unsupported_consistency`.
 
 The response repeats source, partition, and router generation identity together
 with serving node, group, read term/index, and applied term/index. A coordinator
@@ -106,7 +110,9 @@ The service executes the following fail-closed sequence:
 4. obtain and independently validate #3474's read-index proof and applied
    progress for the exact local node/group;
 5. acquire an M1 reader pin, then validate that the exact generation is ready,
-   active, source-current, and free of missing/corrupt/stale assets;
+   active, and free of missing/corrupt/stale assets; standalone live serving
+   additionally pins matching revision/coverage while immutable and replicated
+   serving retains the source-current check;
 6. open every requested M3 partition searcher before searching any partition;
 7. run M3's IDs/scores-only search with the explicit `ef_search`;
 8. validate IDs, finite scores, counters, and response bytes before returning
@@ -128,9 +134,13 @@ clone the bounded placement identity, and reuse the cached partition
 searchers; they do not scan the lifecycle directory or call operational
 vector-index status APIs. A normal replacement `BUILD` leaves the active
 generation lease valid. Successful `READY` activation or deactivation advances
-the mutation-driven activation revision. A DB state publication evicts the
-cache entry without permanently tombstoning it and forces one new full
-authority load, which either confirms the generation/source or fails closed.
+the mutation-driven activation revision. A DB state publication refreshes
+authority. For an immutable request it forces one new full source check. For an
+exact standalone live binding, the cheap warm proof may retain the opened
+generation when its coherent state token and live coverage match; a cold
+refresh re-reads collection source identity and accepts only exact recovered or
+replayed coverage. Neither path reconciles by scanning the source on the
+request path.
 
 The catalog/lifecycle owner must call
 `InvalidateVectorPartitionGenerationV1` when it replaces the service's static
@@ -173,12 +183,16 @@ Each response separates:
 - total request.
 
 Basic partial stats include candidates, edges, search route, pack bytes,
-mapped/heap bytes, and open time. Service totals count requests, successes,
-every fail-closed class, owner routes, read proofs, partitions, candidates,
-response bytes, mapped/heap opens, partition cache hits/misses, cancellation,
-and timeout. The collection generation source separately counts generation
-cache hits/misses, partition hits/misses, and invalidations. The service has no
-mutation API or mutation dependency.
+mapped/heap bytes, and open time. Live responses additionally separate base
+and delta candidate work, base and delta result contribution, logical domains
+searched, mutation/owner counts, cutovers, and request-path rebuilds. Search
+time includes both base and delta traversal. Service totals count requests,
+successes, every fail-closed class, owner routes, read proofs, partitions,
+candidates, response bytes, mapped/heap opens, partition cache hits/misses,
+cancellation, and timeout. The collection generation source separately counts
+generation cache hits/misses, partition hits/misses, and invalidations. The
+service still has no mutation API; it consumes only the collection-owned pinned
+live view.
 
 Read-index/apply time is always separate and must never be attributed to ANN
 search. See `../performance/vector-partition-m5.md` for the checked-in scoped

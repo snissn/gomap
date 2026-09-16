@@ -73,6 +73,10 @@ func TestDocsVectorPartitionV1CorrectnessAndApproximationContract(t *testing.T) 
 		"source_mismatch",
 		"placement partition/group drift",
 		"mutation invalidates",
+		"Standalone live-delta extension",
+		"Live revision and coverage are distinct proof fields",
+		"before native HNSW top-k admission",
+		"request-path reconciliation scan or exact fallback",
 		"IDs/scores-only",
 		"must not fetch or materialize documents",
 		"Issue #3999",
@@ -81,6 +85,7 @@ func TestDocsVectorPartitionV1CorrectnessAndApproximationContract(t *testing.T) 
 		"TestM8ProductionMultiGroupAssetsCheckedIn10kCISmokeV1",
 		"TestM8CanonicalFP32ScoreContractTiePrecisionAndDedupeV1",
 		"TestDocsVectorPartitionV1CorrectnessAndApproximationContract",
+		"TestVectorPartitionLiveProductionCoordinatorMutationAndColdReloadV1",
 	} {
 		if !strings.Contains(string(b), needle) {
 			t.Fatalf("V1 contract missing %q", needle)
@@ -102,6 +107,9 @@ func TestDocsVectorPartitionV1CorrectnessAndApproximationContract(t *testing.T) 
 		"TestM8ProductionMultiGroupAssetsCheckedIn10kCISmokeV1",
 		"TestPartitionLocalHNSWStageIsRecallQualifiedNotExact",
 		"TestDocsVectorPartitionV1CorrectnessAndApproximationContract",
+		"Vector partition standalone live-delta verification",
+		"TestVectorIndexPartitionLive",
+		"TestVectorPartitionLiveProduction",
 		"GOWORK=off go test -count=1 ./cmd/treedb_vector_partition_bench",
 		"GOWORK=off go test -count=1 ./TreeDB/docs",
 	} {

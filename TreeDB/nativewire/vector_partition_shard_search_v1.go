@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"math"
 	"slices"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -25,7 +26,7 @@ import (
 const VectorPartitionShardSearchVersionV1 uint32 = 1
 
 const (
-	vectorPartitionShardSearchResponseEnvelopeBytesV1 uint64 = 256
+	vectorPartitionShardSearchResponseEnvelopeBytesV1 uint64 = 344
 	vectorPartitionShardSearchPartialEnvelopeBytesV1  uint64 = 128
 	vectorPartitionDuplicateLinearThresholdV1                = 16
 )
@@ -151,10 +152,12 @@ type VectorPartitionShardSearchRequestV1 struct {
 
 	SourceGeneration, SourceChecksum, SourceSchemaHash, SourceRowCount uint64
 	PartitionGeneration, RouterGeneration                              uint64
+	LiveRevision, LiveCoverage                                         uint64
 
 	TargetGroupID raftcluster.GroupID
 	TargetNodeID  raftcluster.NodeID
 	PartitionIDs  []uint32
+	LiveDomainIDs []uint32
 
 	Query       []float32
 	Metric      VectorPartitionShardSearchMetricV1
@@ -199,6 +202,7 @@ type VectorPartitionShardSearchProofV1 struct {
 	CatalogAppliedIndex, GroupAppliedIndex                             uint64
 	SourceGeneration, SourceChecksum, SourceSchemaHash, SourceRowCount uint64
 	PartitionGeneration, RouterGeneration                              uint64
+	LiveRevision, LiveCoverage                                         uint64
 }
 
 type VectorPartitionShardSearchTimingV1 struct {
@@ -213,6 +217,10 @@ type VectorPartitionShardSearchResponseV1 struct {
 	Partials                                               []VectorPartitionShardSearchPartialV1
 	Partitions, ReadProofs, GenerationPins, PartitionOpens uint64
 	Candidates                                             uint64
+	BaseCandidates, DeltaCandidates                        uint64
+	BaseResults, DeltaResults                              uint64
+	LiveDomainsSearched, LiveMutatedIDs, LiveIDs, Cutovers uint64
+	RequestPathFullRebuilds                                uint64
 	Edges                                                  uint64
 	ResponseBytes                                          uint64
 	Timing                                                 VectorPartitionShardSearchTimingV1
@@ -298,6 +306,10 @@ type VectorPartitionPinnedGenerationV1 interface {
 // Manifest contract.
 type vectorPartitionPinnedManifestViewV1 interface {
 	immutableManifestViewV1() VectorPartitionPinnedManifestV1
+}
+
+type vectorPartitionPinnedLiveViewV1 interface {
+	acquireVectorPartitionLiveSearchPinV1() (*collections.VectorIndexPartitionLiveSearchPinV1, error)
 }
 
 type VectorPartitionGenerationSourceV1 interface {
@@ -538,9 +550,66 @@ func (s *VectorPartitionShardSearchServiceV1) Search(ctx context.Context, reques
 		response.Timing.GenerationOpenNanos = elapsedNanosV1(openStarted)
 		return response, s.wrapError(err, groupID)
 	}
+	var livePin *collections.VectorIndexPartitionLiveSearchPinV1
+	if liveSource, ok := pinned.(vectorPartitionPinnedLiveViewV1); ok {
+		livePin, err = liveSource.acquireVectorPartitionLiveSearchPinV1()
+		if err != nil {
+			response.Timing.GenerationOpenNanos = elapsedNanosV1(openStarted)
+			return response, s.wrapError(fmt.Errorf("%w: live revision: %v", ErrVectorPartitionShardSearchGenerationMismatch, err), groupID)
+		}
+		defer livePin.Release()
+	}
+	if request.LiveCoverage != 0 {
+		if livePin == nil {
+			return response, s.wrapError(fmt.Errorf("%w: missing live partition identity", ErrVectorPartitionShardSearchGenerationMismatch), groupID)
+		}
+		liveStatus := livePin.StatusV1()
+		if liveStatus.Revision != request.LiveRevision || liveStatus.Coverage != request.LiveCoverage {
+			return response, s.wrapError(fmt.Errorf("%w: live revision=%d coverage=%d", ErrVectorPartitionShardSearchGenerationMismatch, liveStatus.Revision, liveStatus.Coverage), groupID)
+		}
+	} else if livePin != nil {
+		return response, s.wrapError(fmt.Errorf("%w: missing coordinator live identity", ErrVectorPartitionShardSearchGenerationMismatch), groupID)
+	}
+	var excludedStableIDs map[string]struct{}
+	domainFirstPartial := make(map[uint32]int)
+	var liveDomains []uint32
+	if livePin != nil {
+		excludedStableIDs = livePin.ExcludedStableIDsV1()
+		liveDomains = slices.Clone(request.LiveDomainIDs)
+		for _, domain := range liveDomains {
+			for i, partitionID := range request.PartitionIDs {
+				mapped, ok := livePin.DomainForPackV1(partitionID)
+				if ok && mapped == domain {
+					domainFirstPartial[domain] = i
+					break
+				}
+			}
+			if _, ok := domainFirstPartial[domain]; !ok {
+				return response, s.wrapError(ErrVectorPartitionShardSearchGenerationMismatch, groupID)
+			}
+		}
+	}
 
 	searchers := make([]*VectorPartitionPartitionSearchLeaseV1, 0, len(request.PartitionIDs))
 	var openedCandidateBytes uint64
+	for _, domain := range liveDomains {
+		candidateCeiling, scratchBytes, preflightErr := livePin.DomainSearchPreflightV1(domain, collections.VectorPartitionSearchOptionsV1{
+			TopK: request.TopK, EfSearch: request.EfSearch, MaxStableIDBytes: s.limits.MaxStableIDBytes,
+		})
+		if preflightErr != nil {
+			return response, s.wrapError(fmt.Errorf("%w: live domain %d scratch bound: %v", ErrVectorPartitionShardSearchAssetsUnavailable, domain, preflightErr), groupID)
+		}
+		deltaCandidateBytes, ok := mulUint64V1(candidateCeiling, 64)
+		if scratchBytes > deltaCandidateBytes {
+			deltaCandidateBytes = scratchBytes
+		}
+		if ok {
+			openedCandidateBytes, ok = addUint64V1(openedCandidateBytes, deltaCandidateBytes)
+		}
+		if !ok || openedCandidateBytes > request.CandidateBytesLimit || openedCandidateBytes > s.limits.MaxCandidateBytes {
+			return response, s.wrapError(fmt.Errorf("%w: opened live delta candidate ceiling", ErrVectorPartitionShardSearchInvalidRequest), groupID)
+		}
+	}
 	defer func() {
 		if !ownedAssets {
 			return
@@ -582,9 +651,10 @@ func (s *VectorPartitionShardSearchServiceV1) Search(ctx context.Context, reques
 		}
 		searcher := lease.Searcher
 		status, scratchBytes, scratchErr := searcher.SearchPreflightV1(collections.VectorPartitionSearchOptionsV1{
-			TopK:             request.TopK,
-			EfSearch:         request.EfSearch,
-			MaxStableIDBytes: s.limits.MaxStableIDBytes,
+			TopK:              request.TopK,
+			EfSearch:          request.EfSearch,
+			MaxStableIDBytes:  s.limits.MaxStableIDBytes,
+			ExcludedStableIDs: excludedStableIDs,
 		})
 		if status.Generation != request.PartitionGeneration || status.PartitionID != partitionID || status.Retired {
 			if ownedAssets {
@@ -609,7 +679,7 @@ func (s *VectorPartitionShardSearchServiceV1) Search(ctx context.Context, reques
 			return response, s.wrapError(fmt.Errorf("%w: partition %d scratch bound: %v", ErrVectorPartitionShardSearchAssetsUnavailable, partitionID, scratchErr), groupID)
 		}
 		candidateCeiling := uint64(request.EfSearch)
-		if status.SearchRoute == collections.VectorPartitionSearchRouteExactFP32ScanV1 {
+		if status.SearchRoute == collections.VectorPartitionSearchRouteExactFP32ScanV1 || len(excludedStableIDs) != 0 {
 			candidateCeiling = uint64(status.HomeMemberships + status.OverlapMemberships)
 		}
 		partitionCandidateBytes, ok := mulUint64V1(candidateCeiling, 64)
@@ -649,9 +719,10 @@ func (s *VectorPartitionShardSearchServiceV1) Search(ctx context.Context, reques
 		}
 		partitionSearchStarted := time.Now()
 		results, metrics, searchErr := search(ctx, searcher, request.Query, collections.VectorPartitionSearchOptionsV1{
-			TopK:             request.TopK,
-			EfSearch:         request.EfSearch,
-			MaxStableIDBytes: s.limits.MaxStableIDBytes,
+			TopK:              request.TopK,
+			EfSearch:          request.EfSearch,
+			MaxStableIDBytes:  s.limits.MaxStableIDBytes,
+			ExcludedStableIDs: excludedStableIDs,
 		})
 		searchNanos += elapsedNanosV1(partitionSearchStarted)
 		response.Timing.SearchNanos = searchNanos
@@ -670,6 +741,10 @@ func (s *VectorPartitionShardSearchServiceV1) Search(ctx context.Context, reques
 		}
 		var ok bool
 		totalCandidates, ok = addUint64V1(totalCandidates, metrics.Candidates)
+		if !ok {
+			return response, s.wrapError(ErrVectorPartitionShardSearchResponseTooLarge, groupID)
+		}
+		response.BaseCandidates, ok = addUint64V1(response.BaseCandidates, metrics.Candidates)
 		if !ok {
 			return response, s.wrapError(ErrVectorPartitionShardSearchResponseTooLarge, groupID)
 		}
@@ -701,6 +776,55 @@ func (s *VectorPartitionShardSearchServiceV1) Search(ctx context.Context, reques
 			partials[i].Neighbors[j] = VectorPartitionShardSearchNeighborV1{ID: result.ID, Score: result.Score}
 		}
 	}
+	if livePin != nil {
+		for _, domain := range liveDomains {
+			deltaSearchStarted := time.Now()
+			results, metrics, searchErr := livePin.SearchDomainV1(ctx, domain, request.Query, collections.VectorPartitionSearchOptionsV1{TopK: request.TopK, EfSearch: request.EfSearch, MaxStableIDBytes: s.limits.MaxStableIDBytes})
+			searchNanos += elapsedNanosV1(deltaSearchStarted)
+			response.Timing.SearchNanos = searchNanos
+			if searchErr != nil {
+				return response, s.wrapError(searchErr, groupID)
+			}
+			var ok bool
+			totalCandidates, ok = addUint64V1(totalCandidates, metrics.Candidates)
+			if !ok {
+				return response, s.wrapError(ErrVectorPartitionShardSearchResponseTooLarge, groupID)
+			}
+			response.DeltaCandidates, ok = addUint64V1(response.DeltaCandidates, metrics.Candidates)
+			if !ok {
+				return response, s.wrapError(ErrVectorPartitionShardSearchResponseTooLarge, groupID)
+			}
+			response.LiveDomainsSearched++
+			deltaBytes, ok := mulUint64V1(metrics.Candidates, 64)
+			if ok {
+				actualCandidateBytes, ok = addUint64V1(actualCandidateBytes, deltaBytes)
+			}
+			if !ok || actualCandidateBytes > request.CandidateBytesLimit || actualCandidateBytes > s.limits.MaxCandidateBytes {
+				return response, s.wrapError(fmt.Errorf("%w: live delta candidate bytes", ErrVectorPartitionShardSearchInvalidRequest), groupID)
+			}
+			partial := &partials[domainFirstPartial[domain]]
+			var baseResults, deltaResults uint64
+			partial.Neighbors, baseResults, deltaResults = mergeVectorPartitionShardLiveResultsV1(partial.Neighbors, results, request.TopK)
+			response.BaseResults, ok = addUint64V1(response.BaseResults, baseResults)
+			if ok {
+				response.DeltaResults, ok = addUint64V1(response.DeltaResults, deltaResults)
+			}
+			if !ok {
+				return response, s.wrapError(ErrVectorPartitionShardSearchResponseTooLarge, groupID)
+			}
+		}
+	}
+	if livePin == nil {
+		for _, partial := range partials {
+			response.BaseResults, _ = addUint64V1(response.BaseResults, uint64(len(partial.Neighbors)))
+		}
+	} else {
+		for i, partial := range partials {
+			if _, merged := domainFirstPartialForIndexV1(domainFirstPartial, i); !merged {
+				response.BaseResults, _ = addUint64V1(response.BaseResults, uint64(len(partial.Neighbors)))
+			}
+		}
+	}
 
 	if s.testBeforeResponseCopy != nil {
 		s.testBeforeResponseCopy()
@@ -721,6 +845,7 @@ func (s *VectorPartitionShardSearchServiceV1) Search(ctx context.Context, reques
 		SourceGeneration: request.SourceGeneration, SourceChecksum: request.SourceChecksum,
 		SourceSchemaHash: request.SourceSchemaHash, SourceRowCount: request.SourceRowCount,
 		PartitionGeneration: request.PartitionGeneration, RouterGeneration: request.RouterGeneration,
+		LiveRevision: request.LiveRevision, LiveCoverage: request.LiveCoverage,
 	}
 	if strictSnapshot != nil {
 		capability := request.StrictCapability
@@ -732,20 +857,80 @@ func (s *VectorPartitionShardSearchServiceV1) Search(ctx context.Context, reques
 			SourceGeneration: request.SourceGeneration, SourceChecksum: request.SourceChecksum,
 			SourceSchemaHash: request.SourceSchemaHash, SourceRowCount: request.SourceRowCount,
 			PartitionGeneration: request.PartitionGeneration, RouterGeneration: request.RouterGeneration,
+			LiveRevision: request.LiveRevision, LiveCoverage: request.LiveCoverage,
 		}
 	}
+	liveStatus := collections.VectorIndexPartitionLiveStatusV1{}
+	if livePin != nil {
+		liveStatus = livePin.StatusV1()
+	}
 	response = VectorPartitionShardSearchResponseV1{
-		Version:       VectorPartitionShardSearchVersionV1,
-		RequestID:     request.RequestID,
-		Proof:         responseProof,
-		Partials:      partials,
-		Partitions:    uint64(len(partials)),
-		Candidates:    totalCandidates,
-		Edges:         totalEdges,
-		ResponseBytes: responseBytes,
-		Timing:        response.Timing,
+		Version:             VectorPartitionShardSearchVersionV1,
+		RequestID:           request.RequestID,
+		Proof:               responseProof,
+		Partials:            partials,
+		Partitions:          uint64(len(partials)),
+		ReadProofs:          response.ReadProofs,
+		GenerationPins:      response.GenerationPins,
+		PartitionOpens:      response.PartitionOpens,
+		Candidates:          totalCandidates,
+		BaseCandidates:      response.BaseCandidates,
+		DeltaCandidates:     response.DeltaCandidates,
+		BaseResults:         response.BaseResults,
+		DeltaResults:        response.DeltaResults,
+		LiveDomainsSearched: response.LiveDomainsSearched,
+		LiveMutatedIDs:      uint64(liveStatus.MutatedIDs),
+		LiveIDs:             uint64(liveStatus.LiveIDs),
+		Cutovers:            liveStatus.Cutovers,
+		Edges:               totalEdges,
+		ResponseBytes:       responseBytes,
+		Timing:              response.Timing,
 	}
 	return response, nil
+}
+
+func mergeVectorPartitionShardLiveResultsV1(base []VectorPartitionShardSearchNeighborV1, live []collections.VectorPartitionSearchResultV1, topK int) ([]VectorPartitionShardSearchNeighborV1, uint64, uint64) {
+	type candidate struct {
+		score float32
+		live  bool
+	}
+	unique := make(map[string]candidate, len(base)+len(live))
+	for _, neighbor := range base {
+		unique[neighbor.ID] = candidate{score: neighbor.Score}
+	}
+	for _, neighbor := range live {
+		if previous, ok := unique[neighbor.ID]; !ok || neighbor.Score > previous.score {
+			unique[neighbor.ID] = candidate{score: neighbor.Score, live: true}
+		}
+	}
+	out := make([]VectorPartitionShardSearchNeighborV1, 0, len(unique))
+	for id, value := range unique {
+		out = append(out, VectorPartitionShardSearchNeighborV1{ID: id, Score: value.score})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].Score > out[j].Score || out[i].Score == out[j].Score && out[i].ID < out[j].ID
+	})
+	if len(out) > topK {
+		out = out[:topK]
+	}
+	var baseResults, deltaResults uint64
+	for _, result := range out {
+		if unique[result.ID].live {
+			deltaResults++
+		} else {
+			baseResults++
+		}
+	}
+	return out, baseResults, deltaResults
+}
+
+func domainFirstPartialForIndexV1(domains map[uint32]int, index int) (uint32, bool) {
+	for domain, first := range domains {
+		if first == index {
+			return domain, true
+		}
+	}
+	return 0, false
 }
 
 type vectorPartitionSearchAsyncResultV1 struct {
@@ -852,6 +1037,17 @@ func (s *VectorPartitionShardSearchServiceV1) validateRequest(r VectorPartitionS
 	for i, partitionID := range r.PartitionIDs {
 		if i > 0 && partitionID <= r.PartitionIDs[i-1] {
 			return fmt.Errorf("%w: partition ids must be strictly increasing", ErrVectorPartitionShardSearchInvalidRequest)
+		}
+	}
+	if r.LiveCoverage == 0 {
+		if r.LiveRevision != 0 || len(r.LiveDomainIDs) != 0 {
+			return fmt.Errorf("%w: incomplete live identity", ErrVectorPartitionShardSearchInvalidRequest)
+		}
+	} else {
+		for i, domain := range r.LiveDomainIDs {
+			if i > 0 && domain <= r.LiveDomainIDs[i-1] {
+				return fmt.Errorf("%w: live domain ids must be strictly increasing", ErrVectorPartitionShardSearchInvalidRequest)
+			}
 		}
 	}
 	requestBytes, requestBytesErr := vectorPartitionCoordinatorShardRequestBytesV1(r)

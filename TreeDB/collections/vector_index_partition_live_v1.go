@@ -1,0 +1,882 @@
+package collections
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"math"
+	"sort"
+
+	backenddb "github.com/snissn/gomap/TreeDB/db"
+)
+
+const vectorIndexPartitionLiveMaxMutatedIDsV1 = 128 << 10
+
+var (
+	ErrVectorIndexPartitionLiveUnavailableV1 = errors.New("collections: vector partition live state unavailable")
+	ErrVectorIndexPartitionLiveMismatchV1    = errors.New("collections: vector partition live state mismatch")
+	ErrVectorIndexPartitionLiveCapacityV1    = errors.New("collections: vector partition live mutation capacity exceeded")
+)
+
+type vectorPartitionLiveRepresentativeV1 struct {
+	domain uint32
+	vector []float32
+}
+
+type vectorPartitionLiveOwnerV1 struct {
+	domain  uint32
+	deleted bool
+}
+
+// vectorIndexPartitionLiveStateV1 is deliberately owned by the registered
+// VectorIndex. The immutable partition generation remains the base; this is
+// only its bounded, durable live overlay.
+type vectorIndexPartitionLiveStateV1 struct {
+	indexDefinitionDigest string
+	source                VectorPartitionSourceIdentityV1
+	generation            uint64
+	revision              uint64
+	coverage              uint64
+	packDomains           []uint32
+	representatives       []vectorPartitionLiveRepresentativeV1
+	domains               map[uint32]*VectorIndex
+	owners                map[string]vectorPartitionLiveOwnerV1
+	cutovers              uint64
+	nodeCapacity          int
+	bindingDurable        bool
+	invalid               bool
+}
+
+type vectorIndexPartitionLivePersistV1 struct {
+	Version               int                                       `json:"version"`
+	IndexDefinitionDigest string                                    `json:"index_definition_digest"`
+	Source                VectorPartitionSourceIdentityV1           `json:"source"`
+	Generation            uint64                                    `json:"generation"`
+	Revision              uint64                                    `json:"revision"`
+	Coverage              uint64                                    `json:"coverage"`
+	Cutovers              uint64                                    `json:"cutovers"`
+	PackDomains           []uint32                                  `json:"pack_domains"`
+	Representatives       []vectorIndexPartitionLivePersistRepV1    `json:"representatives"`
+	Owners                []vectorIndexPartitionLivePersistOwnerV1  `json:"owners"`
+	Domains               []vectorIndexPartitionLivePersistDomainV1 `json:"domains"`
+}
+
+type vectorIndexPartitionLivePersistRepV1 struct {
+	Domain uint32    `json:"domain"`
+	Vector []float32 `json:"vector"`
+}
+type vectorIndexPartitionLivePersistOwnerV1 struct {
+	ID      string `json:"id"`
+	Domain  uint32 `json:"domain"`
+	Deleted bool   `json:"deleted"`
+}
+type vectorIndexPartitionLivePersistDomainV1 struct {
+	Domain   uint32                     `json:"domain"`
+	Snapshot vectorIndexPersistSnapshot `json:"snapshot"`
+}
+
+type VectorIndexPartitionLiveStatusV1 struct {
+	Generation uint64
+	Revision   uint64
+	Coverage   uint64
+	MutatedIDs int
+	LiveIDs    int
+	Cutovers   uint64
+}
+
+type VectorIndexPartitionLiveSearchPinV1 struct {
+	status            VectorIndexPartitionLiveStatusV1
+	packDomains       []uint32
+	excludedStableIDs map[string]struct{}
+	domains           map[uint32]vectorIndexPartitionLiveDomainPinV1
+}
+
+type vectorIndexPartitionLiveDomainPinV1 struct {
+	index *VectorIndex
+	view  *vectorIndexSearchView
+}
+
+func vectorPartitionLiveSourceV1(m VectorPartitionManifestV1) VectorPartitionSourceIdentityV1 {
+	return VectorPartitionSourceIdentityV1{Generation: m.SourceGeneration, Checksum: m.SourceChecksum, SchemaHash: m.SourceSchemaHash, RowCount: m.SourceRowCount}
+}
+
+func vectorPartitionLiveRepresentativeLessV1(a, b vectorPartitionLiveRepresentativeV1) bool {
+	if a.domain != b.domain {
+		return a.domain < b.domain
+	}
+	for i := 0; i < len(a.vector) && i < len(b.vector); i++ {
+		left, right := math.Float32bits(a.vector[i]), math.Float32bits(b.vector[i])
+		if left != right {
+			return left < right
+		}
+	}
+	return len(a.vector) < len(b.vector)
+}
+
+func (idx *VectorIndex) bindVectorPartitionLiveV1(manifest VectorPartitionManifestV1, representatives []vectorPartitionLiveRepresentativeV1) error {
+	if idx == nil {
+		return ErrVectorIndexPartitionLiveUnavailableV1
+	}
+	if manifest.IndexName != idx.name || manifest.Generation == 0 || manifest.DomainCount == 0 || len(manifest.DomainPacks) != int(manifest.PartitionCount) || len(representatives) == 0 {
+		return fmt.Errorf("%w: incomplete binding", ErrVectorIndexPartitionLiveMismatchV1)
+	}
+	packDomains := make([]uint32, manifest.PartitionCount)
+	seenPacks := make([]bool, manifest.PartitionCount)
+	seenDomains := make([]bool, manifest.DomainCount)
+	for _, mapping := range manifest.DomainPacks {
+		if mapping.PackID >= manifest.PartitionCount || mapping.DomainID >= manifest.DomainCount || seenPacks[mapping.PackID] {
+			return fmt.Errorf("%w: invalid domain pack mapping", ErrVectorIndexPartitionLiveMismatchV1)
+		}
+		seenPacks[mapping.PackID] = true
+		seenDomains[mapping.DomainID] = true
+		packDomains[mapping.PackID] = mapping.DomainID
+	}
+	for _, seen := range seenPacks {
+		if !seen {
+			return fmt.Errorf("%w: incomplete pack mapping", ErrVectorIndexPartitionLiveMismatchV1)
+		}
+	}
+	clonedReps := make([]vectorPartitionLiveRepresentativeV1, len(representatives))
+	representedDomains := make([]bool, manifest.DomainCount)
+	for i, rep := range representatives {
+		if rep.domain >= manifest.DomainCount || len(rep.vector) != idx.dimensions || !seenDomains[rep.domain] {
+			return fmt.Errorf("%w: invalid representative", ErrVectorIndexPartitionLiveMismatchV1)
+		}
+		if err := validateFloat32Vector(rep.vector); err != nil {
+			return err
+		}
+		clonedReps[i] = vectorPartitionLiveRepresentativeV1{domain: rep.domain, vector: append([]float32(nil), rep.vector...)}
+		representedDomains[rep.domain] = true
+	}
+	for _, represented := range representedDomains {
+		if !represented {
+			return fmt.Errorf("%w: missing domain representative", ErrVectorIndexPartitionLiveMismatchV1)
+		}
+	}
+	sort.Slice(clonedReps, func(i, j int) bool { return vectorPartitionLiveRepresentativeLessV1(clonedReps[i], clonedReps[j]) })
+
+	idx.mu.Lock()
+	defer idx.mu.Unlock()
+	source := vectorPartitionLiveSourceV1(manifest)
+	if live := idx.partitionLive; live != nil {
+		if live.indexDefinitionDigest == manifest.IndexDefinitionDigest && live.source == source && live.generation == manifest.Generation {
+			if len(live.packDomains) != len(packDomains) {
+				return ErrVectorIndexPartitionLiveMismatchV1
+			}
+			for i := range packDomains {
+				if live.packDomains[i] != packDomains[i] {
+					return ErrVectorIndexPartitionLiveMismatchV1
+				}
+			}
+			if len(live.representatives) != len(clonedReps) {
+				return ErrVectorIndexPartitionLiveMismatchV1
+			}
+			for i := range clonedReps {
+				if live.representatives[i].domain != clonedReps[i].domain || len(live.representatives[i].vector) != len(clonedReps[i].vector) {
+					return ErrVectorIndexPartitionLiveMismatchV1
+				}
+				for dimension := range clonedReps[i].vector {
+					if math.Float32bits(live.representatives[i].vector[dimension]) != math.Float32bits(clonedReps[i].vector[dimension]) {
+						return ErrVectorIndexPartitionLiveMismatchV1
+					}
+				}
+			}
+			return nil
+		}
+		// A newly published immutable generation retires the old overlay.  It
+		// may only cut over when it is newer and its base source is the exact
+		// current collection source. Existing pins own immutable delta views,
+		// so replacing the registered pointer does not invalidate them.
+		if manifest.Generation <= live.generation || !idx.sourceDocumentRootsValid || idx.sourceDocumentGeneration != manifest.SourceGeneration {
+			return ErrVectorIndexPartitionLiveMismatchV1
+		}
+	}
+	if idx.collection != nil && (!idx.sourceDocumentRootsValid || idx.sourceDocumentGeneration != manifest.SourceGeneration) {
+		return fmt.Errorf("%w: immutable source=%d current=%d", ErrVectorIndexPartitionLiveMismatchV1, manifest.SourceGeneration, idx.sourceDocumentGeneration)
+	}
+	idx.partitionLive = &vectorIndexPartitionLiveStateV1{
+		indexDefinitionDigest: manifest.IndexDefinitionDigest, source: source, generation: manifest.Generation,
+		coverage: manifest.SourceGeneration, packDomains: packDomains, representatives: clonedReps,
+		domains: make(map[uint32]*VectorIndex), owners: make(map[string]vectorPartitionLiveOwnerV1),
+		nodeCapacity: vectorIndexPartitionLiveMaxMutatedIDsV1, bindingDurable: idx.collection == nil,
+	}
+	idx.mutationSeq++
+	idx.markVectorMetaDirtyLocked()
+	return nil
+}
+
+func (idx *VectorIndex) invalidateVectorPartitionLiveLocked() {
+	if idx.partitionLive != nil {
+		idx.partitionLive.invalid = true
+		idx.mutationSeq++
+		idx.markVectorMetaDirtyLocked()
+	}
+}
+
+func (idx *VectorIndex) newPartitionLiveDomainIndexV1() (*VectorIndex, error) {
+	delta, err := newVectorIndex(nil, VectorIndexOptions{Name: idx.name, Field: idx.field, Metric: idx.metric, Encoding: idx.encoding, Dimensions: idx.dimensions, M: idx.m, EfConstruction: idx.efConstruction, EfSearch: idx.efSearch, RebuildDeletedRatio: idx.rebuildDeletedRatio})
+	if err != nil {
+		return nil, err
+	}
+	delta.sourceDocumentRootsValid = true
+	delta.sourceDocumentGeneration = idx.sourceDocumentGeneration
+	delta.acknowledgeSearchViewStateLocked()
+	delta.trackSearchViewDirty = true
+	delta.publishSearchViewLocked(true)
+	return delta, nil
+}
+
+func (idx *VectorIndex) partitionLiveRouteLocked(vector []float32) (uint32, error) {
+	if len(vector) != idx.dimensions || idx.partitionLive == nil {
+		return 0, ErrVectorIndexPartitionLiveUnavailableV1
+	}
+	bestDomain, bestScore, found := uint32(0), float32(-math.MaxFloat32), false
+	for _, rep := range idx.partitionLive.representatives {
+		score, err := CanonicalVectorPartitionCosineScoreV1(vector, rep.vector)
+		if err != nil {
+			return 0, err
+		}
+		if !found || score > bestScore || score == bestScore && rep.domain < bestDomain {
+			bestDomain, bestScore, found = rep.domain, score, true
+		}
+	}
+	if !found {
+		return 0, ErrVectorIndexPartitionLiveUnavailableV1
+	}
+	return bestDomain, nil
+}
+
+func (idx *VectorIndex) reconcileVectorPartitionMutationLocked(documentID []byte, vector []float32) error {
+	live := idx.partitionLive
+	if live == nil || live.invalid {
+		return nil
+	}
+	key := string(documentID)
+	old, existed := live.owners[key]
+	if !existed && len(live.owners) >= vectorIndexPartitionLiveMaxMutatedIDsV1 {
+		return ErrVectorIndexPartitionLiveCapacityV1
+	}
+	if vector == nil {
+		if existed && !old.deleted {
+			if delta := live.domains[old.domain]; delta != nil {
+				delta.mu.Lock()
+				delta.tombstoneDocumentIDLocked(documentID)
+				delta.publishSearchViewLocked(false)
+				delta.mu.Unlock()
+			}
+		}
+		live.owners[key] = vectorPartitionLiveOwnerV1{deleted: true}
+	} else {
+		domain, err := idx.partitionLiveRouteLocked(vector)
+		if err != nil {
+			return err
+		}
+		delta := live.domains[domain]
+		newDomain := delta == nil
+		if delta == nil {
+			delta, err = idx.newPartitionLiveDomainIndexV1()
+			if err != nil {
+				return err
+			}
+		}
+		delta.mu.Lock()
+		err = delta.insertVectorLocked(documentID, vector)
+		if err == nil {
+			delta.acknowledgeSearchViewStateLocked()
+			delta.publishSearchViewLocked(false)
+		}
+		delta.mu.Unlock()
+		if err != nil {
+			return err
+		}
+		if newDomain {
+			live.domains[domain] = delta
+		}
+		if existed && !old.deleted && old.domain != domain {
+			if oldDelta := live.domains[old.domain]; oldDelta != nil {
+				oldDelta.mu.Lock()
+				oldDelta.tombstoneDocumentIDLocked(documentID)
+				oldDelta.publishSearchViewLocked(false)
+				oldDelta.mu.Unlock()
+			}
+		}
+		live.owners[key] = vectorPartitionLiveOwnerV1{domain: domain}
+	}
+	live.revision++
+	idx.mutationSeq++
+	if idx.persistedEpoch != 0 {
+		idx.persistedSnapshotDirty = true
+	}
+	idx.markVectorMetaDirtyLocked()
+	return nil
+}
+
+func (idx *VectorIndex) partitionLiveNodeCountLocked() int {
+	if idx.partitionLive == nil {
+		return 0
+	}
+	total := 0
+	for _, domain := range idx.partitionLive.domains {
+		if domain == nil || len(domain.nodes) > vectorIndexPartitionLiveMaxMutatedIDsV1-total {
+			return vectorIndexPartitionLiveMaxMutatedIDsV1
+		}
+		total += len(domain.nodes)
+	}
+	return total
+}
+
+func (idx *VectorIndex) partitionLiveNodeCapacityLocked() int {
+	if idx.partitionLive == nil || idx.partitionLive.nodeCapacity <= 0 {
+		return vectorIndexPartitionLiveMaxMutatedIDsV1
+	}
+	return idx.partitionLive.nodeCapacity
+}
+
+func (idx *VectorIndex) partitionLiveActiveOwnerCountLocked() int {
+	if idx.partitionLive == nil {
+		return 0
+	}
+	active := 0
+	for _, owner := range idx.partitionLive.owners {
+		if !owner.deleted {
+			active++
+		}
+	}
+	return active
+}
+
+// cutoverVectorPartitionLiveLocked compacts each logical domain from current
+// live owners. The parent lock makes the map swap atomic; existing pins keep
+// their old indexes and immutable search views until Release.
+func (idx *VectorIndex) cutoverVectorPartitionLiveLocked() error {
+	live := idx.partitionLive
+	if live == nil || live.invalid {
+		return ErrVectorIndexPartitionLiveUnavailableV1
+	}
+	if idx.partitionLiveNodeCountLocked() <= idx.partitionLiveActiveOwnerCountLocked() {
+		return ErrVectorIndexPartitionLiveCapacityV1
+	}
+	ownerIDs := make([]string, 0, len(live.owners))
+	for id, owner := range live.owners {
+		if !owner.deleted {
+			ownerIDs = append(ownerIDs, id)
+		}
+	}
+	sort.Strings(ownerIDs)
+	fresh := make(map[uint32]*VectorIndex, len(live.domains))
+	for _, id := range ownerIDs {
+		owner := live.owners[id]
+		old := live.domains[owner.domain]
+		if old == nil {
+			return ErrVectorIndexPartitionLiveUnavailableV1
+		}
+		old.mu.RLock()
+		nodeID, ok := old.currentNode[id]
+		if !ok || nodeID < 0 || nodeID >= len(old.nodes) || old.nodes[nodeID].deleted {
+			old.mu.RUnlock()
+			return ErrVectorIndexPartitionLiveUnavailableV1
+		}
+		vector := make([]float32, old.nodes[nodeID].vectorDimensions())
+		for dimension := range vector {
+			vector[dimension] = old.nodes[nodeID].vectorValueAt(dimension)
+		}
+		old.mu.RUnlock()
+
+		delta := fresh[owner.domain]
+		var err error
+		if delta == nil {
+			delta, err = idx.newPartitionLiveDomainIndexV1()
+			if err != nil {
+				return err
+			}
+			fresh[owner.domain] = delta
+		}
+		delta.mu.Lock()
+		err = delta.insertVectorLocked([]byte(id), vector)
+		if err == nil {
+			delta.acknowledgeSearchViewStateLocked()
+			delta.publishSearchViewLocked(false)
+		}
+		delta.mu.Unlock()
+		if err != nil {
+			return err
+		}
+	}
+	live.domains = fresh
+	live.cutovers++
+	idx.mutationSeq++
+	idx.markVectorMetaDirtyLocked()
+	return nil
+}
+
+func (idx *VectorIndex) ensureVectorPartitionLiveCapacityLocked(additionalNodes int) error {
+	if idx.partitionLive == nil || additionalNodes <= 0 {
+		return nil
+	}
+	capacity := idx.partitionLiveNodeCapacityLocked()
+	nodes := idx.partitionLiveNodeCountLocked()
+	if additionalNodes <= capacity && nodes <= capacity-additionalNodes {
+		return nil
+	}
+	active := idx.partitionLiveActiveOwnerCountLocked()
+	if additionalNodes > capacity || active > capacity-additionalNodes {
+		return ErrVectorIndexPartitionLiveCapacityV1
+	}
+	if err := idx.cutoverVectorPartitionLiveLocked(); err != nil {
+		return err
+	}
+	nodes = idx.partitionLiveNodeCountLocked()
+	if additionalNodes > capacity || nodes > capacity-additionalNodes {
+		return ErrVectorIndexPartitionLiveCapacityV1
+	}
+	return nil
+}
+
+func (idx *VectorIndex) preflightVectorPartitionMutationLocked(documentID []byte, vector []float32) error {
+	if idx.partitionLive == nil {
+		return nil
+	}
+	if _, exists := idx.partitionLive.owners[string(documentID)]; !exists && len(idx.partitionLive.owners) >= vectorIndexPartitionLiveMaxMutatedIDsV1 {
+		return ErrVectorIndexPartitionLiveCapacityV1
+	}
+	if vector != nil {
+		if err := idx.ensureVectorPartitionLiveCapacityLocked(1); err != nil {
+			return err
+		}
+		_, err := idx.partitionLiveRouteLocked(vector)
+		return err
+	}
+	return nil
+}
+
+func (idx *VectorIndex) preflightVectorPartitionMutationBatchLocked(documentIDs [][]byte, vectors [][]float32) error {
+	if idx.partitionLive == nil {
+		return nil
+	}
+	owners := len(idx.partitionLive.owners)
+	additionalNodes := 0
+	newOwners := make(map[string]struct{})
+	for i, documentID := range documentIDs {
+		key := string(documentID)
+		if _, exists := idx.partitionLive.owners[key]; !exists {
+			if _, duplicate := newOwners[key]; !duplicate {
+				newOwners[key] = struct{}{}
+				owners++
+			}
+		}
+		if owners > vectorIndexPartitionLiveMaxMutatedIDsV1 {
+			return ErrVectorIndexPartitionLiveCapacityV1
+		}
+		if vectors[i] == nil {
+			continue
+		}
+		additionalNodes++
+		if _, err := idx.partitionLiveRouteLocked(vectors[i]); err != nil {
+			return err
+		}
+	}
+	return idx.ensureVectorPartitionLiveCapacityLocked(additionalNodes)
+}
+
+func (idx *VectorIndex) acquireVectorPartitionLiveSearchPinV1(manifest VectorPartitionManifestV1) (*VectorIndexPartitionLiveSearchPinV1, error) {
+	if idx == nil {
+		return nil, ErrVectorIndexPartitionLiveUnavailableV1
+	}
+	idx.mu.RLock()
+	live := idx.partitionLive
+	if live == nil || live.indexDefinitionDigest != manifest.IndexDefinitionDigest || live.source != vectorPartitionLiveSourceV1(manifest) || live.generation != manifest.Generation {
+		idx.mu.RUnlock()
+		return nil, ErrVectorIndexPartitionLiveMismatchV1
+	}
+	if live.invalid || !live.bindingDurable {
+		idx.mu.RUnlock()
+		return nil, ErrVectorIndexPartitionLiveUnavailableV1
+	}
+	// Once collection reconciliation advances the current source state, only a
+	// matching durable overlay coverage is authority for the old immutable base.
+	if idx.collection != nil && (!idx.sourceDocumentRootsValid || live.coverage != idx.sourceDocumentGeneration) {
+		idx.mu.RUnlock()
+		return nil, fmt.Errorf("%w: live coverage=%d current=%d", ErrVectorIndexPartitionLiveMismatchV1, live.coverage, idx.sourceDocumentGeneration)
+	}
+	pin := &VectorIndexPartitionLiveSearchPinV1{
+		status:            VectorIndexPartitionLiveStatusV1{Generation: live.generation, Revision: live.revision, Coverage: live.coverage, MutatedIDs: len(live.owners), Cutovers: live.cutovers},
+		packDomains:       append([]uint32(nil), live.packDomains...),
+		excludedStableIDs: make(map[string]struct{}, len(live.owners)),
+		domains:           make(map[uint32]vectorIndexPartitionLiveDomainPinV1, len(live.domains)),
+	}
+	for id, owner := range live.owners {
+		pin.excludedStableIDs[id] = struct{}{}
+		if !owner.deleted {
+			pin.status.LiveIDs++
+		}
+	}
+	for domain, delta := range live.domains {
+		view := delta.acquireSearchView()
+		if view == nil {
+			idx.mu.RUnlock()
+			pin.Release()
+			return nil, ErrVectorIndexPartitionLiveUnavailableV1
+		}
+		pin.domains[domain] = vectorIndexPartitionLiveDomainPinV1{index: delta, view: view}
+	}
+	idx.mu.RUnlock()
+	return pin, nil
+}
+
+func (idx *VectorIndex) partitionLivePersistLocked() *vectorIndexPartitionLivePersistV1 {
+	live := idx.partitionLive
+	if live == nil || live.invalid {
+		return nil
+	}
+	persisted := &vectorIndexPartitionLivePersistV1{
+		Version: 1, IndexDefinitionDigest: live.indexDefinitionDigest, Source: live.source,
+		Generation: live.generation, Revision: live.revision, Coverage: live.coverage, Cutovers: live.cutovers,
+		PackDomains:     append([]uint32(nil), live.packDomains...),
+		Representatives: make([]vectorIndexPartitionLivePersistRepV1, len(live.representatives)),
+		Owners:          make([]vectorIndexPartitionLivePersistOwnerV1, 0, len(live.owners)),
+		Domains:         make([]vectorIndexPartitionLivePersistDomainV1, 0, len(live.domains)),
+	}
+	for i, rep := range live.representatives {
+		persisted.Representatives[i] = vectorIndexPartitionLivePersistRepV1{Domain: rep.domain, Vector: append([]float32(nil), rep.vector...)}
+	}
+	for id, owner := range live.owners {
+		persisted.Owners = append(persisted.Owners, vectorIndexPartitionLivePersistOwnerV1{ID: id, Domain: owner.domain, Deleted: owner.deleted})
+	}
+	sort.Slice(persisted.Owners, func(i, j int) bool { return persisted.Owners[i].ID < persisted.Owners[j].ID })
+	domains := make([]uint32, 0, len(live.domains))
+	for domain := range live.domains {
+		domains = append(domains, domain)
+	}
+	sort.Slice(domains, func(i, j int) bool { return domains[i] < domains[j] })
+	for _, domain := range domains {
+		snapshot, _ := live.domains[domain].persistSnapshot()
+		persisted.Domains = append(persisted.Domains, vectorIndexPartitionLivePersistDomainV1{Domain: domain, Snapshot: snapshot})
+	}
+	return persisted
+}
+
+func (idx *VectorIndex) restorePartitionLiveV1(persisted *vectorIndexPartitionLivePersistV1, sourceCoverage uint64) (*vectorIndexPartitionLiveStateV1, string) {
+	if persisted == nil {
+		return nil, ""
+	}
+	if persisted.Version != 1 || persisted.IndexDefinitionDigest == "" || persisted.Generation == 0 || persisted.Source.Generation == 0 || persisted.Coverage != sourceCoverage || len(persisted.PackDomains) == 0 || len(persisted.Representatives) == 0 || len(persisted.Owners) > vectorIndexPartitionLiveMaxMutatedIDsV1 {
+		return nil, "invalid_partition_live_meta"
+	}
+	mappedDomains := make(map[uint32]struct{}, len(persisted.PackDomains))
+	for _, domain := range persisted.PackDomains {
+		mappedDomains[domain] = struct{}{}
+	}
+	live := &vectorIndexPartitionLiveStateV1{indexDefinitionDigest: persisted.IndexDefinitionDigest, source: persisted.Source, generation: persisted.Generation, revision: persisted.Revision, coverage: persisted.Coverage, cutovers: persisted.Cutovers, nodeCapacity: vectorIndexPartitionLiveMaxMutatedIDsV1, bindingDurable: true, packDomains: append([]uint32(nil), persisted.PackDomains...), representatives: make([]vectorPartitionLiveRepresentativeV1, len(persisted.Representatives)), domains: make(map[uint32]*VectorIndex), owners: make(map[string]vectorPartitionLiveOwnerV1, len(persisted.Owners))}
+	representedDomains := make(map[uint32]struct{}, len(persisted.Representatives))
+	for i, rep := range persisted.Representatives {
+		if len(rep.Vector) != idx.dimensions {
+			return nil, "invalid_partition_live_representative"
+		}
+		if _, mapped := mappedDomains[rep.Domain]; !mapped {
+			return nil, "invalid_partition_live_representative"
+		}
+		if i > 0 && vectorPartitionLiveRepresentativeLessV1(
+			vectorPartitionLiveRepresentativeV1{domain: rep.Domain, vector: rep.Vector},
+			vectorPartitionLiveRepresentativeV1{domain: persisted.Representatives[i-1].Domain, vector: persisted.Representatives[i-1].Vector},
+		) {
+			return nil, "invalid_partition_live_representative"
+		}
+		if err := validateFloat32Vector(rep.Vector); err != nil {
+			return nil, "invalid_partition_live_representative"
+		}
+		representedDomains[rep.Domain] = struct{}{}
+		live.representatives[i] = vectorPartitionLiveRepresentativeV1{domain: rep.Domain, vector: append([]float32(nil), rep.Vector...)}
+	}
+	if len(representedDomains) != len(mappedDomains) {
+		return nil, "invalid_partition_live_representative"
+	}
+	for _, domain := range persisted.Domains {
+		if _, mapped := mappedDomains[domain.Domain]; !mapped {
+			return nil, "invalid_partition_live_domain"
+		}
+		if _, duplicate := live.domains[domain.Domain]; duplicate {
+			return nil, "invalid_partition_live_domain"
+		}
+		if domain.Snapshot.Meta.PartitionLive != nil {
+			return nil, "invalid_partition_live_domain"
+		}
+		delta, err := idx.newPartitionLiveDomainIndexV1()
+		if err != nil {
+			return nil, "invalid_partition_live_domain"
+		}
+		if reason := delta.loadPersistSnapshot(domain.Snapshot); reason != "" {
+			return nil, "invalid_partition_live_" + reason
+		}
+		live.domains[domain.Domain] = delta
+	}
+	totalNodes := 0
+	for _, delta := range live.domains {
+		if delta == nil || len(delta.nodes) > vectorIndexPartitionLiveMaxMutatedIDsV1-totalNodes {
+			return nil, "invalid_partition_live_capacity"
+		}
+		totalNodes += len(delta.nodes)
+	}
+	previousID := ""
+	activeOwners := 0
+	for i, owner := range persisted.Owners {
+		if owner.ID == "" || i > 0 && owner.ID <= previousID {
+			return nil, "invalid_partition_live_owner"
+		}
+		previousID = owner.ID
+		if !owner.Deleted {
+			activeOwners++
+			delta := live.domains[owner.Domain]
+			if delta == nil {
+				return nil, "invalid_partition_live_owner_domain"
+			}
+			delta.mu.RLock()
+			node, ok := delta.currentNode[owner.ID]
+			valid := ok && node >= 0 && node < len(delta.nodes) && !delta.nodes[node].deleted
+			delta.mu.RUnlock()
+			if !valid {
+				return nil, "invalid_partition_live_owner_node"
+			}
+		}
+		live.owners[owner.ID] = vectorPartitionLiveOwnerV1{domain: owner.Domain, deleted: owner.Deleted}
+	}
+	activeRows := 0
+	for domain, delta := range live.domains {
+		delta.mu.RLock()
+		for id, node := range delta.currentNode {
+			owner, ok := live.owners[id]
+			if !ok || owner.deleted || owner.domain != domain || node < 0 || node >= len(delta.nodes) || delta.nodes[node].deleted {
+				delta.mu.RUnlock()
+				return nil, "invalid_partition_live_owner_node"
+			}
+			activeRows++
+		}
+		delta.mu.RUnlock()
+	}
+	if activeRows != activeOwners {
+		return nil, "invalid_partition_live_owner_node"
+	}
+	return live, ""
+}
+
+// EnsureVectorPartitionLiveBindingV1 binds the ready immutable generation to
+// the same registered VectorIndex that production collection reconciliation
+// updates. It does not alter partition lifecycle authority.
+func (c *Collection) EnsureVectorPartitionLiveBindingV1(ctx context.Context, manifest VectorPartitionManifestV1) error {
+	if c == nil {
+		return ErrVectorIndexPartitionLiveUnavailableV1
+	}
+	if _, err := c.ensureDeclaredNativeVectorIndexesLoaded(); err != nil {
+		return err
+	}
+	idx := c.registeredVectorIndex(manifest.IndexName)
+	if idx == nil {
+		return ErrVectorIndexPartitionLiveUnavailableV1
+	}
+	router, status, err := c.OpenPreparedVectorPartitionRouterForGenerationWithContextV1(ctx, manifest.IndexName, manifest.Generation)
+	if err != nil {
+		return err
+	}
+	defer router.Close()
+	if status.Generation != manifest.Generation {
+		return ErrVectorIndexPartitionLiveMismatchV1
+	}
+	representatives, err := router.partitionLiveRepresentativesV1()
+	if err != nil {
+		return err
+	}
+	idx.mu.RLock()
+	currentGeneration := idx.sourceDocumentGeneration
+	currentRootsValid := idx.sourceDocumentRootsValid
+	idx.mu.RUnlock()
+	if !currentRootsValid {
+		return ErrVectorIndexPartitionLiveMismatchV1
+	}
+	idx.mu.RLock()
+	live := idx.partitionLive
+	liveCurrent := live != nil && !live.invalid && live.bindingDurable &&
+		live.indexDefinitionDigest == manifest.IndexDefinitionDigest && live.source == vectorPartitionLiveSourceV1(manifest) &&
+		live.generation == manifest.Generation && live.coverage == currentGeneration
+	idx.mu.RUnlock()
+	if liveCurrent {
+		return nil
+	}
+	if currentGeneration != manifest.SourceGeneration {
+		return fmt.Errorf("%w: immutable source=%d current=%d live coverage is not exact", ErrVectorIndexPartitionLiveMismatchV1, manifest.SourceGeneration, currentGeneration)
+	}
+	if err := idx.bindVectorPartitionLiveV1(manifest, representatives); err != nil {
+		return err
+	}
+
+	idx.mu.RLock()
+	live = idx.partitionLive
+	needsBindingPublication := live != nil && !live.bindingDurable
+	idx.mu.RUnlock()
+	if needsBindingPublication {
+		status, err := idx.SaveNativeDeltaSnapshot()
+		if err != nil {
+			return err
+		}
+		if !status.Loaded {
+			return fmt.Errorf("%w: durable binding publication did not commit", ErrVectorIndexPartitionLiveUnavailableV1)
+		}
+		idx.mu.Lock()
+		live = idx.partitionLive
+		if live == nil || live.invalid || live.indexDefinitionDigest != manifest.IndexDefinitionDigest || live.source != vectorPartitionLiveSourceV1(manifest) || live.generation != manifest.Generation || live.coverage != idx.sourceDocumentGeneration {
+			idx.mu.Unlock()
+			return ErrVectorIndexPartitionLiveMismatchV1
+		}
+		live.bindingDurable = true
+		idx.mu.Unlock()
+	}
+	return nil
+}
+
+func (c *Collection) validateVectorPartitionLiveCoverageV1(manifest VectorPartitionManifestV1, currentGeneration uint64) error {
+	if c == nil || currentGeneration == 0 {
+		return ErrVectorIndexPartitionLiveUnavailableV1
+	}
+	idx := c.registeredVectorIndex(manifest.IndexName)
+	if idx == nil {
+		return ErrVectorIndexPartitionLiveUnavailableV1
+	}
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+	live := idx.partitionLive
+	if live == nil || live.invalid || !live.bindingDurable ||
+		live.indexDefinitionDigest != manifest.IndexDefinitionDigest || live.source != vectorPartitionLiveSourceV1(manifest) ||
+		live.generation != manifest.Generation || live.coverage != currentGeneration ||
+		!idx.sourceDocumentRootsValid || idx.sourceDocumentGeneration != currentGeneration {
+		return ErrVectorIndexPartitionLiveMismatchV1
+	}
+	return nil
+}
+
+func (c *Collection) validateVectorPartitionLiveAuthorityStateV1(index string, generation uint64, state backenddb.StateToken) error {
+	if c == nil {
+		return ErrVectorIndexPartitionLiveUnavailableV1
+	}
+	idx := c.registeredVectorIndex(index)
+	if idx == nil {
+		return ErrVectorIndexPartitionLiveUnavailableV1
+	}
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+	live := idx.partitionLive
+	if live == nil || live.invalid || !live.bindingDurable || live.generation != generation ||
+		!idx.sourceDocumentRootsValid || !idx.sourceDocumentStateValid || live.coverage != idx.sourceDocumentGeneration ||
+		idx.sourceDocumentState != state {
+		return ErrVectorIndexPartitionLiveMismatchV1
+	}
+	return nil
+}
+
+func (c *Collection) AcquireVectorPartitionLiveSearchPinV1(manifest VectorPartitionManifestV1) (*VectorIndexPartitionLiveSearchPinV1, error) {
+	if c == nil {
+		return nil, ErrVectorIndexPartitionLiveUnavailableV1
+	}
+	idx := c.registeredVectorIndex(manifest.IndexName)
+	if idx == nil {
+		return nil, ErrVectorIndexPartitionLiveUnavailableV1
+	}
+	return idx.acquireVectorPartitionLiveSearchPinV1(manifest)
+}
+
+func (p *VectorIndexPartitionLiveSearchPinV1) Release() {
+	if p == nil {
+		return
+	}
+	for domain, pin := range p.domains {
+		if pin.view != nil {
+			pin.index.releaseSearchView(pin.view)
+		}
+		delete(p.domains, domain)
+	}
+	p.excludedStableIDs = nil
+}
+func (p *VectorIndexPartitionLiveSearchPinV1) StatusV1() VectorIndexPartitionLiveStatusV1 {
+	if p == nil {
+		return VectorIndexPartitionLiveStatusV1{}
+	}
+	return p.status
+}
+func (p *VectorIndexPartitionLiveSearchPinV1) ExcludesBaseIDV1(id string) bool {
+	if p == nil {
+		return false
+	}
+	_, ok := p.excludedStableIDs[id]
+	return ok
+}
+func (p *VectorIndexPartitionLiveSearchPinV1) ExcludedStableIDsV1() map[string]struct{} {
+	// The pin owns this immutable set. Callers may read it until Release but
+	// must not mutate or retain it beyond the pin lifetime.
+	return p.excludedStableIDs
+}
+func (p *VectorIndexPartitionLiveSearchPinV1) DomainForPackV1(pack uint32) (uint32, bool) {
+	if p == nil || int(pack) >= len(p.packDomains) {
+		return 0, false
+	}
+	return p.packDomains[pack], true
+}
+func (p *VectorIndexPartitionLiveSearchPinV1) DomainDeltaCountV1(domain uint32) int {
+	if p == nil {
+		return 0
+	}
+	pin, ok := p.domains[domain]
+	if !ok || pin.view == nil {
+		return 0
+	}
+	return pin.view.liveDocs
+}
+
+func (p *VectorIndexPartitionLiveSearchPinV1) DomainSearchPreflightV1(domain uint32, opts VectorPartitionSearchOptionsV1) (uint64, uint64, error) {
+	if p == nil || opts.TopK <= 0 || opts.EfSearch <= 0 || opts.MaxStableIDBytes <= 0 {
+		return 0, 0, ErrVectorIndexPartitionLiveUnavailableV1
+	}
+	pin, ok := p.domains[domain]
+	if !ok || pin.view == nil || pin.view.liveDocs == 0 {
+		return 0, 0, nil
+	}
+	nodes := uint64(len(pin.view.nodes) + len(pin.view.deltaNodes))
+	if nodes > vectorIndexPartitionLiveMaxMutatedIDsV1 {
+		return 0, 0, ErrVectorIndexPartitionLiveCapacityV1
+	}
+	// The live-delta ANN scratch consists of visited ordinals and bounded
+	// candidate heaps. Account a conservative 64 bytes for every allocated
+	// node plus the largest possible returned stable IDs before doing work.
+	if nodes > ^uint64(0)/64 {
+		return 0, 0, ErrVectorIndexPartitionLiveCapacityV1
+	}
+	scratch := nodes * 64
+	resultBytes := uint64(opts.TopK) * uint64(opts.MaxStableIDBytes)
+	if resultBytes/uint64(opts.TopK) != uint64(opts.MaxStableIDBytes) || scratch > ^uint64(0)-resultBytes {
+		return 0, 0, ErrVectorIndexPartitionLiveCapacityV1
+	}
+	return nodes, scratch + resultBytes, nil
+}
+
+func (p *VectorIndexPartitionLiveSearchPinV1) SearchDomainV1(ctx context.Context, domain uint32, query []float32, opts VectorPartitionSearchOptionsV1) ([]VectorPartitionSearchResultV1, VectorPartitionSearchMetricsV1, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, VectorPartitionSearchMetricsV1{}, err
+	}
+	pinned, ok := p.domains[domain]
+	if !ok || pinned.view == nil || pinned.view.liveDocs == 0 {
+		return nil, VectorPartitionSearchMetricsV1{Route: VectorPartitionSearchRouteHNSWSearchPackV1}, nil
+	}
+	var buffer VectorIndexSearchBuffer
+	buffer.nativeSearchWorkEnabled = true
+	buffer.nativeSearchScratch.context = ctx
+	defer func() { buffer.nativeSearchScratch.context = nil }()
+	results, err := pinned.view.searchGraphOnlyWithBuffer(query, opts.TopK, opts.EfSearch, &buffer)
+	if err != nil {
+		return nil, VectorPartitionSearchMetricsV1{}, err
+	}
+	out := make([]VectorPartitionSearchResultV1, len(results))
+	for i, result := range results {
+		out[i] = VectorPartitionSearchResultV1{ID: string(result.ID), Score: float32(result.Score)}
+	}
+	candidates := uint64(buffer.nativeSearchWork.baseVisited + buffer.nativeSearchWork.deltaVisited)
+	return out, VectorPartitionSearchMetricsV1{Candidates: candidates, Route: VectorPartitionSearchRouteHNSWSearchPackV1}, nil
+}

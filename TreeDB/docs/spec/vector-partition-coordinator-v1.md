@@ -15,8 +15,9 @@ coordinator for one vector query. It:
 1. opens and validates one persisted M4 router generation;
 2. selects logical routing domains;
 3. expands each domain to all of its required physical search packs;
-4. resolves those packs through one immutable M1 placement snapshot and
-   groups/chunks them into M5 shard-search requests;
+4. resolves those packs through one immutable M1 placement snapshot, captures
+   the optional standalone live revision/coverage, and groups/chunks them into
+   M5 shard-search requests;
 5. dispatches those requests through a fixed worker pool;
 6. validates every M5 response and read proof;
 7. deduplicates stable IDs and returns one deterministic top-k.
@@ -120,9 +121,9 @@ Search(context.Context, VectorPartitionCoordinatorRequestV1)
   entry limit;
 - an optional Unix-nanosecond deadline.
 
-The request does not carry caller-selected source or derived-generation
-numbers. After open, the coordinator requires the M4 runtime status to match
-the constructed M1 placement exactly:
+The request does not carry caller-selected source, derived-generation, or live
+revision numbers. After open, the coordinator requires the M4 runtime status
+to match the constructed M1 placement exactly:
 
 - ready state, collection, index, and index-definition digest;
 - source generation, checksum, schema hash, and row count;
@@ -134,8 +135,11 @@ the constructed M1 placement exactly:
 
 Exact router mode additionally requires a candidate budget at least as large
 as the persisted representative count. A mismatch fails before M5 dispatch;
-the coordinator never mixes router, partition, source, or placement
-generations.
+the coordinator never mixes router, partition, source, placement, or live
+revision/coverage identities. When the standalone router lease exposes a live
+pin, the coordinator copies that one identity to every shard request and
+assigns each selected logical-domain delta to exactly one request even when its
+physical packs span groups.
 
 ## Request state machine
 
@@ -146,7 +150,7 @@ The request state sequence is fail closed:
 | preflight | validate request identity, search shape, finite query, and caller budgets |
 | router pin | acquire a generation-pinned M4 session and exact per-request runtime-status validation |
 | route | search that pinned router and require exactly the requested number of unique, finite logical-domain scores |
-| plan | expand every selected domain to all required packs, resolve those packs through M1, group and chunk deterministically, and reserve all budgets |
+| plan | expand every selected domain to all required packs, resolve those packs through M1, assign any live delta once, group and chunk deterministically, and reserve base plus delta budgets |
 | fanout | run every M5 task through the fixed worker pool, with one bounded not-leader retry path |
 | verify | validate every M5 envelope, partition order, proof, score, counter, and byte total |
 | dedupe | keep the best FP32 score for each stable ID and count duplicates/disagreements |
@@ -239,6 +243,10 @@ Planning reserves resources before dispatch:
   and then combined across partitions in each M5 chunk. Consequently,
   `selected_partitions * ef_search * 64` is only the traversal component, not a
   sufficient general budget formula for exact scans or large partitions;
+- a standalone live pin adds each selected logical domain's bounded delta
+  candidate ceiling and search scratch exactly once before surplus is divided;
+  it does not add another merge-entry reservation because its results are
+  merged into one existing partial for that domain;
 - response reservation uses M5's downstream stable-ID ceiling for every
   `partition * top_k` result before sizing response slices. This remains true
   when the coordinator's own accepted stable-ID cap is lower because M5 V1
@@ -306,10 +314,13 @@ without turning a service failure into partial success.
 Each success separately reports selected logical domains, physical packs, and
 groups (with selected partitions retained as a pack alias); requests, RPCs,
 retries/redirects; query/request/response/candidate bytes; candidates, edges,
-merge entries, duplicates, and score disagreements. Timing separates router
-open/search, placement, queue, dispatcher RPC, transport residual,
-read-index/apply, generation open, shard search, response materialization,
-dedupe, merge, and total request time.
+merge entries, duplicates, and score disagreements. Standalone live responses
+also report revision/coverage, base/delta work and returned-result
+contribution, domains searched, mutation/owner counts, cutovers, and
+request-path rebuilds. Timing separates router open/search, placement, queue,
+dispatcher RPC, transport residual, read-index/apply, generation open, shard
+search (including delta traversal), response materialization, dedupe, merge,
+and total request time.
 
 `Stats` accumulates request/success/error/cancel/timeout counts, successful
 fanout and dedupe counters, and total time under a mutex. It is operational

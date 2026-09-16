@@ -170,6 +170,22 @@ type VectorPartitionRouterV1 struct {
 	selected       atomic.Uint64
 }
 
+func (r *VectorPartitionRouterV1) partitionLiveRepresentativesV1() ([]vectorPartitionLiveRepresentativeV1, error) {
+	if r == nil {
+		return nil, ErrVectorIndexPartitionLiveUnavailableV1
+	}
+	r.closeMu.RLock()
+	defer r.closeMu.RUnlock()
+	if r.closed.Load() || len(r.model.Representatives) == 0 {
+		return nil, ErrVectorIndexPartitionLiveUnavailableV1
+	}
+	out := make([]vectorPartitionLiveRepresentativeV1, len(r.model.Representatives))
+	for i, representative := range r.model.Representatives {
+		out[i] = vectorPartitionLiveRepresentativeV1{domain: representative.PartitionID, vector: append([]float32(nil), representative.Values...)}
+	}
+	return out, nil
+}
+
 // BuildAndPublishVectorPartitionRouterV1 turns an already-persisted M1
 // building generation into a ready generation. Publication is the only
 // visibility point; cancellation or any validation failure leaves it building.

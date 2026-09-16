@@ -16,6 +16,8 @@ import (
 	"sort"
 	"sync"
 	"unsafe"
+
+	"github.com/snissn/gomap/TreeDB/internal/typedcolumn"
 )
 
 // Keep the domain-separated membership digest as the final header field.
@@ -670,6 +672,10 @@ type VectorPartitionSearchOptionsV1 struct {
 	TopK             int
 	EfSearch         int
 	MaxStableIDBytes int
+	// ExcludedStableIDs shadows immutable base rows that have a newer live
+	// owner or tombstone. The exclusion is applied before bounded top-K
+	// admission; callers must pass an immutable map for the search lifetime.
+	ExcludedStableIDs map[string]struct{}
 }
 
 const (
@@ -1043,7 +1049,15 @@ func vectorPartitionSearchScratchBytesV1(opts VectorPartitionSearchOptionsV1, pr
 	if err != nil {
 		return 0, ErrVectorPartitionSearchUnavailable
 	}
-	return vectorPartitionHNSWSearchScratchBytesV1(rowCount, header.Dimensions, header.VectorStride, degree, topK, topK, efSearch)
+	base, err := vectorPartitionHNSWSearchScratchBytesV1(rowCount, header.Dimensions, header.VectorStride, degree, topK, topK, efSearch)
+	if err != nil || len(opts.ExcludedStableIDs) == 0 {
+		return base, err
+	}
+	filterBytes := uint64(min(len(opts.ExcludedStableIDs), rowCount))*uint64(3*unsafe.Sizeof(int(0))) + uint64((rowCount+63)/64)*16
+	if math.MaxUint64-base < filterBytes {
+		return 0, ErrVectorPartitionSearchUnavailable
+	}
+	return base + filterBytes, nil
 }
 
 func vectorPartitionExactSearchScratchBytesV1(rows, dimensions, topK int) (uint64, error) {
@@ -1176,6 +1190,8 @@ type VectorPartitionLocalSearcherV1 struct {
 	openNanos                                                uint64
 	searchRoute                                              string
 	maxStableIDBytes                                         int
+	stableIDOrdinals                                         map[string]int
+	stableIDOrdinalBytes                                     uint64
 	candidates, edges                                        uint64
 	auxiliaryEdges, auxiliaryCandidates, auxiliaryAdmissions uint64
 	scratch                                                  sync.Pool
@@ -1813,6 +1829,15 @@ func (s *VectorPartitionLocalSearcherV1) searchWithOptionsV1(ctx context.Context
 			OmitResultMaterialization:            true,
 			SuppressOmittedResultMaterialization: true,
 		}
+		if len(opts.ExcludedStableIDs) != 0 {
+			eligible, err := s.partitionLiveEligibleRowsV1(opts.ExcludedStableIDs)
+			if err != nil {
+				s.recordFailure()
+				return nil, VectorPartitionSearchMetricsV1{}, err
+			}
+			nativeOpts.CandidateRows, nativeOpts.HasCandidateRows = eligible, true
+			nativeOpts.CandidateLimit = s.prepared.Header.Rows
+		}
 		var trace columnHNSWSearchPackAttributionTrace
 		if attribution != nil {
 			nativeOpts.StatsMode = columnVectorGraphNativeSearchStatsModeWorkAccounting
@@ -1835,7 +1860,7 @@ func (s *VectorPartitionLocalSearcherV1) searchWithOptionsV1(ctx context.Context
 			s.recordFailure()
 			return nil, VectorPartitionSearchMetricsV1{}, err
 		}
-		out, err := canonicalizeVectorPartitionNativeResultsV1(ctx, s.prepared, query, scratch.top, opts.TopK)
+		out, err := canonicalizeVectorPartitionNativeResultsExcludingV1(ctx, s.prepared, query, scratch.top, opts.TopK, opts.ExcludedStableIDs)
 		if err != nil {
 			s.recordFailure()
 			return nil, VectorPartitionSearchMetricsV1{}, err
@@ -1903,6 +1928,9 @@ func (s *VectorPartitionLocalSearcherV1) searchWithOptionsV1(ctx context.Context
 				return nil, VectorPartitionSearchMetricsV1{}, err
 			}
 		}
+		if _, excluded := opts.ExcludedStableIDs[s.asset.IDs[i]]; excluded {
+			continue
+		}
 		score, err := canonicalVectorPartitionScoreWithInvNormV1(normalizedQuery, s.asset.Vectors[i], s.vectorInvNorms[i])
 		if err != nil {
 			s.recordFailure()
@@ -1936,6 +1964,49 @@ func (s *VectorPartitionLocalSearcherV1) searchWithOptionsV1(ctx context.Context
 	s.edges += edges
 	s.mu.Unlock()
 	return out, VectorPartitionSearchMetricsV1{Candidates: uint64(len(s.asset.IDs)), Edges: edges, Route: VectorPartitionSearchRouteExactFP32ScanV1}, nil
+}
+
+func vectorPartitionPreparedStableIDOrdinalsV1(view *columnHNSWSearchPackPreparedView) (map[string]int, error) {
+	if view == nil || len(view.DocumentIDOffsets) != view.Header.Rows+1 {
+		return nil, ErrVectorPartitionSearchUnavailable
+	}
+	out := make(map[string]int, view.Header.Rows)
+	for ordinal := 0; ordinal < view.Header.Rows; ordinal++ {
+		start, end := view.DocumentIDOffsets[ordinal], view.DocumentIDOffsets[ordinal+1]
+		if end < start || end > uint64(len(view.DocumentIDBytes)) {
+			return nil, ErrVectorPartitionSearchUnavailable
+		}
+		id := string(view.DocumentIDBytes[start:end])
+		if _, duplicate := out[id]; duplicate {
+			return nil, ErrVectorPartitionSearchUnavailable
+		}
+		out[id] = ordinal
+	}
+	return out, nil
+}
+
+func (s *VectorPartitionLocalSearcherV1) partitionLiveEligibleRowsV1(excluded map[string]struct{}) (typedcolumn.RowSelection, error) {
+	rows := s.prepared.Header.Rows
+	stableIDOrdinals := s.stableIDOrdinals
+	if stableIDOrdinals == nil {
+		return typedcolumn.RowSelection{}, fmt.Errorf("%w: stable ID eligibility was not prepared", ErrVectorPartitionSearchUnavailable)
+	}
+	ordinals := make([]int, 0, min(len(excluded), rows))
+	for id := range excluded {
+		if ordinal, ok := stableIDOrdinals[id]; ok {
+			ordinals = append(ordinals, ordinal)
+		}
+	}
+	sort.Ints(ordinals)
+	deleted, err := typedcolumn.NewSparseRowSelection(rows, ordinals)
+	if err != nil {
+		return typedcolumn.RowSelection{}, fmt.Errorf("%w: stale-row filter: %v", ErrVectorPartitionSearchUnavailable, err)
+	}
+	eligible, err := typedcolumn.ComposeRowSelections(rows, typedcolumn.RowSelectionComponents{Deletes: &deleted})
+	if err != nil {
+		return typedcolumn.RowSelection{}, fmt.Errorf("%w: stale-row eligibility: %v", ErrVectorPartitionSearchUnavailable, err)
+	}
+	return eligible, nil
 }
 
 // SearchExactWithOptionsV1 scans the already generation-pinned prepared pack.
@@ -2018,6 +2089,10 @@ func (s *VectorPartitionLocalSearcherV1) SearchExactWithOptionsV1(ctx context.Co
 }
 
 func canonicalizeVectorPartitionNativeResultsV1(ctx context.Context, prepared *columnHNSWSearchPackPreparedView, query []float32, candidates []columnVectorGraphSearchCandidate, topK int) ([]VectorPartitionSearchResultV1, error) {
+	return canonicalizeVectorPartitionNativeResultsExcludingV1(ctx, prepared, query, candidates, topK, nil)
+}
+
+func canonicalizeVectorPartitionNativeResultsExcludingV1(ctx context.Context, prepared *columnHNSWSearchPackPreparedView, query []float32, candidates []columnVectorGraphSearchCandidate, topK int, excluded map[string]struct{}) ([]VectorPartitionSearchResultV1, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -2041,6 +2116,10 @@ func canonicalizeVectorPartitionNativeResultsV1(ctx context.Context, prepared *c
 		}
 		if candidate.ordinal < 0 || candidate.ordinal >= prepared.Header.Rows {
 			return nil, ErrVectorPartitionSearchUnavailable
+		}
+		idStart, idEnd := prepared.DocumentIDOffsets[candidate.ordinal], prepared.DocumentIDOffsets[candidate.ordinal+1]
+		if _, shadowed := excluded[string(prepared.DocumentIDBytes[idStart:idEnd])]; shadowed {
+			continue
 		}
 		base := candidate.ordinal * prepared.Header.VectorStride
 		score, err := canonicalVectorPartitionNormalizedScoreV1(normalizedQuery, prepared.NormalizedVectors[base:base+prepared.Header.Dimensions])
@@ -2105,7 +2184,7 @@ func (s *VectorPartitionLocalSearcherV1) Status() VectorPartitionSearchStatusV1 
 }
 
 func (s *VectorPartitionLocalSearcherV1) statusLockedV1() VectorPartitionSearchStatusV1 {
-	st := VectorPartitionSearchStatusV1{Generation: s.asset.Generation, PartitionID: s.asset.PartitionID, ActivePins: s.pins, Opened: s.opened, Searches: s.searches, Failures: s.failures, Retired: s.retired, HomeMemberships: s.homeMemberships, OverlapMemberships: s.overlapMemberships, MaxStableIDBytes: s.maxStableIDBytes, PackBytes: s.packBytes, MappedBytes: s.mappedBytes, HeapBytes: s.heapBytes, OpenNanos: s.openNanos, SearchRoute: s.searchRoute, Candidates: s.candidates, Edges: s.edges, AuxiliaryEdges: s.auxiliaryEdges, AuxiliaryCandidates: s.auxiliaryCandidates, AuxiliaryAdmissions: s.auxiliaryAdmissions}
+	st := VectorPartitionSearchStatusV1{Generation: s.asset.Generation, PartitionID: s.asset.PartitionID, ActivePins: s.pins, Opened: s.opened, Searches: s.searches, Failures: s.failures, Retired: s.retired, HomeMemberships: s.homeMemberships, OverlapMemberships: s.overlapMemberships, MaxStableIDBytes: s.maxStableIDBytes, PackBytes: s.packBytes, MappedBytes: s.mappedBytes, HeapBytes: s.heapBytes + s.stableIDOrdinalBytes, OpenNanos: s.openNanos, SearchRoute: s.searchRoute, Candidates: s.candidates, Edges: s.edges, AuxiliaryEdges: s.auxiliaryEdges, AuxiliaryCandidates: s.auxiliaryCandidates, AuxiliaryAdmissions: s.auxiliaryAdmissions}
 	if s.prepared != nil {
 		return st
 	}
