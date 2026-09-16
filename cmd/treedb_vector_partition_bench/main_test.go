@@ -2056,8 +2056,8 @@ func TestM8UnsupportedOverlapSkipsMeasuredAndAttributionWorkV1(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Two appended route-proof counters add 16 bytes to each retained outcome.
-	if plan.QueryRequests != 4 || plan.MeasuredQueryRequests != 0 || plan.WarmupAndPreflightQueryRequests != 4 || plan.AttributionQueryPasses != 0 || plan.RetainedCoordinatorCells != 0 || plan.RetainedCoordinatorResults != 0 || plan.CurrentCellOutcomes != 2 || plan.CurrentCellOutcomeBytes != 1476 || plan.CurrentQueryConversionBytes != 64 || plan.RetainedAttributionMatrices != 0 || plan.RetainedAttributionResults != 0 || plan.RetainedAttributionBytes != 0 || plan.AttributionMergeScratchResults != 0 || plan.AttributionMergeScratchBytes != 0 {
+	// Logical-domain and physical-pack evidence adds two slices and two counters.
+	if plan.QueryRequests != 4 || plan.MeasuredQueryRequests != 0 || plan.WarmupAndPreflightQueryRequests != 4 || plan.AttributionQueryPasses != 0 || plan.RetainedCoordinatorCells != 0 || plan.RetainedCoordinatorResults != 0 || plan.CurrentCellOutcomes != 2 || plan.CurrentCellOutcomeBytes != 1604 || plan.CurrentQueryConversionBytes != 64 || plan.RetainedAttributionMatrices != 0 || plan.RetainedAttributionResults != 0 || plan.RetainedAttributionBytes != 0 || plan.AttributionMergeScratchResults != 0 || plan.AttributionMergeScratchBytes != 0 {
 		t.Fatalf("unsupported-only M8 work plan=%+v", plan)
 	}
 }
@@ -2749,10 +2749,14 @@ func TestM8AttributionApproximateCoverageShortfallIsOwnedV1(t *testing.T) {
 func TestM8CoordinatorResponseCanonicalShapeFailsClosedV1(t *testing.T) {
 	response := nativewire.VectorPartitionCoordinatorResponseV1{
 		Neighbors:        []nativewire.VectorPartitionCoordinatorNeighborV1{{ID: "a", Score: .9}, {ID: "b", Score: .8}},
+		ProbedDomains:    []uint32{0, 1},
+		ProbedPacks:      []uint32{0, 1},
 		ProbedPartitions: []uint32{0, 1},
 	}
 	response.ProbedGroups = append(response.ProbedGroups, "group-a")
-	manifest := collections.VectorPartitionManifestV1{SourceRowCount: 3, PartitionCount: 4, Placements: []collections.VectorPartitionPlacementV1{
+	manifest := collections.VectorPartitionManifestV1{SourceRowCount: 3, PartitionCount: 4, DomainCount: 4, DomainPacks: []collections.VectorPartitionDomainPackV1{
+		{DomainID: 0, PackID: 0}, {DomainID: 1, PackID: 1}, {DomainID: 2, PackID: 2}, {DomainID: 3, PackID: 3},
+	}, Placements: []collections.VectorPartitionPlacementV1{
 		{PartitionID: 0, GroupID: "group-a"}, {PartitionID: 1, GroupID: "group-a"},
 		{PartitionID: 2, GroupID: "group-b"}, {PartitionID: 3, GroupID: "group-b"},
 	}, Memberships: []collections.VectorPartitionMembershipV1{
@@ -2771,11 +2775,11 @@ func TestM8CoordinatorResponseCanonicalShapeFailsClosedV1(t *testing.T) {
 		t.Fatal("accepted duplicate response neighbor")
 	}
 	response.Neighbors = []nativewire.VectorPartitionCoordinatorNeighborV1{{ID: "a", Score: .9}, {ID: "b", Score: .8}}
-	response.ProbedPartitions = []uint32{0, 2}
+	response.ProbedDomains, response.ProbedPacks, response.ProbedPartitions = []uint32{0, 2}, []uint32{0, 2}, []uint32{0, 2}
 	if _, err := m8ValidateCoordinatorResponseV1(response, manifest, 2, 2); err == nil {
 		t.Fatal("accepted response missing an owning group")
 	}
-	response.ProbedPartitions = []uint32{0, 1}
+	response.ProbedDomains, response.ProbedPacks, response.ProbedPartitions = []uint32{0, 1}, []uint32{0, 1}, []uint32{0, 1}
 	response.ProbedGroups = append(response.ProbedGroups[:0], "group-b")
 	if _, err := m8ValidateCoordinatorResponseV1(response, manifest, 2, 2); err == nil {
 		t.Fatal("accepted a non-owner group")
@@ -2798,6 +2802,22 @@ func TestM8CoordinatorResponseCanonicalShapeFailsClosedV1(t *testing.T) {
 	)
 	if _, err := m8ValidateCoordinatorResponseV1(response, manifest, 2, 2); err == nil {
 		t.Fatal("accepted response longer than top-k")
+	}
+	multiPack := manifest
+	multiPack.DomainCount = 1
+	multiPack.DomainPacks = []collections.VectorPartitionDomainPackV1{{DomainID: 0, PackID: 0}, {DomainID: 0, PackID: 1}, {DomainID: 0, PackID: 2}, {DomainID: 0, PackID: 3}}
+	response.Neighbors = response.Neighbors[:2]
+	response.ProbedDomains = []uint32{0}
+	response.ProbedPacks = []uint32{0, 1, 2, 3}
+	response.ProbedPartitions = []uint32{0, 1, 2, 3}
+	response.ProbedGroups = append(response.ProbedGroups[:0], "group-a", "group-b")
+	if got, err := m8ValidateCoordinatorResponseV1(response, multiPack, 1, 2); err != nil || len(got) != 2 {
+		t.Fatalf("valid multi-pack domain got=%+v err=%v", got, err)
+	}
+	response.ProbedPacks = response.ProbedPacks[:3]
+	response.ProbedPartitions = response.ProbedPartitions[:3]
+	if _, err := m8ValidateCoordinatorResponseV1(response, multiPack, 1, 2); err == nil {
+		t.Fatal("accepted incomplete physical-pack expansion")
 	}
 }
 

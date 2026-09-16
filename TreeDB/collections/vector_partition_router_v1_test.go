@@ -41,6 +41,62 @@ func TestRankVectorPartitionRouterCandidatesReportsUniqueCoverageShortfallV1(t *
 	}
 }
 
+func TestVectorPartitionRouterDomainsCombineRequiredPacksV1(t *testing.T) {
+	manifest := VectorPartitionManifestV1{
+		PartitionCount: 2,
+		DomainCount:    1,
+		DomainPacks: []VectorPartitionDomainPackV1{
+			{DomainID: 0, PackID: 0},
+			{DomainID: 0, PackID: 1},
+		},
+	}
+	packs := []internalrouter.RouterPartitionV1{
+		{PartitionID: 0, Vectors: []internalrouter.RouterVectorV1{
+			{Ordinal: 0, Values: []float32{1, 0}, MembershipKind: string(VectorPartitionMembershipHomeV1)},
+			{Ordinal: 1, Values: []float32{0, 1}, MembershipKind: string(VectorPartitionMembershipOverlapV1)},
+		}},
+		{PartitionID: 1, Vectors: []internalrouter.RouterVectorV1{
+			{Ordinal: 1, Values: []float32{0, 1}, MembershipKind: string(VectorPartitionMembershipHomeV1)},
+			{Ordinal: 2, Values: []float32{-1, 0}, MembershipKind: string(VectorPartitionMembershipHomeV1)},
+		}},
+	}
+	domains, err := vectorPartitionRouterDomainsV1(manifest, packs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(domains) != 1 || domains[0].PartitionID != 0 || len(domains[0].Vectors) != 3 ||
+		domains[0].Vectors[1].Ordinal != 1 || domains[0].Vectors[1].MembershipKind != string(VectorPartitionMembershipHomeV1) {
+		t.Fatalf("domains=%+v", domains)
+	}
+}
+
+func TestVectorPartitionRouterScalarWorkPreflightUsesLogicalDomainsV1(t *testing.T) {
+	cfg := internalrouter.DefaultRouterConfigV1()
+	cfg.BranchFactor = 2
+	cfg.MaxIterations = 3
+	cfg.RepresentativesPerPartition = 2
+	manifest := VectorPartitionManifestV1{
+		SourceRowCount: 2,
+		PartitionCount: 2,
+		DomainCount:    1,
+		DomainPacks: []VectorPartitionDomainPackV1{
+			{DomainID: 0, PackID: 0}, {DomainID: 0, PackID: 1},
+		},
+		Memberships: []VectorPartitionMembershipV1{
+			{VectorOrdinal: 0, PartitionID: 0}, {VectorOrdinal: 1, PartitionID: 1},
+		},
+	}
+	if work, ok := checkedVectorPartitionRouterScalarWorkV1(manifest, cfg, 4); !ok || work != 96 {
+		t.Fatalf("domain scalar work=%d ok=%v want=96", work, ok)
+	}
+	manifest.SourceRowCount = 1
+	manifest.Memberships = manifest.Memberships[:1]
+	manifest.OverlapMemberships = []VectorPartitionMembershipV1{{VectorOrdinal: 0, PartitionID: 1}}
+	if work, ok := checkedVectorPartitionRouterScalarWorkV1(manifest, cfg, 4); !ok || work != 24 {
+		t.Fatalf("deduplicated domain scalar work=%d ok=%v want=24", work, ok)
+	}
+}
+
 func TestVectorPartitionRouterActiveLoadCancellationReleasesBarrierV1(t *testing.T) {
 	requireVectorPartitionPersistenceV1(t)
 	database := openCollectionCommandWALDB(t, t.TempDir())

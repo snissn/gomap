@@ -192,9 +192,10 @@ func (b *hcBridgeV1) search(w http.ResponseWriter, r *http.Request) {
 		hcBridgeWriteErrorV1(w, http.StatusBadRequest, "invalid_request")
 		return
 	}
+	mergePacks := min(coordinatorLimits.MaxSelectedPartitions, coordinatorLimits.MaxMergeEntries/request.TopK)
 	ctx, cancel := context.WithTimeout(r.Context(), b.timeout)
 	defer cancel()
-	response, err := b.call(ctx, vectorPartitionOperationsWireRequestV1{SchemaVersion: hcBridgeVersionV1, Operation: "search", Search: public.SearchRequestV1{Version: hcBridgeVersionV1, Generation: public.GenerationIDV1{Index: request.Index, Generation: request.Generation}, Query: request.Query, Metric: public.MetricCosineV1, TopK: request.TopK, Probes: request.Probes, EfSearch: request.EfSearch, Consistency: public.ConsistencyGenerationSnapshotV1, Limits: public.SearchLimitsV1{RequestBytes: operationsLimits.MaxRequestBytes, CandidateBytes: operationsLimits.MaxCandidateBytes, ResponseBytes: operationsLimits.MaxResponseBytes, MergeEntries: request.Probes * request.TopK}, Deadline: time.Now().Add(b.timeout)}})
+	response, err := b.call(ctx, vectorPartitionOperationsWireRequestV1{SchemaVersion: hcBridgeVersionV1, Operation: "search", Search: public.SearchRequestV1{Version: hcBridgeVersionV1, Generation: public.GenerationIDV1{Index: request.Index, Generation: request.Generation}, Query: request.Query, Metric: public.MetricCosineV1, TopK: request.TopK, Probes: request.Probes, EfSearch: request.EfSearch, Consistency: public.ConsistencyGenerationSnapshotV1, Limits: public.SearchLimitsV1{RequestBytes: operationsLimits.MaxRequestBytes, CandidateBytes: operationsLimits.MaxCandidateBytes, ResponseBytes: operationsLimits.MaxResponseBytes, MergeEntries: mergePacks * request.TopK}, Deadline: time.Now().Add(b.timeout)}})
 	if err != nil || response.Search == nil {
 		hcBridgeWriteErrorV1(w, hcBridgeStatusV1(err), "search_failed")
 		return
@@ -212,7 +213,8 @@ func (b *hcBridgeV1) search(w http.ResponseWriter, r *http.Request) {
 		}
 		ids[i] = n
 	}
-	if len(response.Search.Neighbors) != request.TopK || response.Search.Counters.SelectedPartitions != uint64(request.Probes) || response.Search.Counters.SelectedPartitions == 0 || response.Search.Counters.HNSWServedPartitions > response.Search.Counters.SelectedPartitions || response.Search.Counters.ExactScanPartitions != response.Search.Counters.SelectedPartitions-response.Search.Counters.HNSWServedPartitions {
+	counters := response.Search.Counters
+	if len(response.Search.Neighbors) != request.TopK || counters.SelectedDomains != uint64(request.Probes) || counters.SelectedPacks < counters.SelectedDomains || counters.SelectedPacks > uint64(coordinatorLimits.MaxSelectedPartitions) || counters.SelectedPartitions != counters.SelectedPacks || counters.HNSWServedPartitions > counters.SelectedPacks || counters.ExactScanPartitions != counters.SelectedPacks-counters.HNSWServedPartitions {
 		hcBridgeWriteErrorV1(w, http.StatusBadGateway, "incomplete_route_proof")
 		return
 	}

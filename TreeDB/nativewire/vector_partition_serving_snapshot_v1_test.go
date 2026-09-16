@@ -94,8 +94,9 @@ func newVectorPartitionServingSnapshotFixtureV1(tb testing.TB) *vectorPartitionS
 		IntegrityDigest: strings.Repeat("d", 64), SourceGeneration: identity.Source.Generation,
 		SourceChecksum: identity.Source.Checksum, SourceSchemaHash: identity.Source.SchemaHash,
 		SourceRowCount: identity.Source.RowCount, Generation: identity.Generation, RouterGeneration: identity.Generation,
-		PartitionCount: 2, ReadySetDigest: strings.Repeat("b", 64),
-		Placements: []collections.VectorPartitionPlacementV1{{PartitionID: 0, GroupID: "group-a"}, {PartitionID: 1, GroupID: "group-b"}},
+		PartitionCount: 2, DomainCount: 2, ReadySetDigest: strings.Repeat("b", 64),
+		DomainPacks: []collections.VectorPartitionDomainPackV1{{DomainID: 0, PackID: 0}, {DomainID: 1, PackID: 1}},
+		Placements:  []collections.VectorPartitionPlacementV1{{PartitionID: 0, GroupID: "group-a"}, {PartitionID: 1, GroupID: "group-b"}},
 		Assets: []collections.VectorPartitionAssetV1{
 			{ID: "partition-0", Checksum: strings.Repeat("0", 64), PartitionID: 0, Bytes: 1},
 			{ID: "partition-1", Checksum: strings.Repeat("1", 64), PartitionID: 1, Bytes: 1},

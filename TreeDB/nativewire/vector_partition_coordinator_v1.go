@@ -220,6 +220,7 @@ type VectorPartitionCoordinatorNeighborV1 struct {
 }
 
 type VectorPartitionCoordinatorCountersV1 struct {
+	SelectedDomains, SelectedPacks                           uint64
 	SelectedPartitions, SelectedGroups                       uint64
 	HNSWServedPartitions, ExactScanPartitions                uint64
 	Requests, RPCs, Retries, Redirects                       uint64
@@ -254,6 +255,8 @@ type VectorPartitionCoordinatorResponseV1 struct {
 	Consistency                                                        VectorPartitionShardSearchConsistencyV1
 
 	Neighbors        []VectorPartitionCoordinatorNeighborV1
+	ProbedDomains    []uint32
+	ProbedPacks      []uint32
 	ProbedPartitions []uint32
 	ProbedGroups     []raftcluster.GroupID
 	Counters         VectorPartitionCoordinatorCountersV1
@@ -262,6 +265,7 @@ type VectorPartitionCoordinatorResponseV1 struct {
 
 type VectorPartitionCoordinatorStatsV1 struct {
 	Requests, Successes, Errors, Canceled, TimedOut uint64
+	SelectedDomains, SelectedPacks                  uint64
 	SelectedPartitions, SelectedGroups, RPCs        uint64
 	Retries, Redirects, Duplicates, Disagreements   uint64
 	TotalNanos                                      uint64
@@ -351,11 +355,12 @@ type vectorPartitionCoordinatorRouterKeyV1 struct {
 }
 
 type vectorPartitionCoordinatorRouterSessionV1 struct {
-	router           VectorPartitionCoordinatorRouterV1
-	partitionRows    []uint64
-	stats            *vectorPartitionCoordinatorRouterSessionStatsV1
-	refs             uint64
-	retired, closing bool
+	router            VectorPartitionCoordinatorRouterV1
+	partitionRows     []uint64
+	domainPackOffsets []int
+	stats             *vectorPartitionCoordinatorRouterSessionStatsV1
+	refs              uint64
+	retired, closing  bool
 }
 
 // vectorPartitionCoordinatorRouterSessionStatsV1 aggregates every reopen for
@@ -526,9 +531,14 @@ func (c *VectorPartitionCoordinatorV1) acquireRouterSessionV1(ctx context.Contex
 
 		router, err := c.routerSource.OpenVectorPartitionCoordinatorRouterV1(ctx, index, generation)
 		var partitionRows []uint64
+		var domainPackOffsets []int
 		if err == nil && router != nil {
 			status := router.Status()
-			if err = c.validateRouterStatus(status); err == nil {
+			domainPackOffsets, err = vectorPartitionCoordinatorDomainPackOffsetsV1(status.Manifest)
+			if err == nil {
+				err = c.validateRouterStatus(status, domainPackOffsets)
+			}
+			if err == nil {
 				partitionRows, err = vectorPartitionCoordinatorPartitionRowsV1(ctx, status.Manifest)
 			}
 		}
@@ -541,7 +551,9 @@ func (c *VectorPartitionCoordinatorV1) acquireRouterSessionV1(ctx context.Contex
 			err = fmt.Errorf("%w: coordinator closed", ErrVectorPartitionCoordinatorUnavailable)
 		}
 		if err == nil {
-			session := &vectorPartitionCoordinatorRouterSessionV1{router: router, partitionRows: partitionRows, stats: stats, refs: 1}
+			session := &vectorPartitionCoordinatorRouterSessionV1{
+				router: router, partitionRows: partitionRows, domainPackOffsets: domainPackOffsets, stats: stats, refs: 1,
+			}
 			c.sessions[key] = session
 			c.leases++
 			stats.value.ReaderPins++
@@ -841,6 +853,7 @@ func (c *VectorPartitionCoordinatorV1) searchV1(ctx context.Context, request Vec
 	var routerLease *vectorPartitionCoordinatorRouterLeaseV1
 	var router VectorPartitionCoordinatorRouterV1
 	var partitionRows []uint64
+	var domainPackOffsets []int
 	if strict == nil {
 		routerLease, err = c.acquireRouterSessionV1(requestCtx, request.IndexName, c.placement.PartitionGeneration)
 		if err != nil {
@@ -853,16 +866,18 @@ func (c *VectorPartitionCoordinatorV1) searchV1(ctx context.Context, request Vec
 		}()
 		router = routerLease.session.router
 		partitionRows = routerLease.session.partitionRows
+		domainPackOffsets = routerLease.session.domainPackOffsets
 	} else {
 		router = strict.snapshot.snapshot.router.session.router
 		partitionRows = strict.snapshot.snapshot.router.session.partitionRows
+		domainPackOffsets = strict.snapshot.snapshot.router.session.domainPackOffsets
 	}
 	response.Timing.RouterOpenNanos = elapsedNanosV1(openStarted)
 	if router == nil {
 		return response, c.wrapError(ErrVectorPartitionCoordinatorUnavailable, "")
 	}
 	status := router.Status()
-	if err := c.validateRouterStatus(status); err != nil {
+	if err := c.validateRouterStatus(status, domainPackOffsets); err != nil {
 		if strict == nil && vectorPartitionCoordinatorRouterStatusInvalidatesSessionV1(err) {
 			c.retireRouterSessionV1(routerLease)
 		}
@@ -895,7 +910,7 @@ func (c *VectorPartitionCoordinatorV1) searchV1(ctx context.Context, request Vec
 		}
 		replicatedReadySetDigest = identity.ReadySetDigest
 	}
-	if err := validateVectorPartitionCoordinatorRouterRequestV1(request, status); err != nil {
+	if err := validateVectorPartitionCoordinatorRouterRequestV1(request, status, len(domainPackOffsets)-1); err != nil {
 		return response, c.wrapError(err, "")
 	}
 
@@ -913,7 +928,7 @@ func (c *VectorPartitionCoordinatorV1) searchV1(ctx context.Context, request Vec
 	}
 
 	placementStarted := time.Now()
-	tasks, selectedPartitions, selectedGroups, budget, err := c.plan(requestCtx, request, status, partitionRows, replicatedReadySetDigest, routed.Partitions, strict)
+	tasks, selectedPartitions, selectedGroups, budget, err := c.plan(requestCtx, request, status, domainPackOffsets, partitionRows, replicatedReadySetDigest, routed.Partitions, strict)
 	response.Timing.PlacementNanos = elapsedNanosV1(placementStarted)
 	if err != nil {
 		return response, c.wrapError(err, "")
@@ -923,6 +938,7 @@ func (c *VectorPartitionCoordinatorV1) searchV1(ctx context.Context, request Vec
 	}
 
 	counters := VectorPartitionCoordinatorCountersV1{
+		SelectedDomains: uint64(len(routed.Partitions)), SelectedPacks: uint64(len(selectedPartitions)),
 		SelectedPartitions: uint64(len(selectedPartitions)), SelectedGroups: uint64(len(selectedGroups)),
 		Requests: uint64(len(tasks)), QueryBytes: uint64(len(request.Query)) * 4,
 		RequestBytes: budget.requestBytes,
@@ -959,7 +975,7 @@ func (c *VectorPartitionCoordinatorV1) searchV1(ctx context.Context, request Vec
 	}
 
 	dedupeStarted := time.Now()
-	unique, duplicates, disagreements, err := c.dedupe(requestCtx, request, taskResults)
+	unique, duplicates, disagreements, err := c.dedupe(requestCtx, request, len(selectedPartitions), taskResults)
 	response.Timing.DedupeNanos = elapsedNanosV1(dedupeStarted)
 	if err != nil {
 		return response, c.wrapError(err, "")
@@ -986,6 +1002,11 @@ func (c *VectorPartitionCoordinatorV1) searchV1(ctx context.Context, request Vec
 	response.ReadySetDigest = replicatedReadySetDigest
 	response.Consistency = VectorPartitionShardSearchConsistencySnapshotV1
 	response.Neighbors = neighbors
+	response.ProbedDomains = make([]uint32, len(routed.Partitions))
+	for i, score := range routed.Partitions {
+		response.ProbedDomains[i] = score.PartitionID
+	}
+	response.ProbedPacks = slices.Clone(selectedPartitions)
 	response.ProbedPartitions = selectedPartitions
 	response.ProbedGroups = selectedGroups
 	response.Counters = counters
@@ -1199,10 +1220,10 @@ func (c *VectorPartitionCoordinatorV1) validateRequest(request VectorPartitionCo
 	return nil
 }
 
-func (c *VectorPartitionCoordinatorV1) validateRouterStatus(status collections.VectorPartitionRouterRuntimeStatusV1) error {
+func (c *VectorPartitionCoordinatorV1) validateRouterStatus(status collections.VectorPartitionRouterRuntimeStatusV1, domainPackOffsets []int) error {
 	m := status.Manifest
 	p := c.placement
-	if m.State != "ready" || m.Collection != p.Collection.Collection ||
+	if len(domainPackOffsets) != int(m.DomainCount)+1 || m.State != "ready" || m.Collection != p.Collection.Collection ||
 		m.IndexName != p.IndexName || m.IndexDefinitionDigest != p.IndexDefinitionDigest ||
 		m.SourceGeneration != p.SourceGeneration || m.SourceChecksum != p.SourceChecksum ||
 		m.SourceSchemaHash != p.SourceSchemaHash || m.SourceRowCount != p.SourceRowCount ||
@@ -1212,7 +1233,7 @@ func (c *VectorPartitionCoordinatorV1) validateRouterStatus(status collections.V
 		!isVectorPartitionShardSearchDigestV1(status.ModelDigest) {
 		return ErrVectorPartitionCoordinatorGenerationMismatch
 	}
-	if status.Partitions != uint64(m.PartitionCount) || status.Representatives == 0 {
+	if status.Partitions != uint64(len(domainPackOffsets)-1) || status.Representatives == 0 {
 		return ErrVectorPartitionCoordinatorGenerationMismatch
 	}
 	for i := range p.Partitions {
@@ -1224,12 +1245,40 @@ func (c *VectorPartitionCoordinatorV1) validateRouterStatus(status collections.V
 	return nil
 }
 
-func validateVectorPartitionCoordinatorRouterRequestV1(request VectorPartitionCoordinatorRequestV1, status collections.VectorPartitionRouterRuntimeStatusV1) error {
+func validateVectorPartitionCoordinatorRouterRequestV1(request VectorPartitionCoordinatorRequestV1, status collections.VectorPartitionRouterRuntimeStatusV1, domainCount int) error {
+	if request.PartitionProbes > domainCount {
+		return ErrVectorPartitionCoordinatorInvalidRequest
+	}
 	if request.RouterMode == collections.VectorPartitionRouterModeExactV1 &&
 		request.RouterCandidateBudget < int(status.Representatives) {
 		return fmt.Errorf("%w: exact router candidate budget", ErrVectorPartitionCoordinatorBudgetExceeded)
 	}
 	return nil
+}
+
+func vectorPartitionCoordinatorDomainPackOffsetsV1(manifest collections.VectorPartitionManifestV1) ([]int, error) {
+	if manifest.DomainCount == 0 || manifest.DomainCount > manifest.PartitionCount || len(manifest.DomainPacks) != int(manifest.PartitionCount) {
+		return nil, ErrVectorPartitionCoordinatorGenerationMismatch
+	}
+	offsets := make([]int, manifest.DomainCount+1)
+	seenPacks := make([]bool, manifest.PartitionCount)
+	var lastDomain, lastPack uint32
+	for i, mapping := range manifest.DomainPacks {
+		if mapping.DomainID >= manifest.DomainCount || mapping.PackID >= manifest.PartitionCount || seenPacks[mapping.PackID] ||
+			(i > 0 && (mapping.DomainID < lastDomain || mapping.DomainID == lastDomain && mapping.PackID <= lastPack)) {
+			return nil, ErrVectorPartitionCoordinatorGenerationMismatch
+		}
+		seenPacks[mapping.PackID] = true
+		offsets[mapping.DomainID+1]++
+		lastDomain, lastPack = mapping.DomainID, mapping.PackID
+	}
+	for domainID := range int(manifest.DomainCount) {
+		if offsets[domainID+1] == 0 {
+			return nil, ErrVectorPartitionCoordinatorGenerationMismatch
+		}
+		offsets[domainID+1] += offsets[domainID]
+	}
+	return offsets, nil
 }
 
 func vectorPartitionCoordinatorRouterStatusInvalidatesSessionV1(err error) bool {
@@ -1250,7 +1299,7 @@ type vectorPartitionCoordinatorTaskV1 struct {
 	queuedAt      time.Time
 }
 
-func (c *VectorPartitionCoordinatorV1) plan(ctx context.Context, request VectorPartitionCoordinatorRequestV1, status collections.VectorPartitionRouterRuntimeStatusV1, partitionRows []uint64, readySetDigest string, routed []collections.VectorPartitionRouterPartitionScoreV1, strict *vectorPartitionCoordinatorStrictSearchV1) ([]vectorPartitionCoordinatorTaskV1, []uint32, []raftcluster.GroupID, vectorPartitionCoordinatorBudgetV1, error) {
+func (c *VectorPartitionCoordinatorV1) plan(ctx context.Context, request VectorPartitionCoordinatorRequestV1, status collections.VectorPartitionRouterRuntimeStatusV1, domainPackOffsets []int, partitionRows []uint64, readySetDigest string, routed []collections.VectorPartitionRouterPartitionScoreV1, strict *vectorPartitionCoordinatorStrictSearchV1) ([]vectorPartitionCoordinatorTaskV1, []uint32, []raftcluster.GroupID, vectorPartitionCoordinatorBudgetV1, error) {
 	var zero vectorPartitionCoordinatorBudgetV1
 	if ctx == nil {
 		ctx = context.Background()
@@ -1264,11 +1313,11 @@ func (c *VectorPartitionCoordinatorV1) plan(ctx context.Context, request VectorP
 	if !isVectorPartitionShardSearchDigestV1(readySetDigest) {
 		return nil, nil, nil, zero, ErrVectorPartitionCoordinatorGenerationMismatch
 	}
-	selected := make([]uint32, len(routed))
+	selected := make([]uint32, 0, len(routed))
 	byGroup := make(map[raftcluster.GroupID][]uint32)
 	seen := make(map[uint32]struct{}, len(routed))
-	for i, score := range routed {
-		if score.PartitionID >= c.placement.PartitionCount ||
+	for _, score := range routed {
+		if int(score.PartitionID) >= len(domainPackOffsets)-1 ||
 			math.IsNaN(score.Distance) || math.IsInf(score.Distance, 0) {
 			return nil, nil, nil, zero, ErrVectorPartitionCoordinatorMalformedResponse
 		}
@@ -1276,12 +1325,19 @@ func (c *VectorPartitionCoordinatorV1) plan(ctx context.Context, request VectorP
 			return nil, nil, nil, zero, ErrVectorPartitionCoordinatorMalformedResponse
 		}
 		seen[score.PartitionID] = struct{}{}
-		selected[i] = score.PartitionID
-		groupID := c.placement.Partitions[score.PartitionID].GroupID
-		if _, ok := c.groups[groupID]; !ok {
-			return nil, nil, nil, zero, ErrVectorPartitionCoordinatorRouteMismatch
+		start, end := domainPackOffsets[score.PartitionID], domainPackOffsets[score.PartitionID+1]
+		for _, mapping := range status.Manifest.DomainPacks[start:end] {
+			packID := mapping.PackID
+			selected = append(selected, packID)
+			groupID := c.placement.Partitions[packID].GroupID
+			if _, ok := c.groups[groupID]; !ok {
+				return nil, nil, nil, zero, ErrVectorPartitionCoordinatorRouteMismatch
+			}
+			byGroup[groupID] = append(byGroup[groupID], packID)
 		}
-		byGroup[groupID] = append(byGroup[groupID], score.PartitionID)
+	}
+	if len(selected) > c.limits.MaxSelectedPartitions {
+		return nil, nil, nil, zero, ErrVectorPartitionCoordinatorBudgetExceeded
 	}
 	if len(byGroup) > c.limits.MaxGroups {
 		return nil, nil, nil, zero, ErrVectorPartitionCoordinatorBudgetExceeded
@@ -1836,8 +1892,8 @@ func (c *VectorPartitionCoordinatorV1) validateShardResponse(ctx context.Context
 	return nil
 }
 
-func (c *VectorPartitionCoordinatorV1) dedupe(ctx context.Context, request VectorPartitionCoordinatorRequestV1, results []vectorPartitionCoordinatorTaskResultV1) (map[string]float32, uint64, uint64, error) {
-	capacity := request.PartitionProbes * request.TopK
+func (c *VectorPartitionCoordinatorV1) dedupe(ctx context.Context, request VectorPartitionCoordinatorRequestV1, selectedPacks int, results []vectorPartitionCoordinatorTaskResultV1) (map[string]float32, uint64, uint64, error) {
+	capacity := selectedPacks * request.TopK
 	if capacity < 0 || capacity > request.MergeEntriesLimit || capacity > c.limits.MaxMergeEntries {
 		return nil, 0, 0, ErrVectorPartitionCoordinatorBudgetExceeded
 	}
@@ -2016,6 +2072,8 @@ func (a *vectorPartitionCoordinatorStatsAccumulatorV1) succeed(response VectorPa
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.value.Successes++
+	a.value.SelectedDomains += response.Counters.SelectedDomains
+	a.value.SelectedPacks += response.Counters.SelectedPacks
 	a.value.SelectedPartitions += response.Counters.SelectedPartitions
 	a.value.SelectedGroups += response.Counters.SelectedGroups
 	a.value.RPCs += response.Counters.RPCs

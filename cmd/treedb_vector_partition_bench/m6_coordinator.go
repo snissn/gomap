@@ -36,6 +36,8 @@ type m6LatencySummaryV1 struct {
 }
 
 type m6CoordinatorCounterEvidenceV1 struct {
+	SelectedDomains    uint64 `json:"selected_domains"`
+	SelectedPacks      uint64 `json:"selected_packs"`
 	SelectedPartitions uint64 `json:"selected_partitions"`
 	SelectedGroups     uint64 `json:"selected_groups"`
 	Requests           uint64 `json:"requests"`
@@ -439,6 +441,8 @@ func (a *m6EvidenceAccumulatorV1) add(
 	a.merge = append(a.merge, timing.MergeNanos)
 	a.total = append(a.total, timing.TotalNanos)
 	c := response.Counters
+	a.counters.SelectedDomains += c.SelectedDomains
+	a.counters.SelectedPacks += c.SelectedPacks
 	a.counters.SelectedPartitions += c.SelectedPartitions
 	a.counters.SelectedGroups += c.SelectedGroups
 	a.counters.Requests += c.Requests
@@ -776,7 +780,9 @@ func validateM6CoordinatorEvidenceV1(r runResult) error {
 	}
 	expectedFanout := uint64(evidence.Queries * evidence.Probes)
 	counters := evidence.Counters
-	if counters.SelectedPartitions != expectedFanout ||
+	if counters.SelectedDomains != expectedFanout ||
+		counters.SelectedPacks != expectedFanout ||
+		counters.SelectedPartitions != expectedFanout ||
 		counters.SelectedGroups != expectedFanout ||
 		counters.Requests != expectedFanout ||
 		counters.RPCs != expectedFanout ||

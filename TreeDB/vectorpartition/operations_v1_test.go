@@ -230,7 +230,7 @@ func TestOperationsV1LifecycleMatrixDelegatesServiceV1(t *testing.T) {
 func TestOperationsV1SnapshotsSearchObservabilityV1(t *testing.T) {
 	id := GenerationIDV1{Index: "embedding", Generation: 1}
 	backend := &serviceBackendV1{states: map[GenerationIDV1]GenerationStatusV1{}, search: func(_ context.Context, r SearchRequestV1) (SearchResponseV1, error) {
-		return SearchResponseV1{Generation: r.Generation, Counters: SearchCountersV1{Requests: 2, RPCs: 2, Retries: 1, Redirects: 1, Candidates: 3, Edges: 4, SelectedPartitions: 5, SelectedGroups: 2, QueryBytes: 4, RequestBytes: 5, CandidateBytes: 6, ResponseBytes: 7}}, nil
+		return SearchResponseV1{Generation: r.Generation, Counters: SearchCountersV1{Requests: 2, RPCs: 2, Retries: 1, Redirects: 1, Candidates: 3, Edges: 4, SelectedDomains: 4, SelectedPacks: 5, SelectedPartitions: 5, SelectedGroups: 2, QueryBytes: 4, RequestBytes: 5, CandidateBytes: 6, ResponseBytes: 7}}, nil
 	}}
 	service, err := NewServiceV1(backend)
 	if err != nil {
@@ -248,7 +248,7 @@ func TestOperationsV1SnapshotsSearchObservabilityV1(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := ops.Counters()
-	if got.Searches != 1 || got.Requests != 2 || got.RPCs != 2 || got.Retries != 1 || got.Redirects != 1 || got.Candidates != 3 || got.Edges != 4 || got.SelectedPartitions != 5 || got.SelectedGroups != 2 || got.QueryBytes != 4 || got.RequestBytes != 5 || got.CandidateBytes != 6 || got.ResponseBytes != 7 {
+	if got.Searches != 1 || got.Requests != 2 || got.RPCs != 2 || got.Retries != 1 || got.Redirects != 1 || got.Candidates != 3 || got.Edges != 4 || got.SelectedDomains != 4 || got.SelectedPacks != 5 || got.SelectedPartitions != 5 || got.SelectedGroups != 2 || got.QueryBytes != 4 || got.RequestBytes != 5 || got.CandidateBytes != 6 || got.ResponseBytes != 7 {
 		t.Fatalf("counters=%+v", got)
 	}
 }

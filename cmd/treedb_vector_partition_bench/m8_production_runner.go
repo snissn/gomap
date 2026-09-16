@@ -2828,7 +2828,7 @@ func m8WarmProductionTopologyV1(ctx context.Context, coordinator *nativewire.Vec
 	// production result, including runs with no user-configured warmup or only
 	// low-probe measured rows.
 	requestCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	response, err := coordinator.Search(requestCtx, m8ProductionRequestV1(assets, m8Query32V1(queries[0]), "m8-endpoint-preflight", len(assets.manifest.Placements), efSearch, cfg.topK, cfg.m8CoordinatorLimits.MaxCandidateBytes))
+	response, err := coordinator.Search(requestCtx, m8ProductionExhaustiveRequestV1(assets, m8Query32V1(queries[0]), "m8-endpoint-preflight", efSearch, cfg.topK, cfg.m8CoordinatorLimits.MaxCandidateBytes))
 	cancel()
 	if err != nil {
 		return boundary, fmt.Errorf("M8 exhaustive endpoint preflight: %w", err)
@@ -3319,7 +3319,12 @@ func m8AttachAttributionV1(row *m8ProductionRowV1, attribution m8AttributionCell
 
 func m8ValidateCoordinatorResponseV1(response nativewire.VectorPartitionCoordinatorResponseV1, manifest collections.VectorPartitionManifestV1, probes, topK int) ([]m8CanonicalResultV1, error) {
 	partitionCount := int(manifest.PartitionCount)
-	if probes < 1 || partitionCount < probes || len(manifest.Placements) != partitionCount || topK < 1 || len(response.Neighbors) > topK || len(response.ProbedPartitions) != probes || len(response.ProbedGroups) == 0 || len(response.ProbedGroups) > probes {
+	domainCount := int(manifest.DomainCount)
+	identityDomains := domainCount == 0 && len(manifest.DomainPacks) == 0
+	if identityDomains {
+		domainCount = partitionCount
+	}
+	if probes < 1 || domainCount < probes || domainCount > partitionCount || (!identityDomains && len(manifest.DomainPacks) != partitionCount) || len(manifest.Placements) != partitionCount || topK < 1 || len(response.Neighbors) > topK || len(response.ProbedDomains) != probes || len(response.ProbedPacks) < probes || len(response.ProbedPacks) > partitionCount || !slices.Equal(response.ProbedPartitions, response.ProbedPacks) || len(response.ProbedGroups) == 0 || len(response.ProbedGroups) > len(response.ProbedPacks) {
 		return nil, errors.New("truncated or dimensionally invalid coordinator response")
 	}
 	raw := make([]m8CanonicalResultV1, len(response.Neighbors))
@@ -3333,7 +3338,34 @@ func m8ValidateCoordinatorResponseV1(response nativewire.VectorPartitionCoordina
 	if idParity, scoreParity := m8CanonicalParityV1(canonical, raw); !idParity || !scoreParity {
 		return nil, errors.New("coordinator response violates canonical score/stable-ID order")
 	}
-	seenPartitions := make(map[uint32]struct{}, probes)
+	seenDomains := make(map[uint32]struct{}, probes)
+	expectedPacks := make([]uint32, 0, len(response.ProbedPacks))
+	for _, domain := range response.ProbedDomains {
+		if domain >= uint32(domainCount) {
+			return nil, errors.New("coordinator response contains an out-of-range domain")
+		}
+		if _, duplicate := seenDomains[domain]; duplicate {
+			return nil, errors.New("coordinator response contains a duplicate domain")
+		}
+		seenDomains[domain] = struct{}{}
+		if identityDomains {
+			expectedPacks = append(expectedPacks, domain)
+			continue
+		}
+		before := len(expectedPacks)
+		for _, mapping := range manifest.DomainPacks {
+			if mapping.DomainID == domain {
+				expectedPacks = append(expectedPacks, mapping.PackID)
+			}
+		}
+		if len(expectedPacks) == before {
+			return nil, errors.New("manifest contains a domain without a physical pack")
+		}
+	}
+	if !slices.Equal(response.ProbedPacks, expectedPacks) {
+		return nil, errors.New("coordinator response pack expansion does not match probed domains")
+	}
+	seenPartitions := make(map[uint32]struct{}, len(response.ProbedPacks))
 	owners := make(map[uint32]string, len(manifest.Placements))
 	for _, placement := range manifest.Placements {
 		if placement.PartitionID >= manifest.PartitionCount || placement.GroupID == "" {
@@ -3344,8 +3376,8 @@ func m8ValidateCoordinatorResponseV1(response nativewire.VectorPartitionCoordina
 		}
 		owners[placement.PartitionID] = placement.GroupID
 	}
-	expectedGroups := make(map[string]struct{}, probes)
-	for _, partition := range response.ProbedPartitions {
+	expectedGroups := make(map[string]struct{}, len(response.ProbedPacks))
+	for _, partition := range response.ProbedPacks {
 		if partition >= uint32(partitionCount) {
 			return nil, errors.New("coordinator response contains an out-of-range partition")
 		}
@@ -3490,6 +3522,7 @@ func m8ProductionRequestV1(assets *m8ProductionMultiGroupAssetsV1, query []float
 	if candidateBytesLimit == 0 {
 		candidateBytesLimit = nativewire.DefaultVectorPartitionCoordinatorLimitsV1().MaxCandidateBytes
 	}
+	mergePacks := min(int(assets.manifest.PartitionCount), nativewire.DefaultVectorPartitionCoordinatorLimitsV1().MaxSelectedPartitions)
 	return nativewire.VectorPartitionCoordinatorRequestV1{
 		Version: nativewire.VectorPartitionCoordinatorVersionV1, RequestID: requestID, CancellationID: requestID + "-cancel",
 		Database: "default", Catalog: "default", Collection: assets.manifest.Collection, IndexName: assets.manifest.IndexName,
@@ -3497,8 +3530,12 @@ func m8ProductionRequestV1(assets *m8ProductionMultiGroupAssetsV1, query []float
 		RouterMode: collections.VectorPartitionRouterModeExactV1, RouterCandidateBudget: m8ProductionRouterCandidateBudgetV1(assets), PartitionProbes: probes,
 		Consistency: nativewire.VectorPartitionShardSearchConsistencySnapshotV1, StatsMode: nativewire.VectorPartitionShardSearchStatsBasicV1,
 		TopK: topK, EfSearch: efSearch, DeadlineUnixNano: time.Now().Add(30 * time.Second).UnixNano(), RequestBytesLimit: 4 << 20,
-		CandidateBytesLimit: candidateBytesLimit, ResponseBytesLimit: 64 << 20, MergeEntriesLimit: probes * topK,
+		CandidateBytesLimit: candidateBytesLimit, ResponseBytesLimit: 64 << 20, MergeEntriesLimit: mergePacks * topK,
 	}
+}
+
+func m8ProductionExhaustiveRequestV1(assets *m8ProductionMultiGroupAssetsV1, query []float32, requestID string, efSearch, topK int, candidateBytesLimit uint64) nativewire.VectorPartitionCoordinatorRequestV1 {
+	return m8ProductionRequestV1(assets, query, requestID, int(assets.manifest.DomainCount), efSearch, topK, candidateBytesLimit)
 }
 
 func m8ProductionApproximateRequestV1(assets *m8ProductionMultiGroupAssetsV1, query []float32, requestID string, probes, efSearch, topK, routerCandidates int, candidateBytesLimit uint64) nativewire.VectorPartitionCoordinatorRequestV1 {
@@ -3531,7 +3568,7 @@ func m8RunUnavailableGroupV1(ctx context.Context, topology *nativewire.VectorPar
 	requestCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 	started := time.Now()
-	response, err := topology.Coordinator().Search(requestCtx, m8ProductionRequestV1(assets, m8Query32V1(query64), "m8-unavailable-group", len(assets.manifest.Placements), 4096, topK, candidateBytesLimit))
+	response, err := topology.Coordinator().Search(requestCtx, m8ProductionExhaustiveRequestV1(assets, m8Query32V1(query64), "m8-unavailable-group", 4096, topK, candidateBytesLimit))
 	result.ResourceBoundary.WallClockNanos = uint64(time.Since(started))
 	if err != nil {
 		result.Error = err.Error()

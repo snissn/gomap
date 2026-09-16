@@ -74,6 +74,9 @@ func cloneVectorPartitionManifestForCheckpointWithContextV1(ctx context.Context,
 		return VectorPartitionManifestV1{}, err
 	}
 	var err error
+	if m.DomainPacks, err = cloneVectorPartitionSliceWithContextV1(ctx, m.DomainPacks); err != nil {
+		return VectorPartitionManifestV1{}, err
+	}
 	if m.Placements, err = cloneVectorPartitionSliceWithContextV1(ctx, m.Placements); err != nil {
 		return VectorPartitionManifestV1{}, err
 	}
