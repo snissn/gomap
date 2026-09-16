@@ -717,7 +717,11 @@ func (c *FixedPeerTCPClientV1) call(ctx context.Context, node raftcluster.NodeID
 		return reply, err
 	}
 	if reply.Error != "" {
-		return reply, &fixedPeerRemoteErrorV1{message: reply.Error, code: reply.ErrorCode, route: reply.RouteError}
+		remoteErr := fixedPeerRemoteErrorV1{message: reply.Error, code: reply.ErrorCode}
+		if reply.RouteError != nil {
+			return reply, &fixedPeerRemoteRouteErrorV1{fixedPeerRemoteErrorV1: remoteErr, route: *reply.RouteError}
+		}
+		return reply, &remoteErr
 	}
 	return reply, nil
 }
@@ -807,16 +811,18 @@ func fixedPeerErrorCodeV1(err error) string {
 
 type fixedPeerRemoteErrorV1 struct {
 	message, code string
-	route         *raftcluster.RouteErrorMetadata
 }
 
 func (e *fixedPeerRemoteErrorV1) Error() string { return e.message }
 func (e *fixedPeerRemoteErrorV1) Is(target error) bool {
 	return target != nil && target.Error() == e.code
 }
-func (e *fixedPeerRemoteErrorV1) RouteErrorMetadata() raftcluster.RouteErrorMetadata {
-	if e.route != nil {
-		return *e.route
-	}
-	return raftcluster.RouteErrorMetadata{}
+
+type fixedPeerRemoteRouteErrorV1 struct {
+	fixedPeerRemoteErrorV1
+	route raftcluster.RouteErrorMetadata
+}
+
+func (e *fixedPeerRemoteRouteErrorV1) RouteErrorMetadata() raftcluster.RouteErrorMetadata {
+	return e.route
 }

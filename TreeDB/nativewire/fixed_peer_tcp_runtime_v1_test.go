@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -741,6 +742,48 @@ func TestFixedPeerTCPRemoteErrorClassesV1(t *testing.T) {
 	}
 	if code := fixedPeerErrorCodeV1(errors.Join(context.Canceled, raftcluster.ErrCommitAmbiguous)); code != raftcluster.ErrCommitAmbiguous.Error() {
 		t.Fatalf("ambiguous outcome lost: %s", code)
+	}
+}
+
+func TestFixedPeerTCPRemoteErrorRouteMetadataPresenceV1(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		sentinel error
+		route    *raftcluster.RouteErrorMetadata
+	}{
+		{name: "non-route", sentinel: raftcluster.ErrCommitAmbiguous},
+		{name: "routed", sentinel: raftcluster.ErrRouteTargetUnknown, route: &raftcluster.RouteErrorMetadata{
+			Class: raftcluster.RouteErrorClassUnknownOwner, GroupID: "group-b", Members: []string{"owner-1", "owner-2"}, LeaderHint: "owner-1",
+		}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_ = json.NewEncoder(w).Encode(fixedPeerReplyV1{
+					NodeID: raftcluster.NodeID(r.Header.Get("X-TreeDB-Node")), ConfigDigest: r.Header.Get("X-TreeDB-Config"),
+					Error: "remote refusal", ErrorCode: fixedPeerErrorCodeV1(tt.sentinel), RouteError: tt.route,
+				})
+			}))
+			defer server.Close()
+			config := fixedPeerTestConfigsV1(t)[0]
+			config.Nodes[0].Address = strings.TrimPrefix(server.URL, "http://")
+			config.ListenAddress = config.Nodes[0].Address
+			client, err := NewFixedPeerTCPClientV1(config)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer client.Close()
+			_, err = client.Submit(context.Background(), config.NodeID, nil, ClusterRequestMetadata{})
+			if !errors.Is(err, tt.sentinel) || err.Error() != "remote refusal" {
+				t.Fatalf("lost remote error class or message: %v", err)
+			}
+			wantRoute := tt.route != nil
+			if route, ok := raftcluster.RouteErrorMetadataOf(err); ok != wantRoute || (ok && !reflect.DeepEqual(route, *tt.route)) {
+				t.Errorf("raft route metadata=(%+v, %v), want %v", route, ok, tt.route)
+			}
+			if route, ok := ClusterRouteErrorMetadataOf(err); ok != wantRoute || (ok && !reflect.DeepEqual(route, clusterRouteErrorMetadataFromRaft(*tt.route))) {
+				t.Errorf("nativewire route metadata=(%+v, %v), want %v", route, ok, tt.route)
+			}
+		})
 	}
 }
 
