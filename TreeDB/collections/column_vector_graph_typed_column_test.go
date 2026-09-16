@@ -808,13 +808,32 @@ func TestSearchVectorIndexColumnGraphL2RemainsFailClosed1782(t *testing.T) {
 	}
 }
 
-func openColumnGraphTypedColumnVectorTestCollection1782(tb testing.TB, dims, m int, rows []columnGraphRebuildInputRowV2A) (string, *backenddb.DB, *Collection, VectorIndexDefinition) {
+func openColumnGraphTypedColumnVectorTestCollection1782(tb testing.TB, dims, m int, rows []columnGraphRebuildInputRowV2A, openOptions ...backenddb.Options) (string, *backenddb.DB, *Collection, VectorIndexDefinition) {
 	tb.Helper()
+	if len(openOptions) > 1 {
+		tb.Fatal("openColumnGraphTypedColumnVectorTestCollection1782 accepts at most one options value")
+	}
 	dir := tb.TempDir()
-	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+	format := backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}
+	if len(openOptions) == 1 {
+		format.DurabilityProfile = openOptions[0].ResolvedProfile
+	}
+	if err := backenddb.SaveFormatConfig(dir, format); err != nil {
 		tb.Fatalf("SaveFormatConfig: %v", err)
 	}
-	d := openCollectionCommandWALDB(tb, dir)
+	var d *backenddb.DB
+	if len(openOptions) == 0 {
+		d = openCollectionCommandWALDB(tb, dir)
+	} else {
+		options := openOptions[0]
+		options.Dir = dir
+		options.DisableBackgroundPrune = true
+		var err error
+		d, err = backenddb.Open(options)
+		if err != nil {
+			tb.Fatalf("Open command WAL DB: %v", err)
+		}
+	}
 	def := columnGraphRebuildVectorIndexDefinitionV2A(dims, m)
 	meta := CollectionMeta{
 		Name: "docs",

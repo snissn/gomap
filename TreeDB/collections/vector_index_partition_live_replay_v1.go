@@ -26,7 +26,7 @@ func runVectorPartitionLiveReplayAfterAcceptedHookV1() {
 }
 
 // vectorPartitionLiveReplaySpecV1 describes one already-restored carrier that
-// must advance in the same root publication as a replayed document mutation.
+// must advance in the same root publication as a durable document mutation.
 type vectorPartitionLiveReplaySpecV1 struct {
 	before       *VectorIndex
 	definition   VectorIndexDefinition
@@ -55,7 +55,9 @@ type vectorPartitionLiveReplayAttemptV1 struct {
 }
 
 func (c *Collection) vectorPartitionLiveReplaySpecsV1(input columnWritePublishInput) ([]vectorPartitionLiveReplaySpecV1, error) {
-	if _, replay := input.commandWALIntent.ReplayAssignedLSN(); !replay {
+	_, replay := input.commandWALIntent.ReplayAssignedLSN()
+	foregroundDurable := input.commandWALIntent != nil && c != nil && c.db != nil && c.db.ResolvedProfile() == backenddb.ProfileCommandWALDurable
+	if !replay && !foregroundDurable {
 		return nil, nil
 	}
 	carriers := c.registeredVectorPartitionLiveCarriersV1()

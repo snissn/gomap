@@ -1749,7 +1749,32 @@ func (c *Collection) reconcileVectorIndexes(documentIDs [][]byte) error {
 	unlockPublication := c.lockNativeVectorIndexPublicationRead()
 	defer unlockPublication()
 	indexes := c.registeredVectorIndexes()
+	if vectorIndexListHasPartitionLiveCarrier(indexes) {
+		currentGeneration, err := c.currentVectorIndexDocumentGeneration()
+		if err != nil {
+			c.invalidateRegisteredVectorIndexDocumentCoverageLocked()
+			return err
+		}
+		write := 0
+		for _, index := range indexes {
+			if index.isPartitionLiveCarrier() && index.coversSourceDocumentGeneration(currentGeneration) {
+				continue
+			}
+			indexes[write] = index
+			write++
+		}
+		indexes = indexes[:write]
+	}
 	return c.reconcileLoadedVectorIndexes(documentIDs, indexes, rebuilt, true)
+}
+
+func vectorIndexListHasPartitionLiveCarrier(indexes []*VectorIndex) bool {
+	for _, index := range indexes {
+		if index.isPartitionLiveCarrier() {
+			return true
+		}
+	}
+	return false
 }
 
 // reconcileVectorPartitionLiveReplay advances only the already-restored live
