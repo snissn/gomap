@@ -166,8 +166,9 @@ type vectorPartitionLiveSearchPinKeyV1 struct {
 }
 
 type vectorIndexPartitionLiveDomainPinV1 struct {
-	index *VectorIndex
-	view  *vectorIndexSearchView
+	index            *VectorIndex
+	view             *vectorIndexSearchView
+	maxStableIDBytes int
 }
 
 func vectorPartitionLiveSourceV1(m VectorPartitionManifestV1) VectorPartitionSourceIdentityV1 {
@@ -745,10 +746,12 @@ func (idx *VectorIndex) acquireVectorPartitionLiveSearchPinV1(manifest VectorPar
 		excludedStableIDs: make(map[string]struct{}, len(live.owners)),
 		domains:           make(map[uint32]vectorIndexPartitionLiveDomainPinV1, len(live.domains)),
 	}
+	maxStableIDBytes := make(map[uint32]int, len(live.domains))
 	for id, owner := range live.owners {
 		pin.excludedStableIDs[id] = struct{}{}
 		if !owner.deleted {
 			pin.status.LiveIDs++
+			maxStableIDBytes[owner.domain] = maxInt(maxStableIDBytes[owner.domain], len(id))
 		}
 	}
 	for domain, delta := range live.domains {
@@ -758,7 +761,7 @@ func (idx *VectorIndex) acquireVectorPartitionLiveSearchPinV1(manifest VectorPar
 			pin.Release()
 			return nil, ErrVectorIndexPartitionLiveUnavailableV1
 		}
-		pin.domains[domain] = vectorIndexPartitionLiveDomainPinV1{index: delta, view: view}
+		pin.domains[domain] = vectorIndexPartitionLiveDomainPinV1{index: delta, view: view, maxStableIDBytes: maxStableIDBytes[domain]}
 	}
 	idx.mu.RUnlock()
 	return pin, nil
@@ -1406,6 +1409,9 @@ func (p *VectorIndexPartitionLiveSearchPinV1) DomainSearchPreflightV1(domain uin
 	if !ok || pin.view == nil || pin.view.liveDocs == 0 {
 		return 0, 0, nil
 	}
+	if pin.maxStableIDBytes > opts.MaxStableIDBytes {
+		return 0, 0, fmt.Errorf("%w: stable ID bytes=%d exceeds limit=%d", ErrVectorIndexPartitionLiveUnavailableV1, pin.maxStableIDBytes, opts.MaxStableIDBytes)
+	}
 	nodes := uint64(len(pin.view.nodes) + len(pin.view.deltaNodes))
 	if nodes > vectorIndexPartitionLiveMaxMutatedIDsV1 {
 		return 0, 0, ErrVectorIndexPartitionLiveCapacityV1
@@ -1417,8 +1423,9 @@ func (p *VectorIndexPartitionLiveSearchPinV1) DomainSearchPreflightV1(domain uin
 		return 0, 0, ErrVectorIndexPartitionLiveCapacityV1
 	}
 	scratch := nodes * 64
-	resultBytes := uint64(opts.TopK) * uint64(opts.MaxStableIDBytes)
-	if resultBytes/uint64(opts.TopK) != uint64(opts.MaxStableIDBytes) || scratch > ^uint64(0)-resultBytes {
+	resultRows := uint64(minInt(opts.TopK, pin.view.liveDocs))
+	resultBytes := resultRows * uint64(opts.MaxStableIDBytes)
+	if resultBytes/resultRows != uint64(opts.MaxStableIDBytes) || scratch > ^uint64(0)-resultBytes {
 		return 0, 0, ErrVectorIndexPartitionLiveCapacityV1
 	}
 	return nodes, scratch + resultBytes, nil
@@ -1437,6 +1444,9 @@ func (p *VectorIndexPartitionLiveSearchPinV1) SearchDomainV1(ctx context.Context
 	pinned, ok := p.domains[domain]
 	if !ok || pinned.view == nil || pinned.view.liveDocs == 0 {
 		return nil, VectorPartitionSearchMetricsV1{Route: VectorPartitionSearchRouteHNSWSearchPackV1}, nil
+	}
+	if opts.MaxStableIDBytes > 0 && pinned.maxStableIDBytes > opts.MaxStableIDBytes {
+		return nil, VectorPartitionSearchMetricsV1{}, fmt.Errorf("%w: stable ID bytes=%d exceeds limit=%d", ErrVectorIndexPartitionLiveUnavailableV1, pinned.maxStableIDBytes, opts.MaxStableIDBytes)
 	}
 	var buffer VectorIndexSearchBuffer
 	buffer.nativeSearchWorkEnabled = true

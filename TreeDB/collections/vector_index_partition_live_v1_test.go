@@ -89,6 +89,91 @@ func TestVectorIndexPartitionLiveMutationMoveAndDeleteV1(t *testing.T) {
 	}
 }
 
+func TestVectorIndexPartitionLiveDomainSearchBoundsV1(t *testing.T) {
+	idx, err := newVectorIndex(nil, VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4, EfConstruction: 16, EfSearch: 8})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest := VectorPartitionManifestV1{IndexName: "embedding", IndexDefinitionDigest: "definition", SourceGeneration: 3, SourceChecksum: 4, SourceSchemaHash: 5, SourceRowCount: 1, Generation: 7, DomainCount: 1, PartitionCount: 1, DomainPacks: []VectorPartitionDomainPackV1{{DomainID: 0, PackID: 0}}}
+	if err := idx.bindVectorPartitionLiveV1(manifest, manifest.SourceGeneration, []vectorPartitionLiveRepresentativeV1{{domain: 0, vector: []float32{1, 0}}}); err != nil {
+		t.Fatal(err)
+	}
+	idx.mu.Lock()
+	err = idx.reconcileVectorPartitionMutationLocked([]byte("oversized"), []float32{1, 0})
+	idx.mu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pin, err := idx.acquireVectorPartitionLiveSearchPinV1(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pin.Release()
+	tooSmall := VectorPartitionSearchOptionsV1{TopK: 1, EfSearch: 8, MaxStableIDBytes: 8}
+	if _, _, err := pin.DomainSearchPreflightV1(0, tooSmall); !errors.Is(err, ErrVectorIndexPartitionLiveUnavailableV1) {
+		t.Fatalf("preflight err=%v want unavailable", err)
+	}
+	if _, _, err := pin.SearchDomainV1(t.Context(), 0, []float32{1, 0}, tooSmall); !errors.Is(err, ErrVectorIndexPartitionLiveUnavailableV1) {
+		t.Fatalf("search err=%v want unavailable", err)
+	}
+	if nodes, scratch, err := pin.DomainSearchPreflightV1(0, VectorPartitionSearchOptionsV1{TopK: 256, EfSearch: 256, MaxStableIDBytes: 4096}); err != nil || nodes != 1 || scratch != 64+4096 {
+		t.Fatalf("nodes=%d scratch=%d err=%v", nodes, scratch, err)
+	}
+
+	view := &vectorIndexSearchView{nodes: make([]vectorIndexNode, 1), liveDocs: 1}
+	many := &VectorIndexPartitionLiveSearchPinV1{domains: make(map[uint32]vectorIndexPartitionLiveDomainPinV1, 19)}
+	total := uint64(64_000_000)
+	for domain := uint32(0); domain < 19; domain++ {
+		many.domains[domain] = vectorIndexPartitionLiveDomainPinV1{view: view, maxStableIDBytes: 1}
+		_, scratch, err := many.DomainSearchPreflightV1(domain, VectorPartitionSearchOptionsV1{TopK: 256, EfSearch: 256, MaxStableIDBytes: 4096})
+		if err != nil {
+			t.Fatal(err)
+		}
+		total += scratch
+	}
+	if total != 64_079_040 || total > 80<<20 {
+		t.Fatalf("multi-domain bytes=%d", total)
+	}
+}
+
+func TestVectorIndexPartitionLiveReplayRejectsDifferentInstalledCarrierV1(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
+	_, database, collection, def, manifest := newVectorPartitionLiveProductionFixtureV1(t)
+	defer database.Close()
+	if err := collection.EnsureVectorPartitionLiveBindingV1(t.Context(), manifest); err != nil {
+		t.Fatal(err)
+	}
+	current := collection.registeredVectorIndex(def.Name)
+	rootID, err := collection.currentNativeVectorIndexRootID(def.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, beforeSeq := current.persistSnapshot()
+	candidate, err := newVectorIndex(collection, vectorIndexOptionsFromDefinition(def))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reason := candidate.loadPersistSnapshot(snapshot); reason != "" {
+		t.Fatalf("candidate restore reason=%q", reason)
+	}
+	candidate.recordPersistentDefinition(def)
+	candidate.recordLoadedSnapshot(rootID, current.Stats().BytesDisk)
+	if err := current.InsertDocument([]byte("a")); err != nil {
+		t.Fatal(err)
+	}
+	attempt := &vectorPartitionLiveReplayAttemptV1{entries: []vectorPartitionLiveReplayEntryV1{{
+		spec:      vectorPartitionLiveReplaySpecV1{before: current, definition: def, beforeSeq: beforeSeq, rootName: collectionVectorIndexRootName(collection.name, def.Name)},
+		candidate: candidate, snapshotSeq: candidate.nativeMutationSequence(),
+	}}}
+	err = collection.installVectorPartitionLiveReplayAttemptV1(attempt, []string{attempt.entries[0].spec.rootName}, []uint64{rootID})
+	if !errors.Is(err, ErrConcurrentMutation) {
+		t.Fatalf("install err=%v want concurrent mutation", err)
+	}
+	if !current.needsNativeAutoPersist() {
+		t.Fatal("concurrent carrier mutation was incorrectly marked persisted")
+	}
+}
+
 func TestVectorIndexPartitionLiveSnapshotRecoveryAndMismatchV1(t *testing.T) {
 	idx, err := newVectorIndex(nil, VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4, EfConstruction: 16, EfSearch: 8})
 	if err != nil {
