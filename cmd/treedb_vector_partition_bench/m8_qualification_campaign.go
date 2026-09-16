@@ -765,6 +765,11 @@ func m8QualificationCommandWithExecutableV1(root, matrixDirectory string, report
 	default:
 		return false
 	}
+	domainCount, _, ok := m8ProductionDomainLayoutV1(report.Config)
+	if !ok {
+		return false
+	}
+	cfg.m8OracleDomainCounts = []int{domainCount}
 	return reflect.DeepEqual(m8QualificationCommandConfigV1(cfg), m8CommandBoundProductionConfigV1(report.Config)) &&
 		cfg.m8MaxRSSBytes == report.Resources.PeakRSSCapBytes &&
 		cfg.m8MaxAssetBytes == report.Resources.PersistentAssetCap &&
@@ -828,6 +833,7 @@ func m8QualificationMatrixCommandWithExecutableV1(root, matrixDirectory string, 
 	commandConfig := m8QualificationCommandConfigV1(cfg)
 	commandConfig.Overlap = nil
 	profileRoot := ""
+	oracleDomainCounts := make([]int, 0, len(m8RequiredVariantIDsV1))
 	variantDBs := make(map[string]bool, len(cfg.m8VariantDBs))
 	for _, dir := range cfg.m8VariantDBs {
 		canonical, err := m8CanonicalPathV1(dir)
@@ -859,7 +865,13 @@ func m8QualificationMatrixCommandWithExecutableV1(root, matrixDirectory string, 
 		if cfg.m8TruthCacheSHA256 != report.TruthCache.ArtifactSHA256 {
 			return false
 		}
+		domainCount, _, ok := m8ProductionDomainLayoutV1(report.Config)
+		if !ok {
+			return false
+		}
+		oracleDomainCounts = append(oracleDomainCounts, domainCount)
 	}
+	cfg.m8OracleDomainCounts = oracleDomainCounts
 	profiles, err := m8CanonicalPathV1(cfg.profiles)
 	return err == nil && profiles == profileRoot &&
 		m8QualificationCommandAdmissionV1(matrix.Command[1:], cfg, base.Dataset)

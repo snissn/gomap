@@ -4622,31 +4622,36 @@ func m8ProductionDomainLayoutV1(cfg m8ProductionConfigEvidenceV1) (int, []int, b
 	return cfg.DomainCount, cfg.PacksPerDomain, total == cfg.Partitions
 }
 
-func m8ExpectedLocalSearchBoundsV1(samples, probes int, packsPerDomain []int) (uint64, uint64, bool) {
-	if samples < 1 || probes < 1 || probes > len(packsPerDomain) {
-		return 0, 0, false
-	}
-	counts := append([]int(nil), packsPerDomain...)
-	sort.Ints(counts)
-	minimumPacks, maximumPacks := 0, 0
-	for i := range probes {
-		minimumPacks += counts[i]
-		maximumPacks += counts[len(counts)-1-i]
-	}
-	if minimumPacks < 1 || uint64(samples) > ^uint64(0)/uint64(maximumPacks) {
-		return 0, 0, false
-	}
-	return uint64(samples) * uint64(minimumPacks), uint64(samples) * uint64(maximumPacks), true
-}
-
 func m8LocalSearchFanoutValidV1(fanout []uint32, aggregate uint64, samples, probes int, packsPerDomain []int) bool {
-	minimum, maximum, ok := m8ExpectedLocalSearchBoundsV1(1, probes, packsPerDomain)
-	if !ok || len(fanout) != samples {
+	if samples < 1 || probes < 1 || probes > len(packsPerDomain) || len(fanout) != samples {
 		return false
+	}
+	totalPacks := 0
+	for _, count := range packsPerDomain {
+		if count < 1 || count > math.MaxInt-totalPacks {
+			return false
+		}
+		totalPacks += count
+	}
+	reachable := make([][]bool, probes+1)
+	for selected := range reachable {
+		reachable[selected] = make([]bool, totalPacks+1)
+	}
+	reachable[0][0] = true
+	seen := 0
+	for _, count := range packsPerDomain {
+		for selected := min(probes, seen+1); selected > 0; selected-- {
+			for prior := totalPacks - count; prior >= 0; prior-- {
+				if reachable[selected-1][prior] {
+					reachable[selected][prior+count] = true
+				}
+			}
+		}
+		seen++
 	}
 	var total uint64
 	for _, searches := range fanout {
-		if uint64(searches) < minimum || uint64(searches) > maximum || total > math.MaxUint64-uint64(searches) {
+		if uint64(searches) > uint64(totalPacks) || !reachable[probes][int(searches)] || total > math.MaxUint64-uint64(searches) {
 			return false
 		}
 		total += uint64(searches)

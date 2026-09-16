@@ -224,6 +224,29 @@ func openM8ProductionExistingAssetSetV1(dir string) (_ *m8ProductionMultiGroupAs
 	return openM8ProductionExistingAssetSetModeV1(dir, true)
 }
 
+func m8RetainedOracleDomainCountsV1(cfg config) ([]int, error) {
+	dirs := cfg.m8VariantDBs
+	if cfg.m8ExistingDB != "" {
+		dirs = []string{cfg.m8ExistingDB}
+	}
+	counts := make([]int, 0, len(dirs))
+	for _, dir := range dirs {
+		assets, err := openM8ProductionExistingAssetSetV1(dir)
+		if err != nil {
+			return nil, fmt.Errorf("open retained M8 manifest for work planning: %w", err)
+		}
+		partitions, domains := assets.manifest.PartitionCount, assets.manifest.DomainCount
+		if err := assets.Close(); err != nil {
+			return nil, fmt.Errorf("close retained M8 manifest after work planning: %w", err)
+		}
+		if uint64(partitions) != uint64(cfg.partitions) || domains < 1 || domains > partitions {
+			return nil, errors.New("retained M8 manifest does not match configured physical packs or logical domains")
+		}
+		counts = append(counts, int(domains))
+	}
+	return counts, nil
+}
+
 func openM8ProductionExistingAssetSetModeV1(dir string, readOnly bool) (_ *m8ProductionMultiGroupAssetsV1, err error) {
 	info, statErr := os.Stat(dir)
 	if statErr != nil {

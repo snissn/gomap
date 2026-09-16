@@ -355,6 +355,29 @@ func TestM8MembershipOracleCombinationBoundIsPreflightedV1(t *testing.T) {
 	}
 }
 
+func TestM8BenchmarkWorkUsesRetainedLogicalDomainCountsV1(t *testing.T) {
+	cfg := config{
+		partitions: 256, overlaps: []float64{0}, probes: []int{16}, efSearch: []int{64}, concurrency: []int{1}, topK: 1,
+		m8ExistingDB: "/retained/multi-pack", m8OracleDomainCounts: []int{16}, m8MaxExactTruthVisits: math.MaxInt64,
+	}
+	plan, err := validateM8BenchmarkWork(cfg, fixtureManifest{Vectors: 256, Queries: 1, Dimensions: 1}, math.MaxInt64, math.MaxInt64)
+	if err != nil || plan.MaxMembershipOracleSubsets != 1 || plan.MembershipOracleSubsetEvaluations != 1 || plan.MembershipOracleWorkUnits != 289 {
+		t.Fatalf("logical-domain work plan=%+v err=%v", plan, err)
+	}
+	cfg.probes = []int{17}
+	if _, err := validateM8BenchmarkWork(cfg, fixtureManifest{Vectors: 256, Queries: 1, Dimensions: 1}, math.MaxInt64, math.MaxInt64); err == nil {
+		t.Fatal("accepted probes above retained logical-domain count")
+	}
+	cfg.m8ExistingDB = ""
+	cfg.m8VariantDBs = []string{"/a", "/b", "/c"}
+	cfg.m8OracleDomainCounts = []int{2, 4, 8}
+	cfg.probes = []int{2}
+	plan, err = validateM8BenchmarkWork(cfg, fixtureManifest{Vectors: 256, Queries: 1, Dimensions: 1}, math.MaxInt64, math.MaxInt64)
+	if err != nil || plan.MaxMembershipOracleSubsets != 28 || plan.MembershipOracleSubsetEvaluations != 35 {
+		t.Fatalf("logical-domain matrix work plan=%+v err=%v", plan, err)
+	}
+}
+
 func TestM8AttributionOwnersKeepRouterAndLocalLossSeparateV1(t *testing.T) {
 	for _, test := range []struct {
 		name                         string

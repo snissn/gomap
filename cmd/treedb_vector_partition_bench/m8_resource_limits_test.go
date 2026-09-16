@@ -39,6 +39,18 @@ func TestM8ConfiguredProbesUseLogicalDomainCountV1(t *testing.T) {
 	}
 }
 
+func TestM8LocalSearchFanoutRequiresAchievableDomainSubsetV1(t *testing.T) {
+	if !m8LocalSearchFanoutValidV1([]uint32{1, 3}, 4, 2, 1, []int{1, 3}) {
+		t.Fatal("rejected achievable one-domain fanouts")
+	}
+	if m8LocalSearchFanoutValidV1([]uint32{2}, 2, 1, 1, []int{1, 3}) {
+		t.Fatal("accepted fanout between achievable one-domain totals")
+	}
+	if !m8LocalSearchFanoutValidV1([]uint32{4}, 4, 1, 2, []int{1, 3}) {
+		t.Fatal("rejected achievable two-domain fanout")
+	}
+}
+
 func TestM8AttributionExpandsLogicalDomainsToPhysicalPacksV1(t *testing.T) {
 	manifest := collections.VectorPartitionManifestV1{
 		PartitionCount: 3,
