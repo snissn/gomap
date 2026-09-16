@@ -1206,6 +1206,98 @@ func TestVectorIndexPartitionLiveForegroundDurablePublicationCrashV1(t *testing.
 	}
 }
 
+func TestVectorIndexPartitionLiveForegroundRelaxedCheckpointCrashV1(t *testing.T) {
+	if dir := os.Getenv("GOMAP_VECTOR_PARTITION_LIVE_RELAXED_CHECKPOINT_CRASH_DIR"); dir != "" {
+		generation, err := strconv.ParseUint(os.Getenv("GOMAP_VECTOR_PARTITION_LIVE_GENERATION"), 10, 64)
+		if err != nil {
+			t.Fatal(err)
+		}
+		database := openCollectionCommandWALDB(t, dir)
+		collection, err := NewCollectionManager(database).OpenCollection("docs")
+		if err != nil {
+			t.Fatal(err)
+		}
+		manifest, err := collection.ActiveVectorPartitionManifestForLiveRecoveryWithContextV1(t.Context(), "embedding_graph", generation)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := collection.EnsureVectorPartitionLiveBindingV1(t.Context(), manifest); err != nil {
+			t.Fatal(err)
+		}
+		replacement, err := json.Marshal(map[string]any{
+			"time_us": int64(99), "kind": "vector", "did": "a", "embedding": []float32{0, 1},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if matched, err := collection.Replace([]byte("a"), replacement); err != nil || !matched {
+			t.Fatalf("replacement matched=%v err=%v", matched, err)
+		}
+		if err := database.Checkpoint(); err != nil {
+			t.Fatal(err)
+		}
+		os.Exit(0) // Process loss after a successful checkpoint, before Close can persist anything else.
+	}
+
+	requireVectorPartitionPersistenceV1(t)
+	dir, database, collection, def, manifest := newVectorPartitionLiveProductionFixtureV1(t)
+	if err := collection.EnsureVectorPartitionLiveBindingV1(t.Context(), manifest); err != nil {
+		database.Close()
+		t.Fatal(err)
+	}
+	if err := database.Checkpoint(); err != nil {
+		database.Close()
+		t.Fatal(err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	crashRaceOptions := "GORACE=" + strings.TrimSpace(os.Getenv("GORACE")+" atexit_sleep_ms=0")
+	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestVectorIndexPartitionLiveForegroundRelaxedCheckpointCrashV1$")
+	cmd.Env = append(os.Environ(),
+		crashRaceOptions,
+		"GOMAP_VECTOR_PARTITION_LIVE_RELAXED_CHECKPOINT_CRASH_DIR="+dir,
+		"GOMAP_VECTOR_PARTITION_LIVE_GENERATION="+strconv.FormatUint(manifest.Generation, 10),
+	)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("foreground relaxed checkpoint crash helper: %v\n%s", err, output)
+	}
+
+	reopenedDB := openCollectionCommandWALDB(t, dir)
+	defer reopenedDB.Close()
+	reopened, err := NewCollectionManager(reopenedDB).OpenCollection("docs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	recoveredDocument, err := reopened.Get([]byte("a"))
+	if err != nil || !bytes.Contains(recoveredDocument, []byte(`"time_us":99`)) {
+		t.Fatalf("recovered document=%s err=%v", recoveredDocument, err)
+	}
+	reopenedManifest, err := reopened.ActiveVectorPartitionManifestForLiveRecoveryWithContextV1(t.Context(), def.Name, manifest.Generation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reopened.EnsureVectorPartitionLiveBindingV1(t.Context(), reopenedManifest); err != nil {
+		t.Fatal(err)
+	}
+	expectedCoverage, _, err := reopened.currentVectorIndexDocumentStateWithWriteDomainLockState(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pin, err := reopened.AcquireVectorPartitionLiveSearchPinV1(reopenedManifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pin.Release()
+	results, _, searchErr := pin.SearchDomainV1(t.Context(), 0, []float32{0, 1}, VectorPartitionSearchOptionsV1{TopK: 1, EfSearch: 8, MaxStableIDBytes: 16})
+	if searchErr != nil || len(results) != 1 || results[0].ID != "a" || pin.StatusV1().Revision != 1 || pin.StatusV1().Coverage != expectedCoverage {
+		t.Fatalf("recovered=%+v status=%+v coverage=%d err=%v", results, pin.StatusV1(), expectedCoverage, searchErr)
+	}
+}
+
 func TestVectorIndexPartitionLiveForegroundDurableInstallsOnceV1(t *testing.T) {
 	requireVectorPartitionPersistenceV1(t)
 	_, database, collection, _, manifest := newVectorPartitionLiveProductionFixtureV1(t, backenddb.Options{

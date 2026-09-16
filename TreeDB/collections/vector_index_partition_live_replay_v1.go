@@ -55,9 +55,7 @@ type vectorPartitionLiveReplayAttemptV1 struct {
 }
 
 func (c *Collection) vectorPartitionLiveReplaySpecsV1(input columnWritePublishInput) ([]vectorPartitionLiveReplaySpecV1, error) {
-	_, replay := input.commandWALIntent.ReplayAssignedLSN()
-	foregroundDurable := input.commandWALIntent != nil && c != nil && c.db != nil && c.db.ResolvedProfile() == backenddb.ProfileCommandWALDurable
-	if !replay && !foregroundDurable {
+	if input.commandWALIntent == nil {
 		return nil, nil
 	}
 	carriers := c.registeredVectorPartitionLiveCarriersV1()
@@ -65,7 +63,7 @@ func (c *Collection) vectorPartitionLiveReplaySpecsV1(input columnWritePublishIn
 		return nil, nil
 	}
 	if !columnStoreWriteEnabled(input.meta) || input.catalog == nil || input.meta.Options.ColumnStore == nil {
-		return nil, fmt.Errorf("%w: replayed partition-live mutation requires a column publication", ErrVectorIndexPartitionLiveUnavailableV1)
+		return nil, fmt.Errorf("%w: command-WAL partition-live mutation requires a column publication", ErrVectorIndexPartitionLiveUnavailableV1)
 	}
 	snap := c.db.AcquireSnapshot()
 	if snap == nil {

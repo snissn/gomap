@@ -133,17 +133,18 @@ Missing, stale, partial, or corrupt coverage fails closed.
 An acknowledged insert, embedding replacement, delete, or logical-domain move
 publishes ownership, tombstones, all affected domain views, live revision, and
 source coverage atomically. The mutation is immediately searchable in memory;
-it does not require a vector snapshot per write. In the durable command-WAL
-profile, each foreground or replayed document command includes the live-carrier
-root in the same ordered document/column/locator/system-root publication before
-acknowledgement or advancement of the applied command frontier. The first live
-binding is durably published before overlay mutations are admitted, and
-ordinary checkpoint plus command-WAL replay reconstructs later acknowledged
-changes on reopen. Recovery loads the checkpointed carrier before applying
-later document-only commands; it never rebuilds the carrier from collection
-rows or requires a post-checkpoint binding command. Snapshot restore validates
-both directions of ownership: every live owner names one current delta row, and
-every current delta row has exactly one matching nondeleted owner. Mapping,
+each foreground or replayed command-WAL document command serializes the bounded
+live-carrier state and includes its root in the same ordered
+document/column/locator/system-root publication before acknowledgement or
+advancement of the applied command frontier. This does not rebuild or rewrite
+the immutable partition base or scan collection rows. The first live binding
+is durably published before overlay mutations are admitted, and ordinary
+checkpoint plus command-WAL replay reconstructs later acknowledged changes on
+reopen. Recovery loads the checkpointed carrier before applying later
+document-only commands; it never rebuilds the carrier from collection rows or
+requires a post-checkpoint binding command. Snapshot restore validates both
+directions of ownership: every live owner names one current delta row, and every
+current delta row has exactly one matching nondeleted owner. Mapping,
 representative, revision, coverage, or ownership mismatch rejects the whole
 live state.
 
