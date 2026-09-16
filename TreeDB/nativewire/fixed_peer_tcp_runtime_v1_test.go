@@ -44,7 +44,9 @@ func fixedPeerReadyV1(t testing.TB, ctx context.Context, names []string) ([]Fixe
 	wait(func() bool {
 		for _, c := range configs {
 			s, e := client.Status(ctx, c.NodeID)
-			if e == nil && s.CatalogRaft.LeaderID != "" {
+			// Raft can elect a leader before that process finishes opening its
+			// data stores and HTTP listener. A follower's hint is not RPC readiness.
+			if e == nil && s.CatalogRaft.State == "Leader" && s.CatalogRaft.LeaderID == c.NodeID {
 				metaLeader = s.CatalogRaft.LeaderID
 				return true
 			}
