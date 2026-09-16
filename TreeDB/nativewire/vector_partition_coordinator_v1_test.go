@@ -442,6 +442,39 @@ func TestVectorPartitionCoordinatorExpandsOneDomainToAllRequiredPacksV1(t *testi
 	}
 }
 
+func TestVectorPartitionCoordinatorPinsDomainPacksWithSessionOffsetsV1(t *testing.T) {
+	coordinator, source, _ := testVectorPartitionCoordinatorV1(t,
+		[]raftplacement.GroupV1{
+			{ID: "group-a", Members: []raftcluster.NodeID{"node-a"}, LeaderHint: "node-a"},
+			{ID: "group-b", Members: []raftcluster.NodeID{"node-b"}, LeaderHint: "node-b"},
+		},
+		[]raftcluster.GroupID{"group-a", "group-b"},
+		map[uint32][]VectorPartitionShardSearchNeighborV1{
+			0: {{ID: "pack-0", Score: .9}},
+			1: {{ID: "pack-1", Score: .8}},
+		},
+		VectorPartitionCoordinatorLimitsV1{},
+	)
+	source.router.status.Manifest.DomainCount = 1
+	source.router.status.Manifest.DomainPacks = []collections.VectorPartitionDomainPackV1{
+		{DomainID: 0, PackID: 0}, {DomainID: 0, PackID: 1},
+	}
+	source.router.status.Partitions = 1
+	source.router.partitions = source.router.partitions[:1]
+	request := testVectorPartitionCoordinatorRequestV1(1)
+	request.RouterCandidateBudget = int(source.router.status.Representatives)
+	request.MergeEntriesLimit = 6
+	if _, err := coordinator.Search(t.Context(), request); err != nil {
+		t.Fatal(err)
+	}
+
+	source.router.status.Manifest.DomainPacks[0].PackID = 99
+	response, err := coordinator.Search(t.Context(), request)
+	if err != nil || !slices.Equal(response.ProbedPacks, []uint32{0, 1}) {
+		t.Fatalf("response=%+v err=%v", response, err)
+	}
+}
+
 func TestVectorPartitionCoordinatorRejectsIncompleteDomainPackMappingBeforeDispatchV1(t *testing.T) {
 	coordinator, source, dispatcher := testVectorPartitionCoordinatorV1(t,
 		[]raftplacement.GroupV1{{ID: "group-a", Members: []raftcluster.NodeID{"node-a"}, LeaderHint: "node-a"}},

@@ -358,6 +358,7 @@ type vectorPartitionCoordinatorRouterSessionV1 struct {
 	router            VectorPartitionCoordinatorRouterV1
 	partitionRows     []uint64
 	domainPackOffsets []int
+	domainPacks       []collections.VectorPartitionDomainPackV1
 	stats             *vectorPartitionCoordinatorRouterSessionStatsV1
 	refs              uint64
 	retired, closing  bool
@@ -532,14 +533,19 @@ func (c *VectorPartitionCoordinatorV1) acquireRouterSessionV1(ctx context.Contex
 		router, err := c.routerSource.OpenVectorPartitionCoordinatorRouterV1(ctx, index, generation)
 		var partitionRows []uint64
 		var domainPackOffsets []int
+		var domainPacks []collections.VectorPartitionDomainPackV1
 		if err == nil && router != nil {
 			status := router.Status()
+			status.Manifest.DomainPacks = slices.Clone(status.Manifest.DomainPacks)
 			domainPackOffsets, err = vectorPartitionCoordinatorDomainPackOffsetsV1(status.Manifest)
 			if err == nil {
 				err = c.validateRouterStatus(status, domainPackOffsets)
 			}
 			if err == nil {
 				partitionRows, err = vectorPartitionCoordinatorPartitionRowsV1(ctx, status.Manifest)
+			}
+			if err == nil {
+				domainPacks = status.Manifest.DomainPacks
 			}
 		}
 		c.sessionMu.Lock()
@@ -552,7 +558,7 @@ func (c *VectorPartitionCoordinatorV1) acquireRouterSessionV1(ctx context.Contex
 		}
 		if err == nil {
 			session := &vectorPartitionCoordinatorRouterSessionV1{
-				router: router, partitionRows: partitionRows, domainPackOffsets: domainPackOffsets, stats: stats, refs: 1,
+				router: router, partitionRows: partitionRows, domainPackOffsets: domainPackOffsets, domainPacks: domainPacks, stats: stats, refs: 1,
 			}
 			c.sessions[key] = session
 			c.leases++
@@ -854,6 +860,7 @@ func (c *VectorPartitionCoordinatorV1) searchV1(ctx context.Context, request Vec
 	var router VectorPartitionCoordinatorRouterV1
 	var partitionRows []uint64
 	var domainPackOffsets []int
+	var domainPacks []collections.VectorPartitionDomainPackV1
 	if strict == nil {
 		routerLease, err = c.acquireRouterSessionV1(requestCtx, request.IndexName, c.placement.PartitionGeneration)
 		if err != nil {
@@ -867,10 +874,12 @@ func (c *VectorPartitionCoordinatorV1) searchV1(ctx context.Context, request Vec
 		router = routerLease.session.router
 		partitionRows = routerLease.session.partitionRows
 		domainPackOffsets = routerLease.session.domainPackOffsets
+		domainPacks = routerLease.session.domainPacks
 	} else {
 		router = strict.snapshot.snapshot.router.session.router
 		partitionRows = strict.snapshot.snapshot.router.session.partitionRows
 		domainPackOffsets = strict.snapshot.snapshot.router.session.domainPackOffsets
+		domainPacks = strict.snapshot.snapshot.router.session.domainPacks
 	}
 	response.Timing.RouterOpenNanos = elapsedNanosV1(openStarted)
 	if router == nil {
@@ -928,7 +937,7 @@ func (c *VectorPartitionCoordinatorV1) searchV1(ctx context.Context, request Vec
 	}
 
 	placementStarted := time.Now()
-	tasks, selectedPartitions, selectedGroups, budget, err := c.plan(requestCtx, request, status, domainPackOffsets, partitionRows, replicatedReadySetDigest, routed.Partitions, strict)
+	tasks, selectedPartitions, selectedGroups, budget, err := c.plan(requestCtx, request, status, domainPackOffsets, domainPacks, partitionRows, replicatedReadySetDigest, routed.Partitions, strict)
 	response.Timing.PlacementNanos = elapsedNanosV1(placementStarted)
 	if err != nil {
 		return response, c.wrapError(err, "")
@@ -1299,7 +1308,7 @@ type vectorPartitionCoordinatorTaskV1 struct {
 	queuedAt      time.Time
 }
 
-func (c *VectorPartitionCoordinatorV1) plan(ctx context.Context, request VectorPartitionCoordinatorRequestV1, status collections.VectorPartitionRouterRuntimeStatusV1, domainPackOffsets []int, partitionRows []uint64, readySetDigest string, routed []collections.VectorPartitionRouterPartitionScoreV1, strict *vectorPartitionCoordinatorStrictSearchV1) ([]vectorPartitionCoordinatorTaskV1, []uint32, []raftcluster.GroupID, vectorPartitionCoordinatorBudgetV1, error) {
+func (c *VectorPartitionCoordinatorV1) plan(ctx context.Context, request VectorPartitionCoordinatorRequestV1, status collections.VectorPartitionRouterRuntimeStatusV1, domainPackOffsets []int, domainPacks []collections.VectorPartitionDomainPackV1, partitionRows []uint64, readySetDigest string, routed []collections.VectorPartitionRouterPartitionScoreV1, strict *vectorPartitionCoordinatorStrictSearchV1) ([]vectorPartitionCoordinatorTaskV1, []uint32, []raftcluster.GroupID, vectorPartitionCoordinatorBudgetV1, error) {
 	var zero vectorPartitionCoordinatorBudgetV1
 	if ctx == nil {
 		ctx = context.Background()
@@ -1326,7 +1335,10 @@ func (c *VectorPartitionCoordinatorV1) plan(ctx context.Context, request VectorP
 		}
 		seen[score.PartitionID] = struct{}{}
 		start, end := domainPackOffsets[score.PartitionID], domainPackOffsets[score.PartitionID+1]
-		for _, mapping := range status.Manifest.DomainPacks[start:end] {
+		if start < 0 || end < start || end > len(domainPacks) {
+			return nil, nil, nil, zero, ErrVectorPartitionCoordinatorGenerationMismatch
+		}
+		for _, mapping := range domainPacks[start:end] {
 			packID := mapping.PackID
 			selected = append(selected, packID)
 			groupID := c.placement.Partitions[packID].GroupID
