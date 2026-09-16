@@ -45,6 +45,17 @@ var (
 	ErrColumnGraphSearchBudget = errTypedGraphSearchBudget
 )
 
+// ValidateColumnGraphServingOptions rejects incomplete explicit admission
+// limits with ErrColumnGraphSearchBudget. It performs no I/O and does not
+// select a serving policy.
+func ValidateColumnGraphServingOptions(opts ColumnGraphServingOptions) error {
+	p, o, f, m := opts.Publication, opts.Owners, opts.Filter, opts.Maintenance
+	if p.Rows <= 0 || p.Tombstones <= 0 || p.ValueSlots <= 0 || p.OwnedBytes <= 0 || p.EncodedOutputBytes <= 0 || !typedGraphReadOwnerLimitsValid(o) || opts.CandidateOutput.Bytes <= 0 || opts.CandidateOutput.AppenderAttempts <= 0 || opts.FoldRows <= 0 || opts.SearchCandidates <= 0 || f.SourceIDs <= 0 || f.SourceBytes <= 0 || f.RetainedBytes <= 0 || f.MappingWork <= 0 || f.InspectedEntries <= 0 || m.NativeEntries <= 0 || m.ColumnSegments <= 0 || m.ManifestRecords <= 0 || m.LifecycleEntries <= 0 || m.NativeBytes <= 0 || m.ColumnBytes <= 0 || m.ManifestBytes <= 0 || m.RetainedBytes <= 0 || m.PagerPages == 0 {
+		return errTypedGraphSearchBudget
+	}
+	return nil
+}
+
 type typedGraphServingPolicy struct {
 	index   string
 	options ColumnGraphServingOptions
@@ -74,10 +85,10 @@ func (c *Collection) EnsureColumnGraphServing(ctx context.Context, index string,
 	if err := ValidateIndexName(index); err != nil {
 		return err
 	}
-	p, o, f, m := opts.Publication, opts.Owners, opts.Filter, opts.Maintenance
-	if p.Rows <= 0 || p.Tombstones <= 0 || p.ValueSlots <= 0 || p.OwnedBytes <= 0 || p.EncodedOutputBytes <= 0 || !typedGraphReadOwnerLimitsValid(o) || opts.CandidateOutput.Bytes <= 0 || opts.CandidateOutput.AppenderAttempts <= 0 || opts.FoldRows <= 0 || opts.SearchCandidates <= 0 || f.SourceIDs <= 0 || f.SourceBytes <= 0 || f.RetainedBytes <= 0 || f.MappingWork <= 0 || f.InspectedEntries <= 0 || m.NativeEntries <= 0 || m.ColumnSegments <= 0 || m.ManifestRecords <= 0 || m.LifecycleEntries <= 0 || m.NativeBytes <= 0 || m.ColumnBytes <= 0 || m.ManifestBytes <= 0 || m.RetainedBytes <= 0 || m.PagerPages == 0 {
-		return errTypedGraphSearchBudget
+	if err := ValidateColumnGraphServingOptions(opts); err != nil {
+		return err
 	}
+	p, o, m := opts.Publication, opts.Owners, opts.Maintenance
 	coord := c.collectionSchemaCoordinator()
 	policy := &typedGraphServingPolicy{index: index, options: opts}
 	if old := coord.typedGraphServing.Load(); old != nil && *old != *policy {

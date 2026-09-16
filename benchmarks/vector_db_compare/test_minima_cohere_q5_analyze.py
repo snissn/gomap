@@ -11,13 +11,261 @@ import minima_cohere_q5_analyze as analyzer
 
 
 COMMIT = "a" * 40
+FROZEN_LEGACY_FAILURES = [
+    "initial exact oracle mismatch for broad_10pct",
+    "RuntimeError: timed query 3 does not match its frozen oracle",
+]
+FROZEN_LEGACY_IDS = [f"minima/broad_10pct/{ordinal:06d}" for ordinal in range(1000, 1005)]
+FROZEN_LEGACY_ROUTE_DEFINITIONS = {
+    "small": ("complete_exact", "bounded_complete_set", 16, 16, 16, 16, 16, 5, 16),
+    "all_match": ("vector_aligned_ann", "vector_aligned_scalar",
+                  4096, 32, 32, 2080, 2064, 5, 32),
+    "over_limit_4097": ("vector_aligned_ann", "vector_aligned_scalar",
+                        4096, 32, 32, 2080, 2064, 5, 32),
+    "broad_10pct": ("complete_finite_ann", "bounded_complete_set",
+                    1000, 1000, 1000, 2064, 2064, 0, 1000),
+    "sparse_over_limit": ("vector_aligned_ann", "vector_aligned_scalar",
+                          4096, 32, 32, 2080, 2064, 5, 32),
+    "mixed_broad_narrow": ("mixed_refined", "bounded_candidate_refinement",
+                           4101, 5, 5, 5, 5, 5, 5),
+    "empty_user": ("complete_exact", "bounded_complete_set", 0, 0, 0, 0, 0, 0, 0),
+    "empty_file": ("complete_exact", "bounded_complete_set", 16, 0, 0, 0, 0, 0, 0),
+}
 
 
 def canonical(value):
     return json.dumps(value, sort_keys=True, separators=(",", ":")).encode() + b"\n"
 
 
+def frozen_legacy_routes():
+    routes = {}
+    for name, (plan, membership, probe, candidates, retained, visited, scored,
+               admitted, allowed) in FROZEN_LEGACY_ROUTE_DEFINITIONS.items():
+        routes[name] = ({
+            "identity": "native_base_plus_live_delta", "declared_scalar_filtering": True,
+            "native_base_plus_live_delta": True, "full_document_scan_fallbacks": 0,
+            "scalar_filter_unbounded": 0, "probe_ids": probe, "candidate_ids": candidates,
+            "retained_candidate_ids": retained, "refined_candidate_ids": retained,
+            "membership_source": membership, "plan": plan,
+            "allowed_id_materialization_rows": allowed, "primary_document_scans": 0,
+            "visited_candidates": visited, "scored_candidates": scored,
+            "admitted_candidates": admitted,
+        }, {
+            "membership_source": membership, "plan": plan, "probe_ids": probe,
+            "candidates": scored, "candidate_ids": candidates, "retained": retained,
+            "refined": retained, "visited": visited, "scored": scored,
+            "admitted": admitted, "visibility_mismatches": 0, "visibility_retries": 0,
+        })
+    return routes
+
+
+def bounded_manifest():
+    populations = {
+        "small": (128, 16), "all_match": (7616, 7616),
+        "over_limit_4097": (10000, 4097), "broad_10pct": (10000, 1000),
+        "sparse_over_limit": (12000, 4097), "mixed_broad_narrow": (10000, 5),
+        "empty_user": (128, 0), "empty_file": (128, 0),
+    }
+    queries = []
+    for name, (_, eligible) in populations.items():
+        ids = (FROZEN_LEGACY_IDS if name == "broad_10pct"
+               else ([] if eligible == 0 else [f"minima/{name}/000000"]))
+        scores = [0.9] * len(ids)
+        queries.append({
+            "scenario": name,
+            "initial_oracle_ids": list(ids), "initial_oracle_scores": list(scores),
+            "final_oracle_ids": list(ids), "final_oracle_scores": list(scores),
+        })
+    return {
+        "schema": "treedb_rag_minima_manifest/v2", "fixture": "bounded-50k",
+        "config": {
+            "dimension": 8, "top_k": 5, "batch_size": 256, "lookup_limit": 4096,
+            "warmup_queries": 32, "timed_queries": 1024,
+            "reader_concurrency": 4, "writer_concurrency": 1,
+            "order_tolerance": 0, "score_tolerance": 0.000001,
+        },
+        "corpora": [
+            {"name": name, "corpus_rows": rows, "eligible_rows": eligible,
+             "selectivity": eligible / rows}
+            for name, (rows, eligible) in populations.items()
+        ],
+        "queries": queries,
+        "operations": [],
+        "corpus_sha256": "1" * 64, "query_sha256": "2" * 64,
+        "operation_sha256": "3" * 64, "expected_state_sha256": "4" * 64,
+    }
+
+
+def bounded_plan(manifest, serving):
+    return {
+        "schema": analyzer.BOUNDED_SQ8_PLAN_SCHEMA,
+        "manifest": {
+            "schema": manifest["schema"], "fixture": manifest["fixture"],
+            "config": manifest["config"], "corpus_sha256": manifest["corpus_sha256"],
+            "query_sha256": manifest["query_sha256"],
+            "operation_sha256": manifest["operation_sha256"],
+            "expected_state_sha256": manifest["expected_state_sha256"],
+        },
+        "quantized_profile": {
+            "schema": "treedb_minima_quantized_profile/v1", "name": "minima_sq8",
+            "query_mode": "quantized_rerank", "index_name": "minima_sq8",
+            "codec": "scalar_u8", "version": 1, "calibration": "legacy",
+            "quantized_config_hash": 0, "requested_ef_search": 64,
+            "requested_rerank_candidates": 64, "native_command_version": 3,
+        },
+        "vector_strategy": "column_graph", "transport": "native",
+        "durability_profile": "command_wal_durable", "vector_m": 16,
+        "ef_construction": 32, "serving": serving,
+    }
+
+
+def bounded_backend(role, manifest, service, service_sha):
+    exact = role == "exact"
+    config = {
+        "harness_commit": COMMIT, "product_commit": COMMIT,
+        "runner_sha256": analyzer.sha256_file(
+            Path(analyzer.__file__).with_name("minima_treedb_runner.py")),
+        "service_binary": str(service), "service_binary_sha256": service_sha,
+        "service_binary_vcs_revision": COMMIT, "service_binary_vcs_modified": "false",
+        "vector_strategy": "native_runtime" if exact else "column_graph",
+        "transport": "http" if exact else "native", "profile": "command_wal_durable",
+        "dimension": "8", "ef_search": "128" if exact else "64",
+        "url": "http://127.0.0.1:18040" if exact else "http://127.0.0.1:18050",
+        "collection": f"minima_q5_bounded_{'exact' if exact else 'sq8'}_{COMMIT[:12]}",
+    }
+    if not exact:
+        config.update(ef_construction_requested="32", query_mode="quantized_rerank",
+                      quantized_index_name="minima_sq8")
+    return {
+        "name": "treedb", "configuration": config,
+        "manifest": {key: manifest[key] for key in (
+            "corpus_sha256", "operation_sha256", "query_sha256",
+        )},
+        "operations": {"manifest_ordered": True},
+    }
+
+
+def clean_bounded_artifact(role, manifest, service, service_sha, plan_sha=None):
+    backend = bounded_backend(role, manifest, service, service_sha)
+    artifact = {
+        "schema": (analyzer.BOUNDED_ARTIFACT_SCHEMA if role == "exact"
+                   else analyzer.BOUNDED_SQ8_ARTIFACT_SCHEMA),
+        "state": "partial", "passing": False, "readiness_recommendation": "not_evaluated",
+        "manifest": manifest, "backends": [backend], "scenarios": [], "failures": [],
+        "backend_raw_evidence": {"treedb": {"final_scroll_state": {"match": True}}},
+    }
+    if role == "exact":
+        artifact["native_path_proof"] = {"strategy": "native_runtime"}
+    else:
+        plan = bounded_plan(manifest, {})
+        artifact.update(quantized_plan_sha256=plan_sha,
+                        quantized_profile=plan["quantized_profile"])
+    return artifact
+
+
+def known_legacy_failure_artifact(manifest, service, service_sha):
+    artifact = clean_bounded_artifact("exact", manifest, service, service_sha)
+    artifact["schema"] = "treedb_rag_application/minima_diagnostic_v1"
+    artifact["failures"] = list(FROZEN_LEGACY_FAILURES)
+    artifact["native_path_proof"] = {
+        "schema": "treedb_minima_native_path_proof/v1", "strategy": "native_runtime",
+        "availability": "unavailable", "counters": None,
+        "reason": ("native baseline diagnostic; typed column_graph lifecycle counters require "
+                   "M1-M4; bounded sparse scenario does not preserve full <1% selectivity"),
+    }
+    backend = artifact["backends"][0]
+    backend["operations"] = {
+        "batch_insert_during_search": False, "empty_cases_checked": False,
+        "explicit_delete_visible": False, "explicit_update_visible": False,
+        "manifest_ordered": False, "reindex_delete_replace": False,
+        "reindex_execution_sha256": "", "reindex_execution_trace": {"operations": []},
+        "reindex_operations_executed": 0, "timed_execution_sha256": "",
+        "timed_execution_trace": {"queries": [], "rounds": []},
+        "timed_queries_executed": 0, "timed_rounds_completed": 0,
+    }
+    backend["reopen"] = {
+        "attempted": False, "committed_parity": False, "result_manifest_hash": "",
+    }
+    scenarios, events, routes = [], [], {}
+    population = {row["name"]: row for row in manifest["corpora"]}
+    route_contracts = frozen_legacy_routes()
+    for query in manifest["queries"]:
+        name = query["scenario"]
+        expected, expected_scores = query["initial_oracle_ids"], query["initial_oracle_scores"]
+        mismatch = name == "broad_10pct"
+        actual = [] if mismatch else list(expected)
+        actual_scores = [] if mismatch else list(expected_scores)
+        route, routes[name] = copy.deepcopy(route_contracts[name])
+        scenarios.append({
+            "scenario": name, "backend": "treedb",
+            "corpus_rows": population[name]["corpus_rows"],
+            "expected_matches": population[name]["eligible_rows"],
+            "selectivity": population[name]["selectivity"],
+            "initial_oracle_ids": expected, "initial_actual_ids": actual,
+            "initial_oracle_scores": expected_scores,
+            "initial_actual_scores": actual_scores,
+            "final_oracle_ids": query["final_oracle_ids"],
+            "final_oracle_scores": query["final_oracle_scores"],
+            "order_tolerance": manifest["config"]["order_tolerance"],
+            "score_tolerance": manifest["config"]["score_tolerance"],
+            "actual_ids": [], "actual_scores": [], "reopen_ids": [], "reopen_parity": True,
+            "errors": 0, "timeouts": 0,
+            "recall": 1.0 if query["final_oracle_ids"] == [] else 0.0,
+            "overlap": 1.0 if query["final_oracle_ids"] == [] else 0.0,
+            "route": route,
+            "correctness": {
+                "cross_user_results": 0, "stale_delete_ids": 0,
+                "stale_insert_ids": 0, "stale_update_ids": 0,
+            },
+            "visibility": {
+                "generation_consistent": True, "visibility_mismatch_count": 0,
+                "visibility_retry_count": 0,
+            },
+        })
+        events.append({
+            "kind": "oracle_comparison", "operation": "initial_oracle_comparison",
+            "scenario": name, "expected_ids": expected, "actual_ids": actual,
+            "match": not mismatch, "maximum_score_delta": 0.0,
+        })
+    artifact["scenarios"] = scenarios
+    artifact["backend_raw_evidence"] = {"treedb": {
+        "events": events, "native_route_responses": routes,
+        "final_scroll_state": {}, "restart_boundary": {},
+    }}
+    return artifact
+
+
 class Q5AnalyzeTest(unittest.TestCase):
+    def test_packet_serving_configuration_requires_current_physical_limits(self):
+        serving = {
+            "Publication": {key: 1 for key in (
+                "Rows", "Tombstones", "ValueSlots", "OwnedBytes", "EncodedOutputBytes",
+            )},
+            "Owners": {
+                **{key: 1 for key in ("Owners", "States", "StateBytes", "AssetBytes")},
+                "Cold": {key: 1 for key in (
+                    "ManifestRecords", "ManifestBytes", "AssetBytes", "DecodedTermBytes",
+                )},
+                "Physical": {key: 1 for key in (
+                    "segments", "descriptors", "mapped_bytes", "fallback_bytes", "inventory_bytes",
+                )},
+            },
+            "CandidateOutput": {"Bytes": 1, "AppenderAttempts": 1},
+            "Maintenance": {key: 1 for key in (
+                "NativeEntries", "ColumnSegments", "ManifestRecords", "LifecycleEntries",
+                "NativeBytes", "ColumnBytes", "ManifestBytes", "RetainedBytes", "PagerPages",
+            )},
+            "Filter": {key: 1 for key in (
+                "SourceIDs", "SourceBytes", "RetainedBytes", "MappingWork", "InspectedEntries",
+            )},
+            "FoldRows": 1,
+            "SearchCandidates": 1,
+        }
+        analyzer.validate_serving_configuration(serving)
+        del serving["Owners"]["Physical"]
+        with self.assertRaisesRegex(analyzer.EvidenceError, "invalid frozen TreeDB serving"):
+            analyzer.validate_serving_configuration(serving)
+
     @staticmethod
     def _append_construction_calls(events, rows):
         def append(phase, **fields):
@@ -213,45 +461,157 @@ class Q5AnalyzeTest(unittest.TestCase):
             exact = root / "exact.json"
             sq8 = root / "sq8.json"
             plan = root / "plan.json"
+            manifest_path = root / "manifest.json"
+            serving_path = root / "serving.json"
             binary = root / "validator"
-            completed = {
-                "backends": [{"name": "treedb", "operations": {"manifest_ordered": True}}],
-                "failures": [], "raw_evidence": {"treedb": {"final_scroll_state": {"match": True}}},
-            }
-            exact.write_bytes(canonical({
-                **completed, "native_path_proof": {"strategy": "native_runtime"},
-            }))
-            sq8.write_bytes(canonical({
-                **completed,
-                "schema": "treedb_rag_application/minima_quantized_diagnostic_v1",
-                "backends": [{"name": "treedb", "operations": {"manifest_ordered": True},
-                              "configuration": {"vector_strategy": "column_graph"}}],
-            }))
-            plan.write_bytes(b"plan")
+            service = root / "service"
+            serving = {}
+            manifest = bounded_manifest()
+            service.write_bytes(b"service")
+            service_sha = hashlib.sha256(b"service").hexdigest()
+            plan_json = bounded_plan(manifest, serving)
+            plan.write_bytes(canonical(plan_json))
+            plan_sha = hashlib.sha256(plan.read_bytes()).hexdigest()
+            manifest_path.write_bytes(canonical(manifest))
+            serving_path.write_bytes(canonical(serving))
+            exact.write_bytes(canonical(clean_bounded_artifact(
+                "exact", manifest, service, service_sha,
+            )))
+            sq8.write_bytes(canonical(clean_bounded_artifact(
+                "sq8", manifest, service, service_sha, plan_sha,
+            )))
             binary.write_bytes(b"binary")
             packet = {
                 "candidate_commit": COMMIT,
                 "inputs": {
                     "bounded_validator_binary": "validator",
+                    "bounded_manifest": "manifest",
                     "bounded_sq8_plan": "plan",
+                    "treedb_service_binary": "service",
+                    "serving": "serving",
                 },
                 "arms": {"bounded_exact": "exact", "bounded_sq8": "sq8"},
-                "files": {"plan": {"sha256": hashlib.sha256(b"plan").hexdigest()}},
+                "files": {
+                    "plan": {"sha256": plan_sha},
+                    "service": {"sha256": service_sha},
+                },
             }
-            paths = {"validator": binary, "plan": plan, "exact": exact, "sq8": sq8}
+            paths = {
+                "validator": binary, "manifest": manifest_path, "plan": plan,
+                "service": service, "serving": serving_path, "exact": exact, "sq8": sq8,
+            }
             calls = []
-            analyzer.validate_bounded_artifacts(packet, paths, calls.append)
+            baseline = analyzer.validate_bounded_artifacts(packet, paths, calls.append)
+            self.assertEqual(baseline["classification"], "completed_clean")
             self.assertEqual(len(calls), 2)
             self.assertNotIn("-minima-quantized-plan", calls[0])
             self.assertIn("-minima-quantized-plan", calls[1])
             self.assertEqual(calls[0][-1], COMMIT)
             self.assertEqual(calls[1][-1], COMMIT)
 
+            sq8_clean = json.loads(sq8.read_text())
+            changed = copy.deepcopy(sq8_clean)
+            changed["raw_evidence"] = changed.pop("backend_raw_evidence")
+            sq8.write_bytes(canonical(changed))
+            with self.assertRaisesRegex(analyzer.EvidenceError, "completed clean"):
+                analyzer.validate_bounded_artifacts(packet, paths, calls.append)
+            sq8.write_bytes(canonical(sq8_clean))
+
+            changed_plan = copy.deepcopy(plan_json)
+            changed_plan["ef_construction"] = 64
+            plan.write_bytes(canonical(changed_plan))
+            with self.assertRaisesRegex(analyzer.EvidenceError, "frozen manifest and profile"):
+                analyzer.validate_bounded_artifacts(packet, paths, calls.append)
+            plan.write_bytes(canonical(plan_json))
+
+            changed = json.loads(exact.read_text())
+            changed["manifest"]["fixture"] = "bounded-250k"
+            exact.write_bytes(canonical(changed))
+            with self.assertRaisesRegex(analyzer.EvidenceError, "inventoried manifest"):
+                analyzer.validate_bounded_artifacts(packet, paths, calls.append)
+
+            exact.write_bytes(canonical(known_legacy_failure_artifact(
+                manifest, service, service_sha,
+            )))
+            baseline = analyzer.validate_bounded_artifacts(packet, paths, calls.append)
+            self.assertEqual(
+                baseline["classification"], "known_legacy_complete_finite_ann_failure",
+            )
+            self.assertFalse(baseline["lifecycle_claim_available"])
+            self.assertFalse(baseline["latency_claim_available"])
+
             changed = json.loads(exact.read_text())
             changed["native_path_proof"]["strategy"] = "column_graph"
             exact.write_bytes(canonical(changed))
             with self.assertRaisesRegex(analyzer.EvidenceError, "native_runtime"):
                 analyzer.validate_bounded_artifacts(packet, paths, calls.append)
+
+    def test_frozen_legacy_baseline_failure_is_narrow_and_uses_real_raw_key(self):
+        self.assertEqual(analyzer.BOUNDED_MANIFEST_SCHEMA, "treedb_rag_minima_manifest/v2")
+        self.assertEqual(
+            analyzer.BOUNDED_ARTIFACT_SCHEMA,
+            "treedb_rag_application/minima_diagnostic_v1",
+        )
+        self.assertEqual(
+            analyzer.LEGACY_BASELINE_CLASSIFICATION,
+            "known_legacy_complete_finite_ann_failure",
+        )
+        self.assertEqual(analyzer.LEGACY_BASELINE_FAILURES, FROZEN_LEGACY_FAILURES)
+        self.assertEqual(analyzer.LEGACY_BASELINE_IDS, FROZEN_LEGACY_IDS)
+        self.assertEqual(analyzer._legacy_baseline_routes(), frozen_legacy_routes())
+        manifest = bounded_manifest()
+        service = Path("/packet/service")
+        artifact = known_legacy_failure_artifact(manifest, service, "a" * 64)
+        backend = artifact["backends"][0]
+        self.assertTrue(analyzer._known_legacy_baseline_failure(artifact, backend))
+
+        def drift_tolerance(row, field, value):
+            row["manifest"]["config"][field] = value
+            for scenario in row["scenarios"]:
+                scenario[field] = value
+
+        mutations = {
+            "extra failure": lambda row: row["failures"].append("timeout"),
+            "wrong actual IDs": lambda row: row["scenarios"][3].update(
+                initial_actual_ids=["other"]),
+            "wrong declared initial IDs": lambda row: row["scenarios"][0].update(
+                initial_oracle_ids=["other"]),
+            "wrong declared initial scores": lambda row: row["scenarios"][0].update(
+                initial_oracle_scores=[0.8]),
+            "wrong declared final IDs": lambda row: row["scenarios"][0].update(
+                final_oracle_ids=["other"]),
+            "wrong declared final scores": lambda row: row["scenarios"][0].update(
+                final_oracle_scores=[0.8]),
+            "wrong order tolerance": lambda row: row["scenarios"][0].update(
+                order_tolerance=1),
+            "boolean order tolerance": lambda row: row["scenarios"][0].update(
+                order_tolerance=False),
+            "wrong score tolerance": lambda row: row["scenarios"][0].update(
+                score_tolerance=0.1),
+            "coordinated order tolerance drift": lambda row: drift_tolerance(
+                row, "order_tolerance", 1),
+            "coordinated score tolerance drift": lambda row: drift_tolerance(
+                row, "score_tolerance", 0.1),
+            "wrong recall summary": lambda row: row["scenarios"][0].update(recall=1.0),
+            "wrong overlap summary": lambda row: row["scenarios"][6].update(overlap=0.0),
+            "wrong plan": lambda row: row["scenarios"][3]["route"].update(plan="complete_exact"),
+            "cleanup claim": lambda row: row["backend_raw_evidence"]["treedb"].update(
+                final_scroll_state={"match": True}),
+            "other mismatch": lambda row: row["backend_raw_evidence"]["treedb"]["events"][0].update(
+                match=False),
+            "bad score": lambda row: row["scenarios"][0].update(initial_actual_scores=[None]),
+            "bad score delta": lambda row: row["backend_raw_evidence"]["treedb"]["events"][0].update(
+                maximum_score_delta=None),
+            "wrong raw key": lambda row: row.update(
+                raw_evidence=row.pop("backend_raw_evidence")),
+        }
+        for label, mutate in mutations.items():
+            changed = copy.deepcopy(artifact)
+            mutate(changed)
+            with self.subTest(label=label):
+                self.assertFalse(analyzer._known_legacy_baseline_failure(
+                    changed, changed["backends"][0],
+                ))
 
     def test_receipts_bind_dataset_outputs_and_typed_unqualified_exit(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -271,6 +631,7 @@ class Q5AnalyzeTest(unittest.TestCase):
                 dataset["queries"]: dataset_dir / "queries.f32",
                 dataset["truth"]: dataset_dir / "truth.json",
                 inputs["bounded_validator_binary"]: root / "bin" / "validator",
+                inputs["bounded_manifest"]: root / "bounded" / "manifest.json",
                 inputs["bounded_sq8_plan"]: root / "inputs" / "bounded-plan.json",
                 inputs["treedb_service_binary"]: root / "bin" / "service",
                 inputs["serving"]: root / "inputs" / "serving.json",
@@ -459,11 +820,93 @@ class Q5AnalyzeTest(unittest.TestCase):
                        "output_sha256": files[arms[role]]["sha256"]}
                 for role in analyzer.RUN_ARM_KINDS
             }
+            runs["bounded_exact"].update(
+                started_utc="2026-09-15T00:01:00Z", ended_utc="2026-09-15T00:02:00Z",
+            )
+            runs["bounded_sq8"].update(
+                started_utc="2026-09-15T00:04:00Z", ended_utc="2026-09-15T00:05:00Z",
+            )
+            runner_prefix = [
+                "/usr/bin/taskset", "-c", "0-5", str(Path(analyzer.sys.executable).resolve()),
+                str(Path(analyzer.__file__).with_name("minima_treedb_runner.py").resolve()),
+            ]
+            bounded_manifest_path = paths[inputs["bounded_manifest"]]
+            exact_commands = [
+                {
+                    "argv": [
+                        str(paths[inputs["bounded_validator_binary"]]), "-workload=minima",
+                        "-dump-minima-manifest", str(bounded_manifest_path),
+                        "-minima-bounded-total-rows", "50000",
+                    ],
+                    "started_utc": "2026-09-15T00:00:00Z",
+                    "ended_utc": "2026-09-15T00:00:01Z", "exit_code": 0,
+                    "output_sha256": files[inputs["bounded_manifest"]]["sha256"],
+                },
+                {
+                    "argv": [
+                        *runner_prefix, "--manifest", str(bounded_manifest_path),
+                        "--output", str(paths[arms["bounded_exact"]]),
+                        "--service-bin", str(paths[inputs["treedb_service_binary"]]),
+                        "--url", "http://127.0.0.1:18040",
+                        "--data-dir", str(bounded_manifest_path.parent / "exact-db"),
+                        "--collection", f"minima_q5_bounded_exact_{COMMIT[:12]}",
+                        "--profile", "command_wal_durable", "--strategy", "native_runtime",
+                        "--operation-timeout", "120", "--startup-timeout", "120",
+                        "--ef-search", "128",
+                    ],
+                    "started_utc": "2026-09-15T00:00:01Z",
+                    "ended_utc": "2026-09-15T00:01:00Z", "exit_code": 0,
+                    "output_sha256": files[arms["bounded_exact"]]["sha256"],
+                },
+            ]
+            sq8_common = [
+                *runner_prefix, "--manifest", str(bounded_manifest_path),
+                "--strategy", "column_graph", "--transport", "native",
+                "--column-graph-serving", str(paths[inputs["serving"]]),
+                "--profile", "command_wal_durable", "--ef-construction", "32",
+                "--query-mode", "quantized_rerank", "--quantized-index-name", "minima_sq8",
+                "--ef-search", "64", "--quantized-rerank-candidates", "64",
+            ]
+            sq8_commands = [
+                {
+                    "argv": [*sq8_common, "--write-quantized-plan",
+                             str(paths[inputs["bounded_sq8_plan"]])],
+                    "started_utc": "2026-09-15T00:02:00Z",
+                    "ended_utc": "2026-09-15T00:02:01Z", "exit_code": 0,
+                    "output_sha256": files[inputs["bounded_sq8_plan"]]["sha256"],
+                },
+                {
+                    "argv": [
+                        *sq8_common, "--quantized-plan",
+                        str(paths[inputs["bounded_sq8_plan"]]),
+                        "--expected-quantized-plan-sha256",
+                        files[inputs["bounded_sq8_plan"]]["sha256"],
+                        "--output", str(paths[arms["bounded_sq8"]]),
+                        "--service-bin", str(paths[inputs["treedb_service_binary"]]),
+                        "--url", "http://127.0.0.1:18050",
+                        "--native-address", "127.0.0.1:18052",
+                        "--data-dir", str(bounded_manifest_path.parent / "sq8-db"),
+                        "--collection", f"minima_q5_bounded_sq8_{COMMIT[:12]}",
+                        "--operation-timeout", "120", "--startup-timeout", "120",
+                    ],
+                    "started_utc": "2026-09-15T00:02:01Z",
+                    "ended_utc": "2026-09-15T00:04:00Z", "exit_code": 0,
+                    "output_sha256": files[arms["bounded_sq8"]]["sha256"],
+                },
+            ]
+            preparations = {
+                role: {
+                    "cwd": str(root), "environment": copy.deepcopy(environment),
+                    "umask": "0022", "commands": commands,
+                }
+                for role, commands in (("bounded_exact", exact_commands),
+                                       ("bounded_sq8", sq8_commands))
+            }
             receipts = {
                 "schema": analyzer.RECEIPT_SCHEMA, "candidate_commit": COMMIT,
                 "dataset_manifest_sha256": files[dataset["manifest"]]["sha256"],
                 "dataset_files_sha256": dataset_hashes,
-                "runs": runs,
+                "preparations": preparations, "runs": runs,
             }
             path.write_bytes(canonical(receipts))
             packet = {"candidate_commit": COMMIT, "declared_quality_outcome": "miss",
@@ -471,11 +914,14 @@ class Q5AnalyzeTest(unittest.TestCase):
                       "inputs": inputs, "files": files}
             analyzer.validate_receipts(
                 packet, paths, receipts["dataset_manifest_sha256"], dataset_hashes,
+                {"classification": "completed_clean"},
             )
             for mutation in (
                     "exit", "environment", "environment_extra", "environment_value",
                     "environment_path", "plan", "argv", "matching_extra",
-                    "missing_input", "duplicate", "affinity", "qdrant_api_key"):
+                    "missing_input", "duplicate", "affinity", "qdrant_api_key",
+                    "producer_exit", "producer_argv", "producer_environment",
+                    "producer_order", "validator_order", "missing_preparation"):
                 changed = copy.deepcopy(receipts)
                 if mutation == "exit":
                     changed["runs"]["full_sq8_events"]["exit_code"] = 0
@@ -516,13 +962,38 @@ class Q5AnalyzeTest(unittest.TestCase):
                         changed["runs"]["qdrant_fp32_rss"][command].extend([
                             "--api-key", "secret",
                         ])
+                elif mutation == "producer_exit":
+                    changed["preparations"]["bounded_exact"]["commands"][1]["exit_code"] = 1
+                elif mutation == "producer_argv":
+                    changed["preparations"]["bounded_sq8"]["commands"][1]["argv"].append(
+                        "--unexpected",
+                    )
+                elif mutation == "producer_environment":
+                    changed["preparations"]["bounded_exact"]["environment"]["UNCONTROLLED"] = "1"
+                elif mutation == "producer_order":
+                    changed["preparations"]["bounded_sq8"]["commands"][0][
+                        "started_utc"] = "2026-09-15T00:00:30Z"
+                elif mutation == "validator_order":
+                    changed["runs"]["bounded_sq8"]["started_utc"] = "2026-09-15T00:03:00Z"
+                elif mutation == "missing_preparation":
+                    del changed["preparations"]["bounded_sq8"]
                 else:
                     changed["runs"]["smoke_exact"]["plan_sha256"] = "f" * 64
                 path.write_bytes(canonical(changed))
                 with self.subTest(mutation=mutation), self.assertRaises(analyzer.EvidenceError):
                     analyzer.validate_receipts(
                         packet, paths, receipts["dataset_manifest_sha256"], dataset_hashes,
+                        {"classification": "completed_clean"},
                     )
+
+            known_failure_receipt = copy.deepcopy(receipts)
+            known_failure_receipt["preparations"]["bounded_exact"]["commands"][1][
+                "exit_code"] = 1
+            path.write_bytes(canonical(known_failure_receipt))
+            analyzer.validate_receipts(
+                packet, paths, receipts["dataset_manifest_sha256"], dataset_hashes,
+                {"classification": analyzer.LEGACY_BASELINE_CLASSIFICATION},
+            )
 
             qdrant_plan = json.loads(plan_paths["qdrant_fp32_rss"].read_text())
             changed_plan = copy.deepcopy(qdrant_plan)
@@ -535,6 +1006,7 @@ class Q5AnalyzeTest(unittest.TestCase):
             with self.assertRaisesRegex(analyzer.EvidenceError, "comparison"):
                 analyzer.validate_receipts(
                     packet, paths, receipts["dataset_manifest_sha256"], dataset_hashes,
+                    {"classification": "completed_clean"},
                 )
             plan_paths["qdrant_fp32_rss"].write_bytes(canonical(qdrant_plan))
 
@@ -554,6 +1026,7 @@ class Q5AnalyzeTest(unittest.TestCase):
             with self.assertRaisesRegex(analyzer.EvidenceError, "packet inventory"):
                 analyzer.validate_receipts(
                     packet, paths, receipts["dataset_manifest_sha256"], dataset_hashes,
+                    {"classification": "completed_clean"},
                 )
 
     def _full_events(self, include_retune=False, quality_pass=True):
@@ -1340,7 +1813,13 @@ class Q5AnalyzeTest(unittest.TestCase):
                     mock.patch.object(analyzer, "validate_go_inputs", return_value={}), \
                     mock.patch.object(analyzer, "validate_receipts"), \
                     mock.patch.object(analyzer, "validate_plans"), \
-                    mock.patch.object(analyzer, "validate_bounded_artifacts"), \
+                    mock.patch.object(analyzer, "validate_bounded_artifacts", return_value={
+                        "classification": analyzer.LEGACY_BASELINE_CLASSIFICATION,
+                        "completed_clean": False, "lifecycle_claim_available": False,
+                        "latency_claim_available": False,
+                        "representation_matched_comparison": False,
+                        "known_limitation": "test limitation",
+                    }), \
                     mock.patch.object(analyzer, "validate_rss_and_comparisons",
                                       return_value=({}, {}, {}, {"state": "accept"}, {"state": "complete"})), \
                     mock.patch.object(analyzer, "_smoke_truth", return_value={}), \
@@ -1351,6 +1830,11 @@ class Q5AnalyzeTest(unittest.TestCase):
                                       return_value=(False, None, None)):
                 result = analyzer.analyze(path, pin, lambda _: None)
                 self.assertEqual(result["state"], "valid_unqualified", result)
+                self.assertEqual(
+                    result["bounded_legacy_control"]["classification"],
+                    analyzer.LEGACY_BASELINE_CLASSIFICATION,
+                )
+                self.assertIn("#4617", result["limitations"][-1])
                 assurance = result["final_state_assurance"]
                 self.assertFalse(assurance["producer_attested"])
                 self.assertFalse(assurance["independently_recomputed"])

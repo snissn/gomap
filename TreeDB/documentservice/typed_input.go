@@ -130,8 +130,10 @@ func (s *Service) optimizeTypedInput(ctx context.Context, col *collections.Colle
 	if action == "" {
 		action = "build"
 	}
-	if (action == "build" || action == "ensure") && req.ColumnGraphServing == nil {
-		return OptimizeIndexResponse{}, serviceError(CodeInvalidRequest, "typed build/ensure requires positive column_graph_serving limits")
+	if action == "build" || action == "ensure" {
+		if req.ColumnGraphServing == nil || collections.ValidateColumnGraphServingOptions(*req.ColumnGraphServing) != nil {
+			return OptimizeIndexResponse{}, serviceError(CodeInvalidRequest, "typed build/ensure requires complete positive column_graph_serving limits")
+		}
 	}
 	if action != "build" && action != "ensure" && action != "fold" && action != "renew" {
 		return OptimizeIndexResponse{}, serviceError(CodeInvalidRequest, "unknown column_graph_action")

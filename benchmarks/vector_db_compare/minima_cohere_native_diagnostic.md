@@ -48,6 +48,13 @@ changes beneath `benchmarks/vector_db_compare` and `clients/python/treedb_client
 at freeze and run time; this attestation does not trust an imported runner or
 client module to certify its own bytes:
 
+Review the serving configuration against the exact combined candidate after
+any serving-contract change. It must use the complete
+`ColumnGraphServingOptions` schema, including positive `Owners.Physical`
+`segments`, `descriptors`, `mapped_bytes`, `fallback_bytes`, and
+`inventory_bytes` limits. Freeze and run both reject incomplete, extra, or
+non-integer fields before starting a service.
+
 ```sh
 python benchmarks/vector_db_compare/minima_cohere_native_diagnostic.py \
   --freeze /mnt/fast4tb/TASK/plan.json --run-dir /mnt/fast4tb/TASK/run \
@@ -123,6 +130,9 @@ over `B+S`; candidate widths and observed shadow work must match that same plan.
 Unfiltered search has only the immutable-base alternative. This distinction also
 preserves the producer's suffix-only exact route when a current filtered plan has
 no base rows, even if its live suffix is larger than the normal exact threshold.
+The FP32 overlap arm also requires every returned document projection to match
+one whole authored batch state whose mutation window intersects that request;
+it does not validate old/new fields independently.
 
 The full SQ8 diagnostic also emits one
 `treedb_cohere_768_sq8_paired_query/v1` event after quality selection and before

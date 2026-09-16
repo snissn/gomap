@@ -20,6 +20,14 @@ import minima_qdrant_runner as common
 import minima_treedb_runner as runner
 import minima_treedb_probe as probe
 import minima_treedb_probe_analyze as probe_analyze
+
+
+def column_graph_serving_options():
+    def populated(shape):
+        return {key: 1 if nested is None else populated(nested)
+                for key, nested in shape.items()}
+
+    return populated(runner.COLUMN_GRAPH_SERVING_SHAPE)
 from treedb_client import DenseScorePlaneProof, DenseSearchWork, IndexInfo, TreeDBProtocolError, TreeDBServiceError
 from treedb_client._native import _dense_work
 
@@ -282,7 +290,7 @@ class ProbeContractTest(unittest.TestCase):
                 args.binding.write_text(json.dumps({'manifest_sha256': 'hash', 'serving': str(args.serving),
                     'serving_sha256': 'hash', 'build_profile': False, 'source_commit': 'commit',
                     'binary': str(args.binary), 'binary_sha256': 'hash'}))
-                args.serving.write_text('{}')
+                args.serving.write_text(json.dumps(column_graph_serving_options()))
                 batch_file = mock.Mock()
                 if operation == 'close':
                     batch_file.close.side_effect = OSError('injected close failure')
@@ -2838,7 +2846,7 @@ class MinimaMeasuredRunnerTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             serving = root/"serving.json"
-            serving.write_text('{"SearchCandidates":4096}')
+            serving.write_text(json.dumps(column_graph_serving_options()))
             argv = ["runner", "--manifest", str(root/"manifest"), "--output", str(root/"out"),
                     "--service-bin", str(root/"service"), "--data-dir", str(root/"data"),
                     "--collection", "owned", "--strategy", "column_graph", "--transport", "http",

@@ -25,9 +25,9 @@ import numpy as np
 import minima_cohere_native_diagnostic as native
 import minima_cohere_qdrant_rss_diagnostic as qdrant
 
-PACKET_SCHEMA = "treedb_cohere_q5_packet/v1"
-ANALYSIS_SCHEMA = "treedb_cohere_q5_analysis/v1"
-RECEIPT_SCHEMA = "treedb_cohere_q5_command_receipts/v1"
+PACKET_SCHEMA = "treedb_cohere_q5_packet/v2"
+ANALYSIS_SCHEMA = "treedb_cohere_q5_analysis/v2"
+RECEIPT_SCHEMA = "treedb_cohere_q5_command_receipts/v2"
 TRADEOFF_REVIEW_SCHEMA = "treedb_cohere_q5_tradeoff_review/v1"
 MAX_PACKET_BYTES = 1 << 20
 MAX_JSON_BYTES = 64 << 20
@@ -53,8 +53,8 @@ PLAN_KINDS = {
     "qdrant_fp32_rss", "full_sq8_events",
 }
 INPUT_KINDS = {
-    "bounded_validator_binary", "bounded_sq8_plan", "treedb_service_binary",
-    "serving", "qdrant_binary",
+    "bounded_validator_binary", "bounded_manifest", "bounded_sq8_plan",
+    "treedb_service_binary", "serving", "qdrant_binary",
 }
 REQUIRED_RECEIPT_ENV = {
     "HOME", "PATH", "TMPDIR", "TZ", "LANG", "LC_ALL", "GOWORK", "GOMAXPROCS",
@@ -67,6 +67,16 @@ HARNESS_TREE_PATHS = (
 PRODUCT_TREE_PATHS = (
     "TreeDB", "cmd/treedb-document-service", "internal", "go.mod", "go.sum",
 )
+BOUNDED_MANIFEST_SCHEMA = "treedb_rag_minima_manifest/v2"
+BOUNDED_ARTIFACT_SCHEMA = "treedb_rag_application/minima_diagnostic_v1"
+BOUNDED_SQ8_ARTIFACT_SCHEMA = "treedb_rag_application/minima_quantized_diagnostic_v1"
+BOUNDED_SQ8_PLAN_SCHEMA = "treedb_minima_quantized_plan/v1"
+LEGACY_BASELINE_CLASSIFICATION = "known_legacy_complete_finite_ann_failure"
+LEGACY_BASELINE_FAILURES = [
+    "initial exact oracle mismatch for broad_10pct",
+    "RuntimeError: timed query 3 does not match its frozen oracle",
+]
+LEGACY_BASELINE_IDS = [f"minima/broad_10pct/{ordinal:06d}" for ordinal in range(1000, 1005)]
 
 
 class EvidenceError(ValueError):
@@ -692,6 +702,38 @@ def _utc_timestamp(value):
     return parsed
 
 
+def _validate_receipt_context(receipt, label):
+    environment = receipt.get("environment") if isinstance(receipt, dict) else None
+    cwd = receipt.get("cwd") if isinstance(receipt, dict) else None
+    umask = receipt.get("umask") if isinstance(receipt, dict) else None
+    if (not isinstance(environment, dict) or set(environment) != REQUIRED_RECEIPT_ENV
+            or any(not isinstance(key, str) or not key or "\0" in key
+                   or not isinstance(value, str) or "\0" in value
+                   for key, value in environment.items())
+            or any(not environment[key] for key in (
+                "HOME", "PATH", "TMPDIR", "TZ", "LANG", "LC_ALL", "GOWORK",
+                "GOMAXPROCS", "PYTHONHASHSEED", "OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS",
+            ))
+            or environment["TZ"] != "UTC"
+            or environment["LANG"] != "C.UTF-8" or environment["LC_ALL"] != "C.UTF-8"
+            or environment["GOWORK"] != "off"
+            or environment["PYTHONHASHSEED"] != "0"
+            or environment["PYTHONDONTWRITEBYTECODE"] != "1"
+            or environment["OPENBLAS_NUM_THREADS"] != "1"
+            or environment["OMP_NUM_THREADS"] != "1"
+            or any(not entry or not Path(entry).is_absolute()
+                   for entry in environment["PATH"].split(os.pathsep))
+            or not environment["GOMAXPROCS"].isdigit()
+            or int(environment["GOMAXPROCS"]) <= 0
+            or not Path(environment["HOME"]).is_absolute()
+            or not Path(environment["TMPDIR"]).is_absolute()
+            or not isinstance(cwd, str) or not Path(cwd).is_absolute()
+            or not isinstance(umask, str) or len(umask) != 4 or umask[0] != "0"
+            or any(value not in "01234567" for value in umask)):
+        raise EvidenceError(f"command receipt lacks a complete controlled environment: {label}")
+    return environment
+
+
 def _bounded_validator_argv(packet, paths, role):
     if role not in {"bounded_exact", "bounded_sq8"}:
         raise EvidenceError(f"unknown bounded validator role: {role}")
@@ -708,10 +750,136 @@ def _bounded_validator_argv(packet, paths, role):
     return argv
 
 
-def validate_receipts(packet, paths, dataset_manifest_sha256, dataset_hashes):
+def _bounded_manifest_argv(packet, paths):
+    return [
+        str(_inventory_path(packet, paths, "inputs", "bounded_validator_binary")),
+        "-workload=minima", "-dump-minima-manifest",
+        str(_inventory_path(packet, paths, "inputs", "bounded_manifest")),
+        "-minima-bounded-total-rows", "50000",
+    ]
+
+
+def _bounded_python_command(packet, paths, role, phase, receipt):
+    if role not in {"bounded_exact", "bounded_sq8"} or phase not in {"freeze", "run"}:
+        raise EvidenceError("unknown bounded producer command")
+    manifest = _inventory_path(packet, paths, "inputs", "bounded_manifest")
+    artifact = _inventory_path(packet, paths, "arms", role)
+    service = _inventory_path(packet, paths, "inputs", "treedb_service_binary")
+    values = {
+        "--manifest": manifest,
+        "--profile": "command_wal_durable",
+    }
+    if role == "bounded_exact":
+        if phase != "run":
+            raise EvidenceError("bounded exact has no plan-freeze command")
+        values.update({
+            "--output": artifact, "--service-bin": service,
+            "--url": "http://127.0.0.1:18040",
+            "--data-dir": manifest.parent / "exact-db",
+            "--collection": f"minima_q5_bounded_exact_{packet['candidate_commit'][:12]}",
+            "--strategy": "native_runtime", "--operation-timeout": 120,
+            "--startup-timeout": 120, "--ef-search": 128,
+        })
+    else:
+        plan = _inventory_path(packet, paths, "inputs", "bounded_sq8_plan")
+        values.update({
+            "--strategy": "column_graph", "--transport": "native",
+            "--column-graph-serving": _inventory_path(packet, paths, "inputs", "serving"),
+            "--ef-construction": 32, "--query-mode": "quantized_rerank",
+            "--quantized-index-name": "minima_sq8", "--ef-search": 64,
+            "--quantized-rerank-candidates": 64,
+        })
+        if phase == "freeze":
+            values["--write-quantized-plan"] = plan
+        else:
+            values.update({
+                "--quantized-plan": plan,
+                "--expected-quantized-plan-sha256":
+                    _inventory_hash(packet, "inputs", "bounded_sq8_plan"),
+                "--output": artifact, "--service-bin": service,
+                "--url": "http://127.0.0.1:18050", "--native-address": "127.0.0.1:18052",
+                "--data-dir": manifest.parent / "sq8-db",
+                "--collection": f"minima_q5_bounded_sq8_{packet['candidate_commit'][:12]}",
+                "--operation-timeout": 120, "--startup-timeout": 120,
+            })
+    path_options = {
+        "--manifest", "--output", "--service-bin", "--data-dir",
+        "--column-graph-serving", "--write-quantized-plan", "--quantized-plan",
+    } & set(values)
+    _validate_python_argv(
+        receipt["argv"], receipt["cwd"], receipt["environment"],
+        Path(__file__).with_name("minima_treedb_runner.py"), list(range(6)),
+        values, set(), path_options,
+    )
+
+
+def _validate_bounded_preparations(packet, paths, preparations, baseline):
+    if not isinstance(preparations, dict) or set(preparations) != {
+            "bounded_exact", "bounded_sq8"}:
+        raise EvidenceError("command receipts do not cover both bounded producers")
+    classification = baseline.get("classification") if isinstance(baseline, dict) else None
+    if classification not in {"completed_clean", LEGACY_BASELINE_CLASSIFICATION}:
+        raise EvidenceError("bounded baseline classification is unavailable to receipts")
+    intervals = {}
+    for role, preparation in preparations.items():
+        if (not isinstance(preparation, dict)
+                or set(preparation) != {"cwd", "environment", "umask", "commands"}):
+            raise EvidenceError(f"invalid bounded preparation receipt: {role}")
+        environment = _validate_receipt_context(preparation, f"{role} preparation")
+        commands = preparation["commands"]
+        if not isinstance(commands, list) or len(commands) != 2:
+            raise EvidenceError(f"bounded preparation must have exactly two commands: {role}")
+        expected_hashes = (
+            [_inventory_hash(packet, "inputs", "bounded_manifest"),
+             _inventory_hash(packet, "arms", "bounded_exact")]
+            if role == "bounded_exact" else
+            [_inventory_hash(packet, "inputs", "bounded_sq8_plan"),
+             _inventory_hash(packet, "arms", "bounded_sq8")]
+        )
+        expected_exits = [0, 1 if role == "bounded_exact"
+                          and classification == LEGACY_BASELINE_CLASSIFICATION else 0]
+        previous_end = None
+        for index, command in enumerate(commands):
+            expected = {
+                "argv", "started_utc", "ended_utc", "exit_code", "output_sha256",
+            }
+            if (not isinstance(command, dict) or set(command) != expected
+                    or not isinstance(command["argv"], list) or not command["argv"]
+                    or not all(isinstance(value, str) and value for value in command["argv"])
+                    or type(command["exit_code"]) is not int
+                    or command["exit_code"] != expected_exits[index]
+                    or command["output_sha256"] != expected_hashes[index]
+                    or _utc_timestamp(command["started_utc"])
+                        > _utc_timestamp(command["ended_utc"])):
+                raise EvidenceError(f"invalid bounded producer command receipt: {role}[{index}]")
+            started = _utc_timestamp(command["started_utc"])
+            ended = _utc_timestamp(command["ended_utc"])
+            if previous_end is not None and started < previous_end:
+                raise EvidenceError(f"bounded producer commands overlap or reverse: {role}")
+            previous_end = ended
+            command_context = {
+                "cwd": preparation["cwd"], "environment": environment,
+                "umask": preparation["umask"], "argv": command["argv"],
+            }
+            if role == "bounded_exact" and index == 0:
+                if command["argv"] != _bounded_manifest_argv(packet, paths):
+                    raise EvidenceError("bounded exact manifest command differs from packet")
+            else:
+                phase = "run" if index == 1 else "freeze"
+                _bounded_python_command(packet, paths, role, phase, command_context)
+        intervals[role] = (
+            _utc_timestamp(commands[0]["started_utc"]),
+            _utc_timestamp(commands[-1]["ended_utc"]),
+        )
+    if intervals["bounded_sq8"][0] < intervals["bounded_exact"][1]:
+        raise EvidenceError("bounded SQ8 preparation precedes the exact baseline")
+    return intervals
+
+
+def validate_receipts(packet, paths, dataset_manifest_sha256, dataset_hashes, baseline):
     receipts = read_json(paths[packet["arms"]["command_receipts"]], "command receipts")
     if set(receipts) != {"schema", "candidate_commit", "dataset_manifest_sha256",
-                         "dataset_files_sha256", "runs"}:
+                         "dataset_files_sha256", "preparations", "runs"}:
         raise EvidenceError("command receipts have an incomplete schema")
     if (receipts["schema"] != RECEIPT_SCHEMA
             or receipts["candidate_commit"] != packet["candidate_commit"]
@@ -737,33 +905,7 @@ def validate_receipts(packet, paths, dataset_manifest_sha256, dataset_hashes):
                 or receipt["exit_code"] != expected_exit
                 or receipt["output_sha256"] != packet["files"][output]["sha256"]):
             raise EvidenceError(f"invalid command receipt: {role}")
-        environment = receipt["environment"]
-        if (not isinstance(environment, dict) or set(environment) != REQUIRED_RECEIPT_ENV
-                or any(not isinstance(key, str) or not key or "\0" in key
-                       or not isinstance(value, str) or "\0" in value
-                       for key, value in environment.items())
-                or any(not environment[key] for key in (
-                    "HOME", "PATH", "TMPDIR", "TZ", "LANG", "LC_ALL", "GOWORK",
-                    "GOMAXPROCS", "PYTHONHASHSEED", "OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS",
-                ))
-                or environment["TZ"] != "UTC"
-                or environment["LANG"] != "C.UTF-8" or environment["LC_ALL"] != "C.UTF-8"
-                or environment["GOWORK"] != "off"
-                or environment["PYTHONHASHSEED"] != "0"
-                or environment["PYTHONDONTWRITEBYTECODE"] != "1"
-                or environment["OPENBLAS_NUM_THREADS"] != "1"
-                or environment["OMP_NUM_THREADS"] != "1"
-                or any(not entry or not Path(entry).is_absolute()
-                       for entry in environment["PATH"].split(os.pathsep))
-                or not environment["GOMAXPROCS"].isdigit()
-                or int(environment["GOMAXPROCS"]) <= 0
-                or not Path(environment["HOME"]).is_absolute()
-                or not Path(environment["TMPDIR"]).is_absolute()
-                or not isinstance(receipt["cwd"], str) or not Path(receipt["cwd"]).is_absolute()
-                or not isinstance(receipt["umask"], str) or len(receipt["umask"]) != 4
-                or receipt["umask"][0] != "0"
-                or any(value not in "01234567" for value in receipt["umask"])):
-            raise EvidenceError(f"command receipt lacks a complete controlled environment: {role}")
+        environment = _validate_receipt_context(receipt, role)
         if _utc_timestamp(receipt["started_utc"]) > _utc_timestamp(receipt["ended_utc"]):
             raise EvidenceError(f"command receipt timestamps are reversed: {role}")
         if role in PLAN_KINDS:
@@ -814,6 +956,15 @@ def validate_receipts(packet, paths, dataset_manifest_sha256, dataset_hashes):
                 raise EvidenceError(f"unplanned bounded arm has a fabricated freeze receipt: {role}")
             if receipt["run_argv"] != _bounded_validator_argv(packet, paths, role):
                 raise EvidenceError(f"bounded receipt does not bind the exact validator command: {role}")
+    preparations = _validate_bounded_preparations(
+        packet, paths, receipts["preparations"], baseline,
+    )
+    exact_run = receipts["runs"]["bounded_exact"]
+    sq8_run = receipts["runs"]["bounded_sq8"]
+    if (_utc_timestamp(exact_run["started_utc"]) < preparations["bounded_exact"][1]
+            or preparations["bounded_sq8"][0] < _utc_timestamp(exact_run["ended_utc"])
+            or _utc_timestamp(sq8_run["started_utc"]) < preparations["bounded_sq8"][1]):
+        raise EvidenceError("bounded producer and validator receipts are not dependency ordered")
 
 
 def _first_jsonl(path):
@@ -826,6 +977,13 @@ def _first_jsonl(path):
         events.close()
 
 
+def validate_serving_configuration(serving):
+    try:
+        native.existing.validate_column_graph_serving(serving)
+    except ValueError as exc:
+        raise EvidenceError(f"invalid frozen TreeDB serving configuration: {exc}") from exc
+
+
 def validate_plans(packet, paths):
     manifest_sha = packet["files"][packet["dataset"]["manifest"]]["sha256"]
     hashes = _dataset_hashes(packet)
@@ -834,6 +992,7 @@ def validate_plans(packet, paths):
         paths[packet["inputs"]["serving"]], "frozen TreeDB serving configuration",
         MAX_PACKET_BYTES,
     )
+    validate_serving_configuration(serving)
     native_roles = PLAN_KINDS - {"qdrant_fp32_rss"}
     for role in native_roles:
         plan = read_json(paths[packet["plans"][role]], f"{role} frozen plan", MAX_PACKET_BYTES)
@@ -939,30 +1098,351 @@ def default_validator_runner(argv):
             "pinned Go validator rejected artifact: " + (completed.stderr or completed.stdout).strip())
 
 
+def _bounded_manifest_contract(manifest):
+    config = manifest.get("config") if isinstance(manifest, dict) else None
+    corpora = manifest.get("corpora") if isinstance(manifest, dict) else None
+    queries = manifest.get("queries") if isinstance(manifest, dict) else None
+    expected_populations = {
+        "small": (128, 16), "all_match": (7616, 7616),
+        "over_limit_4097": (10000, 4097), "broad_10pct": (10000, 1000),
+        "sparse_over_limit": (12000, 4097), "mixed_broad_narrow": (10000, 5),
+        "empty_user": (128, 0), "empty_file": (128, 0),
+    }
+    populations = ({row.get("name"): (row.get("corpus_rows"), row.get("eligible_rows"))
+                    for row in corpora} if isinstance(corpora, list)
+                   and all(isinstance(row, dict) for row in corpora) else {})
+    query_names = ([row.get("scenario") for row in queries]
+                   if isinstance(queries, list)
+                   and all(isinstance(row, dict) for row in queries) else [])
+    if (manifest.get("schema") != BOUNDED_MANIFEST_SCHEMA
+            or manifest.get("fixture") != "bounded-50k"
+            or not isinstance(config, dict)
+            or tuple(config.get(key) for key in (
+                "dimension", "top_k", "batch_size", "lookup_limit",
+                "warmup_queries", "timed_queries", "reader_concurrency", "writer_concurrency",
+            )) != (8, 5, 256, 4096, 32, 1024, 4, 1)
+            or not isinstance(corpora, list) or len(corpora) != 8
+            or not isinstance(queries, list) or len(queries) != 8
+            or populations != expected_populations
+            or query_names != list(expected_populations)
+            or any(not valid_sha256(manifest.get(key)) for key in (
+                "corpus_sha256", "query_sha256", "operation_sha256", "expected_state_sha256",
+            ))):
+        raise EvidenceError("bounded manifest is not the frozen 50K regression workload")
+
+
+def _bounded_plan_contract(packet, paths, manifest):
+    plan_name = packet["inputs"]["bounded_sq8_plan"]
+    plan = read_json(paths[plan_name], "bounded SQ8 plan", MAX_PACKET_BYTES)
+    expected_manifest = {
+        "schema": manifest["schema"], "fixture": manifest["fixture"],
+        "config": manifest["config"], "corpus_sha256": manifest["corpus_sha256"],
+        "query_sha256": manifest["query_sha256"],
+        "operation_sha256": manifest["operation_sha256"],
+        "expected_state_sha256": manifest["expected_state_sha256"],
+    }
+    expected_profile = {
+        "schema": "treedb_minima_quantized_profile/v1", "name": "minima_sq8",
+        "query_mode": "quantized_rerank", "index_name": "minima_sq8",
+        "codec": "scalar_u8", "version": 1, "calibration": "legacy",
+        "quantized_config_hash": 0, "requested_ef_search": 64,
+        "requested_rerank_candidates": 64, "native_command_version": 3,
+    }
+    serving = read_json(
+        _inventory_path(packet, paths, "inputs", "serving"),
+        "bounded serving configuration", MAX_PACKET_BYTES,
+    )
+    if (set(plan) != {
+            "schema", "manifest", "quantized_profile", "vector_strategy", "transport",
+            "durability_profile", "vector_m", "ef_construction", "serving",
+            }
+            or plan.get("schema") != BOUNDED_SQ8_PLAN_SCHEMA
+            or not native.same_json(plan.get("manifest"), expected_manifest)
+            or not native.same_json(plan.get("quantized_profile"), expected_profile)
+            or (plan.get("vector_strategy"), plan.get("transport"),
+                plan.get("durability_profile"), plan.get("vector_m"),
+                plan.get("ef_construction"))
+                != ("column_graph", "native", "command_wal_durable", 16, 32)
+            or not native.same_json(plan.get("serving"), serving)):
+        raise EvidenceError("bounded SQ8 plan is not bound to the frozen manifest and profile")
+    return plan
+
+
+def _bounded_backend(packet, paths, artifact, role):
+    backends = artifact.get("backends")
+    if (not isinstance(backends, list) or len(backends) != 1
+            or not isinstance(backends[0], dict) or backends[0].get("name") != "treedb"):
+        raise EvidenceError(f"bounded {role} artifact requires exactly one TreeDB backend")
+    backend = backends[0]
+    config = backend.get("configuration") or {}
+    manifest = artifact.get("manifest") or {}
+    service = _inventory_path(packet, paths, "inputs", "treedb_service_binary")
+    strategy, transport = (("native_runtime", "http") if role == "exact"
+                           else ("column_graph", "native"))
+    if (not isinstance(config, dict)
+            or config.get("harness_commit") != packet["candidate_commit"]
+            or config.get("product_commit") != packet["candidate_commit"]
+            or config.get("runner_sha256")
+                != sha256_file(Path(__file__).with_name("minima_treedb_runner.py"))
+            or config.get("service_binary_sha256")
+                != _inventory_hash(packet, "inputs", "treedb_service_binary")
+            or config.get("service_binary_vcs_revision") != packet["candidate_commit"]
+            or config.get("service_binary_vcs_modified") != "false"
+            or not isinstance(config.get("service_binary"), str)
+            or Path(config["service_binary"]).resolve() != service
+            or config.get("vector_strategy") != strategy
+            or config.get("transport") != transport
+            or config.get("profile") != "command_wal_durable"
+            or config.get("dimension") != "8"
+            or (backend.get("manifest") or {}) != {
+                "corpus_sha256": manifest.get("corpus_sha256"),
+                "operation_sha256": manifest.get("operation_sha256"),
+                "query_sha256": manifest.get("query_sha256"),
+            }):
+        raise EvidenceError(f"bounded {role} artifact provenance differs from the candidate")
+    if role == "exact":
+        if (config.get("url") != "http://127.0.0.1:18040"
+                or config.get("collection")
+                    != f"minima_q5_bounded_exact_{packet['candidate_commit'][:12]}"
+                or config.get("ef_search") != "128"):
+            raise EvidenceError("bounded exact artifact has an unexpected launch configuration")
+    elif (config.get("url") != "http://127.0.0.1:18050"
+          or config.get("collection")
+              != f"minima_q5_bounded_sq8_{packet['candidate_commit'][:12]}"
+          or config.get("ef_search") != "64"
+          or config.get("ef_construction_requested") != "32"
+          or config.get("query_mode") != "quantized_rerank"
+          or config.get("quantized_index_name") != "minima_sq8"):
+        raise EvidenceError("bounded SQ8 artifact has an unexpected launch configuration")
+    return backend
+
+
+def _bounded_completed_clean(artifact, backend):
+    raw = artifact.get("backend_raw_evidence")
+    return (
+        (backend.get("operations") or {}).get("manifest_ordered") is True
+        and artifact.get("failures") == []
+        and isinstance(raw, dict) and set(raw) == {"treedb"}
+        and (raw["treedb"].get("final_scroll_state") or {}).get("match") is True
+    )
+
+
+def _legacy_baseline_routes():
+    definitions = {
+        "small": ("complete_exact", "bounded_complete_set", 16, 16, 16, 16, 16, 5, 16),
+        "all_match": ("vector_aligned_ann", "vector_aligned_scalar",
+                      4096, 32, 32, 2080, 2064, 5, 32),
+        "over_limit_4097": ("vector_aligned_ann", "vector_aligned_scalar",
+                            4096, 32, 32, 2080, 2064, 5, 32),
+        "broad_10pct": ("complete_finite_ann", "bounded_complete_set",
+                        1000, 1000, 1000, 2064, 2064, 0, 1000),
+        "sparse_over_limit": ("vector_aligned_ann", "vector_aligned_scalar",
+                              4096, 32, 32, 2080, 2064, 5, 32),
+        "mixed_broad_narrow": ("mixed_refined", "bounded_candidate_refinement",
+                               4101, 5, 5, 5, 5, 5, 5),
+        "empty_user": ("complete_exact", "bounded_complete_set", 0, 0, 0, 0, 0, 0, 0),
+        "empty_file": ("complete_exact", "bounded_complete_set", 16, 0, 0, 0, 0, 0, 0),
+    }
+    routes = {}
+    for name, (plan, membership, probe, candidates, retained, visited, scored,
+               admitted, allowed) in definitions.items():
+        routes[name] = ({
+            "identity": "native_base_plus_live_delta", "declared_scalar_filtering": True,
+            "native_base_plus_live_delta": True, "full_document_scan_fallbacks": 0,
+            "scalar_filter_unbounded": 0, "probe_ids": probe, "candidate_ids": candidates,
+            "retained_candidate_ids": retained, "refined_candidate_ids": retained,
+            "membership_source": membership, "plan": plan,
+            "allowed_id_materialization_rows": allowed, "primary_document_scans": 0,
+            "visited_candidates": visited, "scored_candidates": scored,
+            "admitted_candidates": admitted,
+        }, {
+            "membership_source": membership, "plan": plan, "probe_ids": probe,
+            "candidates": scored, "candidate_ids": candidates, "retained": retained,
+            "refined": retained, "visited": visited, "scored": scored,
+            "admitted": admitted, "visibility_mismatches": 0, "visibility_retries": 0,
+        })
+    return routes
+
+
+def _known_legacy_baseline_failure(artifact, backend):
+    operations = backend.get("operations") or {}
+    expected_operations = {
+        "batch_insert_during_search": False, "empty_cases_checked": False,
+        "explicit_delete_visible": False, "explicit_update_visible": False,
+        "manifest_ordered": False, "reindex_delete_replace": False,
+        "reindex_execution_sha256": "",
+        "reindex_execution_trace": {"operations": []},
+        "reindex_operations_executed": 0, "timed_execution_sha256": "",
+        "timed_execution_trace": {"queries": [], "rounds": []},
+        "timed_queries_executed": 0, "timed_rounds_completed": 0,
+    }
+    proof = artifact.get("native_path_proof") or {}
+    raw_all = artifact.get("backend_raw_evidence")
+    raw = raw_all.get("treedb") if isinstance(raw_all, dict) else None
+    reopen = backend.get("reopen")
+    if ((artifact.get("schema"), artifact.get("state"), artifact.get("passing"),
+         artifact.get("readiness_recommendation"))
+            != (BOUNDED_ARTIFACT_SCHEMA, "partial", False, "not_evaluated")
+            or artifact.get("failures") != LEGACY_BASELINE_FAILURES
+            or proof != {
+                "schema": "treedb_minima_native_path_proof/v1",
+                "strategy": "native_runtime", "availability": "unavailable",
+                "counters": None,
+                "reason": ("native baseline diagnostic; typed column_graph lifecycle counters "
+                           "require M1-M4; bounded sparse scenario does not preserve full <1% "
+                           "selectivity"),
+            }
+            or operations != expected_operations
+            or reopen != {"attempted": False, "committed_parity": False,
+                          "result_manifest_hash": ""}
+            or not isinstance(raw, dict) or set(raw_all) != {"treedb"}
+            or raw.get("final_scroll_state") != {}
+            or raw.get("restart_boundary") != {}):
+        return False
+
+    queries = artifact.get("manifest", {}).get("queries")
+    corpora = artifact.get("manifest", {}).get("corpora")
+    scenarios = artifact.get("scenarios")
+    events = raw.get("events")
+    routes = raw.get("native_route_responses")
+    if (not isinstance(queries, list) or not isinstance(corpora, list)
+            or not isinstance(scenarios, list)
+            or not isinstance(events, list) or not isinstance(routes, dict)
+            or len(queries) != 8 or len(corpora) != 8
+            or len(scenarios) != 8 or len(events) != 8):
+        return False
+    names = [query.get("scenario") for query in queries]
+    population = {row.get("name"): row for row in corpora if isinstance(row, dict)}
+    route_contracts = _legacy_baseline_routes()
+    if ([row.get("scenario") for row in scenarios] != names
+            or [event.get("scenario") for event in events] != names
+            or set(routes) != set(names) or set(population) != set(names)
+            or set(route_contracts) != set(names)):
+        return False
+    manifest_config = artifact.get("manifest", {}).get("config", {})
+    order_tolerance = manifest_config.get("order_tolerance")
+    score_tolerance = manifest_config.get("score_tolerance")
+    if (type(order_tolerance) is not int or order_tolerance != 0
+            or type(score_tolerance) not in (int, float)
+            or not math.isfinite(score_tolerance) or score_tolerance != 0.000001):
+        return False
+    for query, row, event in zip(queries, scenarios, events):
+        name = query.get("scenario")
+        expected = query.get("initial_oracle_ids")
+        expected_scores = query.get("initial_oracle_scores")
+        final_expected = query.get("final_oracle_ids")
+        final_expected_scores = query.get("final_oracle_scores")
+        actual = row.get("initial_actual_ids")
+        actual_scores = row.get("initial_actual_scores")
+        mismatch = name == "broad_10pct"
+        scores_valid = (
+            isinstance(expected_scores, list) and isinstance(final_expected_scores, list)
+            and isinstance(actual_scores, list)
+            and all(type(value) in (int, float) and math.isfinite(value) for value in (
+                *expected_scores, *final_expected_scores, *actual_scores,
+            ))
+        )
+        deltas = ([] if mismatch and actual_scores == [] else
+                  [abs(left - right) for left, right in zip(expected_scores, actual_scores)]
+                  if scores_valid and len(expected_scores) == len(actual_scores) else None)
+        maximum_delta = max(deltas, default=0.0) if deltas is not None else None
+        observed_delta = event.get("maximum_score_delta")
+        corpus = population[name]
+        final_summary = 1.0 if final_expected == [] else 0.0
+        if (not isinstance(expected, list) or not isinstance(final_expected, list)
+                or not scores_valid or len(expected) != len(expected_scores)
+                or len(final_expected) != len(final_expected_scores)
+                or row.get("backend") != "treedb"
+                or row.get("initial_oracle_ids") != expected
+                or row.get("initial_oracle_scores") != expected_scores
+                or row.get("final_oracle_ids") != final_expected
+                or row.get("final_oracle_scores") != final_expected_scores
+                or type(row.get("order_tolerance")) is not int
+                or row.get("order_tolerance") != order_tolerance
+                or type(row.get("score_tolerance")) not in (int, float)
+                or row.get("score_tolerance") != score_tolerance
+                or row.get("corpus_rows") != corpus.get("corpus_rows")
+                or row.get("expected_matches") != corpus.get("eligible_rows")
+                or row.get("selectivity") != corpus.get("selectivity")
+                or row.get("errors") != 0 or row.get("timeouts") != 0
+                or row.get("actual_ids") != [] or row.get("actual_scores") != []
+                or type(row.get("recall")) not in (int, float)
+                or type(row.get("overlap")) not in (int, float)
+                or row.get("recall") != final_summary or row.get("overlap") != final_summary
+                or row.get("reopen_ids") != [] or row.get("reopen_parity") is not True
+                or row.get("correctness") != {
+                    "cross_user_results": 0, "stale_delete_ids": 0,
+                    "stale_insert_ids": 0, "stale_update_ids": 0,
+                }
+                or row.get("route") != route_contracts[name][0]
+                or row.get("visibility") != {
+                    "generation_consistent": True, "visibility_mismatch_count": 0,
+                    "visibility_retry_count": 0,
+                }
+                or routes.get(name) != route_contracts[name][1]
+                or event.get("kind") != "oracle_comparison"
+                or event.get("operation") != "initial_oracle_comparison"
+                or event.get("expected_ids") != expected
+                or event.get("actual_ids") != actual
+                or event.get("match") is not (not mismatch)
+                or maximum_delta is None or not math.isfinite(maximum_delta)
+                or maximum_delta > score_tolerance
+                or type(observed_delta) not in (int, float) or not math.isfinite(observed_delta)
+                or not math.isclose(observed_delta, maximum_delta,
+                                    rel_tol=0, abs_tol=1e-12)
+                or (mismatch and (expected != LEGACY_BASELINE_IDS or actual != []
+                                  or actual_scores != []))
+                or (not mismatch and (actual != expected or len(actual_scores) != len(expected)))):
+            return False
+    return True
+
+
 def validate_bounded_artifacts(packet, paths, runner=default_validator_runner):
     exact = paths[packet["arms"]["bounded_exact"]]
     sq8 = paths[packet["arms"]["bounded_sq8"]]
     exact_json = read_json(exact, "bounded exact artifact")
     sq8_json = read_json(sq8, "bounded SQ8 artifact")
+    manifest = read_json(
+        _inventory_path(packet, paths, "inputs", "bounded_manifest"),
+        "bounded manifest", MAX_JSON_BYTES,
+    )
+    _bounded_manifest_contract(manifest)
+    if (not native.same_json(exact_json.get("manifest"), manifest)
+            or not native.same_json(sq8_json.get("manifest"), manifest)):
+        raise EvidenceError("bounded artifacts do not consume the inventoried manifest")
+    plan = _bounded_plan_contract(packet, paths, manifest)
     proof = exact_json.get("native_path_proof") or {}
     if proof.get("strategy") != "native_runtime":
         raise EvidenceError("bounded exact artifact must use native_runtime")
-    if sq8_json.get("schema") != "treedb_rag_application/minima_quantized_diagnostic_v1":
+    if sq8_json.get("schema") != BOUNDED_SQ8_ARTIFACT_SCHEMA:
         raise EvidenceError("bounded SQ8 artifact has the wrong schema")
-    backend = (sq8_json.get("backends") or [{}])[0]
-    if (backend.get("configuration") or {}).get("vector_strategy") != "column_graph":
-        raise EvidenceError("bounded SQ8 artifact must use column_graph")
-    for label, artifact in (("exact", exact_json), ("SQ8", sq8_json)):
-        backends = artifact.get("backends")
-        raw = artifact.get("raw_evidence") or {}
-        if (not isinstance(backends, list) or len(backends) != 1
-                or backends[0].get("name") != "treedb"
-                or (backends[0].get("operations") or {}).get("manifest_ordered") is not True
-                or artifact.get("failures") != []
-                or (raw.get("treedb", {}).get("final_scroll_state") or {}).get("match") is not True):
-            raise EvidenceError(f"bounded {label} artifact is not a completed clean diagnostic")
     runner(_bounded_validator_argv(packet, paths, "bounded_exact"))
     runner(_bounded_validator_argv(packet, paths, "bounded_sq8"))
+    exact_backend = _bounded_backend(packet, paths, exact_json, "exact")
+    sq8_backend = _bounded_backend(packet, paths, sq8_json, "SQ8")
+    if (sq8_json.get("quantized_plan_sha256")
+            != _inventory_hash(packet, "inputs", "bounded_sq8_plan")
+            or not native.same_json(sq8_json.get("quantized_profile"),
+                                    plan["quantized_profile"])):
+        raise EvidenceError("bounded SQ8 artifact does not bind the reviewed plan")
+    if not _bounded_completed_clean(sq8_json, sq8_backend):
+        raise EvidenceError("bounded SQ8 artifact is not a completed clean diagnostic")
+    if _bounded_completed_clean(exact_json, exact_backend):
+        classification = "completed_clean"
+    elif _known_legacy_baseline_failure(exact_json, exact_backend):
+        classification = LEGACY_BASELINE_CLASSIFICATION
+    else:
+        raise EvidenceError("bounded exact artifact is neither clean nor the frozen #4617 failure")
+    clean = classification == "completed_clean"
+    return {
+        "classification": classification,
+        "completed_clean": clean,
+        "lifecycle_claim_available": clean,
+        "latency_claim_available": clean,
+        "representation_matched_comparison": False,
+        "known_limitation": (None if clean else
+            "#4617 bounded-50K broad_10pct complete_finite_ann recall failure"),
+    }
 
 
 def _dataset_hashes(packet):
@@ -2264,12 +2744,12 @@ def _analyze(packet_path, expected_sha256, validator_runner):
     paths = resolve_inventory(packet_path, packet)
     dataset_paths, _ = validate_dataset(packet, paths)
     go_builds = validate_go_inputs(packet, paths)
+    validate_plans(packet, paths)
+    baseline = validate_bounded_artifacts(packet, paths, validator_runner)
     validate_receipts(
         packet, paths, packet["files"][packet["dataset"]["manifest"]]["sha256"],
-        _dataset_hashes(packet),
+        _dataset_hashes(packet), baseline,
     )
-    validate_plans(packet, paths)
-    validate_bounded_artifacts(packet, paths, validator_runner)
     full_truth = _full_truth(dataset_paths["truth"])
     vectors = np.memmap(
         dataset_paths["documents"], mode="r", dtype="<f4", shape=(500000, 768),
@@ -2320,6 +2800,7 @@ def _analyze(packet_path, expected_sha256, validator_runner):
         "candidate_commit": packet["candidate_commit"],
         "consumer_source": consumer_source,
         "go_binary_builds": go_builds,
+        "bounded_legacy_control": baseline,
         "packet_sha256": expected_sha256,
         "declared_quality_outcome": declared,
         "quality_recomputed_from_retained_ids": True,
@@ -2334,6 +2815,11 @@ def _analyze(packet_path, expected_sha256, validator_runner):
             "both fixed query sets are observed and neither is an unseen holdout",
             "smaller score codes do not imply removal of canonical FP32 storage",
             "the FP32/Qdrant result is a new mirror-bounded control, not a replay of #4672",
+            ("the bounded native_runtime control reproduces the frozen #4617 recall failure; "
+             "it contributes no lifecycle, latency, or representation-comparison claim"
+             if baseline["classification"] == LEGACY_BASELINE_CLASSIFICATION else
+             "the bounded native_runtime control completed cleanly but is not a "
+             "representation-matched exact-versus-SQ8 comparison"),
         ],
         "reasons": reasons,
     }

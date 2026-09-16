@@ -166,15 +166,20 @@ func (s *Service) CreateIndex(ctx context.Context, req CreateIndexRequest) (Inde
 	if s == nil {
 		return IndexInfo{}, serviceError(CodeIndexUnavailable, "document service has no collection manager")
 	}
+	if req.ColumnGraphServing != nil && !req.TypedInput {
+		return IndexInfo{}, serviceError(CodeInvalidRequest, "column_graph_serving requires typed_input")
+	}
+	if req.ColumnGraphServing != nil {
+		if err := collections.ValidateColumnGraphServingOptions(*req.ColumnGraphServing); err != nil {
+			return IndexInfo{}, serviceError(CodeInvalidRequest, "column_graph_serving requires complete positive limits")
+		}
+	}
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	if s.deferredVectorBuildMaintenance != nil {
 		if err := s.deferredVectorBuildMaintenance.EndContext(ctx); err != nil {
 			return IndexInfo{}, err
 		}
-	}
-	if req.ColumnGraphServing != nil && !req.TypedInput {
-		return IndexInfo{}, serviceError(CodeInvalidRequest, "column_graph_serving requires typed_input")
 	}
 	info, err := s.createIndexLocked(ctx, req)
 	if err != nil || req.ColumnGraphServing == nil {

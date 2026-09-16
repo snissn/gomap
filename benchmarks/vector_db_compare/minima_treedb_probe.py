@@ -326,13 +326,15 @@ def main():
 
     signal.signal(signal.SIGTERM, interrupted)
     try:
+        serving, _ = tr._strict_json_object(args.serving, "column_graph serving limits")
+        tr.validate_column_graph_serving(serving)
         controller = tr.ServiceController(args.binary, 'http://127.0.0.1:17220', data_dir,
             'command_wal_durable', 120, 120, diagnostics_url='http://127.0.0.1:17221',
             block_profile_rate=0, mutex_profile_fraction=0, native_address='127.0.0.1:17222', measured=True)
         controller.log_path = args.output / 'service.log'
         runner = tr.TreeDBMinimaRunner(manifest, controller=controller,
             collection='minima_harness_cli_treedb', operation_timeout=120, ef_search=2048,
-            strategy='column_graph', transport='native', column_graph_serving=json.loads(args.serving.read_text()))
+            strategy='column_graph', transport='native', column_graph_serving=serving)
         result['pid'] = controller.pid
         result['linux_process_identity'] = tr.common.linux_process_identity(controller.pid)
         result['server_affinity'] = sorted(os.sched_getaffinity(controller.pid))

@@ -105,6 +105,33 @@ def plain(value):
     return value
 
 
+def serving_options():
+    return {
+        "Publication": {key: 1 for key in (
+            "Rows", "Tombstones", "ValueSlots", "OwnedBytes", "EncodedOutputBytes",
+        )},
+        "Owners": {
+            **{key: 1 for key in ("Owners", "States", "StateBytes", "AssetBytes")},
+            "Cold": {key: 1 for key in (
+                "ManifestRecords", "ManifestBytes", "AssetBytes", "DecodedTermBytes",
+            )},
+            "Physical": {key: 1 for key in (
+                "segments", "descriptors", "mapped_bytes", "fallback_bytes", "inventory_bytes",
+            )},
+        },
+        "CandidateOutput": {"Bytes": 1, "AppenderAttempts": 1},
+        "Maintenance": {key: 1 for key in (
+            "NativeEntries", "ColumnSegments", "ManifestRecords", "LifecycleEntries",
+            "NativeBytes", "ColumnBytes", "ManifestBytes", "RetainedBytes", "PagerPages",
+        )},
+        "Filter": {key: 1 for key in (
+            "SourceIDs", "SourceBytes", "RetainedBytes", "MappingWork", "InspectedEntries",
+        )},
+        "FoldRows": 1,
+        "SearchCandidates": 1,
+    }
+
+
 def paired_record(mode, sequence, query=0, ef=32, phase=None, started_ns=None):
     response = quantized_response(500000, ef)
     dense = plain(response.dense_work)
@@ -442,6 +469,34 @@ class NativeCohereDiagnosticTests(unittest.TestCase):
                     {"value": "x" * diagnostic.FROZEN_JSON_MAX_BYTES}, "reviewed fixture",
                 )
 
+    def test_serving_preflight_requires_complete_current_service_schema(self):
+        valid = serving_options()
+        diagnostic.existing.validate_column_graph_serving(valid)
+        hostile = []
+        missing_physical = copy.deepcopy(valid)
+        del missing_physical["Owners"]["Physical"]
+        hostile.append(missing_physical)
+        extra = copy.deepcopy(valid)
+        extra["Owners"]["Physical"]["future_typo"] = 1
+        hostile.append(extra)
+        for path, value in ((["Publication", "Rows"], True),
+                            (["Owners", "Physical", "segments"], 0),
+                            (["Filter", "SourceIDs"], 1 << 63),
+                            (["Maintenance", "PagerPages"], 1 << 64)):
+            changed = copy.deepcopy(valid)
+            parent = changed
+            for key in path[:-1]:
+                parent = parent[key]
+            parent[path[-1]] = value
+            hostile.append(changed)
+        for serving in hostile:
+            with self.subTest(serving=serving), self.assertRaises(ValueError):
+                diagnostic.existing.validate_column_graph_serving(serving)
+
+        maximum = copy.deepcopy(valid)
+        maximum["Maintenance"]["PagerPages"] = (1 << 64) - 1
+        diagnostic.existing.validate_column_graph_serving(maximum)
+
     def test_hashing_quantiles_and_frozen_minima_untouched(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "fixture"
@@ -520,6 +575,22 @@ class NativeCohereDiagnosticTests(unittest.TestCase):
                     "terminal_work": {"cleanup_completed": True, "shutdown_failures": 0,
                                       "contract_version": diagnostic.existing.SERVICE_CONTRACT, "work": {"pid": 123}}}
         diagnostic.validate_shutdowns([lifetime], 1)
+        diagnostic.validate_shutdowns([lifetime])
+        diagnostic.validate_shutdowns([])
+        with self.assertRaisesRegex(RuntimeError, "lifetime count mismatch"):
+            diagnostic.validate_shutdowns([lifetime], 2)
+        self.assertIsNone(diagnostic.expected_shutdown_lifetimes(
+            {"rss_only": False}, "primary failure", "invalid",
+        ))
+        self.assertEqual(diagnostic.expected_shutdown_lifetimes(
+            {"rss_only": False}, None, "valid",
+        ), 2)
+        self.assertEqual(diagnostic.expected_shutdown_lifetimes(
+            {"rss_only": True}, None, "valid",
+        ), 1)
+        self.assertEqual(diagnostic.expected_shutdown_lifetimes(
+            {"rss_only": False}, "quality target", "valid_unqualified",
+        ), 1)
         lifetime["terminal_work"]["shutdown_failures"] = 1
         with self.assertRaisesRegex(RuntimeError, "clean verified shutdown"):
             diagnostic.validate_shutdowns([lifetime], 1)
@@ -798,6 +869,31 @@ class NativeCohereDiagnosticTests(unittest.TestCase):
                 patch.object(diagnostic, "validate_quantized_response"), \
                 patch.object(concurrent, "validate_quantized_lifecycle"):
             concurrent.search("overlap", 16, 32, 0, writer_active=True)
+
+        # FP32 overlap projections must also match one whole mutation state;
+        # merely accepting old/new content per returned row would admit a mix
+        # that no atomic batch can produce.
+        concurrent_exact, concurrent_exact_response, _ = runner("exact")
+        concurrent_exact.overlap_batches = [{
+            "started_monotonic_ns": 5, "ended_monotonic_ns": 15,
+            "rows": (0,), "updated": True, "published": True, "success": True,
+        }]
+        concurrent_exact_response.documents[0].content += ":updated"
+
+        def timed_overlap(_phase, call, timing_evidence=None, **_fields):
+            timing_evidence.update(
+                started_monotonic_ns=10, ended_monotonic_ns=20, duration_ns=10,
+            )
+            return call()
+
+        concurrent_exact.timed = timed_overlap
+        with patch.object(diagnostic, "asdict", side_effect=lambda value: vars(value)):
+            concurrent_exact.search("overlap", 16, 32, 0, writer_active=True)
+        concurrent_exact_response.documents[0].content = "minima-cohere:0"
+        concurrent_exact_response.documents[1].content += ":updated"
+        with patch.object(diagnostic, "asdict", side_effect=lambda value: vars(value)), \
+                self.assertRaisesRegex(RuntimeError, "one whole reachable mutation state"):
+            concurrent_exact.search("overlap", 16, 32, 0, writer_active=True)
 
         for mutation in ("duplicate", "nonfinite", "projection"):
             with self.subTest(mutation=mutation):

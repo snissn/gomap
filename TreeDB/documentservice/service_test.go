@@ -287,6 +287,19 @@ func TestServiceDeferredVectorBuildMaintenanceLifecycle(t *testing.T) {
 
 	deferInsert("docs", "a")
 	assertActive(true)
+	invalidServing := typedServiceTestOptions()
+	invalidServing.Owners.Physical = collections.ColumnGraphPhysicalResourceLimits{}
+	if _, err := svc.CreateIndex(ctx, CreateIndexRequest{
+		Name: "invalid-serving", Dimension: 2, TypedInput: true,
+		VectorIndexOptions: &BenchmarkVectorIndexOptions{Strategy: collections.VectorIndexStrategyColumnGraph},
+		ColumnGraphServing: &invalidServing,
+	}); ErrorCodeOf(err) != CodeInvalidRequest {
+		t.Fatalf("invalid serving CreateIndex error=%v code=%s", err, ErrorCodeOf(err))
+	}
+	assertActive(true)
+	if _, err := svc.OpenIndex(ctx, "invalid-serving"); ErrorCodeOf(err) != CodeIndexNotFound {
+		t.Fatalf("invalid serving request created index: %v", err)
+	}
 	canceled, cancel := context.WithCancel(ctx)
 	cancel()
 	if _, err := svc.CreateIndex(canceled, CreateIndexRequest{Name: "canceled", Dimension: 2, Metric: MetricCosine}); !errors.Is(err, context.Canceled) {
