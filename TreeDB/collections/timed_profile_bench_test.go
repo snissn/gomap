@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"runtime/pprof"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -91,6 +92,9 @@ func benchmarkTimedProfileIndexedInsertBatch(b *testing.B, checkpoint bool) {
 	targetBatchSize := benchmarkBatchSize(b)
 	requireSafeTimedProfileBatchPrebuild(b)
 	backend, collection := openBenchmarkCollection(b, "bench_timed_profile_insert_batch_secondary", secondaryIndexes()...)
+	var publications atomic.Uint64
+	unregisterPublications := backend.RegisterLogicalOrderedRootPublicationObserver(func() { publications.Add(1) })
+	defer unregisterPublications()
 	batches := benchmarkDocumentBatches(b, 0, b.N, targetBatchSize, true)
 	startKeyFallback, startPrefixFallback := benchmarkNativeProbeFallbackCounters(b, backend)
 	var insertElapsed time.Duration
@@ -138,6 +142,7 @@ func benchmarkTimedProfileIndexedInsertBatch(b *testing.B, checkpoint bool) {
 	}
 	benchmarkReportNativeProbeFallbackDeltas(b, backend, startKeyFallback, startPrefixFallback)
 	benchmarkReportTreeDBDiskUsage(b, backend, b.N)
+	b.ReportMetric(float64(publications.Load()), "root_publications")
 }
 
 func BenchmarkCollectionTimedProfileInsertBatchWithSecondaryIndexes(b *testing.B) {
