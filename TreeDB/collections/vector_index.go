@@ -413,6 +413,7 @@ type VectorIndex struct {
 	frozenPrefixHeapRowStores        uint64
 	liveDelta                        *VectorIndex
 	partitionLive                    *vectorIndexPartitionLiveStateV1
+	partitionLiveMutationUndo        *vectorIndexPartitionLiveDomainUndoV2
 	scalarDefinitions                []IndexDefinition
 	scalarRuntimes                   []indexRuntime
 	scalarColumns                    map[string]vectorIndexScalarColumn
@@ -2423,6 +2424,9 @@ func (idx *VectorIndex) InsertDocument(documentID []byte) error {
 	if len(documentID) == 0 {
 		return errors.New("collections: document id cannot be empty")
 	}
+	runVectorPartitionLiveInsertDocumentBeforePublicationHookForTest()
+	unlockPublication := idx.collection.lockNativeVectorIndexPublicationRead()
+	defer unlockPublication()
 	document, err := idx.collection.Get(documentID)
 	if err != nil {
 		return err
@@ -3381,12 +3385,14 @@ func quantizeVectorIndexInt8Value(value, scale float32) int8 {
 }
 
 func (idx *VectorIndex) tombstoneDocumentIDLocked(documentID []byte) {
+	idx.capturePartitionLiveDomainCurrentNodeV2Locked(documentID)
 	nodeID, ok := idx.currentNode[string(documentID)]
 	if !ok {
 		return
 	}
 	idx.prepareSearchViewForMutationLocked()
 	if nodeID >= 0 && nodeID < len(idx.nodes) {
+		idx.capturePartitionLiveDomainNodeV2Locked(nodeID)
 		idx.nodes[nodeID].deleted = true
 		idx.markVectorNodeDirtyLocked(nodeID)
 	}
@@ -3763,6 +3769,7 @@ func (idx *VectorIndex) linkLayerLocked(fromNodeID, toNodeID, layer int, markDir
 	if !ok {
 		return
 	}
+	idx.capturePartitionLiveDomainNodeV2Locked(fromNodeID)
 	neighbors = append(neighbors, vectorIndexNeighbor{nodeID: uint32(toNodeID), distance: distance})
 	trace := idx.constructionTrace
 	var origin string
@@ -6202,6 +6209,15 @@ func (idx *VectorIndex) nativeMutationSequence() uint64 {
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
 	return idx.mutationSeq
+}
+
+func (idx *VectorIndex) nativePersistedBytesAndMutationSequence() (int64, uint64) {
+	if idx == nil {
+		return 0, 0
+	}
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+	return idx.persistedBytesDisk, idx.mutationSeq
 }
 
 func (idx *VectorIndex) markLiveANNFullRebuild() {

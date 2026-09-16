@@ -2053,10 +2053,22 @@ Coverage:
   top-k admission, atomic pinned revisions, repeated-update capacity cutover,
   byte-cap reclaim for single and batch replacements, true unreclaimable-cap
   rejection, pinned-view retirement, publication-barrier immutable-generation
-  rebind, snapshot corruption, first-binding durability, checkpoint/close/
-  reopen, and command-WAL replay.
+  rebind, monotonic retired-domain epochs across native-root reopen, missing-
+  tombstone rejection, V1-to-V3 complete materialization, public-mutation/
+  rollback exclusion, snapshot corruption, first-binding durability,
+  checkpoint/close/reopen, and command-WAL replay.
   The focused `TestVectorIndexPartitionLive*` family is the canonical local
   lifecycle gate.
+- The V2-focused structural and concurrency gates
+  `TestVectorIndexPartitionLiveNativeDeltaTouchesOnlyChangedRecordsV2`,
+  `TestVectorIndexPartitionLiveReplayCandidateSynchronizesSharedOwnersV2`,
+  `TestVectorIndexPartitionLiveReplayDomainTransactionRollbackRetryV2`,
+  `TestVectorIndexPartitionLiveReplayHandoffBlocksOrdinaryPinV2`, and
+  `TestVectorIndexPartitionLiveReplayAcceptedFailureInvalidatesV2` prove that a
+  mutation emits only compact metadata, one changed owner, and dirty records
+  from touched domains; speculative graph edits remain invisible; rollback is
+  byte-for-byte deterministic; handoff blocks new pins until the new view is
+  complete; and accepted handoff failure invalidates the carrier.
 - `TreeDB/collections/vector_partition_persistent_searcher_v1_test.go` proves
   only standalone live generation opens build and charge the stable-ID
   eligibility map; immutable and replicated generation opens retain their
@@ -2108,6 +2120,21 @@ GOWORK=off go test -c -o "$PROFILE_DIR/nativewire.test" ./TreeDB/nativewire
 for CELL in live_overlay_1_id_update_search_1_to_1 live_overlay_1024_ids_update_search_1_to_1; do
   /usr/bin/time -v "$PROFILE_DIR/nativewire.test" -test.run '^$' -test.bench "^BenchmarkVectorPartitionLiveProductionCoordinatorV1/$CELL$" -test.benchmem -test.benchtime=20x -test.count=1 -test.cpuprofile "$PROFILE_DIR/$CELL.cpu.pprof" -test.memprofile "$PROFILE_DIR/$CELL.alloc.pprof" -test.mutexprofile "$PROFILE_DIR/$CELL.mutex.pprof"
 done
+```
+
+`BenchmarkVectorIndexPartitionLiveIncrementalPublicationV2` is the bounded
+publication microbenchmark for #4720. Both cells replace one stable ID in one
+logical domain; only the pre-existing owner count differs (one versus 1,024).
+It reports the root-delta record count and bytes in addition to `ns/op`, `B/op`,
+and `allocs/op`. The timed path includes persistence acknowledgement through
+the maintained O(1) byte/mutation state, then rolls the speculative transaction
+back so all operations start from the identical durable base. The expected
+result is dirty-neighborhood scaling: the 1,024-owner cell must not serialize,
+allocate, or rescan the full owner table or domain graph. It is enabling local
+evidence, not service capacity.
+
+```sh
+GOWORK=off go test ./TreeDB/collections -run '^$' -bench '^BenchmarkVectorIndexPartitionLiveIncrementalPublicationV2$' -benchmem -benchtime=20x -count=3
 ```
 
 # Vector partition M6 coordinator verification

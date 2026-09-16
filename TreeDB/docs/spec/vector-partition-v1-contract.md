@@ -133,11 +133,19 @@ Missing, stale, partial, or corrupt coverage fails closed.
 An acknowledged insert, embedding replacement, delete, or logical-domain move
 publishes ownership, tombstones, all affected domain views, live revision, and
 source coverage atomically. The mutation is immediately searchable in memory;
-each foreground or replayed command-WAL document command serializes the bounded
-live-carrier state and includes its root in the same ordered
+each foreground or replayed command-WAL document command serializes compact
+carrier metadata, the changed owner record, and the dirty HNSW records of only
+the touched logical domains, then includes that root delta in the same ordered
 document/column/locator/system-root publication before acknowledgement or
 advancement of the applied command frontier. This does not rebuild or rewrite
-the immutable partition base or scan collection rows. The first live binding
+the immutable partition base, serialize untouched logical domains, or scan
+collection rows. An exact owner-record count makes missing tombstones fail
+closed. Owner epochs and a monotonic global domain-epoch high-water make
+cutover replacement atomic; older epoch records may remain physically present
+but are unreachable from the current compact metadata, and a retired domain
+never reuses one of their epochs after rebind or reopen. V1 inline state
+receives one complete V3 materialization before incremental publication resumes.
+The first live binding
 is durably published before overlay mutations are admitted, and ordinary
 checkpoint plus command-WAL replay reconstructs later acknowledged changes on
 reopen. Recovery loads the checkpointed carrier before applying later
@@ -162,10 +170,19 @@ Capacity exhaustion is explicit and fail-closed. Repeated-update tombstones are
 compacted by atomically replacing domain indexes built from live nondeleted
 owners. Node- or byte-cap admission that can reclaim retained history performs
 one such cutover and fully re-estimates the proposed mutation before rejecting
-it. Active requests keep the retired view pinned until release. Publishing a
-newer exact immutable manifest takes the same collection publication barrier,
-installs an empty overlay, and retires the old generation without invalidating
-its already captured pins.
+it. A normal mutation copies only the touched HNSW neighborhood into its
+rollback journal. The collection publication barrier spans that speculative
+edit, durable grouped-root publication, and search-view handoff: existing
+requests keep their immutable view pinned, while new pins cannot observe
+unpublished owners, revision metadata, or graph adjacency. Accepted handoff
+failure invalidates the carrier fail-closed; prepublication failure restores
+the exact prior graph and can retry deterministically. Publishing a newer exact
+immutable manifest takes the same collection publication barrier, installs an
+empty overlay, and retires the old generation without invalidating its already
+captured pins. Direct public mutation of a registered live carrier takes that
+same barrier, so it cannot modify a shared domain while a grouped-root attempt
+may still roll back. Persistence acknowledgement uses already-maintained byte
+and mutation-sequence state; it does not rescan the domain graph.
 
 Preflight includes the bounded live-delta candidate and scratch requirements
 before coordinator budgets are distributed. Search time includes base and

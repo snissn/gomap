@@ -179,37 +179,28 @@ func TestVectorPartitionLiveProductionCoordinatorMutationAndColdReloadV1(t *test
 				dispatchErr = err
 				return
 			}
+			insertStarted := make(chan struct{})
 			go func() {
+				close(insertStarted)
 				_, err := fixture.collection.Insert([]byte("0-concurrent"), document)
 				insertDone <- err
 			}()
-			deadline := time.NewTimer(5 * time.Second)
-			defer deadline.Stop()
-			poll := time.NewTicker(time.Millisecond)
-			defer poll.Stop()
-			for {
-				stored, getErr := fixture.collection.Get([]byte("0-concurrent"))
-				if getErr != nil {
-					dispatchErr = getErr
-					return
-				}
-				if stored != nil {
-					break
-				}
-				select {
-				case <-ctx.Done():
-					dispatchErr = ctx.Err()
-					return
-				case <-deadline.C:
-					dispatchErr = errors.New("concurrent insert did not publish its collection row")
-					return
-				case <-poll.C:
-				}
+			select {
+			case <-insertStarted:
+			case <-ctx.Done():
+				dispatchErr = ctx.Err()
+				return
 			}
 			select {
 			case err := <-insertDone:
 				dispatchErr = fmt.Errorf("concurrent insert crossed coordinator pin: %v", err)
-			default:
+			case <-time.After(20 * time.Millisecond):
+				stored, getErr := fixture.collection.Get([]byte("0-concurrent"))
+				if getErr != nil {
+					dispatchErr = getErr
+				} else if stored != nil {
+					dispatchErr = errors.New("concurrent insert published before the coordinator pin released")
+				}
 			}
 		})
 		return dispatchErr

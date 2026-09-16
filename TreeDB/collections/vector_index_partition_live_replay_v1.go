@@ -17,10 +17,24 @@ var vectorPartitionLiveReplayAfterAcceptedHookV1 struct {
 	fn func()
 }
 
+var vectorPartitionLiveReplayBeforeDomainCommitHookV2 struct {
+	sync.RWMutex
+	fn func()
+}
+
 func runVectorPartitionLiveReplayAfterAcceptedHookV1() {
 	vectorPartitionLiveReplayAfterAcceptedHookV1.RLock()
 	fn := vectorPartitionLiveReplayAfterAcceptedHookV1.fn
 	vectorPartitionLiveReplayAfterAcceptedHookV1.RUnlock()
+	if fn != nil {
+		fn()
+	}
+}
+
+func runVectorPartitionLiveReplayBeforeDomainCommitHookV2() {
+	vectorPartitionLiveReplayBeforeDomainCommitHookV2.RLock()
+	fn := vectorPartitionLiveReplayBeforeDomainCommitHookV2.fn
+	vectorPartitionLiveReplayBeforeDomainCommitHookV2.RUnlock()
 	if fn != nil {
 		fn()
 	}
@@ -31,7 +45,6 @@ func runVectorPartitionLiveReplayAfterAcceptedHookV1() {
 type vectorPartitionLiveReplaySpecV1 struct {
 	before       *VectorIndex
 	definition   VectorIndexDefinition
-	snapshot     vectorIndexPersistSnapshot
 	rootName     string
 	baseRoot     uint64
 	baseCoverage uint64
@@ -53,6 +66,22 @@ type vectorPartitionLiveReplayEntryV1 struct {
 
 type vectorPartitionLiveReplayAttemptV1 struct {
 	entries []vectorPartitionLiveReplayEntryV1
+}
+
+func (c *Collection) lockVectorPartitionLiveReplayPublicationV2(specs []vectorPartitionLiveReplaySpecV1) (func(), error) {
+	if len(specs) == 0 {
+		return func() {}, nil
+	}
+	coord := c.collectionSchemaCoordinator()
+	if coord == nil {
+		return nil, ErrVectorIndexPartitionLiveUnavailableV1
+	}
+	coord.partitionLivePublishMu.Lock()
+	if err := c.validateVectorPartitionLiveReplaySpecsV1(specs); err != nil {
+		coord.partitionLivePublishMu.Unlock()
+		return nil, err
+	}
+	return coord.partitionLivePublishMu.Unlock, nil
 }
 
 func (c *Collection) vectorPartitionLiveReplaySpecsV1(input columnWritePublishInput) ([]vectorPartitionLiveReplaySpecV1, error) {
@@ -101,11 +130,10 @@ func (c *Collection) vectorPartitionLiveReplaySpecsV1(input columnWritePublishIn
 		if reason := carrier.vectorPartitionLiveReplayDurableBaseReasonV1(baseRoot, baseCoverage); baseRoot == 0 || reason != "" {
 			return nil, fmt.Errorf("%w: replay carrier %q root is not a clean durable base: %s", ErrVectorIndexPartitionLiveUnavailableV1, carrier.name, reason)
 		}
-		snapshot, beforeSeq := carrier.persistSnapshot()
+		beforeSeq := carrier.nativeMutationSequence()
 		specs = append(specs, vectorPartitionLiveReplaySpecV1{
 			before:       carrier,
 			definition:   def,
-			snapshot:     snapshot,
 			rootName:     rootName,
 			baseRoot:     baseRoot,
 			baseCoverage: baseCoverage,
@@ -230,12 +258,13 @@ func (c *Collection) buildVectorPartitionLiveReplayAttemptV1(input columnWritePu
 			attempt.discard()
 			return nil, err
 		}
-		if reason := candidate.loadPersistSnapshot(spec.snapshot); reason != "" {
+		if reason := candidate.clonePartitionLiveReplayStateV2(spec.before, spec.beforeSeq, spec.baseRoot); reason != "" {
 			attempt.discard()
 			return nil, fmt.Errorf("%w: replay carrier %q clone rejected: %s", ErrVectorIndexPartitionLiveUnavailableV1, spec.definition.Name, reason)
 		}
+		attempt.entries = append(attempt.entries, vectorPartitionLiveReplayEntryV1{spec: spec, candidate: candidate})
+		entry := &attempt.entries[len(attempt.entries)-1]
 		candidate.recordPersistentDefinition(spec.definition)
-		candidate.recordLoadedSnapshot(spec.baseRoot, spec.before.Stats().BytesDisk)
 		ids, vectors, err := vectorPartitionLiveReplayMutationsV1(input, spec.vectorColumn)
 		if err != nil {
 			attempt.discard()
@@ -267,17 +296,17 @@ func (c *Collection) buildVectorPartitionLiveReplayAttemptV1(input columnWritePu
 			attempt.discard()
 			return nil, fmt.Errorf("%w: replay carrier %q base root changed", ErrVectorIndexPartitionLiveUnavailableV1, spec.definition.Name)
 		}
+		entry.table = table
+		entry.bytesDisk = bytesDisk
+		entry.snapshotSeq = snapshotSeq
 		table.Freeze()
 		publish, pointerized, err := pointerizeCollectionRunTableValuesForRoot(c.db, input.meta, spec.rootName, table)
 		if err != nil {
-			resetCollectionRunTable(table)
 			attempt.discard()
 			return nil, err
 		}
-		attempt.entries = append(attempt.entries, vectorPartitionLiveReplayEntryV1{
-			spec: spec, candidate: candidate, table: table, publish: publish,
-			pointerized: pointerized, bytesDisk: bytesDisk, snapshotSeq: snapshotSeq,
-		})
+		entry.publish = publish
+		entry.pointerized = pointerized
 	}
 	if err := c.validateVectorPartitionLiveReplaySpecsV1(specs); err != nil {
 		attempt.discard()
@@ -311,7 +340,39 @@ func (a *vectorPartitionLiveReplayAttemptV1) discard() {
 		return
 	}
 	a.closeResources()
+	for i := range a.entries {
+		candidate := a.entries[i].candidate
+		if candidate == nil {
+			continue
+		}
+		candidate.mu.Lock()
+		var transactions []*VectorIndex
+		if live := candidate.partitionLive; live != nil {
+			transactions = make([]*VectorIndex, 0, len(live.domainTransactions))
+			for _, delta := range live.domainTransactions {
+				transactions = append(transactions, delta)
+			}
+			live.domainTransactions = nil
+		}
+		candidate.mu.Unlock()
+		for _, delta := range transactions {
+			delta.mu.Lock()
+			delta.rollbackPartitionLiveDomainMutationV2Locked()
+			delta.mu.Unlock()
+		}
+	}
 	a.entries = nil
+}
+
+func (a *vectorPartitionLiveReplayAttemptV1) invalidateAcceptedFailureV2() {
+	if a == nil {
+		return
+	}
+	for i := range a.entries {
+		if before := a.entries[i].spec.before; before != nil {
+			before.invalidateSourceDocumentRoots()
+		}
+	}
 }
 
 func (c *Collection) installVectorPartitionLiveReplayAttemptV1(attempt *vectorPartitionLiveReplayAttemptV1, rootNames []string, rootIDs []uint64) error {
@@ -331,15 +392,81 @@ func (c *Collection) installVectorPartitionLiveReplayAttemptV1(attempt *vectorPa
 			return fmt.Errorf("collections: replay carrier %q missing published root", entry.spec.definition.Name)
 		}
 		rootID := rootIDs[ordinal]
-		entry.candidate.recordPersistedSnapshot(rootID, entry.bytesDisk, entry.snapshotSeq)
-		installed, err := c.installNativeVectorIndexCandidate(entry.candidate, rootID, entry.spec.before, entry.spec.beforeSeq)
+		snap := c.db.AcquireSnapshot()
+		if snap == nil {
+			return backenddb.ErrClosed
+		}
+		catalog, err := loadCollectionCatalog(snap, c.meta.Name)
 		if err != nil {
+			_ = snap.Close()
 			return err
 		}
-		if installed != entry.candidate {
+		if catalog == nil {
+			_ = snap.Close()
+			return errCollectionNotFound
+		}
+		def, ok := findVectorIndex(catalog.meta.VectorIndexes, entry.spec.definition.Name)
+		documentGeneration, generationErr := vectorIndexDocumentGeneration(snap, catalog)
+		state, stateOK := snap.StateToken()
+		_ = snap.Close()
+		if !ok || entry.candidate.validateNativeSnapshotDefinition(def) != "" || catalog.rootID(entry.spec.rootName) != rootID {
+			return fmt.Errorf("%w: replay carrier %q published identity changed", ErrConcurrentMutation, entry.spec.definition.Name)
+		}
+		if generationErr != nil {
+			return generationErr
+		}
+		if !stateOK {
+			return backenddb.ErrClosed
+		}
+		if c.registeredVectorIndex(entry.spec.definition.Name) != entry.spec.before {
 			return fmt.Errorf("%w: replay carrier %q changed during install", ErrConcurrentMutation, entry.spec.definition.Name)
 		}
-		installed.recordPersistedSnapshot(rootID, entry.bytesDisk, entry.snapshotSeq)
+
+		candidate := entry.candidate
+		before := entry.spec.before
+		candidate.recordPersistedSnapshot(rootID, entry.bytesDisk, entry.snapshotSeq)
+		candidate.mu.Lock()
+		before.mu.Lock()
+		if before.mutationSeq != entry.spec.beforeSeq || candidate.mutationSeq != entry.snapshotSeq ||
+			candidate.partitionLive == nil || candidate.partitionLive.coverage != documentGeneration {
+			before.mu.Unlock()
+			candidate.mu.Unlock()
+			return fmt.Errorf("%w: replay carrier %q changed during handoff", ErrConcurrentMutation, entry.spec.definition.Name)
+		}
+		live := candidate.partitionLive
+		for id, owner := range live.stagedOwners {
+			live.owners[id] = owner
+		}
+		transactions := make([]*VectorIndex, 0, len(live.domainTransactions))
+		for _, delta := range live.domainTransactions {
+			transactions = append(transactions, delta)
+		}
+		live.stagedOwners = nil
+		live.sharedDomains = nil
+		live.domainTransactions = nil
+		live.ownerSource = nil
+		before.partitionLive = live
+		candidate.partitionLive = nil
+		before.sourceDocumentGeneration = documentGeneration
+		before.sourceDocumentRootsValid = true
+		before.sourceDocumentState = state
+		before.sourceDocumentStateValid = true
+		before.mutationSeq = candidate.mutationSeq
+		before.persistedEpoch = candidate.persistedEpoch
+		before.fullSnapshotBaseEpoch = candidate.fullSnapshotBaseEpoch
+		before.persistedBytesDisk = candidate.persistedBytesDisk
+		before.persistedSnapshotDirty = candidate.persistedSnapshotDirty
+		before.dirtyMeta = candidate.dirtyMeta
+		before.dirtyNodes = candidate.dirtyNodes
+		before.dirtyDocs = candidate.dirtyDocs
+		runVectorPartitionLiveReplayBeforeDomainCommitHookV2()
+		for _, delta := range transactions {
+			delta.mu.Lock()
+			delta.commitPartitionLiveDomainMutationV2Locked()
+			delta.mu.Unlock()
+		}
+		before.mu.Unlock()
+		candidate.mu.Unlock()
 	}
 	return nil
 }
