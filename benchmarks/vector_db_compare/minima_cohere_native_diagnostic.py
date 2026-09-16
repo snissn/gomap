@@ -1155,6 +1155,20 @@ def construction_calibration_contract(ef_construction):
     }
 
 
+def physical_memory_bytes(value):
+    """Canonicalize the legacy host-memory probe at the typed contract boundary."""
+    if type(value) is int:
+        result = value
+    elif (isinstance(value, str) and value.isascii() and value.isdecimal()
+          and str(int(value)) == value):
+        result = int(value)
+    else:
+        raise ValueError("host physical memory must be a canonical positive integer")
+    if result <= 0:
+        raise ValueError("host physical memory must be a canonical positive integer")
+    return result
+
+
 def rss_comparison_contract(plan):
     return {
         "schema": "cohere_500k_768d_matched_rss/v3", "rows": plan["rows"],
@@ -1166,7 +1180,8 @@ def rss_comparison_contract(plan):
         "scalar_indexes": ["meta.fpath:string", "meta.user_id:string"],
         "query_filter": "none (all 500000 rows eligible)",
         "batch_size": plan["batch_size"], "durability_visibility": "durable_and_visible_before_ack",
-        "cpu_affinity": plan["cpu_affinity"], "host_memory_bytes": plan["host_memory_bytes"],
+        "cpu_affinity": plan["cpu_affinity"],
+        "host_memory_bytes": physical_memory_bytes(plan["host_memory_bytes"]),
         "treedb_go_runtime": plan["treedb_go_runtime"],
         "host_resource_identity": plan["host_resource_identity"],
         "platform": plan["platform"], "quality_metric": "mean_recall_at_10",

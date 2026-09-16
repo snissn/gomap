@@ -223,6 +223,33 @@ def paired_endpoint(counter, records):
 
 
 class NativeCohereDiagnosticTests(unittest.TestCase):
+    def test_rss_contract_canonicalizes_legacy_memory_probe_and_rejects_type_drift(self):
+        plan = {
+            "rows": 500000, "dimensions": 768, "top_k": 10, "batch_size": 256,
+            "dataset_manifest_sha256": "1" * 64,
+            "dataset_files_sha256": {
+                "documents": "2" * 64, "queries": "3" * 64, "truth": "4" * 64,
+            },
+            "cpu_affinity": [0, 1], "host_memory_bytes": str(32 << 30),
+            "treedb_go_runtime": {"GOMAXPROCS": "2", "GOGC": "", "GOMEMLIMIT": ""},
+            "host_resource_identity": {
+                "machine_id": "machine", "boot_id": "boot", "page_size_bytes": 4096,
+                "numa_mems": "0", "cgroup_membership": "0::/", "cgroup_limits": {},
+                "cpu_model": "test CPU", "cpu_features": ["avx2", "sse2"],
+            },
+            "platform": "test", "rss_recall_target": diagnostic.RSS_RECALL_TARGET,
+            "rss_controls": diagnostic.RSS_CONTROLS,
+            "rss_calibration_queries": diagnostic.RSS_CALIBRATION_QUERIES,
+            "rss_revalidation_queries": diagnostic.RSS_REVALIDATION_QUERIES,
+        }
+        contract = diagnostic.rss_comparison_contract(plan)
+        self.assertEqual(contract["host_memory_bytes"], 32 << 30)
+        self.assertTrue(diagnostic.rss_comparison_contract_valid(contract))
+        for value in (True, 0, -1, 1.0, "0", "01", " 1", "unavailable", None):
+            with self.subTest(value=value), self.assertRaisesRegex(
+                    ValueError, "canonical positive integer"):
+                diagnostic.rss_comparison_contract({**plan, "host_memory_bytes": value})
+
     def test_full_sq8_requires_one_pinned_prior_rss_decision(self):
         sha = "a" * 64
         diagnostic.validate_quantized_options("quantized_rerank", "minima_sq8", False, 500000,
