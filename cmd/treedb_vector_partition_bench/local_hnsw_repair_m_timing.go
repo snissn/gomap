@@ -210,9 +210,9 @@ func localHNSWRepairMTimingSelectedCurveUnchangedV1(path, wantSHA string) error 
 	return nil
 }
 
-func localHNSWRepairMTimingGateV1Build(cells []localHNSWRepairCalibrationTimingCellV1) (localHNSWRepairMTimingGateV1, error) {
+func localHNSWRepairMTimingGateV1Build(cells []localHNSWRepairCalibrationTimingCellV1, lowProbes, allProbes int) (localHNSWRepairMTimingGateV1, error) {
 	var out localHNSWRepairMTimingGateV1
-	if len(cells) != 16 {
+	if lowProbes < 1 || allProbes <= lowProbes || len(cells) != 16 {
 		return out, errors.New("invalid local HNSW repair M timing cells")
 	}
 	qps := [2][2][]float64{}
@@ -226,9 +226,9 @@ func localHNSWRepairMTimingGateV1Build(cells []localHNSWRepairCalibrationTimingC
 			return out, errors.New("invalid local HNSW repair M timing variant")
 		}
 		probe := 0
-		if cell.Probes == 16 {
+		if cell.Probes == allProbes {
 			probe = 1
-		} else if cell.Probes != 2 {
+		} else if cell.Probes != lowProbes {
 			return out, errors.New("invalid local HNSW repair M timing probes")
 		}
 		if cell.QueryCount != 806 || !localHNSWRepairEFCurveFinitePositiveV1(cell.QPS) || cell.P50Nanos == 0 || cell.P50Nanos > cell.P95Nanos || cell.P95Nanos > cell.P99Nanos || cell.Candidates == 0 || cell.NativeEdges == 0 || len(cell.ResultSHA256) != 806 {
@@ -275,7 +275,7 @@ func validateLocalHNSWRepairMTimingReportV1(report localHNSWRepairMTimingReportV
 	if report.Quality.QueryCount != 806 || report.Quality.EFSearch != report.CandidateEFSearch || report.Quality.P2Recall.Mean < .95 || report.Quality.RoutingMissSlots > 20 || !localHNSWAttributionSHA256V1(report.Quality.RoutesSHA256) || !localHNSWAttributionSHA256V1(report.Quality.P2ResultsSHA256) || !localHNSWAttributionSHA256V1(report.Quality.P16ResultsSHA256) || report.Quality.RoutesSHA256 != report.Calibration.BaselineRoutesSHA256 || report.Quality.RoutesSHA256 != report.Calibration.CandidateRoutesSHA256 || report.Quality.RoutesSHA256 != report.TimingRoutesSHA256 || !localHNSWRepairMCurveSlotMeansV1(report.Quality) || localHNSWRepairMCurveHitSlotGapV1(report.Quality.P2HitSlots, report.Quality.P16HitSlots) > 20 || !reflect.DeepEqual(report.Candidate.Quality, report.Quality) {
 		return errors.New("invalid local HNSW repair M timing quality")
 	}
-	want, err := localHNSWRepairMTimingGateV1Build(report.Timing.Cells)
+	want, err := localHNSWRepairMTimingGateV1Build(report.Timing.Cells, report.ProbeCounts[0], report.ProbeCounts[1])
 	if err != nil || want != report.Gate {
 		return errors.New("invalid local HNSW repair M timing gate")
 	}
@@ -433,7 +433,7 @@ func runLocalHNSWRepairMTimingV1(args []string, stdout io.Writer) (runErr error)
 	if err != nil {
 		return err
 	}
-	timing, timingErr := localHNSWRepairCalibrationTimingAtEFV1Build(context.Background(), overlay, candidate, rows, 128, 120)
+	timing, timingErr := localHNSWRepairCalibrationTimingAtEFV1Build(context.Background(), overlay, candidate, rows, 128, 120, min(2, int(source.manifest.DomainCount)), int(source.manifest.DomainCount))
 	profilePaths, stopErr := capture.Stop()
 	if timingErr != nil || stopErr != nil {
 		return errors.Join(timingErr, stopErr)
@@ -449,7 +449,7 @@ func runLocalHNSWRepairMTimingV1(args []string, stdout io.Writer) (runErr error)
 			timing.Cells[i].Variant = "m18_efc256"
 		}
 	}
-	gate, err := localHNSWRepairMTimingGateV1Build(timing.Cells)
+	gate, err := localHNSWRepairMTimingGateV1Build(timing.Cells, min(2, int(source.manifest.DomainCount)), int(source.manifest.DomainCount))
 	if err != nil {
 		return err
 	}
@@ -612,7 +612,7 @@ func localHNSWRepairMTimingRoutesSHA256V1(rows []localHNSWRepairCalibrationQuery
 	h.Write([]byte("treedb-4106-local-hnsw-repair-ef-curve-routes-v1/"))
 	var raw [4]byte
 	for i, row := range rows {
-		if row.Ordinal < 0 || !localHNSWCalibrationOrdinalV1(row.Ordinal) || i > 0 && rows[i-1].Ordinal >= row.Ordinal || !localHNSWAttributionSHA256V1(row.QueryFP32SHA256) || len(row.P2Route) != 2 || len(row.P16Route) != 16 || !localHNSWAttributionRoutePrefixV1(row.P2Route, row.P16Route) || !localHNSWAttributionRoutePermutationV1(row.P16Route, 16) {
+		if row.Ordinal < 0 || !localHNSWCalibrationOrdinalV1(row.Ordinal) || i > 0 && rows[i-1].Ordinal >= row.Ordinal || !localHNSWAttributionSHA256V1(row.QueryFP32SHA256) || len(row.P2Route) < 2 || len(row.P16Route) != 16 || !localHNSWAttributionRoutePrefixV1(row.P2Route, row.P16Route) || !localHNSWAttributionRoutePermutationV1(row.P16Route, 16) {
 			return "", errors.New("invalid local HNSW repair M timing routes")
 		}
 		binary.LittleEndian.PutUint32(raw[:], uint32(row.Ordinal))

@@ -660,7 +660,7 @@ func m8QualificationRetainedAttributionV1(root string, report m8ProductionReport
 		if row.Status != "pass" && row.Status != "fail" {
 			continue
 		}
-		membershipOracles, err := m8MembershipOracleRecallCacheV1(truth, primaryHomes, finalMemberships, len(harness.searchers), row.Probes)
+		membershipOracles, err := m8MembershipOracleRecallCacheV1(truth, primaryHomes, finalMemberships, assets.manifest, row.Probes)
 		if err != nil {
 			return err
 		}

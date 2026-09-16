@@ -85,7 +85,7 @@ func TestLocalHNSWRepairEFCurveV1(t *testing.T) {
 	}
 	badTiming := append([]localHNSWRepairEFCurveTimingCellV1(nil), timing.Cells...)
 	badTiming[4].ResultSHA256 = []string{strings.Repeat("0", 64)}
-	if _, err := localHNSWRepairEFCurveTimingGateV1Build(badTiming, 4); err == nil {
+	if _, err := localHNSWRepairEFCurveTimingGateV1Build(badTiming, 2, 4); err == nil {
 		t.Fatal("expected timing result drift rejection")
 	}
 	if _, err := localHNSWRepairEFCurveV1Build(context.Background(), source, repair, []int{64, 512, 128, 4096}, []int{ordinal}, [][]float32{m8Query32V1(query64)}, truth); err == nil {

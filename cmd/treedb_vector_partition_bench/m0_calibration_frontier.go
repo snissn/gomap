@@ -26,6 +26,8 @@ type m0FrontierCellV1 struct {
 	Probes                   int     `json:"probes"`
 	SelectedPartitions       int     `json:"selected_partitions"`
 	RouterSelectedPartitions uint64  `json:"router_selected_partitions"`
+	SelectedDomains          uint64  `json:"selected_domains"`
+	SelectedPacks            uint64  `json:"selected_packs"`
 	EFSearch                 int     `json:"ef_search"`
 	Queries                  int     `json:"queries"`
 	Recall                   float64 `json:"recall"`
@@ -338,7 +340,7 @@ func validateM0FrontierReportV1(report m0FrontierReportV1, probes, efs []int, ca
 	seen := map[[3]int]bool{}
 	for _, m := range report.Measurements {
 		k := [3]int{m.Repetition, m.Probes, m.EFSearch}
-		if m.Repetition < 0 || m.Repetition > 2 || seen[k] || m.SelectedPartitions != m.Probes || m.RouterSelectedPartitions != uint64(m.Probes*806) || m.Queries != 806 || !localHNSWAttributionSHA256V1(m.ResultSHA256) || !localHNSWAttributionSHA256V1(m.WorkSHA256) {
+		if m.Repetition < 0 || m.Repetition > 2 || seen[k] || m.SelectedPartitions != m.Probes || m.RouterSelectedPartitions != uint64(m.Probes*806) || m.SelectedDomains != m.RouterSelectedPartitions || m.SelectedPacks < m.SelectedDomains || m.SelectedPacks > uint64(report.PartitionCount)*806 || m.Queries != 806 || !localHNSWAttributionSHA256V1(m.ResultSHA256) || !localHNSWAttributionSHA256V1(m.WorkSHA256) {
 			return false
 		}
 		seen[k] = true
@@ -399,7 +401,7 @@ func m0FrontierCellsCompleteV1(cells []m0FrontierCellV1, probes, efs []int, quer
 		return false
 	}
 	for i, c := range cells {
-		if c.Probes != probes[i/len(efs)] || c.EFSearch != efs[i%len(efs)] || c.SelectedPartitions != c.Probes || c.RouterSelectedPartitions != uint64(c.Probes*c.Queries) || c.Queries != queries || c.QPS <= 0 || c.P50Nanos == 0 || c.P95Nanos < c.P50Nanos || !localHNSWAttributionSHA256V1(c.ResultSHA256) || !localHNSWAttributionSHA256V1(c.WorkSHA256) {
+		if c.Probes != probes[i/len(efs)] || c.EFSearch != efs[i%len(efs)] || c.SelectedPartitions != c.Probes || c.RouterSelectedPartitions != uint64(c.Probes*c.Queries) || c.SelectedDomains != c.RouterSelectedPartitions || c.SelectedPacks < c.SelectedDomains || c.Queries != queries || c.QPS <= 0 || c.P50Nanos == 0 || c.P95Nanos < c.P50Nanos || !localHNSWAttributionSHA256V1(c.ResultSHA256) || !localHNSWAttributionSHA256V1(c.WorkSHA256) {
 			return false
 		}
 	}
@@ -441,6 +443,8 @@ func m0FrontierCellBuildV1(h *m8ProductionMultiGroupAssetsV1, searchers []*colle
 			}
 		}
 		c.RouterSelectedPartitions += uint64(len(routed.Partitions))
+		c.SelectedDomains += uint64(len(routeInput.Route))
+		c.SelectedPacks += uint64(len(routeInput.Packs))
 		var found []m8CanonicalResultV1
 		for _, partition := range routeInput.Packs {
 			if int(partition) >= len(searchers) || searchers[partition] == nil {
@@ -469,7 +473,7 @@ func m0FrontierCellBuildV1(h *m8ProductionMultiGroupAssetsV1, searchers []*colle
 		if _, err := fmt.Fprintf(resultHash, "%d/%v\n", ordinal, found); err != nil {
 			return c, err
 		}
-		if _, err := fmt.Fprintf(workHash, "%d/%d/%d/%d\n", ordinal, routeInput.RoutingMissSlots, c.Candidates, c.Edges); err != nil {
+		if _, err := fmt.Fprintf(workHash, "%d/%d/%d/%d/%d/%d\n", ordinal, len(routeInput.Route), len(routeInput.Packs), routeInput.RoutingMissSlots, c.Candidates, c.Edges); err != nil {
 			return c, err
 		}
 	}
@@ -505,7 +509,7 @@ func m0FrontierAggregateV1(measurements, canonical []m0FrontierCellV1, queries i
 		base := rows[0]
 		qps, p50, p95 := make([]float64, 3), make([]uint64, 3), make([]uint64, 3)
 		for i, row := range rows {
-			if row.Queries != queries || row.SelectedPartitions != point.Probes || row.Recall != base.Recall || row.Candidates != base.Candidates || row.Edges != base.Edges || row.RoutingMissSlots != base.RoutingMissSlots || row.RouterSelectedPartitions != base.RouterSelectedPartitions || row.ResultSHA256 != base.ResultSHA256 || row.WorkSHA256 != base.WorkSHA256 {
+			if row.Queries != queries || row.SelectedPartitions != point.Probes || row.Recall != base.Recall || row.Candidates != base.Candidates || row.Edges != base.Edges || row.RoutingMissSlots != base.RoutingMissSlots || row.RouterSelectedPartitions != base.RouterSelectedPartitions || row.SelectedDomains != base.SelectedDomains || row.SelectedPacks != base.SelectedPacks || row.ResultSHA256 != base.ResultSHA256 || row.WorkSHA256 != base.WorkSHA256 {
 				return nil, errors.New("M0 frontier invariant repetition drift")
 			}
 			qps[i], p50[i], p95[i] = row.QPS, row.P50Nanos, row.P95Nanos

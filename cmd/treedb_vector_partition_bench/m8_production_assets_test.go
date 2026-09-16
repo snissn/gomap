@@ -9,6 +9,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -236,8 +237,8 @@ func TestM8ProductionReportRejectsUnexercisedDataGroupV1(t *testing.T) {
 			ExactRepresentativeRecallAtK: 1, ApproximateRepresentativeRecallAtK: 1, LocalHNSWRecallAtK: 1, ApproximateLocalHNSWRecallAtK: 1, EndToEndRecallAtK: 1,
 			CoordinatorMergeIDParity: true, CoordinatorMergeScoreParity: true,
 			ApproximateRouterCandidateBudget: 4, ApproximateRouterPartitionCoverageComplete: true,
-			LocalHNSWSearches: uint64(fixture.Queries) * 4, LocalHNSWCandidates: 4, LocalHNSWEdges: 4,
-			ApproximateLocalHNSWSearches: uint64(fixture.Queries) * 4, ApproximateLocalHNSWCandidates: 4, ApproximateLocalHNSWEdges: 4,
+			LocalHNSWSearches: uint64(fixture.Queries) * 4, LocalHNSWSearchesByQuery: slices.Repeat([]uint32{4}, fixture.Queries), LocalHNSWCandidates: 4, LocalHNSWEdges: 4,
+			ApproximateLocalHNSWSearches: uint64(fixture.Queries) * 4, ApproximateLocalHNSWSearchesByQuery: slices.Repeat([]uint32{4}, fixture.Queries), ApproximateLocalHNSWCandidates: 4, ApproximateLocalHNSWEdges: 4,
 			ResidualLossOwners: []string{"none_observed"},
 		}}},
 		PackDiagnostics: diagnostics(loads),
@@ -512,6 +513,7 @@ func TestM8ProductionReportRejectsUnexercisedDataGroupV1(t *testing.T) {
 	shortfall.Rows[0].Attribution.ApproximateRepresentativeRecallAtK = 0
 	shortfall.Rows[0].Attribution.ApproximateLocalHNSWRecallAtK = 0
 	shortfall.Rows[0].Attribution.ApproximateLocalHNSWSearches = 0
+	shortfall.Rows[0].Attribution.ApproximateLocalHNSWSearchesByQuery = nil
 	shortfall.Rows[0].Attribution.ApproximateLocalHNSWCandidates = 0
 	shortfall.Rows[0].Attribution.ApproximateLocalHNSWEdges = 0
 	shortfall.Rows[0].Attribution.EndToEndRecallAtK = 0
@@ -1078,7 +1080,7 @@ func TestM8ProductionMultiGroupTopology10kTCPV1(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	membershipOracles, err := m8MembershipOracleRecallCacheV1(truth, primaryHomes, finalMemberships, len(harness.searchers), 4)
+	membershipOracles, err := m8MembershipOracleRecallCacheV1(truth, primaryHomes, finalMemberships, assets.manifest, 4)
 	if err != nil {
 		t.Fatal(err)
 	}

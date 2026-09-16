@@ -365,13 +365,13 @@ func localHNSWRepairCalibrationSummaryV1Build(ctx context.Context, sidecar strin
 	return artifact, rows, summary, nil
 }
 
-func localHNSWRepairCalibrationTimingV1Build(ctx context.Context, overlay, repair *localHNSWVariantHarnessV1, queries []localHNSWRepairCalibrationQueryV1) (localHNSWRepairCalibrationTimingV1, error) {
-	return localHNSWRepairCalibrationTimingAtEFV1Build(ctx, overlay, repair, queries, 128, 128)
+func localHNSWRepairCalibrationTimingV1Build(ctx context.Context, overlay, repair *localHNSWVariantHarnessV1, queries []localHNSWRepairCalibrationQueryV1, lowProbes, allProbes int) (localHNSWRepairCalibrationTimingV1, error) {
+	return localHNSWRepairCalibrationTimingAtEFV1Build(ctx, overlay, repair, queries, 128, 128, lowProbes, allProbes)
 }
 
-func localHNSWRepairCalibrationTimingAtEFV1Build(ctx context.Context, overlay, repair *localHNSWVariantHarnessV1, queries []localHNSWRepairCalibrationQueryV1, overlayEF, repairEF int) (localHNSWRepairCalibrationTimingV1, error) {
+func localHNSWRepairCalibrationTimingAtEFV1Build(ctx context.Context, overlay, repair *localHNSWVariantHarnessV1, queries []localHNSWRepairCalibrationQueryV1, overlayEF, repairEF, lowProbes, allProbes int) (localHNSWRepairCalibrationTimingV1, error) {
 	var out localHNSWRepairCalibrationTimingV1
-	if len(queries) != 806 || overlay == nil || repair == nil || overlayEF < 10 || repairEF < 10 || len(overlay.searchers) == 0 || len(overlay.searchers) != len(repair.searchers) {
+	if len(queries) != 806 || overlay == nil || repair == nil || overlayEF < 10 || repairEF < 10 || lowProbes < 1 || allProbes <= lowProbes || len(overlay.searchers) == 0 || len(overlay.searchers) != len(repair.searchers) {
 		return out, errors.New("invalid local HNSW repair timing")
 	}
 	for i, query := range queries {
@@ -398,7 +398,11 @@ func localHNSWRepairCalibrationTimingAtEFV1Build(ctx context.Context, overlay, r
 			if item.variant == "auxiliary_navigation" {
 				efSearch = repairEF
 			}
-			cell, err := localHNSWRepairCalibrationTimingCellAtEFV1Run(ctx, harness, queries, repetition, item.variant, item.all, efSearch)
+			probes := lowProbes
+			if item.all {
+				probes = allProbes
+			}
+			cell, err := localHNSWRepairCalibrationTimingCellAtEFV1Run(ctx, harness, queries, repetition, item.variant, item.all, probes, efSearch)
 			if err != nil {
 				return localHNSWRepairCalibrationTimingV1{}, err
 			}
@@ -409,20 +413,20 @@ func localHNSWRepairCalibrationTimingAtEFV1Build(ctx context.Context, overlay, r
 }
 
 func localHNSWRepairCalibrationTimingCellV1Run(ctx context.Context, harness *localHNSWVariantHarnessV1, queries []localHNSWRepairCalibrationQueryV1, repetition int, variant string, all bool) (localHNSWRepairCalibrationTimingCellV1, error) {
-	return localHNSWRepairCalibrationTimingCellAtEFV1Run(ctx, harness, queries, repetition, variant, all, 128)
-}
-
-func localHNSWRepairCalibrationTimingCellAtEFV1Run(ctx context.Context, harness *localHNSWVariantHarnessV1, queries []localHNSWRepairCalibrationQueryV1, repetition int, variant string, all bool, efSearch int) (localHNSWRepairCalibrationTimingCellV1, error) {
-	var cell localHNSWRepairCalibrationTimingCellV1
-	if harness == nil || len(queries) != 806 || efSearch < 10 || (variant != "overlay_current" && variant != "auxiliary_navigation") {
-		return cell, errors.New("invalid local HNSW repair timing cell")
+	if harness == nil {
+		return localHNSWRepairCalibrationTimingCellV1{}, errors.New("invalid local HNSW repair timing cell")
 	}
 	probes := 2
 	if all {
 		probes = len(harness.searchers)
 	}
-	if probes < 1 {
-		return cell, errors.New("invalid local HNSW repair timing probes")
+	return localHNSWRepairCalibrationTimingCellAtEFV1Run(ctx, harness, queries, repetition, variant, all, probes, 128)
+}
+
+func localHNSWRepairCalibrationTimingCellAtEFV1Run(ctx context.Context, harness *localHNSWVariantHarnessV1, queries []localHNSWRepairCalibrationQueryV1, repetition int, variant string, all bool, probes, efSearch int) (localHNSWRepairCalibrationTimingCellV1, error) {
+	var cell localHNSWRepairCalibrationTimingCellV1
+	if harness == nil || len(queries) != 806 || probes < 1 || efSearch < 10 || (variant != "overlay_current" && variant != "auxiliary_navigation") {
+		return cell, errors.New("invalid local HNSW repair timing cell")
 	}
 	runtime.GC()
 	var before, after runtime.MemStats

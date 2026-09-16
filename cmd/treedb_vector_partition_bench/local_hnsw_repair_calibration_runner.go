@@ -180,7 +180,7 @@ func runLocalHNSWRepairCalibrationV1(args []string, stdout io.Writer) (runErr er
 	if err != nil {
 		return err
 	}
-	timing, timingErr := localHNSWRepairCalibrationTimingV1Build(context.Background(), overlay, repair, queryRows)
+	timing, timingErr := localHNSWRepairCalibrationTimingV1Build(context.Background(), overlay, repair, queryRows, min(2, int(source.manifest.DomainCount)), int(source.manifest.DomainCount))
 	profilePaths, stopErr := capture.Stop()
 	if timingErr != nil || stopErr != nil {
 		return errors.Join(timingErr, stopErr)
@@ -317,10 +317,11 @@ func validateLocalHNSWRepairCalibrationReportV1(report localHNSWRepairCalibratio
 	if err != nil || !reflect.DeepEqual(profileArtifacts, report.Profiles.Artifacts) {
 		return errors.New("invalid local HNSW repair profile artifacts")
 	}
+	lowProbes, allProbes := report.ProbeCounts[0], report.ProbeCounts[1]
 	wantTiming := [4][4]struct {
 		variant string
 		probes  int
-	}{{{"overlay_current", 2}, {"auxiliary_navigation", 2}, {"overlay_current", 16}, {"auxiliary_navigation", 16}}, {{"auxiliary_navigation", 16}, {"overlay_current", 16}, {"auxiliary_navigation", 2}, {"overlay_current", 2}}, {{"overlay_current", 16}, {"auxiliary_navigation", 16}, {"overlay_current", 2}, {"auxiliary_navigation", 2}}, {{"auxiliary_navigation", 2}, {"overlay_current", 2}, {"auxiliary_navigation", 16}, {"overlay_current", 16}}}
+	}{{{"overlay_current", lowProbes}, {"auxiliary_navigation", lowProbes}, {"overlay_current", allProbes}, {"auxiliary_navigation", allProbes}}, {{"auxiliary_navigation", allProbes}, {"overlay_current", allProbes}, {"auxiliary_navigation", lowProbes}, {"overlay_current", lowProbes}}, {{"overlay_current", allProbes}, {"auxiliary_navigation", allProbes}, {"overlay_current", lowProbes}, {"auxiliary_navigation", lowProbes}}, {{"auxiliary_navigation", lowProbes}, {"overlay_current", lowProbes}, {"auxiliary_navigation", allProbes}, {"overlay_current", allProbes}}}
 	stable := map[string][]string{}
 	for i, cell := range report.Timing.Cells {
 		want := wantTiming[i/4][i%4]

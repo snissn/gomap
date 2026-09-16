@@ -261,8 +261,9 @@ func localHNSWRepairEFCurveTimingV1Build(ctx context.Context, source *m8Producti
 	}
 	partitions := int(source.manifest.PartitionCount)
 	domains := int(source.manifest.DomainCount)
+	lowProbes := min(2, domains)
 	candidates := min(256, int(source.status.Representatives))
-	if partitions < 1 || candidates < 1 || len(repair.searchers) != partitions {
+	if partitions < 1 || lowProbes < 1 || domains <= lowProbes || candidates < 1 || len(repair.searchers) != partitions {
 		return out, errors.New("invalid local HNSW repair EF timing harness")
 	}
 	timingQueries := make([]localHNSWRepairEFCurveTimingQueryV1, 0, len(ordinals))
@@ -320,21 +321,21 @@ func localHNSWRepairEFCurveTimingV1Build(ctx context.Context, source *m8Producti
 		return localHNSWRepairEFCurveTimingV1{}, errors.New("invalid local HNSW repair EF timing routes")
 	}
 	orders := [4][4]struct{ efSearch, probes int }{
-		{{128, 2}, {148, 2}, {128, partitions}, {148, partitions}},
-		{{148, partitions}, {128, partitions}, {148, 2}, {128, 2}},
-		{{128, partitions}, {148, partitions}, {128, 2}, {148, 2}},
-		{{148, 2}, {128, 2}, {148, partitions}, {128, partitions}},
+		{{128, lowProbes}, {148, lowProbes}, {128, domains}, {148, domains}},
+		{{148, domains}, {128, domains}, {148, lowProbes}, {128, lowProbes}},
+		{{128, domains}, {148, domains}, {128, lowProbes}, {148, lowProbes}},
+		{{148, lowProbes}, {128, lowProbes}, {148, domains}, {128, domains}},
 	}
 	for repetition, order := range orders {
 		for _, item := range order {
-			cell, err := localHNSWRepairEFCurveTimingCellV1Run(ctx, repair, timingQueries, repetition, item.efSearch, item.probes)
+			cell, err := localHNSWRepairEFCurveTimingCellV1Run(ctx, repair, timingQueries, repetition, item.efSearch, item.probes, domains)
 			if err != nil {
 				return localHNSWRepairEFCurveTimingV1{}, err
 			}
 			out.Cells = append(out.Cells, cell)
 		}
 	}
-	gate, err := localHNSWRepairEFCurveTimingGateV1Build(out.Cells, partitions)
+	gate, err := localHNSWRepairEFCurveTimingGateV1Build(out.Cells, lowProbes, domains)
 	if err != nil {
 		return localHNSWRepairEFCurveTimingV1{}, err
 	}
@@ -346,9 +347,9 @@ func localHNSWRepairEFCurveTimingQueryV1Valid(query localHNSWRepairEFCurveTiming
 	return query.Ordinal >= 0 && localHNSWCalibrationOrdinalV1(query.Ordinal) && len(query.Query) > 0 && query.QueryFP32SHA256 == localHNSWAttributionQueryFP32SHA256V1(query.Query) && len(query.P2Route) >= min(2, partitions) && localHNSWAttributionRoutePrefixV1(query.P2Route, query.P16Route) && localHNSWAttributionRoutePermutationV1(query.P16Route, partitions) && localHNSWAttributionSHA256V1(query.P2EF128SHA256) && localHNSWAttributionSHA256V1(query.P16EF128SHA256) && localHNSWAttributionSHA256V1(query.P2EF148SHA256) && localHNSWAttributionSHA256V1(query.P16EF148SHA256)
 }
 
-func localHNSWRepairEFCurveTimingCellV1Run(ctx context.Context, harness *localHNSWVariantHarnessV1, queries []localHNSWRepairEFCurveTimingQueryV1, repetition, efSearch, probes int) (localHNSWRepairEFCurveTimingCellV1, error) {
+func localHNSWRepairEFCurveTimingCellV1Run(ctx context.Context, harness *localHNSWVariantHarnessV1, queries []localHNSWRepairEFCurveTimingQueryV1, repetition, efSearch, probes, allProbes int) (localHNSWRepairEFCurveTimingCellV1, error) {
 	var cell localHNSWRepairEFCurveTimingCellV1
-	if harness == nil || len(queries) == 0 || (efSearch != 128 && efSearch != 148) || (probes != 2 && probes != len(harness.searchers)) {
+	if harness == nil || len(queries) == 0 || allProbes <= 2 || (efSearch != 128 && efSearch != 148) || (probes != 2 && probes != allProbes) {
 		return cell, errors.New("invalid local HNSW repair EF timing cell")
 	}
 	runtime.GC()
@@ -363,11 +364,11 @@ func localHNSWRepairEFCurveTimingCellV1Run(ctx context.Context, harness *localHN
 			return cell, errors.New("invalid local HNSW repair EF timing query")
 		}
 		route, wantDigest := query.P2Route, query.P2EF128SHA256
-		if probes == len(harness.searchers) {
+		if probes == allProbes {
 			route, wantDigest = query.P16Route, query.P16EF128SHA256
 		}
 		if efSearch == 148 {
-			if probes == len(harness.searchers) {
+			if probes == allProbes {
 				wantDigest = query.P16EF148SHA256
 			} else {
 				wantDigest = query.P2EF148SHA256
@@ -411,17 +412,17 @@ func localHNSWRepairEFCurveTimingCellV1Run(ctx context.Context, harness *localHN
 	return cell, nil
 }
 
-func localHNSWRepairEFCurveTimingGateV1Build(cells []localHNSWRepairEFCurveTimingCellV1, partitions int) (localHNSWRepairEFCurveTimingGateV1, error) {
+func localHNSWRepairEFCurveTimingGateV1Build(cells []localHNSWRepairEFCurveTimingCellV1, lowProbes, allProbes int) (localHNSWRepairEFCurveTimingGateV1, error) {
 	var out localHNSWRepairEFCurveTimingGateV1
-	if partitions < 2 || len(cells) != 16 || cells[0].QueryCount < 1 {
+	if lowProbes < 1 || allProbes <= lowProbes || len(cells) != 16 || cells[0].QueryCount < 1 {
 		return out, errors.New("invalid local HNSW repair EF timing cells")
 	}
 	queryCount := cells[0].QueryCount
 	orders := [4][4]struct{ efSearch, probes int }{
-		{{128, 2}, {148, 2}, {128, partitions}, {148, partitions}},
-		{{148, partitions}, {128, partitions}, {148, 2}, {128, 2}},
-		{{128, partitions}, {148, partitions}, {128, 2}, {148, 2}},
-		{{148, 2}, {128, 2}, {148, partitions}, {128, partitions}},
+		{{128, lowProbes}, {148, lowProbes}, {128, allProbes}, {148, allProbes}},
+		{{148, allProbes}, {128, allProbes}, {148, lowProbes}, {128, lowProbes}},
+		{{128, allProbes}, {148, allProbes}, {128, lowProbes}, {148, lowProbes}},
+		{{148, lowProbes}, {128, lowProbes}, {148, allProbes}, {128, allProbes}},
 	}
 	for repetition, order := range orders {
 		for position, want := range order {
@@ -442,9 +443,9 @@ func localHNSWRepairEFCurveTimingGateV1Build(cells []localHNSWRepairEFCurveTimin
 		} else if cell.EFSearch == 148 {
 			efIndex = 1
 		}
-		if cell.Probes == 2 {
+		if cell.Probes == lowProbes {
 			probeIndex = 0
-		} else if cell.Probes == partitions {
+		} else if cell.Probes == allProbes {
 			probeIndex = 1
 		}
 		if cell.Repetition < 0 || cell.Repetition >= 4 || efIndex < 0 || probeIndex < 0 || seen[cell.Repetition][efIndex][probeIndex] || cell.QueryCount != queryCount || cell.ElapsedNanos == 0 || !localHNSWRepairEFCurveFinitePositiveV1(cell.QPS) || cell.P50Nanos == 0 || cell.P95Nanos == 0 || cell.P99Nanos == 0 || cell.P50Nanos > cell.P95Nanos || cell.P95Nanos > cell.P99Nanos || cell.Candidates == 0 || cell.NativeEdges == 0 || len(cell.ResultSHA256) != cell.QueryCount {
@@ -760,7 +761,7 @@ func validateLocalHNSWRepairEFCurveReportV1(report localHNSWRepairEFCurveReportV
 				return errors.New("invalid local HNSW repair EF timing query count")
 			}
 		}
-		want, err := localHNSWRepairEFCurveTimingGateV1Build(report.Timing.Cells, 16)
+		want, err := localHNSWRepairEFCurveTimingGateV1Build(report.Timing.Cells, report.ProbeCounts[0], report.ProbeCounts[1])
 		if err != nil || want.P2QPS148Over128 != report.Timing.Gate.P2QPS148Over128 || want.P16QPS148Over128 != report.Timing.Gate.P16QPS148Over128 || want.P2P95148Over128 != report.Timing.Gate.P2P95148Over128 || want.P16P95148Over128 != report.Timing.Gate.P16P95148Over128 || want.Disposition != report.Timing.Gate.Disposition {
 			return errors.New("invalid local HNSW repair EF timing")
 		}

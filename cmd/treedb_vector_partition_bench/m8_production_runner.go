@@ -194,9 +194,11 @@ type m8ProductionAttributionV1 struct {
 	LocalHNSWRecallAtK                                float64                     `json:"partition_local_hnsw_recall_at_k"`
 	ApproximateLocalHNSWRecallAtK                     float64                     `json:"approximate_partition_local_hnsw_recall_at_k"`
 	LocalHNSWSearches                                 uint64                      `json:"partition_local_hnsw_searches"`
+	LocalHNSWSearchesByQuery                          []uint32                    `json:"partition_local_hnsw_searches_by_query"`
 	LocalHNSWCandidates                               uint64                      `json:"partition_local_hnsw_candidates"`
 	LocalHNSWEdges                                    uint64                      `json:"partition_local_hnsw_edges"`
 	ApproximateLocalHNSWSearches                      uint64                      `json:"approximate_partition_local_hnsw_searches"`
+	ApproximateLocalHNSWSearchesByQuery               []uint32                    `json:"approximate_partition_local_hnsw_searches_by_query,omitempty"`
 	ApproximateLocalHNSWCandidates                    uint64                      `json:"approximate_partition_local_hnsw_candidates"`
 	ApproximateLocalHNSWEdges                         uint64                      `json:"approximate_partition_local_hnsw_edges"`
 	EndToEndRecallAtK                                 float64                     `json:"end_to_end_recall_at_k"`
@@ -635,7 +637,7 @@ func runM8ProductionSingleVariantV1(cfg config, fixture fixtureManifest, vectors
 		attribution := make(map[string]m8AttributionCellV1, len(cfg.probes)*len(cfg.efSearch))
 		exhaustive := make([][]m8CanonicalResultV1, len(queries))
 		for _, probes := range cfg.probes {
-			membershipOracles, oracleErr := m8MembershipOracleRecallCacheV1(truth, primaryHomes, finalMemberships, len(attributionHarness.searchers), probes)
+			membershipOracles, oracleErr := m8MembershipOracleRecallCacheV1(truth, primaryHomes, finalMemberships, assets.manifest, probes)
 			if oracleErr != nil {
 				return fmt.Errorf("build M8 membership oracles probes=%d: %w", probes, oracleErr)
 			}
@@ -2534,20 +2536,70 @@ func m8MembershipOracleCombinationCountV1(partitions, probes int, cap int64) (in
 	return combinations, nil
 }
 
-func m8MembershipOracleRecallCacheV1(truth [][]m8CanonicalResultV1, primaryHomes map[string]uint32, finalMemberships map[string][]uint32, partitions, probes int) ([]m8MembershipOracleRecallV1, error) {
+func m8MembershipOracleRecallCacheV1(truth [][]m8CanonicalResultV1, primaryHomes map[string]uint32, finalMemberships map[string][]uint32, manifest collections.VectorPartitionManifestV1, probes int) ([]m8MembershipOracleRecallV1, error) {
+	domainHomes, domainMemberships, domains, err := m8OracleDomainMembershipsV1(primaryHomes, finalMemberships, manifest)
+	if err != nil {
+		return nil, err
+	}
 	out := make([]m8MembershipOracleRecallV1, len(truth))
 	for i := range truth {
-		primary, err := m8BestPrimaryHomeOracleRecallV1(truth[i], primaryHomes, partitions, probes)
+		primary, err := m8BestPrimaryHomeOracleRecallV1(truth[i], domainHomes, domains, probes)
 		if err != nil {
 			return nil, fmt.Errorf("M8 primary-home oracle query=%d: %w", i, err)
 		}
-		final, err := m8BestMembershipOracleRecallV1(truth[i], finalMemberships, partitions, probes)
+		final, err := m8BestMembershipOracleRecallV1(truth[i], domainMemberships, domains, probes)
 		if err != nil {
 			return nil, fmt.Errorf("M8 final-membership oracle query=%d: %w", i, err)
 		}
 		out[i] = m8MembershipOracleRecallV1{primary: primary, final: final}
 	}
 	return out, nil
+}
+
+func m8OracleDomainMembershipsV1(primaryHomes map[string]uint32, finalMemberships map[string][]uint32, manifest collections.VectorPartitionManifestV1) (map[string]uint32, map[string][]uint32, int, error) {
+	partitions, domains := int(manifest.PartitionCount), int(manifest.DomainCount)
+	if domains == 0 && len(manifest.DomainPacks) == 0 {
+		domains = partitions
+		manifest.DomainPacks = make([]collections.VectorPartitionDomainPackV1, partitions)
+		for i := range manifest.DomainPacks {
+			manifest.DomainPacks[i] = collections.VectorPartitionDomainPackV1{DomainID: uint32(i), PackID: uint32(i)}
+		}
+	}
+	if partitions < 1 || domains < 1 || domains > partitions || len(manifest.DomainPacks) != partitions {
+		return nil, nil, 0, errors.New("invalid M8 oracle domain-pack layout")
+	}
+	packDomains := make([]uint32, partitions)
+	for i := range packDomains {
+		packDomains[i] = math.MaxUint32
+	}
+	for _, mapping := range manifest.DomainPacks {
+		if mapping.PackID >= uint32(partitions) || mapping.DomainID >= uint32(domains) || packDomains[mapping.PackID] != math.MaxUint32 {
+			return nil, nil, 0, errors.New("invalid M8 oracle domain-pack mapping")
+		}
+		packDomains[mapping.PackID] = mapping.DomainID
+	}
+	domainHomes := make(map[string]uint32, len(primaryHomes))
+	for id, pack := range primaryHomes {
+		if pack >= uint32(partitions) || packDomains[pack] == math.MaxUint32 {
+			return nil, nil, 0, fmt.Errorf("invalid primary pack for %q", id)
+		}
+		domainHomes[id] = packDomains[pack]
+	}
+	domainMemberships := make(map[string][]uint32, len(finalMemberships))
+	for id, packs := range finalMemberships {
+		seen := make(map[uint32]struct{}, len(packs))
+		for _, pack := range packs {
+			if pack >= uint32(partitions) || packDomains[pack] == math.MaxUint32 {
+				return nil, nil, 0, fmt.Errorf("invalid membership pack for %q", id)
+			}
+			seen[packDomains[pack]] = struct{}{}
+		}
+		for domain := range seen {
+			domainMemberships[id] = append(domainMemberships[id], domain)
+		}
+		slices.Sort(domainMemberships[id])
+	}
+	return domainHomes, domainMemberships, domains, nil
 }
 
 // m8TruthHomePartitionDiagnosticsV1 measures the selected-partition coverage
@@ -2753,6 +2805,7 @@ func m8BuildAttributionV1(ctx context.Context, assets *m8ProductionMultiGroupAss
 		}
 		// These counters belong to LocalHNSWRecallAtK's exact route.
 		cell.Evidence.LocalHNSWSearches += uint64(len(exactPartitions))
+		cell.Evidence.LocalHNSWSearchesByQuery = append(cell.Evidence.LocalHNSWSearchesByQuery, uint32(len(exactPartitions)))
 		cell.Evidence.LocalHNSWCandidates += exactLocalMetrics.Candidates
 		cell.Evidence.LocalHNSWEdges += exactLocalMetrics.Edges
 		if cell.Evidence.ApproximateRouterPartitionCoverageComplete {
@@ -2762,6 +2815,7 @@ func m8BuildAttributionV1(ctx context.Context, assets *m8ProductionMultiGroupAss
 				return cell, err
 			}
 			cell.Evidence.ApproximateLocalHNSWSearches += uint64(len(approximatePartitions[i]))
+			cell.Evidence.ApproximateLocalHNSWSearchesByQuery = append(cell.Evidence.ApproximateLocalHNSWSearchesByQuery, uint32(len(approximatePartitions[i])))
 			cell.Evidence.ApproximateLocalHNSWCandidates += approximateLocalMetrics.Candidates
 			cell.Evidence.ApproximateLocalHNSWEdges += approximateLocalMetrics.Edges
 		}
@@ -3309,6 +3363,7 @@ func m8AttachAttributionV1(row *m8ProductionRowV1, attribution m8AttributionCell
 		row.Attribution.ApproximateRepresentativeRecallAtK = 0
 		row.Attribution.ApproximateLocalHNSWRecallAtK = 0
 		row.Attribution.ApproximateLocalHNSWSearches = 0
+		row.Attribution.ApproximateLocalHNSWSearchesByQuery = nil
 		row.Attribution.ApproximateLocalHNSWCandidates = 0
 		row.Attribution.ApproximateLocalHNSWEdges = 0
 		row.Attribution.EndToEndRecallAtK = 0
@@ -4327,12 +4382,8 @@ func validateM8ProductionReportWithProfilesV1(report m8ProductionReportV1, caps 
 		if report.Variant != nil && row.VariantID != report.Variant.VariantID {
 			return errors.New("M8 row variant identity mismatch")
 		}
-		minimumLocalSearches, maximumLocalSearches, ok := m8ExpectedLocalSearchBoundsV1(row.Samples, row.Probes, packsPerDomain)
-		if !ok {
-			return errors.New("M8 local search count overflow")
-		}
-		validExactLocalSearches := row.Attribution.LocalHNSWSearches >= minimumLocalSearches && row.Attribution.LocalHNSWSearches <= maximumLocalSearches
-		validApproximateLocalSearches := row.Attribution.ApproximateLocalHNSWSearches >= minimumLocalSearches && row.Attribution.ApproximateLocalHNSWSearches <= maximumLocalSearches
+		validExactLocalSearches := m8LocalSearchFanoutValidV1(row.Attribution.LocalHNSWSearchesByQuery, row.Attribution.LocalHNSWSearches, row.Samples, row.Probes, packsPerDomain)
+		validApproximateLocalSearches := m8LocalSearchFanoutValidV1(row.Attribution.ApproximateLocalHNSWSearchesByQuery, row.Attribution.ApproximateLocalHNSWSearches, row.Samples, row.Probes, packsPerDomain)
 		if row.ElapsedNanos < row.MaxTotalNanos {
 			return errors.New("M8 cell elapsed is shorter than its slowest request")
 		}
@@ -4342,7 +4393,7 @@ func validateM8ProductionReportWithProfilesV1(report m8ProductionReportV1, caps 
 				row.RouterMode != collections.VectorPartitionRouterModeApproxV1 || row.RouterCandidates < row.Probes || row.RouterCandidates > report.Config.RouterCandidates || row.RouterCandidates != row.Attribution.ApproximateRouterCandidateBudget || row.NoPartialResults || row.ExactParityChecked || row.ExactParityPassed ||
 				row.RecallAtK != 0 || row.QPS != 0 || row.ElapsedNanos == 0 || row.P50Nanos != 0 || row.P95Nanos != 0 || row.P99Nanos != 0 || row.MaxTotalNanos == 0 ||
 				!validExactLocalSearches || row.Attribution.LocalHNSWCandidates == 0 ||
-				row.Attribution.ApproximateRouterPartitionCoverageComplete || row.Attribution.ApproximateRepresentativeRecallAtK != 0 || row.Attribution.ApproximateLocalHNSWRecallAtK != 0 || row.Attribution.ApproximateLocalHNSWSearches != 0 || row.Attribution.ApproximateLocalHNSWCandidates != 0 || row.Attribution.ApproximateLocalHNSWEdges != 0 || row.Attribution.EndToEndRecallAtK != 0 ||
+				row.Attribution.ApproximateRouterPartitionCoverageComplete || row.Attribution.ApproximateRepresentativeRecallAtK != 0 || row.Attribution.ApproximateLocalHNSWRecallAtK != 0 || row.Attribution.ApproximateLocalHNSWSearches != 0 || len(row.Attribution.ApproximateLocalHNSWSearchesByQuery) != 0 || row.Attribution.ApproximateLocalHNSWCandidates != 0 || row.Attribution.ApproximateLocalHNSWEdges != 0 || row.Attribution.EndToEndRecallAtK != 0 ||
 				row.Attribution.CoordinatorMergeIDParity || row.Attribution.CoordinatorMergeScoreParity || !validM8AttributionV1(row.Attribution, report.Config.TopK) {
 				return errors.New("malformed M8 candidate-coverage shortfall row")
 			}
@@ -4588,10 +4639,25 @@ func m8ExpectedLocalSearchBoundsV1(samples, probes int, packsPerDomain []int) (u
 	return uint64(samples) * uint64(minimumPacks), uint64(samples) * uint64(maximumPacks), true
 }
 
+func m8LocalSearchFanoutValidV1(fanout []uint32, aggregate uint64, samples, probes int, packsPerDomain []int) bool {
+	minimum, maximum, ok := m8ExpectedLocalSearchBoundsV1(1, probes, packsPerDomain)
+	if !ok || len(fanout) != samples {
+		return false
+	}
+	var total uint64
+	for _, searches := range fanout {
+		if uint64(searches) < minimum || uint64(searches) > maximum || total > math.MaxUint64-uint64(searches) {
+			return false
+		}
+		total += uint64(searches)
+	}
+	return total == aggregate
+}
+
 func validM8AttributionV1(attribution m8ProductionAttributionV1, topK int) bool {
 	if attribution.Contract != m8CanonicalResultContractV1 || attribution.GlobalExactRecallAtK != 1 ||
 		attribution.ApproximateRouterCandidateBudget < 1 ||
-		(!attribution.ApproximateRouterPartitionCoverageComplete && (attribution.ApproximateRepresentativeRecallAtK != 0 || attribution.ApproximateLocalHNSWRecallAtK != 0 || attribution.ApproximateLocalHNSWSearches != 0 || attribution.ApproximateLocalHNSWCandidates != 0 || attribution.ApproximateLocalHNSWEdges != 0)) ||
+		(!attribution.ApproximateRouterPartitionCoverageComplete && (attribution.ApproximateRepresentativeRecallAtK != 0 || attribution.ApproximateLocalHNSWRecallAtK != 0 || attribution.ApproximateLocalHNSWSearches != 0 || len(attribution.ApproximateLocalHNSWSearchesByQuery) != 0 || attribution.ApproximateLocalHNSWCandidates != 0 || attribution.ApproximateLocalHNSWEdges != 0)) ||
 		!slices.Equal(attribution.ResidualLossOwners, m8AttributionLossOwnersV1(attribution)) || !slices.Equal(attribution.StageOwners, m8AttributionStageOwnersV1(attribution)) {
 		return false
 	}

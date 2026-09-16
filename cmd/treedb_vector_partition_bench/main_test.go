@@ -295,6 +295,24 @@ func TestM8MembershipOraclesSeparatePrimaryAndOverlapCeilingsV1(t *testing.T) {
 	}
 }
 
+func TestM8MembershipOracleUsesLogicalDomainsV1(t *testing.T) {
+	truth := [][]m8CanonicalResultV1{{{ID: "a"}, {ID: "b"}}}
+	homes := map[string]uint32{"a": 0, "b": 1}
+	memberships := map[string][]uint32{"a": {0}, "b": {1}}
+	manifest := collections.VectorPartitionManifestV1{
+		PartitionCount: 4,
+		DomainCount:    2,
+		DomainPacks: []collections.VectorPartitionDomainPackV1{
+			{DomainID: 0, PackID: 0}, {DomainID: 0, PackID: 1},
+			{DomainID: 1, PackID: 2}, {DomainID: 1, PackID: 3},
+		},
+	}
+	oracles, err := m8MembershipOracleRecallCacheV1(truth, homes, memberships, manifest, 1)
+	if err != nil || len(oracles) != 1 || oracles[0].primary != 1 || oracles[0].final != 1 {
+		t.Fatalf("logical-domain oracle=%+v err=%v", oracles, err)
+	}
+}
+
 func TestM8MembershipOracleCombinationBoundIsPreflightedV1(t *testing.T) {
 	if got, err := m8MembershipOracleCombinationCountV1(27, 12, 20_000_000); err != nil || got != 17_383_860 {
 		t.Fatalf("C(27,12)=%d err=%v", got, err)
