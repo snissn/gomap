@@ -258,13 +258,18 @@ For Q5's bounded ordinary-mutable controls, keep the existing Go validator
 boundary intact. The exact bounded `native_runtime` baseline is either a clean
 completed application-lifecycle control or the one exact failed regression
 already frozen by #4617: bounded-50K `broad_10pct`, 1,000 eligible IDs, no
-returned IDs, `complete_finite_ann`, and 2,064 visited/scored candidates. The
-failed form contributes no lifecycle, latency, or comparison claim; any other
-partial or failure is invalid. Completed SQ8 bounded evidence uses the pinned
-quantized plan and `column_graph` and must always complete cleanly. Those two
-bounded rows are not a representation-matched exact-versus-SQ8 comparison;
-same-graph query-only
-attribution comes from the full diagnostic's paired native-v2/native-v3 packet.
+returned IDs, `complete_finite_ann`, and positive integral visited/scored work
+with visited equal to scored and scored no greater than 4,096. Every duplicate
+scenario/raw work counter must agree. The sibling vector-aligned ANN snapshots
+retain their frozen routes and membership evidence while allowing at most 4,096
+seed-row visits above their positive integral scored work. The first retained
+failure observed 2,064 scored candidates; that layout-dependent observation is
+historical, not the semantic identity of the regression. The failed form
+contributes no lifecycle, latency, or comparison claim; any other partial or
+failure is invalid. Completed SQ8 bounded evidence uses the pinned quantized
+plan and `column_graph` and must always complete cleanly. Those two bounded rows
+are not a representation-matched exact-versus-SQ8 comparison; same-graph
+query-only attribution comes from the full diagnostic's paired native-v2/native-v3 packet.
 Do not relax the bounded exact validator to admit `column_graph` under the old
 schema.
 
