@@ -329,13 +329,7 @@ func OpenFixedPeerTCPRuntimeV1(config FixedPeerTCPConfigV1) (*FixedPeerTCPRuntim
 		if e != nil {
 			return fail(e)
 		}
-		submitter, e := raftcluster.NewSingleGroupSubmitter(raftcluster.SingleGroupSubmitterOptions{Cluster: cfg, AdmissionProvider: d.provider, CommitSource: d.provider, Preflight: d.fsm, Applier: d.fsm, CatalogVersionProvider: raftcluster.CatalogVersionProviderFunc(func(context.Context) (uint64, bool, error) {
-			s := d.db.State()
-			if s == nil {
-				return 0, false, nil
-			}
-			return s.CommitSeq, true, nil
-		})})
+		submitter, e := raftcluster.NewSingleGroupSubmitter(raftcluster.SingleGroupSubmitterOptions{Cluster: cfg, AdmissionProvider: d.provider, CommitSource: d.provider, Preflight: d.fsm, Applier: d.fsm, CatalogVersionProvider: d.fsm})
 		if e != nil {
 			return fail(e)
 		}
@@ -437,9 +431,9 @@ func (r *FixedPeerTCPRuntimeV1) Status(ctx context.Context) (FixedPeerTCPStatusV
 			if err != nil {
 				return s, err
 			}
-			v := uint64(0)
-			if state := d.db.State(); state != nil {
-				v = state.CommitSeq
+			v, _, err := d.fsm.CurrentCatalogVersion(ctx)
+			if err != nil {
+				return s, err
 			}
 			s.Groups = append(s.Groups, FixedPeerTCPGroupStatusV1{RuntimeStatusV1: status, CatalogVersion: v})
 		}

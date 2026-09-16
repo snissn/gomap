@@ -2,6 +2,7 @@ package raftfsm
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 
@@ -11,6 +12,30 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/raftentry"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
+
+func TestCurrentCatalogVersionFailsClosed(t *testing.T) {
+	dir := t.TempDir()
+	db := openFSMTestDB(t, dir)
+	defer db.Close()
+	fsm := openFSMForTest(t, db, dir)
+	defer fsm.Close()
+	if version, ok, err := fsm.CurrentCatalogVersion(nil); err != nil || !ok || version != db.State().CommitSeq {
+		t.Fatalf("open version=%d ok=%v err=%v", version, ok, err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, ok, err := fsm.CurrentCatalogVersion(ctx); ok || !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled ok=%v err=%v", ok, err)
+	}
+	if err := fsm.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for _, closed := range []*FSM{nil, {}, fsm} {
+		if _, ok, err := closed.CurrentCatalogVersion(context.Background()); ok || err == nil {
+			t.Fatalf("unavailable FSM ok=%v err=%v", ok, err)
+		}
+	}
+}
 
 func TestClusterAdapterAppliesProviderCommittedEntryDurably(t *testing.T) {
 	root := t.TempDir()

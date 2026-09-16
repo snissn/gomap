@@ -23,6 +23,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
 	"github.com/snissn/gomap/TreeDB/internal/raftentry"
 	"github.com/snissn/gomap/TreeDB/internal/raftplacement"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
 func fixedPeerReadyV1(t testing.TB, ctx context.Context, names []string) ([]FixedPeerTCPConfigV1, []*fixedPeerTestProcessV1, *FixedPeerTCPClientV1) {
@@ -92,6 +93,111 @@ func fixedPeerWaitV1(t testing.TB, ctx context.Context, check func() bool) {
 		case <-time.After(20 * time.Millisecond):
 		}
 	}
+}
+
+func TestFixedPeerTCPSnapshotRestoreTracksCurrentCatalogVersionV1(t *testing.T) {
+	if !rootpublication.StableRelativeNamespaceSupported() {
+		t.Skip("Raft snapshot install requires durable rename and removal namespaces")
+	}
+	// Keep normal snapshot settings; explicitly persist a provider snapshot and
+	// restart so HashiCorp restores it onto the replacement FSM-owned DB.
+	c := fixedPeerTestConfigsV1(t)[0]
+	c.Nodes = c.Nodes[:1]
+	c.Catalog.Peers = c.Catalog.Peers[:1]
+	c.Groups = c.Groups[:1]
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	open := func() *FixedPeerTCPRuntimeV1 {
+		r, err := OpenFixedPeerTCPRuntimeV1(c)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			if err := r.Close(); err != nil {
+				t.Error(err)
+			}
+		})
+		fixedPeerWaitV1(t, ctx, func() bool {
+			s, err := r.Status(ctx)
+			return err == nil && s.CatalogRaft.State == "Leader" && len(s.Groups) == 1 && s.Groups[0].State == "Leader"
+		})
+		return r
+	}
+	r := open()
+	client, err := NewFixedPeerTCPClientV1(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	catalog := raftplacement.CatalogV1{Groups: []raftplacement.GroupV1{{ID: "group-a", Members: []raftcluster.NodeID{c.NodeID}}}}
+	for _, name := range []string{"users", "after", "stale"} {
+		catalog.Placements = append(catalog.Placements, raftplacement.CollectionPlacementV1{Collection: raftplacement.CollectionRefV1{Database: "default", Catalog: "default", Collection: name}, GroupID: "group-a"})
+	}
+	record, err := raftplacement.NewCatalogMetaRecordV1(1, catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	command, err := raftplacement.EncodeCatalogMetaCommandV1(raftplacement.CatalogMetaCommandV1{Record: record})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.PublishCatalog(ctx, c.NodeID, command); err != nil {
+		t.Fatal(err)
+	}
+	submit := func(name string, version uint64) (raftcluster.SubmitResultV1, error) {
+		request := ClusterRouteRequest{Database: "default", Catalog: "default", Collection: name, Shape: ClusterRouteShapeCollection}
+		route, err := client.Route(ctx, c.NodeID, request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		metadata := ClusterRequestMetadata{AckPolicy: iwire.AckRaftCommitted}
+		ApplyClusterRouteMetadata(&metadata, request, route)
+		return client.Submit(ctx, c.NodeID, fixedPeerCreateEntryV1(t, name, version), metadata)
+	}
+	before, err := r.Status(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := submit("users", before.Groups[0].CatalogVersion)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := r.data["group-a"].provider.Snapshot(ctx)
+	if err != nil || snapshot.LastIncludedIndex < first.Evidence.Index || snapshot.SizeBytes == 0 {
+		t.Fatalf("snapshot=%+v err=%v", snapshot, err)
+	}
+	if err := r.Close(); err != nil {
+		t.Fatal(err)
+	}
+	r = open()
+	if _, err := r.data["group-a"].db.Get([]byte("snapshot-restore-check")); !errors.Is(err, backenddb.ErrClosed) {
+		t.Fatalf("snapshot did not replace the caller-owned DB: %v", err)
+	}
+	before, err = r.Status(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before.RecoveryState != "reopened" || before.Groups[0].Applied.Index < snapshot.LastIncludedIndex {
+		t.Fatalf("snapshot did not recover: %+v", before)
+	}
+	second, err := submit("after", before.Groups[0].CatalogVersion)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !second.CommittedRecoverable || second.CatalogVersion <= before.Groups[0].CatalogVersion {
+		t.Errorf("post-restore submit version=%d, before=%d; evidence=%+v", second.CatalogVersion, before.Groups[0].CatalogVersion, second.Evidence)
+	}
+	after, err := r.Status(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Groups[0].CatalogVersion <= before.Groups[0].CatalogVersion || after.Groups[0].CatalogVersion != second.CatalogVersion {
+		t.Errorf("post-restore status version=%d, before=%d, submit=%d", after.Groups[0].CatalogVersion, before.Groups[0].CatalogVersion, second.CatalogVersion)
+	}
+	if _, err := submit("stale", before.Groups[0].CatalogVersion); !errors.Is(err, raftcluster.ErrCatalogVersionMismatch) {
+		t.Fatalf("fresh stale-guard write after snapshot restore: %v", err)
+	}
+	t.Logf("restored snapshot index=%d, old DB closed, current catalog advanced %d -> %d; stale guard rejected", snapshot.LastIncludedIndex, before.Groups[0].CatalogVersion, after.Groups[0].CatalogVersion)
 }
 
 // The ingress has no group-b database or provider. A successful write can only
