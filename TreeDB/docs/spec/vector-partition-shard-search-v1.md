@@ -88,7 +88,7 @@ Default service ceilings are:
 | partitions per request | 32 |
 | `top_k` / `ef_search` | 256 / 4,096 |
 | request bytes | 64 KiB |
-| candidate bytes | 64 MiB |
+| candidate bytes | 80 MiB |
 | response bytes | 64 MiB |
 | identity / stable-ID bytes | 4,096 / 4,096 |
 

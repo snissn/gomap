@@ -11,6 +11,14 @@ func operationsRequestV1() SearchRequestV1 {
 	return SearchRequestV1{Version: 1, Generation: GenerationIDV1{Index: "embedding", Generation: 1}, Query: []float32{1}, Metric: MetricCosineV1, TopK: 1, Probes: 1, EfSearch: 1, Consistency: ConsistencyGenerationSnapshotV1, Limits: SearchLimitsV1{RequestBytes: 4, CandidateBytes: 1, ResponseBytes: 1, MergeEntries: 1}}
 }
 
+func TestConservativeOperationsConfigV1CoversVectorPartitionBaseAndLiveMaxima(t *testing.T) {
+	const declaredCandidateFloor = uint64(64_000_000) + uint64(128<<10)*64 + uint64(256*4096)
+	config := ConservativeOperationsConfigV1()
+	if config.MaxCandidateBytes < declaredCandidateFloor {
+		t.Fatalf("candidate bytes=%d want-at-least=%d", config.MaxCandidateBytes, declaredCandidateFloor)
+	}
+}
+
 func TestOperationsV1DefaultsOffAndCapsBeforeServiceV1(t *testing.T) {
 	calls := 0
 	backend := &serviceBackendV1{states: map[GenerationIDV1]GenerationStatusV1{}, search: func(_ context.Context, r SearchRequestV1) (SearchResponseV1, error) {

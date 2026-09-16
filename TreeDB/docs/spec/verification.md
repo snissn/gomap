@@ -2051,8 +2051,10 @@ Coverage:
 - `TreeDB/collections/vector_index_partition_live_v1_test.go` covers insert,
   replacement, delete, A-to-B-to-A movement, stale-base exclusion before HNSW
   top-k admission, atomic pinned revisions, repeated-update capacity cutover,
-  pinned-view retirement, immutable-generation cutover, snapshot corruption,
-  first-binding durability, checkpoint/close/reopen, and command-WAL replay.
+  byte-cap reclaim for single and batch replacements, true unreclaimable-cap
+  rejection, pinned-view retirement, publication-barrier immutable-generation
+  rebind, snapshot corruption, first-binding durability, checkpoint/close/
+  reopen, and command-WAL replay.
   The focused `TestVectorIndexPartitionLive*` family is the canonical local
   lifecycle gate.
 - `TreeDB/collections/vector_partition_persistent_searcher_v1_test.go` proves

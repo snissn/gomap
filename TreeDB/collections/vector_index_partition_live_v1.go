@@ -30,6 +30,32 @@ var vectorPartitionLiveBeforeBindingPublicationHookForTest struct {
 	fn func()
 }
 
+var vectorPartitionLiveBeforeBindingTransitionHookForTest struct {
+	mu sync.Mutex
+	fn func()
+}
+
+func setVectorPartitionLiveBeforeBindingTransitionHookForTest(fn func()) func() {
+	vectorPartitionLiveBeforeBindingTransitionHookForTest.mu.Lock()
+	previous := vectorPartitionLiveBeforeBindingTransitionHookForTest.fn
+	vectorPartitionLiveBeforeBindingTransitionHookForTest.fn = fn
+	vectorPartitionLiveBeforeBindingTransitionHookForTest.mu.Unlock()
+	return func() {
+		vectorPartitionLiveBeforeBindingTransitionHookForTest.mu.Lock()
+		vectorPartitionLiveBeforeBindingTransitionHookForTest.fn = previous
+		vectorPartitionLiveBeforeBindingTransitionHookForTest.mu.Unlock()
+	}
+}
+
+func runVectorPartitionLiveBeforeBindingTransitionHookForTest() {
+	vectorPartitionLiveBeforeBindingTransitionHookForTest.mu.Lock()
+	fn := vectorPartitionLiveBeforeBindingTransitionHookForTest.fn
+	vectorPartitionLiveBeforeBindingTransitionHookForTest.mu.Unlock()
+	if fn != nil {
+		fn()
+	}
+}
+
 func setVectorPartitionLiveBeforeBindingPublicationHookForTest(fn func()) func() {
 	vectorPartitionLiveBeforeBindingPublicationHookForTest.mu.Lock()
 	previous := vectorPartitionLiveBeforeBindingPublicationHookForTest.fn
@@ -609,6 +635,22 @@ func (idx *VectorIndex) ensureVectorPartitionLiveCapacityLocked(additionalNodes 
 	return nil
 }
 
+func (idx *VectorIndex) ensureVectorPartitionLiveByteCapacityLocked(additionalNodes, additionalOwners int, additionalNodeIDBytes, additionalOwnerIDBytes uint64) error {
+	if idx.partitionLive == nil || idx.partitionLiveBytesFitLocked(additionalNodes, additionalOwners, additionalNodeIDBytes, additionalOwnerIDBytes) {
+		return nil
+	}
+	if idx.partitionLiveNodeCountLocked() <= idx.partitionLiveActiveOwnerCountLocked() {
+		return ErrVectorIndexPartitionLiveCapacityV1
+	}
+	if err := idx.cutoverVectorPartitionLiveLocked(); err != nil {
+		return err
+	}
+	if !idx.partitionLiveBytesFitLocked(additionalNodes, additionalOwners, additionalNodeIDBytes, additionalOwnerIDBytes) {
+		return ErrVectorIndexPartitionLiveCapacityV1
+	}
+	return nil
+}
+
 func (idx *VectorIndex) preflightVectorPartitionMutationLocked(documentID []byte, vector []float32) error {
 	if idx.partitionLive == nil {
 		return nil
@@ -629,14 +671,14 @@ func (idx *VectorIndex) preflightVectorPartitionMutationLocked(documentID []byte
 		if !exists {
 			additionalOwners = 1
 		}
-		if !idx.partitionLiveBytesFitLocked(1, additionalOwners, uint64(len(documentID)), ownerBytes) {
-			return ErrVectorIndexPartitionLiveCapacityV1
+		if err := idx.ensureVectorPartitionLiveByteCapacityLocked(1, additionalOwners, uint64(len(documentID)), ownerBytes); err != nil {
+			return err
 		}
 		_, err := idx.partitionLiveRouteLocked(vector)
 		return err
 	}
-	if !exists && !idx.partitionLiveBytesFitLocked(0, 1, 0, uint64(len(documentID))) {
-		return ErrVectorIndexPartitionLiveCapacityV1
+	if !exists {
+		return idx.ensureVectorPartitionLiveByteCapacityLocked(0, 1, 0, uint64(len(documentID)))
 	}
 	return nil
 }
@@ -674,10 +716,7 @@ func (idx *VectorIndex) preflightVectorPartitionMutationBatchLocked(documentIDs 
 	if err := idx.ensureVectorPartitionLiveCapacityLocked(additionalNodes); err != nil {
 		return err
 	}
-	if !idx.partitionLiveBytesFitLocked(additionalNodes, len(newOwners), additionalNodeIDBytes, additionalOwnerIDBytes) {
-		return ErrVectorIndexPartitionLiveCapacityV1
-	}
-	return nil
+	return idx.ensureVectorPartitionLiveByteCapacityLocked(additionalNodes, len(newOwners), additionalNodeIDBytes, additionalOwnerIDBytes)
 }
 
 func (idx *VectorIndex) acquireVectorPartitionLiveSearchPinV1(manifest VectorPartitionManifestV1) (*VectorIndexPartitionLiveSearchPinV1, error) {
@@ -1165,7 +1204,15 @@ func (c *Collection) ensureVectorPartitionLiveBindingV1(ctx context.Context, man
 		if err != nil {
 			return nil, false, err
 		}
-		if err := idx.bindVectorPartitionLiveV1(manifest, currentGeneration, representatives); err != nil {
+		coord := c.collectionSchemaCoordinator()
+		if coord == nil {
+			return nil, false, ErrVectorIndexPartitionLiveUnavailableV1
+		}
+		runVectorPartitionLiveBeforeBindingTransitionHookForTest()
+		coord.partitionLivePublishMu.Lock()
+		err = idx.bindVectorPartitionLiveV1(manifest, currentGeneration, representatives)
+		coord.partitionLivePublishMu.Unlock()
+		if err != nil {
 			return nil, false, err
 		}
 		idx.mu.RLock()

@@ -1097,6 +1097,20 @@ func TestVectorPartitionShardSearchBoundsFailBeforeProofOrAllocationV1(t *testin
 	}
 }
 
+func TestVectorPartitionShardSearchDefaultCandidateBudgetBoundaryV1(t *testing.T) {
+	limits := DefaultVectorPartitionShardSearchLimitsV1()
+	service := &VectorPartitionShardSearchServiceV1{limits: limits}
+	request := vectorPartitionShardSearchRequestTestV1([]uint32{0})
+	request.CandidateBytesLimit = limits.MaxCandidateBytes
+	if err := service.validateRequest(request); err != nil {
+		t.Fatalf("default candidate ceiling rejected: %v", err)
+	}
+	request.CandidateBytesLimit++
+	if err := service.validateRequest(request); !errors.Is(err, ErrVectorPartitionShardSearchInvalidRequest) {
+		t.Fatalf("candidate ceiling + 1 err=%v", err)
+	}
+}
+
 func TestVectorPartitionShardSearchCancellationReleasesPinsWithoutPartialV1(t *testing.T) {
 	t.Run("before_read_proof", func(t *testing.T) {
 		service, source, coordinator := newVectorPartitionShardSearchTestServiceV1(t,

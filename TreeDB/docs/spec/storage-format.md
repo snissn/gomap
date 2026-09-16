@@ -2830,15 +2830,13 @@ collection rows, fold column assets, or rebuild either a native graph or a
 `column_graph`. Missing or mismatched manifest/router identity fails recovery
 closed. The first empty carrier command establishes the durable binding;
 checkpoint recovery loads and validates that carrier before applying any later
-ordinary collection mutation command. Those document-only commands then replay
-through the registered carrier to reconstruct its exact live revision and
-coverage. After replay, and only after the command journal, visible state,
-value-log appender, and root-publication runtime are ready, `Open` publishes the
-reconciled carrier through a fresh command-WAL-covered
-`CollectionPersistPartitionLive` frame before returning. A subsequent
-checkpoint therefore fences the replayed documents and their exact carrier
-together; recovery never requires that frame to have existed after the older
-checkpoint.
+ordinary collection mutation command. On replay, each document-only command
+derives its carrier delta before publication and includes that delta in the
+same ordered root group as the document, typed-column, locator, and system-root
+updates. The command's durable `AppliedCommandLSN`, exact live revision, and
+collection document-generation coverage therefore become visible atomically;
+there is no post-replay carrier frame or collection scan. A later checkpoint
+fences that already-atomic root group.
 
 `ExternalRefs`, `Preconditions`, and `ResultAssertions` are length-delimited
 sections so PR1 can harden framing before replay uses them. The PR1 external-ref

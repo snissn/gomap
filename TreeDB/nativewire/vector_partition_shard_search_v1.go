@@ -135,7 +135,7 @@ func DefaultVectorPartitionShardSearchLimitsV1() VectorPartitionShardSearchLimit
 		MaxTopK:           256,
 		MaxEfSearch:       4096,
 		MaxRequestBytes:   64 << 10,
-		MaxCandidateBytes: 64 << 20,
+		MaxCandidateBytes: 80 << 20,
 		MaxResponseBytes:  64 << 20,
 		MaxIdentityBytes:  4096,
 		MaxStableIDBytes:  4096,

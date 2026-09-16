@@ -220,7 +220,7 @@ Zero-valued limit fields select the following defaults:
 | identity / stable-ID bytes | 4,096 / 4,096 |
 | merge entries | 65,536 |
 | total logical M5 request bytes | 4 MiB |
-| total candidate bytes | 64 MiB |
+| total candidate bytes | 80 MiB |
 | total response bytes | 64 MiB |
 | wall clock | 30 s |
 

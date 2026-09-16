@@ -162,7 +162,15 @@ func (c *Collection) replaceSourceDocumentsAtomicModeSchemaLocked(parentID []byt
 				reconcileIDs = append(reconcileIDs, id)
 			}
 		}
-		notifyErr := c.reconcileVectorIndexes(reconcileIDs)
+		var notifyErr error
+		if _, replaying := replay.ReplayAssignedLSN(); replaying {
+			// Replay folded an already-restored partition-live carrier into the
+			// accepted document root group. Never route replay back through the
+			// ordinary load/build path or apply the same carrier mutation twice.
+			notifyErr = c.reconcileVectorPartitionLiveReplay(reconcileIDs)
+		} else {
+			notifyErr = c.reconcileVectorIndexes(reconcileIDs)
+		}
 		if notifyErr != nil {
 			c.invalidateRegisteredVectorIndexDocumentCoverage()
 			notifyErr = commitAmbiguousError("atomic source replacement vector maintenance", notifyErr)

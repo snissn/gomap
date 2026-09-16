@@ -156,9 +156,12 @@ obsolete nodes, stable IDs, owners/tombstones, router representatives, and
 transient snapshot/JSON copy headroom before accepting the document mutation.
 Capacity exhaustion is explicit and fail-closed. Repeated-update tombstones are
 compacted by atomically replacing domain indexes built from live nondeleted
-owners; pins retain the retired view until release. Publishing a newer exact
-immutable manifest similarly installs an empty overlay and retires the old
-generation without invalidating its already captured pins.
+owners. Node- or byte-cap admission that can reclaim retained history performs
+one such cutover and fully re-estimates the proposed mutation before rejecting
+it. Active requests keep the retired view pinned until release. Publishing a
+newer exact immutable manifest takes the same collection publication barrier,
+installs an empty overlay, and retires the old generation without invalidating
+its already captured pins.
 
 Preflight includes the bounded live-delta candidate and scratch requirements
 before coordinator budgets are distributed. Search time includes base and
@@ -166,7 +169,10 @@ delta traversal. Counters separately report base/delta candidate work,
 base/delta returned-result contribution, logical domains searched, cutovers,
 request-path rebuilds, and exact fallbacks. A healthy live request performs no
 request-path reconciliation scan or exact fallback and reuses warmed immutable
-packs across mutations.
+packs across mutations. The aligned coordinator, shard, and public operations
+candidate ceiling is 80 MiB: enough for the declared one-million-row base floor
+plus the maximum live-node and stable-ID preflight floors without weakening any
+per-request accounting.
 
 ## Historical evidence ownership
 

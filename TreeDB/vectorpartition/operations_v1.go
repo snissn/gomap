@@ -17,7 +17,7 @@ type OperationsConfigV1 struct {
 }
 
 func ConservativeOperationsConfigV1() OperationsConfigV1 {
-	return OperationsConfigV1{MaxQueryBytes: 1 << 20, MaxRequestBytes: 4 << 20, MaxCandidateBytes: 64 << 20, MaxResponseBytes: 16 << 20, MaxTopK: 10_000, MaxProbes: 256, MaxEfSearch: 10_000, MaxMergeEntries: 2_560_000}
+	return OperationsConfigV1{MaxQueryBytes: 1 << 20, MaxRequestBytes: 4 << 20, MaxCandidateBytes: 80 << 20, MaxResponseBytes: 16 << 20, MaxTopK: 10_000, MaxProbes: 256, MaxEfSearch: 10_000, MaxMergeEntries: 2_560_000}
 }
 
 // OperationsHealthV1 is a live authority-derived health snapshot. It carries

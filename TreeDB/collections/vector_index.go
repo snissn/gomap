@@ -1770,6 +1770,20 @@ func (c *Collection) reconcileVectorPartitionLiveReplay(documentIDs [][]byte) er
 	}
 	coord.partitionLivePublishMu.Lock()
 	defer coord.partitionLivePublishMu.Unlock()
+	currentGeneration, err := c.currentVectorIndexDocumentGeneration()
+	if err != nil {
+		return err
+	}
+	covered := true
+	for _, index := range indexes {
+		if !index.coversSourceDocumentGeneration(currentGeneration) {
+			covered = false
+			break
+		}
+	}
+	if covered {
+		return nil
+	}
 	return c.reconcileLoadedVectorIndexes(documentIDs, indexes, nil, false)
 }
 
