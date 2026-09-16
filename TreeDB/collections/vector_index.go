@@ -2484,7 +2484,7 @@ func (idx *VectorIndex) insertStoredDocumentsUnpublished(materializer *StoredDoc
 	if err := idx.preflightVectorPartitionMutationBatchLocked(documentIDs, vectors); err != nil {
 		return err
 	}
-	if hasVector && len(idx.scalarDefinitions) == 0 && idx.partitionLive == nil {
+	if hasVector && len(idx.scalarDefinitions) == 0 && idx.partitionLive == nil && !idx.partitionLiveOnly {
 		if idx.liveDeltaActiveLocked() {
 			return idx.insertLiveVectorBatchLocked(documentIDs, vectors)
 		}

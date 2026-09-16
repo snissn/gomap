@@ -149,7 +149,12 @@ before native HNSW top-k admission; stale base rows may navigate but cannot be
 selected. Each selected logical domain searches its live delta exactly once,
 even when the domain expands to physical packs in several owner groups. The
 base and delta results use the existing deterministic stable-ID merge and score
-ordering. Per-domain nodes are capacity bounded. Repeated-update tombstones are
+ordering. Admission has both a 128K stable-owner-ID ceiling and a conservative
+256 MiB retained-plus-snapshot byte budget. The byte budget is dimension- and
+M-dependent and charges live vectors, all bounded HNSW layers, retained
+obsolete nodes, stable IDs, owners/tombstones, router representatives, and
+transient snapshot/JSON copy headroom before accepting the document mutation.
+Capacity exhaustion is explicit and fail-closed. Repeated-update tombstones are
 compacted by atomically replacing domain indexes built from live nondeleted
 owners; pins retain the retired view until release. Publishing a newer exact
 immutable manifest similarly installs an empty overlay and retires the old

@@ -580,6 +580,8 @@ type DB struct {
 	commandWALReplayLSN                            atomic.Uint64
 	commandWALReplayToken                          atomic.Uint64
 	commandWALReplayTokenSeq                       atomic.Uint64
+	commandWALReplayFinalizersMu                   sync.Mutex
+	commandWALReplayFinalizers                     []func() error
 	// commandWALFlushPoisoned is intentionally cleared only by closing and
 	// reopening the DB. After an append reached the journal but flush/sync or
 	// root publication failed, continuing on the same handle could create an
@@ -2508,6 +2510,16 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	if err := db.initializeRootPublicationRuntimeV1(gen); err != nil {
 		db.Close()
 		return nil, err
+	}
+	// Replay handlers may restore derived state that must become durable before
+	// Open returns. Run those callbacks only after the command journal, visible
+	// state, value-log appender, and root-publication runtime are ready so their
+	// ordinary command-WAL-covered publications use the same production path as
+	// foreground persistence. A later checkpoint can then fence and clean both
+	// the replayed document command and this derived-state publication.
+	if err := db.runCommandWALReplayFinalizers(); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("treedb: finalize command WAL replay: %w", err)
 	}
 
 	db.pruner.Start(db, pruneWorkerOptions{

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -173,7 +174,7 @@ func TestVectorPartitionLiveProductionCoordinatorMutationAndColdReloadV1(t *test
 	var dispatchErr error
 	dispatcher.setBeforeDispatch(func(ctx context.Context, _ VectorPartitionShardSearchRequestV1) error {
 		dispatchOnce.Do(func() {
-			document, err := json.Marshal(map[string]any{"embedding": []float32{1, 0}})
+			document, err := json.Marshal(map[string]any{"embedding": []float32{.9, .1}})
 			if err != nil {
 				dispatchErr = err
 				return
@@ -213,7 +214,7 @@ func TestVectorPartitionLiveProductionCoordinatorMutationAndColdReloadV1(t *test
 		})
 		return dispatchErr
 	})
-	pinned := search("concurrent-pinned", []float32{1, 0})
+	pinned := search("concurrent-pinned", []float32{.9, .1})
 	dispatcher.setBeforeDispatch(nil)
 	if len(pinned.Neighbors) != 1 || pinned.Neighbors[0].ID != "a" || pinned.LiveRevision != initial.LiveRevision || pinned.LiveCoverage != initial.LiveCoverage {
 		t.Fatalf("concurrent pinned response=%+v initial=%+v", pinned, initial)
@@ -226,7 +227,7 @@ func TestVectorPartitionLiveProductionCoordinatorMutationAndColdReloadV1(t *test
 	case <-time.After(5 * time.Second):
 		t.Fatal("concurrent insert remained blocked after coordinator search")
 	}
-	concurrent := search("concurrent-visible", []float32{1, 0})
+	concurrent := search("concurrent-visible", []float32{.9, .1})
 	if len(concurrent.Neighbors) != 1 || concurrent.Neighbors[0].ID != "0-concurrent" || concurrent.LiveRevision <= pinned.LiveRevision || concurrent.LiveCoverage <= pinned.LiveCoverage {
 		t.Fatalf("concurrent visible response=%+v pinned=%+v", concurrent, pinned)
 	}
@@ -341,10 +342,30 @@ func TestVectorPartitionLiveProductionCheckpointCloseReopenV1(t *testing.T) {
 
 	initial := search("reopen-initial")
 	insertVectorPartitionLiveDocumentV1(t, fixture.collection, "0-reopen", []float32{1, 0})
+	replaceVectorPartitionLiveDocumentV1(t, fixture.collection, "a", []float32{0, 1})
+	replaceVectorPartitionLiveDocumentV1(t, fixture.collection, "0-reopen", []float32{0, 1})
+	replaceVectorPartitionLiveDocumentV1(t, fixture.collection, "0-reopen", []float32{1, 0})
+	insertVectorPartitionLiveDocumentV1(t, fixture.collection, "0-deleted-reopen", []float32{1, 0})
+	if err := fixture.collection.Delete([]byte("0-deleted-reopen")); err != nil {
+		t.Fatal(err)
+	}
 	mutated := search("reopen-mutated")
 	if len(mutated.Neighbors) != 1 || mutated.Neighbors[0].ID != "0-reopen" || mutated.LiveRevision <= initial.LiveRevision || mutated.LiveCoverage <= initial.LiveCoverage {
 		t.Fatalf("mutated response=%+v initial=%+v", mutated, initial)
 	}
+	ordinaryPlan, err := collections.NewVectorPartitionGenerationSearchOpenPlanWithContextV1(t.Context(), fixture.manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ordinaryPin, err := fixture.collection.AcquireVectorPartitionReaderPinWithContextV1(t.Context(), fixture.definition.Name, fixture.manifest.Generation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.collection.OpenVectorPartitionLocalSearcherForGenerationSearchPlanWithContextV1(t.Context(), fixture.definition.Name, fixture.manifest.Generation, fixture.manifest.Assets[0].PartitionID, ordinaryPlan, ordinaryPin); !errors.Is(err, collections.ErrVectorPartitionSearchUnavailable) {
+		ordinaryPin.Release()
+		t.Fatalf("ordinary stale-source open err=%v", err)
+	}
+	ordinaryPin.Release()
 	if err := fixture.database.Checkpoint(); err != nil {
 		t.Fatal(err)
 	}
@@ -367,6 +388,44 @@ func TestVectorPartitionLiveProductionCheckpointCloseReopenV1(t *testing.T) {
 	if len(reopened.Neighbors) != 1 || reopened.Neighbors[0].ID != "0-reopen" ||
 		reopened.LiveRevision != mutated.LiveRevision || reopened.LiveCoverage != mutated.LiveCoverage {
 		t.Fatalf("reopened response=%+v mutated=%+v", reopened, mutated)
+	}
+
+	wrongManifest := fixture.manifest
+	wrongManifest.Placements = append([]collections.VectorPartitionPlacementV1(nil), fixture.manifest.Placements...)
+	wrongManifest.Placements[0].GroupID = "substituted-group"
+	wrongManifest.Canonicalize()
+	if _, err := fixture.collection.NewVectorPartitionGenerationLiveSearchOpenPlanWithContextV1(t.Context(), wrongManifest); !errors.Is(err, collections.ErrVectorPartitionSearchUnavailable) {
+		t.Fatalf("non-authoritative live manifest err=%v", err)
+	}
+
+	openPlan, err := fixture.collection.NewVectorPartitionGenerationLiveSearchOpenPlanWithContextV1(t.Context(), fixture.manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	generationPin, err := fixture.collection.AcquireVectorPartitionReaderPinWithContextV1(t.Context(), fixture.definition.Name, fixture.manifest.Generation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer generationPin.Release()
+	asset := fixture.manifest.Assets[0]
+	assetPath := filepath.Join(fixture.database.ColumnAssetRootDir(), filepath.FromSlash(asset.Ref.Namespace), "assets", "segments", fmt.Sprintf("segment-%06d.tca", asset.Ref.FileID))
+	file, err := os.OpenFile(assetPath, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.WriteAt([]byte{'X'}, asset.Ref.Offset); err != nil {
+		_ = file.Close()
+		t.Fatal(err)
+	}
+	if err := file.Sync(); err != nil {
+		_ = file.Close()
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.collection.OpenVectorPartitionLocalSearcherForGenerationLiveSearchPlanWithContextV1(t.Context(), fixture.definition.Name, fixture.manifest.Generation, asset.PartitionID, openPlan, generationPin); !errors.Is(err, collections.ErrVectorPartitionSearchUnavailable) {
+		t.Fatalf("corrupt immutable live pack err=%v", err)
 	}
 }
 
@@ -426,10 +485,11 @@ func BenchmarkVectorPartitionLiveProductionCoordinatorV1(b *testing.B) {
 			for i := 0; i < b.N; i++ {
 				vector := []float32{1, 0}
 				if i&1 != 0 {
-					vector = []float32{2, 0}
+					vector = []float32{0, 1}
 				}
 				replaceVectorPartitionLiveDocumentV1(b, fixture.collection, "0-live", vector)
 				writes++
+				request.Query = vector
 				started := time.Now()
 				response, err := coordinator.Search(b.Context(), request)
 				latencies[i] = uint64(time.Since(started))
@@ -462,6 +522,9 @@ func BenchmarkVectorPartitionLiveProductionCoordinatorV1(b *testing.B) {
 			if err != nil {
 				b.Fatal(err)
 			}
+			runtime.GC()
+			var liveHeap runtime.MemStats
+			runtime.ReadMemStats(&liveHeap)
 			operations := float64(max(b.N, 1))
 			elapsed := b.Elapsed().Seconds()
 			b.ReportMetric(float64(writes)/elapsed, "writes/s")
@@ -475,7 +538,8 @@ func BenchmarkVectorPartitionLiveProductionCoordinatorV1(b *testing.B) {
 			b.ReportMetric(float64(deltaResults)/operations, "delta-results/op")
 			b.ReportMetric(float64(domains)/operations, "live-domains/op")
 			b.ReportMetric(float64(packs)/operations, "packs/op")
-			b.ReportMetric(float64(dispatcher.packHeapBytes()-heapBefore)/operations, "reported-pack-heap-B/op")
+			b.ReportMetric(float64(dispatcher.packHeapBytes()-heapBefore)/operations, "response-pack-heap-B/op")
+			b.ReportMetric(float64(liveHeap.HeapAlloc), "reachable-process-heap-B")
 			b.ReportMetric(float64(storageBytes), "storage-B")
 			b.ReportMetric(float64(lastCutovers), "cutovers")
 			b.ReportMetric(float64(liveMutatedIDs), "live-mutated-ids")
@@ -516,8 +580,16 @@ func newVectorPartitionLiveNativewireFixtureV1(t testing.TB) vectorPartitionLive
 		database.Close()
 		t.Fatal(err)
 	}
-	for id, vector := range map[string][]float32{"a": {1, 0}, "b": {.8, .2}, "c": {0, 1}, "d": {.2, .8}} {
-		insertVectorPartitionLiveDocumentV1(t, collection, id, vector)
+	for _, document := range []struct {
+		id     string
+		vector []float32
+	}{
+		{id: "a", vector: []float32{1, 0}},
+		{id: "b", vector: []float32{.8, .2}},
+		{id: "c", vector: []float32{0, 1}},
+		{id: "d", vector: []float32{.2, .8}},
+	} {
+		insertVectorPartitionLiveDocumentV1(t, collection, document.id, document.vector)
 	}
 	if _, err := collection.RebuildVectorIndex(definition.Name); err != nil {
 		database.Close()

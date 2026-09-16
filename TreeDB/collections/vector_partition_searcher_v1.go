@@ -1921,6 +1921,7 @@ func (s *VectorPartitionLocalSearcherV1) searchWithOptionsV1(ctx context.Context
 	limit := min(opts.TopK, len(s.asset.IDs))
 	top := make(vectorPartitionSearchResultMaxHeapV1, 0, limit)
 	var edges uint64
+	var candidates uint64
 	for i := range s.asset.Vectors {
 		if i&255 == 0 {
 			if err := ctx.Err(); err != nil {
@@ -1931,6 +1932,7 @@ func (s *VectorPartitionLocalSearcherV1) searchWithOptionsV1(ctx context.Context
 		if _, excluded := opts.ExcludedStableIDs[s.asset.IDs[i]]; excluded {
 			continue
 		}
+		candidates++
 		score, err := canonicalVectorPartitionScoreWithInvNormV1(normalizedQuery, s.asset.Vectors[i], s.vectorInvNorms[i])
 		if err != nil {
 			s.recordFailure()
@@ -1960,10 +1962,10 @@ func (s *VectorPartitionLocalSearcherV1) searchWithOptionsV1(ctx context.Context
 	}
 	s.mu.Lock()
 	s.searches++
-	s.candidates += uint64(len(s.asset.IDs))
+	s.candidates += candidates
 	s.edges += edges
 	s.mu.Unlock()
-	return out, VectorPartitionSearchMetricsV1{Candidates: uint64(len(s.asset.IDs)), Edges: edges, Route: VectorPartitionSearchRouteExactFP32ScanV1}, nil
+	return out, VectorPartitionSearchMetricsV1{Candidates: candidates, Edges: edges, Route: VectorPartitionSearchRouteExactFP32ScanV1}, nil
 }
 
 func vectorPartitionPreparedStableIDOrdinalsV1(view *columnHNSWSearchPackPreparedView) (map[string]int, error) {

@@ -2832,8 +2832,13 @@ closed. The first empty carrier command establishes the durable binding;
 checkpoint recovery loads and validates that carrier before applying any later
 ordinary collection mutation command. Those document-only commands then replay
 through the registered carrier to reconstruct its exact live revision and
-coverage; recovery never requires a later `CollectionPersistPartitionLive`
-frame.
+coverage. After replay, and only after the command journal, visible state,
+value-log appender, and root-publication runtime are ready, `Open` publishes the
+reconciled carrier through a fresh command-WAL-covered
+`CollectionPersistPartitionLive` frame before returning. A subsequent
+checkpoint therefore fences the replayed documents and their exact carrier
+together; recovery never requires that frame to have existed after the older
+checkpoint.
 
 `ExternalRefs`, `Preconditions`, and `ResultAssertions` are length-delimited
 sections so PR1 can harden framing before replay uses them. The PR1 external-ref

@@ -439,6 +439,16 @@ func (idx *VectorIndex) saveNativeDeltaSnapshotWithCommandWALIntent(replay *back
 	}
 	unlockAdmission := c.lockVectorIndexSynchronousPublicationAdmission()
 	defer unlockAdmission()
+	return idx.saveNativeDeltaSnapshotWithAdmissionHeldAndCommandWALIntent(replay)
+}
+
+// saveNativeDeltaSnapshotWithAdmissionHeldAndCommandWALIntent persists a
+// native delta while its caller owns native-vector publication admission.
+// First standalone partition binding uses the stronger write admission lock so
+// no document mutation can observe the carrier before its durable root exists.
+func (idx *VectorIndex) saveNativeDeltaSnapshotWithAdmissionHeldAndCommandWALIntent(replay *backenddb.CommandWALIntent) (VectorIndexLoadStatus, error) {
+	status := VectorIndexLoadStatus{}
+	c := idx.collection
 	unlockCoverage := c.lockVectorIndexCoveragePersistence()
 	defer unlockCoverage()
 	if idx.needsNativeFullSnapshotAutoPersist() {
@@ -750,11 +760,12 @@ func (c *Collection) LoadNativeVectorIndexSnapshot(opts VectorIndexOptions) (*Ve
 		status.ExactFallbackReason = reason
 		return nil, status, nil
 	}
-	if def.Strategy == VectorIndexStrategyColumnGraph && snapshot.Meta.PartitionLive == nil {
-		status.ExactFallbackReason = vectorIndexFallbackMetaMismatch
-		return nil, status, nil
-	}
-	if !vectorIndexDefinitionUsesNativeRuntime(def) && def.Strategy != VectorIndexStrategyColumnGraph {
+	if def.Strategy == VectorIndexStrategyColumnGraph {
+		if snapshot.Meta.PartitionLive == nil {
+			status.ExactFallbackReason = vectorIndexFallbackMetaMismatch
+			return nil, status, nil
+		}
+	} else if snapshot.Meta.PartitionLive != nil || !vectorIndexDefinitionUsesNativeRuntime(def) {
 		status.ExactFallbackReason = vectorIndexFallbackMetaMismatch
 		return nil, status, nil
 	}

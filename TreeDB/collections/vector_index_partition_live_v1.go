@@ -11,7 +11,13 @@ import (
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
 
-const vectorIndexPartitionLiveMaxMutatedIDsV1 = 128 << 10
+const (
+	vectorIndexPartitionLiveMaxMutatedIDsV1 = 128 << 10
+	// The live overlay is serialized inside the vector-index metadata record.
+	// Bound retained graph state plus conservative snapshot/JSON copy headroom
+	// before accepting a document mutation.
+	vectorIndexPartitionLiveMaxBytesV1 = 256 << 20
+)
 
 var (
 	ErrVectorIndexPartitionLiveUnavailableV1 = errors.New("collections: vector partition live state unavailable")
@@ -71,6 +77,9 @@ type vectorIndexPartitionLiveStateV1 struct {
 	cutovers              uint64
 	cutoverPublications   uint64
 	nodeCapacity          int
+	byteCapacity          uint64
+	nodeIDBytes           uint64
+	ownerIDBytes          uint64
 	bindingDurable        bool
 	invalid               bool
 }
@@ -233,11 +242,14 @@ func (idx *VectorIndex) bindVectorPartitionLiveV1(manifest VectorPartitionManife
 	if idx.collection != nil && (!idx.sourceDocumentRootsValid || idx.sourceDocumentGeneration != coverage) {
 		return fmt.Errorf("%w: live coverage=%d current=%d", ErrVectorIndexPartitionLiveMismatchV1, coverage, idx.sourceDocumentGeneration)
 	}
+	if !idx.vectorPartitionLiveBindingBytesFitV1(packDomains, clonedReps) {
+		return ErrVectorIndexPartitionLiveCapacityV1
+	}
 	idx.partitionLive = &vectorIndexPartitionLiveStateV1{
 		indexDefinitionDigest: manifest.IndexDefinitionDigest, source: source, generation: manifest.Generation,
 		coverage: coverage, packDomains: packDomains, representatives: clonedReps,
 		domains: make(map[uint32]*VectorIndex), owners: make(map[string]vectorPartitionLiveOwnerV1),
-		nodeCapacity: vectorIndexPartitionLiveMaxMutatedIDsV1, bindingDurable: idx.collection == nil,
+		nodeCapacity: vectorIndexPartitionLiveMaxMutatedIDsV1, byteCapacity: vectorIndexPartitionLiveMaxBytesV1, bindingDurable: idx.collection == nil,
 	}
 	idx.mutationSeq++
 	idx.markVectorMetaDirtyLocked()
@@ -348,6 +360,10 @@ func (idx *VectorIndex) reconcileVectorPartitionMutationLocked(documentID []byte
 			}
 		}
 		live.owners[key] = vectorPartitionLiveOwnerV1{domain: domain}
+		live.nodeIDBytes += uint64(len(documentID))
+	}
+	if !existed {
+		live.ownerIDBytes += uint64(len(documentID))
 	}
 	live.revision++
 	idx.mutationSeq++
@@ -377,6 +393,107 @@ func (idx *VectorIndex) partitionLiveNodeCapacityLocked() int {
 		return vectorIndexPartitionLiveMaxMutatedIDsV1
 	}
 	return idx.partitionLive.nodeCapacity
+}
+
+func (idx *VectorIndex) partitionLiveByteCapacityLocked() uint64 {
+	if idx.partitionLive == nil || idx.partitionLive.byteCapacity == 0 {
+		return vectorIndexPartitionLiveMaxBytesV1
+	}
+	return idx.partitionLive.byteCapacity
+}
+
+func vectorPartitionLiveAddBytesV1(total *uint64, value uint64) bool {
+	if value > ^uint64(0)-*total {
+		return false
+	}
+	*total += value
+	return true
+}
+
+func (idx *VectorIndex) vectorPartitionLiveNodeBytesV1() (uint64, bool) {
+	dimensions, m := uint64(idx.dimensions), uint64(maxInt(idx.m, 1))
+	// Runtime node/vector data, all 33 bounded HNSW layers, and conservative
+	// slice/fixed overhead. The final multiplier in the state estimate covers
+	// persisted snapshots, JSON expansion, and transient copies.
+	if dimensions > (^uint64(0)-1024)/5 || m > (^uint64(0)-1024)/(34*8) {
+		return 0, false
+	}
+	return 1024 + dimensions*5 + m*34*8, true
+}
+
+func (idx *VectorIndex) vectorPartitionLiveBindingBytesFitV1(packDomains []uint32, reps []vectorPartitionLiveRepresentativeV1) bool {
+	total := uint64(1024 + len(packDomains)*4)
+	for _, rep := range reps {
+		if !vectorPartitionLiveAddBytesV1(&total, uint64(len(rep.vector))*4+64) {
+			return false
+		}
+	}
+	return total <= vectorIndexPartitionLiveMaxBytesV1/8
+}
+
+func (idx *VectorIndex) partitionLiveBytesFitLocked(additionalNodes, additionalOwners int, additionalNodeIDBytes, additionalOwnerIDBytes uint64) bool {
+	live := idx.partitionLive
+	if live == nil || additionalNodes < 0 || additionalOwners < 0 {
+		return live == nil
+	}
+	nodeBytes, ok := idx.vectorPartitionLiveNodeBytesV1()
+	if !ok {
+		return false
+	}
+	nodes := idx.partitionLiveNodeCountLocked()
+	if additionalNodes > math.MaxInt-nodes || additionalOwners > math.MaxInt-len(live.owners) {
+		return false
+	}
+	total := uint64(1024 + len(live.packDomains)*(4+128) + (len(live.owners)+additionalOwners)*128)
+	for _, rep := range live.representatives {
+		if !vectorPartitionLiveAddBytesV1(&total, uint64(len(rep.vector))*4+64) {
+			return false
+		}
+	}
+	if uint64(nodes+additionalNodes) > ^uint64(0)/nodeBytes || !vectorPartitionLiveAddBytesV1(&total, uint64(nodes+additionalNodes)*nodeBytes) ||
+		!vectorPartitionLiveAddBytesV1(&total, live.nodeIDBytes) || !vectorPartitionLiveAddBytesV1(&total, additionalNodeIDBytes) ||
+		!vectorPartitionLiveAddBytesV1(&total, live.ownerIDBytes) || !vectorPartitionLiveAddBytesV1(&total, additionalOwnerIDBytes) ||
+		total > ^uint64(0)/8 {
+		return false
+	}
+	return total*8 <= idx.partitionLiveByteCapacityLocked()
+}
+
+func (idx *VectorIndex) vectorPartitionLivePersistBytesFitV1(persisted *vectorIndexPartitionLivePersistV1) bool {
+	if persisted == nil {
+		return true
+	}
+	nodeBytes, ok := idx.vectorPartitionLiveNodeBytesV1()
+	if !ok {
+		return false
+	}
+	total := uint64(1024 + len(persisted.PackDomains)*4 + len(persisted.Domains)*128 + len(persisted.Owners)*128)
+	for _, rep := range persisted.Representatives {
+		if !vectorPartitionLiveAddBytesV1(&total, uint64(len(rep.Vector))*4+64) {
+			return false
+		}
+	}
+	nodes := uint64(0)
+	for _, domain := range persisted.Domains {
+		if uint64(len(domain.Snapshot.Nodes)) > ^uint64(0)-nodes {
+			return false
+		}
+		nodes += uint64(len(domain.Snapshot.Nodes))
+		for _, node := range domain.Snapshot.Nodes {
+			if !vectorPartitionLiveAddBytesV1(&total, uint64(len(node.DocumentID))) {
+				return false
+			}
+		}
+	}
+	if nodes > ^uint64(0)/nodeBytes || !vectorPartitionLiveAddBytesV1(&total, nodes*nodeBytes) {
+		return false
+	}
+	for _, owner := range persisted.Owners {
+		if !vectorPartitionLiveAddBytesV1(&total, uint64(len(owner.ID))) {
+			return false
+		}
+	}
+	return total <= vectorIndexPartitionLiveMaxBytesV1/8
 }
 
 func (idx *VectorIndex) partitionLiveActiveOwnerCountLocked() int {
@@ -459,6 +576,10 @@ func (idx *VectorIndex) cutoverVectorPartitionLiveLocked() error {
 		live.cutoverPublications++
 	}
 	live.domains = fresh
+	live.nodeIDBytes = 0
+	for _, id := range ownerIDs {
+		live.nodeIDBytes += uint64(len(id))
+	}
 	live.cutovers++
 	idx.mutationSeq++
 	idx.markVectorMetaDirtyLocked()
@@ -492,15 +613,30 @@ func (idx *VectorIndex) preflightVectorPartitionMutationLocked(documentID []byte
 	if idx.partitionLive == nil {
 		return nil
 	}
-	if _, exists := idx.partitionLive.owners[string(documentID)]; !exists && len(idx.partitionLive.owners) >= vectorIndexPartitionLiveMaxMutatedIDsV1 {
+	_, exists := idx.partitionLive.owners[string(documentID)]
+	if !exists && len(idx.partitionLive.owners) >= vectorIndexPartitionLiveMaxMutatedIDsV1 {
 		return ErrVectorIndexPartitionLiveCapacityV1
 	}
 	if vector != nil {
 		if err := idx.ensureVectorPartitionLiveCapacityLocked(1); err != nil {
 			return err
 		}
+		ownerBytes := uint64(0)
+		if !exists {
+			ownerBytes = uint64(len(documentID))
+		}
+		additionalOwners := 0
+		if !exists {
+			additionalOwners = 1
+		}
+		if !idx.partitionLiveBytesFitLocked(1, additionalOwners, uint64(len(documentID)), ownerBytes) {
+			return ErrVectorIndexPartitionLiveCapacityV1
+		}
 		_, err := idx.partitionLiveRouteLocked(vector)
 		return err
+	}
+	if !exists && !idx.partitionLiveBytesFitLocked(0, 1, 0, uint64(len(documentID))) {
+		return ErrVectorIndexPartitionLiveCapacityV1
 	}
 	return nil
 }
@@ -511,6 +647,8 @@ func (idx *VectorIndex) preflightVectorPartitionMutationBatchLocked(documentIDs 
 	}
 	owners := len(idx.partitionLive.owners)
 	additionalNodes := 0
+	additionalNodeIDBytes := uint64(0)
+	additionalOwnerIDBytes := uint64(0)
 	newOwners := make(map[string]struct{})
 	for i, documentID := range documentIDs {
 		key := string(documentID)
@@ -518,6 +656,7 @@ func (idx *VectorIndex) preflightVectorPartitionMutationBatchLocked(documentIDs 
 			if _, duplicate := newOwners[key]; !duplicate {
 				newOwners[key] = struct{}{}
 				owners++
+				additionalOwnerIDBytes += uint64(len(documentID))
 			}
 		}
 		if owners > vectorIndexPartitionLiveMaxMutatedIDsV1 {
@@ -527,11 +666,18 @@ func (idx *VectorIndex) preflightVectorPartitionMutationBatchLocked(documentIDs 
 			continue
 		}
 		additionalNodes++
+		additionalNodeIDBytes += uint64(len(documentID))
 		if _, err := idx.partitionLiveRouteLocked(vectors[i]); err != nil {
 			return err
 		}
 	}
-	return idx.ensureVectorPartitionLiveCapacityLocked(additionalNodes)
+	if err := idx.ensureVectorPartitionLiveCapacityLocked(additionalNodes); err != nil {
+		return err
+	}
+	if !idx.partitionLiveBytesFitLocked(additionalNodes, len(newOwners), additionalNodeIDBytes, additionalOwnerIDBytes) {
+		return ErrVectorIndexPartitionLiveCapacityV1
+	}
+	return nil
 }
 
 func (idx *VectorIndex) acquireVectorPartitionLiveSearchPinV1(manifest VectorPartitionManifestV1) (*VectorIndexPartitionLiveSearchPinV1, error) {
@@ -615,14 +761,14 @@ func (idx *VectorIndex) restorePartitionLiveV1(persisted *vectorIndexPartitionLi
 	if persisted == nil {
 		return nil, ""
 	}
-	if persisted.Version != 1 || persisted.IndexDefinitionDigest == "" || persisted.Generation == 0 || persisted.Source.Generation == 0 || persisted.Coverage != sourceCoverage || len(persisted.PackDomains) == 0 || len(persisted.Representatives) == 0 || len(persisted.Owners) > vectorIndexPartitionLiveMaxMutatedIDsV1 {
+	if persisted.Version != 1 || persisted.IndexDefinitionDigest == "" || persisted.Generation == 0 || persisted.Source.Generation == 0 || persisted.Coverage != sourceCoverage || len(persisted.PackDomains) == 0 || len(persisted.Representatives) == 0 || len(persisted.Owners) > vectorIndexPartitionLiveMaxMutatedIDsV1 || !idx.vectorPartitionLivePersistBytesFitV1(persisted) {
 		return nil, "invalid_partition_live_meta"
 	}
 	mappedDomains := make(map[uint32]struct{}, len(persisted.PackDomains))
 	for _, domain := range persisted.PackDomains {
 		mappedDomains[domain] = struct{}{}
 	}
-	live := &vectorIndexPartitionLiveStateV1{indexDefinitionDigest: persisted.IndexDefinitionDigest, source: persisted.Source, generation: persisted.Generation, revision: persisted.Revision, coverage: persisted.Coverage, cutovers: persisted.Cutovers, nodeCapacity: vectorIndexPartitionLiveMaxMutatedIDsV1, bindingDurable: true, packDomains: append([]uint32(nil), persisted.PackDomains...), representatives: make([]vectorPartitionLiveRepresentativeV1, len(persisted.Representatives)), domains: make(map[uint32]*VectorIndex), owners: make(map[string]vectorPartitionLiveOwnerV1, len(persisted.Owners))}
+	live := &vectorIndexPartitionLiveStateV1{indexDefinitionDigest: persisted.IndexDefinitionDigest, source: persisted.Source, generation: persisted.Generation, revision: persisted.Revision, coverage: persisted.Coverage, cutovers: persisted.Cutovers, nodeCapacity: vectorIndexPartitionLiveMaxMutatedIDsV1, byteCapacity: vectorIndexPartitionLiveMaxBytesV1, bindingDurable: true, packDomains: append([]uint32(nil), persisted.PackDomains...), representatives: make([]vectorPartitionLiveRepresentativeV1, len(persisted.Representatives)), domains: make(map[uint32]*VectorIndex), owners: make(map[string]vectorPartitionLiveOwnerV1, len(persisted.Owners))}
 	representedDomains := make(map[uint32]struct{}, len(persisted.Representatives))
 	for i, rep := range persisted.Representatives {
 		if len(rep.Vector) != idx.dimensions {
@@ -663,6 +809,9 @@ func (idx *VectorIndex) restorePartitionLiveV1(persisted *vectorIndexPartitionLi
 		if reason := delta.loadPersistSnapshot(domain.Snapshot); reason != "" {
 			return nil, "invalid_partition_live_" + reason
 		}
+		for _, node := range domain.Snapshot.Nodes {
+			live.nodeIDBytes += uint64(len(node.DocumentID))
+		}
 		live.domains[domain.Domain] = delta
 	}
 	totalNodes := 0
@@ -679,6 +828,7 @@ func (idx *VectorIndex) restorePartitionLiveV1(persisted *vectorIndexPartitionLi
 			return nil, "invalid_partition_live_owner"
 		}
 		previousID = owner.ID
+		live.ownerIDBytes += uint64(len(owner.ID))
 		if !owner.Deleted {
 			activeOwners++
 			delta := live.domains[owner.Domain]
@@ -923,6 +1073,11 @@ func (c *Collection) ensureVectorPartitionLiveBindingV1(ctx context.Context, man
 		return nil
 	}
 
+	// Mutations take native-vector admission before loading/reconciling runtime
+	// state. Use the same order and hold exclusive admission until a new binding
+	// is durably published and marked admitted.
+	unlockAdmission := c.lockNativeVectorAdmissionWrite()
+	defer unlockAdmission()
 	unlockLoad := c.lockNativeVectorIndexLoad()
 	if replay == nil && c.vectorPartitionLiveWarmBindingCurrentV1(manifest) {
 		unlockLoad()
@@ -1028,7 +1183,7 @@ func (c *Collection) ensureVectorPartitionLiveBindingV1(ctx context.Context, man
 	}
 	if needsBindingPublication {
 		runVectorPartitionLiveBeforeBindingPublicationHookForTest()
-		_, err := idx.saveNativeDeltaSnapshotWithCommandWALIntent(replay)
+		_, err := idx.saveNativeDeltaSnapshotWithAdmissionHeldAndCommandWALIntent(replay)
 		if err != nil {
 			return err
 		}
@@ -1172,6 +1327,9 @@ func (p *VectorIndexPartitionLiveSearchPinV1) ExcludesBaseIDV1(id string) bool {
 	return ok
 }
 func (p *VectorIndexPartitionLiveSearchPinV1) ExcludedStableIDsV1() map[string]struct{} {
+	if p == nil {
+		return nil
+	}
 	// The pin owns this immutable set. Callers may read it until Release but
 	// must not mutate or retain it beyond the pin lifetime.
 	return p.excludedStableIDs
@@ -1220,6 +1378,9 @@ func (p *VectorIndexPartitionLiveSearchPinV1) DomainSearchPreflightV1(domain uin
 }
 
 func (p *VectorIndexPartitionLiveSearchPinV1) SearchDomainV1(ctx context.Context, domain uint32, query []float32, opts VectorPartitionSearchOptionsV1) ([]VectorPartitionSearchResultV1, VectorPartitionSearchMetricsV1, error) {
+	if p == nil {
+		return nil, VectorPartitionSearchMetricsV1{}, ErrVectorIndexPartitionLiveUnavailableV1
+	}
 	if ctx == nil {
 		ctx = context.Background()
 	}

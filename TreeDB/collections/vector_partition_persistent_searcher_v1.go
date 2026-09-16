@@ -662,6 +662,27 @@ func vectorPartitionLocalProductionGraphVariantV1(membership, expected [sha256.S
 	return "", false
 }
 
+// vectorPartitionLocalProductionGraphVariantForHeaderV1 recognizes only the
+// three production V3 pack shapes. It is used by standalone live recovery,
+// where the active manifest and immutable asset digest bind the membership
+// proof and the advanced mutable ColumnGraph must not be rehashed.
+func vectorPartitionLocalProductionGraphVariantForHeaderV1(def VectorIndexDefinition, header columnHNSWSearchPackHeader) (VectorPartitionLocalGraphVariantV1, VectorIndexDefinition, bool) {
+	if !header.HasAuxiliaryNavigation || header.Dimensions != def.Dimensions {
+		return "", VectorIndexDefinition{}, false
+	}
+	for _, variant := range [...]VectorPartitionLocalGraphVariantV1{
+		VectorPartitionLocalGraphVariantAuxiliaryNavigationV1,
+		VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1,
+		VectorPartitionLocalGraphVariantAuxiliaryNavigationM20EfConstruction256V1,
+	} {
+		packDef, auxiliary, err := vectorPartitionLocalGraphVariantDefinitionV1(def, variant)
+		if err == nil && auxiliary && header.M == packDef.M && header.EfConstruction == packDef.EfConstruction && header.EfSearch == packDef.EfSearch {
+			return variant, packDef, true
+		}
+	}
+	return "", VectorIndexDefinition{}, false
+}
+
 // vectorPartitionLocalOfflineGraphVariantV1 recognizes the domain-separated
 // identities accepted only by the offline asset-open seam. Keep this list
 // alongside the variant identity registry so a generic offline open cannot
@@ -1157,6 +1178,7 @@ type VectorPartitionGenerationSearchOpenPlanV1 struct {
 	sourceGeneration      uint64
 	sourceChecksum        uint64
 	sourceSchemaHash      uint64
+	sourceRowCount        uint64
 	generation            uint64
 	partitionCount        uint32
 	assets                []VectorPartitionAssetV1
@@ -1165,6 +1187,7 @@ type VectorPartitionGenerationSearchOpenPlanV1 struct {
 	memberOffsets         []int
 	homeCounts            []int
 	overlapCounts         []int
+	liveRecovery          bool
 }
 
 // NewVectorPartitionGenerationSearchOpenPlanWithContextV1 indexes a validated
@@ -1194,6 +1217,7 @@ func NewVectorPartitionGenerationSearchOpenPlanWithContextV1(ctx context.Context
 		sourceGeneration:      manifest.SourceGeneration,
 		sourceChecksum:        manifest.SourceChecksum,
 		sourceSchemaHash:      manifest.SourceSchemaHash,
+		sourceRowCount:        manifest.SourceRowCount,
 		generation:            manifest.Generation,
 		partitionCount:        manifest.PartitionCount,
 		assets:                make([]VectorPartitionAssetV1, partitionCount),
@@ -1262,6 +1286,37 @@ func NewVectorPartitionGenerationSearchOpenPlanWithContextV1(ctx context.Context
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	return plan, nil
+}
+
+// NewVectorPartitionGenerationLiveSearchOpenPlanWithContextV1 constructs the
+// standalone serving plan that may reopen manifest-bound immutable packs after
+// the mutable ColumnGraph source has advanced. Admission requires the exact
+// durable live carrier to cover the current collection document generation;
+// replicated and ordinary prepared opens never receive this authority.
+func (c *Collection) NewVectorPartitionGenerationLiveSearchOpenPlanWithContextV1(ctx context.Context, manifest VectorPartitionManifestV1) (*VectorPartitionGenerationSearchOpenPlanV1, error) {
+	if c == nil || manifest.Collection != c.name {
+		return nil, ErrVectorPartitionSearchUnavailable
+	}
+	if err := manifest.validateWithContextV1(ctx, DefaultVectorPartitionManifestLimits()); err != nil {
+		return nil, fmt.Errorf("%w: live recovery manifest: %v", ErrVectorPartitionSearchUnavailable, err)
+	}
+	authoritative, token, err := c.ActiveVectorPartitionManifestAndAuthorityTokenWithContextV1(ctx, manifest.IndexName, manifest.Generation)
+	if err != nil {
+		return nil, fmt.Errorf("%w: live recovery manifest authority: %v", ErrVectorPartitionSearchUnavailable, err)
+	}
+	token.Release()
+	if authoritative.IntegrityDigest != manifest.IntegrityDigest {
+		return nil, fmt.Errorf("%w: live recovery manifest identity", ErrVectorPartitionSearchUnavailable)
+	}
+	if err := c.validateCurrentVectorPartitionLiveBindingV1(ctx, manifest); err != nil {
+		return nil, fmt.Errorf("%w: live recovery authority: %v", ErrVectorPartitionSearchUnavailable, err)
+	}
+	plan, err := NewVectorPartitionGenerationSearchOpenPlanWithContextV1(ctx, authoritative)
+	if err != nil {
+		return nil, err
+	}
+	plan.liveRecovery = true
 	return plan, nil
 }
 
@@ -2572,7 +2627,7 @@ func (c *Collection) openVectorPartitionLocalSearcherForOfflineAssetWithContextV
 			return nil, ErrVectorPartitionSearchUnavailable
 		}
 	}
-	return c.openVectorPartitionLocalSearcherForPreparedPartitionWithContextV1(ctx, index, manifest.Generation, asset.PartitionID, manifest.IndexDefinitionDigest, manifest.SourceGeneration, manifest.SourceChecksum, manifest.SourceSchemaHash, &asset, members, home, overlap, true, expectedVariant, false)
+	return c.openVectorPartitionLocalSearcherForPreparedPartitionWithContextV1(ctx, index, manifest.Generation, asset.PartitionID, manifest.IndexDefinitionDigest, manifest.SourceGeneration, manifest.SourceChecksum, manifest.SourceSchemaHash, manifest.SourceRowCount, &asset, members, home, overlap, true, expectedVariant, false, false)
 }
 
 // OpenVectorPartitionLocalSearcherForGenerationWithContextV1 is the
@@ -2639,8 +2694,8 @@ func (c *Collection) OpenVectorPartitionLocalSearcherForGenerationWithContextV1(
 	}
 	searcher, err := c.openVectorPartitionLocalSearcherForPreparedPartitionWithContextV1(
 		ctx, index, generation, partition,
-		m.IndexDefinitionDigest, m.SourceGeneration, m.SourceChecksum, m.SourceSchemaHash,
-		asset, members, home, overlap, false, "", false,
+		m.IndexDefinitionDigest, m.SourceGeneration, m.SourceChecksum, m.SourceSchemaHash, m.SourceRowCount,
+		asset, members, home, overlap, false, "", false, false,
 	)
 	if err != nil {
 		return nil, err
@@ -2663,6 +2718,9 @@ func (c *Collection) OpenVectorPartitionLocalSearcherForGenerationSearchPlanWith
 // prepares the stable-ID eligibility table needed by standalone live-delta
 // serving. Immutable and replicated generation opens deliberately omit it.
 func (c *Collection) OpenVectorPartitionLocalSearcherForGenerationLiveSearchPlanWithContextV1(ctx context.Context, index string, generation uint64, partition uint32, plan *VectorPartitionGenerationSearchOpenPlanV1, generationPin *VectorPartitionReaderPinV1) (*VectorPartitionLocalSearcherV1, error) {
+	if plan == nil || !plan.liveRecovery {
+		return nil, fmt.Errorf("%w: live recovery plan", ErrVectorPartitionSearchUnavailable)
+	}
 	return c.openVectorPartitionLocalSearcherForGenerationSearchPlanWithContextV1(ctx, index, generation, partition, plan, generationPin, true)
 }
 
@@ -2678,6 +2736,19 @@ func (c *Collection) openVectorPartitionLocalSearcherForGenerationSearchPlanWith
 	}
 	if plan == nil || plan.collection != c.name || plan.indexName != index || plan.generation != generation {
 		return nil, fmt.Errorf("%w: stale generation search-open plan", ErrVectorPartitionSearchUnavailable)
+	}
+	if prepareStableIDOrdinals {
+		manifest := VectorPartitionManifestV1{
+			Collection: plan.collection, IndexName: plan.indexName, IndexDefinitionDigest: plan.indexDefinitionDigest,
+			SourceGeneration: plan.sourceGeneration, SourceChecksum: plan.sourceChecksum, SourceSchemaHash: plan.sourceSchemaHash,
+			SourceRowCount: plan.sourceRowCount, Generation: plan.generation,
+		}
+		if !plan.liveRecovery {
+			return nil, fmt.Errorf("%w: live recovery authority", ErrVectorPartitionSearchUnavailable)
+		}
+		if err := c.validateCurrentVectorPartitionLiveBindingV1(ctx, manifest); err != nil {
+			return nil, fmt.Errorf("%w: live recovery authority: %v", ErrVectorPartitionSearchUnavailable, err)
+		}
 	}
 	pinKey := vectorPartitionReaderPinKeyV1(c.db.Dir(), c.name, index, generation)
 	pin, err := generationPin.cloneForKey(pinKey)
@@ -2699,8 +2770,8 @@ func (c *Collection) openVectorPartitionLocalSearcherForGenerationSearchPlanWith
 	}
 	searcher, err := c.openVectorPartitionLocalSearcherForPreparedPartitionWithContextV1(
 		ctx, index, generation, partition,
-		plan.indexDefinitionDigest, plan.sourceGeneration, plan.sourceChecksum, plan.sourceSchemaHash,
-		asset, members, home, overlap, false, "", prepareStableIDOrdinals,
+		plan.indexDefinitionDigest, plan.sourceGeneration, plan.sourceChecksum, plan.sourceSchemaHash, plan.sourceRowCount,
+		asset, members, home, overlap, false, "", prepareStableIDOrdinals, plan.liveRecovery,
 	)
 	if err != nil {
 		return nil, err
@@ -2719,6 +2790,7 @@ func (c *Collection) openVectorPartitionLocalSearcherForPreparedPartitionWithCon
 	sourceGeneration uint64,
 	sourceChecksum uint64,
 	sourceSchemaHash uint64,
+	sourceRowCount uint64,
 	asset *VectorPartitionAssetV1,
 	members []vectorPartitionMembershipSourceV1,
 	home int,
@@ -2726,6 +2798,7 @@ func (c *Collection) openVectorPartitionLocalSearcherForPreparedPartitionWithCon
 	allowOfflineNative bool,
 	expectedGraphVariant VectorPartitionLocalGraphVariantV1,
 	prepareStableIDOrdinals bool,
+	allowLiveRecovery bool,
 ) (*VectorPartitionLocalSearcherV1, error) {
 	def, ok := findVectorIndex(c.meta.VectorIndexes, index)
 	if !ok || indexDefinitionDigest != VectorIndexDefinitionDigestV1(def) || def.Metric != VectorMetricCosine || def.Encoding != VectorIndexEncodingFloat32 {
@@ -2738,24 +2811,36 @@ func (c *Collection) openVectorPartitionLocalSearcherForPreparedPartitionWithCon
 	if err != nil {
 		return nil, err
 	}
-	sourceReader, err := c.openColumnVectorGraphPhysicalRowReader(index, columnVectorGraphPhysicalRowReaderOptions{})
-	if err != nil {
-		return nil, fmt.Errorf("%w: membership source reader: %v", ErrVectorPartitionSearchUnavailable, err)
+	sourceReader, sourceErr := c.openColumnVectorGraphPhysicalRowReader(index, columnVectorGraphPhysicalRowReaderOptions{})
+	if sourceErr == nil && (sourceReader.graph.BaseManifestGeneration != sourceGeneration ||
+		sourceReader.graph.BaseManifestChecksum != sourceChecksum || sourceReader.graph.BaseSchemaHash != sourceSchemaHash ||
+		uint64(sourceReader.graph.RowCount) != sourceRowCount) {
+		_ = sourceReader.Close()
+		sourceReader = nil
+		sourceErr = ErrVectorIndexSnapshotMismatch
 	}
-	recomputedMembershipDigest, digestErr := vectorPartitionMembershipDigestWithContextV1(ctx, sourceReader, generation, partition, members)
-	closeErr := sourceReader.Close()
-	if digestErr != nil || closeErr != nil {
-		if errors.Is(digestErr, context.Canceled) || errors.Is(digestErr, context.DeadlineExceeded) {
-			return nil, digestErr
+	liveRecovery := sourceErr != nil && allowLiveRecovery
+	if sourceErr != nil && !liveRecovery {
+		return nil, fmt.Errorf("%w: membership source reader: %v", ErrVectorPartitionSearchUnavailable, sourceErr)
+	}
+	var recomputedMembershipDigest [sha256.Size]byte
+	if !liveRecovery {
+		digestErr := error(nil)
+		recomputedMembershipDigest, digestErr = vectorPartitionMembershipDigestWithContextV1(ctx, sourceReader, generation, partition, members)
+		closeErr := sourceReader.Close()
+		if digestErr != nil || closeErr != nil {
+			if errors.Is(digestErr, context.Canceled) || errors.Is(digestErr, context.DeadlineExceeded) {
+				return nil, digestErr
+			}
+			return nil, fmt.Errorf("%w: membership identity: %v", ErrVectorPartitionSearchUnavailable, errors.Join(digestErr, closeErr))
 		}
-		return nil, fmt.Errorf("%w: membership identity: %v", ErrVectorPartitionSearchUnavailable, errors.Join(digestErr, closeErr))
 	}
 	packDef := def
 	expectAuxiliaryNavigation := false
 	offlineV3 := false
 	graphVariant := VectorPartitionLocalGraphVariantV1("")
-	undomainSeparatedVariant := recomputedMembershipDigest == expectedMembershipDigest
-	if recomputedMembershipDigest != expectedMembershipDigest {
+	undomainSeparatedVariant := !liveRecovery && recomputedMembershipDigest == expectedMembershipDigest
+	if !liveRecovery && recomputedMembershipDigest != expectedMembershipDigest {
 		if variant, production := vectorPartitionLocalProductionGraphVariantV1(recomputedMembershipDigest, expectedMembershipDigest); production {
 			graphVariant = variant
 			var definitionErr error
@@ -2884,7 +2969,14 @@ func (c *Collection) openVectorPartitionLocalSearcherForPreparedPartitionWithCon
 		_ = h.Release()
 		return nil, fmt.Errorf("%w: %v", ErrVectorPartitionSearchUnavailable, err)
 	}
-	if view.Header.Dimensions != packDef.Dimensions || view.Header.M != packDef.M || view.Header.EfConstruction != packDef.EfConstruction || view.Header.EfSearch != packDef.EfSearch {
+	if liveRecovery {
+		variant, recoveredDef, production := vectorPartitionLocalProductionGraphVariantForHeaderV1(def, view.Header)
+		if !production || view.Header.Rows != len(members) || home < 0 || overlap < 0 || home+overlap != len(members) {
+			_ = view.Close()
+			return nil, ErrVectorPartitionSearchUnavailable
+		}
+		graphVariant, packDef, expectAuxiliaryNavigation = variant, recoveredDef, true
+	} else if view.Header.Dimensions != packDef.Dimensions || view.Header.M != packDef.M || view.Header.EfConstruction != packDef.EfConstruction || view.Header.EfSearch != packDef.EfSearch {
 		_ = view.Close()
 		return nil, ErrVectorPartitionSearchUnavailable
 	}

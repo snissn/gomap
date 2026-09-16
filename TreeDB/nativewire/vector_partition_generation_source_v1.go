@@ -285,7 +285,12 @@ func (s *CollectionVectorPartitionGenerationSourceV1) loadGeneration(ctx context
 		authorityToken = validatedToken
 		liveManifest = manifest
 	}
-	openPlan, err := collections.NewVectorPartitionGenerationSearchOpenPlanWithContextV1(ctx, manifest)
+	var openPlan *collections.VectorPartitionGenerationSearchOpenPlanV1
+	if s.replicatedLifecycle == nil {
+		openPlan, err = s.Collection.NewVectorPartitionGenerationLiveSearchOpenPlanWithContextV1(ctx, manifest)
+	} else {
+		openPlan, err = collections.NewVectorPartitionGenerationSearchOpenPlanWithContextV1(ctx, manifest)
+	}
 	if err != nil {
 		authorityToken.Release()
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {

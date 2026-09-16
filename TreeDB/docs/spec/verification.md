@@ -2081,12 +2081,16 @@ correctness baseline, not a throughput comparison cell. The benchmark checks
 the expected first result and reports recall@1, `ns/op`, `B/op`, `allocs/op`, p99 search latency,
 achieved writes/searches, base/delta candidate work and result contribution,
 logical domains, selected packs, live owner/delta size, cutovers, observed
-storage bytes, reported pack-heap change per operation, and exact-fallback,
+storage bytes, response-reported pack-heap footprint per operation, reachable
+process heap while the live fixture remains open, and exact-fallback,
 request-rebuild, and error counts. Use the fixed iteration count and three
 repetitions for comparable local results; Linux is required for execution.
-The profiling command records CPU, heap/retained-memory, and mutex-contention
-profiles; `/usr/bin/time -v` records peak RSS. These bounded local profiles do
-not replace the H-C qualification owned by #4249.
+The profiling commands record CPU, allocation, and mutex-contention profiles;
+the in-benchmark reachable-process-heap metric is the live-fixture retention
+observation, while `/usr/bin/time -v` records peak RSS. Neither the allocation
+profile nor response pack footprint is presented as retained overlay growth.
+These bounded local profiles do not replace the H-C qualification owned by
+#4249.
 
 ```sh
 GOWORK=off go test -count=1 ./TreeDB/collections -run 'TestVectorIndexPartitionLive|TestVectorPartitionHNSWExcludesMoreThanTopKBeforeAdmission|TestVectorPartitionSearcherExcludesStaleBeforeTopK'
@@ -2095,7 +2099,10 @@ GOWORK=off go test -race -count=1 ./TreeDB/collections -run 'Test(VectorIndexPar
 GOWORK=off go test -race -count=1 ./TreeDB/nativewire -run 'Test(VectorPartitionLiveProduction|VectorPartitionCoordinator|VectorPartitionShardSearch)'
 GOWORK=off go test ./TreeDB/nativewire -run '^$' -bench '^BenchmarkVectorPartitionLiveProductionCoordinatorV1$' -benchmem -benchtime=20x -count=3
 PROFILE_DIR=$(mktemp -d /tmp/gomap_4324_profiles_XXXXXX)
-/usr/bin/time -v env GOWORK=off go test ./TreeDB/nativewire -run '^$' -bench '^BenchmarkVectorPartitionLiveProductionCoordinatorV1$' -benchmem -benchtime=20x -count=1 -cpuprofile "$PROFILE_DIR/cpu.pprof" -memprofile "$PROFILE_DIR/mem.pprof" -mutexprofile "$PROFILE_DIR/mutex.pprof"
+GOWORK=off go test -c -o "$PROFILE_DIR/nativewire.test" ./TreeDB/nativewire
+for CELL in live_overlay_1_id_update_search_1_to_1 live_overlay_1024_ids_update_search_1_to_1; do
+  /usr/bin/time -v "$PROFILE_DIR/nativewire.test" -test.run '^$' -test.bench "^BenchmarkVectorPartitionLiveProductionCoordinatorV1/$CELL$" -test.benchmem -test.benchtime=20x -test.count=1 -test.cpuprofile "$PROFILE_DIR/$CELL.cpu.pprof" -test.memprofile "$PROFILE_DIR/$CELL.alloc.pprof" -test.mutexprofile "$PROFILE_DIR/$CELL.mutex.pprof"
+done
 ```
 
 # Vector partition M6 coordinator verification

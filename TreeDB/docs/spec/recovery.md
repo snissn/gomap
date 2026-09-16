@@ -260,7 +260,12 @@ registered-index reconciliation. Replay never scans collection rows and never
 folds or rebuilds a `column_graph`. Missing, stale, or corrupt carrier coverage,
 or unavailable/mismatched active manifest or router identity, fails closed.
 The manifest source generation and the carrier's collection document-generation
-coverage are independent clocks and are validated separately.
+coverage are independent clocks and are validated separately. Once replay is
+complete and the ordinary command-journal, visible-state, value-log, and root
+publication runtimes are installed, `Open` emits a fresh
+`CollectionPersistPartitionLive` command and publishes the reconciled carrier
+before returning. A following checkpoint fences that carrier even if the
+process exits without opening a collection or running a clean-close hook.
 
 Legacy raw redo-journal replay is skipped only when durability mode is
 `DurabilityWALOffRelaxed`.

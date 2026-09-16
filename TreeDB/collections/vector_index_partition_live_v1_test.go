@@ -1,9 +1,13 @@
 package collections
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"os/exec"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -114,6 +118,9 @@ func TestVectorIndexPartitionLiveSnapshotRecoveryAndMismatchV1(t *testing.T) {
 	if got := restored.partitionLive.representatives; len(got) != 3 || got[0].domain != 0 || got[1].domain != 0 || got[2].domain != 1 {
 		t.Fatalf("restored representatives=%+v", got)
 	}
+	if restored.partitionLive.byteCapacity != vectorIndexPartitionLiveMaxBytesV1 || restored.partitionLive.nodeIDBytes != uint64(len("doc")) || restored.partitionLive.ownerIDBytes != uint64(len("doc")) {
+		t.Fatalf("restored byte accounting capacity=%d node_ids=%d owner_ids=%d", restored.partitionLive.byteCapacity, restored.partitionLive.nodeIDBytes, restored.partitionLive.ownerIDBytes)
+	}
 	pin, err := restored.acquireVectorPartitionLiveSearchPinV1(manifest)
 	if err != nil {
 		t.Fatal(err)
@@ -144,6 +151,32 @@ func TestVectorIndexPartitionLiveSnapshotRecoveryAndMismatchV1(t *testing.T) {
 	nested.Domains[0].Snapshot.Meta.PartitionLive = &vectorIndexPartitionLivePersistV1{Version: 1}
 	if _, reason := restored.restorePartitionLiveV1(nested, nested.Coverage); reason != "invalid_partition_live_domain" {
 		t.Fatalf("nested live domain reason=%q", reason)
+	}
+}
+
+func TestVectorIndexPartitionLiveByteCapacityRejectsBeforePublicationV1(t *testing.T) {
+	const dimensions = 4096
+	idx, err := newVectorIndex(nil, VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: dimensions, M: 4, EfConstruction: 16, EfSearch: 8})
+	if err != nil {
+		t.Fatal(err)
+	}
+	vector := make([]float32, dimensions)
+	vector[0] = 1
+	manifest := VectorPartitionManifestV1{IndexName: "embedding", IndexDefinitionDigest: "definition", SourceGeneration: 3, SourceChecksum: 4, SourceSchemaHash: 5, SourceRowCount: 1, Generation: 7, DomainCount: 1, PartitionCount: 1, DomainPacks: []VectorPartitionDomainPackV1{{DomainID: 0, PackID: 0}}}
+	if err := idx.bindVectorPartitionLiveV1(manifest, manifest.SourceGeneration, []vectorPartitionLiveRepresentativeV1{{domain: 0, vector: vector}}); err != nil {
+		t.Fatal(err)
+	}
+	idx.mu.Lock()
+	idx.partitionLive.byteCapacity = 150 << 10
+	revision := idx.partitionLive.revision
+	err = idx.preflightVectorPartitionMutationLocked([]byte("high-dimensional"), vector)
+	owners, nodes, afterRevision := len(idx.partitionLive.owners), idx.partitionLiveNodeCountLocked(), idx.partitionLive.revision
+	idx.mu.Unlock()
+	if !errors.Is(err, ErrVectorIndexPartitionLiveCapacityV1) {
+		t.Fatalf("preflight err=%v, want capacity", err)
+	}
+	if owners != 0 || nodes != 0 || afterRevision != revision {
+		t.Fatalf("rejected mutation published owners=%d nodes=%d revision=%d want=%d", owners, nodes, afterRevision, revision)
 	}
 }
 
@@ -244,6 +277,8 @@ func TestVectorIndexPartitionLiveGenerationCutoverKeepsOldPinV1(t *testing.T) {
 func TestVectorIndexPartitionLiveRepeatedUpdateCutoverKeepsPinnedViewV1(t *testing.T) {
 	idx, _ := newVectorIndex(nil, VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4, EfConstruction: 16, EfSearch: 8})
 	manifest := VectorPartitionManifestV1{IndexName: "embedding", IndexDefinitionDigest: "definition", SourceGeneration: 3, SourceChecksum: 4, SourceSchemaHash: 5, SourceRowCount: 1, Generation: 7, DomainCount: 1, PartitionCount: 1, DomainPacks: []VectorPartitionDomainPackV1{{DomainID: 0, PackID: 0}}}
+	idx.sourceDocumentGeneration = manifest.SourceGeneration
+	idx.sourceDocumentRootsValid = true
 	if err := idx.bindVectorPartitionLiveV1(manifest, manifest.SourceGeneration, []vectorPartitionLiveRepresentativeV1{{domain: 0, vector: []float32{1, 0}}}); err != nil {
 		t.Fatal(err)
 	}
@@ -280,6 +315,7 @@ func TestVectorIndexPartitionLiveRepeatedUpdateCutoverKeepsPinnedViewV1(t *testi
 	}
 
 	oldResults, _, oldErr := oldPin.SearchDomainV1(t.Context(), 0, []float32{1, 0}, VectorPartitionSearchOptionsV1{TopK: 1, EfSearch: 8})
+	oldPinStatus := oldPin.StatusV1()
 	oldPin.Release()
 	newPin, err := idx.acquireVectorPartitionLiveSearchPinV1(manifest)
 	if err != nil {
@@ -293,9 +329,26 @@ func TestVectorIndexPartitionLiveRepeatedUpdateCutoverKeepsPinnedViewV1(t *testi
 	if newPin.StatusV1().Cutovers != 1 {
 		t.Fatalf("cutovers=%d, want 1", newPin.StatusV1().Cutovers)
 	}
-	oldPinStatus := oldPin.StatusV1()
 	if oldDelta == newPin.domains[0].index || oldPinStatus.Cutovers != 0 {
 		t.Fatal("cutover did not retire the old domain behind its pin")
+	}
+	idx.mu.RLock()
+	wantNodeIDBytes := uint64(idx.partitionLiveNodeCountLocked() * len("doc"))
+	gotNodeIDBytes := idx.partitionLive.nodeIDBytes
+	idx.mu.RUnlock()
+	if gotNodeIDBytes != wantNodeIDBytes {
+		t.Fatalf("retained node ID bytes=%d want=%d", gotNodeIDBytes, wantNodeIDBytes)
+	}
+	snapshot, _ := idx.persistSnapshot()
+	restored, err := newVectorIndex(nil, VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4, EfConstruction: 16, EfSearch: 8})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reason := restored.loadPersistSnapshot(snapshot); reason != "" {
+		t.Fatalf("restore reason=%q", reason)
+	}
+	if restored.partitionLive.nodeIDBytes != wantNodeIDBytes || restored.partitionLive.ownerIDBytes != uint64(len("doc")) {
+		t.Fatalf("restored retained bytes node_ids=%d owner_ids=%d", restored.partitionLive.nodeIDBytes, restored.partitionLive.ownerIDBytes)
 	}
 }
 
@@ -540,11 +593,11 @@ func TestVectorPartitionSearcherExcludesStaleBeforeTopKV1(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	results, _, err := searcher.SearchWithOptionsV1(context.Background(), []float32{1, 0}, VectorPartitionSearchOptionsV1{
+	results, metrics, err := searcher.SearchWithOptionsV1(context.Background(), []float32{1, 0}, VectorPartitionSearchOptionsV1{
 		TopK: 1, EfSearch: 8, ExcludedStableIDs: map[string]struct{}{"stale": {}},
 	})
-	if err != nil || len(results) != 1 || results[0].ID != "fresh" {
-		t.Fatalf("results=%v err=%v", results, err)
+	if err != nil || len(results) != 1 || results[0].ID != "fresh" || metrics.Candidates != 1 {
+		t.Fatalf("results=%v metrics=%+v err=%v", results, metrics, err)
 	}
 }
 
@@ -579,22 +632,25 @@ func TestVectorIndexPartitionLiveFirstBindingConcurrentMutationV1(t *testing.T) 
 		t.Fatal(err)
 	}
 	mutationDone := make(chan error, 1)
+	mutationStarted := make(chan struct{})
 	go func() {
+		close(mutationStarted)
 		matched, err := collection.Replace([]byte("a"), replacement)
 		if err == nil && !matched {
 			err = errors.New("replacement did not match")
 		}
 		mutationDone <- err
 	}()
+	<-mutationStarted
 	select {
 	case err := <-mutationDone:
-		if err != nil {
-			close(continuePublication)
-			t.Fatal(err)
-		}
-	case <-time.After(5 * time.Second):
 		close(continuePublication)
-		t.Fatal("concurrent mutation deadlocked behind first binding publication")
+		t.Fatalf("mutation acknowledged before first binding durability: %v", err)
+	default:
+	}
+	if current, err := collection.Get([]byte("a")); err != nil || bytes.Contains(current, []byte(`"time_us":99`)) {
+		close(continuePublication)
+		t.Fatalf("mutation visible before first binding durability: document=%s err=%v", current, err)
 	}
 	close(continuePublication)
 	select {
@@ -604,6 +660,14 @@ func TestVectorIndexPartitionLiveFirstBindingConcurrentMutationV1(t *testing.T) 
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("first binding did not finish after concurrent mutation")
+	}
+	select {
+	case err := <-mutationDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("concurrent mutation did not finish after durable first binding")
 	}
 
 	wantCoverage, _, err := collection.currentVectorIndexDocumentStateWithWriteDomainLockState(false)
@@ -622,8 +686,79 @@ func TestVectorIndexPartitionLiveFirstBindingConcurrentMutationV1(t *testing.T) 
 }
 
 func TestVectorIndexPartitionLiveFirstBindingCheckpointCommandWALReplayV1(t *testing.T) {
+	if dir := os.Getenv("GOMAP_VECTOR_PARTITION_LIVE_CRASH_DIR"); dir != "" {
+		if os.Getenv("GOMAP_VECTOR_PARTITION_LIVE_CHECKPOINT_CRASH") == "1" {
+			preopenLSN, err := strconv.ParseUint(os.Getenv("GOMAP_VECTOR_PARTITION_LIVE_PREOPEN_LSN"), 10, 64)
+			if err != nil {
+				t.Fatal(err)
+			}
+			database := openCollectionCommandWALDB(t, dir)
+			persistedCarrier := false
+			for _, frame := range collectionCommandWALFrames(t, dir) {
+				if frame.LSN > preopenLSN && frame.Kind == commitlog.CommandKindCollectionPersistPartitionLive {
+					persistedCarrier = true
+				}
+			}
+			if !persistedCarrier {
+				database.Close()
+				t.Fatal("Open did not publish a fresh command-WAL-covered replay carrier")
+			}
+			if err := database.Checkpoint(); err != nil {
+				t.Fatal(err)
+			}
+			os.Exit(0) // Process loss immediately after checkpoint: no close hook may mask missing replay ownership.
+		}
+		generation, err := strconv.ParseUint(os.Getenv("GOMAP_VECTOR_PARTITION_LIVE_GENERATION"), 10, 64)
+		if err != nil {
+			t.Fatal(err)
+		}
+		database := openCollectionCommandWALDB(t, dir)
+		collection, err := NewCollectionManager(database).OpenCollection("docs")
+		if err != nil {
+			t.Fatal(err)
+		}
+		manifest, err := collection.PreparedVectorPartitionManifestWithContextV1(t.Context(), "embedding_graph", generation)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := collection.EnsureVectorPartitionLiveBindingV1(t.Context(), manifest); err != nil {
+			t.Fatalf("reload checkpointed binding: %v", err)
+		}
+		maxBaselineLSN := uint64(0)
+		for _, frame := range collectionCommandWALFrames(t, dir) {
+			if frame.LSN > maxBaselineLSN {
+				maxBaselineLSN = frame.LSN
+			}
+		}
+		replacement, err := json.Marshal(map[string]any{
+			"time_us": int64(99), "kind": "vector", "did": "a", "embedding": []float32{0, 1},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if matched, err := collection.Replace([]byte("a"), replacement); err != nil || !matched {
+			t.Fatalf("replacement matched=%v err=%v", matched, err)
+		}
+		replayedMutation := false
+		for _, frame := range collectionCommandWALFrames(t, dir) {
+			if frame.LSN <= maxBaselineLSN {
+				continue
+			}
+			if frame.Kind == commitlog.CommandKindCollectionPersistPartitionLive {
+				t.Fatal("post-checkpoint replay unexpectedly depended on a partition-live binding command")
+			}
+			switch frame.Kind {
+			case commitlog.CommandKindCollectionInsertBatchByID, commitlog.CommandKindCollectionDeleteBatchByID,
+				commitlog.CommandKindCollectionUpdateBatchByID, commitlog.CommandKindCollectionReplaceSourceByID:
+				replayedMutation = true
+			}
+		}
+		if !replayedMutation {
+			t.Fatal("missing post-checkpoint document mutation frame")
+		}
+		os.Exit(0) // Process loss: preserve the checkpoint and replay only the acknowledged document WAL frame.
+	}
 	requireVectorPartitionPersistenceV1(t)
-	replayDir := t.TempDir()
 	dir, database, collection, def, manifest := newVectorPartitionLiveProductionFixtureV1(t)
 	if err := collection.EnsureVectorPartitionLiveBindingV1(t.Context(), manifest); err != nil {
 		database.Close()
@@ -642,59 +777,28 @@ func TestVectorIndexPartitionLiveFirstBindingCheckpointCommandWALReplayV1(t *tes
 	if err := database.Close(); err != nil {
 		t.Fatal(err)
 	}
-	copyTypedStorageCommandWALReplayBenchmarkDirM10C(t, dir, replayDir)
 	maxBaselineLSN := uint64(0)
 	for _, frame := range collectionCommandWALFrames(t, dir) {
 		if frame.LSN > maxBaselineLSN {
 			maxBaselineLSN = frame.LSN
 		}
 	}
-	database = openCollectionCommandWALDB(t, dir)
-	collection, err = NewCollectionManager(database).OpenCollection("docs")
-	if err != nil {
-		database.Close()
-		t.Fatal(err)
-	}
-	if err := collection.EnsureVectorPartitionLiveBindingV1(t.Context(), manifest); err != nil {
-		database.Close()
-		t.Fatalf("reload checkpointed binding: %v", err)
-	}
-
-	replacement, err := json.Marshal(map[string]any{
-		"time_us": int64(99), "kind": "vector", "did": "a", "embedding": []float32{0, 1},
-	})
-	if err != nil {
-		database.Close()
-		t.Fatal(err)
-	}
-	if matched, err := collection.Replace([]byte("a"), replacement); err != nil || !matched {
-		database.Close()
-		t.Fatalf("replacement matched=%v err=%v", matched, err)
-	}
-	expectedCoverage, _, err := collection.currentVectorIndexDocumentStateWithWriteDomainLockState(false)
-	if err != nil {
-		database.Close()
-		t.Fatal(err)
-	}
-	pin, err = collection.AcquireVectorPartitionLiveSearchPinV1(manifest)
-	if err != nil {
-		database.Close()
-		t.Fatalf("acknowledged mutation was not immediately searchable: %v", err)
-	}
-	immediate, _, immediateErr := pin.SearchDomainV1(t.Context(), 0, []float32{0, 1}, VectorPartitionSearchOptionsV1{TopK: 1, EfSearch: 8, MaxStableIDBytes: 16})
-	pin.Release()
-	if immediateErr != nil || len(immediate) != 1 || immediate[0].ID != "a" {
-		database.Close()
-		t.Fatalf("immediate results=%+v err=%v", immediate, immediateErr)
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestVectorIndexPartitionLiveFirstBindingCheckpointCommandWALReplayV1$")
+	cmd.Env = append(os.Environ(),
+		"GOMAP_VECTOR_PARTITION_LIVE_CRASH_DIR="+dir,
+		"GOMAP_VECTOR_PARTITION_LIVE_GENERATION="+strconv.FormatUint(manifest.Generation, 10),
+	)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("crash helper: %v\n%s", err, output)
 	}
 	replayedMutation := false
 	for _, frame := range collectionCommandWALFrames(t, dir) {
 		if frame.LSN <= maxBaselineLSN {
 			continue
 		}
-		writeCollectionCommandWALFrame(t, replayDir, frame.LSN, frame.Kind, frame.PayloadFormat, frame.Payload)
 		if frame.Kind == commitlog.CommandKindCollectionPersistPartitionLive {
-			database.Close()
 			t.Fatal("post-checkpoint replay unexpectedly depended on a partition-live binding command")
 		}
 		switch frame.Kind {
@@ -704,14 +808,26 @@ func TestVectorIndexPartitionLiveFirstBindingCheckpointCommandWALReplayV1(t *tes
 		}
 	}
 	if !replayedMutation {
-		database.Close()
 		t.Fatal("missing post-checkpoint document mutation frame")
 	}
-	if err := database.Close(); err != nil {
-		t.Fatal(err)
+	maxReplayedLSN := maxBaselineLSN
+	for _, frame := range collectionCommandWALFrames(t, dir) {
+		if frame.LSN > maxReplayedLSN {
+			maxReplayedLSN = frame.LSN
+		}
 	}
 
-	reopenedDB := openCollectionCommandWALDB(t, replayDir)
+	checkpointCmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestVectorIndexPartitionLiveFirstBindingCheckpointCommandWALReplayV1$")
+	checkpointCmd.Env = append(os.Environ(),
+		"GOMAP_VECTOR_PARTITION_LIVE_CRASH_DIR="+dir,
+		"GOMAP_VECTOR_PARTITION_LIVE_CHECKPOINT_CRASH=1",
+		"GOMAP_VECTOR_PARTITION_LIVE_PREOPEN_LSN="+strconv.FormatUint(maxReplayedLSN, 10),
+	)
+	if output, err := checkpointCmd.CombinedOutput(); err != nil {
+		t.Fatalf("checkpoint crash helper: %v\n%s", err, output)
+	}
+
+	reopenedDB := openCollectionCommandWALDB(t, dir)
 	defer reopenedDB.Close()
 	reopened, err := NewCollectionManager(reopenedDB).OpenCollection("docs")
 	if err != nil {
@@ -723,6 +839,10 @@ func TestVectorIndexPartitionLiveFirstBindingCheckpointCommandWALReplayV1(t *tes
 	}
 	if err := reopened.EnsureVectorPartitionLiveBindingV1(t.Context(), reopenedManifest); err != nil {
 		t.Fatalf("recover durable binding after document replay: %v", err)
+	}
+	expectedCoverage, _, err := reopened.currentVectorIndexDocumentStateWithWriteDomainLockState(false)
+	if err != nil {
+		t.Fatal(err)
 	}
 	recoveredPin, err := reopened.AcquireVectorPartitionLiveSearchPinV1(reopenedManifest)
 	if err != nil {

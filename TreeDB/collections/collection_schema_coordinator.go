@@ -29,24 +29,25 @@ type collectionSchemaCoordinator struct {
 	typedPublicationChanged  chan struct{}
 	typedPublicationClosed   bool
 
-	schemaMu                sync.RWMutex
-	nativeVectorIndexLoadMu sync.Mutex
-	nativeVectorAdmissionMu sync.RWMutex
-	nativeVectorBaseline    atomic.Pointer[uint64]
-	hasNativeVectorIndexes  atomic.Bool
-	partitionLiveMu         sync.RWMutex
-	partitionLiveCarriers   map[string]*VectorIndex
-	partitionLivePublishMu  sync.RWMutex
-	partitionLiveSearchPins map[vectorPartitionLiveSearchPinKeyV1]int
-	adHocVectorAdmissionMu  sync.RWMutex
-	adHocVectorIndexes      atomic.Int64
-	legacyVectorSidecarMu   sync.Mutex
-	domainsMu               sync.Mutex
-	domains                 map[*collectionWriteDomain]struct{}
-	chunkLifecycleMu        sync.Mutex
-	chunkLifecycles         map[string]*chunkLifecycleLock
-	chunkMutationOnce       sync.Once
-	chunkMutationToken      chan struct{}
+	schemaMu                               sync.RWMutex
+	nativeVectorIndexLoadMu                sync.Mutex
+	nativeVectorAdmissionMu                sync.RWMutex
+	nativeVectorBaseline                   atomic.Pointer[uint64]
+	hasNativeVectorIndexes                 atomic.Bool
+	partitionLiveMu                        sync.RWMutex
+	partitionLiveCarriers                  map[string]*VectorIndex
+	partitionLiveReplayFinalizerRegistered bool
+	partitionLivePublishMu                 sync.RWMutex
+	partitionLiveSearchPins                map[vectorPartitionLiveSearchPinKeyV1]int
+	adHocVectorAdmissionMu                 sync.RWMutex
+	adHocVectorIndexes                     atomic.Int64
+	legacyVectorSidecarMu                  sync.Mutex
+	domainsMu                              sync.Mutex
+	domains                                map[*collectionWriteDomain]struct{}
+	chunkLifecycleMu                       sync.Mutex
+	chunkLifecycles                        map[string]*chunkLifecycleLock
+	chunkMutationOnce                      sync.Once
+	chunkMutationToken                     chan struct{}
 
 	// Includes reserved and attempted encoded work within the current explicit
 	// maintenance epoch. Reconciliation and pointer-pin release do not renew it.
@@ -133,7 +134,26 @@ func (coord *collectionSchemaCoordinator) registerPartitionLiveCarrier(carrier *
 		coord.partitionLiveCarriers = make(map[string]*VectorIndex)
 	}
 	coord.partitionLiveCarriers[carrier.name] = carrier
+	registerReplayFinalizer := !coord.partitionLiveReplayFinalizerRegistered
 	coord.partitionLiveMu.Unlock()
+	if registerReplayFinalizer && carrier.collection != nil && carrier.collection.db != nil && carrier.collection.db.RegisterCommandWALReplayFinalizer(coord.persistPartitionLiveReplayCarriers) {
+		coord.partitionLiveMu.Lock()
+		coord.partitionLiveReplayFinalizerRegistered = true
+		coord.partitionLiveMu.Unlock()
+	}
+}
+
+func (coord *collectionSchemaCoordinator) persistPartitionLiveReplayCarriers() error {
+	if coord == nil {
+		return nil
+	}
+	var persistErr error
+	for _, carrier := range coord.partitionLiveCarrierList() {
+		if _, err := carrier.SaveNativeDeltaSnapshot(); err != nil {
+			persistErr = errors.Join(persistErr, err)
+		}
+	}
+	return persistErr
 }
 
 func (coord *collectionSchemaCoordinator) unregisterPartitionLiveCarrier(name string, expected *VectorIndex) {
@@ -311,6 +331,15 @@ func collectionDBSchemaCoordinatorForDB(db *backenddb.DB) *collectionDBSchemaCoo
 		var closeErr error
 		for _, named := range collections {
 			collection := named.value
+			// Command-WAL replay managers are intentionally hookless, but their
+			// restored standalone partition carriers are owned by this DB-scoped
+			// coordinator. Persist replay-reconciled carriers at the real DB close
+			// boundary so a later checkpoint/reopen does not lose the overlay.
+			for _, carrier := range collection.partitionLiveCarrierList() {
+				if _, err := carrier.SaveNativeDeltaSnapshot(); err != nil {
+					closeErr = errors.Join(closeErr, err)
+				}
+			}
 			collection.typedPublicationDebtMu.Lock()
 			collection.typedPublicationClosed = true
 			collection.wakeTypedGraphPublicationWaitersLocked()
