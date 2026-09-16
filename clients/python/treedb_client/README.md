@@ -64,6 +64,14 @@ false. Commands 64 and 65 pack query and ingest FP32 values respectively;
 document responses from commands 50 and 64 remain JSON, with stored FP32 values
 represented as JSON numbers and decoded Python floats.
 
+The optional transport currently requires native-wire header version 1.1 on
+both the Python client and service. This pre-alpha version accompanied the
+incompatible vector-partition response change from one selected-partition
+counter to distinct selected-domain and selected-pack counters. Version 1.0 is
+rejected rather than decoded ambiguously; upgrade the client and service
+together. The `protocol_major` and `protocol_minor` hello capabilities confirm
+1.1 and do not negotiate a downgrade.
+
 Native addresses must be numeric IPv4 literals (`127.0.0.1:7121`) or bracketed
 numeric IPv6 literals (`[::1]:7121`), without zone identifiers. Hostnames are
 rejected before networking: one family-specific socket connects with the

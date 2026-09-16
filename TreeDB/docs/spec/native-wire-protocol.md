@@ -387,7 +387,7 @@ whose freshness matters.
 The client MUST send `hello` before ordinary requests. The server replies with
 `hello_ok` or `error`.
 
-`hello` advertises:
+The target protocol permits `hello` to advertise:
 
 - client protocol versions,
 - maximum frame size,
@@ -410,12 +410,20 @@ Feature negotiation MUST be explicit. A client MUST NOT assume support for a
 command, document format, compression codec, query operator, or consistency mode
 that the server did not advertise.
 
-A connection has exactly one selected transport protocol version. `hello` and
-`hello_ok` for this specification use header version 1.0. After `hello_ok`, all
-frames on the connection MUST carry the selected version. Receivers MUST reject
-ordinary frames with a different major version and MUST reject an unnegotiated
-minor version. Major versions are incompatible. Minor versions are additive only
-when explicitly negotiated.
+A connection has exactly one selected transport protocol version. The current
+pre-alpha implementation supports exactly header version 1.1 for `hello`,
+`hello_ok`, ordinary frames, and error frames. An empty `hello` is permitted and
+selects 1.1 by construction; the returned `protocol_major=1` and
+`protocol_minor=1` capabilities confirm that version but are not a downgrade
+mechanism. Version 1.1 introduced the distinct logical-domain and physical-pack
+counters in `vector_search_response`. It is intentionally incompatible with
+the former 1.0 response layout, so clients and servers require a coordinated
+upgrade and reject 1.0 rather than risking shifted positional decoding. After
+`hello_ok`, all frames on the connection MUST carry 1.1. Future minor versions
+MUST be additive and explicitly negotiated before mixed-minor connections are
+accepted; major versions remain incompatible.
+The `internal/nativewire/testdata/v1` fixture directory denotes protocol major
+version 1, not the retired 1.0 minor layout.
 
 ## 7. Command Header
 
@@ -796,6 +804,15 @@ maps, and string-form float conversion are not part of this route. One
 the close command or by connection teardown. Strict, fast, and pinned searches
 retain their public `vectorpartition.OperationsV1` consistency and validation
 semantics; native wire changes only the transport representation.
+
+In transport 1.1, `vector_search_response` carries exactly 19 counter uvarints
+before its 20 stage-timing uvarints, in this order: selected domains, selected
+packs, selected groups, requests, RPCs, retries, redirects, candidates, edges,
+snapshot pins, read proofs, generation pins, partition opens, query bytes,
+request bytes, candidate bytes, response bytes, HNSW-served packs, and
+exact-scan packs. The decoded `selected_partitions` compatibility field aliases
+selected packs. The former 1.0 layout had 18 counters and is not accepted as a
+1.1 response.
 
 ### 10.1. Document-service dense search
 

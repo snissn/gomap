@@ -275,6 +275,47 @@ func TestServerRejectsCriticalUnknownHelloSection(t *testing.T) {
 	}
 }
 
+func TestServerRejectsPreviousMinorHello(t *testing.T) {
+	server := NewServer(ServerOptions{})
+	left, right := net.Pipe()
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- server.ServeConn(context.Background(), right)
+	}()
+	t.Cleanup(func() {
+		_ = left.Close()
+		_ = right.Close()
+		_ = server.Close()
+	})
+
+	header, err := iwire.AppendHeader(nil, iwire.Header{Type: iwire.FrameHello, RequestID: 1})
+	if err != nil {
+		t.Fatalf("append hello header: %v", err)
+	}
+	header[8], header[9] = 0, 0 // AppendHeader defaults zero to the current minor.
+	if err := writeAll(left, header); err != nil {
+		t.Fatalf("write 1.0 hello: %v", err)
+	}
+	responseHeader, body, err := readFrame(left, iwire.DefaultLimits())
+	if err != nil {
+		t.Fatalf("read version error: %v", err)
+	}
+	if responseHeader.Version.Minor != iwire.ProtocolMinorV1 || responseHeader.Type != iwire.FrameError {
+		t.Fatalf("version error header=%+v", responseHeader)
+	}
+	if !isRemoteError(decodeWireError(body, iwire.DefaultLimits(), false), iwire.ErrUnsupportedVersion) {
+		t.Fatalf("1.0 hello body did not decode as unsupported version")
+	}
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("ServeConn returned %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ServeConn did not close after previous-version hello")
+	}
+}
+
 func TestPayloadDecodersRejectMalformedScalars(t *testing.T) {
 	if _, err := decodeStringMap([]byte{0x80, 0x00}); codeOf(err) != iwire.ErrMalformedFrame {
 		t.Fatalf("decodeStringMap non-minimal count err=%v code=%d", err, codeOf(err))

@@ -13,6 +13,8 @@ from collections.abc import Mapping
 from .errors import TreeDBConfigError, TreeDBProtocolError, TreeDBTimeoutError, TreeDBTransportError
 
 _HEADER = struct.Struct("<4sHHHHIQQQ")
+_PROTOCOL_MAJOR = 1
+_PROTOCOL_MINOR = 1
 _MAX_FRAME = 16 << 20
 _CRITICAL_SECTION_IDS = frozenset((134, 135, 136))
 
@@ -504,9 +506,9 @@ class _NativeConnection:
         if remaining <= 0:
             raise TimeoutError("native request deadline expired")
         self.socket.settimeout(remaining)
-        self.socket.sendall(_HEADER.pack(b"TDB1", 40, 1, 0, frame_type, 0, 0, self.request_id, len(body)) + body)
+        self.socket.sendall(_HEADER.pack(b"TDB1", 40, _PROTOCOL_MAJOR, _PROTOCOL_MINOR, frame_type, 0, 0, self.request_id, len(body)) + body)
         magic, size, major, minor, kind, flags, stream, request, count = _HEADER.unpack(self._read(40, deadline))
-        if (magic, size, major, minor, flags, stream, request) != (b"TDB1", 40, 1, 0, 0, 0, self.request_id) or count + 40 > self.limit:
+        if (magic, size, major, minor, flags, stream, request) != (b"TDB1", 40, _PROTOCOL_MAJOR, _PROTOCOL_MINOR, 0, 0, self.request_id) or count + 40 > self.limit:
             raise TreeDBProtocolError("invalid native response header")
         payload = self._read(count, deadline)
         if kind == 6:
@@ -599,6 +601,8 @@ class _NativeConnection:
                     self.capabilities = _string_map(hello[3])
                     if self.capabilities.get("protocol") != "treedb-native-wire":
                         raise TreeDBProtocolError("wrong native protocol capability")
+                    if (self.capabilities.get("protocol_major"), self.capabilities.get("protocol_minor")) != (str(_PROTOCOL_MAJOR), str(_PROTOCOL_MINOR)):
+                        raise TreeDBProtocolError("wrong native protocol version capability")
                     server_limit = int(self.capabilities.get("max_frame_size", "0"))
                     if server_limit < 40:
                         raise TreeDBProtocolError("native frame capability missing")
