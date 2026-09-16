@@ -174,6 +174,44 @@ func TestVectorIndexPartitionLiveReplayRejectsDifferentInstalledCarrierV1(t *tes
 	}
 }
 
+func TestVectorIndexPartitionLiveReplayPreservesInstalledCarrierMutationV1(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
+	_, database, collection, def, manifest := newVectorPartitionLiveProductionFixtureV1(t)
+	defer database.Close()
+	if err := collection.EnsureVectorPartitionLiveBindingV1(t.Context(), manifest); err != nil {
+		t.Fatal(err)
+	}
+	current := collection.registeredVectorIndex(def.Name)
+	rootID, err := collection.currentNativeVectorIndexRootID(def.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, beforeSeq := current.persistSnapshot()
+	candidate, err := newVectorIndex(collection, vectorIndexOptionsFromDefinition(def))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reason := candidate.loadPersistSnapshot(snapshot); reason != "" {
+		t.Fatalf("candidate restore reason=%q", reason)
+	}
+	candidate.recordPersistentDefinition(def)
+	candidate.recordLoadedSnapshot(rootID, current.Stats().BytesDisk)
+	snapshotSeq := candidate.nativeMutationSequence()
+	candidate.mu.Lock()
+	candidate.partitionLive.coverage = 0
+	candidate.mu.Unlock()
+	attempt := &vectorPartitionLiveReplayAttemptV1{entries: []vectorPartitionLiveReplayEntryV1{{
+		spec:      vectorPartitionLiveReplaySpecV1{before: current, definition: def, beforeSeq: beforeSeq, rootName: collectionVectorIndexRootName(collection.name, def.Name)},
+		candidate: candidate, snapshotSeq: snapshotSeq,
+	}}}
+	if err := collection.installVectorPartitionLiveReplayAttemptV1(attempt, []string{attempt.entries[0].spec.rootName}, []uint64{rootID}); err != nil {
+		t.Fatal(err)
+	}
+	if collection.registeredVectorIndex(def.Name) != candidate || !candidate.needsNativeAutoPersist() {
+		t.Fatal("installed carrier mutation was incorrectly marked persisted")
+	}
+}
+
 func TestVectorIndexPartitionLiveSnapshotRecoveryAndMismatchV1(t *testing.T) {
 	idx, err := newVectorIndex(nil, VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4, EfConstruction: 16, EfSearch: 8})
 	if err != nil {

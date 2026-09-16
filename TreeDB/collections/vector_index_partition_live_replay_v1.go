@@ -330,7 +330,7 @@ func (c *Collection) installVectorPartitionLiveReplayAttemptV1(attempt *vectorPa
 		if installed != entry.candidate {
 			return fmt.Errorf("%w: replay carrier %q changed during install", ErrConcurrentMutation, entry.spec.definition.Name)
 		}
-		installed.recordPersistedSnapshot(rootID, entry.bytesDisk, installed.nativeMutationSequence())
+		installed.recordPersistedSnapshot(rootID, entry.bytesDisk, entry.snapshotSeq)
 	}
 	return nil
 }
