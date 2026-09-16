@@ -64,11 +64,15 @@ The Q5 packet consumer has one narrower historical-control disposition. It may
 retain either that clean completed 50K `native_runtime` lifecycle control or the
 exact #4617 failure described under **M0 baseline limitation** below. The latter
 must have only the `broad_10pct` initial-oracle failure, the frozen expected IDs,
-zero results, `complete_finite_ann`, `bounded_complete_set`, and exactly 2,064
-visited/scored candidates with no scan fallback. It is failed recall evidence,
-not lifecycle or latency evidence. No timeout, cleanup/provenance failure,
-additional mismatch, different row count, or changed route is equivalent. The
-SQ8 bounded control remains clean-completion-only.
+zero results, `complete_finite_ann`, `bounded_complete_set`, positive integral
+visited/scored work with visited equal to scored and scored no greater than
+4,096, and no scan fallback. Duplicate scenario/raw counters must agree. The
+other ANN snapshots keep their frozen routes and membership counts while their
+positive integral traversal work may include at most 4,096 seed-row visits
+above scored work. It is failed recall evidence, not lifecycle or latency
+evidence. No timeout, cleanup/provenance failure, additional mismatch, different
+row count, changed route, or contradictory completion evidence is equivalent.
+The SQ8 bounded control remains clean-completion-only.
 
 The historical shell lane defaults to `native_runtime` for baseline reproduction.
 The Python runner also supports explicit `--strategy column_graph` with declared
@@ -324,8 +328,10 @@ The first public bounded-50k run at `8eb50f829` (unchanged TreeDB production
 code from `c2781c147`) completed load in 10.627 seconds, then failed: the
 `broad_10pct` filter had 1,000 valid IDs but `complete_finite_ann` returned none
 (2,064 visited/scored, zero admitted). This is failed recall evidence, not a
-completed latency result. The old runtime exact cap is 512, and its complete
-finite branch lacks the eligible-region seeding used by its broad-filter branch.
+completed latency result. The 2,064 count is that run's historical observation,
+not the regression's semantic identity. The old runtime exact cap is 512, and
+its complete finite branch lacks the eligible-region seeding used by its
+broad-filter branch.
 Keep this fixture/oracle as a native-path regression; do not retune it to hide
 the failure. The already-defined bounded-250k shape is the separate M0
 characterization candidate. Neither shape certifies the full sparse case.

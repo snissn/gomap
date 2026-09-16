@@ -86,10 +86,11 @@ WAL payloads should reuse or wrap these deterministic command-entry schemas so
 the single-node WAL and future Raft paths do not grow separate mutation
 encoders.
 
-Protocol compatibility is based on explicit version and feature negotiation, not
-best-effort decoding of unknown required fields. Unknown required frame flags,
-section flags, command IDs, command versions, or critical sections MUST fail
-fast with a structured error. Unknown advisory fields MAY be ignored.
+Protocol compatibility is based on exact transport-version matching and explicit
+feature negotiation, not best-effort decoding of unknown required fields.
+Unknown required frame flags, section flags, command IDs, command versions, or
+critical sections MUST fail fast with a structured error. Unknown advisory
+fields MAY be ignored.
 
 ## 5. Transport
 
@@ -387,18 +388,13 @@ whose freshness matters.
 The client MUST send `hello` before ordinary requests. The server replies with
 `hello_ok` or `error`.
 
-`hello` advertises:
-
-- client protocol versions,
-- maximum frame size,
-- supported compression codecs,
-- supported document formats,
-- desired authentication mode,
-- optional client name and driver version.
+`hello` may carry capability, trace-context, and compression sections. An empty
+body is valid. The current protocol does not select a transport version from the
+body; the frame header must already use the exact supported version.
 
 `hello_ok` returns:
 
-- selected protocol version,
+- exact `protocol_major` and `protocol_minor` capabilities,
 - server maximum frame size,
 - selected compression policy,
 - supported command IDs,
@@ -410,12 +406,12 @@ Feature negotiation MUST be explicit. A client MUST NOT assume support for a
 command, document format, compression codec, query operator, or consistency mode
 that the server did not advertise.
 
-A connection has exactly one selected transport protocol version. `hello` and
-`hello_ok` for this specification use header version 1.0. After `hello_ok`, all
-frames on the connection MUST carry the selected version. Receivers MUST reject
-ordinary frames with a different major version and MUST reject an unnegotiated
-minor version. Major versions are incompatible. Minor versions are additive only
-when explicitly negotiated.
+The current transport version is exactly 1.1. `hello`, `hello_ok`, and every
+ordinary frame MUST carry header version 1.1; receivers MUST reject every other
+major or minor version before command dispatch. `hello_ok` advertises that exact
+version in its capability set, but v1 does not negotiate or fall back between
+transport versions. Command and feature capabilities remain explicitly
+negotiated.
 
 ## 7. Command Header
 

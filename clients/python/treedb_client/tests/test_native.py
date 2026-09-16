@@ -335,7 +335,7 @@ class NativeCodecTests(unittest.TestCase):
                 work_only_client = TreeDBClient("http://127.0.0.1:1", native_address="127.0.0.1:2")
                 work_only_client._native.socket = mock.Mock()
                 work_only_client._native.capabilities["dense_vector_search_versions"] = "3"
-                candidate_header = _HEADER.pack(b"TDB1", 40, 1, 0, 6, 0, 0, 1, len(candidate_payload))
+                candidate_header = _HEADER.pack(b"TDB1", 40, 1, 1, 6, 0, 0, 1, len(candidate_payload))
                 expected = "proof does not match the request" if rejected else "native error"
                 with self.subTest(native_work_only=name), \
                      mock.patch.object(work_only_client._native, "_read", side_effect=(candidate_header, candidate_payload)), \
@@ -353,7 +353,7 @@ class NativeCodecTests(unittest.TestCase):
             proof_only_client = TreeDBClient("http://127.0.0.1:1", native_address="127.0.0.1:2")
             proof_only_client._native.socket = mock.Mock()
             proof_only_client._native.capabilities["dense_vector_search_versions"] = "3"
-            proof_only_header = _HEADER.pack(b"TDB1", 40, 1, 0, 6, 0, 0, 1, len(proof_only_payload))
+            proof_only_header = _HEADER.pack(b"TDB1", 40, 1, 1, 6, 0, 0, 1, len(proof_only_payload))
             with mock.patch.object(proof_only_client._native, "_read", side_effect=(proof_only_header, proof_only_payload)), \
                  self.assertRaisesRegex(TreeDBProtocolError, "proof does not match the request") as caught:
                 proof_only_client.query_by_embedding(
@@ -503,7 +503,7 @@ class NativeCodecTests(unittest.TestCase):
                 completion_client = TreeDBClient("http://127.0.0.1:1", native_address="127.0.0.1:2")
                 completion_client._native.socket = mock.Mock()
                 completion_client._native.capabilities["dense_vector_search_versions"] = "3"
-                candidate_header = _HEADER.pack(b"TDB1", 40, 1, 0, 6, 0, 0, 1, len(candidate_payload))
+                candidate_header = _HEADER.pack(b"TDB1", 40, 1, 1, 6, 0, 0, 1, len(candidate_payload))
                 expected = "proof does not match the request" if rejected else "native error"
                 with self.subTest(native_completion_prefix=name), \
                      mock.patch.object(completion_client._native, "_read", side_effect=(candidate_header, candidate_payload)), \
@@ -1170,11 +1170,21 @@ class NativeCodecTests(unittest.TestCase):
         self.assertTrue(connection.closed)
 
     def test_frame_and_dense_request_goldens(self):
-        self.assertEqual(_HEADER.pack(b"TDB1", 40, 1, 0, 1, 0, 0, 1, 0).hex(),
-                         "54444231280001000000010000000000000000000000000001000000000000000000000000000000")
+        self.assertEqual(_HEADER.pack(b"TDB1", 40, 1, 1, 1, 0, 0, 1, 0).hex(),
+                         "54444231280001000100010000000000000000000000000001000000000000000000000000000000")
         self.assertEqual(_dense_request("a", [1, 0], 1, 8, 2, True, None).hex(),
                          "016101080201020000803f0000000000")
         self.assertEqual(_vector([b"a", b"bc"]).hex(), "020102616263")
+        connection = _NativeConnection("127.0.0.1:2", 1)
+        connection.socket = mock.Mock()
+        legacy = _HEADER.pack(b"TDB1", 40, 1, 0, 2, 0, 0, 1, 0)
+        with mock.patch.object(connection, "_read", return_value=legacy), \
+             self.assertRaisesRegex(TreeDBProtocolError, "invalid native response header"):
+            connection._round_trip(1, b"", 2, 10**12)
+        self.assertEqual(
+            connection.socket.sendall.call_args.args[0],
+            _HEADER.pack(b"TDB1", 40, 1, 1, 1, 0, 0, 1, 0),
+        )
 
     def test_typed_response_golden_and_version_rejection(self):
         meta = bytes.fromhex("0201000001000000000000f03f")
@@ -1288,7 +1298,7 @@ class NativeCodecTests(unittest.TestCase):
             payload = _section(2, error_payload) + _section(134, work_raw) + _section(136, plane_raw)
             connection = _NativeConnection("127.0.0.1:2", 1)
             connection.socket = mock.Mock()
-            header = _HEADER.pack(b"TDB1", 40, 1, 0, 6, 0, 0, 1, len(payload))
+            header = _HEADER.pack(b"TDB1", 40, 1, 1, 6, 0, 0, 1, len(payload))
             with self.subTest(malformed=name), mock.patch.object(connection, "_read", side_effect=(header, payload)), self.assertRaises(TreeDBProtocolError) as caught:
                 connection._round_trip(1, b"", 2, 10**12, dense_proof=True, dense_version=3)
             self.assertEqual(caught.exception.dense_work, want_work)
@@ -1301,7 +1311,7 @@ class NativeCodecTests(unittest.TestCase):
         ):
             connection = _NativeConnection("127.0.0.1:2", 1)
             connection.socket = mock.Mock()
-            header = _HEADER.pack(b"TDB1", 40, 1, 0, 6, 0, 0, 1, len(payload))
+            header = _HEADER.pack(b"TDB1", 40, 1, 1, 6, 0, 0, 1, len(payload))
             with self.subTest(noncritical_error=name), mock.patch.object(connection, "_read", side_effect=(header, payload)), self.assertRaisesRegex(TreeDBProtocolError, "not critical") as caught:
                 connection._round_trip(1, b"", 2, 10**12, dense_proof=True, dense_version=3)
             self.assertEqual(caught.exception.dense_work, work)
@@ -1318,7 +1328,7 @@ class NativeCodecTests(unittest.TestCase):
         ):
             connection = _NativeConnection("127.0.0.1:2", 1)
             connection.socket = mock.Mock()
-            header = _HEADER.pack(b"TDB1", 40, 1, 0, 6, 0, 0, 1, len(payload))
+            header = _HEADER.pack(b"TDB1", 40, 1, 1, 6, 0, 0, 1, len(payload))
             with self.subTest(malformed_error=name), mock.patch.object(connection, "_read", side_effect=(header, payload)), self.assertRaises(TreeDBProtocolError) as caught:
                 connection._round_trip(1, b"", 2, 10**12, dense_proof=True, dense_version=3)
             self.assertEqual(caught.exception.dense_work, work)
@@ -1409,8 +1419,8 @@ class NativeCodecTests(unittest.TestCase):
 
     def test_connection_errors_close_without_retry(self):
         for incoming, error in ((b"", TreeDBTransportError),
-                                (_HEADER.pack(b"TDB1", 40, 1, 0, 2, 0, 0, 99, 0), TreeDBProtocolError),
-                                (_HEADER.pack(b"TDB1", 40, 1, 0, 2, 0, 0, 1, 1 << 30), TreeDBProtocolError),
+                                (_HEADER.pack(b"TDB1", 40, 1, 1, 2, 0, 0, 99, 0), TreeDBProtocolError),
+                                (_HEADER.pack(b"TDB1", 40, 1, 1, 2, 0, 0, 1, 1 << 30), TreeDBProtocolError),
                                 (TimeoutError("deadline"), TreeDBTimeoutError)):
             with self.subTest(incoming=incoming):
                 sock = mock.Mock()
