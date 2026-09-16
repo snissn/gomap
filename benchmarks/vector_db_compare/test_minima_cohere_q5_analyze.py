@@ -19,13 +19,13 @@ FROZEN_LEGACY_IDS = [f"minima/broad_10pct/{ordinal:06d}" for ordinal in range(10
 FROZEN_LEGACY_ROUTE_DEFINITIONS = {
     "small": ("complete_exact", "bounded_complete_set", 16, 16, 16, 16, 16, 5, 16),
     "all_match": ("vector_aligned_ann", "vector_aligned_scalar",
-                  4096, 32, 32, 2080, 2064, 5, 32),
+                  4096, 32, 32, None, None, 5, 32),
     "over_limit_4097": ("vector_aligned_ann", "vector_aligned_scalar",
-                        4096, 32, 32, 2080, 2064, 5, 32),
+                        4096, 32, 32, None, None, 5, 32),
     "broad_10pct": ("complete_finite_ann", "bounded_complete_set",
-                    1000, 1000, 1000, 2064, 2064, 0, 1000),
+                    1000, 1000, 1000, None, None, 0, 1000),
     "sparse_over_limit": ("vector_aligned_ann", "vector_aligned_scalar",
-                          4096, 32, 32, 2080, 2064, 5, 32),
+                          4096, 32, 32, None, None, 5, 32),
     "mixed_broad_narrow": ("mixed_refined", "bounded_candidate_refinement",
                            4101, 5, 5, 5, 5, 5, 5),
     "empty_user": ("complete_exact", "bounded_complete_set", 0, 0, 0, 0, 0, 0, 0),
@@ -69,7 +69,8 @@ def bounded_manifest():
     queries = []
     for name, (_, eligible) in populations.items():
         ids = (FROZEN_LEGACY_IDS if name == "broad_10pct"
-               else ([] if eligible == 0 else [f"minima/{name}/000000"]))
+               else ([] if eligible == 0
+                     else [f"minima/{name}/{ordinal:06d}" for ordinal in range(5)]))
         scores = [0.9] * len(ids)
         queries.append({
             "scenario": name,
@@ -196,6 +197,11 @@ def known_legacy_failure_artifact(manifest, service, service_sha):
         actual = [] if mismatch else list(expected)
         actual_scores = [] if mismatch else list(expected_scores)
         route, routes[name] = copy.deepcopy(route_contracts[name])
+        if name in analyzer.LEGACY_BASELINE_ANN_ROUTES:
+            scored = 2064
+            visited = scored if name == "broad_10pct" else scored + 16
+            route.update(visited_candidates=visited, scored_candidates=scored)
+            routes[name].update(candidates=scored, visited=visited, scored=scored)
         scenarios.append({
             "scenario": name, "backend": "treedb",
             "corpus_rows": population[name]["corpus_rows"],
@@ -228,11 +234,49 @@ def known_legacy_failure_artifact(manifest, service, service_sha):
             "match": not mismatch, "maximum_score_delta": 0.0,
         })
     artifact["scenarios"] = scenarios
+    phases = []
+    for index, (name, classification) in enumerate(analyzer.LEGACY_BASELINE_PHASES):
+        start = 100 + index * 20
+        phases.append({
+            "name": name, "classification": classification,
+            "start_nanos": start, "end_nanos": start + 10, "duration_nanos": 10,
+            "resource_segments": [{"start": {}, "end": {}}],
+            "sample_count": 1, "sample_duration_nanos": 1,
+        })
     artifact["backend_raw_evidence"] = {"treedb": {
-        "events": events, "native_route_responses": routes,
-        "final_scroll_state": {}, "restart_boundary": {},
+        "diagnostic_resume": None,
+        "diagnostics": copy.deepcopy(analyzer.LEGACY_BASELINE_DIAGNOSTICS),
+        "events": events, "final_scroll_state": {}, "native_route_responses": routes,
+        "phase_attribution": {
+            "clock": "time.monotonic_ns", "total_start_nanos": 100,
+            "total_end_nanos": 160, "total_duration_nanos": 60,
+            "unattributed_nanos": 30,
+            "unattributed_rule": (
+                "total_duration_nanos = sum(phase.duration_nanos) + unattributed_nanos; "
+                "unattributed_nanos <= max(60000000000, total_duration_nanos / 100); "
+                "unattributed covers only runner bookkeeping between declared boundaries"
+            ),
+            "phases": phases,
+        },
+        "phase_latency_distributions": {}, "resource_availability": {},
+        "resource_measurement": {}, "restart_boundary": {}, "service_log": {},
+        "timed_overlap": {},
+        "upsert_batch_correlation_contract": copy.deepcopy(
+            analyzer.LEGACY_BASELINE_CORRELATION_CONTRACT,
+        ),
+        "upsert_batch_correlations": [],
     }}
     return artifact
+
+
+def set_legacy_ann_work(artifact, name, scored, visited):
+    scenario = next(row for row in artifact["scenarios"] if row["scenario"] == name)
+    raw = artifact["backend_raw_evidence"]["treedb"]["native_route_responses"][name]
+    scenario["route"].update(
+        scored_candidates=scored,
+        visited_candidates=visited,
+    )
+    raw.update(candidates=scored, scored=scored, visited=visited)
 
 
 class Q5AnalyzeTest(unittest.TestCase):
@@ -641,6 +685,139 @@ class Q5AnalyzeTest(unittest.TestCase):
                 maximum_score_delta=None),
             "wrong raw key": lambda row: row.update(
                 raw_evidence=row.pop("backend_raw_evidence")),
+            "boolean zero route field": lambda row: row["scenarios"][1]["route"].update(
+                primary_document_scans=False),
+            "float deterministic work": lambda row: (
+                row["scenarios"][0]["route"].update(scored_candidates=16.0),
+                row["backend_raw_evidence"]["treedb"]["native_route_responses"][
+                    "small"
+                ].update(candidates=16.0, scored=16.0),
+            ),
+            "numeric false passing": lambda row: row.update(passing=0),
+        }
+        for label, mutate in mutations.items():
+            changed = copy.deepcopy(artifact)
+            mutate(changed)
+            with self.subTest(label=label):
+                self.assertFalse(analyzer._known_legacy_baseline_failure(
+                    changed, changed["backends"][0],
+                ))
+
+    def test_legacy_ann_work_accepts_source_bounds_and_reconciles_every_copy(self):
+        manifest = bounded_manifest()
+        artifact = known_legacy_failure_artifact(manifest, Path("/packet/service"), "a" * 64)
+
+        accepted = {
+            "all_match": (1, 1),
+            "over_limit_4097": (4096, 8192),
+            "broad_10pct": (2048, 2048),
+            "sparse_over_limit": (4096, 4096),
+        }
+        for name, (scored, visited) in accepted.items():
+            changed = copy.deepcopy(artifact)
+            set_legacy_ann_work(changed, name, scored, visited)
+            with self.subTest(accepted=name):
+                self.assertTrue(analyzer._known_legacy_baseline_failure(
+                    changed, changed["backends"][0],
+                ))
+
+        rejected = {
+            "zero scored": ("all_match", 0, 0),
+            "negative scored": ("all_match", -1, -1),
+            "oversized scored": ("all_match", 4097, 4097),
+            "finite seed work": ("broad_10pct", 2048, 2049),
+            "visited below scored": ("all_match", 2048, 2047),
+            "excessive seed work": ("all_match", 2048, 6145),
+        }
+        for label, (name, scored, visited) in rejected.items():
+            changed = copy.deepcopy(artifact)
+            set_legacy_ann_work(changed, name, scored, visited)
+            with self.subTest(rejected=label):
+                self.assertFalse(analyzer._known_legacy_baseline_failure(
+                    changed, changed["backends"][0],
+                ))
+
+        for value in (False, 2064.0, "2064", None):
+            for owner, field in (
+                ("scenario", "scored_candidates"),
+                ("scenario", "visited_candidates"),
+                ("raw", "candidates"), ("raw", "scored"), ("raw", "visited"),
+            ):
+                changed = copy.deepcopy(artifact)
+                scenario = next(
+                    row for row in changed["scenarios"] if row["scenario"] == "all_match"
+                )
+                raw = changed["backend_raw_evidence"]["treedb"][
+                    "native_route_responses"
+                ]["all_match"]
+                (scenario["route"] if owner == "scenario" else raw)[field] = value
+                with self.subTest(type=type(value).__name__, owner=owner, field=field):
+                    self.assertFalse(analyzer._known_legacy_baseline_failure(
+                        changed, changed["backends"][0],
+                    ))
+
+        for label, mutate in {
+            "raw scored mismatch": lambda row: row["backend_raw_evidence"]["treedb"][
+                "native_route_responses"
+            ]["all_match"].update(scored=2063),
+            "raw candidates mismatch": lambda row: row["backend_raw_evidence"]["treedb"][
+                "native_route_responses"
+            ]["all_match"].update(candidates=2063),
+            "raw visited mismatch": lambda row: row["backend_raw_evidence"]["treedb"][
+                "native_route_responses"
+            ]["all_match"].update(visited=2079),
+            "missing counter": lambda row: row["scenarios"][1]["route"].pop(
+                "scored_candidates"
+            ),
+            "extra route field": lambda row: row["scenarios"][1]["route"].update(
+                completed=True
+            ),
+            "coordinated admission drift": lambda row: (
+                row["scenarios"][1]["route"].update(admitted_candidates=4),
+                row["backend_raw_evidence"]["treedb"]["native_route_responses"][
+                    "all_match"
+                ].update(admitted=4),
+            ),
+        }.items():
+            changed = copy.deepcopy(artifact)
+            mutate(changed)
+            with self.subTest(reconciliation=label):
+                self.assertFalse(analyzer._known_legacy_baseline_failure(
+                    changed, changed["backends"][0],
+                ))
+
+    def test_legacy_failure_rejects_completion_claims_and_malformed_shapes(self):
+        artifact = known_legacy_failure_artifact(
+            bounded_manifest(), Path("/packet/service"), "a" * 64,
+        )
+        raw = lambda row: row["backend_raw_evidence"]["treedb"]
+        mutations = {
+            "timed overlap": lambda row: raw(row).update(timed_overlap={"completed": True}),
+            "diagnostic resume": lambda row: raw(row).update(
+                diagnostic_resume={"resumed": True}),
+            "correlation evidence": lambda row: raw(row)["upsert_batch_correlations"].append(
+                {"outcome": "completed"}),
+            "correlation claim": lambda row: raw(row)[
+                "upsert_batch_correlation_contract"
+            ].update(record_count=1),
+            "enabled diagnostics": lambda row: raw(row)["diagnostics"].update(enabled=True),
+            "later lifecycle phase": lambda row: raw(row)["phase_attribution"]["phases"][
+                -1
+            ].update(name="lifecycle_mutations"),
+            "phase completion field": lambda row: raw(row)["phase_attribution"]["phases"][
+                -1
+            ].update(completed=True),
+            "extra raw claim": lambda row: raw(row).update(lifecycle_complete=True),
+            "malformed manifest": lambda row: row.update(manifest=[]),
+            "malformed query": lambda row: row["manifest"]["queries"].__setitem__(0, None),
+            "malformed scenario": lambda row: row["scenarios"].__setitem__(0, None),
+            "malformed raw route": lambda row: raw(row)["native_route_responses"].update(
+                all_match=None),
+            "malformed phase": lambda row: raw(row)["phase_attribution"]["phases"].__setitem__(
+                0, None),
+            "malformed phase resource": lambda row: raw(row)["phase_attribution"]["phases"][
+                0
+            ].update(resource_segments=[None]),
         }
         for label, mutate in mutations.items():
             changed = copy.deepcopy(artifact)

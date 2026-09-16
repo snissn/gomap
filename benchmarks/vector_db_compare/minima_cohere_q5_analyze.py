@@ -77,6 +77,40 @@ LEGACY_BASELINE_FAILURES = [
     "RuntimeError: timed query 3 does not match its frozen oracle",
 ]
 LEGACY_BASELINE_IDS = [f"minima/broad_10pct/{ordinal:06d}" for ordinal in range(1000, 1005)]
+# The frozen exact control uses EF=128. Its native runtime can search one base
+# and one live-delta plane, each bounded by EF * nativeScalarANNVisitFactor.
+LEGACY_BASELINE_ANN_MAX_SCORED = 2 * 128 * 16
+# Vector-aligned routes share this many eligible-region probe rows across both
+# planes; complete-finite routes do not perform eligible-region seeding.
+LEGACY_BASELINE_ANN_MAX_SEED_ROWS = 4096
+LEGACY_BASELINE_ANN_ROUTES = {
+    "all_match": "vector_aligned_ann",
+    "over_limit_4097": "vector_aligned_ann",
+    "broad_10pct": "complete_finite_ann",
+    "sparse_over_limit": "vector_aligned_ann",
+}
+LEGACY_BASELINE_RAW_KEYS = {
+    "diagnostic_resume", "diagnostics", "events", "final_scroll_state",
+    "native_route_responses", "phase_attribution", "phase_latency_distributions",
+    "resource_availability", "resource_measurement", "restart_boundary", "service_log",
+    "timed_overlap", "upsert_batch_correlation_contract", "upsert_batch_correlations",
+}
+LEGACY_BASELINE_DIAGNOSTICS = {
+    "capture_timeout_seconds": 10, "directory": None, "enabled": False,
+    "nonqualifying": False, "profile_seconds": 5, "slow_batch_seconds": 30,
+}
+LEGACY_BASELINE_CORRELATION_CONTRACT = {
+    "compact_completed_records": 0, "compact_record_max_bytes": 2048,
+    "full_diagnostic_records": 0,
+    "full_stats_retention": ["failed", "timeout", "slow", "profile_captured"],
+    "maximum_record_count": 205, "record_count": 0,
+    "schema": "treedb-minima-upsert-batch-correlations/v1",
+}
+LEGACY_BASELINE_PHASES = [
+    ("initial_durable_load", "production_path"),
+    ("warmup_search", "production_path"),
+    ("timed_search_write_overlap", "production_path"),
+]
 
 
 class EvidenceError(ValueError):
@@ -1231,13 +1265,13 @@ def _legacy_baseline_routes():
     definitions = {
         "small": ("complete_exact", "bounded_complete_set", 16, 16, 16, 16, 16, 5, 16),
         "all_match": ("vector_aligned_ann", "vector_aligned_scalar",
-                      4096, 32, 32, 2080, 2064, 5, 32),
+                      4096, 32, 32, None, None, 5, 32),
         "over_limit_4097": ("vector_aligned_ann", "vector_aligned_scalar",
-                            4096, 32, 32, 2080, 2064, 5, 32),
+                            4096, 32, 32, None, None, 5, 32),
         "broad_10pct": ("complete_finite_ann", "bounded_complete_set",
-                        1000, 1000, 1000, 2064, 2064, 0, 1000),
+                        1000, 1000, 1000, None, None, 0, 1000),
         "sparse_over_limit": ("vector_aligned_ann", "vector_aligned_scalar",
-                              4096, 32, 32, 2080, 2064, 5, 32),
+                              4096, 32, 32, None, None, 5, 32),
         "mixed_broad_narrow": ("mixed_refined", "bounded_candidate_refinement",
                                4101, 5, 5, 5, 5, 5, 5),
         "empty_user": ("complete_exact", "bounded_complete_set", 0, 0, 0, 0, 0, 0, 0),
@@ -1264,7 +1298,119 @@ def _legacy_baseline_routes():
     return routes
 
 
+def _legacy_partial_phase_prefix_valid(value):
+    if not isinstance(value, dict) or set(value) != {
+        "clock", "total_start_nanos", "total_end_nanos", "total_duration_nanos",
+        "unattributed_nanos", "unattributed_rule", "phases",
+    }:
+        return False
+    total_start = value.get("total_start_nanos")
+    total_end = value.get("total_end_nanos")
+    total_duration = value.get("total_duration_nanos")
+    unattributed = value.get("unattributed_nanos")
+    phases = value.get("phases")
+    if (value.get("clock") != "time.monotonic_ns"
+            or value.get("unattributed_rule") != (
+                "total_duration_nanos = sum(phase.duration_nanos) + unattributed_nanos; "
+                "unattributed_nanos <= max(60000000000, total_duration_nanos / 100); "
+                "unattributed covers only runner bookkeeping between declared boundaries"
+            )
+            or any(type(number) is not int for number in (
+                total_start, total_end, total_duration, unattributed,
+            ))
+            or total_start <= 0 or total_end < total_start
+            or total_duration != total_end - total_start or unattributed < 0
+            or unattributed > max(60_000_000_000, total_duration // 100)
+            or not isinstance(phases, list) or len(phases) != len(LEGACY_BASELINE_PHASES)):
+        return False
+    durations = 0
+    previous_end = total_start
+    for phase, (name, classification) in zip(phases, LEGACY_BASELINE_PHASES):
+        if not isinstance(phase, dict) or set(phase) != {
+            "classification", "duration_nanos", "end_nanos", "name", "resource_segments",
+            "sample_count", "sample_duration_nanos", "start_nanos",
+        }:
+            return False
+        start = phase.get("start_nanos")
+        end = phase.get("end_nanos")
+        duration = phase.get("duration_nanos")
+        sample_count = phase.get("sample_count")
+        sample_duration = phase.get("sample_duration_nanos")
+        if ((phase.get("name"), phase.get("classification")) != (name, classification)
+                or any(type(number) is not int for number in (
+                    start, end, duration, sample_count, sample_duration,
+                ))
+                or start < previous_end or end < start or duration != end - start
+                or sample_count < 0 or sample_duration < 0
+                or not isinstance(phase.get("resource_segments"), list)
+                or not phase["resource_segments"]
+                or not all(
+                    isinstance(segment, dict) and set(segment) == {"start", "end"}
+                    and isinstance(segment["start"], dict)
+                    and isinstance(segment["end"], dict)
+                    for segment in phase["resource_segments"]
+                )):
+            return False
+        durations += duration
+        previous_end = end
+    return durations + unattributed == total_duration and previous_end <= total_end
+
+
+def _legacy_partial_raw_valid(raw):
+    return (
+        isinstance(raw, dict) and set(raw) == LEGACY_BASELINE_RAW_KEYS
+        and native.same_json(raw.get("final_scroll_state"), {})
+        and native.same_json(raw.get("restart_boundary"), {})
+        and native.same_json(raw.get("timed_overlap"), {})
+        and raw.get("diagnostic_resume") is None
+        and native.same_json(raw.get("upsert_batch_correlations"), [])
+        and native.same_json(raw.get("diagnostics"), LEGACY_BASELINE_DIAGNOSTICS)
+        and native.same_json(
+            raw.get("upsert_batch_correlation_contract"),
+            LEGACY_BASELINE_CORRELATION_CONTRACT,
+        )
+        and _legacy_partial_phase_prefix_valid(raw.get("phase_attribution"))
+    )
+
+
+def _legacy_route_valid(name, route, raw_route, contracts):
+    if not isinstance(route, dict) or not isinstance(raw_route, dict):
+        return False
+    expected_route, expected_raw = contracts
+    if set(route) != set(expected_route) or set(raw_route) != set(expected_raw):
+        return False
+    if name not in LEGACY_BASELINE_ANN_ROUTES:
+        return native.same_json(route, expected_route) and native.same_json(raw_route, expected_raw)
+
+    route_dynamic = {"visited_candidates", "scored_candidates"}
+    raw_dynamic = {"candidates", "visited", "scored"}
+    if (not native.same_json(
+            {key: value for key, value in route.items() if key not in route_dynamic},
+            {key: value for key, value in expected_route.items() if key not in route_dynamic},
+        )
+            or not native.same_json(
+                {key: value for key, value in raw_route.items() if key not in raw_dynamic},
+                {key: value for key, value in expected_raw.items() if key not in raw_dynamic},
+            )):
+        return False
+    scored = route.get("scored_candidates")
+    visited = route.get("visited_candidates")
+    if (type(scored) is not int or type(visited) is not int
+            or type(raw_route.get("candidates")) is not int
+            or type(raw_route.get("scored")) is not int
+            or type(raw_route.get("visited")) is not int
+            or scored != raw_route["scored"] or scored != raw_route["candidates"]
+            or visited != raw_route["visited"]
+            or not 0 < scored <= LEGACY_BASELINE_ANN_MAX_SCORED):
+        return False
+    if LEGACY_BASELINE_ANN_ROUTES[name] == "complete_finite_ann":
+        return visited == scored
+    return scored <= visited <= scored + LEGACY_BASELINE_ANN_MAX_SEED_ROWS
+
+
 def _known_legacy_baseline_failure(artifact, backend):
+    if not isinstance(artifact, dict) or not isinstance(backend, dict):
+        return False
     operations = backend.get("operations") or {}
     expected_operations = {
         "batch_insert_during_search": False, "empty_cases_checked": False,
@@ -1276,32 +1422,37 @@ def _known_legacy_baseline_failure(artifact, backend):
         "timed_execution_trace": {"queries": [], "rounds": []},
         "timed_queries_executed": 0, "timed_rounds_completed": 0,
     }
-    proof = artifact.get("native_path_proof") or {}
+    expected_proof = {
+        "schema": "treedb_minima_native_path_proof/v1",
+        "strategy": "native_runtime", "availability": "unavailable",
+        "counters": None,
+        "reason": ("native baseline diagnostic; typed column_graph lifecycle counters "
+                   "require M1-M4; bounded sparse scenario does not preserve full <1% "
+                   "selectivity"),
+    }
+    proof = artifact.get("native_path_proof")
     raw_all = artifact.get("backend_raw_evidence")
     raw = raw_all.get("treedb") if isinstance(raw_all, dict) else None
     reopen = backend.get("reopen")
-    if ((artifact.get("schema"), artifact.get("state"), artifact.get("passing"),
-         artifact.get("readiness_recommendation"))
-            != (BOUNDED_ARTIFACT_SCHEMA, "partial", False, "not_evaluated")
-            or artifact.get("failures") != LEGACY_BASELINE_FAILURES
-            or proof != {
-                "schema": "treedb_minima_native_path_proof/v1",
-                "strategy": "native_runtime", "availability": "unavailable",
-                "counters": None,
-                "reason": ("native baseline diagnostic; typed column_graph lifecycle counters "
-                           "require M1-M4; bounded sparse scenario does not preserve full <1% "
-                           "selectivity"),
-            }
-            or operations != expected_operations
-            or reopen != {"attempted": False, "committed_parity": False,
-                          "result_manifest_hash": ""}
-            or not isinstance(raw, dict) or set(raw_all) != {"treedb"}
-            or raw.get("final_scroll_state") != {}
-            or raw.get("restart_boundary") != {}):
+    if (artifact.get("schema") != BOUNDED_ARTIFACT_SCHEMA
+            or artifact.get("state") != "partial"
+            or artifact.get("passing") is not False
+            or artifact.get("readiness_recommendation") != "not_evaluated"
+            or not native.same_json(artifact.get("failures"), LEGACY_BASELINE_FAILURES)
+            or not native.same_json(proof, expected_proof)
+            or not native.same_json(operations, expected_operations)
+            or not native.same_json(reopen, {
+                "attempted": False, "committed_parity": False, "result_manifest_hash": "",
+            })
+            or not isinstance(raw_all, dict) or set(raw_all) != {"treedb"}
+            or not _legacy_partial_raw_valid(raw)):
         return False
 
-    queries = artifact.get("manifest", {}).get("queries")
-    corpora = artifact.get("manifest", {}).get("corpora")
+    manifest = artifact.get("manifest")
+    if not isinstance(manifest, dict):
+        return False
+    queries = manifest.get("queries")
+    corpora = manifest.get("corpora")
     scenarios = artifact.get("scenarios")
     events = raw.get("events")
     routes = raw.get("native_route_responses")
@@ -1309,7 +1460,10 @@ def _known_legacy_baseline_failure(artifact, backend):
             or not isinstance(scenarios, list)
             or not isinstance(events, list) or not isinstance(routes, dict)
             or len(queries) != 8 or len(corpora) != 8
-            or len(scenarios) != 8 or len(events) != 8):
+            or len(scenarios) != 8 or len(events) != 8
+            or not all(isinstance(row, dict) for rows in (
+                queries, corpora, scenarios, events,
+            ) for row in rows)):
         return False
     names = [query.get("scenario") for query in queries]
     population = {row.get("name"): row for row in corpora if isinstance(row, dict)}
@@ -1319,7 +1473,9 @@ def _known_legacy_baseline_failure(artifact, backend):
             or set(routes) != set(names) or set(population) != set(names)
             or set(route_contracts) != set(names)):
         return False
-    manifest_config = artifact.get("manifest", {}).get("config", {})
+    manifest_config = manifest.get("config")
+    if not isinstance(manifest_config, dict):
+        return False
     order_tolerance = manifest_config.get("order_tolerance")
     score_tolerance = manifest_config.get("score_tolerance")
     if (type(order_tolerance) is not int or order_tolerance != 0
@@ -1353,37 +1509,42 @@ def _known_legacy_baseline_failure(artifact, backend):
                 or not scores_valid or len(expected) != len(expected_scores)
                 or len(final_expected) != len(final_expected_scores)
                 or row.get("backend") != "treedb"
-                or row.get("initial_oracle_ids") != expected
-                or row.get("initial_oracle_scores") != expected_scores
-                or row.get("final_oracle_ids") != final_expected
-                or row.get("final_oracle_scores") != final_expected_scores
+                or not native.same_json(row.get("initial_oracle_ids"), expected)
+                or not native.same_json(row.get("initial_oracle_scores"), expected_scores)
+                or not native.same_json(row.get("final_oracle_ids"), final_expected)
+                or not native.same_json(row.get("final_oracle_scores"), final_expected_scores)
                 or type(row.get("order_tolerance")) is not int
                 or row.get("order_tolerance") != order_tolerance
                 or type(row.get("score_tolerance")) not in (int, float)
                 or row.get("score_tolerance") != score_tolerance
-                or row.get("corpus_rows") != corpus.get("corpus_rows")
-                or row.get("expected_matches") != corpus.get("eligible_rows")
-                or row.get("selectivity") != corpus.get("selectivity")
-                or row.get("errors") != 0 or row.get("timeouts") != 0
-                or row.get("actual_ids") != [] or row.get("actual_scores") != []
+                or not native.same_json(row.get("corpus_rows"), corpus.get("corpus_rows"))
+                or not native.same_json(row.get("expected_matches"), corpus.get("eligible_rows"))
+                or not native.same_json(row.get("selectivity"), corpus.get("selectivity"))
+                or not native.same_json(row.get("errors"), 0)
+                or not native.same_json(row.get("timeouts"), 0)
+                or not native.same_json(row.get("actual_ids"), [])
+                or not native.same_json(row.get("actual_scores"), [])
                 or type(row.get("recall")) not in (int, float)
                 or type(row.get("overlap")) not in (int, float)
-                or row.get("recall") != final_summary or row.get("overlap") != final_summary
-                or row.get("reopen_ids") != [] or row.get("reopen_parity") is not True
-                or row.get("correctness") != {
+                or not native.same_json(row.get("recall"), final_summary)
+                or not native.same_json(row.get("overlap"), final_summary)
+                or not native.same_json(row.get("reopen_ids"), [])
+                or row.get("reopen_parity") is not True
+                or not native.same_json(row.get("correctness"), {
                     "cross_user_results": 0, "stale_delete_ids": 0,
                     "stale_insert_ids": 0, "stale_update_ids": 0,
-                }
-                or row.get("route") != route_contracts[name][0]
-                or row.get("visibility") != {
+                })
+                or not _legacy_route_valid(
+                    name, row.get("route"), routes.get(name), route_contracts[name],
+                )
+                or not native.same_json(row.get("visibility"), {
                     "generation_consistent": True, "visibility_mismatch_count": 0,
                     "visibility_retry_count": 0,
-                }
-                or routes.get(name) != route_contracts[name][1]
+                })
                 or event.get("kind") != "oracle_comparison"
                 or event.get("operation") != "initial_oracle_comparison"
-                or event.get("expected_ids") != expected
-                or event.get("actual_ids") != actual
+                or not native.same_json(event.get("expected_ids"), expected)
+                or not native.same_json(event.get("actual_ids"), actual)
                 or event.get("match") is not (not mismatch)
                 or maximum_delta is None or not math.isfinite(maximum_delta)
                 or maximum_delta > score_tolerance
@@ -1392,7 +1553,10 @@ def _known_legacy_baseline_failure(artifact, backend):
                                     rel_tol=0, abs_tol=1e-12)
                 or (mismatch and (expected != LEGACY_BASELINE_IDS or actual != []
                                   or actual_scores != []))
-                or (not mismatch and (actual != expected or len(actual_scores) != len(expected)))):
+                or (not mismatch and (
+                    actual != expected or len(actual_scores) != len(expected)
+                    or route_contracts[name][0]["admitted_candidates"] != len(expected)
+                ))):
             return False
     return True
 
