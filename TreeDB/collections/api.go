@@ -22089,7 +22089,7 @@ func (c *Collection) GetInto(documentID []byte, dst []byte) ([]byte, bool, error
 	if catalog == nil {
 		return dst[:0], false, errCollectionNotFound
 	}
-	value, found, err := collectionGetAppendAtCatalogRoot(snap, catalog, collectionPrimaryRootName(c.meta.Name), documentID, dst)
+	value, found, err := collectionGetAppendAtCatalogRoot(snap, catalog, catalog.primaryRootName, documentID, dst)
 	if err != nil || !found || !columnStoreCanReconstructDocument(catalog.meta) {
 		return value, found, err
 	}
