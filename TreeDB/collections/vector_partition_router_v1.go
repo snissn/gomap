@@ -256,7 +256,7 @@ func (c *Collection) BuildAndPublishVectorPartitionRouterV1(ctx context.Context,
 		return fail(fmt.Errorf("collections: vector partition router final memberships=%d exceed configured limit=%d", finalMemberships, opts.Config.MaxVectors))
 	}
 	maxRepresentatives, ok := checkedVectorPartitionRouterRepresentativeBoundV1(
-		finalMemberships, building.PartitionCount, opts.Config.RepresentativesPerPartition,
+		finalMemberships, building.DomainCount, opts.Config.RepresentativesPerPartition,
 	)
 	if !ok {
 		return fail(errors.New("collections: vector partition router representative preflight overflow"))
@@ -287,7 +287,11 @@ func (c *Collection) BuildAndPublishVectorPartitionRouterV1(ctx context.Context,
 	if err != nil {
 		return fail(err)
 	}
-	model, err := internalrouter.BuildRouterV1(authoritativePartitions, opts.Config)
+	domains, err := vectorPartitionRouterDomainsV1(building, authoritativePartitions)
+	if err != nil {
+		return fail(err)
+	}
+	model, err := internalrouter.BuildRouterV1(domains, opts.Config)
 	if err != nil {
 		return fail(err)
 	}
@@ -585,6 +589,43 @@ func (c *Collection) authoritativeVectorPartitionRouterInputV1(manifest VectorPa
 	return authoritative, nil
 }
 
+func vectorPartitionRouterDomainsV1(manifest VectorPartitionManifestV1, packs []internalrouter.RouterPartitionV1) ([]internalrouter.RouterPartitionV1, error) {
+	if manifest.DomainCount == 0 || len(manifest.DomainPacks) != int(manifest.PartitionCount) || len(packs) != int(manifest.PartitionCount) {
+		return nil, errors.New("collections: vector partition router domain mapping is incomplete")
+	}
+	byPack := make([]*internalrouter.RouterPartitionV1, manifest.PartitionCount)
+	for i := range packs {
+		pack := &packs[i]
+		if pack.PartitionID >= manifest.PartitionCount || byPack[pack.PartitionID] != nil {
+			return nil, errors.New("collections: vector partition router pack mapping is ambiguous")
+		}
+		byPack[pack.PartitionID] = pack
+	}
+	domains := make([]internalrouter.RouterPartitionV1, manifest.DomainCount)
+	positions := make([]map[uint64]int, manifest.DomainCount)
+	for domainID := range manifest.DomainCount {
+		domains[domainID].PartitionID = domainID
+		positions[domainID] = make(map[uint64]int)
+	}
+	for _, mapping := range manifest.DomainPacks {
+		if mapping.DomainID >= manifest.DomainCount || mapping.PackID >= manifest.PartitionCount || byPack[mapping.PackID] == nil {
+			return nil, errors.New("collections: vector partition router domain mapping is invalid")
+		}
+		domain := &domains[mapping.DomainID]
+		for _, vector := range byPack[mapping.PackID].Vectors {
+			if ordinal, duplicate := positions[mapping.DomainID][vector.Ordinal]; duplicate {
+				if vector.MembershipKind == string(VectorPartitionMembershipHomeV1) {
+					domain.Vectors[ordinal].MembershipKind = vector.MembershipKind
+				}
+				continue
+			}
+			positions[mapping.DomainID][vector.Ordinal] = len(domain.Vectors)
+			domain.Vectors = append(domain.Vectors, vector)
+		}
+	}
+	return domains, nil
+}
+
 func buildVectorPartitionRouterPackV1(manifest VectorPartitionManifestV1, model internalrouter.RouterModelV1, modelDigest string, def VectorIndexDefinition) ([]byte, error) {
 	digest, err := hex.DecodeString(modelDigest)
 	if err != nil || len(digest) != sha256.Size {
@@ -665,6 +706,15 @@ func vectorPartitionRouterFinalMembershipDigestV1(manifest VectorPartitionManife
 	var encoded [8]byte
 	for _, value := range []uint64{manifest.SourceGeneration, manifest.SourceChecksum, manifest.SourceSchemaHash, manifest.SourceRowCount, manifest.Generation} {
 		binary.BigEndian.PutUint64(encoded[:], value)
+		h.Write(encoded[:])
+	}
+	binary.BigEndian.PutUint32(encoded[:4], manifest.DomainCount)
+	h.Write(encoded[:4])
+	binary.BigEndian.PutUint32(encoded[:4], uint32(len(manifest.DomainPacks)))
+	h.Write(encoded[:4])
+	for _, mapping := range manifest.DomainPacks {
+		binary.BigEndian.PutUint32(encoded[:4], mapping.DomainID)
+		binary.BigEndian.PutUint32(encoded[4:], mapping.PackID)
 		h.Write(encoded[:])
 	}
 	for kind, memberships := range [][]VectorPartitionMembershipV1{manifest.Memberships, manifest.OverlapMemberships} {

@@ -41,6 +41,35 @@ func TestRankVectorPartitionRouterCandidatesReportsUniqueCoverageShortfallV1(t *
 	}
 }
 
+func TestVectorPartitionRouterDomainsCombineRequiredPacksV1(t *testing.T) {
+	manifest := VectorPartitionManifestV1{
+		PartitionCount: 2,
+		DomainCount:    1,
+		DomainPacks: []VectorPartitionDomainPackV1{
+			{DomainID: 0, PackID: 0},
+			{DomainID: 0, PackID: 1},
+		},
+	}
+	packs := []internalrouter.RouterPartitionV1{
+		{PartitionID: 0, Vectors: []internalrouter.RouterVectorV1{
+			{Ordinal: 0, Values: []float32{1, 0}, MembershipKind: string(VectorPartitionMembershipHomeV1)},
+			{Ordinal: 1, Values: []float32{0, 1}, MembershipKind: string(VectorPartitionMembershipOverlapV1)},
+		}},
+		{PartitionID: 1, Vectors: []internalrouter.RouterVectorV1{
+			{Ordinal: 1, Values: []float32{0, 1}, MembershipKind: string(VectorPartitionMembershipHomeV1)},
+			{Ordinal: 2, Values: []float32{-1, 0}, MembershipKind: string(VectorPartitionMembershipHomeV1)},
+		}},
+	}
+	domains, err := vectorPartitionRouterDomainsV1(manifest, packs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(domains) != 1 || domains[0].PartitionID != 0 || len(domains[0].Vectors) != 3 ||
+		domains[0].Vectors[1].Ordinal != 1 || domains[0].Vectors[1].MembershipKind != string(VectorPartitionMembershipHomeV1) {
+		t.Fatalf("domains=%+v", domains)
+	}
+}
+
 func TestVectorPartitionRouterActiveLoadCancellationReleasesBarrierV1(t *testing.T) {
 	requireVectorPartitionPersistenceV1(t)
 	database := openCollectionCommandWALDB(t, t.TempDir())

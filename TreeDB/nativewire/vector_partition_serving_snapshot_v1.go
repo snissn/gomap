@@ -313,7 +313,7 @@ func (p *VectorPartitionServingSnapshotPublisherV1) buildSnapshotV1(ctx context.
 	}
 	counts.routerPins++
 	routerStatus := snapshot.router.session.router.Status()
-	if err := p.opts.Coordinator.validateRouterStatus(routerStatus); err != nil {
+	if err := p.opts.Coordinator.validateRouterStatus(routerStatus, snapshot.router.session.domainPackOffsets); err != nil {
 		p.opts.Coordinator.retireRouterSessionV1(snapshot.router)
 		return fail(err)
 	}

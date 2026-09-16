@@ -131,7 +131,7 @@ func (l VectorPartitionManifestLimits) totalMembershipLimit() int {
 
 type VectorPartitionAssetV1 struct {
 	ID, Checksum, MembershipDigest string
-	PartitionID                    uint32 // logical partition; RouterAsset is separate and remains zero.
+	PartitionID                    uint32 // physical search pack; RouterAsset is separate and remains zero.
 	Bytes                          uint64
 	Ref                            ColumnAssetRef
 }
@@ -143,6 +143,10 @@ type VectorPartitionMembershipV1 struct {
 	VectorOrdinal uint64
 	PartitionID   uint32
 }
+type VectorPartitionDomainPackV1 struct {
+	DomainID uint32
+	PackID   uint32
+}
 
 // VectorPartitionManifestV1 is canonical only when its variable-length lists
 // are sorted. ReadySetDigest is SHA-256 of its required assets and placements.
@@ -152,7 +156,9 @@ type VectorPartitionManifestV1 struct {
 	SourceGeneration, SourceChecksum, SourceSchemaHash, SourceRowCount uint64
 	Generation, RouterGeneration                                       uint64
 	PartitionCount                                                     uint32
+	DomainCount                                                        uint32
 	BalancePolicy                                                      string
+	DomainPacks                                                        []VectorPartitionDomainPackV1
 	Placements                                                         []VectorPartitionPlacementV1
 	Memberships                                                        []VectorPartitionMembershipV1
 	OverlapMemberships                                                 []VectorPartitionMembershipV1
@@ -176,7 +182,9 @@ var vectorPartitionManifestIntegrityFieldNamesV1 = [...]string{
 	"Generation",
 	"RouterGeneration",
 	"PartitionCount",
+	"DomainCount",
 	"BalancePolicy",
+	"DomainPacks",
 	"Placements",
 	"Memberships",
 	"OverlapMemberships",
@@ -258,13 +266,13 @@ func (m VectorPartitionManifestV1) validateWithContextV1(ctx context.Context, l 
 	if l.MaxBytes <= 0 {
 		l = DefaultVectorPartitionManifestLimits()
 	}
-	if m.Format != VectorPartitionManifestFormatV1 || (m.State != "building" && m.State != "ready") || m.Collection == "" || m.IndexName == "" || !isSHA256VPM(m.IndexDefinitionDigest) || !isSHA256VPM(m.IntegrityDigest) || m.Generation == 0 || m.SourceGeneration == 0 || m.SourceRowCount == 0 || m.PartitionCount == 0 || int(m.PartitionCount) > l.MaxPartitions {
+	if m.Format != VectorPartitionManifestFormatV1 || (m.State != "building" && m.State != "ready") || m.Collection == "" || m.IndexName == "" || !isSHA256VPM(m.IndexDefinitionDigest) || !isSHA256VPM(m.IntegrityDigest) || m.Generation == 0 || m.SourceGeneration == 0 || m.SourceRowCount == 0 || m.PartitionCount == 0 || int(m.PartitionCount) > l.MaxPartitions || m.DomainCount == 0 || m.DomainCount > m.PartitionCount {
 		return fmt.Errorf("%w: identity or partition bounds", ErrVectorPartitionManifestInvalid)
 	}
 	if m.SourceRowCount > uint64(l.sourceRowLimit()) || len(m.Collection) > l.MaxStringBytes || len(m.IndexName) > l.MaxStringBytes || len(m.State) > l.MaxStringBytes || len(m.BalancePolicy) > l.MaxStringBytes || len(m.IndexDefinitionDigest) > l.MaxStringBytes || len(m.IntegrityDigest) > l.MaxStringBytes {
 		return fmt.Errorf("%w: source/string cap", ErrVectorPartitionManifestInvalid)
 	}
-	if len(m.Placements) != int(m.PartitionCount) || len(m.Assets) == 0 || len(m.Assets) > l.MaxAssets || len(m.Memberships) != int(m.SourceRowCount) || len(m.OverlapMemberships) > l.MaxMemberships || len(m.Representatives) > l.MaxMemberships || totalMembershipsVPM(m.Memberships, m.OverlapMemberships, m.Representatives) > l.totalMembershipLimit() || (m.State == "ready" && !isSHA256VPM(m.ReadySetDigest)) {
+	if len(m.DomainPacks) != int(m.PartitionCount) || len(m.Placements) != int(m.PartitionCount) || len(m.Assets) == 0 || len(m.Assets) > l.MaxAssets || len(m.Memberships) != int(m.SourceRowCount) || len(m.OverlapMemberships) > l.MaxMemberships || len(m.Representatives) > l.MaxMemberships || totalMembershipsVPM(m.Memberships, m.OverlapMemberships, m.Representatives) > l.totalMembershipLimit() || (m.State == "ready" && !isSHA256VPM(m.ReadySetDigest)) {
 		return fmt.Errorf("%w: incomplete ready set or capped list", ErrVectorPartitionManifestInvalid)
 	}
 	if m.State == "ready" {
@@ -302,6 +310,31 @@ func (m VectorPartitionManifestV1) validateWithContextV1(ctx context.Context, l 
 			return fmt.Errorf("%w: missing partition %d", ErrVectorPartitionManifestInvalid, i)
 		}
 	}
+	domains := make(map[uint32]struct{}, m.DomainCount)
+	packs := make(map[uint32]struct{}, m.PartitionCount)
+	var lastDomain, lastPack uint32
+	for i, mapping := range m.DomainPacks {
+		if mapping.DomainID >= m.DomainCount || mapping.PackID >= m.PartitionCount ||
+			(i > 0 && (mapping.DomainID < lastDomain || mapping.DomainID == lastDomain && mapping.PackID <= lastPack)) {
+			return fmt.Errorf("%w: noncanonical domain-pack mapping", ErrVectorPartitionManifestInvalid)
+		}
+		if _, duplicate := packs[mapping.PackID]; duplicate {
+			return fmt.Errorf("%w: ambiguous domain-pack mapping", ErrVectorPartitionManifestInvalid)
+		}
+		domains[mapping.DomainID] = struct{}{}
+		packs[mapping.PackID] = struct{}{}
+		lastDomain, lastPack = mapping.DomainID, mapping.PackID
+	}
+	for domainID := uint32(0); domainID < m.DomainCount; domainID++ {
+		if _, ok := domains[domainID]; !ok {
+			return fmt.Errorf("%w: missing domain %d", ErrVectorPartitionManifestInvalid, domainID)
+		}
+	}
+	for packID := uint32(0); packID < m.PartitionCount; packID++ {
+		if _, ok := packs[packID]; !ok {
+			return fmt.Errorf("%w: missing domain pack %d", ErrVectorPartitionManifestInvalid, packID)
+		}
+	}
 	if err := validateMembershipsWithContextVPM(ctx, m.Memberships, seenP, "membership", m.SourceRowCount, true, l.MaxMembershipsPerVector); err != nil {
 		return err
 	}
@@ -330,7 +363,7 @@ func (m VectorPartitionManifestV1) validateWithContextV1(ctx context.Context, l 
 			return fmt.Errorf("%w: duplicate home/overlap membership", ErrVectorPartitionManifestInvalid)
 		}
 	}
-	if err := validateMembershipsWithContextVPM(ctx, m.Representatives, seenP, "representative", m.SourceRowCount, false, l.MaxRepresentativesPerPartition); err != nil {
+	if err := validateMembershipsWithContextVPM(ctx, m.Representatives, domains, "representative", m.SourceRowCount, false, l.MaxRepresentativesPerPartition); err != nil {
 		return err
 	}
 	lastID := ""
@@ -470,9 +503,12 @@ func encodedSizeWithContextVPM(ctx context.Context, m VectorPartitionManifestV1,
 			return 0, err
 		}
 	}
-	if err := add(8*6 + 4 + 4); err != nil {
+	if err := add(8*6 + 4*4); err != nil {
 		return 0, err
-	} // fixed fields and router asset count
+	} // fixed fields, domain-pack count, and router asset count
+	if err := add(uint64(len(m.DomainPacks)) * 8); err != nil {
+		return 0, err
+	}
 	if err := asset(m.RouterAsset); err != nil {
 		return 0, err
 	}
@@ -582,6 +618,12 @@ func (m VectorPartitionManifestV1) readyDigestWithContextV1(ctx context.Context)
 		ctx = context.Background()
 	}
 	h := sha256.New()
+	writeU32VPM(h, m.DomainCount)
+	writeU32VPM(h, uint32(len(m.DomainPacks)))
+	for _, mapping := range m.DomainPacks {
+		writeU32VPM(h, mapping.DomainID)
+		writeU32VPM(h, mapping.PackID)
+	}
 	for i, p := range m.Placements {
 		if i&1023 == 0 {
 			if err := ctx.Err(); err != nil {
@@ -638,6 +680,16 @@ func (m *VectorPartitionManifestV1) canonicalizeWithContextV1(ctx context.Contex
 	if m.Placements == nil {
 		m.Placements = []VectorPartitionPlacementV1{}
 	}
+	if m.DomainPacks == nil {
+		m.DomainPacks = []VectorPartitionDomainPackV1{}
+	}
+	if m.DomainCount == 0 && len(m.DomainPacks) == 0 && m.PartitionCount > 0 {
+		m.DomainCount = m.PartitionCount
+		m.DomainPacks = make([]VectorPartitionDomainPackV1, m.PartitionCount)
+		for id := range m.PartitionCount {
+			m.DomainPacks[id] = VectorPartitionDomainPackV1{DomainID: id, PackID: id}
+		}
+	}
 	if m.Memberships == nil {
 		m.Memberships = []VectorPartitionMembershipV1{}
 	}
@@ -658,6 +710,11 @@ func (m *VectorPartitionManifestV1) canonicalizeWithContextV1(ctx context.Contex
 	}
 	if err := sortVectorPartitionSliceWithContextV1(ctx, m.Placements, func(a, b VectorPartitionPlacementV1) bool {
 		return a.PartitionID < b.PartitionID
+	}); err != nil {
+		return err
+	}
+	if err := sortVectorPartitionSliceWithContextV1(ctx, m.DomainPacks, func(a, b VectorPartitionDomainPackV1) bool {
+		return a.DomainID < b.DomainID || a.DomainID == b.DomainID && a.PackID < b.PackID
 	}); err != nil {
 		return err
 	}
@@ -775,12 +832,18 @@ func (m VectorPartitionManifestV1) integrityDigestWithContextV1(ctx context.Cont
 		{"Generation", m.Generation},
 		{"RouterGeneration", m.RouterGeneration},
 		{"PartitionCount", m.PartitionCount},
+		{"DomainCount", m.DomainCount},
 		{"BalancePolicy", m.BalancePolicy},
 	}
 	for i, field := range scalars {
 		if err := writeField(field.name, field.value, i == 0); err != nil {
 			return "", err
 		}
+	}
+	if err := writeSliceField("DomainPacks", func() error {
+		return writeVectorPartitionJSONSliceWithContextV1(ctx, h, m.DomainPacks, 256)
+	}); err != nil {
+		return "", err
 	}
 	if err := writeSliceField("Placements", func() error {
 		return writeVectorPartitionJSONSliceWithContextV1(ctx, h, m.Placements, 256)
@@ -980,7 +1043,7 @@ func encodeVectorPartitionManifestWithContextV1(ctx context.Context, m VectorPar
 	var x [4]byte
 	binary.BigEndian.PutUint32(x[:], vectorPartitionManifestMagicV1)
 	b.Write(x[:])
-	putU32VPM(b, 3)
+	putU32VPM(b, 4)
 	for _, s := range []string{m.Format, m.State, m.Collection, m.IndexName, m.IndexDefinitionDigest, m.IntegrityDigest, m.BalancePolicy, m.ReadySetDigest} {
 		putStringVPM(b, s)
 	}
@@ -988,6 +1051,8 @@ func encodeVectorPartitionManifestWithContextV1(ctx context.Context, m VectorPar
 		putU64VPM(b, n)
 	}
 	putU32VPM(b, m.PartitionCount)
+	putU32VPM(b, m.DomainCount)
+	putDomainPacksVPM(b, m.DomainPacks)
 	putAssetsVPM(b, []VectorPartitionAssetV1{m.RouterAsset})
 	if err := putPlacementsWithContextVPM(ctx, b, m.Placements); err != nil {
 		return nil, err
@@ -1020,7 +1085,7 @@ func preflightVectorPartitionManifestWithContextV1(ctx context.Context, m Vector
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if len(m.Placements) > l.MaxPartitions || len(m.Assets) > l.MaxAssets || len(m.Memberships) > l.MaxMemberships || len(m.OverlapMemberships) > l.MaxMemberships || len(m.Representatives) > l.MaxMemberships || totalMembershipsVPM(m.Memberships, m.OverlapMemberships, m.Representatives) > l.totalMembershipLimit() {
+	if len(m.DomainPacks) > l.MaxPartitions || len(m.Placements) > l.MaxPartitions || len(m.Assets) > l.MaxAssets || len(m.Memberships) > l.MaxMemberships || len(m.OverlapMemberships) > l.MaxMemberships || len(m.Representatives) > l.MaxMemberships || totalMembershipsVPM(m.Memberships, m.OverlapMemberships, m.Representatives) > l.totalMembershipLimit() {
 		return fmt.Errorf("%w: list cap", ErrVectorPartitionManifestInvalid)
 	}
 	for _, s := range []string{m.Format, m.State, m.Collection, m.IndexName, m.IndexDefinitionDigest, m.IntegrityDigest, m.BalancePolicy, m.ReadySetDigest} {
@@ -1074,7 +1139,7 @@ func DecodeVectorPartitionManifestWithContextV1(ctx context.Context, raw []byte,
 		return VectorPartitionManifestV1{}, fmt.Errorf("%w: encoded bytes cap", ErrVectorPartitionManifestInvalid)
 	}
 	r := vpmReader{b: raw, l: l, ctx: ctx}
-	if r.u32() != vectorPartitionManifestMagicV1 || r.u32() != 3 {
+	if r.u32() != vectorPartitionManifestMagicV1 || r.u32() != 4 {
 		return VectorPartitionManifestV1{}, fmt.Errorf("%w: magic/version", ErrVectorPartitionManifestInvalid)
 	}
 	m := VectorPartitionManifestV1{}
@@ -1089,6 +1154,8 @@ func DecodeVectorPartitionManifestWithContextV1(ctx context.Context, raw []byte,
 	m.Generation = r.u64()
 	m.RouterGeneration = r.u64()
 	m.PartitionCount = r.u32()
+	m.DomainCount = r.u32()
+	m.DomainPacks = r.domainPacks()
 	ra := r.assets()
 	m.Placements = r.placements()
 	m.Memberships = r.memberships()
@@ -1288,6 +1355,24 @@ func (r *vpmReader) placements() []VectorPartitionPlacementV1 {
 	}
 	return x
 }
+func (r *vpmReader) domainPacks() []VectorPartitionDomainPackV1 {
+	const domainPackBytes = 4 + 4
+	n := r.allocationCount(r.l.MaxPartitions, domainPackBytes, "domain pack")
+	if r.err != nil {
+		return nil
+	}
+	if r.canceled() {
+		return nil
+	}
+	x := make([]VectorPartitionDomainPackV1, n)
+	for i := range x {
+		if i&1023 == 0 && r.canceled() {
+			return nil
+		}
+		x[i] = VectorPartitionDomainPackV1{DomainID: r.u32(), PackID: r.u32()}
+	}
+	return x
+}
 func (r *vpmReader) memberships() []VectorPartitionMembershipV1 {
 	const membershipBytes = 8 + 4
 	n := r.allocationCount(r.l.MaxMemberships, membershipBytes, "membership")
@@ -1346,6 +1431,13 @@ func writeColumnAssetRefVPM(h interface{ Write([]byte) (int, error) }, r ColumnA
 	writeU32VPM(h, r.Checksum)
 }
 func putStringVPM(b *bytes.Buffer, s string) { putU32VPM(b, uint32(len(s))); b.WriteString(s) }
+func putDomainPacksVPM(b *bytes.Buffer, x []VectorPartitionDomainPackV1) {
+	putU32VPM(b, uint32(len(x)))
+	for _, mapping := range x {
+		putU32VPM(b, mapping.DomainID)
+		putU32VPM(b, mapping.PackID)
+	}
+}
 func putAssetsVPM(b *bytes.Buffer, x []VectorPartitionAssetV1) {
 	putU32VPM(b, uint32(len(x)))
 	for _, a := range x {
