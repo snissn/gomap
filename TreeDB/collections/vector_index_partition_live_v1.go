@@ -175,6 +175,34 @@ func vectorPartitionLiveSourceV1(m VectorPartitionManifestV1) VectorPartitionSou
 	return VectorPartitionSourceIdentityV1{Generation: m.SourceGeneration, Checksum: m.SourceChecksum, SchemaHash: m.SourceSchemaHash, RowCount: m.SourceRowCount}
 }
 
+func vectorPartitionLiveRoutingIdentityMatchesV1(packDomains []uint32, manifest VectorPartitionManifestV1) bool {
+	if manifest.DomainCount == 0 || uint64(len(packDomains)) != uint64(manifest.PartitionCount) || len(manifest.DomainPacks) != len(packDomains) {
+		return false
+	}
+	var lastDomain, lastPack uint32
+	for i, mapping := range manifest.DomainPacks {
+		if mapping.DomainID >= manifest.DomainCount || uint64(mapping.PackID) >= uint64(len(packDomains)) || packDomains[mapping.PackID] != mapping.DomainID ||
+			(i == 0 && mapping.DomainID != 0) ||
+			(i > 0 && (mapping.DomainID < lastDomain || mapping.DomainID > lastDomain+1 || mapping.DomainID == lastDomain && mapping.PackID <= lastPack)) {
+			return false
+		}
+		lastDomain, lastPack = mapping.DomainID, mapping.PackID
+	}
+	return lastDomain == manifest.DomainCount-1
+}
+
+func vectorPartitionLiveManifestRoutingIdentityMatchesV1(authoritative, candidate VectorPartitionManifestV1) bool {
+	if authoritative.DomainCount != candidate.DomainCount || authoritative.PartitionCount != candidate.PartitionCount || len(authoritative.DomainPacks) != len(candidate.DomainPacks) {
+		return false
+	}
+	for i := range authoritative.DomainPacks {
+		if authoritative.DomainPacks[i] != candidate.DomainPacks[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func vectorPartitionLiveRepresentativeLessV1(a, b vectorPartitionLiveRepresentativeV1) bool {
 	if a.domain != b.domain {
 		return a.domain < b.domain
@@ -726,7 +754,8 @@ func (idx *VectorIndex) acquireVectorPartitionLiveSearchPinV1(manifest VectorPar
 	}
 	idx.mu.RLock()
 	live := idx.partitionLive
-	if live == nil || live.indexDefinitionDigest != manifest.IndexDefinitionDigest || live.source != vectorPartitionLiveSourceV1(manifest) || live.generation != manifest.Generation {
+	if live == nil || live.indexDefinitionDigest != manifest.IndexDefinitionDigest || live.source != vectorPartitionLiveSourceV1(manifest) || live.generation != manifest.Generation ||
+		!vectorPartitionLiveRoutingIdentityMatchesV1(live.packDomains, manifest) {
 		idx.mu.RUnlock()
 		return nil, ErrVectorIndexPartitionLiveMismatchV1
 	}
@@ -922,7 +951,8 @@ func (idx *VectorIndex) vectorPartitionLiveBindingCurrentV1(manifest VectorParti
 	live := idx.partitionLive
 	return idx.sourceDocumentRootsValid && live != nil && !live.invalid && live.bindingDurable &&
 		live.indexDefinitionDigest == manifest.IndexDefinitionDigest && live.source == vectorPartitionLiveSourceV1(manifest) &&
-		live.generation == manifest.Generation && live.coverage == idx.sourceDocumentGeneration
+		live.generation == manifest.Generation && live.coverage == idx.sourceDocumentGeneration &&
+		vectorPartitionLiveRoutingIdentityMatchesV1(live.packDomains, manifest)
 }
 
 func (c *Collection) vectorPartitionLiveWarmBindingCurrentV1(manifest VectorPartitionManifestV1) bool {
@@ -990,6 +1020,7 @@ func (idx *VectorIndex) vectorPartitionLiveSearchPinKeyV1(manifest VectorPartiti
 	live := idx.partitionLive
 	if live == nil || live.invalid || !live.bindingDurable || live.indexDefinitionDigest != manifest.IndexDefinitionDigest ||
 		live.source != vectorPartitionLiveSourceV1(manifest) || live.generation != manifest.Generation ||
+		!vectorPartitionLiveRoutingIdentityMatchesV1(live.packDomains, manifest) ||
 		!idx.sourceDocumentRootsValid || !idx.sourceDocumentStateValid || live.coverage != idx.sourceDocumentGeneration {
 		return vectorPartitionLiveSearchPinKeyV1{}, false
 	}
@@ -1203,6 +1234,9 @@ func (c *Collection) ensureVectorPartitionLiveBindingV1(ctx context.Context, man
 		if status.Generation != manifest.Generation {
 			return nil, false, ErrVectorIndexPartitionLiveMismatchV1
 		}
+		if !vectorPartitionLiveManifestRoutingIdentityMatchesV1(router.manifest, manifest) {
+			return nil, false, ErrVectorIndexPartitionLiveMismatchV1
+		}
 		representatives, err := router.partitionLiveRepresentativesV1()
 		if err != nil {
 			return nil, false, err
@@ -1247,7 +1281,8 @@ func (c *Collection) ensureVectorPartitionLiveBindingV1(ctx context.Context, man
 		live := idx.partitionLive
 		dirty := idx.dirtyMeta || (idx.mutationSeq != 0 && (idx.persistedEpoch == 0 || idx.persistedSnapshotDirty))
 		if rootID == 0 || idx.persistedEpoch != rootID || dirty ||
-			live == nil || live.invalid || live.indexDefinitionDigest != manifest.IndexDefinitionDigest || live.source != vectorPartitionLiveSourceV1(manifest) || live.generation != manifest.Generation || live.coverage != idx.sourceDocumentGeneration {
+			live == nil || live.invalid || live.indexDefinitionDigest != manifest.IndexDefinitionDigest || live.source != vectorPartitionLiveSourceV1(manifest) || live.generation != manifest.Generation || live.coverage != idx.sourceDocumentGeneration ||
+			!vectorPartitionLiveRoutingIdentityMatchesV1(live.packDomains, manifest) {
 			idx.mu.Unlock()
 			return fmt.Errorf("%w: durable binding publication did not commit", ErrVectorIndexPartitionLiveUnavailableV1)
 		}
@@ -1270,7 +1305,7 @@ func (c *Collection) validateAndRecordVectorPartitionLiveAuthorityStateV1(manife
 	live := idx.partitionLive
 	if live == nil || live.invalid || !live.bindingDurable ||
 		live.indexDefinitionDigest != manifest.IndexDefinitionDigest || live.source != vectorPartitionLiveSourceV1(manifest) ||
-		live.generation != manifest.Generation || live.coverage != currentGeneration ||
+		live.generation != manifest.Generation || live.coverage != currentGeneration || !vectorPartitionLiveRoutingIdentityMatchesV1(live.packDomains, manifest) ||
 		!idx.sourceDocumentRootsValid || idx.sourceDocumentGeneration != currentGeneration {
 		return ErrVectorIndexPartitionLiveMismatchV1
 	}

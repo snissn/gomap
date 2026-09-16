@@ -1007,6 +1007,54 @@ func TestVectorPartitionSearcherExcludesStaleBeforeTopKV1(t *testing.T) {
 	}
 }
 
+func TestVectorIndexPartitionLiveRejectsNonAuthoritativeRoutingIdentityV1(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
+	_, database, collection, def, manifest := newVectorPartitionLiveProductionFixtureWithPartitionsV1(t, nil, 2)
+	defer database.Close()
+
+	altered := manifest
+	altered.DomainPacks = []VectorPartitionDomainPackV1{{DomainID: 0, PackID: 1}, {DomainID: 1, PackID: 0}}
+	altered.Canonicalize()
+	if err := collection.EnsureVectorPartitionLiveBindingV1(t.Context(), altered); !errors.Is(err, ErrVectorIndexPartitionLiveMismatchV1) {
+		t.Fatalf("cold altered binding err=%v want mismatch", err)
+	}
+	idx := collection.registeredVectorIndex(def.Name)
+	idx.mu.RLock()
+	poisoned := idx.partitionLive != nil
+	idx.mu.RUnlock()
+	if poisoned {
+		t.Fatal("altered routing identity installed a live carrier")
+	}
+
+	if err := collection.EnsureVectorPartitionLiveBindingV1(t.Context(), manifest); err != nil {
+		t.Fatal(err)
+	}
+	if err := collection.EnsureVectorPartitionLiveBindingV1(t.Context(), altered); !errors.Is(err, ErrVectorIndexPartitionLiveMismatchV1) {
+		t.Fatalf("warm altered binding err=%v want mismatch", err)
+	}
+	if pin, err := collection.AcquireVectorPartitionLiveSearchPinV1(altered); !errors.Is(err, ErrVectorIndexPartitionLiveMismatchV1) {
+		if pin != nil {
+			pin.Release()
+		}
+		t.Fatalf("altered pin err=%v want mismatch", err)
+	}
+
+	collection.UnregisterVectorIndex(def.Name)
+	if err := collection.EnsureVectorPartitionLiveBindingV1(t.Context(), altered); !errors.Is(err, ErrVectorIndexPartitionLiveMismatchV1) {
+		t.Fatalf("restored altered binding err=%v want mismatch", err)
+	}
+	pin, err := collection.AcquireVectorPartitionLiveSearchPinV1(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pin.Release()
+	for pack, wantDomain := range []uint32{0, 1} {
+		if domain, ok := pin.DomainForPackV1(uint32(pack)); !ok || domain != wantDomain {
+			t.Fatalf("pack=%d domain=%d ok=%t want=%d", pack, domain, ok, wantDomain)
+		}
+	}
+}
+
 func TestVectorIndexPartitionLiveFirstBindingConcurrentMutationV1(t *testing.T) {
 	requireVectorPartitionPersistenceV1(t)
 	_, database, collection, _, manifest := newVectorPartitionLiveProductionFixtureV1(t)
@@ -1638,7 +1686,14 @@ func newVectorPartitionLiveProductionFixtureV1(t *testing.T, openOptions ...back
 }
 
 func newVectorPartitionLiveProductionFixtureWithIndexesV1(t *testing.T, extraVectorIndexes []VectorIndexDefinition, openOptions ...backenddb.Options) (string, *backenddb.DB, *Collection, VectorIndexDefinition, VectorPartitionManifestV1) {
+	return newVectorPartitionLiveProductionFixtureWithPartitionsV1(t, extraVectorIndexes, 1, openOptions...)
+}
+
+func newVectorPartitionLiveProductionFixtureWithPartitionsV1(t *testing.T, extraVectorIndexes []VectorIndexDefinition, partitionCount uint32, openOptions ...backenddb.Options) (string, *backenddb.DB, *Collection, VectorIndexDefinition, VectorPartitionManifestV1) {
 	t.Helper()
+	if partitionCount == 0 || partitionCount > 2 {
+		t.Fatalf("unsupported partition count %d", partitionCount)
+	}
 	rows := []columnGraphRebuildInputRowV2A{
 		{id: "a", vector: []float32{1, 0}},
 		{id: "b", vector: []float32{.8, .2}},
@@ -1659,18 +1714,24 @@ func newVectorPartitionLiveProductionFixtureWithIndexesV1(t *testing.T, extraVec
 		IndexDefinitionDigest: VectorIndexDefinitionDigestV1(def),
 		SourceGeneration:      source.Generation, SourceChecksum: source.Checksum,
 		SourceSchemaHash: source.SchemaHash, SourceRowCount: source.RowCount,
-		Generation: source.Generation + 100, PartitionCount: 1, DomainCount: 1,
-		DomainPacks:   []VectorPartitionDomainPackV1{{DomainID: 0, PackID: 0}},
+		Generation: source.Generation + 100, PartitionCount: partitionCount, DomainCount: partitionCount,
 		BalancePolicy: "disjoint_v1",
-		Placements:    []VectorPartitionPlacementV1{{PartitionID: 0, GroupID: "raft-a"}},
 	}
-	partition := internalrouter.RouterPartitionV1{PartitionID: 0}
+	partitions := make([]internalrouter.RouterPartitionV1, partitionCount)
+	assetInputs := make([]VectorPartitionSearchAssetV1, partitionCount)
+	for partitionID := range partitionCount {
+		manifest.DomainPacks = append(manifest.DomainPacks, VectorPartitionDomainPackV1{DomainID: partitionID, PackID: partitionID})
+		manifest.Placements = append(manifest.Placements, VectorPartitionPlacementV1{PartitionID: partitionID, GroupID: "raft-" + strconv.FormatUint(uint64(partitionID), 10)})
+		partitions[partitionID].PartitionID = partitionID
+		assetInputs[partitionID] = VectorPartitionSearchAssetV1{Source: source, Generation: manifest.Generation, PartitionID: partitionID, Dimensions: def.Dimensions}
+	}
 	for _, row := range sourceRows {
-		manifest.Memberships = append(manifest.Memberships, VectorPartitionMembershipV1{VectorOrdinal: row.VectorOrdinal, PartitionID: 0})
-		partition.Vectors = append(partition.Vectors, internalrouter.RouterVectorV1{Ordinal: row.VectorOrdinal, Values: append([]float32(nil), row.Values...), MembershipKind: string(VectorPartitionMembershipHomeV1)})
+		partitionID := uint32(row.VectorOrdinal % uint64(partitionCount))
+		manifest.Memberships = append(manifest.Memberships, VectorPartitionMembershipV1{VectorOrdinal: row.VectorOrdinal, PartitionID: partitionID})
+		partitions[partitionID].Vectors = append(partitions[partitionID].Vectors, internalrouter.RouterVectorV1{Ordinal: row.VectorOrdinal, Values: append([]float32(nil), row.Values...), MembershipKind: string(VectorPartitionMembershipHomeV1)})
 	}
 	manifest.Canonicalize()
-	assets, resources, err := collection.MaterializeVectorPartitionLocalSearchAssetsV1(def.Name, manifest, 7801, []VectorPartitionSearchAssetV1{{Source: source, Generation: manifest.Generation, PartitionID: 0, Dimensions: def.Dimensions}})
+	assets, resources, err := collection.MaterializeVectorPartitionLocalSearchAssetsV1(def.Name, manifest, 7801, assetInputs)
 	if err != nil {
 		database.Close()
 		t.Fatal(err)
@@ -1692,7 +1753,7 @@ func newVectorPartitionLiveProductionFixtureWithIndexesV1(t *testing.T, extraVec
 	cfg.MaxDimensions = 8
 	cfg.MaxRepresentatives = 32
 	cfg.MaxScalarWork = 1_000_000
-	if _, err := collection.BuildAndPublishVectorPartitionRouterV1(t.Context(), manifest, []internalrouter.RouterPartitionV1{partition}, VectorPartitionRouterBuildOptionsV1{Config: cfg, AssetFileID: 7802, AssetPartID: 1, M: 2, EfConstruction: 8, EfSearch: 8}); err != nil {
+	if _, err := collection.BuildAndPublishVectorPartitionRouterV1(t.Context(), manifest, partitions, VectorPartitionRouterBuildOptionsV1{Config: cfg, AssetFileID: 7802, AssetPartID: 1, M: 2, EfConstruction: 8, EfSearch: 8}); err != nil {
 		database.Close()
 		t.Fatal(err)
 	}
