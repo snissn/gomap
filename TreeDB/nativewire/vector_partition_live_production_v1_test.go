@@ -245,7 +245,10 @@ func TestVectorPartitionLiveProductionCoordinatorMutationAndColdReloadV1(t *test
 
 	replaceVectorPartitionLiveDocumentV1(t, fixture.collection, "a", []float32{0, 1})
 	replaced := search("replace-worse", []float32{1, 0})
-	if len(replaced.Neighbors) != 1 || replaced.Neighbors[0].ID != "0" || replaced.Counters.BaseResults != 0 || replaced.Counters.DeltaResults != 1 {
+	if len(replaced.Neighbors) != 1 || replaced.Neighbors[0].ID != "0" ||
+		replaced.LiveRevision <= inserted.LiveRevision || replaced.LiveCoverage <= inserted.LiveCoverage ||
+		replaced.Counters.BaseCandidates == 0 || replaced.Counters.DeltaCandidates == 0 ||
+		replaced.Counters.DeltaResults != 1 || replaced.Counters.LiveDomainsSearched != 1 {
 		t.Fatalf("stale nearest was admitted response=%+v", replaced)
 	}
 	replaceVectorPartitionLiveDocumentV1(t, fixture.collection, "0", []float32{0, 1})

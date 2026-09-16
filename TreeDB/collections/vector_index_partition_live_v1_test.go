@@ -833,10 +833,11 @@ func TestVectorIndexPartitionLiveFirstBindingCheckpointCommandWALReplayV1(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	reopenedManifest, err := reopened.PreparedVectorPartitionManifestWithContextV1(t.Context(), def.Name, manifest.Generation)
+	reopenedManifest, authorityToken, err := reopened.ActiveVectorPartitionManifestAndAuthorityTokenWithContextV1(t.Context(), def.Name, manifest.Generation)
 	if err != nil {
 		t.Fatal(err)
 	}
+	authorityToken.Release()
 	if err := reopened.EnsureVectorPartitionLiveBindingV1(t.Context(), reopenedManifest); err != nil {
 		t.Fatalf("recover durable binding after document replay: %v", err)
 	}
