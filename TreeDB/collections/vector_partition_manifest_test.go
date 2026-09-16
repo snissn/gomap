@@ -2497,7 +2497,9 @@ func TestCollectionVectorPartitionBuildingPublicationAndGCLinearize(t *testing.T
 		m.State, m.RouterGeneration, m.RouterAsset, m.ReadySetDigest = "building", 0, VectorPartitionAssetV1{}, ""
 		m.IndexName, m.IndexDefinitionDigest = def.Name, VectorIndexDefinitionDigestV1(def)
 		m.SourceGeneration, m.SourceChecksum, m.SourceSchemaHash, m.SourceRowCount = graph.BaseManifestGeneration, graph.BaseManifestChecksum, graph.BaseSchemaHash, uint64(graph.RowCount)
-		m.PartitionCount, m.Placements, m.Assets = 1, []VectorPartitionPlacementV1{{PartitionID: 0, GroupID: "raft-a"}}, m.Assets[:1]
+		m.PartitionCount, m.DomainCount = 1, 0
+		m.DomainPacks = nil
+		m.Placements, m.Assets = []VectorPartitionPlacementV1{{PartitionID: 0, GroupID: "raft-a"}}, m.Assets[:1]
 		m.Memberships = []VectorPartitionMembershipV1{{VectorOrdinal: 0, PartitionID: 0}, {VectorOrdinal: 1, PartitionID: 0}}
 		m.Assets[0].Ref, m.Assets[0].Bytes, m.Assets[0].Checksum = refs[0], uint64(refs[0].Length), hex.EncodeToString(sum[:])
 		m.Canonicalize()
