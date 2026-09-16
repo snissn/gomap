@@ -724,11 +724,25 @@ func TestVectorPartitionLiveColumnGraphCarrierLoadsWithoutRebuildV1(t *testing.T
 	replayCollection.UnregisterVectorIndex(otherManifest.IndexName)
 	replayIDs := [][]byte{[]byte("replayed")}
 	replayDocuments := [][]byte{[]byte(`{"time_us":3,"kind":"vector","did":"replayed","embedding":[0.5,0.5]}`)}
-	if _, err := replayCollection.insertBatchWithCommandWALIntent(replayIDs, replayDocuments, false, nil, nil, insertBatchExecutionOptions{returnResultIDs: true}); err != nil {
-		t.Fatal(err)
+	insertDone := make(chan error, 1)
+	go func() {
+		_, err := replayCollection.insertBatchWithCommandWALIntent(replayIDs, replayDocuments, false, nil, nil, insertBatchExecutionOptions{returnResultIDs: true})
+		insertDone <- err
+	}()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if currentState, ok := database.StateToken(); ok && currentState != pinnedState {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("mutation did not publish documents while coordinator pin was held")
+		}
+		runtime.Gosched()
 	}
-	if currentState, ok := database.StateToken(); !ok || currentState == pinnedState {
-		t.Fatalf("mutation did not advance DB state: current=%+v pinned=%+v", currentState, pinnedState)
+	select {
+	case err := <-insertDone:
+		t.Fatalf("mutation crossed coordinator pin: %v", err)
+	default:
 	}
 	if err := replayCollection.validateVectorPartitionLiveCoordinatorPinnedAuthorityV1(def.Name, manifest.Generation, pinnedState.CommitSeq, pinnedState.SystemRootPageID); err != nil {
 		t.Fatalf("coordinator-pinned authority: %v", err)
@@ -750,13 +764,25 @@ func TestVectorPartitionLiveColumnGraphCarrierLoadsWithoutRebuildV1(t *testing.T
 	}
 	shardPin.Release()
 	pin.Release()
+	select {
+	case err := <-insertDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("mutation did not complete after coordinator pin release")
+	}
 	if err := replayCollection.validateVectorPartitionLiveCoordinatorPinnedAuthorityV1(def.Name, manifest.Generation, pinnedState.CommitSeq, pinnedState.SystemRootPageID); !errors.Is(err, ErrVectorIndexPartitionLiveMismatchV1) {
 		t.Fatalf("released coordinator pin retained authority: %v", err)
 	}
 	if err := replayCollection.reconcileVectorPartitionLiveReplay(replayIDs); err != nil {
 		t.Fatal(err)
 	}
-	pin, err = loaded.acquireVectorPartitionLiveSearchPinV1(manifest)
+	current := replayCollection.registeredVectorIndex(def.Name)
+	if current == nil || current == loaded {
+		t.Fatalf("atomic carrier install current=%p old=%p", current, loaded)
+	}
+	pin, err = current.acquireVectorPartitionLiveSearchPinV1(manifest)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -766,13 +792,22 @@ func TestVectorPartitionLiveColumnGraphCarrierLoadsWithoutRebuildV1(t *testing.T
 		t.Fatalf("carrier-only replay results=%+v rebuilds=%d err=%v", results, rebuilds, searchErr)
 	}
 
-	if _, err := collection.Insert([]byte("c"), []byte(`{"time_us":3,"kind":"vector","did":"c","embedding":[0.5,0.5]}`)); err != nil {
+	if _, err := collection.Insert([]byte("c"), []byte(`{"time_us":3,"kind":"vector","did":"c","embedding":[0.3,0.7]}`)); err != nil {
 		t.Fatal(err)
 	}
 	collection.UnregisterVectorIndex(def.Name)
-	stale, staleStatus, err := collection.loadVectorPartitionLiveIndexForServingV1(def)
-	if err != nil || stale != nil || staleStatus.ExactFallbackReason != vectorIndexFallbackStaleDocumentRoot || rebuilds != 0 {
-		t.Fatalf("stale carrier loaded=%v status=%+v rebuilds=%d err=%v", stale != nil, staleStatus, rebuilds, err)
+	current, currentStatus, err := collection.loadVectorPartitionLiveIndexForServingV1(def)
+	if err != nil || current == nil || !currentStatus.Loaded || rebuilds != 0 {
+		t.Fatalf("current carrier loaded=%v status=%+v rebuilds=%d err=%v", current != nil, currentStatus, rebuilds, err)
+	}
+	pin, err = current.acquireVectorPartitionLiveSearchPinV1(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	results, _, searchErr = pin.SearchDomainV1(t.Context(), 0, []float32{0.3, 0.7}, VectorPartitionSearchOptionsV1{TopK: 1, EfSearch: 8})
+	pin.Release()
+	if searchErr != nil || len(results) != 1 || results[0].ID != "c" || rebuilds != 0 {
+		t.Fatalf("foreground carrier results=%+v rebuilds=%d err=%v", results, rebuilds, searchErr)
 	}
 }
 
@@ -1329,6 +1364,52 @@ func TestVectorIndexPartitionLiveForegroundDurableInstallsOnceV1(t *testing.T) {
 	if searchErr != nil || len(results) != 1 || results[0].ID != "a" || pin.StatusV1().Revision != 1 || pin.StatusV1().Coverage != expectedCoverage {
 		t.Fatalf("results=%+v status=%+v coverage=%d err=%v", results, pin.StatusV1(), expectedCoverage, searchErr)
 	}
+}
+
+func TestVectorIndexPartitionLiveAlternatesCollectionManagerDomainsV1(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
+	_, database, collectionA, _, manifest := newVectorPartitionLiveProductionFixtureV1(t)
+	defer database.Close()
+	if err := collectionA.EnsureVectorPartitionLiveBindingV1(t.Context(), manifest); err != nil {
+		t.Fatal(err)
+	}
+	collectionB, err := NewCollectionManager(database).OpenCollection("docs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	replace := func(collection *Collection, sequence int64, vector []float32) {
+		t.Helper()
+		replacement, err := json.Marshal(map[string]any{
+			"time_us": sequence, "kind": "vector", "did": "a", "embedding": vector,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if matched, err := collection.Replace([]byte("a"), replacement); err != nil || !matched {
+			t.Fatalf("replacement %d matched=%v err=%v", sequence, matched, err)
+		}
+	}
+	assertRevision := func(collection *Collection, wantRevision uint64, query []float32) {
+		t.Helper()
+		pin, err := collection.AcquireVectorPartitionLiveSearchPinV1(manifest)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer pin.Release()
+		results, _, searchErr := pin.SearchDomainV1(t.Context(), 0, query, VectorPartitionSearchOptionsV1{TopK: 1, EfSearch: 8, MaxStableIDBytes: 16})
+		if searchErr != nil || len(results) != 1 || results[0].ID != "a" || pin.StatusV1().Revision != wantRevision {
+			t.Fatalf("revision=%d results=%+v status=%+v err=%v", wantRevision, results, pin.StatusV1(), searchErr)
+		}
+	}
+
+	replace(collectionB, 1, []float32{0.2, 1})
+	assertRevision(collectionB, 1, []float32{0.2, 1})
+	replace(collectionA, 2, []float32{1, 0.2})
+	assertRevision(collectionA, 2, []float32{1, 0.2})
+	replace(collectionB, 3, []float32{0.3, 1})
+	assertRevision(collectionB, 3, []float32{0.3, 1})
+	collectionA.invalidateOtherVectorIndexDocumentCoverage()
+	assertRevision(collectionB, 3, []float32{0.3, 1})
 }
 
 func openVectorPartitionLiveDurableDBV1(t testing.TB, dir string) *backenddb.DB {

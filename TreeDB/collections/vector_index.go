@@ -1920,13 +1920,27 @@ func (c *Collection) invalidateOtherVectorIndexDocumentCoverage() {
 	if c == nil || c.writeDomain == nil || c.writeDomain.schemaCoordinator == nil {
 		return
 	}
-	for _, domain := range c.writeDomain.schemaCoordinator.snapshotDomains() {
+	coord := c.writeDomain.schemaCoordinator
+	shared := make(map[string]struct{})
+	for _, carrier := range coord.partitionLiveCarrierList() {
+		shared[carrier.name] = struct{}{}
+	}
+	for _, domain := range coord.snapshotDomains() {
 		if domain == c.writeDomain {
 			continue
 		}
 		domain.nativeVectorMutationMu.Lock()
 		domain.nativeVectorSearchActive.Store(false)
-		(&Collection{db: c.db, writeDomain: domain}).invalidateRegisteredVectorIndexDocumentCoverage()
+		other := &Collection{db: c.db, writeDomain: domain}
+		unlockPublication := other.lockNativeVectorIndexPublicationRead()
+		domain.nativeVectorIndexesMu.RLock()
+		for name, index := range domain.nativeVectorIndexes {
+			if _, ok := shared[name]; !ok {
+				index.invalidateSourceDocumentRoots()
+			}
+		}
+		domain.nativeVectorIndexesMu.RUnlock()
+		unlockPublication()
 		domain.nativeVectorMutationMu.Unlock()
 	}
 }
@@ -2103,18 +2117,32 @@ func (c *Collection) lockVectorIndexSynchronousPublicationAdmission() func() {
 }
 
 func (c *Collection) nativeVectorBaselineCovers(generation uint64) bool {
-	domain := c.writeDomain
-	domain.nativeVectorIndexesMu.RLock()
-	defer domain.nativeVectorIndexesMu.RUnlock()
-	if len(domain.nativeVectorIndexes) == 0 {
-		return false
+	carriers := c.registeredVectorPartitionLiveCarriersV1()
+	covered := false
+	var shared map[string]struct{}
+	if len(carriers) != 0 {
+		shared = make(map[string]struct{}, len(carriers))
 	}
-	for _, index := range domain.nativeVectorIndexes {
+	for _, index := range carriers {
+		covered = true
+		shared[index.name] = struct{}{}
 		if !index.coversSourceDocumentGeneration(generation) {
 			return false
 		}
 	}
-	return true
+	domain := c.writeDomain
+	domain.nativeVectorIndexesMu.RLock()
+	defer domain.nativeVectorIndexesMu.RUnlock()
+	for name, index := range domain.nativeVectorIndexes {
+		if _, ok := shared[name]; ok {
+			continue
+		}
+		covered = true
+		if !index.coversSourceDocumentGeneration(generation) {
+			return false
+		}
+	}
+	return covered
 }
 
 func (c *Collection) lockVectorIndexCoveragePersistence() func() {
