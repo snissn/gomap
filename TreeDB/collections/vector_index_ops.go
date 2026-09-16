@@ -241,6 +241,11 @@ func (c *Collection) registeredVectorIndex(name string) *VectorIndex {
 	if c == nil {
 		return nil
 	}
+	if coord := c.collectionSchemaCoordinator(); coord != nil {
+		if carrier := coord.partitionLiveCarrier(name); carrier != nil {
+			return carrier
+		}
+	}
 	if c.writeDomain != nil {
 		c.writeDomain.nativeVectorIndexesMu.RLock()
 		index := c.writeDomain.nativeVectorIndexes[name]
@@ -252,4 +257,15 @@ func (c *Collection) registeredVectorIndex(name string) *VectorIndex {
 	c.vectorIndexesMu.RLock()
 	defer c.vectorIndexesMu.RUnlock()
 	return c.vectorIndexes[name]
+}
+
+func (c *Collection) registeredVectorPartitionLiveCarriersV1() []*VectorIndex {
+	if c == nil {
+		return nil
+	}
+	coord := c.collectionSchemaCoordinator()
+	if coord == nil {
+		return nil
+	}
+	return coord.partitionLiveCarrierList()
 }

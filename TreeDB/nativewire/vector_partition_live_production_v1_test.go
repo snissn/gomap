@@ -35,6 +35,7 @@ type vectorPartitionLiveProductionDispatcherV1 struct {
 	recordCalls           bool
 	calls                 []VectorPartitionShardSearchRequestV1
 	reportedPackHeapBytes uint64
+	beforeDispatch        func(context.Context, VectorPartitionShardSearchRequestV1) error
 }
 
 func (d *vectorPartitionLiveProductionDispatcherV1) DispatchVectorPartitionShardSearchV1(ctx context.Context, request VectorPartitionShardSearchRequestV1) (VectorPartitionShardSearchResponseV1, error) {
@@ -43,9 +44,15 @@ func (d *vectorPartitionLiveProductionDispatcherV1) DispatchVectorPartitionShard
 		d.calls = append(d.calls, request)
 	}
 	service := d.services[request.TargetGroupID]
+	beforeDispatch := d.beforeDispatch
 	d.mu.Unlock()
 	if service == nil {
 		return VectorPartitionShardSearchResponseV1{}, ErrVectorPartitionCoordinatorUnavailable
+	}
+	if beforeDispatch != nil {
+		if err := beforeDispatch(ctx, request); err != nil {
+			return VectorPartitionShardSearchResponseV1{}, err
+		}
 	}
 	response, err := service.Search(ctx, request)
 	if err != nil {
@@ -64,6 +71,12 @@ func (d *vectorPartitionLiveProductionDispatcherV1) DispatchVectorPartitionShard
 func (d *vectorPartitionLiveProductionDispatcherV1) replace(services map[raftcluster.GroupID]*VectorPartitionShardSearchServiceV1) {
 	d.mu.Lock()
 	d.services = services
+	d.mu.Unlock()
+}
+
+func (d *vectorPartitionLiveProductionDispatcherV1) setBeforeDispatch(fn func(context.Context, VectorPartitionShardSearchRequestV1) error) {
+	d.mu.Lock()
+	d.beforeDispatch = fn
 	d.mu.Unlock()
 }
 
@@ -154,6 +167,69 @@ func TestVectorPartitionLiveProductionCoordinatorMutationAndColdReloadV1(t *test
 	}
 	initialStats := []CollectionVectorPartitionGenerationCacheStatsV1{sources[0].Stats(), sources[1].Stats()}
 
+	insertDone := make(chan error, 1)
+	var dispatchOnce sync.Once
+	var dispatchErr error
+	dispatcher.setBeforeDispatch(func(ctx context.Context, _ VectorPartitionShardSearchRequestV1) error {
+		dispatchOnce.Do(func() {
+			document, err := json.Marshal(map[string]any{"embedding": []float32{1, 0}})
+			if err != nil {
+				dispatchErr = err
+				return
+			}
+			go func() {
+				_, err := fixture.collection.Insert([]byte("0-concurrent"), document)
+				insertDone <- err
+			}()
+			deadline := time.NewTimer(5 * time.Second)
+			defer deadline.Stop()
+			poll := time.NewTicker(time.Millisecond)
+			defer poll.Stop()
+			for {
+				stored, getErr := fixture.collection.Get([]byte("0-concurrent"))
+				if getErr != nil {
+					dispatchErr = getErr
+					return
+				}
+				if stored != nil {
+					break
+				}
+				select {
+				case <-ctx.Done():
+					dispatchErr = ctx.Err()
+					return
+				case <-deadline.C:
+					dispatchErr = errors.New("concurrent insert did not publish its collection row")
+					return
+				case <-poll.C:
+				}
+			}
+			select {
+			case err := <-insertDone:
+				dispatchErr = fmt.Errorf("concurrent insert crossed coordinator pin: %v", err)
+			default:
+			}
+		})
+		return dispatchErr
+	})
+	pinned := search("concurrent-pinned", []float32{1, 0})
+	dispatcher.setBeforeDispatch(nil)
+	if len(pinned.Neighbors) != 1 || pinned.Neighbors[0].ID != "a" || pinned.LiveRevision != initial.LiveRevision || pinned.LiveCoverage != initial.LiveCoverage {
+		t.Fatalf("concurrent pinned response=%+v initial=%+v", pinned, initial)
+	}
+	select {
+	case err := <-insertDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("concurrent insert remained blocked after coordinator search")
+	}
+	concurrent := search("concurrent-visible", []float32{1, 0})
+	if len(concurrent.Neighbors) != 1 || concurrent.Neighbors[0].ID != "0-concurrent" || concurrent.LiveRevision <= pinned.LiveRevision || concurrent.LiveCoverage <= pinned.LiveCoverage {
+		t.Fatalf("concurrent visible response=%+v pinned=%+v", concurrent, pinned)
+	}
+
 	insertVectorPartitionLiveDocumentV1(t, fixture.collection, "0", []float32{1, 0})
 	inserted := search("insert", []float32{1, 0})
 	if len(inserted.Neighbors) != 1 || inserted.Neighbors[0].ID != "0" || inserted.Counters.DeltaResults != 1 || inserted.Counters.LiveDomainsSearched != 1 {
@@ -220,11 +296,10 @@ func BenchmarkVectorPartitionLiveProductionCoordinatorV1(b *testing.B) {
 	for _, cell := range []struct {
 		name       string
 		mutatedIDs int
-		write      bool
 		wantFirst  string
 	}{
-		{name: "baseline_empty_overlay_read_only", wantFirst: "a"},
-		{name: "live_overlay_1024_ids_update_search_1_to_1", mutatedIDs: 1024, write: true, wantFirst: "0-live"},
+		{name: "live_overlay_1_id_update_search_1_to_1", mutatedIDs: 1, wantFirst: "0-live"},
+		{name: "live_overlay_1024_ids_update_search_1_to_1", mutatedIDs: 1024, wantFirst: "0-live"},
 	} {
 		b.Run(cell.name, func(b *testing.B) {
 			fixture := newVectorPartitionLiveNativewireFixtureV1(b)
@@ -271,14 +346,12 @@ func BenchmarkVectorPartitionLiveProductionCoordinatorV1(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				if cell.write {
-					vector := []float32{.8, .2}
-					if i&1 != 0 {
-						vector = []float32{.79, .21}
-					}
-					insertVectorPartitionLiveDocumentV1(b, fixture.collection, fmt.Sprintf("live-%04d", 1+i%(cell.mutatedIDs-1)), vector)
-					writes++
+				vector := []float32{1, 0}
+				if i&1 != 0 {
+					vector = []float32{2, 0}
 				}
+				insertVectorPartitionLiveDocumentV1(b, fixture.collection, "0-live", vector)
+				writes++
 				started := time.Now()
 				response, err := coordinator.Search(b.Context(), request)
 				latencies[i] = uint64(time.Since(started))
@@ -317,6 +390,7 @@ func BenchmarkVectorPartitionLiveProductionCoordinatorV1(b *testing.B) {
 			b.ReportMetric(float64(searches)/elapsed, "searches/s")
 			b.ReportMetric(float64(p99), "p99-search-ns")
 			b.ReportMetric(float64(correctResults)/operations, "correct-results/op")
+			b.ReportMetric(float64(correctResults)/operations, "recall-at-1")
 			b.ReportMetric(float64(baseCandidates)/operations, "base-candidates/op")
 			b.ReportMetric(float64(deltaCandidates)/operations, "delta-candidates/op")
 			b.ReportMetric(float64(baseResults)/operations, "base-results/op")

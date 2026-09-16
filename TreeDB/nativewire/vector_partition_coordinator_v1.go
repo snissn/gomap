@@ -155,7 +155,7 @@ func (s CollectionVectorPartitionCoordinatorRouterSourceV1) acquireVectorPartiti
 	if err := s.Collection.EnsureVectorPartitionLiveBindingV1(ctx, manifest); err != nil {
 		return nil, err
 	}
-	return s.Collection.AcquireVectorPartitionLiveSearchPinV1(manifest)
+	return s.Collection.AcquireVectorPartitionLiveCoordinatorSearchPinV1(manifest)
 }
 
 // VectorPartitionShardSearchDispatcherV1 owns transport and connection

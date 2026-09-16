@@ -2074,14 +2074,18 @@ authoritative runtime gate. Darwin still compiles them and reports a skip.
 
 `BenchmarkVectorPartitionLiveProductionCoordinatorV1` is a bounded enabling
 fixture, not final H-C, paid, or service-capacity evidence. It compares the
-same production topology with an empty live overlay against 1,024 live owners
-and a fixed one-update/one-search sequence. The benchmark checks the expected
-first result and reports `ns/op`, `B/op`, `allocs/op`, p99 search latency,
+same production topology at one and 1,024 live owners with the identical fixed
+one-update/one-search sequence. The old snapshot-invalidation path is a
+correctness baseline, not a throughput comparison cell. The benchmark checks
+the expected first result and reports recall@1, `ns/op`, `B/op`, `allocs/op`, p99 search latency,
 achieved writes/searches, base/delta candidate work and result contribution,
 logical domains, selected packs, live owner/delta size, cutovers, observed
-storage bytes, reported retained pack heap, and exact-fallback,
+storage bytes, reported pack-heap change per operation, and exact-fallback,
 request-rebuild, and error counts. Use the fixed iteration count and three
 repetitions for comparable local results; Linux is required for execution.
+The profiling command records CPU, heap/retained-memory, and mutex-contention
+profiles; `/usr/bin/time -v` records peak RSS. These bounded local profiles do
+not replace the H-C qualification owned by #4249.
 
 ```sh
 GOWORK=off go test -count=1 ./TreeDB/collections -run 'TestVectorIndexPartitionLive|TestVectorPartitionHNSWExcludesMoreThanTopKBeforeAdmission|TestVectorPartitionSearcherExcludesStaleBeforeTopK'

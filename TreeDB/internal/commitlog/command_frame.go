@@ -72,14 +72,15 @@ const (
 
 	// Collection command frames carry deterministic user-level collection
 	// mutations. They do not encode physical root deltas.
-	CommandKindCollectionInsertBatchByID    CommandKind = 100
-	CommandKindCollectionDeleteBatchByID    CommandKind = 101
-	CommandKindCollectionUpdateBatchByID    CommandKind = 102
-	CommandKindCollectionRebuildVectorIndex CommandKind = 103
-	CommandKindCollectionReplaceSourceByID  CommandKind = 104
-	CommandKindCatalogCreateCollection      CommandKind = 200
-	CommandKindCatalogMutationPlaceholder   CommandKind = CommandKindCatalogCreateCollection
-	CommandKindDurablePrefixBarrier         CommandKind = 300
+	CommandKindCollectionInsertBatchByID      CommandKind = 100
+	CommandKindCollectionDeleteBatchByID      CommandKind = 101
+	CommandKindCollectionUpdateBatchByID      CommandKind = 102
+	CommandKindCollectionRebuildVectorIndex   CommandKind = 103
+	CommandKindCollectionReplaceSourceByID    CommandKind = 104
+	CommandKindCollectionPersistPartitionLive CommandKind = 105
+	CommandKindCatalogCreateCollection        CommandKind = 200
+	CommandKindCatalogMutationPlaceholder     CommandKind = CommandKindCatalogCreateCollection
+	CommandKindDurablePrefixBarrier           CommandKind = 300
 )
 
 // CommandScope identifies which logical TreeDB surface a command mutates.
@@ -2183,6 +2184,10 @@ func validateCommandEnvelopeIdentity(env CommandEnvelope) error {
 		if env.Scope != CommandScopeCollection || env.PayloadFormat != PayloadFormatCollectionRebuildVectorIndexV1 {
 			return ErrCorrupt
 		}
+	case CommandKindCollectionPersistPartitionLive:
+		if env.Scope != CommandScopeCollection || env.PayloadFormat != PayloadFormatCollectionRebuildVectorIndexV1 {
+			return ErrCorrupt
+		}
 	case CommandKindCatalogCreateCollection:
 		if env.Scope != CommandScopeCatalog || env.PayloadFormat != PayloadFormatCatalogCreateCollectionV1 {
 			return ErrCorrupt
@@ -2218,7 +2223,7 @@ func validateCommandEnvelopePayload(env CommandEnvelope) error {
 		}
 		_, err := DecodeCollectionReplaceSourceByIDPayload(env.Payload)
 		return err
-	case CommandKindCollectionRebuildVectorIndex:
+	case CommandKindCollectionRebuildVectorIndex, CommandKindCollectionPersistPartitionLive:
 		return validateCollectionRebuildVectorIndexPayload(env.Payload)
 	case CommandKindCatalogCreateCollection:
 		return validateCatalogCreateCollectionPayload(env.Payload)

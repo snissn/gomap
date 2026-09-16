@@ -2392,6 +2392,7 @@ Current command kinds:
 | 102 | `CollectionUpdateBatchByID` | collection | `CollectionUpdateBatchByIDV1` or `CollectionTypedBatchByIDV1` | deterministic collection update/replace-by-id batch |
 | 103 | `CollectionRebuildVectorIndex` | collection | `CollectionRebuildVectorIndexV1` | deterministic collection vector-index rebuild command |
 | 104 | `CollectionReplaceSourceByID` | collection | `CollectionReplaceSourceByIDV1` or `CollectionTypedSourceByIDV1` | atomic explicit delete-and-reinsert source command |
+| 105 | `CollectionPersistPartitionLive` | collection | `CollectionRebuildVectorIndexV1` | deterministic standalone partition-live carrier publication; never authorizes a collection-row or column-graph rebuild |
 | 200 | `CatalogCreateCollection` | catalog | `CatalogCreateCollectionV1` | deterministic catalog create-collection command; old placeholder name is an alias only |
 | 300 | `DurablePrefixBarrier` | system | `DurablePrefixBarrierV1` | active V2 empty durable-frontier record used by explicit sync with no user mutation |
 
@@ -2547,13 +2548,19 @@ changed but vector values did not. Older coverage versions are not migrated in
 this pre-alpha format; the index must be rebuilt.
 
 For a standalone ready vector-partition generation, `meta` may also contain the
-optional `partition_live` object at version `1`. It is part of the same atomic
-native-runtime snapshot, not a sidecar or a second mutation log. The object
+optional `partition_live` object at version `1`. A `native_runtime` index stores
+it in its existing graph root. A `column_graph` index stores the same object in
+an otherwise graph-empty `<collection>/vector-index/<index_name>` live-overlay
+carrier; immutable column-graph/router/search-pack assets remain the base and
+are not copied into that root. In either case the live object is part of one
+atomic vector-index snapshot, not a sidecar or a second mutation log. The object
 persists the immutable partition binding (index-definition digest, source
 identity, partition generation, pack-to-domain mapping, and canonical
 representatives covering every mapped domain) separately from the mutable live
-revision and exact source
-coverage. It also persists the cutover count, stable-ID ownership/tombstones,
+revision and exact collection document-generation coverage. The immutable
+source generation and collection document generation are separate clocks and
+are never compared numerically. The object also persists the cutover count,
+stable-ID ownership/tombstones,
 and one nested vector-index snapshot per nonempty logical-domain delta.
 
 Open validates the V1 tag, exact parent source coverage, bounded owner and node
@@ -2814,6 +2821,16 @@ longer requires a
 physical rebuild, must still publish a no-op command-WAL boundary and advance
 `AppliedCommandLSN`. Corrupt payloads, unsupported payload versions, and
 undefined replay outcomes fail closed before advancing `AppliedCommandLSN`.
+
+Command kind `CollectionPersistPartitionLive` (105) deliberately reuses this
+bounded name payload, but its semantics are narrower than kind 103. Replay may
+restore or publish only the `partition_live` carrier for the exact active ready
+manifest and its already-published router representatives. It must not scan
+collection rows, fold column assets, or rebuild either a native graph or a
+`column_graph`. Missing or mismatched manifest/router identity fails recovery
+closed. The first empty carrier command establishes the durable binding;
+subsequent ordinary collection mutation commands replay through the registered
+carrier to reconstruct its live revision and coverage.
 
 `ExternalRefs`, `Preconditions`, and `ResultAssertions` are length-delimited
 sections so PR1 can harden framing before replay uses them. The PR1 external-ref

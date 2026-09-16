@@ -470,6 +470,10 @@ func TestReplayFixtureCopyOmitsCoordinationLocks(t *testing.T) {
 }
 
 func copyColumnStoreCommandWALReplayBenchmarkDirM10C(tb testing.TB, src, dst string) {
+	copyTypedStorageCommandWALReplayBenchmarkDirM10C(tb, src, dst)
+}
+
+func copyTypedStorageCommandWALReplayBenchmarkDirM10C(tb testing.TB, src, dst string) {
 	tb.Helper()
 	if err := filepath.WalkDir(src, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {

@@ -685,6 +685,39 @@ func TestCommandWALFormatV1CollectionRebuildVectorIndex(t *testing.T) {
 	}
 }
 
+func TestCommandWALFormatV1CollectionPersistPartitionLive(t *testing.T) {
+	payload, err := EncodeCollectionRebuildVectorIndexPayload("users", "embedding_graph")
+	if err != nil {
+		t.Fatal(err)
+	}
+	frame, err := EncodeCommandFrame(CommandEnvelope{
+		LSN: 16, Kind: CommandKindCollectionPersistPartitionLive,
+		Scope: CommandScopeCollection, PayloadFormat: PayloadFormatCollectionRebuildVectorIndexV1,
+		Payload: payload,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := DecodeCommandFrame(frame)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := DecodeCollectionRebuildVectorIndexPayload(got.Payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Kind != CommandKindCollectionPersistPartitionLive || decoded.Collection != "users" || decoded.IndexName != "embedding_graph" {
+		t.Fatalf("decoded partition-live command=%+v payload=%+v", got, decoded)
+	}
+	if _, err := EncodeCommandFrame(CommandEnvelope{
+		LSN: 17, Kind: CommandKindCollectionPersistPartitionLive,
+		Scope: CommandScopeRawKV, PayloadFormat: PayloadFormatCollectionRebuildVectorIndexV1,
+		Payload: payload,
+	}); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("wrong-scope error=%v, want ErrCorrupt", err)
+	}
+}
+
 func TestCommandWALFormatGoldenV1CatalogCreateCollection(t *testing.T) {
 	payload, err := EncodeCatalogCreateCollectionPayload("users", []byte(`{"version":1,"name":"users"}`))
 	if err != nil {

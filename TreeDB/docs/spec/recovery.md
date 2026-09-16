@@ -250,6 +250,18 @@ publisher with the typed projection. Delete and insertion are never separate
 commands or applied frontiers. Format 10 remains the legacy JSON/delete-only
 source encoding; no new recovery log or watermark is introduced.
 
+Standalone vector-partition live bindings use
+`CollectionPersistPartitionLive` (kind 105) with the bounded collection/index
+name payload shared by vector-index rebuild commands. Its replay handler is
+carrier-only: it reads the exact active ready immutable manifest, restores or
+publishes the matching empty live-overlay carrier from its existing router, and
+then lets later collection mutation commands rebuild live deltas through normal
+registered-index reconciliation. Replay never scans collection rows and never
+folds or rebuilds a `column_graph`. Missing, stale, or corrupt carrier coverage,
+or unavailable/mismatched active manifest or router identity, fails closed.
+The manifest source generation and the carrier's collection document-generation
+coverage are independent clocks and are validated separately.
+
 Legacy raw redo-journal replay is skipped only when durability mode is
 `DurabilityWALOffRelaxed`.
 

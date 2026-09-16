@@ -100,6 +100,10 @@ func (idx *VectorIndex) SaveNativeSnapshot() (VectorIndexLoadStatus, error) {
 }
 
 func (idx *VectorIndex) saveNativeSnapshotWithCoverageLocked() (VectorIndexLoadStatus, error) {
+	return idx.saveNativeSnapshotWithCoverageLockedAndCommandWALIntent(nil)
+}
+
+func (idx *VectorIndex) saveNativeSnapshotWithCoverageLockedAndCommandWALIntent(replay *backenddb.CommandWALIntent) (VectorIndexLoadStatus, error) {
 	status := VectorIndexLoadStatus{}
 	c := idx.collection
 	unlockMutation := c.lockMutation()
@@ -117,7 +121,7 @@ func (idx *VectorIndex) saveNativeSnapshotWithCoverageLocked() (VectorIndexLoadS
 		return status, err
 	}
 	idx.recordSourceDocumentState(sourceDocumentGeneration, sourceDocumentState)
-	return idx.saveNativeSnapshotPrepared()
+	return idx.saveNativeSnapshotPreparedWithCommandWALIntent(replay)
 }
 
 func staleNativeSnapshotSaveStatus(c *Collection, idx *VectorIndex) (VectorIndexLoadStatus, bool, error) {
@@ -184,7 +188,7 @@ func (idx *VectorIndex) saveNativeSnapshotPreparedWithCommandWALIntent(replay *b
 	}
 	c.meta = catalog.meta
 	def, ok := findVectorIndex(catalog.meta.VectorIndexes, idx.name)
-	if !ok || !vectorIndexDefinitionUsesNativeRuntime(def) {
+	if !ok || !vectorIndexDefinitionUsesPersistentRuntime(def, idx) {
 		return status, fmt.Errorf("%w: %q", errVectorIndexNotDeclared, idx.name)
 	}
 	if reason := idx.validateNativeSnapshotDefinition(def); reason != "" {
@@ -221,7 +225,12 @@ func (idx *VectorIndex) saveNativeSnapshotPreparedWithCommandWALIntent(replay *b
 	if pointerized {
 		defer resetCollectionRunTable(publishTable)
 	}
-	intent, err := c.newCollectionRebuildVectorIndexCommandWALIntent(idx.name, replay)
+	var intent *backenddb.CommandWALIntent
+	if idx.isPartitionLiveCarrier() {
+		intent, err = c.newCollectionPersistPartitionLiveCommandWALIntent(idx.name, replay)
+	} else {
+		intent, err = c.newCollectionRebuildVectorIndexCommandWALIntent(idx.name, replay)
+	}
 	if err != nil {
 		resetCollectionRunTable(table)
 		return status, err
@@ -323,9 +332,14 @@ func (c *Collection) installNativeVectorIndexCandidate(candidate *VectorIndex, e
 		return nil, errCollectionNotFound
 	}
 	def, ok := findVectorIndex(catalog.meta.VectorIndexes, candidate.name)
-	if !ok || !vectorIndexDefinitionUsesNativeRuntime(def) {
+	candidate.mu.RLock()
+	hasPartitionLive := candidate.partitionLive != nil
+	candidate.mu.RUnlock()
+	partitionLiveCarrier := ok && def.Strategy == VectorIndexStrategyColumnGraph && hasPartitionLive
+	if !ok || !vectorIndexDefinitionUsesNativeRuntime(def) && !partitionLiveCarrier {
 		return nil, fmt.Errorf("%w: %q", errVectorIndexNotDeclared, candidate.name)
 	}
+	candidate.setPartitionLiveCarrier(partitionLiveCarrier)
 	activeRoot := catalog.rootID(collectionVectorIndexRootName(catalog.meta.Name, def.Name))
 	documentGeneration, err := vectorIndexDocumentGeneration(snap, catalog)
 	if err != nil {
@@ -379,7 +393,7 @@ func (c *Collection) installNativeVectorIndexCandidate(candidate *VectorIndex, e
 	}
 	postDef, ok := findVectorIndex(postCatalog.meta.VectorIndexes, candidate.name)
 	postRoot := postCatalog.rootID(collectionVectorIndexRootName(postCatalog.meta.Name, candidate.name))
-	if !ok || !vectorIndexDefinitionUsesNativeRuntime(postDef) || candidate.validateNativeSnapshotDefinition(postDef) != "" || postRoot != expectedRoot {
+	if !ok || !vectorIndexDefinitionUsesPersistentRuntime(postDef, candidate) || candidate.validateNativeSnapshotDefinition(postDef) != "" || postRoot != expectedRoot {
 		_ = postInstall.Close()
 		rollback()
 		return nil, fmt.Errorf("%w: index %q changed during install", errVectorIndexStaleNativeRoot, candidate.name)
@@ -408,6 +422,10 @@ func (c *Collection) installNativeVectorIndexCandidate(candidate *VectorIndex, e
 // rebuild/shrink publication should continue to use SaveNativeSnapshot so
 // removed graph keys cannot survive.
 func (idx *VectorIndex) SaveNativeDeltaSnapshot() (VectorIndexLoadStatus, error) {
+	return idx.saveNativeDeltaSnapshotWithCommandWALIntent(nil)
+}
+
+func (idx *VectorIndex) saveNativeDeltaSnapshotWithCommandWALIntent(replay *backenddb.CommandWALIntent) (VectorIndexLoadStatus, error) {
 	status := VectorIndexLoadStatus{}
 	if idx == nil {
 		return status, errors.New("collections: vector index is nil")
@@ -424,7 +442,7 @@ func (idx *VectorIndex) SaveNativeDeltaSnapshot() (VectorIndexLoadStatus, error)
 	unlockCoverage := c.lockVectorIndexCoveragePersistence()
 	defer unlockCoverage()
 	if idx.needsNativeFullSnapshotAutoPersist() {
-		return idx.saveNativeSnapshotWithCoverageLocked()
+		return idx.saveNativeSnapshotWithCoverageLockedAndCommandWALIntent(replay)
 	}
 	unlockMutation := c.lockMutation()
 	defer unlockMutation.Unlock()
@@ -456,7 +474,7 @@ func (idx *VectorIndex) SaveNativeDeltaSnapshot() (VectorIndexLoadStatus, error)
 	}
 	c.meta = catalog.meta
 	def, ok := findVectorIndex(catalog.meta.VectorIndexes, idx.name)
-	if !ok || !vectorIndexDefinitionUsesNativeRuntime(def) {
+	if !ok || !vectorIndexDefinitionUsesPersistentRuntime(def, idx) {
 		return status, fmt.Errorf("%w: %q", errVectorIndexNotDeclared, idx.name)
 	}
 	if reason := idx.validateNativeSnapshotDefinition(def); reason != "" {
@@ -496,7 +514,12 @@ func (idx *VectorIndex) SaveNativeDeltaSnapshot() (VectorIndexLoadStatus, error)
 	if pointerized {
 		defer resetCollectionRunTable(publishTable)
 	}
-	intent, err := c.newCollectionRebuildVectorIndexCommandWALIntent(idx.name, nil)
+	var intent *backenddb.CommandWALIntent
+	if idx.isPartitionLiveCarrier() {
+		intent, err = c.newCollectionPersistPartitionLiveCommandWALIntent(idx.name, replay)
+	} else {
+		intent, err = c.newCollectionRebuildVectorIndexCommandWALIntent(idx.name, replay)
+	}
 	if err != nil {
 		resetCollectionRunTable(table)
 		return status, err
@@ -727,6 +750,14 @@ func (c *Collection) LoadNativeVectorIndexSnapshot(opts VectorIndexOptions) (*Ve
 		status.ExactFallbackReason = reason
 		return nil, status, nil
 	}
+	if def.Strategy == VectorIndexStrategyColumnGraph && snapshot.Meta.PartitionLive == nil {
+		status.ExactFallbackReason = vectorIndexFallbackMetaMismatch
+		return nil, status, nil
+	}
+	if !vectorIndexDefinitionUsesNativeRuntime(def) && def.Strategy != VectorIndexStrategyColumnGraph {
+		status.ExactFallbackReason = vectorIndexFallbackMetaMismatch
+		return nil, status, nil
+	}
 	matchesDocumentRoots, err := vectorIndexSnapshotMatchesDocumentRoots(snapshot.Meta, catalog, snap)
 	if err != nil {
 		return nil, status, err
@@ -743,12 +774,15 @@ func (c *Collection) LoadNativeVectorIndexSnapshot(opts VectorIndexOptions) (*Ve
 		status.ExactFallbackReason = reason
 		return nil, status, nil
 	}
+	index.setPartitionLiveCarrier(def.Strategy == VectorIndexStrategyColumnGraph)
 	if index.validateNativeSnapshotDefinition(def) != "" {
 		status.ExactFallbackReason = vectorIndexFallbackMetaMismatch
 		return nil, status, nil
 	}
-	if err := populateNativeScalarColumnsFromSecondaryIndexes(index, snap, catalog); err != nil {
-		return nil, status, fmt.Errorf("%w: native scalar columns: %v", ErrVectorIndexSearchUnavailable, err)
+	if def.Strategy != VectorIndexStrategyColumnGraph {
+		if err := populateNativeScalarColumnsFromSecondaryIndexes(index, snap, catalog); err != nil {
+			return nil, status, fmt.Errorf("%w: native scalar columns: %v", ErrVectorIndexSearchUnavailable, err)
+		}
 	}
 	status.RootID = rootID
 	index.recordLoadedSnapshot(rootID, bytesDisk)

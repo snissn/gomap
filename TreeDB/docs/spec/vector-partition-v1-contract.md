@@ -111,7 +111,7 @@ The production standalone collection adapter may keep one active immutable M1
 base searchable across acknowledged document mutations by binding it to the
 collection's already registered `VectorIndex`. This is not a second mutable
 index. The same index owns the immutable-manifest binding, monotonically
-increasing live revision, exact source-generation coverage, per-logical-domain
+increasing live revision, exact collection document-generation coverage, per-logical-domain
 deltas, stable-ID ownership/tombstones, and captured composite search views.
 The extension is deliberately absent from replicated/Raft lifecycle serving;
 requests with no standalone live binding retain the immutable V1 behavior.
@@ -121,10 +121,13 @@ The binding preserves the immutable base identity
 domain-pack mapping)`. Live revision and coverage are distinct proof fields and
 must never rewrite that identity. A standalone request pins one combined
 identity before fanout and sends the same revision and coverage to every shard.
+A collection mutation that commits while this coordinator pin is active waits
+at live-overlay publication; every local shard therefore opens the pinned
+revision, and mutation acknowledgement completes after the request releases it.
 A shard with a live-bound lease rejects a request that omits or mismatches that
 identity. Cold authority reacquisition may accept a newer current collection
-source only when the durable binding and recovered/replayed overlay cover it
-exactly; unrelated database state-token changes do not invalidate that proof.
+document state only when the durable binding and recovered/replayed overlay
+cover it exactly; unrelated database state-token changes do not invalidate that proof.
 Missing, stale, partial, or corrupt coverage fails closed.
 
 An acknowledged insert, embedding replacement, delete, or logical-domain move

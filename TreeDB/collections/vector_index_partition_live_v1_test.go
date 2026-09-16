@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
 	internalrouter "github.com/snissn/gomap/TreeDB/internal/vectorpartition"
 )
@@ -29,7 +30,7 @@ func TestVectorIndexPartitionLiveMutationMoveAndDeleteV1(t *testing.T) {
 		{domain: 0, vector: []float32{1, 0}},
 		{domain: 1, vector: []float32{0, 1}},
 	}
-	if err := idx.bindVectorPartitionLiveV1(manifest, representatives); err != nil {
+	if err := idx.bindVectorPartitionLiveV1(manifest, manifest.SourceGeneration, representatives); err != nil {
 		t.Fatal(err)
 	}
 
@@ -91,7 +92,7 @@ func TestVectorIndexPartitionLiveSnapshotRecoveryAndMismatchV1(t *testing.T) {
 		{domain: 0, vector: []float32{1, 0}},
 		{domain: 0, vector: []float32{.8, .2}},
 	}
-	if err := idx.bindVectorPartitionLiveV1(manifest, reps); err != nil {
+	if err := idx.bindVectorPartitionLiveV1(manifest, manifest.SourceGeneration, reps); err != nil {
 		t.Fatal(err)
 	}
 	idx.mu.Lock()
@@ -147,7 +148,7 @@ func TestVectorIndexPartitionLiveSnapshotRecoveryAndMismatchV1(t *testing.T) {
 func TestVectorIndexPartitionLivePinnedReaderAcrossRevisionV1(t *testing.T) {
 	idx, _ := newVectorIndex(nil, VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4, EfConstruction: 16, EfSearch: 8})
 	manifest := VectorPartitionManifestV1{IndexName: "embedding", IndexDefinitionDigest: "definition", SourceGeneration: 3, SourceChecksum: 4, SourceSchemaHash: 5, SourceRowCount: 2, Generation: 7, DomainCount: 2, PartitionCount: 2, DomainPacks: []VectorPartitionDomainPackV1{{DomainID: 0, PackID: 0}, {DomainID: 1, PackID: 1}}}
-	if err := idx.bindVectorPartitionLiveV1(manifest, []vectorPartitionLiveRepresentativeV1{{domain: 0, vector: []float32{1, 0}}, {domain: 1, vector: []float32{0, 1}}}); err != nil {
+	if err := idx.bindVectorPartitionLiveV1(manifest, manifest.SourceGeneration, []vectorPartitionLiveRepresentativeV1{{domain: 0, vector: []float32{1, 0}}, {domain: 1, vector: []float32{0, 1}}}); err != nil {
 		t.Fatal(err)
 	}
 	idx.mu.Lock()
@@ -180,7 +181,7 @@ func TestVectorIndexPartitionLiveGenerationCutoverKeepsOldPinV1(t *testing.T) {
 	}
 	oldManifest := VectorPartitionManifestV1{IndexName: "embedding", IndexDefinitionDigest: "definition", SourceGeneration: 3, SourceChecksum: 4, SourceSchemaHash: 5, SourceRowCount: 1, Generation: 7, DomainCount: 1, PartitionCount: 1, DomainPacks: []VectorPartitionDomainPackV1{{DomainID: 0, PackID: 0}}}
 	reps := []vectorPartitionLiveRepresentativeV1{{domain: 0, vector: []float32{1, 0}}}
-	if err := idx.bindVectorPartitionLiveV1(oldManifest, reps); err != nil {
+	if err := idx.bindVectorPartitionLiveV1(oldManifest, oldManifest.SourceGeneration, reps); err != nil {
 		t.Fatal(err)
 	}
 	idx.mu.Lock()
@@ -199,7 +200,8 @@ func TestVectorIndexPartitionLiveGenerationCutoverKeepsOldPinV1(t *testing.T) {
 	newManifest.Generation = 8
 	newManifest.SourceGeneration = 4
 	newManifest.SourceChecksum = 6
-	if err := idx.bindVectorPartitionLiveV1(newManifest, reps); !errors.Is(err, ErrVectorIndexPartitionLiveMismatchV1) {
+	newCoverage := uint64(41)
+	if err := idx.bindVectorPartitionLiveV1(newManifest, newCoverage, reps); !errors.Is(err, ErrVectorIndexPartitionLiveMismatchV1) {
 		t.Fatalf("cutover without exact source err=%v", err)
 	}
 	if pin, err := idx.acquireVectorPartitionLiveSearchPinV1(oldManifest); err != nil {
@@ -210,9 +212,9 @@ func TestVectorIndexPartitionLiveGenerationCutoverKeepsOldPinV1(t *testing.T) {
 
 	idx.mu.Lock()
 	idx.sourceDocumentRootsValid = true
-	idx.sourceDocumentGeneration = newManifest.SourceGeneration
+	idx.sourceDocumentGeneration = newCoverage
 	idx.mu.Unlock()
-	if err := idx.bindVectorPartitionLiveV1(newManifest, reps); err != nil {
+	if err := idx.bindVectorPartitionLiveV1(newManifest, newCoverage, reps); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := idx.acquireVectorPartitionLiveSearchPinV1(oldManifest); !errors.Is(err, ErrVectorIndexPartitionLiveMismatchV1) {
@@ -223,7 +225,7 @@ func TestVectorIndexPartitionLiveGenerationCutoverKeepsOldPinV1(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer newPin.Release()
-	if status := newPin.StatusV1(); status.Generation != newManifest.Generation || status.Revision != 0 || status.Coverage != newManifest.SourceGeneration || status.MutatedIDs != 0 || status.LiveIDs != 0 {
+	if status := newPin.StatusV1(); status.Generation != newManifest.Generation || status.Revision != 0 || status.Coverage != newCoverage || status.MutatedIDs != 0 || status.LiveIDs != 0 {
 		t.Fatalf("new generation status=%+v", status)
 	}
 	oldResults, _, oldErr := oldPin.SearchDomainV1(t.Context(), 0, []float32{1, 0}, VectorPartitionSearchOptionsV1{TopK: 1, EfSearch: 8})
@@ -240,7 +242,7 @@ func TestVectorIndexPartitionLiveGenerationCutoverKeepsOldPinV1(t *testing.T) {
 func TestVectorIndexPartitionLiveRepeatedUpdateCutoverKeepsPinnedViewV1(t *testing.T) {
 	idx, _ := newVectorIndex(nil, VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4, EfConstruction: 16, EfSearch: 8})
 	manifest := VectorPartitionManifestV1{IndexName: "embedding", IndexDefinitionDigest: "definition", SourceGeneration: 3, SourceChecksum: 4, SourceSchemaHash: 5, SourceRowCount: 1, Generation: 7, DomainCount: 1, PartitionCount: 1, DomainPacks: []VectorPartitionDomainPackV1{{DomainID: 0, PackID: 0}}}
-	if err := idx.bindVectorPartitionLiveV1(manifest, []vectorPartitionLiveRepresentativeV1{{domain: 0, vector: []float32{1, 0}}}); err != nil {
+	if err := idx.bindVectorPartitionLiveV1(manifest, manifest.SourceGeneration, []vectorPartitionLiveRepresentativeV1{{domain: 0, vector: []float32{1, 0}}}); err != nil {
 		t.Fatal(err)
 	}
 	idx.mu.Lock()
@@ -295,6 +297,214 @@ func TestVectorIndexPartitionLiveRepeatedUpdateCutoverKeepsPinnedViewV1(t *testi
 	}
 }
 
+func TestVectorIndexPartitionLiveCutoverPublishesOncePerDomainV1(t *testing.T) {
+	idx, _ := newVectorIndex(nil, VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4, EfConstruction: 16, EfSearch: 8})
+	manifest := VectorPartitionManifestV1{IndexName: "embedding", IndexDefinitionDigest: "definition", SourceGeneration: 3, SourceChecksum: 4, SourceSchemaHash: 5, SourceRowCount: 3, Generation: 7, DomainCount: 1, PartitionCount: 1, DomainPacks: []VectorPartitionDomainPackV1{{DomainID: 0, PackID: 0}}}
+	if err := idx.bindVectorPartitionLiveV1(manifest, manifest.SourceGeneration, []vectorPartitionLiveRepresentativeV1{{domain: 0, vector: []float32{1, 0}}}); err != nil {
+		t.Fatal(err)
+	}
+	idx.mu.Lock()
+	idx.partitionLive.nodeCapacity = 4
+	idx.mu.Unlock()
+	update := func(id string, vector []float32) {
+		t.Helper()
+		idx.mu.Lock()
+		defer idx.mu.Unlock()
+		if err := idx.preflightVectorPartitionMutationLocked([]byte(id), vector); err != nil {
+			t.Fatal(err)
+		}
+		if err := idx.reconcileVectorPartitionMutationLocked([]byte(id), vector); err != nil {
+			t.Fatal(err)
+		}
+	}
+	update("a", []float32{1, 0})
+	update("b", []float32{.9, .1})
+	update("c", []float32{.8, .2})
+	update("a", []float32{.7, .3})
+	update("b", []float32{.6, .4}) // compacts three owners before this insert
+
+	idx.mu.RLock()
+	publications := idx.partitionLive.cutoverPublications
+	cutovers := idx.partitionLive.cutovers
+	idx.mu.RUnlock()
+	if cutovers != 1 || publications != 1 {
+		t.Fatalf("cutovers=%d publications=%d, want one publication for one rebuilt domain", cutovers, publications)
+	}
+}
+
+func TestVectorPartitionLiveColumnGraphCarrierLoadsWithoutRebuildV1(t *testing.T) {
+	rows := []columnGraphRebuildInputRowV2A{{id: "a", vector: []float32{1, 0}}, {id: "b", vector: []float32{0, 1}}}
+	_, database, collection, def := openColumnGraphTypedColumnVectorTestCollection1782(t, 2, 2, rows)
+	defer database.Close()
+	if _, err := collection.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatal(err)
+	}
+	rebuilds := 0
+	restoreHook := setColumnVectorGraphRebuildBeforeBuildTestHook(func() { rebuilds++ })
+	defer restoreHook()
+
+	missing, missingStatus, err := collection.loadVectorPartitionLiveIndexForServingV1(def)
+	if err != nil || missing != nil || missingStatus.ExactFallbackReason != vectorIndexFallbackMissingGraphRoot || rebuilds != 0 {
+		t.Fatalf("missing carrier loaded=%v status=%+v rebuilds=%d err=%v", missing != nil, missingStatus, rebuilds, err)
+	}
+	source, _, err := collection.ReadVectorPartitionRouterSourceRowsV1(def.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest := VectorPartitionManifestV1{
+		IndexName: def.Name, IndexDefinitionDigest: VectorIndexDefinitionDigestV1(def),
+		SourceGeneration: source.Generation, SourceChecksum: source.Checksum, SourceSchemaHash: source.SchemaHash, SourceRowCount: source.RowCount,
+		Generation: source.Generation + 100, PartitionCount: 1, DomainCount: 1,
+		DomainPacks: []VectorPartitionDomainPackV1{{DomainID: 0, PackID: 0}},
+	}
+	carrier, err := newVectorIndex(collection, vectorIndexOptionsFromDefinition(def))
+	if err != nil {
+		t.Fatal(err)
+	}
+	carrier.setPartitionLiveCarrier(true)
+	generation, state, err := collection.currentVectorIndexDocumentStateWithWriteDomainLockState(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	carrier.recordSourceDocumentState(generation, state)
+	if err := carrier.bindVectorPartitionLiveV1(manifest, generation, []vectorPartitionLiveRepresentativeV1{{domain: 0, vector: []float32{1, 0}}}); err != nil {
+		t.Fatal(err)
+	}
+	collection.registerVectorIndexCurrentCatalog(carrier)
+	if status, err := carrier.SaveNativeDeltaSnapshot(); err != nil || !status.Loaded {
+		t.Fatalf("persist carrier status=%+v err=%v", status, err)
+	}
+	collection.UnregisterVectorIndex(def.Name)
+	loaded, status, err := collection.loadVectorPartitionLiveIndexForServingV1(def)
+	if err != nil || loaded == nil || !status.Loaded || !loaded.isPartitionLiveCarrier() || rebuilds != 0 {
+		t.Fatalf("loaded carrier=%v status=%+v rebuilds=%d err=%v", loaded != nil, status, rebuilds, err)
+	}
+	replayCollection, err := newCommandWALReplayCollectionManager(database).OpenCollection("docs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := replayCollection.registeredVectorIndex(def.Name); got != loaded {
+		t.Fatalf("replay manager carrier=%p want shared carrier=%p", got, loaded)
+	}
+	pin, err := replayCollection.AcquireVectorPartitionLiveCoordinatorSearchPinV1(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	coordinatorStatus := pin.StatusV1()
+	loaded.mu.RLock()
+	pinnedState := loaded.sourceDocumentState
+	loaded.mu.RUnlock()
+	otherManifest := manifest
+	otherManifest.IndexName = "other_embedding_graph"
+	otherManifest.IndexDefinitionDigest = "other-definition"
+	other, err := newVectorIndex(replayCollection, VectorIndexOptions{
+		Name: otherManifest.IndexName, Field: def.Field, Metric: def.Metric, Dimensions: def.Dimensions,
+		M: def.M, EfConstruction: def.EfConstruction, EfSearch: def.EfSearch,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	other.recordSourceDocumentState(generation, pinnedState)
+	if err := other.bindVectorPartitionLiveV1(otherManifest, generation, []vectorPartitionLiveRepresentativeV1{{domain: 0, vector: []float32{1, 0}}}); err != nil {
+		t.Fatal(err)
+	}
+	other.mu.Lock()
+	other.partitionLive.bindingDurable = true
+	other.mu.Unlock()
+	replayCollection.registerVectorIndexCurrentCatalog(other)
+	if replayCollection.vectorPartitionLiveCoordinatorBindingPinnedV1(otherManifest) {
+		t.Fatal("index A coordinator pin authorized index B binding")
+	}
+	if err := replayCollection.validateVectorPartitionLiveCoordinatorPinnedAuthorityV1(otherManifest.IndexName, otherManifest.Generation, pinnedState.CommitSeq, pinnedState.SystemRootPageID); !errors.Is(err, ErrVectorIndexPartitionLiveMismatchV1) {
+		t.Fatalf("index A coordinator pin authorized index B authority: %v", err)
+	}
+	replayCollection.UnregisterVectorIndex(otherManifest.IndexName)
+	replayIDs := [][]byte{[]byte("replayed")}
+	replayDocuments := [][]byte{[]byte(`{"time_us":3,"kind":"vector","did":"replayed","embedding":[0.5,0.5]}`)}
+	if _, err := replayCollection.insertBatchWithCommandWALIntent(replayIDs, replayDocuments, false, nil, nil, insertBatchExecutionOptions{returnResultIDs: true}); err != nil {
+		t.Fatal(err)
+	}
+	if currentState, ok := database.StateToken(); !ok || currentState == pinnedState {
+		t.Fatalf("mutation did not advance DB state: current=%+v pinned=%+v", currentState, pinnedState)
+	}
+	if err := replayCollection.validateVectorPartitionLiveCoordinatorPinnedAuthorityV1(def.Name, manifest.Generation, pinnedState.CommitSeq, pinnedState.SystemRootPageID); err != nil {
+		t.Fatalf("coordinator-pinned authority: %v", err)
+	}
+	if err := replayCollection.EnsureVectorPartitionLiveBindingV1(t.Context(), manifest); err != nil {
+		t.Fatalf("coordinator-pinned binding after accepted mutation: %v", err)
+	}
+	coord := replayCollection.collectionSchemaCoordinator()
+	if coord.partitionLivePublishMu.TryLock() {
+		coord.partitionLivePublishMu.Unlock()
+		t.Fatal("live mutation publication lock crossed coordinator pin")
+	}
+	shardPin, err := replayCollection.AcquireVectorPartitionLiveSearchPinV1(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if shardStatus := shardPin.StatusV1(); shardStatus.Revision != coordinatorStatus.Revision || shardStatus.Coverage != coordinatorStatus.Coverage {
+		t.Fatalf("shard live status=%+v want coordinator status=%+v", shardStatus, coordinatorStatus)
+	}
+	shardPin.Release()
+	pin.Release()
+	if err := replayCollection.validateVectorPartitionLiveCoordinatorPinnedAuthorityV1(def.Name, manifest.Generation, pinnedState.CommitSeq, pinnedState.SystemRootPageID); !errors.Is(err, ErrVectorIndexPartitionLiveMismatchV1) {
+		t.Fatalf("released coordinator pin retained authority: %v", err)
+	}
+	if err := replayCollection.reconcileVectorPartitionLiveReplay(replayIDs); err != nil {
+		t.Fatal(err)
+	}
+	pin, err = loaded.acquireVectorPartitionLiveSearchPinV1(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	results, _, searchErr := pin.SearchDomainV1(t.Context(), 0, []float32{0.5, 0.5}, VectorPartitionSearchOptionsV1{TopK: 1, EfSearch: 8})
+	pin.Release()
+	if searchErr != nil || len(results) != 1 || results[0].ID != "replayed" || rebuilds != 0 {
+		t.Fatalf("carrier-only replay results=%+v rebuilds=%d err=%v", results, rebuilds, searchErr)
+	}
+
+	if _, err := collection.Insert([]byte("c"), []byte(`{"time_us":3,"kind":"vector","did":"c","embedding":[0.5,0.5]}`)); err != nil {
+		t.Fatal(err)
+	}
+	collection.UnregisterVectorIndex(def.Name)
+	stale, staleStatus, err := collection.loadVectorPartitionLiveIndexForServingV1(def)
+	if err != nil || stale != nil || staleStatus.ExactFallbackReason != vectorIndexFallbackStaleDocumentRoot || rebuilds != 0 {
+		t.Fatalf("stale carrier loaded=%v status=%+v rebuilds=%d err=%v", stale != nil, staleStatus, rebuilds, err)
+	}
+}
+
+func TestVectorPartitionLiveMissingCarrierAfterMutationFailsWithoutRebuildV1(t *testing.T) {
+	rows := []columnGraphRebuildInputRowV2A{{id: "a", vector: []float32{1, 0}}, {id: "b", vector: []float32{0, 1}}}
+	_, database, collection, def := openColumnGraphTypedColumnVectorTestCollection1782(t, 2, 2, rows)
+	defer database.Close()
+	if _, err := collection.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatal(err)
+	}
+	source, _, err := collection.ReadVectorPartitionRouterSourceRowsV1(def.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest := VectorPartitionManifestV1{
+		IndexName: def.Name, IndexDefinitionDigest: VectorIndexDefinitionDigestV1(def),
+		SourceGeneration: source.Generation, SourceChecksum: source.Checksum, SourceSchemaHash: source.SchemaHash, SourceRowCount: source.RowCount,
+		Generation: source.Generation + 100, PartitionCount: 1, DomainCount: 1,
+		DomainPacks: []VectorPartitionDomainPackV1{{DomainID: 0, PackID: 0}},
+	}
+	rebuilds := 0
+	restoreHook := setColumnVectorGraphRebuildBeforeBuildTestHook(func() { rebuilds++ })
+	defer restoreHook()
+
+	if _, err := collection.Insert([]byte("d"), []byte(`{"time_us":4,"kind":"vector","did":"d","embedding":[0.5,0.5]}`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := collection.EnsureVectorPartitionLiveBindingV1(t.Context(), manifest); err == nil {
+		t.Fatal("missing carrier admitted after the immutable column graph became stale")
+	}
+	if rebuilds != 0 {
+		t.Fatalf("request-path column graph rebuilds=%d, want 0", rebuilds)
+	}
+}
+
 func TestVectorPartitionHNSWExcludesMoreThanTopKBeforeAdmissionV1(t *testing.T) {
 	input := testColumnHNSWSearchPackInput2312()
 	raw, err := encodeColumnHNSWSearchPack(input)
@@ -340,6 +550,17 @@ func TestVectorIndexPartitionLiveFirstBindingCheckpointCommandWALReplayV1(t *tes
 	requireVectorPartitionPersistenceV1(t)
 	replayDir := t.TempDir()
 	dir, database, collection, def, manifest := newVectorPartitionLiveProductionFixtureV1(t)
+	if err := database.Checkpoint(); err != nil {
+		database.Close()
+		t.Fatal(err)
+	}
+	copyTypedStorageCommandWALReplayBenchmarkDirM10C(t, dir, replayDir)
+	maxBaselineLSN := uint64(0)
+	for _, frame := range collectionCommandWALFrames(t, dir) {
+		if frame.LSN > maxBaselineLSN {
+			maxBaselineLSN = frame.LSN
+		}
+	}
 	if err := collection.EnsureVectorPartitionLiveBindingV1(t.Context(), manifest); err != nil {
 		database.Close()
 		t.Fatal(err)
@@ -350,17 +571,6 @@ func TestVectorIndexPartitionLiveFirstBindingCheckpointCommandWALReplayV1(t *tes
 		t.Fatalf("first binding was not durably admitted: %v", err)
 	}
 	pin.Release()
-	if err := database.Checkpoint(); err != nil {
-		database.Close()
-		t.Fatal(err)
-	}
-	copyColumnStoreCommandWALReplayBenchmarkDirM10C(t, dir, replayDir)
-	maxBaselineLSN := uint64(0)
-	for _, frame := range collectionCommandWALFrames(t, dir) {
-		if frame.LSN > maxBaselineLSN {
-			maxBaselineLSN = frame.LSN
-		}
-	}
 
 	replacement, err := json.Marshal(map[string]any{
 		"time_us": int64(99), "kind": "vector", "did": "a", "embedding": []float32{0, 1},
@@ -370,6 +580,11 @@ func TestVectorIndexPartitionLiveFirstBindingCheckpointCommandWALReplayV1(t *tes
 		t.Fatal(err)
 	}
 	if _, err := collection.Insert([]byte("a"), replacement); err != nil {
+		database.Close()
+		t.Fatal(err)
+	}
+	expectedCoverage, _, err := collection.currentVectorIndexDocumentStateWithWriteDomainLockState(false)
+	if err != nil {
 		database.Close()
 		t.Fatal(err)
 	}
@@ -384,17 +599,22 @@ func TestVectorIndexPartitionLiveFirstBindingCheckpointCommandWALReplayV1(t *tes
 		database.Close()
 		t.Fatalf("immediate results=%+v err=%v", immediate, immediateErr)
 	}
-	replayed := false
+	replayedBinding := false
+	replayedMutation := false
 	for _, frame := range collectionCommandWALFrames(t, dir) {
 		if frame.LSN <= maxBaselineLSN {
 			continue
 		}
 		writeCollectionCommandWALFrame(t, replayDir, frame.LSN, frame.Kind, frame.PayloadFormat, frame.Payload)
-		replayed = true
+		if frame.Kind == commitlog.CommandKindCollectionPersistPartitionLive {
+			replayedBinding = true
+		} else {
+			replayedMutation = true
+		}
 	}
-	if !replayed {
+	if !replayedBinding || !replayedMutation {
 		database.Close()
-		t.Fatal("mutation emitted no command-WAL frame")
+		t.Fatalf("replay frames binding=%v mutation=%v", replayedBinding, replayedMutation)
 	}
 	if err := database.Close(); err != nil {
 		t.Fatal(err)
@@ -419,7 +639,7 @@ func TestVectorIndexPartitionLiveFirstBindingCheckpointCommandWALReplayV1(t *tes
 	}
 	defer recoveredPin.Release()
 	recovered, _, recoveredErr := recoveredPin.SearchDomainV1(t.Context(), 0, []float32{0, 1}, VectorPartitionSearchOptionsV1{TopK: 1, EfSearch: 8, MaxStableIDBytes: 16})
-	if recoveredErr != nil || len(recovered) != 1 || recovered[0].ID != "a" || recoveredPin.StatusV1().Coverage <= manifest.SourceGeneration {
+	if recoveredErr != nil || len(recovered) != 1 || recovered[0].ID != "a" || recoveredPin.StatusV1().Coverage != expectedCoverage {
 		t.Fatalf("recovered=%+v status=%+v err=%v", recovered, recoveredPin.StatusV1(), recoveredErr)
 	}
 }

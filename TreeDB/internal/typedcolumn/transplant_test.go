@@ -655,6 +655,9 @@ func TestTypedColumnTransplantNoProductionPublication(t *testing.T) {
 		// consumers do not own publication or introduce a new durable data plane.
 		filepath.Clean(filepath.Join(collectionsDir, "typed_graph_filter.go")):        {},
 		filepath.Clean(filepath.Join(collectionsDir, "typed_graph_filtered_pack.go")): {},
+		// #4324 uses RowSelection only for bounded HNSW candidate admission;
+		// the partition searcher owns no typed-column publication.
+		filepath.Clean(filepath.Join(collectionsDir, "vector_partition_searcher_v1.go")): {},
 		// #4618 classifies an empty adjacency section against its positive
 		// offsets companion using existing codec constants; no publication.
 		filepath.Clean(filepath.Join(collectionsDir, "column_asset_reachability.go")): {},

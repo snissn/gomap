@@ -1,6 +1,7 @@
 package collections
 
 import (
+	"context"
 	"fmt"
 	"sync"
 
@@ -25,6 +26,7 @@ func RegisterCommandWALReplayHandlers() {
 		backenddb.RegisterCommandWALReplayHandler(commitlog.CommandKindCollectionUpdateBatchByID, replayCollectionUpdateBatchByIDCommandWAL)
 		backenddb.RegisterCommandWALReplayHandler(commitlog.CommandKindCollectionReplaceSourceByID, replayCollectionReplaceSourceByIDCommandWAL)
 		backenddb.RegisterCommandWALReplayHandler(commitlog.CommandKindCollectionRebuildVectorIndex, replayCollectionRebuildVectorIndexCommandWAL)
+		backenddb.RegisterCommandWALReplayHandler(commitlog.CommandKindCollectionPersistPartitionLive, replayCollectionPersistPartitionLiveCommandWAL)
 		backenddb.RegisterCommandWALReplayHandler(commitlog.CommandKindCatalogCreateCollection, replayCatalogCreateCollectionCommandWAL)
 	})
 }
@@ -172,6 +174,25 @@ func (c *Collection) newCollectionRebuildVectorIndexCommandWALIntent(indexName s
 	}
 	return c.db.NewCommandWALIntent(
 		commitlog.CommandKindCollectionRebuildVectorIndex,
+		commitlog.CommandScopeCollection,
+		commitlog.PayloadFormatCollectionRebuildVectorIndexV1,
+		payload,
+	)
+}
+
+func (c *Collection) newCollectionPersistPartitionLiveCommandWALIntent(indexName string, replay *backenddb.CommandWALIntent) (*backenddb.CommandWALIntent, error) {
+	if replay != nil {
+		return replay, nil
+	}
+	if c == nil || c.db == nil || !c.db.CommandWALEnabled() {
+		return nil, nil
+	}
+	payload, err := commitlog.EncodeCollectionRebuildVectorIndexPayload(c.meta.Name, indexName)
+	if err != nil {
+		return nil, err
+	}
+	return c.db.NewCommandWALIntent(
+		commitlog.CommandKindCollectionPersistPartitionLive,
 		commitlog.CommandScopeCollection,
 		commitlog.PayloadFormatCollectionRebuildVectorIndexV1,
 		payload,
@@ -369,7 +390,10 @@ func replayCollectionInsertBatchByIDCommandWAL(db *backenddb.DB, env commitlog.C
 			return err
 		}
 		_, err = collection.insertBatchWithCommandWALIntent(ids, docs, false, nil, intent, insertBatchExecutionOptions{returnResultIDs: true, trustedFloat32Projection: projection})
-		return err
+		if err != nil {
+			return err
+		}
+		return collection.reconcileVectorPartitionLiveReplay(ids)
 	}
 	payload, err := commitlog.DecodeCollectionInsertBatchByIDPayload(env.Payload)
 	if err != nil {
@@ -398,7 +422,10 @@ func replayCollectionInsertBatchByIDCommandWAL(db *backenddb.DB, env commitlog.C
 		docs[i] = payload.Documents[i].Document
 	}
 	_, err = collection.insertBatchWithCommandWALIntent(ids, docs, false, templateV1ReplayStoredDocumentEncoder(collection), intent, insertBatchExecutionOptions{returnResultIDs: true})
-	return err
+	if err != nil {
+		return err
+	}
+	return collection.reconcileVectorPartitionLiveReplay(ids)
 }
 
 func replayCollectionDeleteBatchByIDCommandWAL(db *backenddb.DB, env commitlog.CommandEnvelope) error {
@@ -416,7 +443,10 @@ func replayCollectionDeleteBatchByIDCommandWAL(db *backenddb.DB, env commitlog.C
 		return err
 	}
 	_, err = collection.deleteBatchWithCommandWALIntent(payload.IDs, intent)
-	return err
+	if err != nil {
+		return err
+	}
+	return collection.reconcileVectorPartitionLiveReplay(payload.IDs)
 }
 
 func replayCollectionReplaceSourceByIDCommandWAL(db *backenddb.DB, env commitlog.CommandEnvelope) error {
@@ -442,7 +472,11 @@ func replayCollectionReplaceSourceByIDCommandWAL(db *backenddb.DB, env commitlog
 		unlockCoverage := collection.lockVectorIndexCoverageMutation()
 		defer unlockCoverage()
 		_, err = collection.replaceSourceDocumentsAtomicSchemaLocked(nil, payload.DeleteIDs, ids, retained, intent, nil, projection)
-		return err
+		if err != nil {
+			return err
+		}
+		changedIDs := append(append(make([][]byte, 0, len(payload.DeleteIDs)+len(ids)), payload.DeleteIDs...), ids...)
+		return collection.reconcileVectorPartitionLiveReplay(changedIDs)
 	}
 	payload, err := commitlog.DecodeCollectionReplaceSourceByIDPayload(env.Payload)
 	if err != nil {
@@ -462,8 +496,16 @@ func replayCollectionReplaceSourceByIDCommandWAL(db *backenddb.DB, env commitlog
 		ids[i] = payload.Documents[i].ID
 		documents[i] = payload.Documents[i].Document
 	}
-	_, err = collection.replaceSourceDocumentsWithCommandWALIntent(payload.DeleteIDs, ids, documents, intent, nil)
-	return err
+	unlockSchema := collection.lockCollectionSchemaRead()
+	defer unlockSchema()
+	unlockCoverage := collection.lockVectorIndexCoverageMutation()
+	defer unlockCoverage()
+	_, err = collection.replaceSourceDocumentsAtomicSchemaLocked(nil, payload.DeleteIDs, ids, documents, intent, nil, nil)
+	if err != nil {
+		return err
+	}
+	changedIDs := append(append(make([][]byte, 0, len(payload.DeleteIDs)+len(ids)), payload.DeleteIDs...), ids...)
+	return collection.reconcileVectorPartitionLiveReplay(changedIDs)
 }
 
 func replayCollectionUpdateBatchByIDCommandWAL(db *backenddb.DB, env commitlog.CommandEnvelope) error {
@@ -485,7 +527,10 @@ func replayCollectionUpdateBatchByIDCommandWAL(db *backenddb.DB, env commitlog.C
 			return err
 		}
 		_, _, err = collection.updateBatchOwnedItemsWithCommandWALIntent(typedReplacementItems(ids, retained, projection), updateBatchModeAny, intent)
-		return err
+		if err != nil {
+			return err
+		}
+		return collection.reconcileVectorPartitionLiveReplay(ids)
 	}
 	payload, err := commitlog.DecodeCollectionUpdateBatchByIDPayload(env.Payload)
 	if err != nil {
@@ -523,7 +568,14 @@ func replayCollectionUpdateBatchByIDCommandWAL(db *backenddb.DB, env commitlog.C
 		}
 	}
 	_, _, err = collection.updateBatchOwnedItemsWithCommandWALIntent(items, updateBatchModeAny, intent)
-	return err
+	if err != nil {
+		return err
+	}
+	ids := make([][]byte, len(payload.Documents))
+	for i := range payload.Documents {
+		ids[i] = payload.Documents[i].ID
+	}
+	return collection.reconcileVectorPartitionLiveReplay(ids)
 }
 
 func replayCollectionRebuildVectorIndexCommandWAL(db *backenddb.DB, env commitlog.CommandEnvelope) error {
@@ -542,6 +594,27 @@ func replayCollectionRebuildVectorIndexCommandWAL(db *backenddb.DB, env commitlo
 	}
 	_, err = collection.rebuildVectorIndexWithCommandWALIntent(payload.IndexName, intent)
 	return err
+}
+
+func replayCollectionPersistPartitionLiveCommandWAL(db *backenddb.DB, env commitlog.CommandEnvelope) error {
+	payload, err := commitlog.DecodeCollectionRebuildVectorIndexPayload(env.Payload)
+	if err != nil {
+		return err
+	}
+	intent, err := db.NewCommandWALReplayIntent(env)
+	if err != nil {
+		return err
+	}
+	manager := newCommandWALReplayCollectionManager(db)
+	collection, err := manager.openCollectionWithCommandWALIntent(payload.Collection, intent)
+	if err != nil {
+		return err
+	}
+	manifest, err := collection.activeVectorPartitionManifestForLiveRecoveryV1(context.Background(), payload.IndexName)
+	if err != nil {
+		return err
+	}
+	return collection.ensureVectorPartitionLiveBindingV1(context.Background(), manifest, intent)
 }
 
 func replayCatalogCreateCollectionCommandWAL(db *backenddb.DB, env commitlog.CommandEnvelope) error {

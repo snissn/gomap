@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"sync"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
@@ -42,6 +43,7 @@ type vectorIndexPartitionLiveStateV1 struct {
 	domains               map[uint32]*VectorIndex
 	owners                map[string]vectorPartitionLiveOwnerV1
 	cutovers              uint64
+	cutoverPublications   uint64
 	nodeCapacity          int
 	bindingDurable        bool
 	invalid               bool
@@ -85,10 +87,21 @@ type VectorIndexPartitionLiveStatusV1 struct {
 }
 
 type VectorIndexPartitionLiveSearchPinV1 struct {
-	status            VectorIndexPartitionLiveStatusV1
-	packDomains       []uint32
-	excludedStableIDs map[string]struct{}
-	domains           map[uint32]vectorIndexPartitionLiveDomainPinV1
+	status             VectorIndexPartitionLiveStatusV1
+	packDomains        []uint32
+	excludedStableIDs  map[string]struct{}
+	domains            map[uint32]vectorIndexPartitionLiveDomainPinV1
+	releasePublication func()
+	releaseOnce        sync.Once
+}
+
+type vectorPartitionLiveSearchPinKeyV1 struct {
+	index      string
+	generation uint64
+	revision   uint64
+	coverage   uint64
+	commitSeq  uint64
+	systemRoot uint64
 }
 
 type vectorIndexPartitionLiveDomainPinV1 struct {
@@ -113,11 +126,11 @@ func vectorPartitionLiveRepresentativeLessV1(a, b vectorPartitionLiveRepresentat
 	return len(a.vector) < len(b.vector)
 }
 
-func (idx *VectorIndex) bindVectorPartitionLiveV1(manifest VectorPartitionManifestV1, representatives []vectorPartitionLiveRepresentativeV1) error {
+func (idx *VectorIndex) bindVectorPartitionLiveV1(manifest VectorPartitionManifestV1, coverage uint64, representatives []vectorPartitionLiveRepresentativeV1) error {
 	if idx == nil {
 		return ErrVectorIndexPartitionLiveUnavailableV1
 	}
-	if manifest.IndexName != idx.name || manifest.Generation == 0 || manifest.DomainCount == 0 || len(manifest.DomainPacks) != int(manifest.PartitionCount) || len(representatives) == 0 {
+	if manifest.IndexName != idx.name || manifest.Generation == 0 || coverage == 0 || manifest.DomainCount == 0 || len(manifest.DomainPacks) != int(manifest.PartitionCount) || len(representatives) == 0 {
 		return fmt.Errorf("%w: incomplete binding", ErrVectorIndexPartitionLiveMismatchV1)
 	}
 	packDomains := make([]uint32, manifest.PartitionCount)
@@ -187,16 +200,16 @@ func (idx *VectorIndex) bindVectorPartitionLiveV1(manifest VectorPartitionManife
 		// may only cut over when it is newer and its base source is the exact
 		// current collection source. Existing pins own immutable delta views,
 		// so replacing the registered pointer does not invalidate them.
-		if manifest.Generation <= live.generation || !idx.sourceDocumentRootsValid || idx.sourceDocumentGeneration != manifest.SourceGeneration {
+		if manifest.Generation <= live.generation || !idx.sourceDocumentRootsValid || idx.sourceDocumentGeneration != coverage {
 			return ErrVectorIndexPartitionLiveMismatchV1
 		}
 	}
-	if idx.collection != nil && (!idx.sourceDocumentRootsValid || idx.sourceDocumentGeneration != manifest.SourceGeneration) {
-		return fmt.Errorf("%w: immutable source=%d current=%d", ErrVectorIndexPartitionLiveMismatchV1, manifest.SourceGeneration, idx.sourceDocumentGeneration)
+	if idx.collection != nil && (!idx.sourceDocumentRootsValid || idx.sourceDocumentGeneration != coverage) {
+		return fmt.Errorf("%w: live coverage=%d current=%d", ErrVectorIndexPartitionLiveMismatchV1, coverage, idx.sourceDocumentGeneration)
 	}
 	idx.partitionLive = &vectorIndexPartitionLiveStateV1{
 		indexDefinitionDigest: manifest.IndexDefinitionDigest, source: source, generation: manifest.Generation,
-		coverage: manifest.SourceGeneration, packDomains: packDomains, representatives: clonedReps,
+		coverage: coverage, packDomains: packDomains, representatives: clonedReps,
 		domains: make(map[uint32]*VectorIndex), owners: make(map[string]vectorPartitionLiveOwnerV1),
 		nodeCapacity: vectorIndexPartitionLiveMaxMutatedIDsV1, bindingDurable: idx.collection == nil,
 	}
@@ -214,15 +227,23 @@ func (idx *VectorIndex) invalidateVectorPartitionLiveLocked() {
 }
 
 func (idx *VectorIndex) newPartitionLiveDomainIndexV1() (*VectorIndex, error) {
+	delta, err := idx.newPartitionLiveDomainIndexUnpublishedV1()
+	if err != nil {
+		return nil, err
+	}
+	delta.acknowledgeSearchViewStateLocked()
+	delta.publishSearchViewLocked(true)
+	return delta, nil
+}
+
+func (idx *VectorIndex) newPartitionLiveDomainIndexUnpublishedV1() (*VectorIndex, error) {
 	delta, err := newVectorIndex(nil, VectorIndexOptions{Name: idx.name, Field: idx.field, Metric: idx.metric, Encoding: idx.encoding, Dimensions: idx.dimensions, M: idx.m, EfConstruction: idx.efConstruction, EfSearch: idx.efSearch, RebuildDeletedRatio: idx.rebuildDeletedRatio})
 	if err != nil {
 		return nil, err
 	}
 	delta.sourceDocumentRootsValid = true
 	delta.sourceDocumentGeneration = idx.sourceDocumentGeneration
-	delta.acknowledgeSearchViewStateLocked()
 	delta.trackSearchViewDirty = true
-	delta.publishSearchViewLocked(true)
 	return delta, nil
 }
 
@@ -385,7 +406,7 @@ func (idx *VectorIndex) cutoverVectorPartitionLiveLocked() error {
 		delta := fresh[owner.domain]
 		var err error
 		if delta == nil {
-			delta, err = idx.newPartitionLiveDomainIndexV1()
+			delta, err = idx.newPartitionLiveDomainIndexUnpublishedV1()
 			if err != nil {
 				return err
 			}
@@ -393,14 +414,23 @@ func (idx *VectorIndex) cutoverVectorPartitionLiveLocked() error {
 		}
 		delta.mu.Lock()
 		err = delta.insertVectorLocked([]byte(id), vector)
-		if err == nil {
-			delta.acknowledgeSearchViewStateLocked()
-			delta.publishSearchViewLocked(false)
-		}
 		delta.mu.Unlock()
 		if err != nil {
 			return err
 		}
+	}
+	domains := make([]uint32, 0, len(fresh))
+	for domain := range fresh {
+		domains = append(domains, domain)
+	}
+	sort.Slice(domains, func(i, j int) bool { return domains[i] < domains[j] })
+	for _, domain := range domains {
+		delta := fresh[domain]
+		delta.mu.Lock()
+		delta.acknowledgeSearchViewStateLocked()
+		delta.publishSearchViewLocked(true)
+		delta.mu.Unlock()
+		live.cutoverPublications++
 	}
 	live.domains = fresh
 	live.cutovers++
@@ -662,57 +692,258 @@ func (idx *VectorIndex) restorePartitionLiveV1(persisted *vectorIndexPartitionLi
 // the same registered VectorIndex that production collection reconciliation
 // updates. It does not alter partition lifecycle authority.
 func (c *Collection) EnsureVectorPartitionLiveBindingV1(ctx context.Context, manifest VectorPartitionManifestV1) error {
+	return c.ensureVectorPartitionLiveBindingV1(ctx, manifest, nil)
+}
+
+func (idx *VectorIndex) vectorPartitionLiveBindingCurrentV1(manifest VectorPartitionManifestV1) bool {
+	if idx == nil {
+		return false
+	}
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+	live := idx.partitionLive
+	return idx.sourceDocumentRootsValid && live != nil && !live.invalid && live.bindingDurable &&
+		live.indexDefinitionDigest == manifest.IndexDefinitionDigest && live.source == vectorPartitionLiveSourceV1(manifest) &&
+		live.generation == manifest.Generation && live.coverage == idx.sourceDocumentGeneration
+}
+
+func (c *Collection) vectorPartitionLiveWarmBindingCurrentV1(manifest VectorPartitionManifestV1) bool {
+	if c == nil || c.db == nil {
+		return false
+	}
+	idx := c.registeredVectorIndex(manifest.IndexName)
+	if idx == nil || !idx.vectorPartitionLiveBindingCurrentV1(manifest) {
+		return false
+	}
+	state, ok := c.db.StateToken()
+	return ok && c.validateVectorPartitionLiveAuthorityStateV1(manifest.IndexName, manifest.Generation, state) == nil
+}
+
+func (c *Collection) vectorPartitionLiveCoordinatorBindingPinnedV1(manifest VectorPartitionManifestV1) bool {
+	if c == nil {
+		return false
+	}
+	coord := c.collectionSchemaCoordinator()
+	if coord == nil {
+		return false
+	}
+	idx := c.registeredVectorIndex(manifest.IndexName)
+	key, ok := idx.vectorPartitionLiveSearchPinKeyV1(manifest)
+	return ok && coord.hasPartitionLiveSearchPin(key)
+}
+
+func (c *Collection) validateVectorPartitionLiveCoordinatorPinnedAuthorityV1(index string, generation, commitSeq, systemRoot uint64) error {
 	if c == nil {
 		return ErrVectorIndexPartitionLiveUnavailableV1
 	}
-	if _, err := c.ensureDeclaredNativeVectorIndexesLoaded(); err != nil {
-		return err
+	coord := c.collectionSchemaCoordinator()
+	if coord == nil {
+		return ErrVectorIndexPartitionLiveMismatchV1
 	}
-	idx := c.registeredVectorIndex(manifest.IndexName)
+	idx := c.registeredVectorIndex(index)
 	if idx == nil {
 		return ErrVectorIndexPartitionLiveUnavailableV1
 	}
-	router, status, err := c.OpenPreparedVectorPartitionRouterForGenerationWithContextV1(ctx, manifest.IndexName, manifest.Generation)
-	if err != nil {
-		return err
-	}
-	defer router.Close()
-	if status.Generation != manifest.Generation {
-		return ErrVectorIndexPartitionLiveMismatchV1
-	}
-	representatives, err := router.partitionLiveRepresentativesV1()
-	if err != nil {
-		return err
-	}
-	idx.mu.RLock()
-	currentGeneration := idx.sourceDocumentGeneration
-	currentRootsValid := idx.sourceDocumentRootsValid
-	idx.mu.RUnlock()
-	if !currentRootsValid {
-		return ErrVectorIndexPartitionLiveMismatchV1
-	}
 	idx.mu.RLock()
 	live := idx.partitionLive
-	liveCurrent := live != nil && !live.invalid && live.bindingDurable &&
-		live.indexDefinitionDigest == manifest.IndexDefinitionDigest && live.source == vectorPartitionLiveSourceV1(manifest) &&
-		live.generation == manifest.Generation && live.coverage == currentGeneration
+	if live == nil || live.invalid || !live.bindingDurable || live.generation != generation ||
+		!idx.sourceDocumentRootsValid || !idx.sourceDocumentStateValid || live.coverage != idx.sourceDocumentGeneration ||
+		idx.sourceDocumentState.CommitSeq != commitSeq || idx.sourceDocumentState.SystemRootPageID != systemRoot {
+		idx.mu.RUnlock()
+		return ErrVectorIndexPartitionLiveMismatchV1
+	}
+	key := vectorPartitionLiveSearchPinKeyV1{
+		index: index, generation: generation, revision: live.revision, coverage: live.coverage,
+		commitSeq: commitSeq, systemRoot: systemRoot,
+	}
 	idx.mu.RUnlock()
-	if liveCurrent {
-		return nil
+	if !coord.hasPartitionLiveSearchPin(key) {
+		return ErrVectorIndexPartitionLiveMismatchV1
 	}
-	if currentGeneration != manifest.SourceGeneration {
-		return fmt.Errorf("%w: immutable source=%d current=%d live coverage is not exact", ErrVectorIndexPartitionLiveMismatchV1, manifest.SourceGeneration, currentGeneration)
+	return nil
+}
+
+func (idx *VectorIndex) vectorPartitionLiveSearchPinKeyV1(manifest VectorPartitionManifestV1) (vectorPartitionLiveSearchPinKeyV1, bool) {
+	if idx == nil {
+		return vectorPartitionLiveSearchPinKeyV1{}, false
 	}
-	if err := idx.bindVectorPartitionLiveV1(manifest, representatives); err != nil {
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+	live := idx.partitionLive
+	if live == nil || live.invalid || !live.bindingDurable || live.indexDefinitionDigest != manifest.IndexDefinitionDigest ||
+		live.source != vectorPartitionLiveSourceV1(manifest) || live.generation != manifest.Generation ||
+		!idx.sourceDocumentRootsValid || !idx.sourceDocumentStateValid || live.coverage != idx.sourceDocumentGeneration {
+		return vectorPartitionLiveSearchPinKeyV1{}, false
+	}
+	return vectorPartitionLiveSearchPinKeyV1{
+		index: manifest.IndexName, generation: live.generation, revision: live.revision, coverage: live.coverage,
+		commitSeq: idx.sourceDocumentState.CommitSeq, systemRoot: idx.sourceDocumentState.SystemRootPageID,
+	}, true
+}
+
+func (c *Collection) validateCurrentVectorPartitionLiveBindingV1(ctx context.Context, manifest VectorPartitionManifestV1) error {
+	currentSource, currentGeneration, currentState, err := c.vectorPartitionLiveCurrentStateV1(ctx, manifest.IndexName)
+	if err != nil {
 		return err
 	}
+	if currentSource != vectorPartitionLiveSourceV1(manifest) {
+		return fmt.Errorf("%w: immutable source identity is not current", ErrVectorIndexPartitionLiveMismatchV1)
+	}
+	return c.validateAndRecordVectorPartitionLiveAuthorityStateV1(manifest, currentGeneration, currentState)
+}
 
-	idx.mu.RLock()
-	live = idx.partitionLive
-	needsBindingPublication := live != nil && !live.bindingDurable
-	idx.mu.RUnlock()
+// loadVectorPartitionLiveIndexForServingV1 restores only a durable registered
+// runtime. It never scans collection rows or invokes an automatic graph
+// rebuild; missing, stale, or corrupt coverage is reported to the caller.
+func (c *Collection) loadVectorPartitionLiveIndexForServingV1(def VectorIndexDefinition) (*VectorIndex, VectorIndexLoadStatus, error) {
+	if idx := c.registeredVectorIndex(def.Name); idx != nil {
+		if idx.validateNativeSnapshotDefinition(def) != "" || !idx.hasValidSourceDocumentRoots() {
+			return nil, VectorIndexLoadStatus{ExactFallbackReason: vectorIndexFallbackStaleDocumentRoot}, ErrVectorIndexPartitionLiveMismatchV1
+		}
+		return idx, VectorIndexLoadStatus{Loaded: true}, nil
+	}
+	return c.LoadNativeVectorIndexSnapshot(vectorIndexOptionsFromDefinition(def))
+}
+
+func (c *Collection) vectorPartitionLiveCurrentStateV1(ctx context.Context, index string) (VectorPartitionSourceIdentityV1, uint64, backenddb.StateToken, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return VectorPartitionSourceIdentityV1{}, 0, backenddb.StateToken{}, err
+	}
+	snap := c.db.AcquireSnapshot()
+	if snap == nil {
+		return VectorPartitionSourceIdentityV1{}, 0, backenddb.StateToken{}, backenddb.ErrClosed
+	}
+	defer func() { _ = snap.Close() }()
+	source, err := c.vectorPartitionSourceIdentityAtSnapshotV1(index, snap)
+	if err != nil {
+		return VectorPartitionSourceIdentityV1{}, 0, backenddb.StateToken{}, err
+	}
+	documentGeneration, err := vectorIndexDocumentGenerationForCollection(snap, c.name)
+	if err != nil {
+		return VectorPartitionSourceIdentityV1{}, 0, backenddb.StateToken{}, err
+	}
+	state, ok := snap.StateToken()
+	if !ok {
+		return VectorPartitionSourceIdentityV1{}, 0, backenddb.StateToken{}, backenddb.ErrClosed
+	}
+	return source, documentGeneration, state, ctx.Err()
+}
+
+func (c *Collection) ensureVectorPartitionLiveBindingV1(ctx context.Context, manifest VectorPartitionManifestV1, replay *backenddb.CommandWALIntent) error {
+	if c == nil {
+		return ErrVectorIndexPartitionLiveUnavailableV1
+	}
+	if replay == nil && c.vectorPartitionLiveWarmBindingCurrentV1(manifest) {
+		return nil
+	}
+	if replay == nil && c.vectorPartitionLiveCoordinatorBindingPinnedV1(manifest) {
+		return nil
+	}
+
+	unlockLoad := c.lockNativeVectorIndexLoad()
+	defer unlockLoad()
+	if replay == nil && c.vectorPartitionLiveWarmBindingCurrentV1(manifest) {
+		return nil
+	}
+
+	idx, needsBindingPublication, err := func() (*VectorIndex, bool, error) {
+		unlockMutation := c.lockMutation()
+		defer unlockMutation.Unlock()
+		if idx := c.registeredVectorIndex(manifest.IndexName); idx != nil && idx.vectorPartitionLiveBindingCurrentV1(manifest) {
+			if err := c.validateCurrentVectorPartitionLiveBindingV1(ctx, manifest); err != nil {
+				return nil, false, err
+			}
+			return idx, replay != nil, nil
+		}
+
+		snap := c.db.AcquireSnapshot()
+		if snap == nil {
+			return nil, false, backenddb.ErrClosed
+		}
+		catalog, err := c.catalogForSnapshot(snap)
+		if err != nil {
+			_ = snap.Close()
+			return nil, false, err
+		}
+		if catalog == nil {
+			_ = snap.Close()
+			return nil, false, errCollectionNotFound
+		}
+		def, ok := findVectorIndex(catalog.meta.VectorIndexes, manifest.IndexName)
+		closeErr := snap.Close()
+		if closeErr != nil {
+			return nil, false, closeErr
+		}
+		if !ok || VectorIndexDefinitionDigestV1(def) != manifest.IndexDefinitionDigest {
+			return nil, false, ErrVectorIndexPartitionLiveMismatchV1
+		}
+		idx, loadStatus, err := c.loadVectorPartitionLiveIndexForServingV1(def)
+		if err != nil {
+			return nil, false, err
+		}
+		if idx != nil && idx.vectorPartitionLiveBindingCurrentV1(manifest) {
+			if err := c.validateCurrentVectorPartitionLiveBindingV1(ctx, manifest); err != nil {
+				return nil, false, err
+			}
+			return idx, replay != nil, nil
+		}
+
+		currentSource, currentGeneration, currentState, err := c.vectorPartitionLiveCurrentStateV1(ctx, manifest.IndexName)
+		if err != nil {
+			return nil, false, err
+		}
+		if currentSource != vectorPartitionLiveSourceV1(manifest) {
+			return nil, false, fmt.Errorf("%w: immutable source identity is not current", ErrVectorIndexPartitionLiveMismatchV1)
+		}
+		if idx == nil {
+			if def.Strategy != VectorIndexStrategyColumnGraph || loadStatus.ExactFallbackReason != vectorIndexFallbackMissingGraphRoot {
+				return nil, false, fmt.Errorf("%w: durable live carrier load failed: %s", ErrVectorIndexPartitionLiveUnavailableV1, loadStatus.ExactFallbackReason)
+			}
+			idx, err = newVectorIndex(c, vectorIndexOptionsFromDefinition(def))
+			if err != nil {
+				return nil, false, err
+			}
+			idx.setPartitionLiveCarrier(true)
+			idx.recordSourceDocumentState(currentGeneration, currentState)
+			c.registerVectorIndexCurrentCatalog(idx)
+		} else {
+			idx.mu.RLock()
+			coverageCurrent := idx.sourceDocumentRootsValid && idx.sourceDocumentGeneration == currentGeneration
+			idx.mu.RUnlock()
+			if !coverageCurrent {
+				return nil, false, ErrVectorIndexPartitionLiveMismatchV1
+			}
+		}
+
+		router, status, err := c.OpenPreparedVectorPartitionRouterForGenerationWithContextV1(ctx, manifest.IndexName, manifest.Generation)
+		if err != nil {
+			return nil, false, err
+		}
+		defer router.Close()
+		if status.Generation != manifest.Generation {
+			return nil, false, ErrVectorIndexPartitionLiveMismatchV1
+		}
+		representatives, err := router.partitionLiveRepresentativesV1()
+		if err != nil {
+			return nil, false, err
+		}
+		if err := idx.bindVectorPartitionLiveV1(manifest, currentGeneration, representatives); err != nil {
+			return nil, false, err
+		}
+		idx.mu.RLock()
+		live := idx.partitionLive
+		needsPublication := live != nil && !live.bindingDurable
+		idx.mu.RUnlock()
+		return idx, needsPublication, nil
+	}()
+	if err != nil {
+		return err
+	}
 	if needsBindingPublication {
-		status, err := idx.SaveNativeDeltaSnapshot()
+		status, err := idx.saveNativeDeltaSnapshotWithCommandWALIntent(replay)
 		if err != nil {
 			return err
 		}
@@ -720,7 +951,7 @@ func (c *Collection) EnsureVectorPartitionLiveBindingV1(ctx context.Context, man
 			return fmt.Errorf("%w: durable binding publication did not commit", ErrVectorIndexPartitionLiveUnavailableV1)
 		}
 		idx.mu.Lock()
-		live = idx.partitionLive
+		live := idx.partitionLive
 		if live == nil || live.invalid || live.indexDefinitionDigest != manifest.IndexDefinitionDigest || live.source != vectorPartitionLiveSourceV1(manifest) || live.generation != manifest.Generation || live.coverage != idx.sourceDocumentGeneration {
 			idx.mu.Unlock()
 			return ErrVectorIndexPartitionLiveMismatchV1
@@ -731,7 +962,7 @@ func (c *Collection) EnsureVectorPartitionLiveBindingV1(ctx context.Context, man
 	return nil
 }
 
-func (c *Collection) validateVectorPartitionLiveCoverageV1(manifest VectorPartitionManifestV1, currentGeneration uint64) error {
+func (c *Collection) validateAndRecordVectorPartitionLiveAuthorityStateV1(manifest VectorPartitionManifestV1, currentGeneration uint64, state backenddb.StateToken) error {
 	if c == nil || currentGeneration == 0 {
 		return ErrVectorIndexPartitionLiveUnavailableV1
 	}
@@ -739,8 +970,8 @@ func (c *Collection) validateVectorPartitionLiveCoverageV1(manifest VectorPartit
 	if idx == nil {
 		return ErrVectorIndexPartitionLiveUnavailableV1
 	}
-	idx.mu.RLock()
-	defer idx.mu.RUnlock()
+	idx.mu.Lock()
+	defer idx.mu.Unlock()
 	live := idx.partitionLive
 	if live == nil || live.invalid || !live.bindingDurable ||
 		live.indexDefinitionDigest != manifest.IndexDefinitionDigest || live.source != vectorPartitionLiveSourceV1(manifest) ||
@@ -748,6 +979,10 @@ func (c *Collection) validateVectorPartitionLiveCoverageV1(manifest VectorPartit
 		!idx.sourceDocumentRootsValid || idx.sourceDocumentGeneration != currentGeneration {
 		return ErrVectorIndexPartitionLiveMismatchV1
 	}
+	// Coverage was validated before this process-local authority cache update;
+	// never advance the durable live revision or coverage here.
+	idx.sourceDocumentState = state
+	idx.sourceDocumentStateValid = true
 	return nil
 }
 
@@ -781,17 +1016,57 @@ func (c *Collection) AcquireVectorPartitionLiveSearchPinV1(manifest VectorPartit
 	return idx.acquireVectorPartitionLiveSearchPinV1(manifest)
 }
 
+// AcquireVectorPartitionLiveCoordinatorSearchPinV1 holds publication at one
+// live identity through coordinator planning and every local shard dispatch.
+// Shards acquire ordinary pins while this pin is held; they must not queue a
+// second RWMutex reader behind a waiting writer because that would deadlock the
+// coordinator waiting for the shard.
+func (c *Collection) AcquireVectorPartitionLiveCoordinatorSearchPinV1(manifest VectorPartitionManifestV1) (*VectorIndexPartitionLiveSearchPinV1, error) {
+	if c == nil {
+		return nil, ErrVectorIndexPartitionLiveUnavailableV1
+	}
+	coord := c.collectionSchemaCoordinator()
+	if coord == nil {
+		return nil, ErrVectorIndexPartitionLiveUnavailableV1
+	}
+	coord.partitionLivePublishMu.RLock()
+	pin, err := c.AcquireVectorPartitionLiveSearchPinV1(manifest)
+	if err != nil {
+		coord.partitionLivePublishMu.RUnlock()
+		return nil, err
+	}
+	idx := c.registeredVectorIndex(manifest.IndexName)
+	key, ok := idx.vectorPartitionLiveSearchPinKeyV1(manifest)
+	if !ok || key.revision != pin.status.Revision || key.coverage != pin.status.Coverage {
+		pin.Release()
+		coord.partitionLivePublishMu.RUnlock()
+		return nil, ErrVectorIndexPartitionLiveMismatchV1
+	}
+	coord.registerPartitionLiveSearchPin(key)
+	pin.releasePublication = func() {
+		coord.unregisterPartitionLiveSearchPin(key)
+		coord.partitionLivePublishMu.RUnlock()
+	}
+	return pin, nil
+}
+
 func (p *VectorIndexPartitionLiveSearchPinV1) Release() {
 	if p == nil {
 		return
 	}
-	for domain, pin := range p.domains {
-		if pin.view != nil {
-			pin.index.releaseSearchView(pin.view)
+	p.releaseOnce.Do(func() {
+		for domain, pin := range p.domains {
+			if pin.view != nil {
+				pin.index.releaseSearchView(pin.view)
+			}
+			delete(p.domains, domain)
 		}
-		delete(p.domains, domain)
-	}
-	p.excludedStableIDs = nil
+		p.excludedStableIDs = nil
+		if p.releasePublication != nil {
+			p.releasePublication()
+			p.releasePublication = nil
+		}
+	})
 }
 func (p *VectorIndexPartitionLiveSearchPinV1) StatusV1() VectorIndexPartitionLiveStatusV1 {
 	if p == nil {
