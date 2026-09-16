@@ -141,6 +141,20 @@ func TestM8ProductionResourcesReportRequestRouterBudgetV1(t *testing.T) {
 	t.Fatal("missing coordinator_router_candidates comparison")
 }
 
+func TestM8ProductionRequestReservesPhysicalPackMergeBudgetV1(t *testing.T) {
+	assets := &m8ProductionMultiGroupAssetsV1{manifest: collections.VectorPartitionManifestV1{
+		PartitionCount: 2,
+		DomainCount:    1,
+		DomainPacks: []collections.VectorPartitionDomainPackV1{
+			{DomainID: 0, PackID: 0}, {DomainID: 0, PackID: 1},
+		},
+	}}
+	request := m8ProductionRequestV1(assets, []float32{1}, "physical-pack-budget", 1, 10, 10, 1)
+	if request.MergeEntriesLimit != 20 {
+		t.Fatalf("merge entries=%d want=20", request.MergeEntriesLimit)
+	}
+}
+
 func TestM8ResourceEvidenceIncludesAllUntimedBoundariesV1(t *testing.T) {
 	cfg := config{
 		m8CoordinatorLimits: nativewire.DefaultVectorPartitionCoordinatorLimitsV1(),
