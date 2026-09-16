@@ -142,8 +142,8 @@ func runM0LocalityCaptureV1(args []string, stdout io.Writer) error {
 	if err := m3DescriptorMatchesManifestV1(descriptor, fixture, assets.manifest, assets.status.ModelDigest, assets.status.Config); err != nil {
 		return fmt.Errorf("retained capture descriptor: %w", err)
 	}
-	if int(assets.manifest.PartitionCount) < probes {
-		return errors.New("probes exceed retained partitions")
+	if int(assets.manifest.DomainCount) < probes {
+		return errors.New("probes exceed retained routing domains")
 	}
 	// Open/verify each immutable pack once. Reopening inside the query loop
 	// would measure checksum/open work rather than traversal page locality.

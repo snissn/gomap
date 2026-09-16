@@ -52,6 +52,11 @@ func TestLocalHNSWAttributionTimingV1(t *testing.T) {
 	for i := range cases {
 		cases[i].QueryFP32SHA256 = localHNSWAttributionQueryFP32SHA256V1(cases[i].Query)
 	}
+	expanded := append([]localHNSWAttributionTimingCaseV1(nil), cases...)
+	expanded[0].LowRoute = []uint32{0, 1, 2}
+	if err := localHNSWAttributionTimingCasesV1(expanded, len(source.manifest.Assets)); err != nil {
+		t.Fatalf("expanded low route rejected: %v", err)
+	}
 	evidence, err := localHNSWAttributionTimingV1(t.Context(), source, native, overlay, cases)
 	if err != nil {
 		t.Fatal(err)

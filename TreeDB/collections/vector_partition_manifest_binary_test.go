@@ -42,6 +42,11 @@ type vpmBinaryPlacementItem struct {
 	partitionOffset int
 }
 
+type vpmBinaryDomainPackItem struct {
+	vpmBinarySpan
+	domainOffset, packOffset int
+}
+
 type vpmBinaryMembershipItem struct {
 	vpmBinarySpan
 	ordinalOffset, partitionOffset int
@@ -65,6 +70,8 @@ type vpmBinaryLayout struct {
 	strings              [vpmBinaryStringFieldCount]vpmBinaryStringField
 	u64s                 [vpmBinaryU64FieldCount]int
 	partitionCountOffset int
+	domainCountOffset    int
+	domainPacks          vpmBinaryList[vpmBinaryDomainPackItem]
 	routerAssets         vpmBinaryList[vpmBinaryAssetItem]
 	placements           vpmBinaryList[vpmBinaryPlacementItem]
 	memberships          vpmBinaryList[vpmBinaryMembershipItem]
@@ -86,7 +93,7 @@ func parseVPMBinaryLayout(t testing.TB, raw []byte) vpmBinaryLayout {
 	if got := c.u32(); got != vectorPartitionManifestMagicV1 {
 		t.Fatalf("binary fixture magic=%#x", got)
 	}
-	if got := c.u32(); got != 3 {
+	if got := c.u32(); got != 4 {
 		t.Fatalf("binary fixture version=%d", got)
 	}
 	var layout vpmBinaryLayout
@@ -97,6 +104,8 @@ func parseVPMBinaryLayout(t testing.TB, raw []byte) vpmBinaryLayout {
 		layout.u64s[i] = c.take(8).start
 	}
 	layout.partitionCountOffset = c.take(4).start
+	layout.domainCountOffset = c.take(4).start
+	layout.domainPacks = c.domainPacks()
 	layout.routerAssets = c.assets()
 	layout.placements = c.placements()
 	layout.memberships = c.memberships()
@@ -108,6 +117,21 @@ func parseVPMBinaryLayout(t testing.TB, raw []byte) vpmBinaryLayout {
 		t.Fatalf("binary layout consumed %d of %d bytes", layout.end, len(raw))
 	}
 	return layout
+}
+
+func (c *vpmBinaryLayoutCursor) domainPacks() vpmBinaryList[vpmBinaryDomainPackItem] {
+	countOffset, n := c.count()
+	list := vpmBinaryList[vpmBinaryDomainPackItem]{countOffset: countOffset, items: make([]vpmBinaryDomainPackItem, n)}
+	for i := range list.items {
+		start := c.off
+		list.items[i] = vpmBinaryDomainPackItem{
+			vpmBinarySpan: vpmBinarySpan{start: start, end: start + 8},
+			domainOffset:  c.take(4).start,
+			packOffset:    c.take(4).start,
+		}
+	}
+	list.end = c.off
+	return list
 }
 
 func (c *vpmBinaryLayoutCursor) take(n int) vpmBinarySpan {
@@ -201,6 +225,7 @@ func (c *vpmBinaryLayoutCursor) memberships() vpmBinaryList[vpmBinaryMembershipI
 }
 
 func cloneVPMForBinaryMutation(m VectorPartitionManifestV1) VectorPartitionManifestV1 {
+	m.DomainPacks = append([]VectorPartitionDomainPackV1(nil), m.DomainPacks...)
 	m.Placements = append([]VectorPartitionPlacementV1(nil), m.Placements...)
 	m.Memberships = append([]VectorPartitionMembershipV1(nil), m.Memberships...)
 	m.OverlapMemberships = append([]VectorPartitionMembershipV1(nil), m.OverlapMemberships...)
@@ -303,6 +328,26 @@ func TestVectorPartitionManifestV1RouterAssetFramingIsExactlyOne(t *testing.T) {
 	}
 }
 
+func TestVectorPartitionManifestV1RejectsDomainPackDigestMismatchOnDecode(t *testing.T) {
+	raw, err := EncodeVectorPartitionManifestV1(testVectorPartitionManifestV1())
+	if err != nil {
+		t.Fatal(err)
+	}
+	layout := parseVPMBinaryLayout(t, raw)
+	if len(layout.domainPacks.items) != 2 {
+		t.Fatalf("domain-pack fixture count=%d", len(layout.domainPacks.items))
+	}
+	first := layout.domainPacks.items[0].packOffset
+	second := layout.domainPacks.items[1].packOffset
+	a := binary.BigEndian.Uint32(raw[first : first+4])
+	b := binary.BigEndian.Uint32(raw[second : second+4])
+	binary.BigEndian.PutUint32(raw[first:first+4], b)
+	binary.BigEndian.PutUint32(raw[second:second+4], a)
+	if _, err := DecodeVectorPartitionManifestV1(raw, DefaultVectorPartitionManifestLimits()); err == nil {
+		t.Fatal("mapping change with stale ready/integrity digests was accepted")
+	}
+}
+
 func TestVectorPartitionManifestV1BinaryMutationAndResealMatrix(t *testing.T) {
 	base := testVectorPartitionManifestV1()
 	base.OverlapMemberships = []VectorPartitionMembershipV1{{VectorOrdinal: 0, PartitionID: 1}, {VectorOrdinal: 1, PartitionID: 0}}
@@ -323,6 +368,7 @@ func TestVectorPartitionManifestV1BinaryMutationAndResealMatrix(t *testing.T) {
 			"header":                     8,
 			"format_length":              baseLayout.strings[vpmBinaryFormatField].value.start,
 			"fixed_identity":             baseLayout.partitionCountOffset,
+			"domain_mapping":             baseLayout.domainPacks.end,
 			"router_asset":               baseLayout.routerAssets.end,
 			"placements":                 baseLayout.placements.end,
 			"home_memberships":           baseLayout.memberships.end,
@@ -517,6 +563,7 @@ func TestVectorPartitionManifestV1BinaryDeclaredSizesFailBeforeAllocation(t *tes
 	for _, tc := range []declaredSizeCase{
 		{name: "string_length", want: "string cap/truncated", limits: permissive, offset: layout.strings[vpmBinaryCollectionField].lengthOffset},
 		{name: "router_asset_count", want: "asset count exceeds remaining bytes", limits: permissive, offset: layout.routerAssets.countOffset},
+		{name: "domain_pack_count", want: "domain pack count exceeds remaining bytes", limits: permissive, offset: layout.domainPacks.countOffset},
 		{name: "placement_count", want: "placement count exceeds remaining bytes", limits: permissive, offset: layout.placements.countOffset},
 		{name: "membership_count", want: "membership count exceeds remaining bytes", limits: permissive, offset: layout.memberships.countOffset},
 		{name: "ready_asset_count", want: "asset count exceeds remaining bytes", limits: permissive, offset: layout.assets.countOffset},

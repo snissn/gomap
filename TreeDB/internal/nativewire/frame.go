@@ -21,7 +21,7 @@ func AppendHeader(dst []byte, h Header) ([]byte, error) {
 		h.Version.Major = ProtocolMajorV1
 	}
 	if h.Version.Minor == 0 {
-		h.Version.Minor = ProtocolMinorV0
+		h.Version.Minor = ProtocolMinorV1
 	}
 	if !validFrameType(h.Type) {
 		return dst, protocolError(ErrInvalidCommand, "unknown frame type %d", h.Type)

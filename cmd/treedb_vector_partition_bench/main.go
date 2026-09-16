@@ -113,6 +113,7 @@ type config struct {
 	m3PersistDir          string
 	m8ExistingDB          string
 	m8VariantDBs          []string
+	m8OracleDomainCounts  []int
 	partitionAssignment   string
 	partitionTruthOracle  bool
 	shardPlanMode         string
@@ -763,6 +764,10 @@ func runWithRuntimeCapabilities(args []string, stdout io.Writer, capabilities be
 		}
 		if cfg.topK > nativewire.DefaultVectorPartitionShardSearchLimitsV1().MaxTopK {
 			return fmt.Errorf("top-k cannot exceed M8 shard limit %d", nativewire.DefaultVectorPartitionShardSearchLimitsV1().MaxTopK)
+		}
+		cfg.m8OracleDomainCounts, err = m8RetainedOracleDomainCountsV1(cfg)
+		if err != nil {
+			return err
 		}
 		if _, err := validateM8BenchmarkWork(cfg, fixture, maxBenchmarkWorkUnits, cfg.maxBytes); err != nil {
 			return err
@@ -2204,6 +2209,19 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 		variantRuns = int64(len(cfg.m8VariantDBs))
 		supportedOverlaps = 1
 	}
+	oracleRuns, err := memoryMul(supportedOverlaps, variantRuns)
+	if err != nil {
+		return plan, err
+	}
+	oracleDomainCounts := cfg.m8OracleDomainCounts
+	if len(oracleDomainCounts) == 0 {
+		oracleDomainCounts = make([]int, int(oracleRuns))
+		for i := range oracleDomainCounts {
+			oracleDomainCounts[i] = cfg.partitions
+		}
+	} else if int64(len(oracleDomainCounts)) != oracleRuns {
+		return plan, errors.New("cannot plan M8 membership-oracle work without one logical-domain count per run")
+	}
 	var membershipOracleSubsetsPerSweep int64
 	var membershipOracleWorkPerQuerySweep int64
 	var probeSum int64
@@ -2220,55 +2238,60 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 		if supportedOverlaps == 0 {
 			continue
 		}
-		combinations, err := m8MembershipOracleCombinationCountV1(cfg.partitions, probes, maxBenchmarkWorkUnits)
-		if err != nil {
-			return plan, err
-		}
-		plan.MaxMembershipOracleSubsets = max(plan.MaxMembershipOracleSubsets, combinations)
-		membershipOracleSubsetsPerSweep, err = memoryAdd(membershipOracleSubsetsPerSweep, combinations)
-		if err != nil {
-			return plan, err
-		}
-		membershipPreparation, err := memoryMul(int64(cfg.topK), int64(cfg.partitions))
-		if err != nil {
-			return plan, err
-		}
-		oracleWork := membershipPreparation
-		if probes != cfg.partitions {
-			// The pruned combination walk has C(partitions+1, probes)
-			// calls including its root and one popcount per leaf.
-			nodes, err := m8MembershipOracleCombinationCountV1(cfg.partitions+1, probes, maxBenchmarkWorkUnits)
+		for _, domainCount := range oracleDomainCounts {
+			if domainCount < 1 || domainCount > cfg.partitions || probes > domainCount {
+				return plan, errors.New("cannot plan M8 benchmark work with an invalid logical-domain probe count")
+			}
+			combinations, err := m8MembershipOracleCombinationCountV1(domainCount, probes, maxBenchmarkWorkUnits)
 			if err != nil {
 				return plan, err
 			}
-			wordOperations, err := memoryMul(nodes-1+combinations, truthWords)
+			plan.MaxMembershipOracleSubsets = max(plan.MaxMembershipOracleSubsets, combinations)
+			membershipOracleSubsetsPerSweep, err = memoryAdd(membershipOracleSubsetsPerSweep, combinations)
 			if err != nil {
 				return plan, err
 			}
-			oracleWork, err = memoryAdd(oracleWork, wordOperations)
+			membershipPreparation, err := memoryMul(int64(cfg.topK), int64(domainCount))
 			if err != nil {
 				return plan, err
 			}
-		}
-		// The primary-home oracle counts each truth result, sorts every
-		// partition count, and walks the selected probe counts. Charge a
-		// conservative quadratic sort bound so the shared oracle cap covers
-		// both the primary-home and final-membership ladders.
-		primarySortWork, err := memoryMul(int64(cfg.partitions), int64(cfg.partitions))
-		if err != nil {
-			return plan, err
-		}
-		primaryOracleWork, err := memoryAdd(int64(cfg.topK), primarySortWork, int64(probes))
-		if err != nil {
-			return plan, err
-		}
-		oracleWork, err = memoryAdd(oracleWork, primaryOracleWork)
-		if err != nil {
-			return plan, err
-		}
-		membershipOracleWorkPerQuerySweep, err = memoryAdd(membershipOracleWorkPerQuerySweep, oracleWork)
-		if err != nil {
-			return plan, err
+			oracleWork := membershipPreparation
+			if probes != domainCount {
+				// The pruned combination walk has C(domains+1, probes)
+				// calls including its root and one popcount per leaf.
+				nodes, err := m8MembershipOracleCombinationCountV1(domainCount+1, probes, maxBenchmarkWorkUnits)
+				if err != nil {
+					return plan, err
+				}
+				wordOperations, err := memoryMul(nodes-1+combinations, truthWords)
+				if err != nil {
+					return plan, err
+				}
+				oracleWork, err = memoryAdd(oracleWork, wordOperations)
+				if err != nil {
+					return plan, err
+				}
+			}
+			// The primary-home oracle counts each truth result, sorts every
+			// domain count, and walks the selected probe counts. Charge a
+			// conservative quadratic sort bound so the shared oracle cap covers
+			// both the primary-home and final-membership ladders.
+			primarySortWork, err := memoryMul(int64(domainCount), int64(domainCount))
+			if err != nil {
+				return plan, err
+			}
+			primaryOracleWork, err := memoryAdd(int64(cfg.topK), primarySortWork, int64(probes))
+			if err != nil {
+				return plan, err
+			}
+			oracleWork, err = memoryAdd(oracleWork, primaryOracleWork)
+			if err != nil {
+				return plan, err
+			}
+			membershipOracleWorkPerQuerySweep, err = memoryAdd(membershipOracleWorkPerQuerySweep, oracleWork)
+			if err != nil {
+				return plan, err
+			}
 		}
 	}
 	truthCap := cfg.m8MaxExactTruthVisits
@@ -2345,11 +2368,11 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 	if plan.AttributionDiagnosticWorkUnits > capUnits {
 		return plan, fmt.Errorf("modeled M8 attribution diagnostics exceed %d-operation cap: truth_results_per_query=%d truth_pairs_per_query=%d attribution_cells=%d max_memberships_per_truth_result=%d selected_partition_setup=%d linear_bookkeeping=%d linear_membership_scans=%d pair_comparisons=%d total=%d", capUnits, cfg.topK, truthPairs, attributionCells, maxFinalMemberships, plan.SelectedPartitionSetupWorkUnits, plan.AttributionLinearWorkUnits, plan.FinalMembershipLinearScans, plan.FinalMembershipPairComparisons, plan.AttributionDiagnosticWorkUnits)
 	}
-	plan.MembershipOracleSubsetEvaluations, err = memoryMul(membershipOracleSubsetsPerSweep, int64(m.Queries), supportedOverlaps, variantRuns)
+	plan.MembershipOracleSubsetEvaluations, err = memoryMul(membershipOracleSubsetsPerSweep, int64(m.Queries))
 	if err != nil {
 		return plan, err
 	}
-	plan.MembershipOracleWorkUnits, err = memoryMul(membershipOracleWorkPerQuerySweep, int64(m.Queries), supportedOverlaps, variantRuns)
+	plan.MembershipOracleWorkUnits, err = memoryMul(membershipOracleWorkPerQuerySweep, int64(m.Queries))
 	if err != nil {
 		return plan, err
 	}

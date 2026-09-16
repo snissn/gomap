@@ -103,6 +103,7 @@ func localHNSWAttributionQueryEvidenceV1Build(ctx context.Context, source *m8Pro
 		return out, errors.New("noncanonical local HNSW global truth")
 	}
 	partitions := int(source.manifest.PartitionCount)
+	domains := int(source.manifest.DomainCount)
 	partitionDocumentIDs, err := localHNSWAttributionQueryPartitionDocumentIDsV1(source, native, overlay)
 	if err != nil {
 		return out, err
@@ -115,12 +116,12 @@ func localHNSWAttributionQueryEvidenceV1Build(ctx context.Context, source *m8Pro
 	if candidates < 1 {
 		return out, errors.New("invalid retained local HNSW router")
 	}
-	lowCount := min(2, partitions)
+	lowCount := min(2, domains)
 	lowRoute, err := localHNSWAttributionQueryRouteV1(ctx, source, query, candidates, lowCount)
 	if err != nil {
 		return out, err
 	}
-	highRoute, err := localHNSWAttributionQueryRouteV1(ctx, source, query, candidates, partitions)
+	highRoute, err := localHNSWAttributionQueryRouteV1(ctx, source, query, candidates, domains)
 	if err != nil || !localHNSWAttributionRoutePrefixV1(lowRoute, highRoute) || !localHNSWAttributionRoutePermutationV1(highRoute, partitions) {
 		return out, errors.New("invalid retained local HNSW query route")
 	}
@@ -271,15 +272,16 @@ func localHNSWAttributionQueryEvidenceRouteValidateV1(ctx context.Context, sourc
 		return errors.New("invalid local HNSW query route authority")
 	}
 	partitions := int(source.manifest.PartitionCount)
+	domains := int(source.manifest.DomainCount)
 	candidates := min(256, int(source.status.Representatives))
 	if candidates < 1 || len(evidence.Partitions) != partitions {
 		return errors.New("invalid retained local HNSW router")
 	}
-	low, err := localHNSWAttributionQueryRouteV1(ctx, source, query, candidates, min(2, partitions))
+	low, err := localHNSWAttributionQueryRouteV1(ctx, source, query, candidates, min(2, domains))
 	if err != nil {
 		return err
 	}
-	high, err := localHNSWAttributionQueryRouteV1(ctx, source, query, candidates, partitions)
+	high, err := localHNSWAttributionQueryRouteV1(ctx, source, query, candidates, domains)
 	if err != nil || !slices.Equal(evidence.LowRoute, low) || !slices.Equal(evidence.HighRoute, high) {
 		return errors.New("persisted local HNSW route does not match retained router")
 	}
@@ -398,11 +400,11 @@ func localHNSWAttributionQueryRouteV1(ctx context.Context, source *m8ProductionM
 	if err != nil || route.Status.Mode != collections.VectorPartitionRouterModeApproxV1 || len(route.Partitions) != probes {
 		return nil, errors.New("retained local HNSW router query")
 	}
-	out := make([]uint32, probes)
+	domains := make([]uint32, probes)
 	for i, partition := range route.Partitions {
-		out[i] = partition.PartitionID
+		domains[i] = partition.PartitionID
 	}
-	return out, nil
+	return m8AttributionPacksForDomainsV1(source.manifest, len(source.manifest.Assets), domains)
 }
 
 func localHNSWAttributionExactLocalV1(ctx context.Context, native *localHNSWVariantHarnessV1, query []float32, route []uint32) ([]m8CanonicalResultV1, error) {
@@ -635,7 +637,7 @@ func localHNSWAttributionQueryEvidenceValidateV1(evidence localHNSWAttributionQu
 	if err != nil {
 		return err
 	}
-	if evidence.Schema != localHNSWAttributionQuerySchemaV1 || evidence.QueryOrdinal < 0 || !localHNSWAttributionSHA256V1(evidence.QueryFP32SHA256) || len(evidence.Partitions) == 0 || len(partitionRows) != len(evidence.Partitions) || !slices.Equal(evidence.PartitionRows, partitionRows) || len(evidence.LowRoute) != min(2, len(evidence.Partitions)) || !localHNSWAttributionRoutePrefixV1(evidence.LowRoute, evidence.HighRoute) || !localHNSWAttributionRoutePermutationV1(evidence.HighRoute, len(evidence.Partitions)) {
+	if evidence.Schema != localHNSWAttributionQuerySchemaV1 || evidence.QueryOrdinal < 0 || !localHNSWAttributionSHA256V1(evidence.QueryFP32SHA256) || len(evidence.Partitions) == 0 || len(partitionRows) != len(evidence.Partitions) || !slices.Equal(evidence.PartitionRows, partitionRows) || len(evidence.LowRoute) < min(2, len(evidence.Partitions)) || !localHNSWAttributionRoutePrefixV1(evidence.LowRoute, evidence.HighRoute) || !localHNSWAttributionRoutePermutationV1(evidence.HighRoute, len(evidence.Partitions)) {
 		return errors.New("invalid local HNSW persisted query evidence")
 	}
 	truth, err := localHNSWAttributionCanonicalQueryResultBitsV1(evidence.GlobalTruth, true)

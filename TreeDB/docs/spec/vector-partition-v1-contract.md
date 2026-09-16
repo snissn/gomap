@@ -29,18 +29,20 @@ An `exact_partition_union_v1` result is conformant only when all of these hold:
 
 1. The M1 manifest/source identity is byte-for-byte bound at open: collection,
    index definition digest, source generation/checksum/schema/row count,
-   partition generation, router generation, ready-set digest, and complete
-   canonical partition placement. A missing, stale, mixed, or source_mismatch
+   partition generation, router generation, ready-set digest, complete
+   logical-domain-to-physical-pack mapping, and canonical pack placement. A
+   missing, stale, mixed, or source_mismatch
    manifest/source/generation identity is rejected before routing or fanout as
    `generation_mismatch` (with the failed identity in detail), not a partial
    result. Exact placement partition/group drift is separately
    `route_mismatch`; it is not folded into `generation_mismatch`.
 2. Where routing is used, the exact representative route scores every persisted
-   representative and selects unique partitions deterministically by
-   `(distance, partition_id)`. Representative selection is not a substitute for
+   representative and selects unique logical domains deterministically by
+   `(distance, domain_id)`. Every selected domain expands to all of its required
+   physical search packs. Representative selection is not a substitute for
    an exhaustive exact union.
-3. The union covers every canonical logical partition exactly as named by the
-   accepted generation. Each partition is searched with `exact_fp32_scan_v1`;
+3. The union covers every canonical physical search pack exactly as named by
+   the accepted generation. Each pack is searched with `exact_fp32_scan_v1`;
    overlap may yield repeated stable IDs but may not create a second logical
    document.
 4. Scores use the canonical FP32 cosine contract. Global dedupe keeps the best score per stable ID and final top-k ordering is `(score descending, stable ID bytewise ascending)`. Equal-score ties and duplicate arrival order therefore

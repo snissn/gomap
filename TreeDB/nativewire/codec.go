@@ -52,7 +52,7 @@ func writeFrame(w io.Writer, header iwire.Header, body []byte) error {
 		header.Version.Major = iwire.ProtocolMajorV1
 	}
 	if header.Version.Minor == 0 {
-		header.Version.Minor = iwire.ProtocolMinorV0
+		header.Version.Minor = iwire.ProtocolMinorV1
 	}
 	header.BodyLen = uint64(len(body))
 	var headerBuf [iwire.FrameHeaderLenV1]byte
@@ -74,7 +74,7 @@ func writeFrameBuffered(w io.Writer, header iwire.Header, body []byte, dst []byt
 		header.Version.Major = iwire.ProtocolMajorV1
 	}
 	if header.Version.Minor == 0 {
-		header.Version.Minor = iwire.ProtocolMinorV0
+		header.Version.Minor = iwire.ProtocolMinorV1
 	}
 	header.BodyLen = uint64(len(body))
 	var headerBuf [iwire.FrameHeaderLenV1]byte

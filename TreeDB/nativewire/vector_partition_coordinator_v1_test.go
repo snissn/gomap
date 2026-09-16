@@ -279,13 +279,15 @@ func testVectorPartitionCoordinatorWithShardLimitsV1(t *testing.T, groups []raft
 		SourceGeneration: placement.SourceGeneration, SourceChecksum: placement.SourceChecksum,
 		SourceSchemaHash: placement.SourceSchemaHash, SourceRowCount: placement.SourceRowCount,
 		Generation: placement.PartitionGeneration, RouterGeneration: placement.PartitionGeneration,
-		PartitionCount: placement.PartitionCount, ReadySetDigest: fmt.Sprintf("%064x", 23),
-		Placements: make([]collections.VectorPartitionPlacementV1, len(owners)),
+		PartitionCount: placement.PartitionCount, DomainCount: placement.PartitionCount, ReadySetDigest: fmt.Sprintf("%064x", 23),
+		DomainPacks: make([]collections.VectorPartitionDomainPackV1, len(owners)),
+		Placements:  make([]collections.VectorPartitionPlacementV1, len(owners)),
 	}
 	partitionScores := make([]collections.VectorPartitionRouterPartitionScoreV1, len(owners))
 	for partition, groupID := range owners {
 		placement.Partitions[partition] = raftplacement.VectorPartitionGroupV1{PartitionID: uint32(partition), GroupID: groupID}
 		manifest.Placements[partition] = collections.VectorPartitionPlacementV1{PartitionID: uint32(partition), GroupID: string(groupID)}
+		manifest.DomainPacks[partition] = collections.VectorPartitionDomainPackV1{DomainID: uint32(partition), PackID: uint32(partition)}
 		partitionScores[partition] = collections.VectorPartitionRouterPartitionScoreV1{
 			PartitionID: uint32(partition), Distance: float64(partition) / 100,
 		}
@@ -402,6 +404,92 @@ func TestVectorPartitionCoordinatorCoalescesChunksDedupesAndMergesV1(t *testing.
 	if got := response.Neighbors; len(got) != 3 || got[0].ID != "doc-00" ||
 		got[1].ID != "doc-01" || got[2].ID != "doc-02" {
 		t.Fatalf("stable top-k=%+v", got)
+	}
+}
+
+func TestVectorPartitionCoordinatorExpandsOneDomainToAllRequiredPacksV1(t *testing.T) {
+	owners := []raftcluster.GroupID{"group-a", "group-b"}
+	neighbors := map[uint32][]VectorPartitionShardSearchNeighborV1{
+		0: {{ID: "pack-0", Score: .9}},
+		1: {{ID: "pack-1", Score: .8}},
+	}
+	coordinator, source, dispatcher := testVectorPartitionCoordinatorV1(t,
+		[]raftplacement.GroupV1{
+			{ID: "group-a", Members: []raftcluster.NodeID{"node-a"}, LeaderHint: "node-a"},
+			{ID: "group-b", Members: []raftcluster.NodeID{"node-b"}, LeaderHint: "node-b"},
+		}, owners, neighbors, VectorPartitionCoordinatorLimitsV1{},
+	)
+	source.router.status.Manifest.DomainCount = 1
+	source.router.status.Manifest.DomainPacks = []collections.VectorPartitionDomainPackV1{
+		{DomainID: 0, PackID: 0}, {DomainID: 0, PackID: 1},
+	}
+	source.router.status.Partitions = 1
+	source.router.partitions = source.router.partitions[:1]
+
+	request := testVectorPartitionCoordinatorRequestV1(1)
+	request.RouterCandidateBudget = int(source.router.status.Representatives)
+	request.MergeEntriesLimit = 6
+	response, err := coordinator.Search(t.Context(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(response.ProbedDomains, []uint32{0}) ||
+		!slices.Equal(response.ProbedPacks, []uint32{0, 1}) ||
+		!slices.Equal(response.ProbedPartitions, response.ProbedPacks) ||
+		response.Counters.SelectedDomains != 1 || response.Counters.SelectedPacks != 2 ||
+		response.Counters.SelectedPartitions != 2 || len(dispatcher.calls) != 2 {
+		t.Fatalf("response=%+v calls=%+v", response, dispatcher.calls)
+	}
+}
+
+func TestVectorPartitionCoordinatorPinsDomainPacksWithSessionOffsetsV1(t *testing.T) {
+	coordinator, source, _ := testVectorPartitionCoordinatorV1(t,
+		[]raftplacement.GroupV1{
+			{ID: "group-a", Members: []raftcluster.NodeID{"node-a"}, LeaderHint: "node-a"},
+			{ID: "group-b", Members: []raftcluster.NodeID{"node-b"}, LeaderHint: "node-b"},
+		},
+		[]raftcluster.GroupID{"group-a", "group-b"},
+		map[uint32][]VectorPartitionShardSearchNeighborV1{
+			0: {{ID: "pack-0", Score: .9}},
+			1: {{ID: "pack-1", Score: .8}},
+		},
+		VectorPartitionCoordinatorLimitsV1{},
+	)
+	source.router.status.Manifest.DomainCount = 1
+	source.router.status.Manifest.DomainPacks = []collections.VectorPartitionDomainPackV1{
+		{DomainID: 0, PackID: 0}, {DomainID: 0, PackID: 1},
+	}
+	source.router.status.Partitions = 1
+	source.router.partitions = source.router.partitions[:1]
+	request := testVectorPartitionCoordinatorRequestV1(1)
+	request.RouterCandidateBudget = int(source.router.status.Representatives)
+	request.MergeEntriesLimit = 6
+	if _, err := coordinator.Search(t.Context(), request); err != nil {
+		t.Fatal(err)
+	}
+
+	source.router.status.Manifest.DomainPacks[0].PackID = 99
+	response, err := coordinator.Search(t.Context(), request)
+	if err != nil || !slices.Equal(response.ProbedPacks, []uint32{0, 1}) {
+		t.Fatalf("response=%+v err=%v", response, err)
+	}
+}
+
+func TestVectorPartitionCoordinatorRejectsIncompleteDomainPackMappingBeforeDispatchV1(t *testing.T) {
+	coordinator, source, dispatcher := testVectorPartitionCoordinatorV1(t,
+		[]raftplacement.GroupV1{{ID: "group-a", Members: []raftcluster.NodeID{"node-a"}, LeaderHint: "node-a"}},
+		[]raftcluster.GroupID{"group-a", "group-a"},
+		map[uint32][]VectorPartitionShardSearchNeighborV1{0: {{ID: "pack-0", Score: .9}}, 1: {{ID: "pack-1", Score: .8}}},
+		VectorPartitionCoordinatorLimitsV1{},
+	)
+	source.router.status.Manifest.DomainCount = 1
+	source.router.status.Manifest.DomainPacks = []collections.VectorPartitionDomainPackV1{{DomainID: 0, PackID: 0}}
+	source.router.status.Partitions = 1
+
+	response, err := coordinator.Search(t.Context(), testVectorPartitionCoordinatorRequestV1(1))
+	if err == nil || !errors.Is(err, ErrVectorPartitionCoordinatorGenerationMismatch) ||
+		!reflect.DeepEqual(response, VectorPartitionCoordinatorResponseV1{}) || len(dispatcher.calls) != 0 {
+		t.Fatalf("response=%+v err=%v calls=%+v", response, err, dispatcher.calls)
 	}
 }
 

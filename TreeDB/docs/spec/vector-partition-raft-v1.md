@@ -10,9 +10,10 @@ multi-group acceptance remain M8 work.
 
 ## M1 durable lifecycle
 
-Each ready manifest stores typed `ColumnAssetRef`s, not paths. Every partition
-asset has an explicit logical `partition_id`; every declared logical partition
-must have at least one asset, while the router is a separate asset. Asset refs,
+Each ready manifest stores typed `ColumnAssetRef`s, not paths. Every physical
+search-pack asset has an explicit pack ID and belongs to exactly one logical
+routing domain; every domain binds one or more packs, while the router is a
+separate asset. Asset refs,
 checksums, lengths, and aggregate referenced bytes are bounded and canonical.
 The reduced checkpoint state pins one ready active generation. `Deactivate`
 appends an immutable transition that changes it to retained/prepared-only;
@@ -40,7 +41,9 @@ self-contained copies and do not pin live side-store files after export.
 
 `BuildAndPublishVectorPartitionRouterV1` consumes a byte-identical durable M1
 `building` manifest plus the complete primary vector membership of every
-logical partition. It revalidates the live source identity, index-definition
+physical pack. It aggregates each domain's pack memberships by source ordinal,
+with home membership winning duplicate home/overlap labels, then revalidates
+the live source identity, index-definition
 digest, dimensions, membership closure, and bounded router configuration before
 building. `ReadVectorPartitionRouterSourceRowsV1` exposes an owned
 ordinal/document-ID/FP32 snapshot for membership construction; publication
@@ -51,7 +54,7 @@ order is not significant: partitions and source ordinals are canonicalized
 before deterministic hierarchical cosine k-means.
 
 `RouterConfigV1` persists the seed, branch factor, leaf-size stop,
-representative budget per partition, maximum depth, maximum Lloyd iterations,
+representative budget per logical domain, maximum depth, maximum Lloyd iterations,
 and vector/dimension/representative/scalar-work/persisted-byte caps. A
 conservative full 64-layer native-pack bound is checked before row or adjacency
 allocation, and the actual encoded length is checked again before append.
@@ -100,12 +103,17 @@ Exact routing is the correctness oracle and requires
 representatives. Approximate routing passes its explicit candidate budget as a
 hard distinct layer-0 scoring limit to the native prepared HNSW path. Candidate
 budget and partition-probe count are separate controls. Both paths reduce
-multiple representative hits to the minimum cosine distance per partition and
-return unique partitions ordered by `(distance, partition_id)`. A zero/invalid
+multiple representative hits to the minimum cosine distance per domain and
+return unique domains ordered by `(distance, domain_id)`. A zero/invalid
 budget, non-finite or dimension-mismatched query, malformed asset, stale
 generation, closed handle, or candidate set that cannot supply the requested
 number of unique partitions is an error; no partial partition list is
 returned.
+
+The coordinator expands every selected domain to all bound packs before
+placement or dispatch. Public and retained evidence report
+selected-domain and selected-pack counters separately; the legacy selected-partition counter is a
+physical-pack alias.
 
 Build, open, search, and cumulative runtime status report generation/digest,
 representative and hierarchy counts, build/append/publication/open/search
@@ -481,15 +489,15 @@ real multi-group matched-recall evidence.
 `collections.VectorPartitionManifestV1` is the M1 binary record, with format
 `vector_partition_manifest_v1`. It binds a collection, the SHA-256 digest of
 the existing `VectorIndexDefinition`, source base generation/checksum/schema
-and row count, derived partition generation, and a complete logical
-partition-to-Raft-group mapping. Logical partition IDs are dense `[0,n)` and
-are not `_id` token partitions; multiple logical partitions can name one Raft
-group.
+and row count, derived partition generation, a complete
+logical-domain-to-physical-pack mapping, and physical-pack-to-Raft-group placement. Domain and
+pack IDs are independently dense from zero; multiple packs can name one Raft
+group and every domain binds at least one pack.
 
 The record separates `building` from `ready`. A building record has no router
 or ready-set reference and is never active. A ready record requires a matching
-router generation and canonical SHA-256 ready-set digest over length-prefixed
-placement and asset descriptors, including the router's required canonical
+router generation and canonical SHA-256 ready-set digest over the domain-pack
+mapping, placement, and asset descriptors, including the router's canonical
 `partition_id=0`. It contains exactly one disjoint membership
 for every source ordinal and separately records bounded overlap memberships.
 Raw `VectorPartitionStoreV1` lifecycle mutation is fail-closed: publication,
@@ -526,12 +534,12 @@ with both original and superseded refs, and retains the reduced reclaim state
 until all segment debt is physically absent; the durable-root fallback
 generation can therefore delay, but never bypass, DELETE_COMPLETE.
 
-### V1 API/schema contract, VPM1 wire version 3, and bounds
+### V1 API/schema contract, VPM1 wire version 4, and bounds
 
 `V1` in public API, type, and schema names identifies that pre-alpha contract;
 it is distinct from the explicit VPM1 wire version.
 The canonical generation payload is binary `VPM1` (big-endian magic
-`0x56504d31`, version `3`), followed by fixed-order length-prefixed fields;
+`0x56504d31`, version `4`), followed by fixed-order length-prefixed fields;
 there are no tagged optional fields. The JSON form is an inspection/exchange
 encoding of that same record: unknown fields, a second JSON value, trailing
 bytes, and non-canonical ordering fail closed. VPM1 is embedded in VCP1
@@ -541,15 +549,18 @@ placement, every membership family, and asset descriptors; this is separate
 from the ready-set asset contract. Version 3 adds each asset descriptor's
 optional membership digest. Native partition HNSW assets require it; the digest
 also appears in their pack wire-version-2 header and binds generation,
-partition, ordered authoritative stable IDs, and home/overlap kinds.
+partition, ordered authoritative stable IDs, and home/overlap kinds. Version 4
+adds the dense logical-domain count and complete canonical domain-pack mapping;
+both the ready-set and whole-record integrity digests bind that mapping.
 
 | Record area | Required content | Validation boundary |
 | --- | --- | --- |
 | identity | collection, index name, SHA-256 index-definition digest; source generation/checksum/schema/row count; partition and router generations | exact live TVIS/base identity; ready router generation equals partition generation |
-| placement | dense logical `partition_id` to one Raft group, with many logical partitions allowed per group | IDs are exactly `[0, partition_count)` and canonical |
-| memberships | one disjoint membership per source ordinal; bounded overlap and representatives | ordinal/partition coverage, sorted order, per-vector and per-partition caps; the same ordinal/partition pair cannot be both home and overlap |
-| assets | typed `ColumnAssetRef`, length, CRC, SHA-256 and logical asset ID for each partition plus router; native partition packs also carry the canonical membership digest | references are namespace-bound, unique, streamed and checksum-verified before every collection-authorized publication; native membership identity is recomputed from the authoritative source and must match both descriptor and pack header; router partition ID is exactly zero |
-| ready set | SHA-256 over canonical placements, partition assets and router descriptor | mismatches, mixed router/generation, or missing partition asset reject |
+| domains | dense logical domain IDs and a complete domain-to-pack mapping | every physical pack appears exactly once and every domain is nonempty |
+| placement | dense physical pack ID to one Raft group, with many packs allowed per group | IDs are exactly `[0, partition_count)` and canonical |
+| memberships | one disjoint physical-pack membership per source ordinal; bounded pack overlap and logical-domain representatives | ordinal/ID coverage, sorted order, per-vector and per-ID caps; the same ordinal/pack pair cannot be both home and overlap |
+| assets | typed `ColumnAssetRef`, length, CRC, SHA-256 and logical asset ID for each physical pack plus router; native packs also carry the canonical membership digest | references are namespace-bound, unique, streamed and checksum-verified before every collection-authorized publication; native membership identity is recomputed from the authoritative source and must match both descriptor and pack header; router partition ID is exactly zero |
+| ready set | SHA-256 over canonical domain-pack mapping, placements, pack assets and router descriptor | mismatches, mixed router/generation, incomplete mapping, or missing pack asset reject |
 
 Default decode limits are 16 MiB encoded bytes, 65,536 partitions, 1,048,576
 source rows, and 2,097,152 aggregate memberships across disjoint, overlap,

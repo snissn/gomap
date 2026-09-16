@@ -192,7 +192,7 @@ func (e *localEndpoint) roundTripVersion(ctx context.Context, streamID uint64, t
 	}
 	e.frame = e.frame[:0]
 	request := iwire.Header{
-		Version:   iwire.Version{Major: iwire.ProtocolMajorV1, Minor: iwire.ProtocolMinorV0},
+		Version:   iwire.Version{Major: iwire.ProtocolMajorV1, Minor: iwire.ProtocolMinorV1},
 		Type:      typ,
 		StreamID:  streamID,
 		RequestID: requestID,
@@ -212,7 +212,7 @@ func (e *localEndpoint) roundTripVersion(ctx context.Context, streamID uint64, t
 	if err != nil {
 		return iwire.Header{}, nil, err
 	}
-	if err := iwire.ValidateHeaderVersion(header, iwire.Version{Major: iwire.ProtocolMajorV1, Minor: iwire.ProtocolMinorV0}); err != nil {
+	if err := iwire.ValidateHeaderVersion(header, iwire.Version{Major: iwire.ProtocolMajorV1, Minor: iwire.ProtocolMinorV1}); err != nil {
 		return header, nil, err
 	}
 	response := e.frame[iwire.FrameHeaderLenV1:]

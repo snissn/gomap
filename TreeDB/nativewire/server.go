@@ -625,7 +625,7 @@ func (s *Server) unregisterLocalEndpoint(endpoint *localEndpoint) {
 func (s *Server) handleFrame(ctx context.Context, w io.Writer, state *connState, header iwire.Header, body []byte) error {
 	s.counters.incFramesIn()
 	s.counters.addBytesIn(uint64(iwire.FrameHeaderLenV1) + uint64(len(body)))
-	if err := iwire.ValidateHeaderVersion(header, iwire.Version{Major: iwire.ProtocolMajorV1, Minor: iwire.ProtocolMinorV0}); err != nil {
+	if err := iwire.ValidateHeaderVersion(header, iwire.Version{Major: iwire.ProtocolMajorV1, Minor: iwire.ProtocolMinorV1}); err != nil {
 		if writeErr := s.writeError(w, header, err); writeErr != nil {
 			return writeErr
 		}
@@ -856,7 +856,7 @@ func (s *Server) writeHelloOK(w io.Writer, header iwire.Header, state *connState
 	caps := map[string]string{
 		"protocol":           "treedb-native-wire",
 		"protocol_major":     strconv.Itoa(int(iwire.ProtocolMajorV1)),
-		"protocol_minor":     strconv.Itoa(int(iwire.ProtocolMinorV0)),
+		"protocol_minor":     strconv.Itoa(int(iwire.ProtocolMinorV1)),
 		"connection_id":      strconv.FormatUint(connectionID, 10),
 		"default_ack_policy": strconv.FormatUint(uint64(s.defaultAckPolicy), 10),
 	}
@@ -1059,7 +1059,7 @@ func (s *Server) writeSimpleFrame(w io.Writer, header iwire.Header, body []byte)
 			}
 		}
 	}
-	header.Version = iwire.Version{Major: iwire.ProtocolMajorV1, Minor: iwire.ProtocolMinorV0}
+	header.Version = iwire.Version{Major: iwire.ProtocolMajorV1, Minor: iwire.ProtocolMinorV1}
 	if err := writeFrame(w, header, body); err != nil {
 		return err
 	}

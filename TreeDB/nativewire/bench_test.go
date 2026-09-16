@@ -284,7 +284,7 @@ func benchmarkDispatchRequest(tb testing.TB, server *Server, state *connState, s
 func benchmarkDispatchRequestError(server *Server, state *connState, sink *benchmarkFrameSink, body []byte) ([]byte, error) {
 	sink.frame = sink.frame[:0]
 	header := iwire.Header{
-		Version:   iwire.Version{Major: iwire.ProtocolMajorV1, Minor: iwire.ProtocolMinorV0},
+		Version:   iwire.Version{Major: iwire.ProtocolMajorV1, Minor: iwire.ProtocolMinorV1},
 		Type:      iwire.FrameRequest,
 		RequestID: 1,
 	}

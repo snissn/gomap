@@ -64,7 +64,7 @@ func TestHCBridgeClientCapReservesSystemDiagnosticConnectionV1(t *testing.T) {
 }
 
 func TestHCBridgeStatusAndSearchIdentityV1(t *testing.T) {
-	b := hcBridgeTestV1(&hcBridgeFakeClientV1{search: public.SearchResponseV1{Generation: public.GenerationIDV1{Index: "idx", Generation: 7}, Neighbors: []public.NeighborV1{{ID: "doc-000042", Score: .5}}, Counters: public.SearchCountersV1{SelectedPartitions: 1, HNSWServedPartitions: 1}}})
+	b := hcBridgeTestV1(&hcBridgeFakeClientV1{search: public.SearchResponseV1{Generation: public.GenerationIDV1{Index: "idx", Generation: 7}, Neighbors: []public.NeighborV1{{ID: "doc-000042", Score: .5}}, Counters: public.SearchCountersV1{SelectedDomains: 1, SelectedPacks: 1, SelectedPartitions: 1, HNSWServedPartitions: 1}}})
 	for _, tc := range []struct {
 		method, path, body string
 		want               int
@@ -100,7 +100,7 @@ func TestHCBridgeStatusPoolAcquireHonorsConfiguredDeadlineV1(t *testing.T) {
 
 func TestHCBridgeSearchRouteProofV1(t *testing.T) {
 	valid := func() public.SearchResponseV1 {
-		return public.SearchResponseV1{Generation: public.GenerationIDV1{Index: "idx", Generation: 7}, Neighbors: []public.NeighborV1{{ID: "doc-000042"}}, Counters: public.SearchCountersV1{SelectedPartitions: 1, HNSWServedPartitions: 1}}
+		return public.SearchResponseV1{Generation: public.GenerationIDV1{Index: "idx", Generation: 7}, Neighbors: []public.NeighborV1{{ID: "doc-000042"}}, Counters: public.SearchCountersV1{SelectedDomains: 1, SelectedPacks: 1, SelectedPartitions: 1, HNSWServedPartitions: 1}}
 	}
 	for _, tc := range []struct {
 		name   string
@@ -110,11 +110,16 @@ func TestHCBridgeSearchRouteProofV1(t *testing.T) {
 		{"stale_generation", func(r *public.SearchResponseV1) { r.Generation.Generation = 8 }, http.StatusBadGateway},
 		{"partial_top_k", func(r *public.SearchResponseV1) { r.Neighbors = nil }, http.StatusBadGateway},
 		{"absent_route", func(r *public.SearchResponseV1) {
-			r.Counters.SelectedPartitions, r.Counters.HNSWServedPartitions = 0, 0
+			r.Counters.SelectedDomains, r.Counters.SelectedPacks, r.Counters.SelectedPartitions, r.Counters.HNSWServedPartitions = 0, 0, 0, 0
 		}, http.StatusBadGateway},
-		{"missing_fanout", func(r *public.SearchResponseV1) { r.Counters.SelectedPartitions = 0 }, http.StatusBadGateway},
-		{"extra_fanout", func(r *public.SearchResponseV1) {
-			r.Counters.SelectedPartitions, r.Counters.HNSWServedPartitions = 2, 2
+		{"missing_domain", func(r *public.SearchResponseV1) { r.Counters.SelectedDomains = 0 }, http.StatusBadGateway},
+		{"extra_domain", func(r *public.SearchResponseV1) { r.Counters.SelectedDomains = 2 }, http.StatusBadGateway},
+		{"pack_alias_mismatch", func(r *public.SearchResponseV1) { r.Counters.SelectedPartitions = 2 }, http.StatusBadGateway},
+		{"multi_pack_valid", func(r *public.SearchResponseV1) {
+			r.Counters.SelectedPacks, r.Counters.SelectedPartitions, r.Counters.HNSWServedPartitions = 2, 2, 2
+		}, http.StatusOK},
+		{"pack_below_domain", func(r *public.SearchResponseV1) {
+			r.Counters.SelectedDomains, r.Counters.SelectedPacks, r.Counters.SelectedPartitions = 2, 1, 1
 		}, http.StatusBadGateway},
 		{"hnsw_over_selected", func(r *public.SearchResponseV1) { r.Counters.HNSWServedPartitions = 2 }, http.StatusBadGateway},
 		{"overflow_shaped", func(r *public.SearchResponseV1) {
@@ -207,7 +212,7 @@ func TestHCBridgeSearchRetriesRetiredClientOnceV1(t *testing.T) {
 }
 
 func TestHCBridgeSearchDoesNotIssueStatusRPCV1(t *testing.T) {
-	client := &hcBridgeCountingClientV1{search: public.SearchResponseV1{Generation: public.GenerationIDV1{Index: "idx", Generation: 7}, Neighbors: []public.NeighborV1{{ID: "doc-000042"}}, Counters: public.SearchCountersV1{SelectedPartitions: 1, HNSWServedPartitions: 1}}}
+	client := &hcBridgeCountingClientV1{search: public.SearchResponseV1{Generation: public.GenerationIDV1{Index: "idx", Generation: 7}, Neighbors: []public.NeighborV1{{ID: "doc-000042"}}, Counters: public.SearchCountersV1{SelectedDomains: 1, SelectedPacks: 1, SelectedPartitions: 1, HNSWServedPartitions: 1}}}
 	b := hcBridgeTestV1(client)
 	w := httptest.NewRecorder()
 	b.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/v1/search", strings.NewReader(`{"version":1,"index":"idx","generation":7,"query":[1],"top_k":1,"probes":1,"ef_search":1}`)))
@@ -230,8 +235,9 @@ func TestHCBridgeSearchUsesRequestLocalMergeBudgetV1(t *testing.T) {
 	if w.Code != http.StatusOK || len(client.calls) != 1 || client.calls[0] != "search" {
 		t.Fatalf("status=%d calls=%+v", w.Code, client.calls)
 	}
-	if got := client.request[0].Search.Limits.MergeEntries; got != 10 || got > nativewire.DefaultVectorPartitionCoordinatorLimitsV1().MaxMergeEntries {
-		t.Fatalf("merge budget got=%d want=10", got)
+	want := nativewire.DefaultVectorPartitionCoordinatorLimitsV1().MaxSelectedPartitions * 10
+	if got := client.request[0].Search.Limits.MergeEntries; got != want || got > nativewire.DefaultVectorPartitionCoordinatorLimitsV1().MaxMergeEntries {
+		t.Fatalf("merge budget got=%d want=%d", got, want)
 	}
 }
 
@@ -268,7 +274,7 @@ func hcBridgeTenNeighborSearchV1() public.SearchResponseV1 {
 	for i := range neighbors {
 		neighbors[i] = public.NeighborV1{ID: fmt.Sprintf("doc-%06d", i), Score: float32(i)}
 	}
-	return public.SearchResponseV1{Generation: public.GenerationIDV1{Index: "idx", Generation: 7}, Neighbors: neighbors, Counters: public.SearchCountersV1{SelectedPartitions: 1, HNSWServedPartitions: 1}}
+	return public.SearchResponseV1{Generation: public.GenerationIDV1{Index: "idx", Generation: 7}, Neighbors: neighbors, Counters: public.SearchCountersV1{SelectedDomains: 1, SelectedPacks: 1, SelectedPartitions: 1, HNSWServedPartitions: 1}}
 }
 
 func TestHCBridgeServerReservesTimeoutResponseGraceV1(t *testing.T) {

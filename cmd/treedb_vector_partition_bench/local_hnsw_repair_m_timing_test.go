@@ -142,7 +142,7 @@ func TestLocalHNSWRepairMTimingGateV1(t *testing.T) {
 			}
 		}
 	}
-	gate, err := localHNSWRepairMTimingGateV1Build(cells)
+	gate, err := localHNSWRepairMTimingGateV1Build(cells, 2, 16)
 	if err != nil || gate.Disposition != "calibration_timing_gate_pass" || gate.P2QPSCandidateOverBaseline != 1 || gate.P16P95CandidateOverBaseline != 1 {
 		t.Fatalf("gate=%+v err=%v", gate, err)
 	}
@@ -151,7 +151,7 @@ func TestLocalHNSWRepairMTimingGateV1(t *testing.T) {
 			cells[i].QPS = 80
 		}
 	}
-	if gate, err = localHNSWRepairMTimingGateV1Build(cells); err != nil || gate.Disposition != "calibration_timing_gate_fail" {
+	if gate, err = localHNSWRepairMTimingGateV1Build(cells, 2, 16); err != nil || gate.Disposition != "calibration_timing_gate_fail" {
 		t.Fatalf("failed gate=%+v err=%v", gate, err)
 	}
 	if err := run([]string{"local-hnsw-repair-m-timing"}, nil); err == nil {

@@ -2,6 +2,7 @@ package main
 
 import (
 	"math"
+	"slices"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/collections"
@@ -26,6 +27,44 @@ func TestM8RowCountersTrackTruePerRequestMaximaV1(t *testing.T) {
 		row.MaxRequestBytes != 100 || row.MaxCandidateBytes != 400 || row.MaxResponseBytes != 300 || row.MaxMergeEntries != 40 ||
 		row.MaxShardPartitions != 4 || row.MaxShardRequestBytes != 70 || row.MaxShardCandidateBytes != 300 || row.MaxShardResponseBytes != 220 {
 		t.Fatalf("per-request maxima=%+v", row)
+	}
+}
+
+func TestM8ConfiguredProbesUseLogicalDomainCountV1(t *testing.T) {
+	if err := m8ValidateConfiguredDomainProbesV1([]int{1}, 1); err != nil {
+		t.Fatalf("one logical-domain probe: %v", err)
+	}
+	if err := m8ValidateConfiguredDomainProbesV1([]int{2}, 1); err == nil {
+		t.Fatal("accepted physical-pack probe count above logical domains")
+	}
+}
+
+func TestM8LocalSearchFanoutRequiresAchievableDomainSubsetV1(t *testing.T) {
+	if !m8LocalSearchFanoutValidV1([]uint32{1, 3}, 4, 2, 1, []int{1, 3}) {
+		t.Fatal("rejected achievable one-domain fanouts")
+	}
+	if m8LocalSearchFanoutValidV1([]uint32{2}, 2, 1, 1, []int{1, 3}) {
+		t.Fatal("accepted fanout between achievable one-domain totals")
+	}
+	if !m8LocalSearchFanoutValidV1([]uint32{4}, 4, 1, 2, []int{1, 3}) {
+		t.Fatal("rejected achievable two-domain fanout")
+	}
+}
+
+func TestM8AttributionExpandsLogicalDomainsToPhysicalPacksV1(t *testing.T) {
+	manifest := collections.VectorPartitionManifestV1{
+		PartitionCount: 3,
+		DomainCount:    2,
+		DomainPacks: []collections.VectorPartitionDomainPackV1{
+			{DomainID: 0, PackID: 0}, {DomainID: 0, PackID: 1}, {DomainID: 1, PackID: 2},
+		},
+	}
+	got, err := m8AttributionPacksForDomainsV1(manifest, 3, []uint32{0})
+	if err != nil || !slices.Equal(got, []uint32{0, 1}) {
+		t.Fatalf("domain 0 packs=%v err=%v want [0 1]", got, err)
+	}
+	if _, err := m8AttributionPacksForDomainsV1(manifest, 3, []uint32{0, 0}); err == nil {
+		t.Fatal("accepted duplicate routed domain")
 	}
 }
 
@@ -139,6 +178,30 @@ func TestM8ProductionResourcesReportRequestRouterBudgetV1(t *testing.T) {
 		return
 	}
 	t.Fatal("missing coordinator_router_candidates comparison")
+}
+
+func TestM8ProductionRequestReservesPhysicalPackMergeBudgetV1(t *testing.T) {
+	assets := &m8ProductionMultiGroupAssetsV1{manifest: collections.VectorPartitionManifestV1{
+		PartitionCount: 2,
+		DomainCount:    1,
+		DomainPacks: []collections.VectorPartitionDomainPackV1{
+			{DomainID: 0, PackID: 0}, {DomainID: 0, PackID: 1},
+		},
+	}}
+	request := m8ProductionRequestV1(assets, []float32{1}, "physical-pack-budget", 1, 10, 10, 1)
+	if request.MergeEntriesLimit != 20 {
+		t.Fatalf("merge entries=%d want=20", request.MergeEntriesLimit)
+	}
+	exhaustive := m8ProductionExhaustiveRequestV1(assets, []float32{1}, "logical-domain-probes", 10, 10, 1)
+	if exhaustive.PartitionProbes != 1 || exhaustive.MergeEntriesLimit != 20 {
+		t.Fatalf("exhaustive request probes=%d merge entries=%d want=1/20", exhaustive.PartitionProbes, exhaustive.MergeEntriesLimit)
+	}
+	assets.manifest.PartitionCount = uint32(nativewire.DefaultVectorPartitionCoordinatorLimitsV1().MaxSelectedPartitions + 1)
+	request = m8ProductionRequestV1(assets, []float32{1}, "bounded-pack-budget", 1, 10, 10, 1)
+	want := nativewire.DefaultVectorPartitionCoordinatorLimitsV1().MaxSelectedPartitions * 10
+	if request.MergeEntriesLimit != want {
+		t.Fatalf("bounded merge entries=%d want=%d", request.MergeEntriesLimit, want)
+	}
 }
 
 func TestM8ResourceEvidenceIncludesAllUntimedBoundariesV1(t *testing.T) {

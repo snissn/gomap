@@ -446,6 +446,20 @@ func TestM8CoupledGraphGateRequiresOneMatchedOperatingPointV1(t *testing.T) {
 	if got := m8AnyGraphVariantCoupledGatesPassV1([]m8ProductionReportV1{report}); got != "pass" {
 		t.Fatalf("coupled operating-point gate=%q want pass", got)
 	}
+	multiPack := report
+	multiPack.Config.DomainCount = 4
+	multiPack.Config.PacksPerDomain = []int{4, 4, 4, 4}
+	multiPack.Rows = append([]m8ProductionRowV1(nil), report.Rows...)
+	for i := range multiPack.Rows {
+		if multiPack.Rows[i].Probes == 16 {
+			multiPack.Rows[i].Probes = 4
+		} else {
+			multiPack.Rows[i].Probes = 1
+		}
+	}
+	if got := m8AnyGraphVariantCoupledGatesPassV1([]m8ProductionReportV1{multiPack}); got != "pass" {
+		t.Fatalf("logical-domain coupled operating-point gate=%q want pass", got)
+	}
 	report.Rows[2].Status = "fail"
 	report.Rows[2].ExactParityPassed = false
 	report.Rows[2].RecallAtK = .95
@@ -458,9 +472,9 @@ func TestM8DecisionReportUsesLowestQuarterProbeOperatingPointV1(t *testing.T) {
 	descriptor := testM3VariantDescriptorV1(t.TempDir())
 	attribution := m8ProductionAttributionV1{GlobalExactRecallAtK: 1, OracleStagesComplete: true, PrimaryHomeOracleRecallAtK: .8, FinalMembershipOracleRecallAtK: .9, ExhaustivePartitionRecallAtK: 1, ExhaustivePartitionIDParity: true, ExhaustivePartitionScoreParity: true, ExactRepresentativeRecallAtK: .7, ApproximateRepresentativeRecallAtK: .7, LocalHNSWRecallAtK: .7, ApproximateLocalHNSWRecallAtK: .7, EndToEndRecallAtK: .7}
 	attribution.StageOwners = m8AttributionStageOwnersV1(attribution)
-	report := m8ProductionReportV1{Variant: &descriptor, Config: m8ProductionConfigEvidenceV1{Partitions: 32}, Rows: []m8ProductionRowV1{
-		{Status: "pass", Probes: 8, EfSearch: 128, Concurrency: 1, Attribution: attribution},
-		{Status: "pass", Probes: 8, EfSearch: 64, Concurrency: 1, Attribution: attribution},
+	report := m8ProductionReportV1{Variant: &descriptor, Config: m8ProductionConfigEvidenceV1{Partitions: 32, DomainCount: 8, PacksPerDomain: []int{4, 4, 4, 4, 4, 4, 4, 4}}, Rows: []m8ProductionRowV1{
+		{Status: "pass", Probes: 2, EfSearch: 128, Concurrency: 1, Attribution: attribution},
+		{Status: "pass", Probes: 2, EfSearch: 64, Concurrency: 1, Attribution: attribution},
 		{Status: "pass", Probes: 4, EfSearch: 32, Concurrency: 1, Attribution: attribution},
 	}}
 	got := m8DecisionReportV1([]m8ProductionReportV1{report})
@@ -468,7 +482,7 @@ func TestM8DecisionReportUsesLowestQuarterProbeOperatingPointV1(t *testing.T) {
 		t.Fatalf("decision=%+v", got)
 	}
 	for _, row := range got {
-		if row.Probes != 8 || row.EfSearch != 64 || row.VariantID != descriptor.VariantID {
+		if row.Probes != 2 || row.EfSearch != 64 || row.VariantID != descriptor.VariantID {
 			t.Fatalf("decision row=%+v", row)
 		}
 	}

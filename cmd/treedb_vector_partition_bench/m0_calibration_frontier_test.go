@@ -68,7 +68,7 @@ func TestM0FrontierCellsCompleteV1RejectsDuplicateMissingAndMixed(t *testing.T) 
 	cells := make([]m0FrontierCellV1, 0, 12)
 	for _, p := range probes {
 		for _, ef := range efs {
-			cells = append(cells, m0FrontierCellV1{Probes: p, SelectedPartitions: p, RouterSelectedPartitions: uint64(p * 806), EFSearch: ef, Queries: 806, QPS: 1, P50Nanos: 1, P95Nanos: 2, ResultSHA256: strings.Repeat("a", 64), WorkSHA256: strings.Repeat("b", 64)})
+			cells = append(cells, m0FrontierCellV1{Probes: p, SelectedPartitions: p, RouterSelectedPartitions: uint64(p * 806), SelectedDomains: uint64(p * 806), SelectedPacks: uint64(p * 806), EFSearch: ef, Queries: 806, QPS: 1, P50Nanos: 1, P95Nanos: 2, ResultSHA256: strings.Repeat("a", 64), WorkSHA256: strings.Repeat("b", 64)})
 		}
 	}
 	if !m0FrontierCellsCompleteV1(cells, probes, efs, 806) {
@@ -116,7 +116,7 @@ func TestValidateM0FrontierReportV1RejectsMixedIdentity(t *testing.T) {
 	measurements := make([]m0FrontierCellV1, 0, 36)
 	for _, p := range probes {
 		for _, ef := range efs {
-			cell := m0FrontierCellV1{Probes: p, SelectedPartitions: p, RouterSelectedPartitions: uint64(p * 806), EFSearch: ef, Queries: 806, QPS: 1, P50Nanos: 1, P95Nanos: 2, ResultSHA256: sha, WorkSHA256: sha}
+			cell := m0FrontierCellV1{Probes: p, SelectedPartitions: p, RouterSelectedPartitions: uint64(p * 806), SelectedDomains: uint64(p * 806), SelectedPacks: uint64(p * 806), EFSearch: ef, Queries: 806, QPS: 1, P50Nanos: 1, P95Nanos: 2, ResultSHA256: sha, WorkSHA256: sha}
 			canonical = append(canonical, cell)
 			for repetition := 0; repetition < 3; repetition++ {
 				cell.Repetition = repetition
@@ -205,7 +205,7 @@ func TestM0FrontierAggregateThreeCounterbalancedRepetitions(t *testing.T) {
 	measurements := make([]m0FrontierCellV1, 0, 36)
 	for repetition := 0; repetition < 3; repetition++ {
 		for _, point := range m0FrontierExecutionOrderV1(plan, repetition) {
-			measurements = append(measurements, m0FrontierCellV1{Repetition: repetition, Probes: point.Probes, EFSearch: point.EFSearch, SelectedPartitions: point.Probes, RouterSelectedPartitions: uint64(point.Probes * 806), Queries: 806, QPS: 100 + float64(repetition), P50Nanos: uint64(10 + repetition), P95Nanos: uint64(20 + repetition), ResultSHA256: sha, WorkSHA256: sha})
+			measurements = append(measurements, m0FrontierCellV1{Repetition: repetition, Probes: point.Probes, EFSearch: point.EFSearch, SelectedPartitions: point.Probes, RouterSelectedPartitions: uint64(point.Probes * 806), SelectedDomains: uint64(point.Probes * 806), SelectedPacks: uint64(point.Probes * 806), Queries: 806, QPS: 100 + float64(repetition), P50Nanos: uint64(10 + repetition), P95Nanos: uint64(20 + repetition), ResultSHA256: sha, WorkSHA256: sha})
 		}
 	}
 	aggregates, err := m0FrontierAggregateV1(measurements, plan, 806)

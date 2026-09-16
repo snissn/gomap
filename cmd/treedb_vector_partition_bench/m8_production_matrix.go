@@ -748,7 +748,11 @@ func m8DecisionReportV1(reports []m8ProductionReportV1) []m8DecisionRowV1 {
 		if report.Variant == nil {
 			continue
 		}
-		targetProbes := max(1, report.Config.Partitions/4)
+		domainCount, _, ok := m8ProductionDomainLayoutV1(report.Config)
+		if !ok {
+			continue
+		}
+		targetProbes := max(1, domainCount/4)
 		var selected *m8ProductionRowV1
 		for i := range report.Rows {
 			row := &report.Rows[i]
@@ -813,12 +817,16 @@ func m8AnyGraphVariantCoupledGatesPassV1(reports []m8ProductionReportV1) string 
 }
 
 func m8ReportHasCoupledGateOperatingPointV1(report m8ProductionReportV1) bool {
+	domainCount, _, ok := m8ProductionDomainLayoutV1(report.Config)
+	if !ok {
+		return false
+	}
 	for _, candidate := range report.Rows {
-		if candidate.Status != "pass" || candidate.RecallAtK < report.Config.RecallTarget || candidate.Probes*4 > report.Config.Partitions {
+		if candidate.Status != "pass" || candidate.RecallAtK < report.Config.RecallTarget || candidate.Probes > domainCount/4 {
 			continue
 		}
 		for _, base := range report.Rows {
-			if base.Status != "pass" || base.Probes != report.Config.Partitions || !base.Attribution.ExhaustivePartitionIDParity || !base.Attribution.ExhaustivePartitionScoreParity || base.Attribution.ExhaustivePartitionRecallAtK != 1 || base.RecallAtK < report.Config.RecallTarget || candidate.EfSearch != base.EfSearch || candidate.Concurrency != base.Concurrency {
+			if base.Status != "pass" || base.Probes != domainCount || !base.Attribution.ExhaustivePartitionIDParity || !base.Attribution.ExhaustivePartitionScoreParity || base.Attribution.ExhaustivePartitionRecallAtK != 1 || base.RecallAtK < report.Config.RecallTarget || candidate.EfSearch != base.EfSearch || candidate.Concurrency != base.Concurrency {
 				continue
 			}
 			if candidate.QPS >= base.QPS*1.15 && candidate.P95Nanos <= base.P95Nanos {
