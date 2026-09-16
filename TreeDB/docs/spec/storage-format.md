@@ -12,6 +12,20 @@ cleaning, compacting, or rewriting the directory. Typed-column image,
 descriptor, manifest, and schema evolution follows the fail-closed policy in
 `typed-column-schema-evolution.md`.
 
+## Reserved `cosine_normalized_f32_v1` vector asset
+
+The pre-alpha target format for the opt-in normalized cosine representation is
+specified in
+[`cosine-normalized-f32-v1.md`](cosine-normalized-f32-v1.md). Q1 reserves its
+semantic identity; Q2 owns concrete versioned record/manifest fields and their
+golden/reopen tests.
+
+The format has one permanent row-major, graph-ordinal normalized FP32 base
+asset. HNSW topology references its durable identity and does not contain a
+second FP32 vector section. Scalar-u8 codes are separate derived state. Replay,
+reopen, fold, and rebuild preserve admitted canonical bytes without
+renormalizing. Older binaries may fail closed on the new format.
+
 Column manifest generation is not a command LSN or an incarnation identifier.
 Managed writes advance it; physical maintenance can preserve it. A replay
 candidate below all compatible captured root generations can be excluded only

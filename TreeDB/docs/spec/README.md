@@ -178,6 +178,12 @@ Given pre-alpha status, this is a living spec that tracks implementation.
   - issue #1926/#2454/#2481 scalar_u8, `rabitq_1bit`, and prototype
     `brq_1bit` quantized score-plane semantics, fail-closed query modes, exact
     rerank behavior, benchmark/storage evidence, and future-work boundaries.
+- `TreeDB/docs/spec/cosine-normalized-f32-v1.md`
+  - issue #4722 opt-in one-plane normalized FP32 score/storage/return contract,
+    packed scalar-u8 rerank requirement, native-v4 capability boundary, and
+    phase-owned performance gates.
+  - retained Q1 diagnostic context:
+    `TreeDB/docs/benchmarks/minima-sq8-q1-baseline.md`.
 - `TreeDB/docs/spec/scalar-u8-alpha-default-gate-2845.md`
   - issue #2845 no-promote decision for per-granule-alpha `scalar_u8` as the
     new-index default, including count=10 10k x 768 gate evidence, storage/rebuild

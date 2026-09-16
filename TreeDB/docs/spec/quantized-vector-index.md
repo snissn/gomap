@@ -25,6 +25,12 @@ The narrow mutable typed read-view extension in #4685 is specified below; it
 does not promote another codec, replace the existing buffered routes, or change
 the default exact behavior.
 
+The opt-in `cosine_normalized_f32_v1` successor is specified separately in
+[`cosine-normalized-f32-v1.md`](cosine-normalized-f32-v1.md). For that
+representation only, scalar-u8 traversal supplies candidate ordinals and final
+rerank uses indexed/batched packed FP32 dot scoring over the one canonical
+normalized asset. The legacy close-angle stable scorer is not a fallback.
+
 ## User-visible query modes
 
 `VectorIndexDefinition.QuantizedIndexes` declares one or more named derived score

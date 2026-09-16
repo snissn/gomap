@@ -16,6 +16,21 @@ deterministic encoding, benchmark labels, or observability keys MUST update this
 document, the roadmap, relevant codec/golden tests, and benchmark documentation
 in the same change.
 
+### Reserved normalized-cosine v4 contract
+
+Native command64/v4 is reserved for the opt-in
+`cosine_normalized_f32_v1` representation specified in
+[`cosine-normalized-f32-v1.md`](cosine-normalized-f32-v1.md). Q1 defines the
+capability boundary but adds no command implementation. Until Q3, Go/Python v4
+stages are `NOT_IMPLEMENTED`; a v1/v2/v3 request for the representation fails
+closed instead of using legacy score semantics.
+
+The future v4 envelope carries framing, bounds, negotiated score contract,
+captured owner/generation, IDs/scores, and projected documents. It carries no
+full score-plane proof unless diagnostic mode was requested. With
+`return_embedding=false` it carries no embedding bytes; true returns canonical
+normalized vectors. Current command versions remain unchanged below.
+
 ## 1. Decision
 
 TreeDB SHOULD use a native binary protocol for its production data plane.
