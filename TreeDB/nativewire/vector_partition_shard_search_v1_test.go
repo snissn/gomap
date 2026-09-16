@@ -694,7 +694,7 @@ func TestVectorPartitionShardSearchLeaderGroupLocalReturnsOracleAndProofV1(t *te
 	if got := response.Partials[1].Neighbors; len(got) != 2 || got[0].ID != "d" || got[1].ID != "e" {
 		t.Fatalf("partition 1 neighbors=%+v", got)
 	}
-	if response.Candidates != 5 || response.ResponseBytes != 580 || response.Timing.ReadIndexApplyNanos == 0 {
+	if response.Candidates != 5 || response.ResponseBytes != 668 || response.Timing.ReadIndexApplyNanos == 0 {
 		t.Fatalf("response accounting=%+v", response)
 	}
 	if coordinator.callCount() != 1 {
@@ -1094,6 +1094,20 @@ func TestVectorPartitionShardSearchBoundsFailBeforeProofOrAllocationV1(t *testin
 	}
 	if pins, releases, opens := source.counts(); pins != 0 || releases != 0 || opens != 0 {
 		t.Fatalf("invalid requests observed local state %d/%d/%d", pins, releases, opens)
+	}
+}
+
+func TestVectorPartitionShardSearchDefaultCandidateBudgetBoundaryV1(t *testing.T) {
+	limits := DefaultVectorPartitionShardSearchLimitsV1()
+	service := &VectorPartitionShardSearchServiceV1{limits: limits}
+	request := vectorPartitionShardSearchRequestTestV1([]uint32{0})
+	request.CandidateBytesLimit = limits.MaxCandidateBytes
+	if err := service.validateRequest(request); err != nil {
+		t.Fatalf("default candidate ceiling rejected: %v", err)
+	}
+	request.CandidateBytesLimit++
+	if err := service.validateRequest(request); !errors.Is(err, ErrVectorPartitionShardSearchInvalidRequest) {
+		t.Fatalf("candidate ceiling + 1 err=%v", err)
 	}
 }
 

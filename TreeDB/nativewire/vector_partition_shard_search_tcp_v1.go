@@ -22,7 +22,7 @@ import (
 const (
 	vectorPartitionShardSearchTCPMaxFrameBytesV1      uint32 = 64 << 20
 	vectorPartitionShardSearchTCPMinFrameBytesV1      uint64 = 4 << 10
-	vectorPartitionShardSearchTCPFrameVersionV1       byte   = 1
+	vectorPartitionShardSearchTCPFrameVersionV1       byte   = 2
 	vectorPartitionShardSearchTCPFrameRequestV1       byte   = 1
 	vectorPartitionShardSearchTCPFrameResponseV1      byte   = 2
 	vectorPartitionShardSearchTCPFrameErrorV1         byte   = 3
@@ -30,7 +30,7 @@ const (
 	vectorPartitionShardSearchTCPFrameProbeResponseV1 byte   = 5
 	// Fixed bytes include the frame-body header and every fixed-width request
 	// field plus the length prefix for each request string.
-	vectorPartitionShardSearchTCPRequestFixedBytesV1 uint64 = 151
+	vectorPartitionShardSearchTCPRequestFixedBytesV1 uint64 = 171
 	// The capability fixed bytes include its six string length prefixes.
 	vectorPartitionStrictCapabilityFixedBytesV1 uint64 = 84
 	// Response byte accounting excludes the request ID and six proof strings.
@@ -852,7 +852,7 @@ func appendVectorPartitionShardSearchTCPRequestV1(w *vectorPartitionShardSearchT
 	for _, value := range []string{r.RequestID, r.CancellationID, r.Database, r.Catalog, r.Collection, r.IndexName, r.IndexDefinitionDigest, r.ReadySetDigest, string(r.TargetGroupID), string(r.TargetNodeID)} {
 		w.string(value)
 	}
-	for _, value := range []uint64{r.SourceGeneration, r.SourceChecksum, r.SourceSchemaHash, r.SourceRowCount, r.PartitionGeneration, r.RouterGeneration} {
+	for _, value := range []uint64{r.SourceGeneration, r.SourceChecksum, r.SourceSchemaHash, r.SourceRowCount, r.PartitionGeneration, r.RouterGeneration, r.LiveRevision, r.LiveCoverage} {
 		w.u64(value)
 	}
 	if uint64(len(r.PartitionIDs)) > math.MaxUint32 {
@@ -861,6 +861,14 @@ func appendVectorPartitionShardSearchTCPRequestV1(w *vectorPartitionShardSearchT
 	}
 	w.u32(uint32(len(r.PartitionIDs)))
 	for _, value := range r.PartitionIDs {
+		w.u32(value)
+	}
+	if uint64(len(r.LiveDomainIDs)) > math.MaxUint32 {
+		w.err = errors.New("M5 TCP live domain count exceeds uint32")
+		return
+	}
+	w.u32(uint32(len(r.LiveDomainIDs)))
+	for _, value := range r.LiveDomainIDs {
 		w.u32(value)
 	}
 	if uint64(len(r.Query)) > math.MaxUint32 {
@@ -917,11 +925,19 @@ func readVectorPartitionShardSearchTCPRequestV1(r *vectorPartitionShardSearchTCP
 	value.TargetGroupID, value.TargetNodeID = raftcluster.GroupID(fields[8]), raftcluster.NodeID(fields[9])
 	value.SourceGeneration, value.SourceChecksum, value.SourceSchemaHash = r.u64(), r.u64(), r.u64()
 	value.SourceRowCount, value.PartitionGeneration, value.RouterGeneration = r.u64(), r.u64(), r.u64()
+	value.LiveRevision, value.LiveCoverage = r.u64(), r.u64()
 	count := r.count(r.remaining() / 4)
 	if r.err == nil {
 		value.PartitionIDs = make([]uint32, count)
 		for i := range value.PartitionIDs {
 			value.PartitionIDs[i] = r.u32()
+		}
+	}
+	count = r.count(r.remaining() / 4)
+	if r.err == nil && count != 0 {
+		value.LiveDomainIDs = make([]uint32, count)
+		for i := range value.LiveDomainIDs {
+			value.LiveDomainIDs[i] = r.u32()
 		}
 	}
 	count = r.count(r.remaining() / 4)
@@ -1096,7 +1112,7 @@ func appendVectorPartitionShardSearchTCPResponseV1(w *vectorPartitionShardSearch
 		w.u64(partial.HeapBytes)
 		w.u64(partial.OpenNanos)
 	}
-	for _, value := range []uint64{v.Partitions, v.ReadProofs, v.GenerationPins, v.PartitionOpens, v.Candidates, v.Edges, v.ResponseBytes, v.Timing.RouteOwnerNanos, v.Timing.ReadIndexApplyNanos, v.Timing.GenerationOpenNanos, v.Timing.SearchNanos, v.Timing.ResponseCopyNanos, v.Timing.TotalNanos} {
+	for _, value := range []uint64{v.Partitions, v.ReadProofs, v.GenerationPins, v.PartitionOpens, v.Candidates, v.BaseCandidates, v.DeltaCandidates, v.BaseResults, v.DeltaResults, v.LiveDomainsSearched, v.LiveMutatedIDs, v.LiveIDs, v.Cutovers, v.RequestPathFullRebuilds, v.Edges, v.ResponseBytes, v.Timing.RouteOwnerNanos, v.Timing.ReadIndexApplyNanos, v.Timing.GenerationOpenNanos, v.Timing.SearchNanos, v.Timing.ResponseCopyNanos, v.Timing.TotalNanos} {
 		w.u64(value)
 	}
 }
@@ -1133,7 +1149,11 @@ func readVectorPartitionShardSearchTCPResponseWithBoundsV1(r *vectorPartitionSha
 			partial.PackBytes, partial.MappedBytes, partial.HeapBytes, partial.OpenNanos = r.u64(), r.u64(), r.u64(), r.u64()
 		}
 	}
-	v.Partitions, v.ReadProofs, v.GenerationPins, v.PartitionOpens, v.Candidates, v.Edges, v.ResponseBytes = r.u64(), r.u64(), r.u64(), r.u64(), r.u64(), r.u64(), r.u64()
+	v.Partitions, v.ReadProofs, v.GenerationPins, v.PartitionOpens, v.Candidates = r.u64(), r.u64(), r.u64(), r.u64(), r.u64()
+	v.BaseCandidates, v.DeltaCandidates = r.u64(), r.u64()
+	v.BaseResults, v.DeltaResults, v.LiveDomainsSearched = r.u64(), r.u64(), r.u64()
+	v.LiveMutatedIDs, v.LiveIDs, v.Cutovers, v.RequestPathFullRebuilds = r.u64(), r.u64(), r.u64(), r.u64()
+	v.Edges, v.ResponseBytes = r.u64(), r.u64()
 	v.Timing = VectorPartitionShardSearchTimingV1{RouteOwnerNanos: r.u64(), ReadIndexApplyNanos: r.u64(), GenerationOpenNanos: r.u64(), SearchNanos: r.u64(), ResponseCopyNanos: r.u64(), TotalNanos: r.u64()}
 	return v
 }
@@ -1141,7 +1161,7 @@ func appendVectorPartitionShardSearchTCPProofV1(w *vectorPartitionShardSearchTCP
 	for _, value := range []string{p.Kind, string(p.ServingNode), string(p.LeaderNode), string(p.GroupID), p.ReadySetDigest, p.ServingIdentityDigest} {
 		w.string(value)
 	}
-	for _, value := range []uint64{p.ReadTerm, p.ReadIndex, p.AppliedTerm, p.AppliedIndex, p.CatalogAppliedIndex, p.GroupAppliedIndex, p.SourceGeneration, p.SourceChecksum, p.SourceSchemaHash, p.SourceRowCount, p.PartitionGeneration, p.RouterGeneration} {
+	for _, value := range []uint64{p.ReadTerm, p.ReadIndex, p.AppliedTerm, p.AppliedIndex, p.CatalogAppliedIndex, p.GroupAppliedIndex, p.SourceGeneration, p.SourceChecksum, p.SourceSchemaHash, p.SourceRowCount, p.PartitionGeneration, p.RouterGeneration, p.LiveRevision, p.LiveCoverage} {
 		w.u64(value)
 	}
 }
@@ -1155,7 +1175,7 @@ func readVectorPartitionShardSearchTCPProofV1(r *vectorPartitionShardSearchTCPBo
 		Kind: fields[0], ServingNode: raftcluster.NodeID(fields[1]), LeaderNode: raftcluster.NodeID(fields[2]), GroupID: raftcluster.GroupID(fields[3]),
 		ReadySetDigest: fields[4], ServingIdentityDigest: fields[5],
 		ReadTerm: r.u64(), ReadIndex: r.u64(), AppliedTerm: r.u64(), AppliedIndex: r.u64(), CatalogAppliedIndex: r.u64(), GroupAppliedIndex: r.u64(),
-		SourceGeneration: r.u64(), SourceChecksum: r.u64(), SourceSchemaHash: r.u64(), SourceRowCount: r.u64(), PartitionGeneration: r.u64(), RouterGeneration: r.u64(),
+		SourceGeneration: r.u64(), SourceChecksum: r.u64(), SourceSchemaHash: r.u64(), SourceRowCount: r.u64(), PartitionGeneration: r.u64(), RouterGeneration: r.u64(), LiveRevision: r.u64(), LiveCoverage: r.u64(),
 	}
 }
 

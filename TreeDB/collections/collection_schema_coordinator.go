@@ -29,19 +29,25 @@ type collectionSchemaCoordinator struct {
 	typedPublicationChanged  chan struct{}
 	typedPublicationClosed   bool
 
-	schemaMu                sync.RWMutex
-	nativeVectorAdmissionMu sync.RWMutex
-	nativeVectorBaseline    atomic.Pointer[uint64]
-	hasNativeVectorIndexes  atomic.Bool
-	adHocVectorAdmissionMu  sync.RWMutex
-	adHocVectorIndexes      atomic.Int64
-	legacyVectorSidecarMu   sync.Mutex
-	domainsMu               sync.Mutex
-	domains                 map[*collectionWriteDomain]struct{}
-	chunkLifecycleMu        sync.Mutex
-	chunkLifecycles         map[string]*chunkLifecycleLock
-	chunkMutationOnce       sync.Once
-	chunkMutationToken      chan struct{}
+	schemaMu                               sync.RWMutex
+	nativeVectorIndexLoadMu                sync.Mutex
+	nativeVectorAdmissionMu                sync.RWMutex
+	nativeVectorBaseline                   atomic.Pointer[uint64]
+	hasNativeVectorIndexes                 atomic.Bool
+	partitionLiveMu                        sync.RWMutex
+	partitionLiveCarriers                  map[string]*VectorIndex
+	partitionLiveReplayFinalizerRegistered bool
+	partitionLivePublishMu                 sync.RWMutex
+	partitionLiveSearchPins                map[vectorPartitionLiveSearchPinKeyV1]int
+	adHocVectorAdmissionMu                 sync.RWMutex
+	adHocVectorIndexes                     atomic.Int64
+	legacyVectorSidecarMu                  sync.Mutex
+	domainsMu                              sync.Mutex
+	domains                                map[*collectionWriteDomain]struct{}
+	chunkLifecycleMu                       sync.Mutex
+	chunkLifecycles                        map[string]*chunkLifecycleLock
+	chunkMutationOnce                      sync.Once
+	chunkMutationToken                     chan struct{}
 
 	// Includes reserved and attempted encoded work within the current explicit
 	// maintenance epoch. Reconciliation and pointer-pin release do not renew it.
@@ -51,6 +57,114 @@ type collectionSchemaCoordinator struct {
 	typedGraphCandidateAttempts  int64
 	typedGraphWorkEpochLimits    *typedGraphWorkEpochLimits
 	typedGraphWorkEpoch          uint64
+}
+
+func (coord *collectionSchemaCoordinator) registerPartitionLiveSearchPin(key vectorPartitionLiveSearchPinKeyV1) {
+	coord.partitionLiveMu.Lock()
+	if coord.partitionLiveSearchPins == nil {
+		coord.partitionLiveSearchPins = make(map[vectorPartitionLiveSearchPinKeyV1]int)
+	}
+	coord.partitionLiveSearchPins[key]++
+	coord.partitionLiveMu.Unlock()
+}
+
+func (coord *collectionSchemaCoordinator) unregisterPartitionLiveSearchPin(key vectorPartitionLiveSearchPinKeyV1) {
+	coord.partitionLiveMu.Lock()
+	if count := coord.partitionLiveSearchPins[key]; count <= 1 {
+		delete(coord.partitionLiveSearchPins, key)
+	} else {
+		coord.partitionLiveSearchPins[key] = count - 1
+	}
+	coord.partitionLiveMu.Unlock()
+}
+
+func (coord *collectionSchemaCoordinator) hasPartitionLiveSearchPin(key vectorPartitionLiveSearchPinKeyV1) bool {
+	if coord == nil {
+		return false
+	}
+	coord.partitionLiveMu.RLock()
+	has := coord.partitionLiveSearchPins[key] > 0
+	coord.partitionLiveMu.RUnlock()
+	return has
+}
+
+func (coord *collectionSchemaCoordinator) partitionLiveCarrier(name string) *VectorIndex {
+	if coord == nil || name == "" {
+		return nil
+	}
+	coord.partitionLiveMu.RLock()
+	carrier := coord.partitionLiveCarriers[name]
+	coord.partitionLiveMu.RUnlock()
+	return carrier
+}
+
+func (coord *collectionSchemaCoordinator) partitionLiveCarrierList() []*VectorIndex {
+	if coord == nil {
+		return nil
+	}
+	coord.partitionLiveMu.RLock()
+	if len(coord.partitionLiveCarriers) == 0 {
+		coord.partitionLiveMu.RUnlock()
+		return nil
+	}
+	out := make([]*VectorIndex, 0, len(coord.partitionLiveCarriers))
+	for _, carrier := range coord.partitionLiveCarriers {
+		out = append(out, carrier)
+	}
+	coord.partitionLiveMu.RUnlock()
+	return out
+}
+
+func (coord *collectionSchemaCoordinator) hasPartitionLiveCarrier() bool {
+	if coord == nil {
+		return false
+	}
+	coord.partitionLiveMu.RLock()
+	has := len(coord.partitionLiveCarriers) != 0
+	coord.partitionLiveMu.RUnlock()
+	return has
+}
+
+func (coord *collectionSchemaCoordinator) registerPartitionLiveCarrier(carrier *VectorIndex) {
+	if coord == nil || carrier == nil || carrier.name == "" {
+		return
+	}
+	coord.partitionLiveMu.Lock()
+	if coord.partitionLiveCarriers == nil {
+		coord.partitionLiveCarriers = make(map[string]*VectorIndex)
+	}
+	coord.partitionLiveCarriers[carrier.name] = carrier
+	registerReplayFinalizer := !coord.partitionLiveReplayFinalizerRegistered
+	coord.partitionLiveMu.Unlock()
+	if registerReplayFinalizer && carrier.collection != nil && carrier.collection.db != nil && carrier.collection.db.RegisterCommandWALReplayFinalizer(coord.persistPartitionLiveReplayCarriers) {
+		coord.partitionLiveMu.Lock()
+		coord.partitionLiveReplayFinalizerRegistered = true
+		coord.partitionLiveMu.Unlock()
+	}
+}
+
+func (coord *collectionSchemaCoordinator) persistPartitionLiveReplayCarriers() error {
+	if coord == nil {
+		return nil
+	}
+	var persistErr error
+	for _, carrier := range coord.partitionLiveCarrierList() {
+		if _, err := carrier.SaveNativeDeltaSnapshot(); err != nil {
+			persistErr = errors.Join(persistErr, err)
+		}
+	}
+	return persistErr
+}
+
+func (coord *collectionSchemaCoordinator) unregisterPartitionLiveCarrier(name string, expected *VectorIndex) {
+	if coord == nil || name == "" || expected == nil {
+		return
+	}
+	coord.partitionLiveMu.Lock()
+	if coord.partitionLiveCarriers[name] == expected {
+		delete(coord.partitionLiveCarriers, name)
+	}
+	coord.partitionLiveMu.Unlock()
 }
 
 type collectionDBSchemaCoordinators struct {
@@ -217,6 +331,15 @@ func collectionDBSchemaCoordinatorForDB(db *backenddb.DB) *collectionDBSchemaCoo
 		var closeErr error
 		for _, named := range collections {
 			collection := named.value
+			// Command-WAL replay managers are intentionally hookless, but their
+			// restored standalone partition carriers are owned by this DB-scoped
+			// coordinator. Persist replay-reconciled carriers at the real DB close
+			// boundary so a later checkpoint/reopen does not lose the overlay.
+			for _, carrier := range collection.partitionLiveCarrierList() {
+				if _, err := carrier.SaveNativeDeltaSnapshot(); err != nil {
+					closeErr = errors.Join(closeErr, err)
+				}
+			}
 			collection.typedPublicationDebtMu.Lock()
 			collection.typedPublicationClosed = true
 			collection.wakeTypedGraphPublicationWaitersLocked()

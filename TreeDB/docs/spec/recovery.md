@@ -250,6 +250,37 @@ publisher with the typed projection. Delete and insertion are never separate
 commands or applied frontiers. Format 10 remains the legacy JSON/delete-only
 source encoding; no new recovery log or watermark is introduced.
 
+Standalone vector-partition live bindings use
+`CollectionPersistPartitionLive` (kind 105) with the bounded collection/index
+name payload shared by vector-index rebuild commands. Its replay handler is
+carrier-only: it reads the exact active ready immutable manifest and restores or
+publishes the matching empty live-overlay carrier from its existing router.
+Each later foreground or replayed command-WAL document mutation includes the
+carrier's compact binding/revision/coverage metadata, changed owner record, and
+dirty native HNSW records from only the touched logical domains in the
+mutation's ordered
+document/column/locator/system-root publication. Replay never scans collection
+rows, serializes untouched live domains, or folds or rebuilds a `column_graph`.
+Missing, stale, or corrupt carrier coverage, or unavailable/mismatched active
+manifest or router identity, fails closed.
+The manifest source generation and the carrier's collection document-generation
+coverage are independent clocks and are validated separately. A foreground or
+replayed command-WAL document command advances its `AppliedCommandLSN` only in
+the same publication that advances the carrier's revision and exact collection
+document-generation coverage. A process loss before ordinary in-memory
+reconciliation or an `Open` finalizer therefore cannot strand durable documents
+behind stale carrier coverage, and a following checkpoint needs no extra
+carrier command. The compact V3 metadata records the exact owner-record count
+and a monotonic global domain-epoch high-water. Owner and domain epoch
+descriptors select one complete durable generation of each record family;
+stale epoch keys are ignored, active epochs must not exceed the high-water, and
+missing or mixed active-epoch records fail recovery closed. Restored V1 inline
+state marks every owner and domain dirty so its first compact V3 publication
+materializes the complete overlay rather than only the first subsequently
+touched records. The unsafe intermediate compact V2 format fails closed under
+the pre-alpha format policy because it cannot prove retired-domain epoch
+high-water.
+
 Legacy raw redo-journal replay is skipped only when durability mode is
 `DurabilityWALOffRelaxed`.
 

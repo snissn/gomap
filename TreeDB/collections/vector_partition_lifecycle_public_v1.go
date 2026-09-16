@@ -53,6 +53,57 @@ func (c *Collection) ActiveVectorPartitionManifestWithContextV1(ctx context.Cont
 	return manifest, err
 }
 
+// ActiveVectorPartitionManifestForLiveRecoveryWithContextV1 returns the exact
+// active immutable manifest as recovery input without making it serving
+// authority. Callers must reconstruct and validate the manifest-bound live
+// overlay, then acquire the normal active authority token before serving.
+func (c *Collection) ActiveVectorPartitionManifestForLiveRecoveryWithContextV1(ctx context.Context, index string, generation uint64) (VectorPartitionManifestV1, error) {
+	manifest, err := c.activeVectorPartitionManifestForLiveRecoveryV1(ctx, index)
+	if err != nil {
+		return VectorPartitionManifestV1{}, err
+	}
+	if manifest.Generation != generation {
+		return VectorPartitionManifestV1{}, fmt.Errorf("%w: generation %d is not active", ErrVectorPartitionManifestInvalid, generation)
+	}
+	return manifest, nil
+}
+
+func (c *Collection) activeVectorPartitionManifestForLiveRecoveryV1(ctx context.Context, index string) (VectorPartitionManifestV1, error) {
+	if c == nil || c.db == nil {
+		return VectorPartitionManifestV1{}, errors.New("collections: closed collection")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return VectorPartitionManifestV1{}, err
+	}
+	var manifest VectorPartitionManifestV1
+	err := WithVectorPartitionStorageBarrierV1(c.db.Dir(), func() error {
+		unlock := c.lockMutation()
+		defer unlock.Unlock()
+		store, err := OpenExistingVectorPartitionStoreV1(c.db.Dir())
+		if err != nil {
+			return err
+		}
+		loaded, present, err := store.loadVectorPartitionLifecycleAuthorityWithContextV1(ctx, c.name, index)
+		if err != nil {
+			return err
+		}
+		generation := loaded.state.ActiveGeneration
+		if !present || generation == 0 {
+			return fmt.Errorf("%w: index %q has no active generation", ErrVectorPartitionManifestInvalid, index)
+		}
+		entry, ok := loaded.state.Generations[generation]
+		if !ok || entry.Manifest == nil || entry.Deleting || entry.Manifest.State != "ready" {
+			return fmt.Errorf("%w: generation %d is not complete and ready", ErrVectorPartitionManifestInvalid, generation)
+		}
+		manifest, err = vectorPartitionLifecycleManifestWithContextV1(ctx, loaded.state, generation, false)
+		return err
+	})
+	return manifest, err
+}
+
 // PreparedVectorPartitionManifestWithContextV1 opens one complete local
 // generation without consulting the standalone active pointer. It is the M7
 // readiness seam: the returned bytes are exact-generation local evidence only,
@@ -155,16 +206,20 @@ func (c *Collection) ActiveVectorPartitionManifestAndAuthorityTokenWithContextV1
 			return errors.New("collections: vector partition source snapshot unavailable")
 		}
 		source, sourceErr := c.vectorPartitionSourceIdentityAtSnapshotV1(index, snap)
+		documentGeneration, documentErr := vectorIndexDocumentGenerationForCollection(snap, c.name)
 		sourceState, sourceStateOK := snap.StateToken()
 		closeErr := snap.Close()
-		if sourceErr != nil || closeErr != nil {
-			return errors.Join(sourceErr, closeErr)
+		if documentErr != nil || closeErr != nil {
+			return errors.Join(documentErr, closeErr)
 		}
 		if !sourceStateOK {
 			return errors.New("collections: vector partition source state unavailable")
 		}
-		if manifest.SourceGeneration != source.Generation || manifest.SourceChecksum != source.Checksum || manifest.SourceSchemaHash != source.SchemaHash || manifest.SourceRowCount != source.RowCount {
-			return errors.New("collections: vector partition source identity mismatch")
+		sourceMatches := sourceErr == nil && manifest.SourceGeneration == source.Generation && manifest.SourceChecksum == source.Checksum && manifest.SourceSchemaHash == source.SchemaHash && manifest.SourceRowCount == source.RowCount
+		if !sourceMatches {
+			if err := c.validateAndRecordVectorPartitionLiveAuthorityStateV1(manifest, documentGeneration, sourceState); err != nil {
+				return errors.Join(errors.New("collections: vector partition source identity mismatch"), sourceErr)
+			}
 		}
 		token, err = registerVectorPartitionActiveAuthorityV1(c.db.Dir(), c.name, index, generation, sourceState.SystemRootPageID)
 		if err != nil {
@@ -213,6 +268,12 @@ func (c *Collection) ValidateActiveVectorPartitionAuthorityTokenWithContextV1(ct
 		return errors.New("collections: vector partition source state unavailable")
 	}
 	if sourceState.CommitSeq != expected.sourceCommitSeq || sourceState.SystemRootPageID != expected.sourceSystemRoot {
+		if err := c.validateVectorPartitionLiveCoordinatorPinnedAuthorityV1(index, generation, expected.sourceCommitSeq, expected.sourceSystemRoot); err == nil {
+			return ctx.Err()
+		}
+		if err := c.validateVectorPartitionLiveAuthorityStateV1(index, generation, sourceState); err == nil {
+			return ctx.Err()
+		}
 		return ErrVectorPartitionAuthorityRefreshRequiredV1
 	}
 	return ctx.Err()

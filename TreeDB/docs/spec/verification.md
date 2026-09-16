@@ -2035,6 +2035,108 @@ GOWORK=off go test -count=1 ./cmd/treedb_vector_partition_bench -run 'Test(M8Pro
 GOWORK=off go test -count=1 ./TreeDB/docs -run TestDocsVectorPartitionV1CorrectnessAndApproximationContract
 ```
 
+# Vector partition standalone live-delta verification
+
+The #4324 extension keeps one immutable partition generation bound to the
+registered collection `VectorIndex` while acknowledged standalone mutations
+publish one atomic live revision and exact source coverage. Verification must
+prove mutation visibility and shadowing, one delta search per logical domain,
+fail-closed persistence/recovery, bounded reconciliation, request-wide proof
+identity, and unchanged replicated-lifecycle behavior. A passing route reports
+zero request-path full rebuilds and zero exact fallbacks; base/delta candidate
+work and returned-result contribution remain separately attributable.
+
+Coverage:
+
+- `TreeDB/collections/vector_index_partition_live_v1_test.go` covers insert,
+  replacement, delete, A-to-B-to-A movement, stale-base exclusion before HNSW
+  top-k admission, atomic pinned revisions, repeated-update capacity cutover,
+  byte-cap reclaim for single and batch replacements, true unreclaimable-cap
+  rejection, pinned-view retirement, publication-barrier immutable-generation
+  rebind, monotonic retired-domain epochs across native-root reopen, missing-
+  tombstone rejection, V1-to-V3 complete materialization, public-mutation/
+  rollback exclusion, snapshot corruption, first-binding durability,
+  checkpoint/close/reopen, and command-WAL replay.
+  The focused `TestVectorIndexPartitionLive*` family is the canonical local
+  lifecycle gate.
+- The V2-focused structural and concurrency gates
+  `TestVectorIndexPartitionLiveNativeDeltaTouchesOnlyChangedRecordsV2`,
+  `TestVectorIndexPartitionLiveReplayCandidateSynchronizesSharedOwnersV2`,
+  `TestVectorIndexPartitionLiveReplayDomainTransactionRollbackRetryV2`,
+  `TestVectorIndexPartitionLiveReplayHandoffBlocksOrdinaryPinV2`, and
+  `TestVectorIndexPartitionLiveReplayAcceptedFailureInvalidatesV2` prove that a
+  mutation emits only compact metadata, one changed owner, and dirty records
+  from touched domains; speculative graph edits remain invisible; rollback is
+  byte-for-byte deterministic; handoff blocks new pins until the new view is
+  complete; and accepted handoff failure invalidates the carrier.
+- `TreeDB/collections/vector_partition_persistent_searcher_v1_test.go` proves
+  only standalone live generation opens build and charge the stable-ID
+  eligibility map; immutable and replicated generation opens retain their
+  prior heap/load behavior.
+- `TreeDB/nativewire/vector_partition_live_production_v1_test.go` composes a
+  real collection generation source, two production shard services, and the
+  public coordinator. One logical domain spans two packs and two groups but is
+  assigned and searched once. The fixture covers immediate insert/update/
+  delete/domain movement, stale-nearest exclusion, warm pack reuse, cold
+  post-mutation authority reload, unrelated DB publication, live-identity
+  mismatch, checkpoint/close/reopen recovery, and zero exact-fallback/request-
+  rebuild counters. The focused production gates are
+  `TestVectorPartitionLiveProductionCoordinatorMutationAndColdReloadV1` and
+  `TestVectorPartitionLiveProductionCheckpointCloseReopenV1`.
+
+The namespace-backed persistence fixtures are platform-gated; Linux CI is the
+authoritative runtime gate. Darwin still compiles them and reports a skip.
+
+`BenchmarkVectorPartitionLiveProductionCoordinatorV1` is a bounded enabling
+fixture, not final H-C, paid, or service-capacity evidence. It compares the
+same production topology at one and 1,024 live owners with the identical fixed
+one-update/one-search sequence. The old snapshot-invalidation path is a
+correctness baseline, not a throughput comparison cell. The benchmark measures
+the expected first result as recall@1 rather than requiring approximate HNSW to
+be exact; lower recall remains visible capacity evidence while execution errors,
+fallbacks, and request-path rebuilds fail the run. It also reports `ns/op`,
+`B/op`, `allocs/op`, p99 search latency,
+achieved writes/searches, base/delta candidate work and result contribution,
+logical domains, selected packs, live owner/delta size, cutovers, observed
+storage bytes, response-reported pack-heap footprint per operation, reachable
+process heap while the live fixture remains open, and exact-fallback,
+request-rebuild, and error counts. Use the fixed iteration count and three
+repetitions for comparable local results; Linux is required for execution.
+The profiling commands record CPU, allocation, and mutex-contention profiles;
+the in-benchmark reachable-process-heap metric is the live-fixture retention
+observation, while `/usr/bin/time -v` records peak RSS. Neither the allocation
+profile nor response pack footprint is presented as retained overlay growth.
+These bounded local profiles do not replace the H-C qualification owned by
+#4249.
+
+```sh
+GOWORK=off go test -count=1 ./TreeDB/collections -run 'TestVectorIndexPartitionLive|TestVectorPartitionHNSWExcludesMoreThanTopKBeforeAdmission|TestVectorPartitionSearcherExcludesStaleBeforeTopK'
+GOWORK=off go test -count=1 ./TreeDB/nativewire -run 'Test(VectorPartitionLiveProduction|VectorPartitionCoordinator|VectorPartitionShardSearch|CollectionVectorPartitionGenerationSource)'
+GOWORK=off go test -race -count=1 ./TreeDB/collections -run 'Test(VectorIndexPartitionLive|VectorPartitionHNSWExcludesMoreThanTopKBeforeAdmission)'
+GOWORK=off go test -race -count=1 ./TreeDB/nativewire -run 'Test(VectorPartitionLiveProduction|VectorPartitionCoordinator|VectorPartitionShardSearch)'
+GOWORK=off go test ./TreeDB/nativewire -run '^$' -bench '^BenchmarkVectorPartitionLiveProductionCoordinatorV1$' -benchmem -benchtime=20x -count=3
+PROFILE_DIR=$(mktemp -d /tmp/gomap_4324_profiles_XXXXXX)
+GOWORK=off go test -c -o "$PROFILE_DIR/nativewire.test" ./TreeDB/nativewire
+for CELL in live_overlay_1_id_update_search_1_to_1 live_overlay_1024_ids_update_search_1_to_1; do
+  /usr/bin/time -v "$PROFILE_DIR/nativewire.test" -test.run '^$' -test.bench "^BenchmarkVectorPartitionLiveProductionCoordinatorV1/$CELL$" -test.benchmem -test.benchtime=20x -test.count=1 -test.cpuprofile "$PROFILE_DIR/$CELL.cpu.pprof" -test.memprofile "$PROFILE_DIR/$CELL.alloc.pprof" -test.mutexprofile "$PROFILE_DIR/$CELL.mutex.pprof"
+done
+```
+
+`BenchmarkVectorIndexPartitionLiveIncrementalPublicationV2` is the bounded
+publication microbenchmark for #4720. Both cells replace one stable ID in one
+logical domain; only the pre-existing owner count differs (one versus 1,024).
+It reports the root-delta record count and bytes in addition to `ns/op`, `B/op`,
+and `allocs/op`. The timed path includes persistence acknowledgement through
+the maintained O(1) byte/mutation state, then rolls the speculative transaction
+back so all operations start from the identical durable base. The expected
+result is dirty-neighborhood scaling: the 1,024-owner cell must not serialize,
+allocate, or rescan the full owner table or domain graph. It is enabling local
+evidence, not service capacity.
+
+```sh
+GOWORK=off go test ./TreeDB/collections -run '^$' -bench '^BenchmarkVectorIndexPartitionLiveIncrementalPublicationV2$' -benchmem -benchtime=20x -count=3
+```
+
 # Vector partition M6 coordinator verification
 
 M6 verification requires one exact M1/M4 generation per request, deterministic

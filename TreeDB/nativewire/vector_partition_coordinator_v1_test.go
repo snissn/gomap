@@ -1488,6 +1488,21 @@ func TestVectorPartitionCoordinatorWeightsCandidateBudgetByMembershipV1(t *testi
 	}
 }
 
+func TestVectorPartitionCoordinatorDefaultCandidateBudgetCoversBaseAndLiveMaximaV1(t *testing.T) {
+	baseFloors, baseTotal, err := vectorPartitionCoordinatorCandidateFloorsV1(
+		[]uint64{1_000_000}, []uint32{0}, 2, 256, 4096,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const liveFloor = uint64(128<<10)*64 + uint64(256*4096)
+	want := baseTotal + liveFloor
+	limits := DefaultVectorPartitionShardSearchLimitsV1()
+	if len(baseFloors) != 1 || baseFloors[0] != 64_000_000 || limits.MaxCandidateBytes < want {
+		t.Fatalf("base=%v live=%d default=%d want-at-least=%d", baseFloors, liveFloor, limits.MaxCandidateBytes, want)
+	}
+}
+
 func TestVectorPartitionCoordinatorReservesCandidateBaselineBeforeUnevenSurplusV1(t *testing.T) {
 	coordinator, source, dispatcher := testVectorPartitionCoordinatorV1(t,
 		[]raftplacement.GroupV1{

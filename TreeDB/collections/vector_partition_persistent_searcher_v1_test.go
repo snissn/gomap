@@ -144,7 +144,7 @@ func TestOpenVectorPartitionLocalSearcherForOfflineAssetV1FailsClosed(t *testing
 		t.Fatal(err)
 	}
 	members := vectorPartitionMembershipsForPartitionV1(manifest, assets[0].PartitionID)
-	if _, err := col.openVectorPartitionLocalSearcherForPreparedPartitionWithContextV1(t.Context(), def.Name, manifest.Generation, assets[0].PartitionID, manifest.IndexDefinitionDigest, manifest.SourceGeneration, manifest.SourceChecksum, manifest.SourceSchemaHash, &assets[0], members, len(members), 0, false, ""); !errors.Is(err, ErrVectorPartitionSearchUnavailable) {
+	if _, err := col.openVectorPartitionLocalSearcherForPreparedPartitionWithContextV1(t.Context(), def.Name, manifest.Generation, assets[0].PartitionID, manifest.IndexDefinitionDigest, manifest.SourceGeneration, manifest.SourceChecksum, manifest.SourceSchemaHash, manifest.SourceRowCount, &assets[0], members, len(members), 0, false, "", false, false); !errors.Is(err, ErrVectorPartitionSearchUnavailable) {
 		t.Fatalf("production open accepted native v2 pack: %v", err)
 	}
 	nativeManifest := manifest
@@ -1212,7 +1212,7 @@ func TestVectorPartitionOfflineAuxiliaryConstructionVariantsV1(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		production, productionErr := col.openVectorPartitionLocalSearcherForPreparedPartitionWithContextV1(t.Context(), def.Name, m.Generation, 0, m.IndexDefinitionDigest, m.SourceGeneration, m.SourceChecksum, m.SourceSchemaHash, &assets[0], members, len(members), 0, false, "")
+		production, productionErr := col.openVectorPartitionLocalSearcherForPreparedPartitionWithContextV1(t.Context(), def.Name, m.Generation, 0, m.IndexDefinitionDigest, m.SourceGeneration, m.SourceChecksum, m.SourceSchemaHash, m.SourceRowCount, &assets[0], members, len(members), 0, false, "", false, false)
 		if test.variant == VectorPartitionLocalGraphVariantAuxiliaryNavigationV1 || test.variant == VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1 || test.variant == VectorPartitionLocalGraphVariantAuxiliaryNavigationM20EfConstruction256V1 {
 			if productionErr != nil {
 				t.Fatalf("variant=%s production open err=%v", test.variant, productionErr)
@@ -1453,11 +1453,17 @@ func TestVectorPartitionPersistentLocalSearcherReopenCorruptionAndPinsV1(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
+	if planned.stableIDOrdinals != nil || planned.stableIDOrdinalBytes != 0 {
+		t.Fatalf("immutable generation charged live eligibility map bytes=%d", planned.stableIDOrdinalBytes)
+	}
 	if got, err := planned.Search([]float32{1, 0, 0}, 1); err != nil || len(got) != 1 || got[0].ID != "b" {
 		t.Fatalf("planned search=%+v err=%v", got, err)
 	}
 	if err := planned.Close(); err != nil {
 		t.Fatal(err)
+	}
+	if _, err := col.OpenVectorPartitionLocalSearcherForGenerationLiveSearchPlanWithContextV1(t.Context(), def.Name, m1.Generation, 0, openPlan, generationPin); !errors.Is(err, ErrVectorPartitionSearchUnavailable) {
+		t.Fatalf("ordinary plan admitted live recovery err=%v", err)
 	}
 	concurrentOpen := make(chan error, 2)
 	for partition := uint32(0); partition < 2; partition++ {

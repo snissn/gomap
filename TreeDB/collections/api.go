@@ -3858,6 +3858,11 @@ func (m *CollectionManager) openCollectionWithCommandWALIntent(name string, comm
 	}
 	collection.rememberCatalog(snap, catalog)
 	collection.noteWriteDomainCatalog(snapshotSystemRoot(snap), catalog)
+	if commandWALIntent != nil {
+		if err := collection.loadVectorPartitionLiveCarriersForReplayV1(catalog); err != nil {
+			return nil, err
+		}
+	}
 	return collection, nil
 }
 
@@ -4350,10 +4355,18 @@ func (c *Collection) DropVectorIndex(name string) (*CollectionMeta, error) {
 	unlockAdmission := c.lockVectorIndexSynchronousPublicationAdmission()
 	defer unlockAdmission()
 	unlockMutation := c.lockMutation()
-	defer unlockMutation.Unlock()
 	if err := c.flushBufferedWritesWithVectorAdmissionLocked(); err != nil {
+		unlockMutation.Unlock()
 		return nil, err
 	}
+	coord := c.collectionSchemaCoordinator()
+	if coord != nil && coord.partitionLiveCarrier(name) != nil {
+		unlockMutation.Unlock()
+		coord.partitionLivePublishMu.Lock()
+		defer coord.partitionLivePublishMu.Unlock()
+		unlockMutation = c.lockMutation()
+	}
+	defer unlockMutation.Unlock()
 
 	snap := c.db.AcquireSnapshot()
 	if snap == nil {
@@ -4417,10 +4430,10 @@ func (c *Collection) DropVectorIndex(name string) (*CollectionMeta, error) {
 	nextCatalog := cloneCatalogAfterSchemaChange(catalog, newMeta, clearedRootNames, []uint64{0})
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
-	if coord := c.collectionSchemaCoordinator(); coord != nil {
+	if coord != nil {
 		coord.hasNativeVectorIndexes.Store(collectionMetaHasNativeVectorIndexes(newMeta))
 	}
-	c.UnregisterVectorIndex(name)
+	c.unregisterVectorIndex(name, coord)
 	return newMeta.copy(), nil
 }
 
@@ -22076,7 +22089,7 @@ func (c *Collection) GetInto(documentID []byte, dst []byte) ([]byte, bool, error
 	if catalog == nil {
 		return dst[:0], false, errCollectionNotFound
 	}
-	value, found, err := collectionGetAppendAtCatalogRoot(snap, catalog, collectionPrimaryRootName(c.meta.Name), documentID, dst)
+	value, found, err := collectionGetAppendAtCatalogRoot(snap, catalog, catalog.primaryRootName, documentID, dst)
 	if err != nil || !found || !columnStoreCanReconstructDocument(catalog.meta) {
 		return value, found, err
 	}

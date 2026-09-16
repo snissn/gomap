@@ -31,13 +31,15 @@ const (
 	vectorIndexTombstonesFile            = "tombstones.json"
 	vectorIndexDocMapFile                = "docmap.json"
 
-	vectorIndexNativeKeyMeta           = "meta"
-	vectorIndexNativeKeyPrefixNode     = "node/"
-	vectorIndexNativeKeyPrefixEdge     = "edge/"
-	vectorIndexNativeKeyPrefixTomb     = "tomb/"
-	vectorIndexNativeKeyPrefixDoc      = "doc/"
-	vectorIndexNativeKeyOrdinalWidth   = 20
-	vectorIndexNativeKeyEdgeLayerWidth = 3
+	vectorIndexNativeKeyMeta             = "meta"
+	vectorIndexNativeKeyPrefixNode       = "node/"
+	vectorIndexNativeKeyPrefixEdge       = "edge/"
+	vectorIndexNativeKeyPrefixTomb       = "tomb/"
+	vectorIndexNativeKeyPrefixDoc        = "doc/"
+	vectorIndexNativeKeyPrefixLiveOwner  = "partition_live/owner/"
+	vectorIndexNativeKeyPrefixLiveDomain = "partition_live/domain/"
+	vectorIndexNativeKeyOrdinalWidth     = 20
+	vectorIndexNativeKeyEdgeLayerWidth   = 3
 )
 
 var (
@@ -100,6 +102,10 @@ func (idx *VectorIndex) SaveNativeSnapshot() (VectorIndexLoadStatus, error) {
 }
 
 func (idx *VectorIndex) saveNativeSnapshotWithCoverageLocked() (VectorIndexLoadStatus, error) {
+	return idx.saveNativeSnapshotWithCoverageLockedAndCommandWALIntent(nil)
+}
+
+func (idx *VectorIndex) saveNativeSnapshotWithCoverageLockedAndCommandWALIntent(replay *backenddb.CommandWALIntent) (VectorIndexLoadStatus, error) {
 	status := VectorIndexLoadStatus{}
 	c := idx.collection
 	unlockMutation := c.lockMutation()
@@ -117,7 +123,7 @@ func (idx *VectorIndex) saveNativeSnapshotWithCoverageLocked() (VectorIndexLoadS
 		return status, err
 	}
 	idx.recordSourceDocumentState(sourceDocumentGeneration, sourceDocumentState)
-	return idx.saveNativeSnapshotPrepared()
+	return idx.saveNativeSnapshotPreparedWithCommandWALIntent(replay)
 }
 
 func staleNativeSnapshotSaveStatus(c *Collection, idx *VectorIndex) (VectorIndexLoadStatus, bool, error) {
@@ -184,7 +190,7 @@ func (idx *VectorIndex) saveNativeSnapshotPreparedWithCommandWALIntent(replay *b
 	}
 	c.meta = catalog.meta
 	def, ok := findVectorIndex(catalog.meta.VectorIndexes, idx.name)
-	if !ok || !vectorIndexDefinitionUsesNativeRuntime(def) {
+	if !ok || !vectorIndexDefinitionUsesPersistentRuntime(def, idx) {
 		return status, fmt.Errorf("%w: %q", errVectorIndexNotDeclared, idx.name)
 	}
 	if reason := idx.validateNativeSnapshotDefinition(def); reason != "" {
@@ -221,7 +227,12 @@ func (idx *VectorIndex) saveNativeSnapshotPreparedWithCommandWALIntent(replay *b
 	if pointerized {
 		defer resetCollectionRunTable(publishTable)
 	}
-	intent, err := c.newCollectionRebuildVectorIndexCommandWALIntent(idx.name, replay)
+	var intent *backenddb.CommandWALIntent
+	if idx.isPartitionLiveCarrier() {
+		intent, err = c.newCollectionPersistPartitionLiveCommandWALIntent(idx.name, replay)
+	} else {
+		intent, err = c.newCollectionRebuildVectorIndexCommandWALIntent(idx.name, replay)
+	}
 	if err != nil {
 		resetCollectionRunTable(table)
 		return status, err
@@ -323,9 +334,14 @@ func (c *Collection) installNativeVectorIndexCandidate(candidate *VectorIndex, e
 		return nil, errCollectionNotFound
 	}
 	def, ok := findVectorIndex(catalog.meta.VectorIndexes, candidate.name)
-	if !ok || !vectorIndexDefinitionUsesNativeRuntime(def) {
+	candidate.mu.RLock()
+	hasPartitionLive := candidate.partitionLive != nil
+	candidate.mu.RUnlock()
+	partitionLiveCarrier := ok && def.Strategy == VectorIndexStrategyColumnGraph && hasPartitionLive
+	if !ok || !vectorIndexDefinitionUsesNativeRuntime(def) && !partitionLiveCarrier {
 		return nil, fmt.Errorf("%w: %q", errVectorIndexNotDeclared, candidate.name)
 	}
+	candidate.setPartitionLiveCarrier(partitionLiveCarrier)
 	activeRoot := catalog.rootID(collectionVectorIndexRootName(catalog.meta.Name, def.Name))
 	documentGeneration, err := vectorIndexDocumentGeneration(snap, catalog)
 	if err != nil {
@@ -358,7 +374,7 @@ func (c *Collection) installNativeVectorIndexCandidate(candidate *VectorIndex, e
 		if current != nil {
 			c.registerVectorIndexCurrentCatalog(current)
 		} else {
-			c.UnregisterVectorIndex(def.Name)
+			c.unregisterVectorIndex(def.Name, c.collectionSchemaCoordinator())
 		}
 	}
 	postInstall := c.db.AcquireSnapshot()
@@ -379,7 +395,7 @@ func (c *Collection) installNativeVectorIndexCandidate(candidate *VectorIndex, e
 	}
 	postDef, ok := findVectorIndex(postCatalog.meta.VectorIndexes, candidate.name)
 	postRoot := postCatalog.rootID(collectionVectorIndexRootName(postCatalog.meta.Name, candidate.name))
-	if !ok || !vectorIndexDefinitionUsesNativeRuntime(postDef) || candidate.validateNativeSnapshotDefinition(postDef) != "" || postRoot != expectedRoot {
+	if !ok || !vectorIndexDefinitionUsesPersistentRuntime(postDef, candidate) || candidate.validateNativeSnapshotDefinition(postDef) != "" || postRoot != expectedRoot {
 		_ = postInstall.Close()
 		rollback()
 		return nil, fmt.Errorf("%w: index %q changed during install", errVectorIndexStaleNativeRoot, candidate.name)
@@ -400,6 +416,7 @@ func (c *Collection) installNativeVectorIndexCandidate(candidate *VectorIndex, e
 		return nil, backenddb.ErrClosed
 	}
 	candidate.recordSourceDocumentState(candidateGeneration, postState)
+	candidate.materializePartitionLiveStagedOwnersV2()
 	return candidate, nil
 }
 
@@ -408,6 +425,10 @@ func (c *Collection) installNativeVectorIndexCandidate(candidate *VectorIndex, e
 // rebuild/shrink publication should continue to use SaveNativeSnapshot so
 // removed graph keys cannot survive.
 func (idx *VectorIndex) SaveNativeDeltaSnapshot() (VectorIndexLoadStatus, error) {
+	return idx.saveNativeDeltaSnapshotWithCommandWALIntent(nil)
+}
+
+func (idx *VectorIndex) saveNativeDeltaSnapshotWithCommandWALIntent(replay *backenddb.CommandWALIntent) (VectorIndexLoadStatus, error) {
 	status := VectorIndexLoadStatus{}
 	if idx == nil {
 		return status, errors.New("collections: vector index is nil")
@@ -421,10 +442,20 @@ func (idx *VectorIndex) SaveNativeDeltaSnapshot() (VectorIndexLoadStatus, error)
 	}
 	unlockAdmission := c.lockVectorIndexSynchronousPublicationAdmission()
 	defer unlockAdmission()
+	return idx.saveNativeDeltaSnapshotWithAdmissionHeldAndCommandWALIntent(replay)
+}
+
+// saveNativeDeltaSnapshotWithAdmissionHeldAndCommandWALIntent persists a
+// native delta while its caller owns native-vector publication admission.
+// First standalone partition binding uses the stronger write admission lock so
+// no document mutation can observe the carrier before its durable root exists.
+func (idx *VectorIndex) saveNativeDeltaSnapshotWithAdmissionHeldAndCommandWALIntent(replay *backenddb.CommandWALIntent) (VectorIndexLoadStatus, error) {
+	status := VectorIndexLoadStatus{}
+	c := idx.collection
 	unlockCoverage := c.lockVectorIndexCoveragePersistence()
 	defer unlockCoverage()
 	if idx.needsNativeFullSnapshotAutoPersist() {
-		return idx.saveNativeSnapshotWithCoverageLocked()
+		return idx.saveNativeSnapshotWithCoverageLockedAndCommandWALIntent(replay)
 	}
 	unlockMutation := c.lockMutation()
 	defer unlockMutation.Unlock()
@@ -456,7 +487,7 @@ func (idx *VectorIndex) SaveNativeDeltaSnapshot() (VectorIndexLoadStatus, error)
 	}
 	c.meta = catalog.meta
 	def, ok := findVectorIndex(catalog.meta.VectorIndexes, idx.name)
-	if !ok || !vectorIndexDefinitionUsesNativeRuntime(def) {
+	if !ok || !vectorIndexDefinitionUsesPersistentRuntime(def, idx) {
 		return status, fmt.Errorf("%w: %q", errVectorIndexNotDeclared, idx.name)
 	}
 	if reason := idx.validateNativeSnapshotDefinition(def); reason != "" {
@@ -496,7 +527,12 @@ func (idx *VectorIndex) SaveNativeDeltaSnapshot() (VectorIndexLoadStatus, error)
 	if pointerized {
 		defer resetCollectionRunTable(publishTable)
 	}
-	intent, err := c.newCollectionRebuildVectorIndexCommandWALIntent(idx.name, nil)
+	var intent *backenddb.CommandWALIntent
+	if idx.isPartitionLiveCarrier() {
+		intent, err = c.newCollectionPersistPartitionLiveCommandWALIntent(idx.name, replay)
+	} else {
+		intent, err = c.newCollectionRebuildVectorIndexCommandWALIntent(idx.name, replay)
+	}
 	if err != nil {
 		resetCollectionRunTable(table)
 		return status, err
@@ -727,6 +763,15 @@ func (c *Collection) LoadNativeVectorIndexSnapshot(opts VectorIndexOptions) (*Ve
 		status.ExactFallbackReason = reason
 		return nil, status, nil
 	}
+	if def.Strategy == VectorIndexStrategyColumnGraph {
+		if snapshot.Meta.PartitionLive == nil {
+			status.ExactFallbackReason = vectorIndexFallbackMetaMismatch
+			return nil, status, nil
+		}
+	} else if snapshot.Meta.PartitionLive != nil || !vectorIndexDefinitionUsesNativeRuntime(def) {
+		status.ExactFallbackReason = vectorIndexFallbackMetaMismatch
+		return nil, status, nil
+	}
 	matchesDocumentRoots, err := vectorIndexSnapshotMatchesDocumentRoots(snapshot.Meta, catalog, snap)
 	if err != nil {
 		return nil, status, err
@@ -743,12 +788,15 @@ func (c *Collection) LoadNativeVectorIndexSnapshot(opts VectorIndexOptions) (*Ve
 		status.ExactFallbackReason = reason
 		return nil, status, nil
 	}
+	index.setPartitionLiveCarrier(def.Strategy == VectorIndexStrategyColumnGraph)
 	if index.validateNativeSnapshotDefinition(def) != "" {
 		status.ExactFallbackReason = vectorIndexFallbackMetaMismatch
 		return nil, status, nil
 	}
-	if err := populateNativeScalarColumnsFromSecondaryIndexes(index, snap, catalog); err != nil {
-		return nil, status, fmt.Errorf("%w: native scalar columns: %v", ErrVectorIndexSearchUnavailable, err)
+	if def.Strategy != VectorIndexStrategyColumnGraph {
+		if err := populateNativeScalarColumnsFromSecondaryIndexes(index, snap, catalog); err != nil {
+			return nil, status, fmt.Errorf("%w: native scalar columns: %v", ErrVectorIndexSearchUnavailable, err)
+		}
 	}
 	status.RootID = rootID
 	index.recordLoadedSnapshot(rootID, bytesDisk)
@@ -1009,27 +1057,30 @@ type vectorIndexManifestFileEntry struct {
 }
 
 type vectorIndexPersistSnapshot struct {
-	Meta       vectorIndexPersistMeta
-	Nodes      []vectorIndexPersistNode
-	Edges      []vectorIndexPersistEdges
-	Tombstones vectorIndexPersistTombstones
-	DocMap     vectorIndexPersistDocMap
+	Meta                 vectorIndexPersistMeta
+	Nodes                []vectorIndexPersistNode
+	Edges                []vectorIndexPersistEdges
+	Tombstones           vectorIndexPersistTombstones
+	DocMap               vectorIndexPersistDocMap
+	PartitionLiveOwners  []vectorIndexPartitionLivePersistOwnerV1
+	PartitionLiveDomains []vectorIndexPartitionLivePersistDomainV1
 }
 
 type vectorIndexPersistMeta struct {
-	Name                            string              `json:"name"`
-	Field                           string              `json:"field"`
-	Metric                          VectorMetric        `json:"metric"`
-	Encoding                        VectorIndexEncoding `json:"encoding"`
-	Dimensions                      int                 `json:"dimensions"`
-	M                               int                 `json:"m"`
-	EfConstruction                  int                 `json:"ef_construction"`
-	EfSearch                        int                 `json:"ef_search"`
-	RebuildDeletedRatio             float64             `json:"rebuild_deleted_ratio"`
-	Entry                           int                 `json:"entry"`
-	MaxLevel                        int                 `json:"max_level"`
-	SourceDocumentGenerationVersion int                 `json:"source_document_generation_version"`
-	SourceDocumentGeneration        uint64              `json:"source_document_generation"`
+	Name                            string                             `json:"name"`
+	Field                           string                             `json:"field"`
+	Metric                          VectorMetric                       `json:"metric"`
+	Encoding                        VectorIndexEncoding                `json:"encoding"`
+	Dimensions                      int                                `json:"dimensions"`
+	M                               int                                `json:"m"`
+	EfConstruction                  int                                `json:"ef_construction"`
+	EfSearch                        int                                `json:"ef_search"`
+	RebuildDeletedRatio             float64                            `json:"rebuild_deleted_ratio"`
+	Entry                           int                                `json:"entry"`
+	MaxLevel                        int                                `json:"max_level"`
+	SourceDocumentGenerationVersion int                                `json:"source_document_generation_version"`
+	SourceDocumentGeneration        uint64                             `json:"source_document_generation"`
+	PartitionLive                   *vectorIndexPartitionLivePersistV1 `json:"partition_live,omitempty"`
 }
 
 type vectorIndexPersistNode struct {
@@ -1060,6 +1111,8 @@ func (idx *VectorIndex) persistSnapshot() (vectorIndexPersistSnapshot, uint64) {
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
 	seq := idx.mutationSeq
+	liveMeta := idx.partitionLiveMetaPersistLockedV2()
+	liveOwners, liveDomains := idx.partitionLiveSnapshotRecordsLockedV2()
 	snapshot := vectorIndexPersistSnapshot{
 		Meta: vectorIndexPersistMeta{
 			Name:                            idx.name,
@@ -1075,11 +1128,13 @@ func (idx *VectorIndex) persistSnapshot() (vectorIndexPersistSnapshot, uint64) {
 			MaxLevel:                        idx.maxLevel,
 			SourceDocumentGenerationVersion: vectorIndexDocumentGenerationVersion,
 			SourceDocumentGeneration:        idx.sourceDocumentGeneration,
+			PartitionLive:                   liveMeta,
 		},
 		Nodes: make([]vectorIndexPersistNode, len(idx.nodes)),
 		DocMap: vectorIndexPersistDocMap{
 			Current: make(map[string]int, len(idx.currentNode)),
 		},
+		PartitionLiveOwners: liveOwners, PartitionLiveDomains: liveDomains,
 	}
 	for i, node := range idx.nodes {
 		snapshot.Nodes[i] = vectorIndexPersistNode{
@@ -1132,7 +1187,7 @@ func vectorIndexSnapshotBytes(manifestData []byte, entries []vectorIndexManifest
 }
 
 func buildVectorIndexNativeSnapshotTable(snapshot vectorIndexPersistSnapshot) (memtable.Table, int64, error) {
-	entryCount := 1 + len(snapshot.Nodes) + len(snapshot.Edges) + len(snapshot.Tombstones.NodeIDs) + len(snapshot.DocMap.Current)
+	entryCount := 1 + len(snapshot.Nodes) + len(snapshot.Edges) + len(snapshot.Tombstones.NodeIDs) + len(snapshot.DocMap.Current) + len(snapshot.PartitionLiveOwners)
 	table := newCollectionRunTable(entryCount)
 	var bytesDisk int64
 	add := func(key []byte, payload any) error {
@@ -1169,7 +1224,54 @@ func buildVectorIndexNativeSnapshotTable(snapshot vectorIndexPersistSnapshot) (m
 			return nil, 0, err
 		}
 	}
+	if live := snapshot.Meta.PartitionLive; live != nil && live.Version == 3 {
+		for _, owner := range snapshot.PartitionLiveOwners {
+			if err := add(vectorIndexPartitionLiveOwnerKeyV2(live.OwnerEpoch, owner.ID), owner); err != nil {
+				resetCollectionRunTable(table)
+				return nil, 0, err
+			}
+		}
+		for _, domain := range snapshot.PartitionLiveDomains {
+			domainTable, domainBytes, err := buildVectorIndexNativeSnapshotTable(domain.Snapshot)
+			if err != nil {
+				resetCollectionRunTable(table)
+				return nil, 0, err
+			}
+			domainTable.Freeze()
+			it := domainTable.NewIterator(nil, nil)
+			prefix := vectorIndexPartitionLiveDomainPrefixV2(domain.Domain, domain.Epoch)
+			for it.Valid() {
+				key := append(append([]byte(nil), prefix...), it.KeyCopy(nil)...)
+				if it.IsDeleted() {
+					table.DeleteSteal(key)
+				} else {
+					table.SetSteal(key, it.ValueCopy(nil))
+				}
+				it.Next()
+			}
+			iterErr := it.Error()
+			_ = it.Close()
+			resetCollectionRunTable(domainTable)
+			if iterErr != nil {
+				resetCollectionRunTable(table)
+				return nil, 0, iterErr
+			}
+			bytesDisk += domainBytes
+		}
+	}
 	return table, bytesDisk, nil
+}
+
+func vectorIndexPartitionLiveOwnerKeyV2(epoch uint64, id string) []byte {
+	key := make([]byte, 0, len(vectorIndexNativeKeyPrefixLiveOwner)+vectorIndexNativeKeyOrdinalWidth+1+len(id))
+	key = append(key, vectorIndexNativeKeyPrefixLiveOwner...)
+	key = append(key, fmt.Sprintf("%020d/", epoch)...)
+	key = append(key, id...)
+	return key
+}
+
+func vectorIndexPartitionLiveDomainPrefixV2(domain uint32, epoch uint64) []byte {
+	return []byte(fmt.Sprintf("%s%020d/%020d/", vectorIndexNativeKeyPrefixLiveDomain, domain, epoch))
 }
 
 func (idx *VectorIndex) persistNativeDeltaTable(includeMeta bool) (memtable.Table, int64, uint64, uint64, bool, error) {
@@ -1275,6 +1377,66 @@ func (idx *VectorIndex) persistNativeDeltaTable(includeMeta bool) (memtable.Tabl
 			return nil, 0, seq, persistedEpoch, false, err
 		}
 	}
+	if live := idx.partitionLive; live != nil && !live.invalid {
+		ownerIDs := make([]string, 0, len(live.dirtyOwners))
+		for id := range live.dirtyOwners {
+			ownerIDs = append(ownerIDs, id)
+		}
+		sort.Strings(ownerIDs)
+		for _, id := range ownerIDs {
+			owner, ok := live.ownerV1(id)
+			if !ok {
+				resetCollectionRunTable(table)
+				return nil, 0, seq, persistedEpoch, false, fmt.Errorf("collections: partition-live dirty owner %q is missing", id)
+			}
+			if err := add(vectorIndexPartitionLiveOwnerKeyV2(live.ownerEpoch, id), vectorIndexPartitionLivePersistOwnerV1{ID: id, Domain: owner.domain, Deleted: owner.deleted}); err != nil {
+				resetCollectionRunTable(table)
+				return nil, 0, seq, persistedEpoch, false, err
+			}
+		}
+		domains := make([]uint32, 0, len(live.dirtyDomains))
+		for domain := range live.dirtyDomains {
+			domains = append(domains, domain)
+		}
+		sort.Slice(domains, func(i, j int) bool { return domains[i] < domains[j] })
+		for _, domain := range domains {
+			delta := live.domains[domain]
+			if delta == nil {
+				resetCollectionRunTable(table)
+				return nil, 0, seq, persistedEpoch, false, fmt.Errorf("collections: partition-live dirty domain %d is missing", domain)
+			}
+			_, full := live.fullDomains[domain]
+			domainTable, domainBytes, _, _, domainWork, err := delta.persistNativeDeltaTable(full)
+			if err != nil {
+				resetCollectionRunTable(table)
+				return nil, 0, seq, persistedEpoch, false, err
+			}
+			if !domainWork {
+				resetCollectionRunTable(domainTable)
+				continue
+			}
+			domainTable.Freeze()
+			it := domainTable.NewIterator(nil, nil)
+			prefix := vectorIndexPartitionLiveDomainPrefixV2(domain, live.domainEpochs[domain])
+			for it.Valid() {
+				key := append(append([]byte(nil), prefix...), it.KeyCopy(nil)...)
+				if it.IsDeleted() {
+					table.DeleteSteal(key)
+				} else {
+					table.SetSteal(key, it.ValueCopy(nil))
+				}
+				it.Next()
+			}
+			iterErr := it.Error()
+			_ = it.Close()
+			resetCollectionRunTable(domainTable)
+			if iterErr != nil {
+				resetCollectionRunTable(table)
+				return nil, 0, seq, persistedEpoch, false, iterErr
+			}
+			bytesDisk += domainBytes
+		}
+	}
 	return table, bytesDisk, seq, persistedEpoch, true, nil
 }
 
@@ -1293,6 +1455,7 @@ func (idx *VectorIndex) persistMetaLocked() vectorIndexPersistMeta {
 		MaxLevel:                        idx.maxLevel,
 		SourceDocumentGenerationVersion: vectorIndexDocumentGenerationVersion,
 		SourceDocumentGeneration:        idx.sourceDocumentGeneration,
+		PartitionLive:                   idx.partitionLiveMetaPersistLockedV2(),
 	}
 }
 
@@ -1325,6 +1488,19 @@ func readVectorIndexNativeSnapshot(snap *backenddb.Snapshot, catalog *collection
 	nodes := make(map[int]vectorIndexPersistNode)
 	maxNodeID := -1
 	snapshot.DocMap.Current = make(map[string]int)
+	type liveDomainReadV2 struct {
+		snapshot vectorIndexPersistSnapshot
+		nodes    map[int]vectorIndexPersistNode
+		maxNode  int
+		seenMeta bool
+	}
+	activeDomainEpochs := make(map[uint32]uint64)
+	if live := snapshot.Meta.PartitionLive; live != nil && live.Version == 3 {
+		for _, domain := range live.DomainEpochs {
+			activeDomainEpochs[domain.Domain] = domain.Epoch
+		}
+	}
+	liveDomains := make(map[uint32]*liveDomainReadV2, len(activeDomainEpochs))
 	it, err := collectionIteratorAtCatalogRoot(snap, catalog, rootName, nil, nil, false)
 	if err != nil {
 		return snapshot, bytesDisk, "", err
@@ -1345,57 +1521,143 @@ func readVectorIndexNativeSnapshot(snap *backenddb.Snapshot, catalog *collection
 		}
 		bytesDisk += int64(len(value))
 		switch {
-		case bytes.HasPrefix(key, []byte(vectorIndexNativeKeyPrefixNode)):
-			nodeID, ok := parseVectorIndexNativeOrdinal(string(key[len(vectorIndexNativeKeyPrefixNode):]))
-			if !ok {
+		case bytes.HasPrefix(key, []byte(vectorIndexNativeKeyPrefixLiveOwner)):
+			live := snapshot.Meta.PartitionLive
+			rest := key[len(vectorIndexNativeKeyPrefixLiveOwner):]
+			if live == nil || live.Version != 3 || len(rest) <= vectorIndexNativeKeyOrdinalWidth || rest[vectorIndexNativeKeyOrdinalWidth] != '/' {
 				return snapshot, bytesDisk, vectorIndexFallbackInvalidGraphRootKey, nil
 			}
-			var node vectorIndexPersistNode
-			if err := json.Unmarshal(value, &node); err != nil {
-				return snapshot, bytesDisk, vectorIndexFallbackInvalidGraphRootEntry, nil
-			}
-			nodes[nodeID] = node
-			if nodeID > maxNodeID {
-				maxNodeID = nodeID
-			}
-		case bytes.HasPrefix(key, []byte(vectorIndexNativeKeyPrefixEdge)):
-			var edge vectorIndexPersistEdges
-			if err := json.Unmarshal(value, &edge); err != nil {
-				return snapshot, bytesDisk, vectorIndexFallbackInvalidGraphRootEntry, nil
-			}
-			snapshot.Edges = append(snapshot.Edges, edge)
-		case bytes.HasPrefix(key, []byte(vectorIndexNativeKeyPrefixTomb)):
-			nodeID, ok := parseVectorIndexNativeOrdinal(string(key[len(vectorIndexNativeKeyPrefixTomb):]))
-			if !ok {
+			epoch, err := strconv.ParseUint(string(rest[:vectorIndexNativeKeyOrdinalWidth]), 10, 64)
+			if err != nil || epoch == 0 {
 				return snapshot, bytesDisk, vectorIndexFallbackInvalidGraphRootKey, nil
 			}
-			snapshot.Tombstones.NodeIDs = append(snapshot.Tombstones.NodeIDs, nodeID)
-		case bytes.HasPrefix(key, []byte(vectorIndexNativeKeyPrefixDoc)):
-			var nodeID int
-			if err := json.Unmarshal(value, &nodeID); err != nil {
-				return snapshot, bytesDisk, vectorIndexFallbackInvalidGraphRootEntry, nil
+			if epoch == live.OwnerEpoch {
+				var owner vectorIndexPartitionLivePersistOwnerV1
+				if err := json.Unmarshal(value, &owner); err != nil || owner.ID != string(rest[vectorIndexNativeKeyOrdinalWidth+1:]) {
+					return snapshot, bytesDisk, vectorIndexFallbackInvalidGraphRootEntry, nil
+				}
+				snapshot.PartitionLiveOwners = append(snapshot.PartitionLiveOwners, owner)
 			}
-			snapshot.DocMap.Current[string(key[len(vectorIndexNativeKeyPrefixDoc):])] = nodeID
+		case bytes.HasPrefix(key, []byte(vectorIndexNativeKeyPrefixLiveDomain)):
+			live := snapshot.Meta.PartitionLive
+			rest := key[len(vectorIndexNativeKeyPrefixLiveDomain):]
+			segment := vectorIndexNativeKeyOrdinalWidth
+			if live == nil || live.Version != 3 || len(rest) <= segment*2+2 || rest[segment] != '/' || rest[segment*2+1] != '/' {
+				return snapshot, bytesDisk, vectorIndexFallbackInvalidGraphRootKey, nil
+			}
+			domain64, domainErr := strconv.ParseUint(string(rest[:segment]), 10, 32)
+			epoch, epochErr := strconv.ParseUint(string(rest[segment+1:segment*2+1]), 10, 64)
+			if domainErr != nil || epochErr != nil || epoch == 0 {
+				return snapshot, bytesDisk, vectorIndexFallbackInvalidGraphRootKey, nil
+			}
+			domain := uint32(domain64)
+			if activeDomainEpochs[domain] != epoch {
+				break
+			}
+			state := liveDomains[domain]
+			if state == nil {
+				state = &liveDomainReadV2{nodes: make(map[int]vectorIndexPersistNode), maxNode: -1}
+				state.snapshot.DocMap.Current = make(map[string]int)
+				liveDomains[domain] = state
+			}
+			nativeKey := rest[segment*2+2:]
+			if bytes.Equal(nativeKey, []byte(vectorIndexNativeKeyMeta)) {
+				if state.seenMeta || json.Unmarshal(value, &state.snapshot.Meta) != nil {
+					return snapshot, bytesDisk, vectorIndexFallbackInvalidGraphRootEntry, nil
+				}
+				state.seenMeta = true
+			} else if reason := appendVectorIndexNativeSnapshotRecordV2(&state.snapshot, state.nodes, &state.maxNode, nativeKey, value); reason != "" {
+				return snapshot, bytesDisk, reason, nil
+			}
 		default:
-			return snapshot, bytesDisk, vectorIndexFallbackInvalidGraphRootKey, nil
+			if reason := appendVectorIndexNativeSnapshotRecordV2(&snapshot, nodes, &maxNodeID, key, value); reason != "" {
+				return snapshot, bytesDisk, reason, nil
+			}
 		}
 		it.Next()
 	}
 	if err := it.Error(); err != nil {
 		return snapshot, bytesDisk, "", err
 	}
+	if reason := finalizeVectorIndexNativeSnapshotRecordsV2(&snapshot, nodes, maxNodeID); reason != "" {
+		return snapshot, bytesDisk, reason, nil
+	}
+	if live := snapshot.Meta.PartitionLive; live != nil && live.Version == 3 {
+		sort.Slice(snapshot.PartitionLiveOwners, func(i, j int) bool { return snapshot.PartitionLiveOwners[i].ID < snapshot.PartitionLiveOwners[j].ID })
+		for _, descriptor := range live.DomainEpochs {
+			state := liveDomains[descriptor.Domain]
+			if state == nil || !state.seenMeta {
+				return snapshot, bytesDisk, vectorIndexFallbackMissingGraphRootEntry, nil
+			}
+			if reason := finalizeVectorIndexNativeSnapshotRecordsV2(&state.snapshot, state.nodes, state.maxNode); reason != "" {
+				return snapshot, bytesDisk, reason, nil
+			}
+			snapshot.PartitionLiveDomains = append(snapshot.PartitionLiveDomains, vectorIndexPartitionLivePersistDomainV1{Domain: descriptor.Domain, Epoch: descriptor.Epoch, Snapshot: state.snapshot})
+		}
+	}
+	sort.Ints(snapshot.Tombstones.NodeIDs)
+	return snapshot, bytesDisk, "", nil
+}
+
+func appendVectorIndexNativeSnapshotRecordV2(snapshot *vectorIndexPersistSnapshot, nodes map[int]vectorIndexPersistNode, maxNodeID *int, key, value []byte) string {
+	switch {
+	case bytes.HasPrefix(key, []byte(vectorIndexNativeKeyPrefixNode)):
+		nodeID, ok := parseVectorIndexNativeOrdinal(string(key[len(vectorIndexNativeKeyPrefixNode):]))
+		if !ok {
+			return vectorIndexFallbackInvalidGraphRootKey
+		}
+		var node vectorIndexPersistNode
+		if err := json.Unmarshal(value, &node); err != nil {
+			return vectorIndexFallbackInvalidGraphRootEntry
+		}
+		if _, duplicate := nodes[nodeID]; duplicate {
+			return vectorIndexFallbackInvalidGraphRootEntry
+		}
+		nodes[nodeID] = node
+		if nodeID > *maxNodeID {
+			*maxNodeID = nodeID
+		}
+	case bytes.HasPrefix(key, []byte(vectorIndexNativeKeyPrefixEdge)):
+		var edge vectorIndexPersistEdges
+		if err := json.Unmarshal(value, &edge); err != nil {
+			return vectorIndexFallbackInvalidGraphRootEntry
+		}
+		snapshot.Edges = append(snapshot.Edges, edge)
+	case bytes.HasPrefix(key, []byte(vectorIndexNativeKeyPrefixTomb)):
+		nodeID, ok := parseVectorIndexNativeOrdinal(string(key[len(vectorIndexNativeKeyPrefixTomb):]))
+		if !ok {
+			return vectorIndexFallbackInvalidGraphRootKey
+		}
+		snapshot.Tombstones.NodeIDs = append(snapshot.Tombstones.NodeIDs, nodeID)
+	case bytes.HasPrefix(key, []byte(vectorIndexNativeKeyPrefixDoc)):
+		var nodeID int
+		if err := json.Unmarshal(value, &nodeID); err != nil {
+			return vectorIndexFallbackInvalidGraphRootEntry
+		}
+		docID := string(key[len(vectorIndexNativeKeyPrefixDoc):])
+		if _, duplicate := snapshot.DocMap.Current[docID]; duplicate {
+			return vectorIndexFallbackInvalidGraphRootEntry
+		}
+		snapshot.DocMap.Current[docID] = nodeID
+	default:
+		return vectorIndexFallbackInvalidGraphRootKey
+	}
+	return ""
+}
+
+func finalizeVectorIndexNativeSnapshotRecordsV2(snapshot *vectorIndexPersistSnapshot, nodes map[int]vectorIndexPersistNode, maxNodeID int) string {
 	if maxNodeID >= 0 {
 		snapshot.Nodes = make([]vectorIndexPersistNode, maxNodeID+1)
 		for nodeID := 0; nodeID <= maxNodeID; nodeID++ {
 			node, ok := nodes[nodeID]
 			if !ok {
-				return snapshot, bytesDisk, vectorIndexFallbackMissingGraphRootEntry, nil
+				return vectorIndexFallbackMissingGraphRootEntry
 			}
 			snapshot.Nodes[nodeID] = node
 		}
 	}
 	sort.Ints(snapshot.Tombstones.NodeIDs)
-	return snapshot, bytesDisk, "", nil
+	return ""
 }
 
 func vectorIndexNativeNodeKey(nodeID int) []byte {
@@ -1494,6 +1756,7 @@ func (idx *VectorIndex) recordPersistedSnapshot(epoch uint64, bytesDisk int64, s
 		idx.dirtyMeta = false
 		clear(idx.dirtyNodes)
 		clear(idx.dirtyDocs)
+		idx.acknowledgePartitionLivePersistenceLockedV2()
 	}
 	if view := idx.searchView.Load(); idx.nativePersistent && view != nil {
 		view.persisted.Store(&vectorIndexSearchPersistedMetadata{epoch: epoch, bytesDisk: bytesDisk})
@@ -1718,6 +1981,11 @@ func (idx *VectorIndex) loadPersistSnapshot(snapshot vectorIndexPersistSnapshot)
 		idx.mutationSeq = 0
 		idx.sourceDocumentGeneration = snapshot.Meta.SourceDocumentGeneration
 		idx.sourceDocumentRootsValid = true
+		partitionLive, reason := idx.restorePartitionLiveSnapshotV2(snapshot.Meta.PartitionLive, snapshot.PartitionLiveOwners, snapshot.PartitionLiveDomains, snapshot.Meta.SourceDocumentGeneration)
+		if reason != "" {
+			return reason
+		}
+		idx.partitionLive = partitionLive
 		idx.publishSearchViewLocked(true)
 		return ""
 	}
@@ -1844,6 +2112,11 @@ func (idx *VectorIndex) loadPersistSnapshot(snapshot vectorIndexPersistSnapshot)
 	idx.mutationSeq = 0
 	idx.sourceDocumentGeneration = snapshot.Meta.SourceDocumentGeneration
 	idx.sourceDocumentRootsValid = true
+	partitionLive, reason := idx.restorePartitionLiveSnapshotV2(snapshot.Meta.PartitionLive, snapshot.PartitionLiveOwners, snapshot.PartitionLiveDomains, snapshot.Meta.SourceDocumentGeneration)
+	if reason != "" {
+		return reason
+	}
+	idx.partitionLive = partitionLive
 	idx.publishSearchViewLocked(true)
 	return ""
 }

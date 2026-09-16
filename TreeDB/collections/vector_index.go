@@ -412,6 +412,8 @@ type VectorIndex struct {
 	frozenPrefixIndexedDotBatches    uint64
 	frozenPrefixHeapRowStores        uint64
 	liveDelta                        *VectorIndex
+	partitionLive                    *vectorIndexPartitionLiveStateV1
+	partitionLiveMutationUndo        *vectorIndexPartitionLiveDomainUndoV2
 	scalarDefinitions                []IndexDefinition
 	scalarRuntimes                   []indexRuntime
 	scalarColumns                    map[string]vectorIndexScalarColumn
@@ -440,6 +442,7 @@ type VectorIndex struct {
 	persistedBytesDisk     int64
 	persistedSnapshotDirty bool
 	nativePersistent       bool
+	partitionLiveOnly      bool
 	dirtyMeta              bool
 	dirtyNodes             map[int]struct{}
 	dirtyDocs              map[string]struct{}
@@ -1317,7 +1320,7 @@ func (c *Collection) registerAdHocVectorIndexCurrentCatalogWithAdmissionLocked(i
 
 func (c *Collection) registerVectorIndexCurrentCatalog(index *VectorIndex) {
 	def, declaredNative := findVectorIndex(c.meta.VectorIndexes, index.name)
-	sharedNative := declaredNative && vectorIndexDefinitionUsesNativeRuntime(def) && c.writeDomain != nil
+	sharedNative := declaredNative && vectorIndexDefinitionUsesPersistentRuntime(def, index) && c.writeDomain != nil
 	coord := c.collectionSchemaCoordinator()
 	if !sharedNative && coord != nil {
 		coord.adHocVectorAdmissionMu.Lock()
@@ -1328,14 +1331,17 @@ func (c *Collection) registerVectorIndexCurrentCatalog(index *VectorIndex) {
 
 func (c *Collection) registerVectorIndexCurrentCatalogWithAdHocAdmissionLocked(index *VectorIndex) {
 	def, declaredNative := findVectorIndex(c.meta.VectorIndexes, index.name)
-	sharedNative := declaredNative && vectorIndexDefinitionUsesNativeRuntime(def) && c.writeDomain != nil
+	sharedNative := declaredNative && vectorIndexDefinitionUsesPersistentRuntime(def, index) && c.writeDomain != nil
 	coord := c.collectionSchemaCoordinator()
 	if index.searchView.Load() == nil && index.hasValidSourceDocumentRoots() {
 		index.publishSearchView()
 	}
 	index.collection = c
 	if sharedNative {
-		index.recordNativeDefinition(def)
+		index.recordPersistentDefinition(def)
+		if index.isPartitionLiveCarrier() && coord != nil {
+			coord.registerPartitionLiveCarrier(index)
+		}
 		c.writeDomain.nativeVectorIndexesMu.Lock()
 		if c.writeDomain.nativeVectorIndexes == nil {
 			c.writeDomain.nativeVectorIndexes = make(map[string]*VectorIndex)
@@ -1397,7 +1403,7 @@ func (c *Collection) registeredVectorIndexNativeRuntimeIsStale(index *VectorInde
 	}
 	c.rememberCatalog(snap, catalog)
 	def, ok := findVectorIndex(catalog.meta.VectorIndexes, index.name)
-	if !ok || !vectorIndexDefinitionUsesNativeRuntime(def) {
+	if !ok || !vectorIndexDefinitionUsesPersistentRuntime(def, index) {
 		return index.isNativePersistent(), nil
 	}
 	wasNativePersistent := index.isNativePersistent()
@@ -1419,17 +1425,38 @@ func (c *Collection) UnregisterVectorIndex(name string) {
 	if c == nil {
 		return
 	}
+	coord := c.collectionSchemaCoordinator()
+	if coord != nil {
+		coord.partitionLivePublishMu.Lock()
+		defer coord.partitionLivePublishMu.Unlock()
+	}
+	c.unregisterVectorIndex(name, coord)
+}
+
+func (c *Collection) unregisterVectorIndex(name string, coord *collectionSchemaCoordinator) {
+	var removedNative *VectorIndex
 	if c.writeDomain != nil {
 		c.writeDomain.nativeVectorIndexesMu.Lock()
+		removedNative = c.writeDomain.nativeVectorIndexes[name]
 		delete(c.writeDomain.nativeVectorIndexes, name)
 		c.writeDomain.nativeVectorIndexesMu.Unlock()
+	}
+	if removedNative == nil {
+		if coord != nil {
+			removedNative = coord.partitionLiveCarrier(name)
+		}
+	}
+	if removedNative != nil && removedNative.isPartitionLiveCarrier() {
+		if coord != nil {
+			coord.unregisterPartitionLiveCarrier(name, removedNative)
+		}
 	}
 	c.vectorIndexesMu.Lock()
 	_, removedAdHoc := c.vectorIndexes[name]
 	delete(c.vectorIndexes, name)
 	c.vectorIndexesMu.Unlock()
 	if removedAdHoc {
-		if coord := c.collectionSchemaCoordinator(); coord != nil {
+		if coord != nil {
 			coord.adHocVectorIndexes.Add(-1)
 		}
 	}
@@ -1451,12 +1478,26 @@ func (c *Collection) registeredVectorIndexes() []*VectorIndex {
 	if c == nil {
 		return nil
 	}
-	var out []*VectorIndex
+	carriers := c.registeredVectorPartitionLiveCarriersV1()
+	out := make([]*VectorIndex, 0, len(carriers))
+	var seen map[string]*VectorIndex
+	if len(carriers) != 0 {
+		seen = make(map[string]*VectorIndex, len(carriers))
+	}
+	for _, carrier := range carriers {
+		out = append(out, carrier)
+		seen[carrier.name] = carrier
+	}
 	if c.writeDomain != nil {
 		c.writeDomain.nativeVectorIndexesMu.RLock()
-		out = make([]*VectorIndex, 0, len(c.writeDomain.nativeVectorIndexes))
-		for _, index := range c.writeDomain.nativeVectorIndexes {
+		for name, index := range c.writeDomain.nativeVectorIndexes {
+			if seen != nil && seen[name] != nil {
+				continue
+			}
 			out = append(out, index)
+			if seen != nil {
+				seen[name] = index
+			}
 		}
 		c.writeDomain.nativeVectorIndexesMu.RUnlock()
 	}
@@ -1465,12 +1506,14 @@ func (c *Collection) registeredVectorIndexes() []*VectorIndex {
 		c.vectorIndexesMu.RUnlock()
 		return out
 	}
-	sharedNames := make(map[string]struct{}, len(out))
-	for _, index := range out {
-		sharedNames[index.name] = struct{}{}
+	if seen == nil {
+		seen = make(map[string]*VectorIndex, len(out))
+		for _, index := range out {
+			seen[index.name] = index
+		}
 	}
 	for name, index := range c.vectorIndexes {
-		if _, shared := sharedNames[name]; !shared {
+		if seen[name] == nil {
 			out = append(out, index)
 		}
 	}
@@ -1483,6 +1526,10 @@ func (c *Collection) hasRegisteredVectorIndex(name string) bool {
 }
 
 func (c *Collection) lockNativeVectorIndexLoad() func() {
+	if coord := c.collectionSchemaCoordinator(); coord != nil {
+		coord.nativeVectorIndexLoadMu.Lock()
+		return coord.nativeVectorIndexLoadMu.Unlock
+	}
 	if c != nil && c.writeDomain != nil {
 		c.writeDomain.nativeVectorIndexLoadMu.Lock()
 		return c.writeDomain.nativeVectorIndexLoadMu.Unlock
@@ -1492,6 +1539,11 @@ func (c *Collection) lockNativeVectorIndexLoad() func() {
 }
 
 func (idx *VectorIndex) nativePublicationLock() *sync.RWMutex {
+	if idx != nil && idx.isPartitionLiveCarrier() && idx.collection != nil {
+		if coord := idx.collection.collectionSchemaCoordinator(); coord != nil {
+			return &coord.partitionLivePublishMu
+		}
+	}
 	if idx != nil && idx.collection != nil && idx.collection.writeDomain != nil {
 		return &idx.collection.writeDomain.nativeVectorPublishMu
 	}
@@ -1545,7 +1597,7 @@ func (c *Collection) ensureDeclaredNativeVectorIndexesLoaded() (map[string]struc
 
 	declared := make(map[string]VectorIndexDefinition, len(c.meta.VectorIndexes))
 	for _, def := range c.meta.VectorIndexes {
-		if vectorIndexDefinitionUsesNativeRuntime(def) {
+		if vectorIndexDefinitionUsesNativeRuntime(def) || def.Strategy == VectorIndexStrategyColumnGraph && catalog.rootID(collectionVectorIndexRootName(catalog.meta.Name, def.Name)) != 0 {
 			declared[def.Name] = def
 		}
 	}
@@ -1563,7 +1615,8 @@ func (c *Collection) ensureDeclaredNativeVectorIndexesLoaded() (map[string]struc
 	}
 	var rebuilt map[string]struct{}
 	for _, def := range c.meta.VectorIndexes {
-		if !vectorIndexDefinitionUsesNativeRuntime(def) {
+		persistentRuntime := vectorIndexDefinitionUsesNativeRuntime(def) || def.Strategy == VectorIndexStrategyColumnGraph && catalog.rootID(collectionVectorIndexRootName(catalog.meta.Name, def.Name)) != 0
+		if !persistentRuntime {
 			continue
 		}
 		if index := c.registeredVectorIndex(def.Name); index != nil {
@@ -1572,6 +1625,9 @@ func (c *Collection) ensureDeclaredNativeVectorIndexesLoaded() (map[string]struc
 				continue
 			}
 			if !index.hasValidSourceDocumentRoots() {
+				if !vectorIndexDefinitionUsesNativeRuntime(def) {
+					return nil, fmt.Errorf("%w: partition live carrier %q does not cover current documents", ErrVectorIndexPartitionLiveMismatchV1, def.Name)
+				}
 				_, err := c.buildVectorIndexPrepared(vectorIndexOptionsFromDefinition(def), true, true, true, true)
 				if err != nil {
 					return nil, err
@@ -1591,6 +1647,9 @@ func (c *Collection) ensureDeclaredNativeVectorIndexesLoaded() (map[string]struc
 			continue
 		}
 		if status.ExactFallbackReason != "" {
+			if !vectorIndexDefinitionUsesNativeRuntime(def) {
+				return nil, fmt.Errorf("%w: partition live carrier %q load failed: %s", ErrVectorIndexPartitionLiveUnavailableV1, def.Name, status.ExactFallbackReason)
+			}
 			_, err := c.buildVectorIndexPrepared(vectorIndexOptionsFromDefinition(def), true, true, true, true)
 			if err != nil {
 				return nil, err
@@ -1612,8 +1671,17 @@ func (c *Collection) declaredNativeVectorIndexesLoadedForCurrentCatalog() bool {
 	c.catalogMu.RLock()
 	catalogCurrent := c.catalog != nil && c.catalogCommitSeq == commitSeq && c.catalogSystemRoot == systemRoot
 	var defs []VectorIndexDefinition
+	var persistentColumnGraphRoots map[string]struct{}
 	if catalogCurrent {
 		defs = append([]VectorIndexDefinition(nil), c.catalog.meta.VectorIndexes...)
+		for _, def := range defs {
+			if def.Strategy == VectorIndexStrategyColumnGraph && c.catalog.rootID(collectionVectorIndexRootName(c.catalog.meta.Name, def.Name)) != 0 {
+				if persistentColumnGraphRoots == nil {
+					persistentColumnGraphRoots = make(map[string]struct{})
+				}
+				persistentColumnGraphRoots[def.Name] = struct{}{}
+			}
+		}
 	}
 	c.catalogMu.RUnlock()
 	if !catalogCurrent {
@@ -1621,7 +1689,8 @@ func (c *Collection) declaredNativeVectorIndexesLoadedForCurrentCatalog() bool {
 	}
 	nativeDefs := make([]VectorIndexDefinition, 0, len(defs))
 	for _, def := range defs {
-		if vectorIndexDefinitionUsesNativeRuntime(def) {
+		_, persistentColumnGraph := persistentColumnGraphRoots[def.Name]
+		if vectorIndexDefinitionUsesNativeRuntime(def) || persistentColumnGraph {
 			nativeDefs = append(nativeDefs, def)
 		}
 	}
@@ -1656,6 +1725,10 @@ func vectorIndexDefinitionUsesNativeRuntime(def VectorIndexDefinition) bool {
 	return def.Strategy == "" || def.Strategy == VectorIndexStrategyNativeRuntime
 }
 
+func vectorIndexDefinitionUsesPersistentRuntime(def VectorIndexDefinition, index *VectorIndex) bool {
+	return vectorIndexDefinitionUsesNativeRuntime(def) || def.Strategy == VectorIndexStrategyColumnGraph && index != nil && index.isPartitionLiveCarrier()
+}
+
 func (c *Collection) notifyVectorIndexesUpsert(documentIDs [][]byte) error {
 	return c.reconcileVectorIndexes(documentIDs)
 }
@@ -1675,7 +1748,21 @@ func (c *Collection) reconcileVectorIndexes(documentIDs [][]byte) error {
 		rebuildCurrentDocuments := c.writeDomain.nativeVectorActive != 0 && !c.writeDomain.nativeVectorSearchActive.Load()
 		c.writeDomain.nativeVectorActiveMu.Unlock()
 		if rebuildCurrentDocuments {
-			c.invalidateRegisteredVectorIndexDocumentCoverage()
+			coord := c.collectionSchemaCoordinator()
+			unlockPublication := c.lockNativeVectorIndexPublicationRead()
+			currentGeneration, err := c.currentVectorIndexDocumentGeneration()
+			if err != nil {
+				c.invalidateRegisteredVectorIndexDocumentCoverageLocked()
+				unlockPublication()
+				return err
+			}
+			for _, index := range c.registeredVectorIndexes() {
+				if coord != nil && coord.partitionLiveCarrier(index.name) == index && index.coversSourceDocumentGeneration(currentGeneration) {
+					continue
+				}
+				index.invalidateSourceDocumentRoots()
+			}
+			unlockPublication()
 		}
 	}
 	rebuilt, err := c.ensureDeclaredNativeVectorIndexesLoaded()
@@ -1686,10 +1773,74 @@ func (c *Collection) reconcileVectorIndexes(documentIDs [][]byte) error {
 	unlockPublication := c.lockNativeVectorIndexPublicationRead()
 	defer unlockPublication()
 	indexes := c.registeredVectorIndexes()
+	if vectorIndexListHasPartitionLiveCarrier(indexes) {
+		currentGeneration, err := c.currentVectorIndexDocumentGeneration()
+		if err != nil {
+			c.invalidateRegisteredVectorIndexDocumentCoverageLocked()
+			return err
+		}
+		write := 0
+		for _, index := range indexes {
+			if index.isPartitionLiveCarrier() && index.coversSourceDocumentGeneration(currentGeneration) {
+				continue
+			}
+			indexes[write] = index
+			write++
+		}
+		indexes = indexes[:write]
+	}
+	return c.reconcileLoadedVectorIndexes(documentIDs, indexes, rebuilt, true)
+}
+
+func vectorIndexListHasPartitionLiveCarrier(indexes []*VectorIndex) bool {
+	for _, index := range indexes {
+		if index.isPartitionLiveCarrier() {
+			return true
+		}
+	}
+	return false
+}
+
+// reconcileVectorPartitionLiveReplay advances only the already-restored live
+// carrier. Command replay must never trigger a collection scan or graph build.
+func (c *Collection) reconcileVectorPartitionLiveReplay(documentIDs [][]byte) error {
+	if len(documentIDs) == 0 {
+		return nil
+	}
+	indexes := c.registeredVectorPartitionLiveCarriersV1()
 	if len(indexes) == 0 {
 		return nil
 	}
-	if c.manager != nil && vectorIndexListHasNativePersistent(indexes) {
+	unlockMutation := c.lockVectorIndexMutation()
+	defer unlockMutation()
+	coord := c.collectionSchemaCoordinator()
+	if coord == nil {
+		return ErrVectorIndexPartitionLiveUnavailableV1
+	}
+	coord.partitionLivePublishMu.Lock()
+	defer coord.partitionLivePublishMu.Unlock()
+	currentGeneration, err := c.currentVectorIndexDocumentGeneration()
+	if err != nil {
+		return err
+	}
+	covered := true
+	for _, index := range indexes {
+		if !index.coversSourceDocumentGeneration(currentGeneration) {
+			covered = false
+			break
+		}
+	}
+	if covered {
+		return nil
+	}
+	return c.reconcileLoadedVectorIndexes(documentIDs, indexes, nil, false)
+}
+
+func (c *Collection) reconcileLoadedVectorIndexes(documentIDs [][]byte, indexes []*VectorIndex, rebuilt map[string]struct{}, registerHandle bool) error {
+	if len(indexes) == 0 {
+		return nil
+	}
+	if registerHandle && c.manager != nil && vectorIndexListHasNativePersistent(indexes) {
 		c.manager.registerCollectionHandle(c)
 	}
 	needsInsert := false
@@ -1793,13 +1944,27 @@ func (c *Collection) invalidateOtherVectorIndexDocumentCoverage() {
 	if c == nil || c.writeDomain == nil || c.writeDomain.schemaCoordinator == nil {
 		return
 	}
-	for _, domain := range c.writeDomain.schemaCoordinator.snapshotDomains() {
+	coord := c.writeDomain.schemaCoordinator
+	shared := make(map[string]struct{})
+	for _, carrier := range coord.partitionLiveCarrierList() {
+		shared[carrier.name] = struct{}{}
+	}
+	for _, domain := range coord.snapshotDomains() {
 		if domain == c.writeDomain {
 			continue
 		}
 		domain.nativeVectorMutationMu.Lock()
 		domain.nativeVectorSearchActive.Store(false)
-		(&Collection{db: c.db, writeDomain: domain}).invalidateRegisteredVectorIndexDocumentCoverage()
+		other := &Collection{db: c.db, writeDomain: domain}
+		unlockPublication := other.lockNativeVectorIndexPublicationRead()
+		domain.nativeVectorIndexesMu.RLock()
+		for name, index := range domain.nativeVectorIndexes {
+			if _, ok := shared[name]; !ok {
+				index.invalidateSourceDocumentRoots()
+			}
+		}
+		domain.nativeVectorIndexesMu.RUnlock()
+		unlockPublication()
 		domain.nativeVectorMutationMu.Unlock()
 	}
 }
@@ -1854,7 +2019,7 @@ func (c *Collection) lockVectorIndexCoverageMutation() func() {
 	var exclusiveAdmission bool
 	for {
 		admissionMu.RLock()
-		hasMaintainedVectorIndexes = coord != nil && coord.hasNativeVectorIndexes.Load()
+		hasMaintainedVectorIndexes = coord != nil && (coord.hasNativeVectorIndexes.Load() || coord.hasPartitionLiveCarrier())
 		domain.mu.RLock()
 		hasMaintainedVectorIndexes = hasMaintainedVectorIndexes || collectionMetaHasNativeVectorIndexes(domain.meta)
 		domain.mu.RUnlock()
@@ -1936,7 +2101,7 @@ func (c *Collection) lockVectorIndexPublicationAdmission() func() {
 	admissionMu := c.nativeVectorAdmissionMutex()
 	admissionMu.RLock()
 	coord := domain.schemaCoordinator
-	hasMaintainedVectorIndexes := coord != nil && coord.hasNativeVectorIndexes.Load()
+	hasMaintainedVectorIndexes := coord != nil && (coord.hasNativeVectorIndexes.Load() || coord.hasPartitionLiveCarrier())
 	domain.mu.RLock()
 	hasMaintainedVectorIndexes = hasMaintainedVectorIndexes || collectionMetaHasNativeVectorIndexes(domain.meta)
 	domain.mu.RUnlock()
@@ -1976,18 +2141,32 @@ func (c *Collection) lockVectorIndexSynchronousPublicationAdmission() func() {
 }
 
 func (c *Collection) nativeVectorBaselineCovers(generation uint64) bool {
-	domain := c.writeDomain
-	domain.nativeVectorIndexesMu.RLock()
-	defer domain.nativeVectorIndexesMu.RUnlock()
-	if len(domain.nativeVectorIndexes) == 0 {
-		return false
+	carriers := c.registeredVectorPartitionLiveCarriersV1()
+	covered := false
+	var shared map[string]struct{}
+	if len(carriers) != 0 {
+		shared = make(map[string]struct{}, len(carriers))
 	}
-	for _, index := range domain.nativeVectorIndexes {
+	for _, index := range carriers {
+		covered = true
+		shared[index.name] = struct{}{}
 		if !index.coversSourceDocumentGeneration(generation) {
 			return false
 		}
 	}
-	return true
+	domain := c.writeDomain
+	domain.nativeVectorIndexesMu.RLock()
+	defer domain.nativeVectorIndexesMu.RUnlock()
+	for name, index := range domain.nativeVectorIndexes {
+		if _, ok := shared[name]; ok {
+			continue
+		}
+		covered = true
+		if !index.coversSourceDocumentGeneration(generation) {
+			return false
+		}
+	}
+	return covered
 }
 
 func (c *Collection) lockVectorIndexCoveragePersistence() func() {
@@ -2090,9 +2269,24 @@ func (c *Collection) recordVectorIndexCoverageAfterBufferedDocumentPublishWithWr
 }
 
 func (c *Collection) lockNativeVectorIndexPublicationRead() func() {
+	var liveMu *sync.RWMutex
+	if coord := c.collectionSchemaCoordinator(); coord != nil && coord.hasPartitionLiveCarrier() {
+		liveMu = &coord.partitionLivePublishMu
+		// Live reconciliation and invalidation publish a new revision, so they
+		// exclude coordinator and shard pins held across a whole request.
+		liveMu.Lock()
+	}
 	if c != nil && c.writeDomain != nil {
 		c.writeDomain.nativeVectorPublishMu.RLock()
-		return c.writeDomain.nativeVectorPublishMu.RUnlock
+		return func() {
+			c.writeDomain.nativeVectorPublishMu.RUnlock()
+			if liveMu != nil {
+				liveMu.Unlock()
+			}
+		}
+	}
+	if liveMu != nil {
+		return liveMu.Unlock
 	}
 	return func() {}
 }
@@ -2230,6 +2424,9 @@ func (idx *VectorIndex) InsertDocument(documentID []byte) error {
 	if len(documentID) == 0 {
 		return errors.New("collections: document id cannot be empty")
 	}
+	runVectorPartitionLiveInsertDocumentBeforePublicationHookForTest()
+	unlockPublication := idx.collection.lockNativeVectorIndexPublicationRead()
+	defer unlockPublication()
 	document, err := idx.collection.Get(documentID)
 	if err != nil {
 		return err
@@ -2259,10 +2456,21 @@ func (idx *VectorIndex) insertStoredDocumentWithAcknowledgment(materializer *Sto
 	}
 	if document == nil {
 		idx.mu.Lock()
-		if idx.liveDeltaActiveLocked() {
-			idx.tombstoneLiveDocumentLocked(documentID)
-		} else {
-			idx.tombstoneDocumentIDLocked(documentID)
+		if err := idx.preflightVectorPartitionMutationLocked(documentID, nil); err != nil {
+			idx.mu.Unlock()
+			return err
+		}
+		if !idx.partitionLiveOnly {
+			if idx.liveDeltaActiveLocked() {
+				idx.tombstoneLiveDocumentLocked(documentID)
+			} else {
+				idx.tombstoneDocumentIDLocked(documentID)
+			}
+		}
+		if err := idx.reconcileVectorPartitionMutationLocked(documentID, nil); err != nil {
+			idx.invalidateVectorPartitionLiveLocked()
+			idx.mu.Unlock()
+			return err
 		}
 		if acknowledge {
 			idx.acknowledgeSearchViewStateLocked()
@@ -2276,10 +2484,21 @@ func (idx *VectorIndex) insertStoredDocumentWithAcknowledgment(materializer *Sto
 	}
 	if !ok {
 		idx.mu.Lock()
-		if idx.liveDeltaActiveLocked() {
-			idx.tombstoneLiveDocumentLocked(documentID)
-		} else {
-			idx.tombstoneDocumentIDLocked(documentID)
+		if err := idx.preflightVectorPartitionMutationLocked(documentID, nil); err != nil {
+			idx.mu.Unlock()
+			return err
+		}
+		if !idx.partitionLiveOnly {
+			if idx.liveDeltaActiveLocked() {
+				idx.tombstoneLiveDocumentLocked(documentID)
+			} else {
+				idx.tombstoneDocumentIDLocked(documentID)
+			}
+		}
+		if err := idx.reconcileVectorPartitionMutationLocked(documentID, nil); err != nil {
+			idx.invalidateVectorPartitionLiveLocked()
+			idx.mu.Unlock()
+			return err
 		}
 		if acknowledge {
 			idx.acknowledgeSearchViewStateLocked()
@@ -2292,7 +2511,25 @@ func (idx *VectorIndex) insertStoredDocumentWithAcknowledgment(materializer *Sto
 		return fmt.Errorf("collections: native scalar fields in document %q: %w", documentID, err)
 	}
 	idx.mu.Lock()
+	if err := idx.preflightVectorPartitionMutationLocked(documentID, vector); err != nil {
+		idx.mu.Unlock()
+		return err
+	}
+	if idx.partitionLiveOnly {
+		err = idx.reconcileVectorPartitionMutationLocked(documentID, vector)
+		if err == nil && acknowledge {
+			idx.acknowledgeSearchViewStateLocked()
+		}
+		idx.mu.Unlock()
+		return err
+	}
 	err = idx.insertVectorWithNativeScalarLocked(documentID, vector, scalarRow)
+	if err == nil {
+		err = idx.reconcileVectorPartitionMutationLocked(documentID, vector)
+		if err != nil {
+			idx.invalidateVectorPartitionLiveLocked()
+		}
+	}
 	if err == nil && acknowledge {
 		idx.acknowledgeSearchViewStateLocked()
 	}
@@ -2338,7 +2575,10 @@ func (idx *VectorIndex) insertStoredDocumentsUnpublished(materializer *StoredDoc
 	}
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
-	if hasVector && len(idx.scalarDefinitions) == 0 {
+	if err := idx.preflightVectorPartitionMutationBatchLocked(documentIDs, vectors); err != nil {
+		return err
+	}
+	if hasVector && len(idx.scalarDefinitions) == 0 && idx.partitionLive == nil && !idx.partitionLiveOnly {
 		if idx.liveDeltaActiveLocked() {
 			return idx.insertLiveVectorBatchLocked(documentIDs, vectors)
 		}
@@ -2346,15 +2586,30 @@ func (idx *VectorIndex) insertStoredDocumentsUnpublished(materializer *StoredDoc
 	}
 	liveDelta := idx.liveDeltaActiveLocked()
 	for i := range documentIDs {
+		if err := idx.preflightVectorPartitionMutationLocked(documentIDs[i], vectors[i]); err != nil {
+			return err
+		}
 		if vectors[i] == nil {
-			if liveDelta {
-				idx.tombstoneLiveDocumentLocked(documentIDs[i])
-			} else {
-				idx.tombstoneDocumentIDLocked(documentIDs[i])
+			if !idx.partitionLiveOnly {
+				if liveDelta {
+					idx.tombstoneLiveDocumentLocked(documentIDs[i])
+				} else {
+					idx.tombstoneDocumentIDLocked(documentIDs[i])
+				}
+			}
+			if err := idx.reconcileVectorPartitionMutationLocked(documentIDs[i], nil); err != nil {
+				idx.invalidateVectorPartitionLiveLocked()
+				return err
 			}
 			continue
 		}
-		if err := idx.insertVectorWithNativeScalarLocked(documentIDs[i], vectors[i], scalarRows[i]); err != nil {
+		if !idx.partitionLiveOnly {
+			if err := idx.insertVectorWithNativeScalarLocked(documentIDs[i], vectors[i], scalarRows[i]); err != nil {
+				return err
+			}
+		}
+		if err := idx.reconcileVectorPartitionMutationLocked(documentIDs[i], vectors[i]); err != nil {
+			idx.invalidateVectorPartitionLiveLocked()
 			return err
 		}
 	}
@@ -2411,26 +2666,14 @@ func (idx *VectorIndex) insertVectorLocked(documentID []byte, vector []float32) 
 	} else if len(vector) != idx.dimensions {
 		return fmt.Errorf("collections: vector field %q in document %q has dimension %d, want %d", idx.field, documentID, len(vector), idx.dimensions)
 	}
+	if idx.currentVectorMatchesLocked(documentID, vector) {
+		return nil
+	}
 	var quantized []int8
 	var quantScale float32
 	if idx.encoding == VectorIndexEncodingInt8 {
 		idx.insertQuantScratch, quantScale = quantizeVectorIndexInt8Into(idx.insertQuantScratch[:0], vector)
 		quantized = idx.insertQuantScratch
-	}
-	if nodeID, ok := idx.currentNode[string(documentID)]; ok && nodeID >= 0 && nodeID < len(idx.nodes) {
-		node := &idx.nodes[nodeID]
-		if !node.deleted {
-			switch idx.encoding {
-			case VectorIndexEncodingInt8:
-				if node.matchesQuantizedVector(quantized, quantScale) {
-					return nil
-				}
-			default:
-				if node.matchesVector(vector) {
-					return nil
-				}
-			}
-		}
 	}
 	if !vectorIndexNodeOrdinalsFitUint32(uint64(len(idx.nodes)), 1) {
 		return errors.New("collections: vector index node ordinal exceeds uint32")
@@ -3030,13 +3273,6 @@ func (node *vectorIndexNode) matchesVector(vector []float32) bool {
 	return slices.Equal(node.vector, vector)
 }
 
-func (node *vectorIndexNode) matchesQuantizedVector(quantized []int8, quantScale float32) bool {
-	if node == nil {
-		return false
-	}
-	return node.quantScale == quantScale && slices.Equal(node.quantized, quantized)
-}
-
 func (node *vectorIndexNode) matchesInt8SourceVector(vector []float32) bool {
 	if node == nil || len(node.quantized) != len(vector) {
 		return false
@@ -3051,6 +3287,22 @@ func (node *vectorIndexNode) matchesInt8SourceVector(vector []float32) bool {
 		}
 	}
 	return true
+}
+
+func (idx *VectorIndex) vectorIndexNodeMatchesSourceVectorLocked(node *vectorIndexNode, vector []float32) bool {
+	if idx.encoding == VectorIndexEncodingInt8 {
+		return node.matchesInt8SourceVector(vector)
+	}
+	return node.matchesVector(vector)
+}
+
+func (idx *VectorIndex) currentVectorMatchesLocked(documentID []byte, vector []float32) bool {
+	nodeID, ok := idx.currentNode[string(documentID)]
+	if !ok || nodeID < 0 || nodeID >= len(idx.nodes) {
+		return false
+	}
+	node := &idx.nodes[nodeID]
+	return !node.deleted && idx.vectorIndexNodeMatchesSourceVectorLocked(node, vector)
 }
 
 func (idx *VectorIndex) newVectorIndexNode(documentID []byte, vector []float32, level int) vectorIndexNode {
@@ -3133,12 +3385,14 @@ func quantizeVectorIndexInt8Value(value, scale float32) int8 {
 }
 
 func (idx *VectorIndex) tombstoneDocumentIDLocked(documentID []byte) {
+	idx.capturePartitionLiveDomainCurrentNodeV2Locked(documentID)
 	nodeID, ok := idx.currentNode[string(documentID)]
 	if !ok {
 		return
 	}
 	idx.prepareSearchViewForMutationLocked()
 	if nodeID >= 0 && nodeID < len(idx.nodes) {
+		idx.capturePartitionLiveDomainNodeV2Locked(nodeID)
 		idx.nodes[nodeID].deleted = true
 		idx.markVectorNodeDirtyLocked(nodeID)
 	}
@@ -3236,13 +3490,40 @@ func (idx *VectorIndex) setNativePersistent(enabled bool) {
 }
 
 func (idx *VectorIndex) recordNativeDefinition(def VectorIndexDefinition) {
+	idx.recordPersistentDefinition(def)
+}
+
+func (idx *VectorIndex) recordPersistentDefinition(def VectorIndexDefinition) {
 	if idx == nil {
 		return
 	}
 	idx.mu.Lock()
 	idx.nativePersistent = true
-	idx.parallelReciprocalLinks = true
+	idx.partitionLiveOnly = def.Strategy == VectorIndexStrategyColumnGraph
+	idx.parallelReciprocalLinks = !idx.partitionLiveOnly
 	idx.schemaGeneration = def.SchemaGeneration
+	idx.mu.Unlock()
+}
+
+func (idx *VectorIndex) isPartitionLiveCarrier() bool {
+	if idx == nil {
+		return false
+	}
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+	return idx.partitionLiveOnly
+}
+
+func (idx *VectorIndex) setPartitionLiveCarrier(enabled bool) {
+	if idx == nil {
+		return
+	}
+	idx.mu.Lock()
+	idx.partitionLiveOnly = enabled
+	if enabled {
+		idx.nativePersistent = true
+		idx.parallelReciprocalLinks = false
+	}
 	idx.mu.Unlock()
 }
 
@@ -3310,6 +3591,13 @@ func (idx *VectorIndex) recordSourceDocumentStateLocked(generation uint64, state
 	idx.sourceDocumentGeneration = generation
 	idx.sourceDocumentState = state
 	idx.sourceDocumentStateValid = true
+	if idx.partitionLive != nil && !idx.partitionLive.invalid {
+		if idx.partitionLive.coverage != generation {
+			idx.partitionLive.coverage = generation
+			idx.mutationSeq++
+			idx.markVectorMetaDirtyLocked()
+		}
+	}
 	idx.acknowledgeSearchViewStateLocked()
 	if changed {
 		idx.searchViewCurrent.Store(false)
@@ -3481,6 +3769,7 @@ func (idx *VectorIndex) linkLayerLocked(fromNodeID, toNodeID, layer int, markDir
 	if !ok {
 		return
 	}
+	idx.capturePartitionLiveDomainNodeV2Locked(fromNodeID)
 	neighbors = append(neighbors, vectorIndexNeighbor{nodeID: uint32(toNodeID), distance: distance})
 	trace := idx.constructionTrace
 	var origin string
@@ -5920,6 +6209,15 @@ func (idx *VectorIndex) nativeMutationSequence() uint64 {
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
 	return idx.mutationSeq
+}
+
+func (idx *VectorIndex) nativePersistedBytesAndMutationSequence() (int64, uint64) {
+	if idx == nil {
+		return 0, 0
+	}
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+	return idx.persistedBytesDisk, idx.mutationSeq
 }
 
 func (idx *VectorIndex) markLiveANNFullRebuild() {

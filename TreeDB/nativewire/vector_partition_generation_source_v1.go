@@ -165,7 +165,7 @@ func (s *CollectionVectorPartitionGenerationSourceV1) PinVectorPartitionGenerati
 			s.mu.Lock()
 			s.stats.GenerationHits++
 			s.mu.Unlock()
-			return newCollectionVectorPartitionGenerationLeaseV1(s, entry), nil
+			return newCollectionVectorPartitionGenerationLeaseWithContextV1(ctx, s, entry)
 		}
 		if load := s.loads[key]; load != nil {
 			s.mu.Unlock()
@@ -227,7 +227,7 @@ func (s *CollectionVectorPartitionGenerationSourceV1) PinVectorPartitionGenerati
 			_ = s.release(entry)
 			return nil, err
 		}
-		return newCollectionVectorPartitionGenerationLeaseV1(s, entry), nil
+		return newCollectionVectorPartitionGenerationLeaseWithContextV1(ctx, s, entry)
 	}
 }
 
@@ -256,7 +256,7 @@ func (s *CollectionVectorPartitionGenerationSourceV1) loadGeneration(ctx context
 	if s.replicatedLifecycle != nil {
 		manifest, err = s.Collection.PreparedVectorPartitionManifestWithContextV1(ctx, key.index, key.generation)
 	} else {
-		manifest, authorityToken, err = s.Collection.ActiveVectorPartitionManifestAndAuthorityTokenWithContextV1(ctx, key.index, key.generation)
+		manifest, err = s.Collection.ActiveVectorPartitionManifestForLiveRecoveryWithContextV1(ctx, key.index, key.generation)
 	}
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
@@ -269,7 +269,28 @@ func (s *CollectionVectorPartitionGenerationSourceV1) loadGeneration(ctx context
 		authorityToken.Release()
 		return nil, vectorPartitionReplicatedLifecycleValidationErrorV1(ctx, err)
 	}
-	openPlan, err := collections.NewVectorPartitionGenerationSearchOpenPlanWithContextV1(ctx, manifest)
+	var liveManifest collections.VectorPartitionManifestV1
+	if s.replicatedLifecycle == nil {
+		if err := s.Collection.EnsureVectorPartitionLiveBindingV1(ctx, manifest); err != nil {
+			return nil, fmt.Errorf("%w: live binding: %v", ErrVectorPartitionShardSearchGenerationMismatch, err)
+		}
+		validatedManifest, validatedToken, err := s.Collection.ActiveVectorPartitionManifestAndAuthorityTokenWithContextV1(ctx, key.index, key.generation)
+		if err != nil {
+			return nil, fmt.Errorf("%w: live authority: %v", ErrVectorPartitionShardSearchGenerationMismatch, err)
+		}
+		if validatedManifest.IntegrityDigest != manifest.IntegrityDigest {
+			validatedToken.Release()
+			return nil, fmt.Errorf("%w: live authority manifest changed", ErrVectorPartitionShardSearchGenerationMismatch)
+		}
+		authorityToken = validatedToken
+		liveManifest = manifest
+	}
+	var openPlan *collections.VectorPartitionGenerationSearchOpenPlanV1
+	if s.replicatedLifecycle == nil {
+		openPlan, err = s.Collection.NewVectorPartitionGenerationLiveSearchOpenPlanWithContextV1(ctx, manifest)
+	} else {
+		openPlan, err = collections.NewVectorPartitionGenerationSearchOpenPlanWithContextV1(ctx, manifest)
+	}
 	if err != nil {
 		authorityToken.Release()
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
@@ -289,6 +310,7 @@ func (s *CollectionVectorPartitionGenerationSourceV1) loadGeneration(ctx context
 		index:          key.index,
 		generation:     key.generation,
 		manifest:       pinnedManifest,
+		liveManifest:   liveManifest,
 		openPlan:       openPlan,
 		authorityToken: authorityToken,
 		pin:            pin,
@@ -495,6 +517,7 @@ type collectionVectorPartitionGenerationCacheV1 struct {
 	index          string
 	generation     uint64
 	manifest       VectorPartitionPinnedManifestV1
+	liveManifest   collections.VectorPartitionManifestV1
 	openPlan       *collections.VectorPartitionGenerationSearchOpenPlanV1
 	authorityToken collections.VectorPartitionActiveAuthorityTokenV1
 	pin            *collections.VectorPartitionReaderPinV1
@@ -556,7 +579,13 @@ func (e *collectionVectorPartitionGenerationCacheV1) openPartition(ctx context.C
 		e.opening[partition] = load
 		e.mu.Unlock()
 
-		searcher, err := e.collection.OpenVectorPartitionLocalSearcherForGenerationSearchPlanWithContextV1(ctx, e.index, e.generation, partition, e.openPlan, e.pin)
+		var searcher *collections.VectorPartitionLocalSearcherV1
+		var err error
+		if e.liveManifest.Generation != 0 {
+			searcher, err = e.collection.OpenVectorPartitionLocalSearcherForGenerationLiveSearchPlanWithContextV1(ctx, e.index, e.generation, partition, e.openPlan, e.pin)
+		} else {
+			searcher, err = e.collection.OpenVectorPartitionLocalSearcherForGenerationSearchPlanWithContextV1(ctx, e.index, e.generation, partition, e.openPlan, e.pin)
+		}
 		if err != nil {
 			if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
 				err = fmt.Errorf("%w: %v", ErrVectorPartitionShardSearchAssetsUnavailable, err)
@@ -622,6 +651,14 @@ type collectionVectorPartitionGenerationLeaseV1 struct {
 	closeErr error
 }
 
+func newCollectionVectorPartitionGenerationLeaseWithContextV1(ctx context.Context, source *CollectionVectorPartitionGenerationSourceV1, entry *collectionVectorPartitionGenerationCacheV1) (*collectionVectorPartitionGenerationLeaseV1, error) {
+	if err := ctx.Err(); err != nil {
+		_ = source.release(entry)
+		return nil, err
+	}
+	return newCollectionVectorPartitionGenerationLeaseV1(source, entry), nil
+}
+
 func newCollectionVectorPartitionGenerationLeaseV1(source *CollectionVectorPartitionGenerationSourceV1, entry *collectionVectorPartitionGenerationCacheV1) *collectionVectorPartitionGenerationLeaseV1 {
 	return &collectionVectorPartitionGenerationLeaseV1{
 		source: source,
@@ -645,6 +682,13 @@ func (p *collectionVectorPartitionGenerationLeaseV1) immutableManifestViewV1() V
 		return VectorPartitionPinnedManifestV1{}
 	}
 	return p.manifest
+}
+
+func (p *collectionVectorPartitionGenerationLeaseV1) acquireVectorPartitionLiveSearchPinV1() (*collections.VectorIndexPartitionLiveSearchPinV1, error) {
+	if p == nil || p.entry == nil || p.entry.collection == nil || p.entry.liveManifest.Generation == 0 {
+		return nil, nil
+	}
+	return p.entry.collection.AcquireVectorPartitionLiveSearchPinV1(p.entry.liveManifest)
 }
 
 func (p *collectionVectorPartitionGenerationLeaseV1) OpenPartition(ctx context.Context, partition uint32) (*VectorPartitionPartitionSearchLeaseV1, error) {

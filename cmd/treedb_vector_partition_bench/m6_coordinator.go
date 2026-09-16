@@ -242,7 +242,7 @@ func (d *m6LocalShardDispatcherV1) DispatchVectorPartitionShardSearchV1(ctx cont
 		return nativewire.VectorPartitionShardSearchResponseV1{}, err
 	}
 	partials := make([]nativewire.VectorPartitionShardSearchPartialV1, len(request.PartitionIDs))
-	var candidates, searchNanos uint64
+	var candidates, results, searchNanos uint64
 	for i, partitionID := range request.PartitionIDs {
 		if int(partitionID) >= d.partitions || d.groupByPartition[partitionID] != groupID {
 			return nativewire.VectorPartitionShardSearchResponseV1{}, errors.New("local M5 route mismatch")
@@ -254,6 +254,7 @@ func (d *m6LocalShardDispatcherV1) DispatchVectorPartitionShardSearchV1(ctx cont
 			return nativewire.VectorPartitionShardSearchResponseV1{}, err
 		}
 		candidates += visited
+		results += uint64(len(neighbors))
 		partials[i] = nativewire.VectorPartitionShardSearchPartialV1{
 			PartitionID: partitionID, Neighbors: neighbors, Candidates: visited,
 			SearchRoute: collections.VectorPartitionSearchRouteExactFP32ScanV1,
@@ -282,9 +283,11 @@ func (d *m6LocalShardDispatcherV1) DispatchVectorPartitionShardSearchV1(ctx cont
 			SourceGeneration: request.SourceGeneration, SourceChecksum: request.SourceChecksum,
 			SourceSchemaHash: request.SourceSchemaHash, SourceRowCount: request.SourceRowCount,
 			PartitionGeneration: request.PartitionGeneration, RouterGeneration: request.RouterGeneration,
+			LiveRevision: request.LiveRevision, LiveCoverage: request.LiveCoverage,
 		},
 		Partials: partials, Partitions: uint64(len(partials)),
-		Candidates: candidates, ResponseBytes: responseBytes,
+		Candidates: candidates, BaseCandidates: candidates, BaseResults: results,
+		LiveDomainsSearched: uint64(len(request.LiveDomainIDs)), ResponseBytes: responseBytes,
 		Timing: nativewire.VectorPartitionShardSearchTimingV1{
 			SearchNanos: searchNanos, ResponseCopyNanos: responseNanos, TotalNanos: totalNanos,
 		},
