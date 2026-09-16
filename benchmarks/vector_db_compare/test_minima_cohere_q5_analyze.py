@@ -708,7 +708,7 @@ class Q5AnalyzeTest(unittest.TestCase):
         artifact = known_legacy_failure_artifact(manifest, Path("/packet/service"), "a" * 64)
 
         accepted = {
-            "all_match": (5, 5),
+            "all_match": (32, 32),
             "over_limit_4097": (4096, 8192),
             "broad_10pct": (2048, 2048),
             "sparse_over_limit": (4096, 4096),
@@ -725,6 +725,7 @@ class Q5AnalyzeTest(unittest.TestCase):
             "zero scored": ("all_match", 0, 0),
             "negative scored": ("all_match", -1, -1),
             "scored below admitted": ("all_match", 4, 4),
+            "scored below vector seed workload": ("all_match", 31, 31),
             "oversized scored": ("all_match", 4097, 4097),
             "finite seed work": ("broad_10pct", 2048, 2049),
             "visited below scored": ("all_match", 2048, 2047),
@@ -808,6 +809,12 @@ class Q5AnalyzeTest(unittest.TestCase):
             "phase completion field": lambda row: raw(row)["phase_attribution"]["phases"][
                 -1
             ].update(completed=True),
+            "zero duration phase hidden as bookkeeping": lambda row: (
+                raw(row)["phase_attribution"]["phases"][0].update(
+                    end_nanos=100, duration_nanos=0,
+                ),
+                raw(row)["phase_attribution"].update(unattributed_nanos=40),
+            ),
             "extra raw claim": lambda row: raw(row).update(lifecycle_complete=True),
             "malformed manifest": lambda row: row.update(manifest=[]),
             "malformed query": lambda row: row["manifest"]["queries"].__setitem__(0, None),

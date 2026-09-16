@@ -1340,7 +1340,7 @@ def _legacy_partial_phase_prefix_valid(value):
                 or any(type(number) is not int for number in (
                     start, end, duration, sample_count, sample_duration,
                 ))
-                or start < previous_end or end < start or duration != end - start
+                or start < previous_end or end <= start or duration != end - start
                 or sample_count < 0 or sample_duration < 0
                 or not isinstance(phase.get("resource_segments"), list)
                 or not phase["resource_segments"]
@@ -1396,13 +1396,16 @@ def _legacy_route_valid(name, route, raw_route, contracts):
     scored = route.get("scored_candidates")
     visited = route.get("visited_candidates")
     admitted = route.get("admitted_candidates")
+    minimum_scored = max(1, admitted)
+    if LEGACY_BASELINE_ANN_ROUTES[name] == "vector_aligned_ann":
+        minimum_scored = max(minimum_scored, route["retained_candidate_ids"])
     if (type(scored) is not int or type(visited) is not int
             or type(raw_route.get("candidates")) is not int
             or type(raw_route.get("scored")) is not int
             or type(raw_route.get("visited")) is not int
             or scored != raw_route["scored"] or scored != raw_route["candidates"]
             or visited != raw_route["visited"]
-            or not max(1, admitted) <= scored <= LEGACY_BASELINE_ANN_MAX_SCORED):
+            or not minimum_scored <= scored <= LEGACY_BASELINE_ANN_MAX_SCORED):
         return False
     if LEGACY_BASELINE_ANN_ROUTES[name] == "complete_finite_ann":
         return visited == scored
