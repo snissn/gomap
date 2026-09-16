@@ -765,7 +765,7 @@ func m8QualificationCommandWithExecutableV1(root, matrixDirectory string, report
 	default:
 		return false
 	}
-	return reflect.DeepEqual(m8QualificationCommandConfigV1(cfg), report.Config) &&
+	return reflect.DeepEqual(m8QualificationCommandConfigV1(cfg), m8CommandBoundProductionConfigV1(report.Config)) &&
 		cfg.m8MaxRSSBytes == report.Resources.PeakRSSCapBytes &&
 		cfg.m8MaxAssetBytes == report.Resources.PersistentAssetCap &&
 		m8QualificationCommandAdmissionV1(report.Command[1:], cfg, report.Dataset)
@@ -780,6 +780,12 @@ func m8QualificationCommandConfigV1(cfg config) m8ProductionConfigEvidenceV1 {
 		EfSearch: cfg.efSearch, RouterCandidates: cfg.routerCandidates,
 		MaxExactTruthVisits: cfg.m8MaxExactTruthVisits, Seed: cfg.seed,
 	}
+}
+
+func m8CommandBoundProductionConfigV1(cfg m8ProductionConfigEvidenceV1) m8ProductionConfigEvidenceV1 {
+	cfg.DomainCount = 0
+	cfg.PacksPerDomain = nil
+	return cfg
 }
 
 func m8QualificationMatrixCommandWithExecutableV1(root, matrixDirectory string, matrix m8ProductionMatrixV1, commandExecutable m8QualificationCommandExecutableVerifierV1) bool {
@@ -837,6 +843,7 @@ func m8QualificationMatrixCommandWithExecutableV1(root, matrixDirectory string, 
 		}
 		expectedConfig := report.Config
 		expectedConfig.Overlap = nil
+		expectedConfig = m8CommandBoundProductionConfigV1(expectedConfig)
 		if !reflect.DeepEqual(commandConfig, expectedConfig) || cfg.m8MaxRSSBytes != report.Resources.PeakRSSCapBytes || cfg.m8MaxAssetBytes != report.Resources.PersistentAssetCap {
 			return false
 		}

@@ -283,6 +283,39 @@ func TestM8ProductionReportRejectsUnexercisedDataGroupV1(t *testing.T) {
 	if err := testM8ValidateProductionReportV1(report); err != nil {
 		t.Fatalf("valid endpoint coverage rejected: %v", err)
 	}
+	multiPack := report
+	multiPack.Config.DomainCount = 1
+	multiPack.Config.PacksPerDomain = []int{4}
+	multiPack.Config.Probes = []int{1}
+	multiPack.Rows = append([]m8ProductionRowV1(nil), report.Rows...)
+	multiPack.Rows[0].Probes = 1
+	multiPack.GateLedger = m8ProductionGateLedgerForReportV1(multiPack)
+	if multiPack.GateLedger.ExhaustiveParity != "pass" {
+		t.Fatalf("logical-domain exhaustive row ledger=%+v", multiPack.GateLedger)
+	}
+	if err := testM8ValidateProductionReportV1(multiPack); err != nil {
+		t.Fatalf("one-domain/four-pack report rejected: %v", err)
+	}
+	multiPack.Rows[0].Attribution.LocalHNSWSearches--
+	if err := testM8ValidateProductionReportV1(multiPack); err == nil {
+		t.Fatal("accepted one-domain/four-pack report with a missing local search")
+	}
+	for name, mutate := range map[string]func(*m8ProductionConfigEvidenceV1){
+		"missing_fanout": func(cfg *m8ProductionConfigEvidenceV1) { cfg.PacksPerDomain = nil },
+		"wrong_pack_total": func(cfg *m8ProductionConfigEvidenceV1) {
+			cfg.PacksPerDomain = []int{3}
+		},
+	} {
+		t.Run("rejects_"+name, func(t *testing.T) {
+			invalid := report
+			invalid.Config.DomainCount = 1
+			invalid.Config.PacksPerDomain = []int{4}
+			mutate(&invalid.Config)
+			if err := testM8ValidateProductionReportV1(invalid); err == nil {
+				t.Fatalf("accepted %s domain-pack layout", name)
+			}
+		})
+	}
 	missingDescriptorBytes := report
 	missingDescriptorBytes.Resources.VariantDescriptorBytes = 0
 	if err := testM8ValidateProductionReportV1(missingDescriptorBytes); err == nil {
