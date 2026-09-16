@@ -95,6 +95,85 @@ func fixedPeerWaitV1(t testing.TB, ctx context.Context, check func() bool) {
 	}
 }
 
+func TestFixedPeerTCPAdmissionSaturationPreservesNestedRPCsV1(t *testing.T) {
+	c := fixedPeerTestConfigsV1(t)[0]
+	c.Nodes = c.Nodes[:1]
+	c.Catalog.Peers = c.Catalog.Peers[:1]
+	c.Groups = c.Groups[:1]
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	r, err := OpenFixedPeerTCPRuntimeV1(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := r.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	// One forward occupies the entire mutation connection pool. Its catalog
+	// reads must progress independently, even when the leader is this process.
+	r.client.http.Transport.(*http.Transport).MaxConnsPerHost = 1
+	client, err := NewFixedPeerTCPClientV1(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	fixedPeerWaitV1(t, ctx, func() bool {
+		s, err := client.Status(ctx, c.NodeID)
+		return err == nil && s.CatalogRaft.State == "Leader" && len(s.Groups) == 1 && s.Groups[0].State == "Leader"
+	})
+	catalog := raftplacement.CatalogV1{
+		Groups:     []raftplacement.GroupV1{{ID: "group-a", Members: []raftcluster.NodeID{c.NodeID}}},
+		Placements: []raftplacement.CollectionPlacementV1{{Collection: raftplacement.CollectionRefV1{Database: "default", Catalog: "default", Collection: "users"}, GroupID: "group-a"}},
+	}
+	record, err := raftplacement.NewCatalogMetaRecordV1(1, catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	command, err := raftplacement.EncodeCatalogMetaCommandV1(raftplacement.CatalogMetaCommandV1{Record: record})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.PublishCatalog(ctx, c.NodeID, command); err != nil {
+		t.Fatal(err)
+	}
+	// Deterministically reserve all but one outer-handler slot; each real TCP
+	// request below takes the last slot while issuing its nested requests.
+	reserved := cap(r.requests) - 1
+	for i := 0; i < reserved; i++ {
+		r.requests <- struct{}{}
+	}
+	defer func() {
+		for i := 0; i < reserved; i++ {
+			<-r.requests
+		}
+	}()
+	request := ClusterRouteRequest{Database: "default", Catalog: "default", Collection: "users", Shape: ClusterRouteShapeCollection}
+	route, err := client.Route(ctx, c.NodeID, request)
+	if err != nil {
+		t.Fatalf("admitted route starved its nested catalog RPC: %v", err)
+	}
+	status, err := client.Status(ctx, c.NodeID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata := ClusterRequestMetadata{AckPolicy: iwire.AckRaftCommitted}
+	ApplyClusterRouteMetadata(&metadata, request, route)
+	result, err := client.Submit(ctx, c.NodeID, fixedPeerCreateEntryV1(t, "users", status.Groups[0].CatalogVersion), metadata)
+	if err != nil || result.Evidence.Index == 0 {
+		t.Fatalf("admitted submit starved its nested forward/read RPC: result=%+v err=%v", result, err)
+	}
+	r.requests <- struct{}{}
+	reserved++
+	if _, err := client.Route(ctx, c.NodeID, request); !errors.Is(err, raftcluster.ErrAdmissionUnavailable) {
+		t.Fatalf("outer admission overflow=%v", err)
+	}
+	if _, err := client.Status(ctx, c.NodeID); err != nil {
+		t.Fatalf("saturated ingress blocked independent status: %v", err)
+	}
+}
+
 func TestFixedPeerTCPSnapshotRestoreTracksCurrentCatalogVersionV1(t *testing.T) {
 	if !rootpublication.StableRelativeNamespaceSupported() {
 		t.Skip("Raft snapshot install requires durable rename and removal namespaces")
@@ -547,7 +626,7 @@ func TestFixedPeerTCPConnectionRefusedIsNotCommitAmbiguousV1(t *testing.T) {
 }
 
 func TestFixedPeerTCPRejectsMalformedFramesV1(t *testing.T) {
-	r := &FixedPeerTCPRuntimeV1{config: FixedPeerTCPConfigV1{NodeID: "node-a", RequestTimeout: time.Second}, client: &FixedPeerTCPClientV1{digest: "config"}, requests: make(chan struct{}, 1)}
+	r := &FixedPeerTCPRuntimeV1{config: FixedPeerTCPConfigV1{NodeID: "node-a", RequestTimeout: time.Second}, client: &FixedPeerTCPClientV1{digest: "config"}, reads: make(chan struct{}, 1)}
 	for _, tt := range []struct{ name, body, node, digest string }{
 		{"unknown-field", `{"unknown":true}`, "node-a", "config"},
 		{"trailing", `{} {}`, "node-a", "config"},

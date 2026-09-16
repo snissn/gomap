@@ -46,6 +46,12 @@ store opens; restart requires an exact match. A changed or
 corrupt manifest refuses startup. Do not edit manifests or reuse roots to change
 membership. No replacement/reconfiguration or format migration is provided.
 
+Manifest contents are file-synced on every platform. The parent directory is
+also synced on Unix. Windows follows the existing Raft-store convention: the
+file flush covers creation metadata, but directory handles cannot be synced.
+This is not a Windows directory-rename/removal durability or snapshot-install
+qualification; the snapshot-restore conformance test requires those capabilities.
+
 Data lives in `DataRoot/<group-id>`. Existing provider layout under
 `RaftRoot/nodes/<node-id>/groups/<group-id>` holds consensus log/stable state,
 snapshots, and durable apply progress/results. Preserve both roots together.
@@ -81,8 +87,11 @@ enqueue also preserves `ErrCommitAmbiguous`; a committed command can apply after
 the caller stops waiting. No-quorum refusal may occur before enqueue or become
 ambiguous afterward, depending on the observed leader lease.
 
-HTTP requests/replies are capped at 8 MiB (including JSON/base64), server request
-handlers at 32, and each client at 8 connections per endpoint. Headers, body
+HTTP requests/replies are capped at 8 MiB (including JSON/base64). Each server
+admits up to 32 ingress handlers, 32 owner forwards, and 32 non-recursive
+status/catalog reads independently. Each client has separate ordinary and read
+pools, each capped at 8 connections per endpoint. This keeps admitted callers
+from exhausting the capacity needed by their nested RPCs. Headers, body
 reads, writes, idle connections, and requests have deadlines. Invalid/trailing
 frames and destination/config mismatches fail closed. Oversized/lost replies
 after a mutation remain ambiguous. These are small control-plane/conformance

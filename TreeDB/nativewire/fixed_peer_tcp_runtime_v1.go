@@ -14,6 +14,7 @@ import (
 	"net/http/httptrace"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -92,12 +93,15 @@ type FixedPeerTCPRuntimeV1 struct {
 	closeOnce     sync.Once
 	closeErr      error
 	requests      chan struct{}
+	forwards      chan struct{}
+	reads         chan struct{}
 }
 
 type FixedPeerTCPClientV1 struct {
-	config FixedPeerTCPConfigV1
-	digest string
-	http   *http.Client
+	config   FixedPeerTCPConfigV1
+	digest   string
+	http     *http.Client
+	readHTTP *http.Client
 }
 
 func validateFixedPeerConfigV1(c FixedPeerTCPConfigV1) (FixedPeerTCPConfigV1, string, error) {
@@ -235,7 +239,12 @@ func NewFixedPeerTCPClientV1(config FixedPeerTCPConfigV1) (*FixedPeerTCPClientV1
 	if err != nil {
 		return nil, err
 	}
-	return &FixedPeerTCPClientV1{config: c, digest: digest, http: &http.Client{Timeout: c.RequestTimeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }, Transport: &http.Transport{Proxy: nil, MaxConnsPerHost: 8, MaxIdleConnsPerHost: 4, IdleConnTimeout: c.RequestTimeout, ResponseHeaderTimeout: c.RequestTimeout}}}, nil
+	newHTTPClient := func() *http.Client {
+		return &http.Client{Timeout: c.RequestTimeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }, Transport: &http.Transport{Proxy: nil, MaxConnsPerHost: 8, MaxIdleConnsPerHost: 4, IdleConnTimeout: c.RequestTimeout, ResponseHeaderTimeout: c.RequestTimeout}}
+	}
+	// Forwarded mutations can hold every ordinary connection while waiting for
+	// a catalog read on the same endpoint. Reads have no nested RPC dependency.
+	return &FixedPeerTCPClientV1{config: c, digest: digest, http: newHTTPClient(), readHTTP: newHTTPClient()}, nil
 }
 
 func OpenFixedPeerTCPRuntimeV1(config FixedPeerTCPConfigV1) (*FixedPeerTCPRuntimeV1, error) {
@@ -243,7 +252,7 @@ func OpenFixedPeerTCPRuntimeV1(config FixedPeerTCPConfigV1) (*FixedPeerTCPRuntim
 	if err != nil {
 		return nil, err
 	}
-	r := &FixedPeerTCPRuntimeV1{config: client.config, client: client, authority: raftplacement.NewCatalogMetaAuthorityV1(), data: map[raftcluster.GroupID]*fixedPeerDataV1{}, requests: make(chan struct{}, 32)}
+	r := &FixedPeerTCPRuntimeV1{config: client.config, client: client, authority: raftplacement.NewCatalogMetaAuthorityV1(), data: map[raftcluster.GroupID]*fixedPeerDataV1{}, requests: make(chan struct{}, 32), forwards: make(chan struct{}, 32), reads: make(chan struct{}, 32)}
 	fail := func(err error) (*FixedPeerTCPRuntimeV1, error) { _ = r.Close(); return nil, err }
 	// Persist exact local configuration before opening any stores. A partial or
 	// modified manifest refuses startup instead of silently reusing identities.
@@ -367,6 +376,11 @@ func syncFixedPeerDirectoryV1(path string) error {
 	if err != nil {
 		return err
 	}
+	// Match the existing Raft apply/commit-log stores: Windows cannot fsync a
+	// directory handle. Manifest contents and creation metadata use file.Sync.
+	if runtime.GOOS == "windows" {
+		return dir.Close()
+	}
 	return errors.Join(dir.Sync(), dir.Close())
 }
 
@@ -407,7 +421,7 @@ func (r *FixedPeerTCPRuntimeV1) Close() error {
 			}
 		}
 		if r.client != nil {
-			r.client.http.CloseIdleConnections()
+			r.client.Close()
 		}
 		r.closeErr = errors.Join(errs...)
 	})
@@ -545,9 +559,18 @@ func (r *FixedPeerTCPRuntimeV1) serve(w http.ResponseWriter, request *http.Reque
 		}
 		_ = json.NewEncoder(w).Encode(reply)
 	}()
+	// The dependency order is ingress -> forward -> status/catalog-read. Give
+	// each stage bounded capacity so callers cannot starve their own callees.
+	requests := r.requests
+	switch request.URL.Path {
+	case "/v1/forward":
+		requests = r.forwards
+	case "/v1/status", "/v1/catalog-read":
+		requests = r.reads
+	}
 	select {
-	case r.requests <- struct{}{}:
-		defer func() { <-r.requests }()
+	case requests <- struct{}{}:
+		defer func() { <-requests }()
 	default:
 		err = raftcluster.ErrAdmissionUnavailable
 		return
@@ -665,7 +688,11 @@ func (c *FixedPeerTCPClientV1) call(ctx context.Context, node raftcluster.NodeID
 	}
 	req.Header.Set("X-TreeDB-Node", string(node))
 	req.Header.Set("X-TreeDB-Config", c.digest)
-	response, err := c.http.Do(req)
+	httpClient := c.http
+	if operation == "status" || operation == "catalog-read" {
+		httpClient = c.readHTTP
+	}
+	response, err := httpClient.Do(req)
 	if err == nil {
 		defer response.Body.Close()
 		if response.StatusCode != http.StatusOK {
@@ -741,6 +768,7 @@ func (c *FixedPeerTCPClientV1) Submit(ctx context.Context, node raftcluster.Node
 func (c *FixedPeerTCPClientV1) Close() {
 	if c != nil {
 		c.http.CloseIdleConnections()
+		c.readHTTP.CloseIdleConnections()
 	}
 }
 
