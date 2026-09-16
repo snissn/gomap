@@ -158,7 +158,8 @@ def validate_control_provenance(tree, qdrant_result, commit, trees, hashes):
 def validate_host_identity(plan):
     if (platform.platform() != plan["platform"]
             or native.host_resource_identity() != plan["host_resource_identity"]
-            or native.existing.common.memory_bytes() != plan["host_memory_bytes"]
+            or native.physical_memory_bytes(native.existing.common.memory_bytes())
+               != plan["host_memory_bytes"]
             or {key: os.environ.get(key, "") for key in ("GOMAXPROCS", "GOGC", "GOMEMLIMIT")}
                != plan["treedb_go_runtime"]):
         raise RuntimeError("campaign host resource identity drifted")
@@ -169,7 +170,8 @@ def validate_control_environment(contract):
         "cpu_affinity": sorted(os.sched_getaffinity(0)),
         "host_resource_identity": native.host_resource_identity(),
         "platform": platform.platform(),
-        "host_memory_bytes": native.existing.common.memory_bytes(),
+        "host_memory_bytes": native.physical_memory_bytes(
+            native.existing.common.memory_bytes()),
         "treedb_go_runtime": {
             key: os.environ.get(key, "") for key in ("GOMAXPROCS", "GOGC", "GOMEMLIMIT")
         },
