@@ -223,6 +223,44 @@ def paired_endpoint(counter, records):
 
 
 class NativeCohereDiagnosticTests(unittest.TestCase):
+    def test_column_graph_build_validation_binds_quantized_stage_to_arm(self):
+        build = {
+            **{field: 1 for field in diagnostic._COLUMN_GRAPH_BUILD_FIELDS
+               if field != "construction_decisions"},
+            "construction_decisions": None,
+        }
+        self.assertTrue(diagnostic.column_graph_build_valid(
+            build, expect_quantized_assets=True,
+        ))
+        self.assertFalse(diagnostic.column_graph_build_valid(
+            build, expect_quantized_assets=False,
+        ))
+
+        fp32_build = {**build, "quantized_preparation_nanos": 0}
+        self.assertTrue(diagnostic.column_graph_build_valid(
+            fp32_build, expect_quantized_assets=False,
+        ))
+        self.assertFalse(diagnostic.column_graph_build_valid(
+            fp32_build, expect_quantized_assets=True,
+        ))
+
+        for label, mutate in {
+            "negative_optional": lambda row: row.update(document_id_preparation_nanos=-1),
+            "float": lambda row: row.update(total_nanos=1.0),
+            "bool": lambda row: row.update(total_nanos=True),
+            "missing": lambda row: row.pop("snapshot_nanos"),
+            "extra": lambda row: row.update(completed=True),
+            "zero_required": lambda row: row.update(adjacency_build_nanos=0),
+            "zero_file_sync": lambda row: row.update(file_sync_count=0),
+            "zero_namespace_sync": lambda row: row.update(namespace_sync_count=0),
+        }.items():
+            changed = dict(fp32_build)
+            mutate(changed)
+            with self.subTest(label=label):
+                self.assertFalse(diagnostic.column_graph_build_valid(
+                    changed, expect_quantized_assets=False,
+                ))
+
     def test_rss_contract_canonicalizes_legacy_memory_probe_and_rejects_type_drift(self):
         plan = {
             "rows": 500000, "dimensions": 768, "top_k": 10, "batch_size": 256,

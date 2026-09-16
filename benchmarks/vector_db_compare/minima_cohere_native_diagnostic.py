@@ -239,13 +239,16 @@ def boundary_storage_valid(storage):
     )
 
 
-def column_graph_build_valid(build):
+def column_graph_build_valid(build, *, expect_quantized_assets):
     if not isinstance(build, dict) or set(build) != _COLUMN_GRAPH_BUILD_FIELDS:
         return False
     numeric = _COLUMN_GRAPH_BUILD_FIELDS - {"construction_decisions"}
+    required = _COLUMN_GRAPH_BUILD_POSITIVE_NANOS - {"quantized_preparation_nanos"}
     return (
         all(type(build[field]) is int and build[field] >= 0 for field in numeric)
-        and all(build[field] > 0 for field in _COLUMN_GRAPH_BUILD_POSITIVE_NANOS)
+        and all(build[field] > 0 for field in required)
+        and ((build["quantized_preparation_nanos"] > 0)
+             if expect_quantized_assets else build["quantized_preparation_nanos"] == 0)
         and build["file_sync_count"] > 0 and build["namespace_sync_count"] > 0
         and (build["construction_decisions"] is None
              or isinstance(build["construction_decisions"], dict))
@@ -527,7 +530,9 @@ def sq8_rss_artifact_reasons(artifact, plan):
     if (readiness.get("graph_action") != "build"
             or type(readiness.get("successful_ann_queries")) is not int
             or readiness.get("successful_ann_queries") != len(requests)
-            or not column_graph_build_valid(readiness.get("column_graph_build"))
+            or not column_graph_build_valid(
+                readiness.get("column_graph_build"), expect_quantized_assets=True,
+            )
             or (((readiness.get("column_graph_build") or {}).get("construction_decisions")
                  is not None) != bool(plan.get("construction_decisions")))
             or not sq8_effective_index_valid(
