@@ -1194,6 +1194,36 @@ func TestVectorIndexPartitionLiveRejectsNonAuthoritativeRoutingIdentityV1(t *tes
 	}
 }
 
+func TestVectorIndexPartitionLiveFailedBindingPublicationUnregistersCarrierV1(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
+	_, database, collection, def, manifest := newVectorPartitionLiveProductionFixtureV1(t)
+	defer database.Close()
+
+	publishErr := errors.New("binding publication failed")
+	var restoreCatalogHook func()
+	restoreBindingHook := setVectorPartitionLiveBeforeBindingPublicationHookForTest(func() {
+		restoreCatalogHook = setTestCollectionCatalogLoadHookForTest(func(ctx collectionCatalogLoadFaultContext) error {
+			if ctx.Collection == collection.meta.Name && ctx.Stage == collectionCatalogLoadFaultMeta {
+				return publishErr
+			}
+			return nil
+		})
+	})
+	defer restoreBindingHook()
+	defer func() {
+		if restoreCatalogHook != nil {
+			restoreCatalogHook()
+		}
+	}()
+
+	if err := collection.EnsureVectorPartitionLiveBindingV1(t.Context(), manifest); !errors.Is(err, publishErr) {
+		t.Fatalf("binding err=%v want %v", err, publishErr)
+	}
+	if got := collection.registeredVectorIndex(def.Name); got != nil {
+		t.Fatalf("failed binding publication retained carrier=%p", got)
+	}
+}
+
 func TestVectorIndexPartitionLiveFirstBindingConcurrentMutationV1(t *testing.T) {
 	requireVectorPartitionPersistenceV1(t)
 	_, database, collection, _, manifest := newVectorPartitionLiveProductionFixtureV1(t)

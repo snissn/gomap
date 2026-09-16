@@ -1265,6 +1265,15 @@ func (c *Collection) ensureVectorPartitionLiveBindingV1(ctx context.Context, man
 		return err
 	}
 	if needsBindingPublication {
+		rollbackRegistration := c.registeredVectorIndex(manifest.IndexName) == nil
+		if rollbackRegistration {
+			c.registerVectorIndexCurrentCatalog(idx)
+			defer func() {
+				if rollbackRegistration && c.registeredVectorIndex(manifest.IndexName) == idx {
+					c.UnregisterVectorIndex(manifest.IndexName)
+				}
+			}()
+		}
 		runVectorPartitionLiveBeforeBindingPublicationHookForTest()
 		_, err := idx.saveNativeDeltaSnapshotWithAdmissionHeldAndCommandWALIntent(replay)
 		if err != nil {
@@ -1287,6 +1296,7 @@ func (c *Collection) ensureVectorPartitionLiveBindingV1(ctx context.Context, man
 		}
 		live.bindingDurable = true
 		idx.mu.Unlock()
+		rollbackRegistration = false
 	}
 	return nil
 }
