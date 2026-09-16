@@ -208,7 +208,7 @@ func (c *Client) roundTripLockedStreamVersion(ctx context.Context, streamID uint
 	onWire := true
 	var err error
 	c.writeBody, err = writeFrameBuffered(c.conn, iwire.Header{
-		Version:   iwire.Version{Major: iwire.ProtocolMajorV1, Minor: iwire.ProtocolMinorV0},
+		Version:   iwire.Version{Major: iwire.ProtocolMajorV1, Minor: iwire.ProtocolMinorV1},
 		Type:      typ,
 		StreamID:  streamID,
 		RequestID: requestID,
@@ -221,7 +221,7 @@ func (c *Client) roundTripLockedStreamVersion(ctx context.Context, streamID uint
 		return iwire.Header{}, nil, c.closeOnProtocolError(c.errorOrCanceledOnWire(ctx, onWire, err))
 	}
 	c.readBody = response[:0]
-	if err := iwire.ValidateHeaderVersion(header, iwire.Version{Major: iwire.ProtocolMajorV1, Minor: iwire.ProtocolMinorV0}); err != nil {
+	if err := iwire.ValidateHeaderVersion(header, iwire.Version{Major: iwire.ProtocolMajorV1, Minor: iwire.ProtocolMinorV1}); err != nil {
 		return header, response, c.closeOnProtocolError(err)
 	}
 	if header.RequestID != requestID {
@@ -264,7 +264,7 @@ func (c *Client) roundTripLockedDiscardResponse(ctx context.Context, typ iwire.F
 	onWire := true
 	var err error
 	c.writeBody, err = writeFrameBuffered(c.conn, iwire.Header{
-		Version:   iwire.Version{Major: iwire.ProtocolMajorV1, Minor: iwire.ProtocolMinorV0},
+		Version:   iwire.Version{Major: iwire.ProtocolMajorV1, Minor: iwire.ProtocolMinorV1},
 		Type:      typ,
 		RequestID: requestID,
 	}, body, c.writeBody)
@@ -276,7 +276,7 @@ func (c *Client) roundTripLockedDiscardResponse(ctx context.Context, typ iwire.F
 		return c.closeOnProtocolError(c.errorOrCanceledOnWire(ctx, onWire, err))
 	}
 	c.readBody = response[:0]
-	if err := iwire.ValidateHeaderVersion(header, iwire.Version{Major: iwire.ProtocolMajorV1, Minor: iwire.ProtocolMinorV0}); err != nil {
+	if err := iwire.ValidateHeaderVersion(header, iwire.Version{Major: iwire.ProtocolMajorV1, Minor: iwire.ProtocolMinorV1}); err != nil {
 		return c.closeOnProtocolError(err)
 	}
 	if header.RequestID != requestID {

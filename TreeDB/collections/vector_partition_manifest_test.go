@@ -27,6 +27,18 @@ func requireVectorPartitionPersistenceV1(t testing.TB) {
 	}
 }
 
+func TestVectorPartitionManifestLegacyDomainFallbackRejectsOversizedPartitionCountV1(t *testing.T) {
+	m := testVectorPartitionManifestV1()
+	m.PartitionCount = ^uint32(0)
+	m.DomainCount, m.DomainPacks = 0, nil
+	if _, err := EncodeVectorPartitionManifestV1(m); !errors.Is(err, ErrVectorPartitionManifestInvalid) {
+		t.Fatalf("encode oversized legacy mapping err=%v", err)
+	}
+	if err := m.canonicalizeWithContextV1(t.Context()); !errors.Is(err, ErrVectorPartitionManifestInvalid) {
+		t.Fatalf("canonicalize oversized legacy mapping err=%v", err)
+	}
+}
+
 func TestVerifyVectorPartitionAssetsWithContextV1RejectsCanceledOpen(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -1372,10 +1384,11 @@ func TestVectorPartitionStorageFormatContractDoc(t *testing.T) {
 	requireTextContains(t, "vector partition storage format", doc,
 		"### Vector-partition manifests (`vector_partitions/`)",
 		"one (exactly one)\nrouter-asset frame",
-		"wire version `3`",
-		"Version 3 has this fixed,\nuntagged order",
-		"adds the membership-digest string between the asset checksum and byte length",
-		"decoder accepts only version 3",
+		"wire version `4`",
+		"Version 4 has this fixed,\nuntagged order",
+		"Every physical pack belongs to exactly one\nnonempty domain",
+		"added the membership-digest string between the\nasset checksum and byte length",
+		"decoder accepts only version 4",
 		"The highest checkpoint epoch is the sole authority",
 		"VPR1 is the bounded, versioned, checksummed reclaim payload",
 		"Raft-snapshot-included namespace",
@@ -1765,6 +1778,7 @@ func TestCollectionVectorPartitionReclaimV1ReclaimsCoResidentRecords(t *testing.
 		m.RouterGeneration = 0
 		m.SourceRowCount = 1
 		m.PartitionCount = 1
+		m.DomainCount, m.DomainPacks = 0, nil
 		m.Placements = []VectorPartitionPlacementV1{{PartitionID: 0, GroupID: "raft-a"}}
 		m.Memberships = []VectorPartitionMembershipV1{{VectorOrdinal: 0, PartitionID: 0}}
 		m.OverlapMemberships = nil
@@ -1892,6 +1906,7 @@ func publishDeletedVectorPartitionReclaimCandidateV1(t *testing.T, d *backenddb.
 	m.Generation = generation
 	m.RouterGeneration = 0
 	m.PartitionCount = 1
+	m.DomainCount, m.DomainPacks = 0, nil
 	m.Placements = []VectorPartitionPlacementV1{{PartitionID: 0, GroupID: "raft-a"}}
 	m.Memberships = []VectorPartitionMembershipV1{{VectorOrdinal: 0, PartitionID: 0}}
 	m.OverlapMemberships = nil
@@ -2494,7 +2509,9 @@ func TestCollectionVectorPartitionBuildingPublicationAndGCLinearize(t *testing.T
 		m.State, m.RouterGeneration, m.RouterAsset, m.ReadySetDigest = "building", 0, VectorPartitionAssetV1{}, ""
 		m.IndexName, m.IndexDefinitionDigest = def.Name, VectorIndexDefinitionDigestV1(def)
 		m.SourceGeneration, m.SourceChecksum, m.SourceSchemaHash, m.SourceRowCount = graph.BaseManifestGeneration, graph.BaseManifestChecksum, graph.BaseSchemaHash, uint64(graph.RowCount)
-		m.PartitionCount, m.Placements, m.Assets = 1, []VectorPartitionPlacementV1{{PartitionID: 0, GroupID: "raft-a"}}, m.Assets[:1]
+		m.PartitionCount, m.DomainCount = 1, 0
+		m.DomainPacks = nil
+		m.Placements, m.Assets = []VectorPartitionPlacementV1{{PartitionID: 0, GroupID: "raft-a"}}, m.Assets[:1]
 		m.Memberships = []VectorPartitionMembershipV1{{VectorOrdinal: 0, PartitionID: 0}, {VectorOrdinal: 1, PartitionID: 0}}
 		m.Assets[0].Ref, m.Assets[0].Bytes, m.Assets[0].Checksum = refs[0], uint64(refs[0].Length), hex.EncodeToString(sum[:])
 		m.Canonicalize()
@@ -2678,14 +2695,59 @@ func TestVectorPartitionManifestV1CanonicalRoundTrip(t *testing.T) {
 func TestVectorPartitionStoreV1CanonicalReopen(t *testing.T) {
 	requireVectorPartitionPersistenceV1(t)
 	m := testVectorPartitionManifestV1()
-	s, err := OpenVectorPartitionStoreV1(t.TempDir())
+	m.DomainCount = 1
+	m.DomainPacks = []VectorPartitionDomainPackV1{{DomainID: 0, PackID: 0}, {DomainID: 0, PackID: 1}}
+	m.Canonicalize()
+	root := t.TempDir()
+	s, err := OpenVectorPartitionStoreV1(root)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := s.publishLocked(m); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Open("docs", "embedding", 7); err != nil {
+	reopened, err := OpenExistingVectorPartitionStoreV1(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := reopened.Open("docs", "embedding", 7)
+	if err != nil || got.DomainCount != 1 || !reflect.DeepEqual(got.DomainPacks, m.DomainPacks) {
+		t.Fatalf("reopened domain mapping=%+v count=%d err=%v", got.DomainPacks, got.DomainCount, err)
+	}
+
+	checkpointName, err := vectorPartitionLifecycleCheckpointNameV1(m.Collection, m.IndexName, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkpointPath := filepath.Join(s.dir, checkpointName)
+	raw, err := os.ReadFile(checkpointPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifestStart, reclaimStart := lifecycleCheckpointFirstGenerationOffsetsV1(t, raw)
+	layout := parseVPMBinaryLayout(t, raw[manifestStart:reclaimStart-4])
+	if len(layout.domainPacks.items) != 2 {
+		t.Fatalf("checkpoint domain-pack count=%d", len(layout.domainPacks.items))
+	}
+	first := manifestStart + layout.domainPacks.items[0].packOffset
+	second := manifestStart + layout.domainPacks.items[1].packOffset
+	a := binary.BigEndian.Uint32(raw[first : first+4])
+	b := binary.BigEndian.Uint32(raw[second : second+4])
+	binary.BigEndian.PutUint32(raw[first:first+4], b)
+	binary.BigEndian.PutUint32(raw[second:second+4], a)
+	rechecksumLifecycleCheckpointV1(raw)
+	if err := os.WriteFile(checkpointPath, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err = OpenExistingVectorPartitionStoreV1(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err = reopened.Open("docs", "embedding", 7)
+	if err == nil || !reflect.DeepEqual(got, VectorPartitionManifestV1{}) {
+		t.Fatalf("mapping/digest mismatch returned partial manifest=%+v err=%v", got, err)
+	}
+	if !errors.Is(err, ErrVectorPartitionManifestInvalid) {
 		t.Fatal(err)
 	}
 }
@@ -2954,10 +3016,62 @@ func testVectorPartitionManifestV1() VectorPartitionManifestV1 {
 	return m
 }
 
+func TestVectorPartitionManifestV1BindsLogicalDomainsToPhysicalPacks(t *testing.T) {
+	m := testVectorPartitionManifestV1()
+	m.DomainCount = 1
+	m.DomainPacks = []VectorPartitionDomainPackV1{{DomainID: 0, PackID: 0}, {DomainID: 0, PackID: 1}}
+	m.Canonicalize()
+	if err := m.Validate(DefaultVectorPartitionManifestLimits()); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := EncodeVectorPartitionManifestV1(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := DecodeVectorPartitionManifestV1(raw, DefaultVectorPartitionManifestLimits())
+	if err != nil || got.DomainCount != 1 || !reflect.DeepEqual(got.DomainPacks, m.DomainPacks) {
+		t.Fatalf("decoded domain mapping=%+v count=%d err=%v", got.DomainPacks, got.DomainCount, err)
+	}
+	oneToOne := testVectorPartitionManifestV1()
+	if got.ReadySetDigest == oneToOne.ReadySetDigest || got.IntegrityDigest == oneToOne.IntegrityDigest {
+		t.Fatal("domain-pack mapping is not bound by ready and integrity digests")
+	}
+	cloned := cloneVectorPartitionManifestForCheckpointV1(m)
+	cloned.DomainPacks[0].PackID = 1
+	if m.DomainPacks[0].PackID != 0 {
+		t.Fatal("checkpoint clone aliases domain-pack mapping")
+	}
+
+	for name, mutate := range map[string]func(*VectorPartitionManifestV1){
+		"missing pack": func(x *VectorPartitionManifestV1) { x.DomainPacks = x.DomainPacks[:1] },
+		"duplicate pack": func(x *VectorPartitionManifestV1) {
+			x.DomainPacks[1].PackID = x.DomainPacks[0].PackID
+		},
+		"missing domain": func(x *VectorPartitionManifestV1) {
+			x.DomainCount = 2
+		},
+		"representative outside domain": func(x *VectorPartitionManifestV1) {
+			x.Representatives[0].PartitionID = 1
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			bad := m
+			bad.DomainPacks = append([]VectorPartitionDomainPackV1(nil), m.DomainPacks...)
+			bad.Representatives = append([]VectorPartitionMembershipV1(nil), m.Representatives...)
+			mutate(&bad)
+			bad.Canonicalize()
+			if err := bad.Validate(DefaultVectorPartitionManifestLimits()); err == nil {
+				t.Fatal("invalid domain-pack mapping accepted")
+			}
+		})
+	}
+}
+
 func scaledVectorPartitionManifestV1(rows int) VectorPartitionManifestV1 {
 	m := testVectorPartitionManifestV1()
 	m.SourceRowCount = uint64(rows)
 	m.PartitionCount = 1
+	m.DomainCount, m.DomainPacks = 0, nil
 	m.Placements = []VectorPartitionPlacementV1{{PartitionID: 0, GroupID: "raft-a"}}
 	m.Memberships = make([]VectorPartitionMembershipV1, rows)
 	for i := range m.Memberships {
@@ -3043,6 +3157,7 @@ func BenchmarkVectorPartitionManifestV1Scale(b *testing.B) {
 			m := testVectorPartitionManifestV1()
 			m.SourceRowCount = uint64(rows)
 			m.PartitionCount = 1
+			m.DomainCount, m.DomainPacks = 0, nil
 			m.Placements = []VectorPartitionPlacementV1{{PartitionID: 0, GroupID: "raft-a"}}
 			m.Memberships = make([]VectorPartitionMembershipV1, rows)
 			for i := range m.Memberships {

@@ -249,6 +249,7 @@ func TestCompareVectorPartitionLocalGraphPacksV1RejectsNonOverlayNativePack(t *t
 	m.IndexDefinitionDigest = VectorIndexDefinitionDigestV1(def)
 	m.Generation = 92
 	m.PartitionCount = 1
+	m.DomainCount, m.DomainPacks = 0, nil
 	m.SourceGeneration, m.SourceChecksum, m.SourceSchemaHash, m.SourceRowCount = source.Generation, source.Checksum, source.SchemaHash, source.RowCount
 	m.Memberships = make([]VectorPartitionMembershipV1, len(rows))
 	for i := range rows {
@@ -727,6 +728,7 @@ func TestVectorPartitionLocalGraphOverlayMutationChangesTraversalAndTopK(t *test
 	m := testVectorPartitionManifestV1()
 	m.State, m.Collection, m.IndexName = "building", col.name, def.Name
 	m.IndexDefinitionDigest, m.Generation, m.PartitionCount = VectorIndexDefinitionDigestV1(def), 93, 1
+	m.DomainCount, m.DomainPacks = 0, nil
 	m.SourceGeneration, m.SourceChecksum, m.SourceSchemaHash, m.SourceRowCount = source.Generation, source.Checksum, source.SchemaHash, source.RowCount
 	m.Memberships = make([]VectorPartitionMembershipV1, len(rows))
 	for i := range rows {
@@ -929,6 +931,7 @@ func TestVectorPartitionOfflineAuxiliaryConstructionVariantsV1(t *testing.T) {
 	m := testVectorPartitionManifestV1()
 	m.State, m.Collection, m.IndexName = "building", col.name, def.Name
 	m.IndexDefinitionDigest, m.Generation, m.PartitionCount = VectorIndexDefinitionDigestV1(def), 94, 1
+	m.DomainCount, m.DomainPacks = 0, nil
 	m.SourceGeneration, m.SourceChecksum, m.SourceSchemaHash, m.SourceRowCount = source.Generation, source.Checksum, source.SchemaHash, source.RowCount
 	m.Memberships = make([]VectorPartitionMembershipV1, len(rows))
 	for i := range rows {
@@ -1327,6 +1330,7 @@ func TestVectorPartitionConstructionEvidenceReconcilesReciprocityRepairV1(t *tes
 	manifest.IndexDefinitionDigest = VectorIndexDefinitionDigestV1(def)
 	manifest.Generation = 148
 	manifest.PartitionCount = 1
+	manifest.DomainCount, manifest.DomainPacks = 0, nil
 	manifest.SourceGeneration, manifest.SourceChecksum, manifest.SourceSchemaHash, manifest.SourceRowCount = source.Generation, source.Checksum, source.SchemaHash, source.RowCount
 	manifest.Memberships = make([]VectorPartitionMembershipV1, len(inputs))
 	for i := range inputs {

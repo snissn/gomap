@@ -125,6 +125,9 @@ func runM0FrontierDiagnoseV1(args []string, stdout io.Writer) error {
 		return err
 	}
 	defer h.Close()
+	if h.manifest.DomainCount < 4 {
+		return errors.New("M0 diagnostic requires four routing domains")
+	}
 	if err = m8BindRetainedM3DescriptorV1(h, fixture); err != nil {
 		return fmt.Errorf("M0 diagnose retained descriptor: %w", err)
 	}
@@ -189,15 +192,22 @@ func runM0FrontierDiagnoseV1(args []string, stdout io.Writer) error {
 			return errors.New("M0 diagnostic route")
 		}
 		row := m0FrontierDiagnosticQueryV1{Query: ordinal, Route: make([]uint32, 4)}
+		routePacks := make([][]uint32, 4)
 		for i, r := range routed.Partitions {
 			row.Route[i] = r.PartitionID
+			routePacks[i], err = m8AttributionPacksForDomainsV1(h.manifest, len(searchers), []uint32{r.PartitionID})
+			if err != nil {
+				return err
+			}
 		}
 		for _, want := range truth[ordinal] {
 			rank := 0
-			for i, p := range row.Route {
+			for i, packs := range routePacks {
 				for _, member := range members[want.ID] {
-					if member == p && rank == 0 {
-						rank = i + 1
+					for _, pack := range packs {
+						if member == pack && rank == 0 {
+							rank = i + 1
+						}
 					}
 				}
 			}
@@ -208,10 +218,13 @@ func runM0FrontierDiagnoseV1(args []string, stdout io.Writer) error {
 				if !ok {
 					return errors.New("M0 diagnostic truth ID absent from graph artifact")
 				}
-				for _, p := range row.Route {
-					if childParent[int(p)] == parent {
-						report.ApproxMissSiblingSelected++
-						break
+			siblingSelected:
+				for _, packs := range routePacks {
+					for _, pack := range packs {
+						if childParent[int(pack)] == parent {
+							report.ApproxMissSiblingSelected++
+							break siblingSelected
+						}
 					}
 				}
 			}
@@ -223,12 +236,21 @@ func runM0FrontierDiagnoseV1(args []string, stdout io.Writer) error {
 		if err != nil || len(exact.Partitions) != 4 {
 			return errors.New("M0 diagnostic exact route")
 		}
+		exactPacks := make([][]uint32, len(exact.Partitions))
+		for i, domain := range exact.Partitions {
+			exactPacks[i], err = m8AttributionPacksForDomainsV1(h.manifest, len(searchers), []uint32{domain.PartitionID})
+			if err != nil {
+				return err
+			}
+		}
 		for _, want := range truth[ordinal] {
 			rank := 0
-			for i, p := range exact.Partitions {
+			for i, packs := range exactPacks {
 				for _, member := range members[want.ID] {
-					if member == p.PartitionID && rank == 0 {
-						rank = i + 1
+					for _, pack := range packs {
+						if member == pack && rank == 0 {
+							rank = i + 1
+						}
 					}
 				}
 			}
@@ -236,18 +258,17 @@ func runM0FrontierDiagnoseV1(args []string, stdout io.Writer) error {
 			report.ExactTruthRankSlots[rank]++
 		}
 		var prior []m8CanonicalResultV1
-		for rank, p := range row.Route {
-			got, _, _, e := searchers[p].SearchWithAttributionV1(context.Background(), q, collections.VectorPartitionSearchOptionsV1{TopK: 10, EfSearch: ef})
-			if e != nil {
-				return e
-			}
-			combined := append(append([]m8CanonicalResultV1(nil), prior...), func() []m8CanonicalResultV1 {
-				out := make([]m8CanonicalResultV1, len(got))
-				for i, x := range got {
-					out[i] = m8CanonicalResultV1{ID: x.ID, Score: x.Score}
+		for rank, packs := range routePacks {
+			combined := append([]m8CanonicalResultV1(nil), prior...)
+			for _, pack := range packs {
+				got, _, _, e := searchers[pack].SearchWithAttributionV1(context.Background(), q, collections.VectorPartitionSearchOptionsV1{TopK: 10, EfSearch: ef})
+				if e != nil {
+					return e
 				}
-				return out
-			}()...)
+				for _, x := range got {
+					combined = append(combined, m8CanonicalResultV1{ID: x.ID, Score: x.Score})
+				}
+			}
 			now := m8CanonicalResultsV1(combined, 10)
 			if len(now) != 10 {
 				return errors.New("M0 diagnostic result")
@@ -318,12 +339,21 @@ func m0FrontierRouterSweepV1(h *m8ProductionMultiGroupAssetsV1, ordinals []int, 
 			cells[i].ElapsedNanos += elapsed
 			cells[i].Candidates += route.Status.Candidates
 			cells[i].Edges += route.Status.Edges
+			packsByDomain := make([][]uint32, len(route.Partitions))
+			for pos, domain := range route.Partitions {
+				packsByDomain[pos], err = m8AttributionPacksForDomainsV1(h.manifest, int(h.manifest.PartitionCount), []uint32{domain.PartitionID})
+				if err != nil {
+					return nil, err
+				}
+			}
 			for _, want := range truth[ordinal] {
 				rank := 0
-				for pos, p := range route.Partitions {
+				for pos, packs := range packsByDomain {
 					for _, member := range members[want.ID] {
-						if member == p.PartitionID && rank == 0 {
-							rank = pos + 1
+						for _, pack := range packs {
+							if member == pack && rank == 0 {
+								rank = pos + 1
+							}
 						}
 					}
 				}

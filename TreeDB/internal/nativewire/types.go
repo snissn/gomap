@@ -8,7 +8,7 @@ import (
 const (
 	Magic             = "TDB1"
 	ProtocolMajorV1   = uint16(1)
-	ProtocolMinorV0   = uint16(0)
+	ProtocolMinorV1   = uint16(1)
 	FrameHeaderLenV1  = uint16(40)
 	MaxFrameHeaderLen = FrameHeaderLenV1
 )

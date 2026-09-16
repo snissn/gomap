@@ -8,7 +8,7 @@ import (
 
 func TestFrameHeaderGolden(t *testing.T) {
 	got, err := AppendHeader(nil, Header{
-		Version:   Version{Major: ProtocolMajorV1, Minor: ProtocolMinorV0},
+		Version:   Version{Major: ProtocolMajorV1, Minor: ProtocolMinorV1},
 		Type:      FrameRequest,
 		RequestID: 42,
 		BodyLen:   5,
@@ -25,7 +25,7 @@ func TestFrameHeaderGolden(t *testing.T) {
 	if h.Type != FrameRequest || h.RequestID != 42 || h.BodyLen != 5 {
 		t.Fatalf("decoded header = %#v", h)
 	}
-	if err := ValidateHeaderVersion(h, Version{Major: 1, Minor: 0}); err != nil {
+	if err := ValidateHeaderVersion(h, Version{Major: ProtocolMajorV1, Minor: ProtocolMinorV1}); err != nil {
 		t.Fatalf("ValidateHeaderVersion: %v", err)
 	}
 }
@@ -61,12 +61,12 @@ func TestFrameHeaderRejectsMalformedAndUnsupported(t *testing.T) {
 		t.Fatalf("advisory flag should decode: %v", err)
 	}
 
-	header[8] = 1 // unnegotiated minor version.
+	header[8] = 0 // previous minor version.
 	h, err := DecodeHeader(header, Limits{})
 	if err != nil {
 		t.Fatalf("DecodeHeader minor: %v", err)
 	}
-	if err := ValidateHeaderVersion(h, Version{Major: 1, Minor: 0}); codeOf(err) != ErrUnsupportedVersion {
+	if err := ValidateHeaderVersion(h, Version{Major: ProtocolMajorV1, Minor: ProtocolMinorV1}); codeOf(err) != ErrUnsupportedVersion {
 		t.Fatalf("version err=%v code=%d", err, codeOf(err))
 	}
 }

@@ -434,7 +434,7 @@ func vectorPartitionSystemBenchCell(ctx context.Context, endpoint, wantNodeConfi
 		}
 	}
 	var recall float64
-	counters := map[string]uint64{"selected_partitions": 0, "selected_groups": 0, "requests": 0, "rpcs": 0, "retries": 0, "redirects": 0, "candidates": 0, "edges": 0, "snapshot_pins": 0, "session_pins": 0, "read_proofs": 0, "generation_pins": 0, "partition_opens": 0, "query_bytes": 0, "request_bytes": 0, "candidate_bytes": 0, "response_bytes": 0, "public_request_frame_bytes": 0, "public_response_frame_bytes": 0}
+	counters := map[string]uint64{"selected_domains": 0, "selected_packs": 0, "selected_partitions": 0, "selected_groups": 0, "requests": 0, "rpcs": 0, "retries": 0, "redirects": 0, "candidates": 0, "edges": 0, "snapshot_pins": 0, "session_pins": 0, "read_proofs": 0, "generation_pins": 0, "partition_opens": 0, "query_bytes": 0, "request_bytes": 0, "candidate_bytes": 0, "response_bytes": 0, "public_request_frame_bytes": 0, "public_response_frame_bytes": 0}
 	if searchMode == vectorPartitionSystemSearchPinnedV1 {
 		counters["session_pins"] = uint64(workers)
 	}
@@ -460,7 +460,7 @@ func vectorPartitionSystemBenchCell(ctx context.Context, endpoint, wantNodeConfi
 		}
 		recall += m8CanonicalRecallV1(truth[index], got)
 		c := outcome.Counters
-		for key, value := range map[string]uint64{"selected_partitions": c.SelectedPartitions, "selected_groups": c.SelectedGroups, "requests": c.Requests, "rpcs": c.RPCs, "retries": c.Retries, "redirects": c.Redirects, "candidates": c.Candidates, "edges": c.Edges, "snapshot_pins": c.SnapshotPins, "read_proofs": c.ReadProofs, "generation_pins": c.GenerationPins, "partition_opens": c.PartitionOpens, "query_bytes": c.QueryBytes, "request_bytes": c.RequestBytes, "candidate_bytes": c.CandidateBytes, "response_bytes": c.ResponseBytes} {
+		for key, value := range map[string]uint64{"selected_domains": c.SelectedDomains, "selected_packs": c.SelectedPacks, "selected_partitions": c.SelectedPartitions, "selected_groups": c.SelectedGroups, "requests": c.Requests, "rpcs": c.RPCs, "retries": c.Retries, "redirects": c.Redirects, "candidates": c.Candidates, "edges": c.Edges, "snapshot_pins": c.SnapshotPins, "read_proofs": c.ReadProofs, "generation_pins": c.GenerationPins, "partition_opens": c.PartitionOpens, "query_bytes": c.QueryBytes, "request_bytes": c.RequestBytes, "candidate_bytes": c.CandidateBytes, "response_bytes": c.ResponseBytes} {
 			if math.MaxUint64-counters[key] < value {
 				return cell, errors.New("system-bench counter overflow")
 			}

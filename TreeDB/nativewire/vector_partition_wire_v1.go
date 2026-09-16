@@ -579,13 +579,13 @@ func decodeVectorPartitionSearchResponseV1(src []byte, maxNeighbors int, limits 
 			response.Neighbors[i] = public.NeighborV1{ID: r.string(), Score: r.float32()}
 		}
 	}
-	var counters [18]uint64
+	var counters [19]uint64
 	for i := range counters {
 		counters[i] = r.u64()
 	}
 	response.Counters = public.SearchCountersV1{
-		SelectedPartitions: counters[0], SelectedGroups: counters[1], Requests: counters[2], RPCs: counters[3], Retries: counters[4], Redirects: counters[5], Candidates: counters[6], Edges: counters[7],
-		SnapshotPins: counters[8], ReadProofs: counters[9], GenerationPins: counters[10], PartitionOpens: counters[11], QueryBytes: counters[12], RequestBytes: counters[13], CandidateBytes: counters[14], ResponseBytes: counters[15], HNSWServedPartitions: counters[16], ExactScanPartitions: counters[17],
+		SelectedDomains: counters[0], SelectedPacks: counters[1], SelectedPartitions: counters[1], SelectedGroups: counters[2], Requests: counters[3], RPCs: counters[4], Retries: counters[5], Redirects: counters[6], Candidates: counters[7], Edges: counters[8],
+		SnapshotPins: counters[9], ReadProofs: counters[10], GenerationPins: counters[11], PartitionOpens: counters[12], QueryBytes: counters[13], RequestBytes: counters[14], CandidateBytes: counters[15], ResponseBytes: counters[16], HNSWServedPartitions: counters[17], ExactScanPartitions: counters[18],
 	}
 	var timings [20]time.Duration
 	for i := range timings {
@@ -662,8 +662,16 @@ func decodeVectorPartitionStatusV1(src []byte) (VectorPartitionStatusV1, error) 
 	return status, r.done()
 }
 
-func vectorPartitionCountersV1(c public.SearchCountersV1) [18]uint64 {
-	return [18]uint64{c.SelectedPartitions, c.SelectedGroups, c.Requests, c.RPCs, c.Retries, c.Redirects, c.Candidates, c.Edges, c.SnapshotPins, c.ReadProofs, c.GenerationPins, c.PartitionOpens, c.QueryBytes, c.RequestBytes, c.CandidateBytes, c.ResponseBytes, c.HNSWServedPartitions, c.ExactScanPartitions}
+func vectorPartitionCountersV1(c public.SearchCountersV1) [19]uint64 {
+	packs := c.SelectedPacks
+	if packs == 0 {
+		packs = c.SelectedPartitions
+	}
+	domains := c.SelectedDomains
+	if domains == 0 {
+		domains = packs
+	}
+	return [19]uint64{domains, packs, c.SelectedGroups, c.Requests, c.RPCs, c.Retries, c.Redirects, c.Candidates, c.Edges, c.SnapshotPins, c.ReadProofs, c.GenerationPins, c.PartitionOpens, c.QueryBytes, c.RequestBytes, c.CandidateBytes, c.ResponseBytes, c.HNSWServedPartitions, c.ExactScanPartitions}
 }
 
 func vectorPartitionTimingsV1(t public.SearchTimingV1) ([20]uint64, error) {

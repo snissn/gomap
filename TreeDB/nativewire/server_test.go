@@ -315,7 +315,7 @@ func TestServerClosesPostHandshakeUnsupportedVersion(t *testing.T) {
 		t.Fatalf("hello response type=%d want hello_ok", header.Type)
 	}
 	if err := writeFrame(left, iwire.Header{
-		Version:   iwire.Version{Major: iwire.ProtocolMajorV1, Minor: iwire.ProtocolMinorV0 + 1},
+		Version:   iwire.Version{Major: iwire.ProtocolMajorV1, Minor: iwire.ProtocolMinorV1 + 1},
 		Type:      iwire.FramePing,
 		RequestID: 2,
 	}, nil); err != nil {
@@ -449,7 +449,7 @@ func TestClientRejectsUnsupportedResponseVersion(t *testing.T) {
 			return
 		}
 		errCh <- writeFrame(right, iwire.Header{
-			Version:   iwire.Version{Major: iwire.ProtocolMajorV1, Minor: iwire.ProtocolMinorV0 + 1},
+			Version:   iwire.Version{Major: iwire.ProtocolMajorV1, Minor: iwire.ProtocolMinorV1 + 1},
 			Type:      iwire.FramePong,
 			RequestID: header.RequestID,
 		}, nil)

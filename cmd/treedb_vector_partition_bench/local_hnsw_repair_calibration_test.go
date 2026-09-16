@@ -56,6 +56,11 @@ func TestLocalHNSWRepairCalibrationQueryV1(t *testing.T) {
 	if !localHNSWRepairCalibrationQueryV1Valid(evidence, 4) || len(evidence.OverlaySearches) != 4 || len(evidence.RepairSearches) != 4 || evidence.Overlay.P2Recall < 0 || evidence.Repair.P16Recall < 0 {
 		t.Fatalf("evidence=%+v", evidence)
 	}
+	expandedLowRoute := evidence
+	expandedLowRoute.P2Route = append([]uint32(nil), evidence.P16Route...)
+	if !localHNSWRepairCalibrationQueryV1Valid(expandedLowRoute, 4) {
+		t.Fatal("rejected a logical probe expanded to multiple physical packs")
+	}
 	for _, search := range evidence.OverlaySearches {
 		if search.AuxiliaryEdges != 0 || search.AuxiliaryCandidates != 0 || search.AuxiliaryAdmissions != 0 {
 			t.Fatalf("overlay counters=%+v", search)

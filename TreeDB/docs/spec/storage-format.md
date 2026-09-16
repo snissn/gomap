@@ -100,9 +100,9 @@ batches, applies the 4,096-entry cap to all names, and verifies the ranges,
 CRC32 values, and SHA-256 digests of every asset referenced by a non-deleting
 manifest before replacing the target namespace.
 
-VPM1 uses big-endian magic `0x56504d31` and wire version `3`, bounded
+VPM1 uses big-endian magic `0x56504d31` and wire version `4`, bounded
 length-prefixed fields and lists, one (exactly one) router-asset frame,
-canonical ordering, and an integrity digest. Version 3 has this fixed,
+canonical ordering, and an integrity digest. Version 4 has this fixed,
 untagged order:
 
 1. magic and `uint32` version;
@@ -111,23 +111,26 @@ untagged order:
    ready-set digest;
 3. six `uint64` values: source generation, source checksum, source schema
    hash, source row count, partition generation, and router generation,
-   followed by the `uint32` partition count;
+   followed by the `uint32` physical-pack count, `uint32` logical-domain
+   count, and counted `(domain_id, pack_id)` `uint32` pairs;
 4. exactly one router asset;
-5. counted placement, disjoint-membership, overlap-membership,
+5. counted physical-pack placement, disjoint-membership, overlap-membership,
    representative-membership, and partition-asset lists, in that order.
 
-Each placement is a `uint32` partition ID plus a length-prefixed group ID.
-Each membership is a `uint64` source ordinal plus a `uint32` partition ID.
-Every asset descriptor is a partition ID; length-prefixed logical ID,
+Each placement is a `uint32` physical pack ID plus a length-prefixed group ID.
+Disjoint and overlap memberships name physical packs; representative
+memberships name logical domains. Every physical pack belongs to exactly one
+nonempty domain, while a domain may require one or more packs. Every asset
+descriptor is a physical pack ID; length-prefixed logical ID,
 SHA-256 checksum, and optional membership digest; a `uint64` byte length; and
 a `ColumnAssetRef` containing length-prefixed kind/namespace, `uint64`
 generation/part ID, `uint32` file ID, `uint64` offset/length, and `uint32`
-CRC, in that order. Version 3 adds the membership-digest string between the
-asset checksum and byte length.
+CRC, in that order. Version 3 added the membership-digest string between the
+asset checksum and byte length; version 4 adds the domain-pack mapping.
 Native partition HNSW assets require that SHA-256 digest; it binds the
 generation, partition, ordered authoritative stable IDs, and home/overlap
 membership kinds. There are no optional tagged fields and this pre-alpha
-decoder accepts only version 3; older directories require rebuild rather than
+decoder accepts only version 4; older directories require rebuild rather than
 migration.
 
 Partition-local `hnsw_search_pack_v1` assets use wire version 3 when rebuilt

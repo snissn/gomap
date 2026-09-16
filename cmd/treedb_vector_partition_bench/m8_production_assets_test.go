@@ -9,6 +9,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -236,8 +237,8 @@ func TestM8ProductionReportRejectsUnexercisedDataGroupV1(t *testing.T) {
 			ExactRepresentativeRecallAtK: 1, ApproximateRepresentativeRecallAtK: 1, LocalHNSWRecallAtK: 1, ApproximateLocalHNSWRecallAtK: 1, EndToEndRecallAtK: 1,
 			CoordinatorMergeIDParity: true, CoordinatorMergeScoreParity: true,
 			ApproximateRouterCandidateBudget: 4, ApproximateRouterPartitionCoverageComplete: true,
-			LocalHNSWSearches: uint64(fixture.Queries) * 4, LocalHNSWCandidates: 4, LocalHNSWEdges: 4,
-			ApproximateLocalHNSWSearches: uint64(fixture.Queries) * 4, ApproximateLocalHNSWCandidates: 4, ApproximateLocalHNSWEdges: 4,
+			LocalHNSWSearches: uint64(fixture.Queries) * 4, LocalHNSWSearchesByQuery: slices.Repeat([]uint32{4}, fixture.Queries), LocalHNSWCandidates: 4, LocalHNSWEdges: 4,
+			ApproximateLocalHNSWSearches: uint64(fixture.Queries) * 4, ApproximateLocalHNSWSearchesByQuery: slices.Repeat([]uint32{4}, fixture.Queries), ApproximateLocalHNSWCandidates: 4, ApproximateLocalHNSWEdges: 4,
 			ResidualLossOwners: []string{"none_observed"},
 		}}},
 		PackDiagnostics: diagnostics(loads),
@@ -282,6 +283,39 @@ func TestM8ProductionReportRejectsUnexercisedDataGroupV1(t *testing.T) {
 	testM8CompleteResourceLimitsV1(t, &report)
 	if err := testM8ValidateProductionReportV1(report); err != nil {
 		t.Fatalf("valid endpoint coverage rejected: %v", err)
+	}
+	multiPack := report
+	multiPack.Config.DomainCount = 1
+	multiPack.Config.PacksPerDomain = []int{4}
+	multiPack.Config.Probes = []int{1}
+	multiPack.Rows = append([]m8ProductionRowV1(nil), report.Rows...)
+	multiPack.Rows[0].Probes = 1
+	multiPack.GateLedger = m8ProductionGateLedgerForReportV1(multiPack)
+	if multiPack.GateLedger.ExhaustiveParity != "pass" {
+		t.Fatalf("logical-domain exhaustive row ledger=%+v", multiPack.GateLedger)
+	}
+	if err := testM8ValidateProductionReportV1(multiPack); err != nil {
+		t.Fatalf("one-domain/four-pack report rejected: %v", err)
+	}
+	multiPack.Rows[0].Attribution.LocalHNSWSearches--
+	if err := testM8ValidateProductionReportV1(multiPack); err == nil {
+		t.Fatal("accepted one-domain/four-pack report with a missing local search")
+	}
+	for name, mutate := range map[string]func(*m8ProductionConfigEvidenceV1){
+		"missing_fanout": func(cfg *m8ProductionConfigEvidenceV1) { cfg.PacksPerDomain = nil },
+		"wrong_pack_total": func(cfg *m8ProductionConfigEvidenceV1) {
+			cfg.PacksPerDomain = []int{3}
+		},
+	} {
+		t.Run("rejects_"+name, func(t *testing.T) {
+			invalid := report
+			invalid.Config.DomainCount = 1
+			invalid.Config.PacksPerDomain = []int{4}
+			mutate(&invalid.Config)
+			if err := testM8ValidateProductionReportV1(invalid); err == nil {
+				t.Fatalf("accepted %s domain-pack layout", name)
+			}
+		})
 	}
 	missingDescriptorBytes := report
 	missingDescriptorBytes.Resources.VariantDescriptorBytes = 0
@@ -479,6 +513,7 @@ func TestM8ProductionReportRejectsUnexercisedDataGroupV1(t *testing.T) {
 	shortfall.Rows[0].Attribution.ApproximateRepresentativeRecallAtK = 0
 	shortfall.Rows[0].Attribution.ApproximateLocalHNSWRecallAtK = 0
 	shortfall.Rows[0].Attribution.ApproximateLocalHNSWSearches = 0
+	shortfall.Rows[0].Attribution.ApproximateLocalHNSWSearchesByQuery = nil
 	shortfall.Rows[0].Attribution.ApproximateLocalHNSWCandidates = 0
 	shortfall.Rows[0].Attribution.ApproximateLocalHNSWEdges = 0
 	shortfall.Rows[0].Attribution.EndToEndRecallAtK = 0
@@ -1045,7 +1080,7 @@ func TestM8ProductionMultiGroupTopology10kTCPV1(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	membershipOracles, err := m8MembershipOracleRecallCacheV1(truth, primaryHomes, finalMemberships, len(harness.searchers), 4)
+	membershipOracles, err := m8MembershipOracleRecallCacheV1(truth, primaryHomes, finalMemberships, assets.manifest, 4)
 	if err != nil {
 		t.Fatal(err)
 	}

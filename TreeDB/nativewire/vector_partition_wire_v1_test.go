@@ -48,7 +48,7 @@ func TestVectorPartitionWireV1RoundTrip(t *testing.T) {
 		Generation: request.Generation,
 		Neighbors:  []public.NeighborV1{{ID: "doc-000001", Score: 0.25}, {ID: "doc-000002", Score: 0.5}},
 		Counters: public.SearchCountersV1{
-			SelectedPartitions: 1, SelectedGroups: 2, Requests: 3, RPCs: 4, Retries: 5, Redirects: 6, Candidates: 7, Edges: 8,
+			SelectedDomains: 1, SelectedPacks: 1, SelectedPartitions: 1, SelectedGroups: 2, Requests: 3, RPCs: 4, Retries: 5, Redirects: 6, Candidates: 7, Edges: 8,
 			SnapshotPins: 9, ReadProofs: 10, GenerationPins: 11, PartitionOpens: 12, QueryBytes: 13, RequestBytes: 14, CandidateBytes: 15, ResponseBytes: 16,
 			HNSWServedPartitions: 17, ExactScanPartitions: 18,
 		},

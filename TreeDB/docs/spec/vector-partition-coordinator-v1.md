@@ -13,9 +13,10 @@ router, and the M5 shard-search contract
 coordinator for one vector query. It:
 
 1. opens and validates one persisted M4 router generation;
-2. selects logical vector partitions;
-3. resolves those partitions through one immutable M1 placement snapshot;
-4. groups and chunks them into M5 shard-search requests;
+2. selects logical routing domains;
+3. expands each domain to all of its required physical search packs;
+4. resolves those packs through one immutable M1 placement snapshot and
+   groups/chunks them into M5 shard-search requests;
 5. dispatches those requests through a fixed worker pool;
 6. validates every M5 response and read proof;
 7. deduplicates stable IDs and returns one deterministic top-k.
@@ -126,7 +127,8 @@ the constructed M1 placement exactly:
 - ready state, collection, index, and index-definition digest;
 - source generation, checksum, schema hash, and row count;
 - partition generation and router generation;
-- partition count and every canonical partition-to-group placement;
+- physical-pack count, logical-domain count, complete domain-pack mapping, and
+  every canonical pack-to-group placement;
 - valid ready-set and router-model SHA-256 digests;
 - nonzero representatives and consistent runtime partition count.
 
@@ -143,8 +145,8 @@ The request state sequence is fail closed:
 | --- | --- |
 | preflight | validate request identity, search shape, finite query, and caller budgets |
 | router pin | acquire a generation-pinned M4 session and exact per-request runtime-status validation |
-| route | search that pinned router and require exactly the requested number of unique, finite partition scores |
-| plan | resolve every selected partition through M1, group and chunk deterministically, and reserve all budgets |
+| route | search that pinned router and require exactly the requested number of unique, finite logical-domain scores |
+| plan | expand every selected domain to all required packs, resolve those packs through M1, group and chunk deterministically, and reserve all budgets |
 | fanout | run every M5 task through the fixed worker pool, with one bounded not-leader retry path |
 | verify | validate every M5 envelope, partition order, proof, score, counter, and byte total |
 | dedupe | keep the best FP32 score for each stable ID and count duplicates/disagreements |
@@ -169,9 +171,11 @@ during heap merge.
 
 ## Deterministic planning and fanout
 
-The M4 router's selected partition order is retained in
-`ProbedPartitions`. Planning rejects an out-of-range, repeated, or non-finite
-router result. For dispatch:
+The M4 router's selected logical-domain order is retained in `ProbedDomains`.
+Planning rejects an out-of-range, repeated, or non-finite router result, then
+expands each domain in canonical mapping order. `ProbedPacks` contains that
+complete expansion; the legacy `ProbedPartitions` alias is identical to
+`ProbedPacks`. For dispatch:
 
 - partitions are grouped by their exact M1 owner group;
 - group IDs are sorted bytewise;
@@ -200,7 +204,7 @@ Zero-valued limit fields select the following defaults:
 
 | Coordinator resource | Default hard ceiling |
 | --- | ---: |
-| selected partitions | 256 |
+| selected physical packs | 256 |
 | owner groups | 64 |
 | M5 requests | 256 |
 | concurrent M5 requests | 8 |
@@ -239,7 +243,7 @@ Planning reserves resources before dispatch:
   `partition * top_k` result before sizing response slices. This remains true
   when the coordinator's own accepted stable-ID cap is lower because M5 V1
   preflight has no per-request stable-ID cap;
-- merge capacity requires `partition_probes * top_k` to fit both the request
+- merge capacity requires `selected_packs * top_k` to fit both the request
   and coordinator merge limits.
 
 After dispatch, actual measured response bytes and `candidates * 64` are
@@ -299,7 +303,8 @@ the smaller complete set.
 The optional `GroupID` identifies the failed task. Wrapped M5 errors are mapped
 without turning a service failure into partial success.
 
-Each success reports selected partitions/groups; requests, RPCs,
+Each success separately reports selected logical domains, physical packs, and
+groups (with selected partitions retained as a pack alias); requests, RPCs,
 retries/redirects; query/request/response/candidate bytes; candidates, edges,
 merge entries, duplicates, and score disagreements. Timing separates router
 open/search, placement, queue, dispatcher RPC, transport residual,

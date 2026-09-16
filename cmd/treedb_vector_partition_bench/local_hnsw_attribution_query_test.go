@@ -167,6 +167,24 @@ func TestLocalHNSWAttributionQueryEvidenceV1(t *testing.T) {
 		t.Fatal("decoded alternate router route accepted by calibration summary")
 	}
 	bad = decodeEvidence()
+	bad.LowRoute = append([]uint32(nil), bad.HighRoute[:3]...)
+	truth, err = localHNSWAttributionCanonicalQueryResultBitsV1(bad.GlobalTruth, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	exactLocal, err = localHNSWAttributionExactLocalV1(t.Context(), native, query, bad.LowRoute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bad.NativeExactLocalTruth = localHNSWAttributionQueryResultBitsV1(exactLocal)
+	if err := rebuildVariants(&bad, truth, exactLocal); err != nil {
+		t.Fatal(err)
+	}
+	bad.RoutingRecall = bad.Native.RoutingRecall
+	if err := localHNSWAttributionQueryEvidenceValidateV1(bad, partitionDocumentIDs); err != nil {
+		t.Fatalf("expanded low route rejected: %v", err)
+	}
+	bad = decodeEvidence()
 	bad.QueryFP32SHA256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	if err := localHNSWAttributionQueryEvidenceValidateV1(bad, partitionDocumentIDs); err != nil {
 		t.Fatalf("well-formed alternate query digest rejected before retained validation: %v", err)
