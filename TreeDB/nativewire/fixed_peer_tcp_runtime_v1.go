@@ -723,8 +723,19 @@ func (c *FixedPeerTCPClientV1) call(ctx context.Context, node raftcluster.NodeID
 }
 
 func (c *FixedPeerTCPClientV1) leader(ctx context.Context, group FixedPeerTCPGroupV1) (raftcluster.NodeID, error) {
-	for _, p := range group.Peers {
-		s, err := c.Status(ctx, p.ID)
+	ctx, cancel := context.WithTimeout(ctx, c.config.RequestTimeout)
+	defer cancel()
+	deadline, _ := ctx.Deadline()
+	for i, p := range group.Peers {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		// Reserve a fair share for each remaining peer. A healthy first peer
+		// still costs one status request; a silent peer cannot use the whole
+		// discovery deadline (which also honors an earlier caller deadline).
+		probeCtx, cancelProbe := context.WithTimeout(ctx, time.Until(deadline)/time.Duration(len(group.Peers)-i))
+		s, err := c.Status(probeCtx, p.ID)
+		cancelProbe()
 		if err != nil {
 			if ctx.Err() != nil {
 				return "", ctx.Err()

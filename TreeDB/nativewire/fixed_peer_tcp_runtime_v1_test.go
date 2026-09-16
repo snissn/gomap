@@ -625,6 +625,90 @@ func TestFixedPeerTCPConnectionRefusedIsNotCommitAmbiguousV1(t *testing.T) {
 	}
 }
 
+func TestFixedPeerTCPLeaderDiscoveryCancelsBlackholedFirstPeerV1(t *testing.T) {
+	c := fixedPeerTestConfigsV1(t)[0]
+	entered := make(chan struct{})
+	canceled := make(chan struct{})
+	release := make(chan struct{})
+	defer close(release)
+	var blackhole atomic.Bool
+	blackhole.Store(true)
+	requests := make([]atomic.Int32, len(c.Nodes))
+	for i := range c.Nodes {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+			requests[i].Add(1)
+			_, _ = io.Copy(io.Discard, request.Body)
+			if request.URL.Path != "/v1/status" {
+				t.Errorf("discovery issued non-status request: %s", request.URL.Path)
+				return
+			}
+			if i == 0 && blackhole.Load() {
+				// Accept the first peer's TCP request but never send a response.
+				close(entered)
+				select {
+				case <-request.Context().Done():
+					close(canceled)
+				case <-release:
+				}
+				return
+			}
+			// Ensure a successful discovery cannot bypass the blackholed probe.
+			select {
+			case <-entered:
+			case <-request.Context().Done():
+				return
+			}
+			_ = json.NewEncoder(w).Encode(fixedPeerReplyV1{
+				NodeID: raftcluster.NodeID(request.Header.Get("X-TreeDB-Node")), ConfigDigest: request.Header.Get("X-TreeDB-Config"),
+				Status: FixedPeerTCPStatusV1{CatalogRaft: raftcluster.RuntimeStatusV1{GroupID: c.Catalog.ID, LeaderID: c.Nodes[1].ID}},
+			})
+		}))
+		t.Cleanup(server.Close)
+		c.Nodes[i].Address = strings.TrimPrefix(server.URL, "http://")
+	}
+	c.ListenAddress = c.Nodes[0].Address
+	client, err := NewFixedPeerTCPClientV1(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(client.Close)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	leader, err := client.leader(ctx, c.Catalog)
+	if err != nil || leader != c.Nodes[1].ID {
+		t.Fatalf("healthy later peer did not supply leader within outer deadline: leader=%q err=%v", leader, err)
+	}
+	select {
+	case <-canceled:
+	case <-ctx.Done():
+		t.Fatal("blackholed probe was not canceled before the outer deadline")
+	}
+	if err := ctx.Err(); err != nil {
+		t.Fatalf("discovery exhausted outer deadline: %v", err)
+	}
+	// Once the first peer responds normally, discovery must not fan out to
+	// later peers. Keep the same TCP endpoints and a fresh caller deadline.
+	blackhole.Store(false)
+	before := make([]int32, len(requests))
+	for i := range requests {
+		before[i] = requests[i].Load()
+	}
+	healthyCtx, healthyCancel := context.WithTimeout(context.Background(), time.Second)
+	defer healthyCancel()
+	if leader, err := client.leader(healthyCtx, c.Catalog); err != nil || leader != c.Nodes[1].ID {
+		t.Fatalf("healthy-first discovery: leader=%q err=%v", leader, err)
+	}
+	for i := range requests {
+		want := int32(0)
+		if i == 0 {
+			want = 1
+		}
+		if got := requests[i].Load() - before[i]; got != want {
+			t.Errorf("healthy-first peer %d requests=%d, want %d", i, got, want)
+		}
+	}
+}
+
 func TestFixedPeerTCPRejectsMalformedFramesV1(t *testing.T) {
 	r := &FixedPeerTCPRuntimeV1{config: FixedPeerTCPConfigV1{NodeID: "node-a", RequestTimeout: time.Second}, client: &FixedPeerTCPClientV1{digest: "config"}, reads: make(chan struct{}, 1)}
 	for _, tt := range []struct{ name, body, node, digest string }{
