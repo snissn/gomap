@@ -504,9 +504,9 @@ class _NativeConnection:
         if remaining <= 0:
             raise TimeoutError("native request deadline expired")
         self.socket.settimeout(remaining)
-        self.socket.sendall(_HEADER.pack(b"TDB1", 40, 1, 0, frame_type, 0, 0, self.request_id, len(body)) + body)
+        self.socket.sendall(_HEADER.pack(b"TDB1", 40, 1, 1, frame_type, 0, 0, self.request_id, len(body)) + body)
         magic, size, major, minor, kind, flags, stream, request, count = _HEADER.unpack(self._read(40, deadline))
-        if (magic, size, major, minor, flags, stream, request) != (b"TDB1", 40, 1, 0, 0, 0, self.request_id) or count + 40 > self.limit:
+        if (magic, size, major, minor, flags, stream, request) != (b"TDB1", 40, 1, 1, 0, 0, self.request_id) or count + 40 > self.limit:
             raise TreeDBProtocolError("invalid native response header")
         payload = self._read(count, deadline)
         if kind == 6:
