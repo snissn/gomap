@@ -8,6 +8,8 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -19,6 +21,40 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
 	internalrouter "github.com/snissn/gomap/TreeDB/internal/vectorpartition"
 )
+
+func partitionLivePersistV1ForTest(idx *VectorIndex) *vectorIndexPartitionLivePersistV1 {
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+	live := idx.partitionLive
+	if live == nil || live.invalid {
+		return nil
+	}
+	persisted := &vectorIndexPartitionLivePersistV1{
+		Version: 1, IndexDefinitionDigest: live.indexDefinitionDigest, Source: live.source,
+		Generation: live.generation, Revision: live.revision, Coverage: live.coverage, Cutovers: live.cutovers,
+		PackDomains:     append([]uint32(nil), live.packDomains...),
+		Representatives: make([]vectorIndexPartitionLivePersistRepV1, len(live.representatives)),
+		Owners:          make([]vectorIndexPartitionLivePersistOwnerV1, 0, len(live.owners)),
+		Domains:         make([]vectorIndexPartitionLivePersistDomainV1, 0, len(live.domains)),
+	}
+	for i, rep := range live.representatives {
+		persisted.Representatives[i] = vectorIndexPartitionLivePersistRepV1{Domain: rep.domain, Vector: append([]float32(nil), rep.vector...)}
+	}
+	for id, owner := range live.owners {
+		persisted.Owners = append(persisted.Owners, vectorIndexPartitionLivePersistOwnerV1{ID: id, Domain: owner.domain, Deleted: owner.deleted})
+	}
+	sort.Slice(persisted.Owners, func(i, j int) bool { return persisted.Owners[i].ID < persisted.Owners[j].ID })
+	domains := make([]uint32, 0, len(live.domains))
+	for domain := range live.domains {
+		domains = append(domains, domain)
+	}
+	sort.Slice(domains, func(i, j int) bool { return domains[i] < domains[j] })
+	for _, domain := range domains {
+		snapshot, _ := live.domains[domain].persistSnapshot()
+		persisted.Domains = append(persisted.Domains, vectorIndexPartitionLivePersistDomainV1{Domain: domain, Snapshot: snapshot})
+	}
+	return persisted
+}
 
 func TestVectorIndexPartitionLiveMutationMoveAndDeleteV1(t *testing.T) {
 	idx, err := newVectorIndex(nil, VectorIndexOptions{
@@ -86,6 +122,395 @@ func TestVectorIndexPartitionLiveMutationMoveAndDeleteV1(t *testing.T) {
 	defer pin.Release()
 	if !pin.ExcludesBaseIDV1("doc") || pin.DomainDeltaCountV1(0) != 0 || pin.DomainDeltaCountV1(1) != 0 {
 		t.Fatalf("delete pin=%+v", pin.StatusV1())
+	}
+}
+
+func TestVectorIndexPartitionLiveNativeDeltaTouchesOnlyChangedRecordsV2(t *testing.T) {
+	idx, err := newVectorIndex(nil, VectorIndexOptions{
+		Name: "embedding", Field: "embedding", Metric: VectorMetricCosine,
+		Dimensions: 2, M: 4, EfConstruction: 16, EfSearch: 8,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	idx.setNativePersistent(true)
+	manifest := VectorPartitionManifestV1{
+		IndexName: "embedding", IndexDefinitionDigest: "definition",
+		SourceGeneration: 3, SourceChecksum: 4, SourceSchemaHash: 5, SourceRowCount: 2,
+		Generation: 7, DomainCount: 2, PartitionCount: 2,
+		DomainPacks: []VectorPartitionDomainPackV1{{DomainID: 0, PackID: 0}, {DomainID: 1, PackID: 1}},
+	}
+	if err := idx.bindVectorPartitionLiveV1(manifest, manifest.SourceGeneration, []vectorPartitionLiveRepresentativeV1{
+		{domain: 0, vector: []float32{1, 0}},
+		{domain: 1, vector: []float32{0, 1}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	apply := func(id string, vector []float32) {
+		t.Helper()
+		idx.mu.Lock()
+		defer idx.mu.Unlock()
+		if err := idx.preflightVectorPartitionMutationLocked([]byte(id), vector); err != nil {
+			t.Fatal(err)
+		}
+		if err := idx.reconcileVectorPartitionMutationLocked([]byte(id), vector); err != nil {
+			t.Fatal(err)
+		}
+	}
+	apply("a", []float32{1, 0})
+	apply("z", []float32{0, 1})
+	idx.recordPersistedSnapshot(1, 0, idx.nativeMutationSequence())
+
+	deltaKeys := func() []string {
+		t.Helper()
+		table, _, seq, _, hasWork, err := idx.persistNativeDeltaTable(true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !hasWork {
+			t.Fatal("missing native delta")
+		}
+		table.Freeze()
+		defer resetCollectionRunTable(table)
+		it := table.NewIterator(nil, nil)
+		defer it.Close()
+		var keys []string
+		for it.Valid() {
+			keys = append(keys, string(it.KeyCopy(nil)))
+			if string(it.KeyCopy(nil)) == vectorIndexNativeKeyMeta {
+				value := string(it.ValueCopy(nil))
+				if strings.Contains(value, `"owners"`) || strings.Contains(value, `"snapshot"`) {
+					t.Fatalf("compact metadata embeds live records: %s", value)
+				}
+			}
+			it.Next()
+		}
+		if err := it.Error(); err != nil {
+			t.Fatal(err)
+		}
+		idx.recordPersistedSnapshot(1, 0, seq)
+		return keys
+	}
+	requireTouched := func(keys []string, owners []string, domains []string) {
+		t.Helper()
+		var gotOwners, gotDomains []string
+		for _, key := range keys {
+			switch {
+			case strings.HasPrefix(key, "partition_live/owner/"):
+				gotOwners = append(gotOwners, key)
+			case strings.HasPrefix(key, "partition_live/domain/"):
+				rest := strings.TrimPrefix(key, "partition_live/domain/")
+				domain, _, ok := strings.Cut(rest, "/")
+				if ok && !slices.Contains(gotDomains, domain) {
+					gotDomains = append(gotDomains, domain)
+				}
+			}
+		}
+		slices.Sort(gotOwners)
+		slices.Sort(gotDomains)
+		if !slices.Equal(gotOwners, owners) || !slices.Equal(gotDomains, domains) {
+			t.Fatalf("keys=%q owners=%q domains=%q want owners=%q domains=%q", keys, gotOwners, gotDomains, owners, domains)
+		}
+	}
+
+	apply("a", []float32{1, 0})
+	requireTouched(deltaKeys(), nil, nil)
+	apply("a", []float32{.9, .1})
+	requireTouched(deltaKeys(), []string{"partition_live/owner/00000000000000000001/a"}, []string{"00000000000000000000"})
+	apply("a", []float32{0, 1})
+	requireTouched(deltaKeys(), []string{"partition_live/owner/00000000000000000001/a"}, []string{"00000000000000000000", "00000000000000000001"})
+	apply("a", nil)
+	requireTouched(deltaKeys(), []string{"partition_live/owner/00000000000000000001/a"}, []string{"00000000000000000001"})
+}
+
+func TestVectorIndexPartitionLiveReplayCandidateSynchronizesSharedOwnersV2(t *testing.T) {
+	before, err := newVectorIndex(nil, VectorIndexOptions{
+		Name: "embedding", Field: "embedding", Metric: VectorMetricCosine,
+		Dimensions: 2, M: 4, EfConstruction: 16, EfSearch: 8,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest := VectorPartitionManifestV1{
+		IndexName: "embedding", IndexDefinitionDigest: "definition",
+		SourceGeneration: 3, SourceChecksum: 4, SourceSchemaHash: 5, SourceRowCount: 1,
+		Generation: 7, DomainCount: 1, PartitionCount: 1,
+		DomainPacks: []VectorPartitionDomainPackV1{{DomainID: 0, PackID: 0}},
+	}
+	if err := before.bindVectorPartitionLiveV1(manifest, manifest.SourceGeneration, []vectorPartitionLiveRepresentativeV1{{domain: 0, vector: []float32{1, 0}}}); err != nil {
+		t.Fatal(err)
+	}
+	before.mu.Lock()
+	if err := before.reconcileVectorPartitionMutationLocked([]byte("a"), []float32{1, 0}); err != nil {
+		before.mu.Unlock()
+		t.Fatal(err)
+	}
+	before.mu.Unlock()
+	before.recordPersistedSnapshot(1, 0, before.nativeMutationSequence())
+
+	candidate, err := newVectorIndex(nil, VectorIndexOptions{
+		Name: "embedding", Field: "embedding", Metric: VectorMetricCosine,
+		Dimensions: 2, M: 4, EfConstruction: 16, EfSearch: 8,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reason := candidate.clonePartitionLiveReplayStateV2(before, before.nativeMutationSequence(), 1); reason != "" {
+		t.Fatalf("clone reason=%q", reason)
+	}
+
+	before.mu.Lock()
+	started := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		candidate.mu.RLock()
+		close(started)
+		_, _ = candidate.partitionLive.ownerV1("a")
+		candidate.mu.RUnlock()
+		close(done)
+	}()
+	<-started
+	select {
+	case <-done:
+		before.mu.Unlock()
+		t.Fatal("candidate read shared owners without source lock")
+	case <-time.After(10 * time.Millisecond):
+	}
+	before.mu.Unlock()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("candidate owner read remained blocked")
+	}
+}
+
+func TestVectorIndexPartitionLiveReplayDomainTransactionRollbackRetryV2(t *testing.T) {
+	before, err := newVectorIndex(nil, VectorIndexOptions{
+		Name: "embedding", Field: "embedding", Metric: VectorMetricCosine,
+		Dimensions: 2, M: 4, EfConstruction: 16, EfSearch: 8,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest := VectorPartitionManifestV1{
+		IndexName: "embedding", IndexDefinitionDigest: "definition",
+		SourceGeneration: 3, SourceChecksum: 4, SourceSchemaHash: 5, SourceRowCount: 2,
+		Generation: 7, DomainCount: 1, PartitionCount: 1,
+		DomainPacks: []VectorPartitionDomainPackV1{{DomainID: 0, PackID: 0}},
+	}
+	if err := before.bindVectorPartitionLiveV1(manifest, manifest.SourceGeneration, []vectorPartitionLiveRepresentativeV1{{domain: 0, vector: []float32{1, 0}}}); err != nil {
+		t.Fatal(err)
+	}
+	before.mu.Lock()
+	for _, row := range []struct {
+		id     string
+		vector []float32
+	}{{"a", []float32{1, 0}}, {"b", []float32{0.6, 0.8}}} {
+		if err := before.reconcileVectorPartitionMutationLocked([]byte(row.id), row.vector); err != nil {
+			before.mu.Unlock()
+			t.Fatal(err)
+		}
+	}
+	before.mu.Unlock()
+	before.recordPersistedSnapshot(1, 0, before.nativeMutationSequence())
+	beforeSeq := before.nativeMutationSequence()
+	domain := before.partitionLive.domains[0]
+	baseDomainSeq := domain.nativeMutationSequence()
+	baseSnapshot, _ := domain.persistSnapshot()
+	baseJSON, err := json.Marshal(baseSnapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseView := domain.acquireSearchView()
+	if baseView == nil {
+		t.Fatal("missing base search view")
+	}
+	domain.releaseSearchView(baseView)
+
+	type builtAttempt struct {
+		attempt *vectorPartitionLiveReplayAttemptV1
+		records [][]byte
+	}
+	build := func() builtAttempt {
+		t.Helper()
+		candidate, err := newVectorIndex(nil, VectorIndexOptions{
+			Name: "embedding", Field: "embedding", Metric: VectorMetricCosine,
+			Dimensions: 2, M: 4, EfConstruction: 16, EfSearch: 8,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if reason := candidate.clonePartitionLiveReplayStateV2(before, beforeSeq, 1); reason != "" {
+			t.Fatalf("clone reason=%q", reason)
+		}
+		attempt := &vectorPartitionLiveReplayAttemptV1{entries: []vectorPartitionLiveReplayEntryV1{{candidate: candidate}}}
+		candidate.mu.Lock()
+		err = candidate.reconcileVectorPartitionMutationLocked([]byte("a"), []float32{0, 1})
+		candidate.mu.Unlock()
+		if err != nil {
+			attempt.discard()
+			t.Fatal(err)
+		}
+		table, _, _, _, hasWork, err := candidate.persistNativeDeltaTable(true)
+		if err != nil || !hasWork {
+			attempt.discard()
+			t.Fatalf("persist work=%t err=%v", hasWork, err)
+		}
+		table.Freeze()
+		it := table.NewIterator(nil, nil)
+		var records [][]byte
+		for it.Valid() {
+			record := append(it.KeyCopy(nil), 0)
+			record = append(record, it.ValueCopy(nil)...)
+			records = append(records, record)
+			it.Next()
+		}
+		if err := it.Error(); err != nil {
+			_ = it.Close()
+			resetCollectionRunTable(table)
+			attempt.discard()
+			t.Fatal(err)
+		}
+		_ = it.Close()
+		resetCollectionRunTable(table)
+		return builtAttempt{attempt: attempt, records: records}
+	}
+	assertOldSearch := func() {
+		t.Helper()
+		pin, err := before.acquireVectorPartitionLiveSearchPinV1(manifest)
+		if err != nil {
+			t.Fatal(err)
+		}
+		results, _, searchErr := pin.SearchDomainV1(t.Context(), 0, []float32{0, 1}, VectorPartitionSearchOptionsV1{TopK: 1, EfSearch: 8, MaxStableIDBytes: 16})
+		pin.Release()
+		if searchErr != nil || len(results) != 1 || results[0].ID != "b" {
+			t.Fatalf("prepublication results=%+v err=%v", results, searchErr)
+		}
+	}
+
+	first := build()
+	viewDuring := domain.acquireSearchView()
+	if viewDuring != baseView {
+		domain.releaseSearchView(viewDuring)
+		first.attempt.discard()
+		t.Fatal("speculative mutation published a search view")
+	}
+	domain.releaseSearchView(viewDuring)
+	assertOldSearch()
+	first.attempt.discard()
+	afterRollback, _ := domain.persistSnapshot()
+	afterRollbackJSON, err := json.Marshal(afterRollback)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(afterRollbackJSON, baseJSON) || domain.nativeMutationSequence() != baseDomainSeq || domain.partitionLiveMutationUndo != nil {
+		t.Fatalf("rollback changed domain: before=%s after=%s seq=%d want=%d undo=%v", baseJSON, afterRollbackJSON, domain.nativeMutationSequence(), baseDomainSeq, domain.partitionLiveMutationUndo != nil)
+	}
+	assertOldSearch()
+
+	second := build()
+	if !slices.EqualFunc(first.records, second.records, bytes.Equal) {
+		second.attempt.discard()
+		t.Fatalf("retry records changed: first=%q second=%q", first.records, second.records)
+	}
+	second.attempt.entries[0].candidate.mu.Lock()
+	transaction := second.attempt.entries[0].candidate.partitionLive.domainTransactions[0]
+	second.attempt.entries[0].candidate.partitionLive.domainTransactions = nil
+	second.attempt.entries[0].candidate.mu.Unlock()
+	transaction.mu.Lock()
+	transaction.commitPartitionLiveDomainMutationV2Locked()
+	transaction.mu.Unlock()
+	pin, err := before.acquireVectorPartitionLiveSearchPinV1(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	results, _, searchErr := pin.SearchDomainV1(t.Context(), 0, []float32{0, 1}, VectorPartitionSearchOptionsV1{TopK: 1, EfSearch: 8, MaxStableIDBytes: 16})
+	pin.Release()
+	if searchErr != nil || len(results) != 1 || results[0].ID != "a" {
+		t.Fatalf("committed results=%+v err=%v", results, searchErr)
+	}
+}
+
+func BenchmarkVectorIndexPartitionLiveIncrementalPublicationV2(b *testing.B) {
+	for _, owners := range []int{1, 1024} {
+		b.Run(strconv.Itoa(owners)+"-owners-one-domain", func(b *testing.B) {
+			before, err := newVectorIndex(nil, VectorIndexOptions{
+				Name: "embedding", Field: "embedding", Metric: VectorMetricCosine,
+				Dimensions: 2, M: 4, EfConstruction: 16, EfSearch: 8,
+			})
+			if err != nil {
+				b.Fatal(err)
+			}
+			manifest := VectorPartitionManifestV1{
+				IndexName: "embedding", IndexDefinitionDigest: "definition",
+				SourceGeneration: 3, SourceChecksum: 4, SourceSchemaHash: 5, SourceRowCount: uint64(owners),
+				Generation: 7, DomainCount: 1, PartitionCount: 1,
+				DomainPacks: []VectorPartitionDomainPackV1{{DomainID: 0, PackID: 0}},
+			}
+			if err := before.bindVectorPartitionLiveV1(manifest, manifest.SourceGeneration, []vectorPartitionLiveRepresentativeV1{{domain: 0, vector: []float32{1, 0}}}); err != nil {
+				b.Fatal(err)
+			}
+			before.mu.Lock()
+			for i := 0; i < owners; i++ {
+				id := []byte("doc-" + strconv.Itoa(i))
+				if err := before.reconcileVectorPartitionMutationLocked(id, []float32{1, float32(i+1) / float32(owners*100)}); err != nil {
+					before.mu.Unlock()
+					b.Fatal(err)
+				}
+			}
+			before.mu.Unlock()
+			before.recordPersistedSnapshot(1, 0, before.nativeMutationSequence())
+			beforeSeq := before.nativeMutationSequence()
+			var emittedBytes, emittedRecords uint64
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				candidate, err := newVectorIndex(nil, VectorIndexOptions{
+					Name: "embedding", Field: "embedding", Metric: VectorMetricCosine,
+					Dimensions: 2, M: 4, EfConstruction: 16, EfSearch: 8,
+				})
+				if err != nil {
+					b.Fatal(err)
+				}
+				if reason := candidate.clonePartitionLiveReplayStateV2(before, beforeSeq, 1); reason != "" {
+					b.Fatalf("clone reason=%q", reason)
+				}
+				attempt := &vectorPartitionLiveReplayAttemptV1{entries: []vectorPartitionLiveReplayEntryV1{{candidate: candidate}}}
+				candidate.mu.Lock()
+				if err := candidate.preflightVectorPartitionMutationLocked([]byte("doc-0"), []float32{.9, .1}); err == nil {
+					err = candidate.reconcileVectorPartitionMutationLocked([]byte("doc-0"), []float32{.9, .1})
+				}
+				candidate.mu.Unlock()
+				if err != nil {
+					b.Fatal(err)
+				}
+				table, bytesDisk, _, _, hasWork, err := candidate.persistNativeDeltaTable(true)
+				if err != nil || !hasWork {
+					b.Fatalf("persist work=%t err=%v", hasWork, err)
+				}
+				table.Freeze()
+				it := table.NewIterator(nil, nil)
+				for it.Valid() {
+					emittedRecords++
+					it.Next()
+				}
+				if err := it.Error(); err != nil {
+					_ = it.Close()
+					resetCollectionRunTable(table)
+					b.Fatal(err)
+				}
+				_ = it.Close()
+				emittedBytes += uint64(bytesDisk)
+				resetCollectionRunTable(table)
+				attempt.discard()
+			}
+			b.StopTimer()
+			if before.nativeMutationSequence() != beforeSeq {
+				b.Fatalf("rollback sequence=%d want=%d", before.nativeMutationSequence(), beforeSeq)
+			}
+			b.ReportMetric(float64(emittedRecords)/float64(b.N), "records/op")
+			b.ReportMetric(float64(emittedBytes)/float64(b.N), "published-B/op")
+		})
 	}
 }
 
@@ -174,7 +599,7 @@ func TestVectorIndexPartitionLiveReplayRejectsDifferentInstalledCarrierV1(t *tes
 	}
 }
 
-func TestVectorIndexPartitionLiveReplayPreservesInstalledCarrierMutationV1(t *testing.T) {
+func TestVectorIndexPartitionLiveReplayRejectsCandidateMutationAfterSnapshotV1(t *testing.T) {
 	requireVectorPartitionPersistenceV1(t)
 	_, database, collection, def, manifest := newVectorPartitionLiveProductionFixtureV1(t)
 	defer database.Close()
@@ -198,17 +623,18 @@ func TestVectorIndexPartitionLiveReplayPreservesInstalledCarrierMutationV1(t *te
 	candidate.recordLoadedSnapshot(rootID, current.Stats().BytesDisk)
 	snapshotSeq := candidate.nativeMutationSequence()
 	candidate.mu.Lock()
-	candidate.partitionLive.coverage = 0
+	candidate.dirtyMeta = true
+	candidate.mutationSeq++
 	candidate.mu.Unlock()
 	attempt := &vectorPartitionLiveReplayAttemptV1{entries: []vectorPartitionLiveReplayEntryV1{{
 		spec:      vectorPartitionLiveReplaySpecV1{before: current, definition: def, beforeSeq: beforeSeq, rootName: collectionVectorIndexRootName(collection.name, def.Name)},
 		candidate: candidate, snapshotSeq: snapshotSeq,
 	}}}
-	if err := collection.installVectorPartitionLiveReplayAttemptV1(attempt, []string{attempt.entries[0].spec.rootName}, []uint64{rootID}); err != nil {
-		t.Fatal(err)
+	if err := collection.installVectorPartitionLiveReplayAttemptV1(attempt, []string{attempt.entries[0].spec.rootName}, []uint64{rootID}); !errors.Is(err, ErrConcurrentMutation) {
+		t.Fatalf("install err=%v want concurrent mutation", err)
 	}
-	if collection.registeredVectorIndex(def.Name) != candidate || !candidate.needsNativeAutoPersist() {
-		t.Fatal("installed carrier mutation was incorrectly marked persisted")
+	if collection.registeredVectorIndex(def.Name) != current || !candidate.needsNativeAutoPersist() {
+		t.Fatal("mutated candidate was installed or incorrectly marked persisted")
 	}
 }
 
@@ -307,23 +733,35 @@ func TestVectorIndexPartitionLiveSnapshotRecoveryAndMismatchV1(t *testing.T) {
 		t.Fatalf("results=%+v err=%v", results, err)
 	}
 	tampered := snapshot
-	tampered.Meta.PartitionLive = idx.partitionLivePersistLocked()
+	tampered.Meta.PartitionLive = partitionLivePersistV1ForTest(idx)
 	tampered.Meta.PartitionLive.Coverage++
 	mismatch, _ := newVectorIndex(nil, VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4, EfConstruction: 16, EfSearch: 8})
 	if reason := mismatch.loadPersistSnapshot(tampered); reason != "invalid_partition_live_meta" {
 		t.Fatalf("mismatch reason=%q", reason)
 	}
-	orphan := idx.partitionLivePersistLocked()
+	wrongEpoch := snapshot
+	liveV2 := *snapshot.Meta.PartitionLive
+	liveV2.DomainEpochs = append([]vectorIndexPartitionLivePersistDomainEpochV2(nil), liveV2.DomainEpochs...)
+	liveV2.DomainEpochs[0].Epoch++
+	wrongEpoch.Meta.PartitionLive = &liveV2
+	wrongEpochIndex, err := newVectorIndex(nil, VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4, EfConstruction: 16, EfSearch: 8})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reason := wrongEpochIndex.loadPersistSnapshot(wrongEpoch); reason != "invalid_partition_live_domain" {
+		t.Fatalf("wrong active domain epoch reason=%q", reason)
+	}
+	orphan := partitionLivePersistV1ForTest(idx)
 	orphan.Owners = nil
 	if _, reason := restored.restorePartitionLiveV1(orphan, orphan.Coverage); reason != "invalid_partition_live_owner_node" {
 		t.Fatalf("orphan reason=%q", reason)
 	}
-	unordered := idx.partitionLivePersistLocked()
+	unordered := partitionLivePersistV1ForTest(idx)
 	unordered.Representatives[0], unordered.Representatives[1] = unordered.Representatives[1], unordered.Representatives[0]
 	if _, reason := restored.restorePartitionLiveV1(unordered, unordered.Coverage); reason != "invalid_partition_live_representative" {
 		t.Fatalf("unordered representatives reason=%q", reason)
 	}
-	nested := idx.partitionLivePersistLocked()
+	nested := partitionLivePersistV1ForTest(idx)
 	nested.Domains[0].Snapshot.Meta.PartitionLive = &vectorIndexPartitionLivePersistV1{Version: 1}
 	if _, reason := restored.restorePartitionLiveV1(nested, nested.Coverage); reason != "invalid_partition_live_domain" {
 		t.Fatalf("nested live domain reason=%q", reason)
@@ -444,7 +882,7 @@ func TestVectorIndexPartitionLiveGenerationCutoverKeepsOldPinV1(t *testing.T) {
 	if oldErr != nil || len(oldResults) != 1 || oldResults[0].ID != "doc" || newErr != nil || len(newResults) != 0 {
 		t.Fatalf("old=%+v/%v new=%+v/%v", oldResults, oldErr, newResults, newErr)
 	}
-	persisted := idx.partitionLivePersistLocked()
+	persisted := partitionLivePersistV1ForTest(idx)
 	if persisted == nil || persisted.Generation != newManifest.Generation || len(persisted.Owners) != 0 || len(persisted.Domains) != 0 {
 		t.Fatalf("persisted cutover=%+v", persisted)
 	}
@@ -1217,13 +1655,13 @@ func TestVectorPartitionLiveColumnGraphCarrierLoadsWithoutRebuildV1(t *testing.T
 		_, err := replayCollection.insertBatchWithCommandWALIntent(replayIDs, replayDocuments, false, nil, nil, insertBatchExecutionOptions{returnResultIDs: true})
 		insertDone <- err
 	}()
+	coord := replayCollection.collectionSchemaCoordinator()
 	deadline := time.Now().Add(5 * time.Second)
-	for {
-		if currentState, ok := database.StateToken(); ok && currentState != pinnedState {
-			break
-		}
+	for coord.partitionLivePublishMu.TryRLock() {
+		coord.partitionLivePublishMu.RUnlock()
 		if time.Now().After(deadline) {
-			t.Fatal("mutation did not publish documents while coordinator pin was held")
+			pin.Release()
+			t.Fatal("live mutation did not wait on coordinator pin")
 		}
 		runtime.Gosched()
 	}
@@ -1232,13 +1670,13 @@ func TestVectorPartitionLiveColumnGraphCarrierLoadsWithoutRebuildV1(t *testing.T
 		t.Fatalf("mutation crossed coordinator pin: %v", err)
 	default:
 	}
+	if currentState, ok := database.StateToken(); !ok || currentState != pinnedState {
+		pin.Release()
+		t.Fatalf("document publication crossed coordinator pin: state=%+v ok=%t want=%+v", currentState, ok, pinnedState)
+	}
 	if err := replayCollection.validateVectorPartitionLiveCoordinatorPinnedAuthorityV1(def.Name, manifest.Generation, pinnedState.CommitSeq, pinnedState.SystemRootPageID); err != nil {
 		t.Fatalf("coordinator-pinned authority: %v", err)
 	}
-	if err := replayCollection.EnsureVectorPartitionLiveBindingV1(t.Context(), manifest); err != nil {
-		t.Fatalf("coordinator-pinned binding after accepted mutation: %v", err)
-	}
-	coord := replayCollection.collectionSchemaCoordinator()
 	if coord.partitionLivePublishMu.TryLock() {
 		coord.partitionLivePublishMu.Unlock()
 		t.Fatal("live mutation publication lock crossed coordinator pin")
@@ -1267,8 +1705,8 @@ func TestVectorPartitionLiveColumnGraphCarrierLoadsWithoutRebuildV1(t *testing.T
 		t.Fatal(err)
 	}
 	current := replayCollection.registeredVectorIndex(def.Name)
-	if current == nil || current == loaded {
-		t.Fatalf("atomic carrier install current=%p old=%p", current, loaded)
+	if current == nil || current != loaded {
+		t.Fatalf("atomic carrier handoff current=%p loaded=%p", current, loaded)
 	}
 	pin, err = current.acquireVectorPartitionLiveSearchPinV1(manifest)
 	if err != nil {
@@ -1945,6 +2383,7 @@ func TestVectorIndexPartitionLiveForegroundDurableInstallsOnceV1(t *testing.T) {
 	if err := collection.EnsureVectorPartitionLiveBindingV1(t.Context(), manifest); err != nil {
 		t.Fatal(err)
 	}
+	carrier := collection.registeredVectorIndex(manifest.IndexName)
 	replacement, err := json.Marshal(map[string]any{
 		"time_us": int64(99), "kind": "vector", "did": "a", "embedding": []float32{0, 1},
 	})
@@ -1954,6 +2393,20 @@ func TestVectorIndexPartitionLiveForegroundDurableInstallsOnceV1(t *testing.T) {
 	if matched, err := collection.Replace([]byte("a"), replacement); err != nil || !matched {
 		t.Fatalf("replacement matched=%v err=%v", matched, err)
 	}
+	if current := collection.registeredVectorIndex(manifest.IndexName); current != carrier {
+		t.Fatalf("accepted handoff replaced carrier: before=%p after=%p", carrier, current)
+	}
+	carrier.mu.RLock()
+	for domain, delta := range carrier.partitionLive.domains {
+		delta.mu.RLock()
+		undo := delta.partitionLiveMutationUndo
+		delta.mu.RUnlock()
+		if undo != nil {
+			carrier.mu.RUnlock()
+			t.Fatalf("accepted domain %d retained transaction undo", domain)
+		}
+	}
+	carrier.mu.RUnlock()
 	expectedCoverage, _, err := collection.currentVectorIndexDocumentStateWithWriteDomainLockState(false)
 	if err != nil {
 		t.Fatal(err)
@@ -1966,6 +2419,141 @@ func TestVectorIndexPartitionLiveForegroundDurableInstallsOnceV1(t *testing.T) {
 	results, _, searchErr := pin.SearchDomainV1(t.Context(), 0, []float32{0, 1}, VectorPartitionSearchOptionsV1{TopK: 1, EfSearch: 8, MaxStableIDBytes: 16})
 	if searchErr != nil || len(results) != 1 || results[0].ID != "a" || pin.StatusV1().Revision != 1 || pin.StatusV1().Coverage != expectedCoverage {
 		t.Fatalf("results=%+v status=%+v coverage=%d err=%v", results, pin.StatusV1(), expectedCoverage, searchErr)
+	}
+}
+
+func TestVectorIndexPartitionLiveReplayHandoffBlocksOrdinaryPinV2(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
+	_, database, collection, _, manifest := newVectorPartitionLiveProductionFixtureV1(t)
+	defer database.Close()
+	if err := collection.EnsureVectorPartitionLiveBindingV1(t.Context(), manifest); err != nil {
+		t.Fatal(err)
+	}
+	replace := func(timeUS int64, vector []float32) error {
+		document, err := json.Marshal(map[string]any{
+			"time_us": timeUS, "kind": "vector", "did": "a", "embedding": vector,
+		})
+		if err != nil {
+			return err
+		}
+		matched, err := collection.Replace([]byte("a"), document)
+		if err == nil && !matched {
+			return errors.New("replacement did not match")
+		}
+		return err
+	}
+	if err := replace(98, []float32{0, 1}); err != nil {
+		t.Fatal(err)
+	}
+
+	entered := make(chan struct{})
+	continueCommit := make(chan struct{})
+	var enterOnce sync.Once
+	vectorPartitionLiveReplayBeforeDomainCommitHookV2.Lock()
+	vectorPartitionLiveReplayBeforeDomainCommitHookV2.fn = func() {
+		enterOnce.Do(func() { close(entered) })
+		<-continueCommit
+	}
+	vectorPartitionLiveReplayBeforeDomainCommitHookV2.Unlock()
+	defer func() {
+		vectorPartitionLiveReplayBeforeDomainCommitHookV2.Lock()
+		vectorPartitionLiveReplayBeforeDomainCommitHookV2.fn = nil
+		vectorPartitionLiveReplayBeforeDomainCommitHookV2.Unlock()
+	}()
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(continueCommit) }) }
+	defer release()
+
+	mutationDone := make(chan error, 1)
+	go func() { mutationDone <- replace(99, []float32{1, 0}) }()
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		release()
+		t.Fatal("accepted handoff did not reach domain commit")
+	}
+	type pinResult struct {
+		pin *VectorIndexPartitionLiveSearchPinV1
+		err error
+	}
+	pinDone := make(chan pinResult, 1)
+	go func() {
+		pin, err := collection.AcquireVectorPartitionLiveSearchPinV1(manifest)
+		pinDone <- pinResult{pin: pin, err: err}
+	}()
+	select {
+	case result := <-pinDone:
+		if result.pin != nil {
+			result.pin.Release()
+		}
+		release()
+		t.Fatalf("ordinary pin crossed incomplete handoff: %v", result.err)
+	case <-time.After(25 * time.Millisecond):
+	}
+	release()
+	select {
+	case err := <-mutationDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("mutation remained blocked after handoff release")
+	}
+	select {
+	case result := <-pinDone:
+		if result.err != nil {
+			t.Fatal(result.err)
+		}
+		if result.pin.StatusV1().Revision != 2 {
+			result.pin.Release()
+			t.Fatalf("pin revision=%d want=2", result.pin.StatusV1().Revision)
+		}
+		results, _, err := result.pin.SearchDomainV1(t.Context(), 0, []float32{1, 0}, VectorPartitionSearchOptionsV1{TopK: 1, EfSearch: 8, MaxStableIDBytes: 16})
+		result.pin.Release()
+		if err != nil || len(results) != 1 || results[0].ID != "a" {
+			t.Fatalf("post-handoff results=%+v err=%v", results, err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("ordinary pin remained blocked after handoff")
+	}
+}
+
+func TestVectorIndexPartitionLiveReplayAcceptedFailureInvalidatesV2(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
+	_, database, collection, _, manifest := newVectorPartitionLiveProductionFixtureV1(t)
+	defer database.Close()
+	if err := collection.EnsureVectorPartitionLiveBindingV1(t.Context(), manifest); err != nil {
+		t.Fatal(err)
+	}
+	carrier := collection.registeredVectorIndex(manifest.IndexName)
+	vectorPartitionLiveReplayAfterAcceptedHookV1.Lock()
+	vectorPartitionLiveReplayAfterAcceptedHookV1.fn = func() {
+		carrier.mu.Lock()
+		carrier.mutationSeq++
+		carrier.dirtyMeta = true
+		carrier.mu.Unlock()
+	}
+	vectorPartitionLiveReplayAfterAcceptedHookV1.Unlock()
+	defer func() {
+		vectorPartitionLiveReplayAfterAcceptedHookV1.Lock()
+		vectorPartitionLiveReplayAfterAcceptedHookV1.fn = nil
+		vectorPartitionLiveReplayAfterAcceptedHookV1.Unlock()
+	}()
+	document, err := json.Marshal(map[string]any{
+		"time_us": int64(99), "kind": "vector", "did": "a", "embedding": []float32{0, 1},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if matched, err := collection.Replace([]byte("a"), document); !errors.Is(err, ErrConcurrentMutation) {
+		t.Fatalf("accepted failure matched=%v err=%v", matched, err)
+	}
+	accepted, err := collection.Get([]byte("a"))
+	if err != nil || !bytes.Contains(accepted, []byte(`"time_us":99`)) {
+		t.Fatalf("accepted document=%s err=%v", accepted, err)
+	}
+	if carrier.hasValidSourceDocumentRoots() {
+		t.Fatal("accepted handoff failure retained valid carrier authority")
 	}
 }
 

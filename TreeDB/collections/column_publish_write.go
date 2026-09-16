@@ -177,6 +177,22 @@ func (c *Collection) publishRootDeltaGroupMaybeColumn(ordered []backenddb.Ordere
 	if err != nil {
 		return 0, nil, CollectionMeta{}, nil, err
 	}
+	unlockLivePublication, err := c.lockVectorPartitionLiveReplayPublicationV2(replaySpecs)
+	if err != nil {
+		return 0, nil, CollectionMeta{}, nil, err
+	}
+	defer unlockLivePublication()
+	var replayAttempt *vectorPartitionLiveReplayAttemptV1
+	var replayPublicationAccepted, replayInstalled bool
+	defer func() {
+		if replayAttempt == nil || replayInstalled {
+			return
+		}
+		if replayPublicationAccepted {
+			replayAttempt.invalidateAcceptedFailureV2()
+		}
+		replayAttempt.discard()
+	}()
 	derived, err := c.prepareTypedGraphPublication(input)
 	if err != nil {
 		return 0, nil, CollectionMeta{}, nil, err
@@ -218,7 +234,6 @@ func (c *Collection) publishRootDeltaGroupMaybeColumn(ordered []backenddb.Ordere
 	var updatedMeta CollectionMeta
 	var newSystemRoot uint64
 	var rootIDs []uint64
-	var replayAttempt *vectorPartitionLiveReplayAttemptV1
 	buildColumnDelta := func(ctx backenddb.CommandWALPublishContext) ([]backenddb.OrderedRootDeltaPublishInput, error) {
 		stageStart := time.Now()
 		defer func() {
@@ -339,10 +354,8 @@ func (c *Collection) publishRootDeltaGroupMaybeColumn(ordered []backenddb.Ordere
 	}
 	recordColumnPublishCommit(input.insertStats, time.Since(commitStart))
 	recordColumnPublishTiming(input.insertStats, publishTiming)
-	if replayAttempt != nil {
-		replayAttempt.closeResources()
-	}
 	if err != nil {
+		replayPublicationAccepted = backenddb.CommitPublicationAccepted(err)
 		if input.commandWALIntent.AssignedLSN() != 0 {
 			derived.invalidate()
 		} else {
@@ -352,6 +365,10 @@ func (c *Collection) publishRootDeltaGroupMaybeColumn(ordered []backenddb.Ordere
 			err = errors.Join(err, planLease.finishFailure(err))
 		}
 		return 0, nil, CollectionMeta{}, nil, err
+	}
+	replayPublicationAccepted = true
+	if replayAttempt != nil {
+		replayAttempt.closeResources()
 	}
 	if replayAttempt != nil {
 		runVectorPartitionLiveReplayAfterAcceptedHookV1()
@@ -372,6 +389,7 @@ func (c *Collection) publishRootDeltaGroupMaybeColumn(ordered []backenddb.Ordere
 	if err := c.installVectorPartitionLiveReplayAttemptV1(replayAttempt, rootNames, rootIDs); err != nil {
 		return 0, nil, CollectionMeta{}, nil, err
 	}
+	replayInstalled = true
 	return newSystemRoot, rootIDs, updatedMeta, rootNames, nil
 }
 
@@ -398,6 +416,22 @@ func (c *Collection) publishRootDeltaBatchGroupMaybeColumn(ordered []backenddb.O
 	if err != nil {
 		return 0, nil, CollectionMeta{}, nil, err
 	}
+	unlockLivePublication, err := c.lockVectorPartitionLiveReplayPublicationV2(replaySpecs)
+	if err != nil {
+		return 0, nil, CollectionMeta{}, nil, err
+	}
+	defer unlockLivePublication()
+	var replayAttempt *vectorPartitionLiveReplayAttemptV1
+	var replayPublicationAccepted, replayInstalled bool
+	defer func() {
+		if replayAttempt == nil || replayInstalled {
+			return
+		}
+		if replayPublicationAccepted {
+			replayAttempt.invalidateAcceptedFailureV2()
+		}
+		replayAttempt.discard()
+	}()
 	derived, err := c.prepareTypedGraphPublication(input)
 	if err != nil {
 		return 0, nil, CollectionMeta{}, nil, err
@@ -438,7 +472,6 @@ func (c *Collection) publishRootDeltaBatchGroupMaybeColumn(ordered []backenddb.O
 	var planLease *columnPublishPlanLease
 	var updatedMeta CollectionMeta
 	var cleanupColumnDelta func()
-	var replayAttempt *vectorPartitionLiveReplayAttemptV1
 	buildColumnDelta := func(ctx backenddb.CommandWALPublishContext) ([]backenddb.OrderedRootDeltaBatchPublishInput, error) {
 		stageStart := time.Now()
 		defer func() {
@@ -589,6 +622,7 @@ func (c *Collection) publishRootDeltaBatchGroupMaybeColumn(ordered []backenddb.O
 		replayAttempt.closeResources()
 	}
 	if err != nil {
+		replayPublicationAccepted = backenddb.CommitPublicationAccepted(err)
 		// The DB publish helper owns context-built batch deltas on publish errors.
 		if input.commandWALIntent.AssignedLSN() != 0 {
 			derived.invalidate()
@@ -600,6 +634,7 @@ func (c *Collection) publishRootDeltaBatchGroupMaybeColumn(ordered []backenddb.O
 		}
 		return 0, nil, CollectionMeta{}, nil, err
 	}
+	replayPublicationAccepted = true
 	if replayAttempt != nil {
 		runVectorPartitionLiveReplayAfterAcceptedHookV1()
 	}
@@ -623,6 +658,7 @@ func (c *Collection) publishRootDeltaBatchGroupMaybeColumn(ordered []backenddb.O
 	if err := c.installVectorPartitionLiveReplayAttemptV1(replayAttempt, rootNames, rootIDs); err != nil {
 		return 0, nil, CollectionMeta{}, nil, err
 	}
+	replayInstalled = true
 	return newSystemRoot, rootIDs, updatedMeta, rootNames, nil
 }
 

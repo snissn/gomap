@@ -2548,7 +2548,9 @@ changed but vector values did not. Older coverage versions are not migrated in
 this pre-alpha format; the index must be rebuilt.
 
 For a standalone ready vector-partition generation, `meta` may also contain the
-optional `partition_live` object at version `1`. A `native_runtime` index stores
+optional `partition_live` object. Native roots write version `2`; version `1`
+is the earlier inline snapshot representation accepted only by the existing
+pre-alpha restore path. A `native_runtime` index stores
 it in its existing graph root. A `column_graph` index stores the same object in
 an otherwise graph-empty `<collection>/vector-index/<index_name>` live-overlay
 carrier; immutable column-graph/router/search-pack assets remain the base and
@@ -2559,15 +2561,24 @@ identity, partition generation, pack-to-domain mapping, and canonical
 representatives covering every mapped domain) separately from the mutable live
 revision and exact collection document-generation coverage. The immutable
 source generation and collection document generation are separate clocks and
-are never compared numerically. The object also persists the cutover count,
-stable-ID ownership/tombstones,
-and one nested vector-index snapshot per nonempty logical-domain delta.
+are never compared numerically. The V2 object also persists the cutover count,
+one active owner epoch, and one active epoch for every nonempty logical-domain
+delta. Owner values live at
+`partition_live/owner/<20-digit epoch>/<stable ID>`. Domain-native records live
+at `partition_live/domain/<20-digit domain>/<20-digit epoch>/<native key>` and
+use the ordinary `meta`, `node/`, `edge/`, `tomb/`, and `doc/` encodings. A
+normal mutation rewrites compact `meta`, the changed owner key, and only dirty
+native records from touched domains. It does not rewrite unchanged owners or
+untouched domain graphs. Cutover advances the relevant epoch and emits the new
+complete owner or domain record set; old epochs are unreachable garbage.
 
-Open validates the V1 tag, exact parent source coverage, bounded owner and node
+Open validates the supported tag, exact parent source coverage, bounded owner and node
 counts, complete domain mappings and representatives, canonical unique owners,
 nondecreasing domain/vector representative order, no nested live overlays, and
 a bidirectional match between every nondeleted owner and every current delta
-row. Missing, duplicate, orphaned, cross-domain, stale, or malformed live
+row. V2 additionally requires nonzero unique active epoch descriptors and
+loads only records in those epochs. Missing, duplicate, orphaned, cross-domain,
+mixed-epoch, stale, or malformed live
 state fails closed as an invalid vector-index snapshot; it is never repaired by
 scanning immutable packs on the search path. A newly published immutable
 partition generation replaces the old live object with an empty binding in one
@@ -2831,13 +2842,14 @@ collection rows, fold column assets, or rebuild either a native graph or a
 closed. The first empty carrier command establishes the durable binding;
 checkpoint recovery loads and validates that carrier before applying any later
 ordinary collection mutation command. Each foreground or replayed command-WAL
-document command derives its bounded carrier state before publication and
-includes that state in the same ordered root group as the document,
+document command derives compact carrier metadata plus the changed owner and
+dirty touched-domain records before publication and includes that delta in the
+same ordered root group as the document,
 typed-column, locator, and system-root updates. The command's durable
 `AppliedCommandLSN`, exact live revision, and collection document-generation
 coverage therefore become visible atomically; there is no post-replay carrier
-frame or collection scan. A later checkpoint fences that already-atomic root
-group.
+frame, collection scan, or serialization of untouched logical domains. A later
+checkpoint fences that already-atomic root group.
 
 `ExternalRefs`, `Preconditions`, and `ResultAssertions` are length-delimited
 sections so PR1 can harden framing before replay uses them. The PR1 external-ref

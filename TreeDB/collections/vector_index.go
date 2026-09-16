@@ -413,6 +413,7 @@ type VectorIndex struct {
 	frozenPrefixHeapRowStores        uint64
 	liveDelta                        *VectorIndex
 	partitionLive                    *vectorIndexPartitionLiveStateV1
+	partitionLiveMutationUndo        *vectorIndexPartitionLiveDomainUndoV2
 	scalarDefinitions                []IndexDefinition
 	scalarRuntimes                   []indexRuntime
 	scalarColumns                    map[string]vectorIndexScalarColumn
@@ -3381,12 +3382,14 @@ func quantizeVectorIndexInt8Value(value, scale float32) int8 {
 }
 
 func (idx *VectorIndex) tombstoneDocumentIDLocked(documentID []byte) {
+	idx.capturePartitionLiveDomainCurrentNodeV2Locked(documentID)
 	nodeID, ok := idx.currentNode[string(documentID)]
 	if !ok {
 		return
 	}
 	idx.prepareSearchViewForMutationLocked()
 	if nodeID >= 0 && nodeID < len(idx.nodes) {
+		idx.capturePartitionLiveDomainNodeV2Locked(nodeID)
 		idx.nodes[nodeID].deleted = true
 		idx.markVectorNodeDirtyLocked(nodeID)
 	}
@@ -3763,6 +3766,7 @@ func (idx *VectorIndex) linkLayerLocked(fromNodeID, toNodeID, layer int, markDir
 	if !ok {
 		return
 	}
+	idx.capturePartitionLiveDomainNodeV2Locked(fromNodeID)
 	neighbors = append(neighbors, vectorIndexNeighbor{nodeID: uint32(toNodeID), distance: distance})
 	trace := idx.constructionTrace
 	var origin string
