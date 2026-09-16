@@ -1425,7 +1425,7 @@ func (c *Collection) UnregisterVectorIndex(name string) {
 		return
 	}
 	coord := c.collectionSchemaCoordinator()
-	if coord != nil && coord.partitionLiveCarrier(name) != nil {
+	if coord != nil {
 		coord.partitionLivePublishMu.Lock()
 		defer coord.partitionLivePublishMu.Unlock()
 	}
@@ -2662,26 +2662,14 @@ func (idx *VectorIndex) insertVectorLocked(documentID []byte, vector []float32) 
 	} else if len(vector) != idx.dimensions {
 		return fmt.Errorf("collections: vector field %q in document %q has dimension %d, want %d", idx.field, documentID, len(vector), idx.dimensions)
 	}
+	if idx.currentVectorMatchesLocked(documentID, vector) {
+		return nil
+	}
 	var quantized []int8
 	var quantScale float32
 	if idx.encoding == VectorIndexEncodingInt8 {
 		idx.insertQuantScratch, quantScale = quantizeVectorIndexInt8Into(idx.insertQuantScratch[:0], vector)
 		quantized = idx.insertQuantScratch
-	}
-	if nodeID, ok := idx.currentNode[string(documentID)]; ok && nodeID >= 0 && nodeID < len(idx.nodes) {
-		node := &idx.nodes[nodeID]
-		if !node.deleted {
-			switch idx.encoding {
-			case VectorIndexEncodingInt8:
-				if node.matchesQuantizedVector(quantized, quantScale) {
-					return nil
-				}
-			default:
-				if node.matchesVector(vector) {
-					return nil
-				}
-			}
-		}
 	}
 	if !vectorIndexNodeOrdinalsFitUint32(uint64(len(idx.nodes)), 1) {
 		return errors.New("collections: vector index node ordinal exceeds uint32")
@@ -3281,13 +3269,6 @@ func (node *vectorIndexNode) matchesVector(vector []float32) bool {
 	return slices.Equal(node.vector, vector)
 }
 
-func (node *vectorIndexNode) matchesQuantizedVector(quantized []int8, quantScale float32) bool {
-	if node == nil {
-		return false
-	}
-	return node.quantScale == quantScale && slices.Equal(node.quantized, quantized)
-}
-
 func (node *vectorIndexNode) matchesInt8SourceVector(vector []float32) bool {
 	if node == nil || len(node.quantized) != len(vector) {
 		return false
@@ -3302,6 +3283,22 @@ func (node *vectorIndexNode) matchesInt8SourceVector(vector []float32) bool {
 		}
 	}
 	return true
+}
+
+func (idx *VectorIndex) vectorIndexNodeMatchesSourceVectorLocked(node *vectorIndexNode, vector []float32) bool {
+	if idx.encoding == VectorIndexEncodingInt8 {
+		return node.matchesInt8SourceVector(vector)
+	}
+	return node.matchesVector(vector)
+}
+
+func (idx *VectorIndex) currentVectorMatchesLocked(documentID []byte, vector []float32) bool {
+	nodeID, ok := idx.currentNode[string(documentID)]
+	if !ok || nodeID < 0 || nodeID >= len(idx.nodes) {
+		return false
+	}
+	node := &idx.nodes[nodeID]
+	return !node.deleted && idx.vectorIndexNodeMatchesSourceVectorLocked(node, vector)
 }
 
 func (idx *VectorIndex) newVectorIndexNode(documentID []byte, vector []float32, level int) vectorIndexNode {

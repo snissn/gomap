@@ -16,8 +16,6 @@ import (
 	"sort"
 	"sync"
 	"unsafe"
-
-	"github.com/snissn/gomap/TreeDB/internal/typedcolumn"
 )
 
 // Keep the domain-separated membership digest as the final header field.
@@ -1010,17 +1008,18 @@ func (s *VectorPartitionLocalSearcherV1) SearchPreflightV1(opts VectorPartitionS
 	exactRows := len(s.asset.IDs)
 	dimensions := s.asset.Dimensions
 	maxStableIDBytes := s.maxStableIDBytes
+	stableIDOrdinals := s.stableIDOrdinals
 	var header columnHNSWSearchPackHeader
 	if prepared != nil {
 		header = prepared.Header
 	}
 	s.mu.Unlock()
 
-	scratchBytes, err := vectorPartitionSearchScratchBytesV1(opts, prepared, exactRows, dimensions, maxStableIDBytes, header)
+	scratchBytes, err := vectorPartitionSearchScratchBytesV1(opts, prepared, exactRows, dimensions, maxStableIDBytes, stableIDOrdinals, header)
 	return status, scratchBytes, err
 }
 
-func vectorPartitionSearchScratchBytesV1(opts VectorPartitionSearchOptionsV1, prepared *columnHNSWSearchPackPreparedView, exactRows, dimensions, maxStableIDBytes int, header columnHNSWSearchPackHeader) (uint64, error) {
+func vectorPartitionSearchScratchBytesV1(opts VectorPartitionSearchOptionsV1, prepared *columnHNSWSearchPackPreparedView, exactRows, dimensions, maxStableIDBytes int, stableIDOrdinals map[string]int, header columnHNSWSearchPackHeader) (uint64, error) {
 	if opts.MaxStableIDBytes > 0 && maxStableIDBytes > opts.MaxStableIDBytes {
 		return 0, fmt.Errorf("%w: stable ID bytes=%d exceeds limit=%d", ErrVectorPartitionSearchUnavailable, maxStableIDBytes, opts.MaxStableIDBytes)
 	}
@@ -1031,9 +1030,38 @@ func vectorPartitionSearchScratchBytesV1(opts VectorPartitionSearchOptionsV1, pr
 	if rowCount < 0 || header.VectorStride < 0 || header.M < 0 {
 		return 0, ErrVectorPartitionSearchUnavailable
 	}
-	topK := opts.TopK
-	if topK > rowCount {
-		topK = rowCount
+	nativeTopK, efSearch, err := vectorPartitionNativeSearchBoundsV1(opts, header, stableIDOrdinals)
+	if err != nil {
+		return 0, err
+	}
+	publicTopK := min(opts.TopK, rowCount)
+	degree, err := prepared.layer0ExpansionDegreeV1()
+	if err != nil {
+		return 0, ErrVectorPartitionSearchUnavailable
+	}
+	return vectorPartitionHNSWSearchScratchBytesV1(rowCount, header.Dimensions, header.VectorStride, degree, nativeTopK, publicTopK, efSearch)
+}
+
+func vectorPartitionNativeSearchBoundsV1(opts VectorPartitionSearchOptionsV1, header columnHNSWSearchPackHeader, stableIDOrdinals map[string]int) (int, int, error) {
+	rows := header.Rows
+	if rows < 0 || opts.TopK < 1 || opts.EfSearch < 0 {
+		return 0, 0, ErrVectorPartitionSearchUnavailable
+	}
+	topK := min(opts.TopK, rows)
+	if len(opts.ExcludedStableIDs) != 0 {
+		if stableIDOrdinals == nil {
+			return 0, 0, fmt.Errorf("%w: stable ID ordinals were not prepared", ErrVectorPartitionSearchUnavailable)
+		}
+		present := 0
+		for id := range opts.ExcludedStableIDs {
+			if ordinal, ok := stableIDOrdinals[id]; ok {
+				if ordinal < 0 || ordinal >= rows {
+					return 0, 0, ErrVectorPartitionSearchUnavailable
+				}
+				present++
+			}
+		}
+		topK += min(present, rows-topK)
 	}
 	efSearch := opts.EfSearch
 	if efSearch == 0 {
@@ -1042,22 +1070,10 @@ func vectorPartitionSearchScratchBytesV1(opts VectorPartitionSearchOptionsV1, pr
 	if efSearch < topK {
 		efSearch = topK
 	}
-	if efSearch > rowCount {
-		efSearch = rowCount
+	if efSearch > rows {
+		efSearch = rows
 	}
-	degree, err := prepared.layer0ExpansionDegreeV1()
-	if err != nil {
-		return 0, ErrVectorPartitionSearchUnavailable
-	}
-	base, err := vectorPartitionHNSWSearchScratchBytesV1(rowCount, header.Dimensions, header.VectorStride, degree, topK, topK, efSearch)
-	if err != nil || len(opts.ExcludedStableIDs) == 0 {
-		return base, err
-	}
-	filterBytes := uint64(min(len(opts.ExcludedStableIDs), rowCount))*uint64(3*unsafe.Sizeof(int(0))) + uint64((rowCount+63)/64)*16
-	if math.MaxUint64-base < filterBytes {
-		return 0, ErrVectorPartitionSearchUnavailable
-	}
-	return base + filterBytes, nil
+	return topK, efSearch, nil
 }
 
 func vectorPartitionExactSearchScratchBytesV1(rows, dimensions, topK int) (uint64, error) {
@@ -1823,20 +1839,16 @@ func (s *VectorPartitionLocalSearcherV1) searchWithOptionsV1(ctx context.Context
 			resetVectorPartitionNativeSearchScratchV1(scratch)
 			s.scratch.Put(scratch)
 		}()
+		nativeTopK, nativeEfSearch, boundsErr := vectorPartitionNativeSearchBoundsV1(opts, s.prepared.Header, s.stableIDOrdinals)
+		if boundsErr != nil {
+			s.recordFailure()
+			return nil, VectorPartitionSearchMetricsV1{}, boundsErr
+		}
 		nativeOpts := columnVectorGraphNativeSearchOptions{
-			TopK:                                 opts.TopK,
-			EfSearch:                             opts.EfSearch,
+			TopK:                                 nativeTopK,
+			EfSearch:                             nativeEfSearch,
 			OmitResultMaterialization:            true,
 			SuppressOmittedResultMaterialization: true,
-		}
-		if len(opts.ExcludedStableIDs) != 0 {
-			eligible, err := s.partitionLiveEligibleRowsV1(opts.ExcludedStableIDs)
-			if err != nil {
-				s.recordFailure()
-				return nil, VectorPartitionSearchMetricsV1{}, err
-			}
-			nativeOpts.CandidateRows, nativeOpts.HasCandidateRows = eligible, true
-			nativeOpts.CandidateLimit = s.prepared.Header.Rows
 		}
 		var trace columnHNSWSearchPackAttributionTrace
 		if attribution != nil {
@@ -1985,30 +1997,6 @@ func vectorPartitionPreparedStableIDOrdinalsV1(view *columnHNSWSearchPackPrepare
 		out[id] = ordinal
 	}
 	return out, nil
-}
-
-func (s *VectorPartitionLocalSearcherV1) partitionLiveEligibleRowsV1(excluded map[string]struct{}) (typedcolumn.RowSelection, error) {
-	rows := s.prepared.Header.Rows
-	stableIDOrdinals := s.stableIDOrdinals
-	if stableIDOrdinals == nil {
-		return typedcolumn.RowSelection{}, fmt.Errorf("%w: stable ID eligibility was not prepared", ErrVectorPartitionSearchUnavailable)
-	}
-	ordinals := make([]int, 0, min(len(excluded), rows))
-	for id := range excluded {
-		if ordinal, ok := stableIDOrdinals[id]; ok {
-			ordinals = append(ordinals, ordinal)
-		}
-	}
-	sort.Ints(ordinals)
-	deleted, err := typedcolumn.NewSparseRowSelection(rows, ordinals)
-	if err != nil {
-		return typedcolumn.RowSelection{}, fmt.Errorf("%w: stale-row filter: %v", ErrVectorPartitionSearchUnavailable, err)
-	}
-	eligible, err := typedcolumn.ComposeRowSelections(rows, typedcolumn.RowSelectionComponents{Deletes: &deleted})
-	if err != nil {
-		return typedcolumn.RowSelection{}, fmt.Errorf("%w: stale-row eligibility: %v", ErrVectorPartitionSearchUnavailable, err)
-	}
-	return eligible, nil
 }
 
 // SearchExactWithOptionsV1 scans the already generation-pinned prepared pack.

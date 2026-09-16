@@ -394,11 +394,13 @@ func (idx *VectorIndex) reconcileVectorPartitionMutationLocked(documentID []byte
 			}
 		}
 		delta.mu.Lock()
+		beforeNodes := len(delta.nodes)
 		err = delta.insertVectorLocked(documentID, vector)
 		if err == nil {
 			delta.acknowledgeSearchViewStateLocked()
 			delta.publishSearchViewLocked(false)
 		}
+		afterNodes := len(delta.nodes)
 		delta.mu.Unlock()
 		if err != nil {
 			return err
@@ -415,7 +417,9 @@ func (idx *VectorIndex) reconcileVectorPartitionMutationLocked(documentID []byte
 			}
 		}
 		live.owners[key] = vectorPartitionLiveOwnerV1{domain: domain}
-		live.nodeIDBytes += uint64(len(documentID))
+		if afterNodes > beforeNodes {
+			live.nodeIDBytes += uint64(len(documentID))
+		}
 	}
 	if !existed {
 		live.ownerIDBytes += uint64(len(documentID))
@@ -689,7 +693,24 @@ func (idx *VectorIndex) preflightVectorPartitionMutationLocked(documentID []byte
 		return ErrVectorIndexPartitionLiveCapacityV1
 	}
 	if vector != nil {
-		if err := idx.ensureVectorPartitionLiveCapacityLocked(1); err != nil {
+		domain, err := idx.partitionLiveRouteLocked(vector)
+		if err != nil {
+			return err
+		}
+		additionalNodes := 1
+		additionalNodeIDBytes := uint64(len(documentID))
+		if owner, ok := idx.partitionLive.owners[string(documentID)]; ok && !owner.deleted && owner.domain == domain {
+			if delta := idx.partitionLive.domains[domain]; delta != nil {
+				delta.mu.RLock()
+				unchanged := delta.currentVectorMatchesLocked(documentID, vector)
+				delta.mu.RUnlock()
+				if unchanged {
+					additionalNodes = 0
+					additionalNodeIDBytes = 0
+				}
+			}
+		}
+		if err := idx.ensureVectorPartitionLiveCapacityLocked(additionalNodes); err != nil {
 			return err
 		}
 		ownerBytes := uint64(0)
@@ -700,11 +721,10 @@ func (idx *VectorIndex) preflightVectorPartitionMutationLocked(documentID []byte
 		if !exists {
 			additionalOwners = 1
 		}
-		if err := idx.ensureVectorPartitionLiveByteCapacityLocked(1, additionalOwners, uint64(len(documentID)), ownerBytes); err != nil {
+		if err := idx.ensureVectorPartitionLiveByteCapacityLocked(additionalNodes, additionalOwners, additionalNodeIDBytes, ownerBytes); err != nil {
 			return err
 		}
-		_, err := idx.partitionLiveRouteLocked(vector)
-		return err
+		return nil
 	}
 	if !exists {
 		return idx.ensureVectorPartitionLiveByteCapacityLocked(0, 1, 0, uint64(len(documentID)))
@@ -721,6 +741,13 @@ func (idx *VectorIndex) preflightVectorPartitionMutationBatchLocked(documentIDs 
 	additionalNodeIDBytes := uint64(0)
 	additionalOwnerIDBytes := uint64(0)
 	newOwners := make(map[string]struct{})
+	type preflightOwner struct {
+		active    bool
+		domain    uint32
+		vector    []float32
+		fromBatch bool
+	}
+	batchOwners := make(map[string]preflightOwner)
 	for i, documentID := range documentIDs {
 		key := string(documentID)
 		if _, exists := idx.partitionLive.owners[key]; !exists {
@@ -733,14 +760,41 @@ func (idx *VectorIndex) preflightVectorPartitionMutationBatchLocked(documentIDs 
 		if owners > vectorIndexPartitionLiveMaxMutatedIDsV1 {
 			return ErrVectorIndexPartitionLiveCapacityV1
 		}
+		owner, seen := batchOwners[key]
+		if !seen {
+			if current, ok := idx.partitionLive.owners[key]; ok {
+				owner.active = !current.deleted
+				owner.domain = current.domain
+			}
+		}
 		if vectors[i] == nil {
+			batchOwners[key] = preflightOwner{fromBatch: true}
 			continue
 		}
-		additionalNodes++
-		additionalNodeIDBytes += uint64(len(documentID))
-		if _, err := idx.partitionLiveRouteLocked(vectors[i]); err != nil {
+		domain, err := idx.partitionLiveRouteLocked(vectors[i])
+		if err != nil {
 			return err
 		}
+		unchanged := false
+		if owner.active && owner.domain == domain {
+			if owner.fromBatch {
+				node := vectorIndexNode{vector: owner.vector}
+				if idx.encoding == VectorIndexEncodingInt8 {
+					node.vector = nil
+					node.quantized, node.quantScale = quantizeVectorIndexInt8(owner.vector)
+				}
+				unchanged = idx.vectorIndexNodeMatchesSourceVectorLocked(&node, vectors[i])
+			} else if delta := idx.partitionLive.domains[domain]; delta != nil {
+				delta.mu.RLock()
+				unchanged = delta.currentVectorMatchesLocked(documentID, vectors[i])
+				delta.mu.RUnlock()
+			}
+		}
+		if !unchanged {
+			additionalNodes++
+			additionalNodeIDBytes += uint64(len(documentID))
+		}
+		batchOwners[key] = preflightOwner{active: true, domain: domain, vector: vectors[i], fromBatch: true}
 	}
 	if err := idx.ensureVectorPartitionLiveCapacityLocked(additionalNodes); err != nil {
 		return err

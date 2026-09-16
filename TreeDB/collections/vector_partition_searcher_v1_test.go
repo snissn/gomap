@@ -542,7 +542,7 @@ func TestVectorPartitionHNSWSearchScratchIncludesOrdinalHandoffResultsV1(t *test
 	prepared := &columnHNSWSearchPackPreparedView{Header: columnHNSWSearchPackHeader{
 		Rows: rows, Dimensions: dimensions, VectorStride: vectorStride, M: degree / 2, EfSearch: efSearch,
 	}}
-	got, err := vectorPartitionSearchScratchBytesV1(VectorPartitionSearchOptionsV1{TopK: topK, EfSearch: efSearch}, prepared, 0, dimensions, 0, prepared.Header)
+	got, err := vectorPartitionSearchScratchBytesV1(VectorPartitionSearchOptionsV1{TopK: topK, EfSearch: efSearch}, prepared, 0, dimensions, 0, nil, prepared.Header)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -583,11 +583,11 @@ func TestVectorPartitionHNSWSearchScratchIncludesAuxiliaryFanoutV3(t *testing.T)
 		t.Fatalf("v3 expansion=%d err=%v want 13", got, err)
 	}
 	opts := VectorPartitionSearchOptionsV1{TopK: 1, EfSearch: 8}
-	v2Bytes, err := vectorPartitionSearchScratchBytesV1(opts, v2, 0, 3, 0, v2.Header)
+	v2Bytes, err := vectorPartitionSearchScratchBytesV1(opts, v2, 0, 3, 0, nil, v2.Header)
 	if err != nil {
 		t.Fatal(err)
 	}
-	v3Bytes, err := vectorPartitionSearchScratchBytesV1(opts, v3, 0, 3, 0, v3.Header)
+	v3Bytes, err := vectorPartitionSearchScratchBytesV1(opts, v3, 0, 3, 0, nil, v3.Header)
 	if err != nil || v3Bytes <= v2Bytes {
 		t.Fatalf("v2=%d v3=%d err=%v", v2Bytes, v3Bytes, err)
 	}
@@ -604,7 +604,7 @@ func TestVectorPartitionExactSearchScratchIncludesCanonicalQueryV1(t *testing.T)
 		dimensions = 29
 		topK       = 3
 	)
-	got, err := vectorPartitionSearchScratchBytesV1(VectorPartitionSearchOptionsV1{TopK: topK}, nil, rows, dimensions, 0, columnHNSWSearchPackHeader{})
+	got, err := vectorPartitionSearchScratchBytesV1(VectorPartitionSearchOptionsV1{TopK: topK}, nil, rows, dimensions, 0, nil, columnHNSWSearchPackHeader{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -624,11 +624,11 @@ func TestVectorPartitionConservativeSearchScratchCoversActualRoutesV1(t *testing
 	prepared := &columnHNSWSearchPackPreparedView{Header: columnHNSWSearchPackHeader{
 		Rows: 17, Dimensions: 4096, VectorStride: 4096, M: 256, EfSearch: 128,
 	}}
-	actualHNSW, err := vectorPartitionSearchScratchBytesV1(opts, prepared, 0, 4096, 0, prepared.Header)
+	actualHNSW, err := vectorPartitionSearchScratchBytesV1(opts, prepared, 0, 4096, 0, nil, prepared.Header)
 	if err != nil {
 		t.Fatal(err)
 	}
-	actualExact, err := vectorPartitionSearchScratchBytesV1(opts, nil, 17, 4096, 0, columnHNSWSearchPackHeader{})
+	actualExact, err := vectorPartitionSearchScratchBytesV1(opts, nil, 17, 4096, 0, nil, columnHNSWSearchPackHeader{})
 	if err != nil {
 		t.Fatal(err)
 	}
