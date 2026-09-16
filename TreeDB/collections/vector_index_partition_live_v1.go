@@ -1305,7 +1305,7 @@ func (c *Collection) validateAndRecordVectorPartitionLiveAuthorityStateV1(manife
 	live := idx.partitionLive
 	if live == nil || live.invalid || !live.bindingDurable ||
 		live.indexDefinitionDigest != manifest.IndexDefinitionDigest || live.source != vectorPartitionLiveSourceV1(manifest) ||
-		live.generation != manifest.Generation || live.coverage != currentGeneration || !vectorPartitionLiveRoutingIdentityMatchesV1(live.packDomains, manifest) ||
+		live.generation != manifest.Generation || live.coverage != currentGeneration ||
 		!idx.sourceDocumentRootsValid || idx.sourceDocumentGeneration != currentGeneration {
 		return ErrVectorIndexPartitionLiveMismatchV1
 	}
