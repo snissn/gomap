@@ -99,10 +99,11 @@ class MatchedPerformanceTest(unittest.TestCase):
 
         runtime = {key: subject.os.environ.get(key, "") for key in ("GOMAXPROCS", "GOGC", "GOMEMLIMIT")}
         plan = {"platform": "platform", "host_resource_identity": {"boot_id": "boot"},
-                "host_memory_bytes": "memory", "treedb_go_runtime": runtime}
+                "host_memory_bytes": 32 << 30, "treedb_go_runtime": runtime}
         with mock.patch.object(subject.platform, "platform", return_value="platform"), \
                 mock.patch.object(subject.native, "host_resource_identity", return_value={"boot_id": "boot"}):
-            with mock.patch.object(subject.native.existing.common, "memory_bytes", return_value="memory"):
+            with mock.patch.object(subject.native.existing.common, "memory_bytes",
+                                   return_value=str(32 << 30)):
                 subject.validate_host_identity(plan)
         with mock.patch.object(subject.platform, "platform", return_value="platform"), \
                 mock.patch.object(subject.native, "host_resource_identity", return_value={"boot_id": "new"}):
@@ -112,9 +113,12 @@ class MatchedPerformanceTest(unittest.TestCase):
         contract = {**plan, "cpu_affinity": [0, 1]}
         with mock.patch.object(subject.platform, "platform", return_value="platform"), \
                 mock.patch.object(subject.native, "host_resource_identity", return_value={"boot_id": "boot"}), \
-                mock.patch.object(subject.native.existing.common, "memory_bytes", return_value="memory"), \
+                mock.patch.object(subject.native.existing.common, "memory_bytes",
+                                  return_value=str(32 << 30)), \
                 mock.patch.object(subject.os, "sched_getaffinity", return_value={0, 1}):
-            self.assertEqual(subject.validate_control_environment(contract)["cpu_affinity"], [0, 1])
+            control_environment = subject.validate_control_environment(contract)
+            self.assertEqual(control_environment["cpu_affinity"], [0, 1])
+            self.assertEqual(control_environment["host_memory_bytes"], 32 << 30)
             contract["cpu_affinity"] = [0]
             with self.assertRaisesRegex(RuntimeError, "different environment"):
                 subject.validate_control_environment(contract)
@@ -131,6 +135,34 @@ class MatchedPerformanceTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "over budget"):
             subject.check_final_tree_resources(run, mock.Mock(is_alive=lambda: False))
         run.check_resources.assert_called_once()
+
+    def test_typed_memory_contract_round_trips_through_matched_performance(self):
+        runtime = {
+            key: subject.os.environ.get(key, "")
+            for key in ("GOMAXPROCS", "GOGC", "GOMEMLIMIT")
+        }
+        host = {
+            "machine_id": "machine", "boot_id": "boot", "page_size_bytes": 4096,
+            "numa_mems": "0", "cgroup_membership": "0::/", "cgroup_limits": {},
+            "cpu_model": "test CPU", "cpu_features": ["avx2"],
+        }
+        files = {"documents": "b" * 64, "queries": "c" * 64, "truth": "d" * 64}
+        with mock.patch.object(subject.platform, "platform", return_value="platform"), \
+                mock.patch.object(subject.native, "host_resource_identity", return_value=host), \
+                mock.patch.object(subject.qdrant_rss.existing, "memory_bytes",
+                                  return_value=str(32 << 30)), \
+                mock.patch.object(subject.os, "sched_getaffinity", return_value={0, 1}):
+            contract = subject.qdrant_rss.comparison_contract("a" * 64, files, [0, 1])
+            self.assertEqual(contract["host_memory_bytes"], 32 << 30)
+            self.assertTrue(subject.native.rss_comparison_contract_valid(contract))
+            environment = subject.validate_control_environment(contract)
+            plan = {
+                "platform": contract["platform"],
+                "host_resource_identity": contract["host_resource_identity"],
+                "host_memory_bytes": environment["host_memory_bytes"],
+                "treedb_go_runtime": runtime,
+            }
+            subject.validate_host_identity(plan)
 
     def test_timed_window_runs_each_worker(self):
         result, samples = subject.timed_window(lambda query: query,
