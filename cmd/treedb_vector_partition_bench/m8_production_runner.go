@@ -2214,22 +2214,44 @@ func (h *m8AttributionHarnessV1) route(ctx context.Context, query []float32, pro
 	if err != nil {
 		return nil, err
 	}
-	partitions := make([]uint32, len(result.Partitions))
-	seen := make(map[uint32]struct{}, len(result.Partitions))
+	if len(result.Partitions) != probes {
+		return nil, fmt.Errorf("M8 attribution router selected %d domains, want %d", len(result.Partitions), probes)
+	}
+	domains := make([]uint32, len(result.Partitions))
 	for i, partition := range result.Partitions {
-		if partition.PartitionID >= uint32(len(h.searchers)) {
-			return nil, errors.New("M8 attribution router returned out-of-range partition")
-		}
-		if _, ok := seen[partition.PartitionID]; ok {
-			return nil, errors.New("M8 attribution router returned duplicate partition")
-		}
-		seen[partition.PartitionID] = struct{}{}
-		partitions[i] = partition.PartitionID
+		domains[i] = partition.PartitionID
 	}
-	if len(partitions) != probes {
-		return nil, fmt.Errorf("M8 attribution router selected %d partitions, want %d", len(partitions), probes)
+	return m8AttributionPacksForDomainsV1(h.assets.manifest, len(h.searchers), domains)
+}
+
+func m8AttributionPacksForDomainsV1(manifest collections.VectorPartitionManifestV1, searcherCount int, domains []uint32) ([]uint32, error) {
+	if manifest.DomainCount == 0 || manifest.DomainCount > manifest.PartitionCount || len(manifest.DomainPacks) != int(manifest.PartitionCount) || searcherCount != int(manifest.PartitionCount) {
+		return nil, errors.New("M8 attribution domain-pack coverage is incomplete")
 	}
-	return partitions, nil
+	packs := make([]uint32, 0, len(domains))
+	seen := make(map[uint32]struct{}, len(domains))
+	for _, domainID := range domains {
+		if domainID >= manifest.DomainCount {
+			return nil, errors.New("M8 attribution router returned out-of-range domain")
+		}
+		if _, ok := seen[domainID]; ok {
+			return nil, errors.New("M8 attribution router returned duplicate domain")
+		}
+		seen[domainID] = struct{}{}
+		start := len(packs)
+		for _, mapping := range manifest.DomainPacks {
+			if mapping.DomainID == domainID {
+				if mapping.PackID >= uint32(searcherCount) {
+					return nil, errors.New("M8 attribution domain mapped to out-of-range pack")
+				}
+				packs = append(packs, mapping.PackID)
+			}
+		}
+		if len(packs) == start {
+			return nil, errors.New("M8 attribution routed domain has no physical packs")
+		}
+	}
+	return packs, nil
 }
 
 // m8ApproximateRouterCoverageV1 converts only the typed bounded-candidate

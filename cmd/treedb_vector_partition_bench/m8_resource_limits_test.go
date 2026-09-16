@@ -2,6 +2,7 @@ package main
 
 import (
 	"math"
+	"slices"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/collections"
@@ -35,6 +36,23 @@ func TestM8ConfiguredProbesUseLogicalDomainCountV1(t *testing.T) {
 	}
 	if err := m8ValidateConfiguredDomainProbesV1([]int{2}, 1); err == nil {
 		t.Fatal("accepted physical-pack probe count above logical domains")
+	}
+}
+
+func TestM8AttributionExpandsLogicalDomainsToPhysicalPacksV1(t *testing.T) {
+	manifest := collections.VectorPartitionManifestV1{
+		PartitionCount: 3,
+		DomainCount:    2,
+		DomainPacks: []collections.VectorPartitionDomainPackV1{
+			{DomainID: 0, PackID: 0}, {DomainID: 0, PackID: 1}, {DomainID: 1, PackID: 2},
+		},
+	}
+	got, err := m8AttributionPacksForDomainsV1(manifest, 3, []uint32{0})
+	if err != nil || !slices.Equal(got, []uint32{0, 1}) {
+		t.Fatalf("domain 0 packs=%v err=%v want [0 1]", got, err)
+	}
+	if _, err := m8AttributionPacksForDomainsV1(manifest, 3, []uint32{0, 0}); err == nil {
+		t.Fatal("accepted duplicate routed domain")
 	}
 }
 
