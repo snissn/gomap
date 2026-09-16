@@ -194,6 +194,8 @@ var vectorPartitionManifestIntegrityFieldNamesV1 = [...]string{
 	"ReadySetDigest",
 }
 
+var vectorPartitionDomainPacksIntegrityFieldV1 = []byte(`,"DomainPacks":`)
+
 var vectorPartitionManifestIntegrityShapeErrV1 = validateVectorPartitionManifestIntegrityShapeV1()
 
 func validateVectorPartitionManifestIntegrityShapeV1() error {
@@ -310,30 +312,24 @@ func (m VectorPartitionManifestV1) validateWithContextV1(ctx context.Context, l 
 			return fmt.Errorf("%w: missing partition %d", ErrVectorPartitionManifestInvalid, i)
 		}
 	}
-	domains := make(map[uint32]struct{}, m.DomainCount)
-	packs := make(map[uint32]struct{}, m.PartitionCount)
 	var lastDomain, lastPack uint32
 	for i, mapping := range m.DomainPacks {
 		if mapping.DomainID >= m.DomainCount || mapping.PackID >= m.PartitionCount ||
-			(i > 0 && (mapping.DomainID < lastDomain || mapping.DomainID == lastDomain && mapping.PackID <= lastPack)) {
+			(i == 0 && mapping.DomainID != 0) ||
+			(i > 0 && (mapping.DomainID < lastDomain || mapping.DomainID > lastDomain+1 || mapping.DomainID == lastDomain && mapping.PackID <= lastPack)) {
 			return fmt.Errorf("%w: noncanonical domain-pack mapping", ErrVectorPartitionManifestInvalid)
 		}
-		if _, duplicate := packs[mapping.PackID]; duplicate {
+		if _, available := seenP[mapping.PackID]; !available {
 			return fmt.Errorf("%w: ambiguous domain-pack mapping", ErrVectorPartitionManifestInvalid)
 		}
-		domains[mapping.DomainID] = struct{}{}
-		packs[mapping.PackID] = struct{}{}
+		delete(seenP, mapping.PackID)
 		lastDomain, lastPack = mapping.DomainID, mapping.PackID
 	}
-	for domainID := uint32(0); domainID < m.DomainCount; domainID++ {
-		if _, ok := domains[domainID]; !ok {
-			return fmt.Errorf("%w: missing domain %d", ErrVectorPartitionManifestInvalid, domainID)
-		}
+	if lastDomain != m.DomainCount-1 || len(seenP) != 0 {
+		return fmt.Errorf("%w: incomplete domain-pack mapping", ErrVectorPartitionManifestInvalid)
 	}
-	for packID := uint32(0); packID < m.PartitionCount; packID++ {
-		if _, ok := packs[packID]; !ok {
-			return fmt.Errorf("%w: missing domain pack %d", ErrVectorPartitionManifestInvalid, packID)
-		}
+	for _, mapping := range m.DomainPacks {
+		seenP[mapping.PackID] = struct{}{}
 	}
 	if err := validateMembershipsWithContextVPM(ctx, m.Memberships, seenP, "membership", m.SourceRowCount, true, l.MaxMembershipsPerVector); err != nil {
 		return err
@@ -363,7 +359,11 @@ func (m VectorPartitionManifestV1) validateWithContextV1(ctx context.Context, l 
 			return fmt.Errorf("%w: duplicate home/overlap membership", ErrVectorPartitionManifestInvalid)
 		}
 	}
-	if err := validateMembershipsWithContextVPM(ctx, m.Representatives, domains, "representative", m.SourceRowCount, false, l.MaxRepresentativesPerPartition); err != nil {
+	clear(seenP)
+	for domainID := range m.DomainCount {
+		seenP[domainID] = struct{}{}
+	}
+	if err := validateMembershipsWithContextVPM(ctx, m.Representatives, seenP, "representative", m.SourceRowCount, false, l.MaxRepresentativesPerPartition); err != nil {
 		return err
 	}
 	lastID := ""
@@ -832,17 +832,29 @@ func (m VectorPartitionManifestV1) integrityDigestWithContextV1(ctx context.Cont
 		{"Generation", m.Generation},
 		{"RouterGeneration", m.RouterGeneration},
 		{"PartitionCount", m.PartitionCount},
-		{"DomainCount", m.DomainCount},
-		{"BalancePolicy", m.BalancePolicy},
 	}
 	for i, field := range scalars {
 		if err := writeField(field.name, field.value, i == 0); err != nil {
 			return "", err
 		}
 	}
-	if err := writeSliceField("DomainPacks", func() error {
-		return writeVectorPartitionJSONSliceWithContextV1(ctx, h, m.DomainPacks, 256)
-	}); err != nil {
+	domainFields, err := json.Marshal(struct {
+		DomainCount   uint32
+		BalancePolicy string
+	}{m.DomainCount, m.BalancePolicy})
+	if err != nil || len(domainFields) < 2 || domainFields[0] != '{' || domainFields[len(domainFields)-1] != '}' {
+		return "", fmt.Errorf("%w: domain field encoding", ErrVectorPartitionManifestInvalid)
+	}
+	if _, err := h.Write([]byte{','}); err != nil {
+		return "", err
+	}
+	if _, err := h.Write(domainFields[1 : len(domainFields)-1]); err != nil {
+		return "", err
+	}
+	if _, err := h.Write(vectorPartitionDomainPacksIntegrityFieldV1); err != nil {
+		return "", err
+	}
+	if err := writeVectorPartitionJSONSliceWithContextV1(ctx, h, m.DomainPacks, 256); err != nil {
 		return "", err
 	}
 	if err := writeSliceField("Placements", func() error {
