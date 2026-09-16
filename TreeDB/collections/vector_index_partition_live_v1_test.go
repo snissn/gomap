@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"sync"
 	"testing"
+	"time"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
@@ -546,10 +548,93 @@ func TestVectorPartitionSearcherExcludesStaleBeforeTopKV1(t *testing.T) {
 	}
 }
 
+func TestVectorIndexPartitionLiveFirstBindingConcurrentMutationV1(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
+	_, database, collection, _, manifest := newVectorPartitionLiveProductionFixtureV1(t)
+	defer database.Close()
+
+	publicationReached := make(chan struct{})
+	continuePublication := make(chan struct{})
+	var publicationOnce sync.Once
+	restoreHook := setVectorPartitionLiveBeforeBindingPublicationHookForTest(func() {
+		publicationOnce.Do(func() { close(publicationReached) })
+		<-continuePublication
+	})
+	defer restoreHook()
+
+	ensureDone := make(chan error, 1)
+	go func() {
+		ensureDone <- collection.EnsureVectorPartitionLiveBindingV1(t.Context(), manifest)
+	}()
+	select {
+	case <-publicationReached:
+	case <-time.After(5 * time.Second):
+		t.Fatal("first binding did not reach durable publication")
+	}
+
+	replacement, err := json.Marshal(map[string]any{
+		"time_us": int64(99), "kind": "vector", "did": "a", "embedding": []float32{0, 1},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mutationDone := make(chan error, 1)
+	go func() {
+		matched, err := collection.Replace([]byte("a"), replacement)
+		if err == nil && !matched {
+			err = errors.New("replacement did not match")
+		}
+		mutationDone <- err
+	}()
+	select {
+	case err := <-mutationDone:
+		if err != nil {
+			close(continuePublication)
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		close(continuePublication)
+		t.Fatal("concurrent mutation deadlocked behind first binding publication")
+	}
+	close(continuePublication)
+	select {
+	case err := <-ensureDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("first binding did not finish after concurrent mutation")
+	}
+
+	wantCoverage, _, err := collection.currentVectorIndexDocumentStateWithWriteDomainLockState(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pin, err := collection.AcquireVectorPartitionLiveSearchPinV1(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pin.Release()
+	results, _, err := pin.SearchDomainV1(t.Context(), 0, []float32{0, 1}, VectorPartitionSearchOptionsV1{TopK: 1, EfSearch: 8, MaxStableIDBytes: 16})
+	if err != nil || len(results) != 1 || results[0].ID != "a" || pin.StatusV1().Coverage != wantCoverage {
+		t.Fatalf("post-state results=%+v status=%+v wantCoverage=%d err=%v", results, pin.StatusV1(), wantCoverage, err)
+	}
+}
+
 func TestVectorIndexPartitionLiveFirstBindingCheckpointCommandWALReplayV1(t *testing.T) {
 	requireVectorPartitionPersistenceV1(t)
 	replayDir := t.TempDir()
 	dir, database, collection, def, manifest := newVectorPartitionLiveProductionFixtureV1(t)
+	if err := collection.EnsureVectorPartitionLiveBindingV1(t.Context(), manifest); err != nil {
+		database.Close()
+		t.Fatal(err)
+	}
+	pin, err := collection.AcquireVectorPartitionLiveSearchPinV1(manifest)
+	if err != nil {
+		database.Close()
+		t.Fatalf("first binding was not durably admitted: %v", err)
+	}
+	pin.Release()
 	if err := database.Checkpoint(); err != nil {
 		database.Close()
 		t.Fatal(err)
@@ -561,16 +646,6 @@ func TestVectorIndexPartitionLiveFirstBindingCheckpointCommandWALReplayV1(t *tes
 			maxBaselineLSN = frame.LSN
 		}
 	}
-	if err := collection.EnsureVectorPartitionLiveBindingV1(t.Context(), manifest); err != nil {
-		database.Close()
-		t.Fatal(err)
-	}
-	pin, err := collection.AcquireVectorPartitionLiveSearchPinV1(manifest)
-	if err != nil {
-		database.Close()
-		t.Fatalf("first binding was not durably admitted: %v", err)
-	}
-	pin.Release()
 
 	replacement, err := json.Marshal(map[string]any{
 		"time_us": int64(99), "kind": "vector", "did": "a", "embedding": []float32{0, 1},
@@ -579,9 +654,9 @@ func TestVectorIndexPartitionLiveFirstBindingCheckpointCommandWALReplayV1(t *tes
 		database.Close()
 		t.Fatal(err)
 	}
-	if _, err := collection.Insert([]byte("a"), replacement); err != nil {
+	if matched, err := collection.Replace([]byte("a"), replacement); err != nil || !matched {
 		database.Close()
-		t.Fatal(err)
+		t.Fatalf("replacement matched=%v err=%v", matched, err)
 	}
 	expectedCoverage, _, err := collection.currentVectorIndexDocumentStateWithWriteDomainLockState(false)
 	if err != nil {
@@ -599,7 +674,6 @@ func TestVectorIndexPartitionLiveFirstBindingCheckpointCommandWALReplayV1(t *tes
 		database.Close()
 		t.Fatalf("immediate results=%+v err=%v", immediate, immediateErr)
 	}
-	replayedBinding := false
 	replayedMutation := false
 	for _, frame := range collectionCommandWALFrames(t, dir) {
 		if frame.LSN <= maxBaselineLSN {
@@ -607,14 +681,18 @@ func TestVectorIndexPartitionLiveFirstBindingCheckpointCommandWALReplayV1(t *tes
 		}
 		writeCollectionCommandWALFrame(t, replayDir, frame.LSN, frame.Kind, frame.PayloadFormat, frame.Payload)
 		if frame.Kind == commitlog.CommandKindCollectionPersistPartitionLive {
-			replayedBinding = true
-		} else {
+			database.Close()
+			t.Fatal("post-checkpoint replay unexpectedly depended on a partition-live binding command")
+		}
+		switch frame.Kind {
+		case commitlog.CommandKindCollectionInsertBatchByID, commitlog.CommandKindCollectionDeleteBatchByID,
+			commitlog.CommandKindCollectionUpdateBatchByID, commitlog.CommandKindCollectionReplaceSourceByID:
 			replayedMutation = true
 		}
 	}
-	if !replayedBinding || !replayedMutation {
+	if !replayedMutation {
 		database.Close()
-		t.Fatalf("replay frames binding=%v mutation=%v", replayedBinding, replayedMutation)
+		t.Fatal("missing post-checkpoint document mutation frame")
 	}
 	if err := database.Close(); err != nil {
 		t.Fatal(err)

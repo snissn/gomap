@@ -136,10 +136,13 @@ source coverage atomically. The mutation is immediately searchable in memory;
 it does not require a vector snapshot per write. The first live binding is
 durably published before overlay mutations are admitted, and ordinary
 checkpoint plus command-WAL replay reconstructs later acknowledged changes on
-reopen. Snapshot restore validates both directions of ownership: every live
-owner names one current delta row, and every current delta row has exactly one
-matching nondeleted owner. Mapping, representative, revision, coverage, or
-ownership mismatch rejects the whole live state.
+reopen. Recovery loads the checkpointed carrier before applying later
+document-only commands; it never rebuilds the carrier from collection rows or
+requires a post-checkpoint binding command. Snapshot restore validates both
+directions of ownership: every live owner names one current delta row, and every
+current delta row has exactly one matching nondeleted owner. Mapping,
+representative, revision, coverage, or ownership mismatch rejects the whole
+live state.
 
 Search applies live tombstones and ownership to base candidate eligibility,
 before native HNSW top-k admission; stale base rows may navigate but cannot be

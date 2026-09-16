@@ -3858,6 +3858,11 @@ func (m *CollectionManager) openCollectionWithCommandWALIntent(name string, comm
 	}
 	collection.rememberCatalog(snap, catalog)
 	collection.noteWriteDomainCatalog(snapshotSystemRoot(snap), catalog)
+	if commandWALIntent != nil {
+		if err := collection.loadVectorPartitionLiveCarriersForReplayV1(catalog); err != nil {
+			return nil, err
+		}
+	}
 	return collection, nil
 }
 

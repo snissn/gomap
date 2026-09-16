@@ -19,6 +19,32 @@ var (
 	ErrVectorIndexPartitionLiveCapacityV1    = errors.New("collections: vector partition live mutation capacity exceeded")
 )
 
+var vectorPartitionLiveBeforeBindingPublicationHookForTest struct {
+	mu sync.Mutex
+	fn func()
+}
+
+func setVectorPartitionLiveBeforeBindingPublicationHookForTest(fn func()) func() {
+	vectorPartitionLiveBeforeBindingPublicationHookForTest.mu.Lock()
+	previous := vectorPartitionLiveBeforeBindingPublicationHookForTest.fn
+	vectorPartitionLiveBeforeBindingPublicationHookForTest.fn = fn
+	vectorPartitionLiveBeforeBindingPublicationHookForTest.mu.Unlock()
+	return func() {
+		vectorPartitionLiveBeforeBindingPublicationHookForTest.mu.Lock()
+		vectorPartitionLiveBeforeBindingPublicationHookForTest.fn = previous
+		vectorPartitionLiveBeforeBindingPublicationHookForTest.mu.Unlock()
+	}
+}
+
+func runVectorPartitionLiveBeforeBindingPublicationHookForTest() {
+	vectorPartitionLiveBeforeBindingPublicationHookForTest.mu.Lock()
+	fn := vectorPartitionLiveBeforeBindingPublicationHookForTest.fn
+	vectorPartitionLiveBeforeBindingPublicationHookForTest.mu.Unlock()
+	if fn != nil {
+		fn()
+	}
+}
+
 type vectorPartitionLiveRepresentativeV1 struct {
 	domain uint32
 	vector []float32
@@ -782,14 +808,40 @@ func (idx *VectorIndex) vectorPartitionLiveSearchPinKeyV1(manifest VectorPartiti
 }
 
 func (c *Collection) validateCurrentVectorPartitionLiveBindingV1(ctx context.Context, manifest VectorPartitionManifestV1) error {
-	currentSource, currentGeneration, currentState, err := c.vectorPartitionLiveCurrentStateV1(ctx, manifest.IndexName)
+	currentGeneration, currentState, err := c.vectorPartitionLiveCurrentDocumentStateV1(ctx)
 	if err != nil {
 		return err
 	}
-	if currentSource != vectorPartitionLiveSourceV1(manifest) {
-		return fmt.Errorf("%w: immutable source identity is not current", ErrVectorIndexPartitionLiveMismatchV1)
-	}
+	// The immutable source tuple remains bound to the manifest. A newer
+	// ColumnGraph source is admissible only when this exact durable carrier
+	// proves coverage of the coherent current collection document state.
 	return c.validateAndRecordVectorPartitionLiveAuthorityStateV1(manifest, currentGeneration, currentState)
+}
+
+func (c *Collection) vectorPartitionLiveCurrentDocumentStateV1(ctx context.Context) (uint64, backenddb.StateToken, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return 0, backenddb.StateToken{}, err
+	}
+	if c == nil || c.db == nil {
+		return 0, backenddb.StateToken{}, ErrVectorIndexPartitionLiveUnavailableV1
+	}
+	snap := c.db.AcquireSnapshot()
+	if snap == nil {
+		return 0, backenddb.StateToken{}, backenddb.ErrClosed
+	}
+	defer func() { _ = snap.Close() }()
+	documentGeneration, err := vectorIndexDocumentGenerationForCollection(snap, c.name)
+	if err != nil {
+		return 0, backenddb.StateToken{}, err
+	}
+	state, ok := snap.StateToken()
+	if !ok {
+		return 0, backenddb.StateToken{}, backenddb.ErrClosed
+	}
+	return documentGeneration, state, ctx.Err()
 }
 
 // loadVectorPartitionLiveIndexForServingV1 restores only a durable registered
@@ -803,6 +855,34 @@ func (c *Collection) loadVectorPartitionLiveIndexForServingV1(def VectorIndexDef
 		return idx, VectorIndexLoadStatus{Loaded: true}, nil
 	}
 	return c.LoadNativeVectorIndexSnapshot(vectorIndexOptionsFromDefinition(def))
+}
+
+// loadVectorPartitionLiveCarriersForReplayV1 restores checkpointed carriers
+// before a later document command is applied. It is deliberately load-only:
+// command replay must never scan collection rows or rebuild a ColumnGraph.
+func (c *Collection) loadVectorPartitionLiveCarriersForReplayV1(catalog *collectionCatalog) error {
+	if c == nil || catalog == nil {
+		return nil
+	}
+	unlockLoad := c.lockNativeVectorIndexLoad()
+	defer unlockLoad()
+	for _, def := range catalog.meta.VectorIndexes {
+		if def.Strategy != VectorIndexStrategyColumnGraph || c.registeredVectorIndex(def.Name) != nil {
+			continue
+		}
+		rootName := collectionVectorIndexRootName(catalog.meta.Name, def.Name)
+		if catalog.rootID(rootName) == 0 && len(catalog.overlayRootIDs(rootName)) == 0 {
+			continue
+		}
+		index, status, err := c.loadVectorPartitionLiveIndexForServingV1(def)
+		if err != nil {
+			return err
+		}
+		if index == nil || !index.isPartitionLiveCarrier() {
+			return fmt.Errorf("%w: partition live carrier %q replay load failed: %s", ErrVectorIndexPartitionLiveUnavailableV1, def.Name, status.ExactFallbackReason)
+		}
+	}
+	return nil
 }
 
 func (c *Collection) vectorPartitionLiveCurrentStateV1(ctx context.Context, index string) (VectorPartitionSourceIdentityV1, uint64, backenddb.StateToken, error) {
@@ -844,8 +924,8 @@ func (c *Collection) ensureVectorPartitionLiveBindingV1(ctx context.Context, man
 	}
 
 	unlockLoad := c.lockNativeVectorIndexLoad()
-	defer unlockLoad()
 	if replay == nil && c.vectorPartitionLiveWarmBindingCurrentV1(manifest) {
+		unlockLoad()
 		return nil
 	}
 
@@ -939,22 +1019,32 @@ func (c *Collection) ensureVectorPartitionLiveBindingV1(ctx context.Context, man
 		idx.mu.RUnlock()
 		return idx, needsPublication, nil
 	}()
+	// Collection mutations acquire admission before loading registered vector
+	// runtimes. Never hold the load mutex while durable publication acquires
+	// admission, or concurrent first binding and mutation can deadlock.
+	unlockLoad()
 	if err != nil {
 		return err
 	}
 	if needsBindingPublication {
-		status, err := idx.saveNativeDeltaSnapshotWithCommandWALIntent(replay)
+		runVectorPartitionLiveBeforeBindingPublicationHookForTest()
+		_, err := idx.saveNativeDeltaSnapshotWithCommandWALIntent(replay)
 		if err != nil {
 			return err
 		}
-		if !status.Loaded {
-			return fmt.Errorf("%w: durable binding publication did not commit", ErrVectorIndexPartitionLiveUnavailableV1)
+		unlockLoad = c.lockNativeVectorIndexLoad()
+		defer unlockLoad()
+		rootID, err := c.currentNativeVectorIndexRootID(manifest.IndexName)
+		if err != nil {
+			return err
 		}
 		idx.mu.Lock()
 		live := idx.partitionLive
-		if live == nil || live.invalid || live.indexDefinitionDigest != manifest.IndexDefinitionDigest || live.source != vectorPartitionLiveSourceV1(manifest) || live.generation != manifest.Generation || live.coverage != idx.sourceDocumentGeneration {
+		dirty := idx.dirtyMeta || (idx.mutationSeq != 0 && (idx.persistedEpoch == 0 || idx.persistedSnapshotDirty))
+		if rootID == 0 || idx.persistedEpoch != rootID || dirty ||
+			live == nil || live.invalid || live.indexDefinitionDigest != manifest.IndexDefinitionDigest || live.source != vectorPartitionLiveSourceV1(manifest) || live.generation != manifest.Generation || live.coverage != idx.sourceDocumentGeneration {
 			idx.mu.Unlock()
-			return ErrVectorIndexPartitionLiveMismatchV1
+			return fmt.Errorf("%w: durable binding publication did not commit", ErrVectorIndexPartitionLiveUnavailableV1)
 		}
 		live.bindingDurable = true
 		idx.mu.Unlock()

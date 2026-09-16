@@ -2065,9 +2065,10 @@ Coverage:
   assigned and searched once. The fixture covers immediate insert/update/
   delete/domain movement, stale-nearest exclusion, warm pack reuse, cold
   post-mutation authority reload, unrelated DB publication, live-identity
-  mismatch, and zero exact-fallback/request-rebuild counters. The focused
-  production gate is
-  `TestVectorPartitionLiveProductionCoordinatorMutationAndColdReloadV1`.
+  mismatch, checkpoint/close/reopen recovery, and zero exact-fallback/request-
+  rebuild counters. The focused production gates are
+  `TestVectorPartitionLiveProductionCoordinatorMutationAndColdReloadV1` and
+  `TestVectorPartitionLiveProductionCheckpointCloseReopenV1`.
 
 The namespace-backed persistence fixtures are platform-gated; Linux CI is the
 authoritative runtime gate. Darwin still compiles them and reports a skip.

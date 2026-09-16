@@ -241,17 +241,17 @@ func TestVectorPartitionLiveProductionCoordinatorMutationAndColdReloadV1(t *test
 		}
 	}
 
-	insertVectorPartitionLiveDocumentV1(t, fixture.collection, "a", []float32{0, 1})
+	replaceVectorPartitionLiveDocumentV1(t, fixture.collection, "a", []float32{0, 1})
 	replaced := search("replace-worse", []float32{1, 0})
 	if len(replaced.Neighbors) != 1 || replaced.Neighbors[0].ID != "0" || replaced.Counters.BaseResults != 0 || replaced.Counters.DeltaResults != 1 {
 		t.Fatalf("stale nearest was admitted response=%+v", replaced)
 	}
-	insertVectorPartitionLiveDocumentV1(t, fixture.collection, "0", []float32{0, 1})
+	replaceVectorPartitionLiveDocumentV1(t, fixture.collection, "0", []float32{0, 1})
 	movedB := search("move-b", []float32{0, 1})
 	if len(movedB.Neighbors) != 1 || movedB.Neighbors[0].ID != "0" {
 		t.Fatalf("move to domain B response=%+v", movedB)
 	}
-	insertVectorPartitionLiveDocumentV1(t, fixture.collection, "0", []float32{1, 0})
+	replaceVectorPartitionLiveDocumentV1(t, fixture.collection, "0", []float32{1, 0})
 	movedA := search("move-a", []float32{1, 0})
 	if len(movedA.Neighbors) != 1 || movedA.Neighbors[0].ID != "0" {
 		t.Fatalf("move back to domain A response=%+v", movedA)
@@ -289,6 +289,83 @@ func TestVectorPartitionLiveProductionCoordinatorMutationAndColdReloadV1(t *test
 	bad.LiveRevision++
 	if _, err := services[bad.TargetGroupID].Search(t.Context(), bad); !errors.Is(err, ErrVectorPartitionShardSearchGenerationMismatch) {
 		t.Fatalf("mismatched live identity err=%v", err)
+	}
+}
+
+func TestVectorPartitionLiveProductionCheckpointCloseReopenV1(t *testing.T) {
+	fixture := newVectorPartitionLiveNativewireFixtureV1(t)
+	t.Cleanup(func() {
+		if fixture.database != nil {
+			_ = fixture.database.Close()
+		}
+	})
+
+	search := func(id string) VectorPartitionCoordinatorResponseV1 {
+		t.Helper()
+		services, sources := newVectorPartitionLiveProductionServicesV1(t, fixture)
+		defer func() {
+			for _, source := range sources {
+				_ = source.Close()
+			}
+		}()
+		coordinator, err := NewVectorPartitionCoordinatorForTopologyV1(
+			vectorPartitionLiveCoordinatorTopologyV1(fixture),
+			CollectionVectorPartitionCoordinatorRouterSourceV1{Collection: fixture.collection},
+			&vectorPartitionLiveProductionDispatcherV1{services: services},
+			VectorPartitionCoordinatorLimitsV1{},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer coordinator.Close()
+		response, err := coordinator.Search(t.Context(), VectorPartitionCoordinatorRequestV1{
+			Version: VectorPartitionCoordinatorVersionV1, RequestID: id, CancellationID: "cancel-" + id,
+			Database: "default", Catalog: "default", Collection: "docs", IndexName: fixture.definition.Name,
+			IndexDefinitionDigest: collections.VectorIndexDefinitionDigestV1(fixture.definition),
+			Query:                 []float32{1, 0}, Metric: VectorPartitionShardSearchMetricCosineV1,
+			RouterMode: collections.VectorPartitionRouterModeExactV1, RouterCandidateBudget: 2, PartitionProbes: 1,
+			Consistency: VectorPartitionShardSearchConsistencySnapshotV1, StatsMode: VectorPartitionShardSearchStatsBasicV1,
+			TopK: 1, EfSearch: 8, RequestBytesLimit: 1 << 20, CandidateBytesLimit: 8 << 20,
+			ResponseBytesLimit: 1 << 20, MergeEntriesLimit: 3,
+		})
+		if err != nil {
+			t.Fatalf("search %s: %v", id, err)
+		}
+		if response.Counters.ExactScanPartitions != 0 || response.Counters.RequestPathFullRebuilds != 0 ||
+			response.Counters.HNSWServedPartitions != response.Counters.SelectedPartitions {
+			t.Fatalf("search %s fallback/rebuild counters=%+v", id, response.Counters)
+		}
+		return response
+	}
+
+	initial := search("reopen-initial")
+	insertVectorPartitionLiveDocumentV1(t, fixture.collection, "0-reopen", []float32{1, 0})
+	mutated := search("reopen-mutated")
+	if len(mutated.Neighbors) != 1 || mutated.Neighbors[0].ID != "0-reopen" || mutated.LiveRevision <= initial.LiveRevision || mutated.LiveCoverage <= initial.LiveCoverage {
+		t.Fatalf("mutated response=%+v initial=%+v", mutated, initial)
+	}
+	if err := fixture.database.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.database.Close(); err != nil {
+		t.Fatal(err)
+	}
+	fixture.database = nil
+
+	database, err := backenddb.Open(backenddb.Options{Dir: fixture.dir, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture.database = database
+	collection, err := collections.NewCollectionManager(database).OpenCollection("docs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture.collection = collection
+	reopened := search("reopened")
+	if len(reopened.Neighbors) != 1 || reopened.Neighbors[0].ID != "0-reopen" ||
+		reopened.LiveRevision != mutated.LiveRevision || reopened.LiveCoverage != mutated.LiveCoverage {
+		t.Fatalf("reopened response=%+v mutated=%+v", reopened, mutated)
 	}
 }
 
@@ -350,7 +427,7 @@ func BenchmarkVectorPartitionLiveProductionCoordinatorV1(b *testing.B) {
 				if i&1 != 0 {
 					vector = []float32{2, 0}
 				}
-				insertVectorPartitionLiveDocumentV1(b, fixture.collection, "0-live", vector)
+				replaceVectorPartitionLiveDocumentV1(b, fixture.collection, "0-live", vector)
 				writes++
 				started := time.Now()
 				response, err := coordinator.Search(b.Context(), request)
@@ -574,5 +651,17 @@ func insertVectorPartitionLiveDocumentV1(t testing.TB, collection *collections.C
 	}
 	if _, err := collection.Insert([]byte(id), document); err != nil {
 		t.Fatalf("insert %s: %v", id, err)
+	}
+}
+
+func replaceVectorPartitionLiveDocumentV1(t testing.TB, collection *collections.Collection, id string, vector []float32) {
+	t.Helper()
+	document, err := json.Marshal(map[string]any{"embedding": vector})
+	if err != nil {
+		t.Fatal(err)
+	}
+	matched, err := collection.Replace([]byte(id), document)
+	if err != nil || !matched {
+		t.Fatalf("replace %s matched=%v: %v", id, matched, err)
 	}
 }
