@@ -833,13 +833,20 @@ func TestVectorIndexPartitionLiveFirstBindingCheckpointCommandWALReplayV1(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	reopenedManifest, authorityToken, err := reopened.ActiveVectorPartitionManifestAndAuthorityTokenWithContextV1(t.Context(), def.Name, manifest.Generation)
+	reopenedManifest, err := reopened.ActiveVectorPartitionManifestForLiveRecoveryWithContextV1(t.Context(), def.Name, manifest.Generation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reopened.EnsureVectorPartitionLiveBindingV1(t.Context(), reopenedManifest); err != nil {
+		t.Fatalf("recover durable binding after document replay: %v", err)
+	}
+	validatedManifest, authorityToken, err := reopened.ActiveVectorPartitionManifestAndAuthorityTokenWithContextV1(t.Context(), def.Name, manifest.Generation)
 	if err != nil {
 		t.Fatal(err)
 	}
 	authorityToken.Release()
-	if err := reopened.EnsureVectorPartitionLiveBindingV1(t.Context(), reopenedManifest); err != nil {
-		t.Fatalf("recover durable binding after document replay: %v", err)
+	if validatedManifest.IntegrityDigest != reopenedManifest.IntegrityDigest {
+		t.Fatal("live recovery authority manifest changed")
 	}
 	expectedCoverage, _, err := reopened.currentVectorIndexDocumentStateWithWriteDomainLockState(false)
 	if err != nil {
