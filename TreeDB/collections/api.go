@@ -4433,7 +4433,7 @@ func (c *Collection) DropVectorIndex(name string) (*CollectionMeta, error) {
 	if coord != nil {
 		coord.hasNativeVectorIndexes.Store(collectionMetaHasNativeVectorIndexes(newMeta))
 	}
-	c.unregisterVectorIndexWithPublicationLocked(name, coord)
+	c.unregisterVectorIndex(name, coord)
 	return newMeta.copy(), nil
 }
 

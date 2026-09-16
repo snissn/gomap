@@ -1424,15 +1424,10 @@ func (c *Collection) UnregisterVectorIndex(name string) {
 	if c == nil {
 		return
 	}
-	coord := c.collectionSchemaCoordinator()
-	if coord != nil {
-		coord.partitionLivePublishMu.Lock()
-		defer coord.partitionLivePublishMu.Unlock()
-	}
-	c.unregisterVectorIndexWithPublicationLocked(name, coord)
+	c.unregisterVectorIndex(name, c.collectionSchemaCoordinator())
 }
 
-func (c *Collection) unregisterVectorIndexWithPublicationLocked(name string, coord *collectionSchemaCoordinator) {
+func (c *Collection) unregisterVectorIndex(name string, coord *collectionSchemaCoordinator) {
 	var removedNative *VectorIndex
 	if c.writeDomain != nil {
 		c.writeDomain.nativeVectorIndexesMu.Lock()
