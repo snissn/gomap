@@ -2077,8 +2077,11 @@ authoritative runtime gate. Darwin still compiles them and reports a skip.
 fixture, not final H-C, paid, or service-capacity evidence. It compares the
 same production topology at one and 1,024 live owners with the identical fixed
 one-update/one-search sequence. The old snapshot-invalidation path is a
-correctness baseline, not a throughput comparison cell. The benchmark checks
-the expected first result and reports recall@1, `ns/op`, `B/op`, `allocs/op`, p99 search latency,
+correctness baseline, not a throughput comparison cell. The benchmark measures
+the expected first result as recall@1 rather than requiring approximate HNSW to
+be exact; lower recall remains visible capacity evidence while execution errors,
+fallbacks, and request-path rebuilds fail the run. It also reports `ns/op`,
+`B/op`, `allocs/op`, p99 search latency,
 achieved writes/searches, base/delta candidate work and result contribution,
 logical domains, selected packs, live owner/delta size, cutovers, observed
 storage bytes, response-reported pack-heap footprint per operation, reachable
