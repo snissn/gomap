@@ -639,12 +639,25 @@ func TestVectorIndexPartitionLiveFirstBindingCheckpointCommandWALReplayV1(t *tes
 		database.Close()
 		t.Fatal(err)
 	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
 	copyTypedStorageCommandWALReplayBenchmarkDirM10C(t, dir, replayDir)
 	maxBaselineLSN := uint64(0)
 	for _, frame := range collectionCommandWALFrames(t, dir) {
 		if frame.LSN > maxBaselineLSN {
 			maxBaselineLSN = frame.LSN
 		}
+	}
+	database = openCollectionCommandWALDB(t, dir)
+	collection, err = NewCollectionManager(database).OpenCollection("docs")
+	if err != nil {
+		database.Close()
+		t.Fatal(err)
+	}
+	if err := collection.EnsureVectorPartitionLiveBindingV1(t.Context(), manifest); err != nil {
+		database.Close()
+		t.Fatalf("reload checkpointed binding: %v", err)
 	}
 
 	replacement, err := json.Marshal(map[string]any{

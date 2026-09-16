@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -91,7 +92,7 @@ func (d *vectorPartitionLiveProductionDispatcherV1) requests(requestID string) [
 	defer d.mu.Unlock()
 	requests := make([]VectorPartitionShardSearchRequestV1, 0, len(d.calls))
 	for _, request := range d.calls {
-		if request.RequestID == requestID {
+		if strings.HasPrefix(request.RequestID, requestID+"/") {
 			requests = append(requests, request)
 		}
 	}

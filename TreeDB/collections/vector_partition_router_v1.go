@@ -982,7 +982,7 @@ func (c *Collection) OpenVectorPartitionRouterV1(index string) (*VectorPartition
 // used by the bounded M6 coordinator. The legacy entry point remains a
 // background-context wrapper.
 func (c *Collection) OpenVectorPartitionRouterWithContextV1(ctx context.Context, index string) (*VectorPartitionRouterV1, VectorPartitionRouterOpenStatusV1, error) {
-	return c.openVectorPartitionRouterWithContextV1(ctx, index, func(ctx context.Context, store *VectorPartitionStoreV1) (VectorPartitionManifestV1, error) {
+	return c.openVectorPartitionRouterWithContextV1(ctx, index, false, func(ctx context.Context, store *VectorPartitionStoreV1) (VectorPartitionManifestV1, error) {
 		return store.OpenActiveWithContext(ctx, c.name, index)
 	})
 }
@@ -995,7 +995,32 @@ func (c *Collection) OpenPreparedVectorPartitionRouterForGenerationWithContextV1
 	if generation == 0 {
 		return nil, VectorPartitionRouterOpenStatusV1{FailureReason: "collections: invalid vector partition router generation"}, errors.New("collections: invalid vector partition router generation")
 	}
-	return c.openVectorPartitionRouterWithContextV1(ctx, index, func(ctx context.Context, store *VectorPartitionStoreV1) (VectorPartitionManifestV1, error) {
+	return c.openVectorPartitionRouterWithContextV1(ctx, index, false, func(ctx context.Context, store *VectorPartitionStoreV1) (VectorPartitionManifestV1, error) {
+		loaded, present, err := store.loadVectorPartitionLifecycleAuthorityWithContextV1(ctx, c.name, index)
+		if err != nil {
+			return VectorPartitionManifestV1{}, err
+		}
+		entry, ok := loaded.state.Generations[generation]
+		if !present || !ok || entry.Manifest == nil || entry.Deleting || entry.Manifest.State != "ready" {
+			return VectorPartitionManifestV1{}, fmt.Errorf("%w: generation %d is not prepared and ready", ErrVectorPartitionManifestInvalid, generation)
+		}
+		return vectorPartitionLifecycleManifestWithContextV1(ctx, loaded.state, generation, false)
+	})
+}
+
+// OpenPreparedVectorPartitionRouterForLiveRecoveryWithContextV1 opens one
+// standalone generation after restoring and validating its durable live
+// carrier. It never rebuilds the source ColumnGraph or changes prepared and
+// replicated generation admission.
+func (c *Collection) OpenPreparedVectorPartitionRouterForLiveRecoveryWithContextV1(ctx context.Context, index string, generation uint64) (*VectorPartitionRouterV1, VectorPartitionRouterOpenStatusV1, error) {
+	manifest, err := c.ActiveVectorPartitionManifestForLiveRecoveryWithContextV1(ctx, index, generation)
+	if err != nil {
+		return nil, VectorPartitionRouterOpenStatusV1{FailureReason: err.Error()}, err
+	}
+	if err := c.EnsureVectorPartitionLiveBindingV1(ctx, manifest); err != nil {
+		return nil, VectorPartitionRouterOpenStatusV1{FailureReason: err.Error()}, err
+	}
+	return c.openVectorPartitionRouterWithContextV1(ctx, index, true, func(ctx context.Context, store *VectorPartitionStoreV1) (VectorPartitionManifestV1, error) {
 		loaded, present, err := store.loadVectorPartitionLifecycleAuthorityWithContextV1(ctx, c.name, index)
 		if err != nil {
 			return VectorPartitionManifestV1{}, err
@@ -1011,6 +1036,7 @@ func (c *Collection) OpenPreparedVectorPartitionRouterForGenerationWithContextV1
 func (c *Collection) openVectorPartitionRouterWithContextV1(
 	ctx context.Context,
 	index string,
+	allowLiveRecovery bool,
 	load func(context.Context, *VectorPartitionStoreV1) (VectorPartitionManifestV1, error),
 ) (*VectorPartitionRouterV1, VectorPartitionRouterOpenStatusV1, error) {
 	var router *VectorPartitionRouterV1
@@ -1048,7 +1074,12 @@ func (c *Collection) openVectorPartitionRouterWithContextV1(
 			return errors.New("collections: vector partition router ready generation has no representative mapping")
 		}
 		if err := c.validateVectorPartitionSourceIdentityV1(manifest); err != nil {
-			return err
+			if !allowLiveRecovery {
+				return err
+			}
+			if liveErr := c.validateCurrentVectorPartitionLiveBindingV1(ctx, manifest); liveErr != nil {
+				return errors.Join(err, liveErr)
+			}
 		}
 		opened, err := c.openVectorPartitionRouterManifestWithContextV1(ctx, manifest)
 		if err != nil {

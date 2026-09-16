@@ -134,11 +134,29 @@ type vectorPartitionCoordinatorLivePinSourceV1 interface {
 	acquireVectorPartitionCoordinatorLivePinV1(context.Context, collections.VectorPartitionManifestV1) (*collections.VectorIndexPartitionLiveSearchPinV1, error)
 }
 
+type vectorPartitionCoordinatorLiveRouterSourceV1 interface {
+	openVectorPartitionCoordinatorLiveRouterV1(context.Context, string, uint64) (VectorPartitionCoordinatorRouterV1, error)
+}
+
 func (s CollectionVectorPartitionCoordinatorRouterSourceV1) OpenVectorPartitionCoordinatorRouterV1(ctx context.Context, index string, generation uint64) (VectorPartitionCoordinatorRouterV1, error) {
 	if s.Collection == nil {
 		return nil, ErrVectorPartitionCoordinatorUnavailable
 	}
 	router, _, err := s.Collection.OpenPreparedVectorPartitionRouterForGenerationWithContextV1(ctx, index, generation)
+	if err != nil {
+		return nil, err
+	}
+	if router == nil {
+		return nil, ErrVectorPartitionCoordinatorUnavailable
+	}
+	return router, nil
+}
+
+func (s CollectionVectorPartitionCoordinatorRouterSourceV1) openVectorPartitionCoordinatorLiveRouterV1(ctx context.Context, index string, generation uint64) (VectorPartitionCoordinatorRouterV1, error) {
+	if s.Collection == nil {
+		return nil, ErrVectorPartitionCoordinatorUnavailable
+	}
+	router, _, err := s.Collection.OpenPreparedVectorPartitionRouterForLiveRecoveryWithContextV1(ctx, index, generation)
 	if err != nil {
 		return nil, err
 	}
@@ -549,7 +567,13 @@ func (c *VectorPartitionCoordinatorV1) acquireRouterSessionV1(ctx context.Contex
 		stats.value.Misses++
 		c.sessionMu.Unlock()
 
-		router, err := c.routerSource.OpenVectorPartitionCoordinatorRouterV1(ctx, index, generation)
+		var router VectorPartitionCoordinatorRouterV1
+		var err error
+		if source, ok := c.routerSource.(vectorPartitionCoordinatorLiveRouterSourceV1); ok && c.replicatedLifecycle == nil {
+			router, err = source.openVectorPartitionCoordinatorLiveRouterV1(ctx, index, generation)
+		} else {
+			router, err = c.routerSource.OpenVectorPartitionCoordinatorRouterV1(ctx, index, generation)
+		}
 		var partitionRows []uint64
 		var domainPackOffsets []int
 		var domainPacks []collections.VectorPartitionDomainPackV1
