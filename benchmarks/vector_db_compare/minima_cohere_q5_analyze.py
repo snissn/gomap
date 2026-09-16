@@ -1395,13 +1395,14 @@ def _legacy_route_valid(name, route, raw_route, contracts):
         return False
     scored = route.get("scored_candidates")
     visited = route.get("visited_candidates")
+    admitted = route.get("admitted_candidates")
     if (type(scored) is not int or type(visited) is not int
             or type(raw_route.get("candidates")) is not int
             or type(raw_route.get("scored")) is not int
             or type(raw_route.get("visited")) is not int
             or scored != raw_route["scored"] or scored != raw_route["candidates"]
             or visited != raw_route["visited"]
-            or not 0 < scored <= LEGACY_BASELINE_ANN_MAX_SCORED):
+            or not max(1, admitted) <= scored <= LEGACY_BASELINE_ANN_MAX_SCORED):
         return False
     if LEGACY_BASELINE_ANN_ROUTES[name] == "complete_finite_ann":
         return visited == scored

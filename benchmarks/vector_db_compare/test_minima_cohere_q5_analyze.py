@@ -708,7 +708,7 @@ class Q5AnalyzeTest(unittest.TestCase):
         artifact = known_legacy_failure_artifact(manifest, Path("/packet/service"), "a" * 64)
 
         accepted = {
-            "all_match": (1, 1),
+            "all_match": (5, 5),
             "over_limit_4097": (4096, 8192),
             "broad_10pct": (2048, 2048),
             "sparse_over_limit": (4096, 4096),
@@ -724,6 +724,7 @@ class Q5AnalyzeTest(unittest.TestCase):
         rejected = {
             "zero scored": ("all_match", 0, 0),
             "negative scored": ("all_match", -1, -1),
+            "scored below admitted": ("all_match", 4, 4),
             "oversized scored": ("all_match", 4097, 4097),
             "finite seed work": ("broad_10pct", 2048, 2049),
             "visited below scored": ("all_match", 2048, 2047),
