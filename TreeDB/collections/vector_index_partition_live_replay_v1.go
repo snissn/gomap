@@ -1,6 +1,7 @@
 package collections
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"sync"
@@ -214,6 +215,14 @@ func (c *Collection) buildVectorPartitionLiveReplayAttemptV1(input columnWritePu
 	if len(specs) == 0 {
 		return nil, nil
 	}
+	state, ok := c.db.StateToken()
+	if !ok {
+		return nil, backenddb.ErrClosed
+	}
+	if state.CommitSeq == ^uint64(0) {
+		return nil, errors.New("collections: document generation exhausted")
+	}
+	targetGeneration := state.CommitSeq + 1
 	attempt := &vectorPartitionLiveReplayAttemptV1{entries: make([]vectorPartitionLiveReplayEntryV1, 0, len(specs))}
 	for _, spec := range specs {
 		candidate, err := newVectorIndex(c, vectorIndexOptionsFromDefinition(spec.definition))
@@ -241,7 +250,7 @@ func (c *Collection) buildVectorPartitionLiveReplayAttemptV1(input columnWritePu
 			}
 		}
 		if err == nil {
-			candidate.recordSourceDocumentStateLocked(input.baseCommitSeq+1, backenddb.StateToken{})
+			candidate.recordSourceDocumentStateLocked(targetGeneration, backenddb.StateToken{})
 		}
 		candidate.mu.Unlock()
 		if err != nil {

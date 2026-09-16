@@ -212,6 +212,57 @@ func TestVectorIndexPartitionLiveReplayPreservesInstalledCarrierMutationV1(t *te
 	}
 }
 
+func TestVectorIndexPartitionLiveReplayUsesPublicationSequenceV1(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
+	_, database, collection, _, manifest := newVectorPartitionLiveProductionFixtureV1(t)
+	defer database.Close()
+	if err := collection.EnsureVectorPartitionLiveBindingV1(t.Context(), manifest); err != nil {
+		t.Fatal(err)
+	}
+
+	snap := database.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("missing base snapshot")
+	}
+	catalog, err := loadCollectionCatalog(snap, collection.meta.Name)
+	if err != nil {
+		_ = snap.Close()
+		t.Fatal(err)
+	}
+	input := columnWritePublishInput{
+		meta: collection.meta, catalog: catalog,
+		baseCommitSeq: snapshotCommitSeq(snap), baseSystemRoot: snapshotSystemRoot(snap),
+		commandWALIntent: &backenddb.CommandWALIntent{}, operation: ColumnPublishOperationDelete,
+		sourceDeleteDocuments: []columnWriteDocument{{ID: []byte("a")}},
+	}
+	_ = snap.Close()
+	specs, err := collection.vectorPartitionLiveReplaySpecsV1(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.SetSync([]byte("unrelated-publication"), []byte("1")); err != nil {
+		t.Fatal(err)
+	}
+	state, ok := database.StateToken()
+	if !ok || state.CommitSeq <= input.baseCommitSeq {
+		t.Fatalf("state=%+v ok=%t base=%d", state, ok, input.baseCommitSeq)
+	}
+
+	attempt, err := collection.buildVectorPartitionLiveReplayAttemptV1(input, specs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer attempt.discard()
+	if len(attempt.entries) != 1 {
+		t.Fatalf("replay entries=%d want=1", len(attempt.entries))
+	}
+	persisted, _ := attempt.entries[0].candidate.persistSnapshot()
+	want := state.CommitSeq + 1
+	if persisted.Meta.SourceDocumentGeneration != want || persisted.Meta.PartitionLive == nil || persisted.Meta.PartitionLive.Coverage != want {
+		t.Fatalf("persisted generation=%d live=%+v want=%d", persisted.Meta.SourceDocumentGeneration, persisted.Meta.PartitionLive, want)
+	}
+}
+
 func TestVectorIndexPartitionLiveSnapshotRecoveryAndMismatchV1(t *testing.T) {
 	idx, err := newVectorIndex(nil, VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4, EfConstruction: 16, EfSearch: 8})
 	if err != nil {

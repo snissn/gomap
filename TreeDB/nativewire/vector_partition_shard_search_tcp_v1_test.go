@@ -85,12 +85,17 @@ func TestVectorPartitionShardSearchTCPBinaryFrameRoundTripV1(t *testing.T) {
 		if len(raw) != wantBytes[i] {
 			t.Fatalf("frame[%d] bytes=%d want=%d", i, len(raw), wantBytes[i])
 		}
+		legacy := append([]byte(nil), raw...)
+		legacy[0] = 1
+		if _, err := decodeVectorPartitionShardSearchTCPFrameBodyV1(legacy); err == nil {
+			t.Fatalf("accepted legacy frame[%d]", i)
+		}
 	}
 	probe, err := appendVectorPartitionShardSearchTCPFrameBodyV1(nil, frames[3])
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantProbe := []byte{1, 4, 0, 0, 0, 0, 1, 0, 0, 0}
+	wantProbe := []byte{2, 4, 0, 0, 0, 0, 1, 0, 0, 0}
 	if !bytes.Equal(probe, wantProbe) {
 		t.Fatalf("probe=%x want=%x", probe, wantProbe)
 	}
@@ -119,7 +124,7 @@ func TestVectorPartitionShardSearchTCPBinaryFrameRejectsMalformedV1(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, malformed := range [][]byte{nil, raw[:len(raw)-1], append(append([]byte(nil), raw...), 0), append([]byte{2}, raw[1:]...), append([]byte{1, 99, 0, 0, 0, 0}, raw[6:]...)} {
+	for _, malformed := range [][]byte{nil, raw[:len(raw)-1], append(append([]byte(nil), raw...), 0), append([]byte{1}, raw[1:]...), append([]byte{2, 99, 0, 0, 0, 0}, raw[6:]...)} {
 		if _, err := decodeVectorPartitionShardSearchTCPFrameBodyV1(malformed); err == nil {
 			t.Fatalf("accepted malformed body %x", malformed)
 		}
@@ -129,7 +134,7 @@ func TestVectorPartitionShardSearchTCPBinaryFrameRejectsMalformedV1(t *testing.T
 	if _, err := decodeVectorPartitionShardSearchTCPFrameBodyV1(badRequestVersion); err == nil {
 		t.Fatal("accepted unsupported request version")
 	}
-	if _, err := decodeVectorPartitionShardSearchTCPFrameBodyV1([]byte{1, 4, 0, 0, 0, 0, 2, 0, 0, 0}); err == nil {
+	if _, err := decodeVectorPartitionShardSearchTCPFrameBodyV1([]byte{2, 4, 0, 0, 0, 0, 2, 0, 0, 0}); err == nil {
 		t.Fatal("accepted unsupported probe version")
 	}
 	response := VectorPartitionShardSearchResponseV1{Version: VectorPartitionShardSearchVersionV1, RequestID: "request"}

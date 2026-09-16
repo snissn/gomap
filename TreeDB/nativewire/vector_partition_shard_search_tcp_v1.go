@@ -22,7 +22,7 @@ import (
 const (
 	vectorPartitionShardSearchTCPMaxFrameBytesV1      uint32 = 64 << 20
 	vectorPartitionShardSearchTCPMinFrameBytesV1      uint64 = 4 << 10
-	vectorPartitionShardSearchTCPFrameVersionV1       byte   = 1
+	vectorPartitionShardSearchTCPFrameVersionV1       byte   = 2
 	vectorPartitionShardSearchTCPFrameRequestV1       byte   = 1
 	vectorPartitionShardSearchTCPFrameResponseV1      byte   = 2
 	vectorPartitionShardSearchTCPFrameErrorV1         byte   = 3
