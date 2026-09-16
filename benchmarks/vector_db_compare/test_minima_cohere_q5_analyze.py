@@ -236,6 +236,43 @@ def known_legacy_failure_artifact(manifest, service, service_sha):
 
 
 class Q5AnalyzeTest(unittest.TestCase):
+    def test_fp32_readiness_requires_nonquantized_build_and_exact_count_type(self):
+        build = {
+            **{field: 1 for field in analyzer.native._COLUMN_GRAPH_BUILD_FIELDS
+               if field != "construction_decisions"},
+            "construction_decisions": None,
+            "quantized_preparation_nanos": 0,
+        }
+        tree = {
+            "construction_calibration_contract":
+                analyzer.native.construction_calibration_contract(32),
+            "readiness": {
+                "graph_action": "build", "successful_ann_queries": 2,
+                "column_graph_build": build,
+                "effective_index": {"m": 16, "ef_construction": 32},
+            },
+            "quality": {
+                "calibration": {"curve": [{"per_query": [1.0]}]},
+                "revalidation": {"curve": [{"per_query": [1.0]}]},
+            },
+        }
+        self.assertTrue(analyzer._fp32_rss_readiness_valid(tree))
+        for label, mutate in {
+            "quantized_stage": lambda row: row["readiness"]["column_graph_build"].update(
+                quantized_preparation_nanos=1,
+            ),
+            "float_count": lambda row: row["readiness"].update(
+                successful_ann_queries=2.0,
+            ),
+            "bool_count": lambda row: row["readiness"].update(
+                successful_ann_queries=True,
+            ),
+        }.items():
+            changed = copy.deepcopy(tree)
+            mutate(changed)
+            with self.subTest(label=label):
+                self.assertFalse(analyzer._fp32_rss_readiness_valid(changed))
+
     def test_packet_serving_configuration_requires_current_physical_limits(self):
         serving = {
             "Publication": {key: 1 for key in (
