@@ -4355,10 +4355,18 @@ func (c *Collection) DropVectorIndex(name string) (*CollectionMeta, error) {
 	unlockAdmission := c.lockVectorIndexSynchronousPublicationAdmission()
 	defer unlockAdmission()
 	unlockMutation := c.lockMutation()
-	defer unlockMutation.Unlock()
 	if err := c.flushBufferedWritesWithVectorAdmissionLocked(); err != nil {
+		unlockMutation.Unlock()
 		return nil, err
 	}
+	coord := c.collectionSchemaCoordinator()
+	if coord != nil && coord.partitionLiveCarrier(name) != nil {
+		unlockMutation.Unlock()
+		coord.partitionLivePublishMu.Lock()
+		defer coord.partitionLivePublishMu.Unlock()
+		unlockMutation = c.lockMutation()
+	}
+	defer unlockMutation.Unlock()
 
 	snap := c.db.AcquireSnapshot()
 	if snap == nil {
@@ -4422,10 +4430,10 @@ func (c *Collection) DropVectorIndex(name string) (*CollectionMeta, error) {
 	nextCatalog := cloneCatalogAfterSchemaChange(catalog, newMeta, clearedRootNames, []uint64{0})
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
-	if coord := c.collectionSchemaCoordinator(); coord != nil {
+	if coord != nil {
 		coord.hasNativeVectorIndexes.Store(collectionMetaHasNativeVectorIndexes(newMeta))
 	}
-	c.UnregisterVectorIndex(name)
+	c.unregisterVectorIndexWithPublicationLocked(name, coord)
 	return newMeta.copy(), nil
 }
 

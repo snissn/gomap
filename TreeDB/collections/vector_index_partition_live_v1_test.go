@@ -521,6 +521,97 @@ func TestVectorIndexPartitionLiveGenerationRebindWaitsForCoordinatorPinV1(t *tes
 	}
 }
 
+func TestVectorIndexPartitionLiveDropWaitsForCoordinatorPinV1(t *testing.T) {
+	database, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	mgr := NewCollectionManager(database)
+	def := VectorIndexDefinition{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4, Strategy: VectorIndexStrategyNativeRuntime}
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs", Options: CollectionOptions{DocumentFormat: DocumentFormatJSON}, VectorIndexes: []VectorIndexDefinition{def}}); err != nil {
+		t.Fatal(err)
+	}
+	collection, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := collection.InsertBatch([][]byte{[]byte("a")}, [][]byte{[]byte(`{"embedding":[1,0]}`)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := collection.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatal(err)
+	}
+	carrier := collection.registeredVectorIndex(def.Name)
+	carrier.mu.RLock()
+	coverage := carrier.sourceDocumentGeneration
+	carrier.mu.RUnlock()
+	manifest := VectorPartitionManifestV1{
+		IndexName: def.Name, IndexDefinitionDigest: VectorIndexDefinitionDigestV1(def), SourceGeneration: coverage,
+		SourceChecksum: 1, SourceSchemaHash: 1, Generation: coverage + 1, DomainCount: 1, PartitionCount: 1,
+		DomainPacks: []VectorPartitionDomainPackV1{{DomainID: 0, PackID: 0}},
+	}
+	carrier.setPartitionLiveCarrier(true)
+	if err := carrier.bindVectorPartitionLiveV1(manifest, coverage, []vectorPartitionLiveRepresentativeV1{{domain: 0, vector: []float32{1, 0}}}); err != nil {
+		t.Fatal(err)
+	}
+	carrier.mu.Lock()
+	carrier.partitionLive.bindingDurable = true
+	carrier.mu.Unlock()
+	coord := collection.collectionSchemaCoordinator()
+	coord.registerPartitionLiveCarrier(carrier)
+	if got := coord.partitionLiveCarrier(def.Name); got != carrier {
+		t.Fatalf("registered carrier=%p want=%p", got, carrier)
+	}
+	pin, err := collection.AcquireVectorPartitionLiveCoordinatorSearchPinV1(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := collection.DropVectorIndex(def.Name)
+		done <- err
+	}()
+	deadline := time.Now().Add(5 * time.Second)
+	for coord.partitionLivePublishMu.TryRLock() {
+		coord.partitionLivePublishMu.RUnlock()
+		select {
+		case err := <-done:
+			pin.Release()
+			t.Fatalf("vector index drop did not wait: %v", err)
+		default:
+		}
+		if time.Now().After(deadline) {
+			pin.Release()
+			t.Fatal("carrier removal did not queue behind coordinator pin")
+		}
+		runtime.Gosched()
+	}
+	if got := collection.registeredVectorIndex(def.Name); got != carrier {
+		pin.Release()
+		t.Fatalf("pinned carrier=%p want=%p", got, carrier)
+	}
+	shardPin, err := collection.AcquireVectorPartitionLiveSearchPinV1(manifest)
+	if err != nil {
+		pin.Release()
+		t.Fatalf("shard pin during carrier removal: %v", err)
+	}
+	shardPin.Release()
+	pin.Release()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("vector index drop remained blocked after coordinator release")
+	}
+	if got := collection.registeredVectorIndex(def.Name); got != nil {
+		t.Fatalf("carrier remained registered: %p", got)
+	}
+}
+
 func TestVectorIndexPartitionLiveRepeatedUpdateCutoverKeepsPinnedViewV1(t *testing.T) {
 	idx, _ := newVectorIndex(nil, VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4, EfConstruction: 16, EfSearch: 8})
 	manifest := VectorPartitionManifestV1{IndexName: "embedding", IndexDefinitionDigest: "definition", SourceGeneration: 3, SourceChecksum: 4, SourceSchemaHash: 5, SourceRowCount: 1, Generation: 7, DomainCount: 1, PartitionCount: 1, DomainPacks: []VectorPartitionDomainPackV1{{DomainID: 0, PackID: 0}}}
