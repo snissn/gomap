@@ -127,15 +127,16 @@ func localHNSWRepairCalibrationQueryAtEFV1Build(ctx context.Context, source *m8P
 		return out, errors.New("noncanonical local HNSW repair calibration truth")
 	}
 	partitions := int(source.manifest.PartitionCount)
+	domains := int(source.manifest.DomainCount)
 	candidates := min(256, int(source.status.Representatives))
 	if candidates < 1 {
 		return out, errors.New("invalid local HNSW repair router")
 	}
-	p2, err := localHNSWAttributionQueryRouteV1(ctx, source, query, candidates, min(2, partitions))
+	p2, err := localHNSWAttributionQueryRouteV1(ctx, source, query, candidates, min(2, domains))
 	if err != nil {
 		return out, err
 	}
-	p16, err := localHNSWAttributionQueryRouteV1(ctx, source, query, candidates, partitions)
+	p16, err := localHNSWAttributionQueryRouteV1(ctx, source, query, candidates, domains)
 	if err != nil || !localHNSWAttributionRoutePrefixV1(p2, p16) || !localHNSWAttributionRoutePermutationV1(p16, partitions) {
 		return out, errors.New("invalid local HNSW repair calibration route")
 	}
@@ -228,7 +229,7 @@ func localHNSWRepairCalibrationMergeV1(results [][]m8CanonicalResultV1, route []
 }
 
 func localHNSWRepairCalibrationQueryV1Valid(query localHNSWRepairCalibrationQueryV1, partitions int) bool {
-	if query.Schema != localHNSWRepairCalibrationSchemaV1 || query.Ordinal < 0 || !localHNSWCalibrationOrdinalV1(query.Ordinal) || !localHNSWAttributionSHA256V1(query.QueryFP32SHA256) || !localHNSWAttributionRoutePermutationV1(query.P16Route, partitions) || len(query.P2Route) != min(2, partitions) || !localHNSWAttributionRoutePrefixV1(query.P2Route, query.P16Route) || len(query.Truth) != 10 || !localHNSWAttributionFiniteRecallV1(query.RoutingRecall) || len(query.OverlaySearches) != partitions || len(query.RepairSearches) != partitions {
+	if query.Schema != localHNSWRepairCalibrationSchemaV1 || query.Ordinal < 0 || !localHNSWCalibrationOrdinalV1(query.Ordinal) || !localHNSWAttributionSHA256V1(query.QueryFP32SHA256) || !localHNSWAttributionRoutePermutationV1(query.P16Route, partitions) || len(query.P2Route) < min(2, partitions) || !localHNSWAttributionRoutePrefixV1(query.P2Route, query.P16Route) || len(query.Truth) != 10 || !localHNSWAttributionFiniteRecallV1(query.RoutingRecall) || len(query.OverlaySearches) != partitions || len(query.RepairSearches) != partitions {
 		return false
 	}
 	for _, value := range []float64{query.Overlay.P2Recall, query.Overlay.P16Recall, query.Repair.P2Recall, query.Repair.P16Recall} {

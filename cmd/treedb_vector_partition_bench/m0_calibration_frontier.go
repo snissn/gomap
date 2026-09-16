@@ -79,6 +79,7 @@ type m0FrontierReportV1 struct {
 type m0FrontierQueryRouteV1 struct {
 	Ordinal          int
 	Route            []uint32
+	Packs            []uint32
 	RoutingMissSlots uint64
 }
 
@@ -174,7 +175,7 @@ func runM0CalibrationFrontierV1(args []string, stdout io.Writer) error {
 	if e = m8BindRetainedM3DescriptorWithPolicyV1(h, fixture, allowOfflineGraphVariant); e != nil {
 		return fmt.Errorf("M0 frontier retained descriptor: %w", e)
 	}
-	if h.manifest.PartitionCount < 4 || h.status.Manifest.State != "ready" {
+	if h.manifest.DomainCount < 4 || h.status.Manifest.State != "ready" {
 		return errors.New("M0 frontier DB status")
 	}
 	if h.status.Representatives == 0 || uint64(candidates) > h.status.Representatives {
@@ -417,7 +418,7 @@ func m0FrontierIntsV1(raw string) ([]int, error) {
 }
 func m0FrontierCellBuildV1(h *m8ProductionMultiGroupAssetsV1, searchers []*collections.VectorPartitionLocalSearcherV1, queries [][]float64, truth [][]m8CanonicalResultV1, routes []m0FrontierQueryRouteV1, probes, ef, candidates, repetition int) (m0FrontierCellV1, error) {
 	var c m0FrontierCellV1
-	if probes > len(searchers) || ef < 10 {
+	if h == nil || probes < 1 || probes > int(h.manifest.DomainCount) || ef < 10 {
 		return c, errors.New("M0 frontier cell")
 	}
 	c.Repetition = repetition
@@ -441,7 +442,10 @@ func m0FrontierCellBuildV1(h *m8ProductionMultiGroupAssetsV1, searchers []*colle
 		}
 		c.RouterSelectedPartitions += uint64(len(routed.Partitions))
 		var found []m8CanonicalResultV1
-		for _, partition := range routeInput.Route {
+		for _, partition := range routeInput.Packs {
+			if int(partition) >= len(searchers) || searchers[partition] == nil {
+				return c, errors.New("M0 routed pack")
+			}
 			s := searchers[partition]
 			got, m, e := s.SearchWithOptionsV1(context.Background(), q, collections.VectorPartitionSearchOptionsV1{TopK: 10, EfSearch: ef})
 			if e != nil {
@@ -520,6 +524,9 @@ func m0FrontierAggregateV1(measurements, canonical []m0FrontierCellV1, queries i
 }
 
 func m0FrontierRoutesV1(h *m8ProductionMultiGroupAssetsV1, ordinals []int, queries [][]float64, truth [][]m8CanonicalResultV1, idMemberships map[string][]uint32, probes, candidates int) ([]m0FrontierQueryRouteV1, error) {
+	if h == nil || probes < 1 || probes > int(h.manifest.DomainCount) {
+		return nil, errors.New("M0 route domains")
+	}
 	out := make([]m0FrontierQueryRouteV1, 0, len(ordinals))
 	for _, ordinal := range ordinals {
 		if ordinal < 0 || ordinal >= len(queries) || ordinal >= len(truth) {
@@ -530,11 +537,17 @@ func m0FrontierRoutesV1(h *m8ProductionMultiGroupAssetsV1, ordinals []int, queri
 		if e != nil || len(r.Partitions) != probes {
 			return nil, errors.New("M0 route")
 		}
-		selected := map[uint32]bool{}
 		route := make([]uint32, len(r.Partitions))
 		for i, x := range r.Partitions {
 			route[i] = x.PartitionID
-			selected[x.PartitionID] = true
+		}
+		packs, e := m8AttributionPacksForDomainsV1(h.manifest, len(h.manifest.Assets), route)
+		if e != nil {
+			return nil, e
+		}
+		selected := make(map[uint32]bool, len(packs))
+		for _, pack := range packs {
+			selected[pack] = true
 		}
 		var miss uint64
 		for _, want := range truth[ordinal] {
@@ -550,7 +563,7 @@ func m0FrontierRoutesV1(h *m8ProductionMultiGroupAssetsV1, ordinals []int, queri
 				miss++
 			}
 		}
-		out = append(out, m0FrontierQueryRouteV1{Ordinal: ordinal, Route: route, RoutingMissSlots: miss})
+		out = append(out, m0FrontierQueryRouteV1{Ordinal: ordinal, Route: route, Packs: packs, RoutingMissSlots: miss})
 	}
 	return out, nil
 }
