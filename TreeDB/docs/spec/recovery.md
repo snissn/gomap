@@ -270,9 +270,16 @@ the same publication that advances the carrier's revision and exact collection
 document-generation coverage. A process loss before ordinary in-memory
 reconciliation or an `Open` finalizer therefore cannot strand durable documents
 behind stale carrier coverage, and a following checkpoint needs no extra
-carrier command. Owner and domain epoch descriptors in the compact metadata
-select one complete durable generation of each record family; stale epoch keys
-are ignored, while missing or mixed active-epoch records fail recovery closed.
+carrier command. The compact V3 metadata records the exact owner-record count
+and a monotonic global domain-epoch high-water. Owner and domain epoch
+descriptors select one complete durable generation of each record family;
+stale epoch keys are ignored, active epochs must not exceed the high-water, and
+missing or mixed active-epoch records fail recovery closed. Restored V1 inline
+state marks every owner and domain dirty so its first compact V3 publication
+materializes the complete overlay rather than only the first subsequently
+touched records. The unsafe intermediate compact V2 format fails closed under
+the pre-alpha format policy because it cannot prove retired-domain epoch
+high-water.
 
 Legacy raw redo-journal replay is skipped only when durability mode is
 `DurabilityWALOffRelaxed`.

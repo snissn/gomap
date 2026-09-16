@@ -35,6 +35,32 @@ var vectorPartitionLiveBeforeBindingTransitionHookForTest struct {
 	fn func()
 }
 
+var vectorPartitionLiveInsertDocumentBeforePublicationHookForTest struct {
+	mu sync.Mutex
+	fn func()
+}
+
+func setVectorPartitionLiveInsertDocumentBeforePublicationHookForTest(fn func()) func() {
+	vectorPartitionLiveInsertDocumentBeforePublicationHookForTest.mu.Lock()
+	previous := vectorPartitionLiveInsertDocumentBeforePublicationHookForTest.fn
+	vectorPartitionLiveInsertDocumentBeforePublicationHookForTest.fn = fn
+	vectorPartitionLiveInsertDocumentBeforePublicationHookForTest.mu.Unlock()
+	return func() {
+		vectorPartitionLiveInsertDocumentBeforePublicationHookForTest.mu.Lock()
+		vectorPartitionLiveInsertDocumentBeforePublicationHookForTest.fn = previous
+		vectorPartitionLiveInsertDocumentBeforePublicationHookForTest.mu.Unlock()
+	}
+}
+
+func runVectorPartitionLiveInsertDocumentBeforePublicationHookForTest() {
+	vectorPartitionLiveInsertDocumentBeforePublicationHookForTest.mu.Lock()
+	fn := vectorPartitionLiveInsertDocumentBeforePublicationHookForTest.fn
+	vectorPartitionLiveInsertDocumentBeforePublicationHookForTest.mu.Unlock()
+	if fn != nil {
+		fn()
+	}
+}
+
 func setVectorPartitionLiveBeforeBindingTransitionHookForTest(fn func()) func() {
 	vectorPartitionLiveBeforeBindingTransitionHookForTest.mu.Lock()
 	previous := vectorPartitionLiveBeforeBindingTransitionHookForTest.fn
@@ -272,7 +298,9 @@ type vectorIndexPartitionLiveStateV1 struct {
 	representatives       []vectorPartitionLiveRepresentativeV1
 	domains               map[uint32]*VectorIndex
 	owners                map[string]vectorPartitionLiveOwnerV1
+	ownerCount            int
 	ownerEpoch            uint64
+	domainEpochHighWater  uint64
 	domainEpochs          map[uint32]uint64
 	dirtyOwners           map[string]struct{}
 	dirtyDomains          map[uint32]struct{}
@@ -301,7 +329,9 @@ type vectorIndexPartitionLivePersistV1 struct {
 	Cutovers              uint64                                         `json:"cutovers"`
 	PackDomains           []uint32                                       `json:"pack_domains"`
 	Representatives       []vectorIndexPartitionLivePersistRepV1         `json:"representatives"`
+	OwnerCount            uint64                                         `json:"owner_count,omitempty"`
 	OwnerEpoch            uint64                                         `json:"owner_epoch,omitempty"`
+	DomainEpochHighWater  uint64                                         `json:"domain_epoch_high_water,omitempty"`
 	DomainEpochs          []vectorIndexPartitionLivePersistDomainEpochV2 `json:"domain_epochs,omitempty"`
 	Owners                []vectorIndexPartitionLivePersistOwnerV1       `json:"owners,omitempty"`
 	Domains               []vectorIndexPartitionLivePersistDomainV1      `json:"domains,omitempty"`
@@ -451,6 +481,7 @@ func (idx *VectorIndex) bindVectorPartitionLiveV1(manifest VectorPartitionManife
 	defer idx.mu.Unlock()
 	source := vectorPartitionLiveSourceV1(manifest)
 	ownerEpoch := uint64(1)
+	domainEpochHighWater := uint64(0)
 	domainEpochs := make(map[uint32]uint64)
 	if live := idx.partitionLive; live != nil {
 		if live.indexDefinitionDigest == manifest.IndexDefinitionDigest && live.source == source && live.generation == manifest.Generation {
@@ -488,9 +519,7 @@ func (idx *VectorIndex) bindVectorPartitionLiveV1(manifest VectorPartitionManife
 			return ErrVectorIndexPartitionLiveCapacityV1
 		}
 		ownerEpoch = live.ownerEpoch + 1
-		for domain, epoch := range live.domainEpochs {
-			domainEpochs[domain] = epoch
-		}
+		domainEpochHighWater = live.domainEpochHighWater
 	}
 	if idx.collection != nil && (!idx.sourceDocumentRootsValid || idx.sourceDocumentGeneration != coverage) {
 		return fmt.Errorf("%w: live coverage=%d current=%d", ErrVectorIndexPartitionLiveMismatchV1, coverage, idx.sourceDocumentGeneration)
@@ -502,7 +531,7 @@ func (idx *VectorIndex) bindVectorPartitionLiveV1(manifest VectorPartitionManife
 		indexDefinitionDigest: manifest.IndexDefinitionDigest, source: source, generation: manifest.Generation,
 		coverage: coverage, packDomains: packDomains, representatives: clonedReps,
 		domains: make(map[uint32]*VectorIndex), owners: make(map[string]vectorPartitionLiveOwnerV1),
-		ownerEpoch: ownerEpoch, domainEpochs: domainEpochs, dirtyOwners: make(map[string]struct{}),
+		ownerEpoch: ownerEpoch, domainEpochHighWater: domainEpochHighWater, domainEpochs: domainEpochs, dirtyOwners: make(map[string]struct{}),
 		dirtyDomains: make(map[uint32]struct{}), fullDomains: make(map[uint32]struct{}),
 		nodeCapacity: vectorIndexPartitionLiveMaxMutatedIDsV1, byteCapacity: vectorIndexPartitionLiveMaxBytesV1, bindingDurable: idx.collection == nil,
 	}
@@ -584,17 +613,7 @@ func (live *vectorIndexPartitionLiveStateV1) ownerCountV1() int {
 	if live == nil {
 		return 0
 	}
-	if live.ownerSource != nil {
-		live.ownerSource.mu.RLock()
-		defer live.ownerSource.mu.RUnlock()
-	}
-	count := len(live.owners)
-	for id := range live.stagedOwners {
-		if _, exists := live.owners[id]; !exists {
-			count++
-		}
-	}
-	return count
+	return live.ownerCount
 }
 
 func (live *vectorIndexPartitionLiveStateV1) setOwnerV1(id string, owner vectorPartitionLiveOwnerV1) {
@@ -647,11 +666,12 @@ func (idx *VectorIndex) ensurePartitionLiveDomainWritableLocked(domain uint32) (
 		if err != nil {
 			return nil, err
 		}
-		live.domains[domain] = delta
-		live.domainEpochs[domain]++
-		if live.domainEpochs[domain] == 0 {
+		if live.domainEpochHighWater == ^uint64(0) {
 			return nil, ErrVectorIndexPartitionLiveCapacityV1
 		}
+		live.domainEpochHighWater++
+		live.domains[domain] = delta
+		live.domainEpochs[domain] = live.domainEpochHighWater
 		if live.fullDomains == nil {
 			live.fullDomains = make(map[uint32]struct{})
 		}
@@ -760,6 +780,7 @@ func (idx *VectorIndex) reconcileVectorPartitionMutationLocked(documentID []byte
 		}
 	}
 	if !existed {
+		live.ownerCount++
 		live.ownerIDBytes += uint64(len(documentID))
 	}
 	live.revision++
@@ -966,6 +987,9 @@ func (idx *VectorIndex) cutoverVectorPartitionLiveLocked() error {
 		domains = append(domains, domain)
 	}
 	sort.Slice(domains, func(i, j int) bool { return domains[i] < domains[j] })
+	if uint64(len(domains)) > ^uint64(0)-live.domainEpochHighWater {
+		return ErrVectorIndexPartitionLiveCapacityV1
+	}
 	for _, domain := range domains {
 		delta := fresh[domain]
 		delta.mu.Lock()
@@ -975,20 +999,12 @@ func (idx *VectorIndex) cutoverVectorPartitionLiveLocked() error {
 		live.cutoverPublications++
 	}
 	live.domains = fresh
-	if live.domainEpochs == nil {
-		live.domainEpochs = make(map[uint32]uint64)
-	}
-	if live.dirtyDomains == nil {
-		live.dirtyDomains = make(map[uint32]struct{})
-	}
-	if live.fullDomains == nil {
-		live.fullDomains = make(map[uint32]struct{})
-	}
+	live.domainEpochs = make(map[uint32]uint64, len(domains))
+	live.dirtyDomains = make(map[uint32]struct{}, len(domains))
+	live.fullDomains = make(map[uint32]struct{}, len(domains))
 	for _, domain := range domains {
-		live.domainEpochs[domain]++
-		if live.domainEpochs[domain] == 0 {
-			return ErrVectorIndexPartitionLiveCapacityV1
-		}
+		live.domainEpochHighWater++
+		live.domainEpochs[domain] = live.domainEpochHighWater
 		live.dirtyDomains[domain] = struct{}{}
 		live.fullDomains[domain] = struct{}{}
 	}
@@ -1215,11 +1231,13 @@ func (idx *VectorIndex) partitionLiveMetaPersistLockedV2() *vectorIndexPartition
 		return nil
 	}
 	persisted := &vectorIndexPartitionLivePersistV1{
-		Version: 2, IndexDefinitionDigest: live.indexDefinitionDigest, Source: live.source,
+		Version: 3, IndexDefinitionDigest: live.indexDefinitionDigest, Source: live.source,
 		Generation: live.generation, Revision: live.revision, Coverage: live.coverage, Cutovers: live.cutovers,
-		OwnerEpoch:      live.ownerEpoch,
-		PackDomains:     append([]uint32(nil), live.packDomains...),
-		Representatives: make([]vectorIndexPartitionLivePersistRepV1, len(live.representatives)),
+		OwnerCount:           uint64(live.ownerCount),
+		OwnerEpoch:           live.ownerEpoch,
+		DomainEpochHighWater: live.domainEpochHighWater,
+		PackDomains:          append([]uint32(nil), live.packDomains...),
+		Representatives:      make([]vectorIndexPartitionLivePersistRepV1, len(live.representatives)),
 	}
 	for i, rep := range live.representatives {
 		persisted.Representatives[i] = vectorIndexPartitionLivePersistRepV1{Domain: rep.domain, Vector: append([]float32(nil), rep.vector...)}
@@ -1269,7 +1287,8 @@ func (idx *VectorIndex) acknowledgePartitionLivePersistenceLockedV2() {
 		if delta == nil {
 			continue
 		}
-		delta.recordPersistedSnapshot(live.domainEpochs[domain], delta.Stats().BytesDisk, delta.nativeMutationSequence())
+		bytesDisk, mutationSeq := delta.nativePersistedBytesAndMutationSequence()
+		delta.recordPersistedSnapshot(live.domainEpochs[domain], bytesDisk, mutationSeq)
 	}
 	clear(live.dirtyOwners)
 	clear(live.dirtyDomains)
@@ -1321,8 +1340,8 @@ func (idx *VectorIndex) clonePartitionLiveReplayStateV2(before *VectorIndex, bef
 		packDomains:     append([]uint32(nil), old.packDomains...),
 		representatives: make([]vectorPartitionLiveRepresentativeV1, len(old.representatives)),
 		domains:         make(map[uint32]*VectorIndex, len(old.domains)), owners: old.owners,
-		ownerEpoch: old.ownerEpoch, domainEpochs: make(map[uint32]uint64, len(old.domainEpochs)),
-		dirtyOwners: make(map[string]struct{}), dirtyDomains: make(map[uint32]struct{}), fullDomains: make(map[uint32]struct{}),
+		ownerCount: old.ownerCount, ownerEpoch: old.ownerEpoch, domainEpochHighWater: old.domainEpochHighWater, domainEpochs: make(map[uint32]uint64, len(old.domainEpochs)),
+		dirtyOwners: make(map[string]struct{}, len(old.dirtyOwners)), dirtyDomains: make(map[uint32]struct{}, len(old.dirtyDomains)), fullDomains: make(map[uint32]struct{}, len(old.fullDomains)),
 		stagedOwners: make(map[string]vectorPartitionLiveOwnerV1), sharedDomains: make(map[uint32]struct{}, len(old.domains)), ownerSource: before,
 	}
 	for i, rep := range old.representatives {
@@ -1334,6 +1353,15 @@ func (idx *VectorIndex) clonePartitionLiveReplayStateV2(before *VectorIndex, bef
 	}
 	for domain, epoch := range old.domainEpochs {
 		live.domainEpochs[domain] = epoch
+	}
+	for id := range old.dirtyOwners {
+		live.dirtyOwners[id] = struct{}{}
+	}
+	for domain := range old.dirtyDomains {
+		live.dirtyDomains[domain] = struct{}{}
+	}
+	for domain := range old.fullDomains {
+		live.fullDomains[domain] = struct{}{}
 	}
 	before.mu.RUnlock()
 
@@ -1369,11 +1397,12 @@ func (idx *VectorIndex) restorePartitionLiveSnapshotV2(persisted *vectorIndexPar
 		owners = persisted.Owners
 		domains = persisted.Domains
 	}
-	if (persisted.Version != 1 && persisted.Version != 2) || persisted.IndexDefinitionDigest == "" || persisted.Generation == 0 || persisted.Source.Generation == 0 || persisted.Coverage != sourceCoverage || len(persisted.PackDomains) == 0 || len(persisted.Representatives) == 0 || len(owners) > vectorIndexPartitionLiveMaxMutatedIDsV1 {
+	if (persisted.Version != 1 && persisted.Version != 3) || persisted.IndexDefinitionDigest == "" || persisted.Generation == 0 || persisted.Source.Generation == 0 || persisted.Coverage != sourceCoverage || len(persisted.PackDomains) == 0 || len(persisted.Representatives) == 0 || len(owners) > vectorIndexPartitionLiveMaxMutatedIDsV1 {
 		return nil, "invalid_partition_live_meta"
 	}
-	if persisted.Version == 2 {
-		if persisted.OwnerEpoch == 0 || len(persisted.Owners) != 0 || len(persisted.Domains) != 0 {
+	domainEpochHighWater := persisted.DomainEpochHighWater
+	if persisted.Version == 3 {
+		if persisted.OwnerEpoch == 0 || persisted.OwnerCount != uint64(len(owners)) || len(persisted.Owners) != 0 || len(persisted.Domains) != 0 {
 			return nil, "invalid_partition_live_meta"
 		}
 		descriptors := make(map[uint32]uint64, len(persisted.DomainEpochs))
@@ -1386,12 +1415,27 @@ func (idx *VectorIndex) restorePartitionLiveSnapshotV2(persisted *vectorIndexPar
 			}
 			descriptors[descriptor.Domain] = descriptor.Epoch
 		}
+		for _, epoch := range descriptors {
+			if epoch > domainEpochHighWater {
+				return nil, "invalid_partition_live_domain"
+			}
+		}
 		if len(descriptors) != len(domains) {
 			return nil, "invalid_partition_live_domain"
 		}
 		for _, domain := range domains {
 			if descriptors[domain.Domain] != domain.Epoch || domain.Epoch == 0 {
 				return nil, "invalid_partition_live_domain"
+			}
+		}
+	} else {
+		for _, domain := range domains {
+			epoch := domain.Epoch
+			if epoch == 0 {
+				epoch = 1
+			}
+			if epoch > domainEpochHighWater {
+				domainEpochHighWater = epoch
 			}
 		}
 	}
@@ -1409,7 +1453,7 @@ func (idx *VectorIndex) restorePartitionLiveSnapshotV2(persisted *vectorIndexPar
 	if ownerEpoch == 0 {
 		ownerEpoch = 1
 	}
-	live := &vectorIndexPartitionLiveStateV1{indexDefinitionDigest: persisted.IndexDefinitionDigest, source: persisted.Source, generation: persisted.Generation, revision: persisted.Revision, coverage: persisted.Coverage, cutovers: persisted.Cutovers, nodeCapacity: vectorIndexPartitionLiveMaxMutatedIDsV1, byteCapacity: vectorIndexPartitionLiveMaxBytesV1, bindingDurable: true, packDomains: append([]uint32(nil), persisted.PackDomains...), representatives: make([]vectorPartitionLiveRepresentativeV1, len(persisted.Representatives)), domains: make(map[uint32]*VectorIndex), owners: make(map[string]vectorPartitionLiveOwnerV1, len(owners)), ownerEpoch: ownerEpoch, domainEpochs: make(map[uint32]uint64), dirtyOwners: make(map[string]struct{}), dirtyDomains: make(map[uint32]struct{}), fullDomains: make(map[uint32]struct{})}
+	live := &vectorIndexPartitionLiveStateV1{indexDefinitionDigest: persisted.IndexDefinitionDigest, source: persisted.Source, generation: persisted.Generation, revision: persisted.Revision, coverage: persisted.Coverage, cutovers: persisted.Cutovers, nodeCapacity: vectorIndexPartitionLiveMaxMutatedIDsV1, byteCapacity: vectorIndexPartitionLiveMaxBytesV1, bindingDurable: true, packDomains: append([]uint32(nil), persisted.PackDomains...), representatives: make([]vectorPartitionLiveRepresentativeV1, len(persisted.Representatives)), domains: make(map[uint32]*VectorIndex), owners: make(map[string]vectorPartitionLiveOwnerV1, len(owners)), ownerCount: len(owners), ownerEpoch: ownerEpoch, domainEpochHighWater: domainEpochHighWater, domainEpochs: make(map[uint32]uint64), dirtyOwners: make(map[string]struct{}), dirtyDomains: make(map[uint32]struct{}), fullDomains: make(map[uint32]struct{})}
 	representedDomains := make(map[uint32]struct{}, len(persisted.Representatives))
 	for i, rep := range persisted.Representatives {
 		if len(rep.Vector) != idx.dimensions {
@@ -1511,6 +1555,24 @@ func (idx *VectorIndex) restorePartitionLiveSnapshotV2(persisted *vectorIndexPar
 	}
 	if activeRows != activeOwners {
 		return nil, "invalid_partition_live_owner_node"
+	}
+	if persisted.Version == 1 {
+		for id := range live.owners {
+			live.dirtyOwners[id] = struct{}{}
+		}
+		for domain, delta := range live.domains {
+			live.dirtyDomains[domain] = struct{}{}
+			live.fullDomains[domain] = struct{}{}
+			delta.mu.Lock()
+			delta.dirtyMeta = true
+			for nodeID := range delta.nodes {
+				delta.markVectorNodeDirtyLocked(nodeID)
+			}
+			for id := range delta.currentNode {
+				delta.markVectorDocDirtyLocked([]byte(id))
+			}
+			delta.mu.Unlock()
+		}
 	}
 	return live, ""
 }

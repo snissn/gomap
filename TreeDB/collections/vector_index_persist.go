@@ -1224,7 +1224,7 @@ func buildVectorIndexNativeSnapshotTable(snapshot vectorIndexPersistSnapshot) (m
 			return nil, 0, err
 		}
 	}
-	if live := snapshot.Meta.PartitionLive; live != nil && live.Version == 2 {
+	if live := snapshot.Meta.PartitionLive; live != nil && live.Version == 3 {
 		for _, owner := range snapshot.PartitionLiveOwners {
 			if err := add(vectorIndexPartitionLiveOwnerKeyV2(live.OwnerEpoch, owner.ID), owner); err != nil {
 				resetCollectionRunTable(table)
@@ -1495,7 +1495,7 @@ func readVectorIndexNativeSnapshot(snap *backenddb.Snapshot, catalog *collection
 		seenMeta bool
 	}
 	activeDomainEpochs := make(map[uint32]uint64)
-	if live := snapshot.Meta.PartitionLive; live != nil && live.Version == 2 {
+	if live := snapshot.Meta.PartitionLive; live != nil && live.Version == 3 {
 		for _, domain := range live.DomainEpochs {
 			activeDomainEpochs[domain.Domain] = domain.Epoch
 		}
@@ -1524,7 +1524,7 @@ func readVectorIndexNativeSnapshot(snap *backenddb.Snapshot, catalog *collection
 		case bytes.HasPrefix(key, []byte(vectorIndexNativeKeyPrefixLiveOwner)):
 			live := snapshot.Meta.PartitionLive
 			rest := key[len(vectorIndexNativeKeyPrefixLiveOwner):]
-			if live == nil || live.Version != 2 || len(rest) <= vectorIndexNativeKeyOrdinalWidth || rest[vectorIndexNativeKeyOrdinalWidth] != '/' {
+			if live == nil || live.Version != 3 || len(rest) <= vectorIndexNativeKeyOrdinalWidth || rest[vectorIndexNativeKeyOrdinalWidth] != '/' {
 				return snapshot, bytesDisk, vectorIndexFallbackInvalidGraphRootKey, nil
 			}
 			epoch, err := strconv.ParseUint(string(rest[:vectorIndexNativeKeyOrdinalWidth]), 10, 64)
@@ -1542,7 +1542,7 @@ func readVectorIndexNativeSnapshot(snap *backenddb.Snapshot, catalog *collection
 			live := snapshot.Meta.PartitionLive
 			rest := key[len(vectorIndexNativeKeyPrefixLiveDomain):]
 			segment := vectorIndexNativeKeyOrdinalWidth
-			if live == nil || live.Version != 2 || len(rest) <= segment*2+2 || rest[segment] != '/' || rest[segment*2+1] != '/' {
+			if live == nil || live.Version != 3 || len(rest) <= segment*2+2 || rest[segment] != '/' || rest[segment*2+1] != '/' {
 				return snapshot, bytesDisk, vectorIndexFallbackInvalidGraphRootKey, nil
 			}
 			domain64, domainErr := strconv.ParseUint(string(rest[:segment]), 10, 32)
@@ -1582,7 +1582,7 @@ func readVectorIndexNativeSnapshot(snap *backenddb.Snapshot, catalog *collection
 	if reason := finalizeVectorIndexNativeSnapshotRecordsV2(&snapshot, nodes, maxNodeID); reason != "" {
 		return snapshot, bytesDisk, reason, nil
 	}
-	if live := snapshot.Meta.PartitionLive; live != nil && live.Version == 2 {
+	if live := snapshot.Meta.PartitionLive; live != nil && live.Version == 3 {
 		sort.Slice(snapshot.PartitionLiveOwners, func(i, j int) bool { return snapshot.PartitionLiveOwners[i].ID < snapshot.PartitionLiveOwners[j].ID })
 		for _, descriptor := range live.DomainEpochs {
 			state := liveDomains[descriptor.Domain]

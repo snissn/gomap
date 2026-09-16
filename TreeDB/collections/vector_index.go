@@ -2424,6 +2424,9 @@ func (idx *VectorIndex) InsertDocument(documentID []byte) error {
 	if len(documentID) == 0 {
 		return errors.New("collections: document id cannot be empty")
 	}
+	runVectorPartitionLiveInsertDocumentBeforePublicationHookForTest()
+	unlockPublication := idx.collection.lockNativeVectorIndexPublicationRead()
+	defer unlockPublication()
 	document, err := idx.collection.Get(documentID)
 	if err != nil {
 		return err
@@ -6206,6 +6209,15 @@ func (idx *VectorIndex) nativeMutationSequence() uint64 {
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
 	return idx.mutationSeq
+}
+
+func (idx *VectorIndex) nativePersistedBytesAndMutationSequence() (int64, uint64) {
+	if idx == nil {
+		return 0, 0
+	}
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+	return idx.persistedBytesDisk, idx.mutationSeq
 }
 
 func (idx *VectorIndex) markLiveANNFullRebuild() {

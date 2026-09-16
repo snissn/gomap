@@ -2053,8 +2053,10 @@ Coverage:
   top-k admission, atomic pinned revisions, repeated-update capacity cutover,
   byte-cap reclaim for single and batch replacements, true unreclaimable-cap
   rejection, pinned-view retirement, publication-barrier immutable-generation
-  rebind, snapshot corruption, first-binding durability, checkpoint/close/
-  reopen, and command-WAL replay.
+  rebind, monotonic retired-domain epochs across native-root reopen, missing-
+  tombstone rejection, V1-to-V3 complete materialization, public-mutation/
+  rollback exclusion, snapshot corruption, first-binding durability,
+  checkpoint/close/reopen, and command-WAL replay.
   The focused `TestVectorIndexPartitionLive*` family is the canonical local
   lifecycle gate.
 - The V2-focused structural and concurrency gates
@@ -2124,11 +2126,12 @@ done
 publication microbenchmark for #4720. Both cells replace one stable ID in one
 logical domain; only the pre-existing owner count differs (one versus 1,024).
 It reports the root-delta record count and bytes in addition to `ns/op`, `B/op`,
-and `allocs/op`, and rolls the speculative transaction back after every timed
-iteration so all operations start from the identical durable base. The expected
-result is dirty-neighborhood scaling: the 1,024-owner cell must not serialize or
-allocate the full owner table or domain graph. It is enabling local evidence,
-not service capacity.
+and `allocs/op`. The timed path includes persistence acknowledgement through
+the maintained O(1) byte/mutation state, then rolls the speculative transaction
+back so all operations start from the identical durable base. The expected
+result is dirty-neighborhood scaling: the 1,024-owner cell must not serialize,
+allocate, or rescan the full owner table or domain graph. It is enabling local
+evidence, not service capacity.
 
 ```sh
 GOWORK=off go test ./TreeDB/collections -run '^$' -bench '^BenchmarkVectorIndexPartitionLiveIncrementalPublicationV2$' -benchmem -benchtime=20x -count=3

@@ -139,9 +139,13 @@ the touched logical domains, then includes that root delta in the same ordered
 document/column/locator/system-root publication before acknowledgement or
 advancement of the applied command frontier. This does not rebuild or rewrite
 the immutable partition base, serialize untouched logical domains, or scan
-collection rows. Owner and per-domain epochs make cutover replacement atomic;
-older epoch records may remain physically present but are unreachable from the
-current compact metadata. The first live binding
+collection rows. An exact owner-record count makes missing tombstones fail
+closed. Owner epochs and a monotonic global domain-epoch high-water make
+cutover replacement atomic; older epoch records may remain physically present
+but are unreachable from the current compact metadata, and a retired domain
+never reuses one of their epochs after rebind or reopen. V1 inline state
+receives one complete V3 materialization before incremental publication resumes.
+The first live binding
 is durably published before overlay mutations are admitted, and ordinary
 checkpoint plus command-WAL replay reconstructs later acknowledged changes on
 reopen. Recovery loads the checkpointed carrier before applying later
@@ -175,7 +179,10 @@ failure invalidates the carrier fail-closed; prepublication failure restores
 the exact prior graph and can retry deterministically. Publishing a newer exact
 immutable manifest takes the same collection publication barrier, installs an
 empty overlay, and retires the old generation without invalidating its already
-captured pins.
+captured pins. Direct public mutation of a registered live carrier takes that
+same barrier, so it cannot modify a shared domain while a grouped-root attempt
+may still roll back. Persistence acknowledgement uses already-maintained byte
+and mutation-sequence state; it does not rescan the domain graph.
 
 Preflight includes the bounded live-delta candidate and scratch requirements
 before coordinator budgets are distributed. Search time includes base and
