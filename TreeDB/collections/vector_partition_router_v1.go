@@ -749,21 +749,44 @@ func checkedVectorPartitionRouterRepresentativeBoundV1(sourceRows uint64, partit
 }
 
 func checkedVectorPartitionRouterScalarWorkV1(manifest VectorPartitionManifestV1, cfg internalrouter.RouterConfigV1, dimensions int) (uint64, bool) {
-	if dimensions < 1 || manifest.PartitionCount == 0 {
+	if dimensions < 1 || manifest.PartitionCount == 0 || manifest.DomainCount == 0 || len(manifest.DomainPacks) != int(manifest.PartitionCount) || len(manifest.Memberships) != int(manifest.SourceRowCount) {
 		return 0, false
 	}
-	counts := make([]uint64, manifest.PartitionCount)
-	for _, membership := range manifest.Memberships {
-		if membership.PartitionID >= manifest.PartitionCount {
+	packDomains := make([]uint32, manifest.PartitionCount)
+	mappedPacks := make([]bool, manifest.PartitionCount)
+	for _, mapping := range manifest.DomainPacks {
+		if mapping.DomainID >= manifest.DomainCount || mapping.PackID >= manifest.PartitionCount || mappedPacks[mapping.PackID] {
 			return 0, false
 		}
-		counts[membership.PartitionID]++
+		packDomains[mapping.PackID] = mapping.DomainID
+		mappedPacks[mapping.PackID] = true
 	}
-	for _, membership := range manifest.OverlapMemberships {
-		if membership.PartitionID >= manifest.PartitionCount {
+	counts := make([]uint64, manifest.DomainCount)
+	for ordinal, membership := range manifest.Memberships {
+		if membership.VectorOrdinal != uint64(ordinal) || membership.PartitionID >= manifest.PartitionCount || !mappedPacks[membership.PartitionID] {
 			return 0, false
 		}
-		counts[membership.PartitionID]++
+		counts[packDomains[membership.PartitionID]]++
+	}
+	seenOverlapOrdinal := make([]uint64, manifest.DomainCount)
+	for _, membership := range manifest.OverlapMemberships {
+		if membership.VectorOrdinal >= uint64(len(manifest.Memberships)) || membership.PartitionID >= manifest.PartitionCount || !mappedPacks[membership.PartitionID] {
+			return 0, false
+		}
+		domain := packDomains[membership.PartitionID]
+		home := manifest.Memberships[membership.VectorOrdinal]
+		if home.VectorOrdinal != membership.VectorOrdinal || home.PartitionID >= manifest.PartitionCount || !mappedPacks[home.PartitionID] {
+			return 0, false
+		}
+		marker := membership.VectorOrdinal + 1
+		if marker == 0 {
+			return 0, false
+		}
+		if domain == packDomains[home.PartitionID] || seenOverlapOrdinal[domain] == marker {
+			continue
+		}
+		seenOverlapOrdinal[domain] = marker
+		counts[domain]++
 	}
 	var pairs uint64
 	for _, count := range counts {

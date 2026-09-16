@@ -70,6 +70,33 @@ func TestVectorPartitionRouterDomainsCombineRequiredPacksV1(t *testing.T) {
 	}
 }
 
+func TestVectorPartitionRouterScalarWorkPreflightUsesLogicalDomainsV1(t *testing.T) {
+	cfg := internalrouter.DefaultRouterConfigV1()
+	cfg.BranchFactor = 2
+	cfg.MaxIterations = 3
+	cfg.RepresentativesPerPartition = 2
+	manifest := VectorPartitionManifestV1{
+		SourceRowCount: 2,
+		PartitionCount: 2,
+		DomainCount:    1,
+		DomainPacks: []VectorPartitionDomainPackV1{
+			{DomainID: 0, PackID: 0}, {DomainID: 0, PackID: 1},
+		},
+		Memberships: []VectorPartitionMembershipV1{
+			{VectorOrdinal: 0, PartitionID: 0}, {VectorOrdinal: 1, PartitionID: 1},
+		},
+	}
+	if work, ok := checkedVectorPartitionRouterScalarWorkV1(manifest, cfg, 4); !ok || work != 96 {
+		t.Fatalf("domain scalar work=%d ok=%v want=96", work, ok)
+	}
+	manifest.SourceRowCount = 1
+	manifest.Memberships = manifest.Memberships[:1]
+	manifest.OverlapMemberships = []VectorPartitionMembershipV1{{VectorOrdinal: 0, PartitionID: 1}}
+	if work, ok := checkedVectorPartitionRouterScalarWorkV1(manifest, cfg, 4); !ok || work != 24 {
+		t.Fatalf("deduplicated domain scalar work=%d ok=%v want=24", work, ok)
+	}
+}
+
 func TestVectorPartitionRouterActiveLoadCancellationReleasesBarrierV1(t *testing.T) {
 	requireVectorPartitionPersistenceV1(t)
 	database := openCollectionCommandWALDB(t, t.TempDir())
