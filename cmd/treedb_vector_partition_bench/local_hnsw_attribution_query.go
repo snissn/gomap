@@ -637,7 +637,7 @@ func localHNSWAttributionQueryEvidenceValidateV1(evidence localHNSWAttributionQu
 	if err != nil {
 		return err
 	}
-	if evidence.Schema != localHNSWAttributionQuerySchemaV1 || evidence.QueryOrdinal < 0 || !localHNSWAttributionSHA256V1(evidence.QueryFP32SHA256) || len(evidence.Partitions) == 0 || len(partitionRows) != len(evidence.Partitions) || !slices.Equal(evidence.PartitionRows, partitionRows) || len(evidence.LowRoute) != min(2, len(evidence.Partitions)) || !localHNSWAttributionRoutePrefixV1(evidence.LowRoute, evidence.HighRoute) || !localHNSWAttributionRoutePermutationV1(evidence.HighRoute, len(evidence.Partitions)) {
+	if evidence.Schema != localHNSWAttributionQuerySchemaV1 || evidence.QueryOrdinal < 0 || !localHNSWAttributionSHA256V1(evidence.QueryFP32SHA256) || len(evidence.Partitions) == 0 || len(partitionRows) != len(evidence.Partitions) || !slices.Equal(evidence.PartitionRows, partitionRows) || len(evidence.LowRoute) < min(2, len(evidence.Partitions)) || !localHNSWAttributionRoutePrefixV1(evidence.LowRoute, evidence.HighRoute) || !localHNSWAttributionRoutePermutationV1(evidence.HighRoute, len(evidence.Partitions)) {
 		return errors.New("invalid local HNSW persisted query evidence")
 	}
 	truth, err := localHNSWAttributionCanonicalQueryResultBitsV1(evidence.GlobalTruth, true)
