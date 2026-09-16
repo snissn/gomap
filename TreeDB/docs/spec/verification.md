@@ -111,7 +111,11 @@ a cumulative I/O quota.
 floor-39 split-allocation regression and requires pack and live reservations to
 produce 40 then 41 from one authority. The repeated db and caching allocator
 tests require unique, monotonic, in-range reservations under concurrency and
-retain exhaustion behavior. `TestLeafGenerationPackSharedAuthorityInterleavesLiveChildAndReopens`
+retain exhaustion behavior. `TestCommandWALLeafOwnerSharesPackSequenceAuthority`
+and `TestCommandWALLeafOwnerStablePrepareSharesSequenceAuthority` require the
+production replay-inline owner to share the same authority with ordinary and
+stable pack preparation, including the existing CommandWAL RID namespace.
+`TestLeafGenerationPackSharedAuthorityInterleavesLiveChildAndReopens`
 pauses at deterministic copy completion, creates a live lane-255 child, then
 checks distinct IDs, unchanged live-child identity, successful no-replace
 promotion, value readability, checkpoint, and clean reopen. The unsupported

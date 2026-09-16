@@ -423,7 +423,13 @@ func (db *DB) leafGenerationPackLocked(ctx context.Context, opts LeafGenerationP
 
 func (db *DB) leafGenerationPackAllocators(leafStartSeq uint32, nextRID uint64, reserveRIDs func(int) (uint64, error)) (LeafPageLogSequenceReserver, *rewriteRIDAllocator, error) {
 	var seqAlloc LeafPageLogSequenceReserver = newLeafLogSeqAllocator(leafStartSeq)
-	ridAlloc := newRewriteRIDAllocator(nextRID, reserveRIDs)
+	sharedRIDReserve := reserveRIDs
+	if db != nil && sharedRIDReserve == nil {
+		if reserver := db.currentValueLogRIDReserver(); reserver != nil {
+			sharedRIDReserve = reserver.ReserveRIDs
+		}
+	}
+	ridAlloc := newRewriteRIDAllocator(nextRID, sharedRIDReserve)
 	if db == nil {
 		return seqAlloc, ridAlloc, nil
 	}
@@ -434,7 +440,7 @@ func (db *DB) leafGenerationPackAllocators(leafStartSeq uint32, nextRID uint64, 
 		seqAlloc = reserver
 	}
 	if group, ok := owner.(*leafPageLogLaneGroup); ok && group != nil {
-		if reserveRIDs == nil && group.ridAlloc != nil {
+		if sharedRIDReserve == nil && group.ridAlloc != nil {
 			ridAlloc = group.ridAlloc
 		}
 	}

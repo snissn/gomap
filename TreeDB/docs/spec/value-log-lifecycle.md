@@ -236,15 +236,18 @@ cached allocator.
 
 Every producer of a persistent `leaf_vlog/value-l255-*.log` child uses one
 installed-owner sequence authority. Internal lane groups reserve from their
-shared leaf-log allocator; cached groups and lanes reserve from
-`leafLogAppendSeq`. A reservation atomically selects
+shared leaf-log allocator; CommandWAL's replay-inline owner reserves from its
+rewrite-writer allocator; cached groups and lanes reserve from `leafLogAppendSeq`.
+A reservation atomically selects
 `max(live authority, discovered filesystem/set floor)+1`. The scan is only a
 lower bound, and every staged pack rotation reserves again from the live
-authority. Failed or abandoned work may leave a gap; reserved sequences are
-never reused. If a concurrent installed owner cannot expose this capability,
-ordinary pack and stable-pack preparation fail before creating either a
-`.leaf-pack-copy-*` or `.leaf-pack-stable-prepare-*` namespace. This does not
-fence foreground writers and does not weaken exact no-replace promotion.
+authority. CommandWAL pack records also reserve from the installed value-log
+appender's existing RID authority. Failed or abandoned work may leave a gap;
+reserved sequences and RIDs are never reused. If a concurrent installed owner
+cannot expose this capability, ordinary pack and stable-pack preparation fail
+before creating either a `.leaf-pack-copy-*` or
+`.leaf-pack-stable-prepare-*` namespace. This does not fence foreground writers
+and does not weaken exact no-replace promotion.
 
 Leaf-generation pack uses a two-phase copy/publish state machine:
 

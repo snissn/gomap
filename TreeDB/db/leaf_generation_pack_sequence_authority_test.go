@@ -57,6 +57,104 @@ func TestLeafGenerationPackAllocatorsUseInstalledSequenceAuthority(t *testing.T)
 	}
 }
 
+func TestCommandWALLeafOwnerSharesPackSequenceAuthority(t *testing.T) {
+	database, err := Open(Options{
+		Dir:                        t.TempDir(),
+		CommandWAL:                 true,
+		DisableBackgroundPrune:     true,
+		IndexOuterLeavesInValueLog: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	appender, ok := database.currentValueLogAppender().(*replayInlineAppender)
+	if !ok || appender == nil {
+		t.Fatalf("command-WAL value-log appender=%T, want *replayInlineAppender", database.currentValueLogAppender())
+	}
+	pack, packRIDs, err := database.leafGenerationPackAllocators(39, 1, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	packSeq, err := pack.ReserveLeafPageLogSequence(39)
+	if err != nil {
+		t.Fatal(err)
+	}
+	appender.mu.Lock()
+	liveSeq, err := appender.writer.nextLeafSeq()
+	appender.mu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if packSeq != 40 || liveSeq != 41 {
+		t.Fatalf("command-WAL pack/live sequences=(%d,%d), want (40,41)", packSeq, liveSeq)
+	}
+	packRID, err := packRIDs.Next()
+	if err != nil {
+		t.Fatal(err)
+	}
+	liveRID, err := appender.ReserveRIDs(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if packRID != 1 || liveRID != 2 {
+		t.Fatalf("command-WAL pack/live RIDs=(%d,%d), want (1,2)", packRID, liveRID)
+	}
+}
+
+func TestCommandWALLeafOwnerStablePrepareSharesSequenceAuthority(t *testing.T) {
+	requireLeafGenerationPackPromotionSupport(t)
+	database, err := Open(Options{
+		Dir:                        t.TempDir(),
+		CommandWAL:                 true,
+		DisableBackgroundPrune:     true,
+		IndexOuterLeavesInValueLog: true,
+		LeafPrefixCompression:      true,
+		IndexColumnarLeaves:        true,
+		IndexPackedValuePtr:        true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	closure, err := database.PrepareLeafGenerationPackStableClosure(context.Background(), [][]byte{
+		buildLeafGenerationPackStablePage(t, 'c'),
+	})
+	if err != nil {
+		t.Fatalf("PrepareLeafGenerationPackStableClosure: %v", err)
+	}
+	if closure == nil {
+		t.Fatal("PrepareLeafGenerationPackStableClosure returned nil closure")
+	}
+	defer closure.Abandon()
+	segments := closure.Segments()
+	if len(segments) != 1 {
+		t.Fatalf("stable packed segments=%v, want one", segments)
+	}
+	pointers := closure.Pointers()
+	if len(pointers) != 1 {
+		t.Fatalf("stable packed pointers=%v, want one", pointers)
+	}
+
+	livePtr, err := database.leafPageLog.AppendLeafPage(buildLeafGenerationPackStablePage(t, 'l'))
+	if err != nil {
+		t.Fatalf("command-WAL live AppendLeafPage: %v", err)
+	}
+	if livePtr.ValuePtr().FileID == segments[0].FileID {
+		t.Fatalf("stable pack and command-WAL live owner both selected file ID %d", segments[0].FileID)
+	}
+	if err := database.leafPageLog.Flush(); err != nil {
+		t.Fatalf("flush command-WAL live leaf log: %v", err)
+	}
+	packRID := readLeafLogRIDForPtr(t, database.dir, pointers[0])
+	liveRID := readLeafLogRIDForPtr(t, database.dir, livePtr)
+	if packRID == liveRID {
+		t.Fatalf("stable pack and command-WAL live owner both selected RID %d", packRID)
+	}
+}
+
 func TestLeafLogSequenceAllocatorConcurrentReservations(t *testing.T) {
 	const (
 		floor   = uint32(39)
