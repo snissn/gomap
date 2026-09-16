@@ -1368,48 +1368,91 @@ func TestVectorIndexPartitionLiveForegroundDurableInstallsOnceV1(t *testing.T) {
 
 func TestVectorIndexPartitionLiveAlternatesCollectionManagerDomainsV1(t *testing.T) {
 	requireVectorPartitionPersistenceV1(t)
-	_, database, collectionA, _, manifest := newVectorPartitionLiveProductionFixtureV1(t)
-	defer database.Close()
-	if err := collectionA.EnsureVectorPartitionLiveBindingV1(t.Context(), manifest); err != nil {
-		t.Fatal(err)
-	}
-	collectionB, err := NewCollectionManager(database).OpenCollection("docs")
-	if err != nil {
-		t.Fatal(err)
-	}
-	replace := func(collection *Collection, sequence int64, vector []float32) {
-		t.Helper()
-		replacement, err := json.Marshal(map[string]any{
-			"time_us": sequence, "kind": "vector", "did": "a", "embedding": vector,
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if matched, err := collection.Replace([]byte("a"), replacement); err != nil || !matched {
-			t.Fatalf("replacement %d matched=%v err=%v", sequence, matched, err)
-		}
-	}
-	assertRevision := func(collection *Collection, wantRevision uint64, query []float32) {
-		t.Helper()
-		pin, err := collection.AcquireVectorPartitionLiveSearchPinV1(manifest)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer pin.Release()
-		results, _, searchErr := pin.SearchDomainV1(t.Context(), 0, query, VectorPartitionSearchOptionsV1{TopK: 1, EfSearch: 8, MaxStableIDBytes: 16})
-		if searchErr != nil || len(results) != 1 || results[0].ID != "a" || pin.StatusV1().Revision != wantRevision {
-			t.Fatalf("revision=%d results=%+v status=%+v err=%v", wantRevision, results, pin.StatusV1(), searchErr)
-		}
-	}
+	for _, tc := range []struct {
+		name         string
+		withOrdinary bool
+	}{
+		{name: "partition_live_only"},
+		{name: "partition_live_and_native", withOrdinary: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ordinaryDef := VectorIndexDefinition{
+				Name: "embedding_native", Field: "embedding", Metric: VectorMetricCosine,
+				Dimensions: 2, M: 4, EfConstruction: 16, EfSearch: 8, Strategy: VectorIndexStrategyNativeRuntime,
+			}
+			var extra []VectorIndexDefinition
+			if tc.withOrdinary {
+				extra = []VectorIndexDefinition{ordinaryDef}
+			}
+			_, database, collectionA, _, manifest := newVectorPartitionLiveProductionFixtureWithIndexesV1(t, extra)
+			defer database.Close()
+			var ordinaryA *VectorIndex
+			if tc.withOrdinary {
+				ordinaryDef, _ = findVectorIndex(collectionA.Meta().VectorIndexes, ordinaryDef.Name)
+				if _, err := collectionA.RebuildVectorIndex(ordinaryDef.Name); err != nil {
+					t.Fatal(err)
+				}
+				ordinaryA = collectionA.registeredVectorIndex(ordinaryDef.Name)
+				if ordinaryA == nil {
+					t.Fatal("manager A ordinary native index is not loaded")
+				}
+			}
+			if err := collectionA.EnsureVectorPartitionLiveBindingV1(t.Context(), manifest); err != nil {
+				t.Fatal(err)
+			}
+			collectionB, err := NewCollectionManager(database).OpenCollection("docs")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var ordinaryB *VectorIndex
+			if tc.withOrdinary {
+				var loadStatus VectorIndexLoadStatus
+				ordinaryB, loadStatus, err = collectionB.LoadNativeVectorIndexSnapshot(vectorIndexOptionsFromDefinition(ordinaryDef))
+				if err != nil || ordinaryB == nil || !loadStatus.Loaded {
+					t.Fatalf("manager B ordinary native load=%v status=%+v err=%v", ordinaryB != nil, loadStatus, err)
+				}
+			}
+			replace := func(collection *Collection, sequence int64, vector []float32) {
+				t.Helper()
+				replacement, err := json.Marshal(map[string]any{
+					"time_us": sequence, "kind": "vector", "did": "a", "embedding": vector,
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if matched, err := collection.Replace([]byte("a"), replacement); err != nil || !matched {
+					t.Fatalf("replacement %d matched=%v err=%v", sequence, matched, err)
+				}
+			}
+			assertRevision := func(collection *Collection, wantRevision uint64, query []float32) {
+				t.Helper()
+				pin, err := collection.AcquireVectorPartitionLiveSearchPinV1(manifest)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer pin.Release()
+				results, _, searchErr := pin.SearchDomainV1(t.Context(), 0, query, VectorPartitionSearchOptionsV1{TopK: 1, EfSearch: 8, MaxStableIDBytes: 16})
+				if searchErr != nil || len(results) != 1 || results[0].ID != "a" || pin.StatusV1().Revision != wantRevision {
+					t.Fatalf("revision=%d results=%+v status=%+v err=%v", wantRevision, results, pin.StatusV1(), searchErr)
+				}
+			}
 
-	replace(collectionB, 1, []float32{0.2, 1})
-	assertRevision(collectionB, 1, []float32{0.2, 1})
-	replace(collectionA, 2, []float32{1, 0.2})
-	assertRevision(collectionA, 2, []float32{1, 0.2})
-	replace(collectionB, 3, []float32{0.3, 1})
-	assertRevision(collectionB, 3, []float32{0.3, 1})
-	collectionA.invalidateOtherVectorIndexDocumentCoverage()
-	assertRevision(collectionB, 3, []float32{0.3, 1})
+			replace(collectionB, 1, []float32{0.2, 1})
+			assertRevision(collectionB, 1, []float32{0.2, 1})
+			replace(collectionA, 2, []float32{1, 0.2})
+			if ordinaryA != nil && ordinaryA.hasValidSourceDocumentRoots() {
+				t.Fatal("manager A stale ordinary native index was not invalidated before rebuild")
+			}
+			assertRevision(collectionA, 2, []float32{1, 0.2})
+			replace(collectionB, 3, []float32{0.3, 1})
+			if ordinaryB != nil && ordinaryB.hasValidSourceDocumentRoots() {
+				t.Fatal("manager B stale ordinary native index was not invalidated before rebuild")
+			}
+			assertRevision(collectionB, 3, []float32{0.3, 1})
+			collectionA.invalidateOtherVectorIndexDocumentCoverage()
+			assertRevision(collectionB, 3, []float32{0.3, 1})
+		})
+	}
 }
 
 func openVectorPartitionLiveDurableDBV1(t testing.TB, dir string) *backenddb.DB {
@@ -1468,13 +1511,17 @@ func TestVectorPartitionLiveReplayMutationCoalescingV1(t *testing.T) {
 }
 
 func newVectorPartitionLiveProductionFixtureV1(t *testing.T, openOptions ...backenddb.Options) (string, *backenddb.DB, *Collection, VectorIndexDefinition, VectorPartitionManifestV1) {
+	return newVectorPartitionLiveProductionFixtureWithIndexesV1(t, nil, openOptions...)
+}
+
+func newVectorPartitionLiveProductionFixtureWithIndexesV1(t *testing.T, extraVectorIndexes []VectorIndexDefinition, openOptions ...backenddb.Options) (string, *backenddb.DB, *Collection, VectorIndexDefinition, VectorPartitionManifestV1) {
 	t.Helper()
 	rows := []columnGraphRebuildInputRowV2A{
 		{id: "a", vector: []float32{1, 0}},
 		{id: "b", vector: []float32{.8, .2}},
 		{id: "c", vector: []float32{0, 1}},
 	}
-	dir, database, collection, def := openColumnGraphTypedColumnVectorTestCollection1782(t, 2, 2, rows, openOptions...)
+	dir, database, collection, def := openColumnGraphTypedColumnVectorTestCollectionWithIndexes1782(t, 2, 2, rows, extraVectorIndexes, openOptions...)
 	if _, err := collection.RebuildVectorIndex(def.Name); err != nil {
 		database.Close()
 		t.Fatal(err)

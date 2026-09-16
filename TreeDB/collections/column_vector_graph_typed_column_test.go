@@ -809,9 +809,13 @@ func TestSearchVectorIndexColumnGraphL2RemainsFailClosed1782(t *testing.T) {
 }
 
 func openColumnGraphTypedColumnVectorTestCollection1782(tb testing.TB, dims, m int, rows []columnGraphRebuildInputRowV2A, openOptions ...backenddb.Options) (string, *backenddb.DB, *Collection, VectorIndexDefinition) {
+	return openColumnGraphTypedColumnVectorTestCollectionWithIndexes1782(tb, dims, m, rows, nil, openOptions...)
+}
+
+func openColumnGraphTypedColumnVectorTestCollectionWithIndexes1782(tb testing.TB, dims, m int, rows []columnGraphRebuildInputRowV2A, extraVectorIndexes []VectorIndexDefinition, openOptions ...backenddb.Options) (string, *backenddb.DB, *Collection, VectorIndexDefinition) {
 	tb.Helper()
 	if len(openOptions) > 1 {
-		tb.Fatal("openColumnGraphTypedColumnVectorTestCollection1782 accepts at most one options value")
+		tb.Fatal("openColumnGraphTypedColumnVectorTestCollectionWithIndexes1782 accepts at most one options value")
 	}
 	dir := tb.TempDir()
 	format := backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}
@@ -841,7 +845,7 @@ func openColumnGraphTypedColumnVectorTestCollection1782(tb testing.TB, dims, m i
 			DocumentFormat: DocumentFormatJSON,
 			ColumnStore:    columnGraphTypedColumnVectorStoreConfig1782(dims),
 		},
-		VectorIndexes: []VectorIndexDefinition{def},
+		VectorIndexes: append([]VectorIndexDefinition{def}, extraVectorIndexes...),
 	}
 	if _, err := NewCollectionManager(d).CreateCollection(&meta); err != nil {
 		_ = d.Close()

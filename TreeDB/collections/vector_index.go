@@ -1738,7 +1738,21 @@ func (c *Collection) reconcileVectorIndexes(documentIDs [][]byte) error {
 		rebuildCurrentDocuments := c.writeDomain.nativeVectorActive != 0 && !c.writeDomain.nativeVectorSearchActive.Load()
 		c.writeDomain.nativeVectorActiveMu.Unlock()
 		if rebuildCurrentDocuments {
-			c.invalidateRegisteredVectorIndexDocumentCoverage()
+			coord := c.collectionSchemaCoordinator()
+			unlockPublication := c.lockNativeVectorIndexPublicationRead()
+			currentGeneration, err := c.currentVectorIndexDocumentGeneration()
+			if err != nil {
+				c.invalidateRegisteredVectorIndexDocumentCoverageLocked()
+				unlockPublication()
+				return err
+			}
+			for _, index := range c.registeredVectorIndexes() {
+				if coord != nil && coord.partitionLiveCarrier(index.name) == index && index.coversSourceDocumentGeneration(currentGeneration) {
+					continue
+				}
+				index.invalidateSourceDocumentRoots()
+			}
+			unlockPublication()
 		}
 	}
 	rebuilt, err := c.ensureDeclaredNativeVectorIndexesLoaded()
