@@ -467,7 +467,7 @@ class CohereQdrantRSSDiagnosticTests(unittest.TestCase):
             "snapshot_not_initial", "zero_schema_hash", "representation_version_type",
             "request_command_type", "eligible_type", "readiness_dimension_type", "readiness_m_type",
             "quality_coordinate_type", "execution_version_type", "successful_count_type", "request_ndcg",
-            "lifecycle_state",
+            "quantized_build_zero", "lifecycle_state",
         ):
             with self.subTest(mutation=mutation):
                 changed = copy.deepcopy(sq8)
@@ -585,6 +585,8 @@ class CohereQdrantRSSDiagnosticTests(unittest.TestCase):
                     changed["readiness"]["successful_ann_queries"] = 200.0
                 elif mutation == "request_ndcg":
                     changed["observed_execution"]["requests"][0]["ndcg_at_10"] = 0.0
+                elif mutation == "quantized_build_zero":
+                    changed["readiness"]["column_graph_build"]["quantized_preparation_nanos"] = 0
                 else:
                     changed["observed_execution"]["requests"][0]["lifecycle_state"]["owner_advance"] = 1
                 rejected = qdrant_rss.compare_three_arms(tree, qdrant, changed)

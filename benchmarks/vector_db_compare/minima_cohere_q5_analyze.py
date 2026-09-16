@@ -2601,6 +2601,33 @@ def _artifact_dataset_contract(artifact, manifest_sha256, dataset_hashes):
             and native.same_json(contract.get("dataset_files_sha256"), dataset_hashes))
 
 
+def _fp32_rss_readiness_valid(tree):
+    construction = tree.get("construction_calibration_contract") or {}
+    ef_construction = construction.get("ef_construction")
+    readiness = tree.get("readiness") or {}
+    quality = tree.get("quality") or {}
+    successful = sum(
+        len(row.get("per_query", []))
+        for split in (quality.get("calibration") or {}, quality.get("revalidation") or {})
+        for row in split.get("curve", [])
+    )
+    return (
+        type(ef_construction) is int and ef_construction in (32, 64, 96, 128)
+        and native.same_json(
+            construction, native.construction_calibration_contract(ef_construction),
+        )
+        and readiness.get("graph_action") == "build"
+        and type(readiness.get("successful_ann_queries")) is int
+        and readiness["successful_ann_queries"] == successful
+        and native.column_graph_build_valid(
+            readiness.get("column_graph_build"), expect_quantized_assets=False,
+        )
+        and native.same_json(readiness.get("effective_index"), {
+            "m": 16, "ef_construction": ef_construction,
+        })
+    )
+
+
 def validate_rss_and_comparisons(
         packet, paths, dataset_paths, full_truth=None, vectors=None, queries=None):
     tree = read_json(paths[packet["arms"]["treedb_fp32_rss"]], "TreeDB FP32 RSS")
@@ -2629,24 +2656,7 @@ def validate_rss_and_comparisons(
                 or provenance.get("dataset_manifest_sha256") != manifest_sha
                 or not native.same_json(provenance.get("dataset_files_sha256"), hashes)):
             raise EvidenceError("TreeDB RSS artifact is not from the exact candidate")
-    construction = tree.get("construction_calibration_contract") or {}
-    ef_construction = construction.get("ef_construction")
-    readiness = tree.get("readiness") or {}
-    quality = tree.get("quality") or {}
-    successful = sum(
-        len(row.get("per_query", []))
-        for split in (quality.get("calibration") or {}, quality.get("revalidation") or {})
-        for row in split.get("curve", [])
-    )
-    if (type(ef_construction) is not int or ef_construction not in (32, 64, 96, 128)
-            or not native.same_json(
-                construction, native.construction_calibration_contract(ef_construction))
-            or readiness.get("graph_action") != "build"
-            or readiness.get("successful_ann_queries") != successful
-            or not native.column_graph_build_valid(readiness.get("column_graph_build"))
-            or not native.same_json(readiness.get("effective_index"), {
-                "m": 16, "ef_construction": ef_construction,
-            })):
+    if not _fp32_rss_readiness_valid(tree):
         raise EvidenceError("TreeDB FP32 RSS readiness is incomplete")
     qd_provenance = qd.get("provenance") or {}
     expected_qdrant_provenance = {
