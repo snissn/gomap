@@ -236,11 +236,16 @@ class CohereQdrantRSSDiagnosticTests(unittest.TestCase):
         with patch.dict(qdrant_rss.os.environ,
                         {"GOMAXPROCS": "6", "GOGC": "75", "GOMEMLIMIT": "12GiB",
                          "TREEDB_LEAF_PAGE_CACHE_ENTRIES": "262144"}, clear=True):
-            contract = qdrant_rss.comparison_contract("a" * 64, {"documents": "b" * 64}, [0, 1])
+            with patch.object(qdrant_rss.existing, "memory_bytes", return_value=str(32 << 30)):
+                contract = qdrant_rss.comparison_contract("a" * 64, {
+                    "documents": "b" * 64, "queries": "c" * 64, "truth": "d" * 64,
+                }, [0, 1])
             child = native.treedb_service_environment({"treedb_go_runtime": contract["treedb_go_runtime"]})
         self.assertEqual(contract["treedb_go_runtime"], {
             "GOMAXPROCS": "6", "GOGC": "75", "GOMEMLIMIT": "12GiB",
         })
+        self.assertEqual(contract["host_memory_bytes"], 32 << 30)
+        self.assertTrue(native.rss_comparison_contract_valid(contract))
         self.assertNotIn("TREEDB_LEAF_PAGE_CACHE_ENTRIES", child)
         self.assertTrue(contract["host_resource_identity"]["machine_id"])
         self.assertTrue(contract["host_resource_identity"]["boot_id"])
