@@ -1216,7 +1216,6 @@ func (c *Collection) ensureVectorPartitionLiveBindingV1(ctx context.Context, man
 			}
 			idx.setPartitionLiveCarrier(true)
 			idx.recordSourceDocumentState(currentGeneration, currentState)
-			c.registerVectorIndexCurrentCatalog(idx)
 		} else {
 			idx.mu.RLock()
 			coverageCurrent := idx.sourceDocumentRootsValid && idx.sourceDocumentGeneration == currentGeneration

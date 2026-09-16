@@ -372,7 +372,7 @@ func (c *Collection) installNativeVectorIndexCandidate(candidate *VectorIndex, e
 		if current != nil {
 			c.registerVectorIndexCurrentCatalog(current)
 		} else {
-			c.UnregisterVectorIndex(def.Name)
+			c.unregisterVectorIndex(def.Name, c.collectionSchemaCoordinator())
 		}
 	}
 	postInstall := c.db.AcquireSnapshot()

@@ -1424,7 +1424,12 @@ func (c *Collection) UnregisterVectorIndex(name string) {
 	if c == nil {
 		return
 	}
-	c.unregisterVectorIndex(name, c.collectionSchemaCoordinator())
+	coord := c.collectionSchemaCoordinator()
+	if coord != nil && coord.partitionLiveCarrier(name) != nil {
+		coord.partitionLivePublishMu.Lock()
+		defer coord.partitionLivePublishMu.Unlock()
+	}
+	c.unregisterVectorIndex(name, coord)
 }
 
 func (c *Collection) unregisterVectorIndex(name string, coord *collectionSchemaCoordinator) {

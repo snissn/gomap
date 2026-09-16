@@ -612,6 +612,58 @@ func TestVectorIndexPartitionLiveDropWaitsForCoordinatorPinV1(t *testing.T) {
 	}
 }
 
+func TestVectorIndexPartitionLiveUnregisterWaitsForCoordinatorPinV1(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
+	_, database, collection, def, manifest := newVectorPartitionLiveProductionFixtureV1(t)
+	defer database.Close()
+	if err := collection.EnsureVectorPartitionLiveBindingV1(t.Context(), manifest); err != nil {
+		t.Fatal(err)
+	}
+	carrier := collection.registeredVectorIndex(def.Name)
+	pin, err := collection.AcquireVectorPartitionLiveCoordinatorSearchPinV1(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pin.Release()
+
+	done := make(chan struct{})
+	go func() {
+		collection.UnregisterVectorIndex(def.Name)
+		close(done)
+	}()
+	coord := collection.collectionSchemaCoordinator()
+	deadline := time.Now().Add(5 * time.Second)
+	for coord.partitionLivePublishMu.TryRLock() {
+		coord.partitionLivePublishMu.RUnlock()
+		select {
+		case <-done:
+			t.Fatal("vector index unregister did not wait")
+		default:
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("carrier unregister did not queue behind coordinator pin")
+		}
+		runtime.Gosched()
+	}
+	if got := collection.registeredVectorIndex(def.Name); got != carrier {
+		t.Fatalf("pinned carrier=%p want=%p", got, carrier)
+	}
+	shardPin, err := collection.AcquireVectorPartitionLiveSearchPinV1(manifest)
+	if err != nil {
+		t.Fatalf("shard pin during carrier unregister: %v", err)
+	}
+	shardPin.Release()
+	pin.Release()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("vector index unregister remained blocked after coordinator release")
+	}
+	if got := collection.registeredVectorIndex(def.Name); got != nil {
+		t.Fatalf("carrier remained registered: %p", got)
+	}
+}
+
 func TestVectorIndexPartitionLiveRepeatedUpdateCutoverKeepsPinnedViewV1(t *testing.T) {
 	idx, _ := newVectorIndex(nil, VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4, EfConstruction: 16, EfSearch: 8})
 	manifest := VectorPartitionManifestV1{IndexName: "embedding", IndexDefinitionDigest: "definition", SourceGeneration: 3, SourceChecksum: 4, SourceSchemaHash: 5, SourceRowCount: 1, Generation: 7, DomainCount: 1, PartitionCount: 1, DomainPacks: []VectorPartitionDomainPackV1{{DomainID: 0, PackID: 0}}}
@@ -1109,12 +1161,8 @@ func TestVectorIndexPartitionLiveRejectsNonAuthoritativeRoutingIdentityV1(t *tes
 	if err := collection.EnsureVectorPartitionLiveBindingV1(t.Context(), altered); !errors.Is(err, ErrVectorIndexPartitionLiveMismatchV1) {
 		t.Fatalf("cold altered binding err=%v want mismatch", err)
 	}
-	idx := collection.registeredVectorIndex(def.Name)
-	idx.mu.RLock()
-	poisoned := idx.partitionLive != nil
-	idx.mu.RUnlock()
-	if poisoned {
-		t.Fatal("altered routing identity installed a live carrier")
+	if idx := collection.registeredVectorIndex(def.Name); idx != nil {
+		t.Fatalf("altered routing identity registered carrier=%p", idx)
 	}
 
 	if err := collection.EnsureVectorPartitionLiveBindingV1(t.Context(), manifest); err != nil {
