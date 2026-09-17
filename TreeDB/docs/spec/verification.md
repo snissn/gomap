@@ -198,6 +198,16 @@ namespace registration alongside append evidence. The service
 held read view, current full fetch and ordinary reopen. The existing deferred
 maintenance lifecycle/manager/crash tests remain regression gates.
 
+`TestVectorIndexRebuildDrainsRawBarriersBeforeMutation` covers ordinary and
+normalized, empty and populated rebuild capture/publication without barriers
+under mutation ownership. `TestVectorIndexRebuildCheckpointPublicationHandoff`
+forces checkpoint raw ownership during construction, proves unrelated raw
+writes are not blocked by construction, and checks unchanged-source publication,
+changed-source rejection and ordinary reopen. Normalized public search after
+reopen additionally requires supported prepared-holder/namespace authority.
+`TestVectorIndexRebuildReleasesRawWhileMutationIsBusy` forces mutation contention
+at capture and final publication; unrelated raw commands must still progress.
+
 ### Internal mutable graph consumer (#4617)
 
 `TestTypedGraphOverlay*` covers checked base/current lineage, insert/replacement/
