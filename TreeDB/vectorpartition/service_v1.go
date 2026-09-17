@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"slices"
 	"time"
+	"unicode/utf8"
+
+	"github.com/snissn/gomap/TreeDB/internal/raftentry"
 )
 
 // ErrorCodeV1 is the stable error classification returned by ServiceV1.
@@ -19,8 +22,11 @@ const (
 	ErrorUnavailableV1        ErrorCodeV1 = "unavailable"
 	ErrorCanceledV1           ErrorCodeV1 = "canceled"
 	ErrorDeadlineExceededV1   ErrorCodeV1 = "deadline_exceeded"
+	ErrorCommitAmbiguousV1    ErrorCodeV1 = "commit_ambiguous"
 	ErrorFailedV1             ErrorCodeV1 = "failed"
 )
+
+const MaxStableIDBytesV1 = 4096
 
 type ErrorV1 struct {
 	Code ErrorCodeV1
@@ -101,6 +107,45 @@ type SearchResponseV1 struct {
 	Timing     SearchTimingV1
 }
 
+// InsertRequestV1 is the deliberately narrow public vector-mutation contract.
+// ID is exact (there is no predicate or fanout mutation) and Generation pins
+// routing, apply, and visibility to one immutable placement generation.
+type InsertRequestV1 struct {
+	Version    uint32
+	Generation GenerationIDV1
+	// IdempotencyKey identifies one logical mutation attempt. Callers must
+	// preserve it across retries and use a new key for a later reinsertion.
+	IdempotencyKey []byte
+	ID             []byte
+	Vector         []float32
+	Document       []byte
+	Deadline       time.Time
+}
+
+// MutationCountersV1 are stable, per-request proof counters. A successful
+// routed mutation has exactly one route, commit, consensus replication, apply,
+// and visibility proof; Forwards is zero only when ingress is already the
+// owning group leader.
+type MutationCountersV1 struct {
+	Routes, Forwards, Commits, Replications, Applies, VisibilityProofs uint64
+}
+
+// InsertResponseV1 binds consensus, deterministic apply, and live visibility
+// to the same generation and exact document identity.
+type InsertResponseV1 struct {
+	Generation           GenerationIDV1
+	PartitionID          uint32
+	OwnerGroup           string
+	CommitTerm           uint64
+	CommitIndex          uint64
+	AppliedIndex         uint64
+	ProductionConsensus  bool
+	LiveRevision         uint64
+	VisibilityGeneration GenerationIDV1
+	VisibleID            string
+	Counters             MutationCountersV1
+}
+
 // GenerationRegistrationV1 identifies an immutable derived generation without
 // exposing catalog records, group IDs, or lifecycle encodings.
 type GenerationRegistrationV1 struct {
@@ -154,6 +199,12 @@ type BackendV1 interface {
 	VectorPartitionCleanupEligibilityV1(context.Context, GenerationIDV1) (CleanupEligibilityV1, error)
 }
 
+// MutationBackendV1 is optional so search-only and lifecycle-only assembled
+// backends remain source-compatible. ServiceV1 fails closed when it is absent.
+type MutationBackendV1 interface {
+	InsertVectorPartitionV1(context.Context, InsertRequestV1) (InsertResponseV1, error)
+}
+
 type ServiceV1 struct{ backend BackendV1 }
 
 func NewServiceV1(backend BackendV1) (*ServiceV1, error) {
@@ -177,6 +228,26 @@ func (s *ServiceV1) Search(ctx context.Context, request SearchRequestV1) (Search
 		return SearchResponseV1{}, err
 	}
 	response.Neighbors = slices.Clone(response.Neighbors)
+	return response, nil
+}
+
+func (s *ServiceV1) Insert(ctx context.Context, request InsertRequestV1) (InsertResponseV1, error) {
+	if err := ValidateInsertRequestV1(ctx, request); err != nil {
+		return InsertResponseV1{}, err
+	}
+	backend, ok := s.backend.(MutationBackendV1)
+	if !ok {
+		return InsertResponseV1{}, &ErrorV1{Code: ErrorUnavailableV1, Err: errors.New("vector mutation backend is unavailable")}
+	}
+	requestCtx, cancel := searchRequestContextV1(ctx, request.Deadline)
+	defer cancel()
+	response, err := backend.InsertVectorPartitionV1(requestCtx, cloneInsertRequestV1(request))
+	if err != nil {
+		return InsertResponseV1{}, classifyErrorV1(requestCtx, err)
+	}
+	if err := ValidateInsertResponseV1(request, response); err != nil {
+		return InsertResponseV1{}, err
+	}
 	return response, nil
 }
 
@@ -310,6 +381,45 @@ func cloneSearchRequestV1(r SearchRequestV1) SearchRequestV1 {
 	r.Query = slices.Clone(r.Query)
 	return r
 }
+
+// ValidateInsertRequestV1 applies the public mutation boundary at every ingress.
+func ValidateInsertRequestV1(ctx context.Context, r InsertRequestV1) error {
+	if err := validateGenerationV1(ctx, r.Generation); err != nil {
+		return err
+	}
+	if r.Version != 1 || len(r.IdempotencyKey) == 0 || len(r.ID) == 0 || !utf8.Valid(r.ID) || len(r.Vector) == 0 || len(r.Document) == 0 {
+		return invalidV1("version, generation, idempotency key, valid UTF-8 id, vector, and document are required")
+	}
+	if len(r.IdempotencyKey) > raftentry.MaxIdempotencyKeyBytesV1 || len(r.ID) > MaxStableIDBytesV1 {
+		return invalidV1("idempotency key or stable id exceeds mutation limit")
+	}
+	if string(r.IdempotencyKey) == raftentry.NoIdempotencyTokenV1 {
+		return invalidV1("reserved no-idempotency token is not accepted for mutations")
+	}
+	if !r.Deadline.IsZero() && !time.Now().Before(r.Deadline) {
+		return &ErrorV1{Code: ErrorDeadlineExceededV1, Err: context.DeadlineExceeded}
+	}
+	return nil
+}
+func cloneInsertRequestV1(r InsertRequestV1) InsertRequestV1 {
+	r.IdempotencyKey = slices.Clone(r.IdempotencyKey)
+	r.ID = slices.Clone(r.ID)
+	r.Vector = slices.Clone(r.Vector)
+	r.Document = slices.Clone(r.Document)
+	return r
+}
+
+// ValidateInsertResponseV1 verifies the complete proof returned for a public
+// mutation request. Transports use the same validator as the in-process API.
+func ValidateInsertResponseV1(request InsertRequestV1, response InsertResponseV1) error {
+	if response.Generation != request.Generation || response.VisibilityGeneration != request.Generation || response.OwnerGroup == "" || response.CommitTerm == 0 || response.CommitIndex == 0 || response.AppliedIndex < response.CommitIndex || !response.ProductionConsensus || response.LiveRevision == 0 || response.VisibleID != string(request.ID) {
+		return &ErrorV1{Code: ErrorFailedV1, Err: errors.New("backend returned invalid vector mutation response")}
+	}
+	if response.Counters.Routes != 1 || response.Counters.Commits != 1 || response.Counters.Replications != 1 || response.Counters.Applies != 1 || response.Counters.VisibilityProofs != 1 || response.Counters.Forwards > 1 {
+		return &ErrorV1{Code: ErrorFailedV1, Err: errors.New("backend returned invalid vector mutation counters")}
+	}
+	return nil
+}
 func invalidV1(message string) error {
 	return &ErrorV1{Code: ErrorInvalidRequestV1, Err: errors.New(message)}
 }
@@ -317,13 +427,16 @@ func classifyErrorV1(ctx context.Context, err error) error {
 	if err == nil {
 		return nil
 	}
+	var existing *ErrorV1
+	if errors.As(err, &existing) && existing.Code == ErrorCommitAmbiguousV1 {
+		return err
+	}
 	if errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
 		return &ErrorV1{Code: ErrorCanceledV1, Err: err}
 	}
 	if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		return &ErrorV1{Code: ErrorDeadlineExceededV1, Err: err}
 	}
-	var existing *ErrorV1
 	if errors.As(err, &existing) {
 		return err
 	}

@@ -29,6 +29,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/raftentry"
 	"github.com/snissn/gomap/TreeDB/internal/raftfsm"
 	"github.com/snissn/gomap/TreeDB/internal/raftplacement"
+	public "github.com/snissn/gomap/TreeDB/vectorpartition"
 )
 
 // This internal HTTP protocol is for fixed, trusted private peers. It is not a
@@ -58,6 +59,7 @@ type FixedPeerTCPConfigV1 struct {
 	Catalog                           FixedPeerTCPGroupV1
 	Groups                            []FixedPeerTCPGroupV1
 	RequestTimeout, RaftTimeout       time.Duration
+	Vector                            *FixedPeerTCPVectorConfigV1
 }
 
 type FixedPeerTCPStatusV1 struct {
@@ -66,6 +68,20 @@ type FixedPeerTCPStatusV1 struct {
 	Catalog                              raftplacement.CatalogMetaStatusV1
 	CatalogRaft                          raftcluster.RuntimeStatusV1
 	Groups                               []FixedPeerTCPGroupStatusV1
+}
+
+func (r *FixedPeerTCPRuntimeV1) LinearizableCatalogMetaReadProofV1(ctx context.Context) (raftcluster.CatalogMetaReadProofV1, error) {
+	if r == nil || r.meta == nil {
+		return raftcluster.CatalogMetaReadProofV1{}, raftplacement.ErrCatalogMetaUnavailable
+	}
+	return r.meta.LinearizableCatalogMetaReadProofV1(ctx)
+}
+
+func (r *FixedPeerTCPRuntimeV1) ValidateCatalogMetaReadProofLeaseV1(proof raftcluster.CatalogMetaReadProofV1) error {
+	if r == nil || r.meta == nil {
+		return raftplacement.ErrCatalogMetaUnavailable
+	}
+	return r.meta.ValidateCatalogMetaReadProofLeaseV1(proof)
 }
 
 type FixedPeerTCPGroupStatusV1 struct {
@@ -86,6 +102,8 @@ type FixedPeerTCPRuntimeV1 struct {
 	meta          *raftcluster.CatalogMetaRaftProviderV1
 	data          map[raftcluster.GroupID]*fixedPeerDataV1
 	local, routed *raftcluster.GroupRoutedSubmitter
+	localRegistry raftcluster.GroupSubmitterRegistryV1
+	vector        *fixedPeerVectorRuntimeV1
 	transports    []*hraft.NetworkTransport
 	server        *http.Server
 	listener      net.Listener
@@ -189,8 +207,8 @@ func validateFixedPeerConfigV1(c FixedPeerTCPConfigV1) (FixedPeerTCPConfigV1, st
 		if e != nil {
 			return c, "", e
 		}
-		if raftcluster.FeatureSetRequiresV1(resolved.Features, raftcluster.FeatureVectorPartitionLifecycle) {
-			return invalid("vector lifecycle is not supported by this runtime")
+		if raftcluster.FeatureSetRequiresV1(resolved.Features, raftcluster.FeatureVectorPartitionLifecycle) && (i != 0 || c.Vector == nil) {
+			return invalid("vector lifecycle is only supported by the configured catalog runtime")
 		}
 		g.Peers, g.Features = resolved.Peers, resolved.Features
 		for _, p := range g.Peers {
@@ -212,6 +230,9 @@ func validateFixedPeerConfigV1(c FixedPeerTCPConfigV1) (FixedPeerTCPConfigV1, st
 	if !localGroups[c.Catalog.ID] {
 		return invalid("every runtime must join the shared catalog")
 	}
+	if raftcluster.FeatureSetRequiresV1(c.Catalog.Features, raftcluster.FeatureVectorPartitionLifecycle) != (c.Vector != nil) {
+		return invalid("vector runtime and catalog lifecycle feature must be enabled together")
+	}
 	if len(localGroups) != len(c.RaftListen) {
 		return invalid("listen map must match hosted groups")
 	}
@@ -219,6 +240,23 @@ func validateFixedPeerConfigV1(c FixedPeerTCPConfigV1) (FixedPeerTCPConfigV1, st
 		a, e := net.ResolveTCPAddr("tcp", c.RaftListen[g])
 		if e != nil || a.Port <= 0 {
 			return invalid("explicit raft listen address required")
+		}
+	}
+	if err := validateFixedPeerVectorConfigV1(c, localGroups); err != nil {
+		return invalid(err.Error())
+	}
+	if c.Vector != nil {
+		for _, address := range c.Vector.PublicAddresses {
+			if !addressOK(address) {
+				return invalid("duplicate/invalid vector public address")
+			}
+		}
+		for _, peers := range c.Vector.ShardAddresses {
+			for _, address := range peers {
+				if !addressOK(address) {
+					return invalid("duplicate/invalid vector shard address")
+				}
+			}
 		}
 	}
 	slices.SortFunc(c.Nodes, func(a, b FixedPeerTCPNodeV1) int { return bytes.Compare([]byte(a.ID), []byte(b.ID)) })
@@ -349,6 +387,7 @@ func OpenFixedPeerTCPRuntimeV1(config FixedPeerTCPConfigV1) (*FixedPeerTCPRuntim
 		if e != nil {
 			return fail(e)
 		}
+		r.localRegistry = registry
 		r.local, e = raftcluster.NewCatalogMetaGroupRoutedSubmitter(registry, r)
 		if e != nil {
 			return fail(e)
@@ -367,6 +406,13 @@ func OpenFixedPeerTCPRuntimeV1(config FixedPeerTCPConfigV1) (*FixedPeerTCPRuntim
 		return fail(err)
 	}
 	r.server = &http.Server{Handler: http.HandlerFunc(r.serve), ReadHeaderTimeout: r.config.RequestTimeout, ReadTimeout: r.config.RequestTimeout, WriteTimeout: 2 * r.config.RequestTimeout, IdleTimeout: r.config.RequestTimeout, MaxHeaderBytes: 4096}
+	if r.config.Vector != nil {
+		r.vector, err = openFixedPeerVectorRuntimeV1(r)
+		if err != nil {
+			return fail(err)
+		}
+		r.vector.start()
+	}
 	go func() { _ = r.server.Serve(r.listener) }()
 	return r, nil
 }
@@ -400,6 +446,13 @@ func (r *FixedPeerTCPRuntimeV1) Close() error {
 			errs = append(errs, err)
 		} else if r.listener != nil {
 			errs = append(errs, r.listener.Close())
+		}
+		// The vector runtime pointer is immutable after Open. Keep it published
+		// through shutdown so concurrent requests never race a nil assignment.
+		// Drain the private forwarding endpoint before closing the public vector
+		// endpoint and its shared topology; Raft/data remain live for both drains.
+		if r.vector != nil {
+			errs = append(errs, r.vector.Close())
 		}
 		if r.meta != nil {
 			errs = append(errs, r.meta.Close())
@@ -529,9 +582,11 @@ func (s fixedPeerRemoteSubmitterV1) SubmitCommandEntryV1(ctx context.Context, en
 }
 
 type fixedPeerRequestV1 struct {
-	Entry    []byte
-	Metadata raftentry.RequestMetadataV1
-	Route    ClusterRouteRequest
+	Entry        []byte
+	Metadata     raftentry.RequestMetadataV1
+	Route        ClusterRouteRequest
+	VectorInsert *VectorPartitionRoutedInsertV1 `json:",omitempty"`
+	VectorSearch *public.SearchRequestV1        `json:",omitempty"`
 }
 type fixedPeerReplyV1 struct {
 	NodeID       raftcluster.NodeID
@@ -543,6 +598,8 @@ type fixedPeerReplyV1 struct {
 	Catalog      raftplacement.CatalogMetaStatusV1
 	Submit       raftcluster.SubmitResultV1
 	Route        ClusterRouteTarget
+	VectorInsert *public.InsertResponseV1 `json:",omitempty"`
+	VectorSearch *public.SearchResponseV1 `json:",omitempty"`
 }
 
 func (r *FixedPeerTCPRuntimeV1) serve(w http.ResponseWriter, request *http.Request) {
@@ -563,7 +620,7 @@ func (r *FixedPeerTCPRuntimeV1) serve(w http.ResponseWriter, request *http.Reque
 	// each stage bounded capacity so callers cannot starve their own callees.
 	requests := r.requests
 	switch request.URL.Path {
-	case "/v1/forward":
+	case "/v1/forward", "/v1/vector-forward", "/v1/vector-lifecycle":
 		requests = r.forwards
 	case "/v1/status", "/v1/catalog-read":
 		requests = r.reads
@@ -613,6 +670,22 @@ func (r *FixedPeerTCPRuntimeV1) serve(w http.ResponseWriter, request *http.Reque
 		if err == nil {
 			reply.Catalog, _ = r.authority.Status()
 		}
+	case "/v1/vector-forward":
+		if body.VectorInsert == nil {
+			err = ErrFixedPeerVectorProofMissingV1
+			return
+		}
+		response, applyErr := r.applyVectorInsertV1(ctx, *body.VectorInsert)
+		reply.VectorInsert, err = &response, applyErr
+	case "/v1/vector-lifecycle":
+		reply.Catalog, err = r.ensureVectorLifecycleLeaderV1(ctx)
+	case "/v1/vector-search":
+		if body.VectorSearch == nil {
+			err = ErrFixedPeerVectorProofMissingV1
+			return
+		}
+		response, searchErr := r.searchVectorPartitionStrictV1(ctx, *body.VectorSearch)
+		reply.VectorSearch, err = &response, searchErr
 	case "/v1/route":
 		reply.Route, err = r.route(ctx, body.Route)
 	case "/v1/submit", "/v1/forward":
@@ -634,12 +707,16 @@ func (r *FixedPeerTCPRuntimeV1) serve(w http.ResponseWriter, request *http.Reque
 }
 
 func (r *FixedPeerTCPRuntimeV1) validateCatalog(c raftplacement.CatalogV1) error {
-	if raftcluster.FeatureSetRequiresV1(c.Features, raftcluster.FeatureVectorPartitionLifecycle) {
+	return validateFixedPeerCatalogV1(r.config, c)
+}
+
+func validateFixedPeerCatalogV1(config FixedPeerTCPConfigV1, c raftplacement.CatalogV1) error {
+	if raftcluster.FeatureSetRequiresV1(c.Features, raftcluster.FeatureVectorPartitionLifecycle) != (config.Vector != nil) {
 		return raftcluster.ErrUnsupportedFeature
 	}
 	for _, g := range c.Groups {
 		var expected []raftcluster.NodeID
-		for _, fixed := range r.config.Groups {
+		for _, fixed := range config.Groups {
 			if fixed.ID == g.ID {
 				for _, p := range fixed.Peers {
 					expected = append(expected, p.ID)
@@ -790,7 +867,9 @@ func (c *FixedPeerTCPClientV1) Close() {
 // Preserve retry/admission-relevant sentinels; unclassified validation failures
 // remain definite rejections with their diagnostic message, not retriable codes.
 var fixedPeerErrorsV1 = []error{
-	raftcluster.ErrCommitAmbiguous, raftcluster.ErrNotLeader, raftcluster.ErrAdmissionUnavailable, raftcluster.ErrHashicorpRaftUnavailable,
+	raftcluster.ErrCommitAmbiguous,
+	ErrFixedPeerVectorProofMissingV1, ErrFixedPeerVectorProofStaleV1, ErrFixedPeerVectorWrongOwnerV1, ErrFixedPeerVectorUnavailableV1, ErrFixedPeerVectorDocumentV1,
+	raftcluster.ErrNotLeader, raftcluster.ErrAdmissionUnavailable, raftcluster.ErrHashicorpRaftUnavailable,
 	raftcluster.ErrCommitNotProven, raftcluster.ErrLocalApplyNotRecoverable, raftcluster.ErrUnsupportedSubmitAck,
 	raftcluster.ErrMissingCatalogVersion, raftcluster.ErrCatalogVersionMismatch,
 	raftcluster.ErrRouteTargetMissing, raftcluster.ErrRouteTargetUnknown, raftcluster.ErrRouteTargetUnsupported, raftcluster.ErrRouteGroupMismatch, raftcluster.ErrRouteFanoutRequired,
@@ -801,6 +880,10 @@ var fixedPeerErrorsV1 = []error{
 }
 
 func fixedPeerErrorCodeV1(err error) string {
+	var publicErr *public.ErrorV1
+	if errors.As(err, &publicErr) {
+		return string(publicErr.Code)
+	}
 	for _, known := range fixedPeerErrorsV1 {
 		if errors.Is(err, known) {
 			return known.Error()

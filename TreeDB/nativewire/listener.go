@@ -170,25 +170,25 @@ func (e *localEndpoint) roundTrip(ctx context.Context, streamID uint64, typ iwir
 
 func (e *localEndpoint) roundTripVersion(ctx context.Context, streamID uint64, typ iwire.FrameType, requestID uint64, body []byte, want iwire.FrameType, limits iwire.Limits, responseDst []byte, copyResponse bool, denseVersion uint64) (iwire.Header, []byte, error) {
 	if e == nil {
-		return iwire.Header{}, nil, io.ErrClosedPipe
+		return iwire.Header{}, nil, &requestNotSubmittedError{io.ErrClosedPipe}
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.server == nil || e.closed.Load() || e.server.closed.Load() {
-		return iwire.Header{}, nil, io.ErrClosedPipe
+		return iwire.Header{}, nil, &requestNotSubmittedError{io.ErrClosedPipe}
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if ctx != nil && ctx.Err() != nil {
-		return iwire.Header{}, nil, ctx.Err()
+		return iwire.Header{}, nil, &requestNotSubmittedError{ctx.Err()}
 	}
 	frameLen := uint64(iwire.FrameHeaderLenV1) + uint64(len(body))
 	if frameLen < uint64(len(body)) {
-		return iwire.Header{}, nil, protocolError(iwire.ErrMalformedFrame, "request frame length overflow")
+		return iwire.Header{}, nil, &requestNotSubmittedError{protocolError(iwire.ErrMalformedFrame, "request frame length overflow")}
 	}
 	if frameLen > e.server.limits.MaxFrameSize {
-		return iwire.Header{}, nil, protocolError(iwire.ErrResourceExhausted, "request frame length %d exceeds limit %d", frameLen, e.server.limits.MaxFrameSize)
+		return iwire.Header{}, nil, &requestNotSubmittedError{protocolError(iwire.ErrResourceExhausted, "request frame length %d exceeds limit %d", frameLen, e.server.limits.MaxFrameSize)}
 	}
 	e.frame = e.frame[:0]
 	request := iwire.Header{

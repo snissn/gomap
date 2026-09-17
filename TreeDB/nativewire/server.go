@@ -755,7 +755,7 @@ func (s *Server) handleRequest(ctx context.Context, w io.Writer, state *connStat
 		// The common error path below records command/request counters.
 	} else if s.clusterSubmitter != nil && (cmd.Header.ID == iwire.CommandTypedDocumentUpsert || (cmd.Header.ID == iwire.CommandGetMany && cmd.Header.Version == 2)) {
 		err = protocolError(iwire.ErrUnsupportedFeature, "local-only command is unavailable through cluster submission")
-	} else if s.clusterSubmitter != nil && cmd.Schema.Kind == iwire.CommandKindMutation {
+	} else if s.clusterSubmitter != nil && cmd.Schema.Kind == iwire.CommandKindMutation && cmd.Header.ID != iwire.CommandVectorInsert {
 		responseSections, err = s.handleClusterMutation(ctx, header, cmd)
 	} else {
 		if cmd.Schema.Kind == iwire.CommandKindRead && !coordinatedReadCommand(cmd.Header.ID) {
@@ -818,7 +818,8 @@ func (s *Server) handleRequest(ctx context.Context, w io.Writer, state *connStat
 			iwire.CommandVectorSearchFast,
 			iwire.CommandVectorPinSearchSnapshot,
 			iwire.CommandVectorSearchPinned,
-			iwire.CommandVectorClosePinnedSnapshot:
+			iwire.CommandVectorClosePinnedSnapshot,
+			iwire.CommandVectorInsert:
 			responseBody, err = s.handleVectorPartitionCommandV1(ctx, state, cmd, state.responseScratch())
 			responseBodySet = true
 		default:

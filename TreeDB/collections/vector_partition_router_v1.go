@@ -35,6 +35,9 @@ const (
 // that is valid but collapses to fewer distinct partitions than requested.
 var ErrVectorPartitionRouterCandidateCoverageV1 = errors.New("collections: vector partition router candidate coverage shortfall")
 
+// ErrVectorPartitionRouterQueryV1 identifies malformed caller vectors.
+var ErrVectorPartitionRouterQueryV1 = errors.New("collections: invalid vector partition router query")
+
 type VectorPartitionRouterBuildOptionsV1 struct {
 	Config         internalrouter.RouterConfigV1
 	AssetFileID    uint32
@@ -1589,11 +1592,11 @@ func rankVectorPartitionRouterCandidatesWithContextV1(ctx context.Context, repre
 
 func normalizeVectorPartitionRouterQueryV1(query []float32, dimensions int) ([]float32, error) {
 	if len(query) != dimensions {
-		return nil, fmt.Errorf("collections: vector partition router query dimensions=%d want %d", len(query), dimensions)
+		return nil, fmt.Errorf("%w: dimensions=%d want %d", ErrVectorPartitionRouterQueryV1, len(query), dimensions)
 	}
 	invNorm, err := columnVectorGraphInvNorm(query)
 	if err != nil {
-		return nil, fmt.Errorf("collections: vector partition router query: %w", err)
+		return nil, fmt.Errorf("%w: %w", ErrVectorPartitionRouterQueryV1, err)
 	}
 	normalized := make([]float32, len(query))
 	for i := range query {

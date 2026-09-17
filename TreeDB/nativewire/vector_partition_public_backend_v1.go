@@ -13,23 +13,43 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/snissn/gomap/TreeDB/collections"
 	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
 	"github.com/snissn/gomap/TreeDB/internal/raftplacement"
 	public "github.com/snissn/gomap/TreeDB/vectorpartition"
 )
 
 type VectorPartitionPublicBackendOptionsV1 struct {
-	Topology       *VectorPartitionProductionTopologyV1
-	RequestBase    VectorPartitionCoordinatorRequestV1
-	Lifecycle      raftplacement.VectorPartitionLifecycleCoordinatorV1
-	ReadFence      CatalogMetaLinearizableAppliedIndexProviderV1
-	Identity       raftplacement.VectorPartitionLifecycleIdentityV1
-	RequiredGroups []raftcluster.GroupID
-	Builder        raftplacement.VectorPartitionLifecycleGroupBuilderV1
-	MutationEpoch  uint64
+	Topology          *VectorPartitionProductionTopologyV1
+	RequestBase       VectorPartitionCoordinatorRequestV1
+	Lifecycle         raftplacement.VectorPartitionLifecycleCoordinatorV1
+	ReadFence         CatalogMetaLinearizableAppliedIndexProviderV1
+	Identity          raftplacement.VectorPartitionLifecycleIdentityV1
+	RequiredGroups    []raftcluster.GroupID
+	Builder           raftplacement.VectorPartitionLifecycleGroupBuilderV1
+	MutationEpoch     uint64
+	MutationSubmitter VectorPartitionMutationSubmitterV1
 	// RebuildRequest is an optional node-owned enqueue hook. It deliberately
 	// does not run a rebuild inline; scheduling and recovery policy are #4018.
 	RebuildRequest func(context.Context) error
+}
+
+// VectorPartitionRoutedInsertV1 is the server-owned proof passed from public
+// routing to the dedicated fixed-peer mutation transport. The owner must
+// independently revalidate every field before consensus submission.
+type VectorPartitionRoutedInsertV1 struct {
+	Request           public.InsertRequestV1
+	Identity          raftplacement.VectorPartitionLifecycleIdentityV1
+	CatalogProof      raftplacement.CatalogProofV1
+	ReadySetDigest    string
+	RouterModelDigest string
+	PartitionID       uint32
+	OwnerGroup        raftcluster.GroupID
+	Forwarded         bool
+}
+
+type VectorPartitionMutationSubmitterV1 interface {
+	SubmitVectorPartitionInsertV1(context.Context, VectorPartitionRoutedInsertV1) (public.InsertResponseV1, error)
 }
 
 type VectorPartitionPublicBackendV1 struct {
@@ -39,13 +59,22 @@ type VectorPartitionPublicBackendV1 struct {
 
 const vectorPartitionPublicRequestSuffixBytesV1 = 1 + 16
 
+func validateVectorPartitionPublicRequestIdentityV1(request VectorPartitionCoordinatorRequestV1, maxIdentityBytes int) error {
+	if request.RequestID == "" || request.CancellationID == "" {
+		return errors.New("nativewire: public vector partition backend is incomplete")
+	}
+	if len(request.RequestID)+vectorPartitionPublicRequestSuffixBytesV1 > maxIdentityBytes || len(request.CancellationID)+vectorPartitionPublicRequestSuffixBytesV1 > maxIdentityBytes {
+		return errors.New("nativewire: public vector partition request identity exceeds coordinator limit after suffix")
+	}
+	return nil
+}
+
 func NewVectorPartitionPublicBackendV1(opts VectorPartitionPublicBackendOptionsV1) (*VectorPartitionPublicBackendV1, error) {
-	if opts.Topology == nil || opts.Topology.Coordinator() == nil || opts.Identity.Generation == 0 || opts.Identity.Index.IndexName == "" || len(opts.RequiredGroups) == 0 || opts.RequestBase.RequestID == "" || opts.RequestBase.CancellationID == "" {
+	if opts.Topology == nil || opts.Topology.Coordinator() == nil || opts.Identity.Generation == 0 || opts.Identity.Index.IndexName == "" || len(opts.RequiredGroups) == 0 {
 		return nil, errors.New("nativewire: public vector partition backend is incomplete")
 	}
-	maxIdentityBytes := opts.Topology.Coordinator().limits.MaxIdentityBytes
-	if len(opts.RequestBase.RequestID)+vectorPartitionPublicRequestSuffixBytesV1 > maxIdentityBytes || len(opts.RequestBase.CancellationID)+vectorPartitionPublicRequestSuffixBytesV1 > maxIdentityBytes {
-		return nil, errors.New("nativewire: public vector partition request identity exceeds coordinator limit after suffix")
+	if err := validateVectorPartitionPublicRequestIdentityV1(opts.RequestBase, opts.Topology.Coordinator().limits.MaxIdentityBytes); err != nil {
+		return nil, err
 	}
 	if opts.Builder == nil || opts.Lifecycle.Authority == nil || opts.Lifecycle.Committer == nil || opts.ReadFence == nil {
 		return nil, errors.New("nativewire: public vector partition backend requires lifecycle authority, linearizable read fence, and group builder")
@@ -62,6 +91,73 @@ func (b *VectorPartitionPublicBackendV1) SearchVectorPartitionV1(ctx context.Con
 	adapterNanos := time.Since(started)
 	response, err := b.opts.Topology.searchStrictV1(ctx, r)
 	return b.publicSearchResponseV1(request, response, err, started, adapterNanos)
+}
+
+func (b *VectorPartitionPublicBackendV1) InsertVectorPartitionV1(ctx context.Context, request public.InsertRequestV1) (public.InsertResponseV1, error) {
+	if b == nil || b.opts.Topology == nil || b.opts.Topology.Status().Closed || b.opts.MutationSubmitter == nil {
+		return public.InsertResponseV1{}, &public.ErrorV1{Code: public.ErrorUnavailableV1, Err: errors.New("production vector mutation route is unavailable")}
+	}
+	if err := b.checkID(request.Generation); err != nil {
+		return public.InsertResponseV1{}, err
+	}
+	coordinator := b.opts.Topology.Coordinator()
+	lease, err := coordinator.acquireRouterSessionV1(ctx, request.Generation.Index, request.Generation.Generation)
+	if err != nil {
+		return public.InsertResponseV1{}, publicBackendErrorV1(err)
+	}
+	defer lease.Close()
+	status := lease.session.router.Status()
+	readySetDigest, err := coordinator.validateReplicatedLifecycle(ctx, status)
+	if err != nil {
+		return public.InsertResponseV1{}, publicBackendErrorV1(err)
+	}
+	// Mutation ownership is always one canonical exact-router decision. Search
+	// tuning in RequestBase must never weaken the write-owner proof.
+	selection, err := lease.session.router.SearchWithContextV1(ctx, request.Vector, collections.VectorPartitionRouterSearchOptionsV1{
+		Mode: collections.VectorPartitionRouterModeExactV1, CandidateBudget: int(status.Representatives), PartitionProbes: 1,
+	})
+	if err != nil {
+		return public.InsertResponseV1{}, publicBackendErrorV1(err)
+	}
+	if len(selection.Partitions) != 1 {
+		return public.InsertResponseV1{}, &public.ErrorV1{Code: public.ErrorGenerationMismatchV1, Err: errors.New("router did not select one exact owner partition")}
+	}
+	partitionID, owner, err := vectorPartitionMutationOwnerV1(status.Manifest, coordinator.placement, selection.Partitions[0].PartitionID)
+	if err != nil {
+		return public.InsertResponseV1{}, publicBackendErrorV1(err)
+	}
+	response, err := b.opts.MutationSubmitter.SubmitVectorPartitionInsertV1(ctx, VectorPartitionRoutedInsertV1{
+		Request: request, Identity: b.opts.Identity,
+		CatalogProof:   raftplacement.CatalogProofV1{Epoch: b.opts.Identity.Index.CatalogEpoch, Digest: b.opts.Identity.Index.CatalogDigest},
+		ReadySetDigest: readySetDigest, RouterModelDigest: status.ModelDigest,
+		PartitionID: partitionID, OwnerGroup: owner,
+	})
+	if err != nil {
+		return public.InsertResponseV1{}, fixedPeerVectorPublicErrorV1(err)
+	}
+	return response, nil
+}
+
+func vectorPartitionMutationOwnerV1(manifest collections.VectorPartitionManifestV1, placement raftplacement.VectorPartitionPlacementRecordV1, domainID uint32) (uint32, raftcluster.GroupID, error) {
+	offsets, err := vectorPartitionCoordinatorDomainPackOffsetsV1(manifest)
+	if err != nil || int(domainID) >= len(offsets)-1 || len(placement.Partitions) != int(manifest.PartitionCount) {
+		return 0, "", ErrFixedPeerVectorProofStaleV1
+	}
+	start, end := offsets[domainID], offsets[domainID+1]
+	if start == end {
+		return 0, "", ErrFixedPeerVectorProofStaleV1
+	}
+	canonical := manifest.DomainPacks[start].PackID
+	owner := placement.Partitions[canonical].GroupID
+	if owner == "" {
+		return 0, "", ErrFixedPeerVectorWrongOwnerV1
+	}
+	for _, mapping := range manifest.DomainPacks[start:end] {
+		if placement.Partitions[mapping.PackID].PartitionID != mapping.PackID || placement.Partitions[mapping.PackID].GroupID != owner {
+			return 0, "", ErrFixedPeerVectorWrongOwnerV1
+		}
+	}
+	return canonical, owner, nil
 }
 
 func (b *VectorPartitionPublicBackendV1) SearchVectorPartitionFastV1(ctx context.Context, request public.SearchRequestV1, options public.FastSearchOptionsV1) (public.SearchResponseV1, public.FastSearchEvidenceV1, error) {
@@ -358,11 +454,22 @@ func publicStatusV1(r raftplacement.VectorPartitionLifecycleRecordV1) public.Gen
 }
 
 func publicBackendErrorV1(err error) error {
+	// Once a mutation may have reached consensus, cancellation and deadline
+	// are diagnostic detail rather than proof that the write did not commit.
+	if errors.Is(err, raftcluster.ErrCommitAmbiguous) {
+		return &public.ErrorV1{Code: public.ErrorCommitAmbiguousV1, Err: errors.New(err.Error())}
+	}
 	if errors.Is(err, context.Canceled) {
 		return &public.ErrorV1{Code: public.ErrorCanceledV1, Err: err}
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		return &public.ErrorV1{Code: public.ErrorDeadlineExceededV1, Err: err}
+	}
+	if errors.Is(err, ErrFixedPeerVectorProofMissingV1) || errors.Is(err, ErrFixedPeerVectorDocumentV1) || errors.Is(err, collections.ErrVectorPartitionRouterQueryV1) {
+		return &public.ErrorV1{Code: public.ErrorInvalidRequestV1, Err: err}
+	}
+	if errors.Is(err, ErrFixedPeerVectorProofStaleV1) || errors.Is(err, ErrFixedPeerVectorWrongOwnerV1) {
+		return &public.ErrorV1{Code: public.ErrorGenerationMismatchV1, Err: err}
 	}
 	var coordinatorErr *VectorPartitionCoordinatorErrorV1
 	if errors.As(err, &coordinatorErr) {

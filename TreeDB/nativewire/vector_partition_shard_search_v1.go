@@ -21,6 +21,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/collections"
 	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
 	"github.com/snissn/gomap/TreeDB/internal/raftplacement"
+	public "github.com/snissn/gomap/TreeDB/vectorpartition"
 )
 
 const VectorPartitionShardSearchVersionV1 uint32 = 1
@@ -138,7 +139,7 @@ func DefaultVectorPartitionShardSearchLimitsV1() VectorPartitionShardSearchLimit
 		MaxCandidateBytes: 80 << 20,
 		MaxResponseBytes:  64 << 20,
 		MaxIdentityBytes:  4096,
-		MaxStableIDBytes:  4096,
+		MaxStableIDBytes:  public.MaxStableIDBytesV1,
 	}
 }
 
@@ -551,12 +552,18 @@ func (s *VectorPartitionShardSearchServiceV1) Search(ctx context.Context, reques
 		return response, s.wrapError(err, groupID)
 	}
 	var livePin *collections.VectorIndexPartitionLiveSearchPinV1
-	if liveSource, ok := pinned.(vectorPartitionPinnedLiveViewV1); ok {
+	ownedLivePin := false
+	if strictSnapshot != nil {
+		livePin = strictSnapshot.snapshot.livePins[groupID]
+	} else if liveSource, ok := pinned.(vectorPartitionPinnedLiveViewV1); ok {
 		livePin, err = liveSource.acquireVectorPartitionLiveSearchPinV1()
 		if err != nil {
 			response.Timing.GenerationOpenNanos = elapsedNanosV1(openStarted)
 			return response, s.wrapError(fmt.Errorf("%w: live revision: %v", ErrVectorPartitionShardSearchGenerationMismatch, err), groupID)
 		}
+		ownedLivePin = livePin != nil
+	}
+	if ownedLivePin {
 		defer livePin.Release()
 	}
 	if request.LiveCoverage != 0 {

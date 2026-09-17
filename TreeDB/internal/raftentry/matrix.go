@@ -80,6 +80,7 @@ func AllCommandRowsV1() []CommandRowV1 {
 		nativewire.CommandVectorClosePinnedSnapshot,
 		nativewire.CommandDenseVectorSearch,
 		nativewire.CommandTypedDocumentUpsert,
+		nativewire.CommandVectorInsert,
 	}
 	rows := make([]CommandRowV1, 0, len(ids))
 	for _, id := range ids {
@@ -108,6 +109,7 @@ var commandRowsV1 = map[nativewire.CommandID]CommandRowV1{
 	nativewire.CommandUpdateBSONSet: acceptedRow(nativewire.CommandUpdateBSONSet, "CommandUpdateBSONSet", "update_bson_set", "CollectionUpdateBatchByID", "native-wire deterministic entry fixture", "accepted mutation widening slice; structured top-level BSON $set lowers to deterministic replacement command-WAL payload"),
 
 	nativewire.CommandTypedDocumentUpsert: rejectedRow(nativewire.CommandTypedDocumentUpsert, "CommandTypedDocumentUpsert", "typed_document_upsert", "WAL-supported", "CollectionReplaceSourceByID (typed format 12)", "local_only_mutation_v1", "typed upsert has a local atomic command-WAL/replay contract but no replicated deterministic-entry contract"),
+	nativewire.CommandVectorInsert:        rejectedRow(nativewire.CommandVectorInsert, "CommandVectorInsert", "vector_insert", "WAL-supported", "CollectionInsertBatchByID (via fixed-peer Raft owner)", "local_only_mutation_v1", "public vector insert is local-only routing; the owner lowers the validated request to the existing deterministic insert-batch Raft entry"),
 
 	nativewire.CommandFlushCollection: rejectedRow(nativewire.CommandFlushCollection, "CommandFlushCollection", "flush_collection", "WAL-supported", "local durability barrier", "local_only_barrier_v1", "local durability barriers are not replicated command identity"),
 	nativewire.CommandFlushAll:        rejectedRow(nativewire.CommandFlushAll, "CommandFlushAll", "flush_all", "WAL-supported", "local durability barrier", "local_only_barrier_v1", "local durability barriers are not replicated command identity"),

@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 	"unsafe"
@@ -50,13 +51,14 @@ func TestTopVectorPartitionCoordinatorNeighborsV1OnlyClonesAdmissions(t *testing
 }
 
 type testVectorPartitionCoordinatorRouterV1 struct {
-	status     collections.VectorPartitionRouterRuntimeStatusV1
-	partitions []collections.VectorPartitionRouterPartitionScoreV1
-	closeMu    sync.Mutex
-	closeCount int
-	closeErr   error
-	closeBlock <-chan struct{}
-	closeStart chan<- struct{}
+	searchCalls atomic.Uint64
+	status      collections.VectorPartitionRouterRuntimeStatusV1
+	partitions  []collections.VectorPartitionRouterPartitionScoreV1
+	closeMu     sync.Mutex
+	closeCount  int
+	closeErr    error
+	closeBlock  <-chan struct{}
+	closeStart  chan<- struct{}
 }
 
 var vectorPartitionCoordinatorCandidateRowsBenchmarkSinkV1 struct {
@@ -65,6 +67,7 @@ var vectorPartitionCoordinatorCandidateRowsBenchmarkSinkV1 struct {
 }
 
 func (r *testVectorPartitionCoordinatorRouterV1) SearchWithContextV1(ctx context.Context, _ []float32, opts collections.VectorPartitionRouterSearchOptionsV1) (collections.VectorPartitionRouterSearchResultV1, error) {
+	r.searchCalls.Add(1)
 	if err := ctx.Err(); err != nil {
 		return collections.VectorPartitionRouterSearchResultV1{}, err
 	}
@@ -145,6 +148,11 @@ func (s *testVectorPartitionCoordinatorRouterSourceV1) openCount() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.opens
+}
+
+func (s *testVectorPartitionCoordinatorRouterSourceV1) acquireVectorPartitionCoordinatorReplicatedLivePinV1(context.Context, collections.VectorPartitionManifestV1) (*collections.VectorIndexPartitionLiveSearchPinV1, error) {
+	// This static-router fixture has no live tail.
+	return nil, nil
 }
 
 type testVectorPartitionCoordinatorDispatcherV1 struct {
@@ -580,6 +588,51 @@ func TestVectorPartitionCoordinatorAllowsBoundedAggregateCandidateLimitAboveShar
 	}
 	if got.MaxCandidateBytes != 128<<20 {
 		t.Fatalf("aggregate candidate limit=%d", got.MaxCandidateBytes)
+	}
+}
+
+func TestVectorPartitionCoordinatorRequiresReplicatedLivePinSourceV1(t *testing.T) {
+	coordinator, source, dispatcher := testVectorPartitionCoordinatorV1(t,
+		[]raftplacement.GroupV1{{ID: "group-a", Members: []raftcluster.NodeID{"node-a"}, LeaderHint: "node-a"}},
+		[]raftcluster.GroupID{"group-a"}, map[uint32][]VectorPartitionShardSearchNeighborV1{0: {{ID: "doc", Score: 1}}}, VectorPartitionCoordinatorLimitsV1{},
+	)
+	coordinator.replicatedLifecycle = &recordingVectorPartitionReplicatedLifecycleAuthorityV1{readySetDigest: strings.Repeat("c", 64)}
+	// Expose only the base router capability, not the replicated live-pin source.
+	coordinator.routerSource = struct {
+		VectorPartitionCoordinatorRouterSourceV1
+	}{source}
+	if _, err := coordinator.Search(t.Context(), testVectorPartitionCoordinatorRequestV1(1)); !errors.Is(err, ErrVectorPartitionCoordinatorUnavailable) {
+		t.Fatalf("missing replicated live-pin source error=%v", err)
+	}
+	if source.router.searchCalls.Load() != 0 || len(dispatcher.calls) != 0 {
+		t.Fatalf("missing capability searched=%d dispatched=%d", source.router.searchCalls.Load(), len(dispatcher.calls))
+	}
+}
+
+func TestVectorPartitionImmutableCoordinatorRouterSourceV1(t *testing.T) {
+	coordinator, source, dispatcher := testVectorPartitionCoordinatorV1(t,
+		[]raftplacement.GroupV1{{ID: "group-a", Members: []raftcluster.NodeID{"node-a"}, LeaderHint: "node-a"}},
+		[]raftcluster.GroupID{"group-a"}, map[uint32][]VectorPartitionShardSearchNeighborV1{0: {{ID: "doc", Score: 1}}}, VectorPartitionCoordinatorLimitsV1{},
+	)
+	coordinator.replicatedLifecycle = &recordingVectorPartitionReplicatedLifecycleAuthorityV1{readySetDigest: strings.Repeat("c", 64)}
+	// As with external router wrappers, expose only Open; the constructor's
+	// immutable adapter supplies the explicit no-live-tail capability.
+	coordinator.routerSource = vectorPartitionImmutableCoordinatorRouterSourceV1{struct {
+		VectorPartitionCoordinatorRouterSourceV1
+	}{source}}
+	response, err := coordinator.Search(t.Context(), testVectorPartitionCoordinatorRequestV1(1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Neighbors) != 1 || response.LiveRevision != 0 || response.LiveCoverage != 0 {
+		t.Fatalf("immutable response=%+v", response)
+	}
+	if !reflect.DeepEqual(source.generations, []uint64{coordinator.placement.PartitionGeneration}) || source.router.searchCalls.Load() != 1 || len(dispatcher.calls) != 1 {
+		t.Fatalf("router generations=%v searched=%d dispatched=%d", source.generations, source.router.searchCalls.Load(), len(dispatcher.calls))
+	}
+	request := dispatcher.calls[0]
+	if request.LiveRevision != 0 || request.LiveCoverage != 0 || len(request.LiveDomainIDs) != 0 {
+		t.Fatalf("immutable request carried live identity: %+v", request)
 	}
 }
 

@@ -150,7 +150,7 @@ func TestVectorPartitionLiveProductionCoordinatorMutationAndColdReloadV1(t *test
 	}
 
 	initial := search("initial", []float32{1, 0})
-	if len(initial.Neighbors) != 1 || initial.Neighbors[0].ID != "a" || initial.Counters.SelectedPacks != 2 || initial.Counters.LiveDomainsSearched != 1 {
+	if len(initial.Neighbors) != 1 || initial.Neighbors[0].ID != "a" || initial.Counters.SelectedPacks != 2 || initial.Counters.LiveDomainsSearched != 2 {
 		t.Fatalf("initial response=%+v", initial)
 	}
 	initialRequests := dispatcher.requests("initial")
@@ -164,7 +164,7 @@ func TestVectorPartitionLiveProductionCoordinatorMutationAndColdReloadV1(t *test
 		}
 		liveAssignments++
 	}
-	if len(initialRequests) != 2 || liveAssignments != 1 {
+	if len(initialRequests) != 2 || liveAssignments != 2 {
 		t.Fatalf("initial request assignments=%+v", initialRequests)
 	}
 	initialStats := []CollectionVectorPartitionGenerationCacheStatsV1{sources[0].Stats(), sources[1].Stats()}
@@ -225,7 +225,7 @@ func TestVectorPartitionLiveProductionCoordinatorMutationAndColdReloadV1(t *test
 
 	insertVectorPartitionLiveDocumentV1(t, fixture.collection, "0", []float32{1, 0})
 	inserted := search("insert", []float32{1, 0})
-	if len(inserted.Neighbors) != 1 || inserted.Neighbors[0].ID != "0" || inserted.Counters.DeltaResults != 1 || inserted.Counters.LiveDomainsSearched != 1 {
+	if len(inserted.Neighbors) != 1 || inserted.Neighbors[0].ID != "0" || inserted.Counters.DeltaResults != 2 || inserted.Counters.LiveDomainsSearched != 2 {
 		t.Fatalf("insert response=%+v", inserted)
 	}
 	for i, source := range sources {
@@ -239,7 +239,7 @@ func TestVectorPartitionLiveProductionCoordinatorMutationAndColdReloadV1(t *test
 	if len(replaced.Neighbors) != 1 || replaced.Neighbors[0].ID != "0" ||
 		replaced.LiveRevision <= inserted.LiveRevision || replaced.LiveCoverage <= inserted.LiveCoverage ||
 		replaced.Counters.BaseCandidates == 0 || replaced.Counters.DeltaCandidates == 0 ||
-		replaced.Counters.DeltaResults != 1 || replaced.Counters.LiveDomainsSearched != 1 {
+		replaced.Counters.DeltaResults != 2 || replaced.Counters.LiveDomainsSearched != 2 {
 		t.Fatalf("stale nearest was admitted response=%+v", replaced)
 	}
 	replaceVectorPartitionLiveDocumentV1(t, fixture.collection, "0", []float32{0, 1})
@@ -285,6 +285,77 @@ func TestVectorPartitionLiveProductionCoordinatorMutationAndColdReloadV1(t *test
 	bad.LiveRevision++
 	if _, err := services[bad.TargetGroupID].Search(t.Context(), bad); !errors.Is(err, ErrVectorPartitionShardSearchGenerationMismatch) {
 		t.Fatalf("mismatched live identity err=%v", err)
+	}
+}
+
+func TestVectorPartitionReplicatedLivePinDoesNotBlockPublicationV1(t *testing.T) {
+	fixture := newVectorPartitionLiveNativewireFixtureV1(t)
+	defer fixture.database.Close()
+	services, sources := newVectorPartitionLiveProductionServicesV1(t, fixture)
+	defer func() {
+		for _, source := range sources {
+			_ = source.Close()
+		}
+	}()
+	dispatcher := &vectorPartitionLiveProductionDispatcherV1{services: services}
+	coordinator, err := NewVectorPartitionCoordinatorForTopologyV1(
+		vectorPartitionLiveCoordinatorTopologyV1(fixture),
+		fixedPeerVectorCoordinatorRouterSourceV1{CollectionVectorPartitionCoordinatorRouterSourceV1{Collection: fixture.collection}},
+		dispatcher,
+		VectorPartitionCoordinatorLimitsV1{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer coordinator.Close()
+	coordinator.replicatedLifecycle = &recordingVectorPartitionReplicatedLifecycleAuthorityV1{readySetDigest: fixture.manifest.ReadySetDigest}
+
+	document, err := json.Marshal(map[string]any{"embedding": []float32{.9, .1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	applyDone := make(chan error, 1)
+	var dispatchOnce sync.Once
+	var dispatchErr error
+	publicationCompleted := false
+	dispatcher.setBeforeDispatch(func(ctx context.Context, _ VectorPartitionShardSearchRequestV1) error {
+		dispatchOnce.Do(func() {
+			go func() {
+				_, applyErr := fixture.collection.Insert([]byte("0-replicated-concurrent"), document)
+				applyDone <- applyErr
+			}()
+			select {
+			case dispatchErr = <-applyDone:
+				publicationCompleted = dispatchErr == nil
+			case <-time.After(2 * time.Second):
+				dispatchErr = errors.New("live publication blocked by coordinator search pin")
+			case <-ctx.Done():
+				dispatchErr = ctx.Err()
+			}
+		})
+		return dispatchErr
+	})
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	_, err = coordinator.Search(ctx, VectorPartitionCoordinatorRequestV1{
+		Version: VectorPartitionCoordinatorVersionV1, RequestID: "replicated-concurrent", CancellationID: "cancel-replicated-concurrent",
+		Database: "default", Catalog: "default", Collection: "docs", IndexName: fixture.definition.Name,
+		IndexDefinitionDigest: collections.VectorIndexDefinitionDigestV1(fixture.definition),
+		Query:                 []float32{.9, .1}, Metric: VectorPartitionShardSearchMetricCosineV1,
+		RouterMode: collections.VectorPartitionRouterModeExactV1, RouterCandidateBudget: 2, PartitionProbes: 1,
+		Consistency: VectorPartitionShardSearchConsistencySnapshotV1, StatsMode: VectorPartitionShardSearchStatsBasicV1,
+		TopK: 1, EfSearch: 8, RequestBytesLimit: 1 << 20, CandidateBytesLimit: 8 << 20,
+		ResponseBytesLimit: 1 << 20, MergeEntriesLimit: 3,
+	})
+	if dispatchErr != nil {
+		t.Fatal(dispatchErr)
+	}
+	if !publicationCompleted {
+		t.Fatal("search failed before exercising concurrent live publication")
+	}
+	var coordinatorErr *VectorPartitionCoordinatorErrorV1
+	if !errors.As(err, &coordinatorErr) || coordinatorErr.Code != VectorPartitionCoordinatorErrorGenerationMismatchV1 {
+		t.Fatalf("concurrent live revision error=%v, want generation mismatch", err)
 	}
 }
 

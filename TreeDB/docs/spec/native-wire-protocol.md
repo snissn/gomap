@@ -782,9 +782,10 @@ is terminal for the named cursor but not for the connection.
 61 vector_pin_search_snapshot
 62 vector_search_pinned
 63 vector_close_pinned_snapshot
+66 vector_insert
 ```
 
-These are connection-local read commands and never deterministic mutation or
+Commands 58-63 are connection-local reads and never deterministic mutation or
 command-WAL entries. Every command requires the generic `deadline` section and
 uses the existing native-wire framing, bounded operation context,
 connection limits, cancellation, and error frames. Their direct binary sections
@@ -797,6 +798,8 @@ are:
 126 vector_search_response
 127 vector_fast_evidence
 128 vector_status
+137 vector_insert_request
+138 vector_insert_response
 ```
 
 The request carries float32 query values, generation, metric, search budgets,
@@ -807,6 +810,30 @@ maps, and string-form float conversion are not part of this route. One
 the close command or by connection teardown. Strict, fast, and pinned searches
 retain their public `vectorpartition.OperationsV1` consistency and validation
 semantics; native wire changes only the transport representation.
+
+`vector_insert` is the narrow LocalOnly public mutation route. It requires the
+generic `deadline` section and `vector_insert_request` (137). The request binds
+one mutation-attempt idempotency key, exact document ID, generation, FP32
+routing vector, JSON document, and deadline. The exact document ID must be
+valid UTF-8 so the same identity can be returned in the visibility proof. The
+server selects exactly one partition owner, revalidates catalog,
+lifecycle, router, document/vector, and leader proofs at that owner, then lowers
+the mutation to the existing deterministic insert-batch entry for the owning
+Raft group. Command 66 is never itself encoded as a replicated entry.
+
+On success, `vector_insert_response` (138) returns generation, partition and
+owner, commit term/index, applied index, production-consensus proof, live
+revision, visible ID, and route/forward/commit/replication/apply/visibility
+counters. Any failure after submission may have committed and MUST surface as
+`commit_ambiguous`; stale or incomplete authority fails closed before mutation.
+
+The fixed-peer routed vector runtime registers only `vector_status`,
+`vector_search_strict`, and `vector_insert` (commands 58, 59, and 66). It does
+not register commands 60-63 because that runtime has no serving-snapshot
+publisher; fast and pinned search remain available on production nodes that do
+configure one. Each vector-enabled fixed-peer process must host exactly one
+configured data group, which may be either the owner group or a non-owner
+ingress group.
 
 ### 10.1. Document-service dense search
 

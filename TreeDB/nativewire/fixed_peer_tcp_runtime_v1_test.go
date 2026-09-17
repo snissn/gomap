@@ -25,6 +25,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/raftentry"
 	"github.com/snissn/gomap/TreeDB/internal/raftplacement"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
+	public "github.com/snissn/gomap/TreeDB/vectorpartition"
 )
 
 func fixedPeerReadyV1(t testing.TB, ctx context.Context, names []string) ([]FixedPeerTCPConfigV1, []*fixedPeerTestProcessV1, *FixedPeerTCPClientV1) {
@@ -745,6 +746,12 @@ func TestFixedPeerTCPRemoteErrorClassesV1(t *testing.T) {
 	if code := fixedPeerErrorCodeV1(errors.Join(context.Canceled, raftcluster.ErrCommitAmbiguous)); code != raftcluster.ErrCommitAmbiguous.Error() {
 		t.Fatalf("ambiguous outcome lost: %s", code)
 	}
+	if code := fixedPeerErrorCodeV1(errors.Join(ErrFixedPeerVectorUnavailableV1, raftcluster.ErrCommitAmbiguous)); code != raftcluster.ErrCommitAmbiguous.Error() {
+		t.Fatalf("post-commit vector failure lost: %s", code)
+	}
+	if code := fixedPeerErrorCodeV1(&public.ErrorV1{Code: public.ErrorGenerationMismatchV1, Err: errors.New("stale")}); code != string(public.ErrorGenerationMismatchV1) {
+		t.Fatalf("public vector error lost: %s", code)
+	}
 }
 
 func TestFixedPeerTCPRemoteErrorRouteMetadataPresenceV1(t *testing.T) {
@@ -796,6 +803,18 @@ func TestFixedPeerTCPDirectorySyncV1(t *testing.T) {
 	}
 	if err := syncFixedPeerDirectoryV1(filepath.Join(root, "missing")); err == nil {
 		t.Fatal("ignored directory-open failure")
+	}
+}
+
+func TestFixedPeerJSONOmitsUnusedVectorFieldsV1(t *testing.T) {
+	for _, value := range []any{fixedPeerRequestV1{}, fixedPeerReplyV1{}} {
+		raw, err := json.Marshal(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(raw), "VectorInsert") || strings.Contains(string(raw), "VectorSearch") {
+			t.Fatalf("unused vector payload was encoded: %s", raw)
+		}
 	}
 }
 

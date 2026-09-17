@@ -2,6 +2,7 @@ package collections
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -92,6 +93,51 @@ func (c *Collection) declaredVectorIndexDefinition(name string) (VectorIndexDefi
 		return VectorIndexDefinition{}, err
 	}
 	return c.declaredVectorIndexDefinitionPrepared(name)
+}
+
+// ValidatedVectorFromDocumentV1 decodes one declared index's vector from the
+// exact document bytes that a collection mutation will store. It is the
+// canonical boundary for callers that must bind routing to persisted content.
+func (c *Collection) ValidatedVectorFromDocumentV1(index string, format DocumentFormat, document []byte) ([]float32, error) {
+	def, err := c.declaredVectorIndexDefinition(index)
+	if err != nil {
+		return nil, err
+	}
+	want, err := normalizeDocumentFormat(c.meta.Options.DocumentFormat)
+	if err != nil {
+		return nil, err
+	}
+	got, err := normalizeDocumentFormat(format)
+	if err != nil {
+		return nil, err
+	}
+	if got != want {
+		return nil, fmt.Errorf("collections: document format %q does not match collection format %q", got, want)
+	}
+	path, err := parseVectorFieldPath(def.Field)
+	if err != nil {
+		return nil, err
+	}
+	var vector []float32
+	var ok bool
+	switch got {
+	case DocumentFormatJSON:
+		vector, ok, err = vectorFromJSONField(document, path)
+	case DocumentFormatBSON:
+		vector, ok, err = vectorFromBSONField(document, path)
+	default:
+		return nil, fmt.Errorf("collections: routed vector mutation does not support document format %q", got)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, fmt.Errorf("collections: document is missing vector field %q", def.Field)
+	}
+	if err := validateIngestVectors([][]float32{vector}, def); err != nil {
+		return nil, err
+	}
+	return vector, nil
 }
 
 func (c *Collection) declaredVectorIndexDefinitionPrepared(name string) (VectorIndexDefinition, error) {
