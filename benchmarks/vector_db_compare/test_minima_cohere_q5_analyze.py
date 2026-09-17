@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest import mock
 
@@ -2073,12 +2074,53 @@ class Q5AnalyzeTest(unittest.TestCase):
                 )
                 self.assertEqual(result["state"], "invalid")
 
+    def test_normalized_truth_recomputation_uses_go_checked_shared_oracle(self):
+        vectors = analyzer.np.tile(analyzer.np.asarray([1, 0], dtype=analyzer.np.float32), (128, 1))
+        vectors[::2] = [0, 1]
+        queries = analyzer.np.asarray([[1, 0]], dtype=analyzer.np.float32)
+        ids, scores = analyzer.native.canonical_normalized_f32_truth(vectors, queries, [128])
+        def recompute(want_ids, want_scores):
+            # Small source arrays test the math, not final packet admission.
+            with mock.patch.object(analyzer.np, "memmap", side_effect=[vectors, queries]), \
+                    mock.patch.object(analyzer, "FULL_ELIGIBLE_COUNTS", [128]):
+                return analyzer._normalized_recompute_canonical_truth(
+                    {"documents": "documents.f32", "queries": "queries.f32"}, want_ids, want_scores,
+                )
+        normalized, normalized_queries = recompute(ids, scores)
+        analyzer.np.testing.assert_array_equal(normalized, vectors)
+        analyzer.np.testing.assert_array_equal(normalized_queries, queries)
+        bad_ids = copy.deepcopy(ids)
+        bad_ids["128"][0][-1] = "row-000025"
+        with self.assertRaisesRegex(analyzer.EvidenceError, "source recomputation"):
+            recompute(bad_ids, scores)
+        bad_scores = copy.deepcopy(scores)
+        bad_scores["128"][0][0] = 0.5
+        with self.assertRaisesRegex(analyzer.EvidenceError, "source recomputation"):
+            recompute(ids, bad_scores)
+
+    def test_normalized_result_scores_apply_clamp_and_contract_tolerance(self):
+        vectors = analyzer.np.asarray([[1.0000001, 0], [0.5, 0]], dtype=analyzer.np.float32)
+        queries = analyzer.np.asarray([[1, 0]], dtype=analyzer.np.float32)
+        self.assertTrue(analyzer._normalized_result_scores_match(
+            ["row-000000", "row-000001"], [1, .5000025], 0, vectors, queries,
+        ))
+        self.assertFalse(analyzer._normalized_result_scores_match(
+            ["row-000001"], [.50001], 0, vectors, queries,
+        ))
+        for invalid in (1.0000001, float("inf"), float("nan")):
+            self.assertFalse(analyzer._normalized_result_scores_match(
+                ["row-000000"], [invalid], 0, vectors, queries,
+            ))
+        ids, scores = analyzer.native.canonical_normalized_f32_topk(vectors, queries, [2])
+        self.assertEqual(scores["2"][0], [1.0, 0.5])
+
     def test_normalized_engine_recomputes_same_shortlist_raw_repetitions(self):
         shortlists = [{
             "query": query, "ordinals": list(range(64)),
             "candidate_work": {
                 "quantized_score_calls": 128,
                 "quantized_code_bytes_read": 128 * 768,
+                "prepared_graph_search_views": 1,
             },
             "packed_score_calls": 1, "packed_score_candidates": 64,
             "packed_vector_bytes_read": 64 * 768 * 4,
@@ -2096,27 +2138,298 @@ class Q5AnalyzeTest(unittest.TestCase):
             "ef_search": 64, "rerank_candidates": 64,
             "representation": analyzer.native.NORMALIZED_REPRESENTATION,
             "index": "minima_cohere", "quantized_index": analyzer.native.QUANTIZED_PROFILE_NAME,
+            "collection_generation": 12,
             "stable_duplicate_score_calls": 0, "shortlists": shortlists,
-            "shortlists_sha256": hashlib.sha256(json.dumps(
-                shortlists, sort_keys=True, separators=(",", ":"),
-            ).encode()).hexdigest(),
             "candidate_only": benchmark(80_000, "candidate_only"),
             "packed_same_shortlist": benchmark(6_900, "packed_same_shortlist"),
         }
         summary, failures = analyzer._normalized_validate_engine(artifact)
         self.assertFalse(failures)
         self.assertEqual(summary["summaries"]["packed_same_shortlist"]["median_ns"], 6_900)
+        owner = {
+            "schema_hash": 11, "schema_generation": 12,
+            "base_manifest_generation": 13, "base_manifest_checksum": 14,
+            "current_manifest_generation": 13, "current_manifest_checksum": 14,
+            "current_coverage_lsn": 15,
+        }
+        artifact["serving_owner"] = {
+            "index": "embedding", "publication_present": True,
+            "publication_unchanged": True, "serving_ready": True,
+            "invalid": False, "reconciling": False,
+            "base_manifest": {"generation": 13, "checksum": 14},
+            "current_manifest": {"generation": 13, "checksum": 14},
+            "current_coverage_lsn": 15,
+        }
+        analyzer._normalized_validate_engine(artifact, owner)
+        changed = copy.deepcopy(artifact)
+        changed["collection_generation"] = 13
+        with self.assertRaisesRegex(analyzer.EvidenceError, "timed serving owner"):
+            analyzer._normalized_validate_engine(changed, owner)
         changed = copy.deepcopy(artifact)
         changed["packed_same_shortlist"][5]["ordinal"] = 4
         with self.assertRaisesRegex(analyzer.EvidenceError, "raw benchmark"):
             analyzer._normalized_validate_engine(changed)
         changed = copy.deepcopy(artifact)
         changed["shortlists"][0]["packed_vector_bytes_read"] -= 4
-        changed["shortlists_sha256"] = hashlib.sha256(json.dumps(
-            changed["shortlists"], sort_keys=True, separators=(",", ":"),
-        ).encode()).hexdigest()
         with self.assertRaisesRegex(analyzer.EvidenceError, "shortlist work"):
             analyzer._normalized_validate_engine(changed)
+        changed = copy.deepcopy(artifact)
+        changed["collection_generation"] = 0
+        with self.assertRaisesRegex(analyzer.EvidenceError, "engine diagnostic identity"):
+            analyzer._normalized_validate_engine(changed)
+
+    def test_normalized_producer_coordinates_bind_runtime_host_and_interpreter(self):
+        runtime = analyzer.native.python_runtime_identity()
+        executable = str(Path(analyzer.sys.executable).absolute())
+        self.assertEqual(runtime["python_executable"], executable)
+        self.assertEqual(runtime["python_executable_sha256"], analyzer.sha256_file(Path(executable)))
+        self.assertEqual(analyzer._consumer_runtime_identity(), runtime)
+        coordinate = {
+            "python": "producer python", "numpy": "producer numpy", "platform": "producer host",
+            "python_executable": executable, "python_executable_sha256": "a" * 64,
+            "cpu_affinity": [0, 1], "gomaxprocs": "2",
+            "treedb_go_runtime": {"GOMAXPROCS": "2", "GOGC": "", "GOMEMLIMIT": ""},
+            "blas_threads": {"OPENBLAS_NUM_THREADS": "1", "OMP_NUM_THREADS": "1"},
+            "host_memory_bytes": str(32 * analyzer.native.GIB),
+            "host_resource_identity": {"machine_id": "host", "boot_id": "boot"},
+            "infrastructure": {"effective_resources": {
+                "effective_memory_bytes": 32 * analyzer.native.GIB,
+                "effective_cpu_quota_millis": 2000,
+            }},
+        }
+        plans = {"exact": copy.deepcopy(coordinate), "sq8": copy.deepcopy(coordinate)}
+        self.assertEqual(
+            analyzer._normalized_producer_coordinates(plans)["python"], "producer python",
+        )
+        for field in ("python", "python_executable_sha256", "host_resource_identity"):
+            changed = copy.deepcopy(plans)
+            changed["sq8"][field] = "different" if field != "host_resource_identity" else {
+                "machine_id": "other", "boot_id": "boot",
+            }
+            with self.subTest(field=field), self.assertRaisesRegex(
+                    analyzer.EvidenceError, "different producer coordinates"):
+                analyzer._normalized_producer_coordinates(changed)
+
+        script = "/source/minima_cohere_native_diagnostic.py"
+        self.assertEqual(
+            analyzer._normalized_command_flags(
+                [executable, script, "--rows", "500000"], coordinate,
+            ),
+            {"--rows": "500000"},
+        )
+        with self.assertRaisesRegex(analyzer.EvidenceError, "reviewed producer"):
+            analyzer._normalized_command_flags(
+                ["/different/python", script, "--rows", "500000"], coordinate,
+            )
+
+    def test_normalized_analyzer_recomputes_cgroup_preflight(self):
+        with tempfile.TemporaryDirectory() as directory:
+            plan = {
+                "rows": 500000, "run_dir": str(Path(directory) / "run"),
+                "minimum_free_bytes": 10 * analyzer.native.GIB,
+                "maximum_output_bytes": 11 * analyzer.native.GIB,
+                "maximum_combined_rss_bytes": 24 * analyzer.native.GIB,
+                "host_memory_bytes": str(32 * analyzer.native.GIB),
+                "cpu_affinity": [0, 1], "gomaxprocs": "2",
+                "host_resource_identity": {"cgroup_limits": {
+                    "scope/cpu.max": "max 100000", "scope/memory.high": "max",
+                    "scope/memory.max": "max",
+                }},
+            }
+            with mock.patch.object(
+                    analyzer.native.shutil, "disk_usage",
+                    return_value=SimpleNamespace(free=22 * analyzer.native.GIB)):
+                plan["infrastructure"] = analyzer.native.normalized_v4_infrastructure_receipt(plan)
+            analyzer._normalized_validate_infrastructure(plan, "test")
+
+            changed = copy.deepcopy(plan)
+            changed["infrastructure"]["effective_resources"]["effective_memory_bytes"] -= 1
+            with self.assertRaisesRegex(analyzer.EvidenceError, "preflight is unavailable"):
+                analyzer._normalized_validate_infrastructure(changed, "test")
+            changed = copy.deepcopy(plan)
+            changed["host_resource_identity"]["cgroup_limits"]["scope/memory.max"] = str(
+                8 * analyzer.native.GIB
+            )
+            with self.assertRaisesRegex(analyzer.EvidenceError, "preflight is unavailable"):
+                analyzer._normalized_validate_infrastructure(changed, "test")
+
+    def test_normalized_production_identity_accepts_actual_packed_wire_shapes(self):
+        owner = {
+            "schema_hash": 11, "schema_generation": 12,
+            "base_manifest_generation": 13, "base_manifest_checksum": 14,
+            "current_manifest_generation": 13, "current_manifest_checksum": 14,
+            "current_coverage_lsn": 15,
+        }
+        direct = {
+            "version": 1, "representation": analyzer.native.NORMALIZED_REPRESENTATION,
+            "query_mode": "exact", "execution_route": "typed_hnsw",
+            "return_embedding": False, "diagnostics": False, "filter": False,
+            "top_k": 10, "ef_search": 64, "rerank_candidates": 0,
+            "result_count": 10, **owner,
+            "fp32_score_calls": 1150, "fp32_vector_bytes_read": 1150 * 768 * 4,
+            "quantized_index_name": "", "quantized_codec": "", "quantized_version": 0,
+            "embedding_vector_reads": 0, "embedding_vector_bytes": 0,
+            "embedding_output_bytes": 0, "packed_score_calls": 6,
+            "packed_score_candidates": 81, "packed_vector_bytes_read": 81 * 768 * 4,
+        }
+        analyzer._normalized_production_identity(direct, "exact", "go_native")
+        sq8 = {
+            **direct, "query_mode": "quantized_rerank", "rerank_candidates": 64,
+            "quantized_index_name": analyzer.native.QUANTIZED_PROFILE_NAME,
+            "quantized_codec": "scalar_u8", "quantized_version": 1,
+            "quantized_score_calls": 1154, "quantized_code_bytes_read": 1154 * 768,
+            "fp32_score_calls": 64, "fp32_vector_bytes_read": 64 * 768 * 4,
+            "packed_score_calls": 1, "packed_score_candidates": 64,
+            "packed_vector_bytes_read": 64 * 768 * 4,
+        }
+        analyzer._normalized_production_identity(
+            sq8, "quantized_rerank", "python_native",
+        )
+
+        receipt = {
+            "Available": True, "Representation": analyzer.native.NORMALIZED_REPRESENTATION,
+            "QueryMode": "exact", "Route": "typed_hnsw", "ResultCount": 10,
+            "SchemaHash": 11, "SchemaGeneration": 12,
+            "BaseManifestGeneration": 13, "BaseManifestChecksum": 14,
+            "CurrentManifestGeneration": 13, "CurrentManifestChecksum": 14,
+            "CurrentCoverageLSN": 15, "QuantizedIndexName": "",
+            "QuantizedCodec": "", "QuantizedVersion": 0,
+        }
+        collection = {
+            "receipt": receipt, "quantized_score_calls": 0, "fp32_score_calls": 0,
+            "packed_score_calls": 6, "packed_score_candidates": 81,
+            "packed_vector_bytes_read": 81 * 768 * 4,
+            "embedding_vector_reads": 0, "embedding_vector_bytes": 0,
+            "embedding_output_bytes": 0,
+        }
+        analyzer._normalized_production_identity(
+            collection, "exact", "collection_search",
+        )
+        collection_sq8 = {
+            **collection,
+            "receipt": {
+                **receipt, "QueryMode": "quantized_rerank",
+                "QuantizedIndexName": analyzer.native.QUANTIZED_PROFILE_NAME,
+                "QuantizedCodec": "scalar_u8", "QuantizedVersion": 1,
+            },
+            "quantized_score_calls": 1154, "fp32_score_calls": 64,
+            "packed_score_calls": 1, "packed_score_candidates": 64,
+            "packed_vector_bytes_read": 64 * 768 * 4,
+        }
+        analyzer._normalized_production_identity(
+            collection_sq8, "quantized_rerank", "collection_fetch",
+        )
+
+        for field in ("quantized_index_name", "quantized_codec", "quantized_version"):
+            changed = copy.deepcopy(direct)
+            changed.pop(field)
+            with self.subTest(shape="client", field=field), self.assertRaisesRegex(
+                    analyzer.EvidenceError, "crossed the SQ8 plane"):
+                analyzer._normalized_production_identity(changed, "exact", "service")
+            changed = copy.deepcopy(collection)
+            changed["receipt"].pop({
+                "quantized_index_name": "QuantizedIndexName",
+                "quantized_codec": "QuantizedCodec",
+                "quantized_version": "QuantizedVersion",
+            }[field])
+            with self.subTest(shape="collection", field=field), self.assertRaisesRegex(
+                    analyzer.EvidenceError, "crossed score planes"):
+                analyzer._normalized_production_identity(
+                    changed, "exact", "collection_search",
+                )
+
+        changed = {**direct, "packed_vector_bytes_read": 1}
+        with self.assertRaisesRegex(analyzer.EvidenceError, "packed FP32"):
+            analyzer._normalized_production_identity(changed, "exact", "service")
+        changed = copy.deepcopy(collection_sq8)
+        changed["receipt"]["QueryMode"] = "exact"
+        with self.assertRaisesRegex(analyzer.EvidenceError, "production route"):
+            analyzer._normalized_production_identity(
+                changed, "quantized_rerank", "collection_fetch",
+            )
+
+    def test_normalized_matrix_recomputes_immutable_owner_identity(self):
+        identity = {
+            "schema_hash": 11, "schema_generation": 12,
+            "base_manifest_generation": 13, "base_manifest_checksum": 14,
+            "current_manifest_generation": 13, "current_manifest_checksum": 14,
+            "current_coverage_lsn": 15,
+        }
+
+        def lane(*, receipt=False):
+            route = identity
+            if receipt:
+                route = {"receipt": {
+                    receipt_name: identity[canonical]
+                    for canonical, receipt_name
+                    in analyzer.native.v4_gate._OWNER_IDENTITY_FIELDS
+                }}
+            arm = {"repetitions": [{"observations": [{"route": copy.deepcopy(route)}]}]}
+            return {"exact": copy.deepcopy(arm), "sq8": copy.deepcopy(arm)}
+
+        lanes = {
+            "go_native": lane(), "python_native": lane(),
+            "collection_search": lane(receipt=True),
+            "collection_fetch": lane(receipt=True), "service": lane(),
+        }
+        proof = analyzer.native.v4_gate.immutable_owner_identity(lanes)
+        self.assertEqual(
+            analyzer._normalized_matrix_owner_identity(
+                {"immutable_owner_identity": proof}, lanes,
+            ),
+            proof,
+        )
+        with self.assertRaisesRegex(analyzer.EvidenceError, "missing or inconsistent"):
+            analyzer._normalized_matrix_owner_identity(
+                {"immutable_owner_identity": {**proof, "current_coverage_lsn": 16}}, lanes,
+            )
+        lanes["service"]["sq8"]["repetitions"][0]["observations"][0]["route"][
+            "current_manifest_checksum"
+        ] += 1
+        with self.assertRaisesRegex(analyzer.EvidenceError, "cross graph publications"):
+            analyzer._normalized_matrix_owner_identity(
+                {"immutable_owner_identity": proof}, lanes,
+            )
+
+    def test_normalized_serving_owner_and_retained_scores_are_independently_bound(self):
+        owner = {
+            "schema_hash": 11, "schema_generation": 12,
+            "base_manifest_generation": 13, "base_manifest_checksum": 14,
+            "current_manifest_generation": 13, "current_manifest_checksum": 14,
+            "current_coverage_lsn": 15,
+        }
+        graph = {
+            "index": "embedding",
+            "publication_present": True, "publication_unchanged": True,
+            "serving_ready": True, "invalid": False, "reconciling": False,
+            "base_manifest": {"generation": 13, "checksum": 14},
+            "current_manifest": {"generation": 13, "checksum": 14},
+            "current_coverage_lsn": 15,
+        }
+        analyzer._normalized_ready_graph_owner(graph, owner, 12, "test")
+        for field, value in (
+                ("publication_present", False), ("invalid", True),
+                ("current_coverage_lsn", 16), ("index", "other")):
+            changed = copy.deepcopy(graph)
+            changed[field] = value
+            with self.subTest(field=field), self.assertRaisesRegex(
+                    analyzer.EvidenceError, "timed serving owner"):
+                analyzer._normalized_ready_graph_owner(changed, owner, 12, "test")
+        with self.assertRaisesRegex(analyzer.EvidenceError, "timed serving owner"):
+            analyzer._normalized_ready_graph_owner(graph, owner, 13, "test")
+
+        vectors = analyzer.np.asarray([[1, 0], [0, 1], [1, 1]], dtype=analyzer.np.float32)
+        vectors /= analyzer.np.linalg.norm(vectors, axis=1)[:, None]
+        queries = analyzer.np.asarray([[1, 0]], dtype=analyzer.np.float32)
+        self.assertTrue(analyzer._normalized_result_scores_match(
+            ["row-000000", "row-000002"], [1.0, 2 ** -.5], 0, vectors, queries,
+        ))
+        self.assertFalse(analyzer._normalized_result_scores_match(
+            ["row-000000", "row-000002"], [1.0, .5], 0, vectors, queries,
+        ))
+        self.assertTrue(analyzer._normalized_result_scores_match(
+            [], [], 0, vectors, queries,
+        ))
 
     def test_normalized_sq8_exact_route_requires_packed_fp32_work(self):
         identity = {
@@ -2167,6 +2480,17 @@ class Q5AnalyzeTest(unittest.TestCase):
             exact, "exact", eligible=4097, filtered=True, result_count=10,
         )
         for field, value in (
+            ("quantized_index_name", "forged"),
+            ("quantized_codec", "scalar_u8"),
+            ("quantized_version", 1),
+        ):
+            with self.subTest(mode="exact", field=field), self.assertRaisesRegex(
+                    analyzer.EvidenceError, "crossed the SQ8 score plane"):
+                analyzer._normalized_route_identity(
+                    {**exact, field: value}, "exact",
+                    eligible=4097, filtered=True, result_count=10,
+                )
+        for field, value in (
             ("quantized_score_calls", 1),
             ("packed_score_calls", 0),
             ("packed_score_candidates", 0),
@@ -2207,35 +2531,49 @@ class Q5AnalyzeTest(unittest.TestCase):
         topology = {
             "role": "hnsw_search_pack", "asset_id": "hnsw_topology_pack_v2",
             "logical_type": "hnsw_search_pack", "physical_encoding": "hnsw_topology_pack_v2",
-            "rows": 500000, "bytes": 1234, "ref": {**ref, "PartID": 2, "Length": 1234},
+            "rows": 500000, "bytes": 1234,
+            "ref": {**ref, "PartID": 2, "FileID": 2, "Length": 1234},
         }
         codes = {
-            "role": "quantized_codes", "asset_id": "minima_sq8/scalar_u8/v1/codes",
+            "role": "quantized_codes", "asset_id": "quantized/minima_sq8/codes",
             "logical_type": "byte_vector", "physical_encoding": "raw_fixed_bytes",
             "rows": 500000, "bytes": 500000 * 768,
             "logical_payload_bytes": 500000 * 768,
-            "ref": {**ref, "PartID": 3, "Length": 500000 * 768},
+            "ref": {**ref, "PartID": 3, "FileID": 3, "Length": 500000 * 768},
         }
-        alpha = {
-            "role": "quantized_alpha", "asset_id": "minima_sq8/scalar_u8/v1/alpha",
-            "logical_type": "scalar_u8_alpha", "physical_encoding": "raw_float32_uint32",
-            "rows": 100, "bytes": 800, "ref": {**ref, "PartID": 4, "Length": 800},
-        }
-        files = [{"path": "wal/000001", "bytes": 100, "category": "command_wal"},
-                 {"path": "docs/column_assets/1", "bytes": 200, "category": "column_assets"}]
+        files = [
+            {"path": "wal/000001", "bytes": 100, "category": "command_wal"},
+            {"path": "db/column_assets/docs/column-assets/assets/segments/segment-000001.tca",
+             "bytes": normalized["bytes"], "category": "column_assets"},
+            {"path": "db/column_assets/docs/column-assets/assets/segments/segment-000002.tca",
+             "bytes": topology["bytes"], "category": "column_assets"},
+            {"path": "db/column_assets/docs/column-assets/assets/segments/segment-000003.tca",
+             "bytes": codes["bytes"], "category": "column_assets"},
+        ]
+        column_bytes = sum(row["bytes"] for row in files if row["category"] == "column_assets")
         inventory = {
             "schema": "treedb_cohere_normalized_v4_resource_inventory/v1",
             "typed_graph": {
-                "serving_ready": True, "publication_unchanged": True,
+                "publication_present": True, "serving_ready": True,
+                "publication_unchanged": True, "invalid": False, "reconciling": False,
                 "base_rows": 500000, "suffix_rows": 0,
-                "vector_assets": [normalized, topology, codes, alpha],
+                "vector_assets": [normalized, topology, codes],
                 "typed_column_parts": [{"rows": 500000, "role": "float32_vectors", "ref": ref}],
-                "logical_resources": {"active_heap_copy_bytes": 0},
-                "physical": {"mapped_bytes": 1},
+                "logical_resources": {
+                    "active_heap_copy_bytes": 0, "active_mapped_bytes": 1,
+                    "fallback_reads": 0,
+                },
+                "physical": {
+                    "closed_db": False, "mapped_bytes": 1,
+                    "descriptors_in_flight": 0, "fallback_backings": 0,
+                    "fallback_bytes": 0, "fallback_bytes_in_flight": 0,
+                    "fallback_segments": 0, "mapped_bytes_in_flight": 0,
+                },
             },
             "owned_files": {
-                "schema": "treedb_owned_db_file_inventory/v1", "total_bytes": 300,
-                "category_bytes": {"column_assets": 200, "command_wal": 100,
+                "schema": "treedb_owned_db_file_inventory/v1",
+                "total_bytes": column_bytes + 100,
+                "category_bytes": {"column_assets": column_bytes, "command_wal": 100,
                                    "value_log": 0, "leaf_log": 0, "other": 0},
                 "files": files,
             },
@@ -2250,8 +2588,11 @@ class Q5AnalyzeTest(unittest.TestCase):
                 {**normalized, "role": "other_fp32"}),
             "unshared_authority": lambda value: value["typed_graph"].update(
                 typed_column_parts=[]),
-            "missing_alpha": lambda value: value["typed_graph"].update(
-                vector_assets=[normalized, topology, codes]),
+            "unexpected_alpha": lambda value: value["typed_graph"]["vector_assets"].append({
+                "role": "quantized_alpha", "asset_id": "unexpected-alpha",
+                "logical_type": "scalar_u8_alpha", "physical_encoding": "raw_float32_uint32",
+                "rows": 1, "bytes": 8, "ref": {**ref, "PartID": 4, "Length": 8},
+            }),
             "forged_file_total": lambda value: value["owned_files"]["files"][0].update(bytes=99),
         }.items():
             with self.subTest(name=name):

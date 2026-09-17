@@ -1,5 +1,6 @@
 """Small fail-closed checks; no service, protected holdout or corpus collection."""
 import copy
+import json
 import subprocess
 import tempfile
 from pathlib import Path
@@ -223,6 +224,67 @@ def paired_endpoint(counter, records):
 
 
 class NativeCohereDiagnosticTests(unittest.TestCase):
+    def test_normalized_infrastructure_preflight_is_structured_and_fail_closed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            plan = {
+                "rows": 500000, "run_dir": str(Path(directory) / "run"),
+                "minimum_free_bytes": 10 * diagnostic.GIB,
+                "maximum_output_bytes": 11 * diagnostic.GIB,
+                "maximum_combined_rss_bytes": 24 * diagnostic.GIB,
+                "host_memory_bytes": str(32 * diagnostic.GIB),
+                "cpu_affinity": [0, 1],
+                "gomaxprocs": "2",
+                "host_resource_identity": {"cgroup_limits": {
+                    "scope/cpu.max": "max 100000",
+                    "scope/memory.high": "max",
+                    "scope/memory.max": "max",
+                }},
+            }
+            with patch.object(
+                    diagnostic.shutil, "disk_usage",
+                    return_value=SimpleNamespace(free=22 * diagnostic.GIB)):
+                receipt = diagnostic.normalized_v4_infrastructure_receipt(plan)
+            self.assertEqual(receipt["state"], "available")
+            self.assertEqual(receipt["requirements"], {
+                "minimum_free_bytes": 21 * diagnostic.GIB,
+                "minimum_host_memory_bytes": 24 * diagnostic.GIB,
+                "minimum_effective_memory_bytes": 24 * diagnostic.GIB,
+                "minimum_cpu_quota_millis": 2000,
+            })
+            self.assertEqual(receipt["effective_resources"], {
+                "effective_memory_bytes": 32 * diagnostic.GIB,
+                "effective_cpu_quota_millis": 2000,
+            })
+            self.assertEqual(receipt["reasons"], [])
+
+            with patch.object(
+                    diagnostic.shutil, "disk_usage",
+                    return_value=SimpleNamespace(free=20 * diagnostic.GIB)):
+                receipt = diagnostic.normalized_v4_infrastructure_receipt(plan)
+            self.assertEqual(receipt["state"], "unavailable")
+            self.assertEqual(receipt["reasons"], ["disk_headroom"])
+
+            constrained = copy.deepcopy(plan)
+            constrained["host_resource_identity"]["cgroup_limits"]["scope/memory.max"] = str(
+                8 * diagnostic.GIB
+            )
+            with patch.object(
+                    diagnostic.shutil, "disk_usage",
+                    return_value=SimpleNamespace(free=22 * diagnostic.GIB)):
+                receipt = diagnostic.normalized_v4_infrastructure_receipt(constrained)
+            self.assertEqual(receipt["state"], "unavailable")
+            self.assertEqual(receipt["effective_resources"]["effective_memory_bytes"], 8 * diagnostic.GIB)
+            self.assertEqual(receipt["reasons"], ["cgroup_memory"])
+
+            constrained = copy.deepcopy(plan)
+            constrained["host_resource_identity"]["cgroup_limits"]["scope/cpu.max"] = "100000 100000"
+            with patch.object(
+                    diagnostic.shutil, "disk_usage",
+                    return_value=SimpleNamespace(free=22 * diagnostic.GIB)):
+                receipt = diagnostic.normalized_v4_infrastructure_receipt(constrained)
+            self.assertEqual(receipt["state"], "unavailable")
+            self.assertEqual(receipt["reasons"], ["cgroup_cpu_quota"])
+
     def test_v4_production_matrix_requires_one_immutable_publication(self):
         identity = {
             "schema_hash": 11,
@@ -843,6 +905,82 @@ class NativeCohereDiagnosticTests(unittest.TestCase):
         self.assertEqual(run.clients.optimize_index.call_args.kwargs["column_graph_serving"], {"limit": 1})
         run.optimize("fold")
         self.assertIsNone(run.clients.optimize_index.call_args.kwargs["column_graph_serving"])
+
+    def test_engine_wrapper_preserves_go_bytes_and_rejects_wrong_generation(self):
+        fixture = Path(__file__).resolve().parents[2] / "TreeDB/collections/testdata/cosine_normalized_f32_campaign.json"
+        go_raw = fixture.read_bytes()  # Verified against the actual Go serializer by its test.
+        artifact = json.loads(go_raw)
+        with tempfile.TemporaryDirectory() as directory:
+            run = object.__new__(diagnostic.Run)
+            run.output, run.info, run.emit = Path(directory), SimpleNamespace(generation=7), Mock()
+            run.plan = {
+                "go_tool": "/go", "product_commit": artifact["source_commit"],
+                "dataset": "/dataset", "serving_path": "/serving", "rows": 8, "queries": 1,
+                "dataset_manifest_sha256": artifact["dataset_manifest_sha256"],
+                "dataset_files_sha256": {"queries": artifact["queries_sha256"]},
+                "serving_sha256": artifact["serving_sha256"],
+            }
+            path = run.output / "normalized_v4_engine_diagnostic.json"
+            def execute(raw):
+                def produce(*args, **kwargs):
+                    path.write_bytes(raw)
+                    return SimpleNamespace(returncode=0, stdout="", stderr="")
+                with patch.object(diagnostic.subprocess, "run", side_effect=produce):
+                    return run.normalized_v4_engine_diagnostic()
+            receipt = execute(go_raw)
+            self.assertEqual(path.read_bytes(), go_raw)
+            self.assertEqual(receipt["sha256"], diagnostic.bytes_digest(go_raw))
+            self.assertEqual(receipt["artifact"], artifact)
+            for generation in (None, 8):
+                wrong = dict(artifact)
+                if generation is None:
+                    del wrong["collection_generation"]
+                else:
+                    wrong["collection_generation"] = generation
+                raw = diagnostic.canonical(wrong)
+                with self.subTest(generation=generation), self.assertRaisesRegex(RuntimeError, "identity differs"):
+                    execute(raw)
+                self.assertEqual(path.read_bytes(), raw)
+
+    def test_normalized_rows_match_go_golden_bits(self):
+        fixture = Path(__file__).resolve().parents[2] / "TreeDB/collections/testdata/cosine_normalized_f32_golden.json"
+        rows = json.loads(fixture.read_text())
+        source = np.asarray([row["input_bits"] for row in rows], dtype=np.uint32).view(np.float32)
+        expected = np.asarray([row["canonical_bits"] for row in rows], dtype=np.uint32)
+        original = source.copy()
+        actual = diagnostic.canonical_normalized_f32_rows(source, row_batch=2)
+        np.testing.assert_array_equal(actual.view(np.uint32), expected)
+        np.testing.assert_array_equal(source.view(np.uint32), original.view(np.uint32))
+        self.assertFalse(np.shares_memory(actual, source))
+        for invalid in ([[0, 0]], [[float("nan"), 1]], [[float("inf"), 1]], [[]]):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                diagnostic.canonical_normalized_f32_rows(invalid)
+
+    def test_normalized_truth_cutoff_ties_use_lowest_document_ids(self):
+        vectors = np.tile(np.asarray([1, 0], dtype=np.float32), (128, 1))
+        vectors[::2] = [0, 1]
+        ids, scores = diagnostic.canonical_normalized_f32_truth(vectors, [[1, 0]], [128])
+        self.assertEqual(ids["128"][0], [f"row-{row:06d}" for row in range(1, 20, 2)])
+        self.assertEqual(scores["128"][0], [1.0] * 10)
+
+    def test_normalized_truth_accepts_extreme_finite_vectors(self):
+        vectors = np.asarray([[np.finfo(np.float32).max, 0], [0, np.nextafter(np.float32(0), np.float32(1))]])
+        ids, scores = diagnostic.canonical_normalized_f32_truth(vectors, [[1, 0]], [2])
+        self.assertEqual(ids["2"][0], ["row-000000", "row-000001"])
+        self.assertEqual(scores["2"][0], [1.0, 0.0])
+
+    def test_normalized_materialization_checks_canonical_bytes_without_renormalizing(self):
+        run = object.__new__(diagnostic.Run)
+        run.plan = {"rows": 1, "campaign_profile": diagnostic.CAMPAIGN_PROFILE_NORMALIZED_V4}
+        run.updated = set()
+        run.vectors = np.tile(np.asarray([3, 4, 1e-7, -2], dtype=np.float32), (1, 192))
+        canonical_vector = diagnostic.canonical_normalized_f32_rows(run.vectors)[0]
+        document = diagnostic.make_document(run.vectors, 0, 1)
+        document["embedding"] = canonical_vector.tolist()
+        run.check_documents([SimpleNamespace(**document)], ["row-000000"])
+        document["embedding"][0] += 2e-7  # Within the old 1e-6 check, but not stored FP32.
+        with self.assertRaisesRegex(RuntimeError, "stored canonical vector"):
+            run.check_documents([SimpleNamespace(**document)], ["row-000000"])
 
     def test_normalized_truth_uses_canonical_float32_dot(self):
         vectors = np.asarray([[3.0, 4.0], [0.0, 2.0], [-4.0, 3.0]], dtype=np.float32)

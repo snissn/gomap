@@ -1171,20 +1171,38 @@ def exact_truth(vectors, queries, eligible_counts):
     return result
 
 
+def canonical_normalized_f32_rows(vectors, *, row_batch=8192):
+    """Match Go admission bits; accumulate dimensions in order, vectorize rows."""
+    source = np.asarray(vectors, dtype=np.float32)
+    if source.ndim != 2 or source.shape[1] == 0 or row_batch <= 0:
+        raise ValueError("canonical vectors require positive dimensions and batch size")
+    normalized = np.empty(source.shape, dtype=np.float32)
+    for start in range(0, len(source), row_batch):
+        # Float64 intermediates are bounded to this chunk, not another corpus.
+        block = np.array(source[start:start + row_batch], dtype=np.float64, order="F")
+        if not np.isfinite(block).all():
+            raise ValueError("canonical vectors contain non-finite components")
+        squared_norm = np.zeros(len(block), dtype=np.float64)
+        for component in block.T:
+            squared_norm += component * component
+        if np.any(squared_norm <= 0) or not np.isfinite(squared_norm).all():
+            raise ValueError("canonical vectors contain zero or non-finite norms")
+        block *= (1.0 / np.sqrt(squared_norm))[:, None]
+        normalized[start:start + len(block)] = block
+    return normalized
+
+
 def canonical_normalized_f32_truth(vectors, queries, eligible_counts, *, query_batch=8):
-    """Independent canonical-f32 dot truth, kept distinct from source cosine truth."""
-    normalized = np.asarray(vectors, dtype=np.float32).copy()
-    norms = np.linalg.norm(normalized, axis=1)
-    if not np.isfinite(normalized).all() or not np.isfinite(norms).all() or np.any(norms <= 0):
-        raise ValueError("canonical truth source vectors are zero or non-finite")
-    normalized /= norms[:, None]
-    normalized_queries = np.asarray(queries, dtype=np.float32).copy()
-    query_norms = np.linalg.norm(normalized_queries, axis=1)
-    if (not np.isfinite(normalized_queries).all() or not np.isfinite(query_norms).all()
-            or np.any(query_norms <= 0)):
-        raise ValueError("canonical truth query vectors are zero or non-finite")
-    normalized_queries /= query_norms[:, None]
-    ranks = (np.arange(len(vectors), dtype=np.int64) * 7919) % len(vectors)
+    """Canonical-f32 dot truth, kept distinct from original-cosine truth."""
+    return canonical_normalized_f32_topk(
+        canonical_normalized_f32_rows(vectors), canonical_normalized_f32_rows(queries),
+        eligible_counts, query_batch=query_batch,
+    )
+
+
+def canonical_normalized_f32_topk(normalized, normalized_queries, eligible_counts, *, query_batch=8):
+    """Score already-canonical rows; never normalize stored canonical bytes again."""
+    ranks = (np.arange(len(normalized), dtype=np.int64) * 7919) % len(normalized)
     eligible_rows = {
         eligible: np.flatnonzero(ranks < eligible) for eligible in eligible_counts
     }
@@ -1192,14 +1210,19 @@ def canonical_normalized_f32_truth(vectors, queries, eligible_counts, *, query_b
     score_result = {str(eligible): [] for eligible in eligible_counts}
     for start in range(0, len(normalized_queries), query_batch):
         scores = normalized_queries[start:start + query_batch] @ normalized.T
+        np.clip(scores, -1, 1, out=scores)
         for values in scores:
             for eligible in eligible_counts:
                 rows = eligible_rows[eligible]
                 if len(rows) <= 10:
                     selected = rows[np.lexsort((rows, -values[rows]))]
                 else:
-                    local = np.argpartition(-values[rows], 9)[:10]
-                    selected = rows[local]
+                    eligible_scores = values[rows]
+                    cutoff = np.partition(eligible_scores, len(rows) - 10)[len(rows) - 10]
+                    better = rows[eligible_scores > cutoff]
+                    # rows are ascending ordinals, hence ascending row-%06d IDs.
+                    tied = rows[eligible_scores == cutoff][:10 - len(better)]
+                    selected = np.concatenate((better, tied))
                     selected = selected[np.lexsort((selected, -values[selected]))]
                 result[str(eligible)].append(
                     [f"row-{int(row):06d}" for row in selected]
@@ -1421,6 +1444,16 @@ def treedb_service_environment(plan):
     return child
 
 
+def python_runtime_identity():
+    # Preserve the virtualenv path: following its symlink loses the dependency
+    # context that argv and sys.executable actually selected.
+    executable = Path(os.sys.executable).absolute()
+    return {
+        "python": os.sys.version, "numpy": np.__version__, "platform": platform.platform(),
+        "python_executable": str(executable), "python_executable_sha256": digest(executable),
+    }
+
+
 def host_resource_identity():
     cgroup = Path("/proc/self/cgroup").read_text().strip()
     status = dict(line.split(":", 1) for line in Path("/proc/self/status").read_text().splitlines() if ":" in line)
@@ -1455,6 +1488,100 @@ def host_resource_identity():
             or not identity["cpu_model"] or not identity["cpu_features"]):
         raise RuntimeError("host resource identity is incomplete")
     return identity
+
+
+def normalized_v4_effective_resources(plan):
+    """Resolve the tightest recorded cgroup-v2 capacity at this process."""
+    host_memory = physical_memory_bytes(plan["host_memory_bytes"])
+    affinity = plan.get("cpu_affinity")
+    limits = (plan.get("host_resource_identity") or {}).get("cgroup_limits")
+    if (not isinstance(affinity, list) or not affinity
+            or any(type(cpu) is not int or cpu < 0 for cpu in affinity)
+            or len(affinity) != len(set(affinity)) or not isinstance(limits, dict)):
+        raise ValueError("normalized-v4 effective resource inputs are invalid")
+    memory_limits, cpu_quotas = [host_memory], [len(affinity) * 1000]
+    saw_memory, saw_cpu = False, False
+    for name, raw in limits.items():
+        if not isinstance(name, str) or not isinstance(raw, str):
+            raise ValueError("normalized-v4 cgroup limits are invalid")
+        if name.endswith("memory.max") or name.endswith("memory.high"):
+            saw_memory = True
+            if raw != "max":
+                if not raw.isascii() or not raw.isdecimal() or str(int(raw)) != raw:
+                    raise ValueError("normalized-v4 cgroup memory limit is invalid")
+                memory_limits.append(int(raw))
+        elif name.endswith("cpu.max"):
+            saw_cpu = True
+            parts = raw.split()
+            if len(parts) != 2 or not parts[1].isascii() or not parts[1].isdecimal() \
+                    or int(parts[1]) <= 0:
+                raise ValueError("normalized-v4 cgroup CPU quota is invalid")
+            if parts[0] != "max":
+                if not parts[0].isascii() or not parts[0].isdecimal() or int(parts[0]) <= 0:
+                    raise ValueError("normalized-v4 cgroup CPU quota is invalid")
+                cpu_quotas.append(int(parts[0]) * 1000 // int(parts[1]))
+    if not saw_memory or not saw_cpu:
+        raise ValueError("normalized-v4 cgroup-v2 capacity is unavailable")
+    return {
+        "effective_memory_bytes": min(memory_limits),
+        "effective_cpu_quota_millis": min(cpu_quotas),
+    }
+
+
+def normalized_v4_infrastructure_receipt(plan):
+    """Fail closed before a full qualification arm if its local runner is undersized."""
+    full = plan["rows"] == 500000
+    required_free = (plan["minimum_free_bytes"] + plan["maximum_output_bytes"]
+                     if full else plan["minimum_free_bytes"] + GIB)
+    required_memory = plan["maximum_combined_rss_bytes"] if full else GIB
+    parent = Path(plan["run_dir"]).parent
+    try:
+        disk_headroom = parent.is_dir() and shutil.disk_usage(parent).free >= required_free
+    except OSError:
+        disk_headroom = False
+    try:
+        host_memory = physical_memory_bytes(plan["host_memory_bytes"]) >= required_memory
+    except (TypeError, ValueError):
+        host_memory = False
+    try:
+        effective = normalized_v4_effective_resources(plan)
+    except (KeyError, TypeError, ValueError):
+        effective = {"effective_memory_bytes": 0, "effective_cpu_quota_millis": 0}
+    try:
+        required_cpu_millis = (int(plan["gomaxprocs"]) * 1000) if full else 1000
+    except (KeyError, TypeError, ValueError):
+        required_cpu_millis = 1
+    checks = {
+        "cpu_affinity": bool(plan["cpu_affinity"]),
+        "cgroup_cpu_quota": effective["effective_cpu_quota_millis"] >= required_cpu_millis,
+        "cgroup_memory": effective["effective_memory_bytes"] >= required_memory,
+        "disk_headroom": disk_headroom,
+        "host_memory": host_memory,
+        "linux_procfs": all(Path(path).is_file() for path in (
+            "/proc/self/status", "/proc/cpuinfo", "/proc/self/cgroup",
+        )),
+    }
+    reasons = [name for name, passed in checks.items() if not passed]
+    return {
+        "schema": "treedb_normalized_v4_infrastructure/v1",
+        "state": "available" if not reasons else "unavailable",
+        "runner": "shared_workstation_serialized_quiet_window",
+        "dataset_cache": "persistent_local",
+        "artifact_storage": "local_owned_directory",
+        "requirements": {
+            "minimum_free_bytes": required_free,
+            "minimum_host_memory_bytes": required_memory,
+            "minimum_effective_memory_bytes": required_memory,
+            "minimum_cpu_quota_millis": required_cpu_millis,
+        },
+        "effective_resources": effective,
+        "checks": checks,
+        "operator_contract": {
+            "other_benchmark_load": "excluded",
+            "run_policy": "one_arm_at_a_time",
+        },
+        "reasons": reasons,
+    }
 
 
 def process_peak_at_boundary(pid, expected_identity, expected_affinity):
@@ -1559,7 +1686,7 @@ def prepare(args):
             "host_memory_bytes": existing.common.memory_bytes(),
             "host_resource_identity": host_resource_identity(),
             "blas_threads": {key: os.environ.get(key, "") for key in ("OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS")},
-            "python": os.sys.version, "numpy": np.__version__, "platform": platform.platform(),
+            **python_runtime_identity(),
             "query_usage": ("observed calibration 0..99 and observed revalidation 100..199; "
                             "both fixed sets select the control; neither is a holdout" if rss_only
                             else "diagnostic queries, not final holdout"),
@@ -1581,6 +1708,12 @@ def prepare(args):
             query_usage=("fixed E=R=64 normalized-v4 production comparison; all queries are retained "
                          "diagnostic evidence, not an unseen holdout"),
         )
+        plan["infrastructure"] = normalized_v4_infrastructure_receipt(plan)
+        if plan["infrastructure"]["state"] != "available":
+            raise RuntimeError(
+                "INFRASTRUCTURE_UNAVAILABLE: "
+                + ", ".join(plan["infrastructure"]["reasons"])
+            )
     if query_mode == "quantized_rerank":
         plan.update(
             query_mode=query_mode,
@@ -2500,8 +2633,7 @@ class Run:
                     selected_filter is not None,
                 )
             ids, scores, results = [], [], []
-            query_vector = np.asarray(self.queries[query], dtype=np.float32)
-            query_vector = query_vector / np.linalg.norm(query_vector)
+            query_vector = canonical_normalized_f32_rows(self.queries[query:query + 1])[0]
             for document in response.documents:
                 row = int(document.id.removeprefix("row-"))
                 if (document.id != f"row-{row:06d}" or not 0 <= row < self.plan["rows"]
@@ -2516,15 +2648,18 @@ class Run:
                                     {base_content + (":updated" if row in self.updated else "")})
                 if document.meta != expected_meta or document.content not in expected_content:
                     raise RuntimeError("normalized-v4 result projection differs from the reachable state")
-                vector = np.asarray(self.vectors[row], dtype=np.float32)
-                vector = vector / np.linalg.norm(vector)
-                score = float(np.dot(query_vector, vector))
-                if not math.isfinite(document.score) or abs(score - document.score) > 2e-5:
+                if not math.isfinite(document.score):
                     raise RuntimeError("normalized-v4 score differs from canonical float32 dot")
                 ids.append(document.id)
                 scores.append(float(document.score))
                 results.append({"id": document.id, "content": document.content,
                                 "meta": document.meta, "score": float(document.score)})
+            if ids:
+                ordinals = [int(identifier.removeprefix("row-")) for identifier in ids]
+                vectors = canonical_normalized_f32_rows(self.vectors[ordinals])
+                expected_scores = np.clip(vectors @ query_vector, -1, 1)
+                if not np.allclose(scores, expected_scores, rtol=2e-6, atol=2e-6):
+                    raise RuntimeError("normalized-v4 score differs from canonical float32 dot")
             if list(zip((-score for score in scores), ids)) != sorted(zip((-score for score in scores), ids)):
                 raise RuntimeError("normalized-v4 results are not canonically ordered")
             canonical_truth = [] if eligible == 0 else self.truth[str(eligible)][query]
@@ -2702,6 +2837,14 @@ class Run:
     def check_documents(self, docs, expected_ids):
         if [None if doc is None else doc.id for doc in docs] != expected_ids:
             raise RuntimeError("public materialization ID ordering/missing mismatch")
+        canonical_vectors = {}
+        if self.plan.get("campaign_profile") == CAMPAIGN_PROFILE_NORMALIZED_V4:
+            present = [doc for doc in docs if doc is not None]
+            if present:
+                rows = [int(doc.id.removeprefix("row-")) for doc in present]
+                canonical_vectors = dict(zip(
+                    (doc.id for doc in present), canonical_normalized_f32_rows(self.vectors[rows]),
+                ))
         for doc in docs:
             if doc is None:
                 continue
@@ -2719,10 +2862,13 @@ class Run:
             want /= want_norm
             if self.plan.get("campaign_profile") != CAMPAIGN_PROFILE_NORMALIZED_V4:
                 actual /= actual_norm
-            elif abs(actual_norm - 1.0) > 1e-5:
-                raise RuntimeError("normalized-v4 output is not the stored canonical vector")
+            else:
+                want = canonical_vectors[doc.id]
+                if abs(actual_norm - 1.0) > 1e-5 or not np.array_equal(actual.astype(np.float32), want):
+                    raise RuntimeError("normalized-v4 output is not the stored canonical vector")
             if np.max(np.abs(actual - want)) > 1e-6:
                 raise RuntimeError("public materialization full-vector mismatch")
+        return canonical_vectors
 
     def overlap(self):
         quantized = self.plan.get("query_mode") == "quantized_rerank"
@@ -2818,7 +2964,7 @@ class Run:
             result = self.clients.filter_documents("minima_cohere", limit=256, return_embedding=True,
                 after_id=after, cursor_page=True, expected_generation=self.info.generation)
             expected = [f"row-{row:06d}" for row in range(seen, min(seen + 256, self.plan["rows"]))]
-            self.check_documents(result.documents, expected)
+            canonical_vectors = self.check_documents(result.documents, expected)
             if self.plan.get("campaign_profile") == CAMPAIGN_PROFILE_NORMALIZED_V4:
                 for document in result.documents:
                     row = int(document.id.removeprefix("row-"))
@@ -2828,8 +2974,7 @@ class Run:
                     final_state.update(len(payload).to_bytes(8, "big"))
                     final_state.update(payload)
                     actual = np.asarray(document.embedding, dtype=np.float64)
-                    source = np.asarray(self.vectors[row], dtype=np.float64)
-                    expected_vector = source / np.linalg.norm(source)
+                    expected_vector = canonical_vectors[document.id]
                     maximum_vector_error = max(
                         maximum_vector_error, float(np.max(np.abs(actual - expected_vector))),
                     )
@@ -3196,6 +3341,7 @@ class Run:
             "rerank_candidates": NORMALIZED_RERANK_CANDIDATES,
             "representation": NORMALIZED_REPRESENTATION,
             "index": "minima_cohere", "quantized_index": QUANTIZED_PROFILE_NAME,
+            "collection_generation": self.info.generation,
         }
         if any(artifact.get(key) != value for key, value in expected.items()):
             raise RuntimeError("normalized-v4 engine diagnostic identity differs from the campaign")

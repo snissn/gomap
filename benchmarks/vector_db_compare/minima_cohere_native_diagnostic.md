@@ -117,6 +117,20 @@ and, for SQ8, the production matrix plus actual-campaign engine diagnostic.
 Resource inventory explicitly distinguishes the topology-only HNSW pack from
 the single normalized FP32 vector asset and its derived SQ8 assets.
 
+The producer and analyzer share the normalized-dot oracle. Admission math follows
+Go's left-to-right float64 squared-norm accumulation, reciprocal multiplication,
+and float32 rounding; shared Go/Python bit-pattern fixtures cover extreme finite
+inputs. Top-k resolves cutoff ties by document ID and clamps scores to `[-1, 1]`.
+The analyzer recomputes truth from the frozen source files; this is not a second
+independently implemented Python oracle. Explicit embedding output is checked
+against the canonical float32 values without renormalizing the returned vector.
+
+The engine diagnostic emits generation from its captured Go query owner and
+checks that the serving inventory names that same owner. Python retains the
+original Go output bytes and rejects a missing or different generation. Packet
+file-size/SHA256 validation protects the whole artifact; no nested shortlist
+JSON hash or wrapper-side identity injection is used.
+
 ## Scalar-u8 rerank opt-in
 
 Add `--query-mode quantized_rerank --quantized-index-name minima_sq8` to both

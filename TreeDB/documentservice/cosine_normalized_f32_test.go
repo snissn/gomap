@@ -19,6 +19,46 @@ func requireCosineNormalizedF32V1Serving(t *testing.T) {
 	}
 }
 
+func TestServiceDenseDiagnosticsRejectsLegacyRepresentations(t *testing.T) {
+	svc, db := newTestService(t)
+	defer db.Close()
+	defer svc.Close()
+	ctx := context.Background()
+	for _, strategy := range []collections.VectorIndexStrategy{collections.VectorIndexStrategyNativeRuntime, collections.VectorIndexStrategyColumnGraph} {
+		t.Run(string(strategy), func(t *testing.T) {
+			info, err := svc.CreateIndex(ctx, CreateIndexRequest{
+				Name: "legacy-" + string(strategy), Dimension: 2, Metric: MetricCosine,
+				VectorIndexOptions: &BenchmarkVectorIndexOptions{Strategy: strategy},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := svc.UpsertDocuments(ctx, info.Name, UpsertDocumentsRequest{Documents: []Document{{ID: "a", Content: "alpha", Embedding: []float32{1, 0}}}}); err != nil {
+				t.Fatal(err)
+			}
+			for _, route := range []Route{RouteAnn, RouteExact} {
+				t.Run(string(route), func(t *testing.T) {
+					req := DenseVectorSearchRequest{QueryEmbedding: []float32{1, 0}, TopK: 1, EfSearch: 8, Route: route}
+					if _, err := svc.SearchDenseVector(ctx, info.Name, req); err != nil {
+						t.Fatalf("ordinary legacy search: %v", err)
+					}
+					req.Diagnostics = true
+					if _, err := svc.SearchDenseVector(ctx, info.Name, req); ErrorCodeOf(err) != CodeUnsupported {
+						t.Fatalf("diagnostics error=%v want unsupported", err)
+					}
+					var payload map[string]any
+					postJSON(t, NewHandler(svc), "/v1/indexes/"+info.Name+"/search/vector", req, http.StatusNotImplemented, &payload)
+					raw, err := json.Marshal(payload)
+					if err != nil {
+						t.Fatal(err)
+					}
+					assertHTTPErrorCode(t, raw, CodeUnsupported)
+				})
+			}
+		})
+	}
+}
+
 func TestServiceCosineNormalizedF32V1HNSWExactReceipt(t *testing.T) {
 	requireCosineNormalizedF32V1Serving(t)
 	svc, db := newTestService(t)

@@ -889,6 +889,8 @@ func (s *Server) handleVersionedDenseVectorSearch(ctx context.Context, state *co
 			return nil, protocolError(iwire.ErrInvalidCommand, "typed dense quantized search requires an explicit positive ef_search")
 		}
 	}
+	// Legacy typed commands retain their mandatory proofs through the service's
+	// legacy representation path; they do not request the normalized-v4 opt-in.
 	response, err := s.documentService.SearchDenseVectorNativeRawInto(ctx, request.Index, documentservice.DenseVectorSearchRequest{
 		ExpectedGeneration:          request.ExpectedGeneration,
 		QueryEmbedding:              request.Query,
@@ -900,7 +902,6 @@ func (s *Server) handleVersionedDenseVectorSearch(ctx context.Context, state *co
 		Route:                       documentservice.RouteAnn,
 		Filter:                      request.Filter,
 		ReturnEmbedding:             request.ReturnEmbedding,
-		Diagnostics:                 version >= iwire.DenseVectorSearchTypedVersion,
 		VectorRepresentation:        "",
 		RequireVectorRepresentation: true,
 	}, state.denseResults[:0])

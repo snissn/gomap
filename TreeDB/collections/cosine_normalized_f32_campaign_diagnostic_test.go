@@ -1,18 +1,19 @@
 package collections
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"runtime"
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
 
 	treedb "github.com/snissn/gomap/TreeDB"
@@ -92,13 +93,13 @@ type cosineNormalizedF32CampaignDiagnostic struct {
 	Representation            VectorIndexRepresentation              `json:"representation"`
 	Index                     string                                 `json:"index"`
 	QuantizedIndex            string                                 `json:"quantized_index"`
+	CollectionGeneration      uint64                                 `json:"collection_generation"`
 	Dataset                   cosineNormalizedF32CampaignManifest    `json:"dataset"`
 	DatasetManifestSHA256     string                                 `json:"dataset_manifest_sha256"`
 	QueriesSHA256             string                                 `json:"queries_sha256"`
 	ServingSHA256             string                                 `json:"serving_sha256"`
 	ServingOwner              ColumnGraphServingStats                `json:"serving_owner"`
 	Shortlists                []cosineNormalizedF32CampaignShortlist `json:"shortlists"`
-	ShortlistsSHA256          string                                 `json:"shortlists_sha256"`
 	CandidateOnly             []cosineNormalizedF32CampaignBenchmark `json:"candidate_only"`
 	PackedSameShortlist       []cosineNormalizedF32CampaignBenchmark `json:"packed_same_shortlist"`
 	StableDuplicateScoreCalls uint64                                 `json:"stable_duplicate_score_calls"`
@@ -108,6 +109,42 @@ var (
 	cosineNormalizedF32CampaignLinkedCommit string
 	cosineNormalizedF32CampaignSink         int
 )
+
+func TestCosineNormalizedF32CampaignJSON(t *testing.T) {
+	// Serialization-only example, deliberately not a qualifying campaign.
+	report := cosineNormalizedF32CampaignDiagnostic{
+		Schema:       "treedb_cosine_normalized_f32_campaign_engine/v1",
+		SourceCommit: strings.Repeat("a", 40),
+		Rows:         8, Dimensions: 768, QueryCount: 1, TopK: 10,
+		EFSearch: 64, RerankCandidates: 64,
+		Representation: VectorIndexRepresentationCosineNormalizedF32V1,
+		Index:          "minima_cohere", QuantizedIndex: "minima_sq8", CollectionGeneration: 7,
+		DatasetManifestSHA256: strings.Repeat("b", 64),
+		QueriesSHA256:         strings.Repeat("c", 64), ServingSHA256: strings.Repeat("d", 64),
+		Shortlists:          []cosineNormalizedF32CampaignShortlist{{Query: 0, Ordinals: []int{3, 1}}},
+		CandidateOnly:       make([]cosineNormalizedF32CampaignBenchmark, 6),
+		PackedSameShortlist: make([]cosineNormalizedF32CampaignBenchmark, 6),
+	}
+	raw, err := json.Marshal(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := os.ReadFile("testdata/cosine_normalized_f32_campaign.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded cosineNormalizedF32CampaignDiagnostic
+	if err := json.Unmarshal(want, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	roundtrip, err := json.Marshal(decoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(raw, roundtrip) {
+		t.Fatal("campaign serializer fields differ from the shared Python fixture")
+	}
+}
 
 // TestCosineNormalizedF32V1CampaignEngineDiagnostic is an opt-in evidence seam.
 // It opens an already-built campaign database through normal serving admission,
@@ -202,6 +239,15 @@ func TestCosineNormalizedF32V1CampaignEngineDiagnostic(t *testing.T) {
 	servingOwner, available := collection.ColumnGraphServingSnapshot()
 	if !available || !servingOwner.ServingReady || !servingOwner.PublicationUnchanged || servingOwner.BaseRows != campaignRows {
 		t.Fatalf("campaign serving inventory unavailable: available=%t owner=%+v", available, servingOwner)
+	}
+	snapshot := owner.querySnapshot()
+	if snapshot.SchemaGeneration == 0 ||
+		snapshot.BaseManifest.Generation != servingOwner.BaseManifest.Generation ||
+		snapshot.BaseManifest.Checksum != servingOwner.BaseManifest.Checksum ||
+		snapshot.CurrentManifest.Generation != servingOwner.CurrentManifest.Generation ||
+		snapshot.CurrentManifest.Checksum != servingOwner.CurrentManifest.Checksum ||
+		snapshot.CurrentCoverageLSN != servingOwner.CurrentCoverageLSN {
+		t.Fatal("campaign serving inventory differs from the captured query owner")
 	}
 
 	canonicalQueries := make([][]float32, len(queries))
@@ -315,10 +361,6 @@ func TestCosineNormalizedF32V1CampaignEngineDiagnostic(t *testing.T) {
 			candidateResults[repetition] = cosineNormalizedF32CampaignBenchmarkResult(repetition, 1, candidateBenchmark())
 		}
 	}
-	shortlistRaw, err := json.Marshal(shortlists)
-	if err != nil {
-		t.Fatal(err)
-	}
 	report := cosineNormalizedF32CampaignDiagnostic{
 		Schema:       "treedb_cosine_normalized_f32_campaign_engine/v1",
 		SourceCommit: sourceCommit, GoVersion: runtime.Version(), GOMAXPROCS: runtime.GOMAXPROCS(0),
@@ -326,13 +368,13 @@ func TestCosineNormalizedF32V1CampaignEngineDiagnostic(t *testing.T) {
 		TopK: cosineNormalizedF32CampaignTopK, EFSearch: cosineNormalizedF32CampaignWidth,
 		RerankCandidates: cosineNormalizedF32CampaignWidth,
 		Representation:   definition.Representation, Index: index, QuantizedIndex: quantizedIndex,
+		CollectionGeneration:  snapshot.SchemaGeneration,
 		Dataset:               manifest,
 		DatasetManifestSHA256: cosineNormalizedF32CampaignFileSHA256(t, manifestPath),
 		QueriesSHA256:         cosineNormalizedF32CampaignFileSHA256(t, queriesPath),
 		ServingSHA256:         cosineNormalizedF32CampaignFileSHA256(t, servingPath),
 		ServingOwner:          servingOwner, Shortlists: shortlists,
-		ShortlistsSHA256: fmt.Sprintf("%x", sha256.Sum256(shortlistRaw)),
-		CandidateOnly:    candidateResults, PackedSameShortlist: packedResults,
+		CandidateOnly: candidateResults, PackedSameShortlist: packedResults,
 		StableDuplicateScoreCalls: 0,
 	}
 	encoded, err := json.MarshalIndent(report, "", "  ")

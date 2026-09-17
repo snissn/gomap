@@ -997,6 +997,9 @@ func bindDenseVectorRepresentation(req *DenseVectorSearchRequest, info IndexInfo
 	} else {
 		req.VectorRepresentation = info.VectorRepresentation
 	}
+	if req.Diagnostics && info.VectorRepresentation != collections.VectorIndexRepresentationCosineNormalizedF32V1 {
+		return serviceError(CodeUnsupported, "dense vector diagnostics require cosine_normalized_f32_v1")
+	}
 	return nil
 }
 

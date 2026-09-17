@@ -111,6 +111,9 @@ representation rather than translating it to legacy semantics.
 Create-time `vector_representation` metadata selects v4 in Go and Python.
 Production returns compact route identity and omits full proofs; explicit
 diagnostics returns dense-work and, for scalar-u8 rerank, packed score-plane v2.
+HTTP and direct service searches reject `diagnostics=true` for other index
+representations with `unsupported` (HTTP 501), including ANN and document-exact
+routes. Ordinary searches on those representations retain their existing behavior.
 An unsupported or unnegotiated stage is never filled with a legacy measurement.
 
 ## Phase gates and qualification ownership

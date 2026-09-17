@@ -3036,8 +3036,13 @@ def _normalized_run_path(packet, paths, mode, role):
     return paths[packet["runs"][mode]["files"][role]]
 
 
-def _normalized_command_flags(argv):
-    if len(argv) < 2 or not argv[1].endswith("minima_cohere_native_diagnostic.py"):
+def _normalized_command_flags(argv, plan):
+    executable = plan.get("python_executable")
+    if (len(argv) < 2 or not isinstance(executable, str)
+            or not Path(executable).is_absolute()
+            or not Path(argv[0]).is_absolute()
+            or argv[0] != executable
+            or not argv[1].endswith("minima_cohere_native_diagnostic.py")):
         raise EvidenceError("normalized-v4 command does not invoke the reviewed producer")
     flags, index = {}, 2
     while index < len(argv):
@@ -3055,6 +3060,69 @@ def _normalized_command_flags(argv):
     return flags
 
 
+def _normalized_validate_infrastructure(plan, mode):
+    infrastructure = plan.get("infrastructure") or {}
+    try:
+        host_memory = native.physical_memory_bytes(plan.get("host_memory_bytes"))
+        effective = native.normalized_v4_effective_resources(plan)
+        required_cpu_millis = int(plan["gomaxprocs"]) * 1000
+    except (KeyError, TypeError, ValueError) as exc:
+        raise EvidenceError(f"normalized-v4 {mode} resource receipt is invalid") from exc
+    expected_checks = {
+        "cpu_affinity": True,
+        "cgroup_cpu_quota": effective["effective_cpu_quota_millis"] >= required_cpu_millis,
+        "cgroup_memory": effective["effective_memory_bytes"] >= 24 * native.GIB,
+        "disk_headroom": True,
+        "host_memory": host_memory >= 24 * native.GIB,
+        "linux_procfs": True,
+    }
+    if (infrastructure.get("schema") != "treedb_normalized_v4_infrastructure/v1"
+            or infrastructure.get("state") != "available"
+            or infrastructure.get("runner") != "shared_workstation_serialized_quiet_window"
+            or infrastructure.get("dataset_cache") != "persistent_local"
+            or infrastructure.get("artifact_storage") != "local_owned_directory"
+            or infrastructure.get("checks") != expected_checks
+            or not all(expected_checks.values())
+            or infrastructure.get("requirements") != {
+                "minimum_free_bytes": 21 * native.GIB,
+                "minimum_host_memory_bytes": 24 * native.GIB,
+                "minimum_effective_memory_bytes": 24 * native.GIB,
+                "minimum_cpu_quota_millis": required_cpu_millis,
+            }
+            or infrastructure.get("effective_resources") != effective
+            or infrastructure.get("operator_contract") != {
+                "other_benchmark_load": "excluded",
+                "run_policy": "one_arm_at_a_time",
+            }
+            or infrastructure.get("reasons") != []):
+        raise EvidenceError(f"normalized-v4 {mode} infrastructure preflight is unavailable")
+    return effective
+
+
+def _normalized_producer_coordinates(plans):
+    fields = (
+        "python", "numpy", "platform", "python_executable", "python_executable_sha256",
+        "cpu_affinity", "gomaxprocs", "treedb_go_runtime", "blas_threads",
+        "host_memory_bytes", "host_resource_identity",
+    )
+    coordinates = {
+        mode: {field: plan.get(field) for field in fields}
+        for mode, plan in plans.items()
+    }
+    for mode, plan in plans.items():
+        coordinates[mode]["effective_resources"] = (
+            (plan.get("infrastructure") or {}).get("effective_resources")
+        )
+    if set(coordinates) != {"exact", "sq8"} \
+            or not native.same_json(coordinates["exact"], coordinates["sq8"]):
+        raise EvidenceError("normalized-v4 exact and SQ8 runs used different producer coordinates")
+    return coordinates["exact"]
+
+
+def _consumer_runtime_identity():
+    return native.python_runtime_identity()
+
+
 def _normalized_validate_plan_and_receipt(packet, paths, mode, dataset_manifest):
     plan_path = _normalized_run_path(packet, paths, mode, "plan")
     plan = read_json(plan_path, f"normalized-v4 {mode} plan", MAX_PACKET_BYTES)
@@ -3064,10 +3132,20 @@ def _normalized_validate_plan_and_receipt(packet, paths, mode, dataset_manifest)
         for role in ("documents", "queries", "truth")
     }
     input_hash = lambda role: packet["files"][packet["inputs"][role]]["sha256"]
+    harness_trees, product_trees = _source_trees(packet["candidate_commit"])
     if (plan.get("schema") != native.NORMALIZED_CAMPAIGN_SCHEMA
             or plan.get("campaign_profile") != native.CAMPAIGN_PROFILE_NORMALIZED_V4
             or plan.get("product_commit") != packet["candidate_commit"]
             or plan.get("harness_commit") != packet["candidate_commit"]
+            or plan.get("harness_source_sha256") != sha256_file(Path(native.__file__))
+            or plan.get("harness_trees") != harness_trees
+            or plan.get("product_trees") != product_trees
+            or not isinstance(plan.get("python"), str) or not plan["python"]
+            or not isinstance(plan.get("numpy"), str) or not plan["numpy"]
+            or not isinstance(plan.get("platform"), str) or not plan["platform"]
+            or not isinstance(plan.get("python_executable"), str)
+            or not Path(plan["python_executable"]).is_absolute()
+            or not valid_sha256(plan.get("python_executable_sha256"))
             or plan.get("mode") != "diagnostic" or plan.get("rss_only") is not False
             or plan.get("rows") != 500000 or plan.get("dimensions") != 768
             or plan.get("queries") != 200 or plan.get("top_k") != 10
@@ -3105,6 +3183,25 @@ def _normalized_validate_plan_and_receipt(packet, paths, mode, dataset_manifest)
             or int(plan["gomaxprocs"]) <= 0
             or (plan.get("treedb_go_runtime") or {}).get("GOMAXPROCS") != plan["gomaxprocs"]):
         raise EvidenceError(f"normalized-v4 {mode} plan differs from the frozen campaign")
+    _normalized_validate_infrastructure(plan, mode)
+    try:
+        host_memory = native.physical_memory_bytes(plan.get("host_memory_bytes"))
+    except (TypeError, ValueError) as exc:
+        raise EvidenceError(f"normalized-v4 {mode} host-memory receipt is invalid") from exc
+    host = plan.get("host_resource_identity") or {}
+    if (host_memory < 24 * native.GIB
+            or set(host) != {
+                "machine_id", "boot_id", "page_size_bytes", "numa_mems",
+                "cgroup_membership", "cgroup_limits", "cpu_model", "cpu_features",
+            }
+            or any(not isinstance(host.get(field), str) or not host[field] for field in (
+                "machine_id", "boot_id", "numa_mems", "cgroup_membership", "cpu_model",
+            ))
+            or type(host.get("page_size_bytes")) is not int or host["page_size_bytes"] <= 0
+            or not isinstance(host.get("cgroup_limits"), dict)
+            or not isinstance(host.get("cpu_features"), list) or not host["cpu_features"]
+            or host["cpu_features"] != sorted(set(host["cpu_features"]))):
+        raise EvidenceError(f"normalized-v4 {mode} host identity is incomplete")
     if mode == "sq8":
         if (plan.get("query_mode") != expected_mode
                 or plan.get("quantized_index_name") != native.QUANTIZED_PROFILE_NAME
@@ -3120,8 +3217,8 @@ def _normalized_validate_plan_and_receipt(packet, paths, mode, dataset_manifest)
         raise EvidenceError(f"normalized-v4 {mode} plan serving limits differ from the pinned input")
 
     receipt = packet["runs"][mode]
-    freeze = _normalized_command_flags(receipt["freeze_argv"])
-    run = _normalized_command_flags(receipt["run_argv"])
+    freeze = _normalized_command_flags(receipt["freeze_argv"], plan)
+    run = _normalized_command_flags(receipt["run_argv"], plan)
     common = {
         "--dataset": plan["dataset"], "--service-bin": plan["service_bin"],
         "--product-commit": packet["candidate_commit"],
@@ -3149,13 +3246,14 @@ def _normalized_validate_plan_and_receipt(packet, paths, mode, dataset_manifest)
     return plan
 
 
-def _normalized_truth_artifact(path):
+def _normalized_truth_artifact(path, source_truth, source_truth_sha256):
     artifact = read_json(path, "normalized-v4 truth", MAX_JSON_BYTES)
     if (not isinstance(artifact, dict)
             or artifact.get("schema") != "treedb_cohere_normalized_v4_truth/v1"
             or artifact.get("rows") != 500000 or artifact.get("dimensions") != 768
             or artifact.get("query_order") != list(range(200))
-            or artifact.get("eligible_counts") != FULL_ELIGIBLE_COUNTS):
+            or artifact.get("eligible_counts") != FULL_ELIGIBLE_COUNTS
+            or artifact.get("source_truth_sha256") != source_truth_sha256):
         raise EvidenceError("normalized-v4 truth artifact identity is invalid")
     canonical_truth = (artifact.get("canonical_normalized_f32_dot") or {}).get("ordered_ids")
     canonical_scores = (artifact.get("canonical_normalized_f32_dot") or {}).get("ordered_scores")
@@ -3185,7 +3283,48 @@ def _normalized_truth_artifact(path):
                 if (identifier != f"row-{ordinal:06d}" or not 0 <= ordinal < 500000
                         or (ordinal * 7919) % 500000 >= eligible):
                     raise EvidenceError("normalized-v4 truth ID is outside its cohort")
-    return artifact, canonical_truth, original_truth
+    if not native.same_json(original_truth, source_truth):
+        raise EvidenceError("normalized-v4 original-cosine truth differs from the frozen oracle")
+    return artifact, canonical_truth, canonical_scores, original_truth
+
+
+def _normalized_recompute_canonical_truth(dataset_paths, canonical_truth, canonical_scores):
+    """Recompute from source with the shared, Go-golden-checked oracle."""
+    source_vectors = np.memmap(
+        dataset_paths["documents"], mode="r", dtype="<f4", shape=(500000, 768),
+    )
+    source_queries = np.memmap(
+        dataset_paths["queries"], mode="r", dtype="<f4", shape=(200, 768),
+    )
+    try:
+        normalized = native.canonical_normalized_f32_rows(source_vectors)
+        queries = native.canonical_normalized_f32_rows(source_queries)
+        expected_ids, expected_scores = native.canonical_normalized_f32_topk(
+            normalized, queries, FULL_ELIGIBLE_COUNTS,
+        )
+    except ValueError as exc:
+        raise EvidenceError("normalized-v4 source vectors are invalid") from exc
+    for key in expected_ids:
+        if (canonical_truth[key] != expected_ids[key]
+                or not np.allclose(canonical_scores[key], expected_scores[key], rtol=2e-6, atol=2e-6)):
+            raise EvidenceError("normalized-v4 canonical truth differs from source recomputation")
+    return normalized, queries
+
+
+def _normalized_result_scores_match(ids, scores, query, normalized_vectors, normalized_queries):
+    if ids == []:
+        return scores == [] and type(query) is int and 0 <= query < len(normalized_queries)
+    try:
+        ordinals = np.asarray(
+            [int(identifier.removeprefix("row-")) for identifier in ids], dtype=np.int64,
+        )
+        expected = np.clip(normalized_vectors[ordinals] @ normalized_queries[query], -1, 1)
+        observed = np.asarray(scores, dtype=np.float64)
+    except (AttributeError, IndexError, TypeError, ValueError):
+        return False
+    return (expected.shape == observed.shape and np.isfinite(observed).all()
+            and np.all(np.abs(observed) <= 1)
+            and np.allclose(observed, expected, rtol=2e-6, atol=2e-6))
 
 
 def _normalized_route_identity(identity, mode, *, eligible, filtered, result_count):
@@ -3223,6 +3362,9 @@ def _normalized_route_identity(identity, mode, *, eligible, filtered, result_cou
         raise EvidenceError("normalized-v4 diagnostic route identity is incomplete")
     if mode == "exact":
         if (identity.get("rerank_candidates") != 0
+                or identity.get("quantized_index_name") != ""
+                or identity.get("quantized_codec") != ""
+                or identity.get("quantized_version") != 0
                 or identity.get("quantized_score_calls") != 0
                 or identity.get("quantized_code_bytes_read") != 0):
             raise EvidenceError("normalized-v4 exact diagnostic crossed the SQ8 score plane")
@@ -3271,12 +3413,20 @@ def _normalized_dense_event(event, request_mode, *, filtered, result_count):
     except (TypeError, ValueError) as exc:
         raise EvidenceError("normalized-v4 diagnostic dense work is invalid") from exc
     identity = event.get("route_identity") or {}
+    snapshot = work.graph.snapshot
     if (not work.completed or not work.graph.available or not work.graph.completed
             or work.graph.route != identity.get("execution_route")
             or work.graph.filter.attempted is not filtered
             or (filtered and (not work.graph.filter.completed
                               or work.graph.filter.eligible_rows != event.get("eligible")))
             or not work.graph.snapshot.available
+            or identity.get("schema_hash") != snapshot.schema_hash
+            or identity.get("schema_generation") != snapshot.schema_generation
+            or identity.get("base_manifest_generation") != snapshot.base_manifest.generation
+            or identity.get("base_manifest_checksum") != snapshot.base_manifest.checksum
+            or identity.get("current_manifest_generation") != snapshot.current_manifest.generation
+            or identity.get("current_manifest_checksum") != snapshot.current_manifest.checksum
+            or identity.get("current_coverage_lsn") != snapshot.current_coverage_lsn
             or not work.output.attempted or not work.output.completed
             or work.output.requested != result_count or work.output.fetched != result_count
             or work.output.missing != 0
@@ -3286,8 +3436,10 @@ def _normalized_dense_event(event, request_mode, *, filtered, result_count):
             or (work.output.output_bytes == 0) != (result_count == 0)):
         raise EvidenceError("normalized-v4 diagnostic graph/output work is incomplete")
     if request_mode == "exact":
-        if event.get("score_plane") is not None:
-            raise EvidenceError("normalized-v4 exact diagnostic returned an SQ8 proof")
+        if (event.get("score_plane") is not None
+                or identity.get("fp32_score_calls")
+                    != work.graph.base_ann_scored + work.graph.delta_scored):
+            raise EvidenceError("normalized-v4 exact diagnostic work does not bind its FP32 route")
         return
     try:
         proof = native.dense_contract.DenseScorePlaneProof.from_dict(event.get("score_plane"))
@@ -3301,7 +3453,16 @@ def _normalized_dense_event(event, request_mode, *, filtered, result_count):
             or proof.effective_mode != "quantized_rerank"
             or proof.requested_ef_search != 64
             or proof.requested_rerank_candidates != 64
-            or proof.quantized_index_name != native.QUANTIZED_PROFILE_NAME):
+            or proof.quantized_index_name != native.QUANTIZED_PROFILE_NAME
+            or identity.get("quantized_score_calls") != proof.quantized_score_calls
+            or identity.get("fp32_score_calls") != (
+                proof.exact_base_rerank_score_calls
+                + proof.exact_small_filter_score_calls
+                + proof.exact_suffix_score_calls
+            )
+            or identity.get("packed_score_calls") != proof.packed_score_batch_calls
+            or identity.get("packed_score_candidates") != proof.packed_score_candidates
+            or identity.get("packed_vector_bytes_read") != proof.packed_vector_bytes_read):
         raise EvidenceError("normalized-v4 SQ8 diagnostic work does not bind one packed route")
 
 
@@ -3325,7 +3486,8 @@ def _normalized_expected_projection_digest(rows):
     return digest.hexdigest()
 
 
-def _normalized_validate_events(path, plan, mode, canonical_truth, original_truth):
+def _normalized_validate_events(path, plan, mode, canonical_truth, original_truth,
+                                normalized_vectors, normalized_queries):
     events = read_native_events(path)
     if not events or events[0].get("event") != "plan" or not native.same_json(events[0].get("plan"), plan):
         raise EvidenceError(f"normalized-v4 {mode} event log does not start with its frozen plan")
@@ -3377,6 +3539,9 @@ def _normalized_validate_events(path, plan, mode, canonical_truth, original_trut
                 or not isinstance(scores, list) or len(scores) != len(ids)
                 or any(not isinstance(score, (int, float)) or not math.isfinite(score)
                        for score in scores)
+                or not _normalized_result_scores_match(
+                    ids, scores, query, normalized_vectors, normalized_queries,
+                )
                 or list(zip((-score for score in scores), ids))
                     != sorted(zip((-score for score in scores), ids))):
             raise EvidenceError("normalized-v4 diagnostic result ordering is invalid")
@@ -3431,10 +3596,14 @@ def _normalized_validate_events(path, plan, mode, canonical_truth, original_trut
         ids, scores = event.get("ids"), event.get("scores")
         eligible = event.get("eligible")
         if (request_mode not in expected_modes or type(eligible) is not int
+                or type(event.get("query")) is not int or not 0 <= event["query"] < 200
                 or not isinstance(ids, list) or len(ids) != len(set(ids))
                 or not isinstance(scores, list) or len(scores) != len(ids)
                 or any(not isinstance(score, (int, float)) or not math.isfinite(score)
                        for score in scores)
+                or not _normalized_result_scores_match(
+                    ids, scores, event["query"], normalized_vectors, normalized_queries,
+                )
                 or list(zip((-score for score in scores), ids))
                     != sorted(zip((-score for score in scores), ids))
                 or event.get("command_version") != 4 or event.get("diagnostics") is not True):
@@ -3482,22 +3651,43 @@ def _normalized_production_identity(route, mode, lane):
         if not isinstance(route, dict) or not isinstance(route.get("receipt"), dict):
             raise EvidenceError("normalized-v4 collection timing omitted its route receipt")
         receipt = route["receipt"]
-        if (receipt.get("route") != "typed_hnsw" or receipt.get("available") is not True
+        if (receipt.get("Route") != "typed_hnsw" or receipt.get("Available") is not True
+                or receipt.get("Representation") != native.NORMALIZED_REPRESENTATION
+                or receipt.get("QueryMode") != mode or receipt.get("ResultCount") != 10
+                or any(type(receipt.get(field)) is not int or receipt[field] <= 0 for field in (
+                    "SchemaHash", "SchemaGeneration", "BaseManifestGeneration",
+                    "BaseManifestChecksum", "CurrentManifestGeneration",
+                    "CurrentManifestChecksum", "CurrentCoverageLSN",
+                ))
+                or receipt["CurrentManifestGeneration"] < receipt["BaseManifestGeneration"]
+                or (receipt["CurrentManifestGeneration"] == receipt["BaseManifestGeneration"]
+                    and receipt["CurrentManifestChecksum"] != receipt["BaseManifestChecksum"])
                 or route.get("embedding_vector_reads") != 0
                 or route.get("embedding_vector_bytes") != 0
                 or route.get("embedding_output_bytes") != 0):
             raise EvidenceError("normalized-v4 collection timing left the production route")
+        packed_calls = route.get("packed_score_calls")
+        packed_candidates = route.get("packed_score_candidates")
+        packed_bytes = route.get("packed_vector_bytes_read")
+        if (type(packed_calls) is not int or type(packed_candidates) is not int
+                or type(packed_bytes) is not int or not 0 < packed_calls <= packed_candidates
+                or packed_bytes != packed_candidates * 768 * 4):
+            raise EvidenceError("normalized-v4 collection timing omitted packed FP32 work")
         if mode == "quantized_rerank":
-            if (route.get("quantized_score_calls", 0) <= 0
-                    or route.get("packed_score_calls") != 1
-                    or not 0 < route.get("packed_score_candidates", 0) <= 64
-                    or route.get("packed_vector_bytes_read")
-                        != route["packed_score_candidates"] * 768 * 4):
+            if (receipt.get("QuantizedIndexName") != native.QUANTIZED_PROFILE_NAME
+                    or receipt.get("QuantizedCodec") != "scalar_u8"
+                    or receipt.get("QuantizedVersion") != 1
+                    or type(route.get("quantized_score_calls")) is not int
+                    or route["quantized_score_calls"] <= 0
+                    or route.get("fp32_score_calls") != packed_candidates
+                    or packed_calls != 1 or packed_candidates > 64):
                 raise EvidenceError("normalized-v4 collection SQ8 timing omitted packed work")
-        elif any(route.get(field, 0) != 0 for field in (
-                "quantized_score_calls", "packed_score_calls", "packed_score_candidates",
-                "packed_vector_bytes_read")):
-            raise EvidenceError("normalized-v4 collection exact timing crossed the SQ8 plane")
+        elif (receipt.get("QuantizedIndexName") != ""
+                or receipt.get("QuantizedCodec") != ""
+                or receipt.get("QuantizedVersion") != 0
+                or route.get("quantized_score_calls", 0) != 0
+                or route.get("fp32_score_calls", 0) != 0):
+            raise EvidenceError("normalized-v4 collection exact timing crossed score planes")
         return
     if (not isinstance(route, dict) or route.get("version") != 1
             or route.get("representation") != native.NORMALIZED_REPRESENTATION
@@ -3505,21 +3695,75 @@ def _normalized_production_identity(route, mode, lane):
             or route.get("return_embedding") is not False or route.get("diagnostics") is not False
             or route.get("filter") is not False or route.get("top_k") != 10
             or route.get("ef_search") != 64 or route.get("result_count") != 10
+            or any(type(route.get(field)) is not int or route[field] <= 0 for field in (
+                "schema_hash", "schema_generation", "base_manifest_generation",
+                "base_manifest_checksum", "current_manifest_generation",
+                "current_manifest_checksum", "current_coverage_lsn", "fp32_score_calls",
+            ))
+            or route["current_manifest_generation"] < route["base_manifest_generation"]
+            or (route["current_manifest_generation"] == route["base_manifest_generation"]
+                and route["current_manifest_checksum"] != route["base_manifest_checksum"])
+            or route.get("fp32_vector_bytes_read") != route["fp32_score_calls"] * 768 * 4
             or any(route.get(field) != 0 for field in (
                 "embedding_vector_reads", "embedding_vector_bytes", "embedding_output_bytes",
             ))):
         raise EvidenceError("normalized-v4 timed client route identity is incomplete")
+    packed_calls = route.get("packed_score_calls")
+    packed_candidates = route.get("packed_score_candidates")
+    packed_bytes = route.get("packed_vector_bytes_read")
+    if (type(packed_calls) is not int or type(packed_candidates) is not int
+            or type(packed_bytes) is not int or not 0 < packed_calls <= packed_candidates
+            or packed_candidates > route["fp32_score_calls"]
+            or packed_bytes != packed_candidates * 768 * 4):
+        raise EvidenceError("normalized-v4 timed client omitted packed FP32 work")
     if mode == "quantized_rerank":
-        if (route.get("quantized_score_calls", 0) <= 0
-                or route.get("packed_score_calls") != 1
-                or not 0 < route.get("packed_score_candidates", 0) <= 64
-                or route.get("packed_vector_bytes_read")
-                    != route["packed_score_candidates"] * 768 * 4):
+        if (route.get("rerank_candidates") != 64
+                or route.get("quantized_index_name") != native.QUANTIZED_PROFILE_NAME
+                or route.get("quantized_codec") != "scalar_u8"
+                or route.get("quantized_version") != 1
+                or type(route.get("quantized_score_calls")) is not int
+                or route["quantized_score_calls"] <= 0
+                or route.get("quantized_code_bytes_read")
+                    != route["quantized_score_calls"] * 768
+                or packed_calls != 1 or packed_candidates > 64
+                or route["fp32_score_calls"] != packed_candidates):
             raise EvidenceError("normalized-v4 timed SQ8 client omitted packed work")
-    elif any(route.get(field, 0) != 0 for field in (
-            "quantized_score_calls", "packed_score_calls", "packed_score_candidates",
-            "packed_vector_bytes_read")):
+    elif (route.get("rerank_candidates", 0) != 0
+            or route.get("quantized_index_name") != ""
+            or route.get("quantized_codec") != ""
+            or route.get("quantized_version") != 0
+            or route.get("quantized_score_calls", 0) != 0
+            or route.get("quantized_code_bytes_read", 0) != 0):
         raise EvidenceError("normalized-v4 timed exact client crossed the SQ8 plane")
+
+
+def _normalized_matrix_owner_identity(matrix, lanes):
+    try:
+        observed = native.v4_gate.immutable_owner_identity(lanes)
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise EvidenceError("normalized-v4 production lanes cross graph publications") from exc
+    if not native.same_json(matrix.get("immutable_owner_identity"), observed):
+        raise EvidenceError("normalized-v4 immutable owner receipt is missing or inconsistent")
+    return observed
+
+
+def _normalized_ready_graph_owner(graph, owner, generation, label):
+    base = (graph or {}).get("base_manifest") or {}
+    current = (graph or {}).get("current_manifest") or {}
+    if (not isinstance(graph, dict)
+            or graph.get("index") != "embedding"
+            or generation != owner.get("schema_generation")
+            or graph.get("publication_present") is not True
+            or graph.get("publication_unchanged") is not True
+            or graph.get("serving_ready") is not True
+            or graph.get("invalid") is not False
+            or graph.get("reconciling") is not False
+            or base.get("generation") != owner.get("base_manifest_generation")
+            or base.get("checksum") != owner.get("base_manifest_checksum")
+            or current.get("generation") != owner.get("current_manifest_generation")
+            or current.get("checksum") != owner.get("current_manifest_checksum")
+            or graph.get("current_coverage_lsn") != owner.get("current_coverage_lsn")):
+        raise EvidenceError(f"normalized-v4 {label} differs from the timed serving owner")
 
 
 def _normalized_lane_statistics(lane, lane_name, observations):
@@ -3586,6 +3830,12 @@ def _normalized_validate_matrix(matrix, diagnostic_fixed):
     required = {"go_native", "python_native", "collection_search", "collection_fetch", "service"}
     if not isinstance(lanes, dict) or set(lanes) != required:
         raise EvidenceError("normalized-v4 production matrix lane set is incomplete")
+    owner = _normalized_matrix_owner_identity(matrix, lanes)
+    for label in ("live_resource_before", "live_resource_after"):
+        endpoint = matrix.get(label) or {}
+        _normalized_ready_graph_owner(
+            endpoint.get("typed_graph"), owner, endpoint.get("generation"), label,
+        )
     observations, statistics_by_lane = {}, {}
     for lane_name in ("collection_search", "collection_fetch", "service", "go_native", "python_native"):
         statistics_by_lane[lane_name] = _normalized_lane_statistics(
@@ -3639,12 +3889,13 @@ def _normalized_validate_matrix(matrix, diagnostic_fixed):
             failures.append(f"{lane_name}: transport consumes over half the collection advantage")
     return {
         "lanes": statistics_by_lane, "historical_exact": historical,
+        "immutable_owner_identity": owner,
         "client_cpu_delta_ns": client_cpu,
         "collection_advantage_ns": advantage, "transport_consumption_ns": transport,
     }, failures
 
 
-def _normalized_validate_engine(engine):
+def _normalized_validate_engine(engine, expected_owner=None):
     if (engine.get("schema") != "treedb_cosine_normalized_f32_campaign_engine/v1"
             or engine.get("rows") != 500000 or engine.get("dimensions") != 768
             or engine.get("query_count") != 200 or engine.get("top_k") != 10
@@ -3652,28 +3903,31 @@ def _normalized_validate_engine(engine):
             or engine.get("representation") != native.NORMALIZED_REPRESENTATION
             or engine.get("index") != "minima_cohere"
             or engine.get("quantized_index") != native.QUANTIZED_PROFILE_NAME
+            or type(engine.get("collection_generation")) is not int
+            or engine["collection_generation"] <= 0
             or engine.get("stable_duplicate_score_calls") != 0):
         raise EvidenceError("normalized-v4 engine diagnostic identity is invalid")
+    if expected_owner is not None:
+        _normalized_ready_graph_owner(
+            engine.get("serving_owner"), expected_owner,
+            engine.get("collection_generation"), "engine serving owner",
+        )
     shortlists = engine.get("shortlists")
     if not isinstance(shortlists, list) or len(shortlists) != 200:
         raise EvidenceError("normalized-v4 engine diagnostic lacks 200 actual shortlists")
-    if hashlib.sha256(json.dumps(
-            shortlists, sort_keys=True, allow_nan=False, separators=(",", ":"),
-            ).encode()).hexdigest() != engine.get("shortlists_sha256"):
-        # Go marshals the shortlist array without a final newline and preserves
-        # struct-field order. Re-encode that exact semantic object below before
-        # rejecting an otherwise valid artifact.
-        raw = json.dumps(shortlists, separators=(",", ":"), ensure_ascii=False).encode()
-        if hashlib.sha256(raw).hexdigest() != engine.get("shortlists_sha256"):
-            raise EvidenceError("normalized-v4 shortlist digest is invalid")
+    # resolve_normalized_inventory verifies the original file's SHA256. Keep
+    # semantic checks here; do not invent another JSON serialization to hash.
     for query, row in enumerate(shortlists):
         ordinals = row.get("ordinals")
         work = row.get("candidate_work") or {}
         if (row.get("query") != query or not isinstance(ordinals, list) or len(ordinals) != 64
                 or len(set(ordinals)) != 64
                 or any(type(value) is not int or not 0 <= value < 500000 for value in ordinals)
-                or work.get("quantized_score_calls", 0) <= 0
-                or work.get("quantized_code_bytes_read", 0) <= 0
+                or type(work.get("quantized_score_calls")) is not int
+                or work["quantized_score_calls"] <= 0
+                or work.get("quantized_code_bytes_read")
+                    != work["quantized_score_calls"] * 768
+                or work.get("prepared_graph_search_views") != 1
                 or row.get("packed_score_calls") != 1
                 or row.get("packed_score_candidates") != 64
                 or row.get("packed_vector_bytes_read") != 64 * 768 * 4):
@@ -3724,7 +3978,10 @@ def _normalized_asset_inventory(inventory, mode):
     process_memory = inventory.get("process_memory")
     go_memory = inventory.get("go_memory")
     if (inventory.get("schema") != "treedb_cohere_normalized_v4_resource_inventory/v1"
-            or not graph.get("serving_ready") or not graph.get("publication_unchanged")
+            or graph.get("publication_present") is not True
+            or graph.get("serving_ready") is not True
+            or graph.get("publication_unchanged") is not True
+            or graph.get("invalid") is not False or graph.get("reconciling") is not False
             or graph.get("base_rows") != 500000
             or type(graph.get("suffix_rows")) is not int or graph["suffix_rows"] < 0
             or not isinstance(assets, list) or not isinstance(parts, list)
@@ -3750,6 +4007,27 @@ def _normalized_asset_inventory(inventory, mode):
         file_categories[row["category"]] += row["bytes"]
     if file_categories != categories or sum(row["bytes"] for row in files) != owned["total_bytes"]:
         raise EvidenceError(f"normalized-v4 {mode} owned-file ledger does not reproduce totals")
+    owned_by_path = {row["path"]: row for row in files}
+
+    def owned_asset(asset):
+        ref = asset.get("ref") or {}
+        namespace = ref.get("Namespace")
+        file_id = ref.get("FileID")
+        offset = ref.get("Offset")
+        length = ref.get("Length")
+        if (not isinstance(namespace, str) or not namespace
+                or type(file_id) is not int or file_id <= 0
+                or type(offset) is not int or offset < 0
+                or type(length) is not int or length <= 0
+                or asset.get("bytes") != length):
+            return False
+        suffix = f"column_assets/{namespace}/assets/segments/segment-{file_id:06d}.tca"
+        matches = [row for path, row in owned_by_path.items() if path.endswith(suffix)]
+        return (len(matches) == 1 and matches[0]["category"] == "column_assets"
+                and offset + length <= matches[0]["bytes"])
+
+    if any(not isinstance(asset, dict) or not owned_asset(asset) for asset in assets):
+        raise EvidenceError(f"normalized-v4 {mode} vector assets are not owned column assets")
     by_role = {}
     for asset in assets:
         by_role.setdefault(asset.get("role"), []).append(asset)
@@ -3772,18 +4050,28 @@ def _normalized_asset_inventory(inventory, mode):
     codes = by_role.get("quantized_codes", [])
     alpha = by_role.get("quantized_alpha", [])
     if mode == "sq8":
-        if (len(codes) != 1 or len(alpha) != 1
+        if (len(codes) != 1 or alpha
+                or codes[0].get("asset_id") != "quantized/minima_sq8/codes"
+                or codes[0].get("logical_type") != "byte_vector"
                 or codes[0].get("rows") != 500000
                 or codes[0].get("bytes", 0) <= 0
                 or codes[0].get("logical_payload_bytes") != 500000 * 768
-                or codes[0].get("physical_encoding") != "raw_fixed_bytes"
-                or alpha[0].get("bytes", 0) <= 0):
+                or codes[0].get("physical_encoding") != "raw_fixed_bytes"):
             raise EvidenceError("normalized-v4 SQ8 inventory lacks its derived byte plane")
     elif codes or alpha:
         raise EvidenceError("normalized-v4 FP32-only inventory unexpectedly owns SQ8 assets")
     logical = graph.get("logical_resources") or {}
     physical = graph.get("physical") or {}
-    if logical.get("active_heap_copy_bytes", 0) != 0 or physical.get("mapped_bytes", 0) <= 0:
+    zero_physical = (
+        "descriptors_in_flight", "fallback_backings", "fallback_bytes",
+        "fallback_bytes_in_flight", "fallback_segments", "mapped_bytes_in_flight",
+    )
+    if (logical.get("active_heap_copy_bytes") != 0
+            or logical.get("fallback_reads") != 0
+            or logical.get("active_mapped_bytes", 0) <= 0
+            or physical.get("closed_db") is not False
+            or physical.get("mapped_bytes", 0) <= 0
+            or any(physical.get(field) != 0 for field in zero_physical)):
         raise EvidenceError(f"normalized-v4 {mode} inventory does not prove mapped one-plane serving")
     return {
         "total_owned_bytes": owned["total_bytes"],
@@ -3795,7 +4083,7 @@ def _normalized_asset_inventory(inventory, mode):
     }
 
 
-def _normalized_validate_resources(artifact, mode):
+def _normalized_validate_resources(artifact, mode, expected_owner=None):
     if (artifact.get("schema") != "treedb_cohere_normalized_v4_resource_inventories/v1"
             or artifact.get("rows") != 500000 or artifact.get("dimensions") != 768
             or artifact.get("query_mode") != ("quantized_rerank" if mode == "sq8" else "exact")
@@ -3808,6 +4096,11 @@ def _normalized_validate_resources(artifact, mode):
     suffixes = [(row.get("typed_graph") or {}).get("suffix_rows") for row in inventories]
     if not (suffixes[0] == 0 and suffixes[1] > 0 and suffixes[2:] == [0, 0, 0]):
         raise EvidenceError(f"normalized-v4 {mode} resource lifecycle suffix states are invalid")
+    if expected_owner is not None:
+        _normalized_ready_graph_owner(
+            inventories[0].get("typed_graph"), expected_owner,
+            inventories[0].get("generation"), f"{mode} initial-ready owner",
+        )
     summaries = [_normalized_asset_inventory(row, mode) for row in inventories]
     return {"phases": phases, "inventories": summaries, "final": summaries[-1]}
 
@@ -3843,20 +4136,28 @@ def _analyze_normalized(packet_path, packet, expected_sha256):
         mode: _normalized_validate_plan_and_receipt(packet, paths, mode, manifest)
         for mode in ("exact", "sq8")
     }
+    producer_coordinates = _normalized_producer_coordinates(plans)
+    source_truth = _full_truth(dataset_paths["truth"])
+    source_truth_sha256 = packet["files"][packet["dataset"]["truth"]]["sha256"]
     truth_rows = {}
     for mode in ("exact", "sq8"):
         truth_rows[mode] = _normalized_truth_artifact(
             _normalized_run_path(packet, paths, mode, "truth"),
+            source_truth, source_truth_sha256,
         )
     if not native.same_json(truth_rows["exact"][0], truth_rows["sq8"][0]):
         raise EvidenceError("normalized-v4 exact and SQ8 runs used different truth artifacts")
-    _, canonical_truth, original_truth = truth_rows["sq8"]
+    _, canonical_truth, canonical_scores, original_truth = truth_rows["sq8"]
+    normalized_vectors, normalized_queries = _normalized_recompute_canonical_truth(
+        dataset_paths, canonical_truth, canonical_scores,
+    )
     evidence = {
         mode: _normalized_validate_events(
             _normalized_run_path(packet, paths, mode, "events"), plans[mode], mode,
-            canonical_truth, original_truth,
+            canonical_truth, original_truth, normalized_vectors, normalized_queries,
         ) for mode in ("exact", "sq8")
     }
+    del normalized_vectors, normalized_queries
     standalone_exact = evidence["exact"]["quality"]["exact"]
     same_build_exact = evidence["sq8"]["quality"]["exact"]
     sq8_quality = evidence["sq8"]["quality"]["quantized_rerank"]
@@ -3873,6 +4174,7 @@ def _analyze_normalized(packet_path, packet, expected_sha256):
         "normalized-v4 production matrix", MAX_JSON_BYTES,
     )
     matrix_statistics, matrix_failures = _normalized_validate_matrix(matrix, evidence["sq8"]["fixed"])
+    owner = matrix_statistics["immutable_owner_identity"]
     failures.extend(matrix_failures)
     engine = read_json(
         _normalized_run_path(packet, paths, "sq8", "engine"),
@@ -3891,14 +4193,14 @@ def _analyze_normalized(packet_path, packet, expected_sha256):
             or engine.get("serving_sha256")
                 != packet["files"][packet["inputs"]["serving"]]["sha256"]):
         raise EvidenceError("normalized-v4 matrix did not retain its exact engine diagnostic")
-    engine_statistics, engine_failures = _normalized_validate_engine(engine)
+    engine_statistics, engine_failures = _normalized_validate_engine(engine, owner)
     failures.extend(engine_failures)
 
     resources = {
         mode: _normalized_validate_resources(read_json(
             _normalized_run_path(packet, paths, mode, "resources"),
             f"normalized-v4 {mode} resources", MAX_JSON_BYTES,
-        ), mode) for mode in ("exact", "sq8")
+        ), mode, owner if mode == "sq8" else None) for mode in ("exact", "sq8")
     }
     exact_disk = resources["exact"]["final"]["total_owned_bytes"]
     sq8_disk = resources["sq8"]["final"]["total_owned_bytes"]
@@ -3948,6 +4250,8 @@ def _analyze_normalized(packet_path, packet, expected_sha256):
         "candidate_commit": packet["candidate_commit"],
         "packet_sha256": expected_sha256,
         "consumer_source": consumer_source,
+        "consumer_runtime": _consumer_runtime_identity(),
+        "producer_coordinates": producer_coordinates,
         "go_binary_builds": go_builds,
         "quality": {
             "standalone_fp32_recall_at_10": standalone_exact,

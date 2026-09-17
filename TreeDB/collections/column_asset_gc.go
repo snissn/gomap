@@ -57,6 +57,17 @@ type ColumnAssetGCStats struct {
 // is never touched.
 var ErrColumnAssetGCPlanStale = errors.New("collections: column asset GC plan identity changed")
 
+// Use the same bounded convergence budget as RecoverableRootSet capture. A
+// durable-root candidate can advance after GC captures its recovery closure;
+// only a pass that has not deleted anything may be rebuilt from fresh roots.
+const columnAssetGCRecoverableRootAttempts = 8
+
+func shouldRetryColumnAssetGCFromFreshRecoverableRoots(err error, stats ColumnAssetGCStats, attempt int) bool {
+	return errors.Is(err, backenddb.ErrRecoverableRootSetStale) &&
+		stats.SegmentsDeleted == 0 &&
+		attempt+1 < columnAssetGCRecoverableRootAttempts
+}
+
 var (
 	columnAssetGCTestHookMu             sync.RWMutex
 	removeColumnAssetGCSegment          func(string) error
