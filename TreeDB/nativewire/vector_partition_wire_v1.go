@@ -979,7 +979,11 @@ func (r *vectorPartitionWireReaderV1) bytes(maximum int) []byte {
 	if r.err != nil {
 		return nil
 	}
-	if length > uint64(maximum) || length > uint64(len(r.src)-r.off) {
+	if length > uint64(len(r.src)-r.off) {
+		r.err = protocolError(iwire.ErrMalformedFrame, "vector byte string exceeds remaining payload")
+		return nil
+	}
+	if length > uint64(maximum) {
 		r.err = protocolError(iwire.ErrResourceExhausted, "vector byte string exceeds bound")
 		return nil
 	}

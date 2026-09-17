@@ -145,6 +145,25 @@ func TestVectorPartitionWireV1RoundTrip(t *testing.T) {
 	}
 }
 
+func TestVectorPartitionWireReaderV1ClassifiesTruncationBeforeLimit(t *testing.T) {
+	for name, test := range map[string]struct {
+		src     []byte
+		maximum int
+		code    iwire.ErrorCode
+	}{
+		"truncated-under-limit": {binary.AppendUvarint(nil, 4), 8, iwire.ErrMalformedFrame},
+		"truncated-over-limit":  {binary.AppendUvarint(nil, 16), 8, iwire.ErrMalformedFrame},
+		"complete-over-limit":   {append(binary.AppendUvarint(nil, 4), 0, 0, 0, 0), 3, iwire.ErrResourceExhausted},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := vectorPartitionWireReaderV1{src: test.src}
+			if value := r.bytes(test.maximum); value != nil || nativeCodeOf(r.err) != test.code {
+				t.Fatalf("value=%x error=%v, want code %d", value, r.err, test.code)
+			}
+		})
+	}
+}
+
 func TestValidateVectorPartitionFastEvidenceV1(t *testing.T) {
 	generation := public.GenerationIDV1{Index: "fixture", Generation: 7}
 	options := public.FastSearchOptionsV1{MaxIndexAge: time.Second, MinIndexedThrough: 9}

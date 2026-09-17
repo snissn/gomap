@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"slices"
 	"time"
+	"unicode/utf8"
 )
 
 // ErrorCodeV1 is the stable error classification returned by ServiceV1.
@@ -380,8 +381,8 @@ func validateInsertRequestV1(ctx context.Context, r InsertRequestV1) error {
 	if err := validateGenerationV1(ctx, r.Generation); err != nil {
 		return err
 	}
-	if r.Version != 1 || len(r.IdempotencyKey) == 0 || len(r.ID) == 0 || len(r.Vector) == 0 || len(r.Document) == 0 {
-		return invalidV1("version, generation, idempotency key, id, vector, and document are required")
+	if r.Version != 1 || len(r.IdempotencyKey) == 0 || len(r.ID) == 0 || !utf8.Valid(r.ID) || len(r.Vector) == 0 || len(r.Document) == 0 {
+		return invalidV1("version, generation, idempotency key, valid UTF-8 id, vector, and document are required")
 	}
 	if !r.Deadline.IsZero() && !time.Now().Before(r.Deadline) {
 		return &ErrorV1{Code: ErrorDeadlineExceededV1, Err: context.DeadlineExceeded}

@@ -347,7 +347,7 @@ func (o *OperationsV1) admitInsertV1(ctx context.Context, r InsertRequestV1) err
 		return err
 	}
 	vectorBytes := uint64(len(r.Vector)) * 4
-	requestBytes := vectorBytes + uint64(len(r.IdempotencyKey)) + uint64(len(r.ID)) + uint64(len(r.Document))
+	requestBytes := vectorBytes + uint64(len(r.Generation.Index)) + uint64(len(r.IdempotencyKey)) + uint64(len(r.ID)) + uint64(len(r.Document))
 	var reason *uint64
 	switch {
 	case vectorBytes > o.config.MaxQueryBytes:

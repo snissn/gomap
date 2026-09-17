@@ -265,6 +265,13 @@ func TestVectorPartitionSystemNativeFourDaemonRemoteWriteRoutesAppliesAndBecomes
 	if _, err := client.VectorInsertV1(ctx, mismatch); !hasPublicVectorErrorCodeV1(err, public.ErrorInvalidRequestV1) {
 		t.Fatalf("document mismatch error=%v", err)
 	}
+	invalidID := mismatch
+	invalidID.IdempotencyKey = []byte("reject-invalid-id")
+	invalidID.ID = []byte{0xff}
+	invalidID.Document = []byte(`{"embedding":[0,1]}`)
+	if _, err := client.VectorInsertV1(ctx, invalidID); !hasPublicVectorErrorCodeV1(err, public.ErrorInvalidRequestV1) {
+		t.Fatalf("invalid UTF-8 ID error=%v", err)
+	}
 	if _, err := fixture.client.call(ctx, "owner-1", "vector-forward", fixedPeerRequestV1{VectorInsert: &VectorPartitionRoutedInsertV1{}}, true); !errors.Is(err, ErrFixedPeerVectorProofMissingV1) {
 		t.Fatalf("missing proof error=%v", err)
 	}
@@ -281,6 +288,10 @@ func TestVectorPartitionSystemNativeFourDaemonRemoteWriteRoutesAppliesAndBecomes
 	}
 	if _, err := fixture.client.call(ctx, "owner-1", "vector-forward", fixedPeerRequestV1{VectorInsert: &private}, true); !errors.Is(err, ErrFixedPeerVectorProofStaleV1) {
 		t.Fatalf("stale catalog proof error=%v", err)
+	}
+	private.Request.ID = []byte{0xff}
+	if _, err := fixture.client.call(ctx, "owner-1", "vector-forward", fixedPeerRequestV1{VectorInsert: &private}, true); !errors.Is(err, ErrFixedPeerVectorDocumentV1) {
+		t.Fatalf("owner invalid UTF-8 ID error=%v", err)
 	}
 	private.Request.ID = []byte("reject-wrong-owner")
 	private.CatalogProof.Digest = fixture.configs[0].Vector.Identity.Index.CatalogDigest
@@ -322,10 +333,10 @@ func TestVectorPartitionSystemNativeFourDaemonRemoteWriteRoutesAppliesAndBecomes
 		t.Fatalf("subsequent production search did not observe routed mutation: %+v", search)
 	}
 	fixture.RequireNoWrongGroupMutation(t, ctx,
-		[]byte("remote-visible"), []byte("reject-stale-generation"), []byte("reject-document-mismatch"), []byte("reject-stale-catalog"), []byte("reject-wrong-owner"),
+		[]byte("remote-visible"), []byte("reject-stale-generation"), []byte("reject-document-mismatch"), []byte{0xff}, []byte("reject-stale-catalog"), []byte("reject-wrong-owner"),
 	)
 	fixture.RequireOwnerDocuments(t, []byte("remote-visible"),
-		[]byte("reject-stale-generation"), []byte("reject-document-mismatch"), []byte("reject-stale-catalog"), []byte("reject-wrong-owner"),
+		[]byte("reject-stale-generation"), []byte("reject-document-mismatch"), []byte{0xff}, []byte("reject-stale-catalog"), []byte("reject-wrong-owner"),
 	)
 }
 
@@ -667,6 +678,12 @@ func TestFixedPeerVectorConfigRequiresOneOwnerGroupV1(t *testing.T) {
 	}
 	if err := validateFixedPeerVectorConfigV1(config, map[raftcluster.GroupID]bool{"group-a": true, "group-b": true}); err == nil || err.Error() != want {
 		t.Fatalf("multi-owner validation error=%v, want %q", err, want)
+	}
+	config.Vector.Placement.Partitions = []raftplacement.VectorPartitionGroupV1{{PartitionID: 0, GroupID: "group-a"}}
+	config.Vector.ShardAddresses["group-a"]["node"] = "missing-port"
+	want = `invalid vector shard address for node "node"`
+	if err := validateFixedPeerVectorConfigV1(config, map[raftcluster.GroupID]bool{"group-a": true}); err == nil || err.Error() != want {
+		t.Fatalf("invalid shard address error=%v, want %q", err, want)
 	}
 }
 

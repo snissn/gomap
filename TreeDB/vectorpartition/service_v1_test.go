@@ -189,6 +189,10 @@ func TestServiceV1InsertRequiresCompleteEvidenceAndClonesV1(t *testing.T) {
 	if _, err := service.Insert(t.Context(), request); !hasCodeV1(err, ErrorCommitAmbiguousV1) {
 		t.Fatalf("post-commit deadline classification=%v", err)
 	}
+	request.ID = []byte{0xff}
+	if _, err := service.Insert(t.Context(), request); !hasCodeV1(err, ErrorInvalidRequestV1) {
+		t.Fatalf("invalid UTF-8 ID error=%v", err)
+	}
 }
 
 func TestServiceV1FastAndPinnedContract(t *testing.T) {

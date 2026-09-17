@@ -112,6 +112,14 @@ func TestOperationsV1InsertAdmissionAndCountersV1(t *testing.T) {
 	if counters := operations.Counters(); counters.CapQueryBytes != 1 || counters.Inserts != 1 {
 		t.Fatalf("admission counters=%+v", counters)
 	}
+	tooLarge = operationsInsertRequestV1()
+	tooLarge.Generation.Index = string(make([]byte, config.MaxRequestBytes))
+	if _, err := operations.Insert(t.Context(), tooLarge); !hasOperationErrorCodeV1(err, ErrorInvalidRequestV1) {
+		t.Fatalf("oversized index error=%v", err)
+	}
+	if counters := operations.Counters(); counters.CapRequestBytes != 1 || counters.Inserts != 1 {
+		t.Fatalf("index admission counters=%+v", counters)
+	}
 }
 
 func hasOperationErrorCodeV1(err error, want ErrorCodeV1) bool {

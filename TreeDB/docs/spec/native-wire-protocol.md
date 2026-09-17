@@ -814,7 +814,9 @@ semantics; native wire changes only the transport representation.
 `vector_insert` is the narrow LocalOnly public mutation route. It requires the
 generic `deadline` section and `vector_insert_request` (137). The request binds
 one mutation-attempt idempotency key, exact document ID, generation, FP32
-routing vector, JSON document, and deadline. The server selects exactly one partition owner, revalidates catalog,
+routing vector, JSON document, and deadline. The exact document ID must be
+valid UTF-8 so the same identity can be returned in the visibility proof. The
+server selects exactly one partition owner, revalidates catalog,
 lifecycle, router, document/vector, and leader proofs at that owner, then lowers
 the mutation to the existing deterministic insert-batch entry for the owning
 Raft group. Command 66 is never itself encoded as a replicated entry.

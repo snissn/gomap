@@ -906,6 +906,11 @@ func TestVectorIndexPartitionLiveSnapshotRecoveryAndMismatchV1(t *testing.T) {
 	if _, reason := restored.restorePartitionLiveV1(orphan, orphan.Coverage); reason != "invalid_partition_live_owner_node" {
 		t.Fatalf("orphan reason=%q", reason)
 	}
+	zeroRevision := partitionLivePersistV1ForTest(idx)
+	zeroRevision.Revision = 0
+	if _, reason := restored.restorePartitionLiveV1(zeroRevision, zeroRevision.Coverage); reason != "invalid_partition_live_meta" {
+		t.Fatalf("zero revision with owners reason=%q", reason)
+	}
 	unordered := partitionLivePersistV1ForTest(idx)
 	unordered.Representatives[0], unordered.Representatives[1] = unordered.Representatives[1], unordered.Representatives[0]
 	if _, reason := restored.restorePartitionLiveV1(unordered, unordered.Coverage); reason != "invalid_partition_live_representative" {

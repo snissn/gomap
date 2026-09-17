@@ -12,6 +12,7 @@ import (
 	"slices"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/snissn/gomap/TreeDB/collections"
 	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
@@ -593,8 +594,10 @@ func validateFixedPeerVectorConfigV1(config FixedPeerTCPConfigV1, localGroups ma
 			return fmt.Errorf("vector shard address coverage is incomplete for group %q", group)
 		}
 		for _, peer := range fixed.Peers {
-			if vector.ShardAddresses[group][peer.ID] == "" {
-				return fmt.Errorf("vector shard address is missing for node %q", peer.ID)
+			address := vector.ShardAddresses[group][peer.ID]
+			resolved, err := net.ResolveTCPAddr("tcp", address)
+			if err != nil || resolved.IP == nil || resolved.IP.IsUnspecified() || resolved.Port == 0 {
+				return fmt.Errorf("invalid vector shard address for node %q", peer.ID)
 			}
 		}
 		if localGroups[group] && vector.ShardAddresses[group][config.NodeID] == "" {
@@ -813,6 +816,9 @@ func fixedPeerVectorSubmitErrorV1(result raftcluster.SubmitResultV1, err error) 
 func (r *FixedPeerTCPRuntimeV1) validateVectorInsertOwnerV1(ctx context.Context, request VectorPartitionRoutedInsertV1) error {
 	if request.CatalogProof.Epoch == 0 || request.CatalogProof.Digest == "" || request.ReadySetDigest == "" || request.RouterModelDigest == "" {
 		return ErrFixedPeerVectorProofMissingV1
+	}
+	if !utf8.Valid(request.Request.ID) {
+		return ErrFixedPeerVectorDocumentV1
 	}
 	vector := r.config.Vector
 	if vector == nil || r.vector == nil || request.Identity != vector.Identity ||

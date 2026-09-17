@@ -1400,7 +1400,7 @@ func (idx *VectorIndex) restorePartitionLiveSnapshotV2(persisted *vectorIndexPar
 		owners = persisted.Owners
 		domains = persisted.Domains
 	}
-	if (persisted.Version != 1 && persisted.Version != 3) || persisted.IndexDefinitionDigest == "" || persisted.Generation == 0 || persisted.Source.Generation == 0 || persisted.Coverage != sourceCoverage || len(persisted.PackDomains) == 0 || len(persisted.Representatives) == 0 || len(owners) > vectorIndexPartitionLiveMaxMutatedIDsV1 {
+	if (persisted.Version != 1 && persisted.Version != 3) || persisted.IndexDefinitionDigest == "" || persisted.Generation == 0 || persisted.Source.Generation == 0 || persisted.Coverage != sourceCoverage || (persisted.Revision == 0 && len(owners) != 0) || len(persisted.PackDomains) == 0 || len(persisted.Representatives) == 0 || len(owners) > vectorIndexPartitionLiveMaxMutatedIDsV1 {
 		return nil, "invalid_partition_live_meta"
 	}
 	domainEpochHighWater := persisted.DomainEpochHighWater
