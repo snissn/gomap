@@ -85,7 +85,7 @@ not a claim made by the dense benchmark.
 | Logical field | Selected authoritative representation | Consumers |
 |---|---|---|
 | document ID | existing primary/typed-row identity | lookup, tombstones, deduplication, result identity |
-| `embedding` | `float32_vector`, `typed_column_part`, fixed dimensions | graph construction, ANN distance, typed exact scoring |
+| `embedding` | `cosine_normalized_f32_v1` `float32_vector`, `typed_column_part`, fixed dimensions | graph construction, ANN distance, packed exact scoring, optional result embedding |
 | `meta.user_id`, `meta.fpath` | declared `string` fields in typed-row assets initially | native scalar postings and typed predicate checks |
 | `content` | declared `string` in typed-row assets | existing text analyzer/postings and result materialization |
 | other unindexed payload | existing non-column retained-payload storage | requested result fields only |

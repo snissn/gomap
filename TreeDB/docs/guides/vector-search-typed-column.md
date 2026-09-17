@@ -9,13 +9,14 @@ TreeDB remains **pre-alpha**. Vector storage metadata, graph/search APIs, and
 on-disk formats may change. Rebuild demo/benchmark DB directories across branch
 changes.
 
-The planned opt-in
+The opt-in
 [`cosine_normalized_f32_v1`](../spec/cosine-normalized-f32-v1.md)
 representation stores one canonical normalized FP32 plane and uses scalar-u8
-candidates with packed FP32 rerank. It is a frozen target contract, not a
-currently enabled representation. `return_embedding` will default to false;
-when true it returns the canonical normalized value, not the caller's original
-magnitude or bit pattern.
+candidates with packed FP32 rerank. It is enabled for Go collection and
+document-service typed input; native command and Python support remain gated on
+the next protocol stage. `return_embedding` defaults to false. When true it
+returns the canonical normalized value, not the caller's original magnitude or
+bit pattern.
 
 ## Recommended layout
 
@@ -322,6 +323,7 @@ meta := &collections.CollectionMeta{
         Dimensions: 128,
         M:          16,
         Strategy:   collections.VectorIndexStrategyColumnGraph,
+        Representation: collections.VectorIndexRepresentationCosineNormalizedF32V1,
         QuantizedIndexes: []collections.QuantizedVectorIndexDefinition{{
             Name: "embedding.scalar_u8.fast", // codec/version default to scalar_u8 v1
         }, {

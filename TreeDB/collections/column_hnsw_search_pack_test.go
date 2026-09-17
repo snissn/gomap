@@ -56,6 +56,32 @@ func TestColumnHNSWSearchPackRoundTrip2312(t *testing.T) {
 	}
 }
 
+func TestColumnHNSWTopologyPackV4OmitsVectorsAndBindsCanonicalAsset(t *testing.T) {
+	input := testColumnHNSWSearchPackInput2312()
+	input.NormalizedVectors = nil
+	input.VectorStride = input.Dimensions
+	ref := ColumnAssetRef{Kind: ColumnAssetKindTCS1TypedColumnPart, Namespace: "docs/assets", Generation: input.BaseIdentity.ManifestGeneration, PartID: 2, FileID: 7, Offset: 128, Length: 4096, Checksum: 19}
+	input.ExternalNormalizedVectors = true
+	input.ExternalVectorDigest = columnHNSWSearchPackExternalVectorRefDigest(ref)
+	raw, err := encodeColumnHNSWSearchPack(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := hnswPackU16(raw, columnHNSWSearchPackHeaderVersionOffset); got != columnHNSWSearchPackVersionV4 {
+		t.Fatalf("wire version=%d want %d", got, columnHNSWSearchPackVersionV4)
+	}
+	pack, err := decodeColumnHNSWSearchPack(raw, columnHNSWSearchPackDecodeOptions{ExpectedBaseIdentity: input.BaseIdentity})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !pack.Header.ExternalNormalizedVectors || pack.Header.ExternalVectorDigest != input.ExternalVectorDigest || pack.Header.VectorStride != input.Dimensions || len(pack.NormalizedVectors) != 0 {
+		t.Fatalf("topology header/vectors=%+v vectors=%d", pack.Header, len(pack.NormalizedVectors))
+	}
+	if _, err := columnHNSWSearchPackFindSection(pack.Sections, columnHNSWSearchPackSectionNormalizedVectors, 0); err == nil {
+		t.Fatal("topology-only pack retained normalized_vectors section")
+	}
+}
+
 func TestColumnHNSWSearchPackRowEncodingMatchesMaterializedBytes4420(t *testing.T) {
 	rows := []columnVectorGraphAssetRow{
 		{Vector: []float32{1, 0, 0}, InvNorm: 1},
@@ -615,7 +641,7 @@ func TestColumnHNSWSearchPackDecodeRejectsCorruptEnvelope2312(t *testing.T) {
 		},
 		{
 			name: "bad_version",
-			raw:  testColumnHNSWSearchPackPatchU16Header2312(raw, columnHNSWSearchPackHeaderVersionOffset, columnHNSWSearchPackVersionV3+1),
+			raw:  testColumnHNSWSearchPackPatchU16Header2312(raw, columnHNSWSearchPackHeaderVersionOffset, columnHNSWSearchPackVersionV4+1),
 			want: "unsupported hnsw_search_pack_v1 version",
 		},
 		{

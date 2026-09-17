@@ -326,6 +326,8 @@ func TestPatchColumnAssetRewriteManifestRecordsRemapsVectorIndexStateRefs1986(t 
 		columnVectorIndexStateAssetSnapshotForTest(columnVectorIndexStateAssetRoleInverseNorm, "inv_norm_by_ordinal", oldNormRef, indexState.RowCount, state.cfg.SchemaHash+2),
 		columnVectorIndexStateAssetSnapshotForTest(columnVectorIndexStateAssetRoleHNSWSearchPack, columnVectorIndexStateHNSWSearchPackAssetID, oldPackRef, indexState.RowCount, state.cfg.SchemaHash+3),
 	}
+	indexState.Assets[2].LogicalType = columnVectorIndexStateLogicalTypeSearchPack
+	indexState.Assets[2].PhysicalEncoding = columnVectorIndexStateEncodingHNSWSearchPackV1
 	stateRaw, err := encodeColumnVectorIndexStateRecord(indexState)
 	if err != nil {
 		t.Fatalf("encodeColumnVectorIndexStateRecord: %v", err)

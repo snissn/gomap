@@ -756,6 +756,9 @@ func prepareColumnWritePublishInputBeforeCommandWAL(input columnWritePublishInpu
 			if len(input.declaredRows) != input.rows {
 				return columnWritePublishInput{}, fmt.Errorf("collections: column physical asset %s prepared rows=%d rows=%d", input.operation, len(input.declaredRows), input.rows)
 			}
+			if err := validateCosineNormalizedF32V1DeclaredRows(input.meta, input.declaredRows); err != nil {
+				return columnWritePublishInput{}, err
+			}
 			return input, nil
 		}
 		if len(input.documents) != input.rows {
@@ -775,9 +778,15 @@ func prepareColumnWritePublishInputBeforeCommandWAL(input columnWritePublishInpu
 			for i := range input.documents {
 				preparedRows[i] = columnDeclaredRow{ID: input.documents[i].ID, Values: input.documents[i].declaredValues}
 			}
+			if err := validateCosineNormalizedF32V1DeclaredRows(input.meta, preparedRows); err != nil {
+				return columnWritePublishInput{}, err
+			}
 			input.declaredRows = preparedRows
 			input.declaredRowsReady = true
 			return input, nil
+		}
+		if _, normalized := cosineNormalizedF32V1Definition(input.meta); normalized && input.operation == ColumnPublishOperationInsert {
+			return columnWritePublishInput{}, fmt.Errorf("collections: representation %q inserts require canonical typed vector admission", VectorIndexRepresentationCosineNormalizedF32V1)
 		}
 		if normalizedDocumentFormat(input.meta.Options.DocumentFormat) != DocumentFormatJSON {
 			return columnWritePublishInput{}, fmt.Errorf("collections: column physical asset %s requires JSON document format in M12A, got %q", input.operation, input.meta.Options.DocumentFormat)
@@ -789,6 +798,9 @@ func prepareColumnWritePublishInputBeforeCommandWAL(input columnWritePublishInpu
 		rows, err := extractColumnDeclaredRowsFromJSONDocuments(*input.meta.Options.ColumnStore, input.documents)
 		input.documentExtraction = time.Since(start)
 		if err != nil {
+			return columnWritePublishInput{}, err
+		}
+		if err := validateCosineNormalizedF32V1DeclaredRows(input.meta, rows); err != nil {
 			return columnWritePublishInput{}, err
 		}
 		input.declaredRows = rows

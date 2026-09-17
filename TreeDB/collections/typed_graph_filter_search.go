@@ -36,7 +36,15 @@ func (v *typedGraphOverlaySearch) searchPreparedFilterWithContext(ctx context.Co
 	if len(query) != v.base.reader.def.Dimensions {
 		return nil, stats, errColumnVectorGraphNativeSearchQueryDimensionMismatch
 	}
-	queryNorm, err := columnVectorGraphInvNorm(query)
+	canonicalRepresentation := vectorIndexUsesCosineNormalizedF32V1(v.base.reader.def)
+	scoreQuery := query
+	queryNorm := float32(1)
+	var err error
+	if canonicalRepresentation {
+		scoreQuery, err = buffer.normalizeCosineNormalizedF32V1Query(query, v.base.reader.def.Dimensions)
+	} else {
+		queryNorm, err = columnVectorGraphInvNorm(query)
+	}
 	if err != nil {
 		return nil, stats, err
 	}
@@ -72,47 +80,54 @@ func (v *typedGraphOverlaySearch) searchPreparedFilterWithContext(ctx context.Co
 			return nil, stats, errTypedGraphSearchBudget
 		}
 		stats.Route = "typed_exact"
-		// Retain only K scored ordinals; document IDs are read at the result
-		// boundary, not for every eligible candidate.
-		scratch := &buffer.searchScratch
-		scratch.top = scratch.top[:0]
-		for rank, ordinal := range plan.exactBaseByID {
-			if rank&255 == 0 {
-				if err := ctx.Err(); err != nil {
-					return nil, stats, err
-				}
-			}
-			vector, _, _, ok := v.base.reader.typedVectorSource.vectorForOrdinal(ordinal)
-			if !ok {
-				return nil, stats, ErrVectorIndexSnapshotMismatch
-			}
-			norm, _, _, ok := v.base.reader.invNormForOrdinal(ordinal)
-			if !ok {
-				return nil, stats, ErrVectorIndexSnapshotMismatch
-			}
-			score, err := columnVectorGraphNativeCosineScoreVector(query, queryNorm, ordinal, vector, norm)
-			if err != nil {
+		if canonicalRepresentation {
+			var ignoredProof ColumnGraphScorePlaneWork
+			if err := typedGraphCanonicalPackedAppendExactBase(ctx, v, plan.exactBaseByID, scoreQuery, buffer, &stats, &ignoredProof, true); err != nil {
 				return nil, stats, err
 			}
-			stats.ExactBaseScored++
-			scratch.insertTop(baseK, columnVectorGraphSearchCandidate{ordinal: rank, score: score})
-		}
-		if err := ctx.Err(); err != nil {
-			return nil, stats, err
-		}
-		scratch.retainTopBestFirst(baseK)
-		for i, candidate := range scratch.top {
-			if i&255 == 0 {
-				if err := ctx.Err(); err != nil {
+		} else {
+			// Retain only K scored ordinals; document IDs are read at the result
+			// boundary, not for every eligible candidate.
+			scratch := &buffer.searchScratch
+			scratch.top = scratch.top[:0]
+			for rank, ordinal := range plan.exactBaseByID {
+				if rank&255 == 0 {
+					if err := ctx.Err(); err != nil {
+						return nil, stats, err
+					}
+				}
+				vector, _, _, ok := v.base.reader.typedVectorSource.vectorForOrdinal(ordinal)
+				if !ok {
+					return nil, stats, ErrVectorIndexSnapshotMismatch
+				}
+				norm, _, _, ok := v.base.reader.invNormForOrdinal(ordinal)
+				if !ok {
+					return nil, stats, ErrVectorIndexSnapshotMismatch
+				}
+				score, err := columnVectorGraphNativeCosineScoreVector(scoreQuery, queryNorm, ordinal, vector, norm)
+				if err != nil {
 					return nil, stats, err
 				}
+				stats.ExactBaseScored++
+				scratch.insertTop(baseK, columnVectorGraphSearchCandidate{ordinal: rank, score: score})
 			}
-			id, ok := v.pack.documentIDForOrdinal(plan.exactBaseByID[candidate.ordinal])
-			if !ok {
-				return nil, stats, ErrVectorIndexSnapshotMismatch
+			if err := ctx.Err(); err != nil {
+				return nil, stats, err
 			}
-			buffer.baseResults = append(buffer.baseResults, VectorIndexSearchResult{ID: id, Score: candidate.score})
-			stats.BaseResultIDs++
+			scratch.retainTopBestFirst(baseK)
+			for i, candidate := range scratch.top {
+				if i&255 == 0 {
+					if err := ctx.Err(); err != nil {
+						return nil, stats, err
+					}
+				}
+				id, ok := v.pack.documentIDForOrdinal(plan.exactBaseByID[candidate.ordinal])
+				if !ok {
+					return nil, stats, ErrVectorIndexSnapshotMismatch
+				}
+				buffer.baseResults = append(buffer.baseResults, VectorIndexSearchResult{ID: id, Score: candidate.score})
+				stats.BaseResultIDs++
+			}
 		}
 	} else {
 		baseLimit := candidateLimit - len(plan.delta)
@@ -129,12 +144,12 @@ func (v *typedGraphOverlaySearch) searchPreparedFilterWithContext(ctx context.Co
 		var baseStats columnVectorGraphNativeSearchStats
 		var err error
 		if navigation != nil {
-			results, baseStats, err = navigation.search(ctx, query, baseRequestK, searchEF, baseLimit, v.pack, &buffer.searchScratch)
+			results, baseStats, err = navigation.search(ctx, scoreQuery, baseRequestK, searchEF, baseLimit, v.pack, &buffer.searchScratch)
 			if errors.Is(err, errTypedGraphFilterNavigationDeclined) {
-				results, baseStats, err = v.pack.searchCosineWithContext(ctx, query, columnVectorGraphNativeSearchOptions{TopK: baseRequestK, EfSearch: searchEF, StrictScoreBudget: true, CandidateLimit: baseLimit, CandidateRows: plan.base, HasCandidateRows: true, StatsMode: columnVectorGraphNativeSearchStatsModeFullDiagnostics}, &buffer.searchScratch)
+				results, baseStats, err = v.pack.searchCosineWithContext(ctx, scoreQuery, columnVectorGraphNativeSearchOptions{TopK: baseRequestK, EfSearch: searchEF, StrictScoreBudget: true, CandidateLimit: baseLimit, CandidateRows: plan.base, HasCandidateRows: true, StatsMode: columnVectorGraphNativeSearchStatsModeFullDiagnostics, CanonicalNormalizedQuery: canonicalRepresentation}, &buffer.searchScratch)
 			}
 		} else {
-			results, baseStats, err = v.pack.searchCosineWithContext(ctx, query, columnVectorGraphNativeSearchOptions{TopK: baseRequestK, EfSearch: searchEF, StrictScoreBudget: true, CandidateLimit: baseLimit, CandidateRows: plan.base, HasCandidateRows: true, StatsMode: columnVectorGraphNativeSearchStatsModeFullDiagnostics}, &buffer.searchScratch)
+			results, baseStats, err = v.pack.searchCosineWithContext(ctx, scoreQuery, columnVectorGraphNativeSearchOptions{TopK: baseRequestK, EfSearch: searchEF, StrictScoreBudget: true, CandidateLimit: baseLimit, CandidateRows: plan.base, HasCandidateRows: true, StatsMode: columnVectorGraphNativeSearchStatsModeFullDiagnostics, CanonicalNormalizedQuery: canonicalRepresentation}, &buffer.searchScratch)
 		}
 		stats.Base = baseStats
 		stats.BaseResultIDs = len(results)
@@ -154,19 +169,26 @@ func (v *typedGraphOverlaySearch) searchPreparedFilterWithContext(ctx context.Co
 			buffer.baseResults = append(buffer.baseResults, VectorIndexSearchResult{ID: result.ID, Score: result.Score})
 		}
 	}
-	for rank, i := range plan.delta {
-		if rank&255 == 0 {
-			if err := ctx.Err(); err != nil {
-				return nil, stats, err
-			}
-		}
-		row := v.rows[i]
-		score, err := columnVectorGraphNativeCosineScoreVector(query, queryNorm, i, row.Values[v.vectorColumn].Float32Vector, v.invNorms[i])
-		if err != nil {
+	if canonicalRepresentation {
+		var ignoredProof ColumnGraphScorePlaneWork
+		if err := typedGraphCanonicalPackedAppendDelta(ctx, v, plan, scoreQuery, buffer, &stats, &ignoredProof); err != nil {
 			return nil, stats, err
 		}
-		stats.DeltaScored++
-		buffer.deltaResults = append(buffer.deltaResults, VectorIndexSearchResult{ID: row.ID, Score: score})
+	} else {
+		for rank, i := range plan.delta {
+			if rank&255 == 0 {
+				if err := ctx.Err(); err != nil {
+					return nil, stats, err
+				}
+			}
+			row := v.rows[i]
+			score, err := columnVectorGraphNativeCosineScoreVector(scoreQuery, queryNorm, i, row.Values[v.vectorColumn].Float32Vector, v.invNorms[i])
+			if err != nil {
+				return nil, stats, err
+			}
+			stats.DeltaScored++
+			buffer.deltaResults = append(buffer.deltaResults, VectorIndexSearchResult{ID: row.ID, Score: score})
+		}
 	}
 	compare := func(a, b VectorIndexSearchResult) int {
 		if vectorIndexSearchResultBefore(a, b) {

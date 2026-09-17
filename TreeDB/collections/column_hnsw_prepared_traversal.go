@@ -32,7 +32,8 @@ type columnHNSWPreparedTraversalOptions struct {
 	EfSearch int
 	// ScoreTileCapacity keeps the shared score staging sized for a caller's
 	// post-traversal work, such as an exact rerank shortlist.
-	ScoreTileCapacity int
+	ScoreTileCapacity        int
+	CanonicalNormalizedQuery bool
 
 	// RetainedCandidateLimit optionally asks traversal to retain more score-plane
 	// candidates than the final TopK. Zero uses normalized ef_search. This keeps
@@ -150,10 +151,6 @@ func (p *columnHNSWPreparedExactFP32ScorePlane) prepareForHNSWPreparedTraversal(
 	if p == nil || pack == nil || scratch == nil {
 		return errColumnHNSWPreparedTraversalScorePlaneUnavailable
 	}
-	queryInvNorm, err := columnVectorGraphInvNorm(query)
-	if err != nil {
-		return fmt.Errorf("collections: hnsw_search_pack_v1 prepared traversal exact query norm: %w: %w", errColumnVectorGraphNativeSearchQueryNormInvalid, err)
-	}
 	if cap(scratch.scoreScratch.Float32Values) < pack.Header.VectorStride {
 		scratch.scoreScratch.Float32Values = ensureColumnVectorGraphNativeFloat32Scratch(scratch.scoreScratch.Float32Values, pack.Header.VectorStride)
 	}
@@ -162,8 +159,22 @@ func (p *columnHNSWPreparedExactFP32ScorePlane) prepareForHNSWPreparedTraversal(
 	// read-only while the plane is active and use scoreTile* fields for staging;
 	// allocating a per-query copy would violate the zero-allocation seam contract.
 	normalizedQuery := scratch.scoreScratch.Float32Values[:pack.Header.VectorStride]
-	for i := 0; i < pack.Header.Dimensions; i++ {
-		normalizedQuery[i] = query[i] * queryInvNorm
+	if opts.CanonicalNormalizedQuery {
+		if !pack.Header.ExternalNormalizedVectors {
+			return errors.New("collections: canonical normalized query requires topology-only hnsw pack")
+		}
+		// The private flag proves the selected typed-owner boundary already
+		// validated and normalized this slice. Keep the copy needed by the
+		// scorer, but do not rescan the query at each downstream score plane.
+		copy(normalizedQuery[:pack.Header.Dimensions], query)
+	} else {
+		queryInvNorm, err := columnVectorGraphInvNorm(query)
+		if err != nil {
+			return fmt.Errorf("collections: hnsw_search_pack_v1 prepared traversal exact query norm: %w: %w", errColumnVectorGraphNativeSearchQueryNormInvalid, err)
+		}
+		for i := 0; i < pack.Header.Dimensions; i++ {
+			normalizedQuery[i] = query[i] * queryInvNorm
+		}
 	}
 	if pack.Header.VectorStride > pack.Header.Dimensions {
 		clear(normalizedQuery[pack.Header.Dimensions:])
@@ -795,6 +806,10 @@ func (v *columnHNSWSearchPackPreparedView) scoreAndPushFrontierVisitedRowIDTileP
 }
 
 func (v *columnHNSWSearchPackPreparedView) exactRerankPreparedTraversalRowIDCandidates(query []float32, topK int, rerankLimit int, scoreBatchMode columnVectorGraphScoreBatchMode, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) error {
+	return v.exactRerankPreparedTraversalRowIDCandidatesWithQuery(query, false, true, topK, rerankLimit, scoreBatchMode, scratch, stats)
+}
+
+func (v *columnHNSWSearchPackPreparedView) exactRerankPreparedTraversalRowIDCandidatesWithQuery(query []float32, canonicalQuery, recordQuantizedRerank bool, topK int, rerankLimit int, scoreBatchMode columnVectorGraphScoreBatchMode, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) error {
 	if v == nil {
 		return errColumnHNSWSearchPackSearchUnavailable
 	}
@@ -820,7 +835,7 @@ func (v *columnHNSWSearchPackPreparedView) exactRerankPreparedTraversalRowIDCand
 		rowIDs = append(rowIDs, uint32(ordinal))
 	}
 	var exactPlane columnHNSWPreparedExactFP32ScorePlane
-	if err := exactPlane.prepareForHNSWPreparedTraversal(v, query, columnHNSWPreparedTraversalOptions{ScoreBatchMode: scoreBatchMode}, scratch); err != nil {
+	if err := exactPlane.prepareForHNSWPreparedTraversal(v, query, columnHNSWPreparedTraversalOptions{ScoreBatchMode: scoreBatchMode, CanonicalNormalizedQuery: canonicalQuery}, scratch); err != nil {
 		return err
 	}
 	scratch.scoreTileScores = ensureColumnVectorGraphNativeFloat64Scratch(scratch.scoreTileScores, n)
@@ -833,12 +848,16 @@ func (v *columnHNSWSearchPackPreparedView) exactRerankPreparedTraversalRowIDCand
 	}
 	if stats != nil {
 		n64 := uint64(n)
-		stats.QuantizedRerankCandidates += n64
-		stats.QuantizedRerankExactScoreCalls += n64
+		if recordQuantizedRerank {
+			stats.QuantizedRerankCandidates += n64
+			stats.QuantizedRerankExactScoreCalls += n64
+		}
 		// The pack-native exact scorer reads normalized vectors directly, but this
 		// quantized_rerank route still reports the logical exact FP32 vector+norm
 		// byte contract exposed by the generic exact rerank path.
-		stats.NormBytesRead += n64 * 4
+		if !v.Header.ExternalNormalizedVectors {
+			stats.NormBytesRead += n64 * 4
+		}
 	}
 	scratch.top = scratch.top[:0]
 	for i, rowID := range rowIDs {

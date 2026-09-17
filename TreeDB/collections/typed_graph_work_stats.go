@@ -62,6 +62,10 @@ type ColumnGraphScorePlaneWork struct {
 	ExactSmallFilterScoreCalls uint64 `json:"exact_small_filter_score_calls"`
 	ExactBaseVectorBytesRead   uint64 `json:"exact_base_vector_bytes_read"`
 	ExactSuffixVectorBytesRead uint64 `json:"exact_suffix_vector_bytes_read"`
+	PackedScoreBatchCalls      uint64 `json:"packed_score_batch_calls"`
+	PackedScoreCandidates      uint64 `json:"packed_score_candidates"`
+	PackedVectorBytesRead      uint64 `json:"packed_vector_bytes_read"`
+	ForbiddenStableScoreCalls  uint64 `json:"forbidden_stable_score_calls"`
 
 	Snapshot ColumnGraphQuerySnapshot `json:"snapshot"`
 }

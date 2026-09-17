@@ -917,6 +917,7 @@ type VectorIndexSearchBuffer struct {
 	baseIDBytes             []byte
 	deltaResults            []VectorIndexSearchResult
 	deltaIDBytes            []byte
+	canonicalQuery          []float32
 	searchScratch           columnVectorGraphNativeSearchScratch
 	nativeSearchScratch     vectorIndexSearchScratch
 	nativeSearchWorkEnabled bool
@@ -942,6 +943,20 @@ func (b *VectorIndexSearchBuffer) resetView() {
 	b.baseIDBytes = b.baseIDBytes[:0]
 	b.deltaResults = b.deltaResults[:0]
 	b.deltaIDBytes = b.deltaIDBytes[:0]
+	b.canonicalQuery = b.canonicalQuery[:0]
+}
+
+func (b *VectorIndexSearchBuffer) normalizeCosineNormalizedF32V1Query(query []float32, dimensions int) ([]float32, error) {
+	if b == nil {
+		return nil, errColumnVectorGraphNativeSearchScratchRequired
+	}
+	b.canonicalQuery = ensureColumnVectorGraphNativeFloat32Scratch(b.canonicalQuery, dimensions)
+	b.canonicalQuery = b.canonicalQuery[:dimensions]
+	if err := normalizeCosineNormalizedF32V1Into(b.canonicalQuery, query, dimensions); err != nil {
+		b.canonicalQuery = b.canonicalQuery[:0]
+		return nil, err
+	}
+	return b.canonicalQuery, nil
 }
 
 // VectorIndexSearcher is a reusable, snapshot-bound vector index search handle.

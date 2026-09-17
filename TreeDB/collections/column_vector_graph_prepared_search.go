@@ -62,7 +62,7 @@ func columnVectorGraphPreparedSearchMmapPrerequisitesPresent(reader *columnVecto
 	if !columnVectorGraphPreparedSearchVectorMmapPrerequisitePresent(reader.typedVectorSource) {
 		return false
 	}
-	if !columnVectorGraphPreparedSearchNormMmapPrerequisitePresent(reader.invNormSource) {
+	if !vectorIndexUsesCosineNormalizedF32V1(reader.def) && !columnVectorGraphPreparedSearchNormMmapPrerequisitePresent(reader.invNormSource) {
 		return false
 	}
 	if !columnVectorGraphPreparedSearchAdjacencyMmapPrerequisitePresent(reader.adjacencyLayerSources) {
@@ -163,9 +163,14 @@ func prepareColumnVectorGraphPreparedSearchViewWithHolderFallback(reader *column
 		}
 		return nil, fmt.Errorf("base vector prepared view unavailable reason=%s", reason)
 	}
-	norm, normReason, ok := prepareColumnVectorGraphPreparedNormViewWithHolderFallback(reader.invNormSource, rows, allowHolderFallback)
-	if !ok {
-		return nil, fmt.Errorf("inverse-norm prepared view unavailable reason=%s", normReason)
+	norm := columnVectorGraphPreparedNormView{rows: rows, implicitUnit: vectorIndexUsesCosineNormalizedF32V1(reader.def)}
+	if !norm.implicitUnit {
+		var normReason typeddecode.Reason
+		var ok bool
+		norm, normReason, ok = prepareColumnVectorGraphPreparedNormViewWithHolderFallback(reader.invNormSource, rows, allowHolderFallback)
+		if !ok {
+			return nil, fmt.Errorf("inverse-norm prepared view unavailable reason=%s", normReason)
+		}
 	}
 	view := &columnVectorGraphPreparedSearchView{
 		rows:                  rows,
@@ -214,7 +219,7 @@ func (v *columnVectorGraphPreparedSearchView) recordIndexedScoreBatchMinimalCoun
 		return
 	}
 	for _, ordinal := range ordinals {
-		if ordinal < 0 || ordinal >= len(v.norm.values) {
+		if ordinal < 0 || ordinal >= v.norm.rows {
 			counters.recordPreparedScoreBatch(ordinals, false, true)
 			return
 		}
@@ -338,8 +343,14 @@ func (v *columnVectorGraphPreparedSearchView) validateNormLive() error {
 	if v == nil || !v.norm.ready() {
 		return errors.New("inverse-norm prepared view is not ready")
 	}
-	if v.norm.rows != v.rows || len(v.norm.values) != v.rows {
+	if v.norm.rows != v.rows || (!v.norm.implicitUnit && len(v.norm.values) != v.rows) {
 		return fmt.Errorf("inverse-norm prepared rows/values=(%d,%d) want rows=%d", v.norm.rows, len(v.norm.values), v.rows)
+	}
+	if v.norm.implicitUnit {
+		if v.norm.source != nil || len(v.norm.values) != 0 {
+			return errors.New("implicit unit-norm prepared view retains inverse-norm state")
+		}
+		return nil
 	}
 	if v.norm.source == nil || v.norm.source.closed || (v.norm.source.handle != nil && v.norm.source.handle.Released()) {
 		return errors.New("inverse-norm prepared handle is stale")
@@ -402,17 +413,18 @@ func (v *columnVectorGraphPreparedSearchView) scoreOrdinal(plan *columnVectorGra
 	if len(query) != v.dims {
 		return 0, fmt.Errorf("collections: column_graph candidate ordinal=%d vector dims=%d want %d: %w", ordinal, v.dims, len(query), errColumnVectorGraphNativeSearchCandidateDimensionMismatch)
 	}
-	if ordinal < 0 || ordinal >= v.rows || ordinal >= len(v.norm.values) {
+	if ordinal < 0 || ordinal >= v.rows || ordinal >= v.norm.rows {
 		return 0, fmt.Errorf("collections: column_graph prepared vector ordinal=%d unavailable reason=%s", ordinal, typeddecode.ReasonRowCountMismatch)
 	}
-	if v.norm.source == nil || v.norm.source.closed || (v.norm.source.handle != nil && v.norm.source.handle.Released()) {
-		return 0, fmt.Errorf("collections: column_graph prepared inverse-norm ordinal=%d unavailable reason=%s", ordinal, typeddecode.ReasonStaleHandle)
+	invNorm, reason, ok := v.norm.valueForOrdinal(ordinal)
+	if !ok {
+		return 0, fmt.Errorf("collections: column_graph prepared inverse-norm ordinal=%d unavailable reason=%s", ordinal, reason)
 	}
 	vector, ok := v.vectorForOrdinalFast(ordinal)
 	if !ok {
 		return 0, fmt.Errorf("collections: column_graph prepared vector ordinal=%d unavailable reason=%s", ordinal, typeddecode.ReasonStaleHandle)
 	}
-	score, err := columnVectorGraphPreparedCosineScore(query, queryInvNorm, ordinal, vector, v.norm.values[ordinal], stats)
+	score, err := columnVectorGraphPreparedCosineScore(query, queryInvNorm, ordinal, vector, invNorm, stats)
 	if err != nil {
 		return 0, err
 	}
@@ -431,8 +443,8 @@ func (v *columnVectorGraphPreparedSearchView) checkScalarScoreInputs(query []flo
 	if len(query) != v.dims {
 		return fmt.Errorf("collections: column_graph candidate ordinal=%d vector dims=%d want %d: %w", ordinal, v.dims, len(query), errColumnVectorGraphNativeSearchCandidateDimensionMismatch)
 	}
-	if v.norm.source == nil || v.norm.source.closed || (v.norm.source.handle != nil && v.norm.source.handle.Released()) {
-		return fmt.Errorf("collections: column_graph prepared inverse-norm ordinal=%d unavailable reason=%s", ordinal, typeddecode.ReasonStaleHandle)
+	if _, reason, ok := v.norm.valueForOrdinal(ordinal); !ok {
+		return fmt.Errorf("collections: column_graph prepared inverse-norm ordinal=%d unavailable reason=%s", ordinal, reason)
 	}
 	return nil
 }
@@ -524,7 +536,7 @@ func (v *columnVectorGraphPreparedSearchView) scoreOrdinalsScalar(plan *columnVe
 		}
 		rowIndexByOrdinal := vectorView.rowIndexByOrdinal
 		for i, ordinal := range ordinals {
-			if ordinal < 0 || ordinal >= v.rows || ordinal >= len(normValues) {
+			if ordinal < 0 || ordinal >= v.rows || ordinal >= v.norm.rows {
 				return dst[:i], fmt.Errorf("collections: column_graph prepared vector ordinal=%d unavailable reason=%s", ordinal, typeddecode.ReasonRowCountMismatch)
 			}
 			row := ordinal
@@ -536,7 +548,11 @@ func (v *columnVectorGraphPreparedSearchView) scoreOrdinalsScalar(plan *columnVe
 			if row < 0 || row >= part.rows || start < 0 || end < start || end > len(part.values) {
 				return dst[:i], fmt.Errorf("collections: column_graph prepared vector ordinal=%d unavailable reason=%s", ordinal, typeddecode.ReasonStaleHandle)
 			}
-			score, err := columnVectorGraphPreparedCosineScore(query, queryInvNorm, ordinal, part.values[start:end], normValues[ordinal], stats)
+			invNorm := float32(1)
+			if !v.norm.implicitUnit {
+				invNorm = normValues[ordinal]
+			}
+			score, err := columnVectorGraphPreparedCosineScore(query, queryInvNorm, ordinal, part.values[start:end], invNorm, stats)
 			if err != nil {
 				return dst[:i], err
 			}
@@ -547,7 +563,7 @@ func (v *columnVectorGraphPreparedSearchView) scoreOrdinalsScalar(plan *columnVe
 		partIndexByOrdinal := vectorView.partIndexByOrdinal
 		rowIndexByOrdinal := vectorView.rowIndexByOrdinal
 		for i, ordinal := range ordinals {
-			if ordinal < 0 || ordinal >= v.rows || ordinal >= len(normValues) || ordinal >= len(partIndexByOrdinal) || ordinal >= len(rowIndexByOrdinal) {
+			if ordinal < 0 || ordinal >= v.rows || ordinal >= v.norm.rows || ordinal >= len(partIndexByOrdinal) || ordinal >= len(rowIndexByOrdinal) {
 				return dst[:i], fmt.Errorf("collections: column_graph prepared vector ordinal=%d unavailable reason=%s", ordinal, typeddecode.ReasonRowCountMismatch)
 			}
 			partIndex := int(partIndexByOrdinal[ordinal])
@@ -564,7 +580,11 @@ func (v *columnVectorGraphPreparedSearchView) scoreOrdinalsScalar(plan *columnVe
 			if row < 0 || row >= part.rows || start < 0 || end < start || end > len(part.values) {
 				return dst[:i], fmt.Errorf("collections: column_graph prepared vector ordinal=%d unavailable reason=%s", ordinal, typeddecode.ReasonStaleHandle)
 			}
-			score, err := columnVectorGraphPreparedCosineScore(query, queryInvNorm, ordinal, part.values[start:end], normValues[ordinal], stats)
+			invNorm := float32(1)
+			if !v.norm.implicitUnit {
+				invNorm = normValues[ordinal]
+			}
+			score, err := columnVectorGraphPreparedCosineScore(query, queryInvNorm, ordinal, part.values[start:end], invNorm, stats)
 			if err != nil {
 				return dst[:i], err
 			}
@@ -594,13 +614,13 @@ func (v *columnVectorGraphPreparedSearchView) scoreOrdinalsIndexed(plan *columnV
 	maxRun := 0
 	for i := 0; i < len(ordinals); {
 		part, row, ok := v.vector.locationForOrdinal(ordinals[i])
-		if !ok || ordinals[i] < 0 || ordinals[i] >= len(v.norm.values) || uint64(row) > uint64(^uint32(0)) {
+		if !ok || ordinals[i] < 0 || ordinals[i] >= v.norm.rows || uint64(row) > uint64(^uint32(0)) {
 			return dst, false, nil
 		}
 		j := i + 1
 		for j < len(ordinals) {
 			nextPart, nextRow, ok := v.vector.locationForOrdinal(ordinals[j])
-			if !ok || nextPart != part || ordinals[j] < 0 || ordinals[j] >= len(v.norm.values) || uint64(nextRow) > uint64(^uint32(0)) {
+			if !ok || nextPart != part || ordinals[j] < 0 || ordinals[j] >= v.norm.rows || uint64(nextRow) > uint64(^uint32(0)) {
 				break
 			}
 			j++
@@ -648,7 +668,11 @@ func (v *columnVectorGraphPreparedSearchView) scoreOrdinalsIndexed(plan *columnV
 		for i, ordinal := range ordinals[runStart:runEnd] {
 			_, row, _ := v.vector.locationForOrdinal(ordinal)
 			vector := part.values[row*v.dims : row*v.dims+v.dims]
-			score, err := columnVectorGraphNativeCosineScoreDot(query, queryInvNorm, ordinal, float64(dots[i]), vector, v.norm.values[ordinal])
+			invNorm := float32(1)
+			if !v.norm.implicitUnit {
+				invNorm = v.norm.values[ordinal]
+			}
+			score, err := columnVectorGraphNativeCosineScoreDot(query, queryInvNorm, ordinal, float64(dots[i]), vector, invNorm)
 			if err != nil {
 				return dst, true, err
 			}
@@ -686,7 +710,7 @@ func (v *columnVectorGraphPreparedSearchView) scoreOrdinalsIndexedSinglePart(pla
 	if part == nil || part.handle == nil || part.handle.Released() || part.rows < 0 || v.dims <= 0 || part.rows > maxCollectionInt/v.dims || len(part.values) != part.rows*v.dims {
 		return dst, false, nil
 	}
-	if len(v.norm.values) != v.rows {
+	if v.norm.rows != v.rows || (!v.norm.implicitUnit && len(v.norm.values) != v.rows) {
 		return dst, false, nil
 	}
 	rowIndexByOrdinal := v.vector.rowIndexByOrdinal
@@ -806,7 +830,11 @@ func (v *columnVectorGraphPreparedSearchView) scorePreparedDot(query []float32, 
 		}
 		dot = columnVectorGraphNativeDotProductFloat64(query, vector)
 	}
-	score := dot * float64(queryInvNorm) * float64(v.norm.values[ordinal])
+	invNorm := float32(1)
+	if !v.norm.implicitUnit {
+		invNorm = v.norm.values[ordinal]
+	}
+	score := dot * float64(queryInvNorm) * float64(invNorm)
 	if math.IsNaN(score) || math.IsInf(score, 0) {
 		return 0, fmt.Errorf("collections: column_graph candidate ordinal=%d cosine score is not finite", ordinal)
 	}
@@ -823,7 +851,9 @@ func (v *columnVectorGraphPreparedSearchView) recordScoreStats(stats *columnVect
 	stats.VisitedNodes += uint64(count)
 	stats.CandidateFetches += uint64(count)
 	stats.VectorBytesRead += uint64(count * v.dims * 4)
-	stats.NormBytesRead += uint64(count * 4)
+	if !v.norm.implicitUnit {
+		stats.NormBytesRead += uint64(count * 4)
+	}
 	if v.vector.singlePart != nil {
 		recordColumnVectorGraphPreparedVectorOutcomeStats(stats, v.vector.singlePart.outcome, uint64(count))
 	} else {
@@ -837,7 +867,9 @@ func (v *columnVectorGraphPreparedSearchView) recordScoreStats(stats *columnVect
 	if v.norm.source != nil {
 		recordColumnVectorGraphPreparedNormOutcomeStats(stats, v.norm.source.outcome, uint64(count))
 	}
-	stats.NormPreparedDirectViews += uint64(count)
+	if !v.norm.implicitUnit {
+		stats.NormPreparedDirectViews += uint64(count)
+	}
 	if plan != nil {
 		stats.BlockViewHits = plan.hits
 		stats.BlockViewMisses = plan.misses

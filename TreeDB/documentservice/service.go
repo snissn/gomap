@@ -234,6 +234,9 @@ func (s *Service) createIndexLocked(ctx context.Context, req CreateIndexRequest)
 	if req.TypedInput && vectorOptions.strategy != collections.VectorIndexStrategyColumnGraph {
 		return IndexInfo{}, serviceError(CodeInvalidRequest, "typed input requires column_graph")
 	}
+	if vectorOptions.representation == collections.VectorIndexRepresentationCosineNormalizedF32V1 && !req.TypedInput {
+		return IndexInfo{}, serviceErrorf(CodeInvalidRequest, "vector representation %q requires typed_input=true", vectorOptions.representation)
+	}
 	if vectorOptions.strategy == collections.VectorIndexStrategyColumnGraph {
 		options.ColumnStore = serviceColumnStoreConfig(req.Dimension)
 		if req.TypedInput {
@@ -261,6 +264,7 @@ func (s *Service) createIndexLocked(ctx context.Context, req CreateIndexRequest)
 			EfSearch:         vectorOptions.efSearch,
 			Encoding:         collections.VectorIndexEncodingFloat32,
 			Strategy:         vectorOptions.strategy,
+			Representation:   vectorOptions.representation,
 			SchemaGeneration: 1,
 			QuantizedIndexes: vectorOptions.quantizedIndexes,
 		}},
@@ -1093,7 +1097,7 @@ func (s *Service) ResetIndex(ctx context.Context, index string, req ResetIndexRe
 		if ErrorCodeOf(err) != CodeIndexNotFound {
 			return ResetIndexResponse{}, err
 		}
-		info, err := s.createIndexLocked(ctx, CreateIndexRequest{Name: index, Dimension: req.Dimension, Metric: req.Metric, VectorIndexOptions: req.VectorIndexOptions})
+		info, err := s.createIndexLocked(ctx, CreateIndexRequest{Name: index, Dimension: req.Dimension, Metric: req.Metric, TypedInput: req.TypedInput, VectorIndexOptions: req.VectorIndexOptions, ScalarFields: req.ScalarFields})
 		if err != nil {
 			return ResetIndexResponse{}, err
 		}
@@ -1111,7 +1115,7 @@ func (s *Service) ResetIndex(ctx context.Context, index string, req ResetIndexRe
 	if existingInfo.VectorStrategy == collections.VectorIndexStrategyColumnGraph {
 		return ResetIndexResponse{}, serviceErrorf(CodeUnsupported, "drop_old reset for column_graph benchmark index %q requires a fresh data directory or unique index name", index)
 	}
-	if _, err := s.createIndexLocked(ctx, CreateIndexRequest{Name: index, Dimension: req.Dimension, Metric: req.Metric, VectorIndexOptions: req.VectorIndexOptions}); err != nil {
+	if _, err := s.createIndexLocked(ctx, CreateIndexRequest{Name: index, Dimension: req.Dimension, Metric: req.Metric, TypedInput: req.TypedInput, VectorIndexOptions: req.VectorIndexOptions, ScalarFields: req.ScalarFields}); err != nil {
 		return ResetIndexResponse{}, err
 	}
 
@@ -1801,6 +1805,7 @@ func indexInfoFromMeta(meta collections.CollectionMeta) (IndexInfo, error) {
 		EmbeddingField:       defaultEmbeddingField,
 		VectorIndexName:      vectorDef.Name,
 		VectorStrategy:       vectorDef.Strategy,
+		VectorRepresentation: vectorDef.Representation,
 		VectorM:              vectorDef.M,
 		VectorEfConstruction: vectorDef.EfConstruction,
 		VectorEfSearch:       vectorDef.EfSearch,
@@ -1858,6 +1863,7 @@ func serviceTextIndexDefinition(meta collections.CollectionMeta) (collections.Te
 
 type normalizedBenchmarkVectorIndexOptions struct {
 	strategy         collections.VectorIndexStrategy
+	representation   collections.VectorIndexRepresentation
 	m                int
 	efConstruction   int
 	efSearch         int
@@ -1888,8 +1894,17 @@ func benchmarkVectorIndexOptionsForCreate(metric Metric, opts *BenchmarkVectorIn
 	} else if len(opts.QuantizedIndexes) > 0 {
 		out.strategy = collections.VectorIndexStrategyColumnGraph
 	}
+	switch opts.Representation {
+	case "", collections.VectorIndexRepresentationCosineNormalizedF32V1:
+		out.representation = opts.Representation
+	default:
+		return normalizedBenchmarkVectorIndexOptions{}, serviceErrorf(CodeInvalidRequest, "unsupported vector index representation %q", opts.Representation)
+	}
 	if out.strategy == collections.VectorIndexStrategyColumnGraph && metric != MetricCosine {
 		return normalizedBenchmarkVectorIndexOptions{}, serviceErrorf(CodeInvalidRequest, "vector index strategy %q requires metric %q", out.strategy, MetricCosine)
+	}
+	if out.representation == collections.VectorIndexRepresentationCosineNormalizedF32V1 && out.strategy != collections.VectorIndexStrategyColumnGraph {
+		return normalizedBenchmarkVectorIndexOptions{}, serviceErrorf(CodeInvalidRequest, "vector index representation %q requires strategy %q", out.representation, collections.VectorIndexStrategyColumnGraph)
 	}
 	if len(opts.QuantizedIndexes) > 0 && out.strategy != collections.VectorIndexStrategyColumnGraph {
 		return normalizedBenchmarkVectorIndexOptions{}, serviceErrorf(CodeInvalidRequest, "quantized vector indexes require strategy %q", collections.VectorIndexStrategyColumnGraph)

@@ -159,6 +159,39 @@ func (c *Collection) foldTypedGraphTimed(ctx context.Context, cold typedGraphCol
 	if err = ctx.Err(); err != nil {
 		return err
 	}
+	canonicalRepresentation := vectorIndexUsesCosineNormalizedF32V1(def)
+	canonicalAdjacencyBuilt := false
+	if canonicalRepresentation {
+		if !streamed {
+			graphRows, err = typedGraphFoldAssetRows(rows, captured.cfg, def)
+			if err != nil {
+				return err
+			}
+		}
+		// The canonical typed vector asset is the exact graph-locality plane.
+		// Reorder first while BaseRowRef still points at each captured source
+		// row, then let the physical row and typed-column encoders consume that
+		// same order. Legacy representations retain their established order.
+		if err = buildColumnVectorGraphAdjacencyTimed(graphRows, def, timing); err != nil {
+			return err
+		}
+		canonicalAdjacencyBuilt = true
+		if !streamed {
+			byID := make(map[string]int, len(rows))
+			for i := range rows {
+				byID[string(rows[i].ID)] = i
+			}
+			ordered := make([]columnDeclaredRow, len(rows))
+			for i := range graphRows {
+				rowIndex, ok := byID[string(graphRows[i].ID)]
+				if !ok {
+					return ErrVectorIndexSnapshotMismatch
+				}
+				ordered[i] = rows[rowIndex]
+			}
+			rows = ordered
+		}
+	}
 	stage = time.Now()
 	var prepared ColumnPublishPreparedAssets
 	defer func() {
@@ -197,24 +230,10 @@ func (c *Collection) foldTypedGraphTimed(ctx context.Context, cold typedGraphCol
 			rowPart = asset.Ref.PartID
 		}
 	}
-	if !streamed {
-		vectorColumn := -1
-		for i, column := range captured.cfg.Columns {
-			if column.Path == def.Field {
-				vectorColumn = i
-			}
-		}
-		if vectorColumn < 0 {
-			return ErrHybridSearchUnsupported
-		}
-		graphRows = make([]columnVectorGraphAssetRow, len(rows))
-		for i, row := range rows {
-			vector := row.Values[vectorColumn].Float32Vector
-			norm, e := columnVectorGraphInvNorm(vector)
-			if e != nil {
-				return e
-			}
-			graphRows[i] = columnVectorGraphAssetRow{ID: row.ID, Vector: vector, InvNorm: norm}
+	if !streamed && graphRows == nil {
+		graphRows, err = typedGraphFoldAssetRows(rows, captured.cfg, def)
+		if err != nil {
+			return err
 		}
 	}
 	locators := make([]systemTargetEntry, len(graphRows))
@@ -227,8 +246,10 @@ func (c *Collection) foldTypedGraphTimed(ctx context.Context, cold typedGraphCol
 	if err = ctx.Err(); err != nil {
 		return err
 	}
-	if err = buildColumnVectorGraphAdjacencyTimed(graphRows, def, timing); err != nil {
-		return err
+	if !canonicalAdjacencyBuilt {
+		if err = buildColumnVectorGraphAdjacencyTimed(graphRows, def, timing); err != nil {
+			return err
+		}
 	}
 	if err = ctx.Err(); err != nil {
 		return err
@@ -297,6 +318,40 @@ func (c *Collection) foldTypedGraphTimed(ctx context.Context, cold typedGraphCol
 		return c.reconcileTypedGraphPublication(state.limits, cold)
 	}
 	return nil
+}
+
+func typedGraphFoldAssetRows(rows []columnDeclaredRow, cfg ColumnStoreConfig, def VectorIndexDefinition) ([]columnVectorGraphAssetRow, error) {
+	vectorColumn := -1
+	for i, column := range cfg.Columns {
+		if column.Path == def.Field {
+			vectorColumn = i
+			break
+		}
+	}
+	if vectorColumn < 0 {
+		return nil, ErrHybridSearchUnsupported
+	}
+	graphRows := make([]columnVectorGraphAssetRow, len(rows))
+	for i, row := range rows {
+		if vectorColumn >= len(row.Values) {
+			return nil, ErrVectorIndexSnapshotMismatch
+		}
+		vector := row.Values[vectorColumn].Float32Vector
+		norm := float32(1)
+		if vectorIndexUsesCosineNormalizedF32V1(def) {
+			if err := validateCosineNormalizedF32V1Canonical(vector, def.Dimensions); err != nil {
+				return nil, err
+			}
+		} else {
+			var err error
+			norm, err = columnVectorGraphInvNorm(vector)
+			if err != nil {
+				return nil, err
+			}
+		}
+		graphRows[i] = columnVectorGraphAssetRow{ID: row.ID, Vector: vector, InvNorm: norm}
+	}
+	return graphRows, nil
 }
 
 func (c *Collection) installTypedGraphFold(ctx context.Context, captured columnStoreCompactionState, copy *typedGraphBaseCopy, cold typedGraphColdLimits, maxRows int, baseRecords []columnManifestRecord, baseIdentity ColumnManifestIdentity, baseMeta CollectionMeta, locators []systemTargetEntry, prepared *ColumnPublishPreparedAssets, graph *columnVectorGraphPreparedPhysicalAsset, timing *ColumnGraphBuildTiming, serving *typedGraphFoldServing) (err error) {

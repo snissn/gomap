@@ -160,10 +160,9 @@ func typedGraphQuantizedRerankForEachDelta(ctx context.Context, v *typedGraphOve
 	return nil
 }
 
-// typedGraphStableCosineQueryInvNorm and typedGraphStableCosineScore are the
-// selected Q2 score plane. They intentionally do not use the prepared pack's
-// stored float32 inverse norms or its raw-dot scorer: final rerank ordering is
-// defined by the authoritative typed float32 vectors with FP64 inverse norms.
+// typedGraphStableCosineQueryInvNorm and typedGraphStableCosineScore retain the
+// legacy/omitted-representation score plane. cosine_normalized_f32_v1 must
+// never reach them; it uses the canonical packed float32 plane above.
 func typedGraphStableCosineQueryInvNorm(query []float32) (float64, error) {
 	if len(query) == 0 {
 		return 0, errColumnVectorGraphInvNormEmpty
@@ -218,12 +217,17 @@ func typedGraphQuantizedRerankCompare(left, right VectorIndexSearchResult) int {
 	return 0
 }
 
-func typedGraphQuantizedRerankAppendDelta(ctx context.Context, v *typedGraphOverlaySearch, filter *typedGraphPreparedFilter, query []float32, queryInvNorm float64, buffer *VectorIndexSearchBuffer, stats *typedGraphOverlaySearchStats, proof *ColumnGraphScorePlaneWork) error {
+func typedGraphQuantizedRerankAppendDelta(ctx context.Context, v *typedGraphOverlaySearch, filter *typedGraphPreparedFilter, query []float32, queryInvNorm float64, canonical bool, buffer *VectorIndexSearchBuffer, stats *typedGraphOverlaySearchStats, proof *ColumnGraphScorePlaneWork) error {
+	if canonical {
+		return typedGraphCanonicalPackedAppendDelta(ctx, v, filter, query, buffer, stats, proof)
+	}
 	return typedGraphQuantizedRerankForEachDelta(ctx, v, filter, func(row columnPhysicalVisibleRow) error {
 		if row.Values == nil || v.vectorColumn < 0 || v.vectorColumn >= len(row.Values) {
 			return ErrVectorIndexSnapshotMismatch
 		}
-		score, err := typedGraphStableCosineScore(query, queryInvNorm, row.Values[v.vectorColumn].Float32Vector)
+		var score float64
+		var err error
+		score, err = typedGraphStableCosineScore(query, queryInvNorm, row.Values[v.vectorColumn].Float32Vector)
 		if err != nil {
 			return err
 		}
@@ -239,7 +243,138 @@ func typedGraphQuantizedRerankAppendDelta(ctx context.Context, v *typedGraphOver
 	})
 }
 
+func typedGraphCanonicalPackedAppendDelta(ctx context.Context, v *typedGraphOverlaySearch, filter *typedGraphPreparedFilter, query []float32, buffer *VectorIndexSearchBuffer, stats *typedGraphOverlaySearchStats, proof *ColumnGraphScorePlaneWork) error {
+	if v == nil || buffer == nil || v.vectorColumn < 0 {
+		return ErrVectorIndexSnapshotMismatch
+	}
+	scratch := &buffer.searchScratch
+	count, err := typedGraphQuantizedRerankDeltaCount(v, filter)
+	if err != nil {
+		return err
+	}
+	if count == 0 {
+		return nil
+	}
+	dims := v.base.reader.def.Dimensions
+	if dims <= 0 || count > math.MaxInt/dims {
+		return ErrVectorIndexSnapshotMismatch
+	}
+	scratch.resultOrdinals = resizeColumnVectorGraphNativeIntScratch(scratch.resultOrdinals, count)[:0]
+	if filter == nil {
+		for ordinal, row := range v.rows {
+			if !row.Deleted {
+				scratch.resultOrdinals = append(scratch.resultOrdinals, ordinal)
+			}
+		}
+	} else {
+		scratch.resultOrdinals = append(scratch.resultOrdinals, filter.delta...)
+	}
+	if len(scratch.resultOrdinals) != count {
+		return ErrVectorIndexSnapshotMismatch
+	}
+	valuesCount := count * dims
+	scratch.expandScratch.Float32Values = ensureColumnVectorGraphNativeFloat32Scratch(scratch.expandScratch.Float32Values, valuesCount)
+	values := scratch.expandScratch.Float32Values[:valuesCount]
+	for i, ordinal := range scratch.resultOrdinals {
+		if i&255 == 0 {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+		}
+		if ordinal < 0 || ordinal >= len(v.rows) || v.rows[ordinal].Deleted || v.vectorColumn >= len(v.rows[ordinal].Values) {
+			return ErrVectorIndexSnapshotMismatch
+		}
+		vector := v.rows[ordinal].Values[v.vectorColumn].Float32Vector
+		if err := validateCosineNormalizedF32V1Canonical(vector, dims); err != nil {
+			return err
+		}
+		copy(values[i*dims:(i+1)*dims], vector)
+	}
+	scratch.scoreTileDots = ensureColumnVectorGraphNativeFloat32Scratch(scratch.scoreTileDots, count)
+	dots := scratch.scoreTileDots[:count]
+	status := vectorops.DotFloat32Strided(dots, values, query, count, dims, dims)
+	if status.Invalid || status.Rows != count {
+		return ErrVectorIndexSnapshotMismatch
+	}
+	for i, ordinal := range scratch.resultOrdinals {
+		buffer.deltaResults = append(buffer.deltaResults, VectorIndexSearchResult{ID: v.rows[ordinal].ID, Score: clampCosineNormalizedF32V1Score(float64(dots[i]))})
+	}
+	count64 := uint64(count)
+	bytesRead := count64 * uint64(dims) * 4
+	stats.Base.VectorBytesRead += bytesRead
+	stats.Base.CandidateFetches += count64
+	stats.Base.FP32ScoreCalls += count64
+	recordColumnVectorGraphScoreBatchStats(&stats.Base, count, status.Optimized, status.Fallback)
+	stats.DeltaScored += count
+	proof.ExactSuffixVectorBytesRead += bytesRead
+	proof.ExactSuffixScoreCalls += count64
+	return nil
+}
+
+func typedGraphCanonicalPackedAppendExactBase(ctx context.Context, v *typedGraphOverlaySearch, ordinals []int, query []float32, buffer *VectorIndexSearchBuffer, stats *typedGraphOverlaySearchStats, proof *ColumnGraphScorePlaneWork, smallFilter bool) error {
+	if len(ordinals) == 0 {
+		return nil
+	}
+	if v == nil || v.pack == nil || !v.pack.Header.ExternalNormalizedVectors || buffer == nil {
+		return ErrVectorIndexSnapshotMismatch
+	}
+	scratch := &buffer.searchScratch
+	scratch.top = resizeColumnVectorGraphNativeCandidateScratch(scratch.top, len(ordinals))[:0]
+	for i, ordinal := range ordinals {
+		if i&255 == 0 {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+		}
+		if ordinal < 0 || ordinal >= v.pack.Header.Rows || uint64(ordinal) > math.MaxUint32 {
+			return ErrVectorIndexSnapshotMismatch
+		}
+		scratch.top = append(scratch.top, columnVectorGraphSearchCandidate{ordinal: ordinal})
+	}
+	beforePackedCalls := stats.Base.PackedExactScoreCalls
+	beforePackedCandidates := stats.Base.PackedExactScoreCandidates
+	beforePackedBytes := stats.Base.PackedExactVectorBytesRead
+	if err := v.pack.exactRerankPreparedTraversalRowIDCandidatesWithQuery(query, true, !smallFilter, len(ordinals), len(ordinals), columnVectorGraphScoreBatchModeDefault, scratch, &stats.Base); err != nil {
+		return err
+	}
+	if len(scratch.top) != len(ordinals) {
+		return ErrVectorIndexSnapshotMismatch
+	}
+	for _, candidate := range scratch.top {
+		id, ok := v.pack.documentIDForOrdinal(candidate.ordinal)
+		if !ok {
+			return ErrVectorIndexSnapshotMismatch
+		}
+		buffer.baseResults = append(buffer.baseResults, VectorIndexSearchResult{ID: id, Score: candidate.score})
+	}
+	count := uint64(len(ordinals))
+	bytesRead := count * uint64(v.pack.Header.Dimensions) * 4
+	stats.ExactBaseScored += len(ordinals)
+	stats.BaseResultIDs += len(ordinals)
+	proof.ExactBaseVectorBytesRead += bytesRead
+	packedCalls := stats.Base.PackedExactScoreCalls - beforePackedCalls
+	packedCandidates := stats.Base.PackedExactScoreCandidates - beforePackedCandidates
+	packedBytes := stats.Base.PackedExactVectorBytesRead - beforePackedBytes
+	if packedCalls != 1 || packedCandidates != count || packedBytes != bytesRead {
+		return ErrVectorIndexSnapshotMismatch
+	}
+	proof.PackedScoreBatchCalls += packedCalls
+	proof.PackedScoreCandidates += packedCandidates
+	proof.PackedVectorBytesRead += packedBytes
+	if smallFilter {
+		proof.ExactSmallFilterScoreCalls += count
+	} else {
+		proof.ExactBaseRerankScoreCalls += count
+		proof.ActualRerankCandidates += count
+	}
+	return nil
+}
+
 func typedGraphQuantizedRerankAppendExactBase(ctx context.Context, v *typedGraphOverlaySearch, ordinal int, query []float32, queryInvNorm float64, buffer *VectorIndexSearchBuffer, stats *typedGraphOverlaySearchStats, proof *ColumnGraphScorePlaneWork, smallFilter bool) error {
+	if v != nil && v.base != nil && vectorIndexUsesCosineNormalizedF32V1(v.base.reader.def) {
+		proof.ForbiddenStableScoreCalls++
+		return ErrVectorIndexSnapshotMismatch
+	}
 	if ordinal < 0 || ordinal >= v.pack.Header.Rows || v.base.reader.typedVectorSource == nil {
 		return ErrVectorIndexSnapshotMismatch
 	}
@@ -277,7 +412,7 @@ func typedGraphQuantizedRerankAppendExactBase(ctx context.Context, v *typedGraph
 	return nil
 }
 
-func (o *typedGraphReadOwner) validateTypedGraphQuantizedRerankAsset(ctx context.Context, query []float32, q QuantizedVectorIndexDefinition, filter *typedGraphPreparedFilter, buffer *VectorIndexSearchBuffer, stats *typedGraphOverlaySearchStats) error {
+func (o *typedGraphReadOwner) validateTypedGraphQuantizedRerankAsset(ctx context.Context, query []float32, canonical bool, q QuantizedVectorIndexDefinition, filter *typedGraphPreparedFilter, buffer *VectorIndexSearchBuffer, stats *typedGraphOverlaySearchStats) error {
 	v := o.overlay
 	if v.base.reader.RowCount() == 0 {
 		// The owner attach seam has already validated the declared scalar-u8 v1
@@ -286,12 +421,13 @@ func (o *typedGraphReadOwner) validateTypedGraphQuantizedRerankAsset(ctx context
 		return nil
 	}
 	_, baseStats, err := v.searchScalarU8PreparedCandidatesWithContext(ctx, query, typedGraphScalarU8TraversalOptions{
-		TopK:               0,
-		EfSearch:           0,
-		ScoreBudget:        0,
-		QuantizedIndexName: q.Name,
-		StatsMode:          columnVectorGraphNativeSearchStatsModeMinimal,
-		PreparedFilter:     filter,
+		TopK:                     0,
+		EfSearch:                 0,
+		ScoreBudget:              0,
+		QuantizedIndexName:       q.Name,
+		StatsMode:                columnVectorGraphNativeSearchStatsModeMinimal,
+		PreparedFilter:           filter,
+		CanonicalNormalizedQuery: canonical,
 	}, &buffer.searchScratch)
 	stats.Base = baseStats
 	stats.Base.SearchRouteQuantizedRerank = 1
@@ -338,7 +474,14 @@ func (o *typedGraphReadOwner) searchScalarU8QuantizedRerankWithContext(ctx conte
 	if len(opts.Query) != v.base.reader.def.Dimensions {
 		return nil, stats, proof, errColumnVectorGraphNativeSearchQueryDimensionMismatch
 	}
-	queryInvNorm, err := typedGraphStableCosineQueryInvNorm(opts.Query)
+	canonicalRepresentation := vectorIndexUsesCosineNormalizedF32V1(v.base.reader.def)
+	scoreQuery := opts.Query
+	queryInvNorm := float64(1)
+	if canonicalRepresentation {
+		scoreQuery, err = buffer.normalizeCosineNormalizedF32V1Query(opts.Query, v.base.reader.def.Dimensions)
+	} else {
+		queryInvNorm, err = typedGraphStableCosineQueryInvNorm(opts.Query)
+	}
 	if err != nil {
 		return nil, stats, proof, err
 	}
@@ -386,7 +529,7 @@ func (o *typedGraphReadOwner) searchScalarU8QuantizedRerankWithContext(ctx conte
 	// by the owner attach seam above.
 	needsValidationOnly := v.base.reader.RowCount() > 0 && (opts.TopK == 0 || baseDomain == 0 || (filter != nil && filter.count <= typedGraphScalarExactLimit))
 	if needsValidationOnly {
-		if err := o.validateTypedGraphQuantizedRerankAsset(ctx, opts.Query, q, filter, buffer, &stats); err != nil {
+		if err := o.validateTypedGraphQuantizedRerankAsset(ctx, scoreQuery, canonicalRepresentation, q, filter, buffer, &stats); err != nil {
 			proof.QuantizedScoreCalls = stats.Base.QuantizedScoreCalls
 			proof.QuantizedCodeBytesRead = stats.Base.QuantizedCodeBytesRead
 			return nil, stats, proof, err
@@ -406,7 +549,7 @@ func (o *typedGraphReadOwner) searchScalarU8QuantizedRerankWithContext(ctx conte
 		stats.FilteredExact = true
 		stats.Route = "typed_exact"
 		proof.Route = "typed_exact"
-		baseLive := 0
+		baseOrdinals := resizeColumnVectorGraphNativeIntScratch(buffer.searchScratch.resultOrdinals, len(filter.exactBaseByID))[:0]
 		for rank, ordinal := range filter.exactBaseByID {
 			if rank&255 == 0 {
 				if err := ctx.Err(); err != nil {
@@ -427,29 +570,25 @@ func (o *typedGraphReadOwner) searchScalarU8QuantizedRerankWithContext(ctx conte
 				stats.BaseShadowed++
 				continue
 			}
-			baseLive++
+			baseOrdinals = append(baseOrdinals, ordinal)
 		}
+		buffer.searchScratch.resultOrdinals = baseOrdinals
+		baseLive := len(baseOrdinals)
 		if deltaEligible > candidateLimit || baseLive > candidateLimit-deltaEligible {
 			return nil, stats, proof, errTypedGraphSearchBudget
 		}
-		for rank, ordinal := range filter.exactBaseByID {
-			if rank&255 == 0 {
-				if err := ctx.Err(); err != nil {
+		if canonicalRepresentation {
+			if err := typedGraphCanonicalPackedAppendExactBase(ctx, v, baseOrdinals, scoreQuery, buffer, &stats, &proof, true); err != nil {
+				return nil, stats, proof, err
+			}
+		} else {
+			for _, ordinal := range baseOrdinals {
+				if err := typedGraphQuantizedRerankAppendExactBase(ctx, v, ordinal, scoreQuery, queryInvNorm, buffer, &stats, &proof, true); err != nil {
 					return nil, stats, proof, err
 				}
 			}
-			id, ok := v.pack.documentIDForOrdinal(ordinal)
-			if !ok {
-				return nil, stats, proof, ErrVectorIndexSnapshotMismatch
-			}
-			if filter.excludesBaseOrdinal(ordinal) || v.shadows(id) {
-				continue
-			}
-			if err := typedGraphQuantizedRerankAppendExactBase(ctx, v, ordinal, opts.Query, queryInvNorm, buffer, &stats, &proof, true); err != nil {
-				return nil, stats, proof, err
-			}
 		}
-		if err := typedGraphQuantizedRerankAppendDelta(ctx, v, filter, opts.Query, queryInvNorm, buffer, &stats, &proof); err != nil {
+		if err := typedGraphQuantizedRerankAppendDelta(ctx, v, filter, scoreQuery, queryInvNorm, canonicalRepresentation, buffer, &stats, &proof); err != nil {
 			return nil, stats, proof, err
 		}
 		slices.SortFunc(buffer.baseResults, typedGraphQuantizedRerankCompare)
@@ -471,7 +610,7 @@ func (o *typedGraphReadOwner) searchScalarU8QuantizedRerankWithContext(ctx conte
 	if baseDomain == 0 {
 		stats.Route = "typed_exact"
 		proof.Route = "typed_exact"
-		if err := typedGraphQuantizedRerankAppendDelta(ctx, v, filter, opts.Query, queryInvNorm, buffer, &stats, &proof); err != nil {
+		if err := typedGraphQuantizedRerankAppendDelta(ctx, v, filter, scoreQuery, queryInvNorm, canonicalRepresentation, buffer, &stats, &proof); err != nil {
 			return nil, stats, proof, err
 		}
 		slices.SortFunc(buffer.deltaResults, typedGraphQuantizedRerankCompare)
@@ -503,13 +642,14 @@ func (o *typedGraphReadOwner) searchScalarU8QuantizedRerankWithContext(ctx conte
 		cloned.excludedBase = nil
 		traversalFilter = &cloned
 	}
-	raw, baseStats, err := v.searchScalarU8PreparedCandidatesWithContext(ctx, opts.Query, typedGraphScalarU8TraversalOptions{
-		TopK:               plan.candidateWidth,
-		EfSearch:           plan.candidateWidth,
-		ScoreBudget:        baseScoreBudget,
-		QuantizedIndexName: q.Name,
-		StatsMode:          columnVectorGraphNativeSearchStatsModeMinimal,
-		PreparedFilter:     traversalFilter,
+	raw, baseStats, err := v.searchScalarU8PreparedCandidatesWithContext(ctx, scoreQuery, typedGraphScalarU8TraversalOptions{
+		TopK:                     plan.candidateWidth,
+		EfSearch:                 plan.candidateWidth,
+		ScoreBudget:              baseScoreBudget,
+		QuantizedIndexName:       q.Name,
+		StatsMode:                columnVectorGraphNativeSearchStatsModeMinimal,
+		PreparedFilter:           traversalFilter,
+		CanonicalNormalizedQuery: canonicalRepresentation,
 	}, &buffer.searchScratch)
 	stats.Base = baseStats
 	stats.Route = "typed_hnsw"
@@ -528,6 +668,7 @@ func (o *typedGraphReadOwner) searchScalarU8QuantizedRerankWithContext(ctx conte
 	// Q1's returned Ordinal is always an immutable base ordinal. Do not inspect
 	// scratch.top here: a cached filtered navigation view leaves that internal
 	// heap in its local ordinal domain.
+	buffer.searchScratch.prepareVisitEpoch(v.pack.Header.Rows)
 	survivors := resizeColumnVectorGraphNativeIntScratch(buffer.searchScratch.resultOrdinals, plan.effectiveEF)
 	for rank, candidate := range raw {
 		if rank&255 == 0 {
@@ -539,6 +680,10 @@ func (o *typedGraphReadOwner) searchScalarU8QuantizedRerankWithContext(ctx conte
 		if ordinal < 0 || ordinal >= v.pack.Header.Rows {
 			return nil, stats, proof, ErrVectorIndexSnapshotMismatch
 		}
+		if buffer.searchScratch.visitMarks[ordinal] == buffer.searchScratch.visitEpoch {
+			continue
+		}
+		buffer.searchScratch.visitMarks[ordinal] = buffer.searchScratch.visitEpoch
 		if filter != nil && (!filter.base.Contains(ordinal) || filter.excludesBaseOrdinal(ordinal)) {
 			stats.BaseShadowed++
 			continue
@@ -558,23 +703,26 @@ func (o *typedGraphReadOwner) searchScalarU8QuantizedRerankWithContext(ctx conte
 	buffer.searchScratch.resultOrdinals = survivors
 	proof.LiveShortlistCandidates = uint64(len(survivors))
 	rerankCount := min(len(survivors), plan.rerankCap)
-	for rank, ordinal := range survivors[:rerankCount] {
-		if rank&255 == 0 {
-			if err := ctx.Err(); err != nil {
-				return nil, stats, proof, err
-			}
-		}
-		if err := typedGraphQuantizedRerankAppendExactBase(ctx, v, ordinal, opts.Query, queryInvNorm, buffer, &stats, &proof, false); err != nil {
+	if canonicalRepresentation {
+		if err := typedGraphCanonicalPackedAppendExactBase(ctx, v, survivors[:rerankCount], scoreQuery, buffer, &stats, &proof, false); err != nil {
 			return nil, stats, proof, err
 		}
-		// These counts describe completed canonical base reranks, not the
-		// requested cap. Keeping them in the loop preserves a truthful prefix
-		// if cancellation or a corrupt authoritative vector stops the query.
-		proof.ActualRerankCandidates++
-		stats.Base.QuantizedRerankCandidates++
-		stats.Base.QuantizedRerankExactScoreCalls++
+	} else {
+		for rank, ordinal := range survivors[:rerankCount] {
+			if rank&255 == 0 {
+				if err := ctx.Err(); err != nil {
+					return nil, stats, proof, err
+				}
+			}
+			if err := typedGraphQuantizedRerankAppendExactBase(ctx, v, ordinal, scoreQuery, queryInvNorm, buffer, &stats, &proof, false); err != nil {
+				return nil, stats, proof, err
+			}
+			proof.ActualRerankCandidates++
+			stats.Base.QuantizedRerankCandidates++
+			stats.Base.QuantizedRerankExactScoreCalls++
+		}
 	}
-	if err := typedGraphQuantizedRerankAppendDelta(ctx, v, filter, opts.Query, queryInvNorm, buffer, &stats, &proof); err != nil {
+	if err := typedGraphQuantizedRerankAppendDelta(ctx, v, filter, scoreQuery, queryInvNorm, canonicalRepresentation, buffer, &stats, &proof); err != nil {
 		return nil, stats, proof, err
 	}
 	if stats.DeltaScored != deltaEligible {

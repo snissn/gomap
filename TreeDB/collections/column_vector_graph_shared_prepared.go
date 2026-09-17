@@ -650,7 +650,7 @@ func (h *columnVectorGraphSharedPreparedSearch) acquireLegacyScalarU8AssetWithCo
 func (h *columnVectorGraphSharedPreparedSearch) ready() bool {
 	// Combined readiness includes any borrowed pack and persisted inverse.
 	// Pack presence alone cannot admit the native counted-source fallback.
-	return h != nil && h.typedVectorSource != nil && h.invNormSource != nil && h.rowRefSource != nil && h.documentIDSource != nil && h.adjacencyLayerSources != nil && h.preparedSearch != nil && h.preparedSearch.ready() && (h.key.family != columnVectorGraphSharedPreparedSearchKeyServing || (h.servingSegments != nil && h.servingSourceAccess != nil && h.servingSourceAccess.pool == h.servingSegments))
+	return h != nil && h.typedVectorSource != nil && (h.invNormSource != nil || (h.preparedSearch != nil && h.preparedSearch.norm.implicitUnit)) && h.rowRefSource != nil && h.documentIDSource != nil && h.adjacencyLayerSources != nil && h.preparedSearch != nil && h.preparedSearch.ready() && (h.key.family != columnVectorGraphSharedPreparedSearchKeyServing || (h.servingSegments != nil && h.servingSourceAccess != nil && h.servingSourceAccess.pool == h.servingSegments))
 }
 
 func (h *columnVectorGraphSharedPreparedSearch) close() error {

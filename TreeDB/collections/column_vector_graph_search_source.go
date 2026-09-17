@@ -29,12 +29,15 @@ type columnVectorGraphSearchNormSourceKind uint8
 const (
 	columnVectorGraphSearchNormSourceGraphRows columnVectorGraphSearchNormSourceKind = iota
 	columnVectorGraphSearchNormSourceInvNormByOrdinal
+	columnVectorGraphSearchNormSourceImplicitUnit
 )
 
 func (k columnVectorGraphSearchNormSourceKind) String() string {
 	switch k {
 	case columnVectorGraphSearchNormSourceInvNormByOrdinal:
 		return "inv_norm_by_ordinal"
+	case columnVectorGraphSearchNormSourceImplicitUnit:
+		return "implicit_unit"
 	default:
 		return "graph_rows"
 	}
@@ -117,7 +120,10 @@ func (s *columnVectorGraphSearchSource) prepare(plan *columnVectorGraphSearchPla
 		s.vectorFallbackDescription = description
 	}
 
-	if values, outcome, fallbackReason, reason, ok := columnVectorGraphInvNormSourceUsableForSearch(reader.invNormSource, s.rowCount); ok {
+	if vectorIndexUsesCosineNormalizedF32V1(reader.def) {
+		s.normKind = columnVectorGraphSearchNormSourceImplicitUnit
+		s.preparedNorm = columnVectorGraphPreparedNormView{rows: s.rowCount, implicitUnit: true}
+	} else if values, outcome, fallbackReason, reason, ok := columnVectorGraphInvNormSourceUsableForSearch(reader.invNormSource, s.rowCount); ok {
 		s.normKind = columnVectorGraphSearchNormSourceInvNormByOrdinal
 		s.invNormSource = reader.invNormSource
 		s.invNormByOrdinal = values
@@ -137,7 +143,7 @@ func (s *columnVectorGraphSearchSource) prepare(plan *columnVectorGraphSearchPla
 		if s.vectorKind != columnVectorGraphSearchVectorSourceTypedColumn {
 			return fmt.Errorf("collections: column_graph %q search requires base typed-column vectors when graph row fallback is unavailable", reader.def.Name)
 		}
-		if s.normKind != columnVectorGraphSearchNormSourceInvNormByOrdinal {
+		if s.normKind != columnVectorGraphSearchNormSourceInvNormByOrdinal && s.normKind != columnVectorGraphSearchNormSourceImplicitUnit {
 			return fmt.Errorf("collections: column_graph %q search requires vector-index inverse-norm state when graph row fallback is unavailable", reader.def.Name)
 		}
 	}
@@ -234,7 +240,9 @@ func (s *columnVectorGraphSearchSource) scoreOrdinal(plan *columnVectorGraphSear
 	if stats != nil {
 		stats.CandidateFetches++
 		stats.VectorBytesRead += uint64(len(vector)) * 4
-		stats.NormBytesRead += 4
+		if s.normKind != columnVectorGraphSearchNormSourceImplicitUnit {
+			stats.NormBytesRead += 4
+		}
 	}
 	scoreStart := columnVectorGraphNativeSearchStartDistanceKernel(stats)
 	score, err := columnVectorGraphNativeCosineScoreVector(query, queryInvNorm, ordinal, vector, invNorm)
@@ -275,7 +283,7 @@ func (s *columnVectorGraphSearchSource) scoreOrdinals(plan *columnVectorGraphSea
 }
 
 func (s *columnVectorGraphSearchSource) scoreOrdinalsIndexed(plan *columnVectorGraphSearchPlan, query []float32, queryInvNorm float32, ordinals []int, dst []float64, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) ([]float64, bool, error) {
-	if s == nil || s.reader == nil || s.vectorKind != columnVectorGraphSearchVectorSourceTypedColumn || s.normKind != columnVectorGraphSearchNormSourceInvNormByOrdinal || s.dims <= 0 || len(query) != s.dims || len(ordinals) == 0 || scratch == nil {
+	if s == nil || s.reader == nil || s.vectorKind != columnVectorGraphSearchVectorSourceTypedColumn || (s.normKind != columnVectorGraphSearchNormSourceInvNormByOrdinal && s.normKind != columnVectorGraphSearchNormSourceImplicitUnit) || s.dims <= 0 || len(query) != s.dims || len(ordinals) == 0 || scratch == nil {
 		return dst, false, nil
 	}
 	if s.invNormSource != nil && (s.invNormSource.closed || (s.invNormSource.handle != nil && s.invNormSource.handle.Released())) {
@@ -289,14 +297,14 @@ func (s *columnVectorGraphSearchSource) scoreOrdinalsIndexed(plan *columnVectorG
 	maxRun := 0
 	for i := 0; i < len(ordinals); {
 		loc, ok := s.indexedVectorLocationForOrdinal(ordinals[i])
-		if !ok || ordinals[i] < 0 || ordinals[i] >= len(s.invNormByOrdinal) || uint64(loc.rowIndex) > uint64(^uint32(0)) {
+		if !ok || ordinals[i] < 0 || (s.normKind != columnVectorGraphSearchNormSourceImplicitUnit && ordinals[i] >= len(s.invNormByOrdinal)) || uint64(loc.rowIndex) > uint64(^uint32(0)) {
 			return dst, false, nil
 		}
 		part := loc.part
 		j := i + 1
 		for j < len(ordinals) {
 			nextLoc, ok := s.indexedVectorLocationForOrdinal(ordinals[j])
-			if !ok || nextLoc.part != part || ordinals[j] < 0 || ordinals[j] >= len(s.invNormByOrdinal) || uint64(nextLoc.rowIndex) > uint64(^uint32(0)) {
+			if !ok || nextLoc.part != part || ordinals[j] < 0 || (s.normKind != columnVectorGraphSearchNormSourceImplicitUnit && ordinals[j] >= len(s.invNormByOrdinal)) || uint64(nextLoc.rowIndex) > uint64(^uint32(0)) {
 				break
 			}
 			j++
@@ -344,7 +352,11 @@ func (s *columnVectorGraphSearchSource) scoreOrdinalsIndexed(plan *columnVectorG
 		}
 		for i, ordinal := range ordinals[runStart:runEnd] {
 			loc := s.typedVectorLocations[ordinal]
-			score, err := columnVectorGraphNativeCosineScoreDot(query, queryInvNorm, ordinal, float64(dots[i]), part.values[loc.rowIndex*s.dims:loc.rowIndex*s.dims+s.dims], s.invNormByOrdinal[ordinal])
+			invNorm := float32(1)
+			if s.normKind != columnVectorGraphSearchNormSourceImplicitUnit {
+				invNorm = s.invNormByOrdinal[ordinal]
+			}
+			score, err := columnVectorGraphNativeCosineScoreDot(query, queryInvNorm, ordinal, float64(dots[i]), part.values[loc.rowIndex*s.dims:loc.rowIndex*s.dims+s.dims], invNorm)
 			if err != nil {
 				return dst, true, err
 			}
@@ -369,14 +381,18 @@ func (s *columnVectorGraphSearchSource) scoreOrdinalsIndexed(plan *columnVectorG
 		stats.FP32ScoreCalls += uint64(len(ordinals))
 		stats.CandidateFetches += uint64(len(ordinals))
 		stats.VectorBytesRead += uint64(len(ordinals) * s.dims * 4)
-		stats.NormBytesRead += uint64(len(ordinals) * 4)
+		if s.normKind != columnVectorGraphSearchNormSourceImplicitUnit {
+			stats.NormBytesRead += uint64(len(ordinals) * 4)
+		}
 		stats.BlockViewHits = plan.hits
 		stats.BlockViewMisses = plan.misses
 		stats.BlockViewBuilds = plan.builds
 		for _, ordinal := range ordinals {
 			loc := s.typedVectorLocations[ordinal]
 			recordColumnVectorGraphVectorSourceStats(stats, loc.part.outcome, loc.part.fallbackReason)
-			recordColumnVectorGraphInvNormSourceStats(stats, s.invNormOutcome, s.invNormFallback)
+			if s.normKind != columnVectorGraphSearchNormSourceImplicitUnit {
+				recordColumnVectorGraphInvNormSourceStats(stats, s.invNormOutcome, s.invNormFallback)
+			}
 		}
 	}
 	return dst, true, nil
@@ -462,6 +478,9 @@ func (s *columnVectorGraphSearchSource) vectorForOrdinal(view *columnVectorGraph
 }
 
 func (s *columnVectorGraphSearchSource) invNormForOrdinal(view *columnVectorGraphBlockView, rowIndex int, ordinal int, stats *columnVectorGraphNativeSearchStats) (float32, error) {
+	if s.normKind == columnVectorGraphSearchNormSourceImplicitUnit {
+		return 1, nil
+	}
 	if s.normKind == columnVectorGraphSearchNormSourceInvNormByOrdinal {
 		if s.invNormSource != nil && (s.invNormSource.closed || (s.invNormSource.handle != nil && s.invNormSource.handle.Released())) {
 			s.normFallbackReason = typeddecode.ReasonStaleHandle

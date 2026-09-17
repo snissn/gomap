@@ -34,7 +34,8 @@ import (
 )
 
 const (
-	collectionMetaVersion        = 6
+	collectionMetaVersion        = 7
+	collectionMetaVersionV6      = 6
 	collectionMetaVersionV5      = 5
 	maxCollectionMutationRetries = 64
 	// Bound stale buffered-read replans so a writer under constant buffered
@@ -1252,6 +1253,7 @@ type VectorIndexDefinition struct {
 	EfSearch         int                              `json:"ef_search,omitempty"`
 	Encoding         VectorIndexEncoding              `json:"encoding,omitempty"`
 	Strategy         VectorIndexStrategy              `json:"strategy,omitempty"`
+	Representation   VectorIndexRepresentation        `json:"representation,omitempty"`
 	SchemaGeneration uint64                           `json:"schema_generation,omitempty"`
 	QuantizedIndexes []QuantizedVectorIndexDefinition `json:"quantized_indexes,omitempty"`
 }
@@ -4302,6 +4304,9 @@ func (c *Collection) CreateVectorIndex(def VectorIndexDefinition) (*CollectionMe
 	newMeta, normalizedDef, err := addVectorIndexToCollectionMeta(baseMeta, def)
 	if err != nil {
 		return nil, err
+	}
+	if vectorIndexUsesCosineNormalizedF32V1(normalizedDef) && !registerEmptyRuntime {
+		return nil, fmt.Errorf("collections: representation %q may only be created on an empty collection", normalizedDef.Representation)
 	}
 	var runtime *VectorIndex
 	if registerEmptyRuntime {
@@ -25001,13 +25006,20 @@ func decodeCollectionMeta(raw []byte) (CollectionMeta, error) {
 	if err := json.Unmarshal(raw, &disk); err != nil {
 		return CollectionMeta{}, err
 	}
-	if disk.Version != collectionMetaVersionV5 && disk.Version != collectionMetaVersion {
+	if disk.Version != collectionMetaVersionV5 && disk.Version != collectionMetaVersionV6 && disk.Version != collectionMetaVersion {
 		return CollectionMeta{}, fmt.Errorf("collections: unsupported collection metadata version %d", disk.Version)
 	}
 	if disk.Version == collectionMetaVersionV5 {
 		for _, index := range disk.Indexes {
 			if len(index.Components) != 0 {
 				return CollectionMeta{}, errors.New("collections: version 5 metadata cannot define compound index components")
+			}
+		}
+	}
+	if disk.Version != collectionMetaVersion {
+		for _, index := range disk.VectorIndexes {
+			if index.Representation != "" {
+				return CollectionMeta{}, fmt.Errorf("collections: metadata version %d cannot define vector representation %q", disk.Version, index.Representation)
 			}
 		}
 	}
@@ -25143,6 +25155,9 @@ func normalizeCollectionMeta(meta CollectionMeta) (CollectionMeta, error) {
 		seen[vectorIndexes[i].Name] = struct{}{}
 	}
 	meta.VectorIndexes = vectorIndexes
+	if err := validateVectorIndexRepresentationSchema(meta); err != nil {
+		return CollectionMeta{}, err
+	}
 	textIndexes := copyTextIndexDefinitions(meta.TextIndexes)
 	for i := range textIndexes {
 		normalized, err := normalizeTextIndexDefinition(textIndexes[i])
@@ -25206,6 +25221,45 @@ func normalizeCollectionMeta(meta CollectionMeta) (CollectionMeta, error) {
 		meta.Options.BufferedIndexedAsyncFlushMaxQueuedUnits = 0
 	}
 	return meta, nil
+}
+
+func validateVectorIndexRepresentationSchema(meta CollectionMeta) error {
+	var selected *VectorIndexDefinition
+	for i := range meta.VectorIndexes {
+		if !vectorIndexUsesCosineNormalizedF32V1(meta.VectorIndexes[i]) {
+			continue
+		}
+		if selected != nil {
+			return fmt.Errorf("collections: representation %q permits exactly one vector index", VectorIndexRepresentationCosineNormalizedF32V1)
+		}
+		selected = &meta.VectorIndexes[i]
+	}
+	if selected == nil {
+		return nil
+	}
+	// The mutable typed serving lifecycle captures one vector-index owner and
+	// every typed admission validates all declared vector indexes. Accepting an
+	// unrelated second index here would therefore create metadata for which the
+	// representation has no valid write or serving path.
+	if len(meta.VectorIndexes) != 1 {
+		return fmt.Errorf("collections: representation %q requires exactly one vector index, got %d", selected.Representation, len(meta.VectorIndexes))
+	}
+	cfg := meta.Options.ColumnStore
+	if cfg == nil || !cfg.Enabled || cfg.AssetManager == nil {
+		return fmt.Errorf("collections: representation %q requires enabled managed column storage", selected.Representation)
+	}
+	if cfg.RetainedPayload != ColumnRetainedPayloadNonColumn || columnRetainedPayloadEffectiveEncoding(cfg) != ColumnRetainedPayloadEncodingJSON {
+		return fmt.Errorf("collections: representation %q requires non-column JSON retained payload", selected.Representation)
+	}
+	fields := columnStoreTypedColumnPartFields(*cfg)
+	if len(fields) != 1 {
+		return fmt.Errorf("collections: representation %q requires exactly one typed-column-part field, got %d", selected.Representation, len(fields))
+	}
+	field := fields[0]
+	if field.Path != selected.Field || field.ValueType != ColumnStoreValueFloat32Vector || field.Nullable || field.VectorDims != selected.Dimensions {
+		return fmt.Errorf("collections: representation %q typed-column-part field must be the non-null float32 vector %q with %d dimensions", selected.Representation, selected.Field, selected.Dimensions)
+	}
+	return nil
 }
 
 const maxCompoundIndexComponents = 4
@@ -25279,6 +25333,11 @@ func normalizeVectorIndexDefinition(def VectorIndexDefinition) (VectorIndexDefin
 	def.Metric = metric
 	def.Encoding = encoding
 	def.Strategy = strategy
+	representation, err := normalizeVectorIndexRepresentation(def.Representation)
+	if err != nil {
+		return VectorIndexDefinition{}, err
+	}
+	def.Representation = representation
 	quantized, err := normalizeQuantizedVectorIndexDefinitions(def)
 	if err != nil {
 		return VectorIndexDefinition{}, err
@@ -25293,6 +25352,11 @@ func normalizeVectorIndexDefinition(def VectorIndexDefinition) (VectorIndexDefin
 		}
 		if def.Encoding != VectorIndexEncodingFloat32 {
 			return VectorIndexDefinition{}, fmt.Errorf("collections: column_graph vector index %q supports only encoding %q", def.Name, VectorIndexEncodingFloat32)
+		}
+	}
+	if vectorIndexUsesCosineNormalizedF32V1(def) {
+		if def.Strategy != VectorIndexStrategyColumnGraph || def.Metric != VectorMetricCosine || def.Encoding != VectorIndexEncodingFloat32 {
+			return VectorIndexDefinition{}, fmt.Errorf("collections: representation %q requires strategy=%q metric=%q encoding=%q", def.Representation, VectorIndexStrategyColumnGraph, VectorMetricCosine, VectorIndexEncodingFloat32)
 		}
 	}
 	if def.M < 0 {
@@ -25535,6 +25599,7 @@ func vectorIndexDefinitionValuesEqual(a, b VectorIndexDefinition) bool {
 		a.EfSearch != b.EfSearch ||
 		a.Encoding != b.Encoding ||
 		a.Strategy != b.Strategy ||
+		a.Representation != b.Representation ||
 		a.SchemaGeneration != b.SchemaGeneration ||
 		len(a.QuantizedIndexes) != len(b.QuantizedIndexes) {
 		return false

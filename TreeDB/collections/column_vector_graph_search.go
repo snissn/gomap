@@ -234,6 +234,11 @@ type columnVectorGraphNativeSearchOptions struct {
 	// the allowance before layer 0, and exhaustion returns no partial results.
 	// Typed serving opts in; the partition router retains the default policy.
 	StrictScoreBudget bool
+	// CanonicalNormalizedQuery is a private trust assertion that query was
+	// already validated and normalized by the selected typed-owner boundary.
+	// It is valid only for a topology-only pack bound to that canonical typed
+	// vector plane; downstream scorers deliberately do not rescan it.
+	CanonicalNormalizedQuery bool
 
 	ScoreBatchMode columnVectorGraphScoreBatchMode
 	QueryMode      columnVectorGraphNativeSearchQueryMode
@@ -392,6 +397,9 @@ type columnVectorGraphNativeSearchStats struct {
 	QuantizedCodeBytesRead               uint64
 	QuantizedRerankCandidates            uint64
 	QuantizedRerankExactScoreCalls       uint64
+	PackedExactScoreCalls                uint64
+	PackedExactScoreCandidates           uint64
+	PackedExactVectorBytesRead           uint64
 	QuantizedScorerActive                uint64
 	QuantizedAssetMissing                uint64
 	QuantizedAssetInvalid                uint64

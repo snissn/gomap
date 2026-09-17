@@ -407,6 +407,9 @@ func validateColumnVectorIndexStateAssetsForStatus(rootDir, collection string, c
 }
 
 func validateColumnVectorIndexStateAssetsWithMode(rootDir, collection string, cfg ColumnStoreConfig, def VectorIndexDefinition, state columnVectorIndexStateSnapshot, graph columnVectorGraphManifestSnapshot, validatePayload bool) error {
+	if err := validateColumnVectorIndexStateRepresentationAssets(state, def); err != nil {
+		return err
+	}
 	seenAdjacencyLayers := make(map[int]string)
 	maxAdjacencyLayer := -1
 	var rawScratch []byte

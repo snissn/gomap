@@ -1,9 +1,10 @@
 # Canonical normalized FP32 cosine representation v1 (#4722)
 
-Status: normative target contract for the opt-in
-`cosine_normalized_f32_v1` representation. Q1 freezes the contract and the
-engine gates below; the representation is unavailable until Q2 implements it.
-Legacy and omitted representations keep their existing behavior.
+Status: implemented for the opt-in Go collection and document-service
+`cosine_normalized_f32_v1` representation. Q1 froze the contract and engine
+gates; Q2 implements the durable owner, mutable serving, scalar-u8 candidates,
+and packed rerank. Native command and Python support remain unavailable until
+Q3. Legacy and omitted representations keep their existing behavior.
 
 ## Declaration and admission
 
@@ -15,6 +16,11 @@ representation is selected when the index is created. It is not inferred from
 data, enabled by a query flag, or applied to a populated legacy index in place.
 TreeDB is pre-alpha, so rebuilding the database is the migration when the format
 changes.
+
+Version 1 requires exactly one non-null `typed_column_part` field, and that
+field is the selected vector, plus exactly one vector index in the collection.
+Sibling row-asset fields and non-column retained JSON remain allowed; additional
+column-part fields or vector indexes fail at create/reset.
 
 The canonical asset replaces the selected typed vector column's FP32 payload;
 it is not an auxiliary graph cache. Generic typed-column and document readers
@@ -31,6 +37,11 @@ component as the float32-rounded product. It MUST NOT mutate caller memory.
 Query normalization uses the same arithmetic once per request. Replay, reopen,
 fold, rebuild, and suffix-to-base publication preserve the canonical bytes and
 MUST NOT renormalize them.
+
+New vector inserts use the typed admission API. Generic JSON insert does not
+silently normalize a vector and fails before WAL. A generic document update may
+carry forward already-canonical bytes, but a noncanonical replacement likewise
+fails before WAL; callers use typed replacement admission for a new vector.
 
 A metadata-only or document-only update preserves the existing canonical
 embedding bytes without renormalization. It may copy those identical bytes into
@@ -121,8 +132,9 @@ Q2 MUST preserve these engine guardrails at E=R=64 on the same-shortlist seam:
   than 0.01 absolute below same-build FP32;
 - positive scalar-u8 and packed counters, zero stable-scorer fallback, and exact
   packed accounting for all retained eligible base candidates;
-- one canonical FP32 inventory and scalar-u8 total-owned-storage increment no
-  greater than 10% over the same representation without scalar-u8 codes.
+- one canonical FP32 inventory; scalar-u8 storage is one code byte per
+  dimension plus bounded calibration/metadata, reported separately and without
+  unexplained bytes or another FP32 corpus;
 - mutation, checkpoint, fold, reopen, GC, suffix/base merge, and same-owner
   materialization preserve the contract and fail closed on identity mismatch.
 
