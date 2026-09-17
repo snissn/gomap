@@ -134,6 +134,10 @@ type vectorPartitionCoordinatorLivePinSourceV1 interface {
 	acquireVectorPartitionCoordinatorLivePinV1(context.Context, collections.VectorPartitionManifestV1) (*collections.VectorIndexPartitionLiveSearchPinV1, error)
 }
 
+type vectorPartitionCoordinatorReplicatedLivePinSourceV1 interface {
+	acquireVectorPartitionCoordinatorReplicatedLivePinV1(context.Context, collections.VectorPartitionManifestV1) (*collections.VectorIndexPartitionLiveSearchPinV1, error)
+}
+
 type vectorPartitionCoordinatorLiveRouterSourceV1 interface {
 	openVectorPartitionCoordinatorLiveRouterV1(context.Context, string, uint64) (VectorPartitionCoordinatorRouterV1, error)
 }
@@ -966,12 +970,16 @@ func (c *VectorPartitionCoordinatorV1) searchV1(ctx context.Context, request Vec
 		return response, c.wrapError(err, "")
 	}
 	var livePin *collections.VectorIndexPartitionLiveSearchPinV1
-	if strict == nil && c.replicatedLifecycle == nil {
-		if source, ok := c.routerSource.(vectorPartitionCoordinatorLivePinSourceV1); ok {
+	if strict == nil {
+		if source, ok := c.routerSource.(vectorPartitionCoordinatorReplicatedLivePinSourceV1); ok && c.replicatedLifecycle != nil {
+			livePin, err = source.acquireVectorPartitionCoordinatorReplicatedLivePinV1(requestCtx, status.Manifest)
+		} else if source, ok := c.routerSource.(vectorPartitionCoordinatorLivePinSourceV1); ok && c.replicatedLifecycle == nil {
 			livePin, err = source.acquireVectorPartitionCoordinatorLivePinV1(requestCtx, status.Manifest)
-			if err != nil {
-				return response, c.wrapError(fmt.Errorf("%w: live partition identity: %v", ErrVectorPartitionCoordinatorGenerationMismatch, err), "")
-			}
+		}
+		if err != nil {
+			return response, c.wrapError(fmt.Errorf("%w: live partition identity: %v", ErrVectorPartitionCoordinatorGenerationMismatch, err), "")
+		}
+		if livePin != nil {
 			defer livePin.Release()
 		}
 	}

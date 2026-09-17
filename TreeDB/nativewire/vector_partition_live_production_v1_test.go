@@ -288,6 +288,77 @@ func TestVectorPartitionLiveProductionCoordinatorMutationAndColdReloadV1(t *test
 	}
 }
 
+func TestVectorPartitionReplicatedLivePinDoesNotBlockPublicationV1(t *testing.T) {
+	fixture := newVectorPartitionLiveNativewireFixtureV1(t)
+	defer fixture.database.Close()
+	services, sources := newVectorPartitionLiveProductionServicesV1(t, fixture)
+	defer func() {
+		for _, source := range sources {
+			_ = source.Close()
+		}
+	}()
+	dispatcher := &vectorPartitionLiveProductionDispatcherV1{services: services}
+	coordinator, err := NewVectorPartitionCoordinatorForTopologyV1(
+		vectorPartitionLiveCoordinatorTopologyV1(fixture),
+		fixedPeerVectorCoordinatorRouterSourceV1{CollectionVectorPartitionCoordinatorRouterSourceV1{Collection: fixture.collection}},
+		dispatcher,
+		VectorPartitionCoordinatorLimitsV1{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer coordinator.Close()
+	coordinator.replicatedLifecycle = &recordingVectorPartitionReplicatedLifecycleAuthorityV1{readySetDigest: fixture.manifest.ReadySetDigest}
+
+	document, err := json.Marshal(map[string]any{"embedding": []float32{.9, .1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	applyDone := make(chan error, 1)
+	var dispatchOnce sync.Once
+	var dispatchErr error
+	publicationCompleted := false
+	dispatcher.setBeforeDispatch(func(ctx context.Context, _ VectorPartitionShardSearchRequestV1) error {
+		dispatchOnce.Do(func() {
+			go func() {
+				_, applyErr := fixture.collection.Insert([]byte("0-replicated-concurrent"), document)
+				applyDone <- applyErr
+			}()
+			select {
+			case dispatchErr = <-applyDone:
+				publicationCompleted = dispatchErr == nil
+			case <-time.After(2 * time.Second):
+				dispatchErr = errors.New("live publication blocked by coordinator search pin")
+			case <-ctx.Done():
+				dispatchErr = ctx.Err()
+			}
+		})
+		return dispatchErr
+	})
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	_, err = coordinator.Search(ctx, VectorPartitionCoordinatorRequestV1{
+		Version: VectorPartitionCoordinatorVersionV1, RequestID: "replicated-concurrent", CancellationID: "cancel-replicated-concurrent",
+		Database: "default", Catalog: "default", Collection: "docs", IndexName: fixture.definition.Name,
+		IndexDefinitionDigest: collections.VectorIndexDefinitionDigestV1(fixture.definition),
+		Query:                 []float32{.9, .1}, Metric: VectorPartitionShardSearchMetricCosineV1,
+		RouterMode: collections.VectorPartitionRouterModeExactV1, RouterCandidateBudget: 2, PartitionProbes: 1,
+		Consistency: VectorPartitionShardSearchConsistencySnapshotV1, StatsMode: VectorPartitionShardSearchStatsBasicV1,
+		TopK: 1, EfSearch: 8, RequestBytesLimit: 1 << 20, CandidateBytesLimit: 8 << 20,
+		ResponseBytesLimit: 1 << 20, MergeEntriesLimit: 3,
+	})
+	if dispatchErr != nil {
+		t.Fatal(dispatchErr)
+	}
+	if !publicationCompleted {
+		t.Fatal("search failed before exercising concurrent live publication")
+	}
+	var coordinatorErr *VectorPartitionCoordinatorErrorV1
+	if !errors.As(err, &coordinatorErr) || coordinatorErr.Code != VectorPartitionCoordinatorErrorGenerationMismatchV1 {
+		t.Fatalf("concurrent live revision error=%v, want generation mismatch", err)
+	}
+}
+
 func TestVectorPartitionLiveProductionCheckpointCloseReopenV1(t *testing.T) {
 	fixture := newVectorPartitionLiveNativewireFixtureV1(t)
 	t.Cleanup(func() {

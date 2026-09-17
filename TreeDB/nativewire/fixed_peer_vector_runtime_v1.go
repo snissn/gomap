@@ -33,18 +33,29 @@ var (
 // process. Per-process listeners are selected from the node-keyed maps so the
 // fixed-peer configuration digest cannot silently diverge across daemons.
 type FixedPeerTCPVectorConfigV1 struct {
-	Collection                 raftplacement.CollectionRefV1
-	Catalog                    raftplacement.CatalogV1
-	Manifest                   collections.VectorPartitionManifestV1
-	Placement                  raftplacement.VectorPartitionPlacementRecordV1
-	Identity                   raftplacement.VectorPartitionLifecycleIdentityV1
-	PublicAddresses            map[raftcluster.NodeID]string
-	ShardAddresses             map[raftcluster.GroupID]map[raftcluster.NodeID]string
-	RequestBase                VectorPartitionCoordinatorRequestV1
-	TopologyDigest             string
-	AuthorizationOverlayDigest string
-	StrictCapabilityKey        []byte
-	IndexedThrough             uint64
+	Collection      raftplacement.CollectionRefV1
+	Catalog         raftplacement.CatalogV1
+	Manifest        collections.VectorPartitionManifestV1
+	Placement       raftplacement.VectorPartitionPlacementRecordV1
+	Identity        raftplacement.VectorPartitionLifecycleIdentityV1
+	PublicAddresses map[raftcluster.NodeID]string
+	ShardAddresses  map[raftcluster.GroupID]map[raftcluster.NodeID]string
+	RequestBase     VectorPartitionCoordinatorRequestV1
+	IndexedThrough  uint64
+}
+
+type fixedPeerVectorCoordinatorRouterSourceV1 struct {
+	CollectionVectorPartitionCoordinatorRouterSourceV1
+}
+
+func (s fixedPeerVectorCoordinatorRouterSourceV1) acquireVectorPartitionCoordinatorReplicatedLivePinV1(ctx context.Context, manifest collections.VectorPartitionManifestV1) (*collections.VectorIndexPartitionLiveSearchPinV1, error) {
+	if s.Collection == nil {
+		return nil, ErrVectorPartitionCoordinatorUnavailable
+	}
+	if err := s.Collection.EnsureVectorPartitionLiveBindingV1(ctx, manifest); err != nil {
+		return nil, err
+	}
+	return s.Collection.AcquireVectorPartitionLiveSearchPinV1(manifest)
 }
 
 type fixedPeerVectorRuntimeV1 struct {
@@ -365,7 +376,7 @@ func (r *fixedPeerVectorRuntimeV1) ensureBackendV1(ctx context.Context) (*Vector
 		ConstructionContext: ctx,
 		Catalog:             topologyCatalog,
 		Placement:           vector.Placement,
-		RouterSource:        CollectionVectorPartitionCoordinatorRouterSourceV1{Collection: r.collection},
+		RouterSource:        fixedPeerVectorCoordinatorRouterSourceV1{CollectionVectorPartitionCoordinatorRouterSourceV1{Collection: r.collection}},
 		ReplicatedLifecycle: authority,
 		Endpoints:           endpoints,
 		NodeEndpoints:       nodeEndpoints,
@@ -402,11 +413,6 @@ func (r *fixedPeerVectorRuntimeV1) ensureBackendV1(ctx context.Context) (*Vector
 		topologyOptions.Shards = []VectorPartitionProductionShardV1{{
 			GroupID: owner, Listener: shardListener, Service: shardService, EndpointIdentity: r.parent.client.digest,
 		}}
-		topologyOptions.ServingSnapshot = &VectorPartitionServingSnapshotPublisherOptionsV1{
-			Authority: authority, GenerationSources: map[raftcluster.GroupID]VectorPartitionGenerationSourceV1{owner: source},
-			TopologyDigest: vector.TopologyDigest, AuthorizationOverlayDigest: vector.AuthorizationOverlayDigest, IndexedThrough: vector.IndexedThrough,
-		}
-		topologyOptions.StrictCapabilityKey = slices.Clone(vector.StrictCapabilityKey)
 	}
 	topology, err := NewVectorPartitionProductionTopologyV1(topologyOptions)
 	if err != nil {
@@ -539,7 +545,7 @@ func fixedPeerVectorOperationsConfigV1() public.OperationsConfigV1 {
 
 // LinearizableCatalogMetaAppliedIndexV1 makes remote catalog fencing available
 // to ingress nodes without pretending they can mint an owner-local no-log
-// proof. Strict snapshots are therefore constructed only on the meta leader.
+// proof. Fixed-peer strict searches use a fresh request-scoped live pin.
 func (r *FixedPeerTCPRuntimeV1) LinearizableCatalogMetaAppliedIndexV1(ctx context.Context) (uint64, error) {
 	status, err := r.catalogFence(ctx)
 	return status.AppliedIndex, err
@@ -555,8 +561,7 @@ func validateFixedPeerVectorConfigV1(config FixedPeerTCPConfigV1, localGroups ma
 		vector.Manifest.IndexName == "" || vector.Manifest.Generation == 0 || vector.Manifest.IntegrityDigest == "" ||
 		vector.Placement.Collection != vector.Collection || vector.Placement.IndexName != vector.Manifest.IndexName ||
 		vector.Placement.PartitionGeneration != vector.Manifest.Generation || vector.Identity.Index.Collection != vector.Collection ||
-		vector.Identity.Index.IndexName != vector.Manifest.IndexName || vector.Identity.Generation != vector.Manifest.Generation ||
-		vector.TopologyDigest == "" || vector.AuthorizationOverlayDigest == "" || len(vector.StrictCapabilityKey) != sha256.Size || vector.IndexedThrough == 0 {
+		vector.Identity.Index.IndexName != vector.Manifest.IndexName || vector.Identity.Generation != vector.Manifest.Generation || vector.IndexedThrough == 0 {
 		return errors.New("incomplete vector runtime identity")
 	}
 	if len(vector.PublicAddresses) != len(config.Nodes) {
@@ -572,6 +577,9 @@ func validateFixedPeerVectorConfigV1(config FixedPeerTCPConfigV1, localGroups ma
 	owners := make(map[raftcluster.GroupID]bool)
 	for _, partition := range vector.Placement.Partitions {
 		owners[partition.GroupID] = true
+	}
+	if len(owners) != 1 {
+		return errors.New("fixed-peer vector runtime requires exactly one owner group")
 	}
 	for group := range owners {
 		var fixed *FixedPeerTCPGroupV1
@@ -597,7 +605,7 @@ func validateFixedPeerVectorConfigV1(config FixedPeerTCPConfigV1, localGroups ma
 }
 
 // searchVectorPartitionStrictV1 keeps the single-owner production search on
-// the owner whose live serving snapshot and capability authorize it.
+// the owner whose Raft barrier and fresh live pin authorize it.
 func (r *FixedPeerTCPRuntimeV1) searchVectorPartitionStrictV1(ctx context.Context, request public.SearchRequestV1) (public.SearchResponseV1, error) {
 	if r == nil || r.vector == nil || r.config.Vector == nil {
 		return public.SearchResponseV1{}, publicBackendErrorV1(ErrFixedPeerVectorUnavailableV1)
@@ -764,9 +772,6 @@ func (r *FixedPeerTCPRuntimeV1) applyVectorInsertV1(ctx context.Context, request
 	ownerStatus, err := data.provider.RuntimeStatusV1(ctx)
 	if err != nil || ownerStatus.State != "Leader" || ownerStatus.LeaderID != r.config.NodeID || ownerStatus.RaftAppliedIndex < result.CommittedEntry.Index {
 		return public.InsertResponseV1{}, fixedPeerVectorPostCommitAmbiguousV1(errors.Join(ErrFixedPeerVectorUnavailableV1, err, errors.New("owner apply proof is incomplete")))
-	}
-	if err := r.vector.topology.PublishServingSnapshotV1(ctx); err != nil {
-		return public.InsertResponseV1{}, fixedPeerVectorPostCommitAmbiguousV1(errors.Join(ErrFixedPeerVectorUnavailableV1, err))
 	}
 	pin, err := r.vector.collection.AcquireVectorPartitionLiveSearchPinV1(r.config.Vector.Manifest)
 	if err != nil {

@@ -7,7 +7,6 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -23,7 +22,6 @@ import (
 
 type fixedPeerVectorReadyFixtureV1 struct {
 	IngressPublicAddress string
-	OwnerPublicAddress   string
 	Generation           public.GenerationIDV1
 	RemotePartition      uint32
 	RemoteGroup          string
@@ -91,7 +89,7 @@ func fixedPeerVectorReadyV1(t testing.TB, ctx context.Context) fixedPeerVectorRe
 	t.Cleanup(client.Close)
 	fixedPeerWaitV1(t, ctx, func() bool {
 		status, statusErr := client.Status(ctx, "owner-1")
-		if statusErr != nil || status.CatalogRaft.State != "Leader" || status.CatalogRaft.LeaderID != "owner-1" || len(status.Groups) != 1 {
+		if statusErr != nil || status.CatalogRaft.State != "Follower" || status.CatalogRaft.LeaderID != "owner-2" || len(status.Groups) != 1 {
 			return false
 		}
 		return status.Groups[0].GroupID == "group-b" && status.Groups[0].State == "Leader" && status.Groups[0].LeaderID == "owner-1"
@@ -104,7 +102,7 @@ func fixedPeerVectorReadyV1(t testing.TB, ctx context.Context) fixedPeerVectorRe
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := client.PublishCatalog(ctx, "owner-1", command); err != nil {
+	if _, err := client.PublishCatalog(ctx, "owner-2", command); err != nil {
 		t.Fatal(err)
 	}
 	fixedPeerWaitV1(t, ctx, func() bool {
@@ -137,9 +135,9 @@ func fixedPeerVectorReadyV1(t testing.TB, ctx context.Context) fixedPeerVectorRe
 		return statusErr == nil && status.Health.Ready && status.Health.Generation.Index == seed.manifest.IndexName && status.Health.Generation.Generation == seed.manifest.Generation
 	})
 	return fixedPeerVectorReadyFixtureV1{
-		IngressPublicAddress: ingressPublic, OwnerPublicAddress: ownerPublic,
-		Generation:      public.GenerationIDV1{Index: seed.manifest.IndexName, Generation: seed.manifest.Generation},
-		RemotePartition: 0, RemoteGroup: "group-b", configs: configs, processes: processes, client: client,
+		IngressPublicAddress: ingressPublic,
+		Generation:           public.GenerationIDV1{Index: seed.manifest.IndexName, Generation: seed.manifest.Generation},
+		RemotePartition:      0, RemoteGroup: "group-b", configs: configs, processes: processes, client: client,
 	}
 }
 
@@ -253,11 +251,6 @@ func TestVectorPartitionSystemNativeFourDaemonRemoteWriteRoutesAppliesAndBecomes
 		t.Fatal(err)
 	}
 	defer client.Close()
-	ownerClient, err := DialContext(ctx, "tcp", fixture.OwnerPublicAddress)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer ownerClient.Close()
 	stale := public.InsertRequestV1{
 		Version: 1, Generation: public.GenerationIDV1{Index: fixture.Generation.Index, Generation: fixture.Generation.Generation + 1},
 		IdempotencyKey: []byte("reject-stale-generation"), ID: []byte("reject-stale-generation"), Vector: []float32{0, 1}, Document: []byte(`{"embedding":[0,1]}`), Deadline: time.Now().Add(30 * time.Second),
@@ -299,14 +292,6 @@ func TestVectorPartitionSystemNativeFourDaemonRemoteWriteRoutesAppliesAndBecomes
 		t.Fatalf("pre-mutation ingress search: %v", err)
 	}
 
-	// Pin A immediately before the accepted mutation so it remains within the
-	// production publisher's bounded session age while B is published.
-	if _, err := ownerClient.VectorPinSearchSnapshotV1(ctx, public.PinSearchSnapshotOptionsV1{
-		FastSearchOptionsV1: public.FastSearchOptionsV1{MaxIndexAge: time.Minute},
-		MaxSessionAge:       defaultVectorPartitionMaxPinnedSessionAgeV1,
-	}); err != nil {
-		t.Fatal(err)
-	}
 	started := time.Now()
 	result, err := client.VectorInsertV1(ctx, public.InsertRequestV1{
 		Version:        1,
@@ -329,16 +314,6 @@ func TestVectorPartitionSystemNativeFourDaemonRemoteWriteRoutesAppliesAndBecomes
 	}
 	fixture.RequireOwnerReplication(t, ctx, result.CommitIndex)
 
-	// Snapshot A was published at the immutable zero/zero live identity, so it
-	// cannot retain a live view. Once the mutation advances the owner binding,
-	// the old session must fail closed instead of reacquiring B and exposing the
-	// newly inserted ID under A.
-	if _, err := ownerClient.VectorSearchPinnedV1(ctx, fixture.SearchRequest([]float32{0, 1}, 4)); !hasPublicVectorErrorCodeV1(err, public.ErrorGenerationMismatchV1) {
-		t.Fatalf("pre-mutation pinned snapshot error=%v, want generation mismatch", err)
-	}
-	if err := ownerClient.VectorClosePinnedSnapshotV1(ctx); err != nil {
-		t.Fatal(err)
-	}
 	search, err := client.VectorSearchStrictV1(ctx, fixture.SearchRequest([]float32{0, 1}, 4))
 	if err != nil {
 		t.Fatal(err)
@@ -566,7 +541,7 @@ func fixedPeerVectorTestConfigsV1(t testing.TB, seed fixedPeerVectorSeedFixtureV
 		raftcluster.RequiredFeature{Name: raftcluster.FeatureVectorPartitionLifecycle, Version: raftcluster.SupportedFeatureFloors[raftcluster.FeatureVectorPartitionLifecycle]},
 	)
 	nodes := make([]FixedPeerTCPNodeV1, 0, len(nodeIDs))
-	meta := FixedPeerTCPGroupV1{ID: "meta", BootstrapNode: "owner-1", Features: features}
+	meta := FixedPeerTCPGroupV1{ID: "meta", BootstrapNode: "owner-2", Features: features}
 	groupA := FixedPeerTCPGroupV1{ID: "group-a", BootstrapNode: "ingress"}
 	groupB := FixedPeerTCPGroupV1{ID: "group-b", BootstrapNode: "owner-1"}
 	publicAddresses := make(map[raftcluster.NodeID]string, len(nodeIDs))
@@ -614,8 +589,7 @@ func fixedPeerVectorTestConfigsV1(t testing.TB, seed fixedPeerVectorSeedFixtureV
 	vector := &FixedPeerTCPVectorConfigV1{
 		Collection: ref, Catalog: seed.catalog, Manifest: seed.manifest, Placement: placement, Identity: identity,
 		PublicAddresses: publicAddresses, ShardAddresses: shardAddresses, RequestBase: requestBase,
-		TopologyDigest: strings.Repeat("a", 64), AuthorizationOverlayDigest: strings.Repeat("b", 64),
-		StrictCapabilityKey: []byte("0123456789abcdef0123456789abcdef"), IndexedThrough: 1,
+		IndexedThrough: 1,
 	}
 	root := t.TempDir()
 	configs := make([]FixedPeerTCPConfigV1, len(nodes))
@@ -658,6 +632,41 @@ func TestFixedPeerVectorConfigRequiresCatalogLifecycleFeatureV1(t *testing.T) {
 	config.Catalog.Features.Required = []raftcluster.RequiredFeature{{Name: raftcluster.FeatureCatalogMetaAuthority, Version: raftcluster.SupportedFeatureFloors[raftcluster.FeatureCatalogMetaAuthority]}}
 	if _, _, err := validateFixedPeerConfigV1(config); err == nil {
 		t.Fatal("vector config without catalog lifecycle feature was accepted")
+	}
+}
+
+func TestFixedPeerVectorConfigRequiresOneOwnerGroupV1(t *testing.T) {
+	ref := raftplacement.CollectionRefV1{Database: "default", Catalog: "default", Collection: "docs"}
+	vector := &FixedPeerTCPVectorConfigV1{
+		Collection:      ref,
+		Manifest:        collections.VectorPartitionManifestV1{State: "ready", Collection: "docs", IndexName: "embedding", Generation: 1, IntegrityDigest: "integrity"},
+		Placement:       raftplacement.VectorPartitionPlacementRecordV1{Collection: ref, IndexName: "embedding", PartitionGeneration: 1},
+		Identity:        raftplacement.VectorPartitionLifecycleIdentityV1{Index: raftplacement.VectorPartitionLifecycleIndexIdentityV1{Collection: ref, IndexName: "embedding"}, Generation: 1},
+		PublicAddresses: map[raftcluster.NodeID]string{"node": "127.0.0.1:10001"},
+		ShardAddresses: map[raftcluster.GroupID]map[raftcluster.NodeID]string{
+			"group-a": {"node": "127.0.0.1:10002"},
+			"group-b": {"node": "127.0.0.1:10003"},
+		},
+		IndexedThrough: 1,
+	}
+	config := FixedPeerTCPConfigV1{
+		NodeID: "node", Nodes: []FixedPeerTCPNodeV1{{ID: "node"}}, Vector: vector,
+		Groups: []FixedPeerTCPGroupV1{
+			{ID: "group-a", Peers: []raftcluster.Peer{{ID: "node"}}},
+			{ID: "group-b", Peers: []raftcluster.Peer{{ID: "node"}}},
+		},
+	}
+	config.Vector.Placement.Partitions = nil
+	want := "fixed-peer vector runtime requires exactly one owner group"
+	if err := validateFixedPeerVectorConfigV1(config, map[raftcluster.GroupID]bool{}); err == nil || err.Error() != want {
+		t.Fatalf("zero-owner validation error=%v, want %q", err, want)
+	}
+	config.Vector.Placement.Partitions = []raftplacement.VectorPartitionGroupV1{
+		{PartitionID: 0, GroupID: "group-a"},
+		{PartitionID: 1, GroupID: "group-b"},
+	}
+	if err := validateFixedPeerVectorConfigV1(config, map[raftcluster.GroupID]bool{"group-a": true, "group-b": true}); err == nil || err.Error() != want {
+		t.Fatalf("multi-owner validation error=%v, want %q", err, want)
 	}
 }
 
