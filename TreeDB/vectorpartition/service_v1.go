@@ -7,6 +7,8 @@ import (
 	"slices"
 	"time"
 	"unicode/utf8"
+
+	"github.com/snissn/gomap/TreeDB/internal/raftentry"
 )
 
 // ErrorCodeV1 is the stable error classification returned by ServiceV1.
@@ -23,6 +25,8 @@ const (
 	ErrorCommitAmbiguousV1    ErrorCodeV1 = "commit_ambiguous"
 	ErrorFailedV1             ErrorCodeV1 = "failed"
 )
+
+const MaxStableIDBytesV1 = 4096
 
 type ErrorV1 struct {
 	Code ErrorCodeV1
@@ -228,7 +232,7 @@ func (s *ServiceV1) Search(ctx context.Context, request SearchRequestV1) (Search
 }
 
 func (s *ServiceV1) Insert(ctx context.Context, request InsertRequestV1) (InsertResponseV1, error) {
-	if err := validateInsertRequestV1(ctx, request); err != nil {
+	if err := ValidateInsertRequestV1(ctx, request); err != nil {
 		return InsertResponseV1{}, err
 	}
 	backend, ok := s.backend.(MutationBackendV1)
@@ -377,12 +381,17 @@ func cloneSearchRequestV1(r SearchRequestV1) SearchRequestV1 {
 	r.Query = slices.Clone(r.Query)
 	return r
 }
-func validateInsertRequestV1(ctx context.Context, r InsertRequestV1) error {
+
+// ValidateInsertRequestV1 applies the public mutation boundary at every ingress.
+func ValidateInsertRequestV1(ctx context.Context, r InsertRequestV1) error {
 	if err := validateGenerationV1(ctx, r.Generation); err != nil {
 		return err
 	}
 	if r.Version != 1 || len(r.IdempotencyKey) == 0 || len(r.ID) == 0 || !utf8.Valid(r.ID) || len(r.Vector) == 0 || len(r.Document) == 0 {
 		return invalidV1("version, generation, idempotency key, valid UTF-8 id, vector, and document are required")
+	}
+	if len(r.IdempotencyKey) > raftentry.MaxIdempotencyKeyBytesV1 || len(r.ID) > MaxStableIDBytesV1 {
+		return invalidV1("idempotency key or stable id exceeds mutation limit")
 	}
 	if !r.Deadline.IsZero() && !time.Now().Before(r.Deadline) {
 		return &ErrorV1{Code: ErrorDeadlineExceededV1, Err: context.DeadlineExceeded}

@@ -21,6 +21,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/collections"
 	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
 	"github.com/snissn/gomap/TreeDB/internal/raftplacement"
+	public "github.com/snissn/gomap/TreeDB/vectorpartition"
 )
 
 const VectorPartitionShardSearchVersionV1 uint32 = 1
@@ -138,7 +139,7 @@ func DefaultVectorPartitionShardSearchLimitsV1() VectorPartitionShardSearchLimit
 		MaxCandidateBytes: 80 << 20,
 		MaxResponseBytes:  64 << 20,
 		MaxIdentityBytes:  4096,
-		MaxStableIDBytes:  4096,
+		MaxStableIDBytes:  public.MaxStableIDBytesV1,
 	}
 }
 

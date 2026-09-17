@@ -42,6 +42,12 @@ func TestVectorPartitionPublicBackendMapsCoordinatorErrorsV1(t *testing.T) {
 	if !hasPublicErrorCodeV1(ambiguous, public.ErrorCommitAmbiguousV1) || errors.Is(ambiguous, context.DeadlineExceeded) {
 		t.Fatalf("post-commit deadline = %v", ambiguous)
 	}
+	for _, code := range []public.ErrorCodeV1{public.ErrorInvalidRequestV1, public.ErrorDeadlineExceededV1} {
+		mapped := fixedPeerVectorPublicErrorV1(&fixedPeerRemoteErrorV1{message: "remote refusal", code: string(code)})
+		if !hasPublicErrorCodeV1(mapped, code) {
+			t.Fatalf("remote public code=%q mapped=%v", code, mapped)
+		}
+	}
 }
 
 func TestVectorPartitionPublicBackendMapsBoundGenerationMismatchV1(t *testing.T) {

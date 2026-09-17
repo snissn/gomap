@@ -670,6 +670,10 @@ func (r *FixedPeerTCPRuntimeV1) searchVectorPartitionStrictV1(ctx context.Contex
 }
 
 func fixedPeerVectorPublicErrorV1(err error) error {
+	var publicErr *public.ErrorV1
+	if errors.As(err, &publicErr) {
+		return err
+	}
 	var remote *fixedPeerRemoteErrorV1
 	if errors.As(err, &remote) {
 		code := public.ErrorCodeV1(remote.code)
@@ -840,6 +844,9 @@ func (r *FixedPeerTCPRuntimeV1) validateVectorInsertOwnerV1(ctx context.Context,
 	}
 	if !utf8.Valid(request.Request.ID) {
 		return ErrFixedPeerVectorDocumentV1
+	}
+	if err := public.ValidateInsertRequestV1(ctx, request.Request); err != nil {
+		return err
 	}
 	vector := r.config.Vector
 	if vector == nil || r.vector == nil || request.Identity != vector.Identity ||

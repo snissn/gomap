@@ -193,6 +193,15 @@ func TestServiceV1InsertRequiresCompleteEvidenceAndClonesV1(t *testing.T) {
 	if _, err := service.Insert(t.Context(), request); !hasCodeV1(err, ErrorInvalidRequestV1) {
 		t.Fatalf("invalid UTF-8 ID error=%v", err)
 	}
+	request.ID = make([]byte, MaxStableIDBytesV1+1)
+	if _, err := service.Insert(t.Context(), request); !hasCodeV1(err, ErrorInvalidRequestV1) {
+		t.Fatalf("oversized stable ID error=%v", err)
+	}
+	request.ID = []byte("doc-1")
+	request.IdempotencyKey = make([]byte, 1025)
+	if _, err := service.Insert(t.Context(), request); !hasCodeV1(err, ErrorInvalidRequestV1) {
+		t.Fatalf("oversized idempotency key error=%v", err)
+	}
 }
 
 func TestServiceV1FastAndPinnedContract(t *testing.T) {

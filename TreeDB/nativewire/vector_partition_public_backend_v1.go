@@ -124,7 +124,7 @@ func (b *VectorPartitionPublicBackendV1) InsertVectorPartitionV1(ctx context.Con
 		PartitionID: partitionID, OwnerGroup: owner,
 	})
 	if err != nil {
-		return public.InsertResponseV1{}, publicBackendErrorV1(err)
+		return public.InsertResponseV1{}, fixedPeerVectorPublicErrorV1(err)
 	}
 	return response, nil
 }

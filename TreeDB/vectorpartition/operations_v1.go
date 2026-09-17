@@ -343,7 +343,7 @@ func (o *OperationsV1) admitInsertV1(ctx context.Context, r InsertRequestV1) err
 	if err := o.enabled(); err != nil {
 		return err
 	}
-	if err := validateInsertRequestV1(ctx, r); err != nil {
+	if err := ValidateInsertRequestV1(ctx, r); err != nil {
 		return err
 	}
 	vectorBytes := uint64(len(r.Vector)) * 4

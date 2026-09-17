@@ -824,3 +824,24 @@ func TestFixedPeerVectorInsertEntryUsesCallerAttemptIdentityV1(t *testing.T) {
 		t.Fatalf("new attempt reused entry: err=%v", err)
 	}
 }
+
+func TestFixedPeerVectorOwnerRevalidatesPublicInsertLimitsV1(t *testing.T) {
+	request := VectorPartitionRoutedInsertV1{Request: public.InsertRequestV1{
+		Version: 1, Generation: public.GenerationIDV1{Index: "embedding", Generation: 7},
+		IdempotencyKey: make([]byte, raftentry.MaxIdempotencyKeyBytesV1), ID: make([]byte, public.MaxStableIDBytesV1),
+		Vector: []float32{1}, Document: []byte(`{"embedding":[1]}`),
+	}, CatalogProof: raftplacement.CatalogProofV1{Epoch: 1, Digest: "catalog"}, ReadySetDigest: "ready", RouterModelDigest: "router"}
+	runtime := &FixedPeerTCPRuntimeV1{}
+	if err := runtime.validateVectorInsertOwnerV1(t.Context(), request); !errors.Is(err, ErrFixedPeerVectorProofStaleV1) {
+		t.Fatalf("boundary request error=%v", err)
+	}
+	request.Request.ID = make([]byte, public.MaxStableIDBytesV1+1)
+	if err := runtime.validateVectorInsertOwnerV1(t.Context(), request); !hasPublicVectorErrorCodeV1(err, public.ErrorInvalidRequestV1) {
+		t.Fatalf("oversized stable ID error=%v", err)
+	}
+	request.Request.ID = []byte("doc")
+	request.Request.IdempotencyKey = make([]byte, raftentry.MaxIdempotencyKeyBytesV1+1)
+	if err := runtime.validateVectorInsertOwnerV1(t.Context(), request); !hasPublicVectorErrorCodeV1(err, public.ErrorInvalidRequestV1) {
+		t.Fatalf("oversized idempotency key error=%v", err)
+	}
+}
