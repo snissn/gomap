@@ -9,6 +9,31 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/raftentry"
 )
 
+// CurrentCatalogVersion follows the FSM-owned DB across snapshot replacement.
+// The caller's original DB handle is closed when a snapshot is installed.
+func (f *FSM) CurrentCatalogVersion(ctx context.Context) (uint64, bool, error) {
+	ctx = readBarrierContext(ctx)
+	if err := ctx.Err(); err != nil {
+		return 0, false, err
+	}
+	if f == nil {
+		return 0, false, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "FSM is not open")
+	}
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	if err := ctx.Err(); err != nil {
+		return 0, false, err
+	}
+	if f.closed || f.db == nil {
+		return 0, false, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "FSM is not open")
+	}
+	state := f.db.State()
+	if state == nil {
+		return 0, false, nil
+	}
+	return state.CommitSeq, true, nil
+}
+
 // PreflightCommandEntryV1 adapts the raftcluster pre-commit deterministic
 // preflight request into the local FSM apply preflight shape.
 func (f *FSM) PreflightCommandEntryV1(ctx context.Context, req raftcluster.CommandEntryPreflightRequestV1) (raftcluster.CommandEntryPreflightResultV1, error) {

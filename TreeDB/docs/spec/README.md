@@ -390,6 +390,7 @@ Given pre-alpha status, this is a living spec that tracks implementation.
 | Native-wire ack policies | `native-wire-protocol.md` | `user-command-wal.md`, `native-query-raft-roadmap.md`. |
 | Raft/local apply layering | `native-query-raft-roadmap.md` | `native-wire-protocol.md`, `user-command-wal.md`. |
 | Single-group Raft provider/storage boundary | `raftcluster.md` | `native-query-raft-roadmap.md`, `storage-format.md`, `user-command-wal.md`. |
+| Fixed-peer TCP data/catalog process runtime | `fixed-peer-tcp-runtime-v1.md` | `raftcluster.md`, `raftplacement.md`. |
 | Collection-level Raft placement catalog and token-ring simulation | `raftplacement.md` | `native-query-raft-roadmap.md`, `raftcluster.md`. |
 | Verification mapping | `verification.md` | all normative specs. |
 
