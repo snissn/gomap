@@ -657,6 +657,28 @@ func validateFixedPeerVectorConfigV1(config FixedPeerTCPConfigV1, localGroups ma
 			return errors.New("vector partition mapping differs from manifest")
 		}
 	}
+	// Only defaults retained by coordinatorRequestV1 belong in startup preflight.
+	request, limits := vector.RequestBase, DefaultVectorPartitionCoordinatorLimitsV1()
+	if err := validateVectorPartitionPublicRequestIdentityV1(request, limits.MaxIdentityBytes); err != nil {
+		return err
+	}
+	if request.Database != placement.Collection.Database || request.Catalog != placement.Collection.Catalog ||
+		request.Collection != placement.Collection.Collection || request.IndexDefinitionDigest != placement.IndexDefinitionDigest ||
+		!isVectorPartitionShardSearchDigestV1(request.IndexDefinitionDigest) {
+		return errors.New("vector request base identity differs from placement or has invalid digest")
+	}
+	for _, identity := range []string{request.Database, request.Catalog, request.Collection, placement.IndexName, request.IndexDefinitionDigest} {
+		if len(identity) > limits.MaxIdentityBytes {
+			return errors.New("vector request base identity exceeds coordinator limit")
+		}
+	}
+	if request.RouterCandidateBudget < 1 || request.RouterCandidateBudget > limits.MaxRouterCandidates ||
+		(request.RouterMode != collections.VectorPartitionRouterModeExactV1 && request.RouterMode != collections.VectorPartitionRouterModeApproxV1) ||
+		(request.RouterMode == collections.VectorPartitionRouterModeExactV1 && request.RouterCandidateBudget < len(manifest.Representatives)) ||
+		(request.RouterMode == collections.VectorPartitionRouterModeApproxV1 && request.RouterCandidateBudget > len(manifest.Representatives)) ||
+		request.StatsMode != VectorPartitionShardSearchStatsBasicV1 {
+		return errors.New("invalid vector request base router or stats defaults")
+	}
 	return nil
 }
 

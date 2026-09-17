@@ -59,13 +59,22 @@ type VectorPartitionPublicBackendV1 struct {
 
 const vectorPartitionPublicRequestSuffixBytesV1 = 1 + 16
 
+func validateVectorPartitionPublicRequestIdentityV1(request VectorPartitionCoordinatorRequestV1, maxIdentityBytes int) error {
+	if request.RequestID == "" || request.CancellationID == "" {
+		return errors.New("nativewire: public vector partition backend is incomplete")
+	}
+	if len(request.RequestID)+vectorPartitionPublicRequestSuffixBytesV1 > maxIdentityBytes || len(request.CancellationID)+vectorPartitionPublicRequestSuffixBytesV1 > maxIdentityBytes {
+		return errors.New("nativewire: public vector partition request identity exceeds coordinator limit after suffix")
+	}
+	return nil
+}
+
 func NewVectorPartitionPublicBackendV1(opts VectorPartitionPublicBackendOptionsV1) (*VectorPartitionPublicBackendV1, error) {
-	if opts.Topology == nil || opts.Topology.Coordinator() == nil || opts.Identity.Generation == 0 || opts.Identity.Index.IndexName == "" || len(opts.RequiredGroups) == 0 || opts.RequestBase.RequestID == "" || opts.RequestBase.CancellationID == "" {
+	if opts.Topology == nil || opts.Topology.Coordinator() == nil || opts.Identity.Generation == 0 || opts.Identity.Index.IndexName == "" || len(opts.RequiredGroups) == 0 {
 		return nil, errors.New("nativewire: public vector partition backend is incomplete")
 	}
-	maxIdentityBytes := opts.Topology.Coordinator().limits.MaxIdentityBytes
-	if len(opts.RequestBase.RequestID)+vectorPartitionPublicRequestSuffixBytesV1 > maxIdentityBytes || len(opts.RequestBase.CancellationID)+vectorPartitionPublicRequestSuffixBytesV1 > maxIdentityBytes {
-		return nil, errors.New("nativewire: public vector partition request identity exceeds coordinator limit after suffix")
+	if err := validateVectorPartitionPublicRequestIdentityV1(opts.RequestBase, opts.Topology.Coordinator().limits.MaxIdentityBytes); err != nil {
+		return nil, err
 	}
 	if opts.Builder == nil || opts.Lifecycle.Authority == nil || opts.Lifecycle.Committer == nil || opts.ReadFence == nil {
 		return nil, errors.New("nativewire: public vector partition backend requires lifecycle authority, linearizable read fence, and group builder")

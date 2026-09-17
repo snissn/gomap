@@ -777,6 +777,11 @@ func TestFixedPeerVectorConfigRequiresOneOwnerGroupV1(t *testing.T) {
 	config.Vector.Identity.Index.IndexDefinitionDigest = config.Vector.Placement.IndexDefinitionDigest
 	config.Vector.Identity.Index.CatalogDigest = strings.Repeat("b", 64)
 	config.Vector.Identity.Source = raftplacement.VectorPartitionLifecycleSourceIdentityV1{Generation: 1, Checksum: 1, SchemaHash: 1, RowCount: 1}
+	config.Vector.RequestBase = VectorPartitionCoordinatorRequestV1{
+		RequestID: "request", CancellationID: "cancel", Database: ref.Database, Catalog: ref.Catalog, Collection: ref.Collection,
+		IndexDefinitionDigest: config.Vector.Placement.IndexDefinitionDigest,
+		RouterMode:            collections.VectorPartitionRouterModeExactV1, RouterCandidateBudget: 1, StatsMode: VectorPartitionShardSearchStatsBasicV1,
+	}
 	for _, localGroup := range []raftcluster.GroupID{"group-a", "group-b"} {
 		if err := validateFixedPeerVectorConfigV1(config, map[raftcluster.GroupID]bool{localGroup: true}); err != nil {
 			t.Fatalf("one local data group %q rejected: %v", localGroup, err)
@@ -795,6 +800,7 @@ func TestFixedPeerVectorConfigPreflightBeforeDiskCreationV1(t *testing.T) {
 			State: "ready", Collection: "docs", IndexName: "embedding", Generation: 1, IntegrityDigest: "integrity",
 			IndexDefinitionDigest: strings.Repeat("a", 64), SourceGeneration: 1, SourceChecksum: 1, SourceSchemaHash: 1, SourceRowCount: 1,
 			PartitionCount: 1, Placements: []collections.VectorPartitionPlacementV1{{PartitionID: 0, GroupID: "group-b"}},
+			Representatives: []collections.VectorPartitionMembershipV1{{PartitionID: 0}},
 		},
 		catalog: raftplacement.CatalogV1{
 			Features: raftplacement.DefaultFeatureSet(),
@@ -805,7 +811,37 @@ func TestFixedPeerVectorConfigPreflightBeforeDiskCreationV1(t *testing.T) {
 			Placements: []raftplacement.CollectionPlacementV1{{Collection: ref, GroupID: "group-b", Mode: raftplacement.PlacementModeCollectionV1}},
 		},
 	}
+	limits := DefaultVectorPartitionCoordinatorLimitsV1()
 	for name, mutate := range map[string]func(*FixedPeerTCPConfigV1){
+		"request_id_empty":      func(c *FixedPeerTCPConfigV1) { c.Vector.RequestBase.RequestID = "" },
+		"cancellation_id_empty": func(c *FixedPeerTCPConfigV1) { c.Vector.RequestBase.CancellationID = "" },
+		"request_id_limit": func(c *FixedPeerTCPConfigV1) {
+			c.Vector.RequestBase.RequestID = strings.Repeat("r", limits.MaxIdentityBytes-vectorPartitionPublicRequestSuffixBytesV1+1)
+		},
+		"cancellation_id_limit": func(c *FixedPeerTCPConfigV1) {
+			c.Vector.RequestBase.CancellationID = strings.Repeat("c", limits.MaxIdentityBytes-vectorPartitionPublicRequestSuffixBytesV1+1)
+		},
+		"request_database":   func(c *FixedPeerTCPConfigV1) { c.Vector.RequestBase.Database = "other" },
+		"request_catalog":    func(c *FixedPeerTCPConfigV1) { c.Vector.RequestBase.Catalog = "other" },
+		"request_collection": func(c *FixedPeerTCPConfigV1) { c.Vector.RequestBase.Collection = "other" },
+		"request_digest":     func(c *FixedPeerTCPConfigV1) { c.Vector.RequestBase.IndexDefinitionDigest = strings.Repeat("b", 64) },
+		"effective_index_name_limit": func(c *FixedPeerTCPConfigV1) {
+			name := strings.Repeat("i", limits.MaxIdentityBytes+1)
+			c.Vector.Manifest.IndexName, c.Vector.Placement.IndexName, c.Vector.Identity.Index.IndexName = name, name, name
+		},
+		"request_router_mode":        func(c *FixedPeerTCPConfigV1) { c.Vector.RequestBase.RouterMode = "invalid" },
+		"request_router_budget_zero": func(c *FixedPeerTCPConfigV1) { c.Vector.RequestBase.RouterCandidateBudget = 0 },
+		"request_router_budget_limit": func(c *FixedPeerTCPConfigV1) {
+			c.Vector.RequestBase.RouterCandidateBudget = limits.MaxRouterCandidates + 1
+		},
+		"request_exact_budget_shortfall": func(c *FixedPeerTCPConfigV1) {
+			c.Vector.Manifest.Representatives = append(c.Vector.Manifest.Representatives, collections.VectorPartitionMembershipV1{VectorOrdinal: 1, PartitionID: 0})
+		},
+		"request_approx_budget_excess": func(c *FixedPeerTCPConfigV1) {
+			c.Vector.RequestBase.RouterMode = collections.VectorPartitionRouterModeApproxV1
+			c.Vector.RequestBase.RouterCandidateBudget = 2
+		},
+		"request_stats_mode":           func(c *FixedPeerTCPConfigV1) { c.Vector.RequestBase.StatsMode = "invalid" },
 		"collection_incarnation":       func(c *FixedPeerTCPConfigV1) { c.Vector.Identity.Index.CollectionIncarnation = 0 },
 		"index_epoch":                  func(c *FixedPeerTCPConfigV1) { c.Vector.Identity.Index.IndexEpoch = 0 },
 		"malformed_index_digest":       func(c *FixedPeerTCPConfigV1) { c.Vector.Identity.Index.IndexDefinitionDigest = "invalid" },
@@ -891,6 +927,19 @@ func TestFixedPeerVectorConfigPreflightBeforeDiskCreationV1(t *testing.T) {
 			}
 		})
 	}
+	t.Run("overwritten_fields_are_not_defaults", func(t *testing.T) {
+		config := fixedPeerVectorTestConfigsV1(t, seed)[0]
+		base := config.Vector.RequestBase
+		config.Vector.RequestBase = VectorPartitionCoordinatorRequestV1{
+			RequestID: base.RequestID, CancellationID: base.CancellationID,
+			Database: base.Database, Catalog: base.Catalog, Collection: base.Collection, IndexDefinitionDigest: base.IndexDefinitionDigest,
+			RouterMode: collections.VectorPartitionRouterModeApproxV1, RouterCandidateBudget: 1, StatsMode: base.StatsMode,
+			IndexName: strings.Repeat("ignored", limits.MaxIdentityBytes),
+		}
+		if _, _, err := validateFixedPeerConfigV1(config); err != nil {
+			t.Fatalf("valid retained defaults rejected: %v", err)
+		}
+	})
 }
 
 func TestFixedPeerVectorLocalDataGroupValidationPrecedesDiskCreationV1(t *testing.T) {
