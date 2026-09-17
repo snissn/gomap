@@ -51,7 +51,10 @@ func prepareTypedGraphOverlaySearch(base *VectorIndexSearcher, current *Collecti
 		return nil, err
 	}
 	slices.SortFunc(rows, func(a, b columnPhysicalVisibleRow) int { return bytes.Compare(a.ID, b.ID) })
-	view := &typedGraphOverlaySearch{base: base, pack: pack, current: current, rows: rows, vectorColumn: -1, invNorms: make([]float32, len(rows)), sourceRows: suffix.rows, sourceTombstones: suffix.tombstones, sourceBytes: suffix.bytes}
+	view := &typedGraphOverlaySearch{base: base, pack: pack, current: current, rows: rows, vectorColumn: -1, sourceRows: suffix.rows, sourceTombstones: suffix.tombstones, sourceBytes: suffix.bytes}
+	if !vectorIndexUsesCosineNormalizedF32V1(base.reader.def) {
+		view.invNorms = make([]float32, len(rows))
+	}
 	for i, field := range suffix.view.FullConfig.Columns {
 		if field.Path == base.reader.def.Field {
 			view.vectorColumn = i
@@ -69,9 +72,15 @@ func prepareTypedGraphOverlaySearch(base *VectorIndexSearcher, current *Collecti
 		if len(vector) != base.reader.def.Dimensions {
 			return nil, ErrVectorIndexSnapshotMismatch
 		}
-		view.invNorms[i], err = columnVectorGraphInvNorm(vector)
-		if err != nil {
-			return nil, err
+		if vectorIndexUsesCosineNormalizedF32V1(base.reader.def) {
+			if err := validateCosineNormalizedF32V1Canonical(vector, base.reader.def.Dimensions); err != nil {
+				return nil, err
+			}
+		} else {
+			view.invNorms[i], err = columnVectorGraphInvNorm(vector)
+			if err != nil {
+				return nil, err
+			}
 		}
 	}
 	return view, nil
@@ -128,7 +137,15 @@ func (v *typedGraphOverlaySearch) searchWithContext(ctx context.Context, query [
 	if len(query) != v.base.reader.def.Dimensions {
 		return nil, stats, errColumnVectorGraphNativeSearchQueryDimensionMismatch
 	}
-	queryInvNorm, err := columnVectorGraphInvNorm(query)
+	canonicalRepresentation := vectorIndexUsesCosineNormalizedF32V1(v.base.reader.def)
+	scoreQuery := query
+	queryInvNorm := float32(1)
+	var err error
+	if canonicalRepresentation {
+		scoreQuery, err = buffer.normalizeCosineNormalizedF32V1Query(query, v.base.reader.def.Dimensions)
+	} else {
+		queryInvNorm, err = columnVectorGraphInvNorm(query)
+	}
 	if err != nil {
 		return nil, stats, err
 	}
@@ -155,7 +172,7 @@ func (v *typedGraphOverlaySearch) searchWithContext(ctx context.Context, query [
 	} else {
 		stats.Route = "typed_empty"
 	}
-	baseResults, baseStats, err := v.pack.searchCosineWithContext(ctx, query, columnVectorGraphNativeSearchOptions{TopK: baseTopK, EfSearch: max(efSearch, baseTopK), StrictScoreBudget: true, CandidateLimit: baseLimit, StatsMode: columnVectorGraphNativeSearchStatsModeFullDiagnostics}, &buffer.searchScratch)
+	baseResults, baseStats, err := v.pack.searchCosineWithContext(ctx, scoreQuery, columnVectorGraphNativeSearchOptions{TopK: baseTopK, EfSearch: max(efSearch, baseTopK), StrictScoreBudget: true, CandidateLimit: baseLimit, StatsMode: columnVectorGraphNativeSearchStatsModeFullDiagnostics, CanonicalNormalizedQuery: canonicalRepresentation}, &buffer.searchScratch)
 	stats.Base = baseStats
 	stats.BaseResultIDs = len(baseResults)
 	if err != nil {
@@ -179,24 +196,34 @@ func (v *typedGraphOverlaySearch) searchWithContext(ctx context.Context, query [
 		}
 		buffer.baseResults = append(buffer.baseResults, VectorIndexSearchResult{ID: result.ID, Score: result.Score})
 	}
-	for i, row := range v.rows {
-		if i&255 == 0 {
-			if err := ctx.Err(); err != nil {
-				return nil, stats, err
-			}
-		}
-		if row.Deleted {
-			continue
-		}
-		if stats.Route == "typed_empty" {
-			stats.Route = "typed_exact"
-		}
-		score, err := columnVectorGraphNativeCosineScoreVector(query, queryInvNorm, i, row.Values[v.vectorColumn].Float32Vector, v.invNorms[i])
-		if err != nil {
+	if canonicalRepresentation {
+		var ignoredProof ColumnGraphScorePlaneWork
+		if err := typedGraphCanonicalPackedAppendDelta(ctx, v, nil, scoreQuery, buffer, &stats, &ignoredProof); err != nil {
 			return nil, stats, err
 		}
-		stats.DeltaScored++
-		buffer.deltaResults = append(buffer.deltaResults, VectorIndexSearchResult{ID: row.ID, Score: score})
+		if stats.DeltaScored > 0 && stats.Route == "typed_empty" {
+			stats.Route = "typed_exact"
+		}
+	} else {
+		for i, row := range v.rows {
+			if i&255 == 0 {
+				if err := ctx.Err(); err != nil {
+					return nil, stats, err
+				}
+			}
+			if row.Deleted {
+				continue
+			}
+			if stats.Route == "typed_empty" {
+				stats.Route = "typed_exact"
+			}
+			score, err := columnVectorGraphNativeCosineScoreVector(scoreQuery, queryInvNorm, i, row.Values[v.vectorColumn].Float32Vector, v.invNorms[i])
+			if err != nil {
+				return nil, stats, err
+			}
+			stats.DeltaScored++
+			buffer.deltaResults = append(buffer.deltaResults, VectorIndexSearchResult{ID: row.ID, Score: score})
+		}
 	}
 	compare := func(a, b VectorIndexSearchResult) int {
 		if vectorIndexSearchResultBefore(a, b) {

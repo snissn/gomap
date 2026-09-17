@@ -381,6 +381,9 @@ func (c *Collection) rebuildVectorIndexWithCommandWALIntent(name string, replay 
 			return VectorIndexStatus{}, err
 		}
 	}
+	if vectorIndexUsesCosineNormalizedF32V1(def) {
+		return c.rebuildCosineNormalizedF32V1ColumnGraph(name, snap, catalog, baseMeta, *cfg, def, manifest, records, rows, constructionMatrix, baseCopy, baseCommitSeq, baseSystemRoot, rootName, baseManifestRootID, replay, started, &timing)
+	}
 	rootNames := []string{rootName}
 	baseRootIDs := map[string]uint64{rootName: baseManifestRootID}
 	intent, err := c.newCollectionRebuildVectorIndexCommandWALIntent(name, replay)
@@ -548,6 +551,212 @@ func (c *Collection) rebuildNativeVectorIndexPrepared(def VectorIndexDefinition,
 		RebuildNeeded:       native.ExactFallbackReason != "" || stats.RebuildNeeded || stats.SnapshotDirty,
 		Duration:            duration,
 	}, nil
+}
+
+// rebuildCosineNormalizedF32V1ColumnGraph fuses the first locality rewrite and
+// graph rebuild into one command-WAL publication. The selected typed vector
+// payload is therefore already the graph-ordinal canonical owner when the v4
+// topology pack becomes visible; no live generation ever contains both that
+// owner and an embedded normalized FP32 corpus.
+func (c *Collection) rebuildCosineNormalizedF32V1ColumnGraph(name string, snap *backenddb.Snapshot, catalog *collectionCatalog, baseMeta CollectionMeta, cfg ColumnStoreConfig, def VectorIndexDefinition, manifest columnManifestSnapshot, records []columnManifestRecord, rows []columnVectorGraphAssetRow, constructionMatrix *columnVectorGraphConstructionMatrix, baseCopy *typedGraphBaseCopy, baseCommitSeq, baseSystemRoot uint64, rootName string, baseManifestRootID uint64, replay *backenddb.CommandWALIntent, started time.Time, timing *ColumnGraphBuildTiming) (VectorIndexStatus, error) {
+	if baseCopy == nil || !vectorIndexUsesCosineNormalizedF32V1(def) || len(rows) == 0 {
+		return VectorIndexStatus{}, errors.New("collections: canonical normalized column_graph rebuild requires non-empty captured typed base")
+	}
+	streamed, err := typedGraphFoldStreamedSourcesEligible(cfg, def)
+	if err != nil {
+		return VectorIndexStatus{}, err
+	}
+	if !streamed {
+		return VectorIndexStatus{}, errors.New("collections: canonical normalized column_graph rebuild requires one streamed typed vector field")
+	}
+	state := columnStoreCompactionState{
+		snap:           snap,
+		catalog:        catalog,
+		meta:           baseMeta,
+		cfg:            cfg,
+		rootName:       rootName,
+		baseRoot:       baseManifestRootID,
+		baseCommitSeq:  baseCommitSeq,
+		baseSystemRoot: baseSystemRoot,
+		manifest:       manifest,
+		records:        records,
+	}
+	rowSource, err := newTypedGraphFoldRowSource(context.Background(), c, state, rows)
+	if err != nil {
+		return VectorIndexStatus{}, err
+	}
+	typedSource := typedGraphFoldVectorSource{ctx: context.Background(), rows: rows, field: columnStoreTypedColumnPartFields(cfg)[0]}
+	prepareStarted := time.Now()
+	basePrepared, prepareErr := c.prepareTypedGraphCapturedAssetsFromSources(state, nil, rowSource, typedSource, nil)
+	prepareErr = errors.Join(prepareErr, rowSource.Close())
+	if prepareErr != nil {
+		if basePrepared.stableResources != nil {
+			basePrepared.stableResources.Release()
+		}
+		return VectorIndexStatus{}, prepareErr
+	}
+	defer func() {
+		if basePrepared.stableResources != nil {
+			basePrepared.stableResources.Release()
+		}
+	}()
+	baseManifest, err := encodeColumnManifestAtGeneration(ColumnPublishManifestEncodeInput{
+		Collection: baseMeta.Name, ColumnStore: cfg, Operation: ColumnPublishOperationInsert,
+		AppliedCommandLSN: manifest.AppliedCommandLSN, Prepared: basePrepared,
+	}, manifest.Generation)
+	if err != nil {
+		return VectorIndexStatus{}, err
+	}
+	baseHeader, err := decodeColumnManifestSnapshotForScan(baseManifest.Records)
+	if err != nil {
+		return VectorIndexStatus{}, err
+	}
+	rowPart := uint64(0)
+	for _, asset := range basePrepared.Assets {
+		if asset.Ref.Kind == ColumnAssetKindTCS1PartImage {
+			if rowPart != 0 {
+				return VectorIndexStatus{}, errors.New("collections: canonical normalized rebuild prepared multiple physical row parts")
+			}
+			rowPart = asset.Ref.PartID
+		}
+	}
+	if rowPart == 0 {
+		return VectorIndexStatus{}, errors.New("collections: canonical normalized rebuild prepared no physical row part")
+	}
+	locators := make([]systemTargetEntry, len(rows))
+	for ordinal := range rows {
+		ref := DocumentRowRef{DocumentID: rows[ordinal].ID, Generation: manifest.Generation, PartID: rowPart, RowIndex: ordinal, AppliedCommandLSN: manifest.AppliedCommandLSN}
+		rows[ordinal].BaseRowRef = ref
+		locators[ordinal] = systemTargetEntry{key: bytes.Clone(rows[ordinal].ID), value: encodeColumnPrimaryRowLocator(ref)}
+	}
+	sort.Slice(locators, func(i, j int) bool { return bytes.Compare(locators[i].key, locators[j].key) < 0 })
+	intent, err := c.newCollectionRebuildVectorIndexCommandWALIntent(name, replay)
+	if err != nil {
+		return VectorIndexStatus{}, err
+	}
+	if intent == nil {
+		return VectorIndexStatus{}, fmt.Errorf("%w: canonical normalized column_graph rebuild requires command WAL", backenddb.ErrCommandWALRejected)
+	}
+	locatorName := collectionColumnRowLocatorRootName(baseMeta.Name)
+	rootNames := []string{rootName, locatorName}
+	baseRootIDs := map[string]uint64{rootName: baseManifestRootID, locatorName: catalog.rootID(locatorName)}
+	locatorPolicy, err := collectionRootStoragePolicyForDB(c.db, baseMeta, locatorName)
+	if err != nil {
+		return VectorIndexStatus{}, err
+	}
+	var graphPrepared columnVectorGraphPreparedPhysicalAsset
+	defer func() { graphPrepared.releaseStableResources() }()
+	var updatedMeta CollectionMeta
+	var captured *typedGraphBaseAlias
+	buildContextDeltas := func(ctx backenddb.CommandWALPublishContext) ([]backenddb.OrderedRootDeltaPublishInput, error) {
+		graph, finalRecords, finalIdentity, err := prepareColumnVectorGraphRebuildManifestForPublicationTimed(baseMeta.Name, cfg, baseMeta.VectorIndexes, def, baseHeader, baseManifest.Records, ctx.AppliedCommandLSN, rows, c.db.ColumnAssetRootDir(), c.db.StableResourceIdentityPinRegistry(), timing, nil, true)
+		if err != nil {
+			return nil, err
+		}
+		replaceColumnVectorGraphPreparedPhysicalAsset(&graphPrepared, graph)
+		if err := constructionMatrix.CloseRows(rows); err != nil {
+			return nil, err
+		}
+		if err := runColumnVectorGraphConstructionMatrixLastUseTestHook(rows, constructionMatrix); err != nil {
+			return nil, err
+		}
+		updatedMeta, err = columnGraphRebuildUpdatedMeta(baseMeta, finalIdentity, ctx.AppliedCommandLSN)
+		if err != nil {
+			return nil, err
+		}
+		mutations, err := buildColumnManifestMutationDelta(records, finalRecords)
+		if err != nil {
+			return nil, err
+		}
+		manifestDelta := ColumnManifestRootDelta{
+			RootName: rootName, BaseRootID: baseManifestRootID, StoragePolicy: cfg.ManifestRoot.StoragePolicy,
+			Identity: finalIdentity, IdentityRecord: encodeColumnManifestIdentityRecordArray(finalIdentity), Records: finalRecords,
+			Mutations: mutations, MutationDelta: true,
+		}
+		manifestInput, err := manifestDelta.OrderedRootDeltaPublishInput()
+		if err != nil {
+			return nil, err
+		}
+		if err := c.registerCosineNormalizedF32V1RebuildDurability(ctx, &basePrepared, &graphPrepared, finalRecords, finalIdentity.Generation, cfg.AssetManager.Namespace); err != nil {
+			return nil, errors.Join(err, manifestInput.Iter.Close())
+		}
+		inputs := []backenddb.OrderedRootDeltaPublishInput{
+			manifestInput,
+			{BaseRoot: catalog.rootID(locatorName), Iter: &systemTargetIterator{entries: cloneSystemTargetEntries(locators)}, StoragePolicy: locatorPolicy},
+		}
+		copies, err := baseCopy.inputsWithLocator(manifestDelta.IdentityRecord, finalRecords, &systemTargetIterator{entries: cloneSystemTargetEntries(locators)})
+		if err != nil {
+			for _, input := range inputs {
+				_ = input.Iter.Close()
+			}
+			return nil, err
+		}
+		return append(inputs, copies...), nil
+	}
+	buildSystemDelta := func(_ backenddb.CommandWALPublishContext, rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		expected := len(rootNames) + len(baseCopy.names)
+		if len(rootIDs) != expected || rootIDs[0] == 0 || rootIDs[1] == 0 {
+			return nil, unexpectedOrderedRootCountError(baseMeta.Name, expected, len(rootIDs))
+		}
+		var err error
+		captured, err = baseCopy.captured(updatedMeta, rootIDs[len(rootNames):])
+		if err != nil {
+			return nil, err
+		}
+		return c.buildColumnGraphRebuildSystemDeltaIterator(baseMeta, updatedMeta, baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, rootIDs[:len(rootNames)], captured)
+	}
+	publicationStarted := time.Now()
+	preflight := func() error { return c.validateColumnGraphRebuildSource(catalog, baseCommitSeq, baseSystemRoot) }
+	newSystemRoot, rootIDs, err := c.db.PublishOrderedRootDeltaGroupWithPreflightCommandWALContextRootBuilderAndSystemDeltaBuilder(nil, preflight, intent, buildContextDeltas, buildSystemDelta)
+	if timing != nil {
+		timing.AssetPreparation = max(timing.AssetPreparation, collectionObservedElapsedSince(prepareStarted))
+		timing.Publication = collectionObservedElapsedSince(publicationStarted)
+	}
+	if err != nil {
+		return VectorIndexStatus{}, err
+	}
+	if len(rootIDs) != len(rootNames)+len(baseCopy.names) {
+		return VectorIndexStatus{}, unexpectedOrderedRootCountError(baseMeta.Name, len(rootNames)+len(baseCopy.names), len(rootIDs))
+	}
+	c.meta = updatedMeta
+	nextCatalog := cloneCatalogWithRootUpdates(catalog, updatedMeta, rootNames, rootIDs[:len(rootNames)])
+	nextCatalog.typedGraphBase = captured
+	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
+	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
+	status, err := c.columnGraphVectorIndexStatus(def.Name)
+	if err != nil {
+		return VectorIndexStatus{}, err
+	}
+	if timing != nil {
+		timing.Total = collectionObservedElapsedSince(started)
+		reconcileColumnGraphBuildTiming(timing)
+		status.Duration = timing.Total
+		status.ColumnGraphBuild = *timing
+	}
+	return status, nil
+}
+
+func cloneSystemTargetEntries(entries []systemTargetEntry) []systemTargetEntry {
+	cloned := make([]systemTargetEntry, len(entries))
+	for i := range entries {
+		cloned[i] = systemTargetEntry{key: bytes.Clone(entries[i].key), value: bytes.Clone(entries[i].value), flags: entries[i].flags}
+	}
+	return cloned
+}
+
+func (c *Collection) registerCosineNormalizedF32V1RebuildDurability(ctx backenddb.CommandWALPublishContext, base *ColumnPublishPreparedAssets, graph *columnVectorGraphPreparedPhysicalAsset, records []columnManifestRecord, generation uint64, namespace string) error {
+	if base == nil || base.stableResources == nil {
+		return fmt.Errorf("%w: canonical normalized rebuild produced no typed-base durable resources", rootpublication.ErrUnresolvedResource)
+	}
+	if err := validateStableColumnResourcesMatchPrepared(base.Assets, base.stableResources); err != nil {
+		return err
+	}
+	resources := base.stableResources
+	base.stableResources = nil
+	if err := ctx.RegisterDurableResources(resources); err != nil {
+		return err
+	}
+	return c.registerColumnVectorGraphDurablePublication(ctx, graph, records, generation, namespace, nil)
 }
 
 func validateColumnVectorGraphEmptyTypedSource(snap *backenddb.Snapshot, catalog *collectionCatalog) error {
@@ -720,9 +929,17 @@ func (c *Collection) columnVectorGraphRowsFromTypedColumnCatalogSnapshot(snap *b
 			return nil, nil, false, fmt.Errorf("collections: column_graph rebuild typed row document id %q vector bounds", string(id))
 		}
 		vector := part.values[start:end]
-		invNorm, normErr := columnVectorGraphInvNorm(vector)
-		if normErr != nil {
-			return nil, nil, false, fmt.Errorf("collections: column_graph rebuild document id %q: %w", string(id), normErr)
+		invNorm := float32(1)
+		if vectorIndexUsesCosineNormalizedF32V1(def) {
+			if normErr := validateCosineNormalizedF32V1Canonical(vector, def.Dimensions); normErr != nil {
+				return nil, nil, false, fmt.Errorf("collections: column_graph rebuild document id %q: %w", string(id), normErr)
+			}
+		} else {
+			var normErr error
+			invNorm, normErr = columnVectorGraphInvNorm(vector)
+			if normErr != nil {
+				return nil, nil, false, fmt.Errorf("collections: column_graph rebuild document id %q: %w", string(id), normErr)
+			}
 		}
 		baseRowRef := DocumentRowRef{
 			Generation:        location.generation,
@@ -961,9 +1178,17 @@ func (c *Collection) columnVectorGraphRowsFromCatalogSnapshot(snap *backenddb.Sn
 			return false, fmt.Errorf("collections: column_graph rebuild missing vector for document id %q", string(record.ID))
 		}
 		vector := append([]float32(nil), value.Float32Vector...)
-		invNorm, err := columnVectorGraphInvNorm(vector)
-		if err != nil {
-			return false, fmt.Errorf("collections: column_graph rebuild document id %q: %w", string(record.ID), err)
+		invNorm := float32(1)
+		if vectorIndexUsesCosineNormalizedF32V1(def) {
+			if err := validateCosineNormalizedF32V1Canonical(vector, def.Dimensions); err != nil {
+				return false, fmt.Errorf("collections: column_graph rebuild document id %q: %w", string(record.ID), err)
+			}
+		} else {
+			var err error
+			invNorm, err = columnVectorGraphInvNorm(vector)
+			if err != nil {
+				return false, fmt.Errorf("collections: column_graph rebuild document id %q: %w", string(record.ID), err)
+			}
 		}
 		// The scan producers clone iterator keys before calling visit; do
 		// not add another per-row ID copy on the rebuild hot path.
@@ -1752,6 +1977,10 @@ func prepareColumnVectorGraphRebuildManifestWithAuthorityTimed(collection string
 			return columnVectorGraphPreparedPhysicalAsset{}, nil, ColumnManifestIdentity{}, fmt.Errorf("collections: column_graph rebuild for %q requires base float32_vector typed-column owner for field %q; rebuild collection metadata before rebuilding the vector index", def.Name, def.Field)
 		}
 	}
+	canonicalVectorAsset, err := columnVectorGraphCanonicalNormalizedVectorStateAsset(def, cfg, manifest, recordsForLSN, rows)
+	if err != nil {
+		return columnVectorGraphPreparedPhysicalAsset{}, nil, ColumnManifestIdentity{}, err
+	}
 	partID := nextColumnVectorGraphPartID(recordsForLSN, graphCfg.AssetManager.Namespace)
 	prepared := columnVectorGraphPreparedPhysicalAsset{
 		AssetRootDir: assetRootDir,
@@ -1760,7 +1989,10 @@ func prepareColumnVectorGraphRebuildManifestWithAuthorityTimed(collection string
 	}
 	invNormPartID := partID
 	stageStarted := time.Now()
-	preparedInvNorm, err := prepareColumnVectorGraphInvNormStateAssetWithStableAuthority(assetRootDir, collection, cfg, def, manifest.Generation, invNormPartID, rows, authority)
+	preparedInvNorm := columnVectorGraphPreparedInvNormStateAsset{}
+	if !vectorIndexUsesCosineNormalizedF32V1(def) {
+		preparedInvNorm, err = prepareColumnVectorGraphInvNormStateAssetWithStableAuthority(assetRootDir, collection, cfg, def, manifest.Generation, invNormPartID, rows, authority)
+	}
 	if timing != nil {
 		timing.InvNormPreparation = collectionObservedElapsedSince(stageStarted)
 	}
@@ -1850,7 +2082,11 @@ func prepareColumnVectorGraphRebuildManifestWithAuthorityTimed(collection string
 		searchPackPartID = nextColumnVectorGraphPartIDAfter(searchPackPartID, preparedQuantizedAssets[len(preparedQuantizedAssets)-1].Ref.PartID)
 	}
 	stageStarted = time.Now()
-	preparedSearchPack, err := writeColumnHNSWSearchPackAssetWithStableAuthority(assetRootDir, cfg, def, graph, manifest.Generation, searchPackPartID, rows, authority)
+	var canonicalVectorRef *ColumnAssetRef
+	if canonicalVectorAsset != nil {
+		canonicalVectorRef = &canonicalVectorAsset.Ref
+	}
+	preparedSearchPack, err := writeColumnHNSWSearchPackAssetWithStableAuthorityAndCanonicalVectors(assetRootDir, cfg, def, graph, manifest.Generation, searchPackPartID, rows, authority, canonicalVectorRef)
 	if err != nil {
 		return columnVectorGraphPreparedPhysicalAsset{}, nil, ColumnManifestIdentity{}, err
 	}
@@ -1881,6 +2117,9 @@ func prepareColumnVectorGraphRebuildManifestWithAuthorityTimed(collection string
 		state.AdjacencyLayerCount = preparedSearchPack.AdjacencyLayerCount
 	}
 	state.Assets = columnVectorIndexStateAdjacencyAssetsFromPrepared(stateAdjacencyAssets)
+	if canonicalVectorAsset != nil {
+		state.Assets = append(state.Assets, *canonicalVectorAsset)
+	}
 	if invNormAsset, ok := columnVectorGraphInvNormStateAssetSnapshot(preparedInvNorm); ok {
 		state.Assets = append(state.Assets, invNormAsset)
 	}
@@ -1919,7 +2158,16 @@ func prepareColumnVectorGraphRebuildManifestWithAuthorityTimed(collection string
 	}
 	normalizeColumnManifestIdentityDefaults(&identity)
 	if authority != nil {
-		resources, err := authority.freeze(state.Assets)
+		producerAssets := state.Assets
+		if canonicalVectorAsset != nil {
+			producerAssets = make([]columnVectorIndexStateAssetSnapshot, 0, len(state.Assets)-1)
+			for _, asset := range state.Assets {
+				if asset.Role != columnVectorIndexStateAssetRoleNormalizedVectors {
+					producerAssets = append(producerAssets, asset)
+				}
+			}
+		}
+		resources, err := authority.freeze(producerAssets)
 		if err != nil {
 			return columnVectorGraphPreparedPhysicalAsset{}, nil, ColumnManifestIdentity{}, err
 		}
@@ -1929,7 +2177,7 @@ func prepareColumnVectorGraphRebuildManifestWithAuthorityTimed(collection string
 		prepared.stableNamespaceSyncs = authority.namespaceSyncs
 		prepared.stableFileSync = authority.fileSync
 		prepared.stableNamespaceSync = authority.namespaceSync
-		if err := runColumnVectorGraphStableAuthorityTestHook(resources, state.Assets); err != nil {
+		if err := runColumnVectorGraphStableAuthorityTestHook(resources, producerAssets); err != nil {
 			prepared.releaseStableResources()
 			return columnVectorGraphPreparedPhysicalAsset{}, nil, ColumnManifestIdentity{}, err
 		}
@@ -1938,6 +2186,57 @@ func prepareColumnVectorGraphRebuildManifestWithAuthorityTimed(collection string
 		timing.ManifestFinalization = collectionObservedElapsedSince(stageStarted)
 	}
 	return prepared, nextRecords, identity, nil
+}
+
+func columnVectorGraphCanonicalNormalizedVectorStateAsset(def VectorIndexDefinition, cfg ColumnStoreConfig, manifest columnManifestSnapshot, records []columnManifestRecord, rows []columnVectorGraphAssetRow) (*columnVectorIndexStateAssetSnapshot, error) {
+	if !vectorIndexUsesCosineNormalizedF32V1(def) {
+		return nil, nil
+	}
+	if len(rows) == 0 {
+		return nil, nil
+	}
+	if cfg.AssetManager == nil || manifest.Generation == 0 {
+		return nil, errors.New("collections: canonical normalized vector asset requires physical base identity")
+	}
+	typedRefs, err := typedColumnPartRefsByGenerationFromManifestRecords(records, cfg.AssetManager.Namespace)
+	if err != nil {
+		return nil, err
+	}
+	typed, ok := typedRefs[manifest.Generation]
+	if !ok || typed.Rows != len(rows) {
+		return nil, fmt.Errorf("collections: canonical normalized vector asset rows=%d unavailable at generation=%d", len(rows), manifest.Generation)
+	}
+	physicalRefs, _, err := columnManifestAssetRefsFromRecordsForScan(records, manifest.Generation, cfg.AssetManager.Namespace)
+	if err != nil {
+		return nil, err
+	}
+	physicalRows, physicalParts, err := columnVectorGraphTypedColumnPhysicalRowsByGenerationFromRefs(physicalRefs)
+	if err != nil {
+		return nil, err
+	}
+	rowPart, ok := physicalParts[manifest.Generation]
+	if !ok || physicalRows[manifest.Generation] != len(rows) {
+		return nil, errors.New("collections: canonical normalized vector asset requires one graph-order physical row part")
+	}
+	for ordinal := range rows {
+		ref := rows[ordinal].BaseRowRef
+		if ref.Generation != manifest.Generation || ref.PartID != rowPart || ref.RowIndex != ordinal || ref.AppliedCommandLSN != manifest.AppliedCommandLSN {
+			return nil, fmt.Errorf("collections: canonical normalized vector asset row[%d] ref=(generation=%d part=%d row=%d lsn=%d) want=(generation=%d part=%d row=%d lsn=%d)", ordinal, ref.Generation, ref.PartID, ref.RowIndex, ref.AppliedCommandLSN, manifest.Generation, rowPart, ordinal, manifest.AppliedCommandLSN)
+		}
+		if err := validateCosineNormalizedF32V1Canonical(rows[ordinal].Vector, def.Dimensions); err != nil {
+			return nil, fmt.Errorf("collections: canonical normalized vector asset row[%d]: %w", ordinal, err)
+		}
+	}
+	return &columnVectorIndexStateAssetSnapshot{
+		Role:             columnVectorIndexStateAssetRoleNormalizedVectors,
+		AssetID:          columnVectorIndexStateNormalizedVectorsAssetID,
+		LogicalType:      columnVectorIndexStateLogicalTypeFloat32Vector,
+		PhysicalEncoding: columnVectorIndexStateEncodingRawFloat32Vector,
+		RowCount:         len(rows),
+		SourceSchemaHash: cfg.SchemaHash,
+		Ref:              typed.Ref,
+		AssetBytes:       typed.Ref.Length,
+	}, nil
 }
 
 func columnVectorGraphManifestRecordsWithAppliedCommandLSN(manifest columnManifestSnapshot, records []columnManifestRecord, cfg ColumnStoreConfig, activeVectorIndexes []VectorIndexDefinition, appliedCommandLSN uint64) ([]columnManifestRecord, error) {

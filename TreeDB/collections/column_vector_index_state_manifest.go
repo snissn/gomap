@@ -32,6 +32,8 @@ const (
 	columnVectorIndexStateAssetRoleQuantizedAlpha    = "quantized_alpha"
 	columnVectorIndexStateAssetRoleHNSWSearchPack    = "hnsw_search_pack"
 	columnVectorIndexStateHNSWSearchPackAssetID      = "hnsw_search_pack_v1"
+	columnVectorIndexStateHNSWTopologyPackAssetID    = "hnsw_topology_pack_v2"
+	columnVectorIndexStateNormalizedVectorsAssetID   = "cosine_normalized_f32_v1"
 
 	columnVectorIndexStateLogicalTypeUint32List      = "uint32_list"
 	columnVectorIndexStateLogicalTypeInt64           = "int64"
@@ -51,6 +53,7 @@ const (
 	columnVectorIndexStateEncodingRawPackedBitVector = "raw_packed_bit_vector"
 	columnVectorIndexStateEncodingRawFloat32Uint32   = "raw_float32_uint32"
 	columnVectorIndexStateEncodingHNSWSearchPackV1   = "hnsw_search_pack_v1"
+	columnVectorIndexStateEncodingHNSWSearchPackV2   = "hnsw_topology_pack_v2"
 )
 
 var columnVectorIndexStateRecordPrefixBytes = []byte(columnVectorIndexStateRecordPrefix)
@@ -433,6 +436,10 @@ func validateColumnVectorIndexStateAssetSnapshot(snapshot columnVectorIndexState
 		if !columnVectorIndexStateQuantizedAssetTypeEncodingKnown(asset.LogicalType, asset.PhysicalEncoding) {
 			return fmt.Errorf("role=%q type/encoding=(%q,%q) want one of (%q,%q), (%q,%q)", asset.Role, asset.LogicalType, asset.PhysicalEncoding, columnVectorIndexStateLogicalTypeByteVector, columnVectorIndexStateEncodingRawFixedBytes, columnVectorIndexStateLogicalTypePackedBitVector, columnVectorIndexStateEncodingRawPackedBitVector)
 		}
+	} else if asset.Role == columnVectorIndexStateAssetRoleHNSWSearchPack {
+		if asset.LogicalType != columnVectorIndexStateLogicalTypeSearchPack || (asset.PhysicalEncoding != columnVectorIndexStateEncodingHNSWSearchPackV1 && asset.PhysicalEncoding != columnVectorIndexStateEncodingHNSWSearchPackV2) {
+			return fmt.Errorf("role=%q type/encoding=(%q,%q) is not a supported search pack", asset.Role, asset.LogicalType, asset.PhysicalEncoding)
+		}
 	} else if logical, encoding, strict := columnVectorIndexStateAssetTypeContract(asset.Role); strict {
 		if asset.LogicalType != logical || asset.PhysicalEncoding != encoding {
 			return fmt.Errorf("role=%q type/encoding=(%q,%q) want (%q,%q)", asset.Role, asset.LogicalType, asset.PhysicalEncoding, logical, encoding)
@@ -440,8 +447,8 @@ func validateColumnVectorIndexStateAssetSnapshot(snapshot columnVectorIndexState
 	} else if !columnVectorIndexStateAssetRoleKnown(asset.Role) {
 		return fmt.Errorf("unknown role %q", asset.Role)
 	}
-	if asset.Role == columnVectorIndexStateAssetRoleHNSWSearchPack && asset.AssetID != columnVectorIndexStateHNSWSearchPackAssetID {
-		return fmt.Errorf("hnsw_search_pack asset id=%q want %q", asset.AssetID, columnVectorIndexStateHNSWSearchPackAssetID)
+	if asset.Role == columnVectorIndexStateAssetRoleHNSWSearchPack && !((asset.AssetID == columnVectorIndexStateHNSWSearchPackAssetID && asset.PhysicalEncoding == columnVectorIndexStateEncodingHNSWSearchPackV1) || (asset.AssetID == columnVectorIndexStateHNSWTopologyPackAssetID && asset.PhysicalEncoding == columnVectorIndexStateEncodingHNSWSearchPackV2)) {
+		return fmt.Errorf("hnsw_search_pack asset id/encoding=(%q,%q) mismatch", asset.AssetID, asset.PhysicalEncoding)
 	}
 	if asset.Role == columnVectorIndexStateAssetRoleQuantizedAlpha {
 		if asset.RowCount < 0 || (snapshot.RowCount > 0 && asset.RowCount == 0) || asset.RowCount > snapshot.RowCount {
@@ -494,7 +501,7 @@ func columnVectorIndexStateAssetTypeContract(role string) (logicalType, physical
 	case columnVectorIndexStateAssetRoleQuantizedAlpha:
 		return columnVectorIndexStateLogicalTypeScalarU8Alpha, columnVectorIndexStateEncodingRawFloat32Uint32, true
 	case columnVectorIndexStateAssetRoleHNSWSearchPack:
-		return columnVectorIndexStateLogicalTypeSearchPack, columnVectorIndexStateEncodingHNSWSearchPackV1, true
+		return "", "", false
 	default:
 		return "", "", false
 	}
@@ -563,6 +570,9 @@ func columnVectorIndexStateMatchStatusWithBaseChecksum(state columnVectorIndexSt
 }
 
 func columnVectorIndexStateDefinitionParametersMatch(state *columnVectorIndexStateSnapshot, def *VectorIndexDefinition) bool {
+	if state == nil || def == nil {
+		return false
+	}
 	return state.IndexName == def.Name &&
 		state.Field == def.Field &&
 		state.Metric == def.Metric &&
@@ -571,7 +581,56 @@ func columnVectorIndexStateDefinitionParametersMatch(state *columnVectorIndexSta
 		state.M == def.M &&
 		state.EfConstruction == def.EfConstruction &&
 		state.EfSearch == def.EfSearch &&
-		columnVectorGraphQuantizedStateAssetIDSetMatches(*def, *state)
+		columnVectorGraphQuantizedStateAssetIDSetMatches(*def, *state) &&
+		validateColumnVectorIndexStateRepresentationAssets(*state, *def) == nil
+}
+
+// validateColumnVectorIndexStateRepresentationAssets binds a definition's
+// representation to one unambiguous state-asset shape. The representation is
+// durable collection metadata; accepting a legacy pack under normalized
+// metadata (or the reverse) would otherwise reinterpret the same state record.
+func validateColumnVectorIndexStateRepresentationAssets(state columnVectorIndexStateSnapshot, def VectorIndexDefinition) error {
+	pack, hasPack, err := findColumnHNSWSearchPackStateAsset(state)
+	if err != nil {
+		return err
+	}
+	normalizedCount := 0
+	inverseNormCount := 0
+	var normalized columnVectorIndexStateAssetSnapshot
+	for _, asset := range state.Assets {
+		switch asset.Role {
+		case columnVectorIndexStateAssetRoleNormalizedVectors:
+			normalizedCount++
+			normalized = asset
+		case columnVectorIndexStateAssetRoleInverseNorm:
+			inverseNormCount++
+		}
+	}
+	if vectorIndexUsesCosineNormalizedF32V1(def) {
+		if !hasPack || pack.AssetID != columnVectorIndexStateHNSWTopologyPackAssetID || pack.PhysicalEncoding != columnVectorIndexStateEncodingHNSWSearchPackV2 {
+			return errors.New("collections: normalized cosine representation requires exactly one topology-only hnsw pack")
+		}
+		if inverseNormCount != 0 {
+			return errors.New("collections: normalized cosine representation forbids inverse-norm assets")
+		}
+		if state.RowCount == 0 {
+			if normalizedCount != 0 {
+				return errors.New("collections: empty normalized cosine representation forbids canonical vector row assets")
+			}
+			return nil
+		}
+		if normalizedCount != 1 || normalized.AssetID != columnVectorIndexStateNormalizedVectorsAssetID || normalized.LogicalType != columnVectorIndexStateLogicalTypeFloat32Vector || normalized.PhysicalEncoding != columnVectorIndexStateEncodingRawFloat32Vector {
+			return errors.New("collections: normalized cosine representation requires exactly one canonical vector asset")
+		}
+		return nil
+	}
+	if normalizedCount != 0 {
+		return errors.New("collections: legacy vector representation forbids canonical normalized vector assets")
+	}
+	if hasPack && (pack.AssetID == columnVectorIndexStateHNSWTopologyPackAssetID || pack.PhysicalEncoding == columnVectorIndexStateEncodingHNSWSearchPackV2) {
+		return errors.New("collections: legacy vector representation forbids topology-only hnsw packs")
+	}
+	return nil
 }
 
 func columnVectorIndexStateMatchesGraph(state columnVectorIndexStateSnapshot, graph columnVectorGraphManifestSnapshot) bool {

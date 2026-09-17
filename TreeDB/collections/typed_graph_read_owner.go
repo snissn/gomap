@@ -178,7 +178,7 @@ func (c *Collection) finishTypedGraphReadOwnerOpen(open *typedGraphReadOwnerServ
 			break
 		}
 	}
-	if view.vectorColumn < 0 || len(state.rows) != len(state.invNorms) {
+	if view.vectorColumn < 0 || (!vectorIndexUsesCosineNormalizedF32V1(open.def) && len(state.rows) != len(state.invNorms)) || (vectorIndexUsesCosineNormalizedF32V1(open.def) && len(state.invNorms) != 0) {
 		return ErrVectorIndexSnapshotMismatch
 	}
 	view.rows, view.invNorms = state.rows, state.invNorms

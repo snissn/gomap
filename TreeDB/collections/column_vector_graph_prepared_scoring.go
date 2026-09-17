@@ -29,9 +29,10 @@ type columnVectorGraphPreparedVectorView struct {
 }
 
 type columnVectorGraphPreparedNormView struct {
-	rows   int
-	values []float32
-	source *columnVectorGraphInvNormStateSource
+	rows         int
+	values       []float32
+	source       *columnVectorGraphInvNormStateSource
+	implicitUnit bool
 }
 
 func prepareColumnVectorGraphPreparedVectorView(source *columnVectorGraphTypedColumnVectorSource, rowCount, dims int) (columnVectorGraphPreparedVectorView, typeddecode.Reason, string, bool) {
@@ -210,12 +211,15 @@ func (v columnVectorGraphPreparedVectorView) outcomeForOrdinal(ordinal int) (col
 }
 
 func (v columnVectorGraphPreparedNormView) ready() bool {
-	return v.rows >= 0 && v.source != nil && len(v.values) == v.rows
+	return v.rows >= 0 && (v.implicitUnit || (v.source != nil && len(v.values) == v.rows))
 }
 
 func (v columnVectorGraphPreparedNormView) valueForOrdinal(ordinal int) (float32, typeddecode.Reason, bool) {
 	if !v.ready() || ordinal < 0 || ordinal >= v.rows {
 		return 0, typeddecode.ReasonRowCountMismatch, false
+	}
+	if v.implicitUnit {
+		return 1, "", true
 	}
 	if v.source.closed || (v.source.handle != nil && v.source.handle.Released()) {
 		return 0, typeddecode.ReasonStaleHandle, false
@@ -238,7 +242,7 @@ func (s *columnVectorGraphSearchSource) scorePreparedOrdinal(plan *columnVectorG
 	if ordinal < 0 || ordinal >= vectorView.rows || ordinal >= normView.rows {
 		return 0, false, nil
 	}
-	if (s.typedVectorSource != nil && s.typedVectorSource.closed) || normView.source == nil || normView.source.closed || (normView.source.handle != nil && normView.source.handle.Released()) {
+	if (s.typedVectorSource != nil && s.typedVectorSource.closed) || (!normView.implicitUnit && (normView.source == nil || normView.source.closed || (normView.source.handle != nil && normView.source.handle.Released()))) {
 		return 0, false, nil
 	}
 
@@ -268,7 +272,10 @@ func (s *columnVectorGraphSearchSource) scorePreparedOrdinal(plan *columnVectorG
 		vector = part.values[start : start+vectorView.dims]
 		vectorOutcome = part.outcome
 	}
-	invNorm := normView.values[ordinal]
+	invNorm := float32(1)
+	if !normView.implicitUnit {
+		invNorm = normView.values[ordinal]
+	}
 
 	if stats != nil {
 		recordColumnVectorGraphScoreBatchStats(stats, 1, false, true)
@@ -277,7 +284,9 @@ func (s *columnVectorGraphSearchSource) scorePreparedOrdinal(plan *columnVectorG
 		stats.VisitedNodes++
 		stats.CandidateFetches++
 		stats.VectorBytesRead += uint64(vectorView.dims) * 4
-		stats.NormBytesRead += 4
+		if !normView.implicitUnit {
+			stats.NormBytesRead += 4
+		}
 		recordColumnVectorGraphPreparedVectorOutcomeStats(stats, vectorOutcome, 1)
 		stats.VectorPreparedDirectViews++
 		if identityMapping {
@@ -285,8 +294,10 @@ func (s *columnVectorGraphSearchSource) scorePreparedOrdinal(plan *columnVectorG
 		} else {
 			stats.VectorPreparedRowRefMappings++
 		}
-		recordColumnVectorGraphPreparedNormOutcomeStats(stats, normView.source.outcome, 1)
-		stats.NormPreparedDirectViews++
+		if !normView.implicitUnit {
+			recordColumnVectorGraphPreparedNormOutcomeStats(stats, normView.source.outcome, 1)
+			stats.NormPreparedDirectViews++
+		}
 		if plan != nil {
 			stats.BlockViewHits = plan.hits
 			stats.BlockViewMisses = plan.misses

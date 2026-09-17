@@ -158,6 +158,28 @@ const (
 	VectorIndexStrategyColumnGraph VectorIndexStrategy = "column_graph"
 )
 
+// VectorIndexRepresentation selects an opt-in persisted serving-value
+// contract. The empty value preserves the legacy representation and score
+// semantics.
+type VectorIndexRepresentation string
+
+const (
+	VectorIndexRepresentationCosineNormalizedF32V1 VectorIndexRepresentation = "cosine_normalized_f32_v1"
+)
+
+func normalizeVectorIndexRepresentation(representation VectorIndexRepresentation) (VectorIndexRepresentation, error) {
+	switch representation {
+	case "", VectorIndexRepresentationCosineNormalizedF32V1:
+		return representation, nil
+	default:
+		return "", fmt.Errorf("collections: unsupported vector index representation %q", representation)
+	}
+}
+
+func vectorIndexUsesCosineNormalizedF32V1(def VectorIndexDefinition) bool {
+	return def.Representation == VectorIndexRepresentationCosineNormalizedF32V1
+}
+
 type VectorIndexState string
 
 const (

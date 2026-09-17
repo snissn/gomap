@@ -365,7 +365,6 @@ func (c *Collection) prepareTypedGraphPublication(input columnWritePublishInput)
 		}
 	}
 	next.rows = make([]columnPhysicalVisibleRow, 0, len(before.rows)+len(unique))
-	next.invNorms = make([]float32, 0, cap(next.rows))
 	vectorColumn := -1
 	if len(input.meta.VectorIndexes) != 1 {
 		return nil, ErrVectorIndexSnapshotMismatch
@@ -379,11 +378,20 @@ func (c *Collection) prepareTypedGraphPublication(input columnWritePublishInput)
 	if vectorColumn < 0 {
 		return nil, ErrVectorIndexSnapshotMismatch
 	}
+	def := input.meta.VectorIndexes[0]
+	canonicalRepresentation := vectorIndexUsesCosineNormalizedF32V1(def)
+	if !canonicalRepresentation {
+		next.invNorms = make([]float32, 0, cap(next.rows))
+	} else {
+		next.invNorms = nil
+	}
 	old := 0
 	for _, row := range unique {
 		for old < len(before.rows) && bytes.Compare(before.rows[old].ID, row.ID) < 0 {
 			next.rows = append(next.rows, before.rows[old])
-			next.invNorms = append(next.invNorms, before.invNorms[old])
+			if !canonicalRepresentation {
+				next.invNorms = append(next.invNorms, before.invNorms[old])
+			}
 			old++
 		}
 		if old < len(before.rows) && bytes.Equal(before.rows[old].ID, row.ID) {
@@ -394,17 +402,28 @@ func (c *Collection) prepareTypedGraphPublication(input columnWritePublishInput)
 			if vectorColumn >= len(row.Values) {
 				return nil, ErrVectorIndexSnapshotMismatch
 			}
-			var err error
-			norm, err = columnVectorGraphInvNorm(row.Values[vectorColumn].Float32Vector)
-			if err != nil {
-				return nil, err
+			if canonicalRepresentation {
+				if err := validateCosineNormalizedF32V1Canonical(row.Values[vectorColumn].Float32Vector, def.Dimensions); err != nil {
+					return nil, err
+				}
+				norm = 1
+			} else {
+				var err error
+				norm, err = columnVectorGraphInvNorm(row.Values[vectorColumn].Float32Vector)
+				if err != nil {
+					return nil, err
+				}
 			}
 		}
 		next.rows = append(next.rows, row)
-		next.invNorms = append(next.invNorms, norm)
+		if !canonicalRepresentation {
+			next.invNorms = append(next.invNorms, norm)
+		}
 	}
 	next.rows = append(next.rows, before.rows[old:]...)
-	next.invNorms = append(next.invNorms, before.invNorms[old:]...)
+	if !canonicalRepresentation {
+		next.invNorms = append(next.invNorms, before.invNorms[old:]...)
+	}
 	receipts := input.typedReceipts
 	ownReceipt := len(receipts) == 0
 	if ownReceipt {

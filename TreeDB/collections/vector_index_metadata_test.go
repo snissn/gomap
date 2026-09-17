@@ -10,7 +10,7 @@ import (
 
 var vectorIndexStatusBenchSink VectorIndexStatus
 
-func TestColumnGraphVectorIndexMetadataUsesCollectionMetaVersionV2A(t *testing.T) {
+func TestColumnGraphVectorIndexMetadataUsesCurrentVersion(t *testing.T) {
 	raw, err := encodeCollectionMeta(CollectionMeta{
 		Name: "docs",
 		VectorIndexes: []VectorIndexDefinition{{
@@ -28,8 +28,8 @@ func TestColumnGraphVectorIndexMetadataUsesCollectionMetaVersionV2A(t *testing.T
 	if err := json.Unmarshal(raw, &disk); err != nil {
 		t.Fatalf("unmarshal collectionMetaDisk: %v", err)
 	}
-	if collectionMetaVersion != 6 {
-		t.Fatalf("collectionMetaVersion=%d want compound-index metadata version 6", collectionMetaVersion)
+	if collectionMetaVersion != 7 {
+		t.Fatalf("collectionMetaVersion=%d want vector-representation metadata version 7", collectionMetaVersion)
 	}
 	if disk.Version != collectionMetaVersion {
 		t.Fatalf("collection metadata version=%d want current compound-index metadata version %d", disk.Version, collectionMetaVersion)
@@ -39,7 +39,7 @@ func TestColumnGraphVectorIndexMetadataUsesCollectionMetaVersionV2A(t *testing.T
 	}
 }
 
-func TestDecodeCollectionMetaAcceptsLegacyV5VectorMetadata(t *testing.T) {
+func TestDecodeCollectionMetaAcceptsLegacyV5AndV6VectorMetadata(t *testing.T) {
 	want, err := normalizeCollectionMeta(CollectionMeta{
 		Name: "docs",
 		VectorIndexes: []VectorIndexDefinition{{
@@ -61,19 +61,22 @@ func TestDecodeCollectionMetaAcceptsLegacyV5VectorMetadata(t *testing.T) {
 	if err := json.Unmarshal(raw, &disk); err != nil {
 		t.Fatal(err)
 	}
-	disk.Version = collectionMetaVersionV5
-	raw, err = json.Marshal(disk)
-	if err != nil {
-		t.Fatal(err)
-	}
-	got, err := decodeCollectionMeta(raw)
-	if err != nil {
-		t.Fatalf("decode v5 vector metadata: %v", err)
-	}
-	if !collectionMetaValuesEqual(got, want) {
-		t.Fatalf("decoded v5 metadata=%+v want %+v", got, want)
+	for _, version := range []int{collectionMetaVersionV5, collectionMetaVersionV6} {
+		disk.Version = version
+		raw, err = json.Marshal(disk)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := decodeCollectionMeta(raw)
+		if err != nil {
+			t.Fatalf("decode v%d vector metadata: %v", version, err)
+		}
+		if !collectionMetaValuesEqual(got, want) {
+			t.Fatalf("decoded v%d metadata=%+v want %+v", version, got, want)
+		}
 	}
 
+	disk.Version = collectionMetaVersionV5
 	disk.Indexes = []IndexDefinition{{Name: "compound", Field: "a", Components: []IndexComponent{{Field: "a", Direction: IndexDirectionAscending}}}}
 	if raw, err = json.Marshal(disk); err != nil {
 		t.Fatal(err)

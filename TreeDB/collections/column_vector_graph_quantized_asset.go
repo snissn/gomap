@@ -1085,12 +1085,17 @@ func buildColumnVectorGraphScalarU8CodesWithAlpha(def VectorIndexDefinition, row
 		if len(row.Vector) != def.Dimensions {
 			return nil, fmt.Errorf("collections: column_graph quantized asset row %d vector dimensions=%d want %d", rowIdx, len(row.Vector), def.Dimensions)
 		}
-		if def.Metric == VectorMetricCosine && (row.InvNorm <= 0 || math.IsNaN(float64(row.InvNorm)) || math.IsInf(float64(row.InvNorm), 0)) {
+		canonicalCosine := vectorIndexUsesCosineNormalizedF32V1(def)
+		if canonicalCosine {
+			if err := validateCosineNormalizedF32V1Canonical(row.Vector, def.Dimensions); err != nil {
+				return nil, fmt.Errorf("collections: column_graph quantized asset row %d: %w", rowIdx, err)
+			}
+		} else if def.Metric == VectorMetricCosine && (row.InvNorm <= 0 || math.IsNaN(float64(row.InvNorm)) || math.IsInf(float64(row.InvNorm), 0)) {
 			return nil, fmt.Errorf("collections: column_graph quantized asset row %d inverse norm is invalid", rowIdx)
 		}
 		for _, value := range row.Vector {
 			codeValue := value
-			if def.Metric == VectorMetricCosine {
+			if def.Metric == VectorMetricCosine && !canonicalCosine {
 				codeValue *= row.InvNorm
 			}
 			if len(metadata.Alphas) != 0 {

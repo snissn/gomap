@@ -62,6 +62,38 @@ func (v *columnHNSWSearchPackPreparedView) searchCosine(query []float32, opts co
 	return v.searchCosineWithContext(context.Background(), query, opts, scratch)
 }
 
+func (v *columnHNSWSearchPackPreparedView) prepareNormalizedQuery(ctx context.Context, query []float32, canonical bool, dst []float32) error {
+	if v == nil || len(query) != v.Header.Dimensions || len(dst) < v.Header.VectorStride {
+		return errColumnVectorGraphNativeSearchQueryDimensionMismatch
+	}
+	if canonical {
+		if !v.Header.ExternalNormalizedVectors {
+			return errors.New("collections: canonical normalized query requires topology-only hnsw pack")
+		}
+		// canonical is a private trust assertion from the selected typed-owner
+		// boundary. Revalidating the same O(dimensions) slice in every score
+		// plane would defeat the representation's normalize-once contract.
+		copy(dst[:v.Header.Dimensions], query)
+	} else {
+		queryInvNorm, err := columnVectorGraphInvNorm(query)
+		if err != nil {
+			return fmt.Errorf("collections: hnsw_search_pack_v1 query norm: %w: %w", errColumnVectorGraphNativeSearchQueryNormInvalid, err)
+		}
+		for i := 0; i < v.Header.Dimensions; i++ {
+			if i&255 == 0 && ctx != nil {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+			}
+			dst[i] = query[i] * queryInvNorm
+		}
+	}
+	if v.Header.VectorStride > v.Header.Dimensions {
+		clear(dst[v.Header.Dimensions:v.Header.VectorStride])
+	}
+	return nil
+}
+
 // searchCosineWithContext keeps the existing searchCosine API available to
 // callers without a context while making every potentially long traversal
 // phase interruptible for deadline-bound router and partition searches.
@@ -202,21 +234,9 @@ func (v *columnHNSWSearchPackPreparedView) searchCosineWithContextFast(ctx conte
 	if err := ctx.Err(); err != nil {
 		return nil, stats, err
 	}
-	queryInvNorm, err := columnVectorGraphInvNorm(query)
-	if err != nil {
-		return nil, stats, fmt.Errorf("collections: hnsw_search_pack_v1 query norm: %w: %w", errColumnVectorGraphNativeSearchQueryNormInvalid, err)
-	}
 	normalizedQuery := scratch.scoreScratch.Float32Values[:v.Header.VectorStride]
-	for i := 0; i < v.Header.Dimensions; i++ {
-		if i&255 == 0 {
-			if err := ctx.Err(); err != nil {
-				return nil, stats, err
-			}
-		}
-		normalizedQuery[i] = query[i] * queryInvNorm
-	}
-	if v.Header.VectorStride > v.Header.Dimensions {
-		clear(normalizedQuery[v.Header.Dimensions:])
+	if err := v.prepareNormalizedQuery(ctx, query, opts.CanonicalNormalizedQuery, normalizedQuery); err != nil {
+		return nil, stats, err
 	}
 	countLoopEdges := !statsMode.minimal()
 	var loopEdgeVisits uint64
@@ -566,21 +586,9 @@ func (v *columnHNSWSearchPackPreparedView) searchCosineWithContextTrace(ctx cont
 	if err := ctx.Err(); err != nil {
 		return nil, stats, err
 	}
-	queryInvNorm, err := columnVectorGraphInvNorm(query)
-	if err != nil {
-		return nil, stats, fmt.Errorf("collections: hnsw_search_pack_v1 query norm: %w: %w", errColumnVectorGraphNativeSearchQueryNormInvalid, err)
-	}
 	normalizedQuery := scratch.scoreScratch.Float32Values[:v.Header.VectorStride]
-	for i := 0; i < v.Header.Dimensions; i++ {
-		if i&255 == 0 {
-			if err := ctx.Err(); err != nil {
-				return nil, stats, err
-			}
-		}
-		normalizedQuery[i] = query[i] * queryInvNorm
-	}
-	if v.Header.VectorStride > v.Header.Dimensions {
-		clear(normalizedQuery[v.Header.Dimensions:])
+	if err := v.prepareNormalizedQuery(ctx, query, opts.CanonicalNormalizedQuery, normalizedQuery); err != nil {
+		return nil, stats, err
 	}
 	countLoopEdges := !statsMode.minimal()
 	var loopEdgeVisits uint64
@@ -1174,6 +1182,9 @@ func (v *columnHNSWSearchPackPreparedView) scoreOrdinal(normalizedQuery []float3
 	vector := v.NormalizedVectors[start:end]
 	scoreStart := columnVectorGraphNativeSearchStartDistanceKernel(stats)
 	score := float64(vectorDotProductFloat32(normalizedQuery[:v.Header.Dimensions], vector))
+	if v.Header.ExternalNormalizedVectors {
+		score = clampCosineNormalizedF32V1Score(score)
+	}
 	columnVectorGraphNativeSearchFinishDistanceKernel(stats, scoreStart)
 	optimized := scoreBatchMode != columnVectorGraphScoreBatchModeScalar && vectorops.DotFloat32OptimizedEligible(v.Header.Dimensions)
 	recordColumnHNSWSearchPackScoreBatchStats(stats, 1, optimized, !optimized)
@@ -1191,6 +1202,36 @@ func (v *columnHNSWSearchPackPreparedView) scoreRowIDs(normalizedQuery []float32
 	if len(rowIDs) == 0 {
 		return dst, nil
 	}
+	// The external-vector format is Q2's canonical score plane. Its exact
+	// shortlist must always cross the indexed vectorops seam, including a
+	// singleton shortlist, and must never turn an invalid batch into a scalar
+	// rescore. The vectorops implementation itself may use its supported scalar
+	// fallback; that is still the same single batched score contract.
+	if v.Header.ExternalNormalizedVectors {
+		if v == nil || scratch == nil || v.Header.VectorStride <= 0 || len(normalizedQuery) < v.Header.VectorStride {
+			return dst[:0], errColumnHNSWPreparedTraversalScorePlaneUnavailable
+		}
+		scratch.scoreTileDots = ensureColumnVectorGraphNativeFloat32Scratch(scratch.scoreTileDots, len(rowIDs))
+		dots := scratch.scoreTileDots[:len(rowIDs)]
+		scoreStart := columnVectorGraphNativeSearchStartDistanceKernel(stats)
+		status := vectorops.DotFloat32IndexedPrevalidated(dots, v.NormalizedVectors, normalizedQuery[:v.Header.VectorStride], rowIDs, v.Header.VectorStride)
+		columnVectorGraphNativeSearchFinishDistanceKernel(stats, scoreStart)
+		if status.Invalid || status.Rows != len(rowIDs) {
+			return dst[:0], ErrVectorIndexSnapshotMismatch
+		}
+		for i := range rowIDs {
+			dst[i] = clampCosineNormalizedF32V1Score(float64(dots[i]))
+		}
+		recordColumnHNSWSearchPackScoreBatchStats(stats, len(rowIDs), status.Optimized, status.Fallback)
+		v.recordScoreStats(stats, len(rowIDs))
+		if stats != nil {
+			count := uint64(len(rowIDs))
+			stats.PackedExactScoreCalls++
+			stats.PackedExactScoreCandidates += count
+			stats.PackedExactVectorBytesRead += count * uint64(v.Header.Dimensions) * 4
+		}
+		return dst, nil
+	}
 	if scoreBatchMode != columnVectorGraphScoreBatchModeScalar && len(rowIDs) > 1 && scratch != nil && len(normalizedQuery) >= v.Header.VectorStride {
 		scratch.scoreTileDots = ensureColumnVectorGraphNativeFloat32Scratch(scratch.scoreTileDots, len(rowIDs))
 		dots := scratch.scoreTileDots[:len(rowIDs)]
@@ -1200,6 +1241,9 @@ func (v *columnHNSWSearchPackPreparedView) scoreRowIDs(normalizedQuery []float32
 		if !status.Invalid && status.Rows == len(rowIDs) {
 			for i := range rowIDs {
 				dst[i] = float64(dots[i])
+				if v.Header.ExternalNormalizedVectors {
+					dst[i] = clampCosineNormalizedF32V1Score(dst[i])
+				}
 			}
 			recordColumnHNSWSearchPackScoreBatchStats(stats, len(rowIDs), status.Optimized, status.Fallback)
 			v.recordScoreStats(stats, len(rowIDs))

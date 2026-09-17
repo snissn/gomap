@@ -70,7 +70,8 @@ func buildTypedGraphFilterNavigationFromAdmittedSource(ctx context.Context, sour
 	}
 	selection := plan.base
 	count := selection.Count()
-	if source.pack == nil || source.vectorSource == nil || source.normSource == nil {
+	canonicalRepresentation := vectorIndexUsesCosineNormalizedF32V1(source.def)
+	if source.pack == nil || source.vectorSource == nil || (!canonicalRepresentation && source.normSource == nil) {
 		return nil, ErrVectorIndexSnapshotMismatch
 	}
 	if count <= typedGraphScalarExactLimit || count > typedGraphFilterNavigationMaxRows || selection.IsAll() || maxBytes <= 0 {
@@ -139,9 +140,17 @@ func buildTypedGraphFilterNavigationFromAdmittedSource(ctx context.Context, sour
 		if !ok {
 			return nil, ErrVectorIndexSnapshotMismatch
 		}
-		invNorm, _, _, ok := source.normSource.invNormForOrdinal(ordinal)
-		if !ok {
-			return nil, ErrVectorIndexSnapshotMismatch
+		invNorm := float32(1)
+		if canonicalRepresentation {
+			if err := validateCosineNormalizedF32V1Canonical(vector, source.def.Dimensions); err != nil {
+				return nil, ErrVectorIndexSnapshotMismatch
+			}
+		} else {
+			var ok bool
+			invNorm, _, _, ok = source.normSource.invNormForOrdinal(ordinal)
+			if !ok {
+				return nil, ErrVectorIndexSnapshotMismatch
+			}
 		}
 		rows[i] = columnVectorGraphAssetRow{ID: id, Vector: vector, InvNorm: invNorm, BaseRowRef: DocumentRowRef{RowIndex: ordinal}}
 	}
@@ -318,7 +327,7 @@ func (n *typedGraphFilterNavigation) search(ctx context.Context, query []float32
 		ctx = context.Background()
 	}
 	plane := typedGraphFilterNavigationScorePlane{ctx: ctx, base: columnHNSWPreparedExactFP32ScorePlane{pack: base}, ordinals: n.baseOrdinals, limit: uint64(candidateLimit)}
-	_, stats, err := n.view.searchCosinePreparedScorePlane(query, columnHNSWPreparedTraversalOptions{TopK: topK, EfSearch: efSearch, RetainedCandidateLimit: efSearch, ScoreBatchMode: columnVectorGraphScoreBatchModeDefault, StatsMode: columnVectorGraphNativeSearchStatsModeFullDiagnostics, OmitResultMaterialization: true, SuppressOmittedResultMaterialization: true}, scratch, &plane)
+	_, stats, err := n.view.searchCosinePreparedScorePlane(query, columnHNSWPreparedTraversalOptions{TopK: topK, EfSearch: efSearch, RetainedCandidateLimit: efSearch, ScoreBatchMode: columnVectorGraphScoreBatchModeDefault, StatsMode: columnVectorGraphNativeSearchStatsModeFullDiagnostics, OmitResultMaterialization: true, SuppressOmittedResultMaterialization: true, CanonicalNormalizedQuery: base.Header.ExternalNormalizedVectors}, scratch, &plane)
 	if err != nil {
 		return nil, stats, err
 	}

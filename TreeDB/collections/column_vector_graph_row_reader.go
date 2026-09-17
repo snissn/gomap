@@ -367,12 +367,27 @@ func (c *Collection) prepareColumnVectorGraphPhysicalRowReaderSourcesAtSnapshot(
 				graphReader.typedVectorFallbackReason = fallbackReason
 			}
 		}
+		if pack != nil && pack.Header.ExternalNormalizedVectors {
+			if !vectorIndexUsesCosineNormalizedF32V1(def) {
+				return fmt.Errorf("collections: topology-only hnsw pack requires representation %q: %w", VectorIndexRepresentationCosineNormalizedF32V1, errColumnVectorGraphManifestMismatch)
+			}
+			_, records, recordsErr := loadBaseManifestRecords()
+			if recordsErr != nil {
+				return recordsErr
+			}
+			if bindErr := pack.bindExternalNormalizedVectors(state, records, *baseCfg, graphReader.typedVectorSource); bindErr != nil {
+				return fmt.Errorf("collections: bind topology-only hnsw pack vectors: %w: %w", bindErr, errColumnVectorGraphManifestMismatch)
+			}
+		}
 		if !graphReader.skipQuantizedAssets {
 			c.prepareColumnVectorGraphQuantizedAssetsForReader(graphReader, view)
 		}
 	}
+	if vectorIndexUsesCosineNormalizedF32V1(graphReader.def) && (graphReader.hnswSearchPack == nil || !graphReader.hnswSearchPack.Header.ExternalNormalizedVectors || graphReader.hnswSearchPack.validateLive() != nil) {
+		return fmt.Errorf("collections: column_graph %q missing bound topology-only hnsw search pack: %w", def.Name, errColumnVectorGraphManifestMismatch)
+	}
 	if !columnVectorGraphManifestHasPhysicalAsset(graph) && graph.RowCount > 0 {
-		if graphReader.invNormSource == nil {
+		if !vectorIndexUsesCosineNormalizedF32V1(graphReader.def) && graphReader.invNormSource == nil {
 			return fmt.Errorf("collections: column_graph %q missing required vector-index inverse-norm state source: %w", def.Name, errColumnVectorGraphManifestMismatch)
 		}
 		if graphReader.rowRefSource == nil {
