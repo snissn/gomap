@@ -707,12 +707,16 @@ func (r *FixedPeerTCPRuntimeV1) serve(w http.ResponseWriter, request *http.Reque
 }
 
 func (r *FixedPeerTCPRuntimeV1) validateCatalog(c raftplacement.CatalogV1) error {
-	if raftcluster.FeatureSetRequiresV1(c.Features, raftcluster.FeatureVectorPartitionLifecycle) != (r.config.Vector != nil) {
+	return validateFixedPeerCatalogV1(r.config, c)
+}
+
+func validateFixedPeerCatalogV1(config FixedPeerTCPConfigV1, c raftplacement.CatalogV1) error {
+	if raftcluster.FeatureSetRequiresV1(c.Features, raftcluster.FeatureVectorPartitionLifecycle) != (config.Vector != nil) {
 		return raftcluster.ErrUnsupportedFeature
 	}
 	for _, g := range c.Groups {
 		var expected []raftcluster.NodeID
-		for _, fixed := range r.config.Groups {
+		for _, fixed := range config.Groups {
 			if fixed.ID == g.ID {
 				for _, p := range fixed.Peers {
 					expected = append(expected, p.ID)

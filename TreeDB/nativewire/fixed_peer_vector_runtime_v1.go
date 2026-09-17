@@ -18,6 +18,7 @@ import (
 	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
 	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
 	"github.com/snissn/gomap/TreeDB/internal/raftentry"
+	"github.com/snissn/gomap/TreeDB/internal/raftfsm"
 	"github.com/snissn/gomap/TreeDB/internal/raftplacement"
 	public "github.com/snissn/gomap/TreeDB/vectorpartition"
 )
@@ -633,6 +634,22 @@ func validateFixedPeerVectorConfigV1(config FixedPeerTCPConfigV1, localGroups ma
 	if err := resolved.ValidateVectorPartitionPlacementV1(vector.Placement); err != nil {
 		return fmt.Errorf("invalid vector placement: %w", err)
 	}
+	if err := validateFixedPeerCatalogV1(config, vector.Catalog); err != nil {
+		return err
+	}
+	for owner := range owners {
+		group, ok := resolved.Group(owner)
+		if !ok || group.LeaderHint == "" || !slices.Contains(group.Members, group.LeaderHint) {
+			return errors.New("vector owner catalog leader hint must be a member")
+		}
+	}
+	record, err := raftplacement.NewCatalogMetaRecordV1(vector.Identity.Index.CatalogEpoch, vector.Catalog)
+	if err != nil {
+		return fmt.Errorf("invalid vector catalog record: %w", err)
+	}
+	if record.Digest != vector.Identity.Index.CatalogDigest {
+		return errors.New("vector catalog digest differs from lifecycle identity")
+	}
 	lifecycleOwners, ready, err := fixedPeerVectorLifecycleSpecV1(vector)
 	if err != nil {
 		return err
@@ -888,6 +905,11 @@ func fixedPeerVectorPostCommitAmbiguousV1(err error) error {
 func fixedPeerVectorSubmitErrorV1(result raftcluster.SubmitResultV1, err error) error {
 	if err != nil && (result.CommittedEntry.Term != 0 || result.CommittedEntry.Index != 0 || result.Evidence.ProvesProductionConsensus()) {
 		return fixedPeerVectorPostCommitAmbiguousV1(err)
+	}
+	if !errors.Is(err, raftcluster.ErrCommitAmbiguous) {
+		if code, ok := raftfsm.ErrorCodeOf(err); ok && code == raftentry.ErrorRejectedConflictV1 {
+			return &public.ErrorV1{Code: public.ErrorInvalidRequestV1, Err: err}
+		}
 	}
 	return err
 }

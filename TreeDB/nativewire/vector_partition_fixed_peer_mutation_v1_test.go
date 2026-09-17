@@ -18,6 +18,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/raftapply"
 	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
 	"github.com/snissn/gomap/TreeDB/internal/raftentry"
+	"github.com/snissn/gomap/TreeDB/internal/raftfsm"
 	"github.com/snissn/gomap/TreeDB/internal/raftplacement"
 	internalrouter "github.com/snissn/gomap/TreeDB/internal/vectorpartition"
 	public "github.com/snissn/gomap/TreeDB/vectorpartition"
@@ -41,6 +42,31 @@ func TestFixedPeerVectorSubmitErrorMarksCommittedResultAmbiguousV1(t *testing.T)
 	}
 	if err := fixedPeerVectorSubmitErrorV1(raftcluster.SubmitResultV1{}, cause); !errors.Is(err, cause) || errors.Is(err, raftcluster.ErrCommitAmbiguous) {
 		t.Fatalf("uncommitted error = %v", err)
+	}
+}
+
+func TestFixedPeerVectorSubmitErrorNormalizesOnlyPrecommitConflictV1(t *testing.T) {
+	for _, cause := range []error{
+		&raftfsm.Error{Code: raftentry.ErrorRejectedConflictV1},
+		&raftapply.Error{Code: raftentry.ErrorRejectedConflictV1},
+		&raftentry.ValidationError{Code: raftentry.ErrorRejectedConflictV1},
+	} {
+		wrapped := errors.Join(errors.New("preflight"), cause)
+		err := fixedPeerVectorSubmitErrorV1(raftcluster.SubmitResultV1{}, wrapped)
+		if !hasPublicVectorErrorCodeV1(err, public.ErrorInvalidRequestV1) || !errors.Is(err, cause) || fixedPeerErrorCodeV1(err) != string(public.ErrorInvalidRequestV1) {
+			t.Fatalf("typed conflict mapping = %v", err)
+		}
+		committed := raftcluster.SubmitResultV1{CommittedEntry: raftcluster.CommittedCommandEntryV1{Term: 1, Index: 2}}
+		if err := fixedPeerVectorSubmitErrorV1(committed, wrapped); !errors.Is(err, raftcluster.ErrCommitAmbiguous) || hasPublicVectorErrorCodeV1(err, public.ErrorInvalidRequestV1) {
+			t.Fatalf("post-commit conflict mapping = %v", err)
+		}
+		if err := fixedPeerVectorSubmitErrorV1(raftcluster.SubmitResultV1{}, errors.Join(raftcluster.ErrCommitAmbiguous, wrapped)); !errors.Is(err, raftcluster.ErrCommitAmbiguous) || hasPublicVectorErrorCodeV1(err, public.ErrorInvalidRequestV1) {
+			t.Fatalf("ambiguous conflict mapping = %v", err)
+		}
+	}
+	rejected := &fixedPeerRemoteErrorV1{code: "rejected", message: "idempotency conflict"}
+	if err := fixedPeerVectorSubmitErrorV1(raftcluster.SubmitResultV1{}, rejected); err != rejected {
+		t.Fatalf("generic rejection was normalized: %v", err)
 	}
 }
 
@@ -383,6 +409,34 @@ func TestVectorPartitionSystemNativeFourDaemonRemoteWriteRoutesAppliesAndBecomes
 		t.Fatalf("mutation counters: %+v", result.Counters)
 	}
 	fixture.RequireOwnerReplication(t, ctx, result.CommitIndex)
+	for _, node := range []raftcluster.NodeID{"owner-1", "ingress"} {
+		t.Run("idempotency_conflict_"+string(node), func(t *testing.T) {
+			writer, err := DialContext(ctx, "tcp", fixture.configs[0].Vector.PublicAddresses[node])
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer writer.Close()
+			before, err := fixture.client.Status(ctx, "owner-1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = writer.VectorInsertV1(ctx, public.InsertRequestV1{
+				Version: 1, Generation: fixture.Generation, IdempotencyKey: []byte("remote-visible-attempt-1"),
+				ID: []byte("conflict-" + string(node)), Vector: []float32{0, 1}, Document: []byte(`{"embedding":[0,1],"kind":"conflict"}`),
+				Deadline: time.Now().Add(30 * time.Second),
+			})
+			if !hasPublicVectorErrorCodeV1(err, public.ErrorInvalidRequestV1) {
+				t.Fatalf("idempotency conflict error=%v", err)
+			}
+			after, err := fixture.client.Status(ctx, "owner-1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if before.Groups[0].CommitIndex != after.Groups[0].CommitIndex || before.Groups[0].RaftAppliedIndex != after.Groups[0].RaftAppliedIndex || before.Groups[0].Applied.Index != after.Groups[0].Applied.Index {
+				t.Fatalf("rejected conflict advanced commit/apply: before=%+v after=%+v", before.Groups[0], after.Groups[0])
+			}
+		})
+	}
 
 	search, err := client.VectorSearchStrictV1(ctx, fixture.SearchRequest([]float32{0, 1}, 4))
 	if err != nil {
@@ -395,6 +449,7 @@ func TestVectorPartitionSystemNativeFourDaemonRemoteWriteRoutesAppliesAndBecomes
 		[]byte("remote-visible"), []byte("reject-stale-generation"), []byte("reject-document-mismatch"), []byte{0xff}, []byte("reject-stale-catalog"), []byte("reject-wrong-owner"),
 	)
 	fixture.RequireOwnerDocuments(t, []byte("remote-visible"),
+		[]byte("conflict-owner-1"), []byte("conflict-ingress"),
 		[]byte("reject-stale-generation"), []byte("reject-document-mismatch"), []byte{0xff}, []byte("reject-stale-catalog"), []byte("reject-wrong-owner"),
 	)
 }
@@ -756,9 +811,10 @@ func TestFixedPeerVectorConfigRequiresOneOwnerGroupV1(t *testing.T) {
 	}
 	config.Vector.Catalog = raftplacement.CatalogV1{
 		Features:   raftplacement.DefaultFeatureSet(),
-		Groups:     []raftplacement.GroupV1{{ID: "group-a", Members: []raftcluster.NodeID{"node"}}},
+		Groups:     []raftplacement.GroupV1{{ID: "group-a", Members: []raftcluster.NodeID{"node"}, LeaderHint: "node"}},
 		Placements: []raftplacement.CollectionPlacementV1{{Collection: ref, GroupID: "group-a", Mode: raftplacement.PlacementModeCollectionV1}},
 	}
+	config.Vector.Catalog.Features.Required = append(config.Vector.Catalog.Features.Required, raftcluster.RequiredFeature{Name: raftcluster.FeatureVectorPartitionLifecycle, Version: raftcluster.SupportedFeatureFloors[raftcluster.FeatureVectorPartitionLifecycle]})
 	config.Vector.Placement.IndexDefinitionDigest = strings.Repeat("a", 64)
 	config.Vector.Placement.SourceGeneration = 1
 	config.Vector.Placement.SourceChecksum = 1
@@ -775,7 +831,11 @@ func TestFixedPeerVectorConfigRequiresOneOwnerGroupV1(t *testing.T) {
 	config.Vector.Identity.Index.CollectionIncarnation = 1
 	config.Vector.Identity.Index.IndexEpoch = 1
 	config.Vector.Identity.Index.IndexDefinitionDigest = config.Vector.Placement.IndexDefinitionDigest
-	config.Vector.Identity.Index.CatalogDigest = strings.Repeat("b", 64)
+	record, err := raftplacement.NewCatalogMetaRecordV1(config.Vector.Identity.Index.CatalogEpoch, config.Vector.Catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config.Vector.Identity.Index.CatalogDigest = record.Digest
 	config.Vector.Identity.Source = raftplacement.VectorPartitionLifecycleSourceIdentityV1{Generation: 1, Checksum: 1, SchemaHash: 1, RowCount: 1}
 	config.Vector.RequestBase = VectorPartitionCoordinatorRequestV1{
 		RequestID: "request", CancellationID: "cancel", Database: ref.Database, Catalog: ref.Catalog, Collection: ref.Collection,
@@ -811,8 +871,35 @@ func TestFixedPeerVectorConfigPreflightBeforeDiskCreationV1(t *testing.T) {
 			Placements: []raftplacement.CollectionPlacementV1{{Collection: ref, GroupID: "group-b", Mode: raftplacement.PlacementModeCollectionV1}},
 		},
 	}
+	seed.catalog.Features.Required = append(seed.catalog.Features.Required, raftcluster.RequiredFeature{Name: raftcluster.FeatureVectorPartitionLifecycle, Version: raftcluster.SupportedFeatureFloors[raftcluster.FeatureVectorPartitionLifecycle]})
 	limits := DefaultVectorPartitionCoordinatorLimitsV1()
+	bindCatalog := func(c *FixedPeerTCPConfigV1) {
+		record, err := raftplacement.NewCatalogMetaRecordV1(c.Vector.Identity.Index.CatalogEpoch, c.Vector.Catalog)
+		if err != nil {
+			t.Fatal(err)
+		}
+		c.Vector.Identity.Index.CatalogDigest = record.Digest
+	}
 	for name, mutate := range map[string]func(*FixedPeerTCPConfigV1){
+		"catalog_lifecycle_feature_missing": func(c *FixedPeerTCPConfigV1) {
+			c.Vector.Catalog.Features = raftplacement.DefaultFeatureSet()
+			bindCatalog(c)
+		},
+		"catalog_digest_binding": func(c *FixedPeerTCPConfigV1) { c.Vector.Identity.Index.CatalogDigest = strings.Repeat("b", 64) },
+		"catalog_members_binding": func(c *FixedPeerTCPConfigV1) {
+			c.Vector.Catalog.Groups = append([]raftplacement.GroupV1(nil), c.Vector.Catalog.Groups...)
+			c.Vector.Catalog.Groups[1].Members = []raftcluster.NodeID{"owner-1", "owner-2", "ingress"}
+			bindCatalog(c)
+		},
+		"catalog_owner_leader_missing": func(c *FixedPeerTCPConfigV1) {
+			c.Vector.Catalog.Groups = append([]raftplacement.GroupV1(nil), c.Vector.Catalog.Groups...)
+			c.Vector.Catalog.Groups[1].LeaderHint = ""
+			bindCatalog(c)
+		},
+		"catalog_owner_leader_not_member": func(c *FixedPeerTCPConfigV1) {
+			c.Vector.Catalog.Groups = append([]raftplacement.GroupV1(nil), c.Vector.Catalog.Groups...)
+			c.Vector.Catalog.Groups[1].LeaderHint = "ingress"
+		},
 		"request_id_empty":      func(c *FixedPeerTCPConfigV1) { c.Vector.RequestBase.RequestID = "" },
 		"cancellation_id_empty": func(c *FixedPeerTCPConfigV1) { c.Vector.RequestBase.CancellationID = "" },
 		"request_id_limit": func(c *FixedPeerTCPConfigV1) {
@@ -927,6 +1014,15 @@ func TestFixedPeerVectorConfigPreflightBeforeDiskCreationV1(t *testing.T) {
 			}
 		})
 	}
+	t.Run("catalog_owner_hint_need_not_be_bootstrap", func(t *testing.T) {
+		config := fixedPeerVectorTestConfigsV1(t, seed)[0]
+		config.Vector.Catalog.Groups = append([]raftplacement.GroupV1(nil), config.Vector.Catalog.Groups...)
+		config.Vector.Catalog.Groups[1].LeaderHint = "owner-2"
+		bindCatalog(&config)
+		if _, _, err := validateFixedPeerConfigV1(config); err != nil {
+			t.Fatalf("non-bootstrap member leader hint rejected: %v", err)
+		}
+	})
 	t.Run("overwritten_fields_are_not_defaults", func(t *testing.T) {
 		config := fixedPeerVectorTestConfigsV1(t, seed)[0]
 		base := config.Vector.RequestBase
