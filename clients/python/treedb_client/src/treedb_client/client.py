@@ -1741,28 +1741,19 @@ def _dense_embedding_scores_match_query(
     return True
 
 
+def _native_dense_document_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    out = {}
+    for key, value in pairs:
+        if key in out:
+            raise ValueError("duplicate field in native dense document")
+        out[key] = value
+    return out
+
+
 def _decode_native_dense_document_json(payload: bytes, *, reject_duplicates: bool) -> Any:
-    if not reject_duplicates:
-        return json.loads(payload)
-
-    class ObjectPairs(list):
-        pass
-
-    decoded = json.loads(payload, object_pairs_hook=ObjectPairs)
-
-    def collapse(value: Any) -> Any:
-        if isinstance(value, ObjectPairs):
-            out = {}
-            for key, item in value:
-                if key in out:
-                    raise ValueError("duplicate field in native dense document")
-                out[key] = collapse(item)
-            return out
-        if isinstance(value, list):
-            return [collapse(item) for item in value]
-        return value
-
-    return collapse(decoded)
+    return json.loads(
+        payload, object_pairs_hook=_native_dense_document_object if reject_duplicates else None
+    )
 
 
 def _is_legacy_scalar_u8_v1_index(selected: Any) -> bool:
