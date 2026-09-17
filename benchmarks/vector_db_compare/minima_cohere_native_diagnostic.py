@@ -2599,6 +2599,16 @@ class Run:
                 diagnostics=True,
             )
             record.update(timing)
+            # Retain the returned evidence even when a subsequent validation
+            # rejects it. This remains an error receipt, never accepted evidence.
+            record.update(
+                route_identity=asdict(response.route_identity) if response.route_identity is not None else None,
+                dense_work=asdict(response.dense_work) if response.dense_work is not None else None,
+                score_plane=asdict(response.score_plane) if response.score_plane is not None else None,
+                results=[{"id": document.id, "content": document.content,
+                          "meta": document.meta, "score": float(document.score)}
+                         for document in response.documents],
+            )
             receipt = v4_gate.validate_response(
                 response, request_mode, diagnostics=True, top_k=min(10, eligible),
                 expected_route=normalized_v4_expected_routes(

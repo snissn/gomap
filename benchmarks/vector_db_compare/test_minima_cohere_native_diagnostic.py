@@ -355,6 +355,7 @@ class NativeCohereDiagnosticTests(unittest.TestCase):
             packed_score_calls=1, packed_score_candidates=1,
             packed_vector_bytes_read=diagnostic.v4_gate.DIMENSIONS * 4,
             fp32_score_calls=1,
+            base_manifest_generation=1, current_manifest_generation=1,
         )
         response = SimpleNamespace(
             native_command_version=4,
@@ -362,7 +363,7 @@ class NativeCohereDiagnosticTests(unittest.TestCase):
             route_identity=identity,
             dense_work=SimpleNamespace(
                 completed=True,
-                graph=SimpleNamespace(completed=True),
+                graph=SimpleNamespace(completed=True, base_ann_scored=1, delta_scored=0),
                 output=SimpleNamespace(completed=True),
             ),
             score_plane=None,
@@ -390,6 +391,8 @@ class NativeCohereDiagnosticTests(unittest.TestCase):
                    completed=True, forbidden_stable_score_calls=0,
                    packed_score_batch_calls=1, packed_score_candidates=1,
                    packed_vector_bytes_read=diagnostic.v4_gate.DIMENSIONS * 4,
+                   exact_base_rerank_score_calls=0, exact_small_filter_score_calls=1,
+                   exact_suffix_score_calls=0,
                )},
         )
         with patch.object(diagnostic.v4_gate, "asdict", return_value={"execution_route": "typed_exact"}):
@@ -398,11 +401,32 @@ class NativeCohereDiagnosticTests(unittest.TestCase):
                 expected_route="typed_exact",
             )
         sq8_identity.packed_score_candidates = 0
-        with self.assertRaisesRegex(RuntimeError, "omitted the packed FP32 batch"):
+        with self.assertRaisesRegex(RuntimeError, "inconsistent base/suffix"):
             diagnostic.v4_gate.validate_response(
                 sq8_response, "quantized_rerank", diagnostics=True, top_k=1,
                 expected_route="typed_exact",
             )
+        sq8_identity.packed_score_calls = 0
+        sq8_identity.packed_vector_bytes_read = 0
+        sq8_identity.current_manifest_generation = 2
+        sq8_response.score_plane.packed_score_batch_calls = 0
+        sq8_response.score_plane.packed_score_candidates = 0
+        sq8_response.score_plane.packed_vector_bytes_read = 0
+        sq8_response.score_plane.exact_small_filter_score_calls = 0
+        sq8_response.score_plane.exact_suffix_score_calls = 1
+        sq8_response.dense_work.graph.delta_scored = 1
+        for mode, route in (("quantized_rerank", "typed_exact"),
+                            ("quantized_rerank", "typed_hnsw"), ("exact", "typed_exact")):
+            sq8_identity.query_mode, sq8_identity.execution_route = mode, route
+            sq8_identity.quantized_score_calls = int(route == "typed_hnsw")
+            sq8_identity.quantized_code_bytes_read = diagnostic.v4_gate.DIMENSIONS if route == "typed_hnsw" else 0
+            sq8_response.dense_work.graph.base_ann_scored = 0
+            sq8_response.score_plane = None if mode == "exact" else sq8_response.score_plane
+            with self.subTest(suffix_mode=mode, route=route), \
+                 patch.object(diagnostic.v4_gate, "asdict", return_value={}):
+                diagnostic.v4_gate.validate_response(
+                    sq8_response, mode, diagnostics=True, top_k=1, expected_route=route,
+                )
 
     def test_normalized_v4_search_translates_production_route_into_event_receipt(self):
         run = object.__new__(diagnostic.Run)
@@ -446,11 +470,22 @@ class NativeCohereDiagnosticTests(unittest.TestCase):
 
         run.timed = timed
         route = {"execution_route": "typed_exact", "query_mode": "exact"}
-        with patch.object(diagnostic.v4_gate, "validate_response", return_value={"route": route}):
+        with patch.object(diagnostic, "asdict", side_effect=plain), \
+             patch.object(diagnostic.v4_gate, "validate_response", return_value={"route": route}):
             run.search_normalized_v4("fixed_coordinate_curve", 1, 0)
         self.assertEqual(run.quantized_requests[0]["route_identity"], route)
         self.assertEqual(emitted[-1]["route_identity"], route)
         self.assertEqual(emitted[-1]["event"], "search_result")
+        with patch.object(diagnostic, "asdict", side_effect=plain), \
+             patch.object(diagnostic.v4_gate, "validate_response", side_effect=RuntimeError("corrupt returned counter")), \
+             self.assertRaisesRegex(RuntimeError, "corrupt returned counter"):
+            run.search_normalized_v4("fixed_coordinate_curve", 1, 0)
+        failed = run.quantized_requests[-1]
+        self.assertEqual(failed["outcome"], "error")
+        self.assertEqual(failed["route_identity"], plain(response.route_identity))
+        self.assertEqual(failed["dense_work"], plain(work))
+        self.assertEqual(failed["results"][0]["id"], "row-000000")
+        self.assertEqual(emitted[-1]["event"], "search_request_failure")
 
     def test_column_graph_build_validation_binds_quantized_stage_to_arm(self):
         build = {

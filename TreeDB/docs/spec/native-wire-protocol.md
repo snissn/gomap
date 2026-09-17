@@ -938,7 +938,12 @@ result count, candidate-code reads, FP32 scoring reads, packed-batch work, and
 embedding projection work. Its owner identities and byte/count products are
 validated independently by the service and client. Nonempty results require
 positive FP32 scoring work; scalar-u8 HNSW also requires positive candidate-code
-and one packed rerank batch. IDs/documents/metadata have flags zero; route and
+work. Packed counters cover live base rows only: one batch if any remain, zero
+if shadow suppression leaves only mutable suffix results. Suffix rows are
+separately exact-scored by the packed strided FP32 kernel. For scalar-u8,
+FP32 score calls equal packed base candidates plus exact suffix calls; an
+unchanged base/current manifest permits no suffix work. IDs/documents/metadata
+have flags zero; route and
 diagnostic sections have exactly the critical flag. Unknown flags or sections,
 duplicate sections, invalid counts, non-finite/out-of-range scores, invalid IDs,
 unordered results, and document/request-shape mismatches fail closed.

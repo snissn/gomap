@@ -581,6 +581,13 @@ func validateDenseTypedQuantizedVectorSearchRouteLean(response collections.Vecto
 	} else if stats.PackedExactScoreCalls != 1 {
 		return serviceError(CodeIndexUnavailable, "typed quantized dense search did not use one packed rerank call")
 	}
+	// Packed counters describe the base batch only. Shadow suppression can
+	// leave no live base candidates while the exact mutable suffix supplies results.
+	if stats.PackedExactScoreCandidates > ^uint64(0)-stats.ColumnGraphDeltaScored ||
+		stats.FP32ScoreCalls != stats.PackedExactScoreCandidates+stats.ColumnGraphDeltaScored ||
+		(receipt.CurrentManifestGeneration == receipt.BaseManifestGeneration && stats.ColumnGraphDeltaScored != 0) {
+		return serviceError(CodeIndexUnavailable, "typed quantized dense search base/suffix score accounting is invalid")
+	}
 	if receipt.Route != "typed_hnsw" {
 		if stats.QuantizedScoreCalls != 0 || stats.QuantizedCodeBytesRead != 0 || stats.QuantizedRerankCandidates != 0 || stats.QuantizedRerankExactScoreCalls != 0 {
 			return serviceError(CodeIndexUnavailable, "typed quantized exact shortcut carried traversal or rerank work")
@@ -597,7 +604,7 @@ func validateDenseTypedQuantizedVectorSearchRouteLean(response collections.Vecto
 	if effectiveR <= 0 || stats.QuantizedRerankCandidates > uint64(effectiveR) {
 		return serviceError(CodeIndexUnavailable, "typed quantized dense search exceeded the admitted rerank width")
 	}
-	if stats.QuantizedScorerActive != 1 || stats.QuantizedScoreCalls == 0 || stats.QuantizedCodeBytesRead == 0 || stats.QuantizedRerankCandidates == 0 {
+	if stats.QuantizedScorerActive != 1 || stats.QuantizedScoreCalls == 0 || stats.QuantizedCodeBytesRead == 0 {
 		return serviceError(CodeIndexUnavailable, "typed quantized dense search did not execute the admitted traversal and rerank planes")
 	}
 	return nil

@@ -476,13 +476,16 @@ def _dense_normalized_route_matches(identity, *, query_mode, quantized_index_nam
         identity.quantized_codec != "scalar_u8"
         or identity.quantized_index_name != quantized_index_name
         or identity.quantized_version != 1
+        or identity.packed_score_calls != int(identity.packed_score_candidates > 0)
+        or (
+            identity.current_manifest_generation == identity.base_manifest_generation
+            and identity.fp32_score_calls != identity.packed_score_candidates
+        )
         or (
             identity.execution_route == "typed_hnsw"
             and (
                 identity.quantized_score_calls == 0
                 or identity.quantized_code_bytes_read == 0
-                or identity.packed_score_calls != 1
-                or identity.packed_score_candidates == 0
             )
         )
         or (
@@ -550,6 +553,7 @@ def _dense_normalized_diagnostic_matches(identity, work, proof, *, query_mode,
         return (
             proof is None
             and identity.fp32_score_calls == graph.base_ann_scored + graph.delta_scored
+            and identity.packed_score_candidates <= graph.base_ann_scored
         )
     if (
         proof is None

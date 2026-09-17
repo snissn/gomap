@@ -236,8 +236,7 @@ def validate_response(
         if identity.quantized_score_calls != 0 or identity.quantized_code_bytes_read != 0:
             raise RuntimeError("Python exact call crossed the SQ8 score plane")
         if identity.execution_route != "typed_empty" and (
-            identity.packed_score_calls == 0
-            or identity.packed_score_candidates == 0
+            (identity.packed_score_calls == 0) != (identity.packed_score_candidates == 0)
             or identity.packed_score_calls > identity.packed_score_candidates
             or identity.packed_score_candidates > identity.fp32_score_calls
             or identity.packed_vector_bytes_read
@@ -251,12 +250,17 @@ def validate_response(
         )):
             raise RuntimeError("Python exact empty route unexpectedly carried packed work")
     if mode == "quantized_rerank":
+        # The indexed packed batch scores live base rows, not mutable suffix
+        # rows. A shadowed base may still traverse SQ8 codes but rerank no rows.
+        if (identity.packed_score_candidates > identity.fp32_score_calls
+                or identity.packed_score_calls != int(identity.packed_score_candidates > 0)
+                or (identity.current_manifest_generation == identity.base_manifest_generation
+                    and identity.fp32_score_calls != identity.packed_score_candidates)):
+            raise RuntimeError("Python SQ8 route has inconsistent base/suffix packed FP32 work")
         if identity.execution_route == "typed_hnsw" and (
             identity.quantized_score_calls == 0
             or identity.quantized_code_bytes_read
                 != identity.quantized_score_calls * DIMENSIONS
-            or identity.packed_score_calls != 1
-            or identity.packed_score_candidates == 0
             or identity.packed_vector_bytes_read
                 != identity.packed_score_candidates * DIMENSIONS * 4
         ):
@@ -264,8 +268,6 @@ def validate_response(
         if identity.execution_route == "typed_exact" and (
             identity.quantized_score_calls != 0
             or identity.quantized_code_bytes_read != 0
-            or identity.packed_score_calls != 1
-            or identity.packed_score_candidates == 0
             or identity.packed_vector_bytes_read
                 != identity.packed_score_candidates * DIMENSIONS * 4
         ):
@@ -284,12 +286,22 @@ def validate_response(
             raise RuntimeError("Python diagnostic response omitted completed dense work")
         if mode == "exact" and proof is not None:
             raise RuntimeError("Python exact diagnostic unexpectedly returned score-plane proof")
+        if mode == "exact" and (
+            identity.fp32_score_calls != work.graph.base_ann_scored + work.graph.delta_scored
+            or identity.packed_score_candidates > work.graph.base_ann_scored
+        ):
+            raise RuntimeError("Python exact diagnostic has inconsistent base/suffix FP32 work")
         if mode == "quantized_rerank" and (
             proof is None
             or not proof.completed
             or proof.packed_score_batch_calls != identity.packed_score_calls
             or proof.packed_score_candidates != identity.packed_score_candidates
             or proof.packed_vector_bytes_read != identity.packed_vector_bytes_read
+            or identity.packed_score_candidates
+                != proof.exact_base_rerank_score_calls + proof.exact_small_filter_score_calls
+            or identity.fp32_score_calls
+                != identity.packed_score_candidates + proof.exact_suffix_score_calls
+            or work.graph.delta_scored != proof.exact_suffix_score_calls
             or proof.forbidden_stable_score_calls != 0
         ):
             raise RuntimeError("Python SQ8 diagnostic omitted packed same-owner proof")

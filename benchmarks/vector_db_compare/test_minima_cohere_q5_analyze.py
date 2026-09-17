@@ -2468,6 +2468,31 @@ class Q5AnalyzeTest(unittest.TestCase):
         analyzer._normalized_route_identity(
             identity, "quantized_rerank", eligible=4096, filtered=True, result_count=10,
         )
+        suffix = {
+            **identity, "current_manifest_generation": 2, "current_manifest_checksum": 2,
+            "packed_score_calls": 0, "packed_score_candidates": 0, "packed_vector_bytes_read": 0,
+        }
+        analyzer._normalized_route_identity(
+            {**suffix, "packed_score_calls": 1, "packed_score_candidates": 4000,
+             "packed_vector_bytes_read": 4000 * 768 * 4},
+            "quantized_rerank", eligible=4096, filtered=True, result_count=10,
+        )
+        for route in ("typed_exact", "typed_hnsw"):
+            filtered = route == "typed_exact"
+            eligible = 4096 if filtered else 500000
+            changed = {**suffix, "execution_route": route, "filter": filtered,
+                       "quantized_score_calls": int(route == "typed_hnsw"),
+                       "quantized_code_bytes_read": 768 if route == "typed_hnsw" else 0}
+            with self.subTest(suffix_route=route):
+                analyzer._normalized_route_identity(
+                    changed, "quantized_rerank", eligible=eligible,
+                    filtered=filtered, result_count=10,
+                )
+                with self.assertRaisesRegex(analyzer.EvidenceError, "base/suffix"):
+                    analyzer._normalized_route_identity(
+                        {**changed, "current_manifest_generation": 1, "current_manifest_checksum": 1},
+                        "quantized_rerank", eligible=eligible, filtered=filtered, result_count=10,
+                    )
         exact = {
             **identity, "query_mode": "exact", "rerank_candidates": 0,
             "quantized_index_name": "", "quantized_codec": "",

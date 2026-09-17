@@ -214,6 +214,80 @@ func TestDenseNormalizedV4ProductionDiagnosticsAndVersionIsolation(t *testing.T)
 	}
 }
 
+func TestDenseNormalizedV4MixedAndAllShadowedBase(t *testing.T) {
+	server, client, info, ctx := newDenseNormalizedV4Test(t)
+	for _, allShadowed := range []bool{false, true} {
+		if allShadowed {
+			_, err := server.documentService.UpsertDocuments(ctx, info.Name, documentservice.UpsertDocumentsRequest{
+				DeferVectorIndexRebuild: true,
+				Documents: []documentservice.Document{
+					{ID: "a", Content: "alpha-replaced", Embedding: []float32{3, 4}, Meta: map[string]any{"tenant": "one"}},
+					{ID: "b", Content: "beta-replaced", Embedding: []float32{0, 2}, Meta: map[string]any{"tenant": "two"}},
+				},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		for _, mode := range []collections.VectorIndexQueryMode{collections.VectorIndexQueryModeExact, collections.VectorIndexQueryModeQuantizedRerank} {
+			for _, filtered := range []bool{false, true} {
+				for _, diagnostics := range []bool{false, true} {
+					req := DenseVectorSearchRequest{
+						Index: info.Name, Query: []float32{3, 4}, TopK: 3, EfSearch: 8, ExpectedGeneration: info.Generation,
+						VectorRepresentation: collections.VectorIndexRepresentationCosineNormalizedF32V1,
+						QueryMode:            mode, Diagnostics: diagnostics,
+					}
+					if mode == collections.VectorIndexQueryModeQuantizedRerank {
+						req.QuantizedIndexName = "embedding.scalar_u8.v1"
+						req.QuantizedRerankCandidates = 8
+					}
+					wantResults := 3
+					if filtered {
+						req.Filter = &documentservice.Filter{Field: "meta.tenant", Operator: "==", Value: "one"}
+						wantResults = 2
+					}
+					response, err := client.DenseVectorSearch(ctx, req)
+					if err != nil {
+						t.Fatalf("allShadowed=%t mode=%s filtered=%t diagnostics=%t: %v", allShadowed, mode, filtered, diagnostics, err)
+					}
+					identity := response.RouteIdentity
+					if identity == nil || len(response.Results) != wantResults {
+						t.Fatalf("invalid mixed/suffix-only response: %+v", response)
+					}
+					if allShadowed && (filtered || mode == collections.VectorIndexQueryModeQuantizedRerank) {
+						if identity.PackedScoreCalls != 0 || identity.PackedScoreCandidates != 0 || identity.PackedVectorBytesRead != 0 || identity.FP32ScoreCalls != uint64(len(response.Results)) {
+							t.Fatalf("suffix-only scores incorrectly counted as base packed work: %+v", identity)
+						}
+						if mode == collections.VectorIndexQueryModeQuantizedRerank {
+							immutable := *identity
+							immutable.CurrentManifestGeneration = immutable.BaseManifestGeneration
+							immutable.CurrentManifestChecksum = immutable.BaseManifestChecksum
+							if err := validateDenseNormalizedRouteIdentity(immutable, req, len(response.Results)); nativeCodeOf(err) != iwire.ErrConsistencyUnavailable {
+								t.Fatalf("immutable owner accepted suffix-only SQ8 work: %v", err)
+							}
+						}
+					}
+					if diagnostics && mode == collections.VectorIndexQueryModeQuantizedRerank {
+						proof := response.ScorePlane
+						if proof == nil || identity.PackedScoreCandidates != proof.ExactBaseRerankScoreCalls+proof.ExactSmallFilterScoreCalls || identity.FP32ScoreCalls != identity.PackedScoreCandidates+proof.ExactSuffixScoreCalls || proof.ForbiddenStableScoreCalls != 0 {
+							t.Fatalf("base/suffix score work does not partition: %+v", response)
+						}
+					}
+					for _, result := range response.Results {
+						var doc documentservice.Document
+						if err := json.Unmarshal(result.Document, &doc); err != nil {
+							t.Fatal(err)
+						}
+						if allShadowed && (doc.ID == "a" && doc.Content != "alpha-replaced" || doc.ID == "b" && doc.Content != "beta-replaced") {
+							t.Fatalf("shadowed document incarnation escaped: %+v", doc)
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
 func TestDenseNormalizedV4BorrowedResultsAndOwnedRouteIdentity(t *testing.T) {
 	_, client, info, ctx := newDenseNormalizedV4Test(t)
 	request := DenseVectorSearchRequest{

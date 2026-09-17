@@ -311,9 +311,14 @@ func validateDenseNormalizedRouteIdentity(identity documentservice.DenseSearchRo
 			return protocolError(iwire.ErrConsistencyUnavailable, "normalized dense embedding projection accounting is invalid")
 		}
 	}
-	if request.QueryMode == collections.VectorIndexQueryModeQuantizedRerank && identity.ExecutionRoute == "typed_hnsw" &&
-		(identity.QuantizedScoreCalls == 0 || identity.PackedScoreCalls != 1 || identity.PackedScoreCandidates == 0) {
-		return protocolError(iwire.ErrConsistencyUnavailable, "normalized quantized HNSW route omitted candidate or packed rerank work")
+	if request.QueryMode == collections.VectorIndexQueryModeQuantizedRerank {
+		if identity.PackedScoreCalls != min(identity.PackedScoreCandidates, 1) ||
+			(identity.CurrentManifestGeneration == identity.BaseManifestGeneration && identity.FP32ScoreCalls != identity.PackedScoreCandidates) {
+			return protocolError(iwire.ErrConsistencyUnavailable, "normalized quantized base/suffix score accounting is invalid")
+		}
+		if identity.ExecutionRoute == "typed_hnsw" && identity.QuantizedScoreCalls == 0 {
+			return protocolError(iwire.ErrConsistencyUnavailable, "normalized quantized HNSW route omitted candidate work")
+		}
 	}
 	if request.QueryMode == collections.VectorIndexQueryModeQuantizedRerank && identity.ExecutionRoute != "typed_hnsw" &&
 		(identity.QuantizedScoreCalls != 0 || identity.QuantizedCodeBytesRead != 0) {
@@ -339,7 +344,7 @@ func validateDenseNormalizedDiagnosticIdentity(identity documentservice.DenseSea
 		return protocolError(iwire.ErrConsistencyUnavailable, "normalized dense route identity and diagnostic work proof disagree")
 	}
 	if request.QueryMode == collections.VectorIndexQueryModeExact {
-		if proof != nil || graph.BaseANNScored > math.MaxUint64-graph.DeltaScored || identity.FP32ScoreCalls != graph.BaseANNScored+graph.DeltaScored {
+		if proof != nil || graph.BaseANNScored > math.MaxUint64-graph.DeltaScored || identity.FP32ScoreCalls != graph.BaseANNScored+graph.DeltaScored || identity.PackedScoreCandidates > graph.BaseANNScored {
 			return protocolError(iwire.ErrConsistencyUnavailable, "normalized exact route identity and diagnostic counters disagree")
 		}
 		return nil

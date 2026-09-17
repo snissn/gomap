@@ -3372,7 +3372,8 @@ def _normalized_route_identity(identity, mode, *, eligible, filtered, result_cou
             "packed_score_calls", "packed_score_candidates", "packed_vector_bytes_read",
         ))
         if identity.get("execution_route") != "typed_empty":
-            if (not 0 < packed[0] <= packed[1] <= identity["fp32_score_calls"]
+            if (not 0 <= packed[0] <= packed[1] <= identity["fp32_score_calls"]
+                    or (packed[0] == 0) != (packed[1] == 0)
                     or packed[2] != packed[1] * 768 * 4):
                 raise EvidenceError("normalized-v4 exact route omitted packed FP32 work")
         elif any(packed):
@@ -3382,21 +3383,25 @@ def _normalized_route_identity(identity, mode, *, eligible, filtered, result_cou
             or identity.get("quantized_codec") != "scalar_u8"
             or identity.get("quantized_version") != 1):
         raise EvidenceError("normalized-v4 SQ8 diagnostic identity is incomplete")
+    elif (type(identity.get("packed_score_candidates")) is not int
+            or not 0 <= identity["packed_score_candidates"] <= identity["fp32_score_calls"]
+            or identity.get("packed_score_calls") != int(identity["packed_score_candidates"] > 0)
+            or (identity["current_manifest_generation"] == identity["base_manifest_generation"]
+                and identity["fp32_score_calls"] != identity["packed_score_candidates"])):
+        raise EvidenceError("normalized-v4 SQ8 base/suffix packed accounting is invalid")
     elif identity.get("execution_route") == "typed_hnsw":
         if (type(identity.get("quantized_score_calls")) is not int
                 or identity["quantized_score_calls"] <= 0
                 or identity.get("quantized_code_bytes_read")
                     != identity["quantized_score_calls"] * 768
-                or identity.get("packed_score_calls") != 1
-                or not 0 < identity.get("packed_score_candidates", 0) <= 64
+                or not 0 <= identity["packed_score_candidates"] <= 64
                 or identity.get("packed_vector_bytes_read")
                     != identity["packed_score_candidates"] * 768 * 4):
             raise EvidenceError("normalized-v4 SQ8 diagnostic omitted candidate or packed work")
     elif identity.get("execution_route") == "typed_exact":
         if (identity.get("quantized_score_calls") != 0
                 or identity.get("quantized_code_bytes_read") != 0
-                or identity.get("packed_score_calls") != 1
-                or not 0 < identity.get("packed_score_candidates", 0) <= 5000
+                or not 0 <= identity["packed_score_candidates"] <= 5000
                 or identity.get("packed_vector_bytes_read")
                     != identity["packed_score_candidates"] * 768 * 4):
             raise EvidenceError("normalized-v4 SQ8 exact route omitted packed FP32 work")
@@ -3438,7 +3443,8 @@ def _normalized_dense_event(event, request_mode, *, filtered, result_count):
     if request_mode == "exact":
         if (event.get("score_plane") is not None
                 or identity.get("fp32_score_calls")
-                    != work.graph.base_ann_scored + work.graph.delta_scored):
+                    != work.graph.base_ann_scored + work.graph.delta_scored
+                or identity.get("packed_score_candidates", 0) > work.graph.base_ann_scored):
             raise EvidenceError("normalized-v4 exact diagnostic work does not bind its FP32 route")
         return
     try:

@@ -88,6 +88,13 @@ candidates are scored exactly once by indexed/batched packed FP32 scoring in
 one call or bounded chunks of that kernel. A token packed call followed by
 scalar or stable rescoring is non-conforming.
 
+Packed batch counters describe base candidates only. Mutable suffix rows use
+the strided packed FP32 kernel and separate exact-suffix counters. Thus a
+nonempty response may have zero base packed work after replacements shadow
+every base row. Scalar-u8 traversal still reads codes; its live shortlist and
+base rerank may both be empty. FP32 calls partition into exact base plus exact
+suffix calls, and an unchanged base/current manifest permits no suffix calls.
+
 ## Result projection
 
 `return_embedding` defaults to false. False permits FP32 reads for scoring but

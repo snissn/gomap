@@ -693,11 +693,11 @@ class TreeDBClient:
                     exc, query_mode=mode, quantized_index_name=quantized_index_name,
                     top_k=top_k_value, ef_search=ef_search_value or 0,
                     rerank_candidates=rerank_value, query_dimension=len(request["query_embedding"]),
-                    expected_generation=expected_generation, filter_requested=filter_requested,
+                    expected_generation=request.get("expected_generation"), filter_requested=filter_requested,
                     default_ef_search=(
                         index_info.vector_ef_search
                         if index_info is not None
-                        and expected_generation == index_info.generation
+                        and request.get("expected_generation") == index_info.generation
                         else None
                     ),
                 )

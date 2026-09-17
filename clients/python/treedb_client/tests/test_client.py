@@ -18,6 +18,7 @@ from unittest import mock
 
 import _support  # noqa: F401
 from treedb_client import (
+    IndexInfo,
     BenchmarkVectorIndexOptions,
     Document,
     HybridFusionOptions,
@@ -1182,6 +1183,30 @@ class TreeDBClientTests(unittest.TestCase):
                     )
                 self.assertIsNotNone(caught.exception.dense_work)
                 self.assertIsNotNone(caught.exception.score_plane)
+
+            # Normalized HTTP requests pin the caller-held generation even
+            # when expected_generation was omitted from the public call.
+            normalized_info = IndexInfo.from_dict({
+                **typed_index, "vector_representation": "cosine_normalized_f32_v1",
+            })
+            for future in (False, True):
+                snapshot = replace(result.score_plane.snapshot, schema_generation=2 if future else 1)
+                proof = replace(result.score_plane, snapshot=snapshot,
+                                requested_ef_search=normalized_info.vector_ef_search,
+                                requested_rerank_candidates=normalized_info.vector_ef_search)
+                work = replace(result.dense_work, graph=replace(result.dense_work.graph, snapshot=snapshot))
+                error = IndexUnavailableError("index_unavailable", "budget", dense_work=work, score_plane=proof)
+                with self.subTest(normalized_implicit_generation=future), \
+                     mock.patch.object(client, "_request", side_effect=error) as request, \
+                     self.assertRaises(TreeDBProtocolError if future else IndexUnavailableError) as caught:
+                    client.query_by_embedding(
+                        "docs", [1, 0], 1, query_mode="quantized_rerank",
+                        quantized_index_name="embedding.scalar_u8.public", diagnostics=True,
+                        index_info=normalized_info,
+                    )
+                self.assertEqual(request.call_args.args[2]["expected_generation"], normalized_info.generation)
+                self.assertEqual(caught.exception.dense_work, work)
+                self.assertEqual(caught.exception.score_plane, proof)
 
             partial_proof = replace(
                 result.score_plane, completed=False, reason="scoring interrupted",

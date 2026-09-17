@@ -266,6 +266,23 @@ class NativeDenseV4Tests(unittest.TestCase):
             rerank=64,
             name=QUANTIZED,
         ))
+        for route in ("typed_exact", "typed_hnsw"):
+            suffix = replace(
+                quantized_exact, execution_route=route,
+                current_manifest_generation=2, current_manifest_checksum=4,
+                packed_score_calls=0, packed_score_candidates=0, packed_vector_bytes_read=0,
+                quantized_score_calls=int(route == "typed_hnsw"),
+                quantized_code_bytes_read=2 if route == "typed_hnsw" else 0,
+            )
+            with self.subTest(suffix_route=route):
+                self.assertTrue(matches(suffix, mode="quantized_rerank", rerank=64, name=QUANTIZED))
+                for hostile in (
+                    replace(suffix, current_manifest_generation=1, current_manifest_checksum=3),
+                    replace(suffix, packed_score_calls=1),
+                    replace(suffix, packed_score_candidates=1, packed_vector_bytes_read=8),
+                    replace(suffix, packed_vector_bytes_read=8),
+                ):
+                    self.assertFalse(matches(hostile, mode="quantized_rerank", rerank=64, name=QUANTIZED))
 
     def test_v4_diagnostics_bind_receipt_to_the_same_snapshot_owner(self):
         raw = bytes.fromhex(
