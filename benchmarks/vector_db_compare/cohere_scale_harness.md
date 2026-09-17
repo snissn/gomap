@@ -453,3 +453,20 @@ The consumer rejects a dirty or different candidate checkout and independently
 recomputes production-lane statistics, same-shortlist engine thresholds,
 canonical quality, final-state projection, one-FP32/SQ8 resource ownership, and
 disk/RSS deltas from raw retained evidence.
+
+All five resource inventories (`initial_ready`, `pre_fold`, `post_fold`,
+`post_reopen`, `final_verified`) are LIVE serving observations. File rows,
+category bytes and their total come from the same collected metadata; a second
+live directory walk is not required to agree. The walker uses one no-follow stat
+per observed entry, excludes symlinks, skips files/directories that disappear
+with ENOENT/ESTALE, and propagates other errors. Required vector assets still
+must be present with valid owned extents and canonical typed-part references.
+These observations do not claim filesystem quiescence or an atomic snapshot.
+
+The final whole-directory exact/SQ8 disk comparison instead uses the existing
+terminal `final_disk_bytes`, after successful clean shutdown of all expected
+owned service lifetimes. The consumer independently validates shutdown and
+positive integer totals. This boundary is **post-clean-shutdown owned-directory
+bytes, including retained WAL**. Live asset/category breakdowns remain separate
+from stopped totals; shutdown does not imply removal of every theoretically
+reclaimable byte. All numerical qualification thresholds are unchanged.
