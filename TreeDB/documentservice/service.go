@@ -915,6 +915,9 @@ func (s *Service) SearchDenseVector(ctx context.Context, index string, req Dense
 	if err != nil {
 		return DenseVectorSearchResponse{}, err
 	}
+	if err := bindDenseVectorRepresentation(&req, info); err != nil {
+		return DenseVectorSearchResponse{}, err
+	}
 	if req.TopK <= 0 {
 		return DenseVectorSearchResponse{}, serviceError(CodeInvalidRequest, "top_k must be positive")
 	}
@@ -981,6 +984,23 @@ func (s *Service) SearchDenseVector(ctx context.Context, index string, req Dense
 		docs = []Document{}
 	}
 	return DenseVectorSearchResponse{Index: info, Documents: docs, Metric: info.Metric, Route: RouteExact, Exact: true, Candidates: candidateCount}, nil
+}
+
+func bindDenseVectorRepresentation(req *DenseVectorSearchRequest, info IndexInfo) error {
+	if req == nil {
+		return serviceError(CodeInvalidRequest, "dense vector request is nil")
+	}
+	if req.RequireVectorRepresentation || req.VectorRepresentation != "" {
+		if req.VectorRepresentation != info.VectorRepresentation {
+			return serviceErrorf(CodeUnsupported, "dense vector representation %q does not match index representation %q", req.VectorRepresentation, info.VectorRepresentation)
+		}
+	} else {
+		req.VectorRepresentation = info.VectorRepresentation
+	}
+	if req.Diagnostics && info.VectorRepresentation != collections.VectorIndexRepresentationCosineNormalizedF32V1 {
+		return serviceError(CodeUnsupported, "dense vector diagnostics require cosine_normalized_f32_v1")
+	}
+	return nil
 }
 
 // resolveDenseSearchRoute applies the deterministic route defaulting rules:

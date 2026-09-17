@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
@@ -349,6 +350,98 @@ func TestTypedGraphWorkEpochCleanupFailure(t *testing.T) {
 	}
 	if _, err := col.renewTypedGraphWorkEpoch(context.Background(), typedGraphTestWorkEpochLimits()); err != nil {
 		t.Fatalf("retry: %v", err)
+	}
+}
+
+func TestTypedGraphWorkEpochRetriesFreshPlanAfterRecoverableRootAdvance(t *testing.T) {
+	for _, continuous := range []bool{false, true} {
+		t.Run(fmt.Sprintf("continuous=%t", continuous), func(t *testing.T) {
+			requireColumnAssetExactDestructiveGCTest(t)
+			col, base, _, _, _, _ := openTypedGraphQualityFixture(t, 8)
+			if err := base.Close(); err != nil {
+				t.Fatal(err)
+			}
+			cold := typedGraphOverlapLimits().Cold
+			if err := col.reconcileTypedGraphPublication(typedGraphPublicationLimits{Rows: 32, Tombstones: 32, ValueSlots: 128, OwnedBytes: 1 << 20, EncodedOutputBytes: 1 << 20}, cold); err != nil {
+				t.Fatal(err)
+			}
+			limits := typedGraphTestWorkEpochLimits()
+			if _, err := col.renewTypedGraphWorkEpoch(context.Background(), limits); err != nil {
+				t.Fatalf("configure: %v", err)
+			}
+			if err := col.foldTypedGraph(context.Background(), cold, 128, typedGraphFoldTestAssetLimits(), nil); err != nil {
+				t.Fatal(err)
+			}
+			advanceColumnAssetDurableFallbackM15C(t, col.db)
+
+			manager := NewCollectionManager(col.db)
+			if _, err := manager.CreateCollection(&CollectionMeta{
+				Name:    "work_epoch_retry_witness",
+				Options: CollectionOptions{DisableIndexedWriteMemtables: true},
+				Indexes: []IndexDefinition{{
+					Name: "value", Field: "value", ValueType: IndexValueString,
+				}},
+			}); err != nil {
+				t.Fatal(err)
+			}
+			other, err := manager.OpenCollection("work_epoch_retry_witness")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := col.db.Checkpoint(); err != nil {
+				t.Fatal(err)
+			}
+			coord := col.collectionSchemaCoordinator()
+			beforeEpoch, beforeDebt, beforeAttempts := coord.typedGraphWorkEpoch, coord.typedGraphCandidateBytes, coord.typedGraphCandidateAttempts
+			advanced, hookCalls := false, 0
+			restore := setColumnAssetStableDeleteAfterPlanTestHook(func() {
+				hookCalls++
+				if advanced && !continuous {
+					return
+				}
+				before := col.db.State().CommitSeq
+				advanced = true
+				if _, err := other.Insert([]byte(fmt.Sprintf("advance-%d", hookCalls)), []byte(`{"value":"one"}`)); err != nil {
+					t.Fatal(err)
+				}
+				if after := col.db.State().CommitSeq; after <= before {
+					t.Fatalf("witness insert did not advance commit sequence: before=%d after=%d", before, after)
+				}
+			})
+			defer restore()
+			stats, err := col.renewTypedGraphWorkEpoch(context.Background(), limits)
+			if continuous {
+				if !errors.Is(err, backenddb.ErrRecoverableRootSetStale) || stats.Columns.SegmentsDeleted != 0 || stats.Epoch != 0 {
+					t.Fatalf("exhausted retry changed maintenance state: stats=%+v err=%v", stats, err)
+				}
+				// Root capture or pinning can reject an attempt before the late
+				// post-plan hook. It observes a subset, not the retry count; the
+				// shared predicate's exact eight-attempt budget is tested separately.
+				if !advanced || hookCalls < 1 || hookCalls > columnAssetGCRecoverableRootAttempts {
+					t.Fatalf("post-plan hook calls=%d want an observed injection within %d attempts", hookCalls, columnAssetGCRecoverableRootAttempts)
+				}
+				if coord.typedGraphWorkEpoch != beforeEpoch || coord.typedGraphCandidateBytes != beforeDebt || coord.typedGraphCandidateAttempts != beforeAttempts {
+					t.Fatal("exhausted retry credited epoch or candidate debt")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("renew after recoverable-root advance: %v", err)
+			}
+			if !advanced {
+				t.Fatal("test did not advance the recoverable-root basis")
+			}
+			if stats.Columns.SegmentsDeleted == 0 {
+				logTypedGraphWorkEpochRetention(t, col)
+				t.Fatalf("fresh retry reclaimed no retired segment: %+v", stats.Columns)
+			}
+			if hookCalls < 2 {
+				t.Fatalf("post-plan hook calls=%d want at least 2 to prove a fresh retry", hookCalls)
+			}
+			if stats.Epoch != 2 {
+				t.Fatalf("work epoch=%d want 2", stats.Epoch)
+			}
+		})
 	}
 }
 

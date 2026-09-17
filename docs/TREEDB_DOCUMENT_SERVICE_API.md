@@ -275,7 +275,14 @@ scalar strings, create a cosine `column_graph` index with `typed_input=true`:
   "dimension": 2,
   "metric": "cosine",
   "typed_input": true,
-  "vector_index_options": {"strategy": "column_graph"},
+  "vector_index_options": {
+    "strategy": "column_graph",
+    "representation": "cosine_normalized_f32_v1",
+    "ef_search": 64,
+    "quantized_indexes": [
+      {"name": "embedding.scalar_u8.fast", "codec": "scalar_u8", "version": 1}
+    ]
+  },
   "scalar_fields": [
     {"field": "user_id", "value_type": "string"},
     {"field": "fpath", "value_type": "string"}
@@ -283,7 +290,10 @@ scalar strings, create a cosine `column_graph` index with `typed_input=true`:
 }
 ```
 
-The response echoes `index.typed_input=true`. Undeclared metadata remains
+The response echoes `index.typed_input=true` and
+`index.vector_representation="cosine_normalized_f32_v1"`. The representation
+is fixed at creation; an omitted representation retains legacy behavior and
+cannot be changed in place. Undeclared metadata remains
 residual JSON. Creation without `column_graph_serving` declares the schema; it
 does not build or admit the graph. Load typed documents, then use the explicit
 [optimize actions](#selected-typed-optimize-actions) below. A compatible create
@@ -315,6 +325,7 @@ Responses include:
     "embedding_field": "embedding",
     "vector_index_name": "embedding",
     "vector_strategy": "column_graph",
+    "vector_representation": "cosine_normalized_f32_v1",
     "vector_m": 16,
     "vector_ef_construction": 128,
     "vector_ef_search": 64,
@@ -681,8 +692,37 @@ ANN responses report `route=ann` and `exact=false`. Declared scalar filters are
 supported by `native_runtime` and selected typed `column_graph`; unsupported
 shapes fail closed. Typed clients validate every decoded result document against
 the requested filter rather than treating filter-work counts as membership proof.
-Selected executed empty/exact/HNSW behavior is reported in
-`dense_work.graph.route`, independently of the top-level route tag.
+Selected legacy or diagnostic empty/exact/HNSW behavior is reported in
+`dense_work.graph.route`; canonical production reports the same value in
+`route_identity.execution_route`, independently of the top-level route tag.
+
+For `cosine_normalized_f32_v1`, production HTTP requests use the same controls
+as native v4 and bind them to caller-held metadata:
+
+```json
+{
+  "query_embedding": [0.1, 0.2, 0.3],
+  "top_k": 10,
+  "route": "ann",
+  "expected_generation": 1,
+  "vector_representation": "cosine_normalized_f32_v1",
+  "query_mode": "quantized_rerank",
+  "quantized_index_name": "embedding.scalar_u8.fast",
+  "quantized_rerank_candidates": 64,
+  "ef_search": 64,
+  "return_embedding": false,
+  "diagnostics": false
+}
+```
+
+The response includes compact `route_identity` binding representation, exact or
+SQ8 mode, executed empty/exact/HNSW route, captured owner, E/R/top-K, result
+count, candidate-code reads, FP32/packed scoring reads, and embedding output
+work. Production omits `dense_work` and `score_plane`. Set `diagnostics=true`
+only for explicit evidence: it adds `dense_work`, and SQ8 adds the packed
+score-plane proof. Diagnostics does not change decisions. With
+`return_embedding=false`, route identity proves zero output embedding reads and
+bytes; true returns the canonical normalized vector.
 
 Legacy `column_graph` indexes with persisted update/delete parts report
 `no_document_vector_search=false`: an omitted route selects the existing

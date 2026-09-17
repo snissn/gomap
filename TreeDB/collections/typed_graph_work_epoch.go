@@ -109,13 +109,18 @@ func (c *Collection) renewTypedGraphWorkEpoch(ctx context.Context, limits typedG
 		if err != nil {
 			return err
 		}
-		out.Columns, err = c.columnAssetGC(ctx, ColumnAssetGCOptions{
-			MaxSegmentEntries: limits.ColumnSegments, MaxManifestRecords: limits.ManifestRecords,
-			MaxManifestBytes: limits.ManifestBytes, MaxLifecycleEntries: limits.LifecycleEntries,
-			maxReplayAssetBytes: limits.ColumnBytes,
-		})
-		if err != nil {
-			return err
+		for attempt := 0; ; attempt++ {
+			out.Columns, err = c.columnAssetGC(ctx, ColumnAssetGCOptions{
+				MaxSegmentEntries: limits.ColumnSegments, MaxManifestRecords: limits.ManifestRecords,
+				MaxManifestBytes: limits.ManifestBytes, MaxLifecycleEntries: limits.LifecycleEntries,
+				maxReplayAssetBytes: limits.ColumnBytes,
+			})
+			if err == nil {
+				break
+			}
+			if !shouldRetryColumnAssetGCFromFreshRecoverableRoots(err, out.Columns, attempt) {
+				return err
+			}
 		}
 		if err := c.pruneTypedGraphRetiredCandidates(limits.LifecycleEntries); err != nil {
 			return err

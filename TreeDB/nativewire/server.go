@@ -878,7 +878,7 @@ func (s *Server) writeHelloOK(w io.Writer, header iwire.Header, state *connState
 			caps["typed_document_upsert_versions"] = "1"
 		}
 		var versions []string
-		for _, version := range []uint64{iwire.DenseVectorSearchLegacyVersion, iwire.DenseVectorSearchTypedVersion, iwire.DenseVectorSearchTypedQuantizedVersion} {
+		for _, version := range []uint64{iwire.DenseVectorSearchLegacyVersion, iwire.DenseVectorSearchTypedVersion, iwire.DenseVectorSearchTypedQuantizedVersion, iwire.DenseVectorSearchNormalizedVersion} {
 			if _, ok := s.registry.LookupCommand(iwire.CommandDenseVectorSearch, version); ok {
 				versions = append(versions, strconv.FormatUint(version, 10))
 			}
@@ -954,7 +954,7 @@ func (s *Server) writeError(w io.Writer, request iwire.Header, err error) error 
 			return proofErr
 		}
 		sectionCount := 2
-		if observed.version == iwire.DenseVectorSearchTypedQuantizedVersion && observed.scorePlane != nil {
+		if (observed.version == iwire.DenseVectorSearchTypedQuantizedVersion || observed.version == iwire.DenseVectorSearchNormalizedVersion) && observed.scorePlane != nil {
 			sectionCount++
 		}
 		if err := s.checkResponseSectionCount(sectionCount); err != nil {
@@ -970,9 +970,13 @@ func (s *Server) writeError(w io.Writer, request iwire.Header, err error) error 
 		if err := s.checkResponseBodyLen(uint64(len(body))); err != nil {
 			return err
 		}
-		if observed.version == iwire.DenseVectorSearchTypedQuantizedVersion && observed.scorePlane != nil {
+		if (observed.version == iwire.DenseVectorSearchTypedQuantizedVersion || observed.version == iwire.DenseVectorSearchNormalizedVersion) && observed.scorePlane != nil {
 			var proofScratch [2048]byte
-			proof, proofErr := appendDenseScorePlane(proofScratch[:0], *observed.scorePlane, s.limits)
+			if observed.version == iwire.DenseVectorSearchNormalizedVersion {
+				proof, proofErr = appendDenseScorePlaneV2(proofScratch[:0], *observed.scorePlane, s.limits)
+			} else {
+				proof, proofErr = appendDenseScorePlane(proofScratch[:0], *observed.scorePlane, s.limits)
+			}
 			if proofErr != nil {
 				return proofErr
 			}

@@ -296,23 +296,27 @@ func (c *Collection) RenewColumnGraphServing(ctx context.Context, index string) 
 // the coherent mutable base/suffix/fetch contract.
 func (c *Collection) searchTypedGraphServing(opts VectorIndexSearchOptions, buffer *VectorIndexSearchBuffer, allowSelectedQuantizedRerank bool) (response VectorIndexSearchResponse, view *CollectionReadView, err error) {
 	workstats.Graph.Requests.Attempts.Add(1)
+	includeProof := opts.StatsMode == VectorIndexSearchStatsModeProduction
 	var stats typedGraphOverlaySearchStats
 	var filterWork ColumnGraphFilterWork
 	var snapshot ColumnGraphQuerySnapshot
-	var scorePlane ColumnGraphScorePlaneWork
+	var scorePlane *ColumnGraphScorePlaneWork
 	defer func() {
 		workstats.Graph.Requests.Finish(err == nil)
+		if !includeProof {
+			return
+		}
 		work := stats.work()
 		work.Completed = err == nil
 		work.Filter = filterWork
 		work.Snapshot = snapshot
-		if scorePlane.Available {
+		if scorePlane != nil && scorePlane.Available {
 			scorePlane.Completed = err == nil
 			scorePlane.Snapshot = snapshot
 			if err != nil && scorePlane.Reason == "" {
 				scorePlane.Reason = err.Error()
 			}
-			work.ScorePlane = scorePlane
+			work.ScorePlane = *scorePlane
 		}
 		response.Stats.ColumnGraphWork = work
 	}()
@@ -369,7 +373,7 @@ func (c *Collection) searchTypedGraphServing(opts VectorIndexSearchOptions, buff
 	}
 	if err == nil {
 		if queryMode == columnVectorGraphNativeSearchQueryModeQuantizedRerank {
-			response.Results, stats, scorePlane, err = owner.searchScalarU8QuantizedRerankWithContext(ctx, opts, filter, p.options.SearchCandidates, buffer)
+			response.Results, stats, scorePlane, err = owner.searchScalarU8QuantizedRerankWithContext(ctx, opts, filter, p.options.SearchCandidates, buffer, includeProof)
 		} else if filter == nil {
 			response.Results, stats, err = owner.overlay.searchWithContext(ctx, opts.Query, opts.TopK, opts.EfSearch, p.options.SearchCandidates, buffer)
 		} else {
@@ -386,6 +390,29 @@ func (c *Collection) searchTypedGraphServing(opts VectorIndexSearchOptions, buff
 	}
 	response.IndexName, response.Strategy, response.Path = p.index, VectorIndexStrategyColumnGraph, VectorIndexSearchPathColumnGraphNativeReader
 	response.Stats = vectorIndexSearchStatsFromInternal(stats.Base, owner.overlay.base.reader.Stats())
+	receipt := ColumnGraphRouteReceipt{
+		Available:                 true,
+		Representation:            owner.overlay.base.reader.def.Representation,
+		QueryMode:                 opts.QueryMode,
+		Route:                     stats.Route,
+		SchemaHash:                snapshot.SchemaHash,
+		SchemaGeneration:          snapshot.SchemaGeneration,
+		BaseManifestGeneration:    snapshot.BaseManifest.Generation,
+		BaseManifestChecksum:      snapshot.BaseManifest.Checksum,
+		CurrentManifestGeneration: snapshot.CurrentManifest.Generation,
+		CurrentManifestChecksum:   snapshot.CurrentManifest.Checksum,
+		CurrentCoverageLSN:        snapshot.CurrentCoverageLSN,
+		ResultCount:               uint64(len(response.Results)),
+	}
+	if receipt.QueryMode == "" {
+		receipt.QueryMode = VectorIndexQueryModeExact
+	}
+	if receipt.QueryMode == VectorIndexQueryModeQuantizedRerank {
+		receipt.QuantizedIndexName = opts.QuantizedIndexName
+		receipt.QuantizedCodec = QuantizedVectorCodecScalarU8
+		receipt.QuantizedVersion = 1
+	}
+	response.Stats.ColumnGraphReceipt = receipt
 	// Preserve the logical pack source diagnostics captured when this exact
 	// holder was assembled. The serving route may use either its mmap view or
 	// its admitted pool-owned parent fallback, but that physical choice does not

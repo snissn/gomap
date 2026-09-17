@@ -3230,13 +3230,10 @@ func (s *VectorPartitionStoreV1) persistVectorPartitionRewriteDebtV1(records []v
 	return nil
 }
 
-// Use the same bounded convergence budget as RecoverableRootSet capture.
-const vectorPartitionReclaimRecoverableRootAttemptsV1 = 8
+const vectorPartitionReclaimRecoverableRootAttemptsV1 = columnAssetGCRecoverableRootAttempts
 
 func shouldRefreshVectorPartitionReclaimGCPlanV1(err error, stats ColumnAssetGCStats, attempt int) bool {
-	return errors.Is(err, backenddb.ErrRecoverableRootSetStale) &&
-		stats.SegmentsDeleted == 0 &&
-		attempt+1 < vectorPartitionReclaimRecoverableRootAttemptsV1
+	return shouldRetryColumnAssetGCFromFreshRecoverableRoots(err, stats, attempt)
 }
 
 // DeactivateVectorPartitionV1 retires the active generation under DB-owned

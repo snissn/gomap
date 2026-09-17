@@ -25,9 +25,11 @@ import time
 import numpy as np
 
 import minima_treedb_runner as existing
+import minima_cohere_v4_production_gate as v4_gate
 from treedb_client import _dense_work as dense_contract
 
 SCHEMA = "treedb_minima_cohere_native_diagnostic/v2"
+NORMALIZED_CAMPAIGN_SCHEMA = "treedb_cohere_normalized_v4_campaign/v1"
 RSS_ARTIFACT_SCHEMA = "treedb_cohere_768_rss_boundary/v3"
 QUANTIZED_RSS_ARTIFACT_SCHEMA = "treedb_cohere_768_sq8_rss_boundary/v1"
 PAIRED_QUERY_ARTIFACT_SCHEMA = "treedb_cohere_768_sq8_paired_query/v1"
@@ -40,6 +42,13 @@ RSS_REVALIDATION_QUERIES = list(range(100, 200))
 RSS_SELECTION_PROTOCOL = "lowest_control_passing_both_fixed_query_sets/v1"
 PAIRED_TIMING_REPETITIONS = 5
 PAIRED_TIMING_QUERY_COUNT = 20
+CAMPAIGN_PROFILE_LEGACY = "legacy_v2_v3"
+CAMPAIGN_PROFILE_NORMALIZED_V4 = "normalized_v4"
+NORMALIZED_REPRESENTATION = "cosine_normalized_f32_v1"
+NORMALIZED_EF_SEARCH = 64
+NORMALIZED_RERANK_CANDIDATES = 64
+NORMALIZED_FILTER_EXACT_ROWS = 4096
+NORMALIZED_FILTER_COLD_EXACT_MAX_ROWS = 5000
 GIB = 1 << 30
 FROZEN_JSON_MAX_BYTES = 1 << 20
 EVIDENCE_JSON_MAX_BYTES = 64 << 20
@@ -81,6 +90,28 @@ def quantized_representation_arm():
         "quantized_config_hash": 0,
         "vector_m": 16,
         "requested_rerank_policy": "R=E_at_each_predeclared_coordinate",
+    }
+
+
+def normalized_v4_representation_arm():
+    return {
+        "schema": "treedb_cohere_normalized_v4_representation/v1",
+        "canonical_representation": NORMALIZED_REPRESENTATION,
+        "source_vectors": "fp32_normalized_once_before_WAL",
+        "query_vectors": "fp32_normalized_once_before_search",
+        "truths": ["canonical_normalized_f32_dot", "original_fp32_cosine"],
+        "query_mode": "quantized_rerank",
+        "quantized_index_name": QUANTIZED_PROFILE_NAME,
+        "codec": "scalar_u8", "version": 1, "calibration": "legacy",
+        "quantized_config_hash": 0, "vector_m": 16,
+        "fixed_coordinate": {"ef_search": NORMALIZED_EF_SEARCH,
+                             "rerank_candidates": NORMALIZED_RERANK_CANDIDATES},
+        "filtered_route_policy": {
+            "scalar_exact_max_rows": NORMALIZED_FILTER_EXACT_ROWS,
+            "cold_exact_max_rows": NORMALIZED_FILTER_COLD_EXACT_MAX_ROWS,
+        },
+        "native_command_version": 4, "diagnostics_in_timed_lanes": False,
+        "return_embedding_in_timed_lanes": False,
     }
 
 
@@ -984,6 +1015,58 @@ def digest(path):
     return result.hexdigest()
 
 
+def owned_db_file_inventory(root):
+    """Inventory owned files without hashing multi-gigabyte campaign payloads."""
+    root = Path(root).resolve()
+    if not root.is_dir():
+        raise RuntimeError("campaign database directory is unavailable")
+    categories = {
+        "column_assets": 0, "command_wal": 0, "value_log": 0,
+        "leaf_log": 0, "other": 0,
+    }
+    files = []
+    for path in sorted(item for item in root.rglob("*") if item.is_file()):
+        relative = path.relative_to(root).as_posix()
+        size = path.stat().st_size
+        if any(marker in "/" + relative for marker in ("/column_assets/", "/column-assets/")):
+            category = "column_assets"
+        elif "/wal/" in "/" + relative:
+            category = "command_wal"
+        elif "/value_vlog/" in "/" + relative:
+            category = "value_log"
+        elif "/leaf_vlog/" in "/" + relative:
+            category = "leaf_log"
+        else:
+            category = "other"
+        categories[category] += size
+        files.append({"path": relative, "bytes": size, "category": category})
+    total = sum(row["bytes"] for row in files)
+    if total != sum(categories.values()) or total <= 0:
+        raise RuntimeError("campaign database file inventory is inconsistent")
+    return {
+        "schema": "treedb_owned_db_file_inventory/v1",
+        "root": str(root), "total_bytes": total,
+        "category_bytes": categories, "files": files,
+    }
+
+
+def linux_process_memory(pid):
+    fields = {}
+    try:
+        for line in Path(f"/proc/{pid}/status").read_text(encoding="utf-8").splitlines():
+            name, separator, value = line.partition(":")
+            if separator and name in ("VmRSS", "VmHWM", "VmSize", "VmPeak"):
+                number, unit = value.split()
+                if unit != "kB":
+                    raise RuntimeError(f"unexpected /proc memory unit {unit!r}")
+                fields[name.lower() + "_bytes"] = int(number) * 1024
+    except (FileNotFoundError, PermissionError, ValueError) as exc:
+        raise RuntimeError(f"owned process memory is unavailable: {exc}") from exc
+    if set(fields) != {"vmrss_bytes", "vmhwm_bytes", "vmsize_bytes", "vmpeak_bytes"}:
+        raise RuntimeError("owned process memory endpoint is incomplete")
+    return fields
+
+
 def canonical(value):
     return (json.dumps(value, sort_keys=True, allow_nan=False, separators=(",", ":")) + "\n").encode()
 
@@ -1052,6 +1135,20 @@ def predicate(rows, eligible):
     return None if eligible == rows else {"field": "meta.user_id", "operator": "<", "value": f"{eligible:06d}"}
 
 
+def normalized_v4_expected_routes(eligible, filter_requested):
+    if type(eligible) is not int or eligible < 0 or type(filter_requested) is not bool:
+        raise ValueError("normalized-v4 route inputs are invalid")
+    if not filter_requested:
+        return ("typed_hnsw",)
+    if eligible == 0:
+        return ("typed_empty",)
+    if eligible <= NORMALIZED_FILTER_EXACT_ROWS:
+        return ("typed_exact",)
+    if eligible <= NORMALIZED_FILTER_COLD_EXACT_MAX_ROWS:
+        return ("typed_exact", "typed_hnsw")
+    return ("typed_hnsw",)
+
+
 def make_document(vectors, row, total, updated=False):
     return {"id": f"row-{row:06d}", "content": f"minima-cohere:{row}" + (":updated" if updated else ""),
             "embedding": vectors[row].tolist(),
@@ -1074,6 +1171,68 @@ def exact_truth(vectors, queries, eligible_counts):
     return result
 
 
+def canonical_normalized_f32_rows(vectors, *, row_batch=8192):
+    """Match Go admission bits; accumulate dimensions in order, vectorize rows."""
+    source = np.asarray(vectors, dtype=np.float32)
+    if source.ndim != 2 or source.shape[1] == 0 or row_batch <= 0:
+        raise ValueError("canonical vectors require positive dimensions and batch size")
+    normalized = np.empty(source.shape, dtype=np.float32)
+    for start in range(0, len(source), row_batch):
+        # Float64 intermediates are bounded to this chunk, not another corpus.
+        block = np.array(source[start:start + row_batch], dtype=np.float64, order="F")
+        if not np.isfinite(block).all():
+            raise ValueError("canonical vectors contain non-finite components")
+        squared_norm = np.zeros(len(block), dtype=np.float64)
+        for component in block.T:
+            squared_norm += component * component
+        if np.any(squared_norm <= 0) or not np.isfinite(squared_norm).all():
+            raise ValueError("canonical vectors contain zero or non-finite norms")
+        block *= (1.0 / np.sqrt(squared_norm))[:, None]
+        normalized[start:start + len(block)] = block
+    return normalized
+
+
+def canonical_normalized_f32_truth(vectors, queries, eligible_counts, *, query_batch=8):
+    """Canonical-f32 dot truth, kept distinct from original-cosine truth."""
+    return canonical_normalized_f32_topk(
+        canonical_normalized_f32_rows(vectors), canonical_normalized_f32_rows(queries),
+        eligible_counts, query_batch=query_batch,
+    )
+
+
+def canonical_normalized_f32_topk(normalized, normalized_queries, eligible_counts, *, query_batch=8):
+    """Score already-canonical rows; never normalize stored canonical bytes again."""
+    ranks = (np.arange(len(normalized), dtype=np.int64) * 7919) % len(normalized)
+    eligible_rows = {
+        eligible: np.flatnonzero(ranks < eligible) for eligible in eligible_counts
+    }
+    result = {str(eligible): [] for eligible in eligible_counts}
+    score_result = {str(eligible): [] for eligible in eligible_counts}
+    for start in range(0, len(normalized_queries), query_batch):
+        scores = normalized_queries[start:start + query_batch] @ normalized.T
+        np.clip(scores, -1, 1, out=scores)
+        for values in scores:
+            for eligible in eligible_counts:
+                rows = eligible_rows[eligible]
+                if len(rows) <= 10:
+                    selected = rows[np.lexsort((rows, -values[rows]))]
+                else:
+                    eligible_scores = values[rows]
+                    cutoff = np.partition(eligible_scores, len(rows) - 10)[len(rows) - 10]
+                    better = rows[eligible_scores > cutoff]
+                    # rows are ascending ordinals, hence ascending row-%06d IDs.
+                    tied = rows[eligible_scores == cutoff][:10 - len(better)]
+                    selected = np.concatenate((better, tied))
+                    selected = selected[np.lexsort((selected, -values[selected]))]
+                result[str(eligible)].append(
+                    [f"row-{int(row):06d}" for row in selected]
+                )
+                score_result[str(eligible)].append(
+                    [float(values[row]) for row in selected]
+                )
+    return result, score_result
+
+
 def quantiles(values):
     values = sorted(values)
     if not values:
@@ -1083,13 +1242,14 @@ def quantiles(values):
                for name, fraction in (("p50", .5), ("p95", .95), ("p99", .99), ("max", 1))}}
 
 
-def dataset_identity(dataset, rows):
+def dataset_identity(dataset, rows, *, normalized_v4=False):
     dataset = Path(dataset).resolve()
     manifest, _ = strict_json_object(dataset / "manifest.json", "dataset manifest")
     if (manifest.get("dimensions"), manifest.get("top_k"), manifest.get("exact_train_query_overlap")) != (768, 10, 0):
         raise ValueError("expected the existing real 768D top-10 nonoverlapping diagnostic export")
-    if rows not in (512, 500000) or rows > manifest["rows"] or math.gcd(rows, 7919) != 1:
-        raise ValueError("only real-prefix 512-row smoke or 500000-row diagnostic runs are supported")
+    supported = (512, 5000, 500000) if normalized_v4 else (512, 500000)
+    if rows not in supported or rows > manifest["rows"] or math.gcd(rows, 7919) != 1:
+        raise ValueError("unsupported real-prefix Cohere campaign size")
     query_count = 4 if rows == 512 else 200
     if query_count > manifest["query_count"]:
         raise ValueError("not enough exported queries")
@@ -1284,6 +1444,16 @@ def treedb_service_environment(plan):
     return child
 
 
+def python_runtime_identity():
+    # Preserve the virtualenv path: following its symlink loses the dependency
+    # context that argv and sys.executable actually selected.
+    executable = Path(os.sys.executable).absolute()
+    return {
+        "python": os.sys.version, "numpy": np.__version__, "platform": platform.platform(),
+        "python_executable": str(executable), "python_executable_sha256": digest(executable),
+    }
+
+
 def host_resource_identity():
     cgroup = Path("/proc/self/cgroup").read_text().strip()
     status = dict(line.split(":", 1) for line in Path("/proc/self/status").read_text().splitlines() if ":" in line)
@@ -1320,6 +1490,106 @@ def host_resource_identity():
     return identity
 
 
+def normalized_v4_effective_resources(plan):
+    """Resolve the tightest recorded cgroup-v2 capacity at this process."""
+    host_memory = physical_memory_bytes(plan["host_memory_bytes"])
+    affinity = plan.get("cpu_affinity")
+    limits = (plan.get("host_resource_identity") or {}).get("cgroup_limits")
+    if (not isinstance(affinity, list) or not affinity
+            or any(type(cpu) is not int or cpu < 0 for cpu in affinity)
+            or len(affinity) != len(set(affinity)) or not isinstance(limits, dict)):
+        raise ValueError("normalized-v4 effective resource inputs are invalid")
+    memory_limits, cpu_quotas = [host_memory], [len(affinity) * 1000]
+    saw_memory, saw_cpu = False, False
+    for name, raw in limits.items():
+        if not isinstance(name, str) or not isinstance(raw, str):
+            raise ValueError("normalized-v4 cgroup limits are invalid")
+        if name.endswith("memory.max") or name.endswith("memory.high"):
+            saw_memory = True
+            if raw != "max":
+                if not raw.isascii() or not raw.isdecimal() or str(int(raw)) != raw:
+                    raise ValueError("normalized-v4 cgroup memory limit is invalid")
+                memory_limits.append(int(raw))
+        elif name.endswith("cpu.max"):
+            saw_cpu = True
+            parts = raw.split()
+            if len(parts) != 2 or not parts[1].isascii() or not parts[1].isdecimal() \
+                    or int(parts[1]) <= 0:
+                raise ValueError("normalized-v4 cgroup CPU quota is invalid")
+            if parts[0] != "max":
+                if not parts[0].isascii() or not parts[0].isdecimal() or int(parts[0]) <= 0:
+                    raise ValueError("normalized-v4 cgroup CPU quota is invalid")
+                cpu_quotas.append(int(parts[0]) * 1000 // int(parts[1]))
+    if not saw_memory or not saw_cpu:
+        raise ValueError("normalized-v4 cgroup-v2 capacity is unavailable")
+    return {
+        "effective_memory_bytes": min(memory_limits),
+        "effective_cpu_quota_millis": min(cpu_quotas),
+    }
+
+
+def normalized_v4_infrastructure_receipt(plan):
+    """Fail closed before a full qualification arm if its local runner is undersized."""
+    full = plan["rows"] == 500000
+    required_free = (plan["minimum_free_bytes"] + plan["maximum_output_bytes"]
+                     if full else plan["minimum_free_bytes"] + GIB)
+    required_memory = plan["maximum_combined_rss_bytes"] if full else GIB
+    parent = Path(plan["run_dir"]).parent
+    try:
+        disk_headroom = parent.is_dir() and shutil.disk_usage(parent).free >= required_free
+    except OSError:
+        disk_headroom = False
+    try:
+        host_memory = physical_memory_bytes(plan["host_memory_bytes"]) >= required_memory
+    except (TypeError, ValueError):
+        host_memory = False
+    try:
+        effective = normalized_v4_effective_resources(plan)
+    except (KeyError, TypeError, ValueError):
+        effective = {"effective_memory_bytes": 0, "effective_cpu_quota_millis": 0}
+    required_cpu_millis = 1000
+    if full:
+        gomaxprocs = plan.get("gomaxprocs")
+        try:
+            required_cpu_millis = (int(gomaxprocs) * 1000
+                                   if isinstance(gomaxprocs, str) and gomaxprocs.isdigit()
+                                   else None)
+        except ValueError:
+            required_cpu_millis = None
+    checks = {
+        "cpu_affinity": bool(plan["cpu_affinity"]),
+        "cgroup_cpu_quota": (required_cpu_millis is not None and required_cpu_millis > 0
+                             and effective["effective_cpu_quota_millis"] >= required_cpu_millis),
+        "cgroup_memory": effective["effective_memory_bytes"] >= required_memory,
+        "disk_headroom": disk_headroom,
+        "host_memory": host_memory,
+        "linux_procfs": all(Path(path).is_file() for path in (
+            "/proc/self/status", "/proc/cpuinfo", "/proc/self/cgroup",
+        )),
+    }
+    reasons = [name for name, passed in checks.items() if not passed]
+    return {
+        "schema": "treedb_normalized_v4_infrastructure/v1",
+        "state": "available" if not reasons else "unavailable",
+        "runner": "shared_workstation_serialized_quiet_window",
+        "dataset_cache": "persistent_local",
+        "artifact_storage": "local_owned_directory",
+        "requirements": {
+            "minimum_free_bytes": required_free,
+            "minimum_host_memory_bytes": required_memory,
+            "minimum_effective_memory_bytes": required_memory,
+            "minimum_cpu_quota_millis": required_cpu_millis,
+        },
+        "effective_resources": effective,
+        "checks": checks,
+        "operator_contract": {
+            "other_benchmark_load": "excluded",
+            "run_policy": "one_arm_at_a_time",
+        },
+        "reasons": reasons,
+    }
+
+
 def process_peak_at_boundary(pid, expected_identity, expected_affinity):
     sample = existing.common.process_peak_rss(pid)
     identity = existing.common.linux_process_identity(pid)
@@ -1348,24 +1618,50 @@ def prepare(args):
     query_mode = getattr(args, "query_mode", "exact")
     quantized_index_name = getattr(args, "quantized_index_name", None)
     rss_only = getattr(args, "rss_only", False)
+    campaign_profile = getattr(args, "campaign_profile", CAMPAIGN_PROFILE_LEGACY)
+    normalized_v4 = campaign_profile == CAMPAIGN_PROFILE_NORMALIZED_V4
     sq8_rss_artifact = getattr(args, "all_rows_sq8_rss_artifact", None)
     expected_sq8_rss_sha256 = getattr(args, "expected_all_rows_sq8_rss_artifact_sha256", None)
-    validate_quantized_options(
-        query_mode, quantized_index_name, rss_only, args.rows,
-        sq8_rss_artifact, expected_sq8_rss_sha256,
-    )
+    if normalized_v4:
+        if rss_only or sq8_rss_artifact is not None or expected_sq8_rss_sha256 is not None:
+            raise ValueError("normalized-v4 campaign does not consume legacy RSS coordinate selection")
+        if query_mode == "quantized_rerank" and quantized_index_name != QUANTIZED_PROFILE_NAME:
+            raise ValueError("normalized-v4 SQ8 arm requires the minima_sq8 code plane")
+        if query_mode == "exact" and quantized_index_name is not None:
+            raise ValueError("normalized-v4 FP32-only arm does not declare an SQ8 code plane")
+    else:
+        validate_quantized_options(
+            query_mode, quantized_index_name, rss_only, args.rows,
+            sq8_rss_artifact, expected_sq8_rss_sha256,
+        )
     harness = producer_harness_commit(source, args.product_commit)
-    dataset, manifest, files, query_count = dataset_identity(args.dataset, args.rows)
+    dataset, manifest, files, query_count = dataset_identity(
+        args.dataset, args.rows, normalized_v4=normalized_v4,
+    )
     if rss_only and args.rows != 500000:
         raise ValueError("matched RSS mode requires the frozen 500000-row export")
     existing.service_binary_build_provenance(args.service_bin, args.product_commit)
+    go_helper = getattr(args, "go_helper", None)
+    go_tool = getattr(args, "go", "go")
+    if normalized_v4:
+        if go_helper is None or not go_helper.resolve().is_file():
+            raise ValueError("normalized-v4 campaign requires the pinned Go measurement helper")
+        result = subprocess.run(
+            [go_tool, "version", "-m", str(go_helper.resolve())],
+            text=True, capture_output=True, timeout=30, check=False,
+        )
+        if result.returncode != 0 or f"vcs.revision={args.product_commit}" not in result.stdout \
+                or "vcs.modified=false" not in result.stdout:
+            raise ValueError("normalized-v4 Go helper provenance differs from the candidate commit")
     root_tree = lambda path: subprocess.check_output(
         ["git", "rev-parse", harness + ":" + path], cwd=source, text=True,
     ).strip()
     product_tree = lambda path: subprocess.check_output(["git", "rev-parse", args.product_commit + ":" + path], cwd=source, text=True).strip()
     serving, serving_raw = strict_json_object(args.serving, "column_graph serving limits")
     existing.validate_column_graph_serving(serving)
-    plan = {"schema": SCHEMA, "qualification": "not_evaluated", "mode": "smoke" if args.rows == 512 else "diagnostic",
+    plan = {"schema": NORMALIZED_CAMPAIGN_SCHEMA if normalized_v4 else SCHEMA,
+            "qualification": "not_evaluated", "mode": "smoke" if args.rows < 500000 else "diagnostic",
+            "campaign_profile": campaign_profile,
             "harness_commit": harness, "harness_source_sha256": digest(Path(__file__)),
             "harness_trees": {path: root_tree(path) for path in HARNESS_TREE_PATHS},
             "product_commit": args.product_commit, "service_bin": str(args.service_bin.resolve()),
@@ -1396,28 +1692,54 @@ def prepare(args):
             "host_memory_bytes": existing.common.memory_bytes(),
             "host_resource_identity": host_resource_identity(),
             "blas_threads": {key: os.environ.get(key, "") for key in ("OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS")},
-            "python": os.sys.version, "numpy": np.__version__, "platform": platform.platform(),
+            **python_runtime_identity(),
             "query_usage": ("observed calibration 0..99 and observed revalidation 100..199; "
                             "both fixed sets select the control; neither is a holdout" if rss_only
                             else "diagnostic queries, not final holdout"),
             "infrastructure": "INFRASTRUCTURE_UNAVAILABLE: runner: shared workstation, serialized quiet window; persistent cache and local artifact storage"}
+    if normalized_v4:
+        plan.update(
+            representation=NORMALIZED_REPRESENTATION,
+            fixed_coordinate={"ef_search": NORMALIZED_EF_SEARCH,
+                              "rerank_candidates": NORMALIZED_RERANK_CANDIDATES,
+                              "top_k": 10},
+            production_timing={"schema": "treedb_cohere_v4_production_timing/v1",
+                               "queries": list(range(query_count)),
+                               "warmup_queries_per_arm": min(20, query_count),
+                               "measured_repetitions": 6,
+                               "arm_order": "alternate_first_complete_arm_batch_by_repetition",
+                               "diagnostics": False, "return_embedding": False},
+            go_helper=str(go_helper.resolve()), go_helper_sha256=digest(go_helper.resolve()),
+            go_tool=str(Path(go_tool).resolve()) if Path(go_tool).is_file() else go_tool,
+            query_usage=("fixed E=R=64 normalized-v4 production comparison; all queries are retained "
+                         "diagnostic evidence, not an unseen holdout"),
+        )
+        plan["infrastructure"] = normalized_v4_infrastructure_receipt(plan)
+        if plan["infrastructure"]["state"] != "available":
+            raise RuntimeError(
+                "INFRASTRUCTURE_UNAVAILABLE: "
+                + ", ".join(plan["infrastructure"]["reasons"])
+            )
     if query_mode == "quantized_rerank":
         plan.update(
             query_mode=query_mode,
             quantized_index_name=quantized_index_name,
             vector_m=16,
-            representation_arm=quantized_representation_arm(),
+            representation_arm=(normalized_v4_representation_arm()
+                                if normalized_v4 else quantized_representation_arm()),
             quantized_coordinate_policy="ordered_ef_grid_with_requested_rerank_candidates_equal_ef",
-            paired_timing=(None if rss_only else paired_timing_plan(query_count)),
-            query_usage=("observed fixed sets 0..99 and 100..199 both select every >4096 cohort; "
+            paired_timing=(None if rss_only or normalized_v4 else paired_timing_plan(query_count)),
+            query_usage=(("fixed E=R=64 normalized-v4 production comparison; all queries are retained "
+                          "diagnostic evidence, not an unseen holdout") if normalized_v4 else
+                        ("observed fixed sets 0..99 and 100..199 both select every >4096 cohort; "
                          "the prior RSS-selected all-row coordinate is revalidated once on the fresh graph; "
                          "filtered <=4096 is typed-exact correctness; "
                          "after selection, paired timing reuses frozen observed queries without retuning"
                          if args.rows == 500000 else
                          "four observed queries select the unfiltered 512-row cohort; smaller filtered cohorts are typed-exact; "
-                         "paired smoke timing reuses the same four observed queries without retuning"),
+                         "paired smoke timing reuses the same four observed queries without retuning")),
         )
-        if args.rows == 500000 and not rss_only:
+        if args.rows == 500000 and not rss_only and not normalized_v4:
             plan["all_rows_coordinate_lock"] = locked_sq8_rss_selection(
                 sq8_rss_artifact, expected_sq8_rss_sha256, plan,
             )
@@ -1482,7 +1804,12 @@ def validate_shutdowns(lifetimes, expected_count=None):
 def expected_shutdown_lifetimes(plan, failed, qualification):
     if failed is not None and qualification != "valid_unqualified":
         return None
-    return 1 if plan["rss_only"] or qualification == "valid_unqualified" else 2
+    if plan["rss_only"] or qualification == "valid_unqualified":
+        return 1
+    if (plan.get("campaign_profile") == CAMPAIGN_PROFILE_NORMALIZED_V4
+            and plan.get("query_mode") == "quantized_rerank" and plan["rows"] >= 5000):
+        return 3
+    return 2
 
 
 def process_cpu_endpoint(pid, expected_identity):
@@ -1959,12 +2286,21 @@ class Run:
         data = Path(plan["dataset"])
         self.vectors = np.memmap(data / "documents.f32", mode="r", dtype="<f4", shape=(plan["rows"], 768))
         self.queries = np.memmap(data / "queries.f32", mode="r", dtype="<f4", shape=(plan["queries"], 768))
+        normalized_v4 = plan.get("campaign_profile") == CAMPAIGN_PROFILE_NORMALIZED_V4
         if plan["mode"] == "diagnostic":
-            self.truth, _ = strict_json_object(
+            source_truth, _ = strict_json_object(
                 data / "truth.json", "frozen truth", EVIDENCE_JSON_MAX_BYTES,
             )
         else:
-            self.truth = exact_truth(self.vectors, self.queries, plan["eligible_counts"])
+            source_truth = exact_truth(self.vectors, self.queries, plan["eligible_counts"])
+        self.original_cosine_truth = source_truth
+        self.normalized_truth_scores = None
+        if normalized_v4:
+            self.truth, self.normalized_truth_scores = canonical_normalized_f32_truth(
+                self.vectors, self.queries, plan["eligible_counts"],
+            )
+        else:
+            self.truth = source_truth
         for eligible in plan["eligible_counts"]:
             if len(self.truth[str(eligible)]) != plan["queries"]:
                 raise ValueError("oracle query cardinality mismatch")
@@ -1980,6 +2316,7 @@ class Run:
         self.quantized_folded = False
         self.quantized_initial_snapshot = None
         self.quantized_owner_snapshots = {}
+        self.normalized_v4_resource_inventories = []
         self.info = None
         self.initial_graph_build = None
         self.quantized_requests = []
@@ -2042,6 +2379,11 @@ class Run:
 
     def ensure(self):
         vector_index_options = {"strategy": "column_graph", "ef_construction": self.plan["ef_construction"]}
+        normalized_v4 = self.plan.get("campaign_profile") == CAMPAIGN_PROFILE_NORMALIZED_V4
+        if normalized_v4:
+            vector_index_options["representation"] = NORMALIZED_REPRESENTATION
+            vector_index_options["m"] = 16
+            vector_index_options["ef_search"] = NORMALIZED_EF_SEARCH
         if self.plan.get("query_mode") == "quantized_rerank":
             vector_index_options["m"] = self.plan["vector_m"]
             vector_index_options["quantized_indexes"] = [{
@@ -2061,8 +2403,16 @@ class Run:
                 or info.extra.get("typed_input") is not True
                 or {(f.field, f.value_type) for f in info.scalar_fields} != {("meta.user_id", "string"), ("meta.fpath", "string")}):
             raise RuntimeError("public collection schema differs from frozen typed schema")
+        if normalized_v4 and (
+                info.vector_representation != NORMALIZED_REPRESENTATION
+                or info.vector_ef_search != NORMALIZED_EF_SEARCH):
+            raise RuntimeError("public collection schema differs from frozen normalized-v4 schema")
         if self.plan.get("query_mode") == "quantized_rerank":
-            if not existing.quantized_effective_index_valid(
+            if normalized_v4:
+                quantized = [item.to_dict() for item in info.quantized_indexes]
+                if quantized != [{"name": QUANTIZED_PROFILE_NAME, "codec": "scalar_u8", "version": 1}]:
+                    raise RuntimeError("normalized-v4 collection SQ8 declaration differs from frozen minima_sq8")
+            elif not existing.quantized_effective_index_valid(
                     info, "minima_cohere", 768, "cosine", self.plan["ef_construction"]):
                 raise RuntimeError("public collection quantized profile differs from frozen minima_sq8")
             self.emit("quantized_index", observed=info.to_dict())
@@ -2206,8 +2556,164 @@ class Run:
                     window.update(ended_monotonic_ns=time.monotonic_ns(), success=True)
         return response
 
+    def search_normalized_v4(self, phase, eligible, query, writer_active=False,
+                             query_filter=None, request_mode=None):
+        configured_quantized = self.plan.get("query_mode") == "quantized_rerank"
+        request_mode = ("quantized_rerank" if configured_quantized else "exact") \
+            if request_mode is None else request_mode
+        if request_mode not in ("exact", "quantized_rerank") \
+                or (request_mode == "quantized_rerank" and not configured_quantized):
+            raise ValueError("normalized-v4 request mode is outside the frozen collection arm")
+        selected_filter = predicate(self.plan["rows"], eligible) if query_filter is None else query_filter
+        record = {
+            "request_sequence": len(self.quantized_requests) + 1,
+            "phase": phase, "eligible": eligible, "query": query,
+            "requested_ef_search": NORMALIZED_EF_SEARCH,
+            "requested_rerank_candidates": (
+                NORMALIZED_RERANK_CANDIDATES if request_mode == "quantized_rerank" else None
+            ),
+            "command_version": 4, "request_mode": request_mode,
+            "diagnostics": True, "return_embedding": False,
+            "expected_generation": self.info.generation,
+            "filter": selected_filter, "started_monotonic_ns": time.monotonic_ns(),
+            "outcome": "error", "results": [],
+        }
+        with self.lock:
+            self.quantized_requests.append(record)
+        response = None
+        try:
+            timing = {}
+            response = self.timed(
+                phase,
+                lambda: v4_gate.python_call(
+                    self.clients.native, self.info, self.queries[query].tolist(), request_mode,
+                    diagnostics=True, index="minima_cohere", top_k=10,
+                    ef_search=NORMALIZED_EF_SEARCH,
+                    rerank_candidates=NORMALIZED_RERANK_CANDIDATES,
+                    quantized_index=QUANTIZED_PROFILE_NAME,
+                ) if selected_filter is None else self.clients.native.query_by_embedding(
+                    "minima_cohere", self.queries[query].tolist(), 10, selected_filter,
+                    route="ann", ef_search=NORMALIZED_EF_SEARCH,
+                    query_mode=request_mode,
+                    **({"quantized_index_name": QUANTIZED_PROFILE_NAME,
+                        "quantized_rerank_candidates": NORMALIZED_RERANK_CANDIDATES}
+                       if request_mode == "quantized_rerank" else {}),
+                    return_embedding=False, diagnostics=True, index_info=self.info,
+                ),
+                timing_evidence=timing, eligible=eligible, ef=NORMALIZED_EF_SEARCH,
+                query=query, writer_active=writer_active, request_mode=request_mode,
+                diagnostics=True,
+            )
+            record.update(timing)
+            # Retain the returned evidence even when a subsequent validation
+            # rejects it. This remains an error receipt, never accepted evidence.
+            record.update(
+                route_identity=asdict(response.route_identity) if response.route_identity is not None else None,
+                dense_work=asdict(response.dense_work) if response.dense_work is not None else None,
+                score_plane=asdict(response.score_plane) if response.score_plane is not None else None,
+                results=[{"id": document.id, "content": document.content,
+                          "meta": document.meta, "score": float(document.score)}
+                         for document in response.documents],
+            )
+            receipt = v4_gate.validate_response(
+                response, request_mode, diagnostics=True, top_k=min(10, eligible),
+                expected_route=normalized_v4_expected_routes(
+                    eligible, selected_filter is not None,
+                ),
+            )
+            identity, work, proof = response.route_identity, response.dense_work, response.score_plane
+            if (identity is None or work is None or identity.filter != (selected_filter is not None)
+                    or identity.result_count != len(response.documents)
+                    or identity.representation != NORMALIZED_REPRESENTATION
+                    or identity.embedding_vector_reads != 0
+                    or identity.embedding_vector_bytes != 0
+                    or identity.embedding_output_bytes != 0):
+                raise RuntimeError("normalized-v4 diagnostic receipt is not request-complete")
+            if selected_filter is not None and work.graph.filter.eligible_rows != eligible:
+                raise RuntimeError("normalized-v4 producer filter membership differs from the frozen cohort")
+            if request_mode == "exact" and writer_active:
+                states = self.quantized_allowed_states(
+                    True, timing["started_monotonic_ns"], timing["ended_monotonic_ns"],
+                )
+                if not any(quantized_response_projection_matches_state(
+                        response.documents, state) for state in states):
+                    raise RuntimeError("normalized-v4 exact response crossed owner lifecycle states")
+            if request_mode == "quantized_rerank":
+                if (proof is None or proof.forbidden_stable_score_calls != 0
+                        or proof.packed_score_batch_calls != identity.packed_score_calls
+                        or proof.packed_score_candidates != identity.packed_score_candidates
+                        or proof.packed_vector_bytes_read != identity.packed_vector_bytes_read):
+                    raise RuntimeError("normalized-v4 SQ8 proof is not packed and same-owner")
+                self.validate_quantized_lifecycle(
+                    response, record, writer_active, eligible, NORMALIZED_EF_SEARCH,
+                    selected_filter is not None,
+                )
+            ids, scores, results = [], [], []
+            query_vector = canonical_normalized_f32_rows(self.queries[query:query + 1])[0]
+            for document in response.documents:
+                row = int(document.id.removeprefix("row-"))
+                if (document.id != f"row-{row:06d}" or not 0 <= row < self.plan["rows"]
+                        or (row * 7919) % self.plan["rows"] >= eligible
+                        or document.embedding is not None or document.score is None):
+                    raise RuntimeError("normalized-v4 result shape or cohort membership is invalid")
+                expected_meta = {"user_id": f"{(row * 7919) % self.plan['rows']:06d}",
+                                 "fpath": f"/cohere/{row // 256:06d}.txt"}
+                base_content = f"minima-cohere:{row}"
+                expected_content = ({base_content, base_content + ":updated"}
+                                    if writer_active else
+                                    {base_content + (":updated" if row in self.updated else "")})
+                if document.meta != expected_meta or document.content not in expected_content:
+                    raise RuntimeError("normalized-v4 result projection differs from the reachable state")
+                if not math.isfinite(document.score):
+                    raise RuntimeError("normalized-v4 score differs from canonical float32 dot")
+                ids.append(document.id)
+                scores.append(float(document.score))
+                results.append({"id": document.id, "content": document.content,
+                                "meta": document.meta, "score": float(document.score)})
+            if ids:
+                ordinals = [int(identifier.removeprefix("row-")) for identifier in ids]
+                vectors = canonical_normalized_f32_rows(self.vectors[ordinals])
+                expected_scores = np.clip(vectors @ query_vector, -1, 1)
+                if not np.allclose(scores, expected_scores, rtol=2e-6, atol=2e-6):
+                    raise RuntimeError("normalized-v4 score differs from canonical float32 dot")
+            if list(zip((-score for score in scores), ids)) != sorted(zip((-score for score in scores), ids)):
+                raise RuntimeError("normalized-v4 results are not canonically ordered")
+            canonical_truth = [] if eligible == 0 else self.truth[str(eligible)][query]
+            original_truth = [] if eligible == 0 else self.original_cosine_truth[str(eligible)][query]
+            recall = len(set(ids) & set(canonical_truth)) / len(canonical_truth) if canonical_truth else (1.0 if not ids else 0.0)
+            original_recall = len(set(ids) & set(original_truth)) / len(original_truth) if original_truth else (1.0 if not ids else 0.0)
+            record.update(
+                outcome="success", results=results, recall=recall,
+                original_cosine_recall=original_recall,
+                dense_work=asdict(work), score_plane=asdict(proof) if proof is not None else None,
+                route_identity=receipt["route"],
+            )
+            self.emit(
+                "search_result", phase=phase, eligible=eligible,
+                ef=NORMALIZED_EF_SEARCH, rerank_candidates=(
+                    NORMALIZED_RERANK_CANDIDATES if request_mode == "quantized_rerank" else None
+                ), query=query, ids=ids, recall=recall,
+                scores=scores,
+                original_cosine_recall=original_recall, writer_active=writer_active,
+                request_mode=request_mode, command_version=4, diagnostics=True,
+                route_identity=record["route_identity"], dense_work=record["dense_work"],
+                score_plane=record["score_plane"],
+            )
+            return response
+        except BaseException as exc:
+            record.setdefault("ended_monotonic_ns", time.monotonic_ns())
+            record["error"] = f"{type(exc).__name__}: {exc}"
+            self.emit("search_request_failure", request=record)
+            raise
+
     def search(self, phase, eligible, ef, query, writer_active=False, query_filter=None,
                request_mode=None, request_ledger=None):
+        if self.plan.get("campaign_profile") == CAMPAIGN_PROFILE_NORMALIZED_V4:
+            if request_ledger is not None:
+                raise ValueError("normalized-v4 production timing uses the dedicated retained lane")
+            return self.search_normalized_v4(
+                phase, eligible, query, writer_active, query_filter, request_mode,
+            )
         configured_quantized = self.plan.get("query_mode") == "quantized_rerank"
         request_mode = ("quantized_rerank" if configured_quantized else "exact") \
             if request_mode is None else request_mode
@@ -2347,6 +2853,14 @@ class Run:
     def check_documents(self, docs, expected_ids):
         if [None if doc is None else doc.id for doc in docs] != expected_ids:
             raise RuntimeError("public materialization ID ordering/missing mismatch")
+        canonical_vectors = {}
+        if self.plan.get("campaign_profile") == CAMPAIGN_PROFILE_NORMALIZED_V4:
+            present = [doc for doc in docs if doc is not None]
+            if present:
+                rows = [int(doc.id.removeprefix("row-")) for doc in present]
+                canonical_vectors = dict(zip(
+                    (doc.id for doc in present), canonical_normalized_f32_rows(self.vectors[rows]),
+                ))
         for doc in docs:
             if doc is None:
                 continue
@@ -2361,10 +2875,16 @@ class Run:
             actual_norm, want_norm = np.linalg.norm(actual), np.linalg.norm(want)
             if not (math.isfinite(actual_norm) and actual_norm > 0 and math.isfinite(want_norm) and want_norm > 0):
                 raise RuntimeError("public materialization zero/nonfinite vector norm")
-            actual /= actual_norm
             want /= want_norm
+            if self.plan.get("campaign_profile") != CAMPAIGN_PROFILE_NORMALIZED_V4:
+                actual /= actual_norm
+            else:
+                want = canonical_vectors[doc.id]
+                if abs(actual_norm - 1.0) > 1e-5 or not np.array_equal(actual.astype(np.float32), want):
+                    raise RuntimeError("normalized-v4 output is not the stored canonical vector")
             if np.max(np.abs(actual - want)) > 1e-6:
                 raise RuntimeError("public materialization full-vector mismatch")
+        return canonical_vectors
 
     def overlap(self):
         quantized = self.plan.get("query_mode") == "quantized_rerank"
@@ -2382,8 +2902,12 @@ class Run:
             for n in range(64):
                 eligible = self.plan["overlap_eligible"]
                 ef = self.selected_efs.get(str(eligible), self.plan["overlap_ef"])
+                request_mode = None
+                if (quantized and self.plan.get("campaign_profile") == CAMPAIGN_PROFILE_NORMALIZED_V4):
+                    request_mode = "exact" if (n + worker) % 2 == 0 else "quantized_rerank"
                 self.search("overlap_search", eligible, ef,
-                            (n * 4 + worker) % self.plan["queries"], active.is_set())
+                            (n * 4 + worker) % self.plan["queries"], active.is_set(),
+                            request_mode=request_mode)
         def writer():
             barrier.wait(timeout=30)
             try:
@@ -2409,6 +2933,11 @@ class Run:
             self.updated.update(rows)
         docs = self.timed("native_get_many", lambda: self.clients.native.get_many("minima_cohere", ids, index_info=self.info))
         self.check_documents(docs, ids)
+        if self.plan.get("campaign_profile") == CAMPAIGN_PROFILE_NORMALIZED_V4:
+            modes = ("exact", "quantized_rerank") if quantized else ("exact",)
+            for mode in modes:
+                self.search("post_update_visibility", self.plan["rows"], NORMALIZED_EF_SEARCH, 0,
+                            request_mode=mode)
         deleted = self.timed("http_delete_file", lambda: self.clients.delete_by_filter("minima_cohere",
             {"field": "meta.fpath", "operator": "==", "value": "/cohere/000000.txt"}, expected_generation=self.info.generation))
         if deleted.deleted != len(rows):
@@ -2419,7 +2948,19 @@ class Run:
         self.upsert(rows, "reindex_replacement", updated=True, record_quantized=quantized)
         docs = self.timed("native_reinsert_visibility", lambda: self.clients.native.get_many("minima_cohere", ids, index_info=self.info))
         self.check_documents(docs, ids)
+        if self.plan.get("campaign_profile") == CAMPAIGN_PROFILE_NORMALIZED_V4:
+            for mode in (("exact", "quantized_rerank") if quantized else ("exact",)):
+                self.search("post_replacement_visibility", self.plan["rows"], NORMALIZED_EF_SEARCH, 1,
+                            request_mode=mode)
         empty_filter = {"field": "meta.user_id", "operator": "==", "value": "missing-user"}
+        if self.plan.get("campaign_profile") == CAMPAIGN_PROFILE_NORMALIZED_V4:
+            modes = ("exact", "quantized_rerank") if quantized else ("exact",)
+            responses = [self.search("empty_user", 0, NORMALIZED_EF_SEARCH, 0,
+                                     query_filter=empty_filter, request_mode=mode)
+                         for mode in modes]
+            if any(response.documents for response in responses):
+                raise RuntimeError("empty-user normalized-v4 query returned documents")
+            return
         if self.plan.get("query_mode") == "quantized_rerank":
             response = self.search("empty_user", 0, self.selected_efs[str(self.plan["rows"])], 0,
                                    query_filter=empty_filter)
@@ -2432,11 +2973,30 @@ class Run:
 
     def scroll(self):
         after, seen = None, 0
+        final_state = hashlib.sha256()
+        maximum_vector_error = 0.0
+        maximum_norm_error = 0.0
         while True:
             result = self.clients.filter_documents("minima_cohere", limit=256, return_embedding=True,
                 after_id=after, cursor_page=True, expected_generation=self.info.generation)
             expected = [f"row-{row:06d}" for row in range(seen, min(seen + 256, self.plan["rows"]))]
-            self.check_documents(result.documents, expected)
+            canonical_vectors = self.check_documents(result.documents, expected)
+            if self.plan.get("campaign_profile") == CAMPAIGN_PROFILE_NORMALIZED_V4:
+                for document in result.documents:
+                    row = int(document.id.removeprefix("row-"))
+                    payload = canonical({
+                        "id": document.id, "content": document.content, "meta": document.meta,
+                    })
+                    final_state.update(len(payload).to_bytes(8, "big"))
+                    final_state.update(payload)
+                    actual = np.asarray(document.embedding, dtype=np.float64)
+                    expected_vector = canonical_vectors[document.id]
+                    maximum_vector_error = max(
+                        maximum_vector_error, float(np.max(np.abs(actual - expected_vector))),
+                    )
+                    maximum_norm_error = max(
+                        maximum_norm_error, abs(float(np.linalg.norm(actual)) - 1.0),
+                    )
             seen += len(result.documents)
             if result.exhausted:
                 break
@@ -2445,7 +3005,19 @@ class Run:
             after = result.next_after_id
         if seen != self.plan["rows"]:
             raise RuntimeError("public full-state count mismatch")
-        self.emit("full_state_verified", rows=seen, vectors_checked=seen, normalized_full_vector_tolerance=1e-6)
+        self.emit(
+            "full_state_verified", rows=seen, vectors_checked=seen,
+            normalized_full_vector_tolerance=1e-6,
+            projection_sha256=(final_state.hexdigest()
+                               if self.plan.get("campaign_profile") == CAMPAIGN_PROFILE_NORMALIZED_V4
+                               else None),
+            maximum_vector_error=(maximum_vector_error
+                                  if self.plan.get("campaign_profile") == CAMPAIGN_PROFILE_NORMALIZED_V4
+                                  else None),
+            maximum_norm_error=(maximum_norm_error
+                                if self.plan.get("campaign_profile") == CAMPAIGN_PROFILE_NORMALIZED_V4
+                                else None),
+        )
 
     def paired_resource_endpoint(self):
         """Capture one drained, same-owner endpoint around a paired query batch."""
@@ -2496,6 +3068,52 @@ class Run:
             }
         except (KeyError, TypeError, ValueError, RuntimeError) as exc:
             raise RuntimeError(f"paired resource endpoint unavailable: {exc}") from exc
+
+    def normalized_v4_resource_inventory(self, phase):
+        if self.plan.get("campaign_profile") != CAMPAIGN_PROFILE_NORMALIZED_V4:
+            raise RuntimeError("normalized-v4 resource inventory requested by a legacy campaign")
+        endpoint = self.paired_resource_endpoint()
+        graph = endpoint["typed_graph"]
+        assets = graph.get("vector_assets")
+        typed_parts = graph.get("typed_column_parts")
+        if (not isinstance(assets, list) or not assets or not isinstance(typed_parts, list)
+                or not graph.get("publication_unchanged") or not graph.get("serving_ready")):
+            raise RuntimeError("normalized-v4 serving inventory is unavailable")
+        inventory = {
+            "schema": "treedb_cohere_normalized_v4_resource_inventory/v1",
+            "phase": phase, "captured_monotonic_ns": endpoint["captured_monotonic_ns"],
+            "pid": endpoint["pid"],
+            "linux_process_identity": endpoint["linux_process_identity"],
+            "generation": endpoint["generation"],
+            "process_memory": linux_process_memory(endpoint["pid"]),
+            "go_memory": endpoint["work"].get("memory"),
+            "typed_graph": graph,
+            "owned_files": owned_db_file_inventory(self.output / "db"),
+        }
+        if inventory["owned_files"]["total_bytes"] != endpoint["total_db_bytes_including_wal"]:
+            raise RuntimeError("normalized-v4 file inventory differs from the owned-directory total")
+        self.normalized_v4_resource_inventories.append(inventory)
+        self.emit("normalized_v4_resource_inventory", inventory=inventory)
+        return inventory
+
+    def write_normalized_v4_resource_inventories(self):
+        artifact = {
+            "schema": "treedb_cohere_normalized_v4_resource_inventories/v1",
+            "rows": self.plan["rows"], "dimensions": 768,
+            "query_mode": self.plan.get("query_mode", "exact"),
+            "representation": NORMALIZED_REPRESENTATION,
+            "inventories": self.normalized_v4_resource_inventories,
+        }
+        phases = [row["phase"] for row in self.normalized_v4_resource_inventories]
+        required = ["initial_ready", "pre_fold", "post_fold", "post_reopen", "final_verified"]
+        if phases != required:
+            raise RuntimeError(f"normalized-v4 resource inventory phases={phases} want {required}")
+        path = self.output / "normalized_v4_resource_inventories.json"
+        raw = canonical(artifact)
+        with path.open("xb") as output:
+            output.write(raw)
+        self.emit("normalized_v4_resource_inventories", path=str(path), sha256=bytes_digest(raw), bytes=len(raw))
+        return artifact
 
     def paired_query_batch(self, batch_kind, repetition, ledger):
         timing = self.plan["paired_timing"]
@@ -2591,6 +3209,176 @@ class Run:
         self.emit("paired_query_timing", artifact=artifact)
         return artifact
 
+    def normalized_v4_production_matrix(self):
+        if (self.plan.get("campaign_profile") != CAMPAIGN_PROFILE_NORMALIZED_V4
+                or self.plan.get("query_mode") != "quantized_rerank"
+                or self.plan["rows"] < 5000):
+            raise RuntimeError("normalized-v4 matrix requires the admitted SQ8 campaign database")
+        timing = self.plan["production_timing"]
+        if not same_json(timing, {
+                "schema": "treedb_cohere_v4_production_timing/v1",
+                "queries": list(range(self.plan["queries"])),
+                "warmup_queries_per_arm": min(20, self.plan["queries"]),
+                "measured_repetitions": 6,
+                "arm_order": "alternate_first_complete_arm_batch_by_repetition",
+                "diagnostics": False, "return_embedding": False}):
+            raise RuntimeError("normalized-v4 production timing differs from the frozen plan")
+        helper = Path(self.plan["go_helper"])
+        if digest(helper) != self.plan["go_helper_sha256"]:
+            raise RuntimeError("normalized-v4 Go helper changed after plan freeze")
+        queries = [row.tolist() for row in self.queries]
+        live_before = self.paired_resource_endpoint()
+        go_native = v4_gate.run_go_helper(helper, [
+            "-lane=native", f"-address={self.plan['native_address']}",
+            f"-dataset={self.plan['dataset']}", "-index=minima_cohere",
+            f"-generation={self.info.generation}",
+            f"-quantized-index={QUANTIZED_PROFILE_NAME}",
+        ])
+        python_native = v4_gate.measure_python(
+            self.clients.native, self.info, queries, index="minima_cohere",
+            top_k=10, ef_search=NORMALIZED_EF_SEARCH,
+            rerank_candidates=NORMALIZED_RERANK_CANDIDATES,
+            quantized_index=QUANTIZED_PROFILE_NAME, repetitions=6,
+            warmup_queries=min(20, len(queries)),
+        )
+        profiles = v4_gate.capture_profile(
+            self.controller, self.clients.native, self.info, queries,
+            self.output / "profiles", index="minima_cohere", top_k=10,
+            ef_search=NORMALIZED_EF_SEARCH,
+            rerank_candidates=NORMALIZED_RERANK_CANDIDATES,
+            quantized_index=QUANTIZED_PROFILE_NAME,
+        )
+        profile_analysis = v4_gate.pprof_top(
+            self.plan["go_tool"], Path(self.plan["service_bin"]), profiles, self.output,
+        )
+        live_after = self.paired_resource_endpoint()
+        self.emit("production_matrix_owner_transition", state="service_stop_for_exclusive_go_seams",
+                  linux_process_identity=self.controller._owned_identity)
+        self.clients.close()
+        seams = v4_gate.run_go_helper(helper, [
+            "-lane=seams", f"-dir={self.output / 'db'}",
+            f"-dataset={self.plan['dataset']}", f"-serving={self.plan['serving_path']}",
+            "-index=minima_cohere", f"-quantized-index={QUANTIZED_PROFILE_NAME}",
+        ])
+        seam_records = seams.get("sub_lanes")
+        if not isinstance(seam_records, list) or len(seam_records) != 3 or any(
+                not isinstance(lane, dict) for lane in seam_records):
+            raise RuntimeError("normalized-v4 Go seam inventory is malformed")
+        by_name = {lane.get("lane"): lane for lane in seam_records}
+        required = {"collection_search", "collection_fetch", "service"}
+        if set(by_name) != required:
+            raise RuntimeError("normalized-v4 Go seam inventory is incomplete")
+        engine = self.normalized_v4_engine_diagnostic()
+        self.controller.start()
+        self.ensure()
+        self.optimize("ensure")
+        self.emit("production_matrix_owner_transition", state="service_restarted_and_readmitted",
+                  linux_process_identity=self.controller._owned_identity)
+        lanes = {
+            "go_native": go_native, "python_native": python_native,
+            "collection_search": by_name["collection_search"],
+            "collection_fetch": by_name["collection_fetch"],
+            "service": by_name["service"],
+        }
+        owner_identity = v4_gate.immutable_owner_identity(lanes)
+        evaluation, failures = v4_gate.evaluate({
+            "go_native": go_native, "python_native": python_native,
+            "collection": by_name["collection_fetch"], "service": by_name["service"],
+        })
+        artifact = {
+            "schema": "treedb_cohere_normalized_v4_production_matrix/v1",
+            "rows": self.plan["rows"], "dimensions": 768,
+            "query_order": timing["queries"], "top_k": 10,
+            "ef_search": NORMALIZED_EF_SEARCH,
+            "rerank_candidates": NORMALIZED_RERANK_CANDIDATES,
+            "representation": NORMALIZED_REPRESENTATION,
+            "diagnostics": False, "return_embedding": False,
+            "live_resource_before": live_before, "live_resource_after": live_after,
+            "lanes": lanes, "immutable_owner_identity": owner_identity,
+            "producer_evaluation": evaluation,
+            "producer_failures": failures,
+            "profile_capture": profiles, "profile_analysis": profile_analysis,
+            "engine_diagnostic": engine,
+        }
+        path = self.output / "normalized_v4_production_matrix.json"
+        raw = canonical(artifact)
+        with path.open("xb") as output:
+            output.write(raw)
+        self.emit("normalized_v4_production_matrix", path=str(path), sha256=bytes_digest(raw),
+                  bytes=len(raw), lane_names=sorted(lanes))
+        return artifact
+
+    def normalized_v4_engine_diagnostic(self):
+        """Measure candidate and packed stages on the stopped campaign owner."""
+        output = self.output / "normalized_v4_engine_diagnostic.json"
+        stdout = self.output / "normalized_v4_engine_diagnostic.stdout"
+        stderr = self.output / "normalized_v4_engine_diagnostic.stderr"
+        command = [
+            self.plan["go_tool"], "test",
+            "-ldflags", (
+                "-X=github.com/snissn/gomap/TreeDB/collections."
+                "cosineNormalizedF32CampaignLinkedCommit=" + self.plan["product_commit"]
+            ),
+            "./TreeDB/collections",
+            "-run", "^TestCosineNormalizedF32V1CampaignEngineDiagnostic$",
+            "-count=1", "-timeout=30m",
+        ]
+        environment = os.environ.copy()
+        environment.update({
+            "TREEDB_NORMALIZED_V4_DIAGNOSTIC_DB": str(self.output / "db"),
+            "TREEDB_NORMALIZED_V4_DIAGNOSTIC_DATA": self.plan["dataset"],
+            "TREEDB_NORMALIZED_V4_DIAGNOSTIC_SERVING": self.plan["serving_path"],
+            "TREEDB_NORMALIZED_V4_DIAGNOSTIC_OUTPUT": str(output),
+            "TREEDB_NORMALIZED_V4_SOURCE_COMMIT": self.plan["product_commit"],
+            "TREEDB_NORMALIZED_V4_INDEX": "minima_cohere",
+            "TREEDB_NORMALIZED_V4_QUANTIZED_INDEX": QUANTIZED_PROFILE_NAME,
+            "TREEDB_NORMALIZED_V4_ROWS": str(self.plan["rows"]),
+        })
+        completed = subprocess.run(
+            command, cwd=Path(__file__).resolve().parents[2], env=environment,
+            text=True, capture_output=True, timeout=1900, check=False,
+        )
+        stdout.write_text(completed.stdout, encoding="utf-8")
+        stderr.write_text(completed.stderr, encoding="utf-8")
+        if completed.returncode != 0:
+            raise RuntimeError(
+                "normalized-v4 campaign engine diagnostic failed: "
+                + completed.stderr.strip()
+            )
+        artifact, raw = strict_json_object(
+            output, "normalized-v4 engine diagnostic", EVIDENCE_JSON_MAX_BYTES,
+        )
+        expected = {
+            "schema": "treedb_cosine_normalized_f32_campaign_engine/v1",
+            "source_commit": self.plan["product_commit"],
+            "rows": self.plan["rows"], "dimensions": 768,
+            "query_count": self.plan["queries"], "top_k": 10,
+            "ef_search": NORMALIZED_EF_SEARCH,
+            "rerank_candidates": NORMALIZED_RERANK_CANDIDATES,
+            "representation": NORMALIZED_REPRESENTATION,
+            "index": "minima_cohere", "quantized_index": QUANTIZED_PROFILE_NAME,
+            "collection_generation": self.info.generation,
+        }
+        if any(artifact.get(key) != value for key, value in expected.items()):
+            raise RuntimeError("normalized-v4 engine diagnostic identity differs from the campaign")
+        if (artifact.get("dataset_manifest_sha256") != self.plan["dataset_manifest_sha256"]
+                or artifact.get("queries_sha256") != self.plan["dataset_files_sha256"]["queries"]
+                or artifact.get("serving_sha256") != self.plan["serving_sha256"]
+                or len(artifact.get("shortlists", [])) != self.plan["queries"]
+                or len(artifact.get("candidate_only", [])) != 6
+                or len(artifact.get("packed_same_shortlist", [])) != 6
+                or artifact.get("stable_duplicate_score_calls") != 0):
+            raise RuntimeError("normalized-v4 engine diagnostic is incomplete")
+        result = {
+            "path": str(output), "sha256": bytes_digest(raw), "bytes": len(raw),
+            "command": command,
+            "stdout": {"path": str(stdout), "sha256": digest(stdout)},
+            "stderr": {"path": str(stderr), "sha256": digest(stderr)},
+            "artifact": artifact,
+        }
+        self.emit("normalized_v4_engine_diagnostic", **result)
+        return result
+
     def rss_boundary(self):
         truth = self.truth[str(self.plan["rows"])]
         fp32_requests = []
@@ -2672,6 +3460,27 @@ class Run:
             }
         return artifact
 
+    def write_normalized_v4_truth(self):
+        if self.plan.get("campaign_profile") != CAMPAIGN_PROFILE_NORMALIZED_V4:
+            raise RuntimeError("normalized-v4 truth is outside the legacy campaign")
+        artifact = {
+            "schema": "treedb_cohere_normalized_v4_truth/v1",
+            "rows": self.plan["rows"], "dimensions": 768,
+            "query_order": list(range(self.plan["queries"])),
+            "eligible_counts": self.plan["eligible_counts"],
+            "canonical_normalized_f32_dot": {
+                "ordered_ids": self.truth, "ordered_scores": self.normalized_truth_scores,
+            },
+            "original_fp32_cosine": {"ordered_ids": self.original_cosine_truth},
+            "source_truth_sha256": self.plan["dataset_files_sha256"]["truth"],
+        }
+        path = self.output / "normalized_v4_truth.json"
+        raw = canonical(artifact)
+        with path.open("xb") as output:
+            output.write(raw)
+        self.emit("normalized_v4_truth", path=str(path), sha256=bytes_digest(raw), bytes=len(raw))
+        return artifact
+
     def execute(self):
         self.started = time.monotonic()
         monitor = threading.Thread(target=self.guard, daemon=True)
@@ -2687,10 +3496,48 @@ class Run:
             decisions = self.initial_graph_build.status.column_graph_build.construction_decisions
             if (decisions is not None) != self.plan["construction_decisions"]:
                 raise RuntimeError("construction decision observer response differs from frozen mode")
+            if self.plan.get("campaign_profile") == CAMPAIGN_PROFILE_NORMALIZED_V4:
+                self.write_normalized_v4_truth()
             if self.plan["rss_only"]:
                 rss_artifact = self.rss_boundary()
                 if rss_artifact["reasons"]:
                     raise RuntimeError("; ".join(rss_artifact["reasons"]))
+            elif self.plan.get("campaign_profile") == CAMPAIGN_PROFILE_NORMALIZED_V4:
+                quantized = self.plan.get("query_mode") == "quantized_rerank"
+                self.selected_efs = {
+                    str(eligible): NORMALIZED_EF_SEARCH
+                    for eligible in self.plan["eligible_counts"]
+                }
+                self.normalized_v4_resource_inventory("initial_ready")
+                if quantized and self.plan["rows"] >= 5000:
+                    self.normalized_v4_production_matrix()
+                modes = ("exact", "quantized_rerank") if quantized else ("exact",)
+                for mode in modes:
+                    for eligible in self.plan["eligible_counts"]:
+                        for query in range(self.plan["queries"]):
+                            self.search("fixed_coordinate_curve", eligible, NORMALIZED_EF_SEARCH,
+                                        query, request_mode=mode)
+                self.overlap()
+                self.lifecycle()
+                self.normalized_v4_resource_inventory("pre_fold")
+                self.timed("pre_close_fold", lambda: self.optimize("fold"))
+                self.normalized_v4_resource_inventory("post_fold")
+                self.timed("close", self.clients.close)
+                expected_before_reopen = 2 if quantized and self.plan["rows"] >= 5000 else 1
+                validate_shutdowns(self.controller.lifetimes, expected_before_reopen)
+                self.timed("reopen", self.controller.start)
+                self.timed("idempotent_ensure", self.ensure)
+                self.timed("reopen_graph_ensure", lambda: self.optimize("ensure"))
+                self.normalized_v4_resource_inventory("post_reopen")
+                for mode in modes:
+                    for eligible in self.plan["eligible_counts"]:
+                        for query in range(self.plan["queries"]):
+                            self.search("post_reopen_curve", eligible, NORMALIZED_EF_SEARCH,
+                                        query, request_mode=mode)
+                self.timed("verification_only_full_scroll", self.scroll)
+                self.normalized_v4_resource_inventory("final_verified")
+                self.write_normalized_v4_resource_inventories()
+                qualification = "producer_gates_passed"
             elif self.plan.get("query_mode") == "quantized_rerank":
                 cold_populations = set()
 
@@ -2846,7 +3693,9 @@ def main():
     parser.add_argument("--product-commit", required=True)
     parser.add_argument("--serving", required=True, type=Path)
     parser.add_argument("--run-dir", required=True, type=Path)
-    parser.add_argument("--rows", type=int, choices=[512, 500000], default=500000)
+    parser.add_argument("--rows", type=int, choices=[512, 5000, 500000], default=500000)
+    parser.add_argument("--campaign-profile", choices=(CAMPAIGN_PROFILE_LEGACY, CAMPAIGN_PROFILE_NORMALIZED_V4),
+                        default=CAMPAIGN_PROFILE_LEGACY)
     parser.add_argument("--rss-only", action="store_true")
     parser.add_argument("--query-mode", choices=("exact", "quantized_rerank"), default="exact")
     parser.add_argument("--quantized-index-name")
@@ -2859,6 +3708,8 @@ def main():
         default=DEFAULT_EF_CONSTRUCTION,
     )
     parser.add_argument("--construction-decisions", action="store_true")
+    parser.add_argument("--go-helper", type=Path)
+    parser.add_argument("--go", default="go")
     parser.add_argument("--url", default="http://127.0.0.1:17420")
     parser.add_argument("--native-address", default="127.0.0.1:17422")
     parser.add_argument("--diagnostics-url", default="http://127.0.0.1:17421")

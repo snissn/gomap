@@ -380,16 +380,18 @@ class BenchmarkVectorIndexOptions:
     ef_construction: Optional[int] = None
     ef_search: Optional[int] = None
     quantized_indexes: Sequence[QuantizedIndexInfo | Mapping[str, Any]] = field(default_factory=list)
+    representation: str = ""
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "BenchmarkVectorIndexOptions":
         data = _as_mapping(data, "vector index options")
-        _reject_unknown(data, ["strategy", "m", "ef_construction", "ef_search", "quantized_indexes"], "vector index options")
+        _reject_unknown(data, ["strategy", "representation", "m", "ef_construction", "ef_search", "quantized_indexes"], "vector index options")
         raw_quantized = data.get("quantized_indexes", [])
         if isinstance(raw_quantized, (str, bytes, bytearray)) or not isinstance(raw_quantized, Sequence):
             raise TypeError("vector index options.quantized_indexes must be a sequence")
         return cls(
             strategy=_as_optional_str_default(data.get("strategy"), "vector index options.strategy"),
+            representation=_as_optional_str_default(data.get("representation"), "vector index options.representation"),
             m=None if "m" not in data or data.get("m") is None else _as_int(data.get("m"), "vector index options.m"),
             ef_construction=None
             if "ef_construction" not in data or data.get("ef_construction") is None
@@ -404,6 +406,8 @@ class BenchmarkVectorIndexOptions:
         out: Dict[str, Any] = {}
         if self.strategy:
             out["strategy"] = self.strategy
+        if self.representation:
+            out["representation"] = self.representation
         if self.m is not None:
             out["m"] = _as_int(self.m, "vector index options.m")
         if self.ef_construction is not None:
@@ -491,6 +495,7 @@ class IndexInfo:
     text_field: str = ""
     text_index_name: str = ""
     extra: Dict[str, Any] = field(default_factory=dict)
+    vector_representation: str = ""
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "IndexInfo":
@@ -504,6 +509,7 @@ class IndexInfo:
             "embedding_field",
             "vector_index_name",
             "vector_strategy",
+            "vector_representation",
             "vector_m",
             "vector_ef_construction",
             "vector_ef_search",
@@ -524,6 +530,9 @@ class IndexInfo:
             embedding_field=embedding_field,
             vector_index_name=_as_optional_str_default(data.get("vector_index_name", embedding_field), "index.vector_index_name"),
             vector_strategy=_as_optional_str_default(data.get("vector_strategy", ""), "index.vector_strategy"),
+            vector_representation=_as_optional_str_default(
+                data.get("vector_representation", ""), "index.vector_representation"
+            ),
             vector_m=_as_optional_int_default(data.get("vector_m"), "index.vector_m"),
             vector_ef_construction=_as_optional_int_default(
                 data.get("vector_ef_construction"), "index.vector_ef_construction"
@@ -549,6 +558,7 @@ class IndexInfo:
                 "embedding_field": self.embedding_field,
                 "vector_index_name": self.vector_index_name,
                 "vector_strategy": self.vector_strategy,
+                "vector_representation": self.vector_representation,
                 "vector_m": self.vector_m,
                 "vector_ef_construction": self.vector_ef_construction,
                 "vector_ef_search": self.vector_ef_search,
@@ -635,6 +645,85 @@ class FilterDocumentsResponse:
 
 
 @dataclass(frozen=True)
+class DenseSearchRouteIdentity:
+    version: int
+    representation: str
+    query_mode: str
+    execution_route: str
+    return_embedding: bool
+    diagnostics: bool
+    filter: bool
+    schema_hash: int
+    schema_generation: int
+    base_manifest_generation: int
+    base_manifest_checksum: int
+    current_manifest_generation: int
+    current_manifest_checksum: int
+    current_coverage_lsn: int
+    top_k: int
+    ef_search: int
+    rerank_candidates: int
+    result_count: int
+    fp32_score_calls: int
+    fp32_vector_bytes_read: int
+    embedding_vector_reads: int
+    embedding_vector_bytes: int
+    embedding_output_bytes: int
+    quantized_codec: str = ""
+    quantized_index_name: str = ""
+    quantized_version: int = 0
+    quantized_score_calls: int = 0
+    quantized_code_bytes_read: int = 0
+    packed_score_calls: int = 0
+    packed_score_candidates: int = 0
+    packed_vector_bytes_read: int = 0
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> "DenseSearchRouteIdentity":
+        data = _as_mapping(data, "dense route identity")
+        required_ints = (
+            "version", "schema_hash", "schema_generation", "base_manifest_generation",
+            "base_manifest_checksum", "current_manifest_generation", "current_manifest_checksum",
+            "current_coverage_lsn", "top_k", "ef_search", "rerank_candidates", "result_count",
+            "fp32_score_calls", "fp32_vector_bytes_read", "embedding_vector_reads",
+            "embedding_vector_bytes", "embedding_output_bytes",
+        )
+        optional_ints = (
+            "quantized_version", "quantized_score_calls", "quantized_code_bytes_read",
+            "packed_score_calls", "packed_score_candidates", "packed_vector_bytes_read",
+        )
+        required_strings = ("representation", "query_mode", "execution_route")
+        optional_strings = ("quantized_codec", "quantized_index_name")
+        booleans = ("return_embedding", "diagnostics", "filter")
+        allowed = required_ints + optional_ints + required_strings + optional_strings + booleans
+        _reject_unknown(data, allowed, "dense route identity")
+        missing = [name for name in required_ints + required_strings + booleans if name not in data]
+        if missing:
+            raise ValueError("dense route identity fields are missing")
+        values: Dict[str, Any] = {}
+        for name in required_ints + optional_ints:
+            value = _as_int(data.get(name, 0), f"dense route identity.{name}")
+            if not 0 <= value < 1 << 64:
+                raise ValueError(f"dense route identity.{name} must be uint64")
+            values[name] = value
+        for name in required_strings:
+            values[name] = _as_str(data[name], f"dense route identity.{name}")
+        for name in optional_strings:
+            values[name] = _as_optional_str_default(data.get(name), f"dense route identity.{name}")
+        for name in booleans:
+            values[name] = _as_bool(data[name], f"dense route identity.{name}")
+        if (
+            values["version"] != 1
+            or values["representation"] != "cosine_normalized_f32_v1"
+            or values["query_mode"] not in ("exact", "quantized_rerank")
+            or values["execution_route"] not in ("typed_empty", "typed_exact", "typed_hnsw")
+            or values["quantized_version"] > 65535
+        ):
+            raise ValueError("unsupported dense route identity")
+        return cls(**values)
+
+
+@dataclass(frozen=True)
 class DenseVectorSearchResponse:
     index: IndexInfo
     documents: list[Document]
@@ -670,6 +759,7 @@ class DenseVectorSearchResponse:
     document_materialization_rows: int = 0
     visibility_mismatch_count: int = 0
     visibility_retry_count: int = 0
+    route_identity: Optional[DenseSearchRouteIdentity] = None
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "DenseVectorSearchResponse":
@@ -692,6 +782,11 @@ class DenseVectorSearchResponse:
             out = cls(
                 dense_work=work,
                 score_plane=score_plane,
+                route_identity=(
+                    None
+                    if data.get("route_identity") is None
+                    else DenseSearchRouteIdentity.from_dict(data["route_identity"])
+                ),
                 index=IndexInfo.from_dict(data["index"]),
                 documents=[Document.from_dict(item) for item in data.get("documents", [])],
                 metric=_as_str(data["metric"], "metric"),

@@ -20,6 +20,7 @@ from .errors import (
     InvalidRequestError,
     TreeDBConfigError,
     TreeDBProtocolError,
+    TreeDBServiceError,
     TreeDBTimeoutError,
     TreeDBTransportError,
     UnsupportedError,
@@ -386,6 +387,7 @@ class TreeDBClient:
         quantized_index_name: Optional[str] = None,
         quantized_rerank_candidates: Optional[int] = None,
         return_embedding: bool = False,
+        diagnostics: bool = False,
         expected_generation: Optional[int] = None,
         index_info: Optional[IndexInfo] = None,
     ) -> DenseVectorSearchResponse:
@@ -405,6 +407,8 @@ class TreeDBClient:
 
         if route is not None and route not in ("ann", "exact"):
             raise InvalidRequestError("invalid_request", f"unsupported dense search route {route!r}; use 'ann' or 'exact'")
+        if type(diagnostics) is not bool:
+            raise InvalidRequestError("invalid_request", "diagnostics must be a boolean")
         top_k_value = _validate_binary_int_query_param(top_k, "top_k", minimum=1)
         mode = "exact" if query_mode is None else query_mode
         if not isinstance(mode, str) or mode.strip() == "":
@@ -435,6 +439,37 @@ class TreeDBClient:
         ef_search_value = None
         if ef_search is not None:
             ef_search_value = _validate_binary_int_query_param(ef_search, "ef_search", minimum=0)
+        canonical = (
+            index_info is not None
+            and getattr(index_info, "vector_representation", "") == "cosine_normalized_f32_v1"
+        )
+        if diagnostics and not canonical:
+            raise TreeDBConfigError("dense diagnostics require cosine_normalized_f32_v1 IndexInfo")
+        if canonical:
+            if (
+                index_info.name != index
+                or index_info.extra.get("typed_input") is not True
+                or index_info.vector_strategy != "column_graph"
+                or index_info.metric != "cosine"
+                or index_info.generation <= 0
+                or len(query_embedding) != index_info.dimension
+            ):
+                raise TreeDBConfigError("normalized dense search requires matching selected typed IndexInfo")
+            try:
+                if not all(math.isfinite(float(value)) for value in query_embedding):
+                    raise ValueError()
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise TreeDBConfigError("normalized dense query must be finite") from exc
+            if ef_search_value in (None, 0):
+                ef_search_value = index_info.vector_ef_search
+            if type(ef_search_value) is not int or not 0 < ef_search_value < 1 << 63:
+                raise TreeDBConfigError("normalized dense search requires a positive IndexInfo vector_ef_search")
+            if mode == "quantized_rerank" and rerank_value == 0:
+                rerank_value = ef_search_value
+            if mode == "quantized_rerank" and rerank_value < top_k_value:
+                raise TreeDBConfigError("normalized dense rerank width must be at least top_k")
+            if top_k_value > 1 << 20 or ef_search_value > 1 << 20 or rerank_value > 1 << 20:
+                raise TreeDBConfigError("normalized dense K, E, and R must not exceed 1048576")
         normalized_filter = normalize_filter(filter)
         filter_requested = normalized_filter is not None
         if self._native is not None:
@@ -455,13 +490,18 @@ class TreeDBClient:
                     raise TreeDBConfigError("native dense quantized rerank requires a positive IndexInfo vector_ef_search")
             if route not in (None, "ann") or (expected_generation is not None and expected_generation != index_info.generation):
                 raise TreeDBConfigError("native dense route or generation conflicts with IndexInfo")
-            version = 3 if mode == "quantized_rerank" else 2
+            version = 4 if canonical else (3 if mode == "quantized_rerank" else 2)
             payload = _dense_request(index, query_embedding, top_k_value, ef_search_value or 0, index_info.generation, return_embedding, normalized_filter)
             deadline = _uint(time.time_ns() + int(self.timeout * 1_000_000_000))
             sections = _section(129, payload) + _section(4, deadline)
             if version == 3:
                 from ._native import _dense_quantized_options
                 sections += _section(135, _dense_quantized_options(mode, quantized_index_name, rerank_value))
+            elif version == 4:
+                from ._native import _dense_normalized_options
+                sections += _section(137, _dense_normalized_options(mode, quantized_index_name, rerank_value))
+                if diagnostics:
+                    sections += _section(139, _uint(1))
             try:
                 raw = self._native.command(64, version, sections, "dense_vector_search_versions")
                 decoded = _dense_response(
@@ -475,9 +515,13 @@ class TreeDBClient:
                     query_dimension=len(query_embedding),
                     expected_generation=index_info.generation,
                     filter_requested=filter_requested,
+                    return_embedding=return_embedding,
+                    diagnostics=diagnostics,
                 )
             except Exception as exc:
-                if mode == "quantized_rerank":
+                if version == 4 and diagnostics and mode == "exact":
+                    _reject_unauthenticated_dense_exact_failure(exc)
+                if mode == "quantized_rerank" and (version == 3 or diagnostics):
                     _validate_dense_failure_proofs(
                         exc, query_mode=mode, quantized_index_name=quantized_index_name,
                         top_k=top_k_value, ef_search=ef_search_value or 0,
@@ -485,16 +529,20 @@ class TreeDBClient:
                         expected_generation=index_info.generation, filter_requested=filter_requested,
                     )
                 raise
-            if version == 3:
+            if version == 4:
+                ids, payloads, scores, candidates, work, score_plane, route_identity = decoded
+            elif version == 3:
                 ids, payloads, scores, candidates, work, score_plane = decoded
+                route_identity = None
             else:
                 ids, payloads, scores, candidates, work = decoded
                 score_plane = None
+                route_identity = None
             documents = []
             for item_id, document_raw, score in zip(ids, payloads, scores):
                 try:
                     document = Document.from_dict(
-                        _decode_native_dense_document_json(document_raw, reject_duplicates=version == 3)
+                        _decode_native_dense_document_json(document_raw, reject_duplicates=version >= 3)
                     )
                     if document.id.encode("utf-8") != item_id:
                         raise ValueError("document ID mismatch")
@@ -518,7 +566,7 @@ class TreeDBClient:
                     dense_work=work,
                     score_plane=score_plane,
                 )
-            if version == 3 and not all(
+            if version >= 3 and not all(
                 _document_matches_filter(document, normalized_filter) for document in documents
             ):
                 raise TreeDBProtocolError(
@@ -529,7 +577,7 @@ class TreeDBClient:
             return DenseVectorSearchResponse(index=index_info, documents=documents, metric=index_info.metric,
                                              exact=False, candidates=candidates, route="ann",
                                              native_base_plus_live_delta=False, native_command_version=version, dense_work=work,
-                                             score_plane=score_plane)
+                                             score_plane=score_plane, route_identity=route_identity)
         request: dict[str, Any] = {
             "query_embedding": [float(value) for value in query_embedding],
             "top_k": top_k_value,
@@ -539,25 +587,70 @@ class TreeDBClient:
             request["route"] = route
         if ef_search_value is not None:
             request["ef_search"] = ef_search_value
-        if query_mode is not None:
+        if query_mode is not None or canonical:
             request["query_mode"] = mode
         if mode == "quantized_rerank":
             request["quantized_index_name"] = quantized_index_name
             if rerank_value:
                 request["quantized_rerank_candidates"] = rerank_value
+        if canonical:
+            if expected_generation is not None and expected_generation != index_info.generation:
+                raise TreeDBConfigError("dense generation conflicts with IndexInfo")
+            request["vector_representation"] = index_info.vector_representation
+            request["expected_generation"] = index_info.generation
+            if diagnostics:
+                request["diagnostics"] = True
         if normalized_filter is not None:
             request["filter"] = normalized_filter
-        _add_expected_generation(request, expected_generation)
+        if not canonical:
+            _add_expected_generation(request, expected_generation)
         try:
             payload = self._request(
                 "POST",
                 self._index_path(index, "search", "vector"),
                 request,
                 dense_proof=True,
-                dense_score_plane=mode == "quantized_rerank",
+                dense_score_plane=mode == "quantized_rerank" and (not canonical or diagnostics),
             )
             response = _parse_response("vector search response", DenseVectorSearchResponse.from_dict, payload)
-            if mode == "quantized_rerank":
+            if response.index.vector_representation == "cosine_normalized_f32_v1" and not canonical:
+                raise TreeDBProtocolError(
+                    "normalized dense HTTP search requires matching caller-held IndexInfo",
+                    dense_work=response.dense_work,
+                    score_plane=response.score_plane,
+                )
+            if canonical:
+                _validate_http_dense_normalized_response(
+                    response,
+                    index=index,
+                    top_k=top_k_value,
+                    ef_search=ef_search_value or 0,
+                    query_dimension=len(request["query_embedding"]),
+                    query_mode=mode,
+                    quantized_index_name=quantized_index_name,
+                    quantized_rerank_candidates=rerank_value,
+                    expected_generation=index_info.generation,
+                    filter_requested=filter_requested,
+                    normalized_filter=normalized_filter,
+                    return_embedding=return_embedding,
+                    diagnostics=diagnostics,
+                )
+                if diagnostics and mode == "quantized_rerank":
+                    _validate_http_dense_quantized_response(
+                        response,
+                        index=index,
+                        top_k=top_k_value,
+                        ef_search=ef_search_value or 0,
+                        query_embedding=request["query_embedding"],
+                        query_dimension=len(request["query_embedding"]),
+                        quantized_index_name=quantized_index_name,
+                        quantized_rerank_candidates=rerank_value,
+                        expected_generation=index_info.generation,
+                        filter_requested=filter_requested,
+                        return_embedding=return_embedding,
+                        rescore_embeddings=False,
+                    )
+            elif mode == "quantized_rerank":
                 _validate_http_dense_quantized_response(
                     response,
                     index=index,
@@ -593,16 +686,18 @@ class TreeDBClient:
                     dense_work=response.dense_work,
                 )
         except Exception as exc:
+            if canonical and diagnostics and mode == "exact":
+                _reject_unauthenticated_dense_exact_failure(exc)
             if mode == "quantized_rerank":
                 _validate_dense_failure_proofs(
                     exc, query_mode=mode, quantized_index_name=quantized_index_name,
                     top_k=top_k_value, ef_search=ef_search_value or 0,
                     rerank_candidates=rerank_value, query_dimension=len(request["query_embedding"]),
-                    expected_generation=expected_generation, filter_requested=filter_requested,
+                    expected_generation=request.get("expected_generation"), filter_requested=filter_requested,
                     default_ef_search=(
                         index_info.vector_ef_search
                         if index_info is not None
-                        and expected_generation == index_info.generation
+                        and request.get("expected_generation") == index_info.generation
                         else None
                     ),
                 )
@@ -1187,6 +1282,7 @@ def _validate_http_dense_quantized_response(
     expected_generation: Optional[int],
     filter_requested: bool,
     return_embedding: bool,
+    rescore_embeddings: bool = True,
 ) -> None:
     """Require the HTTP response proof for an explicitly selected public route."""
 
@@ -1223,7 +1319,7 @@ def _validate_http_dense_quantized_response(
         or not dense_cosine_scores_valid(document.score for document in response.documents)
         or not _dense_http_results_ordered(response.documents)
         or not _dense_document_embeddings_match(response.documents, return_embedding, query_dimension)
-        or (return_embedding and not _dense_embedding_scores_match_query(response.documents, query_embedding))
+        or (rescore_embeddings and return_embedding and not _dense_embedding_scores_match_query(response.documents, query_embedding))
         or response.index.dimension != query_dimension
         or type(response.index.generation) is not int
         or not 0 < response.index.generation < 1 << 64
@@ -1305,6 +1401,92 @@ def _validate_http_dense_quantized_response(
         )
 
 
+def _validate_http_dense_normalized_response(
+    response: DenseVectorSearchResponse,
+    *,
+    index: str,
+    top_k: int,
+    ef_search: int,
+    query_dimension: int,
+    query_mode: str,
+    quantized_index_name: Optional[str],
+    quantized_rerank_candidates: int,
+    expected_generation: int,
+    filter_requested: bool,
+    normalized_filter: Any,
+    return_embedding: bool,
+    diagnostics: bool,
+) -> None:
+    from ._dense_work import (
+        dense_cosine_scores_valid,
+        dense_document_ids_valid,
+    )
+    from ._native import (
+        _dense_normalized_diagnostic_matches,
+        _dense_normalized_route_matches,
+    )
+
+    identity = response.route_identity
+    mismatch = (
+        response.index.name != index
+        or response.index.dimension != query_dimension
+        or response.index.generation != expected_generation
+        or response.index.metric != "cosine"
+        or response.index.vector_strategy != "column_graph"
+        or response.index.vector_representation != "cosine_normalized_f32_v1"
+        or response.index.extra.get("typed_input") is not True
+        or response.metric != "cosine"
+        or response.route != "ann"
+        or response.exact
+        or response.candidates != len(response.documents)
+        or len(response.documents) > top_k
+        or not dense_document_ids_valid(document.id for document in response.documents)
+        or any(document.score is None for document in response.documents)
+        or not dense_cosine_scores_valid(document.score for document in response.documents)
+        or not _dense_http_results_ordered(response.documents)
+        or not _dense_document_embeddings_match(response.documents, return_embedding, query_dimension)
+        or not all(_document_matches_filter(document, normalized_filter) for document in response.documents)
+        or not _dense_normalized_route_matches(
+            identity,
+            query_mode=query_mode,
+            quantized_index_name=quantized_index_name,
+            top_k=top_k,
+            ef_search=ef_search,
+            rerank_candidates=quantized_rerank_candidates,
+            result_count=len(response.documents),
+            query_dimension=query_dimension,
+            expected_generation=expected_generation,
+            return_embedding=return_embedding,
+            diagnostics=diagnostics,
+            filter_requested=filter_requested,
+        )
+        or (not diagnostics and (response.dense_work is not None or response.score_plane is not None))
+        or (
+            diagnostics
+            and not _dense_normalized_diagnostic_matches(
+                identity,
+                response.dense_work,
+                response.score_plane,
+                query_mode=query_mode,
+                quantized_index_name=quantized_index_name,
+                top_k=top_k,
+                ef_search=ef_search,
+                rerank_candidates=quantized_rerank_candidates,
+                result_count=len(response.documents),
+                query_dimension=query_dimension,
+                expected_generation=expected_generation,
+                filter_requested=filter_requested,
+            )
+        )
+    )
+    if mismatch:
+        raise TreeDBProtocolError(
+            "normalized dense HTTP response does not match the request",
+            dense_work=response.dense_work,
+            score_plane=response.score_plane,
+        )
+
+
 def _dense_score_plane_request_matches(
     proof: Any,
     *,
@@ -1374,6 +1556,28 @@ def _dense_work_requires_score_plane(work: Any) -> bool:
         or output.attempted or output.completed or output.requested or output.fetched or output.missing
         or output.output_bytes or output.retained_payload_fetches or output.json_reconstruction_rows or output.typed_column_rows
     )
+
+
+def _reject_unauthenticated_dense_exact_failure(error: Exception) -> None:
+    """Fail closed when dense-work v1 cannot bind an exact failure to this request."""
+
+    work = getattr(error, "dense_work", None)
+    if work is None:
+        return
+    remote_native_error = (
+        isinstance(error, TreeDBProtocolError)
+        and str(error).startswith("native error ")
+    )
+    if not isinstance(error, TreeDBServiceError) and not remote_native_error:
+        return
+    raise TreeDBProtocolError(
+        "normalized dense exact failure diagnostics are consistency-unavailable: "
+        "dense-work v1 has no request identity",
+        status_code=getattr(error, "status_code", None),
+        response_body=getattr(error, "response_body", None),
+        dense_work=work,
+        score_plane=getattr(error, "score_plane", None),
+    ) from error
 
 
 def _validate_dense_failure_proofs(
@@ -1537,28 +1741,19 @@ def _dense_embedding_scores_match_query(
     return True
 
 
+def _native_dense_document_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    out = {}
+    for key, value in pairs:
+        if key in out:
+            raise ValueError("duplicate field in native dense document")
+        out[key] = value
+    return out
+
+
 def _decode_native_dense_document_json(payload: bytes, *, reject_duplicates: bool) -> Any:
-    if not reject_duplicates:
-        return json.loads(payload)
-
-    class ObjectPairs(list):
-        pass
-
-    decoded = json.loads(payload, object_pairs_hook=ObjectPairs)
-
-    def collapse(value: Any) -> Any:
-        if isinstance(value, ObjectPairs):
-            out = {}
-            for key, item in value:
-                if key in out:
-                    raise ValueError("duplicate field in native dense document")
-                out[key] = collapse(item)
-            return out
-        if isinstance(value, list):
-            return [collapse(item) for item in value]
-        return value
-
-    return collapse(decoded)
+    return json.loads(
+        payload, object_pairs_hook=_native_dense_document_object if reject_duplicates else None
+    )
 
 
 def _is_legacy_scalar_u8_v1_index(selected: Any) -> bool:

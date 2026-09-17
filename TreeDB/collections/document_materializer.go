@@ -81,7 +81,12 @@ type DocumentMaterializationStats struct {
 	OutputBytes         uint64
 	FieldsReconstructed uint64
 	FieldsSkipped       uint64
-	FetchNanos          int64
+	// EmbeddingVectorReads/Bytes count canonical FP32 vectors read solely for
+	// final document output. EmbeddingOutputBytes counts their encoded JSON field.
+	EmbeddingVectorReads uint64
+	EmbeddingVectorBytes uint64
+	EmbeddingOutputBytes uint64
+	FetchNanos           int64
 
 	RetainedPayloadFetches uint64
 	RetainedPayloadBytes   uint64
@@ -1612,6 +1617,9 @@ func addDocumentMaterializationStatsToVectorStats(dst *VectorIndexSearchStats, s
 	dst.DocumentOutputBytes += src.OutputBytes
 	dst.DocumentFieldsReconstructed += src.FieldsReconstructed
 	dst.DocumentFieldsSkipped += src.FieldsSkipped
+	dst.DocumentEmbeddingVectorReads += src.EmbeddingVectorReads
+	dst.DocumentEmbeddingVectorBytes += src.EmbeddingVectorBytes
+	dst.DocumentEmbeddingOutputBytes += src.EmbeddingOutputBytes
 	dst.DocumentFetchNanos += uint64(maxInt64ForMetric(src.FetchNanos, 0))
 	dst.DocumentRetainedFetches += src.RetainedPayloadFetches
 	dst.DocumentRetainedBytes += src.RetainedPayloadBytes

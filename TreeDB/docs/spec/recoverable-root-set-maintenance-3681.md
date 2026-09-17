@@ -31,6 +31,14 @@ stale capability deletes nothing. Callers MAY release exact resource pins after
 successful revalidation only while holding a publication fence that prevents a
 new visible root from appearing before the mutation completes.
 
+Typed graph work-epoch renewal and vector-partition reclamation may retry a
+column-asset GC pass on `ErrRecoverableRootSetStale`, with at most eight attempts,
+only when that pass deleted no segments. Each retry releases the stale capture
+and rebuilds the full plan from fresh roots. Exhaustion returns the stale error;
+it does not advance the work epoch. Partial deletion or unrelated errors are not
+retryable by this rule. No checkpoint or sleep is introduced inside the held
+schema/storage/mutation locks.
+
 Capture performs no tree scan. Its scalar work is bounded by the two durable
 slots and publication debt; resource work is bounded by retained manifests and
 pins. Maintenance operations walk the captured roots only when they need a

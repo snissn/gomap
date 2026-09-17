@@ -13,7 +13,7 @@ from treedb_client import TreeDBClient
 from treedb_client.errors import TreeDBConfigError, TreeDBProtocolError, TreeDBTimeoutError, TreeDBTransportError, UnsupportedError
 from treedb_client._native import _dense_work, _dense_quantized_options, _dense_score_plane
 from treedb_client._dense_work import DenseScorePlaneProof, DenseSearchWork, dense_document_ids_valid
-from treedb_client.client import _decode_json_body
+from treedb_client.client import _decode_json_body, _decode_native_dense_document_json
 from treedb_client._native import _HEADER, _NativeConnection, _dense_request, _dense_response, _decode_vector, _read_uint, _section, _sections, _string_map, _uint, _vector, _typed_upsert_request, _typed_upsert_response
 
 
@@ -23,6 +23,30 @@ def _bytes_for_test(value):
 
 
 class NativeCodecTests(unittest.TestCase):
+    def test_dense_document_decoder_preserves_json_and_rejects_nested_duplicates(self):
+        payload = b'{"id":"a","meta":{"items":[{"rank":1},null,[true,"x"]]},"embedding":[1,0]}'
+        for reject_duplicates in (False, True):
+            with self.subTest(reject_duplicates=reject_duplicates):
+                self.assertEqual(
+                    _decode_native_dense_document_json(payload, reject_duplicates=reject_duplicates),
+                    json.loads(payload),
+                )
+        for payload in (
+            b'{"id":"b","id":"a"}',
+            b'{"meta":{"tenant":"b","\\u0074enant":"a"}}',
+            b'{"meta":{"items":[{"rank":1,"rank":2}]}}',
+            b'[{"id":"b","id":"a"}]',
+        ):
+            with self.subTest(payload=payload):
+                with self.assertRaisesRegex(ValueError, "duplicate field in native dense document"):
+                    _decode_native_dense_document_json(payload, reject_duplicates=True)
+                self.assertEqual(
+                    _decode_native_dense_document_json(payload, reject_duplicates=False),
+                    json.loads(payload),
+                )
+        with self.assertRaises(json.JSONDecodeError):
+            _decode_native_dense_document_json(b'{"id":', reject_duplicates=True)
+
     def test_typed_quantized_dense_uses_v3_and_owned_score_plane(self):
         raw_work = bytes.fromhex((_support.REPO_ROOT / "TreeDB/nativewire/testdata/dense_work_v1.hex").read_text().strip())
         work_values, work_offset = [], 0

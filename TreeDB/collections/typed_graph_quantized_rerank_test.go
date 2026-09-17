@@ -181,7 +181,7 @@ func TestTypedGraphPublicScalarU8QuantizedRerank(t *testing.T) {
 		QuantizedRerankCandidates: 3,
 		TopK:                      2,
 		EfSearch:                  3,
-		StatsMode:                 VectorIndexSearchStatsModeMinimal,
+		StatsMode:                 VectorIndexSearchStatsModeProduction,
 	}
 	var buffer VectorIndexSearchBuffer
 	response, view, err := col.SearchVectorIndexWithBufferReadView(selected, &buffer)
@@ -241,7 +241,7 @@ func TestTypedGraphPublicScalarU8QuantizedRerank(t *testing.T) {
 		TopK:                      2,
 		EfSearch:                  3,
 		DeclaredScalarFilter:      &HybridScalarFilter{IndexName: "user", Value: "u"},
-		StatsMode:                 VectorIndexSearchStatsModeMinimal,
+		StatsMode:                 VectorIndexSearchStatsModeProduction,
 	}, &buffer)
 	if err != nil {
 		t.Fatalf("small filtered typed quantized rerank: %v", err)
@@ -310,7 +310,7 @@ func TestTypedGraphPublicScalarU8QuantizedRerankBudgetAdmission(t *testing.T) {
 			TopK:                      topK,
 			EfSearch:                  3,
 			DeclaredScalarFilter:      filter,
-			StatsMode:                 VectorIndexSearchStatsModeMinimal,
+			StatsMode:                 VectorIndexSearchStatsModeProduction,
 		}, &buffer)
 	}
 
@@ -472,7 +472,7 @@ func TestTypedGraphPublicScalarU8QuantizedRerankZeroBaseAssetValidation(t *testi
 			QuantizedIndexName: "embedding.scalar_u8.legacy",
 			TopK:               topK,
 			EfSearch:           8,
-			StatsMode:          VectorIndexSearchStatsModeMinimal,
+			StatsMode:          VectorIndexSearchStatsModeProduction,
 		}, &buffer)
 	}
 	assertNoZeroRowHolder := func(t *testing.T, view *CollectionReadView, where string) {
@@ -684,7 +684,7 @@ func TestTypedGraphPublicScalarU8QuantizedRerankFilterBoundary(t *testing.T) {
 					TopK:                      2,
 					EfSearch:                  8,
 					DeclaredScalarFilter:      &filter,
-					StatsMode:                 VectorIndexSearchStatsModeMinimal,
+					StatsMode:                 VectorIndexSearchStatsModeProduction,
 				}, &buffer)
 				if err != nil {
 					t.Fatalf("filter=%+v typed quantized rerank: %v", filter, err)
@@ -793,7 +793,7 @@ func TestTypedGraphPublicScalarU8QuantizedRerankLiveSuffixAndRebuild(t *testing.
 			TopK:                      3,
 			EfSearch:                  3,
 			DeclaredScalarFilter:      filter,
-			StatsMode:                 VectorIndexSearchStatsModeMinimal,
+			StatsMode:                 VectorIndexSearchStatsModeProduction,
 		}, &buffer)
 		if err != nil {
 			t.Fatalf("filter=%+v typed quantized rerank: %v", filter, err)

@@ -9,8 +9,8 @@ import (
 	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
 )
 
-// Only the typed v2/v3 handler supplies this transport metadata. The original
-// error chain/code is preserved; v1 never emits details from a nested service error.
+// Typed v2/v3 and explicitly diagnostic normalized v4 calls supply this
+// transport metadata. The original error chain/code is preserved.
 type denseWorkError struct {
 	error
 	work       documentservice.DenseSearchWork

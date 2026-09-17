@@ -1,10 +1,10 @@
 # Canonical normalized FP32 cosine representation v1 (#4722)
 
-Status: implemented for the opt-in Go collection and document-service
-`cosine_normalized_f32_v1` representation. Q1 froze the contract and engine
-gates; Q2 implements the durable owner, mutable serving, scalar-u8 candidates,
-and packed rerank. Native command and Python support remain unavailable until
-Q3. Legacy and omitted representations keep their existing behavior.
+Status: implemented for the opt-in Go collection/document service, negotiated
+native command64/v4, HTTP, and Python client. Q1 froze the contract and engine
+gates; Q2 implemented the durable owner, mutable serving, scalar-u8 candidates,
+and packed rerank; Q3 exposes the production and explicit diagnostic envelopes.
+Legacy and omitted representations keep their existing behavior.
 
 ## Declaration and admission
 
@@ -88,6 +88,13 @@ candidates are scored exactly once by indexed/batched packed FP32 scoring in
 one call or bounded chunks of that kernel. A token packed call followed by
 scalar or stable rescoring is non-conforming.
 
+Packed batch counters describe base candidates only. Mutable suffix rows use
+the strided packed FP32 kernel and separate exact-suffix counters. Thus a
+nonempty response may have zero base packed work after replacements shadow
+every base row. Scalar-u8 traversal still reads codes; its live shortlist and
+base rerank may both be empty. FP32 calls partition into exact base plus exact
+suffix calls, and an unchanged base/current manifest permits no suffix calls.
+
 ## Result projection
 
 `return_embedding` defaults to false. False permits FP32 reads for scoring but
@@ -108,10 +115,13 @@ Proof is explicit diagnostic work. Production clients do not reconstruct
 vectors or re-score results. Older command versions fail closed for this
 representation rather than translating it to legacy semantics.
 
-Q1 records Go/Python v4 as `NOT_IMPLEMENTED`. Q2 keeps those stages unavailable
-while implementing storage and collection/service behavior. Q3 owns the native
-wire and Python seam. An unsupported stage is never filled with a legacy
-measurement.
+Create-time `vector_representation` metadata selects v4 in Go and Python.
+Production returns compact route identity and omits full proofs; explicit
+diagnostics returns dense-work and, for scalar-u8 rerank, packed score-plane v2.
+HTTP and direct service searches reject `diagnostics=true` for other index
+representations with `unsupported` (HTTP 501), including ANN and document-exact
+routes. Ordinary searches on those representations retain their existing behavior.
+An unsupported or unnegotiated stage is never filled with a legacy measurement.
 
 ## Phase gates and qualification ownership
 

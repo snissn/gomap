@@ -2,8 +2,10 @@ package collections
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"math"
+	"os"
 	"slices"
 	"testing"
 )
@@ -50,6 +52,39 @@ func cosineNormalizedF32V1ReferenceScore(left, right []float32) float32 {
 		return -1
 	}
 	return score
+}
+
+// Shared with the Python campaign oracle; these fixed bit patterns include
+// magnitudes whose norm overflows or underflows a float32 accumulator.
+func TestCosineNormalizedF32V1PythonGolden(t *testing.T) {
+	raw, err := os.ReadFile("testdata/cosine_normalized_f32_golden.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rows []struct {
+		Input     []uint32 `json:"input_bits"`
+		Canonical []uint32 `json:"canonical_bits"`
+	}
+	if err := json.Unmarshal(raw, &rows); err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 6 {
+		t.Fatalf("golden rows=%d want 6", len(rows))
+	}
+	for _, row := range rows {
+		input, want := make([]float32, len(row.Input)), make([]float32, len(row.Canonical))
+		for i, bits := range row.Input {
+			input[i] = math.Float32frombits(bits)
+		}
+		for i, bits := range row.Canonical {
+			want[i] = math.Float32frombits(bits)
+		}
+		got, err := normalizeCosineNormalizedF32V1(input, len(input))
+		if err != nil {
+			t.Fatal(err)
+		}
+		requireFloat32BitsEqual(t, got, want)
+	}
 }
 
 func TestCosineNormalizedF32V1ReferenceContract(t *testing.T) {

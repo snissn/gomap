@@ -296,8 +296,8 @@ class TreeDBClientIntegrationTests(unittest.TestCase):
                 reopened.stop()
 
     @unittest.skipUnless(sys.platform.startswith("linux"), "selected serving fixture requires Linux namespace authority and mmap")
-    def test_quantized_column_graph_public_native_smoke(self) -> None:
-        """Cross the 4,096 cutoff through the real public native-v3 route."""
+    def test_normalized_v4_column_graph_public_clients(self) -> None:
+        """Cross the 4,096 cutoff through real native-v4 and HTTP clients."""
         with tempfile.TemporaryDirectory(prefix="treedb_quantized_client_") as data_dir:
             service = TreeDBServiceProcess(_support.REPO_ROOT, data_dir, native=True)
             limits = {
@@ -325,10 +325,12 @@ class TreeDBClientIntegrationTests(unittest.TestCase):
                         "quantized", 2, "cosine", scalar_fields=declarations, typed_input=True,
                         vector_index_options={
                             "strategy": "column_graph", "m": 16, "ef_construction": 32,
+                            "representation": "cosine_normalized_f32_v1",
                             "quantized_indexes": [{"name": "minima_sq8", "codec": "scalar_u8", "version": 1}],
                         },
                     )
                     self.assertTrue(info.capabilities.typed_dense_quantized_rerank)
+                    self.assertEqual(info.vector_representation, "cosine_normalized_f32_v1")
                     self.assertEqual(
                         [(row.name, row.codec, row.version, row.scalar_u8_calibration)
                          for row in info.quantized_indexes],
@@ -360,16 +362,69 @@ class TreeDBClientIntegrationTests(unittest.TestCase):
                             quantized_index_name="minima_sq8", quantized_rerank_candidates=64,
                             index_info=info,
                         )
+                        diagnostic = native.query_by_embedding(
+                            "quantized", [1.0, 0.0], 5,
+                            {"field": "meta.user_id", "operator": "==", "value": "owner"},
+                            route="ann", ef_search=64, query_mode="quantized_rerank",
+                            quantized_index_name="minima_sq8", quantized_rerank_candidates=64,
+                            diagnostics=True, index_info=info,
+                        )
                         unfiltered = native.query_by_embedding(
                             "quantized", [1.0, 0.0], 5, route="ann", ef_search=64,
                             query_mode="quantized_rerank", quantized_index_name="minima_sq8",
                             quantized_rerank_candidates=64, index_info=info,
                         )
-                    self.assertEqual(response.native_command_version, 3)
+                        exact = native.query_by_embedding(
+                            "quantized", [1.0, 0.0], 5, route="ann", ef_search=64,
+                            query_mode="exact", index_info=info,
+                        )
+                        with_embedding = native.query_by_embedding(
+                            "quantized", [1.0, 0.0], 1, route="ann", ef_search=64,
+                            query_mode="exact", return_embedding=True, index_info=info,
+                        )
+                    http_quantized = control.query_by_embedding(
+                        "quantized", [1.0, 0.0], 5,
+                        {"field": "meta.user_id", "operator": "==", "value": "owner"},
+                        route="ann", ef_search=64, query_mode="quantized_rerank",
+                        quantized_index_name="minima_sq8", quantized_rerank_candidates=64,
+                        index_info=info,
+                    )
+                    http_exact = control.query_by_embedding(
+                        "quantized", [1.0, 0.0], 5, route="ann", ef_search=64,
+                        query_mode="exact", index_info=info,
+                    )
+                    self.assertEqual(response.native_command_version, 4)
                     self.assertEqual(len(response.documents), 5)
-                    work, proof = response.dense_work, response.score_plane
+                    self.assertIsNone(response.dense_work)
+                    self.assertIsNone(response.score_plane)
+                    self.assertIsNotNone(response.route_identity)
+                    self.assertFalse(response.route_identity.diagnostics)
+                    self.assertEqual(response.route_identity.embedding_vector_reads, 0)
+                    self.assertEqual(response.route_identity.embedding_vector_bytes, 0)
+                    self.assertEqual(response.route_identity.embedding_output_bytes, 0)
+                    self.assertGreater(response.route_identity.quantized_score_calls, 0)
+                    self.assertEqual(response.route_identity.packed_score_calls, 1)
+                    self.assertEqual(
+                        [(row.id, row.score) for row in response.documents],
+                        [(row.id, row.score) for row in diagnostic.documents],
+                    )
+                    self.assertEqual(
+                        [(row.id, row.score) for row in response.documents],
+                        [(row.id, row.score) for row in http_quantized.documents],
+                    )
+                    self.assertEqual(
+                        [(row.id, row.score) for row in exact.documents],
+                        [(row.id, row.score) for row in http_exact.documents],
+                    )
+                    self.assertTrue(all(row.embedding is None for row in response.documents + exact.documents))
+                    self.assertEqual(len(with_embedding.documents[0].embedding), 2)
+                    self.assertEqual(with_embedding.route_identity.embedding_vector_reads, 1)
+                    self.assertEqual(with_embedding.route_identity.embedding_vector_bytes, 8)
+                    self.assertGreater(with_embedding.route_identity.embedding_output_bytes, 0)
+                    work, proof = diagnostic.dense_work, diagnostic.score_plane
                     self.assertIsNotNone(work)
                     self.assertIsNotNone(proof)
+                    self.assertTrue(diagnostic.route_identity.diagnostics)
                     self.assertEqual((work.graph.route, proof.route), ("typed_hnsw", "quantized_rerank"))
                     self.assertGreater(proof.quantized_score_calls, 0)
                     self.assertGreater(proof.exact_base_rerank_score_calls, 0)
@@ -377,15 +432,10 @@ class TreeDBClientIntegrationTests(unittest.TestCase):
                     self.assertTrue(dense_quantized_response_work_matches(work, proof, 5, 5, True))
                     self.assertLessEqual(proof.raw_retained_candidates, work.graph.base_candidates)
                     self.assertLessEqual(work.graph.base_candidates, proof.quantized_score_calls)
-                    unfiltered_work, unfiltered_proof = unfiltered.dense_work, unfiltered.score_plane
-                    self.assertEqual((unfiltered_work.graph.route, unfiltered_proof.route),
-                                     ("typed_hnsw", "quantized_rerank"))
-                    self.assertEqual(unfiltered_work.graph.base_candidates, 0)
-                    self.assertLessEqual(unfiltered_proof.raw_retained_candidates,
-                                         unfiltered_proof.quantized_score_calls)
-                    self.assertTrue(dense_quantized_response_work_matches(
-                        unfiltered_work, unfiltered_proof, 5, 5, False,
-                    ))
+                    self.assertIsNone(unfiltered.dense_work)
+                    self.assertIsNone(unfiltered.score_plane)
+                    self.assertEqual(unfiltered.route_identity.execution_route, "typed_hnsw")
+                    self.assertGreater(unfiltered.route_identity.quantized_score_calls, 0)
                     for document in response.documents:
                         ordinal = int(document.id.removeprefix("row-"))
                         self.assertEqual(document.content, f"content-{ordinal}")

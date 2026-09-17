@@ -1,5 +1,6 @@
 """Small fail-closed checks; no service, protected holdout or corpus collection."""
 import copy
+import json
 import subprocess
 import tempfile
 from pathlib import Path
@@ -223,6 +224,314 @@ def paired_endpoint(counter, records):
 
 
 class NativeCohereDiagnosticTests(unittest.TestCase):
+    def test_normalized_infrastructure_preflight_is_structured_and_fail_closed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            plan = {
+                "rows": 500000, "run_dir": str(Path(directory) / "run"),
+                "minimum_free_bytes": 10 * diagnostic.GIB,
+                "maximum_output_bytes": 11 * diagnostic.GIB,
+                "maximum_combined_rss_bytes": 24 * diagnostic.GIB,
+                "host_memory_bytes": str(32 * diagnostic.GIB),
+                "cpu_affinity": [0, 1],
+                "gomaxprocs": "2",
+                "host_resource_identity": {"cgroup_limits": {
+                    "scope/cpu.max": "max 100000",
+                    "scope/memory.high": "max",
+                    "scope/memory.max": "max",
+                }},
+            }
+            with patch.object(
+                    diagnostic.shutil, "disk_usage",
+                    return_value=SimpleNamespace(free=22 * diagnostic.GIB)):
+                receipt = diagnostic.normalized_v4_infrastructure_receipt(plan)
+            self.assertEqual(receipt["state"], "available")
+            self.assertEqual(receipt["requirements"], {
+                "minimum_free_bytes": 21 * diagnostic.GIB,
+                "minimum_host_memory_bytes": 24 * diagnostic.GIB,
+                "minimum_effective_memory_bytes": 24 * diagnostic.GIB,
+                "minimum_cpu_quota_millis": 2000,
+            })
+            self.assertEqual(receipt["effective_resources"], {
+                "effective_memory_bytes": 32 * diagnostic.GIB,
+                "effective_cpu_quota_millis": 2000,
+            })
+            self.assertEqual(receipt["reasons"], [])
+
+            with patch.object(
+                    diagnostic.shutil, "disk_usage",
+                    return_value=SimpleNamespace(free=20 * diagnostic.GIB)):
+                receipt = diagnostic.normalized_v4_infrastructure_receipt(plan)
+            self.assertEqual(receipt["state"], "unavailable")
+            self.assertEqual(receipt["reasons"], ["disk_headroom"])
+
+            constrained = copy.deepcopy(plan)
+            constrained["host_resource_identity"]["cgroup_limits"]["scope/memory.max"] = str(
+                8 * diagnostic.GIB
+            )
+            with patch.object(
+                    diagnostic.shutil, "disk_usage",
+                    return_value=SimpleNamespace(free=22 * diagnostic.GIB)):
+                receipt = diagnostic.normalized_v4_infrastructure_receipt(constrained)
+            self.assertEqual(receipt["state"], "unavailable")
+            self.assertEqual(receipt["effective_resources"]["effective_memory_bytes"], 8 * diagnostic.GIB)
+            self.assertEqual(receipt["reasons"], ["cgroup_memory"])
+
+            constrained = copy.deepcopy(plan)
+            constrained["host_resource_identity"]["cgroup_limits"]["scope/cpu.max"] = "100000 100000"
+            with patch.object(
+                    diagnostic.shutil, "disk_usage",
+                    return_value=SimpleNamespace(free=22 * diagnostic.GIB)):
+                receipt = diagnostic.normalized_v4_infrastructure_receipt(constrained)
+            self.assertEqual(receipt["state"], "unavailable")
+            self.assertEqual(receipt["reasons"], ["cgroup_cpu_quota"])
+
+            for value in (None, "", "invalid", "0", "-1", "+2", " 2", 2, True, "²"):
+                with self.subTest(gomaxprocs=value):
+                    invalid = copy.deepcopy(plan)
+                    if value is None:
+                        invalid.pop("gomaxprocs")
+                    else:
+                        invalid["gomaxprocs"] = value
+                    with patch.object(
+                            diagnostic.shutil, "disk_usage",
+                            return_value=SimpleNamespace(free=22 * diagnostic.GIB)):
+                        receipt = diagnostic.normalized_v4_infrastructure_receipt(invalid)
+                    self.assertEqual(receipt["state"], "unavailable")
+                    self.assertEqual(receipt["reasons"], ["cgroup_cpu_quota"])
+                    invalid["rows"] = 512
+                    with patch.object(
+                            diagnostic.shutil, "disk_usage",
+                            return_value=SimpleNamespace(free=22 * diagnostic.GIB)):
+                        receipt = diagnostic.normalized_v4_infrastructure_receipt(invalid)
+                    self.assertEqual(receipt["state"], "available")
+                    self.assertEqual(receipt["requirements"]["minimum_cpu_quota_millis"], 1000)
+
+    def test_v4_production_matrix_requires_one_immutable_publication(self):
+        identity = {
+            "schema_hash": 11,
+            "schema_generation": 12,
+            "base_manifest_generation": 13,
+            "base_manifest_checksum": 14,
+            "current_manifest_generation": 15,
+            "current_manifest_checksum": 16,
+            "current_coverage_lsn": 17,
+        }
+
+        def lane(*, receipt=False):
+            route = identity
+            if receipt:
+                route = {"receipt": {
+                    receipt_name: identity[canonical]
+                    for canonical, receipt_name
+                    in diagnostic.v4_gate._OWNER_IDENTITY_FIELDS
+                }}
+            arm = {"repetitions": [{"observations": [{"route": copy.deepcopy(route)}]}]}
+            return {"exact": copy.deepcopy(arm), "sq8": copy.deepcopy(arm)}
+
+        lanes = {
+            "go_native": lane(),
+            "python_native": lane(),
+            "collection_search": lane(receipt=True),
+            "collection_fetch": lane(receipt=True),
+            "service": lane(),
+        }
+        proof = diagnostic.v4_gate.immutable_owner_identity(lanes)
+        self.assertEqual(proof["current_manifest_checksum"], 16)
+        self.assertEqual(proof["validated_lanes"], sorted(lanes))
+        self.assertEqual(proof["validated_observations"], 10)
+
+        drifted = copy.deepcopy(lanes)
+        drifted["collection_search"]["sq8"]["repetitions"][0]["observations"][0][
+            "route"
+        ]["receipt"]["CurrentManifestChecksum"] += 1
+        with self.assertRaisesRegex(ValueError, "crossed graph publications"):
+            diagnostic.v4_gate.immutable_owner_identity(drifted)
+
+    def test_normalized_v4_expected_routes_preserve_cold_filter_policy(self):
+        for eligible, filtered, expected in (
+            (5000, False, ("typed_hnsw",)),
+            (0, True, ("typed_empty",)),
+            (1, True, ("typed_exact",)),
+            (4096, True, ("typed_exact",)),
+            (4097, True, ("typed_exact", "typed_hnsw")),
+            (5000, True, ("typed_exact", "typed_hnsw")),
+            (5001, True, ("typed_hnsw",)),
+        ):
+            with self.subTest(eligible=eligible, filtered=filtered):
+                self.assertEqual(
+                    diagnostic.normalized_v4_expected_routes(eligible, filtered),
+                    expected,
+                )
+        for eligible, filtered in ((-1, True), (1.0, True), (1, 1)):
+            with self.subTest(invalid=(eligible, filtered)):
+                with self.assertRaises(ValueError):
+                    diagnostic.normalized_v4_expected_routes(eligible, filtered)
+
+    def test_v4_response_validation_binds_the_declared_route(self):
+        identity = SimpleNamespace(
+            query_mode="exact", execution_route="typed_exact", diagnostics=True,
+            return_embedding=False, embedding_vector_reads=0,
+            embedding_vector_bytes=0, embedding_output_bytes=0,
+            quantized_score_calls=0, quantized_code_bytes_read=0,
+            packed_score_calls=1, packed_score_candidates=1,
+            packed_vector_bytes_read=diagnostic.v4_gate.DIMENSIONS * 4,
+            fp32_score_calls=1,
+            base_manifest_generation=1, current_manifest_generation=1,
+        )
+        response = SimpleNamespace(
+            native_command_version=4,
+            documents=[SimpleNamespace(id="row-000000", score=1.0, embedding=None)],
+            route_identity=identity,
+            dense_work=SimpleNamespace(
+                completed=True,
+                graph=SimpleNamespace(completed=True, base_ann_scored=1, delta_scored=0),
+                output=SimpleNamespace(completed=True),
+            ),
+            score_plane=None,
+        )
+        with patch.object(diagnostic.v4_gate, "asdict", return_value={"execution_route": "typed_exact"}):
+            receipt = diagnostic.v4_gate.validate_response(
+                response, "exact", diagnostics=True, top_k=1,
+                expected_route="typed_exact",
+            )
+        self.assertEqual(receipt["route"]["execution_route"], "typed_exact")
+        with self.assertRaisesRegex(RuntimeError, "expected='typed_hnsw'.*observed='typed_exact'"):
+            diagnostic.v4_gate.validate_response(
+                response, "exact", diagnostics=True, top_k=1,
+            )
+
+        sq8_identity = SimpleNamespace(**{
+            **vars(identity), "query_mode": "quantized_rerank",
+            "quantized_score_calls": 0, "quantized_code_bytes_read": 0,
+            "packed_score_calls": 1, "packed_score_candidates": 1,
+            "packed_vector_bytes_read": diagnostic.v4_gate.DIMENSIONS * 4,
+        })
+        sq8_response = SimpleNamespace(
+            **{**vars(response), "route_identity": sq8_identity,
+               "score_plane": SimpleNamespace(
+                   completed=True, forbidden_stable_score_calls=0,
+                   packed_score_batch_calls=1, packed_score_candidates=1,
+                   packed_vector_bytes_read=diagnostic.v4_gate.DIMENSIONS * 4,
+                   exact_base_rerank_score_calls=0, exact_small_filter_score_calls=1,
+                   exact_suffix_score_calls=0,
+               )},
+        )
+        with patch.object(diagnostic.v4_gate, "asdict", return_value={"execution_route": "typed_exact"}):
+            diagnostic.v4_gate.validate_response(
+                sq8_response, "quantized_rerank", diagnostics=True, top_k=1,
+                expected_route="typed_exact",
+            )
+        sq8_identity.packed_score_candidates = 0
+        with self.assertRaisesRegex(RuntimeError, "inconsistent base/suffix"):
+            diagnostic.v4_gate.validate_response(
+                sq8_response, "quantized_rerank", diagnostics=True, top_k=1,
+                expected_route="typed_exact",
+            )
+        sq8_identity.packed_score_calls = 0
+        sq8_identity.packed_vector_bytes_read = 0
+        sq8_identity.current_manifest_generation = 2
+        sq8_response.score_plane.packed_score_batch_calls = 0
+        sq8_response.score_plane.packed_score_candidates = 0
+        sq8_response.score_plane.packed_vector_bytes_read = 0
+        sq8_response.score_plane.exact_small_filter_score_calls = 0
+        sq8_response.score_plane.exact_suffix_score_calls = 1
+        sq8_response.dense_work.graph.delta_scored = 1
+        for mode, route in (("quantized_rerank", "typed_exact"),
+                            ("quantized_rerank", "typed_hnsw"), ("exact", "typed_exact")):
+            sq8_identity.query_mode, sq8_identity.execution_route = mode, route
+            sq8_identity.quantized_score_calls = int(route == "typed_hnsw")
+            sq8_identity.quantized_code_bytes_read = diagnostic.v4_gate.DIMENSIONS if route == "typed_hnsw" else 0
+            sq8_response.dense_work.graph.base_ann_scored = 0
+            sq8_response.score_plane = None if mode == "exact" else sq8_response.score_plane
+            with self.subTest(suffix_mode=mode, route=route), \
+                 patch.object(diagnostic.v4_gate, "asdict", return_value={}):
+                diagnostic.v4_gate.validate_response(
+                    sq8_response, mode, diagnostics=True, top_k=1, expected_route=route,
+                )
+
+    def test_v4_launcher_reserves_distinct_ports_and_closes_all_probes(self):
+        real_socket = diagnostic.v4_gate.socket.socket
+        for fail in (False, True):
+            probes = []
+
+            def create_probe(*args):
+                self.assertTrue(all(probe.fileno() >= 0 for probe in probes))
+                if fail and len(probes) == 2:
+                    raise OSError("probe creation failed")
+                probe = real_socket(*args)
+                probes.append(probe)
+                return probe
+
+            with self.subTest(fail=fail), \
+                 patch.object(diagnostic.v4_gate.socket, "socket", side_effect=create_probe):
+                if fail:
+                    with self.assertRaisesRegex(OSError, "probe creation failed"):
+                        diagnostic.v4_gate.free_service_addresses()
+                else:
+                    addresses = diagnostic.v4_gate.free_service_addresses()
+                    self.assertEqual(len(addresses), 3)
+                    self.assertEqual(len(set(addresses)), 3)
+            self.assertTrue(all(probe.fileno() == -1 for probe in probes))
+
+    def test_normalized_v4_search_translates_production_route_into_event_receipt(self):
+        run = object.__new__(diagnostic.Run)
+        run.plan = {"campaign_profile": diagnostic.CAMPAIGN_PROFILE_NORMALIZED_V4,
+                    "query_mode": "exact", "rows": 5000, "queries": 1}
+        run.quantized_requests, run.updated = [], set()
+        run.lock = diagnostic.threading.Lock()
+        run.info = SimpleNamespace(generation=1)
+        run.queries = np.asarray([[1.0, 0.0]], dtype=np.float32)
+        run.vectors = np.asarray([[1.0, 0.0]], dtype=np.float32)
+        run.truth = {"1": [["row-000000"]]}
+        run.original_cosine_truth = {"1": [["row-000000"]]}
+        work = diagnostic.dense_contract.DenseSearchWork.from_dict(
+            plain(quantized_response(eligible=1, filter_requested=True).dense_work),
+        )
+        response = SimpleNamespace(
+            route_identity=SimpleNamespace(
+                filter=True, result_count=1,
+                representation=diagnostic.NORMALIZED_REPRESENTATION,
+                embedding_vector_reads=0, embedding_vector_bytes=0,
+                embedding_output_bytes=0,
+            ),
+            dense_work=work, score_plane=None,
+            documents=[SimpleNamespace(
+                id="row-000000", content="minima-cohere:0",
+                meta={"user_id": "000000", "fpath": "/cohere/000000.txt"},
+                embedding=None, score=1.0,
+            )],
+        )
+        native = Mock()
+        native.query_by_embedding.return_value = response
+        run.clients = SimpleNamespace(native=native)
+        emitted = []
+        run.emit = lambda event, **fields: emitted.append({"event": event, **fields})
+
+        def timed(_phase, call, *, timing_evidence, **_fields):
+            timing_evidence.update(
+                started_monotonic_ns=1, ended_monotonic_ns=2, duration_ns=1,
+            )
+            return call()
+
+        run.timed = timed
+        route = {"execution_route": "typed_exact", "query_mode": "exact"}
+        with patch.object(diagnostic, "asdict", side_effect=plain), \
+             patch.object(diagnostic.v4_gate, "validate_response", return_value={"route": route}):
+            run.search_normalized_v4("fixed_coordinate_curve", 1, 0)
+        self.assertEqual(run.quantized_requests[0]["route_identity"], route)
+        self.assertEqual(emitted[-1]["route_identity"], route)
+        self.assertEqual(emitted[-1]["event"], "search_result")
+        with patch.object(diagnostic, "asdict", side_effect=plain), \
+             patch.object(diagnostic.v4_gate, "validate_response", side_effect=RuntimeError("corrupt returned counter")), \
+             self.assertRaisesRegex(RuntimeError, "corrupt returned counter"):
+            run.search_normalized_v4("fixed_coordinate_curve", 1, 0)
+        failed = run.quantized_requests[-1]
+        self.assertEqual(failed["outcome"], "error")
+        self.assertEqual(failed["route_identity"], plain(response.route_identity))
+        self.assertEqual(failed["dense_work"], plain(work))
+        self.assertEqual(failed["results"][0]["id"], "row-000000")
+        self.assertEqual(emitted[-1]["event"], "search_request_failure")
+
     def test_column_graph_build_validation_binds_quantized_stage_to_arm(self):
         build = {
             **{field: 1 for field in diagnostic._COLUMN_GRAPH_BUILD_FIELDS
@@ -676,6 +985,115 @@ class NativeCohereDiagnosticTests(unittest.TestCase):
         self.assertEqual(run.clients.optimize_index.call_args.kwargs["column_graph_serving"], {"limit": 1})
         run.optimize("fold")
         self.assertIsNone(run.clients.optimize_index.call_args.kwargs["column_graph_serving"])
+
+    def test_engine_wrapper_preserves_go_bytes_and_rejects_wrong_generation(self):
+        fixture = Path(__file__).resolve().parents[2] / "TreeDB/collections/testdata/cosine_normalized_f32_campaign.json"
+        go_raw = fixture.read_bytes()  # Verified against the actual Go serializer by its test.
+        artifact = json.loads(go_raw)
+        with tempfile.TemporaryDirectory() as directory:
+            run = object.__new__(diagnostic.Run)
+            run.output, run.info, run.emit = Path(directory), SimpleNamespace(generation=7), Mock()
+            run.plan = {
+                "go_tool": "/go", "product_commit": artifact["source_commit"],
+                "dataset": "/dataset", "serving_path": "/serving", "rows": 8, "queries": 1,
+                "dataset_manifest_sha256": artifact["dataset_manifest_sha256"],
+                "dataset_files_sha256": {"queries": artifact["queries_sha256"]},
+                "serving_sha256": artifact["serving_sha256"],
+            }
+            path = run.output / "normalized_v4_engine_diagnostic.json"
+            def execute(raw):
+                def produce(*args, **kwargs):
+                    path.write_bytes(raw)
+                    return SimpleNamespace(returncode=0, stdout="", stderr="")
+                with patch.object(diagnostic.subprocess, "run", side_effect=produce):
+                    return run.normalized_v4_engine_diagnostic()
+            receipt = execute(go_raw)
+            self.assertEqual(path.read_bytes(), go_raw)
+            self.assertEqual(receipt["sha256"], diagnostic.bytes_digest(go_raw))
+            self.assertEqual(receipt["artifact"], artifact)
+            for generation in (None, 8):
+                wrong = dict(artifact)
+                if generation is None:
+                    del wrong["collection_generation"]
+                else:
+                    wrong["collection_generation"] = generation
+                raw = diagnostic.canonical(wrong)
+                with self.subTest(generation=generation), self.assertRaisesRegex(RuntimeError, "identity differs"):
+                    execute(raw)
+                self.assertEqual(path.read_bytes(), raw)
+
+    def test_normalized_rows_match_go_golden_bits(self):
+        fixture = Path(__file__).resolve().parents[2] / "TreeDB/collections/testdata/cosine_normalized_f32_golden.json"
+        rows = json.loads(fixture.read_text())
+        source = np.asarray([row["input_bits"] for row in rows], dtype=np.uint32).view(np.float32)
+        expected = np.asarray([row["canonical_bits"] for row in rows], dtype=np.uint32)
+        original = source.copy()
+        actual = diagnostic.canonical_normalized_f32_rows(source, row_batch=2)
+        np.testing.assert_array_equal(actual.view(np.uint32), expected)
+        np.testing.assert_array_equal(source.view(np.uint32), original.view(np.uint32))
+        self.assertFalse(np.shares_memory(actual, source))
+        for invalid in ([[0, 0]], [[float("nan"), 1]], [[float("inf"), 1]], [[]]):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                diagnostic.canonical_normalized_f32_rows(invalid)
+
+    def test_normalized_truth_cutoff_ties_use_lowest_document_ids(self):
+        vectors = np.tile(np.asarray([1, 0], dtype=np.float32), (128, 1))
+        vectors[::2] = [0, 1]
+        ids, scores = diagnostic.canonical_normalized_f32_truth(vectors, [[1, 0]], [128])
+        self.assertEqual(ids["128"][0], [f"row-{row:06d}" for row in range(1, 20, 2)])
+        self.assertEqual(scores["128"][0], [1.0] * 10)
+
+    def test_normalized_truth_accepts_extreme_finite_vectors(self):
+        vectors = np.asarray([[np.finfo(np.float32).max, 0], [0, np.nextafter(np.float32(0), np.float32(1))]])
+        ids, scores = diagnostic.canonical_normalized_f32_truth(vectors, [[1, 0]], [2])
+        self.assertEqual(ids["2"][0], ["row-000000", "row-000001"])
+        self.assertEqual(scores["2"][0], [1.0, 0.0])
+
+    def test_normalized_materialization_checks_canonical_bytes_without_renormalizing(self):
+        run = object.__new__(diagnostic.Run)
+        run.plan = {"rows": 1, "campaign_profile": diagnostic.CAMPAIGN_PROFILE_NORMALIZED_V4}
+        run.updated = set()
+        run.vectors = np.tile(np.asarray([3, 4, 1e-7, -2], dtype=np.float32), (1, 192))
+        canonical_vector = diagnostic.canonical_normalized_f32_rows(run.vectors)[0]
+        document = diagnostic.make_document(run.vectors, 0, 1)
+        document["embedding"] = canonical_vector.tolist()
+        run.check_documents([SimpleNamespace(**document)], ["row-000000"])
+        document["embedding"][0] += 2e-7  # Within the old 1e-6 check, but not stored FP32.
+        with self.assertRaisesRegex(RuntimeError, "stored canonical vector"):
+            run.check_documents([SimpleNamespace(**document)], ["row-000000"])
+
+    def test_normalized_truth_uses_canonical_float32_dot(self):
+        vectors = np.asarray([[3.0, 4.0], [0.0, 2.0], [-4.0, 3.0]], dtype=np.float32)
+        queries = np.asarray([[1.0, 1.0]], dtype=np.float32)
+        ids, scores = diagnostic.canonical_normalized_f32_truth(
+            vectors, queries, [3], query_batch=1,
+        )
+        normalized = vectors / np.linalg.norm(vectors, axis=1)[:, None]
+        query = queries[0] / np.linalg.norm(queries[0])
+        expected = query @ normalized.T
+        order = np.lexsort((np.arange(3), -expected))
+        self.assertEqual(ids["3"][0], [f"row-{row:06d}" for row in order])
+        np.testing.assert_allclose(scores["3"][0], expected[order], rtol=0, atol=1e-7)
+
+    def test_owned_db_file_inventory_recomputes_categories(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for relative, payload in (
+                    ("docs/column-assets/part", b"abc"),
+                    ("wal/000001", b"12345"),
+                    ("value_vlog/000001", b"1234567"),
+                    ("leaf_vlog/000001", b"12"),
+                    ("MANIFEST", b"x")):
+                path = root / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(payload)
+            inventory = diagnostic.owned_db_file_inventory(root)
+            self.assertEqual(inventory["total_bytes"], 18)
+            self.assertEqual(inventory["category_bytes"], {
+                "column_assets": 3, "command_wal": 5, "value_log": 7,
+                "leaf_log": 2, "other": 1,
+            })
+            self.assertEqual(sum(row["bytes"] for row in inventory["files"]), 18)
 
     def test_ensure_binds_effective_construction_width(self):
         run = object.__new__(diagnostic.Run)

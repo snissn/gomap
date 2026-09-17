@@ -680,6 +680,19 @@ func v1CommandSchemas() []CommandSchema {
 			},
 		},
 		{
+			ID:        CommandDenseVectorSearch,
+			Version:   DenseVectorSearchNormalizedVersion,
+			Name:      "dense_vector_search",
+			Kind:      CommandKindRead,
+			LocalOnly: true,
+			Sections: []SectionRule{
+				{ID: SectionDeadline, Name: "deadline", Required: true},
+				{ID: SectionDenseSearchRequest, Name: "dense_search_request", Required: true},
+				{ID: SectionDenseSearchNormalizedOptions, Name: "dense_search_normalized_options", Required: true},
+				{ID: SectionDenseSearchDiagnostics, Name: "dense_search_diagnostics"},
+			},
+		},
+		{
 			ID: CommandTypedDocumentUpsert, Version: 1, Name: "typed_document_upsert", Kind: CommandKindMutation, LocalOnly: true,
 			Sections: []SectionRule{
 				{ID: SectionDeadline, Name: "deadline", Required: true},

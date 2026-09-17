@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/snissn/gomap/TreeDB/collections"
 	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
 )
 
@@ -35,6 +36,7 @@ type Client struct {
 	denseResults                  []DenseVectorSearchResult
 	denseTypedNegotiated          bool
 	denseTypedQuantizedNegotiated bool
+	denseNormalizedNegotiated     bool
 }
 
 // NewClient returns a native-wire client that owns conn until Close.
@@ -77,6 +79,7 @@ func (c *Client) Hello(ctx context.Context) error {
 	defer c.mu.Unlock()
 	c.denseTypedNegotiated = false
 	c.denseTypedQuantizedNegotiated = false
+	c.denseNormalizedNegotiated = false
 	_, response, err := c.roundTripLocked(ctx, iwire.FrameHello, nil, iwire.FrameHelloOK)
 	if err != nil {
 		return err
@@ -99,6 +102,9 @@ func (c *Client) Hello(ctx context.Context) error {
 		}
 		if version == "3" {
 			c.denseTypedQuantizedNegotiated = true
+		}
+		if version == "4" {
+			c.denseNormalizedNegotiated = true
 		}
 	}
 	return nil
@@ -386,11 +392,16 @@ func decodeWireErrorVersion(body []byte, limits iwire.Limits, denseVersion uint6
 			}
 		}
 	}
-	if denseVersion == iwire.DenseVectorSearchTypedQuantizedVersion {
+	if denseVersion == iwire.DenseVectorSearchTypedQuantizedVersion || denseVersion == iwire.DenseVectorSearchNormalizedVersion {
 		scoreRaw, scoreFound, candidateErr := singletonSection(sections, iwire.SectionDenseSearchScorePlaneProof)
 		scoreErr = candidateErr
 		if scoreErr == nil && scoreFound {
-			decoded, candidateErr := decodeDenseScorePlane(scoreRaw, limits)
+			var decoded collections.ColumnGraphScorePlaneWork
+			if denseVersion == iwire.DenseVectorSearchNormalizedVersion {
+				decoded, candidateErr = decodeDenseScorePlaneV2(scoreRaw, limits)
+			} else {
+				decoded, candidateErr = decodeDenseScorePlane(scoreRaw, limits)
+			}
 			scoreErr = candidateErr
 			if scoreErr == nil {
 				out.ScorePlane = &decoded
@@ -404,16 +415,22 @@ func decodeWireErrorVersion(body []byte, limits iwire.Limits, denseVersion uint6
 		return &DenseVectorSearchDecodeError{Err: candidate, DenseWork: out.DenseWork, ScorePlane: out.ScorePlane}
 	}
 	for _, section := range sections {
+		if denseVersion == iwire.DenseVectorSearchNormalizedVersion && section.ID != iwire.SectionError && section.ID != iwire.SectionDenseSearchWork && section.ID != iwire.SectionDenseSearchScorePlaneProof {
+			return withProofs(protocolError(iwire.ErrMalformedFrame, "unexpected normalized dense error section"))
+		}
+		if denseVersion == iwire.DenseVectorSearchNormalizedVersion && section.ID == iwire.SectionError && section.Flags != 0 {
+			return withProofs(protocolError(iwire.ErrMalformedFrame, "normalized dense error section flags are invalid"))
+		}
 		if section.ID == iwire.SectionDenseSearchWork && !denseWorkAllowed {
 			return withProofs(protocolError(iwire.ErrMalformedFrame, "dense error work is unavailable for this call"))
 		}
 		if section.ID == iwire.SectionDenseSearchWork && denseWorkAllowed && section.Flags != iwire.SectionFlagCritical {
 			return withProofs(protocolError(iwire.ErrMalformedFrame, "dense error work section must be critical"))
 		}
-		if section.ID == iwire.SectionDenseSearchScorePlaneProof && denseVersion != iwire.DenseVectorSearchTypedQuantizedVersion {
+		if section.ID == iwire.SectionDenseSearchScorePlaneProof && denseVersion != iwire.DenseVectorSearchTypedQuantizedVersion && denseVersion != iwire.DenseVectorSearchNormalizedVersion {
 			return withProofs(protocolError(iwire.ErrMalformedFrame, "dense score-plane proof is unavailable for this call"))
 		}
-		if section.ID == iwire.SectionDenseSearchScorePlaneProof && denseVersion == iwire.DenseVectorSearchTypedQuantizedVersion && section.Flags != iwire.SectionFlagCritical {
+		if section.ID == iwire.SectionDenseSearchScorePlaneProof && (denseVersion == iwire.DenseVectorSearchTypedQuantizedVersion || denseVersion == iwire.DenseVectorSearchNormalizedVersion) && section.Flags != iwire.SectionFlagCritical {
 			return withProofs(protocolError(iwire.ErrMalformedFrame, "dense error score-plane proof section must be critical"))
 		}
 		if denseWorkAllowed && section.ID != iwire.SectionError && section.ID != iwire.SectionDenseSearchWork && section.ID != iwire.SectionDenseSearchScorePlaneProof && section.Flags&iwire.SectionFlagCritical != 0 {

@@ -341,7 +341,7 @@ func openTypedWrite768Diagnostic(t *testing.T, preload, writeRows int) (string, 
 func typedWrite768Search(col *Collection, query []float32) (typedWrite768SearchResult, error) {
 	var buffer VectorIndexSearchBuffer
 	started := time.Now()
-	response, view, err := col.SearchVectorIndexWithBufferReadView(VectorIndexSearchOptions{IndexName: "embedding_graph", Query: query, TopK: 10, EfSearch: 128, StatsMode: VectorIndexSearchStatsModeMinimal}, &buffer)
+	response, view, err := col.SearchVectorIndexWithBufferReadView(VectorIndexSearchOptions{IndexName: "embedding_graph", Query: query, TopK: 10, EfSearch: 128, StatsMode: VectorIndexSearchStatsModeProduction}, &buffer)
 	if view != nil {
 		if closeErr := view.Close(); err == nil {
 			err = closeErr
