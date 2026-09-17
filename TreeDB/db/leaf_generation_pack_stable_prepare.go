@@ -457,7 +457,16 @@ func (db *DB) PrepareLeafGenerationPackStableClosure(ctx context.Context, leafPa
 	// Keep the lease until all deferred staging/authority cleanup has completed.
 	defer captureLease.Release()
 	layout := resolveStorageLayout(db.dir)
-	stagingRoot, err := os.MkdirTemp(layout.leafVLogDir, ".leaf-pack-stable-prepare-")
+	segments, err := listValueLogSegments(db.dir)
+	if err != nil {
+		return nil, err
+	}
+	leafStartSeq := maxRewriteLaneSeq(segments, rewriteLeafLogLaneID)
+	seqAlloc, ridAlloc, err := db.leafGenerationPackAllocators(leafStartSeq, 1, nil)
+	if err != nil {
+		return nil, err
+	}
+	stagingRoot, err := makeLeafGenerationPackStagingDirFn(layout.leafVLogDir, ".leaf-pack-stable-prepare-")
 	if err != nil {
 		return nil, err
 	}
@@ -487,9 +496,8 @@ func (db *DB) PrepareLeafGenerationPackStableClosure(ctx context.Context, leafPa
 	if err := os.MkdirAll(stagingLeafDir, 0o700); err != nil {
 		return nil, err
 	}
-	seqAlloc, ridAlloc := db.leafGenerationPackAllocators(1, 1, nil)
 	writer = newRewriteWriter(layout.valueVLogDir, 0, 0, 0)
-	writer.ConfigureLeafLog(stagingLeafDir, rewriteLeafLogLaneID, 1)
+	writer.ConfigureLeafLog(stagingLeafDir, rewriteLeafLogLaneID, leafStartSeq)
 	writer.configureLeafStaging(stagingRoot)
 	writer.setLeafPageLogSeqAllocator(seqAlloc)
 	writer.setLeafPageLogRIDAllocator(ridAlloc)

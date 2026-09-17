@@ -1064,7 +1064,9 @@ func newReplayInlineAppenderWithNextRID(db *DB, segments []logSegment, nextRID u
 	}
 	layout := resolveStorageLayout(db.dir)
 	writer := newRewriteWriter(layout.valueVLogDir, 0, maxLane0Seq, maxSegmentBytes)
-	writer.ConfigureLeafLog(layout.leafVLogDir, rewriteLeafLogLaneID, maxRewriteLaneSeq(segments, rewriteLeafLogLaneID))
+	leafStartSeq := maxRewriteLaneSeq(segments, rewriteLeafLogLaneID)
+	writer.ConfigureLeafLog(layout.leafVLogDir, rewriteLeafLogLaneID, leafStartSeq)
+	writer.setLeafPageLogSeqAllocator(newLeafLogSeqAllocator(leafStartSeq))
 	writer.blockCompression = db.valueLogCompression != ValueLogCompressionOff
 	writer.blockCodec = valuelogBlockCodecFromDB(db.valueLogBlockCodec)
 	writer.leafBlockCodec = leafPageBlockCodecFromOptions(db.valueLogCompression, db.valueLogAutoPolicy, db.valueLogBlockCodec, db.indexOuterLeavesInValueLog)
@@ -1335,6 +1337,18 @@ func (a *replayInlineAppender) advanceLeafLogSeqAtLeast(seq uint32) error {
 	return a.writer.resetLeafLogSeqAtLeast(seq)
 }
 
+func (a *replayInlineAppender) reserveLeafPageLogSequence(floor uint32) (uint32, error) {
+	if a == nil {
+		return 0, errors.New("commitlog: replay leaf-page log sequence reservation unavailable")
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.writer == nil || a.writer.leafSeqAllocator == nil {
+		return 0, errors.New("commitlog: replay leaf-page log sequence reservation unavailable")
+	}
+	return a.writer.leafSeqAllocator.ReserveLeafPageLogSequence(floor)
+}
+
 func (a *replayInlineAppender) syncIfDirty() error {
 	if a == nil {
 		return nil
@@ -1376,6 +1390,8 @@ type replayInlineLeafPageLog struct {
 	appender *replayInlineAppender
 }
 
+var _ LeafPageLogSequenceReserver = replayInlineLeafPageLog{}
+
 func (l replayInlineLeafPageLog) AppendLeafPage(leafPage []byte) (page.LeafLogPtr, error) {
 	if l.appender == nil {
 		return page.LeafLogPtr{}, fmt.Errorf("commitlog: replay leaf-page log unavailable")
@@ -1416,6 +1432,13 @@ func (l replayInlineLeafPageLog) AdvanceCompactStorageLeafPageLogSeqAtLeast(seq 
 		return nil
 	}
 	return l.appender.advanceLeafLogSeqAtLeast(seq)
+}
+
+func (l replayInlineLeafPageLog) ReserveLeafPageLogSequence(floor uint32) (uint32, error) {
+	if l.appender == nil {
+		return 0, errors.New("commitlog: replay leaf-page log sequence reservation unavailable")
+	}
+	return l.appender.reserveLeafPageLogSequence(floor)
 }
 
 func applyCommitBatch(db *DB, records []commitlog.Record, ridMap map[uint64]page.ValuePtr, inlineAppender *replayInlineAppender) error {
