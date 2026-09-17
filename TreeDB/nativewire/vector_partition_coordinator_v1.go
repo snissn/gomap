@@ -971,9 +971,13 @@ func (c *VectorPartitionCoordinatorV1) searchV1(ctx context.Context, request Vec
 	}
 	var livePin *collections.VectorIndexPartitionLiveSearchPinV1
 	if strict == nil {
-		if source, ok := c.routerSource.(vectorPartitionCoordinatorReplicatedLivePinSourceV1); ok && c.replicatedLifecycle != nil {
+		if c.replicatedLifecycle != nil {
+			source, ok := c.routerSource.(vectorPartitionCoordinatorReplicatedLivePinSourceV1)
+			if !ok {
+				return response, c.wrapError(fmt.Errorf("%w: replicated live-pin source is required", ErrVectorPartitionCoordinatorUnavailable), "")
+			}
 			livePin, err = source.acquireVectorPartitionCoordinatorReplicatedLivePinV1(requestCtx, status.Manifest)
-		} else if source, ok := c.routerSource.(vectorPartitionCoordinatorLivePinSourceV1); ok && c.replicatedLifecycle == nil {
+		} else if source, ok := c.routerSource.(vectorPartitionCoordinatorLivePinSourceV1); ok {
 			livePin, err = source.acquireVectorPartitionCoordinatorLivePinV1(requestCtx, status.Manifest)
 		}
 		if err != nil {

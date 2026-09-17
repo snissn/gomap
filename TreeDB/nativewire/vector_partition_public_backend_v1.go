@@ -456,7 +456,7 @@ func publicBackendErrorV1(err error) error {
 	if errors.Is(err, context.DeadlineExceeded) {
 		return &public.ErrorV1{Code: public.ErrorDeadlineExceededV1, Err: err}
 	}
-	if errors.Is(err, ErrFixedPeerVectorProofMissingV1) || errors.Is(err, ErrFixedPeerVectorDocumentV1) {
+	if errors.Is(err, ErrFixedPeerVectorProofMissingV1) || errors.Is(err, ErrFixedPeerVectorDocumentV1) || errors.Is(err, collections.ErrVectorPartitionRouterQueryV1) {
 		return &public.ErrorV1{Code: public.ErrorInvalidRequestV1, Err: err}
 	}
 	if errors.Is(err, ErrFixedPeerVectorProofStaleV1) || errors.Is(err, ErrFixedPeerVectorWrongOwnerV1) {

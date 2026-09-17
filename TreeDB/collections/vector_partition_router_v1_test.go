@@ -634,8 +634,10 @@ func TestPartitionRouterRecordRejectsMalformedFiniteAndHierarchyV1(t *testing.T)
 			t.Fatalf("malformed record of length %d succeeded", len(malformed))
 		}
 	}
-	if _, err := normalizeVectorPartitionRouterQueryV1([]float32{float32(math.NaN()), 1}, 2); err == nil {
-		t.Fatal("non-finite router query succeeded")
+	for _, query := range [][]float32{{1}, {float32(math.NaN()), 1}, {1, float32(math.Inf(1))}, {0, 0}} {
+		if _, err := normalizeVectorPartitionRouterQueryV1(query, 2); !errors.Is(err, ErrVectorPartitionRouterQueryV1) {
+			t.Fatalf("malformed router query %v error=%v", query, err)
+		}
 	}
 }
 

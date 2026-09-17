@@ -23,6 +23,53 @@ var (
 	vectorPartitionBenchmarkEvidenceSink public.FastSearchEvidenceV1
 )
 
+type vectorPartitionWireInsertBackendV1 struct {
+	public.BackendV1
+	calls int
+}
+
+func (b *vectorPartitionWireInsertBackendV1) InsertVectorPartitionV1(_ context.Context, request public.InsertRequestV1) (public.InsertResponseV1, error) {
+	b.calls++
+	return public.InsertResponseV1{
+		Generation: request.Generation, VisibilityGeneration: request.Generation, VisibleID: string(request.ID),
+		OwnerGroup: "owner", CommitTerm: 1, CommitIndex: 1, AppliedIndex: 1, ProductionConsensus: true, LiveRevision: 1,
+		Counters: public.MutationCountersV1{Routes: 1, Commits: 1, Replications: 1, Applies: 1, VisibilityProofs: 1},
+	}, nil
+}
+
+func TestVectorPartitionNativeWireInsertWithClusterSubmitterV1(t *testing.T) {
+	backend := &vectorPartitionWireInsertBackendV1{}
+	service, err := public.NewServiceV1(backend)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := public.ConservativeOperationsConfigV1()
+	config.Enabled = true
+	operations, err := public.NewOperationsV1(service, config, func(context.Context) (public.OperationsHealthV1, error) {
+		return public.OperationsHealthV1{Ready: true}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cluster := &fakeClusterSubmitter{}
+	server := NewServer(ServerOptions{ClusterSubmitter: cluster, VectorPartitionOperations: operations})
+	client, _, err := NewInProcessClient(t.Context(), server)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	request := public.InsertRequestV1{
+		Version: 1, Generation: public.GenerationIDV1{Index: "embedding", Generation: 1},
+		IdempotencyKey: []byte("attempt"), ID: []byte("doc"), Vector: []float32{1}, Document: []byte(`{"embedding":[1]}`), Deadline: time.Now().Add(time.Second),
+	}
+	if _, err := client.VectorInsertV1(t.Context(), request); err != nil {
+		t.Fatal(err)
+	}
+	if backend.calls != 1 || len(cluster.snapshot()) != 0 {
+		t.Fatalf("vector calls=%d cluster calls=%d", backend.calls, len(cluster.snapshot()))
+	}
+}
+
 func TestVectorPartitionWireV1RoundTrip(t *testing.T) {
 	limits := iwire.DefaultLimits()
 	request := public.SearchRequestV1{

@@ -38,6 +38,14 @@ func TestVectorPartitionPublicBackendMapsCoordinatorErrorsV1(t *testing.T) {
 	if got := publicBackendErrorV1(context.Canceled); !errors.Is(got, context.Canceled) {
 		t.Fatalf("canceled = %v", got)
 	}
+	for _, err := range []error{
+		collections.ErrVectorPartitionRouterQueryV1,
+		(&VectorPartitionCoordinatorV1{}).wrapError(collections.ErrVectorPartitionRouterQueryV1, ""),
+	} {
+		if mapped := publicBackendErrorV1(err); !hasPublicErrorCodeV1(mapped, public.ErrorInvalidRequestV1) {
+			t.Fatalf("router input error mapped as %v", mapped)
+		}
+	}
 	ambiguous := publicBackendErrorV1(errors.Join(context.DeadlineExceeded, raftcluster.ErrCommitAmbiguous))
 	if !hasPublicErrorCodeV1(ambiguous, public.ErrorCommitAmbiguousV1) || errors.Is(ambiguous, context.DeadlineExceeded) {
 		t.Fatalf("post-commit deadline = %v", ambiguous)

@@ -574,7 +574,8 @@ func validateFixedPeerVectorConfigV1(config FixedPeerTCPConfigV1, localGroups ma
 		vector.Manifest.IndexName == "" || vector.Manifest.Generation == 0 || vector.Manifest.IntegrityDigest == "" ||
 		vector.Placement.Collection != vector.Collection || vector.Placement.IndexName != vector.Manifest.IndexName ||
 		vector.Placement.PartitionGeneration != vector.Manifest.Generation || vector.Identity.Index.Collection != vector.Collection ||
-		vector.Identity.Index.IndexName != vector.Manifest.IndexName || vector.Identity.Generation != vector.Manifest.Generation || vector.IndexedThrough == 0 {
+		vector.Identity.Index.IndexName != vector.Manifest.IndexName || vector.Identity.Index.CatalogEpoch == 0 ||
+		vector.Identity.Index.CatalogDigest == "" || vector.Identity.Generation != vector.Manifest.Generation || vector.IndexedThrough == 0 {
 		return errors.New("incomplete vector runtime identity")
 	}
 	if len(vector.PublicAddresses) != len(config.Nodes) {
@@ -624,6 +625,13 @@ func validateFixedPeerVectorConfigV1(config FixedPeerTCPConfigV1, localGroups ma
 		if localGroups[group] && vector.ShardAddresses[group][config.NodeID] == "" {
 			return fmt.Errorf("vector shard address is missing for local owner group %q", group)
 		}
+	}
+	resolved, err := raftplacement.Validate(vector.Catalog)
+	if err != nil {
+		return fmt.Errorf("invalid vector catalog: %w", err)
+	}
+	if err := resolved.ValidateVectorPartitionPlacementV1(vector.Placement); err != nil {
+		return fmt.Errorf("invalid vector placement: %w", err)
 	}
 	return nil
 }

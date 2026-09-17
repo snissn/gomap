@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"math"
 	"net"
 	"os"
 	"path/filepath"
@@ -295,6 +296,20 @@ func TestVectorPartitionSystemNativeFourDaemonRemoteWriteRoutesAppliesAndBecomes
 		t.Fatal(err)
 	}
 	defer client.Close()
+	for name, vector := range map[string][]float32{
+		"dimension": {1}, "nan": {float32(math.NaN()), 1},
+		"infinity": {1, float32(math.Inf(1))}, "zero_cosine": {0, 0},
+	} {
+		t.Run("invalid_vector_"+name, func(t *testing.T) {
+			request := public.InsertRequestV1{
+				Version: 1, Generation: fixture.Generation, IdempotencyKey: []byte("invalid-" + name),
+				ID: []byte("invalid-" + name), Vector: vector, Document: []byte(`{"embedding":[0,1]}`), Deadline: time.Now().Add(10 * time.Second),
+			}
+			if _, err := client.VectorInsertV1(ctx, request); !hasPublicVectorErrorCodeV1(err, public.ErrorInvalidRequestV1) {
+				t.Fatalf("malformed vector error=%v", err)
+			}
+		})
+	}
 	stale := public.InsertRequestV1{
 		Version: 1, Generation: public.GenerationIDV1{Index: fixture.Generation.Index, Generation: fixture.Generation.Generation + 1},
 		IdempotencyKey: []byte("reject-stale-generation"), ID: []byte("reject-stale-generation"), Vector: []float32{0, 1}, Document: []byte(`{"embedding":[0,1]}`), Deadline: time.Now().Add(30 * time.Second),
@@ -696,7 +711,7 @@ func TestFixedPeerVectorConfigRequiresOneOwnerGroupV1(t *testing.T) {
 		Collection:      ref,
 		Manifest:        collections.VectorPartitionManifestV1{State: "ready", Collection: "docs", IndexName: "embedding", Generation: 1, IntegrityDigest: "integrity"},
 		Placement:       raftplacement.VectorPartitionPlacementRecordV1{Collection: ref, IndexName: "embedding", PartitionGeneration: 1},
-		Identity:        raftplacement.VectorPartitionLifecycleIdentityV1{Index: raftplacement.VectorPartitionLifecycleIndexIdentityV1{Collection: ref, IndexName: "embedding"}, Generation: 1},
+		Identity:        raftplacement.VectorPartitionLifecycleIdentityV1{Index: raftplacement.VectorPartitionLifecycleIndexIdentityV1{Collection: ref, IndexName: "embedding", CatalogEpoch: 1, CatalogDigest: "catalog"}, Generation: 1},
 		PublicAddresses: map[raftcluster.NodeID]string{"node": "127.0.0.1:10001"},
 		ShardAddresses: map[raftcluster.GroupID]map[raftcluster.NodeID]string{
 			"group-a": {"node": "127.0.0.1:10002"},
@@ -739,6 +754,15 @@ func TestFixedPeerVectorConfigRequiresOneOwnerGroupV1(t *testing.T) {
 			t.Fatalf("local data-group validation error=%v, want %q", err, want)
 		}
 	}
+	config.Vector.Catalog = raftplacement.CatalogV1{
+		Features:   raftplacement.DefaultFeatureSet(),
+		Groups:     []raftplacement.GroupV1{{ID: "group-a", Members: []raftcluster.NodeID{"node"}}},
+		Placements: []raftplacement.CollectionPlacementV1{{Collection: ref, GroupID: "group-a", Mode: raftplacement.PlacementModeCollectionV1}},
+	}
+	config.Vector.Placement.IndexDefinitionDigest = strings.Repeat("a", 64)
+	config.Vector.Placement.SourceGeneration = 1
+	config.Vector.Placement.SourceRowCount = 1
+	config.Vector.Placement.PartitionCount = 1
 	for _, localGroup := range []raftcluster.GroupID{"group-a", "group-b"} {
 		if err := validateFixedPeerVectorConfigV1(config, map[raftcluster.GroupID]bool{localGroup: true}); err != nil {
 			t.Fatalf("one local data group %q rejected: %v", localGroup, err)
@@ -747,6 +771,66 @@ func TestFixedPeerVectorConfigRequiresOneOwnerGroupV1(t *testing.T) {
 	config.Vector = nil
 	if err := validateFixedPeerVectorConfigV1(config, map[raftcluster.GroupID]bool{"group-a": true, "group-b": true}); err != nil {
 		t.Fatalf("non-vector config rejected: %v", err)
+	}
+}
+
+func TestFixedPeerVectorConfigPreflightBeforeDiskCreationV1(t *testing.T) {
+	ref := raftplacement.CollectionRefV1{Database: "default", Catalog: "default", Collection: "docs"}
+	seed := fixedPeerVectorSeedFixtureV1{
+		manifest: collections.VectorPartitionManifestV1{
+			State: "ready", Collection: "docs", IndexName: "embedding", Generation: 1, IntegrityDigest: "integrity",
+			IndexDefinitionDigest: strings.Repeat("a", 64), SourceGeneration: 1, SourceRowCount: 1,
+		},
+		catalog: raftplacement.CatalogV1{
+			Features: raftplacement.DefaultFeatureSet(),
+			Groups: []raftplacement.GroupV1{
+				{ID: "group-a", Members: []raftcluster.NodeID{"ingress"}, LeaderHint: "ingress"},
+				{ID: "group-b", Members: []raftcluster.NodeID{"owner-1", "owner-2", "owner-3"}, LeaderHint: "owner-1"},
+			},
+			Placements: []raftplacement.CollectionPlacementV1{{Collection: ref, GroupID: "group-b", Mode: raftplacement.PlacementModeCollectionV1}},
+		},
+	}
+	for name, mutate := range map[string]func(*FixedPeerTCPConfigV1){
+		"catalog_epoch":  func(c *FixedPeerTCPConfigV1) { c.Vector.Identity.Index.CatalogEpoch = 0 },
+		"catalog_digest": func(c *FixedPeerTCPConfigV1) { c.Vector.Identity.Index.CatalogDigest = "" },
+		"catalog":        func(c *FixedPeerTCPConfigV1) { c.Vector.Catalog = raftplacement.CatalogV1{} },
+		"placement":      func(c *FixedPeerTCPConfigV1) { c.Vector.Placement.PartitionCount++ },
+		"unknown_owner":  func(c *FixedPeerTCPConfigV1) { c.Vector.Catalog.Groups = c.Vector.Catalog.Groups[:1] },
+		"shard_rpc":      func(c *FixedPeerTCPConfigV1) { c.Vector.ShardAddresses["group-b"]["owner-1"] = c.Nodes[0].Address },
+		"shard_catalog_raft": func(c *FixedPeerTCPConfigV1) {
+			c.Vector.ShardAddresses["group-b"]["owner-1"] = c.Catalog.Peers[0].Address
+		},
+		"shard_data_raft": func(c *FixedPeerTCPConfigV1) {
+			c.Vector.ShardAddresses["group-b"]["owner-1"] = c.Groups[1].Peers[0].Address
+		},
+		"shard_public": func(c *FixedPeerTCPConfigV1) {
+			c.Vector.ShardAddresses["group-b"]["owner-1"] = c.Vector.PublicAddresses["owner-1"]
+		},
+		"shard_duplicate": func(c *FixedPeerTCPConfigV1) {
+			c.Vector.ShardAddresses["group-b"]["owner-1"] = c.Vector.ShardAddresses["group-b"]["owner-2"]
+		},
+		"public_duplicate": func(c *FixedPeerTCPConfigV1) {
+			c.Vector.PublicAddresses["owner-1"] = c.Vector.PublicAddresses["owner-2"]
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			config := fixedPeerVectorTestConfigsV1(t, seed)[0]
+			if _, _, err := validateFixedPeerConfigV1(config); err != nil {
+				t.Fatalf("valid baseline config rejected: %v", err)
+			}
+			mutate(&config)
+			if runtime, err := OpenFixedPeerTCPRuntimeV1(config); !errors.Is(err, raftcluster.ErrInvalidConfig) {
+				if runtime != nil {
+					_ = runtime.Close()
+				}
+				t.Fatalf("invalid config error=%v", err)
+			}
+			for _, path := range []string{config.DataRoot, config.RaftRoot} {
+				if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("invalid open created %s: %v", path, err)
+				}
+			}
+		})
 	}
 }
 
@@ -764,7 +848,7 @@ func TestFixedPeerVectorLocalDataGroupValidationPrecedesDiskCreationV1(t *testin
 			State: "ready", Collection: "docs", IndexName: "embedding", Generation: 1, IntegrityDigest: "integrity",
 		},
 		Placement:       raftplacement.VectorPartitionPlacementRecordV1{Collection: ref, IndexName: "embedding", PartitionGeneration: 1, Partitions: []raftplacement.VectorPartitionGroupV1{{PartitionID: 0, GroupID: "group-b"}}},
-		Identity:        raftplacement.VectorPartitionLifecycleIdentityV1{Index: raftplacement.VectorPartitionLifecycleIndexIdentityV1{Collection: ref, IndexName: "embedding"}, Generation: 1},
+		Identity:        raftplacement.VectorPartitionLifecycleIdentityV1{Index: raftplacement.VectorPartitionLifecycleIndexIdentityV1{Collection: ref, IndexName: "embedding", CatalogEpoch: 1, CatalogDigest: "catalog"}, Generation: 1},
 		PublicAddresses: map[raftcluster.NodeID]string{"ingress": "127.0.0.1:21001", "owner-1": "127.0.0.1:21002", "owner-2": "127.0.0.1:21003"},
 		ShardAddresses: map[raftcluster.GroupID]map[raftcluster.NodeID]string{
 			"group-b": {"owner-1": "127.0.0.1:22001", "owner-2": "127.0.0.1:22002"},

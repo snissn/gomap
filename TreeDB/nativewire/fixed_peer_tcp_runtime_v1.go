@@ -245,6 +245,20 @@ func validateFixedPeerConfigV1(c FixedPeerTCPConfigV1) (FixedPeerTCPConfigV1, st
 	if err := validateFixedPeerVectorConfigV1(c, localGroups); err != nil {
 		return invalid(err.Error())
 	}
+	if c.Vector != nil {
+		for _, address := range c.Vector.PublicAddresses {
+			if !addressOK(address) {
+				return invalid("duplicate/invalid vector public address")
+			}
+		}
+		for _, peers := range c.Vector.ShardAddresses {
+			for _, address := range peers {
+				if !addressOK(address) {
+					return invalid("duplicate/invalid vector shard address")
+				}
+			}
+		}
+	}
 	slices.SortFunc(c.Nodes, func(a, b FixedPeerTCPNodeV1) int { return bytes.Compare([]byte(a.ID), []byte(b.ID)) })
 	slices.SortFunc(c.Groups, func(a, b FixedPeerTCPGroupV1) int { return bytes.Compare([]byte(a.ID), []byte(b.ID)) })
 	shared := c
