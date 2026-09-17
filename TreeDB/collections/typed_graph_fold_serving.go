@@ -32,11 +32,18 @@ func (f *typedGraphFoldServing) prepareNext(before *typedGraphPublicationState, 
 		return nil, ErrVectorIndexSnapshotMismatch
 	}
 	next.rows = make([]columnPhysicalVisibleRow, 0, count)
-	next.invNorms = make([]float32, 0, count)
+	canonicalRepresentation := len(meta.VectorIndexes) == 1 && vectorIndexUsesCosineNormalizedF32V1(meta.VectorIndexes[0])
+	if !canonicalRepresentation {
+		next.invNorms = make([]float32, 0, count)
+	} else {
+		next.invNorms = nil
+	}
 	for i, row := range before.rows {
 		if row.Generation > generation {
 			next.rows = append(next.rows, row)
-			next.invNorms = append(next.invNorms, before.invNorms[i])
+			if !canonicalRepresentation {
+				next.invNorms = append(next.invNorms, before.invNorms[i])
+			}
 		}
 	}
 	next.physicalRows, next.tombstones, next.valueSlots, next.admittedPayloadBytes = cost.rows, cost.tombstones, cost.slots, cost.bytes

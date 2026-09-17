@@ -625,91 +625,126 @@ func TestTypedGraphPublicScalarU8QuantizedRerankZeroBaseAssetValidation(t *testi
 func TestTypedGraphPublicScalarU8QuantizedRerankFilterBoundary(t *testing.T) {
 	requireTypedGraphPublicServingTest(t)
 	const rows = typedGraphScalarExactLimit + 1
-	meta := typedMinimaCollectionMeta()
-	meta.VectorIndexes[0].M = 16
-	meta.VectorIndexes[0].QuantizedIndexes = []QuantizedVectorIndexDefinition{{Name: "embedding.scalar_u8.legacy"}}
-	_, db, col := openTypedMinimaCollectionMeta(t, meta)
-	defer db.Close()
+	for _, tc := range []struct {
+		name       string
+		normalized bool
+	}{
+		{name: "legacy"},
+		{name: "cosine_normalized_f32_v1", normalized: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			meta := typedMinimaCollectionMeta()
+			meta.VectorIndexes[0].M = 16
+			meta.VectorIndexes[0].QuantizedIndexes = []QuantizedVectorIndexDefinition{{Name: "embedding.scalar_u8.legacy"}}
+			if tc.normalized {
+				meta.VectorIndexes[0].Representation = VectorIndexRepresentationCosineNormalizedF32V1
+			}
+			_, db, col := openTypedMinimaCollectionMeta(t, meta)
+			defer db.Close()
 
-	ids, retained := make([][]byte, rows), make([][]byte, rows)
-	columns := []TypedColumnBatch{{Name: "embedding"}, {Name: "content"}, {Name: "user"}, {Name: "path"}}
-	for ordinal := range rows {
-		id := []byte(fmt.Sprintf("row-%05d", ordinal))
-		ids[ordinal] = id
-		retained[ordinal] = []byte(fmt.Sprintf(`{"id":%q}`, id))
-		columns[0].Float32Vectors = append(columns[0].Float32Vectors, vectorBenchmarkEmbedding(ordinal, 8))
-		columns[1].Strings = append(columns[1].Strings, "content")
-		columns[2].Strings = append(columns[2].Strings, fmt.Sprintf("%05d", ordinal))
-		columns[3].Strings = append(columns[3].Strings, "source")
-	}
-	if _, _, err := col.InsertTypedBatchWithStats(ids, retained, columns); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := col.RebuildVectorIndex("embedding_graph"); err != nil {
-		t.Fatal(err)
-	}
-	serving := typedGraphPublicTestOptions()
-	serving.SearchCandidates = 8192
-	serving.Filter.SourceIDs = rows + 16
-	serving.Filter.SourceBytes = 4 << 20
-	serving.Filter.RetainedBytes = 4 << 20
-	serving.Filter.MappingWork = 1 << 20
-	serving.Filter.InspectedEntries = 2 * rows
-	if err := col.EnsureColumnGraphServing(context.Background(), "embedding_graph", serving); errors.Is(err, errColumnVectorGraphSharedPreparedSearchNotEligible) {
-		t.Skip("typed shared prepared holder is unavailable on this host")
-	} else if err != nil {
-		t.Fatal(err)
-	}
+			ids, retained := make([][]byte, rows), make([][]byte, rows)
+			columns := []TypedColumnBatch{{Name: "embedding"}, {Name: "content"}, {Name: "user"}, {Name: "path"}}
+			for ordinal := range rows {
+				id := []byte(fmt.Sprintf("row-%05d", ordinal))
+				ids[ordinal] = id
+				retained[ordinal] = []byte(fmt.Sprintf(`{"id":%q}`, id))
+				columns[0].Float32Vectors = append(columns[0].Float32Vectors, vectorBenchmarkEmbedding(ordinal, 8))
+				columns[1].Strings = append(columns[1].Strings, "content")
+				columns[2].Strings = append(columns[2].Strings, fmt.Sprintf("%05d", ordinal))
+				columns[3].Strings = append(columns[3].Strings, "source")
+			}
+			if _, _, err := col.InsertTypedBatchWithStats(ids, retained, columns); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := col.RebuildVectorIndex("embedding_graph"); err != nil {
+				t.Fatal(err)
+			}
+			serving := typedGraphPublicTestOptions()
+			serving.SearchCandidates = 8192
+			serving.Filter.SourceIDs = rows + 16
+			serving.Filter.SourceBytes = 4 << 20
+			serving.Filter.RetainedBytes = 4 << 20
+			serving.Filter.MappingWork = 1 << 20
+			serving.Filter.InspectedEntries = 2 * rows
+			if err := col.EnsureColumnGraphServing(context.Background(), "embedding_graph", serving); errors.Is(err, errColumnVectorGraphSharedPreparedSearchNotEligible) {
+				t.Skip("typed shared prepared holder is unavailable on this host")
+			} else if err != nil {
+				t.Fatal(err)
+			}
 
-	search := func(filter HybridScalarFilter) VectorIndexSearchResponse {
-		t.Helper()
-		var buffer VectorIndexSearchBuffer
-		response, view, err := col.SearchVectorIndexWithBufferReadView(VectorIndexSearchOptions{
-			IndexName:                 "embedding_graph",
-			Query:                     columns[0].Float32Vectors[0],
-			QueryMode:                 VectorIndexQueryModeQuantizedRerank,
-			QuantizedIndexName:        "embedding.scalar_u8.legacy",
-			QuantizedRerankCandidates: 4,
-			TopK:                      2,
-			EfSearch:                  8,
-			DeclaredScalarFilter:      &filter,
-			StatsMode:                 VectorIndexSearchStatsModeMinimal,
-		}, &buffer)
-		if err != nil {
-			t.Fatalf("filter=%+v typed quantized rerank: %v", filter, err)
-		}
-		if view == nil {
-			t.Fatalf("filter=%+v typed quantized rerank returned no read view", filter)
-		}
-		if err := view.Close(); err != nil {
-			t.Fatalf("filter=%+v close read view: %v", filter, err)
-		}
-		return response
-	}
-	rangeTo := func(last int) HybridScalarFilter {
-		return HybridScalarFilter{IndexName: "user", Range: &IndexRangeOptions{
-			Lower: IndexRangeBound{Value: "00000", Inclusive: true},
-			Upper: IndexRangeBound{Value: fmt.Sprintf("%05d", last), Inclusive: true},
-		}}
-	}
+			search := func(filter HybridScalarFilter) VectorIndexSearchResponse {
+				t.Helper()
+				var buffer VectorIndexSearchBuffer
+				response, view, err := col.SearchVectorIndexWithBufferReadView(VectorIndexSearchOptions{
+					IndexName:                 "embedding_graph",
+					Query:                     columns[0].Float32Vectors[0],
+					QueryMode:                 VectorIndexQueryModeQuantizedRerank,
+					QuantizedIndexName:        "embedding.scalar_u8.legacy",
+					QuantizedRerankCandidates: 4,
+					TopK:                      2,
+					EfSearch:                  8,
+					DeclaredScalarFilter:      &filter,
+					StatsMode:                 VectorIndexSearchStatsModeMinimal,
+				}, &buffer)
+				if err != nil {
+					t.Fatalf("filter=%+v typed quantized rerank: %v", filter, err)
+				}
+				if view == nil {
+					t.Fatalf("filter=%+v typed quantized rerank returned no read view", filter)
+				}
+				if err := view.Close(); err != nil {
+					t.Fatalf("filter=%+v close read view: %v", filter, err)
+				}
+				return response
+			}
+			rangeTo := func(last int) HybridScalarFilter {
+				return HybridScalarFilter{IndexName: "user", Range: &IndexRangeOptions{
+					Lower: IndexRangeBound{Value: "00000", Inclusive: true},
+					Upper: IndexRangeBound{Value: fmt.Sprintf("%05d", last), Inclusive: true},
+				}}
+			}
 
-	empty := search(HybridScalarFilter{IndexName: "user", Value: "missing"})
-	emptyWork := empty.Stats.ColumnGraphWork
-	if len(empty.Results) != 0 || emptyWork.Route != "typed_empty" || empty.Stats.SearchRouteQuantizedRerank != 1 || empty.Stats.QuantizedScoreCalls != 0 || emptyWork.ExactBaseScored != 0 || emptyWork.ScorePlane.QuantizedScoreCalls != 0 || emptyWork.ScorePlane.ExactBaseRerankScoreCalls != 0 {
-		t.Fatalf("empty selected filter response=%+v work=%+v", empty, emptyWork)
-	}
+			empty := search(HybridScalarFilter{IndexName: "user", Value: "missing"})
+			emptyWork := empty.Stats.ColumnGraphWork
+			if len(empty.Results) != 0 || emptyWork.Route != "typed_empty" || empty.Stats.SearchRouteQuantizedRerank != 1 || empty.Stats.QuantizedScoreCalls != 0 || emptyWork.ExactBaseScored != 0 || emptyWork.ScorePlane.QuantizedScoreCalls != 0 || emptyWork.ScorePlane.ExactBaseRerankScoreCalls != 0 {
+				t.Fatalf("empty selected filter response=%+v work=%+v", empty, emptyWork)
+			}
 
-	small := search(rangeTo(typedGraphScalarExactLimit - 1))
-	smallWork := small.Stats.ColumnGraphWork
-	if len(small.Results) != 2 || smallWork.Route != "typed_exact" || smallWork.ExactBaseScored != typedGraphScalarExactLimit || small.Stats.QuantizedScoreCalls != 0 || smallWork.ScorePlane.ExactSmallFilterScoreCalls != typedGraphScalarExactLimit || smallWork.ScorePlane.ExactBaseRerankScoreCalls != 0 {
-		t.Fatalf("4096 selected filter response=%+v work=%+v", small, smallWork)
-	}
+			one := search(rangeTo(0))
+			oneProof := one.Stats.ColumnGraphWork.ScorePlane
+			if len(one.Results) != 1 || one.Stats.ColumnGraphWork.Route != "typed_exact" || one.Stats.ColumnGraphWork.ExactBaseScored != 1 || oneProof.ExactSmallFilterScoreCalls != 1 {
+				t.Fatalf("one-row selected filter response=%+v work=%+v", one, one.Stats.ColumnGraphWork)
+			}
+			if tc.normalized && (oneProof.PackedScoreBatchCalls != 1 || oneProof.PackedScoreCandidates != 1 || oneProof.PackedVectorBytesRead != 8*4 || oneProof.ForbiddenStableScoreCalls != 0 || one.Stats.NormBytesRead != 0) {
+				t.Fatalf("one-row normalized packed proof=%+v stats=%+v", oneProof, one.Stats)
+			}
 
-	large := search(rangeTo(rows - 1))
-	largeWork := large.Stats.ColumnGraphWork
-	largeProof := largeWork.ScorePlane
-	if len(large.Results) != 2 || largeWork.Route != "typed_hnsw" || large.Stats.QuantizedScoreCalls == 0 || largeWork.ExactBaseScored == 0 || largeWork.ExactBaseScored > 4 || largeProof.RawCandidateWidth != 8 || largeProof.RerankCandidateCap != 4 || largeProof.ActualRerankCandidates > 4 || largeProof.ExactSmallFilterScoreCalls != 0 {
-		t.Fatalf("4097 selected filter response=%+v work=%+v proof=%+v", large, largeWork, largeProof)
+			small := search(rangeTo(typedGraphScalarExactLimit - 1))
+			smallWork := small.Stats.ColumnGraphWork
+			if len(small.Results) != 2 || smallWork.Route != "typed_exact" || smallWork.ExactBaseScored != typedGraphScalarExactLimit || small.Stats.QuantizedScoreCalls != 0 || smallWork.ScorePlane.ExactSmallFilterScoreCalls != typedGraphScalarExactLimit || smallWork.ScorePlane.ExactBaseRerankScoreCalls != 0 {
+				t.Fatalf("4096 selected filter response=%+v work=%+v", small, smallWork)
+			}
+			if tc.normalized {
+				proof := smallWork.ScorePlane
+				wantBytes := uint64(typedGraphScalarExactLimit * 8 * 4)
+				if proof.PackedScoreBatchCalls != 1 || proof.PackedScoreCandidates != typedGraphScalarExactLimit || proof.PackedVectorBytesRead != wantBytes || proof.ForbiddenStableScoreCalls != 0 || small.Stats.NormBytesRead != 0 {
+					t.Fatalf("4096 normalized packed proof=%+v stats=%+v", proof, small.Stats)
+				}
+			}
+
+			large := search(rangeTo(rows - 1))
+			largeWork := large.Stats.ColumnGraphWork
+			largeProof := largeWork.ScorePlane
+			if len(large.Results) != 2 || largeWork.Route != "typed_hnsw" || large.Stats.QuantizedScoreCalls == 0 || largeWork.ExactBaseScored == 0 || largeWork.ExactBaseScored > 4 || largeProof.RawCandidateWidth != 8 || largeProof.RerankCandidateCap != 4 || largeProof.ActualRerankCandidates > 4 || largeProof.ExactSmallFilterScoreCalls != 0 {
+				t.Fatalf("4097 selected filter response=%+v work=%+v proof=%+v", large, largeWork, largeProof)
+			}
+			if tc.normalized {
+				wantBytes := largeProof.ActualRerankCandidates * 8 * 4
+				if largeProof.PackedScoreBatchCalls != 1 || largeProof.PackedScoreCandidates != largeProof.ActualRerankCandidates || largeProof.PackedVectorBytesRead != wantBytes || largeProof.ForbiddenStableScoreCalls != 0 || large.Stats.NormBytesRead != 0 {
+					t.Fatalf("4097 normalized packed proof=%+v stats=%+v", largeProof, large.Stats)
+				}
+			}
+		})
 	}
 }
 

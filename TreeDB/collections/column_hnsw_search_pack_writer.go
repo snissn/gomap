@@ -14,12 +14,13 @@ import (
 )
 
 type columnHNSWSearchPackPreparedAsset struct {
-	AdjacencyLayerCount int // From the already-built native pack input; not a second graph reconstruction.
-	Present             bool
-	Ref                 ColumnAssetRef
-	Bytes               int64
-	Rows                int
-	SchemaHash          uint64
+	AdjacencyLayerCount       int // From the already-built native pack input; not a second graph reconstruction.
+	Present                   bool
+	Ref                       ColumnAssetRef
+	Bytes                     int64
+	Rows                      int
+	SchemaHash                uint64
+	ExternalNormalizedVectors bool
 }
 
 func prepareColumnHNSWSearchPackAsset(assetRootDir string, cfg ColumnStoreConfig, def VectorIndexDefinition, graph columnVectorGraphManifestSnapshot, generation, partID uint64, rows []columnVectorGraphAssetRow) (columnHNSWSearchPackPreparedAsset, error) {
@@ -42,6 +43,10 @@ func prepareColumnHNSWSearchPackAssetWithStableAuthority(assetRootDir string, cf
 // seam to release its borrowed typed-vector source before validation maps the
 // new pack.
 func writeColumnHNSWSearchPackAssetWithStableAuthority(assetRootDir string, cfg ColumnStoreConfig, def VectorIndexDefinition, graph columnVectorGraphManifestSnapshot, generation, partID uint64, rows []columnVectorGraphAssetRow, authority *columnVectorGraphStableResourceAccumulator) (columnHNSWSearchPackPreparedAsset, error) {
+	return writeColumnHNSWSearchPackAssetWithStableAuthorityAndCanonicalVectors(assetRootDir, cfg, def, graph, generation, partID, rows, authority, nil)
+}
+
+func writeColumnHNSWSearchPackAssetWithStableAuthorityAndCanonicalVectors(assetRootDir string, cfg ColumnStoreConfig, def VectorIndexDefinition, graph columnVectorGraphManifestSnapshot, generation, partID uint64, rows []columnVectorGraphAssetRow, authority *columnVectorGraphStableResourceAccumulator, canonicalVectorRef *ColumnAssetRef) (columnHNSWSearchPackPreparedAsset, error) {
 	if assetRootDir == "" {
 		return columnHNSWSearchPackPreparedAsset{}, errors.New("collections: hnsw search pack requires asset root dir")
 	}
@@ -57,6 +62,23 @@ func writeColumnHNSWSearchPackAssetWithStableAuthority(assetRootDir string, cfg 
 	input, err := buildColumnHNSWSearchPackInputWithoutVectors(def, graph, rows)
 	if err != nil {
 		return columnHNSWSearchPackPreparedAsset{}, err
+	}
+	if vectorIndexUsesCosineNormalizedF32V1(def) {
+		input.VectorStride = def.Dimensions
+		input.ExternalNormalizedVectors = true
+		if canonicalVectorRef == nil {
+			if len(rows) != 0 {
+				return columnHNSWSearchPackPreparedAsset{}, errors.New("collections: topology-only hnsw search pack requires canonical vectors for non-empty base")
+			}
+			input.ExternalVectorDigest = columnHNSWSearchPackEmptyExternalVectorDigest()
+		} else {
+			if canonicalVectorRef.Kind != ColumnAssetKindTCS1TypedColumnPart || canonicalVectorRef.Generation != graph.BaseManifestGeneration || canonicalVectorRef.Namespace != cfg.AssetManager.Namespace {
+				return columnHNSWSearchPackPreparedAsset{}, errors.New("collections: topology-only hnsw search pack canonical vector ref does not match base manifest")
+			}
+			input.ExternalVectorDigest = columnHNSWSearchPackExternalVectorRefDigest(*canonicalVectorRef)
+		}
+	} else if canonicalVectorRef != nil {
+		return columnHNSWSearchPackPreparedAsset{}, errors.New("collections: canonical vector ref requires normalized-f32 representation")
 	}
 	plan, err := planColumnHNSWSearchPackStream(input)
 	if err != nil {
@@ -83,12 +105,13 @@ func writeColumnHNSWSearchPackAssetWithStableAuthority(assetRootDir string, cfg 
 		return columnHNSWSearchPackPreparedAsset{}, closeErr
 	}
 	prepared := columnHNSWSearchPackPreparedAsset{
-		AdjacencyLayerCount: len(input.AdjacencyLayers),
-		Present:             true,
-		Ref:                 ref,
-		Bytes:               ref.Length,
-		Rows:                len(rows),
-		SchemaHash:          cfg.SchemaHash,
+		AdjacencyLayerCount:       len(input.AdjacencyLayers),
+		Present:                   true,
+		Ref:                       ref,
+		Bytes:                     ref.Length,
+		Rows:                      len(rows),
+		SchemaHash:                cfg.SchemaHash,
+		ExternalNormalizedVectors: input.ExternalNormalizedVectors,
 	}
 	return prepared, nil
 }
@@ -286,11 +309,17 @@ func columnHNSWSearchPackStateAssetSnapshot(prepared columnHNSWSearchPackPrepare
 	if !prepared.Present {
 		return columnVectorIndexStateAssetSnapshot{}, false
 	}
+	assetID := columnVectorIndexStateHNSWSearchPackAssetID
+	encoding := columnVectorIndexStateEncodingHNSWSearchPackV1
+	if prepared.ExternalNormalizedVectors {
+		assetID = columnVectorIndexStateHNSWTopologyPackAssetID
+		encoding = columnVectorIndexStateEncodingHNSWSearchPackV2
+	}
 	return columnVectorIndexStateAssetSnapshot{
 		Role:             columnVectorIndexStateAssetRoleHNSWSearchPack,
-		AssetID:          columnVectorIndexStateHNSWSearchPackAssetID,
+		AssetID:          assetID,
 		LogicalType:      columnVectorIndexStateLogicalTypeSearchPack,
-		PhysicalEncoding: columnVectorIndexStateEncodingHNSWSearchPackV1,
+		PhysicalEncoding: encoding,
 		RowCount:         prepared.Rows,
 		SourceSchemaHash: prepared.SchemaHash,
 		Ref:              prepared.Ref,
@@ -305,8 +334,8 @@ func findColumnHNSWSearchPackStateAsset(state columnVectorIndexStateSnapshot) (c
 		if asset.Role != columnVectorIndexStateAssetRoleHNSWSearchPack {
 			continue
 		}
-		if asset.AssetID != columnVectorIndexStateHNSWSearchPackAssetID {
-			return columnVectorIndexStateAssetSnapshot{}, true, fmt.Errorf("collections: vector-index hnsw search pack asset id %q is not %q", asset.AssetID, columnVectorIndexStateHNSWSearchPackAssetID)
+		if !((asset.AssetID == columnVectorIndexStateHNSWSearchPackAssetID && asset.PhysicalEncoding == columnVectorIndexStateEncodingHNSWSearchPackV1) || (asset.AssetID == columnVectorIndexStateHNSWTopologyPackAssetID && asset.PhysicalEncoding == columnVectorIndexStateEncodingHNSWSearchPackV2)) {
+			return columnVectorIndexStateAssetSnapshot{}, true, fmt.Errorf("collections: vector-index hnsw search pack asset id/encoding=(%q,%q) is unsupported", asset.AssetID, asset.PhysicalEncoding)
 		}
 		if seen {
 			return columnVectorIndexStateAssetSnapshot{}, true, errors.New("collections: duplicate vector-index hnsw search pack asset")
@@ -417,7 +446,7 @@ func validateColumnHNSWSearchPackAssetPayloadDirectFile(path string, ref ColumnA
 	version := hnswPackU16(prefix, columnHNSWSearchPackHeaderVersionOffset)
 	switch version {
 	case columnHNSWSearchPackVersionV1:
-	case columnHNSWSearchPackVersionV2, columnHNSWSearchPackVersionV3:
+	case columnHNSWSearchPackVersionV2, columnHNSWSearchPackVersionV3, columnHNSWSearchPackVersionV4:
 		headerSize = columnHNSWSearchPackHeaderSizeV2
 		if err := readColumnHNSWSearchPackFileAt(file, ref.Offset+columnHNSWSearchPackHeaderSize, prefix[columnHNSWSearchPackHeaderSize:headerSize]); err != nil {
 			return err
@@ -431,6 +460,9 @@ func validateColumnHNSWSearchPackAssetPayloadDirectFile(path string, ref ColumnA
 	}
 	sectionCount := hnswPackU32(prefix, columnHNSWSearchPackHeaderSectionCountOffset)
 	expectedSectionCount := uint32(8 + 2*layers)
+	if version == columnHNSWSearchPackVersionV4 {
+		expectedSectionCount--
+	}
 	if version == columnHNSWSearchPackVersionV3 {
 		expectedSectionCount += 2
 	}
@@ -479,12 +511,14 @@ func validateColumnHNSWSearchPackDirectFileSections(file *os.File, baseOffset in
 	if !ok {
 		return errors.New("collections: hnsw_search_pack_v1 normalized vector count overflows uint64")
 	}
-	vectors, err := columnHNSWSearchPackRequireSection(pack.Sections, columnHNSWSearchPackSectionNormalizedVectors, 0, vectorCount, 4)
-	if err != nil {
-		return err
-	}
-	if err := validateColumnHNSWSearchPackDirectFiniteFloat32(file, baseOffset+int64(vectors.Offset), vectors.Length); err != nil {
-		return err
+	if !pack.Header.ExternalNormalizedVectors {
+		vectors, err := columnHNSWSearchPackRequireSection(pack.Sections, columnHNSWSearchPackSectionNormalizedVectors, 0, vectorCount, 4)
+		if err != nil {
+			return err
+		}
+		if err := validateColumnHNSWSearchPackDirectFiniteFloat32(file, baseOffset+int64(vectors.Offset), vectors.Length); err != nil {
+			return err
+		}
 	}
 	levels, err := columnHNSWSearchPackRequireSection(pack.Sections, columnHNSWSearchPackSectionLevels, 0, rows, 2)
 	if err != nil {

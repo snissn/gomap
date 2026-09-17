@@ -969,7 +969,7 @@ func (c *Collection) columnGraphVectorIndexStatusAtSnapshot(name string, snap *b
 		return status, nil
 	}
 	if !columnVectorGraphManifestHasPhysicalAsset(graph) && graph.RowCount > 0 {
-		if _, ok := findColumnVectorGraphInvNormStateAsset(*loadedState); !ok {
+		if _, ok := findColumnVectorGraphInvNormStateAsset(*loadedState); !ok && !vectorIndexUsesCosineNormalizedF32V1(def) {
 			status.State = VectorIndexStateColumnGraphRebuildNeeded
 			status.Reason = VectorIndexReasonColumnGraphAssetMismatch
 			status.RebuildNeeded = true

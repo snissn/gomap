@@ -187,12 +187,15 @@ func stableColumnManifestDurableRequirementsWithWork(records []columnManifestRec
 			if err != nil {
 				return rootpublication.StableLogicalObligationRequirements{}, err
 			}
-			refs, err := columnVectorIndexStateManifestAssetRefsForScan(state, activeGeneration, expectedNamespace)
-			if err != nil {
+			if _, err := columnVectorIndexStateManifestAssetRefsForScan(state, activeGeneration, expectedNamespace); err != nil {
 				return rootpublication.StableLogicalObligationRequirements{}, err
 			}
-			for _, ref := range refs {
-				if err := appendRef(ref, rootpublication.ReachabilityVectorGraphPack); err != nil {
+			for _, asset := range state.Assets {
+				reachability := rootpublication.ReachabilityVectorGraphPack
+				if asset.Role == columnVectorIndexStateAssetRoleNormalizedVectors {
+					reachability = rootpublication.ReachabilityTypedColumnMultipart
+				}
+				if err := appendRef(asset.Ref, reachability); err != nil {
 					return rootpublication.StableLogicalObligationRequirements{}, err
 				}
 			}

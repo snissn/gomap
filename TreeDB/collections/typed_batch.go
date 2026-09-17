@@ -83,21 +83,28 @@ func newTrustedTypedProjection(meta CollectionMeta, ids, retained [][]byte, colu
 					return nil, errors.New("collections: typed vector dimensions mismatch")
 				}
 			}
+			normalizedDef, normalizedRepresentation := cosineNormalizedF32V1DefinitionForField(meta, col.Path)
 			owned := make([]float32, len(ids)*col.VectorDims)
 			for row, vector := range input.Float32Vectors {
 				if len(vector) != col.VectorDims {
 					return nil, errors.New("collections: typed vector dimensions mismatch")
 				}
-				if err := validateFloat32Vector(vector); err != nil {
-					return nil, err
-				}
-				for _, index := range meta.VectorIndexes {
-					if index.Field == col.Path && index.Metric == VectorMetricCosine && vectorNormSquared(vector) == 0 {
-						return nil, errors.New("collections: typed cosine vector has zero magnitude")
-					}
-				}
 				v := owned[row*col.VectorDims : (row+1)*col.VectorDims : (row+1)*col.VectorDims]
-				copy(v, vector)
+				if normalizedRepresentation {
+					if err := normalizeCosineNormalizedF32V1Into(v, vector, normalizedDef.Dimensions); err != nil {
+						return nil, err
+					}
+				} else {
+					if err := validateFloat32Vector(vector); err != nil {
+						return nil, err
+					}
+					for _, index := range meta.VectorIndexes {
+						if index.Field == col.Path && index.Metric == VectorMetricCosine && vectorNormSquared(vector) == 0 {
+							return nil, errors.New("collections: typed cosine vector has zero magnitude")
+						}
+					}
+					copy(v, vector)
+				}
 				values[row*len(columns)+colIndex] = columnDeclaredValue{Type: col.ValueType, Present: true, Float32Vector: v}
 			}
 		}
@@ -360,9 +367,15 @@ func typedProjectionFromPayload(meta CollectionMeta, payload commitlog.Collectio
 			}
 			v[i] = columnDeclaredValue{Type: col.ValueType, Present: true, String: value.String, Float32Vector: value.Vector}
 			if col.ValueType == ColumnStoreValueFloat32Vector {
-				for _, index := range meta.VectorIndexes {
-					if index.Field == col.Path && index.Metric == VectorMetricCosine && vectorNormSquared(value.Vector) == 0 {
-						return nil, nil, nil, errors.New("collections: typed cosine vector has zero magnitude")
+				if normalizedDef, ok := cosineNormalizedF32V1DefinitionForField(meta, col.Path); ok {
+					if err := validateCosineNormalizedF32V1Canonical(value.Vector, normalizedDef.Dimensions); err != nil {
+						return nil, nil, nil, fmt.Errorf("collections: typed command canonical vector: %w", err)
+					}
+				} else {
+					for _, index := range meta.VectorIndexes {
+						if index.Field == col.Path && index.Metric == VectorMetricCosine && vectorNormSquared(value.Vector) == 0 {
+							return nil, nil, nil, errors.New("collections: typed cosine vector has zero magnitude")
+						}
 					}
 				}
 			}

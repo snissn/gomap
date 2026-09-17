@@ -17,6 +17,10 @@ type typedGraphScalarU8TraversalOptions struct {
 	QuantizedIndexName string
 	ScoreBatchMode     columnVectorGraphScoreBatchMode
 	StatsMode          columnVectorGraphNativeSearchStatsMode
+	// CanonicalNormalizedQuery is a private trust assertion from the selected
+	// Q2 owner. It prevents the scalar-u8 collector from rescanning or
+	// renormalizing the already validated canonical query.
+	CanonicalNormalizedQuery bool
 
 	// PreparedFilter is the authoritative typed-filter pin. The private
 	// collector derives both base membership and any cached local navigation
@@ -340,9 +344,17 @@ func (v *typedGraphOverlaySearch) searchScalarU8PreparedCandidatesWithContext(ct
 	if len(query) != reader.def.Dimensions {
 		return nil, setupStats, errColumnVectorGraphNativeSearchQueryDimensionMismatch
 	}
-	queryInvNorm, err := columnVectorGraphInvNorm(query)
-	if err != nil {
-		return nil, setupStats, err
+	queryInvNorm := float32(1)
+	if opts.CanonicalNormalizedQuery {
+		if !vectorIndexUsesCosineNormalizedF32V1(reader.def) {
+			return nil, setupStats, ErrVectorIndexSnapshotMismatch
+		}
+	} else {
+		var err error
+		queryInvNorm, err = columnVectorGraphInvNorm(query)
+		if err != nil {
+			return nil, setupStats, err
+		}
 	}
 	// Validate and encode the selected code plane once even for an empty typed
 	// domain so a stale/corrupt requested asset cannot be hidden by a shortcut.

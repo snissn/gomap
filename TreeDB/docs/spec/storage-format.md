@@ -12,13 +12,13 @@ cleaning, compacting, or rewriting the directory. Typed-column image,
 descriptor, manifest, and schema evolution follows the fail-closed policy in
 `typed-column-schema-evolution.md`.
 
-## Reserved `cosine_normalized_f32_v1` vector asset
+## `cosine_normalized_f32_v1` vector asset
 
-The pre-alpha target format for the opt-in normalized cosine representation is
+The pre-alpha format for the opt-in normalized cosine representation is
 specified in
-[`cosine-normalized-f32-v1.md`](cosine-normalized-f32-v1.md). Q1 reserves its
-semantic identity; Q2 owns concrete versioned record/manifest fields and their
-golden/reopen tests.
+[`cosine-normalized-f32-v1.md`](cosine-normalized-f32-v1.md). Collection
+metadata version 7 persists the representation selector. Older metadata
+versions cannot declare it.
 
 The format has one permanent row-major, graph-ordinal normalized FP32 base
 asset. HNSW topology references its durable identity and does not contain a
@@ -159,6 +159,18 @@ descent before layer-0 reaches the component bridge. Its ordinals, offsets,
 tree bridges, seed anchors, degree cap, edge total, source identity, and
 membership binding validate before a reader exposes a prepared view.
 Versions 1 and 2 retain their existing layouts and have no auxiliary channel.
+
+The non-partitioned `column_graph` pack uses wire version 4 for
+`cosine_normalized_f32_v1`. Version 4 is topology-only: it omits the normalized
+vector section and carries a checksum-covered digest of the authoritative
+`normalized_vectors` asset's rewrite-stable logical/content identity: kind,
+namespace, generation, part, length, and checksum. Physical file and offset are
+excluded so ordinary column-asset relocation does not invalidate the topology
+pack. Open binds that reference to the selected typed-column FP32 section,
+checks row count, dimensions, representation and digest, and then exposes the
+borrowed slice. Empty bases use a fixed empty-owner digest and have no
+normalized-vector row asset. Versions 1 through 3 retain the legacy
+embedded-vector layouts.
 
 For M3 bounded-overlap manifests, the canonical balance-policy grammar is
 `m3_bounded_overlap_v1:capacity=<u64>,budget=<u64>,realized=<u64>,unspent=<u64>`
@@ -2124,6 +2136,14 @@ vector-index derived records so stale-state checks compare against authoritative
 collection data. See `vector-index-state-manifest.md` and
 `vector-index-row-ref-state-1993.md` for validation and fail-closed rules.
 
+For `cosine_normalized_f32_v1`, a nonempty state requires exactly one
+`normalized_vectors` asset with the canonical asset ID and raw-float32-vector
+encoding, exactly one topology-v2 search-pack state asset, and no inverse-norm
+asset. The normalized asset reference is the selected typed-column physical
+owner, not a second graph copy. Empty state requires only the topology pack and
+forbids row-backed normalized-vector or inverse-norm assets. Legacy
+representations reject the topology-v2/external-vector asset shape.
+
 New graph rebuilds include the optional `row_refs` asset
 `base_row_ref/ordinal_by_physical_row`: N raw-int64 graph ordinals sorted by
 forward `(generation, part_id, row_index)` coordinates, adding `8*N` payload
@@ -2527,8 +2547,10 @@ metadata fails closed before advancing `AppliedCommandLSN`.
 
 Collection vector-index declarations are stored in the canonical collection
 metadata JSON under top-level `vector_indexes`. The current collection metadata
-JSON version is `5`, which includes the persisted `scalar_u8_calibration`
-semantics for quantized scalar_u8 score planes. Quantized score-plane
+JSON version is `7`. Version 5 introduced persisted `scalar_u8_calibration`,
+version 6 introduced compound-index components, and version 7 adds
+`vector_indexes[].representation`, including `cosine_normalized_f32_v1`.
+Quantized score-plane
 declarations, when present, live under `vector_indexes[].quantized_indexes` and
 are declarations only until matching derived assets are built and loaded; explicit
 quantized query modes must fail closed when those assets are absent or stale.

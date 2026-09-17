@@ -512,9 +512,14 @@ type typedGraphServingScalarU8SourceFixture struct {
 }
 
 func openTypedGraphServingScalarU8SourceFixture(t testing.TB) typedGraphServingScalarU8SourceFixture {
+	return openTypedGraphServingScalarU8SourceFixtureWithRepresentation(t, "")
+}
+
+func openTypedGraphServingScalarU8SourceFixtureWithRepresentation(t testing.TB, representation VectorIndexRepresentation) typedGraphServingScalarU8SourceFixture {
 	t.Helper()
 	meta := typedMinimaCollectionMeta()
 	const quantizedName = "embedding.scalar_u8.legacy"
+	meta.VectorIndexes[0].Representation = representation
 	meta.VectorIndexes[0].QuantizedIndexes = []QuantizedVectorIndexDefinition{{Name: quantizedName}}
 	_, db, col := openTypedMinimaCollectionMeta(t, meta)
 	ids := [][]byte{[]byte("a"), []byte("b"), []byte("c"), []byte("d")}
@@ -569,6 +574,54 @@ func openTypedGraphServingScalarU8SourceFixture(t testing.TB) typedGraphServingS
 			StatsMode:                 VectorIndexSearchStatsModeMinimal,
 		},
 		codes: assets.Codes.Ref,
+	}
+}
+
+func TestCosineNormalizedF32V1ServingHeapCopyUsesImplicitUnitNorm(t *testing.T) {
+	requireTypedGraphPreparedHolderTest(t)
+	fixture := openTypedGraphServingScalarU8SourceFixtureWithRepresentation(t, VectorIndexRepresentationCosineNormalizedF32V1)
+	defer func() {
+		if err := fixture.db.Close(); err != nil {
+			t.Errorf("db close: %v", err)
+		}
+	}()
+	installColumnServingLeaseHooks(t, func() {
+		columnServingSegmentLeaseHooks.Lock()
+		columnServingSegmentLeaseHooks.mmap = func(*os.File, int64) ([]byte, error) {
+			return nil, errColumnServingLeaseInjected
+		}
+		columnServingSegmentLeaseHooks.Unlock()
+	})
+	owner, err := fixture.col.openTypedGraphReadOwner(fixture.limits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := owner.Close(); err != nil {
+			t.Errorf("owner close: %v", err)
+		}
+	}()
+	holder := typedGraphServingScalarU8Holder(t, owner)
+	if holder.invNormSource != nil || !holder.preparedSearch.norm.implicitUnit {
+		t.Fatalf("normalized heap holder retained a norm plane: source=%p prepared=%+v", holder.invNormSource, holder.preparedSearch.norm)
+	}
+	managers := columnVectorGraphHolderSourceManagers(holder)
+	if _, ok := managers["inverse_norm"]; ok {
+		t.Fatalf("normalized heap holder exposed inverse-norm manager: %+v", managers)
+	}
+	requireColumnVectorGraphServingManagerSources(t, holder, mappedresource.SourceHeapCopy)
+
+	var buffer VectorIndexSearchBuffer
+	response, view, err := fixture.col.SearchVectorIndexWithBufferReadView(fixture.selected, &buffer)
+	if view != nil {
+		err = errors.Join(err, view.Close())
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	proof := response.Stats.ColumnGraphWork.ScorePlane
+	if len(response.Results) != 2 || response.Stats.NormBytesRead != 0 || response.Stats.HNSWSearchPackHeapCopy != 1 || response.Stats.QuantizedAssetHeapCopy != 1 || proof.PackedScoreBatchCalls != 1 || proof.PackedScoreCandidates != proof.ActualRerankCandidates || proof.ForbiddenStableScoreCalls != 0 {
+		t.Fatalf("normalized heap selected response=%+v proof=%+v", response, proof)
 	}
 }
 

@@ -106,35 +106,37 @@ type QuantizedIndexInfo struct {
 
 // IndexInfo is returned by create/open and echoed by operation responses.
 type IndexInfo struct {
-	TypedInput           bool                            `json:"typed_input,omitempty"`
-	Name                 string                          `json:"name"`
-	Dimension            int                             `json:"dimension"`
-	Metric               Metric                          `json:"metric"`
-	Generation           uint64                          `json:"generation"`
-	ContractVersion      string                          `json:"contract_version"`
-	EmbeddingField       string                          `json:"embedding_field"`
-	VectorIndexName      string                          `json:"vector_index_name"`
-	VectorStrategy       collections.VectorIndexStrategy `json:"vector_strategy"`
-	ScalarFields         []ScalarFieldInfo               `json:"scalar_fields,omitempty"`
-	VectorM              int                             `json:"vector_m,omitempty"`
-	VectorEfConstruction int                             `json:"vector_ef_construction,omitempty"`
-	VectorEfSearch       int                             `json:"vector_ef_search,omitempty"`
-	QuantizedIndexes     []QuantizedIndexInfo            `json:"quantized_indexes,omitempty"`
-	TextField            string                          `json:"text_field"`
-	TextIndexName        string                          `json:"text_index_name"`
-	DocumentType         string                          `json:"document_type"`
-	Capabilities         IndexCapabilities               `json:"capabilities"`
+	TypedInput           bool                                  `json:"typed_input,omitempty"`
+	Name                 string                                `json:"name"`
+	Dimension            int                                   `json:"dimension"`
+	Metric               Metric                                `json:"metric"`
+	Generation           uint64                                `json:"generation"`
+	ContractVersion      string                                `json:"contract_version"`
+	EmbeddingField       string                                `json:"embedding_field"`
+	VectorIndexName      string                                `json:"vector_index_name"`
+	VectorStrategy       collections.VectorIndexStrategy       `json:"vector_strategy"`
+	VectorRepresentation collections.VectorIndexRepresentation `json:"vector_representation,omitempty"`
+	ScalarFields         []ScalarFieldInfo                     `json:"scalar_fields,omitempty"`
+	VectorM              int                                   `json:"vector_m,omitempty"`
+	VectorEfConstruction int                                   `json:"vector_ef_construction,omitempty"`
+	VectorEfSearch       int                                   `json:"vector_ef_search,omitempty"`
+	QuantizedIndexes     []QuantizedIndexInfo                  `json:"quantized_indexes,omitempty"`
+	TextField            string                                `json:"text_field"`
+	TextIndexName        string                                `json:"text_index_name"`
+	DocumentType         string                                `json:"document_type"`
+	Capabilities         IndexCapabilities                     `json:"capabilities"`
 }
 
 // BenchmarkVectorIndexOptions configures the service-owned collection vector
 // index for benchmark lifecycle setups. Omitted fields preserve the legacy
 // create-index defaults used by treedb-client and treedb-haystack.
 type BenchmarkVectorIndexOptions struct {
-	Strategy         collections.VectorIndexStrategy `json:"strategy,omitempty"`
-	M                int                             `json:"m,omitempty"`
-	EfConstruction   int                             `json:"ef_construction,omitempty"`
-	EfSearch         int                             `json:"ef_search,omitempty"`
-	QuantizedIndexes []QuantizedIndexInfo            `json:"quantized_indexes,omitempty"`
+	Strategy         collections.VectorIndexStrategy       `json:"strategy,omitempty"`
+	Representation   collections.VectorIndexRepresentation `json:"representation,omitempty"`
+	M                int                                   `json:"m,omitempty"`
+	EfConstruction   int                                   `json:"ef_construction,omitempty"`
+	EfSearch         int                                   `json:"ef_search,omitempty"`
+	QuantizedIndexes []QuantizedIndexInfo                  `json:"quantized_indexes,omitempty"`
 }
 
 // CreateIndexRequest creates or opens a service index. Existing compatible
@@ -294,10 +296,12 @@ const (
 // reset fails closed for existing indexes; use a fresh data directory or unique
 // index name to preserve the insert-only load boundary required by graph assets.
 type ResetIndexRequest struct {
+	TypedInput         bool                         `json:"typed_input,omitempty"`
 	Dimension          int                          `json:"dimension"`
 	Metric             Metric                       `json:"metric,omitempty"`
 	DropOld            bool                         `json:"drop_old,omitempty"`
 	VectorIndexOptions *BenchmarkVectorIndexOptions `json:"vector_index_options,omitempty"`
+	ScalarFields       []ScalarFieldDeclaration     `json:"scalar_fields,omitempty"`
 }
 
 type ResetIndexResponse struct {

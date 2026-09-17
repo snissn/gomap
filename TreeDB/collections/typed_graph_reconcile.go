@@ -236,7 +236,12 @@ func (c *Collection) reconcileTypedGraphPublicationWithContext(ctx context.Conte
 		return errTypedGraphOverlayFoldNeeded
 	}
 	slices.SortFunc(rows, func(a, b columnPhysicalVisibleRow) int { return bytes.Compare(a.ID, b.ID) })
-	next := &typedGraphPublicationState{catalog: current.catalog, limits: limits, rows: rows, invNorms: make([]float32, len(rows)), physicalRows: cost.rows, tombstones: cost.tombstones, valueSlots: cost.slots, admittedPayloadBytes: cost.bytes, installedAssetBytes: suffix.bytes}
+	def := current.catalog.meta.VectorIndexes[0]
+	canonicalRepresentation := vectorIndexUsesCosineNormalizedF32V1(def)
+	next := &typedGraphPublicationState{catalog: current.catalog, limits: limits, rows: rows, physicalRows: cost.rows, tombstones: cost.tombstones, valueSlots: cost.slots, admittedPayloadBytes: cost.bytes, installedAssetBytes: suffix.bytes}
+	if !canonicalRepresentation {
+		next.invNorms = make([]float32, len(rows))
+	}
 	if err := next.prepareEncodedBounds(); err != nil {
 		return err
 	}
@@ -254,9 +259,15 @@ func (c *Collection) reconcileTypedGraphPublicationWithContext(ctx context.Conte
 		if row.Deleted {
 			continue
 		}
-		next.invNorms[i], err = columnVectorGraphInvNorm(row.Values[vectorColumn].Float32Vector)
-		if err != nil {
-			return err
+		if canonicalRepresentation {
+			if err := validateCosineNormalizedF32V1Canonical(row.Values[vectorColumn].Float32Vector, def.Dimensions); err != nil {
+				return err
+			}
+		} else {
+			next.invNorms[i], err = columnVectorGraphInvNorm(row.Values[vectorColumn].Float32Vector)
+			if err != nil {
+				return err
+			}
 		}
 	}
 	return WithVectorPartitionStorageBarrierWithContextV1(ctx, c.db.Dir(), func() error {

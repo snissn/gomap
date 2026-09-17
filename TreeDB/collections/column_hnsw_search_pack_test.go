@@ -56,6 +56,110 @@ func TestColumnHNSWSearchPackRoundTrip2312(t *testing.T) {
 	}
 }
 
+func TestColumnHNSWTopologyPackV4OmitsVectorsAndBindsCanonicalAsset(t *testing.T) {
+	input := testColumnHNSWSearchPackInput2312()
+	input.NormalizedVectors = nil
+	input.VectorStride = input.Dimensions
+	ref := ColumnAssetRef{Kind: ColumnAssetKindTCS1TypedColumnPart, Namespace: "docs/assets", Generation: input.BaseIdentity.ManifestGeneration, PartID: 2, FileID: 7, Offset: 128, Length: 4096, Checksum: 19}
+	input.ExternalNormalizedVectors = true
+	input.ExternalVectorDigest = columnHNSWSearchPackExternalVectorRefDigest(ref)
+	raw, err := encodeColumnHNSWSearchPack(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := hnswPackU16(raw, columnHNSWSearchPackHeaderVersionOffset); got != columnHNSWSearchPackVersionV4 {
+		t.Fatalf("wire version=%d want %d", got, columnHNSWSearchPackVersionV4)
+	}
+	pack, err := decodeColumnHNSWSearchPack(raw, columnHNSWSearchPackDecodeOptions{ExpectedBaseIdentity: input.BaseIdentity})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !pack.Header.ExternalNormalizedVectors || pack.Header.ExternalVectorDigest != input.ExternalVectorDigest || pack.Header.VectorStride != input.Dimensions || len(pack.NormalizedVectors) != 0 {
+		t.Fatalf("topology header/vectors=%+v vectors=%d", pack.Header, len(pack.NormalizedVectors))
+	}
+	if _, err := columnHNSWSearchPackFindSection(pack.Sections, columnHNSWSearchPackSectionNormalizedVectors, 0); err == nil {
+		t.Fatal("topology-only pack retained normalized_vectors section")
+	}
+}
+
+func TestColumnHNSWTopologyPackV4ExternalVectorDigestSurvivesRewrite(t *testing.T) {
+	ref := ColumnAssetRef{
+		Kind:       ColumnAssetKindTCS1TypedColumnPart,
+		Namespace:  "docs/assets",
+		Generation: 17,
+		PartID:     23,
+		FileID:     5,
+		Offset:     128,
+		Length:     4096,
+		Checksum:   0x4724,
+	}
+	relocated := ref
+	relocated.FileID = 19
+	relocated.Offset = 8192
+	if !columnAssetRewriteSameLogicalRef(ref, relocated) {
+		t.Fatalf("relocated ref is not rewrite-equivalent: old=%+v new=%+v", ref, relocated)
+	}
+	want := columnHNSWSearchPackExternalVectorRefDigest(ref)
+	if got := columnHNSWSearchPackExternalVectorRefDigest(relocated); got != want {
+		t.Fatalf("external-vector digest changed across physical relocation: got=%x want=%x", got, want)
+	}
+
+	for name, mutate := range map[string]func(*ColumnAssetRef){
+		"kind":       func(candidate *ColumnAssetRef) { candidate.Kind = ColumnAssetKindTCS1PartImage },
+		"namespace":  func(candidate *ColumnAssetRef) { candidate.Namespace = "other/assets" },
+		"generation": func(candidate *ColumnAssetRef) { candidate.Generation++ },
+		"part":       func(candidate *ColumnAssetRef) { candidate.PartID++ },
+		"length":     func(candidate *ColumnAssetRef) { candidate.Length++ },
+		"checksum":   func(candidate *ColumnAssetRef) { candidate.Checksum++ },
+	} {
+		t.Run(name, func(t *testing.T) {
+			candidate := ref
+			mutate(&candidate)
+			if columnAssetRewriteSameLogicalRef(ref, candidate) {
+				t.Fatalf("changed logical ref is rewrite-equivalent: old=%+v new=%+v", ref, candidate)
+			}
+			if got := columnHNSWSearchPackExternalVectorRefDigest(candidate); got == want {
+				t.Fatalf("external-vector digest did not bind changed %s identity", name)
+			}
+		})
+	}
+}
+
+func TestColumnHNSWTopologyPackV4CanonicalVectorViewAcceptsHeapCopy(t *testing.T) {
+	fixture := newColumnVectorGraphTypedColumnVectorViewFixture1898(t, 3, [][]float32{{1, 0, 0}, {0, 1, 0}})
+	manager := mappedresource.NewManager()
+	handle := columnVectorGraphTypedColumnVectorAcquireBytesHandle1898(t, manager, fixture, mappedresource.SourceHeapCopy, append([]byte(nil), fixture.sectionBytes...))
+	values, retained, outcome, reason, err := columnVectorGraphTypedColumnDenseVectorValuesFromHandle(manager, handle, fixture.directReq, fixture.rows, fixture.dims)
+	if err != nil {
+		t.Fatalf("heap-copy typed vector view: %v", err)
+	}
+	defer func() { _ = retained.Release() }()
+	if retained != handle || outcome != columnVectorGraphTypedColumnVectorOutcomeHeapCopyTypedView || reason != "" {
+		t.Fatalf("retained=%v outcome=%s reason=%s want retained heap-copy typed view", retained == handle, outcome, reason)
+	}
+	part := &columnVectorGraphTypedColumnVectorPart{generation: 1, partID: 1, rows: fixture.rows, values: values, outcome: outcome, handle: retained}
+	locations := make([]columnVectorGraphTypedColumnVectorLocation, fixture.rows)
+	for ordinal := range locations {
+		locations[ordinal] = columnVectorGraphTypedColumnVectorLocation{part: part, generation: 1, rowIndex: ordinal}
+	}
+	source := &columnVectorGraphTypedColumnVectorSource{
+		dims:      fixture.dims,
+		locations: locations,
+		parts:     []*columnVectorGraphTypedColumnVectorPart{part},
+		manager:   manager,
+	}
+	if source.prepared.ready() {
+		t.Fatal("test requires the generic non-mmap source to start without a prepared view")
+	}
+	prepared, err := columnHNSWSearchPackCanonicalVectorView(source, fixture.rows, fixture.dims)
+	if err != nil {
+		t.Fatalf("canonical heap-copy vector view: %v", err)
+	}
+	if !prepared.identityMapping() || len(prepared.values) != len(values) || &prepared.values[0] != &values[0] {
+		t.Fatal("canonical heap-copy view did not borrow the one handle-owned FP32 plane")
+	}
+}
+
 func TestColumnHNSWSearchPackRowEncodingMatchesMaterializedBytes4420(t *testing.T) {
 	rows := []columnVectorGraphAssetRow{
 		{Vector: []float32{1, 0, 0}, InvNorm: 1},
@@ -615,7 +719,7 @@ func TestColumnHNSWSearchPackDecodeRejectsCorruptEnvelope2312(t *testing.T) {
 		},
 		{
 			name: "bad_version",
-			raw:  testColumnHNSWSearchPackPatchU16Header2312(raw, columnHNSWSearchPackHeaderVersionOffset, columnHNSWSearchPackVersionV3+1),
+			raw:  testColumnHNSWSearchPackPatchU16Header2312(raw, columnHNSWSearchPackHeaderVersionOffset, columnHNSWSearchPackVersionV4+1),
 			want: "unsupported hnsw_search_pack_v1 version",
 		},
 		{
