@@ -28,6 +28,7 @@ var _ backenddb.LeafPageLogCurrentSegmentProvider = (*cachingLeafPageLogGroup)(n
 var _ backenddb.LeafPageLogSegmentRegistrationObserver = (*cachingLeafPageLogGroup)(nil)
 var _ backenddb.LeafPageLogLaneProvider = (*cachingLeafPageLogGroup)(nil)
 var _ backenddb.LeafPageLogCompactStorageHandoff = (*cachingLeafPageLogGroup)(nil)
+var _ backenddb.LeafPageLogSequenceReserver = (*cachingLeafPageLogGroup)(nil)
 
 func (g *cachingLeafPageLogGroup) laneForWorkerIndex(workerIndex int) (*lane, bool) {
 	if g == nil || g.db == nil || !g.db.indexOuterLeavesInValueLog {
@@ -268,6 +269,13 @@ func (g *cachingLeafPageLogGroup) AdvanceCompactStorageLeafPageLogSeqAtLeast(seq
 		return nil
 	}
 	return g.db.advanceCompactStorageLeafPageLogSeqAtLeast(seq)
+}
+
+func (g *cachingLeafPageLogGroup) ReserveLeafPageLogSequence(floor uint32) (uint32, error) {
+	if g == nil || g.db == nil {
+		return 0, errors.New("cachingdb: leaf page log sequence reservation unavailable")
+	}
+	return g.db.reserveLeafLogAppendSequence(floor)
 }
 
 func (g *cachingLeafPageLogGroup) Close() error {

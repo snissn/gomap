@@ -72,6 +72,13 @@ type LeafPageConcurrentAppendLog interface {
 	ConcurrentLeafPageAppends() bool
 }
 
+// LeafPageLogSequenceReserver owns sequence allocation for persistent
+// leaf_vlog children. Callers supply the highest sequence discovered outside
+// the live owner; successful reservations are never reused.
+type LeafPageLogSequenceReserver interface {
+	ReserveLeafPageLogSequence(floor uint32) (uint32, error)
+}
+
 type LeafPagePreparedBatchLog interface {
 	// AppendPreparedLeafPages appends caller-prepared leaf-log payloads while
 	// preserving the positional relationship to the original leaf pages. The

@@ -6,6 +6,12 @@ Minima is already supported by `column_graph`. The feature gates below must
 land before the new route can qualify. The existing public `native_runtime`
 strategy is unchanged here; its documentation-only deprecation is #4621.
 
+The target `cosine_normalized_f32_v1` successor is normative in
+[`cosine-normalized-f32-v1.md`](cosine-normalized-f32-v1.md). It requires one
+canonical normalized FP32 asset, scalar-u8 candidate generation, packed rerank,
+default no-embedding output, and native command64/v4. Legacy measurements
+cannot fill `NOT_IMPLEMENTED` successor stages.
+
 ## Actual application boundary
 
 `TreeDB/cmd/treedb_rag_benchmark/main.go -workload=minima` generates, validates,

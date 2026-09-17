@@ -3479,13 +3479,22 @@ func (db *DB) advanceCompactStorageLeafPageLogSeqAtLeast(seq uint32) error {
 }
 
 func (db *DB) nextLeafLogAppendSeq() (int, error) {
+	seq, err := db.reserveLeafLogAppendSequence(0)
+	return int(seq), err
+}
+
+func (db *DB) reserveLeafLogAppendSequence(floor uint32) (uint32, error) {
 	if db == nil || !db.indexOuterLeavesInValueLog {
 		return 0, errWALUnavailable
 	}
 	for {
 		cur := db.leafLogAppendSeq.Load()
-		next := cur + 1
-		if next <= cur {
+		base := cur
+		if floor > base {
+			base = floor
+		}
+		next := base + 1
+		if next <= base {
 			return 0, fmt.Errorf("cachingdb: leaf log sequence space exhausted")
 		}
 		if _, err := valuelog.EncodeFileID(uint32(leafLogLaneID), next); err != nil {
@@ -3495,7 +3504,7 @@ func (db *DB) nextLeafLogAppendSeq() (int, error) {
 			return 0, err
 		}
 		if db.leafLogAppendSeq.CompareAndSwap(cur, next) {
-			return int(next), nil
+			return next, nil
 		}
 	}
 }

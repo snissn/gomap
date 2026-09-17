@@ -3563,7 +3563,7 @@ type rewriteWriter struct {
 	leafDir          string
 	leafLane         uint32
 	leafSeq          uint32
-	leafSeqAllocator *leafLogSeqAllocator
+	leafSeqAllocator LeafPageLogSequenceReserver
 	nextRID          uint64
 	ridAlloc         *rewriteRIDAllocator
 	// currentPath/currentFileID cache the active writer segment identity so
@@ -3698,7 +3698,7 @@ func (w *rewriteWriter) configureLeafStaging(stagingRoot string) {
 	}
 }
 
-func (w *rewriteWriter) setLeafPageLogSeqAllocator(seqAlloc *leafLogSeqAllocator) {
+func (w *rewriteWriter) setLeafPageLogSeqAllocator(seqAlloc LeafPageLogSequenceReserver) {
 	if w == nil {
 		return
 	}
@@ -3767,7 +3767,11 @@ func (w *rewriteWriter) resetLeafLogSeqAtLeast(seq uint32) error {
 		w.leafW = nil
 	}
 	if w.leafSeqAllocator != nil {
-		w.leafSeqAllocator.AdvanceAtLeast(seq)
+		advancer, ok := w.leafSeqAllocator.(interface{ AdvanceAtLeast(uint32) })
+		if !ok {
+			return errors.New("vlog-rewrite: leaf log sequence authority cannot advance floor")
+		}
+		advancer.AdvanceAtLeast(seq)
 	}
 	w.leafSeq = seq
 	w.leafCurrentPath = ""
@@ -4578,7 +4582,7 @@ func (w *rewriteWriter) nextLeafSeq() (uint32, error) {
 		return 0, errors.New("vlog-rewrite: nil writer")
 	}
 	if w.leafSeqAllocator != nil {
-		seq, err := w.leafSeqAllocator.Next()
+		seq, err := w.leafSeqAllocator.ReserveLeafPageLogSequence(w.leafSeq)
 		if err != nil {
 			return 0, err
 		}

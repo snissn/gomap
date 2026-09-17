@@ -2,6 +2,7 @@ package caching
 
 import (
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
@@ -28,6 +29,78 @@ func TestNextLeafLogAppendSeqRejectsSegmentIDExhaustion(t *testing.T) {
 	}
 	if seq != leafLogMaxSegmentSeqForTest {
 		t.Fatalf("seq=%d want max %d", seq, uint32(leafLogMaxSegmentSeqForTest))
+	}
+}
+
+func TestCachingLeafPageLogSequenceReservationSharesRotationAuthority(t *testing.T) {
+	db := &DB{indexOuterLeavesInValueLog: true}
+	db.leafLogAppendSeq.Store(39)
+	group := &cachingLeafPageLogGroup{db: db}
+	laneLog := &cachingLeafPageLog{db: db, lane: &db.leafLog}
+
+	packSeq, err := group.ReserveLeafPageLogSequence(39)
+	if err != nil {
+		t.Fatal(err)
+	}
+	liveSeq, err := db.nextLeafLogAppendSeq()
+	if err != nil {
+		t.Fatal(err)
+	}
+	laneSeq, err := laneLog.ReserveLeafPageLogSequence(39)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if packSeq != 40 || liveSeq != 41 || laneSeq != 42 {
+		t.Fatalf("group/live/lane sequences=(%d,%d,%d), want (40,41,42)", packSeq, liveSeq, laneSeq)
+	}
+}
+
+func TestCachingLeafPageLogConcurrentSequenceReservations(t *testing.T) {
+	const (
+		floor   = uint32(39)
+		workers = 16
+		perRun  = 128
+	)
+	for run := 0; run < 8; run++ {
+		db := &DB{indexOuterLeavesInValueLog: true}
+		db.leafLogAppendSeq.Store(floor)
+		group := &cachingLeafPageLogGroup{db: db}
+		sequences := make(chan uint32, workers*perRun)
+		errs := make(chan error, workers)
+		var wg sync.WaitGroup
+		for worker := 0; worker < workers; worker++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for i := 0; i < perRun; i++ {
+					seq, err := group.ReserveLeafPageLogSequence(floor)
+					if err != nil {
+						errs <- err
+						return
+					}
+					sequences <- seq
+				}
+			}()
+		}
+		wg.Wait()
+		close(errs)
+		close(sequences)
+		for err := range errs {
+			t.Fatal(err)
+		}
+		seen := make(map[uint32]struct{}, workers*perRun)
+		for seq := range sequences {
+			if seq <= floor || seq > floor+workers*perRun {
+				t.Fatalf("run %d reserved out-of-range sequence %d", run, seq)
+			}
+			if _, exists := seen[seq]; exists {
+				t.Fatalf("run %d reserved duplicate sequence %d", run, seq)
+			}
+			seen[seq] = struct{}{}
+		}
+		if len(seen) != workers*perRun {
+			t.Fatalf("run %d reserved %d sequences, want %d", run, len(seen), workers*perRun)
+		}
 	}
 }
 
