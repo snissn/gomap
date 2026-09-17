@@ -24,7 +24,7 @@ The format has one permanent row-major, graph-ordinal normalized FP32 base
 asset. HNSW topology references its durable identity and does not contain a
 second FP32 vector section. Scalar-u8 codes are separate derived state. Replay,
 reopen, fold, and rebuild preserve admitted canonical bytes without
-renormalizing. Older binaries may fail closed on the new format.
+renormalizing. Older binaries must fail closed on the new format.
 
 Column manifest generation is not a command LSN or an incarnation identifier.
 Managed writes advance it; physical maintenance can preserve it. A replay

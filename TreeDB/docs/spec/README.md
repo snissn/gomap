@@ -180,7 +180,8 @@ Given pre-alpha status, this is a living spec that tracks implementation.
     rerank behavior, benchmark/storage evidence, and future-work boundaries.
 - `TreeDB/docs/spec/cosine-normalized-f32-v1.md`
   - issue #4722 opt-in one-plane normalized FP32 score/storage/return contract,
-    packed scalar-u8 rerank requirement, native-v4 capability boundary, and
+    scalar-u8 candidate generation and packed FP32 rerank requirement,
+    native-v4 capability boundary, and
     phase-owned performance gates.
   - retained Q1 diagnostic context:
     `TreeDB/docs/benchmarks/minima-sq8-q1-baseline.md`.
