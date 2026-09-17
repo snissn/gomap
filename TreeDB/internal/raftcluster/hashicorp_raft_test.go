@@ -877,6 +877,84 @@ func TestHashicorpRaftProviderDoesNotEnqueueCanceledContext(t *testing.T) {
 	}
 }
 
+func TestFixedPeerTCPProviderPostEnqueueCancellationIsCommitAmbiguousV1(t *testing.T) {
+	transport, err := hraft.NewTCPTransport("127.0.0.1:0", nil, 2, time.Second, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer transport.Close()
+	entered, release, applied := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	applier := CommittedCommandApplierFunc(func(context.Context, CommittedCommandEntryV1) (raftentry.ApplyResultV1, error) {
+		close(entered)
+		<-release
+		close(applied)
+		return raftentry.ApplyResultV1{Status: raftentry.ApplyStatusApplied}, nil
+	})
+	root := t.TempDir()
+	cfg := Config{Dir: filepath.Join(root, "data"), ClusterDir: filepath.Join(root, "raft"), NodeID: "node-a", GroupID: "group-a", Peers: []Peer{{ID: "node-a", Address: string(transport.LocalAddr())}}}
+	rc := hraft.DefaultConfig()
+	rc.HeartbeatTimeout, rc.ElectionTimeout, rc.LeaderLeaseTimeout = 50*time.Millisecond, 50*time.Millisecond, 50*time.Millisecond
+	rc.LogOutput = io.Discard
+	p, err := OpenHashicorpRaftProvider(HashicorpRaftProviderOptions{Cluster: cfg, Applier: applier, Transport: transport, RaftConfig: rc, Bootstrap: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	var releaseOnce sync.Once
+	unblock := func() { releaseOnce.Do(func() { close(release) }) }
+	defer unblock() // Release before shutdown, including every failed assertion.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	for {
+		status, err := p.RuntimeStatusV1(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if status.State == "Leader" {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	callCtx, cancelCall := context.WithCancel(ctx)
+	defer cancelCall()
+	done := make(chan error, 1)
+	entry := testClusterCreateCollectionEntry(t, 7)
+	go func() {
+		_, err := p.CommitCommandEntryV1(callCtx, CommitCommandEntryV1Request{GroupID: cfg.GroupID, NodeID: cfg.NodeID, EntryBytes: entry, CurrentCatalogVersion: 7, HasCurrentCatalogVersion: true, SyncLocalCommandWAL: true})
+		done <- err
+	}()
+	select {
+	case <-entered:
+	case <-ctx.Done():
+		t.Fatal("command did not reach actual committed apply")
+	}
+	cancelCall()
+	select {
+	case err := <-done:
+		if !errors.Is(err, ErrCommitAmbiguous) || !errors.Is(err, context.Canceled) {
+			t.Fatalf("post-enqueue outcome=%v", err)
+		}
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	// The canceled call does not undo consensus commitment.
+	select {
+	case <-applied:
+		t.Fatal("blocking applier unexpectedly completed")
+	default:
+	}
+	unblock()
+	select {
+	case <-applied:
+	case <-ctx.Done():
+		t.Fatal("committed command did not finish applying after cancellation")
+	}
+}
+
 func TestHashicorpRaftProviderEvidenceFailsClosedWhenNotProven(t *testing.T) {
 	applier := &recordingClusterApplier{result: raftentry.ApplyResultV1{Status: raftentry.ApplyStatusApplied, AffectedCount: 1}}
 	submitter := newTestSingleGroupSubmitter(t, SingleGroupSubmitterOptions{
