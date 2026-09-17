@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import argparse
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import closing
+from contextlib import ExitStack, closing
 from dataclasses import asdict
 import hashlib
 import json
@@ -67,10 +67,15 @@ def prefix_sha256(path: Path, size: int) -> str:
     return digest.hexdigest()
 
 
-def free_address() -> str:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.bind(("127.0.0.1", 0))
-        return f"127.0.0.1:{sock.getsockname()[1]}"
+def free_service_addresses() -> tuple[str, ...]:
+    # Keep every probe bound until all three addresses have been selected;
+    # closing each probe early lets the OS reuse its port for the next one.
+    with ExitStack() as stack:
+        probes = [stack.enter_context(socket.socket(socket.AF_INET, socket.SOCK_STREAM))
+                  for _ in range(3)]
+        for probe in probes:
+            probe.bind(("127.0.0.1", 0))
+        return tuple(f"127.0.0.1:{probe.getsockname()[1]}" for probe in probes)
 
 
 def strict_json(path: Path) -> dict[str, Any]:
@@ -719,7 +724,7 @@ def main() -> int:
     service_binary, helper = args.service_bin.resolve(), args.go_helper.resolve()
     if not service_binary.is_file() or not helper.is_file():
         raise ValueError("service and Go gate helper binaries must exist")
-    http_address, native_address, diagnostic_address = free_address(), free_address(), free_address()
+    http_address, native_address, diagnostic_address = free_service_addresses()
     controller = ServiceController(
         service_binary,
         "http://" + http_address,

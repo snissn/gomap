@@ -428,6 +428,30 @@ class NativeCohereDiagnosticTests(unittest.TestCase):
                     sq8_response, mode, diagnostics=True, top_k=1, expected_route=route,
                 )
 
+    def test_v4_launcher_reserves_distinct_ports_and_closes_all_probes(self):
+        real_socket = diagnostic.v4_gate.socket.socket
+        for fail in (False, True):
+            probes = []
+
+            def create_probe(*args):
+                self.assertTrue(all(probe.fileno() >= 0 for probe in probes))
+                if fail and len(probes) == 2:
+                    raise OSError("probe creation failed")
+                probe = real_socket(*args)
+                probes.append(probe)
+                return probe
+
+            with self.subTest(fail=fail), \
+                 patch.object(diagnostic.v4_gate.socket, "socket", side_effect=create_probe):
+                if fail:
+                    with self.assertRaisesRegex(OSError, "probe creation failed"):
+                        diagnostic.v4_gate.free_service_addresses()
+                else:
+                    addresses = diagnostic.v4_gate.free_service_addresses()
+                    self.assertEqual(len(addresses), 3)
+                    self.assertEqual(len(set(addresses)), 3)
+            self.assertTrue(all(probe.fileno() == -1 for probe in probes))
+
     def test_normalized_v4_search_translates_production_route_into_event_receipt(self):
         run = object.__new__(diagnostic.Run)
         run.plan = {"campaign_profile": diagnostic.CAMPAIGN_PROFILE_NORMALIZED_V4,
