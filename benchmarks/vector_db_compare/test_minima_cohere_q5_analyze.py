@@ -504,6 +504,114 @@ class Q5AnalyzeTest(unittest.TestCase):
                 self.assertRaisesRegex(analyzer.EvidenceError, "dirty"):
             analyzer.validate_consumer_source(COMMIT)
 
+    def test_normalized_build_admission_preserves_identity_without_requiring_trimpath(self):
+        package = "github.com/snissn/gomap/cmd/treedb-document-service"
+        base = "\n".join((
+            "/packet/service: go1.26.0", f"\tpath\t{package}",
+            "\tmod\tgithub.com/snissn/gomap\t(devel)", "\tbuild\tvcs=git",
+            f"\tbuild\tvcs.revision={COMMIT}", "\tbuild\tvcs.modified=false",
+        ))
+        for extra in ("", "\n\tbuild\t-trimpath=true"):
+            with self.subTest(trimpath=bool(extra)), mock.patch.object(
+                    analyzer.subprocess, "run", return_value=mock.Mock(returncode=0, stdout=base + extra)):
+                build = analyzer._go_binary_build(
+                    Path("/packet/service"), COMMIT, package, require_trimpath=False,
+                )
+                self.assertEqual(build["build_settings"].get("-trimpath"), "true" if extra else None)
+                self.assertEqual(build["build_settings"]["vcs.revision"], COMMIT)
+        for changed in (
+            base, base.replace("vcs.modified=false", "vcs.modified=true"),
+            base.replace(COMMIT, "b" * 40), base.replace(package, package + "-wrong"),
+            base.replace("vcs=git", "vcs=other"), base.replace("go1.26.0", "go1.25.0"),
+            base.replace("\tmod\tgithub.com/snissn/gomap", "\tmod\twrong/module"),
+        ):
+            with self.subTest(metadata=changed), mock.patch.object(
+                    analyzer.subprocess, "run", return_value=mock.Mock(returncode=0, stdout=changed)):
+                with self.assertRaises(analyzer.EvidenceError):
+                    analyzer._go_binary_build(Path("/packet/service"), COMMIT, package)
+                if changed != base:
+                    with self.assertRaises(analyzer.EvidenceError):
+                        analyzer._go_binary_build(
+                            Path("/packet/service"), COMMIT, package, require_trimpath=False,
+                        )
+
+    def test_normalized_consumer_reanalysis_is_bound_to_only_reviewed_offline_changes(self):
+        repair = "b" * 40
+        relative = "benchmarks/vector_db_compare/minima_cohere_q5_analyze.py"
+        allowed = [relative, "benchmarks/vector_db_compare/test_minima_cohere_q5_analyze.py",
+                   "benchmarks/vector_db_compare/cohere_scale_harness.md"]
+        raw = Path(analyzer.__file__).read_bytes()
+
+        def run(argv, **_kwargs):
+            if argv[1] == "show":
+                return mock.Mock(returncode=0, stdout=raw)
+            if argv[1] == "rev-parse":
+                return mock.Mock(returncode=0, stdout="c" * 40 + "\n")
+            if argv[1] == "diff" and "--name-only" in argv:
+                self.assertIn(COMMIT, argv)
+                self.assertIn(repair, argv)
+                self.assertIn("TreeDB", argv)
+                self.assertIn("clients/python/treedb_client", argv)
+                return mock.Mock(returncode=0, stdout="\0".join(allowed) + "\0")
+            if argv[1] == "merge-base":
+                return mock.Mock(returncode=0, stdout="")
+            if argv[1] == "diff":
+                self.assertIn(repair, argv)
+            return mock.Mock(returncode=0, stdout="")
+
+        with mock.patch.object(analyzer.sys, "modules", {}), \
+                mock.patch.object(analyzer.subprocess, "run", side_effect=run):
+            identity = analyzer.validate_consumer_source(COMMIT, analyzer_commit=repair)
+        self.assertEqual(identity["candidate_commit"], COMMIT)
+        self.assertEqual(identity["analyzer_commit"], repair)
+        self.assertEqual(identity["consumer_only_changed_paths"], sorted(allowed))
+        self.assertEqual(identity["analyzer_sha256"], hashlib.sha256(raw).hexdigest())
+        self.assertIn("producer_harness_trees", identity)
+
+        for changed in (
+            "TreeDB/collections/vector_index_rebuild.go", "go.mod", "internal/foo.go",
+            "cmd/treedb-document-service/main.go",
+            "benchmarks/vector_db_compare/minima_cohere_native_diagnostic.py",
+            "clients/python/treedb_client/src/treedb_client/native.py",
+        ):
+            def drift(argv, **kwargs):
+                if argv[1] == "diff" and "--name-only" in argv:
+                    return mock.Mock(returncode=0, stdout=changed + "\0")
+                return run(argv, **kwargs)
+            with self.subTest(changed=changed), mock.patch.object(analyzer.sys, "modules", {}), \
+                    mock.patch.object(analyzer.subprocess, "run", side_effect=drift), \
+                    self.assertRaisesRegex(analyzer.EvidenceError, "consumer-only"):
+                analyzer.validate_consumer_source(COMMIT, analyzer_commit=repair)
+        for operation in ("diff", "status", "show", "merge-base"):
+            def invalid(argv, **kwargs):
+                if argv[1] == operation:
+                    return mock.Mock(returncode=1, stdout=b"wrong blob" if operation == "show"
+                                     else "dirty or wrong revision")
+                return run(argv, **kwargs)
+            with self.subTest(operation=operation), mock.patch.object(analyzer.sys, "modules", {}), \
+                    mock.patch.object(analyzer.subprocess, "run", side_effect=invalid), \
+                    self.assertRaises(analyzer.EvidenceError):
+                analyzer.validate_consumer_source(COMMIT, analyzer_commit=repair)
+        with self.assertRaises(analyzer.EvidenceError):
+            analyzer.validate_consumer_source(COMMIT, analyzer_commit="not-a-commit")
+
+        def changed_import(argv, **kwargs):
+            if argv[1] == "show" and argv[2].endswith("minima_cohere_native_diagnostic.py"):
+                value = (b"changed producer import" if argv[2].startswith(COMMIT)
+                         else Path(analyzer.native.__file__).read_bytes())
+                return mock.Mock(returncode=0, stdout=value)
+            return run(argv, **kwargs)
+        with mock.patch.object(analyzer.sys, "modules", {"native": analyzer.native}), \
+                mock.patch.object(analyzer.subprocess, "run", side_effect=changed_import), \
+                self.assertRaisesRegex(analyzer.EvidenceError, "producer import"):
+            analyzer.validate_consumer_source(COMMIT, analyzer_commit=repair)
+
+    def test_analyzer_commit_override_is_normalized_only(self):
+        with mock.patch.object(analyzer, "load_packet", return_value=(Path("packet"), {
+                "schema": analyzer.PACKET_SCHEMA, "candidate_commit": COMMIT})), \
+                self.assertRaisesRegex(analyzer.EvidenceError, "normalized-v4"):
+            analyzer._analyze("packet", "a" * 64, lambda _: None, analyzer_commit="b" * 40)
+
     def test_inventory_has_one_path_and_hash_per_semantic_role(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

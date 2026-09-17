@@ -449,10 +449,32 @@ one role.
 The ordered predecessor receipts bind issue/PR pairs 4730/4731, 4723/4732,
 4724/4733, and 4725/4735. Each records `reviewed_head`, `merge_commit`,
 `reviewed_tree`, and `merge_tree`; the reviewed and merged trees must match.
-The consumer rejects a dirty or different candidate checkout and independently
+The consumer rejects a dirty or different source checkout and independently
 recomputes production-lane statistics, same-shortlist engine thresholds,
 canonical quality, final-state projection, one-FP32/SQ8 resource ownership, and
 disk/RSS deltas from raw retained evidence.
+
+Normalized-v4 admits the producer's exact SHA-256-pinned Go 1.26 service/helper
+binaries with the correct package/module, candidate VCS revision and
+`vcs.modified=false`, whether or not built with `-trimpath`. Actual build
+settings are retained; untrimmed binaries do **not** claim reproducibility across
+arbitrary source paths. This differs from legacy **Q5 packet analysis**, whose
+trimming requirement remains unchanged. Prefer `go build -trimpath` for fresh
+campaigns; never rebuild and relabel already measured binaries.
+
+For an independently reviewed, landed offline-consumer-only repair, pass
+`--analyzer-commit <full-commit>` and write a new `--output` path. The analyzer
+commit must descend from the unchanged packet's producer candidate. Within the
+recorded product/harness source trees, only this analyzer, its existing test
+file and this documentation may differ. Executing source/imports must match the
+clean analyzer commit; all other local imports must also match the producer.
+Product, producer, client and other imported-code drift fails closed. The
+analysis records distinct producer/analyzer identities, actual imported blob
+hashes and the consumer-only changed paths. Without that option, source must
+match the producer as before. Packet/plan/binary/producer implementation binding,
+normalization, truth, numerical gates, lifecycle and resource rules remain
+unchanged. Preserve the original raw packet, binaries, hashes and invalid
+analysis; no measured runtime/data change is covered by this exception.
 
 All five resource inventories (`initial_ready`, `pre_fold`, `post_fold`,
 `post_reopen`, `final_verified`) are LIVE serving observations. File rows,
