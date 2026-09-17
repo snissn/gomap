@@ -113,16 +113,9 @@ func (b *VectorPartitionPublicBackendV1) InsertVectorPartitionV1(ctx context.Con
 	if len(selection.Partitions) != 1 {
 		return public.InsertResponseV1{}, &public.ErrorV1{Code: public.ErrorGenerationMismatchV1, Err: errors.New("router did not select one exact owner partition")}
 	}
-	partitionID := selection.Partitions[0].PartitionID
-	var owner raftcluster.GroupID
-	for _, partition := range coordinator.placement.Partitions {
-		if partition.PartitionID == partitionID {
-			owner = partition.GroupID
-			break
-		}
-	}
-	if owner == "" {
-		return public.InsertResponseV1{}, &public.ErrorV1{Code: public.ErrorGenerationMismatchV1, Err: errors.New("selected partition has no catalog owner")}
+	partitionID, owner, err := vectorPartitionMutationOwnerV1(status.Manifest, coordinator.placement, selection.Partitions[0].PartitionID)
+	if err != nil {
+		return public.InsertResponseV1{}, publicBackendErrorV1(err)
 	}
 	response, err := b.opts.MutationSubmitter.SubmitVectorPartitionInsertV1(ctx, VectorPartitionRoutedInsertV1{
 		Request: request, Identity: b.opts.Identity,
@@ -134,6 +127,28 @@ func (b *VectorPartitionPublicBackendV1) InsertVectorPartitionV1(ctx context.Con
 		return public.InsertResponseV1{}, publicBackendErrorV1(err)
 	}
 	return response, nil
+}
+
+func vectorPartitionMutationOwnerV1(manifest collections.VectorPartitionManifestV1, placement raftplacement.VectorPartitionPlacementRecordV1, domainID uint32) (uint32, raftcluster.GroupID, error) {
+	offsets, err := vectorPartitionCoordinatorDomainPackOffsetsV1(manifest)
+	if err != nil || int(domainID) >= len(offsets)-1 || len(placement.Partitions) != int(manifest.PartitionCount) {
+		return 0, "", ErrFixedPeerVectorProofStaleV1
+	}
+	start, end := offsets[domainID], offsets[domainID+1]
+	if start == end {
+		return 0, "", ErrFixedPeerVectorProofStaleV1
+	}
+	canonical := manifest.DomainPacks[start].PackID
+	owner := placement.Partitions[canonical].GroupID
+	if owner == "" {
+		return 0, "", ErrFixedPeerVectorWrongOwnerV1
+	}
+	for _, mapping := range manifest.DomainPacks[start:end] {
+		if placement.Partitions[mapping.PackID].PartitionID != mapping.PackID || placement.Partitions[mapping.PackID].GroupID != owner {
+			return 0, "", ErrFixedPeerVectorWrongOwnerV1
+		}
+	}
+	return canonical, owner, nil
 }
 
 func (b *VectorPartitionPublicBackendV1) SearchVectorPartitionFastV1(ctx context.Context, request public.SearchRequestV1, options public.FastSearchOptionsV1) (public.SearchResponseV1, public.FastSearchEvidenceV1, error) {

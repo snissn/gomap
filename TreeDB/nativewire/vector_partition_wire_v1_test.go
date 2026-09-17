@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
 	"net"
 	"os"
@@ -533,6 +534,47 @@ func TestVectorPartitionNativeWireClientEnforcesRequestDeadlineV1(t *testing.T) 
 	}
 	if elapsed := time.Since(started); elapsed >= time.Second/2 {
 		t.Fatalf("request deadline returned after %s", elapsed)
+	}
+}
+
+func TestVectorPartitionNativeWireInsertUnprovenReplyIsCommitAmbiguousV1(t *testing.T) {
+	for _, malformed := range []bool{false, true} {
+		t.Run(fmt.Sprintf("malformed=%t", malformed), func(t *testing.T) {
+			left, right := net.Pipe()
+			client := NewClient(left)
+			defer client.Close()
+			peer := make(chan error, 1)
+			go func() {
+				header, _, err := readFrame(right, iwire.DefaultLimits())
+				if err == nil && malformed {
+					err = writeFrame(right, iwire.Header{Type: iwire.FrameResponse, RequestID: header.RequestID}, nil)
+				}
+				peer <- errors.Join(err, right.Close())
+			}()
+			request := public.InsertRequestV1{
+				Version: 1, Generation: public.GenerationIDV1{Index: "embedding", Generation: 7}, ID: []byte("doc"), Vector: []float32{1},
+				Document: []byte(`{"embedding":[1]}`), Deadline: time.Now().Add(time.Second),
+			}
+			if _, err := client.VectorInsertV1(t.Context(), request); !hasPublicErrorCodeV1(err, public.ErrorCommitAmbiguousV1) {
+				t.Fatalf("unproven reply error = %v", err)
+			}
+			if err := <-peer; err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestVectorPartitionNativeWireInsertCanceledBeforeSendV1(t *testing.T) {
+	left, right := net.Pipe()
+	defer left.Close()
+	defer right.Close()
+	client := NewClient(left)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	request := public.InsertRequestV1{Version: 1, Generation: public.GenerationIDV1{Index: "embedding", Generation: 7}, ID: []byte("doc"), Vector: []float32{1}, Document: []byte(`{"embedding":[1]}`), Deadline: time.Now().Add(time.Second)}
+	if _, err := client.VectorInsertV1(ctx, request); !hasPublicErrorCodeV1(err, public.ErrorCanceledV1) {
+		t.Fatalf("pre-send canceled error = %v", err)
 	}
 }
 

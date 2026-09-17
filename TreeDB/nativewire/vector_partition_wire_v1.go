@@ -66,6 +66,9 @@ func (c *Client) VectorInsertV1(ctx context.Context, request public.InsertReques
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.local == nil && c.conn == nil {
+		return public.InsertResponseV1{}, io.ErrClosedPipe
+	}
 	body, err := appendVectorPartitionInsertCommandBodyV1(c.requestBody[:0], request, deadline, c.limits)
 	if err != nil {
 		return public.InsertResponseV1{}, vectorPartitionClientErrorV1(err)
@@ -75,27 +78,30 @@ func (c *Client) VectorInsertV1(ctx context.Context, request public.InsertReques
 	}
 	requestCtx, cancel := context.WithDeadline(ctx, deadline)
 	defer cancel()
+	if err := requestCtx.Err(); err != nil {
+		return public.InsertResponseV1{}, vectorPartitionClientErrorV1(err)
+	}
 	_, raw, err := c.roundTripLocked(requestCtx, iwire.FrameRequest, body, iwire.FrameResponse)
 	c.requestBody = body[:0]
 	if err != nil {
-		return public.InsertResponseV1{}, vectorPartitionClientErrorV1(err)
+		return public.InsertResponseV1{}, vectorPartitionMutationClientErrorV1(err)
 	}
 	c.vectorSections, err = iwire.DecodeSectionsInto(c.vectorSections[:0], raw, c.limits)
 	if err != nil {
-		return public.InsertResponseV1{}, err
+		return public.InsertResponseV1{}, vectorPartitionMutationClientErrorV1(err)
 	}
 	encoded, ok, err := singletonSection(c.vectorSections, iwire.SectionVectorInsertResponse)
 	if err != nil || !ok {
 		if err == nil {
 			err = protocolError(iwire.ErrMalformedFrame, "vector insert response is missing")
 		}
-		return public.InsertResponseV1{}, err
+		return public.InsertResponseV1{}, vectorPartitionMutationClientErrorV1(err)
 	}
 	response, err := decodeVectorPartitionInsertResponseV1(encoded)
 	if err == nil && (response.Generation != request.Generation || response.VisibilityGeneration != request.Generation || response.VisibleID != string(request.ID)) {
 		err = protocolError(iwire.ErrMalformedFrame, "vector insert response does not match request")
 	}
-	return response, err
+	return response, vectorPartitionMutationClientErrorV1(err)
 }
 
 // VectorSearchFastV1 executes the bounded immutable-snapshot search shape.
@@ -571,6 +577,17 @@ func vectorPartitionClientErrorV1(err error) error {
 		code = public.ErrorCommitAmbiguousV1
 	}
 	return &public.ErrorV1{Code: code, Err: cause}
+}
+
+func vectorPartitionMutationClientErrorV1(err error) error {
+	if err == nil {
+		return nil
+	}
+	var wire *WireError
+	if errors.As(err, &wire) {
+		return vectorPartitionClientErrorV1(err)
+	}
+	return &public.ErrorV1{Code: public.ErrorCommitAmbiguousV1, Err: err}
 }
 
 func appendVectorPartitionCommandBodyV1(dst []byte, command iwire.CommandID, request *public.SearchRequestV1, fast *public.FastSearchOptionsV1, pin *public.PinSearchSnapshotOptionsV1, deadline time.Time, limits iwire.Limits) ([]byte, error) {

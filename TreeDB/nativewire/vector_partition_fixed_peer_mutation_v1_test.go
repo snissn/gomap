@@ -31,6 +31,17 @@ type fixedPeerVectorReadyFixtureV1 struct {
 	client               *FixedPeerTCPClientV1
 }
 
+func TestFixedPeerVectorSubmitErrorMarksCommittedResultAmbiguousV1(t *testing.T) {
+	cause := context.DeadlineExceeded
+	committed := raftcluster.SubmitResultV1{CommittedEntry: raftcluster.CommittedCommandEntryV1{Term: 1, Index: 2}}
+	if err := fixedPeerVectorSubmitErrorV1(committed, cause); !errors.Is(err, raftcluster.ErrCommitAmbiguous) || !errors.Is(err, cause) {
+		t.Fatalf("committed error = %v", err)
+	}
+	if err := fixedPeerVectorSubmitErrorV1(raftcluster.SubmitResultV1{}, cause); !errors.Is(err, cause) || errors.Is(err, raftcluster.ErrCommitAmbiguous) {
+		t.Fatalf("uncommitted error = %v", err)
+	}
+}
+
 func TestFixedPeerVectorRuntimeCloseReleasesPublicListenerV1(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -273,6 +284,9 @@ func TestVectorPartitionSystemNativeFourDaemonRemoteWriteRoutesAppliesAndBecomes
 	if _, err := fixture.client.call(ctx, "owner-1", "vector-forward", fixedPeerRequestV1{VectorInsert: &private}, true); !errors.Is(err, ErrFixedPeerVectorWrongOwnerV1) {
 		t.Fatalf("wrong ownership error=%v", err)
 	}
+	if _, err := client.VectorSearchStrictV1(ctx, fixture.SearchRequest([]float32{0, 1}, 4)); err != nil {
+		t.Fatalf("pre-mutation ingress search: %v", err)
+	}
 
 	// Pin A immediately before the accepted mutation so it remains within the
 	// production publisher's bounded session age while B is published.
@@ -313,7 +327,7 @@ func TestVectorPartitionSystemNativeFourDaemonRemoteWriteRoutesAppliesAndBecomes
 	if err := ownerClient.VectorClosePinnedSnapshotV1(ctx); err != nil {
 		t.Fatal(err)
 	}
-	search, err := ownerClient.VectorSearchStrictV1(ctx, fixture.SearchRequest([]float32{0, 1}, 4))
+	search, err := client.VectorSearchStrictV1(ctx, fixture.SearchRequest([]float32{0, 1}, 4))
 	if err != nil {
 		t.Fatal(err)
 	}

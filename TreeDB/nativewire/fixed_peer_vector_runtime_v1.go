@@ -85,11 +85,10 @@ func (b *fixedPeerVectorBackendV1) backend(ctx context.Context) (*VectorPartitio
 }
 
 func (b *fixedPeerVectorBackendV1) SearchVectorPartitionV1(ctx context.Context, request public.SearchRequestV1) (public.SearchResponseV1, error) {
-	backend, err := b.backend(ctx)
-	if err != nil {
-		return public.SearchResponseV1{}, publicBackendErrorV1(err)
+	if b == nil || b.runtime == nil || b.runtime.parent == nil {
+		return public.SearchResponseV1{}, publicBackendErrorV1(ErrFixedPeerVectorUnavailableV1)
 	}
-	return backend.SearchVectorPartitionV1(ctx, request)
+	return b.runtime.parent.searchVectorPartitionStrictV1(ctx, request)
 }
 
 func (b *fixedPeerVectorBackendV1) SearchVectorPartitionFastV1(ctx context.Context, request public.SearchRequestV1, options public.FastSearchOptionsV1) (public.SearchResponseV1, public.FastSearchEvidenceV1, error) {
@@ -513,6 +512,60 @@ func validateFixedPeerVectorConfigV1(config FixedPeerTCPConfigV1, localGroups ma
 	return nil
 }
 
+// searchVectorPartitionStrictV1 keeps the single-owner production search on
+// the owner whose live serving snapshot and capability authorize it.
+func (r *FixedPeerTCPRuntimeV1) searchVectorPartitionStrictV1(ctx context.Context, request public.SearchRequestV1) (public.SearchResponseV1, error) {
+	if r == nil || r.vector == nil || r.config.Vector == nil {
+		return public.SearchResponseV1{}, publicBackendErrorV1(ErrFixedPeerVectorUnavailableV1)
+	}
+	owners := fixedPeerVectorOwnerGroupsV1(r.config.Vector.Placement)
+	if len(owners) != 1 {
+		return public.SearchResponseV1{}, publicBackendErrorV1(errors.New("fixed-peer strict search requires exactly one owner group"))
+	}
+	var group *FixedPeerTCPGroupV1
+	for i := range r.config.Groups {
+		if r.config.Groups[i].ID == owners[0] {
+			group = &r.config.Groups[i]
+			break
+		}
+	}
+	if group == nil {
+		return public.SearchResponseV1{}, publicBackendErrorV1(ErrFixedPeerVectorWrongOwnerV1)
+	}
+	leader, err := r.client.leader(ctx, *group)
+	if err != nil {
+		return public.SearchResponseV1{}, publicBackendErrorV1(err)
+	}
+	if leader == r.config.NodeID {
+		backend, err := r.vector.ensureBackendV1(ctx)
+		if err != nil {
+			return public.SearchResponseV1{}, publicBackendErrorV1(err)
+		}
+		return backend.SearchVectorPartitionV1(ctx, request)
+	}
+	reply, err := r.client.call(ctx, leader, "vector-search", fixedPeerRequestV1{VectorSearch: &request}, false)
+	if err != nil {
+		return public.SearchResponseV1{}, fixedPeerVectorPublicErrorV1(err)
+	}
+	if reply.VectorSearch == nil {
+		return public.SearchResponseV1{}, publicBackendErrorV1(ErrFixedPeerVectorUnavailableV1)
+	}
+	return *reply.VectorSearch, nil
+}
+
+func fixedPeerVectorPublicErrorV1(err error) error {
+	var remote *fixedPeerRemoteErrorV1
+	if errors.As(err, &remote) {
+		code := public.ErrorCodeV1(remote.code)
+		switch code {
+		case public.ErrorInvalidRequestV1, public.ErrorGenerationMismatchV1, public.ErrorUnavailableV1,
+			public.ErrorCanceledV1, public.ErrorDeadlineExceededV1, public.ErrorCommitAmbiguousV1, public.ErrorFailedV1:
+			return &public.ErrorV1{Code: code, Err: errors.New(remote.message)}
+		}
+	}
+	return publicBackendErrorV1(err)
+}
+
 // SubmitVectorPartitionInsertV1 performs exactly one fixed-peer hop to the
 // configured owner leader. The receiving owner repeats the complete proof
 // validation inside its serialized preflight-to-consensus boundary.
@@ -609,7 +662,7 @@ func (r *FixedPeerTCPRuntimeV1) applyVectorInsertV1(ctx context.Context, request
 	result, err := submitter.SubmitCommandEntryWithPreCommitV1(ctx, entry, metadata, func(commitCtx context.Context) error {
 		return r.validateVectorInsertOwnerV1(commitCtx, request)
 	})
-	if err != nil {
+	if err = fixedPeerVectorSubmitErrorV1(result, err); err != nil {
 		return public.InsertResponseV1{}, err
 	}
 	if result.ActualAck != iwire.AckRaftCommitted || !result.CommittedRecoverable || !result.CommittedApplied ||
@@ -684,6 +737,13 @@ func fixedPeerVectorPostCommitAmbiguousV1(err error) error {
 	return errors.Join(raftcluster.ErrCommitAmbiguous, err)
 }
 
+func fixedPeerVectorSubmitErrorV1(result raftcluster.SubmitResultV1, err error) error {
+	if err != nil && (result.CommittedEntry.Term != 0 || result.CommittedEntry.Index != 0 || result.Evidence.ProvesProductionConsensus()) {
+		return fixedPeerVectorPostCommitAmbiguousV1(err)
+	}
+	return err
+}
+
 func (r *FixedPeerTCPRuntimeV1) validateVectorInsertOwnerV1(ctx context.Context, request VectorPartitionRoutedInsertV1) error {
 	if request.CatalogProof.Epoch == 0 || request.CatalogProof.Digest == "" || request.ReadySetDigest == "" || request.RouterModelDigest == "" {
 		return ErrFixedPeerVectorProofMissingV1
@@ -746,15 +806,8 @@ func (r *FixedPeerTCPRuntimeV1) validateVectorInsertOwnerV1(ctx context.Context,
 	if err != nil || len(selection.Partitions) != 1 {
 		return errors.Join(ErrFixedPeerVectorWrongOwnerV1, err)
 	}
-	partitionID := selection.Partitions[0].PartitionID
-	owner := raftcluster.GroupID("")
-	for _, partition := range coordinator.placement.Partitions {
-		if partition.PartitionID == partitionID {
-			owner = partition.GroupID
-			break
-		}
-	}
-	if partitionID != request.PartitionID || owner == "" || owner != request.OwnerGroup {
+	partitionID, owner, err := vectorPartitionMutationOwnerV1(routerStatus.Manifest, coordinator.placement, selection.Partitions[0].PartitionID)
+	if err != nil || partitionID != request.PartitionID || owner != request.OwnerGroup {
 		return ErrFixedPeerVectorWrongOwnerV1
 	}
 	return nil

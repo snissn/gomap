@@ -568,6 +568,7 @@ type fixedPeerRequestV1 struct {
 	Metadata     raftentry.RequestMetadataV1
 	Route        ClusterRouteRequest
 	VectorInsert *VectorPartitionRoutedInsertV1 `json:",omitempty"`
+	VectorSearch *public.SearchRequestV1        `json:",omitempty"`
 }
 type fixedPeerReplyV1 struct {
 	NodeID       raftcluster.NodeID
@@ -580,6 +581,7 @@ type fixedPeerReplyV1 struct {
 	Submit       raftcluster.SubmitResultV1
 	Route        ClusterRouteTarget
 	VectorInsert *public.InsertResponseV1 `json:",omitempty"`
+	VectorSearch *public.SearchResponseV1 `json:",omitempty"`
 }
 
 func (r *FixedPeerTCPRuntimeV1) serve(w http.ResponseWriter, request *http.Request) {
@@ -657,6 +659,13 @@ func (r *FixedPeerTCPRuntimeV1) serve(w http.ResponseWriter, request *http.Reque
 		}
 		response, applyErr := r.applyVectorInsertV1(ctx, *body.VectorInsert)
 		reply.VectorInsert, err = &response, applyErr
+	case "/v1/vector-search":
+		if body.VectorSearch == nil {
+			err = ErrFixedPeerVectorProofMissingV1
+			return
+		}
+		response, searchErr := r.searchVectorPartitionStrictV1(ctx, *body.VectorSearch)
+		reply.VectorSearch, err = &response, searchErr
 	case "/v1/route":
 		reply.Route, err = r.route(ctx, body.Route)
 	case "/v1/submit", "/v1/forward":
@@ -847,6 +856,10 @@ var fixedPeerErrorsV1 = []error{
 }
 
 func fixedPeerErrorCodeV1(err error) string {
+	var publicErr *public.ErrorV1
+	if errors.As(err, &publicErr) {
+		return string(publicErr.Code)
+	}
 	for _, known := range fixedPeerErrorsV1 {
 		if errors.Is(err, known) {
 			return known.Error()

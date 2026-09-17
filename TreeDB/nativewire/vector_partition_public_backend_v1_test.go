@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/snissn/gomap/TreeDB/collections"
 	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
 	"github.com/snissn/gomap/TreeDB/internal/raftplacement"
 	public "github.com/snissn/gomap/TreeDB/vectorpartition"
@@ -60,6 +61,27 @@ func TestVectorPartitionPublicBackendMapsBoundGenerationMismatchV1(t *testing.T)
 func hasPublicErrorCodeV1(err error, want public.ErrorCodeV1) bool {
 	var apiErr *public.ErrorV1
 	return errors.As(err, &apiErr) && apiErr.Code == want
+}
+
+func TestVectorPartitionMutationOwnerUsesDomainPackMappingV1(t *testing.T) {
+	manifest := collections.VectorPartitionManifestV1{
+		PartitionCount: 3, DomainCount: 2,
+		DomainPacks: []collections.VectorPartitionDomainPackV1{{DomainID: 0, PackID: 0}, {DomainID: 0, PackID: 1}, {DomainID: 1, PackID: 2}},
+	}
+	placement := raftplacement.VectorPartitionPlacementRecordV1{PartitionCount: 3, Partitions: []raftplacement.VectorPartitionGroupV1{
+		{PartitionID: 0, GroupID: "group-a"}, {PartitionID: 1, GroupID: "group-a"}, {PartitionID: 2, GroupID: "group-b"},
+	}}
+	pack, owner, err := vectorPartitionMutationOwnerV1(manifest, placement, 1)
+	if err != nil || pack != 2 || owner != "group-b" {
+		t.Fatalf("domain owner = pack %d group %q err=%v", pack, owner, err)
+	}
+	if _, _, err := vectorPartitionMutationOwnerV1(manifest, placement, 0); err != nil {
+		t.Fatalf("same-owner domain rejected: %v", err)
+	}
+	placement.Partitions[1].GroupID = "group-b"
+	if _, _, err := vectorPartitionMutationOwnerV1(manifest, placement, 0); !errors.Is(err, ErrFixedPeerVectorWrongOwnerV1) {
+		t.Fatalf("cross-owner domain error = %v", err)
+	}
 }
 
 type publicBackendLifecycleBuilderV1 struct{ calls int }
