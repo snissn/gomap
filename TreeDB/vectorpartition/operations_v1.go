@@ -39,6 +39,9 @@ type OperationsCountersV1 struct {
 	SelectedPartitions, SelectedGroups                              uint64
 	HNSWServedPartitions, ExactScanPartitions                       uint64
 	QueryBytes, RequestBytes, CandidateBytes, ResponseBytes         uint64
+	Inserts, MutationRoutes, MutationForwards                       uint64
+	MutationCommits, MutationReplications, MutationApplies          uint64
+	MutationVisibilityProofs                                        uint64
 }
 
 // OperationsV1 is the explicit operator boundary over an already assembled
@@ -96,6 +99,30 @@ func (o *OperationsV1) Search(ctx context.Context, request SearchRequestV1) (Sea
 	return o.searchV1(ctx, request, func() (SearchResponseV1, error) {
 		return o.service.Search(ctx, request)
 	})
+}
+
+// Insert admits one exact-ID mutation through the same default-off public
+// operations boundary as search. Existing query/request caps bound its vector
+// and complete payload respectively.
+func (o *OperationsV1) Insert(ctx context.Context, request InsertRequestV1) (InsertResponseV1, error) {
+	if err := o.admitInsertV1(ctx, request); err != nil {
+		return InsertResponseV1{}, err
+	}
+	response, err := o.service.Insert(ctx, request)
+	o.mu.Lock()
+	o.counts.Inserts++
+	if err != nil {
+		o.counts.Failures++
+	} else {
+		o.counts.MutationRoutes += response.Counters.Routes
+		o.counts.MutationForwards += response.Counters.Forwards
+		o.counts.MutationCommits += response.Counters.Commits
+		o.counts.MutationReplications += response.Counters.Replications
+		o.counts.MutationApplies += response.Counters.Applies
+		o.counts.MutationVisibilityProofs += response.Counters.VisibilityProofs
+	}
+	o.mu.Unlock()
+	return response, err
 }
 
 // SearchFast applies Operations admission to the bounded local-snapshot path.
@@ -310,4 +337,29 @@ func (o *OperationsV1) admit(ctx context.Context, r SearchRequestV1) error {
 	*reason++
 	o.mu.Unlock()
 	return &ErrorV1{Code: ErrorInvalidRequestV1, Err: errors.New("vector partition request exceeds configured operation limit")}
+}
+
+func (o *OperationsV1) admitInsertV1(ctx context.Context, r InsertRequestV1) error {
+	if err := o.enabled(); err != nil {
+		return err
+	}
+	if err := validateInsertRequestV1(ctx, r); err != nil {
+		return err
+	}
+	vectorBytes := uint64(len(r.Vector)) * 4
+	requestBytes := vectorBytes + uint64(len(r.ID)) + uint64(len(r.Document))
+	var reason *uint64
+	switch {
+	case vectorBytes > o.config.MaxQueryBytes:
+		reason = &o.counts.CapQueryBytes
+	case requestBytes > o.config.MaxRequestBytes:
+		reason = &o.counts.CapRequestBytes
+	}
+	if reason == nil {
+		return nil
+	}
+	o.mu.Lock()
+	*reason++
+	o.mu.Unlock()
+	return &ErrorV1{Code: ErrorInvalidRequestV1, Err: errors.New("vector mutation exceeds configured operation limit")}
 }

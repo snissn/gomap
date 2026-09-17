@@ -745,6 +745,9 @@ func TestFixedPeerTCPRemoteErrorClassesV1(t *testing.T) {
 	if code := fixedPeerErrorCodeV1(errors.Join(context.Canceled, raftcluster.ErrCommitAmbiguous)); code != raftcluster.ErrCommitAmbiguous.Error() {
 		t.Fatalf("ambiguous outcome lost: %s", code)
 	}
+	if code := fixedPeerErrorCodeV1(errors.Join(ErrFixedPeerVectorUnavailableV1, raftcluster.ErrCommitAmbiguous)); code != raftcluster.ErrCommitAmbiguous.Error() {
+		t.Fatalf("post-commit vector failure lost: %s", code)
+	}
 }
 
 func TestFixedPeerTCPRemoteErrorRouteMetadataPresenceV1(t *testing.T) {
@@ -796,6 +799,18 @@ func TestFixedPeerTCPDirectorySyncV1(t *testing.T) {
 	}
 	if err := syncFixedPeerDirectoryV1(filepath.Join(root, "missing")); err == nil {
 		t.Fatal("ignored directory-open failure")
+	}
+}
+
+func TestFixedPeerJSONOmitsUnusedVectorFieldsV1(t *testing.T) {
+	for _, value := range []any{fixedPeerRequestV1{}, fixedPeerReplyV1{}} {
+		raw, err := json.Marshal(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(raw), "VectorInsert") {
+			t.Fatalf("unused vector payload was encoded: %s", raw)
+		}
 	}
 }
 

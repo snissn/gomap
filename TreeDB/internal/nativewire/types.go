@@ -92,6 +92,8 @@ const (
 	// frozen request/work sections. IDs are allocated from the live registry.
 	SectionDenseSearchQuantizedOptions SectionID = 135
 	SectionDenseSearchScorePlaneProof  SectionID = 136
+	SectionVectorInsertRequest         SectionID = 137
+	SectionVectorInsertResponse        SectionID = 138
 )
 
 type CommandID uint64
@@ -131,6 +133,7 @@ const (
 	CommandVectorClosePinnedSnapshot CommandID = 63
 	CommandDenseVectorSearch         CommandID = 64
 	CommandTypedDocumentUpsert       CommandID = 65
+	CommandVectorInsert              CommandID = 66
 )
 
 type DocumentFormat uint64

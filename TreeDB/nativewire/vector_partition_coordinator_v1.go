@@ -1457,10 +1457,31 @@ func (c *VectorPartitionCoordinatorV1) plan(ctx context.Context, request VectorP
 	if err != nil {
 		return nil, nil, nil, zero, ErrVectorPartitionCoordinatorBudgetExceeded
 	}
-	liveDomainFloors := make(map[uint32]uint64, len(routed))
-	if livePin != nil {
-		for _, score := range routed {
-			candidateCeiling, scratchBytes, preflightErr := livePin.DomainSearchPreflightV1(score.PartitionID, collections.VectorPartitionSearchOptionsV1{
+	type liveDomainKeyV1 struct {
+		group  raftcluster.GroupID
+		domain uint32
+	}
+	livePinForGroup := func(group raftcluster.GroupID) *collections.VectorIndexPartitionLiveSearchPinV1 {
+		if strict != nil {
+			return strict.snapshot.snapshot.livePins[group]
+		}
+		return livePin
+	}
+	liveDomainFloors := make(map[liveDomainKeyV1]uint64, len(routed))
+	for _, score := range routed {
+		start, end := domainPackOffsets[score.PartitionID], domainPackOffsets[score.PartitionID+1]
+		seenGroups := make(map[raftcluster.GroupID]struct{}, end-start)
+		for _, mapping := range domainPacks[start:end] {
+			group := c.placement.Partitions[mapping.PackID].GroupID
+			if _, seen := seenGroups[group]; seen {
+				continue
+			}
+			seenGroups[group] = struct{}{}
+			groupLivePin := livePinForGroup(group)
+			if groupLivePin == nil {
+				continue
+			}
+			candidateCeiling, scratchBytes, preflightErr := groupLivePin.DomainSearchPreflightV1(score.PartitionID, collections.VectorPartitionSearchOptionsV1{
 				TopK: request.TopK, EfSearch: request.EfSearch, MaxStableIDBytes: shardLimits.MaxStableIDBytes,
 			})
 			if preflightErr != nil {
@@ -1473,7 +1494,7 @@ func (c *VectorPartitionCoordinatorV1) plan(ctx context.Context, request VectorP
 			if !floorOK {
 				return nil, nil, nil, zero, ErrVectorPartitionCoordinatorBudgetExceeded
 			}
-			liveDomainFloors[score.PartitionID] = deltaFloor
+			liveDomainFloors[liveDomainKeyV1{group: group, domain: score.PartitionID}] = deltaFloor
 			totalCandidateFloor, floorOK = addUint64V1(totalCandidateFloor, deltaFloor)
 			if !floorOK {
 				return nil, nil, nil, zero, ErrVectorPartitionCoordinatorBudgetExceeded
@@ -1485,14 +1506,15 @@ func (c *VectorPartitionCoordinatorV1) plan(ctx context.Context, request VectorP
 	}
 	candidateSurplus := request.CandidateBytesLimit - totalCandidateFloor
 	var candidateWeightCursor uint64
-	assignedLiveDomains := make(map[uint32]struct{})
-	var liveStatus collections.VectorIndexPartitionLiveStatusV1
-	if livePin != nil {
-		liveStatus = livePin.StatusV1()
-	}
+	assignedLiveDomains := make(map[liveDomainKeyV1]struct{})
 	for _, groupID := range groupIDs {
 		group := c.groups[groupID]
 		partitions := byGroup[groupID]
+		groupLivePin := livePinForGroup(groupID)
+		var liveStatus collections.VectorIndexPartitionLiveStatusV1
+		if groupLivePin != nil {
+			liveStatus = groupLivePin.StatusV1()
+		}
 		for start := 0; start < len(partitions); start += c.limits.MaxPartitionsPerRequest {
 			end := min(start+c.limits.MaxPartitionsPerRequest, len(partitions))
 			ids := slices.Clone(partitions[start:end])
@@ -1532,20 +1554,21 @@ func (c *VectorPartitionCoordinatorV1) plan(ctx context.Context, request VectorP
 				TopK: request.TopK, EfSearch: request.EfSearch, DeadlineUnixNano: request.DeadlineUnixNano,
 			}
 			var liveBaseline uint64
-			if livePin != nil {
+			if groupLivePin != nil {
 				shardRequest.LiveRevision = liveStatus.Revision
 				shardRequest.LiveCoverage = liveStatus.Coverage
 				for _, partitionID := range ids {
-					domain, ok := livePin.DomainForPackV1(partitionID)
+					domain, ok := groupLivePin.DomainForPackV1(partitionID)
 					if !ok {
 						return nil, nil, nil, zero, ErrVectorPartitionCoordinatorGenerationMismatch
 					}
-					if _, assigned := assignedLiveDomains[domain]; assigned {
+					key := liveDomainKeyV1{group: groupID, domain: domain}
+					if _, assigned := assignedLiveDomains[key]; assigned {
 						continue
 					}
-					assignedLiveDomains[domain] = struct{}{}
+					assignedLiveDomains[key] = struct{}{}
 					shardRequest.LiveDomainIDs = append(shardRequest.LiveDomainIDs, domain)
-					liveBaseline, ok = addUint64V1(liveBaseline, liveDomainFloors[domain])
+					liveBaseline, ok = addUint64V1(liveBaseline, liveDomainFloors[key])
 					if !ok {
 						return nil, nil, nil, zero, ErrVectorPartitionCoordinatorBudgetExceeded
 					}

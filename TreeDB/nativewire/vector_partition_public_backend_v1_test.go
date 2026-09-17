@@ -37,6 +37,10 @@ func TestVectorPartitionPublicBackendMapsCoordinatorErrorsV1(t *testing.T) {
 	if got := publicBackendErrorV1(context.Canceled); !errors.Is(got, context.Canceled) {
 		t.Fatalf("canceled = %v", got)
 	}
+	ambiguous := publicBackendErrorV1(errors.Join(context.DeadlineExceeded, raftcluster.ErrCommitAmbiguous))
+	if !hasPublicErrorCodeV1(ambiguous, public.ErrorCommitAmbiguousV1) || errors.Is(ambiguous, context.DeadlineExceeded) {
+		t.Fatalf("post-commit deadline = %v", ambiguous)
+	}
 }
 
 func TestVectorPartitionPublicBackendMapsBoundGenerationMismatchV1(t *testing.T) {

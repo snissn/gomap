@@ -92,6 +92,7 @@ type vectorPartitionServingSnapshotV1 struct {
 	router      *vectorPartitionCoordinatorRouterLeaseV1
 	generations map[raftcluster.GroupID]VectorPartitionPinnedGenerationV1
 	partitions  map[raftcluster.GroupID]map[uint32]*VectorPartitionPartitionSearchLeaseV1
+	livePins    map[raftcluster.GroupID]*collections.VectorIndexPartitionLiveSearchPinV1
 	refs        uint64
 	retired     bool
 	closeOnce   sync.Once
@@ -302,6 +303,7 @@ func (p *VectorPartitionServingSnapshotPublisherV1) buildSnapshotV1(ctx context.
 	snapshot := &vectorPartitionServingSnapshotV1{
 		generations: make(map[raftcluster.GroupID]VectorPartitionPinnedGenerationV1, len(p.opts.GenerationSources)),
 		partitions:  make(map[raftcluster.GroupID]map[uint32]*VectorPartitionPartitionSearchLeaseV1, len(p.opts.GenerationSources)),
+		livePins:    make(map[raftcluster.GroupID]*collections.VectorIndexPartitionLiveSearchPinV1, len(p.opts.GenerationSources)),
 	}
 	fail := func(err error) (*vectorPartitionServingSnapshotV1, vectorPartitionServingSnapshotBuildCountsV1, error) {
 		return nil, counts, errors.Join(err, snapshot.close())
@@ -324,7 +326,6 @@ func (p *VectorPartitionServingSnapshotPublisherV1) buildSnapshotV1(ctx context.
 		p.opts.Coordinator.retireRouterSessionV1(snapshot.router)
 		return fail(err)
 	}
-
 	localGroups := make([]raftcluster.GroupID, 0, len(p.opts.GenerationSources))
 	for group := range p.opts.GenerationSources {
 		localGroups = append(localGroups, group)
@@ -343,6 +344,29 @@ func (p *VectorPartitionServingSnapshotPublisherV1) buildSnapshotV1(ctx context.
 		manifest := generation.Manifest()
 		if err := validateVectorPartitionServingSnapshotManifestV1(placement, group, manifest, routerStatus.Manifest, before.authority); err != nil {
 			return fail(err)
+		}
+		if liveSource, ok := generation.(vectorPartitionPinnedLiveViewV1); ok {
+			livePin, liveErr := liveSource.acquireVectorPartitionLiveSearchPinV1()
+			if liveErr != nil {
+				return fail(fmt.Errorf("%w: live snapshot group %q: %v", ErrVectorPartitionShardSearchGenerationMismatch, group, liveErr))
+			}
+			if livePin != nil {
+				liveStatus := livePin.StatusV1()
+				switch {
+				case liveStatus.Generation != placement.PartitionGeneration:
+					livePin.Release()
+					return fail(fmt.Errorf("%w: live snapshot group %q generation", ErrVectorPartitionShardSearchGenerationMismatch, group))
+				case liveStatus.Revision == 0:
+					// A zero-revision binding has no mutation view to publish. Keep
+					// the strict snapshot at the legacy zero/zero immutable identity.
+					livePin.Release()
+				case liveStatus.Coverage == 0:
+					livePin.Release()
+					return fail(fmt.Errorf("%w: live snapshot group %q coverage", ErrVectorPartitionShardSearchGenerationMismatch, group))
+				default:
+					snapshot.livePins[group] = livePin
+				}
+			}
 		}
 		snapshot.partitions[group] = make(map[uint32]*VectorPartitionPartitionSearchLeaseV1)
 		for _, partition := range placement.Partitions {
@@ -974,6 +998,9 @@ func (s *vectorPartitionServingSnapshotV1) close() error {
 		}
 		sort.Slice(groups, func(i, j int) bool { return groups[i] < groups[j] })
 		for _, group := range groups {
+			if livePin := s.livePins[group]; livePin != nil {
+				livePin.Release()
+			}
 			partitions := make([]uint32, 0, len(s.partitions[group]))
 			for partition := range s.partitions[group] {
 				partitions = append(partitions, partition)

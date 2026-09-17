@@ -1320,6 +1320,51 @@ func (c *Collection) NewVectorPartitionGenerationLiveSearchOpenPlanWithContextV1
 	return plan, nil
 }
 
+// NewPreparedVectorPartitionGenerationReplicatedLiveSearchOpenPlanWithContextV1
+// constructs a live search plan for an exact locally prepared generation.
+// Unlike the standalone recovery entrypoint above it deliberately does not
+// consult ActiveGeneration: its caller must first validate replicated
+// lifecycle authority and establish the manifest-bound durable live binding.
+// Re-reading the prepared manifest and the current binding here makes a stale
+// or mismatched caller fail closed before any partition asset is opened.
+func (c *Collection) NewPreparedVectorPartitionGenerationReplicatedLiveSearchOpenPlanWithContextV1(ctx context.Context, manifest VectorPartitionManifestV1) (*VectorPartitionGenerationSearchOpenPlanV1, error) {
+	if c == nil || manifest.Collection != c.name {
+		return nil, ErrVectorPartitionSearchUnavailable
+	}
+	if err := manifest.validateWithContextV1(ctx, DefaultVectorPartitionManifestLimits()); err != nil {
+		return nil, fmt.Errorf("%w: replicated live manifest: %v", ErrVectorPartitionSearchUnavailable, err)
+	}
+	prepared, err := c.PreparedVectorPartitionManifestWithContextV1(ctx, manifest.IndexName, manifest.Generation)
+	if err != nil {
+		return nil, fmt.Errorf("%w: replicated prepared manifest: %v", ErrVectorPartitionSearchUnavailable, err)
+	}
+	if prepared.IntegrityDigest != manifest.IntegrityDigest {
+		return nil, fmt.Errorf("%w: replicated prepared manifest identity", ErrVectorPartitionSearchUnavailable)
+	}
+	def, err := c.declaredVectorIndexDefinitionPrepared(manifest.IndexName)
+	if err != nil || VectorIndexDefinitionDigestV1(def) != manifest.IndexDefinitionDigest {
+		return nil, fmt.Errorf("%w: replicated live index definition: %v", ErrVectorPartitionSearchUnavailable, err)
+	}
+	// Reopening a collection does not eagerly install native vector runtimes.
+	// Restore only the already-persisted carrier under the ordinary load lock;
+	// this path must never rebuild or publish a replacement binding.
+	unlockLoad := c.lockNativeVectorIndexLoad()
+	carrier, loadStatus, loadErr := c.loadVectorPartitionLiveIndexForServingV1(def)
+	unlockLoad()
+	if loadErr != nil || carrier == nil || !loadStatus.Loaded || !carrier.isPartitionLiveCarrier() {
+		return nil, fmt.Errorf("%w: replicated durable live carrier: status=%+v err=%v", ErrVectorPartitionSearchUnavailable, loadStatus, loadErr)
+	}
+	if err := c.validateCurrentVectorPartitionLiveBindingV1(ctx, manifest); err != nil {
+		return nil, fmt.Errorf("%w: replicated live authority: %v", ErrVectorPartitionSearchUnavailable, err)
+	}
+	plan, err := NewVectorPartitionGenerationSearchOpenPlanWithContextV1(ctx, prepared)
+	if err != nil {
+		return nil, err
+	}
+	plan.liveRecovery = true
+	return plan, nil
+}
+
 func appendVectorPartitionMembershipsToPlanV1(
 	ctx context.Context,
 	plan *VectorPartitionGenerationSearchOpenPlanV1,

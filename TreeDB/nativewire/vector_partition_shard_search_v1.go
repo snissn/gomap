@@ -551,12 +551,18 @@ func (s *VectorPartitionShardSearchServiceV1) Search(ctx context.Context, reques
 		return response, s.wrapError(err, groupID)
 	}
 	var livePin *collections.VectorIndexPartitionLiveSearchPinV1
-	if liveSource, ok := pinned.(vectorPartitionPinnedLiveViewV1); ok {
+	ownedLivePin := false
+	if strictSnapshot != nil {
+		livePin = strictSnapshot.snapshot.livePins[groupID]
+	} else if liveSource, ok := pinned.(vectorPartitionPinnedLiveViewV1); ok {
 		livePin, err = liveSource.acquireVectorPartitionLiveSearchPinV1()
 		if err != nil {
 			response.Timing.GenerationOpenNanos = elapsedNanosV1(openStarted)
 			return response, s.wrapError(fmt.Errorf("%w: live revision: %v", ErrVectorPartitionShardSearchGenerationMismatch, err), groupID)
 		}
+		ownedLivePin = livePin != nil
+	}
+	if ownedLivePin {
 		defer livePin.Release()
 	}
 	if request.LiveCoverage != 0 {

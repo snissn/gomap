@@ -818,7 +818,8 @@ func (s *Server) handleRequest(ctx context.Context, w io.Writer, state *connStat
 			iwire.CommandVectorSearchFast,
 			iwire.CommandVectorPinSearchSnapshot,
 			iwire.CommandVectorSearchPinned,
-			iwire.CommandVectorClosePinnedSnapshot:
+			iwire.CommandVectorClosePinnedSnapshot,
+			iwire.CommandVectorInsert:
 			responseBody, err = s.handleVectorPartitionCommandV1(ctx, state, cmd, state.responseScratch())
 			responseBodySet = true
 		default:

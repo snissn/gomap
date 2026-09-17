@@ -10,12 +10,19 @@ import (
 
 type serviceBackendV1 struct {
 	search   func(context.Context, SearchRequestV1) (SearchResponseV1, error)
+	insert   func(context.Context, InsertRequestV1) (InsertResponseV1, error)
 	states   map[GenerationIDV1]GenerationStatusV1
 	snapshot *serviceBackendSnapshotV1
 }
 
 func (b *serviceBackendV1) SearchVectorPartitionV1(ctx context.Context, r SearchRequestV1) (SearchResponseV1, error) {
 	return b.search(ctx, r)
+}
+func (b *serviceBackendV1) InsertVectorPartitionV1(ctx context.Context, r InsertRequestV1) (InsertResponseV1, error) {
+	if b.insert == nil {
+		return InsertResponseV1{}, errors.New("insert unavailable")
+	}
+	return b.insert(ctx, r)
 }
 func (b *serviceBackendV1) SearchVectorPartitionFastV1(ctx context.Context, r SearchRequestV1, options FastSearchOptionsV1) (SearchResponseV1, FastSearchEvidenceV1, error) {
 	response, err := b.search(ctx, r)
@@ -135,6 +142,52 @@ func TestServiceV1PublicContract(t *testing.T) {
 	}
 	if eligibility, err := svc.CleanupEligibility(context.Background(), id); err != nil || eligibility.Status.State != GenerationRetiredV1 {
 		t.Fatalf("cleanup eligibility = %#v, %v", eligibility, err)
+	}
+}
+
+func TestServiceV1InsertRequiresCompleteEvidenceAndClonesV1(t *testing.T) {
+	id := GenerationIDV1{Index: "embedding", Generation: 7}
+	backend := &serviceBackendV1{states: map[GenerationIDV1]GenerationStatusV1{}}
+	backend.insert = func(_ context.Context, request InsertRequestV1) (InsertResponseV1, error) {
+		request.ID[0], request.Vector[0], request.Document[0] = 'x', 9, 'x'
+		return InsertResponseV1{
+			Generation: id, PartitionID: 2, OwnerGroup: "group-b", CommitTerm: 3, CommitIndex: 4, AppliedIndex: 5,
+			ProductionConsensus: true, LiveRevision: 6, VisibilityGeneration: id, VisibleID: "doc-1",
+			Counters: MutationCountersV1{Routes: 1, Forwards: 1, Commits: 1, Replications: 1, Applies: 1, VisibilityProofs: 1},
+		}, nil
+	}
+	service, err := NewServiceV1(backend)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := InsertRequestV1{Version: 1, Generation: id, ID: []byte("doc-1"), Vector: []float32{1, 0}, Document: []byte(`{"embedding":[1,0]}`)}
+	response, err := service.Insert(t.Context(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.AppliedIndex != 5 || request.ID[0] != 'd' || request.Vector[0] != 1 || request.Document[0] != '{' {
+		t.Fatalf("response=%+v request aliases backend=%+v", response, request)
+	}
+	backend.insert = func(context.Context, InsertRequestV1) (InsertResponseV1, error) {
+		response.ProductionConsensus = false
+		return response, nil
+	}
+	if _, err := service.Insert(t.Context(), request); !hasCodeV1(err, ErrorFailedV1) {
+		t.Fatalf("incomplete evidence error=%v", err)
+	}
+	backend.insert = func(context.Context, InsertRequestV1) (InsertResponseV1, error) {
+		response.ProductionConsensus = true
+		response.Counters.Replications = 0
+		return response, nil
+	}
+	if _, err := service.Insert(t.Context(), request); !hasCodeV1(err, ErrorFailedV1) {
+		t.Fatalf("missing replication counter error=%v", err)
+	}
+	backend.insert = func(context.Context, InsertRequestV1) (InsertResponseV1, error) {
+		return InsertResponseV1{}, &ErrorV1{Code: ErrorCommitAmbiguousV1, Err: context.DeadlineExceeded}
+	}
+	if _, err := service.Insert(t.Context(), request); !hasCodeV1(err, ErrorCommitAmbiguousV1) {
+		t.Fatalf("post-commit deadline classification=%v", err)
 	}
 }
 

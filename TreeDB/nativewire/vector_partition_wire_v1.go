@@ -49,6 +49,55 @@ func (c *Client) VectorSearchStrictV1(ctx context.Context, request public.Search
 	return response, err
 }
 
+// VectorInsertV1 submits one exact-ID mutation through the public product
+// protocol. Routing and ownership proof remain server-owned.
+func (c *Client) VectorInsertV1(ctx context.Context, request public.InsertRequestV1) (public.InsertResponseV1, error) {
+	if c == nil {
+		return public.InsertResponseV1{}, io.ErrClosedPipe
+	}
+	deadline := request.Deadline
+	if ctx != nil {
+		if current, ok := ctx.Deadline(); ok && (deadline.IsZero() || current.Before(deadline)) {
+			deadline = current
+		}
+	}
+	if deadline.IsZero() {
+		return public.InsertResponseV1{}, vectorPartitionClientErrorV1(protocolError(iwire.ErrInvalidCommand, "bounded vector mutation deadline is required"))
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	body, err := appendVectorPartitionInsertCommandBodyV1(c.requestBody[:0], request, deadline, c.limits)
+	if err != nil {
+		return public.InsertResponseV1{}, vectorPartitionClientErrorV1(err)
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	requestCtx, cancel := context.WithDeadline(ctx, deadline)
+	defer cancel()
+	_, raw, err := c.roundTripLocked(requestCtx, iwire.FrameRequest, body, iwire.FrameResponse)
+	c.requestBody = body[:0]
+	if err != nil {
+		return public.InsertResponseV1{}, vectorPartitionClientErrorV1(err)
+	}
+	c.vectorSections, err = iwire.DecodeSectionsInto(c.vectorSections[:0], raw, c.limits)
+	if err != nil {
+		return public.InsertResponseV1{}, err
+	}
+	encoded, ok, err := singletonSection(c.vectorSections, iwire.SectionVectorInsertResponse)
+	if err != nil || !ok {
+		if err == nil {
+			err = protocolError(iwire.ErrMalformedFrame, "vector insert response is missing")
+		}
+		return public.InsertResponseV1{}, err
+	}
+	response, err := decodeVectorPartitionInsertResponseV1(encoded)
+	if err == nil && (response.Generation != request.Generation || response.VisibilityGeneration != request.Generation || response.VisibleID != string(request.ID)) {
+		err = protocolError(iwire.ErrMalformedFrame, "vector insert response does not match request")
+	}
+	return response, err
+}
+
 // VectorSearchFastV1 executes the bounded immutable-snapshot search shape.
 func (c *Client) VectorSearchFastV1(ctx context.Context, request public.SearchRequestV1, options public.FastSearchOptionsV1) (public.SearchResponseV1, public.FastSearchEvidenceV1, error) {
 	return c.vectorSearchCommandV1(ctx, iwire.CommandVectorSearchFast, request, &options)
@@ -297,9 +346,161 @@ func (s *Server) handleVectorPartitionCommandV1(ctx context.Context, state *conn
 			return nil, protocolError(iwire.ErrInvalidCommand, "connection state is unavailable")
 		}
 		return dst, vectorPartitionServerErrorV1(state.closeVectorPinnedLocked())
+	case iwire.CommandVectorInsert:
+		raw, ok, err := singletonSection(cmd.Known, iwire.SectionVectorInsertRequest)
+		if err != nil || !ok {
+			if err == nil {
+				err = protocolError(iwire.ErrInvalidCommand, "vector insert request is missing")
+			}
+			return nil, err
+		}
+		request, err := decodeVectorPartitionInsertRequestV1(raw, s.limits)
+		if err != nil {
+			return nil, err
+		}
+		response, err := s.vectorPartitionOperations.Insert(ctx, request)
+		if err != nil {
+			return nil, vectorPartitionServerErrorV1(err)
+		}
+		return appendVectorPartitionInsertResponseSectionV1(dst, response)
 	default:
 		return nil, protocolError(iwire.ErrUnsupportedFeature, "unsupported vector command")
 	}
+}
+
+func appendVectorPartitionInsertCommandBodyV1(dst []byte, request public.InsertRequestV1, deadline time.Time, limits iwire.Limits) ([]byte, error) {
+	body, err := appendCommandHeaderSection(dst, iwire.CommandVectorInsert)
+	if err != nil {
+		return nil, err
+	}
+	if deadline.UnixNano() <= 0 {
+		return nil, protocolError(iwire.ErrInvalidCommand, "vector mutation deadline cannot be encoded")
+	}
+	body, err = iwire.AppendSectionHeader(body, iwire.SectionDeadline, 0, uvarintLen(uint64(deadline.UnixNano())))
+	if err != nil {
+		return nil, err
+	}
+	body = binary.AppendUvarint(body, uint64(deadline.UnixNano()))
+	return appendVectorPartitionInsertRequestSectionV1(body, request, limits)
+}
+
+func appendVectorPartitionInsertRequestSectionV1(dst []byte, request public.InsertRequestV1, limits iwire.Limits) ([]byte, error) {
+	if request.Version != 1 || request.Generation.Index == "" || request.Generation.Generation == 0 || len(request.ID) == 0 || len(request.Vector) == 0 || len(request.Vector) > limits.MaxByteVectorItems || len(request.Document) == 0 || uint64(len(request.ID)) > limits.MaxSectionLen || uint64(len(request.Document)) > limits.MaxSectionLen || len(request.Vector) > maxInt/4 {
+		return nil, protocolError(iwire.ErrInvalidCommand, "vector insert request cannot be encoded")
+	}
+	deadline := uint64(0)
+	if !request.Deadline.IsZero() {
+		if request.Deadline.UnixNano() <= 0 {
+			return nil, protocolError(iwire.ErrInvalidCommand, "vector mutation deadline cannot be encoded")
+		}
+		deadline = uint64(request.Deadline.UnixNano())
+	}
+	payloadLen := uvarintLen(1) + encodedStringLenV1(request.Generation.Index) + uvarintLen(request.Generation.Generation) + uvarintLen(uint64(len(request.ID))) + len(request.ID) + uvarintLen(uint64(len(request.Vector))) + 4*len(request.Vector) + uvarintLen(uint64(len(request.Document))) + len(request.Document) + uvarintLen(deadline)
+	body, err := iwire.AppendSectionHeader(dst, iwire.SectionVectorInsertRequest, 0, payloadLen)
+	if err != nil {
+		return nil, err
+	}
+	body = binary.AppendUvarint(body, 1)
+	body = appendString(body, request.Generation.Index)
+	body = binary.AppendUvarint(body, request.Generation.Generation)
+	body = binary.AppendUvarint(body, uint64(len(request.ID)))
+	body = append(body, request.ID...)
+	body = binary.AppendUvarint(body, uint64(len(request.Vector)))
+	for _, value := range request.Vector {
+		body = binary.LittleEndian.AppendUint32(body, math.Float32bits(value))
+	}
+	body = binary.AppendUvarint(body, uint64(len(request.Document)))
+	body = append(body, request.Document...)
+	return binary.AppendUvarint(body, deadline), nil
+}
+
+func decodeVectorPartitionInsertRequestV1(src []byte, limits iwire.Limits) (public.InsertRequestV1, error) {
+	r := vectorPartitionWireReaderV1{src: src}
+	request := public.InsertRequestV1{}
+	version := r.u64()
+	if version != 1 && r.err == nil {
+		r.err = protocolError(iwire.ErrUnsupportedVersion, "unsupported vector mutation version")
+	} else {
+		request.Version = uint32(version)
+	}
+	request.Generation.Index, request.Generation.Generation = r.string(), r.u64()
+	maximum := maxInt
+	if limits.MaxSectionLen < uint64(maximum) {
+		maximum = int(limits.MaxSectionLen)
+	}
+	request.ID = r.bytes(maximum)
+	count := r.int()
+	if r.err == nil && (count <= 0 || count > limits.MaxByteVectorItems || count > (len(src)-r.off)/4) {
+		r.err = protocolError(iwire.ErrResourceExhausted, "vector mutation dimension exceeds bound")
+	}
+	if r.err == nil {
+		request.Vector = make([]float32, count)
+		for i := range request.Vector {
+			request.Vector[i] = r.float32()
+		}
+	}
+	request.Document = r.bytes(maximum)
+	if deadline := r.u64(); deadline > math.MaxInt64 {
+		r.err = protocolError(iwire.ErrInvalidCommand, "vector mutation deadline overflows time")
+	} else if deadline != 0 {
+		request.Deadline = time.Unix(0, int64(deadline))
+	}
+	if r.err == nil && (len(request.ID) == 0 || len(request.Document) == 0) {
+		r.err = protocolError(iwire.ErrInvalidCommand, "vector mutation id and document are required")
+	}
+	return request, r.done()
+}
+
+func appendVectorPartitionInsertResponseSectionV1(dst []byte, response public.InsertResponseV1) ([]byte, error) {
+	consensus := uint64(0)
+	if response.ProductionConsensus {
+		consensus = 1
+	}
+	values := []uint64{uint64(response.PartitionID), response.CommitTerm, response.CommitIndex, response.AppliedIndex, consensus, response.LiveRevision, response.VisibilityGeneration.Generation, response.Counters.Routes, response.Counters.Forwards, response.Counters.Commits, response.Counters.Replications, response.Counters.Applies, response.Counters.VisibilityProofs}
+	payloadLen := encodedStringLenV1(response.Generation.Index) + uvarintLen(response.Generation.Generation) + encodedStringLenV1(response.OwnerGroup) + encodedStringLenV1(response.VisibilityGeneration.Index) + encodedStringLenV1(response.VisibleID)
+	for _, value := range values {
+		payloadLen += uvarintLen(value)
+	}
+	body, err := iwire.AppendSectionHeader(dst, iwire.SectionVectorInsertResponse, 0, payloadLen)
+	if err != nil {
+		return nil, err
+	}
+	body = appendString(body, response.Generation.Index)
+	body = binary.AppendUvarint(body, response.Generation.Generation)
+	body = binary.AppendUvarint(body, uint64(response.PartitionID))
+	body = appendString(body, response.OwnerGroup)
+	for _, value := range values[1:6] {
+		body = binary.AppendUvarint(body, value)
+	}
+	body = appendString(body, response.VisibilityGeneration.Index)
+	body = binary.AppendUvarint(body, response.VisibilityGeneration.Generation)
+	body = appendString(body, response.VisibleID)
+	for _, value := range values[7:] {
+		body = binary.AppendUvarint(body, value)
+	}
+	return body, nil
+}
+
+func decodeVectorPartitionInsertResponseV1(src []byte) (public.InsertResponseV1, error) {
+	r := vectorPartitionWireReaderV1{src: src, ownedStrings: string(src)}
+	response := public.InsertResponseV1{}
+	response.Generation.Index, response.Generation.Generation = r.string(), r.u64()
+	partition := r.u64()
+	if partition > math.MaxUint32 && r.err == nil {
+		r.err = protocolError(iwire.ErrMalformedFrame, "vector partition id overflows uint32")
+	}
+	response.PartitionID = uint32(partition)
+	response.OwnerGroup = r.string()
+	response.CommitTerm, response.CommitIndex, response.AppliedIndex = r.u64(), r.u64(), r.u64()
+	consensus := r.u64()
+	if consensus > 1 && r.err == nil {
+		r.err = protocolError(iwire.ErrMalformedFrame, "vector consensus proof is not boolean")
+	}
+	response.ProductionConsensus, response.LiveRevision = consensus == 1, r.u64()
+	response.VisibilityGeneration.Index, response.VisibilityGeneration.Generation = r.string(), r.u64()
+	response.VisibleID = r.string()
+	response.Counters = public.MutationCountersV1{Routes: r.u64(), Forwards: r.u64(), Commits: r.u64(), Replications: r.u64(), Applies: r.u64(), VisibilityProofs: r.u64()}
+	return response, r.done()
 }
 
 func vectorPartitionServerErrorV1(err error) error {
@@ -320,6 +521,8 @@ func vectorPartitionServerErrorV1(err error) error {
 			code = iwire.ErrCanceled
 		case public.ErrorDeadlineExceededV1:
 			code = iwire.ErrTimeout
+		case public.ErrorCommitAmbiguousV1:
+			code = iwire.ErrCommitAmbiguous
 		}
 		if code == iwire.ErrInternal {
 			logDebug("vector operation failed: %v", err)
@@ -364,6 +567,8 @@ func vectorPartitionClientErrorV1(err error) error {
 		code, cause = public.ErrorCanceledV1, context.Canceled
 	case iwire.ErrTimeout:
 		code, cause = public.ErrorDeadlineExceededV1, context.DeadlineExceeded
+	case iwire.ErrCommitAmbiguous:
+		code = public.ErrorCommitAmbiguousV1
 	}
 	return &public.ErrorV1{Code: code, Err: cause}
 }
@@ -741,6 +946,23 @@ func (r *vectorPartitionWireReaderV1) string() string {
 		r.err = err
 	}
 	return value
+}
+
+func (r *vectorPartitionWireReaderV1) bytes(maximum int) []byte {
+	if r.err != nil {
+		return nil
+	}
+	length := r.u64()
+	if r.err != nil {
+		return nil
+	}
+	if length > uint64(maximum) || length > uint64(len(r.src)-r.off) {
+		r.err = protocolError(iwire.ErrResourceExhausted, "vector byte string exceeds bound")
+		return nil
+	}
+	start := r.off
+	r.off += int(length)
+	return r.src[start:r.off]
 }
 
 func (r *vectorPartitionWireReaderV1) float32() float32 {

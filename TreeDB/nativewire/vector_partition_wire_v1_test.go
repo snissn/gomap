@@ -115,6 +115,33 @@ func TestVectorPartitionWireV1RoundTrip(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(gotStatus, status) {
 		t.Fatal("decoded status aliases the reusable frame buffer")
 	}
+
+	insert := public.InsertRequestV1{
+		Version: 1, Generation: request.Generation, ID: []byte("doc-000003"), Vector: []float32{.25, .75},
+		Document: []byte(`{"embedding":[0.25,0.75]}`), Deadline: time.Unix(0, 223456789),
+	}
+	body, err = appendVectorPartitionInsertRequestSectionV1(nil, insert, limits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw = vectorPartitionTestSectionV1(t, body, iwire.SectionVectorInsertRequest, limits)
+	gotInsert, err := decodeVectorPartitionInsertRequestV1(raw, limits)
+	if err != nil || !reflect.DeepEqual(gotInsert, insert) {
+		t.Fatalf("insert request round trip = %+v, err=%v", gotInsert, err)
+	}
+	insertResponse := public.InsertResponseV1{
+		Generation: insert.Generation, PartitionID: 3, OwnerGroup: "group-b", CommitTerm: 4, CommitIndex: 5, AppliedIndex: 6,
+		ProductionConsensus: true, LiveRevision: 7, VisibilityGeneration: insert.Generation, VisibleID: string(insert.ID),
+		Counters: public.MutationCountersV1{Routes: 1, Forwards: 1, Commits: 1, Replications: 1, Applies: 1, VisibilityProofs: 1},
+	}
+	body, err = appendVectorPartitionInsertResponseSectionV1(nil, insertResponse)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotInsertResponse, err := decodeVectorPartitionInsertResponseV1(vectorPartitionTestSectionV1(t, body, iwire.SectionVectorInsertResponse, limits))
+	if err != nil || !reflect.DeepEqual(gotInsertResponse, insertResponse) {
+		t.Fatalf("insert response round trip = %+v, err=%v", gotInsertResponse, err)
+	}
 }
 
 func TestValidateVectorPartitionFastEvidenceV1(t *testing.T) {
@@ -267,6 +294,12 @@ func TestVectorPartitionNativeWireErrorMappingV1(t *testing.T) {
 	var publicErr *public.ErrorV1
 	if err := vectorPartitionClientErrorV1(&WireError{Code: iwire.ErrResourceExhausted, Message: "busy"}); !errors.As(err, &publicErr) || publicErr.Code != public.ErrorUnavailableV1 {
 		t.Fatalf("resource exhaustion mapping = %v", err)
+	}
+	if err := vectorPartitionServerErrorV1(&public.ErrorV1{Code: public.ErrorCommitAmbiguousV1, Err: errors.New("visibility proof failed")}); nativeCodeOf(err) != iwire.ErrCommitAmbiguous {
+		t.Fatalf("commit ambiguous server mapping = %v", err)
+	}
+	if err := vectorPartitionClientErrorV1(&WireError{Code: iwire.ErrCommitAmbiguous, Message: "commit outcome unknown"}); !errors.As(err, &publicErr) || publicErr.Code != public.ErrorCommitAmbiguousV1 {
+		t.Fatalf("commit ambiguous client mapping = %v", err)
 	}
 	client := &Client{limits: iwire.DefaultLimits()}
 	if _, err := client.VectorStatusV1(context.Background()); !errors.As(err, &publicErr) || publicErr.Code != public.ErrorInvalidRequestV1 {

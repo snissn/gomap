@@ -749,5 +749,12 @@ func v1CommandSchemas() []CommandSchema {
 			LocalOnly: true,
 			Sections:  []SectionRule{{ID: SectionDeadline, Name: "deadline", Required: true}},
 		},
+		{
+			ID: CommandVectorInsert, Version: 1, Name: "vector_insert", Kind: CommandKindMutation, LocalOnly: true,
+			Sections: []SectionRule{
+				{ID: SectionDeadline, Name: "deadline", Required: true},
+				{ID: SectionVectorInsertRequest, Name: "vector_insert_request", Required: true},
+			},
+		},
 	}
 }

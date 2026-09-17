@@ -11,6 +11,10 @@ func operationsRequestV1() SearchRequestV1 {
 	return SearchRequestV1{Version: 1, Generation: GenerationIDV1{Index: "embedding", Generation: 1}, Query: []float32{1}, Metric: MetricCosineV1, TopK: 1, Probes: 1, EfSearch: 1, Consistency: ConsistencyGenerationSnapshotV1, Limits: SearchLimitsV1{RequestBytes: 4, CandidateBytes: 1, ResponseBytes: 1, MergeEntries: 1}}
 }
 
+func operationsInsertRequestV1() InsertRequestV1 {
+	return InsertRequestV1{Version: 1, Generation: GenerationIDV1{Index: "embedding", Generation: 1}, ID: []byte("doc-1"), Vector: []float32{1}, Document: []byte(`{"embedding":[1]}`)}
+}
+
 func TestConservativeOperationsConfigV1CoversVectorPartitionBaseAndLiveMaxima(t *testing.T) {
 	const declaredCandidateFloor = uint64(64_000_000) + uint64(128<<10)*64 + uint64(256*4096)
 	config := ConservativeOperationsConfigV1()
@@ -69,6 +73,44 @@ func TestOperationsV1DefaultsOffAndCapsBeforeServiceV1(t *testing.T) {
 	}
 	if got := ops.Counters().CapTopK; got != 1 {
 		t.Fatalf("cap topk=%d", got)
+	}
+}
+
+func TestOperationsV1InsertAdmissionAndCountersV1(t *testing.T) {
+	backend := &serviceBackendV1{states: map[GenerationIDV1]GenerationStatusV1{}}
+	backend.insert = func(_ context.Context, request InsertRequestV1) (InsertResponseV1, error) {
+		return InsertResponseV1{
+			Generation: request.Generation, OwnerGroup: "group-b", CommitTerm: 1, CommitIndex: 2, AppliedIndex: 2,
+			ProductionConsensus: true, LiveRevision: 3, VisibilityGeneration: request.Generation, VisibleID: string(request.ID),
+			Counters: MutationCountersV1{Routes: 1, Forwards: 1, Commits: 1, Replications: 1, Applies: 1, VisibilityProofs: 1},
+		}, nil
+	}
+	service, err := NewServiceV1(backend)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := ConservativeOperationsConfigV1()
+	config.Enabled, config.MaxQueryBytes, config.MaxRequestBytes = true, 4, 128
+	operations, err := NewOperationsV1(service, config, func(context.Context) (OperationsHealthV1, error) {
+		return OperationsHealthV1{Ready: true}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := operations.Insert(t.Context(), operationsInsertRequestV1()); err != nil {
+		t.Fatal(err)
+	}
+	counters := operations.Counters()
+	if counters.Inserts != 1 || counters.MutationRoutes != 1 || counters.MutationForwards != 1 || counters.MutationCommits != 1 || counters.MutationReplications != 1 || counters.MutationApplies != 1 || counters.MutationVisibilityProofs != 1 {
+		t.Fatalf("mutation counters=%+v", counters)
+	}
+	tooLarge := operationsInsertRequestV1()
+	tooLarge.Vector = []float32{1, 2}
+	if _, err := operations.Insert(t.Context(), tooLarge); !hasOperationErrorCodeV1(err, ErrorInvalidRequestV1) {
+		t.Fatalf("oversized insert error=%v", err)
+	}
+	if counters := operations.Counters(); counters.CapQueryBytes != 1 || counters.Inserts != 1 {
+		t.Fatalf("admission counters=%+v", counters)
 	}
 }
 

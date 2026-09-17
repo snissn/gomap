@@ -348,6 +348,8 @@ func commandCounterName(id iwire.CommandID) string {
 		return "vector_search_pinned"
 	case iwire.CommandVectorClosePinnedSnapshot:
 		return "vector_close_pinned_snapshot"
+	case iwire.CommandVectorInsert:
+		return "vector_insert"
 	case iwire.CommandDenseVectorSearch:
 		return "dense_vector_search"
 	default:
