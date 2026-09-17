@@ -46,7 +46,8 @@ type ColumnGraphServingStats struct {
 
 // ColumnGraphServingAssetStats is the immutable persisted vector-state
 // inventory. It carries identities and sizes only; diagnostics never read or
-// expose vector payloads.
+// expose vector payloads. LogicalPayloadBytes is omitted for layouts whose
+// payload size cannot be derived from the manifest dimensions alone.
 type ColumnGraphServingAssetStats struct {
 	Role                string         `json:"role"`
 	AssetID             string         `json:"asset_id"`
@@ -56,6 +57,20 @@ type ColumnGraphServingAssetStats struct {
 	Bytes               int64          `json:"bytes"`
 	LogicalPayloadBytes int64          `json:"logical_payload_bytes,omitempty"`
 	Ref                 ColumnAssetRef `json:"ref"`
+}
+
+func columnGraphServingAssetLogicalPayloadBytes(asset columnVectorIndexStateAssetSnapshot, dimensions int) int64 {
+	switch asset.Role {
+	case columnVectorIndexStateAssetRoleNormalizedVectors:
+		return int64(asset.RowCount) * int64(dimensions) * 4
+	case columnVectorIndexStateAssetRoleQuantizedCodes:
+		if asset.LogicalType == columnVectorIndexStateLogicalTypeByteVector && asset.PhysicalEncoding == columnVectorIndexStateEncodingRawFixedBytes {
+			return int64(asset.RowCount) * int64(dimensions)
+		}
+	}
+	// Packed-bit codecs may pad or transform dimensions. Do not report their
+	// logical payload as a byte-vector plane; AssetBytes still reports storage.
+	return 0
 }
 
 // ColumnGraphServingPartStats identifies persisted typed-column parts so the
@@ -214,17 +229,10 @@ func (c *Collection) ColumnGraphServingSnapshot() (out ColumnGraphServingStats, 
 			if view.VectorIndexStateFound {
 				out.VectorAssets = make([]ColumnGraphServingAssetStats, len(view.VectorIndexState.Assets))
 				for i, asset := range view.VectorIndexState.Assets {
-					logicalPayloadBytes := int64(0)
-					switch asset.Role {
-					case columnVectorIndexStateAssetRoleNormalizedVectors:
-						logicalPayloadBytes = int64(asset.RowCount) * int64(view.VectorIndexState.Dimensions) * 4
-					case columnVectorIndexStateAssetRoleQuantizedCodes:
-						logicalPayloadBytes = int64(asset.RowCount) * int64(view.VectorIndexState.Dimensions)
-					}
 					out.VectorAssets[i] = ColumnGraphServingAssetStats{
 						Role: asset.Role, AssetID: asset.AssetID, LogicalType: asset.LogicalType,
 						PhysicalEncoding: asset.PhysicalEncoding, Rows: asset.RowCount,
-						Bytes: asset.AssetBytes, LogicalPayloadBytes: logicalPayloadBytes, Ref: asset.Ref,
+						Bytes: asset.AssetBytes, LogicalPayloadBytes: columnGraphServingAssetLogicalPayloadBytes(asset, view.VectorIndexState.Dimensions), Ref: asset.Ref,
 					}
 				}
 			}

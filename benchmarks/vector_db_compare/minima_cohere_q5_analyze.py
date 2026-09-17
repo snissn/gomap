@@ -3536,7 +3536,7 @@ def _normalized_validate_events(path, plan, mode, canonical_truth, original_trut
            for before, after in zip(fixed, reopened)):
         raise EvidenceError(f"normalized-v4 {mode} post-reopen search decisions changed")
     quality = {request_mode: [] for request_mode in expected_modes}
-    for event in fixed + reopened:
+    for position, event in enumerate(fixed + reopened):
         request_mode, eligible, query = event.get("request_mode"), event.get("eligible"), event.get("query")
         ids, scores = event.get("ids"), event.get("scores")
         if (request_mode not in expected_modes or eligible not in FULL_ELIGIBLE_COUNTS
@@ -3577,7 +3577,7 @@ def _normalized_validate_events(path, plan, mode, canonical_truth, original_trut
                     or proof.get("packed_score_candidates")
                         != event["route_identity"].get("packed_score_candidates")):
                 raise EvidenceError("normalized-v4 SQ8 diagnostic proof is not packed")
-        if event in fixed and eligible == 500000:
+        if position < len(fixed) and eligible == 500000:
             quality[request_mode].append(recall)
 
     overlap = [row for row in searches if row.get("phase") == "overlap_search"]

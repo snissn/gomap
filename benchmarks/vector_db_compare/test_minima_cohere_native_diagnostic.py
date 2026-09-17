@@ -285,6 +285,27 @@ class NativeCohereDiagnosticTests(unittest.TestCase):
             self.assertEqual(receipt["state"], "unavailable")
             self.assertEqual(receipt["reasons"], ["cgroup_cpu_quota"])
 
+            for value in (None, "", "invalid", "0", "-1", "+2", " 2", 2, True, "²"):
+                with self.subTest(gomaxprocs=value):
+                    invalid = copy.deepcopy(plan)
+                    if value is None:
+                        invalid.pop("gomaxprocs")
+                    else:
+                        invalid["gomaxprocs"] = value
+                    with patch.object(
+                            diagnostic.shutil, "disk_usage",
+                            return_value=SimpleNamespace(free=22 * diagnostic.GIB)):
+                        receipt = diagnostic.normalized_v4_infrastructure_receipt(invalid)
+                    self.assertEqual(receipt["state"], "unavailable")
+                    self.assertEqual(receipt["reasons"], ["cgroup_cpu_quota"])
+                    invalid["rows"] = 512
+                    with patch.object(
+                            diagnostic.shutil, "disk_usage",
+                            return_value=SimpleNamespace(free=22 * diagnostic.GIB)):
+                        receipt = diagnostic.normalized_v4_infrastructure_receipt(invalid)
+                    self.assertEqual(receipt["state"], "available")
+                    self.assertEqual(receipt["requirements"]["minimum_cpu_quota_millis"], 1000)
+
     def test_v4_production_matrix_requires_one_immutable_publication(self):
         identity = {
             "schema_hash": 11,

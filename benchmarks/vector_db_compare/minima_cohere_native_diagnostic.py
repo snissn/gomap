@@ -1547,13 +1547,19 @@ def normalized_v4_infrastructure_receipt(plan):
         effective = normalized_v4_effective_resources(plan)
     except (KeyError, TypeError, ValueError):
         effective = {"effective_memory_bytes": 0, "effective_cpu_quota_millis": 0}
-    try:
-        required_cpu_millis = (int(plan["gomaxprocs"]) * 1000) if full else 1000
-    except (KeyError, TypeError, ValueError):
-        required_cpu_millis = 1
+    required_cpu_millis = 1000
+    if full:
+        gomaxprocs = plan.get("gomaxprocs")
+        try:
+            required_cpu_millis = (int(gomaxprocs) * 1000
+                                   if isinstance(gomaxprocs, str) and gomaxprocs.isdigit()
+                                   else None)
+        except ValueError:
+            required_cpu_millis = None
     checks = {
         "cpu_affinity": bool(plan["cpu_affinity"]),
-        "cgroup_cpu_quota": effective["effective_cpu_quota_millis"] >= required_cpu_millis,
+        "cgroup_cpu_quota": (required_cpu_millis is not None and required_cpu_millis > 0
+                             and effective["effective_cpu_quota_millis"] >= required_cpu_millis),
         "cgroup_memory": effective["effective_memory_bytes"] >= required_memory,
         "disk_headroom": disk_headroom,
         "host_memory": host_memory,

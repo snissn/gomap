@@ -129,14 +129,8 @@ func TestCosineNormalizedF32CampaignJSON(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want, err := os.ReadFile("testdata/cosine_normalized_f32_campaign.json")
-	if err != nil {
-		t.Fatal(err)
-	}
 	var decoded cosineNormalizedF32CampaignDiagnostic
-	if err := json.Unmarshal(want, &decoded); err != nil {
-		t.Fatal(err)
-	}
+	readCosineNormalizedF32CampaignJSON(t, "testdata/cosine_normalized_f32_campaign.json", &decoded)
 	roundtrip, err := json.Marshal(decoded)
 	if err != nil {
 		t.Fatal(err)
