@@ -325,7 +325,7 @@ class TreeDBLinuxRaceHeadroomTest(unittest.TestCase):
         self.assertIn("treedb_race_weighted_shards.tsv", race_job)
         self.assertIn("grep -v '^github.com/snissn/gomap/TreeDB/collections$'", race_job)
         self.assertIn(
-            "go test -json -race -p 1 -timeout 12m ./collections",
+            "go test -json -race -p 1 -timeout 20m ./collections",
             race_job,
         )
         self.assertIn("grep -v '^TestVacuumRaceMissingKey$'", race_job)
