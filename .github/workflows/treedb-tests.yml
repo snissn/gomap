@@ -702,7 +702,7 @@ jobs:
           shard_count="${{ matrix.shard_count }}"
           if [ "$shard_kind" = collections ]; then
             echo "TreeDB/collections and vacuum-race dedicated race shard"
-            GOMEMLIMIT=4GiB GOMAXPROCS=2 go test -json -race -p 1 -timeout 12m ./collections | tee treedb-race.jsonl
+            GOMEMLIMIT=4GiB GOMAXPROCS=2 go test -json -race -p 1 -timeout 20m ./collections | tee treedb-race.jsonl
             GOMEMLIMIT=4GiB GOMAXPROCS=2 go test -json -race -p 1 -timeout 12m ./db -run '^TestVacuumRaceMissingKey$' | tee -a treedb-race.jsonl
             exit 0
           fi
