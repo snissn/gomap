@@ -230,6 +230,9 @@ func validateFixedPeerConfigV1(c FixedPeerTCPConfigV1) (FixedPeerTCPConfigV1, st
 	if !localGroups[c.Catalog.ID] {
 		return invalid("every runtime must join the shared catalog")
 	}
+	if raftcluster.FeatureSetRequiresV1(c.Catalog.Features, raftcluster.FeatureVectorPartitionLifecycle) != (c.Vector != nil) {
+		return invalid("vector runtime and catalog lifecycle feature must be enabled together")
+	}
 	if len(localGroups) != len(c.RaftListen) {
 		return invalid("listen map must match hosted groups")
 	}
@@ -389,13 +392,14 @@ func OpenFixedPeerTCPRuntimeV1(config FixedPeerTCPConfigV1) (*FixedPeerTCPRuntim
 		return fail(err)
 	}
 	r.server = &http.Server{Handler: http.HandlerFunc(r.serve), ReadHeaderTimeout: r.config.RequestTimeout, ReadTimeout: r.config.RequestTimeout, WriteTimeout: 2 * r.config.RequestTimeout, IdleTimeout: r.config.RequestTimeout, MaxHeaderBytes: 4096}
-	go func() { _ = r.server.Serve(r.listener) }()
 	if r.config.Vector != nil {
 		r.vector, err = openFixedPeerVectorRuntimeV1(r)
 		if err != nil {
 			return fail(err)
 		}
+		r.vector.start()
 	}
+	go func() { _ = r.server.Serve(r.listener) }()
 	return r, nil
 }
 
@@ -602,7 +606,7 @@ func (r *FixedPeerTCPRuntimeV1) serve(w http.ResponseWriter, request *http.Reque
 	// each stage bounded capacity so callers cannot starve their own callees.
 	requests := r.requests
 	switch request.URL.Path {
-	case "/v1/forward":
+	case "/v1/forward", "/v1/vector-forward", "/v1/vector-lifecycle":
 		requests = r.forwards
 	case "/v1/status", "/v1/catalog-read":
 		requests = r.reads
@@ -659,6 +663,8 @@ func (r *FixedPeerTCPRuntimeV1) serve(w http.ResponseWriter, request *http.Reque
 		}
 		response, applyErr := r.applyVectorInsertV1(ctx, *body.VectorInsert)
 		reply.VectorInsert, err = &response, applyErr
+	case "/v1/vector-lifecycle":
+		reply.Catalog, err = r.ensureVectorLifecycleLeaderV1(ctx)
 	case "/v1/vector-search":
 		if body.VectorSearch == nil {
 			err = ErrFixedPeerVectorProofMissingV1

@@ -125,6 +125,57 @@ func TestVectorIndexPartitionLiveMutationMoveAndDeleteV1(t *testing.T) {
 	}
 }
 
+func TestVectorIndexPartitionLiveSearchPinContainsImmutableLiveIDV1(t *testing.T) {
+	idx, err := newVectorIndex(nil, VectorIndexOptions{
+		Name: "embedding", Field: "embedding", Metric: VectorMetricCosine,
+		Dimensions: 2, M: 4, EfConstruction: 16, EfSearch: 8,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest := VectorPartitionManifestV1{
+		IndexName: "embedding", IndexDefinitionDigest: "definition",
+		SourceGeneration: 3, SourceChecksum: 4, SourceSchemaHash: 5, SourceRowCount: 1,
+		Generation: 7, DomainCount: 1, PartitionCount: 1,
+		DomainPacks: []VectorPartitionDomainPackV1{{DomainID: 0, PackID: 0}},
+	}
+	if err := idx.bindVectorPartitionLiveV1(manifest, manifest.SourceGeneration, []vectorPartitionLiveRepresentativeV1{{domain: 0, vector: []float32{1, 0}}}); err != nil {
+		t.Fatal(err)
+	}
+	idx.mu.Lock()
+	err = idx.reconcileVectorPartitionMutationLocked([]byte("doc"), []float32{1, 0})
+	idx.mu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldPin, err := idx.acquireVectorPartitionLiveSearchPinV1(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !oldPin.ContainsLiveIDV1("doc") || oldPin.ContainsLiveIDV1("missing") {
+		t.Fatalf("initial live membership: doc=%t missing=%t", oldPin.ContainsLiveIDV1("doc"), oldPin.ContainsLiveIDV1("missing"))
+	}
+
+	idx.mu.Lock()
+	err = idx.reconcileVectorPartitionMutationLocked([]byte("doc"), nil)
+	idx.mu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	newPin, err := idx.acquireVectorPartitionLiveSearchPinV1(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer newPin.Release()
+	if !oldPin.ContainsLiveIDV1("doc") || newPin.ContainsLiveIDV1("doc") {
+		t.Fatalf("pin membership was not immutable: old=%t new=%t", oldPin.ContainsLiveIDV1("doc"), newPin.ContainsLiveIDV1("doc"))
+	}
+	oldPin.Release()
+	if oldPin.ContainsLiveIDV1("doc") {
+		t.Fatal("released pin retained live membership")
+	}
+}
+
 func TestVectorIndexPartitionLiveNativeDeltaTouchesOnlyChangedRecordsV2(t *testing.T) {
 	idx, err := newVectorIndex(nil, VectorIndexOptions{
 		Name: "embedding", Field: "embedding", Metric: VectorMetricCosine,

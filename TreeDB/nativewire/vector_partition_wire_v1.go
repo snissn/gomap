@@ -98,7 +98,10 @@ func (c *Client) VectorInsertV1(ctx context.Context, request public.InsertReques
 		return public.InsertResponseV1{}, vectorPartitionMutationClientErrorV1(err)
 	}
 	response, err := decodeVectorPartitionInsertResponseV1(encoded)
-	if err == nil && (response.Generation != request.Generation || response.VisibilityGeneration != request.Generation || response.VisibleID != string(request.ID)) {
+	if err == nil {
+		err = public.ValidateInsertResponseV1(request, response)
+	}
+	if err != nil {
 		err = protocolError(iwire.ErrMalformedFrame, "vector insert response does not match request")
 	}
 	return response, vectorPartitionMutationClientErrorV1(err)
@@ -391,7 +394,7 @@ func appendVectorPartitionInsertCommandBodyV1(dst []byte, request public.InsertR
 }
 
 func appendVectorPartitionInsertRequestSectionV1(dst []byte, request public.InsertRequestV1, limits iwire.Limits) ([]byte, error) {
-	if request.Version != 1 || request.Generation.Index == "" || request.Generation.Generation == 0 || len(request.ID) == 0 || len(request.Vector) == 0 || len(request.Vector) > limits.MaxByteVectorItems || len(request.Document) == 0 || uint64(len(request.ID)) > limits.MaxSectionLen || uint64(len(request.Document)) > limits.MaxSectionLen || len(request.Vector) > maxInt/4 {
+	if request.Version != 1 || request.Generation.Index == "" || request.Generation.Generation == 0 || len(request.IdempotencyKey) == 0 || len(request.ID) == 0 || len(request.Vector) == 0 || len(request.Vector) > limits.MaxByteVectorItems || len(request.Document) == 0 || uint64(len(request.IdempotencyKey)) > limits.MaxSectionLen || uint64(len(request.ID)) > limits.MaxSectionLen || uint64(len(request.Document)) > limits.MaxSectionLen || len(request.Vector) > maxInt/4 {
 		return nil, protocolError(iwire.ErrInvalidCommand, "vector insert request cannot be encoded")
 	}
 	deadline := uint64(0)
@@ -401,7 +404,7 @@ func appendVectorPartitionInsertRequestSectionV1(dst []byte, request public.Inse
 		}
 		deadline = uint64(request.Deadline.UnixNano())
 	}
-	payloadLen := uvarintLen(1) + encodedStringLenV1(request.Generation.Index) + uvarintLen(request.Generation.Generation) + uvarintLen(uint64(len(request.ID))) + len(request.ID) + uvarintLen(uint64(len(request.Vector))) + 4*len(request.Vector) + uvarintLen(uint64(len(request.Document))) + len(request.Document) + uvarintLen(deadline)
+	payloadLen := uvarintLen(1) + encodedStringLenV1(request.Generation.Index) + uvarintLen(request.Generation.Generation) + uvarintLen(uint64(len(request.IdempotencyKey))) + len(request.IdempotencyKey) + uvarintLen(uint64(len(request.ID))) + len(request.ID) + uvarintLen(uint64(len(request.Vector))) + 4*len(request.Vector) + uvarintLen(uint64(len(request.Document))) + len(request.Document) + uvarintLen(deadline)
 	body, err := iwire.AppendSectionHeader(dst, iwire.SectionVectorInsertRequest, 0, payloadLen)
 	if err != nil {
 		return nil, err
@@ -409,6 +412,8 @@ func appendVectorPartitionInsertRequestSectionV1(dst []byte, request public.Inse
 	body = binary.AppendUvarint(body, 1)
 	body = appendString(body, request.Generation.Index)
 	body = binary.AppendUvarint(body, request.Generation.Generation)
+	body = binary.AppendUvarint(body, uint64(len(request.IdempotencyKey)))
+	body = append(body, request.IdempotencyKey...)
 	body = binary.AppendUvarint(body, uint64(len(request.ID)))
 	body = append(body, request.ID...)
 	body = binary.AppendUvarint(body, uint64(len(request.Vector)))
@@ -434,6 +439,7 @@ func decodeVectorPartitionInsertRequestV1(src []byte, limits iwire.Limits) (publ
 	if limits.MaxSectionLen < uint64(maximum) {
 		maximum = int(limits.MaxSectionLen)
 	}
+	request.IdempotencyKey = r.bytes(maximum)
 	request.ID = r.bytes(maximum)
 	count := r.int()
 	if r.err == nil && (count <= 0 || count > limits.MaxByteVectorItems || count > (len(src)-r.off)/4) {
@@ -451,8 +457,8 @@ func decodeVectorPartitionInsertRequestV1(src []byte, limits iwire.Limits) (publ
 	} else if deadline != 0 {
 		request.Deadline = time.Unix(0, int64(deadline))
 	}
-	if r.err == nil && (len(request.ID) == 0 || len(request.Document) == 0) {
-		r.err = protocolError(iwire.ErrInvalidCommand, "vector mutation id and document are required")
+	if r.err == nil && (len(request.IdempotencyKey) == 0 || len(request.ID) == 0 || len(request.Document) == 0) {
+		r.err = protocolError(iwire.ErrInvalidCommand, "vector mutation idempotency key, id, and document are required")
 	}
 	return request, r.done()
 }

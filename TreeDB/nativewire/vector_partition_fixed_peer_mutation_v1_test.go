@@ -1,6 +1,7 @@
 package nativewire
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"net"
@@ -157,8 +158,18 @@ func (f fixedPeerVectorReadyFixtureV1) RequireOwnerReplication(t testing.TB, ctx
 
 func (f fixedPeerVectorReadyFixtureV1) RequireNoWrongGroupMutation(t testing.TB, _ context.Context, ids ...[]byte) {
 	t.Helper()
-	f.processes[0].stop(t)
-	database, err := backenddb.Open(backenddb.Options{Dir: filepath.Join(f.configs[0].DataRoot, "group-a"), CommandWAL: true})
+	ingress := -1
+	for i := range f.configs {
+		if f.configs[i].NodeID == "ingress" {
+			ingress = i
+			break
+		}
+	}
+	if ingress < 0 {
+		t.Fatal("ingress config is missing")
+	}
+	f.processes[ingress].stop(t)
+	database, err := backenddb.Open(backenddb.Options{Dir: filepath.Join(f.configs[ingress].DataRoot, "group-a"), CommandWAL: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -249,14 +260,14 @@ func TestVectorPartitionSystemNativeFourDaemonRemoteWriteRoutesAppliesAndBecomes
 	defer ownerClient.Close()
 	stale := public.InsertRequestV1{
 		Version: 1, Generation: public.GenerationIDV1{Index: fixture.Generation.Index, Generation: fixture.Generation.Generation + 1},
-		ID: []byte("reject-stale-generation"), Vector: []float32{0, 1}, Document: []byte(`{"embedding":[0,1]}`), Deadline: time.Now().Add(30 * time.Second),
+		IdempotencyKey: []byte("reject-stale-generation"), ID: []byte("reject-stale-generation"), Vector: []float32{0, 1}, Document: []byte(`{"embedding":[0,1]}`), Deadline: time.Now().Add(30 * time.Second),
 	}
 	if _, err := client.VectorInsertV1(ctx, stale); !hasPublicVectorErrorCodeV1(err, public.ErrorGenerationMismatchV1) {
 		t.Fatalf("stale generation error=%v", err)
 	}
 	mismatch := public.InsertRequestV1{
 		Version: 1, Generation: fixture.Generation,
-		ID: []byte("reject-document-mismatch"), Vector: []float32{0, 1}, Document: []byte(`{"embedding":[1,0]}`), Deadline: time.Now().Add(30 * time.Second),
+		IdempotencyKey: []byte("reject-document-mismatch"), ID: []byte("reject-document-mismatch"), Vector: []float32{0, 1}, Document: []byte(`{"embedding":[1,0]}`), Deadline: time.Now().Add(30 * time.Second),
 	}
 	if _, err := client.VectorInsertV1(ctx, mismatch); !hasPublicVectorErrorCodeV1(err, public.ErrorInvalidRequestV1) {
 		t.Fatalf("document mismatch error=%v", err)
@@ -266,7 +277,7 @@ func TestVectorPartitionSystemNativeFourDaemonRemoteWriteRoutesAppliesAndBecomes
 	}
 	private := VectorPartitionRoutedInsertV1{
 		Request: public.InsertRequestV1{
-			Version: 1, Generation: fixture.Generation, ID: []byte("reject-stale-catalog"), Vector: []float32{0, 1},
+			Version: 1, Generation: fixture.Generation, IdempotencyKey: []byte("reject-stale-catalog"), ID: []byte("reject-stale-catalog"), Vector: []float32{0, 1},
 			Document: []byte(`{"embedding":[0,1]}`), Deadline: time.Now().Add(30 * time.Second),
 		},
 		Identity: fixture.configs[0].Vector.Identity,
@@ -298,12 +309,13 @@ func TestVectorPartitionSystemNativeFourDaemonRemoteWriteRoutesAppliesAndBecomes
 	}
 	started := time.Now()
 	result, err := client.VectorInsertV1(ctx, public.InsertRequestV1{
-		Version:    1,
-		Generation: fixture.Generation,
-		ID:         []byte("remote-visible"),
-		Vector:     []float32{0, 1},
-		Document:   []byte(`{"embedding":[0,1],"kind":"remote-visible"}`),
-		Deadline:   time.Now().Add(30 * time.Second),
+		Version:        1,
+		Generation:     fixture.Generation,
+		IdempotencyKey: []byte("remote-visible-attempt-1"),
+		ID:             []byte("remote-visible"),
+		Vector:         []float32{0, 1},
+		Document:       []byte(`{"embedding":[0,1],"kind":"remote-visible"}`),
+		Deadline:       time.Now().Add(30 * time.Second),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -458,7 +470,9 @@ func fixedPeerVectorSeedV1(t testing.TB) fixedPeerVectorSeedFixtureV1 {
 		Features: features,
 		Groups: []raftplacement.GroupV1{
 			{ID: "group-a", Members: []raftcluster.NodeID{"ingress"}, LeaderHint: "ingress"},
-			{ID: "group-b", Members: []raftcluster.NodeID{"owner-1", "owner-2", "owner-3"}, LeaderHint: "owner-1"},
+			// Keep the placement hint deliberately different from the Raft
+			// bootstrap node so the system proof cannot rely on static ownership.
+			{ID: "group-b", Members: []raftcluster.NodeID{"owner-1", "owner-2", "owner-3"}, LeaderHint: "owner-3"},
 		},
 		Placements: []raftplacement.CollectionPlacementV1{{Collection: ref, GroupID: "group-b", Mode: raftplacement.PlacementModeCollectionV1}},
 	}
@@ -635,5 +649,34 @@ func TestFixedPeerVectorTestConfigIsFourDaemonsAndThreeOwnerVotersV1(t *testing.
 		if config.Vector == nil || config.Vector.PublicAddresses[config.NodeID] == "" {
 			t.Fatalf("missing vector endpoint for %s", config.NodeID)
 		}
+	}
+}
+
+func TestFixedPeerVectorConfigRequiresCatalogLifecycleFeatureV1(t *testing.T) {
+	configs := fixedPeerVectorTestConfigsV1(t, fixedPeerVectorSeedV1(t))
+	config := configs[0]
+	config.Catalog.Features.Required = []raftcluster.RequiredFeature{{Name: raftcluster.FeatureCatalogMetaAuthority, Version: raftcluster.SupportedFeatureFloors[raftcluster.FeatureCatalogMetaAuthority]}}
+	if _, _, err := validateFixedPeerConfigV1(config); err == nil {
+		t.Fatal("vector config without catalog lifecycle feature was accepted")
+	}
+}
+
+func TestFixedPeerVectorInsertEntryUsesCallerAttemptIdentityV1(t *testing.T) {
+	request := VectorPartitionRoutedInsertV1{Request: public.InsertRequestV1{
+		Version: 1, Generation: public.GenerationIDV1{Index: "embedding", Generation: 7},
+		IdempotencyKey: []byte("attempt-1"), ID: []byte("doc"), Vector: []float32{1}, Document: []byte(`{"embedding":[1]}`),
+	}, Identity: raftplacement.VectorPartitionLifecycleIdentityV1{Index: raftplacement.VectorPartitionLifecycleIndexIdentityV1{IndexName: "embedding"}, Generation: 7}}
+	first, _, err := fixedPeerVectorInsertEntryV1("docs", collections.DocumentFormatJSON, 1, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replay, _, err := fixedPeerVectorInsertEntryV1("docs", collections.DocumentFormatJSON, 1, request)
+	if err != nil || !bytes.Equal(first, replay) {
+		t.Fatalf("same attempt changed entry: err=%v", err)
+	}
+	request.Request.IdempotencyKey = []byte("attempt-2")
+	next, _, err := fixedPeerVectorInsertEntryV1("docs", collections.DocumentFormatJSON, 1, request)
+	if err != nil || bytes.Equal(first, next) {
+		t.Fatalf("new attempt reused entry: err=%v", err)
 	}
 }

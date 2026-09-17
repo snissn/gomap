@@ -12,7 +12,7 @@ func operationsRequestV1() SearchRequestV1 {
 }
 
 func operationsInsertRequestV1() InsertRequestV1 {
-	return InsertRequestV1{Version: 1, Generation: GenerationIDV1{Index: "embedding", Generation: 1}, ID: []byte("doc-1"), Vector: []float32{1}, Document: []byte(`{"embedding":[1]}`)}
+	return InsertRequestV1{Version: 1, Generation: GenerationIDV1{Index: "embedding", Generation: 1}, IdempotencyKey: []byte("attempt-1"), ID: []byte("doc-1"), Vector: []float32{1}, Document: []byte(`{"embedding":[1]}`)}
 }
 
 func TestConservativeOperationsConfigV1CoversVectorPartitionBaseAndLiveMaxima(t *testing.T) {

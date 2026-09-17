@@ -149,7 +149,7 @@ func TestServiceV1InsertRequiresCompleteEvidenceAndClonesV1(t *testing.T) {
 	id := GenerationIDV1{Index: "embedding", Generation: 7}
 	backend := &serviceBackendV1{states: map[GenerationIDV1]GenerationStatusV1{}}
 	backend.insert = func(_ context.Context, request InsertRequestV1) (InsertResponseV1, error) {
-		request.ID[0], request.Vector[0], request.Document[0] = 'x', 9, 'x'
+		request.IdempotencyKey[0], request.ID[0], request.Vector[0], request.Document[0] = 'x', 'x', 9, 'x'
 		return InsertResponseV1{
 			Generation: id, PartitionID: 2, OwnerGroup: "group-b", CommitTerm: 3, CommitIndex: 4, AppliedIndex: 5,
 			ProductionConsensus: true, LiveRevision: 6, VisibilityGeneration: id, VisibleID: "doc-1",
@@ -160,12 +160,12 @@ func TestServiceV1InsertRequiresCompleteEvidenceAndClonesV1(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := InsertRequestV1{Version: 1, Generation: id, ID: []byte("doc-1"), Vector: []float32{1, 0}, Document: []byte(`{"embedding":[1,0]}`)}
+	request := InsertRequestV1{Version: 1, Generation: id, IdempotencyKey: []byte("attempt-1"), ID: []byte("doc-1"), Vector: []float32{1, 0}, Document: []byte(`{"embedding":[1,0]}`)}
 	response, err := service.Insert(t.Context(), request)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if response.AppliedIndex != 5 || request.ID[0] != 'd' || request.Vector[0] != 1 || request.Document[0] != '{' {
+	if response.AppliedIndex != 5 || request.IdempotencyKey[0] != 'a' || request.ID[0] != 'd' || request.Vector[0] != 1 || request.Document[0] != '{' {
 		t.Fatalf("response=%+v request aliases backend=%+v", response, request)
 	}
 	backend.insert = func(context.Context, InsertRequestV1) (InsertResponseV1, error) {

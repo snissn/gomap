@@ -108,10 +108,13 @@ type SearchResponseV1 struct {
 type InsertRequestV1 struct {
 	Version    uint32
 	Generation GenerationIDV1
-	ID         []byte
-	Vector     []float32
-	Document   []byte
-	Deadline   time.Time
+	// IdempotencyKey identifies one logical mutation attempt. Callers must
+	// preserve it across retries and use a new key for a later reinsertion.
+	IdempotencyKey []byte
+	ID             []byte
+	Vector         []float32
+	Document       []byte
+	Deadline       time.Time
 }
 
 // MutationCountersV1 are stable, per-request proof counters. A successful
@@ -237,7 +240,7 @@ func (s *ServiceV1) Insert(ctx context.Context, request InsertRequestV1) (Insert
 	if err != nil {
 		return InsertResponseV1{}, classifyErrorV1(requestCtx, err)
 	}
-	if err := validateInsertResponseV1(request, response); err != nil {
+	if err := ValidateInsertResponseV1(request, response); err != nil {
 		return InsertResponseV1{}, err
 	}
 	return response, nil
@@ -377,8 +380,8 @@ func validateInsertRequestV1(ctx context.Context, r InsertRequestV1) error {
 	if err := validateGenerationV1(ctx, r.Generation); err != nil {
 		return err
 	}
-	if r.Version != 1 || len(r.ID) == 0 || len(r.Vector) == 0 || len(r.Document) == 0 {
-		return invalidV1("version, generation, id, vector, and document are required")
+	if r.Version != 1 || len(r.IdempotencyKey) == 0 || len(r.ID) == 0 || len(r.Vector) == 0 || len(r.Document) == 0 {
+		return invalidV1("version, generation, idempotency key, id, vector, and document are required")
 	}
 	if !r.Deadline.IsZero() && !time.Now().Before(r.Deadline) {
 		return &ErrorV1{Code: ErrorDeadlineExceededV1, Err: context.DeadlineExceeded}
@@ -386,12 +389,16 @@ func validateInsertRequestV1(ctx context.Context, r InsertRequestV1) error {
 	return nil
 }
 func cloneInsertRequestV1(r InsertRequestV1) InsertRequestV1 {
+	r.IdempotencyKey = slices.Clone(r.IdempotencyKey)
 	r.ID = slices.Clone(r.ID)
 	r.Vector = slices.Clone(r.Vector)
 	r.Document = slices.Clone(r.Document)
 	return r
 }
-func validateInsertResponseV1(request InsertRequestV1, response InsertResponseV1) error {
+
+// ValidateInsertResponseV1 verifies the complete proof returned for a public
+// mutation request. Transports use the same validator as the in-process API.
+func ValidateInsertResponseV1(request InsertRequestV1, response InsertResponseV1) error {
 	if response.Generation != request.Generation || response.VisibilityGeneration != request.Generation || response.OwnerGroup == "" || response.CommitTerm == 0 || response.CommitIndex == 0 || response.AppliedIndex < response.CommitIndex || !response.ProductionConsensus || response.LiveRevision == 0 || response.VisibleID != string(request.ID) {
 		return &ErrorV1{Code: ErrorFailedV1, Err: errors.New("backend returned invalid vector mutation response")}
 	}

@@ -785,7 +785,7 @@ is terminal for the named cursor but not for the connection.
 66 vector_insert
 ```
 
-These are connection-local read commands and never deterministic mutation or
+Commands 58-63 are connection-local reads and never deterministic mutation or
 command-WAL entries. Every command requires the generic `deadline` section and
 uses the existing native-wire framing, bounded operation context,
 connection limits, cancellation, and error frames. Their direct binary sections
@@ -813,8 +813,8 @@ semantics; native wire changes only the transport representation.
 
 `vector_insert` is the narrow LocalOnly public mutation route. It requires the
 generic `deadline` section and `vector_insert_request` (137). The request binds
-one exact document ID, generation, FP32 routing vector, JSON document, and
-deadline. The server selects exactly one partition owner, revalidates catalog,
+one mutation-attempt idempotency key, exact document ID, generation, FP32
+routing vector, JSON document, and deadline. The server selects exactly one partition owner, revalidates catalog,
 lifecycle, router, document/vector, and leader proofs at that owner, then lowers
 the mutation to the existing deterministic insert-batch entry for the owning
 Raft group. Command 66 is never itself encoded as a replicated entry.

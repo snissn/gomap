@@ -11,6 +11,7 @@ import (
 	"reflect"
 	"slices"
 	"sync"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/collections"
 	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
@@ -212,6 +213,18 @@ func (r *fixedPeerVectorRuntimeV1) Close() error {
 	return r.closeErr
 }
 
+func (r *fixedPeerVectorRuntimeV1) start() {
+	go func() {
+		for {
+			conn, err := r.listener.Accept()
+			if err != nil {
+				return
+			}
+			go func() { _ = r.server.ServeConn(context.Background(), conn) }()
+		}
+	}()
+}
+
 func openFixedPeerVectorRuntimeV1(parent *FixedPeerTCPRuntimeV1) (*fixedPeerVectorRuntimeV1, error) {
 	if parent == nil || parent.config.Vector == nil {
 		return nil, ErrFixedPeerVectorUnavailableV1
@@ -265,15 +278,6 @@ func openFixedPeerVectorRuntimeV1(parent *FixedPeerTCPRuntimeV1) (*fixedPeerVect
 		return nil, err
 	}
 	runtime.server = NewServer(ServerOptions{VectorPartitionOperations: ops, VectorPartitionNodeConfigSHA256: parent.client.digest, ConnectionIdleTimeout: parent.config.RequestTimeout})
-	go func() {
-		for {
-			conn, acceptErr := listener.Accept()
-			if acceptErr != nil {
-				return
-			}
-			go func() { _ = runtime.server.ServeConn(context.Background(), conn) }()
-		}
-	}()
 	return runtime, nil
 }
 
@@ -301,41 +305,38 @@ func (r *fixedPeerVectorRuntimeV1) ensureBackendV1(ctx context.Context) (*Vector
 	if err := resolved.ValidateVectorPartitionPlacementV1(vector.Placement); err != nil {
 		return nil, errors.Join(ErrFixedPeerVectorUnavailableV1, err)
 	}
-	owners := fixedPeerVectorOwnerGroupsV1(vector.Placement)
-	if len(owners) != 1 {
-		return nil, errors.Join(ErrFixedPeerVectorUnavailableV1, errors.New("fixed-peer routed vector mutation requires exactly one owner group"))
+	owners, ready, err := fixedPeerVectorLifecycleSpecV1(vector)
+	if err != nil {
+		return nil, err
 	}
 	owner := owners[0]
-	ready := map[raftcluster.GroupID]raftplacement.VectorPartitionLifecycleGroupReadyV1{
-		owner: {
-			GroupID:        owner,
-			AppliedIndex:   vector.IndexedThrough,
-			AssetSetDigest: vectorPartitionM8GroupAssetSetDigestV1(string(owner), vector.Manifest),
-		},
-	}
-	lifecycle := raftplacement.VectorPartitionLifecycleCoordinatorV1{Authority: r.parent.authority, Committer: r.parent.meta}
-	record, exists := r.parent.authority.VectorPartitionLifecycleRecordV1(vector.Identity)
-	if !exists {
-		metaStatus := r.parent.meta.RuntimeStatusV1()
-		if metaStatus.State != "Leader" || metaStatus.LeaderID != r.parent.config.NodeID || r.parent.config.Catalog.BootstrapNode != r.parent.config.NodeID {
-			return nil, errors.Join(ErrFixedPeerVectorUnavailableV1, errors.New("vector lifecycle is not active on this catalog follower"))
+	topologyCatalog := resolved
+	if r.dataGroup == owner {
+		catalog := vector.Catalog
+		catalog.Groups = slices.Clone(catalog.Groups)
+		for i := range catalog.Groups {
+			if catalog.Groups[i].ID == owner {
+				catalog.Groups[i].LeaderHint = r.parent.config.NodeID
+			}
 		}
-		if _, err := lifecycle.BeginBuildV1(ctx, vector.Identity, owners, 0, 1); err != nil {
-			return nil, errors.Join(ErrFixedPeerVectorUnavailableV1, err)
-		}
-		if _, err := lifecycle.RecordGroupReadyV1(ctx, vector.Identity, ready[owner]); err != nil {
-			return nil, errors.Join(ErrFixedPeerVectorUnavailableV1, err)
-		}
-		if _, err := lifecycle.PrepareV1(ctx, vector.Identity); err != nil {
-			return nil, errors.Join(ErrFixedPeerVectorUnavailableV1, err)
-		}
-		record, err = lifecycle.ActivateV1(ctx, vector.Identity)
+		topologyCatalog, err = raftplacement.Validate(catalog)
 		if err != nil {
 			return nil, errors.Join(ErrFixedPeerVectorUnavailableV1, err)
 		}
 	}
+	lifecycle := raftplacement.VectorPartitionLifecycleCoordinatorV1{Authority: r.parent.authority, Committer: r.parent.meta}
+	record, exists := r.parent.authority.VectorPartitionLifecycleRecordV1(vector.Identity)
+	if !exists || record.State != raftplacement.VectorPartitionLifecycleActiveV1 {
+		if err := r.parent.ensureVectorLifecycleV1(ctx); err != nil {
+			return nil, errors.Join(ErrFixedPeerVectorUnavailableV1, err)
+		}
+		record, exists = r.parent.authority.VectorPartitionLifecycleRecordV1(vector.Identity)
+		if !exists {
+			return nil, errors.Join(ErrFixedPeerVectorUnavailableV1, errors.New("vector lifecycle record did not replicate locally"))
+		}
+	}
 	if record.State != raftplacement.VectorPartitionLifecycleActiveV1 || record.Identity != vector.Identity ||
-		!reflect.DeepEqual(record.RequiredGroups, owners) || len(record.ReadyGroups) != 1 || record.ReadyGroups[0] != ready[owner] || record.ReadySetDigest == "" {
+		!reflect.DeepEqual(record.RequiredGroups, owners) || len(record.ReadyGroups) != 1 || record.ReadyGroups[0] != ready || record.ReadySetDigest == "" {
 		return nil, errors.Join(ErrFixedPeerVectorUnavailableV1, errors.New("vector lifecycle identity or ready set mismatch"))
 	}
 
@@ -355,11 +356,14 @@ func (r *fixedPeerVectorRuntimeV1) ensureBackendV1(ctx context.Context) (*Vector
 		for node, endpoint := range vector.ShardAddresses[groupID] {
 			nodeEndpoints[groupID][node] = endpoint
 		}
+		if r.dataGroup == groupID {
+			endpoints[groupID] = vector.ShardAddresses[groupID][r.parent.config.NodeID]
+		}
 	}
 
 	topologyOptions := VectorPartitionProductionTopologyOptionsV1{
 		ConstructionContext: ctx,
-		Catalog:             resolved,
+		Catalog:             topologyCatalog,
 		Placement:           vector.Placement,
 		RouterSource:        CollectionVectorPartitionCoordinatorRouterSourceV1{Collection: r.collection},
 		ReplicatedLifecycle: authority,
@@ -371,11 +375,7 @@ func (r *fixedPeerVectorRuntimeV1) ensureBackendV1(ctx context.Context) (*Vector
 	}
 	var source *CollectionVectorPartitionGenerationSourceV1
 	var shardListener net.Listener
-	localOwnerLeader := false
-	if group, ok := resolved.Group(owner); ok {
-		localOwnerLeader = r.dataGroup == owner && group.LeaderHint == r.parent.config.NodeID
-	}
-	if localOwnerLeader {
+	if r.dataGroup == owner {
 		readCoordinator, readErr := raftcluster.NewGroupRoutedReadIndexCoordinator([]raftcluster.GroupReadIndexCoordinatorV1{{
 			GroupID: owner, NodeID: r.parent.config.NodeID, ReadIndexProvider: r.parent.data[owner].provider, AppliedIndexWaiter: r.parent.data[owner].fsm,
 		}})
@@ -387,7 +387,7 @@ func (r *fixedPeerVectorRuntimeV1) ensureBackendV1(ctx context.Context) (*Vector
 			return nil, err
 		}
 		shardService, serviceErr := NewVectorPartitionShardSearchServiceV1(VectorPartitionShardSearchServiceOptionsV1{
-			Catalog: resolved, Placement: vector.Placement, LocalNodeID: r.parent.config.NodeID, LocalGroupID: owner,
+			Catalog: topologyCatalog, Placement: vector.Placement, LocalNodeID: r.parent.config.NodeID, LocalGroupID: owner,
 			ReadCoordinator: readCoordinator, GenerationSource: source, Limits: DefaultVectorPartitionShardSearchLimitsV1(),
 		})
 		if serviceErr != nil {
@@ -420,7 +420,7 @@ func (r *fixedPeerVectorRuntimeV1) ensureBackendV1(ctx context.Context) (*Vector
 	}
 	backend, err := NewVectorPartitionPublicBackendV1(VectorPartitionPublicBackendOptionsV1{
 		Topology: topology, RequestBase: vector.RequestBase, Lifecycle: lifecycle, ReadFence: r.parent,
-		Identity: vector.Identity, RequiredGroups: owners, Builder: fixedPeerVectorBuilderV1{ready: ready}, MutationEpoch: record.MutationEpoch,
+		Identity: vector.Identity, RequiredGroups: owners, Builder: fixedPeerVectorBuilderV1{ready: map[raftcluster.GroupID]raftplacement.VectorPartitionLifecycleGroupReadyV1{owner: ready}}, MutationEpoch: record.MutationEpoch,
 		MutationSubmitter: r.parent,
 	})
 	if err != nil {
@@ -432,6 +432,90 @@ func (r *fixedPeerVectorRuntimeV1) ensureBackendV1(ctx context.Context) (*Vector
 	}
 	r.source, r.topology, r.backend = source, topology, backend
 	return backend, nil
+}
+
+func fixedPeerVectorLifecycleSpecV1(vector *FixedPeerTCPVectorConfigV1) ([]raftcluster.GroupID, raftplacement.VectorPartitionLifecycleGroupReadyV1, error) {
+	owners := fixedPeerVectorOwnerGroupsV1(vector.Placement)
+	if len(owners) != 1 {
+		return nil, raftplacement.VectorPartitionLifecycleGroupReadyV1{}, errors.Join(ErrFixedPeerVectorUnavailableV1, errors.New("fixed-peer routed vector mutation requires exactly one owner group"))
+	}
+	return owners, raftplacement.VectorPartitionLifecycleGroupReadyV1{
+		GroupID: owners[0], AppliedIndex: vector.IndexedThrough,
+		AssetSetDigest: vectorPartitionM8GroupAssetSetDigestV1(string(owners[0]), vector.Manifest),
+	}, nil
+}
+
+func (r *FixedPeerTCPRuntimeV1) ensureVectorLifecycleLeaderV1(ctx context.Context) (raftplacement.CatalogMetaStatusV1, error) {
+	if r == nil || r.config.Vector == nil {
+		return raftplacement.CatalogMetaStatusV1{}, ErrFixedPeerVectorUnavailableV1
+	}
+	status := r.meta.RuntimeStatusV1()
+	if status.State != "Leader" || status.LeaderID != r.config.NodeID {
+		return raftplacement.CatalogMetaStatusV1{}, raftcluster.ErrNotLeader
+	}
+	owners, ready, err := fixedPeerVectorLifecycleSpecV1(r.config.Vector)
+	if err != nil {
+		return raftplacement.CatalogMetaStatusV1{}, err
+	}
+	lifecycle := raftplacement.VectorPartitionLifecycleCoordinatorV1{Authority: r.authority, Committer: r.meta}
+	record, err := lifecycle.BeginBuildV1(ctx, r.config.Vector.Identity, owners, 0, 1)
+	if err == nil && (record.State == raftplacement.VectorPartitionLifecycleBuildingV1 || record.State == raftplacement.VectorPartitionLifecycleStagedV1) {
+		record, err = lifecycle.RecordGroupReadyV1(ctx, r.config.Vector.Identity, ready)
+	}
+	if err == nil && record.State == raftplacement.VectorPartitionLifecycleStagedV1 {
+		record, err = lifecycle.PrepareV1(ctx, r.config.Vector.Identity)
+	}
+	if err == nil && record.State == raftplacement.VectorPartitionLifecyclePreparedV1 {
+		record, err = lifecycle.ActivateV1(ctx, r.config.Vector.Identity)
+	}
+	if err != nil {
+		return raftplacement.CatalogMetaStatusV1{}, err
+	}
+	if record.State != raftplacement.VectorPartitionLifecycleActiveV1 {
+		return raftplacement.CatalogMetaStatusV1{}, raftplacement.ErrVectorPartitionLifecycleState
+	}
+	catalog, ok := r.authority.Status()
+	if !ok {
+		return catalog, raftplacement.ErrCatalogMetaUnavailable
+	}
+	return catalog, nil
+}
+
+func (r *FixedPeerTCPRuntimeV1) ensureVectorLifecycleV1(ctx context.Context) error {
+	leader, err := r.client.leader(ctx, r.config.Catalog)
+	if err != nil {
+		return err
+	}
+	var target raftplacement.CatalogMetaStatusV1
+	if leader == r.config.NodeID {
+		target, err = r.ensureVectorLifecycleLeaderV1(ctx)
+	} else {
+		var reply fixedPeerReplyV1
+		reply, err = r.client.call(ctx, leader, "vector-lifecycle", fixedPeerRequestV1{}, true)
+		target = reply.Catalog
+	}
+	if err != nil {
+		return err
+	}
+	if target.Epoch == 0 || target.Digest == "" || target.AppliedIndex == 0 {
+		return raftplacement.ErrCatalogMetaUnavailable
+	}
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	for {
+		local, ok := r.authority.Status()
+		if ok && local.AppliedIndex >= target.AppliedIndex {
+			if local.Epoch != target.Epoch || local.Digest != target.Digest {
+				return raftplacement.ErrCatalogMetaUnavailable
+			}
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
 }
 
 func fixedPeerVectorOwnerGroupsV1(placement raftplacement.VectorPartitionPlacementRecordV1) []raftcluster.GroupID {
@@ -615,7 +699,11 @@ func (r *FixedPeerTCPRuntimeV1) applyVectorInsertV1(ctx context.Context, request
 	if err != nil || !ok {
 		return public.InsertResponseV1{}, errors.Join(ErrFixedPeerVectorUnavailableV1, err)
 	}
-	entry, key, err := fixedPeerVectorInsertEntryV1(r.config.Vector.Collection.Collection, catalogVersion, request)
+	format, err := fixedPeerVectorDocumentFormatV1(r.vector.collection)
+	if err != nil {
+		return public.InsertResponseV1{}, err
+	}
+	entry, key, err := fixedPeerVectorInsertEntryV1(r.config.Vector.Collection.Collection, format, catalogVersion, request)
 	if err != nil {
 		return public.InsertResponseV1{}, errors.Join(ErrFixedPeerVectorDocumentV1, err)
 	}
@@ -685,38 +773,11 @@ func (r *FixedPeerTCPRuntimeV1) applyVectorInsertV1(ctx context.Context, request
 		return public.InsertResponseV1{}, fixedPeerVectorPostCommitAmbiguousV1(errors.Join(ErrFixedPeerVectorUnavailableV1, err))
 	}
 	live := pin.StatusV1()
-	pin.Release()
-	if live.Generation != request.Identity.Generation || live.Revision == 0 || live.Coverage == 0 {
-		return public.InsertResponseV1{}, fixedPeerVectorPostCommitAmbiguousV1(errors.Join(ErrFixedPeerVectorUnavailableV1, errors.New("live visibility proof is incomplete")))
-	}
-	backend, err := r.vector.ensureBackendV1(ctx)
-	if err != nil {
-		return public.InsertResponseV1{}, fixedPeerVectorPostCommitAmbiguousV1(errors.Join(ErrFixedPeerVectorUnavailableV1, err))
-	}
-	requestBase := r.config.Vector.RequestBase
-	visibility, err := backend.SearchVectorPartitionV1(ctx, public.SearchRequestV1{
-		Version: request.Request.Version, Generation: request.Request.Generation, Query: slices.Clone(request.Request.Vector),
-		Metric: public.MetricCosineV1, TopK: requestBase.TopK, Probes: requestBase.PartitionProbes, EfSearch: requestBase.EfSearch,
-		Consistency: public.ConsistencyGenerationSnapshotV1,
-		Limits: public.SearchLimitsV1{
-			RequestBytes: requestBase.RequestBytesLimit, CandidateBytes: requestBase.CandidateBytesLimit,
-			ResponseBytes: requestBase.ResponseBytesLimit, MergeEntries: requestBase.MergeEntriesLimit,
-		},
-		Deadline: request.Request.Deadline,
-	})
-	if err != nil {
-		return public.InsertResponseV1{}, fixedPeerVectorPostCommitAmbiguousV1(errors.Join(ErrFixedPeerVectorUnavailableV1, err))
-	}
 	visibleID := string(request.Request.ID)
-	visible := false
-	for _, neighbor := range visibility.Neighbors {
-		if neighbor.ID == visibleID {
-			visible = true
-			break
-		}
-	}
-	if !visible {
-		return public.InsertResponseV1{}, fixedPeerVectorPostCommitAmbiguousV1(errors.Join(ErrFixedPeerVectorUnavailableV1, errors.New("owner strict search did not return inserted id")))
+	visible := pin.ContainsLiveIDV1(visibleID)
+	pin.Release()
+	if live.Generation != request.Identity.Generation || live.Revision == 0 || live.Coverage == 0 || !visible {
+		return public.InsertResponseV1{}, fixedPeerVectorPostCommitAmbiguousV1(errors.Join(ErrFixedPeerVectorUnavailableV1, errors.New("live visibility proof is incomplete")))
 	}
 	forwards := uint64(0)
 	if request.Forwarded {
@@ -781,7 +842,11 @@ func (r *FixedPeerTCPRuntimeV1) validateVectorInsertOwnerV1(ctx context.Context,
 	if err := record.CanSearch(raftplacement.VectorPartitionLifecycleSearchProofV1{Identity: request.Identity, ReadySetDigest: request.ReadySetDigest}); err != nil {
 		return errors.Join(ErrFixedPeerVectorProofStaleV1, err)
 	}
-	decoded, err := r.vector.collection.ValidatedVectorFromDocumentV1(vector.Manifest.IndexName, collections.DocumentFormatJSON, request.Request.Document)
+	format, err := fixedPeerVectorDocumentFormatV1(r.vector.collection)
+	if err != nil {
+		return err
+	}
+	decoded, err := r.vector.collection.ValidatedVectorFromDocumentV1(vector.Manifest.IndexName, format, request.Request.Document)
 	if err != nil || !sameFloat32BitsV1(decoded, request.Request.Vector) {
 		return errors.Join(ErrFixedPeerVectorDocumentV1, err)
 	}
@@ -813,23 +878,14 @@ func (r *FixedPeerTCPRuntimeV1) validateVectorInsertOwnerV1(ctx context.Context,
 	return nil
 }
 
-func fixedPeerVectorInsertEntryV1(collection string, catalogVersion uint64, request VectorPartitionRoutedInsertV1) ([]byte, [sha256.Size]byte, error) {
-	h := sha256.New()
-	_, _ = h.Write([]byte("TreeDB/fixed-peer-vector-insert/v1\x00"))
-	_, _ = h.Write([]byte(request.Identity.Index.IndexName))
-	var generation [8]byte
-	binary.BigEndian.PutUint64(generation[:], request.Identity.Generation)
-	_, _ = h.Write(generation[:])
-	_, _ = h.Write(request.Request.ID)
-	_, _ = h.Write(request.Request.Document)
-	var key [sha256.Size]byte
-	copy(key[:], h.Sum(nil))
+func fixedPeerVectorInsertEntryV1(collection string, format collections.DocumentFormat, catalogVersion uint64, request VectorPartitionRoutedInsertV1) ([]byte, [sha256.Size]byte, error) {
+	key := sha256.Sum256(request.Request.IdempotencyKey)
 	sections := []iwire.Section{
 		{ID: iwire.SectionCommandHeader, Bytes: iwire.AppendCommandHeader(nil, iwire.CommandHeader{ID: iwire.CommandInsertBatch, Version: 1})},
-		{ID: iwire.SectionIdempotencyKey, Bytes: key[:]},
+		{ID: iwire.SectionIdempotencyKey, Bytes: slices.Clone(request.Request.IdempotencyKey)},
 		{ID: iwire.SectionExpectedCatalogVersion, Bytes: binary.AppendUvarint(nil, catalogVersion)},
 		collectionNameRef(collection),
-		documentFormatSection(collections.DocumentFormatJSON),
+		documentFormatSection(format),
 		{ID: iwire.SectionDocumentIDs, Bytes: iwire.AppendByteVector(nil, request.Request.ID)},
 		{ID: iwire.SectionDocuments, Bytes: iwire.AppendByteVector(nil, request.Request.Document)},
 	}
@@ -839,6 +895,17 @@ func fixedPeerVectorInsertEntryV1(collection string, catalogVersion uint64, requ
 	}
 	entry, err := iwire.AppendDeterministicEntry(nil, validated)
 	return entry, key, err
+}
+
+func fixedPeerVectorDocumentFormatV1(collection *collections.Collection) (collections.DocumentFormat, error) {
+	format := collection.MetaView().Options.DocumentFormat
+	if format == collections.DocumentFormatDefault {
+		format = collections.DocumentFormatJSON
+	}
+	if format != collections.DocumentFormatJSON {
+		return format, ErrFixedPeerVectorDocumentV1
+	}
+	return format, nil
 }
 
 func sameFloat32BitsV1(left, right []float32) bool {

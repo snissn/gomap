@@ -118,7 +118,7 @@ func TestVectorPartitionWireV1RoundTrip(t *testing.T) {
 	}
 
 	insert := public.InsertRequestV1{
-		Version: 1, Generation: request.Generation, ID: []byte("doc-000003"), Vector: []float32{.25, .75},
+		Version: 1, Generation: request.Generation, IdempotencyKey: []byte("attempt-3"), ID: []byte("doc-000003"), Vector: []float32{.25, .75},
 		Document: []byte(`{"embedding":[0.25,0.75]}`), Deadline: time.Unix(0, 223456789),
 	}
 	body, err = appendVectorPartitionInsertRequestSectionV1(nil, insert, limits)
@@ -552,7 +552,7 @@ func TestVectorPartitionNativeWireInsertUnprovenReplyIsCommitAmbiguousV1(t *test
 				peer <- errors.Join(err, right.Close())
 			}()
 			request := public.InsertRequestV1{
-				Version: 1, Generation: public.GenerationIDV1{Index: "embedding", Generation: 7}, ID: []byte("doc"), Vector: []float32{1},
+				Version: 1, Generation: public.GenerationIDV1{Index: "embedding", Generation: 7}, IdempotencyKey: []byte("attempt"), ID: []byte("doc"), Vector: []float32{1},
 				Document: []byte(`{"embedding":[1]}`), Deadline: time.Now().Add(time.Second),
 			}
 			if _, err := client.VectorInsertV1(t.Context(), request); !hasPublicErrorCodeV1(err, public.ErrorCommitAmbiguousV1) {
@@ -565,6 +565,39 @@ func TestVectorPartitionNativeWireInsertUnprovenReplyIsCommitAmbiguousV1(t *test
 	}
 }
 
+func TestVectorPartitionNativeWireInsertRejectsIncompleteProofV1(t *testing.T) {
+	left, right := net.Pipe()
+	client := NewClient(left)
+	defer client.Close()
+	request := public.InsertRequestV1{
+		Version: 1, Generation: public.GenerationIDV1{Index: "embedding", Generation: 7}, IdempotencyKey: []byte("attempt"),
+		ID: []byte("doc"), Vector: []float32{1}, Document: []byte(`{"embedding":[1]}`), Deadline: time.Now().Add(time.Second),
+	}
+	peer := make(chan error, 1)
+	go func() {
+		header, _, err := readFrame(right, iwire.DefaultLimits())
+		response := public.InsertResponseV1{
+			Generation: request.Generation, OwnerGroup: "group-b", CommitTerm: 1, CommitIndex: 2, AppliedIndex: 2,
+			ProductionConsensus: true, LiveRevision: 3, VisibilityGeneration: request.Generation, VisibleID: string(request.ID),
+			Counters: public.MutationCountersV1{Routes: 1, Commits: 1, Applies: 1, VisibilityProofs: 1},
+		}
+		var body []byte
+		if err == nil {
+			body, err = appendVectorPartitionInsertResponseSectionV1(nil, response)
+		}
+		if err == nil {
+			err = writeFrame(right, iwire.Header{Type: iwire.FrameResponse, RequestID: header.RequestID}, body)
+		}
+		peer <- errors.Join(err, right.Close())
+	}()
+	if _, err := client.VectorInsertV1(t.Context(), request); !hasPublicErrorCodeV1(err, public.ErrorCommitAmbiguousV1) {
+		t.Fatalf("incomplete proof error = %v", err)
+	}
+	if err := <-peer; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestVectorPartitionNativeWireInsertCanceledBeforeSendV1(t *testing.T) {
 	left, right := net.Pipe()
 	defer left.Close()
@@ -572,7 +605,7 @@ func TestVectorPartitionNativeWireInsertCanceledBeforeSendV1(t *testing.T) {
 	client := NewClient(left)
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	request := public.InsertRequestV1{Version: 1, Generation: public.GenerationIDV1{Index: "embedding", Generation: 7}, ID: []byte("doc"), Vector: []float32{1}, Document: []byte(`{"embedding":[1]}`), Deadline: time.Now().Add(time.Second)}
+	request := public.InsertRequestV1{Version: 1, Generation: public.GenerationIDV1{Index: "embedding", Generation: 7}, IdempotencyKey: []byte("attempt"), ID: []byte("doc"), Vector: []float32{1}, Document: []byte(`{"embedding":[1]}`), Deadline: time.Now().Add(time.Second)}
 	if _, err := client.VectorInsertV1(ctx, request); !hasPublicErrorCodeV1(err, public.ErrorCanceledV1) {
 		t.Fatalf("pre-send canceled error = %v", err)
 	}

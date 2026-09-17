@@ -370,6 +370,7 @@ type VectorIndexPartitionLiveSearchPinV1 struct {
 	status             VectorIndexPartitionLiveStatusV1
 	packDomains        []uint32
 	excludedStableIDs  map[string]struct{}
+	liveIDs            map[string]struct{}
 	domains            map[uint32]vectorIndexPartitionLiveDomainPinV1
 	releasePublication func()
 	releaseOnce        sync.Once
@@ -1201,12 +1202,14 @@ func (idx *VectorIndex) acquireVectorPartitionLiveSearchPinV1(manifest VectorPar
 		status:            VectorIndexPartitionLiveStatusV1{Generation: live.generation, Revision: live.revision, Coverage: live.coverage, MutatedIDs: live.ownerCountV1(), Cutovers: live.cutovers},
 		packDomains:       append([]uint32(nil), live.packDomains...),
 		excludedStableIDs: make(map[string]struct{}, live.ownerCountV1()),
+		liveIDs:           make(map[string]struct{}, live.ownerCountV1()),
 		domains:           make(map[uint32]vectorIndexPartitionLiveDomainPinV1, len(live.domains)),
 	}
 	maxStableIDBytes := make(map[uint32]int, len(live.domains))
 	live.rangeOwnersV1(func(id string, owner vectorPartitionLiveOwnerV1) bool {
 		pin.excludedStableIDs[id] = struct{}{}
 		if !owner.deleted {
+			pin.liveIDs[id] = struct{}{}
 			pin.status.LiveIDs++
 			maxStableIDBytes[owner.domain] = maxInt(maxStableIDBytes[owner.domain], len(id))
 		}
@@ -2043,6 +2046,7 @@ func (p *VectorIndexPartitionLiveSearchPinV1) Release() {
 			delete(p.domains, domain)
 		}
 		p.excludedStableIDs = nil
+		p.liveIDs = nil
 		if p.releasePublication != nil {
 			p.releasePublication()
 			p.releasePublication = nil
@@ -2060,6 +2064,16 @@ func (p *VectorIndexPartitionLiveSearchPinV1) ExcludesBaseIDV1(id string) bool {
 		return false
 	}
 	_, ok := p.excludedStableIDs[id]
+	return ok
+}
+
+// ContainsLiveIDV1 reports whether id is present in this pin's immutable live
+// overlay. The membership remains exact until Release.
+func (p *VectorIndexPartitionLiveSearchPinV1) ContainsLiveIDV1(id string) bool {
+	if p == nil {
+		return false
+	}
+	_, ok := p.liveIDs[id]
 	return ok
 }
 func (p *VectorIndexPartitionLiveSearchPinV1) ExcludedStableIDsV1() map[string]struct{} {
