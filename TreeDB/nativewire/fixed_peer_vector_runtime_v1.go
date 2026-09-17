@@ -28,6 +28,7 @@ var (
 	ErrFixedPeerVectorWrongOwnerV1   = errors.New("nativewire: fixed-peer vector mutation wrong owner")
 	ErrFixedPeerVectorUnavailableV1  = errors.New("nativewire: fixed-peer vector runtime unavailable")
 	ErrFixedPeerVectorDocumentV1     = errors.New("nativewire: fixed-peer vector document does not match routed vector")
+	errFixedPeerVectorSnapshotV1     = errors.New("nativewire: fixed-peer fast and pinned vector search are unavailable")
 )
 
 // FixedPeerTCPVectorConfigV1 is shared byte-for-byte by every fixed-peer
@@ -104,20 +105,12 @@ func (b *fixedPeerVectorBackendV1) SearchVectorPartitionV1(ctx context.Context, 
 	return b.runtime.parent.searchVectorPartitionStrictV1(ctx, request)
 }
 
-func (b *fixedPeerVectorBackendV1) SearchVectorPartitionFastV1(ctx context.Context, request public.SearchRequestV1, options public.FastSearchOptionsV1) (public.SearchResponseV1, public.FastSearchEvidenceV1, error) {
-	backend, err := b.backend(ctx)
-	if err != nil {
-		return public.SearchResponseV1{}, public.FastSearchEvidenceV1{}, publicBackendErrorV1(err)
-	}
-	return backend.SearchVectorPartitionFastV1(ctx, request, options)
+func (b *fixedPeerVectorBackendV1) SearchVectorPartitionFastV1(context.Context, public.SearchRequestV1, public.FastSearchOptionsV1) (public.SearchResponseV1, public.FastSearchEvidenceV1, error) {
+	return public.SearchResponseV1{}, public.FastSearchEvidenceV1{}, publicBackendErrorV1(errFixedPeerVectorSnapshotV1)
 }
 
-func (b *fixedPeerVectorBackendV1) PinVectorPartitionSearchSnapshotV1(ctx context.Context, options public.PinSearchSnapshotOptionsV1) (public.SearchSnapshotBackendV1, public.FastSearchEvidenceV1, error) {
-	backend, err := b.backend(ctx)
-	if err != nil {
-		return nil, public.FastSearchEvidenceV1{}, publicBackendErrorV1(err)
-	}
-	return backend.PinVectorPartitionSearchSnapshotV1(ctx, options)
+func (b *fixedPeerVectorBackendV1) PinVectorPartitionSearchSnapshotV1(context.Context, public.PinSearchSnapshotOptionsV1) (public.SearchSnapshotBackendV1, public.FastSearchEvidenceV1, error) {
+	return nil, public.FastSearchEvidenceV1{}, publicBackendErrorV1(errFixedPeerVectorSnapshotV1)
 }
 
 func (b *fixedPeerVectorBackendV1) InsertVectorPartitionV1(ctx context.Context, request public.InsertRequestV1) (public.InsertResponseV1, error) {
@@ -263,6 +256,10 @@ func openFixedPeerVectorRuntimeV1(parent *FixedPeerTCPRuntimeV1) (*fixedPeerVect
 	if err != nil || !vectorPartitionReplicatedLiveManifestMatchesV1(prepared, parent.config.Vector.Manifest) {
 		return nil, errors.Join(ErrFixedPeerVectorUnavailableV1, fmt.Errorf("prepared vector manifest mismatch: %v", err))
 	}
+	registry, err := fixedPeerVectorRegistryV1()
+	if err != nil {
+		return nil, err
+	}
 	owners := fixedPeerVectorOwnerGroupsV1(parent.config.Vector.Placement)
 	if slices.Contains(owners, group) {
 		// Replicated fixed-peer startup is validation-only: publishing a missing
@@ -290,7 +287,22 @@ func openFixedPeerVectorRuntimeV1(parent *FixedPeerTCPRuntimeV1) (*fixedPeerVect
 		return nil, err
 	}
 	runtime.server = NewServer(ServerOptions{VectorPartitionOperations: ops, VectorPartitionNodeConfigSHA256: parent.client.digest, ConnectionIdleTimeout: parent.config.RequestTimeout})
+	runtime.server.registry = registry
 	return runtime, nil
+}
+
+func fixedPeerVectorRegistryV1() (*iwire.Registry, error) {
+	schemas := iwire.MustV1Registry().Schemas()
+	schemas = slices.DeleteFunc(schemas, func(schema iwire.CommandSchema) bool {
+		switch schema.ID {
+		case iwire.CommandVectorSearchFast, iwire.CommandVectorPinSearchSnapshot,
+			iwire.CommandVectorSearchPinned, iwire.CommandVectorClosePinnedSnapshot:
+			return true
+		default:
+			return false
+		}
+	})
+	return iwire.NewRegistry(schemas...)
 }
 
 func (r *fixedPeerVectorRuntimeV1) ensureBackendV1(ctx context.Context) (*VectorPartitionPublicBackendV1, error) {
@@ -581,6 +593,15 @@ func validateFixedPeerVectorConfigV1(config FixedPeerTCPConfigV1, localGroups ma
 	}
 	if len(owners) != 1 {
 		return errors.New("fixed-peer vector runtime requires exactly one owner group")
+	}
+	localDataGroups := 0
+	for _, group := range config.Groups {
+		if localGroups[group.ID] {
+			localDataGroups++
+		}
+	}
+	if localDataGroups != 1 {
+		return errors.New("fixed-peer vector runtime requires exactly one local data group")
 	}
 	for group := range owners {
 		var fixed *FixedPeerTCPGroupV1

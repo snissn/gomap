@@ -569,7 +569,7 @@ func vectorPartitionClientErrorV1(err error) error {
 	switch wireCode {
 	case iwire.ErrInvalidCommand, iwire.ErrMalformedFrame:
 		code = public.ErrorInvalidRequestV1
-	case iwire.ErrResourceExhausted:
+	case iwire.ErrUnsupportedVersion, iwire.ErrUnsupportedFeature, iwire.ErrResourceExhausted:
 		code = public.ErrorUnavailableV1
 	case iwire.ErrCatalogChanged:
 		code = public.ErrorGenerationMismatchV1

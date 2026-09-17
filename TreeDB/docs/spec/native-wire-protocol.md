@@ -827,6 +827,14 @@ revision, visible ID, and route/forward/commit/replication/apply/visibility
 counters. Any failure after submission may have committed and MUST surface as
 `commit_ambiguous`; stale or incomplete authority fails closed before mutation.
 
+The fixed-peer routed vector runtime registers only `vector_status`,
+`vector_search_strict`, and `vector_insert` (commands 58, 59, and 66). It does
+not register commands 60-63 because that runtime has no serving-snapshot
+publisher; fast and pinned search remain available on production nodes that do
+configure one. Each vector-enabled fixed-peer process must host exactly one
+configured data group, which may be either the owner group or a non-owner
+ingress group.
+
 ### 10.1. Document-service dense search
 
 Command `64 dense_vector_search` is a LocalOnly read, never a deterministic

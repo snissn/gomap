@@ -7,11 +7,13 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
 	"github.com/snissn/gomap/TreeDB/internal/raftapply"
 	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
 	"github.com/snissn/gomap/TreeDB/internal/raftentry"
@@ -59,6 +61,48 @@ func TestFixedPeerVectorRuntimeCloseReleasesPublicListenerV1(t *testing.T) {
 		t.Fatalf("public listener was not released: %v", err)
 	}
 	_ = rebound.Close()
+}
+
+func TestFixedPeerVectorRuntimeDisablesSnapshotCommandsV1(t *testing.T) {
+	registry, err := fixedPeerVectorRegistryV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, command := range []iwire.CommandID{
+		iwire.CommandVectorSearchFast,
+		iwire.CommandVectorPinSearchSnapshot,
+		iwire.CommandVectorSearchPinned,
+		iwire.CommandVectorClosePinnedSnapshot,
+	} {
+		if _, ok := registry.LookupCommand(command, 1); ok {
+			t.Fatalf("fixed-peer registry retained snapshot command %d", command)
+		}
+		if _, ok := iwire.MustV1Registry().LookupCommand(command, 1); !ok {
+			t.Fatalf("generic registry lost snapshot command %d", command)
+		}
+	}
+	for _, command := range []iwire.CommandID{iwire.CommandVectorStatus, iwire.CommandVectorSearchStrict, iwire.CommandVectorInsert} {
+		if _, ok := registry.LookupCommand(command, 1); !ok {
+			t.Fatalf("fixed-peer registry lost supported command %d", command)
+		}
+	}
+
+	runtime := &fixedPeerVectorRuntimeV1{}
+	backend := &fixedPeerVectorBackendV1{runtime: runtime}
+	assertUnavailable := func(err error) {
+		t.Helper()
+		var publicErr *public.ErrorV1
+		if !errors.As(err, &publicErr) || publicErr.Code != public.ErrorUnavailableV1 || !errors.Is(err, errFixedPeerVectorSnapshotV1) {
+			t.Fatalf("snapshot command error=%v", err)
+		}
+		if runtime.backend != nil {
+			t.Fatal("snapshot command initialized fixed-peer topology")
+		}
+	}
+	_, _, err = backend.SearchVectorPartitionFastV1(t.Context(), public.SearchRequestV1{}, public.FastSearchOptionsV1{})
+	assertUnavailable(err)
+	_, _, err = backend.PinVectorPartitionSearchSnapshotV1(t.Context(), public.PinSearchSnapshotOptionsV1{})
+	assertUnavailable(err)
 }
 
 func fixedPeerVectorReadyV1(t testing.TB, ctx context.Context) fixedPeerVectorReadyFixtureV1 {
@@ -684,6 +728,80 @@ func TestFixedPeerVectorConfigRequiresOneOwnerGroupV1(t *testing.T) {
 	want = `invalid vector shard address for node "node"`
 	if err := validateFixedPeerVectorConfigV1(config, map[raftcluster.GroupID]bool{"group-a": true}); err == nil || err.Error() != want {
 		t.Fatalf("invalid shard address error=%v, want %q", err, want)
+	}
+	config.Vector.ShardAddresses["group-a"]["node"] = "127.0.0.1:10002"
+	want = "fixed-peer vector runtime requires exactly one local data group"
+	for _, localGroups := range []map[raftcluster.GroupID]bool{
+		{},
+		{"group-a": true, "group-b": true},
+	} {
+		if err := validateFixedPeerVectorConfigV1(config, localGroups); err == nil || err.Error() != want {
+			t.Fatalf("local data-group validation error=%v, want %q", err, want)
+		}
+	}
+	for _, localGroup := range []raftcluster.GroupID{"group-a", "group-b"} {
+		if err := validateFixedPeerVectorConfigV1(config, map[raftcluster.GroupID]bool{localGroup: true}); err != nil {
+			t.Fatalf("one local data group %q rejected: %v", localGroup, err)
+		}
+	}
+	config.Vector = nil
+	if err := validateFixedPeerVectorConfigV1(config, map[raftcluster.GroupID]bool{"group-a": true, "group-b": true}); err != nil {
+		t.Fatalf("non-vector config rejected: %v", err)
+	}
+}
+
+func TestFixedPeerVectorLocalDataGroupValidationPrecedesDiskCreationV1(t *testing.T) {
+	config := fixedPeerTestConfigsV1(t)[0]
+	lifecycleFeature := raftcluster.RequiredFeature{Name: raftcluster.FeatureVectorPartitionLifecycle, Version: raftcluster.SupportedFeatureFloors[raftcluster.FeatureVectorPartitionLifecycle]}
+	config.Catalog.Features.Required = append(config.Catalog.Features.Required, lifecycleFeature)
+	for i := range config.Catalog.Peers {
+		config.Catalog.Peers[i].Capabilities = config.Catalog.Features
+	}
+	ref := raftplacement.CollectionRefV1{Database: "default", Catalog: "default", Collection: "docs"}
+	config.Vector = &FixedPeerTCPVectorConfigV1{
+		Collection: ref,
+		Manifest: collections.VectorPartitionManifestV1{
+			State: "ready", Collection: "docs", IndexName: "embedding", Generation: 1, IntegrityDigest: "integrity",
+		},
+		Placement:       raftplacement.VectorPartitionPlacementRecordV1{Collection: ref, IndexName: "embedding", PartitionGeneration: 1, Partitions: []raftplacement.VectorPartitionGroupV1{{PartitionID: 0, GroupID: "group-b"}}},
+		Identity:        raftplacement.VectorPartitionLifecycleIdentityV1{Index: raftplacement.VectorPartitionLifecycleIndexIdentityV1{Collection: ref, IndexName: "embedding"}, Generation: 1},
+		PublicAddresses: map[raftcluster.NodeID]string{"ingress": "127.0.0.1:21001", "owner-1": "127.0.0.1:21002", "owner-2": "127.0.0.1:21003"},
+		ShardAddresses: map[raftcluster.GroupID]map[raftcluster.NodeID]string{
+			"group-b": {"owner-1": "127.0.0.1:22001", "owner-2": "127.0.0.1:22002"},
+		},
+		IndexedThrough: 1,
+	}
+	reserve := func() net.Listener {
+		t.Helper()
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = listener.Close() })
+		return listener
+	}
+	raftListener, shardListener := reserve(), reserve()
+	for i := range config.Groups {
+		if config.Groups[i].ID == "group-b" {
+			config.Groups[i].Peers = append(config.Groups[i].Peers, raftcluster.Peer{ID: config.NodeID, Address: raftListener.Addr().String()})
+		}
+	}
+	config.RaftListen["group-b"] = raftListener.Addr().String()
+	config.Vector.ShardAddresses["group-b"][config.NodeID] = shardListener.Addr().String()
+	root := t.TempDir()
+	config.DataRoot = filepath.Join(root, "data")
+	config.RaftRoot = filepath.Join(root, "raft")
+
+	if runtime, err := OpenFixedPeerTCPRuntimeV1(config); err == nil || !errors.Is(err, raftcluster.ErrInvalidConfig) || !strings.Contains(err.Error(), "requires exactly one local data group") {
+		if runtime != nil {
+			_ = runtime.Close()
+		}
+		t.Fatalf("open validation error=%v", err)
+	}
+	for _, path := range []string{config.DataRoot, config.RaftRoot} {
+		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("invalid open created %s: %v", path, err)
+		}
 	}
 }
 

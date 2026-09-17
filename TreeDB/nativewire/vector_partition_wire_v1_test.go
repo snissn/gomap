@@ -315,6 +315,9 @@ func TestVectorPartitionNativeWireErrorMappingV1(t *testing.T) {
 	if err := vectorPartitionClientErrorV1(&WireError{Code: iwire.ErrResourceExhausted, Message: "busy"}); !errors.As(err, &publicErr) || publicErr.Code != public.ErrorUnavailableV1 {
 		t.Fatalf("resource exhaustion mapping = %v", err)
 	}
+	if err := vectorPartitionClientErrorV1(&WireError{Code: iwire.ErrUnsupportedVersion, Message: "unsupported command"}); !errors.As(err, &publicErr) || publicErr.Code != public.ErrorUnavailableV1 {
+		t.Fatalf("unsupported command mapping = %v", err)
+	}
 	if err := vectorPartitionServerErrorV1(&public.ErrorV1{Code: public.ErrorCommitAmbiguousV1, Err: errors.New("visibility proof failed")}); nativeCodeOf(err) != iwire.ErrCommitAmbiguous {
 		t.Fatalf("commit ambiguous server mapping = %v", err)
 	}
