@@ -1806,8 +1806,19 @@ func TestRebuildVectorIndexPublishesCommandWALV2A(t *testing.T) {
 			}
 			framesBefore := countCollectionCommandWALFrames(t, dir)
 			baseLSN := d.State().AppliedCommandLSN
+			barriers := 0
+			unregister := d.RegisterCommandWALRawPublishBarrier(func() error {
+				barriers++
+				if !col.writeDomain.mutationMu.TryLock() {
+					return errors.New("native/no-op rebuild invoked a raw barrier while owning mutation")
+				}
+				col.writeDomain.mutationMu.Unlock()
+				return nil
+			})
+			defer unregister()
 
 			status, err := col.RebuildVectorIndex(def.Name)
+			unregister()
 			if err != nil {
 				t.Fatalf("RebuildVectorIndex: %v", err)
 			}
@@ -1816,6 +1827,9 @@ func TestRebuildVectorIndexPublishesCommandWALV2A(t *testing.T) {
 			}
 			if tt.wantNativeRoot && (!status.Loaded || status.RootID == 0 || !status.NativeRootLoaded) {
 				t.Fatalf("native rebuild status=%+v want published root", status)
+			}
+			if barriers != 2 {
+				t.Fatalf("native/no-op barrier calls=%d; want capture and final handoff", barriers)
 			}
 			if got := d.State().AppliedCommandLSN; got <= baseLSN {
 				t.Fatalf("AppliedCommandLSN after rebuild=%d want > %d", got, baseLSN)

@@ -76,6 +76,32 @@ var columnVectorGraphRebuildBeforeBuildTestHook struct {
 	hook func()
 }
 
+var columnVectorGraphRebuildAfterMutationReleaseTestHook struct {
+	sync.RWMutex
+	hook func(*Collection)
+}
+
+func setColumnVectorGraphRebuildAfterMutationReleaseTestHook(hook func(*Collection)) func() {
+	columnVectorGraphRebuildAfterMutationReleaseTestHook.Lock()
+	previous := columnVectorGraphRebuildAfterMutationReleaseTestHook.hook
+	columnVectorGraphRebuildAfterMutationReleaseTestHook.hook = hook
+	columnVectorGraphRebuildAfterMutationReleaseTestHook.Unlock()
+	return func() {
+		columnVectorGraphRebuildAfterMutationReleaseTestHook.Lock()
+		columnVectorGraphRebuildAfterMutationReleaseTestHook.hook = previous
+		columnVectorGraphRebuildAfterMutationReleaseTestHook.Unlock()
+	}
+}
+
+func runColumnVectorGraphRebuildAfterMutationReleaseTestHook(c *Collection) {
+	columnVectorGraphRebuildAfterMutationReleaseTestHook.RLock()
+	hook := columnVectorGraphRebuildAfterMutationReleaseTestHook.hook
+	columnVectorGraphRebuildAfterMutationReleaseTestHook.RUnlock()
+	if hook != nil {
+		hook(c)
+	}
+}
+
 var columnVectorGraphConstructionMatrixBoundTestHook struct {
 	sync.RWMutex
 	hook func(*VectorIndex)
@@ -228,18 +254,75 @@ func (c *Collection) rebuildVectorIndexWithCommandWALIntent(name string, replay 
 	}
 	unlockSchema := c.lockCollectionSchemaRead()
 	defer unlockSchema()
-	unlockMutation := c.lockMutation()
-	defer unlockMutation.Unlock()
-	if err := c.flushBufferedWrites(); err != nil {
+	var unlockRawPublish func()
+	defer func() {
+		if unlockRawPublish != nil {
+			unlockRawPublish()
+		}
+	}()
+	var unlockMutation collectionMutationUnlock
+	defer func() { unlockMutation.Unlock() }()
+	_, fromReplay := replay.ReplayAssignedLSN()
+	heldRaw := c.commandWALRawPublishLocked || replay.StagedForPublish()
+	publicHandoff := c.db.CommandWALEnabled() && !fromReplay && !heldRaw
+	acquirePublicationMutation := func() error {
+		for {
+			var err error
+			unlockRawPublish, err = c.db.LockCommandWALPublishWithBarriers()
+			if err != nil {
+				return err
+			}
+			if c.writeDomain == nil {
+				return nil
+			}
+			if mutation, ok := c.tryLockMutation(); ok {
+				unlockMutation = mutation
+				return nil
+			}
+			unlockRawPublish()
+			unlockRawPublish = nil
+			waiting := c.lockMutation()
+			waiting.Unlock()
+		}
+	}
+	// Pin the index generation before taking raw or mutation: stable capture
+	// briefly takes maintenanceMu, which maintenance itself takes before raw.
+	var sourcePin *backenddb.Snapshot
+	if publicHandoff {
+		sourcePin = c.db.AcquireStableSnapshot()
+		if sourcePin == nil {
+			return VectorIndexStatus{}, backenddb.ErrClosed
+		}
+		defer sourcePin.Close()
+		if err := acquirePublicationMutation(); err != nil {
+			return VectorIndexStatus{}, err
+		}
+	} else {
+		unlockMutation = c.lockMutation()
+	}
+	if err := c.flushBufferedWritesWithRawPublishState(publicHandoff || heldRaw); err != nil {
 		return VectorIndexStatus{}, err
 	}
 
 	snapshotStarted := time.Now()
-	snap := c.db.AcquireStableSnapshot()
+	snap := sourcePin
+	if snap == nil {
+		snap = c.db.AcquireStableSnapshot()
+	} else if commit, system := dbCommitSeqAndSystemRoot(c.db); commit != snapshotCommitSeq(snap) || system != snapshotSystemRoot(snap) {
+		// Draining may publish a newer root. The earlier stable-generation pin
+		// protects this current ordinary snapshot without a nested maintenance lock.
+		snap = c.db.AcquireSnapshot()
+	}
 	if snap == nil {
 		return VectorIndexStatus{}, backenddb.ErrClosed
 	}
-	defer func() { _ = snap.Close() }()
+	if snap != sourcePin {
+		defer func() { _ = snap.Close() }()
+	}
+	if publicHandoff {
+		unlockRawPublish()
+		unlockRawPublish = nil
+	}
 	catalog, err := loadCollectionCatalog(snap, c.meta.Name)
 	if err != nil {
 		return VectorIndexStatus{}, err
@@ -252,17 +335,37 @@ func (c *Collection) rebuildVectorIndexWithCommandWALIntent(name string, replay 
 	}
 	baseMeta := catalog.meta
 	c.meta = baseMeta
+	// Construction keeps its existing source snapshot and mutation exclusion,
+	// but must relinquish mutation before waiting for raw publication: a raw
+	// barrier (or a staged writer) may already own raw and need that mutation
+	// lock. Reacquire in raw -> mutation order without waiting on mutation while
+	// holding raw, then reject a changed source before appending any frame.
+	preparePublication := func() (bool, error) {
+		if !publicHandoff {
+			return heldRaw, nil
+		}
+		unlockMutation.Unlock()
+		unlockMutation = collectionMutationUnlock{}
+		runColumnVectorGraphRebuildAfterMutationReleaseTestHook(c)
+		if err := acquirePublicationMutation(); err != nil {
+			return false, err
+		}
+		if err := c.validateColumnGraphRebuildSource(catalog, snapshotCommitSeq(snap), snapshotSystemRoot(snap)); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
 	def, ok := findVectorIndex(baseMeta.VectorIndexes, name)
 	if !ok {
 		return VectorIndexStatus{}, ErrIndexNotFound
 	}
 	if def.Strategy != VectorIndexStrategyColumnGraph {
-		return c.rebuildNativeVectorIndexPrepared(def, catalog, replay)
+		return c.rebuildNativeVectorIndexPrepared(def, catalog, replay, preparePublication)
 	}
 	cfg := baseMeta.Options.ColumnStore
 	if cfg == nil || !cfg.Enabled || cfg.AssetManager == nil {
 		status, statusErr := c.columnGraphVectorIndexStatus(def.Name)
-		return c.finishRebuildVectorIndexNoopStatus(name, status, statusErr, replay)
+		return c.finishRebuildVectorIndexNoopStatus(name, status, statusErr, replay, preparePublication)
 	}
 	if normalizedDocumentFormat(baseMeta.Options.DocumentFormat) != DocumentFormatJSON {
 		return VectorIndexStatus{}, fmt.Errorf("collections: column_graph rebuild for %q requires JSON documents, got %q", name, baseMeta.Options.DocumentFormat)
@@ -295,7 +398,7 @@ func (c *Collection) rebuildVectorIndexWithCommandWALIntent(name string, replay 
 				return VectorIndexStatus{}, err
 			}
 			timing.RowExtraction = collectionObservedElapsedSince(rowsStarted)
-			return c.rebuildEmptyColumnGraphVectorIndexWithoutBaseManifestRoot(name, catalog, baseMeta, def, *cfg, baseCommitSeq, baseSystemRoot, rootName, replay, started, &timing, baseCopy)
+			return c.rebuildEmptyColumnGraphVectorIndexWithoutBaseManifestRoot(name, catalog, baseMeta, def, *cfg, baseCommitSeq, baseSystemRoot, rootName, replay, started, &timing, baseCopy, preparePublication)
 		}
 		rows, err := c.columnVectorGraphRowsFromCatalogSnapshot(snap, catalog, def)
 		timing.RowExtraction = collectionObservedElapsedSince(rowsStarted)
@@ -303,17 +406,17 @@ func (c *Collection) rebuildVectorIndexWithCommandWALIntent(name string, replay 
 			return VectorIndexStatus{}, err
 		}
 		if len(rows) == 0 {
-			return c.rebuildEmptyColumnGraphVectorIndexWithoutBaseManifestRoot(name, catalog, baseMeta, def, *cfg, baseCommitSeq, baseSystemRoot, rootName, replay, started, &timing, baseCopy)
+			return c.rebuildEmptyColumnGraphVectorIndexWithoutBaseManifestRoot(name, catalog, baseMeta, def, *cfg, baseCommitSeq, baseSystemRoot, rootName, replay, started, &timing, baseCopy, preparePublication)
 		}
 		return VectorIndexStatus{}, fmt.Errorf("collections: column_graph rebuild for %q requires an initial physical column manifest root before rebuilding %d documents", name, len(rows))
 	}
 	if cfg.ActiveManifest == nil || cfg.RecoveryAuthoritativeManifest == nil {
 		status, statusErr := c.columnGraphVectorIndexStatus(def.Name)
-		return c.finishRebuildVectorIndexNoopStatus(name, status, statusErr, replay)
+		return c.finishRebuildVectorIndexNoopStatus(name, status, statusErr, replay, preparePublication)
 	}
 	if err := validateColumnManifestIdentityAtRoot(snap, baseManifestRootID, *cfg.ActiveManifest); err != nil {
 		status, statusErr := c.columnGraphVectorIndexStatus(def.Name)
-		return c.finishRebuildVectorIndexNoopStatus(name, status, statusErr, replay)
+		return c.finishRebuildVectorIndexNoopStatus(name, status, statusErr, replay, preparePublication)
 	}
 	records, err := loadColumnManifestRecordsFromRoot(snap, baseManifestRootID)
 	if err != nil {
@@ -382,7 +485,7 @@ func (c *Collection) rebuildVectorIndexWithCommandWALIntent(name string, replay 
 		}
 	}
 	if vectorIndexUsesCosineNormalizedF32V1(def) {
-		return c.rebuildCosineNormalizedF32V1ColumnGraph(name, snap, catalog, baseMeta, *cfg, def, manifest, records, rows, constructionMatrix, baseCopy, baseCommitSeq, baseSystemRoot, rootName, baseManifestRootID, replay, started, &timing)
+		return c.rebuildCosineNormalizedF32V1ColumnGraph(name, snap, catalog, baseMeta, *cfg, def, manifest, records, rows, constructionMatrix, baseCopy, baseCommitSeq, baseSystemRoot, rootName, baseManifestRootID, replay, started, &timing, preparePublication)
 	}
 	rootNames := []string{rootName}
 	baseRootIDs := map[string]uint64{rootName: baseManifestRootID}
@@ -480,7 +583,15 @@ func (c *Collection) rebuildVectorIndexWithCommandWALIntent(name string, replay 
 		}
 		publicationStarted := time.Now()
 		preflight := func() error { return c.validateColumnGraphRebuildSource(catalog, baseCommitSeq, baseSystemRoot) }
-		newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaGroupWithPreflightCommandWALContextRootBuilderAndSystemDeltaBuilder(nil, preflight, intent, buildContextDeltas, buildSystemDelta)
+		heldRaw, prepareErr := preparePublication()
+		if prepareErr != nil {
+			return VectorIndexStatus{}, prepareErr
+		}
+		publish := c.db.PublishOrderedRootDeltaGroupWithPreflightCommandWALContextRootBuilderAndSystemDeltaBuilder
+		if heldRaw {
+			publish = c.db.PublishStagedOrderedRootDeltaGroupWithPreflightCommandWALContextRootBuilderAndSystemDeltaBuilder
+		}
+		newSystemRoot, rootIDs, err = publish(nil, preflight, intent, buildContextDeltas, buildSystemDelta)
 		timing.Publication = collectionObservedElapsedSince(publicationStarted)
 		if err != nil {
 			return VectorIndexStatus{}, err
@@ -512,7 +623,7 @@ func (c *Collection) rebuildVectorIndexWithCommandWALIntent(name string, replay 
 	return status, nil
 }
 
-func (c *Collection) rebuildNativeVectorIndexPrepared(def VectorIndexDefinition, catalog *collectionCatalog, replay *backenddb.CommandWALIntent) (VectorIndexStatus, error) {
+func (c *Collection) rebuildNativeVectorIndexPrepared(def VectorIndexDefinition, catalog *collectionCatalog, replay *backenddb.CommandWALIntent, preparePublication func() (bool, error)) (VectorIndexStatus, error) {
 	start := time.Now()
 	index, err := c.buildVectorIndexPrepared(vectorIndexOptionsFromDefinition(def), false, false, false, false)
 	if err != nil {
@@ -520,7 +631,7 @@ func (c *Collection) rebuildNativeVectorIndexPrepared(def VectorIndexDefinition,
 	}
 	index.setNativePersistent(true)
 	index.recordFullSnapshotBaseEpoch(catalog.rootID(collectionVectorIndexRootName(catalog.meta.Name, def.Name)))
-	native, err := index.saveNativeSnapshotPreparedWithCommandWALIntent(replay)
+	native, err := index.saveNativeSnapshotPreparedWithCommandWALIntentAndPublicationHandoff(replay, preparePublication)
 	if err != nil {
 		return VectorIndexStatus{}, err
 	}
@@ -558,7 +669,7 @@ func (c *Collection) rebuildNativeVectorIndexPrepared(def VectorIndexDefinition,
 // payload is therefore already the graph-ordinal canonical owner when the v4
 // topology pack becomes visible; no live generation ever contains both that
 // owner and an embedded normalized FP32 corpus.
-func (c *Collection) rebuildCosineNormalizedF32V1ColumnGraph(name string, snap *backenddb.Snapshot, catalog *collectionCatalog, baseMeta CollectionMeta, cfg ColumnStoreConfig, def VectorIndexDefinition, manifest columnManifestSnapshot, records []columnManifestRecord, rows []columnVectorGraphAssetRow, constructionMatrix *columnVectorGraphConstructionMatrix, baseCopy *typedGraphBaseCopy, baseCommitSeq, baseSystemRoot uint64, rootName string, baseManifestRootID uint64, replay *backenddb.CommandWALIntent, started time.Time, timing *ColumnGraphBuildTiming) (VectorIndexStatus, error) {
+func (c *Collection) rebuildCosineNormalizedF32V1ColumnGraph(name string, snap *backenddb.Snapshot, catalog *collectionCatalog, baseMeta CollectionMeta, cfg ColumnStoreConfig, def VectorIndexDefinition, manifest columnManifestSnapshot, records []columnManifestRecord, rows []columnVectorGraphAssetRow, constructionMatrix *columnVectorGraphConstructionMatrix, baseCopy *typedGraphBaseCopy, baseCommitSeq, baseSystemRoot uint64, rootName string, baseManifestRootID uint64, replay *backenddb.CommandWALIntent, started time.Time, timing *ColumnGraphBuildTiming, preparePublication func() (bool, error)) (VectorIndexStatus, error) {
 	if baseCopy == nil || !vectorIndexUsesCosineNormalizedF32V1(def) || len(rows) == 0 {
 		return VectorIndexStatus{}, errors.New("collections: canonical normalized column_graph rebuild requires non-empty captured typed base")
 	}
@@ -707,7 +818,15 @@ func (c *Collection) rebuildCosineNormalizedF32V1ColumnGraph(name string, snap *
 	}
 	publicationStarted := time.Now()
 	preflight := func() error { return c.validateColumnGraphRebuildSource(catalog, baseCommitSeq, baseSystemRoot) }
-	newSystemRoot, rootIDs, err := c.db.PublishOrderedRootDeltaGroupWithPreflightCommandWALContextRootBuilderAndSystemDeltaBuilder(nil, preflight, intent, buildContextDeltas, buildSystemDelta)
+	heldRaw, err := preparePublication()
+	if err != nil {
+		return VectorIndexStatus{}, err
+	}
+	publish := c.db.PublishOrderedRootDeltaGroupWithPreflightCommandWALContextRootBuilderAndSystemDeltaBuilder
+	if heldRaw {
+		publish = c.db.PublishStagedOrderedRootDeltaGroupWithPreflightCommandWALContextRootBuilderAndSystemDeltaBuilder
+	}
+	newSystemRoot, rootIDs, err := publish(nil, preflight, intent, buildContextDeltas, buildSystemDelta)
 	if timing != nil {
 		timing.AssetPreparation = max(timing.AssetPreparation, collectionObservedElapsedSince(prepareStarted))
 		timing.Publication = collectionObservedElapsedSince(publicationStarted)
@@ -971,7 +1090,7 @@ func (c *Collection) columnVectorGraphRowsFromTypedColumnCatalogSnapshot(snap *b
 	return rows, source, true, nil
 }
 
-func (c *Collection) rebuildEmptyColumnGraphVectorIndexWithoutBaseManifestRoot(name string, catalog *collectionCatalog, baseMeta CollectionMeta, def VectorIndexDefinition, cfg ColumnStoreConfig, baseCommitSeq, baseSystemRoot uint64, rootName string, replay *backenddb.CommandWALIntent, started time.Time, timing *ColumnGraphBuildTiming, baseCopy *typedGraphBaseCopy) (VectorIndexStatus, error) {
+func (c *Collection) rebuildEmptyColumnGraphVectorIndexWithoutBaseManifestRoot(name string, catalog *collectionCatalog, baseMeta CollectionMeta, def VectorIndexDefinition, cfg ColumnStoreConfig, baseCommitSeq, baseSystemRoot uint64, rootName string, replay *backenddb.CommandWALIntent, started time.Time, timing *ColumnGraphBuildTiming, baseCopy *typedGraphBaseCopy, preparePublication func() (bool, error)) (VectorIndexStatus, error) {
 	capture := baseCopy != nil
 	if capture {
 		if err := baseCopy.reserveManifest(def, nil); err != nil {
@@ -1070,7 +1189,15 @@ func (c *Collection) rebuildEmptyColumnGraphVectorIndexWithoutBaseManifestRoot(n
 	}
 	publicationStarted := time.Now()
 	preflight := func() error { return c.validateColumnGraphRebuildSource(catalog, baseCommitSeq, baseSystemRoot) }
-	newSystemRoot, rootIDs, err := c.db.PublishOrderedRootDeltaGroupWithPreflightCommandWALContextRootBuilderAndSystemDeltaBuilder(nil, preflight, intent, buildContextDeltas, buildSystemDelta)
+	heldRaw, err := preparePublication()
+	if err != nil {
+		return VectorIndexStatus{}, err
+	}
+	publish := c.db.PublishOrderedRootDeltaGroupWithPreflightCommandWALContextRootBuilderAndSystemDeltaBuilder
+	if heldRaw {
+		publish = c.db.PublishStagedOrderedRootDeltaGroupWithPreflightCommandWALContextRootBuilderAndSystemDeltaBuilder
+	}
+	newSystemRoot, rootIDs, err := publish(nil, preflight, intent, buildContextDeltas, buildSystemDelta)
 	if timing != nil {
 		timing.Publication = collectionObservedElapsedSince(publicationStarted)
 	}
@@ -1112,7 +1239,7 @@ func (c *Collection) nativeVectorIndexRebuildStatus(def VectorIndexDefinition) V
 	}
 }
 
-func (c *Collection) finishRebuildVectorIndexNoopStatus(name string, status VectorIndexStatus, statusErr error, replay *backenddb.CommandWALIntent) (VectorIndexStatus, error) {
+func (c *Collection) finishRebuildVectorIndexNoopStatus(name string, status VectorIndexStatus, statusErr error, replay *backenddb.CommandWALIntent, preparePublication func() (bool, error)) (VectorIndexStatus, error) {
 	if statusErr != nil {
 		return VectorIndexStatus{}, statusErr
 	}
@@ -1121,7 +1248,15 @@ func (c *Collection) finishRebuildVectorIndexNoopStatus(name string, status Vect
 		return VectorIndexStatus{}, err
 	}
 	if intent != nil {
-		if err := c.db.PublishCommandWALNoop(intent, false); err != nil {
+		heldRaw, err := preparePublication()
+		if err != nil {
+			return VectorIndexStatus{}, err
+		}
+		publish := c.db.PublishCommandWALNoop
+		if heldRaw {
+			publish = c.db.PublishStagedCommandWALNoop
+		}
+		if err := publish(intent, false); err != nil {
 			return VectorIndexStatus{}, err
 		}
 	}
