@@ -79,6 +79,11 @@ HARNESS_TREE_PATHS = (
 PRODUCT_TREE_PATHS = (
     "TreeDB", "cmd/treedb-document-service", "internal", "go.mod", "go.sum",
 )
+NORMALIZED_CONSUMER_ONLY_PATHS = frozenset({
+    "benchmarks/vector_db_compare/minima_cohere_q5_analyze.py",
+    "benchmarks/vector_db_compare/test_minima_cohere_q5_analyze.py",
+    "benchmarks/vector_db_compare/cohere_scale_harness.md",
+})
 BOUNDED_MANIFEST_SCHEMA = "treedb_rag_minima_manifest/v2"
 BOUNDED_ARTIFACT_SCHEMA = "treedb_rag_application/minima_diagnostic_v1"
 BOUNDED_SQ8_ARTIFACT_SCHEMA = "treedb_rag_application/minima_quantized_diagnostic_v1"
@@ -711,13 +716,36 @@ def _source_trees(candidate_commit):
     )
 
 
-def validate_consumer_source(candidate_commit):
-    """Require the executing consumer and all local imports to equal the candidate."""
+def validate_consumer_source(candidate_commit, *, analyzer_commit=None):
+    """Bind source to the producer, or to an explicit consumer-only descendant."""
     source = Path(__file__).resolve().parents[2]
     paths = [*HARNESS_TREE_PATHS]
+    source_commit = candidate_commit
+    changed_paths = []
+    if analyzer_commit is not None:
+        if not valid_git_oid(analyzer_commit):
+            raise EvidenceError("normalized-v4 analyzer commit must be a full Git object ID")
+        source_commit = analyzer_commit
+        paths.extend(PRODUCT_TREE_PATHS)
+        try:
+            ancestor = subprocess.run(
+                ["git", "merge-base", "--is-ancestor", candidate_commit, analyzer_commit],
+                cwd=source, text=True, capture_output=True, timeout=30, check=False,
+            )
+            delta = subprocess.run(
+                ["git", "diff", "--name-only", "--no-renames", "-z", candidate_commit,
+                 analyzer_commit, "--", *paths],
+                cwd=source, text=True, capture_output=True, timeout=30, check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise EvidenceError(f"consumer-only source delta is unavailable: {exc}") from exc
+        changed_paths = sorted(set(delta.stdout.split("\0")) - {""})
+        if (ancestor.returncode or delta.returncode
+                or set(changed_paths) - NORMALIZED_CONSUMER_ONLY_PATHS):
+            raise EvidenceError("analyzer source is not a permitted consumer-only descendant")
     commands = (
-        ["git", "diff", "--quiet", candidate_commit, "--", *paths],
-        ["git", "diff", "--cached", "--quiet", candidate_commit, "--", *paths],
+        ["git", "diff", "--quiet", source_commit, "--", *paths],
+        ["git", "diff", "--cached", "--quiet", source_commit, "--", *paths],
     )
     try:
         for command in commands:
@@ -749,7 +777,7 @@ def validate_consumer_source(candidate_commit):
         relative = str(path.relative_to(source))
         try:
             completed = subprocess.run(
-                ["git", "show", f"{candidate_commit}:{relative}"], cwd=source,
+                ["git", "show", f"{source_commit}:{relative}"], cwd=source,
                 capture_output=True, timeout=30, check=False,
             )
         except (OSError, subprocess.TimeoutExpired) as exc:
@@ -757,17 +785,34 @@ def validate_consumer_source(candidate_commit):
         digest = hashlib.sha256(completed.stdout).hexdigest()
         if completed.returncode or digest != sha256_file(path):
             raise EvidenceError(f"executing consumer import differs from candidate: {relative}")
+        if analyzer_commit is not None and relative not in NORMALIZED_CONSUMER_ONLY_PATHS:
+            try:
+                producer_blob = subprocess.run(
+                    ["git", "show", f"{candidate_commit}:{relative}"], cwd=source,
+                    capture_output=True, timeout=30, check=False,
+                )
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                raise EvidenceError(f"producer import blob unavailable for {relative}: {exc}") from exc
+            if producer_blob.returncode or hashlib.sha256(producer_blob.stdout).hexdigest() != digest:
+                raise EvidenceError(f"consumer-only repair changed a producer import: {relative}")
         blobs[relative] = digest
-    harness_trees, _ = _source_trees(candidate_commit)
-    return {
+    harness_trees, _ = _source_trees(source_commit)
+    identity = {
         "candidate_commit": candidate_commit,
         "harness_trees": harness_trees,
         "analyzer_sha256": sha256_file(Path(__file__)),
         "imported_blobs_sha256": blobs,
     }
+    if analyzer_commit is not None:
+        identity.update({
+            "analyzer_commit": analyzer_commit,
+            "producer_harness_trees": _source_trees(candidate_commit)[0],
+            "consumer_only_changed_paths": changed_paths,
+        })
+    return identity
 
 
-def _go_binary_build(path, candidate_commit, expected_package):
+def _go_binary_build(path, candidate_commit, expected_package, *, require_trimpath=True):
     try:
         completed = subprocess.run(
             ["go", "version", "-m", str(path)], text=True, capture_output=True,
@@ -796,7 +841,7 @@ def _go_binary_build(path, candidate_commit, expected_package):
             or settings.get("vcs") != "git"
             or settings.get("vcs.revision") != candidate_commit
             or settings.get("vcs.modified") != "false"
-            or settings.get("-trimpath") != "true"):
+            or (require_trimpath and settings.get("-trimpath") != "true")):
         raise EvidenceError(f"Go executable is not a reproducible candidate build: {expected_package}")
     return {
         "go_version": go_version, "package": package, "module": module,
@@ -4150,8 +4195,8 @@ def _normalized_phase_timings(events):
     return result
 
 
-def _analyze_normalized(packet_path, packet, expected_sha256):
-    consumer_source = validate_consumer_source(packet["candidate_commit"])
+def _analyze_normalized(packet_path, packet, expected_sha256, *, analyzer_commit=None):
+    consumer_source = validate_consumer_source(packet["candidate_commit"], analyzer_commit=analyzer_commit)
     paths = resolve_normalized_inventory(packet_path, packet)
     dataset_paths, manifest = _normalized_dataset(packet, paths)
     service = _normalized_file(packet, paths, "inputs", "treedb_service_binary")
@@ -4159,9 +4204,11 @@ def _analyze_normalized(packet_path, packet, expected_sha256):
     go_builds = {
         "treedb_service_binary": _go_binary_build(
             service, packet["candidate_commit"], "github.com/snissn/gomap/cmd/treedb-document-service",
+            require_trimpath=False,
         ),
         "go_helper": _go_binary_build(
             helper, packet["candidate_commit"], "github.com/snissn/gomap/TreeDB/cmd/treedb_v4_production_gate",
+            require_trimpath=False,
         ),
     }
     plans = {
@@ -4302,14 +4349,19 @@ def _analyze_normalized(packet_path, packet, expected_sha256):
             "the frozen 200 Cohere queries are observed qualification queries, not an unseen holdout",
             "SQ8 storage is an accepted additive derived plane; canonical FP32 remains authoritative",
             "phase file/category inventories are live observations, not atomic or post-shutdown totals",
-        ],
+        ] + ([
+            "untrimmed Go inputs are bound to frozen bytes and recorded build context; "
+            "reproducibility across arbitrary source paths is not claimed",
+        ] if any(build["build_settings"].get("-trimpath") != "true" for build in go_builds.values()) else []),
     }
 
 
-def _analyze(packet_path, expected_sha256, validator_runner):
+def _analyze(packet_path, expected_sha256, validator_runner, *, analyzer_commit=None):
     packet_path, packet = load_packet(packet_path, expected_sha256)
     if packet["schema"] == NORMALIZED_PACKET_SCHEMA:
-        return _analyze_normalized(packet_path, packet, expected_sha256)
+        return _analyze_normalized(packet_path, packet, expected_sha256, analyzer_commit=analyzer_commit)
+    if analyzer_commit is not None:
+        raise EvidenceError("analyzer commit override is supported only for normalized-v4 packets")
     consumer_source = validate_consumer_source(packet["candidate_commit"])
     paths = resolve_inventory(packet_path, packet)
     dataset_paths, _ = validate_dataset(packet, paths)
@@ -4395,9 +4447,9 @@ def _analyze(packet_path, expected_sha256, validator_runner):
     }
 
 
-def analyze(packet_path, expected_sha256, validator_runner=default_validator_runner):
+def analyze(packet_path, expected_sha256, validator_runner=default_validator_runner, *, analyzer_commit=None):
     try:
-        return _analyze(packet_path, expected_sha256, validator_runner)
+        return _analyze(packet_path, expected_sha256, validator_runner, analyzer_commit=analyzer_commit)
     except Exception as exc:
         schema = ANALYSIS_SCHEMA
         try:
@@ -4417,8 +4469,9 @@ def main():
     parser.add_argument("--packet", required=True, type=Path)
     parser.add_argument("--expected-packet-sha256", required=True)
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--analyzer-commit", help="reviewed consumer-only descendant; normalized-v4 only")
     args = parser.parse_args()
-    result = analyze(args.packet, args.expected_packet_sha256)
+    result = analyze(args.packet, args.expected_packet_sha256, analyzer_commit=args.analyzer_commit)
     raw = json.dumps(result, sort_keys=True, separators=(",", ":"), allow_nan=False).encode() + b"\n"
     with args.output.open("xb") as output:
         output.write(raw)
