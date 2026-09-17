@@ -223,6 +223,47 @@ def paired_endpoint(counter, records):
 
 
 class NativeCohereDiagnosticTests(unittest.TestCase):
+    def test_v4_production_matrix_requires_one_immutable_publication(self):
+        identity = {
+            "schema_hash": 11,
+            "schema_generation": 12,
+            "base_manifest_generation": 13,
+            "base_manifest_checksum": 14,
+            "current_manifest_generation": 15,
+            "current_manifest_checksum": 16,
+            "current_coverage_lsn": 17,
+        }
+
+        def lane(*, receipt=False):
+            route = identity
+            if receipt:
+                route = {"receipt": {
+                    receipt_name: identity[canonical]
+                    for canonical, receipt_name
+                    in diagnostic.v4_gate._OWNER_IDENTITY_FIELDS
+                }}
+            arm = {"repetitions": [{"observations": [{"route": copy.deepcopy(route)}]}]}
+            return {"exact": copy.deepcopy(arm), "sq8": copy.deepcopy(arm)}
+
+        lanes = {
+            "go_native": lane(),
+            "python_native": lane(),
+            "collection_search": lane(receipt=True),
+            "collection_fetch": lane(receipt=True),
+            "service": lane(),
+        }
+        proof = diagnostic.v4_gate.immutable_owner_identity(lanes)
+        self.assertEqual(proof["current_manifest_checksum"], 16)
+        self.assertEqual(proof["validated_lanes"], sorted(lanes))
+        self.assertEqual(proof["validated_observations"], 10)
+
+        drifted = copy.deepcopy(lanes)
+        drifted["collection_search"]["sq8"]["repetitions"][0]["observations"][0][
+            "route"
+        ]["receipt"]["CurrentManifestChecksum"] += 1
+        with self.assertRaisesRegex(ValueError, "crossed graph publications"):
+            diagnostic.v4_gate.immutable_owner_identity(drifted)
+
     def test_normalized_v4_expected_routes_preserve_cold_filter_policy(self):
         for eligible, filtered, expected in (
             (5000, False, ("typed_hnsw",)),

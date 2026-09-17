@@ -181,7 +181,7 @@ func runSeams(dir, servingPath, index, quantizedIndex string, queries [][]float3
 	if info.VectorRepresentation != gateRepresentation || info.Dimension != len(queries[0]) || info.VectorIndexName == "" {
 		return laneResult{}, fmt.Errorf("index representation/dimension/name mismatch: %q/%d/%q", info.VectorRepresentation, info.Dimension, info.VectorIndexName)
 	}
-	if _, err := service.OptimizeIndex(ctx, index, documentservice.OptimizeIndexRequest{ColumnGraphServing: &serving}); err != nil {
+	if _, err := service.OptimizeIndex(ctx, index, stoppedOwnerEnsureRequest(info, serving)); err != nil {
 		return laneResult{}, fmt.Errorf("re-admit selected serving: %w", err)
 	}
 	collection, err := manager.OpenCollection(index)
@@ -294,6 +294,15 @@ func runSeams(dir, servingPath, index, quantizedIndex string, queries [][]float3
 		QueryCount: len(queries), WarmupCount: gateWarmupQueries, TopK: gateTopK, EfSearch: gateEFSearch,
 		SubLanes: []laneResult{collectionSearchResult, collectionResult, serviceResult},
 	}, nil
+}
+
+func stoppedOwnerEnsureRequest(info documentservice.IndexInfo, serving collections.ColumnGraphServingOptions) documentservice.OptimizeIndexRequest {
+	return documentservice.OptimizeIndexRequest{
+		ColumnGraphAction:  "ensure",
+		ColumnGraphServing: &serving,
+		ExpectedGeneration: info.Generation,
+		VectorIndexName:    info.VectorIndexName,
+	}
 }
 
 func measureLane(name string, queries [][]float32, call measuredCall) (laneResult, error) {

@@ -536,6 +536,75 @@ def lane_arms(lane: dict[str, Any]) -> dict[str, Any]:
     return {"exact": summarize_arm(lane["exact"]), "sq8": summarize_arm(lane["sq8"])}
 
 
+_OWNER_IDENTITY_FIELDS = (
+    ("schema_hash", "SchemaHash"),
+    ("schema_generation", "SchemaGeneration"),
+    ("base_manifest_generation", "BaseManifestGeneration"),
+    ("base_manifest_checksum", "BaseManifestChecksum"),
+    ("current_manifest_generation", "CurrentManifestGeneration"),
+    ("current_manifest_checksum", "CurrentManifestChecksum"),
+    ("current_coverage_lsn", "CurrentCoverageLSN"),
+)
+
+
+def immutable_owner_identity(lanes: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    """Prove every compared observation used one immutable graph publication."""
+    if not lanes:
+        raise ValueError("production matrix has no lanes")
+    expected: dict[str, int] | None = None
+    checked = 0
+    for lane_name, lane in lanes.items():
+        for arm_name in ("exact", "sq8"):
+            repetitions = lane.get(arm_name, {}).get("repetitions")
+            if not isinstance(repetitions, list) or not repetitions:
+                raise ValueError(f"{lane_name}.{arm_name} has no repetitions")
+            for repetition_index, repetition in enumerate(repetitions):
+                observations = repetition.get("observations")
+                if not isinstance(observations, list) or not observations:
+                    raise ValueError(
+                        f"{lane_name}.{arm_name}[{repetition_index}] has no observations"
+                    )
+                for observation_index, observation in enumerate(observations):
+                    route = observation.get("route")
+                    if not isinstance(route, dict):
+                        raise ValueError(
+                            f"{lane_name}.{arm_name}[{repetition_index}]"
+                            f".observations[{observation_index}] has no route identity"
+                        )
+                    source = route.get("receipt", route)
+                    if not isinstance(source, dict):
+                        raise ValueError(
+                            f"{lane_name}.{arm_name}[{repetition_index}]"
+                            f".observations[{observation_index}] has an invalid route receipt"
+                        )
+                    identity: dict[str, int] = {}
+                    for canonical, receipt_name in _OWNER_IDENTITY_FIELDS:
+                        value = source.get(receipt_name if "receipt" in route else canonical)
+                        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                            raise ValueError(
+                                f"{lane_name}.{arm_name}[{repetition_index}]"
+                                f".observations[{observation_index}] has invalid {canonical}"
+                            )
+                        identity[canonical] = value
+                    if expected is None:
+                        expected = identity
+                    elif identity != expected:
+                        raise ValueError(
+                            "production lanes crossed graph publications: "
+                            f"expected {expected}, observed {identity} at "
+                            f"{lane_name}.{arm_name}[{repetition_index}]"
+                            f".observations[{observation_index}]"
+                        )
+                    checked += 1
+    if expected is None:
+        raise ValueError("production matrix has no route observations")
+    return {
+        **expected,
+        "validated_lanes": sorted(lanes),
+        "validated_observations": checked,
+    }
+
+
 def evaluate(lanes: dict[str, dict[str, Any]]) -> tuple[dict[str, Any], list[str]]:
     summaries = {name: lane_arms(lane) for name, lane in lanes.items()}
     checks: dict[str, Any] = {}
@@ -712,14 +781,36 @@ def main() -> int:
                 f"-quantized-index={QUANTIZED_INDEX}",
             ],
         )
-        sub_lanes = {lane["lane"]: lane for lane in seams["sub_lanes"]}
+        seam_records = seams.get("sub_lanes")
+        if not isinstance(seam_records, list) or len(seam_records) != 3 or any(
+            not isinstance(lane, dict) for lane in seam_records
+        ):
+            raise RuntimeError("Go seam lane inventory is malformed")
+        sub_lanes = {lane.get("lane"): lane for lane in seam_records}
+        if set(sub_lanes) != {"collection_search", "collection_fetch", "service"}:
+            raise RuntimeError("Go seam lane inventory is incomplete or duplicated")
         lanes = {
+            "go_native": go_native,
+            "python_native": python_native,
+            "collection_search": sub_lanes["collection_search"],
+            "collection_fetch": sub_lanes["collection_fetch"],
+            "service": sub_lanes["service"],
+        }
+        owner_identity: dict[str, Any]
+        owner_identity_failure = ""
+        try:
+            owner_identity = immutable_owner_identity(lanes)
+        except ValueError as exc:
+            owner_identity = {"error": str(exc)}
+            owner_identity_failure = str(exc)
+        evaluation, failures = evaluate({
             "go_native": go_native,
             "python_native": python_native,
             "collection": sub_lanes["collection_fetch"],
             "service": sub_lanes["service"],
-        }
-        evaluation, failures = evaluate(lanes)
+        })
+        if owner_identity_failure:
+            failures.insert(0, owner_identity_failure)
         for arm in ("exact", "sq8"):
             production = evaluation["summaries"]["python_native"][arm]["median"]
             diagnostic = artifact["diagnostic_cost"][arm]
@@ -745,6 +836,7 @@ def main() -> int:
             state="passed" if not failures else "failed",
             failures=failures,
             lanes=lanes,
+            immutable_owner_identity=owner_identity,
             evaluation=evaluation,
             service_log=str(controller.log_path),
         )

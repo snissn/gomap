@@ -3099,7 +3099,11 @@ class Run:
             f"-dataset={self.plan['dataset']}", f"-serving={self.plan['serving_path']}",
             "-index=minima_cohere", f"-quantized-index={QUANTIZED_PROFILE_NAME}",
         ])
-        by_name = {lane["lane"]: lane for lane in seams["sub_lanes"]}
+        seam_records = seams.get("sub_lanes")
+        if not isinstance(seam_records, list) or len(seam_records) != 3 or any(
+                not isinstance(lane, dict) for lane in seam_records):
+            raise RuntimeError("normalized-v4 Go seam inventory is malformed")
+        by_name = {lane.get("lane"): lane for lane in seam_records}
         required = {"collection_search", "collection_fetch", "service"}
         if set(by_name) != required:
             raise RuntimeError("normalized-v4 Go seam inventory is incomplete")
@@ -3115,6 +3119,7 @@ class Run:
             "collection_fetch": by_name["collection_fetch"],
             "service": by_name["service"],
         }
+        owner_identity = v4_gate.immutable_owner_identity(lanes)
         evaluation, failures = v4_gate.evaluate({
             "go_native": go_native, "python_native": python_native,
             "collection": by_name["collection_fetch"], "service": by_name["service"],
@@ -3128,7 +3133,8 @@ class Run:
             "representation": NORMALIZED_REPRESENTATION,
             "diagnostics": False, "return_embedding": False,
             "live_resource_before": live_before, "live_resource_after": live_after,
-            "lanes": lanes, "producer_evaluation": evaluation,
+            "lanes": lanes, "immutable_owner_identity": owner_identity,
+            "producer_evaluation": evaluation,
             "producer_failures": failures,
             "profile_capture": profiles, "profile_analysis": profile_analysis,
             "engine_diagnostic": engine,

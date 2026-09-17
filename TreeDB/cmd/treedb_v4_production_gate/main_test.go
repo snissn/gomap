@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/collections"
+	"github.com/snissn/gomap/TreeDB/documentservice"
 )
 
 func TestMeasureLaneWarmsAndAlternatesCompleteArms(t *testing.T) {
@@ -38,5 +39,15 @@ func TestMeasureLaneWarmsAndAlternatesCompleteArms(t *testing.T) {
 				t.Fatalf("repetition %d omitted ordered observations: %+v", rep, arm.Observations)
 			}
 		}
+	}
+}
+
+func TestStoppedOwnerRequestPreservesPublication(t *testing.T) {
+	info := documentservice.IndexInfo{Generation: 7, VectorIndexName: "embedding"}
+	serving := collections.ColumnGraphServingOptions{}
+	request := stoppedOwnerEnsureRequest(info, serving)
+	if request.ColumnGraphAction != "ensure" || request.ColumnGraphServing == nil ||
+		request.ExpectedGeneration != info.Generation || request.VectorIndexName != info.VectorIndexName {
+		t.Fatalf("stopped-owner request can rebuild or target a different index: %+v", request)
 	}
 }
