@@ -991,16 +991,28 @@ func newVectorPartitionShardSearchTCPListenerV1(t *testing.T, handler VectorPart
 	if err != nil {
 		t.Fatal(err)
 	}
+	var connsMu sync.Mutex
+	var conns []net.Conn
 	go func() {
 		for {
 			conn, acceptErr := listener.Accept()
 			if acceptErr != nil {
 				return
 			}
+			connsMu.Lock()
+			conns = append(conns, conn)
+			connsMu.Unlock()
 			go (VectorPartitionShardSearchTCPServerV1{Service: handler}).ServeConn(context.Background(), conn)
 		}
 	}()
-	t.Cleanup(func() { _ = listener.Close() })
+	t.Cleanup(func() {
+		_ = listener.Close()
+		connsMu.Lock()
+		defer connsMu.Unlock()
+		for _, conn := range conns {
+			_ = conn.Close()
+		}
+	})
 	return listener
 }
 
