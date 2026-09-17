@@ -322,7 +322,7 @@ func NewVectorPartitionProductionNodeV1(ctx context.Context, opts VectorPartitio
 	}
 	node.topology, err = NewVectorPartitionProductionTopologyV1(VectorPartitionProductionTopologyOptionsV1{
 		ConstructionContext: ctx,
-		Catalog:             resolved, Placement: placement, RouterSource: opts.RouterSource, ReplicatedLifecycle: replicated,
+		Catalog:             resolved, Placement: placement, RouterSource: vectorPartitionImmutableCoordinatorRouterSourceV1{opts.RouterSource}, ReplicatedLifecycle: replicated,
 		Endpoints: endpoints, NodeEndpoints: nodeEndpoints, Shards: shards, CoordinatorLimits: opts.CoordinatorLimits, ShardLimits: opts.ShardLimits,
 		ServingSnapshot: &VectorPartitionServingSnapshotPublisherOptionsV1{
 			Authority: replicated, GenerationSources: generationSources, TopologyDigest: opts.TopologyDigest,

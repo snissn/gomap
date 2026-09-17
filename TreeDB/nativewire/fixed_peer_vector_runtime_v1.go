@@ -633,6 +633,30 @@ func validateFixedPeerVectorConfigV1(config FixedPeerTCPConfigV1, localGroups ma
 	if err := resolved.ValidateVectorPartitionPlacementV1(vector.Placement); err != nil {
 		return fmt.Errorf("invalid vector placement: %w", err)
 	}
+	lifecycleOwners, ready, err := fixedPeerVectorLifecycleSpecV1(vector)
+	if err != nil {
+		return err
+	}
+	if _, err := raftplacement.VectorPartitionLifecycleReadySetDigestV1(vector.Identity, lifecycleOwners, []raftplacement.VectorPartitionLifecycleGroupReadyV1{ready}); err != nil {
+		return fmt.Errorf("invalid vector lifecycle identity: %w", err)
+	}
+	manifest, placement := vector.Manifest, vector.Placement
+	source := raftplacement.VectorPartitionLifecycleSourceIdentityV1{
+		Generation: manifest.SourceGeneration, Checksum: manifest.SourceChecksum,
+		SchemaHash: manifest.SourceSchemaHash, RowCount: manifest.SourceRowCount,
+	}
+	if vector.Identity.Index.IndexDefinitionDigest != manifest.IndexDefinitionDigest || vector.Identity.Source != source ||
+		placement.IndexDefinitionDigest != manifest.IndexDefinitionDigest || placement.SourceGeneration != manifest.SourceGeneration ||
+		placement.SourceChecksum != manifest.SourceChecksum || placement.SourceSchemaHash != manifest.SourceSchemaHash ||
+		placement.SourceRowCount != manifest.SourceRowCount || placement.PartitionCount != manifest.PartitionCount ||
+		len(placement.Partitions) != len(manifest.Placements) {
+		return errors.New("vector identity or placement differs from manifest")
+	}
+	for i, partition := range placement.Partitions {
+		if partition.PartitionID != manifest.Placements[i].PartitionID || string(partition.GroupID) != manifest.Placements[i].GroupID {
+			return errors.New("vector partition mapping differs from manifest")
+		}
+	}
 	return nil
 }
 

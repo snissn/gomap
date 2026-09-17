@@ -138,6 +138,18 @@ type vectorPartitionCoordinatorReplicatedLivePinSourceV1 interface {
 	acquireVectorPartitionCoordinatorReplicatedLivePinV1(context.Context, collections.VectorPartitionManifestV1) (*collections.VectorIndexPartitionLiveSearchPinV1, error)
 }
 
+// vectorPartitionImmutableCoordinatorRouterSourceV1 explicitly matches the
+// immutable replicated generation sources assembled by M8 and ProductionNode.
+// Their prepared generation, not the collection's mutable live tail, is the
+// serving authority. Preserve the supplied router's opening and status behavior.
+type vectorPartitionImmutableCoordinatorRouterSourceV1 struct {
+	VectorPartitionCoordinatorRouterSourceV1
+}
+
+func (vectorPartitionImmutableCoordinatorRouterSourceV1) acquireVectorPartitionCoordinatorReplicatedLivePinV1(context.Context, collections.VectorPartitionManifestV1) (*collections.VectorIndexPartitionLiveSearchPinV1, error) {
+	return nil, nil
+}
+
 type vectorPartitionCoordinatorLiveRouterSourceV1 interface {
 	openVectorPartitionCoordinatorLiveRouterV1(context.Context, string, uint64) (VectorPartitionCoordinatorRouterV1, error)
 }

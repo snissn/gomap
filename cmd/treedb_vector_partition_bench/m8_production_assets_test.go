@@ -1020,7 +1020,7 @@ func TestM8ProductionMultiGroupTopology10kTCPV1(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(response.Neighbors) != 10 || len(response.ProbedGroups) != 2 {
+	if len(response.Neighbors) != 10 || len(response.ProbedGroups) != 2 || response.LiveRevision != 0 || response.LiveCoverage != 0 {
 		t.Fatalf("response=%+v", response)
 	}
 	sessions := topology.Coordinator().Stats().RouterSessions
@@ -1218,7 +1218,7 @@ func TestM8ExistingAssetsRelabelsTopologyWithoutMutatingLocalPacksV1(t *testing.
 		query[i] = float32(value)
 	}
 	response, searchErr := topology.Coordinator().Search(ctx, nativewire.VectorPartitionCoordinatorRequestV1{Version: nativewire.VectorPartitionCoordinatorVersionV1, RequestID: "m8-existing-assets", CancellationID: "m8-existing-assets-cancel", Database: "default", Catalog: "default", Collection: assets.manifest.Collection, IndexName: assets.manifest.IndexName, IndexDefinitionDigest: assets.manifest.IndexDefinitionDigest, Query: query, Metric: nativewire.VectorPartitionShardSearchMetricCosineV1, RouterMode: collections.VectorPartitionRouterModeExactV1, RouterCandidateBudget: 10_000, PartitionProbes: 4, Consistency: nativewire.VectorPartitionShardSearchConsistencySnapshotV1, StatsMode: nativewire.VectorPartitionShardSearchStatsBasicV1, TopK: 10, EfSearch: 4096, DeadlineUnixNano: time.Now().Add(30 * time.Second).UnixNano(), RequestBytesLimit: 4 << 20, CandidateBytesLimit: 64 << 20, ResponseBytesLimit: 64 << 20, MergeEntriesLimit: 40})
-	if searchErr != nil || len(response.Neighbors) != 10 || len(response.ProbedGroups) != 4 {
+	if searchErr != nil || len(response.Neighbors) != 10 || len(response.ProbedGroups) != 4 || response.LiveRevision != 0 || response.LiveCoverage != 0 {
 		t.Fatalf("relabelled topology response=%+v err=%v", response, searchErr)
 	}
 	if err := topology.Close(); err != nil {

@@ -761,8 +761,22 @@ func TestFixedPeerVectorConfigRequiresOneOwnerGroupV1(t *testing.T) {
 	}
 	config.Vector.Placement.IndexDefinitionDigest = strings.Repeat("a", 64)
 	config.Vector.Placement.SourceGeneration = 1
+	config.Vector.Placement.SourceChecksum = 1
+	config.Vector.Placement.SourceSchemaHash = 1
 	config.Vector.Placement.SourceRowCount = 1
 	config.Vector.Placement.PartitionCount = 1
+	config.Vector.Manifest.IndexDefinitionDigest = config.Vector.Placement.IndexDefinitionDigest
+	config.Vector.Manifest.SourceGeneration = 1
+	config.Vector.Manifest.SourceChecksum = 1
+	config.Vector.Manifest.SourceSchemaHash = 1
+	config.Vector.Manifest.SourceRowCount = 1
+	config.Vector.Manifest.PartitionCount = 1
+	config.Vector.Manifest.Placements = []collections.VectorPartitionPlacementV1{{PartitionID: 0, GroupID: "group-a"}}
+	config.Vector.Identity.Index.CollectionIncarnation = 1
+	config.Vector.Identity.Index.IndexEpoch = 1
+	config.Vector.Identity.Index.IndexDefinitionDigest = config.Vector.Placement.IndexDefinitionDigest
+	config.Vector.Identity.Index.CatalogDigest = strings.Repeat("b", 64)
+	config.Vector.Identity.Source = raftplacement.VectorPartitionLifecycleSourceIdentityV1{Generation: 1, Checksum: 1, SchemaHash: 1, RowCount: 1}
 	for _, localGroup := range []raftcluster.GroupID{"group-a", "group-b"} {
 		if err := validateFixedPeerVectorConfigV1(config, map[raftcluster.GroupID]bool{localGroup: true}); err != nil {
 			t.Fatalf("one local data group %q rejected: %v", localGroup, err)
@@ -779,7 +793,8 @@ func TestFixedPeerVectorConfigPreflightBeforeDiskCreationV1(t *testing.T) {
 	seed := fixedPeerVectorSeedFixtureV1{
 		manifest: collections.VectorPartitionManifestV1{
 			State: "ready", Collection: "docs", IndexName: "embedding", Generation: 1, IntegrityDigest: "integrity",
-			IndexDefinitionDigest: strings.Repeat("a", 64), SourceGeneration: 1, SourceRowCount: 1,
+			IndexDefinitionDigest: strings.Repeat("a", 64), SourceGeneration: 1, SourceChecksum: 1, SourceSchemaHash: 1, SourceRowCount: 1,
+			PartitionCount: 1, Placements: []collections.VectorPartitionPlacementV1{{PartitionID: 0, GroupID: "group-b"}},
 		},
 		catalog: raftplacement.CatalogV1{
 			Features: raftplacement.DefaultFeatureSet(),
@@ -791,6 +806,34 @@ func TestFixedPeerVectorConfigPreflightBeforeDiskCreationV1(t *testing.T) {
 		},
 	}
 	for name, mutate := range map[string]func(*FixedPeerTCPConfigV1){
+		"collection_incarnation":       func(c *FixedPeerTCPConfigV1) { c.Vector.Identity.Index.CollectionIncarnation = 0 },
+		"index_epoch":                  func(c *FixedPeerTCPConfigV1) { c.Vector.Identity.Index.IndexEpoch = 0 },
+		"malformed_index_digest":       func(c *FixedPeerTCPConfigV1) { c.Vector.Identity.Index.IndexDefinitionDigest = "invalid" },
+		"malformed_catalog_digest":     func(c *FixedPeerTCPConfigV1) { c.Vector.Identity.Index.CatalogDigest = "invalid" },
+		"zero_source_generation":       func(c *FixedPeerTCPConfigV1) { c.Vector.Identity.Source.Generation = 0 },
+		"zero_source_checksum":         func(c *FixedPeerTCPConfigV1) { c.Vector.Identity.Source.Checksum = 0 },
+		"zero_source_schema":           func(c *FixedPeerTCPConfigV1) { c.Vector.Identity.Source.SchemaHash = 0 },
+		"zero_source_rows":             func(c *FixedPeerTCPConfigV1) { c.Vector.Identity.Source.RowCount = 0 },
+		"binding_identity_digest":      func(c *FixedPeerTCPConfigV1) { c.Vector.Identity.Index.IndexDefinitionDigest = strings.Repeat("b", 64) },
+		"binding_identity_generation":  func(c *FixedPeerTCPConfigV1) { c.Vector.Identity.Source.Generation++ },
+		"binding_identity_checksum":    func(c *FixedPeerTCPConfigV1) { c.Vector.Identity.Source.Checksum++ },
+		"binding_identity_schema":      func(c *FixedPeerTCPConfigV1) { c.Vector.Identity.Source.SchemaHash++ },
+		"binding_identity_rows":        func(c *FixedPeerTCPConfigV1) { c.Vector.Identity.Source.RowCount++ },
+		"binding_placement_digest":     func(c *FixedPeerTCPConfigV1) { c.Vector.Placement.IndexDefinitionDigest = strings.Repeat("b", 64) },
+		"binding_placement_generation": func(c *FixedPeerTCPConfigV1) { c.Vector.Placement.SourceGeneration++ },
+		"binding_placement_checksum":   func(c *FixedPeerTCPConfigV1) { c.Vector.Placement.SourceChecksum++ },
+		"binding_placement_schema":     func(c *FixedPeerTCPConfigV1) { c.Vector.Placement.SourceSchemaHash++ },
+		"binding_placement_rows":       func(c *FixedPeerTCPConfigV1) { c.Vector.Placement.SourceRowCount++ },
+		"binding_placement_count": func(c *FixedPeerTCPConfigV1) {
+			c.Vector.Placement.PartitionCount++
+			c.Vector.Placement.Partitions = append(c.Vector.Placement.Partitions, raftplacement.VectorPartitionGroupV1{PartitionID: 1, GroupID: "group-b"})
+		},
+		"binding_partition_id": func(c *FixedPeerTCPConfigV1) {
+			c.Vector.Manifest.Placements = []collections.VectorPartitionPlacementV1{{PartitionID: 1, GroupID: "group-b"}}
+		},
+		"binding_partition_group": func(c *FixedPeerTCPConfigV1) {
+			c.Vector.Manifest.Placements = []collections.VectorPartitionPlacementV1{{PartitionID: 0, GroupID: "group-a"}}
+		},
 		"catalog_epoch":  func(c *FixedPeerTCPConfigV1) { c.Vector.Identity.Index.CatalogEpoch = 0 },
 		"catalog_digest": func(c *FixedPeerTCPConfigV1) { c.Vector.Identity.Index.CatalogDigest = "" },
 		"catalog":        func(c *FixedPeerTCPConfigV1) { c.Vector.Catalog = raftplacement.CatalogV1{} },
@@ -819,6 +862,22 @@ func TestFixedPeerVectorConfigPreflightBeforeDiskCreationV1(t *testing.T) {
 				t.Fatalf("valid baseline config rejected: %v", err)
 			}
 			mutate(&config)
+			if strings.HasPrefix(name, "binding_") {
+				resolved, err := raftplacement.Validate(config.Vector.Catalog)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := resolved.ValidateVectorPartitionPlacementV1(config.Vector.Placement); err != nil {
+					t.Fatalf("binding test has invalid placement shape: %v", err)
+				}
+				owners, ready, err := fixedPeerVectorLifecycleSpecV1(config.Vector)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := raftplacement.VectorPartitionLifecycleReadySetDigestV1(config.Vector.Identity, owners, []raftplacement.VectorPartitionLifecycleGroupReadyV1{ready}); err != nil {
+					t.Fatalf("binding test has invalid lifecycle shape: %v", err)
+				}
+			}
 			if runtime, err := OpenFixedPeerTCPRuntimeV1(config); !errors.Is(err, raftcluster.ErrInvalidConfig) {
 				if runtime != nil {
 					_ = runtime.Close()
