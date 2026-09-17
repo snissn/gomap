@@ -3500,8 +3500,18 @@ def _normalized_validate_events(path, plan, mode, canonical_truth, original_trut
     terminal = [event for event in events if event.get("event") == "terminal"]
     if (len(terminal) != 1 or terminal[0].get("qualification") != "producer_gates_passed"
             or terminal[0].get("lifecycle_complete") is not True or terminal[0].get("error") is not None
+            or events[-1] is not terminal[0]
+            or type(terminal[0].get("final_disk_bytes")) is not int
+            or terminal[0]["final_disk_bytes"] <= 0
             or any(event.get("event") in {"failure", "finalization_failure"} for event in events)):
         raise EvidenceError(f"normalized-v4 {mode} producer did not complete cleanly")
+    try:
+        native.validate_shutdowns(
+            terminal[0].get("process_lifetimes"),
+            native.expected_shutdown_lifetimes(plan, None, "producer_gates_passed"),
+        )
+    except (RuntimeError, TypeError, KeyError, AttributeError) as exc:
+        raise EvidenceError(f"normalized-v4 {mode} service lifetimes did not shut down cleanly: {exc}") from exc
     calls = [event for event in events if event.get("event") == "call"]
     ingests = [call for call in calls if call.get("phase") == "initial_durable_ingest"]
     if (len(ingests) != math.ceil(500000 / 256)
@@ -3639,7 +3649,7 @@ def _normalized_validate_events(path, plan, mode, canonical_truth, original_trut
             or not 0 <= full[0].get("maximum_norm_error", math.inf) <= 1e-5):
         raise EvidenceError(f"normalized-v4 {mode} exhaustive final state is invalid")
     return {
-        "events": events, "fixed": fixed,
+        "events": events, "fixed": fixed, "terminal": terminal[0],
         "quality": {key: statistics.mean(values) for key, values in quality.items()},
         "full_state": full[0],
     }
@@ -4111,6 +4121,22 @@ def _normalized_validate_resources(artifact, mode, expected_owner=None):
     return {"phases": phases, "inventories": summaries, "final": summaries[-1]}
 
 
+def _normalized_disk_comparison(evidence, resources):
+    totals = {mode: evidence[mode]["terminal"]["final_disk_bytes"] for mode in ("exact", "sq8")}
+    quantized_physical = sum(asset.get("bytes", 0)
+                             for asset in resources["sq8"]["final"]["quantized_assets"])
+    delta = totals["sq8"] - totals["exact"]
+    return {
+        "final_disk_boundary": "post-clean-shutdown owned-directory bytes, including retained WAL",
+        "final_disk_bytes": totals,
+        "disk_delta_bytes": delta, "quantized_physical_bytes": quantized_physical,
+        "disk_checks": {
+            "sq8_delta_nonnegative": delta >= 0,
+            "sq8_delta_explained_by_derived_plane": delta <= quantized_physical * 1.25 + (64 << 20),
+        },
+    }
+
+
 def _normalized_phase_timings(events):
     phases = ("service_start", "schema_ensure", "initial_graph_build", "pre_close_fold",
               "close", "reopen", "idempotent_ensure", "reopen_graph_ensure",
@@ -4208,19 +4234,8 @@ def _analyze_normalized(packet_path, packet, expected_sha256):
             f"normalized-v4 {mode} resources", MAX_JSON_BYTES,
         ), mode, owner if mode == "sq8" else None) for mode in ("exact", "sq8")
     }
-    exact_disk = resources["exact"]["final"]["total_owned_bytes"]
-    sq8_disk = resources["sq8"]["final"]["total_owned_bytes"]
-    quantized_physical = sum(
-        asset.get("bytes", 0) for asset in resources["sq8"]["final"]["quantized_assets"]
-    )
-    disk_delta = sq8_disk - exact_disk
-    disk_checks = {
-        "sq8_delta_nonnegative": disk_delta >= 0,
-        "sq8_delta_explained_by_derived_plane": (
-            disk_delta <= quantized_physical * 1.25 + (64 << 20)
-        ),
-    }
-    failures.extend(f"disk: {name}" for name, passed in disk_checks.items() if not passed)
+    disk = _normalized_disk_comparison(evidence, resources)
+    failures.extend(f"disk: {name}" for name, passed in disk["disk_checks"].items() if not passed)
     exact_peak = max(row["process_memory"].get("vmhwm_bytes", 0)
                      for row in resources["exact"]["inventories"])
     sq8_peak = max(row["process_memory"].get("vmhwm_bytes", 0)
@@ -4270,8 +4285,7 @@ def _analyze_normalized(packet_path, packet, expected_sha256):
         "engine": engine_statistics,
         "resources": {
             "exact": resources["exact"], "sq8": resources["sq8"],
-            "disk_delta_bytes": disk_delta, "quantized_physical_bytes": quantized_physical,
-            "disk_checks": disk_checks, "peak_rss_delta_bytes": rss_delta,
+            **disk, "peak_rss_delta_bytes": rss_delta,
             "rss_explained_by_derived_plane": rss_check,
         },
         "phase_timings_ns": {
@@ -4287,6 +4301,7 @@ def _analyze_normalized(packet_path, packet, expected_sha256):
             "opt-in cosine_normalized_f32_v1 only; no default promotion is implied",
             "the frozen 200 Cohere queries are observed qualification queries, not an unseen holdout",
             "SQ8 storage is an accepted additive derived plane; canonical FP32 remains authoritative",
+            "phase file/category inventories are live observations, not atomic or post-shutdown totals",
         ],
     }
 

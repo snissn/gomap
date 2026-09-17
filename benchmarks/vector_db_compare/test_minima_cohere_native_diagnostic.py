@@ -1,12 +1,14 @@
 """Small fail-closed checks; no service, protected holdout or corpus collection."""
 import copy
+import errno
 import json
 import subprocess
 import tempfile
 from pathlib import Path
+import stat
 from types import SimpleNamespace
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 import numpy as np
 from treedb_client import IndexInfo
@@ -1094,6 +1096,53 @@ class NativeCohereDiagnosticTests(unittest.TestCase):
                 "leaf_log": 2, "other": 1,
             })
             self.assertEqual(sum(row["bytes"] for row in inventory["files"]), 18)
+
+    def test_normalized_inventory_uses_its_own_live_observation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            run = object.__new__(diagnostic.Run)
+            run.plan = {"campaign_profile": diagnostic.CAMPAIGN_PROFILE_NORMALIZED_V4}
+            run.output = Path(directory)
+            (run.output / "db").mkdir()
+            (run.output / "db" / "MANIFEST").write_bytes(b"observed")
+            endpoint = paired_endpoint(1, [])
+            endpoint["typed_graph"].update(vector_assets=[{"ref": "unchanged"}], typed_column_parts=[])
+            run.paired_resource_endpoint = Mock(return_value=endpoint)
+            run.normalized_v4_resource_inventories, run.emit = [], Mock()
+            with patch.object(diagnostic, "linux_process_memory", return_value={"vmrss_bytes": 1}):
+                inventory = run.normalized_v4_resource_inventory("post_fold")
+            self.assertEqual(inventory["owned_files"]["total_bytes"], 8)
+            self.assertNotEqual(inventory["owned_files"]["total_bytes"],
+                                endpoint["total_db_bytes_including_wal"])
+            for field in ("pid", "generation", "linux_process_identity", "typed_graph"):
+                self.assertEqual(inventory[field], endpoint[field])
+            self.assertEqual(run.normalized_v4_resource_inventories, [inventory])
+            run.emit.assert_called_once_with("normalized_v4_resource_inventory", inventory=inventory)
+
+    def test_owned_inventory_stats_each_entry_once_without_following_symlinks(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            entries = []
+            for name, mode, size in (("MANIFEST", stat.S_IFREG, 8),
+                                     ("outside", stat.S_IFLNK, 1000)):
+                entry = Mock(path=str(root / name))
+                entry.stat.return_value = SimpleNamespace(st_mode=mode, st_size=size)
+                entries.append(entry)
+            for code in (errno.ENOENT, getattr(errno, "ESTALE", errno.ENOENT)):
+                entry = Mock(path=str(root / f"obsolete-{code}"))
+                entry.stat.side_effect = OSError(code, "disappeared")
+                entries.append(entry)
+            scan = MagicMock()
+            scan.__iter__.return_value = iter(entries)
+            with patch.object(diagnostic.os, "scandir", return_value=scan):
+                inventory = diagnostic.owned_db_file_inventory(root)
+            self.assertEqual(inventory["files"], [{"path": "MANIFEST", "bytes": 8, "category": "other"}])
+            self.assertEqual(inventory["total_bytes"], 8)
+            for entry in entries:
+                entry.stat.assert_called_once_with(follow_symlinks=False)
+            scan.__exit__.assert_called_once()
+            with patch.object(diagnostic.os, "scandir", side_effect=PermissionError(errno.EACCES, "denied")):
+                with self.assertRaises(PermissionError):
+                    diagnostic.owned_db_file_inventory(root)
 
     def test_ensure_binds_effective_construction_width(self):
         run = object.__new__(diagnostic.Run)

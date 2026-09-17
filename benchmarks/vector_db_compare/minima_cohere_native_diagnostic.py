@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
+import errno
 import hashlib
 import inspect
 import json
@@ -18,6 +19,7 @@ from pathlib import Path
 import platform
 import shutil
 import signal
+import stat
 import subprocess
 import threading
 import time
@@ -1016,7 +1018,7 @@ def digest(path):
 
 
 def owned_db_file_inventory(root):
-    """Inventory owned files without hashing multi-gigabyte campaign payloads."""
+    """One live observation: no symlink traversal; skip ENOENT/ESTALE like disk_bytes."""
     root = Path(root).resolve()
     if not root.is_dir():
         raise RuntimeError("campaign database directory is unavailable")
@@ -1025,21 +1027,43 @@ def owned_db_file_inventory(root):
         "leaf_log": 0, "other": 0,
     }
     files = []
-    for path in sorted(item for item in root.rglob("*") if item.is_file()):
-        relative = path.relative_to(root).as_posix()
-        size = path.stat().st_size
-        if any(marker in "/" + relative for marker in ("/column_assets/", "/column-assets/")):
-            category = "column_assets"
-        elif "/wal/" in "/" + relative:
-            category = "command_wal"
-        elif "/value_vlog/" in "/" + relative:
-            category = "value_log"
-        elif "/leaf_vlog/" in "/" + relative:
-            category = "leaf_log"
-        else:
-            category = "other"
-        categories[category] += size
-        files.append({"path": relative, "bytes": size, "category": category})
+    transient_missing = {errno.ENOENT, getattr(errno, "ESTALE", errno.ENOENT)}
+    pending = [root]
+    while pending:
+        directory = pending.pop()
+        try:
+            entries = os.scandir(directory)
+        except OSError as exc:
+            if exc.errno in transient_missing:
+                continue
+            raise
+        with entries:
+            for entry in entries:
+                try:
+                    info = entry.stat(follow_symlinks=False)
+                except OSError as exc:
+                    if exc.errno in transient_missing:
+                        continue
+                    raise
+                if stat.S_ISDIR(info.st_mode):
+                    pending.append(Path(entry.path))
+                    continue
+                if not stat.S_ISREG(info.st_mode):
+                    continue
+                relative = Path(entry.path).relative_to(root).as_posix()
+                if any(marker in "/" + relative for marker in ("/column_assets/", "/column-assets/")):
+                    category = "column_assets"
+                elif "/wal/" in "/" + relative:
+                    category = "command_wal"
+                elif "/value_vlog/" in "/" + relative:
+                    category = "value_log"
+                elif "/leaf_vlog/" in "/" + relative:
+                    category = "leaf_log"
+                else:
+                    category = "other"
+                categories[category] += info.st_size
+                files.append({"path": relative, "bytes": info.st_size, "category": category})
+    files.sort(key=lambda row: row["path"])
     total = sum(row["bytes"] for row in files)
     if total != sum(categories.values()) or total <= 0:
         raise RuntimeError("campaign database file inventory is inconsistent")
@@ -3090,8 +3114,6 @@ class Run:
             "typed_graph": graph,
             "owned_files": owned_db_file_inventory(self.output / "db"),
         }
-        if inventory["owned_files"]["total_bytes"] != endpoint["total_db_bytes_including_wal"]:
-            raise RuntimeError("normalized-v4 file inventory differs from the owned-directory total")
         self.normalized_v4_resource_inventories.append(inventory)
         self.emit("normalized_v4_resource_inventory", inventory=inventory)
         return inventory

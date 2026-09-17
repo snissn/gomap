@@ -2543,6 +2543,61 @@ class Q5AnalyzeTest(unittest.TestCase):
                 filtered=True, result_count=10,
             )
 
+    def test_normalized_terminal_requires_stopped_totals_and_all_clean_lifetimes(self):
+        for mode, count in (("exact", 2), ("sq8", 3)):
+            plan = {"campaign_profile": analyzer.native.CAMPAIGN_PROFILE_NORMALIZED_V4,
+                    "rss_only": False, "rows": 500000,
+                    "query_mode": "exact" if mode == "exact" else "quantized_rerank"}
+            lifetimes = [{
+                "pid": pid, "linux_process_identity": f"{pid}:123",
+                "exit": {"pid": pid, "linux_process_identity": f"{pid}:123",
+                         "exit_code": 0, "availability": "measured"},
+                "terminal_work": {"cleanup_completed": True, "shutdown_failures": 0,
+                                  "contract_version": analyzer.native.existing.SERVICE_CONTRACT,
+                                  "work": {"pid": pid}},
+            } for pid in range(10, 10 + count)]
+            terminal = {"event": "terminal", "qualification": "producer_gates_passed",
+                        "lifecycle_complete": True, "error": None,
+                        "final_disk_bytes": 100, "process_lifetimes": lifetimes}
+            events = [{"event": "plan", "plan": plan}, terminal]
+            # A valid terminal proceeds to the separate construction-ledger gate.
+            with mock.patch.object(analyzer, "read_native_events", return_value=events):
+                with self.assertRaisesRegex(analyzer.EvidenceError, "construction call ledger"):
+                    analyzer._normalized_validate_events(Path("unused"), plan, mode, {}, {}, None, None)
+            changes = [
+                ("missing_disk", lambda row: row.pop("final_disk_bytes")),
+                *[(f"disk_{value!r}", lambda row, value=value: row.update(final_disk_bytes=value))
+                  for value in (0, -1, True, "100", None)],
+                ("missing_lifetimes", lambda row: row.pop("process_lifetimes")),
+                ("incomplete_lifetimes", lambda row: row["process_lifetimes"].pop()),
+                ("bad_exit", lambda row: row["process_lifetimes"][-1]["exit"].update(exit_code=1)),
+                ("wrong_pid", lambda row: row["process_lifetimes"][-1]["exit"].update(pid=999)),
+                ("cleanup_incomplete", lambda row: row["process_lifetimes"][-1]["terminal_work"].update(cleanup_completed=False)),
+                ("shutdown_failure", lambda row: row["process_lifetimes"][-1]["terminal_work"].update(shutdown_failures=1)),
+            ]
+            for name, mutate in changes:
+                changed = copy.deepcopy(events)
+                mutate(changed[-1])
+                with self.subTest(mode=mode, name=name), \
+                        mock.patch.object(analyzer, "read_native_events", return_value=changed):
+                    with self.assertRaisesRegex(analyzer.EvidenceError, "complete cleanly|shut down cleanly"):
+                        analyzer._normalized_validate_events(Path("unused"), plan, mode, {}, {}, None, None)
+
+    def test_normalized_disk_comparison_uses_shutdown_totals_not_live_categories(self):
+        evidence = {"exact": {"terminal": {"final_disk_bytes": 1000}},
+                    "sq8": {"terminal": {"final_disk_bytes": 1100}}}
+        resources = {"exact": {"final": {"total_owned_bytes": 100000}},
+                     "sq8": {"final": {"total_owned_bytes": 1,
+                                       "quantized_assets": [{"bytes": 100}]}}}
+        summary = analyzer._normalized_disk_comparison(evidence, resources)
+        self.assertEqual(summary["disk_delta_bytes"], 100)
+        self.assertEqual(summary["final_disk_bytes"], {"exact": 1000, "sq8": 1100})
+        self.assertTrue(all(summary["disk_checks"].values()))
+        evidence["sq8"]["terminal"]["final_disk_bytes"] = 999
+        self.assertFalse(analyzer._normalized_disk_comparison(evidence, resources)["disk_checks"]["sq8_delta_nonnegative"])
+        evidence["sq8"]["terminal"]["final_disk_bytes"] = 1000 + (64 << 20) + 126
+        self.assertFalse(analyzer._normalized_disk_comparison(evidence, resources)["disk_checks"]["sq8_delta_explained_by_derived_plane"])
+
     def test_normalized_resource_inventory_proves_one_fp32_authority(self):
         ref = {"Kind": "typed_column_part", "Namespace": "docs/column-assets",
                "Generation": 1, "PartID": 1, "FileID": 1, "Offset": 0,
@@ -2619,6 +2674,8 @@ class Q5AnalyzeTest(unittest.TestCase):
                 "rows": 1, "bytes": 8, "ref": {**ref, "PartID": 4, "Length": 8},
             }),
             "forged_file_total": lambda value: value["owned_files"]["files"][0].update(bytes=99),
+            "missing_asset": lambda value: value["owned_files"]["files"].pop(),
+            "invalid_extent": lambda value: value["typed_graph"]["vector_assets"][0]["ref"].update(Offset=1),
         }.items():
             with self.subTest(name=name):
                 changed = copy.deepcopy(inventory)
