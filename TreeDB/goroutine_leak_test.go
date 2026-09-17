@@ -2,6 +2,7 @@ package treedb
 
 import (
 	"fmt"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -114,15 +115,19 @@ func TestGoroutineLeak_FlushRotationConcurrent(t *testing.T) {
 			opts := OptionsFor(profile, t.TempDir())
 			// Small flush threshold forces the queued-memtable/flush pipeline
 			// to run several rotations during the workload below.
-			opts.FlushThreshold = 1 << 20
+			opts.FlushThreshold = 64 << 10
+			// Keep the workload values inline so they actually occupy memtable
+			// budget; values above the pointer threshold would land in the
+			// value log as small pointers and never approach FlushThreshold.
+			opts.ValueLog.PointerThreshold = 4 << 10
 			db, err := Open(opts)
 			if err != nil {
 				t.Fatalf("Open: %v", err)
 			}
 
-			big := make([]byte, 64<<10)
-			for i := range big {
-				big[i] = byte(i)
+			value := make([]byte, 1<<10)
+			for i := range value {
+				value[i] = byte(i)
 			}
 
 			var stopReaders atomic.Bool
@@ -142,26 +147,37 @@ func TestGoroutineLeak_FlushRotationConcurrent(t *testing.T) {
 				}(w)
 			}
 
-			// ~12 MiB of value-log-scale writes plus inline churn rotates the
-			// 1 MiB memtable repeatedly and exercises the background pruner.
-			for i := 0; i < 192; i++ {
+			// ~512 KiB of inline writes plus churn rotates the 64 KiB memtable
+			// repeatedly and exercises the background pruner.
+			for i := 0; i < 512; i++ {
 				key := []byte(fmt.Sprintf("rot-key-%04d", i))
-				if err := db.Set(key, big); err != nil {
-					t.Fatalf("Set big: %v", err)
+				if err := db.Set(key, value); err != nil {
+					t.Fatalf("Set: %v", err)
 				}
-				small := []byte(fmt.Sprintf("inline-%04d", i))
-				if err := db.Set(key, small); err != nil {
-					t.Fatalf("Set small: %v", err)
+				if i%8 == 0 {
+					small := []byte(fmt.Sprintf("inline-%04d", i))
+					if err := db.Set([]byte(fmt.Sprintf("rot-small-%04d", i)), small); err != nil {
+						t.Fatalf("Set small: %v", err)
+					}
 				}
+			}
+
+			// Assert threshold-driven rotations actually happened: before the
+			// first explicit Checkpoint, any queued memtable came from the
+			// FlushThreshold write path.
+			stats := db.Stats()
+			queued, err := strconv.Atoi(stats["treedb.cache.max_queued_memtables"])
+			if err != nil || queued == 0 {
+				t.Fatalf("no memtable rotations observed before checkpoint (max_queued_memtables=%q)", stats["treedb.cache.max_queued_memtables"])
 			}
 
 			if err := db.Checkpoint(); err != nil {
 				t.Fatalf("Checkpoint mid-run: %v", err)
 			}
 
-			for i := 0; i < 96; i++ {
+			for i := 0; i < 256; i++ {
 				key := []byte(fmt.Sprintf("rot-key-%04d", 4096+i))
-				if err := db.Set(key, big); err != nil {
+				if err := db.Set(key, value); err != nil {
 					t.Fatalf("Set post-checkpoint: %v", err)
 				}
 			}
