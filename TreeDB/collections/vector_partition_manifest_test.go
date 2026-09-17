@@ -61,20 +61,30 @@ func deleteVectorPartitionStoreForTest(s *VectorPartitionStoreV1, collection, in
 
 func TestShouldRefreshVectorPartitionReclaimGCPlanV1(t *testing.T) {
 	stale := backenddb.ErrRecoverableRootSetStale
-	tests := []struct {
+	type retryCase struct {
 		name    string
 		err     error
 		stats   ColumnAssetGCStats
 		attempt int
 		want    bool
-	}{
+	}
+	tests := []retryCase{
 		{name: "fresh stale authority", err: stale, attempt: 0, want: true},
+		{name: "wrapped stale authority", err: errors.Join(ErrColumnAssetGCPlanStale, stale), attempt: 0, want: true},
 		{name: "stale authority after deletion", err: stale, stats: ColumnAssetGCStats{SegmentsDeleted: 1}, attempt: 0},
 		{name: "unrelated error", err: errors.New("injected"), attempt: 0},
 		{name: "attempt bound exhausted", err: stale, attempt: vectorPartitionReclaimRecoverableRootAttemptsV1 - 1},
 	}
+	// Literal boundaries protect the eight-attempt contract independently of
+	// the configured constant and nondeterministic post-plan hook observations.
+	for attempt := range 9 {
+		tests = append(tests, retryCase{name: fmt.Sprintf("attempt %d", attempt), err: stale, attempt: attempt, want: attempt < 7})
+	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			if got := shouldRetryColumnAssetGCFromFreshRecoverableRoots(tt.err, tt.stats, tt.attempt); got != tt.want {
+				t.Fatalf("shouldRetryColumnAssetGCFromFreshRecoverableRoots()=%v want %v", got, tt.want)
+			}
 			if got := shouldRefreshVectorPartitionReclaimGCPlanV1(tt.err, tt.stats, tt.attempt); got != tt.want {
 				t.Fatalf("shouldRefreshVectorPartitionReclaimGCPlanV1()=%v want %v", got, tt.want)
 			}

@@ -391,6 +391,8 @@ func TestTypedGraphWorkEpochRetriesFreshPlanAfterRecoverableRootAdvance(t *testi
 			if err := col.db.Checkpoint(); err != nil {
 				t.Fatal(err)
 			}
+			coord := col.collectionSchemaCoordinator()
+			beforeEpoch, beforeDebt, beforeAttempts := coord.typedGraphWorkEpoch, coord.typedGraphCandidateBytes, coord.typedGraphCandidateAttempts
 			advanced, hookCalls := false, 0
 			restore := setColumnAssetStableDeleteAfterPlanTestHook(func() {
 				hookCalls++
@@ -412,8 +414,14 @@ func TestTypedGraphWorkEpochRetriesFreshPlanAfterRecoverableRootAdvance(t *testi
 				if !errors.Is(err, backenddb.ErrRecoverableRootSetStale) || stats.Columns.SegmentsDeleted != 0 || stats.Epoch != 0 {
 					t.Fatalf("exhausted retry changed maintenance state: stats=%+v err=%v", stats, err)
 				}
-				if hookCalls != columnAssetGCRecoverableRootAttempts {
-					t.Fatalf("retry count=%d want %d", hookCalls, columnAssetGCRecoverableRootAttempts)
+				// Root capture or pinning can reject an attempt before the late
+				// post-plan hook. It observes a subset, not the retry count; the
+				// shared predicate's exact eight-attempt budget is tested separately.
+				if !advanced || hookCalls < 1 || hookCalls > columnAssetGCRecoverableRootAttempts {
+					t.Fatalf("post-plan hook calls=%d want an observed injection within %d attempts", hookCalls, columnAssetGCRecoverableRootAttempts)
+				}
+				if coord.typedGraphWorkEpoch != beforeEpoch || coord.typedGraphCandidateBytes != beforeDebt || coord.typedGraphCandidateAttempts != beforeAttempts {
+					t.Fatal("exhausted retry credited epoch or candidate debt")
 				}
 				return
 			}
