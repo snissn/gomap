@@ -14,7 +14,6 @@ import (
 	"math"
 	"os"
 	"runtime"
-	"syscall"
 	"time"
 
 	treedb "github.com/snissn/gomap/TreeDB"
@@ -32,13 +31,31 @@ const (
 )
 
 type repetition struct {
-	Ordinal        int     `json:"ordinal"`
-	ArmOrder       int     `json:"arm_order"`
-	WallNanos      int64   `json:"wall_nanos"`
-	CPUNanos       int64   `json:"cpu_nanos"`
-	CallWallNanos  []int64 `json:"call_wall_nanos"`
-	CallCPUNanos   []int64 `json:"call_cpu_nanos"`
-	ResultChecksum uint64  `json:"result_checksum"`
+	Ordinal        int               `json:"ordinal"`
+	ArmOrder       int               `json:"arm_order"`
+	WallNanos      int64             `json:"wall_nanos"`
+	CPUNanos       int64             `json:"cpu_nanos"`
+	CallWallNanos  []int64           `json:"call_wall_nanos"`
+	CallCPUNanos   []int64           `json:"call_cpu_nanos"`
+	ResultChecksum uint64            `json:"result_checksum"`
+	Observations   []callObservation `json:"observations"`
+}
+
+type resultObservation struct {
+	ID    string  `json:"id"`
+	Score float64 `json:"score"`
+}
+
+type callObservation struct {
+	Query   int                 `json:"query"`
+	Results []resultObservation `json:"results"`
+	Route   any                 `json:"route"`
+}
+
+type measuredResult struct {
+	Checksum uint64
+	Results  []resultObservation
+	Route    any
 }
 
 type armResult struct {
@@ -60,7 +77,7 @@ type laneResult struct {
 	SubLanes    []laneResult `json:"sub_lanes,omitempty"`
 }
 
-type measuredCall func(context.Context, []float32, collections.VectorIndexQueryMode) (uint64, error)
+type measuredCall func(context.Context, []float32, collections.VectorIndexQueryMode) (measuredResult, error)
 
 func main() {
 	lane := flag.String("lane", "native", "measurement lane: native or seams")
@@ -110,7 +127,7 @@ func runNative(address, index, quantizedIndex string, generation uint64, queries
 		return laneResult{}, fmt.Errorf("dial native service: %w", err)
 	}
 	defer client.Close()
-	call := func(ctx context.Context, query []float32, mode collections.VectorIndexQueryMode) (uint64, error) {
+	call := func(ctx context.Context, query []float32, mode collections.VectorIndexQueryMode) (measuredResult, error) {
 		request := nativewire.DenseVectorSearchRequest{
 			Index: index, Query: query, TopK: gateTopK, EfSearch: gateEFSearch,
 			ExpectedGeneration: generation, VectorRepresentation: gateRepresentation, QueryMode: mode,
@@ -121,15 +138,19 @@ func runNative(address, index, quantizedIndex string, generation uint64, queries
 		}
 		response, err := client.DenseVectorSearch(ctx, request)
 		if err != nil {
-			return 0, err
+			return measuredResult{}, err
 		}
 		identity := response.RouteIdentity
 		if len(response.Results) != gateTopK || identity == nil || identity.Diagnostics || response.DenseWork.Version != 0 || response.ScorePlane != nil ||
 			identity.ReturnEmbedding || identity.EmbeddingVectorReads != 0 || identity.EmbeddingVectorBytes != 0 || identity.EmbeddingOutputBytes != 0 ||
 			identity.QueryMode != mode || identity.ExecutionRoute != "typed_hnsw" {
-			return 0, fmt.Errorf("native %s response left the v4 production route", mode)
+			return measuredResult{}, fmt.Errorf("native %s response left the v4 production route", mode)
 		}
-		return checksumNative(response.Results), nil
+		results := make([]resultObservation, len(response.Results))
+		for i, result := range response.Results {
+			results[i] = resultObservation{ID: string(result.ID), Score: result.Score}
+		}
+		return measuredResult{Checksum: checksumNative(response.Results), Results: results, Route: identity}, nil
 	}
 	return measureLane("go_native_v4", queries, call)
 }
@@ -175,7 +196,7 @@ func runSeams(dir, servingPath, index, quantizedIndex string, queries [][]float3
 	}
 	var collectionBuffer collections.VectorIndexSearchBuffer
 
-	serviceCall := func(ctx context.Context, query []float32, mode collections.VectorIndexQueryMode) (uint64, error) {
+	serviceCall := func(ctx context.Context, query []float32, mode collections.VectorIndexQueryMode) (measuredResult, error) {
 		request := documentservice.DenseVectorSearchRequest{
 			ExpectedGeneration: info.Generation, QueryEmbedding: query, TopK: gateTopK, EfSearch: gateEFSearch,
 			Route: documentservice.RouteAnn, QueryMode: mode, VectorRepresentation: gateRepresentation,
@@ -186,48 +207,83 @@ func runSeams(dir, servingPath, index, quantizedIndex string, queries [][]float3
 		}
 		response, err := service.SearchDenseVector(ctx, index, request)
 		if err != nil {
-			return 0, err
+			return measuredResult{}, err
 		}
 		identity := response.RouteIdentity
 		if len(response.Documents) != gateTopK || identity == nil || identity.Diagnostics || response.DenseWork != nil || response.ScorePlane != nil ||
 			identity.EmbeddingVectorReads != 0 || identity.EmbeddingVectorBytes != 0 || identity.EmbeddingOutputBytes != 0 || identity.ExecutionRoute != "typed_hnsw" {
-			return 0, fmt.Errorf("service %s response left the v4 production route", mode)
+			return measuredResult{}, fmt.Errorf("service %s response left the v4 production route", mode)
 		}
-		return checksumDocuments(response.Documents), nil
+		results := make([]resultObservation, len(response.Documents))
+		for i, result := range response.Documents {
+			results[i] = resultObservation{ID: result.ID, Score: *result.Score}
+		}
+		return measuredResult{Checksum: checksumDocuments(response.Documents), Results: results, Route: identity}, nil
 	}
-	collectionCall := func(ctx context.Context, query []float32, mode collections.VectorIndexQueryMode) (uint64, error) {
-		options := collections.VectorIndexSearchOptions{
-			Context: ctx, IndexName: info.VectorIndexName, Query: query, QueryMode: mode,
-			TopK: gateTopK, EfSearch: gateEFSearch, StatsMode: collections.VectorIndexSearchStatsModeProduction,
+	collectionCall := func(fetch bool) measuredCall {
+		return func(ctx context.Context, query []float32, mode collections.VectorIndexQueryMode) (measuredResult, error) {
+			options := collections.VectorIndexSearchOptions{
+				Context: ctx, IndexName: info.VectorIndexName, Query: query, QueryMode: mode,
+				TopK: gateTopK, EfSearch: gateEFSearch, StatsMode: collections.VectorIndexSearchStatsModeMinimal,
+			}
+			if mode == collections.VectorIndexQueryModeQuantizedRerank {
+				options.QuantizedIndexName = quantizedIndex
+				options.QuantizedRerankCandidates = gateEFSearch
+			}
+			response, view, err := collection.SearchVectorIndexWithBufferReadView(options, &collectionBuffer)
+			if err != nil {
+				return measuredResult{}, err
+			}
+			var fetched collections.DocumentFetchResponse
+			var fetchErr error
+			if fetch {
+				fetched, fetchErr = view.FetchDocumentsForVectorIndexSearchResults(response.Results, collections.DocumentFetchOptions{
+					Context:                  ctx,
+					ExcludePaths:             []string{"embedding"},
+					Format:                   collections.DocumentFormatJSON,
+					ColumnAssetReadIntegrity: collections.ColumnAssetReadIntegrityCachedVerify,
+				})
+			}
+			if err := errors.Join(fetchErr, view.Close()); err != nil {
+				return measuredResult{}, err
+			}
+			receipt := response.Stats.ColumnGraphReceipt
+			if len(response.Results) != gateTopK || (fetch && len(fetched.Results) != gateTopK) || !receipt.Available || receipt.Route != "typed_hnsw" ||
+				(fetch && (fetched.Stats.EmbeddingVectorReads != 0 || fetched.Stats.EmbeddingVectorBytes != 0 || fetched.Stats.EmbeddingOutputBytes != 0)) {
+				return measuredResult{}, fmt.Errorf("collection %s response left the selected production route", mode)
+			}
+			results := make([]resultObservation, len(response.Results))
+			for i, result := range response.Results {
+				results[i] = resultObservation{ID: string(result.ID), Score: result.Score}
+			}
+			route := struct {
+				Receipt               collections.ColumnGraphRouteReceipt `json:"receipt"`
+				QuantizedScoreCalls   uint64                              `json:"quantized_score_calls"`
+				FP32ScoreCalls        uint64                              `json:"fp32_score_calls"`
+				PackedScoreCalls      uint64                              `json:"packed_score_calls"`
+				PackedScoreCandidates uint64                              `json:"packed_score_candidates"`
+				PackedVectorBytesRead uint64                              `json:"packed_vector_bytes_read"`
+				EmbeddingVectorReads  uint64                              `json:"embedding_vector_reads"`
+				EmbeddingVectorBytes  uint64                              `json:"embedding_vector_bytes"`
+				EmbeddingOutputBytes  uint64                              `json:"embedding_output_bytes"`
+			}{receipt, response.Stats.QuantizedScoreCalls, response.Stats.FP32ScoreCalls,
+				response.Stats.PackedExactScoreCalls, response.Stats.PackedExactScoreCandidates,
+				response.Stats.PackedExactVectorBytesRead, fetched.Stats.EmbeddingVectorReads,
+				fetched.Stats.EmbeddingVectorBytes, fetched.Stats.EmbeddingOutputBytes}
+			checksum := checksumVectorResults(response.Results)
+			if fetch {
+				checksum ^= checksumFetched(fetched.Results)
+			}
+			return measuredResult{Checksum: checksum, Results: results, Route: route}, nil
 		}
-		if mode == collections.VectorIndexQueryModeQuantizedRerank {
-			options.QuantizedIndexName = quantizedIndex
-			options.QuantizedRerankCandidates = gateEFSearch
-		}
-		response, view, err := collection.SearchVectorIndexWithBufferReadView(options, &collectionBuffer)
-		if err != nil {
-			return 0, err
-		}
-		fetched, fetchErr := view.FetchDocumentsForVectorIndexSearchResults(response.Results, collections.DocumentFetchOptions{
-			Context:                  ctx,
-			ExcludePaths:             []string{"embedding"},
-			Format:                   collections.DocumentFormatJSON,
-			ColumnAssetReadIntegrity: collections.ColumnAssetReadIntegrityCachedVerify,
-		})
-		closeErr := view.Close()
-		if err := errors.Join(fetchErr, closeErr); err != nil {
-			return 0, err
-		}
-		receipt := response.Stats.ColumnGraphReceipt
-		if len(response.Results) != gateTopK || len(fetched.Results) != gateTopK || !receipt.Available || receipt.Route != "typed_hnsw" ||
-			fetched.Stats.EmbeddingVectorReads != 0 || fetched.Stats.EmbeddingVectorBytes != 0 || fetched.Stats.EmbeddingOutputBytes != 0 {
-			return 0, fmt.Errorf("collection %s response left the selected production route", mode)
-		}
-		return checksumFetched(fetched.Results), nil
 	}
-	collectionResult, err := measureLane("collection_fetch", queries, collectionCall)
+	collectionSearchResult, err := measureLane("collection_search", queries, collectionCall(false))
 	if err != nil {
-		return laneResult{}, fmt.Errorf("collection lane: %w", err)
+		return laneResult{}, fmt.Errorf("collection search lane: %w", err)
+	}
+	collectionResult, err := measureLane("collection_fetch", queries, collectionCall(true))
+	if err != nil {
+		return laneResult{}, fmt.Errorf("collection fetch lane: %w", err)
 	}
 	serviceResult, err := measureLane("service", queries, serviceCall)
 	if err != nil {
@@ -236,7 +292,7 @@ func runSeams(dir, servingPath, index, quantizedIndex string, queries [][]float3
 	return laneResult{
 		Schema: "treedb_v4_production_gate/v1", Lane: "seams", GoVersion: runtime.Version(), GOMAXPROCS: runtime.GOMAXPROCS(0),
 		QueryCount: len(queries), WarmupCount: gateWarmupQueries, TopK: gateTopK, EfSearch: gateEFSearch,
-		SubLanes: []laneResult{collectionResult, serviceResult},
+		SubLanes: []laneResult{collectionSearchResult, collectionResult, serviceResult},
 	}, nil
 }
 
@@ -278,7 +334,7 @@ func measureLane(name string, queries [][]float32, call measuredCall) (laneResul
 }
 
 func measureRepetition(rep, armOrder int, queries [][]float32, mode collections.VectorIndexQueryMode, call measuredCall) (repetition, error) {
-	out := repetition{Ordinal: rep, ArmOrder: armOrder, CallWallNanos: make([]int64, len(queries)), CallCPUNanos: make([]int64, len(queries))}
+	out := repetition{Ordinal: rep, ArmOrder: armOrder, CallWallNanos: make([]int64, len(queries)), CallCPUNanos: make([]int64, len(queries)), Observations: make([]callObservation, len(queries))}
 	batchWall := time.Now()
 	batchCPU, err := processCPUNanos()
 	if err != nil {
@@ -291,7 +347,7 @@ func measureRepetition(rep, armOrder int, queries [][]float32, mode collections.
 		}
 		beforeWall := time.Now()
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		checksum, err := call(ctx, query, mode)
+		measured, err := call(ctx, query, mode)
 		cancel()
 		out.CallWallNanos[i] = time.Since(beforeWall).Nanoseconds()
 		afterCPU, cpuErr := processCPUNanos()
@@ -302,7 +358,8 @@ func measureRepetition(rep, armOrder int, queries [][]float32, mode collections.
 			return repetition{}, cpuErr
 		}
 		out.CallCPUNanos[i] = afterCPU - beforeCPU
-		out.ResultChecksum ^= checksum + uint64(i+1)*0x9e3779b97f4a7c15
+		out.ResultChecksum ^= measured.Checksum + uint64(i+1)*0x9e3779b97f4a7c15
+		out.Observations[i] = callObservation{Query: i, Results: measured.Results, Route: measured.Route}
 	}
 	endCPU, err := processCPUNanos()
 	if err != nil {
@@ -311,14 +368,6 @@ func measureRepetition(rep, armOrder int, queries [][]float32, mode collections.
 	out.WallNanos = time.Since(batchWall).Nanoseconds()
 	out.CPUNanos = endCPU - batchCPU
 	return out, nil
-}
-
-func processCPUNanos() (int64, error) {
-	var usage syscall.Rusage
-	if err := syscall.Getrusage(syscall.RUSAGE_SELF, &usage); err != nil {
-		return 0, err
-	}
-	return usage.Utime.Sec*1e9 + usage.Utime.Usec*1e3 + usage.Stime.Sec*1e9 + usage.Stime.Usec*1e3, nil
 }
 
 func loadQueries(dataset string) ([][]float32, error) {
@@ -385,6 +434,14 @@ func checksumFetched(results []collections.DocumentFetchResult) uint64 {
 	var checksum uint64
 	for _, result := range results {
 		checksum ^= checksumBytes(result.ID) ^ checksumBytes(result.Document)
+	}
+	return checksum
+}
+
+func checksumVectorResults(results []collections.VectorIndexSearchResult) uint64 {
+	var checksum uint64
+	for _, result := range results {
+		checksum ^= checksumBytes(result.ID) ^ math.Float64bits(result.Score)
 	}
 	return checksum
 }

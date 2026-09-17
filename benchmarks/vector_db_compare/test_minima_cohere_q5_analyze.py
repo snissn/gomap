@@ -2073,6 +2073,202 @@ class Q5AnalyzeTest(unittest.TestCase):
                 )
                 self.assertEqual(result["state"], "invalid")
 
+    def test_normalized_engine_recomputes_same_shortlist_raw_repetitions(self):
+        shortlists = [{
+            "query": query, "ordinals": list(range(64)),
+            "candidate_work": {
+                "quantized_score_calls": 128,
+                "quantized_code_bytes_read": 128 * 768,
+            },
+            "packed_score_calls": 1, "packed_score_candidates": 64,
+            "packed_vector_bytes_read": 64 * 768 * 4,
+        } for query in range(200)]
+        benchmark = lambda nanos, arm: [{
+            "ordinal": ordinal,
+            "arm_order": ordinal % 2 if arm == "candidate_only" else 1 - ordinal % 2,
+            "iterations": 10, "elapsed_nanos": nanos * 2000,
+            "nanos_per_query": nanos, "qps": 1e9 / nanos,
+            "bytes_per_query": 0, "allocs_per_query": 0,
+        } for ordinal in range(6)]
+        artifact = {
+            "schema": "treedb_cosine_normalized_f32_campaign_engine/v1",
+            "rows": 500000, "dimensions": 768, "query_count": 200, "top_k": 10,
+            "ef_search": 64, "rerank_candidates": 64,
+            "representation": analyzer.native.NORMALIZED_REPRESENTATION,
+            "index": "minima_cohere", "quantized_index": analyzer.native.QUANTIZED_PROFILE_NAME,
+            "stable_duplicate_score_calls": 0, "shortlists": shortlists,
+            "shortlists_sha256": hashlib.sha256(json.dumps(
+                shortlists, sort_keys=True, separators=(",", ":"),
+            ).encode()).hexdigest(),
+            "candidate_only": benchmark(80_000, "candidate_only"),
+            "packed_same_shortlist": benchmark(6_900, "packed_same_shortlist"),
+        }
+        summary, failures = analyzer._normalized_validate_engine(artifact)
+        self.assertFalse(failures)
+        self.assertEqual(summary["summaries"]["packed_same_shortlist"]["median_ns"], 6_900)
+        changed = copy.deepcopy(artifact)
+        changed["packed_same_shortlist"][5]["ordinal"] = 4
+        with self.assertRaisesRegex(analyzer.EvidenceError, "raw benchmark"):
+            analyzer._normalized_validate_engine(changed)
+        changed = copy.deepcopy(artifact)
+        changed["shortlists"][0]["packed_vector_bytes_read"] -= 4
+        changed["shortlists_sha256"] = hashlib.sha256(json.dumps(
+            changed["shortlists"], sort_keys=True, separators=(",", ":"),
+        ).encode()).hexdigest()
+        with self.assertRaisesRegex(analyzer.EvidenceError, "shortlist work"):
+            analyzer._normalized_validate_engine(changed)
+
+    def test_normalized_sq8_exact_route_requires_packed_fp32_work(self):
+        identity = {
+            "version": 1,
+            "representation": analyzer.native.NORMALIZED_REPRESENTATION,
+            "query_mode": "quantized_rerank",
+            "execution_route": "typed_exact",
+            "return_embedding": False,
+            "diagnostics": True,
+            "filter": True,
+            "top_k": 10,
+            "ef_search": 64,
+            "rerank_candidates": 64,
+            "result_count": 10,
+            "schema_hash": 1,
+            "schema_generation": 1,
+            "base_manifest_generation": 1,
+            "base_manifest_checksum": 1,
+            "current_manifest_generation": 1,
+            "current_manifest_checksum": 1,
+            "current_coverage_lsn": 1,
+            "fp32_score_calls": 4096,
+            "fp32_vector_bytes_read": 4096 * 768 * 4,
+            "embedding_vector_reads": 0,
+            "embedding_vector_bytes": 0,
+            "embedding_output_bytes": 0,
+            "quantized_index_name": analyzer.native.QUANTIZED_PROFILE_NAME,
+            "quantized_codec": "scalar_u8",
+            "quantized_version": 1,
+            "quantized_score_calls": 0,
+            "quantized_code_bytes_read": 0,
+            "packed_score_calls": 1,
+            "packed_score_candidates": 4096,
+            "packed_vector_bytes_read": 4096 * 768 * 4,
+        }
+        analyzer._normalized_route_identity(
+            identity, "quantized_rerank", eligible=4096, filtered=True, result_count=10,
+        )
+        exact = {
+            **identity, "query_mode": "exact", "rerank_candidates": 0,
+            "quantized_index_name": "", "quantized_codec": "",
+            "quantized_version": 0,
+            "fp32_score_calls": 4097, "fp32_vector_bytes_read": 4097 * 768 * 4,
+            "packed_score_candidates": 4097,
+            "packed_vector_bytes_read": 4097 * 768 * 4,
+        }
+        analyzer._normalized_route_identity(
+            exact, "exact", eligible=4097, filtered=True, result_count=10,
+        )
+        for field, value in (
+            ("quantized_score_calls", 1),
+            ("packed_score_calls", 0),
+            ("packed_score_candidates", 0),
+            ("packed_vector_bytes_read", 1),
+        ):
+            with self.subTest(field=field):
+                changed = {**identity, field: value}
+                with self.assertRaises(analyzer.EvidenceError):
+                    analyzer._normalized_route_identity(
+                        changed, "quantized_rerank", eligible=4096,
+                        filtered=True, result_count=10,
+                    )
+        empty = {
+            **identity, "execution_route": "typed_empty", "result_count": 0,
+            "fp32_score_calls": 0, "fp32_vector_bytes_read": 0,
+            "packed_score_calls": 0, "packed_score_candidates": 0,
+            "packed_vector_bytes_read": 0,
+        }
+        analyzer._normalized_route_identity(
+            empty, "quantized_rerank", eligible=0, filtered=True, result_count=0,
+        )
+        with self.assertRaisesRegex(analyzer.EvidenceError, "route identity"):
+            analyzer._normalized_route_identity(
+                identity, "quantized_rerank", eligible=5001,
+                filtered=True, result_count=10,
+            )
+
+    def test_normalized_resource_inventory_proves_one_fp32_authority(self):
+        ref = {"Kind": "typed_column_part", "Namespace": "docs/column-assets",
+               "Generation": 1, "PartID": 1, "FileID": 1, "Offset": 0,
+               "Length": 500000 * 768 * 4, "Checksum": 1}
+        normalized = {
+            "role": "normalized_vectors", "asset_id": analyzer.native.NORMALIZED_REPRESENTATION,
+            "logical_type": "float32_vector", "physical_encoding": "raw_float32_vector",
+            "rows": 500000, "bytes": 500000 * 768 * 4,
+            "logical_payload_bytes": 500000 * 768 * 4, "ref": ref,
+        }
+        topology = {
+            "role": "hnsw_search_pack", "asset_id": "hnsw_topology_pack_v2",
+            "logical_type": "hnsw_search_pack", "physical_encoding": "hnsw_topology_pack_v2",
+            "rows": 500000, "bytes": 1234, "ref": {**ref, "PartID": 2, "Length": 1234},
+        }
+        codes = {
+            "role": "quantized_codes", "asset_id": "minima_sq8/scalar_u8/v1/codes",
+            "logical_type": "byte_vector", "physical_encoding": "raw_fixed_bytes",
+            "rows": 500000, "bytes": 500000 * 768,
+            "logical_payload_bytes": 500000 * 768,
+            "ref": {**ref, "PartID": 3, "Length": 500000 * 768},
+        }
+        alpha = {
+            "role": "quantized_alpha", "asset_id": "minima_sq8/scalar_u8/v1/alpha",
+            "logical_type": "scalar_u8_alpha", "physical_encoding": "raw_float32_uint32",
+            "rows": 100, "bytes": 800, "ref": {**ref, "PartID": 4, "Length": 800},
+        }
+        files = [{"path": "wal/000001", "bytes": 100, "category": "command_wal"},
+                 {"path": "docs/column_assets/1", "bytes": 200, "category": "column_assets"}]
+        inventory = {
+            "schema": "treedb_cohere_normalized_v4_resource_inventory/v1",
+            "typed_graph": {
+                "serving_ready": True, "publication_unchanged": True,
+                "base_rows": 500000, "suffix_rows": 0,
+                "vector_assets": [normalized, topology, codes, alpha],
+                "typed_column_parts": [{"rows": 500000, "role": "float32_vectors", "ref": ref}],
+                "logical_resources": {"active_heap_copy_bytes": 0},
+                "physical": {"mapped_bytes": 1},
+            },
+            "owned_files": {
+                "schema": "treedb_owned_db_file_inventory/v1", "total_bytes": 300,
+                "category_bytes": {"column_assets": 200, "command_wal": 100,
+                                   "value_log": 0, "leaf_log": 0, "other": 0},
+                "files": files,
+            },
+            "process_memory": {"vmrss_bytes": 1, "vmhwm_bytes": 2,
+                               "vmsize_bytes": 3, "vmpeak_bytes": 4},
+            "go_memory": {"heap_alloc_bytes": 1},
+        }
+        summary = analyzer._normalized_asset_inventory(inventory, "sq8")
+        self.assertEqual(summary["normalized_asset"]["ref"], ref)
+        for name, mutate in {
+            "duplicate_fp32": lambda value: value["typed_graph"]["vector_assets"].append(
+                {**normalized, "role": "other_fp32"}),
+            "unshared_authority": lambda value: value["typed_graph"].update(
+                typed_column_parts=[]),
+            "missing_alpha": lambda value: value["typed_graph"].update(
+                vector_assets=[normalized, topology, codes]),
+            "forged_file_total": lambda value: value["owned_files"]["files"][0].update(bytes=99),
+        }.items():
+            with self.subTest(name=name):
+                changed = copy.deepcopy(inventory)
+                mutate(changed)
+                with self.assertRaises(analyzer.EvidenceError):
+                    analyzer._normalized_asset_inventory(changed, "sq8")
+
+    def test_invalid_normalized_packet_keeps_normalized_analysis_schema(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "packet.json"
+            raw = canonical({"schema": analyzer.NORMALIZED_PACKET_SCHEMA})
+            path.write_bytes(raw)
+            result = analyzer.analyze(path, hashlib.sha256(raw).hexdigest())
+            self.assertEqual(result["schema"], analyzer.NORMALIZED_ANALYSIS_SCHEMA)
+            self.assertEqual(result["state"], "invalid")
+
 
 if __name__ == "__main__":
     unittest.main()

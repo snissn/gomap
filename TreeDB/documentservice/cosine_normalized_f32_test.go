@@ -9,9 +9,18 @@ import (
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/collections"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
+func requireCosineNormalizedF32V1Serving(t *testing.T) {
+	t.Helper()
+	if !rootpublication.StableRelativeNamespaceSupported() {
+		t.Skip("normalized serving requires exact relative namespace support")
+	}
+}
+
 func TestServiceCosineNormalizedF32V1HNSWExactReceipt(t *testing.T) {
+	requireCosineNormalizedF32V1Serving(t)
 	svc, db := newTestService(t)
 	defer db.Close()
 	defer svc.Close()
@@ -70,6 +79,7 @@ func normalizedF32V1ServiceOptions() *BenchmarkVectorIndexOptions {
 }
 
 func TestServiceCosineNormalizedF32V1ProductionAndDiagnostics(t *testing.T) {
+	requireCosineNormalizedF32V1Serving(t)
 	svc, db := newTestService(t)
 	defer db.Close()
 	defer svc.Close()
@@ -198,6 +208,7 @@ func TestServiceCosineNormalizedF32V1ProductionAndDiagnostics(t *testing.T) {
 }
 
 func TestServiceCosineNormalizedF32V1CreateAndAdmission(t *testing.T) {
+	requireCosineNormalizedF32V1Serving(t)
 	svc, db := newTestService(t)
 	defer db.Close()
 	defer svc.Close()
@@ -276,6 +287,7 @@ func TestServiceCosineNormalizedF32V1CreateAndAdmission(t *testing.T) {
 }
 
 func TestServiceCosineNormalizedF32V1ResetCreatesTypedSchema(t *testing.T) {
+	requireCosineNormalizedF32V1Serving(t)
 	svc, db := newTestService(t)
 	defer db.Close()
 	defer svc.Close()

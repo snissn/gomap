@@ -429,3 +429,27 @@ error; cleanup, guard, provenance, schema, an unknown/additional public call, or
 evidence defects are `invalid`. Final state is reported only as the reviewed
 producer's exhaustive semantic attestation with
 `independently_recomputed:false` and `digest_claim:false`.
+
+### Normalized-v4 final packet
+
+The replacement production-shaped campaign uses packet schema
+`treedb_cohere_normalized_v4_packet/v1`. It has exactly `schema`,
+`candidate_commit`, `files`, `dataset`, `inputs`, `runs`, and `predecessors`.
+`files` retains distinct relative-path/SHA-256/byte records. `dataset` maps
+`manifest`, `documents`, `queries`, and `truth`; `inputs` maps
+`treedb_service_binary`, `go_helper`, and `serving`.
+
+`runs` has exact `exact` and `sq8` entries. Each entry records `files`,
+`support`, exact freeze/run argv, and zero exit status. Exact run files are
+`plan`, `events`, `truth`, and `resources`. SQ8 adds `matrix` and `engine`, and
+its support map has `service_cpu_pprof`, `service_cpu_top`, `profile_manifest`,
+and `service_stats`; exact support is empty. Every inventoried file has exactly
+one role.
+
+The ordered predecessor receipts bind issue/PR pairs 4730/4731, 4723/4732,
+4724/4733, and 4725/4735. Each records `reviewed_head`, `merge_commit`,
+`reviewed_tree`, and `merge_tree`; the reviewed and merged trees must match.
+The consumer rejects a dirty or different candidate checkout and independently
+recomputes production-lane statistics, same-shortlist engine thresholds,
+canonical quality, final-state projection, one-FP32/SQ8 resource ownership, and
+disk/RSS deltas from raw retained evidence.

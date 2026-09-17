@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
+from dataclasses import asdict
 import hashlib
 import json
 import math
@@ -87,7 +88,9 @@ def strict_json(path: Path) -> dict[str, Any]:
     return value
 
 
-def load_inputs(dataset: Path) -> tuple[np.memmap, list[list[float]], dict[str, Any]]:
+def load_inputs(
+    dataset: Path, *, rows: int = ROWS
+) -> tuple[np.memmap, list[list[float]], dict[str, Any]]:
     manifest_path = dataset / "manifest.json"
     manifest = strict_json(manifest_path)
     documents_path, queries_path = dataset / "documents.f32", dataset / "queries.f32"
@@ -115,7 +118,7 @@ def load_inputs(dataset: Path) -> tuple[np.memmap, list[list[float]], dict[str, 
     query_array = np.memmap(
         queries_path, dtype="<f4", mode="r", shape=(QUERY_COUNT, DIMENSIONS)
     )
-    if not np.isfinite(vectors[:ROWS]).all() or not np.isfinite(query_array).all():
+    if not 0 < rows <= SOURCE_ROWS or not np.isfinite(vectors[:rows]).all() or not np.isfinite(query_array).all():
         raise ValueError("fixed production gate vectors must be finite")
     identity = {
         "source_manifest": manifest,
@@ -132,9 +135,16 @@ def create_and_load(
     native: TreeDBClient,
     vectors: np.memmap,
     serving: dict[str, Any],
+    *,
+    rows: int = ROWS,
+    index: str = INDEX,
+    quantized_index: str | None = QUANTIZED_INDEX,
 ) -> Any:
+    quantized_indexes = [] if quantized_index is None else [
+        {"name": quantized_index, "codec": "scalar_u8", "version": 1}
+    ]
     info = control.create_index(
-        INDEX,
+        index,
         DIMENSIONS,
         "cosine",
         typed_input=True,
@@ -144,13 +154,11 @@ def create_and_load(
             "m": 16,
             "ef_construction": 32,
             "ef_search": EF_SEARCH,
-            "quantized_indexes": [
-                {"name": QUANTIZED_INDEX, "codec": "scalar_u8", "version": 1}
-            ],
+            "quantized_indexes": quantized_indexes,
         },
     )
     if (
-        info.name != INDEX
+        info.name != index
         or info.dimension != DIMENSIONS
         or info.vector_representation != REPRESENTATION
         or info.vector_strategy != "column_graph"
@@ -158,8 +166,8 @@ def create_and_load(
     ):
         raise RuntimeError("created index does not expose the canonical production shape")
     started = time.monotonic()
-    for start in range(0, ROWS, 256):
-        end = min(ROWS, start + 256)
+    for start in range(0, rows, 256):
+        end = min(rows, start + 256)
         documents = [
             Document(
                 id=f"row-{row:06d}",
@@ -168,17 +176,17 @@ def create_and_load(
             )
             for row in range(start, end)
         ]
-        result = native.upsert_documents(INDEX, documents, index_info=info)
+        result = native.upsert_documents(index, documents, index_info=info)
         if result.upserted != len(documents):
             raise RuntimeError(f"typed upsert {start}:{end} did not complete")
-        if end % 10_000 == 0 or end == ROWS:
+        if end % 10_000 == 0 or end == rows:
             print(
-                f"loaded {end}/{ROWS} rows in {time.monotonic() - started:.1f}s",
+                f"loaded {end}/{rows} rows in {time.monotonic() - started:.1f}s",
                 flush=True,
             )
     build_started = time.monotonic()
     control.optimize_index(
-        INDEX,
+        index,
         expected_generation=info.generation,
         column_graph_action="build",
         column_graph_serving=serving,
@@ -187,16 +195,29 @@ def create_and_load(
     return info
 
 
-def validate_response(response: Any, mode: str, *, diagnostics: bool = False) -> int:
+def validate_response(
+    response: Any,
+    mode: str,
+    *,
+    diagnostics: bool = False,
+    top_k: int = TOP_K,
+    expected_route: str = "typed_hnsw",
+) -> dict[str, Any]:
+    expected_routes = ((expected_route,) if isinstance(expected_route, str)
+                       else tuple(expected_route) if isinstance(expected_route, tuple) else ())
+    if (not expected_routes or len(set(expected_routes)) != len(expected_routes)
+            or any(route not in ("typed_empty", "typed_exact", "typed_hnsw")
+                   for route in expected_routes)):
+        raise ValueError("expected normalized-v4 route is invalid")
     identity = response.route_identity
     if (
         response.native_command_version != 4
-        or len(response.documents) != TOP_K
+        or len(response.documents) != top_k
         or (response.dense_work is not None) != diagnostics
         or (response.score_plane is not None) != (diagnostics and mode == "quantized_rerank")
         or identity is None
         or identity.query_mode != mode
-        or identity.execution_route != "typed_hnsw"
+        or identity.execution_route not in expected_routes
         or identity.diagnostics != diagnostics
         or identity.return_embedding
         or identity.embedding_vector_reads != 0
@@ -204,17 +225,82 @@ def validate_response(response: Any, mode: str, *, diagnostics: bool = False) ->
         or identity.embedding_output_bytes != 0
         or any(document.embedding is not None for document in response.documents)
     ):
-        raise RuntimeError(f"Python {mode} call left the v4 production route")
-    if mode == "quantized_rerank" and (
-        identity.quantized_score_calls == 0
-        or identity.packed_score_calls != 1
-        or identity.packed_score_candidates == 0
-    ):
-        raise RuntimeError("Python SQ8 call omitted candidate generation or packed rerank")
-    checksum = 0
-    for document in response.documents:
-        checksum ^= hash((document.id, float(document.score))) & ((1 << 64) - 1)
-    return checksum
+        observed_route = None if identity is None else identity.execution_route
+        expected_description = (expected_routes[0] if len(expected_routes) == 1
+                                else expected_routes)
+        raise RuntimeError(
+            f"Python {mode} call left the v4 production route "
+            f"(expected={expected_description!r}, observed={observed_route!r})"
+        )
+    if mode == "exact":
+        if identity.quantized_score_calls != 0 or identity.quantized_code_bytes_read != 0:
+            raise RuntimeError("Python exact call crossed the SQ8 score plane")
+        if identity.execution_route != "typed_empty" and (
+            identity.packed_score_calls == 0
+            or identity.packed_score_candidates == 0
+            or identity.packed_score_calls > identity.packed_score_candidates
+            or identity.packed_score_candidates > identity.fp32_score_calls
+            or identity.packed_vector_bytes_read
+                != identity.packed_score_candidates * DIMENSIONS * 4
+        ):
+            raise RuntimeError("Python exact route omitted consistent packed FP32 work")
+        if identity.execution_route == "typed_empty" and any((
+            identity.packed_score_calls,
+            identity.packed_score_candidates,
+            identity.packed_vector_bytes_read,
+        )):
+            raise RuntimeError("Python exact empty route unexpectedly carried packed work")
+    if mode == "quantized_rerank":
+        if identity.execution_route == "typed_hnsw" and (
+            identity.quantized_score_calls == 0
+            or identity.quantized_code_bytes_read
+                != identity.quantized_score_calls * DIMENSIONS
+            or identity.packed_score_calls != 1
+            or identity.packed_score_candidates == 0
+            or identity.packed_vector_bytes_read
+                != identity.packed_score_candidates * DIMENSIONS * 4
+        ):
+            raise RuntimeError("Python SQ8 call omitted candidate generation or packed rerank")
+        if identity.execution_route == "typed_exact" and (
+            identity.quantized_score_calls != 0
+            or identity.quantized_code_bytes_read != 0
+            or identity.packed_score_calls != 1
+            or identity.packed_score_candidates == 0
+            or identity.packed_vector_bytes_read
+                != identity.packed_score_candidates * DIMENSIONS * 4
+        ):
+            raise RuntimeError("Python SQ8 exact route omitted the packed FP32 batch")
+        if identity.execution_route == "typed_empty" and any((
+            identity.quantized_score_calls,
+            identity.quantized_code_bytes_read,
+            identity.packed_score_calls,
+            identity.packed_score_candidates,
+            identity.packed_vector_bytes_read,
+        )):
+            raise RuntimeError("Python SQ8 empty route unexpectedly carried score work")
+    if diagnostics:
+        work, proof = response.dense_work, response.score_plane
+        if work is None or not work.completed or not work.graph.completed or not work.output.completed:
+            raise RuntimeError("Python diagnostic response omitted completed dense work")
+        if mode == "exact" and proof is not None:
+            raise RuntimeError("Python exact diagnostic unexpectedly returned score-plane proof")
+        if mode == "quantized_rerank" and (
+            proof is None
+            or not proof.completed
+            or proof.packed_score_batch_calls != identity.packed_score_calls
+            or proof.packed_score_candidates != identity.packed_score_candidates
+            or proof.packed_vector_bytes_read != identity.packed_vector_bytes_read
+            or proof.forbidden_stable_score_calls != 0
+        ):
+            raise RuntimeError("Python SQ8 diagnostic omitted packed same-owner proof")
+    return {
+        "native_command_version": response.native_command_version,
+        "results": [
+            {"id": document.id, "score": float(document.score)}
+            for document in response.documents
+        ],
+        "route": asdict(identity),
+    }
 
 
 def python_call(
@@ -224,10 +310,15 @@ def python_call(
     mode: str,
     *,
     diagnostics: bool = False,
+    index: str = INDEX,
+    top_k: int = TOP_K,
+    ef_search: int = EF_SEARCH,
+    rerank_candidates: int = RERANK_CANDIDATES,
+    quantized_index: str = QUANTIZED_INDEX,
 ) -> Any:
     options: dict[str, Any] = {
         "route": "ann",
-        "ef_search": EF_SEARCH,
+        "ef_search": ef_search,
         "query_mode": mode,
         "return_embedding": False,
         "diagnostics": diagnostics,
@@ -235,36 +326,61 @@ def python_call(
     }
     if mode == "quantized_rerank":
         options.update(
-            quantized_index_name=QUANTIZED_INDEX,
-            quantized_rerank_candidates=RERANK_CANDIDATES,
+            quantized_index_name=quantized_index,
+            quantized_rerank_candidates=rerank_candidates,
         )
-    return client.query_by_embedding(INDEX, query, TOP_K, **options)
+    return client.query_by_embedding(index, query, top_k, **options)
 
 
-def measure_python(client: TreeDBClient, info: Any, queries: list[list[float]]) -> dict[str, Any]:
+def measure_python(
+    client: TreeDBClient,
+    info: Any,
+    queries: list[list[float]],
+    *,
+    index: str = INDEX,
+    top_k: int = TOP_K,
+    ef_search: int = EF_SEARCH,
+    rerank_candidates: int = RERANK_CANDIDATES,
+    quantized_index: str = QUANTIZED_INDEX,
+    repetitions: int = REPETITIONS,
+    warmup_queries: int = WARMUP_QUERIES,
+) -> dict[str, Any]:
     for mode in ("exact", "quantized_rerank"):
-        for query in queries[:WARMUP_QUERIES]:
-            validate_response(python_call(client, info, query, mode), mode)
+        for query in queries[:warmup_queries]:
+            validate_response(
+                python_call(
+                    client, info, query, mode, index=index, top_k=top_k,
+                    ef_search=ef_search, rerank_candidates=rerank_candidates,
+                    quantized_index=quantized_index,
+                ),
+                mode,
+                top_k=top_k,
+            )
     arms: dict[str, dict[str, Any]] = {
         "exact": {"mode": "exact", "repetitions": []},
         "sq8": {"mode": "quantized_rerank", "repetitions": []},
     }
-    for repetition in range(REPETITIONS):
+    for repetition in range(repetitions):
         order = ("exact", "quantized_rerank") if repetition % 2 == 0 else (
             "quantized_rerank",
             "exact",
         )
         for arm_order, mode in enumerate(order):
-            call_wall, call_cpu, checksum = [], [], 0
+            call_wall, call_cpu, observations = [], [], []
             batch_wall, batch_cpu = time.perf_counter_ns(), time.process_time_ns()
             for position, query in enumerate(queries):
                 started_wall, started_cpu = time.perf_counter_ns(), time.process_time_ns()
-                response = python_call(client, info, query, mode)
+                response = python_call(
+                    client, info, query, mode, index=index, top_k=top_k,
+                    ef_search=ef_search, rerank_candidates=rerank_candidates,
+                    quantized_index=quantized_index,
+                )
                 call_cpu.append(time.process_time_ns() - started_cpu)
                 call_wall.append(time.perf_counter_ns() - started_wall)
-                checksum ^= validate_response(response, mode) + (
-                    (position + 1) * 0x9E3779B97F4A7C15
-                )
+                observations.append({
+                    "query": position,
+                    **validate_response(response, mode, top_k=top_k),
+                })
             record = {
                 "ordinal": repetition,
                 "arm_order": arm_order,
@@ -272,7 +388,7 @@ def measure_python(client: TreeDBClient, info: Any, queries: list[list[float]]) 
                 "cpu_nanos": time.process_time_ns() - batch_cpu,
                 "call_wall_nanos": call_wall,
                 "call_cpu_nanos": call_cpu,
-                "result_checksum": checksum & ((1 << 64) - 1),
+                "observations": observations,
             }
             arms["exact" if mode == "exact" else "sq8"]["repetitions"].append(record)
     return {
@@ -280,9 +396,10 @@ def measure_python(client: TreeDBClient, info: Any, queries: list[list[float]]) 
         "lane": "python_native_v4",
         "python": sys.version,
         "query_count": len(queries),
-        "warmup_count": WARMUP_QUERIES,
-        "top_k": TOP_K,
-        "ef_search": EF_SEARCH,
+        "warmup_count": min(warmup_queries, len(queries)),
+        "top_k": top_k,
+        "ef_search": ef_search,
+        "rerank_candidates": rerank_candidates,
         **arms,
     }
 
@@ -354,6 +471,12 @@ def capture_profile(
     info: Any,
     queries: list[list[float]],
     directory: Path,
+    *,
+    index: str = INDEX,
+    top_k: int = TOP_K,
+    ef_search: int = EF_SEARCH,
+    rerank_candidates: int = RERANK_CANDIDATES,
+    quantized_index: str = QUANTIZED_INDEX,
 ) -> dict[str, Any]:
     with ThreadPoolExecutor(max_workers=1) as pool:
         future = pool.submit(
@@ -365,7 +488,15 @@ def capture_profile(
         calls = 0
         while not future.done():
             mode = "exact" if calls % 2 == 0 else "quantized_rerank"
-            validate_response(python_call(client, info, queries[calls % len(queries)], mode), mode)
+            validate_response(
+                python_call(
+                    client, info, queries[calls % len(queries)], mode,
+                    index=index, top_k=top_k, ef_search=ef_search,
+                    rerank_candidates=rerank_candidates, quantized_index=quantized_index,
+                ),
+                mode,
+                top_k=top_k,
+            )
             calls += 1
         capture = future.result()
     capture["production_calls_during_capture"] = calls

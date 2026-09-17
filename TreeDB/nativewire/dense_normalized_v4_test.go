@@ -20,9 +20,7 @@ import (
 
 func newDenseNormalizedV4Test(t *testing.T) (*Server, *Client, documentservice.IndexInfo, context.Context) {
 	t.Helper()
-	if !rootpublication.StableRelativeNamespaceSupported() {
-		t.Skip("selected serving requires exact relative namespace support")
-	}
+	requireDenseNormalizedV4Serving(t)
 	var native [2]byte
 	binary.NativeEndian.PutUint16(native[:], 1)
 	if native[0] != 1 {
@@ -72,6 +70,18 @@ func newDenseNormalizedV4Test(t *testing.T) (*Server, *Client, documentservice.I
 		t.Fatal(err)
 	}
 	return server, client, info, ctx
+}
+
+func requireDenseNormalizedV4Serving(t *testing.T) {
+	t.Helper()
+	if !rootpublication.StableRelativeNamespaceSupported() {
+		t.Skip("selected serving requires exact relative namespace support")
+	}
+	var native [2]byte
+	binary.NativeEndian.PutUint16(native[:], 1)
+	if native[0] != 1 {
+		t.Skip("selected serving requires little-endian prepared views")
+	}
 }
 
 func denseNormalizedV4ServingOptions() collections.ColumnGraphServingOptions {
@@ -744,6 +754,7 @@ func TestDenseNormalizedV4ErrorInventoryFailsClosed(t *testing.T) {
 }
 
 func TestDenseNormalizedV4SurvivesServerRestart(t *testing.T) {
+	requireDenseNormalizedV4Serving(t)
 	dir := t.TempDir()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()

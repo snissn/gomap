@@ -1685,6 +1685,33 @@ class TreeDBClientTests(unittest.TestCase):
                     "a",
                 )
                 filtered_exact_client.close()
+            packed_filtered_exact = copy.deepcopy(filtered_exact)
+            packed_filtered_exact["dense_work"]["graph"].update(
+                base_ann_scored=4097, exact_base_scored=4097, base_result_ids=4097,
+            )
+            packed_filtered_exact["dense_work"]["graph"]["filter"]["eligible_rows"] = 4097
+            packed_filtered_exact["score_plane"].update(
+                exact_small_filter_score_calls=4097,
+                exact_base_vector_bytes_read=4097 * 8,
+                packed_score_batch_calls=1,
+                packed_score_candidates=4097,
+                packed_vector_bytes_read=4097 * 8,
+                forbidden_stable_score_calls=0,
+            )
+            with FixtureServer({
+                ("POST", "/v1/indexes/docs/search/vector"): (200, packed_filtered_exact, 0),
+            }) as packed_exact_server:
+                packed_exact_client = TreeDBClient(packed_exact_server.base_url, timeout=1)
+                packed_result = packed_exact_client.query_by_embedding(
+                    "docs", [1, 0], 1,
+                    filter={"field": "meta.repo", "operator": "==", "value": "gomap"},
+                    query_mode="quantized_rerank",
+                    quantized_index_name="embedding.scalar_u8.public",
+                )
+                self.assertTrue(dense_quantized_response_work_matches(
+                    packed_result.dense_work, packed_result.score_plane, 1, 1, True,
+                ))
+                packed_exact_client.close()
             zero_width_filtered_exact = copy.deepcopy(filtered_exact)
             zero_width_filtered_exact["dense_work"]["graph"].update(
                 delta_scored=1, exact_base_scored=0, base_shadowed=0, base_result_ids=0,

@@ -223,6 +223,132 @@ def paired_endpoint(counter, records):
 
 
 class NativeCohereDiagnosticTests(unittest.TestCase):
+    def test_normalized_v4_expected_routes_preserve_cold_filter_policy(self):
+        for eligible, filtered, expected in (
+            (5000, False, ("typed_hnsw",)),
+            (0, True, ("typed_empty",)),
+            (1, True, ("typed_exact",)),
+            (4096, True, ("typed_exact",)),
+            (4097, True, ("typed_exact", "typed_hnsw")),
+            (5000, True, ("typed_exact", "typed_hnsw")),
+            (5001, True, ("typed_hnsw",)),
+        ):
+            with self.subTest(eligible=eligible, filtered=filtered):
+                self.assertEqual(
+                    diagnostic.normalized_v4_expected_routes(eligible, filtered),
+                    expected,
+                )
+        for eligible, filtered in ((-1, True), (1.0, True), (1, 1)):
+            with self.subTest(invalid=(eligible, filtered)):
+                with self.assertRaises(ValueError):
+                    diagnostic.normalized_v4_expected_routes(eligible, filtered)
+
+    def test_v4_response_validation_binds_the_declared_route(self):
+        identity = SimpleNamespace(
+            query_mode="exact", execution_route="typed_exact", diagnostics=True,
+            return_embedding=False, embedding_vector_reads=0,
+            embedding_vector_bytes=0, embedding_output_bytes=0,
+            quantized_score_calls=0, quantized_code_bytes_read=0,
+            packed_score_calls=1, packed_score_candidates=1,
+            packed_vector_bytes_read=diagnostic.v4_gate.DIMENSIONS * 4,
+            fp32_score_calls=1,
+        )
+        response = SimpleNamespace(
+            native_command_version=4,
+            documents=[SimpleNamespace(id="row-000000", score=1.0, embedding=None)],
+            route_identity=identity,
+            dense_work=SimpleNamespace(
+                completed=True,
+                graph=SimpleNamespace(completed=True),
+                output=SimpleNamespace(completed=True),
+            ),
+            score_plane=None,
+        )
+        with patch.object(diagnostic.v4_gate, "asdict", return_value={"execution_route": "typed_exact"}):
+            receipt = diagnostic.v4_gate.validate_response(
+                response, "exact", diagnostics=True, top_k=1,
+                expected_route="typed_exact",
+            )
+        self.assertEqual(receipt["route"]["execution_route"], "typed_exact")
+        with self.assertRaisesRegex(RuntimeError, "expected='typed_hnsw'.*observed='typed_exact'"):
+            diagnostic.v4_gate.validate_response(
+                response, "exact", diagnostics=True, top_k=1,
+            )
+
+        sq8_identity = SimpleNamespace(**{
+            **vars(identity), "query_mode": "quantized_rerank",
+            "quantized_score_calls": 0, "quantized_code_bytes_read": 0,
+            "packed_score_calls": 1, "packed_score_candidates": 1,
+            "packed_vector_bytes_read": diagnostic.v4_gate.DIMENSIONS * 4,
+        })
+        sq8_response = SimpleNamespace(
+            **{**vars(response), "route_identity": sq8_identity,
+               "score_plane": SimpleNamespace(
+                   completed=True, forbidden_stable_score_calls=0,
+                   packed_score_batch_calls=1, packed_score_candidates=1,
+                   packed_vector_bytes_read=diagnostic.v4_gate.DIMENSIONS * 4,
+               )},
+        )
+        with patch.object(diagnostic.v4_gate, "asdict", return_value={"execution_route": "typed_exact"}):
+            diagnostic.v4_gate.validate_response(
+                sq8_response, "quantized_rerank", diagnostics=True, top_k=1,
+                expected_route="typed_exact",
+            )
+        sq8_identity.packed_score_candidates = 0
+        with self.assertRaisesRegex(RuntimeError, "omitted the packed FP32 batch"):
+            diagnostic.v4_gate.validate_response(
+                sq8_response, "quantized_rerank", diagnostics=True, top_k=1,
+                expected_route="typed_exact",
+            )
+
+    def test_normalized_v4_search_translates_production_route_into_event_receipt(self):
+        run = object.__new__(diagnostic.Run)
+        run.plan = {"campaign_profile": diagnostic.CAMPAIGN_PROFILE_NORMALIZED_V4,
+                    "query_mode": "exact", "rows": 5000, "queries": 1}
+        run.quantized_requests, run.updated = [], set()
+        run.lock = diagnostic.threading.Lock()
+        run.info = SimpleNamespace(generation=1)
+        run.queries = np.asarray([[1.0, 0.0]], dtype=np.float32)
+        run.vectors = np.asarray([[1.0, 0.0]], dtype=np.float32)
+        run.truth = {"1": [["row-000000"]]}
+        run.original_cosine_truth = {"1": [["row-000000"]]}
+        work = diagnostic.dense_contract.DenseSearchWork.from_dict(
+            plain(quantized_response(eligible=1, filter_requested=True).dense_work),
+        )
+        response = SimpleNamespace(
+            route_identity=SimpleNamespace(
+                filter=True, result_count=1,
+                representation=diagnostic.NORMALIZED_REPRESENTATION,
+                embedding_vector_reads=0, embedding_vector_bytes=0,
+                embedding_output_bytes=0,
+            ),
+            dense_work=work, score_plane=None,
+            documents=[SimpleNamespace(
+                id="row-000000", content="minima-cohere:0",
+                meta={"user_id": "000000", "fpath": "/cohere/000000.txt"},
+                embedding=None, score=1.0,
+            )],
+        )
+        native = Mock()
+        native.query_by_embedding.return_value = response
+        run.clients = SimpleNamespace(native=native)
+        emitted = []
+        run.emit = lambda event, **fields: emitted.append({"event": event, **fields})
+
+        def timed(_phase, call, *, timing_evidence, **_fields):
+            timing_evidence.update(
+                started_monotonic_ns=1, ended_monotonic_ns=2, duration_ns=1,
+            )
+            return call()
+
+        run.timed = timed
+        route = {"execution_route": "typed_exact", "query_mode": "exact"}
+        with patch.object(diagnostic.v4_gate, "validate_response", return_value={"route": route}):
+            run.search_normalized_v4("fixed_coordinate_curve", 1, 0)
+        self.assertEqual(run.quantized_requests[0]["route_identity"], route)
+        self.assertEqual(emitted[-1]["route_identity"], route)
+        self.assertEqual(emitted[-1]["event"], "search_result")
+
     def test_column_graph_build_validation_binds_quantized_stage_to_arm(self):
         build = {
             **{field: 1 for field in diagnostic._COLUMN_GRAPH_BUILD_FIELDS
@@ -676,6 +802,39 @@ class NativeCohereDiagnosticTests(unittest.TestCase):
         self.assertEqual(run.clients.optimize_index.call_args.kwargs["column_graph_serving"], {"limit": 1})
         run.optimize("fold")
         self.assertIsNone(run.clients.optimize_index.call_args.kwargs["column_graph_serving"])
+
+    def test_normalized_truth_uses_canonical_float32_dot(self):
+        vectors = np.asarray([[3.0, 4.0], [0.0, 2.0], [-4.0, 3.0]], dtype=np.float32)
+        queries = np.asarray([[1.0, 1.0]], dtype=np.float32)
+        ids, scores = diagnostic.canonical_normalized_f32_truth(
+            vectors, queries, [3], query_batch=1,
+        )
+        normalized = vectors / np.linalg.norm(vectors, axis=1)[:, None]
+        query = queries[0] / np.linalg.norm(queries[0])
+        expected = query @ normalized.T
+        order = np.lexsort((np.arange(3), -expected))
+        self.assertEqual(ids["3"][0], [f"row-{row:06d}" for row in order])
+        np.testing.assert_allclose(scores["3"][0], expected[order], rtol=0, atol=1e-7)
+
+    def test_owned_db_file_inventory_recomputes_categories(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for relative, payload in (
+                    ("docs/column-assets/part", b"abc"),
+                    ("wal/000001", b"12345"),
+                    ("value_vlog/000001", b"1234567"),
+                    ("leaf_vlog/000001", b"12"),
+                    ("MANIFEST", b"x")):
+                path = root / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(payload)
+            inventory = diagnostic.owned_db_file_inventory(root)
+            self.assertEqual(inventory["total_bytes"], 18)
+            self.assertEqual(inventory["category_bytes"], {
+                "column_assets": 3, "command_wal": 5, "value_log": 7,
+                "leaf_log": 2, "other": 1,
+            })
+            self.assertEqual(sum(row["bytes"] for row in inventory["files"]), 18)
 
     def test_ensure_binds_effective_construction_width(self):
         run = object.__new__(diagnostic.Run)

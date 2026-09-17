@@ -40,6 +40,30 @@ type ColumnGraphServingStats struct {
 	BaseBackingBytes        int64                            `json:"base_backing_bytes"`
 	Physical                ColumnGraphPhysicalResourceStats `json:"physical"`
 	LogicalResources        ColumnGraphLogicalResourceStats  `json:"logical_resources"`
+	VectorAssets            []ColumnGraphServingAssetStats   `json:"vector_assets,omitempty"`
+	TypedColumnParts        []ColumnGraphServingPartStats    `json:"typed_column_parts,omitempty"`
+}
+
+// ColumnGraphServingAssetStats is the immutable persisted vector-state
+// inventory. It carries identities and sizes only; diagnostics never read or
+// expose vector payloads.
+type ColumnGraphServingAssetStats struct {
+	Role                string         `json:"role"`
+	AssetID             string         `json:"asset_id"`
+	LogicalType         string         `json:"logical_type"`
+	PhysicalEncoding    string         `json:"physical_encoding"`
+	Rows                int            `json:"rows"`
+	Bytes               int64          `json:"bytes"`
+	LogicalPayloadBytes int64          `json:"logical_payload_bytes,omitempty"`
+	Ref                 ColumnAssetRef `json:"ref"`
+}
+
+// ColumnGraphServingPartStats identifies persisted typed-column parts so the
+// canonical vector authority can be cross-bound to the vector-state asset.
+type ColumnGraphServingPartStats struct {
+	Rows int                    `json:"rows"`
+	Role ColumnManifestPartRole `json:"role"`
+	Ref  ColumnAssetRef         `json:"ref"`
 }
 
 // ColumnGraphPhysicalResourceStats is coordinator-wide across every Collection
@@ -186,6 +210,29 @@ func (c *Collection) ColumnGraphServingSnapshot() (out ColumnGraphServingStats, 
 		}
 		if state.servingBase != nil {
 			out.BaseRows = state.servingBase.graph.RowCount
+			view := state.servingBase.view
+			if view.VectorIndexStateFound {
+				out.VectorAssets = make([]ColumnGraphServingAssetStats, len(view.VectorIndexState.Assets))
+				for i, asset := range view.VectorIndexState.Assets {
+					logicalPayloadBytes := int64(0)
+					switch asset.Role {
+					case columnVectorIndexStateAssetRoleNormalizedVectors:
+						logicalPayloadBytes = int64(asset.RowCount) * int64(view.VectorIndexState.Dimensions) * 4
+					case columnVectorIndexStateAssetRoleQuantizedCodes:
+						logicalPayloadBytes = int64(asset.RowCount) * int64(view.VectorIndexState.Dimensions)
+					}
+					out.VectorAssets[i] = ColumnGraphServingAssetStats{
+						Role: asset.Role, AssetID: asset.AssetID, LogicalType: asset.LogicalType,
+						PhysicalEncoding: asset.PhysicalEncoding, Rows: asset.RowCount,
+						Bytes: asset.AssetBytes, LogicalPayloadBytes: logicalPayloadBytes, Ref: asset.Ref,
+					}
+				}
+			}
+			materializerView := state.servingBase.materializerView
+			out.TypedColumnParts = make([]ColumnGraphServingPartStats, len(materializerView.TypedColumnPartRefs))
+			for i, part := range materializerView.TypedColumnPartRefs {
+				out.TypedColumnParts[i] = ColumnGraphServingPartStats{Rows: part.Rows, Role: part.Role, Ref: part.Ref}
+			}
 		}
 	}
 	debt := func(d typedGraphPublicationCost) ColumnGraphPublicationDebtStats {

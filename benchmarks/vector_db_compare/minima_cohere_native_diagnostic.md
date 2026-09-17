@@ -83,6 +83,40 @@ six, plus the following explicit update, are no-ops. Successful no-ops do not
 advance the expected manifest generation or coverage LSN. The 500K run instead
 has eight distinct changed overlap batches and a changed explicit update.
 
+## Normalized-v4 campaign profile
+
+`--campaign-profile normalized_v4` selects the production query shape introduced
+by the normalized-v4 path. It fixes E=R=64, stores one canonical normalized FP32
+typed-column authority, derives the optional scalar-u8 plane from it, uses native
+command v4 with `return_embedding=false`, and retains original-cosine truth only
+as a secondary report. The default `legacy_v2_v3` profile above is unchanged.
+
+The normalized profile accepts a real-prefix 5,000-row rehearsal and the final
+500,000-row campaign. It records the production filter policy: populations at
+or below 4096 are always typed-exact, while 4097 through 5000 may use the bounded
+packed typed-exact fallback while their cached filter navigation is built and
+then use typed HNSW. Larger filtered populations and nonempty unfiltered
+populations use typed HNSW. The 5K run exercises this cold handoff and runs the
+real production matrix and same-shortlist engine diagnostic; it is a wiring
+check, not qualifying evidence. The Q3 100K integration gate remains
+`minima_cohere_v4_production_gate.py`. Only Q4 runs the fresh 500K exact and SQ8
+arms.
+
+Both freeze and run commands must add the reviewed Go helper and exact Go tool:
+
+```text
+--campaign-profile normalized_v4 --go-helper /abs/treedb_v4_production_gate
+--go /abs/go --rows 5000
+```
+
+The SQ8 arm also adds
+`--query-mode quantized_rerank --quantized-index-name minima_sq8`; the exact arm
+uses `--query-mode exact` and no quantized index. The producer emits canonical
+and original-cosine truth, full lifecycle events, five resource inventories,
+and, for SQ8, the production matrix plus actual-campaign engine diagnostic.
+Resource inventory explicitly distinguishes the topology-only HNSW pack from
+the single normalized FP32 vector asset and its derived SQ8 assets.
+
 ## Scalar-u8 rerank opt-in
 
 Add `--query-mode quantized_rerank --quantized-index-name minima_sq8` to both

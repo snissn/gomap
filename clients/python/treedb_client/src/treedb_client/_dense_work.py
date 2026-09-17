@@ -342,6 +342,7 @@ def dense_score_plane_packed_counters_match(proof, dimension):
 
 
 _DENSE_TYPED_SCALAR_EXACT_LIMIT = 4096
+_DENSE_TYPED_FILTER_COLD_EXACT_MAX_ROWS = 5000
 _DENSE_COSINE_SCORE_TOLERANCE = 1e-6
 
 
@@ -497,6 +498,12 @@ def dense_quantized_completed_graph_matches(work, proof, top_k, result_count, fi
     graph = work.graph
     exact_base_calls = proof.exact_base_rerank_score_calls + proof.exact_small_filter_score_calls
     exact_score_calls = exact_base_calls + proof.exact_suffix_score_calls
+    # Normalized-v4's filtered typed-exact shortcut scores the canonical FP32
+    # base rows through one packed batch. Older proof versions do not carry the
+    # packed counters and retain the legacy zero base_ann_scored convention.
+    expected_base_ann_scored = proof.quantized_score_calls
+    if proof.route == "typed_exact" and getattr(proof, "packed_score_batch_calls", 0):
+        expected_base_ann_scored = exact_base_calls
     if (
         not graph.available
         or not graph.completed
@@ -512,7 +519,7 @@ def dense_quantized_completed_graph_matches(work, proof, top_k, result_count, fi
             exact_score_calls > graph.filter.eligible_rows
             or (proof.route == "typed_exact" and exact_score_calls != graph.filter.eligible_rows)
         ))
-        or proof.quantized_score_calls != graph.base_ann_scored
+        or expected_base_ann_scored != graph.base_ann_scored
         or graph.base_candidates > proof.quantized_score_calls
         or exact_base_calls != graph.exact_base_scored
         or graph.base_result_ids != exact_base_calls
@@ -543,6 +550,8 @@ def dense_quantized_completed_graph_matches(work, proof, top_k, result_count, fi
             and (
                 proof.normalized_candidate_width == 0
                 or graph.filter.eligible_rows <= _DENSE_TYPED_SCALAR_EXACT_LIMIT
+                or (getattr(proof, "packed_score_batch_calls", 0)
+                    and graph.filter.eligible_rows <= _DENSE_TYPED_FILTER_COLD_EXACT_MAX_ROWS)
             )
         )
     # Minimal traversal suppresses base_candidates only for unfiltered work.

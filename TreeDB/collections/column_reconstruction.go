@@ -437,11 +437,11 @@ func reconstructColumnJSONDocumentProjectedIntoWithResolver(arena []byte, cfg Co
 			if !values[i].Present {
 				continue
 			}
+			recordEmbeddingVectorMaterialization(stats, col, values[i])
 			if strings.Contains(col.Path, ".") {
 				if err := setColumnJSONPath(obj, col.Path, raw); err != nil {
 					return arena[:start], nil, fmt.Errorf("collections: column reconstruction column %q: %w", col.Name, err)
 				}
-				recordEmbeddingVectorMaterialization(stats, col, values[i])
 			}
 		}
 	} else {
