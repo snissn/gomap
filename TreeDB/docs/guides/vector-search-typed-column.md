@@ -13,8 +13,8 @@ The opt-in
 [`cosine_normalized_f32_v1`](../spec/cosine-normalized-f32-v1.md)
 representation stores one canonical normalized FP32 plane and uses scalar-u8
 candidates with packed FP32 rerank. It is enabled for Go collection and
-document-service typed input; native command and Python support remain gated on
-the next protocol stage. `return_embedding` defaults to false. When true it
+document-service typed input and exposed through negotiated native command64/v4,
+HTTP, and Python. `return_embedding` defaults to false. When true it
 returns the canonical normalized value, not the caller's original magnitude or
 bit pattern.
 
@@ -124,9 +124,11 @@ exception is intentionally narrow: the same selected
 `SearchVectorIndexWithBufferReadView` route also admits
 `VectorIndexQueryModeQuantizedRerank` for one explicitly named **legacy**
 `scalar_u8` v1 plane. It does not admit `quantized_only`, calibrated scalar-u8,
-RaBitQ, BRQ, Hybrid, or the benchmark wire entry points. The Q3 public typed
-dense route is the separate command-64/v3 contract and carries its own
-capability and sibling score-plane proof. Other unsupported controls are
+RaBitQ, BRQ, Hybrid, or the benchmark wire entry points. The canonical public
+typed dense route is command-64/v4: production carries compact route identity,
+while explicit diagnostics carries dense work and the sibling packed
+score-plane proof. Legacy command-64/v3 remains the noncanonical scalar-u8
+contract. Other unsupported controls are
 rejected rather than ignored. For full documents use the returned read view,
 fetch from that **same view**, and close it after fetching. Do not open a fresh
 view between search and fetch: publication can change the current collection in

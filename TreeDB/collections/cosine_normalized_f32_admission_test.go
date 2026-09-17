@@ -569,7 +569,7 @@ func TestCosineNormalizedF32V1ExactAndSQ8MatchExhaustivePackedTruth(t *testing.T
 		t.Helper()
 		opts := VectorIndexSearchOptions{
 			IndexName: "embedding_graph", Query: query, QueryMode: mode,
-			TopK: len(ids), EfSearch: len(ids), StatsMode: VectorIndexSearchStatsModeMinimal,
+			TopK: len(ids), EfSearch: len(ids), StatsMode: VectorIndexSearchStatsModeProduction,
 		}
 		if mode == VectorIndexQueryModeQuantizedRerank {
 			opts.QuantizedIndexName = "embedding.scalar_u8.legacy"
@@ -733,7 +733,7 @@ func TestCosineNormalizedF32V1PublicSQ8UsesPackedCanonicalRerank(t *testing.T) {
 		QuantizedRerankCandidates: len(ids),
 		TopK:                      2,
 		EfSearch:                  len(ids),
-		StatsMode:                 VectorIndexSearchStatsModeMinimal,
+		StatsMode:                 VectorIndexSearchStatsModeProduction,
 	}
 	var buffer VectorIndexSearchBuffer
 	response, view, err := col.SearchVectorIndexWithBufferReadView(opts, &buffer)
@@ -863,7 +863,7 @@ func TestCosineNormalizedF32V1MutableFoldPinProjectionAndReopen(t *testing.T) {
 			QuantizedRerankCandidates: 3,
 			TopK:                      3,
 			EfSearch:                  3,
-			StatsMode:                 VectorIndexSearchStatsModeMinimal,
+			StatsMode:                 VectorIndexSearchStatsModeProduction,
 		}, &buffer)
 		if err != nil || view == nil {
 			t.Fatalf("selected search response=%+v view=%v err=%v", response, view, err)

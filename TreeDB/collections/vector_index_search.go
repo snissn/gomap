@@ -34,9 +34,11 @@ const (
 
 // VectorIndexSearchStatsMode selects how much vector graph-search telemetry is
 // collected. The zero value preserves full diagnostics for compatibility.
-// Production/minimal mode is the steady-state low-overhead mode: it keeps
-// source-health, admission, result, and fallback counters while avoiding
-// per-edge/per-candidate diagnostic counters on the healthy prepared path.
+// Minimal mode is the steady-state low-overhead mode: it keeps source-health,
+// admission, result, fallback counters, and the compact route receipt while
+// omitting the owner-local query proof. Production mode retains that proof for
+// existing explicit diagnostic consumers; document-service production selects
+// Minimal and its diagnostics switch selects Production.
 // Work-accounting mode is an explicit diagnostic mode for explaining per-query
 // search cost; do not mix it into low-overhead production throughput evidence.
 type VectorIndexSearchStatsMode string
@@ -135,6 +137,9 @@ type VectorIndexSearchResult struct {
 type VectorIndexSearchStats struct {
 	// Engine-local proof; versioned wire exposure is handled separately.
 	ColumnGraphWork ColumnGraphQueryWork `json:"-"`
+	// ColumnGraphReceipt is the compact always-on selected-route identity. It is
+	// intentionally separate from optional diagnostic proof construction.
+	ColumnGraphReceipt ColumnGraphRouteReceipt `json:"-"`
 	// Typed-owner acquisition includes drain, snapshot binding and resource admission.
 	ColumnGraphOwnerAcquireNanos int64  `json:"column_graph_owner_acquire_nanos,omitempty"`
 	ColumnGraphDeltaScored       uint64 `json:"column_graph_delta_scored,omitempty"`
@@ -180,6 +185,10 @@ type VectorIndexSearchStats struct {
 	QuantizedRerankCandidates uint64 `json:"quantized_rerank_candidates,omitempty"`
 	// QuantizedRerankExactScoreCalls counts exact FP32 score calls used by quantized_rerank.
 	QuantizedRerankExactScoreCalls uint64 `json:"quantized_rerank_exact_score_calls,omitempty"`
+	// PackedExact* prove that canonical FP32 rerank stayed on the batched scorer.
+	PackedExactScoreCalls      uint64 `json:"packed_exact_score_calls,omitempty"`
+	PackedExactScoreCandidates uint64 `json:"packed_exact_score_candidates,omitempty"`
+	PackedExactVectorBytesRead uint64 `json:"packed_exact_vector_bytes_read,omitempty"`
 	// ExactRerankScoreCalls aliases exact rerank score calls for work-accounting consumers.
 	ExactRerankScoreCalls uint64 `json:"exact_rerank_score_calls,omitempty"`
 	// QuantizedScorerActive reports that a validated quantized scorer served this search.
@@ -234,6 +243,11 @@ type VectorIndexSearchStats struct {
 	DocumentFieldsReconstructed uint64 `json:"document_fields_reconstructed,omitempty"`
 	// DocumentFieldsSkipped counts declared or retained top-level fields skipped by projection.
 	DocumentFieldsSkipped uint64 `json:"document_fields_skipped,omitempty"`
+	// DocumentEmbedding* count optional final-output vector materialization,
+	// separately from mandatory search scoring reads.
+	DocumentEmbeddingVectorReads uint64 `json:"document_embedding_vector_reads,omitempty"`
+	DocumentEmbeddingVectorBytes uint64 `json:"document_embedding_vector_bytes,omitempty"`
+	DocumentEmbeddingOutputBytes uint64 `json:"document_embedding_output_bytes,omitempty"`
 	// DocumentFetchNanos attributes end-to-end post-top-k document fetch/materialization time.
 	DocumentFetchNanos uint64 `json:"document_fetch_nanos,omitempty"`
 	// DocumentRetainedFetches counts primary retained-payload fetches for document materialization.
@@ -2776,6 +2790,9 @@ func vectorIndexSearchStatsFromInternal(searchStats columnVectorGraphNativeSearc
 		QuantizedCodeBytesRead:                searchStats.QuantizedCodeBytesRead,
 		QuantizedRerankCandidates:             searchStats.QuantizedRerankCandidates,
 		QuantizedRerankExactScoreCalls:        searchStats.QuantizedRerankExactScoreCalls,
+		PackedExactScoreCalls:                 searchStats.PackedExactScoreCalls,
+		PackedExactScoreCandidates:            searchStats.PackedExactScoreCandidates,
+		PackedExactVectorBytesRead:            searchStats.PackedExactVectorBytesRead,
 		QuantizedScorerActive:                 searchStats.QuantizedScorerActive,
 		QuantizedAssetMissing:                 searchStats.QuantizedAssetMissing,
 		QuantizedAssetInvalid:                 searchStats.QuantizedAssetInvalid,

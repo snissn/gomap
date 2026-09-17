@@ -16,20 +16,20 @@ deterministic encoding, benchmark labels, or observability keys MUST update this
 document, the roadmap, relevant codec/golden tests, and benchmark documentation
 in the same change.
 
-### Reserved normalized-cosine v4 contract
+### Normalized-cosine v4 contract
 
-Native command64/v4 is reserved for the opt-in
+Native command64/v4 implements the opt-in
 `cosine_normalized_f32_v1` representation specified in
-[`cosine-normalized-f32-v1.md`](cosine-normalized-f32-v1.md). Q1 defines the
-capability boundary but adds no command implementation. Until Q3, Go/Python v4
-stages are `NOT_IMPLEMENTED`; a v1/v2/v3 request for the representation fails
-closed instead of using legacy score semantics.
+[`cosine-normalized-f32-v1.md`](cosine-normalized-f32-v1.md). Go and Python
+clients negotiate v4 explicitly. A v1/v2/v3 request for this representation
+fails closed before search instead of using legacy score semantics.
 
-The future v4 envelope carries framing, bounds, negotiated score contract,
+The v4 production envelope carries framing, bounds, negotiated score contract,
 captured owner/generation, IDs/scores, and projected documents. It carries no
 full score-plane proof unless diagnostic mode was requested. With
-`return_embedding=false` it carries no embedding bytes; true returns canonical
-normalized vectors. Current command versions remain unchanged below.
+`return_embedding=false` it performs and carries no output embedding work;
+true returns canonical normalized vectors. Legacy command versions remain
+unchanged below.
 
 ## 1. Decision
 
@@ -913,6 +913,52 @@ return-embedding is true. When that embedding is present, consumers recompute
 the FP32 cosine score and require it to match the result-envelope score within
 `1e-6` absolute tolerance.
 
+#### Canonical normalized production envelope (64/v4)
+
+Version 4 is disjoint from the legacy v2/v3 typed envelopes. It requires
+`deadline` (4), `dense_search_request` (129), and critical
+`dense_search_normalized_options` (137). The options payload is version `1`,
+representation tag `1` (`cosine_normalized_f32_v1`), mode tag `1` (exact) or
+`2` (scalar-u8 rerank), a bounded quantized-index name, and `R`. Exact requires
+an empty name and `R=0`; scalar-u8 rerank requires a nonempty declared name and
+`R >= top-K`. Both modes require positive generation and `E`; omitted defaults
+are resolved from caller-held generation-bound index metadata before encoding.
+The optional critical `dense_search_diagnostics` section (139), whose payload
+is exactly version `1`, enables diagnostics. Missing v4 negotiation, an older
+command version, unknown tags, malformed options, or a representation mismatch
+fails before search.
+
+Production responses contain exactly ordered IDs (102), requested JSON
+documents (103), `dense_search_response` (130), and critical
+`dense_search_route_identity` (138). Section 130 is version `1`, result count,
+then one little-endian float64 score per result. Section 138 version `1` binds
+the representation, requested mode, executed empty/exact/HNSW route, optional
+scalar-u8 identity, request flags, captured schema/manifest owner, E/R/top-K,
+result count, candidate-code reads, FP32 scoring reads, packed-batch work, and
+embedding projection work. Its owner identities and byte/count products are
+validated independently by the service and client. Nonempty results require
+positive FP32 scoring work; scalar-u8 HNSW also requires positive candidate-code
+and one packed rerank batch. IDs/documents/metadata have flags zero; route and
+diagnostic sections have exactly the critical flag. Unknown flags or sections,
+duplicate sections, invalid counts, non-finite/out-of-range scores, invalid IDs,
+unordered results, and document/request-shape mismatches fail closed.
+
+Diagnostic v4 adds critical `dense_search_work` (134). Scalar-u8 diagnostic
+responses also add critical `dense_search_score_plane_proof` (136) using wire
+version `2`, which appends packed-batch calls/candidates/bytes and the forbidden
+stable-scorer count to the v1 proof. Diagnostic observation cannot change IDs or
+scores. Production constructs and serializes neither proof and performs no
+diagnostic-only work accounting.
+
+Version-4 clients decode each returned document once. With
+`return_embedding=false` the document must omit `embedding`, and route identity
+must prove zero output embedding reads, bytes, and encoded bytes. With true, the
+document contains the stored canonical normalized vector with the declared
+dimension and finite components. V4 never recomputes result scores from returned
+embeddings. Go result ID/document slices borrow the client response buffer until
+the next call; route identity and optional proofs are owned values. Python owns
+the converted result models.
+
 Section 134 version 1 contains exactly 38 minimal uint64 uvarints, in this order:
 
 | Positions (zero-based) | Values |
@@ -965,10 +1011,15 @@ logical peaks. Other work fields count actual producer work,
 including prefixes before an error. No per-request process snapshot is taken.
 
 The existing FrameError may also carry these critical sections beside its
-unchanged error section (2), for 64/v2 and 64/v3 respectively. Pre-service
-failures may omit unavailable evidence. A later native encoding failure
-preserves completed service/graph/output and score-plane prefixes. This
-completion does not certify wire delivery.
+unchanged error section (2), for legacy 64/v2 and 64/v3 and diagnostic 64/v4.
+Production v4 errors carry no diagnostic proof. Pre-service failures may omit
+unavailable evidence. A later native encoding failure preserves completed
+service/graph/output and score-plane prefixes. Quantized clients bind the
+request-bearing score plane and captured generation before retaining the remote
+error. Dense-work v1 has no query/index/filter-value digest, so an exact v4
+error proof is retained only as debugging detail and the error is reclassified
+as consistency-unavailable rather than treated as request-authenticated.
+Completion does not certify wire delivery.
 Version 1 never emits or accepts section 134 and retains its response/error
 bytes. The Go response owns its fixed proof value independently of borrowed
 result documents; `WireError.DenseWork` is optional owned error detail. If

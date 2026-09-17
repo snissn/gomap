@@ -48,6 +48,8 @@ type DenseVectorSearchRequest struct {
 	ExpectedGeneration        uint64
 	Filter                    *documentservice.Filter
 	ReturnEmbedding           bool
+	VectorRepresentation      collections.VectorIndexRepresentation
+	Diagnostics               bool
 }
 
 // DenseVectorSearchResult borrows ID and Document from the client's response
@@ -58,12 +60,13 @@ type DenseVectorSearchResult struct {
 	Document []byte
 }
 
-// DenseVectorSearchResponse and its Results borrow from the client until its
-// next round trip. DenseWork and ScorePlane are independently owned and remain
-// valid afterward.
+// DenseVectorSearchResponse.Results borrows from the client until its next
+// round trip. DenseWork, ScorePlane, and RouteIdentity are independently owned
+// and remain valid afterward.
 type DenseVectorSearchResponse struct {
 	DenseWork                 documentservice.DenseSearchWork
 	ScorePlane                *collections.ColumnGraphScorePlaneWork
+	RouteIdentity             *documentservice.DenseSearchRouteIdentity
 	TypedColumnGraph          bool
 	Results                   []DenseVectorSearchResult
 	Route                     documentservice.Route
@@ -99,7 +102,31 @@ func (c *Client) DenseVectorSearch(ctx context.Context, request DenseVectorSearc
 	}
 	request.QueryMode = mode
 	version := iwire.DenseVectorSearchLegacyVersion
-	if request.TypedColumnGraph {
+	if request.VectorRepresentation != "" {
+		if request.VectorRepresentation != collections.VectorIndexRepresentationCosineNormalizedF32V1 {
+			return DenseVectorSearchResponse{}, protocolError(iwire.ErrUnsupportedFeature, "unsupported dense vector representation")
+		}
+		if !c.denseNormalizedNegotiated {
+			return DenseVectorSearchResponse{}, protocolError(iwire.ErrUnsupportedFeature, "hello did not negotiate normalized dense search")
+		}
+		if request.ExpectedGeneration == 0 || request.EfSearch <= 0 {
+			return DenseVectorSearchResponse{}, protocolError(iwire.ErrInvalidCommand, "normalized dense search requires positive expected_generation and ef_search")
+		}
+		if request.QueryMode == collections.VectorIndexQueryModeExact {
+			if request.QuantizedIndexName != "" || request.QuantizedRerankCandidates != 0 {
+				return DenseVectorSearchResponse{}, protocolError(iwire.ErrInvalidCommand, "normalized exact search does not accept quantized options")
+			}
+		} else if request.QueryMode == collections.VectorIndexQueryModeQuantizedRerank {
+			if request.QuantizedIndexName == "" || request.QuantizedRerankCandidates < request.TopK || request.QuantizedRerankCandidates <= 0 {
+				return DenseVectorSearchResponse{}, protocolError(iwire.ErrInvalidCommand, "normalized quantized search requires a named score plane and rerank width at least top_k")
+			}
+		} else {
+			return DenseVectorSearchResponse{}, protocolError(iwire.ErrUnsupportedFeature, "unsupported normalized dense query mode")
+		}
+		version = iwire.DenseVectorSearchNormalizedVersion
+	} else if request.Diagnostics {
+		return DenseVectorSearchResponse{}, protocolError(iwire.ErrUnsupportedFeature, "dense diagnostics require the normalized representation")
+	} else if request.TypedColumnGraph {
 		if request.QueryMode == collections.VectorIndexQueryModeQuantizedRerank {
 			if !c.denseTypedQuantizedNegotiated {
 				return DenseVectorSearchResponse{}, protocolError(iwire.ErrUnsupportedFeature, "hello did not negotiate typed dense quantized search")
@@ -138,6 +165,16 @@ func (c *Client) DenseVectorSearch(ctx context.Context, request DenseVectorSearc
 		}
 		requestSections = append(requestSections, iwire.Section{ID: iwire.SectionDenseSearchQuantizedOptions, Flags: iwire.SectionFlagCritical, Bytes: options})
 	}
+	if version == iwire.DenseVectorSearchNormalizedVersion {
+		options, optionsErr := appendDenseNormalizedOptions(nil, request, c.limits)
+		if optionsErr != nil {
+			return DenseVectorSearchResponse{}, optionsErr
+		}
+		requestSections = append(requestSections, iwire.Section{ID: iwire.SectionDenseSearchNormalizedOptions, Flags: iwire.SectionFlagCritical, Bytes: options})
+		if request.Diagnostics {
+			requestSections = append(requestSections, iwire.Section{ID: iwire.SectionDenseSearchDiagnostics, Flags: iwire.SectionFlagCritical, Bytes: binary.AppendUvarint(nil, 1)})
+		}
+	}
 	body, err := appendVersionedCommandRequestBody(c.requestBody[:0], iwire.CommandDenseVectorSearch, version, requestSections...)
 	if err != nil {
 		return DenseVectorSearchResponse{}, err
@@ -148,6 +185,8 @@ func (c *Client) DenseVectorSearch(ctx context.Context, request DenseVectorSearc
 	if err != nil {
 		if version == iwire.DenseVectorSearchTypedQuantizedVersion {
 			err = validateDenseQuantizedFailureProof(err, request)
+		} else if version == iwire.DenseVectorSearchNormalizedVersion {
+			err = validateDenseNormalizedFailure(err, request)
 		}
 		return DenseVectorSearchResponse{}, err
 	}
@@ -161,6 +200,22 @@ func (c *Client) DenseVectorSearch(ctx context.Context, request DenseVectorSearc
 	c.vectorSections, err = iwire.DecodeSectionsInto(c.vectorSections[:0], response, c.limits)
 	if err != nil {
 		return DenseVectorSearchResponse{}, err
+	}
+	if version == iwire.DenseVectorSearchNormalizedVersion {
+		var out DenseVectorSearchResponse
+		out, c.denseIDs, c.denseDocuments, c.denseResults, err = decodeDenseNormalizedResponse(
+			c.vectorSections, request, c.limits, c.denseIDs, c.denseDocuments, c.denseResults,
+		)
+		decoded = err == nil
+		if err != nil {
+			var work *documentservice.DenseSearchWork
+			if out.DenseWork.Version != 0 {
+				owned := out.DenseWork
+				work = &owned
+			}
+			return DenseVectorSearchResponse{}, &DenseVectorSearchDecodeError{Err: err, DenseWork: work, ScorePlane: out.ScorePlane}
+		}
+		return out, nil
 	}
 	var out DenseVectorSearchResponse
 	var workErr, scorePlaneErr error
@@ -750,6 +805,9 @@ func (s *Server) handleDenseVectorSearch(ctx context.Context, state *connState, 
 }
 
 func (s *Server) handleVersionedDenseVectorSearch(ctx context.Context, state *connState, version uint64, sections []iwire.Section, dst []byte) (_ []byte, err error) {
+	if version == iwire.DenseVectorSearchNormalizedVersion {
+		return s.handleDenseNormalizedVectorSearch(ctx, state, sections, dst)
+	}
 	defer clearDenseVectorSearchScratch(state)
 	var proof *documentservice.DenseSearchWork
 	var scorePlane *collections.ColumnGraphScorePlaneWork
@@ -832,16 +890,19 @@ func (s *Server) handleVersionedDenseVectorSearch(ctx context.Context, state *co
 		}
 	}
 	response, err := s.documentService.SearchDenseVectorNativeRawInto(ctx, request.Index, documentservice.DenseVectorSearchRequest{
-		ExpectedGeneration:        request.ExpectedGeneration,
-		QueryEmbedding:            request.Query,
-		TopK:                      request.TopK,
-		EfSearch:                  request.EfSearch,
-		QueryMode:                 request.QueryMode,
-		QuantizedIndexName:        request.QuantizedIndexName,
-		QuantizedRerankCandidates: request.QuantizedRerankCandidates,
-		Route:                     documentservice.RouteAnn,
-		Filter:                    request.Filter,
-		ReturnEmbedding:           request.ReturnEmbedding,
+		ExpectedGeneration:          request.ExpectedGeneration,
+		QueryEmbedding:              request.Query,
+		TopK:                        request.TopK,
+		EfSearch:                    request.EfSearch,
+		QueryMode:                   request.QueryMode,
+		QuantizedIndexName:          request.QuantizedIndexName,
+		QuantizedRerankCandidates:   request.QuantizedRerankCandidates,
+		Route:                       documentservice.RouteAnn,
+		Filter:                      request.Filter,
+		ReturnEmbedding:             request.ReturnEmbedding,
+		Diagnostics:                 version >= iwire.DenseVectorSearchTypedVersion,
+		VectorRepresentation:        "",
+		RequireVectorRepresentation: true,
 	}, state.denseResults[:0])
 	if err != nil {
 		return nil, err

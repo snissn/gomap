@@ -20,13 +20,17 @@ import (
 	"github.com/snissn/gomap/TreeDB/collections"
 )
 
-func TestDenseVectorSearchResponseAlwaysSerializesScalarFilterPlan(t *testing.T) {
+func TestDenseVectorSearchResponseOmitsEmptyProductionDiagnostics(t *testing.T) {
 	raw, err := json.Marshal(DenseVectorSearchResponse{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Contains(raw, []byte(`"scalar_filter_plan":""`)) {
-		t.Fatalf("response JSON=%s want scalar_filter_plan", raw)
+	if bytes.Contains(raw, []byte(`"scalar_filter_plan"`)) || bytes.Contains(raw, []byte(`"dense_work"`)) {
+		t.Fatalf("production response JSON carried empty diagnostics: %s", raw)
+	}
+	diagnostic, err := json.Marshal(DenseVectorSearchResponse{ScalarFilterPlan: collections.NativeScalarFilterPlanCompleteExact})
+	if err != nil || !bytes.Contains(diagnostic, []byte(`"scalar_filter_plan":"complete_exact"`)) {
+		t.Fatalf("diagnostic response JSON=%s err=%v", diagnostic, err)
 	}
 }
 

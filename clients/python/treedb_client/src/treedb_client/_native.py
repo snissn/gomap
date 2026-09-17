@@ -14,7 +14,9 @@ from .errors import TreeDBConfigError, TreeDBProtocolError, TreeDBTimeoutError, 
 
 _HEADER = struct.Struct("<4sHHHHIQQQ")
 _MAX_FRAME = 16 << 20
-_CRITICAL_SECTION_IDS = frozenset((134, 135, 136))
+_MAX_DETERMINISTIC_NAME = 128
+_MAX_BYTE_VECTOR_ITEMS = 1 << 20
+_CRITICAL_SECTION_IDS = frozenset((134, 135, 136, 137, 138, 139))
 
 
 def _uint(value):
@@ -267,6 +269,28 @@ def _dense_quantized_options(query_mode, quantized_index_name, quantized_rerank_
     return _uint(1) + _uint(1) + _bytes(quantized_index_name.encode("utf-8")) + _uint(quantized_rerank_candidates)
 
 
+def _dense_normalized_options(query_mode, quantized_index_name, quantized_rerank_candidates):
+    if query_mode == "exact":
+        if quantized_index_name is not None or quantized_rerank_candidates != 0:
+            raise TreeDBConfigError("normalized exact dense options carry quantized state")
+        mode, name = 1, ""
+    elif query_mode == "quantized_rerank":
+        if not isinstance(quantized_index_name, str) or not quantized_index_name:
+            raise TreeDBConfigError("normalized quantized dense options require an index name")
+        if type(quantized_rerank_candidates) is not int or not 0 < quantized_rerank_candidates <= _MAX_BYTE_VECTOR_ITEMS:
+            raise TreeDBConfigError("normalized quantized rerank candidates must be positive")
+        mode, name = 2, quantized_index_name
+    else:
+        raise TreeDBConfigError("unsupported normalized dense query mode")
+    try:
+        encoded_name = name.encode("utf-8", errors="strict")
+    except UnicodeError as exc:
+        raise TreeDBConfigError("normalized dense index name must be valid UTF-8") from exc
+    if len(encoded_name) > _MAX_DETERMINISTIC_NAME:
+        raise TreeDBConfigError("normalized dense index name exceeds 128 bytes")
+    return _uint(1) + _uint(1) + _uint(mode) + _bytes(encoded_name) + _uint(quantized_rerank_candidates)
+
+
 def _dense_work(raw):
     from ._dense_work import DenseSearchWork
     values, offset = [], 0
@@ -293,12 +317,14 @@ def _dense_work(raw):
         raise TreeDBProtocolError("invalid native dense work proof") from exc
 
 
-def _dense_score_plane(raw):
+def _dense_score_plane(raw, wire_version=1):
+    if wire_version not in (1, 2):
+        raise TreeDBProtocolError("unsupported native dense score-plane wire version")
     values, offset = [], 0
-    for _ in range(27):
+    for _ in range(31 if wire_version == 2 else 27):
         value, offset = _read_uint(raw, offset)
         values.append(value)
-    if values[0] != 1 or values[1] > 7 or values[2] not in (1, 2, 3) or values[3] not in (1, 2, 3) or values[4] > 4 or values[5] > 65535:
+    if values[0] != wire_version or values[1] > 7 or values[2] not in (1, 2, 3) or values[3] not in (1, 2, 3) or values[4] > 4 or values[5] > 65535:
         raise TreeDBProtocolError("invalid native dense score-plane proof")
 
     def read_string():
@@ -329,8 +355,8 @@ def _dense_score_plane(raw):
         "base_manifest": manifests[0], "current_manifest": manifests[1],
         "base_coverage_lsn": values[25], "current_coverage_lsn": values[26],
     }
-    return {
-        "version": values[0], "available": bool(values[1] & 1), "completed": bool(values[1] & 2),
+    result = {
+        "version": 1, "available": bool(values[1] & 1), "completed": bool(values[1] & 2),
         "requested_mode": modes[values[2]], "effective_mode": modes[values[3]], "route": routes[values[4]],
         "reason": reason, "quantized_index_name": name, "quantized_codec": codec,
         "quantized_version": values[5], "quantized_config_hash": values[6],
@@ -341,6 +367,309 @@ def _dense_score_plane(raw):
         "exact_base_rerank_score_calls": values[18], "exact_suffix_score_calls": values[19], "exact_small_filter_score_calls": values[20],
         "exact_base_vector_bytes_read": values[21], "exact_suffix_vector_bytes_read": values[22], "snapshot": snapshot,
     }
+    if wire_version == 2:
+        result.update(
+            packed_score_batch_calls=values[27], packed_score_candidates=values[28],
+            packed_vector_bytes_read=values[29], forbidden_stable_score_calls=values[30],
+        )
+        packed_candidates = values[18] + values[20]
+        if (
+            values[30] != 0
+            or values[28] != packed_candidates
+            or values[29] != values[21]
+            or values[27] != (1 if packed_candidates else 0)
+        ):
+            raise TreeDBProtocolError("invalid native dense packed score-plane proof")
+    return result
+
+
+def _dense_normalized_route_identity(raw):
+    from .models import DenseSearchRouteIdentity
+
+    values, offset = [], 0
+    for _ in range(28):
+        value, offset = _read_uint(raw, offset)
+        values.append(value)
+    size, offset = _read_uint(raw, offset)
+    if size > _MAX_DETERMINISTIC_NAME or size > len(raw) - offset or offset + size != len(raw):
+        raise TreeDBProtocolError("invalid normalized dense route identity length")
+    try:
+        name = raw[offset:offset + size].decode("utf-8", errors="strict")
+    except UnicodeError as exc:
+        raise TreeDBProtocolError("invalid normalized dense route identity name") from exc
+    modes = ("", "exact", "quantized_rerank")
+    routes = ("", "typed_empty", "typed_exact", "typed_hnsw")
+    if values[0] != 1 or values[1] != 1 or values[2] not in (1, 2) or values[3] not in (1, 2, 3) or values[4] > 1 or values[5] > 65535 or values[6] > 7:
+        raise TreeDBProtocolError("invalid normalized dense route identity fields")
+    try:
+        return DenseSearchRouteIdentity.from_dict({
+            "version": values[0], "representation": "cosine_normalized_f32_v1",
+            "query_mode": modes[values[2]], "execution_route": routes[values[3]],
+            "quantized_codec": "scalar_u8" if values[4] else "", "quantized_version": values[5],
+            "return_embedding": bool(values[6] & 1), "diagnostics": bool(values[6] & 2),
+            "filter": bool(values[6] & 4), "schema_hash": values[7], "schema_generation": values[8],
+            "base_manifest_generation": values[9], "base_manifest_checksum": values[10],
+            "current_manifest_generation": values[11], "current_manifest_checksum": values[12],
+            "current_coverage_lsn": values[13], "top_k": values[14], "ef_search": values[15],
+            "rerank_candidates": values[16], "result_count": values[17],
+            "quantized_score_calls": values[18], "quantized_code_bytes_read": values[19],
+            "fp32_score_calls": values[20], "fp32_vector_bytes_read": values[21],
+            "packed_score_calls": values[22], "packed_score_candidates": values[23],
+            "packed_vector_bytes_read": values[24], "embedding_vector_reads": values[25],
+            "embedding_vector_bytes": values[26], "embedding_output_bytes": values[27],
+            "quantized_index_name": name,
+        })
+    except (KeyError, TypeError, ValueError) as exc:
+        raise TreeDBProtocolError("invalid normalized dense route identity") from exc
+
+
+def _dense_normalized_route_matches(identity, *, query_mode, quantized_index_name, top_k,
+                                    ef_search, rerank_candidates, result_count,
+                                    query_dimension, expected_generation, return_embedding,
+                                    diagnostics, filter_requested):
+    if (
+        identity is None
+        or type(query_dimension) is not int
+        or query_dimension <= 0
+        or type(expected_generation) is not int
+        or not 0 < expected_generation < 1 << 64
+    ):
+        return False
+    if (
+        identity.version != 1
+        or identity.representation != "cosine_normalized_f32_v1"
+        or identity.query_mode != query_mode
+        or identity.return_embedding != return_embedding
+        or identity.diagnostics != diagnostics
+        or identity.filter != filter_requested
+        or identity.top_k != top_k
+        or identity.ef_search != ef_search
+        or identity.rerank_candidates != rerank_candidates
+        or identity.result_count != result_count
+        or identity.schema_hash == 0
+        or identity.schema_generation == 0
+        or identity.schema_generation > expected_generation
+        or identity.base_manifest_generation == 0
+        or identity.base_manifest_checksum == 0
+        or identity.current_manifest_generation < identity.base_manifest_generation
+        or identity.current_manifest_checksum == 0
+        or identity.current_coverage_lsn == 0
+        or (
+            identity.current_manifest_generation == identity.base_manifest_generation
+            and identity.current_manifest_checksum != identity.base_manifest_checksum
+        )
+        or (identity.execution_route == "typed_empty" and result_count != 0)
+        or identity.fp32_vector_bytes_read != identity.fp32_score_calls * query_dimension * 4
+        or (result_count != 0 and identity.fp32_score_calls == 0)
+        or identity.quantized_code_bytes_read != identity.quantized_score_calls * query_dimension
+        or identity.packed_vector_bytes_read != identity.packed_score_candidates * query_dimension * 4
+        or identity.packed_score_candidates > identity.fp32_score_calls
+        or (identity.packed_score_candidates == 0) != (identity.packed_score_calls == 0)
+        or identity.packed_score_calls > identity.packed_score_candidates
+    ):
+        return False
+    if query_mode == "exact":
+        if any((identity.quantized_codec, identity.quantized_index_name, identity.quantized_version,
+                identity.quantized_score_calls, identity.quantized_code_bytes_read)):
+            return False
+    elif (
+        identity.quantized_codec != "scalar_u8"
+        or identity.quantized_index_name != quantized_index_name
+        or identity.quantized_version != 1
+        or (
+            identity.execution_route == "typed_hnsw"
+            and (
+                identity.quantized_score_calls == 0
+                or identity.quantized_code_bytes_read == 0
+                or identity.packed_score_calls != 1
+                or identity.packed_score_candidates == 0
+            )
+        )
+        or (
+            identity.execution_route != "typed_hnsw"
+            and (identity.quantized_score_calls != 0 or identity.quantized_code_bytes_read != 0)
+        )
+    ):
+        return False
+    if identity.execution_route == "typed_empty" and any((
+        identity.quantized_score_calls,
+        identity.quantized_code_bytes_read,
+        identity.fp32_score_calls,
+        identity.fp32_vector_bytes_read,
+        identity.packed_score_calls,
+        identity.packed_score_candidates,
+        identity.packed_vector_bytes_read,
+    )):
+        return False
+    if not return_embedding:
+        return not any((identity.embedding_vector_reads, identity.embedding_vector_bytes, identity.embedding_output_bytes))
+    return (
+        identity.embedding_vector_reads == result_count
+        and identity.embedding_vector_bytes == result_count * query_dimension * 4
+        and (result_count == 0 or identity.embedding_output_bytes > 0)
+    )
+
+
+def _dense_normalized_diagnostic_matches(identity, work, proof, *, query_mode,
+                                         quantized_index_name, top_k, ef_search,
+                                         rerank_candidates, result_count,
+                                         query_dimension, expected_generation,
+                                         filter_requested):
+    """Bind optional diagnostics to the same owner and counters as the receipt."""
+
+    from ._dense_work import (
+        dense_quantized_response_work_matches,
+        dense_score_plane_byte_counters_match,
+        dense_score_plane_packed_counters_match,
+    )
+
+    if work is None:
+        return False
+    graph, snapshot, output = work.graph, work.graph.snapshot, work.output
+    if (
+        not work.completed
+        or not graph.completed
+        or not snapshot.available
+        or not output.completed
+        or identity.execution_route != graph.route
+        or identity.filter != graph.filter.attempted
+        or identity.schema_hash != snapshot.schema_hash
+        or identity.schema_generation != snapshot.schema_generation
+        or identity.base_manifest_generation != snapshot.base_manifest.generation
+        or identity.base_manifest_checksum != snapshot.base_manifest.checksum
+        or identity.current_manifest_generation != snapshot.current_manifest.generation
+        or identity.current_manifest_checksum != snapshot.current_manifest.checksum
+        or identity.current_coverage_lsn != snapshot.current_coverage_lsn
+        or identity.result_count != result_count
+        or output.requested != result_count
+        or output.fetched != result_count
+        or output.missing != 0
+    ):
+        return False
+    if query_mode == "exact":
+        return (
+            proof is None
+            and identity.fp32_score_calls == graph.base_ann_scored + graph.delta_scored
+        )
+    if (
+        proof is None
+        or not proof.available
+        or not proof.completed
+        or not proof.snapshot.available
+        or proof.requested_mode != "quantized_rerank"
+        or proof.effective_mode != "quantized_rerank"
+        or proof.quantized_index_name != quantized_index_name
+        or proof.quantized_codec != "scalar_u8"
+        or proof.quantized_version != 1
+        or proof.quantized_config_hash != 0
+        or proof.requested_top_k != top_k
+        or proof.requested_ef_search != ef_search
+        or proof.requested_rerank_candidates != rerank_candidates
+        or proof.snapshot.schema_generation > expected_generation
+        or not dense_score_plane_byte_counters_match(proof, query_dimension)
+        or not dense_score_plane_packed_counters_match(proof, query_dimension)
+        or not dense_quantized_response_work_matches(
+            work, proof, top_k, result_count, filter_requested
+        )
+    ):
+        return False
+    exact_base = proof.exact_base_rerank_score_calls + proof.exact_small_filter_score_calls
+    return (
+        identity.quantized_score_calls == proof.quantized_score_calls
+        and identity.fp32_score_calls == exact_base + proof.exact_suffix_score_calls
+        and identity.packed_score_calls == proof.packed_score_batch_calls
+        and identity.packed_score_candidates == proof.packed_score_candidates
+        and identity.packed_vector_bytes_read == proof.packed_vector_bytes_read
+    )
+
+
+def _dense_normalized_response(body, top_k, *, query_mode, quantized_index_name,
+                               quantized_rerank_candidates, ef_search, query_dimension,
+                               expected_generation, filter_requested, return_embedding,
+                               diagnostics):
+    from ._dense_work import (
+        DenseScorePlaneProof,
+        dense_cosine_scores_valid,
+        dense_document_ids_valid,
+    )
+
+    expected = {102, 103, 130, 138}
+    critical = {138}
+    if diagnostics:
+        expected.add(134)
+        critical.add(134)
+        if query_mode == "quantized_rerank":
+            expected.add(136)
+            critical.add(136)
+    items = _section_items(body)
+    if len(items) != len(expected) or {item[0] for item in items} != expected:
+        raise TreeDBProtocolError("normalized dense response section inventory is invalid")
+    for section_id, flags, _ in items:
+        if flags != (1 if section_id in critical else 0):
+            raise TreeDBProtocolError("normalized dense response section flags are invalid")
+    sections = _sections(body, expected, critical)
+    work = score_plane = None
+    if diagnostics:
+        try:
+            work = _dense_work(sections[134])
+            if query_mode == "quantized_rerank":
+                score_plane = DenseScorePlaneProof.from_dict(_dense_score_plane(sections[136], 2))
+        except (TreeDBProtocolError, ValueError, TypeError, KeyError, UnicodeError) as exc:
+            raise TreeDBProtocolError("invalid normalized dense diagnostic proof", dense_work=work) from exc
+    meta, offset = sections[130], 0
+    try:
+        schema, offset = _read_uint(meta, offset)
+        count, offset = _read_uint(meta, offset)
+    except TreeDBProtocolError as exc:
+        raise TreeDBProtocolError("invalid normalized dense response metadata", dense_work=work, score_plane=score_plane) from exc
+    if schema != 1 or count > top_k or len(meta) - offset != count * 8:
+        raise TreeDBProtocolError("normalized dense response lengths do not match", dense_work=work, score_plane=score_plane)
+    scores = struct.unpack(f"<{count}d", meta[offset:])
+    if not dense_cosine_scores_valid(scores):
+        raise TreeDBProtocolError("normalized dense response has an invalid cosine score", dense_work=work, score_plane=score_plane)
+    try:
+        ids = _decode_vector(sections[102], count)
+        docs = _decode_vector(sections[103], count)
+        identity = _dense_normalized_route_identity(sections[138])
+    except TreeDBProtocolError as exc:
+        raise TreeDBProtocolError("invalid normalized dense result envelope", dense_work=work, score_plane=score_plane) from exc
+    if (
+        not dense_document_ids_valid(ids)
+        or not _dense_results_ordered(ids, scores)
+        or not _dense_normalized_route_matches(
+            identity,
+            query_mode=query_mode,
+            quantized_index_name=quantized_index_name,
+            top_k=top_k,
+            ef_search=ef_search,
+            rerank_candidates=quantized_rerank_candidates,
+            result_count=count,
+            query_dimension=query_dimension,
+            expected_generation=expected_generation,
+            return_embedding=return_embedding,
+            diagnostics=diagnostics,
+            filter_requested=filter_requested,
+        )
+    ):
+        raise TreeDBProtocolError("normalized dense route identity does not match the request", dense_work=work, score_plane=score_plane)
+    if diagnostics and work.output.output_bytes != sum(map(len, docs)):
+        raise TreeDBProtocolError("normalized dense work does not match documents", dense_work=work, score_plane=score_plane)
+    if diagnostics and not _dense_normalized_diagnostic_matches(
+        identity,
+        work,
+        score_plane,
+        query_mode=query_mode,
+        quantized_index_name=quantized_index_name,
+        top_k=top_k,
+        ef_search=ef_search,
+        rerank_candidates=quantized_rerank_candidates,
+        result_count=count,
+        query_dimension=query_dimension,
+        expected_generation=expected_generation,
+        filter_requested=filter_requested,
+    ):
+        raise TreeDBProtocolError("normalized dense diagnostic proof does not match the request", dense_work=work, score_plane=score_plane)
+    return ids, docs, scores, count, work, score_plane, identity
 
 
 def _dense_results_ordered(ids, scores):
@@ -353,7 +682,22 @@ def _dense_results_ordered(ids, scores):
 
 def _dense_response(body, top_k, version=2, *, query_mode=None, quantized_index_name=None,
                     quantized_rerank_candidates=0, ef_search=None, query_dimension=None,
-                    expected_generation=None, filter_requested=False):
+                    expected_generation=None, filter_requested=False, return_embedding=False,
+                    diagnostics=False):
+    if version == 4:
+        return _dense_normalized_response(
+            body,
+            top_k,
+            query_mode=query_mode or "exact",
+            quantized_index_name=quantized_index_name,
+            quantized_rerank_candidates=quantized_rerank_candidates,
+            ef_search=ef_search,
+            query_dimension=query_dimension,
+            expected_generation=expected_generation,
+            filter_requested=filter_requested,
+            return_embedding=return_embedding,
+            diagnostics=diagnostics,
+        )
     if version not in (1, 2, 3):
         raise TreeDBProtocolError(f"unsupported native dense response version {version}")
     known = {102, 103, 130, 134}
@@ -496,7 +840,8 @@ class _NativeConnection:
             result.extend(part)
         return bytes(result)
 
-    def _round_trip(self, frame_type, body, response_type, deadline, *, dense_proof=False, dense_version=0):
+    def _round_trip(self, frame_type, body, response_type, deadline, *, dense_proof=False,
+                    dense_version=0, dense_score_plane=False):
         if len(body) + _HEADER.size > self.limit:
             raise TreeDBConfigError("native request exceeds frame limit")
         self.request_id += 1
@@ -512,10 +857,12 @@ class _NativeConnection:
         if kind == 6:
             if dense_proof and dense_version == 0:
                 dense_version = 2
+            if dense_version == 3:
+                dense_score_plane = True
             known = {2}
             if dense_proof:
                 known.add(134)
-                if dense_version == 3:
+                if dense_score_plane:
                     known.add(136)
             sections = {}
             duplicates = set()
@@ -526,14 +873,19 @@ class _NativeConnection:
                     if section_error is None:
                         section_error = TreeDBProtocolError("duplicate native section")
                     continue
-                if section_id not in known and section_flags & 1 and section_error is None:
-                    section_error = TreeDBProtocolError("unknown critical native section")
+                if section_id not in known and section_error is None:
+                    if dense_version == 4:
+                        section_error = TreeDBProtocolError("unexpected normalized dense error section")
+                    elif section_flags & 1:
+                        section_error = TreeDBProtocolError("unknown critical native section")
                 required_critical = (
                     section_id == 134 and dense_proof
-                    or section_id == 136 and dense_version == 3
+                    or section_id == 136 and dense_score_plane
                 )
                 if required_critical and section_flags != 1 and section_error is None:
                     section_error = TreeDBProtocolError("required native section is not critical")
+                if dense_version == 4 and section_id == 2 and section_flags != 0 and section_error is None:
+                    section_error = TreeDBProtocolError("normalized dense error metadata must not be critical")
                 sections[section_id] = section_value
             work = score_plane = None
             work_error = score_plane_error = None
@@ -542,10 +894,12 @@ class _NativeConnection:
                     work = _dense_work(sections[134])
                 except TreeDBProtocolError as exc:
                     work_error = exc
-            if dense_version == 3 and 136 in sections and 136 not in duplicates:
+            if dense_score_plane and 136 in sections and 136 not in duplicates:
                 from ._dense_work import DenseScorePlaneProof
                 try:
-                    score_plane = DenseScorePlaneProof.from_dict(_dense_score_plane(sections[136]))
+                    score_plane = DenseScorePlaneProof.from_dict(
+                        _dense_score_plane(sections[136], 2 if dense_version == 4 else 1)
+                    )
                 except (ValueError, TypeError, KeyError, UnicodeError, TreeDBProtocolError) as exc:
                     score_plane_error = exc
             if section_error is not None:
@@ -564,7 +918,7 @@ class _NativeConnection:
                     raise TreeDBProtocolError("invalid native error message")
             except TreeDBProtocolError as exc:
                 raise TreeDBProtocolError(str(exc), dense_work=work, score_plane=score_plane) from exc
-            if 136 in sections and dense_version != 3:
+            if 136 in sections and not dense_score_plane:
                 raise TreeDBProtocolError("unexpected native dense score-plane proof", dense_work=work)
             if work_error is not None:
                 raise TreeDBProtocolError("invalid native dense work proof", score_plane=score_plane) from work_error
@@ -607,7 +961,23 @@ class _NativeConnection:
                     raise TreeDBProtocolError(f"native capability {capability}/{version} unavailable")
                 body = _section(1, _uint(command_id) + _uint(version) + b"\x00") + sections
                 dense = command_id == 64 and version in (2, 3)
-                return self._round_trip(3, body, 4, deadline, dense_proof=dense, dense_version=version if dense else 0)
+                dense_score_plane = version == 3
+                if command_id == 64 and version == 4:
+                    request_sections = _sections(sections, {4, 129, 137, 139}, {137, 139})
+                    if not {4, 129, 137} <= request_sections.keys():
+                        raise TreeDBProtocolError("normalized dense request sections are missing")
+                    dense = 139 in request_sections
+                    if dense:
+                        options = request_sections[137]
+                        _, options_offset = _read_uint(options, 0)
+                        _, options_offset = _read_uint(options, options_offset)
+                        mode, _ = _read_uint(options, options_offset)
+                        dense_score_plane = mode == 2
+                return self._round_trip(
+                    3, body, 4, deadline, dense_proof=dense,
+                    dense_version=version if command_id == 64 else 0,
+                    dense_score_plane=dense_score_plane,
+                )
             except TimeoutError as exc:
                 self.close()
                 raise TreeDBTimeoutError(str(exc)) from exc

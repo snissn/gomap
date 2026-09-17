@@ -90,8 +90,11 @@ const (
 	SectionDenseSearchWork        SectionID = 134
 	// Q3 typed dense transport sections are deliberately siblings of the
 	// frozen request/work sections. IDs are allocated from the live registry.
-	SectionDenseSearchQuantizedOptions SectionID = 135
-	SectionDenseSearchScorePlaneProof  SectionID = 136
+	SectionDenseSearchQuantizedOptions  SectionID = 135
+	SectionDenseSearchScorePlaneProof   SectionID = 136
+	SectionDenseSearchNormalizedOptions SectionID = 137
+	SectionDenseSearchRouteIdentity     SectionID = 138
+	SectionDenseSearchDiagnostics       SectionID = 139
 )
 
 type CommandID uint64
@@ -140,6 +143,7 @@ const (
 	DenseVectorSearchLegacyVersion          = uint64(1)
 	DenseVectorSearchTypedVersion           = uint64(2)
 	DenseVectorSearchTypedQuantizedVersion  = uint64(3)
+	DenseVectorSearchNormalizedVersion      = uint64(4)
 	DenseVectorSearchTypedRouteTag          = byte(2)
 	DenseVectorSearchTypedQuantizedRouteTag = byte(3)
 )

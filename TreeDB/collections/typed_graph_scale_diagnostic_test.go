@@ -251,7 +251,7 @@ func TestTypedGraphScaleDiagnostic(t *testing.T) {
 	public := func(filter *HybridScalarFilter) func(int, int) ([]VectorIndexSearchResult, ColumnGraphQueryWork, int64, error) {
 		var buffer VectorIndexSearchBuffer
 		return func(q, ef int) ([]VectorIndexSearchResult, ColumnGraphQueryWork, int64, error) {
-			response, view, err := col.SearchVectorIndexWithBufferReadView(VectorIndexSearchOptions{IndexName: "embedding_graph", Query: queries[q], TopK: 10, EfSearch: ef, DeclaredScalarFilter: filter, StatsMode: VectorIndexSearchStatsModeMinimal}, &buffer)
+			response, view, err := col.SearchVectorIndexWithBufferReadView(VectorIndexSearchOptions{IndexName: "embedding_graph", Query: queries[q], TopK: 10, EfSearch: ef, DeclaredScalarFilter: filter, StatsMode: VectorIndexSearchStatsModeProduction}, &buffer)
 			if view != nil {
 				if closeErr := view.Close(); err == nil {
 					err = closeErr
@@ -433,7 +433,7 @@ func scaleConcurrentWrites(t *testing.T, col *Collection, rows int, data string,
 	read := func(q int, active bool) readSample {
 		q %= len(queries)
 		started := time.Now()
-		response, view, err := col.SearchVectorIndexWithBufferReadView(VectorIndexSearchOptions{IndexName: "embedding_graph", Query: queries[q], TopK: 10, EfSearch: 512, DeclaredScalarFilter: filter, StatsMode: VectorIndexSearchStatsModeMinimal}, &buffer)
+		response, view, err := col.SearchVectorIndexWithBufferReadView(VectorIndexSearchOptions{IndexName: "embedding_graph", Query: queries[q], TopK: 10, EfSearch: 512, DeclaredScalarFilter: filter, StatsMode: VectorIndexSearchStatsModeProduction}, &buffer)
 		if view != nil {
 			if closeErr := view.Close(); err == nil {
 				err = closeErr

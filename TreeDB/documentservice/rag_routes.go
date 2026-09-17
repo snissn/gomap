@@ -232,8 +232,10 @@ type RawDenseVectorResult struct {
 // RawDenseVectorSearchResponse reuses caller-provided result storage when
 // supplied; each ID and Document is response-owned.
 type RawDenseVectorSearchResponse struct {
-	DenseWork  *DenseSearchWork
-	ScorePlane *collections.ColumnGraphScorePlaneWork
+	DenseWork     *DenseSearchWork
+	ScorePlane    *collections.ColumnGraphScorePlaneWork
+	RouteIdentity *DenseSearchRouteIdentity
+	Diagnostics   bool
 	// TypedColumnGraph identifies the validated selected route, not a work proof.
 	TypedColumnGraph          bool
 	Results                   []RawDenseVectorResult
@@ -258,44 +260,49 @@ func denseScorePlaneForResponse(plane collections.ColumnGraphScorePlaneWork, sel
 
 func (r RawDenseVectorSearchResponse) response(docs []Document) DenseVectorSearchResponse {
 	stats := r.searchStats
-	return DenseVectorSearchResponse{
-		DenseWork:                               r.DenseWork,
-		ScorePlane:                              r.ScorePlane,
-		Index:                                   r.info,
-		ColumnGraphPreparedSearch:               stats.SearchRouteColumnGraphPrepared,
-		ColumnGraphDeltaScored:                  stats.ColumnGraphDeltaScored,
-		Documents:                               docs,
-		Metric:                                  r.info.Metric,
-		Route:                                   r.Route,
-		Candidates:                              r.Candidates,
-		NativeBasePlusLiveDelta:                 r.NativeBasePlusLiveDelta,
-		ScalarFilterMembershipSource:            denseNativeScalarMembershipSource(stats.ScalarFilterPlan),
-		ScalarFilterPlan:                        stats.ScalarFilterPlan,
-		ScalarFilterProbeIDs:                    stats.ScalarFilterProbeIDs,
-		ScalarFilterProbeTruncated:              stats.ScalarFilterProbeTruncated,
-		ScalarFilterCandidates:                  stats.ScalarFilterCandidates,
-		ScalarFilterCandidateIDs:                stats.ScalarFilterCandidateIDs,
-		ScalarFilterRetainedCandidateIDs:        stats.ScalarFilterRetainedCandidateIDs,
-		ScalarFilterRefinedCandidateIDs:         stats.ScalarFilterRefinedCandidateIDs,
-		ScalarFilterVisited:                     stats.ScalarFilterVisited,
-		ScalarFilterScored:                      stats.ScalarFilterScored,
-		ScalarFilterAdmitted:                    stats.ScalarFilterAdmitted,
-		ScalarFilterExactScoring:                stats.ScalarFilterExactScoring > 0,
-		ScalarFilterUnderfill:                   stats.ScalarFilterUnderfill > 0,
-		ScalarFilterPlanCacheHits:               stats.ScalarFilterPlanCacheHits,
-		ScalarFilterPlanCacheMisses:             stats.ScalarFilterPlanCacheMisses,
-		ScalarFilterPlanCacheInvalidations:      stats.ScalarFilterPlanCacheInvalidations,
-		ScalarFilterPlanCacheGenerationBypasses: stats.ScalarFilterPlanCacheGenerationBypasses,
-		ScalarFilterPlanCacheEvictions:          stats.ScalarFilterPlanCacheEvictions,
-		ScalarFilterPlanCacheEntries:            stats.ScalarFilterPlanCacheEntries,
-		ScalarFilterPlanCacheRetainedBytes:      stats.ScalarFilterPlanCacheRetainedBytes,
-		ExactFallbacks:                          r.ExactFallbacks,
-		FullDocumentScanFallbacks:               r.FullDocumentScanFallbacks,
-		AllowedIDMaterializationRows:            stats.ScalarFilterRetainedCandidateIDs,
-		DocumentMaterializationRows:             r.fetchedStats.DocumentsFetched,
-		VisibilityMismatchCount:                 uint64(r.attempts),
-		VisibilityRetryCount:                    uint64(r.attempts),
+	out := DenseVectorSearchResponse{
+		RouteIdentity: r.RouteIdentity,
+		Index:         r.info,
+		Documents:     docs,
+		Metric:        r.info.Metric,
+		Route:         r.Route,
+		Candidates:    r.Candidates,
 	}
+	if !r.Diagnostics {
+		return out
+	}
+	out.DenseWork = r.DenseWork
+	out.ScorePlane = r.ScorePlane
+	out.ColumnGraphPreparedSearch = stats.SearchRouteColumnGraphPrepared
+	out.ColumnGraphDeltaScored = stats.ColumnGraphDeltaScored
+	out.NativeBasePlusLiveDelta = r.NativeBasePlusLiveDelta
+	out.ScalarFilterMembershipSource = denseNativeScalarMembershipSource(stats.ScalarFilterPlan)
+	out.ScalarFilterPlan = stats.ScalarFilterPlan
+	out.ScalarFilterProbeIDs = stats.ScalarFilterProbeIDs
+	out.ScalarFilterProbeTruncated = stats.ScalarFilterProbeTruncated
+	out.ScalarFilterCandidates = stats.ScalarFilterCandidates
+	out.ScalarFilterCandidateIDs = stats.ScalarFilterCandidateIDs
+	out.ScalarFilterRetainedCandidateIDs = stats.ScalarFilterRetainedCandidateIDs
+	out.ScalarFilterRefinedCandidateIDs = stats.ScalarFilterRefinedCandidateIDs
+	out.ScalarFilterVisited = stats.ScalarFilterVisited
+	out.ScalarFilterScored = stats.ScalarFilterScored
+	out.ScalarFilterAdmitted = stats.ScalarFilterAdmitted
+	out.ScalarFilterExactScoring = stats.ScalarFilterExactScoring > 0
+	out.ScalarFilterUnderfill = stats.ScalarFilterUnderfill > 0
+	out.ScalarFilterPlanCacheHits = stats.ScalarFilterPlanCacheHits
+	out.ScalarFilterPlanCacheMisses = stats.ScalarFilterPlanCacheMisses
+	out.ScalarFilterPlanCacheInvalidations = stats.ScalarFilterPlanCacheInvalidations
+	out.ScalarFilterPlanCacheGenerationBypasses = stats.ScalarFilterPlanCacheGenerationBypasses
+	out.ScalarFilterPlanCacheEvictions = stats.ScalarFilterPlanCacheEvictions
+	out.ScalarFilterPlanCacheEntries = stats.ScalarFilterPlanCacheEntries
+	out.ScalarFilterPlanCacheRetainedBytes = stats.ScalarFilterPlanCacheRetainedBytes
+	out.ExactFallbacks = r.ExactFallbacks
+	out.FullDocumentScanFallbacks = r.FullDocumentScanFallbacks
+	out.AllowedIDMaterializationRows = stats.ScalarFilterRetainedCandidateIDs
+	out.DocumentMaterializationRows = r.fetchedStats.DocumentsFetched
+	out.VisibilityMismatchCount = uint64(r.attempts)
+	out.VisibilityRetryCount = uint64(r.attempts)
+	return out
 }
 
 // SearchDenseVectorNativeRaw exposes the admitted native_runtime or selected
@@ -311,6 +318,9 @@ func (s *Service) SearchDenseVectorNativeRawInto(ctx context.Context, index stri
 		return RawDenseVectorSearchResponse{}, err
 	}
 	defer release()
+	if err := bindDenseVectorRepresentation(&req, info); err != nil {
+		return RawDenseVectorSearchResponse{}, err
+	}
 	if req.TopK <= 0 {
 		return RawDenseVectorSearchResponse{}, serviceError(CodeInvalidRequest, "top_k must be positive")
 	}
@@ -345,8 +355,12 @@ func (s *Service) searchDenseVectorNativeRaw(ctx context.Context, col *collectio
 }
 
 func (s *Service) searchDenseVectorNativeRawLocked(ctx context.Context, col *collections.Collection, info IndexInfo, req DenseVectorSearchRequest, dst []RawDenseVectorResult) (response RawDenseVectorSearchResponse, err error) {
+	if err := bindDenseVectorRepresentation(&req, info); err != nil {
+		return RawDenseVectorSearchResponse{}, err
+	}
+	includeDiagnostics := req.Diagnostics || info.VectorRepresentation != collections.VectorIndexRepresentationCosineNormalizedF32V1
 	var proof *DenseSearchWork
-	if info.TypedInput {
+	if info.TypedInput && includeDiagnostics {
 		proof = &DenseSearchWork{Version: 1}
 	}
 	defer func() {
@@ -379,7 +393,11 @@ func (s *Service) searchDenseVectorNativeRawLocked(ctx context.Context, col *col
 		if err := ctxErr(ctx); err != nil {
 			return RawDenseVectorSearchResponse{}, err
 		}
-		search, view, err := col.SearchVectorIndexWithBufferReadView(collections.VectorIndexSearchOptions{Context: ctx, IndexName: defaultVectorIndexName, Query: req.QueryEmbedding, QueryMode: req.QueryMode, QuantizedIndexName: req.QuantizedIndexName, QuantizedRerankCandidates: req.QuantizedRerankCandidates, TopK: req.TopK, EfSearch: req.EfSearch, StatsMode: collections.VectorIndexSearchStatsModeProduction, DeclaredScalarFilter: scalarFilter}, buffer)
+		statsMode := collections.VectorIndexSearchStatsModeMinimal
+		if includeDiagnostics {
+			statsMode = collections.VectorIndexSearchStatsModeProduction
+		}
+		search, view, err := col.SearchVectorIndexWithBufferReadView(collections.VectorIndexSearchOptions{Context: ctx, IndexName: defaultVectorIndexName, Query: req.QueryEmbedding, QueryMode: req.QueryMode, QuantizedIndexName: req.QuantizedIndexName, QuantizedRerankCandidates: req.QuantizedRerankCandidates, TopK: req.TopK, EfSearch: req.EfSearch, StatsMode: statsMode, DeclaredScalarFilter: scalarFilter}, buffer)
 		if proof != nil {
 			proof.Graph = search.Stats.ColumnGraphWork
 		}
@@ -398,10 +416,16 @@ func (s *Service) searchDenseVectorNativeRawLocked(ctx context.Context, col *col
 			_ = view.Close()
 			return RawDenseVectorSearchResponse{}, err
 		}
-		if info.TypedInput && req.QueryMode == collections.VectorIndexQueryModeQuantizedRerank {
-			if err := validateDenseTypedQuantizedVectorSearchRoute(search, req, info.Generation, info.VectorEfSearch); err != nil {
+		if info.TypedInput && info.VectorRepresentation == collections.VectorIndexRepresentationCosineNormalizedF32V1 {
+			if err := validateDenseTypedNormalizedVectorSearchRoute(search, req, info); err != nil {
 				_ = view.Close()
 				return RawDenseVectorSearchResponse{}, err
+			}
+			if includeDiagnostics && req.QueryMode == collections.VectorIndexQueryModeQuantizedRerank {
+				if err := validateDenseTypedQuantizedVectorSearchRoute(search, req, info.Generation, info.VectorEfSearch); err != nil {
+					_ = view.Close()
+					return RawDenseVectorSearchResponse{}, err
+				}
 			}
 		}
 		if s.denseVectorNativeAfterSearch != nil {
@@ -440,7 +464,11 @@ func (s *Service) searchDenseVectorNativeRawLocked(ctx context.Context, col *col
 		if fetched.Stats.DocumentsRequested != uint64(len(search.Results)) || fetched.Stats.DocumentsFetched != uint64(len(search.Results)) || fetched.Stats.DocumentsMissing != 0 || len(fetched.Results) != len(search.Results) {
 			return RawDenseVectorSearchResponse{}, serviceErrorf(CodeIndexUnavailable, "native ann document fetch did not materialize exactly the returned candidates: candidates=%d requested=%d fetched=%d missing=%d results=%d", len(search.Results), fetched.Stats.DocumentsRequested, fetched.Stats.DocumentsFetched, fetched.Stats.DocumentsMissing, len(fetched.Results))
 		}
-		diagnostics := search.Diagnostics()
+		var exactFallbacks uint64
+		if info.VectorRepresentation != collections.VectorIndexRepresentationCosineNormalizedF32V1 {
+			diagnostics := search.Diagnostics()
+			exactFallbacks = diagnostics.LiveANN.ExactFallbacks
+		}
 		if len(search.Results) <= cap(dst) {
 			if len(search.Results) < cap(dst) {
 				clear(dst[len(search.Results):cap(dst)])
@@ -450,18 +478,26 @@ func (s *Service) searchDenseVectorNativeRawLocked(ctx context.Context, col *col
 			dst = make([]RawDenseVectorResult, len(search.Results))
 		}
 		out := RawDenseVectorSearchResponse{
+			Diagnostics:               includeDiagnostics,
 			TypedColumnGraph:          info.TypedInput,
-			ScorePlane:                denseScorePlaneForResponse(search.Stats.ColumnGraphWork.ScorePlane, info.TypedInput && req.QueryMode == collections.VectorIndexQueryModeQuantizedRerank),
+			ScorePlane:                denseScorePlaneForResponse(search.Stats.ColumnGraphWork.ScorePlane, includeDiagnostics && info.TypedInput && req.QueryMode == collections.VectorIndexQueryModeQuantizedRerank),
 			Results:                   dst,
 			Route:                     RouteAnn,
 			Candidates:                len(search.Results),
 			NativeBasePlusLiveDelta:   !info.TypedInput,
-			ExactFallbacks:            diagnostics.LiveANN.ExactFallbacks,
+			ExactFallbacks:            exactFallbacks,
 			FullDocumentScanFallbacks: 0,
 			info:                      info,
 			searchStats:               search.Stats,
 			fetchedStats:              fetched.Stats,
 			attempts:                  attempt,
+		}
+		if info.TypedInput && info.VectorRepresentation == collections.VectorIndexRepresentationCosineNormalizedF32V1 {
+			identity := denseSearchRouteIdentity(req, info, search.Stats, fetched.Stats)
+			if err := validateDenseSearchRouteIdentity(identity, req, info, len(search.Results)); err != nil {
+				return RawDenseVectorSearchResponse{}, err
+			}
+			out.RouteIdentity = &identity
 		}
 		for i, result := range search.Results {
 			m := fetched.Results[i]
@@ -478,6 +514,194 @@ func (s *Service) searchDenseVectorNativeRawLocked(ctx context.Context, col *col
 func validateDenseTypedVectorSearchRoute(response collections.VectorIndexSearchResponse) error {
 	if response.Strategy != collections.VectorIndexStrategyColumnGraph || response.Path != collections.VectorIndexSearchPathColumnGraphNativeReader || response.Stats.SearchRouteColumnGraphPrepared != 1 || response.Stats.SearchRouteNativeRuntime != 0 || response.Stats.DocumentsFetched != 0 {
 		return serviceError(CodeIndexUnavailable, "typed graph search left the admitted no-document route")
+	}
+	return nil
+}
+
+func validateDenseTypedNormalizedVectorSearchRoute(response collections.VectorIndexSearchResponse, req DenseVectorSearchRequest, info IndexInfo) error {
+	receipt := response.Stats.ColumnGraphReceipt
+	if !receipt.Available || receipt.Representation != collections.VectorIndexRepresentationCosineNormalizedF32V1 || receipt.Representation != req.VectorRepresentation || receipt.Representation != info.VectorRepresentation {
+		return serviceError(CodeIndexUnavailable, "typed dense search did not bind the admitted canonical representation")
+	}
+	if receipt.QueryMode != req.QueryMode || receipt.ResultCount != uint64(len(response.Results)) {
+		return serviceError(CodeIndexUnavailable, "typed dense search route receipt does not match the request and results")
+	}
+	if receipt.Route != "typed_empty" && receipt.Route != "typed_exact" && receipt.Route != "typed_hnsw" {
+		return serviceErrorf(CodeIndexUnavailable, "typed dense search used unsupported route %q", receipt.Route)
+	}
+	if receipt.SchemaHash == 0 || receipt.SchemaGeneration == 0 || info.Generation == 0 || receipt.SchemaGeneration > info.Generation ||
+		receipt.BaseManifestGeneration == 0 || receipt.BaseManifestChecksum == 0 ||
+		receipt.CurrentManifestGeneration == 0 || receipt.CurrentManifestChecksum == 0 ||
+		receipt.CurrentManifestGeneration < receipt.BaseManifestGeneration || receipt.CurrentCoverageLSN == 0 ||
+		(receipt.CurrentManifestGeneration == receipt.BaseManifestGeneration && receipt.CurrentManifestChecksum != receipt.BaseManifestChecksum) {
+		return serviceError(CodeIndexUnavailable, "typed dense search route receipt has an invalid owner identity")
+	}
+	stats := response.Stats
+	if stats.DocumentsFetched != 0 || stats.DocumentBytes != 0 || stats.DocumentOutputBytes != 0 || stats.NormBytesRead != 0 {
+		return serviceError(CodeIndexUnavailable, "typed dense search left the canonical no-document score plane")
+	}
+	fp32ScoreCalls := stats.FP32ScoreCalls
+	if req.QueryMode == collections.VectorIndexQueryModeExact {
+		if stats.PreparedScoreCalls > ^uint64(0)-stats.ColumnGraphDeltaScored {
+			return serviceError(CodeIndexUnavailable, "typed dense search FP32 work accounting overflowed")
+		}
+		fp32ScoreCalls = stats.PreparedScoreCalls + stats.ColumnGraphDeltaScored
+	}
+	wantVectorBytes, ok := denseUint64Product(fp32ScoreCalls, uint64(info.Dimension), 4)
+	if !ok || stats.VectorBytesRead != wantVectorBytes {
+		return serviceError(CodeIndexUnavailable, "typed dense search FP32 work accounting does not match the canonical vector plane")
+	}
+	if req.QueryMode != collections.VectorIndexQueryModeQuantizedRerank {
+		if receipt.QuantizedIndexName != "" || receipt.QuantizedCodec != "" || receipt.QuantizedVersion != 0 || stats.QuantizedScoreCalls != 0 || stats.QuantizedCodeBytesRead != 0 || stats.QuantizedRerankCandidates != 0 || stats.QuantizedRerankExactScoreCalls != 0 {
+			return serviceError(CodeIndexUnavailable, "typed exact dense search carried quantized route state")
+		}
+		return nil
+	}
+	return validateDenseTypedQuantizedVectorSearchRouteLean(response, req, info)
+}
+
+func validateDenseTypedQuantizedVectorSearchRouteLean(response collections.VectorIndexSearchResponse, req DenseVectorSearchRequest, info IndexInfo) error {
+	stats := response.Stats
+	receipt := stats.ColumnGraphReceipt
+	if receipt.QuantizedIndexName != req.QuantizedIndexName || receipt.QuantizedCodec != collections.QuantizedVectorCodecScalarU8 || receipt.QuantizedVersion != 1 || stats.SearchRouteQuantizedRerank != 1 || stats.SearchRouteQuantizedOnly != 0 {
+		return serviceError(CodeIndexUnavailable, "typed quantized dense search route identity does not match the request")
+	}
+	wantCodeBytes, ok := denseUint64Product(stats.QuantizedScoreCalls, uint64(info.Dimension))
+	if !ok || stats.QuantizedCodeBytesRead != wantCodeBytes {
+		return serviceError(CodeIndexUnavailable, "typed quantized dense search code-byte accounting is invalid")
+	}
+	wantPackedBytes, ok := denseUint64Product(stats.PackedExactScoreCandidates, uint64(info.Dimension), 4)
+	if !ok || stats.PackedExactVectorBytesRead != wantPackedBytes {
+		return serviceError(CodeIndexUnavailable, "typed quantized dense search packed rerank byte accounting is invalid")
+	}
+	if stats.PackedExactScoreCandidates == 0 {
+		if stats.PackedExactScoreCalls != 0 {
+			return serviceError(CodeIndexUnavailable, "typed quantized dense search reported an empty packed rerank call")
+		}
+	} else if stats.PackedExactScoreCalls != 1 {
+		return serviceError(CodeIndexUnavailable, "typed quantized dense search did not use one packed rerank call")
+	}
+	if receipt.Route != "typed_hnsw" {
+		if stats.QuantizedScoreCalls != 0 || stats.QuantizedCodeBytesRead != 0 || stats.QuantizedRerankCandidates != 0 || stats.QuantizedRerankExactScoreCalls != 0 {
+			return serviceError(CodeIndexUnavailable, "typed quantized exact shortcut carried traversal or rerank work")
+		}
+		if receipt.Route == "typed_empty" && (stats.PackedExactScoreCalls != 0 || stats.PackedExactScoreCandidates != 0 || stats.PackedExactVectorBytesRead != 0) {
+			return serviceError(CodeIndexUnavailable, "typed quantized empty shortcut carried packed score work")
+		}
+		return nil
+	}
+	if stats.QuantizedRerankCandidates != stats.QuantizedRerankExactScoreCalls || stats.PackedExactScoreCandidates != stats.QuantizedRerankExactScoreCalls {
+		return serviceErrorf(CodeIndexUnavailable, "typed quantized dense search exact rerank accounting is invalid: candidates=%d exact_calls=%d packed_candidates=%d", stats.QuantizedRerankCandidates, stats.QuantizedRerankExactScoreCalls, stats.PackedExactScoreCandidates)
+	}
+	_, effectiveR := effectiveDenseSearchWidths(req, info)
+	if effectiveR <= 0 || stats.QuantizedRerankCandidates > uint64(effectiveR) {
+		return serviceError(CodeIndexUnavailable, "typed quantized dense search exceeded the admitted rerank width")
+	}
+	if stats.QuantizedScorerActive != 1 || stats.QuantizedScoreCalls == 0 || stats.QuantizedCodeBytesRead == 0 || stats.QuantizedRerankCandidates == 0 {
+		return serviceError(CodeIndexUnavailable, "typed quantized dense search did not execute the admitted traversal and rerank planes")
+	}
+	return nil
+}
+
+func effectiveDenseSearchWidths(req DenseVectorSearchRequest, info IndexInfo) (int, int) {
+	efSearch := req.EfSearch
+	if efSearch == 0 {
+		efSearch = info.VectorEfSearch
+	}
+	rerank := req.QuantizedRerankCandidates
+	if req.QueryMode == collections.VectorIndexQueryModeQuantizedRerank && rerank == 0 {
+		rerank = efSearch
+	}
+	return efSearch, rerank
+}
+
+func denseUint64Product(values ...uint64) (uint64, bool) {
+	product := uint64(1)
+	for _, value := range values {
+		if value != 0 && product > ^uint64(0)/value {
+			return 0, false
+		}
+		product *= value
+	}
+	return product, true
+}
+
+func denseSearchRouteIdentity(req DenseVectorSearchRequest, info IndexInfo, stats collections.VectorIndexSearchStats, fetched collections.DocumentMaterializationStats) DenseSearchRouteIdentity {
+	receipt := stats.ColumnGraphReceipt
+	efSearch, rerank := effectiveDenseSearchWidths(req, info)
+	fp32ScoreCalls := stats.FP32ScoreCalls
+	if req.QueryMode == collections.VectorIndexQueryModeExact {
+		fp32ScoreCalls = stats.PreparedScoreCalls + stats.ColumnGraphDeltaScored
+	}
+	return DenseSearchRouteIdentity{
+		Version:                   1,
+		Representation:            receipt.Representation,
+		QueryMode:                 receipt.QueryMode,
+		ExecutionRoute:            receipt.Route,
+		QuantizedCodec:            receipt.QuantizedCodec,
+		QuantizedIndexName:        receipt.QuantizedIndexName,
+		QuantizedVersion:          receipt.QuantizedVersion,
+		ReturnEmbedding:           req.ReturnEmbedding,
+		Diagnostics:               req.Diagnostics,
+		Filter:                    req.Filter != nil,
+		SchemaHash:                receipt.SchemaHash,
+		SchemaGeneration:          receipt.SchemaGeneration,
+		BaseManifestGeneration:    receipt.BaseManifestGeneration,
+		BaseManifestChecksum:      receipt.BaseManifestChecksum,
+		CurrentManifestGeneration: receipt.CurrentManifestGeneration,
+		CurrentManifestChecksum:   receipt.CurrentManifestChecksum,
+		CurrentCoverageLSN:        receipt.CurrentCoverageLSN,
+		TopK:                      uint64(req.TopK),
+		EfSearch:                  uint64(efSearch),
+		RerankCandidates:          uint64(rerank),
+		ResultCount:               receipt.ResultCount,
+		QuantizedScoreCalls:       stats.QuantizedScoreCalls,
+		QuantizedCodeBytesRead:    stats.QuantizedCodeBytesRead,
+		FP32ScoreCalls:            fp32ScoreCalls,
+		FP32VectorBytesRead:       stats.VectorBytesRead,
+		PackedScoreCalls:          stats.PackedExactScoreCalls,
+		PackedScoreCandidates:     stats.PackedExactScoreCandidates,
+		PackedVectorBytesRead:     stats.PackedExactVectorBytesRead,
+		EmbeddingVectorReads:      fetched.EmbeddingVectorReads,
+		EmbeddingVectorBytes:      fetched.EmbeddingVectorBytes,
+		EmbeddingOutputBytes:      fetched.EmbeddingOutputBytes,
+	}
+}
+
+func validateDenseSearchRouteIdentity(identity DenseSearchRouteIdentity, req DenseVectorSearchRequest, info IndexInfo, resultCount int) error {
+	efSearch, rerank := effectiveDenseSearchWidths(req, info)
+	if resultCount < 0 || identity.Version != 1 ||
+		identity.Representation != collections.VectorIndexRepresentationCosineNormalizedF32V1 || identity.Representation != req.VectorRepresentation || identity.Representation != info.VectorRepresentation ||
+		identity.QueryMode != req.QueryMode || identity.ReturnEmbedding != req.ReturnEmbedding || identity.Diagnostics != req.Diagnostics || identity.Filter != (req.Filter != nil) ||
+		identity.TopK != uint64(req.TopK) || identity.EfSearch != uint64(efSearch) || identity.RerankCandidates != uint64(rerank) || identity.ResultCount != uint64(resultCount) ||
+		identity.CurrentCoverageLSN == 0 ||
+		(identity.CurrentManifestGeneration == identity.BaseManifestGeneration && identity.CurrentManifestChecksum != identity.BaseManifestChecksum) {
+		return serviceError(CodeIndexUnavailable, "typed dense search route identity does not match the completed request")
+	}
+	wantFP32Bytes, ok := denseUint64Product(identity.FP32ScoreCalls, uint64(info.Dimension), 4)
+	if !ok || identity.FP32VectorBytesRead != wantFP32Bytes ||
+		(resultCount != 0 && identity.FP32ScoreCalls == 0) || identity.PackedScoreCandidates > identity.FP32ScoreCalls {
+		return serviceError(CodeIndexUnavailable, "typed dense search route identity has invalid FP32 byte accounting")
+	}
+	wantCodeBytes, ok := denseUint64Product(identity.QuantizedScoreCalls, uint64(info.Dimension))
+	if !ok || identity.QuantizedCodeBytesRead != wantCodeBytes {
+		return serviceError(CodeIndexUnavailable, "typed dense search route identity has invalid quantized byte accounting")
+	}
+	wantPackedBytes, ok := denseUint64Product(identity.PackedScoreCandidates, uint64(info.Dimension), 4)
+	if !ok || identity.PackedVectorBytesRead != wantPackedBytes ||
+		(identity.PackedScoreCandidates == 0 && identity.PackedScoreCalls != 0) ||
+		(identity.PackedScoreCandidates != 0 && (identity.PackedScoreCalls == 0 || identity.PackedScoreCalls > identity.PackedScoreCandidates)) {
+		return serviceError(CodeIndexUnavailable, "typed dense search route identity has invalid packed score accounting")
+	}
+	if !req.ReturnEmbedding {
+		if identity.EmbeddingVectorReads != 0 || identity.EmbeddingVectorBytes != 0 || identity.EmbeddingOutputBytes != 0 {
+			return serviceError(CodeIndexUnavailable, "typed dense search materialized an excluded embedding")
+		}
+		return nil
+	}
+	wantEmbeddingBytes, ok := denseUint64Product(uint64(resultCount), uint64(info.Dimension), 4)
+	if !ok || identity.EmbeddingVectorReads != uint64(resultCount) || identity.EmbeddingVectorBytes != wantEmbeddingBytes || (resultCount != 0 && identity.EmbeddingOutputBytes == 0) {
+		return serviceError(CodeIndexUnavailable, "typed dense search embedding materialization accounting is invalid")
 	}
 	return nil
 }

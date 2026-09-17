@@ -59,16 +59,19 @@ Schema mutation, fold, reconciliation and vacuum retain exclusive admission;
 existing owner and asset pins keep previously admitted readers coherent.
 
 The ordinary Python client and benchmark runner select this lifecycle through
-HTTP controls and native 64/v2 FP32 dense, 64/v3 typed legacy scalar-u8
-quantized rerank, 65/v1 typed upsert and 50/v2 GetMany. Selected dense
-HTTP/native responses expose versioned owned `dense_work`:
+HTTP controls, 65/v1 typed upsert and 50/v2 GetMany. An index declared with
+`cosine_normalized_f32_v1` uses negotiated native 64/v4 for both exact and
+scalar-u8 rerank; legacy representations retain native 64/v2 exact and 64/v3
+scalar-u8 rerank. Selected dense HTTP/native responses expose compact v4 route
+identity in production. Explicit v4 diagnostics additionally exposes owned
+`dense_work`:
 executed graph/filter work, captured owner identities/coverage and requested
 output materialization, including service error prefixes. Dispatch tags alone
 remain insufficient. Process-lifetime diagnostics cover indexed JSON, replay,
 scans and separate GetMany work; per-query proofs do not sample process totals.
-The v3 quantized response carries a sibling score-plane proof and requires the
-separate `typed_dense_quantized_rerank` capability; benchmark quantized
-capabilities do not negotiate this public path.
+The v4 scalar-u8 diagnostic response carries the packed score-plane-v2 sibling;
+production omits both proofs. The representation and command version are
+negotiated together and never downgrade to v2/v3.
 The final artifact validator and workload qualification remain separate gates;
 this product contract does not certify final phase evidence or performance.
 
@@ -274,12 +277,11 @@ zero. Filtered traversal records the admitted layer-0 candidate count, which
 must be at least the score plane's `raw_retained_candidates`; in both cases it
 cannot exceed `base_ann_scored`.
 
-Q2's final base and suffix ordering uses raw authoritative FP32 vectors with
-FP64 inverse norms and `vectorops.CosineDistanceFloat32Normalized`, returning
-`1 - float64(distance)`. It must not substitute a packed raw dot or rounded
-selected-codec score. `ColumnGraphQueryWork.ScorePlane` remains the owner-local
-source; Q3 (#4686) exposes a separately versioned sibling score-plane proof on
-the public HTTP/native/Python response and never extends `dense_work-v1`.
+The legacy v3 base and suffix ordering uses raw authoritative FP32 vectors with
+FP64 inverse norms. The canonical successor instead stores normalized FP32 once
+and uses the packed dot product for exact scoring and rerank. Its production v4
+response carries only route identity; explicit diagnostics exposes a separately
+versioned packed score-plane-v2 sibling and never extends `dense_work-v1`.
 
 ### Q4 bounded SQ8 harness contract
 
@@ -331,7 +333,7 @@ complete width/shadow alternative and, independently, the exact live-base and
 suffix score counts. A suffix-only exact result may therefore have zero base
 candidate widths without weakening its result or score-work proof.
 
-The 768D full SQ8 Cohere diagnostic adds a separate same-owner query packet; it
+The legacy 768D full SQ8 Cohere diagnostic adds a separate same-owner query packet; it
 does not change the bounded application artifact or the RSS population
 boundary. After selection and before mutation, one warm batch and five measured
 repetitions reuse up to the first 20 observed queries at the frozen all-rows
@@ -342,6 +344,41 @@ across complete per-arm batches over the same query list. Raw call intervals,
 both work records and complete result
 projections are retained; the paired packet rejects owner, order, route,
 generation, counter or projection drift.
+
+The canonical Q3 integration gate is separate and bounded: the first fixed
+100,000 rows of the 768D corpus, all 200 fixed queries, top-10 and E=R=64. It
+uses native 64/v4 production with `return_embedding=false`, one warmup outside
+measurement, and at least five order-balanced exact/SQ8 repetitions. Collection,
+service, Go-native and Python-native public-call costs are reported separately;
+client CPU is measured in each client process rather than inferred by
+subtraction. Q4 alone constructs and runs the fresh 500,000-row qualification.
+
+Build the service and narrow Go seam helper from the same source tree, then run
+`benchmarks/vector_db_compare/minima_cohere_v4_production_gate.py` with the
+frozen export, serving limits and a new output directory:
+
+```sh
+go build -o "$RUN/treedb-document-service" ./cmd/treedb-document-service
+go build -o "$RUN/treedb-v4-production-gate" ./TreeDB/cmd/treedb_v4_production_gate
+PYTHONHASHSEED=0 python benchmarks/vector_db_compare/minima_cohere_v4_production_gate.py \
+  --dataset "$COHERE_EXPORT" \
+  --serving "$SERVING_JSON" \
+  --service-bin "$RUN/treedb-document-service" \
+  --go-helper "$RUN/treedb-v4-production-gate" \
+  --run-dir "$RUN/evidence"
+```
+
+The runner verifies independently code-pinned manifest, complete 500K source,
+query, and selected 100K-prefix hashes before loading; values declared by the
+manifest are not the trust anchor. Its JSON artifact retains every per-call
+wall/CPU sample, order, runner and binary hash, and profile path. A separate
+20-query-per-mode diagnostic sample reports exact and SQ8 observability cost,
+but is explicitly non-qualifying and excluded from every production threshold.
+The transport check compares the
+SQ8-specific change in client-over-service overhead with half the direct
+collection SQ8 advantage; fixed overhead shared by exact and SQ8 is reported
+but does not consume that advantage. The direct collection handle is admitted
+and warmed outside measurement, matching the service-owned production handle.
 
 Each arm batch is separately bracketed only after synchronous work and publication
 gauges drain. It records the owned server CPU clock, client-harness CPU, raw Go

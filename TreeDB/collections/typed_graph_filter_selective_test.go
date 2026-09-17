@@ -257,7 +257,7 @@ func TestTypedGraphPreparedFilterSelectiveAND(t *testing.T) {
 			t.Fatal(err)
 		}
 		filter := conjunction(narrow, false)
-		q := VectorIndexSearchOptions{IndexName: "embedding_graph", Query: columns[0].Float32Vectors[0], TopK: 5, EfSearch: 128, StatsMode: VectorIndexSearchStatsModeMinimal, DeclaredScalarFilter: &filter}
+		q := VectorIndexSearchOptions{IndexName: "embedding_graph", Query: columns[0].Float32Vectors[0], TopK: 5, EfSearch: 128, StatsMode: VectorIndexSearchStatsModeProduction, DeclaredScalarFilter: &filter}
 		var buffer VectorIndexSearchBuffer
 		checkResults := func(c *Collection) {
 			t.Helper()

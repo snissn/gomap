@@ -1,10 +1,10 @@
 # Canonical normalized FP32 cosine representation v1 (#4722)
 
-Status: implemented for the opt-in Go collection and document-service
-`cosine_normalized_f32_v1` representation. Q1 froze the contract and engine
-gates; Q2 implements the durable owner, mutable serving, scalar-u8 candidates,
-and packed rerank. Native command and Python support remain unavailable until
-Q3. Legacy and omitted representations keep their existing behavior.
+Status: implemented for the opt-in Go collection/document service, negotiated
+native command64/v4, HTTP, and Python client. Q1 froze the contract and engine
+gates; Q2 implemented the durable owner, mutable serving, scalar-u8 candidates,
+and packed rerank; Q3 exposes the production and explicit diagnostic envelopes.
+Legacy and omitted representations keep their existing behavior.
 
 ## Declaration and admission
 
@@ -108,10 +108,10 @@ Proof is explicit diagnostic work. Production clients do not reconstruct
 vectors or re-score results. Older command versions fail closed for this
 representation rather than translating it to legacy semantics.
 
-Q1 records Go/Python v4 as `NOT_IMPLEMENTED`. Q2 keeps those stages unavailable
-while implementing storage and collection/service behavior. Q3 owns the native
-wire and Python seam. An unsupported stage is never filled with a legacy
-measurement.
+Create-time `vector_representation` metadata selects v4 in Go and Python.
+Production returns compact route identity and omits full proofs; explicit
+diagnostics returns dense-work and, for scalar-u8 rerank, packed score-plane v2.
+An unsupported or unnegotiated stage is never filled with a legacy measurement.
 
 ## Phase gates and qualification ownership
 
