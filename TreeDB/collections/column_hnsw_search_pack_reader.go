@@ -960,11 +960,34 @@ func (v *columnHNSWSearchPackPreparedView) bindExternalNormalizedVectors(state c
 	if !ok || typed.Ref != normalized.Ref {
 		return errors.New("collections: hnsw topology pack canonical vector ref is not the base typed-column owner")
 	}
-	if source == nil || !source.prepared.identityMapping() || source.prepared.rows != v.Header.Rows || source.prepared.dims != v.Header.Dimensions || len(source.prepared.values) != v.Header.Rows*v.Header.Dimensions {
-		return errors.New("collections: hnsw topology pack canonical vector source is not a single graph-order direct view")
+	prepared, err := columnHNSWSearchPackCanonicalVectorView(source, v.Header.Rows, v.Header.Dimensions)
+	if err != nil {
+		return err
 	}
-	v.NormalizedVectors = source.prepared.values
+	v.NormalizedVectors = prepared.values
 	return v.validateLive()
+}
+
+func columnHNSWSearchPackCanonicalVectorView(source *columnVectorGraphTypedColumnVectorSource, rows, dims int) (columnVectorGraphPreparedVectorView, error) {
+	if source == nil {
+		return columnVectorGraphPreparedVectorView{}, errors.New("collections: hnsw topology pack canonical vector source is not a single graph-order direct view")
+	}
+	prepared := source.prepared
+	if !prepared.identityMapping() || prepared.rows != rows || prepared.dims != dims || len(prepared.values) != rows*dims {
+		// A platform without mmap still has one canonical FP32 plane: the
+		// checksummed, handle-owned heap-copy typed view. Admit that retained view
+		// for topology binding without relaxing the generic prepared-search mmap
+		// prerequisite or allocating another vector representation.
+		fallback, reason, description, ok := prepareColumnVectorGraphPreparedVectorViewWithHolderFallback(source, rows, dims, true)
+		if !ok {
+			return columnVectorGraphPreparedVectorView{}, fmt.Errorf("collections: hnsw topology pack canonical vector source is not a single graph-order direct view: reason=%s description=%s", reason, description)
+		}
+		prepared = fallback
+	}
+	if !prepared.identityMapping() || prepared.rows != rows || prepared.dims != dims || len(prepared.values) != rows*dims {
+		return columnVectorGraphPreparedVectorView{}, errors.New("collections: hnsw topology pack canonical vector source is not a single graph-order direct view")
+	}
+	return prepared, nil
 }
 
 func (v *columnHNSWSearchPackPreparedView) validateTopologyLive() error {

@@ -490,11 +490,17 @@ func TestCosineNormalizedF32V1RebuildPublishesOneCanonicalFP32Plane(t *testing.T
 	if reader.hnswSearchPack == nil || reader.hnswSearchPack.validateLive() != nil || len(reader.hnswSearchPack.NormalizedVectors) != graph.RowCount*def.Dimensions {
 		t.Fatalf("bound topology pack unavailable: reader=%+v", reader.hnswSearchPack)
 	}
-	if len(reader.typedVectorSource.parts) != 1 || &reader.hnswSearchPack.NormalizedVectors[0] != &reader.typedVectorSource.prepared.values[0] {
+	if len(reader.typedVectorSource.parts) != 1 || &reader.hnswSearchPack.NormalizedVectors[0] != &reader.typedVectorSource.parts[0].values[0] {
 		t.Fatal("topology pack did not borrow the canonical typed-column vector slice")
 	}
-	if reader.invNormSource != nil || reader.preparedSearch == nil || !reader.preparedSearch.norm.implicitUnit {
-		t.Fatal("normalized representation did not use an implicit unit-norm prepared view")
+	if reader.invNormSource != nil {
+		t.Fatal("normalized representation retained an inverse-norm source")
+	}
+	if reader.preparedSearch != nil && !reader.preparedSearch.norm.implicitUnit {
+		t.Fatal("normalized prepared view did not use implicit unit norms")
+	}
+	if columnGraphTypedColumnMmapDirectViewSupportedForTest() && reader.preparedSearch == nil {
+		t.Fatal("mmap platform did not admit the normalized prepared-search view")
 	}
 	originalDigest := reader.hnswSearchPack.Header.ExternalVectorDigest
 	reader.hnswSearchPack.Header.ExternalVectorDigest[0]++

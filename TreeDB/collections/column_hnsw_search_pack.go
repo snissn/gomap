@@ -265,13 +265,17 @@ type columnHNSWSearchPackSection struct {
 
 func columnHNSWSearchPackExternalVectorRefDigest(ref ColumnAssetRef) [sha256.Size]byte {
 	var raw bytes.Buffer
-	writeManifestString(&raw, "hnsw-search-pack-external-vectors-v1")
+	// Bind the pack to the vector asset's rewrite-stable logical/content
+	// identity. ColumnAssetRewrite is allowed to relocate an otherwise identical
+	// asset, so FileID and Offset must not participate in this digest. The
+	// remaining fields are exactly those preserved by
+	// columnAssetRewriteSameLogicalRef; Length and Checksum still fail closed if
+	// the payload changes.
+	writeManifestString(&raw, "hnsw-search-pack-external-vector-logical-ref-v1")
 	writeManifestString(&raw, string(ref.Kind))
 	writeManifestString(&raw, ref.Namespace)
 	writeManifestUint64(&raw, ref.Generation)
 	writeManifestUint64(&raw, ref.PartID)
-	writeManifestUint64(&raw, uint64(ref.FileID))
-	writeManifestUint64(&raw, uint64(ref.Offset))
 	writeManifestUint64(&raw, uint64(ref.Length))
 	writeManifestUint64(&raw, uint64(ref.Checksum))
 	return sha256.Sum256(raw.Bytes())

@@ -163,11 +163,14 @@ Versions 1 and 2 retain their existing layouts and have no auxiliary channel.
 The non-partitioned `column_graph` pack uses wire version 4 for
 `cosine_normalized_f32_v1`. Version 4 is topology-only: it omits the normalized
 vector section and carries a checksum-covered digest of the authoritative
-`normalized_vectors` asset reference. Open binds that reference to the selected
-typed-column FP32 section, checks row count, dimensions, representation and
-digest, and then exposes the borrowed slice. Empty bases use a fixed empty-owner
-digest and have no normalized-vector row asset. Versions 1 through 3 retain the
-legacy embedded-vector layouts.
+`normalized_vectors` asset's rewrite-stable logical/content identity: kind,
+namespace, generation, part, length, and checksum. Physical file and offset are
+excluded so ordinary column-asset relocation does not invalidate the topology
+pack. Open binds that reference to the selected typed-column FP32 section,
+checks row count, dimensions, representation and digest, and then exposes the
+borrowed slice. Empty bases use a fixed empty-owner digest and have no
+normalized-vector row asset. Versions 1 through 3 retain the legacy
+embedded-vector layouts.
 
 For M3 bounded-overlap manifests, the canonical balance-policy grammar is
 `m3_bounded_overlap_v1:capacity=<u64>,budget=<u64>,realized=<u64>,unspent=<u64>`
