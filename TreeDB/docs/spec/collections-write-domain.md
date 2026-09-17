@@ -247,6 +247,32 @@ descriptor epoch, and descriptor digest. Pending write-domain units and future
 WAL-backed flush units must carry these guards so a drop/recreate or
 same-name index recreate cannot replay into the wrong catalog incarnation.
 
+## Vector Rebuild Publication Handoff
+
+Public command-WAL vector rebuilds take schema-read ownership first and pin the
+index generation before acquiring publication locks. Capture drains the lower
+command prefix under the existing teardown/admission/raw guard, then acquires
+collection mutation ownership. If mutation is busy, capture releases the raw
+guard before waiting and retries the acquisition order. A newer snapshot after
+the drain remains protected by the earlier stable-generation pin.
+
+Graph construction retains mutation ownership and the pinned source, but does
+not hold the database-wide publication guard. Before final publication, rebuild
+releases mutation, drains the command prefix, and reacquires publication then
+mutation using the same nonblocking protocol. It revalidates all collection
+authority roots, metadata and captured typed-base identity before appending a
+rebuild frame. An intervening collection change rejects the candidate; unrelated
+raw or sibling-collection publications may proceed. No automatic rebuild retry
+is implied. Existing staged publishers inherit raw/teardown ownership instead
+of recursively acquiring those guards or invoking barriers with mutation held.
+Replay retains its existing assigned-LSN path and does not run public barriers.
+
+This ordering applies to ordinary, normalized, empty/no-op and native rebuild
+publication. Checkpoint may retain a selected write domain whose pending state
+was already drained: it must still be able to acquire that domain's mutation
+ownership. Skipping a busy domain or dropping lower-command coverage is not a
+valid way to break the cycle.
+
 ## Read Views
 
 The current implementation often protects pending state by copying point values

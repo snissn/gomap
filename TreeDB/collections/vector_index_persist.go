@@ -165,6 +165,10 @@ func (idx *VectorIndex) saveNativeSnapshotPrepared() (VectorIndexLoadStatus, err
 }
 
 func (idx *VectorIndex) saveNativeSnapshotPreparedWithCommandWALIntent(replay *backenddb.CommandWALIntent) (VectorIndexLoadStatus, error) {
+	return idx.saveNativeSnapshotPreparedWithCommandWALIntentAndPublicationHandoff(replay, nil)
+}
+
+func (idx *VectorIndex) saveNativeSnapshotPreparedWithCommandWALIntentAndPublicationHandoff(replay *backenddb.CommandWALIntent, preparePublication func() (bool, error)) (VectorIndexLoadStatus, error) {
 	status := VectorIndexLoadStatus{}
 	if idx == nil {
 		return status, errors.New("collections: vector index is nil")
@@ -238,6 +242,17 @@ func (idx *VectorIndex) saveNativeSnapshotPreparedWithCommandWALIntent(replay *b
 		return status, err
 	}
 	iter := publishTable.NewIterator(nil, nil)
+	// Full-image encoding and pointer preparation above retain mutation but
+	// not global raw ownership. Hand off only when the image is ready to publish.
+	rawPublishLocked := false
+	if preparePublication != nil {
+		rawPublishLocked, err = preparePublication()
+		if err != nil {
+			_ = iter.Close()
+			resetCollectionRunTable(table)
+			return status, err
+		}
+	}
 	publicationMu := idx.nativePublicationLock()
 	publicationMu.Lock()
 	newSystemRoot, rootIDs, err := c.publishRootDeltaGroupWithoutColumn([]backenddb.OrderedRootDeltaPublishInput{{
@@ -253,6 +268,7 @@ func (idx *VectorIndex) saveNativeSnapshotPreparedWithCommandWALIntent(replay *b
 		rootNames:        []string{rootName},
 		baseRootIDs:      baseRootIDs,
 		commandWALIntent: intent,
+		rawPublishLocked: rawPublishLocked,
 	})
 	if err == nil && len(rootIDs) == 1 {
 		status.Loaded = true

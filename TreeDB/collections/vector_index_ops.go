@@ -69,8 +69,10 @@ func (c *Collection) VectorIndexStatus(name string) (VectorIndexStatus, error) {
 
 // RebuildVectorIndex scans canonical collection documents, rebuilds the
 // declared HNSW graph, and publishes a full native vector-index root. It is an
-// operational maintenance call: collection writes wait while the rebuild scans
-// and publishes so the replacement graph cannot miss committed mutations.
+// operational maintenance call: collection writes wait during construction.
+// In command-WAL mode, final publication briefly releases mutation ownership
+// to drain earlier commands without a checkpoint lock inversion. An intervening
+// collection change rejects the rebuild before append; unrelated writes do not.
 func (c *Collection) RebuildVectorIndex(name string) (VectorIndexStatus, error) {
 	if policy := c.typedGraphServingPolicy(); policy != nil {
 		if err := c.FoldColumnGraphServing(context.Background(), name); err != nil {
