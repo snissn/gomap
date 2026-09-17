@@ -393,6 +393,9 @@ func ValidateInsertRequestV1(ctx context.Context, r InsertRequestV1) error {
 	if len(r.IdempotencyKey) > raftentry.MaxIdempotencyKeyBytesV1 || len(r.ID) > MaxStableIDBytesV1 {
 		return invalidV1("idempotency key or stable id exceeds mutation limit")
 	}
+	if string(r.IdempotencyKey) == raftentry.NoIdempotencyTokenV1 {
+		return invalidV1("reserved no-idempotency token is not accepted for mutations")
+	}
 	if !r.Deadline.IsZero() && !time.Now().Before(r.Deadline) {
 		return &ErrorV1{Code: ErrorDeadlineExceededV1, Err: context.DeadlineExceeded}
 	}

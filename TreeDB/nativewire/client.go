@@ -37,6 +37,13 @@ type Client struct {
 	denseTypedQuantizedNegotiated bool
 }
 
+// requestNotSubmittedError marks failures before local handler dispatch or a
+// network write. Mutation callers can distinguish these from unknown outcomes.
+type requestNotSubmittedError struct{ err error }
+
+func (e *requestNotSubmittedError) Error() string { return e.err.Error() }
+func (e *requestNotSubmittedError) Unwrap() error { return e.err }
+
 // NewClient returns a native-wire client that owns conn until Close.
 func NewClient(conn net.Conn) *Client {
 	return &Client{conn: conn, limits: iwire.DefaultLimits()}
@@ -181,7 +188,7 @@ func (c *Client) roundTripLockedStream(ctx context.Context, streamID uint64, typ
 
 func (c *Client) roundTripLockedStreamVersion(ctx context.Context, streamID uint64, typ iwire.FrameType, body []byte, want iwire.FrameType, denseVersion uint64) (iwire.Header, []byte, error) {
 	if c == nil {
-		return iwire.Header{}, nil, io.ErrClosedPipe
+		return iwire.Header{}, nil, &requestNotSubmittedError{io.ErrClosedPipe}
 	}
 	c.clearBorrowedResponseViews()
 	c.readBody = retainSmallPayloadScratch(c.readBody)
@@ -191,10 +198,10 @@ func (c *Client) roundTripLockedStreamVersion(ctx context.Context, streamID uint
 		return header, response, err
 	}
 	if c.conn == nil {
-		return iwire.Header{}, nil, io.ErrClosedPipe
+		return iwire.Header{}, nil, &requestNotSubmittedError{io.ErrClosedPipe}
 	}
 	if ctx != nil && ctx.Err() != nil {
-		return iwire.Header{}, nil, ctx.Err()
+		return iwire.Header{}, nil, &requestNotSubmittedError{ctx.Err()}
 	}
 	requestID := c.nextReq.Add(1)
 	if deadline, ok := ctxDeadline(ctx); ok {

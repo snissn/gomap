@@ -53,7 +53,7 @@ func (c *Client) VectorSearchStrictV1(ctx context.Context, request public.Search
 // protocol. Routing and ownership proof remain server-owned.
 func (c *Client) VectorInsertV1(ctx context.Context, request public.InsertRequestV1) (public.InsertResponseV1, error) {
 	if c == nil {
-		return public.InsertResponseV1{}, io.ErrClosedPipe
+		return public.InsertResponseV1{}, vectorPartitionMutationClientErrorV1(&requestNotSubmittedError{io.ErrClosedPipe})
 	}
 	deadline := request.Deadline
 	if ctx != nil {
@@ -67,7 +67,7 @@ func (c *Client) VectorInsertV1(ctx context.Context, request public.InsertReques
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.local == nil && c.conn == nil {
-		return public.InsertResponseV1{}, io.ErrClosedPipe
+		return public.InsertResponseV1{}, vectorPartitionMutationClientErrorV1(&requestNotSubmittedError{io.ErrClosedPipe})
 	}
 	body, err := appendVectorPartitionInsertCommandBodyV1(c.requestBody[:0], request, deadline, c.limits)
 	if err != nil {
@@ -588,6 +588,13 @@ func vectorPartitionClientErrorV1(err error) error {
 func vectorPartitionMutationClientErrorV1(err error) error {
 	if err == nil {
 		return nil
+	}
+	var notSubmitted *requestNotSubmittedError
+	if errors.As(err, &notSubmitted) {
+		if errors.Is(notSubmitted, io.ErrClosedPipe) {
+			return &public.ErrorV1{Code: public.ErrorUnavailableV1, Err: notSubmitted.err}
+		}
+		return vectorPartitionClientErrorV1(notSubmitted.err)
 	}
 	var wire *WireError
 	if errors.As(err, &wire) {

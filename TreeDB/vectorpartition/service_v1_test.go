@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"testing"
 	"time"
+
+	"github.com/snissn/gomap/TreeDB/internal/raftentry"
 )
 
 type serviceBackendV1 struct {
@@ -201,6 +203,14 @@ func TestServiceV1InsertRequiresCompleteEvidenceAndClonesV1(t *testing.T) {
 	request.IdempotencyKey = make([]byte, 1025)
 	if _, err := service.Insert(t.Context(), request); !hasCodeV1(err, ErrorInvalidRequestV1) {
 		t.Fatalf("oversized idempotency key error=%v", err)
+	}
+	backend.insert = func(context.Context, InsertRequestV1) (InsertResponseV1, error) {
+		t.Fatal("reserved idempotency token reached backend")
+		return InsertResponseV1{}, nil
+	}
+	request.IdempotencyKey = []byte(raftentry.NoIdempotencyTokenV1)
+	if _, err := service.Insert(t.Context(), request); !hasCodeV1(err, ErrorInvalidRequestV1) {
+		t.Fatalf("reserved idempotency key error=%v", err)
 	}
 }
 

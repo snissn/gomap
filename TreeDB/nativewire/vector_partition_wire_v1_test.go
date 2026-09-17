@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"net"
 	"os"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
+	"github.com/snissn/gomap/TreeDB/internal/raftentry"
 	public "github.com/snissn/gomap/TreeDB/vectorpartition"
 )
 
@@ -61,6 +63,14 @@ func TestVectorPartitionNativeWireInsertWithClusterSubmitterV1(t *testing.T) {
 	request := public.InsertRequestV1{
 		Version: 1, Generation: public.GenerationIDV1{Index: "embedding", Generation: 1},
 		IdempotencyKey: []byte("attempt"), ID: []byte("doc"), Vector: []float32{1}, Document: []byte(`{"embedding":[1]}`), Deadline: time.Now().Add(time.Second),
+	}
+	reserved := request
+	reserved.IdempotencyKey = []byte(raftentry.NoIdempotencyTokenV1)
+	if _, err := client.VectorInsertV1(t.Context(), reserved); !hasPublicErrorCodeV1(err, public.ErrorInvalidRequestV1) {
+		t.Fatalf("reserved idempotency key error=%v", err)
+	}
+	if backend.calls != 0 || len(cluster.snapshot()) != 0 {
+		t.Fatal("reserved idempotency token reached a mutation backend")
 	}
 	if _, err := client.VectorInsertV1(t.Context(), request); err != nil {
 		t.Fatal(err)
@@ -677,6 +687,99 @@ func TestVectorPartitionNativeWireInsertCanceledBeforeSendV1(t *testing.T) {
 	request := public.InsertRequestV1{Version: 1, Generation: public.GenerationIDV1{Index: "embedding", Generation: 7}, IdempotencyKey: []byte("attempt"), ID: []byte("doc"), Vector: []float32{1}, Document: []byte(`{"embedding":[1]}`), Deadline: time.Now().Add(time.Second)}
 	if _, err := client.VectorInsertV1(ctx, request); !hasPublicErrorCodeV1(err, public.ErrorCanceledV1) {
 		t.Fatalf("pre-send canceled error = %v", err)
+	}
+}
+
+func TestVectorPartitionNativeWireInsertLocalPreSubmitErrorsV1(t *testing.T) {
+	for _, name := range []string{"closed", "canceled", "deadline"} {
+		t.Run(name, func(t *testing.T) {
+			backend := &vectorPartitionWireInsertBackendV1{}
+			service, err := public.NewServiceV1(backend)
+			if err != nil {
+				t.Fatal(err)
+			}
+			config := public.ConservativeOperationsConfigV1()
+			config.Enabled = true
+			operations, err := public.NewOperationsV1(service, config, func(context.Context) (public.OperationsHealthV1, error) {
+				return public.OperationsHealthV1{Ready: true}, nil
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			server := NewServer(ServerOptions{VectorPartitionOperations: operations})
+			defer server.Close()
+			client, _, err := NewInProcessClient(t.Context(), server)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer client.Close()
+			request := public.InsertRequestV1{Version: 1, Generation: public.GenerationIDV1{Index: "embedding", Generation: 7}, IdempotencyKey: []byte("attempt"), ID: []byte("doc"), Vector: []float32{1}, Document: []byte(`{"embedding":[1]}`), Deadline: time.Now().Add(5 * time.Second)}
+			want, cause := public.ErrorUnavailableV1, io.ErrClosedPipe
+			if name == "closed" {
+				if err := server.Close(); err != nil {
+					t.Fatal(err)
+				}
+				_, err = client.VectorInsertV1(t.Context(), request)
+			} else {
+				ctx, cancel := context.WithCancel(t.Context())
+				if name == "deadline" {
+					cancel()
+					ctx, cancel = context.WithTimeout(t.Context(), 100*time.Millisecond)
+				}
+				defer cancel()
+				client.local.mu.Lock()
+				before := client.nextReq.Load()
+				done := make(chan error, 1)
+				go func() {
+					_, err := client.VectorInsertV1(ctx, request)
+					done <- err
+				}()
+				// Wait until the client has passed its initial cancellation check
+				// and is blocked on the local endpoint's dispatch lock.
+				until := time.Now().Add(time.Second)
+				for client.nextReq.Load() == before && time.Now().Before(until) {
+					time.Sleep(time.Millisecond)
+				}
+				if client.nextReq.Load() == before {
+					client.local.mu.Unlock()
+					t.Fatal("request did not reach local endpoint")
+				}
+				want, cause = public.ErrorCanceledV1, context.Canceled
+				if name == "deadline" {
+					<-ctx.Done()
+					want, cause = public.ErrorDeadlineExceededV1, context.DeadlineExceeded
+				} else {
+					cancel()
+				}
+				client.local.mu.Unlock()
+				err = <-done
+			}
+			if !hasPublicErrorCodeV1(err, want) || !errors.Is(err, cause) || backend.calls != 0 {
+				t.Fatalf("error=%v want=%s cause=%v backend calls=%d", err, want, cause, backend.calls)
+			}
+		})
+	}
+}
+
+func TestVectorPartitionNativeWireInsertCanceledAfterSendV1(t *testing.T) {
+	left, right := net.Pipe()
+	defer right.Close()
+	client := NewClient(left)
+	defer client.Close()
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	peer := make(chan error, 1)
+	go func() {
+		_, _, err := readFrame(right, iwire.DefaultLimits())
+		cancel()
+		peer <- err
+	}()
+	request := public.InsertRequestV1{Version: 1, Generation: public.GenerationIDV1{Index: "embedding", Generation: 7}, IdempotencyKey: []byte("attempt"), ID: []byte("doc"), Vector: []float32{1}, Document: []byte(`{"embedding":[1]}`), Deadline: time.Now().Add(time.Second)}
+	if _, err := client.VectorInsertV1(ctx, request); !hasPublicErrorCodeV1(err, public.ErrorCommitAmbiguousV1) || !errors.Is(err, context.Canceled) {
+		t.Fatalf("post-send canceled error=%v", err)
+	}
+	if err := <-peer; err != nil {
+		t.Fatal(err)
 	}
 }
 
