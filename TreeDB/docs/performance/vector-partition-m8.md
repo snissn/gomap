@@ -747,3 +747,11 @@ GOWORK=off go test ./cmd/treedb_vector_partition_bench -run '^TestM8RouterEffort
 GOWORK=off go test ./cmd/treedb_vector_partition_bench -run '^$' \
   -bench 'BenchmarkM8Router(EffortPrepared|OrdinaryPath)V1' -benchmem -count=5
 ```
+
+Diagnostic attribution is kept out of the size-limited measurement transcript.
+Schema 6 retains every measured output/timing and binds each complete offline
+attribution row by digest. Full diagnostics remain in the main report and must
+be independently replayed; the digest alone is not evidence of correctness.
+Serialization and per-row hashing are untimed, covered by the diagnostic work
+accounting. The transcript cap is not raised. Ordinary schema-5 writes and
+historical readers are unchanged.

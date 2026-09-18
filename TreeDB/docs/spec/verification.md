@@ -2265,3 +2265,10 @@ EF/concurrency repetitions. Existing R1 digest goldens must remain unchanged.
 `BenchmarkM8RouterEffortPreparedV1` measures prepared collection plus ranking and
 hashing; `BenchmarkM8RouterOrdinaryPathV1` is the unchanged router-only control.
 Neither measures full partition ANN, network, Python or a representative corpus.
+
+`TestM8RouterEffortActualProducerKeepsMeasuredBoundary` runs the actual bounded
+M8 CLI, loopback producer, measured transcript and report validator with R2
+selected. `TestM8MeasurementDiagnosticProjectionBindsWithoutCopyingQueries`
+checks the opt-in schema-6 attribution binding, unchanged ordinary projection,
+owned row copies and full-population hash sensitivity. Fresh retained replay
+remains separately required; no digest is treated as source authority.

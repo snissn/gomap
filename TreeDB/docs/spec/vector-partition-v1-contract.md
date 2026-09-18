@@ -293,3 +293,11 @@ reopened assets, including refused queries; schema checks and self-reported
 hashes alone are not authority. Per-query observations cannot disappear because
 one treatment failed. `#4750` remains the owner of any subsequent public policy
 integration, and `#4753` of representative scaling qualification.
+
+Diagnostic-selected M8 writes use measurement transcript schema 6: the small
+measured rows contain SHA-256 bindings to their complete offline attribution
+instead of duplicating the query/model population in the transcript. The report
+retains all attribution. The existing transcript byte cap is unchanged; these
+digests do not replace independent retained-asset reconstruction. Ordinary
+writes stay at schema 5, and historical schema-5 receipts retain their complete
+row interpretation. A missing/reordered/mismatched binding fails closed.

@@ -140,6 +140,7 @@ type m8ProductionMeasurementTranscriptV1 struct {
 	Variant             *m3VariantDescriptorV1       `json:"variant"`
 	Config              m8ProductionConfigEvidenceV1 `json:"config"`
 	Rows                []m8ProductionRowV1          `json:"rows"`
+	AttributionSHA256   []string                     `json:"attribution_sha256,omitempty"`
 	Outcomes            []m8ProductionRowOutcomesV1  `json:"outcomes"`
 	PeakRSSObservations []uint64                     `json:"peak_rss_observations"`
 }
@@ -851,7 +852,15 @@ func m8WriteProductionMeasurementTranscriptV1(dir string, report m8ProductionRep
 	if !report.Resources.PeakRSSMeasured || report.Resources.PeakRSSBytes <= 0 {
 		return m8ProductionMeasurementTranscriptEvidenceV1{}, errors.New("M8 measurement transcript requires a positive peak RSS observation")
 	}
-	transcript := m8ProductionMeasurementTranscriptV1{SchemaVersion: 5, ExecutionID: report.ExecutionID, Dataset: report.Dataset, Variant: report.Variant, Config: report.Config, Rows: report.Rows, Outcomes: outcomes, PeakRSSObservations: []uint64{uint64(report.Resources.PeakRSSBytes)}}
+	rows, attributionSHA256, err := m8MeasurementRowsWithAttributionBindingsV1(report)
+	if err != nil {
+		return m8ProductionMeasurementTranscriptEvidenceV1{}, err
+	}
+	schema := 5
+	if attributionSHA256 != nil {
+		schema = 6
+	}
+	transcript := m8ProductionMeasurementTranscriptV1{SchemaVersion: schema, ExecutionID: report.ExecutionID, Dataset: report.Dataset, Variant: report.Variant, Config: report.Config, Rows: rows, AttributionSHA256: attributionSHA256, Outcomes: outcomes, PeakRSSObservations: []uint64{uint64(report.Resources.PeakRSSBytes)}}
 	raw, err := json.Marshal(transcript)
 	if err != nil {
 		return m8ProductionMeasurementTranscriptEvidenceV1{}, err
@@ -899,14 +908,25 @@ func m8ReadProductionMeasurementTranscriptV1(report m8ProductionReportV1) (m8Pro
 	var transcript m8ProductionMeasurementTranscriptV1
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
-	if decoder.Decode(&transcript) != nil || transcript.SchemaVersion != 5 {
+	if decoder.Decode(&transcript) != nil || (transcript.SchemaVersion != 5 && transcript.SchemaVersion != 6) {
 		return m8ProductionMeasurementTranscriptV1{}, errors.New("invalid M8 measurement transcript schema")
 	}
 	var trailing any
 	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
 		return m8ProductionMeasurementTranscriptV1{}, errors.New("M8 measurement transcript has trailing JSON")
 	}
-	if transcript.ExecutionID != report.ExecutionID || transcript.Dataset != report.Dataset || !reflect.DeepEqual(transcript.Variant, report.Variant) || !reflect.DeepEqual(transcript.Config, report.Config) || !reflect.DeepEqual(transcript.Rows, report.Rows) {
+	expectedRows := report.Rows
+	var expectedAttributionSHA256 []string
+	if transcript.SchemaVersion == 6 {
+		if !report.Config.QualityDiagnostics {
+			return m8ProductionMeasurementTranscriptV1{}, errors.New("diagnostic transcript without diagnostic selection")
+		}
+		expectedRows, expectedAttributionSHA256, err = m8MeasurementRowsWithAttributionBindingsV1(report)
+		if err != nil {
+			return m8ProductionMeasurementTranscriptV1{}, err
+		}
+	}
+	if transcript.ExecutionID != report.ExecutionID || transcript.Dataset != report.Dataset || !reflect.DeepEqual(transcript.Variant, report.Variant) || !reflect.DeepEqual(transcript.Config, report.Config) || !reflect.DeepEqual(transcript.Rows, expectedRows) || !reflect.DeepEqual(transcript.AttributionSHA256, expectedAttributionSHA256) {
 		return m8ProductionMeasurementTranscriptV1{}, errors.New("M8 measurement transcript identity mismatch")
 	}
 	if err := m8ValidateProductionMeasurementTranscriptOutcomesV1(transcript, report); err != nil {
@@ -1038,7 +1058,18 @@ func m8ProductionMeasurementTranscriptMaxBytesV1(report m8ProductionReportV1) (i
 	if err != nil {
 		return 0, err
 	}
-	return memoryAdd(withDurations, routingBytes)
+	bound, err := memoryAdd(withDurations, routingBytes)
+	if err != nil {
+		return 0, err
+	}
+	if report.Config.QualityDiagnostics {
+		rows, err := memoryMul(int64(len(report.Rows)), 8192)
+		if err != nil {
+			return 0, err
+		}
+		return memoryAdd(bound, rows)
+	}
+	return bound, nil
 }
 
 func m8ValidateProductionMeasurementTranscriptOutcomesV1(transcript m8ProductionMeasurementTranscriptV1, report m8ProductionReportV1) error {
