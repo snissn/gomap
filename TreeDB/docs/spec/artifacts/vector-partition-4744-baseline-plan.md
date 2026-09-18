@@ -42,8 +42,9 @@ and a sealed evaluation identity; it cannot claim an unseen evaluation result.
 1. Land the complete reviewed #4755 instrumentation/provenance/replay/docs
    packet before expensive representative collection.
 2. In a clean standalone checkout, pin the landed commit, source tree, all
-   TreeDB/vector-partition runtime and benchmark-harness blobs, vendor identity,
-   Go toolchain, executable SHA-256 and clean embedded VCS revision. Publish those
+   TreeDB/vector-partition runtime and benchmark-harness blobs, module/dependency
+   identities (this repository has no tracked vendor tree), Go toolchain,
+   executable SHA-256 and clean embedded VCS revision. Publish those
    exact identities and fully expanded commands in #4744 **before collection**.
 3. Recover the pinned existing KaHIP adapter/interpreter/backend, then construct
    current graph assets through the existing M3 graph build. Freeze source-vector,

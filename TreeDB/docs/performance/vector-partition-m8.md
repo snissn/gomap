@@ -607,6 +607,9 @@ embedded VCS metadata. The existing command verifier requires child `-out` and
 `-m8-existing-db`, `-profiles`, `-m8-matrix-profiles`, source and explicit caps.
 Captured production profiles are required; replay keeps the existing 4 GiB RSS,
 2 GiB asset and fixture-specific exact-truth caps.
+Current replay reports and explicitly selected diagnostic transcripts have a
+64 MiB retained-file cap; ordinary transcripts and historical qualification
+retain their 2 MiB transcript, 16 MiB matrix and 1 MiB index caps.
 
 ```sh
 /tmp/treedb_vector_partition_bench replay-m8-report \

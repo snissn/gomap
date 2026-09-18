@@ -51,7 +51,7 @@ func runReplayM8ReportV1(args []string, stdout io.Writer) error {
 	if err != nil || canonicalPath != path {
 		return errors.New("replay report is not canonical and contained in root")
 	}
-	raw, err := readBoundedRegularFileV1(path, m8QualificationMatrixMaxBytesV1)
+	raw, err := readBoundedRegularFileV1(path, m8DiagnosticRetainedMaxBytesV1)
 	if err != nil {
 		return fmt.Errorf("read replay report: %w", err)
 	}

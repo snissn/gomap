@@ -802,6 +802,19 @@ func m8ProductionExecutionEvidenceDigestV1(executionID string, artifacts []m8Pro
 	return hex.EncodeToString(digest[:]), nil
 }
 
+// The planned 512-query x 15-cell D40 diagnostic shape serializes to about
+// 33 MiB of indented report JSON. Its compact rows are also copied into the
+// transcript. Keep both current diagnostic artifacts finite without changing
+// the historical qualification or default-off transcript limits.
+const m8DiagnosticRetainedMaxBytesV1 = 64 << 20
+
+func m8ProductionMeasurementTranscriptByteCapV1(report m8ProductionReportV1) int64 {
+	if report.Config.QualityDiagnostics {
+		return m8DiagnosticRetainedMaxBytesV1
+	}
+	return m8QualificationTranscriptMaxBytesV1
+}
+
 func m8WriteProductionMeasurementTranscriptV1(dir string, report m8ProductionReportV1, measuredCells []m8MeasuredCellV1) (m8ProductionMeasurementTranscriptEvidenceV1, error) {
 	if !validM8ProductionExecutionIDV1(report.ExecutionID) {
 		return m8ProductionMeasurementTranscriptEvidenceV1{}, errors.New("invalid M8 execution identity")
@@ -811,7 +824,8 @@ func m8WriteProductionMeasurementTranscriptV1(dir string, report m8ProductionRep
 		return m8ProductionMeasurementTranscriptEvidenceV1{}, err
 	}
 	maxBytes, err := m8ProductionMeasurementTranscriptMaxBytesV1(report)
-	if err != nil || maxBytes > m8QualificationTranscriptMaxBytesV1 {
+	byteCap := m8ProductionMeasurementTranscriptByteCapV1(report)
+	if err != nil || maxBytes > byteCap {
 		return m8ProductionMeasurementTranscriptEvidenceV1{}, errors.New("M8 measurement transcript outcomes exceed the retained byte cap")
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -830,7 +844,7 @@ func m8WriteProductionMeasurementTranscriptV1(dir string, report m8ProductionRep
 	if err != nil {
 		return m8ProductionMeasurementTranscriptEvidenceV1{}, err
 	}
-	if int64(len(raw)) > maxBytes || int64(len(raw)) > m8QualificationTranscriptMaxBytesV1 {
+	if int64(len(raw)) > maxBytes || int64(len(raw)) > byteCap {
 		_ = file.Close()
 		return m8ProductionMeasurementTranscriptEvidenceV1{}, errors.New("M8 measurement transcript exceeds retained byte cap")
 	}
@@ -858,7 +872,7 @@ func m8ReadProductionMeasurementTranscriptV1(report m8ProductionReportV1) (m8Pro
 	if err != nil || path != evidence.Path {
 		return m8ProductionMeasurementTranscriptV1{}, errors.New("M8 measurement transcript path is not canonical")
 	}
-	raw, err := readBoundedRegularFileV1(evidence.Path, m8QualificationTranscriptMaxBytesV1)
+	raw, err := readBoundedRegularFileV1(evidence.Path, min(m8ProductionMeasurementTranscriptByteCapV1(report), evidence.Bytes))
 	if err != nil || int64(len(raw)) != evidence.Bytes {
 		return m8ProductionMeasurementTranscriptV1{}, errors.New("read M8 measurement transcript")
 	}
@@ -974,13 +988,13 @@ func m8ProductionMeasurementTranscriptMaxBytesV1(report m8ProductionReportV1) (i
 			return 0, err
 		}
 	}
-	// ID quotes, comma/bracket punctuation, row keys, and the copied rows.
+	// ID quotes and comma/bracket punctuation.
 	resultBytes, err := memoryMul(resultCount, idBytes+3)
 	if err != nil {
 		return 0, err
 	}
 	// A uint64 JSON value is at most 20 digits plus a comma. The fixed
-	// overhead also covers the field names, brackets, and copied rows.
+	// overhead also covers field names, brackets, and ordinary copied rows.
 	durationBytes, err := memoryMul(durationCount, 21)
 	if err != nil {
 		return 0, err
@@ -996,7 +1010,20 @@ func m8ProductionMeasurementTranscriptMaxBytesV1(report m8ProductionReportV1) (i
 	if err != nil {
 		return 0, err
 	}
-	withResults, err := memoryAdd(64<<10, resultBytes)
+	overhead := int64(64 << 10)
+	if report.Config.QualityDiagnostics {
+		// Diagnostics retain per-query curves, routes and masks in Rows. Account
+		// for their exact immutable JSON copy, not the ordinary-row allowance.
+		rows, err := json.Marshal(report.Rows)
+		if err != nil {
+			return 0, err
+		}
+		overhead, err = memoryAdd(overhead, int64(len(rows)))
+		if err != nil {
+			return 0, err
+		}
+	}
+	withResults, err := memoryAdd(overhead, resultBytes)
 	if err != nil {
 		return 0, err
 	}

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestReplayM8ReportRequiresFrozenPinsV1(t *testing.T) {
@@ -101,6 +102,140 @@ func TestReplayM8ReportAdmissionBeforeIOV1(t *testing.T) {
 	}
 }
 
+func testM8PlannedDiagnosticReportV1(t *testing.T) (m8ProductionReportV1, m8ReportReplayPinsV1) {
+	t.Helper()
+	// Serialize the producer's actual schema/indentation, not string padding.
+	// 512 queries x 15 cells, with all three routes filled to D=40, conservatively
+	// exceeds the plan's largest p=16 route. Both top-10 cost curves and all
+	// unsampled local/coordinator masks are present; trace-only masks stay nil.
+	report, pins := testM8ReportReplayPinsV1(t)
+	report.Dataset.Queries = 512
+	report.ExecutionID = strings.Repeat("a", 32)
+	report.Config.TopK = 10
+	report.Config.QualityDiagnostics = true
+	report.Resources.PeakRSSMeasured = true
+	report.Resources.PeakRSSBytes = 1 << 20
+	fixture, err := json.Marshal(report.Dataset)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pins.Fixture = fmt.Sprintf("%x", sha256.Sum256(fixture))
+	domains, packs := make([]uint32, 40), make([]int64, 40)
+	for i := range domains {
+		domains[i], packs[i] = uint32(i), 1
+	}
+	mask := uint16(1023)
+	curve := m8CoverageCurveV1{Method: m8CoverageCostMethodV1, TruthCount: 10,
+		MinimumCosts: []int64{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10}, WorkBound: maxBenchmarkWorkUnits, ScratchBytes: maxFixtureBytes}
+	queries := make([]m8QualityQueryV1, report.Dataset.Queries)
+	for i := range queries {
+		queries[i] = m8QualityQueryV1{
+			QuerySHA256: strings.Repeat("a", 64), TruthSHA256: strings.Repeat("b", 64), DomainCost: curve, PackCost: curve,
+			NoCoarseningDomains: domains, NoCoarseningMask: mask, NoCoarseningPacks: 40,
+			ExactDomains: domains, ExactMask: mask, ExactPacks: 40,
+			ApproximateDomains: domains, ApproximateMask: &mask, ApproximatePacks: 40,
+			NoCoarseningToExactLost: mask, NoCoarseningToExactGained: mask,
+			ExactToApproximateLost: &mask, ExactToApproximateGained: &mask,
+			Actual: &m8ObservedTruthMasksV1{Available: mask, Returned: mask}, CoordinatorReturned: &mask,
+		}
+	}
+	report.Rows = make([]m8ProductionRowV1, 15)
+	for i := range report.Rows {
+		report.Rows[i] = m8ProductionRowV1{Status: "pass", Samples: len(queries),
+			Probes: 1 << (i % 5), EfSearch: []int{64, 96, 128}[i/5], Concurrency: 1,
+			P50Nanos: 1, P95Nanos: 1, P99Nanos: 1, MaxTotalNanos: 1, ElapsedNanos: uint64(len(queries))}
+		report.Rows[i].Attribution.Quality = &m8QualityAttributionV1{
+			Method: m8QualityAttributionMethodV1, Generation: 1, SourceGeneration: 1,
+			ModelSHA256: strings.Repeat("c", 64), Domains: len(domains), PackCosts: packs, Queries: queries,
+		}
+	}
+	return report, pins
+}
+
+func TestReplayM8ReportPlannedDiagnosticSizeV1(t *testing.T) {
+	report, pins := testM8PlannedDiagnosticReportV1(t)
+	raw, err := json.MarshalIndent(report, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw = append(raw, '\n')
+	t.Logf("512-query x 15-row D40 diagnostic-shaped report: %d bytes", len(raw))
+	if len(raw) <= m8QualificationMatrixMaxBytesV1 || len(raw) > m8DiagnosticRetainedMaxBytesV1 {
+		t.Fatalf("planned diagnostic size %d is outside (16, 64] MiB", len(raw))
+	}
+	root, err := m8CanonicalPathV1(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, "report.json")
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	pins.Report = fmt.Sprintf("%x", sha256.Sum256(raw))
+	var output strings.Builder
+	// Admission must reach the real missing-profile guard after bounded read,
+	// hash, strict decoding and pin checks. This is not a positive replay claim.
+	if err := run(testM8ReportReplayArgsV1(root, path, pins), &output); err == nil || !strings.Contains(err.Error(), "contained captured production profiles") || output.Len() != 0 {
+		t.Fatalf("planned report did not reach profile validation: %v output=%q", err, output.String())
+	}
+}
+
+func TestM8PlannedDiagnosticTranscriptSizeV1(t *testing.T) {
+	report, _ := testM8PlannedDiagnosticReportV1(t)
+	var err error
+	report.MeasurementTranscript, err = m8WriteProductionMeasurementTranscriptV1(t.TempDir(), report, testM8MeasurementCellsV1(report))
+	if err != nil {
+		t.Fatalf("write planned diagnostic transcript: %v", err)
+	}
+	t.Logf("512-query x 15-row D40 diagnostic transcript: %d bytes", report.MeasurementTranscript.Bytes)
+	if report.MeasurementTranscript.Bytes <= m8QualificationTranscriptMaxBytesV1 || report.MeasurementTranscript.Bytes > m8DiagnosticRetainedMaxBytesV1 {
+		t.Fatalf("planned transcript size %d is outside (2, 64] MiB", report.MeasurementTranscript.Bytes)
+	}
+	if _, err := m8ReadProductionMeasurementTranscriptV1(report); err != nil {
+		t.Fatalf("strict read of planned diagnostic transcript: %v", err)
+	}
+	ordinary := report
+	ordinary.Config.QualityDiagnostics = false
+	if _, err := m8ReadProductionMeasurementTranscriptV1(ordinary); err == nil || !strings.Contains(err.Error(), "read M8 measurement transcript") {
+		t.Fatalf("ordinary transcript lost its 2 MiB cap: %v", err)
+	}
+	if err := os.Truncate(report.MeasurementTranscript.Path, m8DiagnosticRetainedMaxBytesV1+1); err != nil {
+		t.Fatal(err)
+	}
+	report.MeasurementTranscript.Bytes = m8DiagnosticRetainedMaxBytesV1 + 1
+	if _, err := m8ReadProductionMeasurementTranscriptV1(report); err == nil || !strings.Contains(err.Error(), "read M8 measurement transcript") {
+		t.Fatalf("accepted oversized diagnostic transcript: %v", err)
+	}
+}
+
+func TestReplayM8ReportHistoricalTranscriptCapV1(t *testing.T) {
+	if m8QualificationTranscriptMaxBytesV1 != 2<<20 || m8QualificationMatrixMaxBytesV1 != 16<<20 || m8QualificationIndexMaxBytesV1 != 1<<20 {
+		t.Fatal("historical qualification byte caps changed")
+	}
+	root := t.TempDir()
+	head := m8QualificationFrozenBaseSHAV1
+	fixture := m8QualificationFixturesV1[0]
+	matrix := testM8QualificationMatrixV1(t, head, fixture, 125)
+	matrix.Variants[0].Config.QualityDiagnostics = true
+	matrix.Variants[0].MeasurementTranscript.Bytes = m8QualificationTranscriptMaxBytesV1 + 1
+	raw, err := json.Marshal(matrix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "repeat.json"), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	campaign := m8QualificationCampaignV1{FixtureChecksum: fixture.Checksum, BaseSHA: head, HeadSHA: head,
+		Runs: []m8QualificationCampaignRunV1{
+			{Path: "repeat.json", SHA256: fmt.Sprintf("%x", sha256.Sum256(raw)), PublicationCompletedAt: matrix.ExecutionCompletedAt.Add(time.Nanosecond)},
+			{Path: "repeat-2.json", SHA256: strings.Repeat("a", 64)},
+			{Path: "repeat-3.json", SHA256: strings.Repeat("b", 64)},
+		}}
+	if _, err := testM8ValidateQualificationCampaignV1(root, campaign); err == nil || !strings.Contains(err.Error(), "historical transcript byte cap") {
+		t.Fatalf("historical campaign did not reject selected diagnostics before child validation: %v", err)
+	}
+}
+
 func TestReplayM8ReportBoundedReceiptV1(t *testing.T) {
 	root, err := m8CanonicalPathV1(t.TempDir())
 	if err != nil {
@@ -169,7 +304,7 @@ func TestReplayM8ReportBoundedReceiptV1(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = file.Truncate(m8QualificationMatrixMaxBytesV1 + 1)
+	err = file.Truncate(m8DiagnosticRetainedMaxBytesV1 + 1)
 	closeErr := file.Close()
 	if err != nil || closeErr != nil {
 		t.Fatalf("oversized receipt setup: %v %v", err, closeErr)
