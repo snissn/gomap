@@ -1,0 +1,57 @@
+name: "Issue 4744: pinned build context"
+on:
+  push:
+    branches: [codex/issue-4744-build-context]
+    paths: [.github/workflows/issue-4744-build-context.yml]
+permissions:
+  contents: read
+jobs:
+  context:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 6d96a7905b818b722827f3cf5cbf4d7c24c77df2
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Export public source and reproducible offline inputs
+        shell: bash
+        env:
+          GOWORK: 'off'
+        run: |
+          set -euo pipefail
+          out="${RUNNER_TEMP}/issue-4744-context"
+          mkdir -p "$out/source" "$out/toolchain" "$out/vendor"
+          test "$(git rev-parse HEAD)" = 6d96a7905b818b722827f3cf5cbf4d7c24c77df2
+          git archive --format=tar HEAD | gzip -1 > "$out/source/source.tar.gz"
+          git rev-parse HEAD > "$out/source/BASE_COMMIT"
+          git ls-tree -r HEAD > "$out/source/SOURCE_TREE.txt"
+          go version | tee "$out/toolchain/GO_VERSION"
+          go mod vendor
+          tar -czf "$out/vendor/vendor.tar.gz" vendor
+          tar -C "$(go env GOROOT)" -czf "$out/toolchain/go.tar.gz" .
+          (cd "$out/source" && sha256sum source.tar.gz > SHA256SUMS)
+          (cd "$out/vendor" && sha256sum vendor.tar.gz > SHA256SUMS)
+          (cd "$out/toolchain" && sha256sum go.tar.gz > SHA256SUMS)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: issue-4744-source
+          path: ${{ runner.temp }}/issue-4744-context/source
+          retention-days: 1
+          compression-level: 0
+      - uses: actions/upload-artifact@v4
+        with:
+          name: issue-4744-vendor
+          path: ${{ runner.temp }}/issue-4744-context/vendor
+          retention-days: 1
+          compression-level: 0
+      - uses: actions/upload-artifact@v4
+        with:
+          name: issue-4744-toolchain
+          path: ${{ runner.temp }}/issue-4744-context/toolchain
+          retention-days: 1
+          compression-level: 0
