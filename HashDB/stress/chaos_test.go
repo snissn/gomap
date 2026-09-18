@@ -47,7 +47,7 @@ func TestChaos(t *testing.T) {
 	defer os.RemoveAll(dbDir)
 
 	// 2. Start Server
-	serverCmd := startServer(t, serverBin, dbDir, addr)
+	serverCmd, serverExited := startServer(t, serverBin, dbDir, addr)
 
 	// 3. Write Data
 	ackedKeys := make(map[string]string)
@@ -90,17 +90,17 @@ func TestChaos(t *testing.T) {
 	if err := serverCmd.Process.Kill(); err != nil {
 		t.Logf("Failed to kill server: %v", err)
 	}
-	serverCmd.Wait() // cleanup
+	<-serverExited // cleanup
 
 	<-done // Wait for client to stop
 
 	t.Logf("Wrote %d keys before crash", len(ackedKeys))
 
 	// 5. Restart Server
-	serverCmd = startServer(t, serverBin, dbDir, addr)
+	serverCmd, serverExited = startServer(t, serverBin, dbDir, addr)
 	defer func() {
 		serverCmd.Process.Kill()
-		serverCmd.Wait()
+		<-serverExited
 	}()
 
 	// 6. Verify
@@ -153,7 +153,10 @@ func pickFreeTCPAddr(t *testing.T) string {
 	return addr
 }
 
-func startServer(t *testing.T, bin string, dbDir, addr string) *exec.Cmd {
+// startServer returns the command and a channel that carries its Wait result.
+// Receive from the channel instead of calling cmd.Wait() — exec.Cmd.Wait must
+// not be invoked from multiple goroutines.
+func startServer(t *testing.T, bin string, dbDir, addr string) (*exec.Cmd, <-chan error) {
 	t.Helper()
 	cmd := exec.Command(bin, "hashdb", dbDir, addr)
 
@@ -168,8 +171,8 @@ func startServer(t *testing.T, bin string, dbDir, addr string) *exec.Cmd {
 		t.Fatalf("Failed to start server: %v", err)
 	}
 
-	// Process.Wait serializes callers and shares ProcessState, so this watcher
-	// stays valid for callers that later kill and Wait the same cmd.
+	// Single owner of cmd.Wait(): the bind loop fails fast on early exit and
+	// callers drain serverExited after killing instead of racing on Wait.
 	exited := make(chan error, 1)
 	go func() { exited <- cmd.Wait() }()
 
@@ -185,12 +188,12 @@ func startServer(t *testing.T, bin string, dbDir, addr string) *exec.Cmd {
 		conn, err := net.Dial("tcp", addr)
 		if err == nil {
 			conn.Close()
-			return cmd
+			return cmd, exited
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
 	_ = cmd.Process.Kill()
 	<-exited
 	t.Fatalf("Server failed to bind port %s", addr)
-	return nil
+	return nil, nil
 }
