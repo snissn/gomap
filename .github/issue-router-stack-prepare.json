@@ -1,8 +1,8 @@
 {
-  "base": "585618cd1dcfa4ffcee4867b9a630262b5e50389",
-  "baseTree": "ebef8c7cb985db0708357ea35b907e4da2633c7d",
-  "expectedTree": "2732b59575eba650dc7311b6566f717e5412d62a",
-  "patchSHA256": "9eed5ab9756f806b65ff250cf89896a358aa3998b10f027b3a1621597cdc0ff6",
-  "chunks": ["3a224c9a3ad376984724435286b6653b1e2c13a0", "132f39bfeeaffce87bba8d09063fd6c957688c7d", "185b2bd97b1ce97b5cf31d5da88dc7c215abc4c0", "0c0bde6c6332aa343cab274236a040781574eb42", "44e69b6ebeaf354f94088b160ae97112a8030413", "8dc91ded5f2a7bbce9128ccc803ddd2cd46e1fb0", "06ac047fa810f0c2f7314eb3fb5cc5c01397078f", "89912a0146f98d1b4ad45b5c9da6de95c6d07953", "27a21a9bc65ffef03a8f835f06688cd4e702b93f", "60c5e8732b786a50fb6139f6507dcb7f520d29a3", "fef0b15c42116b97a79210a7eeb7e217836f3119", "c72179f10ab08073dc070950047739410ecc62ec"],
-  "allowedPaths": ["TreeDB/collections/vector_partition_router_policy_reduce.go", "TreeDB/collections/vector_partition_router_representation_diagnostic.go", "TreeDB/collections/vector_partition_router_representation_diagnostic_test.go", "TreeDB/docs/performance/vector-partition-m8.md", "TreeDB/docs/spec/vector-partition-v1-contract.md", "TreeDB/docs/spec/verification.md", "TreeDB/internal/vectorpartition/router.go", "TreeDB/internal/vectorpartition/router_representation_budget.go", "TreeDB/internal/vectorpartition/router_representation_codec.go", "TreeDB/internal/vectorpartition/router_representation_experiment.go", "TreeDB/internal/vectorpartition/router_representation_experiment_test.go", "cmd/treedb_vector_partition_bench/m8_production_runner.go", "cmd/treedb_vector_partition_bench/m8_qualification_campaign.go", "cmd/treedb_vector_partition_bench/m8_quality_attribution.go", "cmd/treedb_vector_partition_bench/m8_router_representation_bench_test.go", "cmd/treedb_vector_partition_bench/m8_router_representation_experiment.go", "cmd/treedb_vector_partition_bench/m8_router_representation_experiment_test.go", "cmd/treedb_vector_partition_bench/m8_router_representation_producer_test.go", "cmd/treedb_vector_partition_bench/m8_router_representation_replay_test.go", "cmd/treedb_vector_partition_bench/main.go"]
+  "base": "abe1cb08794cc0fd81484107b264bbcea1bb7fe1",
+  "baseTree": "2732b59575eba650dc7311b6566f717e5412d62a",
+  "expectedTree": "88f7277572c740b4e984a3b082285a0511efce0e",
+  "patchSHA256": "6f33a44bd80e26d37f9ec6eb69b487968a9c8bf4d63a850f8da819ca835632e7",
+  "chunks": ["910248f8407f8b470c638502cb21c447a1fa693f"],
+  "allowedPaths": ["TreeDB/docs/spec/vector-partition-v1-contract.md", "TreeDB/docs/spec/verification.md", "TreeDB/internal/vectorpartition/router_representation_codec.go", "TreeDB/internal/vectorpartition/router_representation_decode_test.go", "TreeDB/internal/vectorpartition/router_representation_experiment.go"]
 }
