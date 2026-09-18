@@ -17,6 +17,7 @@ from typing import Optional
 
 import _support
 from treedb_client import Document, TreeDBClient, TreeDBClientError
+from treedb_client.errors import TreeDBProtocolError
 from treedb_client._dense_work import (
     dense_quantized_response_work_matches,
     dense_score_plane_byte_counters_match,
@@ -354,6 +355,13 @@ class TreeDBClientIntegrationTests(unittest.TestCase):
                             self.assertEqual(native.upsert_documents("quantized", rows, index_info=info).upserted,
                                              len(rows))
                     control.optimize_index("quantized", column_graph_serving=limits)
+                    with closing(TreeDBClient(service.base_url, timeout=30, native_address=service.native_addr)) as rejected:
+                        # Finite zero vectors reach the server, which remains
+                        # the authority for zero-norm refusal. The existing
+                        # protocol rejection closes this connection.
+                        with self.assertRaisesRegex(TreeDBProtocolError, "native error 6: invalid command"):
+                            rejected.query_by_embedding("quantized", [0.0, 0.0], 5,
+                                ef_search=64, index_info=info)
                     with closing(TreeDBClient(service.base_url, timeout=30, native_address=service.native_addr)) as native:
                         response = native.query_by_embedding(
                             "quantized", [1.0, 0.0], 5,

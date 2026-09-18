@@ -455,11 +455,14 @@ class TreeDBClient:
                 or len(query_embedding) != index_info.dimension
             ):
                 raise TreeDBConfigError("normalized dense search requires matching selected typed IndexInfo")
-            try:
-                if not all(math.isfinite(float(value)) for value in query_embedding):
-                    raise ValueError()
-            except (TypeError, ValueError, OverflowError) as exc:
-                raise TreeDBConfigError("normalized dense query must be finite") from exc
+            # Native encoding owns conversion and finite/FP32 validation. Keep
+            # HTTP preflight here without traversing native inputs twice.
+            if self._native is None:
+                try:
+                    if not all(math.isfinite(float(value)) for value in query_embedding):
+                        raise ValueError()
+                except (TypeError, ValueError, OverflowError) as exc:
+                    raise TreeDBConfigError("normalized dense query must be finite") from exc
             if ef_search_value in (None, 0):
                 ef_search_value = index_info.vector_ef_search
             if type(ef_search_value) is not int or not 0 < ef_search_value < 1 << 63:
