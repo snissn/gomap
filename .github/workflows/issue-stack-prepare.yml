@@ -1,7 +1,7 @@
 name: "Issue draft stack: prepare verified tree"
 on:
   push:
-    branches: [codex/issue-4744-build-context]
+    branches: [codex/issue-4745-review-context]
     paths: [.github/workflows/issue-stack-prepare.yml, .github/issue-stack-prepare.json]
 permissions:
   contents: write
