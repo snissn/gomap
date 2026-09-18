@@ -246,25 +246,30 @@ func TestRouterRepresentationFrequencyDepthInteraction(t *testing.T) {
 	}
 }
 func BenchmarkVectorPartitionRouterRankingPolicyV1(b *testing.B) {
-	for _, width := range []int{16, 64, 256} {
-		b.Run(fmt.Sprintf("returned=%d", width), func(b *testing.B) {
-			meta := policyTestContext()
-			meta.RepresentativeCount = 4096
-			meta.DomainCount = 16
-			meta.CandidateBudget = width
-			meta.ReturnedWidth = width
-			input := make([]vectorPartitionPolicyCandidateV1, width)
-			for i := range input {
-				input[i] = vectorPartitionPolicyCandidateV1{i, uint32(i % 16), uint64(i), 1 - float64(i)/float64(width+1)}
+	for _, representatives := range []int{16, 256, 4096} {
+		for _, width := range []int{16, 64, 256} {
+			if width > representatives {
+				continue
 			}
-			b.ReportAllocs()
-			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
-				if _, err := reduceVectorPartitionRouterPoliciesV1(context.Background(), meta, input); err != nil {
-					b.Fatal(err)
+			b.Run(fmt.Sprintf("representatives=%d/returned=%d", representatives, width), func(b *testing.B) {
+				meta := policyTestContext()
+				meta.RepresentativeCount = representatives
+				meta.DomainCount = 16
+				meta.CandidateBudget = width
+				meta.ReturnedWidth = width
+				input := make([]vectorPartitionPolicyCandidateV1, width)
+				for i := range input {
+					input[i] = vectorPartitionPolicyCandidateV1{i, uint32(i % 16), uint64(i), 1 - float64(i)/float64(width+1)}
 				}
-			}
-		})
+				b.ReportAllocs()
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					if _, err := reduceVectorPartitionRouterPoliciesV1(context.Background(), meta, input); err != nil {
+						b.Fatal(err)
+					}
+				}
+			})
+		}
 	}
 }
 
