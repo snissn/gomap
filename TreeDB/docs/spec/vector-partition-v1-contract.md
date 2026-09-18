@@ -217,3 +217,42 @@ the public production generation-source-to-shard-to-coordinator path. They
 complement the exact-union, HNSW-route, lifecycle, source-identity,
 response-proof, and all-or-error executable tests in the M1 through M6
 packages; documentation is not a substitute for them.
+
+### Optional offline quality diagnostics
+
+The M8 benchmark's explicit `-m8-quality-diagnostics` selection is an offline,
+static-generation attribution contract, not a public serving policy. It MUST
+bind canonical query/truth, source/model and complete logical-domain to physical
+pack ownership. It MUST NOT count overlap twice, invent unsampled score traces,
+or interpret independent domain-cost and pack-cost optima as the same feasible
+route. Actual coordinator truth masks are attached from measured output and
+remain distinct from offline local-search masks.
+
+The existing canonical score/tie, exact-union, all-or-error, generation-pin and
+visibility contracts are unchanged. Historical receipts without the selection
+retain their previous method. A selected diagnostic's producer, command binding,
+work preflight and retained replay must agree on the new method and fields;
+missing or conflicting data reject rather than falling back to a partial pass.
+See `TreeDB/docs/performance/vector-partition-m8.md` for costs, commands and the
+representative-baseline boundary.
+
+Selected quality evidence on `candidate_coverage_shortfall` rows MUST also be
+recomputed from reopened static assets. Structural validation alone cannot bind
+query/truth/model digests, coverage costs or nearest-member routing. Only the
+unavailable local/coordinator observations are suppressed, using the same rule
+as the producer. Failed serving is not permission to trust self-reported static
+observations.
+
+Offline trace-ID preparation uses the context-aware ordinal-map copy while the
+prepared owner is pinned. It checks cancellation before allocation, during the
+copy, and before cache publication; cancellation returns no partial mapping and
+releases the operation's pin. This does not add trace preparation to serving.
+
+Offline qualification fixtures may specify `query_ordinal_offset` (default zero,
+omitted from legacy JSON). It selects only query generator ordinals, never corpus
+ordinals. The nonnegative half-open range end MUST fit in signed 64 bits before
+allocation; the legacy generator MUST reject nonzero offsets. Query bytes and
+canonical truth remain checksum-bound, so fresh ranges require fresh fixture and
+truth-cache identities. Relative query indices in reports and calibration splits
+remain unchanged. Existing retained descriptors MUST still match the complete
+fixture checksum; corpus equality alone does not authorize descriptor reuse.

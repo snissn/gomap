@@ -286,6 +286,9 @@ func m8ValidateQualificationCampaignWithVerifiersV1(root string, campaign m8Qual
 		seenVariants := make(map[string]bool, len(m8RequiredVariantIDsV1))
 		for i := range matrix.Variants {
 			report := &matrix.Variants[i]
+			if report.MeasurementTranscript.Bytes > m8QualificationTranscriptMaxBytesV1 {
+				return summary, fmt.Errorf("qualification child %s exceeds historical transcript byte cap", cleanPath)
+			}
 			if err := validateM8ProductionReportWithProfilesV1(*report, m8QualificationResourceCapsV1(), profileVerifier); err != nil {
 				return summary, fmt.Errorf("validate qualification child %s: %w", cleanPath, err)
 			}
@@ -655,18 +658,40 @@ func m8QualificationRetainedAttributionV1(root string, report m8ProductionReport
 	if approximateCandidates < 1 {
 		return errors.New("retained attribution has no router candidates")
 	}
+	if report.Config.QualityDiagnostics {
+		if err := harness.enableQualityV1(context.Background(), queries, truth, primaryHomes, finalMemberships, report.Config.QualityTraceQueries, m8CoverageLimitsV1{WorkUnits: maxBenchmarkWorkUnits, Bytes: maxFixtureBytes}); err != nil {
+			return err
+		}
+	}
 	exhaustive := make([][]m8CanonicalResultV1, len(queries))
 	for rowIndex, row := range report.Rows {
-		if row.Status != "pass" && row.Status != "fail" {
+		if err := m8QualityEvidenceSelectionV1(report.Config, row); err != nil {
+			return err
+		}
+		qualityShortfall := report.Config.QualityDiagnostics && row.Status == "candidate_coverage_shortfall"
+		if row.Status != "pass" && row.Status != "fail" && !qualityShortfall {
 			continue
 		}
-		membershipOracles, err := m8MembershipOracleRecallCacheV1(truth, primaryHomes, finalMemberships, assets.manifest, row.Probes)
+		membershipOracles, err := harness.membershipOraclesV1(truth, primaryHomes, finalMemberships, row.Probes)
 		if err != nil {
 			return err
 		}
 		cell, err := m8BuildAttributionV1(context.Background(), assets, primaryHomes, finalMemberships, queries, truth, membershipOracles, row.Probes, row.EfSearch, report.Config.TopK, approximateCandidates, exhaustive, harness)
 		if err != nil {
 			return err
+		}
+		if qualityShortfall {
+			// Failed serving does not make static source/model/coverage claims
+			// self-authenticating. Replay them, then apply exactly the producer's
+			// suppression of unavailable local/coordinator observations.
+			replayed := row
+			if err := m8AttachAttributionV1(&replayed, cell, make([][]m8CanonicalResultV1, len(queries))); err != nil {
+				return err
+			}
+			if !reflect.DeepEqual(replayed.Attribution, row.Attribution) {
+				return errors.New("retained shortfall attribution does not reproduce report")
+			}
+			continue
 		}
 		idParity, scoreParity := true, true
 		for query, local := range cell.Local {
@@ -684,6 +709,18 @@ func m8QualificationRetainedAttributionV1(root string, report m8ProductionReport
 			}
 		}
 		want := cell.Evidence
+		if want.Quality != nil {
+			measured := make([][]m8CanonicalResultV1, len(truth))
+			for q, ids := range transcript.Outcomes[rowIndex].TopKIDs {
+				for _, id := range ids {
+					measured[q] = append(measured[q], m8CanonicalResultV1{ID: id})
+				}
+			}
+			want.Quality, err = m8QualityAttachCoordinatorV1(want.Quality, truth, measured)
+			if err != nil {
+				return err
+			}
+		}
 		want.EndToEndRecallAtK = row.Attribution.EndToEndRecallAtK
 		want.CoordinatorMergeIDParity = idParity
 		want.CoordinatorMergeScoreParity = scoreParity
@@ -783,7 +820,7 @@ func m8QualificationCommandConfigV1(cfg config) m8ProductionConfigEvidenceV1 {
 		Probes: cfg.probes, Overlap: cfg.overlaps, TopK: cfg.topK, RecallTarget: cfg.recallTarget,
 		Concurrency: cfg.concurrency, Warmup: cfg.warmup, EffectiveWarmup: warmup,
 		EfSearch: cfg.efSearch, RouterCandidates: cfg.routerCandidates,
-		MaxExactTruthVisits: cfg.m8MaxExactTruthVisits, Seed: cfg.seed,
+		MaxExactTruthVisits: cfg.m8MaxExactTruthVisits, Seed: cfg.seed, QualityDiagnostics: cfg.m8QualityDiagnostics, QualityTraceQueries: cfg.m8QualityTraceQueries,
 	}
 }
 

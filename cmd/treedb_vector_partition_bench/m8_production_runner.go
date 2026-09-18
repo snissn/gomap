@@ -102,6 +102,8 @@ type m8ProductionReportV1 struct {
 }
 
 type m8ProductionConfigEvidenceV1 struct {
+	QualityDiagnostics  bool      `json:"quality_diagnostics,omitempty"`
+	QualityTraceQueries int       `json:"quality_trace_queries,omitempty"`
 	RaftGroups          int       `json:"raft_groups"`
 	RaftNodesPerGroup   int       `json:"raft_nodes_per_group"`
 	Partitions          int       `json:"partitions"`
@@ -158,8 +160,9 @@ type m8ProductionRowOutcomesV1 struct {
 // m8ProductionAttributionV1 keeps each lossy boundary visible. Recall is
 // always measured against the same canonical global FP32-score oracle.
 type m8ProductionAttributionV1 struct {
-	Contract             string  `json:"contract"`
-	GlobalExactRecallAtK float64 `json:"global_exact_recall_at_k"`
+	Quality              *m8QualityAttributionV1 `json:"quality_diagnostics,omitempty"`
+	Contract             string                  `json:"contract"`
+	GlobalExactRecallAtK float64                 `json:"global_exact_recall_at_k"`
 	// OracleStagesComplete distinguishes the V1 retained ladder from older
 	// report fixtures while keeping the report decoder backwards-readable.
 	OracleStagesComplete              bool    `json:"oracle_stages_complete"`
@@ -516,7 +519,7 @@ func runM8ProductionSingleVariantV1(cfg config, fixture fixtureManifest, vectors
 		ExecutionID: executionID, RouterRepresentatives: assets.status.Representatives,
 		Command: replayCommand, ExecutableSHA256: executableSHA256, BaseSHA: cfg.baseSHA, HeadSHA: cfg.headSHA, Dirty: m8GitDirtyInV1(cfg.sourceCheckout, cfg.out, cfg.profiles, cfg.m8MatrixOut, cfg.m8MatrixProfiles),
 		GoVersion: runtime.Version(), GOOS: runtime.GOOS, GOARCH: runtime.GOARCH, LogicalCPUs: runtime.NumCPU(), GOMAXPROCS: goMaxProcs, GoMemoryLimitBytes: goMemoryLimitBytes, Host: m8ProductionHostV1(cfg, assets.dir), Dataset: fixture, DatasetDirectory: datasetDirectory, TruthCacheDirectory: truthCacheDirectory, Variant: assets.descriptor,
-		Config:        m8ProductionConfigEvidenceV1{RaftGroups: cfg.raftGroups, RaftNodesPerGroup: cfg.raftNodes, Partitions: cfg.partitions, DomainCount: int(assets.manifest.DomainCount), PacksPerDomain: m8ManifestPacksPerDomainV1(assets.manifest), Probes: append([]int(nil), cfg.probes...), Overlap: append([]float64(nil), cfg.overlaps...), TopK: cfg.topK, RecallTarget: cfg.recallTarget, Concurrency: append([]int(nil), cfg.concurrency...), Warmup: cfg.warmup, EfSearch: append([]int(nil), cfg.efSearch...), RouterCandidates: cfg.routerCandidates, MaxExactTruthVisits: cfg.m8MaxExactTruthVisits, Seed: cfg.seed},
+		Config:        m8ProductionConfigEvidenceV1{RaftGroups: cfg.raftGroups, RaftNodesPerGroup: cfg.raftNodes, Partitions: cfg.partitions, DomainCount: int(assets.manifest.DomainCount), PacksPerDomain: m8ManifestPacksPerDomainV1(assets.manifest), Probes: append([]int(nil), cfg.probes...), Overlap: append([]float64(nil), cfg.overlaps...), TopK: cfg.topK, RecallTarget: cfg.recallTarget, Concurrency: append([]int(nil), cfg.concurrency...), Warmup: cfg.warmup, EfSearch: append([]int(nil), cfg.efSearch...), RouterCandidates: cfg.routerCandidates, MaxExactTruthVisits: cfg.m8MaxExactTruthVisits, Seed: cfg.seed, QualityDiagnostics: cfg.m8QualityDiagnostics, QualityTraceQueries: cfg.m8QualityTraceQueries},
 		BuildNanos:    buildNanos,
 		TruthCache:    truthCache,
 		Profiles:      m8ProductionProfileEvidenceV1{Directory: cfg.profiles, Status: "not_captured", Scope: "CPU, block, mutex, and trace cover measured query cells plus the endpoint-loss fault; heap is an end snapshot; allocs requires the captured baseline for differential analysis"},
@@ -634,10 +637,15 @@ func runM8ProductionSingleVariantV1(cfg config, fixture fixtureManifest, vectors
 		if approximateCandidates < 1 {
 			return errors.New("M8 attribution requires an approximate router candidate budget")
 		}
+		if cfg.m8QualityDiagnostics {
+			if err := attributionHarness.enableQualityV1(context.Background(), queries, truth, primaryHomes, finalMemberships, cfg.m8QualityTraceQueries, m8CoverageLimitsV1{WorkUnits: maxBenchmarkWorkUnits, Bytes: cfg.maxBytes}); err != nil {
+				return err
+			}
+		}
 		attribution := make(map[string]m8AttributionCellV1, len(cfg.probes)*len(cfg.efSearch))
 		exhaustive := make([][]m8CanonicalResultV1, len(queries))
 		for _, probes := range cfg.probes {
-			membershipOracles, oracleErr := m8MembershipOracleRecallCacheV1(truth, primaryHomes, finalMemberships, assets.manifest, probes)
+			membershipOracles, oracleErr := attributionHarness.membershipOraclesV1(truth, primaryHomes, finalMemberships, probes)
 			if oracleErr != nil {
 				return fmt.Errorf("build M8 membership oracles probes=%d: %w", probes, oracleErr)
 			}
@@ -794,6 +802,19 @@ func m8ProductionExecutionEvidenceDigestV1(executionID string, artifacts []m8Pro
 	return hex.EncodeToString(digest[:]), nil
 }
 
+// The planned 512-query x 15-cell D40 diagnostic shape serializes to about
+// 33 MiB of indented report JSON. Its compact rows are also copied into the
+// transcript. Keep both current diagnostic artifacts finite without changing
+// the historical qualification or default-off transcript limits.
+const m8DiagnosticRetainedMaxBytesV1 = 64 << 20
+
+func m8ProductionMeasurementTranscriptByteCapV1(report m8ProductionReportV1) int64 {
+	if report.Config.QualityDiagnostics {
+		return m8DiagnosticRetainedMaxBytesV1
+	}
+	return m8QualificationTranscriptMaxBytesV1
+}
+
 func m8WriteProductionMeasurementTranscriptV1(dir string, report m8ProductionReportV1, measuredCells []m8MeasuredCellV1) (m8ProductionMeasurementTranscriptEvidenceV1, error) {
 	if !validM8ProductionExecutionIDV1(report.ExecutionID) {
 		return m8ProductionMeasurementTranscriptEvidenceV1{}, errors.New("invalid M8 execution identity")
@@ -803,7 +824,8 @@ func m8WriteProductionMeasurementTranscriptV1(dir string, report m8ProductionRep
 		return m8ProductionMeasurementTranscriptEvidenceV1{}, err
 	}
 	maxBytes, err := m8ProductionMeasurementTranscriptMaxBytesV1(report)
-	if err != nil || maxBytes > m8QualificationTranscriptMaxBytesV1 {
+	byteCap := m8ProductionMeasurementTranscriptByteCapV1(report)
+	if err != nil || maxBytes > byteCap {
 		return m8ProductionMeasurementTranscriptEvidenceV1{}, errors.New("M8 measurement transcript outcomes exceed the retained byte cap")
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -822,7 +844,7 @@ func m8WriteProductionMeasurementTranscriptV1(dir string, report m8ProductionRep
 	if err != nil {
 		return m8ProductionMeasurementTranscriptEvidenceV1{}, err
 	}
-	if int64(len(raw)) > maxBytes || int64(len(raw)) > m8QualificationTranscriptMaxBytesV1 {
+	if int64(len(raw)) > maxBytes || int64(len(raw)) > byteCap {
 		_ = file.Close()
 		return m8ProductionMeasurementTranscriptEvidenceV1{}, errors.New("M8 measurement transcript exceeds retained byte cap")
 	}
@@ -850,7 +872,7 @@ func m8ReadProductionMeasurementTranscriptV1(report m8ProductionReportV1) (m8Pro
 	if err != nil || path != evidence.Path {
 		return m8ProductionMeasurementTranscriptV1{}, errors.New("M8 measurement transcript path is not canonical")
 	}
-	raw, err := readBoundedRegularFileV1(evidence.Path, m8QualificationTranscriptMaxBytesV1)
+	raw, err := readBoundedRegularFileV1(evidence.Path, min(m8ProductionMeasurementTranscriptByteCapV1(report), evidence.Bytes))
 	if err != nil || int64(len(raw)) != evidence.Bytes {
 		return m8ProductionMeasurementTranscriptV1{}, errors.New("read M8 measurement transcript")
 	}
@@ -966,13 +988,13 @@ func m8ProductionMeasurementTranscriptMaxBytesV1(report m8ProductionReportV1) (i
 			return 0, err
 		}
 	}
-	// ID quotes, comma/bracket punctuation, row keys, and the copied rows.
+	// ID quotes and comma/bracket punctuation.
 	resultBytes, err := memoryMul(resultCount, idBytes+3)
 	if err != nil {
 		return 0, err
 	}
 	// A uint64 JSON value is at most 20 digits plus a comma. The fixed
-	// overhead also covers the field names, brackets, and copied rows.
+	// overhead also covers field names, brackets, and ordinary copied rows.
 	durationBytes, err := memoryMul(durationCount, 21)
 	if err != nil {
 		return 0, err
@@ -988,7 +1010,20 @@ func m8ProductionMeasurementTranscriptMaxBytesV1(report m8ProductionReportV1) (i
 	if err != nil {
 		return 0, err
 	}
-	withResults, err := memoryAdd(64<<10, resultBytes)
+	overhead := int64(64 << 10)
+	if report.Config.QualityDiagnostics {
+		// Diagnostics retain per-query curves, routes and masks in Rows. Account
+		// for their exact immutable JSON copy, not the ordinary-row allowance.
+		rows, err := json.Marshal(report.Rows)
+		if err != nil {
+			return 0, err
+		}
+		overhead, err = memoryAdd(overhead, int64(len(rows)))
+		if err != nil {
+			return 0, err
+		}
+	}
+	withResults, err := memoryAdd(overhead, resultBytes)
 	if err != nil {
 		return 0, err
 	}
@@ -1127,7 +1162,7 @@ func m8ArtifactNameV1(cfg config, fixture fixtureManifest, manifest collections.
 		Fixture: fixture,
 		Config: func() m8ProductionConfigEvidenceV1 {
 			count, _ := m8WarmupCountAndConcurrencyV1(cfg)
-			return m8ProductionConfigEvidenceV1{RaftGroups: cfg.raftGroups, RaftNodesPerGroup: cfg.raftNodes, Partitions: cfg.partitions, DomainCount: int(manifest.DomainCount), PacksPerDomain: m8ManifestPacksPerDomainV1(manifest), Probes: cfg.probes, Overlap: cfg.overlaps, TopK: cfg.topK, RecallTarget: cfg.recallTarget, Concurrency: cfg.concurrency, Warmup: cfg.warmup, EffectiveWarmup: count, EfSearch: cfg.efSearch, RouterCandidates: cfg.routerCandidates, MaxExactTruthVisits: cfg.m8MaxExactTruthVisits, Seed: cfg.seed}
+			return m8ProductionConfigEvidenceV1{RaftGroups: cfg.raftGroups, RaftNodesPerGroup: cfg.raftNodes, Partitions: cfg.partitions, DomainCount: int(manifest.DomainCount), PacksPerDomain: m8ManifestPacksPerDomainV1(manifest), Probes: cfg.probes, Overlap: cfg.overlaps, TopK: cfg.topK, RecallTarget: cfg.recallTarget, Concurrency: cfg.concurrency, Warmup: cfg.warmup, EffectiveWarmup: count, EfSearch: cfg.efSearch, RouterCandidates: cfg.routerCandidates, MaxExactTruthVisits: cfg.m8MaxExactTruthVisits, Seed: cfg.seed, QualityDiagnostics: cfg.m8QualityDiagnostics, QualityTraceQueries: cfg.m8QualityTraceQueries}
 		}(),
 		Assets: m8ArtifactAssetIdentityV1{
 			IntegrityDigest:  manifest.IntegrityDigest,
@@ -2168,6 +2203,7 @@ func m8CanonicalRecallV1(want, got []m8CanonicalResultV1) float64 {
 }
 
 type m8AttributionHarnessV1 struct {
+	quality   *m8QualityCacheV1
 	assets    *m8ProductionMultiGroupAssetsV1
 	searchers []*collections.VectorPartitionLocalSearcherV1
 }
@@ -2210,6 +2246,7 @@ func (h *m8AttributionHarnessV1) Close() error {
 			h.searchers[i] = nil
 		}
 	}
+	h.quality = nil
 	return err
 }
 
@@ -2277,6 +2314,13 @@ func (h *m8AttributionHarnessV1) search(ctx context.Context, query []float32, pa
 }
 
 func (h *m8AttributionHarnessV1) searchWithMetrics(ctx context.Context, query []float32, partitions []uint32, topK, efSearch int, exact bool) ([]m8CanonicalResultV1, collections.VectorPartitionSearchMetricsV1, error) {
+	return h.searchWithMetricsAndBestsV1(ctx, query, partitions, topK, efSearch, exact, nil)
+}
+
+func (h *m8AttributionHarnessV1) searchWithMetricsAndBestsV1(ctx context.Context, query []float32, partitions []uint32, topK, efSearch int, exact bool, bests []m8ExactPackBestV1) ([]m8CanonicalResultV1, collections.VectorPartitionSearchMetricsV1, error) {
+	if bests != nil && (!exact || len(bests) != len(h.searchers)) {
+		return nil, collections.VectorPartitionSearchMetricsV1{}, errors.New("invalid exact pack-best destination")
+	}
 	merged := make([]m8CanonicalResultV1, 0, len(partitions)*topK)
 	var metrics collections.VectorPartitionSearchMetricsV1
 	for _, partition := range partitions {
@@ -2294,6 +2338,9 @@ func (h *m8AttributionHarnessV1) searchWithMetrics(ctx context.Context, query []
 		}
 		if err != nil {
 			return nil, metrics, fmt.Errorf("M8 attribution partition %d: %w", partition, err)
+		}
+		if bests != nil && len(results) > 0 {
+			bests[partition] = m8ExactPackBestV1{Present: true, ID: results[0].ID, Score: results[0].Score}
 		}
 		if !exact {
 			metrics.Candidates += partitionMetrics.Candidates
@@ -2336,8 +2383,9 @@ type m8AttributionCellV1 struct {
 	Evidence m8ProductionAttributionV1
 	// Local is the approximate route's local-HNSW result, matching the measured
 	// coordinator request. Exact-local recall remains separately in Evidence.
-	Local       [][]m8CanonicalResultV1
-	RoutingHits []uint16
+	Local        [][]m8CanonicalResultV1
+	RoutingHits  []uint16
+	qualityTruth [][]m8CanonicalResultV1 // immutable borrowed truth for measured-mask attachment
 }
 
 type m8MembershipOracleRecallV1 struct {
@@ -2716,6 +2764,10 @@ func m8BuildAttributionV1(ctx context.Context, assets *m8ProductionMultiGroupAss
 		ApproximateRouterCandidateBudget:           approximateCandidates,
 		ApproximateRouterPartitionCoverageComplete: true,
 	}, Local: make([][]m8CanonicalResultV1, len(queries))}
+	cell.Evidence.Quality = harness.qualityEvidenceV1()
+	if cell.Evidence.Quality != nil {
+		cell.qualityTruth = truth
+	}
 	allPartitions := make([]uint32, len(harness.searchers))
 	for i := range allPartitions {
 		allPartitions[i] = uint32(i)
@@ -2744,6 +2796,19 @@ func m8BuildAttributionV1(ctx context.Context, assets *m8ProductionMultiGroupAss
 			return cell, err
 		}
 		query := m8Query32V1(query64)
+		if harness.quality != nil {
+			q := &harness.quality.queries[i]
+			if q.querySHA256 != m8QualityQueryDigestV1(query) || q.truthSHA256 != m8QualityTruthDigestV1(truth[i]) {
+				return cell, errors.New("quality cache query/truth mismatch")
+			}
+			if len(q.noCoarsening) == 0 {
+				var err error
+				exhaustive[i], err = harness.exactQualityUnionV1(ctx, i, query, truth[i], topK)
+				if err != nil {
+					return cell, err
+				}
+			}
+		}
 		primaryOracle += membershipOracles[i].primary
 		finalOracle += membershipOracles[i].final
 		if exhaustive[i] == nil {
@@ -2808,9 +2873,14 @@ func m8BuildAttributionV1(ctx context.Context, assets *m8ProductionMultiGroupAss
 		cell.Evidence.LocalHNSWSearchesByQuery = append(cell.Evidence.LocalHNSWSearchesByQuery, uint32(len(exactPartitions)))
 		cell.Evidence.LocalHNSWCandidates += exactLocalMetrics.Candidates
 		cell.Evidence.LocalHNSWEdges += exactLocalMetrics.Edges
+		var observedQuality *m8ObservedTruthMasksV1
 		if cell.Evidence.ApproximateRouterPartitionCoverageComplete {
 			var approximateLocalMetrics collections.VectorPartitionSearchMetricsV1
-			cell.Local[i], approximateLocalMetrics, err = harness.searchWithMetrics(ctx, query, approximatePartitions[i], topK, efSearch, false)
+			if harness.quality != nil && i < harness.quality.traceQueries {
+				cell.Local[i], approximateLocalMetrics, observedQuality, err = harness.searchQualityObservedV1(ctx, query, approximatePartitions[i], truth[i], topK, efSearch)
+			} else {
+				cell.Local[i], approximateLocalMetrics, err = harness.searchWithMetrics(ctx, query, approximatePartitions[i], topK, efSearch, false)
+			}
 			if err != nil {
 				return cell, err
 			}
@@ -2818,6 +2888,13 @@ func m8BuildAttributionV1(ctx context.Context, assets *m8ProductionMultiGroupAss
 			cell.Evidence.ApproximateLocalHNSWSearchesByQuery = append(cell.Evidence.ApproximateLocalHNSWSearchesByQuery, uint32(len(approximatePartitions[i])))
 			cell.Evidence.ApproximateLocalHNSWCandidates += approximateLocalMetrics.Candidates
 			cell.Evidence.ApproximateLocalHNSWEdges += approximateLocalMetrics.Edges
+		}
+		if harness.quality != nil {
+			q, qualityErr := harness.qualityQueryV1(i, probes, truth[i], exactPartitions, approximatePartitions[i], cell.Local[i], observedQuality, cell.Evidence.ApproximateRouterPartitionCoverageComplete)
+			if qualityErr != nil {
+				return cell, qualityErr
+			}
+			cell.Evidence.Quality.Queries[i] = q
 		}
 		exactRecall += m8CanonicalRecallV1(truth[i], exactResults)
 		approximateRecall += m8CanonicalRecallV1(truth[i], approximateResults)
@@ -3359,6 +3436,15 @@ func m8AttachAttributionV1(row *m8ProductionRowV1, attribution m8AttributionCell
 	}
 	row.Attribution = attribution.Evidence
 	if row.Status == "candidate_coverage_shortfall" {
+		if row.Attribution.Quality != nil {
+			q := *row.Attribution.Quality
+			q.Queries = slices.Clone(q.Queries)
+			for i := range q.Queries {
+				q.Queries[i].Actual = nil
+				q.Queries[i].CoordinatorReturned = nil
+			}
+			row.Attribution.Quality = &q
+		}
 		row.Attribution.ApproximateRouterPartitionCoverageComplete = false
 		row.Attribution.ApproximateRepresentativeRecallAtK = 0
 		row.Attribution.ApproximateLocalHNSWRecallAtK = 0
@@ -3384,6 +3470,13 @@ func m8AttachAttributionV1(row *m8ProductionRowV1, attribution m8AttributionCell
 		row.Attribution.ResidualLossOwners = m8AttributionLossOwnersV1(row.Attribution)
 		row.Attribution.StageOwners = m8AttributionStageOwnersV1(row.Attribution)
 		return nil
+	}
+	if row.Attribution.Quality != nil {
+		quality, err := m8QualityAttachCoordinatorV1(row.Attribution.Quality, attribution.qualityTruth, coordinatorResults)
+		if err != nil {
+			return err
+		}
+		row.Attribution.Quality = quality
 	}
 	for i := range coordinatorResults {
 		idParity, scoreParity := m8CanonicalParityV1(attribution.Local[i], coordinatorResults[i])
@@ -4560,6 +4653,9 @@ func validateM8ProductionMeasurementCellsV1(cfg m8ProductionConfigEvidenceV1, ro
 		}
 	}
 	for _, row := range rows {
+		if err := m8QualityEvidenceSelectionV1(cfg, row); err != nil {
+			return err
+		}
 		key := m8ProductionMeasurementCellKeyV1{math.Float64bits(row.Overlap), row.Probes, row.EfSearch, row.Concurrency}
 		if _, ok := configured[key]; !ok {
 			return errors.New("M8 row uses an unconfigured measurement cell")

@@ -1513,7 +1513,20 @@ type VectorPartitionSearchPageTokenV1 struct {
 
 // PackDocumentIDsForOfflineTraceV1 exposes the prepared ordinal-to-ID mapping
 // only for offline attribution joins. It is not used by serving traversal.
+
 func (s *VectorPartitionLocalSearcherV1) PackDocumentIDsForOfflineTraceV1() ([]string, error) {
+	return s.PackDocumentIDsForOfflineTraceWithContextV1(context.Background())
+}
+
+// PackDocumentIDsForOfflineTraceWithContextV1 copies the immutable ordinal map
+// while retaining the prepared owner. Cancellation returns no partial snapshot.
+func (s *VectorPartitionLocalSearcherV1) PackDocumentIDsForOfflineTraceWithContextV1(ctx context.Context) ([]string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if s == nil {
 		return nil, ErrVectorPartitionSearchUnavailable
 	}
@@ -1527,13 +1540,24 @@ func (s *VectorPartitionLocalSearcherV1) PackDocumentIDsForOfflineTraceV1() ([]s
 	if pack == nil || pack.validateLive() != nil {
 		return nil, ErrVectorPartitionSearchUnavailable
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	out := make([]string, pack.Header.Rows)
 	for ordinal := range out {
+		if ordinal&255 == 0 {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+		}
 		start, end := pack.DocumentIDOffsets[ordinal], pack.DocumentIDOffsets[ordinal+1]
 		if end < start || end > uint64(len(pack.DocumentIDBytes)) {
 			return nil, ErrVectorPartitionSearchUnavailable
 		}
 		out[ordinal] = string(pack.DocumentIDBytes[start:end])
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	return out, nil
 }

@@ -492,3 +492,163 @@ gates into passes. The measured follow-up owner is to avoid full manifest
 decode/validation/digest reconstruction per shard request while preserving
 generation and integrity guarantees. Overlap materialization and stable-hash
 attribution remain separately deferred.
+
+## Opt-in graph-quality attribution (#4744)
+
+`-m8-quality-diagnostics` extends the existing `production_multi_group` M8
+producer and retained replay for top-k values from 1 through 10. It changes no
+serving router, graph construction, public query option, or default. Omission
+retains the historical subset-enumeration method and omits the new JSON fields;
+old receipts are not silently reinterpreted as new observations.
+
+The new `quality_diagnostics` object contains, for every query:
+
+- Minimum cost for **at least h** exact truth hits, independently for logical
+  domains and physical packs. The mask dynamic program has at most 1024 states,
+  runs once per query and cost interpretation, and is reused across probe/EF
+  cells. All packs bound to a selected domain contribute to its physical cost.
+- A no-coarsening domain order derived from each pack's best eligible **actual
+  member**, retained during the existing exhaustive pack pass. This is not an
+  order reconstructed from just global top-k truth or nearest centroids.
+- Exact and approximate representative routes, their truth masks, physical
+  costs, and signed gains/losses. Alternative routes need not form nested sets.
+- Available and returned truth masks for the static local search; optional
+  independently observed scored/per-pack-retained masks; and a separate mask
+  attached from the **measured coordinator output**. A mask is not inferred from
+  an aggregate recall value. Local attribution is not concurrent-live evidence.
+
+`-m8-quality-trace-queries N` samples the first N queries (0..8) through the
+existing prepared-pack attribution path, outside serving timers. Zero leaves
+scored/retained masks absent, not zero. An actual pack's edge/row structure must
+pass a conservative event/memory bound before detailed traces or owned ID maps
+are allocated. Unavailable or oversized tracing rejects the selected diagnostic;
+it never silently removes queries from the sample. Trace storage and cached ID
+strings are released with the attribution harness. No per-request tracing or
+second canonical vector corpus is introduced into ordinary serving.
+
+The work planner charges both dynamic programs, mask preparation, curve
+extraction, per-cell retained routes, exact bests, and optional trace/ID storage.
+It removes the binomial restriction **only for the explicitly selected method**.
+The strict retained consumer binds the flags, query/truth digests, generation,
+model, masks and physical costs, then reproduces them from the pinned assets.
+Unknown modes, incomplete pack ownership, malformed costs, contradictory masks,
+missing selected evidence and source/query changes fail closed.
+
+### Cost interpretation
+
+Independent domain and pack optima are not a joint feasibility certificate. For
+truth masks `[1023,31,992]` with pack costs `[8,1,1]`, one domain can cover ten
+hits and two packs can independently cover ten hits, but at most **one domain
+and two packs simultaneously** permits only five. The private, bounded joint
+oracle is tested against exhaustive subsets; this first producer reports the
+independent curves and actual route costs, not a joint-cap serving claim.
+
+### Commands and evidence boundary
+
+A bounded correctness/development run using the existing checked-in generator:
+
+```sh
+GOWORK=off go build -o /tmp/treedb_vector_partition_bench ./cmd/treedb_vector_partition_bench
+/tmp/treedb_vector_partition_bench \
+  -dataset testdata/vector_partition_10k -out /tmp/m8-quality-4744 \
+  -mode production_multi_group -partitions 4 -raft-groups 2 \
+  -overlap 0 -probes 1,2,4 -top-k 10 -ef-search 32 -concurrency 1 \
+  -router-candidates 64 -m8-quality-diagnostics
+```
+
+This is a development command, not a representative acceptance or a multi-host
+Raft benchmark. Retained qualification must use the existing clean-source,
+executable, descriptor, truth-cache and command provenance requirements. Trace
+sampling may need a smaller number of cells to fit the conservative work cap;
+reduce the declared diagnostic matrix before execution, not the retained query
+population after seeing failures.
+
+Before any treatment or final scaling result, #4744 still requires a recorded
+current-host baseline and frozen calibration/evaluation identities, 100K/250K
+95%-recall operating region, physical-cost constraints, uncertainty policy and
+numeric improvement/guardrail decision. Merging instrumentation or passing the
+96-row integration test does not complete that empirical gate or release Raft.
+The [#4744 baseline preregistration](../spec/artifacts/vector-partition-4744-baseline-plan.md)
+is **PLANNED / NO MEASUREMENT**. Its source packet may land before collection;
+the baseline gate remains owned by open #4744 until the retained evidence is
+accepted, and #4745 remains blocked on that acceptance.
+
+To recover fresh query identities without changing a qualification corpus,
+keep its generator, seed, vector count and dimensions fixed and use the existing
+fixture command's optional `-query-ordinal-offset`:
+
+```sh
+/tmp/treedb_vector_partition_bench generate-fixture \
+  -out /tmp/m8-fresh-query-fixture -generator treedb_vector_partition_embedding_mixture_v1 \
+  -vectors 16 -queries 4 -dimensions 8 -seed 4016 \
+  -query-ordinal-offset 1000
+```
+
+This tiny example is a correctness check, not the frozen baseline population.
+Use the actual generator identity from the retained manifest (the CLI rejects
+unknown identities). The qualification query range is half-open
+`[query_ordinal_offset, query_ordinal_offset + queries)`; corpus ordinals remain
+unchanged. Freeze disjoint calibration/evaluation ranges before observing their
+outcomes. The default zero is omitted from JSON and preserves existing fixture
+bytes, checksums and truth-cache identities. The legacy generator rejects a
+nonzero offset. Negative or overflowing ranges reject before fixture allocation.
+Fresh query bytes produce a new checksum and truth-cache identity: regenerate
+canonical truth, and do not reuse a descriptor bound to the old fixture checksum.
+This does not change the historical `validate-qualification` campaign or relax
+its retained descriptor/truth checks.
+
+For a current-contract retained child report, `replay-m8-report` reuses the
+existing production validators without the historical campaign's fixture
+whitelist. It accepts only the existing M8 report schema, not a new campaign
+format. All artifacts must be under a canonical retained root, with the clean
+source checkout at `ROOT/source`. The retained benchmark must have matching clean
+embedded VCS metadata. The existing command verifier requires child `-out` and
+`-m8-matrix-out` to equal the report directory, plus matching
+`-m8-existing-db`, `-profiles`, `-m8-matrix-profiles`, source and explicit caps.
+Captured production profiles are required; replay keeps the existing 4 GiB RSS,
+2 GiB asset and fixture-specific exact-truth caps.
+Current replay reports and explicitly selected diagnostic transcripts have a
+64 MiB retained-file cap; ordinary transcripts and historical qualification
+retain their 2 MiB transcript, 16 MiB matrix and 1 MiB index caps.
+
+```sh
+/tmp/treedb_vector_partition_bench replay-m8-report \
+  -root "$RETAINED_ROOT" -report "$RETAINED_REPORT" \
+  -report-sha256 "$REPORT_SHA256" -fixture-sha256 "$FIXTURE_SHA256" \
+  -command-sha256 "$COMMAND_SHA256" -executable-sha256 "$EXECUTABLE_SHA256" \
+  -variant-descriptor-sha256 "$VARIANT_DESCRIPTOR_SHA256" \
+  -truth-artifact-sha256 "$TRUTH_ARTIFACT_SHA256" \
+  -truth-content-sha256 "$TRUTH_CONTENT_SHA256"
+```
+
+Fixture and argv pins are SHA256 of Go `json.Marshal(fixtureManifest)` and
+`json.Marshal(report.Command)` respectively (no newline), frozen independently
+before measurement. Pin the generated fixture and canonical truth identities
+before observing benchmark outcomes; freeze receipt/file hashes at publication.
+Do not derive all seven trusted pins from the report being checked. In
+particular, a truth-cache checksum alone does not freeze the query offset.
+The variant pin hashes `m3VariantDescriptorJSONV1` bytes (indented JSON plus
+newline), freezing the complete descriptor including router model/configuration,
+not only its M2 `ArtifactSHA256`. The actual descriptor and source are
+independently reopened and compared with the pinned report.
+
+Success prints `REPLAY_ACCEPTED_NOT_QUALIFICATION`: measured failures remain
+failures. This validates retained child evidence, not baseline acceptance,
+cross-variant overlap-storage conclusions, repeat/noise policy, held-out quality
+or historical campaign qualification. A successful bounded rehearsal is not the
+100K/250K empirical packet.
+
+Focused verification:
+
+```sh
+GOWORK=off go test ./cmd/treedb_vector_partition_bench -run '^TestM8(Quality|Coverage|NoCoarsening|ObservedTruth)' -count=1
+GOWORK=off go test ./cmd/treedb_vector_partition_bench -run '^Test(GenerateFixture|FixtureQueryOrdinalOffset|LocalHNSWAttributionCalibration)' -count=1
+GOWORK=off go test ./cmd/treedb_vector_partition_bench -run '^TestReplayM8Report|^TestM8QualityRetainedShortfall' -count=1
+GOWORK=off go test -race ./cmd/treedb_vector_partition_bench -run '^TestM8(Quality|Coverage|NoCoarsening|ObservedTruth)' -count=1
+GOWORK=off go test ./cmd/treedb_vector_partition_bench -run '^$' -bench '^BenchmarkM8CoverageCost' -benchmem -count=5
+```
+
+The coverage benchmark measures oracle CPU/allocation cost, **not ANN QPS**.
+All proposed performance comparisons retain identical datasets, score contracts,
+timer boundaries and populations. Query time is never derived from inverse
+concurrent throughput or combined write/search cycles.

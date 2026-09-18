@@ -2201,3 +2201,45 @@ The accepted 1M-vector row is an all-partition correctness row using an
 in-process M5-contract simulation and synthetic read proof. It is not network,
 production Raft, or M8 evidence. See
 `TreeDB/docs/performance/vector-partition-m6.md`.
+
+## M8 opt-in graph-quality attribution (#4744)
+
+`cmd/treedb_vector_partition_bench/m8_coverage_cost_test.go` checks the top-10
+mask DP against exhaustive subsets, additive physical costs, simultaneous-budget
+counterexamples, checked bounds, cancellation and owned scratch/results.
+`m8_no_coarsening_test.go` checks all-pack nearest-member reduction, eligibility
+empties, ties, duplicate route rejection and nested actual truth masks.
+
+`m8_quality_integration_test.go` exercises real persisted local packs and fresh
+prepared owners, exact canonical-union parity, DP/legacy-oracle parity across
+probe counts, trace/ordinary result-and-work parity, replay identity, physical
+pack expansion, CLI/child propagation, selected/missing/forged evidence, and
+work/memory rejection. These tests preserve the existing public serving policy;
+they are not a 100K/250K scaling result, fresh holdout, or Raft qualification.
+
+`m8_quality_replay_review_test.go` verifies that schema-valid forged static
+quality evidence in failed-coverage rows is rejected after independent asset
+reopen, and that canceled trace preparation does not publish a cache.
+`TreeDB/collections/vector_partition_trace_ids_test.go` covers cancellation
+before and during the offline ID copy, reader-pin release, retry, and ownership
+of returned IDs after close. The shared `BenchmarkM8RouterOrdinaryPathV1` measures
+unchanged router-only work as the stacked policy diagnostic's control; it is not
+full partition-search or service QPS.
+
+`cmd/treedb_vector_partition_bench/fixture_query_offset_test.go` verifies CLI and
+manifest query-range admission, zero-offset manifest bytes/checksum/cache
+compatibility, unchanged corpus generation, fresh query ordinals and identities,
+and negative/overflow/legacy rejection. The calibration builder test also checks
+offset-aware selected queries and retained-source truth parity, with invalid
+ranges rejected before corpus allocation. These are provenance/correctness
+checks, not an observed fresh-holdout or baseline performance result.
+
+`m8_report_replay_test.go` checks required independent pins before I/O, frozen
+fixture/query-offset and argv identities before expensive work, dirty or mixed
+source/executable/variant rejection, canonical root containment, escaping
+symlinks, report digest and bounded/trailing-JSON rejection. The command reuses
+the real production profile, command/executable, truth-anchor, transcript,
+resource and retained-asset/attribution verifiers; these boundary tests do not
+substitute for a complete successful replay of real retained artifacts. Its
+`REPLAY_ACCEPTED_NOT_QUALIFICATION` result does not assert a campaign or baseline
+acceptance and does not modify historical `validate-qualification`.
