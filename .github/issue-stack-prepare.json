@@ -1,31 +1,17 @@
 {
   "base": "cc1551de10098417f11ceb49ff30c90e936e1299",
   "baseTree": "727b0246d9138e72e7c67f45cfd1e0b5924e7473",
-  "expectedTree": "f0fbdcacacbece339926def413abdb3866211d80",
-  "patchSHA256": "3dd57183bac50dd13122871dd497a61dbc648ea0b1e346102e2067b746b463c9",
-  "chunks": [
-    "31165a9406dc3f12ee57e4fbebba2b9856984d14",
-    "91c794a7af655fa8ce2091cc04faeb8e15e44ebe",
-    "7049fb9246f89abd23dce6c8ffbcc8ec487ee449",
-    "361f823815d880dd143d7bb9bd836aff532eb792",
-    "d2e16dacdeda06e19a203bee35f146d8aa54492f"
-  ],
+  "expectedTree": "59e4bb5c925a3384ddaede33b97046cbf5f16175",
+  "patchSHA256": "b70d9ad96c46acf9940ba6d360d429ee899944c9079298fb9ca1b5d5daa75a66",
+  "chunks": ["a480fb45c0b5d066b9daf660e96747ce7a921bbe"],
   "allowedPaths": [
-    "TreeDB/collections/vector_partition_router_policy_diagnostic.go",
-    "TreeDB/collections/vector_partition_router_policy_diagnostic_test.go",
-    "TreeDB/collections/vector_partition_router_policy_reduce.go",
-    "TreeDB/collections/vector_partition_router_policy_reduce_test.go",
-    "TreeDB/collections/vector_partition_router_v1.go",
-    "TreeDB/docs/performance/vector-partition-m8.md",
+    "TreeDB/collections/vector_partition_searcher_v1.go",
+    "TreeDB/collections/vector_partition_trace_ids_test.go",
     "TreeDB/docs/spec/vector-partition-v1-contract.md",
     "TreeDB/docs/spec/verification.md",
-    "cmd/treedb_vector_partition_bench/m8_production_assets.go",
-    "cmd/treedb_vector_partition_bench/m8_production_runner.go",
     "cmd/treedb_vector_partition_bench/m8_qualification_campaign.go",
-    "cmd/treedb_vector_partition_bench/m8_router_ordinary_bench_test.go",
-    "cmd/treedb_vector_partition_bench/m8_router_policy_bench_test.go",
-    "cmd/treedb_vector_partition_bench/m8_router_policy_experiment.go",
-    "cmd/treedb_vector_partition_bench/m8_router_policy_experiment_test.go",
-    "cmd/treedb_vector_partition_bench/main.go"
+    "cmd/treedb_vector_partition_bench/m8_quality_attribution.go",
+    "cmd/treedb_vector_partition_bench/m8_quality_replay_review_test.go",
+    "cmd/treedb_vector_partition_bench/m8_router_ordinary_bench_test.go"
   ]
 }
