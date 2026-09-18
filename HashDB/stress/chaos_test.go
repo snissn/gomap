@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -153,6 +154,25 @@ func pickFreeTCPAddr(t *testing.T) string {
 	return addr
 }
 
+// lockedBuffer serializes exec's stdout/stderr copy goroutines so the
+// bind-failure path can snapshot the captured output without racing them.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) snapshot() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
 // startServer returns the command and a channel that carries its Wait result.
 // Receive from the channel instead of calling cmd.Wait() — exec.Cmd.Wait must
 // not be invoked from multiple goroutines.
@@ -160,9 +180,9 @@ func startServer(t *testing.T, bin string, dbDir, addr string) (*exec.Cmd, <-cha
 	t.Helper()
 	cmd := exec.Command(bin, "hashdb", dbDir, addr)
 
-	var output bytes.Buffer
-	cmd.Stdout = io.MultiWriter(os.Stdout, &output)
-	cmd.Stderr = io.MultiWriter(os.Stderr, &output)
+	output := &lockedBuffer{}
+	cmd.Stdout = io.MultiWriter(os.Stdout, output)
+	cmd.Stderr = io.MultiWriter(os.Stderr, output)
 	cmd.Env = append(os.Environ(),
 		"HASHDB_SHARDS="+strconv.Itoa(serverShards),
 		"GOMAP_SHARDS="+strconv.Itoa(serverShards),
@@ -182,7 +202,7 @@ func startServer(t *testing.T, bin string, dbDir, addr string) (*exec.Cmd, <-cha
 	for time.Now().Before(deadline) {
 		select {
 		case err := <-exited:
-			t.Fatalf("Server exited before binding %s: %v\n%s", addr, err, output.String())
+			t.Fatalf("Server exited before binding %s: %v\n%s", addr, err, output.snapshot())
 		default:
 		}
 		conn, err := net.Dial("tcp", addr)
