@@ -8,50 +8,28 @@ permissions:
 jobs:
   context:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: 6d96a7905b818b722827f3cf5cbf4d7c24c77df2
+          ref: cc1551de10098417f11ceb49ff30c90e936e1299
           persist-credentials: false
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-          cache: true
-      - name: Export public source and reproducible offline inputs
+      - name: Export exact existing draft source for continuation
         shell: bash
-        env:
-          GOWORK: 'off'
         run: |
           set -euo pipefail
-          out="${RUNNER_TEMP}/issue-4744-context"
-          mkdir -p "$out/source" "$out/toolchain" "$out/vendor"
-          test "$(git rev-parse HEAD)" = 6d96a7905b818b722827f3cf5cbf4d7c24c77df2
-          git archive --format=tar HEAD | gzip -1 > "$out/source/source.tar.gz"
-          git rev-parse HEAD > "$out/source/BASE_COMMIT"
-          git ls-tree -r HEAD > "$out/source/SOURCE_TREE.txt"
-          go version | tee "$out/toolchain/GO_VERSION"
-          go mod vendor
-          tar -czf "$out/vendor/vendor.tar.gz" vendor
-          tar -C "$(go env GOROOT)" -czf "$out/toolchain/go.tar.gz" .
-          (cd "$out/source" && sha256sum source.tar.gz > SHA256SUMS)
-          (cd "$out/vendor" && sha256sum vendor.tar.gz > SHA256SUMS)
-          (cd "$out/toolchain" && sha256sum go.tar.gz > SHA256SUMS)
+          test "$(git rev-parse HEAD)" = cc1551de10098417f11ceb49ff30c90e936e1299
+          test "$(git rev-parse HEAD^{tree})" = 727b0246d9138e72e7c67f45cfd1e0b5924e7473
+          out="${RUNNER_TEMP}/issue-4755-source"
+          mkdir -p "$out"
+          git archive --format=tar HEAD | gzip -1 > "$out/source.tar.gz"
+          git rev-parse HEAD > "$out/BASE_COMMIT"
+          git ls-tree -r HEAD > "$out/SOURCE_TREE.txt"
+          git cat-file commit HEAD > "$out/COMMIT_OBJECT"
+          (cd "$out" && sha256sum source.tar.gz SOURCE_TREE.txt COMMIT_OBJECT > SHA256SUMS)
       - uses: actions/upload-artifact@v4
         with:
-          name: issue-4744-source
-          path: ${{ runner.temp }}/issue-4744-context/source
-          retention-days: 1
-          compression-level: 0
-      - uses: actions/upload-artifact@v4
-        with:
-          name: issue-4744-vendor
-          path: ${{ runner.temp }}/issue-4744-context/vendor
-          retention-days: 1
-          compression-level: 0
-      - uses: actions/upload-artifact@v4
-        with:
-          name: issue-4744-toolchain
-          path: ${{ runner.temp }}/issue-4744-context/toolchain
-          retention-days: 1
+          name: issue-4755-source
+          path: ${{ runner.temp }}/issue-4755-source
+          retention-days: 3
           compression-level: 0
