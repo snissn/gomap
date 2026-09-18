@@ -1,0 +1,74 @@
+name: "Router draft stack: prepare verified tree"
+on:
+  push:
+    branches: [codex/issue-4748-4749-build-context]
+    paths: [.github/issue-router-stack-prepare.json]
+permissions:
+  contents: write
+jobs:
+  prepare-tree:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: control
+          persist-credentials: false
+      - name: Validate bounded pinned plan
+        id: plan
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const p = JSON.parse(fs.readFileSync('control/.github/issue-router-stack-prepare.json', 'utf8'));
+            if (context.repo.owner !== 'snissn' || context.repo.repo !== 'gomap') throw Error('wrong repository');
+            for (const k of ['base','baseTree','expectedTree']) if (!/^[0-9a-f]{40}$/.test(p[k])) throw Error(k);
+            if (!/^[0-9a-f]{64}$/.test(p.patchSHA256) || !Array.isArray(p.chunks) || p.chunks.length < 1 || p.chunks.length > 32 || p.chunks.some(s => !/^[0-9a-f]{40}$/.test(s))) throw Error('invalid patch identity');
+            if (!Array.isArray(p.allowedPaths) || p.allowedPaths.length < 1 || p.allowedPaths.length > 32 || new Set(p.allowedPaths).size !== p.allowedPaths.length) throw Error('invalid paths');
+            for (const s of p.allowedPaths) if (!/^(cmd\/treedb_vector_partition_bench\/|TreeDB\/collections\/|TreeDB\/internal\/vectorpartition\/|TreeDB\/vectorpartition\/|TreeDB\/docs\/)/.test(s) || s.includes('..') || !/^[A-Za-z0-9_./-]+$/.test(s)) throw Error('unsafe path');
+            core.setOutput('base', p.base);
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.plan.outputs.base }}
+          path: product
+          persist-credentials: false
+      - name: Prepare verified objects without moving product refs
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs'), path = require('path'), crypto = require('crypto'), zlib = require('zlib'), cp = require('child_process');
+            const p = JSON.parse(fs.readFileSync('control/.github/issue-router-stack-prepare.json','utf8'));
+            const repo = context.repo, cwd = path.resolve('product');
+            const git = (...args) => cp.execFileSync('git',args,{cwd,encoding:'utf8',maxBuffer:8*1024*1024}).trim();
+            if(git('rev-parse','HEAD')!==p.base || git('rev-parse','HEAD^{tree}')!==p.baseTree) throw Error('base drift');
+            const chunks=[];
+            for(const sha of p.chunks){
+              const {data}=await github.rest.git.getBlob({...repo,file_sha:sha});
+              if(data.encoding!=='base64'||data.size>65536) throw Error('invalid chunk');
+              const b=Buffer.from(data.content.replace(/\s/g,''),'base64');
+              if(crypto.createHash('sha1').update(Buffer.concat([Buffer.from(`blob ${b.length}\0`),b])).digest('hex')!==sha) throw Error('chunk mismatch');
+              chunks.push(b);
+            }
+            const patch=zlib.brotliDecompressSync(Buffer.concat(chunks),{maxOutputLength:1024*1024});
+            if(crypto.createHash('sha256').update(patch).digest('hex')!==p.patchSHA256) throw Error('patch mismatch');
+            const patchPath=path.join(process.env.RUNNER_TEMP,'router-stack.patch');fs.writeFileSync(patchPath,patch);
+            git('apply','--check','--index',patchPath);git('apply','--index',patchPath);
+            if(git('write-tree')!==p.expectedTree) throw Error('candidate tree mismatch');
+            const names=git('diff','--cached','--name-only',p.base).split('\n').filter(Boolean).sort();
+            if(JSON.stringify(names)!==JSON.stringify([...p.allowedPaths].sort())) throw Error('path set mismatch');
+            const entries=[];
+            for(const name of names){
+              const st=fs.lstatSync(path.join(cwd,name));if(!st.isFile()||st.size>1024*1024) throw Error('invalid file shape');
+              const mode=git('ls-files','-s','--',name).split(/\s/)[0];if(mode!=='100644') throw Error('nonregular mode');
+              const b=fs.readFileSync(path.join(cwd,name)), expected=git('hash-object','--',name);
+              const {data}=await github.rest.git.createBlob({...repo,content:b.toString('base64'),encoding:'base64'});if(data.sha!==expected) throw Error('blob mismatch');
+              entries.push({path:name,mode:'100644',type:'blob',sha:data.sha});
+            }
+            const {data:tree}=await github.rest.git.createTree({...repo,base_tree:p.baseTree,tree:entries});if(tree.sha!==p.expectedTree) throw Error('tree mismatch');
+            fs.writeFileSync(path.join(process.env.RUNNER_TEMP,'prepared-tree.json'),JSON.stringify({base:p.base,baseTree:p.baseTree,tree:tree.sha,patchSHA256:p.patchSHA256,files:entries},null,2)+'\n');
+            core.notice(`Verified dangling tree ${tree.sha}; no product branch, commit or PR changed by this job.`);
+      - uses: actions/upload-artifact@v4
+        with:
+          name: verified-router-draft-tree
+          path: ${{ runner.temp }}/prepared-tree.json
+          retention-days: 7
