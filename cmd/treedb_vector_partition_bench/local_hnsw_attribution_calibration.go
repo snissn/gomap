@@ -22,6 +22,9 @@ func localHNSWAttributionCalibrationV1Build(source *m8ProductionMultiGroupAssets
 	if source == nil || source.collection == nil || len(ordinals) == 0 || fixture.Queries < 1 || fixture.Dimensions < 1 || !supportedFixtureGeneratorV1(fixture.Generator) {
 		return out, errors.New("invalid local HNSW attribution calibration source")
 	}
+	if err := validateFixtureQueryOrdinalsV1(fixture); err != nil {
+		return out, err
+	}
 	vectors := fixtureVectors(fixture)
 	if err := m8ValidateExistingAssetsFixtureV1(source.collection, source.manifest, fixture, vectors); err != nil {
 		return out, err
@@ -40,7 +43,7 @@ func localHNSWAttributionCalibrationV1Build(source *m8ProductionMultiGroupAssets
 		if fixture.Generator == fixtureGenerator {
 			copy(query, deterministicQuerySet[ordinal])
 		} else {
-			qualificationVectorV1(query, fixture, uint64(ordinal), 0xd1b54a32d192ed03)
+			qualificationVectorV1(query, fixture, uint64(fixture.QueryOrdinalOffset)+uint64(ordinal), 0xd1b54a32d192ed03)
 		}
 		queries64[i], queries32[i] = query, m8Query32V1(query)
 	}

@@ -247,3 +247,12 @@ Offline trace-ID preparation uses the context-aware ordinal-map copy while the
 prepared owner is pinned. It checks cancellation before allocation, during the
 copy, and before cache publication; cancellation returns no partial mapping and
 releases the operation's pin. This does not add trace preparation to serving.
+
+Offline qualification fixtures may specify `query_ordinal_offset` (default zero,
+omitted from legacy JSON). It selects only query generator ordinals, never corpus
+ordinals. The nonnegative half-open range end MUST fit in signed 64 bits before
+allocation; the legacy generator MUST reject nonzero offsets. Query bytes and
+canonical truth remain checksum-bound, so fresh ranges require fresh fixture and
+truth-cache identities. Relative query indices in reports and calibration splits
+remain unchanged. Existing retained descriptors MUST still match the complete
+fixture checksum; corpus equality alone does not authorize descriptor reuse.

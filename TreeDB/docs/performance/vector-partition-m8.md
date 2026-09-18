@@ -568,11 +568,79 @@ current-host baseline and frozen calibration/evaluation identities, 100K/250K
 95%-recall operating region, physical-cost constraints, uncertainty policy and
 numeric improvement/guardrail decision. Merging instrumentation or passing the
 96-row integration test does not complete that empirical gate or release Raft.
+The [#4744 baseline preregistration](../spec/artifacts/vector-partition-4744-baseline-plan.md)
+is **PLANNED / NO MEASUREMENT**. Its source packet may land before collection;
+the baseline gate remains owned by open #4744 until the retained evidence is
+accepted, and #4745 remains blocked on that acceptance.
+
+To recover fresh query identities without changing a qualification corpus,
+keep its generator, seed, vector count and dimensions fixed and use the existing
+fixture command's optional `-query-ordinal-offset`:
+
+```sh
+/tmp/treedb_vector_partition_bench generate-fixture \
+  -out /tmp/m8-fresh-query-fixture -generator treedb_vector_partition_embedding_mixture_v1 \
+  -vectors 16 -queries 4 -dimensions 8 -seed 4016 \
+  -query-ordinal-offset 1000
+```
+
+This tiny example is a correctness check, not the frozen baseline population.
+Use the actual generator identity from the retained manifest (the CLI rejects
+unknown identities). The qualification query range is half-open
+`[query_ordinal_offset, query_ordinal_offset + queries)`; corpus ordinals remain
+unchanged. Freeze disjoint calibration/evaluation ranges before observing their
+outcomes. The default zero is omitted from JSON and preserves existing fixture
+bytes, checksums and truth-cache identities. The legacy generator rejects a
+nonzero offset. Negative or overflowing ranges reject before fixture allocation.
+Fresh query bytes produce a new checksum and truth-cache identity: regenerate
+canonical truth, and do not reuse a descriptor bound to the old fixture checksum.
+This does not change the historical `validate-qualification` campaign or relax
+its retained descriptor/truth checks.
+
+For a current-contract retained child report, `replay-m8-report` reuses the
+existing production validators without the historical campaign's fixture
+whitelist. It accepts only the existing M8 report schema, not a new campaign
+format. All artifacts must be under a canonical retained root, with the clean
+source checkout at `ROOT/source`. The retained benchmark must have matching clean
+embedded VCS metadata. The existing command verifier requires child `-out` and
+`-m8-matrix-out` to equal the report directory, plus matching
+`-m8-existing-db`, `-profiles`, `-m8-matrix-profiles`, source and explicit caps.
+Captured production profiles are required; replay keeps the existing 4 GiB RSS,
+2 GiB asset and fixture-specific exact-truth caps.
+
+```sh
+/tmp/treedb_vector_partition_bench replay-m8-report \
+  -root "$RETAINED_ROOT" -report "$RETAINED_REPORT" \
+  -report-sha256 "$REPORT_SHA256" -fixture-sha256 "$FIXTURE_SHA256" \
+  -command-sha256 "$COMMAND_SHA256" -executable-sha256 "$EXECUTABLE_SHA256" \
+  -variant-descriptor-sha256 "$VARIANT_DESCRIPTOR_SHA256" \
+  -truth-artifact-sha256 "$TRUTH_ARTIFACT_SHA256" \
+  -truth-content-sha256 "$TRUTH_CONTENT_SHA256"
+```
+
+Fixture and argv pins are SHA256 of Go `json.Marshal(fixtureManifest)` and
+`json.Marshal(report.Command)` respectively (no newline), frozen independently
+before measurement. Pin the generated fixture and canonical truth identities
+before observing benchmark outcomes; freeze receipt/file hashes at publication.
+Do not derive all seven trusted pins from the report being checked. In
+particular, a truth-cache checksum alone does not freeze the query offset.
+The variant pin hashes `m3VariantDescriptorJSONV1` bytes (indented JSON plus
+newline), freezing the complete descriptor including router model/configuration,
+not only its M2 `ArtifactSHA256`. The actual descriptor and source are
+independently reopened and compared with the pinned report.
+
+Success prints `REPLAY_ACCEPTED_NOT_QUALIFICATION`: measured failures remain
+failures. This validates retained child evidence, not baseline acceptance,
+cross-variant overlap-storage conclusions, repeat/noise policy, held-out quality
+or historical campaign qualification. A successful bounded rehearsal is not the
+100K/250K empirical packet.
 
 Focused verification:
 
 ```sh
 GOWORK=off go test ./cmd/treedb_vector_partition_bench -run '^TestM8(Quality|Coverage|NoCoarsening|ObservedTruth)' -count=1
+GOWORK=off go test ./cmd/treedb_vector_partition_bench -run '^Test(GenerateFixture|FixtureQueryOrdinalOffset|LocalHNSWAttributionCalibration)' -count=1
+GOWORK=off go test ./cmd/treedb_vector_partition_bench -run '^TestReplayM8Report|^TestM8QualityRetainedShortfall' -count=1
 GOWORK=off go test -race ./cmd/treedb_vector_partition_bench -run '^TestM8(Quality|Coverage|NoCoarsening|ObservedTruth)' -count=1
 GOWORK=off go test ./cmd/treedb_vector_partition_bench -run '^$' -bench '^BenchmarkM8CoverageCost' -benchmem -count=5
 ```

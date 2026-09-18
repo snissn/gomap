@@ -2216,3 +2216,21 @@ before and during the offline ID copy, reader-pin release, retry, and ownership
 of returned IDs after close. The shared `BenchmarkM8RouterOrdinaryPathV1` measures
 unchanged router-only work as the stacked policy diagnostic's control; it is not
 full partition-search or service QPS.
+
+`cmd/treedb_vector_partition_bench/fixture_query_offset_test.go` verifies CLI and
+manifest query-range admission, zero-offset manifest bytes/checksum/cache
+compatibility, unchanged corpus generation, fresh query ordinals and identities,
+and negative/overflow/legacy rejection. The calibration builder test also checks
+offset-aware selected queries and retained-source truth parity, with invalid
+ranges rejected before corpus allocation. These are provenance/correctness
+checks, not an observed fresh-holdout or baseline performance result.
+
+`m8_report_replay_test.go` checks required independent pins before I/O, frozen
+fixture/query-offset and argv identities before expensive work, dirty or mixed
+source/executable/variant rejection, canonical root containment, escaping
+symlinks, report digest and bounded/trailing-JSON rejection. The command reuses
+the real production profile, command/executable, truth-anchor, transcript,
+resource and retained-asset/attribution verifiers; these boundary tests do not
+substitute for a complete successful replay of real retained artifacts. Its
+`REPLAY_ACCEPTED_NOT_QUALIFICATION` result does not assert a campaign or baseline
+acceptance and does not modify historical `validate-qualification`.
