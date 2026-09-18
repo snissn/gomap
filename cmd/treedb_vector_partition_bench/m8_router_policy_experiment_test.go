@@ -376,3 +376,34 @@ func TestM8RouterPolicyRetainedAttributionReplay(t *testing.T) {
 		})
 	}
 }
+
+func TestM8RouterPolicyPlannerChargesCacheHitBookkeeping(t *testing.T) {
+	cfg, err := parseConfig(append(qualityCLIArgsV1(t), "-m8-quality-diagnostics", "-m8-router-policy-diagnostics"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := fixtureManifest{Vectors: 96, Queries: 2, Dimensions: 4}
+	w, b, err := m8PlanRouterPolicyDiagnosticsV1(cfg, m, []int{4}, maxBenchmarkWorkUnits, maxFixtureBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.efSearch = []int{32, 64}
+	moreWork, moreBytes, err := m8PlanRouterPolicyDiagnosticsV1(cfg, m, []int{4}, maxBenchmarkWorkUnits, maxFixtureBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if moreWork <= w || moreBytes <= b {
+		t.Fatalf("extra EF cache validation/copy not charged: work %d -> %d bytes %d -> %d", w, moreWork, b, moreBytes)
+	}
+	cfg.concurrency = []int{1, 2}
+	rowWork, rowBytes, err := m8PlanRouterPolicyDiagnosticsV1(cfg, m, []int{4}, maxBenchmarkWorkUnits, maxFixtureBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rowWork <= moreWork || rowBytes <= moreBytes {
+		t.Fatal("extra retained row validation/copy not charged")
+	}
+	if _, _, err := m8PlanRouterPolicyDiagnosticsV1(cfg, m, []int{4}, w, maxFixtureBytes); err == nil {
+		t.Fatal("old one-cell budget admitted added work")
+	}
+}

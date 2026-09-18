@@ -236,6 +236,18 @@ missing or conflicting data reject rather than falling back to a partial pass.
 See `TreeDB/docs/performance/vector-partition-m8.md` for costs, commands and the
 representative-baseline boundary.
 
+Selected quality evidence on `candidate_coverage_shortfall` rows MUST also be
+recomputed from reopened static assets. Structural validation alone cannot bind
+query/truth/model digests, coverage costs or nearest-member routing. Only the
+unavailable local/coordinator observations are suppressed, using the same rule
+as the producer. Failed serving is not permission to trust self-reported static
+observations.
+
+Offline trace-ID preparation uses the context-aware ordinal-map copy while the
+prepared owner is pinned. It checks cancellation before allocation, during the
+copy, and before cache publication; cancellation returns no partial mapping and
+releases the operation's pin. This does not add trace preparation to serving.
+
 ### Optional same-candidate ranking comparison
 
 The M8-only `-m8-router-policy-diagnostics` selection additionally compares

@@ -665,3 +665,14 @@ outside both timers. Neither benchmark includes local pack ANN, document fetch,
 networking or Python; neither rate is end-user ANN QPS. The pure reducer benchmark
 separately measures ranking/allocation cost without any representative search.
 Publish every repetition and the exact source/toolchain/timer boundaries.
+
+Policy work preflight charges both the once-per-probe candidate comparisons and
+repeated query/truth checks, retained-row validation and scalar serialization
+across EF/concurrency cells. A cache hit removes representative search work,
+not the remaining bookkeeping or owned output cost.
+
+The shared approximate collector allocates its owned scalar candidate copy once
+at the bounded native return width. It does not grow an escaping append buffer
+per query or borrow a pooled native slice after releasing its scratch owner.
+Compare `BenchmarkM8RouterOrdinaryPathV1` against the parent and retain allocation
+counts as well as latency; helper extraction alone is not an overhead waiver.

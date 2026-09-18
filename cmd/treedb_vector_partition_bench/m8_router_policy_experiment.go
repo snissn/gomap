@@ -327,7 +327,7 @@ func m8PlanRouterPolicyDiagnosticsV1(cfg config, m fixtureManifest, domainCounts
 	if len(cfg.m8RouterPolicyRepresentativeCounts) > 0 && len(cfg.m8RouterPolicyRepresentativeCounts) != len(domainCounts) {
 		return 0, 0, errors.New("policy model-count preflight cardinality mismatch")
 	}
-	if !cfg.m8QualityDiagnostics || cfg.routerCandidates < 1 || cfg.m8RouterPolicyWidth < 0 || cfg.m8RouterPolicyWidth > cfg.routerCandidates || m.Vectors < 1 || m.Queries < 1 || m.Dimensions < 1 || len(cfg.probes) < 1 || len(cfg.efSearch) < 1 || len(cfg.concurrency) < 1 || capUnits < 1 || capBytes < 1 {
+	if !cfg.m8QualityDiagnostics || cfg.topK < 1 || cfg.topK > 10 || cfg.routerCandidates < 1 || cfg.m8RouterPolicyWidth < 0 || cfg.m8RouterPolicyWidth > cfg.routerCandidates || m.Vectors < 1 || m.Queries < 1 || m.Dimensions < 1 || len(cfg.probes) < 1 || len(cfg.efSearch) < 1 || len(cfg.concurrency) < 1 || capUnits < 1 || capBytes < 1 {
 		return 0, 0, errors.New("invalid policy diagnostic work shape")
 	}
 	if len(domainCounts) == 0 {
@@ -379,6 +379,34 @@ func m8PlanRouterPolicyDiagnosticsV1(cfg config, m fixtureManifest, domainCounts
 		// Conservative resident/cache plus repeated JSON report/row copies. Cached
 		// values are shared read-only, but encoding can own its own byte buffers.
 		records, err := memoryMul(int64(m.Queries), int64(len(cfg.probes)), int64(len(cfg.efSearch)), int64(len(cfg.concurrency)))
+		if err != nil {
+			return 0, 0, err
+		}
+		// Candidate collection is cached by probes, but every subsequent
+		// attribution cell still validates query/truth identities. Retained
+		// concurrency rows also validate/copy/serialize the scalar receipt.
+		// Price that repeated work separately from the one-time searches.
+		queryWork, err := memoryMul(8, int64(m.Dimensions))
+		if err != nil {
+			return 0, 0, err
+		}
+		truthWork, err := memoryMul(16, int64(cfg.topK), documentIDStorageBytes+8)
+		if err != nil {
+			return 0, 0, err
+		}
+		routeWork, err := memoryMul(512, int64(d))
+		if err != nil {
+			return 0, 0, err
+		}
+		recordWork, err := memoryAdd(queryWork, truthWork, routeWork, 4096)
+		if err != nil {
+			return 0, 0, err
+		}
+		recordWork, err = memoryMul(records, recordWork)
+		if err != nil {
+			return 0, 0, err
+		}
+		work, err = memoryAdd(work, recordWork)
 		if err != nil {
 			return 0, 0, err
 		}

@@ -2208,6 +2208,15 @@ pack expansion, CLI/child propagation, selected/missing/forged evidence, and
 work/memory rejection. These tests preserve the existing public serving policy;
 they are not a 100K/250K scaling result, fresh holdout, or Raft qualification.
 
+`m8_quality_replay_review_test.go` verifies that schema-valid forged static
+quality evidence in failed-coverage rows is rejected after independent asset
+reopen, and that canceled trace preparation does not publish a cache.
+`TreeDB/collections/vector_partition_trace_ids_test.go` covers cancellation
+before and during the offline ID copy, reader-pin release, retry, and ownership
+of returned IDs after close. The shared `BenchmarkM8RouterOrdinaryPathV1` measures
+unchanged router-only work as the stacked policy diagnostic's control; it is not
+full partition-search or service QPS.
+
 ## M8 same-candidate router policy diagnostics (#4745)
 
 `TreeDB/collections/vector_partition_router_policy_reduce_test.go` checks the

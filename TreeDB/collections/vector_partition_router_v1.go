@@ -1526,11 +1526,15 @@ func (r *VectorPartitionRouterV1) collectVectorPartitionRouterCandidatesLockedV1
 		if err := ctx.Err(); err != nil {
 			return nil, work, err
 		}
-		for _, candidate := range native {
+		// The returned native width is already bounded by the validated budget.
+		// Allocate the owned scalar copy once; append growth here would escape
+		// through the shared helper and add per-query allocations to serving.
+		candidates = make([]vectorPartitionRouterCandidateV1, len(native))
+		for i, candidate := range native {
 			if candidate.Ordinal < 0 || candidate.Ordinal >= len(r.viewToModel) {
 				return nil, work, errors.New("collections: vector partition router native ordinal is invalid")
 			}
-			candidates = append(candidates, vectorPartitionRouterCandidateV1{ordinal: r.viewToModel[candidate.Ordinal], score: candidate.Score})
+			candidates[i] = vectorPartitionRouterCandidateV1{ordinal: r.viewToModel[candidate.Ordinal], score: candidate.Score}
 		}
 		work.Candidates = stats.Candidates
 		work.Edges = stats.Edges

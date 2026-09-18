@@ -682,7 +682,8 @@ func m8QualificationRetainedAttributionV1(root string, report m8ProductionReport
 				return errors.New("retained router policy candidates/results do not reproduce report")
 			}
 		}
-		if row.Status != "pass" && row.Status != "fail" {
+		qualityShortfall := report.Config.QualityDiagnostics && row.Status == "candidate_coverage_shortfall"
+		if row.Status != "pass" && row.Status != "fail" && !qualityShortfall {
 			continue
 		}
 		membershipOracles, err := harness.membershipOraclesV1(truth, primaryHomes, finalMemberships, row.Probes)
@@ -692,6 +693,19 @@ func m8QualificationRetainedAttributionV1(root string, report m8ProductionReport
 		cell, err := m8BuildAttributionV1(context.Background(), assets, primaryHomes, finalMemberships, queries, truth, membershipOracles, row.Probes, row.EfSearch, report.Config.TopK, approximateCandidates, exhaustive, harness)
 		if err != nil {
 			return err
+		}
+		if qualityShortfall {
+			// Failed serving does not make static source/model/coverage claims
+			// self-authenticating. Replay them, then apply exactly the producer's
+			// suppression of unavailable local/coordinator observations.
+			replayed := row
+			if err := m8AttachAttributionV1(&replayed, cell, make([][]m8CanonicalResultV1, len(queries))); err != nil {
+				return err
+			}
+			if !reflect.DeepEqual(replayed.Attribution, row.Attribution) {
+				return errors.New("retained shortfall attribution does not reproduce report")
+			}
+			continue
 		}
 		idParity, scoreParity := true, true
 		for query, local := range cell.Local {

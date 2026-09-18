@@ -370,7 +370,13 @@ func (h *m8AttributionHarnessV1) qualityEvidenceV1() *m8QualityAttributionV1 {
 
 // Validate trace storage from actual pack structure BEFORE calling the existing
 // detailed trace path. One trace is live at a time; ordinary requests never use it.
-func (h *m8AttributionHarnessV1) prepareQualityTraceV1(p uint32) error {
+func (h *m8AttributionHarnessV1) prepareQualityTraceV1(ctx context.Context, p uint32) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	c := h.quality
 	if c == nil || c.traceQueries == 0 || int(p) >= len(h.searchers) {
 		return errors.New("invalid quality trace selection")
@@ -398,8 +404,11 @@ func (h *m8AttributionHarnessV1) prepareQualityTraceV1(p uint32) error {
 	if bound > m8QualityTraceMaxBytesV1 || bound > c.limits.Bytes {
 		return errors.New("quality trace structural memory cap exceeded")
 	}
-	ids, err := h.searchers[p].PackDocumentIDsForOfflineTraceV1()
+	ids, err := h.searchers[p].PackDocumentIDsForOfflineTraceWithContextV1(ctx)
 	if err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
 		return err
 	}
 	c.packIDs[p] = ids
@@ -415,7 +424,7 @@ func (h *m8AttributionHarnessV1) searchQualityObservedV1(ctx context.Context, qu
 		if err := ctx.Err(); err != nil {
 			return nil, metrics, nil, err
 		}
-		if err := h.prepareQualityTraceV1(p); err != nil {
+		if err := h.prepareQualityTraceV1(ctx, p); err != nil {
 			return nil, metrics, nil, err
 		}
 		results, m, a, err := h.searchers[p].SearchWithAttributionV1(ctx, query, collections.VectorPartitionSearchOptionsV1{TopK: k, EfSearch: ef})
