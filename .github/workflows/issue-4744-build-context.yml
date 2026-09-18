@@ -8,28 +8,42 @@ permissions:
 jobs:
   context:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: cc1551de10098417f11ceb49ff30c90e936e1299
+          ref: 42b42edee173c1b3ea9c5d9e895a82e6b0e4fa3a
+          fetch-depth: 3
           persist-credentials: false
-      - name: Export exact existing draft source for continuation
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.8'
+          cache: false
+      - name: Export pinned source, dependencies and toolchain
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = cc1551de10098417f11ceb49ff30c90e936e1299
-          test "$(git rev-parse HEAD^{tree})" = 727b0246d9138e72e7c67f45cfd1e0b5924e7473
-          out="${RUNNER_TEMP}/issue-4755-source"
+          test "$(git rev-parse HEAD)" = 42b42edee173c1b3ea9c5d9e895a82e6b0e4fa3a
+          test "$(git rev-parse HEAD^{tree})" = f0fbdcacacbece339926def413abdb3866211d80
+          out="${RUNNER_TEMP}/draft-stack-validation-context"
           mkdir -p "$out"
-          git archive --format=tar HEAD | gzip -1 > "$out/source.tar.gz"
-          git rev-parse HEAD > "$out/BASE_COMMIT"
-          git ls-tree -r HEAD > "$out/SOURCE_TREE.txt"
-          git cat-file commit HEAD > "$out/COMMIT_OBJECT"
-          (cd "$out" && sha256sum source.tar.gz SOURCE_TREE.txt COMMIT_OBJECT > SHA256SUMS)
+          for ref in cc1551de10098417f11ceb49ff30c90e936e1299 42b42edee173c1b3ea9c5d9e895a82e6b0e4fa3a; do
+            mkdir -p "$out/$ref"
+            git archive --format=tar "$ref" | gzip -1 > "$out/$ref/source.tar.gz"
+            git rev-parse "$ref^{tree}" > "$out/$ref/TREE_SHA"
+            git ls-tree -r "$ref" > "$out/$ref/SOURCE_TREE.txt"
+            git cat-file commit "$ref" > "$out/$ref/COMMIT_OBJECT"
+          done
+          GOWORK=off go mod vendor
+          git diff --exit-code
+          tar -czf "$out/vendor.tar.gz" vendor
+          goroot="$(go env GOROOT)"
+          tar -C "$goroot" -czf "$out/go-toolchain.tar.gz" .
+          go version > "$out/GO_VERSION"
+          (cd "$out" && find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS)
       - uses: actions/upload-artifact@v4
         with:
-          name: issue-4755-source
-          path: ${{ runner.temp }}/issue-4755-source
+          name: draft-stack-validation-context
+          path: ${{ runner.temp }}/draft-stack-validation-context
           retention-days: 3
           compression-level: 0
