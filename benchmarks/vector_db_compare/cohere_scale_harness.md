@@ -472,9 +472,25 @@ Product, producer, client and other imported-code drift fails closed. The
 analysis records distinct producer/analyzer identities, actual imported blob
 hashes and the consumer-only changed paths. Without that option, source must
 match the producer as before. Packet/plan/binary/producer implementation binding,
-normalization, truth, numerical gates, lifecycle and resource rules remain
+normalization, truth, numerical thresholds and resource rules remain
 unchanged. Preserve the original raw packet, binaries, hashes and invalid
 analysis; no measured runtime/data change is covered by this exception.
+
+The owner-authorized offline qualification correction validates ANN results
+independently before and after reopen: source-recomputed scores, ordering,
+scalar cohort, route/packed-work receipts, and all existing recall thresholds.
+Each phase must pass separately; their recall is not pooled. Candidate IDs need
+not be identical across asynchronous filter-navigation warmup or graph rebuild.
+Small exhaustive filters (at most 4096 eligible rows) still require identical
+IDs and scores. Exhaustive final-state verification remains mandatory.
+
+For timed exact service/native clients, omitted Go `omitempty` SQ8 metadata
+means its documented empty string or integer zero. Explicit nulls, wrong types,
+nonempty metadata or nonzero SQ8 work still fail; collection receipts and SQ8
+clients retain their required fields. This is metadata handling, not vector
+output: production requests already omit embeddings by default. Record the
+landed corrected analyzer identity and a new analysis; retain earlier invalid
+verdicts rather than presenting the correction as unchanged acceptance logic.
 
 All five resource inventories (`initial_ready`, `pre_fold`, `post_fold`,
 `post_reopen`, `final_verified`) are LIVE serving observations. File rows,

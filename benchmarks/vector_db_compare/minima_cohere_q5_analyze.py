@@ -3357,12 +3357,17 @@ def _normalized_recompute_canonical_truth(dataset_paths, canonical_truth, canoni
 
 
 def _normalized_result_scores_match(ids, scores, query, normalized_vectors, normalized_queries):
+    if type(query) is not int or not 0 <= query < len(normalized_queries):
+        return False
     if ids == []:
-        return scores == [] and type(query) is int and 0 <= query < len(normalized_queries)
+        return scores == []
     try:
-        ordinals = np.asarray(
-            [int(identifier.removeprefix("row-")) for identifier in ids], dtype=np.int64,
-        )
+        ordinals = [int(identifier.removeprefix("row-")) for identifier in ids]
+        if any(not 0 <= ordinal < len(normalized_vectors)
+               or identifier != f"row-{ordinal:06d}"
+               for identifier, ordinal in zip(ids, ordinals)):
+            return False
+        ordinals = np.asarray(ordinals, dtype=np.int64)
         expected = np.clip(normalized_vectors[ordinals] @ normalized_queries[query], -1, 1)
         observed = np.asarray(scores, dtype=np.float64)
     except (AttributeError, IndexError, TypeError, ValueError):
@@ -3586,11 +3591,15 @@ def _normalized_validate_events(path, plan, mode, canonical_truth, original_trut
         if [(row.get("request_mode"), row.get("eligible"), row.get("query"))
                 for row in rows] != expected_curve:
             raise EvidenceError(f"normalized-v4 {mode} {label} curve is incomplete or reordered")
-    if any((before.get("ids"), before.get("scores"))
+    # Small filters are exhaustive; ANN candidates may legitimately change when
+    # process-local filter navigation warms or the graph is rebuilt on reopen.
+    if any(before["eligible"] <= 4096
+           and (before.get("ids"), before.get("scores"))
            != (after.get("ids"), after.get("scores"))
            for before, after in zip(fixed, reopened)):
         raise EvidenceError(f"normalized-v4 {mode} post-reopen search decisions changed")
     quality = {request_mode: [] for request_mode in expected_modes}
+    post_reopen_quality = {request_mode: [] for request_mode in expected_modes}
     for position, event in enumerate(fixed + reopened):
         request_mode, eligible, query = event.get("request_mode"), event.get("eligible"), event.get("query")
         ids, scores = event.get("ids"), event.get("scores")
@@ -3632,8 +3641,9 @@ def _normalized_validate_events(path, plan, mode, canonical_truth, original_trut
                     or proof.get("packed_score_candidates")
                         != event["route_identity"].get("packed_score_candidates")):
                 raise EvidenceError("normalized-v4 SQ8 diagnostic proof is not packed")
-        if position < len(fixed) and eligible == 500000:
-            quality[request_mode].append(recall)
+        if eligible == 500000:
+            phase_quality = quality if position < len(fixed) else post_reopen_quality
+            phase_quality[request_mode].append(recall)
 
     overlap = [row for row in searches if row.get("phase") == "overlap_search"]
     post_update = [row for row in searches if row.get("phase") == "post_update_visibility"]
@@ -3696,6 +3706,9 @@ def _normalized_validate_events(path, plan, mode, canonical_truth, original_trut
     return {
         "events": events, "fixed": fixed, "terminal": terminal[0],
         "quality": {key: statistics.mean(values) for key, values in quality.items()},
+        "post_reopen_quality": {
+            key: statistics.mean(values) for key, values in post_reopen_quality.items()
+        },
         "full_state": full[0],
     }
 
@@ -3789,12 +3802,11 @@ def _normalized_production_identity(route, mode, lane):
                 or packed_calls != 1 or packed_candidates > 64
                 or route["fp32_score_calls"] != packed_candidates):
             raise EvidenceError("normalized-v4 timed SQ8 client omitted packed work")
-    elif (route.get("rerank_candidates", 0) != 0
-            or route.get("quantized_index_name") != ""
-            or route.get("quantized_codec") != ""
-            or route.get("quantized_version") != 0
-            or route.get("quantized_score_calls", 0) != 0
-            or route.get("quantized_code_bytes_read", 0) != 0):
+    elif (any(type(route.get(field, "")) is not str or route.get(field, "") != ""
+              for field in ("quantized_index_name", "quantized_codec"))
+            or any(type(route.get(field, 0)) is not int or route.get(field, 0) != 0
+                   for field in ("rerank_candidates", "quantized_version",
+                                 "quantized_score_calls", "quantized_code_bytes_read"))):
         raise EvidenceError("normalized-v4 timed exact client crossed the SQ8 plane")
 
 
@@ -4237,16 +4249,25 @@ def _analyze_normalized(packet_path, packet, expected_sha256, *, analyzer_commit
         ) for mode in ("exact", "sq8")
     }
     del normalized_vectors, normalized_queries
-    standalone_exact = evidence["exact"]["quality"]["exact"]
-    same_build_exact = evidence["sq8"]["quality"]["exact"]
-    sq8_quality = evidence["sq8"]["quality"]["quantized_rerank"]
-    quality_checks = {
-        "fp32_recall_at_least_0_90": same_build_exact >= .90,
-        "sq8_recall_at_least_0_90": sq8_quality >= .90,
-        "sq8_within_0_01_of_fp32": sq8_quality >= same_build_exact - .01,
-        "fp32_only_consistent": abs(standalone_exact - same_build_exact) <= .01,
-    }
-    failures = [f"quality: {name}" for name, passed in quality_checks.items() if not passed]
+    phase_quality = {}
+    failures = []
+    for phase in ("quality", "post_reopen_quality"):
+        standalone_exact = evidence["exact"][phase]["exact"]
+        same_build_exact = evidence["sq8"][phase]["exact"]
+        sq8_quality = evidence["sq8"][phase]["quantized_rerank"]
+        quality_checks = {
+            "fp32_recall_at_least_0_90": same_build_exact >= .90,
+            "sq8_recall_at_least_0_90": sq8_quality >= .90,
+            "sq8_within_0_01_of_fp32": sq8_quality >= same_build_exact - .01,
+            "fp32_only_consistent": abs(standalone_exact - same_build_exact) <= .01,
+        }
+        phase_quality[phase] = {
+            "standalone_fp32_recall_at_10": standalone_exact,
+            "same_build_fp32_recall_at_10": same_build_exact,
+            "sq8_recall_at_10": sq8_quality,
+            "checks": quality_checks,
+        }
+        failures.extend(f"{phase}: {name}" for name, passed in quality_checks.items() if not passed)
 
     matrix = read_json(
         _normalized_run_path(packet, paths, "sq8", "matrix"),
@@ -4322,10 +4343,8 @@ def _analyze_normalized(packet_path, packet, expected_sha256, *, analyzer_commit
         "producer_coordinates": producer_coordinates,
         "go_binary_builds": go_builds,
         "quality": {
-            "standalone_fp32_recall_at_10": standalone_exact,
-            "same_build_fp32_recall_at_10": same_build_exact,
-            "sq8_recall_at_10": sq8_quality,
-            "checks": quality_checks,
+            **phase_quality["quality"],
+            "post_reopen": phase_quality["post_reopen_quality"],
             "original_cosine_reported": True,
         },
         "production_matrix": matrix_statistics,
