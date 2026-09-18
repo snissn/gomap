@@ -2207,3 +2207,26 @@ probe counts, trace/ordinary result-and-work parity, replay identity, physical
 pack expansion, CLI/child propagation, selected/missing/forged evidence, and
 work/memory rejection. These tests preserve the existing public serving policy;
 they are not a 100K/250K scaling result, fresh holdout, or Raft qualification.
+
+## M8 same-candidate router policy diagnostics (#4745)
+
+`TreeDB/collections/vector_partition_router_policy_reduce_test.go` checks the
+hybrid golden across all 720 permutations and all probe prefixes, unique
+representative voting, conflicting duplicate rejection, nearest-width exact
+voting, deterministic ties, set/sequence identity, refusal receipts and owned
+prefix buffers. The digest-byte golden protects the documented encoding during
+allocation minimization.
+
+`vector_partition_router_policy_diagnostic_test.go` covers the real persisted
+router's shared candidate path, ordinary-result/work parity, unchanged ordinary
+counters, independent owner reopening, invalid selection, cancellation, close,
+concurrent readers and result ownership. The ordinary collector is shared, not
+reimplemented in a benchmark-only approximate search.
+
+`cmd/treedb_vector_partition_bench/m8_router_policy_experiment_test.go` covers
+explicit CLI/config/child selection, full-population coverage refusals, cached
+probe versus EF identity, actual physical pack cost, flags/source/query/candidate
+replay and independently reopened retained report verification. Work and byte
+preflight include actual retained model sizes. Failure receipts cannot be dropped
+or replaced by successful-only averages. These tests do not select a production
+policy, establish 100K/250K scaling, or release the graph-before-Raft gate.

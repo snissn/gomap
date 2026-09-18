@@ -660,10 +660,27 @@ func m8QualificationRetainedAttributionV1(root string, report m8ProductionReport
 			return err
 		}
 	}
+	if report.Config.RouterPolicyDiagnostics {
+		if err := harness.enableRouterPoliciesV1(report.Config.RouterPolicyWidth, approximateCandidates); err != nil {
+			return err
+		}
+	}
 	exhaustive := make([][]m8CanonicalResultV1, len(queries))
 	for rowIndex, row := range report.Rows {
 		if err := m8QualityEvidenceSelectionV1(report.Config, row); err != nil {
 			return err
+		}
+		if err := m8RouterPolicyEvidenceSelectionV1(report.Config, row); err != nil {
+			return err
+		}
+		if row.Attribution.RouterPolicies != nil {
+			replayed, err := harness.routerPolicyEvidenceV1(context.Background(), queries, truth, row.Probes, approximateCandidates)
+			if err != nil {
+				return err
+			}
+			if !m8RouterPolicyReplayEqualV1(replayed, row.Attribution.RouterPolicies) {
+				return errors.New("retained router policy candidates/results do not reproduce report")
+			}
 		}
 		if row.Status != "pass" && row.Status != "fail" {
 			continue
@@ -790,6 +807,12 @@ func m8QualificationCommandWithExecutableV1(root, matrixDirectory string, report
 		return false
 	}
 	cfg.m8OracleDomainCounts = []int{domainCount}
+	if report.Config.RouterPolicyDiagnostics {
+		if report.RouterRepresentatives > uint64(vectorpartition.DefaultRouterConfigV1().MaxRepresentatives) || report.RouterRepresentatives < uint64(domainCount) {
+			return false
+		}
+		cfg.m8RouterPolicyRepresentativeCounts = []int{int(report.RouterRepresentatives)}
+	}
 	return reflect.DeepEqual(m8QualificationCommandConfigV1(cfg), m8CommandBoundProductionConfigV1(report.Config)) &&
 		cfg.m8MaxRSSBytes == report.Resources.PeakRSSCapBytes &&
 		cfg.m8MaxAssetBytes == report.Resources.PersistentAssetCap &&
@@ -803,7 +826,7 @@ func m8QualificationCommandConfigV1(cfg config) m8ProductionConfigEvidenceV1 {
 		Probes: cfg.probes, Overlap: cfg.overlaps, TopK: cfg.topK, RecallTarget: cfg.recallTarget,
 		Concurrency: cfg.concurrency, Warmup: cfg.warmup, EffectiveWarmup: warmup,
 		EfSearch: cfg.efSearch, RouterCandidates: cfg.routerCandidates,
-		MaxExactTruthVisits: cfg.m8MaxExactTruthVisits, Seed: cfg.seed, QualityDiagnostics: cfg.m8QualityDiagnostics, QualityTraceQueries: cfg.m8QualityTraceQueries,
+		MaxExactTruthVisits: cfg.m8MaxExactTruthVisits, Seed: cfg.seed, QualityDiagnostics: cfg.m8QualityDiagnostics, QualityTraceQueries: cfg.m8QualityTraceQueries, RouterPolicyDiagnostics: cfg.m8RouterPolicyDiagnostics, RouterPolicyWidth: cfg.m8RouterPolicyWidth,
 	}
 }
 
@@ -890,6 +913,12 @@ func m8QualificationMatrixCommandWithExecutableV1(root, matrixDirectory string, 
 			return false
 		}
 		oracleDomainCounts = append(oracleDomainCounts, domainCount)
+		if report.Config.RouterPolicyDiagnostics {
+			if report.RouterRepresentatives > uint64(vectorpartition.DefaultRouterConfigV1().MaxRepresentatives) || report.RouterRepresentatives < uint64(domainCount) {
+				return false
+			}
+			cfg.m8RouterPolicyRepresentativeCounts = append(cfg.m8RouterPolicyRepresentativeCounts, int(report.RouterRepresentatives))
+		}
 	}
 	cfg.m8OracleDomainCounts = oracleDomainCounts
 	profiles, err := m8CanonicalPathV1(cfg.profiles)
