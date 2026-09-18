@@ -8,7 +8,7 @@ from unittest import mock
 
 import _support
 from treedb_client import BenchmarkVectorIndexOptions, IndexInfo, TreeDBClient
-from treedb_client.errors import IndexUnavailableError, TreeDBProtocolError
+from treedb_client.errors import IndexUnavailableError, TreeDBConfigError, TreeDBProtocolError
 from treedb_client._native import (
     _HEADER,
     _NativeConnection,
@@ -16,6 +16,7 @@ from treedb_client._native import (
     _dense_normalized_options,
     _dense_normalized_route_identity,
     _dense_normalized_route_matches,
+    _dense_request,
     _dense_response,
     _dense_score_plane,
     _dense_work,
@@ -93,6 +94,59 @@ def _index_info():
 
 
 class NativeDenseV4Tests(unittest.TestCase):
+    def test_public_native_query_converts_each_component_once(self):
+        class CountingFloat:
+            def __init__(self, value):
+                self.value, self.calls = value, 0
+
+            def __float__(self):
+                self.calls += 1
+                return float(self.value)
+
+        client = TreeDBClient("http://127.0.0.1:1", native_address="127.0.0.1:2")
+        self.addCleanup(client.close)
+        for quantized in (False, True):
+            with self.subTest(quantized=quantized):
+                values = [CountingFloat(1), CountingFloat(0)]
+                captured = []
+
+                def command(command_id, version, sections, capability):
+                    self.assertEqual((command_id, version, capability), (64, 4, "dense_vector_search_versions"))
+                    captured.append(_sections(sections, {4, 129, 137}, {137})[129])
+                    return _response_body(quantized=quantized)
+
+                options = {"query_mode": "quantized_rerank", "quantized_index_name": QUANTIZED} if quantized else {}
+                with mock.patch.object(client._native, "command", side_effect=command):
+                    client.query_by_embedding("a", values, 1, index_info=_index_info(), **options)
+                self.assertEqual([value.calls for value in values], [1, 1])
+                self.assertEqual(captured, [_dense_request("a", [1, 0], 1, 64, 1, False, None)])
+
+    def test_public_native_invalid_query_never_sends_frame(self):
+        client = TreeDBClient("http://127.0.0.1:1", native_address="127.0.0.1:2")
+        self.addCleanup(client.close)
+        for representation, quantized in ((REPRESENTATION, False), ("", False), ("", True)):
+            info = _index_info()
+            info.vector_representation = representation
+            options = {"query_mode": "quantized_rerank", "quantized_index_name": QUANTIZED} if quantized else {}
+            for query in ([float("nan"), 0], [float("inf"), 0], [-float("inf"), 0],
+                          [1e100, 0], [10**1000, 0], [object(), 0], [None, 0], ["not-a-number", 0],
+                          [], [1]):
+                with self.subTest(representation=representation, quantized=quantized, query=query):
+                    with mock.patch.object(client._native, "command") as command:
+                        with self.assertRaises(TreeDBConfigError):
+                            client.query_by_embedding("a", query, 1, index_info=info, **options)
+                        command.assert_not_called()
+
+    def test_http_normalized_invalid_query_keeps_preflight(self):
+        client = TreeDBClient("http://127.0.0.1:1")
+        self.addCleanup(client.close)
+        for query in ([float("nan"), 0], [float("inf"), 0], [-float("inf"), 0],
+                      [10**1000, 0], [None, 0], [object(), 0], ["bad", 0]):
+            with self.subTest(query=query), mock.patch.object(client, "_request") as request:
+                with self.assertRaisesRegex(TreeDBConfigError, "normalized dense query must be finite"):
+                    client.query_by_embedding("a", query, 1, index_info=_index_info())
+                request.assert_not_called()
+
     def test_explicit_representation_models(self):
         options = BenchmarkVectorIndexOptions.from_dict({"representation": REPRESENTATION})
         self.assertEqual(options.representation, REPRESENTATION)
