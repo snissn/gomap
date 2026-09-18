@@ -116,11 +116,11 @@ func reduceVectorPartitionRouterPoliciesV1(ctx context.Context, meta vectorParti
 		return vectorPartitionPolicyReductionV1{}, errors.New("invalid router policy shape/budget")
 	}
 	switch meta.Mode {
-	case "exact":
+	case VectorPartitionRouterModeExactV1:
 		if meta.CandidateBudget < meta.RepresentativeCount {
 			return vectorPartitionPolicyReductionV1{}, errors.New("exact policy scan lacks full representative budget")
 		}
-	case "approximate":
+	case VectorPartitionRouterModeApproxV1:
 		if meta.CandidateBudget > meta.RepresentativeCount {
 			return vectorPartitionPolicyReductionV1{}, errors.New("approximate legacy policy budget exceeds model count")
 		}
@@ -148,7 +148,7 @@ func reduceVectorPartitionRouterPoliciesV1(ctx context.Context, meta vectorParti
 		}
 		unique[candidate.Ordinal] = candidate
 	}
-	if meta.Mode == "exact" && len(unique) != meta.RepresentativeCount {
+	if meta.Mode == VectorPartitionRouterModeExactV1 && len(unique) != meta.RepresentativeCount {
 		return vectorPartitionPolicyReductionV1{}, errors.New("exact policy receipt omits model representatives")
 	}
 	candidates := make([]vectorPartitionPolicyCandidateV1, 0, len(unique))

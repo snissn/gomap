@@ -274,13 +274,16 @@ func BenchmarkVectorPartitionRouterRankingPolicyV1(b *testing.B) {
 }
 
 func TestVectorPartitionRouterPolicyCoverageRefusalCarriesCandidateIdentity(t *testing.T) {
-	input := policyGolden()[:1]
-	got, err := reduceVectorPartitionRouterPoliciesV1(nil, policyTestContext(), input)
-	if !errors.Is(err, errVectorPartitionPolicyCoverageV1) || len(got.CandidateSetSHA256) != 64 || len(got.CandidateSequenceSHA256) != 64 || got.UniqueReturned != 1 || len(got.Distance)+len(got.Hybrid)+len(got.Frequency) != 0 {
+	meta := policyTestContext()
+	meta.Probes = 2
+	input := policyGolden()[:2]
+	input[1].Domain = input[0].Domain // Two distinct representatives cannot cover two domains.
+	got, err := reduceVectorPartitionRouterPoliciesV1(nil, meta, input)
+	if !errors.Is(err, errVectorPartitionPolicyCoverageV1) || len(got.CandidateSetSHA256) != 64 || len(got.CandidateSequenceSHA256) != 64 || got.UniqueReturned != 2 || len(got.Distance)+len(got.Hybrid)+len(got.Frequency) != 0 {
 		t.Fatalf("refused route lost reproducible candidate identity: %+v %v", got, err)
 	}
 	input[0].Score -= .01
-	changed, err := reduceVectorPartitionRouterPoliciesV1(nil, policyTestContext(), input)
+	changed, err := reduceVectorPartitionRouterPoliciesV1(nil, meta, input)
 	if !errors.Is(err, errVectorPartitionPolicyCoverageV1) || changed.CandidateSetSHA256 == got.CandidateSetSHA256 {
 		t.Fatal("different failed candidate set is not identifiable")
 	}
