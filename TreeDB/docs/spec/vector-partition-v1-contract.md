@@ -264,3 +264,9 @@ all query outcomes and actual logical-domain/physical-pack cost. This is an
 offline coverage experiment, not admission of any new public routing policy or
 model. Ordinary query results, score/tie order, generation lifetime, write
 placement, durability and default allocation behavior remain unchanged.
+
+Selected router-policy preflight MUST bound query/truth identity checks on cache
+hits across both producer and strict-replay EF/concurrency populations, not just
+new candidate collections. Cached identity validation MUST NOT be removed to
+avoid that cost. Nearest-width and policy ordering MUST observe cancellation
+while sorting under the captured owner; canceled diagnostics return no routes.

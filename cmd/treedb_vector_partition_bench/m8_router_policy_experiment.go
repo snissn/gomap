@@ -327,11 +327,44 @@ func m8PlanRouterPolicyDiagnosticsV1(cfg config, m fixtureManifest, domainCounts
 	if len(cfg.m8RouterPolicyRepresentativeCounts) > 0 && len(cfg.m8RouterPolicyRepresentativeCounts) != len(domainCounts) {
 		return 0, 0, errors.New("policy model-count preflight cardinality mismatch")
 	}
-	if !cfg.m8QualityDiagnostics || cfg.topK < 1 || cfg.topK > 10 || cfg.routerCandidates < 1 || cfg.m8RouterPolicyWidth < 0 || cfg.m8RouterPolicyWidth > cfg.routerCandidates || m.Vectors < 1 || m.Queries < 1 || m.Dimensions < 1 || len(cfg.probes) < 1 || len(cfg.efSearch) < 1 || len(cfg.concurrency) < 1 || capUnits < 1 || capBytes < 1 {
+	if !cfg.m8QualityDiagnostics || cfg.topK < 1 || cfg.topK > 10 || cfg.routerCandidates < 1 || cfg.m8RouterPolicyWidth < 0 || cfg.m8RouterPolicyWidth > cfg.routerCandidates || m.Vectors < 1 || m.Queries < 1 || m.Dimensions < 1 || m.Dimensions > maxDimensions || len(cfg.probes) < 1 || len(cfg.efSearch) < 1 || len(cfg.concurrency) < 1 || capUnits < 1 || capBytes < 1 {
 		return 0, 0, errors.New("invalid policy diagnostic work shape")
 	}
 	if len(domainCounts) == 0 {
 		return 0, 0, errors.New("selected router policy diagnostics have no model shape")
+	}
+	// Collector/reducer results are cached per probe, but routerPolicyEvidenceV1
+	// revalidates the whole query/truth population BEFORE every cache lookup.
+	// Producer: P*E checks. Strict replay: at most 2*P*E*C checks, from the
+	// explicit policy replay and m8BuildAttributionV1 (including failed rows).
+	// Bound the larger traversal, not their sum: these are separate executions.
+	// Count conversion/scalar work plus hash input bytes conservatively; these
+	// units are an admission envelope, not a claim about CPU cycles.
+	populationChecks, err := memoryMul(2, int64(m.Queries), int64(len(cfg.probes)), int64(len(cfg.efSearch)), int64(len(cfg.concurrency)))
+	if err != nil {
+		return 0, 0, err
+	}
+	queryIdentityWork, err := memoryMul(8, int64(m.Dimensions))
+	if err != nil {
+		return 0, 0, err
+	}
+	truthIdentityWork, err := memoryMul(int64(cfg.topK), documentIDStorageBytes+12)
+	if err != nil {
+		return 0, 0, err
+	}
+	identityWork, err := memoryAdd(256, queryIdentityWork, truthIdentityWork)
+	if err != nil {
+		return 0, 0, err
+	}
+	populationWork, err := memoryMul(populationChecks, identityWork)
+	if err != nil {
+		return 0, 0, err
+	}
+	// Include dimension-sized conversion/normalization scratch independently
+	// of model N; a small model can still have a large source dimension.
+	queryScratch, err := memoryMul(16, int64(m.Dimensions))
+	if err != nil {
+		return 0, 0, err
 	}
 	var work, peak int64
 	for variant, d := range domainCounts {
@@ -368,7 +401,7 @@ func m8PlanRouterPolicyDiagnosticsV1(cfg config, m fixtureManifest, domainCounts
 		if err != nil {
 			return 0, 0, err
 		}
-		work, err = memoryAdd(work, w)
+		work, err = memoryAdd(work, w, populationWork)
 		if err != nil {
 			return 0, 0, err
 		}
@@ -382,14 +415,9 @@ func m8PlanRouterPolicyDiagnosticsV1(cfg config, m fixtureManifest, domainCounts
 		if err != nil {
 			return 0, 0, err
 		}
-		// Candidate collection is cached by probes, but every subsequent
-		// attribution cell still validates query/truth identities. Retained
-		// concurrency rows also validate/copy/serialize the scalar receipt.
-		// Price that repeated work separately from the one-time searches.
-		queryWork, err := memoryMul(8, int64(m.Dimensions))
-		if err != nil {
-			return 0, 0, err
-		}
+		// Preserve the per-row validation/copy/serialization bound separately
+		// from the population identity rechecks above. A cached candidate set
+		// removes search work, not retained receipt validation or encoding.
 		truthWork, err := memoryMul(16, int64(cfg.topK), documentIDStorageBytes+8)
 		if err != nil {
 			return 0, 0, err
@@ -398,7 +426,7 @@ func m8PlanRouterPolicyDiagnosticsV1(cfg config, m fixtureManifest, domainCounts
 		if err != nil {
 			return 0, 0, err
 		}
-		recordWork, err := memoryAdd(queryWork, truthWork, routeWork, 4096)
+		recordWork, err := memoryAdd(truthWork, routeWork, 4096)
 		if err != nil {
 			return 0, 0, err
 		}
@@ -414,7 +442,7 @@ func m8PlanRouterPolicyDiagnosticsV1(cfg config, m fixtureManifest, domainCounts
 		if err != nil {
 			return 0, 0, err
 		}
-		bytes, err := memoryAdd(scratch, recordBytes)
+		bytes, err := memoryAdd(scratch, queryScratch, recordBytes)
 		if err != nil {
 			return 0, 0, err
 		}

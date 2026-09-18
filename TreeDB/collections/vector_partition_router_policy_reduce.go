@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"sort"
 )
 
 const vectorPartitionRankingDiagnosticMethodV1 = "returned_representatives_frequency_first_v1"
@@ -154,23 +153,30 @@ func reduceVectorPartitionRouterPoliciesV1(ctx context.Context, meta vectorParti
 	}
 	candidates := make([]vectorPartitionPolicyCandidateV1, 0, len(unique))
 	for _, candidate := range unique {
+		if len(candidates)&255 == 0 {
+			if err := ctx.Err(); err != nil {
+				return vectorPartitionPolicyReductionV1{}, err
+			}
+		}
 		candidates = append(candidates, candidate)
 	}
-	sort.Slice(candidates, func(i, j int) bool {
-		a, b := vectorPartitionPolicyDistanceV1(candidates[i].Score), vectorPartitionPolicyDistanceV1(candidates[j].Score)
-		if a != b {
-			return a < b
-		}
-		return candidates[i].Ordinal < candidates[j].Ordinal
-	})
-	if len(candidates) > meta.ReturnedWidth {
-		candidates = candidates[:meta.ReturnedWidth]
+	var err error
+	candidates, err = nearestVectorPartitionPolicyCandidatesV1(ctx, candidates, meta.ReturnedWidth)
+	if err != nil {
+		return vectorPartitionPolicyReductionV1{}, err
 	}
 	// Nearest-w selection precedes voting; identity order canonicalizes SET
 	// hashing without changing score order or hiding a distinct sequence hash.
-	sort.Slice(candidates, func(i, j int) bool { return candidates[i].Ordinal < candidates[j].Ordinal })
+	if err := sortVectorPartitionSliceWithContextV1(ctx, candidates, func(a, b vectorPartitionPolicyCandidateV1) bool { return a.Ordinal < b.Ordinal }); err != nil {
+		return vectorPartitionPolicyReductionV1{}, err
+	}
 	best := make(map[uint32]vectorPartitionPolicyDomainV1, min(len(candidates), meta.DomainCount))
-	for _, candidate := range candidates {
+	for i, candidate := range candidates {
+		if i&255 == 0 {
+			if err := ctx.Err(); err != nil {
+				return vectorPartitionPolicyReductionV1{}, err
+			}
+		}
 		distance := vectorPartitionPolicyDistanceV1(candidate.Score)
 		row, present := best[candidate.Domain]
 		if !present {
@@ -203,6 +209,11 @@ func reduceVectorPartitionRouterPoliciesV1(ctx context.Context, meta vectorParti
 
 	base := make([]vectorPartitionPolicyDomainV1, 0, len(best))
 	for _, row := range best {
+		if len(base)&255 == 0 {
+			if err := ctx.Err(); err != nil {
+				return vectorPartitionPolicyReductionV1{}, err
+			}
+		}
 		base = append(base, row)
 	}
 	distanceLess := func(a, b vectorPartitionPolicyDomainV1) bool {
@@ -211,14 +222,24 @@ func reduceVectorPartitionRouterPoliciesV1(ctx context.Context, meta vectorParti
 		}
 		return a.Domain < b.Domain
 	}
-	sort.Slice(base, func(i, j int) bool { return distanceLess(base[i], base[j]) })
-	frequency := append([]vectorPartitionPolicyDomainV1(nil), base...)
-	sort.Slice(frequency, func(i, j int) bool {
-		if frequency[i].Frequency != frequency[j].Frequency {
-			return frequency[i].Frequency > frequency[j].Frequency
+	if err := sortVectorPartitionSliceWithContextV1(ctx, base, distanceLess); err != nil {
+		return vectorPartitionPolicyReductionV1{}, err
+	}
+	frequency := make([]vectorPartitionPolicyDomainV1, len(base))
+	for start := 0; start < len(base); start += 1024 {
+		if err := ctx.Err(); err != nil {
+			return vectorPartitionPolicyReductionV1{}, err
 		}
-		return distanceLess(frequency[i], frequency[j])
-	})
+		copy(frequency[start:min(start+1024, len(base))], base[start:min(start+1024, len(base))])
+	}
+	if err := sortVectorPartitionSliceWithContextV1(ctx, frequency, func(a, b vectorPartitionPolicyDomainV1) bool {
+		if a.Frequency != b.Frequency {
+			return a.Frequency > b.Frequency
+		}
+		return distanceLess(a, b)
+	}); err != nil {
+		return vectorPartitionPolicyReductionV1{}, err
+	}
 	// Return only the requested prefixes, not slices retaining full-domain
 	// temporary arrays. All three slices share one owned, disjoint capped buffer.
 	routes := make([]vectorPartitionPolicyDomainV1, 3*meta.Probes)
@@ -229,7 +250,12 @@ func reduceVectorPartitionRouterPoliciesV1(ctx context.Context, meta vectorParti
 	copy(result.Frequency, frequency[:meta.Probes])
 	result.Hybrid[0] = frequency[0]
 	j := 1
-	for _, row := range base {
+	for i, row := range base {
+		if i&255 == 0 {
+			if err := ctx.Err(); err != nil {
+				return vectorPartitionPolicyReductionV1{}, err
+			}
+		}
 		if j == meta.Probes {
 			break
 		}
@@ -242,4 +268,31 @@ func reduceVectorPartitionRouterPoliciesV1(ctx context.Context, meta vectorParti
 		return vectorPartitionPolicyReductionV1{}, err
 	}
 	return result, nil
+}
+
+// nearestVectorPartitionPolicyCandidatesV1 orders a caller-owned work buffer.
+// It must observe cancellation during ordering, not only before and after it.
+func nearestVectorPartitionPolicyCandidatesV1(ctx context.Context, candidates []vectorPartitionPolicyCandidateV1, width int) ([]vectorPartitionPolicyCandidateV1, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if width < 1 {
+		return nil, errors.New("invalid nearest representative width")
+	}
+	if err := sortVectorPartitionSliceWithContextV1(ctx, candidates, func(a, b vectorPartitionPolicyCandidateV1) bool {
+		da, db := vectorPartitionPolicyDistanceV1(a.Score), vectorPartitionPolicyDistanceV1(b.Score)
+		if da != db {
+			return da < db
+		}
+		return a.Ordinal < b.Ordinal
+	}); err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return candidates[:min(width, len(candidates))], nil
 }

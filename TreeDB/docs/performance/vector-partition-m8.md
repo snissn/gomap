@@ -616,7 +616,18 @@ are invalid. A valid set reaching too few domains is retained as
 Queries are not removed from the report because a policy cannot supply a route.
 
 M8 caches the immutable exact/approximate comparisons once per query and probe
-coordinate across local-EF and concurrency cells. It records all three truth
+coordinate across local-EF and concurrency cells. Cache lookup still hashes the full
+query/truth population to reject changed inputs. Preflight therefore charges
+`2*queries*probes*EF-coordinates*concurrency-coordinates` population rechecks per
+variant: the conservative strict-replay maximum, including explicit replay and
+its attribution pass. The producer's smaller count is covered by that envelope;
+collector/reducer work remains charged once per probe. Each recheck includes
+query conversion/hash input, bounded truth-ID/score bytes and fixed digest
+headers. Dimension-sized scratch is charged separately from model-sized scratch.
+These are conservative admission work units, not measured CPU instructions.
+The retained-row validation and serialization bound is separate.
+
+It records all three truth
 masks, signed gained/lost bits, and **all expanded physical pack costs** using
 #4744's common canonical truth and membership. These are coverage diagnostics,
 not complete ANN search results under a new policy. Real local-search/QPS
@@ -676,3 +687,23 @@ at the bounded native return width. It does not grow an escaping append buffer
 per query or borrow a pooled native slice after releasing its scratch owner.
 Compare `BenchmarkM8RouterOrdinaryPathV1` against the parent and retain allocation
 counts as well as latency; helper extraction alone is not an overhead waiver.
+
+#### Draft review repairs for #4756
+
+Nearest-width, representative-identity, domain-distance and domain-frequency
+ordering reuse the existing cancellation-aware bounded merge sort. Diagnostic
+preparation polls through large intermediate copies and returns no policy routes
+on cancellation, allowing the owner read lock to be released. The extra bounded
+sort scratch is included in the model-memory envelope. This changes no ordinary
+serving reducer or selected candidate/digest definition.
+
+Regression commands:
+```sh
+GOWORK=off go test ./TreeDB/collections -run '^TestVectorPartitionRouterPolicy(NearestWidthSortCancellation|ReductionCancellationNoPartial)$'
+GOWORK=off go test ./cmd/treedb_vector_partition_bench -run '^TestM8RouterPolicyResourcePlan'
+```
+
+A prior draft's work bound omitted repeated population revalidation. Old checks
+on that bound do not qualify a new expanded diagnostic matrix; rerun current
+preflight rather than weakening the cap. Cached comparisons still reject input
+mutation and remain outside ordinary serving timers.

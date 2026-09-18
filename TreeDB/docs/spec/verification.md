@@ -2239,3 +2239,10 @@ replay and independently reopened retained report verification. Work and byte
 preflight include actual retained model sizes. Failure receipts cannot be dropped
 or replaced by successful-only averages. These tests do not select a production
 policy, establish 100K/250K scaling, or release the graph-before-Raft gate.
+
+- Router-policy cache-hit work, dimension-sized scratch and overflow admission:
+  `TestM8RouterPolicyResourcePlanChargesEveryPopulationRecheck`,
+  `TestM8RouterPolicyResourcePlanChargesQueryScratchAndRejectsOverflow`.
+- Cancellation within nearest-width sorting and without partial policy results:
+  `TestVectorPartitionRouterPolicyNearestWidthSortCancellation`,
+  `TestVectorPartitionRouterPolicyReductionCancellationNoPartial`.
