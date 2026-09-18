@@ -1,0 +1,34 @@
+name: "Router draft stack: pinned source"
+on:
+  push:
+    branches: [codex/issue-4748-4749-build-context]
+    paths: [.github/workflows/issue-4748-context.yml]
+permissions:
+  contents: read
+jobs:
+  context:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 7c304cd583c422fc62ba8ea70c63738a4bbf3277
+          persist-credentials: false
+      - name: Export exact public source and commit identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="${RUNNER_TEMP}/router-stack-source"
+          mkdir -p "$out"
+          test "$(git rev-parse HEAD)" = 7c304cd583c422fc62ba8ea70c63738a4bbf3277
+          git archive --format=tar HEAD | gzip -1 > "$out/source.tar.gz"
+          git rev-parse HEAD > "$out/BASE_COMMIT"
+          git cat-file commit HEAD > "$out/COMMIT_OBJECT"
+          git ls-tree -r HEAD > "$out/SOURCE_TREE.txt"
+          (cd "$out" && sha256sum source.tar.gz > SHA256SUMS)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: issue-4748-parent-source
+          path: ${{ runner.temp }}/router-stack-source
+          retention-days: 3
+          compression-level: 0
