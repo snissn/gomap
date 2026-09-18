@@ -120,6 +120,27 @@ These checked-in reports use different workloads, profiles, and caveats. Treat
 each workload as scoped evidence from its linked benchmark, not as one combined
 benchmark suite.
 
+### TreeDB versus Qdrant: same-machine 500K vectors
+
+September 17 comparison on a Ryzen 7 9700X with a shared six-CPU budget:
+500K 768-dimensional cosine vectors, `topK=10`, and document payloads **without
+vectors**. End-to-end Python clients use TreeDB native-v4 and Qdrant 1.19.0
+gRPC. Numbers are medians of six warm 10-second windows per configuration.
+
+| System/query configuration | Recall@10 | One-client QPS | Six-client QPS |
+| --- | ---: | ---: | ---: |
+| TreeDB SQ8 + packed FP32 rerank | 96.60% | 1,399 | 4,295 |
+| Qdrant SQ8 + FP32 rescore | 95.85% | 1,232 | 2,586 |
+| Qdrant FP32 search reference | 95.90% | 948 | 2,192 |
+
+At independently selected settings exceeding 95% recall, TreeDB delivered
+**13.5% more one-client QPS and 66.1% more six-client QPS than Qdrant SQ8**.
+Achieved recalls are not identical. This is scoped application throughput on a
+shared workstation, not maximum server throughput or an official 1M benchmark;
+the FP32 reference uses the same SQ8-equipped Qdrant collection.
+See the [September 17 TreeDB/Qdrant report](docs/benchmarks/treedb_vs_qdrant_cohere500k_2026-09-17.md)
+for latency, repeat ranges, configurations, dataset provenance, and limitations.
+
 ### VectorDBBench Cohere 1M
 
 End-to-end VDBBench search on Cohere Medium 1M (768-dimensional cosine,
