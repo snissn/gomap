@@ -1,0 +1,47 @@
+name: Issue 4744 isolated workspace
+
+# Temporary issue-branch bootstrap. Remove before the completed draft diff.
+on:
+  push:
+    branches: [codex/4744-coverage-no-coarsening]
+    paths: [.github/workflows/issue-4744-workspace.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  workspace:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 6d96a7905b818b722827f3cf5cbf4d7c24c77df2
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Package only tracked public source and Go dependencies for offline tests
+        shell: bash
+        env:
+          GOWORK: 'off'
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/issue-4744-workspace"
+          mkdir -p "$out"
+          test "$(git rev-parse HEAD)" = 6d96a7905b818b722827f3cf5cbf4d7c24c77df2
+          git archive --format=tar.gz --prefix=repo/ HEAD > "$out/source.tar.gz"
+          go version > "$out/toolchain.txt"
+          go mod download
+          tar -C "$(go env GOMODCACHE)" -czf "$out/modules.tar.gz" .
+          tar -C "$(go env GOROOT)" -czf "$out/go.tar.gz" .
+          (cd "$out" && sha256sum source.tar.gz modules.tar.gz go.tar.gz > SHA256SUMS)
+          du -h "$out"/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: issue-4744-offline-workspace
+          path: ${{ runner.temp }}/issue-4744-workspace/
+          compression-level: 0
+          retention-days: 3
+          if-no-files-found: error
