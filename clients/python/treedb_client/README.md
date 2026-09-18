@@ -68,6 +68,12 @@ but never parses them to recompute scores. Commands 64 and 65 pack query and
 ingest FP32 values respectively; document responses remain JSON. Legacy
 representations retain dense 64/v2 exact and 64/v3 scalar-u8 rerank.
 
+Native dense preparation converts each query component once and validates
+finiteness in that same pass, then packs the unchanged FP32 request format.
+Non-finite values, failed numeric conversions, and FP32 overflow raise
+`TreeDBConfigError` before sending a frame. HTTP retains its own normalized
+query preflight; neither transport skips dimension or generation validation.
+
 Native addresses must be numeric IPv4 literals (`127.0.0.1:7121`) or bracketed
 numeric IPv6 literals (`[::1]:7121`), without zone identifiers. Hostnames are
 rejected before networking: one family-specific socket connects with the
