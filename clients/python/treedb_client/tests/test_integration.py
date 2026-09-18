@@ -113,6 +113,17 @@ class TreeDBServiceProcess:
                 else:
                     self.proc.kill()
                 self.proc.wait(timeout=5)
+        # `go run` exits before its compiled child finishes shutdown writes
+        # into data_dir; draining the process group prevents ENOTEMPTY when
+        # the test's TemporaryDirectory cleans up right after stop().
+        if hasattr(os, "killpg"):
+            deadline = time.monotonic() + 15
+            while time.monotonic() < deadline:
+                try:
+                    os.killpg(self.proc.pid, 0)
+                except (ProcessLookupError, PermissionError):
+                    break
+                time.sleep(0.1)
         log_name = self.log.name
         self.log.close()
         try:
