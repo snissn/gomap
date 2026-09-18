@@ -248,6 +248,11 @@ func (v *columnHNSWSearchPackPreparedView) searchCosineWithContextFast(ctx conte
 		}
 	}()
 	entryOrdinal := v.Header.EntryOrdinal
+	if opts.effortObservation != nil {
+		opts.effortObservation.initialEntry = entryOrdinal
+		opts.effortObservation.layer0Entry = -1
+		opts.effortObservation.upperLayers = 0
+	}
 	if entryOrdinal < 0 || entryOrdinal >= rowCount {
 		return nil, stats, fmt.Errorf("collections: hnsw_search_pack_v1 entry ordinal=%d outside rows=%d", entryOrdinal, rowCount)
 	}
@@ -258,6 +263,9 @@ func (v *columnHNSWSearchPackPreparedView) searchCosineWithContextFast(ctx conte
 			return nil, stats, err
 		}
 		for layer := maxLayer; layer > 0; layer-- {
+			if opts.effortObservation != nil {
+				opts.effortObservation.upperLayers++
+			}
 			if err := ctx.Err(); err != nil {
 				return nil, stats, err
 			}
@@ -274,6 +282,9 @@ func (v *columnHNSWSearchPackPreparedView) searchCosineWithContextFast(ctx conte
 		if candidateLimit <= 0 {
 			return nil, stats, errTypedGraphSearchBudget
 		}
+	}
+	if opts.effortObservation != nil {
+		opts.effortObservation.layer0Entry = entryOrdinal
 	}
 	visitMarks := scratch.visitMarks
 	visitEpoch := scratch.visitEpoch
@@ -603,6 +614,11 @@ func (v *columnHNSWSearchPackPreparedView) searchCosineWithContextTrace(ctx cont
 		}
 	}()
 	entryOrdinal := v.Header.EntryOrdinal
+	if opts.effortObservation != nil {
+		opts.effortObservation.initialEntry = entryOrdinal
+		opts.effortObservation.layer0Entry = -1
+		opts.effortObservation.upperLayers = 0
+	}
 	if entryOrdinal < 0 || entryOrdinal >= rowCount {
 		return nil, stats, fmt.Errorf("collections: hnsw_search_pack_v1 entry ordinal=%d outside rows=%d", entryOrdinal, rowCount)
 	}
@@ -614,6 +630,9 @@ func (v *columnHNSWSearchPackPreparedView) searchCosineWithContextTrace(ctx cont
 			return nil, stats, err
 		}
 		for layer := maxLayer; layer > 0; layer-- {
+			if opts.effortObservation != nil {
+				opts.effortObservation.upperLayers++
+			}
 			if err := ctx.Err(); err != nil {
 				return nil, stats, err
 			}
@@ -630,6 +649,9 @@ func (v *columnHNSWSearchPackPreparedView) searchCosineWithContextTrace(ctx cont
 		if candidateLimit <= 0 {
 			return nil, stats, errTypedGraphSearchBudget
 		}
+	}
+	if opts.effortObservation != nil {
+		opts.effortObservation.layer0Entry = entryOrdinal
 	}
 	visitMarks := scratch.visitMarks
 	visitEpoch := scratch.visitEpoch
@@ -1189,6 +1211,9 @@ func (v *columnHNSWSearchPackPreparedView) scoreOrdinal(normalizedQuery []float3
 	optimized := scoreBatchMode != columnVectorGraphScoreBatchModeScalar && vectorops.DotFloat32OptimizedEligible(v.Header.Dimensions)
 	recordColumnHNSWSearchPackScoreBatchStats(stats, 1, optimized, !optimized)
 	v.recordScoreStats(stats, 1)
+	if scratch != nil && scratch.hnswScoreObserver != nil {
+		scratch.hnswScoreObserver(ordinal)
+	}
 	_ = scratch
 	return score, nil
 }
@@ -1224,6 +1249,11 @@ func (v *columnHNSWSearchPackPreparedView) scoreRowIDs(normalizedQuery []float32
 		}
 		recordColumnHNSWSearchPackScoreBatchStats(stats, len(rowIDs), status.Optimized, status.Fallback)
 		v.recordScoreStats(stats, len(rowIDs))
+		if scratch != nil && scratch.hnswScoreObserver != nil {
+			for _, id := range rowIDs {
+				scratch.hnswScoreObserver(int(id))
+			}
+		}
 		if stats != nil {
 			count := uint64(len(rowIDs))
 			stats.PackedExactScoreCalls++
@@ -1247,6 +1277,11 @@ func (v *columnHNSWSearchPackPreparedView) scoreRowIDs(normalizedQuery []float32
 			}
 			recordColumnHNSWSearchPackScoreBatchStats(stats, len(rowIDs), status.Optimized, status.Fallback)
 			v.recordScoreStats(stats, len(rowIDs))
+			if scratch.hnswScoreObserver != nil {
+				for _, id := range rowIDs {
+					scratch.hnswScoreObserver(int(id))
+				}
+			}
 			return dst, nil
 		}
 	}

@@ -223,8 +223,9 @@ func (m columnVectorGraphNativeSearchQueryMode) String() string {
 }
 
 type columnVectorGraphNativeSearchOptions struct {
-	TopK     int
-	EfSearch int
+	effortObservation *columnHNSWSearchPackEffortObservationV1 // offline phase observations; nil on serving
+	TopK              int
+	EfSearch          int
 	// CandidateLimit bounds distinct layer-0 scores in prepared HNSW search.
 	// A positive limit starts at layer 0; unfiltered searches may return
 	// approximate results at the cap. Zero preserves ordinary upper traversal.
@@ -1125,6 +1126,8 @@ type columnVectorGraphSearchCandidate struct {
 // It is not concurrency-safe. Parallel searches over immutable graph assets are
 // valid with one reader and one scratch per worker.
 type columnVectorGraphNativeSearchScratch struct {
+	// Independent test/offline score observer. Never set on serving scratch.
+	hnswScoreObserver            func(int)
 	scoreScratch                 columnPhysicalRowReaderScratch
 	expandScratch                columnPhysicalRowReaderScratch
 	resultScratch                columnPhysicalRowReaderScratch

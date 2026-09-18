@@ -270,3 +270,26 @@ hits across both producer and strict-replay EF/concurrency populations, not just
 new candidate collections. Cached identity validation MUST NOT be removed to
 avoid that cost. Nearest-width and policy ordering MUST observe cancellation
 while sorting under the captured owner; canceled diagnostics return no routes.
+
+## R2: explicit offline router effort (#4748)
+
+`CompareRankingPoliciesWithEffortForDiagnosticsV1` is not a public serving
+policy. It consumes one immutable prepared router and the existing R1 reducers.
+It validates `1 <= w <= E <= N`, `E <= C <= 2^24` before traversal. Returned
+width `w`, retained beam `E`, and score budget `C` are distinct coordinates;
+requested coordinates are never silently clamped. `legacy_l0_distinct` keeps
+positive-cap layer-zero entry and requires `C <= N`. Its approximate-at-cap
+result remains permitted. `hierarchical_all_scores` uses the existing strict
+upper-descent traversal; repeated upper scores count, `C > N` is legal, and
+budget exhaustion returns identity/work but no partial route. Zero C is never
+used to remove the score envelope. Both paths omit document materialization.
+
+The evidence names entry policy, budget unit, initial/L0 entry ordinals, upper
+layers and score calls, L0 distinct scores, total calls, bytes and refusal.
+Ordinary counters retain their previous meanings. Optional fixed-size phase
+observations and an independent test-only score observer do not enable detailed
+tracing on serving requests. M8's selected R2 receipt must be reconstructed from
+reopened assets, including refused queries; schema checks and self-reported
+hashes alone are not authority. Per-query observations cannot disappear because
+one treatment failed. `#4750` remains the owner of any subsequent public policy
+integration, and `#4753` of representative scaling qualification.

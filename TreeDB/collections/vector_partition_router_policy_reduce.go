@@ -24,6 +24,7 @@ type vectorPartitionPolicyCandidateV1 struct {
 }
 
 type vectorPartitionPolicyContextV1 struct {
+	RetrievalDigest     string // optional, explicit R2 coordinate; empty preserves V1 bytes
 	ModelDigest         string
 	QueryDigest         string
 	Mode                string
@@ -75,6 +76,10 @@ func vectorPartitionPolicyDigestV1(ctx context.Context, meta vectorPartitionPoli
 	for _, value := range []int{meta.RepresentativeCount, meta.DomainCount, meta.CandidateBudget, meta.ReturnedWidth, len(candidates)} {
 		writeUint(uint64(value))
 	}
+	if meta.RetrievalDigest != "" {
+		writeUint(uint64(len(meta.RetrievalDigest)))
+		_, _ = h.Write([]byte(meta.RetrievalDigest))
+	}
 	for i, c := range candidates {
 		if i&255 == 0 {
 			if err := ctx.Err(); err != nil {
@@ -105,7 +110,11 @@ func reduceVectorPartitionRouterPoliciesV1(ctx context.Context, meta vectorParti
 	if err := ctx.Err(); err != nil {
 		return vectorPartitionPolicyReductionV1{}, err
 	}
-	for _, digest := range []string{meta.ModelDigest, meta.QueryDigest} {
+	digests := []string{meta.ModelDigest, meta.QueryDigest}
+	if meta.RetrievalDigest != "" {
+		digests = append(digests, meta.RetrievalDigest)
+	}
+	for _, digest := range digests {
 		decoded, err := hex.DecodeString(digest)
 		if err != nil || len(decoded) != sha256.Size || hex.EncodeToString(decoded) != digest {
 			return vectorPartitionPolicyReductionV1{}, errors.New("invalid policy model/query digest")

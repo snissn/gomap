@@ -2246,3 +2246,22 @@ policy, establish 100K/250K scaling, or release the graph-before-Raft gate.
 - Cancellation within nearest-width sorting and without partial policy results:
   `TestVectorPartitionRouterPolicyNearestWidthSortCancellation`,
   `TestVectorPartitionRouterPolicyReductionCancellationNoPartial`.
+
+### Router effort diagnostics (#4748)
+
+`vector_partition_router_effort_diagnostic_test.go` compares legacy candidates
+and counters with the persisted R1 owner, checks a deterministic two-layer
+shortcut, repeated upper scoring against an independent scalar/tiled observer,
+strict empty-result refusal, supported statistics modes, trace/fast parity,
+exact effective coordinates, C>N, deterministic identity, cancellation,
+concurrent close, owned results, and reopen. No timeout assertion substitutes
+for the deterministic path/score assertions.
+
+`m8_router_effort_experiment_test.go` and `m8_router_effort_replay_test.go`
+exercise CLI/config/child propagation, complete refused-query populations,
+source/truth/mode/budget binding, schema-valid forged work rejection through
+fresh-asset replay, cache identity/cancellation, and work/memory limits over
+EF/concurrency repetitions. Existing R1 digest goldens must remain unchanged.
+`BenchmarkM8RouterEffortPreparedV1` measures prepared collection plus ranking and
+hashing; `BenchmarkM8RouterOrdinaryPathV1` is the unchanged router-only control.
+Neither measures full partition ANN, network, Python or a representative corpus.

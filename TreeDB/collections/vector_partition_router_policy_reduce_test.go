@@ -11,7 +11,7 @@ import (
 )
 
 func policyTestContext() vectorPartitionPolicyContextV1 {
-	return vectorPartitionPolicyContextV1{strings.Repeat("a", 64), strings.Repeat("b", 64), "approximate", 16, 4, 16, 16, 4}
+	return vectorPartitionPolicyContextV1{ModelDigest: strings.Repeat("a", 64), QueryDigest: strings.Repeat("b", 64), Mode: "approximate", RepresentativeCount: 16, DomainCount: 4, CandidateBudget: 16, ReturnedWidth: 16, Probes: 4}
 }
 func policyGolden() []vectorPartitionPolicyCandidateV1 {
 	return []vectorPartitionPolicyCandidateV1{{0, 0, 0, .99}, {1, 2, 1, .985}, {2, 1, 2, .98}, {3, 1, 3, .97}, {4, 1, 4, .96}, {5, 3, 5, .95}}

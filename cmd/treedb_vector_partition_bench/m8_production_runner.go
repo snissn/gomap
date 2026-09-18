@@ -102,26 +102,27 @@ type m8ProductionReportV1 struct {
 }
 
 type m8ProductionConfigEvidenceV1 struct {
-	QualityDiagnostics      bool      `json:"quality_diagnostics,omitempty"`
-	QualityTraceQueries     int       `json:"quality_trace_queries,omitempty"`
-	RouterPolicyDiagnostics bool      `json:"router_policy_diagnostics,omitempty"`
-	RouterPolicyWidth       int       `json:"router_policy_width,omitempty"`
-	RaftGroups              int       `json:"raft_groups"`
-	RaftNodesPerGroup       int       `json:"raft_nodes_per_group"`
-	Partitions              int       `json:"partitions"`
-	DomainCount             int       `json:"logical_domain_count,omitempty"`
-	PacksPerDomain          []int     `json:"physical_packs_per_domain,omitempty"`
-	Probes                  []int     `json:"probes"`
-	Overlap                 []float64 `json:"overlap"`
-	TopK                    int       `json:"top_k"`
-	RecallTarget            float64   `json:"recall_target"`
-	Concurrency             []int     `json:"concurrency"`
-	Warmup                  int       `json:"warmup_requests"`
-	EffectiveWarmup         int       `json:"effective_warmup_requests"`
-	EfSearch                []int     `json:"ef_search"`
-	RouterCandidates        int       `json:"approximate_router_candidate_budget"`
-	MaxExactTruthVisits     int64     `json:"max_exact_truth_visits,omitempty"`
-	Seed                    int64     `json:"seed"`
+	QualityDiagnostics      bool                                              `json:"quality_diagnostics,omitempty"`
+	QualityTraceQueries     int                                               `json:"quality_trace_queries,omitempty"`
+	RouterPolicyDiagnostics bool                                              `json:"router_policy_diagnostics,omitempty"`
+	RouterPolicyWidth       int                                               `json:"router_policy_width,omitempty"`
+	RouterEffort            *collections.VectorPartitionRouterEffortOptionsV1 `json:"router_effort,omitempty"`
+	RaftGroups              int                                               `json:"raft_groups"`
+	RaftNodesPerGroup       int                                               `json:"raft_nodes_per_group"`
+	Partitions              int                                               `json:"partitions"`
+	DomainCount             int                                               `json:"logical_domain_count,omitempty"`
+	PacksPerDomain          []int                                             `json:"physical_packs_per_domain,omitempty"`
+	Probes                  []int                                             `json:"probes"`
+	Overlap                 []float64                                         `json:"overlap"`
+	TopK                    int                                               `json:"top_k"`
+	RecallTarget            float64                                           `json:"recall_target"`
+	Concurrency             []int                                             `json:"concurrency"`
+	Warmup                  int                                               `json:"warmup_requests"`
+	EffectiveWarmup         int                                               `json:"effective_warmup_requests"`
+	EfSearch                []int                                             `json:"ef_search"`
+	RouterCandidates        int                                               `json:"approximate_router_candidate_budget"`
+	MaxExactTruthVisits     int64                                             `json:"max_exact_truth_visits,omitempty"`
+	Seed                    int64                                             `json:"seed"`
 }
 
 // m8ProductionMeasurementTranscriptEvidenceV1 binds the rows measured before
@@ -164,6 +165,7 @@ type m8ProductionRowOutcomesV1 struct {
 type m8ProductionAttributionV1 struct {
 	Quality              *m8QualityAttributionV1   `json:"quality_diagnostics,omitempty"`
 	RouterPolicies       *m8RouterPolicyEvidenceV1 `json:"router_policy_diagnostics,omitempty"`
+	RouterEffort         *m8RouterEffortEvidenceV1 `json:"router_effort_diagnostics,omitempty"`
 	Contract             string                    `json:"contract"`
 	GlobalExactRecallAtK float64                   `json:"global_exact_recall_at_k"`
 	// OracleStagesComplete distinguishes the V1 retained ladder from older
@@ -490,6 +492,11 @@ func runM8ProductionSingleVariantV1(cfg config, fixture fixtureManifest, vectors
 			return errors.New("opened router exceeds policy work plan or cannot satisfy requested width")
 		}
 	}
+	if cfg.m8RouterEffort.Mode != "" {
+		if err := collections.ValidateVectorPartitionRouterEffortOptionsV1(cfg.m8RouterEffort, int(assets.status.Representatives)); err != nil {
+			return err
+		}
+	}
 	topologyCtx, cancelTopology := context.WithTimeout(context.Background(), 2*time.Minute)
 	topology, err := nativewire.NewVectorPartitionM8ProductionMultiGroupV1(topologyCtx, nativewire.VectorPartitionM8ProductionMultiGroupOptionsV1{
 		Collection: assets.collection, Manifest: assets.manifest, RouterSource: assets.RouterSource(),
@@ -532,7 +539,7 @@ func runM8ProductionSingleVariantV1(cfg config, fixture fixtureManifest, vectors
 		ExecutionID: executionID, RouterRepresentatives: assets.status.Representatives,
 		Command: replayCommand, ExecutableSHA256: executableSHA256, BaseSHA: cfg.baseSHA, HeadSHA: cfg.headSHA, Dirty: m8GitDirtyInV1(cfg.sourceCheckout, cfg.out, cfg.profiles, cfg.m8MatrixOut, cfg.m8MatrixProfiles),
 		GoVersion: runtime.Version(), GOOS: runtime.GOOS, GOARCH: runtime.GOARCH, LogicalCPUs: runtime.NumCPU(), GOMAXPROCS: goMaxProcs, GoMemoryLimitBytes: goMemoryLimitBytes, Host: m8ProductionHostV1(cfg, assets.dir), Dataset: fixture, DatasetDirectory: datasetDirectory, TruthCacheDirectory: truthCacheDirectory, Variant: assets.descriptor,
-		Config:        m8ProductionConfigEvidenceV1{RaftGroups: cfg.raftGroups, RaftNodesPerGroup: cfg.raftNodes, Partitions: cfg.partitions, DomainCount: int(assets.manifest.DomainCount), PacksPerDomain: m8ManifestPacksPerDomainV1(assets.manifest), Probes: append([]int(nil), cfg.probes...), Overlap: append([]float64(nil), cfg.overlaps...), TopK: cfg.topK, RecallTarget: cfg.recallTarget, Concurrency: append([]int(nil), cfg.concurrency...), Warmup: cfg.warmup, EfSearch: append([]int(nil), cfg.efSearch...), RouterCandidates: cfg.routerCandidates, MaxExactTruthVisits: cfg.m8MaxExactTruthVisits, Seed: cfg.seed, QualityDiagnostics: cfg.m8QualityDiagnostics, QualityTraceQueries: cfg.m8QualityTraceQueries, RouterPolicyDiagnostics: cfg.m8RouterPolicyDiagnostics, RouterPolicyWidth: cfg.m8RouterPolicyWidth},
+		Config:        m8ProductionConfigEvidenceV1{RaftGroups: cfg.raftGroups, RaftNodesPerGroup: cfg.raftNodes, Partitions: cfg.partitions, DomainCount: int(assets.manifest.DomainCount), PacksPerDomain: m8ManifestPacksPerDomainV1(assets.manifest), Probes: append([]int(nil), cfg.probes...), Overlap: append([]float64(nil), cfg.overlaps...), TopK: cfg.topK, RecallTarget: cfg.recallTarget, Concurrency: append([]int(nil), cfg.concurrency...), Warmup: cfg.warmup, EfSearch: append([]int(nil), cfg.efSearch...), RouterCandidates: cfg.routerCandidates, MaxExactTruthVisits: cfg.m8MaxExactTruthVisits, Seed: cfg.seed, QualityDiagnostics: cfg.m8QualityDiagnostics, QualityTraceQueries: cfg.m8QualityTraceQueries, RouterPolicyDiagnostics: cfg.m8RouterPolicyDiagnostics, RouterPolicyWidth: cfg.m8RouterPolicyWidth, RouterEffort: m8RouterEffortConfigV1(cfg)},
 		BuildNanos:    buildNanos,
 		TruthCache:    truthCache,
 		Profiles:      m8ProductionProfileEvidenceV1{Directory: cfg.profiles, Status: "not_captured", Scope: "CPU, block, mutex, and trace cover measured query cells plus the endpoint-loss fault; heap is an end snapshot; allocs requires the captured baseline for differential analysis"},
@@ -657,6 +664,11 @@ func runM8ProductionSingleVariantV1(cfg config, fixture fixtureManifest, vectors
 		}
 		if cfg.m8RouterPolicyDiagnostics {
 			if err := attributionHarness.enableRouterPoliciesV1(cfg.m8RouterPolicyWidth, approximateCandidates); err != nil {
+				return err
+			}
+		}
+		if cfg.m8RouterEffort.Mode != "" {
+			if err := attributionHarness.enableRouterEffortV1(cfg.m8RouterEffort); err != nil {
 				return err
 			}
 		}
@@ -1153,7 +1165,7 @@ func m8ArtifactNameV1(cfg config, fixture fixtureManifest, manifest collections.
 		Fixture: fixture,
 		Config: func() m8ProductionConfigEvidenceV1 {
 			count, _ := m8WarmupCountAndConcurrencyV1(cfg)
-			return m8ProductionConfigEvidenceV1{RaftGroups: cfg.raftGroups, RaftNodesPerGroup: cfg.raftNodes, Partitions: cfg.partitions, DomainCount: int(manifest.DomainCount), PacksPerDomain: m8ManifestPacksPerDomainV1(manifest), Probes: cfg.probes, Overlap: cfg.overlaps, TopK: cfg.topK, RecallTarget: cfg.recallTarget, Concurrency: cfg.concurrency, Warmup: cfg.warmup, EffectiveWarmup: count, EfSearch: cfg.efSearch, RouterCandidates: cfg.routerCandidates, MaxExactTruthVisits: cfg.m8MaxExactTruthVisits, Seed: cfg.seed, QualityDiagnostics: cfg.m8QualityDiagnostics, QualityTraceQueries: cfg.m8QualityTraceQueries, RouterPolicyDiagnostics: cfg.m8RouterPolicyDiagnostics, RouterPolicyWidth: cfg.m8RouterPolicyWidth}
+			return m8ProductionConfigEvidenceV1{RaftGroups: cfg.raftGroups, RaftNodesPerGroup: cfg.raftNodes, Partitions: cfg.partitions, DomainCount: int(manifest.DomainCount), PacksPerDomain: m8ManifestPacksPerDomainV1(manifest), Probes: cfg.probes, Overlap: cfg.overlaps, TopK: cfg.topK, RecallTarget: cfg.recallTarget, Concurrency: cfg.concurrency, Warmup: cfg.warmup, EffectiveWarmup: count, EfSearch: cfg.efSearch, RouterCandidates: cfg.routerCandidates, MaxExactTruthVisits: cfg.m8MaxExactTruthVisits, Seed: cfg.seed, QualityDiagnostics: cfg.m8QualityDiagnostics, QualityTraceQueries: cfg.m8QualityTraceQueries, RouterPolicyDiagnostics: cfg.m8RouterPolicyDiagnostics, RouterPolicyWidth: cfg.m8RouterPolicyWidth, RouterEffort: m8RouterEffortConfigV1(cfg)}
 		}(),
 		Assets: m8ArtifactAssetIdentityV1{
 			IntegrityDigest:  manifest.IntegrityDigest,
@@ -2196,6 +2208,7 @@ func m8CanonicalRecallV1(want, got []m8CanonicalResultV1) float64 {
 type m8AttributionHarnessV1 struct {
 	quality   *m8QualityCacheV1
 	policies  *m8RouterPolicyCacheV1
+	effort    *m8RouterEffortCacheV1
 	assets    *m8ProductionMultiGroupAssetsV1
 	searchers []*collections.VectorPartitionLocalSearcherV1
 }
@@ -2240,6 +2253,7 @@ func (h *m8AttributionHarnessV1) Close() error {
 	}
 	h.quality = nil
 	h.policies = nil
+	h.effort = nil
 	return err
 }
 
@@ -2763,6 +2777,11 @@ func m8BuildAttributionV1(ctx context.Context, assets *m8ProductionMultiGroupAss
 		return cell, policyErr
 	}
 	cell.Evidence.RouterPolicies = policies
+	effort, effortErr := harness.routerEffortEvidenceV1(ctx, queries, truth, probes, approximateCandidates)
+	if effortErr != nil {
+		return cell, effortErr
+	}
+	cell.Evidence.RouterEffort = effort
 	if cell.Evidence.Quality != nil {
 		cell.qualityTruth = truth
 	}
@@ -4655,6 +4674,9 @@ func validateM8ProductionMeasurementCellsV1(cfg m8ProductionConfigEvidenceV1, ro
 			return err
 		}
 		if err := m8RouterPolicyEvidenceSelectionV1(cfg, row); err != nil {
+			return err
+		}
+		if err := m8RouterEffortEvidenceSelectionV1(cfg, row); err != nil {
 			return err
 		}
 		key := m8ProductionMeasurementCellKeyV1{math.Float64bits(row.Overlap), row.Probes, row.EfSearch, row.Concurrency}

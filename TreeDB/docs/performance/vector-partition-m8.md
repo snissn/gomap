@@ -707,3 +707,43 @@ A prior draft's work bound omitted repeated population revalidation. Old checks
 on that bound do not qualify a new expanded diagnostic matrix; rerun current
 preflight rather than weakening the cap. Cached comparisons still reject input
 mutation and remain outside ordinary serving timers.
+
+## Explicit router-effort comparison (R2, #4748)
+
+R2 is disabled by default. To add one bounded offline retrieval coordinate to an
+existing M8 run, retain its existing corpus/topology/resource arguments and add:
+
+```sh
+-m8-quality-diagnostics -m8-router-policy-diagnostics \
+-m8-router-policy-width 4 \
+-m8-router-effort-mode hierarchical_all_scores \
+-m8-router-effort-width 4 -m8-router-effort-beam 16 \
+-m8-router-effort-score-budget 128
+```
+
+The model must actually contain at least 16 representatives. Choose declared
+coordinates during calibration, not after viewing protected outcomes. R2 width
+must equal the R1 exact/legacy comparison's frozen returned width. For a coupled
+legacy control use `legacy_l0_distinct` with w=E=C and no larger-than-model cap.
+At the same numeric C, the two modes need not perform equivalent work: legacy
+counts distinct L0 scores; hierarchy counts all invocations, including repeats.
+Strict refusal is reported as `score_budget_exhausted` with no candidate route.
+Coverage refusal is distinct from score exhaustion. Every query is retained.
+
+The existing timed coordinator still uses ordinary min-distance routing. R2
+policy masks describe offline available truth coverage, not deployed ANN recall
+or service latency. The report retains the selected coordinate and total work;
+exact/legacy R1 controls, no-coarsening and membership ceilings remain separate.
+Fresh-owner replay recollects refused rows too. Preflight charges full scoring,
+candidate ordering/hashing, retained scalar receipts and repeated cache-hit
+population validation over EF/concurrency rows. Source vectors are not cloned by
+this query diagnostic. Existing local pack/overlap/SQ8/storage/consensus paths
+are unchanged. No public promotion or Raft resumption follows from small tests.
+
+Focused checks and router-only measurements:
+```sh
+GOWORK=off go test ./TreeDB/collections -run '^TestVectorPartitionRouterEffort' -count=1
+GOWORK=off go test ./cmd/treedb_vector_partition_bench -run '^TestM8RouterEffort' -count=1
+GOWORK=off go test ./cmd/treedb_vector_partition_bench -run '^$' \
+  -bench 'BenchmarkM8Router(EffortPrepared|OrdinaryPath)V1' -benchmem -count=5
+```
