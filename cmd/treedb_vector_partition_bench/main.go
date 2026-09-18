@@ -151,6 +151,7 @@ type config struct {
 	m8RouterPolicyDiagnostics bool
 	m8RouterPolicyWidth       int
 	m8RouterEffort            collections.VectorPartitionRouterEffortOptionsV1
+	m8RouterRepresentation    collections.VectorPartitionRouterRepresentationOptionsV1
 	// Runtime work-planner inputs from the actual retained router models.
 	m8RouterPolicyRepresentativeCounts []int
 	m8TruthCache                       string
@@ -975,6 +976,10 @@ func parseConfig(args []string) (config, error) {
 	fs.IntVar(&cfg.m8QualityTraceQueries, "m8-quality-trace-queries", 0, "sample the first 0..8 quality queries with structurally bounded existing local traces")
 	fs.BoolVar(&cfg.m8RouterPolicyDiagnostics, "m8-router-policy-diagnostics", false, "compare router ranking policies offline on identical candidates; requires -m8-quality-diagnostics and does not change serving")
 	fs.IntVar(&cfg.m8RouterPolicyWidth, "m8-router-policy-width", 0, "nearest returned representatives used for policy voting; zero uses the effective approximate candidate budget")
+	fs.StringVar(&cfg.m8RouterRepresentation.Arm, "m8-router-representation-arm", "", "offline frozen-membership arm: multilevel or centroid_geometry")
+	fs.IntVar(&cfg.m8RouterRepresentation.ReturnedWidth, "m8-router-representation-width", 0, "fixed nearest representative width across all arms")
+	fs.Uint64Var(&cfg.m8RouterRepresentation.MaxBuildWork, "m8-router-representation-max-build-work", 0, "explicit per-variant offline representation build-work cap")
+	fs.Uint64Var(&cfg.m8RouterRepresentation.MaxBuildBytes, "m8-router-representation-max-build-bytes", 0, "explicit per-variant offline representation live-byte cap")
 	fs.StringVar(&cfg.m8RouterEffort.Mode, "m8-router-effort-mode", "", "offline retrieval entry/budget mode: legacy_l0_distinct or hierarchical_all_scores")
 	fs.IntVar(&cfg.m8RouterEffort.ReturnedWidth, "m8-router-effort-width", 0, "offline returned width w; must match R1 control width")
 	fs.IntVar(&cfg.m8RouterEffort.Beam, "m8-router-effort-beam", 0, "offline retained beam E; w<=E<=model rows")
@@ -1165,6 +1170,9 @@ func parseConfig(args []string) (config, error) {
 	}
 	if cfg.m3PersistDir != "" && (cfg.stage != "overlap,partition_index" || len(cfg.overlaps) != 1) {
 		return config{}, errors.New("-m3-persist-db requires stage overlap,partition_index with exactly one overlap ratio")
+	}
+	if err := m8ValidateRouterRepresentationConfigV1(cfg); err != nil {
+		return config{}, err
 	}
 	if err := m8ValidateRouterEffortConfigV1(cfg); err != nil {
 		return config{}, err
@@ -2172,6 +2180,9 @@ type m8BenchmarkWorkPlan struct {
 	RouterPolicyDiagnosticBytes       int64
 	RouterEffortDiagnosticWorkUnits   int64
 	RouterEffortDiagnosticBytes       int64
+	RouterRepresentationWorkUnits     int64
+	RouterRepresentationBytes         int64
+	RouterRepresentationBuildWorkCap  int64
 	FixtureChecksumVectorVisits       int64
 	ExactTruthVectorVisits            int64
 	ExactWorkVectorVisits             int64
@@ -2257,6 +2268,10 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 		return plan, err
 	}
 	plan.RouterPolicyDiagnosticWorkUnits, plan.RouterPolicyDiagnosticBytes, err = m8PlanRouterPolicyDiagnosticsV1(cfg, m, oracleDomainCounts, capUnits, capBytes)
+	if err != nil {
+		return plan, err
+	}
+	plan.RouterRepresentationWorkUnits, plan.RouterRepresentationBytes, plan.RouterRepresentationBuildWorkCap, err = m8PlanRouterRepresentationV1(cfg, m, oracleDomainCounts, capUnits, capBytes)
 	if err != nil {
 		return plan, err
 	}
@@ -2412,7 +2427,7 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 	if err != nil {
 		return plan, err
 	}
-	totalDiagnosticWork, err := memoryAdd(plan.AttributionDiagnosticWorkUnits, plan.QualityDiagnosticWorkUnits, plan.RouterPolicyDiagnosticWorkUnits, plan.RouterEffortDiagnosticWorkUnits)
+	totalDiagnosticWork, err := memoryAdd(plan.AttributionDiagnosticWorkUnits, plan.QualityDiagnosticWorkUnits, plan.RouterPolicyDiagnosticWorkUnits, plan.RouterEffortDiagnosticWorkUnits, plan.RouterRepresentationWorkUnits)
 	if err != nil {
 		return plan, err
 	}
@@ -2775,7 +2790,7 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 	if err != nil {
 		return plan, err
 	}
-	attributionPeak, err = memoryAdd(attributionPeak, plan.QualityDiagnosticBytes, plan.RouterPolicyDiagnosticBytes, plan.RouterEffortDiagnosticBytes)
+	attributionPeak, err = memoryAdd(attributionPeak, plan.QualityDiagnosticBytes, plan.RouterPolicyDiagnosticBytes, plan.RouterEffortDiagnosticBytes, plan.RouterRepresentationBytes)
 	if err != nil {
 		return plan, err
 	}

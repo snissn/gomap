@@ -748,6 +748,67 @@ GOWORK=off go test ./cmd/treedb_vector_partition_bench -run '^$' \
   -bench 'BenchmarkM8Router(EffortPrepared|OrdinaryPath)V1' -benchmem -count=5
 ```
 
+### R3: frozen-source representative shape and geometry
+
+Issue #4749 adds the diagnostic-only representation comparison after G0/R1 (and
+can coexist with the separately selected R2 effort diagnostic). Add these flags
+to an otherwise valid, source-bound `production_multi_group` invocation:
+
+```sh
+-m8-quality-diagnostics \
+-m8-router-policy-diagnostics -m8-router-policy-width 4 \
+-m8-router-representation-arm multilevel \
+-m8-router-representation-width 4 \
+-m8-router-representation-max-build-work 150000000000 \
+-m8-router-representation-max-build-bytes 1073741824
+```
+
+For the isolated geometry comparison change only the arm to
+`centroid_geometry`. These are explicit upper resource envelopes, not estimates
+of the work a run performed. Actual source/model shape must also fit the frozen
+router configuration's existing limits. Calibrate a smaller invocation before
+admitting a representative run; a bound that rejects must not be silently
+expanded. The options, actual derived build bounds, query coordinates and all
+outcomes are command/report/replay-bound. Missing controls or mismatched returned
+widths reject. Default-off reports acquire no model, hashing or scoring work.
+
+The new named build-work cap applies once per opened variant for the serial
+experimental model construction; it does not bypass the existing query-work
+cap. The preflight separately charges full-model exact scoring, sorting and
+hashing, per-query domain explanations, per-cell scalar model copies, repeated
+cache population validation, and serialization over EF/concurrency grids. Peak
+memory includes the authoritative input, one normalized shared source, current
+builder/validation/encoding scratch, retained centroid-only owners, and result
+copies. There is no normalized corpus per experimental arm. Internal graph/DB
+allocations and Go runtime remain subject to the existing separate resource
+boundary and measured RSS gate, not a claim of exact modeled process RSS.
+
+The control is checked against the real persisted router before treatments. The
+multilevel arm retains parents within the same quota; underfill is reported,
+not repaired with duplicate centers. Geometry arms share exact leaf membership.
+They distinguish arithmetic means from normalized means without changing local
+ANN graphs, source membership, local score contracts, or search effort. R3 uses
+an exact offline scorer; it does not pretend raw means are already supported by
+the production normalized-vector HNSW pack. R2's explicit traversal coordinates
+remain a separate experiment, not an implicit mode for these models.
+
+For each truth-bearing domain, join `truth_domains` to a model's
+`full_exact_domain_priorities`; its winning representative ordinal indexes
+`model_info.models[].represented_nodes`. This identifies membership availability,
+nearest actual-member rank/score, representative rank, represented-node depth,
+population, distortion and radius for an omitted domain. A frequency advantage
+can reflect correlated hierarchy votes; compare the distance and frequency arms
+on the same returned candidate set rather than treating those votes as
+independent samples. Missing observations and refusal rows are not zero-score
+successful queries.
+
+`BenchmarkM8RouterRepresentationBuildV1` measures build/setup cost explicitly;
+`BenchmarkM8RouterRepresentationPreparedV1` measures a real exact centroid scan,
+rankers, hashes and domain explanations from an owned prepared model. The
+ordinary-router benchmark remains the default-off control. None is full ANN,
+network, document-fetch or Python QPS. Small fixture validation is not the
+representative 100K/250K decision, and neither R2 nor R3 releases the Raft hold.
+
 Diagnostic attribution is kept out of the size-limited measurement transcript.
 Schema 6 retains every measured output/timing and binds each complete offline
 attribution row by digest. Full diagnostics remain in the main report and must
@@ -755,3 +816,10 @@ be independently replayed; the digest alone is not evidence of correctness.
 Serialization and per-row hashing are untimed, covered by the diagnostic work
 accounting. The transcript cap is not raised. Ordinary schema-5 writes and
 historical readers are unchanged.
+
+R3 `encoded_bytes` is the full, explicitly experimental offline model encoding,
+including coverage leaf IDs. It is not a predicted VKR1/native router-pack size.
+The prepared query owner retains only centroids and scalar node diagnostics,
+not those leaf IDs or another source corpus. `centroid_payload_bytes`, full
+encoded bytes, build envelope and actual builder/query benchmark allocations
+are different quantities and must remain separately reported.

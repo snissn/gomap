@@ -2266,9 +2266,43 @@ EF/concurrency repetitions. Existing R1 digest goldens must remain unchanged.
 hashing; `BenchmarkM8RouterOrdinaryPathV1` is the unchanged router-only control.
 Neither measures full partition ANN, network, Python or a representative corpus.
 
+### R3 representation diagnostic verification (#4749)
+
+The internal `router_representation_experiment_test.go` suite compares the
+leaf-control hierarchy/centroid bits with both V1 and an independent unchanged-
+parent digest, varies branching/quota/leaf size, verifies token accounting and
+underfill, rejects malformed parent/depth/coverage/anchor/metric/geometry records,
+checks overlap identities, and exercises byte/work/cancellation limits. It tests
+the unit-circle geometry counterexample, zero-mean fallback, separate namespace,
+strict codec round trips, deterministic input permutations, and owned prepared
+centroids. The optional integer apportionment helper has canonical tie,
+saturation and overflow cases, not an implicit treatment selection.
+
+`vector_partition_router_representation_diagnostic_test.go` uses actual persisted
+source/routers for ordinary-control parity, close/reopen, source generation
+mismatch, metadata ownership, cancellation and the logical-membership adapter.
+`m8_router_representation_experiment_test.go` and
+`m8_router_representation_replay_test.go` cover explicit CLI/child propagation,
+model underfill/coverage refusal populations, physical-pack costs, per-domain
+explanations, cached population/cancellation, named build versus query budgets,
+and fresh-owner reconstruction after JSON decoding. Replay must reject
+schema-valid forged model, source, geometry, quota, radius or member-score data,
+including rows whose ordinary coordinator query failed.
+
+These tests qualify code paths and evidence accounting only. The unchanged
+public routing policy, native storage/score contract and Raft gate remain
+unchanged until the separate representative experiment and integration owners
+accept their respective results.
+
 `TestM8RouterEffortActualProducerKeepsMeasuredBoundary` runs the actual bounded
 M8 CLI, loopback producer, measured transcript and report validator with R2
 selected. `TestM8MeasurementDiagnosticProjectionBindsWithoutCopyingQueries`
 checks the opt-in schema-6 attribution binding, unchanged ordinary projection,
 owned row copies and full-population hash sensitivity. Fresh retained replay
 remains separately required; no digest is treated as source authority.
+
+`TestM8RouterRepresentationActualProducerKeepsMeasuredBoundary` additionally
+checks the real M8 CLI/producer with R2 plus R3 selected, all geometry arms and
+concurrency rows, bounded transcript projection, and changed-attribution refusal.
+Clustering configuration/seed and the frozen-realized-control quota method are
+explicit model-info fields and independently rebound during retained replay.

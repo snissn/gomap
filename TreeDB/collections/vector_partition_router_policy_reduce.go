@@ -24,6 +24,7 @@ type vectorPartitionPolicyCandidateV1 struct {
 }
 
 type vectorPartitionPolicyContextV1 struct {
+	ScoreGeometry       string // optional R3 geometry; empty preserves ordinary R1 digest
 	RetrievalDigest     string // optional, explicit R2 coordinate; empty preserves V1 bytes
 	ModelDigest         string
 	QueryDigest         string
@@ -68,7 +69,11 @@ func vectorPartitionPolicyDigestV1(ctx context.Context, meta vectorPartitionPoli
 	h := sha256.New()
 	var buf [32]byte
 	writeUint := func(v uint64) { binary.LittleEndian.PutUint64(buf[:8], v); _, _ = h.Write(buf[:8]) }
-	for _, value := range []string{vectorPartitionRankingDiagnosticMethodV1, kind, meta.ModelDigest, meta.QueryDigest, meta.Mode, "cosine_1_minus_score_small_negative_clamp_v1"} {
+	geometry := "cosine_1_minus_score_small_negative_clamp_v1"
+	if meta.ScoreGeometry != "" {
+		geometry = "representation_priority_1_minus_" + meta.ScoreGeometry
+	}
+	for _, value := range []string{vectorPartitionRankingDiagnosticMethodV1, kind, meta.ModelDigest, meta.QueryDigest, meta.Mode, geometry} {
 		writeUint(uint64(len(value)))
 		_, _ = h.Write([]byte(value))
 	}
@@ -109,6 +114,11 @@ func reduceVectorPartitionRouterPoliciesV1(ctx context.Context, meta vectorParti
 	}
 	if err := ctx.Err(); err != nil {
 		return vectorPartitionPolicyReductionV1{}, err
+	}
+	switch meta.ScoreGeometry {
+	case "", "legacy_spherical_f32", "arithmetic_mean_fp64", "normalized_mean_fp64":
+	default:
+		return vectorPartitionPolicyReductionV1{}, errors.New("unsupported diagnostic score geometry")
 	}
 	digests := []string{meta.ModelDigest, meta.QueryDigest}
 	if meta.RetrievalDigest != "" {

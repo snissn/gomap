@@ -705,8 +705,17 @@ func normalizeRouterVectorV1(values []float32) ([]float32, error) {
 }
 
 func routerNextSplitV1(leaves []*routerBuildNodeV1, cfg RouterConfigV1) int {
+	index, _ := routerNextSplitWithContextV1(nil, leaves, cfg)
+	return index
+}
+func routerNextSplitWithContextV1(ctx context.Context, leaves []*routerBuildNodeV1, cfg RouterConfigV1) (int, error) {
 	best := -1
 	for i, leaf := range leaves {
+		if i&255 == 0 {
+			if err := routerBuildContextErrV1(ctx); err != nil {
+				return -1, err
+			}
+		}
 		if len(leaf.members) <= cfg.LeafSize || len(leaf.members) < 2 || int(leaf.record.Depth) >= cfg.MaxDepth {
 			continue
 		}
@@ -716,14 +725,24 @@ func routerNextSplitV1(leaves []*routerBuildNodeV1, cfg RouterConfigV1) int {
 			best = i
 		}
 	}
-	return best
+	return best, routerBuildContextErrV1(ctx)
 }
 
 func routerSplitNodeV1(vectors []routerBuildVectorV1, parent *routerBuildNodeV1, k int, cfg RouterConfigV1, nextNodeID *uint32) ([]*routerBuildNodeV1, int, int, error) {
+	return routerSplitNodeWithContextV1(nil, vectors, parent, k, cfg, nextNodeID)
+}
+
+func routerSplitNodeWithContextV1(ctx context.Context, vectors []routerBuildVectorV1, parent *routerBuildNodeV1, k int, cfg RouterConfigV1, nextNodeID *uint32) ([]*routerBuildNodeV1, int, int, error) {
+	if err := routerBuildContextErrV1(ctx); err != nil {
+		return nil, 0, 0, err
+	}
 	if k < 2 || k > len(parent.members) {
 		return nil, 0, 0, errors.New("invalid hierarchical split width")
 	}
-	centers := routerInitialCentersV1(vectors, parent, k, cfg.Seed)
+	centers, err := routerInitialCentersWithContextV1(ctx, vectors, parent, k, cfg.Seed)
+	if err != nil {
+		return nil, 0, 0, err
+	}
 	assignments := make([]int, len(parent.members))
 	for i := range assignments {
 		assignments[i] = -1
@@ -731,10 +750,18 @@ func routerSplitNodeV1(vectors []routerBuildVectorV1, parent *routerBuildNodeV1,
 	iterations := 0
 	repairs := 0
 	for iterations < cfg.MaxIterations {
+		if err := routerBuildContextErrV1(ctx); err != nil {
+			return nil, iterations, repairs, err
+		}
 		iterations++
 		changed := false
 		counts := make([]int, k)
 		for memberOrdinal, vectorIndex := range parent.members {
+			if memberOrdinal&255 == 0 {
+				if err := routerBuildContextErrV1(ctx); err != nil {
+					return nil, iterations, repairs, err
+				}
+			}
 			bestCenter := 0
 			bestDistance := routerCosineDistanceNormalizedV1(vectors[vectorIndex].values, centers[0])
 			for centerOrdinal := 1; centerOrdinal < k; centerOrdinal++ {
@@ -756,6 +783,11 @@ func routerSplitNodeV1(vectors []routerBuildVectorV1, parent *routerBuildNodeV1,
 			donorMember := -1
 			var donorDistance float64
 			for memberOrdinal, assigned := range assignments {
+				if memberOrdinal&255 == 0 {
+					if err := routerBuildContextErrV1(ctx); err != nil {
+						return nil, iterations, repairs, err
+					}
+				}
 				if counts[assigned] <= 1 {
 					continue
 				}
@@ -777,11 +809,19 @@ func routerSplitNodeV1(vectors []routerBuildVectorV1, parent *routerBuildNodeV1,
 		for centerOrdinal := range centers {
 			clusterMembers := make([]int, 0, counts[centerOrdinal])
 			for memberOrdinal, assigned := range assignments {
+				if memberOrdinal&255 == 0 {
+					if err := routerBuildContextErrV1(ctx); err != nil {
+						return nil, iterations, repairs, err
+					}
+				}
 				if assigned == centerOrdinal {
 					clusterMembers = append(clusterMembers, parent.members[memberOrdinal])
 				}
 			}
-			centers[centerOrdinal], _ = routerCenterAndErrorV1(vectors, clusterMembers)
+			centers[centerOrdinal], _, err = routerCenterAndErrorWithContextV1(ctx, vectors, clusterMembers)
+			if err != nil {
+				return nil, iterations, repairs, err
+			}
 		}
 		if !changed {
 			break
@@ -791,12 +831,24 @@ func routerSplitNodeV1(vectors []routerBuildVectorV1, parent *routerBuildNodeV1,
 	for centerOrdinal := 0; centerOrdinal < k; centerOrdinal++ {
 		members := make([]int, 0)
 		for memberOrdinal, assigned := range assignments {
+			if memberOrdinal&255 == 0 {
+				if err := routerBuildContextErrV1(ctx); err != nil {
+					return nil, iterations, repairs, err
+				}
+			}
 			if assigned == centerOrdinal {
 				members = append(members, parent.members[memberOrdinal])
 			}
 		}
-		sort.Slice(members, func(i, j int) bool { return vectors[members[i]].ordinal < vectors[members[j]].ordinal })
-		center, errorSum := routerCenterAndErrorV1(vectors, members)
+		if ctx == nil {
+			sort.Slice(members, func(i, j int) bool { return vectors[members[i]].ordinal < vectors[members[j]].ordinal })
+		} else if err := routerRepresentationSortV1(ctx, members, func(a, b int) bool { return vectors[a].ordinal < vectors[b].ordinal }); err != nil {
+			return nil, iterations, repairs, err
+		}
+		center, errorSum, err := routerCenterAndErrorWithContextV1(ctx, vectors, members)
+		if err != nil {
+			return nil, iterations, repairs, err
+		}
 		nodeID := *nextNodeID
 		*nextNodeID++
 		path := append(append([]uint32(nil), parent.path...), nodeID)
@@ -824,6 +876,14 @@ func routerSplitNodeV1(vectors []routerBuildVectorV1, parent *routerBuildNodeV1,
 }
 
 func routerInitialCentersV1(vectors []routerBuildVectorV1, node *routerBuildNodeV1, k int, seed int64) [][]float32 {
+	centers, _ := routerInitialCentersWithContextV1(nil, vectors, node, k, seed)
+	return centers
+}
+
+func routerInitialCentersWithContextV1(ctx context.Context, vectors []routerBuildVectorV1, node *routerBuildNodeV1, k int, seed int64) ([][]float32, error) {
+	if err := routerBuildContextErrV1(ctx); err != nil {
+		return nil, err
+	}
 	centers := make([][]float32, 0, k)
 	mixed := routerMix64V1(uint64(seed) ^ uint64(node.record.PartitionID)<<32 ^ uint64(node.record.NodeID))
 	first := int(mixed % uint64(len(node.members)))
@@ -832,7 +892,12 @@ func routerInitialCentersV1(vectors []routerBuildVectorV1, node *routerBuildNode
 	for len(centers) < k {
 		bestMember := -1
 		var bestDistance float64
-		for _, member := range node.members {
+		for pos, member := range node.members {
+			if pos&255 == 0 {
+				if err := routerBuildContextErrV1(ctx); err != nil {
+					return nil, err
+				}
+			}
 			if _, exists := selected[member]; exists {
 				continue
 			}
@@ -851,12 +916,25 @@ func routerInitialCentersV1(vectors []routerBuildVectorV1, node *routerBuildNode
 		selected[bestMember] = struct{}{}
 		centers = append(centers, append([]float32(nil), vectors[bestMember].values...))
 	}
-	return centers
+	return centers, routerBuildContextErrV1(ctx)
 }
 
 func routerCenterAndErrorV1(vectors []routerBuildVectorV1, members []int) ([]float32, float64) {
+	center, distortion, _ := routerCenterAndErrorWithContextV1(nil, vectors, members)
+	return center, distortion
+}
+
+func routerCenterAndErrorWithContextV1(ctx context.Context, vectors []routerBuildVectorV1, members []int) ([]float32, float64, error) {
+	if err := routerBuildContextErrV1(ctx); err != nil {
+		return nil, 0, err
+	}
 	center := make([]float32, len(vectors[members[0]].values))
-	for _, member := range members {
+	for pos, member := range members {
+		if pos&255 == 0 {
+			if err := routerBuildContextErrV1(ctx); err != nil {
+				return nil, 0, err
+			}
+		}
 		for dimension, value := range vectors[member].values {
 			center[dimension] += value
 		}
@@ -874,10 +952,15 @@ func routerCenterAndErrorV1(vectors []routerBuildVectorV1, members []int) ([]flo
 		}
 	}
 	var errorSum float64
-	for _, member := range members {
+	for pos, member := range members {
+		if pos&255 == 0 {
+			if err := routerBuildContextErrV1(ctx); err != nil {
+				return nil, 0, err
+			}
+		}
 		errorSum += routerCosineDistanceNormalizedV1(vectors[member].values, center)
 	}
-	return center, errorSum
+	return center, errorSum, routerBuildContextErrV1(ctx)
 }
 
 func routerMedoidOrdinalV1(vectors []routerBuildVectorV1, members []int, center []float32) uint64 {

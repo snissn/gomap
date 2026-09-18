@@ -294,6 +294,69 @@ hashes alone are not authority. Per-query observations cannot disappear because
 one treatment failed. `#4750` remains the owner of any subsequent public policy
 integration, and `#4753` of representative scaling qualification.
 
+## Offline representation experiments (R3 / #4749)
+
+`BuildRepresentationForDiagnosticsV1` captures the current immutable router and
+its authoritative typed FP32 source. It deduplicates physical copies within each
+logical domain, binds the complete manifest integrity, and normalizes each
+unique source ordinal once for the experimental builder. It never changes the
+active generation, ordinary ranking policy, wire protocol, or native pack.
+The returned heap owner retains centroids and scalar node metadata only; no
+source corpus, leaf-membership matrix, borrowed native slice, or reader pin
+escapes the build. Ordinary router close cannot invalidate that owned result.
+
+The explicitly separate `treedb_router_representation_experiment_v1` format is
+not `RouterModelV1`, a VKR1 record, or a native serving asset. Its validated
+hierarchy retains member IDs only at leaves; internal covering sets are derived
+from children. Parent, depth, domain, member-count, source-anchor, coverage,
+centroid geometry, finite-value, token and byte invariants MUST hold. All model
+coordinates, source bits, memberships, quotas, node/centroid metadata and
+arithmetic choices bind the model digest. Bounded encoding streams large arrays
+with cancellation and refuses partial artifacts. Do not add a migration shim.
+
+Two independent comparisons are selected, not a cross-product:
+
+- `multilevel`: legacy leaf-only centroids versus a budget-safe hierarchy of
+  internal and leaf centroids, using the same spherical FP32 center arithmetic.
+- `centroid_geometry`: legacy spherical FP32 leaf centroids, normalized FP64
+  means, and raw FP64 means of the *identical frozen leaf members*. Geometry does
+  not recluster or borrow a different representative budget.
+
+The common per-domain quota is the control's actual realized count, not a nominal
+configuration cap. Each retained root costs one token; retaining a parent and
+adding `k` children costs `k` further tokens, never `k-1`. Unspendable residual
+quota remains explicit. The optional population apportionment helper reserves
+one token per domain and uses deterministic integer largest remainders with
+capacity saturation; it is not activated by these equal-quota comparisons.
+
+The first experimental arm MUST match the current V1 hierarchy, source anchors,
+and centroid bits before a comparison can be emitted. A golden from the
+unchanged parent independently guards the shared clustering helper extraction.
+Raw means use priority `2*dot(q,c)-dot(c,c)`; unit-mean and legacy-spherical arms
+use their own declared dot priorities. Priority distance is `1-priority` with
+the existing small-negative clamp, **not** a redefinition of the public vector
+score contract. A zero mean is a valid raw origin; normalized-mean geometry uses
+the first canonical source direction as its explicit fallback. Zero source
+vectors are still rejected. Raw means MUST NOT go through an encoder that
+silently normalizes them.
+
+Exact experimental scoring uses the same fixed returned width before the
+unchanged R1 reducers. An underfilled model with fewer representatives than that
+width records `returned_width_exceeds_model`; it does not clamp the width, pad
+centers, widen probes, or use a fallback route. A candidate-coverage refusal
+retains candidate identity and work but no partial route. Ancestor and descendant
+nodes are distinct, correlated representatives even when their source anchor is
+shared; anchors and physical copies are not vote identities.
+
+M8 retains all query/arm outcomes, manifest/source/model identities, actual and
+unused quotas, encoded/payload bytes, represented-node depths/populations/radii/
+distortions, full exact domain priorities, nearest actual-member ranks/scores,
+and signed coverage deltas. Member observations reuse the existing exhaustive
+all-pack pass. They explain coarsening and ranking, not ANN recall from a new
+serving policy. Retained replay rebuilds the models from a freshly opened source,
+repeats scoring and joins, and rejects even schema-valid forged observations in
+failed ordinary-query rows. No self-reported digest is sufficient authority.
+
 Diagnostic-selected M8 writes use measurement transcript schema 6: the small
 measured rows contain SHA-256 bindings to their complete offline attribution
 instead of duplicating the query/model population in the transcript. The report

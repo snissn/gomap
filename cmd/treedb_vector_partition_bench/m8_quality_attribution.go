@@ -66,6 +66,7 @@ type m8QualityCachedQueryV1 struct {
 	primaryPrefix        []int
 	domainCost, packCost m8CoverageCurveV1
 	noCoarsening         []uint32
+	noCoarseningBest     []m8ExactPackBestV1
 }
 
 type m8QualityCacheV1 struct {
@@ -265,6 +266,15 @@ func (h *m8AttributionHarnessV1) exactQualityUnionV1(ctx context.Context, i int,
 		return nil, errors.New("quality exact pass physical cost mismatch")
 	}
 	q.noCoarsening = order
+	if h.representation != nil {
+		q.noCoarseningBest = make([]m8ExactPackBestV1, len(costs))
+		for pack, domain := range h.quality.packDomains {
+			b, old := bests[pack], q.noCoarseningBest[domain]
+			if b.Present && (!old.Present || b.Score > old.Score || b.Score == old.Score && b.ID < old.ID) {
+				q.noCoarseningBest[domain] = b
+			}
+		}
+	}
 	return got, nil
 }
 

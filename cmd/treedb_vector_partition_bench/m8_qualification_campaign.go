@@ -670,6 +670,11 @@ func m8QualificationRetainedAttributionV1(root string, report m8ProductionReport
 			return err
 		}
 	}
+	if report.Config.RouterRepresentation != nil {
+		if err := harness.enableRouterRepresentationV1(context.Background(), *report.Config.RouterRepresentation); err != nil {
+			return err
+		}
+	}
 	exhaustive := make([][]m8CanonicalResultV1, len(queries))
 	for rowIndex, row := range report.Rows {
 		if err := m8QualityEvidenceSelectionV1(report.Config, row); err != nil {
@@ -698,6 +703,9 @@ func m8QualificationRetainedAttributionV1(root string, report m8ProductionReport
 			if !reflect.DeepEqual(replayed, row.Attribution.RouterEffort) {
 				return errors.New("retained router effort does not reproduce report")
 			}
+		}
+		if err := m8RouterRepresentationEvidenceSelectionV1(report.Config, row); err != nil {
+			return err
 		}
 		qualityShortfall := report.Config.QualityDiagnostics && row.Status == "candidate_coverage_shortfall"
 		if row.Status != "pass" && row.Status != "fail" && !qualityShortfall {
@@ -857,7 +865,7 @@ func m8QualificationCommandConfigV1(cfg config) m8ProductionConfigEvidenceV1 {
 		Probes: cfg.probes, Overlap: cfg.overlaps, TopK: cfg.topK, RecallTarget: cfg.recallTarget,
 		Concurrency: cfg.concurrency, Warmup: cfg.warmup, EffectiveWarmup: warmup,
 		EfSearch: cfg.efSearch, RouterCandidates: cfg.routerCandidates,
-		MaxExactTruthVisits: cfg.m8MaxExactTruthVisits, Seed: cfg.seed, QualityDiagnostics: cfg.m8QualityDiagnostics, QualityTraceQueries: cfg.m8QualityTraceQueries, RouterPolicyDiagnostics: cfg.m8RouterPolicyDiagnostics, RouterPolicyWidth: cfg.m8RouterPolicyWidth, RouterEffort: m8RouterEffortConfigV1(cfg),
+		MaxExactTruthVisits: cfg.m8MaxExactTruthVisits, Seed: cfg.seed, QualityDiagnostics: cfg.m8QualityDiagnostics, QualityTraceQueries: cfg.m8QualityTraceQueries, RouterPolicyDiagnostics: cfg.m8RouterPolicyDiagnostics, RouterPolicyWidth: cfg.m8RouterPolicyWidth, RouterEffort: m8RouterEffortConfigV1(cfg), RouterRepresentation: m8RouterRepresentationConfigV1(cfg),
 	}
 }
 
