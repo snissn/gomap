@@ -2,7 +2,9 @@ package stress
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -152,10 +154,12 @@ func pickFreeTCPAddr(t *testing.T) string {
 }
 
 func startServer(t *testing.T, bin string, dbDir, addr string) *exec.Cmd {
+	t.Helper()
 	cmd := exec.Command(bin, "hashdb", dbDir, addr)
 
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	var output bytes.Buffer
+	cmd.Stdout = io.MultiWriter(os.Stdout, &output)
+	cmd.Stderr = io.MultiWriter(os.Stderr, &output)
 	cmd.Env = append(os.Environ(),
 		"HASHDB_SHARDS="+strconv.Itoa(serverShards),
 		"GOMAP_SHARDS="+strconv.Itoa(serverShards),
@@ -164,9 +168,20 @@ func startServer(t *testing.T, bin string, dbDir, addr string) *exec.Cmd {
 		t.Fatalf("Failed to start server: %v", err)
 	}
 
-	// Wait for port
-	// Simple retry loop
-	for i := 0; i < 400; i++ {
+	// Process.Wait serializes callers and shares ProcessState, so this watcher
+	// stays valid for callers that later kill and Wait the same cmd.
+	exited := make(chan error, 1)
+	go func() { exited <- cmd.Wait() }()
+
+	// Give the server up to 2 minutes to bind: Windows CI startup (binary
+	// load plus shard init) can exceed the old 20s budget on loaded runners.
+	deadline := time.Now().Add(2 * time.Minute)
+	for time.Now().Before(deadline) {
+		select {
+		case err := <-exited:
+			t.Fatalf("Server exited before binding %s: %v\n%s", addr, err, output.String())
+		default:
+		}
 		conn, err := net.Dial("tcp", addr)
 		if err == nil {
 			conn.Close()
@@ -175,7 +190,7 @@ func startServer(t *testing.T, bin string, dbDir, addr string) *exec.Cmd {
 		time.Sleep(50 * time.Millisecond)
 	}
 	_ = cmd.Process.Kill()
-	_ = cmd.Wait()
-	t.Fatal("Server failed to bind port")
+	<-exited
+	t.Fatalf("Server failed to bind port %s", addr)
 	return nil
 }
