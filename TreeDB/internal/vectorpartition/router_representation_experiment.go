@@ -11,7 +11,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"math"
 	"math/bits"
 	"reflect"
@@ -860,14 +859,16 @@ func DecodeRouterRepresentationV1(ctx context.Context, raw []byte, maxBytes uint
 	if err := routerBuildContextErrV1(ctx); err != nil {
 		return m, err
 	}
-	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec := json.NewDecoder(&representationContextReaderV1{ctx: ctx, reader: bytes.NewReader(raw)})
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&m); err != nil {
 		return RouterRepresentationModelV1{}, err
 	}
-	var trailing any
-	if err := dec.Decode(&trailing); !errors.Is(err, io.EOF) {
-		return m, errors.New("trailing experimental JSON")
+	// InputOffset ends after the first JSON value even when the decoder has
+	// read ahead. Inspect the original byte slice, never decode a trailing
+	// value into an arbitrary object (which could allocate another model).
+	if err := representationJSONTrailingV1(ctx, raw[dec.InputOffset():]); err != nil {
+		return RouterRepresentationModelV1{}, err
 	}
 	if err := ValidateRouterRepresentationWithContextV1(ctx, m); err != nil {
 		return RouterRepresentationModelV1{}, err

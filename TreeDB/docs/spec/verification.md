@@ -2306,3 +2306,9 @@ checks the real M8 CLI/producer with R2 plus R3 selected, all geometry arms and
 concurrency rows, bounded transcript projection, and changed-attribution refusal.
 Clustering configuration/seed and the frozen-realized-control quota method are
 explicit model-info fields and independently rebound during retained replay.
+
+`router_representation_decode_test.go` adds cancellation during parsing (before
+a late syntax error), bounded reader requests, cancelable whitespace tails,
+first-byte rejection of large trailing values, and no partial model on any
+failure. Successful nil-context and whitespace decode preserves round-trip
+bytes/semantics. These are codec/lifetime checks, not ANN measurements.

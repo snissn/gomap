@@ -364,3 +364,9 @@ retains all attribution. The existing transcript byte cap is unchanged; these
 digests do not replace independent retained-asset reconstruction. Ordinary
 writes stay at schema 5, and historical schema-5 receipts retain their complete
 row interpretation. A missing/reordered/mismatched binding fails closed.
+
+Experimental model decode polls cancellation through reads bounded to 16 KiB,
+checks it again after the first value, and scans trailing JSON whitespace with
+bounded polling. Trailing values are rejected at their first non-whitespace
+byte without constructing another JSON object. Any decode, validation or
+cancellation failure returns no partial model.

@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"strconv"
 )
 
@@ -123,4 +124,41 @@ func encodeRouterRepresentationJSONV1(ctx context.Context, m RouterRepresentatio
 		_, _ = h.Write(out.Bytes()[start:end])
 	}
 	return out.Bytes(), hex.EncodeToString(h.Sum(nil)), routerBuildContextErrV1(ctx)
+}
+
+// Bound each parse read so cancellation cannot be hidden behind a decoder
+// request for the complete artifact. This wrapper owns no model-sized buffer.
+type representationContextReaderV1 struct {
+	ctx    context.Context
+	reader io.Reader
+}
+
+func (r *representationContextReaderV1) Read(dst []byte) (int, error) {
+	if err := routerBuildContextErrV1(r.ctx); err != nil {
+		return 0, err
+	}
+	return r.reader.Read(dst[:min(len(dst), 16<<10)])
+}
+
+// JSON whitespace is exactly space, tab, CR and LF. Reject the first other
+// byte without parsing or allocating a second JSON object. Poll long tails,
+// including all-whitespace tails, instead of scanning a potentially GiB slice
+// with an uninterruptible trimming operation.
+func representationJSONTrailingV1(ctx context.Context, raw []byte) error {
+	if err := routerBuildContextErrV1(ctx); err != nil {
+		return err
+	}
+	for i, c := range raw {
+		if i&4095 == 0 {
+			if err := routerBuildContextErrV1(ctx); err != nil {
+				return err
+			}
+		}
+		switch c {
+		case ' ', '\t', '\r', '\n':
+		default:
+			return errors.New("trailing experimental JSON")
+		}
+	}
+	return routerBuildContextErrV1(ctx)
 }
