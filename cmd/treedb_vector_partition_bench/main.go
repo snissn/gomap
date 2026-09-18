@@ -228,16 +228,17 @@ type partitionGraphDiagnosticsV1 struct {
 }
 
 type fixtureManifest struct {
-	SchemaVersion int    `json:"schema_version"`
-	Fixture       string `json:"fixture"`
-	Generator     string `json:"generator"`
-	Arithmetic    string `json:"arithmetic"`
-	Vectors       int    `json:"vectors"`
-	Queries       int    `json:"queries"`
-	Dimensions    int    `json:"dimensions"`
-	Metric        string `json:"metric"`
-	Seed          int64  `json:"seed"`
-	Checksum      string `json:"checksum"`
+	SchemaVersion      int    `json:"schema_version"`
+	Fixture            string `json:"fixture"`
+	Generator          string `json:"generator"`
+	Arithmetic         string `json:"arithmetic"`
+	Vectors            int    `json:"vectors"`
+	Queries            int    `json:"queries"`
+	QueryOrdinalOffset int64  `json:"query_ordinal_offset,omitempty"`
+	Dimensions         int    `json:"dimensions"`
+	Metric             string `json:"metric"`
+	Seed               int64  `json:"seed"`
+	Checksum           string `json:"checksum"`
 }
 
 type neighbor struct {
@@ -545,6 +546,9 @@ func run(args []string, stdout io.Writer) error {
 	if len(args) > 0 && args[0] == "validate-qualification" {
 		return runValidateQualification(args[1:], stdout)
 	}
+	if len(args) > 0 && args[0] == "replay-m8-report" {
+		return runReplayM8ReportV1(args[1:], stdout)
+	}
 	return runWithRuntimeCapabilities(args, stdout, currentBenchmarkRuntimeCapabilities())
 }
 
@@ -621,13 +625,14 @@ func runGenerateTruthCache(args []string, stdout io.Writer) error {
 
 func runGenerateFixture(args []string, stdout io.Writer) error {
 	var (
-		out               string
-		vectors           int
-		queries           int
-		dimensions        int
-		seed              int64
-		generator         string
-		maxChecksumVisits int64
+		out                string
+		vectors            int
+		queries            int
+		dimensions         int
+		seed               int64
+		queryOrdinalOffset int64
+		generator          string
+		maxChecksumVisits  int64
 	)
 	fs := flag.NewFlagSet("treedb_vector_partition_bench generate-fixture", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -636,6 +641,7 @@ func runGenerateFixture(args []string, stdout io.Writer) error {
 	fs.IntVar(&queries, "queries", 1, "number of deterministic queries")
 	fs.IntVar(&dimensions, "dimensions", 16, "vector dimensions")
 	fs.Int64Var(&seed, "seed", 1, "fixture generation seed")
+	fs.Int64Var(&queryOrdinalOffset, "query-ordinal-offset", 0, "first qualification query ordinal (corpus unchanged; legacy generator requires zero)")
 	fs.StringVar(&generator, "generator", fixtureGenerator, "fixture generator identity")
 	fs.Int64Var(&maxChecksumVisits, "max-checksum-visits", maxBenchmarkWorkUnits, "explicit exact checksum visit bound for fixture generation")
 	if err := fs.Parse(args); err != nil {
@@ -655,15 +661,19 @@ func runGenerateFixture(args []string, stdout io.Writer) error {
 		return fmt.Errorf("generated fixture checksum exact work exceeds %d-visit cap; set -max-checksum-visits explicitly for a declared qualification generation", maxChecksumVisits)
 	}
 	manifest := fixtureManifest{
-		SchemaVersion: schemaVersion,
-		Fixture:       fmt.Sprintf("deterministic_%d", vectors),
-		Generator:     generator,
-		Arithmetic:    fixtureArithmetic,
-		Vectors:       vectors,
-		Queries:       queries,
-		Dimensions:    dimensions,
-		Metric:        "cosine",
-		Seed:          seed,
+		SchemaVersion:      schemaVersion,
+		Fixture:            fmt.Sprintf("deterministic_%d", vectors),
+		Generator:          generator,
+		Arithmetic:         fixtureArithmetic,
+		Vectors:            vectors,
+		Queries:            queries,
+		QueryOrdinalOffset: queryOrdinalOffset,
+		Dimensions:         dimensions,
+		Metric:             "cosine",
+		Seed:               seed,
+	}
+	if err := validateFixtureQueryOrdinalsV1(manifest); err != nil {
+		return err
 	}
 	corpus, querySet := fixtureData(manifest)
 	manifest.Checksum = fixtureChecksumFromData(corpus, querySet)
@@ -1954,7 +1964,7 @@ func loadFixture(dir string) (fixtureManifest, error) {
 	if err = d.Decode(&extra); err != io.EOF {
 		return m, errors.New("fixture manifest has trailing JSON")
 	}
-	return m, nil
+	return m, validateFixtureQueryOrdinalsV1(m)
 }
 func decodeResult(raw []byte) (runResult, error) {
 	var r runResult
@@ -2134,8 +2144,23 @@ func validateFixtureSyntax(m fixtureManifest, capVectors int) error {
 	if m.SchemaVersion != schemaVersion || m.Fixture == "" || !supportedFixtureGeneratorV1(m.Generator) || m.Arithmetic != fixtureArithmetic || m.Vectors < 1 || m.Vectors > capVectors || m.Queries < 1 || m.Dimensions < 1 || m.Dimensions > maxDimensions || m.Metric != "cosine" || len(m.Checksum) != 64 {
 		return errors.New("unsupported or malformed fixture manifest")
 	}
+	if err := validateFixtureQueryOrdinalsV1(m); err != nil {
+		return err
+	}
 	_, e := hex.DecodeString(m.Checksum)
 	return e
+}
+
+// Keep the half-open query ordinal range representable before allocating any
+// fixture data. Corpus ordinals and legacy query selection remain unchanged.
+func validateFixtureQueryOrdinalsV1(m fixtureManifest) error {
+	if m.QueryOrdinalOffset < 0 || m.Queries < 1 || m.QueryOrdinalOffset > math.MaxInt64-int64(m.Queries) {
+		return errors.New("invalid fixture query ordinal range")
+	}
+	if m.Generator == fixtureGenerator && m.QueryOrdinalOffset != 0 {
+		return errors.New("legacy fixture generator requires zero query ordinal offset")
+	}
+	return nil
 }
 
 func supportedFixtureGeneratorV1(generator string) bool {
@@ -3230,7 +3255,7 @@ func qualificationVectorsV1(m fixtureManifest, domain uint64) [][]float64 {
 func qualificationQueriesV1(m fixtureManifest) [][]float64 {
 	q := contiguousFloat64Matrix(m.Queries, m.Dimensions)
 	for i := range q {
-		qualificationVectorV1(q[i], m, uint64(i), 0xd1b54a32d192ed03)
+		qualificationVectorV1(q[i], m, uint64(m.QueryOrdinalOffset)+uint64(i), 0xd1b54a32d192ed03)
 	}
 	return q
 }

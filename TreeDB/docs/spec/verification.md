@@ -216,7 +216,16 @@ delete visibility, cumulative physical bounds and the still-gated public route.
 validation, corruption and handle lifetime. `TestTypedGraphLocatorVisitorOwnership`
 checks the shared borrowed lookup boundary and unchanged owning public results.
 `TestTypedGraphReadOwnerDoesNotWaitForImmediatePublication` checks admission and
-public search while an immediate writer is paused before publication.
+public search while an immediate writer is paused before publication, including
+cold/stale local entries and a cold sibling handle.
+`TestTypedGraphReadOwnerReusesExactLocalCatalog` proves warm owner and public
+normalized SQ8/full-fetch calls do not persistently reload the catalog.
+`TestTypedGraphReadOwnerRejectsStaleOrIncompleteLocalCatalog` covers pager,
+system-root, commit, missing-base/roots and base-schema invalidation with a
+single cold repair.
+`TestTypedGraphReadOwnerCatalogMatchesPublishers` separately compares current
+roots and captured base metadata/root maps to direct persistent loading after
+initial build, upsert, delete, fold and rebuild.
 `TestTypedGraphReadOwnerRetriesPublicationChangedDuringCapture`,
 `TestTypedGraphReadOwnerInstallationGapWaiters`, and
 `TestTypedGraphReadOwnerCloseWakesPublicationWaiter` cover coherent capture,
@@ -2216,6 +2225,24 @@ before and during the offline ID copy, reader-pin release, retry, and ownership
 of returned IDs after close. The shared `BenchmarkM8RouterOrdinaryPathV1` measures
 unchanged router-only work as the stacked policy diagnostic's control; it is not
 full partition-search or service QPS.
+
+`cmd/treedb_vector_partition_bench/fixture_query_offset_test.go` verifies CLI and
+manifest query-range admission, zero-offset manifest bytes/checksum/cache
+compatibility, unchanged corpus generation, fresh query ordinals and identities,
+and negative/overflow/legacy rejection. The calibration builder test also checks
+offset-aware selected queries and retained-source truth parity, with invalid
+ranges rejected before corpus allocation. These are provenance/correctness
+checks, not an observed fresh-holdout or baseline performance result.
+
+`m8_report_replay_test.go` checks required independent pins before I/O, frozen
+fixture/query-offset and argv identities before expensive work, dirty or mixed
+source/executable/variant rejection, canonical root containment, escaping
+symlinks, report digest and bounded/trailing-JSON rejection. The command reuses
+the real production profile, command/executable, truth-anchor, transcript,
+resource and retained-asset/attribution verifiers; these boundary tests do not
+substitute for a complete successful replay of real retained artifacts. Its
+`REPLAY_ACCEPTED_NOT_QUALIFICATION` result does not assert a campaign or baseline
+acceptance and does not modify historical `validate-qualification`.
 
 ## M8 same-candidate router policy diagnostics (#4745)
 

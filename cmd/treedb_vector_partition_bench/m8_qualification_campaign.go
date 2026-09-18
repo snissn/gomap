@@ -286,6 +286,9 @@ func m8ValidateQualificationCampaignWithVerifiersV1(root string, campaign m8Qual
 		seenVariants := make(map[string]bool, len(m8RequiredVariantIDsV1))
 		for i := range matrix.Variants {
 			report := &matrix.Variants[i]
+			if report.MeasurementTranscript.Bytes > m8QualificationTranscriptMaxBytesV1 {
+				return summary, fmt.Errorf("qualification child %s exceeds historical transcript byte cap", cleanPath)
+			}
 			if err := validateM8ProductionReportWithProfilesV1(*report, m8QualificationResourceCapsV1(), profileVerifier); err != nil {
 				return summary, fmt.Errorf("validate qualification child %s: %w", cleanPath, err)
 			}
