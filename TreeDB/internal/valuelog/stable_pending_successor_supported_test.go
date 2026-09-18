@@ -16,16 +16,16 @@ import (
 
 func stablePendingRegistrations(closedID, activeID uint32) (StableResourceRegistration, StableResourceRegistration) {
 	return StableResourceRegistration{
-		LogicalLane: "main", Generation: uint64(closedID),
-		DiagnosticPath: fmt.Sprintf("maindb/value_vlog/%06d.vlog", closedID),
-		Reachability:   rootpublication.ReachabilityValueLogPointer,
-	}, StableResourceRegistration{
-		LogicalLane: "main", Generation: uint64(activeID),
-		DiagnosticPath:     fmt.Sprintf("maindb/value_vlog/%06d.vlog", activeID),
-		Reachability:       rootpublication.ReachabilityValueLogPointer,
-		ParentGeneration:   uint64(activeID),
-		NamespaceOperation: rootpublication.NamespaceCreate,
-	}
+			LogicalLane: "main", Generation: uint64(closedID),
+			DiagnosticPath: fmt.Sprintf("maindb/value_vlog/%06d.vlog", closedID),
+			Reachability:   rootpublication.ReachabilityValueLogPointer,
+		}, StableResourceRegistration{
+			LogicalLane: "main", Generation: uint64(activeID),
+			DiagnosticPath:     fmt.Sprintf("maindb/value_vlog/%06d.vlog", activeID),
+			Reachability:       rootpublication.ReachabilityValueLogPointer,
+			ParentGeneration:   uint64(activeID),
+			NamespaceOperation: rootpublication.NamespaceCreate,
+		}
 }
 
 func appendStablePendingValue(t *testing.T, writer *Writer, rid uint64) {
