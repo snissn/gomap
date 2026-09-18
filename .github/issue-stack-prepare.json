@@ -1,16 +1,21 @@
 {
   "base": "42b42edee173c1b3ea9c5d9e895a82e6b0e4fa3a",
   "baseTree": "f0fbdcacacbece339926def413abdb3866211d80",
-  "expectedTree": "c4677709a3dd3755f89e5e4619f806e28dcd76d2",
-  "patchSHA256": "07baebb726ddf95ab0615b1994488ffaac412f076a06046b444192705271caeb",
-  "chunks": ["72e5639d2f78ce6240277b025fa7ecaf35cd4813"],
+  "expectedTree": "4ef186581288989d25bcfc1b92837450d367818d",
+  "patchSHA256": "ac7121ba1a8f02f49030e891fdc923f595b2a589e69ddf40c5ab148287488693",
+  "chunks": ["d1c2580fe83100d2a5396d126011eece77d3184d"],
   "allowedPaths": [
+    "TreeDB/collections/vector_partition_router_policy_cancellation_test.go",
+    "TreeDB/collections/vector_partition_router_policy_reduce.go",
     "TreeDB/collections/vector_partition_searcher_v1.go",
     "TreeDB/collections/vector_partition_trace_ids_test.go",
+    "TreeDB/docs/performance/vector-partition-m8.md",
     "TreeDB/docs/spec/vector-partition-v1-contract.md",
     "TreeDB/docs/spec/verification.md",
     "cmd/treedb_vector_partition_bench/m8_qualification_campaign.go",
     "cmd/treedb_vector_partition_bench/m8_quality_attribution.go",
-    "cmd/treedb_vector_partition_bench/m8_quality_replay_review_test.go"
+    "cmd/treedb_vector_partition_bench/m8_quality_replay_review_test.go",
+    "cmd/treedb_vector_partition_bench/m8_router_policy_experiment.go",
+    "cmd/treedb_vector_partition_bench/m8_router_policy_work_review_test.go"
   ]
 }
