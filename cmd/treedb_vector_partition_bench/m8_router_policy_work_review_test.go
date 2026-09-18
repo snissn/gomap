@@ -1,9 +1,49 @@
 package main
 
 import (
+	"fmt"
 	"math"
+	"strings"
 	"testing"
 )
+
+func TestM8RouterPolicyRepresentativeCombinedAdmissionV1(t *testing.T) {
+	cfg, err := parseConfig(append(qualityCLIArgsV1(t), "-m8-quality-diagnostics", "-m8-router-policy-diagnostics", "-m8-router-policy-width", "64"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.partitions, cfg.raftGroups, cfg.raftNodes = 16, 4, 3
+	cfg.probes, cfg.efSearch, cfg.concurrency = []int{2}, []int{96}, []int{1}
+	cfg.overlaps, cfg.warmup = []float64{.20}, 1
+	cfg.m8ExistingDB = "/not-opened/retained-variant"
+	cfg.m8OracleDomainCounts = []int{16}
+	cfg.m8RouterPolicyRepresentativeCounts = []int{256}
+	for _, vectors := range []int{100000, 250000} {
+		t.Run(fmt.Sprint(vectors), func(t *testing.T) {
+			m := fixtureManifest{Vectors: vectors, Queries: 512, Dimensions: 128}
+			cfg.m8MaxExactTruthVisits = 600000000
+			if vectors == 250000 {
+				cfg.m8MaxExactTruthVisits = 1500000000
+			}
+			cfg.routerCandidates = 256
+			refused, err := validateM8BenchmarkWork(cfg, m, maxBenchmarkWorkUnits, maxFixtureBytes)
+			if err == nil || !strings.Contains(err.Error(), "combined attribution/quality work") {
+				t.Fatalf("C256 did not refuse the combined work cap: %v", err)
+			}
+			t.Logf("C256 REFUSED before collection: attribution=%d quality=%d policy=%d: %v", refused.AttributionDiagnosticWorkUnits, refused.QualityDiagnosticWorkUnits, refused.RouterPolicyDiagnosticWorkUnits, err)
+			cfg.routerCandidates = 128
+			admitted, err := validateM8BenchmarkWork(cfg, m, maxBenchmarkWorkUnits, maxFixtureBytes)
+			if err != nil {
+				t.Fatalf("finite width64/P2/EF96/C128 refused: %v", err)
+			}
+			total := admitted.AttributionDiagnosticWorkUnits + admitted.QualityDiagnosticWorkUnits + admitted.RouterPolicyDiagnosticWorkUnits
+			if total > maxBenchmarkWorkUnits || admitted.ModeledPeakBytes > maxFixtureBytes {
+				t.Fatalf("admitted above original work/memory caps: %+v", admitted)
+			}
+			t.Logf("C128 ADMITTED: attribution=%d quality=%d policy=%d combined=%d modeled_peak_bytes=%d exact_visits=%d", admitted.AttributionDiagnosticWorkUnits, admitted.QualityDiagnosticWorkUnits, admitted.RouterPolicyDiagnosticWorkUnits, total, admitted.ModeledPeakBytes, admitted.ExactWorkVectorVisits)
+		})
+	}
+}
 
 func TestM8RouterPolicyResourcePlanChargesEveryPopulationRecheck(t *testing.T) {
 	cfg, err := parseConfig(append(qualityCLIArgsV1(t), "-m8-quality-diagnostics", "-m8-router-policy-diagnostics"))

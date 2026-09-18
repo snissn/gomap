@@ -778,3 +778,18 @@ A prior draft's work bound omitted repeated population revalidation. Old checks
 on that bound do not qualify a new expanded diagnostic matrix; rerun current
 preflight rather than weakening the cap. Cached comparisons still reject input
 mutation and remain outside ordinary serving timers.
+
+The representative admission test checks the combined attribution, quality and
+policy work at N=100K/250K, Q=512 and d=128. It preserves the 200M work cap:
+C256 at width64/P2/EF96 must refuse, while the finite C128 cell must admit.
+The typed one-cell receipt test uses the actual producer and strict transcript
+reader under the unchanged 64MiB diagnostic cap. Neither test is empirical
+policy evidence or permission to expand the matrix after observing outcomes.
+
+Raw M0 captures optionally include each complete prepared pack's existing
+identity-neutral SHA256. Only the 32 membership-digest bytes are zeroed; levels,
+vectors, IDs, CSR, auxiliary data and all other headers/sections remain covered.
+Older captures without these hashes are readable but cannot prove full geometry
+parity. An empty-ordinal split can capture geometry without query outcomes; it
+still fails the locality reader's unchanged nonempty-trace admission. Analysis
+executable identity remains distinct from each original descriptor's bindings.
