@@ -2192,3 +2192,18 @@ The accepted 1M-vector row is an all-partition correctness row using an
 in-process M5-contract simulation and synthetic read proof. It is not network,
 production Raft, or M8 evidence. See
 `TreeDB/docs/performance/vector-partition-m6.md`.
+
+## M8 opt-in graph-quality attribution (#4744)
+
+`cmd/treedb_vector_partition_bench/m8_coverage_cost_test.go` checks the top-10
+mask DP against exhaustive subsets, additive physical costs, simultaneous-budget
+counterexamples, checked bounds, cancellation and owned scratch/results.
+`m8_no_coarsening_test.go` checks all-pack nearest-member reduction, eligibility
+empties, ties, duplicate route rejection and nested actual truth masks.
+
+`m8_quality_integration_test.go` exercises real persisted local packs and fresh
+prepared owners, exact canonical-union parity, DP/legacy-oracle parity across
+probe counts, trace/ordinary result-and-work parity, replay identity, physical
+pack expansion, CLI/child propagation, selected/missing/forged evidence, and
+work/memory rejection. These tests preserve the existing public serving policy;
+they are not a 100K/250K scaling result, fresh holdout, or Raft qualification.

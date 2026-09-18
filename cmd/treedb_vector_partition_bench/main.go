@@ -146,6 +146,8 @@ type config struct {
 	m8MaxRSSBytes         uint64
 	m8MaxAssetBytes       uint64
 	m8MaxExactTruthVisits int64
+	m8QualityDiagnostics  bool
+	m8QualityTraceQueries int
 	m8TruthCache          string
 	m8TruthCacheSHA256    string
 	m3MaxBenchmarkVisits  int64
@@ -964,6 +966,8 @@ func parseConfig(args []string) (config, error) {
 	fs.Uint64Var(&cfg.m8MaxRSSBytes, "m8-max-rss-bytes", cfg.m8MaxRSSBytes, "hard process peak-RSS acceptance bound for production_multi_group")
 	fs.Uint64Var(&cfg.m8MaxAssetBytes, "m8-max-persistent-asset-bytes", cfg.m8MaxAssetBytes, "hard persistent derived-asset byte bound for production_multi_group")
 	fs.Int64Var(&cfg.m8MaxExactTruthVisits, "m8-max-exact-truth-visits", cfg.m8MaxExactTruthVisits, "hard exact source-query visit bound for production_multi_group")
+	fs.BoolVar(&cfg.m8QualityDiagnostics, "m8-quality-diagnostics", false, "enable versioned offline coverage-cost/no-coarsening attribution (top-k <= 10); ordinary search is unchanged")
+	fs.IntVar(&cfg.m8QualityTraceQueries, "m8-quality-trace-queries", 0, "sample the first 0..8 quality queries with structurally bounded existing local traces")
 	fs.StringVar(&cfg.m8TruthCache, "m8-truth-cache", "", "external canonical exact-truth cache directory; identity-bound and fail-closed")
 	fs.StringVar(&cfg.m8TruthCacheSHA256, "m8-truth-cache-sha256", "", "independently trusted SHA-256 of the canonical truth-cache artifact required for cache reuse")
 	fs.StringVar(&cfg.partitionAssignment, "partition-assignment", cfg.partitionAssignment, "partition assignment for partition/M3 stages: graph or stable_id_hash")
@@ -1150,6 +1154,9 @@ func parseConfig(args []string) (config, error) {
 	}
 	if cfg.m3PersistDir != "" && (cfg.stage != "overlap,partition_index" || len(cfg.overlaps) != 1) {
 		return config{}, errors.New("-m3-persist-db requires stage overlap,partition_index with exactly one overlap ratio")
+	}
+	if cfg.m8QualityDiagnostics && (cfg.stage != m8ProductionMultiGroupModeV1 || cfg.topK > 10) || cfg.m8QualityTraceQueries < 0 || cfg.m8QualityTraceQueries > m8QualityTraceMaxQueriesV1 || cfg.m8QualityTraceQueries > 0 && !cfg.m8QualityDiagnostics {
+		return config{}, errors.New("quality diagnostics require production_multi_group, top-k <= 10, and a trace sample in [0,8]")
 	}
 	if cfg.m8ExistingDB != "" && cfg.stage != m8ProductionMultiGroupModeV1 {
 		return config{}, errors.New("-m8-existing-db requires production_multi_group")
@@ -2142,6 +2149,8 @@ type m3BenchmarkWorkPlan struct {
 }
 
 type m8BenchmarkWorkPlan struct {
+	QualityDiagnosticWorkUnits        int64
+	QualityDiagnosticBytes            int64
 	FixtureChecksumVectorVisits       int64
 	ExactTruthVectorVisits            int64
 	ExactWorkVectorVisits             int64
@@ -2222,6 +2231,10 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 	} else if int64(len(oracleDomainCounts)) != oracleRuns {
 		return plan, errors.New("cannot plan M8 membership-oracle work without one logical-domain count per run")
 	}
+	plan.QualityDiagnosticWorkUnits, plan.QualityDiagnosticBytes, err = m8PlanQualityDiagnosticsV1(cfg, m, oracleDomainCounts, capUnits, capBytes)
+	if err != nil {
+		return plan, err
+	}
 	var membershipOracleSubsetsPerSweep int64
 	var membershipOracleWorkPerQuerySweep int64
 	var probeSum int64
@@ -2241,6 +2254,11 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 		for _, domainCount := range oracleDomainCounts {
 			if domainCount < 1 || domainCount > cfg.partitions || probes > domainCount {
 				return plan, errors.New("cannot plan M8 benchmark work with an invalid logical-domain probe count")
+			}
+			if cfg.m8QualityDiagnostics {
+				// The new cache computes both cost curves once per query; its
+				// bounded DP work replaces this legacy subset/probe coordinate.
+				continue
 			}
 			combinations, err := m8MembershipOracleCombinationCountV1(domainCount, probes, maxBenchmarkWorkUnits)
 			if err != nil {
@@ -2364,6 +2382,13 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 	plan.AttributionDiagnosticWorkUnits, err = memoryAdd(plan.SelectedPartitionSetupWorkUnits, plan.AttributionLinearWorkUnits, plan.FinalMembershipLinearScans, plan.FinalMembershipPairComparisons)
 	if err != nil {
 		return plan, err
+	}
+	totalDiagnosticWork, err := memoryAdd(plan.AttributionDiagnosticWorkUnits, plan.QualityDiagnosticWorkUnits)
+	if err != nil {
+		return plan, err
+	}
+	if cfg.m8QualityDiagnostics && totalDiagnosticWork > capUnits {
+		return plan, fmt.Errorf("M8 combined attribution/quality work %d exceeds %d", totalDiagnosticWork, capUnits)
 	}
 	if plan.AttributionDiagnosticWorkUnits > capUnits {
 		return plan, fmt.Errorf("modeled M8 attribution diagnostics exceed %d-operation cap: truth_results_per_query=%d truth_pairs_per_query=%d attribution_cells=%d max_memberships_per_truth_result=%d selected_partition_setup=%d linear_bookkeeping=%d linear_membership_scans=%d pair_comparisons=%d total=%d", capUnits, cfg.topK, truthPairs, attributionCells, maxFinalMemberships, plan.SelectedPartitionSetupWorkUnits, plan.AttributionLinearWorkUnits, plan.FinalMembershipLinearScans, plan.FinalMembershipPairComparisons, plan.AttributionDiagnosticWorkUnits)
@@ -2718,6 +2743,10 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 		return plan, err
 	}
 	attributionPeak, err := memoryAdd(measurementBase, plan.AttributionPrimaryHomeMapBytes, plan.AttributionFinalMembershipBytes, plan.RetainedAttributionBytes, plan.AttributionMergeScratchBytes, plan.AttributionLiveResultBytes, plan.AttributionApproximateRouteBytes, plan.AttributionQueryConversionBytes)
+	if err != nil {
+		return plan, err
+	}
+	attributionPeak, err = memoryAdd(attributionPeak, plan.QualityDiagnosticBytes)
 	if err != nil {
 		return plan, err
 	}

@@ -217,3 +217,21 @@ the public production generation-source-to-shard-to-coordinator path. They
 complement the exact-union, HNSW-route, lifecycle, source-identity,
 response-proof, and all-or-error executable tests in the M1 through M6
 packages; documentation is not a substitute for them.
+
+### Optional offline quality diagnostics
+
+The M8 benchmark's explicit `-m8-quality-diagnostics` selection is an offline,
+static-generation attribution contract, not a public serving policy. It MUST
+bind canonical query/truth, source/model and complete logical-domain to physical
+pack ownership. It MUST NOT count overlap twice, invent unsampled score traces,
+or interpret independent domain-cost and pack-cost optima as the same feasible
+route. Actual coordinator truth masks are attached from measured output and
+remain distinct from offline local-search masks.
+
+The existing canonical score/tie, exact-union, all-or-error, generation-pin and
+visibility contracts are unchanged. Historical receipts without the selection
+retain their previous method. A selected diagnostic's producer, command binding,
+work preflight and retained replay must agree on the new method and fields;
+missing or conflicting data reject rather than falling back to a partial pass.
+See `TreeDB/docs/performance/vector-partition-m8.md` for costs, commands and the
+representative-baseline boundary.

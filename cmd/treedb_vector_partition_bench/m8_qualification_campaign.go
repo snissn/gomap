@@ -655,12 +655,20 @@ func m8QualificationRetainedAttributionV1(root string, report m8ProductionReport
 	if approximateCandidates < 1 {
 		return errors.New("retained attribution has no router candidates")
 	}
+	if report.Config.QualityDiagnostics {
+		if err := harness.enableQualityV1(context.Background(), queries, truth, primaryHomes, finalMemberships, report.Config.QualityTraceQueries, m8CoverageLimitsV1{WorkUnits: maxBenchmarkWorkUnits, Bytes: maxFixtureBytes}); err != nil {
+			return err
+		}
+	}
 	exhaustive := make([][]m8CanonicalResultV1, len(queries))
 	for rowIndex, row := range report.Rows {
+		if err := m8QualityEvidenceSelectionV1(report.Config, row); err != nil {
+			return err
+		}
 		if row.Status != "pass" && row.Status != "fail" {
 			continue
 		}
-		membershipOracles, err := m8MembershipOracleRecallCacheV1(truth, primaryHomes, finalMemberships, assets.manifest, row.Probes)
+		membershipOracles, err := harness.membershipOraclesV1(truth, primaryHomes, finalMemberships, row.Probes)
 		if err != nil {
 			return err
 		}
@@ -684,6 +692,18 @@ func m8QualificationRetainedAttributionV1(root string, report m8ProductionReport
 			}
 		}
 		want := cell.Evidence
+		if want.Quality != nil {
+			measured := make([][]m8CanonicalResultV1, len(truth))
+			for q, ids := range transcript.Outcomes[rowIndex].TopKIDs {
+				for _, id := range ids {
+					measured[q] = append(measured[q], m8CanonicalResultV1{ID: id})
+				}
+			}
+			want.Quality, err = m8QualityAttachCoordinatorV1(want.Quality, truth, measured)
+			if err != nil {
+				return err
+			}
+		}
 		want.EndToEndRecallAtK = row.Attribution.EndToEndRecallAtK
 		want.CoordinatorMergeIDParity = idParity
 		want.CoordinatorMergeScoreParity = scoreParity
@@ -783,7 +803,7 @@ func m8QualificationCommandConfigV1(cfg config) m8ProductionConfigEvidenceV1 {
 		Probes: cfg.probes, Overlap: cfg.overlaps, TopK: cfg.topK, RecallTarget: cfg.recallTarget,
 		Concurrency: cfg.concurrency, Warmup: cfg.warmup, EffectiveWarmup: warmup,
 		EfSearch: cfg.efSearch, RouterCandidates: cfg.routerCandidates,
-		MaxExactTruthVisits: cfg.m8MaxExactTruthVisits, Seed: cfg.seed,
+		MaxExactTruthVisits: cfg.m8MaxExactTruthVisits, Seed: cfg.seed, QualityDiagnostics: cfg.m8QualityDiagnostics, QualityTraceQueries: cfg.m8QualityTraceQueries,
 	}
 }
 
