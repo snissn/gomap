@@ -216,7 +216,16 @@ delete visibility, cumulative physical bounds and the still-gated public route.
 validation, corruption and handle lifetime. `TestTypedGraphLocatorVisitorOwnership`
 checks the shared borrowed lookup boundary and unchanged owning public results.
 `TestTypedGraphReadOwnerDoesNotWaitForImmediatePublication` checks admission and
-public search while an immediate writer is paused before publication.
+public search while an immediate writer is paused before publication, including
+cold/stale local entries and a cold sibling handle.
+`TestTypedGraphReadOwnerReusesExactLocalCatalog` proves warm owner and public
+normalized SQ8/full-fetch calls do not persistently reload the catalog.
+`TestTypedGraphReadOwnerRejectsStaleOrIncompleteLocalCatalog` covers pager,
+system-root, commit, missing-base/roots and base-schema invalidation with a
+single cold repair.
+`TestTypedGraphReadOwnerCatalogMatchesPublishers` separately compares current
+roots and captured base metadata/root maps to direct persistent loading after
+initial build, upsert, delete, fold and rebuild.
 `TestTypedGraphReadOwnerRetriesPublicationChangedDuringCapture`,
 `TestTypedGraphReadOwnerInstallationGapWaiters`, and
 `TestTypedGraphReadOwnerCloseWakesPublicationWaiter` cover coherent capture,

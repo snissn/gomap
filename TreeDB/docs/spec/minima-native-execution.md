@@ -55,6 +55,14 @@ barrier it captures a DB snapshot and installed immutable publication, accepting
 only matching catalog/root identities. A changed publication or an outstanding
 publication-installation gap permits retry; an unexplained mismatch fails
 closed. Acknowledged buffered writes still drain for cross-manager visibility.
+Catalog metadata may reuse the existing immutable handle-local entry only for
+the exact pager, nonzero system root and commit sequence of that fresh snapshot.
+Cold, stale or incompatible entries load directly from the captured snapshot
+and replace the single local entry; owner capture never consults the shared
+write-domain cache under the storage barrier. The catalog retains metadata and
+captured base-root aliases, not a snapshot or asset pin. Cached publishers must
+preserve the same current roots and complete base alias as persistent loading;
+publication matching alone does not certify the base alias.
 Schema mutation, fold, reconciliation and vacuum retain exclusive admission;
 existing owner and asset pins keep previously admitted readers coherent.
 
