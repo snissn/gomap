@@ -83,6 +83,16 @@ the route avoids a full code-plane reopen/copy per request. An empty base still
 validates its selected zero-row image before empty/suffix-only success and holds
 no fabricated resource/scorer; asset failures fail closed.
 
+The normalized typed read-view route still captures a fresh owner/snapshot for
+each request. It reuses only the handle's existing immutable catalog metadata
+when pager, system root and commit sequence match exactly; an unchanged warm
+query does not reload persistent catalog records. Cold/stale entries load from
+that snapshot without waiting on the shared write domain. This is bounded
+single-entry metadata reuse, not a reusable request snapshot or a second FP32
+plane. Warm prepared graph/code resources separately, and keep the returned
+view open through full-document fetch. Measure cold opens and publication
+changes separately from warmed queries.
+
 Its bounded work is a correctness contract, not a high-QPS throughput claim:
 with base domain `A`, conservative shadow allowance `S`, effective width `E0`,
 rerank cap `Rcap`, raw width `C=min(A,E0+S)`, eligible suffix count `D`, and
