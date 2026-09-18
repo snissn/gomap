@@ -20656,6 +20656,27 @@ func (c *Collection) catalogForSnapshotWithWriteDomainLocked(snap *backenddb.Sna
 	return c.catalogForSnapshotWithWriteDomainLockState(snap, true)
 }
 
+// cachedCatalogForSnapshot only reads the immutable handle-local entry. In
+// particular it never waits for writeDomain.mu or retains a snapshot. Typed
+// owner capture requires exact commits; the general catalog path may retain
+// its existing non-vector, command-WAL data-only-commit exception.
+func (c *Collection) cachedCatalogForSnapshot(snap *backenddb.Snapshot, allowDataOnlyCommits bool) *collectionCatalog {
+	if c == nil || snap == nil {
+		return nil
+	}
+	systemRoot := snapshotSystemRoot(snap)
+	commitSeq := snapshotCommitSeq(snap)
+	c.catalogMu.RLock()
+	defer c.catalogMu.RUnlock()
+	cached := c.catalog
+	if cached != nil && cached.pager == snap.Pager() && systemRoot != 0 &&
+		c.catalogSystemRoot == systemRoot &&
+		(c.catalogCommitSeq == commitSeq || (allowDataOnlyCommits && c.canReuseCachedCatalogAcrossDataOnlyCommits(cached))) {
+		return cached
+	}
+	return nil
+}
+
 func (c *Collection) catalogForSnapshotWithWriteDomainLockState(snap *backenddb.Snapshot, writeDomainLocked bool) (*collectionCatalog, error) {
 	if snap == nil {
 		return nil, backenddb.ErrClosed
@@ -20664,16 +20685,9 @@ func (c *Collection) catalogForSnapshotWithWriteDomainLockState(snap *backenddb.
 	systemRoot := snapshotSystemRoot(snap)
 	commitSeq := snapshotCommitSeq(snap)
 
-	c.catalogMu.RLock()
-	if cached := c.catalog; cached != nil &&
-		cached.pager == snap.Pager() &&
-		systemRoot != 0 &&
-		c.catalogSystemRoot == systemRoot &&
-		(c.catalogCommitSeq == commitSeq || c.canReuseCachedCatalogAcrossDataOnlyCommits(cached)) {
-		c.catalogMu.RUnlock()
+	if cached := c.cachedCatalogForSnapshot(snap, true); cached != nil {
 		return cached, nil
 	}
-	c.catalogMu.RUnlock()
 
 	var cached *collectionCatalog
 	if writeDomainLocked {
