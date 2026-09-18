@@ -3357,12 +3357,17 @@ def _normalized_recompute_canonical_truth(dataset_paths, canonical_truth, canoni
 
 
 def _normalized_result_scores_match(ids, scores, query, normalized_vectors, normalized_queries):
+    if type(query) is not int or not 0 <= query < len(normalized_queries):
+        return False
     if ids == []:
-        return scores == [] and type(query) is int and 0 <= query < len(normalized_queries)
+        return scores == []
     try:
-        ordinals = np.asarray(
-            [int(identifier.removeprefix("row-")) for identifier in ids], dtype=np.int64,
-        )
+        ordinals = [int(identifier.removeprefix("row-")) for identifier in ids]
+        if any(not 0 <= ordinal < len(normalized_vectors)
+               or identifier != f"row-{ordinal:06d}"
+               for identifier, ordinal in zip(ids, ordinals)):
+            return False
+        ordinals = np.asarray(ordinals, dtype=np.int64)
         expected = np.clip(normalized_vectors[ordinals] @ normalized_queries[query], -1, 1)
         observed = np.asarray(scores, dtype=np.float64)
     except (AttributeError, IndexError, TypeError, ValueError):

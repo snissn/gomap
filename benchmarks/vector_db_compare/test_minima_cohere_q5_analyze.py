@@ -2670,7 +2670,7 @@ class Q5AnalyzeTest(unittest.TestCase):
                 filtered=True, result_count=10,
             )
 
-    def _normalized_lifecycle_result(self, eligible=500000, after_score=1.0):
+    def _normalized_lifecycle_result(self, eligible=500000, after_score=1.0, after_last_id=None):
         # Exercise the real curve/score/quality checks with small source arrays;
         # unrelated shutdown/route/projection checks have their own regressions.
         ordinals = []
@@ -2704,10 +2704,11 @@ class Q5AnalyzeTest(unittest.TestCase):
                     "route_identity": {"execution_route": "typed_exact" if count <= 4096
                                        else "typed_hnsw"}}
 
+        reopened_ids = sorted(ids[:9] + [after_last_id or ids[10]])
         curves = [search(phase, query, result_ids, [score] * 10)
                   for phase, result_ids, score in (
                       ("fixed_coordinate_curve", ids[:10], 1.0),
-                      ("post_reopen_curve", ids[:9] + ids[10:], after_score))
+                      ("post_reopen_curve", reopened_ids, after_score))
                   for query in range(200)]
         mutable = [search("overlap_search", 0, [], [], 4097) for _ in range(256)]
         mutable.extend(search(phase, 0, [], [], 0) for phase in (
@@ -2737,6 +2738,24 @@ class Q5AnalyzeTest(unittest.TestCase):
             self._normalized_lifecycle_result(after_score=.5)
         with self.assertRaisesRegex(analyzer.EvidenceError, "post-reopen search decisions"):
             self._normalized_lifecycle_result(eligible=4096)
+
+    def test_normalized_lifecycle_rejects_negative_row_alias_after_reopen(self):
+        with self.assertRaisesRegex(analyzer.EvidenceError, "result ordering"):
+            self._normalized_lifecycle_result(after_last_id="row--00001")
+
+    def test_normalized_scores_reject_invalid_source_coordinates(self):
+        vectors = analyzer.np.array([[1.0, 0.0]], dtype="float32")
+        for identifier in ("row--00001", "row-000001", "row-0", "000000",
+                           "row-" + "9" * 100):
+            with self.subTest(identifier=identifier):
+                self.assertFalse(analyzer._normalized_result_scores_match(
+                    [identifier], [1.0], 0, vectors, vectors,
+                ))
+        for query in (-1, 1, False):
+            with self.subTest(query=query):
+                self.assertFalse(analyzer._normalized_result_scores_match(
+                    ["row-000000"], [1.0], query, vectors, vectors,
+                ))
 
     def test_normalized_terminal_requires_stopped_totals_and_all_clean_lifetimes(self):
         for mode, count in (("exact", 2), ("sq8", 3)):
