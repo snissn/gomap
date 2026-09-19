@@ -90,67 +90,73 @@ const (
 const partitionAssignmentGraphRepartitionedV1 = "graph_repartitioned"
 
 type config struct {
-	dataset               string
-	partitions            int
-	probes                []int
-	overlaps              []float64
-	topK                  int
-	recallTarget          float64
-	seed                  int64
-	format                string
-	out                   string
-	stages                map[string]bool
-	command               []string
-	maxVectors            int
-	maxBytes              int64
-	baseSHA               string
-	headSHA               string
-	sourceCheckout        string
-	m3BuildDirty          bool
-	hnsw                  *treeDBPartitionHNSW
-	memory                benchmarkMemoryPlan
-	stage                 string
-	m3PersistDir          string
-	m8ExistingDB          string
-	m8VariantDBs          []string
-	m8OracleDomainCounts  []int
-	partitionAssignment   string
-	partitionTruthOracle  bool
-	shardPlanMode         string
-	shardPlanTargetBytes  uint64
-	shardPlanRatio        float64
-	shardPlan             vectorpartition.ShardPlanV1
-	kahipPython           string
-	kahipPythonSHA256     string
-	kahipScript           string
-	kahipAdapterSHA256    string
-	kahipSource           string
-	kahipTimeout          time.Duration
-	partition             vectorpartition.Config
-	partitionHNSWM        int
-	partitionHNSWEfC      int
-	router                *treeDBRepresentativeRouter
-	coordinator           *m6CoordinatorHarnessV1
-	routerConfig          vectorpartition.RouterConfigV1
-	routerCandidates      int
-	sourceHNSWDegree      int
-	mode                  string
-	raftGroups            int
-	raftNodes             int
-	concurrency           []int
-	warmup                int
-	profiles              string
-	m8MatrixOut           string
-	m8MatrixProfiles      string
-	efSearch              []int
-	m8MaxRSSBytes         uint64
-	m8MaxAssetBytes       uint64
-	m8MaxExactTruthVisits int64
-	m8TruthCache          string
-	m8TruthCacheSHA256    string
-	m3MaxBenchmarkVisits  int64
-	m8CoordinatorLimits   nativewire.VectorPartitionCoordinatorLimitsV1
-	m8ShardLimits         nativewire.VectorPartitionShardSearchLimitsV1
+	dataset                   string
+	partitions                int
+	probes                    []int
+	overlaps                  []float64
+	topK                      int
+	recallTarget              float64
+	seed                      int64
+	format                    string
+	out                       string
+	stages                    map[string]bool
+	command                   []string
+	maxVectors                int
+	maxBytes                  int64
+	baseSHA                   string
+	headSHA                   string
+	sourceCheckout            string
+	m3BuildDirty              bool
+	hnsw                      *treeDBPartitionHNSW
+	memory                    benchmarkMemoryPlan
+	stage                     string
+	m3PersistDir              string
+	m8ExistingDB              string
+	m8VariantDBs              []string
+	m8OracleDomainCounts      []int
+	partitionAssignment       string
+	partitionTruthOracle      bool
+	shardPlanMode             string
+	shardPlanTargetBytes      uint64
+	shardPlanRatio            float64
+	shardPlan                 vectorpartition.ShardPlanV1
+	kahipPython               string
+	kahipPythonSHA256         string
+	kahipScript               string
+	kahipAdapterSHA256        string
+	kahipSource               string
+	kahipTimeout              time.Duration
+	partition                 vectorpartition.Config
+	partitionHNSWM            int
+	partitionHNSWEfC          int
+	router                    *treeDBRepresentativeRouter
+	coordinator               *m6CoordinatorHarnessV1
+	routerConfig              vectorpartition.RouterConfigV1
+	routerCandidates          int
+	sourceHNSWDegree          int
+	mode                      string
+	raftGroups                int
+	raftNodes                 int
+	concurrency               []int
+	warmup                    int
+	profiles                  string
+	m8MatrixOut               string
+	m8MatrixProfiles          string
+	efSearch                  []int
+	m8MaxRSSBytes             uint64
+	m8MaxAssetBytes           uint64
+	m8MaxExactTruthVisits     int64
+	m8QualityDiagnostics      bool
+	m8QualityTraceQueries     int
+	m8RouterPolicyDiagnostics bool
+	m8RouterPolicyWidth       int
+	// Runtime work-planner inputs from the actual retained router models.
+	m8RouterPolicyRepresentativeCounts []int
+	m8TruthCache                       string
+	m8TruthCacheSHA256                 string
+	m3MaxBenchmarkVisits               int64
+	m8CoordinatorLimits                nativewire.VectorPartitionCoordinatorLimitsV1
+	m8ShardLimits                      nativewire.VectorPartitionShardSearchLimitsV1
 }
 
 type kahipRequestPartitioner struct{}
@@ -222,16 +228,17 @@ type partitionGraphDiagnosticsV1 struct {
 }
 
 type fixtureManifest struct {
-	SchemaVersion int    `json:"schema_version"`
-	Fixture       string `json:"fixture"`
-	Generator     string `json:"generator"`
-	Arithmetic    string `json:"arithmetic"`
-	Vectors       int    `json:"vectors"`
-	Queries       int    `json:"queries"`
-	Dimensions    int    `json:"dimensions"`
-	Metric        string `json:"metric"`
-	Seed          int64  `json:"seed"`
-	Checksum      string `json:"checksum"`
+	SchemaVersion      int    `json:"schema_version"`
+	Fixture            string `json:"fixture"`
+	Generator          string `json:"generator"`
+	Arithmetic         string `json:"arithmetic"`
+	Vectors            int    `json:"vectors"`
+	Queries            int    `json:"queries"`
+	QueryOrdinalOffset int64  `json:"query_ordinal_offset,omitempty"`
+	Dimensions         int    `json:"dimensions"`
+	Metric             string `json:"metric"`
+	Seed               int64  `json:"seed"`
+	Checksum           string `json:"checksum"`
 }
 
 type neighbor struct {
@@ -539,6 +546,9 @@ func run(args []string, stdout io.Writer) error {
 	if len(args) > 0 && args[0] == "validate-qualification" {
 		return runValidateQualification(args[1:], stdout)
 	}
+	if len(args) > 0 && args[0] == "replay-m8-report" {
+		return runReplayM8ReportV1(args[1:], stdout)
+	}
 	return runWithRuntimeCapabilities(args, stdout, currentBenchmarkRuntimeCapabilities())
 }
 
@@ -615,13 +625,14 @@ func runGenerateTruthCache(args []string, stdout io.Writer) error {
 
 func runGenerateFixture(args []string, stdout io.Writer) error {
 	var (
-		out               string
-		vectors           int
-		queries           int
-		dimensions        int
-		seed              int64
-		generator         string
-		maxChecksumVisits int64
+		out                string
+		vectors            int
+		queries            int
+		dimensions         int
+		seed               int64
+		queryOrdinalOffset int64
+		generator          string
+		maxChecksumVisits  int64
 	)
 	fs := flag.NewFlagSet("treedb_vector_partition_bench generate-fixture", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -630,6 +641,7 @@ func runGenerateFixture(args []string, stdout io.Writer) error {
 	fs.IntVar(&queries, "queries", 1, "number of deterministic queries")
 	fs.IntVar(&dimensions, "dimensions", 16, "vector dimensions")
 	fs.Int64Var(&seed, "seed", 1, "fixture generation seed")
+	fs.Int64Var(&queryOrdinalOffset, "query-ordinal-offset", 0, "first qualification query ordinal (corpus unchanged; legacy generator requires zero)")
 	fs.StringVar(&generator, "generator", fixtureGenerator, "fixture generator identity")
 	fs.Int64Var(&maxChecksumVisits, "max-checksum-visits", maxBenchmarkWorkUnits, "explicit exact checksum visit bound for fixture generation")
 	if err := fs.Parse(args); err != nil {
@@ -649,15 +661,19 @@ func runGenerateFixture(args []string, stdout io.Writer) error {
 		return fmt.Errorf("generated fixture checksum exact work exceeds %d-visit cap; set -max-checksum-visits explicitly for a declared qualification generation", maxChecksumVisits)
 	}
 	manifest := fixtureManifest{
-		SchemaVersion: schemaVersion,
-		Fixture:       fmt.Sprintf("deterministic_%d", vectors),
-		Generator:     generator,
-		Arithmetic:    fixtureArithmetic,
-		Vectors:       vectors,
-		Queries:       queries,
-		Dimensions:    dimensions,
-		Metric:        "cosine",
-		Seed:          seed,
+		SchemaVersion:      schemaVersion,
+		Fixture:            fmt.Sprintf("deterministic_%d", vectors),
+		Generator:          generator,
+		Arithmetic:         fixtureArithmetic,
+		Vectors:            vectors,
+		Queries:            queries,
+		QueryOrdinalOffset: queryOrdinalOffset,
+		Dimensions:         dimensions,
+		Metric:             "cosine",
+		Seed:               seed,
+	}
+	if err := validateFixtureQueryOrdinalsV1(manifest); err != nil {
+		return err
 	}
 	corpus, querySet := fixtureData(manifest)
 	manifest.Checksum = fixtureChecksumFromData(corpus, querySet)
@@ -765,7 +781,7 @@ func runWithRuntimeCapabilities(args []string, stdout io.Writer, capabilities be
 		if cfg.topK > nativewire.DefaultVectorPartitionShardSearchLimitsV1().MaxTopK {
 			return fmt.Errorf("top-k cannot exceed M8 shard limit %d", nativewire.DefaultVectorPartitionShardSearchLimitsV1().MaxTopK)
 		}
-		cfg.m8OracleDomainCounts, err = m8RetainedOracleDomainCountsV1(cfg)
+		cfg.m8OracleDomainCounts, cfg.m8RouterPolicyRepresentativeCounts, err = m8RetainedOracleShapesV1(cfg)
 		if err != nil {
 			return err
 		}
@@ -964,6 +980,10 @@ func parseConfig(args []string) (config, error) {
 	fs.Uint64Var(&cfg.m8MaxRSSBytes, "m8-max-rss-bytes", cfg.m8MaxRSSBytes, "hard process peak-RSS acceptance bound for production_multi_group")
 	fs.Uint64Var(&cfg.m8MaxAssetBytes, "m8-max-persistent-asset-bytes", cfg.m8MaxAssetBytes, "hard persistent derived-asset byte bound for production_multi_group")
 	fs.Int64Var(&cfg.m8MaxExactTruthVisits, "m8-max-exact-truth-visits", cfg.m8MaxExactTruthVisits, "hard exact source-query visit bound for production_multi_group")
+	fs.BoolVar(&cfg.m8QualityDiagnostics, "m8-quality-diagnostics", false, "enable versioned offline coverage-cost/no-coarsening attribution (top-k <= 10); ordinary search is unchanged")
+	fs.IntVar(&cfg.m8QualityTraceQueries, "m8-quality-trace-queries", 0, "sample the first 0..8 quality queries with structurally bounded existing local traces")
+	fs.BoolVar(&cfg.m8RouterPolicyDiagnostics, "m8-router-policy-diagnostics", false, "compare router ranking policies offline on identical candidates; requires -m8-quality-diagnostics and does not change serving")
+	fs.IntVar(&cfg.m8RouterPolicyWidth, "m8-router-policy-width", 0, "nearest returned representatives used for policy voting; zero uses the effective approximate candidate budget")
 	fs.StringVar(&cfg.m8TruthCache, "m8-truth-cache", "", "external canonical exact-truth cache directory; identity-bound and fail-closed")
 	fs.StringVar(&cfg.m8TruthCacheSHA256, "m8-truth-cache-sha256", "", "independently trusted SHA-256 of the canonical truth-cache artifact required for cache reuse")
 	fs.StringVar(&cfg.partitionAssignment, "partition-assignment", cfg.partitionAssignment, "partition assignment for partition/M3 stages: graph or stable_id_hash")
@@ -1150,6 +1170,12 @@ func parseConfig(args []string) (config, error) {
 	}
 	if cfg.m3PersistDir != "" && (cfg.stage != "overlap,partition_index" || len(cfg.overlaps) != 1) {
 		return config{}, errors.New("-m3-persist-db requires stage overlap,partition_index with exactly one overlap ratio")
+	}
+	if cfg.m8RouterPolicyDiagnostics && !cfg.m8QualityDiagnostics || cfg.m8RouterPolicyWidth < 0 || cfg.m8RouterPolicyWidth > cfg.routerCandidates || cfg.m8RouterPolicyWidth != 0 && !cfg.m8RouterPolicyDiagnostics {
+		return config{}, errors.New("router policy diagnostics require quality diagnostics and a width in [0,router-candidates]")
+	}
+	if cfg.m8QualityDiagnostics && (cfg.stage != m8ProductionMultiGroupModeV1 || cfg.topK > 10) || cfg.m8QualityTraceQueries < 0 || cfg.m8QualityTraceQueries > m8QualityTraceMaxQueriesV1 || cfg.m8QualityTraceQueries > 0 && !cfg.m8QualityDiagnostics {
+		return config{}, errors.New("quality diagnostics require production_multi_group, top-k <= 10, and a trace sample in [0,8]")
 	}
 	if cfg.m8ExistingDB != "" && cfg.stage != m8ProductionMultiGroupModeV1 {
 		return config{}, errors.New("-m8-existing-db requires production_multi_group")
@@ -1938,7 +1964,7 @@ func loadFixture(dir string) (fixtureManifest, error) {
 	if err = d.Decode(&extra); err != io.EOF {
 		return m, errors.New("fixture manifest has trailing JSON")
 	}
-	return m, nil
+	return m, validateFixtureQueryOrdinalsV1(m)
 }
 func decodeResult(raw []byte) (runResult, error) {
 	var r runResult
@@ -2118,8 +2144,23 @@ func validateFixtureSyntax(m fixtureManifest, capVectors int) error {
 	if m.SchemaVersion != schemaVersion || m.Fixture == "" || !supportedFixtureGeneratorV1(m.Generator) || m.Arithmetic != fixtureArithmetic || m.Vectors < 1 || m.Vectors > capVectors || m.Queries < 1 || m.Dimensions < 1 || m.Dimensions > maxDimensions || m.Metric != "cosine" || len(m.Checksum) != 64 {
 		return errors.New("unsupported or malformed fixture manifest")
 	}
+	if err := validateFixtureQueryOrdinalsV1(m); err != nil {
+		return err
+	}
 	_, e := hex.DecodeString(m.Checksum)
 	return e
+}
+
+// Keep the half-open query ordinal range representable before allocating any
+// fixture data. Corpus ordinals and legacy query selection remain unchanged.
+func validateFixtureQueryOrdinalsV1(m fixtureManifest) error {
+	if m.QueryOrdinalOffset < 0 || m.Queries < 1 || m.QueryOrdinalOffset > math.MaxInt64-int64(m.Queries) {
+		return errors.New("invalid fixture query ordinal range")
+	}
+	if m.Generator == fixtureGenerator && m.QueryOrdinalOffset != 0 {
+		return errors.New("legacy fixture generator requires zero query ordinal offset")
+	}
+	return nil
 }
 
 func supportedFixtureGeneratorV1(generator string) bool {
@@ -2142,6 +2183,10 @@ type m3BenchmarkWorkPlan struct {
 }
 
 type m8BenchmarkWorkPlan struct {
+	QualityDiagnosticWorkUnits        int64
+	QualityDiagnosticBytes            int64
+	RouterPolicyDiagnosticWorkUnits   int64
+	RouterPolicyDiagnosticBytes       int64
 	FixtureChecksumVectorVisits       int64
 	ExactTruthVectorVisits            int64
 	ExactWorkVectorVisits             int64
@@ -2222,6 +2267,14 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 	} else if int64(len(oracleDomainCounts)) != oracleRuns {
 		return plan, errors.New("cannot plan M8 membership-oracle work without one logical-domain count per run")
 	}
+	plan.QualityDiagnosticWorkUnits, plan.QualityDiagnosticBytes, err = m8PlanQualityDiagnosticsV1(cfg, m, oracleDomainCounts, capUnits, capBytes)
+	if err != nil {
+		return plan, err
+	}
+	plan.RouterPolicyDiagnosticWorkUnits, plan.RouterPolicyDiagnosticBytes, err = m8PlanRouterPolicyDiagnosticsV1(cfg, m, oracleDomainCounts, capUnits, capBytes)
+	if err != nil {
+		return plan, err
+	}
 	var membershipOracleSubsetsPerSweep int64
 	var membershipOracleWorkPerQuerySweep int64
 	var probeSum int64
@@ -2241,6 +2294,11 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 		for _, domainCount := range oracleDomainCounts {
 			if domainCount < 1 || domainCount > cfg.partitions || probes > domainCount {
 				return plan, errors.New("cannot plan M8 benchmark work with an invalid logical-domain probe count")
+			}
+			if cfg.m8QualityDiagnostics {
+				// The new cache computes both cost curves once per query; its
+				// bounded DP work replaces this legacy subset/probe coordinate.
+				continue
 			}
 			combinations, err := m8MembershipOracleCombinationCountV1(domainCount, probes, maxBenchmarkWorkUnits)
 			if err != nil {
@@ -2364,6 +2422,13 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 	plan.AttributionDiagnosticWorkUnits, err = memoryAdd(plan.SelectedPartitionSetupWorkUnits, plan.AttributionLinearWorkUnits, plan.FinalMembershipLinearScans, plan.FinalMembershipPairComparisons)
 	if err != nil {
 		return plan, err
+	}
+	totalDiagnosticWork, err := memoryAdd(plan.AttributionDiagnosticWorkUnits, plan.QualityDiagnosticWorkUnits, plan.RouterPolicyDiagnosticWorkUnits)
+	if err != nil {
+		return plan, err
+	}
+	if cfg.m8QualityDiagnostics && totalDiagnosticWork > capUnits {
+		return plan, fmt.Errorf("M8 combined attribution/quality work %d exceeds %d", totalDiagnosticWork, capUnits)
 	}
 	if plan.AttributionDiagnosticWorkUnits > capUnits {
 		return plan, fmt.Errorf("modeled M8 attribution diagnostics exceed %d-operation cap: truth_results_per_query=%d truth_pairs_per_query=%d attribution_cells=%d max_memberships_per_truth_result=%d selected_partition_setup=%d linear_bookkeeping=%d linear_membership_scans=%d pair_comparisons=%d total=%d", capUnits, cfg.topK, truthPairs, attributionCells, maxFinalMemberships, plan.SelectedPartitionSetupWorkUnits, plan.AttributionLinearWorkUnits, plan.FinalMembershipLinearScans, plan.FinalMembershipPairComparisons, plan.AttributionDiagnosticWorkUnits)
@@ -2718,6 +2783,10 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 		return plan, err
 	}
 	attributionPeak, err := memoryAdd(measurementBase, plan.AttributionPrimaryHomeMapBytes, plan.AttributionFinalMembershipBytes, plan.RetainedAttributionBytes, plan.AttributionMergeScratchBytes, plan.AttributionLiveResultBytes, plan.AttributionApproximateRouteBytes, plan.AttributionQueryConversionBytes)
+	if err != nil {
+		return plan, err
+	}
+	attributionPeak, err = memoryAdd(attributionPeak, plan.QualityDiagnosticBytes, plan.RouterPolicyDiagnosticBytes)
 	if err != nil {
 		return plan, err
 	}
@@ -3186,7 +3255,7 @@ func qualificationVectorsV1(m fixtureManifest, domain uint64) [][]float64 {
 func qualificationQueriesV1(m fixtureManifest) [][]float64 {
 	q := contiguousFloat64Matrix(m.Queries, m.Dimensions)
 	for i := range q {
-		qualificationVectorV1(q[i], m, uint64(i), 0xd1b54a32d192ed03)
+		qualificationVectorV1(q[i], m, uint64(m.QueryOrdinalOffset)+uint64(i), 0xd1b54a32d192ed03)
 	}
 	return q
 }

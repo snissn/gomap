@@ -219,9 +219,15 @@ def _dense_request(index, query, top_k, ef_search, generation, return_embedding,
                    query_mode="exact", quantized_index_name=None, quantized_rerank_candidates=0):
     if top_k <= 0 or not query or len(query) > 65536:
         raise TreeDBConfigError("native dense query and positive top_k required")
-    values = [float(v) for v in query]
-    if not all(math.isfinite(v) for v in values):
-        raise TreeDBConfigError("native dense query must be finite")
+    values = []
+    try:
+        for raw in query:
+            value = float(raw)
+            if not math.isfinite(value):
+                raise ValueError("non-finite component")
+            values.append(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise TreeDBConfigError("native dense query must be finite") from exc
     try:
         packed = struct.pack(f"<{len(values)}f", *values)
     except (OverflowError, struct.error) as exc:

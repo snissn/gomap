@@ -223,6 +223,9 @@ func planHybridSearch(opts HybridSearchOptions) (hybridSearchExecutionPlan, erro
 		if text.CandidateLimit == 0 {
 			text.CandidateLimit = hybridDefaultCandidateLimit(opts.TopK)
 		}
+		if err := validateHybridTextCandidateQuery(text); err != nil {
+			return plan, err
+		}
 		plan.text = &text
 		plan.textCandidateScanBudget = text.CandidateLimit
 		plan.public.TextCandidateLimit = text.CandidateLimit

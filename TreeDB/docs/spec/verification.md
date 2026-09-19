@@ -216,7 +216,16 @@ delete visibility, cumulative physical bounds and the still-gated public route.
 validation, corruption and handle lifetime. `TestTypedGraphLocatorVisitorOwnership`
 checks the shared borrowed lookup boundary and unchanged owning public results.
 `TestTypedGraphReadOwnerDoesNotWaitForImmediatePublication` checks admission and
-public search while an immediate writer is paused before publication.
+public search while an immediate writer is paused before publication, including
+cold/stale local entries and a cold sibling handle.
+`TestTypedGraphReadOwnerReusesExactLocalCatalog` proves warm owner and public
+normalized SQ8/full-fetch calls do not persistently reload the catalog.
+`TestTypedGraphReadOwnerRejectsStaleOrIncompleteLocalCatalog` covers pager,
+system-root, commit, missing-base/roots and base-schema invalidation with a
+single cold repair.
+`TestTypedGraphReadOwnerCatalogMatchesPublishers` separately compares current
+roots and captured base metadata/root maps to direct persistent loading after
+initial build, upsert, delete, fold and rebuild.
 `TestTypedGraphReadOwnerRetriesPublicationChangedDuringCapture`,
 `TestTypedGraphReadOwnerInstallationGapWaiters`, and
 `TestTypedGraphReadOwnerCloseWakesPublicationWaiter` cover coherent capture,
@@ -1076,6 +1085,7 @@ Coverage:
 - `TreeDB/collections/text_search_m4_test.go`:
   - `TestSearchTextSingleTermRankedSearchM4`
   - `TestSearchTextANDOROperatorsM4`
+  - `TestSearchTextLiteralModeM4`
   - `TestSearchTextFieldWeightAffectsRankingM4`
   - `TestSearchTextMissingIndexUnsupportedSyntaxAndTruncationM4`
   - `TestSearchTextSeesUnflushedTextIndexedInsertM4`
@@ -1084,6 +1094,16 @@ Coverage:
   - `TestSearchTextTopKBoundsDocumentFetchM4`
   - `TestSearchTextReopenParityM4`
   - `BenchmarkSearchTextM4`
+- `TreeDB/collections/hybrid_text_candidates_test.go`:
+  - `TestSearchHybridTextCandidatesLexicalOptions4766`
+- `TreeDB/collections/text_v2_blockmax_test.go` and
+  `text_v2_position_validation_4558_test.go`:
+  - block-max fallback and final-attribution posting budgets remain monotonic
+    and fail closed without exceeding the explicit cap
+- `TreeDB/documentservice/rag_parity_test.go`:
+  - `TestHTTPLiteralAndBoundedFilteredLexicalSearch4766`
+  - `TestHTTPBooleanOperatorConflictParity4766`
+  - `BenchmarkHTTPFilteredLexicalSearch4766`
 
 ## 11.2 Raft Placement Route Preflight
 
@@ -2192,3 +2212,83 @@ The accepted 1M-vector row is an all-partition correctness row using an
 in-process M5-contract simulation and synthetic read proof. It is not network,
 production Raft, or M8 evidence. See
 `TreeDB/docs/performance/vector-partition-m6.md`.
+
+## M8 opt-in graph-quality attribution (#4744)
+
+`cmd/treedb_vector_partition_bench/m8_coverage_cost_test.go` checks the top-10
+mask DP against exhaustive subsets, additive physical costs, simultaneous-budget
+counterexamples, checked bounds, cancellation and owned scratch/results.
+`m8_no_coarsening_test.go` checks all-pack nearest-member reduction, eligibility
+empties, ties, duplicate route rejection and nested actual truth masks.
+
+`m8_quality_integration_test.go` exercises real persisted local packs and fresh
+prepared owners, exact canonical-union parity, DP/legacy-oracle parity across
+probe counts, trace/ordinary result-and-work parity, replay identity, physical
+pack expansion, CLI/child propagation, selected/missing/forged evidence, and
+work/memory rejection. These tests preserve the existing public serving policy;
+they are not a 100K/250K scaling result, fresh holdout, or Raft qualification.
+
+`m8_quality_replay_review_test.go` verifies that schema-valid forged static
+quality evidence in failed-coverage rows is rejected after independent asset
+reopen, and that canceled trace preparation does not publish a cache.
+`TreeDB/collections/vector_partition_trace_ids_test.go` covers cancellation
+before and during the offline ID copy, reader-pin release, retry, and ownership
+of returned IDs after close. The shared `BenchmarkM8RouterOrdinaryPathV1` measures
+unchanged router-only work as the stacked policy diagnostic's control; it is not
+full partition-search or service QPS.
+
+`cmd/treedb_vector_partition_bench/fixture_query_offset_test.go` verifies CLI and
+manifest query-range admission, zero-offset manifest bytes/checksum/cache
+compatibility, unchanged corpus generation, fresh query ordinals and identities,
+and negative/overflow/legacy rejection. The calibration builder test also checks
+offset-aware selected queries and retained-source truth parity, with invalid
+ranges rejected before corpus allocation. These are provenance/correctness
+checks, not an observed fresh-holdout or baseline performance result.
+
+`m8_report_replay_test.go` checks required independent pins before I/O, frozen
+fixture/query-offset and argv identities before expensive work, dirty or mixed
+source/executable/variant rejection, canonical root containment, escaping
+symlinks, report digest and bounded/trailing-JSON rejection. The command reuses
+the real production profile, command/executable, truth-anchor, transcript,
+resource and retained-asset/attribution verifiers; these boundary tests do not
+substitute for a complete successful replay of real retained artifacts. Its
+`REPLAY_ACCEPTED_NOT_QUALIFICATION` result does not assert a campaign or baseline
+acceptance and does not modify historical `validate-qualification`.
+
+## M8 same-candidate router policy diagnostics (#4745)
+
+`TreeDB/collections/vector_partition_router_policy_reduce_test.go` checks the
+hybrid golden across all 720 permutations and all probe prefixes, unique
+representative voting, conflicting duplicate rejection, nearest-width exact
+voting, deterministic ties, set/sequence identity, refusal receipts and owned
+prefix buffers. The digest-byte golden protects the documented encoding during
+allocation minimization.
+
+`vector_partition_router_policy_diagnostic_test.go` covers the real persisted
+router's shared candidate path, ordinary-result/work parity, unchanged ordinary
+counters, independent owner reopening, invalid selection, cancellation, close,
+concurrent readers and result ownership. The ordinary collector is shared, not
+reimplemented in a benchmark-only approximate search.
+
+`cmd/treedb_vector_partition_bench/m8_router_policy_experiment_test.go` covers
+explicit CLI/config/child selection, full-population coverage refusals, cached
+probe versus EF identity, actual physical pack cost, flags/source/query/candidate
+replay and independently reopened retained report verification. Work and byte
+preflight include actual retained model sizes. Failure receipts cannot be dropped
+or replaced by successful-only averages. These tests do not select a production
+policy, establish 100K/250K scaling, or release the graph-before-Raft gate.
+
+- Router-policy cache-hit work, dimension-sized scratch and overflow admission:
+  `TestM8RouterPolicyResourcePlanChargesEveryPopulationRecheck`,
+  `TestM8RouterPolicyResourcePlanChargesQueryScratchAndRejectsOverflow`.
+- Cancellation within nearest-width sorting and without partial policy results:
+  `TestVectorPartitionRouterPolicyNearestWidthSortCancellation`,
+  `TestVectorPartitionRouterPolicyReductionCancellationNoPartial`.
+- Combined representative admission and typed full-512-query receipt bytes:
+  `TestM8RouterPolicyRepresentativeCombinedAdmissionV1`,
+  `TestM8PlannedRouterPolicyReceiptSizeV1`. These source checks preserve the
+  original 200M work and 64MiB diagnostic caps; they are not policy outcomes.
+- Optional complete identity-neutral pack digest admission and split parity:
+  `TestM0ReadCaptureRequiresCleanBuildIdentity`,
+  `TestM0CaptureSplitPairRejectsLeakage`. Missing historical hashes do not prove
+  full geometry. Empty-ordinal geometry controls do not qualify as locality traces.

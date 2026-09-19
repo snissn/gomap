@@ -79,6 +79,47 @@ func TestSearchTextANDOROperatorsM4(t *testing.T) {
 	}
 }
 
+func TestSearchTextLiteralModeM4(t *testing.T) {
+	d := openTextTestDB(t)
+	defer func() { _ = d.Close() }()
+	col := createTextSearchCollection2627(t, d, "docs", TextIndexDefinition{
+		Name:            "lexical",
+		Version:         TextIndexVersionV1,
+		AnalyzerOptions: &TextAnalyzerOptions{StopWords: []string{"why"}},
+		Fields:          []TextIndexField{{Field: "body"}},
+	}, [][]byte{[]byte("all"), []byte("partial")}, [][]byte{
+		[]byte(`{"body":"refund and or policy"}`),
+		[]byte(`{"body":"refund policy"}`),
+	})
+
+	literal, err := col.SearchText(TextSearchOptions{
+		IndexName: "lexical",
+		Query:     `Why ("refund") AnD OR policy refund?`,
+		QueryMode: TextSearchQueryModeLiteral,
+		Operator:  TextSearchOperatorAND,
+		TopK:      10,
+	})
+	if err != nil {
+		t.Fatalf("SearchText literal: %v", err)
+	}
+	if literal.Stats.QueryTerms != 4 || len(literal.Results) != 1 || string(literal.Results[0].DocumentID) != "all" {
+		t.Fatalf("literal response=%+v want analyzer terms [refund and or policy] and all", literal)
+	}
+	if _, err := col.SearchText(TextSearchOptions{IndexName: "lexical", Query: `Why ("refund") AnD OR policy refund?`, TopK: 10}); err == nil {
+		t.Fatal("Boolean mode accepted literal-only quote/parenthesis input")
+	}
+	empty, err := col.SearchText(TextSearchOptions{IndexName: "lexical", Query: `...()!?`, QueryMode: TextSearchQueryModeLiteral, TopK: 10})
+	if err != nil || len(empty.Results) != 0 || empty.Stats.QueryTerms != 0 {
+		t.Fatalf("punctuation-only literal response=%+v err=%v want successful empty result", empty, err)
+	}
+	if _, err := col.SearchText(TextSearchOptions{IndexName: "lexical", Query: "refund", QueryMode: TextSearchQueryMode("natural"), TopK: 10}); err == nil {
+		t.Fatal("unknown query mode err=nil")
+	}
+	if _, err := col.SearchText(TextSearchOptions{IndexName: "lexical", Phrase: &TextSearchPhraseQuery{Query: "refund policy"}, QueryMode: TextSearchQueryModeLiteral, TopK: 10}); err == nil {
+		t.Fatal("literal mode plus Phrase err=nil")
+	}
+}
+
 func TestSearchTextFieldWeightAffectsRankingM4(t *testing.T) {
 	d := openTextTestDB(t)
 	defer func() { _ = d.Close() }()

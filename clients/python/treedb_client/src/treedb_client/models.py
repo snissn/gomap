@@ -39,6 +39,27 @@ def _as_int(value: Any, label: str) -> int:
     return value
 
 
+def _lexical_query_mode(value: Any, label: str) -> str:
+    mode = _as_str(value, label)
+    if mode not in {"boolean", "literal"}:
+        raise ValueError(f"{label} must be 'boolean' or 'literal'")
+    return mode
+
+
+def _lexical_operator(value: Any, label: str) -> str:
+    operator = _as_str(value, label)
+    if operator.lower() not in {"and", "or"}:
+        raise ValueError(f"{label} must be 'and' or 'or'")
+    return operator
+
+
+def _non_negative_int(value: Any, label: str) -> int:
+    parsed = _as_int(value, label)
+    if parsed < 0:
+        raise ValueError(f"{label} must be non-negative")
+    return parsed
+
+
 def _as_bool(value: Any, label: str) -> bool:
     if not isinstance(value, bool):
         raise TypeError(f"{label} must be a boolean")
@@ -1111,6 +1132,7 @@ class KeywordSearchRequest:
     query: str
     top_k: int
     expected_generation: Optional[int] = None
+    text_query_mode: Optional[str] = None
     operator: Optional[str] = None
     candidate_limit: Optional[int] = None
     max_postings_scanned: Optional[int] = None
@@ -1125,12 +1147,14 @@ class KeywordSearchRequest:
         }
         if self.expected_generation is not None:
             out["expected_generation"] = _as_int(self.expected_generation, "keyword request.expected_generation")
+        if self.text_query_mode is not None:
+            out["text_query_mode"] = _lexical_query_mode(self.text_query_mode, "keyword request.text_query_mode")
         if self.operator is not None:
-            out["operator"] = _as_str(self.operator, "keyword request.operator")
+            out["operator"] = _lexical_operator(self.operator, "keyword request.operator")
         if self.candidate_limit is not None:
-            out["candidate_limit"] = _as_int(self.candidate_limit, "keyword request.candidate_limit")
+            out["candidate_limit"] = _non_negative_int(self.candidate_limit, "keyword request.candidate_limit")
         if self.max_postings_scanned is not None:
-            out["max_postings_scanned"] = _as_int(self.max_postings_scanned, "keyword request.max_postings_scanned")
+            out["max_postings_scanned"] = _non_negative_int(self.max_postings_scanned, "keyword request.max_postings_scanned")
         normalized_filter = _filter_to_dict(self.filter)
         if normalized_filter is not None:
             out["filter"] = normalized_filter
@@ -1290,8 +1314,11 @@ class HybridSearchRequest:
     expected_generation: Optional[int] = None
     query: Optional[str] = None
     query_embedding: Optional[Sequence[float]] = None
+    text_query_mode: Optional[str] = None
+    text_operator: Optional[str] = None
     candidate_limit: Optional[int] = None
     text_candidate_limit: Optional[int] = None
+    max_postings_scanned: Optional[int] = None
     vector_candidate_limit: Optional[int] = None
     ef_search: Optional[int] = None
     max_chunks_per_parent: Optional[int] = None
@@ -1310,10 +1337,22 @@ class HybridSearchRequest:
             out["query"] = _as_str(self.query, "hybrid request.query")
         if self.query_embedding is not None:
             out["query_embedding"] = _float_list(self.query_embedding, "hybrid request.query_embedding")
+        if not self.query and (
+            self.text_query_mode is not None
+            or self.text_operator is not None
+            or self.max_postings_scanned is not None
+        ):
+            raise ValueError("hybrid lexical options require query")
+        if self.text_query_mode is not None:
+            out["text_query_mode"] = _lexical_query_mode(self.text_query_mode, "hybrid request.text_query_mode")
+        if self.text_operator is not None:
+            out["text_operator"] = _lexical_operator(self.text_operator, "hybrid request.text_operator")
         if self.candidate_limit is not None:
-            out["candidate_limit"] = _as_int(self.candidate_limit, "hybrid request.candidate_limit")
+            out["candidate_limit"] = _non_negative_int(self.candidate_limit, "hybrid request.candidate_limit")
         if self.text_candidate_limit is not None:
-            out["text_candidate_limit"] = _as_int(self.text_candidate_limit, "hybrid request.text_candidate_limit")
+            out["text_candidate_limit"] = _non_negative_int(self.text_candidate_limit, "hybrid request.text_candidate_limit")
+        if self.max_postings_scanned is not None:
+            out["max_postings_scanned"] = _non_negative_int(self.max_postings_scanned, "hybrid request.max_postings_scanned")
         if self.vector_candidate_limit is not None:
             out["vector_candidate_limit"] = _as_int(self.vector_candidate_limit, "hybrid request.vector_candidate_limit")
         if self.ef_search is not None:

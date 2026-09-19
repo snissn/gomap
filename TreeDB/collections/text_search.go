@@ -56,6 +56,16 @@ const (
 	TextSearchResultModeScoreOnly TextSearchResultMode = "score_only"
 )
 
+// TextSearchQueryMode selects how Query is interpreted. The zero value keeps
+// the historical Boolean syntax; literal mode sends the complete input through
+// the configured analyzer without treating words or punctuation as syntax.
+type TextSearchQueryMode string
+
+const (
+	TextSearchQueryModeBoolean TextSearchQueryMode = "boolean"
+	TextSearchQueryModeLiteral TextSearchQueryMode = "literal"
+)
+
 // TextSearchPhraseQuery requests bounded ordered phrase/proximity semantics
 // over text-v2 position lanes. Matching uses analyzed token positions, so
 // stopword-filtered tokens still contribute expected gaps. Slop is the maximum
@@ -70,6 +80,7 @@ type TextSearchPhraseQuery struct {
 type TextSearchOptions struct {
 	IndexName string
 	Query     string
+	QueryMode TextSearchQueryMode
 	// Phrase is a structured phrase/proximity query. It is intentionally separate
 	// from Query to avoid introducing a broad text query DSL.
 	Phrase   *TextSearchPhraseQuery
@@ -290,6 +301,9 @@ func (c *Collection) searchText(opts TextSearchOptions, resultMode textSearchRes
 	if err := validateTextSearchPhraseOptions(opts); err != nil {
 		return textSearchFailClosed(response, textSearchFailClosedUnsupported, err)
 	}
+	if _, err := normalizeTextSearchQueryMode(opts.QueryMode); err != nil {
+		return response, err
+	}
 	if _, err := normalizeTextSearchOperator(opts.Operator); err != nil {
 		return response, err
 	}
@@ -342,7 +356,7 @@ func (c *Collection) searchText(opts TextSearchOptions, resultMode textSearchRes
 		return executeTextV2PhraseSearchAtSnapshot(c, snap, catalog, idx, opts, phrase, opts.Phrase.Slop, candidateLimit, maxPostingsScanned, resultMode, response)
 	}
 
-	terms, operator, err := parseTextSearchQueryWithOptions(idx.Analyzer, idx.AnalyzerOptions, opts.Query, opts.Operator)
+	terms, operator, err := parseTextSearchQueryWithModeAndOptions(idx.Analyzer, idx.AnalyzerOptions, opts.Query, opts.Operator, opts.QueryMode)
 	if err != nil {
 		return response, err
 	}
@@ -810,9 +824,7 @@ func textSearchFailClosed(response TextSearchResponse, reason string, err error)
 	response.Stats.Unavailable = true
 	response.Stats.UnavailableReason = reason
 	textSearchExplainFailClosed(response.Explain, reason)
-	if response.Stats.PostingsScanned == 0 {
-		response.Stats.PostingsScanned = response.Stats.TextPostingsScanned
-	}
+	response.Stats.PostingsScanned = response.Stats.TextPostingsScanned
 	if response.Stats.CandidatesScored == 0 {
 		response.Stats.CandidatesScored = response.Stats.TextCandidatesScored
 	}
@@ -935,6 +947,9 @@ func validateTextSearchPhraseOptions(opts TextSearchOptions) error {
 	if opts.Operator != "" {
 		return errors.New("collections: text phrase query does not support Operator; use Phrase.Slop for bounded proximity")
 	}
+	if opts.QueryMode == TextSearchQueryModeLiteral {
+		return errors.New("collections: text phrase query does not support literal QueryMode; use Phrase.Query")
+	}
 	if opts.Phrase.Slop < 0 {
 		return errors.New("collections: text phrase slop must be non-negative")
 	}
@@ -949,6 +964,28 @@ func parseTextSearchQuery(analyzer TextAnalyzer, query string, requested TextSea
 }
 
 func parseTextSearchQueryWithOptions(analyzer TextAnalyzer, options *TextAnalyzerOptions, query string, requested TextSearchOperator) ([]string, TextSearchOperator, error) {
+	return parseTextSearchQueryWithModeAndOptions(analyzer, options, query, requested, TextSearchQueryModeBoolean)
+}
+
+func parseTextSearchQueryWithModeAndOptions(analyzer TextAnalyzer, options *TextAnalyzerOptions, query string, requested TextSearchOperator, mode TextSearchQueryMode) ([]string, TextSearchOperator, error) {
+	mode, err := normalizeTextSearchQueryMode(mode)
+	if err != nil {
+		return nil, "", err
+	}
+	if mode == TextSearchQueryModeLiteral {
+		operator, err := normalizeTextSearchOperator(requested)
+		if err != nil {
+			return nil, "", err
+		}
+		terms := make([]string, 0, len(strings.Fields(query)))
+		if err := AnalyzeTextToSinkWithOptions(analyzer, options, query, TextTokenSinkFunc(func(token TextToken) error {
+			terms = append(terms, token.Term)
+			return nil
+		})); err != nil {
+			return nil, "", err
+		}
+		return terms, operator, nil
+	}
 	if strings.ContainsAny(query, "\"()") {
 		return nil, "", errors.New("collections: unsupported text query syntax: use TextSearchOptions.Phrase for bounded phrase/proximity search")
 	}
@@ -1005,6 +1042,62 @@ func parseTextSearchQueryWithOptions(analyzer TextAnalyzer, options *TextAnalyze
 		operator = TextSearchOperatorOR
 	}
 	return terms, operator, nil
+}
+
+// validateTextSearchBooleanQuerySyntax validates grammar that is independent
+// of analyzer output. Hybrid planning uses it before an empty scalar allow-set
+// can short-circuit candidate generation; the full parser remains authoritative
+// for analyzer-dependent cases.
+func validateTextSearchBooleanQuerySyntax(query string, requested TextSearchOperator) error {
+	if strings.ContainsAny(query, "\"()") {
+		return errors.New("collections: unsupported text query syntax: use TextSearchOptions.Phrase for bounded phrase/proximity search")
+	}
+	var explicit TextSearchOperator
+	expectTerm := true
+	hasTerm := false
+	for _, part := range strings.Fields(query) {
+		switch {
+		case strings.EqualFold(part, "AND"):
+			if expectTerm {
+				return errors.New("collections: malformed text query: dangling AND")
+			}
+			if explicit != "" && explicit != TextSearchOperatorAND {
+				return errors.New("collections: mixed AND/OR text queries are not supported")
+			}
+			explicit = TextSearchOperatorAND
+			expectTerm = true
+		case strings.EqualFold(part, "OR"):
+			if expectTerm {
+				return errors.New("collections: malformed text query: dangling OR")
+			}
+			if explicit != "" && explicit != TextSearchOperatorOR {
+				return errors.New("collections: mixed AND/OR text queries are not supported")
+			}
+			explicit = TextSearchOperatorOR
+			expectTerm = true
+		default:
+			hasTerm = true
+			expectTerm = false
+		}
+	}
+	if expectTerm && hasTerm {
+		return errors.New("collections: malformed text query: dangling operator")
+	}
+	if explicit != "" && requested != "" && requested != explicit {
+		return fmt.Errorf("collections: text query operator %q conflicts with requested operator %q", explicit, requested)
+	}
+	return nil
+}
+
+func normalizeTextSearchQueryMode(mode TextSearchQueryMode) (TextSearchQueryMode, error) {
+	switch mode {
+	case "", TextSearchQueryModeBoolean:
+		return TextSearchQueryModeBoolean, nil
+	case TextSearchQueryModeLiteral:
+		return TextSearchQueryModeLiteral, nil
+	default:
+		return "", fmt.Errorf("collections: unsupported text search query mode %q", mode)
+	}
 }
 
 type textSearchParsedPhrase struct {

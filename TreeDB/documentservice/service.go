@@ -1370,6 +1370,9 @@ func (s *Service) SearchKeyword(ctx context.Context, index string, req KeywordSe
 	if err != nil {
 		return KeywordSearchResponse{}, err
 	}
+	if err := validateTextQueryMode(req.TextQueryMode); err != nil {
+		return KeywordSearchResponse{}, err
+	}
 	if req.CandidateLimit < 0 || req.MaxPostingsScanned < 0 {
 		return KeywordSearchResponse{}, serviceError(CodeInvalidRequest, "candidate_limit and max_postings_scanned must be non-negative")
 	}
@@ -1377,15 +1380,13 @@ func (s *Service) SearchKeyword(ctx context.Context, index string, req KeywordSe
 		if err := req.Filter.Validate(); err != nil {
 			return KeywordSearchResponse{}, err
 		}
-		if req.MaxPostingsScanned > 0 {
-			return KeywordSearchResponse{}, serviceError(CodeUnsupported, "max_postings_scanned with metadata filters is unsupported; the filtered route fails closed rather than ignoring the guardrail")
-		}
 		return s.searchKeywordWithScalarFilter(ctx, col, info, req, operator)
 	}
 
 	textResponse, err := col.SearchText(collections.TextSearchOptions{
 		IndexName:            defaultTextIndexName,
 		Query:                req.Query,
+		QueryMode:            req.TextQueryMode,
 		Operator:             operator,
 		TopK:                 req.TopK,
 		CandidateLimit:       req.CandidateLimit,
@@ -1416,8 +1417,18 @@ func (s *Service) SearchHybrid(ctx context.Context, index string, req HybridSear
 	}
 	hasText := strings.TrimSpace(req.Query) != ""
 	hasVector := len(req.QueryEmbedding) > 0
+	if !hasText && (req.TextQueryMode != "" || req.TextOperator != "" || req.MaxPostingsScanned != 0) {
+		return HybridSearchResponse{}, serviceError(CodeInvalidRequest, "hybrid text_query_mode, text_operator, and max_postings_scanned require a text query")
+	}
 	if !hasText && !hasVector {
 		return HybridSearchResponse{}, serviceError(CodeInvalidRequest, "hybrid search requires query, query_embedding, or both")
+	}
+	textOperator, err := normalizeKeywordSearchOperator(req.TextOperator)
+	if err != nil {
+		return HybridSearchResponse{}, err
+	}
+	if err := validateTextQueryMode(req.TextQueryMode); err != nil {
+		return HybridSearchResponse{}, err
 	}
 	nativeVectorOnly := !hasText &&
 		hasVector &&
@@ -1426,8 +1437,8 @@ func (s *Service) SearchHybrid(ctx context.Context, index string, req HybridSear
 	if !nativeVectorOnly && !info.Capabilities.HybridSearch {
 		return HybridSearchResponse{}, serviceError(CodeIndexUnavailable, "hybrid search requires a cosine column_graph vector index and content text index")
 	}
-	if req.CandidateLimit < 0 || req.TextCandidateLimit < 0 || req.VectorCandidateLimit < 0 || req.EfSearch < 0 {
-		return HybridSearchResponse{}, serviceError(CodeInvalidRequest, "candidate limits and ef_search must be non-negative")
+	if req.CandidateLimit < 0 || req.TextCandidateLimit < 0 || req.VectorCandidateLimit < 0 || req.MaxPostingsScanned < 0 || req.EfSearch < 0 {
+		return HybridSearchResponse{}, serviceError(CodeInvalidRequest, "candidate limits, max_postings_scanned, and ef_search must be non-negative")
 	}
 	if req.MaxChunksPerParent < 0 {
 		return HybridSearchResponse{}, serviceError(CodeInvalidRequest, "max_chunks_per_parent must be non-negative")
@@ -1457,7 +1468,14 @@ func (s *Service) SearchHybrid(ctx context.Context, index string, req HybridSear
 		if limit == 0 {
 			limit = req.CandidateLimit
 		}
-		opts.Text = &collections.HybridTextQuery{IndexName: defaultTextIndexName, Query: req.Query, CandidateLimit: limit}
+		opts.Text = &collections.HybridTextQuery{
+			IndexName:          defaultTextIndexName,
+			Query:              req.Query,
+			QueryMode:          req.TextQueryMode,
+			Operator:           textOperator,
+			CandidateLimit:     limit,
+			MaxPostingsScanned: req.MaxPostingsScanned,
+		}
 		response.TextIndex = defaultTextIndexName
 	}
 	if hasVector {
@@ -2710,12 +2728,23 @@ func validateBenchmarkQuantizedVectorSearchRoute(mode BenchmarkVectorQueryMode, 
 
 func normalizeKeywordSearchOperator(op collections.TextSearchOperator) (collections.TextSearchOperator, error) {
 	switch strings.TrimSpace(strings.ToLower(string(op))) {
-	case "", string(collections.TextSearchOperatorOR):
+	case "":
+		return "", nil
+	case string(collections.TextSearchOperatorOR):
 		return collections.TextSearchOperatorOR, nil
 	case string(collections.TextSearchOperatorAND):
 		return collections.TextSearchOperatorAND, nil
 	default:
 		return "", serviceErrorf(CodeInvalidRequest, "unsupported keyword operator %q", op)
+	}
+}
+
+func validateTextQueryMode(mode collections.TextSearchQueryMode) error {
+	switch mode {
+	case "", collections.TextSearchQueryModeBoolean, collections.TextSearchQueryModeLiteral:
+		return nil
+	default:
+		return serviceErrorf(CodeInvalidRequest, "unsupported text_query_mode %q", mode)
 	}
 }
 

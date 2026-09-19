@@ -1462,54 +1462,12 @@ func (r *VectorPartitionRouterV1) SearchWithContextV1(ctx context.Context, query
 	if err := ctx.Err(); err != nil {
 		return fail(err)
 	}
-	var candidates []vectorPartitionRouterCandidateV1
-	switch opts.Mode {
-	case VectorPartitionRouterModeExactV1:
-		if opts.CandidateBudget < len(r.model.Representatives) {
-			return fail(fmt.Errorf("collections: exact vector partition router candidate budget=%d below representative count=%d", opts.CandidateBudget, len(r.model.Representatives)))
-		}
-		candidates = make([]vectorPartitionRouterCandidateV1, len(r.model.Representatives))
-		for ordinal, representative := range r.model.Representatives {
-			if ordinal&255 == 0 {
-				if err := ctx.Err(); err != nil {
-					return fail(err)
-				}
-			}
-			candidates[ordinal] = vectorPartitionRouterCandidateV1{
-				ordinal: ordinal, score: cosineDotVectorPartitionRouterV1(normalized, representative.Values),
-			}
-		}
-		result.Status.Candidates = uint64(len(candidates))
-	case VectorPartitionRouterModeApproxV1:
-		if opts.CandidateBudget > len(r.model.Representatives) {
-			return fail(fmt.Errorf("collections: approximate vector partition router candidate budget=%d outside [1,%d]", opts.CandidateBudget, len(r.model.Representatives)))
-		}
-		scratch := r.scratch.Get().(*columnVectorGraphNativeSearchScratch)
-		defer r.scratch.Put(scratch)
-		native, stats, err := r.view.searchCosineWithContext(ctx, query, columnVectorGraphNativeSearchOptions{
-			TopK: opts.CandidateBudget, EfSearch: opts.CandidateBudget,
-			CandidateLimit: opts.CandidateBudget,
-			// Router search consumes only representative ordinals and scores.
-			// Keep the hot path off document-ID and row-ref materialization.
-			OmitResultMaterialization: true,
-		}, scratch)
-		if err != nil {
-			return fail(err)
-		}
-		if err := ctx.Err(); err != nil {
-			return fail(err)
-		}
-		for _, candidate := range native {
-			if candidate.Ordinal < 0 || candidate.Ordinal >= len(r.viewToModel) {
-				return fail(errors.New("collections: vector partition router native ordinal is invalid"))
-			}
-			candidates = append(candidates, vectorPartitionRouterCandidateV1{ordinal: r.viewToModel[candidate.Ordinal], score: candidate.Score})
-		}
-		result.Status.Candidates = stats.Candidates
-		result.Status.Edges = stats.Edges
-	default:
-		return fail(fmt.Errorf("collections: unsupported vector partition router mode %q", opts.Mode))
+	candidates, work, err := r.collectVectorPartitionRouterCandidatesLockedV1(ctx, query, normalized, opts)
+	if err != nil {
+		return fail(err)
 	}
+	result.Status.Candidates = work.Candidates
+	result.Status.Edges = work.Edges
 	result.Partitions, err = rankVectorPartitionRouterCandidatesWithContextV1(ctx, r.model.Representatives, candidates, opts.PartitionProbes)
 	if err != nil {
 		return fail(err)
@@ -1523,6 +1481,72 @@ func (r *VectorPartitionRouterV1) SearchWithContextV1(ctx context.Context, query
 	r.edges.Add(result.Status.Edges)
 	r.selected.Add(result.Status.Selected)
 	return result, nil
+}
+
+// collectVectorPartitionRouterCandidatesLockedV1 is shared by ordinary search
+// and the opt-in offline policy diagnostic. The caller holds closeMu.RLock and
+// has validated the query/options. Returned scalar candidates own their storage;
+// no pooled native result or model-vector alias escapes this helper.
+func (r *VectorPartitionRouterV1) collectVectorPartitionRouterCandidatesLockedV1(ctx context.Context, query, normalized []float32, opts VectorPartitionRouterSearchOptionsV1) ([]vectorPartitionRouterCandidateV1, vectorPartitionRouterCandidateWorkV1, error) {
+	var work vectorPartitionRouterCandidateWorkV1
+	var candidates []vectorPartitionRouterCandidateV1
+	switch opts.Mode {
+	case VectorPartitionRouterModeExactV1:
+		if opts.CandidateBudget < len(r.model.Representatives) {
+			return nil, work, fmt.Errorf("collections: exact vector partition router candidate budget=%d below representative count=%d", opts.CandidateBudget, len(r.model.Representatives))
+		}
+		candidates = make([]vectorPartitionRouterCandidateV1, len(r.model.Representatives))
+		for ordinal, representative := range r.model.Representatives {
+			if ordinal&255 == 0 {
+				if err := ctx.Err(); err != nil {
+					return nil, work, err
+				}
+			}
+			candidates[ordinal] = vectorPartitionRouterCandidateV1{
+				ordinal: ordinal, score: cosineDotVectorPartitionRouterV1(normalized, representative.Values),
+			}
+		}
+		work.Candidates = uint64(len(candidates))
+	case VectorPartitionRouterModeApproxV1:
+		if opts.CandidateBudget > len(r.model.Representatives) {
+			return nil, work, fmt.Errorf("collections: approximate vector partition router candidate budget=%d outside [1,%d]", opts.CandidateBudget, len(r.model.Representatives))
+		}
+		scratch := r.scratch.Get().(*columnVectorGraphNativeSearchScratch)
+		defer r.scratch.Put(scratch)
+		native, stats, err := r.view.searchCosineWithContext(ctx, query, columnVectorGraphNativeSearchOptions{
+			TopK: opts.CandidateBudget, EfSearch: opts.CandidateBudget,
+			CandidateLimit: opts.CandidateBudget,
+			// Router search consumes only representative ordinals and scores.
+			// Keep the hot path off document-ID and row-ref materialization.
+			OmitResultMaterialization: true,
+		}, scratch)
+		if err != nil {
+			return nil, work, err
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, work, err
+		}
+		// The returned native width is already bounded by the validated budget.
+		// Allocate the owned scalar copy once; append growth here would escape
+		// through the shared helper and add per-query allocations to serving.
+		candidates = make([]vectorPartitionRouterCandidateV1, len(native))
+		for i, candidate := range native {
+			if candidate.Ordinal < 0 || candidate.Ordinal >= len(r.viewToModel) {
+				return nil, work, errors.New("collections: vector partition router native ordinal is invalid")
+			}
+			candidates[i] = vectorPartitionRouterCandidateV1{ordinal: r.viewToModel[candidate.Ordinal], score: candidate.Score}
+		}
+		work.Candidates = stats.Candidates
+		work.Edges = stats.Edges
+	default:
+		return nil, work, fmt.Errorf("collections: unsupported vector partition router mode %q", opts.Mode)
+	}
+	return candidates, work, nil
+}
+
+type vectorPartitionRouterCandidateWorkV1 struct {
+	Candidates uint64
+	Edges      uint64
 }
 
 type vectorPartitionRouterCandidateV1 struct {

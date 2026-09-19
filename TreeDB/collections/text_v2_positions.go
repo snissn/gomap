@@ -475,10 +475,15 @@ func readTextV2PositionPostingAtRoot(snap *backenddb.Snapshot, catalog *collecti
 }
 
 func readTextV2PositionPostingAtRootCounted(snap *backenddb.Snapshot, catalog *collectionCatalog, rootName, term string, ordinal, generation uint64, fieldCount int) (textV2SearchPostingValue, bool, int, error) {
+	posting, found, scanned, _, err := readTextV2PositionPostingAtRootCountedBounded(snap, catalog, rootName, term, ordinal, generation, fieldCount, -1)
+	return posting, found, scanned, err
+}
+
+func readTextV2PositionPostingAtRootCountedBounded(snap *backenddb.Snapshot, catalog *collectionCatalog, rootName, term string, ordinal, generation uint64, fieldCount, remaining int) (textV2SearchPostingValue, bool, int, bool, error) {
 	prefix := encodeTextV2PostingBlockTermPrefix(term)
 	it, err := collectionIteratorAtCatalogRoot(snap, catalog, rootName, prefix, textSearchPrefixEnd(prefix), true)
 	if err != nil || it == nil {
-		return textV2SearchPostingValue{}, false, 0, err
+		return textV2SearchPostingValue{}, false, 0, false, err
 	}
 	defer func() { _ = it.Close() }()
 	var scratch []uint32
@@ -496,53 +501,65 @@ func readTextV2PositionPostingAtRootCounted(snap *backenddb.Snapshot, catalog *c
 		}
 		key, err := decodeTextV2PostingBlockKeyForPrefix(keyBytes, prefix)
 		if err != nil {
-			return textV2SearchPostingValue{}, false, scanned, err
+			return textV2SearchPostingValue{}, false, scanned, false, err
 		}
 		scanner, err := newTextV2PostingBlockEntryScanner(it.UnsafeValue(), scratch)
 		if err != nil {
-			return textV2SearchPostingValue{}, false, scanned, err
+			return textV2SearchPostingValue{}, false, scanned, false, err
 		}
 		if scanner.block.BlockStart != key.BlockStart || scanner.block.BlockID != key.BlockID {
-			return textV2SearchPostingValue{}, false, scanned, errMalformedTextStorage("text-v2 position posting block key/value identity mismatch")
+			return textV2SearchPostingValue{}, false, scanned, false, errMalformedTextStorage("text-v2 position posting block key/value identity mismatch")
 		}
 		if ordinal < scanner.block.Summary.FirstOrdinal || ordinal > scanner.block.Summary.LastOrdinal {
 			var discard textV2PostingBlockEntry
-			for scanner.Next(&discard) {
+			for scanner.remaining > 0 {
+				if remaining >= 0 && scanned >= remaining {
+					return textV2SearchPostingValue{}, false, scanned, true, nil
+				}
+				if !scanner.Next(&discard) {
+					break
+				}
 				scanned++
 			}
 			if err := scanner.Err(); err != nil {
-				return textV2SearchPostingValue{}, false, scanned, err
+				return textV2SearchPostingValue{}, false, scanned, false, err
 			}
 			scratch = scanner.scratch
 			it.Next()
 			continue
 		}
 		var entry textV2PostingBlockEntry
-		for scanner.Next(&entry) {
+		for scanner.remaining > 0 {
+			if remaining >= 0 && scanned >= remaining {
+				return textV2SearchPostingValue{}, false, scanned, true, nil
+			}
+			if !scanner.Next(&entry) {
+				break
+			}
 			scanned++
 			if entry.Ordinal != ordinal || entry.Generation != generation {
 				continue
 			}
 			posting, err := textV2SearchPostingValueFromEntry(entry, fieldCount)
 			if err != nil {
-				return textV2SearchPostingValue{}, false, scanned, err
+				return textV2SearchPostingValue{}, false, scanned, false, err
 			}
 			if found {
-				return textV2SearchPostingValue{}, false, scanned, errMalformedTextStorage("duplicate text-v2 scoring posting for position ordinal %d term %q generation %d", ordinal, term, generation)
+				return textV2SearchPostingValue{}, false, scanned, false, errMalformedTextStorage("duplicate text-v2 scoring posting for position ordinal %d term %q generation %d", ordinal, term, generation)
 			}
 			out = posting
 			found = true
 		}
 		if err := scanner.Err(); err != nil {
-			return textV2SearchPostingValue{}, false, scanned, err
+			return textV2SearchPostingValue{}, false, scanned, false, err
 		}
 		scratch = scanner.scratch
 		it.Next()
 	}
 	if err := it.Error(); err != nil {
-		return textV2SearchPostingValue{}, false, scanned, err
+		return textV2SearchPostingValue{}, false, scanned, false, err
 	}
-	return out, found, scanned, nil
+	return out, found, scanned, false, nil
 }
 
 func validateTextV2PositionValueForDefinition(value textV2PositionValue, def TextIndexDefinition) error {

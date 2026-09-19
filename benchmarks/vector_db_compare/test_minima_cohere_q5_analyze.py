@@ -2431,8 +2431,7 @@ class Q5AnalyzeTest(unittest.TestCase):
         for field in ("quantized_index_name", "quantized_codec", "quantized_version"):
             changed = copy.deepcopy(direct)
             changed.pop(field)
-            with self.subTest(shape="client", field=field), self.assertRaisesRegex(
-                    analyzer.EvidenceError, "crossed the SQ8 plane"):
+            with self.subTest(shape="client", field=field):
                 analyzer._normalized_production_identity(changed, "exact", "service")
             changed = copy.deepcopy(collection)
             changed["receipt"].pop({
@@ -2444,6 +2443,26 @@ class Q5AnalyzeTest(unittest.TestCase):
                     analyzer.EvidenceError, "crossed score planes"):
                 analyzer._normalized_production_identity(
                     changed, "exact", "collection_search",
+                )
+
+        # Go omitempty drops all optional zero values; Python includes defaults.
+        omitted = json.loads(json.dumps({
+            key: value for key, value in direct.items()
+            if key not in ("quantized_index_name", "quantized_codec", "quantized_version")
+        }))
+        analyzer._normalized_production_identity(omitted, "exact", "go_native")
+        for field, invalid in (
+            ("quantized_index_name", "minima_sq8"), ("quantized_codec", "scalar_u8"),
+            ("quantized_version", 1), ("quantized_version", None),
+            ("quantized_version", False), ("quantized_version", 0.0),
+            ("quantized_score_calls", 1), ("quantized_score_calls", False),
+            ("quantized_code_bytes_read", None), ("rerank_candidates", "0"),
+            ("quantized_index_name", None), ("quantized_codec", None),
+        ):
+            with self.subTest(field=field, invalid=invalid), self.assertRaisesRegex(
+                    analyzer.EvidenceError, "crossed the SQ8 plane"):
+                analyzer._normalized_production_identity(
+                    {**omitted, field: invalid}, "exact", "go_native",
                 )
 
         changed = {**direct, "packed_vector_bytes_read": 1}
@@ -2650,6 +2669,93 @@ class Q5AnalyzeTest(unittest.TestCase):
                 identity, "quantized_rerank", eligible=5001,
                 filtered=True, result_count=10,
             )
+
+    def _normalized_lifecycle_result(self, eligible=500000, after_score=1.0, after_last_id=None):
+        # Exercise the real curve/score/quality checks with small source arrays;
+        # unrelated shutdown/route/projection checks have their own regressions.
+        ordinals = []
+        for row in range(500000):
+            if (row * 7919) % 500000 < eligible:
+                ordinals.append(row)
+                if len(ordinals) == 11:
+                    break
+        ids = [f"row-{row:06d}" for row in ordinals]
+        vectors = analyzer.np.tile([1.0, 0.0], (ordinals[-1] + 1, 1)).astype("float32")
+        queries = analyzer.np.tile([1.0, 0.0], (200, 1)).astype("float32")
+        truth = {str(eligible): [ids[:10] for _ in range(200)]}
+        plan = {"campaign_profile": analyzer.native.CAMPAIGN_PROFILE_NORMALIZED_V4,
+                "rss_only": False, "rows": 500000, "query_mode": "exact"}
+        calls = [{"event": "call", "phase": "initial_durable_ingest",
+                  "first_row": start, "rows": min(256, 500000 - start), "outcome": "completed"}
+                 for start in range(0, 500000, 256)]
+        phases = ("service_start", "schema_ensure", "initial_graph_build", "explicit_update",
+                  "native_get_many", "http_delete_file", "native_deleted_visibility",
+                  "reindex_replacement", "native_reinsert_visibility", "pre_close_fold", "close",
+                  "reopen", "idempotent_ensure", "reopen_graph_ensure",
+                  "verification_only_full_scroll", *("overlap_replace",) * 8)
+        calls.extend({"event": "call", "phase": phase, "outcome": "completed"} for phase in phases)
+
+        def search(phase, query, result_ids, scores, count=eligible):
+            return {"event": "search_result", "phase": phase, "request_mode": "exact",
+                    "eligible": count, "query": query, "ids": result_ids, "scores": scores,
+                    "recall": len(set(result_ids) & set(ids[:10])) / 10,
+                    "original_cosine_recall": len(set(result_ids) & set(ids[:10])) / 10,
+                    "command_version": 4, "diagnostics": True, "writer_active": False,
+                    "route_identity": {"execution_route": "typed_exact" if count <= 4096
+                                       else "typed_hnsw"}}
+
+        reopened_ids = sorted(ids[:9] + [after_last_id or ids[10]])
+        curves = [search(phase, query, result_ids, [score] * 10)
+                  for phase, result_ids, score in (
+                      ("fixed_coordinate_curve", ids[:10], 1.0),
+                      ("post_reopen_curve", reopened_ids, after_score))
+                  for query in range(200)]
+        mutable = [search("overlap_search", 0, [], [], 4097) for _ in range(256)]
+        mutable.extend(search(phase, 0, [], [], 0) for phase in (
+            "post_update_visibility", "post_replacement_visibility", "empty_user"))
+        full = {"event": "full_state_verified", "rows": 500000, "vectors_checked": 500000,
+                "projection_sha256": "expected", "maximum_vector_error": 0, "maximum_norm_error": 0}
+        terminal = {"event": "terminal", "qualification": "producer_gates_passed",
+                    "lifecycle_complete": True, "error": None, "final_disk_bytes": 100}
+        events = [{"event": "plan", "plan": plan}, *calls, *curves, *mutable, full, terminal]
+        with mock.patch.object(analyzer, "read_native_events", return_value=events), \
+                mock.patch.object(analyzer, "FULL_ELIGIBLE_COUNTS", [eligible]), \
+                mock.patch.object(analyzer.native, "validate_shutdowns"), \
+                mock.patch.object(analyzer, "_normalized_route_identity"), \
+                mock.patch.object(analyzer, "_normalized_dense_event"), \
+                mock.patch.object(analyzer, "_normalized_expected_projection_digest", return_value="expected"):
+            return analyzer._normalized_validate_events(
+                Path("unused"), plan, "exact", truth, truth, vectors, queries,
+            )
+
+    def test_normalized_lifecycle_validates_approximate_results_per_phase(self):
+        result = self._normalized_lifecycle_result()
+        self.assertEqual(result["quality"], {"exact": 1.0})
+        self.assertEqual(result["post_reopen_quality"], {"exact": .9})
+
+    def test_normalized_lifecycle_still_rejects_wrong_scores_and_exhaustive_changes(self):
+        with self.assertRaisesRegex(analyzer.EvidenceError, "result ordering"):
+            self._normalized_lifecycle_result(after_score=.5)
+        with self.assertRaisesRegex(analyzer.EvidenceError, "post-reopen search decisions"):
+            self._normalized_lifecycle_result(eligible=4096)
+
+    def test_normalized_lifecycle_rejects_negative_row_alias_after_reopen(self):
+        with self.assertRaisesRegex(analyzer.EvidenceError, "result ordering"):
+            self._normalized_lifecycle_result(after_last_id="row--00001")
+
+    def test_normalized_scores_reject_invalid_source_coordinates(self):
+        vectors = analyzer.np.array([[1.0, 0.0]], dtype="float32")
+        for identifier in ("row--00001", "row-000001", "row-0", "000000",
+                           "row-" + "9" * 100):
+            with self.subTest(identifier=identifier):
+                self.assertFalse(analyzer._normalized_result_scores_match(
+                    [identifier], [1.0], 0, vectors, vectors,
+                ))
+        for query in (-1, 1, False):
+            with self.subTest(query=query):
+                self.assertFalse(analyzer._normalized_result_scores_match(
+                    ["row-000000"], [1.0], query, vectors, vectors,
+                ))
 
     def test_normalized_terminal_requires_stopped_totals_and_all_clean_lifetimes(self):
         for mode, count in (("exact", 2), ("sq8", 3)):

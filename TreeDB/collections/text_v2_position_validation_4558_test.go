@@ -77,6 +77,57 @@ func TestTextV2StorageStatsPositionValidationUsesPostingTableAndDocMapBlockCache
 		if legacyScanned < documents*documents {
 			t.Fatalf("legacy rescans=%d want at least %d", legacyScanned, documents*documents)
 		}
+
+		root := collectionTextV2PostingBlocksRootName("docs", "lexical")
+		for _, tc := range []struct {
+			name          string
+			remaining     int
+			ordinal       uint64
+			wantFound     bool
+			wantScanned   int
+			wantTruncated bool
+		}{
+			{name: "zero", remaining: 0, ordinal: 1, wantScanned: 0, wantTruncated: true},
+			{name: "mid_block", remaining: documents - 1, ordinal: 1, wantScanned: documents - 1, wantTruncated: true},
+			{name: "exact_block", remaining: documents, ordinal: 1, wantFound: true, wantScanned: documents},
+			{name: "missing_after_exact_block", remaining: documents, ordinal: documents + 1, wantScanned: documents},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				_, found, scanned, truncated, err := readTextV2PositionPostingAtRootCountedBounded(snap, catalog, root, "shared", tc.ordinal, 1, len(def.Fields), tc.remaining)
+				if err != nil || found != tc.wantFound || scanned != tc.wantScanned || truncated != tc.wantTruncated {
+					t.Fatalf("bounded posting found=%v scanned=%d truncated=%v err=%v want found=%v scanned=%d truncated=%v", found, scanned, truncated, err, tc.wantFound, tc.wantScanned, tc.wantTruncated)
+				}
+			})
+		}
+
+		ctx := &textV2SearchContext{postingBlocksRootName: root, fieldNames: []string{"body"}}
+		for _, tc := range []struct {
+			name string
+			run  func(*TextSearchStats) (bool, error)
+		}{
+			{
+				name: "all_terms",
+				run: func(stats *TextSearchStats) (bool, error) {
+					_, truncated, err := buildTextV2SearchCandidateForTopTerms(snap, catalog, ctx, []string{"shared"}, 1, 1, []byte("doc-000"), 1, documents, stats)
+					return truncated, err
+				},
+			},
+			{
+				name: "matching_terms",
+				run: func(stats *TextSearchStats) (bool, error) {
+					_, truncated, err := buildTextV2SearchCandidateForTopMatchingTerms(snap, catalog, ctx, []string{"shared"}, 1, 1, []byte("doc-000"), 1, documents, stats)
+					return truncated, err
+				},
+			},
+		} {
+			t.Run("attribution_"+tc.name, func(t *testing.T) {
+				stats := &TextSearchStats{TextPostingsScanned: documents - 1, PostingsScanned: documents - 1}
+				truncated, err := tc.run(stats)
+				if err != nil || !truncated || stats.TextPostingsScanned != documents || stats.PostingsScanned != documents {
+					t.Fatalf("attribution truncated=%v stats=%+v err=%v want exact cap=%d", truncated, stats, err, documents)
+				}
+			})
+		}
 	})
 	if _, err := col.TextIndexStorageStats("lexical"); err != nil {
 		t.Fatalf("TextIndexStorageStats: %v", err)

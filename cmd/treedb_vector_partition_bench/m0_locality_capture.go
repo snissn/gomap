@@ -37,27 +37,28 @@ type m0LocalityTraceRowV1 struct {
 	Partitions []m0LocalityTracePartitionV1 `json:"partitions"`
 }
 type m0LocalityCaptureV1 struct {
-	Schema           string                                                     `json:"schema"`
-	DB               string                                                     `json:"retained_db"`
-	Split            string                                                     `json:"split_sha256"`
-	Artifact         string                                                     `json:"graph_artifact_sha256,omitempty"`
-	Descriptor       string                                                     `json:"descriptor_sha256,omitempty"`
-	Source           vectorpartition.Source                                     `json:"source,omitempty"`
-	Manifest         string                                                     `json:"manifest_integrity_digest,omitempty"`
-	ReadySet         string                                                     `json:"ready_set_digest,omitempty"`
-	RouterModel      string                                                     `json:"router_model_digest,omitempty"`
-	BinarySHA256     string                                                     `json:"binary_sha256"`
-	SourceRevision   string                                                     `json:"source_revision"`
-	VCSModified      bool                                                       `json:"vcs_modified"`
-	Probes           int                                                        `json:"probes"`
-	RouterCandidates int                                                        `json:"router_candidates"`
-	EF               int                                                        `json:"ef_search"`
-	PageScope        string                                                     `json:"page_scope"`
-	MedianPages      uint64                                                     `json:"median_unique_graph_vector_pages"`
-	P95Pages         uint64                                                     `json:"p95_unique_graph_vector_pages"`
-	Rows             []m0LocalityCaptureRowV1                                   `json:"rows"`
-	Traces           []m0LocalityTraceRowV1                                     `json:"traces,omitempty"`
-	Snapshots        map[uint32]collections.VectorPartitionPackLayoutSnapshotV1 `json:"snapshots,omitempty"`
+	Schema                    string                                                     `json:"schema"`
+	DB                        string                                                     `json:"retained_db"`
+	Split                     string                                                     `json:"split_sha256"`
+	Artifact                  string                                                     `json:"graph_artifact_sha256,omitempty"`
+	Descriptor                string                                                     `json:"descriptor_sha256,omitempty"`
+	Source                    vectorpartition.Source                                     `json:"source,omitempty"`
+	Manifest                  string                                                     `json:"manifest_integrity_digest,omitempty"`
+	ReadySet                  string                                                     `json:"ready_set_digest,omitempty"`
+	RouterModel               string                                                     `json:"router_model_digest,omitempty"`
+	BinarySHA256              string                                                     `json:"binary_sha256"`
+	SourceRevision            string                                                     `json:"source_revision"`
+	VCSModified               bool                                                       `json:"vcs_modified"`
+	Probes                    int                                                        `json:"probes"`
+	RouterCandidates          int                                                        `json:"router_candidates"`
+	EF                        int                                                        `json:"ef_search"`
+	PageScope                 string                                                     `json:"page_scope"`
+	MedianPages               uint64                                                     `json:"median_unique_graph_vector_pages"`
+	P95Pages                  uint64                                                     `json:"p95_unique_graph_vector_pages"`
+	Rows                      []m0LocalityCaptureRowV1                                   `json:"rows"`
+	Traces                    []m0LocalityTraceRowV1                                     `json:"traces,omitempty"`
+	Snapshots                 map[uint32]collections.VectorPartitionPackLayoutSnapshotV1 `json:"snapshots,omitempty"`
+	PackIdentityNeutralSHA256 map[uint32]string                                          `json:"pack_identity_neutral_sha256,omitempty"`
 }
 
 func runM0LocalityCaptureV1(args []string, stdout io.Writer) error {
@@ -162,16 +163,22 @@ func runM0LocalityCaptureV1(args []string, stdout io.Writer) error {
 		}
 	}
 	snapshots := map[uint32]collections.VectorPartitionPackLayoutSnapshotV1{}
+	var packDigests map[uint32]string
 	if rawTraces {
+		packDigests = make(map[uint32]string, len(searchers))
 		for p, s := range searchers {
 			snapshot, e := s.PackLayoutSnapshotV1(ordinals)
 			if e != nil {
 				return e
 			}
 			snapshots[uint32(p)] = snapshot
+			packDigests[uint32(p)], e = s.PackIdentityNeutralSHA256ForOfflineV1()
+			if e != nil {
+				return e
+			}
 		}
 	}
-	report := m0LocalityCaptureV1{Schema: "treedb_vector_partition_m0_exact_pack_trace_v3", DB: db, Split: splitSHA, Artifact: artifactSHA, Descriptor: descriptorSHA, Source: descriptor.Source, Manifest: assets.manifest.IntegrityDigest, ReadySet: assets.manifest.ReadySetDigest, RouterModel: assets.status.ModelDigest, BinarySHA256: buildIdentity.BinarySHA256, SourceRevision: buildIdentity.SourceRevision, VCSModified: buildIdentity.VCSModified, Probes: probes, RouterCandidates: candidates, EF: ef, PageScope: "unique 4KiB graph+vector pack pages/query; excludes document-ID result materialization", Snapshots: snapshots}
+	report := m0LocalityCaptureV1{Schema: "treedb_vector_partition_m0_exact_pack_trace_v3", DB: db, Split: splitSHA, Artifact: artifactSHA, Descriptor: descriptorSHA, Source: descriptor.Source, Manifest: assets.manifest.IntegrityDigest, ReadySet: assets.manifest.ReadySetDigest, RouterModel: assets.status.ModelDigest, BinarySHA256: buildIdentity.BinarySHA256, SourceRevision: buildIdentity.SourceRevision, VCSModified: buildIdentity.VCSModified, Probes: probes, RouterCandidates: candidates, EF: ef, PageScope: "unique 4KiB graph+vector pack pages/query; excludes document-ID result materialization", Snapshots: snapshots, PackIdentityNeutralSHA256: packDigests}
 	for _, ordinal := range split.Ordinals {
 		if ordinal < 0 || ordinal >= len(queries) {
 			return errors.New("split ordinal")
