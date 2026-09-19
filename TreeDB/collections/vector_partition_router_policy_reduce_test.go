@@ -11,7 +11,7 @@ import (
 )
 
 func policyTestContext() vectorPartitionPolicyContextV1 {
-	return vectorPartitionPolicyContextV1{ModelDigest: strings.Repeat("a", 64), QueryDigest: strings.Repeat("b", 64), Mode: "approximate", RepresentativeCount: 16, DomainCount: 4, CandidateBudget: 16, ReturnedWidth: 16, BeamWidth: 16, Probes: 4}
+	return vectorPartitionPolicyContextV1{ModelDigest: strings.Repeat("a", 64), QueryDigest: strings.Repeat("b", 64), Mode: "approximate", RepresentativeCount: 16, DomainCount: 4, ScoreBudget: 16, ReturnedWidth: 16, BeamWidth: 16, Probes: 4}
 }
 func policyGolden() []vectorPartitionPolicyCandidateV1 {
 	return []vectorPartitionPolicyCandidateV1{{0, 0, 0, .99}, {1, 2, 1, .985}, {2, 1, 2, .98}, {3, 1, 3, .97}, {4, 1, 4, .96}, {5, 3, 5, .95}}
@@ -206,7 +206,7 @@ func TestVectorPartitionRouterHybridDeterministicTies(t *testing.T) {
 func TestVectorPartitionRouterPolicyCoverageRefusal(t *testing.T) {
 	meta := policyTestContext()
 	independent := meta
-	independent.CandidateBudget = 2
+	independent.ScoreBudget = 2
 	independent.Probes = 1
 	admitted, err := reduceVectorPartitionRouterPoliciesV1(nil, independent, policyGolden()[:2])
 	if err != nil || len(admitted.Hybrid) != 1 {
@@ -222,7 +222,7 @@ func TestVectorPartitionRouterPolicyCoverageRefusal(t *testing.T) {
 	if _, err := reduceVectorPartitionRouterPoliciesV1(ctx, meta, policyGolden()); !errors.Is(err, context.Canceled) {
 		t.Fatal(err)
 	}
-	for _, mutate := range []func(*vectorPartitionPolicyContextV1){func(m *vectorPartitionPolicyContextV1) { m.Mode = "other" }, func(m *vectorPartitionPolicyContextV1) { m.ModelDigest = "bad" }, func(m *vectorPartitionPolicyContextV1) { m.ReturnedWidth = 17 }, func(m *vectorPartitionPolicyContextV1) { m.Probes = 0 }, func(m *vectorPartitionPolicyContextV1) { m.CandidateBudget = 2 }} {
+	for _, mutate := range []func(*vectorPartitionPolicyContextV1){func(m *vectorPartitionPolicyContextV1) { m.Mode = "other" }, func(m *vectorPartitionPolicyContextV1) { m.ModelDigest = "bad" }, func(m *vectorPartitionPolicyContextV1) { m.ReturnedWidth = 17 }, func(m *vectorPartitionPolicyContextV1) { m.Probes = 0 }, func(m *vectorPartitionPolicyContextV1) { m.ScoreBudget = 2 }} {
 		m := meta
 		mutate(&m)
 		if _, err := reduceVectorPartitionRouterPoliciesV1(nil, m, policyGolden()); err == nil {
@@ -262,7 +262,7 @@ func BenchmarkVectorPartitionRouterRankingPolicyV1(b *testing.B) {
 				meta := policyTestContext()
 				meta.RepresentativeCount = representatives
 				meta.DomainCount = 16
-				meta.CandidateBudget = width
+				meta.ScoreBudget = width
 				meta.ReturnedWidth = width
 				input := make([]vectorPartitionPolicyCandidateV1, width)
 				for i := range input {

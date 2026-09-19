@@ -130,8 +130,11 @@ Search(context.Context, VectorPartitionCoordinatorRequestV1)
   digest matching the constructed M1 placement;
 - a nonempty finite FP32 query with nonzero norm;
 - cosine metric;
-- exact or approximate M4 router mode, an explicit representative-candidate
-  budget, and a partition-probe count;
+- exact or approximate M4 router mode, explicit returned width
+  `RouterReturnedWidth` (w), beam width `RouterBeamWidth` (E), independent
+  score-call ceiling `RouterScoreBudget` (C), and a partition-probe count;
+- `1 <= w <= E <=` the persisted representative count, while C is an
+  independently bounded positive ceiling and need not be at least w or E;
 - `linearizable_generation_snapshot` consistency;
 - `basic` stats mode; `none` is rejected because coordinator response
   validation and budget enforcement require actual candidate/edge and stage
@@ -152,9 +155,10 @@ to match the constructed M1 placement exactly:
 - valid ready-set and router-model SHA-256 digests;
 - nonzero representatives and consistent runtime partition count.
 
-Exact router mode additionally requires a candidate budget at least as large
-as the persisted representative count. A mismatch fails before M5 dispatch;
-the coordinator never mixes router, partition, source, placement, or live
+Exact router mode scans every persisted representative and therefore requires
+C at least as large as the persisted representative count. A mismatch fails
+before M5 dispatch; w and E retain the same independent shape constraints.
+The coordinator never mixes router, partition, source, placement, or live
 revision/coverage identities. When the standalone router lease exposes a live
 pin, the coordinator copies that one identity to every shard request and
 assigns each selected logical-domain delta to exactly one request even when its

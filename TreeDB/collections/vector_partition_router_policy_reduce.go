@@ -29,7 +29,7 @@ type vectorPartitionPolicyContextV1 struct {
 	Mode                string
 	RepresentativeCount int
 	DomainCount         int
-	CandidateBudget     int
+	ScoreBudget         int
 	ReturnedWidth       int
 	BeamWidth           int
 	Probes              int
@@ -73,7 +73,7 @@ func vectorPartitionPolicyDigestV1(ctx context.Context, meta vectorPartitionPoli
 		_, _ = h.Write([]byte(value))
 	}
 	// Probes is not candidate identity: the same set supports all prefixes.
-	for _, value := range []int{meta.RepresentativeCount, meta.DomainCount, meta.CandidateBudget, meta.ReturnedWidth, meta.BeamWidth, len(candidates)} {
+	for _, value := range []int{meta.RepresentativeCount, meta.DomainCount, meta.ScoreBudget, meta.ReturnedWidth, meta.BeamWidth, len(candidates)} {
 		writeUint(uint64(value))
 	}
 	for i, c := range candidates {
@@ -113,12 +113,12 @@ func reduceVectorPartitionRouterPoliciesV1(ctx context.Context, meta vectorParti
 		}
 	}
 	if meta.RepresentativeCount < 1 || meta.DomainCount < 1 || meta.DomainCount > meta.RepresentativeCount || meta.Probes < 1 || meta.Probes > meta.DomainCount ||
-		meta.ReturnedWidth < 1 || meta.ReturnedWidth > meta.RepresentativeCount || meta.CandidateBudget < 1 || len(input) > meta.CandidateBudget {
+		meta.ReturnedWidth < 1 || meta.ReturnedWidth > meta.RepresentativeCount || meta.ScoreBudget < 1 || len(input) > meta.ScoreBudget {
 		return vectorPartitionPolicyReductionV1{}, errors.New("invalid router policy shape/budget")
 	}
 	switch meta.Mode {
 	case VectorPartitionRouterModeExactV1:
-		if meta.CandidateBudget < meta.RepresentativeCount {
+		if meta.ScoreBudget < meta.RepresentativeCount {
 			return vectorPartitionPolicyReductionV1{}, errors.New("exact policy scan lacks full representative budget")
 		}
 	case VectorPartitionRouterModeApproxV1:

@@ -189,7 +189,7 @@ func TestM8RouterPolicyTamperSelectionAndCandidateIdentity(t *testing.T) {
 	if err := m8AttachAttributionV1(&row, cell, cell.Local); err != nil {
 		t.Fatal(err)
 	}
-	cfg := m8ProductionConfigEvidenceV1{QualityDiagnostics: true, RouterPolicyDiagnostics: true, TopK: 10, RouterCandidates: e.ApproximateBudget, RouterWidth: e.EffectiveWidth, RouterBeam: e.EffectiveWidth}
+	cfg := m8ProductionConfigEvidenceV1{QualityDiagnostics: true, RouterPolicyDiagnostics: true, TopK: 10, RouterScoreBudget: e.RouterScoreBudget, RouterWidth: e.EffectiveWidth, RouterBeam: e.EffectiveWidth}
 	if err := m8RouterPolicyEvidenceSelectionV1(cfg, row); err != nil {
 		t.Fatal(err)
 	}
@@ -369,7 +369,7 @@ func TestM8RouterPolicyRetainedAttributionReplay(t *testing.T) {
 			if err := m8AttachAttributionV1(&row, cell, cell.Local); err != nil {
 				t.Fatal(err)
 			}
-			report := m8ProductionReportV1{Dataset: fixture, RouterRepresentatives: assets.status.Representatives, Config: m8ProductionConfigEvidenceV1{TopK: 10, Partitions: 4, DomainCount: 4, PacksPerDomain: []int{1, 1, 1, 1}, RouterCandidates: budget, RouterWidth: assets.routerWidth, RouterBeam: assets.routerBeam, QualityDiagnostics: true, RouterPolicyDiagnostics: true, RouterPolicyWidth: width}, Variant: &m3VariantDescriptorV1{DatabaseDirectory: dir}, Rows: []m8ProductionRowV1{row}}
+			report := m8ProductionReportV1{Dataset: fixture, RouterRepresentatives: assets.status.Representatives, Config: m8ProductionConfigEvidenceV1{TopK: 10, Partitions: 4, DomainCount: 4, PacksPerDomain: []int{1, 1, 1, 1}, RouterScoreBudget: budget, RouterWidth: assets.routerWidth, RouterBeam: assets.routerBeam, QualityDiagnostics: true, RouterPolicyDiagnostics: true, RouterPolicyWidth: width}, Variant: &m3VariantDescriptorV1{DatabaseDirectory: dir}, Rows: []m8ProductionRowV1{row}}
 			outcome := m8ProductionRowOutcomesV1{TopKIDs: make([][]string, len(queries)), TopKScoreBits: make([][]uint32, len(queries))}
 			for i, rows := range cell.Local {
 				outcome.TopKIDs[i] = m8CanonicalIDsV1(rows)

@@ -1262,7 +1262,8 @@ func (c *VectorPartitionCoordinatorV1) validateRequest(request VectorPartitionCo
 		len(request.Query) < 1 || len(request.Query)*4 > l.MaxQueryBytes ||
 		request.PartitionProbes < 1 || request.PartitionProbes > l.MaxSelectedPartitions ||
 		request.PartitionProbes > int(p.PartitionCount) ||
-		request.RouterScoreBudget < 1 || request.RouterScoreBudget > l.MaxRouterCandidates ||
+		request.RouterScoreBudget < 1 ||
+		request.RouterScoreBudget > min(l.MaxRouterCandidates, collections.MaxVectorPartitionRouterScoreBudgetV2) ||
 		request.RouterReturnedWidth < 1 || request.RouterReturnedWidth > request.RouterBeamWidth ||
 		request.RouterBeamWidth > l.MaxRouterCandidates ||
 		request.TopK < 1 || request.TopK > l.MaxTopK ||

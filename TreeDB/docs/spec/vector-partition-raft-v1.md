@@ -542,12 +542,12 @@ with both original and superseded refs, and retains the reduced reclaim state
 until all segment debt is physically absent; the durable-root fallback
 generation can therefore delay, but never bypass, DELETE_COMPLETE.
 
-### V1 API/schema contract, VPM1 wire version 4, and bounds
+### V1 API/schema contract, VPM1 wire version 5, and bounds
 
 `V1` in public API, type, and schema names identifies that pre-alpha contract;
 it is distinct from the explicit VPM1 wire version.
 The canonical generation payload is binary `VPM1` (big-endian magic
-`0x56504d31`, version `4`), followed by fixed-order length-prefixed fields;
+`0x56504d31`, version `5`), followed by fixed-order length-prefixed fields;
 there are no tagged optional fields. The JSON form is an inspection/exchange
 encoding of that same record: unknown fields, a second JSON value, trailing
 bytes, and non-canonical ordering fail closed. VPM1 is embedded in VCP1
@@ -559,14 +559,17 @@ optional membership digest. Native partition HNSW assets require it; the digest
 also appears in their pack wire-version-2 header and binds generation,
 partition, ordered authoritative stable IDs, and home/overlap kinds. Version 4
 adds the dense logical-domain count and complete canonical domain-pack mapping;
-both the ready-set and whole-record integrity digests bind that mapping.
+both the ready-set and whole-record integrity digests bind that mapping. Version
+5 extends each representative mapping with a nonzero represented-node ID.
+Representative mappings are canonical by logical domain and node ID; source
+ordinals remain provenance and may repeat for distinct nodes in one domain.
 
 | Record area | Required content | Validation boundary |
 | --- | --- | --- |
 | identity | collection, index name, SHA-256 index-definition digest; source generation/checksum/schema/row count; partition and router generations | exact live TVIS/base identity; ready router generation equals partition generation |
 | domains | dense logical domain IDs and a complete domain-to-pack mapping | every physical pack appears exactly once and every domain is nonempty |
 | placement | dense physical pack ID to one Raft group, with many packs allowed per group | IDs are exactly `[0, partition_count)` and canonical |
-| memberships | one disjoint physical-pack membership per source ordinal; bounded pack overlap and logical-domain representatives | ordinal/ID coverage, sorted order, per-vector and per-ID caps; the same ordinal/pack pair cannot be both home and overlap |
+| memberships | one disjoint physical-pack membership per source ordinal; bounded pack overlap and logical-domain/node representatives with source-anchor provenance | ordinal/ID coverage, sorted order, per-vector and per-ID caps; represented node IDs are nonzero and unique within each logical domain; the same ordinal/pack pair cannot be both home and overlap |
 | assets | typed `ColumnAssetRef`, length, CRC, SHA-256 and logical asset ID for each physical pack plus router; native packs also carry the canonical membership digest | references are namespace-bound, unique, streamed and checksum-verified before every collection-authorized publication; native membership identity is recomputed from the authoritative source and must match both descriptor and pack header; router partition ID is exactly zero |
 | ready set | SHA-256 over canonical domain-pack mapping, placements, pack assets and router descriptor | mismatches, mixed router/generation, incomplete mapping, or missing pack asset reject |
 

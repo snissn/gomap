@@ -1370,6 +1370,29 @@ func TestVectorPartitionCoordinatorTopKLargerThanLiveCorpusV1(t *testing.T) {
 }
 
 func TestVectorPartitionCoordinatorRejectsImpossibleRouterFanoutBeforeOpenV1(t *testing.T) {
+	t.Run("score_budget_above_router_cap", func(t *testing.T) {
+		coordinator, source, dispatcher := testVectorPartitionCoordinatorV1(t,
+			[]raftplacement.GroupV1{{ID: "group-a", Members: []raftcluster.NodeID{"node-a"}, LeaderHint: "node-a"}},
+			[]raftcluster.GroupID{"group-a"},
+			map[uint32][]VectorPartitionShardSearchNeighborV1{0: {{ID: "a", Score: 1}}},
+			VectorPartitionCoordinatorLimitsV1{MaxRouterCandidates: collections.MaxVectorPartitionRouterScoreBudgetV2 + 1},
+		)
+		request := testVectorPartitionCoordinatorRequestV1(1)
+		request.RouterScoreBudget = collections.MaxVectorPartitionRouterScoreBudgetV2 + 1
+
+		response, err := coordinator.Search(context.Background(), request)
+		var coordinatorErr *VectorPartitionCoordinatorErrorV1
+		if !errors.Is(err, ErrVectorPartitionCoordinatorInvalidRequest) ||
+			!errors.As(err, &coordinatorErr) ||
+			coordinatorErr.Code != VectorPartitionCoordinatorErrorInvalidRequestV1 ||
+			!vectorPartitionCoordinatorResponseIsZeroTestV1(response) {
+			t.Fatalf("response=%+v err=%+v", response, err)
+		}
+		if source.opens != 0 || source.router.closeCount != 0 || len(dispatcher.calls) != 0 {
+			t.Fatalf("router opens=%d closes=%d dispatches=%d", source.opens, source.router.closeCount, len(dispatcher.calls))
+		}
+	})
+
 	t.Run("partition_probes_above_topology", func(t *testing.T) {
 		coordinator, source, dispatcher := testVectorPartitionCoordinatorV1(t,
 			[]raftplacement.GroupV1{

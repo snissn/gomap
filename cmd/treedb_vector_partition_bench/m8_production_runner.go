@@ -120,7 +120,7 @@ type m8ProductionConfigEvidenceV1 struct {
 	Warmup                  int       `json:"warmup_requests"`
 	EffectiveWarmup         int       `json:"effective_warmup_requests"`
 	EfSearch                []int     `json:"ef_search"`
-	RouterCandidates        int       `json:"approximate_router_candidate_budget"`
+	RouterScoreBudget       int       `json:"router_score_budget"`
 	RouterSemantics         string    `json:"router_semantics"`
 	RouterWidth             int       `json:"router_width"`
 	RouterBeam              int       `json:"router_beam"`
@@ -214,7 +214,7 @@ type m8ProductionAttributionV1 struct {
 	EndToEndRecallAtK                                 float64                     `json:"end_to_end_recall_at_k"`
 	CoordinatorMergeIDParity                          bool                        `json:"coordinator_merge_id_parity"`
 	CoordinatorMergeScoreParity                       bool                        `json:"coordinator_merge_score_parity"`
-	ApproximateRouterCandidateBudget                  int                         `json:"approximate_router_candidate_budget"`
+	ApproximateRouterScoreBudget                      int                         `json:"approximate_router_score_budget"`
 	ApproximateRouterPartitionCoverageComplete        bool                        `json:"approximate_router_partition_coverage_complete"`
 	ResidualLossOwners                                []string                    `json:"residual_loss_owners"`
 	StageOwners                                       []m8AttributionStageOwnerV1 `json:"stage_owners"`
@@ -264,7 +264,7 @@ type m8ProductionRowV1 struct {
 	EfSearch               int                       `json:"ef_search,omitempty"`
 	Concurrency            int                       `json:"concurrency,omitempty"`
 	RouterMode             string                    `json:"router_mode,omitempty"`
-	RouterCandidates       int                       `json:"router_candidate_budget,omitempty"`
+	RouterScoreBudget      int                       `json:"router_score_budget,omitempty"`
 	RouterScoreCalls       uint64                    `json:"router_score_calls"`
 	RouterVisited          uint64                    `json:"router_visited"`
 	RouterEdges            uint64                    `json:"router_edges"`
@@ -560,7 +560,7 @@ func runM8ProductionSingleVariantV1(cfg config, fixture fixtureManifest, vectors
 		RouterGlobalBudget: uint64(assets.router.Status().Config.RepresentativeBudget),
 		Command:            replayCommand, ExecutableSHA256: executableSHA256, BaseSHA: cfg.baseSHA, HeadSHA: cfg.headSHA, Dirty: m8GitDirtyInV1(cfg.sourceCheckout, cfg.out, cfg.profiles, cfg.m8MatrixOut, cfg.m8MatrixProfiles),
 		GoVersion: runtime.Version(), GOOS: runtime.GOOS, GOARCH: runtime.GOARCH, LogicalCPUs: runtime.NumCPU(), GOMAXPROCS: goMaxProcs, GoMemoryLimitBytes: goMemoryLimitBytes, Host: m8ProductionHostV1(cfg, assets.dir), Dataset: fixture, DatasetDirectory: datasetDirectory, TruthCacheDirectory: truthCacheDirectory, Variant: assets.descriptor,
-		Config:        m8ProductionConfigEvidenceV1{RaftGroups: cfg.raftGroups, RaftNodesPerGroup: cfg.raftNodes, Partitions: cfg.partitions, DomainCount: int(assets.manifest.DomainCount), PacksPerDomain: m8ManifestPacksPerDomainV1(assets.manifest), Probes: append([]int(nil), cfg.probes...), Overlap: append([]float64(nil), cfg.overlaps...), TopK: cfg.topK, RecallTarget: cfg.recallTarget, Concurrency: append([]int(nil), cfg.concurrency...), Warmup: cfg.warmup, EfSearch: append([]int(nil), cfg.efSearch...), RouterCandidates: cfg.routerCandidates, RouterSemantics: "global_all_level_spherical_krt_w_E_C_v2", RouterWidth: cfg.routerWidth, RouterBeam: cfg.routerBeam, MaxExactTruthVisits: cfg.m8MaxExactTruthVisits, Seed: cfg.seed, QualityDiagnostics: cfg.m8QualityDiagnostics, QualityTraceQueries: cfg.m8QualityTraceQueries, RouterPolicyDiagnostics: cfg.m8RouterPolicyDiagnostics, RouterPolicyWidth: cfg.m8RouterPolicyWidth},
+		Config:        m8ProductionConfigEvidenceV1{RaftGroups: cfg.raftGroups, RaftNodesPerGroup: cfg.raftNodes, Partitions: cfg.partitions, DomainCount: int(assets.manifest.DomainCount), PacksPerDomain: m8ManifestPacksPerDomainV1(assets.manifest), Probes: append([]int(nil), cfg.probes...), Overlap: append([]float64(nil), cfg.overlaps...), TopK: cfg.topK, RecallTarget: cfg.recallTarget, Concurrency: append([]int(nil), cfg.concurrency...), Warmup: cfg.warmup, EfSearch: append([]int(nil), cfg.efSearch...), RouterScoreBudget: cfg.routerCandidates, RouterSemantics: "global_all_level_spherical_krt_w_E_C_v2", RouterWidth: cfg.routerWidth, RouterBeam: cfg.routerBeam, MaxExactTruthVisits: cfg.m8MaxExactTruthVisits, Seed: cfg.seed, QualityDiagnostics: cfg.m8QualityDiagnostics, QualityTraceQueries: cfg.m8QualityTraceQueries, RouterPolicyDiagnostics: cfg.m8RouterPolicyDiagnostics, RouterPolicyWidth: cfg.m8RouterPolicyWidth},
 		BuildNanos:    buildNanos,
 		TruthCache:    truthCache,
 		Profiles:      m8ProductionProfileEvidenceV1{Directory: cfg.profiles, Status: "not_captured", Scope: "CPU, block, mutex, and trace cover measured query cells plus the endpoint-loss fault; heap is an end snapshot; allocs requires the captured baseline for differential analysis"},
@@ -1208,7 +1208,7 @@ func m8ArtifactNameV1(cfg config, fixture fixtureManifest, manifest collections.
 		Fixture: fixture,
 		Config: func() m8ProductionConfigEvidenceV1 {
 			count, _ := m8WarmupCountAndConcurrencyV1(cfg)
-			return m8ProductionConfigEvidenceV1{RaftGroups: cfg.raftGroups, RaftNodesPerGroup: cfg.raftNodes, Partitions: cfg.partitions, DomainCount: int(manifest.DomainCount), PacksPerDomain: m8ManifestPacksPerDomainV1(manifest), Probes: cfg.probes, Overlap: cfg.overlaps, TopK: cfg.topK, RecallTarget: cfg.recallTarget, Concurrency: cfg.concurrency, Warmup: cfg.warmup, EffectiveWarmup: count, EfSearch: cfg.efSearch, RouterCandidates: cfg.routerCandidates, RouterSemantics: "global_all_level_spherical_krt_w_E_C_v2", RouterWidth: cfg.routerWidth, RouterBeam: cfg.routerBeam, MaxExactTruthVisits: cfg.m8MaxExactTruthVisits, Seed: cfg.seed, QualityDiagnostics: cfg.m8QualityDiagnostics, QualityTraceQueries: cfg.m8QualityTraceQueries, RouterPolicyDiagnostics: cfg.m8RouterPolicyDiagnostics, RouterPolicyWidth: cfg.m8RouterPolicyWidth}
+			return m8ProductionConfigEvidenceV1{RaftGroups: cfg.raftGroups, RaftNodesPerGroup: cfg.raftNodes, Partitions: cfg.partitions, DomainCount: int(manifest.DomainCount), PacksPerDomain: m8ManifestPacksPerDomainV1(manifest), Probes: cfg.probes, Overlap: cfg.overlaps, TopK: cfg.topK, RecallTarget: cfg.recallTarget, Concurrency: cfg.concurrency, Warmup: cfg.warmup, EffectiveWarmup: count, EfSearch: cfg.efSearch, RouterScoreBudget: cfg.routerCandidates, RouterSemantics: "global_all_level_spherical_krt_w_E_C_v2", RouterWidth: cfg.routerWidth, RouterBeam: cfg.routerBeam, MaxExactTruthVisits: cfg.m8MaxExactTruthVisits, Seed: cfg.seed, QualityDiagnostics: cfg.m8QualityDiagnostics, QualityTraceQueries: cfg.m8QualityTraceQueries, RouterPolicyDiagnostics: cfg.m8RouterPolicyDiagnostics, RouterPolicyWidth: cfg.m8RouterPolicyWidth}
 		}(),
 		Assets: m8ArtifactAssetIdentityV1{
 			IntegrityDigest:  manifest.IntegrityDigest,
@@ -2813,7 +2813,7 @@ func m8BuildAttributionV1(ctx context.Context, assets *m8ProductionMultiGroupAss
 		OracleStagesComplete:        true,
 		ExhaustivePartitionIDParity: true, ExhaustivePartitionScoreParity: true,
 		CoordinatorMergeIDParity: true, CoordinatorMergeScoreParity: true,
-		ApproximateRouterCandidateBudget:           approximateCandidates,
+		ApproximateRouterScoreBudget:               approximateCandidates,
 		ApproximateRouterPartitionCoverageComplete: true,
 	}, Local: make([][]m8CanonicalResultV1, len(queries))}
 	cell.Evidence.Quality = harness.qualityEvidenceV1()
@@ -3436,7 +3436,7 @@ func m8RunProductionCellV1(ctx context.Context, coordinator *nativewire.VectorPa
 	// Coordinator.Search is an ANN/HNSW path even when every partition is
 	// selected. Exact V1 parity is owned by m8ExactPartitionUnionV1 during
 	// attribution, never by this measured all-partition ANN row.
-	row := m8ProductionRowV1{Status: "pass", Probes: probes, EfSearch: efSearch, Concurrency: concurrency, RouterMode: collections.VectorPartitionRouterModeApproxV1, RouterCandidates: m8ProductionApproximateRouterCandidateBudgetV1(assets, routerCandidates), Samples: len(queries)}
+	row := m8ProductionRowV1{Status: "pass", Probes: probes, EfSearch: efSearch, Concurrency: concurrency, RouterMode: collections.VectorPartitionRouterModeApproxV1, RouterScoreBudget: m8ProductionApproximateRouterScoreBudgetV1(assets, routerCandidates), Samples: len(queries)}
 	canonicalResults := make([][]m8CanonicalResultV1, len(outcomes))
 	durations := make([]uint64, 0, len(outcomes))
 	var recallSum float64
@@ -3473,6 +3473,7 @@ func m8RunProductionCellV1(ctx context.Context, coordinator *nativewire.VectorPa
 		default:
 			row.Status = m8ProductionCandidateCoverageShortfallV1
 		}
+		row.NoPartialResults = true
 		row.ElapsedNanos = elapsedNanos
 		for _, outcome := range outcomes {
 			row.MaxTotalNanos = max(row.MaxTotalNanos, outcome.response.Timing.TotalNanos)
@@ -3753,7 +3754,7 @@ func m8RunBoundedWorkV1(count, concurrency int, run func(int)) {
 	wg.Wait()
 }
 
-func m8ProductionRouterCandidateBudgetV1(assets *m8ProductionMultiGroupAssetsV1) int {
+func m8ProductionRouterScoreBudgetV1(assets *m8ProductionMultiGroupAssetsV1) int {
 	return max(1, int(assets.status.Representatives))
 }
 
@@ -3764,7 +3765,7 @@ func m8ValidateConfiguredDomainProbesV1(probes []int, domains uint32) error {
 	return nil
 }
 
-func m8ProductionApproximateRouterCandidateBudgetV1(assets *m8ProductionMultiGroupAssetsV1, requested int) int {
+func m8ProductionApproximateRouterScoreBudgetV1(assets *m8ProductionMultiGroupAssetsV1, requested int) int {
 	return requested
 }
 
@@ -3777,7 +3778,7 @@ func m8ProductionRequestV1(assets *m8ProductionMultiGroupAssetsV1, query []float
 		Version: nativewire.VectorPartitionCoordinatorVersionV1, RequestID: requestID, CancellationID: requestID + "-cancel",
 		Database: "default", Catalog: "default", Collection: assets.manifest.Collection, IndexName: assets.manifest.IndexName,
 		IndexDefinitionDigest: assets.manifest.IndexDefinitionDigest, Query: query, Metric: nativewire.VectorPartitionShardSearchMetricCosineV1,
-		RouterMode: collections.VectorPartitionRouterModeExactV1, RouterScoreBudget: m8ProductionRouterCandidateBudgetV1(assets), RouterReturnedWidth: m8ProductionRouterCandidateBudgetV1(assets), RouterBeamWidth: m8ProductionRouterCandidateBudgetV1(assets), PartitionProbes: probes,
+		RouterMode: collections.VectorPartitionRouterModeExactV1, RouterScoreBudget: m8ProductionRouterScoreBudgetV1(assets), RouterReturnedWidth: m8ProductionRouterScoreBudgetV1(assets), RouterBeamWidth: m8ProductionRouterScoreBudgetV1(assets), PartitionProbes: probes,
 		Consistency: nativewire.VectorPartitionShardSearchConsistencySnapshotV1, StatsMode: nativewire.VectorPartitionShardSearchStatsBasicV1,
 		TopK: topK, EfSearch: efSearch, DeadlineUnixNano: time.Now().Add(30 * time.Second).UnixNano(), RequestBytesLimit: 4 << 20,
 		CandidateBytesLimit: candidateBytesLimit, ResponseBytesLimit: 64 << 20, MergeEntriesLimit: mergePacks * topK,
@@ -3791,7 +3792,7 @@ func m8ProductionExhaustiveRequestV1(assets *m8ProductionMultiGroupAssetsV1, que
 func m8ProductionApproximateRequestV1(assets *m8ProductionMultiGroupAssetsV1, query []float32, requestID string, probes, efSearch, topK, routerCandidates int, candidateBytesLimit uint64) nativewire.VectorPartitionCoordinatorRequestV1 {
 	request := m8ProductionRequestV1(assets, query, requestID, probes, efSearch, topK, candidateBytesLimit)
 	request.RouterMode = collections.VectorPartitionRouterModeApproxV1
-	request.RouterScoreBudget = m8ProductionApproximateRouterCandidateBudgetV1(assets, routerCandidates)
+	request.RouterScoreBudget = m8ProductionApproximateRouterScoreBudgetV1(assets, routerCandidates)
 	request.RouterReturnedWidth, request.RouterBeamWidth = assets.routerWidth, assets.routerBeam
 	return request
 }
@@ -4480,10 +4481,10 @@ func validateM8ProductionReportWithProfilesV1(report m8ProductionReportV1, caps 
 		report.GeneratedAt.IsZero() || !validM8ProductionExecutionIDV1(report.ExecutionID) || len(report.Command) == 0 || !m8QualificationSHA256V1(report.ExecutableSHA256) || !validSHA(report.BaseSHA) || !validSHA(report.HeadSHA) ||
 		report.GoVersion == "" || report.GOOS == "" || report.GOARCH == "" || report.LogicalCPUs < 1 || report.GOMAXPROCS < 1 || report.GoMemoryLimitBytes < 1 ||
 		report.Config.RaftGroups < 2 || report.Config.RaftNodesPerGroup != 3 || report.Config.Partitions < 4 || report.Config.Partitions > maxPartitions ||
-		report.Config.Warmup < 0 || report.Config.RouterCandidates < 1 || report.RouterRepresentatives == 0 || report.BuildNanos <= 0 || report.TimedBoundary == "" || len(report.Limitations) == 0 {
+		report.Config.Warmup < 0 || report.Config.RouterScoreBudget < 1 || report.RouterRepresentatives == 0 || report.BuildNanos <= 0 || report.TimedBoundary == "" || len(report.Limitations) == 0 {
 		return errors.New("missing or invalid M8 identity, topology, or timing metadata")
 	}
-	if report.Config.RouterSemantics != "global_all_level_spherical_krt_w_E_C_v2" || report.Config.RouterWidth < 1 || report.Config.RouterWidth > report.Config.RouterBeam || report.Config.RouterBeam > int(report.RouterRepresentatives) || report.Config.RouterCandidates > collections.MaxVectorPartitionRouterScoreBudgetV2 || report.RouterGlobalBudget < report.RouterRepresentatives {
+	if report.Config.RouterSemantics != "global_all_level_spherical_krt_w_E_C_v2" || report.Config.RouterWidth < 1 || report.Config.RouterWidth > report.Config.RouterBeam || report.Config.RouterBeam > int(report.RouterRepresentatives) || report.Config.RouterScoreBudget > collections.MaxVectorPartitionRouterScoreBudgetV2 || report.RouterGlobalBudget < report.RouterRepresentatives {
 		return errors.New("M8 requires explicit all-level router w/E/C identity")
 	}
 	expectedWarmup, _ := m8WarmupCountAndConcurrencyV1(config{warmup: report.Config.Warmup, concurrency: report.Config.Concurrency})
@@ -4548,9 +4549,9 @@ func validateM8ProductionReportWithProfilesV1(report m8ProductionReportV1, caps 
 		if report.Variant != nil && row.VariantID != report.Variant.VariantID {
 			return errors.New("M8 row variant identity mismatch")
 		}
-		if row.Samples < 1 || row.RouterCandidates < 1 || row.RouterCandidates > collections.MaxVectorPartitionRouterScoreBudgetV2 ||
-			uint64(row.Samples) > ^uint64(0)/uint64(row.RouterCandidates) ||
-			row.RouterScoreCalls > uint64(row.Samples)*uint64(row.RouterCandidates) || row.RouterVisited > row.RouterScoreCalls {
+		if row.Samples < 1 || row.RouterScoreBudget < 1 || row.RouterScoreBudget > collections.MaxVectorPartitionRouterScoreBudgetV2 ||
+			uint64(row.Samples) > ^uint64(0)/uint64(row.RouterScoreBudget) ||
+			row.RouterScoreCalls > uint64(row.Samples)*uint64(row.RouterScoreBudget) || row.RouterVisited > row.RouterScoreCalls {
 			return errors.New("M8 router work exceeds its explicit score-call budget")
 		}
 		validExactLocalSearches := m8LocalSearchFanoutValidV1(row.Attribution.LocalHNSWSearchesByQuery, row.Attribution.LocalHNSWSearches, row.Samples, row.Probes, packsPerDomain)
@@ -4561,7 +4562,7 @@ func validateM8ProductionReportWithProfilesV1(report m8ProductionReportV1, caps 
 		if m8ProductionRouterRefusalStatusV1(row.Status) {
 			if row.Probes < 1 || row.Probes > domainCount ||
 				row.EfSearch < report.Config.TopK || row.Concurrency < 1 || row.Samples != report.Dataset.Queries ||
-				row.RouterMode != collections.VectorPartitionRouterModeApproxV1 || row.RouterCandidates > report.Config.RouterCandidates || row.RouterCandidates != row.Attribution.ApproximateRouterCandidateBudget || row.NoPartialResults || row.ExactParityChecked || row.ExactParityPassed ||
+				row.RouterMode != collections.VectorPartitionRouterModeApproxV1 || row.RouterScoreBudget > report.Config.RouterScoreBudget || row.RouterScoreBudget != row.Attribution.ApproximateRouterScoreBudget || !row.NoPartialResults || row.ExactParityChecked || row.ExactParityPassed ||
 				row.RecallAtK != 0 || row.QPS != 0 || row.ElapsedNanos == 0 || row.P50Nanos != 0 || row.P95Nanos != 0 || row.P99Nanos != 0 || row.MaxTotalNanos == 0 ||
 				!validExactLocalSearches || row.Attribution.LocalHNSWCandidates == 0 ||
 				row.Attribution.ApproximateRouterPartitionCoverageComplete || row.Attribution.ApproximateRepresentativeRecallAtK != 0 || row.Attribution.ApproximateLocalHNSWRecallAtK != 0 || row.Attribution.ApproximateLocalHNSWSearches != 0 || len(row.Attribution.ApproximateLocalHNSWSearchesByQuery) != 0 || row.Attribution.ApproximateLocalHNSWCandidates != 0 || row.Attribution.ApproximateLocalHNSWEdges != 0 || row.Attribution.EndToEndRecallAtK != 0 ||
@@ -4580,7 +4581,7 @@ func validateM8ProductionReportWithProfilesV1(report m8ProductionReportV1, caps 
 			row.EfSearch < report.Config.TopK || row.Concurrency < 1 || row.Samples != report.Dataset.Queries || math.IsNaN(row.QPS) || math.IsInf(row.QPS, 0) || row.QPS <= 0 ||
 			!qpsOK || math.Float64bits(row.QPS) != math.Float64bits(expectedQPS) ||
 			row.P50Nanos == 0 || row.P50Nanos > row.P95Nanos || row.P95Nanos > row.P99Nanos || row.P99Nanos > row.MaxTotalNanos ||
-			row.RouterMode != collections.VectorPartitionRouterModeApproxV1 || row.RouterCandidates < row.Probes || row.RouterCandidates > report.Config.RouterCandidates || row.RouterCandidates != row.Attribution.ApproximateRouterCandidateBudget || !row.Attribution.ApproximateRouterPartitionCoverageComplete || row.ExactParityPassed && !row.ExactParityChecked || row.ExactParityChecked && row.Probes != domainCount || !row.NoPartialResults ||
+			row.RouterMode != collections.VectorPartitionRouterModeApproxV1 || row.RouterScoreBudget < row.Probes || row.RouterScoreBudget > report.Config.RouterScoreBudget || row.RouterScoreBudget != row.Attribution.ApproximateRouterScoreBudget || !row.Attribution.ApproximateRouterPartitionCoverageComplete || row.ExactParityPassed && !row.ExactParityChecked || row.ExactParityChecked && row.Probes != domainCount || !row.NoPartialResults ||
 			math.Float64bits(row.RecallAtK) != math.Float64bits(row.Attribution.EndToEndRecallAtK) || !validExactLocalSearches || row.Attribution.LocalHNSWCandidates == 0 || !validApproximateLocalSearches || row.Attribution.ApproximateLocalHNSWCandidates == 0 ||
 			!validM8AttributionV1(row.Attribution, report.Config.TopK) {
 			return errors.New("malformed measured M8 row")
@@ -4838,7 +4839,7 @@ func m8LocalSearchFanoutValidV1(fanout []uint32, aggregate uint64, samples, prob
 
 func validM8AttributionV1(attribution m8ProductionAttributionV1, topK int) bool {
 	if attribution.Contract != m8CanonicalResultContractV1 || attribution.GlobalExactRecallAtK != 1 ||
-		attribution.ApproximateRouterCandidateBudget < 1 ||
+		attribution.ApproximateRouterScoreBudget < 1 ||
 		(!attribution.ApproximateRouterPartitionCoverageComplete && (attribution.ApproximateRepresentativeRecallAtK != 0 || attribution.ApproximateLocalHNSWRecallAtK != 0 || attribution.ApproximateLocalHNSWSearches != 0 || len(attribution.ApproximateLocalHNSWSearchesByQuery) != 0 || attribution.ApproximateLocalHNSWCandidates != 0 || attribution.ApproximateLocalHNSWEdges != 0)) ||
 		!slices.Equal(attribution.ResidualLossOwners, m8AttributionLossOwnersV1(attribution)) || !slices.Equal(attribution.StageOwners, m8AttributionStageOwnersV1(attribution)) {
 		return false

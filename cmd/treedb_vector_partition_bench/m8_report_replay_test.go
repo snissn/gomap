@@ -189,7 +189,7 @@ func TestM8PlannedRouterPolicyReceiptSizeV1(t *testing.T) {
 	report.Dataset.Vectors, report.Dataset.Dimensions = 250000, 128
 	report.Config.Partitions, report.Config.DomainCount = 16, 16
 	report.Config.Probes, report.Config.EfSearch, report.Config.Concurrency = []int{2}, []int{96}, []int{1}
-	report.Config.RouterPolicyDiagnostics, report.Config.RouterPolicyWidth, report.Config.RouterCandidates = true, 64, 128
+	report.Config.RouterPolicyDiagnostics, report.Config.RouterPolicyWidth, report.Config.RouterScoreBudget = true, 64, 128
 	report.Rows = report.Rows[:1]
 	row := &report.Rows[0]
 	row.Probes, row.EfSearch = 2, 96
@@ -198,7 +198,7 @@ func TestM8PlannedRouterPolicyReceiptSizeV1(t *testing.T) {
 	for i := range quality.PackCosts {
 		quality.PackCosts[i] = 1
 	}
-	policies := &m8RouterPolicyEvidenceV1{Method: m8RouterPolicyExperimentMethodV1, RequestedWidth: 64, EffectiveWidth: 64, ApproximateBudget: 128, Queries: make([]m8RouterPolicyQueryV1, 512)}
+	policies := &m8RouterPolicyEvidenceV1{Method: m8RouterPolicyExperimentMethodV1, RequestedWidth: 64, EffectiveWidth: 64, RouterScoreBudget: 128, Queries: make([]m8RouterPolicyQueryV1, 512)}
 	for i := range quality.Queries {
 		q := &quality.Queries[i]
 		q.NoCoarseningDomains, q.ExactDomains, q.ApproximateDomains = []uint32{0, 1}, []uint32{0, 1}, []uint32{0, 1}
@@ -211,14 +211,14 @@ func TestM8PlannedRouterPolicyReceiptSizeV1(t *testing.T) {
 		comparison := collections.VectorPartitionRouterPolicyComparisonV1{
 			Method: collections.VectorPartitionRouterPolicyDiagnosticMethodV1, Generation: 1, SourceGeneration: 1,
 			ModelSHA256: quality.ModelSHA256, QuerySHA256: q.QuerySHA256, Mode: collections.VectorPartitionRouterModeExactV1,
-			RepresentativeCount: 256, DomainCount: 16, CandidateBudget: 256, ReturnedWidth: 64, Probes: 2,
+			RepresentativeCount: 256, DomainCount: 16, ScoreBudget: 256, ReturnedWidth: 64, Probes: 2,
 			CollectionComplete: true, Collected: 256, UniqueReturned: 64, Candidates: 256,
 			CandidateSetSHA256: strings.Repeat("d", 64), CandidateSequenceSHA256: strings.Repeat("e", 64),
 			Distance: distance, Frequency: other, Hybrid: other,
 		}
 		coverage := &m8RouterPolicyCoverageV1{DistanceMask: 1023, FrequencyMask: 1023, HybridMask: 1023, DistancePacks: 2, FrequencyPacks: 2, HybridPacks: 2}
 		exact := m8RouterPolicyOutcomeV1{Status: "pass", Comparison: comparison, Coverage: coverage}
-		comparison.Mode, comparison.CandidateBudget, comparison.Collected, comparison.Candidates, comparison.Edges = collections.VectorPartitionRouterModeApproxV1, 128, 128, 128, 32768
+		comparison.Mode, comparison.ScoreBudget, comparison.Collected, comparison.Candidates, comparison.Edges = collections.VectorPartitionRouterModeApproxV1, 128, 128, 128, 32768
 		policies.Queries[i] = m8RouterPolicyQueryV1{QuerySHA256: q.QuerySHA256, TruthSHA256: q.TruthSHA256,
 			Exact: exact, Approximate: m8RouterPolicyOutcomeV1{Status: "pass", Comparison: comparison, Coverage: coverage}}
 	}

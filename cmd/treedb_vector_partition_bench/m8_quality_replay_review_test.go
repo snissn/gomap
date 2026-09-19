@@ -72,7 +72,7 @@ func TestM8QualityRetainedShortfallReplaysStaticEvidence(t *testing.T) {
 	if err := m8AttachAttributionV1(&row, cell, cell.Local); err != nil {
 		t.Fatal(err)
 	}
-	report := m8ProductionReportV1{Dataset: fixture, RouterRepresentatives: assets.status.Representatives, Config: m8ProductionConfigEvidenceV1{TopK: 10, Partitions: 4, DomainCount: 4, PacksPerDomain: []int{1, 1, 1, 1}, RouterCandidates: 256, RouterWidth: assets.routerWidth, RouterBeam: assets.routerBeam, QualityDiagnostics: true}, Variant: &m3VariantDescriptorV1{DatabaseDirectory: dir}, Rows: []m8ProductionRowV1{row}}
+	report := m8ProductionReportV1{Dataset: fixture, RouterRepresentatives: assets.status.Representatives, Config: m8ProductionConfigEvidenceV1{TopK: 10, Partitions: 4, DomainCount: 4, PacksPerDomain: []int{1, 1, 1, 1}, RouterScoreBudget: 256, RouterWidth: assets.routerWidth, RouterBeam: assets.routerBeam, QualityDiagnostics: true}, Variant: &m3VariantDescriptorV1{DatabaseDirectory: dir}, Rows: []m8ProductionRowV1{row}}
 	// Failed producer rows carry no successful coordinator results or timings.
 	transcript := m8ProductionMeasurementTranscriptV1{Outcomes: []m8ProductionRowOutcomesV1{{}}}
 	if err := errors.Join(h.Close(), assets.Close()); err != nil {
