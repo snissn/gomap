@@ -150,7 +150,7 @@ func TestVectorPartitionRouterV3BestParentGroupOrder(t *testing.T) {
 					{NodeID: 4, PartitionID: 1, Values: test.root1}, {NodeID: 5, PartitionID: 1, Values: []float32{1, 0}}, {NodeID: 6, PartitionID: 1, Values: []float32{-1, 0}},
 				},
 			}
-			hierarchy, err := buildVectorPartitionRouterHierarchyV3(model)
+			hierarchy, err := buildVectorPartitionRouterHierarchyV3(context.Background(), model)
 			if err != nil {
 				t.Fatal(err)
 			}

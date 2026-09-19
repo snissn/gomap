@@ -1209,7 +1209,7 @@ func (c *Collection) openVectorPartitionRouterManifestWithContextV1(ctx context.
 	if manifest.RouterAsset.Bytes > model.Config.MaxRouterBytes {
 		return nil, errors.Join(errors.New("collections: vector partition router asset exceeds its persisted byte cap"), view.Close())
 	}
-	hierarchy, err := buildVectorPartitionRouterHierarchyV3(model)
+	hierarchy, err := buildVectorPartitionRouterHierarchyV3(ctx, model)
 	if err != nil {
 		return nil, errors.Join(err, view.Close())
 	}
@@ -1416,17 +1416,34 @@ type vectorPartitionRouterHierarchyV3 struct {
 	representativeToDomain []int
 }
 
-func buildVectorPartitionRouterHierarchyV3(model internalrouter.RouterModelV1) (vectorPartitionRouterHierarchyV3, error) {
-	h := vectorPartitionRouterHierarchyV3{children: make([][]int, len(model.Representatives)), representativeToDomain: make([]int, len(model.Representatives))}
+func buildVectorPartitionRouterHierarchyV3(ctx context.Context, model internalrouter.RouterModelV1) (vectorPartitionRouterHierarchyV3, error) {
+	var h vectorPartitionRouterHierarchyV3
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return h, err
+	}
+	h = vectorPartitionRouterHierarchyV3{children: make([][]int, len(model.Representatives)), representativeToDomain: make([]int, len(model.Representatives))}
 	if len(model.Nodes) != len(model.Representatives) || len(model.Nodes) == 0 {
 		return h, errors.New("collections: vector partition router hierarchy is incomplete")
 	}
 	nodeToRepresentative := make([]int, len(model.Nodes)+1)
 	for i := range nodeToRepresentative {
+		if i&1023 == 0 {
+			if err := ctx.Err(); err != nil {
+				return h, err
+			}
+		}
 		nodeToRepresentative[i] = -1
 	}
 	var previousPartition uint32
 	for ordinal, representative := range model.Representatives {
+		if ordinal&1023 == 0 {
+			if err := ctx.Err(); err != nil {
+				return h, err
+			}
+		}
 		if representative.NodeID == 0 || int(representative.NodeID) > len(model.Nodes) || nodeToRepresentative[representative.NodeID] >= 0 {
 			return h, errors.New("collections: vector partition router representative identity is invalid")
 		}
@@ -1439,6 +1456,11 @@ func buildVectorPartitionRouterHierarchyV3(model internalrouter.RouterModelV1) (
 	}
 	rootDomains := make([]bool, len(h.domainIDs))
 	for ordinal, representative := range model.Representatives {
+		if ordinal&1023 == 0 {
+			if err := ctx.Err(); err != nil {
+				return h, err
+			}
+		}
 		node := model.Nodes[representative.NodeID-1]
 		if node.NodeID != representative.NodeID || node.PartitionID != representative.PartitionID {
 			return h, errors.New("collections: vector partition router hierarchy identity is invalid")
@@ -1457,7 +1479,12 @@ func buildVectorPartitionRouterHierarchyV3(model internalrouter.RouterModelV1) (
 		}
 		h.children[parent] = append(h.children[parent], ordinal)
 	}
-	for _, present := range rootDomains {
+	for domain, present := range rootDomains {
+		if domain&1023 == 0 {
+			if err := ctx.Err(); err != nil {
+				return h, err
+			}
+		}
 		if !present {
 			return h, errors.New("collections: vector partition router domain lacks a root")
 		}

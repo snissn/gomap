@@ -208,6 +208,23 @@ func TestVectorPartitionRouterModelSortObservesContextV1(t *testing.T) {
 	}
 }
 
+func TestVectorPartitionRouterHierarchyBuildObservesContextV3(t *testing.T) {
+	const nodes = 8192
+	model := internalrouter.RouterModelV1{
+		Nodes:           make([]internalrouter.RouterHierarchyNodeV1, nodes),
+		Representatives: make([]internalrouter.RouterRepresentativeV1, nodes),
+	}
+	ctx := &vectorPartitionRouterDeadlineAfterErrContextV1{
+		Context: context.Background(), deadlineAfter: 3,
+	}
+	if _, err := buildVectorPartitionRouterHierarchyV3(ctx, model); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("hierarchy build err=%v want deadline exceeded", err)
+	}
+	if ctx.calls != ctx.deadlineAfter {
+		t.Fatalf("context calls=%d want %d", ctx.calls, ctx.deadlineAfter)
+	}
+}
+
 func TestVectorPartitionRouterOpenCleanupJoinsCloseErrorV1(t *testing.T) {
 	cause := context.Canceled
 	closeErr := errors.New("release failed")
@@ -278,7 +295,7 @@ func TestVectorPartitionRouterApproxDeadlineInterruptsHierarchyTraversalV1(t *te
 		model.Nodes = append(model.Nodes, internalrouter.RouterHierarchyNodeV1{NodeID: nodeID, PartitionID: 0, Depth: 0, MemberCount: 1, Leaf: true, Budget: 1})
 		model.Representatives = append(model.Representatives, internalrouter.RouterRepresentativeV1{PartitionID: 0, NodeID: nodeID, Depth: 0, MemberCount: 1, Path: []uint32{nodeID}, Values: []float32{1}})
 	}
-	hierarchy, err := buildVectorPartitionRouterHierarchyV3(model)
+	hierarchy, err := buildVectorPartitionRouterHierarchyV3(context.Background(), model)
 	if err != nil {
 		t.Fatal(err)
 	}
