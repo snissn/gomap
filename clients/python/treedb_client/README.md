@@ -361,6 +361,9 @@ hybrid = client.search_hybrid(
     text_candidate_limit=100,
     max_postings_scanned=100000,
     vector_candidate_limit=100,
+    vector_query_mode="quantized_rerank",
+    quantized_index_name="embedding.scalar_u8.fast",
+    quantized_rerank_candidates=100,
     ef_search=64,
     max_chunks_per_parent=2,
     fusion={
@@ -374,6 +377,15 @@ hybrid = client.search_hybrid(
 for doc in hybrid.documents:
     print(doc.id, doc.score, doc.meta.get("_treedb_search"))
 ```
+
+Hybrid vectors use exact scoring by default. To select the admitted scalar-u8
+rerank path, set all three explicit fields shown above:
+`vector_query_mode="quantized_rerank"`, `quantized_index_name`, and
+`quantized_rerank_candidates` (zero lets the service use its effective vector
+candidate limit). The response records the selected values in `hybrid.plan` and
+the compact serving receipt in `hybrid.stats.vector_route`; no detailed query
+proof is produced for hybrid search. Returned documents omit embeddings unless
+`return_embedding=True`.
 
 `max_chunks_per_parent` is optional and disabled when omitted or zero. A positive
 value preserves the service's fused order and source attribution while limiting
