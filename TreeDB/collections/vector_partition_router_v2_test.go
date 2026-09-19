@@ -90,7 +90,7 @@ func TestVectorPartitionRouterV3ChecksCancellationAfterDomainSort(t *testing.T) 
 	result, err := router.SearchWithContextV1(ctx, []float32{1, 0}, VectorPartitionRouterSearchOptionsV3{
 		Mode: VectorPartitionRouterModeApproxV1, ScoreBudget: len(router.model.Representatives), PartitionProbes: 2,
 	})
-	if !errors.Is(err, context.DeadlineExceeded) || result.Status.ScoreCalls != uint64(len(router.hierarchy.rootOrdinals)) {
+	if !errors.Is(err, context.DeadlineExceeded) || result.Status.ScoreCalls != uint64(len(router.model.Representatives)) {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
 }
