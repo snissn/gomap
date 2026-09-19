@@ -113,6 +113,9 @@ func TestTypedGraphHybridSelectedOwnerSurvivesConcurrentPublication4767(t *testi
 	if err != nil || len(fresh.Results) != 1 || string(fresh.Results[0].ID) != "b" || !bytes.Contains(fresh.Results[0].Document, []byte(`"version":"new-b"`)) || !bytes.Contains(fresh.Results[0].Document, []byte(`"content":"refund"`)) {
 		t.Fatalf("fresh-owner response=%+v err=%v", fresh, err)
 	}
+	if string(old.response.Results[0].ID) != "a" || !bytes.Contains(old.response.Results[0].Document, []byte(`"version":"old-a"`)) {
+		t.Fatalf("later search mutated owned prior response: %+v", old.response)
+	}
 }
 
 func TestTypedGraphHybridScalarStrategiesAndBudgets(t *testing.T) {

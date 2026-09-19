@@ -79,6 +79,68 @@ func BenchmarkCosineNormalizedF32V1PublicCollectionGate(b *testing.B) {
 	}
 }
 
+// BenchmarkTypedGraphHybridPublicRoutes4767 measures the production hybrid
+// executor over one admitted unfiltered base so the selected arm cannot take
+// the deliberate small-filter exact shortcut.
+func BenchmarkTypedGraphHybridPublicRoutes4767(b *testing.B) {
+	requireTypedGraphPublicServingTest(b)
+	fixture := openTypedGraphVectorReadViewBenchFixture(b, 64, 1024, VectorIndexRepresentationCosineNormalizedF32V1)
+	defer fixture.close()
+	for _, mode := range []VectorIndexQueryMode{VectorIndexQueryModeExact, VectorIndexQueryModeQuantizedRerank} {
+		mode := mode
+		b.Run(string(mode), func(b *testing.B) {
+			request := HybridSearchOptions{
+				TopK: 10,
+				Text: &HybridTextQuery{IndexName: "content", Query: "content", CandidateLimit: 64},
+				Vector: &HybridVectorQuery{
+					IndexName: "embedding_graph", Query: fixture.vectors[0], CandidateLimit: 64,
+					EfSearch: typedGraphVectorReadViewBenchEfSearch, QueryMode: mode,
+				},
+				IncludeDocuments:     true,
+				DocumentFetchOptions: DocumentFetchOptions{ExcludePaths: []string{"embedding"}},
+			}
+			if mode == VectorIndexQueryModeQuantizedRerank {
+				request.Vector.QuantizedIndexName = typedGraphVectorReadViewBenchQuantizedName
+				request.Vector.QuantizedRerankCandidates = fixture.rerankCandidates
+			}
+			search := func(query []float32) HybridSearchResponse {
+				request.Vector.Query = query
+				response, err := fixture.col.SearchHybrid(request)
+				if err != nil {
+					b.Fatal(err)
+				}
+				if len(response.Results) != request.TopK || response.Stats.VectorRoute == nil || response.Stats.VectorRoute.Route != "typed_hnsw" || response.Stats.DocumentsFetched != uint64(len(response.Results)) || response.Stats.EmbeddingOutputBytes != 0 || response.Stats.FullDocumentScanFallbacks != 0 {
+					b.Fatalf("hybrid response=%+v", response)
+				}
+				if mode == VectorIndexQueryModeQuantizedRerank {
+					if response.Stats.VectorRoute.QueryMode != mode || response.Stats.VectorQuantizedScoreCalls == 0 || response.Stats.VectorQuantizedRerankCandidates == 0 || response.Stats.VectorPackedExactScoreCalls == 0 || response.Stats.VectorPackedExactVectorBytesRead == 0 {
+						b.Fatalf("selected hybrid stats=%+v", response.Stats)
+					}
+				} else if response.Stats.VectorQuantizedScoreCalls != 0 || response.Stats.VectorQuantizedRerankCandidates != 0 {
+					b.Fatalf("exact hybrid used quantized work: %+v", response.Stats)
+				}
+				return response
+			}
+			_ = search(fixture.vectors[0])
+			sample := search(fixture.vectors[1])
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				response := search(fixture.vectors[i%len(fixture.vectors)])
+				vectorSearchBenchSinkOrdinalV4 += int(response.Stats.CandidatesFused)
+			}
+			b.StopTimer()
+			b.ReportMetric(float64(sample.Stats.VectorQuantizedScoreCalls), "quantized_scores/search")
+			b.ReportMetric(float64(sample.Stats.VectorQuantizedRerankCandidates), "rerank_candidates/search")
+			b.ReportMetric(float64(sample.Stats.VectorPackedExactScoreCalls), "packed_calls/search")
+			b.ReportMetric(float64(sample.Stats.VectorPackedExactVectorBytesRead), "packed_bytes/search")
+			b.ReportMetric(float64(sample.Stats.CandidatesFused), "candidates_fused/search")
+			b.ReportMetric(float64(sample.Stats.DocumentsFetched), "docs_fetched/search")
+			b.ReportMetric(float64(sample.Stats.EmbeddingOutputBytes), "embedding_output_bytes/search")
+		})
+	}
+}
+
 const (
 	typedGraphVectorReadViewBenchTopK          = 10
 	typedGraphVectorReadViewBenchEfSearch      = 64

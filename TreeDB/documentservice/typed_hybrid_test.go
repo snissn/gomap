@@ -2,6 +2,7 @@ package documentservice
 
 import (
 	"context"
+	"errors"
 	"math"
 	"net/http"
 	"reflect"
@@ -65,6 +66,11 @@ func TestServiceTypedHybridQuantizedRerankPublicRoute4767(t *testing.T) {
 	}
 	if out.Stats.VectorRoute == nil || out.Stats.VectorRoute.Route != "typed_hnsw" || out.Stats.VectorRoute.QueryMode != collections.VectorIndexQueryModeQuantizedRerank || out.Stats.VectorRoute.QuantizedIndexName != request.QuantizedIndexName || out.Stats.VectorQuantizedScoreCalls == 0 || out.Stats.VectorQuantizedRerankExactScoreCalls == 0 || out.Stats.DocumentsFetched != uint64(len(out.Documents)) || out.Stats.EmbeddingOutputBytes != 0 {
 		t.Fatalf("selected hybrid stats=%+v", out.Stats)
+	}
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	if _, err := svc.SearchHybrid(canceled, create.Name, request); !errors.Is(err, context.Canceled) {
+		t.Fatalf("selected hybrid cancellation=%v", err)
 	}
 	var httpOut HybridSearchResponse
 	postJSON(t, NewHandler(svc), "/v1/indexes/"+create.Name+"/search/hybrid", request, http.StatusOK, &httpOut)

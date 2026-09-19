@@ -99,6 +99,15 @@ Single-source text-only and vector-only user flows should continue to use their
 own APIs and benchmark rows. Candidate adapters from #2503 may still use
 `HybridSearchCandidate` as a shared internal shape.
 
+The vector mode defaults to `exact`. `quantized_rerank` is an explicit opt-in
+for an admitted typed cosine `column_graph` with a named legacy scalar-u8/v1
+plane; `QuantizedRerankCandidates` is checked against the effective vector
+candidate limit. Quantized fields with exact mode, `quantized_only`, missing or
+stale assets, unsupported codecs/calibration, and unsupported representations
+fail closed. A complete selective scalar allow-set may truthfully execute the
+existing `typed_exact` route after the selected asset is validated. Selected
+queries use fixed source budgets; adaptive RRF budgeting remains exact-only.
+
 ## Bounded budget defaults
 
 `HybridTextQuery.CandidateLimit` is the returned lexical source budget. The text
@@ -278,6 +287,15 @@ legacy fallback, or primary-document scan as a substitute.
 `system_root_page_id`) and source epochs when the implementation can expose them.
 Zero epoch fields mean unavailable/not applicable, not proof of freshness.
 
+Selected `quantized_rerank` captures one typed read owner before scalar or text
+work. Scalar lookups, lexical postings, scalar-u8 traversal, canonical FP32
+rerank, fusion/collapse, and final document fetch all use that owner's snapshot
+and catalog. Concurrent publication may complete, but cannot mix old and new
+IDs, content, filters, scores, or fetched documents in one response. The
+production route receipt records only work that executed: a validated empty
+allow-set has no receipt and zero vector counters. Cancellation is propagated
+through owner acquisition and checked at source/fusion/fetch phase boundaries.
+
 ## Counters and fail-closed behavior
 
 `HybridSearchStats` is the common debug vocabulary for follow-on PRs. Required
@@ -287,6 +305,11 @@ counter families:
   `text_postings_scanned`, `text_candidates_scored`;
 - vector: `vector_candidates_requested`, `vector_candidates_returned`,
   `vector_candidates_examined`, `vector_edges_visited`;
+- selected vector: `vector_route`, `vector_quantized_score_calls`,
+  `vector_quantized_rerank_candidates`,
+  `vector_quantized_rerank_exact_score_calls`,
+  `vector_packed_exact_score_calls`, and
+  `vector_packed_exact_vector_bytes_read`;
 - scalar: `scalar_filter_lookups`, `scalar_filter_input_ids`,
   `scalar_filter_intersection_steps`, `scalar_filter_final_ids`,
   `scalar_prefilter_ids`, `scalar_postfilter_checks`,
@@ -314,6 +337,8 @@ source paths report fail-closed reasons such as `text_index_unavailable`,
 `vector_index_unavailable`, `text_index_stale`, `vector_index_stale`,
 `scalar_filter_unbounded`, `snapshot_mismatch`,
 `document_fetch_unavailable`, or `full_document_scan_forbidden`.
+`embedding_output_bytes` remains zero when the caller omits embeddings; FP32
+reads used for scoring are accounted separately from output materialization.
 
 ## Dependencies on #1764 text-search milestones
 
