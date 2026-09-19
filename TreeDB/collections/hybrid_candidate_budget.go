@@ -46,6 +46,11 @@ func (c *Collection) hybridSearchCandidatesWithBudgetPolicy(plan hybridSearchExe
 		mode = hybridCandidateBudgetPolicyAdaptive
 	}
 	if filterAllowSet != nil && len(filterAllowSet) == 0 {
+		if plan.text != nil {
+			if err := c.validateHybridTextCandidateQueryAgainstCurrentSnapshot(*plan.text); err != nil {
+				return nil, HybridSearchStats{}, hybridCandidateSourceError{source: HybridCandidateSourceText, err: err}
+			}
+		}
 		policy := HybridCandidateBudgetPolicyFixed
 		stop := HybridCandidateBudgetStopReasonFixedPolicy
 		fallback := HybridCandidateBudgetStopReasonNone
@@ -62,6 +67,12 @@ func (c *Collection) hybridSearchCandidatesWithBudgetPolicy(plan hybridSearchExe
 		return nil, stats, nil
 	}
 	if mode == hybridCandidateBudgetPolicyFixed {
+		return c.hybridSearchCandidatesFixedBudget(plan, candidateAllowSet, HybridCandidateBudgetStopReasonFixedPolicy, HybridCandidateBudgetStopReasonNone)
+	}
+	// An explicit postings cap is one request-wide guardrail. Adaptive retries
+	// would restart lower-level accounting, so capped text requests execute once
+	// with the declared source budgets.
+	if plan.text != nil && plan.text.MaxPostingsScanned > 0 {
 		return c.hybridSearchCandidatesFixedBudget(plan, candidateAllowSet, HybridCandidateBudgetStopReasonFixedPolicy, HybridCandidateBudgetStopReasonNone)
 	}
 	// Exact top-k budget proofs do not prove enough distinct chunk parents for

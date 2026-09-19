@@ -2610,6 +2610,7 @@ class TreeDBClientTests(unittest.TestCase):
                 "docs",
                 "refund policy",
                 5,
+                text_query_mode="literal",
                 operator="and",
                 candidate_limit=100,
                 max_postings_scanned=1000,
@@ -2632,6 +2633,7 @@ class TreeDBClientTests(unittest.TestCase):
                     "top_k": 5,
                     "return_embedding": True,
                     "expected_generation": 2,
+                    "text_query_mode": "literal",
                     "operator": "and",
                     "candidate_limit": 100,
                     "max_postings_scanned": 1000,
@@ -2678,8 +2680,11 @@ class TreeDBClientTests(unittest.TestCase):
                 query="refund policy",
                 query_embedding=[0.1, 0.2],
                 top_k=5,
+                text_query_mode="literal",
+                text_operator="and",
                 candidate_limit=50,
                 text_candidate_limit=25,
+                max_postings_scanned=1000,
                 vector_candidate_limit=30,
                 ef_search=64,
                 max_chunks_per_parent=1,
@@ -2708,6 +2713,9 @@ class TreeDBClientTests(unittest.TestCase):
             self.assertEqual(body["fusion"]["source_order"], ["text", "vector"])
             self.assertEqual(body["fusion"]["tie_policy"], "fused_score_best_rank_source_order_id")
             self.assertEqual(body["text_candidate_limit"], 25)
+            self.assertEqual(body["text_query_mode"], "literal")
+            self.assertEqual(body["text_operator"], "and")
+            self.assertEqual(body["max_postings_scanned"], 1000)
             self.assertEqual(body["vector_candidate_limit"], 30)
             self.assertEqual(body["max_chunks_per_parent"], 1)
             self.assertEqual(body["return_embedding"], False)
@@ -2720,6 +2728,12 @@ class TreeDBClientTests(unittest.TestCase):
 
         self.assertEqual(caught.exception.code, "invalid_request")
         self.assertIn("query or query_embedding", caught.exception.message)
+
+        with self.assertRaises(InvalidRequestError) as lexical:
+            client.search_hybrid(
+                "docs", query_embedding=[1.0, 0.0], top_k=1, text_query_mode="literal"
+            )
+        self.assertIn("lexical options require query", lexical.exception.message)
 
     def test_service_errors_propagate(self) -> None:
         routes = {

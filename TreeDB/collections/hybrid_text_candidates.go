@@ -51,8 +51,11 @@ func (c *Collection) searchHybridTextCandidatesWithScanBudget(query HybridTextQu
 	textResponse, err := c.searchText(TextSearchOptions{
 		IndexName:                query.IndexName,
 		Query:                    query.Query,
+		QueryMode:                query.QueryMode,
+		Operator:                 query.Operator,
 		TopK:                     requested,
 		CandidateLimit:           hybridTextCandidateScanCandidateLimit(scanBudget),
+		MaxPostingsScanned:       query.MaxPostingsScanned,
 		IncludeDocuments:         false,
 		textV2AllowedDocumentIDs: allowSet,
 	}, resultMode)
@@ -69,6 +72,48 @@ func (c *Collection) searchHybridTextCandidatesWithScanBudget(query HybridTextQu
 func validateHybridTextCandidateQuery(query HybridTextQuery) error {
 	if query.CandidateLimit <= 0 {
 		return fmt.Errorf("%w: text candidate limit must be positive", ErrHybridSearchUnsupported)
+	}
+	if query.MaxPostingsScanned < 0 {
+		return fmt.Errorf("%w: text max_postings_scanned must be non-negative", ErrHybridSearchUnsupported)
+	}
+	mode, err := normalizeTextSearchQueryMode(query.QueryMode)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrHybridSearchUnsupported, err)
+	}
+	if _, err := normalizeTextSearchOperator(query.Operator); err != nil {
+		return fmt.Errorf("%w: %v", ErrHybridSearchUnsupported, err)
+	}
+	if mode == TextSearchQueryModeBoolean {
+		if err := validateTextSearchBooleanQuerySyntax(query.Query, query.Operator); err != nil {
+			return fmt.Errorf("%w: %v", ErrHybridSearchUnsupported, err)
+		}
+	}
+	return nil
+}
+
+// validateHybridTextCandidateQueryAgainstCurrentSnapshot runs the
+// analyzer-dependent parse that planning cannot perform. It is used only when
+// an empty scalar allow-set skips normal candidate generation.
+func (c *Collection) validateHybridTextCandidateQueryAgainstCurrentSnapshot(query HybridTextQuery) error {
+	if c == nil || c.db == nil {
+		return hybridTextCandidateError(ErrTextIndexUnavailable, query.IndexName)
+	}
+	snapshot := c.db.AcquireSnapshot()
+	if snapshot == nil {
+		return hybridTextCandidateError(ErrTextIndexUnavailable, query.IndexName)
+	}
+	defer func() { _ = snapshot.Close() }()
+	catalog, err := c.catalogForSnapshot(snapshot)
+	if err != nil || catalog == nil {
+		return hybridTextCandidateError(ErrTextIndexUnavailable, query.IndexName)
+	}
+	index, ok := findTextIndex(catalog.meta.TextIndexes, query.IndexName)
+	if !ok {
+		return hybridTextCandidateError(ErrIndexNotFound, query.IndexName)
+	}
+	_, _, err = parseTextSearchQueryWithModeAndOptions(index.Analyzer, index.AnalyzerOptions, query.Query, query.Operator, query.QueryMode)
+	if err != nil {
+		return hybridTextCandidateError(err, query.IndexName)
 	}
 	return nil
 }

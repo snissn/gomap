@@ -236,6 +236,13 @@ come from v2 docmap blocks. Snapshot-local norm/docmap caches are bounded by the
 number of ordinal blocks touched by the query and are discarded after the search;
 no shared cross-snapshot cache is introduced.
 
+The request posting-entry limit is cumulative across the selected v2 serving
+path. Work decoded before a block-max fallback is not refunded when exact scan
+continues, and final match-attribution lookup consumes only the remaining
+allowance. Rejected and stale decoded entries count; checksum/header validation
+and blocks skipped without entry decoding do not. Exhaustion fails closed at
+the limit and never returns a partial ranking.
+
 M4 is deliberately exhaustive. It reports `posting_blocks_visited`, keeps
 `posting_blocks_skipped=0`, and does not implement WAND/BMW or scalar pruning;
 those are owned by #2628. V2 score-only candidate generation reports

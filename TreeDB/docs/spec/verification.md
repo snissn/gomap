@@ -1085,6 +1085,7 @@ Coverage:
 - `TreeDB/collections/text_search_m4_test.go`:
   - `TestSearchTextSingleTermRankedSearchM4`
   - `TestSearchTextANDOROperatorsM4`
+  - `TestSearchTextLiteralModeM4`
   - `TestSearchTextFieldWeightAffectsRankingM4`
   - `TestSearchTextMissingIndexUnsupportedSyntaxAndTruncationM4`
   - `TestSearchTextSeesUnflushedTextIndexedInsertM4`
@@ -1093,6 +1094,16 @@ Coverage:
   - `TestSearchTextTopKBoundsDocumentFetchM4`
   - `TestSearchTextReopenParityM4`
   - `BenchmarkSearchTextM4`
+- `TreeDB/collections/hybrid_text_candidates_test.go`:
+  - `TestSearchHybridTextCandidatesLexicalOptions4766`
+- `TreeDB/collections/text_v2_blockmax_test.go` and
+  `text_v2_position_validation_4558_test.go`:
+  - block-max fallback and final-attribution posting budgets remain monotonic
+    and fail closed without exceeding the explicit cap
+- `TreeDB/documentservice/rag_parity_test.go`:
+  - `TestHTTPLiteralAndBoundedFilteredLexicalSearch4766`
+  - `TestHTTPBooleanOperatorConflictParity4766`
+  - `BenchmarkHTTPFilteredLexicalSearch4766`
 
 ## 11.2 Raft Placement Route Preflight
 

@@ -132,6 +132,48 @@ class TreeDBServiceProcess:
     "set TREEDB_CLIENT_RUN_INTEGRATION=1 and install Go to run TreeDB service integration tests",
 )
 class TreeDBClientIntegrationTests(unittest.TestCase):
+    def test_literal_and_bounded_filtered_lexical_search(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="treedb_lexical_client_") as data_dir:
+            service = TreeDBServiceProcess(_support.REPO_ROOT, data_dir)
+            try:
+                service.start()
+                with closing(TreeDBClient(service.base_url, timeout=10)) as client:
+                    client.ensure_index(
+                        "docs",
+                        2,
+                        scalar_fields=[{"field": "meta.tenant", "value_type": "string"}],
+                    )
+                    client.upsert_documents(
+                        "docs",
+                        [
+                            Document(id="a", content="alpha and refund policy", embedding=[1, 0], meta={"tenant": "t1"}),
+                            Document(id="b", content="refund policy", embedding=[0, 1], meta={"tenant": "t2"}),
+                        ],
+                    )
+                    wanted = {"field": "meta.tenant", "operator": "==", "value": "t1"}
+                    keyword = client.search_keyword(
+                        "docs",
+                        '("alpha") and refund',
+                        5,
+                        text_query_mode="literal",
+                        operator="and",
+                        max_postings_scanned=64,
+                        filter=wanted,
+                    )
+                    hybrid = client.search_hybrid(
+                        "docs",
+                        query='("alpha") and refund',
+                        top_k=5,
+                        text_query_mode="literal",
+                        text_operator="and",
+                        max_postings_scanned=64,
+                        filter=wanted,
+                    )
+                    self.assertEqual([doc.id for doc in keyword.documents], ["a"])
+                    self.assertEqual([doc.id for doc in hybrid.documents], ["a"])
+            finally:
+                service.stop()
+
     def test_native_public_listener_and_client_capability(self) -> None:
         """The native listener must belong to the same running public service."""
         with tempfile.TemporaryDirectory(prefix="treedb_native_client_") as data_dir:
