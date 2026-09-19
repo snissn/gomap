@@ -2286,6 +2286,18 @@ substitute for a complete successful replay of real retained artifacts. Its
 `REPLAY_ACCEPTED_NOT_QUALIFICATION` result does not assert a campaign or baseline
 acceptance and does not modify historical `validate-qualification`.
 
+## R reference-topology correction (#4773)
+
+`TreeDB/internal/vectorpartition/router_all_levels_test.go` verifies that a
+logical domain is an unrepresented container whose depth-zero nodes are genuine
+bucket centroids, and that residual quota is assigned only to splittable
+buckets. `router_test.go` covers the deterministic sampled initializer, the
+bounded forest-work proof, v3 defaults, and forged build-metadata rejection.
+`TreeDB/collections/vector_partition_router_v1_test.go` preserves build,
+publication, reopen, pin, and strict old-record rejection across the corrected
+multi-root topology. These are product and format gates, not retained
+qualification evidence.
+
 ## M8 same-candidate router policy diagnostics (#4745)
 
 `TreeDB/collections/vector_partition_router_policy_reduce_test.go` checks the

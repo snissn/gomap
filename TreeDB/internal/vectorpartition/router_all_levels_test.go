@@ -84,7 +84,8 @@ func TestRouterGlobalBudgetDoesNotSplitDuplicateDirections(t *testing.T) {
 	cfg := DefaultRouterConfigV1()
 	cfg.RepresentativeBudget, cfg.LeafSize = 32, 1
 	// These non-axis directions have FP32 norm error: dot(x,x) need not be 1.
-	// Farthest-first initialization must not mistake that for a new direction.
+	// Sampling must retain the two distinct bitwise directions without creating
+	// an aggregate domain center or duplicate representatives.
 	model, err := BuildRouterV1([]RouterPartitionV1{{PartitionID: 0, Vectors: []RouterVectorV1{
 		{Ordinal: 0, Values: []float32{1, 1}}, {Ordinal: 1, Values: []float32{1, 1}},
 		{Ordinal: 2, Values: []float32{-1, 1}}, {Ordinal: 3, Values: []float32{-1, 1}},
@@ -92,7 +93,7 @@ func TestRouterGlobalBudgetDoesNotSplitDuplicateDirections(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(model.Nodes) != 3 || model.Metrics.UnusedBudget != 29 {
+	if len(model.Nodes) != 2 || model.Metrics.UnusedBudget != 30 {
 		t.Fatalf("fabricated duplicate-direction centers: %+v", model)
 	}
 }
@@ -121,7 +122,7 @@ func TestRouterGlobalBudgetApportionment(t *testing.T) {
 }
 
 func TestRouterGlobalBudgetCanonicalSiblingQuotaIdentity(t *testing.T) {
-	// Several seeds produce a different farthest-center order. Identity and
+	// Several seeds produce a different sampled-center order. Identity and
 	// quota ties must both use canonical sibling order after clustering.
 	for seed := int64(0); seed < 12; seed++ {
 		cfg := DefaultRouterConfigV1()
@@ -133,8 +134,40 @@ func TestRouterGlobalBudgetCanonicalSiblingQuotaIdentity(t *testing.T) {
 		if err != nil || len(model.Nodes) > 6 {
 			t.Fatalf("seed=%d: %v", seed, err)
 		}
-		if model.Nodes[1].Budget != 3 || model.Nodes[2].Budget != 2 {
+		if model.Nodes[0].Budget != 3 || model.Nodes[1].Budget != 3 {
 			t.Fatalf("noncanonical sibling quotas: %+v", model.Nodes)
 		}
+	}
+}
+
+func TestRouterDomainContainerEmitsBucketCentroidsWithoutAggregateRoot(t *testing.T) {
+	cfg := DefaultRouterConfigV1()
+	cfg.RepresentativeBudget = 16
+	vectors := make([]RouterVectorV1, 16)
+	for i := range vectors {
+		angle := 2 * math.Pi * float64(i) / float64(len(vectors))
+		vectors[i] = RouterVectorV1{Ordinal: uint64(i), Values: []float32{float32(math.Cos(angle)), float32(math.Sin(angle))}}
+	}
+	model, err := BuildRouterV1([]RouterPartitionV1{{PartitionID: 7, Vectors: vectors}}, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(model.Nodes) != 16 || model.Metrics.UnusedBudget != 0 {
+		t.Fatalf("top-level centroids=%d unused=%d want 16,0", len(model.Nodes), model.Metrics.UnusedBudget)
+	}
+	for _, node := range model.Nodes {
+		if node.ParentNodeID != 0 || node.Depth != 0 || node.MemberCount != 1 {
+			t.Fatalf("aggregate container leaked into represented topology: %+v", node)
+		}
+	}
+}
+
+func TestRouterSubtreeBudgetSkipsIneligibleBuckets(t *testing.T) {
+	got, err := apportionRouterSubtreeBudgetsV3([]int{1, 9}, []bool{false, true}, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []int{1, 9}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("subtree budgets=%v want %v", got, want)
 	}
 }

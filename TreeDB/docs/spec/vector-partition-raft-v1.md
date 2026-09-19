@@ -59,32 +59,33 @@ and vector/dimension/representative/scalar-work/persisted-byte caps. A
 conservative full 64-layer native-pack bound is checked before row or adjacency
 allocation, and the actual encoded length is checked again before append.
 The scalar-work cap counts every coordinate evaluated by construction cosine
-distances: farthest-first initialization, Lloyd assignment, empty-cluster
-repair, a possible non-progress center-selection scan, and one medoid pass for
-every represented level. Full-width selection and a non-progress selection
-scan are mutually exclusive paths. Continuing branch-cap splits retain their
-actual quota and member consumption, a terminal successful split uses its
-requested width, and a failed terminal split is charged only when another split
-is feasible. The conservative bound reuses the canonical
-per-domain budget apportionment, then maximizes each root-to-leaf path over
-quota- and member-feasible split widths because memberships are disjoint within
-each level; it does not multiply every vector by its domain's full node quota.
-Farthest-first initialization and all distance/ordinal ties are stable. Empty clusters are
-repaired deterministically by moving the farthest eligible member, with source
-ordinal as the tie break. Reserve one root per nonempty logical domain, then
-apportion the remaining budget by population using bounded integer largest
-remainders with canonical domain/node ties. Every actual node is represented;
-splitting retains its parent center and consumes one token per new child.
-Subtree quotas, leaf size, depth and non-progress bound construction. Unusable
-tokens remain unspent rather than creating duplicate centers. Metrics distinguish
-leaf-size, depth, and no-split stops and record Lloyd iterations and repairs.
-The validator reconstructs root/member totals, parent/depth paths, leaves,
-global/subtree quotas, canonical node/representative order, and
-metric totals; forged hierarchy or build metadata fails closed.
+distances: Lloyd assignment and one medoid pass for every represented level.
+Sampled initialization performs no distance scan, and empty-cluster repair
+reuses the current assignment distance. At each depth memberships are disjoint;
+the sum of split widths cannot exceed the forest's node capacity, each depth is
+fanout-bounded, and every recursive level consumes at least two additional
+nodes. The conservative preflight combines those token, depth, and fanout caps.
+
+Reserve one token per nonempty logical domain, then apportion the global budget
+by population using bounded integer largest remainders with canonical
+domain/node ties. The domain itself is a virtual container: it emits genuine
+depth-zero bucket centroids and contributes no aggregate representative.
+Splitting a retained centroid preserves it and consumes one token per child.
+Residual quota is apportioned only among children eligible under the persisted
+leaf-size and depth controls. Defaults are fanout 64 and leaf size 250.
+Sampled initialization and all distance/ordinal ties are stable. Empty clusters
+are repaired deterministically by moving the farthest eligible member using
+the cached assignment distance, with source ordinal as the tie break. Unusable
+tokens remain unspent rather than creating duplicate centers. Metrics
+distinguish leaf-size, depth, and no-split stops and record Lloyd iterations and
+repairs. The validator reconstructs all domain roots, member totals,
+parent/depth paths, leaves, eligible-only global/subtree quotas, canonical
+node/representative order, and metric totals; forged hierarchy or build
+metadata fails closed.
 
 The router asset is a native TreeDB HNSW search pack, not a sidecar centroid
 file. Every normalized representative vector is accompanied by a strict
-version-2 `VKR1` document-ID record containing:
+version-3 `VKR1` document-ID record containing:
 
 - router generation and canonical model SHA-256;
 - logical domain, provenance source ordinal, represented node, depth, member
@@ -102,7 +103,9 @@ fields cannot be rewritten during promotion. If M1 already declares
 representatives they must exactly match the computed domain/node/provenance
 records; otherwise the digest-bound READY promotion fills the complete mapping.
 Distinct represented nodes may share a source anchor. Manifest version 5 and
-READY-promotion payload version 3 carry this identity; old assets require rebuild.
+READY-promotion payload version 3 carry the unchanged mapping shape; router
+model, record, and asset identity version 3 distinguish the corrected topology.
+Old router assets require rebuild.
 Every ready generation carries the mapping in both its manifest authority and
 the strict router records; open requires exact agreement.
 
