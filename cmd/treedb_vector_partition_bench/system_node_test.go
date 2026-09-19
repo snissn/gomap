@@ -23,7 +23,7 @@ import (
 func TestVectorPartitionSystemNodeRejectsM8LoopbackAssemblyV1(t *testing.T) {
 	root := t.TempDir()
 	config := vectorPartitionSystemNodeConfigV1{
-		SchemaVersion: 2, RouterWidth: 16, RouterBeam: 16, RouterScoreBudget: 1024, ResultKind: vectorPartitionSystemNodeConfigKindV1, Assembly: "m8_loopback", Topology: "single_daemon_four_group", NodeID: "node-0",
+		SchemaVersion: 3, RouterScoreBudget: 1024, ResultKind: vectorPartitionSystemNodeConfigKindV1, Assembly: "m8_loopback", Topology: "single_daemon_four_group", NodeID: "node-0",
 		DatasetDirectory: root, DatabaseDirectory: root, StateDirectory: root, ReadyPath: filepath.Join(root, "ready.json"), PublicListen: "127.0.0.1:1",
 		LocalGroups: []vectorPartitionSystemLocalGroupV1{{GroupID: "group-a", Listen: "127.0.0.1:2"}}, Endpoints: map[string]string{"group-a": "127.0.0.1:2"},
 	}
@@ -49,7 +49,7 @@ func TestVectorPartitionSystemConfigLoadDoesNotCreateStateDirectoryV1(t *testing
 		local = append(local, vectorPartitionSystemLocalGroupV1{GroupID: group, Listen: endpoint})
 	}
 	config := vectorPartitionSystemNodeConfigV1{
-		SchemaVersion: 2, RouterWidth: 16, RouterBeam: 16, RouterScoreBudget: 1024, ResultKind: vectorPartitionSystemNodeConfigKindV1, Assembly: vectorPartitionSystemAssemblyV1,
+		SchemaVersion: 3, RouterScoreBudget: 1024, ResultKind: vectorPartitionSystemNodeConfigKindV1, Assembly: vectorPartitionSystemAssemblyV1,
 		Topology: "single_daemon_four_group", NodeID: "single", DatasetDirectory: filepath.Join(root, "dataset"),
 		DatabaseDirectory: filepath.Join(root, "database"), StateDirectory: state, CapabilityKeyPath: writeVectorPartitionSystemCapabilityKeyTestV1(t, root), PublicListen: "127.0.0.1:22004",
 		ReadyPath: filepath.Join(state, "ready.json"), ProfileDirectory: filepath.Join(state, "profiles"), LocalGroups: local, Endpoints: endpoints,
@@ -67,8 +67,8 @@ func TestVectorPartitionSystemConfigLoadDoesNotCreateStateDirectoryV1(t *testing
 	config.RouterScoreBudget = 1
 	independentBudgetPath := filepath.Join(root, "independent-budget-config.json")
 	writeVectorPartitionSystemJSONTestV1(t, independentBudgetPath, config)
-	if loaded, err := loadVectorPartitionSystemNodeConfigV1(independentBudgetPath); err != nil || loaded.RouterScoreBudget != 1 || loaded.RouterWidth != 16 {
-		t.Fatalf("independent router C/w rejected: config=%+v err=%v", loaded, err)
+	if loaded, err := loadVectorPartitionSystemNodeConfigV1(independentBudgetPath); err != nil || loaded.RouterScoreBudget != 1 {
+		t.Fatalf("independent router C rejected: config=%+v err=%v", loaded, err)
 	}
 	if _, err := os.Stat(state); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("state directory created during config load: %v", err)
@@ -153,7 +153,7 @@ func TestVectorPartitionSystemNodeSingleDaemonUsesProductionPublicRouteV1(t *tes
 		local = append(local, vectorPartitionSystemLocalGroupV1{GroupID: group, Listen: address})
 	}
 	config := vectorPartitionSystemNodeConfigV1{
-		SchemaVersion: 2, RouterWidth: 16, RouterBeam: 16, RouterScoreBudget: 1024, ResultKind: vectorPartitionSystemNodeConfigKindV1, Assembly: vectorPartitionSystemAssemblyV1,
+		SchemaVersion: 3, RouterScoreBudget: 1024, ResultKind: vectorPartitionSystemNodeConfigKindV1, Assembly: vectorPartitionSystemAssemblyV1,
 		Topology: "single_daemon_four_group", NodeID: "single-0", DatasetDirectory: dataset, DatabaseDirectory: database,
 		StateDirectory: state, CapabilityKeyPath: writeVectorPartitionSystemCapabilityKeyTestV1(t, t.TempDir()), PublicListen: "127.0.0.1:0", ReadyPath: filepath.Join(state, "ready.json"), ProfileDirectory: filepath.Join(state, "profiles"), LocalGroups: local, Endpoints: endpoints,
 		GroupAppliedIndexes: map[string]uint64{"group-a": 1, "group-b": 1, "group-c": 1, "group-d": 1},
@@ -358,7 +358,7 @@ func TestVectorPartitionSystemTopologyRequiresDistinctProductionRootsV1(t *testi
 	configs := make([]vectorPartitionSystemNodeConfigV1, len(groups))
 	for index, group := range groups {
 		configs[index] = vectorPartitionSystemNodeConfigV1{
-			SchemaVersion: 2, RouterWidth: 16, RouterBeam: 16, RouterScoreBudget: 1024, ResultKind: vectorPartitionSystemNodeConfigKindV1, Assembly: vectorPartitionSystemAssemblyV1,
+			SchemaVersion: 3, RouterScoreBudget: 1024, ResultKind: vectorPartitionSystemNodeConfigKindV1, Assembly: vectorPartitionSystemAssemblyV1,
 			Topology: "native_four_daemon_four_group", NodeID: "node-" + group, DatasetDirectory: filepath.Join(root, "dataset"),
 			DatabaseDirectory: filepath.Join(root, "db-"+group), StateDirectory: filepath.Join(root, "state-"+group), CapabilityKeyPath: capabilityKey,
 			ReadyPath: filepath.Join(root, "state-"+group, "ready.json"), LocalGroups: []vectorPartitionSystemLocalGroupV1{{GroupID: group, Listen: endpoints[group]}},
@@ -729,7 +729,7 @@ func TestVectorPartitionSystemNativeFourDaemonProcessLossAndRestartV1(t *testing
 		states[index] = filepath.Join(root, "state-"+group)
 		ready[index] = filepath.Join(states[index], "ready.json")
 		config := vectorPartitionSystemNodeConfigV1{
-			SchemaVersion: 2, RouterWidth: routerRepresentatives, RouterBeam: routerRepresentatives, RouterScoreBudget: 1024, ResultKind: vectorPartitionSystemNodeConfigKindV1, Assembly: vectorPartitionSystemAssemblyV1,
+			SchemaVersion: 3, RouterScoreBudget: 1024, ResultKind: vectorPartitionSystemNodeConfigKindV1, Assembly: vectorPartitionSystemAssemblyV1,
 			Topology: "native_four_daemon_four_group", NodeID: "native-" + group, DatasetDirectory: dataset,
 			DatabaseDirectory: databases[index], StateDirectory: states[index], CapabilityKeyPath: capabilityKey, ReadyPath: ready[index],
 			LocalGroups: []vectorPartitionSystemLocalGroupV1{{GroupID: group, Listen: endpoints[group]}}, Endpoints: endpoints,
@@ -949,7 +949,7 @@ func writeVectorPartitionSystemTopologyEvidenceTestV1(t *testing.T, endpoint, da
 		local = append(local, vectorPartitionSystemLocalGroupV1{GroupID: group, Listen: listen})
 	}
 	config := vectorPartitionSystemNodeConfigV1{
-		SchemaVersion: 2, RouterWidth: 16, RouterBeam: 16, RouterScoreBudget: 1024, ResultKind: vectorPartitionSystemNodeConfigKindV1, Assembly: vectorPartitionSystemAssemblyV1,
+		SchemaVersion: 3, RouterScoreBudget: 1024, ResultKind: vectorPartitionSystemNodeConfigKindV1, Assembly: vectorPartitionSystemAssemblyV1,
 		Topology: "single_daemon_four_group", NodeID: "single", DatasetDirectory: dataset,
 		DatabaseDirectory: filepath.Join(root, "database"), StateDirectory: filepath.Join(root, "state"), CapabilityKeyPath: capabilityKey,
 		ReadyPath: filepath.Join(root, "state", "ready.json"), PublicListen: endpoint, LocalGroups: local, Endpoints: endpoints,
@@ -981,7 +981,7 @@ func writeVectorPartitionSystemTopologyWithLiveEndpointsTestV1(t *testing.T, end
 		local = append(local, vectorPartitionSystemLocalGroupV1{GroupID: group, Listen: listener.Addr().String()})
 	}
 	config := vectorPartitionSystemNodeConfigV1{
-		SchemaVersion: 2, RouterWidth: 16, RouterBeam: 16, RouterScoreBudget: 1024, ResultKind: vectorPartitionSystemNodeConfigKindV1, Assembly: vectorPartitionSystemAssemblyV1,
+		SchemaVersion: 3, RouterScoreBudget: 1024, ResultKind: vectorPartitionSystemNodeConfigKindV1, Assembly: vectorPartitionSystemAssemblyV1,
 		Topology: "single_daemon_four_group", NodeID: "single", DatasetDirectory: dataset,
 		DatabaseDirectory: filepath.Join(root, "database"), StateDirectory: filepath.Join(root, "state"), CapabilityKeyPath: capabilityKey,
 		ReadyPath: filepath.Join(root, "state", "ready.json"), PublicListen: endpoint, LocalGroups: local, Endpoints: endpoints,

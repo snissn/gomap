@@ -61,15 +61,11 @@ func policyPersistedFixtureV1(t *testing.T) (*VectorPartitionRouterV1, *Collecti
 	return r, col, def.Name
 }
 
-func TestVectorPartitionRouterPolicyDiagnosticMatchesOrdinaryCandidatePath(t *testing.T) {
+func TestVectorPartitionRouterPolicyDiagnosticRemainsOffline(t *testing.T) {
 	r, col, index := policyPersistedFixtureV1(t)
 	query := []float32{1, 0}
 	for _, mode := range []string{VectorPartitionRouterModeExactV1, VectorPartitionRouterModeApproxV1} {
 		opts := VectorPartitionRouterPolicyDiagnosticOptionsV1{Mode: mode, ScoreBudget: 64, ReturnedWidth: 6, BeamWidth: 6, PartitionProbes: 2}
-		ordinary, err := r.SearchWithContextV1(t.Context(), query, VectorPartitionRouterSearchOptionsV2{Mode: mode, ScoreBudget: 64, ReturnedWidth: 6, BeamWidth: 6, PartitionProbes: 2})
-		if err != nil {
-			t.Fatal(err)
-		}
 		before := r.Status()
 		got, err := r.CompareRankingPoliciesForDiagnosticsV1(t.Context(), query, opts)
 		if err != nil {
@@ -79,13 +75,19 @@ func TestVectorPartitionRouterPolicyDiagnosticMatchesOrdinaryCandidatePath(t *te
 		if before.Searches != after.Searches || before.Candidates != after.Candidates || before.Edges != after.Edges || before.SearchFailures != after.SearchFailures {
 			t.Fatal("diagnostic altered serving counters")
 		}
-		if !got.CollectionComplete || got.Candidates != ordinary.Status.Candidates || got.Edges != ordinary.Status.Edges || got.UniqueReturned != 6 {
-			t.Fatalf("work mismatch %+v / %+v", got, ordinary.Status)
+		if !got.CollectionComplete || got.UniqueReturned != 6 || got.ScoreCalls == 0 {
+			t.Fatalf("incomplete historical diagnostic %+v", got)
 		}
-		for i, p := range got.Distance {
-			want := ordinary.Partitions[i]
-			if p.Domain != want.PartitionID || p.Distance != want.Distance || p.WinningRepresentative != want.WinningRepresentative || p.WinningSourceOrdinal != want.WinningSourceOrdinal {
-				t.Fatalf("different legacy route %+v / %+v", p, want)
+		if mode == VectorPartitionRouterModeExactV1 {
+			ordinary, err := r.SearchWithContextV1(t.Context(), query, VectorPartitionRouterSearchOptionsV3{Mode: mode, ScoreBudget: 64, PartitionProbes: 2})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for i, p := range got.Distance {
+				want := ordinary.Partitions[i]
+				if p.Domain != want.PartitionID || p.Distance != want.Distance || p.WinningRepresentative != want.WinningRepresentative || p.WinningSourceOrdinal != want.WinningSourceOrdinal {
+					t.Fatalf("different exact route %+v / %+v", p, want)
+				}
 			}
 		}
 		// Re-open an independent owner of the same persisted model. Results contain

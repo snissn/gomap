@@ -2,27 +2,27 @@
 
 ## R all-level router evidence boundary (#4773)
 
-The current producer uses report schema 5/result kind
-`m8_production_multi_group_evidence_v5`, explicitly binding
-`global_all_level_spherical_krt_w_E_C_v3`, global budget B, actual representative
-count, returned width w, beam E and score budget C. Defaults are B=256, w=64,
-E=96, C=1024. CLI controls are `-router-global-budget`, `-router-width`,
-`-router-beam`, and `-router-score-budget`; incompatible settings are refused,
-not clamped. System-node config version 2 carries the same server-owned search
-coordinates. Router v3 treats each domain as a virtual container, emits genuine
+The current producer uses report schema 6/result kind
+`m8_production_multi_group_evidence_v6`, explicitly binding
+`global_all_level_spherical_krt_hierarchical_C_v4`, global budget B, actual
+representative count, score budget C and probes P. Defaults are B=256 and
+C=1024. CLI controls are `-router-global-budget` and `-router-score-budget`;
+incompatible settings are refused, not clamped. System-node config version 3
+carries the same server-owned C/P coordinates. Router v3 treats each domain as
+a virtual container, emits genuine
 top-level bucket centroids, and defaults to fanout 64 and minimum cluster size
 250. Old v2 formats and retained reports remain historical and cannot replay as
 v3 evidence.
 
 Ordinary rows retain actual router score calls, distinct visits and edges,
-including failed work. Candidate-coverage, hard-score-budget, and mixed router
-refusals remain explicit `candidate_coverage_shortfall`,
-`router_score_budget_exhausted`, or `mixed_router_refusal` rows in the report,
-measurement transcript, matrix, and retained replay. They preserve observed
-counters/timing but contain no partial results or fabricated quality/throughput
-measurements. Optional policy diagnostics retain the same typed score-budget
-refusal instead of aborting the artifact. Exact attribution is fully charged
-and never a fallback.
+including failed work. A budget below the root count is an explicit
+`router_score_budget_exhausted` row in the report, measurement transcript,
+matrix, and retained replay; it preserves observed counters/timing but contains
+no partial result or fabricated quality/throughput measurement. The production
+hierarchical route always scores one root per domain, so it has no distinct
+candidate-coverage refusal. Optional historical flat-HNSW policy diagnostics
+retain their candidate-coverage and score-budget refusals instead of aborting
+the artifact. Exact attribution is fully charged and never a fallback.
 The renamed meaning of historical internal Go fields called `RouterCandidates`
 is C in this schema, not a distinct representative count. Use the explicit
 semantics/version and score-call counters when interpreting records.
@@ -32,7 +32,7 @@ bounded tree/centroid scratch; publication owns encoded records and pack build
 buffers. A reopened router borrows centers from its pinned prepared FP32 plane,
 plus canonical mapping/path metadata, rather than retaining another vector
 plane. Live owners explicitly clone any vectors they must own. Query scratch is
-bounded by the representative count, w/E and native engine limits; returned
+bounded by the representative count and pending hierarchy groups; returned
 routes are caller-owned. No query exports the corpus or retains diagnostics.
 The ordinary router benchmark uses real immutable M8 assets with setup outside
 timing; it measures router cost only, not public-service or complete ANN QPS.
@@ -713,14 +713,15 @@ counts or physical pack copies. Equal frequency uses nearest distance then domai
 ID; representative-distance ties use the immutable model ordinal. Different
 centroids can share source anchors or coordinates and remain different votes.
 
-`-m8-router-policy-width W` selects the nearest W collected representatives before
-voting; zero uses the configured router width w. Exact-reference collection
-scores **all representatives**, then takes nearest W. Approximate collection
-uses the same production traversal with independently configured returned width
-w, beam E, and strict score-call ceiling C. It neither clamps C to w/E nor
-retries with a larger budget. Returned width is not the number of vectors
-scored. The historical commands above retain their original removed flag names
-and pre-R semantics; they are provenance, not current CLI examples.
+`-m8-router-policy-width W` selects the nearest W collected representatives
+before voting; zero uses the persisted model size. Exact-reference collection
+scores **all representatives**, then takes nearest W. Approximate collection is
+the retained historical flat-HNSW collector with returned width W, traversal
+beam E equal to the persisted model size, and strict score-call ceiling C. It
+is not the production hierarchical route and neither clamps C nor retries with
+a larger budget. Returned width is not the number of vectors scored. The
+historical commands above retain their original removed flag names and pre-R
+semantics; they are provenance, not current CLI examples.
 
 A comparison preserves a permutation-invariant candidate-set digest separately
 from the collected sequence digest. Both bind model, query, score convention,

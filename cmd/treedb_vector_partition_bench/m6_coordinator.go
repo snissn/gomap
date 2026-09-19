@@ -216,7 +216,7 @@ func (h *m6CoordinatorHarnessV1) search(ctx context.Context, query []float64, pr
 		IndexName: h.indexName, IndexDefinitionDigest: h.indexDigest,
 		Query: query32, Metric: nativewire.VectorPartitionShardSearchMetricCosineV1,
 		RouterMode:        collections.VectorPartitionRouterModeExactV1,
-		RouterScoreBudget: h.routerCandidates, RouterReturnedWidth: h.routerCandidates, RouterBeamWidth: h.routerCandidates, PartitionProbes: probes,
+		RouterScoreBudget: h.routerCandidates, PartitionProbes: probes,
 		Consistency: nativewire.VectorPartitionShardSearchConsistencySnapshotV1,
 		StatsMode:   nativewire.VectorPartitionShardSearchStatsBasicV1,
 		TopK:        topK, EfSearch: max(topK, 128),

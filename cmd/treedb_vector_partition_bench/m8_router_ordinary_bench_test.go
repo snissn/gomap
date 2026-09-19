@@ -35,12 +35,12 @@ func m8RouterPreparedBenchFixtureV1(b *testing.B) (*m8ProductionMultiGroupAssets
 	return h, out
 }
 
-// This V2 recipe declares separate w/E/C. The historical V1 recipe belongs to
-// its original commit; it is not a matched-work comparison with this benchmark.
+// This V3 recipe uses the production hierarchical C-budget route. Historical
+// flat-HNSW recipes belong to their original commits and are not matched work.
 // This is router query cost, NOT full partition ANN QPS or public-service QPS.
 func BenchmarkM8RouterOrdinaryPathV1(b *testing.B) {
 	h, queries := m8RouterPreparedBenchFixtureV1(b)
-	opts := collections.VectorPartitionRouterSearchOptionsV2{Mode: collections.VectorPartitionRouterModeApproxV1, ScoreBudget: 4096, ReturnedWidth: int(h.status.Representatives), BeamWidth: int(h.status.Representatives), PartitionProbes: 2}
+	opts := collections.VectorPartitionRouterSearchOptionsV3{Mode: collections.VectorPartitionRouterModeApproxV1, ScoreBudget: 4096, PartitionProbes: 2}
 	ctx := context.Background()
 	for _, q := range queries {
 		if _, err := h.router.SearchWithContextV1(ctx, q, opts); err != nil {

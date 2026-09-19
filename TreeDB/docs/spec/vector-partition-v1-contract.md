@@ -38,16 +38,17 @@ source identity are digest-bound and checked on open. Routing remains
 nearest-center distance, with deterministic domain/representative ties;
 frequency voting is diagnostic only.
 
-Search explicitly separates returned width **w**, retained traversal beam **E**,
-and actual score-call ceiling **C** (`VectorPartitionRouterSearchOptionsV2`).
-C is independently bounded to [1, 1,000,000] before execution.
-Require `1 <= w <= E <= actual representatives`; C is positive and may exceed
-the representative count because upper-level navigation can score a vector
-again. Every such score is charged. Exhaustion returns a budget error and no
-partial routes; no clamping or exact fallback occurs. Fewer distinct domains
-than requested is a separate coverage error. The explicit exact reference
-scores all representatives; use `w=E=N, C>=N` for the full-domain oracle. An
-exact scan truncated to w is only the matched-width representative reference.
+Search uses partition probes **P** and actual centroid score-call ceiling **C**
+(`VectorPartitionRouterSearchOptionsV3`). C is bounded to [1, 1,000,000]
+before execution. Approximate search requires C to cover every depth-zero
+centroid, scores those roots first, and then expands complete sibling groups in
+best-parent-distance order. If the next complete group does not fit C, search
+stops successfully without partially scoring it. Every logical domain has a
+scored root, so routing ranks all domains by their minimum scored-centroid
+distance with stable domain/node ties and returns P domains. The explicit exact
+reference requires C at least equal to N, scores all N representatives, and
+uses the same domain reducer. No mode clamps C, retries with a larger budget,
+or falls back to exact search.
 
 This is an intentional pre-alpha format break: router model/record/asset
 semantics are version 3. Manifest binary version 5 and ready-promotion payload
@@ -60,9 +61,10 @@ reopen, GC/rewrite reachability, and persistent-value-log obligations remain.
 The mapped immutable owner retains vector storage; live owners still clone
 their retained vectors before the pin is released.
 
-The benchmark uses `-router-global-budget`, `-router-width`, `-router-beam`,
-and `-router-score-budget`. M8 evidence is schema 5, system-node config is
-schema 2, and policy diagnostic method/digests bind the new beam semantics.
+The benchmark uses `-router-global-budget` and `-router-score-budget`. M8
+evidence is schema 6, system-node config is schema 3, and production routing
+binds hierarchical C/P semantics. Width/beam remain only in the immutable
+offline flat-HNSW policy diagnostic and are not serving controls.
 Old #4744/#4745 receipts remain historical; neither rebuilding nor changing
 their labels makes them evidence for this revision. R does not correct local
 HNSW, change memberships, or establish the final scaling/recall verdict.
@@ -143,7 +145,7 @@ a response.
 Representative routing and partition-local HNSW are separate approximations:
 
 - `RouteExactV1` is the representative-routing oracle. Approximate
-  representative routing has an explicit candidate budget and reports recall
+  representative routing has an explicit score-call budget and reports recall
   separately from partition-local loss.
 - `hnsw_search_pack_v1` is a partition-local ANN traversal. The historical
   `exact_hnsw_search_pack_v1` route label names the prepared native search-pack

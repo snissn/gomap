@@ -21,9 +21,9 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/raftplacement"
 )
 
-// Version 2 makes router width, beam and actual-score budget explicit. Requests
-// using the former coupled candidate budget must be rebuilt, not reinterpreted.
-const VectorPartitionCoordinatorVersionV1 uint32 = 2
+// Version 3 replaces the flat-HNSW width/beam contract with direct hierarchical
+// routing controlled only by the actual centroid-score budget C and probes P.
+const VectorPartitionCoordinatorVersionV1 uint32 = 3
 
 var (
 	ErrVectorPartitionCoordinatorInvalidRequest     = errors.New("nativewire: invalid vector partition coordinator request")
@@ -83,7 +83,7 @@ func (e *VectorPartitionCoordinatorErrorV1) Unwrap() error {
 
 type VectorPartitionCoordinatorLimitsV1 struct {
 	MaxSelectedPartitions, MaxGroups, MaxRequests, MaxConcurrentRequests int
-	MaxRetries, MaxRedirects, MaxRouterCandidates                        int
+	MaxRetries, MaxRedirects, MaxRouterScoreCalls                        int
 	MaxQueryBytes, MaxTopK, MaxEfSearch, MaxPartitionsPerRequest         int
 	MaxIdentityBytes, MaxStableIDBytes, MaxMergeEntries                  int
 	MaxRequestBytes, MaxCandidateBytes, MaxResponseBytes                 uint64
@@ -99,7 +99,7 @@ func DefaultVectorPartitionCoordinatorLimitsV1() VectorPartitionCoordinatorLimit
 		MaxConcurrentRequests:   8,
 		MaxRetries:              1,
 		MaxRedirects:            1,
-		MaxRouterCandidates:     1_000_000,
+		MaxRouterScoreCalls:     1_000_000,
 		MaxQueryBytes:           shard.MaxQueryBytes,
 		MaxTopK:                 shard.MaxTopK,
 		MaxEfSearch:             shard.MaxEfSearch,
@@ -117,7 +117,7 @@ func DefaultVectorPartitionCoordinatorLimitsV1() VectorPartitionCoordinatorLimit
 // VectorPartitionCoordinatorRouterV1 is the exact pinned M4 generation used by
 // one coordinator request.
 type VectorPartitionCoordinatorRouterV1 interface {
-	SearchWithContextV1(context.Context, []float32, collections.VectorPartitionRouterSearchOptionsV2) (collections.VectorPartitionRouterSearchResultV1, error)
+	SearchWithContextV1(context.Context, []float32, collections.VectorPartitionRouterSearchOptionsV3) (collections.VectorPartitionRouterSearchResultV1, error)
 	Status() collections.VectorPartitionRouterRuntimeStatusV1
 	Close() error
 }
@@ -237,8 +237,6 @@ type VectorPartitionCoordinatorRequestV1 struct {
 	Metric              VectorPartitionShardSearchMetricV1
 	RouterMode          string
 	RouterScoreBudget   int
-	RouterReturnedWidth int
-	RouterBeamWidth     int
 	PartitionProbes     int
 	Consistency         VectorPartitionShardSearchConsistencyV1
 	StatsMode           VectorPartitionShardSearchStatsModeV1
@@ -820,7 +818,7 @@ func normalizeVectorPartitionCoordinatorLimitsV1(limits VectorPartitionCoordinat
 	if limits.MaxRedirects == 0 {
 		limits.MaxRedirects = defaults.MaxRedirects
 	}
-	fillInt(&limits.MaxRouterCandidates, defaults.MaxRouterCandidates)
+	fillInt(&limits.MaxRouterScoreCalls, defaults.MaxRouterScoreCalls)
 	fillInt(&limits.MaxQueryBytes, defaults.MaxQueryBytes)
 	fillInt(&limits.MaxTopK, defaults.MaxTopK)
 	fillInt(&limits.MaxEfSearch, defaults.MaxEfSearch)
@@ -836,7 +834,7 @@ func normalizeVectorPartitionCoordinatorLimitsV1(limits VectorPartitionCoordinat
 	}
 	if limits.MaxSelectedPartitions < 1 || limits.MaxGroups < 1 || limits.MaxRequests < 1 ||
 		limits.MaxConcurrentRequests < 1 || limits.MaxConcurrentRequests > limits.MaxRequests ||
-		limits.MaxRetries < 0 || limits.MaxRedirects < 0 || limits.MaxRouterCandidates < 1 ||
+		limits.MaxRetries < 0 || limits.MaxRedirects < 0 || limits.MaxRouterScoreCalls < 1 ||
 		limits.MaxQueryBytes < 4 ||
 		limits.MaxTopK < 1 ||
 		limits.MaxEfSearch < limits.MaxTopK ||
@@ -982,9 +980,9 @@ func (c *VectorPartitionCoordinatorV1) searchV1(ctx context.Context, request Vec
 	}
 
 	routerStarted := time.Now()
-	routed, err := router.SearchWithContextV1(requestCtx, request.Query, collections.VectorPartitionRouterSearchOptionsV2{
+	routed, err := router.SearchWithContextV1(requestCtx, request.Query, collections.VectorPartitionRouterSearchOptionsV3{
 		Mode: request.RouterMode, ScoreBudget: request.RouterScoreBudget,
-		ReturnedWidth: request.RouterReturnedWidth, BeamWidth: request.RouterBeamWidth, PartitionProbes: request.PartitionProbes,
+		PartitionProbes: request.PartitionProbes,
 	})
 	response.Timing.RouterSearchNanos = elapsedNanosV1(routerStarted)
 	response.Counters.RouterScoreCalls = routed.Status.ScoreCalls
@@ -1263,9 +1261,7 @@ func (c *VectorPartitionCoordinatorV1) validateRequest(request VectorPartitionCo
 		request.PartitionProbes < 1 || request.PartitionProbes > l.MaxSelectedPartitions ||
 		request.PartitionProbes > int(p.PartitionCount) ||
 		request.RouterScoreBudget < 1 ||
-		request.RouterScoreBudget > min(l.MaxRouterCandidates, collections.MaxVectorPartitionRouterScoreBudgetV2) ||
-		request.RouterReturnedWidth < 1 || request.RouterReturnedWidth > request.RouterBeamWidth ||
-		request.RouterBeamWidth > l.MaxRouterCandidates ||
+		request.RouterScoreBudget > min(l.MaxRouterScoreCalls, collections.MaxVectorPartitionRouterScoreBudgetV3) ||
 		request.TopK < 1 || request.TopK > l.MaxTopK ||
 		request.EfSearch < request.TopK || request.EfSearch > l.MaxEfSearch ||
 		request.MergeEntriesLimit < 1 || request.MergeEntriesLimit > l.MaxMergeEntries {
@@ -1339,12 +1335,12 @@ func (c *VectorPartitionCoordinatorV1) validateRouterStatus(status collections.V
 }
 
 func validateVectorPartitionCoordinatorRouterRequestV1(request VectorPartitionCoordinatorRequestV1, status collections.VectorPartitionRouterRuntimeStatusV1, domainCount int) error {
-	if request.PartitionProbes > domainCount || request.RouterBeamWidth > int(status.Representatives) {
+	if request.PartitionProbes > domainCount {
 		return ErrVectorPartitionCoordinatorInvalidRequest
 	}
 	if request.RouterMode == collections.VectorPartitionRouterModeExactV1 &&
 		request.RouterScoreBudget < int(status.Representatives) {
-		return fmt.Errorf("%w: exact router candidate budget", ErrVectorPartitionCoordinatorBudgetExceeded)
+		return fmt.Errorf("%w: exact router score budget", ErrVectorPartitionCoordinatorBudgetExceeded)
 	}
 	return nil
 }

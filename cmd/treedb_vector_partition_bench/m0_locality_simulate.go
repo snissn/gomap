@@ -89,7 +89,7 @@ func runM0LocalitySimulateV1(args []string, stdout io.Writer) error {
 	if err := m0ValidateCaptureSplitPairV1(calibration, holdout, fixture.Queries); err != nil {
 		return err
 	}
-	if calibration.PageScope != holdout.PageScope || calibration.Probes != holdout.Probes || calibration.RouterScoreBudget != holdout.RouterScoreBudget || calibration.RouterWidth != holdout.RouterWidth || calibration.RouterBeam != holdout.RouterBeam || calibration.EF != holdout.EF {
+	if calibration.PageScope != holdout.PageScope || calibration.Probes != holdout.Probes || calibration.RouterScoreBudget != holdout.RouterScoreBudget || calibration.EF != holdout.EF {
 		return errors.New("calibration and holdout capture settings differ")
 	}
 	artifactRaw, err := os.ReadFile(artifactPath)
@@ -153,7 +153,7 @@ func m0ValidateCaptureSplitPairV1(calibration, holdout m0LocalityCaptureV1, quer
 	if queryCount < 1 || calibration.Split == "" || calibration.Split == holdout.Split || len(calibration.Rows) == 0 || len(holdout.Rows) == 0 || len(calibration.Rows)+len(holdout.Rows) != queryCount {
 		return errors.New("capture split identity")
 	}
-	if calibration.DB != holdout.DB || calibration.Artifact != holdout.Artifact || calibration.Descriptor != holdout.Descriptor || calibration.Source != holdout.Source || calibration.Manifest != holdout.Manifest || calibration.ReadySet != holdout.ReadySet || calibration.RouterModel != holdout.RouterModel || calibration.BinarySHA256 != holdout.BinarySHA256 || calibration.SourceRevision != holdout.SourceRevision || calibration.VCSModified != holdout.VCSModified || calibration.Probes != holdout.Probes || calibration.RouterScoreBudget != holdout.RouterScoreBudget || calibration.RouterWidth != holdout.RouterWidth || calibration.RouterBeam != holdout.RouterBeam || calibration.EF != holdout.EF || calibration.PageScope != holdout.PageScope {
+	if calibration.DB != holdout.DB || calibration.Artifact != holdout.Artifact || calibration.Descriptor != holdout.Descriptor || calibration.Source != holdout.Source || calibration.Manifest != holdout.Manifest || calibration.ReadySet != holdout.ReadySet || calibration.RouterModel != holdout.RouterModel || calibration.BinarySHA256 != holdout.BinarySHA256 || calibration.SourceRevision != holdout.SourceRevision || calibration.VCSModified != holdout.VCSModified || calibration.Probes != holdout.Probes || calibration.RouterScoreBudget != holdout.RouterScoreBudget || calibration.EF != holdout.EF || calibration.PageScope != holdout.PageScope {
 		return errors.New("capture retained input identity")
 	}
 	seen := make([]bool, queryCount)
@@ -183,7 +183,7 @@ func m0ReadCaptureV1(path string) (m0LocalityCaptureV1, string, error) {
 	if err := json.Unmarshal(raw, &capture); err != nil {
 		return m0LocalityCaptureV1{}, "", err
 	}
-	if capture.Schema != "treedb_vector_partition_m0_exact_pack_trace_v4" || capture.RouterScoreBudget < 1 || capture.RouterScoreBudget > collections.MaxVectorPartitionRouterScoreBudgetV2 || capture.RouterWidth < 1 || capture.RouterWidth > capture.RouterBeam || !m8SHA256V1(capture.Artifact) || !m8SHA256V1(capture.Descriptor) || capture.Source.SourceID == "" || !m8SHA256V1(capture.Source.Checksum) || capture.Source.Vectors < 1 || capture.Source.Dimensions < 1 || capture.Source.Metric == "" || !m8SHA256V1(capture.Manifest) || !m8SHA256V1(capture.ReadySet) || !m8SHA256V1(capture.RouterModel) || !m0CleanBuildIdentityValidV1(m0CleanBuildIdentityV1{BinarySHA256: capture.BinarySHA256, SourceRevision: capture.SourceRevision, VCSModified: capture.VCSModified}) || len(capture.Traces) == 0 || len(capture.Snapshots) == 0 || len(capture.Traces) != len(capture.Rows) {
+	if capture.Schema != "treedb_vector_partition_m0_exact_pack_trace_v5" || capture.RouterScoreBudget < 1 || capture.RouterScoreBudget > collections.MaxVectorPartitionRouterScoreBudgetV3 || !m8SHA256V1(capture.Artifact) || !m8SHA256V1(capture.Descriptor) || capture.Source.SourceID == "" || !m8SHA256V1(capture.Source.Checksum) || capture.Source.Vectors < 1 || capture.Source.Dimensions < 1 || capture.Source.Metric == "" || !m8SHA256V1(capture.Manifest) || !m8SHA256V1(capture.ReadySet) || !m8SHA256V1(capture.RouterModel) || !m0CleanBuildIdentityValidV1(m0CleanBuildIdentityV1{BinarySHA256: capture.BinarySHA256, SourceRevision: capture.SourceRevision, VCSModified: capture.VCSModified}) || len(capture.Traces) == 0 || len(capture.Snapshots) == 0 || len(capture.Traces) != len(capture.Rows) {
 		return m0LocalityCaptureV1{}, "", errors.New("raw capture schema or trace payload")
 	}
 	if len(capture.PackIdentityNeutralSHA256) > 0 {

@@ -66,9 +66,9 @@ func (h *m8AttributionHarnessV1) enableRouterPoliciesV1(width, approximateBudget
 	n := int(h.assets.status.Representatives)
 	effective := width
 	if effective == 0 {
-		effective = h.assets.routerWidth
+		effective = h.assets.policyDiagnosticWidth
 	}
-	if approximateBudget < 1 || width < 0 || effective < 1 || effective > h.assets.routerBeam || h.assets.routerBeam > n {
+	if approximateBudget < 1 || width < 0 || effective < 1 || effective > h.assets.policyDiagnosticBeam || h.assets.policyDiagnosticBeam > n {
 		return errors.New("invalid policy experiment effective width/budget")
 	}
 	h.policies = &m8RouterPolicyCacheV1{requestedWidth: width, width: effective, approximateBudget: approximateBudget, byProbes: make(map[int]*m8RouterPolicyEvidenceV1)}
@@ -89,7 +89,7 @@ func (h *m8AttributionHarnessV1) routerPolicyOutcomeV1(ctx context.Context, i, p
 	if mode == collections.VectorPartitionRouterModeExactV1 {
 		budget = int(h.assets.status.Representatives)
 	}
-	c, err := h.assets.router.CompareRankingPoliciesForDiagnosticsV1(ctx, query, collections.VectorPartitionRouterPolicyDiagnosticOptionsV1{Mode: mode, ScoreBudget: budget, ReturnedWidth: p.width, BeamWidth: h.assets.routerBeam, PartitionProbes: probes})
+	c, err := h.assets.router.CompareRankingPoliciesForDiagnosticsV1(ctx, query, collections.VectorPartitionRouterPolicyDiagnosticOptionsV1{Mode: mode, ScoreBudget: budget, ReturnedWidth: p.width, BeamWidth: h.assets.policyDiagnosticBeam, PartitionProbes: probes})
 	out := m8RouterPolicyOutcomeV1{Status: "pass", Comparison: c}
 	if err != nil {
 		if errors.Is(err, collections.ErrVectorPartitionRouterCandidateCoverageV1) {
@@ -299,7 +299,7 @@ func m8ValidateRouterPolicyEvidenceV1(e *m8RouterPolicyEvidenceV1, q *m8QualityA
 	return nil
 }
 
-func m8RouterPolicyEvidenceSelectionV1(cfg m8ProductionConfigEvidenceV1, row m8ProductionRowV1) error {
+func m8RouterPolicyEvidenceSelectionV1(cfg m8ProductionConfigEvidenceV1, routerRepresentatives int, row m8ProductionRowV1) error {
 	e := row.Attribution.RouterPolicies
 	if !cfg.RouterPolicyDiagnostics {
 		if cfg.RouterPolicyWidth != 0 || e != nil {
@@ -309,9 +309,9 @@ func m8RouterPolicyEvidenceSelectionV1(cfg m8ProductionConfigEvidenceV1, row m8P
 	}
 	effectiveWidth := cfg.RouterPolicyWidth
 	if effectiveWidth == 0 {
-		effectiveWidth = cfg.RouterWidth
+		effectiveWidth = routerRepresentatives
 	}
-	if !cfg.QualityDiagnostics || cfg.RouterWidth < 1 || cfg.RouterWidth > cfg.RouterBeam || cfg.RouterPolicyWidth < 0 || effectiveWidth < 1 || effectiveWidth > cfg.RouterBeam {
+	if !cfg.QualityDiagnostics || routerRepresentatives < 1 || cfg.RouterPolicyWidth < 0 || effectiveWidth < 1 || effectiveWidth > routerRepresentatives {
 		return errors.New("invalid router policy configuration")
 	}
 	if row.Status != "pass" && row.Status != "fail" && !m8ProductionRouterRefusalStatusV1(row.Status) {
@@ -327,7 +327,7 @@ func m8RouterPolicyEvidenceSelectionV1(cfg m8ProductionConfigEvidenceV1, row m8P
 		return errors.New("policy requested/effective config mismatch")
 	}
 	for _, query := range e.Queries {
-		if query.Exact.Comparison.BeamWidth != cfg.RouterBeam || query.Approximate.Comparison.BeamWidth != cfg.RouterBeam {
+		if query.Exact.Comparison.BeamWidth != routerRepresentatives || query.Approximate.Comparison.BeamWidth != routerRepresentatives {
 			return errors.New("policy beam config mismatch")
 		}
 	}
@@ -349,7 +349,7 @@ func m8PlanRouterPolicyDiagnosticsV1(cfg config, m fixtureManifest, domainCounts
 	if len(cfg.m8RouterPolicyRepresentativeCounts) > 0 && len(cfg.m8RouterPolicyRepresentativeCounts) != len(domainCounts) {
 		return 0, 0, errors.New("policy model-count preflight cardinality mismatch")
 	}
-	if !cfg.m8QualityDiagnostics || cfg.topK < 1 || cfg.topK > 10 || cfg.routerCandidates < 1 || cfg.m8RouterPolicyWidth < 0 || cfg.m8RouterPolicyWidth > cfg.routerBeam || m.Vectors < 1 || m.Queries < 1 || m.Dimensions < 1 || m.Dimensions > maxDimensions || len(cfg.probes) < 1 || len(cfg.efSearch) < 1 || len(cfg.concurrency) < 1 || capUnits < 1 || capBytes < 1 {
+	if !cfg.m8QualityDiagnostics || cfg.topK < 1 || cfg.topK > 10 || cfg.routerCandidates < 1 || cfg.m8RouterPolicyWidth < 0 || cfg.m8RouterPolicyWidth > vectorpartition.DefaultRouterConfigV1().MaxRepresentatives || m.Vectors < 1 || m.Queries < 1 || m.Dimensions < 1 || m.Dimensions > maxDimensions || len(cfg.probes) < 1 || len(cfg.efSearch) < 1 || len(cfg.concurrency) < 1 || capUnits < 1 || capBytes < 1 {
 		return 0, 0, errors.New("invalid policy diagnostic work shape")
 	}
 	if len(domainCounts) == 0 {

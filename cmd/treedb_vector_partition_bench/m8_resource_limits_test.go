@@ -169,7 +169,7 @@ func TestM8ProductionResourcesReportRequestRouterBudgetV1(t *testing.T) {
 	}
 	got := m8ProductionResourcesV1(cfg, fixtureManifest{Vectors: 1, Dimensions: 1}, assets, nil, m8ProductionFaultResourceBoundaryV1{}, nativewire.VectorPartitionM8ProductionMultiGroupEvidenceV1{}, m8ProductionFaultResourceBoundaryV1{})
 	for _, comparison := range got.LimitComparisons {
-		if comparison.Name != "coordinator_router_candidates" {
+		if comparison.Name != "coordinator_router_score_calls" {
 			continue
 		}
 		if comparison.Observed != uint64(assets.status.Representatives) {
@@ -177,7 +177,7 @@ func TestM8ProductionResourcesReportRequestRouterBudgetV1(t *testing.T) {
 		}
 		return
 	}
-	t.Fatal("missing coordinator_router_candidates comparison")
+	t.Fatal("missing coordinator_router_score_calls comparison")
 }
 
 func TestM8ProductionRequestReservesPhysicalPackMergeBudgetV1(t *testing.T) {

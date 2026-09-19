@@ -235,7 +235,7 @@ func (c *vectorPartitionRouterDeadlineAfterErrContextV1) Err() error {
 	return nil
 }
 
-func TestVectorPartitionRouterApproxDeadlineInterruptsNativeTraversalV1(t *testing.T) {
+func TestVectorPartitionRouterApproxDeadlineInterruptsHierarchyTraversalV1(t *testing.T) {
 	const rows = 4096
 	input := columnHNSWSearchPackBuildInput{
 		Rows: rows, Dimensions: 1, VectorStride: 4,
@@ -272,31 +272,35 @@ func TestVectorPartitionRouterApproxDeadlineInterruptsNativeTraversalV1(t *testi
 	view, handle := testColumnHNSWSearchPackPreparedViewFromBytes2314(
 		t, raw, mappedresource.SourceHeapCopy, input.BaseIdentity,
 	)
-	scratch := &columnVectorGraphNativeSearchScratch{}
+	model := internalrouter.RouterModelV1{Dimensions: 1}
+	for ordinal := range rows {
+		nodeID := uint32(ordinal + 1)
+		model.Nodes = append(model.Nodes, internalrouter.RouterHierarchyNodeV1{NodeID: nodeID, PartitionID: 0, Depth: 0, MemberCount: 1, Leaf: true, Budget: 1})
+		model.Representatives = append(model.Representatives, internalrouter.RouterRepresentativeV1{PartitionID: 0, NodeID: nodeID, Depth: 0, MemberCount: 1, Path: []uint32{nodeID}, Values: []float32{1}})
+	}
+	hierarchy, err := buildVectorPartitionRouterHierarchyV3(model)
+	if err != nil {
+		t.Fatal(err)
+	}
 	router := &VectorPartitionRouterV1{
-		model: internalrouter.RouterModelV1{
-			Dimensions:      1,
-			Representatives: make([]internalrouter.RouterRepresentativeV1, rows),
-		},
-		view:        view,
-		viewToModel: make([]int, rows),
+		model: model, view: view, hierarchy: hierarchy,
 	}
-	router.scratch.New = func() any { return scratch }
+	router.route.New = func() any {
+		return &vectorPartitionRouterRouteScratchV3{best: make([]VectorPartitionRouterPartitionScoreV1, 1)}
+	}
 
-	// Five polls cover router/search preflight and scratch/query setup. The
-	// ninth poll fires only after the disconnected layer-0 traversal has seeded
-	// multiple representatives, making the deadline point deterministic.
+	// The fourth poll fires after the first 256 root scores.
 	ctx := &vectorPartitionRouterDeadlineAfterErrContextV1{
-		Context: context.Background(), deadlineAfter: 9,
+		Context: context.Background(), deadlineAfter: 4,
 	}
-	result, err := router.SearchWithContextV1(ctx, []float32{1}, VectorPartitionRouterSearchOptionsV2{
-		Mode: VectorPartitionRouterModeApproxV1, ScoreBudget: rows, ReturnedWidth: rows, BeamWidth: rows, PartitionProbes: 1,
+	result, err := router.SearchWithContextV1(ctx, []float32{1}, VectorPartitionRouterSearchOptionsV3{
+		Mode: VectorPartitionRouterModeApproxV1, ScoreBudget: rows, PartitionProbes: 1,
 	})
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("result=%+v err=%v want deadline exceeded", result, err)
 	}
-	if ctx.calls != ctx.deadlineAfter || len(scratch.top) <= 1 || len(scratch.top) >= rows {
-		t.Fatalf("deadline calls=%d partial candidates=%d rows=%d", ctx.calls, len(scratch.top), rows)
+	if ctx.calls != ctx.deadlineAfter || result.Status.ScoreCalls != 256 {
+		t.Fatalf("deadline calls=%d score calls=%d", ctx.calls, result.Status.ScoreCalls)
 	}
 	if result.Status.FailureReason != context.DeadlineExceeded.Error() {
 		t.Fatalf("failure reason=%q", result.Status.FailureReason)
@@ -501,8 +505,8 @@ func TestPartitionRouterBuildPublishSearchReopenAndPinsV1(t *testing.T) {
 	}
 	var exactPartitionOrder []uint32
 	for _, mode := range []string{VectorPartitionRouterModeExactV1, VectorPartitionRouterModeApproxV1} {
-		result, err := router.Search([]float32{1, 0}, VectorPartitionRouterSearchOptionsV2{
-			Mode: mode, ScoreBudget: 64, ReturnedWidth: 6, BeamWidth: 6, PartitionProbes: 2,
+		result, err := router.Search([]float32{1, 0}, VectorPartitionRouterSearchOptionsV3{
+			Mode: mode, ScoreBudget: 64, PartitionProbes: 2,
 		})
 		if err != nil {
 			t.Fatalf("%s search: %v", mode, err)
@@ -520,16 +524,16 @@ func TestPartitionRouterBuildPublishSearchReopenAndPinsV1(t *testing.T) {
 		if mode == VectorPartitionRouterModeExactV1 {
 			exactPartitionOrder = order
 		} else if !reflect.DeepEqual(order, exactPartitionOrder) {
-			t.Fatalf("full-candidate HNSW partition order=%v want exact=%v", order, exactPartitionOrder)
+			t.Fatalf("full-budget hierarchy partition order=%v want exact=%v", order, exactPartitionOrder)
 		}
 	}
-	if _, err := router.Search([]float32{1, 0}, VectorPartitionRouterSearchOptionsV2{
-		Mode: VectorPartitionRouterModeExactV1, ScoreBudget: 3, ReturnedWidth: 3, BeamWidth: 3, PartitionProbes: 1,
+	if _, err := router.Search([]float32{1, 0}, VectorPartitionRouterSearchOptionsV3{
+		Mode: VectorPartitionRouterModeExactV1, ScoreBudget: 3, PartitionProbes: 1,
 	}); err == nil {
 		t.Fatal("undersized exact candidate budget succeeded")
 	}
-	oversizedExact, err := router.Search([]float32{1, 0}, VectorPartitionRouterSearchOptionsV2{
-		Mode: VectorPartitionRouterModeExactV1, ScoreBudget: 1024, ReturnedWidth: 6, BeamWidth: 6, PartitionProbes: 2,
+	oversizedExact, err := router.Search([]float32{1, 0}, VectorPartitionRouterSearchOptionsV3{
+		Mode: VectorPartitionRouterModeExactV1, ScoreBudget: 1024, PartitionProbes: 2,
 	})
 	if err != nil {
 		t.Fatalf("oversized exact candidate budget: %v", err)
@@ -537,8 +541,8 @@ func TestPartitionRouterBuildPublishSearchReopenAndPinsV1(t *testing.T) {
 	if oversizedExact.Status.ScoreBudget != 1024 || oversizedExact.Status.Candidates != 6 || oversizedExact.Status.Selected != 2 {
 		t.Fatalf("oversized exact status=%+v", oversizedExact.Status)
 	}
-	if _, err := router.Search([]float32{1, 0}, VectorPartitionRouterSearchOptionsV2{
-		Mode: VectorPartitionRouterModeApproxV1, ScoreBudget: 1024, ReturnedWidth: 1024, BeamWidth: 1024, PartitionProbes: 1,
+	if _, err := router.Search([]float32{1, 0}, VectorPartitionRouterSearchOptionsV3{
+		Mode: VectorPartitionRouterModeApproxV1, ScoreBudget: MaxVectorPartitionRouterScoreBudgetV3 + 1, PartitionProbes: 1,
 	}); err == nil {
 		t.Fatal("oversized approximate candidate budget succeeded")
 	}
@@ -549,8 +553,8 @@ func TestPartitionRouterBuildPublishSearchReopenAndPinsV1(t *testing.T) {
 	if err != nil || partitionStatus.ReaderPins != 0 {
 		t.Fatalf("released status=%+v err=%v", partitionStatus, err)
 	}
-	if _, err := router.Search([]float32{1, 0}, VectorPartitionRouterSearchOptionsV2{
-		Mode: VectorPartitionRouterModeExactV1, ScoreBudget: 64, ReturnedWidth: 6, BeamWidth: 6, PartitionProbes: 1,
+	if _, err := router.Search([]float32{1, 0}, VectorPartitionRouterSearchOptionsV3{
+		Mode: VectorPartitionRouterModeExactV1, ScoreBudget: 64, PartitionProbes: 1,
 	}); err == nil {
 		t.Fatal("closed router search succeeded")
 	}
@@ -568,8 +572,8 @@ func TestPartitionRouterBuildPublishSearchReopenAndPinsV1(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open router after DB reopen: %v", err)
 	}
-	result, err := router.Search([]float32{0, 1}, VectorPartitionRouterSearchOptionsV2{
-		Mode: VectorPartitionRouterModeExactV1, ScoreBudget: 64, ReturnedWidth: 6, BeamWidth: 6, PartitionProbes: 1,
+	result, err := router.Search([]float32{0, 1}, VectorPartitionRouterSearchOptionsV3{
+		Mode: VectorPartitionRouterModeExactV1, ScoreBudget: 64, PartitionProbes: 1,
 	})
 	if err != nil || result.Partitions[0].PartitionID != 1 {
 		t.Fatalf("reopened exact result=%+v err=%v", result, err)

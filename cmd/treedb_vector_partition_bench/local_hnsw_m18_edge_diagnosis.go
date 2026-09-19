@@ -350,8 +350,7 @@ func localHNSWM18EdgeDiagnosisBuildV1(ctx context.Context, source *m8ProductionM
 	if source == nil || source.manifest.DomainCount < 2 || h == nil || !localHNSWM18EdgeDiagnosisPointsV1(localHNSWM18EdgeDiagnosisEFV1) || len(calibration.Ordinals) != 806 || len(calibration.Queries) != 806 || len(calibration.Truth) != 806 || localHNSWAttributionGraphHarnessV1(source, h) != nil {
 		return nil, errors.New("invalid M18 edge diagnosis inputs")
 	}
-	width := min(256, int(source.status.Representatives))
-	if width < 1 {
+	if source.status.Representatives < 1 {
 		return nil, errors.New("invalid M18 edge diagnosis router")
 	}
 	out := make([]localHNSWM18EdgeDiagnosisCellV1, len(localHNSWM18EdgeDiagnosisEFV1))
@@ -363,7 +362,7 @@ func localHNSWM18EdgeDiagnosisBuildV1(ctx context.Context, source *m8ProductionM
 		}
 	}
 	for i, query := range calibration.Queries {
-		route, err := localHNSWAttributionQueryRouteV1(ctx, source, query, defaultRouterScoreBudgetV2, width, width, 2)
+		route, err := localHNSWAttributionQueryRouteV1(ctx, source, query, defaultRouterScoreBudgetV3, 2)
 		if err != nil {
 			return nil, err
 		}

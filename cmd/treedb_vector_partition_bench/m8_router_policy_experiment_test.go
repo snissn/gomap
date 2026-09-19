@@ -50,7 +50,7 @@ func TestM8RouterPolicyExplicitCLISelection(t *testing.T) {
 func policyCellFixtureV1(t *testing.T, width, probes int) (*m8AttributionHarnessV1, [][]float64, [][]m8CanonicalResultV1, map[string]uint32, map[string][]uint32, m8AttributionCellV1) {
 	t.Helper()
 	h, queries, truth, homes, members := qualityFixtureV1(t, 0)
-	budget := defaultRouterScoreBudgetV2
+	budget := defaultRouterScoreBudgetV3
 	if err := h.enableRouterPoliciesV1(width, budget); err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +88,7 @@ func TestM8RouterPolicyRealOwnerReplayAndOrdinaryParity(t *testing.T) {
 		t.Fatal(err)
 	}
 	oracles, _ := control.membershipOraclesV1(truth, homes, members, 2)
-	plain, err := m8BuildAttributionV1(t.Context(), h.assets, homes, members, queries, truth, oracles, 2, 32, 10, defaultRouterScoreBudgetV2, make([][]m8CanonicalResultV1, len(queries)), control)
+	plain, err := m8BuildAttributionV1(t.Context(), h.assets, homes, members, queries, truth, oracles, 2, 32, 10, defaultRouterScoreBudgetV3, make([][]m8CanonicalResultV1, len(queries)), control)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,23 +96,23 @@ func TestM8RouterPolicyRealOwnerReplayAndOrdinaryParity(t *testing.T) {
 	if !reflect.DeepEqual(cell, plain) {
 		t.Fatal("opt-in comparison changed ordinary attribution/search")
 	}
-	if err := control.enableRouterPoliciesV1(0, defaultRouterScoreBudgetV2); err != nil {
+	if err := control.enableRouterPoliciesV1(0, defaultRouterScoreBudgetV3); err != nil {
 		t.Fatal(err)
 	}
-	replay, err := m8BuildAttributionV1(t.Context(), h.assets, homes, members, queries, truth, oracles, 2, 32, 10, defaultRouterScoreBudgetV2, make([][]m8CanonicalResultV1, len(queries)), control)
+	replay, err := m8BuildAttributionV1(t.Context(), h.assets, homes, members, queries, truth, oracles, 2, 32, 10, defaultRouterScoreBudgetV3, make([][]m8CanonicalResultV1, len(queries)), control)
 	if err != nil || !m8RouterPolicyReplayEqualV1(e, replay.Evidence.RouterPolicies) {
 		t.Fatal("independent owner replay differs", err)
 	}
 	// Local EF cannot change candidate-set or policy evidence. Cached values are
 	// immutable; a fresh replay independently recomputes before acceptance.
-	again, err := m8BuildAttributionV1(t.Context(), h.assets, homes, members, queries, truth, oracles, 2, 16, 10, defaultRouterScoreBudgetV2, make([][]m8CanonicalResultV1, len(queries)), h)
+	again, err := m8BuildAttributionV1(t.Context(), h.assets, homes, members, queries, truth, oracles, 2, 16, 10, defaultRouterScoreBudgetV3, make([][]m8CanonicalResultV1, len(queries)), h)
 	if err != nil || again.Evidence.RouterPolicies != e {
 		t.Fatal("EF rebuilt the policy candidate set", err)
 	}
 	changed := slices.Clone(queries)
 	changed[0] = slices.Clone(changed[0])
 	changed[0][0] += .01
-	if _, err := h.routerPolicyEvidenceV1(t.Context(), changed, truth, 2, defaultRouterScoreBudgetV2); err == nil {
+	if _, err := h.routerPolicyEvidenceV1(t.Context(), changed, truth, 2, defaultRouterScoreBudgetV3); err == nil {
 		t.Fatal("changed query reused cache")
 	}
 	if _, err := h.routerPolicyEvidenceV1(t.Context(), queries, truth, 2, 1); err == nil {
@@ -120,7 +120,7 @@ func TestM8RouterPolicyRealOwnerReplayAndOrdinaryParity(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	if _, err := h.routerPolicyEvidenceV1(ctx, queries, truth, 2, defaultRouterScoreBudgetV2); err == nil {
+	if _, err := h.routerPolicyEvidenceV1(ctx, queries, truth, 2, defaultRouterScoreBudgetV3); err == nil {
 		t.Fatal("cached diagnostic ignored cancellation")
 	}
 }
@@ -189,30 +189,23 @@ func TestM8RouterPolicyTamperSelectionAndCandidateIdentity(t *testing.T) {
 	if err := m8AttachAttributionV1(&row, cell, cell.Local); err != nil {
 		t.Fatal(err)
 	}
-	cfg := m8ProductionConfigEvidenceV1{QualityDiagnostics: true, RouterPolicyDiagnostics: true, TopK: 10, RouterScoreBudget: e.RouterScoreBudget, RouterWidth: e.EffectiveWidth, RouterBeam: e.EffectiveWidth}
-	if err := m8RouterPolicyEvidenceSelectionV1(cfg, row); err != nil {
+	cfg := m8ProductionConfigEvidenceV1{QualityDiagnostics: true, RouterPolicyDiagnostics: true, TopK: 10, RouterScoreBudget: e.RouterScoreBudget}
+	if err := m8RouterPolicyEvidenceSelectionV1(cfg, e.EffectiveWidth, row); err != nil {
 		t.Fatal(err)
 	}
-	cfg.RouterWidth--
-	if err := m8RouterPolicyEvidenceSelectionV1(cfg, row); err == nil {
-		t.Fatal("mismatched default policy width accepted")
+	if err := m8RouterPolicyEvidenceSelectionV1(cfg, e.EffectiveWidth-1, row); err == nil {
+		t.Fatal("mismatched persisted model size accepted")
 	}
-	cfg.RouterWidth++
-	cfg.RouterBeam++
-	if err := m8RouterPolicyEvidenceSelectionV1(cfg, row); err == nil {
-		t.Fatal("mismatched policy beam accepted")
-	}
-	cfg.RouterBeam--
 	cfg.RouterPolicyDiagnostics = false
-	if err := m8RouterPolicyEvidenceSelectionV1(cfg, row); err == nil {
+	if err := m8RouterPolicyEvidenceSelectionV1(cfg, e.EffectiveWidth, row); err == nil {
 		t.Fatal("unselected policy data accepted")
 	}
 	row.Attribution.RouterPolicies = nil
-	if err := m8RouterPolicyEvidenceSelectionV1(cfg, row); err != nil {
+	if err := m8RouterPolicyEvidenceSelectionV1(cfg, e.EffectiveWidth, row); err != nil {
 		t.Fatal("legacy row refused", err)
 	}
 	cfg.RouterPolicyDiagnostics = true
-	if err := m8RouterPolicyEvidenceSelectionV1(cfg, row); err == nil {
+	if err := m8RouterPolicyEvidenceSelectionV1(cfg, e.EffectiveWidth, row); err == nil {
 		t.Fatal("missing selected policy data accepted")
 	}
 	if len(truth) != len(queries) {
@@ -369,7 +362,7 @@ func TestM8RouterPolicyRetainedAttributionReplay(t *testing.T) {
 			if err := m8AttachAttributionV1(&row, cell, cell.Local); err != nil {
 				t.Fatal(err)
 			}
-			report := m8ProductionReportV1{Dataset: fixture, RouterRepresentatives: assets.status.Representatives, Config: m8ProductionConfigEvidenceV1{TopK: 10, Partitions: 4, DomainCount: 4, PacksPerDomain: []int{1, 1, 1, 1}, RouterScoreBudget: budget, RouterWidth: assets.routerWidth, RouterBeam: assets.routerBeam, QualityDiagnostics: true, RouterPolicyDiagnostics: true, RouterPolicyWidth: width}, Variant: &m3VariantDescriptorV1{DatabaseDirectory: dir}, Rows: []m8ProductionRowV1{row}}
+			report := m8ProductionReportV1{Dataset: fixture, RouterRepresentatives: assets.status.Representatives, Config: m8ProductionConfigEvidenceV1{TopK: 10, Partitions: 4, DomainCount: 4, PacksPerDomain: []int{1, 1, 1, 1}, RouterScoreBudget: budget, QualityDiagnostics: true, RouterPolicyDiagnostics: true, RouterPolicyWidth: width}, Variant: &m3VariantDescriptorV1{DatabaseDirectory: dir}, Rows: []m8ProductionRowV1{row}}
 			outcome := m8ProductionRowOutcomesV1{TopKIDs: make([][]string, len(queries)), TopKScoreBits: make([][]uint32, len(queries))}
 			for i, rows := range cell.Local {
 				outcome.TopKIDs[i] = m8CanonicalIDsV1(rows)

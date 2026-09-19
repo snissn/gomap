@@ -9,10 +9,11 @@ leaf-only model by `TestRouterGlobalBudgetRetainsInternalCenters`,
 `TestRouterGlobalBudgetCanonicalSiblingQuotaIdentity`. These cover retained
 parents, repeated provenance, global conservation, structural underfill and
 canonical sibling/quota identity across clustering seeds.
-`TestVectorPartitionRouterV2IndependentBudgetsAndDurableNodeIdentity` exercises
-actual published records/reopen, independent w/E/C, legal C>N, typed exhausted
-budgets with no partial routes, and charged exact-reference scans.
-`TestVectorPartitionRouterV2ConcurrentPinnedSearch` checks shared-owner search.
+`TestVectorPartitionRouterV3HierarchyBudgetAndDurableNodeIdentity` exercises
+actual published records/reopen, roots-first scoring, atomic child-group budget
+stops, typed pre-score exhaustion with no partial routes, and charged exact
+scans. `TestVectorPartitionRouterV3ConcurrentPinnedSearch` checks shared-owner
+search.
 Existing manifest/lifecycle, live-index and production public-backend tests
 continue to own checkpoint/reopen, source changes, pin/deletion and stable-ID
 merge behavior. These are correctness tests, not scaling qualification.

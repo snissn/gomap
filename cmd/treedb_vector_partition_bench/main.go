@@ -85,9 +85,7 @@ const (
 	// candidate bytes per membership, 128 MiB keeps that complete comparison
 	// bounded while allowing the required 1M + 20% overlap preflight to run.
 	m8ProductionCandidateBudgetBytesV1 uint64 = 128 << 20
-	defaultRouterScoreBudgetV2                = 1024
-	defaultRouterReturnedWidthV2              = 64
-	defaultRouterBeamWidthV2                  = 96
+	defaultRouterScoreBudgetV3                = 1024
 )
 
 const partitionAssignmentGraphRepartitionedV1 = "graph_repartitioned"
@@ -136,8 +134,6 @@ type config struct {
 	coordinator               *m6CoordinatorHarnessV1
 	routerConfig              vectorpartition.RouterConfigV1
 	routerCandidates          int
-	routerWidth               int
-	routerBeam                int
 	sourceHNSWDegree          int
 	mode                      string
 	raftGroups                int
@@ -271,8 +267,6 @@ type stageResult struct {
 	RepresentativeCount       uint64  `json:"representative_count,omitempty"`
 	CandidateBudget           uint64  `json:"candidate_budget,omitempty"`
 	RouterSemantics           string  `json:"router_semantics,omitempty"`
-	ReturnedWidth             uint64  `json:"returned_width,omitempty"`
-	BeamWidth                 uint64  `json:"beam_width,omitempty"`
 	ScoreCalls                uint64  `json:"score_calls,omitempty"`
 	Candidates                uint64  `json:"candidates,omitempty"`
 	Edges                     uint64  `json:"edges,omitempty"`
@@ -438,8 +432,6 @@ type treeDBRepresentativeRouter struct {
 	build            collections.VectorPartitionRouterBuildStatusV1
 	open             collections.VectorPartitionRouterOpenStatusV1
 	candidates       int
-	width            int
-	beam             int
 	sourceHNSWDegree int
 	buildCPU         int64
 	buildCPUOK       bool
@@ -878,7 +870,7 @@ func runWithRuntimeCapabilities(args []string, stdout io.Writer, capabilities be
 	}
 	if cfg.stage == "router" || cfg.stage == m6CoordinatorStageV1 {
 		buildCPUStart, buildCPUAvailable := vectorPartitionBenchmarkCPUNanos()
-		cfg.router, err = newTreeDBRepresentativeRouter(vectors, cfg.partitions, cfg.routerConfig, cfg.routerCandidates, cfg.routerWidth, cfg.routerBeam, cfg.sourceHNSWDegree)
+		cfg.router, err = newTreeDBRepresentativeRouter(vectors, cfg.partitions, cfg.routerConfig, cfg.routerCandidates, cfg.sourceHNSWDegree)
 		if err != nil {
 			return fmt.Errorf("build TreeDB representative router stage: %w", err)
 		}
@@ -953,7 +945,7 @@ func parseConfig(args []string) (config, error) {
 		shardPlanMode:       shardPlanModeOffV1, shardPlanRatio: -1,
 		kahipTimeout: kahipDefaultTimeout,
 		partition:    vectorpartition.DefaultConfig(), routerConfig: vectorpartition.DefaultRouterConfigV1(),
-		routerCandidates: defaultRouterScoreBudgetV2, routerWidth: defaultRouterReturnedWidthV2, routerBeam: defaultRouterBeamWidthV2, sourceHNSWDegree: partitionHNSWDegree,
+		routerCandidates: defaultRouterScoreBudgetV3, sourceHNSWDegree: partitionHNSWDegree,
 		m8MaxRSSBytes: uint64(maxFixtureBytes), m8MaxAssetBytes: uint64(maxFixtureBytes), m8MaxExactTruthVisits: maxBenchmarkWorkUnits,
 		m8CoordinatorLimits: nativewire.DefaultVectorPartitionCoordinatorLimitsV1(),
 		m8ShardLimits:       nativewire.DefaultVectorPartitionShardSearchLimitsV1(),
@@ -995,7 +987,7 @@ func parseConfig(args []string) (config, error) {
 	fs.BoolVar(&cfg.m8QualityDiagnostics, "m8-quality-diagnostics", false, "enable versioned offline coverage-cost/no-coarsening attribution (top-k <= 10); ordinary search is unchanged")
 	fs.IntVar(&cfg.m8QualityTraceQueries, "m8-quality-trace-queries", 0, "sample the first 0..8 quality queries with structurally bounded existing local traces")
 	fs.BoolVar(&cfg.m8RouterPolicyDiagnostics, "m8-router-policy-diagnostics", false, "compare router ranking policies offline on identical candidates; requires -m8-quality-diagnostics and does not change serving")
-	fs.IntVar(&cfg.m8RouterPolicyWidth, "m8-router-policy-width", 0, "nearest returned representatives used for policy voting; zero uses router-width")
+	fs.IntVar(&cfg.m8RouterPolicyWidth, "m8-router-policy-width", 0, "nearest returned representatives used by the offline flat-HNSW diagnostic; zero uses the persisted model size")
 	fs.StringVar(&cfg.m8TruthCache, "m8-truth-cache", "", "external canonical exact-truth cache directory; identity-bound and fail-closed")
 	fs.StringVar(&cfg.m8TruthCacheSHA256, "m8-truth-cache-sha256", "", "independently trusted SHA-256 of the canonical truth-cache artifact required for cache reuse")
 	fs.StringVar(&cfg.partitionAssignment, "partition-assignment", cfg.partitionAssignment, "partition assignment for partition/M3 stages: graph or stable_id_hash")
@@ -1024,9 +1016,7 @@ func parseConfig(args []string) (config, error) {
 	fs.IntVar(&routerMaxVectors, "router-max-vectors", 0, "router final-membership cap; zero inherits -max-vectors")
 	fs.Int64Var(&cfg.routerConfig.MaxScalarWork, "router-max-scalar-work", cfg.routerConfig.MaxScalarWork, "offline router distance-coordinate-work cap (1..50000000000)")
 	fs.Uint64Var(&cfg.routerConfig.MaxRouterBytes, "router-max-bytes", cfg.routerConfig.MaxRouterBytes, "hard conservative persisted router-pack byte cap")
-	fs.IntVar(&cfg.routerCandidates, "router-score-budget", cfg.routerCandidates, "actual representative score-call ceiling including repeated upper-layer calls")
-	fs.IntVar(&cfg.routerWidth, "router-width", cfg.routerWidth, "returned representative width w")
-	fs.IntVar(&cfg.routerBeam, "router-beam", cfg.routerBeam, "retained representative traversal beam E (w <= E <= model size)")
+	fs.IntVar(&cfg.routerCandidates, "router-score-budget", cfg.routerCandidates, "actual hierarchical representative score-call ceiling")
 	fs.IntVar(&cfg.sourceHNSWDegree, "source-hnsw-degree", cfg.sourceHNSWDegree, "source column_graph HNSW degree (1..16; default 16)")
 	fs.StringVar(&stages, "stages", "all", "comma-separated independently enabled loss stages, or all")
 	fs.IntVar(&cfg.maxVectors, "max-vectors", maxVectors, "maximum combined fixture vector/query count before allocation")
@@ -1080,7 +1070,7 @@ func parseConfig(args []string) (config, error) {
 		return config{}, fmt.Errorf("probes: %w", err)
 	}
 	if cfg.stage == m8ProductionMultiGroupModeV1 && !routerCandidatesSet {
-		cfg.routerCandidates = defaultRouterScoreBudgetV2
+		cfg.routerCandidates = defaultRouterScoreBudgetV3
 	}
 	if cfg.overlaps, err = parseFloats(overlap); err != nil {
 		return config{}, fmt.Errorf("overlap: %w", err)
@@ -1175,11 +1165,11 @@ func parseConfig(args []string) (config, error) {
 	if cfg.m3PersistDir != "" && (cfg.stage != "overlap,partition_index" || len(cfg.overlaps) != 1) {
 		return config{}, errors.New("-m3-persist-db requires stage overlap,partition_index with exactly one overlap ratio")
 	}
-	if cfg.routerWidth < 1 || cfg.routerWidth > cfg.routerBeam || cfg.routerBeam > vectorpartition.DefaultRouterConfigV1().MaxRepresentatives || cfg.routerCandidates > collections.MaxVectorPartitionRouterScoreBudgetV2 {
-		return config{}, errors.New("router requires 1 <= width <= beam and score budget in [1,1000000]")
+	if cfg.routerCandidates < 1 || cfg.routerCandidates > collections.MaxVectorPartitionRouterScoreBudgetV3 {
+		return config{}, errors.New("router score budget must be in [1,1000000]")
 	}
-	if cfg.m8RouterPolicyDiagnostics && !cfg.m8QualityDiagnostics || cfg.m8RouterPolicyWidth < 0 || cfg.m8RouterPolicyWidth > cfg.routerBeam || cfg.m8RouterPolicyWidth != 0 && !cfg.m8RouterPolicyDiagnostics {
-		return config{}, errors.New("router policy diagnostics require quality diagnostics and a width in [0,router-beam]")
+	if cfg.m8RouterPolicyDiagnostics && !cfg.m8QualityDiagnostics || cfg.m8RouterPolicyWidth < 0 || cfg.m8RouterPolicyWidth > vectorpartition.DefaultRouterConfigV1().MaxRepresentatives || cfg.m8RouterPolicyWidth != 0 && !cfg.m8RouterPolicyDiagnostics {
+		return config{}, errors.New("router policy diagnostics require quality diagnostics and a width in the persisted model bound")
 	}
 	if cfg.m8QualityDiagnostics && (cfg.stage != m8ProductionMultiGroupModeV1 || cfg.topK > 10) || cfg.m8QualityTraceQueries < 0 || cfg.m8QualityTraceQueries > m8QualityTraceMaxQueriesV1 || cfg.m8QualityTraceQueries > 0 && !cfg.m8QualityDiagnostics {
 		return config{}, errors.New("quality diagnostics require production_multi_group, top-k <= 10, and a trace sample in [0,8]")
@@ -3448,8 +3438,8 @@ func validateSourceHNSWDegree(degree int) error {
 	return nil
 }
 
-func newTreeDBRepresentativeRouter(vectors [][]float64, partitions int, routerConfig vectorpartition.RouterConfigV1, scoreBudget, width, beam, sourceHNSWDegree int) (_ *treeDBRepresentativeRouter, err error) {
-	if len(vectors) == 0 || partitions < 1 || partitions > len(vectors) || scoreBudget < 1 || width < 1 || width > beam {
+func newTreeDBRepresentativeRouter(vectors [][]float64, partitions int, routerConfig vectorpartition.RouterConfigV1, scoreBudget, sourceHNSWDegree int) (_ *treeDBRepresentativeRouter, err error) {
+	if len(vectors) == 0 || partitions < 1 || partitions > len(vectors) || scoreBudget < 1 {
 		return nil, errors.New("invalid vector/partition/candidate count for TreeDB router stage")
 	}
 	if err := validateSourceHNSWDegree(sourceHNSWDegree); err != nil {
@@ -3612,9 +3602,9 @@ func newTreeDBRepresentativeRouter(vectors [][]float64, partitions int, routerCo
 	if err != nil {
 		return nil, err
 	}
-	h.candidates, h.width, h.beam = scoreBudget, width, beam
-	if scoreBudget < 1 || width < 1 || width > beam || beam > int(h.open.Representatives) {
-		return nil, errors.New("router benchmark requires positive C and 1 <= w <= E <= model size; budgets are not clamped")
+	h.candidates = scoreBudget
+	if scoreBudget < 1 {
+		return nil, errors.New("router benchmark requires a positive score budget")
 	}
 	return h, nil
 }
@@ -3629,14 +3619,12 @@ func (h *treeDBRepresentativeRouter) search(query []float64, probes int, approxi
 	}
 	mode := collections.VectorPartitionRouterModeExactV1
 	candidates := int(h.open.Representatives)
-	width, beam := candidates, candidates
 	if approximate {
 		mode = collections.VectorPartitionRouterModeApproxV1
 		candidates = h.candidates
-		width, beam = h.width, h.beam
 	}
-	result, err := h.router.Search(query32, collections.VectorPartitionRouterSearchOptionsV2{
-		Mode: mode, ScoreBudget: candidates, ReturnedWidth: width, BeamWidth: beam, PartitionProbes: probes,
+	result, err := h.router.Search(query32, collections.VectorPartitionRouterSearchOptionsV3{
+		Mode: mode, ScoreBudget: candidates, PartitionProbes: probes,
 	})
 	if err != nil {
 		return nil, result.Status, err
@@ -4124,8 +4112,8 @@ func simulate(cfg config, m fixtureManifest, v, q [][]float64, probes int, overl
 	exactMethod := "centroid_representative_routing"
 	approximateMethod := "deterministic_last_representative_perturbation"
 	if cfg.router != nil {
-		exactMethod = "persisted_krt_exact_representative_oracle_v2"
-		approximateMethod = "persisted_krt_native_hnsw_search_pack_v2"
+		exactMethod = "persisted_krt_exact_representative_oracle_v3"
+		approximateMethod = "persisted_krt_hierarchical_search_v3"
 	}
 	exactRouterStage := stage("exact_representative_routing", exactMethod, probes < cfg.partitions, totals["exact_representative_routing"]/n, probes)
 	approximateRouterStage := stage("approximate_representative_routing", approximateMethod, probes < cfg.partitions, totals["approximate_representative_routing"]/n, probes)
@@ -4133,8 +4121,7 @@ func simulate(cfg config, m fixtureManifest, v, q [][]float64, probes int, overl
 		exactRouterStage.Searches = exactRouterEvidence.Searches
 		exactRouterStage.RepresentativeCount = cfg.router.open.Representatives
 		exactRouterStage.CandidateBudget = cfg.router.open.Representatives
-		exactRouterStage.RouterSemantics = m8RouterSemanticsV3
-		exactRouterStage.ReturnedWidth, exactRouterStage.BeamWidth = cfg.router.open.Representatives, cfg.router.open.Representatives
+		exactRouterStage.RouterSemantics = m8RouterSemanticsV4
 		exactRouterStage.ScoreCalls = exactRouterEvidence.ScoreCalls
 		exactRouterStage.Candidates = exactRouterEvidence.Candidates
 		exactRouterStage.Edges = exactRouterEvidence.Edges
@@ -4150,7 +4137,6 @@ func simulate(cfg config, m fixtureManifest, v, q [][]float64, probes int, overl
 		approximateRouterStage.RepresentativeCount = cfg.router.open.Representatives
 		approximateRouterStage.CandidateBudget = uint64(cfg.router.candidates)
 		approximateRouterStage.RouterSemantics = exactRouterStage.RouterSemantics
-		approximateRouterStage.ReturnedWidth, approximateRouterStage.BeamWidth = uint64(cfg.router.width), uint64(cfg.router.beam)
 		approximateRouterStage.ScoreCalls = approximateRouterEvidence.ScoreCalls
 		approximateRouterStage.Candidates = approximateRouterEvidence.Candidates
 		approximateRouterStage.Edges = approximateRouterEvidence.Edges
@@ -4284,8 +4270,7 @@ func validateResult(r runResult) error {
 		if (r.ResultKind == "router_local_path_evidence" || r.ResultKind == m6CoordinatorResultKindV1) &&
 			(s.Name == "exact_representative_routing" || s.Name == "approximate_representative_routing") {
 			if s.Searches != uint64(s.Queries) || s.RepresentativeCount == 0 ||
-				s.CandidateBudget == 0 || s.RouterSemantics != m8RouterSemanticsV3 ||
-				s.ReturnedWidth < 1 || s.ReturnedWidth > s.BeamWidth || s.BeamWidth > s.RepresentativeCount ||
+				s.CandidateBudget == 0 || s.RouterSemantics != m8RouterSemanticsV4 ||
 				s.ScoreCalls < s.Candidates || s.ScoreCalls > s.Searches*s.CandidateBudget ||
 				s.P50Nanos == 0 || s.P50Nanos > s.P95Nanos || s.P95Nanos > s.P99Nanos {
 				return fmt.Errorf("router stage lacks bounded timing/search evidence: %+v", s)

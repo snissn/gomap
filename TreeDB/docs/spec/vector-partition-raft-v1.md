@@ -118,19 +118,17 @@ the HNSW locality row order back to canonical representative order before
 serving and acquires an M1 reader pin in the same barrier. `Close` excludes
 concurrent searches, closes the prepared view, and releases that pin.
 
-Search options V2 declare returned width `w`, traversal beam `E`, and actual
-score-call budget `C`, independently of domain probes. Require
-`1 <= w <= E <= representative_count`. Exact routing scans all representatives,
-charges that many scores, and retains `w`; the full reference uses `w=E=N` and
-`C>=N`. Approximate routing charges upper-layer descent and every level-zero
-score invocation, including repeated scores. `C` may exceed `N`; exhaustion is
-a typed error with charged work but no partial route or retry. Both paths reduce
-multiple representative hits to the minimum cosine distance per domain and
-return unique domains ordered by `(distance, domain_id)`. A zero/invalid
-budget, non-finite or dimension-mismatched query, malformed asset, stale
-generation, closed handle, or candidate set that cannot supply the requested
-number of unique partitions is an error; no partial partition list is
-returned.
+Search options V3 declare actual centroid-score budget `C` and logical-domain
+probes `P`. Exact routing requires `C>=N`, scores every representative once,
+and returns P domains. Approximate routing requires C to cover every depth-zero
+centroid before scoring, then expands complete sibling groups in best-parent
+distance order while the next whole group fits. It never partially scores a
+group. Both paths reduce scored representatives to the minimum cosine distance
+per domain and return unique domains ordered by `(distance, domain_id)`. A
+zero/invalid budget or probe count, insufficient root budget, non-finite or
+dimension-mismatched query, malformed asset, stale generation, or closed handle
+is an error with no partial partition list or retry. Width/beam and candidate
+coverage remain only in the explicitly selected offline flat-HNSW diagnostic.
 
 The coordinator expands every selected domain to all bound packs before
 placement or dispatch. Public and retained evidence report

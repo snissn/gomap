@@ -706,9 +706,8 @@ func localHNSWFixedBudgetScreenCellsV1(ctx context.Context, source *m8Production
 			out[i].PerPack[j].Partition = asset.PartitionID
 		}
 	}
-	width := min(256, int(source.status.Representatives))
 	for qi, query := range calibration.Queries {
-		route, err := localHNSWAttributionQueryRouteV1(ctx, source, query, defaultRouterScoreBudgetV2, width, width, 2)
+		route, err := localHNSWAttributionQueryRouteV1(ctx, source, query, defaultRouterScoreBudgetV3, 2)
 		if err != nil {
 			return nil, err
 		}

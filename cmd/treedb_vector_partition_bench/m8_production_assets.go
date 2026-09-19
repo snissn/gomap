@@ -21,18 +21,18 @@ import (
 // m8ProductionMultiGroupAssetsV1 is persistent M3 asset materialization for
 // the later M8 topology. It deliberately contains no transport or Raft logic.
 type m8ProductionMultiGroupAssetsV1 struct {
-	dir             string
-	owned           bool
-	db              *backenddb.DB
-	collection      *collections.Collection
-	manifest        collections.VectorPartitionManifestV1
-	router          *collections.VectorPartitionRouterV1
-	status          collections.VectorPartitionRouterRuntimeStatusV1
-	groups          []string
-	assetSetDigests map[string]string
-	descriptor      *m3VariantDescriptorV1
-	routerWidth     int
-	routerBeam      int
+	dir                   string
+	owned                 bool
+	db                    *backenddb.DB
+	collection            *collections.Collection
+	manifest              collections.VectorPartitionManifestV1
+	router                *collections.VectorPartitionRouterV1
+	status                collections.VectorPartitionRouterRuntimeStatusV1
+	groups                []string
+	assetSetDigests       map[string]string
+	descriptor            *m3VariantDescriptorV1
+	policyDiagnosticWidth int
+	policyDiagnosticBeam  int
 }
 
 func newM8ProductionMultiGroupAssetsV1(vectors [][]float64, groups []string, partitions int) (_ *m8ProductionMultiGroupAssetsV1, err error) {
@@ -135,7 +135,7 @@ func newM8ProductionMultiGroupAssetsWithRouterV2(vectors [][]float64, groups []s
 		return nil, err
 	}
 	h.status = h.router.Status()
-	h.routerWidth, h.routerBeam = int(h.status.Representatives), int(h.status.Representatives)
+	h.policyDiagnosticWidth, h.policyDiagnosticBeam = int(h.status.Representatives), int(h.status.Representatives)
 	// Router publication returns the only canonical ready manifest: it includes
 	// the shared router asset and ready-set identity in addition to local packs.
 	h.manifest = h.status.Manifest
@@ -303,7 +303,7 @@ func openM8ProductionExistingAssetSetModeV1(dir string, readOnly bool) (_ *m8Pro
 		return nil, fmt.Errorf("open retained M8 router: %w", err)
 	}
 	h.status = h.router.Status()
-	h.routerWidth, h.routerBeam = int(h.status.Representatives), int(h.status.Representatives)
+	h.policyDiagnosticWidth, h.policyDiagnosticBeam = int(h.status.Representatives), int(h.status.Representatives)
 	h.manifest = h.status.Manifest
 	return h, nil
 }
