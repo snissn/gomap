@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -116,14 +117,18 @@ func TestTypedMetadataUpdatePublicLifecycle(t *testing.T) {
 func TestTypedMetadataUpdateValidationAndHTTPUnknownKeys(t *testing.T) {
 	valid := UpdateMetadataByIDRequest{ExpectedGeneration: 1, IDs: []string{"a"}, Set: map[string]any{"meta.acl": "new"}, Unset: []string{}}
 	for name, mutate := range map[string]func(*UpdateMetadataByIDRequest){
-		"empty_ids":       func(r *UpdateMetadataByIDRequest) { r.IDs = nil },
-		"missing_set":     func(r *UpdateMetadataByIDRequest) { r.Set = nil },
-		"missing_unset":   func(r *UpdateMetadataByIDRequest) { r.Unset = nil },
-		"duplicate_ids":   func(r *UpdateMetadataByIDRequest) { r.IDs = []string{"a", "a"} },
-		"non_meta":        func(r *UpdateMetadataByIDRequest) { r.Set = map[string]any{"content": "x"} },
-		"same_path":       func(r *UpdateMetadataByIDRequest) { r.Unset = []string{"meta.acl"} },
-		"ancestor":        func(r *UpdateMetadataByIDRequest) { r.Unset = []string{"meta.acl.child"} },
-		"duplicate_unset": func(r *UpdateMetadataByIDRequest) { r.Set = nil; r.Unset = []string{"meta.a", "meta.a"} },
+		"empty_ids":     func(r *UpdateMetadataByIDRequest) { r.IDs = nil },
+		"missing_set":   func(r *UpdateMetadataByIDRequest) { r.Set = nil },
+		"missing_unset": func(r *UpdateMetadataByIDRequest) { r.Unset = nil },
+		"duplicate_ids": func(r *UpdateMetadataByIDRequest) { r.IDs = []string{"a", "a"} },
+		"non_meta":      func(r *UpdateMetadataByIDRequest) { r.Set = map[string]any{"content": "x"} },
+		"same_path":     func(r *UpdateMetadataByIDRequest) { r.Unset = []string{"meta.acl"} },
+		"ancestor":      func(r *UpdateMetadataByIDRequest) { r.Unset = []string{"meta.acl.child"} },
+		"punctuation": func(r *UpdateMetadataByIDRequest) {
+			r.Set = map[string]any{"meta.a": 1, "meta.a-child": 2}
+			r.Unset = []string{"meta.a.child"}
+		},
+		"duplicate_unset": func(r *UpdateMetadataByIDRequest) { r.Set = map[string]any{}; r.Unset = []string{"meta.a", "meta.a"} },
 		"invalid_value":   func(r *UpdateMetadataByIDRequest) { r.Set = map[string]any{"meta.x": make(chan int)} },
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -139,6 +144,44 @@ func TestTypedMetadataUpdateValidationAndHTTPUnknownKeys(t *testing.T) {
 	NewHandler(&Service{}).ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), string(CodeMalformedJSON)) {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestTypedMetadataUpdateManyPathsPreservesInput(t *testing.T) {
+	paths := make([]string, 4096)
+	for i := range paths {
+		paths[i] = fmt.Sprintf("meta.field%04d", len(paths)-i)
+	}
+	before := slices.Clone(paths)
+	req := UpdateMetadataByIDRequest{IDs: []string{"a"}, Set: map[string]any{"meta.a-child": 1, "meta.a.child": 2}, Unset: paths}
+	if err := validateMetadataUpdateShape(req); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(paths, before) {
+		t.Fatal("validation reordered caller paths")
+	}
+	req.Set["meta.a"] = 3
+	if err := validateMetadataUpdateShape(req); ErrorCodeOf(err) != CodeInvalidRequest {
+		t.Fatalf("ancestor hidden by punctuation error=%v", err)
+	}
+}
+
+func BenchmarkTypedMetadataUpdatePathValidation(b *testing.B) {
+	for _, count := range []int{1, 256, 4096} {
+		b.Run(fmt.Sprintf("paths%d", count), func(b *testing.B) {
+			paths := make([]string, count)
+			for i := range paths {
+				paths[i] = fmt.Sprintf("meta.field%04d", count-i)
+			}
+			req := UpdateMetadataByIDRequest{IDs: []string{"a"}, Set: map[string]any{}, Unset: paths}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				if err := validateMetadataUpdateShape(req); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
 	}
 }
 

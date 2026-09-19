@@ -42,6 +42,7 @@ from treedb_client.client import (
     _dense_http_results_ordered,
     _dense_work_requires_score_plane,
     _is_legacy_scalar_u8_v1_index,
+    _validate_metadata_update_paths,
 )
 from treedb_client._dense_work import DenseScorePlaneProof, dense_quantized_response_work_matches
 
@@ -642,6 +643,8 @@ class TreeDBClientTests(unittest.TestCase):
             (["a"], {"content": "x"}, []),
             (["a"], {"meta.x": 1}, ["meta.x"]),
             (["a"], {"meta.x": 1}, ["meta.x.child"]),
+            (["a"], {"meta.x": 1, "meta.x-child": 2}, ["meta.x.child"]),
+            (["a"], {}, ["meta.x", "meta.x"]),
             ([], {"meta.x": 1}, []),
         )
         for ids, set_values, unset in invalid:
@@ -654,6 +657,14 @@ class TreeDBClientTests(unittest.TestCase):
                 TreeDBClient("http://localhost:1").update_metadata_by_id(
                     "docs", ["a"], {}, [], expected_generation=generation
                 )
+
+    def test_metadata_many_paths_preserve_input(self) -> None:
+        paths = [f"meta.field{i:04d}" for i in range(4096, 0, -1)]
+        before = paths.copy()
+        _validate_metadata_update_paths({"meta.a-child": 1, "meta.a.child": 2}, paths)
+        self.assertEqual(paths, before)
+        with self.assertRaises(InvalidRequestError):
+            _validate_metadata_update_paths({"meta.a": 1, "meta.a-child": 2, "meta.a.child": 3}, paths)
 
     def test_count_filter_search_and_delete_by_filter_parse_responses(self) -> None:
         routes = {

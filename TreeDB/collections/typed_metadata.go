@@ -139,24 +139,23 @@ func validateTypedMetadataMutation(meta CollectionMeta, set map[string]any, unse
 	}
 	paths = append(paths, unset...)
 	slices.Sort(paths)
-	seen := make(map[string]bool, len(paths))
-	for _, path := range paths {
+	for i, path := range paths {
 		if !utf8.ValidString(path) || !strings.HasPrefix(path, "meta.") || strings.ContainsAny(path, "\x00\\*?[]#") {
 			return fmt.Errorf("collections: unsupported metadata path %q", path)
 		}
-		if seen[path] {
+		if i > 0 && paths[i-1] == path {
 			return errors.New("collections: overlapping metadata paths")
 		}
-		parts := strings.Split(path, ".")
-		for i, part := range parts {
-			if part == "" {
-				return errors.New("collections: metadata path has empty component")
-			}
-			if seen[strings.Join(parts[:i], ".")] {
-				return errors.New("collections: overlapping metadata paths")
-			}
+		if strings.HasSuffix(path, ".") || strings.Contains(path, "..") {
+			return errors.New("collections: metadata path has empty component")
 		}
-		seen[path] = true
+		// Avoid both all-pairs comparisons and rebuilding every ancestor of
+		// a deep path. Punctuation may separate ancestors in lexical order.
+		prefix := path + "."
+		j, _ := slices.BinarySearch(paths, prefix)
+		if j < len(paths) && strings.HasPrefix(paths[j], prefix) {
+			return errors.New("collections: overlapping metadata paths")
+		}
 		for _, reserved := range []string{chunking.MetaFieldParent, chunking.MetaFieldOrdinal, chunking.MetaFieldKind} {
 			if typedMetadataPathsOverlap(path, "meta."+reserved) {
 				return errors.New("collections: chunk linkage metadata is immutable")

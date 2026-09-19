@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+from bisect import bisect_left
 import copy
 import http.client
 import json
@@ -1253,17 +1254,23 @@ def _validate_expected_generation(expected_generation: Optional[int]) -> None:
 
 
 def _validate_metadata_update_paths(set_values: Mapping[str, Any], unset: Sequence[str]) -> None:
-    paths: list[str] = []
-    for path in [*set_values.keys(), *unset]:
-        if not isinstance(path, str) or not path.startswith("meta.") or any(not part for part in path[5:].split(".")):
+    paths = [*set_values.keys(), *unset]
+    for path in paths:
+        if not isinstance(path, str) or not path.startswith("meta.") or path.endswith(".") or ".." in path:
             raise InvalidRequestError("invalid_request", "metadata update paths must be dotted meta.* strings")
         try:
             path.encode("utf-8", errors="strict")
         except UnicodeError as exc:
             raise InvalidRequestError("invalid_request", "metadata update paths must be valid UTF-8") from exc
-        if any(path == previous or path.startswith(previous + ".") or previous.startswith(path + ".") for previous in paths):
+    paths.sort()
+    for i, path in enumerate(paths):
+        if i and paths[i - 1] == path:
             raise InvalidRequestError("invalid_request", "metadata update paths must not overlap")
-        paths.append(path)
+        # Punctuation can separate an ancestor from its descendants in order.
+        prefix = path + "."
+        descendant = bisect_left(paths, prefix)
+        if descendant < len(paths) and paths[descendant].startswith(prefix):
+            raise InvalidRequestError("invalid_request", "metadata update paths must not overlap")
 
 
 def _add_expected_generation(request: dict[str, Any], expected_generation: Optional[int]) -> None:

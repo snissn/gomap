@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -67,14 +68,20 @@ func validateMetadataUpdateShape(req UpdateMetadataByIDRequest) error {
 		paths = append(paths, path)
 	}
 	paths = append(paths, req.Unset...)
+	slices.Sort(paths)
 	for i, path := range paths {
 		if !validMetadataUpdatePath(path) {
 			return serviceErrorf(CodeInvalidRequest, "metadata update path %q must be a dotted meta.* path", path)
 		}
-		for j := 0; j < i; j++ {
-			if metadataPathsOverlap(paths[j], path) {
-				return serviceErrorf(CodeInvalidRequest, "metadata update paths %q and %q overlap", paths[j], path)
-			}
+		if i > 0 && paths[i-1] == path {
+			return serviceErrorf(CodeInvalidRequest, "metadata update path %q is repeated", path)
+		}
+		// A punctuation sibling can sort between an ancestor and descendant,
+		// so search the dotted prefix rather than checking only adjacent paths.
+		prefix := path + "."
+		j, _ := slices.BinarySearch(paths, prefix)
+		if j < len(paths) && strings.HasPrefix(paths[j], prefix) {
+			return serviceErrorf(CodeInvalidRequest, "metadata update paths %q and %q overlap", path, paths[j])
 		}
 	}
 	if _, err := json.Marshal(req.Set); err != nil {
@@ -87,16 +94,7 @@ func validMetadataUpdatePath(path string) bool {
 	if !utf8.ValidString(path) || !strings.HasPrefix(path, "meta.") {
 		return false
 	}
-	for _, part := range strings.Split(strings.TrimPrefix(path, "meta."), ".") {
-		if part == "" {
-			return false
-		}
-	}
-	return true
-}
-
-func metadataPathsOverlap(a, b string) bool {
-	return a == b || strings.HasPrefix(a, b+".") || strings.HasPrefix(b, a+".")
+	return !strings.HasSuffix(path, ".") && !strings.Contains(path, "..")
 }
 
 func validateMetadataUpdateSchema(info IndexInfo, req UpdateMetadataByIDRequest) error {

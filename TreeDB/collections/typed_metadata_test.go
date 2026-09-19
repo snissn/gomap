@@ -15,6 +15,7 @@ import (
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
+	"github.com/snissn/gomap/TreeDB/internal/workstats"
 )
 
 func seedTypedMetadata4769(t testing.TB, rows, dims int) (string, *backenddb.DB, *Collection, [][]byte) {
@@ -518,6 +519,10 @@ func TestTypedMetadataReplayRejectsNonColumnCollection4769(t *testing.T) {
 func TestTypedMetadataInvalidBatchRollback4769(t *testing.T) {
 	_, db, col, ids := seedTypedMetadata4769(t, 2, 8)
 	defer db.Close()
+	deepPath := "meta." + strings.Repeat("nested.", 4096) + "leaf"
+	if err := validateTypedMetadataMutation(col.Meta(), map[string]any{deepPath: true}, nil, metadataGeneration4769(col)); err != nil {
+		t.Fatalf("deep valid path: %v", err)
+	}
 	cases := []struct {
 		name  string
 		set   map[string]any
@@ -661,7 +666,15 @@ func TestTypedMetadataWALRecovery4769(t *testing.T) {
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
+	beforeReplay := workstats.Read().Replay
 	db = openTypedMinimaDB(t, dir)
+	afterReplay := workstats.Read().Replay
+	if afterReplay.TypedPayloadFrames-beforeReplay.TypedPayloadFrames != 1 || afterReplay.LegacyCollectionFrames != beforeReplay.LegacyCollectionFrames {
+		t.Fatalf("metadata replay classification before=%+v after=%+v", beforeReplay, afterReplay)
+	}
+	if afterReplay.TypedRowsDecoded-beforeReplay.TypedRowsDecoded != uint64(len(ids)) || afterReplay.LegacyProjectionRowsDecoded != beforeReplay.LegacyProjectionRowsDecoded {
+		t.Fatalf("metadata replay row work before=%+v after=%+v", beforeReplay, afterReplay)
+	}
 	col, err = NewCollectionManager(db).OpenCollection("minima")
 	if err != nil {
 		t.Fatal(err)

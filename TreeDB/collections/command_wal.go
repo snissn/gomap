@@ -7,6 +7,7 @@ import (
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
+	"github.com/snissn/gomap/TreeDB/internal/workstats"
 	"github.com/snissn/gomap/TreeDB/node"
 )
 
@@ -514,6 +515,7 @@ func replayCollectionUpdateBatchByIDCommandWAL(db *backenddb.DB, env commitlog.C
 		if err != nil {
 			return err
 		}
+		workstats.Replay.TypedRowsDecoded.Add(uint64(len(payload.Documents)))
 		intent, err := db.NewCommandWALReplayIntent(env)
 		if err != nil {
 			return err
