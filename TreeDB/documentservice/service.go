@@ -1462,8 +1462,8 @@ func (s *Service) SearchHybrid(ctx context.Context, index string, req HybridSear
 	if !hasText && !hasVector {
 		return HybridSearchResponse{}, serviceError(CodeInvalidRequest, "hybrid search requires query, query_embedding, or both")
 	}
-	if !hasVector && (req.VectorQueryMode != "" || req.QuantizedIndexName != "" || req.QuantizedRerankCandidates != 0) {
-		return HybridSearchResponse{}, serviceError(CodeInvalidRequest, "hybrid vector_query_mode, quantized_index_name, and quantized_rerank_candidates require query_embedding")
+	if !hasVector && (req.VectorCandidateLimit != 0 || req.VectorQueryMode != "" || req.QuantizedIndexName != "" || req.QuantizedRerankCandidates != 0 || req.EfSearch != 0) {
+		return HybridSearchResponse{}, serviceError(CodeInvalidRequest, "hybrid vector options require query_embedding")
 	}
 	textOperator, err := normalizeKeywordSearchOperator(req.TextOperator)
 	if err != nil {

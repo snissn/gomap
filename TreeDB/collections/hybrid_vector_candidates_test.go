@@ -72,7 +72,7 @@ func TestHybridVectorAllowSetExactScanBudget2729(t *testing.T) {
 
 func TestSearchHybridVectorCandidatesUnsupportedShapesFailClosed2503(t *testing.T) {
 	rows := []columnGraphRebuildInputRowV2A{{id: "doc-a", vector: []float32{1, 0, 0}}}
-	_, d, col, def := openColumnGraphRebuildTestCollectionV2A(t, 3, 1, rows)
+	_, d, col, def := openColumnGraphQuantizedGuardrailTestCollection1926(t, rows)
 	defer func() { _ = d.Close() }()
 	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
 		t.Fatalf("RebuildVectorIndex: %v", err)
@@ -137,7 +137,7 @@ func TestSearchHybridVectorCandidatesUnsupportedShapesFailClosed2503(t *testing.
 	}
 	selected := base
 	selected.QueryMode = VectorIndexQueryModeQuantizedRerank
-	selected.QuantizedIndexName = "embedding.scalar_u8.fast"
+	selected.QuantizedIndexName = def.QuantizedIndexes[0].Name
 	selected.QuantizedRerankCandidates = selected.CandidateLimit
 	got, err := col.SearchHybridVectorCandidates(selected)
 	if !errors.Is(err, ErrHybridSearchIndexUnavailable) || len(got.Candidates) != 0 || got.Stats.FailClosed != 1 || got.Stats.FailClosedReason != HybridFailClosedReasonVectorIndexUnavailable {

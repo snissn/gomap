@@ -1,6 +1,7 @@
 package collections
 
 import (
+	"context"
 	"errors"
 	"fmt"
 )
@@ -21,7 +22,20 @@ var errHybridVectorAllowSetScanBudgetExceeded = errors.New("collections: hybrid 
 // ranks, and fails closed if the backing vector path reports any document
 // materialization or unavailable vector-index state.
 func (c *Collection) SearchHybridVectorCandidates(query HybridVectorQuery) (HybridCandidateResponse, error) {
-	if c.typedGraphServingPolicy() != nil {
+	policy := c.typedGraphServingPolicy()
+	if hybridVectorQuerySelectsQuantizedRerank(&query) && policy == nil {
+		requested := query.CandidateLimit
+		stats := hybridVectorCandidateStatsFromSearch(requested, VectorIndexSearchStats{}, 0)
+		if err := validateHybridVectorCandidateQuery(query); err != nil {
+			stats.FailClosed = 1
+			stats.FailClosedReason = HybridFailClosedReasonUnsupported
+			return HybridCandidateResponse{Stats: stats}, err
+		}
+		stats.FailClosed = 1
+		stats.FailClosedReason = HybridFailClosedReasonVectorIndexUnavailable
+		return HybridCandidateResponse{Stats: stats}, hybridVectorCandidateError(ErrVectorIndexSearchUnavailable, query.IndexName)
+	}
+	if policy != nil {
 		return c.searchHybridVectorCandidatesDeclaredScalar(query, nil)
 	}
 	return c.searchHybridVectorCandidatesWithAllowSetBudget(query, nil, query.CandidateLimit)
@@ -104,7 +118,7 @@ func (c *Collection) searchHybridVectorCandidatesDeclaredScalar(query HybridVect
 	return response, convertErr
 }
 
-func (c *Collection) searchHybridVectorCandidatesDeclaredScalarAtReadView(query HybridVectorQuery, filter *HybridScalarFilter, view *CollectionReadView, ownerAcquireNanos int64) (HybridCandidateResponse, error) {
+func (c *Collection) searchHybridVectorCandidatesDeclaredScalarAtReadView(ctx context.Context, query HybridVectorQuery, filter *HybridScalarFilter, view *CollectionReadView, ownerAcquireNanos int64) (HybridCandidateResponse, error) {
 	requested := query.CandidateLimit
 	if err := validateHybridVectorCandidateQuery(query); err != nil {
 		response := HybridCandidateResponse{Stats: hybridVectorCandidateStatsFromSearch(requested, VectorIndexSearchStats{}, 0)}
@@ -116,6 +130,7 @@ func (c *Collection) searchHybridVectorCandidatesDeclaredScalarAtReadView(query 
 		return HybridCandidateResponse{}, hybridVectorCandidateError(ErrVectorIndexSnapshotMismatch, query.IndexName)
 	}
 	opts := hybridVectorSearchOptions(query)
+	opts.Context = ctx
 	opts.StatsMode = VectorIndexSearchStatsModeMinimal
 	opts.DeclaredScalarFilter = filter
 	var buffer VectorIndexSearchBuffer

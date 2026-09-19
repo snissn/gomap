@@ -908,7 +908,7 @@ func (c *Collection) hybridSearchCandidates(plan hybridSearchExecutionPlan, allo
 				filter = plan.scalarFilter
 			}
 			if plan.readView != nil {
-				return c.searchHybridVectorCandidatesDeclaredScalarAtReadView(*plan.vector, filter, plan.readView, plan.readOwnerAcquireNanos)
+				return c.searchHybridVectorCandidatesDeclaredScalarAtReadView(plan.context, *plan.vector, filter, plan.readView, plan.readOwnerAcquireNanos)
 			}
 			return c.searchHybridVectorCandidatesDeclaredScalar(*plan.vector, filter)
 		}

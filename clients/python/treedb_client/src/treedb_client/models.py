@@ -1364,7 +1364,9 @@ class HybridSearchRequest:
         if self.max_postings_scanned is not None:
             out["max_postings_scanned"] = _non_negative_int(self.max_postings_scanned, "hybrid request.max_postings_scanned")
         if self.vector_candidate_limit is not None:
-            out["vector_candidate_limit"] = _as_int(self.vector_candidate_limit, "hybrid request.vector_candidate_limit")
+            out["vector_candidate_limit"] = _non_negative_int(
+                self.vector_candidate_limit, "hybrid request.vector_candidate_limit"
+            )
         vector_query_mode = "exact" if self.vector_query_mode is None else _hybrid_vector_query_mode(
             self.vector_query_mode, "hybrid request.vector_query_mode"
         )
@@ -1373,6 +1375,15 @@ class HybridSearchRequest:
             rerank_candidates = _non_negative_int(
                 self.quantized_rerank_candidates, "hybrid request.quantized_rerank_candidates"
             )
+        has_vector_options = (
+            self.vector_candidate_limit is not None
+            or self.vector_query_mode is not None
+            or self.quantized_index_name is not None
+            or self.quantized_rerank_candidates is not None
+            or self.ef_search is not None
+        )
+        if not out.get("query_embedding") and has_vector_options:
+            raise ValueError("hybrid vector options require query_embedding")
         if vector_query_mode == "exact":
             if self.quantized_index_name is not None or self.quantized_rerank_candidates is not None:
                 raise ValueError("exact hybrid vector search does not accept quantized options")
@@ -1385,7 +1396,14 @@ class HybridSearchRequest:
         if self.quantized_rerank_candidates is not None:
             out["quantized_rerank_candidates"] = rerank_candidates
         if self.ef_search is not None:
-            out["ef_search"] = _as_int(self.ef_search, "hybrid request.ef_search")
+            out["ef_search"] = _non_negative_int(self.ef_search, "hybrid request.ef_search")
+        if vector_query_mode == "quantized_rerank" and rerank_candidates:
+            effective_vector_limit = out.get("vector_candidate_limit") or out.get("candidate_limit") or max(0, out["top_k"] * 4)
+            if rerank_candidates < effective_vector_limit:
+                raise ValueError(
+                    "hybrid request.quantized_rerank_candidates must be zero or at least "
+                    "the effective vector candidate limit"
+                )
         if self.max_chunks_per_parent is not None:
             out["max_chunks_per_parent"] = _as_int(self.max_chunks_per_parent, "hybrid request.max_chunks_per_parent")
         if self.fusion is not None:

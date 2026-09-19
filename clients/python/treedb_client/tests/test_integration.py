@@ -443,6 +443,13 @@ class TreeDBClientIntegrationTests(unittest.TestCase):
                         "quantized", [1.0, 0.0], 5, route="ann", ef_search=64,
                         query_mode="exact", index_info=info,
                     )
+                    hybrid_quantized = control.search_hybrid(
+                        "quantized", query="content-0", query_embedding=[1.0, 0.0], top_k=5,
+                        text_query_mode="literal", text_candidate_limit=64,
+                        vector_candidate_limit=64, ef_search=64,
+                        vector_query_mode="quantized_rerank", quantized_index_name="minima_sq8",
+                        quantized_rerank_candidates=64,
+                    )
                     self.assertEqual(response.native_command_version, 4)
                     self.assertEqual(len(response.documents), 5)
                     self.assertIsNone(response.dense_work)
@@ -466,6 +473,12 @@ class TreeDBClientIntegrationTests(unittest.TestCase):
                         [(row.id, row.score) for row in exact.documents],
                         [(row.id, row.score) for row in http_exact.documents],
                     )
+                    self.assertEqual(hybrid_quantized.plan.vector_query_mode, "quantized_rerank")
+                    self.assertEqual(hybrid_quantized.plan.quantized_index_name, "minima_sq8")
+                    self.assertEqual(hybrid_quantized.stats.vector_route["route"], "typed_hnsw")
+                    self.assertGreater(hybrid_quantized.stats.vector_quantized_score_calls, 0)
+                    self.assertEqual(hybrid_quantized.stats.vector_packed_exact_score_calls, 1)
+                    self.assertTrue(all(row.embedding is None for row in hybrid_quantized.documents))
                     self.assertTrue(all(row.embedding is None for row in response.documents + exact.documents))
                     self.assertEqual(len(with_embedding.documents[0].embedding), 2)
                     self.assertEqual(with_embedding.route_identity.embedding_vector_reads, 1)

@@ -33,6 +33,22 @@ func TestTypedGraphHybridSelectedOwnerSurvivesConcurrentPublication4767(t *testi
 	if err := col.EnsureColumnGraphServing(context.Background(), "embedding_graph", typedGraphPublicTestOptions()); err != nil {
 		t.Fatal(err)
 	}
+	view, acquiredNanos, err := col.openTypedGraphHybridReadView(context.Background(), "embedding_graph")
+	if err != nil {
+		t.Fatal(err)
+	}
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = col.searchHybridVectorCandidatesDeclaredScalarAtReadView(canceled, HybridVectorQuery{
+		IndexName: "embedding_graph", Query: oldColumns[0].Float32Vectors[0], CandidateLimit: 3, EfSearch: 3,
+		QueryMode: VectorIndexQueryModeQuantizedRerank, QuantizedIndexName: "embedding.scalar_u8.legacy", QuantizedRerankCandidates: 3,
+	}, nil, view, acquiredNanos)
+	if closeErr := view.Close(); closeErr != nil {
+		t.Fatal(closeErr)
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("owner-bound selected vector cancellation=%v", err)
+	}
 
 	entered, release := make(chan struct{}), make(chan struct{})
 	var once sync.Once

@@ -93,7 +93,7 @@ func TestServiceTypedHybridQuantizedRerankPublicRoute4767(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(empty.Documents) != 0 || empty.Stats.VectorRoute != nil || empty.Stats.VectorCandidatesReturned != 0 || empty.Plan.VectorQueryMode != collections.VectorIndexQueryModeQuantizedRerank {
+	if len(empty.Documents) != 0 || empty.Stats.VectorRoute != nil || empty.Stats.VectorCandidatesReturned != 0 || empty.Plan.VectorQueryMode != collections.VectorIndexQueryModeQuantizedRerank || empty.Stats.CandidateBudgetPolicy != collections.HybridCandidateBudgetPolicyFixed || empty.Stats.CandidateBudgetStopReason != collections.HybridCandidateBudgetStopReasonFixedPolicy {
 		t.Fatalf("selected empty-filter response=%+v", empty)
 	}
 
@@ -103,6 +103,8 @@ func TestServiceTypedHybridQuantizedRerankPublicRoute4767(t *testing.T) {
 		"quantized only":                    {QueryEmbedding: []float32{1, 0}, TopK: 1, VectorQueryMode: collections.VectorIndexQueryModeQuantizedOnly, QuantizedIndexName: request.QuantizedIndexName},
 		"rerank below effective candidates": {QueryEmbedding: []float32{1, 0}, TopK: 1, VectorCandidateLimit: 3, VectorQueryMode: collections.VectorIndexQueryModeQuantizedRerank, QuantizedIndexName: request.QuantizedIndexName, QuantizedRerankCandidates: 2},
 		"unknown quantized index":           {QueryEmbedding: []float32{1, 0}, TopK: 1, VectorQueryMode: collections.VectorIndexQueryModeQuantizedRerank, QuantizedIndexName: "missing.scalar_u8"},
+		"vector budget without embedding":   {Query: "refund", TopK: 1, VectorCandidateLimit: 3},
+		"vector ef without embedding":       {Query: "refund", TopK: 1, EfSearch: 3},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := svc.SearchHybrid(ctx, create.Name, malformed); err == nil {

@@ -415,6 +415,17 @@ class KeywordHybridModelTests(unittest.TestCase):
                 top_k=1, query_embedding=[1.0], vector_query_mode="quantized_rerank",
                 quantized_index_name="embedding.scalar_u8.fast", quantized_rerank_candidates=-1,
             ).to_dict()
+        with self.assertRaisesRegex(ValueError, "require query_embedding"):
+            HybridSearchRequest(
+                top_k=1, query="refund", vector_query_mode="quantized_rerank",
+                quantized_index_name="embedding.scalar_u8.fast",
+            ).to_dict()
+        with self.assertRaisesRegex(ValueError, "effective vector candidate limit"):
+            HybridSearchRequest(
+                top_k=1, query_embedding=[1.0], vector_candidate_limit=3,
+                vector_query_mode="quantized_rerank", quantized_index_name="embedding.scalar_u8.fast",
+                quantized_rerank_candidates=2,
+            ).to_dict()
 
     def test_hybrid_response_parses_plan_snapshot_stats(self) -> None:
         response = HybridSearchResponse.from_dict(

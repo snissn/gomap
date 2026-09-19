@@ -54,7 +54,7 @@ func (c *Collection) hybridSearchCandidatesWithBudgetPolicy(plan hybridSearchExe
 		policy := HybridCandidateBudgetPolicyFixed
 		stop := HybridCandidateBudgetStopReasonFixedPolicy
 		fallback := HybridCandidateBudgetStopReasonNone
-		if mode != hybridCandidateBudgetPolicyFixed {
+		if mode != hybridCandidateBudgetPolicyFixed && !hybridVectorQuerySelectsQuantizedRerank(plan.vector) {
 			if _, fallbackReason, ok := hybridCandidateBudgetRRFParamsForPlan(plan); ok {
 				policy = HybridCandidateBudgetPolicyAdaptiveRRF
 				stop = HybridCandidateBudgetStopReasonEmptyScalarAllowSet
