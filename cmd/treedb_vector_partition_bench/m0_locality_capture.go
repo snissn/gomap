@@ -73,14 +73,14 @@ func runM0LocalityCaptureV1(args []string, stdout io.Writer) error {
 	fs.StringVar(&out, "out", "", "fresh JSON output")
 	fs.StringVar(&artifactPath, "artifact", "", "frozen graph artifact for raw layout identity")
 	fs.IntVar(&probes, "probes", 2, "router partition probes")
-	fs.IntVar(&candidates, "router-candidates", 64, "router candidate budget")
+	fs.IntVar(&candidates, "router-score-budget", 64, "router candidate budget")
 	fs.IntVar(&ef, "ef-search", 128, "native ef search")
 	fs.BoolVar(&rawTraces, "raw-traces", false, "persist offline trace events and pack layout snapshots")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if fs.NArg() != 0 || dataset == "" || db == "" || splitPath == "" || out == "" || probes < 1 || candidates < probes || ef < 1 {
-		return errors.New("m0-locality-capture requires frozen inputs and positive bounded probes/router-candidates/ef")
+		return errors.New("m0-locality-capture requires frozen inputs and positive bounded probes/router-score-budget/ef")
 	}
 	buildIdentity, err := m0CurrentCleanBuildIdentityV1()
 	if err != nil {

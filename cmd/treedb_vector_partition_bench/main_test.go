@@ -673,7 +673,7 @@ func TestRouterStageUsesPersistedExactAndNativeHNSWPaths(t *testing.T) {
 		"-partitions", "4",
 		"-probes", "2",
 		"-stage", "router",
-		"-router-representatives", "2",
+		"-router-global-budget", "12", "-router-width", "12", "-router-beam", "12",
 		"-router-leaf-size", "1",
 		"-router-max-bytes", "1",
 	}, io.Discard); err == nil || !strings.Contains(err.Error(), "estimated bytes") {
@@ -687,9 +687,9 @@ func TestRouterStageUsesPersistedExactAndNativeHNSWPaths(t *testing.T) {
 		"-partitions", "4",
 		"-probes", "2",
 		"-stage", "router",
-		"-router-representatives", "2",
+		"-router-global-budget", "12", "-router-width", "12", "-router-beam", "12",
 		"-router-leaf-size", "1",
-		"-router-candidates", "8",
+		"-router-score-budget", "128",
 	}
 	if err := runWithHermeticProvenance(t, args, &stdout); err != nil {
 		t.Fatal(err)
@@ -705,9 +705,9 @@ func TestRouterStageUsesPersistedExactAndNativeHNSWPaths(t *testing.T) {
 		result.ProductionEvidence ||
 		result.Metrics.MeasurementStatus != "router_local_production_path_no_raft" ||
 		result.Metrics.SourceHNSWDegree != partitionHNSWDegree ||
-		result.Metrics.RepresentativeCount != 8 ||
-		result.Metrics.MinRepresentatives != 2 ||
-		result.Metrics.MaxRepresentatives != 2 ||
+		result.Metrics.RepresentativeCount != 12 ||
+		result.Metrics.MinRepresentatives != 3 ||
+		result.Metrics.MaxRepresentatives != 3 ||
 		result.Metrics.RouterBytes <= 0 ||
 		result.Metrics.MappedBytes+result.Metrics.HeapCopyBytes <= 0 {
 		t.Fatalf("router result=%+v", result)
@@ -722,8 +722,8 @@ func TestRouterStageUsesPersistedExactAndNativeHNSWPaths(t *testing.T) {
 		}
 	}
 	if exact.Searches != 4 || approximate.Searches != 4 ||
-		exact.CandidateBudget != 8 || approximate.CandidateBudget != 8 ||
-		exact.Candidates != 32 || approximate.Candidates != 32 ||
+		exact.CandidateBudget != 12 || approximate.CandidateBudget != 128 ||
+		exact.Candidates != 48 || approximate.Candidates != 48 ||
 		exact.RecallAtK != approximate.RecallAtK ||
 		!result.Metrics.CoarseningMeasured ||
 		!result.Metrics.ApproximateMeasured ||
@@ -810,7 +810,7 @@ func TestM6CoordinatorStageUsesRealM4M6AndLabelsLocalSimulation(t *testing.T) {
 		"-top-k", "10",
 		"-stage", m6CoordinatorStageV1,
 		"-source-hnsw-degree", "4",
-		"-router-representatives", "2",
+		"-router-global-budget", "12", "-router-width", "12", "-router-beam", "12",
 		"-router-leaf-size", "1",
 	}
 	if err := runWithHermeticProvenance(t, args, &stdout); err != nil {
@@ -881,9 +881,9 @@ func TestM6CoordinatorHarnessCloseReleasesCachedRouterSession(t *testing.T) {
 	_, vectors, queries := smallFixtureForTest(32, 1, 8)
 	routerConfig := vectorpartition.DefaultRouterConfigV1()
 	routerConfig.LeafSize = 1
-	routerConfig.RepresentativesPerPartition = 2
+	routerConfig.RepresentativeBudget = 12
 	routerConfig.MaxVectors = len(vectors)
-	router, err := newTreeDBRepresentativeRouter(vectors, 4, routerConfig, 2, 4)
+	router, err := newTreeDBRepresentativeRouter(vectors, 4, routerConfig, 128, 12, 12, 4)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1114,11 +1114,11 @@ func TestM3ConfiguredPartitionLocalHNSWBuildsProductionV3Packs(t *testing.T) {
 		routerStatus := router.Status()
 		routes := make([][]uint32, 0, len(queries)*4)
 		for _, query := range queries {
-			for _, options := range []collections.VectorPartitionRouterSearchOptionsV1{
-				{Mode: collections.VectorPartitionRouterModeExactV1, CandidateBudget: int(routerStatus.Representatives), PartitionProbes: 2},
-				{Mode: collections.VectorPartitionRouterModeApproxV1, CandidateBudget: int(routerStatus.Representatives), PartitionProbes: 2},
-				{Mode: collections.VectorPartitionRouterModeExactV1, CandidateBudget: int(routerStatus.Representatives), PartitionProbes: 16},
-				{Mode: collections.VectorPartitionRouterModeApproxV1, CandidateBudget: int(routerStatus.Representatives), PartitionProbes: 16},
+			for _, options := range []collections.VectorPartitionRouterSearchOptionsV2{
+				{Mode: collections.VectorPartitionRouterModeExactV1, ScoreBudget: int(routerStatus.Representatives) * 8, ReturnedWidth: int(routerStatus.Representatives), BeamWidth: int(routerStatus.Representatives), PartitionProbes: 2},
+				{Mode: collections.VectorPartitionRouterModeApproxV1, ScoreBudget: int(routerStatus.Representatives) * 8, ReturnedWidth: int(routerStatus.Representatives), BeamWidth: int(routerStatus.Representatives), PartitionProbes: 2},
+				{Mode: collections.VectorPartitionRouterModeExactV1, ScoreBudget: int(routerStatus.Representatives) * 8, ReturnedWidth: int(routerStatus.Representatives), BeamWidth: int(routerStatus.Representatives), PartitionProbes: 16},
+				{Mode: collections.VectorPartitionRouterModeApproxV1, ScoreBudget: int(routerStatus.Representatives) * 8, ReturnedWidth: int(routerStatus.Representatives), BeamWidth: int(routerStatus.Representatives), PartitionProbes: 16},
 			} {
 				result, err := router.Search(query, options)
 				if err != nil {
@@ -2023,7 +2023,7 @@ func TestM8ProductionModeParsesCanonicalTopologyAndSweepsV1(t *testing.T) {
 	}
 	if cfg.stage != m8ProductionMultiGroupModeV1 || cfg.raftGroups != 4 || cfg.raftNodes != 3 ||
 		fmt.Sprint(cfg.probes) != "[1 4 16]" || fmt.Sprint(cfg.overlaps) != "[0 0.2]" ||
-		fmt.Sprint(cfg.concurrency) != "[1 16 64]" || cfg.warmup != 3 || fmt.Sprint(cfg.efSearch) != "[64 4096]" || cfg.routerCandidates != 64 || cfg.m8ExistingDB != "/retained/m8-assets" {
+		fmt.Sprint(cfg.concurrency) != "[1 16 64]" || cfg.warmup != 3 || fmt.Sprint(cfg.efSearch) != "[64 4096]" || cfg.routerCandidates != 1024 || cfg.routerWidth != 64 || cfg.routerBeam != 96 || cfg.m8ExistingDB != "/retained/m8-assets" {
 		t.Fatalf("M8 config=%+v", cfg)
 	}
 	limit := nativewire.DefaultVectorPartitionCoordinatorLimitsV1().MaxSelectedPartitions
@@ -2034,8 +2034,8 @@ func TestM8ProductionModeParsesCanonicalTopologyAndSweepsV1(t *testing.T) {
 	if err != nil {
 		t.Fatalf("rejected M8 coordinator partition boundary %d: %v", limit, err)
 	}
-	if boundary.routerCandidates != limit {
-		t.Fatalf("M8 coordinator partition boundary candidates=%d want %d", boundary.routerCandidates, limit)
+	if boundary.routerCandidates != 1024 {
+		t.Fatalf("M8 partition count changed independent score budget: %d", boundary.routerCandidates)
 	}
 	for _, args := range [][]string{
 		{"-mode", m8ProductionMultiGroupModeV1, "-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", "16", "-raft-groups", "1"},
@@ -2044,7 +2044,7 @@ func TestM8ProductionModeParsesCanonicalTopologyAndSweepsV1(t *testing.T) {
 		{"-stage", "router", "-m8-existing-db", "/retained/m8-assets", "-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", "16", "-probes", "1"},
 		{"-mode", m8ProductionMultiGroupModeV1, "-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", "16", "-raft-groups", "4", "-warmup", "-1"},
 		{"-mode", m8ProductionMultiGroupModeV1, "-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", strconv.Itoa(limit + 1), "-raft-groups", "2"},
-		{"-mode", m8ProductionMultiGroupModeV1, "-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", "16", "-raft-groups", "4", "-probes", "1,4", "-router-candidates", "2"},
+		{"-mode", m8ProductionMultiGroupModeV1, "-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", "16", "-raft-groups", "4", "-probes", "1,4", "-router-score-budget", "2"},
 	} {
 		if _, err := parseConfig(args); err == nil {
 			t.Fatalf("accepted malformed M8 config %#v", args)
@@ -2097,8 +2097,8 @@ func TestM8UnsupportedOverlapSkipsMeasuredAndAttributionWorkV1(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Logical-domain and physical-pack evidence adds two slices and two counters.
-	if plan.QueryRequests != 4 || plan.MeasuredQueryRequests != 0 || plan.WarmupAndPreflightQueryRequests != 4 || plan.AttributionQueryPasses != 0 || plan.RetainedCoordinatorCells != 0 || plan.RetainedCoordinatorResults != 0 || plan.CurrentCellOutcomes != 2 || plan.CurrentCellOutcomeBytes != 1780 || plan.CurrentQueryConversionBytes != 64 || plan.RetainedAttributionMatrices != 0 || plan.RetainedAttributionResults != 0 || plan.RetainedAttributionBytes != 0 || plan.AttributionMergeScratchResults != 0 || plan.AttributionMergeScratchBytes != 0 {
+	// Each outcome also retains three charged router-work counters.
+	if plan.QueryRequests != 4 || plan.MeasuredQueryRequests != 0 || plan.WarmupAndPreflightQueryRequests != 4 || plan.AttributionQueryPasses != 0 || plan.RetainedCoordinatorCells != 0 || plan.RetainedCoordinatorResults != 0 || plan.CurrentCellOutcomes != 2 || plan.CurrentCellOutcomeBytes != 1828 || plan.CurrentQueryConversionBytes != 64 || plan.RetainedAttributionMatrices != 0 || plan.RetainedAttributionResults != 0 || plan.RetainedAttributionBytes != 0 || plan.AttributionMergeScratchResults != 0 || plan.AttributionMergeScratchBytes != 0 {
 		t.Fatalf("unsupported-only M8 work plan=%+v", plan)
 	}
 }

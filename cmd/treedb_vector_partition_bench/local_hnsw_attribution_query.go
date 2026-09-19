@@ -396,7 +396,7 @@ func localHNSWAttributionQueryPartitionRowsFromDocumentIDsV1(partitionDocumentID
 }
 
 func localHNSWAttributionQueryRouteV1(ctx context.Context, source *m8ProductionMultiGroupAssetsV1, query []float32, candidates, probes int) ([]uint32, error) {
-	route, err := source.router.SearchWithContextV1(ctx, query, collections.VectorPartitionRouterSearchOptionsV1{Mode: collections.VectorPartitionRouterModeApproxV1, CandidateBudget: candidates, PartitionProbes: probes})
+	route, err := source.router.SearchWithContextV1(ctx, query, collections.VectorPartitionRouterSearchOptionsV2{Mode: collections.VectorPartitionRouterModeApproxV1, ScoreBudget: candidates, ReturnedWidth: candidates, BeamWidth: candidates, PartitionProbes: probes})
 	if err != nil || route.Status.Mode != collections.VectorPartitionRouterModeApproxV1 || len(route.Partitions) != probes {
 		return nil, errors.New("retained local HNSW router query")
 	}

@@ -2,8 +2,9 @@ package main
 
 import (
 	"context"
-	"github.com/snissn/gomap/TreeDB/collections"
 	"testing"
+
+	"github.com/snissn/gomap/TreeDB/collections"
 )
 
 // This fixture uses the actual immutable M8 source/router/local packs, without
@@ -34,11 +35,12 @@ func m8RouterPreparedBenchFixtureV1(b *testing.B) (*m8ProductionMultiGroupAssets
 	return h, out
 }
 
-// The identical benchmark is run on the base and candidate production sources.
+// This V2 recipe declares separate w/E/C. The historical V1 recipe belongs to
+// its original commit; it is not a matched-work comparison with this benchmark.
 // This is router query cost, NOT full partition ANN QPS or public-service QPS.
 func BenchmarkM8RouterOrdinaryPathV1(b *testing.B) {
 	h, queries := m8RouterPreparedBenchFixtureV1(b)
-	opts := collections.VectorPartitionRouterSearchOptionsV1{Mode: collections.VectorPartitionRouterModeApproxV1, CandidateBudget: int(h.status.Representatives), PartitionProbes: 2}
+	opts := collections.VectorPartitionRouterSearchOptionsV2{Mode: collections.VectorPartitionRouterModeApproxV1, ScoreBudget: 4096, ReturnedWidth: int(h.status.Representatives), BeamWidth: int(h.status.Representatives), PartitionProbes: 2}
 	ctx := context.Background()
 	for _, q := range queries {
 		if _, err := h.router.SearchWithContextV1(ctx, q, opts); err != nil {

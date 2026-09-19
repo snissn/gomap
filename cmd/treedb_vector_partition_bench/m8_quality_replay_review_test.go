@@ -38,6 +38,9 @@ func TestM8QualityRetainedShortfallReplaysStaticEvidence(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = assets.Close() })
+	// Deliberately restrict returned width, not the score budget: w=1 cannot
+	// cover two domains even when traversal completes successfully.
+	assets.routerWidth, assets.routerBeam = 1, int(assets.status.Representatives)
 	h, err := newM8AttributionHarnessV1(assets)
 	if err != nil {
 		t.Fatal(err)
@@ -58,7 +61,7 @@ func TestM8QualityRetainedShortfallReplaysStaticEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cell, err := m8BuildAttributionV1(t.Context(), assets, homes, members, queries, truth, oracles, 2, 32, 10, 1, make([][]m8CanonicalResultV1, len(queries)), h)
+	cell, err := m8BuildAttributionV1(t.Context(), assets, homes, members, queries, truth, oracles, 2, 32, 10, 256, make([][]m8CanonicalResultV1, len(queries)), h)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,7 +72,7 @@ func TestM8QualityRetainedShortfallReplaysStaticEvidence(t *testing.T) {
 	if err := m8AttachAttributionV1(&row, cell, cell.Local); err != nil {
 		t.Fatal(err)
 	}
-	report := m8ProductionReportV1{Dataset: fixture, RouterRepresentatives: assets.status.Representatives, Config: m8ProductionConfigEvidenceV1{TopK: 10, Partitions: 4, DomainCount: 4, PacksPerDomain: []int{1, 1, 1, 1}, RouterCandidates: 1, QualityDiagnostics: true}, Variant: &m3VariantDescriptorV1{DatabaseDirectory: dir}, Rows: []m8ProductionRowV1{row}}
+	report := m8ProductionReportV1{Dataset: fixture, RouterRepresentatives: assets.status.Representatives, Config: m8ProductionConfigEvidenceV1{TopK: 10, Partitions: 4, DomainCount: 4, PacksPerDomain: []int{1, 1, 1, 1}, RouterCandidates: 256, RouterWidth: assets.routerWidth, RouterBeam: assets.routerBeam, QualityDiagnostics: true}, Variant: &m3VariantDescriptorV1{DatabaseDirectory: dir}, Rows: []m8ProductionRowV1{row}}
 	// Failed producer rows carry no successful coordinator results or timings.
 	transcript := m8ProductionMeasurementTranscriptV1{Outcomes: []m8ProductionRowOutcomesV1{{}}}
 	if err := errors.Join(h.Close(), assets.Close()); err != nil {

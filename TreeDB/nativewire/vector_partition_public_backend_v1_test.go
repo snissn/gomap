@@ -446,6 +446,7 @@ func publicCountersFromCoordinatorTestV1(counters VectorPartitionCoordinatorCoun
 		HNSWServedPartitions: counters.HNSWServedPartitions, ExactScanPartitions: counters.ExactScanPartitions,
 		Requests: counters.Requests, RPCs: counters.RPCs, Retries: counters.Retries, Redirects: counters.Redirects,
 		Candidates: counters.Candidates, Edges: counters.Edges,
+		RouterScoreCalls: counters.RouterScoreCalls, RouterCandidates: counters.RouterCandidates, RouterEdges: counters.RouterEdges,
 		SnapshotPins: counters.SnapshotPins, ReadProofs: counters.ReadProofs, GenerationPins: counters.GenerationPins, PartitionOpens: counters.PartitionOpens,
 		QueryBytes: counters.QueryBytes, RequestBytes: counters.RequestBytes, CandidateBytes: counters.CandidateBytes, ResponseBytes: counters.ResponseBytes,
 	}

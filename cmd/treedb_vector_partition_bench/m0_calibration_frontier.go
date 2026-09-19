@@ -129,7 +129,7 @@ func runM0CalibrationFrontierV1(args []string, stdout io.Writer) error {
 	fs.StringVar(&mode, "mode", "zero", "materialized membership mode")
 	fs.StringVar(&probesRaw, "probes", "1,2,4", "ordered probes")
 	fs.StringVar(&efRaw, "ef", "80,81,88,96", "ordered EFs")
-	fs.IntVar(&candidates, "router-candidates", 64, "router candidates")
+	fs.IntVar(&candidates, "router-score-budget", 64, "router candidates")
 	fs.IntVar(&topK, "top-k", 10, "top K")
 	fs.BoolVar(&allowOfflineGraphVariant, "allow-offline-graph-variant", false, "admit a recognized offline-only graph variant for characterization")
 	if fs.Parse(args) != nil || fs.NArg() != 0 || db == "" || dataset == "" || calibration == "" || truthCache == "" || membershipReport == "" || assignmentArtifact == "" || graphArtifact == "" || out == "" || (mode != "zero" && mode != "useful_only_20") || candidates < 1 || topK != 10 {
@@ -433,7 +433,7 @@ func m0FrontierCellBuildV1(h *m8ProductionMultiGroupAssetsV1, searchers []*colle
 		ordinal := routeInput.Ordinal
 		q := m8Query32V1(queries[ordinal])
 		one := time.Now()
-		routed, err := h.router.SearchWithContextV1(context.Background(), q, collections.VectorPartitionRouterSearchOptionsV1{Mode: collections.VectorPartitionRouterModeApproxV1, CandidateBudget: candidates, PartitionProbes: probes})
+		routed, err := h.router.SearchWithContextV1(context.Background(), q, collections.VectorPartitionRouterSearchOptionsV2{Mode: collections.VectorPartitionRouterModeApproxV1, ScoreBudget: candidates, ReturnedWidth: candidates, BeamWidth: candidates, PartitionProbes: probes})
 		if err != nil || len(routed.Partitions) != len(routeInput.Route) {
 			return c, errors.New("M0 timed route")
 		}
@@ -537,7 +537,7 @@ func m0FrontierRoutesV1(h *m8ProductionMultiGroupAssetsV1, ordinals []int, queri
 			return nil, errors.New("M0 route query ordinal")
 		}
 		q := m8Query32V1(queries[ordinal])
-		r, e := h.router.SearchWithContextV1(context.Background(), q, collections.VectorPartitionRouterSearchOptionsV1{Mode: collections.VectorPartitionRouterModeApproxV1, CandidateBudget: candidates, PartitionProbes: probes})
+		r, e := h.router.SearchWithContextV1(context.Background(), q, collections.VectorPartitionRouterSearchOptionsV2{Mode: collections.VectorPartitionRouterModeApproxV1, ScoreBudget: candidates, ReturnedWidth: candidates, BeamWidth: candidates, PartitionProbes: probes})
 		if e != nil || len(r.Partitions) != probes {
 			return nil, errors.New("M0 route")
 		}

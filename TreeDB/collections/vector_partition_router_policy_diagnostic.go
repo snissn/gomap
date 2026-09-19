@@ -14,13 +14,14 @@ import (
 // not a new serving policy or a promise of improved recall.
 const VectorPartitionRouterPolicyDiagnosticMethodV1 = vectorPartitionRankingDiagnosticMethodV1
 
-// VectorPartitionRouterPolicyDiagnosticOptionsV1 keeps returned-width trimming
-// separate from the unchanged legacy candidate collector. In exact mode the
-// entire model is scored before nearest-ReturnedWidth selection and voting.
+// VectorPartitionRouterPolicyDiagnosticOptionsV1 compares policies using the
+// current V2 collector. It cannot reproduce frozen V1-policy receipts: the model
+// identity, hierarchy and actual-score budget semantics have changed.
 type VectorPartitionRouterPolicyDiagnosticOptionsV1 struct {
 	Mode            string
 	CandidateBudget int
 	ReturnedWidth   int
+	BeamWidth       int
 	PartitionProbes int
 }
 
@@ -42,6 +43,8 @@ type VectorPartitionRouterPolicyComparisonV1 struct {
 	DomainCount             int                                   `json:"domain_count"`
 	CandidateBudget         int                                   `json:"candidate_budget"`
 	ReturnedWidth           int                                   `json:"returned_width"`
+	BeamWidth               int                                   `json:"beam_width"`
+	ScoreCalls              uint64                                `json:"score_calls"`
 	Probes                  int                                   `json:"probes"`
 	CollectionComplete      bool                                  `json:"collection_complete"`
 	Collected               int                                   `json:"collected"`
@@ -91,7 +94,7 @@ func (r *VectorPartitionRouterV1) CompareRankingPoliciesForDiagnosticsV1(ctx con
 		opts.Mode = VectorPartitionRouterModeApproxV1
 	}
 	n, d := len(r.model.Representatives), r.model.Metrics.Partitions
-	if n < 1 || d < 1 || d > n || opts.PartitionProbes < 1 || opts.PartitionProbes > d || opts.ReturnedWidth < 1 || opts.ReturnedWidth > n || opts.CandidateBudget < opts.ReturnedWidth {
+	if n < 1 || d < 1 || d > n || opts.PartitionProbes < 1 || opts.PartitionProbes > d || opts.ReturnedWidth < 1 || opts.ReturnedWidth > opts.BeamWidth || opts.BeamWidth > n || opts.CandidateBudget < 1 || opts.CandidateBudget > MaxVectorPartitionRouterScoreBudgetV2 {
 		return out, errors.New("collections: invalid router policy diagnostic shape")
 	}
 	switch opts.Mode {
@@ -100,9 +103,6 @@ func (r *VectorPartitionRouterV1) CompareRankingPoliciesForDiagnosticsV1(ctx con
 			return out, errors.New("collections: exact router diagnostic requires full representative scan")
 		}
 	case VectorPartitionRouterModeApproxV1:
-		if opts.CandidateBudget > n {
-			return out, errors.New("collections: approximate router diagnostic budget exceeds model")
-		}
 	default:
 		return out, errors.New("collections: unknown router policy diagnostic mode")
 	}
@@ -116,8 +116,20 @@ func (r *VectorPartitionRouterV1) CompareRankingPoliciesForDiagnosticsV1(ctx con
 		RepresentativeCount: n, DomainCount: d, CandidateBudget: opts.CandidateBudget, ReturnedWidth: opts.ReturnedWidth, Probes: opts.PartitionProbes}
 	meta := vectorPartitionPolicyContextV1{ModelDigest: out.ModelSHA256, QueryDigest: out.QuerySHA256, Mode: opts.Mode,
 		RepresentativeCount: n, DomainCount: d, CandidateBudget: opts.CandidateBudget, ReturnedWidth: opts.ReturnedWidth, Probes: opts.PartitionProbes}
-	candidates, work, err := r.collectVectorPartitionRouterCandidatesLockedV1(ctx, query, normalized, VectorPartitionRouterSearchOptionsV1{Mode: opts.Mode, CandidateBudget: opts.CandidateBudget, PartitionProbes: opts.PartitionProbes})
+	out.BeamWidth = opts.BeamWidth
+	meta.BeamWidth = opts.BeamWidth
+	width, beam := opts.ReturnedWidth, opts.BeamWidth
+	if opts.Mode == VectorPartitionRouterModeExactV1 {
+		// The diagnostic reducer owns exact-reference width trimming and proves
+		// the full source population before comparing policies on that prefix.
+		width, beam = n, n
+	}
+	candidates, work, err := r.collectVectorPartitionRouterCandidatesLockedV1(ctx, query, normalized, VectorPartitionRouterSearchOptionsV2{Mode: opts.Mode, ScoreBudget: opts.CandidateBudget, ReturnedWidth: width, BeamWidth: beam, PartitionProbes: opts.PartitionProbes})
+	out.ScoreCalls = work.ScoreCalls
 	if err != nil {
+		if errors.Is(err, errTypedGraphSearchBudget) {
+			err = ErrVectorPartitionRouterScoreBudget
+		}
 		return out, err
 	}
 	out.CollectionComplete = true

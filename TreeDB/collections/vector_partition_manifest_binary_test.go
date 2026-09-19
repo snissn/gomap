@@ -93,7 +93,7 @@ func parseVPMBinaryLayout(t testing.TB, raw []byte) vpmBinaryLayout {
 	if got := c.u32(); got != vectorPartitionManifestMagicV1 {
 		t.Fatalf("binary fixture magic=%#x", got)
 	}
-	if got := c.u32(); got != 4 {
+	if got := c.u32(); got != 5 {
 		t.Fatalf("binary fixture version=%d", got)
 	}
 	var layout vpmBinaryLayout
@@ -110,13 +110,24 @@ func parseVPMBinaryLayout(t testing.TB, raw []byte) vpmBinaryLayout {
 	layout.placements = c.placements()
 	layout.memberships = c.memberships()
 	layout.overlaps = c.memberships()
-	layout.representatives = c.memberships()
+	layout.representatives = c.representatives()
 	layout.assets = c.assets()
 	layout.end = c.off
 	if layout.end != len(raw) {
 		t.Fatalf("binary layout consumed %d of %d bytes", layout.end, len(raw))
 	}
 	return layout
+}
+
+func (c *vpmBinaryLayoutCursor) representatives() vpmBinaryList[vpmBinaryMembershipItem] {
+	countOffset, n := c.count()
+	list := vpmBinaryList[vpmBinaryMembershipItem]{countOffset: countOffset, items: make([]vpmBinaryMembershipItem, n)}
+	for i := range list.items {
+		span := c.take(16)
+		list.items[i] = vpmBinaryMembershipItem{vpmBinarySpan: span, ordinalOffset: span.start, partitionOffset: span.start + 8}
+	}
+	list.end = c.off
+	return list
 }
 
 func (c *vpmBinaryLayoutCursor) domainPacks() vpmBinaryList[vpmBinaryDomainPackItem] {
@@ -229,7 +240,7 @@ func cloneVPMForBinaryMutation(m VectorPartitionManifestV1) VectorPartitionManif
 	m.Placements = append([]VectorPartitionPlacementV1(nil), m.Placements...)
 	m.Memberships = append([]VectorPartitionMembershipV1(nil), m.Memberships...)
 	m.OverlapMemberships = append([]VectorPartitionMembershipV1(nil), m.OverlapMemberships...)
-	m.Representatives = append([]VectorPartitionMembershipV1(nil), m.Representatives...)
+	m.Representatives = append([]VectorPartitionRepresentativeV2(nil), m.Representatives...)
 	m.Assets = append([]VectorPartitionAssetV1(nil), m.Assets...)
 	return m
 }
@@ -616,7 +627,7 @@ func TestVectorPartitionManifestV1BinaryConfiguredLimitBoundaries(t *testing.T) 
 	maxPartitionsOver := maxPartitions
 	maxPartitionsOver.MaxPartitions--
 	maxMemberships := defaults
-	maxMemberships.MaxMemberships = totalMembershipsVPM(base.Memberships, base.OverlapMemberships, base.Representatives)
+	maxMemberships.MaxMemberships = (totalMembershipsVPM(base.Memberships, base.OverlapMemberships) + len(base.Representatives))
 	maxMembershipsOver := maxMemberships
 	maxMembershipsOver.MaxMemberships--
 	maxAssets := defaults

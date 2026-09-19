@@ -223,7 +223,7 @@ func TestM8PlannedRouterPolicyReceiptSizeV1(t *testing.T) {
 			Exact: exact, Approximate: m8RouterPolicyOutcomeV1{Status: "pass", Comparison: comparison, Coverage: coverage}}
 	}
 	row.Attribution.RouterPolicies = policies
-	report.Command = append(report.Command, "-m8-router-policy-diagnostics", "-m8-router-policy-width", "64", "-probes", "2", "-ef-search", "96", "-router-candidates", "128")
+	report.Command = append(report.Command, "-m8-router-policy-diagnostics", "-m8-router-policy-width", "64", "-probes", "2", "-ef-search", "96", "-router-score-budget", "128")
 	for _, item := range []struct {
 		value any
 		pin   *string

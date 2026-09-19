@@ -128,7 +128,8 @@ func (b *VectorPartitionPublicBackendV1) coordinatorRequestV1(request public.Sea
 	sequence := b.sequence.Add(1)
 	r.RequestID = fmt.Sprintf("%s/%016x", r.RequestID, sequence)
 	r.CancellationID = fmt.Sprintf("%s/%016x", r.CancellationID, sequence)
-	r.Version, r.Query, r.IndexName, r.Metric, r.TopK, r.PartitionProbes, r.EfSearch, r.Consistency = request.Version, request.Query, request.Generation.Index, VectorPartitionShardSearchMetricV1(request.Metric), request.TopK, request.Probes, request.EfSearch, VectorPartitionShardSearchConsistencyV1(request.Consistency)
+	// Public API V1 and coordinator routing V2 are separate protocol boundaries.
+	r.Version, r.Query, r.IndexName, r.Metric, r.TopK, r.PartitionProbes, r.EfSearch, r.Consistency = VectorPartitionCoordinatorVersionV1, request.Query, request.Generation.Index, VectorPartitionShardSearchMetricV1(request.Metric), request.TopK, request.Probes, request.EfSearch, VectorPartitionShardSearchConsistencyV1(request.Consistency)
 	r.RequestBytesLimit, r.CandidateBytesLimit, r.ResponseBytesLimit, r.MergeEntriesLimit = request.Limits.RequestBytes, request.Limits.CandidateBytes, request.Limits.ResponseBytes, request.Limits.MergeEntries
 	r.DeadlineUnixNano = 0
 	if !request.Deadline.IsZero() {
@@ -146,6 +147,7 @@ func (b *VectorPartitionPublicBackendV1) publicSearchResponseV1(request public.S
 	}
 	adapterStarted := time.Now()
 	result := public.SearchResponseV1{Generation: request.Generation, Counters: public.SearchCountersV1{
+		RouterScoreCalls: response.Counters.RouterScoreCalls, RouterCandidates: response.Counters.RouterCandidates, RouterEdges: response.Counters.RouterEdges,
 		SelectedDomains: response.Counters.SelectedDomains, SelectedPacks: response.Counters.SelectedPacks,
 		SelectedPartitions: response.Counters.SelectedPartitions, SelectedGroups: response.Counters.SelectedGroups,
 		HNSWServedPartitions: response.Counters.HNSWServedPartitions, ExactScanPartitions: response.Counters.ExactScanPartitions,

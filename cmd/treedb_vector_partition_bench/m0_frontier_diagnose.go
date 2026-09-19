@@ -187,7 +187,7 @@ func runM0FrontierDiagnoseV1(args []string, stdout io.Writer) error {
 	}
 	for _, ordinal := range split.Ordinals {
 		q := m8Query32V1(queries[ordinal])
-		routed, err := h.router.SearchWithContextV1(context.Background(), q, collections.VectorPartitionRouterSearchOptionsV1{Mode: collections.VectorPartitionRouterModeApproxV1, CandidateBudget: 64, PartitionProbes: 4})
+		routed, err := h.router.SearchWithContextV1(context.Background(), q, collections.VectorPartitionRouterSearchOptionsV2{Mode: collections.VectorPartitionRouterModeApproxV1, ScoreBudget: 64, ReturnedWidth: 64, BeamWidth: 64, PartitionProbes: 4})
 		if err != nil || len(routed.Partitions) != 4 {
 			return errors.New("M0 diagnostic route")
 		}
@@ -232,7 +232,7 @@ func runM0FrontierDiagnoseV1(args []string, stdout io.Writer) error {
 		if h.status.Representatives == 0 || h.status.Representatives > uint64(^uint(0)>>1) {
 			return errors.New("M0 diagnostic exact router representatives")
 		}
-		exact, err := h.router.SearchWithContextV1(context.Background(), q, collections.VectorPartitionRouterSearchOptionsV1{Mode: collections.VectorPartitionRouterModeExactV1, CandidateBudget: int(h.status.Representatives), PartitionProbes: 4})
+		exact, err := h.router.SearchWithContextV1(context.Background(), q, collections.VectorPartitionRouterSearchOptionsV2{Mode: collections.VectorPartitionRouterModeExactV1, ScoreBudget: int(h.status.Representatives), ReturnedWidth: int(h.status.Representatives), BeamWidth: int(h.status.Representatives), PartitionProbes: 4})
 		if err != nil || len(exact.Partitions) != 4 {
 			return errors.New("M0 diagnostic exact route")
 		}
@@ -330,7 +330,7 @@ func m0FrontierRouterSweepV1(h *m8ProductionMultiGroupAssetsV1, ordinals []int, 
 		lat := make([]uint64, 0, len(ordinals))
 		for _, ordinal := range ordinals {
 			started := time.Now()
-			route, err := h.router.SearchWithContextV1(context.Background(), m8Query32V1(queries[ordinal]), collections.VectorPartitionRouterSearchOptionsV1{Mode: cells[i].Mode, CandidateBudget: cells[i].CandidateBudget, PartitionProbes: cells[i].Probes})
+			route, err := h.router.SearchWithContextV1(context.Background(), m8Query32V1(queries[ordinal]), collections.VectorPartitionRouterSearchOptionsV2{Mode: cells[i].Mode, ScoreBudget: cells[i].CandidateBudget, ReturnedWidth: cells[i].CandidateBudget, BeamWidth: cells[i].CandidateBudget, PartitionProbes: cells[i].Probes})
 			elapsed := uint64(time.Since(started).Nanoseconds())
 			if err != nil || len(route.Partitions) != cells[i].Probes {
 				return nil, errors.New("M0 diagnostic sweep route")

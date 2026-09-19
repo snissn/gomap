@@ -1291,7 +1291,7 @@ func TestM8VariantBuildCompatibilityRejectsMixedRetainedBuildsV1(t *testing.T) {
 		"router config seed":     func(variants []m3VariantDescriptorV1) { variants[2].RouterConfig.Seed++ },
 		"router config branch":   func(variants []m3VariantDescriptorV1) { variants[2].RouterConfig.BranchFactor++ },
 		"router config leaf":     func(variants []m3VariantDescriptorV1) { variants[2].RouterConfig.LeafSize++ },
-		"router config reps":     func(variants []m3VariantDescriptorV1) { variants[2].RouterConfig.RepresentativesPerPartition++ },
+		"router config reps":     func(variants []m3VariantDescriptorV1) { variants[2].RouterConfig.RepresentativeBudget++ },
 		"router config depth":    func(variants []m3VariantDescriptorV1) { variants[2].RouterConfig.MaxDepth-- },
 		"router config iterations": func(variants []m3VariantDescriptorV1) {
 			variants[2].RouterConfig.MaxIterations--

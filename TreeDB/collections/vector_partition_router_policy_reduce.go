@@ -10,7 +10,7 @@ import (
 	"math"
 )
 
-const vectorPartitionRankingDiagnosticMethodV1 = "returned_representatives_frequency_first_v1"
+const vectorPartitionRankingDiagnosticMethodV1 = "all_level_representatives_frequency_first_w_E_C_v2"
 
 // This private error is mapped to the existing public typed coverage error by
 // the owner-pinned diagnostic entry point, not exposed as a new public contract.
@@ -31,6 +31,7 @@ type vectorPartitionPolicyContextV1 struct {
 	DomainCount         int
 	CandidateBudget     int
 	ReturnedWidth       int
+	BeamWidth           int
 	Probes              int
 }
 
@@ -61,7 +62,7 @@ func vectorPartitionPolicyDistanceV1(score float64) float64 {
 	return distance
 }
 
-// Hash through one bounded row buffer, with identical byte encoding to V1.
+// Hash through one bounded row buffer. V2 binds independent beam and score work.
 // Detailed diagnostic hashing is never called by the ordinary route.
 func vectorPartitionPolicyDigestV1(ctx context.Context, meta vectorPartitionPolicyContextV1, kind string, candidates []vectorPartitionPolicyCandidateV1) (string, error) {
 	h := sha256.New()
@@ -72,7 +73,7 @@ func vectorPartitionPolicyDigestV1(ctx context.Context, meta vectorPartitionPoli
 		_, _ = h.Write([]byte(value))
 	}
 	// Probes is not candidate identity: the same set supports all prefixes.
-	for _, value := range []int{meta.RepresentativeCount, meta.DomainCount, meta.CandidateBudget, meta.ReturnedWidth, len(candidates)} {
+	for _, value := range []int{meta.RepresentativeCount, meta.DomainCount, meta.CandidateBudget, meta.ReturnedWidth, meta.BeamWidth, len(candidates)} {
 		writeUint(uint64(value))
 	}
 	for i, c := range candidates {
@@ -121,9 +122,6 @@ func reduceVectorPartitionRouterPoliciesV1(ctx context.Context, meta vectorParti
 			return vectorPartitionPolicyReductionV1{}, errors.New("exact policy scan lacks full representative budget")
 		}
 	case VectorPartitionRouterModeApproxV1:
-		if meta.CandidateBudget > meta.RepresentativeCount {
-			return vectorPartitionPolicyReductionV1{}, errors.New("approximate legacy policy budget exceeds model count")
-		}
 	default:
 		return vectorPartitionPolicyReductionV1{}, errors.New("unsupported policy retrieval mode")
 	}

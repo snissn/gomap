@@ -12,6 +12,23 @@ cleaning, compacting, or rewriting the directory. Typed-column image,
 descriptor, manifest, and schema evolution follows the fail-closed policy in
 `typed-column-schema-evolution.md`.
 
+## All-level vector-partition router identity
+
+The global all-level spherical router uses model format
+`treedb_vector_partition_router_v2`, document-ID prefix `router/krt-hnsw-v2/`,
+and `VKR1` record version 2. Root-to-node entries persist node ID, population,
+subtree budget and true leaf/internal kind. Centers remain in the native HNSW
+FP32 plane; records bind their canonical model digest.
+
+Partition manifest binary version 5 stores 16-byte representative mappings:
+source ordinal (8 bytes), logical domain (4), represented node (4). Source
+ordinal is provenance, not uniqueness. Membership records remain 12 bytes.
+READY-promotion payload version 3 uses the same new representative mapping;
+the enclosing lifecycle record version is unchanged. Old versions fail closed
+and require an asset rebuild; there is no mixed-format migration path.
+Generation publication, reader pins and reachable asset/value-log retention
+are unchanged. See [the router contract](vector-partition-v1-contract.md).
+
 ## `cosine_normalized_f32_v1` vector asset
 
 The pre-alpha format for the opt-in normalized cosine representation is

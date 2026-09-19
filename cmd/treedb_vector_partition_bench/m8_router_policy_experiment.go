@@ -16,7 +16,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/vectorpartition"
 )
 
-const m8RouterPolicyExperimentMethodV1 = "static_same_candidates_router_policies_v1"
+const m8RouterPolicyExperimentMethodV1 = "static_same_candidates_router_policies_w_E_C_v2"
 
 type m8RouterPolicyCoverageV1 struct {
 	DistanceMask    uint16 `json:"distance_mask"`
@@ -66,9 +66,9 @@ func (h *m8AttributionHarnessV1) enableRouterPoliciesV1(width, approximateBudget
 	n := int(h.assets.status.Representatives)
 	effective := width
 	if effective == 0 {
-		effective = approximateBudget
+		effective = h.assets.routerWidth
 	}
-	if approximateBudget < 1 || approximateBudget > n || width < 0 || effective < 1 || effective > approximateBudget {
+	if approximateBudget < 1 || width < 0 || effective < 1 || effective > h.assets.routerBeam || h.assets.routerBeam > n {
 		return errors.New("invalid policy experiment effective width/budget")
 	}
 	h.policies = &m8RouterPolicyCacheV1{requestedWidth: width, width: effective, approximateBudget: approximateBudget, byProbes: make(map[int]*m8RouterPolicyEvidenceV1)}
@@ -89,7 +89,7 @@ func (h *m8AttributionHarnessV1) routerPolicyOutcomeV1(ctx context.Context, i, p
 	if mode == collections.VectorPartitionRouterModeExactV1 {
 		budget = int(h.assets.status.Representatives)
 	}
-	c, err := h.assets.router.CompareRankingPoliciesForDiagnosticsV1(ctx, query, collections.VectorPartitionRouterPolicyDiagnosticOptionsV1{Mode: mode, CandidateBudget: budget, ReturnedWidth: p.width, PartitionProbes: probes})
+	c, err := h.assets.router.CompareRankingPoliciesForDiagnosticsV1(ctx, query, collections.VectorPartitionRouterPolicyDiagnosticOptionsV1{Mode: mode, CandidateBudget: budget, ReturnedWidth: p.width, BeamWidth: h.assets.routerBeam, PartitionProbes: probes})
 	out := m8RouterPolicyOutcomeV1{Status: "pass", Comparison: c}
 	if err != nil {
 		if errors.Is(err, collections.ErrVectorPartitionRouterCandidateCoverageV1) {
@@ -181,7 +181,7 @@ func m8RouterPolicyLessV1(a, b collections.VectorPartitionRouterPolicyDomainV1, 
 // Shape and internal equations are checked here; authoritative source/model,
 // candidate scores, votes and route masks are checked by fresh-owner replay.
 func m8ValidateRouterPolicyEvidenceV1(e *m8RouterPolicyEvidenceV1, q *m8QualityAttributionV1, k, probes, samples int) error {
-	if e == nil || q == nil || samples < 1 || q.Domains < 1 || q.Domains > maxPartitions || len(q.PackCosts) != q.Domains || e.Method != m8RouterPolicyExperimentMethodV1 || len(e.Queries) != samples || len(q.Queries) != samples || k < 1 || k > 10 || probes < 1 || probes > q.Domains || e.RequestedWidth < 0 || e.EffectiveWidth < 1 || e.EffectiveWidth > e.ApproximateBudget || e.RequestedWidth != 0 && e.RequestedWidth != e.EffectiveWidth || e.RequestedWidth == 0 && e.EffectiveWidth != e.ApproximateBudget {
+	if e == nil || q == nil || samples < 1 || q.Domains < 1 || q.Domains > maxPartitions || len(q.PackCosts) != q.Domains || e.Method != m8RouterPolicyExperimentMethodV1 || len(e.Queries) != samples || len(q.Queries) != samples || k < 1 || k > 10 || probes < 1 || probes > q.Domains || e.RequestedWidth < 0 || e.EffectiveWidth < 1 || e.EffectiveWidth > e.ApproximateBudget || e.RequestedWidth != 0 && e.RequestedWidth != e.EffectiveWidth {
 		return errors.New("invalid policy experiment shape/identity")
 	}
 	full := uint16(1<<uint(k)) - 1
@@ -195,14 +195,14 @@ func m8ValidateRouterPolicyEvidenceV1(e *m8RouterPolicyEvidenceV1, q *m8QualityA
 			out  m8RouterPolicyOutcomeV1
 		}{{"exact", row.Exact}, {"approximate", row.Approximate}} {
 			out, c := which.out, which.out.Comparison
-			if c.Method != collections.VectorPartitionRouterPolicyDiagnosticMethodV1 || c.Mode != which.mode || c.Generation != q.Generation || c.SourceGeneration != q.SourceGeneration || c.ModelSHA256 != q.ModelSHA256 || !m8SHA256V1(c.QuerySHA256) || c.DomainCount != q.Domains || c.RepresentativeCount < c.DomainCount || c.RepresentativeCount > vectorpartition.DefaultRouterConfigV1().MaxRepresentatives || c.CandidateBudget < 1 || c.ReturnedWidth != e.EffectiveWidth || c.Probes != probes || !c.CollectionComplete || c.Collected < 1 || c.Collected > c.RepresentativeCount || c.Collected > c.CandidateBudget || c.Candidates < uint64(c.Collected) || c.Candidates > uint64(c.CandidateBudget) {
+			if c.Method != collections.VectorPartitionRouterPolicyDiagnosticMethodV1 || c.Mode != which.mode || c.Generation != q.Generation || c.SourceGeneration != q.SourceGeneration || c.ModelSHA256 != q.ModelSHA256 || !m8SHA256V1(c.QuerySHA256) || c.DomainCount != q.Domains || c.RepresentativeCount < c.DomainCount || c.RepresentativeCount > vectorpartition.DefaultRouterConfigV1().MaxRepresentatives || c.CandidateBudget < 1 || c.ReturnedWidth != e.EffectiveWidth || c.ReturnedWidth > c.BeamWidth || c.BeamWidth > c.RepresentativeCount || c.ScoreCalls > uint64(c.CandidateBudget) || c.ScoreCalls < c.Candidates || c.Probes != probes || !c.CollectionComplete || c.Collected < 1 || c.Collected > c.RepresentativeCount || c.Collected > c.CandidateBudget || c.Candidates < uint64(c.Collected) || c.Candidates > uint64(c.CandidateBudget) {
 				return errors.New("policy candidate identity/work mismatch")
 			}
 			if which.mode == "exact" {
 				if c.CandidateBudget != c.RepresentativeCount || c.Collected != c.RepresentativeCount || c.Candidates != uint64(c.RepresentativeCount) || c.Edges != 0 {
 					return errors.New("policy exact scan work incomplete")
 				}
-			} else if c.CandidateBudget != e.ApproximateBudget || c.CandidateBudget > c.RepresentativeCount {
+			} else if c.CandidateBudget != e.ApproximateBudget {
 				return errors.New("policy approximate budget mismatch")
 			}
 			if out.Status == "candidate_coverage_shortfall" {
@@ -473,9 +473,6 @@ func m8RouterPolicyRepresentativeBoundV1(cfg config, variant, domains, sourceRow
 	}
 	// The new-assets M8 builder selects DefaultRouterConfigV1, not CLI simulation
 	// router flags. Derive the same bound; never assume it for a retained model.
-	bound, err := memoryMul(int64(domains), int64(vectorpartition.DefaultRouterConfigV1().RepresentativesPerPartition))
-	if err != nil {
-		return 0, err
-	}
-	return min(bound, int64(sourceRows)), nil
+	bound := int64(vectorpartition.DefaultRouterConfigV1().RepresentativeBudget)
+	return min(bound, 2*int64(sourceRows)-int64(domains)), nil
 }

@@ -11,7 +11,7 @@ import (
 )
 
 func policyTestContext() vectorPartitionPolicyContextV1 {
-	return vectorPartitionPolicyContextV1{strings.Repeat("a", 64), strings.Repeat("b", 64), "approximate", 16, 4, 16, 16, 4}
+	return vectorPartitionPolicyContextV1{ModelDigest: strings.Repeat("a", 64), QueryDigest: strings.Repeat("b", 64), Mode: "approximate", RepresentativeCount: 16, DomainCount: 4, CandidateBudget: 16, ReturnedWidth: 16, BeamWidth: 16, Probes: 4}
 }
 func policyGolden() []vectorPartitionPolicyCandidateV1 {
 	return []vectorPartitionPolicyCandidateV1{{0, 0, 0, .99}, {1, 2, 1, .985}, {2, 1, 2, .98}, {3, 1, 3, .97}, {4, 1, 4, .96}, {5, 3, 5, .95}}
@@ -289,13 +289,13 @@ func TestVectorPartitionRouterPolicyCoverageRefusalCarriesCandidateIdentity(t *t
 	}
 }
 
-func TestVectorPartitionRouterPolicyDigestV1GoldenEncoding(t *testing.T) {
+func TestVectorPartitionRouterPolicyDigestV2GoldenEncoding(t *testing.T) {
 	got, err := reduceVectorPartitionRouterPoliciesV1(nil, policyTestContext(), policyGolden())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.CandidateSetSHA256 != "b1fe473339ac5edcdd63f022bb2d19acbc998e8ad13c137c24c5ba14bb55fe7c" || got.CandidateSequenceSHA256 != "1bfc7cef627d0b785c62f62f11c7a61c673e1e4bcd7039d2c14d17caadc6ec0d" {
-		t.Fatal("candidate digest byte encoding changed")
+	if got.CandidateSetSHA256 != "01f8744de565d5082fa7b31df5020c4a0b9205aa4f1864b2d82f70681f5368b0" || got.CandidateSequenceSHA256 != "5f52929c3c0cf1c5b739c1d404223e51d004683552b71d6dd205487606563784" {
+		t.Fatalf("V2 candidate digest byte encoding changed: set=%s sequence=%s", got.CandidateSetSHA256, got.CandidateSequenceSHA256)
 	}
 }
 func TestVectorPartitionRouterPolicyResultPrefixesHaveBoundedOwnership(t *testing.T) {

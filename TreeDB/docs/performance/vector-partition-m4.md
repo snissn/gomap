@@ -1,5 +1,11 @@
 # Vector-partition M4 evidence ledger
 
+Historical evidence only: this ledger measures the pre-R leaf-only,
+per-domain representation and coupled candidate budget at the commit below.
+It is not evidence for #4773's global all-level router or independent w/E/C.
+The reproduction command must run at the cited historical revision; new
+directories, explicit new flags, and fresh evidence are required on R.
+
 This ledger binds the M4 local router measurement to exact merge candidate
 `e1c3a83fc897cf4b26659d28feeb39b1f230dafd` on base
 `2292b334d5114f92859f4e0821f070837d719979`. It exercises the real persisted

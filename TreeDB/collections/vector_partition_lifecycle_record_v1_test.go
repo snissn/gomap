@@ -109,6 +109,9 @@ func TestVectorPartitionReadyPromotionV1CanonicalRoundTripAndReconstruction(t *t
 	if !bytes.Equal(raw, again) {
 		t.Fatal("ready promotion encoding is not deterministic")
 	}
+	if len(again) != cap(again) {
+		t.Fatalf("ready promotion size preflight drift: bytes=%d capacity=%d", len(again), cap(again))
+	}
 	got, err := applyVectorPartitionReadyPromotionV1(building, raw)
 	if err != nil {
 		t.Fatal(err)
@@ -196,6 +199,24 @@ func TestVectorPartitionReadyPromotionV1RejectsMalformedAndWrongDigests(t *testi
 				t.Fatal("accepted invalid ready promotion")
 			}
 		})
+	}
+}
+
+func TestVectorPartitionReadyPromotionV3RejectsOversizedNodeMapping(t *testing.T) {
+	_, building := lifecycleManifestPayloadV1(t, "building")
+	_, ready := lifecycleManifestPayloadV1(t, "ready")
+	raw := lifecycleReadyPromotionPayloadV1(t, building, ready)
+	promotion, err := decodeVectorPartitionReadyPromotionCanonicalV1(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// This count is legal under MaxMemberships but cannot fit the V3 byte cap.
+	promotion.Representatives = make([]VectorPartitionRepresentativeV2, vectorPartitionReadyPromotionMaxBytesV1/16)
+	for i := range promotion.Representatives {
+		promotion.Representatives[i].NodeID = uint32(i + 1)
+	}
+	if raw, err := encodeVectorPartitionReadyPromotionCanonicalV1(promotion); err == nil || raw != nil {
+		t.Fatal("accepted node mapping larger than READY byte cap")
 	}
 }
 

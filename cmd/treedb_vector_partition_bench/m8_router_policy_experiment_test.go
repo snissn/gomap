@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/snissn/gomap/TreeDB/collections"
 	"math"
 	"os"
 	"path/filepath"
@@ -295,7 +296,7 @@ func TestM8RouterPolicyRetainedAttributionReplay(t *testing.T) {
 			if err := h.enableQualityV1(t.Context(), queries, truth, homes, members, 0, m8CoverageLimitsV1{WorkUnits: maxBenchmarkWorkUnits, Bytes: maxFixtureBytes}); err != nil {
 				t.Fatal(err)
 			}
-			budget := int(assets.status.Representatives)
+			budget := 1024 // Full-pool replay is not a score-call budget of N.
 			if coordinate.budget != 0 {
 				budget = coordinate.budget
 			}
@@ -307,6 +308,12 @@ func TestM8RouterPolicyRetainedAttributionReplay(t *testing.T) {
 				t.Fatal(err)
 			}
 			cell, err := m8BuildAttributionV1(t.Context(), assets, homes, members, queries, truth, oracles, 2, 32, 10, budget, make([][]m8CanonicalResultV1, len(queries)), h)
+			if coordinate.budget == 1 {
+				if !errors.Is(err, collections.ErrVectorPartitionRouterScoreBudget) {
+					t.Fatalf("exhausted score budget must fail closed, got %v", err)
+				}
+				return
+			}
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -321,7 +328,7 @@ func TestM8RouterPolicyRetainedAttributionReplay(t *testing.T) {
 			if err := m8AttachAttributionV1(&row, cell, cell.Local); err != nil {
 				t.Fatal(err)
 			}
-			report := m8ProductionReportV1{Dataset: fixture, RouterRepresentatives: assets.status.Representatives, Config: m8ProductionConfigEvidenceV1{TopK: 10, Partitions: 4, DomainCount: 4, PacksPerDomain: []int{1, 1, 1, 1}, RouterCandidates: budget, QualityDiagnostics: true, RouterPolicyDiagnostics: true, RouterPolicyWidth: width}, Variant: &m3VariantDescriptorV1{DatabaseDirectory: dir}, Rows: []m8ProductionRowV1{row}}
+			report := m8ProductionReportV1{Dataset: fixture, RouterRepresentatives: assets.status.Representatives, Config: m8ProductionConfigEvidenceV1{TopK: 10, Partitions: 4, DomainCount: 4, PacksPerDomain: []int{1, 1, 1, 1}, RouterCandidates: budget, RouterWidth: assets.routerWidth, RouterBeam: assets.routerBeam, QualityDiagnostics: true, RouterPolicyDiagnostics: true, RouterPolicyWidth: width}, Variant: &m3VariantDescriptorV1{DatabaseDirectory: dir}, Rows: []m8ProductionRowV1{row}}
 			outcome := m8ProductionRowOutcomesV1{TopKIDs: make([][]string, len(queries)), TopKScoreBits: make([][]uint32, len(queries))}
 			for i, rows := range cell.Local {
 				outcome.TopKIDs[i] = m8CanonicalIDsV1(rows)

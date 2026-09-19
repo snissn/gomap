@@ -72,6 +72,7 @@ type NeighborV1 struct {
 }
 
 type SearchCountersV1 struct {
+	RouterScoreCalls, RouterCandidates, RouterEdges          uint64
 	SelectedDomains, SelectedPacks                           uint64
 	SelectedPartitions, SelectedGroups                       uint64
 	HNSWServedPartitions, ExactScanPartitions                uint64

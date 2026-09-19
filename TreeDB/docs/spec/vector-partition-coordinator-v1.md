@@ -9,6 +9,22 @@ router, and the M5 shard-search contract
 
 ## Purpose and boundary
 
+Router revision R (#4773) uses coordinator request/response version **2**.
+The retained Go `V1` type names do not imply the old numeric protocol version.
+Requests must explicitly provide `RouterReturnedWidth` (w), `RouterBeamWidth`
+(E), and `RouterScoreBudget` (C): `1 <= w <= E <= model size` and `C >= w`.
+C limits actual score calls, including upper-level navigation, and is not
+clamped to model size. `MaxRouterCandidates` bounds both configured E and C.
+`ErrVectorPartitionRouterScoreBudget` maps to `budget_exceeded`, without
+dispatching shards or returning partial routes. Distinct-domain coverage
+failure is not a score-budget exhaustion. Per-response counters preserve
+`RouterScoreCalls`, `RouterCandidates` (unique traversal candidates), and
+`RouterEdges` separately from local shard work, including failed routing work.
+The public V1 adapter translates its own protocol version to coordinator V2
+and inherits explicit server-owned w/E/C; the public query API is unchanged.
+See the R section in `vector-partition-v1-contract.md` for format and rebuild
+requirements. Historical candidate-budget receipts cannot be relabeled as C.
+
 `VectorPartitionCoordinatorV1` is the bounded, transport-neutral scatter/gather
 coordinator for one vector query. It:
 

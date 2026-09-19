@@ -654,7 +654,11 @@ func m8QualificationRetainedAttributionV1(root string, report m8ProductionReport
 	if len(queries) != len(truth) {
 		return errors.New("retained attribution query shape mismatch")
 	}
-	approximateCandidates := min(report.Config.RouterCandidates, int(assets.status.Representatives))
+	if report.Config.RouterWidth < 1 || report.Config.RouterWidth > report.Config.RouterBeam || report.Config.RouterBeam > int(assets.status.Representatives) {
+		return errors.New("retained attribution lacks explicit router w/E identity")
+	}
+	assets.routerWidth, assets.routerBeam = report.Config.RouterWidth, report.Config.RouterBeam
+	approximateCandidates := report.Config.RouterCandidates
 	if approximateCandidates < 1 {
 		return errors.New("retained attribution has no router candidates")
 	}
@@ -843,6 +847,7 @@ func m8QualificationCommandConfigV1(cfg config) m8ProductionConfigEvidenceV1 {
 		Probes: cfg.probes, Overlap: cfg.overlaps, TopK: cfg.topK, RecallTarget: cfg.recallTarget,
 		Concurrency: cfg.concurrency, Warmup: cfg.warmup, EffectiveWarmup: warmup,
 		EfSearch: cfg.efSearch, RouterCandidates: cfg.routerCandidates,
+		RouterSemantics: "global_all_level_spherical_krt_w_E_C_v2", RouterWidth: cfg.routerWidth, RouterBeam: cfg.routerBeam,
 		MaxExactTruthVisits: cfg.m8MaxExactTruthVisits, Seed: cfg.seed, QualityDiagnostics: cfg.m8QualityDiagnostics, QualityTraceQueries: cfg.m8QualityTraceQueries, RouterPolicyDiagnostics: cfg.m8RouterPolicyDiagnostics, RouterPolicyWidth: cfg.m8RouterPolicyWidth,
 	}
 }
