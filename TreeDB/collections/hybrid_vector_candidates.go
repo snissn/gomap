@@ -118,7 +118,7 @@ func (c *Collection) searchHybridVectorCandidatesDeclaredScalar(query HybridVect
 	return response, convertErr
 }
 
-func (c *Collection) searchHybridVectorCandidatesDeclaredScalarAtReadView(ctx context.Context, query HybridVectorQuery, filter *HybridScalarFilter, view *CollectionReadView, ownerAcquireNanos int64) (HybridCandidateResponse, error) {
+func (c *Collection) searchHybridVectorCandidatesDeclaredScalarAtReadView(ctx context.Context, query HybridVectorQuery, filter *HybridScalarFilter, view *CollectionReadView, ownerAcquireNanos int64, scalarStatsOwner bool) (HybridCandidateResponse, error) {
 	requested := query.CandidateLimit
 	if err := validateHybridVectorCandidateQuery(query); err != nil {
 		response := HybridCandidateResponse{Stats: hybridVectorCandidateStatsFromSearch(requested, VectorIndexSearchStats{}, 0)}
@@ -134,17 +134,36 @@ func (c *Collection) searchHybridVectorCandidatesDeclaredScalarAtReadView(ctx co
 	opts.StatsMode = VectorIndexSearchStatsModeMinimal
 	opts.DeclaredScalarFilter = filter
 	var buffer VectorIndexSearchBuffer
-	vectorResponse, gotView, err := c.searchTypedGraphServingWithOwner(opts, &buffer, true, view.typedGraphOwner, ownerAcquireNanos)
+	vectorResponse, gotView, filterWork, err := c.searchTypedGraphServingWithOwner(opts, &buffer, true, view.typedGraphOwner, ownerAcquireNanos, scalarStatsOwner)
 	if err != nil {
 		stats := hybridVectorCandidateStatsFromSearch(requested, vectorResponse.Stats, 0)
+		hybridVectorCandidateApplyTypedFilterStats(&stats, filterWork, filter, scalarStatsOwner)
 		stats.FailClosed = 1
 		stats.FailClosedReason = hybridVectorCandidateFailClosedReason(err)
 		return HybridCandidateResponse{Stats: stats}, hybridVectorCandidateError(err, query.IndexName)
 	}
 	if gotView != view {
-		return HybridCandidateResponse{}, hybridVectorCandidateError(ErrVectorIndexSnapshotMismatch, query.IndexName)
+		stats := hybridVectorCandidateStatsFromSearch(requested, vectorResponse.Stats, 0)
+		hybridVectorCandidateApplyTypedFilterStats(&stats, filterWork, filter, scalarStatsOwner)
+		stats.FailClosed = 1
+		stats.FailClosedReason = HybridFailClosedReasonSnapshotMismatch
+		return HybridCandidateResponse{Stats: stats}, hybridVectorCandidateError(ErrVectorIndexSnapshotMismatch, query.IndexName)
 	}
-	return hybridVectorCandidatesFromSearchResponse(requested, query.IndexName, vectorResponse)
+	response, err := hybridVectorCandidatesFromSearchResponse(requested, query.IndexName, vectorResponse)
+	hybridVectorCandidateApplyTypedFilterStats(&response.Stats, filterWork, filter, scalarStatsOwner)
+	return response, err
+}
+
+func hybridVectorCandidateApplyTypedFilterStats(stats *HybridSearchStats, work ColumnGraphFilterWork, filter *HybridScalarFilter, scalarStatsOwner bool) {
+	if stats == nil || filter == nil || !scalarStatsOwner || !work.Attempted {
+		return
+	}
+	stats.ScalarFilterInputIDs = work.SourceIDs
+	stats.ScalarFilterVisited = work.InspectedEntries
+	if work.Completed {
+		stats.ScalarFilterFinalIDs = work.EligibleRows
+		stats.ScalarPrefilterIDs = work.EligibleRows
+	}
 }
 
 func hybridVectorSearchOptions(query HybridVectorQuery) VectorIndexSearchOptions {

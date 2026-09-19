@@ -44,6 +44,7 @@ type hybridSearchExecutionPlan struct {
 	scalarFilterStrategy          HybridScalarFilterStrategy
 	nativeVectorRuntime           bool
 	nativeVectorScalar            bool
+	ownerBoundVectorScalar        bool
 	fusion                        HybridFusionOptions
 	resultMode                    HybridResultMode
 	maxChunksPerParent            int
@@ -140,24 +141,18 @@ func (c *Collection) searchHybridWithCandidateBudgetPolicy(opts HybridSearchOpti
 		plan.nativeVectorScalar = plan.nativeVectorRuntime &&
 			plan.scalarFilter != nil &&
 			plan.scalarFilterStrategy != HybridScalarFilterStrategyPostfilter
+		// Selected typed serving owns vector-only scalar preparation even when
+		// the catalog definition itself is column_graph rather than
+		// native_runtime. Keep this distinct from the legacy native seam.
+		plan.ownerBoundVectorScalar = plan.readView != nil &&
+			plan.scalarFilter != nil &&
+			plan.scalarFilterStrategy != HybridScalarFilterStrategyPostfilter
 	}
-	// A selected vector-only route normally delegates a non-empty scalar plan
-	// to the typed owner. Resolve it against that same captured read view first
-	// so an empty prefilter can stop before any selected vector work. Preserve
-	// the producer's existing accounting for non-empty filters rather than
-	// merging the same scalar lookup twice.
-	resolveSelectedEmptyFilter := plan.nativeVectorScalar && plan.readView != nil
-	if !plan.nativeVectorScalar || resolveSelectedEmptyFilter {
-		var resolvedAllowSet hybridScalarAllowSet
-		var resolvedScalarStats HybridSearchStats
+	if !plan.nativeVectorScalar && !plan.ownerBoundVectorScalar {
 		if plan.readView != nil {
-			resolvedAllowSet, resolvedScalarStats, err = c.hybridScalarAllowSetAtReadView(plan, plan.readView)
+			allowSet, scalarStats, err = c.hybridScalarAllowSetAtReadView(plan, plan.readView)
 		} else {
-			resolvedAllowSet, resolvedScalarStats, err = c.hybridScalarAllowSet(plan)
-		}
-		if !plan.nativeVectorScalar || len(resolvedAllowSet) == 0 {
-			allowSet = resolvedAllowSet
-			scalarStats = resolvedScalarStats
+			allowSet, scalarStats, err = c.hybridScalarAllowSet(plan)
 		}
 		hybridMergeStats(&response.Stats, scalarStats)
 		if err != nil {
@@ -916,11 +911,11 @@ func (c *Collection) hybridSearchCandidates(plan hybridSearchExecutionPlan, allo
 			var filter *HybridScalarFilter
 			// Keep prefilter admission/order in the executor, but let the
 			// selected owner search its captured base and current mutations.
-			if plan.nativeVectorScalar || selectedTyped && allowSet != nil {
+			if plan.nativeVectorScalar || plan.ownerBoundVectorScalar || (selectedTyped && allowSet != nil) {
 				filter = plan.scalarFilter
 			}
 			if plan.readView != nil {
-				return c.searchHybridVectorCandidatesDeclaredScalarAtReadView(plan.context, *plan.vector, filter, plan.readView, plan.readOwnerAcquireNanos)
+				return c.searchHybridVectorCandidatesDeclaredScalarAtReadView(plan.context, *plan.vector, filter, plan.readView, plan.readOwnerAcquireNanos, plan.ownerBoundVectorScalar)
 			}
 			return c.searchHybridVectorCandidatesDeclaredScalar(*plan.vector, filter)
 		}

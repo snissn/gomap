@@ -295,17 +295,17 @@ func (c *Collection) RenewColumnGraphServing(ctx context.Context, index string) 
 // wrapper: a buffer-only caller cannot preserve the captured owner needed for
 // the coherent mutable base/suffix/fetch contract.
 func (c *Collection) searchTypedGraphServing(opts VectorIndexSearchOptions, buffer *VectorIndexSearchBuffer, allowSelectedQuantizedRerank bool) (response VectorIndexSearchResponse, view *CollectionReadView, err error) {
-	return c.searchTypedGraphServingWithOwner(opts, buffer, allowSelectedQuantizedRerank, nil, 0)
+	response, view, _, err = c.searchTypedGraphServingWithOwner(opts, buffer, allowSelectedQuantizedRerank, nil, 0, false)
+	return response, view, err
 }
 
 // searchTypedGraphServingWithOwner is the one typed serving implementation for
 // public dense/vector calls and owner-bound hybrid vector phases. A supplied
 // owner is borrowed and remains the caller's responsibility.
-func (c *Collection) searchTypedGraphServingWithOwner(opts VectorIndexSearchOptions, buffer *VectorIndexSearchBuffer, allowSelectedQuantizedRerank bool, boundOwner *typedGraphReadOwner, boundAcquireNanos int64) (response VectorIndexSearchResponse, view *CollectionReadView, err error) {
+func (c *Collection) searchTypedGraphServingWithOwner(opts VectorIndexSearchOptions, buffer *VectorIndexSearchBuffer, allowSelectedQuantizedRerank bool, boundOwner *typedGraphReadOwner, boundAcquireNanos int64, shortCircuitEmptyFilter bool) (response VectorIndexSearchResponse, view *CollectionReadView, filterWork ColumnGraphFilterWork, err error) {
 	workstats.Graph.Requests.Attempts.Add(1)
 	includeProof := opts.StatsMode == VectorIndexSearchStatsModeProduction
 	var stats typedGraphOverlaySearchStats
-	var filterWork ColumnGraphFilterWork
 	var snapshot ColumnGraphQuerySnapshot
 	var scorePlane *ColumnGraphScorePlaneWork
 	defer func() {
@@ -333,19 +333,19 @@ func (c *Collection) searchTypedGraphServingWithOwner(opts VectorIndexSearchOpti
 	buffer.Reset()
 	p := c.typedGraphServingPolicy()
 	if p == nil || p.index != opts.IndexName {
-		return response, nil, ErrVectorIndexSearchUnavailable
+		return response, nil, filterWork, ErrVectorIndexSearchUnavailable
 	}
 	queryMode, modeErr := normalizeVectorIndexSearchQueryMode(opts.QueryMode, opts.QuantizedIndexName, opts.QuantizedRerankCandidates, opts.TopK)
 	if modeErr != nil {
-		return response, nil, modeErr
+		return response, nil, filterWork, modeErr
 	}
 	if queryMode == columnVectorGraphNativeSearchQueryModeQuantizedRerank && !allowSelectedQuantizedRerank {
-		return response, nil, ErrHybridSearchUnsupported
+		return response, nil, filterWork, ErrHybridSearchUnsupported
 	}
 	unsupportedMode := queryMode != columnVectorGraphNativeSearchQueryModeExact && queryMode != columnVectorGraphNativeSearchQueryModeQuantizedRerank
 	unsupportedStats := opts.StatsMode != VectorIndexSearchStatsModeMinimal && opts.StatsMode != VectorIndexSearchStatsModeProduction
 	if unsupportedMode || unsupportedStats || opts.MaxDecodedBlocks != 0 {
-		return response, nil, ErrHybridSearchUnsupported
+		return response, nil, filterWork, ErrHybridSearchUnsupported
 	}
 	if opts.Context != nil {
 		if err = opts.Context.Err(); err != nil {
@@ -364,10 +364,10 @@ func (c *Collection) searchTypedGraphServingWithOwner(opts VectorIndexSearchOpti
 		owner, err = c.openTypedGraphReadOwnerWithContext(ctx, p.options.Owners)
 		acquiredNanos = time.Since(started).Nanoseconds()
 		if err != nil {
-			return response, nil, err
+			return response, nil, filterWork, err
 		}
 	} else if owner.closed || owner.overlay == nil || owner.overlay.base == nil || owner.overlay.base.collection != c || owner.overlay.current == nil {
-		return response, nil, ErrVectorIndexSnapshotMismatch
+		return response, nil, filterWork, ErrVectorIndexSnapshotMismatch
 	}
 	snapshot = owner.querySnapshot()
 	defer func() {
@@ -387,6 +387,11 @@ func (c *Collection) searchTypedGraphServingWithOwner(opts VectorIndexSearchOpti
 		}
 		filter, err = prepareTypedGraphServingFilter(ctx, keeper, owner.overlay, *opts.DeclaredScalarFilter, p.options.Filter, &filterWork)
 	}
+	if err == nil && shortCircuitEmptyFilter && filter != nil && filter.count == 0 {
+		view = owner.overlay.current
+		view.typedGraphOwner = owner
+		return response, view, filterWork, nil
+	}
 	if err == nil {
 		if queryMode == columnVectorGraphNativeSearchQueryModeQuantizedRerank {
 			response.Results, stats, scorePlane, err = owner.searchScalarU8QuantizedRerankWithContext(ctx, opts, filter, p.options.SearchCandidates, buffer, includeProof)
@@ -397,11 +402,11 @@ func (c *Collection) searchTypedGraphServingWithOwner(opts VectorIndexSearchOpti
 		}
 	}
 	if err != nil {
-		return response, nil, err
+		return response, nil, filterWork, err
 	}
 	if opts.Context != nil {
 		if err = opts.Context.Err(); err != nil {
-			return response, nil, err
+			return response, nil, filterWork, err
 		}
 	}
 	response.IndexName, response.Strategy, response.Path = p.index, VectorIndexStrategyColumnGraph, VectorIndexSearchPathColumnGraphNativeReader
@@ -444,7 +449,7 @@ func (c *Collection) searchTypedGraphServingWithOwner(opts VectorIndexSearchOpti
 	response.Status = VectorIndexStatus{Name: p.index, Definition: owner.overlay.base.reader.def, Strategy: response.Strategy, Loaded: true, State: VectorIndexStateColumnGraphLoaded}
 	view = owner.overlay.current
 	view.typedGraphOwner = owner
-	return response, view, nil
+	return response, view, filterWork, nil
 }
 
 func (c *Collection) openTypedGraphHybridReadView(ctx context.Context, index string) (*CollectionReadView, int64, error) {

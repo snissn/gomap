@@ -42,7 +42,7 @@ func TestTypedGraphHybridSelectedOwnerSurvivesConcurrentPublication4767(t *testi
 	_, err = col.searchHybridVectorCandidatesDeclaredScalarAtReadView(canceled, HybridVectorQuery{
 		IndexName: "embedding_graph", Query: oldColumns[0].Float32Vectors[0], CandidateLimit: 3, EfSearch: 3,
 		QueryMode: VectorIndexQueryModeQuantizedRerank, QuantizedIndexName: "embedding.scalar_u8.legacy", QuantizedRerankCandidates: 3,
-	}, nil, view, acquiredNanos)
+	}, nil, view, acquiredNanos, false)
 	if closeErr := view.Close(); closeErr != nil {
 		t.Fatal(closeErr)
 	}
