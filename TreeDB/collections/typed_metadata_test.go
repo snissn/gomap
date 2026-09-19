@@ -50,6 +50,61 @@ func seedTypedMetadataWithMeta4769(t testing.TB, rows, dims int, meta Collection
 	return dir, db, col, ids
 }
 
+func TestTypedMetadataPlannerStringBoundary4769(t *testing.T) {
+	_, db, col, ids := seedTypedMetadata4769(t, 1, 8)
+	defer db.Close()
+	// The shared planner validates against its captured schema even when the
+	// caller has not run public-handle validation first.
+	for _, value := range []any{42, nil, []string{"wrong type"}} {
+		plan, _, _, err := col.buildTypedMetadataPlan(ids, map[string]any{"meta.user_id": value}, nil, nil)
+		if plan != nil {
+			plan.close()
+		}
+		if !errors.Is(err, ErrTypedMetadataInvalid) {
+			t.Fatalf("value=%#v error=%v", value, err)
+		}
+	}
+	plan, _, result, err := col.buildTypedMetadataPlan(ids, map[string]any{"meta.user_id": ""}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ModifiedCount != 1 {
+		plan.close()
+		t.Fatalf("empty string modification count=%d", result.ModifiedCount)
+	}
+	j := typedStringColumnIndex(plan.meta.Options.ColumnStore.Columns, "meta.user_id")
+	value := plan.metadataDocuments[0].declaredValues[j]
+	plan.close()
+	if !reflect.DeepEqual(value, columnDeclaredValue{Type: ColumnStoreValueString, Present: true, String: ""}) {
+		t.Fatalf("empty string must be a present non-null value: %+v", value)
+	}
+	for _, modified := range []int{1, 0} {
+		out, err := col.UpdateTypedMetadataByID(ids, map[string]any{"meta.user_id": ""}, nil, metadataGeneration4769(col))
+		if err != nil || out.ModifiedCount != modified {
+			t.Fatalf("empty string update=%+v err=%v want modified=%d", out, err, modified)
+		}
+	}
+	raw, err := col.Get(ids[0])
+	if err != nil || !bytes.Contains(raw, []byte(`"user_id":""`)) {
+		t.Fatalf("empty string reconstruction=%s err=%v", raw, err)
+	}
+}
+
+func TestTypedMetadataCanceledResolutionDoesNotRead4769(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	// No DB/snapshot is available: cancellation must win before any scan or
+	// preserved-row fetch tries to use one.
+	col := new(Collection)
+	rows := []columnPhysicalVisibleRow{{Preserved: &columnRowCoordinates{Generation: 1}}}
+	if err := col.resolveColumnMetadataRows(ctx, nil, nil, ColumnStoreConfig{}, nil, rows); !errors.Is(err, context.Canceled) {
+		t.Fatalf("metadata resolution=%v", err)
+	}
+	if _, _, err := col.materializeColumnStoreCompactionRows(ctx, columnStoreCompactionState{}, ""); !errors.Is(err, context.Canceled) {
+		t.Fatalf("compaction scan=%v", err)
+	}
+}
+
 func TestTypedMetadataNormalizedColdFoldRaceAndGC4769(t *testing.T) {
 	requireTypedGraphPublicServingTest(t)
 	meta := cosineNormalizedF32V1TestMeta()

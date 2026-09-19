@@ -13,7 +13,7 @@ import (
 
 // Parent #4765 acceptance composes the four production seams in one small
 // fixture. Child tests retain ownership of crash injection and performance.
-func TestProductionRetrievalSourceAndPermissionLifecycle4765(t *testing.T) {
+func TestProductionRetrievalSourceAndACLFilterLifecycle4765(t *testing.T) {
 	requireTypedServiceServingTest(t)
 	svc, db := newTestService(t)
 	defer func() { _ = svc.Close(); _ = db.Close() }()
@@ -44,6 +44,8 @@ func TestProductionRetrievalSourceAndPermissionLifecycle4765(t *testing.T) {
 	if _, err := svc.OptimizeIndex(ctx, name, OptimizeIndexRequest{ColumnGraphServing: &serving}); err != nil {
 		t.Fatal(err)
 	}
+	// The application supplies this eligibility filter; this fixture does not
+	// exercise a separate server-side authentication/authorization policy.
 	filter := &Filter{Field: "meta.acl", Operator: "==", Value: "allowed"}
 	hybrid := HybridSearchRequest{ExpectedGeneration: info.Generation, Query: `alpha AND (beta)`, TextQueryMode: collections.TextSearchQueryModeLiteral, QueryEmbedding: []float32{1, 0}, TopK: 8, TextCandidateLimit: 8, VectorCandidateLimit: 8, MaxPostingsScanned: 64, EfSearch: 8, VectorQueryMode: collections.VectorIndexQueryModeQuantizedRerank, QuantizedIndexName: quantized, QuantizedRerankCandidates: 8}
 	// Without a small allow-set the selected public path really uses SQ8 and

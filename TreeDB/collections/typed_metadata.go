@@ -371,7 +371,11 @@ func (c *Collection) buildTypedMetadataPlan(ids [][]byte, set map[string]any, un
 		} else {
 			for path, value := range set {
 				if j := typedStringColumnIndex(cfg.Columns, path); j >= 0 {
-					newValues[j].String = value.(string)
+					text, ok := value.(string)
+					if !ok {
+						return nil, payload, result, fmt.Errorf("%w: metadata column %q requires a string value", ErrTypedMetadataInvalid, cfg.Columns[j].Name)
+					}
+					newValues[j] = columnDeclaredValue{Type: ColumnStoreValueString, Present: true, String: text}
 					continue
 				}
 				changed, err := applyTypedMetadataPath(object, path, value, false)
@@ -390,7 +394,9 @@ func (c *Collection) buildTypedMetadataPlan(ids [][]byte, set map[string]any, un
 		}
 		scalarChanged := false
 		for _, j := range columns {
-			scalarChanged = scalarChanged || oldValues[j].String != newValues[j].String
+			scalarChanged = scalarChanged || oldValues[j].Type != newValues[j].Type ||
+				oldValues[j].Present != newValues[j].Present || oldValues[j].Null != newValues[j].Null ||
+				oldValues[j].String != newValues[j].String
 		}
 		if !metadataChanged && !scalarChanged {
 			continue

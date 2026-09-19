@@ -631,8 +631,12 @@ class TreeDBClientTests(unittest.TestCase):
             )
             self.assertEqual((result.matched_count, result.modified_count), (1, 1))
             body = json_body(server.records[0])
-            self.assertEqual(body["ids"], ["a", "missing"])
-            self.assertNotIn("embedding", json.dumps(body))
+            self.assertEqual(body, {
+                "expected_generation": 1,
+                "ids": ["a", "missing"],
+                "set": {"meta.acl": "new", "meta.rank": 2},
+                "unset": ["meta.old"],
+            })
         invalid = (
             (["a", "a"], {"meta.x": 1}, []),
             (["a"], {"content": "x"}, []),

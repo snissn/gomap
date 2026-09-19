@@ -2373,10 +2373,12 @@ and LocalOnly deterministic-entry rejection. Python unit/integration tests pin
 one HTTP or negotiated native request, no fallback, no vector carrier,
 structured ambiguous/recovery errors, and unchanged content/vector retrieval.
 
-`TestProductionRetrievalSourceAndPermissionLifecycle4765` is the parent graph's
+`TestProductionRetrievalSourceAndACLFilterLifecycle4765` is the parent graph's
 small integrated service/HTTP acceptance fixture: literal filtered AND BM25,
 selected SQ8 plus packed canonical reranking, default vector-free responses,
-atomic source shrink, permission revoke/regrant without vector input, and
-reopen. BM25, dense and hybrid agree on the allowed live set; stale chunks do
-not return. Small selective allow-sets retain their truthful typed-exact route.
+atomic source shrink, ACL-filter visibility changes without vector input, and
+reopen. BM25, dense and hybrid agree on the caller-filtered live set; stale chunks
+do not return. This proves metadata eligibility filtering, not an independent
+server-side authorization policy. Small selective allow-sets retain their
+truthful typed-exact route.
 This fixture lives with the final metadata child, not in a separate harness PR.

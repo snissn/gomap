@@ -223,20 +223,3 @@ func TestCollectionTypedMetadataEnvelopeRegistration(t *testing.T) {
 		})
 	}
 }
-
-func TestCollectionTypedMetadataPayloadIndependentOfVectorDimension(t *testing.T) {
-	encodeForSchema := func(vectorDimensions uint32) []byte {
-		t.Helper()
-		// Vector schema and content are deliberately outside the metadata
-		// after-image. Only declared scalar metadata reaches this codec.
-		_ = vectorDimensions
-		raw, err := EncodeCollectionTypedMetadataPayload(collectionTypedMetadataFixture())
-		if err != nil {
-			t.Fatal(err)
-		}
-		return raw
-	}
-	if one, many := encodeForSchema(1), encodeForSchema(4096); !bytes.Equal(one, many) {
-		t.Fatalf("payload size/content depends on vector dimension: %d vs %d", len(one), len(many))
-	}
-}
