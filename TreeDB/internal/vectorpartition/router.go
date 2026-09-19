@@ -727,11 +727,13 @@ func CheckedRouterScalarWorkV1(populations []int, dimensions int, cfg RouterConf
 	}
 	splitCost := func(branch int) (uint64, bool) {
 		width := uint64(branch)
-		initialization, ok := multiply(width, width-1)
+		initialization, ok := multiply(width, width+1)
 		if !ok {
 			return 0, false
 		}
-		initialization /= 2 // 1 + ... + (branch-1) farthest-first distances.
+		// Include a possible final scan where distinct FP32 centers have zero
+		// cosine distance and farthest-first stops before its requested width.
+		initialization /= 2 // 1 + ... + branch farthest-first distances.
 		perIteration, ok := multiply(2*width-1, uint64(cfg.MaxIterations))
 		if !ok {
 			return 0, false
@@ -757,9 +759,13 @@ func CheckedRouterScalarWorkV1(populations []int, dimensions int, cfg RouterConf
 		quota := quotas[i]
 		maxSplits := min(cfg.MaxDepth, min((quota-1)/2, max(0, population-cfg.LeafSize)))
 		maxBranch := min(cfg.BranchFactor, population)
-		distancesPerVector := uint64(1) // root medoid pass.
+		terminalSelection := uint64(0)
+		if maxSplits > 0 {
+			terminalSelection = 1 // possible failed split after the last represented level.
+		}
+		distancesPerVector := uint64(1) + terminalSelection // root medoid pass.
 		for splits := 1; splits <= maxSplits; splits++ {
-			candidate := uint64(splits + 1) // one medoid pass per represented level.
+			candidate := uint64(splits+1) + terminalSelection // one medoid pass per represented level.
 			extraCapacity := maxBranch - 2
 			prefixExtraCapacity := population - cfg.LeafSize - splits
 			if splits == 1 {
