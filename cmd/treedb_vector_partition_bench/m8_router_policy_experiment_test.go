@@ -224,7 +224,7 @@ func TestM8RouterPolicyTamperSelectionAndCandidateIdentity(t *testing.T) {
 		t.Fatal("legacy row refused", err)
 	}
 	cfg.RouterPolicyDiagnostics = true
-	if err := m8RouterPolicyEvidenceSelectionV1(cfg, e.EffectiveWidth, row); err == nil {
+	if err := m8RouterPolicyEvidenceSelectionV1(cfg, representatives, row); err == nil {
 		t.Fatal("missing selected policy data accepted")
 	}
 	if len(truth) != len(queries) {
