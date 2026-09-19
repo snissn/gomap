@@ -324,7 +324,7 @@ func TestM8ProductionMatrixRequiresLikeForLikeVariantsAndOverlapStorageV1(t *tes
 	}
 	shortfallReports := append([]m8ProductionReportV1(nil), reports...)
 	shortfallReports[0].Rows = append([]m8ProductionRowV1(nil), reports[0].Rows...)
-	shortfallReports[0].Rows[1].Status = "candidate_coverage_shortfall"
+	shortfallReports[0].Rows[1].Status = m8ProductionCandidateCoverageShortfallV1
 	shortfallMatrix, err := m8BuildProductionMatrixV1(cfg, fixture, shortfallReports)
 	if err != nil {
 		t.Fatal(err)
@@ -333,7 +333,7 @@ func TestM8ProductionMatrixRequiresLikeForLikeVariantsAndOverlapStorageV1(t *tes
 	for i, comparison := range shortfallMatrix.Comparison {
 		if comparison.VariantID == shortfallReports[0].Variant.VariantID && comparison.Probes == shortfallReports[0].Rows[1].Probes && comparison.EfSearch == shortfallReports[0].Rows[1].EfSearch && comparison.Concurrency == shortfallReports[0].Rows[1].Concurrency {
 			shortfallAt = i
-			if comparison.Status != "candidate_coverage_shortfall" {
+			if comparison.Status != m8ProductionCandidateCoverageShortfallV1 {
 				t.Fatalf("shortfall comparison status=%q", comparison.Status)
 			}
 		}

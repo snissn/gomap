@@ -298,6 +298,23 @@ type m8ProductionRowV1 struct {
 	Attribution            m8ProductionAttributionV1 `json:"recall_attribution"`
 }
 
+const (
+	m8ProductionCandidateCoverageShortfallV1 = "candidate_coverage_shortfall"
+	m8ProductionRouterScoreBudgetExhaustedV1 = "router_score_budget_exhausted"
+	m8ProductionMixedRouterRefusalV1         = "mixed_router_refusal"
+)
+
+func m8ProductionRouterRefusalStatusV1(status string) bool {
+	return status == m8ProductionCandidateCoverageShortfallV1 ||
+		status == m8ProductionRouterScoreBudgetExhaustedV1 ||
+		status == m8ProductionMixedRouterRefusalV1
+}
+
+func m8ProductionRouterRefusalErrorV1(err error) bool {
+	return errors.Is(err, collections.ErrVectorPartitionRouterCandidateCoverageV1) ||
+		errors.Is(err, collections.ErrVectorPartitionRouterScoreBudget)
+}
+
 type m8ProductionFailureEvidenceV1 struct {
 	Class             string                         `json:"class"`
 	StoppedGroup      string                         `json:"stopped_group"`
@@ -980,7 +997,7 @@ func m8ProductionMeasurementTranscriptOutcomesV1(report m8ProductionReportV1, me
 			if measured.routingHits != nil {
 				outcome.ExactRepresentativeTruthHits = append([]uint16(nil), measured.routingHits...)
 			}
-		} else if _, ok := byRow[i]; ok && row.Status != "candidate_coverage_shortfall" {
+		} else if _, ok := byRow[i]; ok && !m8ProductionRouterRefusalStatusV1(row.Status) {
 			return nil, errors.New("M8 measurement transcript has outcomes for unmeasured row")
 		} else {
 			outcome.TopKIDs = make([][]string, 0)
@@ -2331,14 +2348,14 @@ func m8AttributionPacksForDomainsV1(manifest collections.VectorPartitionManifest
 	return packs, nil
 }
 
-// m8ApproximateRouterCoverageV1 converts only the typed bounded-candidate
-// shortfall into an attributable approximate-routing loss. Every other router
-// error remains fail-closed evidence construction failure.
+// m8ApproximateRouterCoverageV1 converts only typed, no-partial router
+// refusals into an incomplete approximate-routing observation. Every other
+// router error remains a fail-closed evidence construction failure.
 func m8ApproximateRouterCoverageV1(err error) (bool, error) {
 	if err == nil {
 		return true, nil
 	}
-	if errors.Is(err, collections.ErrVectorPartitionRouterCandidateCoverageV1) {
+	if m8ProductionRouterRefusalErrorV1(err) {
 		return false, nil
 	}
 	return false, err
@@ -2814,8 +2831,8 @@ func m8BuildAttributionV1(ctx context.Context, assets *m8ProductionMultiGroupAss
 		allPartitions[i] = uint32(i)
 	}
 	// Route every query before starting either approximate search stage. A
-	// candidate-coverage shortfall invalidates the cell's approximate evidence,
-	// so retaining complete-query approximate work would be misleading.
+	// typed router refusal invalidates the cell's approximate evidence, so
+	// retaining complete-query approximate work would be misleading.
 	approximatePartitions := make([][]uint32, len(queries))
 	for i, query64 := range queries {
 		if err := ctx.Err(); err != nil {
@@ -3053,7 +3070,7 @@ func m8WarmProductionTopologyV1(ctx context.Context, coordinator *nativewire.Vec
 		warmupMu.Lock()
 		defer warmupMu.Unlock()
 		if err != nil {
-			if errors.Is(err, collections.ErrVectorPartitionRouterCandidateCoverageV1) {
+			if m8ProductionRouterRefusalErrorV1(err) {
 				// Search returns a zero response on errors, but its typed
 				// coordinator error retains the observed untimed work.
 				var coordinatorErr *nativewire.VectorPartitionCoordinatorErrorV1
@@ -3424,16 +3441,17 @@ func m8RunProductionCellV1(ctx context.Context, coordinator *nativewire.VectorPa
 	canonicalResults := make([][]m8CanonicalResultV1, len(outcomes))
 	durations := make([]uint64, 0, len(outcomes))
 	var recallSum float64
-	coverageShortfall := false
+	coverageShortfall, scoreBudgetExhausted := false, false
 	for index, outcome := range outcomes {
 		if outcome.err != nil {
-			if errors.Is(outcome.err, collections.ErrVectorPartitionRouterCandidateCoverageV1) {
+			if m8ProductionRouterRefusalErrorV1(outcome.err) {
 				var coordinatorErr *nativewire.VectorPartitionCoordinatorErrorV1
 				if errors.As(outcome.err, &coordinatorErr) {
 					m8AccumulateProductionRowCountersV1(&row, coordinatorErr.Counters)
 					row.MaxTotalNanos = max(row.MaxTotalNanos, coordinatorErr.Timing.TotalNanos)
 				}
-				coverageShortfall = true
+				coverageShortfall = coverageShortfall || errors.Is(outcome.err, collections.ErrVectorPartitionRouterCandidateCoverageV1)
+				scoreBudgetExhausted = scoreBudgetExhausted || errors.Is(outcome.err, collections.ErrVectorPartitionRouterScoreBudget)
 				continue
 			}
 			return row, nil, nil, fmt.Errorf("query %d: %w", index, outcome.err)
@@ -3447,8 +3465,15 @@ func m8RunProductionCellV1(ctx context.Context, coordinator *nativewire.VectorPa
 		durations = append(durations, outcome.response.Timing.TotalNanos)
 		m8AccumulateProductionRowCountersV1(&row, outcome.response.Counters)
 	}
-	if coverageShortfall {
-		row.Status = "candidate_coverage_shortfall"
+	if coverageShortfall || scoreBudgetExhausted {
+		switch {
+		case coverageShortfall && scoreBudgetExhausted:
+			row.Status = m8ProductionMixedRouterRefusalV1
+		case scoreBudgetExhausted:
+			row.Status = m8ProductionRouterScoreBudgetExhaustedV1
+		default:
+			row.Status = m8ProductionCandidateCoverageShortfallV1
+		}
 		row.ElapsedNanos = elapsedNanos
 		for _, outcome := range outcomes {
 			row.MaxTotalNanos = max(row.MaxTotalNanos, outcome.response.Timing.TotalNanos)
@@ -3479,7 +3504,7 @@ func m8AttachAttributionV1(row *m8ProductionRowV1, attribution m8AttributionCell
 		return errors.New("M8 attribution result cardinality mismatch")
 	}
 	row.Attribution = attribution.Evidence
-	if row.Status == "candidate_coverage_shortfall" {
+	if m8ProductionRouterRefusalStatusV1(row.Status) {
 		if row.Attribution.Quality != nil {
 			q := *row.Attribution.Quality
 			q.Queries = slices.Clone(q.Queries)
@@ -4534,7 +4559,7 @@ func validateM8ProductionReportWithProfilesV1(report m8ProductionReportV1, caps 
 		if row.ElapsedNanos < row.MaxTotalNanos {
 			return errors.New("M8 cell elapsed is shorter than its slowest request")
 		}
-		if row.Status == "candidate_coverage_shortfall" {
+		if m8ProductionRouterRefusalStatusV1(row.Status) {
 			if row.Probes < 1 || row.Probes > domainCount ||
 				row.EfSearch < report.Config.TopK || row.Concurrency < 1 || row.Samples != report.Dataset.Queries ||
 				row.RouterMode != collections.VectorPartitionRouterModeApproxV1 || row.RouterCandidates < row.Probes || row.RouterCandidates > report.Config.RouterCandidates || row.RouterCandidates != row.Attribution.ApproximateRouterCandidateBudget || row.NoPartialResults || row.ExactParityChecked || row.ExactParityPassed ||
@@ -4542,7 +4567,7 @@ func validateM8ProductionReportWithProfilesV1(report m8ProductionReportV1, caps 
 				!validExactLocalSearches || row.Attribution.LocalHNSWCandidates == 0 ||
 				row.Attribution.ApproximateRouterPartitionCoverageComplete || row.Attribution.ApproximateRepresentativeRecallAtK != 0 || row.Attribution.ApproximateLocalHNSWRecallAtK != 0 || row.Attribution.ApproximateLocalHNSWSearches != 0 || len(row.Attribution.ApproximateLocalHNSWSearchesByQuery) != 0 || row.Attribution.ApproximateLocalHNSWCandidates != 0 || row.Attribution.ApproximateLocalHNSWEdges != 0 || row.Attribution.EndToEndRecallAtK != 0 ||
 				row.Attribution.CoordinatorMergeIDParity || row.Attribution.CoordinatorMergeScoreParity || !validM8AttributionV1(row.Attribution, report.Config.TopK) {
-				return errors.New("malformed M8 candidate-coverage shortfall row")
+				return errors.New("malformed M8 router-refusal row")
 			}
 			rowSamples := uint64(row.Samples)
 			if rowSamples > ^uint64(0)-measuredSamples {

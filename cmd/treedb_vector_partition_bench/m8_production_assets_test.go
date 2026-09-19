@@ -135,10 +135,11 @@ func requireM8PersistentAssetSupportV1(t testing.TB) {
 
 type m8CoverageShortfallRouterSourceV1 struct {
 	nativewire.VectorPartitionCoordinatorRouterSourceV1
-	failed  int32
-	calls   int32
-	err     error
-	barrier *m8ApproximateSearchBarrierV1
+	failed   int32
+	calls    int32
+	firstErr error
+	err      error
+	barrier  *m8ApproximateSearchBarrierV1
 }
 
 func (s *m8CoverageShortfallRouterSourceV1) OpenVectorPartitionCoordinatorRouterV1(ctx context.Context, index string, generation uint64) (nativewire.VectorPartitionCoordinatorRouterV1, error) {
@@ -146,15 +147,16 @@ func (s *m8CoverageShortfallRouterSourceV1) OpenVectorPartitionCoordinatorRouter
 	if err != nil {
 		return nil, err
 	}
-	return m8CoverageShortfallRouterV1{VectorPartitionCoordinatorRouterV1: router, failed: &s.failed, calls: &s.calls, err: s.err, barrier: s.barrier}, nil
+	return m8CoverageShortfallRouterV1{VectorPartitionCoordinatorRouterV1: router, failed: &s.failed, calls: &s.calls, firstErr: s.firstErr, err: s.err, barrier: s.barrier}, nil
 }
 
 type m8CoverageShortfallRouterV1 struct {
 	nativewire.VectorPartitionCoordinatorRouterV1
-	failed  *int32
-	calls   *int32
-	err     error
-	barrier *m8ApproximateSearchBarrierV1
+	failed   *int32
+	calls    *int32
+	firstErr error
+	err      error
+	barrier  *m8ApproximateSearchBarrierV1
 }
 
 type m8ApproximateSearchBarrierV1 struct {
@@ -190,7 +192,15 @@ func (r m8CoverageShortfallRouterV1) SearchWithContextV1(ctx context.Context, qu
 			defer r.barrier.enter(ctx)()
 		}
 		if atomic.CompareAndSwapInt32(r.failed, 0, 1) {
-			return collections.VectorPartitionRouterSearchResultV1{}, collections.ErrVectorPartitionRouterCandidateCoverageV1
+			failure := r.firstErr
+			if failure == nil {
+				failure = collections.ErrVectorPartitionRouterCandidateCoverageV1
+			}
+			result := collections.VectorPartitionRouterSearchResultV1{}
+			if errors.Is(failure, collections.ErrVectorPartitionRouterScoreBudget) {
+				result.Status = collections.VectorPartitionRouterSearchStatusV1{ScoreBudget: uint64(opts.ScoreBudget), ScoreCalls: uint64(opts.ScoreBudget), Candidates: 1, Edges: 2}
+			}
+			return result, failure
 		}
 		if atomic.AddInt32(r.calls, 1) == 1 && r.err != nil {
 			return collections.VectorPartitionRouterSearchResultV1{}, r.err
@@ -510,7 +520,7 @@ func TestM8ProductionReportRejectsUnexercisedDataGroupV1(t *testing.T) {
 	}
 	shortfall := report
 	shortfall.Rows = append([]m8ProductionRowV1(nil), report.Rows...)
-	shortfall.Rows[0].Status = "candidate_coverage_shortfall"
+	shortfall.Rows[0].Status = m8ProductionCandidateCoverageShortfallV1
 	shortfall.Rows[0].RouterCandidates = 4
 	shortfall.Rows[0].Attribution.ApproximateRouterCandidateBudget = 4
 	shortfall.Rows[0].MaxTotalNanos = 1
@@ -532,6 +542,14 @@ func TestM8ProductionReportRejectsUnexercisedDataGroupV1(t *testing.T) {
 	shortfall.GateLedger = m8ProductionGateLedgerForReportV1(shortfall)
 	if err := testM8ValidateProductionReportV1(shortfall); err != nil {
 		t.Fatalf("valid candidate-coverage shortfall rejected: %v", err)
+	}
+	for _, status := range []string{m8ProductionRouterScoreBudgetExhaustedV1, m8ProductionMixedRouterRefusalV1} {
+		refusal := shortfall
+		refusal.Rows = append([]m8ProductionRowV1(nil), shortfall.Rows...)
+		refusal.Rows[0].Status = status
+		if err := testM8ValidateProductionReportV1(refusal); err != nil {
+			t.Fatalf("valid %s row rejected: %v", status, err)
+		}
 	}
 	zeroTiming := shortfall
 	zeroTiming.Rows = append([]m8ProductionRowV1(nil), shortfall.Rows...)
@@ -1132,7 +1150,7 @@ func TestM8ProductionMultiGroupTopology10kTCPV1(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if shortfall.Status != "candidate_coverage_shortfall" || len(shortfallResults) != len(shortfallQueries) {
+	if shortfall.Status != m8ProductionCandidateCoverageShortfallV1 || len(shortfallResults) != len(shortfallQueries) {
 		t.Fatalf("candidate-coverage shortfall=%+v results=%d", shortfall, len(shortfallResults))
 	}
 	if shortfallDurations != nil {
@@ -1144,6 +1162,42 @@ func TestM8ProductionMultiGroupTopology10kTCPV1(t *testing.T) {
 	for _, results := range shortfallResults {
 		if results != nil {
 			t.Fatalf("candidate-coverage shortfall retained a partial result: %+v", results)
+		}
+	}
+	scoreSource := &m8CoverageShortfallRouterSourceV1{VectorPartitionCoordinatorRouterSourceV1: assets.RouterSource(), firstErr: collections.ErrVectorPartitionRouterScoreBudget}
+	scoreTopology, err := nativewire.NewVectorPartitionM8ProductionMultiGroupV1(ctx, nativewire.VectorPartitionM8ProductionMultiGroupOptionsV1{Collection: assets.collection, Manifest: assets.manifest, RouterSource: scoreSource, GroupAssetSetDigests: assets.assetSetDigests, Database: "default", Catalog: "default"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer scoreTopology.Close()
+	scoreRefusal, scoreResults, scoreDurations, err := m8RunProductionCellV1(ctx, scoreTopology.Coordinator(), assets, shortfallQueries, make([][]m8CanonicalResultV1, len(shortfallQueries)), 4, 4096, 4, 10, candidates, nativewire.DefaultVectorPartitionCoordinatorLimitsV1().MaxCandidateBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if scoreRefusal.Status != m8ProductionRouterScoreBudgetExhaustedV1 || scoreRefusal.RouterScoreCalls < uint64(candidates) || len(scoreResults) != len(shortfallQueries) || scoreDurations != nil {
+		t.Fatalf("score-budget refusal=%+v results=%d timings=%v", scoreRefusal, len(scoreResults), scoreDurations)
+	}
+	for _, results := range scoreResults {
+		if results != nil {
+			t.Fatalf("score-budget refusal retained a partial result: %+v", results)
+		}
+	}
+	mixedSource := &m8CoverageShortfallRouterSourceV1{VectorPartitionCoordinatorRouterSourceV1: assets.RouterSource(), firstErr: collections.ErrVectorPartitionRouterScoreBudget, err: collections.ErrVectorPartitionRouterCandidateCoverageV1, barrier: &m8ApproximateSearchBarrierV1{waitFor: 4, release: make(chan struct{})}}
+	mixedTopology, err := nativewire.NewVectorPartitionM8ProductionMultiGroupV1(ctx, nativewire.VectorPartitionM8ProductionMultiGroupOptionsV1{Collection: assets.collection, Manifest: assets.manifest, RouterSource: mixedSource, GroupAssetSetDigests: assets.assetSetDigests, Database: "default", Catalog: "default"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mixedTopology.Close()
+	mixedRefusal, mixedResults, mixedDurations, err := m8RunProductionCellV1(ctx, mixedTopology.Coordinator(), assets, shortfallQueries, make([][]m8CanonicalResultV1, len(shortfallQueries)), 4, 4096, 4, 10, candidates, nativewire.DefaultVectorPartitionCoordinatorLimitsV1().MaxCandidateBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mixedRefusal.Status != m8ProductionMixedRouterRefusalV1 || len(mixedResults) != len(shortfallQueries) || mixedDurations != nil {
+		t.Fatalf("mixed router refusal=%+v results=%d timings=%v", mixedRefusal, len(mixedResults), mixedDurations)
+	}
+	for _, results := range mixedResults {
+		if results != nil {
+			t.Fatalf("mixed router refusal retained a partial result: %+v", results)
 		}
 	}
 	if row.Attribution.Contract != m8CanonicalResultContractV1 || row.Attribution.ExhaustivePartitionRecallAtK != 1 ||

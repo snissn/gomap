@@ -12,7 +12,14 @@ not clamped. System-node config version 2 carries the same server-owned search
 coordinates. Old formats and retained reports are not relabeled as V2 evidence.
 
 Ordinary rows retain actual router score calls, distinct visits and edges,
-including failed work. Exact attribution is fully charged and never a fallback.
+including failed work. Candidate-coverage, hard-score-budget, and mixed router
+refusals remain explicit `candidate_coverage_shortfall`,
+`router_score_budget_exhausted`, or `mixed_router_refusal` rows in the report,
+measurement transcript, matrix, and retained replay. They preserve observed
+counters/timing but contain no partial results or fabricated quality/throughput
+measurements. Optional policy diagnostics retain the same typed score-budget
+refusal instead of aborting the artifact. Exact attribution is fully charged
+and never a fallback.
 The renamed meaning of historical internal Go fields called `RouterCandidates`
 is C in this schema, not a distinct representative count. Use the explicit
 semantics/version and score-call counters when interpreting records.
@@ -716,8 +723,11 @@ from the collected sequence digest. Both bind model, query, score convention,
 collection mode, budget and width. Duplicate identities with conflicting scores
 are invalid. A valid set reaching too few domains is retained as
 `candidate_coverage_shortfall`, including its work and candidate identity, but
-**no partial route**. No retry, probe escalation or exact fallback fills gaps.
-Queries are not removed from the report because a policy cannot supply a route.
+**no partial route**. A traversal exhausting C is retained as
+`router_score_budget_exhausted`, including the fully charged score-call count,
+but no partial candidate set or policy result. No retry, probe escalation or
+exact fallback fills gaps. Queries are not removed from the report because a
+policy cannot supply a route.
 
 M8 caches the immutable exact/approximate comparisons once per query and probe
 coordinate across local-EF and concurrency cells. Cache lookup still hashes the full

@@ -309,8 +309,16 @@ func TestM8RouterPolicyRetainedAttributionReplay(t *testing.T) {
 			}
 			cell, err := m8BuildAttributionV1(t.Context(), assets, homes, members, queries, truth, oracles, 2, 32, 10, budget, make([][]m8CanonicalResultV1, len(queries)), h)
 			if coordinate.budget == 1 {
-				if !errors.Is(err, collections.ErrVectorPartitionRouterScoreBudget) {
-					t.Fatalf("exhausted score budget must fail closed, got %v", err)
+				if err != nil {
+					t.Fatalf("exhausted score budget was not retained: %v", err)
+				}
+				if err := m8ValidateRouterPolicyEvidenceV1(cell.Evidence.RouterPolicies, cell.Evidence.Quality, 10, 2, len(queries)); err != nil {
+					t.Fatal(err)
+				}
+				for _, query := range cell.Evidence.RouterPolicies.Queries {
+					if query.Approximate.Status != m8ProductionRouterScoreBudgetExhaustedV1 || query.Approximate.Coverage != nil || query.Approximate.Comparison.CollectionComplete || query.Approximate.Comparison.ScoreCalls != 1 {
+						t.Fatalf("score-budget refusal was not explicit: %+v", query.Approximate)
+					}
 				}
 				return
 			}

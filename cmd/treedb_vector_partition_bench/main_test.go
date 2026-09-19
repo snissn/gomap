@@ -2768,8 +2768,10 @@ func TestM8AttributionApproximateCoverageShortfallIsOwnedV1(t *testing.T) {
 	if !validM8AttributionV1(attribution, 10) || !slices.Equal(attribution.ResidualLossOwners, []string{"approximate_representative_routing"}) {
 		t.Fatalf("coverage-shortfall attribution=%+v", attribution)
 	}
-	if complete, err := m8ApproximateRouterCoverageV1(fmt.Errorf("wrapped: %w", collections.ErrVectorPartitionRouterCandidateCoverageV1)); err != nil || complete {
-		t.Fatalf("typed coverage result complete=%t err=%v", complete, err)
+	for _, refusal := range []error{collections.ErrVectorPartitionRouterCandidateCoverageV1, collections.ErrVectorPartitionRouterScoreBudget} {
+		if complete, err := m8ApproximateRouterCoverageV1(fmt.Errorf("wrapped: %w", refusal)); err != nil || complete {
+			t.Fatalf("typed refusal %v result complete=%t err=%v", refusal, complete, err)
+		}
 	}
 	invalid := attribution
 	invalid.ApproximateRepresentativeRecallAtK = .5

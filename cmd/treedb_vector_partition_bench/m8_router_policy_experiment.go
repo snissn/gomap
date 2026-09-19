@@ -93,7 +93,11 @@ func (h *m8AttributionHarnessV1) routerPolicyOutcomeV1(ctx context.Context, i, p
 	out := m8RouterPolicyOutcomeV1{Status: "pass", Comparison: c}
 	if err != nil {
 		if errors.Is(err, collections.ErrVectorPartitionRouterCandidateCoverageV1) {
-			out.Status = "candidate_coverage_shortfall"
+			out.Status = m8ProductionCandidateCoverageShortfallV1
+			return out, nil
+		}
+		if errors.Is(err, collections.ErrVectorPartitionRouterScoreBudget) {
+			out.Status = m8ProductionRouterScoreBudgetExhaustedV1
 			return out, nil
 		}
 		return out, err
@@ -195,7 +199,7 @@ func m8ValidateRouterPolicyEvidenceV1(e *m8RouterPolicyEvidenceV1, q *m8QualityA
 			out  m8RouterPolicyOutcomeV1
 		}{{"exact", row.Exact}, {"approximate", row.Approximate}} {
 			out, c := which.out, which.out.Comparison
-			if c.Method != collections.VectorPartitionRouterPolicyDiagnosticMethodV1 || c.Mode != which.mode || c.Generation != q.Generation || c.SourceGeneration != q.SourceGeneration || c.ModelSHA256 != q.ModelSHA256 || !m8SHA256V1(c.QuerySHA256) || c.DomainCount != q.Domains || c.RepresentativeCount < c.DomainCount || c.RepresentativeCount > vectorpartition.DefaultRouterConfigV1().MaxRepresentatives || c.CandidateBudget < 1 || c.ReturnedWidth != e.EffectiveWidth || c.ReturnedWidth > c.BeamWidth || c.BeamWidth > c.RepresentativeCount || c.ScoreCalls > uint64(c.CandidateBudget) || c.ScoreCalls < c.Candidates || c.Probes != probes || !c.CollectionComplete || c.Collected < 1 || c.Collected > c.RepresentativeCount || c.Collected > c.CandidateBudget || c.Candidates < uint64(c.Collected) || c.Candidates > uint64(c.CandidateBudget) {
+			if c.Method != collections.VectorPartitionRouterPolicyDiagnosticMethodV1 || c.Mode != which.mode || c.Generation != q.Generation || c.SourceGeneration != q.SourceGeneration || c.ModelSHA256 != q.ModelSHA256 || !m8SHA256V1(c.QuerySHA256) || c.DomainCount != q.Domains || c.RepresentativeCount < c.DomainCount || c.RepresentativeCount > vectorpartition.DefaultRouterConfigV1().MaxRepresentatives || c.CandidateBudget < 1 || c.ReturnedWidth != e.EffectiveWidth || c.ReturnedWidth > c.BeamWidth || c.BeamWidth > c.RepresentativeCount || c.ScoreCalls > uint64(c.CandidateBudget) || c.ScoreCalls < c.Candidates || c.Probes != probes {
 				return errors.New("policy candidate identity/work mismatch")
 			}
 			if which.mode == "exact" {
@@ -205,7 +209,16 @@ func m8ValidateRouterPolicyEvidenceV1(e *m8RouterPolicyEvidenceV1, q *m8QualityA
 			} else if c.CandidateBudget != e.ApproximateBudget {
 				return errors.New("policy approximate budget mismatch")
 			}
-			if out.Status == "candidate_coverage_shortfall" {
+			if out.Status == m8ProductionRouterScoreBudgetExhaustedV1 {
+				if which.mode != collections.VectorPartitionRouterModeApproxV1 || out.Coverage != nil || c.CollectionComplete || c.ScoreCalls != uint64(c.CandidateBudget) || c.Collected != 0 || c.Candidates != 0 || c.Edges != 0 || c.UniqueReturned != 0 || c.CandidateSetSHA256 != "" || c.CandidateSequenceSHA256 != "" || len(c.Distance)+len(c.Frequency)+len(c.Hybrid) != 0 {
+					return errors.New("policy score-budget refusal contains partial results")
+				}
+				continue
+			}
+			if !c.CollectionComplete || c.Collected < 1 || c.Collected > c.RepresentativeCount || c.Collected > c.CandidateBudget || c.Candidates < uint64(c.Collected) || c.Candidates > uint64(c.CandidateBudget) {
+				return errors.New("policy candidate collection is incomplete")
+			}
+			if out.Status == m8ProductionCandidateCoverageShortfallV1 {
 				if out.Coverage != nil || len(c.Distance)+len(c.Frequency)+len(c.Hybrid) != 0 || !m8SHA256V1(c.CandidateSetSHA256) || !m8SHA256V1(c.CandidateSequenceSHA256) || c.UniqueReturned < 1 || c.UniqueReturned > c.ReturnedWidth || c.UniqueReturned > c.Collected {
 					return errors.New("policy shortfall contains partial results")
 				}
@@ -297,7 +310,7 @@ func m8RouterPolicyEvidenceSelectionV1(cfg m8ProductionConfigEvidenceV1, row m8P
 	if !cfg.QualityDiagnostics || cfg.RouterPolicyWidth < 0 || cfg.RouterPolicyWidth > cfg.RouterCandidates {
 		return errors.New("invalid router policy configuration")
 	}
-	if row.Status != "pass" && row.Status != "fail" && row.Status != "candidate_coverage_shortfall" {
+	if row.Status != "pass" && row.Status != "fail" && !m8ProductionRouterRefusalStatusV1(row.Status) {
 		if e != nil {
 			return errors.New("unexecuted row has policy observations")
 		}

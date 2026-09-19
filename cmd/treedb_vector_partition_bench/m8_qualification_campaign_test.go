@@ -3278,11 +3278,11 @@ func testM8QualificationTranscriptV1(t *testing.T, dir string, report *m8Product
 func testM8MeasurementCellsV1(report m8ProductionReportV1) []m8MeasuredCellV1 {
 	cells := make([]m8MeasuredCellV1, 0, len(report.Rows))
 	for rowIndex, row := range report.Rows {
-		if row.Status != "pass" && row.Status != "fail" && row.Status != "candidate_coverage_shortfall" {
+		if row.Status != "pass" && row.Status != "fail" && !m8ProductionRouterRefusalStatusV1(row.Status) {
 			continue
 		}
 		results := make([][]m8CanonicalResultV1, row.Samples)
-		if row.Status != "candidate_coverage_shortfall" {
+		if !m8ProductionRouterRefusalStatusV1(row.Status) {
 			for query := range results {
 				results[query] = make([]m8CanonicalResultV1, min(report.Config.TopK, report.Dataset.Vectors))
 				for rank := range results[query] {

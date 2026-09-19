@@ -287,7 +287,8 @@ missing or conflicting data reject rather than falling back to a partial pass.
 See `TreeDB/docs/performance/vector-partition-m8.md` for costs, commands and the
 representative-baseline boundary.
 
-Selected quality evidence on `candidate_coverage_shortfall` rows MUST also be
+Selected quality evidence on `candidate_coverage_shortfall`,
+`router_score_budget_exhausted`, or `mixed_router_refusal` rows MUST also be
 recomputed from reopened static assets. Structural validation alone cannot bind
 query/truth/model digests, coverage costs or nearest-member routing. Only the
 unavailable local/coordinator observations are suppressed, using the same rule

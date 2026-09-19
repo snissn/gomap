@@ -556,7 +556,7 @@ func m8QualityEvidenceSelectionV1(cfg m8ProductionConfigEvidenceV1, row m8Produc
 	if cfg.TopK < 1 || cfg.TopK > 10 || cfg.QualityTraceQueries < 0 || cfg.QualityTraceQueries > m8QualityTraceMaxQueriesV1 {
 		return errors.New("invalid quality config")
 	}
-	if row.Status != "pass" && row.Status != "fail" && row.Status != "candidate_coverage_shortfall" {
+	if row.Status != "pass" && row.Status != "fail" && !m8ProductionRouterRefusalStatusV1(row.Status) {
 		if row.Attribution.Quality != nil {
 			return errors.New("unsupported row has quality evidence")
 		}
