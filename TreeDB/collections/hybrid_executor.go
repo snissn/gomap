@@ -141,11 +141,23 @@ func (c *Collection) searchHybridWithCandidateBudgetPolicy(opts HybridSearchOpti
 			plan.scalarFilter != nil &&
 			plan.scalarFilterStrategy != HybridScalarFilterStrategyPostfilter
 	}
-	if !plan.nativeVectorScalar {
+	// A selected vector-only route normally delegates a non-empty scalar plan
+	// to the typed owner. Resolve it against that same captured read view first
+	// so an empty prefilter can stop before any selected vector work. Preserve
+	// the producer's existing accounting for non-empty filters rather than
+	// merging the same scalar lookup twice.
+	resolveSelectedEmptyFilter := plan.nativeVectorScalar && plan.readView != nil
+	if !plan.nativeVectorScalar || resolveSelectedEmptyFilter {
+		var resolvedAllowSet hybridScalarAllowSet
+		var resolvedScalarStats HybridSearchStats
 		if plan.readView != nil {
-			allowSet, scalarStats, err = c.hybridScalarAllowSetAtReadView(plan, plan.readView)
+			resolvedAllowSet, resolvedScalarStats, err = c.hybridScalarAllowSetAtReadView(plan, plan.readView)
 		} else {
-			allowSet, scalarStats, err = c.hybridScalarAllowSet(plan)
+			resolvedAllowSet, resolvedScalarStats, err = c.hybridScalarAllowSet(plan)
+		}
+		if !plan.nativeVectorScalar || len(resolvedAllowSet) == 0 {
+			allowSet = resolvedAllowSet
+			scalarStats = resolvedScalarStats
 		}
 		hybridMergeStats(&response.Stats, scalarStats)
 		if err != nil {

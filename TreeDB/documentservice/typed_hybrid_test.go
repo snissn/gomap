@@ -93,6 +93,15 @@ func TestServiceTypedHybridQuantizedRerankPublicRoute4767(t *testing.T) {
 	if filtered.Stats.VectorRoute == nil || filtered.Stats.VectorRoute.Route != "typed_exact" || filtered.Stats.VectorQuantizedScoreCalls != 0 || filtered.Stats.VectorCandidatesReturned != 2 {
 		t.Fatalf("selected small-filter response=%+v", filtered)
 	}
+	vectorOnlyFilteredRequest := filteredRequest
+	vectorOnlyFilteredRequest.Query = ""
+	vectorOnlyFiltered, err := svc.SearchHybrid(ctx, create.Name, vectorOnlyFilteredRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(vectorOnlyFiltered.Documents) != 2 || vectorOnlyFiltered.Stats.VectorRoute == nil || vectorOnlyFiltered.Stats.VectorRoute.Route != "typed_exact" || vectorOnlyFiltered.Stats.VectorQuantizedScoreCalls != 0 || vectorOnlyFiltered.Stats.VectorCandidatesReturned != 2 {
+		t.Fatalf("selected vector-only small-filter response=%+v", vectorOnlyFiltered)
+	}
 	emptyRequest := request
 	emptyRequest.Filter = &Filter{Field: "meta.user_id", Operator: "==", Value: "missing"}
 	empty, err := svc.SearchHybrid(ctx, create.Name, emptyRequest)
@@ -101,6 +110,15 @@ func TestServiceTypedHybridQuantizedRerankPublicRoute4767(t *testing.T) {
 	}
 	if len(empty.Documents) != 0 || empty.Stats.VectorRoute != nil || empty.Stats.VectorCandidatesReturned != 0 || empty.Plan.VectorQueryMode != collections.VectorIndexQueryModeQuantizedRerank || empty.Stats.CandidateBudgetPolicy != collections.HybridCandidateBudgetPolicyFixed || empty.Stats.CandidateBudgetStopReason != collections.HybridCandidateBudgetStopReasonFixedPolicy {
 		t.Fatalf("selected empty-filter response=%+v", empty)
+	}
+	vectorOnlyEmptyRequest := emptyRequest
+	vectorOnlyEmptyRequest.Query = ""
+	vectorOnlyEmpty, err := svc.SearchHybrid(ctx, create.Name, vectorOnlyEmptyRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(vectorOnlyEmpty.Documents) != 0 || vectorOnlyEmpty.Stats.VectorRoute != nil || vectorOnlyEmpty.Stats.VectorCandidatesReturned != 0 || vectorOnlyEmpty.Stats.VectorCandidatesExamined != 0 || vectorOnlyEmpty.Stats.VectorQuantizedScoreCalls != 0 || vectorOnlyEmpty.Stats.VectorQuantizedRerankExactScoreCalls != 0 || vectorOnlyEmpty.Stats.VectorPackedExactScoreCalls != 0 || vectorOnlyEmpty.Stats.DocumentsFetched != 0 || vectorOnlyEmpty.Stats.ScalarFilterLookups != 1 || vectorOnlyEmpty.Stats.ScalarFilterInputIDs != 0 || vectorOnlyEmpty.Stats.ScalarFilterFinalIDs != 0 || vectorOnlyEmpty.Stats.CandidateBudgetPolicy != collections.HybridCandidateBudgetPolicyFixed || vectorOnlyEmpty.Stats.CandidateBudgetStopReason != collections.HybridCandidateBudgetStopReasonFixedPolicy {
+		t.Fatalf("selected vector-only empty-filter response=%+v", vectorOnlyEmpty)
 	}
 
 	for name, malformed := range map[string]HybridSearchRequest{
