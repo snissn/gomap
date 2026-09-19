@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/snissn/gomap/TreeDB/collections"
 	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
 	"github.com/snissn/gomap/TreeDB/internal/raftplacement"
 	public "github.com/snissn/gomap/TreeDB/vectorpartition"
@@ -21,6 +22,7 @@ func TestVectorPartitionPublicBackendMapsCoordinatorErrorsV1(t *testing.T) {
 		want public.ErrorCodeV1
 	}{
 		{VectorPartitionCoordinatorErrorInvalidRequestV1, public.ErrorInvalidRequestV1},
+		{VectorPartitionCoordinatorErrorBudgetExceededV1, public.ErrorInvalidRequestV1},
 		{VectorPartitionCoordinatorErrorMalformedResponseV1, public.ErrorFailedV1},
 		{VectorPartitionCoordinatorErrorGenerationMismatchV1, public.ErrorGenerationMismatchV1},
 		{VectorPartitionCoordinatorErrorCanceledV1, public.ErrorCanceledV1},
@@ -36,6 +38,14 @@ func TestVectorPartitionPublicBackendMapsCoordinatorErrorsV1(t *testing.T) {
 	}
 	if got := publicBackendErrorV1(context.Canceled); !errors.Is(got, context.Canceled) {
 		t.Fatalf("canceled = %v", got)
+	}
+	got := publicBackendErrorV1(&VectorPartitionCoordinatorErrorV1{
+		Code: VectorPartitionCoordinatorErrorBudgetExceededV1,
+		Err:  collections.ErrVectorPartitionRouterScoreBudget,
+	})
+	var publicErr *public.ErrorV1
+	if !errors.As(got, &publicErr) || publicErr.Code != public.ErrorUnavailableV1 {
+		t.Fatalf("server-owned router budget exhaustion = %v", got)
 	}
 }
 
@@ -446,6 +456,7 @@ func publicCountersFromCoordinatorTestV1(counters VectorPartitionCoordinatorCoun
 		HNSWServedPartitions: counters.HNSWServedPartitions, ExactScanPartitions: counters.ExactScanPartitions,
 		Requests: counters.Requests, RPCs: counters.RPCs, Retries: counters.Retries, Redirects: counters.Redirects,
 		Candidates: counters.Candidates, Edges: counters.Edges,
+		RouterScoreCalls: counters.RouterScoreCalls, RouterCandidates: counters.RouterCandidates, RouterEdges: counters.RouterEdges,
 		SnapshotPins: counters.SnapshotPins, ReadProofs: counters.ReadProofs, GenerationPins: counters.GenerationPins, PartitionOpens: counters.PartitionOpens,
 		QueryBytes: counters.QueryBytes, RequestBytes: counters.RequestBytes, CandidateBytes: counters.CandidateBytes, ResponseBytes: counters.ResponseBytes,
 	}

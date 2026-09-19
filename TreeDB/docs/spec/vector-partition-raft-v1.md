@@ -54,26 +54,30 @@ order is not significant: partitions and source ordinals are canonicalized
 before deterministic hierarchical cosine k-means.
 
 `RouterConfigV1` persists the seed, branch factor, leaf-size stop,
-representative budget per logical domain, maximum depth, maximum Lloyd iterations,
+one global representative budget, maximum depth, maximum Lloyd iterations,
 and vector/dimension/representative/scalar-work/persisted-byte caps. A
 conservative full 64-layer native-pack bound is checked before row or adjacency
 allocation, and the actual encoded length is checked again before append.
 Farthest-first initialization and all distance/ordinal ties are stable. Empty clusters are
 repaired deterministically by moving the farthest eligible member, with source
-ordinal as the tie break. Each partition stops when its representative budget
-is reached or no eligible leaf remains. The persisted build metrics distinguish
+ordinal as the tie break. Reserve one root per nonempty logical domain, then
+apportion the remaining budget by population using bounded integer largest
+remainders with canonical domain/node ties. Every actual node is represented;
+splitting retains its parent center and consumes one token per new child.
+Subtree quotas, leaf size, depth and non-progress bound construction. Unusable
+tokens remain unspent rather than creating duplicate centers. Metrics distinguish
 leaf-size, depth, and no-split stops and record Lloyd iterations and repairs.
 The validator reconstructs root/member totals, parent/depth paths, leaves,
-per-partition representative caps, canonical node/representative order, and
+global/subtree quotas, canonical node/representative order, and
 metric totals; forged hierarchy or build metadata fails closed.
 
 The router asset is a native TreeDB HNSW search pack, not a sidecar centroid
 file. Every normalized representative vector is accompanied by a strict
-versioned `VKR1` document-ID record containing:
+version-2 `VKR1` document-ID record containing:
 
 - router generation and canonical model SHA-256;
-- partition, source ordinal, leaf, depth, member count, and full root-to-leaf
-  node/member-count path;
+- logical domain, provenance source ordinal, represented node, depth, member
+  count, and full root-to-node path with real node kind and subtree budget;
 - the complete router configuration and build metrics; and
 - the native HNSW `M`, construction-ef, and search-ef values.
 
@@ -84,8 +88,10 @@ Publication is one M1 `building` to `ready` transition. Cancellation or any
 input, append, resource-authority, or publication failure leaves the generation
 non-active and never exposes a partial router. Existing building-manifest
 fields cannot be rewritten during promotion. If M1 already declares
-representative memberships they must exactly match the computed source
-medoids; otherwise the digest-bound READY promotion fills the complete mapping.
+representatives they must exactly match the computed domain/node/provenance
+records; otherwise the digest-bound READY promotion fills the complete mapping.
+Distinct represented nodes may share a source anchor. Manifest version 5 and
+READY-promotion payload version 3 carry this identity; old assets require rebuild.
 Every ready generation carries the mapping in both its manifest authority and
 the strict router records; open requires exact agreement.
 
@@ -98,11 +104,13 @@ the HNSW locality row order back to canonical representative order before
 serving and acquires an M1 reader pin in the same barrier. `Close` excludes
 concurrent searches, closes the prepared view, and releases that pin.
 
-Exact routing is the correctness oracle and requires
-`candidate_budget >= representative_count`; it scans all persisted
-representatives. Approximate routing passes its explicit candidate budget as a
-hard distinct layer-0 scoring limit to the native prepared HNSW path. Candidate
-budget and partition-probe count are separate controls. Both paths reduce
+Search options V2 declare returned width `w`, traversal beam `E`, and actual
+score-call budget `C`, independently of domain probes. Require
+`1 <= w <= E <= representative_count`. Exact routing scans all representatives,
+charges that many scores, and retains `w`; the full reference uses `w=E=N` and
+`C>=N`. Approximate routing charges upper-layer descent and every level-zero
+score invocation, including repeated scores. `C` may exceed `N`; exhaustion is
+a typed error with charged work but no partial route or retry. Both paths reduce
 multiple representative hits to the minimum cosine distance per domain and
 return unique domains ordered by `(distance, domain_id)`. A zero/invalid
 budget, non-finite or dimension-mismatched query, malformed asset, stale
@@ -534,12 +542,12 @@ with both original and superseded refs, and retains the reduced reclaim state
 until all segment debt is physically absent; the durable-root fallback
 generation can therefore delay, but never bypass, DELETE_COMPLETE.
 
-### V1 API/schema contract, VPM1 wire version 4, and bounds
+### V1 API/schema contract, VPM1 wire version 5, and bounds
 
 `V1` in public API, type, and schema names identifies that pre-alpha contract;
 it is distinct from the explicit VPM1 wire version.
 The canonical generation payload is binary `VPM1` (big-endian magic
-`0x56504d31`, version `4`), followed by fixed-order length-prefixed fields;
+`0x56504d31`, version `5`), followed by fixed-order length-prefixed fields;
 there are no tagged optional fields. The JSON form is an inspection/exchange
 encoding of that same record: unknown fields, a second JSON value, trailing
 bytes, and non-canonical ordering fail closed. VPM1 is embedded in VCP1
@@ -551,14 +559,17 @@ optional membership digest. Native partition HNSW assets require it; the digest
 also appears in their pack wire-version-2 header and binds generation,
 partition, ordered authoritative stable IDs, and home/overlap kinds. Version 4
 adds the dense logical-domain count and complete canonical domain-pack mapping;
-both the ready-set and whole-record integrity digests bind that mapping.
+both the ready-set and whole-record integrity digests bind that mapping. Version
+5 extends each representative mapping with a nonzero represented-node ID.
+Representative mappings are canonical by logical domain and node ID; source
+ordinals remain provenance and may repeat for distinct nodes in one domain.
 
 | Record area | Required content | Validation boundary |
 | --- | --- | --- |
 | identity | collection, index name, SHA-256 index-definition digest; source generation/checksum/schema/row count; partition and router generations | exact live TVIS/base identity; ready router generation equals partition generation |
 | domains | dense logical domain IDs and a complete domain-to-pack mapping | every physical pack appears exactly once and every domain is nonempty |
 | placement | dense physical pack ID to one Raft group, with many packs allowed per group | IDs are exactly `[0, partition_count)` and canonical |
-| memberships | one disjoint physical-pack membership per source ordinal; bounded pack overlap and logical-domain representatives | ordinal/ID coverage, sorted order, per-vector and per-ID caps; the same ordinal/pack pair cannot be both home and overlap |
+| memberships | one disjoint physical-pack membership per source ordinal; bounded pack overlap and logical-domain/node representatives with source-anchor provenance | ordinal/ID coverage, sorted order, per-vector and per-ID caps; represented node IDs are nonzero and unique within each logical domain; the same ordinal/pack pair cannot be both home and overlap |
 | assets | typed `ColumnAssetRef`, length, CRC, SHA-256 and logical asset ID for each physical pack plus router; native packs also carry the canonical membership digest | references are namespace-bound, unique, streamed and checksum-verified before every collection-authorized publication; native membership identity is recomputed from the authoritative source and must match both descriptor and pack header; router partition ID is exactly zero |
 | ready set | SHA-256 over canonical domain-pack mapping, placements, pack assets and router descriptor | mismatches, mixed router/generation, incomplete mapping, or missing pack asset reject |
 

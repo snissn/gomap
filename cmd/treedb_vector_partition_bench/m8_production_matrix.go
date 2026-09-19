@@ -711,7 +711,7 @@ func validateM8ProductionMatrixV1(matrix m8ProductionMatrixV1) error {
 			if row.Status == "unsupported" {
 				continue
 			}
-			if row.Status != "pass" && row.Status != "fail" && row.Status != "candidate_coverage_shortfall" {
+			if row.Status != "pass" && row.Status != "fail" && !m8ProductionRouterRefusalStatusV1(row.Status) {
 				return errors.New("M8 matrix contains an invalid measured row status")
 			}
 			k := key{report.Variant.VariantID, row.Probes, row.EfSearch, row.Concurrency}
@@ -725,7 +725,7 @@ func validateM8ProductionMatrixV1(matrix m8ProductionMatrixV1) error {
 		return errors.New("M8 matrix comparison rows do not match child measurements")
 	}
 	for _, comparison := range matrix.Comparison {
-		if comparison.Status != "pass" && comparison.Status != "fail" && comparison.Status != "candidate_coverage_shortfall" {
+		if comparison.Status != "pass" && comparison.Status != "fail" && !m8ProductionRouterRefusalStatusV1(comparison.Status) {
 			return errors.New("M8 matrix comparison has an invalid measured status")
 		}
 		k := key{comparison.VariantID, comparison.Probes, comparison.EfSearch, comparison.Concurrency}

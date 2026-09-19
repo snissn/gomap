@@ -26,7 +26,7 @@ import (
 
 const (
 	vectorPartitionRouterRecordMagicV1   = uint32(0x564b5231) // VKR1
-	vectorPartitionRouterRecordVersionV1 = uint16(1)
+	vectorPartitionRouterRecordVersionV1 = uint16(2)
 	VectorPartitionRouterModeExactV1     = "exact"
 	VectorPartitionRouterModeApproxV1    = "approximate"
 )
@@ -75,11 +75,24 @@ type VectorPartitionRouterOpenStatusV1 struct {
 	FailureReason   string
 }
 
-type VectorPartitionRouterSearchOptionsV1 struct {
+// VectorPartitionRouterSearchOptionsV2 deliberately replaces the coupled V1
+// candidate budget. Width is returned representatives, beam is retained search
+// frontier, and score budget charges every score call, including upper levels.
+type VectorPartitionRouterSearchOptionsV2 struct {
 	Mode            string
-	CandidateBudget int
+	ReturnedWidth   int
+	BeamWidth       int
+	ScoreBudget     int
 	PartitionProbes int
 }
+
+// MaxVectorPartitionRouterScoreBudgetV2 bounds requested work independently of
+// model size; C may exceed the actual representative count.
+const MaxVectorPartitionRouterScoreBudgetV2 = 1_000_000
+
+// ErrVectorPartitionRouterScoreBudget means C was insufficient. No partial
+// routing result or exact fallback is returned; status retains charged work.
+var ErrVectorPartitionRouterScoreBudget = errors.New("collections: vector partition router score budget exhausted")
 
 type VectorPartitionRouterPartitionScoreV1 struct {
 	PartitionID           uint32
@@ -91,7 +104,10 @@ type VectorPartitionRouterPartitionScoreV1 struct {
 type VectorPartitionRouterSearchStatusV1 struct {
 	Mode            string
 	SearchNanos     uint64
-	CandidateBudget uint64
+	ScoreBudget     uint64
+	ReturnedWidth   uint64
+	BeamWidth       uint64
+	ScoreCalls      uint64
 	PartitionProbes uint64
 	Candidates      uint64
 	Edges           uint64
@@ -134,7 +150,7 @@ type vectorPartitionRouterRecordV1 struct {
 	ModelDigest        [sha256.Size]byte
 	PartitionID        uint32
 	SourceOrdinal      uint64
-	LeafNodeID         uint32
+	NodeID             uint32
 	Depth              uint16
 	MemberCount        uint32
 	Config             internalrouter.RouterConfigV1
@@ -148,6 +164,8 @@ type vectorPartitionRouterRecordV1 struct {
 type vectorPartitionRouterPathNodeV1 struct {
 	NodeID      uint32
 	MemberCount uint32
+	Budget      uint32
+	Leaf        bool
 }
 
 type VectorPartitionRouterV1 struct {
@@ -272,7 +290,7 @@ func (c *Collection) BuildAndPublishVectorPartitionRouterV1(ctx context.Context,
 		return fail(fmt.Errorf("collections: vector partition router final memberships=%d exceed configured limit=%d", finalMemberships, opts.Config.MaxVectors))
 	}
 	maxRepresentatives, ok := checkedVectorPartitionRouterRepresentativeBoundV1(
-		finalMemberships, building.DomainCount, opts.Config.RepresentativesPerPartition,
+		finalMemberships, building.DomainCount, opts.Config.RepresentativeBudget,
 	)
 	if !ok {
 		return fail(errors.New("collections: vector partition router representative preflight overflow"))
@@ -417,26 +435,24 @@ func (c *Collection) BuildAndPublishVectorPartitionRouterV1(ctx context.Context,
 	ready.State = "ready"
 	ready.RouterGeneration = ready.Generation
 	ready.RouterAsset = VectorPartitionAssetV1{
-		ID:          "router/krt-hnsw-v1/" + modelDigest,
+		ID:          "router/krt-hnsw-v2/" + modelDigest,
 		Checksum:    hex.EncodeToString(sum[:]),
 		Bytes:       uint64(len(raw)),
 		PartitionID: 0,
 		Ref:         refs[0],
 	}
-	actualRepresentatives := make([]VectorPartitionMembershipV1, 0, len(model.Representatives))
+	actualRepresentatives := make([]VectorPartitionRepresentativeV2, 0, len(model.Representatives))
 	for _, representative := range model.Representatives {
-		actualRepresentatives = append(actualRepresentatives, VectorPartitionMembershipV1{
+		actualRepresentatives = append(actualRepresentatives, VectorPartitionRepresentativeV2{
 			VectorOrdinal: representative.SourceOrdinal,
 			PartitionID:   representative.PartitionID,
+			NodeID:        representative.NodeID,
 		})
 	}
 	sort.Slice(actualRepresentatives, func(i, j int) bool {
-		if actualRepresentatives[i].VectorOrdinal != actualRepresentatives[j].VectorOrdinal {
-			return actualRepresentatives[i].VectorOrdinal < actualRepresentatives[j].VectorOrdinal
-		}
-		return actualRepresentatives[i].PartitionID < actualRepresentatives[j].PartitionID
+		return vectorPartitionRepresentativeLessV2(actualRepresentatives[i], actualRepresentatives[j])
 	})
-	if len(ready.Representatives) != 0 && !equalVectorPartitionMembershipsV1(actualRepresentatives, ready.Representatives) {
+	if len(ready.Representatives) != 0 && !equalVectorPartitionRepresentativesV2(actualRepresentatives, ready.Representatives) {
 		resources.Release()
 		return fail(errors.New("collections: vector partition router representatives differ from building manifest"))
 	}
@@ -657,7 +673,7 @@ func buildVectorPartitionRouterPackV1(manifest VectorPartitionManifestV1, model 
 			RouterGeneration:   manifest.Generation,
 			PartitionID:        representative.PartitionID,
 			SourceOrdinal:      representative.SourceOrdinal,
-			LeafNodeID:         representative.LeafNodeID,
+			NodeID:             representative.NodeID,
 			Depth:              representative.Depth,
 			MemberCount:        representative.MemberCount,
 			Config:             model.Config,
@@ -672,7 +688,7 @@ func buildVectorPartitionRouterPackV1(manifest VectorPartitionManifestV1, model 
 			if !exists {
 				return nil, fmt.Errorf("collections: vector partition router hierarchy node %d missing", nodeID)
 			}
-			record.Path = append(record.Path, vectorPartitionRouterPathNodeV1{NodeID: nodeID, MemberCount: node.MemberCount})
+			record.Path = append(record.Path, vectorPartitionRouterPathNodeV1{NodeID: nodeID, MemberCount: node.MemberCount, Budget: node.Budget, Leaf: node.Leaf})
 		}
 		id, err := encodeVectorPartitionRouterRecordV1(record)
 		if err != nil {
@@ -750,17 +766,11 @@ func vectorPartitionRouterFinalMembershipDigestV1(manifest VectorPartitionManife
 	return digest
 }
 
-func checkedVectorPartitionRouterRepresentativeBoundV1(sourceRows uint64, partitions uint32, representativesPerPartition int) (uint64, bool) {
-	if sourceRows == 0 || partitions == 0 || representativesPerPartition < 1 {
+func checkedVectorPartitionRouterRepresentativeBoundV1(sourceRows uint64, partitions uint32, globalBudget int) (uint64, bool) {
+	if sourceRows < uint64(partitions) || partitions == 0 || globalBudget < int(partitions) || sourceRows > math.MaxUint64/2 {
 		return 0, false
 	}
-	if uint64(partitions) > math.MaxUint64/uint64(representativesPerPartition) {
-		return 0, false
-	}
-	bound := uint64(partitions) * uint64(representativesPerPartition)
-	if bound > sourceRows {
-		bound = sourceRows
-	}
+	bound := min(uint64(globalBudget), 2*sourceRows-uint64(partitions))
 	return bound, bound > 0
 }
 
@@ -805,8 +815,19 @@ func checkedVectorPartitionRouterScalarWorkV1(manifest VectorPartitionManifestV1
 		counts[domain]++
 	}
 	var pairs uint64
-	for _, count := range counts {
-		budget := min(count, uint64(cfg.RepresentativesPerPartition))
+	populations := make([]int, len(counts))
+	for i, count := range counts {
+		if count > uint64(cfg.MaxVectors) {
+			return 0, false
+		}
+		populations[i] = int(count)
+	}
+	quotas, err := internalrouter.ApportionRouterBudgetV2(populations, cfg.RepresentativeBudget)
+	if err != nil {
+		return 0, false
+	}
+	for i, count := range counts {
+		budget := uint64(quotas[i])
 		if budget != 0 && count > math.MaxUint64/budget {
 			return 0, false
 		}
@@ -849,7 +870,7 @@ func estimateVectorPartitionRouterPackShapeBytesV1(rows uint64, dimensions, maxD
 	}
 	// This intentionally overestimates a 64-layer native HNSW pack so the
 	// configured persisted-byte cap is checked before row/adjacency allocation.
-	recordBytes := uint64(212 + (maxDepth+1)*8)
+	recordBytes := uint64(220 + (maxDepth+1)*16)
 	components := [][]uint64{
 		{rows, uint64(dimensions), 4},
 		{rows, 4},
@@ -1270,20 +1291,20 @@ func decodeVectorPartitionRouterModelWithContextV1(ctx context.Context, view *co
 		if ordinal == 0 {
 			digest = record.ModelDigest
 			model = internalrouter.RouterModelV1{
-				Format: "treedb_vector_partition_router_v1",
+				Format: "treedb_vector_partition_router_v2",
 				Config: record.Config, Dimensions: view.Header.Dimensions, Metrics: record.Metrics,
 			}
 		} else if record.ModelDigest != digest || record.Config != model.Config || record.Metrics != model.Metrics {
 			return model, "", nil, errors.New("collections: vector partition router build metadata is inconsistent")
 		}
-		viewKeys[ordinal] = uint64(record.PartitionID)<<32 | uint64(record.LeafNodeID)
+		viewKeys[ordinal] = uint64(record.PartitionID)<<32 | uint64(record.NodeID)
 		path := make([]uint32, len(record.Path))
 		for pathOrdinal, pathNode := range record.Path {
 			path[pathOrdinal] = pathNode.NodeID
 			node := internalrouter.RouterHierarchyNodeV1{
 				NodeID: pathNode.NodeID, PartitionID: record.PartitionID,
 				Depth: uint16(pathOrdinal), MemberCount: pathNode.MemberCount,
-				Leaf: pathOrdinal == len(record.Path)-1,
+				Leaf: pathNode.Leaf, Budget: pathNode.Budget,
 			}
 			if pathOrdinal > 0 {
 				node.ParentNodeID = record.Path[pathOrdinal-1].NodeID
@@ -1291,22 +1312,20 @@ func decodeVectorPartitionRouterModelWithContextV1(ctx context.Context, view *co
 			if current, exists := nodes[node.NodeID]; exists {
 				if current.NodeID != node.NodeID || current.ParentNodeID != node.ParentNodeID ||
 					current.PartitionID != node.PartitionID || current.Depth != node.Depth ||
-					current.MemberCount != node.MemberCount {
+					current.MemberCount != node.MemberCount || current.Leaf != node.Leaf || current.Budget != node.Budget {
 					return model, "", nil, errors.New("collections: vector partition router hierarchy is inconsistent")
-				}
-				if !node.Leaf {
-					current.Leaf = false
-					nodes[node.NodeID] = current
 				}
 			} else {
 				nodes[node.NodeID] = node
 			}
 		}
 		base := ordinal * view.Header.VectorStride
-		values := append([]float32(nil), view.NormalizedVectors[base:base+view.Header.Dimensions]...)
+		// The model borrows the pinned prepared vector plane; Close invalidates
+		// both together. Do not retain a second model-sized vector copy.
+		values := view.NormalizedVectors[base : base+view.Header.Dimensions]
 		model.Representatives = append(model.Representatives, internalrouter.RouterRepresentativeV1{
 			PartitionID: record.PartitionID, SourceOrdinal: record.SourceOrdinal,
-			LeafNodeID: record.LeafNodeID, Depth: record.Depth, MemberCount: record.MemberCount,
+			NodeID: record.NodeID, Depth: record.Depth, MemberCount: record.MemberCount,
 			Path: path, Values: values,
 		})
 	}
@@ -1334,25 +1353,20 @@ func decodeVectorPartitionRouterModelWithContextV1(ctx context.Context, view *co
 	if gotDigest != wantDigest {
 		return model, "", nil, errors.New("collections: vector partition router model digest mismatch")
 	}
-	expectedRepresentatives := append([]VectorPartitionMembershipV1(nil), manifest.Representatives...)
-	actualRepresentatives := make([]VectorPartitionMembershipV1, len(model.Representatives))
+	expectedRepresentatives := manifest.Representatives
+	actualRepresentatives := make([]VectorPartitionRepresentativeV2, len(model.Representatives))
 	for i, representative := range model.Representatives {
 		if i&1023 == 0 {
 			if err := ctx.Err(); err != nil {
 				return model, "", nil, err
 			}
 		}
-		actualRepresentatives[i] = VectorPartitionMembershipV1{VectorOrdinal: representative.SourceOrdinal, PartitionID: representative.PartitionID}
+		actualRepresentatives[i] = VectorPartitionRepresentativeV2{VectorOrdinal: representative.SourceOrdinal, PartitionID: representative.PartitionID, NodeID: representative.NodeID}
 	}
-	if err := sortVectorPartitionSliceWithContextV1(ctx, actualRepresentatives, func(a, b VectorPartitionMembershipV1) bool {
-		if a.VectorOrdinal != b.VectorOrdinal {
-			return a.VectorOrdinal < b.VectorOrdinal
-		}
-		return a.PartitionID < b.PartitionID
-	}); err != nil {
+	if err := sortVectorPartitionSliceWithContextV1(ctx, actualRepresentatives, vectorPartitionRepresentativeLessV2); err != nil {
 		return model, "", nil, err
 	}
-	if len(expectedRepresentatives) == 0 || !equalVectorPartitionMembershipsV1(actualRepresentatives, expectedRepresentatives) {
+	if len(expectedRepresentatives) == 0 || !equalVectorPartitionRepresentativesV2(actualRepresentatives, expectedRepresentatives) {
 		return model, "", nil, errors.New("collections: vector partition router representative manifest mismatch")
 	}
 	modelOrdinal := make(map[uint64]int, len(model.Representatives))
@@ -1362,7 +1376,7 @@ func decodeVectorPartitionRouterModelWithContextV1(ctx context.Context, view *co
 				return model, "", nil, err
 			}
 		}
-		modelOrdinal[uint64(representative.PartitionID)<<32|uint64(representative.LeafNodeID)] = ordinal
+		modelOrdinal[uint64(representative.PartitionID)<<32|uint64(representative.NodeID)] = ordinal
 	}
 	viewToModel := make([]int, len(viewKeys))
 	for ordinal, key := range viewKeys {
@@ -1393,7 +1407,7 @@ func sortDecodedVectorPartitionRouterModelWithContextV1(ctx context.Context, mod
 		if a.PartitionID != b.PartitionID {
 			return a.PartitionID < b.PartitionID
 		}
-		return a.LeafNodeID < b.LeafNodeID
+		return a.NodeID < b.NodeID
 	})
 }
 
@@ -1409,19 +1423,21 @@ func equalVectorPartitionMembershipsV1(left, right []VectorPartitionMembershipV1
 	return true
 }
 
-func (r *VectorPartitionRouterV1) Search(query []float32, opts VectorPartitionRouterSearchOptionsV1) (VectorPartitionRouterSearchResultV1, error) {
+func (r *VectorPartitionRouterV1) Search(query []float32, opts VectorPartitionRouterSearchOptionsV2) (VectorPartitionRouterSearchResultV1, error) {
 	return r.SearchWithContextV1(context.Background(), query, opts)
 }
 
 // SearchWithContextV1 preserves M4 ordering while making representative scans
 // and ranking cancellable for M6 deadlines.
-func (r *VectorPartitionRouterV1) SearchWithContextV1(ctx context.Context, query []float32, opts VectorPartitionRouterSearchOptionsV1) (result VectorPartitionRouterSearchResultV1, resultErr error) {
+func (r *VectorPartitionRouterV1) SearchWithContextV1(ctx context.Context, query []float32, opts VectorPartitionRouterSearchOptionsV2) (result VectorPartitionRouterSearchResultV1, resultErr error) {
 	started := time.Now()
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	result.Status.Mode = opts.Mode
-	result.Status.CandidateBudget = uint64(max(opts.CandidateBudget, 0))
+	result.Status.ScoreBudget = uint64(max(opts.ScoreBudget, 0))
+	result.Status.ReturnedWidth = uint64(max(opts.ReturnedWidth, 0))
+	result.Status.BeamWidth = uint64(max(opts.BeamWidth, 0))
 	result.Status.PartitionProbes = uint64(max(opts.PartitionProbes, 0))
 	fail := func(err error) (VectorPartitionRouterSearchResultV1, error) {
 		result.Status.SearchNanos = elapsedNanosVPR(started)
@@ -1452,8 +1468,8 @@ func (r *VectorPartitionRouterV1) SearchWithContextV1(ctx context.Context, query
 	if opts.PartitionProbes < 1 {
 		return fail(errors.New("collections: vector partition router probes must be positive"))
 	}
-	if opts.CandidateBudget < 1 {
-		return fail(errors.New("collections: vector partition router candidate budget must be positive"))
+	if opts.ScoreBudget < 1 || opts.ScoreBudget > MaxVectorPartitionRouterScoreBudgetV2 || opts.ReturnedWidth < 1 || opts.ReturnedWidth > opts.BeamWidth || opts.BeamWidth > len(r.model.Representatives) {
+		return fail(errors.New("collections: vector partition router requires 1 <= width <= beam <= representatives and score budget in [1,1000000]"))
 	}
 	normalized, err := normalizeVectorPartitionRouterQueryV1(query, r.model.Dimensions)
 	if err != nil {
@@ -1463,11 +1479,15 @@ func (r *VectorPartitionRouterV1) SearchWithContextV1(ctx context.Context, query
 		return fail(err)
 	}
 	candidates, work, err := r.collectVectorPartitionRouterCandidatesLockedV1(ctx, query, normalized, opts)
-	if err != nil {
-		return fail(err)
-	}
 	result.Status.Candidates = work.Candidates
 	result.Status.Edges = work.Edges
+	result.Status.ScoreCalls = work.ScoreCalls
+	if err != nil {
+		if errors.Is(err, errTypedGraphSearchBudget) {
+			err = ErrVectorPartitionRouterScoreBudget
+		}
+		return fail(err)
+	}
 	result.Partitions, err = rankVectorPartitionRouterCandidatesWithContextV1(ctx, r.model.Representatives, candidates, opts.PartitionProbes)
 	if err != nil {
 		return fail(err)
@@ -1487,13 +1507,13 @@ func (r *VectorPartitionRouterV1) SearchWithContextV1(ctx context.Context, query
 // and the opt-in offline policy diagnostic. The caller holds closeMu.RLock and
 // has validated the query/options. Returned scalar candidates own their storage;
 // no pooled native result or model-vector alias escapes this helper.
-func (r *VectorPartitionRouterV1) collectVectorPartitionRouterCandidatesLockedV1(ctx context.Context, query, normalized []float32, opts VectorPartitionRouterSearchOptionsV1) ([]vectorPartitionRouterCandidateV1, vectorPartitionRouterCandidateWorkV1, error) {
+func (r *VectorPartitionRouterV1) collectVectorPartitionRouterCandidatesLockedV1(ctx context.Context, query, normalized []float32, opts VectorPartitionRouterSearchOptionsV2) ([]vectorPartitionRouterCandidateV1, vectorPartitionRouterCandidateWorkV1, error) {
 	var work vectorPartitionRouterCandidateWorkV1
 	var candidates []vectorPartitionRouterCandidateV1
 	switch opts.Mode {
 	case VectorPartitionRouterModeExactV1:
-		if opts.CandidateBudget < len(r.model.Representatives) {
-			return nil, work, fmt.Errorf("collections: exact vector partition router candidate budget=%d below representative count=%d", opts.CandidateBudget, len(r.model.Representatives))
+		if opts.ScoreBudget < len(r.model.Representatives) {
+			return nil, work, fmt.Errorf("%w: exact score budget=%d below representative count=%d", ErrVectorPartitionRouterScoreBudget, opts.ScoreBudget, len(r.model.Representatives))
 		}
 		candidates = make([]vectorPartitionRouterCandidateV1, len(r.model.Representatives))
 		for ordinal, representative := range r.model.Representatives {
@@ -1505,21 +1525,29 @@ func (r *VectorPartitionRouterV1) collectVectorPartitionRouterCandidatesLockedV1
 			candidates[ordinal] = vectorPartitionRouterCandidateV1{
 				ordinal: ordinal, score: cosineDotVectorPartitionRouterV1(normalized, representative.Values),
 			}
+			work.ScoreCalls++
+			work.Candidates++
 		}
-		work.Candidates = uint64(len(candidates))
+		sort.Slice(candidates, func(i, j int) bool {
+			if candidates[i].score != candidates[j].score {
+				return candidates[i].score > candidates[j].score
+			}
+			return candidates[i].ordinal < candidates[j].ordinal
+		})
+		candidates = candidates[:opts.ReturnedWidth]
 	case VectorPartitionRouterModeApproxV1:
-		if opts.CandidateBudget > len(r.model.Representatives) {
-			return nil, work, fmt.Errorf("collections: approximate vector partition router candidate budget=%d outside [1,%d]", opts.CandidateBudget, len(r.model.Representatives))
-		}
 		scratch := r.scratch.Get().(*columnVectorGraphNativeSearchScratch)
 		defer r.scratch.Put(scratch)
 		native, stats, err := r.view.searchCosineWithContext(ctx, query, columnVectorGraphNativeSearchOptions{
-			TopK: opts.CandidateBudget, EfSearch: opts.CandidateBudget,
-			CandidateLimit: opts.CandidateBudget,
+			TopK: opts.ReturnedWidth, EfSearch: opts.BeamWidth,
+			CandidateLimit: opts.ScoreBudget, StrictScoreBudget: true,
 			// Router search consumes only representative ordinals and scores.
 			// Keep the hot path off document-ID and row-ref materialization.
 			OmitResultMaterialization: true,
 		}, scratch)
+		work.Candidates = stats.Candidates
+		work.Edges = stats.Edges
+		work.ScoreCalls = stats.PreparedScoreCalls
 		if err != nil {
 			return nil, work, err
 		}
@@ -1547,6 +1575,7 @@ func (r *VectorPartitionRouterV1) collectVectorPartitionRouterCandidatesLockedV1
 type vectorPartitionRouterCandidateWorkV1 struct {
 	Candidates uint64
 	Edges      uint64
+	ScoreCalls uint64
 }
 
 type vectorPartitionRouterCandidateV1 struct {
@@ -1678,7 +1707,7 @@ func (r *VectorPartitionRouterV1) Close() error {
 func encodeVectorPartitionRouterRecordV1(record vectorPartitionRouterRecordV1) ([]byte, error) {
 	if record.RouterGeneration == 0 || record.PartitionID > math.MaxInt32 || record.MemberCount == 0 ||
 		len(record.Path) == 0 || len(record.Path) > 65 || int(record.Depth)+1 != len(record.Path) ||
-		record.Path[len(record.Path)-1].NodeID != record.LeafNodeID {
+		record.Path[len(record.Path)-1].NodeID != record.NodeID {
 		return nil, errors.New("collections: invalid vector partition router record")
 	}
 	if err := internalrouter.ValidateRouterConfigV1(record.Config); err != nil {
@@ -1692,7 +1721,7 @@ func encodeVectorPartitionRouterRecordV1(record vectorPartitionRouterRecordV1) (
 	b.Write(record.ModelDigest[:])
 	binary.Write(&b, binary.LittleEndian, record.PartitionID)
 	binary.Write(&b, binary.LittleEndian, record.SourceOrdinal)
-	binary.Write(&b, binary.LittleEndian, record.LeafNodeID)
+	binary.Write(&b, binary.LittleEndian, record.NodeID)
 	binary.Write(&b, binary.LittleEndian, record.Depth)
 	binary.Write(&b, binary.LittleEndian, uint16(len(record.Path)))
 	binary.Write(&b, binary.LittleEndian, record.MemberCount)
@@ -1704,6 +1733,12 @@ func encodeVectorPartitionRouterRecordV1(record vectorPartitionRouterRecordV1) (
 	for _, node := range record.Path {
 		binary.Write(&b, binary.LittleEndian, node.NodeID)
 		binary.Write(&b, binary.LittleEndian, node.MemberCount)
+		binary.Write(&b, binary.LittleEndian, node.Budget)
+		var leaf uint32
+		if node.Leaf {
+			leaf = 1
+		}
+		binary.Write(&b, binary.LittleEndian, leaf)
 	}
 	return b.Bytes(), nil
 }
@@ -1728,7 +1763,7 @@ func decodeVectorPartitionRouterRecordV1(raw []byte) (record vectorPartitionRout
 	}
 	read(&record.PartitionID)
 	read(&record.SourceOrdinal)
-	read(&record.LeafNodeID)
+	read(&record.NodeID)
 	read(&record.Depth)
 	read(&pathCount)
 	read(&record.MemberCount)
@@ -1752,12 +1787,14 @@ func decodeVectorPartitionRouterRecordV1(raw []byte) (record vectorPartitionRout
 	}
 	record.Path = make([]vectorPartitionRouterPathNodeV1, pathCount)
 	for i := range record.Path {
-		if !read(&record.Path[i].NodeID) || !read(&record.Path[i].MemberCount) {
+		var leaf uint32
+		if !read(&record.Path[i].NodeID) || !read(&record.Path[i].MemberCount) || !read(&record.Path[i].Budget) || !read(&leaf) || leaf > 1 || record.Path[i].Budget == 0 {
 			return record, errors.New("collections: truncated vector partition router hierarchy path")
 		}
+		record.Path[i].Leaf = leaf == 1
 	}
 	if reader.Len() != 0 || record.RouterGeneration == 0 || record.MemberCount == 0 ||
-		record.Path[len(record.Path)-1].NodeID != record.LeafNodeID ||
+		record.Path[len(record.Path)-1].NodeID != record.NodeID ||
 		record.Path[len(record.Path)-1].MemberCount != record.MemberCount {
 		return record, errors.New("collections: invalid vector partition router record")
 	}
@@ -1769,7 +1806,7 @@ func decodeVectorPartitionRouterRecordV1(raw []byte) (record vectorPartitionRout
 
 func writeVectorPartitionRouterConfigV1(b *bytes.Buffer, cfg internalrouter.RouterConfigV1) {
 	binary.Write(b, binary.LittleEndian, cfg.Seed)
-	for _, value := range []int{cfg.BranchFactor, cfg.LeafSize, cfg.RepresentativesPerPartition, cfg.MaxDepth, cfg.MaxIterations, cfg.MaxVectors, cfg.MaxDimensions, cfg.MaxRepresentatives} {
+	for _, value := range []int{cfg.BranchFactor, cfg.LeafSize, cfg.RepresentativeBudget, cfg.MaxDepth, cfg.MaxIterations, cfg.MaxVectors, cfg.MaxDimensions, cfg.MaxRepresentatives} {
 		binary.Write(b, binary.LittleEndian, uint32(value))
 	}
 	binary.Write(b, binary.LittleEndian, cfg.MaxScalarWork)
@@ -1797,7 +1834,7 @@ func readVectorPartitionRouterConfigV1(reader *bytes.Reader) (internalrouter.Rou
 	}
 	return internalrouter.RouterConfigV1{
 		Seed: seed, BranchFactor: int(values[0]), LeafSize: int(values[1]),
-		RepresentativesPerPartition: int(values[2]), MaxDepth: int(values[3]),
+		RepresentativeBudget: int(values[2]), MaxDepth: int(values[3]),
 		MaxIterations: int(values[4]), MaxVectors: int(values[5]),
 		MaxDimensions: int(values[6]), MaxRepresentatives: int(values[7]), MaxScalarWork: maxWork,
 		MaxRouterBytes: maxRouterBytes,
@@ -1808,14 +1845,14 @@ func writeVectorPartitionRouterMetricsV1(b *bytes.Buffer, metrics internalrouter
 	for _, value := range []int{
 		metrics.Partitions, metrics.Vectors, metrics.Representatives, metrics.HierarchyNodes,
 		metrics.LloydIterations, metrics.EmptyRepairs, metrics.StoppedLeafSize,
-		metrics.StoppedMaxDepth, metrics.StoppedNoSplit,
+		metrics.StoppedMaxDepth, metrics.StoppedNoSplit, metrics.UnusedBudget,
 	} {
 		binary.Write(b, binary.LittleEndian, uint64(value))
 	}
 }
 
 func readVectorPartitionRouterMetricsV1(reader *bytes.Reader) (internalrouter.RouterBuildMetricsV1, error) {
-	values := make([]uint64, 9)
+	values := make([]uint64, 10)
 	for i := range values {
 		if err := binary.Read(reader, binary.LittleEndian, &values[i]); err != nil {
 			return internalrouter.RouterBuildMetricsV1{}, err
@@ -1827,7 +1864,7 @@ func readVectorPartitionRouterMetricsV1(reader *bytes.Reader) (internalrouter.Ro
 	return internalrouter.RouterBuildMetricsV1{
 		Partitions: int(values[0]), Vectors: int(values[1]), Representatives: int(values[2]),
 		HierarchyNodes: int(values[3]), LloydIterations: int(values[4]), EmptyRepairs: int(values[5]),
-		StoppedLeafSize: int(values[6]), StoppedMaxDepth: int(values[7]), StoppedNoSplit: int(values[8]),
+		StoppedLeafSize: int(values[6]), StoppedMaxDepth: int(values[7]), StoppedNoSplit: int(values[8]), UnusedBudget: int(values[9]),
 	}, nil
 }
 

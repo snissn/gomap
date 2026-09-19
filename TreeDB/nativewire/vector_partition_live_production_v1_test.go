@@ -134,7 +134,7 @@ func TestVectorPartitionLiveProductionCoordinatorMutationAndColdReloadV1(t *test
 			Database: "default", Catalog: "default", Collection: "docs", IndexName: fixture.definition.Name,
 			IndexDefinitionDigest: collections.VectorIndexDefinitionDigestV1(fixture.definition),
 			Query:                 query, Metric: VectorPartitionShardSearchMetricCosineV1,
-			RouterMode: collections.VectorPartitionRouterModeExactV1, RouterCandidateBudget: 2, PartitionProbes: 1,
+			RouterMode: collections.VectorPartitionRouterModeExactV1, RouterScoreBudget: len(fixture.manifest.Representatives), RouterReturnedWidth: 2, RouterBeamWidth: 2, PartitionProbes: 1,
 			Consistency: VectorPartitionShardSearchConsistencySnapshotV1, StatsMode: VectorPartitionShardSearchStatsBasicV1,
 			TopK: 1, EfSearch: 8, RequestBytesLimit: 1 << 20, CandidateBytesLimit: 8 << 20,
 			ResponseBytesLimit: 1 << 20, MergeEntriesLimit: 3,
@@ -319,7 +319,7 @@ func TestVectorPartitionLiveProductionCheckpointCloseReopenV1(t *testing.T) {
 			Database: "default", Catalog: "default", Collection: "docs", IndexName: fixture.definition.Name,
 			IndexDefinitionDigest: collections.VectorIndexDefinitionDigestV1(fixture.definition),
 			Query:                 []float32{1, 0}, Metric: VectorPartitionShardSearchMetricCosineV1,
-			RouterMode: collections.VectorPartitionRouterModeExactV1, RouterCandidateBudget: 2, PartitionProbes: 1,
+			RouterMode: collections.VectorPartitionRouterModeExactV1, RouterScoreBudget: len(fixture.manifest.Representatives), RouterReturnedWidth: 2, RouterBeamWidth: 2, PartitionProbes: 1,
 			Consistency: VectorPartitionShardSearchConsistencySnapshotV1, StatsMode: VectorPartitionShardSearchStatsBasicV1,
 			TopK: 1, EfSearch: 8, RequestBytesLimit: 1 << 20, CandidateBytesLimit: 8 << 20,
 			ResponseBytesLimit: 1 << 20, MergeEntriesLimit: 3,
@@ -453,7 +453,7 @@ func BenchmarkVectorPartitionLiveProductionCoordinatorV1(b *testing.B) {
 				Database: "default", Catalog: "default", Collection: "docs", IndexName: fixture.definition.Name,
 				IndexDefinitionDigest: collections.VectorIndexDefinitionDigestV1(fixture.definition),
 				Query:                 []float32{1, 0}, Metric: VectorPartitionShardSearchMetricCosineV1,
-				RouterMode: collections.VectorPartitionRouterModeExactV1, RouterCandidateBudget: 2, PartitionProbes: 1,
+				RouterMode: collections.VectorPartitionRouterModeExactV1, RouterScoreBudget: len(fixture.manifest.Representatives), RouterReturnedWidth: 2, RouterBeamWidth: 2, PartitionProbes: 1,
 				Consistency: VectorPartitionShardSearchConsistencySnapshotV1, StatsMode: VectorPartitionShardSearchStatsBasicV1,
 				TopK: 4, EfSearch: 16, RequestBytesLimit: 1 << 20, CandidateBytesLimit: 8 << 20,
 				ResponseBytesLimit: 1 << 20, MergeEntriesLimit: 8,
@@ -637,7 +637,7 @@ func newVectorPartitionLiveNativewireFixtureV1(t testing.TB) vectorPartitionLive
 		t.Fatal(err)
 	}
 	cfg := internalrouter.DefaultRouterConfigV1()
-	cfg.BranchFactor, cfg.LeafSize, cfg.RepresentativesPerPartition = 2, 1, 1
+	cfg.BranchFactor, cfg.LeafSize, cfg.RepresentativeBudget = 2, 1, len(parts)
 	cfg.MaxDepth, cfg.MaxIterations, cfg.MaxVectors = 4, 8, 8
 	cfg.MaxDimensions, cfg.MaxRepresentatives, cfg.MaxScalarWork = 8, 32, 1_000_000
 	if _, err := collection.BuildAndPublishVectorPartitionRouterV1(t.Context(), manifest, parts, collections.VectorPartitionRouterBuildOptionsV1{Config: cfg, AssetFileID: 9102, AssetPartID: 1, M: 2, EfConstruction: 8, EfSearch: 8}); err != nil {

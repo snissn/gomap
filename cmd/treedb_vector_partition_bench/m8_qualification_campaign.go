@@ -488,7 +488,7 @@ func m8QualificationFixtureV1(candidate fixtureManifest) bool {
 }
 
 func m8QualificationConfigV1(cfg m8ProductionConfigEvidenceV1, fixture fixtureManifest, overlap float64, _ int) bool {
-	return cfg.RaftGroups == 4 && cfg.RaftNodesPerGroup == 3 && cfg.Partitions == 16 && cfg.TopK == 10 && cfg.RecallTarget == .90 && cfg.Warmup == 0 && cfg.EffectiveWarmup == 0 && cfg.RouterCandidates == m8QualificationRouterCandidatesV1 && cfg.MaxExactTruthVisits == m8QualificationExactTruthCapV1(fixture) && cfg.Seed == fixture.Seed && slices.Equal(cfg.Probes, []int{1, 2, 4, 8, 16}) && slices.Equal(cfg.Concurrency, []int{1}) && slices.Equal(cfg.EfSearch, []int{128}) && slices.Equal(cfg.Overlap, []float64{overlap})
+	return cfg.RaftGroups == 4 && cfg.RaftNodesPerGroup == 3 && cfg.Partitions == 16 && cfg.TopK == 10 && cfg.RecallTarget == .90 && cfg.Warmup == 0 && cfg.EffectiveWarmup == 0 && cfg.RouterScoreBudget == m8QualificationRouterCandidatesV1 && cfg.MaxExactTruthVisits == m8QualificationExactTruthCapV1(fixture) && cfg.Seed == fixture.Seed && slices.Equal(cfg.Probes, []int{1, 2, 4, 8, 16}) && slices.Equal(cfg.Concurrency, []int{1}) && slices.Equal(cfg.EfSearch, []int{128}) && slices.Equal(cfg.Overlap, []float64{overlap})
 }
 
 func m8QualificationTrustedTruthCacheV1(root string, report m8ProductionReportV1) ([][]m8CanonicalResultV1, error) {
@@ -654,7 +654,11 @@ func m8QualificationRetainedAttributionV1(root string, report m8ProductionReport
 	if len(queries) != len(truth) {
 		return errors.New("retained attribution query shape mismatch")
 	}
-	approximateCandidates := min(report.Config.RouterCandidates, int(assets.status.Representatives))
+	if report.Config.RouterWidth < 1 || report.Config.RouterWidth > report.Config.RouterBeam || report.Config.RouterBeam > int(assets.status.Representatives) {
+		return errors.New("retained attribution lacks explicit router w/E identity")
+	}
+	assets.routerWidth, assets.routerBeam = report.Config.RouterWidth, report.Config.RouterBeam
+	approximateCandidates := report.Config.RouterScoreBudget
 	if approximateCandidates < 1 {
 		return errors.New("retained attribution has no router candidates")
 	}
@@ -685,8 +689,8 @@ func m8QualificationRetainedAttributionV1(root string, report m8ProductionReport
 				return errors.New("retained router policy candidates/results do not reproduce report")
 			}
 		}
-		qualityShortfall := report.Config.QualityDiagnostics && row.Status == "candidate_coverage_shortfall"
-		if row.Status != "pass" && row.Status != "fail" && !qualityShortfall {
+		qualityRefusal := report.Config.QualityDiagnostics && m8ProductionRouterRefusalStatusV1(row.Status)
+		if row.Status != "pass" && row.Status != "fail" && !qualityRefusal {
 			continue
 		}
 		membershipOracles, err := harness.membershipOraclesV1(truth, primaryHomes, finalMemberships, row.Probes)
@@ -697,7 +701,7 @@ func m8QualificationRetainedAttributionV1(root string, report m8ProductionReport
 		if err != nil {
 			return err
 		}
-		if qualityShortfall {
+		if qualityRefusal {
 			// Failed serving does not make static source/model/coverage claims
 			// self-authenticating. Replay them, then apply exactly the producer's
 			// suppression of unavailable local/coordinator observations.
@@ -706,7 +710,7 @@ func m8QualificationRetainedAttributionV1(root string, report m8ProductionReport
 				return err
 			}
 			if !reflect.DeepEqual(replayed.Attribution, row.Attribution) {
-				return errors.New("retained shortfall attribution does not reproduce report")
+				return errors.New("retained router-refusal attribution does not reproduce report")
 			}
 			continue
 		}
@@ -842,7 +846,8 @@ func m8QualificationCommandConfigV1(cfg config) m8ProductionConfigEvidenceV1 {
 		RaftGroups: cfg.raftGroups, RaftNodesPerGroup: cfg.raftNodes, Partitions: cfg.partitions,
 		Probes: cfg.probes, Overlap: cfg.overlaps, TopK: cfg.topK, RecallTarget: cfg.recallTarget,
 		Concurrency: cfg.concurrency, Warmup: cfg.warmup, EffectiveWarmup: warmup,
-		EfSearch: cfg.efSearch, RouterCandidates: cfg.routerCandidates,
+		EfSearch: cfg.efSearch, RouterScoreBudget: cfg.routerCandidates,
+		RouterSemantics: "global_all_level_spherical_krt_w_E_C_v2", RouterWidth: cfg.routerWidth, RouterBeam: cfg.routerBeam,
 		MaxExactTruthVisits: cfg.m8MaxExactTruthVisits, Seed: cfg.seed, QualityDiagnostics: cfg.m8QualityDiagnostics, QualityTraceQueries: cfg.m8QualityTraceQueries, RouterPolicyDiagnostics: cfg.m8RouterPolicyDiagnostics, RouterPolicyWidth: cfg.m8RouterPolicyWidth,
 	}
 }
@@ -1304,7 +1309,7 @@ func m8QualificationHasFullLadderV1(report m8ProductionReportV1) bool {
 }
 
 func m8QualificationQualifiedRowV1(row m8ProductionRowV1) bool {
-	return row.Status == "pass" && row.EfSearch == 128 && row.Concurrency == 1 && row.RouterMode == collections.VectorPartitionRouterModeApproxV1 && row.RouterCandidates == m8QualificationRouterCandidatesV1 && row.Attribution.OracleStagesComplete
+	return row.Status == "pass" && row.EfSearch == 128 && row.Concurrency == 1 && row.RouterMode == collections.VectorPartitionRouterModeApproxV1 && row.RouterScoreBudget == m8QualificationRouterCandidatesV1 && row.Attribution.OracleStagesComplete
 }
 
 func m8QualificationSHA256V1(value string) bool {
