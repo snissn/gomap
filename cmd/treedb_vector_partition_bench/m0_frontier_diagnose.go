@@ -36,16 +36,18 @@ type m0FrontierDiagnosticBindingV1 struct {
 	ManifestPack    uint32 `json:"manifest_pack"`
 }
 type m0FrontierRouterSweepCellV1 struct {
-	Mode            string    `json:"mode"`
-	CandidateBudget int       `json:"candidate_budget"`
-	Probes          int       `json:"probes"`
-	Queries         int       `json:"queries"`
-	TruthRankSlots  [5]uint64 `json:"truth_slots_at_route_rank"`
-	Candidates      uint64    `json:"router_candidates"`
-	Edges           uint64    `json:"router_edges"`
-	ElapsedNanos    uint64    `json:"router_elapsed_nanos"`
-	P50Nanos        uint64    `json:"router_p50_nanos"`
-	P95Nanos        uint64    `json:"router_p95_nanos"`
+	Mode           string    `json:"mode"`
+	ScoreBudget    int       `json:"score_budget"`
+	ReturnedWidth  int       `json:"returned_width"`
+	BeamWidth      int       `json:"beam_width"`
+	Probes         int       `json:"probes"`
+	Queries        int       `json:"queries"`
+	TruthRankSlots [5]uint64 `json:"truth_slots_at_route_rank"`
+	Candidates     uint64    `json:"router_candidates"`
+	Edges          uint64    `json:"router_edges"`
+	ElapsedNanos   uint64    `json:"router_elapsed_nanos"`
+	P50Nanos       uint64    `json:"router_p50_nanos"`
+	P95Nanos       uint64    `json:"router_p95_nanos"`
 }
 type m0FrontierDiagnosticV1 struct {
 	Schema                    string                          `json:"schema"`
@@ -57,6 +59,9 @@ type m0FrontierDiagnosticV1 struct {
 	SourceRevision            string                          `json:"source_revision"`
 	VCSModified               bool                            `json:"vcs_modified"`
 	EFSearch                  int                             `json:"ef_search"`
+	RouterScoreBudget         int                             `json:"router_score_budget"`
+	RouterWidth               int                             `json:"router_width"`
+	RouterBeam                int                             `json:"router_beam"`
 	TruthRankSlots            [5]uint64                       `json:"truth_slots_at_route_rank"`
 	ExactTruthRankSlots       [5]uint64                       `json:"exact_truth_slots_at_route_rank"`
 	ApproxMissSiblingSelected uint64                          `json:"approx_miss_slots_with_selected_original_component_sibling"`
@@ -177,8 +182,13 @@ func runM0FrontierDiagnoseV1(args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	report := m0FrontierDiagnosticV1{Schema: "treedb_vector_partition_m0_frontier_diagnostic_v1", CalibrationSHA256: splitSHA, GraphArtifactSHA256: account.GraphArtifactSHA256, AssignmentSHA256: account.AssignmentArtifactSHA256, ManifestIntegrity: h.manifest.IntegrityDigest, BinarySHA256: buildIdentity.BinarySHA256, SourceRevision: buildIdentity.SourceRevision, VCSModified: buildIdentity.VCSModified, EFSearch: ef}
-	report.RouterSweep, err = m0FrontierRouterSweepV1(h, split.Ordinals, queries, truth, members)
+	width := min(defaultRouterReturnedWidthV2, int(h.status.Representatives))
+	beam := min(defaultRouterBeamWidthV2, int(h.status.Representatives))
+	if width < 1 || width > beam {
+		return errors.New("M0 diagnostic router width or beam")
+	}
+	report := m0FrontierDiagnosticV1{Schema: "treedb_vector_partition_m0_frontier_diagnostic_v2", CalibrationSHA256: splitSHA, GraphArtifactSHA256: account.GraphArtifactSHA256, AssignmentSHA256: account.AssignmentArtifactSHA256, ManifestIntegrity: h.manifest.IntegrityDigest, BinarySHA256: buildIdentity.BinarySHA256, SourceRevision: buildIdentity.SourceRevision, VCSModified: buildIdentity.VCSModified, EFSearch: ef, RouterScoreBudget: defaultRouterScoreBudgetV2, RouterWidth: width, RouterBeam: beam}
+	report.RouterSweep, err = m0FrontierRouterSweepV1(h, split.Ordinals, queries, truth, members, width, beam)
 	if err != nil {
 		return fmt.Errorf("M0 diagnostic router sweep: %w", err)
 	}
@@ -187,7 +197,7 @@ func runM0FrontierDiagnoseV1(args []string, stdout io.Writer) error {
 	}
 	for _, ordinal := range split.Ordinals {
 		q := m8Query32V1(queries[ordinal])
-		routed, err := h.router.SearchWithContextV1(context.Background(), q, collections.VectorPartitionRouterSearchOptionsV2{Mode: collections.VectorPartitionRouterModeApproxV1, ScoreBudget: 64, ReturnedWidth: 64, BeamWidth: 64, PartitionProbes: 4})
+		routed, err := h.router.SearchWithContextV1(context.Background(), q, collections.VectorPartitionRouterSearchOptionsV2{Mode: collections.VectorPartitionRouterModeApproxV1, ScoreBudget: report.RouterScoreBudget, ReturnedWidth: report.RouterWidth, BeamWidth: report.RouterBeam, PartitionProbes: 4})
 		if err != nil || len(routed.Partitions) != 4 {
 			return errors.New("M0 diagnostic route")
 		}
@@ -313,24 +323,24 @@ func runM0FrontierDiagnoseV1(args []string, stdout io.Writer) error {
 	return err
 }
 
-func m0FrontierRouterSweepV1(h *m8ProductionMultiGroupAssetsV1, ordinals []int, queries [][]float64, truth [][]m8CanonicalResultV1, members map[string][]uint32) ([]m0FrontierRouterSweepCellV1, error) {
-	if h.status.Representatives == 0 || h.status.Representatives > uint64(^uint(0)>>1) {
+func m0FrontierRouterSweepV1(h *m8ProductionMultiGroupAssetsV1, ordinals []int, queries [][]float64, truth [][]m8CanonicalResultV1, members map[string][]uint32, width, beam int) ([]m0FrontierRouterSweepCellV1, error) {
+	if h.status.Representatives == 0 || h.status.Representatives > uint64(^uint(0)>>1) || width < 1 || width > beam || uint64(beam) > h.status.Representatives {
 		return nil, errors.New("M0 diagnostic router sweep status")
 	}
 	cells := make([]m0FrontierRouterSweepCellV1, 0, 12)
-	for _, budget := range []int{64, 128, 256} {
+	for _, budget := range []int{defaultRouterScoreBudgetV2 / 2, defaultRouterScoreBudgetV2, defaultRouterScoreBudgetV2 * 2} {
 		for _, probes := range []int{1, 2, 4} {
-			cells = append(cells, m0FrontierRouterSweepCellV1{Mode: collections.VectorPartitionRouterModeApproxV1, CandidateBudget: budget, Probes: probes})
+			cells = append(cells, m0FrontierRouterSweepCellV1{Mode: collections.VectorPartitionRouterModeApproxV1, ScoreBudget: budget, ReturnedWidth: width, BeamWidth: beam, Probes: probes})
 		}
 	}
 	for _, probes := range []int{1, 2, 4} {
-		cells = append(cells, m0FrontierRouterSweepCellV1{Mode: collections.VectorPartitionRouterModeExactV1, CandidateBudget: int(h.status.Representatives), Probes: probes})
+		cells = append(cells, m0FrontierRouterSweepCellV1{Mode: collections.VectorPartitionRouterModeExactV1, ScoreBudget: int(h.status.Representatives), ReturnedWidth: int(h.status.Representatives), BeamWidth: int(h.status.Representatives), Probes: probes})
 	}
 	for i := range cells {
 		lat := make([]uint64, 0, len(ordinals))
 		for _, ordinal := range ordinals {
 			started := time.Now()
-			route, err := h.router.SearchWithContextV1(context.Background(), m8Query32V1(queries[ordinal]), collections.VectorPartitionRouterSearchOptionsV2{Mode: cells[i].Mode, ScoreBudget: cells[i].CandidateBudget, ReturnedWidth: cells[i].CandidateBudget, BeamWidth: cells[i].CandidateBudget, PartitionProbes: cells[i].Probes})
+			route, err := h.router.SearchWithContextV1(context.Background(), m8Query32V1(queries[ordinal]), collections.VectorPartitionRouterSearchOptionsV2{Mode: cells[i].Mode, ScoreBudget: cells[i].ScoreBudget, ReturnedWidth: cells[i].ReturnedWidth, BeamWidth: cells[i].BeamWidth, PartitionProbes: cells[i].Probes})
 			elapsed := uint64(time.Since(started).Nanoseconds())
 			if err != nil || len(route.Partitions) != cells[i].Probes {
 				return nil, errors.New("M0 diagnostic sweep route")
@@ -374,8 +384,8 @@ func m0FrontierRouterSweepCompleteV1(cells []m0FrontierRouterSweepCellV1) bool {
 	}
 	seen := map[string]bool{}
 	for _, c := range cells {
-		key := fmt.Sprintf("%s/%d/%d", c.Mode, c.CandidateBudget, c.Probes)
-		if seen[key] || c.Queries != 806 || c.Candidates == 0 || c.ElapsedNanos == 0 || c.P50Nanos == 0 || c.P95Nanos < c.P50Nanos {
+		key := fmt.Sprintf("%s/%d/%d/%d/%d", c.Mode, c.ScoreBudget, c.ReturnedWidth, c.BeamWidth, c.Probes)
+		if seen[key] || c.ScoreBudget < 1 || c.ReturnedWidth < 1 || c.ReturnedWidth > c.BeamWidth || c.Queries != 806 || c.Candidates == 0 || c.ElapsedNanos == 0 || c.P50Nanos == 0 || c.P95Nanos < c.P50Nanos {
 			return false
 		}
 		seen[key] = true

@@ -85,6 +85,9 @@ const (
 	// candidate bytes per membership, 128 MiB keeps that complete comparison
 	// bounded while allowing the required 1M + 20% overlap preflight to run.
 	m8ProductionCandidateBudgetBytesV1 uint64 = 128 << 20
+	defaultRouterScoreBudgetV2                = 1024
+	defaultRouterReturnedWidthV2              = 64
+	defaultRouterBeamWidthV2                  = 96
 )
 
 const partitionAssignmentGraphRepartitionedV1 = "graph_repartitioned"
@@ -950,7 +953,7 @@ func parseConfig(args []string) (config, error) {
 		shardPlanMode:       shardPlanModeOffV1, shardPlanRatio: -1,
 		kahipTimeout: kahipDefaultTimeout,
 		partition:    vectorpartition.DefaultConfig(), routerConfig: vectorpartition.DefaultRouterConfigV1(),
-		routerCandidates: 1024, routerWidth: 64, routerBeam: 96, sourceHNSWDegree: partitionHNSWDegree,
+		routerCandidates: defaultRouterScoreBudgetV2, routerWidth: defaultRouterReturnedWidthV2, routerBeam: defaultRouterBeamWidthV2, sourceHNSWDegree: partitionHNSWDegree,
 		m8MaxRSSBytes: uint64(maxFixtureBytes), m8MaxAssetBytes: uint64(maxFixtureBytes), m8MaxExactTruthVisits: maxBenchmarkWorkUnits,
 		m8CoordinatorLimits: nativewire.DefaultVectorPartitionCoordinatorLimitsV1(),
 		m8ShardLimits:       nativewire.DefaultVectorPartitionShardSearchLimitsV1(),
@@ -992,7 +995,7 @@ func parseConfig(args []string) (config, error) {
 	fs.BoolVar(&cfg.m8QualityDiagnostics, "m8-quality-diagnostics", false, "enable versioned offline coverage-cost/no-coarsening attribution (top-k <= 10); ordinary search is unchanged")
 	fs.IntVar(&cfg.m8QualityTraceQueries, "m8-quality-trace-queries", 0, "sample the first 0..8 quality queries with structurally bounded existing local traces")
 	fs.BoolVar(&cfg.m8RouterPolicyDiagnostics, "m8-router-policy-diagnostics", false, "compare router ranking policies offline on identical candidates; requires -m8-quality-diagnostics and does not change serving")
-	fs.IntVar(&cfg.m8RouterPolicyWidth, "m8-router-policy-width", 0, "nearest returned representatives used for policy voting; zero uses the effective approximate candidate budget")
+	fs.IntVar(&cfg.m8RouterPolicyWidth, "m8-router-policy-width", 0, "nearest returned representatives used for policy voting; zero uses router-width")
 	fs.StringVar(&cfg.m8TruthCache, "m8-truth-cache", "", "external canonical exact-truth cache directory; identity-bound and fail-closed")
 	fs.StringVar(&cfg.m8TruthCacheSHA256, "m8-truth-cache-sha256", "", "independently trusted SHA-256 of the canonical truth-cache artifact required for cache reuse")
 	fs.StringVar(&cfg.partitionAssignment, "partition-assignment", cfg.partitionAssignment, "partition assignment for partition/M3 stages: graph or stable_id_hash")
@@ -1077,12 +1080,7 @@ func parseConfig(args []string) (config, error) {
 		return config{}, fmt.Errorf("probes: %w", err)
 	}
 	if cfg.stage == m8ProductionMultiGroupModeV1 && !routerCandidatesSet {
-		cfg.routerCandidates = 1024
-		for _, probes := range cfg.probes {
-			if probes > cfg.routerCandidates {
-				cfg.routerCandidates = probes
-			}
-		}
+		cfg.routerCandidates = defaultRouterScoreBudgetV2
 	}
 	if cfg.overlaps, err = parseFloats(overlap); err != nil {
 		return config{}, fmt.Errorf("overlap: %w", err)
@@ -1170,11 +1168,6 @@ func parseConfig(args []string) (config, error) {
 				return config{}, fmt.Errorf("each ef-search must be in [%d,%d]", cfg.topK, shardLimits.MaxEfSearch)
 			}
 		}
-		for _, probes := range cfg.probes {
-			if probes > cfg.routerCandidates {
-				return config{}, errors.New("production_multi_group requires router-score-budget >= every probe count")
-			}
-		}
 		if !allUnique(cfg.probes) || !allUnique(cfg.efSearch) || !allUnique(cfg.concurrency) || !allUnique(cfg.overlaps) {
 			return config{}, errors.New("production_multi_group requires distinct probes, ef-search, concurrency, and overlap values")
 		}
@@ -1182,8 +1175,8 @@ func parseConfig(args []string) (config, error) {
 	if cfg.m3PersistDir != "" && (cfg.stage != "overlap,partition_index" || len(cfg.overlaps) != 1) {
 		return config{}, errors.New("-m3-persist-db requires stage overlap,partition_index with exactly one overlap ratio")
 	}
-	if cfg.routerWidth < 1 || cfg.routerWidth > cfg.routerBeam || cfg.routerBeam > vectorpartition.DefaultRouterConfigV1().MaxRepresentatives || cfg.routerCandidates < cfg.routerWidth || cfg.routerCandidates > collections.MaxVectorPartitionRouterScoreBudgetV2 {
-		return config{}, errors.New("router requires 1 <= width <= beam and score budget >= width")
+	if cfg.routerWidth < 1 || cfg.routerWidth > cfg.routerBeam || cfg.routerBeam > vectorpartition.DefaultRouterConfigV1().MaxRepresentatives || cfg.routerCandidates > collections.MaxVectorPartitionRouterScoreBudgetV2 {
+		return config{}, errors.New("router requires 1 <= width <= beam and score budget in [1,1000000]")
 	}
 	if cfg.m8RouterPolicyDiagnostics && !cfg.m8QualityDiagnostics || cfg.m8RouterPolicyWidth < 0 || cfg.m8RouterPolicyWidth > cfg.routerBeam || cfg.m8RouterPolicyWidth != 0 && !cfg.m8RouterPolicyDiagnostics {
 		return config{}, errors.New("router policy diagnostics require quality diagnostics and a width in [0,router-beam]")

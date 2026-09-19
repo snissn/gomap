@@ -205,6 +205,13 @@ func TestVectorPartitionRouterHybridDeterministicTies(t *testing.T) {
 }
 func TestVectorPartitionRouterPolicyCoverageRefusal(t *testing.T) {
 	meta := policyTestContext()
+	independent := meta
+	independent.CandidateBudget = 2
+	independent.Probes = 1
+	admitted, err := reduceVectorPartitionRouterPoliciesV1(nil, independent, policyGolden()[:2])
+	if err != nil || len(admitted.Hybrid) != 1 {
+		t.Fatalf("independent C < w reduction rejected: %+v %v", admitted, err)
+	}
 	input := policyGolden()[:1]
 	got, err := reduceVectorPartitionRouterPoliciesV1(nil, meta, input)
 	if !errors.Is(err, errVectorPartitionPolicyCoverageV1) || got.Distance != nil {

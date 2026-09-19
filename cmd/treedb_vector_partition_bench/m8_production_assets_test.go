@@ -547,8 +547,10 @@ func TestM8ProductionReportRejectsUnexercisedDataGroupV1(t *testing.T) {
 		refusal := shortfall
 		refusal.Rows = append([]m8ProductionRowV1(nil), shortfall.Rows...)
 		refusal.Rows[0].Status = status
+		refusal.Rows[0].RouterCandidates = 1
+		refusal.Rows[0].Attribution.ApproximateRouterCandidateBudget = 1
 		if err := testM8ValidateProductionReportV1(refusal); err != nil {
-			t.Fatalf("valid %s row rejected: %v", status, err)
+			t.Fatalf("valid %s row with score budget below probes rejected: %v", status, err)
 		}
 	}
 	zeroTiming := shortfall

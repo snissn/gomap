@@ -588,8 +588,8 @@ func loadVectorPartitionSystemNodeConfigV1(path string) (vectorPartitionSystemNo
 	if config.Assembly != vectorPartitionSystemAssemblyV1 {
 		return config, fmt.Errorf("system node rejects non-production assembly %q", config.Assembly)
 	}
-	if config.RouterWidth < 1 || config.RouterWidth > config.RouterBeam || config.RouterScoreBudget < config.RouterWidth || config.RouterBeam > nativewire.DefaultVectorPartitionCoordinatorLimitsV1().MaxRouterCandidates || config.RouterScoreBudget > nativewire.DefaultVectorPartitionCoordinatorLimitsV1().MaxRouterCandidates {
-		return config, errors.New("system node requires explicit router width <= beam and score budget >= width")
+	if config.RouterWidth < 1 || config.RouterWidth > config.RouterBeam || config.RouterScoreBudget < 1 || config.RouterBeam > nativewire.DefaultVectorPartitionCoordinatorLimitsV1().MaxRouterCandidates || config.RouterScoreBudget > nativewire.DefaultVectorPartitionCoordinatorLimitsV1().MaxRouterCandidates {
+		return config, errors.New("system node requires explicit router width <= beam and score budget in [1,1000000]")
 	}
 	if config.Topology != "single_daemon_four_group" && config.Topology != "native_four_daemon_four_group" && config.Topology != "container_four_daemon_four_group" {
 		return config, fmt.Errorf("system node topology %q is unsupported", config.Topology)
@@ -694,7 +694,7 @@ func openVectorPartitionSystemNodeV1(ctx context.Context, config vectorPartition
 	if err != nil {
 		return nil, err
 	}
-	if config.RouterWidth < 1 || config.RouterWidth > config.RouterBeam || config.RouterBeam > int(assets.status.Representatives) || config.RouterScoreBudget < config.RouterWidth {
+	if config.RouterWidth < 1 || config.RouterWidth > config.RouterBeam || config.RouterBeam > int(assets.status.Representatives) || config.RouterScoreBudget < 1 || config.RouterScoreBudget > nativewire.DefaultVectorPartitionCoordinatorLimitsV1().MaxRouterCandidates {
 		_ = assets.Close()
 		return nil, errors.New("system node router w/E/C does not fit persisted model")
 	}

@@ -64,6 +64,12 @@ func TestVectorPartitionSystemConfigLoadDoesNotCreateStateDirectoryV1(t *testing
 	if loaded.RuntimeOwnership == nil || loaded.RuntimeOwnership.CPUSet != "0-2" || loaded.RuntimeOwnership.GOMAXPROCS != 3 {
 		t.Fatalf("canonical runtime ownership = %+v", loaded.RuntimeOwnership)
 	}
+	config.RouterScoreBudget = 1
+	independentBudgetPath := filepath.Join(root, "independent-budget-config.json")
+	writeVectorPartitionSystemJSONTestV1(t, independentBudgetPath, config)
+	if loaded, err := loadVectorPartitionSystemNodeConfigV1(independentBudgetPath); err != nil || loaded.RouterScoreBudget != 1 || loaded.RouterWidth != 16 {
+		t.Fatalf("independent router C/w rejected: config=%+v err=%v", loaded, err)
+	}
 	if _, err := os.Stat(state); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("state directory created during config load: %v", err)
 	}

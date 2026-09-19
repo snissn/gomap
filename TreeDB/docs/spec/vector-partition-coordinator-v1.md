@@ -12,9 +12,10 @@ router, and the M5 shard-search contract
 Router revision R (#4773) uses coordinator request/response version **2**.
 The retained Go `V1` type names do not imply the old numeric protocol version.
 Requests must explicitly provide `RouterReturnedWidth` (w), `RouterBeamWidth`
-(E), and `RouterScoreBudget` (C): `1 <= w <= E <= model size` and `C >= w`.
-C limits actual score calls, including upper-level navigation, and is not
-clamped to model size. `MaxRouterCandidates` bounds both configured E and C.
+(E), and `RouterScoreBudget` (C): `1 <= w <= E <= model size`, while C is an
+independent positive bounded score-call ceiling. C limits actual score calls,
+including upper-level navigation, and is not clamped to model size.
+`MaxRouterCandidates` bounds both configured E and C.
 `ErrVectorPartitionRouterScoreBudget` maps to `budget_exceeded`, without
 dispatching shards or returning partial routes. Distinct-domain coverage
 failure is not a score-budget exhaustion. Per-response counters preserve

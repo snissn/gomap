@@ -96,18 +96,21 @@ func TestM0CaptureSplitPairRejectsLeakage(t *testing.T) {
 func TestM0ReadCaptureRequiresCleanBuildIdentity(t *testing.T) {
 	sha := strings.Repeat("a", 64)
 	capture := m0LocalityCaptureV1{
-		Schema:         "treedb_vector_partition_m0_exact_pack_trace_v3",
-		Artifact:       sha,
-		Descriptor:     sha,
-		Source:         vectorpartition.Source{SourceID: "fixture", Checksum: sha, Vectors: 1, Dimensions: 1, Metric: "cosine"},
-		Manifest:       sha,
-		ReadySet:       sha,
-		RouterModel:    sha,
-		BinarySHA256:   sha,
-		SourceRevision: strings.Repeat("b", 40),
-		Rows:           []m0LocalityCaptureRowV1{{}},
-		Traces:         []m0LocalityTraceRowV1{{}},
-		Snapshots:      map[uint32]collections.VectorPartitionPackLayoutSnapshotV1{0: {}},
+		Schema:            "treedb_vector_partition_m0_exact_pack_trace_v4",
+		Artifact:          sha,
+		Descriptor:        sha,
+		Source:            vectorpartition.Source{SourceID: "fixture", Checksum: sha, Vectors: 1, Dimensions: 1, Metric: "cosine"},
+		Manifest:          sha,
+		ReadySet:          sha,
+		RouterModel:       sha,
+		BinarySHA256:      sha,
+		SourceRevision:    strings.Repeat("b", 40),
+		RouterScoreBudget: 1024,
+		RouterWidth:       64,
+		RouterBeam:        96,
+		Rows:              []m0LocalityCaptureRowV1{{}},
+		Traces:            []m0LocalityTraceRowV1{{}},
+		Snapshots:         map[uint32]collections.VectorPartitionPackLayoutSnapshotV1{0: {}},
 	}
 	write := func(name string, value m0LocalityCaptureV1) string {
 		t.Helper()

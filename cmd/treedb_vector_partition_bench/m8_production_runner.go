@@ -513,9 +513,8 @@ func runM8ProductionSingleVariantV1(cfg config, fixture fixtureManifest, vectors
 		if err != nil {
 			return err
 		}
-		effective := cfg.routerWidth
-		if assets.status.Representatives > uint64(bound) || cfg.m8RouterPolicyWidth > effective {
-			return errors.New("opened router exceeds policy work plan or cannot satisfy requested width")
+		if assets.status.Representatives > uint64(bound) {
+			return errors.New("opened router exceeds policy work plan")
 		}
 	}
 	topologyCtx, cancelTopology := context.WithTimeout(context.Background(), 2*time.Minute)
@@ -4484,7 +4483,7 @@ func validateM8ProductionReportWithProfilesV1(report m8ProductionReportV1, caps 
 		report.Config.Warmup < 0 || report.Config.RouterCandidates < 1 || report.RouterRepresentatives == 0 || report.BuildNanos <= 0 || report.TimedBoundary == "" || len(report.Limitations) == 0 {
 		return errors.New("missing or invalid M8 identity, topology, or timing metadata")
 	}
-	if report.Config.RouterSemantics != "global_all_level_spherical_krt_w_E_C_v2" || report.Config.RouterWidth < 1 || report.Config.RouterWidth > report.Config.RouterBeam || report.Config.RouterBeam > int(report.RouterRepresentatives) || report.Config.RouterCandidates < report.Config.RouterWidth || report.RouterGlobalBudget < report.RouterRepresentatives {
+	if report.Config.RouterSemantics != "global_all_level_spherical_krt_w_E_C_v2" || report.Config.RouterWidth < 1 || report.Config.RouterWidth > report.Config.RouterBeam || report.Config.RouterBeam > int(report.RouterRepresentatives) || report.Config.RouterCandidates > collections.MaxVectorPartitionRouterScoreBudgetV2 || report.RouterGlobalBudget < report.RouterRepresentatives {
 		return errors.New("M8 requires explicit all-level router w/E/C identity")
 	}
 	expectedWarmup, _ := m8WarmupCountAndConcurrencyV1(config{warmup: report.Config.Warmup, concurrency: report.Config.Concurrency})
@@ -4562,7 +4561,7 @@ func validateM8ProductionReportWithProfilesV1(report m8ProductionReportV1, caps 
 		if m8ProductionRouterRefusalStatusV1(row.Status) {
 			if row.Probes < 1 || row.Probes > domainCount ||
 				row.EfSearch < report.Config.TopK || row.Concurrency < 1 || row.Samples != report.Dataset.Queries ||
-				row.RouterMode != collections.VectorPartitionRouterModeApproxV1 || row.RouterCandidates < row.Probes || row.RouterCandidates > report.Config.RouterCandidates || row.RouterCandidates != row.Attribution.ApproximateRouterCandidateBudget || row.NoPartialResults || row.ExactParityChecked || row.ExactParityPassed ||
+				row.RouterMode != collections.VectorPartitionRouterModeApproxV1 || row.RouterCandidates > report.Config.RouterCandidates || row.RouterCandidates != row.Attribution.ApproximateRouterCandidateBudget || row.NoPartialResults || row.ExactParityChecked || row.ExactParityPassed ||
 				row.RecallAtK != 0 || row.QPS != 0 || row.ElapsedNanos == 0 || row.P50Nanos != 0 || row.P95Nanos != 0 || row.P99Nanos != 0 || row.MaxTotalNanos == 0 ||
 				!validExactLocalSearches || row.Attribution.LocalHNSWCandidates == 0 ||
 				row.Attribution.ApproximateRouterPartitionCoverageComplete || row.Attribution.ApproximateRepresentativeRecallAtK != 0 || row.Attribution.ApproximateLocalHNSWRecallAtK != 0 || row.Attribution.ApproximateLocalHNSWSearches != 0 || len(row.Attribution.ApproximateLocalHNSWSearchesByQuery) != 0 || row.Attribution.ApproximateLocalHNSWCandidates != 0 || row.Attribution.ApproximateLocalHNSWEdges != 0 || row.Attribution.EndToEndRecallAtK != 0 ||
@@ -4692,7 +4691,7 @@ func validateM8ProductionMeasurementCellsV1(cfg m8ProductionConfigEvidenceV1, ro
 		return errors.New("M8 measurement axes must be non-empty and unique")
 	}
 	for _, probes := range cfg.Probes {
-		if probes < 1 || probes > domainCount || probes > cfg.RouterCandidates {
+		if probes < 1 || probes > domainCount {
 			return errors.New("M8 configured probe axis is invalid")
 		}
 	}

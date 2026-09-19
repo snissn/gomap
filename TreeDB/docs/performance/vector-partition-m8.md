@@ -711,12 +711,13 @@ ID; representative-distance ties use the immutable model ordinal. Different
 centroids can share source anchors or coordinates and remain different votes.
 
 `-m8-router-policy-width W` selects the nearest W collected representatives before
-voting; zero uses the actual approximate candidate budget after its existing
-model-size clamp. Exact-reference collection scores **all representatives**,
-then takes nearest W. Approximate collection reuses the ordinary coupled
-`TopK=EfSearch=CandidateLimit` operation without changing entry policy. Returned
-width is not the number of vectors scored. This packet does not implement the
-separate hierarchy/budget experiment in #4748.
+voting; zero uses the configured router width w. Exact-reference collection
+scores **all representatives**, then takes nearest W. Approximate collection
+uses the same production traversal with independently configured returned width
+w, beam E, and strict score-call ceiling C. It neither clamps C to w/E nor
+retries with a larger budget. Returned width is not the number of vectors
+scored. The historical commands above retain their original removed flag names
+and pre-R semantics; they are provenance, not current CLI examples.
 
 A comparison preserves a permutation-invariant candidate-set digest separately
 from the collected sequence digest. Both bind model, query, score convention,

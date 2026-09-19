@@ -113,7 +113,7 @@ func reduceVectorPartitionRouterPoliciesV1(ctx context.Context, meta vectorParti
 		}
 	}
 	if meta.RepresentativeCount < 1 || meta.DomainCount < 1 || meta.DomainCount > meta.RepresentativeCount || meta.Probes < 1 || meta.Probes > meta.DomainCount ||
-		meta.ReturnedWidth < 1 || meta.ReturnedWidth > meta.RepresentativeCount || meta.CandidateBudget < meta.ReturnedWidth || len(input) > meta.CandidateBudget {
+		meta.ReturnedWidth < 1 || meta.ReturnedWidth > meta.RepresentativeCount || meta.CandidateBudget < 1 || len(input) > meta.CandidateBudget {
 		return vectorPartitionPolicyReductionV1{}, errors.New("invalid router policy shape/budget")
 	}
 	switch meta.Mode {

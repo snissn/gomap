@@ -797,6 +797,8 @@ func TestVectorPartitionCoordinatorRouterScoreExhaustionPreservesWorkV2(t *testi
 	source.router.searchErr = collections.ErrVectorPartitionRouterScoreBudget
 	request := testVectorPartitionCoordinatorRequestV1(1)
 	request.RouterMode = collections.VectorPartitionRouterModeApproxV1
+	request.RouterReturnedWidth = 2
+	request.RouterBeamWidth = 2
 	response, err := coordinator.Search(context.Background(), request)
 	var failure *VectorPartitionCoordinatorErrorV1
 	if !errors.As(err, &failure) || failure.Code != "budget_exceeded" || !vectorPartitionCoordinatorResponseIsZeroTestV1(response) || len(dispatcher.calls) != 0 {
@@ -1368,56 +1370,36 @@ func TestVectorPartitionCoordinatorTopKLargerThanLiveCorpusV1(t *testing.T) {
 }
 
 func TestVectorPartitionCoordinatorRejectsImpossibleRouterFanoutBeforeOpenV1(t *testing.T) {
-	tests := []struct {
-		name string
-		edit func(*VectorPartitionCoordinatorRequestV1)
-	}{
-		{
-			name: "partition_probes_above_topology",
-			edit: func(request *VectorPartitionCoordinatorRequestV1) {
-				request.PartitionProbes = 3
-				request.RouterScoreBudget = 3
-				request.MergeEntriesLimit = 9
+	t.Run("partition_probes_above_topology", func(t *testing.T) {
+		coordinator, source, dispatcher := testVectorPartitionCoordinatorV1(t,
+			[]raftplacement.GroupV1{
+				{ID: "group-a", Members: []raftcluster.NodeID{"node-a"}, LeaderHint: "node-a"},
+				{ID: "group-b", Members: []raftcluster.NodeID{"node-b"}, LeaderHint: "node-b"},
 			},
-		},
-		{
-			name: "approximate_candidates_below_probes",
-			edit: func(request *VectorPartitionCoordinatorRequestV1) {
-				request.RouterMode = collections.VectorPartitionRouterModeApproxV1
-				request.RouterScoreBudget = 1
+			[]raftcluster.GroupID{"group-a", "group-b"},
+			map[uint32][]VectorPartitionShardSearchNeighborV1{
+				0: {{ID: "a", Score: 1}},
+				1: {{ID: "b", Score: .5}},
 			},
-		},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			coordinator, source, dispatcher := testVectorPartitionCoordinatorV1(t,
-				[]raftplacement.GroupV1{
-					{ID: "group-a", Members: []raftcluster.NodeID{"node-a"}, LeaderHint: "node-a"},
-					{ID: "group-b", Members: []raftcluster.NodeID{"node-b"}, LeaderHint: "node-b"},
-				},
-				[]raftcluster.GroupID{"group-a", "group-b"},
-				map[uint32][]VectorPartitionShardSearchNeighborV1{
-					0: {{ID: "a", Score: 1}},
-					1: {{ID: "b", Score: .5}},
-				},
-				VectorPartitionCoordinatorLimitsV1{},
-			)
-			request := testVectorPartitionCoordinatorRequestV1(2)
-			test.edit(&request)
+			VectorPartitionCoordinatorLimitsV1{},
+		)
+		request := testVectorPartitionCoordinatorRequestV1(2)
+		request.PartitionProbes = 3
+		request.RouterScoreBudget = 3
+		request.MergeEntriesLimit = 9
 
-			response, err := coordinator.Search(context.Background(), request)
-			var coordinatorErr *VectorPartitionCoordinatorErrorV1
-			if !errors.Is(err, ErrVectorPartitionCoordinatorInvalidRequest) ||
-				!errors.As(err, &coordinatorErr) ||
-				coordinatorErr.Code != VectorPartitionCoordinatorErrorInvalidRequestV1 ||
-				!vectorPartitionCoordinatorResponseIsZeroTestV1(response) {
-				t.Fatalf("response=%+v err=%+v", response, err)
-			}
-			if source.opens != 0 || source.router.closeCount != 0 || len(dispatcher.calls) != 0 {
-				t.Fatalf("router opens=%d closes=%d dispatches=%d", source.opens, source.router.closeCount, len(dispatcher.calls))
-			}
-		})
-	}
+		response, err := coordinator.Search(context.Background(), request)
+		var coordinatorErr *VectorPartitionCoordinatorErrorV1
+		if !errors.Is(err, ErrVectorPartitionCoordinatorInvalidRequest) ||
+			!errors.As(err, &coordinatorErr) ||
+			coordinatorErr.Code != VectorPartitionCoordinatorErrorInvalidRequestV1 ||
+			!vectorPartitionCoordinatorResponseIsZeroTestV1(response) {
+			t.Fatalf("response=%+v err=%+v", response, err)
+		}
+		if source.opens != 0 || source.router.closeCount != 0 || len(dispatcher.calls) != 0 {
+			t.Fatalf("router opens=%d closes=%d dispatches=%d", source.opens, source.router.closeCount, len(dispatcher.calls))
+		}
+	})
 }
 
 func TestVectorPartitionCoordinatorRejectsUnrepresentableQueryNormBeforeOpenV1(t *testing.T) {

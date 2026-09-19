@@ -189,10 +189,20 @@ func TestM8RouterPolicyTamperSelectionAndCandidateIdentity(t *testing.T) {
 	if err := m8AttachAttributionV1(&row, cell, cell.Local); err != nil {
 		t.Fatal(err)
 	}
-	cfg := m8ProductionConfigEvidenceV1{QualityDiagnostics: true, RouterPolicyDiagnostics: true, TopK: 10, RouterCandidates: e.ApproximateBudget}
+	cfg := m8ProductionConfigEvidenceV1{QualityDiagnostics: true, RouterPolicyDiagnostics: true, TopK: 10, RouterCandidates: e.ApproximateBudget, RouterWidth: e.EffectiveWidth, RouterBeam: e.EffectiveWidth}
 	if err := m8RouterPolicyEvidenceSelectionV1(cfg, row); err != nil {
 		t.Fatal(err)
 	}
+	cfg.RouterWidth--
+	if err := m8RouterPolicyEvidenceSelectionV1(cfg, row); err == nil {
+		t.Fatal("mismatched default policy width accepted")
+	}
+	cfg.RouterWidth++
+	cfg.RouterBeam++
+	if err := m8RouterPolicyEvidenceSelectionV1(cfg, row); err == nil {
+		t.Fatal("mismatched policy beam accepted")
+	}
+	cfg.RouterBeam--
 	cfg.RouterPolicyDiagnostics = false
 	if err := m8RouterPolicyEvidenceSelectionV1(cfg, row); err == nil {
 		t.Fatal("unselected policy data accepted")
@@ -265,7 +275,7 @@ func TestM8RouterPolicyRetainedAttributionReplay(t *testing.T) {
 	if err := os.Rename(builtDir, dir); err != nil {
 		t.Fatal(err)
 	}
-	for _, coordinate := range []struct{ width, budget int }{{0, 0}, {1, 0}, {1, 1}} {
+	for _, coordinate := range []struct{ width, budget int }{{0, 0}, {1, 0}, {4, 1}} {
 		width := coordinate.width
 		t.Run(fmt.Sprintf("width=%d/budget=%d", width, coordinate.budget), func(t *testing.T) {
 			assets, err := openM8ProductionExistingAssetSetV1(dir)

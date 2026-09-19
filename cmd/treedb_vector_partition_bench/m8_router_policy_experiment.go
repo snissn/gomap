@@ -185,7 +185,7 @@ func m8RouterPolicyLessV1(a, b collections.VectorPartitionRouterPolicyDomainV1, 
 // Shape and internal equations are checked here; authoritative source/model,
 // candidate scores, votes and route masks are checked by fresh-owner replay.
 func m8ValidateRouterPolicyEvidenceV1(e *m8RouterPolicyEvidenceV1, q *m8QualityAttributionV1, k, probes, samples int) error {
-	if e == nil || q == nil || samples < 1 || q.Domains < 1 || q.Domains > maxPartitions || len(q.PackCosts) != q.Domains || e.Method != m8RouterPolicyExperimentMethodV1 || len(e.Queries) != samples || len(q.Queries) != samples || k < 1 || k > 10 || probes < 1 || probes > q.Domains || e.RequestedWidth < 0 || e.EffectiveWidth < 1 || e.EffectiveWidth > e.ApproximateBudget || e.RequestedWidth != 0 && e.RequestedWidth != e.EffectiveWidth {
+	if e == nil || q == nil || samples < 1 || q.Domains < 1 || q.Domains > maxPartitions || len(q.PackCosts) != q.Domains || e.Method != m8RouterPolicyExperimentMethodV1 || len(e.Queries) != samples || len(q.Queries) != samples || k < 1 || k > 10 || probes < 1 || probes > q.Domains || e.RequestedWidth < 0 || e.EffectiveWidth < 1 || e.ApproximateBudget < 1 || e.RequestedWidth != 0 && e.RequestedWidth != e.EffectiveWidth {
 		return errors.New("invalid policy experiment shape/identity")
 	}
 	full := uint16(1<<uint(k)) - 1
@@ -307,7 +307,11 @@ func m8RouterPolicyEvidenceSelectionV1(cfg m8ProductionConfigEvidenceV1, row m8P
 		}
 		return nil
 	}
-	if !cfg.QualityDiagnostics || cfg.RouterPolicyWidth < 0 || cfg.RouterPolicyWidth > cfg.RouterCandidates {
+	effectiveWidth := cfg.RouterPolicyWidth
+	if effectiveWidth == 0 {
+		effectiveWidth = cfg.RouterWidth
+	}
+	if !cfg.QualityDiagnostics || cfg.RouterWidth < 1 || cfg.RouterWidth > cfg.RouterBeam || cfg.RouterPolicyWidth < 0 || effectiveWidth < 1 || effectiveWidth > cfg.RouterBeam {
 		return errors.New("invalid router policy configuration")
 	}
 	if row.Status != "pass" && row.Status != "fail" && !m8ProductionRouterRefusalStatusV1(row.Status) {
@@ -319,8 +323,13 @@ func m8RouterPolicyEvidenceSelectionV1(cfg m8ProductionConfigEvidenceV1, row m8P
 	if err := m8ValidateRouterPolicyEvidenceV1(e, row.Attribution.Quality, cfg.TopK, row.Probes, row.Samples); err != nil {
 		return err
 	}
-	if e.RequestedWidth != cfg.RouterPolicyWidth || e.ApproximateBudget != row.Attribution.ApproximateRouterCandidateBudget {
+	if e.RequestedWidth != cfg.RouterPolicyWidth || e.EffectiveWidth != effectiveWidth || e.ApproximateBudget != row.Attribution.ApproximateRouterCandidateBudget {
 		return errors.New("policy requested/effective config mismatch")
+	}
+	for _, query := range e.Queries {
+		if query.Exact.Comparison.BeamWidth != cfg.RouterBeam || query.Approximate.Comparison.BeamWidth != cfg.RouterBeam {
+			return errors.New("policy beam config mismatch")
+		}
 	}
 	return nil
 }
@@ -340,7 +349,7 @@ func m8PlanRouterPolicyDiagnosticsV1(cfg config, m fixtureManifest, domainCounts
 	if len(cfg.m8RouterPolicyRepresentativeCounts) > 0 && len(cfg.m8RouterPolicyRepresentativeCounts) != len(domainCounts) {
 		return 0, 0, errors.New("policy model-count preflight cardinality mismatch")
 	}
-	if !cfg.m8QualityDiagnostics || cfg.topK < 1 || cfg.topK > 10 || cfg.routerCandidates < 1 || cfg.m8RouterPolicyWidth < 0 || cfg.m8RouterPolicyWidth > cfg.routerCandidates || m.Vectors < 1 || m.Queries < 1 || m.Dimensions < 1 || m.Dimensions > maxDimensions || len(cfg.probes) < 1 || len(cfg.efSearch) < 1 || len(cfg.concurrency) < 1 || capUnits < 1 || capBytes < 1 {
+	if !cfg.m8QualityDiagnostics || cfg.topK < 1 || cfg.topK > 10 || cfg.routerCandidates < 1 || cfg.m8RouterPolicyWidth < 0 || cfg.m8RouterPolicyWidth > cfg.routerBeam || m.Vectors < 1 || m.Queries < 1 || m.Dimensions < 1 || m.Dimensions > maxDimensions || len(cfg.probes) < 1 || len(cfg.efSearch) < 1 || len(cfg.concurrency) < 1 || capUnits < 1 || capBytes < 1 {
 		return 0, 0, errors.New("invalid policy diagnostic work shape")
 	}
 	if len(domainCounts) == 0 {

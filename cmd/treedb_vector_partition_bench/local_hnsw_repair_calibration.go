@@ -128,15 +128,15 @@ func localHNSWRepairCalibrationQueryAtEFV1Build(ctx context.Context, source *m8P
 	}
 	partitions := int(source.manifest.PartitionCount)
 	domains := int(source.manifest.DomainCount)
-	candidates := min(256, int(source.status.Representatives))
-	if candidates < 1 {
+	width := min(256, int(source.status.Representatives))
+	if width < 1 {
 		return out, errors.New("invalid local HNSW repair router")
 	}
-	p2, err := localHNSWAttributionQueryRouteV1(ctx, source, query, candidates, min(2, domains))
+	p2, err := localHNSWAttributionQueryRouteV1(ctx, source, query, defaultRouterScoreBudgetV2, width, width, min(2, domains))
 	if err != nil {
 		return out, err
 	}
-	p16, err := localHNSWAttributionQueryRouteV1(ctx, source, query, candidates, domains)
+	p16, err := localHNSWAttributionQueryRouteV1(ctx, source, query, defaultRouterScoreBudgetV2, width, width, domains)
 	if err != nil || !localHNSWAttributionRoutePrefixV1(p2, p16) || !localHNSWAttributionRoutePermutationV1(p16, partitions) {
 		return out, errors.New("invalid local HNSW repair calibration route")
 	}
