@@ -36,10 +36,10 @@ func TestCompaction(t *testing.T) {
 	}
 	defer os.RemoveAll(dbDir)
 
-	serverCmd := startServer(t, serverBin, dbDir, addr)
+	serverCmd, serverExited := startServer(t, serverBin, dbDir, addr)
 	defer func() {
 		serverCmd.Process.Kill()
-		serverCmd.Wait()
+		<-serverExited
 	}()
 
 	conn, err := net.Dial("tcp", addr)

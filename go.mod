@@ -35,6 +35,7 @@ require (
 	github.com/zeebo/xxh3 v1.1.0
 	go.etcd.io/bbolt v1.4.3
 	go.mongodb.org/mongo-driver/v2 v2.6.0
+	go.uber.org/goleak v1.3.0
 	golang.org/x/sys v0.41.0
 	gonum.org/v1/plot v0.16.0
 )

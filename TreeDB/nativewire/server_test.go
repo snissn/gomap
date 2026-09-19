@@ -102,6 +102,7 @@ func TestServerServeConnNormalizesNilContext(t *testing.T) {
 
 func TestServerControlHelloPingStatsGoaway(t *testing.T) {
 	server := NewServer(ServerOptions{})
+	defer server.Close()
 	client, errCh := servePipe(t, server)
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -166,6 +167,7 @@ func TestServerControlHelloPingStatsGoaway(t *testing.T) {
 
 func TestServerReadCommandWithoutCollectionManagerReturnsWireError(t *testing.T) {
 	server := NewServer(ServerOptions{})
+	defer server.Close()
 	client, _ := servePipe(t, server)
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -186,6 +188,7 @@ func TestServerReadCommandWithoutCollectionManagerReturnsWireError(t *testing.T)
 
 func TestServerMalformedRequestReturnsWireError(t *testing.T) {
 	server := NewServer(ServerOptions{})
+	defer server.Close()
 	client, errCh := servePipe(t, server)
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -262,6 +265,7 @@ func TestServerRejectsMalformedHelloBody(t *testing.T) {
 
 func TestServerRejectsCriticalUnknownHelloSection(t *testing.T) {
 	server := NewServer(ServerOptions{})
+	defer server.Close()
 	client, _ := servePipe(t, server)
 	body, err := iwire.AppendSection(nil, iwire.Section{ID: 9000, Flags: iwire.SectionFlagCritical})
 	if err != nil {
@@ -343,6 +347,7 @@ func TestServerClosesPostHandshakeUnsupportedVersion(t *testing.T) {
 
 func TestServerRejectsRequestBeforeHello(t *testing.T) {
 	server := NewServer(ServerOptions{})
+	defer server.Close()
 	client, _ := servePipe(t, server)
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -384,6 +389,7 @@ func TestClientDetectsResponseRequestIDMismatch(t *testing.T) {
 
 func TestClientPingAllowsNilContext(t *testing.T) {
 	server := NewServer(ServerOptions{})
+	defer server.Close()
 	client, _ := servePipe(t, server)
 	if err := client.Hello(nil); err != nil {
 		t.Fatalf("Hello nil context: %v", err)

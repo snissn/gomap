@@ -159,6 +159,7 @@ func TestInsertBatchCombinerRejectsClusterModeBypass(t *testing.T) {
 
 func TestInsertBatchCombinerStatsStartAtZero(t *testing.T) {
 	server := NewServer(ServerOptions{})
+	defer server.Close()
 	stats := server.Stats()
 	for _, key := range []string{
 		"insert_batch_combiner.batches_total",
@@ -177,6 +178,7 @@ func TestInsertBatchCombinerNonPositiveOptionsUseDefaults(t *testing.T) {
 		InsertBatchCombineMaxBatch:    -1,
 		InsertBatchCombineDrainYields: -1,
 	})
+	defer server.Close()
 	if server.insertBatchCombineMaxBatch != defaultInsertBatchCombineMaxBatch {
 		t.Fatalf("max batch=%d want default %d", server.insertBatchCombineMaxBatch, defaultInsertBatchCombineMaxBatch)
 	}

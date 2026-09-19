@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"go.uber.org/goleak"
 )
 
 const (
@@ -24,6 +25,17 @@ var columnPhysicalQueryQ1BenchmarkFixture1890 struct {
 func TestMain(m *testing.M) {
 	code := m.Run()
 	cleanupColumnPhysicalQueryQ1BenchmarkFixture1890()
+	if code == 0 {
+		// sharedLoop appears in the stacks of the memtable package's
+		// documented process-global fallback indexer; owned indexer leaks
+		// still report. See TreeDB/internal/memtable/leak_test.go.
+		if err := goleak.Find(
+			goleak.IgnoreAnyFunction("github.com/snissn/gomap/TreeDB/internal/memtable.(*HashSortedIndexer).sharedLoop"),
+		); err != nil {
+			fmt.Fprintf(os.Stderr, "goleak: Errors on successful test run: %v\n", err)
+			code = 1
+		}
+	}
 	os.Exit(code)
 }
 

@@ -176,6 +176,24 @@ func holdVlogGenerationDeferredMaintenanceRunnerForTest(t *testing.T, db *DB) {
 	})
 }
 
+func holdVlogGenerationRewriteQueueRunnerForTest(t *testing.T, db *DB) {
+	t.Helper()
+	if db == nil {
+		return
+	}
+	if db.vlogGenerationRewriteQueuePending.Load() {
+		t.Fatalf("rewrite queue maintenance unexpectedly pending before test ownership barrier")
+	}
+	if !db.vlogGenerationRewriteQueueRunning.CompareAndSwap(false, true) {
+		t.Fatalf("rewrite queue runner unexpectedly active before test ownership barrier")
+	}
+	t.Cleanup(func() {
+		db.vlogGenerationRewriteQueuePending.Store(false)
+		db.vlogGenerationRewriteQueuePendingAutomatic.Store(false)
+		db.vlogGenerationRewriteQueueRunning.Store(false)
+	})
+}
+
 func disableVlogGenerationLoop(t *testing.T) {
 	t.Helper()
 	t.Setenv(envDisableVlogGenerationLoop, "1")
@@ -5726,6 +5744,11 @@ func TestVlogGenerationRewriteQueue_FreshBypassThenExpiredRetryDrainsQueuedDebt(
 		t.Fatalf("queue after fresh bypass=%v want=%v", got, want)
 	}
 
+	// The budgeted drain below intentionally leaves queued debt behind, and a
+	// non-empty remaining queue schedules an asynchronous follow-up pass.
+	// Hold the rewrite-queue runner so the extra drain cannot race the
+	// synchronous assertions; the follow-up behavior is covered elsewhere.
+	holdVlogGenerationRewriteQueueRunnerForTest(t, db)
 	expireVlogGenerationRewritePenaltiesForTest(t, db, 11, 22)
 	db.vlogGenerationRewriteBudgetTokensBytes.Store(64)
 	db.vlogGenerationLastRewriteUnixNano.Store(time.Now().Add(-2 * vlogGenerationRewriteResumeMinInterval).UnixNano())
@@ -8879,6 +8902,19 @@ func TestVlogGenerationAutomaticCheckpointKickPreservesQueuedFollowup(t *testing
 		if time.Now().After(deadline) {
 			_, calls := recorder.recordedRewrite()
 			t.Fatalf("explicit queued follow-up did not rewrite: calls=%d", calls)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	// The rewrite counter increments when ValueLogRewriteOnline starts; the
+	// checkpoint and post-rewrite vacuum boundaries land later in the same
+	// pass, so they must be waited on rather than sampled once.
+	deadline = time.Now().Add(2 * schedulerTestWait(t))
+	for {
+		if checkpoints, vacuums := boundary.boundaryCalls(); checkpoints != 0 && vacuums != 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			break
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
