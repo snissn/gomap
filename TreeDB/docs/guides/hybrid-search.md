@@ -39,6 +39,23 @@ source, while postfilter keeps its existing position after source ranking.
 Candidate generation uses production statistics and fetches no documents.
 These are correctness contracts, separate from dense-query performance results.
 
+Hybrid vectors default to exact scoring. To use scalar-u8 candidates plus
+canonical FP32 reranking, declare and admit a typed cosine `column_graph` with a
+legacy scalar-u8/v1 plane, then set `QueryMode: VectorIndexQueryModeQuantizedRerank`,
+and `QuantizedIndexName`. `QuantizedRerankCandidates` is optional: zero uses the
+effective traversal width, while a nonzero width must be at least the effective
+vector candidate limit. Selected queries keep fixed source budgets. A small
+complete scalar filter may execute `typed_exact`, while an empty filter performs
+no vector traversal. Both cases still validate the named asset. Missing/stale
+assets, `quantized_only`, and unsupported codec/representation combinations fail
+closed without an exact retry.
+
+The selected path retains one read owner through scalar/text work, fusion,
+parent collapse, and final fetch. Its compact route receipt reports actual
+`typed_hnsw` or `typed_exact` work plus SQ8/packed-rerank counters. Excluding the
+embedding from final documents avoids output-vector reads and bytes; FP32 reads
+for reranking remain expected.
+
 ## Index creation sketch
 
 ```go
@@ -108,7 +125,9 @@ resp, err := col.SearchHybrid(collections.HybridSearchOptions{
         Query: queryEmbedding,
         CandidateLimit: 64,
         EfSearch: 128,
-        QueryMode: collections.VectorIndexQueryModeExact,
+        QueryMode: collections.VectorIndexQueryModeQuantizedRerank,
+        QuantizedIndexName: "embedding.scalar_u8.fast",
+        QuantizedRerankCandidates: 64,
     },
     ScalarFilter: &collections.HybridScalarFilter{
         And: []collections.HybridScalarFilter{

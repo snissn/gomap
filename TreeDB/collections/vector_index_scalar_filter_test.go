@@ -346,7 +346,7 @@ func TestSearchVectorIndexDeclaredScalarFilterFailsClosedWithoutTenantLeak(t *te
 	}
 }
 
-func TestNativeScalarExplicitPostfilterPreservesCandidateLimit(t *testing.T) {
+func TestNativeScalarExplicitStrategiesPreserveCandidateLimit(t *testing.T) {
 	d, col, def := newNativeScalarTestCollection(t, []IndexDefinition{{Name: "tenant_idx", Field: "tenant", ValueType: IndexValueString}})
 	defer func() { _ = d.Close() }()
 	if _, err := col.InsertBatch([][]byte{[]byte("alpha-far"), []byte("beta-near")}, [][]byte{
@@ -362,19 +362,21 @@ func TestNativeScalarExplicitPostfilterPreservesCandidateLimit(t *testing.T) {
 	vector := &HybridVectorQuery{
 		IndexName: def.Name, Query: []float32{1, 0}, CandidateLimit: 1, EfSearch: 16, QueryMode: VectorIndexQueryModeExact,
 	}
-	postfiltered, err := col.SearchHybrid(HybridSearchOptions{
-		TopK: 1, Vector: vector, ScalarFilter: filter,
-		ScalarFilterStrategy: HybridScalarFilterStrategyPostfilter,
-		ResultMode:           HybridResultModeScoreOnly,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(postfiltered.Results) != 0 ||
-		postfiltered.Stats.ScalarPostfilterChecks != 1 ||
-		postfiltered.Stats.ScalarFilterMatched != 0 ||
-		postfiltered.Stats.ScalarFilterRejected != 1 {
-		t.Fatalf("postfilter response=%+v", postfiltered)
+	for _, strategy := range []HybridScalarFilterStrategy{HybridScalarFilterStrategyPostfilter, HybridScalarFilterStrategyTextFirst, HybridScalarFilterStrategyVectorFirst, HybridScalarFilterStrategyUnionFusion} {
+		filtered, err := col.SearchHybrid(HybridSearchOptions{
+			TopK: 1, Vector: vector, ScalarFilter: filter,
+			ScalarFilterStrategy: strategy, ResultMode: HybridResultModeScoreOnly,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(filtered.Results) != 0 || filtered.Stats.VectorCandidatesReturned != 1 ||
+			filtered.Stats.ScalarFilterMatched != 0 || filtered.Stats.ScalarFilterRejected != 1 {
+			t.Fatalf("strategy=%s response=%+v", strategy, filtered)
+		}
+		if strategy == HybridScalarFilterStrategyPostfilter && filtered.Stats.ScalarPostfilterChecks != 1 {
+			t.Fatalf("postfilter response=%+v", filtered)
+		}
 	}
 	prefiltered, err := col.SearchHybrid(HybridSearchOptions{
 		TopK: 1, Vector: vector, ScalarFilter: filter, ResultMode: HybridResultModeScoreOnly,

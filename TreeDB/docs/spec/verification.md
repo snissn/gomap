@@ -1970,6 +1970,11 @@ Invariant:
   only that shortlist by graph ordinal, and returns exact cosine scores.
 - Missing, stale, mismatched, unsupported, or unprepared quantized assets fail
   closed with no hidden exact fallback.
+- Public hybrid `quantized_rerank` uses the same admitted scalar-u8 traversal
+  and authoritative FP32 rerank under one captured owner. Exact remains the
+  default; selected requests use fixed source budgets, truthful typed-exact or
+  typed-HNSW receipts, bounded final fetch, and zero output-vector bytes unless
+  embeddings are explicitly requested.
 
 Coverage:
 - Policy owner: `TreeDB/docs/spec/quantized-vector-index.md`.
@@ -1991,6 +1996,13 @@ Coverage:
     allocation guardrails, BRQ counters, and fail-closed asset validation.
   - `TreeDB/collections/vector_index_search_test.go` covers public exact,
     quantized_only, quantized_rerank, searcher buffer, and missing-name behavior.
+  - `TreeDB/collections/typed_graph_hybrid_test.go` covers coherent selected
+    hybrid ownership across concurrent publication, response ownership, scalar
+    strategies, and independent filter budgets.
+  - `TreeDB/documentservice/typed_hybrid_test.go` covers public service/HTTP
+    selection, truthful selective/empty routing, cancellation, omitted
+    embeddings, and invalid field/asset combinations. The Python client model,
+    HTTP, and integration tests cover request serialization and receipt decode.
   - `TreeDB/internal/quantizedasset/quantized_asset_test.go` covers prepared
     ordinal readers, mixed row-count granule metadata roles, role/schema
     validation, footprint metrics, and scorer-shaped allocation benchmarks.
@@ -2018,6 +2030,10 @@ Coverage:
     BRQ lower-level buffered search, BRQ-specific counters, exact-read
     guardrails, logical code bytes/vector, asset bytes/vector, recall@K, and
     rebuild/storage overhead.
+  - `BenchmarkTypedGraphHybridPublicRoutes4767` compares exact and selected
+    SQ8+rerank on the same unfiltered admitted hybrid fixture and reports route,
+    quantized/rerank/packed work, fused candidates, final fetches, embedding
+    output bytes, `ns/op`, `B/op`, and `allocs/op`.
 
 ## 13. Native Wire Protocol
 

@@ -106,6 +106,17 @@ applications that need them must store a separate field.
 IDs, scores, document fetches, and optional embedding fetches remain bound to
 one captured read owner. Projection cannot reopen a newer owner.
 
+Public hybrid search can opt into the same named scalar-u8 candidate plane and
+packed canonical rerank with `vector_query_mode=quantized_rerank` and a
+quantized index name. The rerank width is optional; zero uses the effective
+traversal width. Exact remains the default. The existing hybrid executor owns
+scalar/text work, fusion, parent collapse, and bounded final fetch under the
+captured typed owner; there is no client-side fusion or alternate endpoint. A
+selective allow-set may use the truthful typed-exact route, while an empty
+allow-set performs no vector work after asset validation. Production exposes
+only a compact route receipt and counters; no diagnostic score-plane proof is
+required.
+
 ## Native capability boundary
 
 Native command64/v4 identifies this score contract. Its production envelope

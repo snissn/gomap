@@ -66,9 +66,6 @@ func prepareTypedGraphAND(ctx context.Context, plan *typedGraphPreparedFilter, l
 			if err != nil {
 				return nil, err
 			}
-			if complete && len(set) == 0 {
-				return set, ctx.Err()
-			}
 			if complete && (driverIndex < 0 || len(set) < len(driver)) {
 				driver, driverIndex = set, i
 			}

@@ -835,6 +835,9 @@ Request:
   "candidate_limit": 100,
   "text_candidate_limit": 100,
   "vector_candidate_limit": 100,
+  "vector_query_mode": "quantized_rerank",
+  "quantized_index_name": "embedding.scalar_u8.fast",
+  "quantized_rerank_candidates": 100,
   "ef_search": 64,
   "max_chunks_per_parent": 2,
   "filter": {
@@ -865,6 +868,16 @@ semantics as keyword search and require a non-empty text `query`; vector-only
 requests that supply lexical options are invalid. An explicit posting cap uses
 one fixed lexical source attempt rather than resetting the cap across adaptive
 candidate retries.
+Vector mode defaults to `exact`. `quantized_rerank` requires the explicit mode,
+an admitted typed cosine `column_graph`, and its named legacy scalar-u8/v1
+plane. `quantized_rerank_candidates` is optional: omitted or zero selects the
+effective traversal width; a nonzero value must be at least the effective
+vector candidate limit. Selected hybrid uses fixed source budgets. A small
+complete filter may execute `typed_exact`, and an empty filter executes no
+vector work, but both validate the selected asset first. Quantized fields with
+exact mode, `quantized_only`, missing/stale assets, unsupported codecs or
+representations, and unadmitted serving fail closed without retrying another
+route.
 `max_chunks_per_parent` is disabled when omitted or zero and must otherwise be
 positive. When enabled, the executor walks the already-bounded fused order,
 keeps at most that many canonical `<parentID>#<ordinal>` built-in chunk IDs per
@@ -926,6 +939,9 @@ object shown in the index metadata section):
     "fusion_tie_policy": "fused_score_best_rank_source_order_id",
     "text_candidate_limit": 100,
     "vector_candidate_limit": 100,
+    "vector_query_mode": "quantized_rerank",
+    "quantized_index_name": "embedding.scalar_u8.fast",
+    "quantized_rerank_candidates": 100,
     "max_chunks_per_parent": 2,
     "final_top_k": 10
   },
@@ -938,6 +954,14 @@ object shown in the index metadata section):
     "text_candidates_returned": 10,
     "vector_candidates_requested": 100,
     "vector_candidates_returned": 10,
+    "vector_route": {
+      "route": "typed_hnsw",
+      "query_mode": "quantized_rerank",
+      "quantized_index_name": "embedding.scalar_u8.fast"
+    },
+    "vector_quantized_score_calls": 509,
+    "vector_quantized_rerank_candidates": 100,
+    "vector_packed_exact_score_calls": 1,
     "candidates_fused": 20,
     "fusion_both": 1,
     "collapse_rejections": 4,
@@ -956,6 +980,12 @@ therefore return fewer documents than `top_k`. `truncated` continues to count
 fused candidates omitted by the final bound, including cap rejections. With
 collapse disabled, both collapse counters are zero and IDs, scores, and source
 contributions retain their prior behavior.
+
+For selected SQ8, one captured read owner governs scalar/text candidates,
+vector traversal/rerank, fusion/collapse, and final fetch. `vector_route`
+reports actual work, so a selective request can report `typed_exact`; a
+validated empty allow-set omits the receipt and has zero vector work counters.
+By default responses omit embeddings and `embedding_output_bytes` is zero.
 
 Missing/stale/unavailable text or vector indexes, text postings/candidate budget
 exhaustion, corrupt index state, and bounded document-fetch failures return a

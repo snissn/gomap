@@ -295,10 +295,17 @@ func (c *Collection) RenewColumnGraphServing(ctx context.Context, index string) 
 // wrapper: a buffer-only caller cannot preserve the captured owner needed for
 // the coherent mutable base/suffix/fetch contract.
 func (c *Collection) searchTypedGraphServing(opts VectorIndexSearchOptions, buffer *VectorIndexSearchBuffer, allowSelectedQuantizedRerank bool) (response VectorIndexSearchResponse, view *CollectionReadView, err error) {
+	response, view, _, err = c.searchTypedGraphServingWithOwner(opts, buffer, allowSelectedQuantizedRerank, nil, 0, false)
+	return response, view, err
+}
+
+// searchTypedGraphServingWithOwner is the one typed serving implementation for
+// public dense/vector calls and owner-bound hybrid vector phases. A supplied
+// owner is borrowed and remains the caller's responsibility.
+func (c *Collection) searchTypedGraphServingWithOwner(opts VectorIndexSearchOptions, buffer *VectorIndexSearchBuffer, allowSelectedQuantizedRerank bool, boundOwner *typedGraphReadOwner, boundAcquireNanos int64, shortCircuitEmptyFilter bool) (response VectorIndexSearchResponse, view *CollectionReadView, filterWork ColumnGraphFilterWork, err error) {
 	workstats.Graph.Requests.Attempts.Add(1)
 	includeProof := opts.StatsMode == VectorIndexSearchStatsModeProduction
 	var stats typedGraphOverlaySearchStats
-	var filterWork ColumnGraphFilterWork
 	var snapshot ColumnGraphQuerySnapshot
 	var scorePlane *ColumnGraphScorePlaneWork
 	defer func() {
@@ -326,19 +333,19 @@ func (c *Collection) searchTypedGraphServing(opts VectorIndexSearchOptions, buff
 	buffer.Reset()
 	p := c.typedGraphServingPolicy()
 	if p == nil || p.index != opts.IndexName {
-		return response, nil, ErrVectorIndexSearchUnavailable
+		return response, nil, filterWork, ErrVectorIndexSearchUnavailable
 	}
 	queryMode, modeErr := normalizeVectorIndexSearchQueryMode(opts.QueryMode, opts.QuantizedIndexName, opts.QuantizedRerankCandidates, opts.TopK)
 	if modeErr != nil {
-		return response, nil, modeErr
+		return response, nil, filterWork, modeErr
 	}
 	if queryMode == columnVectorGraphNativeSearchQueryModeQuantizedRerank && !allowSelectedQuantizedRerank {
-		return response, nil, ErrHybridSearchUnsupported
+		return response, nil, filterWork, ErrHybridSearchUnsupported
 	}
 	unsupportedMode := queryMode != columnVectorGraphNativeSearchQueryModeExact && queryMode != columnVectorGraphNativeSearchQueryModeQuantizedRerank
 	unsupportedStats := opts.StatsMode != VectorIndexSearchStatsModeMinimal && opts.StatsMode != VectorIndexSearchStatsModeProduction
 	if unsupportedMode || unsupportedStats || opts.MaxDecodedBlocks != 0 {
-		return response, nil, ErrHybridSearchUnsupported
+		return response, nil, filterWork, ErrHybridSearchUnsupported
 	}
 	if opts.Context != nil {
 		if err = opts.Context.Err(); err != nil {
@@ -349,16 +356,25 @@ func (c *Collection) searchTypedGraphServing(opts VectorIndexSearchOptions, buff
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	started := time.Now()
-	owner, err := c.openTypedGraphReadOwnerWithContext(ctx, p.options.Owners)
-	acquired := time.Since(started)
-	if err != nil {
-		return response, nil, err
+	owner := boundOwner
+	ownerBorrowed := owner != nil
+	acquiredNanos := boundAcquireNanos
+	if owner == nil {
+		started := time.Now()
+		owner, err = c.openTypedGraphReadOwnerWithContext(ctx, p.options.Owners)
+		acquiredNanos = time.Since(started).Nanoseconds()
+		if err != nil {
+			return response, nil, filterWork, err
+		}
+	} else if owner.closed || owner.overlay == nil || owner.overlay.base == nil || owner.overlay.base.collection != c || owner.overlay.current == nil {
+		return response, nil, filterWork, ErrVectorIndexSnapshotMismatch
 	}
 	snapshot = owner.querySnapshot()
 	defer func() {
 		if err != nil {
-			err = errors.Join(err, owner.Close())
+			if !ownerBorrowed {
+				err = errors.Join(err, owner.Close())
+			}
 			buffer.Reset()
 			response.Results = nil
 		}
@@ -371,6 +387,14 @@ func (c *Collection) searchTypedGraphServing(opts VectorIndexSearchOptions, buff
 		}
 		filter, err = prepareTypedGraphServingFilter(ctx, keeper, owner.overlay, *opts.DeclaredScalarFilter, p.options.Filter, &filterWork)
 	}
+	if err == nil && shortCircuitEmptyFilter && filter != nil && filter.count == 0 {
+		if err = ctx.Err(); err != nil {
+			return response, nil, filterWork, err
+		}
+		view = owner.overlay.current
+		view.typedGraphOwner = owner
+		return response, view, filterWork, nil
+	}
 	if err == nil {
 		if queryMode == columnVectorGraphNativeSearchQueryModeQuantizedRerank {
 			response.Results, stats, scorePlane, err = owner.searchScalarU8QuantizedRerankWithContext(ctx, opts, filter, p.options.SearchCandidates, buffer, includeProof)
@@ -381,11 +405,11 @@ func (c *Collection) searchTypedGraphServing(opts VectorIndexSearchOptions, buff
 		}
 	}
 	if err != nil {
-		return response, nil, err
+		return response, nil, filterWork, err
 	}
 	if opts.Context != nil {
 		if err = opts.Context.Err(); err != nil {
-			return response, nil, err
+			return response, nil, filterWork, err
 		}
 	}
 	response.IndexName, response.Strategy, response.Path = p.index, VectorIndexStrategyColumnGraph, VectorIndexSearchPathColumnGraphNativeReader
@@ -418,7 +442,7 @@ func (c *Collection) searchTypedGraphServing(opts VectorIndexSearchOptions, buff
 	// its admitted pool-owned parent fallback, but that physical choice does not
 	// change the selected typed prepared-search algorithm.
 	owner.overlay.base.routeStats.apply(&response.Stats)
-	response.Stats.ColumnGraphOwnerAcquireNanos = acquired.Nanoseconds()
+	response.Stats.ColumnGraphOwnerAcquireNanos = acquiredNanos
 	response.Stats.ColumnGraphDeltaScored = uint64(stats.DeltaScored)
 	response.Stats.SearchRouteColumnGraphPrepared = 1
 	response.Stats.SearchRouteColumnGraphFallback = 0
@@ -428,5 +452,54 @@ func (c *Collection) searchTypedGraphServing(opts VectorIndexSearchOptions, buff
 	response.Status = VectorIndexStatus{Name: p.index, Definition: owner.overlay.base.reader.def, Strategy: response.Strategy, Loaded: true, State: VectorIndexStateColumnGraphLoaded}
 	view = owner.overlay.current
 	view.typedGraphOwner = owner
-	return response, view, nil
+	return response, view, filterWork, nil
+}
+
+func (c *Collection) openTypedGraphHybridReadView(ctx context.Context, index string) (*CollectionReadView, int64, error) {
+	p := c.typedGraphServingPolicy()
+	if p == nil || p.index != index {
+		return nil, 0, ErrVectorIndexSearchUnavailable
+	}
+	started := time.Now()
+	owner, err := c.openTypedGraphReadOwnerWithContext(ctx, p.options.Owners)
+	acquiredNanos := time.Since(started).Nanoseconds()
+	if err != nil {
+		return nil, acquiredNanos, err
+	}
+	if owner.overlay == nil || owner.overlay.current == nil {
+		return nil, acquiredNanos, errors.Join(ErrVectorIndexSnapshotMismatch, owner.Close())
+	}
+	view := owner.overlay.current
+	view.typedGraphOwner = owner
+	return view, acquiredNanos, nil
+}
+
+func validateTypedGraphHybridSelectedAsset(ctx context.Context, view *CollectionReadView, query HybridVectorQuery) error {
+	if view == nil || view.typedGraphOwner == nil || view.typedGraphOwner.closed || view.typedGraphOwner.overlay == nil || view.typedGraphOwner.overlay.base == nil {
+		return ErrVectorIndexSnapshotMismatch
+	}
+	mode, err := normalizeVectorIndexSearchQueryMode(query.QueryMode, query.QuantizedIndexName, query.QuantizedRerankCandidates, query.CandidateLimit)
+	if err != nil {
+		return err
+	}
+	if mode != columnVectorGraphNativeSearchQueryModeQuantizedRerank {
+		return ErrHybridSearchUnsupported
+	}
+	owner := view.typedGraphOwner
+	reader := owner.overlay.base.reader
+	if len(query.Query) != reader.def.Dimensions {
+		return errColumnVectorGraphNativeSearchQueryDimensionMismatch
+	}
+	if vectorIndexUsesCosineNormalizedF32V1(reader.def) {
+		if _, err := cosineNormalizedF32V1InputInvNorm(query.Query, reader.def.Dimensions); err != nil {
+			return err
+		}
+	} else if _, err := typedGraphStableCosineQueryInvNorm(query.Query); err != nil {
+		return err
+	}
+	q, err := typedGraphQuantizedRerankLegacyScalarU8Definition(reader, query.QuantizedIndexName)
+	if err != nil {
+		return err
+	}
+	return owner.attachTypedGraphLegacyScalarU8QuantizedAssetWithContext(ctx, q.Name)
 }

@@ -53,6 +53,13 @@ def _lexical_operator(value: Any, label: str) -> str:
     return operator
 
 
+def _hybrid_vector_query_mode(value: Any, label: str) -> str:
+    mode = _as_str(value, label).strip().lower()
+    if mode not in {"exact", "quantized_rerank"}:
+        raise ValueError(f"{label} must be 'exact' or 'quantized_rerank'")
+    return mode
+
+
 def _non_negative_int(value: Any, label: str) -> int:
     parsed = _as_int(value, label)
     if parsed < 0:
@@ -1320,6 +1327,9 @@ class HybridSearchRequest:
     text_candidate_limit: Optional[int] = None
     max_postings_scanned: Optional[int] = None
     vector_candidate_limit: Optional[int] = None
+    vector_query_mode: Optional[str] = None
+    quantized_index_name: Optional[str] = None
+    quantized_rerank_candidates: Optional[int] = None
     ef_search: Optional[int] = None
     max_chunks_per_parent: Optional[int] = None
     fusion: Any = None
@@ -1354,9 +1364,46 @@ class HybridSearchRequest:
         if self.max_postings_scanned is not None:
             out["max_postings_scanned"] = _non_negative_int(self.max_postings_scanned, "hybrid request.max_postings_scanned")
         if self.vector_candidate_limit is not None:
-            out["vector_candidate_limit"] = _as_int(self.vector_candidate_limit, "hybrid request.vector_candidate_limit")
+            out["vector_candidate_limit"] = _non_negative_int(
+                self.vector_candidate_limit, "hybrid request.vector_candidate_limit"
+            )
+        vector_query_mode = "exact" if self.vector_query_mode is None else _hybrid_vector_query_mode(
+            self.vector_query_mode, "hybrid request.vector_query_mode"
+        )
+        rerank_candidates = 0
+        if self.quantized_rerank_candidates is not None:
+            rerank_candidates = _non_negative_int(
+                self.quantized_rerank_candidates, "hybrid request.quantized_rerank_candidates"
+            )
+        has_vector_options = (
+            self.vector_candidate_limit is not None
+            or self.vector_query_mode is not None
+            or self.quantized_index_name is not None
+            or self.quantized_rerank_candidates is not None
+            or self.ef_search is not None
+        )
+        if not out.get("query_embedding") and has_vector_options:
+            raise ValueError("hybrid vector options require query_embedding")
+        if vector_query_mode == "exact":
+            if self.quantized_index_name is not None or self.quantized_rerank_candidates is not None:
+                raise ValueError("exact hybrid vector search does not accept quantized options")
+        elif not isinstance(self.quantized_index_name, str) or not self.quantized_index_name:
+            raise ValueError("quantized_rerank hybrid search requires quantized_index_name")
+        if self.vector_query_mode is not None:
+            out["vector_query_mode"] = vector_query_mode
+        if self.quantized_index_name is not None:
+            out["quantized_index_name"] = _as_str(self.quantized_index_name, "hybrid request.quantized_index_name")
+        if self.quantized_rerank_candidates is not None:
+            out["quantized_rerank_candidates"] = rerank_candidates
         if self.ef_search is not None:
-            out["ef_search"] = _as_int(self.ef_search, "hybrid request.ef_search")
+            out["ef_search"] = _non_negative_int(self.ef_search, "hybrid request.ef_search")
+        if vector_query_mode == "quantized_rerank" and rerank_candidates:
+            effective_vector_limit = out.get("vector_candidate_limit") or out.get("candidate_limit") or max(0, out["top_k"] * 4)
+            if rerank_candidates < effective_vector_limit:
+                raise ValueError(
+                    "hybrid request.quantized_rerank_candidates must be zero or at least "
+                    "the effective vector candidate limit"
+                )
         if self.max_chunks_per_parent is not None:
             out["max_chunks_per_parent"] = _as_int(self.max_chunks_per_parent, "hybrid request.max_chunks_per_parent")
         if self.fusion is not None:
@@ -1382,6 +1429,9 @@ class HybridSearchPlan:
     fusion_tie_policy: str = ""
     text_candidate_limit: int = 0
     vector_candidate_limit: int = 0
+    vector_query_mode: str = ""
+    quantized_index_name: str = ""
+    quantized_rerank_candidates: int = 0
     max_chunks_per_parent: int = 0
     final_top_k: int = 0
     extra: Dict[str, Any] = field(default_factory=dict)
@@ -1398,6 +1448,9 @@ class HybridSearchPlan:
             "fusion_tie_policy",
             "text_candidate_limit",
             "vector_candidate_limit",
+            "vector_query_mode",
+            "quantized_index_name",
+            "quantized_rerank_candidates",
             "max_chunks_per_parent",
             "final_top_k",
         ]
@@ -1416,6 +1469,11 @@ class HybridSearchPlan:
             fusion_tie_policy=_as_optional_str_default(data.get("fusion_tie_policy"), "hybrid plan.fusion_tie_policy"),
             text_candidate_limit=_as_optional_int_default(data.get("text_candidate_limit"), "hybrid plan.text_candidate_limit"),
             vector_candidate_limit=_as_optional_int_default(data.get("vector_candidate_limit"), "hybrid plan.vector_candidate_limit"),
+            vector_query_mode=_as_optional_str_default(data.get("vector_query_mode"), "hybrid plan.vector_query_mode"),
+            quantized_index_name=_as_optional_str_default(data.get("quantized_index_name"), "hybrid plan.quantized_index_name"),
+            quantized_rerank_candidates=_as_optional_int_default(
+                data.get("quantized_rerank_candidates"), "hybrid plan.quantized_rerank_candidates"
+            ),
             max_chunks_per_parent=_as_optional_int_default(
                 data.get("max_chunks_per_parent"), "hybrid plan.max_chunks_per_parent"
             ),
@@ -1466,6 +1524,14 @@ class HybridSearchStats:
     vector_candidates_returned: int = 0
     vector_candidates_examined: int = 0
     vector_edges_visited: int = 0
+    vector_route: Dict[str, Any] = field(default_factory=dict)
+    vector_quantized_score_calls: int = 0
+    vector_quantized_code_bytes_read: int = 0
+    vector_quantized_rerank_candidates: int = 0
+    vector_quantized_rerank_exact_score_calls: int = 0
+    vector_packed_exact_score_calls: int = 0
+    vector_packed_exact_score_candidates: int = 0
+    vector_packed_exact_vector_bytes_read: int = 0
     scalar_prefilter_ids: int = 0
     scalar_filter_lookups: int = 0
     scalar_filter_input_ids: int = 0
@@ -1485,6 +1551,7 @@ class HybridSearchStats:
     candidates_after_filter: int = 0
     documents_fetched: int = 0
     documents_missing: int = 0
+    embedding_output_bytes: int = 0
     full_document_scan_fallbacks: int = 0
     truncated: int = 0
     fail_closed: int = 0
@@ -1503,6 +1570,14 @@ class HybridSearchStats:
             "vector_candidates_returned",
             "vector_candidates_examined",
             "vector_edges_visited",
+            "vector_route",
+            "vector_quantized_score_calls",
+            "vector_quantized_code_bytes_read",
+            "vector_quantized_rerank_candidates",
+            "vector_quantized_rerank_exact_score_calls",
+            "vector_packed_exact_score_calls",
+            "vector_packed_exact_score_candidates",
+            "vector_packed_exact_vector_bytes_read",
             "scalar_prefilter_ids",
             "scalar_filter_lookups",
             "scalar_filter_input_ids",
@@ -1522,6 +1597,7 @@ class HybridSearchStats:
             "candidates_after_filter",
             "documents_fetched",
             "documents_missing",
+            "embedding_output_bytes",
             "full_document_scan_fallbacks",
             "truncated",
             "fail_closed",
@@ -1542,6 +1618,28 @@ class HybridSearchStats:
                 data.get("vector_candidates_examined"), "hybrid stats.vector_candidates_examined"
             ),
             vector_edges_visited=_as_optional_int_default(data.get("vector_edges_visited"), "hybrid stats.vector_edges_visited"),
+            vector_route=dict(_as_mapping(data.get("vector_route", {}), "hybrid stats.vector_route")),
+            vector_quantized_score_calls=_as_optional_int_default(
+                data.get("vector_quantized_score_calls"), "hybrid stats.vector_quantized_score_calls"
+            ),
+            vector_quantized_code_bytes_read=_as_optional_int_default(
+                data.get("vector_quantized_code_bytes_read"), "hybrid stats.vector_quantized_code_bytes_read"
+            ),
+            vector_quantized_rerank_candidates=_as_optional_int_default(
+                data.get("vector_quantized_rerank_candidates"), "hybrid stats.vector_quantized_rerank_candidates"
+            ),
+            vector_quantized_rerank_exact_score_calls=_as_optional_int_default(
+                data.get("vector_quantized_rerank_exact_score_calls"), "hybrid stats.vector_quantized_rerank_exact_score_calls"
+            ),
+            vector_packed_exact_score_calls=_as_optional_int_default(
+                data.get("vector_packed_exact_score_calls"), "hybrid stats.vector_packed_exact_score_calls"
+            ),
+            vector_packed_exact_score_candidates=_as_optional_int_default(
+                data.get("vector_packed_exact_score_candidates"), "hybrid stats.vector_packed_exact_score_candidates"
+            ),
+            vector_packed_exact_vector_bytes_read=_as_optional_int_default(
+                data.get("vector_packed_exact_vector_bytes_read"), "hybrid stats.vector_packed_exact_vector_bytes_read"
+            ),
             scalar_prefilter_ids=_as_optional_int_default(data.get("scalar_prefilter_ids"), "hybrid stats.scalar_prefilter_ids"),
             scalar_filter_lookups=_as_optional_int_default(data.get("scalar_filter_lookups"), "hybrid stats.scalar_filter_lookups"),
             scalar_filter_input_ids=_as_optional_int_default(data.get("scalar_filter_input_ids"), "hybrid stats.scalar_filter_input_ids"),
@@ -1567,6 +1665,9 @@ class HybridSearchStats:
             candidates_after_filter=_as_optional_int_default(data.get("candidates_after_filter"), "hybrid stats.candidates_after_filter"),
             documents_fetched=_as_optional_int_default(data.get("documents_fetched"), "hybrid stats.documents_fetched"),
             documents_missing=_as_optional_int_default(data.get("documents_missing"), "hybrid stats.documents_missing"),
+            embedding_output_bytes=_as_optional_int_default(
+                data.get("embedding_output_bytes"), "hybrid stats.embedding_output_bytes"
+            ),
             full_document_scan_fallbacks=_as_optional_int_default(
                 data.get("full_document_scan_fallbacks"), "hybrid stats.full_document_scan_fallbacks"
             ),
