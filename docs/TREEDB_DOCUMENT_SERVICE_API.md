@@ -446,6 +446,13 @@ Metadata JSON also rejects unpaired UTF-16 surrogate escapes before decoding,
 including HTTP/native requests and Go `json.RawMessage` values. Valid surrogate
 pairs and intentional U+FFFD characters remain supported. Other document routes
 retain their existing JSON semantics.
+The Go operation validates potentially serialized struct fields, including
+exported fields promoted through private embedded structs; private ordinary
+fields and exact `json:"-"` tags are ignored. Custom `MarshalJSON` output owns
+its representation and is validated as raw JSON. `MarshalText`-dependent values
+and non-string map keys are unsupported: convert them to explicit valid UTF-8
+strings first. String-kind map keys retain Go's ordinary underlying-string
+semantics. Custom serializers must not mutate the supplied request.
 An allowed `set` value is a whole JSON value: literal keys inside an object
 replacement are preserved as keys, including during recovery.
 Path-overlap checks scale with the input size and sorting, not all path pairs.

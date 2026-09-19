@@ -3,6 +3,7 @@ package collections
 import (
 	"bytes"
 	"context"
+	"encoding"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -683,6 +684,7 @@ func TestTypedMetadataRejectsNestedInvalidUTF8BeforePublication4769(t *testing.T
 	defer db.Close()
 	bad := string([]byte{0xff})
 	type namedString string
+	type promoted struct{ Value string }
 	cycle := map[string]any{}
 	cycle["self"] = cycle
 	before, err := col.Get(ids[0])
@@ -701,7 +703,12 @@ func TestTypedMetadataRejectsNestedInvalidUTF8BeforePublication4769(t *testing.T
 		"typed_slice":       []namedString{namedString(bad)},
 		"pointer":           &bad,
 		"struct":            struct{ Name string }{bad},
-		"cycle":             cycle,
+		"promoted":          struct{ promoted }{promoted{bad}},
+		"promoted_pointer":  struct{ *promoted }{&promoted{bad}},
+		"named_embedding": struct {
+			promoted `json:"profile"`
+		}{promoted{bad}},
+		"cycle": cycle,
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := col.UpdateTypedMetadataByID(ids, map[string]any{"meta.profile": value}, nil, metadataGeneration4769(col)); !errors.Is(err, ErrTypedMetadataInvalid) {
@@ -721,6 +728,104 @@ func TestTypedMetadataRejectsNestedInvalidUTF8BeforePublication4769(t *testing.T
 		if err != nil || out.ModifiedCount != modified {
 			t.Fatalf("valid Unicode update=%+v err=%v want modified=%d", out, err, modified)
 		}
+	}
+}
+
+type metadataText4769 string
+
+func (metadataText4769) MarshalText() ([]byte, error) { panic("unsupported text callback invoked") }
+
+type metadataTextKey4769 int
+
+func (metadataTextKey4769) MarshalText() ([]byte, error) { panic("unsupported key callback invoked") }
+
+type metadataPointerText4769 string
+
+func (*metadataPointerText4769) MarshalText() ([]byte, error) {
+	panic("unsupported pointer callback invoked")
+}
+
+type metadataBoth4769 struct{ Internal string }
+
+func (metadataBoth4769) MarshalJSON() ([]byte, error) { return []byte(`"opaque"`), nil }
+func (metadataBoth4769) MarshalText() ([]byte, error) { panic("text callback shadowed by JSON") }
+
+type metadataRawJSON4769 string
+
+func (v metadataRawJSON4769) MarshalJSON() ([]byte, error) { return []byte(v), nil }
+
+type metadataPointerJSON4769 string
+
+func (*metadataPointerJSON4769) MarshalJSON() ([]byte, error) { return []byte(`"opaque"`), nil }
+func (metadataPointerJSON4769) MarshalText() ([]byte, error) {
+	panic("text callback without addressable JSON method")
+}
+
+func TestTypedMetadataGoJSONEncodingBoundaries4769(t *testing.T) {
+	_, db, col, ids := seedTypedMetadata4769(t, 1, 8)
+	defer db.Close()
+	bad := string([]byte{0xff})
+	ptrText := metadataPointerText4769("valid")
+	for name, value := range map[string]any{
+		"text_value":                    metadataText4769("valid"),
+		"nonaddressable_json_over_text": metadataPointerJSON4769("valid"),
+		"text_key":                      map[metadataTextKey4769]int{1: 1},
+		"pointer_text":                  &ptrText,
+		"addressable_text":              []metadataPointerText4769{"valid"},
+		"bad_string_key":                map[metadataText4769]int{metadataText4769(bad): 1},
+		"both_key":                      map[metadataBoth4769]int{{Internal: "valid"}: 1},
+		"static_text_interface":         struct{ Text encoding.TextMarshaler }{metadataBoth4769{}},
+		"raw_invalid_bytes":             metadataRawJSON4769(`"` + bad + `"`),
+		"raw_surrogate":                 metadataRawJSON4769(`"\ud800"`),
+		"emitted_dash_tag": struct {
+			Value string `json:"-,omitempty"`
+		}{bad},
+	} {
+		t.Run(name, func(t *testing.T) {
+			seq, root := dbCommitSeqAndSystemRoot(db)
+			if _, err := col.UpdateTypedMetadataByID(ids, map[string]any{"meta.profile": value}, nil, metadataGeneration4769(col)); !errors.Is(err, ErrTypedMetadataInvalid) {
+				t.Fatalf("error=%v", err)
+			}
+			if gotSeq, gotRoot := dbCommitSeqAndSystemRoot(db); gotSeq != seq || gotRoot != root {
+				t.Fatal("invalid metadata advanced publication")
+			}
+		})
+	}
+	type hidden string
+	type hiddenObject struct{ Value string }
+	for name, value := range map[string]any{
+		"ignored_private": struct {
+			private string
+			Name    string
+		}{bad, "valid"},
+		"ignored_tag": struct {
+			Value string `json:"-"`
+		}{bad},
+		"ignored_embedding": struct{ hidden }{hidden(bad)},
+		"ignored_struct_embedding": struct {
+			hiddenObject `json:"-"`
+		}{hiddenObject{bad}},
+		"nil_struct_embedding": struct{ *hiddenObject }{},
+		"literal_dash_tag": struct {
+			Value string `json:"-,omitempty"`
+		}{"valid"},
+		"nonaddressable_text":        ptrText,
+		"map_nonaddressable_text":    map[string]metadataPointerText4769{"x": ptrText},
+		"string_key":                 map[metadataText4769]int{"valid": 1},
+		"integer_key":                map[int]string{1: "valid"},
+		"json_over_text":             metadataBoth4769{Internal: bad},
+		"addressable_json_over_text": []metadataPointerJSON4769{metadataPointerJSON4769(bad)},
+		"static_json_interface":      struct{ JSON json.Marshaler }{metadataBoth4769{Internal: bad}},
+		"raw_unicode":                metadataRawJSON4769(`"\ud83d\ude00"`),
+		"nil_text_pointer":           (*metadataPointerText4769)(nil),
+		"nil_text_interface":         struct{ Text encoding.TextMarshaler }{},
+		"nil_text_key":               map[*metadataPointerText4769]int{nil: 1},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := col.UpdateTypedMetadataByID(ids, map[string]any{"meta.profile": value}, nil, metadataGeneration4769(col)); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }
 
