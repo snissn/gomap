@@ -138,9 +138,6 @@ func TestTypedGraphPreparedFilterSelectiveAND(t *testing.T) {
 			var work ColumnGraphFilterWork
 			got, err := prepareTypedGraphFilterWithWork(overlay, conjunction("absent", reverse), limits, &work)
 			wantSource, wantInspected, wantMapping := 512, 513, 7*((2*len(broad)+2)+(2*len("absent")+2))
-			if reverse {
-				wantSource, wantInspected, wantMapping = 0, 0, (2*len(broad)+2)+7*(2*len("absent")+2)
-			}
 			if err != nil || got == nil || got.count != 0 || !work.Completed || work.SourceIDs != uint64(wantSource) || work.InspectedEntries != uint64(wantInspected) || work.MappingWorkCharged != uint64(wantMapping) {
 				t.Fatalf("empty reverse=%t work=%+v err=%v", reverse, work, err)
 			}
