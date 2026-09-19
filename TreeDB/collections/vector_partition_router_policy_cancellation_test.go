@@ -55,7 +55,7 @@ func TestVectorPartitionRouterPolicyReductionCancellationNoPartial(t *testing.T)
 	meta := policyTestContext()
 	meta.Mode = "exact"
 	meta.RepresentativeCount = n
-	meta.CandidateBudget = n
+	meta.ScoreBudget = n
 	meta.ReturnedWidth = 64
 	input := make([]vectorPartitionPolicyCandidateV1, n)
 	for i := range input {

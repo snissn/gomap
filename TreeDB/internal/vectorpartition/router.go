@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"slices"
 	"sort"
 	"strconv"
 )
@@ -31,32 +32,32 @@ const (
 // RouterConfigV1 contains every control that can change the deterministic
 // hierarchical k-means representative set.
 type RouterConfigV1 struct {
-	Seed                        int64  `json:"seed"`
-	BranchFactor                int    `json:"branch_factor"`
-	LeafSize                    int    `json:"leaf_size"`
-	RepresentativesPerPartition int    `json:"representatives_per_partition"`
-	MaxDepth                    int    `json:"max_depth"`
-	MaxIterations               int    `json:"max_iterations"`
-	MaxVectors                  int    `json:"max_vectors"`
-	MaxDimensions               int    `json:"max_dimensions"`
-	MaxRepresentatives          int    `json:"max_representatives"`
-	MaxScalarWork               int64  `json:"max_scalar_work"`
-	MaxRouterBytes              uint64 `json:"max_router_bytes"`
+	Seed                 int64  `json:"seed"`
+	BranchFactor         int    `json:"branch_factor"`
+	LeafSize             int    `json:"leaf_size"`
+	RepresentativeBudget int    `json:"representative_budget"`
+	MaxDepth             int    `json:"max_depth"`
+	MaxIterations        int    `json:"max_iterations"`
+	MaxVectors           int    `json:"max_vectors"`
+	MaxDimensions        int    `json:"max_dimensions"`
+	MaxRepresentatives   int    `json:"max_representatives"`
+	MaxScalarWork        int64  `json:"max_scalar_work"`
+	MaxRouterBytes       uint64 `json:"max_router_bytes"`
 }
 
 func DefaultRouterConfigV1() RouterConfigV1 {
 	return RouterConfigV1{
-		Seed:                        1,
-		BranchFactor:                4,
-		LeafSize:                    64,
-		RepresentativesPerPartition: 16,
-		MaxDepth:                    8,
-		MaxIterations:               16,
-		MaxVectors:                  routerMaxVectors,
-		MaxDimensions:               routerMaxDimensions,
-		MaxRepresentatives:          routerMaxRepresentatives,
-		MaxScalarWork:               routerDefaultScalarWork,
-		MaxRouterBytes:              routerMaxBytes,
+		Seed:                 1,
+		BranchFactor:         4,
+		LeafSize:             64,
+		RepresentativeBudget: 256,
+		MaxDepth:             8,
+		MaxIterations:        16,
+		MaxVectors:           routerMaxVectors,
+		MaxDimensions:        routerMaxDimensions,
+		MaxRepresentatives:   routerMaxRepresentatives,
+		MaxScalarWork:        routerDefaultScalarWork,
+		MaxRouterBytes:       routerMaxBytes,
 	}
 }
 
@@ -71,8 +72,8 @@ type RouterPartitionV1 struct {
 	Vectors     []RouterVectorV1 `json:"vectors"`
 }
 
-// RouterHierarchyNodeV1 describes one persisted node. A representative points
-// at a leaf and carries its root-to-leaf node path.
+// RouterHierarchyNodeV1 describes one persisted node. Every node, including
+// retained internal centers, has exactly one representative.
 type RouterHierarchyNodeV1 struct {
 	NodeID       uint32 `json:"node_id"`
 	ParentNodeID uint32 `json:"parent_node_id,omitempty"`
@@ -80,12 +81,13 @@ type RouterHierarchyNodeV1 struct {
 	Depth        uint16 `json:"depth"`
 	MemberCount  uint32 `json:"member_count"`
 	Leaf         bool   `json:"leaf"`
+	Budget       uint32 `json:"budget"`
 }
 
 type RouterRepresentativeV1 struct {
 	PartitionID   uint32    `json:"partition_id"`
 	SourceOrdinal uint64    `json:"source_ordinal"`
-	LeafNodeID    uint32    `json:"leaf_node_id"`
+	NodeID        uint32    `json:"node_id"`
 	Depth         uint16    `json:"depth"`
 	MemberCount   uint32    `json:"member_count"`
 	Path          []uint32  `json:"path"`
@@ -102,6 +104,7 @@ type RouterBuildMetricsV1 struct {
 	StoppedLeafSize int `json:"stopped_leaf_size"`
 	StoppedMaxDepth int `json:"stopped_max_depth"`
 	StoppedNoSplit  int `json:"stopped_no_split"`
+	UnusedBudget    int `json:"unused_budget"`
 }
 
 type RouterModelV1 struct {
@@ -135,7 +138,6 @@ type routerBuildNodeV1 struct {
 	members []int
 	path    []uint32
 	center  []float32
-	error   float64
 }
 
 func ValidateRouterConfigV1(cfg RouterConfigV1) error {
@@ -144,7 +146,7 @@ func ValidateRouterConfigV1(cfg RouterConfigV1) error {
 		return errors.New("vectorpartition: router branch factor must be at least 2")
 	case cfg.LeafSize < 1:
 		return errors.New("vectorpartition: router leaf size must be positive")
-	case cfg.RepresentativesPerPartition < 1:
+	case cfg.RepresentativeBudget < 1 || cfg.RepresentativeBudget > cfg.MaxRepresentatives:
 		return errors.New("vectorpartition: router representative budget must be positive")
 	case cfg.MaxDepth < 1 || cfg.MaxDepth > routerMaxDepth:
 		return fmt.Errorf("vectorpartition: router max depth must be in [1,%d]", routerMaxDepth)
@@ -179,6 +181,9 @@ func BuildRouterV1(partitions []RouterPartitionV1, cfg RouterConfigV1) (RouterMo
 	if len(partitions) > routerMaxPartitions {
 		return model, fmt.Errorf("vectorpartition: router partitions=%d exceeds limit=%d", len(partitions), routerMaxPartitions)
 	}
+	if cfg.RepresentativeBudget < len(partitions) {
+		return model, errors.New("vectorpartition: global representative budget must reserve one root per domain")
+	}
 	input := append([]RouterPartitionV1(nil), partitions...)
 	sort.Slice(input, func(i, j int) bool { return input[i].PartitionID < input[j].PartitionID })
 	for i := 1; i < len(input); i++ {
@@ -189,11 +194,14 @@ func BuildRouterV1(partitions []RouterPartitionV1, cfg RouterConfigV1) (RouterMo
 
 	dimensions := 0
 	totalVectors := 0
-	totalRepresentativeBudget := 0
+	populations := make([]int, len(input))
 	normalized := make([][]routerBuildVectorV1, len(input))
 	for partitionOrdinal, partition := range input {
 		if len(partition.Vectors) == 0 {
 			return model, fmt.Errorf("vectorpartition: router partition %d is empty", partition.PartitionID)
+		}
+		if len(partition.Vectors) > cfg.MaxVectors-totalVectors {
+			return model, fmt.Errorf("vectorpartition: router final memberships exceed vector limit=%d", cfg.MaxVectors)
 		}
 		vectors := append([]RouterVectorV1(nil), partition.Vectors...)
 		sort.Slice(vectors, func(i, j int) bool { return vectors[i].Ordinal < vectors[j].Ordinal })
@@ -221,11 +229,11 @@ func BuildRouterV1(partitions []RouterPartitionV1, cfg RouterConfigV1) (RouterMo
 		if totalVectors > cfg.MaxVectors {
 			return model, fmt.Errorf("vectorpartition: router vectors=%d exceeds limit=%d", totalVectors, cfg.MaxVectors)
 		}
-		budget := min(cfg.RepresentativesPerPartition, len(vectors))
-		totalRepresentativeBudget += budget
-		if totalRepresentativeBudget > cfg.MaxRepresentatives {
-			return model, fmt.Errorf("vectorpartition: router representatives=%d exceeds limit=%d", totalRepresentativeBudget, cfg.MaxRepresentatives)
-		}
+		populations[partitionOrdinal] = len(vectors)
+	}
+	quotas, err := ApportionRouterBudgetV2(populations, cfg.RepresentativeBudget)
+	if err != nil {
+		return model, err
 	}
 	work, ok := checkedRouterWorkV1(normalized, dimensions, cfg)
 	if !ok || work > cfg.MaxScalarWork {
@@ -233,7 +241,7 @@ func BuildRouterV1(partitions []RouterPartitionV1, cfg RouterConfigV1) (RouterMo
 	}
 
 	model = RouterModelV1{
-		Format:     "treedb_vector_partition_router_v1",
+		Format:     "treedb_vector_partition_router_v2",
 		Config:     cfg,
 		Dimensions: dimensions,
 		Metrics: RouterBuildMetricsV1{
@@ -254,53 +262,60 @@ func BuildRouterV1(partitions []RouterPartitionV1, cfg RouterConfigV1) (RouterMo
 				PartitionID: partition.PartitionID,
 				MemberCount: uint32(len(members)),
 				Leaf:        true,
+				Budget:      uint32(quotas[partitionOrdinal]),
 			},
 			members: members,
 			path:    []uint32{nextNodeID},
 		}
 		nextNodeID++
-		root.center, root.error = routerCenterAndErrorV1(vectors, members)
+		root.center = routerSphericalCenterV2(vectors, members)
 		nodes := []*routerBuildNodeV1{root}
-		leaves := []*routerBuildNodeV1{root}
-		budget := min(cfg.RepresentativesPerPartition, len(vectors))
-		for len(leaves) < budget {
-			splitIndex := routerNextSplitV1(leaves, cfg)
-			if splitIndex < 0 {
-				break
+		for cursor := 0; cursor < len(nodes); cursor++ {
+			parent := nodes[cursor]
+			remaining := int(parent.record.Budget) - 1
+			if len(parent.members) <= cfg.LeafSize || int(parent.record.Depth) >= cfg.MaxDepth || remaining < 2 || routerIdenticalMembersV2(vectors, parent.members) {
+				continue
 			}
-			remaining := budget - len(leaves)
-			k := min(cfg.BranchFactor, len(leaves[splitIndex].members))
-			k = min(k, remaining+1)
-			children, iterations, repairs, err := routerSplitNodeV1(vectors, leaves[splitIndex], k, cfg, &nextNodeID)
+			k := min(cfg.BranchFactor, min(len(parent.members), remaining))
+			children, iterations, repairs, err := routerSplitNodeV1(vectors, parent, k, cfg, &nextNodeID)
 			model.Metrics.LloydIterations += iterations
 			model.Metrics.EmptyRepairs += repairs
 			if err != nil {
 				return RouterModelV1{}, fmt.Errorf("vectorpartition: router partition %d: %w", partition.PartitionID, err)
 			}
 			if len(children) < 2 {
-				break
+				continue
 			}
-			parent := leaves[splitIndex]
 			parent.record.Leaf = false
-			leaves = append(leaves[:splitIndex], leaves[splitIndex+1:]...)
-			leaves = append(leaves, children...)
+			counts := make([]int, len(children))
+			for i, child := range children {
+				counts[i] = len(child.members)
+			}
+			childBudgets, err := ApportionRouterBudgetV2(counts, remaining)
+			if err != nil {
+				return RouterModelV1{}, err
+			}
+			for i, child := range children {
+				child.record.Budget = uint32(childBudgets[i])
+			}
 			nodes = append(nodes, children...)
 		}
-		sort.Slice(leaves, func(i, j int) bool { return leaves[i].record.NodeID < leaves[j].record.NodeID })
-		for _, leaf := range leaves {
-			switch {
-			case len(leaf.members) <= cfg.LeafSize:
-				model.Metrics.StoppedLeafSize++
-			case int(leaf.record.Depth) >= cfg.MaxDepth:
-				model.Metrics.StoppedMaxDepth++
-			default:
-				model.Metrics.StoppedNoSplit++
+		for _, leaf := range nodes {
+			if leaf.record.Leaf {
+				switch {
+				case len(leaf.members) <= cfg.LeafSize:
+					model.Metrics.StoppedLeafSize++
+				case int(leaf.record.Depth) >= cfg.MaxDepth:
+					model.Metrics.StoppedMaxDepth++
+				default:
+					model.Metrics.StoppedNoSplit++
+				}
 			}
 			sourceOrdinal := routerMedoidOrdinalV1(vectors, leaf.members, leaf.center)
 			model.Representatives = append(model.Representatives, RouterRepresentativeV1{
 				PartitionID:   partition.PartitionID,
 				SourceOrdinal: sourceOrdinal,
-				LeafNodeID:    leaf.record.NodeID,
+				NodeID:        leaf.record.NodeID,
 				Depth:         leaf.record.Depth,
 				MemberCount:   leaf.record.MemberCount,
 				Path:          append([]uint32(nil), leaf.path...),
@@ -316,10 +331,11 @@ func BuildRouterV1(partitions []RouterPartitionV1, cfg RouterConfigV1) (RouterMo
 		if model.Representatives[i].PartitionID != model.Representatives[j].PartitionID {
 			return model.Representatives[i].PartitionID < model.Representatives[j].PartitionID
 		}
-		return model.Representatives[i].LeafNodeID < model.Representatives[j].LeafNodeID
+		return model.Representatives[i].NodeID < model.Representatives[j].NodeID
 	})
 	model.Metrics.Representatives = len(model.Representatives)
 	model.Metrics.HierarchyNodes = len(model.Nodes)
+	model.Metrics.UnusedBudget = cfg.RepresentativeBudget - len(model.Nodes)
 	return model, ValidateRouterModelV1(model)
 }
 
@@ -334,7 +350,7 @@ func ValidateRouterModelWithContextV1(ctx context.Context, model RouterModelV1) 
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if model.Format != "treedb_vector_partition_router_v1" {
+	if model.Format != "treedb_vector_partition_router_v2" {
 		return errors.New("vectorpartition: invalid router format")
 	}
 	if err := ValidateRouterConfigV1(model.Config); err != nil {
@@ -343,7 +359,7 @@ func ValidateRouterModelWithContextV1(ctx context.Context, model RouterModelV1) 
 	if model.Dimensions < 1 || model.Dimensions > model.Config.MaxDimensions {
 		return fmt.Errorf("vectorpartition: invalid router dimensions %d", model.Dimensions)
 	}
-	if len(model.Representatives) == 0 || len(model.Representatives) > model.Config.MaxRepresentatives {
+	if len(model.Representatives) == 0 || len(model.Representatives) > model.Config.RepresentativeBudget {
 		return fmt.Errorf("vectorpartition: invalid router representative count %d", len(model.Representatives))
 	}
 	if len(model.Nodes) == 0 || len(model.Nodes) > 2*model.Config.MaxRepresentatives {
@@ -359,7 +375,7 @@ func ValidateRouterModelWithContextV1(ctx context.Context, model RouterModelV1) 
 		model.Metrics.StoppedLeafSize < 0 ||
 		model.Metrics.StoppedMaxDepth < 0 ||
 		model.Metrics.StoppedNoSplit < 0 ||
-		model.Metrics.StoppedLeafSize+model.Metrics.StoppedMaxDepth+model.Metrics.StoppedNoSplit != len(model.Representatives) {
+		model.Metrics.UnusedBudget != model.Config.RepresentativeBudget-len(model.Representatives) {
 		return errors.New("vectorpartition: invalid router build metrics")
 	}
 	nodes := make(map[uint32]RouterHierarchyNodeV1, len(model.Nodes))
@@ -367,6 +383,8 @@ func ValidateRouterModelWithContextV1(ctx context.Context, model RouterModelV1) 
 	leaves := make(map[uint32]struct{})
 	childCounts := make(map[uint32]uint32)
 	childMembers := make(map[uint32]uint64)
+	childBudgets := make(map[uint32]uint64)
+	children := make(map[uint32][]RouterHierarchyNodeV1)
 	totalVectors := uint64(0)
 	internalNodes := 0
 	for ordinal, node := range model.Nodes {
@@ -375,7 +393,7 @@ func ValidateRouterModelWithContextV1(ctx context.Context, model RouterModelV1) 
 				return err
 			}
 		}
-		if node.NodeID != uint32(ordinal+1) || node.MemberCount == 0 ||
+		if node.NodeID != uint32(ordinal+1) || node.MemberCount == 0 || node.Budget < 1 || node.Budget > uint32(model.Config.RepresentativeBudget) ||
 			int(node.Depth) > model.Config.MaxDepth {
 			return errors.New("vectorpartition: invalid router hierarchy node")
 		}
@@ -398,13 +416,39 @@ func ValidateRouterModelWithContextV1(ctx context.Context, model RouterModelV1) 
 			}
 			childCounts[node.ParentNodeID]++
 			childMembers[node.ParentNodeID] += uint64(node.MemberCount)
+			childBudgets[node.ParentNodeID] += uint64(node.Budget)
 		}
+		children[node.ParentNodeID] = append(children[node.ParentNodeID], node)
 		if node.Leaf {
 			leaves[node.NodeID] = struct{}{}
 		} else {
 			internalNodes++
 		}
 		nodes[node.NodeID] = node
+	}
+	// Validate the same allocation at roots and every split. A valid digest must
+	// not bless altered quotas that happen to stay below the global ceiling.
+	for parentID, siblings := range children {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		populations := make([]int, len(siblings))
+		for i, child := range siblings {
+			populations[i] = int(child.MemberCount)
+		}
+		budget := model.Config.RepresentativeBudget
+		if parentID != 0 {
+			budget = int(nodes[parentID].Budget) - 1
+		}
+		quotas, err := ApportionRouterBudgetV2(populations, budget)
+		if err != nil {
+			return err
+		}
+		for i, child := range siblings {
+			if int(child.Budget) != quotas[i] {
+				return errors.New("vectorpartition: hierarchy budget differs from canonical apportionment")
+			}
+		}
 	}
 	for ordinal, node := range model.Nodes {
 		if ordinal&255 == 0 {
@@ -418,7 +462,7 @@ func ValidateRouterModelWithContextV1(ctx context.Context, model RouterModelV1) 
 			}
 			continue
 		}
-		if childCounts[node.NodeID] < 2 || childMembers[node.NodeID] != uint64(node.MemberCount) {
+		if childCounts[node.NodeID] < 2 || childCounts[node.NodeID] > uint32(model.Config.BranchFactor) || childMembers[node.NodeID] != uint64(node.MemberCount) || childBudgets[node.NodeID] >= uint64(node.Budget) {
 			return fmt.Errorf("vectorpartition: router hierarchy node %d has invalid child totals", node.NodeID)
 		}
 	}
@@ -430,14 +474,13 @@ func ValidateRouterModelWithContextV1(ctx context.Context, model RouterModelV1) 
 		return errors.New("vectorpartition: router iteration metrics do not match hierarchy")
 	}
 	if len(roots) != model.Metrics.Partitions || totalVectors != uint64(model.Metrics.Vectors) ||
-		len(leaves) != len(model.Representatives) {
+		len(model.Nodes) != len(model.Representatives) || model.Metrics.StoppedLeafSize+model.Metrics.StoppedMaxDepth+model.Metrics.StoppedNoSplit != len(leaves) {
 		return errors.New("vectorpartition: router hierarchy does not match build metrics")
 	}
 	var previousPartition uint32
-	var previousLeaf uint32
+	var previousNode uint32
 	representativesPerPartition := make(map[uint32]int, len(roots))
-	representedLeaves := make(map[uint32]struct{}, len(model.Representatives))
-	representedSources := make(map[[2]uint64]struct{}, len(model.Representatives))
+	representedNodes := make(map[uint32]struct{}, len(model.Representatives))
 	for i, representative := range model.Representatives {
 		if i&63 == 0 {
 			if err := ctx.Err(); err != nil {
@@ -445,48 +488,43 @@ func ValidateRouterModelWithContextV1(ctx context.Context, model RouterModelV1) 
 			}
 		}
 		if i > 0 && (representative.PartitionID < previousPartition ||
-			representative.PartitionID == previousPartition && representative.LeafNodeID <= previousLeaf) {
+			representative.PartitionID == previousPartition && representative.NodeID <= previousNode) {
 			return errors.New("vectorpartition: router representatives are not canonically ordered")
 		}
-		previousPartition, previousLeaf = representative.PartitionID, representative.LeafNodeID
-		node, exists := nodes[representative.LeafNodeID]
-		if !exists || !node.Leaf || node.PartitionID != representative.PartitionID ||
+		previousPartition, previousNode = representative.PartitionID, representative.NodeID
+		node, exists := nodes[representative.NodeID]
+		if !exists || node.PartitionID != representative.PartitionID ||
 			node.MemberCount != representative.MemberCount || node.Depth != representative.Depth {
-			return fmt.Errorf("vectorpartition: representative leaf %d is inconsistent", representative.LeafNodeID)
+			return fmt.Errorf("vectorpartition: representative node %d is inconsistent", representative.NodeID)
 		}
-		if _, exists := representedLeaves[representative.LeafNodeID]; exists {
-			return fmt.Errorf("vectorpartition: duplicate representative leaf %d", representative.LeafNodeID)
+		if _, exists := representedNodes[representative.NodeID]; exists {
+			return fmt.Errorf("vectorpartition: duplicate representative node %d", representative.NodeID)
 		}
-		representedLeaves[representative.LeafNodeID] = struct{}{}
-		sourceKey := [2]uint64{uint64(representative.PartitionID), representative.SourceOrdinal}
-		if _, exists := representedSources[sourceKey]; exists {
-			return fmt.Errorf("vectorpartition: duplicate representative source ordinal %d in partition %d", representative.SourceOrdinal, representative.PartitionID)
-		}
-		representedSources[sourceKey] = struct{}{}
+		representedNodes[representative.NodeID] = struct{}{}
 		representativesPerPartition[representative.PartitionID]++
-		if representativesPerPartition[representative.PartitionID] > model.Config.RepresentativesPerPartition {
+		if representativesPerPartition[representative.PartitionID] > int(nodes[roots[representative.PartitionID]].Budget) {
 			return fmt.Errorf("vectorpartition: partition %d exceeds representative budget", representative.PartitionID)
 		}
 		if len(representative.Path) != int(representative.Depth)+1 ||
 			len(representative.Path) == 0 ||
-			representative.Path[len(representative.Path)-1] != representative.LeafNodeID {
-			return fmt.Errorf("vectorpartition: representative leaf %d has invalid hierarchy path", representative.LeafNodeID)
+			representative.Path[len(representative.Path)-1] != representative.NodeID {
+			return fmt.Errorf("vectorpartition: representative node %d has invalid hierarchy path", representative.NodeID)
 		}
 		for pathIndex, nodeID := range representative.Path {
 			pathNode, ok := nodes[nodeID]
 			if !ok || pathNode.PartitionID != representative.PartitionID || int(pathNode.Depth) != pathIndex {
-				return fmt.Errorf("vectorpartition: representative leaf %d has invalid hierarchy node %d", representative.LeafNodeID, nodeID)
+				return fmt.Errorf("vectorpartition: representative node %d has invalid hierarchy node %d", representative.NodeID, nodeID)
 			}
 			if pathIndex > 0 && pathNode.ParentNodeID != representative.Path[pathIndex-1] {
-				return fmt.Errorf("vectorpartition: representative leaf %d has disconnected hierarchy path", representative.LeafNodeID)
+				return fmt.Errorf("vectorpartition: representative node %d has disconnected hierarchy path", representative.NodeID)
 			}
 		}
 		if len(representative.Values) != model.Dimensions {
-			return fmt.Errorf("vectorpartition: representative leaf %d dimensions=%d want %d", representative.LeafNodeID, len(representative.Values), model.Dimensions)
+			return fmt.Errorf("vectorpartition: representative node %d dimensions=%d want %d", representative.NodeID, len(representative.Values), model.Dimensions)
 		}
 		normalized, err := normalizeRouterVectorV1(representative.Values)
 		if err != nil {
-			return fmt.Errorf("vectorpartition: representative leaf %d: %w", representative.LeafNodeID, err)
+			return fmt.Errorf("vectorpartition: representative node %d: %w", representative.NodeID, err)
 		}
 		for dimension := range normalized {
 			if dimension&255 == 0 {
@@ -495,7 +533,7 @@ func ValidateRouterModelWithContextV1(ctx context.Context, model RouterModelV1) 
 				}
 			}
 			if math.Abs(float64(normalized[dimension]-representative.Values[dimension])) > 1e-5 {
-				return fmt.Errorf("vectorpartition: representative leaf %d is not cosine-normalized", representative.LeafNodeID)
+				return fmt.Errorf("vectorpartition: representative node %d is not cosine-normalized", representative.NodeID)
 			}
 		}
 	}
@@ -662,8 +700,16 @@ func RouteExactV1(model RouterModelV1, query []float32, candidateBudget, partiti
 
 func checkedRouterWorkV1(partitions [][]routerBuildVectorV1, dimensions int, cfg RouterConfigV1) (int64, bool) {
 	var vectorRepresentativePairs int64
-	for _, partition := range partitions {
-		budget := min(cfg.RepresentativesPerPartition, len(partition))
+	populations := make([]int, len(partitions))
+	for i, partition := range partitions {
+		populations[i] = len(partition)
+	}
+	quotas, err := ApportionRouterBudgetV2(populations, cfg.RepresentativeBudget)
+	if err != nil {
+		return 0, false
+	}
+	for i, partition := range partitions {
+		budget := quotas[i]
 		if len(partition) != 0 && int64(budget) > math.MaxInt64/int64(len(partition)) {
 			return 0, false
 		}
@@ -704,26 +750,15 @@ func normalizeRouterVectorV1(values []float32) ([]float32, error) {
 	return normalized, nil
 }
 
-func routerNextSplitV1(leaves []*routerBuildNodeV1, cfg RouterConfigV1) int {
-	best := -1
-	for i, leaf := range leaves {
-		if len(leaf.members) <= cfg.LeafSize || len(leaf.members) < 2 || int(leaf.record.Depth) >= cfg.MaxDepth {
-			continue
-		}
-		if best < 0 || len(leaf.members) > len(leaves[best].members) ||
-			len(leaf.members) == len(leaves[best].members) && leaf.error > leaves[best].error ||
-			len(leaf.members) == len(leaves[best].members) && leaf.error == leaves[best].error && leaf.record.NodeID < leaves[best].record.NodeID {
-			best = i
-		}
-	}
-	return best
-}
-
 func routerSplitNodeV1(vectors []routerBuildVectorV1, parent *routerBuildNodeV1, k int, cfg RouterConfigV1, nextNodeID *uint32) ([]*routerBuildNodeV1, int, int, error) {
 	if k < 2 || k > len(parent.members) {
 		return nil, 0, 0, errors.New("invalid hierarchical split width")
 	}
 	centers := routerInitialCentersV1(vectors, parent, k, cfg.Seed)
+	k = len(centers)
+	if k < 2 {
+		return nil, 0, 0, nil
+	}
 	assignments := make([]int, len(parent.members))
 	for i := range assignments {
 		assignments[i] = -1
@@ -781,7 +816,7 @@ func routerSplitNodeV1(vectors []routerBuildVectorV1, parent *routerBuildNodeV1,
 					clusterMembers = append(clusterMembers, parent.members[memberOrdinal])
 				}
 			}
-			centers[centerOrdinal], _ = routerCenterAndErrorV1(vectors, clusterMembers)
+			centers[centerOrdinal] = routerSphericalCenterV2(vectors, clusterMembers)
 		}
 		if !changed {
 			break
@@ -796,13 +831,9 @@ func routerSplitNodeV1(vectors []routerBuildVectorV1, parent *routerBuildNodeV1,
 			}
 		}
 		sort.Slice(members, func(i, j int) bool { return vectors[members[i]].ordinal < vectors[members[j]].ordinal })
-		center, errorSum := routerCenterAndErrorV1(vectors, members)
-		nodeID := *nextNodeID
-		*nextNodeID++
-		path := append(append([]uint32(nil), parent.path...), nodeID)
+		center := routerSphericalCenterV2(vectors, members)
 		children[centerOrdinal] = &routerBuildNodeV1{
 			record: RouterHierarchyNodeV1{
-				NodeID:       nodeID,
 				ParentNodeID: parent.record.NodeID,
 				PartitionID:  parent.record.PartitionID,
 				Depth:        parent.record.Depth + 1,
@@ -810,9 +841,7 @@ func routerSplitNodeV1(vectors []routerBuildVectorV1, parent *routerBuildNodeV1,
 				Leaf:         true,
 			},
 			members: members,
-			path:    path,
 			center:  center,
-			error:   errorSum,
 		}
 	}
 	sort.Slice(children, func(i, j int) bool {
@@ -820,6 +849,13 @@ func routerSplitNodeV1(vectors []routerBuildVectorV1, parent *routerBuildNodeV1,
 		right := vectors[children[j].members[0]].ordinal
 		return left < right
 	})
+	// Assign identity after canonical sibling ordering. The allocator and reopen
+	// validator use node order for largest-remainder ties, not seed-center order.
+	for _, child := range children {
+		child.record.NodeID = *nextNodeID
+		*nextNodeID++
+		child.path = append(append([]uint32(nil), parent.path...), child.record.NodeID)
+	}
 	return children, iterations, repairs, nil
 }
 
@@ -836,6 +872,16 @@ func routerInitialCentersV1(vectors []routerBuildVectorV1, node *routerBuildNode
 			if _, exists := selected[member]; exists {
 				continue
 			}
+			duplicate := false
+			for _, center := range centers {
+				if slices.Equal(vectors[member].values, center) {
+					duplicate = true
+					break
+				}
+			}
+			if duplicate {
+				continue
+			}
 			minDistance := routerCosineDistanceNormalizedV1(vectors[member].values, centers[0])
 			for _, center := range centers[1:] {
 				distance := routerCosineDistanceNormalizedV1(vectors[member].values, center)
@@ -848,36 +894,38 @@ func routerInitialCentersV1(vectors []routerBuildVectorV1, node *routerBuildNode
 				bestMember, bestDistance = member, minDistance
 			}
 		}
+		if bestMember < 0 || bestDistance <= 0 {
+			break
+		}
 		selected[bestMember] = struct{}{}
 		centers = append(centers, append([]float32(nil), vectors[bestMember].values...))
 	}
 	return centers
 }
 
-func routerCenterAndErrorV1(vectors []routerBuildVectorV1, members []int) ([]float32, float64) {
+func routerSphericalCenterV2(vectors []routerBuildVectorV1, members []int) []float32 {
 	center := make([]float32, len(vectors[members[0]].values))
+	// Accumulate admitted FP32 inputs in FP64 before normalization, especially
+	// for nearly cancelling directions. Member order is canonical.
+	sums := make([]float64, len(center))
 	for _, member := range members {
 		for dimension, value := range vectors[member].values {
-			center[dimension] += value
+			sums[dimension] += float64(value)
 		}
 	}
 	var normSquared float64
-	for _, value := range center {
-		normSquared += float64(value) * float64(value)
+	for _, value := range sums {
+		normSquared += value * value
 	}
 	if normSquared == 0 || math.IsInf(normSquared, 0) {
 		copy(center, vectors[members[0]].values)
 	} else {
-		inverseNorm := float32(1 / math.Sqrt(normSquared))
+		inverseNorm := 1 / math.Sqrt(normSquared)
 		for dimension := range center {
-			center[dimension] *= inverseNorm
+			center[dimension] = float32(sums[dimension] * inverseNorm)
 		}
 	}
-	var errorSum float64
-	for _, member := range members {
-		errorSum += routerCosineDistanceNormalizedV1(vectors[member].values, center)
-	}
-	return center, errorSum
+	return center
 }
 
 func routerMedoidOrdinalV1(vectors []routerBuildVectorV1, members []int, center []float32) uint64 {

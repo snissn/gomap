@@ -68,13 +68,27 @@ func TestVectorPartitionRouterDomainsCombineRequiredPacksV1(t *testing.T) {
 		domains[0].Vectors[1].Ordinal != 1 || domains[0].Vectors[1].MembershipKind != string(VectorPartitionMembershipHomeV1) {
 		t.Fatalf("domains=%+v", domains)
 	}
+	cfg := internalrouter.DefaultRouterConfigV1()
+	cfg.RepresentativeBudget, cfg.LeafSize, cfg.BranchFactor = 5, 1, 2
+	packed, err := internalrouter.BuildRouterV1(domains, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	single, err := internalrouter.BuildRouterV1([]internalrouter.RouterPartitionV1{{PartitionID: 0, Vectors: []internalrouter.RouterVectorV1{
+		{Ordinal: 0, Values: []float32{1, 0}, MembershipKind: string(VectorPartitionMembershipHomeV1)},
+		{Ordinal: 1, Values: []float32{0, 1}, MembershipKind: string(VectorPartitionMembershipHomeV1)},
+		{Ordinal: 2, Values: []float32{-1, 0}, MembershipKind: string(VectorPartitionMembershipHomeV1)},
+	}}}, cfg)
+	if err != nil || !reflect.DeepEqual(packed, single) {
+		t.Fatalf("physical packing changed all-level model: %v", err)
+	}
 }
 
 func TestVectorPartitionRouterScalarWorkPreflightUsesLogicalDomainsV1(t *testing.T) {
 	cfg := internalrouter.DefaultRouterConfigV1()
 	cfg.BranchFactor = 2
 	cfg.MaxIterations = 3
-	cfg.RepresentativesPerPartition = 2
+	cfg.RepresentativeBudget = 2
 	manifest := VectorPartitionManifestV1{
 		SourceRowCount: 2,
 		PartitionCount: 2,
@@ -275,8 +289,8 @@ func TestVectorPartitionRouterApproxDeadlineInterruptsNativeTraversalV1(t *testi
 	ctx := &vectorPartitionRouterDeadlineAfterErrContextV1{
 		Context: context.Background(), deadlineAfter: 9,
 	}
-	result, err := router.SearchWithContextV1(ctx, []float32{1}, VectorPartitionRouterSearchOptionsV1{
-		Mode: VectorPartitionRouterModeApproxV1, CandidateBudget: rows, PartitionProbes: 1,
+	result, err := router.SearchWithContextV1(ctx, []float32{1}, VectorPartitionRouterSearchOptionsV2{
+		Mode: VectorPartitionRouterModeApproxV1, ScoreBudget: rows, ReturnedWidth: rows, BeamWidth: rows, PartitionProbes: 1,
 	})
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("result=%+v err=%v want deadline exceeded", result, err)
@@ -365,7 +379,7 @@ func TestPartitionRouterBuildPublishSearchReopenAndPinsV1(t *testing.T) {
 	cfg := internalrouter.DefaultRouterConfigV1()
 	cfg.BranchFactor = 2
 	cfg.LeafSize = 1
-	cfg.RepresentativesPerPartition = 2
+	cfg.RepresentativeBudget = 6
 	cfg.MaxDepth = 4
 	cfg.MaxIterations = 8
 	// The overlap membership is a second final placement for one source row.
@@ -466,7 +480,7 @@ func TestPartitionRouterBuildPublishSearchReopenAndPinsV1(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build and publish: %v status=%+v", err, build)
 	}
-	if build.Representatives != 4 || build.RouterBytes == 0 || build.ModelDigest == "" {
+	if build.Representatives != 6 || build.RouterBytes == 0 || build.ModelDigest == "" {
 		t.Fatalf("unexpected build status: %+v", build)
 	}
 
@@ -474,10 +488,10 @@ func TestPartitionRouterBuildPublishSearchReopenAndPinsV1(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if openStatus.Generation != building.Generation || openStatus.Representatives != 4 || openStatus.ActiveHandles != 1 {
+	if openStatus.Generation != building.Generation || openStatus.Representatives != 6 || openStatus.ActiveHandles != 1 {
 		t.Fatalf("unexpected open status: %+v", openStatus)
 	}
-	if manifest := router.Status().Manifest; len(manifest.Representatives) != 4 {
+	if manifest := router.Status().Manifest; len(manifest.Representatives) != 6 {
 		t.Fatalf("ready manifest omitted representative mapping: %+v", manifest)
 	}
 	partitionStatus, err := collection.VectorPartitionStatusV1(def.Name, building.Generation)
@@ -487,8 +501,8 @@ func TestPartitionRouterBuildPublishSearchReopenAndPinsV1(t *testing.T) {
 	}
 	var exactPartitionOrder []uint32
 	for _, mode := range []string{VectorPartitionRouterModeExactV1, VectorPartitionRouterModeApproxV1} {
-		result, err := router.Search([]float32{1, 0}, VectorPartitionRouterSearchOptionsV1{
-			Mode: mode, CandidateBudget: 4, PartitionProbes: 2,
+		result, err := router.Search([]float32{1, 0}, VectorPartitionRouterSearchOptionsV2{
+			Mode: mode, ScoreBudget: 64, ReturnedWidth: 6, BeamWidth: 6, PartitionProbes: 2,
 		})
 		if err != nil {
 			t.Fatalf("%s search: %v", mode, err)
@@ -496,7 +510,7 @@ func TestPartitionRouterBuildPublishSearchReopenAndPinsV1(t *testing.T) {
 		if got := result.Partitions[0].PartitionID; got != 0 {
 			t.Fatalf("%s first partition=%d result=%+v", mode, got, result)
 		}
-		if result.Status.Candidates > 4 || result.Status.Selected != 2 {
+		if result.Status.Candidates > 6 || result.Status.Selected != 2 {
 			t.Fatalf("%s status=%+v", mode, result.Status)
 		}
 		order := make([]uint32, len(result.Partitions))
@@ -509,22 +523,22 @@ func TestPartitionRouterBuildPublishSearchReopenAndPinsV1(t *testing.T) {
 			t.Fatalf("full-candidate HNSW partition order=%v want exact=%v", order, exactPartitionOrder)
 		}
 	}
-	if _, err := router.Search([]float32{1, 0}, VectorPartitionRouterSearchOptionsV1{
-		Mode: VectorPartitionRouterModeExactV1, CandidateBudget: 3, PartitionProbes: 1,
+	if _, err := router.Search([]float32{1, 0}, VectorPartitionRouterSearchOptionsV2{
+		Mode: VectorPartitionRouterModeExactV1, ScoreBudget: 3, ReturnedWidth: 3, BeamWidth: 3, PartitionProbes: 1,
 	}); err == nil {
 		t.Fatal("undersized exact candidate budget succeeded")
 	}
-	oversizedExact, err := router.Search([]float32{1, 0}, VectorPartitionRouterSearchOptionsV1{
-		Mode: VectorPartitionRouterModeExactV1, CandidateBudget: 1024, PartitionProbes: 2,
+	oversizedExact, err := router.Search([]float32{1, 0}, VectorPartitionRouterSearchOptionsV2{
+		Mode: VectorPartitionRouterModeExactV1, ScoreBudget: 1024, ReturnedWidth: 6, BeamWidth: 6, PartitionProbes: 2,
 	})
 	if err != nil {
 		t.Fatalf("oversized exact candidate budget: %v", err)
 	}
-	if oversizedExact.Status.CandidateBudget != 1024 || oversizedExact.Status.Candidates != 4 || oversizedExact.Status.Selected != 2 {
+	if oversizedExact.Status.ScoreBudget != 1024 || oversizedExact.Status.Candidates != 6 || oversizedExact.Status.Selected != 2 {
 		t.Fatalf("oversized exact status=%+v", oversizedExact.Status)
 	}
-	if _, err := router.Search([]float32{1, 0}, VectorPartitionRouterSearchOptionsV1{
-		Mode: VectorPartitionRouterModeApproxV1, CandidateBudget: 1024, PartitionProbes: 1,
+	if _, err := router.Search([]float32{1, 0}, VectorPartitionRouterSearchOptionsV2{
+		Mode: VectorPartitionRouterModeApproxV1, ScoreBudget: 1024, ReturnedWidth: 1024, BeamWidth: 1024, PartitionProbes: 1,
 	}); err == nil {
 		t.Fatal("oversized approximate candidate budget succeeded")
 	}
@@ -535,8 +549,8 @@ func TestPartitionRouterBuildPublishSearchReopenAndPinsV1(t *testing.T) {
 	if err != nil || partitionStatus.ReaderPins != 0 {
 		t.Fatalf("released status=%+v err=%v", partitionStatus, err)
 	}
-	if _, err := router.Search([]float32{1, 0}, VectorPartitionRouterSearchOptionsV1{
-		Mode: VectorPartitionRouterModeExactV1, CandidateBudget: 4, PartitionProbes: 1,
+	if _, err := router.Search([]float32{1, 0}, VectorPartitionRouterSearchOptionsV2{
+		Mode: VectorPartitionRouterModeExactV1, ScoreBudget: 64, ReturnedWidth: 6, BeamWidth: 6, PartitionProbes: 1,
 	}); err == nil {
 		t.Fatal("closed router search succeeded")
 	}
@@ -554,8 +568,8 @@ func TestPartitionRouterBuildPublishSearchReopenAndPinsV1(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open router after DB reopen: %v", err)
 	}
-	result, err := router.Search([]float32{0, 1}, VectorPartitionRouterSearchOptionsV1{
-		Mode: VectorPartitionRouterModeExactV1, CandidateBudget: 4, PartitionProbes: 1,
+	result, err := router.Search([]float32{0, 1}, VectorPartitionRouterSearchOptionsV2{
+		Mode: VectorPartitionRouterModeExactV1, ScoreBudget: 64, ReturnedWidth: 6, BeamWidth: 6, PartitionProbes: 1,
 	})
 	if err != nil || result.Partitions[0].PartitionID != 1 {
 		t.Fatalf("reopened exact result=%+v err=%v", result, err)
@@ -608,7 +622,7 @@ func TestPartitionRouterRecordRejectsMalformedFiniteAndHierarchyV1(t *testing.T)
 		RouterGeneration: 7,
 		PartitionID:      1,
 		SourceOrdinal:    4,
-		LeafNodeID:       2,
+		NodeID:           2,
 		Depth:            1,
 		MemberCount:      3,
 		Config:           cfg,
@@ -616,7 +630,7 @@ func TestPartitionRouterRecordRejectsMalformedFiniteAndHierarchyV1(t *testing.T)
 			Partitions: 1, Vectors: 3, Representatives: 1, HierarchyNodes: 2,
 		},
 		HNSWM: 2, HNSWEfConstruction: 8, HNSWEfSearch: 8,
-		Path: []vectorPartitionRouterPathNodeV1{{NodeID: 1, MemberCount: 3}, {NodeID: 2, MemberCount: 3}},
+		Path: []vectorPartitionRouterPathNodeV1{{NodeID: 1, MemberCount: 3, Budget: 5}, {NodeID: 2, MemberCount: 3, Budget: 3, Leaf: true}},
 	}
 	raw, err := encodeVectorPartitionRouterRecordV1(record)
 	if err != nil {
@@ -626,8 +640,13 @@ func TestPartitionRouterRecordRejectsMalformedFiniteAndHierarchyV1(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.LeafNodeID != record.LeafNodeID || got.Config != cfg {
+	if got.NodeID != record.NodeID || got.Config != cfg {
 		t.Fatalf("record=%+v want=%+v", got, record)
+	}
+	legacy := append([]byte(nil), raw...)
+	legacy[4], legacy[5] = 1, 0
+	if _, err := decodeVectorPartitionRouterRecordV1(legacy); err == nil {
+		t.Fatal("accepted legacy leaf-only record version")
 	}
 	for _, malformed := range [][]byte{nil, raw[:len(raw)-1], append(append([]byte(nil), raw...), 1)} {
 		if _, err := decodeVectorPartitionRouterRecordV1(malformed); err == nil {

@@ -31,9 +31,15 @@ type m8ProductionMultiGroupAssetsV1 struct {
 	groups          []string
 	assetSetDigests map[string]string
 	descriptor      *m3VariantDescriptorV1
+	routerWidth     int
+	routerBeam      int
 }
 
 func newM8ProductionMultiGroupAssetsV1(vectors [][]float64, groups []string, partitions int) (_ *m8ProductionMultiGroupAssetsV1, err error) {
+	return newM8ProductionMultiGroupAssetsWithRouterV2(vectors, groups, partitions, vectorpartition.DefaultRouterConfigV1())
+}
+
+func newM8ProductionMultiGroupAssetsWithRouterV2(vectors [][]float64, groups []string, partitions int, routerConfig vectorpartition.RouterConfigV1) (_ *m8ProductionMultiGroupAssetsV1, err error) {
 	if len(vectors) == 0 || len(vectors[0]) == 0 || len(groups) < 2 || partitions < 4 {
 		return nil, errors.New("M8 production assets require vectors, two groups, and four partitions")
 	}
@@ -122,13 +128,14 @@ func newM8ProductionMultiGroupAssetsV1(vectors [][]float64, groups []string, par
 	if err = h.collection.PublishVectorPartitionManifestV1(h.manifest, nil); err != nil {
 		return nil, err
 	}
-	if _, err = h.collection.BuildAndPublishVectorPartitionRouterV1(context.Background(), h.manifest, routerParts, collections.VectorPartitionRouterBuildOptionsV1{Config: vectorpartition.DefaultRouterConfigV1(), AssetFileID: 5002, AssetPartID: uint64(partitions) + 1, M: partitionHNSWDegree, EfConstruction: 128, EfSearch: 128}); err != nil {
+	if _, err = h.collection.BuildAndPublishVectorPartitionRouterV1(context.Background(), h.manifest, routerParts, collections.VectorPartitionRouterBuildOptionsV1{Config: routerConfig, AssetFileID: 5002, AssetPartID: uint64(partitions) + 1, M: partitionHNSWDegree, EfConstruction: 128, EfSearch: 128}); err != nil {
 		return nil, err
 	}
 	if h.router, _, err = h.collection.OpenVectorPartitionRouterV1(partitionHNSWIndex); err != nil {
 		return nil, err
 	}
 	h.status = h.router.Status()
+	h.routerWidth, h.routerBeam = int(h.status.Representatives), int(h.status.Representatives)
 	// Router publication returns the only canonical ready manifest: it includes
 	// the shared router asset and ready-set identity in addition to local packs.
 	h.manifest = h.status.Manifest
@@ -296,6 +303,7 @@ func openM8ProductionExistingAssetSetModeV1(dir string, readOnly bool) (_ *m8Pro
 		return nil, fmt.Errorf("open retained M8 router: %w", err)
 	}
 	h.status = h.router.Status()
+	h.routerWidth, h.routerBeam = int(h.status.Representatives), int(h.status.Representatives)
 	h.manifest = h.status.Manifest
 	return h, nil
 }

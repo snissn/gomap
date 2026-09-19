@@ -65,6 +65,7 @@ func TestPartitionRouterValidationAndDigestObserveContext(t *testing.T) {
 	cfg := routerTestConfigV1()
 	cfg.MaxVectors = 256
 	cfg.MaxRepresentatives = 256
+	cfg.RepresentativeBudget = 256
 	partitions := make([]RouterPartitionV1, 128)
 	for i := range partitions {
 		partitions[i] = RouterPartitionV1{
@@ -97,7 +98,7 @@ func TestPartitionRouterValidationAndDigestObserveContext(t *testing.T) {
 
 func TestKMeansRepresentativeRouterNonConvexFixture(t *testing.T) {
 	cfg := routerTestConfigV1()
-	cfg.RepresentativesPerPartition = 2
+	cfg.RepresentativeBudget = 6
 	partitions := []RouterPartitionV1{
 		{PartitionID: 1, Vectors: []RouterVectorV1{
 			{Ordinal: 1, Values: []float32{1, .02}},
@@ -117,7 +118,7 @@ func TestKMeansRepresentativeRouterNonConvexFixture(t *testing.T) {
 		t.Fatal(err)
 	}
 	singleConfig := cfg
-	singleConfig.RepresentativesPerPartition = 1
+	singleConfig.RepresentativeBudget = 2
 	single, err := BuildRouterV1(partitions, singleConfig)
 	if err != nil {
 		t.Fatal(err)
@@ -148,9 +149,9 @@ func TestKMeansRepresentativeRouterNonConvexFixture(t *testing.T) {
 	}
 }
 
-func TestKMeansRepresentativeRouterRepairsEmptyClusters(t *testing.T) {
+func TestKMeansRepresentativeRouterDoesNotFabricateIdenticalCenters(t *testing.T) {
 	cfg := routerTestConfigV1()
-	cfg.RepresentativesPerPartition = 3
+	cfg.RepresentativeBudget = 3
 	model, err := BuildRouterV1([]RouterPartitionV1{{
 		PartitionID: 7,
 		Vectors: []RouterVectorV1{
@@ -163,11 +164,11 @@ func TestKMeansRepresentativeRouterRepairsEmptyClusters(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if model.Metrics.EmptyRepairs == 0 {
-		t.Fatal("expected deterministic empty-cluster repair")
+	if model.Metrics.EmptyRepairs != 0 || model.Metrics.UnusedBudget != 2 {
+		t.Fatal("identical population must stop without fabricated duplicate centers")
 	}
-	if got := len(model.Representatives); got != 3 {
-		t.Fatalf("representatives=%d want 3", got)
+	if got := len(model.Representatives); got != 1 {
+		t.Fatalf("representatives=%d want 1", got)
 	}
 }
 
@@ -206,7 +207,7 @@ func TestPartitionRouterRejectsMalformedAndBoundedInputs(t *testing.T) {
 
 func TestRepresentativeRouterExactOracleStableTieAndBudgets(t *testing.T) {
 	cfg := routerTestConfigV1()
-	cfg.RepresentativesPerPartition = 1
+	cfg.RepresentativeBudget = 3
 	model, err := BuildRouterV1([]RouterPartitionV1{
 		{PartitionID: 8, Vectors: []RouterVectorV1{{Ordinal: 8, Values: []float32{1, 0}}}},
 		{PartitionID: 3, Vectors: []RouterVectorV1{{Ordinal: 3, Values: []float32{1, 0}}}},
@@ -243,9 +244,9 @@ func TestCheckedRouterWorkUsesWidePairMultiplication(t *testing.T) {
 		[][]routerBuildVectorV1{make([]routerBuildVectorV1, vectors)},
 		1,
 		RouterConfigV1{
-			RepresentativesPerPartition: vectors,
-			BranchFactor:                1,
-			MaxIterations:               1,
+			RepresentativeBudget: vectors,
+			BranchFactor:         1,
+			MaxIterations:        1,
 		},
 	)
 	if !ok {
@@ -258,7 +259,7 @@ func TestCheckedRouterWorkUsesWidePairMultiplication(t *testing.T) {
 
 func TestPartitionRouterModelValidationRejectsForgedMetadata(t *testing.T) {
 	cfg := routerTestConfigV1()
-	cfg.RepresentativesPerPartition = 2
+	cfg.RepresentativeBudget = 3
 	model, err := BuildRouterV1([]RouterPartitionV1{{
 		PartitionID: 4,
 		Vectors: []RouterVectorV1{
@@ -280,7 +281,7 @@ func TestPartitionRouterModelValidationRejectsForgedMetadata(t *testing.T) {
 		func(candidate *RouterModelV1) { candidate.Nodes[1].ParentNodeID = 0 },
 		func(candidate *RouterModelV1) { candidate.Representatives[0].MemberCount++ },
 		func(candidate *RouterModelV1) {
-			leafID := candidate.Representatives[0].LeafNodeID
+			leafID := candidate.Representatives[0].NodeID
 			for i := range candidate.Nodes {
 				if candidate.Nodes[i].NodeID == leafID {
 					candidate.Nodes[i].MemberCount++
@@ -289,7 +290,7 @@ func TestPartitionRouterModelValidationRejectsForgedMetadata(t *testing.T) {
 			candidate.Representatives[0].MemberCount++
 		},
 		func(candidate *RouterModelV1) {
-			candidate.Representatives[1].SourceOrdinal = candidate.Representatives[0].SourceOrdinal
+			candidate.Representatives[1].NodeID = candidate.Representatives[0].NodeID
 		},
 		func(candidate *RouterModelV1) { candidate.Representatives[0].Values[1] *= .5 },
 	} {
@@ -311,7 +312,7 @@ func routerTestConfigV1() RouterConfigV1 {
 	cfg := DefaultRouterConfigV1()
 	cfg.BranchFactor = 3
 	cfg.LeafSize = 1
-	cfg.RepresentativesPerPartition = 3
+	cfg.RepresentativeBudget = 3
 	cfg.MaxDepth = 4
 	cfg.MaxIterations = 8
 	cfg.MaxVectors = 100
@@ -323,8 +324,8 @@ func routerTestConfigV1() RouterConfigV1 {
 
 func TestDefaultRouterConfigV1(t *testing.T) {
 	cfg := DefaultRouterConfigV1()
-	if cfg.RepresentativesPerPartition != 16 {
-		t.Fatalf("representatives per partition=%d want 16", cfg.RepresentativesPerPartition)
+	if cfg.RepresentativeBudget != 256 {
+		t.Fatalf("global representative budget=%d want 256", cfg.RepresentativeBudget)
 	}
 	if cfg.MaxIterations != 16 {
 		t.Fatalf("max iterations=%d want 16", cfg.MaxIterations)

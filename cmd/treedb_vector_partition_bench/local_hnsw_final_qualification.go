@@ -289,7 +289,7 @@ func localHNSWFinalQualificationChildConfigV1(base config, input localHNSWFinalQ
 		"-m8-max-exact-truth-visits", strconv.FormatInt(m8QualificationExactTruthCapV1(input.Fixture), 10),
 		"-m8-truth-cache", input.TruthCache,
 		"-m8-truth-cache-sha256", input.TruthCacheSHA256,
-		"-router-candidates", strconv.Itoa(m8QualificationRouterCandidatesV1),
+		"-router-score-budget", strconv.Itoa(m8QualificationRouterCandidatesV1),
 		"-ef-search", strconv.Itoa(run.EFSearch),
 	}
 	child, err := parseConfig(args)

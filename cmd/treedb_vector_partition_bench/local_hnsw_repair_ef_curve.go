@@ -129,8 +129,8 @@ func localHNSWRepairEFCurveV1Build(ctx context.Context, source *m8ProductionMult
 	}
 	partitions := int(source.manifest.PartitionCount)
 	domains := int(source.manifest.DomainCount)
-	candidates := min(256, int(source.status.Representatives))
-	if partitions < 1 || candidates < 1 {
+	width := min(256, int(source.status.Representatives))
+	if partitions < 1 || width < 1 {
 		return nil, errors.New("invalid local HNSW repair EF curve router")
 	}
 	out := make([]localHNSWRepairEFCurveCellV1, len(points))
@@ -153,11 +153,11 @@ func localHNSWRepairEFCurveV1Build(ctx context.Context, source *m8ProductionMult
 		if err != nil || !ids || !scores {
 			return nil, errors.New("invalid local HNSW repair EF curve truth")
 		}
-		p2, err := localHNSWAttributionQueryRouteV1(ctx, source, queries[i], candidates, min(2, domains))
+		p2, err := localHNSWAttributionQueryRouteV1(ctx, source, queries[i], defaultRouterScoreBudgetV2, width, width, min(2, domains))
 		if err != nil {
 			return nil, err
 		}
-		p16, err := localHNSWAttributionQueryRouteV1(ctx, source, queries[i], candidates, domains)
+		p16, err := localHNSWAttributionQueryRouteV1(ctx, source, queries[i], defaultRouterScoreBudgetV2, width, width, domains)
 		if err != nil || !localHNSWAttributionRoutePrefixV1(p2, p16) || !localHNSWAttributionRoutePermutationV1(p16, partitions) {
 			return nil, errors.New("invalid local HNSW repair EF curve route")
 		}
@@ -262,8 +262,8 @@ func localHNSWRepairEFCurveTimingV1Build(ctx context.Context, source *m8Producti
 	partitions := int(source.manifest.PartitionCount)
 	domains := int(source.manifest.DomainCount)
 	lowProbes := min(2, domains)
-	candidates := min(256, int(source.status.Representatives))
-	if partitions < 1 || lowProbes < 1 || domains <= lowProbes || candidates < 1 || len(repair.searchers) != partitions {
+	width := min(256, int(source.status.Representatives))
+	if partitions < 1 || lowProbes < 1 || domains <= lowProbes || width < 1 || len(repair.searchers) != partitions {
 		return out, errors.New("invalid local HNSW repair EF timing harness")
 	}
 	timingQueries := make([]localHNSWRepairEFCurveTimingQueryV1, 0, len(ordinals))
@@ -274,11 +274,11 @@ func localHNSWRepairEFCurveTimingV1Build(ctx context.Context, source *m8Producti
 		if ordinal < 0 || !localHNSWCalibrationOrdinalV1(ordinal) || i > 0 && ordinals[i-1] >= ordinal || len(queries[i]) == 0 {
 			return out, errors.New("invalid local HNSW repair EF timing query")
 		}
-		p2, err := localHNSWAttributionQueryRouteV1(ctx, source, queries[i], candidates, min(2, domains))
+		p2, err := localHNSWAttributionQueryRouteV1(ctx, source, queries[i], defaultRouterScoreBudgetV2, width, width, min(2, domains))
 		if err != nil {
 			return out, err
 		}
-		p16, err := localHNSWAttributionQueryRouteV1(ctx, source, queries[i], candidates, domains)
+		p16, err := localHNSWAttributionQueryRouteV1(ctx, source, queries[i], defaultRouterScoreBudgetV2, width, width, domains)
 		if err != nil || !localHNSWAttributionRoutePrefixV1(p2, p16) || !localHNSWAttributionRoutePermutationV1(p16, partitions) {
 			return out, errors.New("invalid local HNSW repair EF timing route")
 		}

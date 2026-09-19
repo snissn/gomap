@@ -389,7 +389,7 @@ func vectorPartitionLifecycleManifestWithContextV1(ctx context.Context, state ve
 	if err := ctx.Err(); err != nil {
 		return VectorPartitionManifestV1{}, err
 	}
-	manifest.Representatives = make([]VectorPartitionMembershipV1, len(entry.Manifest.Representatives))
+	manifest.Representatives = make([]VectorPartitionRepresentativeV2, len(entry.Manifest.Representatives))
 	if err := copyChunked(len(manifest.Representatives), func(start, end int) {
 		copy(manifest.Representatives[start:end], entry.Manifest.Representatives[start:end])
 	}); err != nil {

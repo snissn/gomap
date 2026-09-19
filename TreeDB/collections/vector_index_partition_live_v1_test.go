@@ -1492,7 +1492,7 @@ func TestVectorIndexPartitionLiveGenerationRebindWaitsForCoordinatorPinV1(t *tes
 		t.Fatal(err)
 	}
 	cfg := internalrouter.DefaultRouterConfigV1()
-	cfg.BranchFactor, cfg.LeafSize, cfg.RepresentativesPerPartition = 2, 1, 1
+	cfg.BranchFactor, cfg.LeafSize, cfg.RepresentativeBudget = 2, 1, 1
 	cfg.MaxDepth, cfg.MaxIterations, cfg.MaxVectors = 4, 8, len(rows)
 	cfg.MaxDimensions, cfg.MaxRepresentatives, cfg.MaxScalarWork = 8, 32, 1_000_000
 	if _, err := collection.BuildAndPublishVectorPartitionRouterV1(t.Context(), newManifest, []internalrouter.RouterPartitionV1{partition}, VectorPartitionRouterBuildOptionsV1{Config: cfg, AssetFileID: 7812, AssetPartID: 1, M: 2, EfConstruction: 8, EfSearch: 8}); err != nil {
@@ -3326,7 +3326,7 @@ func newVectorPartitionLiveProductionFixtureWithPartitionsV1(t *testing.T, extra
 	cfg := internalrouter.DefaultRouterConfigV1()
 	cfg.BranchFactor = 2
 	cfg.LeafSize = 1
-	cfg.RepresentativesPerPartition = 1
+	cfg.RepresentativeBudget = len(partitions)
 	cfg.MaxDepth = 4
 	cfg.MaxIterations = 8
 	cfg.MaxVectors = len(sourceRows)

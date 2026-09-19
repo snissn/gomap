@@ -5,7 +5,12 @@ See `docs/API_STABILITY.md` for what is intended to be stable for downstream use
 
 ## Unreleased
 
-- (Add notable changes here.)
+- TreeDB partition routing now uses one global all-level spherical kRt budget
+  and durable domain/node representative identity. Search explicitly separates
+  returned width, beam and all-level score-call budget, with no partial fallback.
+  This pre-alpha change requires rebuilding partition assets (manifest v5,
+  router records v2, READY payload v3), coordinator protocol v2 and system-node
+  config v2. Old retained benchmark receipts remain historical evidence.
 
 ## v0.5.0 - 2026-04-17
 

@@ -156,15 +156,15 @@ func TestM8ProductionResourcesReportRequestRouterBudgetV1(t *testing.T) {
 		status: collections.VectorPartitionRouterRuntimeStatusV1{Representatives: 19},
 	}
 	request := m8ProductionApproximateRequestV1(assets, []float32{1}, "router-budget", 1, 1, 1, cfg.routerCandidates, 1)
-	if request.RouterMode != collections.VectorPartitionRouterModeApproxV1 || request.RouterCandidateBudget != 7 {
+	if request.RouterMode != collections.VectorPartitionRouterModeApproxV1 || request.RouterScoreBudget != 7 {
 		t.Fatalf("request=%+v want approximate router budget 7", request)
 	}
 	warmup := m8ProductionWarmupRequestV1(assets, []float32{1}, "warmup-budget", 1, cfg)
-	if warmup.RouterMode != collections.VectorPartitionRouterModeApproxV1 || warmup.RouterCandidateBudget != 7 || warmup.PartitionProbes != 4 {
+	if warmup.RouterMode != collections.VectorPartitionRouterModeApproxV1 || warmup.RouterScoreBudget != 7 || warmup.PartitionProbes != 4 {
 		t.Fatalf("warmup=%+v want approximate router budget 7", warmup)
 	}
 	preflight := m8ProductionRequestV1(assets, []float32{1}, "preflight-budget", 1, 1, 1, 1)
-	if preflight.RouterMode != collections.VectorPartitionRouterModeExactV1 || preflight.RouterCandidateBudget != 19 {
+	if preflight.RouterMode != collections.VectorPartitionRouterModeExactV1 || preflight.RouterScoreBudget != 19 {
 		t.Fatalf("preflight=%+v want exact router budget 19", preflight)
 	}
 	got := m8ProductionResourcesV1(cfg, fixtureManifest{Vectors: 1, Dimensions: 1}, assets, nil, m8ProductionFaultResourceBoundaryV1{}, nativewire.VectorPartitionM8ProductionMultiGroupEvidenceV1{}, m8ProductionFaultResourceBoundaryV1{})

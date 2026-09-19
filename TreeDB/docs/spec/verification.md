@@ -2,6 +2,21 @@
 
 This document maps specification invariants to existing tests and harnesses.
 
+The global all-level spherical router is distinguished from the historical
+leaf-only model by `TestRouterGlobalBudgetRetainsInternalCenters`,
+`TestRouterGlobalBudgetDegenerateUnderfill`,
+`TestRouterGlobalBudgetApportionment` and
+`TestRouterGlobalBudgetCanonicalSiblingQuotaIdentity`. These cover retained
+parents, repeated provenance, global conservation, structural underfill and
+canonical sibling/quota identity across clustering seeds.
+`TestVectorPartitionRouterV2IndependentBudgetsAndDurableNodeIdentity` exercises
+actual published records/reopen, independent w/E/C, legal C>N, typed exhausted
+budgets with no partial routes, and charged exact-reference scans.
+`TestVectorPartitionRouterV2ConcurrentPinnedSearch` checks shared-owner search.
+Existing manifest/lifecycle, live-index and production public-backend tests
+continue to own checkpoint/reopen, source changes, pin/deletion and stable-ID
+merge behavior. These are correctness tests, not scaling qualification.
+
 `TestCollectionVectorIndexCloseCosineRerankIsStableWithFilterAndLiveDelta`
 proves that materialized FP32 cosine reranking preserves close-vector order and
 filtered/unfiltered distance parity, with zero distance for an identical live
