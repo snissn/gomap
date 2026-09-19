@@ -100,14 +100,14 @@ func TestVectorPartitionRouterScalarWorkPreflightUsesLogicalDomainsV1(t *testing
 			{VectorOrdinal: 0, PartitionID: 0}, {VectorOrdinal: 1, PartitionID: 1},
 		},
 	}
-	if work, ok := checkedVectorPartitionRouterScalarWorkV1(manifest, cfg, 4); !ok || work != 712 {
-		t.Fatalf("domain scalar work=%d ok=%v want=712", work, ok)
+	if work, ok := checkedVectorPartitionRouterScalarWorkV1(manifest, cfg, 4); !ok || work != 8 {
+		t.Fatalf("domain scalar work=%d ok=%v want=8", work, ok)
 	}
 	manifest.SourceRowCount = 1
 	manifest.Memberships = manifest.Memberships[:1]
 	manifest.OverlapMemberships = []VectorPartitionMembershipV1{{VectorOrdinal: 0, PartitionID: 1}}
-	if work, ok := checkedVectorPartitionRouterScalarWorkV1(manifest, cfg, 4); !ok || work != 356 {
-		t.Fatalf("deduplicated domain scalar work=%d ok=%v want=356", work, ok)
+	if work, ok := checkedVectorPartitionRouterScalarWorkV1(manifest, cfg, 4); !ok || work != 4 {
+		t.Fatalf("deduplicated domain scalar work=%d ok=%v want=4", work, ok)
 	}
 }
 

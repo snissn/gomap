@@ -61,8 +61,10 @@ allocation, and the actual encoded length is checked again before append.
 The scalar-work cap counts every coordinate evaluated by construction cosine
 distances: farthest-first initialization, Lloyd assignment, empty-cluster
 repair, and one medoid pass for every represented level. Its conservative
-bound follows maximum hierarchy depth because memberships are disjoint within
-each level; it does not multiply every vector by its domain's full node quota.
+bound reuses the canonical per-domain budget apportionment, then follows only
+quota-reachable hierarchy levels and widths because memberships are disjoint
+within each level; it does not multiply every vector by its domain's full node
+quota.
 Farthest-first initialization and all distance/ordinal ties are stable. Empty clusters are
 repaired deterministically by moving the farthest eligible member, with source
 ordinal as the tie break. Reserve one root per nonempty logical domain, then

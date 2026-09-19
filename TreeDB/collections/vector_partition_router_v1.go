@@ -814,17 +814,14 @@ func checkedVectorPartitionRouterScalarWorkV1(manifest VectorPartitionManifestV1
 		seenOverlapOrdinal[domain] = marker
 		counts[domain]++
 	}
-	var vectors uint64
-	for _, count := range counts {
-		if count > uint64(cfg.MaxVectors) {
+	populations := make([]int, len(counts))
+	for i, count := range counts {
+		if count == 0 || count > uint64(cfg.MaxVectors) || count > uint64(math.MaxInt) {
 			return 0, false
 		}
-		if vectors > math.MaxUint64-count {
-			return 0, false
-		}
-		vectors += count
+		populations[i] = int(count)
 	}
-	work, ok := internalrouter.CheckedRouterScalarWorkV1(vectors, dimensions, cfg)
+	work, ok := internalrouter.CheckedRouterScalarWorkV1(populations, dimensions, cfg)
 	if !ok {
 		return 0, false
 	}

@@ -235,7 +235,7 @@ func BuildRouterV1(partitions []RouterPartitionV1, cfg RouterConfigV1) (RouterMo
 	if err != nil {
 		return model, err
 	}
-	work, ok := CheckedRouterScalarWorkV1(uint64(totalVectors), dimensions, cfg)
+	work, ok := CheckedRouterScalarWorkV1(populations, dimensions, cfg)
 	if !ok {
 		return model, errors.New("vectorpartition: router scalar-work bound overflows")
 	}
@@ -703,10 +703,14 @@ func RouteExactV1(model RouterModelV1, query []float32, candidateBudget, partiti
 
 // CheckedRouterScalarWorkV1 bounds every coordinate evaluated by a cosine
 // distance during construction. Memberships are disjoint within a hierarchy
-// depth, so the bound follows depth rather than multiplying each vector by its
-// domain's entire representative quota.
-func CheckedRouterScalarWorkV1(vectors uint64, dimensions int, cfg RouterConfigV1) (int64, bool) {
-	if vectors == 0 || dimensions < 1 || cfg.BranchFactor < 2 || cfg.MaxDepth < 1 || cfg.MaxIterations < 1 {
+// depth, and each split consumes at least two budget tokens from any continuing
+// path, so only quota-reachable levels and widths are charged.
+func CheckedRouterScalarWorkV1(populations []int, dimensions int, cfg RouterConfigV1) (int64, bool) {
+	if len(populations) == 0 || dimensions < 1 || cfg.BranchFactor < 2 || cfg.LeafSize < 1 || cfg.MaxDepth < 1 || cfg.MaxIterations < 1 {
+		return 0, false
+	}
+	quotas, err := ApportionRouterBudgetV2(populations, cfg.RepresentativeBudget)
+	if err != nil {
 		return 0, false
 	}
 	multiply := func(left, right uint64) (uint64, bool) {
@@ -721,39 +725,47 @@ func CheckedRouterScalarWorkV1(vectors uint64, dimensions int, cfg RouterConfigV
 		}
 		return left + right, true
 	}
-	branch := uint64(cfg.BranchFactor)
-	initialization, ok := multiply(branch, branch-1)
-	if !ok {
-		return 0, false
+	var work uint64
+	for i, population := range populations {
+		quota := quotas[i]
+		splitLevels := min(cfg.MaxDepth, min((quota-1)/2, max(0, population-cfg.LeafSize)))
+		distancesPerVector := uint64(splitLevels + 1) // one medoid pass per represented level.
+		for depth := 0; depth < splitLevels; depth++ {
+			// A continuing path loses its parent token and at least one sibling
+			// token per split. It also loses at least one member per level.
+			branch := uint64(min(cfg.BranchFactor, min(quota-2*depth-1, population-depth)))
+			initialization, ok := multiply(branch, branch-1)
+			if !ok {
+				return 0, false
+			}
+			initialization /= 2 // 1 + ... + (branch-1) farthest-first distances.
+			perIteration, ok := multiply(2*branch-1, uint64(cfg.MaxIterations))
+			if !ok {
+				return 0, false
+			}
+			perSplit, ok := add(initialization, perIteration) // assignment plus empty repair.
+			if !ok {
+				return 0, false
+			}
+			distancesPerVector, ok = add(distancesPerVector, perSplit)
+			if !ok {
+				return 0, false
+			}
+		}
+		domainWork, ok := multiply(uint64(population), distancesPerVector)
+		if !ok {
+			return 0, false
+		}
+		domainWork, ok = multiply(domainWork, uint64(dimensions))
+		if !ok {
+			return 0, false
+		}
+		work, ok = add(work, domainWork)
+		if !ok {
+			return 0, false
+		}
 	}
-	initialization /= 2 // 1 + ... + (branch-1) farthest-first distances.
-	perIteration, ok := multiply(2*branch-1, uint64(cfg.MaxIterations))
-	if !ok {
-		return 0, false
-	}
-	perSplit, ok := add(initialization, perIteration) // assignment plus empty repair.
-	if !ok {
-		return 0, false
-	}
-	depth := uint64(cfg.MaxDepth)
-	splitLevels, ok := multiply(perSplit, depth)
-	if !ok {
-		return 0, false
-	}
-	medoidLevels, ok := add(depth, 1)
-	if !ok {
-		return 0, false
-	}
-	distancesPerVector, ok := add(splitLevels, medoidLevels) // one medoid pass per represented level.
-	if !ok {
-		return 0, false
-	}
-	work, ok := multiply(vectors, distancesPerVector)
-	if !ok {
-		return 0, false
-	}
-	work, ok = multiply(work, uint64(dimensions))
-	return int64(work), ok
+	return int64(work), true
 }
 
 func normalizeRouterVectorV1(values []float32) ([]float32, error) {

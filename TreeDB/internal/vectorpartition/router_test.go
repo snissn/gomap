@@ -240,14 +240,24 @@ func TestRepresentativeRouterExactOracleStableTieAndBudgets(t *testing.T) {
 
 func TestCheckedRouterScalarWorkBoundsAllLevelDistanceWorkV1(t *testing.T) {
 	cfg := DefaultRouterConfigV1()
-	work, ok := CheckedRouterScalarWorkV1(300_000, 128, cfg)
+	work, ok := CheckedRouterScalarWorkV1([]int{75_000, 75_000, 75_000, 75_000}, 128, cfg)
 	if !ok || work != 36_595_200_000 {
 		t.Fatalf("router work=%d ok=%v want 36595200000", work, ok)
 	}
 	if work > 50_000_000_000 {
 		t.Fatalf("retained D4 envelope exceeds 50B: %d", work)
 	}
-	if _, ok := CheckedRouterScalarWorkV1(math.MaxUint64, 128, cfg); ok {
+	cfg.RepresentativeBudget = 1
+	work, ok = CheckedRouterScalarWorkV1([]int{300_000}, 128, cfg)
+	if !ok || work != 38_400_000 {
+		t.Fatalf("root-only router work=%d ok=%v want 38400000", work, ok)
+	}
+	cfg.RepresentativeBudget = 3
+	work, ok = CheckedRouterScalarWorkV1([]int{300_000}, 128, cfg)
+	if !ok || work != 1_958_400_000 {
+		t.Fatalf("quota-limited router work=%d ok=%v want 1958400000", work, ok)
+	}
+	if _, ok := CheckedRouterScalarWorkV1([]int{routerMaxVectors}, math.MaxInt, cfg); ok {
 		t.Fatal("overflowing router work was accepted")
 	}
 }
