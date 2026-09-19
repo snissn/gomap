@@ -234,8 +234,13 @@ metadata columns, and protected-field ownership before applying complete metadat
 after-images through the metadata-only planner. It resolves preserved full-row
 coordinates from the preceding authoritative snapshot; the WAL does not contain
 physical pointers or unchanged vectors. Missing rows, incompatible schema, or
-after-images changing content/vector/chunk linkage fail closed. A successfully
-replayed command publishes row locators, secondary indexes and `AppliedCommandLSN`
+after-images changing content/vector/chunk linkage fail closed. A validated
+object replacement preserves literal keys inside its JSON value;
+replay does not reinterpret them as dotted mutation paths. Validation descends
+only where a protected ancestor prevents a whole-value mutation. Empty-object
+additions remain real changes, and changed keys that cannot be addressed by a
+public mutation fail closed; unchanged unusual keys may remain present. A
+successfully replayed command publishes row locators, secondary indexes and `AppliedCommandLSN`
 atomically. Repeated metadata updates flatten to one ordinary full-row reference.
 Current and recovery manifests retain that row's assets until a fold replaces
 them coherently; a fold raced by post-capture metadata must retry. Errors after

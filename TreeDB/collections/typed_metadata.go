@@ -550,41 +550,6 @@ func (c *Collection) buildTypedMetadataPlan(ids [][]byte, set map[string]any, un
 // the preceding schema and row. Recovery cannot use format 13 to rewrite a
 // protected metadata/text/linkage field that the public mutation would reject.
 func validateTypedMetadataReplayChanges(meta CollectionMeta, before, after map[string]any, oldValues []columnDeclaredValue, columns []int, values []string) error {
-	set := make(map[string]any)
-	var unset []string
-	var diff func(string, any, bool, any, bool)
-	diff = func(path string, old any, oldExists bool, next any, nextExists bool) {
-		if oldExists == nextExists && reflect.DeepEqual(old, next) {
-			return
-		}
-		oldMap, oldObject := old.(map[string]any)
-		nextMap, nextObject := next.(map[string]any)
-		if (!oldExists || oldObject) && nextObject {
-			for key, value := range oldMap {
-				n, ok := nextMap[key]
-				diff(path+"."+key, value, true, n, ok)
-			}
-			for key, value := range nextMap {
-				if _, ok := oldMap[key]; !ok {
-					diff(path+"."+key, nil, false, value, true)
-				}
-			}
-			return
-		}
-		if nextExists {
-			set[path] = next
-		} else {
-			unset = append(unset, path)
-		}
-	}
-	old, oldExists := before["meta"]
-	next, nextExists := after["meta"]
-	diff("meta", old, oldExists, next, nextExists)
-	for i, j := range columns {
-		if oldValues[j].String != values[i] {
-			set[meta.Options.ColumnStore.Columns[j].Path] = values[i]
-		}
-	}
 	var generation uint64
 	for _, def := range meta.VectorIndexes {
 		generation = max(generation, def.SchemaGeneration)
@@ -592,7 +557,72 @@ func validateTypedMetadataReplayChanges(meta CollectionMeta, before, after map[s
 	for _, def := range meta.TextIndexes {
 		generation = max(generation, def.SchemaGeneration)
 	}
-	return validateTypedMetadataMutation(meta, set, unset, max(generation, 1))
+	generation = max(generation, 1)
+	set := make(map[string]any)
+	candidate := make(map[string]any, 1)
+	var unset []string
+	var diff func(string, any, bool, any, bool, bool) error
+	diff = func(path string, old any, oldExists bool, next any, nextExists, addressable bool) error {
+		if oldExists == nextExists && reflect.DeepEqual(old, next) {
+			return nil
+		}
+		if !addressable {
+			return errors.New("collections: metadata replay changes an unaddressable object key")
+		}
+		// Public set values are whole JSON values: their literal keys are not
+		// dotted mutation paths. Coalesce at the highest admitted path before
+		// inspecting children; descend only around protected ancestors.
+		var admission error
+		if nextExists {
+			candidate[path] = next
+			admission = validateTypedMetadataMutation(meta, candidate, nil, generation)
+			delete(candidate, path)
+		} else {
+			admission = validateTypedMetadataMutation(meta, nil, []string{path}, generation)
+		}
+		if admission == nil {
+			if nextExists {
+				set[path] = next
+			} else {
+				unset = append(unset, path)
+			}
+			return nil
+		}
+		oldMap, oldObject := old.(map[string]any)
+		nextMap, nextObject := next.(map[string]any)
+		if (!oldExists || oldObject) && nextObject && len(oldMap)+len(nextMap) != 0 {
+			child := func(key string, old any, oldExists bool, next any, nextExists bool) error {
+				valid := key != "" && utf8.ValidString(key) && !strings.ContainsAny(key, ".\x00\\*?[]#")
+				return diff(path+"."+key, old, oldExists, next, nextExists, valid)
+			}
+			for key, value := range oldMap {
+				n, ok := nextMap[key]
+				if err := child(key, value, true, n, ok); err != nil {
+					return err
+				}
+			}
+			for key, value := range nextMap {
+				if _, ok := oldMap[key]; !ok {
+					if err := child(key, nil, false, value, true); err != nil {
+						return err
+					}
+				}
+			}
+			return nil
+		}
+		return admission
+	}
+	old, oldExists := before["meta"]
+	next, nextExists := after["meta"]
+	if err := diff("meta", old, oldExists, next, nextExists, true); err != nil {
+		return err
+	}
+	for i, j := range columns {
+		if oldValues[j].String != values[i] {
+			set[meta.Options.ColumnStore.Columns[j].Path] = values[i]
+		}
+	}
+	return validateTypedMetadataMutation(meta, set, unset, generation)
 }
 
 func applyTypedMetadataPath(object map[string]any, path string, value any, unset bool) (bool, error) {

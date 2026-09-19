@@ -442,6 +442,8 @@ require string values and are required, so they cannot be unset. Content,
 embedding/vector, ID, and chunk-linkage mutations are outside this operation.
 Metadata strings and object keys must be valid UTF-8, including nested values
 supplied through the Go API; invalid input is rejected before publication.
+An allowed `set` value is a whole JSON value: literal keys inside an object
+replacement are preserved as keys, including during recovery.
 Path-overlap checks scale with the input size and sorting, not all path pairs.
 Recovery accounts metadata format 13 as typed payload frames and decoded rows,
 not legacy collection/projection work.

@@ -473,26 +473,120 @@ func TestTypedMetadataReplayRejectsProtectedAfterimages4769(t *testing.T) {
 	}
 	plan.close()
 	for _, field := range []string{"content", "embedding", "meta.chunk_parent", "meta.user_id"} {
-		t.Run(field, func(t *testing.T) {
-			var object map[string]any
-			if err := decodeTypedMetadataJSON(payload.Documents[0].Retained, &object); err != nil {
-				t.Fatal(err)
+		for kind, value := range map[string]any{"string": "forbidden", "null": nil, "empty_array": []any{}, "empty_object": map[string]any{}, "nested_empty": map[string]any{"child": map[string]any{}}} {
+			t.Run(field+"/"+kind, func(t *testing.T) {
+				var object map[string]any
+				if err := decodeTypedMetadataJSON(payload.Documents[0].Retained, &object); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := applyTypedMetadataPath(object, field, value, false); err != nil {
+					t.Fatal(err)
+				}
+				corrupt := payload
+				corrupt.Documents = append([]commitlog.CollectionTypedMetadataDocument(nil), payload.Documents...)
+				corrupt.Documents[0].Retained, err = json.Marshal(object)
+				if err != nil {
+					t.Fatal(err)
+				}
+				p, _, _, err := col.buildTypedMetadataPlan(ids, nil, nil, &corrupt)
+				if p != nil {
+					p.close()
+				}
+				if err == nil {
+					t.Fatal("accepted forbidden afterimage")
+				}
+			})
+		}
+	}
+}
+
+func TestTypedMetadataReplayAcceptsProducedObjects4769(t *testing.T) {
+	_, db, col, ids := seedTypedMetadata4769(t, 1, 8)
+	defer db.Close()
+	for name, value := range map[string]any{
+		"empty":             map[string]any{},
+		"nested_empty":      map[string]any{"new": map[string]any{}},
+		"literal_empty_key": map[string]any{"": 1},
+		"literal_wildcard":  map[string]any{"a*b": 1},
+		"literal_dots":      map[string]any{"a.b": 1, "a": map[string]any{"b": 2}},
+		"literal_overlap":   map[string]any{"x": 1, "x.y": 2},
+		"null":              nil,
+		"array":             []any{map[string]any{"": 1}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			set := map[string]any{"meta.extra": value}
+			if err := validateTypedMetadataMutation(col.Meta(), set, nil, metadataGeneration4769(col)); err != nil {
+				t.Fatalf("public admission: %v", err)
 			}
-			if _, err := applyTypedMetadataPath(object, field, "forbidden", false); err != nil {
-				t.Fatal(err)
-			}
-			corrupt := payload
-			corrupt.Documents = append([]commitlog.CollectionTypedMetadataDocument(nil), payload.Documents...)
-			corrupt.Documents[0].Retained, err = json.Marshal(object)
+			plan, payload, _, err := col.buildTypedMetadataPlan(ids, set, nil, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
-			p, _, _, err := col.buildTypedMetadataPlan(ids, nil, nil, &corrupt)
-			if p != nil {
-				p.close()
+			plan.close()
+			replayed, _, _, err := col.buildTypedMetadataPlan(ids, nil, nil, &payload)
+			if replayed != nil {
+				replayed.close()
 			}
-			if err == nil {
-				t.Fatal("accepted forbidden afterimage")
+			if err != nil {
+				t.Fatalf("rejected produced afterimage: %v", err)
+			}
+		})
+	}
+}
+
+func TestTypedMetadataReplayObjectAddressability4769(t *testing.T) {
+	_, db, col, _ := seedTypedMetadata4769(t, 1, 8)
+	defer db.Close()
+	for _, tc := range []struct {
+		name, before, after string
+		valid               bool
+	}{
+		{"absent_empty_root", `{}`, `{"meta":{}}`, false},
+		{"remove_last_child", `{"meta":{"extra":1}}`, `{"meta":{}}`, true},
+		{"remove_empty_root", `{"meta":{}}`, `{}`, false},
+		{"null_root", `{"meta":null}`, `{"meta":{"extra":1}}`, false},
+		{"forged_dotted_key", `{"meta":{}}`, `{"meta":{"a.b":1}}`, false},
+		{"changed_dotted_key", `{"meta":{"a.b":1}}`, `{"meta":{"a.b":2}}`, false},
+		{"unchanged_unusual_keys", `{"meta":{"":1,"a.b":2}}`, `{"meta":{"":1,"a.b":2,"extra":3}}`, true},
+		{"unchanged_protected_empty", `{"meta":{"chunk_parent":{}}}`, `{"meta":{"chunk_parent":{},"extra":3}}`, true},
+		{"null_to_empty", `{"meta":{"extra":null}}`, `{"meta":{"extra":{}}}`, true},
+		{"empty_to_null", `{"meta":{"extra":{}}}`, `{"meta":{"extra":null}}`, true},
+		{"array_to_empty", `{"meta":{"extra":[]}}`, `{"meta":{"extra":{}}}`, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var before, after map[string]any
+			if err := decodeTypedMetadataJSON([]byte(tc.before), &before); err != nil {
+				t.Fatal(err)
+			}
+			if err := decodeTypedMetadataJSON([]byte(tc.after), &after); err != nil {
+				t.Fatal(err)
+			}
+			err := validateTypedMetadataReplayChanges(col.Meta(), before, after, nil, nil, nil)
+			if (err == nil) != tc.valid {
+				t.Fatalf("replay err=%v want valid=%v", err, tc.valid)
+			}
+		})
+	}
+}
+
+func BenchmarkTypedMetadataReplayPlan4769(b *testing.B) {
+	for _, rows := range []int{1, 32, 128} {
+		b.Run(fmt.Sprintf("rows%d", rows), func(b *testing.B) {
+			_, db, col, ids := seedTypedMetadata4769(b, rows, 8)
+			defer db.Close()
+			plan, payload, _, err := col.buildTypedMetadataPlan(ids, map[string]any{"meta.extra": map[string]any{"flag": false, "nested": map[string]any{"value": true}}}, nil, nil)
+			if err != nil {
+				b.Fatal(err)
+			}
+			plan.close()
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				p, _, _, err := col.buildTypedMetadataPlan(ids, nil, nil, &payload)
+				if err != nil {
+					b.Fatal(err)
+				}
+				p.close()
 			}
 		})
 	}
@@ -651,7 +745,8 @@ func TestTypedMetadataWALRecovery4769(t *testing.T) {
 			restore()
 		}
 	}()
-	_, err = col.UpdateTypedMetadataByID(ids, map[string]any{"meta.user_id": "replayed", "meta.extra.flag": false}, nil, metadataGeneration4769(col))
+	objectValue := map[string]any{"": true, "a*b": true, "a.b": json.Number("1"), "a": map[string]any{"b": json.Number("2")}}
+	_, err = col.UpdateTypedMetadataByID(ids, map[string]any{"meta.user_id": "replayed", "meta.extra.flag": false, "meta.extra.object": objectValue}, nil, metadataGeneration4769(col))
 	if !errors.Is(err, ErrCommitAmbiguous) || !errors.Is(err, injected) {
 		t.Fatalf("post-WAL fault=%v", err)
 	}
@@ -705,6 +800,13 @@ func TestTypedMetadataWALRecovery4769(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, oldDoc) {
 		t.Fatal("replay changed vector/content")
+	}
+	var recovered map[string]any
+	if err := decodeTypedMetadataJSON(raw, &recovered); err != nil {
+		t.Fatal(err)
+	}
+	if got := recovered["meta"].(map[string]any)["extra"].(map[string]any)["object"]; !reflect.DeepEqual(got, objectValue) {
+		t.Fatalf("replay changed literal object keys: got=%v want=%v", got, objectValue)
 	}
 }
 
