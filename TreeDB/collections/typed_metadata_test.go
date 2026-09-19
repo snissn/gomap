@@ -296,8 +296,13 @@ func TestTypedMetadataWALRecovery4769(t *testing.T) {
 		t.Fatal(err)
 	}
 	seq, root := dbCommitSeqAndSystemRoot(db)
-	preIntent := errors.New("metadata asset preparation failure")
-	restorePrepare := setColumnPhysicalAssetPreparationAfterPrepareTestHook(func(ColumnPublishPreparedAssets) error { return preIntent })
+	preIntent := errors.New("metadata before WAL append failure")
+	restorePrepare := durabilitycut.Install(func(event durabilitycut.Event) error {
+		if event.Resource == durabilitycut.ResourceCommandWAL && event.Point == durabilitycut.BeforeDependencyAppend {
+			return preIntent
+		}
+		return nil
+	})
 	_, err = col.UpdateTypedMetadataByID(ids, map[string]any{"meta.user_id": "not-published"}, nil, metadataGeneration4769(col))
 	restorePrepare()
 	if !errors.Is(err, preIntent) || errors.Is(err, ErrCommitAmbiguous) {
