@@ -388,6 +388,9 @@ func (c *Collection) searchTypedGraphServingWithOwner(opts VectorIndexSearchOpti
 		filter, err = prepareTypedGraphServingFilter(ctx, keeper, owner.overlay, *opts.DeclaredScalarFilter, p.options.Filter, &filterWork)
 	}
 	if err == nil && shortCircuitEmptyFilter && filter != nil && filter.count == 0 {
+		if err = ctx.Err(); err != nil {
+			return response, nil, filterWork, err
+		}
 		view = owner.overlay.current
 		view.typedGraphOwner = owner
 		return response, view, filterWork, nil

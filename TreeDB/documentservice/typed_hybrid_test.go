@@ -92,7 +92,7 @@ func TestServiceTypedHybridQuantizedRerankPublicRoute4767(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(vectorOnlyFiltered.Documents) != 2 || vectorOnlyFiltered.Documents[0].ID != "a" || vectorOnlyFiltered.Documents[1].ID != "b" || vectorOnlyFiltered.Stats.VectorRoute == nil || vectorOnlyFiltered.Stats.VectorRoute.Route != "typed_exact" || vectorOnlyFiltered.Stats.VectorQuantizedScoreCalls != 0 || vectorOnlyFiltered.Stats.VectorCandidatesReturned != 2 || vectorOnlyFiltered.Stats.ScalarFilterInputIDs != 2 || vectorOnlyFiltered.Stats.ScalarFilterFinalIDs != 2 {
+	if len(vectorOnlyFiltered.Documents) != 2 || vectorOnlyFiltered.Documents[0].ID != "a" || vectorOnlyFiltered.Documents[1].ID != "b" || vectorOnlyFiltered.Stats.VectorRoute == nil || vectorOnlyFiltered.Stats.VectorRoute.Route != "typed_exact" || vectorOnlyFiltered.Stats.VectorQuantizedScoreCalls != 0 || vectorOnlyFiltered.Stats.VectorCandidatesReturned != 2 || vectorOnlyFiltered.Stats.ScalarFilterLookups != 1 || vectorOnlyFiltered.Stats.ScalarFilterInputIDs != 2 || vectorOnlyFiltered.Stats.ScalarFilterFinalIDs != 2 {
 		t.Fatalf("selected vector-only small-filter response=%+v", vectorOnlyFiltered)
 	}
 	filtered, err := svc.SearchHybrid(ctx, create.Name, filteredRequest)
@@ -117,7 +117,7 @@ func TestServiceTypedHybridQuantizedRerankPublicRoute4767(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(vectorOnlyEmpty.Documents) != 0 || vectorOnlyEmpty.Stats.VectorRoute != nil || vectorOnlyEmpty.Stats.VectorCandidatesReturned != 0 || vectorOnlyEmpty.Stats.VectorCandidatesExamined != 0 || vectorOnlyEmpty.Stats.VectorQuantizedScoreCalls != 0 || vectorOnlyEmpty.Stats.VectorQuantizedRerankExactScoreCalls != 0 || vectorOnlyEmpty.Stats.VectorPackedExactScoreCalls != 0 || vectorOnlyEmpty.Stats.DocumentsFetched != 0 || vectorOnlyEmpty.Stats.ScalarFilterInputIDs != 0 || vectorOnlyEmpty.Stats.ScalarFilterFinalIDs != 0 || vectorOnlyEmpty.Stats.CandidateBudgetPolicy != collections.HybridCandidateBudgetPolicyFixed || vectorOnlyEmpty.Stats.CandidateBudgetStopReason != collections.HybridCandidateBudgetStopReasonFixedPolicy {
+	if len(vectorOnlyEmpty.Documents) != 0 || vectorOnlyEmpty.Stats.VectorRoute != nil || vectorOnlyEmpty.Stats.VectorCandidatesReturned != 0 || vectorOnlyEmpty.Stats.VectorCandidatesExamined != 0 || vectorOnlyEmpty.Stats.VectorQuantizedScoreCalls != 0 || vectorOnlyEmpty.Stats.VectorQuantizedRerankExactScoreCalls != 0 || vectorOnlyEmpty.Stats.VectorPackedExactScoreCalls != 0 || vectorOnlyEmpty.Stats.DocumentsFetched != 0 || vectorOnlyEmpty.Stats.ScalarFilterLookups != 1 || vectorOnlyEmpty.Stats.ScalarFilterInputIDs != 0 || vectorOnlyEmpty.Stats.ScalarFilterFinalIDs != 0 || vectorOnlyEmpty.Stats.CandidateBudgetPolicy != collections.HybridCandidateBudgetPolicyFixed || vectorOnlyEmpty.Stats.CandidateBudgetStopReason != collections.HybridCandidateBudgetStopReasonFixedPolicy {
 		t.Fatalf("selected vector-only empty-filter response=%+v", vectorOnlyEmpty)
 	}
 

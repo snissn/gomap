@@ -158,9 +158,14 @@ func hybridVectorCandidateApplyTypedFilterStats(stats *HybridSearchStats, work C
 	if stats == nil || filter == nil || !scalarStatsOwner || !work.Attempted {
 		return
 	}
+	lookups := uint64(hybridScalarFilterLookupCount(*filter))
+	stats.ScalarFilterLookups = lookups
 	stats.ScalarFilterInputIDs = work.SourceIDs
 	stats.ScalarFilterVisited = work.InspectedEntries
 	if work.Completed {
+		if lookups > 0 {
+			stats.ScalarFilterIntersectionSteps = lookups - 1
+		}
 		stats.ScalarFilterFinalIDs = work.EligibleRows
 		stats.ScalarPrefilterIDs = work.EligibleRows
 	}
