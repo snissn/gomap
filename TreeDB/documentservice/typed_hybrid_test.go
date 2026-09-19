@@ -69,8 +69,14 @@ func TestServiceTypedHybridQuantizedRerankPublicRoute4767(t *testing.T) {
 	}
 	canceled, cancel := context.WithCancel(ctx)
 	cancel()
-	if _, err := svc.SearchHybrid(canceled, create.Name, request); !errors.Is(err, context.Canceled) {
+	if _, err := svc.SearchHybrid(canceled, create.Name, request); !errors.Is(err, context.Canceled) || ErrorCodeOf(err) != CodeIndexUnavailable {
 		t.Fatalf("selected hybrid cancellation=%v", err)
+	}
+	for _, cause := range []error{context.Canceled, context.DeadlineExceeded} {
+		mapped := mapHybridSearchError(errors.Join(collections.ErrHybridSearchUnsupported, cause))
+		if !errors.Is(mapped, cause) || ErrorCodeOf(mapped) != CodeIndexUnavailable {
+			t.Fatalf("hybrid mapped cancellation cause=%v mapped=%v code=%s", cause, mapped, ErrorCodeOf(mapped))
+		}
 	}
 	var httpOut HybridSearchResponse
 	postJSON(t, NewHandler(svc), "/v1/indexes/"+create.Name+"/search/hybrid", request, http.StatusOK, &httpOut)

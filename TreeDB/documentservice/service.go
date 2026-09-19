@@ -2997,6 +2997,9 @@ func mapHybridSearchError(err error) error {
 	if errors.As(err, &serviceErr) {
 		return err
 	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return wrapServiceError(CodeIndexUnavailable, "request context is no longer available", err)
+	}
 	if errors.Is(err, collections.ErrHybridSearchStaleIndex) {
 		return wrapServiceError(CodeIndexStale, "hybrid search index snapshot is stale", err)
 	}
