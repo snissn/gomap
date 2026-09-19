@@ -21,7 +21,7 @@ func TestM8RouterPolicyExplicitCLISelection(t *testing.T) {
 	if err != nil || !selected.m8RouterPolicyDiagnostics || selected.m8RouterPolicyWidth != 4 {
 		t.Fatalf("explicit policy diagnostic unavailable: %v", err)
 	}
-	for _, tail := range [][]string{{"-m8-router-policy-diagnostics"}, {"-m8-router-policy-width", "1"}, {"-m8-quality-diagnostics", "-m8-router-policy-diagnostics", "-m8-router-policy-width", "-1"}, {"-m8-quality-diagnostics", "-m8-router-policy-diagnostics", "-m8-router-policy-width", "999999999"}} {
+	for _, tail := range [][]string{{"-m8-router-policy-diagnostics"}, {"-m8-router-policy-width", "1"}, {"-m8-quality-diagnostics", "-m8-router-policy-diagnostics", "-m8-router-policy-width", "-1"}, {"-m8-quality-diagnostics", "-m8-router-policy-diagnostics", "-m8-router-policy-width", "97"}} {
 		if _, err := parseConfig(append(slices.Clone(base), tail...)); err == nil {
 			t.Fatalf("accepted invalid %v", tail)
 		}
@@ -44,6 +44,21 @@ func TestM8RouterPolicyExplicitCLISelection(t *testing.T) {
 	got, err := parseConfig(child)
 	if err != nil || !got.m8RouterPolicyDiagnostics || got.m8RouterPolicyWidth != 4 {
 		t.Fatal("child lost policy", err)
+	}
+}
+
+func TestM8RouterPolicyDefaultDiagnosticShapeStaysBoundedV1(t *testing.T) {
+	if width, beam := m8RouterPolicyDiagnosticShapeV1(2048, 0, defaultRouterScoreBudgetV3); width != 64 || beam != 96 || beam > defaultRouterScoreBudgetV3 {
+		t.Fatalf("large-model diagnostic shape = %d/%d", width, beam)
+	}
+	if width, beam := m8RouterPolicyDiagnosticShapeV1(2048, 0, 32); width != 32 || beam != 32 {
+		t.Fatalf("budget-bounded diagnostic shape = %d/%d", width, beam)
+	}
+	if width, beam := m8RouterPolicyDiagnosticShapeV1(48, 0, defaultRouterScoreBudgetV3); width != 48 || beam != 48 {
+		t.Fatalf("small-model diagnostic shape = %d/%d", width, beam)
+	}
+	if width, beam := m8RouterPolicyDiagnosticShapeV1(2048, 4, 1); width != 4 || beam != 4 {
+		t.Fatalf("explicit tiny-budget diagnostic shape = %d/%d", width, beam)
 	}
 }
 

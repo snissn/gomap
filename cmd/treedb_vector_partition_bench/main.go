@@ -84,8 +84,10 @@ const (
 	// up to one full duplicate membership per source row. At 64 conservative
 	// candidate bytes per membership, 128 MiB keeps that complete comparison
 	// bounded while allowing the required 1M + 20% overlap preflight to run.
-	m8ProductionCandidateBudgetBytesV1 uint64 = 128 << 20
-	defaultRouterScoreBudgetV3                = 1024
+	m8ProductionCandidateBudgetBytesV1   uint64 = 128 << 20
+	defaultRouterScoreBudgetV3                  = 1024
+	defaultRouterPolicyDiagnosticWidthV1        = 64
+	defaultRouterPolicyDiagnosticBeamV1         = 96
 )
 
 const partitionAssignmentGraphRepartitionedV1 = "graph_repartitioned"
@@ -987,7 +989,7 @@ func parseConfig(args []string) (config, error) {
 	fs.BoolVar(&cfg.m8QualityDiagnostics, "m8-quality-diagnostics", false, "enable versioned offline coverage-cost/no-coarsening attribution (top-k <= 10); ordinary search is unchanged")
 	fs.IntVar(&cfg.m8QualityTraceQueries, "m8-quality-trace-queries", 0, "sample the first 0..8 quality queries with structurally bounded existing local traces")
 	fs.BoolVar(&cfg.m8RouterPolicyDiagnostics, "m8-router-policy-diagnostics", false, "compare router ranking policies offline on identical candidates; requires -m8-quality-diagnostics and does not change serving")
-	fs.IntVar(&cfg.m8RouterPolicyWidth, "m8-router-policy-width", 0, "nearest returned representatives used by the offline flat-HNSW diagnostic; zero uses the persisted model size")
+	fs.IntVar(&cfg.m8RouterPolicyWidth, "m8-router-policy-width", 0, "nearest returned representatives used by the offline flat-HNSW diagnostic; zero uses the bounded default")
 	fs.StringVar(&cfg.m8TruthCache, "m8-truth-cache", "", "external canonical exact-truth cache directory; identity-bound and fail-closed")
 	fs.StringVar(&cfg.m8TruthCacheSHA256, "m8-truth-cache-sha256", "", "independently trusted SHA-256 of the canonical truth-cache artifact required for cache reuse")
 	fs.StringVar(&cfg.partitionAssignment, "partition-assignment", cfg.partitionAssignment, "partition assignment for partition/M3 stages: graph or stable_id_hash")
@@ -1168,8 +1170,8 @@ func parseConfig(args []string) (config, error) {
 	if cfg.routerCandidates < 1 || cfg.routerCandidates > collections.MaxVectorPartitionRouterScoreBudgetV3 {
 		return config{}, errors.New("router score budget must be in [1,1000000]")
 	}
-	if cfg.m8RouterPolicyDiagnostics && !cfg.m8QualityDiagnostics || cfg.m8RouterPolicyWidth < 0 || cfg.m8RouterPolicyWidth > vectorpartition.DefaultRouterConfigV1().MaxRepresentatives || cfg.m8RouterPolicyWidth != 0 && !cfg.m8RouterPolicyDiagnostics {
-		return config{}, errors.New("router policy diagnostics require quality diagnostics and a width in the persisted model bound")
+	if cfg.m8RouterPolicyDiagnostics && !cfg.m8QualityDiagnostics || cfg.m8RouterPolicyWidth < 0 || cfg.m8RouterPolicyWidth > defaultRouterPolicyDiagnosticBeamV1 || cfg.m8RouterPolicyWidth != 0 && !cfg.m8RouterPolicyDiagnostics {
+		return config{}, errors.New("router policy diagnostics require quality diagnostics and a width in the diagnostic beam bound")
 	}
 	if cfg.m8QualityDiagnostics && (cfg.stage != m8ProductionMultiGroupModeV1 || cfg.topK > 10) || cfg.m8QualityTraceQueries < 0 || cfg.m8QualityTraceQueries > m8QualityTraceMaxQueriesV1 || cfg.m8QualityTraceQueries > 0 && !cfg.m8QualityDiagnostics {
 		return config{}, errors.New("quality diagnostics require production_multi_group, top-k <= 10, and a trace sample in [0,8]")
