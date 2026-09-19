@@ -533,21 +533,24 @@ type KeywordSearchStats struct {
 // to bounded equality/range leaves joined only by AND over declared scalar
 // fields; unsupported shapes fail closed without a document scan.
 type HybridSearchRequest struct {
-	ExpectedGeneration   uint64                          `json:"expected_generation,omitempty"`
-	Query                string                          `json:"query,omitempty"`
-	QueryEmbedding       []float32                       `json:"query_embedding,omitempty"`
-	TopK                 int                             `json:"top_k"`
-	TextQueryMode        collections.TextSearchQueryMode `json:"text_query_mode,omitempty"`
-	TextOperator         collections.TextSearchOperator  `json:"text_operator,omitempty"`
-	TextCandidateLimit   int                             `json:"text_candidate_limit,omitempty"`
-	MaxPostingsScanned   int                             `json:"max_postings_scanned,omitempty"`
-	VectorCandidateLimit int                             `json:"vector_candidate_limit,omitempty"`
-	CandidateLimit       int                             `json:"candidate_limit,omitempty"`
-	MaxChunksPerParent   int                             `json:"max_chunks_per_parent,omitempty"`
-	EfSearch             int                             `json:"ef_search,omitempty"`
-	Fusion               collections.HybridFusionOptions `json:"fusion,omitempty"`
-	Filter               *Filter                         `json:"filter,omitempty"`
-	ReturnEmbedding      bool                            `json:"return_embedding,omitempty"`
+	ExpectedGeneration        uint64                           `json:"expected_generation,omitempty"`
+	Query                     string                           `json:"query,omitempty"`
+	QueryEmbedding            []float32                        `json:"query_embedding,omitempty"`
+	TopK                      int                              `json:"top_k"`
+	TextQueryMode             collections.TextSearchQueryMode  `json:"text_query_mode,omitempty"`
+	TextOperator              collections.TextSearchOperator   `json:"text_operator,omitempty"`
+	TextCandidateLimit        int                              `json:"text_candidate_limit,omitempty"`
+	MaxPostingsScanned        int                              `json:"max_postings_scanned,omitempty"`
+	VectorCandidateLimit      int                              `json:"vector_candidate_limit,omitempty"`
+	VectorQueryMode           collections.VectorIndexQueryMode `json:"vector_query_mode,omitempty"`
+	QuantizedIndexName        string                           `json:"quantized_index_name,omitempty"`
+	QuantizedRerankCandidates int                              `json:"quantized_rerank_candidates,omitempty"`
+	CandidateLimit            int                              `json:"candidate_limit,omitempty"`
+	MaxChunksPerParent        int                              `json:"max_chunks_per_parent,omitempty"`
+	EfSearch                  int                              `json:"ef_search,omitempty"`
+	Fusion                    collections.HybridFusionOptions  `json:"fusion,omitempty"`
+	Filter                    *Filter                          `json:"filter,omitempty"`
+	ReturnEmbedding           bool                             `json:"return_embedding,omitempty"`
 }
 
 type HybridSearchResponse struct {

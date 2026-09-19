@@ -1,6 +1,9 @@
 package collections
 
-import "errors"
+import (
+	"context"
+	"errors"
+)
 
 // Hybrid-search errors are fail-closed sentinels. Implementations may wrap them
 // with source/index-specific detail, but must not silently scan all documents or
@@ -198,6 +201,9 @@ const (
 // scalar filters, lexical candidates, vector candidates, deterministic fusion,
 // and bounded final document fetch.
 type HybridSearchOptions struct {
+	// Context bounds owner acquisition and selected vector work. Other hybrid
+	// phases observe cancellation at their phase boundaries.
+	Context              context.Context            `json:"-"`
 	TopK                 int                        `json:"top_k"`
 	Text                 *HybridTextQuery           `json:"text,omitempty"`
 	Vector               *HybridVectorQuery         `json:"vector,omitempty"`
@@ -272,6 +278,9 @@ type HybridSearchPlan struct {
 	ResultMode                 HybridResultMode           `json:"result_mode,omitempty"`
 	TextCandidateLimit         int                        `json:"text_candidate_limit,omitempty"`
 	VectorCandidateLimit       int                        `json:"vector_candidate_limit,omitempty"`
+	VectorQueryMode            VectorIndexQueryMode       `json:"vector_query_mode,omitempty"`
+	QuantizedIndexName         string                     `json:"quantized_index_name,omitempty"`
+	QuantizedRerankCandidates  int                        `json:"quantized_rerank_candidates,omitempty"`
 	MaxChunksPerParent         int                        `json:"max_chunks_per_parent,omitempty"`
 	FinalTopK                  int                        `json:"final_top_k,omitempty"`
 }
@@ -315,6 +324,14 @@ type HybridSearchStats struct {
 	VectorCandidatesReturned                uint64                          `json:"vector_candidates_returned,omitempty"`
 	VectorCandidatesExamined                uint64                          `json:"vector_candidates_examined,omitempty"`
 	VectorEdgesVisited                      uint64                          `json:"vector_edges_visited,omitempty"`
+	VectorRoute                             *ColumnGraphRouteReceipt        `json:"vector_route,omitempty"`
+	VectorQuantizedScoreCalls               uint64                          `json:"vector_quantized_score_calls,omitempty"`
+	VectorQuantizedCodeBytesRead            uint64                          `json:"vector_quantized_code_bytes_read,omitempty"`
+	VectorQuantizedRerankCandidates         uint64                          `json:"vector_quantized_rerank_candidates,omitempty"`
+	VectorQuantizedRerankExactScoreCalls    uint64                          `json:"vector_quantized_rerank_exact_score_calls,omitempty"`
+	VectorPackedExactScoreCalls             uint64                          `json:"vector_packed_exact_score_calls,omitempty"`
+	VectorPackedExactScoreCandidates        uint64                          `json:"vector_packed_exact_score_candidates,omitempty"`
+	VectorPackedExactVectorBytesRead        uint64                          `json:"vector_packed_exact_vector_bytes_read,omitempty"`
 	ScalarPrefilterIDs                      uint64                          `json:"scalar_prefilter_ids,omitempty"`
 	ScalarFilterLookups                     uint64                          `json:"scalar_filter_lookups,omitempty"`
 	ScalarFilterInputIDs                    uint64                          `json:"scalar_filter_input_ids,omitempty"`
@@ -347,6 +364,7 @@ type HybridSearchStats struct {
 	CandidatesAfterFilter                   uint64                          `json:"candidates_after_filter,omitempty"`
 	DocumentsFetched                        uint64                          `json:"documents_fetched,omitempty"`
 	DocumentsMissing                        uint64                          `json:"documents_missing,omitempty"`
+	EmbeddingOutputBytes                    uint64                          `json:"embedding_output_bytes,omitempty"`
 	FullDocumentScanFallbacks               uint64                          `json:"full_document_scan_fallbacks,omitempty"`
 	Truncated                               uint64                          `json:"truncated,omitempty"`
 	CandidateBudgetPolicy                   HybridCandidateBudgetPolicy     `json:"candidate_budget_policy,omitempty"`

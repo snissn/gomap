@@ -91,6 +91,14 @@ deletes, source replacement, reopen, and final-state checks. Text postings must
 remain correct, but text/hybrid query throughput is a separate regression lane,
 not a claim made by the dense benchmark.
 
+The document-service hybrid lane is nevertheless a supported production seam:
+HTTP/Python `search_hybrid` may select the admitted scalar-u8 plane with
+`vector_query_mode=quantized_rerank`, its name, and fixed rerank width. It stays
+on the existing hybrid executor and one typed read owner for filters, lexical
+work, SQ8 candidates, canonical FP32 rerank, fusion/collapse, and final fetch.
+This does not change the frozen dense Minima workload or make hybrid throughput
+part of its qualification claim.
+
 ## Data ownership and write contract
 
 | Logical field | Selected authoritative representation | Consumers |

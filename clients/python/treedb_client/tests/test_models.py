@@ -352,6 +352,9 @@ class KeywordHybridModelTests(unittest.TestCase):
             text_candidate_limit=25,
             max_postings_scanned=1000,
             vector_candidate_limit=30,
+            vector_query_mode="quantized_rerank",
+            quantized_index_name="embedding.scalar_u8.fast",
+            quantized_rerank_candidates=32,
             ef_search=64,
             max_chunks_per_parent=2,
             fusion=HybridFusionOptions(
@@ -379,11 +382,18 @@ class KeywordHybridModelTests(unittest.TestCase):
         self.assertEqual(payload["text_query_mode"], "literal")
         self.assertEqual(payload["text_operator"], "and")
         self.assertEqual(payload["max_postings_scanned"], 1000)
+        self.assertEqual(payload["vector_query_mode"], "quantized_rerank")
+        self.assertEqual(payload["quantized_index_name"], "embedding.scalar_u8.fast")
+        self.assertEqual(payload["quantized_rerank_candidates"], 32)
         self.assertEqual(payload["max_chunks_per_parent"], 2)
         self.assertEqual(payload["filter"]["operator"], "AND")
         self.assertEqual(len(payload["filter"]["conditions"]), 2)
         self.assertEqual(payload["return_embedding"], False)
         self.assertNotIn("max_chunks_per_parent", HybridSearchRequest(top_k=1, query="refund").to_dict())
+        exact = HybridSearchRequest(top_k=1, query_embedding=[1.0]).to_dict()
+        self.assertNotIn("vector_query_mode", exact)
+        self.assertNotIn("quantized_index_name", exact)
+        self.assertNotIn("quantized_rerank_candidates", exact)
 
     def test_lexical_request_options_fail_closed_locally(self) -> None:
         with self.assertRaisesRegex(ValueError, "text_query_mode"):
@@ -394,6 +404,28 @@ class KeywordHybridModelTests(unittest.TestCase):
             KeywordSearchRequest(query="refund", top_k=1, max_postings_scanned=-1).to_dict()
         with self.assertRaisesRegex(ValueError, "require query"):
             HybridSearchRequest(top_k=1, query_embedding=[1.0], text_query_mode="literal").to_dict()
+        with self.assertRaisesRegex(ValueError, "vector_query_mode"):
+            HybridSearchRequest(top_k=1, query_embedding=[1.0], vector_query_mode="quantized_only").to_dict()
+        with self.assertRaisesRegex(ValueError, "requires quantized_index_name"):
+            HybridSearchRequest(top_k=1, query_embedding=[1.0], vector_query_mode="quantized_rerank").to_dict()
+        with self.assertRaisesRegex(ValueError, "does not accept quantized options"):
+            HybridSearchRequest(top_k=1, query_embedding=[1.0], quantized_index_name="embedding.scalar_u8.fast").to_dict()
+        with self.assertRaisesRegex(ValueError, "non-negative"):
+            HybridSearchRequest(
+                top_k=1, query_embedding=[1.0], vector_query_mode="quantized_rerank",
+                quantized_index_name="embedding.scalar_u8.fast", quantized_rerank_candidates=-1,
+            ).to_dict()
+        with self.assertRaisesRegex(ValueError, "require query_embedding"):
+            HybridSearchRequest(
+                top_k=1, query="refund", vector_query_mode="quantized_rerank",
+                quantized_index_name="embedding.scalar_u8.fast",
+            ).to_dict()
+        with self.assertRaisesRegex(ValueError, "effective vector candidate limit"):
+            HybridSearchRequest(
+                top_k=1, query_embedding=[1.0], vector_candidate_limit=3,
+                vector_query_mode="quantized_rerank", quantized_index_name="embedding.scalar_u8.fast",
+                quantized_rerank_candidates=2,
+            ).to_dict()
 
     def test_hybrid_response_parses_plan_snapshot_stats(self) -> None:
         response = HybridSearchResponse.from_dict(
@@ -407,6 +439,9 @@ class KeywordHybridModelTests(unittest.TestCase):
                     "scalar_filter_lookup_limit": 4096,
                     "scalar_filter_aggregate_limit": 8192,
                     "fusion_method": "rrf",
+                    "vector_query_mode": "quantized_rerank",
+                    "quantized_index_name": "embedding.scalar_u8.fast",
+                    "quantized_rerank_candidates": 32,
                     "max_chunks_per_parent": 2,
                     "final_top_k": 5,
                     "future_plan": "kept",
@@ -421,6 +456,10 @@ class KeywordHybridModelTests(unittest.TestCase):
                     "collapse_rejections": 3,
                     "collapse_exhaustions": 1,
                     "documents_fetched": 2,
+                    "embedding_output_bytes": 0,
+                    "vector_route": {"available": True, "query_mode": "quantized_rerank", "route": "typed_hnsw"},
+                    "vector_quantized_score_calls": 32,
+                    "vector_quantized_rerank_exact_score_calls": 32,
                 },
             }
         )
@@ -433,6 +472,9 @@ class KeywordHybridModelTests(unittest.TestCase):
         self.assertEqual(response.plan.scalar_filter_lookup_count, 2)
         self.assertEqual(response.plan.scalar_filter_lookup_limit, 4096)
         self.assertEqual(response.plan.scalar_filter_aggregate_limit, 8192)
+        self.assertEqual(response.plan.vector_query_mode, "quantized_rerank")
+        self.assertEqual(response.plan.quantized_index_name, "embedding.scalar_u8.fast")
+        self.assertEqual(response.plan.quantized_rerank_candidates, 32)
         self.assertEqual(response.plan.extra["future_plan"], "kept")
         self.assertEqual(response.snapshot.commit_seq, 9)
         self.assertEqual(response.stats.collapse_rejections, 3)
@@ -442,6 +484,10 @@ class KeywordHybridModelTests(unittest.TestCase):
         self.assertEqual(response.stats.scalar_filter_final_ids, 1)
         self.assertEqual(response.stats.collapse_exhaustions, 1)
         self.assertEqual(response.stats.documents_fetched, 2)
+        self.assertEqual(response.stats.embedding_output_bytes, 0)
+        self.assertEqual(response.stats.vector_route["route"], "typed_hnsw")
+        self.assertEqual(response.stats.vector_quantized_score_calls, 32)
+        self.assertEqual(response.stats.vector_quantized_rerank_exact_score_calls, 32)
         self.assertEqual(response.documents[0].meta["_treedb_search"]["type"], "hybrid")
 
 

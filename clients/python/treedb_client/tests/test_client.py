@@ -2686,6 +2686,9 @@ class TreeDBClientTests(unittest.TestCase):
                 text_candidate_limit=25,
                 max_postings_scanned=1000,
                 vector_candidate_limit=30,
+                vector_query_mode="quantized_rerank",
+                quantized_index_name="embedding.scalar_u8.fast",
+                quantized_rerank_candidates=32,
                 ef_search=64,
                 max_chunks_per_parent=1,
                 fusion=HybridFusionOptions(
@@ -2717,6 +2720,9 @@ class TreeDBClientTests(unittest.TestCase):
             self.assertEqual(body["text_operator"], "and")
             self.assertEqual(body["max_postings_scanned"], 1000)
             self.assertEqual(body["vector_candidate_limit"], 30)
+            self.assertEqual(body["vector_query_mode"], "quantized_rerank")
+            self.assertEqual(body["quantized_index_name"], "embedding.scalar_u8.fast")
+            self.assertEqual(body["quantized_rerank_candidates"], 32)
             self.assertEqual(body["max_chunks_per_parent"], 1)
             self.assertEqual(body["return_embedding"], False)
 
