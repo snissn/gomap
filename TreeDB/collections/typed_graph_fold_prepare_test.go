@@ -76,7 +76,7 @@ func TestTypedGraphFoldStreamedAssetsMatchMaterializedRows(t *testing.T) {
 	if vectorSource != nil {
 		defer vectorSource.Close()
 	}
-	streamedRows, err := newTypedGraphFoldRowSource(context.Background(), col, state, graphRows)
+	streamedRows, err := newTypedGraphFoldRowSource(context.Background(), col, state, graphRows, false)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1036,6 +1036,14 @@ atomically republishes the manifest and all live locators because it rewrites
 their physical generation and row coordinates. Unknown magic, the wrong value
 length, an overflowing row index, or invalid physical coordinates fail closed.
 
+Metadata-only typed updates use `CRL2`: the same first 36 bytes (magic `CRL2`)
+identify the current metadata row, followed by four big-endian u64 fields naming
+the preserved full-row generation, part, row index and LSN. Total size is 68
+bytes. The preserved generation and LSN must precede the metadata row. Repeated
+updates retain one ordinary full row, never a chain of metadata rows. Scoring
+uses the preserved coordinates; current materialization uses the metadata row.
+Readers continue to accept CRL1. Fold emits ordinary full rows and CRL1 locators.
+
 Raw side-root block value:
 
 ```text
@@ -1757,6 +1765,16 @@ columns  declared column descriptors
 rows     versioned row payloads
 ```
 
+Version 9 is the metadata-only update row encoding. Each row has its ID and
+false deleted flag, then four u64 preserved-full-row coordinates (generation,
+part, row index, LSN). The header retains the complete row-asset schema; only
+required string columns whose paths begin with `meta.` have value payloads.
+Other values, including content and vectors, are absent, not null, and resolve
+through the preserved ordinary row. The existing active/recovery manifests keep
+those referenced assets reachable. A fold that races with newer metadata retries
+before removing its captured assets. This pre-alpha extension has no migration:
+old binaries reject v9/CRL2 databases.
+
 Version 2 row payloads are:
 
 ```text
@@ -2470,6 +2488,17 @@ Current payload format IDs:
 | 10 | `CollectionReplaceSourceByIDV1` |
 | 11 | `CollectionTypedBatchByIDV1` |
 | 12 | `CollectionTypedSourceByIDV1` |
+| 13 | `CollectionTypedMetadataByIDV1` |
+
+Format 13 is accepted only for collection update kind 102. Its little-endian
+payload is u16 version 1, u64 schema hash, u32 column count, u32 row count, then
+u32-length-prefixed collection, sorted metadata column names, and sorted unique
+rows. Each row contains ID, retained JSON after-image, and one string after-value
+per column. Zero metadata columns is valid; zero rows is not. It contains no
+content/vector values or physical coordinates. Replay resolves IDs against the
+preceding authoritative snapshot and uses the metadata publication planner,
+never a full typed replacement. Duplicate IDs/columns, bad ordering or UTF-8,
+truncation, trailing bytes, schema mismatch and invalid after-images fail closed.
 
 `RawKVBatchV1` and `RawKVBatchV2` share this payload framing:
 

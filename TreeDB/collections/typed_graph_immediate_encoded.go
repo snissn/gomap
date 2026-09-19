@@ -9,6 +9,7 @@ import (
 // Only immediate receipts need this borrowed proof. The producing plan owns all
 // headers until synchronous publication returns; no document payload is copied.
 type typedGraphImmediateReceiptInput struct {
+	metadataOnly       bool
 	operation          ColumnPublishOperation
 	documents, deleted []columnWriteDocument
 	rows               []columnDeclaredRow
@@ -56,7 +57,7 @@ func (c *Collection) prepareImmediateTypedGraphEncoded(input columnWritePublishI
 	if err != nil {
 		return input, noop, err
 	}
-	r.immediate = &typedGraphImmediateReceiptInput{operation: prepared.operation, documents: prepared.documents, deleted: prepared.sourceDeleteDocuments, rows: prepared.declaredRows}
+	r.immediate = &typedGraphImmediateReceiptInput{metadataOnly: prepared.metadataOnly, operation: prepared.operation, documents: prepared.documents, deleted: prepared.sourceDeleteDocuments, rows: prepared.declaredRows}
 	prepared.typedReceipts = []*typedGraphPublicationReceipt{r}
 	cleanup := func() {
 		// An assigned command may have been accepted ambiguously. Logical debt
@@ -77,7 +78,7 @@ func validateTypedGraphImmediateReceiptInput(coord *collectionSchemaCoordinator,
 	defer coord.typedPublicationDebtMu.Unlock()
 	r := input.typedReceipts[0]
 	p := r.immediate
-	if r.coord != coord || r.consumed || r.cost != cost || p.operation != input.operation || len(p.documents) != len(input.documents) || len(p.deleted) != len(input.sourceDeleteDocuments) || len(p.rows) != len(input.declaredRows) || !input.declaredRowsReady {
+	if r.coord != coord || r.consumed || r.cost != cost || p.metadataOnly != input.metadataOnly || p.operation != input.operation || len(p.documents) != len(input.documents) || len(p.deleted) != len(input.sourceDeleteDocuments) || len(p.rows) != len(input.declaredRows) || !input.declaredRowsReady {
 		return ErrVectorIndexSnapshotMismatch
 	}
 	for i, doc := range p.documents {
@@ -92,7 +93,7 @@ func validateTypedGraphImmediateReceiptInput(coord *collectionSchemaCoordinator,
 	}
 	for i, row := range p.rows {
 		actual := input.declaredRows[i]
-		if !bytes.Equal(row.ID, actual.ID) || len(row.Values) != len(actual.Values) || (len(row.Values) > 0 && &row.Values[0] != &actual.Values[0]) {
+		if row.Preserved != actual.Preserved || !bytes.Equal(row.ID, actual.ID) || len(row.Values) != len(actual.Values) || (len(row.Values) > 0 && &row.Values[0] != &actual.Values[0]) {
 			return ErrVectorIndexSnapshotMismatch
 		}
 	}

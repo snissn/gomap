@@ -9,6 +9,7 @@ import (
 )
 
 type columnPhysicalVisibleRow struct {
+	Preserved         *columnRowCoordinates
 	Generation        uint64
 	PartID            uint64
 	AppliedCommandLSN uint64
@@ -169,6 +170,11 @@ func (c *Collection) scanColumnPhysicalVisibleRowsAtSnapshotForTargetsWithReadCa
 		return columnPhysicalVisibilityResult{Diagnostics: diag}, err
 	}
 	rows := latest.rows
+	// Metadata versions retain full-row authority in older manifest assets.
+	// Resolve only the surviving metadata rows, not every historical version.
+	if err := c.resolveColumnMetadataRows(ctx, snap, catalog, cfg, projected, readIntegrity, rows); err != nil {
+		return columnPhysicalVisibilityResult{Diagnostics: diag}, err
+	}
 	sort.Slice(rows, func(i, j int) bool {
 		return bytes.Compare(rows[i].ID, rows[j].ID) < 0
 	})
@@ -244,7 +250,53 @@ func (c *Collection) latestColumnPhysicalVisibleRowAtSnapshot(
 			return nil
 		},
 	})
+	if err == nil && found && latest.Preserved != nil {
+		rows := []columnPhysicalVisibleRow{latest}
+		err = c.resolveColumnMetadataRows(nil, snap, catalog, cfg, projected, ColumnAssetReadIntegrityVerify, rows)
+		latest = rows[0]
+	}
 	return latest, diag, found, err
+}
+
+func (c *Collection) resolveColumnMetadataRows(ctx context.Context, snap *backenddb.Snapshot, catalog *collectionCatalog, cfg ColumnStoreConfig, projected []string, readIntegrity ColumnAssetReadIntegrity, rows []columnPhysicalVisibleRow) error {
+	var view *CollectionReadView
+	defer func() {
+		if view != nil {
+			_ = view.Close()
+		}
+	}()
+	var scratch columnPhysicalRowReaderScratch
+	for i := range rows {
+		if rows[i].Preserved == nil || rows[i].Deleted {
+			continue
+		}
+		if ctx != nil {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+		}
+		if view == nil {
+			view = newCollectionReadViewAtSnapshot(c, snap, catalog, false, "")
+			if err := view.ensureAssetReadCaches(cfg, readIntegrity); err != nil {
+				return err
+			}
+		}
+		physical, err := view.materializerColumnSnapshotView(cfg)
+		if err != nil {
+			return err
+		}
+		projection, err := view.pointRowScanProjection(physical, projected)
+		if err != nil {
+			return err
+		}
+		ref := DocumentRowRef{DocumentID: rows[i].ID, Generation: rows[i].Generation, PartID: rows[i].PartID, RowIndex: rows[i].RowIndex, AppliedCommandLSN: rows[i].AppliedCommandLSN}
+		resolved, err := view.fetchDocumentPointRow(physical, ref, projection, &scratch, nil)
+		if err != nil {
+			return err
+		}
+		rows[i].Values = cloneColumnDeclaredValuesInto(rows[i].Values, resolved.Values)
+	}
+	return nil
 }
 
 type columnPhysicalVisibilityIndex struct {
@@ -283,6 +335,7 @@ func (idx *columnPhysicalVisibilityIndex) upsert(row columnPhysicalScanRowView) 
 }
 
 func (idx *columnPhysicalVisibilityIndex) assignColumnPhysicalVisibleRow(dst *columnPhysicalVisibleRow, row columnPhysicalScanRowView) {
+	dst.Preserved = row.Preserved
 	dst.Generation = row.Generation
 	dst.PartID = row.PartID
 	dst.AppliedCommandLSN = row.AppliedCommandLSN
@@ -360,6 +413,7 @@ func (idx *columnPhysicalVisibilityIndex) cloneBytes(raw []byte) []byte {
 }
 
 func assignColumnPhysicalVisibleRow(dst *columnPhysicalVisibleRow, row columnPhysicalScanRowView) {
+	dst.Preserved = row.Preserved
 	dst.Generation = row.Generation
 	dst.PartID = row.PartID
 	dst.AppliedCommandLSN = row.AppliedCommandLSN

@@ -43,10 +43,27 @@ silently normalize a vector and fails before WAL. A generic document update may
 carry forward already-canonical bytes, but a noncanonical replacement likewise
 fails before WAL; callers use typed replacement admission for a new vector.
 
-A metadata-only or document-only update preserves the existing canonical
+A generic metadata-only or document-only update preserves the existing canonical
 embedding bytes without renormalization. It may copy those identical bytes into
 the bounded mutable suffix and therefore may replace the physical row mapping.
 Supplying an embedding is a new vector admission and follows the rules above.
+
+The explicit `UpdateTypedMetadataByID` operation is stricter: its metadata-only
+WAL and row publication contain no unchanged vector/content payload. It retains
+one durable full-row reference and shares the existing scoring rows/inverse norms,
+without normalization, vector admission, or graph topology changes. Current
+metadata locators and scalar roots advance atomically; filters resolve eligibility
+against those roots, not stale immutable-base filter caches. Cold reconstruction
+may read the preserved full row, and later fold may materialize it into a new
+canonical generation. Those maintenance/read costs are not mutation work.
+
+Graph row references identify scoring data, not necessarily the latest document.
+Final document fetch validates the scoring reference against the captured locator's
+preserved-row link and uses its current metadata coordinates. Normalized rebuild must
+likewise copy scalar/content values from the current locator while retaining the
+preserved vector as scoring input. An explicit public document-row-ref request
+remains strict: stale coordinates are rejected, not silently upgraded. All of
+these decisions are snapshot-local; pinned old readers retain old metadata.
 
 ## Score and ordering
 

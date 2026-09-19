@@ -149,7 +149,7 @@ func prepareTypedGraphFilterUnmetered(ctx context.Context, overlay *typedGraphOv
 		}
 		plan.scratchIDBytes = max(plan.scratchIDBytes, bytesInChunk)
 		plan.scratchRows = max(plan.scratchRows, len(ids))
-		_, err := overlay.current.visitDocumentRowRefsByID(ids, func(_ []byte, ref DocumentRowRef, found bool) error {
+		_, err := overlay.current.visitDocumentScoringRowRefsByID(ids, func(_ []byte, ref DocumentRowRef, found bool) error {
 			if (baseCount+deltaCount)&255 == 0 {
 				if err := ctx.Err(); err != nil {
 					return err
@@ -308,7 +308,7 @@ func prepareTypedGraphSingleLeaf(ctx context.Context, plan *typedGraphPreparedFi
 		}
 		plan.scratchRows = max(plan.scratchRows, len(ids))
 		plan.scratchIDBytes = max(plan.scratchIDBytes, len(arena))
-		_, err := overlay.current.visitDocumentRowRefsByID(ids, func(_ []byte, ref DocumentRowRef, found bool) error {
+		_, err := overlay.current.visitDocumentScoringRowRefsByID(ids, func(_ []byte, ref DocumentRowRef, found bool) error {
 			if (len(baseOrdinals)+len(deltaOrdinals))&255 == 0 {
 				if err := ctx.Err(); err != nil {
 					return err

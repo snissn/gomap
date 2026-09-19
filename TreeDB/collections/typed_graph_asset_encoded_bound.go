@@ -33,8 +33,11 @@ func typedGraphColumnEncodedBound(input columnWritePublishInput) (int64, error) 
 		}
 		one := [1]columnDeclaredRow{}
 		for i, doc := range documents {
-			one[0] = columnDeclaredRow{ID: doc.ID, Deleted: operation == ColumnPublishOperationDelete}
+			one[0] = columnDeclaredRow{ID: doc.ID, Deleted: operation == ColumnPublishOperationDelete, Preserved: doc.preserved}
 			locatorBytes := columnPrimaryRowLocatorValueSize
+			if doc.preserved != nil {
+				locatorBytes += 32
+			}
 			if one[0].Deleted {
 				locatorBytes = 0
 			}
@@ -75,7 +78,7 @@ func typedGraphColumnEncodedBound(input columnWritePublishInput) (int64, error) 
 	if err := rowBound(input.documents, input.operation, true); err != nil {
 		return 0, err
 	}
-	if input.operation == ColumnPublishOperationDelete || len(input.documents) == 0 {
+	if input.metadataOnly || input.operation == ColumnPublishOperationDelete || len(input.documents) == 0 {
 		return total, nil
 	}
 	encoded, err := typedColumnPublicationFP32EncodedBound(*cfg, len(input.documents))

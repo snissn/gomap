@@ -213,6 +213,37 @@ def _typed_source_replace_response(body, generation, delete_count, live_count):
     return values[1], values[2]
 
 
+def _typed_metadata_update_request(index, ids, set_values, unset, generation):
+    request = {
+        "expected_generation": generation,
+        "ids": list(ids),
+        "index": index,
+        "set": copy.deepcopy(dict(set_values)),
+        "unset": list(unset),
+    }
+    try:
+        raw = json.dumps(request, allow_nan=False, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    except (TypeError, ValueError, UnicodeError) as exc:
+        raise TreeDBConfigError("invalid typed metadata update request") from exc
+    if len(raw) + 128 > _MAX_FRAME:
+        raise TreeDBConfigError("typed metadata update exceeds frame bounds")
+    return _section(142, raw)
+
+
+def _typed_metadata_update_response(body, generation, id_count):
+    sections = _sections(body, {143})
+    if 143 not in sections:
+        raise TreeDBProtocolError("typed metadata update response missing")
+    raw, offset, values = sections[143], 0, []
+    for _ in range(3):
+        value, offset = _read_uint(raw, offset)
+        values.append(value)
+    if (offset != len(raw) or values[0] != generation or values[1] > id_count
+            or values[2] > values[1]):
+        raise TreeDBProtocolError("typed metadata update response generation/count mismatch")
+    return values[1], values[2]
+
+
 def _typed_upsert_response(body, generation, rows):
     sections = _sections(body, {132})
     if 132 not in sections:

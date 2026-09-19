@@ -168,7 +168,7 @@ func projectColumnDeclaredRowsForColumns(allColumns, selected []ColumnStoreColum
 	if len(selected) == 0 {
 		out := make([]columnDeclaredRow, len(rows))
 		for rowIdx, row := range rows {
-			out[rowIdx] = columnDeclaredRow{ID: row.ID, Deleted: row.Deleted}
+			out[rowIdx] = columnDeclaredRow{ID: row.ID, Deleted: row.Deleted, Preserved: row.Preserved}
 			if row.Deleted {
 				continue
 			}
@@ -204,7 +204,7 @@ func projectColumnDeclaredRowsForColumns(allColumns, selected []ColumnStoreColum
 	}
 	out := make([]columnDeclaredRow, len(rows))
 	for rowIdx, row := range rows {
-		out[rowIdx] = columnDeclaredRow{ID: row.ID, Deleted: row.Deleted}
+		out[rowIdx] = columnDeclaredRow{ID: row.ID, Deleted: row.Deleted, Preserved: row.Preserved}
 		if !contiguous {
 			out[rowIdx].ID = bytes.Clone(row.ID)
 		}
@@ -496,6 +496,10 @@ func (c *Collection) typedColumnPartValuesForVisibleRowAtSnapshotIntoWithCache(s
 }
 
 func (c *Collection) typedColumnPartValuesForVisibleRowAtSnapshotIntoWithCacheProjected(snap *backenddb.Snapshot, manifestRootID uint64, cfg ColumnStoreConfig, physicalRow columnPhysicalVisibleRow, cache *typedColumnPartReconstructionCache, dst []columnDeclaredValue, selected []bool) (typedColumnPartVisibleValues, error) {
+	if p := physicalRow.Preserved; p != nil {
+		physicalRow.Generation, physicalRow.PartID = p.Generation, p.PartID
+		physicalRow.RowIndex, physicalRow.AppliedCommandLSN = p.RowIndex, p.AppliedCommandLSN
+	}
 	if !columnStoreHasTypedColumnPartOwners(cfg) {
 		return typedColumnPartVisibleValues{}, nil
 	}

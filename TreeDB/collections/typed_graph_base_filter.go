@@ -157,7 +157,7 @@ func (result *typedGraphBaseFilter) prepare(ctx context.Context, base *VectorInd
 }
 
 func (b *typedGraphBaseFilter) validFor(overlay *typedGraphOverlaySearch) bool {
-	if b == nil || b.plan == nil || !overlay.validOpen() {
+	if b == nil || b.plan == nil || !overlay.validOpen() || overlay.lastMetadataGeneration != 0 {
 		return false
 	}
 	if b.holder == nil {
@@ -245,7 +245,7 @@ func bindTypedGraphBaseFilterWithContext(ctx context.Context, base *typedGraphBa
 		}
 		plan.scratchRows = max(plan.scratchRows, len(ids))
 		plan.scratchIDBytes = max(plan.scratchIDBytes, bytesInChunk)
-		_, err := view.visitDocumentRowRefsByID(ids, func(_ []byte, ref DocumentRowRef, found bool) error {
+		_, err := view.visitDocumentScoringRowRefsByID(ids, func(_ []byte, ref DocumentRowRef, found bool) error {
 			if !found {
 				return nil
 			}

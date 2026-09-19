@@ -97,6 +97,8 @@ const (
 	SectionDenseSearchDiagnostics       SectionID = 139
 	SectionSourceDeleteIDs              SectionID = 140
 	SectionSourceReplaceResponse        SectionID = 141
+	SectionTypedMetadataUpdateRequest   SectionID = 142
+	SectionTypedMetadataUpdateResponse  SectionID = 143
 )
 
 type CommandID uint64
@@ -137,7 +139,8 @@ const (
 	CommandDenseVectorSearch         CommandID = 64
 	CommandTypedDocumentUpsert       CommandID = 65
 	// Command 66 is reserved by the vector-insert transport tracked in #4734.
-	CommandTypedSourceReplace CommandID = 67
+	CommandTypedSourceReplace  CommandID = 67
+	CommandTypedMetadataUpdate CommandID = 68
 )
 
 type DocumentFormat uint64

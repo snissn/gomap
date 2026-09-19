@@ -182,6 +182,7 @@ func (c *Collection) finishTypedGraphReadOwnerOpen(open *typedGraphReadOwnerServ
 		return ErrVectorIndexSnapshotMismatch
 	}
 	view.rows, view.invNorms = state.rows, state.invNorms
+	view.lastMetadataGeneration = state.lastMetadataGeneration
 	view.sourceRows, view.sourceTombstones, view.sourceBytes = state.physicalRows, state.tombstones, state.installedAssetBytes
 	if state.servingBase != nil {
 		prepared := state.servingMaterializer

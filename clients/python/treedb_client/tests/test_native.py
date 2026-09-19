@@ -14,7 +14,7 @@ from treedb_client.errors import CommitAmbiguousError, RecoveryRequiredError, Tr
 from treedb_client._native import _dense_work, _dense_quantized_options, _dense_score_plane
 from treedb_client._dense_work import DenseScorePlaneProof, DenseSearchWork, dense_document_ids_valid
 from treedb_client.client import _decode_json_body, _decode_native_dense_document_json
-from treedb_client._native import _HEADER, _NativeConnection, _dense_request, _dense_response, _decode_vector, _read_uint, _section, _sections, _string_map, _uint, _vector, _typed_source_replace_request, _typed_source_replace_response, _typed_upsert_request, _typed_upsert_response
+from treedb_client._native import _HEADER, _NativeConnection, _dense_request, _dense_response, _decode_vector, _read_uint, _section, _sections, _string_map, _uint, _vector, _typed_metadata_update_request, _typed_metadata_update_response, _typed_source_replace_request, _typed_source_replace_response, _typed_upsert_request, _typed_upsert_response
 
 
 def _bytes_for_test(value):
@@ -1178,6 +1178,21 @@ class NativeCodecTests(unittest.TestCase):
             with self.subTest(raw=raw), self.assertRaises(TreeDBProtocolError):
                 _typed_source_replace_response(_section(141, raw), 1, 1, 1)
 
+    def test_typed_metadata_update_json_carrier_and_response(self):
+        payload = _typed_metadata_update_request(
+            "a", ["id", "missing"], {"meta.acl": "new", "meta.nested.rank": 2}, ["meta.old"], 7
+        )
+        sections = _sections(payload, {142})
+        self.assertEqual(
+            sections[142],
+            b'{"expected_generation":7,"ids":["id","missing"],"index":"a","set":{"meta.acl":"new","meta.nested.rank":2},"unset":["meta.old"]}',
+        )
+        self.assertNotIn(b"embedding", sections[142])
+        self.assertEqual(_typed_metadata_update_response(_section(143, b"\x07\x01\x01"), 7, 2), (1, 1))
+        for raw in (b"", b"\x08\x01\x01", b"\x07\x03\x01", b"\x07\x01\x02", b"\x07\x01\x01\x00"):
+            with self.subTest(raw=raw), self.assertRaises(TreeDBProtocolError):
+                _typed_metadata_update_response(_section(143, raw), 7, 2)
+
     def test_native_address_rejects_hostnames_before_networking(self):
         with mock.patch("socket.getaddrinfo", side_effect=AssertionError("resolver called")):
             for address in ("localhost:12", "example.org:12", "[localhost]:12", "[::1:12", "::1:12", "[fe80::1%eth0]:12"):
@@ -1450,6 +1465,8 @@ class NativeCodecTests(unittest.TestCase):
                 client.upsert_documents("a", [])
             with self.assertRaises(TreeDBConfigError):
                 client.replace_source_by_id("a", [], [], expected_generation=1)
+            with self.assertRaises(TreeDBConfigError):
+                client.update_metadata_by_id("a", ["id"], {"meta.acl": "new"}, [], expected_generation=1)
             for call in (lambda: client.delete_documents("a", []),
                          lambda: client.delete_by_filter("a", {"field": "meta.x", "operator": "==", "value": "x"})):
                 with self.assertRaises(UnsupportedError):
@@ -1475,6 +1492,28 @@ class NativeCodecTests(unittest.TestCase):
                 client._native, "command", side_effect=TreeDBProtocolError("native failure", native_error_code=code)
             ), self.assertRaises(error):
                 client.replace_source_by_id("a", ["old"], [], expected_generation=1, index_info=info)
+
+    def test_native_metadata_update_negotiates_and_preserves_outcome_errors(self):
+        client = TreeDBClient("http://localhost:1", native_address="127.0.0.1:2")
+        self.addCleanup(client.close)
+        info = SimpleNamespace(
+            name="a", generation=1, vector_strategy="column_graph", extra={"typed_input": True},
+        )
+        with mock.patch.object(client, "_request", side_effect=AssertionError("HTTP fallback")), \
+             mock.patch.object(client._native, "command", return_value=_section(143, b"\x01\x01\x01")) as command:
+            result = client.update_metadata_by_id(
+                "a", ["id", "missing"], {"meta.acl": "new"}, [], expected_generation=1, index_info=info
+            )
+        self.assertEqual((result.matched_count, result.modified_count), (1, 1))
+        self.assertEqual(command.call_args.args[0:2], (68, 1))
+        self.assertEqual(command.call_args.args[3], "typed_metadata_update_versions")
+        for code, error in ((23, CommitAmbiguousError), (18, RecoveryRequiredError)):
+            with self.subTest(code=code), mock.patch.object(
+                client._native, "command", side_effect=TreeDBProtocolError("native failure", native_error_code=code)
+            ), self.assertRaises(error):
+                client.update_metadata_by_id(
+                    "a", ["id"], {"meta.acl": "new"}, [], expected_generation=1, index_info=info
+                )
 
     def test_invalid_query_and_scalar_bounds(self):
         for query in ([float("nan")], [float("inf")], [-float("inf")], [1e100],

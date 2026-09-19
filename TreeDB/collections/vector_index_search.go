@@ -2335,7 +2335,11 @@ func (s *VectorIndexSearcher) Search(opts VectorIndexSearcherSearchOptions) (Vec
 					refs[i] = rowRefs.Results[i].RowRef
 				}
 			}
-			documents, err = s.documentView.FetchDocumentsByRowRef(refs, documentFetchOptions)
+			if useResultRowRefs {
+				documents, err = s.documentView.fetchDocumentsByScoringRowRef(refs, documentFetchOptions)
+			} else {
+				documents, err = s.documentView.FetchDocumentsByRowRef(refs, documentFetchOptions)
+			}
 			if err != nil {
 				return response, err
 			}

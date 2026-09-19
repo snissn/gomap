@@ -58,6 +58,7 @@ type columnPhysicalScanDiagnostics struct {
 }
 
 type columnPhysicalScanRowView struct {
+	Preserved         *columnRowCoordinates
 	Generation        uint64
 	PartID            uint64
 	AppliedCommandLSN uint64
@@ -2293,7 +2294,7 @@ func scanColumnPhysicalAssetRowsWithManifestOperation(raw []byte, ref ColumnAsse
 		return columnPhysicalAssetScanSummary{}, err
 	}
 	cur := manifestCursor{raw: raw, pos: rowsOffset}
-	if version >= columnPhysicalAssetVersionV7 {
+	if version == columnPhysicalAssetVersionV7 || version == columnPhysicalAssetVersionV8 {
 		return scanColumnPhysicalAssetEncodedIDRows(&cur, raw, version, header, visitor)
 	}
 	valuesBuf := projection.values
@@ -2303,6 +2304,10 @@ func scanColumnPhysicalAssetRowsWithManifestOperation(raw []byte, ref ColumnAsse
 		deleted := false
 		if version >= columnPhysicalAssetVersionV2 {
 			deleted = cur.bool()
+		}
+		var preserved *columnRowCoordinates
+		if version == columnPhysicalAssetVersionV9 {
+			preserved = readColumnPreservedRow(&cur, id, header.Generation, header.AppliedCommandLSN, header.Operation, deleted)
 		}
 		if cur.err != nil {
 			return columnPhysicalAssetScanSummary{}, cur.err
@@ -2327,6 +2332,7 @@ func scanColumnPhysicalAssetRowsWithManifestOperation(raw []byte, ref ColumnAsse
 		if visitor != nil {
 			// ID and Values alias the asset buffer and scanner scratch; visitors must copy to retain them.
 			if err := visitor(columnPhysicalScanRowView{
+				Preserved:         preserved,
 				Generation:        header.Generation,
 				PartID:            header.PartID,
 				AppliedCommandLSN: header.AppliedCommandLSN,
@@ -2492,6 +2498,12 @@ func columnPhysicalScanOperationFromBytes(raw []byte) (ColumnPublishOperation, b
 
 func scanColumnPhysicalRowValues(cur *manifestCursor, version uint16, cfg *ColumnStoreConfig, projection columnPhysicalScanProjection, rowValues []columnDeclaredValue) error {
 	for colIdx, col := range cfg.Columns {
+		if version == columnPhysicalAssetVersionV9 && !columnMetadataStoredColumn(col) {
+			if output := projection.outputByColumn[colIdx]; output >= 0 {
+				rowValues[output] = columnDeclaredValue{}
+			}
+			continue
+		}
 		typeBytes := cur.stringBytes()
 		if cur.err != nil {
 			return cur.err

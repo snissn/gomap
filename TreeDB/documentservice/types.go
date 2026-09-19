@@ -188,6 +188,22 @@ type ReplaceSourceByIDResponse struct {
 	InsertedCount int       `json:"inserted_count"`
 }
 
+// UpdateMetadataByIDRequest applies one atomic metadata-only mutation to the
+// existing explicit IDs. Missing IDs are skipped; vectors and content are not
+// accepted by this shape.
+type UpdateMetadataByIDRequest struct {
+	ExpectedGeneration uint64         `json:"expected_generation"`
+	IDs                []string       `json:"ids"`
+	Set                map[string]any `json:"set"`
+	Unset              []string       `json:"unset"`
+}
+
+type UpdateMetadataByIDResponse struct {
+	Index         IndexInfo `json:"index"`
+	MatchedCount  int       `json:"matched_count"`
+	ModifiedCount int       `json:"modified_count"`
+}
+
 // DeleteDocumentsRequest deletes either explicit IDs or documents matching a
 // metadata filter. Supplying both IDs and Filter is rejected as ambiguous.
 type DeleteDocumentsRequest struct {

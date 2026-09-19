@@ -2342,3 +2342,43 @@ HTTP/native request, fail-closed capability use, response counts, and structured
 ambiguous/recovery errors. `BenchmarkTypedSourceReplacement` and
 `BenchmarkTypedUpsertDecode` remain the bounded core/decoder performance gates;
 no separate application harness is introduced.
+
+## Typed metadata-only update (#4769)
+
+`TestCollectionTypedMetadataPayloadGoldenRoundTrip` and its corruption suite pin
+format 13's canonical metadata after-images, owned decoding, truncation/bounds,
+and absence of vector-dimension-dependent bytes. Collection tests own atomic
+old-or-new replay/publication, no-op, missing-ID, repeated-update, reopen/fold,
+and preserved scoring/vector authority.
+
+`TestTypedMetadataNormalizedColdFoldRaceAndGC4769` covers normalized SQ8 scoring
+across base/suffix metadata updates, cold reopen, racing fold rejection/retry,
+column/value-log GC, pinned old metadata, and subsequent replacement/deletion.
+`TestTypedMetadataWALRecovery4769` injects a durable-intent failure and verifies
+the recovery fence and replay. Invalid-batch and protected-afterimage tests
+reject partial/prohibited updates. `TestTypedMetadataDimensionIndependentPayload4769`
+compares batches 1/32/128 at 8/768 dimensions without vector-bearing plan values.
+
+`BenchmarkTypedMinimaMetadataMutation` and `BenchmarkServiceTypedMetadataMutation`
+measure core and service admission/publication separately on the existing typed
+fixtures, including WAL payload, row assets and request JSON bytes. These are
+bounded local diagnostics (`-benchtime=10x -count=3`), not serving-throughput
+qualification. Setup/ingestion is untimed; no new benchmark driver is required.
+
+`TestTypedMetadataUpdatePublicLifecycle` exercises the public service shape and
+exact matched/modified counts without vector input.
+`TestTypedMetadataUpdateGoldenBoundsAndRegistry` pins command 68/v1, the bounded
+strict JSON request, sections 142/143, independent capability advertisement,
+and LocalOnly deterministic-entry rejection. Python unit/integration tests pin
+one HTTP or negotiated native request, no fallback, no vector carrier,
+structured ambiguous/recovery errors, and unchanged content/vector retrieval.
+
+`TestProductionRetrievalSourceAndACLFilterLifecycle4765` is the parent graph's
+small integrated service/HTTP acceptance fixture: literal filtered AND BM25,
+selected SQ8 plus packed canonical reranking, default vector-free responses,
+atomic source shrink, ACL-filter visibility changes without vector input, and
+reopen. BM25, dense and hybrid agree on the caller-filtered live set; stale chunks
+do not return. This proves metadata eligibility filtering, not an independent
+server-side authorization policy. Small selective allow-sets retain their
+truthful typed-exact route.
+This fixture lives with the final metadata child, not in a separate harness PR.

@@ -442,6 +442,19 @@ protocol.
 
 Collection metadata mutators:
 
+`Collection.UpdateTypedMetadataByID` changes explicit existing IDs only, skipping
+missing IDs and rejecting duplicates. It accepts non-overlapping `meta.*` paths,
+requires non-null strings for declared scalar columns, and rejects content,
+vector, text-indexed metadata and chunk-linkage changes. `expectedGeneration` is
+the schema/index generation, not a document revision. Matched and modified counts
+are separate; an unchanged admitted request creates no own WAL/publication. The
+metadata batch is atomic with its scalar-index deltas. It retains canonical
+content/vector authority without serializing or re-admitting unchanged vectors;
+pinned readers see their original metadata and data. HTTP/native/Python use the
+same operation without a vector parameter or automatic retry after ambiguous
+commit. See the normalized-vector and storage-format contracts for cold reads
+and fold costs.
+
 | Method | Contract |
 |---|---|
 | `CollectionManager.CreateCollection` | WAL-off behavior publishes the catalog entry under the selected non-sync durability mode. Command-WAL behavior uses a `CatalogCreateCollection` frame and publishes the catalog root plus `AppliedCommandLSN` in one backend tuple. Retrying creation with identical metadata is idempotent; retrying with incompatible metadata fails without changing the existing collection. |

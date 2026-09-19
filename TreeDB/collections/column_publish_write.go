@@ -36,6 +36,7 @@ func setColumnPhysicalAssetPreparationAfterPrepareTestHook(hook func(ColumnPubli
 }
 
 type columnWritePublishInput struct {
+	metadataOnly         bool
 	candidateAdmission   *typedGraphFoldAssetAdmission
 	selectStableResource func(rootpublication.StableResourceSelector) (*rootpublication.StableResourceSet, error)
 	reuseSegment         *columnManifestSegmentOwnership
@@ -746,6 +747,12 @@ func combineOrderedRootGroupPreflight(first, second backenddb.OrderedRootGroupPr
 }
 
 func prepareColumnWritePublishInputBeforeCommandWAL(input columnWritePublishInput) (columnWritePublishInput, error) {
+	if input.metadataOnly {
+		if err := validateColumnMetadataPublishInput(input); err != nil {
+			return columnWritePublishInput{}, err
+		}
+		return input, nil
+	}
 	switch input.operation {
 	case ColumnPublishOperationInsert, ColumnPublishOperationUpdate:
 		if input.rows == 0 {
@@ -1654,7 +1661,7 @@ func (c *Collection) prepareColumnPhysicalAssetRowsAtIdentityFromSources(prepare
 		err      error
 	}
 	var typedColumnDone chan typedColumnPrepareResult
-	if (hookInput.Operation == ColumnPublishOperationInsert || hookInput.Operation == ColumnPublishOperationUpdate) && columnStoreHasTypedColumnPartOwners(hookInput.ColumnStore) {
+	if !input.metadataOnly && (hookInput.Operation == ColumnPublishOperationInsert || hookInput.Operation == ColumnPublishOperationUpdate) && columnStoreHasTypedColumnPartOwners(hookInput.ColumnStore) {
 		typedColumnDone = make(chan typedColumnPrepareResult, 1)
 		go func(done chan<- typedColumnPrepareResult) {
 			start := time.Now()

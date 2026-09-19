@@ -42,6 +42,7 @@ from treedb_client.client import (
     _dense_http_results_ordered,
     _dense_work_requires_score_plane,
     _is_legacy_scalar_u8_v1_index,
+    _validate_metadata_update_paths,
 )
 from treedb_client._dense_work import DenseScorePlaneProof, dense_quantized_response_work_matches
 
@@ -620,6 +621,54 @@ class TreeDBClientTests(unittest.TestCase):
         for generation in (None, 0, -1, True, 1 << 64):
             with self.subTest(generation=generation), self.assertRaises(InvalidRequestError):
                 TreeDBClient("http://localhost:1").replace_source_by_id("docs", [], [], expected_generation=generation)
+
+    def test_update_metadata_by_id_sends_no_vectors_and_validates_paths(self) -> None:
+        route = "/v1/indexes/docs/documents/update_metadata_by_id"
+        response = {"index": SAMPLE_INDEX, "matched_count": 1, "modified_count": 1}
+        unicode_values = {"emoji": "\U0001f600", "replacement": "\ufffd", "literal": "\\ud800"}
+        with FixtureServer({("POST", route): (200, response, 0)}) as server:
+            client = TreeDBClient(server.base_url, timeout=1)
+            result = client.update_metadata_by_id(
+                "docs", ["a", "missing"], {"meta.acl": "new", "meta.rank": 2, "meta.unicode": unicode_values}, ["meta.old"], expected_generation=1
+            )
+            self.assertEqual((result.matched_count, result.modified_count), (1, 1))
+            body = json_body(server.records[0])
+            self.assertEqual(body, {
+                "expected_generation": 1,
+                "ids": ["a", "missing"],
+                "set": {"meta.acl": "new", "meta.rank": 2, "meta.unicode": unicode_values},
+                "unset": ["meta.old"],
+            })
+        invalid = (
+            (["a", "a"], {"meta.x": 1}, []),
+            (["a"], {"content": "x"}, []),
+            (["a"], {"meta.x": 1}, ["meta.x"]),
+            (["a"], {"meta.x": 1}, ["meta.x.child"]),
+            (["a"], {"meta.x": 1, "meta.x-child": 2}, ["meta.x.child"]),
+            (["a"], {}, ["meta.x", "meta.x"]),
+            ([], {"meta.x": 1}, []),
+            (["a"], {"meta.x": "\ud800"}, []),
+            (["a"], {"meta.x": {"\udc00": 1}}, []),
+            (["a"], {"meta.x": ["\ud800"]}, []),
+        )
+        for ids, set_values, unset in invalid:
+            with self.subTest(ids=ids, set=set_values, unset=unset), self.assertRaises(InvalidRequestError):
+                TreeDBClient("http://localhost:1").update_metadata_by_id(
+                    "docs", ids, set_values, unset, expected_generation=1
+                )
+        for generation in (None, 0, -1, True, 1 << 64):
+            with self.subTest(generation=generation), self.assertRaises(InvalidRequestError):
+                TreeDBClient("http://localhost:1").update_metadata_by_id(
+                    "docs", ["a"], {}, [], expected_generation=generation
+                )
+
+    def test_metadata_many_paths_preserve_input(self) -> None:
+        paths = [f"meta.field{i:04d}" for i in range(4096, 0, -1)]
+        before = paths.copy()
+        _validate_metadata_update_paths({"meta.a-child": 1, "meta.a.child": 2}, paths)
+        self.assertEqual(paths, before)
+        with self.assertRaises(InvalidRequestError):
+            _validate_metadata_update_paths({"meta.a": 1, "meta.a-child": 2, "meta.a.child": 3}, paths)
 
     def test_count_filter_search_and_delete_by_filter_parse_responses(self) -> None:
         routes = {

@@ -28,6 +28,7 @@ const (
 	columnPhysicalAssetVersionV6 = uint16(6)
 	columnPhysicalAssetVersionV7 = uint16(7)
 	columnPhysicalAssetVersionV8 = uint16(8)
+	columnPhysicalAssetVersionV9 = uint16(9) // metadata rows with preserved full-row coordinates
 	columnPhysicalAssetVersion   = columnPhysicalAssetVersionV4
 )
 
@@ -39,6 +40,7 @@ const (
 var ErrColumnDeclaredValueUnsupported = errors.New("collections: unsupported column declared value")
 
 type columnWriteDocument struct {
+	preserved               *columnRowCoordinates
 	ID                      []byte
 	Document                []byte
 	declaredValues          []columnDeclaredValue
@@ -313,9 +315,10 @@ type columnDeclaredValue struct {
 }
 
 type columnDeclaredRow struct {
-	ID      []byte
-	Deleted bool
-	Values  []columnDeclaredValue
+	Preserved *columnRowCoordinates
+	ID        []byte
+	Deleted   bool
+	Values    []columnDeclaredValue
 }
 
 type columnDeclaredRowSource interface {
@@ -890,6 +893,7 @@ func encodeColumnPhysicalAssetFromSource(input columnPhysicalAssetEncodeInput, r
 		return nil, columnPhysicalAssetSummary{}, fmt.Errorf("collections: unsupported column physical asset operation %q", input.Operation)
 	}
 	rowCount := rows.Len()
+	metadataOnly := false
 	if rowCount < 0 {
 		return nil, columnPhysicalAssetSummary{}, errors.New("collections: column physical asset negative row count")
 	}
@@ -897,6 +901,20 @@ func encodeColumnPhysicalAssetFromSource(input columnPhysicalAssetEncodeInput, r
 		row, err := rows.Row(rowIdx)
 		if err != nil {
 			return nil, columnPhysicalAssetSummary{}, fmt.Errorf("collections: column physical asset row[%d]: %w", rowIdx, err)
+		}
+		if rowIdx == 0 {
+			metadataOnly = row.Preserved != nil
+		}
+		if (row.Preserved != nil) != metadataOnly {
+			return nil, columnPhysicalAssetSummary{}, errors.New("collections: mixed metadata and ordinary physical rows")
+		}
+		if metadataOnly {
+			if input.Operation != ColumnPublishOperationUpdate || row.Deleted {
+				return nil, columnPhysicalAssetSummary{}, errors.New("collections: metadata rows require update operation")
+			}
+			if err := validateColumnPreservedRow(row.ID, *row.Preserved, input.Generation, input.AppliedCommandLSN); err != nil {
+				return nil, columnPhysicalAssetSummary{}, err
+			}
 		}
 		switch input.Operation {
 		case ColumnPublishOperationInsert, ColumnPublishOperationUpdate:
@@ -907,6 +925,9 @@ func encodeColumnPhysicalAssetFromSource(input columnPhysicalAssetEncodeInput, r
 				return nil, columnPhysicalAssetSummary{}, fmt.Errorf("collections: column physical asset row[%d] values=%d columns=%d", rowIdx, len(row.Values), len(input.Columns))
 			}
 			for colIdx, value := range row.Values {
+				if metadataOnly && !columnMetadataStoredColumn(input.Columns[colIdx]) {
+					continue
+				}
 				if !value.Present && !value.Null {
 					return nil, columnPhysicalAssetSummary{}, fmt.Errorf("collections: column physical asset row[%d] column[%d] absent value is not null", rowIdx, colIdx)
 				}
@@ -949,7 +970,10 @@ func encodeColumnPhysicalAssetFromSource(input columnPhysicalAssetEncodeInput, r
 	if err != nil {
 		return nil, columnPhysicalAssetSummary{}, err
 	}
-	if useDenseIDRows {
+	if metadataOnly {
+		version = columnPhysicalAssetVersionV9
+		useDenseIDRows, useFixedIDRows = false, false
+	} else if useDenseIDRows {
 		version = columnPhysicalAssetVersionV8
 	} else if useFixedIDRows {
 		version = columnPhysicalAssetVersionV7
@@ -1013,11 +1037,17 @@ func encodeColumnPhysicalAssetFromSource(input columnPhysicalAssetEncodeInput, r
 		}
 		writeManifestBytes(&b, row.ID)
 		writeManifestBool(&b, row.Deleted)
+		if metadataOnly {
+			writeColumnPreservedRow(&b, *row.Preserved)
+		}
 		if row.Deleted {
 			continue
 		}
 		for colIdx, value := range row.Values {
 			col := input.Columns[colIdx]
+			if metadataOnly && !columnMetadataStoredColumn(col) {
+				continue
+			}
 			writeManifestString(&b, string(value.Type))
 			writeManifestBool(&b, value.Null)
 			writeManifestBool(&b, columnDeclaredValuePresentForEncode(value))
@@ -1111,6 +1141,9 @@ func decodeColumnPhysicalAsset(raw []byte) (columnPhysicalAsset, error) {
 	}
 	header.ColumnCount = int(columnCount)
 	header.RowCount = int(rowCount)
+	if version == columnPhysicalAssetVersionV9 && (columnCount > uint64(len(raw)-cur.pos)/2 || rowCount > uint64(len(raw)-cur.pos)/41) {
+		return columnPhysicalAsset{}, errors.New("collections: metadata row counts exceed payload")
+	}
 	asset := columnPhysicalAsset{
 		Header:  header,
 		Columns: make([]ColumnStoreColumn, int(columnCount)),
@@ -1151,7 +1184,7 @@ func decodeColumnPhysicalAsset(raw []byte) (columnPhysicalAsset, error) {
 			}
 		}
 	}
-	if version >= columnPhysicalAssetVersionV7 {
+	if version == columnPhysicalAssetVersionV7 || version == columnPhysicalAssetVersionV8 {
 		rowEncoding := cur.string()
 		if rowEncoding != columnPhysicalAssetRowEncodingFixedID && rowEncoding != columnPhysicalAssetRowEncodingDenseIDRange {
 			return columnPhysicalAsset{}, fmt.Errorf("collections: unsupported column physical asset row encoding %q", rowEncoding)
@@ -1211,9 +1244,15 @@ func decodeColumnPhysicalAsset(raw []byte) (columnPhysicalAsset, error) {
 		if version >= columnPhysicalAssetVersionV2 {
 			row.Deleted = cur.bool()
 		}
+		if version == columnPhysicalAssetVersionV9 {
+			row.Preserved = readColumnPreservedRow(&cur, row.ID, header.Generation, header.AppliedCommandLSN, header.Operation, row.Deleted)
+		}
 		if !row.Deleted {
 			row.Values = make([]columnDeclaredValue, int(columnCount))
 			for colIdx := 0; colIdx < int(columnCount); colIdx++ {
+				if version == columnPhysicalAssetVersionV9 && !columnMetadataStoredColumn(asset.Columns[colIdx]) {
+					continue
+				}
 				value := columnDeclaredValue{
 					Type: ColumnStoreValueType(cur.string()),
 					Null: cur.bool(),
@@ -1380,6 +1419,9 @@ func validateColumnPhysicalAssetForManifest(raw []byte, ref ColumnAssetRef, cfg 
 			return fmt.Errorf("collections: column physical asset row[%d] values=%d want %d", rowIdx, len(row.Values), len(cfg.Columns))
 		}
 		for colIdx, value := range row.Values {
+			if row.Preserved != nil && !columnMetadataStoredColumn(cfg.Columns[colIdx]) {
+				continue
+			}
 			if value.Type != cfg.Columns[colIdx].ValueType {
 				return fmt.Errorf("collections: column physical asset row[%d] column[%d] type=%q want %q", rowIdx, colIdx, value.Type, cfg.Columns[colIdx].ValueType)
 			}
@@ -1404,7 +1446,7 @@ func validateColumnPhysicalAssetForManifest(raw []byte, ref ColumnAssetRef, cfg 
 
 func isSupportedColumnPhysicalAssetVersion(version uint16) bool {
 	switch version {
-	case columnPhysicalAssetVersionV1, columnPhysicalAssetVersionV2, columnPhysicalAssetVersionV3, columnPhysicalAssetVersionV4, columnPhysicalAssetVersionV5, columnPhysicalAssetVersionV6, columnPhysicalAssetVersionV7, columnPhysicalAssetVersionV8:
+	case columnPhysicalAssetVersionV1, columnPhysicalAssetVersionV2, columnPhysicalAssetVersionV3, columnPhysicalAssetVersionV4, columnPhysicalAssetVersionV5, columnPhysicalAssetVersionV6, columnPhysicalAssetVersionV7, columnPhysicalAssetVersionV8, columnPhysicalAssetVersionV9:
 		return true
 	default:
 		return false

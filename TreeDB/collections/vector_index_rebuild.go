@@ -692,7 +692,7 @@ func (c *Collection) rebuildCosineNormalizedF32V1ColumnGraph(name string, snap *
 		manifest:       manifest,
 		records:        records,
 	}
-	rowSource, err := newTypedGraphFoldRowSource(context.Background(), c, state, rows)
+	rowSource, err := newTypedGraphFoldRowSource(context.Background(), c, state, rows, baseCopy.lastMetadataGeneration != 0)
 	if err != nil {
 		return VectorIndexStatus{}, err
 	}
@@ -1011,7 +1011,7 @@ func (c *Collection) columnVectorGraphRowsFromTypedColumnCatalogSnapshot(snap *b
 			if locator == nil || !locator.Valid() || !bytes.Equal(locator.UnsafeKey(), id) {
 				return nil, nil, false, fmt.Errorf("collections: column_graph rebuild primary/locator ID mismatch at %q", id)
 			}
-			ref, decodeErr := decodeColumnPrimaryRowLocatorBorrowedID(id, locator.UnsafeValue())
+			ref, decodeErr := decodeColumnScoringRowLocatorBorrowedID(id, locator.UnsafeValue())
 			if decodeErr != nil {
 				return nil, nil, false, decodeErr
 			}
