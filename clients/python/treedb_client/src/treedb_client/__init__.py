@@ -2,6 +2,7 @@
 
 from .client import TreeDBClient
 from .errors import (
+    CommitAmbiguousError,
     ConflictError,
     IndexNotFoundError,
     IndexStaleError,
@@ -9,6 +10,7 @@ from .errors import (
     InternalServiceError,
     InvalidRequestError,
     MalformedJSONError,
+    RecoveryRequiredError,
     SnapshotMismatchError,
     TreeDBClientError,
     TreeDBConfigError,
@@ -47,6 +49,7 @@ from .models import (
     OptimizeIndexResponse,
     OptimizeIndexTiming,
     QuantizedIndexInfo,
+    ReplaceSourceByIDResponse,
     ScalarFieldDeclaration,
     ScalarFieldInfo,
     ScalarU8AlphaPolicy,
@@ -61,6 +64,7 @@ __all__ = [
     "BenchmarkVectorSearchIDsResponse",
     "BenchmarkVectorSearchResponse",
     "BenchmarkVectorSearchResult",
+    "CommitAmbiguousError",
     "ConflictError",
     "CountDocumentsResponse",
     "ColumnGraphBuildTiming",
@@ -94,6 +98,8 @@ __all__ = [
     "OptimizeIndexResponse",
     "OptimizeIndexTiming",
     "QuantizedIndexInfo",
+    "RecoveryRequiredError",
+    "ReplaceSourceByIDResponse",
     "ScalarFieldDeclaration",
     "ScalarFieldInfo",
     "ScalarU8AlphaPolicy",

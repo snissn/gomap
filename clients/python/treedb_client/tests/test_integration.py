@@ -79,6 +79,21 @@ def _process_group_has_live_members(pgid: int) -> bool:
     return True
 
 
+def _typed_serving_limits():
+    return {
+        "Publication": {"Rows": 512, "Tombstones": 512, "ValueSlots": 4096, "OwnedBytes": 16 << 20, "EncodedOutputBytes": 16 << 20},
+        "Owners": {"Owners": 8, "States": 8, "StateBytes": 128 << 20, "AssetBytes": 128 << 20,
+                   "Cold": {"ManifestRecords": 4096, "ManifestBytes": 8 << 20, "AssetBytes": 64 << 20, "DecodedTermBytes": 64 << 20},
+                   "Physical": {"segments": 4096, "descriptors": 4096, "mapped_bytes": 1 << 30,
+                                "fallback_bytes": 1 << 30, "inventory_bytes": 64 << 20}},
+        "CandidateOutput": {"Bytes": 1 << 30, "AppenderAttempts": 4096},
+        "Maintenance": {"NativeEntries": 4096, "ColumnSegments": 4096, "ManifestRecords": 4096, "LifecycleEntries": 4096,
+                        "NativeBytes": 128 << 20, "ColumnBytes": 64 << 20, "ManifestBytes": 8 << 20, "RetainedBytes": 256 << 20, "PagerPages": 32768},
+        "Filter": {"SourceIDs": 4096, "SourceBytes": 4 << 20, "RetainedBytes": 4 << 20, "MappingWork": 100000, "InspectedEntries": 4096},
+        "FoldRows": 4096, "SearchCandidates": 4096,
+    }
+
+
 class TreeDBServiceProcess:
     def __init__(self, repo_root: Path, data_dir: str, *, native: bool = False) -> None:
         self.repo_root = repo_root
@@ -242,18 +257,7 @@ class TreeDBClientIntegrationTests(unittest.TestCase):
             declarations = [{"field": "meta.user_id", "value_type": "string"},
                             {"field": "meta.fpath", "value_type": "string"}]
             wanted = {"field": "meta.user_id", "operator": "==", "value": "owner"}
-            limits = {
-                "Publication": {"Rows": 512, "Tombstones": 512, "ValueSlots": 4096, "OwnedBytes": 16 << 20, "EncodedOutputBytes": 16 << 20},
-                "Owners": {"Owners": 8, "States": 8, "StateBytes": 128 << 20, "AssetBytes": 128 << 20,
-                           "Cold": {"ManifestRecords": 4096, "ManifestBytes": 8 << 20, "AssetBytes": 64 << 20, "DecodedTermBytes": 64 << 20},
-                           "Physical": {"segments": 4096, "descriptors": 4096, "mapped_bytes": 1 << 30,
-                                        "fallback_bytes": 1 << 30, "inventory_bytes": 64 << 20}},
-                "CandidateOutput": {"Bytes": 1 << 30, "AppenderAttempts": 4096},
-                "Maintenance": {"NativeEntries": 4096, "ColumnSegments": 4096, "ManifestRecords": 4096, "LifecycleEntries": 4096,
-                                "NativeBytes": 128 << 20, "ColumnBytes": 64 << 20, "ManifestBytes": 8 << 20, "RetainedBytes": 256 << 20, "PagerPages": 32768},
-                "Filter": {"SourceIDs": 4096, "SourceBytes": 4 << 20, "RetainedBytes": 4 << 20, "MappingWork": 100000, "InspectedEntries": 4096},
-                "FoldRows": 4096, "SearchCandidates": 4096,
-            }
+            limits = _typed_serving_limits()
             try:
                 service.start()
                 with closing(TreeDBClient(service.base_url, timeout=10)) as client:
@@ -378,6 +382,91 @@ class TreeDBClientIntegrationTests(unittest.TestCase):
                         self.assertEqual(native.get_many("typed", ["2"], index_info=info), [None])
             finally:
                 reopened.stop()
+
+    @unittest.skipUnless(sys.platform.startswith("linux"), "selected serving fixture requires Linux namespace authority and mmap")
+    def test_atomic_typed_source_replacement_lifecycle(self) -> None:
+        """Prove native 5→2→0 replacement and public retrieval across reopen."""
+        with tempfile.TemporaryDirectory(prefix="treedb_source_replace_") as data_dir:
+            limits = _typed_serving_limits()
+            declarations = [{"field": "meta.user_id", "value_type": "string"}]
+            delete_ids = [f"source#{i}" for i in range(5)] + ["missing"]
+            original = [Document(id=f"source#{i}", content="obsolete", embedding=[1, i / 8],
+                                 meta={"user_id": "owner"}) for i in range(5)]
+            unrelated = Document(id="other#0", content="unrelated", embedding=[0, 1], meta={"user_id": "other"})
+            live = [Document(id=f"source#{i}", content="fresh", embedding=[1 - i, i],
+                             meta={"user_id": "owner"}) for i in range(2)]
+
+            service = TreeDBServiceProcess(_support.REPO_ROOT, data_dir, native=True)
+            try:
+                service.start()
+                with closing(TreeDBClient(service.base_url, timeout=10)) as control:
+                    info = control.ensure_index(
+                        "sources", 2, typed_input=True, scalar_fields=declarations,
+                        vector_index_options={"strategy": "column_graph"},
+                    )
+                    with closing(TreeDBClient(service.base_url, timeout=10, native_address=service.native_addr)) as native:
+                        native.upsert_documents("sources", original + [unrelated], index_info=info)
+                    control.optimize_index("sources", column_graph_serving=limits)
+                    with closing(TreeDBClient(service.base_url, timeout=10, native_address=service.native_addr)) as native:
+                        result = native.replace_source_by_id(
+                            "sources", delete_ids, live,
+                            expected_generation=info.generation, index_info=info,
+                        )
+                        self.assertEqual((result.deleted_count, result.inserted_count), (5, 2))
+                        got = native.get_many("sources", delete_ids + ["other#0"], index_info=info)
+                        self.assertEqual([doc.id if doc else None for doc in got],
+                                         ["source#0", "source#1", None, None, None, None, "other#0"])
+                    control.optimize_index("sources", column_graph_action="ensure", column_graph_serving=limits)
+                    self.assertEqual(control.count_documents("sources").count, 3)
+                    self.assertEqual(control.search_keyword("sources", "obsolete", 8).documents, [])
+                    self.assertEqual({d.id for d in control.filter_documents(
+                        "sources", {"field": "meta.user_id", "operator": "==", "value": "owner"}
+                    ).documents}, {"source#0", "source#1"})
+                    self.assertEqual({d.id for d in control.search_hybrid(
+                        "sources", query="fresh", query_embedding=[1, 0], top_k=8,
+                        text_candidate_limit=8, vector_candidate_limit=8, ef_search=8,
+                    ).documents}, {"source#0", "source#1", "other#0"})
+            finally:
+                service.stop()
+
+            reopened = TreeDBServiceProcess(_support.REPO_ROOT, data_dir, native=True)
+            try:
+                reopened.start()
+                with closing(TreeDBClient(reopened.base_url, timeout=10)) as control:
+                    info = control.open_index("sources")
+                    control.optimize_index("sources", column_graph_action="ensure", column_graph_serving=limits)
+                    self.assertEqual(control.search_keyword("sources", "obsolete", 8).documents, [])
+                    with closing(TreeDBClient(reopened.base_url, timeout=10, native_address=reopened.native_addr)) as native:
+                        result = native.replace_source_by_id(
+                            "sources", ["source#0", "source#1"], [],
+                            expected_generation=info.generation, index_info=info,
+                        )
+                        self.assertEqual((result.deleted_count, result.inserted_count), (2, 0))
+                    control.optimize_index("sources", column_graph_action="ensure", column_graph_serving=limits)
+                    self.assertEqual(control.search_keyword("sources", "fresh", 8).documents, [])
+                    self.assertFalse(any(d.id.startswith("source#") for d in control.query_by_embedding(
+                        "sources", [1, 0], 8, route="ann"
+                    ).documents))
+                    self.assertFalse(any(d.id.startswith("source#") for d in control.search_hybrid(
+                        "sources", query="fresh", query_embedding=[1, 0], top_k=8,
+                        text_candidate_limit=8, vector_candidate_limit=8, ef_search=8,
+                    ).documents))
+            finally:
+                reopened.stop()
+
+            final = TreeDBServiceProcess(_support.REPO_ROOT, data_dir, native=True)
+            try:
+                final.start()
+                with closing(TreeDBClient(final.base_url, timeout=10)) as control:
+                    info = control.open_index("sources")
+                    control.optimize_index("sources", column_graph_action="ensure", column_graph_serving=limits)
+                    self.assertEqual(control.count_documents("sources").count, 1)
+                    self.assertEqual(control.search_keyword("sources", "fresh", 8).documents, [])
+                    self.assertFalse(any(d.id.startswith("source#") for d in control.query_by_embedding(
+                        "sources", [1, 0], 8, route="ann"
+                    ).documents))
+            finally:
+                final.stop()
 
     @unittest.skipUnless(sys.platform.startswith("linux"), "selected serving fixture requires Linux namespace authority and mmap")
     def test_normalized_v4_column_graph_public_clients(self) -> None:

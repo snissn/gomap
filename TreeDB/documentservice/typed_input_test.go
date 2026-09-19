@@ -6,11 +6,13 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/collections"
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/workstats"
 )
@@ -51,6 +53,117 @@ func TestServiceTypedInputOwnership(t *testing.T) {
 	doc := Document{ID: "a", Content: "alpha", Embedding: []float32{1, 0, 0, 0, 0, 0, 0, 0}, Meta: map[string]any{"user_id": "u", "fpath": "/a", "extra": "residual"}}
 	if out, err := svc.UpsertDocuments(context.Background(), req.Name, UpsertDocumentsRequest{Documents: []Document{doc}, DeferVectorIndexRebuild: true}); err != nil || out.Inserted != 1 {
 		t.Fatalf("typed load: %+v %v", out, err)
+	}
+}
+
+func TestServiceReplaceSourceByIDLifecycle(t *testing.T) {
+	requireTypedServiceServingTest(t)
+	svc, db := newTestService(t)
+	defer db.Close()
+	defer svc.Close()
+	ctx := context.Background()
+	info, err := svc.CreateIndex(ctx, CreateIndexRequest{
+		Name: "typed-source-replace", Dimension: 2, TypedInput: true,
+		VectorIndexOptions: &BenchmarkVectorIndexOptions{Strategy: collections.VectorIndexStrategyColumnGraph},
+		ScalarFields:       []ScalarFieldDeclaration{{Field: "meta.user_id", ValueType: ScalarFieldString}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	docs := make([]Document, 5)
+	deleteIDs := append(make([]string, 0, 6), "missing")
+	for i := range docs {
+		docs[i] = Document{ID: fmt.Sprintf("source#%d", i), Content: "obsolete", Embedding: []float32{1, float32(i + 1)}, Meta: map[string]any{"user_id": "old"}}
+		deleteIDs = append(deleteIDs, docs[i].ID)
+	}
+	if _, err := svc.UpsertDocuments(ctx, info.Name, UpsertDocumentsRequest{ExpectedGeneration: info.Generation, Documents: docs, DeferVectorIndexRebuild: true}); err != nil {
+		t.Fatal(err)
+	}
+	serving := typedServiceTestOptions()
+	if _, err := svc.OptimizeIndex(ctx, info.Name, OptimizeIndexRequest{ExpectedGeneration: info.Generation, ColumnGraphAction: "build", ColumnGraphServing: &serving}); err != nil {
+		t.Fatal(err)
+	}
+	for name, request := range map[string]ReplaceSourceByIDRequest{
+		"missing generation": {DeleteIDs: []string{"source#0"}},
+		"stale generation":   {ExpectedGeneration: info.Generation + 1, DeleteIDs: []string{"source#0"}},
+		"duplicate delete":   {ExpectedGeneration: info.Generation, DeleteIDs: []string{"source#0", "source#0"}},
+		"duplicate live":     {ExpectedGeneration: info.Generation, DeleteIDs: []string{"source#0"}, Documents: []Document{docs[0], docs[0]}},
+		"outside scope":      {ExpectedGeneration: info.Generation, Documents: []Document{{ID: "source#0", Content: "conflict", Embedding: []float32{1, 0}, Meta: map[string]any{"user_id": "new"}}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := svc.ReplaceSourceByID(ctx, info.Name, request); err == nil {
+				t.Fatal("invalid source replacement accepted")
+			}
+			if got, err := svc.CountDocuments(ctx, info.Name, CountDocumentsRequest{ExpectedGeneration: info.Generation}); err != nil || got.Count != 5 {
+				t.Fatalf("rejected replacement changed count=%+v err=%v", got, err)
+			}
+		})
+	}
+	live := []Document{
+		{ID: "source#0", Content: "fresh", Embedding: []float32{1, 0}, Meta: map[string]any{"user_id": "keep"}},
+		{ID: "source#1", Content: "fresh", Embedding: []float32{0, 1}, Meta: map[string]any{"user_id": "keep"}},
+	}
+	var replaced ReplaceSourceByIDResponse
+	postJSON(t, NewHandler(svc), "/v1/indexes/typed-source-replace/documents/replace_source_by_id", ReplaceSourceByIDRequest{
+		ExpectedGeneration: info.Generation, DeleteIDs: deleteIDs, Documents: live,
+	}, http.StatusOK, &replaced)
+	if replaced.DeletedCount != 5 || replaced.InsertedCount != 2 || replaced.Index.Generation != info.Generation {
+		t.Fatalf("replacement response=%+v", replaced)
+	}
+	if _, err := svc.OptimizeIndex(ctx, info.Name, OptimizeIndexRequest{ExpectedGeneration: info.Generation, ColumnGraphAction: "ensure", ColumnGraphServing: &serving}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := svc.CountDocuments(ctx, info.Name, CountDocumentsRequest{ExpectedGeneration: info.Generation}); err != nil || got.Count != 2 {
+		t.Fatalf("count after shrink=%+v err=%v", got, err)
+	}
+	if got, err := svc.SearchKeyword(ctx, info.Name, KeywordSearchRequest{ExpectedGeneration: info.Generation, Query: "obsolete", TopK: 8}); err != nil || len(got.Documents) != 0 {
+		t.Fatalf("stale lexical result=%+v err=%v", got, err)
+	}
+	filter := &Filter{Field: "meta.user_id", Operator: "==", Value: "keep"}
+	if got, err := svc.FilterDocuments(ctx, info.Name, FilterDocumentsRequest{ExpectedGeneration: info.Generation, Filter: filter}); err != nil || len(got.Documents) != 2 {
+		t.Fatalf("scalar replacement result=%+v err=%v", got, err)
+	}
+	if got, err := svc.SearchDenseVector(ctx, info.Name, DenseVectorSearchRequest{ExpectedGeneration: info.Generation, QueryEmbedding: []float32{1, 0}, TopK: 8, Route: RouteAnn}); err != nil || len(got.Documents) != 2 {
+		t.Fatalf("dense replacement result=%+v err=%v", got, err)
+	}
+	if got, err := svc.SearchHybrid(ctx, info.Name, HybridSearchRequest{ExpectedGeneration: info.Generation, Query: "fresh", QueryEmbedding: []float32{1, 0}, TopK: 8, TextCandidateLimit: 8, VectorCandidateLimit: 8, EfSearch: 8}); err != nil || len(got.Documents) != 2 {
+		t.Fatalf("hybrid replacement result=%+v err=%v", got, err)
+	}
+	deleted, err := svc.ReplaceSourceByID(ctx, info.Name, ReplaceSourceByIDRequest{ExpectedGeneration: info.Generation, DeleteIDs: []string{"source#0", "source#1"}})
+	if err != nil || deleted.DeletedCount != 2 || deleted.InsertedCount != 0 {
+		t.Fatalf("delete-only response=%+v err=%v", deleted, err)
+	}
+	noop, err := svc.ReplaceSourceByID(ctx, info.Name, ReplaceSourceByIDRequest{ExpectedGeneration: info.Generation})
+	if err != nil || noop.DeletedCount != 0 || noop.InsertedCount != 0 {
+		t.Fatalf("empty response=%+v err=%v", noop, err)
+	}
+	if _, err := svc.OptimizeIndex(ctx, info.Name, OptimizeIndexRequest{ExpectedGeneration: info.Generation, ColumnGraphAction: "ensure", ColumnGraphServing: &serving}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := svc.SearchKeyword(ctx, info.Name, KeywordSearchRequest{ExpectedGeneration: info.Generation, Query: "fresh", TopK: 8}); err != nil || len(got.Documents) != 0 {
+		t.Fatalf("delete-only lexical result=%+v err=%v", got, err)
+	}
+	if got, err := svc.SearchDenseVector(ctx, info.Name, DenseVectorSearchRequest{ExpectedGeneration: info.Generation, QueryEmbedding: []float32{1, 0}, TopK: 8, Route: RouteAnn}); err != nil || len(got.Documents) != 0 {
+		t.Fatalf("delete-only dense result=%+v err=%v", got, err)
+	}
+	if got, err := svc.SearchHybrid(ctx, info.Name, HybridSearchRequest{ExpectedGeneration: info.Generation, Query: "fresh", QueryEmbedding: []float32{1, 0}, TopK: 8, TextCandidateLimit: 8, VectorCandidateLimit: 8, EfSearch: 8}); err != nil || len(got.Documents) != 0 {
+		t.Fatalf("delete-only hybrid result=%+v err=%v", got, err)
+	}
+}
+
+func TestTypedSourceReplacementOutcomeErrorsRemainStructured(t *testing.T) {
+	for _, tc := range []struct {
+		err  error
+		code ErrorCode
+	}{
+		{err: errors.Join(collections.ErrCommitAmbiguous, context.Canceled), code: CodeCommitAmbiguous},
+		{err: errors.Join(collections.ErrRecoveryRequired, context.DeadlineExceeded), code: CodeRecoveryRequired},
+		{err: errors.Join(backenddb.ErrRecoveryRequired, context.Canceled), code: CodeRecoveryRequired},
+	} {
+		mapped := mapTypedSourceReplacementError(tc.err)
+		if ErrorCodeOf(mapped) != tc.code || !errors.Is(mapped, tc.err) {
+			t.Fatalf("mapped=%v code=%s want=%s", mapped, ErrorCodeOf(mapped), tc.code)
+		}
 	}
 }
 

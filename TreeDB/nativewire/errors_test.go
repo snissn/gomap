@@ -2,12 +2,27 @@ package nativewire
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
+	"github.com/snissn/gomap/TreeDB/collections"
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/documentservice"
 	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
 )
+
+func TestErrorCodeForMutationOutcomeOutranksContext(t *testing.T) {
+	if got := errorCodeFor(errors.Join(collections.ErrCommitAmbiguous, context.Canceled)); got != iwire.ErrCommitAmbiguous {
+		t.Fatalf("ambiguous+canceled code=%v want=%v", got, iwire.ErrCommitAmbiguous)
+	}
+	if got := errorCodeFor(errors.Join(collections.ErrRecoveryRequired, context.DeadlineExceeded)); got != iwire.ErrDurabilityUnavailable {
+		t.Fatalf("recovery+deadline code=%v want=%v", got, iwire.ErrDurabilityUnavailable)
+	}
+	if got := errorCodeFor(errors.Join(backenddb.ErrRecoveryRequired, context.Canceled)); got != iwire.ErrDurabilityUnavailable {
+		t.Fatalf("backend recovery+canceled code=%v want=%v", got, iwire.ErrDurabilityUnavailable)
+	}
+}
 
 func TestErrorCodeForPreservesWrappedDocumentServiceContextError(t *testing.T) {
 	for _, tc := range []struct {

@@ -2304,7 +2304,26 @@ policy, establish 100K/250K scaling, or release the graph-before-Raft gate.
   `TestM8RouterPolicyRepresentativeCombinedAdmissionV1`,
   `TestM8PlannedRouterPolicyReceiptSizeV1`. These source checks preserve the
   original 200M work and 64MiB diagnostic caps; they are not policy outcomes.
+
 - Optional complete identity-neutral pack digest admission and split parity:
   `TestM0ReadCaptureRequiresCleanBuildIdentity`,
   `TestM0CaptureSplitPairRejectsLeakage`. Missing historical hashes do not prove
   full geometry. Empty-ordinal geometry controls do not qualify as locality traces.
+
+## Atomic typed source replacement (#4768)
+
+`TestTypedSourceEmptyReplacementIsAdmittedNoop` proves that the collection
+primitive performs normal typed/WAL admission while leaving WAL, root, and
+sequence unchanged for an empty scope. Existing `TestTypedSource*` coverage
+continues to own atomic publication, failure, replay, delete-only, and graph
+visibility semantics.
+
+`TestServiceReplaceSourceByIDLifecycle` exercises the public HTTP/service 5→2→0
+lifecycle across lexical, scalar, dense, and hybrid visibility, including an
+explicit graph build/ensure boundary. `TestTypedSourceReplaceEmptyCarrierAndRegistry`
+pins command 67/v1, the canonical zero-live carrier, required sections, and
+LocalOnly deterministic-entry rejection. Python codec/client tests pin one
+HTTP/native request, fail-closed capability use, response counts, and structured
+ambiguous/recovery errors. `BenchmarkTypedSourceReplacement` and
+`BenchmarkTypedUpsertDecode` remain the bounded core/decoder performance gates;
+no separate application harness is introduced.

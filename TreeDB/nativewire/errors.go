@@ -240,6 +240,20 @@ func errorCodeFor(err error) iwire.ErrorCode {
 	if code, ok := iwire.ErrorCodeOf(err); ok {
 		return code
 	}
+	// Publication ambiguity and recovery state outrank a joined cancellation:
+	// callers must never infer that a non-idempotent mutation was not accepted.
+	switch documentservice.ErrorCodeOf(err) {
+	case documentservice.CodeCommitAmbiguous:
+		return iwire.ErrCommitAmbiguous
+	case documentservice.CodeRecoveryRequired:
+		return iwire.ErrDurabilityUnavailable
+	}
+	if errors.Is(err, collections.ErrCommitAmbiguous) {
+		return iwire.ErrCommitAmbiguous
+	}
+	if errors.Is(err, collections.ErrRecoveryRequired) || errors.Is(err, backenddb.ErrRecoveryRequired) {
+		return iwire.ErrDurabilityUnavailable
+	}
 	switch {
 	case errors.Is(err, context.Canceled):
 		return iwire.ErrCanceled

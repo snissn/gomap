@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/workstats"
@@ -180,6 +181,32 @@ func TestTypedSourceNativeAuthority(t *testing.T) {
 	frames := collectionCommandWALFrames(t, dir)
 	if frames[len(frames)-1].PayloadFormat != commitlog.PayloadFormatCollectionReplaceSourceByIDV1 {
 		t.Fatal("delete-only did not reuse format 10")
+	}
+}
+
+func TestTypedSourceEmptyReplacementIsAdmittedNoop(t *testing.T) {
+	dir, d, c := openTypedMinimaCollection(t)
+	defer d.Close()
+	beforeFrames := len(collectionCommandWALFrames(t, dir))
+	beforeSeq, beforeRoot := dbCommitSeqAndSystemRoot(d)
+	if deleted, err := c.ReplaceTypedSourceByID(nil, nil, nil, nil); err != nil || deleted != 0 {
+		t.Fatalf("empty replacement deleted=%d err=%v", deleted, err)
+	}
+	if got := len(collectionCommandWALFrames(t, dir)); got != beforeFrames {
+		t.Fatalf("empty replacement WAL frames=%d want=%d", got, beforeFrames)
+	}
+	if afterSeq, afterRoot := dbCommitSeqAndSystemRoot(d); afterSeq != beforeSeq || afterRoot != beforeRoot {
+		t.Fatalf("empty replacement changed authority seq=%d/%d root=%d/%d", beforeSeq, afterSeq, beforeRoot, afterRoot)
+	}
+	d.MarkCommandWALRecoveryRequired()
+	if _, err := c.ReplaceTypedSourceByID(nil, nil, nil, nil); !errors.Is(err, backenddb.ErrRecoveryRequired) {
+		t.Fatalf("poisoned empty replacement error=%v, want recovery required", err)
+	}
+	if got := len(collectionCommandWALFrames(t, dir)); got != beforeFrames {
+		t.Fatalf("poisoned empty replacement WAL frames=%d want=%d", got, beforeFrames)
+	}
+	if afterSeq, afterRoot := dbCommitSeqAndSystemRoot(d); afterSeq != beforeSeq || afterRoot != beforeRoot {
+		t.Fatalf("poisoned empty replacement changed authority seq=%d/%d root=%d/%d", beforeSeq, afterSeq, beforeRoot, afterRoot)
 	}
 }
 
