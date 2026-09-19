@@ -51,7 +51,10 @@ func TestServiceOverheadParityRows(t *testing.T) {
 		if row.Samples != row.Reps*row.Queries {
 			t.Fatalf("%s/%s samples=%d want %d", row.Lane, row.Path, row.Samples, row.Reps*row.Queries)
 		}
-		if row.P50Millis <= 0 || row.P99Millis < row.P50Millis {
+		// A zero median is legitimate: on coarse monotonic clocks a fast
+		// in-process HTTP call can measure zero elapsed ticks, and the
+		// percentile sanity check only needs ordering plus a non-negative p50.
+		if row.P50Millis < 0 || row.P99Millis < row.P50Millis {
 			t.Fatalf("%s/%s p50=%f p99=%f invalid percentiles", row.Lane, row.Path, row.P50Millis, row.P99Millis)
 		}
 	}

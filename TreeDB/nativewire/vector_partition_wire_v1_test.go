@@ -305,6 +305,7 @@ func TestVectorPartitionNativeWirePinCleanupV1(t *testing.T) {
 				t.Fatal(err)
 			}
 			server := NewServer(ServerOptions{VectorPartitionOperations: operations})
+			defer server.Close()
 			client, _, err := NewInProcessClient(t.Context(), server)
 			if err != nil {
 				t.Fatal(err)
@@ -417,6 +418,7 @@ func TestVectorPartitionNativeWirePropagatesRequestDeadlineV1(t *testing.T) {
 		t.Fatal(err)
 	}
 	server := NewServer(ServerOptions{VectorPartitionOperations: operations})
+	defer server.Close()
 	deadline := time.Now().Add(20 * time.Millisecond)
 	missingDeadline, err := appendVectorPartitionCommandBodyV1(nil, iwire.CommandVectorStatus, nil, nil, nil, time.Time{}, iwire.DefaultLimits())
 	if err != nil {
@@ -505,6 +507,7 @@ func TestVectorPartitionNativeWireClientEnforcesRequestDeadlineV1(t *testing.T) 
 
 func TestVectorPartitionNativeWireWriteDeadlineV1(t *testing.T) {
 	server := NewServer(ServerOptions{ConnectionIdleTimeout: 20 * time.Millisecond})
+	defer server.Close()
 	left, right := net.Pipe()
 	defer left.Close()
 	defer right.Close()

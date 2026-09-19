@@ -39,6 +39,7 @@ func serveCollectionPipeWithServerAndOptions(t *testing.T, opts ServerOptions) (
 	opts.Collections = mgr
 	opts.Backend = db
 	server := NewServer(opts)
+	t.Cleanup(func() { _ = server.Close() })
 	client, _ := servePipe(t, server)
 	t.Cleanup(func() { _ = db.Close() })
 	return client, server, mgr, db
@@ -52,6 +53,7 @@ func serveCommandWALCollectionPipe(t *testing.T) (*Client, *collections.Collecti
 	}
 	mgr := collections.NewCollectionManager(db)
 	server := NewServer(ServerOptions{Collections: mgr, Backend: db})
+	t.Cleanup(func() { _ = server.Close() })
 	client, _ := servePipe(t, server)
 	t.Cleanup(func() { _ = db.Close() })
 	return client, mgr, db
@@ -578,6 +580,7 @@ func TestMetadataIndexMutationsRememberCommittedResponses(t *testing.T) {
 
 func TestMetadataIdempotencyCacheEvictsOldestEntry(t *testing.T) {
 	server := NewServer(ServerOptions{MaxMetadataIdempotencyEntries: 2})
+	defer server.Close()
 	for i := 0; i < 3; i++ {
 		key := string([]byte{'k', byte('0' + i)})
 		sections := []iwire.Section{

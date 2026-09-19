@@ -333,6 +333,8 @@ func TestBatchArenaRetainedHardCap_PreflightBlocksLargeFirstBatchLease(t *testin
 }
 
 func TestCachedBatchWriteUsesSteal_ExplicitAllowlist(t *testing.T) {
+	indexer := memtable.NewHashSortedIndexer()
+	defer indexer.Close()
 	cases := []struct {
 		name        string
 		newMemtable func() memtable.Table
@@ -341,7 +343,7 @@ func TestCachedBatchWriteUsesSteal_ExplicitAllowlist(t *testing.T) {
 		{name: "skiplist", newMemtable: func() memtable.Table { return memtable.NewWithCapacity(0) }, want: true},
 		{name: "btree", newMemtable: func() memtable.Table { return memtable.NewBTree() }, want: true},
 		{name: "hash_sorted", newMemtable: func() memtable.Table {
-			return memtable.NewHashSortedWithCapacityAndIndexer(0, memtable.NewHashSortedIndexer())
+			return memtable.NewHashSortedWithCapacityAndIndexer(0, indexer)
 		}, want: false},
 		{name: "append_only", newMemtable: func() memtable.Table { return memtable.NewAppendOnlyWithCapacity(0) }, want: false},
 	}

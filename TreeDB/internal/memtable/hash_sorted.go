@@ -128,7 +128,7 @@ func NewHashSortedWithIndexer(indexer *HashSortedIndexer) *HashSorted {
 
 func NewHashSortedWithCapacityAndIndexer(capacity int, indexer *HashSortedIndexer) *HashSorted {
 	if indexer == nil {
-		indexer = globalHashSortedIndexer
+		indexer = sharedHashSortedIndexer()
 	}
 	initialEntries := hashSortedInitialEntries(capacity)
 	m := &HashSorted{

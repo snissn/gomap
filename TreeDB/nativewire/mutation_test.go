@@ -1160,6 +1160,7 @@ func TestMutationGuardWithoutBackendRejectedBeforeWrite(t *testing.T) {
 	}
 	mgr := collections.NewCollectionManager(db)
 	server := NewServer(ServerOptions{Collections: mgr})
+	defer server.Close()
 	client, _ := servePipe(t, server)
 	t.Cleanup(func() { _ = db.Close() })
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -1305,6 +1306,7 @@ func TestNativewireAckSyncedOptsUpInWALOnRelaxed(t *testing.T) {
 	}
 	mgr := collections.NewCollectionManager(db)
 	server := NewServer(ServerOptions{Collections: mgr, Backend: db})
+	defer server.Close()
 	client, _ := servePipe(t, server)
 	t.Cleanup(func() { _ = db.Close() })
 

@@ -48,6 +48,37 @@ def _dense_work_without_filter_materialization(work):
     return replace(work, graph=replace(work.graph, filter=filter_work))
 
 
+def _process_group_has_live_members(pgid: int) -> bool:
+    """True while the process group holds a member that can still write.
+
+    Zombies ('Z' state) have already exited and released their files, so they
+    must not count — signal 0 alone would succeed for a zombie-only group and
+    burn the whole wait budget under a PID 1 that does not reap.
+    """
+    if os.path.isdir("/proc"):
+        for entry in os.listdir("/proc"):
+            if not entry.isdigit():
+                continue
+            try:
+                with open(f"/proc/{entry}/stat", "rb") as handle:
+                    stat = handle.read()
+            except OSError:
+                continue
+            rparen = stat.rfind(b")")
+            if rparen < 0:
+                continue
+            fields = stat[rparen + 1 :].split()
+            # fields[0]=state, fields[1]=ppid, fields[2]=pgrp
+            if len(fields) > 2 and int(fields[2]) == pgid and fields[0] != b"Z":
+                return True
+        return False
+    try:
+        os.killpg(pgid, 0)
+    except (ProcessLookupError, PermissionError):
+        return False
+    return True
+
+
 class TreeDBServiceProcess:
     def __init__(self, repo_root: Path, data_dir: str, *, native: bool = False) -> None:
         self.repo_root = repo_root
@@ -114,6 +145,16 @@ class TreeDBServiceProcess:
                 else:
                     self.proc.kill()
                 self.proc.wait(timeout=5)
+        # `go run` exits before its compiled child finishes shutdown writes
+        # into data_dir; draining the live members of the process group
+        # prevents ENOTEMPTY when the test's TemporaryDirectory cleans up
+        # right after stop().
+        if hasattr(os, "killpg"):
+            deadline = time.monotonic() + 15
+            while time.monotonic() < deadline:
+                if not _process_group_has_live_members(self.proc.pid):
+                    break
+                time.sleep(0.1)
         log_name = self.log.name
         self.log.close()
         try:
