@@ -134,6 +134,64 @@ func TestTypedGraphHybridSelectedOwnerSurvivesConcurrentPublication4767(t *testi
 	}
 }
 
+func TestTypedGraphHybridScalarStrategiesPreserveSourceCandidates4767(t *testing.T) {
+	requireTypedGraphPublicServingTest(t)
+	meta := typedMinimaCollectionMeta()
+	meta.VectorIndexes[0].QuantizedIndexes = []QuantizedVectorIndexDefinition{{Name: "embedding.scalar_u8.legacy"}}
+	_, db, col := openTypedMinimaCollectionMeta(t, meta)
+	defer db.Close()
+	ids := [][]byte{[]byte("nearest-denied"), []byte("farther-allowed")}
+	retained := [][]byte{[]byte(`{"id":"nearest-denied"}`), []byte(`{"id":"farther-allowed"}`)}
+	columns := []TypedColumnBatch{
+		{Name: "embedding", Float32Vectors: [][]float32{{1, 0, 0, 0, 0, 0, 0, 0}, {0, 1, 0, 0, 0, 0, 0, 0}}},
+		{Name: "content", Strings: []string{"refund", "shipping"}},
+		{Name: "user", Strings: []string{"denied", "allowed"}},
+		{Name: "path", Strings: []string{"source", "source"}},
+	}
+	if _, _, err := col.InsertTypedBatchWithStats(ids, retained, columns); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := col.RebuildVectorIndex("embedding_graph"); err != nil {
+		t.Fatal(err)
+	}
+	if err := col.EnsureColumnGraphServing(context.Background(), "embedding_graph", typedGraphPublicTestOptions()); err != nil {
+		t.Fatal(err)
+	}
+	for _, mode := range []VectorIndexQueryMode{VectorIndexQueryModeExact, VectorIndexQueryModeQuantizedRerank} {
+		for _, strategy := range []HybridScalarFilterStrategy{HybridScalarFilterStrategyPrefilter, HybridScalarFilterStrategyPostfilter, HybridScalarFilterStrategyTextFirst, HybridScalarFilterStrategyVectorFirst, HybridScalarFilterStrategyUnionFusion} {
+			for _, combined := range []bool{false, true} {
+				query := HybridSearchOptions{
+					TopK: 1, Vector: &HybridVectorQuery{IndexName: "embedding_graph", Query: columns[0].Float32Vectors[0], CandidateLimit: 1, EfSearch: 8, QueryMode: mode},
+					ScalarFilter: &HybridScalarFilter{IndexName: "user", Value: "allowed"}, ScalarFilterStrategy: strategy,
+				}
+				if mode == VectorIndexQueryModeQuantizedRerank {
+					query.Vector.QuantizedIndexName = "embedding.scalar_u8.legacy"
+					query.Vector.QuantizedRerankCandidates = 2
+				}
+				if combined {
+					// No lexical match: adding a source must not silently change
+					// which vector candidate the same strategy selects.
+					query.Text = &HybridTextQuery{IndexName: "content", Query: "absent", CandidateLimit: 1}
+				}
+				out, err := col.SearchHybrid(query)
+				if err != nil {
+					t.Fatalf("mode=%s strategy=%s combined=%t: %v", mode, strategy, combined, err)
+				}
+				if strategy == HybridScalarFilterStrategyPrefilter {
+					if len(out.Results) != 1 || string(out.Results[0].ID) != "farther-allowed" {
+						t.Fatalf("prefilter mode=%s combined=%t: %+v", mode, combined, out)
+					}
+				} else if len(out.Results) != 0 || out.Stats.ScalarFilterRejected != 1 {
+					t.Fatalf("source filter pushed down: mode=%s strategy=%s combined=%t: %+v", mode, strategy, combined, out)
+				}
+				if out.Stats.VectorCandidatesReturned != 1 || out.Stats.ScalarFilterLookups != 1 || out.Stats.ScalarFilterInputIDs > 1 || out.Stats.DocumentsFetched != 0 {
+					t.Fatalf("source/accounting changed: mode=%s strategy=%s combined=%t: %+v", mode, strategy, combined, out.Stats)
+				}
+			}
+		}
+	}
+}
+
 func TestTypedGraphHybridScalarStrategiesAndBudgets(t *testing.T) {
 	requireTypedGraphPublicServingTest(t)
 	col, base, ids, retained, columns, _ := openTypedGraphQualityFixture(t, 8)

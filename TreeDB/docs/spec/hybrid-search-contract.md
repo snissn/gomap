@@ -414,7 +414,11 @@ error and snapshot changes report `snapshot_mismatch`.
 planning/reporting labels unless a source API can accept an ID restriction; the
 executor still builds the scalar allow-set before source generation and applies
 it before fusion for non-`postfilter` strategies. Empty allow-sets short-circuit
-all strategies, including `postfilter`. `bound_snapshot` remains reserved for a
+all strategies, including `postfilter`. Only `prefilter` pushes the scalar
+restriction into source candidate generation, including vector-only native and
+selected typed serving. Explicit `text_first`, `vector_first`, and `union_fusion`
+retain the unfiltered source candidate limits and ranks before scalar filtering.
+`bound_snapshot` remains reserved for a
 future explicit read-view/searcher API; the current executor supports
 `current_snapshot` and fails closed on root/commit changes observed between
 bounded phases.

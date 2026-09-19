@@ -140,13 +140,13 @@ func (c *Collection) searchHybridWithCandidateBudgetPolicy(opts HybridSearchOpti
 		}
 		plan.nativeVectorScalar = plan.nativeVectorRuntime &&
 			plan.scalarFilter != nil &&
-			plan.scalarFilterStrategy != HybridScalarFilterStrategyPostfilter
+			plan.scalarFilterStrategy == HybridScalarFilterStrategyPrefilter
 		// Selected typed serving owns vector-only scalar preparation even when
 		// the catalog definition itself is column_graph rather than
 		// native_runtime. Keep this distinct from the legacy native seam.
 		plan.ownerBoundVectorScalar = plan.readView != nil &&
 			plan.scalarFilter != nil &&
-			plan.scalarFilterStrategy != HybridScalarFilterStrategyPostfilter
+			plan.scalarFilterStrategy == HybridScalarFilterStrategyPrefilter
 	}
 	if !plan.nativeVectorScalar && !plan.ownerBoundVectorScalar {
 		if plan.readView != nil {
