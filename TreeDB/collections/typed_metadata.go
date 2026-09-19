@@ -355,6 +355,8 @@ func (c *Collection) buildTypedMetadataPlan(ids [][]byte, set map[string]any, un
 	var scratch columnPhysicalRowReaderScratch
 	var indexArena indexEncodeArena
 	var changed []preparedBatchUpdate
+	oldValues := make([]columnDeclaredValue, len(cfg.Columns))
+	newValues := make([]columnDeclaredValue, len(cfg.Columns))
 	for pos, id := range ids {
 		raw, found, err := collectionGetAppendAtCatalogRoot(plan.snap, catalog, collectionPrimaryRootName(plan.meta.Name), id, nil)
 		if err != nil {
@@ -384,7 +386,7 @@ func (c *Collection) buildTypedMetadataPlan(ids [][]byte, set map[string]any, un
 		if err != nil {
 			return nil, payload, result, err
 		}
-		oldValues := make([]columnDeclaredValue, len(cfg.Columns))
+		clear(oldValues)
 		for j, col := range physical.Config.Columns {
 			for k, fullCol := range cfg.Columns {
 				if col.Name == fullCol.Name {
@@ -397,12 +399,11 @@ func (c *Collection) buildTypedMetadataPlan(ids [][]byte, set map[string]any, un
 				}
 			}
 		}
-		newValues := slices.Clone(oldValues)
+		copy(newValues, oldValues)
 		var object map[string]any
 		if err := decodeTypedMetadataJSON(raw, &object); err != nil || object == nil {
 			return nil, payload, result, errors.Join(err, errors.New("collections: invalid retained metadata object"))
 		}
-		before := bytes.Clone(raw)
 		metadataChanged := false
 		if replay != nil {
 			d := replay.Documents[pos]
@@ -467,7 +468,7 @@ func (c *Collection) buildTypedMetadataPlan(ids [][]byte, set map[string]any, un
 		if !metadataChanged && !scalarChanged {
 			continue
 		}
-		retained := before
+		retained := raw
 		if metadataChanged {
 			retained, err = json.Marshal(object)
 			if err != nil {
