@@ -703,8 +703,7 @@ func RouteExactV1(model RouterModelV1, query []float32, candidateBudget, partiti
 
 // CheckedRouterScalarWorkV1 bounds every coordinate evaluated by a cosine
 // distance during construction. Memberships are disjoint within a hierarchy
-// depth, and each split consumes at least two budget tokens from any continuing
-// path, so only quota-reachable levels and widths are charged.
+// depth, and a root-to-leaf path's split widths sum to at most quota-1.
 func CheckedRouterScalarWorkV1(populations []int, dimensions int, cfg RouterConfigV1) (int64, bool) {
 	if len(populations) == 0 || dimensions < 1 || cfg.BranchFactor < 2 || cfg.LeafSize < 1 || cfg.MaxDepth < 1 || cfg.MaxIterations < 1 {
 		return 0, false
@@ -725,31 +724,78 @@ func CheckedRouterScalarWorkV1(populations []int, dimensions int, cfg RouterConf
 		}
 		return left + right, true
 	}
+	splitCost := func(branch int) (uint64, bool) {
+		width := uint64(branch)
+		initialization, ok := multiply(width, width-1)
+		if !ok {
+			return 0, false
+		}
+		initialization /= 2 // 1 + ... + (branch-1) farthest-first distances.
+		perIteration, ok := multiply(2*width-1, uint64(cfg.MaxIterations))
+		if !ok {
+			return 0, false
+		}
+		return add(initialization, perIteration) // assignment plus empty repair.
+	}
+	addSplitCosts := func(total uint64, count, branch int) (uint64, bool) {
+		if count == 0 {
+			return total, true
+		}
+		cost, ok := splitCost(branch)
+		if !ok {
+			return 0, false
+		}
+		cost, ok = multiply(uint64(count), cost)
+		if !ok {
+			return 0, false
+		}
+		return add(total, cost)
+	}
 	var work uint64
 	for i, population := range populations {
 		quota := quotas[i]
-		splitLevels := min(cfg.MaxDepth, min((quota-1)/2, max(0, population-cfg.LeafSize)))
-		distancesPerVector := uint64(splitLevels + 1) // one medoid pass per represented level.
-		for depth := 0; depth < splitLevels; depth++ {
-			// A continuing path loses its parent token and at least one sibling
-			// token per split. It also loses at least one member per level.
-			branch := uint64(min(cfg.BranchFactor, min(quota-2*depth-1, population-depth)))
-			initialization, ok := multiply(branch, branch-1)
-			if !ok {
-				return 0, false
+		maxSplits := min(cfg.MaxDepth, min((quota-1)/2, max(0, population-cfg.LeafSize)))
+		maxBranch := min(cfg.BranchFactor, population)
+		distancesPerVector := uint64(1) // root medoid pass.
+		for splits := 1; splits <= maxSplits; splits++ {
+			candidate := uint64(splits + 1) // one medoid pass per represented level.
+			totalWidth := quota - 1
+			if maxBranch <= (quota-1)/splits {
+				totalWidth = splits * maxBranch
 			}
-			initialization /= 2 // 1 + ... + (branch-1) farthest-first distances.
-			perIteration, ok := multiply(2*branch-1, uint64(cfg.MaxIterations))
-			if !ok {
-				return 0, false
+			// Split cost is convex in width. Subject to widths in [2,maxBranch]
+			// and their quota-feasible sum, its maximum saturates all but at most
+			// one split at an endpoint.
+			if maxBranch == 2 {
+				var ok bool
+				candidate, ok = addSplitCosts(candidate, splits, 2)
+				if !ok {
+					return 0, false
+				}
+			} else {
+				extraWidth := totalWidth - 2*splits
+				saturated := extraWidth / (maxBranch - 2)
+				remainder := extraWidth % (maxBranch - 2)
+				var ok bool
+				candidate, ok = addSplitCosts(candidate, saturated, maxBranch)
+				if !ok {
+					return 0, false
+				}
+				remaining := splits - saturated
+				if remainder > 0 {
+					candidate, ok = addSplitCosts(candidate, 1, 2+remainder)
+					if !ok {
+						return 0, false
+					}
+					remaining--
+				}
+				candidate, ok = addSplitCosts(candidate, remaining, 2)
+				if !ok {
+					return 0, false
+				}
 			}
-			perSplit, ok := add(initialization, perIteration) // assignment plus empty repair.
-			if !ok {
-				return 0, false
-			}
-			distancesPerVector, ok = add(distancesPerVector, perSplit)
-			if !ok {
-				return 0, false
+			if candidate > distancesPerVector {
+				distancesPerVector = candidate
 			}
 		}
 		domainWork, ok := multiply(uint64(population), distancesPerVector)
