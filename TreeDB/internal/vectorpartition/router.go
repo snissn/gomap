@@ -235,8 +235,11 @@ func BuildRouterV1(partitions []RouterPartitionV1, cfg RouterConfigV1) (RouterMo
 	if err != nil {
 		return model, err
 	}
-	work, ok := checkedRouterWorkV1(normalized, dimensions, cfg)
-	if !ok || work > cfg.MaxScalarWork {
+	work, ok := CheckedRouterScalarWorkV1(populations, dimensions, cfg)
+	if !ok {
+		return model, errors.New("vectorpartition: router scalar-work bound overflows")
+	}
+	if work > cfg.MaxScalarWork {
 		return model, fmt.Errorf("vectorpartition: router scalar work=%d exceeds limit=%d", work, cfg.MaxScalarWork)
 	}
 
@@ -698,31 +701,255 @@ func RouteExactV1(model RouterModelV1, query []float32, candidateBudget, partiti
 	return result, nil
 }
 
-func checkedRouterWorkV1(partitions [][]routerBuildVectorV1, dimensions int, cfg RouterConfigV1) (int64, bool) {
-	var vectorRepresentativePairs int64
-	populations := make([]int, len(partitions))
-	for i, partition := range partitions {
-		populations[i] = len(partition)
+// CheckedRouterScalarWorkV1 bounds every coordinate evaluated by a cosine
+// distance during construction. Memberships are disjoint within a hierarchy
+// depth. Along a root-to-leaf path, a width-k split consumes at least k quota
+// tokens and k-1 members before any child can continue.
+func CheckedRouterScalarWorkV1(populations []int, dimensions int, cfg RouterConfigV1) (int64, bool) {
+	if len(populations) == 0 || dimensions < 1 || cfg.BranchFactor < 2 || cfg.LeafSize < 1 || cfg.MaxDepth < 1 || cfg.MaxIterations < 1 {
+		return 0, false
 	}
 	quotas, err := ApportionRouterBudgetV2(populations, cfg.RepresentativeBudget)
 	if err != nil {
 		return 0, false
 	}
-	for i, partition := range partitions {
-		budget := quotas[i]
-		if len(partition) != 0 && int64(budget) > math.MaxInt64/int64(len(partition)) {
+	multiply := func(left, right uint64) (uint64, bool) {
+		if right != 0 && left > math.MaxInt64/right {
 			return 0, false
 		}
-		vectorRepresentativePairs += int64(len(partition)) * int64(budget)
+		return left * right, true
 	}
-	work := vectorRepresentativePairs
-	for _, multiplier := range []int{cfg.BranchFactor, cfg.MaxIterations, dimensions} {
-		if multiplier != 0 && work > math.MaxInt64/int64(multiplier) {
+	add := func(left, right uint64) (uint64, bool) {
+		if right > math.MaxInt64 || left > math.MaxInt64-right {
 			return 0, false
 		}
-		work *= int64(multiplier)
+		return left + right, true
 	}
-	return work, true
+	type workCandidate struct {
+		work     uint64
+		feasible bool
+	}
+	var arithmeticOK = true
+	fullSplitCost := func(branch int) workCandidate {
+		width := uint64(branch)
+		initialization, ok := multiply(width, width-1)
+		if !ok {
+			arithmeticOK = false
+			return workCandidate{}
+		}
+		initialization /= 2
+		perIteration, ok := multiply(2*width-1, uint64(cfg.MaxIterations))
+		if !ok {
+			arithmeticOK = false
+			return workCandidate{}
+		}
+		work, ok := add(initialization, perIteration) // assignment plus empty repair.
+		if !ok {
+			arithmeticOK = false
+			return workCandidate{}
+		}
+		return workCandidate{work: work, feasible: true}
+	}
+	earlySplitCost := func(branch int) workCandidate {
+		width := uint64(branch)
+		initialization, ok := multiply(width, width+1)
+		if !ok {
+			arithmeticOK = false
+			return workCandidate{}
+		}
+		initialization /= 2 // includes the paid scan that finds no next center.
+		perIteration, ok := multiply(2*width-1, uint64(cfg.MaxIterations))
+		if !ok {
+			arithmeticOK = false
+			return workCandidate{}
+		}
+		work, ok := add(initialization, perIteration)
+		if !ok {
+			arithmeticOK = false
+			return workCandidate{}
+		}
+		return workCandidate{work: work, feasible: true}
+	}
+	addCandidate := func(left, right workCandidate) workCandidate {
+		if !left.feasible || !right.feasible {
+			return workCandidate{}
+		}
+		work, ok := add(left.work, right.work)
+		if !ok {
+			arithmeticOK = false
+			return workCandidate{}
+		}
+		return workCandidate{work: work, feasible: true}
+	}
+	repeatCandidate := func(count int, candidate workCandidate) workCandidate {
+		if count == 0 {
+			return workCandidate{feasible: true}
+		}
+		if !candidate.feasible {
+			return workCandidate{}
+		}
+		work, ok := multiply(uint64(count), candidate.work)
+		if !ok {
+			arithmeticOK = false
+			return workCandidate{}
+		}
+		return workCandidate{work: work, feasible: true}
+	}
+	maxCandidate := func(left, right workCandidate) workCandidate {
+		if !left.feasible || right.feasible && right.work > left.work {
+			return right
+		}
+		return left
+	}
+	// A continuing split either reaches the configured branch cap, or stops
+	// early after a paid non-progress scan. For a fixed total width, the latter
+	// cost is convex, so its maximum has only endpoint widths and one remainder.
+	maxEarlyOnlyCost := func(count, totalWidth, maxBranch int) workCandidate {
+		if count == 0 {
+			return workCandidate{feasible: totalWidth == 0}
+		}
+		if maxBranch <= 2 || totalWidth < 2*count || totalWidth > (maxBranch-1)*count {
+			return workCandidate{}
+		}
+		extraCapacity := maxBranch - 3
+		if extraCapacity == 0 {
+			if totalWidth != 2*count {
+				return workCandidate{}
+			}
+			return repeatCandidate(count, earlySplitCost(2))
+		}
+		extraWidth := totalWidth - 2*count
+		saturated := extraWidth / extraCapacity
+		remainder := extraWidth % extraCapacity
+		candidate := repeatCandidate(saturated, earlySplitCost(maxBranch-1))
+		remaining := count - saturated
+		if remainder > 0 {
+			candidate = addCandidate(candidate, earlySplitCost(2+remainder))
+			remaining--
+		}
+		return addCandidate(candidate, repeatCandidate(remaining, earlySplitCost(2)))
+	}
+	maxContinuingCost := func(count, totalWidth, maxBranch int) workCandidate {
+		if count == 0 {
+			return workCandidate{feasible: totalWidth == 0}
+		}
+		if totalWidth < 2*count || totalWidth > maxBranch*count {
+			return workCandidate{}
+		}
+		if maxBranch == 2 {
+			if totalWidth != 2*count {
+				return workCandidate{}
+			}
+			return repeatCandidate(count, fullSplitCost(2))
+		}
+		var best workCandidate
+		for fullCount := 0; fullCount <= count; fullCount++ {
+			early := maxEarlyOnlyCost(count-fullCount, totalWidth-fullCount*maxBranch, maxBranch)
+			if !early.feasible {
+				continue
+			}
+			candidate := addCandidate(repeatCandidate(fullCount, fullSplitCost(maxBranch)), early)
+			best = maxCandidate(best, candidate)
+		}
+		return best
+	}
+	// The final successful split always maximizes at its full requested width:
+	// f_full(k) = f_early(k-1) + 2*MaxIterations. When members or quota,
+	// rather than the branch cap, set that width, enumerate only the convex
+	// allocation vertices of the continuing prefix.
+	maxResourceFinalCost := func(prefixCount, combinedWidth, maxPrefixWidth, maxBranch int) workCandidate {
+		if maxBranch <= 2 {
+			return workCandidate{}
+		}
+		var best workCandidate
+		for fullCount := 0; fullCount <= prefixCount; fullCount++ {
+			earlyCount := prefixCount - fullCount
+			lowFinal := max(2, max(combinedWidth-maxPrefixWidth, combinedWidth-fullCount*maxBranch-(maxBranch-1)*earlyCount))
+			highFinal := min(maxBranch-1, min(combinedWidth-2*prefixCount, combinedWidth-fullCount*maxBranch-2*earlyCount))
+			if lowFinal > highFinal {
+				continue
+			}
+			evaluate := func(finalWidth int) {
+				earlyWidth := combinedWidth - finalWidth - fullCount*maxBranch
+				early := maxEarlyOnlyCost(earlyCount, earlyWidth, maxBranch)
+				if !early.feasible {
+					return
+				}
+				candidate := addCandidate(repeatCandidate(fullCount, fullSplitCost(maxBranch)), early)
+				candidate = addCandidate(candidate, fullSplitCost(finalWidth))
+				best = maxCandidate(best, candidate)
+			}
+			evaluate(lowFinal)
+			if highFinal != lowFinal {
+				evaluate(highFinal)
+			}
+			extraCapacity := maxBranch - 3
+			if extraCapacity == 0 {
+				continue
+			}
+			base := combinedWidth - fullCount*maxBranch - 2*earlyCount
+			minimumExtra := base - highFinal
+			maximumExtra := base - lowFinal
+			firstEndpoint := (minimumExtra + extraCapacity - 1) / extraCapacity
+			lastEndpoint := maximumExtra / extraCapacity
+			for endpoint := firstEndpoint; endpoint <= lastEndpoint; endpoint++ {
+				finalWidth := base - endpoint*extraCapacity
+				if finalWidth != lowFinal && finalWidth != highFinal {
+					evaluate(finalWidth)
+				}
+			}
+		}
+		return best
+	}
+	var work uint64
+	for i, population := range populations {
+		quota := quotas[i]
+		maxSplits := min(cfg.MaxDepth, min((quota-1)/2, max(0, population-cfg.LeafSize)))
+		maxBranch := min(cfg.BranchFactor, min(population, quota-1))
+		best := workCandidate{work: 1, feasible: true} // root medoid pass.
+		for splits := 0; splits < maxSplits; splits++ {
+			maxWidth := min(splits*maxBranch, min(quota-3, population-cfg.LeafSize+splits-1))
+			if maxWidth < 2*splits {
+				continue
+			}
+			candidate := maxContinuingCost(splits, maxWidth, maxBranch)
+			candidate = addCandidate(workCandidate{work: uint64(splits + 2), feasible: true}, candidate) // medoids plus terminal failed scan.
+			best = maxCandidate(best, candidate)
+		}
+		for splits := 1; splits <= maxSplits; splits++ {
+			prefixCount := splits - 1
+			maxPrefixWidth := min(prefixCount*maxBranch, min(quota-3, population-cfg.LeafSize+prefixCount-1))
+			if maxPrefixWidth < 2*prefixCount {
+				continue
+			}
+			combinedWidth := min(population+prefixCount, quota-1)
+			candidate := workCandidate{}
+			branchPrefixWidth := min(maxPrefixWidth, combinedWidth-maxBranch)
+			if branchPrefixWidth >= 2*prefixCount {
+				candidate = maxContinuingCost(prefixCount, branchPrefixWidth, maxBranch)
+				candidate = addCandidate(candidate, fullSplitCost(maxBranch))
+			}
+			candidate = maxCandidate(candidate, maxResourceFinalCost(prefixCount, combinedWidth, maxPrefixWidth, maxBranch))
+			candidate = addCandidate(workCandidate{work: uint64(splits + 1), feasible: true}, candidate) // one medoid per represented level.
+			best = maxCandidate(best, candidate)
+		}
+		if !arithmeticOK || !best.feasible {
+			return 0, false
+		}
+		domainWork, ok := multiply(uint64(population), best.work)
+		if !ok {
+			return 0, false
+		}
+		domainWork, ok = multiply(domainWork, uint64(dimensions))
+		if !ok {
+			return 0, false
+		}
+		work, ok = add(work, domainWork)
+		if !ok {
+			return 0, false
+		}
+	}
+	return int64(work), true
 }
 
 func normalizeRouterVectorV1(values []float32) ([]float32, error) {

@@ -238,22 +238,159 @@ func TestRepresentativeRouterExactOracleStableTieAndBudgets(t *testing.T) {
 	}
 }
 
-func TestCheckedRouterWorkUsesWidePairMultiplication(t *testing.T) {
-	const vectors = 50_000
-	work, ok := checkedRouterWorkV1(
-		[][]routerBuildVectorV1{make([]routerBuildVectorV1, vectors)},
-		1,
-		RouterConfigV1{
-			RepresentativeBudget: vectors,
-			BranchFactor:         1,
-			MaxIterations:        1,
-		},
-	)
-	if !ok {
-		t.Fatal("expected representable router work")
+func TestCheckedRouterScalarWorkBoundsAllLevelDistanceWorkV1(t *testing.T) {
+	cfg := DefaultRouterConfigV1()
+	work, ok := CheckedRouterScalarWorkV1([]int{75_000, 75_000, 75_000, 75_000}, 128, cfg)
+	if !ok || work != 36_595_200_000 {
+		t.Fatalf("router work=%d ok=%v want 36595200000", work, ok)
 	}
-	if want := int64(vectors) * int64(vectors); work != want {
-		t.Fatalf("router work=%d want %d", work, want)
+	if work > 50_000_000_000 {
+		t.Fatalf("retained D4 envelope exceeds 50B: %d", work)
+	}
+	cfg.RepresentativeBudget = 1
+	work, ok = CheckedRouterScalarWorkV1([]int{300_000}, 128, cfg)
+	if !ok || work != 38_400_000 {
+		t.Fatalf("root-only router work=%d ok=%v want 38400000", work, ok)
+	}
+	cfg.RepresentativeBudget = 3
+	work, ok = CheckedRouterScalarWorkV1([]int{300_000}, 128, cfg)
+	if !ok || work != 1_958_400_000 {
+		t.Fatalf("quota-limited router work=%d ok=%v want 1958400000", work, ok)
+	}
+	cfg.BranchFactor = 256
+	cfg.MaxDepth = 64
+	cfg.MaxIterations = 1
+	cfg.RepresentativeBudget = 256
+	work, ok = CheckedRouterScalarWorkV1([]int{1_000}, 128, cfg)
+	if !ok || work != 4_210_688_000 {
+		t.Fatalf("wide quota-feasible router work=%d ok=%v want 4210688000", work, ok)
+	}
+	cfg.BranchFactor = 100
+	cfg.LeafSize = 900
+	cfg.RepresentativeBudget = 1_999
+	work, ok = CheckedRouterScalarWorkV1([]int{1_000}, 1, cfg)
+	if !ok || work != 10_306_000 {
+		t.Fatalf("member-limited router work=%d ok=%v want 10306000", work, ok)
+	}
+	cfg.BranchFactor = 1_000
+	cfg.LeafSize = 1
+	cfg.MaxDepth = 2
+	work, ok = CheckedRouterScalarWorkV1([]int{1_000}, 64, cfg)
+	if !ok || work != 32_096_256_000 {
+		t.Fatalf("total-member-limited router work=%d ok=%v want 32096256000", work, ok)
+	}
+	if _, ok := CheckedRouterScalarWorkV1([]int{routerMaxVectors}, math.MaxInt, cfg); ok {
+		t.Fatal("overflowing router work was accepted")
+	}
+}
+
+func TestCheckedRouterScalarWorkDoesNotCombineExclusiveCenterSelectionPathsV1(t *testing.T) {
+	cfg := DefaultRouterConfigV1()
+	cfg.BranchFactor = 2
+	cfg.LeafSize = 1
+	cfg.MaxDepth = 1
+	cfg.MaxIterations = 42
+	cfg.RepresentativeBudget = 3
+	work, ok := CheckedRouterScalarWorkV1([]int{1_200_000}, 128, cfg)
+	if !ok || work != 19_814_400_000 {
+		t.Fatalf("router work=%d ok=%v want 19814400000", work, ok)
+	}
+}
+
+func TestCheckedRouterScalarWorkPreservesTerminalFullWidthV1(t *testing.T) {
+	cfg := DefaultRouterConfigV1()
+	cfg.BranchFactor = 3
+	cfg.LeafSize = 1
+	cfg.MaxDepth = 2
+	cfg.MaxIterations = 1
+	cfg.RepresentativeBudget = 5
+	work, ok := CheckedRouterScalarWorkV1([]int{300_000}, 4_096, cfg)
+	if !ok || work != 15_974_400_000 {
+		t.Fatalf("router work=%d ok=%v want 15974400000", work, ok)
+	}
+}
+
+func TestCheckedRouterScalarWorkMatchesExhaustivePathOracleV1(t *testing.T) {
+	type state struct {
+		members int
+		budget  int
+		depth   int
+	}
+	for population := 1; population <= 10; population++ {
+		for budget := 1; budget <= 12; budget++ {
+			for branch := 2; branch <= 7; branch++ {
+				for depth := 1; depth <= 4; depth++ {
+					for leaf := 1; leaf <= population; leaf++ {
+						for iterations := 1; iterations <= 3; iterations++ {
+							cfg := DefaultRouterConfigV1()
+							cfg.BranchFactor = branch
+							cfg.LeafSize = leaf
+							cfg.RepresentativeBudget = budget
+							cfg.MaxDepth = depth
+							cfg.MaxIterations = iterations
+							memo := make(map[state]int)
+							var pathWork func(state) int
+							pathWork = func(current state) int {
+								if cached, ok := memo[current]; ok {
+									return cached
+								}
+								if current.members <= leaf || current.budget < 3 || current.depth >= depth {
+									return 0
+								}
+								requested := min(branch, min(current.members, current.budget-1))
+								best := 1 // one-center terminal failure.
+								for width := 2; width <= requested; width++ {
+									initialization := width * (width + 1) / 2
+									if width == requested {
+										initialization = width * (width - 1) / 2
+									}
+									split := initialization + iterations*(2*width-1)
+									child := state{members: current.members - width + 1, budget: current.budget - width, depth: current.depth + 1}
+									best = max(best, split+1+pathWork(child)) // child medoid pass.
+								}
+								memo[current] = best
+								return best
+							}
+							want := int64(population * (1 + pathWork(state{members: population, budget: budget}))) // root medoid pass.
+							got, ok := CheckedRouterScalarWorkV1([]int{population}, 1, cfg)
+							if !ok || got != want {
+								t.Fatalf("population=%d budget=%d branch=%d depth=%d leaf=%d iterations=%d: work=%d ok=%v want=%d", population, budget, branch, depth, leaf, iterations, got, ok, want)
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+func TestCheckedRouterScalarWorkCoversFailedCenterSelectionV1(t *testing.T) {
+	vectors := []routerBuildVectorV1{
+		{ordinal: 1, values: []float32{0.5718129277229309, -0.8203840851783752}},
+		{ordinal: 2, values: []float32{0.5718127489089966, -0.8203842043876648}},
+	}
+	if reflect.DeepEqual(vectors[0].values, vectors[1].values) {
+		t.Fatal("test vectors must be distinct")
+	}
+	if distance := routerCosineDistanceNormalizedV1(vectors[0].values, vectors[1].values); distance != 0 {
+		t.Fatalf("rounded cosine distance=%g want 0", distance)
+	}
+	parent := &routerBuildNodeV1{
+		record:  RouterHierarchyNodeV1{NodeID: 1, PartitionID: 1},
+		members: []int{0, 1},
+	}
+	if centers := routerInitialCentersV1(vectors, parent, 2, 0); len(centers) != 1 {
+		t.Fatalf("initial centers=%d want 1 after the failed selection scan", len(centers))
+	}
+	cfg := DefaultRouterConfigV1()
+	cfg.BranchFactor = 2
+	cfg.LeafSize = 1
+	cfg.MaxDepth = 1
+	cfg.MaxIterations = 1
+	cfg.RepresentativeBudget = 3
+	work, ok := CheckedRouterScalarWorkV1([]int{2}, 2, cfg)
+	if !ok || work != 24 {
+		t.Fatalf("failed-selection router work=%d ok=%v want 24", work, ok)
 	}
 }
 

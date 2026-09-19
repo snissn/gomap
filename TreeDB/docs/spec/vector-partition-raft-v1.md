@@ -58,6 +58,17 @@ one global representative budget, maximum depth, maximum Lloyd iterations,
 and vector/dimension/representative/scalar-work/persisted-byte caps. A
 conservative full 64-layer native-pack bound is checked before row or adjacency
 allocation, and the actual encoded length is checked again before append.
+The scalar-work cap counts every coordinate evaluated by construction cosine
+distances: farthest-first initialization, Lloyd assignment, empty-cluster
+repair, a possible non-progress center-selection scan, and one medoid pass for
+every represented level. Full-width selection and a non-progress selection
+scan are mutually exclusive paths. Continuing branch-cap splits retain their
+actual quota and member consumption, a terminal successful split uses its
+requested width, and a failed terminal split is charged only when another split
+is feasible. The conservative bound reuses the canonical
+per-domain budget apportionment, then maximizes each root-to-leaf path over
+quota- and member-feasible split widths because memberships are disjoint within
+each level; it does not multiply every vector by its domain's full node quota.
 Farthest-first initialization and all distance/ordinal ties are stable. Empty clusters are
 repaired deterministically by moving the farthest eligible member, with source
 ordinal as the tie break. Reserve one root per nonempty logical domain, then
