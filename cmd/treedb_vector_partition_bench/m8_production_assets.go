@@ -31,8 +31,6 @@ type m8ProductionMultiGroupAssetsV1 struct {
 	groups          []string
 	assetSetDigests map[string]string
 	descriptor      *m3VariantDescriptorV1
-	routerWidth     int
-	routerBeam      int
 }
 
 func newM8ProductionMultiGroupAssetsV1(vectors [][]float64, groups []string, partitions int) (_ *m8ProductionMultiGroupAssetsV1, err error) {
@@ -135,7 +133,6 @@ func newM8ProductionMultiGroupAssetsWithRouterV2(vectors [][]float64, groups []s
 		return nil, err
 	}
 	h.status = h.router.Status()
-	h.routerWidth, h.routerBeam = int(h.status.Representatives), int(h.status.Representatives)
 	// Router publication returns the only canonical ready manifest: it includes
 	// the shared router asset and ready-set identity in addition to local packs.
 	h.manifest = h.status.Manifest
@@ -303,7 +300,6 @@ func openM8ProductionExistingAssetSetModeV1(dir string, readOnly bool) (_ *m8Pro
 		return nil, fmt.Errorf("open retained M8 router: %w", err)
 	}
 	h.status = h.router.Status()
-	h.routerWidth, h.routerBeam = int(h.status.Representatives), int(h.status.Representatives)
 	h.manifest = h.status.Manifest
 	return h, nil
 }

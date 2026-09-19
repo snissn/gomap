@@ -265,7 +265,7 @@ func m8ValidateQualificationCampaignWithVerifiersV1(root string, campaign m8Qual
 		if err := json.Unmarshal(raw, &matrix); err != nil {
 			return summary, fmt.Errorf("decode qualification matrix %s: %w", run.Path, err)
 		}
-		if matrix.SchemaVersion != 5 || matrix.ResultKind != "m8_production_multi_variant_matrix_v5" || matrix.BaseSHA != campaign.BaseSHA || matrix.HeadSHA != campaign.HeadSHA || !m8QualificationSHA256V1(matrix.ExecutableSHA256) || !m8QualificationGitSHAV1(matrix.BaseSHA) || !m8QualificationGitSHAV1(matrix.HeadSHA) {
+		if matrix.SchemaVersion != 6 || matrix.ResultKind != "m8_production_multi_variant_matrix_v6" || matrix.BaseSHA != campaign.BaseSHA || matrix.HeadSHA != campaign.HeadSHA || !m8QualificationSHA256V1(matrix.ExecutableSHA256) || !m8QualificationGitSHAV1(matrix.BaseSHA) || !m8QualificationGitSHAV1(matrix.HeadSHA) {
 			return summary, fmt.Errorf("qualification matrix %s has invalid schema/provenance/status", cleanPath)
 		}
 		if err := validateM8ProductionMatrixV1(matrix); err != nil {
@@ -654,10 +654,9 @@ func m8QualificationRetainedAttributionV1(root string, report m8ProductionReport
 	if len(queries) != len(truth) {
 		return errors.New("retained attribution query shape mismatch")
 	}
-	if report.Config.RouterWidth < 1 || report.Config.RouterWidth > report.Config.RouterBeam || report.Config.RouterBeam > int(assets.status.Representatives) {
-		return errors.New("retained attribution lacks explicit router w/E identity")
+	if report.RouterRepresentatives != assets.status.Representatives {
+		return errors.New("retained attribution router model size mismatch")
 	}
-	assets.routerWidth, assets.routerBeam = report.Config.RouterWidth, report.Config.RouterBeam
 	approximateCandidates := report.Config.RouterScoreBudget
 	if approximateCandidates < 1 {
 		return errors.New("retained attribution has no router candidates")
@@ -677,7 +676,7 @@ func m8QualificationRetainedAttributionV1(root string, report m8ProductionReport
 		if err := m8QualityEvidenceSelectionV1(report.Config, row); err != nil {
 			return err
 		}
-		if err := m8RouterPolicyEvidenceSelectionV1(report.Config, row); err != nil {
+		if err := m8RouterPolicyEvidenceSelectionV1(report.Config, int(report.RouterRepresentatives), row); err != nil {
 			return err
 		}
 		if row.Attribution.RouterPolicies != nil {
@@ -847,7 +846,7 @@ func m8QualificationCommandConfigV1(cfg config) m8ProductionConfigEvidenceV1 {
 		Probes: cfg.probes, Overlap: cfg.overlaps, TopK: cfg.topK, RecallTarget: cfg.recallTarget,
 		Concurrency: cfg.concurrency, Warmup: cfg.warmup, EffectiveWarmup: warmup,
 		EfSearch: cfg.efSearch, RouterScoreBudget: cfg.routerCandidates,
-		RouterSemantics: m8RouterSemanticsV3, RouterWidth: cfg.routerWidth, RouterBeam: cfg.routerBeam,
+		RouterSemantics:     m8RouterSemanticsV4,
 		MaxExactTruthVisits: cfg.m8MaxExactTruthVisits, Seed: cfg.seed, QualityDiagnostics: cfg.m8QualityDiagnostics, QualityTraceQueries: cfg.m8QualityTraceQueries, RouterPolicyDiagnostics: cfg.m8RouterPolicyDiagnostics, RouterPolicyWidth: cfg.m8RouterPolicyWidth,
 	}
 }

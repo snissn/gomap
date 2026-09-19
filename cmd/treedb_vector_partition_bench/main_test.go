@@ -673,7 +673,7 @@ func TestRouterStageUsesPersistedExactAndNativeHNSWPaths(t *testing.T) {
 		"-partitions", "4",
 		"-probes", "2",
 		"-stage", "router",
-		"-router-global-budget", "12", "-router-width", "12", "-router-beam", "12",
+		"-router-global-budget", "12",
 		"-router-leaf-size", "1",
 		"-router-max-bytes", "1",
 	}, io.Discard); err == nil || !strings.Contains(err.Error(), "estimated bytes") {
@@ -687,7 +687,7 @@ func TestRouterStageUsesPersistedExactAndNativeHNSWPaths(t *testing.T) {
 		"-partitions", "4",
 		"-probes", "2",
 		"-stage", "router",
-		"-router-global-budget", "12", "-router-width", "12", "-router-beam", "12",
+		"-router-global-budget", "12",
 		"-router-leaf-size", "1",
 		"-router-score-budget", "128",
 	}
@@ -810,7 +810,7 @@ func TestM6CoordinatorStageUsesRealM4M6AndLabelsLocalSimulation(t *testing.T) {
 		"-top-k", "10",
 		"-stage", m6CoordinatorStageV1,
 		"-source-hnsw-degree", "4",
-		"-router-global-budget", "12", "-router-width", "12", "-router-beam", "12",
+		"-router-global-budget", "12",
 		"-router-leaf-size", "1",
 	}
 	if err := runWithHermeticProvenance(t, args, &stdout); err != nil {
@@ -883,7 +883,7 @@ func TestM6CoordinatorHarnessCloseReleasesCachedRouterSession(t *testing.T) {
 	routerConfig.LeafSize = 1
 	routerConfig.RepresentativeBudget = 12
 	routerConfig.MaxVectors = len(vectors)
-	router, err := newTreeDBRepresentativeRouter(vectors, 4, routerConfig, 128, 12, 12, 4)
+	router, err := newTreeDBRepresentativeRouter(vectors, 4, routerConfig, 128, 4)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1114,11 +1114,11 @@ func TestM3ConfiguredPartitionLocalHNSWBuildsProductionV3Packs(t *testing.T) {
 		routerStatus := router.Status()
 		routes := make([][]uint32, 0, len(queries)*4)
 		for _, query := range queries {
-			for _, options := range []collections.VectorPartitionRouterSearchOptionsV2{
-				{Mode: collections.VectorPartitionRouterModeExactV1, ScoreBudget: int(routerStatus.Representatives) * 8, ReturnedWidth: int(routerStatus.Representatives), BeamWidth: int(routerStatus.Representatives), PartitionProbes: 2},
-				{Mode: collections.VectorPartitionRouterModeApproxV1, ScoreBudget: int(routerStatus.Representatives) * 8, ReturnedWidth: int(routerStatus.Representatives), BeamWidth: int(routerStatus.Representatives), PartitionProbes: 2},
-				{Mode: collections.VectorPartitionRouterModeExactV1, ScoreBudget: int(routerStatus.Representatives) * 8, ReturnedWidth: int(routerStatus.Representatives), BeamWidth: int(routerStatus.Representatives), PartitionProbes: 16},
-				{Mode: collections.VectorPartitionRouterModeApproxV1, ScoreBudget: int(routerStatus.Representatives) * 8, ReturnedWidth: int(routerStatus.Representatives), BeamWidth: int(routerStatus.Representatives), PartitionProbes: 16},
+			for _, options := range []collections.VectorPartitionRouterSearchOptionsV3{
+				{Mode: collections.VectorPartitionRouterModeExactV1, ScoreBudget: int(routerStatus.Representatives) * 8, PartitionProbes: 2},
+				{Mode: collections.VectorPartitionRouterModeApproxV1, ScoreBudget: int(routerStatus.Representatives) * 8, PartitionProbes: 2},
+				{Mode: collections.VectorPartitionRouterModeExactV1, ScoreBudget: int(routerStatus.Representatives) * 8, PartitionProbes: 16},
+				{Mode: collections.VectorPartitionRouterModeApproxV1, ScoreBudget: int(routerStatus.Representatives) * 8, PartitionProbes: 16},
 			} {
 				result, err := router.Search(query, options)
 				if err != nil {
@@ -2023,7 +2023,7 @@ func TestM8ProductionModeParsesCanonicalTopologyAndSweepsV1(t *testing.T) {
 	}
 	if cfg.stage != m8ProductionMultiGroupModeV1 || cfg.raftGroups != 4 || cfg.raftNodes != 3 ||
 		fmt.Sprint(cfg.probes) != "[1 4 16]" || fmt.Sprint(cfg.overlaps) != "[0 0.2]" ||
-		fmt.Sprint(cfg.concurrency) != "[1 16 64]" || cfg.warmup != 3 || fmt.Sprint(cfg.efSearch) != "[64 4096]" || cfg.routerCandidates != 1024 || cfg.routerWidth != 64 || cfg.routerBeam != 96 || cfg.m8ExistingDB != "/retained/m8-assets" {
+		fmt.Sprint(cfg.concurrency) != "[1 16 64]" || cfg.warmup != 3 || fmt.Sprint(cfg.efSearch) != "[64 4096]" || cfg.routerCandidates != 1024 || cfg.m8ExistingDB != "/retained/m8-assets" {
 		t.Fatalf("M8 config=%+v", cfg)
 	}
 	limit := nativewire.DefaultVectorPartitionCoordinatorLimitsV1().MaxSelectedPartitions
@@ -2041,7 +2041,7 @@ func TestM8ProductionModeParsesCanonicalTopologyAndSweepsV1(t *testing.T) {
 		"-mode", m8ProductionMultiGroupModeV1, "-dataset", fixturePath(t), "-out", t.TempDir(),
 		"-partitions", "16", "-raft-groups", "4", "-probes", "1,4", "-router-score-budget", "2",
 	})
-	if err != nil || independent.routerCandidates != 2 || independent.routerWidth != 64 || independent.routerBeam != 96 {
+	if err != nil || independent.routerCandidates != 2 {
 		t.Fatalf("rejected independent router C/w/E: config=%+v err=%v", independent, err)
 	}
 	for _, args := range [][]string{

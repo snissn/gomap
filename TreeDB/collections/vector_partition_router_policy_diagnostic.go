@@ -15,7 +15,7 @@ import (
 const VectorPartitionRouterPolicyDiagnosticMethodV1 = vectorPartitionRankingDiagnosticMethodV1
 
 // VectorPartitionRouterPolicyDiagnosticOptionsV1 compares policies using the
-// current V2 collector. It cannot reproduce frozen V1-policy receipts: the model
+// historical flat-HNSW collector. It cannot reproduce frozen V1-policy receipts: the model
 // identity, hierarchy and actual-score budget semantics have changed.
 type VectorPartitionRouterPolicyDiagnosticOptionsV1 struct {
 	Mode            string
@@ -94,7 +94,7 @@ func (r *VectorPartitionRouterV1) CompareRankingPoliciesForDiagnosticsV1(ctx con
 		opts.Mode = VectorPartitionRouterModeApproxV1
 	}
 	n, d := len(r.model.Representatives), r.model.Metrics.Partitions
-	if n < 1 || d < 1 || d > n || opts.PartitionProbes < 1 || opts.PartitionProbes > d || opts.ReturnedWidth < 1 || opts.ReturnedWidth > opts.BeamWidth || opts.BeamWidth > n || opts.ScoreBudget < 1 || opts.ScoreBudget > MaxVectorPartitionRouterScoreBudgetV2 {
+	if n < 1 || d < 1 || d > n || opts.PartitionProbes < 1 || opts.PartitionProbes > d || opts.ReturnedWidth < 1 || opts.ReturnedWidth > opts.BeamWidth || opts.BeamWidth > n || opts.ScoreBudget < 1 || opts.ScoreBudget > MaxVectorPartitionRouterScoreBudgetV3 {
 		return out, errors.New("collections: invalid router policy diagnostic shape")
 	}
 	switch opts.Mode {
@@ -124,7 +124,7 @@ func (r *VectorPartitionRouterV1) CompareRankingPoliciesForDiagnosticsV1(ctx con
 		// the full source population before comparing policies on that prefix.
 		width, beam = n, n
 	}
-	candidates, work, err := r.collectVectorPartitionRouterCandidatesLockedV1(ctx, query, normalized, VectorPartitionRouterSearchOptionsV2{Mode: opts.Mode, ScoreBudget: opts.ScoreBudget, ReturnedWidth: width, BeamWidth: beam, PartitionProbes: opts.PartitionProbes})
+	candidates, work, err := r.collectVectorPartitionRouterPolicyCandidatesLockedV1(ctx, query, normalized, vectorPartitionRouterPolicyCandidateOptionsV1{Mode: opts.Mode, ScoreBudget: opts.ScoreBudget, ReturnedWidth: width, BeamWidth: beam})
 	out.ScoreCalls = work.ScoreCalls
 	if err != nil {
 		if errors.Is(err, errTypedGraphSearchBudget) {

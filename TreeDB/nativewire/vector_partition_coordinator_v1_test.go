@@ -65,7 +65,7 @@ var vectorPartitionCoordinatorCandidateRowsBenchmarkSinkV1 struct {
 	total uint64
 }
 
-func (r *testVectorPartitionCoordinatorRouterV1) SearchWithContextV1(ctx context.Context, _ []float32, opts collections.VectorPartitionRouterSearchOptionsV2) (collections.VectorPartitionRouterSearchResultV1, error) {
+func (r *testVectorPartitionCoordinatorRouterV1) SearchWithContextV1(ctx context.Context, _ []float32, opts collections.VectorPartitionRouterSearchOptionsV3) (collections.VectorPartitionRouterSearchResultV1, error) {
 	if err := ctx.Err(); err != nil {
 		return collections.VectorPartitionRouterSearchResultV1{}, err
 	}
@@ -329,7 +329,7 @@ func testVectorPartitionCoordinatorRequestV1(partitions int) VectorPartitionCoor
 		IndexDefinitionDigest: fmt.Sprintf("%064x", 17),
 		Query:                 []float32{1, 0}, Metric: VectorPartitionShardSearchMetricCosineV1,
 		RouterMode:        collections.VectorPartitionRouterModeExactV1,
-		RouterScoreBudget: partitions, RouterReturnedWidth: partitions, RouterBeamWidth: partitions, PartitionProbes: partitions,
+		RouterScoreBudget: partitions, PartitionProbes: partitions,
 		Consistency: VectorPartitionShardSearchConsistencySnapshotV1,
 		TopK:        3, EfSearch: 8, StatsMode: VectorPartitionShardSearchStatsBasicV1,
 		RequestBytesLimit: 4 << 20, CandidateBytesLimit: 64 << 20,
@@ -797,8 +797,6 @@ func TestVectorPartitionCoordinatorRouterScoreExhaustionPreservesWorkV2(t *testi
 	source.router.searchErr = collections.ErrVectorPartitionRouterScoreBudget
 	request := testVectorPartitionCoordinatorRequestV1(1)
 	request.RouterMode = collections.VectorPartitionRouterModeApproxV1
-	request.RouterReturnedWidth = 2
-	request.RouterBeamWidth = 2
 	response, err := coordinator.Search(context.Background(), request)
 	var failure *VectorPartitionCoordinatorErrorV1
 	if !errors.As(err, &failure) || failure.Code != "budget_exceeded" || !vectorPartitionCoordinatorResponseIsZeroTestV1(response) || len(dispatcher.calls) != 0 {
@@ -1375,10 +1373,10 @@ func TestVectorPartitionCoordinatorRejectsImpossibleRouterFanoutBeforeOpenV1(t *
 			[]raftplacement.GroupV1{{ID: "group-a", Members: []raftcluster.NodeID{"node-a"}, LeaderHint: "node-a"}},
 			[]raftcluster.GroupID{"group-a"},
 			map[uint32][]VectorPartitionShardSearchNeighborV1{0: {{ID: "a", Score: 1}}},
-			VectorPartitionCoordinatorLimitsV1{MaxRouterCandidates: collections.MaxVectorPartitionRouterScoreBudgetV2 + 1},
+			VectorPartitionCoordinatorLimitsV1{MaxRouterScoreCalls: collections.MaxVectorPartitionRouterScoreBudgetV3 + 1},
 		)
 		request := testVectorPartitionCoordinatorRequestV1(1)
-		request.RouterScoreBudget = collections.MaxVectorPartitionRouterScoreBudgetV2 + 1
+		request.RouterScoreBudget = collections.MaxVectorPartitionRouterScoreBudgetV3 + 1
 
 		response, err := coordinator.Search(context.Background(), request)
 		var coordinatorErr *VectorPartitionCoordinatorErrorV1

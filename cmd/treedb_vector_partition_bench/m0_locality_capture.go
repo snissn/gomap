@@ -51,8 +51,6 @@ type m0LocalityCaptureV1 struct {
 	VCSModified               bool                                                       `json:"vcs_modified"`
 	Probes                    int                                                        `json:"probes"`
 	RouterScoreBudget         int                                                        `json:"router_score_budget"`
-	RouterWidth               int                                                        `json:"router_width"`
-	RouterBeam                int                                                        `json:"router_beam"`
 	EF                        int                                                        `json:"ef_search"`
 	PageScope                 string                                                     `json:"page_scope"`
 	MedianPages               uint64                                                     `json:"median_unique_graph_vector_pages"`
@@ -67,7 +65,7 @@ func runM0LocalityCaptureV1(args []string, stdout io.Writer) error {
 	fs := flag.NewFlagSet("treedb_vector_partition_bench m0-locality-capture", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	var dataset, db, splitPath, out, artifactPath string
-	var probes, scoreBudget, width, beam, ef int
+	var probes, scoreBudget, ef int
 	var rawTraces bool
 	fs.StringVar(&dataset, "dataset", "", "frozen fixture directory")
 	fs.StringVar(&db, "retained-db", "", "read-only retained M3 DB")
@@ -75,16 +73,14 @@ func runM0LocalityCaptureV1(args []string, stdout io.Writer) error {
 	fs.StringVar(&out, "out", "", "fresh JSON output")
 	fs.StringVar(&artifactPath, "artifact", "", "frozen graph artifact for raw layout identity")
 	fs.IntVar(&probes, "probes", 2, "router partition probes")
-	fs.IntVar(&scoreBudget, "router-score-budget", defaultRouterScoreBudgetV2, "actual router score-call ceiling")
-	fs.IntVar(&width, "router-width", defaultRouterReturnedWidthV2, "returned router representative width")
-	fs.IntVar(&beam, "router-beam", defaultRouterBeamWidthV2, "retained router traversal beam")
+	fs.IntVar(&scoreBudget, "router-score-budget", defaultRouterScoreBudgetV3, "actual router score-call ceiling")
 	fs.IntVar(&ef, "ef-search", 128, "native ef search")
 	fs.BoolVar(&rawTraces, "raw-traces", false, "persist offline trace events and pack layout snapshots")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if fs.NArg() != 0 || dataset == "" || db == "" || splitPath == "" || out == "" || probes < 1 || scoreBudget < 1 || scoreBudget > collections.MaxVectorPartitionRouterScoreBudgetV2 || width < 1 || width > beam || ef < 1 {
-		return errors.New("m0-locality-capture requires frozen inputs and positive bounded probes/router-score-budget/router-width/router-beam/ef")
+	if fs.NArg() != 0 || dataset == "" || db == "" || splitPath == "" || out == "" || probes < 1 || scoreBudget < 1 || scoreBudget > collections.MaxVectorPartitionRouterScoreBudgetV3 || ef < 1 {
+		return errors.New("m0-locality-capture requires frozen inputs and positive bounded probes/router-score-budget/ef")
 	}
 	buildIdentity, err := m0CurrentCleanBuildIdentityV1()
 	if err != nil {
@@ -182,16 +178,13 @@ func runM0LocalityCaptureV1(args []string, stdout io.Writer) error {
 			}
 		}
 	}
-	if beam > int(assets.status.Representatives) {
-		return errors.New("m0-locality-capture router beam exceeds opened model")
-	}
-	report := m0LocalityCaptureV1{Schema: "treedb_vector_partition_m0_exact_pack_trace_v4", DB: db, Split: splitSHA, Artifact: artifactSHA, Descriptor: descriptorSHA, Source: descriptor.Source, Manifest: assets.manifest.IntegrityDigest, ReadySet: assets.manifest.ReadySetDigest, RouterModel: assets.status.ModelDigest, BinarySHA256: buildIdentity.BinarySHA256, SourceRevision: buildIdentity.SourceRevision, VCSModified: buildIdentity.VCSModified, Probes: probes, RouterScoreBudget: scoreBudget, RouterWidth: width, RouterBeam: beam, EF: ef, PageScope: "unique 4KiB graph+vector pack pages/query; excludes document-ID result materialization", Snapshots: snapshots, PackIdentityNeutralSHA256: packDigests}
+	report := m0LocalityCaptureV1{Schema: "treedb_vector_partition_m0_exact_pack_trace_v5", DB: db, Split: splitSHA, Artifact: artifactSHA, Descriptor: descriptorSHA, Source: descriptor.Source, Manifest: assets.manifest.IntegrityDigest, ReadySet: assets.manifest.ReadySetDigest, RouterModel: assets.status.ModelDigest, BinarySHA256: buildIdentity.BinarySHA256, SourceRevision: buildIdentity.SourceRevision, VCSModified: buildIdentity.VCSModified, Probes: probes, RouterScoreBudget: scoreBudget, EF: ef, PageScope: "unique 4KiB graph+vector pack pages/query; excludes document-ID result materialization", Snapshots: snapshots, PackIdentityNeutralSHA256: packDigests}
 	for _, ordinal := range split.Ordinals {
 		if ordinal < 0 || ordinal >= len(queries) {
 			return errors.New("split ordinal")
 		}
 		q := m8Query32V1(queries[ordinal])
-		route, err := localHNSWAttributionQueryRouteV1(context.Background(), assets, q, scoreBudget, width, beam, probes)
+		route, err := localHNSWAttributionQueryRouteV1(context.Background(), assets, q, scoreBudget, probes)
 		if err != nil {
 			return err
 		}

@@ -516,7 +516,7 @@ func m8BuildProductionMatrixV1(cfg config, fixture fixtureManifest, reports []m8
 
 func m8BuildProductionMatrixWithExecutionIntervalV1(cfg config, fixture fixtureManifest, reports []m8ProductionReportV1, executionStartedAt, executionCompletedAt time.Time) (m8ProductionMatrixV1, error) {
 	matrix := m8ProductionMatrixV1{
-		SchemaVersion: 5, ResultKind: "m8_production_multi_variant_matrix_v5", Status: "incomplete", GeneratedAt: time.Now().UTC(), ExecutionStartedAt: executionStartedAt, ExecutionCompletedAt: executionCompletedAt,
+		SchemaVersion: 6, ResultKind: "m8_production_multi_variant_matrix_v6", Status: "incomplete", GeneratedAt: time.Now().UTC(), ExecutionStartedAt: executionStartedAt, ExecutionCompletedAt: executionCompletedAt,
 		Command: append([]string(nil), cfg.command...), BaseSHA: cfg.baseSHA, HeadSHA: cfg.headSHA, Dataset: fixture,
 		RequiredVariants: append([]string(nil), m8RequiredVariantIDsV1...), Variants: reports,
 		Limitations: []string{"single-host loopback production-shaped topology; multi-host qualification remains owned by #3983", "no external-system or paper-scale comparison is claimed"},

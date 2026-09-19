@@ -2,6 +2,7 @@ package collections
 
 import (
 	"bytes"
+	"container/heap"
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
@@ -75,20 +76,17 @@ type VectorPartitionRouterOpenStatusV1 struct {
 	FailureReason   string
 }
 
-// VectorPartitionRouterSearchOptionsV2 deliberately replaces the coupled V1
-// candidate budget. Width is returned representatives, beam is retained search
-// frontier, and score budget charges every score call, including upper levels.
-type VectorPartitionRouterSearchOptionsV2 struct {
+// VectorPartitionRouterSearchOptionsV3 exposes the only two serving controls:
+// C charges every centroid score and P is the requested logical-domain count.
+type VectorPartitionRouterSearchOptionsV3 struct {
 	Mode            string
-	ReturnedWidth   int
-	BeamWidth       int
 	ScoreBudget     int
 	PartitionProbes int
 }
 
-// MaxVectorPartitionRouterScoreBudgetV2 bounds requested work independently of
+// MaxVectorPartitionRouterScoreBudgetV3 bounds requested work independently of
 // model size; C may exceed the actual representative count.
-const MaxVectorPartitionRouterScoreBudgetV2 = 1_000_000
+const MaxVectorPartitionRouterScoreBudgetV3 = 1_000_000
 
 // ErrVectorPartitionRouterScoreBudget means C was insufficient. No partial
 // routing result or exact fallback is returned; status retains charged work.
@@ -105,8 +103,6 @@ type VectorPartitionRouterSearchStatusV1 struct {
 	Mode            string
 	SearchNanos     uint64
 	ScoreBudget     uint64
-	ReturnedWidth   uint64
-	BeamWidth       uint64
 	ScoreCalls      uint64
 	PartitionProbes uint64
 	Candidates      uint64
@@ -174,12 +170,14 @@ type VectorPartitionRouterV1 struct {
 	modelDigest string
 	viewToModel []int
 	view        *columnHNSWSearchPackPreparedView
+	hierarchy   vectorPartitionRouterHierarchyV3
 	pin         *VectorPartitionReaderPinV1
 	openNanos   uint64
 
 	closeMu sync.RWMutex
 	closed  atomic.Bool
-	scratch sync.Pool
+	scratch sync.Pool // historical flat-HNSW diagnostic only
+	route   sync.Pool
 
 	searches       atomic.Uint64
 	searchFailures atomic.Uint64
@@ -1211,8 +1209,15 @@ func (c *Collection) openVectorPartitionRouterManifestWithContextV1(ctx context.
 	if manifest.RouterAsset.Bytes > model.Config.MaxRouterBytes {
 		return nil, errors.Join(errors.New("collections: vector partition router asset exceeds its persisted byte cap"), view.Close())
 	}
-	router := &VectorPartitionRouterV1{manifest: manifest, model: model, modelDigest: digest, view: view, viewToModel: viewToModel}
+	hierarchy, err := buildVectorPartitionRouterHierarchyV3(ctx, model)
+	if err != nil {
+		return nil, errors.Join(err, view.Close())
+	}
+	router := &VectorPartitionRouterV1{manifest: manifest, model: model, modelDigest: digest, view: view, viewToModel: viewToModel, hierarchy: hierarchy}
 	router.scratch.New = func() any { return &columnVectorGraphNativeSearchScratch{} }
+	router.route.New = func() any {
+		return &vectorPartitionRouterRouteScratchV3{best: make([]VectorPartitionRouterPartitionScoreV1, len(hierarchy.domainIDs))}
+	}
 	return router, nil
 }
 
@@ -1404,21 +1409,139 @@ func equalVectorPartitionMembershipsV1(left, right []VectorPartitionMembershipV1
 	return true
 }
 
-func (r *VectorPartitionRouterV1) Search(query []float32, opts VectorPartitionRouterSearchOptionsV2) (VectorPartitionRouterSearchResultV1, error) {
+type vectorPartitionRouterHierarchyV3 struct {
+	rootOrdinals           []int
+	children               [][]int
+	domainIDs              []uint32
+	representativeToDomain []int
+}
+
+func buildVectorPartitionRouterHierarchyV3(ctx context.Context, model internalrouter.RouterModelV1) (vectorPartitionRouterHierarchyV3, error) {
+	var h vectorPartitionRouterHierarchyV3
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return h, err
+	}
+	h = vectorPartitionRouterHierarchyV3{children: make([][]int, len(model.Representatives)), representativeToDomain: make([]int, len(model.Representatives))}
+	if len(model.Nodes) != len(model.Representatives) || len(model.Nodes) == 0 {
+		return h, errors.New("collections: vector partition router hierarchy is incomplete")
+	}
+	nodeToRepresentative := make([]int, len(model.Nodes)+1)
+	for i := range nodeToRepresentative {
+		if i&1023 == 0 {
+			if err := ctx.Err(); err != nil {
+				return h, err
+			}
+		}
+		nodeToRepresentative[i] = -1
+	}
+	var previousPartition uint32
+	for ordinal, representative := range model.Representatives {
+		if ordinal&1023 == 0 {
+			if err := ctx.Err(); err != nil {
+				return h, err
+			}
+		}
+		if representative.NodeID == 0 || int(representative.NodeID) > len(model.Nodes) || nodeToRepresentative[representative.NodeID] >= 0 {
+			return h, errors.New("collections: vector partition router representative identity is invalid")
+		}
+		nodeToRepresentative[representative.NodeID] = ordinal
+		if ordinal == 0 || representative.PartitionID != previousPartition {
+			h.domainIDs = append(h.domainIDs, representative.PartitionID)
+			previousPartition = representative.PartitionID
+		}
+		h.representativeToDomain[ordinal] = len(h.domainIDs) - 1
+	}
+	rootDomains := make([]bool, len(h.domainIDs))
+	for ordinal, representative := range model.Representatives {
+		if ordinal&1023 == 0 {
+			if err := ctx.Err(); err != nil {
+				return h, err
+			}
+		}
+		node := model.Nodes[representative.NodeID-1]
+		if node.NodeID != representative.NodeID || node.PartitionID != representative.PartitionID {
+			return h, errors.New("collections: vector partition router hierarchy identity is invalid")
+		}
+		if node.ParentNodeID == 0 {
+			h.rootOrdinals = append(h.rootOrdinals, ordinal)
+			rootDomains[h.representativeToDomain[ordinal]] = true
+			continue
+		}
+		if int(node.ParentNodeID) >= len(nodeToRepresentative) || nodeToRepresentative[node.ParentNodeID] < 0 {
+			return h, errors.New("collections: vector partition router hierarchy parent is missing")
+		}
+		parent := nodeToRepresentative[node.ParentNodeID]
+		if model.Representatives[parent].PartitionID != representative.PartitionID {
+			return h, errors.New("collections: vector partition router hierarchy crosses domains")
+		}
+		h.children[parent] = append(h.children[parent], ordinal)
+	}
+	for domain, present := range rootDomains {
+		if domain&1023 == 0 {
+			if err := ctx.Err(); err != nil {
+				return h, err
+			}
+		}
+		if !present {
+			return h, errors.New("collections: vector partition router domain lacks a root")
+		}
+	}
+	return h, nil
+}
+
+type vectorPartitionRouterPendingGroupV3 struct {
+	parentOrdinal int
+	distance      float64
+	partitionID   uint32
+	nodeID        uint32
+}
+
+type vectorPartitionRouterPendingHeapV3 []vectorPartitionRouterPendingGroupV3
+
+func (h vectorPartitionRouterPendingHeapV3) Len() int { return len(h) }
+func (h vectorPartitionRouterPendingHeapV3) Less(i, j int) bool {
+	if h[i].distance != h[j].distance {
+		return h[i].distance < h[j].distance
+	}
+	if h[i].partitionID != h[j].partitionID {
+		return h[i].partitionID < h[j].partitionID
+	}
+	return h[i].nodeID < h[j].nodeID
+}
+func (h vectorPartitionRouterPendingHeapV3) Swap(i, j int) { h[i], h[j] = h[j], h[i] }
+func (h *vectorPartitionRouterPendingHeapV3) Push(value any) {
+	*h = append(*h, value.(vectorPartitionRouterPendingGroupV3))
+}
+func (h *vectorPartitionRouterPendingHeapV3) Pop() any {
+	old := *h
+	last := old[len(old)-1]
+	*h = old[:len(old)-1]
+	return last
+}
+
+type vectorPartitionRouterRouteScratchV3 struct {
+	best    []VectorPartitionRouterPartitionScoreV1
+	pending vectorPartitionRouterPendingHeapV3
+}
+
+const maxVectorPartitionRouterRetainedPendingGroupsV3 = 4096
+
+func (r *VectorPartitionRouterV1) Search(query []float32, opts VectorPartitionRouterSearchOptionsV3) (VectorPartitionRouterSearchResultV1, error) {
 	return r.SearchWithContextV1(context.Background(), query, opts)
 }
 
-// SearchWithContextV1 preserves M4 ordering while making representative scans
-// and ranking cancellable for M6 deadlines.
-func (r *VectorPartitionRouterV1) SearchWithContextV1(ctx context.Context, query []float32, opts VectorPartitionRouterSearchOptionsV2) (result VectorPartitionRouterSearchResultV1, resultErr error) {
+// SearchWithContextV1 scores all roots, then expands complete child groups in
+// best-parent-first order. C is the sole approximate-search work control.
+func (r *VectorPartitionRouterV1) SearchWithContextV1(ctx context.Context, query []float32, opts VectorPartitionRouterSearchOptionsV3) (result VectorPartitionRouterSearchResultV1, resultErr error) {
 	started := time.Now()
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	result.Status.Mode = opts.Mode
 	result.Status.ScoreBudget = uint64(max(opts.ScoreBudget, 0))
-	result.Status.ReturnedWidth = uint64(max(opts.ReturnedWidth, 0))
-	result.Status.BeamWidth = uint64(max(opts.BeamWidth, 0))
 	result.Status.PartitionProbes = uint64(max(opts.PartitionProbes, 0))
 	fail := func(err error) (VectorPartitionRouterSearchResultV1, error) {
 		result.Status.SearchNanos = elapsedNanosVPR(started)
@@ -1449,8 +1572,8 @@ func (r *VectorPartitionRouterV1) SearchWithContextV1(ctx context.Context, query
 	if opts.PartitionProbes < 1 {
 		return fail(errors.New("collections: vector partition router probes must be positive"))
 	}
-	if opts.ScoreBudget < 1 || opts.ScoreBudget > MaxVectorPartitionRouterScoreBudgetV2 || opts.ReturnedWidth < 1 || opts.ReturnedWidth > opts.BeamWidth || opts.BeamWidth > len(r.model.Representatives) {
-		return fail(errors.New("collections: vector partition router requires 1 <= width <= beam <= representatives and score budget in [1,1000000]"))
+	if opts.PartitionProbes > len(r.hierarchy.domainIDs) || opts.ScoreBudget < 1 || opts.ScoreBudget > MaxVectorPartitionRouterScoreBudgetV3 {
+		return fail(errors.New("collections: vector partition router probes or score budget are out of range"))
 	}
 	normalized, err := normalizeVectorPartitionRouterQueryV1(query, r.model.Dimensions)
 	if err != nil {
@@ -1459,17 +1582,8 @@ func (r *VectorPartitionRouterV1) SearchWithContextV1(ctx context.Context, query
 	if err := ctx.Err(); err != nil {
 		return fail(err)
 	}
-	candidates, work, err := r.collectVectorPartitionRouterCandidatesLockedV1(ctx, query, normalized, opts)
-	result.Status.Candidates = work.Candidates
-	result.Status.Edges = work.Edges
-	result.Status.ScoreCalls = work.ScoreCalls
-	if err != nil {
-		if errors.Is(err, errTypedGraphSearchBudget) {
-			err = ErrVectorPartitionRouterScoreBudget
-		}
-		return fail(err)
-	}
-	result.Partitions, err = rankVectorPartitionRouterCandidatesWithContextV1(ctx, r.model.Representatives, candidates, opts.PartitionProbes)
+	result.Partitions, result.Status.ScoreCalls, result.Status.Edges, err = r.routeVectorPartitionHierarchyLockedV3(ctx, normalized, opts)
+	result.Status.Candidates = result.Status.ScoreCalls
 	if err != nil {
 		return fail(err)
 	}
@@ -1484,11 +1598,130 @@ func (r *VectorPartitionRouterV1) SearchWithContextV1(ctx context.Context, query
 	return result, nil
 }
 
-// collectVectorPartitionRouterCandidatesLockedV1 is shared by ordinary search
-// and the opt-in offline policy diagnostic. The caller holds closeMu.RLock and
-// has validated the query/options. Returned scalar candidates own their storage;
-// no pooled native result or model-vector alias escapes this helper.
-func (r *VectorPartitionRouterV1) collectVectorPartitionRouterCandidatesLockedV1(ctx context.Context, query, normalized []float32, opts VectorPartitionRouterSearchOptionsV2) ([]vectorPartitionRouterCandidateV1, vectorPartitionRouterCandidateWorkV1, error) {
+func (r *VectorPartitionRouterV1) routeVectorPartitionHierarchyLockedV3(ctx context.Context, normalized []float32, opts VectorPartitionRouterSearchOptionsV3) ([]VectorPartitionRouterPartitionScoreV1, uint64, uint64, error) {
+	if len(r.hierarchy.rootOrdinals) == 0 || len(r.hierarchy.domainIDs) == 0 {
+		return nil, 0, 0, errors.New("collections: vector partition router hierarchy is unavailable")
+	}
+	if opts.Mode == VectorPartitionRouterModeExactV1 {
+		if opts.ScoreBudget < len(r.model.Representatives) {
+			return nil, 0, 0, fmt.Errorf("%w: exact score budget=%d below representative count=%d", ErrVectorPartitionRouterScoreBudget, opts.ScoreBudget, len(r.model.Representatives))
+		}
+	} else if opts.Mode == VectorPartitionRouterModeApproxV1 {
+		if opts.ScoreBudget < len(r.hierarchy.rootOrdinals) {
+			return nil, 0, 0, fmt.Errorf("%w: score budget=%d below root count=%d", ErrVectorPartitionRouterScoreBudget, opts.ScoreBudget, len(r.hierarchy.rootOrdinals))
+		}
+	} else {
+		return nil, 0, 0, fmt.Errorf("collections: unsupported vector partition router mode %q", opts.Mode)
+	}
+
+	value := r.route.Get()
+	if value == nil {
+		value = &vectorPartitionRouterRouteScratchV3{best: make([]VectorPartitionRouterPartitionScoreV1, len(r.hierarchy.domainIDs))}
+	}
+	scratch := value.(*vectorPartitionRouterRouteScratchV3)
+	if len(scratch.best) != len(r.hierarchy.domainIDs) {
+		scratch.best = make([]VectorPartitionRouterPartitionScoreV1, len(r.hierarchy.domainIDs))
+	}
+	for i, partitionID := range r.hierarchy.domainIDs {
+		scratch.best[i] = VectorPartitionRouterPartitionScoreV1{PartitionID: partitionID, Distance: math.Inf(1), WinningRepresentative: -1}
+	}
+	scratch.pending = scratch.pending[:0]
+	defer func() {
+		if cap(scratch.pending) > maxVectorPartitionRouterRetainedPendingGroupsV3 {
+			scratch.pending = nil
+		}
+		r.route.Put(scratch)
+	}()
+
+	var scoreCalls, edges uint64
+	score := func(ordinal int, enqueue bool) error {
+		if scoreCalls&255 == 0 {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+		}
+		representative := r.model.Representatives[ordinal]
+		distance := 1 - cosineDotVectorPartitionRouterV1(normalized, representative.Values)
+		if distance < 0 && distance > -1e-6 {
+			distance = 0
+		}
+		if math.IsNaN(distance) || math.IsInf(distance, 0) {
+			return errors.New("collections: vector partition router score is invalid")
+		}
+		domain := r.hierarchy.representativeToDomain[ordinal]
+		current := &scratch.best[domain]
+		if distance < current.Distance || distance == current.Distance && ordinal < current.WinningRepresentative {
+			*current = VectorPartitionRouterPartitionScoreV1{
+				PartitionID: representative.PartitionID, Distance: distance,
+				WinningRepresentative: ordinal, WinningSourceOrdinal: representative.SourceOrdinal,
+			}
+		}
+		scoreCalls++
+		if enqueue && len(r.hierarchy.children[ordinal]) > 0 {
+			heap.Push(&scratch.pending, vectorPartitionRouterPendingGroupV3{
+				parentOrdinal: ordinal, distance: distance,
+				partitionID: representative.PartitionID, nodeID: representative.NodeID,
+			})
+		}
+		return nil
+	}
+
+	if opts.Mode == VectorPartitionRouterModeExactV1 {
+		for ordinal := range r.model.Representatives {
+			if err := score(ordinal, false); err != nil {
+				return nil, scoreCalls, edges, err
+			}
+		}
+	} else {
+		for _, ordinal := range r.hierarchy.rootOrdinals {
+			if err := score(ordinal, true); err != nil {
+				return nil, scoreCalls, edges, err
+			}
+		}
+		for scratch.pending.Len() > 0 {
+			group := scratch.pending[0]
+			children := r.hierarchy.children[group.parentOrdinal]
+			if int(scoreCalls)+len(children) > opts.ScoreBudget {
+				break
+			}
+			heap.Pop(&scratch.pending)
+			edges += uint64(len(children))
+			for _, ordinal := range children {
+				if err := score(ordinal, true); err != nil {
+					return nil, scoreCalls, edges, err
+				}
+			}
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, scoreCalls, edges, err
+	}
+	for _, best := range scratch.best {
+		if best.WinningRepresentative < 0 {
+			return nil, scoreCalls, edges, errors.New("collections: vector partition router did not score every domain")
+		}
+	}
+	sort.Slice(scratch.best, func(i, j int) bool {
+		if scratch.best[i].Distance != scratch.best[j].Distance {
+			return scratch.best[i].Distance < scratch.best[j].Distance
+		}
+		return scratch.best[i].PartitionID < scratch.best[j].PartitionID
+	})
+	if err := ctx.Err(); err != nil {
+		return nil, scoreCalls, edges, err
+	}
+	result := append([]VectorPartitionRouterPartitionScoreV1(nil), scratch.best[:opts.PartitionProbes]...)
+	return result, scoreCalls, edges, nil
+}
+
+type vectorPartitionRouterPolicyCandidateOptionsV1 struct {
+	Mode                                  string
+	ScoreBudget, ReturnedWidth, BeamWidth int
+}
+
+// collectVectorPartitionRouterPolicyCandidatesLockedV1 retains the rejected
+// flat-HNSW candidate set only for immutable offline-policy comparisons.
+func (r *VectorPartitionRouterV1) collectVectorPartitionRouterPolicyCandidatesLockedV1(ctx context.Context, query, normalized []float32, opts vectorPartitionRouterPolicyCandidateOptionsV1) ([]vectorPartitionRouterCandidateV1, vectorPartitionRouterCandidateWorkV1, error) {
 	var work vectorPartitionRouterCandidateWorkV1
 	var candidates []vectorPartitionRouterCandidateV1
 	switch opts.Mode {
