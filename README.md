@@ -222,6 +222,37 @@ reads with one writer measured 2.96M reader ops/sec and 44.3k writer docs/sec.
 Source:
 [June 4 collection concurrency report](docs/benchmarks/collections_concurrency_main_2026-06-04.md).
 
+### Typed Metadata Mutation Workload
+
+September 19 same-host paired run on a Ryzen 7 9700X, pinned to two CPUs with
+`GOMAXPROCS=2`: 128 existing typed documents, 8-dimensional vectors, and a
+declared metadata string update. Each sample performs 10 complete public
+mutations, including validation, planning, command-WAL encoding, and
+publication; setup and teardown are untimed. The Collection API fixture uses
+`command_wal_durable` with fsync-on-publish. The document-service fixture uses
+its test backend with command WAL enabled but without fsync-on-publish. Vector
+assets are not rebuilt.
+Medians are from five samples at baseline `578aeb9bd` and merged candidate
+`ce827a07c`.
+
+| public boundary | publication profile | median ns/op | batches/sec | rows/sec | B/op | allocs/op | candidate delta |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
+| Collection API | durable, fsync-on-publish | 9,968,746 | 100.31 | 12,840 | 1,634,576 | 10,839 | ns/op -0.3%; B/op -15.7%; allocs/op -3.4% |
+| Document service | test backend, no fsync-on-publish | 5,934,939 | 168.49 | 21,567 | 1,395,546 | 9,068 | ns/op -0.6%; B/op -14.1%; allocs/op -4.0% |
+
+The rows use different fixtures and publication profiles, so compare each only
+with its own baseline, not with the other row. The sub-1% timing changes are
+within local run noise; the demonstrated optimization is lower allocation
+cost. Reproduce with:
+
+```sh
+GOMAXPROCS=2 taskset -c 4,5 go test \
+  ./TreeDB/collections ./TreeDB/documentservice \
+  -run '^$' \
+  -bench '^Benchmark(TypedMinima|ServiceTyped)MetadataMutation$/^rows128$/^dims8$' \
+  -benchmem -benchtime=10x -count=5
+```
+
 ### Vector Search Serving Workload
 
 Dated Tier S exact-FP32 no-document snapshot: Apple M3 (`darwin/arm64`),
