@@ -203,7 +203,7 @@ func (c *Collection) foldTypedGraphTimed(ctx context.Context, cold typedGraphCol
 		}
 	}()
 	if streamed {
-		rowSource, sourceErr := newTypedGraphFoldRowSource(ctx, c, captured, graphRows)
+		rowSource, sourceErr := newTypedGraphFoldRowSource(ctx, c, captured, graphRows, copy.lastMetadataGeneration != 0)
 		if sourceErr != nil {
 			return sourceErr
 		}

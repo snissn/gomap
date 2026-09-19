@@ -692,7 +692,7 @@ func (c *Collection) rebuildCosineNormalizedF32V1ColumnGraph(name string, snap *
 		manifest:       manifest,
 		records:        records,
 	}
-	rowSource, err := newTypedGraphFoldRowSource(context.Background(), c, state, rows)
+	rowSource, err := newTypedGraphFoldRowSource(context.Background(), c, state, rows, baseCopy.lastMetadataGeneration != 0)
 	if err != nil {
 		return VectorIndexStatus{}, err
 	}

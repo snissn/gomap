@@ -57,6 +57,14 @@ against those roots, not stale immutable-base filter caches. Cold reconstruction
 may read the preserved full row, and later fold may materialize it into a new
 canonical generation. Those maintenance/read costs are not mutation work.
 
+Graph row references identify scoring data, not necessarily the latest document.
+Final document fetch validates the scoring reference against the captured locator's
+preserved-row link and uses its current metadata coordinates. Normalized rebuild must
+likewise copy scalar/content values from the current locator while retaining the
+preserved vector as scoring input. An explicit public document-row-ref request
+remains strict: stale coordinates are rejected, not silently upgraded. All of
+these decisions are snapshot-local; pinned old readers retain old metadata.
+
 ## Score and ordering
 
 The public score is the packed float32 dot product of the normalized query and

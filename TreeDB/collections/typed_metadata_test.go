@@ -214,6 +214,120 @@ func TestTypedMetadataPreservedReadIntegrity4769(t *testing.T) {
 	}
 }
 
+func TestTypedMetadataVectorDocumentIdentity4769(t *testing.T) {
+	for _, representation := range []VectorIndexRepresentation{"", VectorIndexRepresentationCosineNormalizedF32V1} {
+		name := string(representation)
+		if name == "" {
+			name = "legacy"
+		}
+		t.Run(name, func(t *testing.T) {
+			meta := cosineNormalizedF32V1TestMeta()
+			meta.VectorIndexes[0].Representation = representation
+			dir, db, col, ids := seedTypedMetadataWithMeta4769(t, 3, 8, meta)
+			defer func() { db.Close() }()
+			if _, err := col.RebuildVectorIndex("embedding_graph"); err != nil {
+				t.Fatal(err)
+			}
+			query := VectorIndexSearchOptions{IndexName: "embedding_graph", Query: []float32{3, 4, 0, 0, 0, 0, 0, 0}, TopK: 3, EfSearch: 8, IncludeDocuments: true}
+			before, err := col.SearchVectorIndex(query)
+			if err != nil {
+				t.Fatalf("before metadata: %v", err)
+			}
+			pinned, err := col.OpenVectorIndexSearcher(VectorIndexSearcherOptions{IndexName: query.IndexName})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer pinned.Close()
+			pinnedView, err := col.OpenCollectionReadView()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer pinnedView.Close()
+			oldRefs, err := pinnedView.LookupDocumentRowRefsByID(ids[:1], DocumentFetchOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			// One preserved scoring row is in the base and another in the mutable
+			// suffix. Keep its content/vector unchanged for exact score comparison.
+			replacement := []TypedColumnBatch{{Name: "embedding", Float32Vectors: [][]float32{{0, 3, 4, 0, 0, 0, 0, 0}}}, {Name: "content", Strings: []string{"immutable searchable content"}}, {Name: "user", Strings: []string{"old"}}, {Name: "path", Strings: []string{"source"}}}
+			if _, err := col.ReplaceTypedBatch(ids[1:2], [][]byte{[]byte(fmt.Sprintf(`{"id":%q,"meta":{"extra":{"flag":true}}}`, ids[1]))}, replacement); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := col.UpdateTypedMetadataByID(ids[:2], map[string]any{"meta.user_id": "new"}, nil, metadataGeneration4769(col)); err != nil {
+				t.Fatal(err)
+			}
+			current, err := col.OpenCollectionReadView()
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, staleErr := current.FetchDocumentsByRowRef([]DocumentRowRef{oldRefs.Results[0].RowRef}, DocumentFetchOptions{})
+			current.Close()
+			if staleErr == nil {
+				t.Fatal("explicit stale row-ref request must still fail closed")
+			}
+			if _, err := col.SearchVectorIndex(query); !errors.Is(err, ErrVectorIndexSearchUnavailable) {
+				t.Fatalf("legacy admission before rebuild: %v", err)
+			}
+			if _, err := col.RebuildVectorIndex("embedding_graph"); err != nil {
+				t.Fatalf("rebuild after metadata: %v", err)
+			}
+			checkLatest := func(stage string) {
+				t.Helper()
+				for _, project := range []bool{false, true} {
+					opts := query
+					if project {
+						opts.DocumentFetchOptions.ExcludePaths = []string{"embedding"}
+					}
+					after, err := col.SearchVectorIndex(opts)
+					if err != nil {
+						t.Fatalf("%s metadata document fetch: %v", stage, err)
+					}
+					if len(before.Results) != 3 || len(after.Results) != 3 || after.Stats.DocumentRowLocatorLookups != 3 || after.Stats.DocumentVisibilityScans != 0 {
+						t.Fatalf("%s result/point-lookup budget: %+v", stage, after)
+					}
+					for i, row := range after.Results {
+						if !bytes.Equal(row.ID, before.Results[i].ID) || row.Score != before.Results[i].Score {
+							t.Fatal("metadata changed scoring")
+						}
+						want := "old"
+						if bytes.Equal(row.ID, ids[0]) || bytes.Equal(row.ID, ids[1]) {
+							want = "new"
+						}
+						if !bytes.Contains(row.Document, []byte(fmt.Sprintf(`"user_id":%q`, want))) || (project && bytes.Contains(row.Document, []byte(`"embedding"`))) {
+							t.Fatalf("%s document=%s want user_id=%s projected=%t", stage, row.Document, want, project)
+						}
+					}
+				}
+				searcher, err := col.OpenVectorIndexSearcher(VectorIndexSearcherOptions{IndexName: query.IndexName})
+				if err != nil {
+					t.Fatal(err)
+				}
+				result, err := searcher.Search(VectorIndexSearcherSearchOptions{Query: query.Query, TopK: 3, EfSearch: 8})
+				searcher.Close()
+				if err != nil || result.Stats.DocumentsFetched != 0 || result.Stats.DocumentRowLocatorLookups != 0 {
+					t.Fatalf("%s no-document work=%+v err=%v", stage, result.Stats, err)
+				}
+			}
+			checkLatest("rebuilt")
+			old, err := pinned.Search(VectorIndexSearcherSearchOptions{Query: query.Query, TopK: 3, EfSearch: 8, IncludeDocuments: true})
+			if err != nil || !reflect.DeepEqual(old.Results, before.Results) {
+				t.Fatalf("pinned search changed: %+v error=%v", old.Results, err)
+			}
+			pinned.Close()
+			pinnedView.Close()
+			if err := db.Close(); err != nil {
+				t.Fatal(err)
+			}
+			db = openTypedMinimaDB(t, dir)
+			col, err = NewCollectionManager(db).OpenCollection("minima")
+			if err != nil {
+				t.Fatal(err)
+			}
+			checkLatest("reopened")
+		})
+	}
+}
+
 func TestTypedMetadataNormalizedColdFoldRaceAndGC4769(t *testing.T) {
 	requireTypedGraphPublicServingTest(t)
 	meta := cosineNormalizedF32V1TestMeta()

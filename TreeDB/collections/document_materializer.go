@@ -936,39 +936,50 @@ func noColumnPhysicalScanProjection(cfg ColumnStoreConfig) columnPhysicalScanPro
 	return projection
 }
 
-func (v *CollectionReadView) validateDocumentRowRefLatest(ref DocumentRowRef, stats *DocumentMaterializationStats) error {
+// Scoring coordinates may name the immutable full row preserved by CRL2.
+// Validate that link against this snapshot, then return document authority.
+// Explicit public row-ref requests remain strict and do not follow that link.
+func (v *CollectionReadView) resolveDocumentRowRefLatest(ref DocumentRowRef, stats *DocumentMaterializationStats, scoringRef bool) (DocumentRowRef, error) {
 	if v == nil || v.catalog == nil || v.snapshot == nil {
-		return errors.New("collections: nil collection read view")
+		return DocumentRowRef{}, errors.New("collections: nil collection read view")
 	}
 	if stats != nil {
 		stats.RowLocatorLookups++
 	}
 	locatorRootName := collectionColumnRowLocatorRootName(v.catalog.meta.Name)
 	if v.catalog.rootID(locatorRootName) == 0 {
-		return fmt.Errorf("collections: primary row locator root is absent for collection %q", v.catalog.meta.Name)
+		return DocumentRowRef{}, fmt.Errorf("collections: primary row locator root is absent for collection %q", v.catalog.meta.Name)
 	}
 	value, found, err := collectionGetAppendAtCatalogRoot(v.snapshot, v.catalog, locatorRootName, ref.DocumentID, nil)
 	if err != nil {
-		return fmt.Errorf("collections: primary row locator validation for id %q: %w", string(ref.DocumentID), err)
+		return DocumentRowRef{}, fmt.Errorf("collections: primary row locator validation for id %q: %w", string(ref.DocumentID), err)
 	}
 	if !found || len(value) == 0 {
 		if stats != nil {
 			stats.RowLocatorMisses++
 			stats.RowRefValidationFailures++
 		}
-		return fmt.Errorf("collections: document row ref for id %q is not visible in primary root", string(ref.DocumentID))
+		return DocumentRowRef{}, fmt.Errorf("collections: document row ref for id %q is not visible in primary root", string(ref.DocumentID))
 	}
 	latest, err := decodeColumnPrimaryRowLocatorBorrowedID(ref.DocumentID, value)
 	if err != nil {
-		return err
+		return DocumentRowRef{}, err
 	}
-	if err := validateDocumentRowRefMatchesRowRef(ref, latest); err != nil {
+	expected := latest
+	if scoringRef && len(value) != columnPrimaryRowLocatorValueSize {
+		// The complete CRL2 value was validated above.
+		expected, err = decodeColumnRowCoordinates(ref.DocumentID, value[36:])
+		if err != nil {
+			return DocumentRowRef{}, err
+		}
+	}
+	if err := validateDocumentRowRefMatchesRowRef(ref, expected); err != nil {
 		if stats != nil {
 			stats.RowRefValidationFailures++
 		}
-		return err
+		return DocumentRowRef{}, err
 	}
-	return nil
+	return latest, nil
 }
 
 func (v *CollectionReadView) fetchDocumentPointRow(view columnPhysicalScanSnapshotView, ref DocumentRowRef, projection columnPhysicalScanProjection, scratch *columnPhysicalRowReaderScratch, stats *DocumentMaterializationStats) (columnPhysicalVisibleRow, error) {
@@ -1138,7 +1149,7 @@ func (v *CollectionReadView) FetchDocumentsByRowRef(refs []DocumentRowRef, opts 
 	endForegroundRead := v.beginForegroundRead()
 	defer endForegroundRead()
 	start := time.Now()
-	response, err := v.fetchDocumentsByRowRef(refs, opts, false)
+	response, err := v.fetchDocumentsByRowRef(refs, opts, documentRowRefStrict)
 	response.Stats.FetchNanos = time.Since(start).Nanoseconds()
 	return response, err
 }
@@ -1148,10 +1159,27 @@ func (v *CollectionReadView) FetchDocumentsByRowRef(refs []DocumentRowRef, opts 
 // snapshot, so repeating latest-locator validation would be redundant. Primary
 // visibility and physical-row coordinate validation still fail closed below.
 func (v *CollectionReadView) fetchDocumentsByResolvedRowRef(refs []DocumentRowRef, opts DocumentFetchOptions) (DocumentFetchResponse, error) {
-	return v.fetchDocumentsByRowRef(refs, opts, true)
+	return v.fetchDocumentsByRowRef(refs, opts, documentRowRefResolved)
 }
 
-func (v *CollectionReadView) fetchDocumentsByRowRef(refs []DocumentRowRef, opts DocumentFetchOptions, locatorResolvedAtView bool) (out DocumentFetchResponse, err error) {
+// Only internal graph results carry scoring refs. The shared fetch loop checks
+// each ref against the captured locator once, just as strict row-ref fetch does.
+func (v *CollectionReadView) fetchDocumentsByScoringRowRef(refs []DocumentRowRef, opts DocumentFetchOptions) (DocumentFetchResponse, error) {
+	start := time.Now()
+	response, err := v.fetchDocumentsByRowRef(refs, opts, documentRowRefScoring)
+	response.Stats.FetchNanos = time.Since(start).Nanoseconds()
+	return response, err
+}
+
+type documentRowRefAuthority uint8
+
+const (
+	documentRowRefStrict documentRowRefAuthority = iota
+	documentRowRefResolved
+	documentRowRefScoring
+)
+
+func (v *CollectionReadView) fetchDocumentsByRowRef(refs []DocumentRowRef, opts DocumentFetchOptions, authority documentRowRefAuthority) (out DocumentFetchResponse, err error) {
 	workstats.Output.Materialization.Attempts.Add(1)
 	defer func() {
 		w := documentMaterializationWork(out.Stats)
@@ -1195,7 +1223,7 @@ func (v *CollectionReadView) fetchDocumentsByRowRef(refs []DocumentRowRef, opts 
 			}
 		}
 	}
-	return v.fetchColumnStoreDocumentsByRowRef(response, refs, retained, opts, projection, locatorResolvedAtView)
+	return v.fetchColumnStoreDocumentsByRowRef(response, refs, retained, opts, projection, authority)
 }
 
 func (v *CollectionReadView) fetchDocumentsByID(ids [][]byte, expected []*DocumentRowRef, opts DocumentFetchOptions) (out DocumentFetchResponse, err error) {
@@ -1336,7 +1364,7 @@ func documentFetchContextErr(ctx context.Context) error {
 	return ctx.Err()
 }
 
-func (v *CollectionReadView) fetchColumnStoreDocumentsByRowRef(response DocumentFetchResponse, refs []DocumentRowRef, retained [][]byte, opts DocumentFetchOptions, projection *documentProjection, locatorResolvedAtView bool) (out DocumentFetchResponse, err error) {
+func (v *CollectionReadView) fetchColumnStoreDocumentsByRowRef(response DocumentFetchResponse, refs []DocumentRowRef, retained [][]byte, opts DocumentFetchOptions, projection *documentProjection, authority documentRowRefAuthority) (out DocumentFetchResponse, err error) {
 	out = response
 	cfg := v.catalog.meta.Options.ColumnStore.copy()
 	readIntegrity := opts.ColumnAssetReadIntegrity
@@ -1377,12 +1405,14 @@ func (v *CollectionReadView) fetchColumnStoreDocumentsByRowRef(response Document
 			// require every primary row to exist before entering this shared loop.
 			continue
 		}
-		if !locatorResolvedAtView {
-			if err := v.validateDocumentRowRefLatest(refs[i], &out.Stats); err != nil {
+		ref := refs[i]
+		if authority != documentRowRefResolved {
+			ref, err = v.resolveDocumentRowRefLatest(ref, &out.Stats, authority == documentRowRefScoring)
+			if err != nil {
 				return out, err
 			}
 		}
-		row, err := v.fetchDocumentPointRow(view, refs[i], pointProjection, &rowScratch, &out.Stats)
+		row, err := v.fetchDocumentPointRow(view, ref, pointProjection, &rowScratch, &out.Stats)
 		if err != nil {
 			out.Stats.RowRefValidationFailures++
 			return out, err
@@ -1461,7 +1491,7 @@ func (v *CollectionReadView) fetchColumnStoreDocumentsByID(response DocumentFetc
 	if err != nil {
 		return response, err
 	}
-	return v.fetchColumnStoreDocumentsByRowRef(response, refs, retained, opts, projection, true)
+	return v.fetchColumnStoreDocumentsByRowRef(response, refs, retained, opts, projection, documentRowRefResolved)
 }
 
 func appendDocumentFetchOwnedBytes(arena []byte, src []byte, result *DocumentFetchResult) []byte {
