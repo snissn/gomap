@@ -143,6 +143,14 @@ type VectorPartitionMembershipV1 struct {
 	VectorOrdinal uint64
 	PartitionID   uint32
 }
+
+// VectorPartitionRepresentativeV2 identifies a represented hierarchy node.
+// VectorOrdinal is source provenance only and may repeat within a domain.
+type VectorPartitionRepresentativeV2 struct {
+	VectorOrdinal uint64
+	PartitionID   uint32 // logical domain, not physical pack
+	NodeID        uint32
+}
 type VectorPartitionDomainPackV1 struct {
 	DomainID uint32
 	PackID   uint32
@@ -162,7 +170,7 @@ type VectorPartitionManifestV1 struct {
 	Placements                                                         []VectorPartitionPlacementV1
 	Memberships                                                        []VectorPartitionMembershipV1
 	OverlapMemberships                                                 []VectorPartitionMembershipV1
-	Representatives                                                    []VectorPartitionMembershipV1
+	Representatives                                                    []VectorPartitionRepresentativeV2
 	Assets                                                             []VectorPartitionAssetV1
 	RouterAsset                                                        VectorPartitionAssetV1
 	ReadySetDigest                                                     string
@@ -274,7 +282,7 @@ func (m VectorPartitionManifestV1) validateWithContextV1(ctx context.Context, l 
 	if m.SourceRowCount > uint64(l.sourceRowLimit()) || len(m.Collection) > l.MaxStringBytes || len(m.IndexName) > l.MaxStringBytes || len(m.State) > l.MaxStringBytes || len(m.BalancePolicy) > l.MaxStringBytes || len(m.IndexDefinitionDigest) > l.MaxStringBytes || len(m.IntegrityDigest) > l.MaxStringBytes {
 		return fmt.Errorf("%w: source/string cap", ErrVectorPartitionManifestInvalid)
 	}
-	if len(m.DomainPacks) != int(m.PartitionCount) || len(m.Placements) != int(m.PartitionCount) || len(m.Assets) == 0 || len(m.Assets) > l.MaxAssets || len(m.Memberships) != int(m.SourceRowCount) || len(m.OverlapMemberships) > l.MaxMemberships || len(m.Representatives) > l.MaxMemberships || totalMembershipsVPM(m.Memberships, m.OverlapMemberships, m.Representatives) > l.totalMembershipLimit() || (m.State == "ready" && !isSHA256VPM(m.ReadySetDigest)) {
+	if len(m.DomainPacks) != int(m.PartitionCount) || len(m.Placements) != int(m.PartitionCount) || len(m.Assets) == 0 || len(m.Assets) > l.MaxAssets || len(m.Memberships) != int(m.SourceRowCount) || len(m.OverlapMemberships) > l.MaxMemberships || len(m.Representatives) > l.MaxMemberships || (totalMembershipsVPM(m.Memberships, m.OverlapMemberships)+len(m.Representatives)) > l.totalMembershipLimit() || (m.State == "ready" && !isSHA256VPM(m.ReadySetDigest)) {
 		return fmt.Errorf("%w: incomplete ready set or capped list", ErrVectorPartitionManifestInvalid)
 	}
 	if m.State == "ready" {
@@ -359,11 +367,7 @@ func (m VectorPartitionManifestV1) validateWithContextV1(ctx context.Context, l 
 			return fmt.Errorf("%w: duplicate home/overlap membership", ErrVectorPartitionManifestInvalid)
 		}
 	}
-	clear(seenP)
-	for domainID := range m.DomainCount {
-		seenP[domainID] = struct{}{}
-	}
-	if err := validateMembershipsWithContextVPM(ctx, m.Representatives, seenP, "representative", m.SourceRowCount, false, l.MaxRepresentativesPerPartition); err != nil {
+	if err := validateRepresentativesWithContextVPM(ctx, m.Representatives, m.DomainCount, m.SourceRowCount, l.MaxRepresentativesPerPartition); err != nil {
 		return err
 	}
 	lastID := ""
@@ -525,10 +529,13 @@ func encodedSizeWithContextVPM(ctx context.Context, m VectorPartitionManifestV1,
 			return 0, err
 		}
 	}
-	for _, ms := range [][]VectorPartitionMembershipV1{m.Memberships, m.OverlapMemberships, m.Representatives} {
+	for _, ms := range [][]VectorPartitionMembershipV1{m.Memberships, m.OverlapMemberships} {
 		if err := add(4 + uint64(len(ms))*12); err != nil {
 			return 0, err
 		}
+	}
+	if err := add(4 + uint64(len(m.Representatives))*16); err != nil {
+		return 0, err
 	}
 	if err := add(4); err != nil {
 		return 0, err
@@ -561,7 +568,6 @@ func validateMembershipsWithContextVPM(ctx context.Context, ms []VectorPartition
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	partitionCounts := make(map[uint32]int)
 	for i, x := range ms {
 		if i&1023 == 0 {
 			if err := ctx.Err(); err != nil {
@@ -580,20 +586,13 @@ func validateMembershipsWithContextVPM(ctx context.Context, ms []VectorPartition
 		if base && x.VectorOrdinal != uint64(i) {
 			return fmt.Errorf("%w: disjoint coverage", ErrVectorPartitionManifestInvalid)
 		}
-		if kind == "representative" {
-			if partitionCounts[x.PartitionID] >= capPer {
-				return fmt.Errorf("%w: representative partition cap", ErrVectorPartitionManifestInvalid)
-			}
-			partitionCounts[x.PartitionID]++
-		} else {
-			if i == 0 || x.VectorOrdinal != prev.VectorOrdinal {
-				ordinalCount = 0
-			}
-			if ordinalCount >= capPer {
-				return fmt.Errorf("%w: %s ordinal/cap", ErrVectorPartitionManifestInvalid, kind)
-			}
-			ordinalCount++
+		if i == 0 || x.VectorOrdinal != prev.VectorOrdinal {
+			ordinalCount = 0
 		}
+		if ordinalCount >= capPer {
+			return fmt.Errorf("%w: %s ordinal/cap", ErrVectorPartitionManifestInvalid, kind)
+		}
+		ordinalCount++
 		prev = x
 	}
 	return nil
@@ -700,7 +699,7 @@ func (m *VectorPartitionManifestV1) canonicalizeWithContextV1(ctx context.Contex
 		m.OverlapMemberships = []VectorPartitionMembershipV1{}
 	}
 	if m.Representatives == nil {
-		m.Representatives = []VectorPartitionMembershipV1{}
+		m.Representatives = []VectorPartitionRepresentativeV2{}
 	}
 	if m.Assets == nil {
 		m.Assets = []VectorPartitionAssetV1{}
@@ -724,7 +723,7 @@ func (m *VectorPartitionManifestV1) canonicalizeWithContextV1(ctx context.Contex
 	if err := sortVectorPartitionSliceWithContextV1(ctx, m.Memberships, vectorPartitionMembershipLessV1); err != nil {
 		return err
 	}
-	if err := sortVectorPartitionSliceWithContextV1(ctx, m.Representatives, vectorPartitionMembershipLessV1); err != nil {
+	if err := sortVectorPartitionSliceWithContextV1(ctx, m.Representatives, vectorPartitionRepresentativeLessV2); err != nil {
 		return err
 	}
 	if err := sortVectorPartitionSliceWithContextV1(ctx, m.OverlapMemberships, vectorPartitionMembershipLessV1); err != nil {
@@ -1058,7 +1057,7 @@ func encodeVectorPartitionManifestWithContextV1(ctx context.Context, m VectorPar
 	var x [4]byte
 	binary.BigEndian.PutUint32(x[:], vectorPartitionManifestMagicV1)
 	b.Write(x[:])
-	putU32VPM(b, 4)
+	putU32VPM(b, 5)
 	for _, s := range []string{m.Format, m.State, m.Collection, m.IndexName, m.IndexDefinitionDigest, m.IntegrityDigest, m.BalancePolicy, m.ReadySetDigest} {
 		putStringVPM(b, s)
 	}
@@ -1078,7 +1077,7 @@ func encodeVectorPartitionManifestWithContextV1(ctx context.Context, m VectorPar
 	if err := putMembershipsWithContextVPM(ctx, b, m.OverlapMemberships); err != nil {
 		return nil, err
 	}
-	if err := putMembershipsWithContextVPM(ctx, b, m.Representatives); err != nil {
+	if err := putRepresentativesWithContextVPM(ctx, b, m.Representatives); err != nil {
 		return nil, err
 	}
 	if err := putAssetsWithContextVPM(ctx, b, m.Assets); err != nil {
@@ -1100,7 +1099,7 @@ func preflightVectorPartitionManifestWithContextV1(ctx context.Context, m Vector
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if int64(m.PartitionCount) > int64(l.MaxPartitions) || len(m.DomainPacks) > l.MaxPartitions || len(m.Placements) > l.MaxPartitions || len(m.Assets) > l.MaxAssets || len(m.Memberships) > l.MaxMemberships || len(m.OverlapMemberships) > l.MaxMemberships || len(m.Representatives) > l.MaxMemberships || totalMembershipsVPM(m.Memberships, m.OverlapMemberships, m.Representatives) > l.totalMembershipLimit() {
+	if int64(m.PartitionCount) > int64(l.MaxPartitions) || len(m.DomainPacks) > l.MaxPartitions || len(m.Placements) > l.MaxPartitions || len(m.Assets) > l.MaxAssets || len(m.Memberships) > l.MaxMemberships || len(m.OverlapMemberships) > l.MaxMemberships || len(m.Representatives) > l.MaxMemberships || (totalMembershipsVPM(m.Memberships, m.OverlapMemberships)+len(m.Representatives)) > l.totalMembershipLimit() {
 		return fmt.Errorf("%w: list cap", ErrVectorPartitionManifestInvalid)
 	}
 	for _, s := range []string{m.Format, m.State, m.Collection, m.IndexName, m.IndexDefinitionDigest, m.IntegrityDigest, m.BalancePolicy, m.ReadySetDigest} {
@@ -1154,7 +1153,7 @@ func DecodeVectorPartitionManifestWithContextV1(ctx context.Context, raw []byte,
 		return VectorPartitionManifestV1{}, fmt.Errorf("%w: encoded bytes cap", ErrVectorPartitionManifestInvalid)
 	}
 	r := vpmReader{b: raw, l: l, ctx: ctx}
-	if r.u32() != vectorPartitionManifestMagicV1 || r.u32() != 4 {
+	if r.u32() != vectorPartitionManifestMagicV1 || r.u32() != 5 {
 		return VectorPartitionManifestV1{}, fmt.Errorf("%w: magic/version", ErrVectorPartitionManifestInvalid)
 	}
 	m := VectorPartitionManifestV1{}
@@ -1175,7 +1174,7 @@ func DecodeVectorPartitionManifestWithContextV1(ctx context.Context, raw []byte,
 	m.Placements = r.placements()
 	m.Memberships = r.memberships()
 	m.OverlapMemberships = r.memberships()
-	m.Representatives = r.memberships()
+	m.Representatives = r.representatives()
 	m.Assets = r.assets()
 	if r.err != nil || r.off != len(raw) {
 		if err := ctx.Err(); err != nil {
@@ -2585,12 +2584,12 @@ func vectorPartitionBuildingPromotionIdentityV1(building, ready VectorPartitionM
 	// and asset identity. Promotion may fill an omitted representative mapping,
 	// but a mapping declared by BUILD is immutable.
 	if len(building.Representatives) != 0 &&
-		!equalVectorPartitionMembershipsV1(building.Representatives, ready.Representatives) {
+		!equalVectorPartitionRepresentativesV2(building.Representatives, ready.Representatives) {
 		return false
 	}
 	expected := ready
 	expected.State, expected.RouterGeneration, expected.RouterAsset, expected.ReadySetDigest = "building", 0, VectorPartitionAssetV1{}, ""
-	expected.Representatives = append([]VectorPartitionMembershipV1(nil), building.Representatives...)
+	expected.Representatives = append([]VectorPartitionRepresentativeV2(nil), building.Representatives...)
 	expected.Canonicalize()
 	want, wantErr := EncodeVectorPartitionManifestV1(expected)
 	got, gotErr := EncodeVectorPartitionManifestV1(building)

@@ -1,5 +1,45 @@
 # Vector partition M8 production multi-group closeout
 
+## R all-level router evidence boundary (#4773)
+
+The current producer uses report schema 5/result kind
+`m8_production_multi_group_evidence_v5`, explicitly binding
+`global_all_level_spherical_krt_w_E_C_v2`, global budget B, actual representative
+count, returned width w, beam E and score budget C. Defaults are B=256, w=64,
+E=96, C=1024. CLI controls are `-router-global-budget`, `-router-width`,
+`-router-beam`, and `-router-score-budget`; incompatible settings are refused,
+not clamped. System-node config version 2 carries the same server-owned search
+coordinates. Old formats and retained reports are not relabeled as V2 evidence.
+
+Ordinary rows retain actual router score calls, distinct visits and edges,
+including failed work. Candidate-coverage, hard-score-budget, and mixed router
+refusals remain explicit `candidate_coverage_shortfall`,
+`router_score_budget_exhausted`, or `mixed_router_refusal` rows in the report,
+measurement transcript, matrix, and retained replay. They preserve observed
+counters/timing but contain no partial results or fabricated quality/throughput
+measurements. Optional policy diagnostics retain the same typed score-budget
+refusal instead of aborting the artifact. Exact attribution is fully charged
+and never a fallback.
+The renamed meaning of historical internal Go fields called `RouterCandidates`
+is C in this schema, not a distinct representative count. Use the explicit
+semantics/version and score-call counters when interpreting records.
+
+Allocation ownership: construction owns normalized source/member buffers and
+bounded tree/centroid scratch; publication owns encoded records and pack build
+buffers. A reopened router borrows centers from its pinned prepared FP32 plane,
+plus canonical mapping/path metadata, rather than retaining another vector
+plane. Live owners explicitly clone any vectors they must own. Query scratch is
+bounded by the representative count, w/E and native engine limits; returned
+routes are caller-owned. No query exports the corpus or retains diagnostics.
+The ordinary router benchmark uses real immutable M8 assets with setup outside
+timing; it measures router cost only, not public-service or complete ANN QPS.
+
+No R performance or 100K-to-250K scaling improvement is asserted here. Retained
+qualification must freeze reviewed product/harness identities, use eligible
+comparable hosts and record build/open/query wall/CPU, allocation, memory and
+bytes alongside exact/approximate routing quality. L/M and final #4753 own
+local navigability, membership feasibility and matched-recall scaling.
+
 Date: 2026-07-26
 
 Historical M8 closeout code head: `9f3cb7c6f8d5aa8283fe2342d9f341cbdbebab48`
@@ -671,20 +711,24 @@ ID; representative-distance ties use the immutable model ordinal. Different
 centroids can share source anchors or coordinates and remain different votes.
 
 `-m8-router-policy-width W` selects the nearest W collected representatives before
-voting; zero uses the actual approximate candidate budget after its existing
-model-size clamp. Exact-reference collection scores **all representatives**,
-then takes nearest W. Approximate collection reuses the ordinary coupled
-`TopK=EfSearch=CandidateLimit` operation without changing entry policy. Returned
-width is not the number of vectors scored. This packet does not implement the
-separate hierarchy/budget experiment in #4748.
+voting; zero uses the configured router width w. Exact-reference collection
+scores **all representatives**, then takes nearest W. Approximate collection
+uses the same production traversal with independently configured returned width
+w, beam E, and strict score-call ceiling C. It neither clamps C to w/E nor
+retries with a larger budget. Returned width is not the number of vectors
+scored. The historical commands above retain their original removed flag names
+and pre-R semantics; they are provenance, not current CLI examples.
 
 A comparison preserves a permutation-invariant candidate-set digest separately
 from the collected sequence digest. Both bind model, query, score convention,
 collection mode, budget and width. Duplicate identities with conflicting scores
 are invalid. A valid set reaching too few domains is retained as
 `candidate_coverage_shortfall`, including its work and candidate identity, but
-**no partial route**. No retry, probe escalation or exact fallback fills gaps.
-Queries are not removed from the report because a policy cannot supply a route.
+**no partial route**. A traversal exhausting C is retained as
+`router_score_budget_exhausted`, including the fully charged score-call count,
+but no partial candidate set or policy result. No retry, probe escalation or
+exact fallback fills gaps. Queries are not removed from the report because a
+policy cannot supply a route.
 
 M8 caches the immutable exact/approximate comparisons once per query and probe
 coordinate across local-EF and concurrency cells. Cache lookup still hashes the full

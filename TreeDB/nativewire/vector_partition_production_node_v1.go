@@ -337,9 +337,6 @@ func NewVectorPartitionProductionNodeV1(ctx context.Context, opts VectorPartitio
 	requestBase := opts.RequestBase
 	requestBase.Database, requestBase.Catalog, requestBase.Collection = opts.Database, opts.Catalog, opts.Manifest.Collection
 	requestBase.IndexName, requestBase.IndexDefinitionDigest = opts.Manifest.IndexName, opts.Manifest.IndexDefinitionDigest
-	if requestBase.RouterCandidateBudget > len(opts.Manifest.Representatives) {
-		requestBase.RouterCandidateBudget = len(opts.Manifest.Representatives)
-	}
 	if requestBase.RouterMode == "" {
 		requestBase.RouterMode = collections.VectorPartitionRouterModeApproxV1
 	}

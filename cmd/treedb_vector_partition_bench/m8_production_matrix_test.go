@@ -274,7 +274,7 @@ func TestM8ProductionMatrixRequiresLikeForLikeVariantsAndOverlapStorageV1(t *tes
 	hash := strings.Repeat("a", 40)
 	fixture := fixtureManifest{Checksum: strings.Repeat("b", 64)}
 	cfg := config{baseSHA: hash, headSHA: hash, partitions: 16, command: []string{"bench"}}
-	common := m8ProductionConfigEvidenceV1{RaftGroups: 4, RaftNodesPerGroup: 3, Partitions: 16, Probes: []int{4, 16}, TopK: 10, RecallTarget: .9, Concurrency: []int{1}, Warmup: 1, EfSearch: []int{128}, RouterCandidates: 1024, Seed: 1}
+	common := m8ProductionConfigEvidenceV1{RaftGroups: 4, RaftNodesPerGroup: 3, Partitions: 16, Probes: []int{4, 16}, TopK: 10, RecallTarget: .9, Concurrency: []int{1}, Warmup: 1, EfSearch: []int{128}, RouterScoreBudget: 1024, Seed: 1}
 	pass := m8ProductionGateLedgerV1{ExhaustiveParity: "pass", FailureHonesty: "pass", PartitionPackReachability: "pass", Recall: "pass", ProbeReduction: "pass", EndToEndQPS: "pass", TailLatency: "pass", Balance: "pass", ResourceBounds: "pass"}
 	reports := make([]m8ProductionReportV1, 0, 3)
 	for _, variant := range []struct {
@@ -324,7 +324,7 @@ func TestM8ProductionMatrixRequiresLikeForLikeVariantsAndOverlapStorageV1(t *tes
 	}
 	shortfallReports := append([]m8ProductionReportV1(nil), reports...)
 	shortfallReports[0].Rows = append([]m8ProductionRowV1(nil), reports[0].Rows...)
-	shortfallReports[0].Rows[1].Status = "candidate_coverage_shortfall"
+	shortfallReports[0].Rows[1].Status = m8ProductionCandidateCoverageShortfallV1
 	shortfallMatrix, err := m8BuildProductionMatrixV1(cfg, fixture, shortfallReports)
 	if err != nil {
 		t.Fatal(err)
@@ -333,7 +333,7 @@ func TestM8ProductionMatrixRequiresLikeForLikeVariantsAndOverlapStorageV1(t *tes
 	for i, comparison := range shortfallMatrix.Comparison {
 		if comparison.VariantID == shortfallReports[0].Variant.VariantID && comparison.Probes == shortfallReports[0].Rows[1].Probes && comparison.EfSearch == shortfallReports[0].Rows[1].EfSearch && comparison.Concurrency == shortfallReports[0].Rows[1].Concurrency {
 			shortfallAt = i
-			if comparison.Status != "candidate_coverage_shortfall" {
+			if comparison.Status != m8ProductionCandidateCoverageShortfallV1 {
 				t.Fatalf("shortfall comparison status=%q", comparison.Status)
 			}
 		}
@@ -1122,7 +1122,7 @@ func TestM8ProductionMatrixSeparatesUsefulOnlyShortfallFromUnderMaterializationV
 	hash := strings.Repeat("a", 40)
 	fixture := fixtureManifest{Checksum: strings.Repeat("b", 64)}
 	cfg := config{baseSHA: hash, headSHA: hash, partitions: 16, command: []string{"bench"}}
-	common := m8ProductionConfigEvidenceV1{RaftGroups: 4, RaftNodesPerGroup: 3, Partitions: 16, Probes: []int{4}, TopK: 10, RecallTarget: .9, Concurrency: []int{1}, Warmup: 1, EfSearch: []int{128}, RouterCandidates: 1024, Seed: 1}
+	common := m8ProductionConfigEvidenceV1{RaftGroups: 4, RaftNodesPerGroup: 3, Partitions: 16, Probes: []int{4}, TopK: 10, RecallTarget: .9, Concurrency: []int{1}, Warmup: 1, EfSearch: []int{128}, RouterScoreBudget: 1024, Seed: 1}
 	pass := m8ProductionGateLedgerV1{ExhaustiveParity: "pass", FailureHonesty: "pass", PartitionPackReachability: "pass", Recall: "pass", ProbeReduction: "pass", EndToEndQPS: "pass", TailLatency: "pass", Balance: "pass", ResourceBounds: "pass"}
 	// Ten rows at ratio .2 request two overlap memberships; the graph variant
 	// realizes one useful replica and leaves the rest of the budget unspent.
@@ -1291,7 +1291,7 @@ func TestM8VariantBuildCompatibilityRejectsMixedRetainedBuildsV1(t *testing.T) {
 		"router config seed":     func(variants []m3VariantDescriptorV1) { variants[2].RouterConfig.Seed++ },
 		"router config branch":   func(variants []m3VariantDescriptorV1) { variants[2].RouterConfig.BranchFactor++ },
 		"router config leaf":     func(variants []m3VariantDescriptorV1) { variants[2].RouterConfig.LeafSize++ },
-		"router config reps":     func(variants []m3VariantDescriptorV1) { variants[2].RouterConfig.RepresentativesPerPartition++ },
+		"router config reps":     func(variants []m3VariantDescriptorV1) { variants[2].RouterConfig.RepresentativeBudget++ },
 		"router config depth":    func(variants []m3VariantDescriptorV1) { variants[2].RouterConfig.MaxDepth-- },
 		"router config iterations": func(variants []m3VariantDescriptorV1) {
 			variants[2].RouterConfig.MaxIterations--

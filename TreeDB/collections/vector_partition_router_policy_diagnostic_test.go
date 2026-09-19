@@ -42,7 +42,7 @@ func policyPersistedFixtureV1(t *testing.T) (*VectorPartitionRouterV1, *Collecti
 	cfg := internalrouter.DefaultRouterConfigV1()
 	cfg.BranchFactor = 2
 	cfg.LeafSize = 1
-	cfg.RepresentativesPerPartition = 2
+	cfg.RepresentativeBudget = 6
 	cfg.MaxDepth = 4
 	cfg.MaxIterations = 8
 	cfg.MaxScalarWork = 50_000_000_000
@@ -65,8 +65,8 @@ func TestVectorPartitionRouterPolicyDiagnosticMatchesOrdinaryCandidatePath(t *te
 	r, col, index := policyPersistedFixtureV1(t)
 	query := []float32{1, 0}
 	for _, mode := range []string{VectorPartitionRouterModeExactV1, VectorPartitionRouterModeApproxV1} {
-		opts := VectorPartitionRouterPolicyDiagnosticOptionsV1{Mode: mode, CandidateBudget: 4, ReturnedWidth: 4, PartitionProbes: 2}
-		ordinary, err := r.SearchWithContextV1(t.Context(), query, VectorPartitionRouterSearchOptionsV1{Mode: mode, CandidateBudget: 4, PartitionProbes: 2})
+		opts := VectorPartitionRouterPolicyDiagnosticOptionsV1{Mode: mode, ScoreBudget: 64, ReturnedWidth: 6, BeamWidth: 6, PartitionProbes: 2}
+		ordinary, err := r.SearchWithContextV1(t.Context(), query, VectorPartitionRouterSearchOptionsV2{Mode: mode, ScoreBudget: 64, ReturnedWidth: 6, BeamWidth: 6, PartitionProbes: 2})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -79,7 +79,7 @@ func TestVectorPartitionRouterPolicyDiagnosticMatchesOrdinaryCandidatePath(t *te
 		if before.Searches != after.Searches || before.Candidates != after.Candidates || before.Edges != after.Edges || before.SearchFailures != after.SearchFailures {
 			t.Fatal("diagnostic altered serving counters")
 		}
-		if !got.CollectionComplete || got.Candidates != ordinary.Status.Candidates || got.Edges != ordinary.Status.Edges || got.UniqueReturned != 4 {
+		if !got.CollectionComplete || got.Candidates != ordinary.Status.Candidates || got.Edges != ordinary.Status.Edges || got.UniqueReturned != 6 {
 			t.Fatalf("work mismatch %+v / %+v", got, ordinary.Status)
 		}
 		for i, p := range got.Distance {
@@ -112,17 +112,31 @@ func TestVectorPartitionRouterPolicyDiagnosticMatchesOrdinaryCandidatePath(t *te
 
 func TestVectorPartitionRouterPolicyDiagnosticFailureAndClose(t *testing.T) {
 	r, _, _ := policyPersistedFixtureV1(t)
-	base := VectorPartitionRouterPolicyDiagnosticOptionsV1{Mode: "exact", CandidateBudget: 4, ReturnedWidth: 4, PartitionProbes: 2}
-	for _, opts := range []VectorPartitionRouterPolicyDiagnosticOptionsV1{{Mode: "bad", CandidateBudget: 4, ReturnedWidth: 4, PartitionProbes: 2}, {Mode: "exact", CandidateBudget: 3, ReturnedWidth: 3, PartitionProbes: 1}, {Mode: "approximate", CandidateBudget: 5, ReturnedWidth: 4, PartitionProbes: 1}, {Mode: "exact", CandidateBudget: 4, ReturnedWidth: 0, PartitionProbes: 1}, {Mode: "exact", CandidateBudget: 4, ReturnedWidth: 5, PartitionProbes: 1}, {Mode: "exact", CandidateBudget: 4, ReturnedWidth: 4, PartitionProbes: 3}} {
+	base := VectorPartitionRouterPolicyDiagnosticOptionsV1{Mode: "exact", ScoreBudget: 64, ReturnedWidth: 6, BeamWidth: 6, PartitionProbes: 2}
+	for _, opts := range []VectorPartitionRouterPolicyDiagnosticOptionsV1{
+		{Mode: "bad", ScoreBudget: 4, ReturnedWidth: 4, BeamWidth: 4, PartitionProbes: 2},
+		{Mode: "exact", ScoreBudget: 3, ReturnedWidth: 3, BeamWidth: 3, PartitionProbes: 1},
+		{Mode: "approximate", ScoreBudget: 0, ReturnedWidth: 4, BeamWidth: 4, PartitionProbes: 1},
+		{Mode: "exact", ScoreBudget: 64, ReturnedWidth: 0, BeamWidth: 4, PartitionProbes: 1},
+		{Mode: "exact", ScoreBudget: 64, ReturnedWidth: 5, BeamWidth: 4, PartitionProbes: 1},
+		{Mode: "exact", ScoreBudget: 64, ReturnedWidth: 4, BeamWidth: 4, PartitionProbes: 3},
+	} {
 		got, err := r.CompareRankingPoliciesForDiagnosticsV1(t.Context(), []float32{1, 0}, opts)
 		if err == nil || len(got.Hybrid) > 0 {
 			t.Fatalf("accepted malformed %+v: %v", opts, err)
 		}
 	}
+	approximate := base
+	approximate.Mode, approximate.ScoreBudget, approximate.ReturnedWidth, approximate.BeamWidth, approximate.PartitionProbes = "approximate", 5, 4, 4, 1
+	if _, err := r.CompareRankingPoliciesForDiagnosticsV1(t.Context(), []float32{1, 0}, approximate); err != nil &&
+		!errors.Is(err, ErrVectorPartitionRouterScoreBudget) &&
+		!errors.Is(err, ErrVectorPartitionRouterCandidateCoverageV1) {
+		t.Fatalf("valid independent approximate score budget rejected: %v", err)
+	}
 	short := base
 	short.ReturnedWidth = 1
 	got, err := r.CompareRankingPoliciesForDiagnosticsV1(t.Context(), []float32{1, 0}, short)
-	if !errors.Is(err, ErrVectorPartitionRouterCandidateCoverageV1) || !got.CollectionComplete || got.Candidates != 4 || len(got.Hybrid)+len(got.Distance)+len(got.Frequency) != 0 {
+	if !errors.Is(err, ErrVectorPartitionRouterCandidateCoverageV1) || !got.CollectionComplete || got.Candidates != 6 || len(got.Hybrid)+len(got.Distance)+len(got.Frequency) != 0 {
 		t.Fatalf("shortfall not empty and attributable: %+v %v", got, err)
 	}
 	for _, q := range [][]float32{{1}, {0, 0}, {float32(math.NaN()), 1}} {
@@ -157,7 +171,7 @@ func TestVectorPartitionRouterPolicyConcurrentReadersAndClose(t *testing.T) {
 			defer wg.Done()
 			<-start
 			for range 12 {
-				got, err := r.CompareRankingPoliciesForDiagnosticsV1(context.Background(), []float32{1, 0}, VectorPartitionRouterPolicyDiagnosticOptionsV1{Mode: "approximate", CandidateBudget: 4, ReturnedWidth: 4, PartitionProbes: 2})
+				got, err := r.CompareRankingPoliciesForDiagnosticsV1(context.Background(), []float32{1, 0}, VectorPartitionRouterPolicyDiagnosticOptionsV1{Mode: "approximate", ScoreBudget: 64, ReturnedWidth: 6, BeamWidth: 6, PartitionProbes: 2})
 				if err == nil && (len(got.Hybrid) != 2 || !got.CollectionComplete) {
 					t.Error("partial successful diagnostic")
 				}

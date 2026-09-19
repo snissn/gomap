@@ -6,6 +6,7 @@ package collections
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
@@ -22,7 +23,7 @@ const (
 	vectorPartitionLifecycleMaxBytesV1 = 64 << 20
 
 	vectorPartitionReadyPromotionMagicV1   = "VRP1"
-	vectorPartitionReadyPromotionVersionV1 = 2
+	vectorPartitionReadyPromotionVersionV1 = 3
 	// A promotion carries one router asset, the generation's computed
 	// representative mapping, and fixed-size digests. The mapping remains
 	// bounded below the lifecycle/store caps and avoids retaining a second full
@@ -66,7 +67,7 @@ type vectorPartitionReadyPromotionV1 struct {
 	BuildingDigest   [sha256.Size]byte
 	RouterGeneration uint64
 	RouterAsset      VectorPartitionAssetV1
-	Representatives  []VectorPartitionMembershipV1
+	Representatives  []VectorPartitionRepresentativeV2
 	ReadySetDigest   string
 	ReadyDigest      [sha256.Size]byte
 }
@@ -117,10 +118,12 @@ func vectorPartitionReadyPromotionShapeV1(p vectorPartitionReadyPromotionV1) err
 		return fmt.Errorf("%w: ready promotion representative cap", ErrVectorPartitionManifestInvalid)
 	}
 	for i, representative := range p.Representatives {
+		if representative.NodeID == 0 {
+			return fmt.Errorf("%w: missing representative node", ErrVectorPartitionManifestInvalid)
+		}
 		if i > 0 {
 			previous := p.Representatives[i-1]
-			if representative.VectorOrdinal < previous.VectorOrdinal ||
-				(representative.VectorOrdinal == previous.VectorOrdinal && representative.PartitionID <= previous.PartitionID) {
+			if !vectorPartitionRepresentativeLessV2(previous, representative) {
 				return fmt.Errorf("%w: ready promotion representatives", ErrVectorPartitionManifestInvalid)
 			}
 		}
@@ -134,12 +137,19 @@ func encodeVectorPartitionReadyPromotionCanonicalV1(p vectorPartitionReadyPromot
 	}
 	limits := DefaultVectorPartitionManifestLimits()
 	a := p.RouterAsset
-	for _, s := range []string{p.ReadySetDigest, a.ID, a.Checksum, string(a.Ref.Kind), a.Ref.Namespace} {
+	// Fixed fields, six string lengths, representative/asset counts, and digest.
+	// V3 representatives carry 16 bytes, including the durable represented node.
+	encodedBytes := uint64(204) + 16*uint64(len(p.Representatives))
+	for _, s := range []string{p.ReadySetDigest, a.ID, a.Checksum, a.MembershipDigest, string(a.Ref.Kind), a.Ref.Namespace} {
 		if len(s) > limits.MaxStringBytes {
 			return nil, fmt.Errorf("%w: ready promotion string cap", ErrVectorPartitionManifestInvalid)
 		}
+		encodedBytes += uint64(len(s))
 	}
-	b := bytes.NewBuffer(make([]byte, 0, 512))
+	if encodedBytes > vectorPartitionReadyPromotionMaxBytesV1 {
+		return nil, fmt.Errorf("%w: ready promotion bytes cap", ErrVectorPartitionManifestInvalid)
+	}
+	b := bytes.NewBuffer(make([]byte, 0, int(encodedBytes)))
 	b.WriteString(vectorPartitionReadyPromotionMagicV1)
 	putU32VPM(b, vectorPartitionReadyPromotionVersionV1)
 	putU64VPM(b, p.Generation)
@@ -147,7 +157,9 @@ func encodeVectorPartitionReadyPromotionCanonicalV1(p vectorPartitionReadyPromot
 	putU64VPM(b, p.RouterGeneration)
 	b.Write(p.ReadyDigest[:])
 	putStringVPM(b, p.ReadySetDigest)
-	putMembershipsVPM(b, p.Representatives)
+	if err := putRepresentativesWithContextVPM(context.Background(), b, p.Representatives); err != nil {
+		return nil, err
+	}
 	putAssetsVPM(b, []VectorPartitionAssetV1{p.RouterAsset})
 	if b.Len()+sha256.Size > vectorPartitionReadyPromotionMaxBytesV1 {
 		return nil, fmt.Errorf("%w: ready promotion bytes cap", ErrVectorPartitionManifestInvalid)
@@ -191,7 +203,7 @@ func decodeVectorPartitionReadyPromotionCanonicalV1(raw []byte) (vectorPartition
 	copy(p.ReadyDigest[:], content[r.off:r.off+sha256.Size])
 	r.off += sha256.Size
 	p.ReadySetDigest = r.str()
-	p.Representatives = r.memberships()
+	p.Representatives = r.representatives()
 	assets := r.assets()
 	if r.err != nil || r.off != len(content) || len(assets) != 1 {
 		return zero, fmt.Errorf("%w: ready promotion truncated, trailing, or asset count", ErrVectorPartitionManifestInvalid)
@@ -221,7 +233,7 @@ func makeVectorPartitionReadyPromotionPayloadV1(building, ready VectorPartitionM
 		BuildingDigest:   sha256.Sum256(buildingRaw),
 		RouterGeneration: ready.RouterGeneration,
 		RouterAsset:      ready.RouterAsset,
-		Representatives:  append([]VectorPartitionMembershipV1(nil), ready.Representatives...),
+		Representatives:  append([]VectorPartitionRepresentativeV2(nil), ready.Representatives...),
 		ReadySetDigest:   ready.ReadySetDigest,
 		ReadyDigest:      sha256.Sum256(readyRaw),
 	})
@@ -246,7 +258,7 @@ func applyVectorPartitionReadyPromotionV1(building VectorPartitionManifestV1, pa
 	ready.State = "ready"
 	ready.RouterGeneration = p.RouterGeneration
 	ready.RouterAsset = p.RouterAsset
-	ready.Representatives = append([]VectorPartitionMembershipV1(nil), p.Representatives...)
+	ready.Representatives = append([]VectorPartitionRepresentativeV2(nil), p.Representatives...)
 	ready.ReadySetDigest = p.ReadySetDigest
 	ready.Canonicalize()
 	if ready.ReadySetDigest != p.ReadySetDigest {

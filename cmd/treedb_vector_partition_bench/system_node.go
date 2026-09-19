@@ -29,7 +29,7 @@ import (
 )
 
 const (
-	vectorPartitionSystemNodeConfigKindV1 = "vector_partition_system_node_config_v1"
+	vectorPartitionSystemNodeConfigKindV1 = "vector_partition_system_node_config_v2"
 	vectorPartitionSystemNodeReadyKindV1  = "vector_partition_system_node_ready_v1"
 	vectorPartitionSystemTopologyKindV1   = "vector_partition_system_topology_v1"
 	vectorPartitionSystemAssemblyV1       = "production_public_v1"
@@ -66,6 +66,9 @@ type vectorPartitionSystemNodeConfigV1 struct {
 	Endpoints           map[string]string                        `json:"endpoints"`
 	GroupAppliedIndexes map[string]uint64                        `json:"group_applied_indexes,omitempty"`
 	RuntimeOwnership    *vectorPartitionSystemRuntimeOwnershipV1 `json:"runtime_ownership,omitempty"`
+	RouterWidth         int                                      `json:"router_width"`
+	RouterBeam          int                                      `json:"router_beam"`
+	RouterScoreBudget   int                                      `json:"router_score_budget"`
 }
 
 type vectorPartitionSystemGroupReadyV1 struct {
@@ -579,11 +582,14 @@ func loadVectorPartitionSystemNodeConfigV1(path string) (vectorPartitionSystemNo
 		}
 		return m8CanonicalPathV1(value)
 	}
-	if config.SchemaVersion != 1 || config.ResultKind != vectorPartitionSystemNodeConfigKindV1 {
+	if config.SchemaVersion != 2 || config.ResultKind != vectorPartitionSystemNodeConfigKindV1 {
 		return config, errors.New("system node config identity is invalid")
 	}
 	if config.Assembly != vectorPartitionSystemAssemblyV1 {
 		return config, fmt.Errorf("system node rejects non-production assembly %q", config.Assembly)
+	}
+	if config.RouterWidth < 1 || config.RouterWidth > config.RouterBeam || config.RouterScoreBudget < 1 || config.RouterBeam > nativewire.DefaultVectorPartitionCoordinatorLimitsV1().MaxRouterCandidates || config.RouterScoreBudget > nativewire.DefaultVectorPartitionCoordinatorLimitsV1().MaxRouterCandidates {
+		return config, errors.New("system node requires explicit router width <= beam and score budget in [1,1000000]")
 	}
 	if config.Topology != "single_daemon_four_group" && config.Topology != "native_four_daemon_four_group" && config.Topology != "container_four_daemon_four_group" {
 		return config, fmt.Errorf("system node topology %q is unsupported", config.Topology)
@@ -688,6 +694,10 @@ func openVectorPartitionSystemNodeV1(ctx context.Context, config vectorPartition
 	if err != nil {
 		return nil, err
 	}
+	if config.RouterWidth < 1 || config.RouterWidth > config.RouterBeam || config.RouterBeam > int(assets.status.Representatives) || config.RouterScoreBudget < 1 || config.RouterScoreBudget > nativewire.DefaultVectorPartitionCoordinatorLimitsV1().MaxRouterCandidates {
+		_ = assets.Close()
+		return nil, errors.New("system node router w/E/C does not fit persisted model")
+	}
 	node := &vectorPartitionSystemNodeV1{config: config, assets: assets}
 	defer func() {
 		if err != nil {
@@ -715,8 +725,8 @@ func openVectorPartitionSystemNodeV1(ctx context.Context, config vectorPartition
 		shards = append(shards, nativewire.VectorPartitionProductionNodeShardV1{GroupID: local.GroupID, Listener: listener})
 	}
 	requestBase := nativewire.VectorPartitionCoordinatorRequestV1{
-		Version: 1, RequestID: "system-public", CancellationID: "system-public-cancel", Metric: nativewire.VectorPartitionShardSearchMetricCosineV1, TopK: 10, PartitionProbes: 2,
-		EfSearch: 128, RouterCandidateBudget: 256, Consistency: nativewire.VectorPartitionShardSearchConsistencySnapshotV1,
+		Version: nativewire.VectorPartitionCoordinatorVersionV1, RequestID: "system-public", CancellationID: "system-public-cancel", Metric: nativewire.VectorPartitionShardSearchMetricCosineV1, TopK: 10, PartitionProbes: 2,
+		EfSearch: 128, RouterScoreBudget: config.RouterScoreBudget, RouterReturnedWidth: config.RouterWidth, RouterBeamWidth: config.RouterBeam, Consistency: nativewire.VectorPartitionShardSearchConsistencySnapshotV1,
 	}
 	configSHA, err := vectorPartitionSystemNodeConfigSHA256V1(config)
 	if err != nil {

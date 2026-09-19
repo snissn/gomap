@@ -16,7 +16,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/vectorpartition"
 )
 
-const m8RouterPolicyExperimentMethodV1 = "static_same_candidates_router_policies_v1"
+const m8RouterPolicyExperimentMethodV1 = "static_same_candidates_router_policies_w_E_C_v2"
 
 type m8RouterPolicyCoverageV1 struct {
 	DistanceMask    uint16 `json:"distance_mask"`
@@ -48,7 +48,7 @@ type m8RouterPolicyEvidenceV1 struct {
 	Method            string                  `json:"method"`
 	RequestedWidth    int                     `json:"requested_width"`
 	EffectiveWidth    int                     `json:"effective_width"`
-	ApproximateBudget int                     `json:"approximate_budget"`
+	RouterScoreBudget int                     `json:"router_score_budget"`
 	Queries           []m8RouterPolicyQueryV1 `json:"queries"`
 }
 
@@ -66,9 +66,9 @@ func (h *m8AttributionHarnessV1) enableRouterPoliciesV1(width, approximateBudget
 	n := int(h.assets.status.Representatives)
 	effective := width
 	if effective == 0 {
-		effective = approximateBudget
+		effective = h.assets.routerWidth
 	}
-	if approximateBudget < 1 || approximateBudget > n || width < 0 || effective < 1 || effective > approximateBudget {
+	if approximateBudget < 1 || width < 0 || effective < 1 || effective > h.assets.routerBeam || h.assets.routerBeam > n {
 		return errors.New("invalid policy experiment effective width/budget")
 	}
 	h.policies = &m8RouterPolicyCacheV1{requestedWidth: width, width: effective, approximateBudget: approximateBudget, byProbes: make(map[int]*m8RouterPolicyEvidenceV1)}
@@ -89,11 +89,15 @@ func (h *m8AttributionHarnessV1) routerPolicyOutcomeV1(ctx context.Context, i, p
 	if mode == collections.VectorPartitionRouterModeExactV1 {
 		budget = int(h.assets.status.Representatives)
 	}
-	c, err := h.assets.router.CompareRankingPoliciesForDiagnosticsV1(ctx, query, collections.VectorPartitionRouterPolicyDiagnosticOptionsV1{Mode: mode, CandidateBudget: budget, ReturnedWidth: p.width, PartitionProbes: probes})
+	c, err := h.assets.router.CompareRankingPoliciesForDiagnosticsV1(ctx, query, collections.VectorPartitionRouterPolicyDiagnosticOptionsV1{Mode: mode, ScoreBudget: budget, ReturnedWidth: p.width, BeamWidth: h.assets.routerBeam, PartitionProbes: probes})
 	out := m8RouterPolicyOutcomeV1{Status: "pass", Comparison: c}
 	if err != nil {
 		if errors.Is(err, collections.ErrVectorPartitionRouterCandidateCoverageV1) {
-			out.Status = "candidate_coverage_shortfall"
+			out.Status = m8ProductionCandidateCoverageShortfallV1
+			return out, nil
+		}
+		if errors.Is(err, collections.ErrVectorPartitionRouterScoreBudget) {
+			out.Status = m8ProductionRouterScoreBudgetExhaustedV1
 			return out, nil
 		}
 		return out, err
@@ -148,7 +152,7 @@ func (h *m8AttributionHarnessV1) routerPolicyEvidenceV1(ctx context.Context, que
 	if cached := h.policies.byProbes[probes]; cached != nil {
 		return cached, nil
 	}
-	result := &m8RouterPolicyEvidenceV1{Method: m8RouterPolicyExperimentMethodV1, RequestedWidth: h.policies.requestedWidth, EffectiveWidth: h.policies.width, ApproximateBudget: approximateBudget, Queries: make([]m8RouterPolicyQueryV1, len(queries))}
+	result := &m8RouterPolicyEvidenceV1{Method: m8RouterPolicyExperimentMethodV1, RequestedWidth: h.policies.requestedWidth, EffectiveWidth: h.policies.width, RouterScoreBudget: approximateBudget, Queries: make([]m8RouterPolicyQueryV1, len(queries))}
 	for i, q64 := range queries {
 		q := m8Query32V1(q64)
 		record := &result.Queries[i]
@@ -181,7 +185,7 @@ func m8RouterPolicyLessV1(a, b collections.VectorPartitionRouterPolicyDomainV1, 
 // Shape and internal equations are checked here; authoritative source/model,
 // candidate scores, votes and route masks are checked by fresh-owner replay.
 func m8ValidateRouterPolicyEvidenceV1(e *m8RouterPolicyEvidenceV1, q *m8QualityAttributionV1, k, probes, samples int) error {
-	if e == nil || q == nil || samples < 1 || q.Domains < 1 || q.Domains > maxPartitions || len(q.PackCosts) != q.Domains || e.Method != m8RouterPolicyExperimentMethodV1 || len(e.Queries) != samples || len(q.Queries) != samples || k < 1 || k > 10 || probes < 1 || probes > q.Domains || e.RequestedWidth < 0 || e.EffectiveWidth < 1 || e.EffectiveWidth > e.ApproximateBudget || e.RequestedWidth != 0 && e.RequestedWidth != e.EffectiveWidth || e.RequestedWidth == 0 && e.EffectiveWidth != e.ApproximateBudget {
+	if e == nil || q == nil || samples < 1 || q.Domains < 1 || q.Domains > maxPartitions || len(q.PackCosts) != q.Domains || e.Method != m8RouterPolicyExperimentMethodV1 || len(e.Queries) != samples || len(q.Queries) != samples || k < 1 || k > 10 || probes < 1 || probes > q.Domains || e.RequestedWidth < 0 || e.EffectiveWidth < 1 || e.RouterScoreBudget < 1 || e.RequestedWidth != 0 && e.RequestedWidth != e.EffectiveWidth {
 		return errors.New("invalid policy experiment shape/identity")
 	}
 	full := uint16(1<<uint(k)) - 1
@@ -195,17 +199,26 @@ func m8ValidateRouterPolicyEvidenceV1(e *m8RouterPolicyEvidenceV1, q *m8QualityA
 			out  m8RouterPolicyOutcomeV1
 		}{{"exact", row.Exact}, {"approximate", row.Approximate}} {
 			out, c := which.out, which.out.Comparison
-			if c.Method != collections.VectorPartitionRouterPolicyDiagnosticMethodV1 || c.Mode != which.mode || c.Generation != q.Generation || c.SourceGeneration != q.SourceGeneration || c.ModelSHA256 != q.ModelSHA256 || !m8SHA256V1(c.QuerySHA256) || c.DomainCount != q.Domains || c.RepresentativeCount < c.DomainCount || c.RepresentativeCount > vectorpartition.DefaultRouterConfigV1().MaxRepresentatives || c.CandidateBudget < 1 || c.ReturnedWidth != e.EffectiveWidth || c.Probes != probes || !c.CollectionComplete || c.Collected < 1 || c.Collected > c.RepresentativeCount || c.Collected > c.CandidateBudget || c.Candidates < uint64(c.Collected) || c.Candidates > uint64(c.CandidateBudget) {
+			if c.Method != collections.VectorPartitionRouterPolicyDiagnosticMethodV1 || c.Mode != which.mode || c.Generation != q.Generation || c.SourceGeneration != q.SourceGeneration || c.ModelSHA256 != q.ModelSHA256 || !m8SHA256V1(c.QuerySHA256) || c.DomainCount != q.Domains || c.RepresentativeCount < c.DomainCount || c.RepresentativeCount > vectorpartition.DefaultRouterConfigV1().MaxRepresentatives || c.ScoreBudget < 1 || c.ReturnedWidth != e.EffectiveWidth || c.ReturnedWidth > c.BeamWidth || c.BeamWidth > c.RepresentativeCount || c.ScoreCalls > uint64(c.ScoreBudget) || c.ScoreCalls < c.Candidates || c.Probes != probes {
 				return errors.New("policy candidate identity/work mismatch")
 			}
 			if which.mode == "exact" {
-				if c.CandidateBudget != c.RepresentativeCount || c.Collected != c.RepresentativeCount || c.Candidates != uint64(c.RepresentativeCount) || c.Edges != 0 {
+				if c.ScoreBudget != c.RepresentativeCount || c.Collected != c.RepresentativeCount || c.Candidates != uint64(c.RepresentativeCount) || c.Edges != 0 {
 					return errors.New("policy exact scan work incomplete")
 				}
-			} else if c.CandidateBudget != e.ApproximateBudget || c.CandidateBudget > c.RepresentativeCount {
+			} else if c.ScoreBudget != e.RouterScoreBudget {
 				return errors.New("policy approximate budget mismatch")
 			}
-			if out.Status == "candidate_coverage_shortfall" {
+			if out.Status == m8ProductionRouterScoreBudgetExhaustedV1 {
+				if which.mode != collections.VectorPartitionRouterModeApproxV1 || out.Coverage != nil || c.CollectionComplete || c.ScoreCalls != uint64(c.ScoreBudget) || c.Collected != 0 || c.Candidates != 0 || c.Edges != 0 || c.UniqueReturned != 0 || c.CandidateSetSHA256 != "" || c.CandidateSequenceSHA256 != "" || len(c.Distance)+len(c.Frequency)+len(c.Hybrid) != 0 {
+					return errors.New("policy score-budget refusal contains partial results")
+				}
+				continue
+			}
+			if !c.CollectionComplete || c.Collected < 1 || c.Collected > c.RepresentativeCount || c.Collected > c.ScoreBudget || c.Candidates < uint64(c.Collected) || c.Candidates > uint64(c.ScoreBudget) {
+				return errors.New("policy candidate collection is incomplete")
+			}
+			if out.Status == m8ProductionCandidateCoverageShortfallV1 {
 				if out.Coverage != nil || len(c.Distance)+len(c.Frequency)+len(c.Hybrid) != 0 || !m8SHA256V1(c.CandidateSetSHA256) || !m8SHA256V1(c.CandidateSequenceSHA256) || c.UniqueReturned < 1 || c.UniqueReturned > c.ReturnedWidth || c.UniqueReturned > c.Collected {
 					return errors.New("policy shortfall contains partial results")
 				}
@@ -294,10 +307,14 @@ func m8RouterPolicyEvidenceSelectionV1(cfg m8ProductionConfigEvidenceV1, row m8P
 		}
 		return nil
 	}
-	if !cfg.QualityDiagnostics || cfg.RouterPolicyWidth < 0 || cfg.RouterPolicyWidth > cfg.RouterCandidates {
+	effectiveWidth := cfg.RouterPolicyWidth
+	if effectiveWidth == 0 {
+		effectiveWidth = cfg.RouterWidth
+	}
+	if !cfg.QualityDiagnostics || cfg.RouterWidth < 1 || cfg.RouterWidth > cfg.RouterBeam || cfg.RouterPolicyWidth < 0 || effectiveWidth < 1 || effectiveWidth > cfg.RouterBeam {
 		return errors.New("invalid router policy configuration")
 	}
-	if row.Status != "pass" && row.Status != "fail" && row.Status != "candidate_coverage_shortfall" {
+	if row.Status != "pass" && row.Status != "fail" && !m8ProductionRouterRefusalStatusV1(row.Status) {
 		if e != nil {
 			return errors.New("unexecuted row has policy observations")
 		}
@@ -306,8 +323,13 @@ func m8RouterPolicyEvidenceSelectionV1(cfg m8ProductionConfigEvidenceV1, row m8P
 	if err := m8ValidateRouterPolicyEvidenceV1(e, row.Attribution.Quality, cfg.TopK, row.Probes, row.Samples); err != nil {
 		return err
 	}
-	if e.RequestedWidth != cfg.RouterPolicyWidth || e.ApproximateBudget != row.Attribution.ApproximateRouterCandidateBudget {
+	if e.RequestedWidth != cfg.RouterPolicyWidth || e.EffectiveWidth != effectiveWidth || e.RouterScoreBudget != row.Attribution.ApproximateRouterScoreBudget {
 		return errors.New("policy requested/effective config mismatch")
+	}
+	for _, query := range e.Queries {
+		if query.Exact.Comparison.BeamWidth != cfg.RouterBeam || query.Approximate.Comparison.BeamWidth != cfg.RouterBeam {
+			return errors.New("policy beam config mismatch")
+		}
 	}
 	return nil
 }
@@ -327,7 +349,7 @@ func m8PlanRouterPolicyDiagnosticsV1(cfg config, m fixtureManifest, domainCounts
 	if len(cfg.m8RouterPolicyRepresentativeCounts) > 0 && len(cfg.m8RouterPolicyRepresentativeCounts) != len(domainCounts) {
 		return 0, 0, errors.New("policy model-count preflight cardinality mismatch")
 	}
-	if !cfg.m8QualityDiagnostics || cfg.topK < 1 || cfg.topK > 10 || cfg.routerCandidates < 1 || cfg.m8RouterPolicyWidth < 0 || cfg.m8RouterPolicyWidth > cfg.routerCandidates || m.Vectors < 1 || m.Queries < 1 || m.Dimensions < 1 || m.Dimensions > maxDimensions || len(cfg.probes) < 1 || len(cfg.efSearch) < 1 || len(cfg.concurrency) < 1 || capUnits < 1 || capBytes < 1 {
+	if !cfg.m8QualityDiagnostics || cfg.topK < 1 || cfg.topK > 10 || cfg.routerCandidates < 1 || cfg.m8RouterPolicyWidth < 0 || cfg.m8RouterPolicyWidth > cfg.routerBeam || m.Vectors < 1 || m.Queries < 1 || m.Dimensions < 1 || m.Dimensions > maxDimensions || len(cfg.probes) < 1 || len(cfg.efSearch) < 1 || len(cfg.concurrency) < 1 || capUnits < 1 || capBytes < 1 {
 		return 0, 0, errors.New("invalid policy diagnostic work shape")
 	}
 	if len(domainCounts) == 0 {
@@ -471,11 +493,8 @@ func m8RouterPolicyRepresentativeBoundV1(cfg config, variant, domains, sourceRow
 	if cfg.m8ExistingDB != "" || len(cfg.m8VariantDBs) > 0 {
 		return 0, errors.New("retained policy diagnostics require actual representative counts")
 	}
-	// The new-assets M8 builder selects DefaultRouterConfigV1, not CLI simulation
-	// router flags. Derive the same bound; never assume it for a retained model.
-	bound, err := memoryMul(int64(domains), int64(vectorpartition.DefaultRouterConfigV1().RepresentativesPerPartition))
-	if err != nil {
-		return 0, err
-	}
-	return min(bound, int64(sourceRows)), nil
+	// The new-assets M8 builder uses the validated CLI router configuration.
+	// Derive its exact bound; never assume a configured bound for a retained model.
+	bound := int64(cfg.routerConfig.RepresentativeBudget)
+	return min(bound, 2*int64(sourceRows)-int64(domains)), nil
 }

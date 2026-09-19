@@ -1394,11 +1394,11 @@ func TestVectorPartitionStorageFormatContractDoc(t *testing.T) {
 	requireTextContains(t, "vector partition storage format", doc,
 		"### Vector-partition manifests (`vector_partitions/`)",
 		"one (exactly one)\nrouter-asset frame",
-		"wire version `4`",
-		"Version 4 has this fixed,\nuntagged order",
+		"wire version `5`",
+		"Version 5 has this fixed,\nuntagged order",
 		"Every physical pack belongs to exactly one\nnonempty domain",
 		"added the membership-digest string between the\nasset checksum and byte length",
-		"decoder accepts only version 4",
+		"decoder accepts only version 5",
 		"The highest checkpoint epoch is the sole authority",
 		"VPR1 is the bounded, versioned, checksummed reclaim payload",
 		"Raft-snapshot-included namespace",
@@ -2858,7 +2858,7 @@ func TestVectorPartitionManifestV1IntegrityRejectsSemanticMutation(t *testing.T)
 			m.OverlapMemberships = []VectorPartitionMembershipV1{{VectorOrdinal: 0, PartitionID: 1}}
 		},
 		"representative": func(m *VectorPartitionManifestV1) {
-			m.Representatives = []VectorPartitionMembershipV1{{VectorOrdinal: 1, PartitionID: 1}}
+			m.Representatives = []VectorPartitionRepresentativeV2{{VectorOrdinal: 1, PartitionID: 1, NodeID: 1}}
 		},
 		"policy":     func(m *VectorPartitionManifestV1) { m.BalancePolicy = "other" },
 		"generation": func(m *VectorPartitionManifestV1) { m.Generation++ },
@@ -2954,7 +2954,7 @@ func TestVectorPartitionManifestV1DefaultLimitsSupportMillionRowsAndOverlap(t *t
 	for i := range m.OverlapMemberships {
 		m.OverlapMemberships[i] = VectorPartitionMembershipV1{VectorOrdinal: uint64(i), PartitionID: 1}
 	}
-	m.Representatives = []VectorPartitionMembershipV1{{VectorOrdinal: 0, PartitionID: 0}}
+	m.Representatives = []VectorPartitionRepresentativeV2{{VectorOrdinal: 0, PartitionID: 0, NodeID: 1}}
 	m.Canonicalize()
 	raw, err := EncodeVectorPartitionManifestV1(m)
 	if err != nil {
@@ -3021,7 +3021,7 @@ func testVectorPartitionManifestV1() VectorPartitionManifestV1 {
 	ref := func(partID uint64, fileID uint32, bytes int64) ColumnAssetRef {
 		return ColumnAssetRef{Kind: ColumnAssetKindTCS1PartImage, Namespace: "test", Generation: 7, PartID: partID, FileID: fileID, Length: bytes}
 	}
-	m := VectorPartitionManifestV1{State: "ready", Collection: "docs", IndexName: "embedding", IndexDefinitionDigest: h, SourceGeneration: 4, SourceChecksum: 9, SourceSchemaHash: 11, SourceRowCount: 2, Generation: 7, RouterGeneration: 7, PartitionCount: 2, BalancePolicy: "disjoint_v1", Placements: []VectorPartitionPlacementV1{{0, "raft-a"}, {1, "raft-a"}}, Memberships: []VectorPartitionMembershipV1{{0, 0}, {1, 1}}, Representatives: []VectorPartitionMembershipV1{{0, 0}}, Assets: []VectorPartitionAssetV1{{ID: "partition/0", PartitionID: 0, Checksum: b, Bytes: 12, Ref: ref(1, 1, 12)}, {ID: "partition/1", PartitionID: 1, Checksum: b, Bytes: 13, Ref: ref(2, 2, 13)}}, RouterAsset: VectorPartitionAssetV1{ID: "router", Checksum: b, Bytes: 14, Ref: ref(3, 3, 14)}}
+	m := VectorPartitionManifestV1{State: "ready", Collection: "docs", IndexName: "embedding", IndexDefinitionDigest: h, SourceGeneration: 4, SourceChecksum: 9, SourceSchemaHash: 11, SourceRowCount: 2, Generation: 7, RouterGeneration: 7, PartitionCount: 2, BalancePolicy: "disjoint_v1", Placements: []VectorPartitionPlacementV1{{0, "raft-a"}, {1, "raft-a"}}, Memberships: []VectorPartitionMembershipV1{{0, 0}, {1, 1}}, Representatives: []VectorPartitionRepresentativeV2{{0, 0, 1}}, Assets: []VectorPartitionAssetV1{{ID: "partition/0", PartitionID: 0, Checksum: b, Bytes: 12, Ref: ref(1, 1, 12)}, {ID: "partition/1", PartitionID: 1, Checksum: b, Bytes: 13, Ref: ref(2, 2, 13)}}, RouterAsset: VectorPartitionAssetV1{ID: "router", Checksum: b, Bytes: 14, Ref: ref(3, 3, 14)}}
 	m.Canonicalize()
 	return m
 }
@@ -3067,7 +3067,7 @@ func TestVectorPartitionManifestV1BindsLogicalDomainsToPhysicalPacks(t *testing.
 		t.Run(name, func(t *testing.T) {
 			bad := m
 			bad.DomainPacks = append([]VectorPartitionDomainPackV1(nil), m.DomainPacks...)
-			bad.Representatives = append([]VectorPartitionMembershipV1(nil), m.Representatives...)
+			bad.Representatives = append([]VectorPartitionRepresentativeV2(nil), m.Representatives...)
 			mutate(&bad)
 			bad.Canonicalize()
 			if err := bad.Validate(DefaultVectorPartitionManifestLimits()); err == nil {
@@ -3087,7 +3087,7 @@ func scaledVectorPartitionManifestV1(rows int) VectorPartitionManifestV1 {
 	for i := range m.Memberships {
 		m.Memberships[i] = VectorPartitionMembershipV1{VectorOrdinal: uint64(i), PartitionID: 0}
 	}
-	m.Representatives = []VectorPartitionMembershipV1{{VectorOrdinal: 0, PartitionID: 0}}
+	m.Representatives = []VectorPartitionRepresentativeV2{{VectorOrdinal: 0, PartitionID: 0, NodeID: 1}}
 	m.Assets = m.Assets[:1]
 	m.Canonicalize()
 	return m
@@ -3116,7 +3116,7 @@ func TestVectorPartitionManifestContextDigestMatchesStableJSONV1(t *testing.T) {
 			Placements:            nil,
 			Memberships:           []VectorPartitionMembershipV1{},
 			OverlapMemberships:    nil,
-			Representatives:       []VectorPartitionMembershipV1{},
+			Representatives:       []VectorPartitionRepresentativeV2{},
 			Assets:                nil,
 			RouterAsset:           VectorPartitionAssetV1{ID: "<router>&", Ref: ColumnAssetRef{Kind: ColumnAssetKind("<kind>"), Offset: -1}},
 			ReadySetDigest:        "",

@@ -7,11 +7,62 @@ Consumes: the M1/M4/M5/M6 contracts in `vector-partition-raft-v1.md`,
 
 ## Purpose and admission boundary
 
+### Router representation revision R (#4773)
+
+The public search API remains V1, but newly built routers use
+`treedb_vector_partition_router_v2`: a **global** representative budget B,
+not B per domain. Canonically ordered nonempty logical domains reserve one
+root each. Remaining tokens are apportioned by integer largest remainders,
+weighted by membership count, with domain/node order breaking ties and a
+non-unary-tree capacity of `2*n-1`. Each node consumes one token before its
+remaining quota is apportioned to children. B below the domain count fails.
+Parents remain represented after splitting; every actual node contributes its
+normalized spherical center. Identical vectors, leaf size, depth, insufficient
+quota, and failed non-unary splits stop subdivision. Unused tokens are reported,
+not filled with fabricated duplicate nodes. Physical packing does not multiply
+the logical-domain quota.
+
+Representative identity is `(logical domain, represented node ID)`. Source
+ordinal is provenance, may repeat at several levels, and is not a uniqueness
+key. Ordering, node ancestry, true leaf flags, quotas, config, centers, and
+source identity are digest-bound and checked on open. Routing remains
+nearest-center distance, with deterministic domain/representative ties;
+frequency voting is diagnostic only.
+
+Search explicitly separates returned width **w**, retained traversal beam **E**,
+and actual score-call ceiling **C** (`VectorPartitionRouterSearchOptionsV2`).
+C is independently bounded to [1, 1,000,000] before execution.
+Require `1 <= w <= E <= actual representatives`; C is positive and may exceed
+the representative count because upper-level navigation can score a vector
+again. Every such score is charged. Exhaustion returns a budget error and no
+partial routes; no clamping or exact fallback occurs. Fewer distinct domains
+than requested is a separate coverage error. The explicit exact reference
+scores all representatives; use `w=E=N, C>=N` for the full-domain oracle. An
+exact scan truncated to w is only the matched-width representative reference.
+
+This is an intentional pre-alpha format break: manifest binary version 5,
+router record version 2, and ready-promotion payload version 3 replace earlier
+encodings. Representative records are 16 bytes (source ordinal, domain, node)
+instead of membership-shaped 12-byte records; path metadata retains leaf flags
+and quota. Rebuild old DB/benchmark directories; do not migrate or silently
+reinterpret old assets. Existing publication, generation pin, checkpoint,
+reopen, GC/rewrite reachability, and persistent-value-log obligations remain.
+The mapped immutable owner retains vector storage; live owners still clone
+their retained vectors before the pin is released.
+
+The benchmark uses `-router-global-budget`, `-router-width`, `-router-beam`,
+and `-router-score-budget`. M8 evidence is schema 5, system-node config is
+schema 2, and policy diagnostic method/digests bind the new beam semantics.
+Old #4744/#4745 receipts remain historical; neither rebuilding nor changing
+their labels makes them evidence for this revision. R does not correct local
+HNSW, change memberships, or establish the final scaling/recall verdict.
+
 This document freezes the supported snapshot-bound graph-partitioned vector
 search V1 contract. It is an admission contract, not an enablement claim: the
 feature remains internal and experimental/off until its owning rollout gate
-accepts it. It does not add a runtime route, change a persistent format, or
-promote the benchmark simulation to production evidence.
+accepts it. The original V1 admission contract did not add a runtime route or
+promote the benchmark simulation to production evidence. The R revision above
+explicitly changes derived-asset formats without changing that enablement gate.
 
 V1 has two deliberately disjoint result classifications:
 
@@ -236,7 +287,8 @@ missing or conflicting data reject rather than falling back to a partial pass.
 See `TreeDB/docs/performance/vector-partition-m8.md` for costs, commands and the
 representative-baseline boundary.
 
-Selected quality evidence on `candidate_coverage_shortfall` rows MUST also be
+Selected quality evidence on `candidate_coverage_shortfall`,
+`router_score_budget_exhausted`, or `mixed_router_refusal` rows MUST also be
 recomputed from reopened static assets. Structural validation alone cannot bind
 query/truth/model digests, coverage costs or nearest-member routing. Only the
 unavailable local/coordinator observations are suppressed, using the same rule

@@ -189,10 +189,20 @@ func TestM8RouterPolicyTamperSelectionAndCandidateIdentity(t *testing.T) {
 	if err := m8AttachAttributionV1(&row, cell, cell.Local); err != nil {
 		t.Fatal(err)
 	}
-	cfg := m8ProductionConfigEvidenceV1{QualityDiagnostics: true, RouterPolicyDiagnostics: true, TopK: 10, RouterCandidates: e.ApproximateBudget}
+	cfg := m8ProductionConfigEvidenceV1{QualityDiagnostics: true, RouterPolicyDiagnostics: true, TopK: 10, RouterScoreBudget: e.RouterScoreBudget, RouterWidth: e.EffectiveWidth, RouterBeam: e.EffectiveWidth}
 	if err := m8RouterPolicyEvidenceSelectionV1(cfg, row); err != nil {
 		t.Fatal(err)
 	}
+	cfg.RouterWidth--
+	if err := m8RouterPolicyEvidenceSelectionV1(cfg, row); err == nil {
+		t.Fatal("mismatched default policy width accepted")
+	}
+	cfg.RouterWidth++
+	cfg.RouterBeam++
+	if err := m8RouterPolicyEvidenceSelectionV1(cfg, row); err == nil {
+		t.Fatal("mismatched policy beam accepted")
+	}
+	cfg.RouterBeam--
 	cfg.RouterPolicyDiagnostics = false
 	if err := m8RouterPolicyEvidenceSelectionV1(cfg, row); err == nil {
 		t.Fatal("unselected policy data accepted")
@@ -245,6 +255,30 @@ func TestM8RouterPolicyResourcePlanAndRetainedModel(t *testing.T) {
 	}
 }
 
+func TestM8RouterPolicyResourcePlanUsesConfiguredRepresentativeBudgetV1(t *testing.T) {
+	cfg, err := parseConfig(append(qualityCLIArgsV1(t), "-m8-quality-diagnostics", "-m8-router-policy-diagnostics"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := fixtureManifest{Vectors: 400, Queries: 2, Dimensions: 4}
+	defaultWork, defaultBytes, err := m8PlanRouterPolicyDiagnosticsV1(cfg, m, []int{4}, maxBenchmarkWorkUnits, maxFixtureBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.routerConfig.RepresentativeBudget = 512
+	bound, err := m8RouterPolicyRepresentativeBoundV1(cfg, 0, 4, m.Vectors)
+	if err != nil || bound != 512 {
+		t.Fatalf("configured representative bound = %d, %v", bound, err)
+	}
+	work, bytes, err := m8PlanRouterPolicyDiagnosticsV1(cfg, m, []int{4}, maxBenchmarkWorkUnits, maxFixtureBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if work <= defaultWork || bytes <= defaultBytes {
+		t.Fatalf("B=512 was not charged: work %d -> %d bytes %d -> %d", defaultWork, work, defaultBytes, bytes)
+	}
+}
+
 func TestM8RouterPolicyRetainedAttributionReplay(t *testing.T) {
 	requireM8PersistentAssetSupportV1(t)
 	fixture := m8QualificationFixturesV1[0]
@@ -265,7 +299,7 @@ func TestM8RouterPolicyRetainedAttributionReplay(t *testing.T) {
 	if err := os.Rename(builtDir, dir); err != nil {
 		t.Fatal(err)
 	}
-	for _, coordinate := range []struct{ width, budget int }{{0, 0}, {1, 0}, {1, 1}} {
+	for _, coordinate := range []struct{ width, budget int }{{0, 0}, {1, 0}, {4, 1}} {
 		width := coordinate.width
 		t.Run(fmt.Sprintf("width=%d/budget=%d", width, coordinate.budget), func(t *testing.T) {
 			assets, err := openM8ProductionExistingAssetSetV1(dir)
@@ -295,7 +329,7 @@ func TestM8RouterPolicyRetainedAttributionReplay(t *testing.T) {
 			if err := h.enableQualityV1(t.Context(), queries, truth, homes, members, 0, m8CoverageLimitsV1{WorkUnits: maxBenchmarkWorkUnits, Bytes: maxFixtureBytes}); err != nil {
 				t.Fatal(err)
 			}
-			budget := int(assets.status.Representatives)
+			budget := 1024 // Full-pool replay is not a score-call budget of N.
 			if coordinate.budget != 0 {
 				budget = coordinate.budget
 			}
@@ -307,6 +341,20 @@ func TestM8RouterPolicyRetainedAttributionReplay(t *testing.T) {
 				t.Fatal(err)
 			}
 			cell, err := m8BuildAttributionV1(t.Context(), assets, homes, members, queries, truth, oracles, 2, 32, 10, budget, make([][]m8CanonicalResultV1, len(queries)), h)
+			if coordinate.budget == 1 {
+				if err != nil {
+					t.Fatalf("exhausted score budget was not retained: %v", err)
+				}
+				if err := m8ValidateRouterPolicyEvidenceV1(cell.Evidence.RouterPolicies, cell.Evidence.Quality, 10, 2, len(queries)); err != nil {
+					t.Fatal(err)
+				}
+				for _, query := range cell.Evidence.RouterPolicies.Queries {
+					if query.Approximate.Status != m8ProductionRouterScoreBudgetExhaustedV1 || query.Approximate.Coverage != nil || query.Approximate.Comparison.CollectionComplete || query.Approximate.Comparison.ScoreCalls != 1 {
+						t.Fatalf("score-budget refusal was not explicit: %+v", query.Approximate)
+					}
+				}
+				return
+			}
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -321,7 +369,7 @@ func TestM8RouterPolicyRetainedAttributionReplay(t *testing.T) {
 			if err := m8AttachAttributionV1(&row, cell, cell.Local); err != nil {
 				t.Fatal(err)
 			}
-			report := m8ProductionReportV1{Dataset: fixture, RouterRepresentatives: assets.status.Representatives, Config: m8ProductionConfigEvidenceV1{TopK: 10, Partitions: 4, DomainCount: 4, PacksPerDomain: []int{1, 1, 1, 1}, RouterCandidates: budget, QualityDiagnostics: true, RouterPolicyDiagnostics: true, RouterPolicyWidth: width}, Variant: &m3VariantDescriptorV1{DatabaseDirectory: dir}, Rows: []m8ProductionRowV1{row}}
+			report := m8ProductionReportV1{Dataset: fixture, RouterRepresentatives: assets.status.Representatives, Config: m8ProductionConfigEvidenceV1{TopK: 10, Partitions: 4, DomainCount: 4, PacksPerDomain: []int{1, 1, 1, 1}, RouterScoreBudget: budget, RouterWidth: assets.routerWidth, RouterBeam: assets.routerBeam, QualityDiagnostics: true, RouterPolicyDiagnostics: true, RouterPolicyWidth: width}, Variant: &m3VariantDescriptorV1{DatabaseDirectory: dir}, Rows: []m8ProductionRowV1{row}}
 			outcome := m8ProductionRowOutcomesV1{TopKIDs: make([][]string, len(queries)), TopKScoreBits: make([][]uint32, len(queries))}
 			for i, rows := range cell.Local {
 				outcome.TopKIDs[i] = m8CanonicalIDsV1(rows)
