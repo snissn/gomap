@@ -48,25 +48,57 @@ func (c *Collection) UpdateTypedMetadataByID(ids [][]byte, set map[string]any, u
 		ownedIDs[i] = bytes.Clone(id)
 	}
 	slices.SortFunc(ownedIDs, bytes.Compare)
-	for path, value := range set {
-		if !utf8.ValidString(path) {
-			return TypedMetadataUpdateResult{}, ErrTypedMetadataInvalid
-		}
-		if s, ok := value.(string); ok && !utf8.ValidString(s) {
-			return TypedMetadataUpdateResult{}, ErrTypedMetadataInvalid
-		}
-	}
 	// Freeze JSON values before planning, reject non-JSON/NaN input, and keep
 	// numbers lossless when comparing existing retained JSON for no-op admission.
 	raw, err := json.Marshal(set)
 	if err != nil {
 		return TypedMetadataUpdateResult{}, errors.Join(ErrTypedMetadataInvalid, err)
 	}
+	// Marshal first preserves its cycle/type checks. Its replacement of invalid
+	// UTF-8 is lossy, so validate the original value tree before accepting it.
+	if !typedMetadataValidUTF8(reflect.ValueOf(set), 0) {
+		return TypedMetadataUpdateResult{}, fmt.Errorf("%w: metadata strings and object keys must be valid UTF-8", ErrTypedMetadataInvalid)
+	}
 	var ownedSet map[string]any
 	if err := decodeTypedMetadataJSON(raw, &ownedSet); err != nil {
 		return TypedMetadataUpdateResult{}, errors.Join(ErrTypedMetadataInvalid, err)
 	}
 	return c.updateTypedMetadataByID(ownedIDs, ownedSet, slices.Clone(unset), expectedGeneration, nil, nil)
+}
+
+func typedMetadataValidUTF8(value reflect.Value, depth int) bool {
+	// Also bound Go containers hidden by custom marshalers. Normal JSON cannot
+	// exceed encoding/json's 10,000-level decoding limit in any case.
+	if depth > 10000 {
+		return false
+	}
+	switch value.Kind() {
+	case reflect.String:
+		return utf8.ValidString(value.String())
+	case reflect.Interface, reflect.Pointer:
+		return value.IsNil() || typedMetadataValidUTF8(value.Elem(), depth+1)
+	case reflect.Map:
+		it := value.MapRange()
+		for it.Next() {
+			if !typedMetadataValidUTF8(it.Key(), depth+1) || !typedMetadataValidUTF8(it.Value(), depth+1) {
+				return false
+			}
+		}
+	case reflect.Slice, reflect.Array:
+		for i := 0; i < value.Len(); i++ {
+			if !typedMetadataValidUTF8(value.Index(i), depth+1) {
+				return false
+			}
+		}
+	case reflect.Struct:
+		for i := 0; i < value.NumField(); i++ {
+			field := value.Type().Field(i)
+			if field.PkgPath == "" && field.Tag.Get("json") != "-" && !typedMetadataValidUTF8(value.Field(i), depth+1) {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func decodeTypedMetadataJSON(raw []byte, out any) error {

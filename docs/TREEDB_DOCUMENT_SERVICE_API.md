@@ -440,6 +440,8 @@ Only dotted `meta.*` paths are accepted. Identical or ancestor/descendant path
 overlaps across `set` and `unset` are invalid. Declared scalar metadata fields
 require string values and are required, so they cannot be unset. Content,
 embedding/vector, ID, and chunk-linkage mutations are outside this operation.
+Metadata strings and object keys must be valid UTF-8, including nested values
+supplied through the Go API; invalid input is rejected before publication.
 The request contains no vector input; durable format 13 and runtime publication
 preserve the existing content and scoring/vector authority. A fully admitted
 no-op creates no WAL or row/manifest publication. The explicit batch is atomic.

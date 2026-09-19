@@ -566,6 +566,50 @@ func TestTypedMetadataInvalidBatchRollback4769(t *testing.T) {
 	}
 }
 
+func TestTypedMetadataRejectsNestedInvalidUTF8BeforePublication4769(t *testing.T) {
+	_, db, col, ids := seedTypedMetadata4769(t, 1, 8)
+	defer db.Close()
+	bad := string([]byte{0xff})
+	type namedString string
+	cycle := map[string]any{}
+	cycle["self"] = cycle
+	before, err := col.Get(ids[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	seq, root := dbCommitSeqAndSystemRoot(db)
+	for name, value := range map[string]any{
+		"string":       bad,
+		"object_value": map[string]any{"name": bad},
+		"object_key":   map[string]any{bad: "value"},
+		"array":        []any{"valid", map[string]any{"nested": []any{bad}}},
+		"typed_map":    map[string]string{"name": bad},
+		"typed_slice":  []namedString{namedString(bad)},
+		"pointer":      &bad,
+		"struct":       struct{ Name string }{bad},
+		"cycle":        cycle,
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := col.UpdateTypedMetadataByID(ids, map[string]any{"meta.profile": value}, nil, metadataGeneration4769(col)); !errors.Is(err, ErrTypedMetadataInvalid) {
+				t.Fatalf("invalid nested metadata error=%v", err)
+			}
+			if gotSeq, gotRoot := dbCommitSeqAndSystemRoot(db); gotSeq != seq || gotRoot != root {
+				t.Fatal("invalid metadata advanced publication")
+			}
+			if after, err := col.Get(ids[0]); err != nil || !bytes.Equal(after, before) {
+				t.Fatalf("invalid metadata changed document: %s error=%v", after, err)
+			}
+		})
+	}
+	valid := map[string]any{"meta.profile": map[string]any{"名字": []any{"日本語", "�", nil, true, json.Number("9007199254740993")}}}
+	for _, modified := range []int{1, 0} {
+		out, err := col.UpdateTypedMetadataByID(ids, valid, nil, metadataGeneration4769(col))
+		if err != nil || out.ModifiedCount != modified {
+			t.Fatalf("valid Unicode update=%+v err=%v want modified=%d", out, err, modified)
+		}
+	}
+}
+
 func TestTypedMetadataWALRecovery4769(t *testing.T) {
 	dir, db, col, ids := seedTypedMetadata4769(t, 2, 8)
 	defer func() { db.Close() }()
