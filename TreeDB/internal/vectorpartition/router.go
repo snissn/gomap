@@ -280,10 +280,14 @@ func BuildRouterV1(partitions []RouterPartitionV1, cfg RouterConfigV1) (RouterMo
 			nodes = roots
 		}
 		if len(nodes) < 2 {
+			rootBudget := quota
+			if len(members) <= cfg.LeafSize {
+				rootBudget = 1
+			}
 			root := &routerBuildNodeV1{
 				record: RouterHierarchyNodeV1{
 					NodeID: nextNodeID, PartitionID: partition.PartitionID,
-					MemberCount: uint32(len(members)), Leaf: true, Budget: uint32(quota),
+					MemberCount: uint32(len(members)), Leaf: true, Budget: uint32(rootBudget),
 				},
 				members: members,
 				path:    []uint32{nextNodeID},

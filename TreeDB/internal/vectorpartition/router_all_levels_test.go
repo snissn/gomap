@@ -70,7 +70,7 @@ func TestRouterGlobalBudgetRetainsInternalCenters(t *testing.T) {
 
 func TestRouterGlobalBudgetDegenerateUnderfill(t *testing.T) {
 	cfg := DefaultRouterConfigV1()
-	cfg.RepresentativeBudget, cfg.LeafSize = 32, 1
+	cfg.RepresentativeBudget = 32
 	model, err := BuildRouterV1([]RouterPartitionV1{{PartitionID: 0, Vectors: []RouterVectorV1{{Ordinal: 0, Values: []float32{1, 0}}, {Ordinal: 1, Values: []float32{1, 0}}}}}, cfg)
 	if err != nil {
 		t.Fatal(err)
