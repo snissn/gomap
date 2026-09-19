@@ -725,26 +725,30 @@ func CheckedRouterScalarWorkV1(populations []int, dimensions int, cfg RouterConf
 		}
 		return left + right, true
 	}
-	splitCost := func(branch int) (uint64, bool) {
+	splitCost := func(branch int, relaxFailedSelection bool) (uint64, bool) {
 		width := uint64(branch)
-		initialization, ok := multiply(width, width+1)
+		initializationFactor := width - 1
+		iterationFactor := 2*width - 1
+		if relaxFailedSelection {
+			initializationFactor = width + 1
+			iterationFactor = 2*width + 1
+		}
+		initialization, ok := multiply(width, initializationFactor)
 		if !ok {
 			return 0, false
 		}
-		// Include a possible final scan where distinct FP32 centers have zero
-		// cosine distance and farthest-first stops before its requested width.
-		initialization /= 2 // 1 + ... + branch farthest-first distances.
-		perIteration, ok := multiply(2*width-1, uint64(cfg.MaxIterations))
+		initialization /= 2
+		perIteration, ok := multiply(iterationFactor, uint64(cfg.MaxIterations))
 		if !ok {
 			return 0, false
 		}
 		return add(initialization, perIteration) // assignment plus empty repair.
 	}
-	addSplitCosts := func(total uint64, count, branch int) (uint64, bool) {
+	addSplitCosts := func(total uint64, count, branch int, relaxFailedSelection bool) (uint64, bool) {
 		if count == 0 {
 			return total, true
 		}
-		cost, ok := splitCost(branch)
+		cost, ok := splitCost(branch, relaxFailedSelection)
 		if !ok {
 			return 0, false
 		}
@@ -758,14 +762,24 @@ func CheckedRouterScalarWorkV1(populations []int, dimensions int, cfg RouterConf
 	for i, population := range populations {
 		quota := quotas[i]
 		maxSplits := min(cfg.MaxDepth, min((quota-1)/2, max(0, population-cfg.LeafSize)))
-		maxBranch := min(cfg.BranchFactor, population)
-		terminalSelection := uint64(0)
-		if maxSplits > 0 {
-			terminalSelection = 1 // possible failed split after the last represented level.
+		maxBranch := min(cfg.BranchFactor, min(population, quota-1))
+		relaxFailedSelection := maxBranch > 2
+		if relaxFailedSelection {
+			// A full-width split has no failed selection scan. Map it to width-1;
+			// charging k*(k+1)/2 + I*(2*k+1) then also covers every narrower
+			// split that stops after a paid non-progress scan. The mapped path uses
+			// no more quota or members, and this cost remains convex.
+			maxBranch--
 		}
-		distancesPerVector := uint64(1) + terminalSelection // root medoid pass.
+		distancesPerVector := uint64(1) // root medoid pass.
+		if maxSplits > 0 {
+			distancesPerVector++ // root center selection can fail without a split.
+		}
 		for splits := 1; splits <= maxSplits; splits++ {
-			candidate := uint64(splits+1) + terminalSelection // one medoid pass per represented level.
+			candidate := uint64(splits + 1) // one medoid pass per represented level.
+			if splits < maxSplits {
+				candidate++ // possible failed split after the last represented level.
+			}
 			extraCapacity := maxBranch - 2
 			prefixExtraCapacity := population - cfg.LeafSize - splits
 			if splits == 1 {
@@ -780,7 +794,7 @@ func CheckedRouterScalarWorkV1(populations []int, dimensions int, cfg RouterConf
 			// the tighter continuation requirement on every preceding split.
 			if maxBranch == 2 {
 				var ok bool
-				candidate, ok = addSplitCosts(candidate, splits, 2)
+				candidate, ok = addSplitCosts(candidate, splits, 2, relaxFailedSelection)
 				if !ok {
 					return 0, false
 				}
@@ -788,19 +802,19 @@ func CheckedRouterScalarWorkV1(populations []int, dimensions int, cfg RouterConf
 				saturated := extraWidth / extraCapacity
 				remainder := extraWidth % extraCapacity
 				var ok bool
-				candidate, ok = addSplitCosts(candidate, saturated, maxBranch)
+				candidate, ok = addSplitCosts(candidate, saturated, maxBranch, relaxFailedSelection)
 				if !ok {
 					return 0, false
 				}
 				remaining := splits - saturated
 				if remainder > 0 {
-					candidate, ok = addSplitCosts(candidate, 1, 2+remainder)
+					candidate, ok = addSplitCosts(candidate, 1, 2+remainder, relaxFailedSelection)
 					if !ok {
 						return 0, false
 					}
 					remaining--
 				}
-				candidate, ok = addSplitCosts(candidate, remaining, 2)
+				candidate, ok = addSplitCosts(candidate, remaining, 2, relaxFailedSelection)
 				if !ok {
 					return 0, false
 				}
