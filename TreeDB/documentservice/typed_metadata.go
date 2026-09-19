@@ -127,10 +127,16 @@ func mapTypedMetadataUpdateError(err error) error {
 		return wrapServiceError(CodeRecoveryRequired, "metadata update requires database recovery", err)
 	case errors.Is(err, collections.ErrDurabilityUnavailable):
 		return wrapServiceError(CodeIndexUnavailable, "metadata update durability is unavailable", err)
-	case errors.Is(err, collections.ErrDuplicateDocumentID):
-		return wrapServiceError(CodeInvalidRequest, "metadata update contains duplicate document IDs", err)
 	case errors.Is(err, collections.ErrConcurrentMutation):
 		return wrapServiceError(CodeConflict, "metadata update conflicted with a concurrent mutation", err)
+	case errors.Is(err, collections.ErrHybridSearchStaleIndex):
+		return wrapServiceError(CodeIndexStale, "metadata update schema generation changed", err)
+	case errors.Is(err, collections.ErrHybridSearchUnsupported):
+		return wrapServiceError(CodeUnsupported, "metadata update is unsupported for this index", err)
+	case errors.Is(err, collections.ErrDuplicateDocumentID):
+		return wrapServiceError(CodeInvalidRequest, "metadata update contains duplicate document IDs", err)
+	case errors.Is(err, collections.ErrTypedMetadataInvalid):
+		return wrapServiceError(CodeInvalidRequest, "metadata update request is invalid", err)
 	default:
 		return wrapServiceError(CodeInternal, "metadata update failed", err)
 	}

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 )
 
 // This diagnostic is deliberately separate from throughput: forced GC measures
@@ -92,6 +93,55 @@ func BenchmarkTypedMinimaPublicMutation(b *testing.B) {
 		for _, mode := range []string{"json", "typed"} {
 			b.Run(operation+"/"+mode, func(b *testing.B) {
 				benchmarkTypedMinimaPublicBatch(b, 32, 3, mode, operation)
+			})
+		}
+	}
+}
+
+// Existing mutation fixture, bounded diagnostic: setup and WAL-size inspection
+// are untimed; validation, metadata planning and durable publication are timed.
+func BenchmarkTypedMinimaMetadataMutation(b *testing.B) {
+	for _, rows := range []int{1, 32, 128} {
+		for _, dims := range []int{8, 768} {
+			b.Run(fmt.Sprintf("rows%d/dims%d", rows, dims), func(b *testing.B) {
+				if b.N > 16 {
+					b.Skip("bounded metadata diagnostic: use -benchtime=10x")
+				}
+				b.StopTimer()
+				_, db, col, ids := seedTypedMetadata4769(b, rows, dims)
+				defer db.Close()
+				plan, payload, _, err := col.buildTypedMetadataPlan(ids, map[string]any{"meta.user_id": "new-0"}, nil, nil)
+				if err != nil {
+					b.Fatal(err)
+				}
+				raw, err := commitlog.EncodeCollectionTypedMetadataPayload(payload)
+				plan.close()
+				if err != nil {
+					b.Fatal(err)
+				}
+				var vectorAssets, assetBytes int64
+				restore := setColumnPhysicalAssetPreparationAfterPrepareTestHook(func(prepared ColumnPublishPreparedAssets) error {
+					assetBytes += prepared.ColumnPayloadBytes
+					for _, asset := range prepared.Assets {
+						if asset.Ref.Kind == ColumnAssetKindTCS1TypedColumnPart {
+							vectorAssets++
+						}
+					}
+					return nil
+				})
+				defer restore()
+				b.ReportAllocs()
+				b.ResetTimer()
+				b.StartTimer()
+				for i := 0; i < b.N; i++ {
+					if _, err := col.UpdateTypedMetadataByID(ids, map[string]any{"meta.user_id": fmt.Sprintf("new-%d", i%2)}, nil, metadataGeneration4769(col)); err != nil {
+						b.Fatal(err)
+					}
+				}
+				b.StopTimer()
+				b.ReportMetric(float64(len(raw)), "WAL-payload-B/op")
+				b.ReportMetric(float64(assetBytes)/float64(b.N), "row-asset-B/op")
+				b.ReportMetric(float64(vectorAssets)/float64(b.N), "vector-assets/op")
 			})
 		}
 	}

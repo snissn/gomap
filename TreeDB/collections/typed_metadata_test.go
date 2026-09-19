@@ -4,9 +4,412 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"reflect"
+	"sync/atomic"
 	"testing"
+
+	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/commitlog"
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 )
+
+func seedTypedMetadata4769(t testing.TB, rows, dims int) (string, *backenddb.DB, *Collection, [][]byte) {
+	t.Helper()
+	meta := cosineNormalizedF32V1TestMeta()
+	meta.Options.ColumnStore.Columns[0].VectorDims = dims
+	meta.VectorIndexes[0].Dimensions = dims
+	return seedTypedMetadataWithMeta4769(t, rows, dims, meta)
+}
+
+func seedTypedMetadataWithMeta4769(t testing.TB, rows, dims int, meta CollectionMeta) (string, *backenddb.DB, *Collection, [][]byte) {
+	t.Helper()
+	dir, db, col := openTypedMinimaCollectionMeta(t, meta)
+	ids, retained := make([][]byte, rows), make([][]byte, rows)
+	columns := []TypedColumnBatch{{Name: "embedding"}, {Name: "content"}, {Name: "user"}, {Name: "path"}}
+	for i := range rows {
+		ids[i] = []byte(fmt.Sprintf("metadata-%03d", i))
+		retained[i] = []byte(fmt.Sprintf(`{"id":%q,"meta":{"extra":{"flag":true}}}`, ids[i]))
+		v := make([]float32, dims)
+		v[i%dims] = 3
+		v[(i+1)%dims] = 4
+		columns[0].Float32Vectors = append(columns[0].Float32Vectors, v)
+		columns[1].Strings = append(columns[1].Strings, "immutable searchable content")
+		columns[2].Strings = append(columns[2].Strings, "old")
+		columns[3].Strings = append(columns[3].Strings, "source")
+	}
+	if _, _, err := col.InsertTypedBatchWithStats(ids, retained, columns); err != nil {
+		db.Close()
+		t.Fatal(err)
+	}
+	if err := col.Flush(); err != nil {
+		db.Close()
+		t.Fatal(err)
+	}
+	return dir, db, col, ids
+}
+
+func TestTypedMetadataNormalizedColdFoldRaceAndGC4769(t *testing.T) {
+	requireTypedGraphPublicServingTest(t)
+	meta := cosineNormalizedF32V1TestMeta()
+	meta.VectorIndexes[0].QuantizedIndexes = []QuantizedVectorIndexDefinition{{Name: "embedding.scalar_u8.legacy"}}
+	dir, db, col, ids := seedTypedMetadataWithMeta4769(t, 8, 8, meta)
+	defer func() { db.Close() }()
+	ctx := context.Background()
+	if _, err := col.RebuildVectorIndex("embedding_graph"); err != nil {
+		t.Fatal(err)
+	}
+	serving := typedGraphPublicTestOptions()
+	if err := col.EnsureColumnGraphServing(ctx, "embedding_graph", serving); err != nil {
+		t.Fatal(err)
+	}
+	// Keep a scored suffix row as well as immutable-base rows.
+	replacement := []TypedColumnBatch{{Name: "embedding", Float32Vectors: [][]float32{{0, 3, 4, 0, 0, 0, 0, 0}}}, {Name: "content", Strings: []string{"replacement content"}}, {Name: "user", Strings: []string{"old"}}, {Name: "path", Strings: []string{"source"}}}
+	if _, err := col.ReplaceTypedBatch(ids[1:2], [][]byte{[]byte(fmt.Sprintf(`{"id":%q}`, ids[1]))}, replacement); err != nil {
+		t.Fatal(err)
+	}
+	query := VectorIndexSearchOptions{IndexName: "embedding_graph", Query: []float32{3, 4, 0, 0, 0, 0, 0, 0}, QueryMode: VectorIndexQueryModeQuantizedRerank, QuantizedIndexName: "embedding.scalar_u8.legacy", QuantizedRerankCandidates: 8, TopK: 8, EfSearch: 16, StatsMode: VectorIndexSearchStatsModeProduction}
+	search := func(acl string) (VectorIndexSearchResponse, *CollectionReadView) {
+		t.Helper()
+		opts := query
+		if acl != "" {
+			opts.DeclaredScalarFilter = &HybridScalarFilter{IndexName: "user", Value: acl}
+		}
+		var buffer VectorIndexSearchBuffer
+		result, view, err := col.SearchVectorIndexWithBufferReadView(opts, &buffer)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return result, view
+	}
+	before, pinned := search("")
+	defer pinned.Close()
+	oldDocs, err := pinned.FetchDocumentsByID(ids[:2], DocumentFetchOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := col.UpdateTypedMetadataByID(ids[:2], map[string]any{"meta.user_id": "new"}, nil, metadataGeneration4769(col)); err != nil {
+		t.Fatal(err)
+	}
+	after, view := search("")
+	view.Close()
+	if !reflect.DeepEqual(before.Results, after.Results) || after.Stats.NormBytesRead != 0 || after.Stats.ColumnGraphWork.ScorePlane.ExactSuffixScoreCalls != 1 {
+		t.Fatalf("metadata changed normalized scoring: before=%+v after=%+v", before, after)
+	}
+	pinned.Close()
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db = openTypedMinimaDB(t, dir)
+	col, err = NewCollectionManager(db).OpenCollection("minima")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := col.EnsureColumnGraphServing(ctx, "embedding_graph", serving); err != nil {
+		t.Fatal(err)
+	}
+	after, view = search("")
+	view.Close()
+	if !reflect.DeepEqual(before.Results, after.Results) || col.typedGraphPublicationSnapshot().lastMetadataGeneration == 0 {
+		t.Fatal("cold metadata lost scoring or invalidation frontier")
+	}
+	allowed, held := search("new")
+	defer held.Close()
+	if len(allowed.Results) != 2 {
+		t.Fatalf("cold ACL=%+v", allowed.Results)
+	}
+	heldDocs, err := held.FetchDocumentsByID(ids[:2], DocumentFetchOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A new reference after capture cannot be installed against retired full rows.
+	err = col.foldTypedGraph(ctx, serving.Owners.Cold, serving.FoldRows, serving.CandidateOutput, func() error {
+		_, err := col.UpdateTypedMetadataByID(ids[:2], map[string]any{"meta.user_id": "raced"}, nil, metadataGeneration4769(col))
+		return err
+	})
+	if !errors.Is(err, ErrConcurrentMutation) {
+		t.Fatalf("racing fold=%v", err)
+	}
+	if err := col.FoldColumnGraphServing(ctx, "embedding_graph"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := col.ColumnAssetGC(ctx, ColumnAssetGCOptions{Detailed: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ValueLogGC(ctx, backenddb.ValueLogGCOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	stillHeld, err := held.FetchDocumentsByID(ids[:2], DocumentFetchOptions{})
+	if err != nil || !reflect.DeepEqual(heldDocs.Results, stillHeld.Results) {
+		t.Fatalf("GC changed pinned metadata: %v", err)
+	}
+	allowed, view = search("raced")
+	if len(allowed.Results) != 2 {
+		t.Fatalf("folded ACL=%+v", allowed.Results)
+	}
+	docs, err := view.FetchDocumentsByID(ids[:2], DocumentFetchOptions{})
+	view.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, row := range docs.Results {
+		var old, current struct {
+			Content   string
+			Embedding []float32
+		}
+		if err := json.Unmarshal(oldDocs.Results[i].Document, &old); err != nil {
+			t.Fatal(err)
+		}
+		if err := json.Unmarshal(row.Document, &current); err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(old, current) {
+			t.Fatal("fold changed canonical content/vector bits")
+		}
+	}
+	// Ordinary replacement and deletion must supersede metadata references.
+	if _, err := col.UpdateTypedMetadataByID(ids[:2], map[string]any{"meta.user_id": "again"}, nil, metadataGeneration4769(col)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := col.ReplaceTypedBatch(ids[:1], [][]byte{[]byte(fmt.Sprintf(`{"id":%q}`, ids[0]))}, replacement); err != nil {
+		t.Fatal(err)
+	}
+	if err := col.Delete(ids[1]); err != nil {
+		t.Fatal(err)
+	}
+	allowed, view = search("again")
+	view.Close()
+	if len(allowed.Results) != 0 {
+		t.Fatalf("superseded metadata remained visible: %+v", allowed.Results)
+	}
+}
+
+func TestTypedMetadataReplayRejectsProtectedAfterimages4769(t *testing.T) {
+	_, db, col, ids := seedTypedMetadata4769(t, 1, 8)
+	defer db.Close()
+	plan, payload, _, err := col.buildTypedMetadataPlan(ids, map[string]any{"meta.user_id": "new"}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan.close()
+	for _, field := range []string{"content", "embedding", "meta.chunk_parent", "meta.user_id"} {
+		t.Run(field, func(t *testing.T) {
+			var object map[string]any
+			if err := decodeTypedMetadataJSON(payload.Documents[0].Retained, &object); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := applyTypedMetadataPath(object, field, "forbidden", false); err != nil {
+				t.Fatal(err)
+			}
+			corrupt := payload
+			corrupt.Documents = append([]commitlog.CollectionTypedMetadataDocument(nil), payload.Documents...)
+			corrupt.Documents[0].Retained, err = json.Marshal(object)
+			if err != nil {
+				t.Fatal(err)
+			}
+			p, _, _, err := col.buildTypedMetadataPlan(ids, nil, nil, &corrupt)
+			if p != nil {
+				p.close()
+			}
+			if err == nil {
+				t.Fatal("accepted forbidden afterimage")
+			}
+		})
+	}
+}
+
+func TestTypedMetadataReplayRejectsNonColumnCollection4769(t *testing.T) {
+	dir := prepareCollectionCommandWALDir(t, CollectionMeta{Name: "ordinary"})
+	db := openCollectionCommandWALDB(t, dir)
+	defer db.Close()
+	col, err := NewCollectionManager(db).OpenCollection("ordinary")
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := commitlog.CollectionTypedMetadataPayload{Collection: "ordinary", SchemaHash: 1, Documents: []commitlog.CollectionTypedMetadataDocument{{ID: []byte("a"), Retained: []byte(`{"id":"a"}`)}}}
+	plan, _, _, err := col.buildTypedMetadataPlan([][]byte{[]byte("a")}, nil, nil, &payload)
+	if plan != nil {
+		plan.close()
+	}
+	if !errors.Is(err, ErrHybridSearchUnsupported) {
+		t.Fatalf("non-column replay=%v", err)
+	}
+}
+
+func TestTypedMetadataInvalidBatchRollback4769(t *testing.T) {
+	_, db, col, ids := seedTypedMetadata4769(t, 2, 8)
+	defer db.Close()
+	cases := []struct {
+		name  string
+		set   map[string]any
+		unset []string
+	}{
+		{"nonmeta", map[string]any{"content": "bad"}, nil},
+		{"ancestor", map[string]any{"meta.extra": map[string]any{}, "meta.extra-child": true, "meta.extra.flag": false}, nil},
+		{"overlap", map[string]any{"meta.user_id": "new"}, []string{"meta.user_id"}},
+		{"type", map[string]any{"meta.user_id": 42}, nil},
+		{"unset_required", nil, []string{"meta.user_id"}},
+		{"chunk", map[string]any{"meta.chunk_parent": "bad"}, nil},
+		{"path", map[string]any{"meta..bad": "bad"}, nil},
+		{"traverse_scalar", map[string]any{"meta.extra.flag.x": false}, nil},
+	}
+	seq, root := dbCommitSeqAndSystemRoot(db)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := col.UpdateTypedMetadataByID(ids, tc.set, tc.unset, metadataGeneration4769(col)); !errors.Is(err, ErrTypedMetadataInvalid) {
+				t.Fatalf("err=%v", err)
+			}
+			if nextSeq, nextRoot := dbCommitSeqAndSystemRoot(db); nextSeq != seq || nextRoot != root {
+				t.Fatal("rejected batch published")
+			}
+		})
+	}
+	if _, err := col.UpdateTypedMetadataByID([][]byte{ids[0], ids[0]}, map[string]any{}, nil, metadataGeneration4769(col)); !errors.Is(err, ErrDuplicateDocumentID) {
+		t.Fatalf("duplicate=%v", err)
+	}
+	if _, err := col.UpdateTypedMetadataByID(ids, map[string]any{}, nil, metadataGeneration4769(col)+1); !errors.Is(err, ErrHybridSearchStaleIndex) {
+		t.Fatalf("generation=%v", err)
+	}
+	// A later ID's incompatible residual shape cannot partially update the first ID.
+	if _, err := col.UpdateTypedMetadataByID(ids[1:], map[string]any{"meta.extra": false}, nil, metadataGeneration4769(col)); err != nil {
+		t.Fatal(err)
+	}
+	seq, root = dbCommitSeqAndSystemRoot(db)
+	if _, err := col.UpdateTypedMetadataByID(ids, map[string]any{"meta.user_id": "new", "meta.extra.flag": false}, nil, metadataGeneration4769(col)); !errors.Is(err, ErrTypedMetadataInvalid) {
+		t.Fatalf("batch=%v", err)
+	}
+	if nextSeq, nextRoot := dbCommitSeqAndSystemRoot(db); nextSeq != seq || nextRoot != root {
+		t.Fatal("partially applied rejected batch")
+	}
+	raw, err := col.Get(ids[0])
+	if err != nil || !bytes.Contains(raw, []byte(`"user_id":"old"`)) {
+		t.Fatalf("old first=%s err=%v", raw, err)
+	}
+}
+
+func TestTypedMetadataWALRecovery4769(t *testing.T) {
+	dir, db, col, ids := seedTypedMetadata4769(t, 2, 8)
+	defer func() { db.Close() }()
+	before, err := col.Get(ids[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	seq, root := dbCommitSeqAndSystemRoot(db)
+	preIntent := errors.New("metadata asset preparation failure")
+	restorePrepare := setColumnPhysicalAssetPreparationAfterPrepareTestHook(func(ColumnPublishPreparedAssets) error { return preIntent })
+	_, err = col.UpdateTypedMetadataByID(ids, map[string]any{"meta.user_id": "not-published"}, nil, metadataGeneration4769(col))
+	restorePrepare()
+	if !errors.Is(err, preIntent) || errors.Is(err, ErrCommitAmbiguous) {
+		t.Fatalf("pre-intent failure=%v", err)
+	}
+	if nextSeq, nextRoot := dbCommitSeqAndSystemRoot(db); nextSeq != seq || nextRoot != root {
+		t.Fatal("pre-intent failure changed authority")
+	}
+	injected := errors.New("metadata after durable intent failure")
+	var fired atomic.Bool
+	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+		if event.Resource == durabilitycut.ResourceCommandWAL && event.Point == durabilitycut.AfterDependencyFileSync && fired.CompareAndSwap(false, true) {
+			return injected
+		}
+		return nil
+	})
+	defer func() {
+		if restore != nil {
+			restore()
+		}
+	}()
+	_, err = col.UpdateTypedMetadataByID(ids, map[string]any{"meta.user_id": "replayed", "meta.extra.flag": false}, nil, metadataGeneration4769(col))
+	if !errors.Is(err, ErrCommitAmbiguous) || !errors.Is(err, injected) {
+		t.Fatalf("post-WAL fault=%v", err)
+	}
+	restore()
+	restore = nil
+	if nextSeq, nextRoot := dbCommitSeqAndSystemRoot(db); nextSeq != seq || nextRoot != root {
+		t.Fatal("failed output changed authority")
+	}
+	if _, err := col.UpdateTypedMetadataByID(ids, map[string]any{}, nil, metadataGeneration4769(col)); !errors.Is(err, backenddb.ErrRecoveryRequired) {
+		t.Fatalf("no-op bypassed recovery fence: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db = openTypedMinimaDB(t, dir)
+	col, err = NewCollectionManager(db).OpenCollection("minima")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var oldDoc struct {
+		Embedding []float32
+		Content   string
+	}
+	if err := json.Unmarshal(before, &oldDoc); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range ids {
+		raw, err := col.Get(id)
+		if err != nil || !bytes.Contains(raw, []byte(`"user_id":"replayed"`)) {
+			t.Fatalf("replay=%s err=%v", raw, err)
+		}
+	}
+	raw, err := col.Get(ids[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		Embedding []float32
+		Content   string
+	}
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, oldDoc) {
+		t.Fatal("replay changed vector/content")
+	}
+}
+
+func TestTypedMetadataDimensionIndependentPayload4769(t *testing.T) {
+	for _, rows := range []int{1, 32, 128} {
+		var want int
+		for _, dims := range []int{8, 768} {
+			t.Run(fmt.Sprintf("rows%d/dims%d", rows, dims), func(t *testing.T) {
+				_, db, col, ids := seedTypedMetadata4769(t, rows, dims)
+				defer db.Close()
+				plan, payload, result, err := col.buildTypedMetadataPlan(ids, map[string]any{"meta.user_id": "changed"}, nil, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer plan.close()
+				if result.ModifiedCount != rows {
+					t.Fatalf("modified=%d", result.ModifiedCount)
+				}
+				raw, err := commitlog.EncodeCollectionTypedMetadataPayload(payload)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if dims == 8 {
+					want = len(raw)
+				} else if len(raw) != want {
+					t.Fatalf("WAL payload grew with dimension: %d vs %d", len(raw), want)
+				}
+				for _, doc := range plan.metadataDocuments {
+					if doc.preserved == nil {
+						t.Fatal("missing preserved authority")
+					}
+					for _, value := range doc.declaredValues {
+						if value.Float32Vector != nil || value.DenseNumericVector != nil {
+							t.Fatal("metadata plan copied a vector")
+						}
+					}
+				}
+				t.Logf("rows=%d dims=%d WAL_payload_B=%d", rows, dims, len(raw))
+				if _, err := col.UpdateTypedMetadataByID(ids, map[string]any{"meta.user_id": "changed"}, nil, metadataGeneration4769(col)); err != nil {
+					t.Fatal(err)
+				}
+			})
+		}
+	}
+}
 
 func TestTypedMetadataBaseSuffixServingAndFold4769(t *testing.T) {
 	requireTypedGraphPublicServingTest(t)

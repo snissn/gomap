@@ -244,6 +244,9 @@ func (c *Collection) buildTypedMetadataPlan(ids [][]byte, set map[string]any, un
 	plan.baseUserRoot, plan.baseSystemRoot, plan.baseCommitSeq = snapshotUserRoot(plan.snap), snapshotSystemRoot(plan.snap), snapshotCommitSeq(plan.snap)
 	plan.baseRootIDs = make(map[string]uint64)
 	plan.results = make([]UpdateBatchResult, len(ids))
+	if plan.meta.Options.ColumnStore == nil {
+		return nil, payload, result, fmt.Errorf("%w: metadata update requires a typed column schema", ErrHybridSearchUnsupported)
+	}
 	cfg := *plan.meta.Options.ColumnStore
 	if err := validateTypedProjectionMeta(plan.meta, &trustedFloat32Projection{columns: cfg.Columns, schemaHash: cfg.SchemaHash}); err != nil {
 		return nil, payload, result, err
@@ -358,6 +361,9 @@ func (c *Collection) buildTypedMetadataPlan(ids [][]byte, set map[string]any, un
 				object["meta"] = oldMeta
 			}
 			metadataChanged = !reflect.DeepEqual(object, after)
+			if err := validateTypedMetadataReplayChanges(plan.meta, object, after, oldValues, columns, d.Values); err != nil {
+				return nil, payload, result, err
+			}
 			object = after
 			for j, k := range columns {
 				newValues[k] = columnDeclaredValue{Type: ColumnStoreValueString, Present: true, String: d.Values[j]}
@@ -501,6 +507,55 @@ func (c *Collection) buildTypedMetadataPlan(ids [][]byte, set map[string]any, un
 		}
 	}
 	return plan, payload, result, nil
+}
+
+// The wire codec validates bytes; this layer checks the after-image against
+// the preceding schema and row. Recovery cannot use format 13 to rewrite a
+// protected metadata/text/linkage field that the public mutation would reject.
+func validateTypedMetadataReplayChanges(meta CollectionMeta, before, after map[string]any, oldValues []columnDeclaredValue, columns []int, values []string) error {
+	set := make(map[string]any)
+	var unset []string
+	var diff func(string, any, bool, any, bool)
+	diff = func(path string, old any, oldExists bool, next any, nextExists bool) {
+		if oldExists == nextExists && reflect.DeepEqual(old, next) {
+			return
+		}
+		oldMap, oldObject := old.(map[string]any)
+		nextMap, nextObject := next.(map[string]any)
+		if (!oldExists || oldObject) && nextObject {
+			for key, value := range oldMap {
+				n, ok := nextMap[key]
+				diff(path+"."+key, value, true, n, ok)
+			}
+			for key, value := range nextMap {
+				if _, ok := oldMap[key]; !ok {
+					diff(path+"."+key, nil, false, value, true)
+				}
+			}
+			return
+		}
+		if nextExists {
+			set[path] = next
+		} else {
+			unset = append(unset, path)
+		}
+	}
+	old, oldExists := before["meta"]
+	next, nextExists := after["meta"]
+	diff("meta", old, oldExists, next, nextExists)
+	for i, j := range columns {
+		if oldValues[j].String != values[i] {
+			set[meta.Options.ColumnStore.Columns[j].Path] = values[i]
+		}
+	}
+	var generation uint64
+	for _, def := range meta.VectorIndexes {
+		generation = max(generation, def.SchemaGeneration)
+	}
+	for _, def := range meta.TextIndexes {
+		generation = max(generation, def.SchemaGeneration)
+	}
+	return validateTypedMetadataMutation(meta, set, unset, max(generation, 1))
 }
 
 func applyTypedMetadataPath(object map[string]any, path string, value any, unset bool) (bool, error) {

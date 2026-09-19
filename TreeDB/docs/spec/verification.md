@@ -2336,6 +2336,20 @@ and absence of vector-dimension-dependent bytes. Collection tests own atomic
 old-or-new replay/publication, no-op, missing-ID, repeated-update, reopen/fold,
 and preserved scoring/vector authority.
 
+`TestTypedMetadataNormalizedColdFoldRaceAndGC4769` covers normalized SQ8 scoring
+across base/suffix metadata updates, cold reopen, racing fold rejection/retry,
+column/value-log GC, pinned old metadata, and subsequent replacement/deletion.
+`TestTypedMetadataWALRecovery4769` injects a durable-intent failure and verifies
+the recovery fence and replay. Invalid-batch and protected-afterimage tests
+reject partial/prohibited updates. `TestTypedMetadataDimensionIndependentPayload4769`
+compares batches 1/32/128 at 8/768 dimensions without vector-bearing plan values.
+
+`BenchmarkTypedMinimaMetadataMutation` and `BenchmarkServiceTypedMetadataMutation`
+measure core and service admission/publication separately on the existing typed
+fixtures, including WAL payload, row assets and request JSON bytes. These are
+bounded local diagnostics (`-benchtime=10x -count=3`), not serving-throughput
+qualification. Setup/ingestion is untimed; no new benchmark driver is required.
+
 `TestTypedMetadataUpdatePublicLifecycle` exercises the public service shape and
 exact matched/modified counts without vector input.
 `TestTypedMetadataUpdateGoldenBoundsAndRegistry` pins command 68/v1, the bounded

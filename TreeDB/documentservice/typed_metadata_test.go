@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -12,6 +13,58 @@ import (
 	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
+
+// Same bounded service fixture as source replacement. Transport setup is not
+// timed; service validation, collection planning and durable publication are.
+func BenchmarkServiceTypedMetadataMutation(b *testing.B) {
+	for _, rows := range []int{1, 32, 128} {
+		for _, dims := range []int{8, 768} {
+			b.Run(fmt.Sprintf("rows%d/dims%d", rows, dims), func(b *testing.B) {
+				if b.N > 16 {
+					b.Skip("bounded metadata diagnostic: use -benchtime=10x")
+				}
+				svc, db := newTestService(b)
+				defer db.Close()
+				defer svc.Close()
+				ctx := context.Background()
+				info, err := svc.CreateIndex(ctx, CreateIndexRequest{Name: "metadata-cost", Dimension: dims, TypedInput: true, VectorIndexOptions: &BenchmarkVectorIndexOptions{Strategy: collections.VectorIndexStrategyColumnGraph, Representation: collections.VectorIndexRepresentationCosineNormalizedF32V1}, ScalarFields: []ScalarFieldDeclaration{{Field: "meta.acl", ValueType: ScalarFieldString}}})
+				if err != nil {
+					b.Fatal(err)
+				}
+				ids, docs := make([]string, rows), make([]Document, rows)
+				for i := range ids {
+					ids[i] = fmt.Sprintf("metadata-%03d", i)
+					v := make([]float32, dims)
+					v[i%dims] = 3
+					v[(i+1)%dims] = 4
+					docs[i] = Document{ID: ids[i], Content: "immutable searchable content", Embedding: v, Meta: map[string]any{"acl": "old"}}
+				}
+				if _, err := svc.UpsertDocuments(ctx, info.Name, UpsertDocumentsRequest{ExpectedGeneration: info.Generation, Documents: docs, DeferVectorIndexRebuild: true}); err != nil {
+					b.Fatal(err)
+				}
+				requests := []UpdateMetadataByIDRequest{{ExpectedGeneration: info.Generation, IDs: ids, Set: map[string]any{"meta.acl": "new-0"}, Unset: []string{}}, {ExpectedGeneration: info.Generation, IDs: ids, Set: map[string]any{"meta.acl": "new-1"}, Unset: []string{}}}
+				// Drain buffered ingestion before measuring the mutation boundary.
+				if _, err := svc.UpdateMetadataByID(ctx, info.Name, requests[1]); err != nil {
+					b.Fatal(err)
+				}
+				wire, err := json.Marshal(requests[0])
+				if err != nil {
+					b.Fatal(err)
+				}
+				b.ReportAllocs()
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					out, err := svc.UpdateMetadataByID(ctx, info.Name, requests[i%2])
+					if err != nil || out.ModifiedCount != rows {
+						b.Fatalf("out=%+v err=%v", out, err)
+					}
+				}
+				b.StopTimer()
+				b.ReportMetric(float64(len(wire)), "request-json-B/op")
+			})
+		}
+	}
+}
 
 func TestTypedMetadataUpdatePublicLifecycle(t *testing.T) {
 	svc, db := newTestService(t)
@@ -54,6 +107,10 @@ func TestTypedMetadataUpdatePublicLifecycle(t *testing.T) {
 	if err != nil || noop.MatchedCount != 1 || noop.ModifiedCount != 0 {
 		t.Fatalf("noop=%+v err=%v", noop, err)
 	}
+	_, err = svc.UpdateMetadataByID(ctx, info.Name, UpdateMetadataByIDRequest{ExpectedGeneration: info.Generation, IDs: []string{"a"}, Set: map[string]any{"meta.chunk_parent": "immutable"}, Unset: []string{}})
+	if ErrorCodeOf(err) != CodeInvalidRequest || !errors.Is(err, collections.ErrTypedMetadataInvalid) {
+		t.Fatalf("reserved metadata err=%v code=%s", err, ErrorCodeOf(err))
+	}
 }
 
 func TestTypedMetadataUpdateValidationAndHTTPUnknownKeys(t *testing.T) {
@@ -94,11 +151,19 @@ func TestTypedMetadataUpdateOutcomeErrorsRemainStructured(t *testing.T) {
 		{collections.ErrRecoveryRequired, CodeRecoveryRequired},
 		{backenddb.ErrRecoveryRequired, CodeRecoveryRequired},
 		{collections.ErrDurabilityUnavailable, CodeIndexUnavailable},
+		{collections.ErrConcurrentMutation, CodeConflict},
+		{collections.ErrHybridSearchStaleIndex, CodeIndexStale},
+		{collections.ErrHybridSearchUnsupported, CodeUnsupported},
 		{collections.ErrDuplicateDocumentID, CodeInvalidRequest},
+		{collections.ErrTypedMetadataInvalid, CodeInvalidRequest},
 	} {
 		mapped := mapTypedMetadataUpdateError(errors.Join(tc.err, errors.New("detail")))
 		if ErrorCodeOf(mapped) != tc.code || !errors.Is(mapped, tc.err) {
 			t.Fatalf("mapped=%v code=%s want=%s", mapped, ErrorCodeOf(mapped), tc.code)
 		}
+	}
+	priority := mapTypedMetadataUpdateError(errors.Join(collections.ErrRecoveryRequired, collections.ErrHybridSearchStaleIndex))
+	if ErrorCodeOf(priority) != CodeRecoveryRequired {
+		t.Fatalf("priority=%v code=%s", priority, ErrorCodeOf(priority))
 	}
 }
