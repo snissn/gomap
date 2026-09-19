@@ -2327,3 +2327,19 @@ HTTP/native request, fail-closed capability use, response counts, and structured
 ambiguous/recovery errors. `BenchmarkTypedSourceReplacement` and
 `BenchmarkTypedUpsertDecode` remain the bounded core/decoder performance gates;
 no separate application harness is introduced.
+
+## Typed metadata-only update (#4769)
+
+`TestCollectionTypedMetadataPayloadGoldenRoundTrip` and its corruption suite pin
+format 13's canonical metadata after-images, owned decoding, truncation/bounds,
+and absence of vector-dimension-dependent bytes. Collection tests own atomic
+old-or-new replay/publication, no-op, missing-ID, repeated-update, reopen/fold,
+and preserved scoring/vector authority.
+
+`TestTypedMetadataUpdatePublicLifecycle` exercises the public service shape and
+exact matched/modified counts without vector input.
+`TestTypedMetadataUpdateGoldenBoundsAndRegistry` pins command 68/v1, the bounded
+strict JSON request, sections 142/143, independent capability advertisement,
+and LocalOnly deterministic-entry rejection. Python unit/integration tests pin
+one HTTP or negotiated native request, no fallback, no vector carrier,
+structured ambiguous/recovery errors, and unchanged content/vector retrieval.

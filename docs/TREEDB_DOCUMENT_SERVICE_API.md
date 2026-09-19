@@ -416,6 +416,43 @@ This operation maps to one `ReplaceTypedSourceByID` publication. A
 `commit_ambiguous` response may already be visible or recoverable and must not be
 blindly retried; `recovery_required` requires reopening/recovery first.
 
+## Update metadata for explicit IDs
+
+```http
+POST /v1/indexes/{index}/documents/update_metadata_by_id
+```
+
+```json
+{
+  "expected_generation": 1,
+  "ids": ["doc-1", "missing"],
+  "set": {"meta.acl": "team-a", "meta.attributes.rank": 2},
+  "unset": ["meta.obsolete"]
+}
+```
+
+`expected_generation` is mandatory and refers to the persisted vector/text
+schema generation, not a document revision. IDs must be non-empty and unique.
+Missing IDs are skipped: `matched_count` reports existing IDs and
+`modified_count` reports rows whose metadata actually changed.
+
+Only dotted `meta.*` paths are accepted. Identical or ancestor/descendant path
+overlaps across `set` and `unset` are invalid. Declared scalar metadata fields
+require string values and are required, so they cannot be unset. Content,
+embedding/vector, ID, and chunk-linkage mutations are outside this operation.
+The request contains no vector input; durable format 13 and runtime publication
+preserve the existing content and scoring/vector authority. A fully admitted
+no-op creates no WAL or row/manifest publication. The explicit batch is atomic.
+
+Native clients negotiate the independent local-only command 68/v1 capability
+and fail closed without an HTTP retry or fallback. `commit_ambiguous` and
+`recovery_required` retain the same non-retry outcome semantics as source
+replacement.
+
+This is a pre-alpha format/API addition. Older binaries do not understand
+command 68 or durable payload format 13; rebuild experimental database
+directories rather than expecting migration support.
+
 ## Delete documents
 
 Delete by ID:

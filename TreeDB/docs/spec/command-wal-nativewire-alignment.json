@@ -127,6 +127,18 @@
       "notes": "Explicit typed source replacement uses one local atomic source command-WAL frame and existing replay authority. Positive live rows use typed format 12; delete-only uses existing format 10. The native command is local-only and has no replicated payload equivalence."
     },
     {
+      "nativewire_command": "CommandTypedMetadataUpdate",
+      "nativewire_fixture": "",
+      "nativewire_fixture_sha256": "",
+      "command_wal_kind": "CollectionUpdateBatchByID (typed metadata format 13)",
+      "command_wal_payload_format": "CollectionTypedMetadataByIDV1 (format 13)",
+      "local_fixture": "",
+      "local_fixture_sha256": "",
+      "support_matrix_status": "WAL-supported",
+      "relationship": "local_only_mutation_v1",
+      "notes": "Explicit typed metadata update uses one local partial command-WAL frame and replay authority. The durable payload contains metadata after-images and no vectors, content, callbacks, or physical coordinates. The native command is local-only and has no replicated payload equivalence."
+    },
+    {
       "nativewire_command": "CommandDeleteBatch",
       "nativewire_fixture": "TreeDB/internal/nativewire/testdata/v1/delete_batch_entry.hex",
       "nativewire_fixture_sha256": "0c371815884ce5959869143ed5168cd477ab9aee276825447b7f9636961608c6",

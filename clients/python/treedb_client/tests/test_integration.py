@@ -469,6 +469,43 @@ class TreeDBClientIntegrationTests(unittest.TestCase):
                 final.stop()
 
     @unittest.skipUnless(sys.platform.startswith("linux"), "selected serving fixture requires Linux namespace authority and mmap")
+    def test_typed_metadata_update_without_vector_roundtrip(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="treedb_metadata_update_") as data_dir:
+            service = TreeDBServiceProcess(_support.REPO_ROOT, data_dir, native=True)
+            try:
+                service.start()
+                with closing(TreeDBClient(service.base_url, timeout=10)) as control:
+                    info = control.ensure_index(
+                        "metadata", 2, typed_input=True,
+                        scalar_fields=[{"field": "meta.acl", "value_type": "string"}],
+                        vector_index_options={"strategy": "column_graph"},
+                    )
+                    original = Document(
+                        id="a", content="unchanged", embedding=[0.25, 0.75],
+                        meta={"acl": "old", "residual": {"keep": True}},
+                    )
+                    with closing(TreeDBClient(service.base_url, timeout=10, native_address=service.native_addr)) as native:
+                        native.upsert_documents("metadata", [original], index_info=info)
+                        result = native.update_metadata_by_id(
+                            "metadata", ["a", "missing"],
+                            {"meta.acl": "new", "meta.residual.changed": 1}, [],
+                            expected_generation=info.generation, index_info=info,
+                        )
+                        self.assertEqual((result.matched_count, result.modified_count), (1, 1))
+                        document = native.get_many("metadata", ["a"], index_info=info)[0]
+                        self.assertEqual(document.content, "unchanged")
+                        self.assertEqual(document.embedding, [0.25, 0.75])
+                        self.assertEqual(document.meta["acl"], "new")
+                        self.assertEqual(document.meta["residual"], {"keep": True, "changed": 1})
+                        noop = native.update_metadata_by_id(
+                            "metadata", ["a"], {"meta.acl": "new"}, [],
+                            expected_generation=info.generation, index_info=info,
+                        )
+                        self.assertEqual((noop.matched_count, noop.modified_count), (1, 0))
+            finally:
+                service.stop()
+
+    @unittest.skipUnless(sys.platform.startswith("linux"), "selected serving fixture requires Linux namespace authority and mmap")
     def test_normalized_v4_column_graph_public_clients(self) -> None:
         """Cross the 4,096 cutoff through real native-v4 and HTTP clients."""
         with tempfile.TemporaryDirectory(prefix="treedb_quantized_client_") as data_dir:

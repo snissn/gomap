@@ -113,6 +113,17 @@ validated no-op. Missing capability or mismatched typed `IndexInfo` fails closed
 without HTTP fallback. `CommitAmbiguousError` and `RecoveryRequiredError` are
 non-retry signals unless the caller first establishes the stored outcome.
 
+`update_metadata_by_id(index, ids, set, unset,
+expected_generation=info.generation, index_info=info)` changes only explicit
+`meta.*` paths on existing typed rows. Missing IDs are skipped and the response
+returns exact `matched_count`/`modified_count`. It accepts no vector or content
+argument; unchanged scoring/content authority is preserved by the partial
+metadata WAL/publication path. Declared scalar metadata values must be strings
+and cannot be unset, paths cannot overlap, and the expected schema generation
+is mandatory. Native transport uses the independent local-only 68/v1
+`typed_metadata_update_versions` capability and fails closed without retry or
+HTTP fallback; HTTP uses one atomic `update_metadata_by_id` request.
+
 Native general delete/filter-delete remain unsupported; use an explicit HTTP
 control client for those operations. Other
 existing HTTP APIs retain their existing transport. There is no native request

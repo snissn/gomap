@@ -81,6 +81,7 @@ func AllCommandRowsV1() []CommandRowV1 {
 		nativewire.CommandDenseVectorSearch,
 		nativewire.CommandTypedDocumentUpsert,
 		nativewire.CommandTypedSourceReplace,
+		nativewire.CommandTypedMetadataUpdate,
 	}
 	rows := make([]CommandRowV1, 0, len(ids))
 	for _, id := range ids {
@@ -110,6 +111,7 @@ var commandRowsV1 = map[nativewire.CommandID]CommandRowV1{
 
 	nativewire.CommandTypedDocumentUpsert: rejectedRow(nativewire.CommandTypedDocumentUpsert, "CommandTypedDocumentUpsert", "typed_document_upsert", "WAL-supported", "CollectionReplaceSourceByID (typed format 12)", "local_only_mutation_v1", "typed upsert has a local atomic command-WAL/replay contract but no replicated deterministic-entry contract"),
 	nativewire.CommandTypedSourceReplace:  rejectedRow(nativewire.CommandTypedSourceReplace, "CommandTypedSourceReplace", "typed_source_replace", "WAL-supported", "CollectionReplaceSourceByID (typed format 12 or delete-only format 10)", "local_only_mutation_v1", "typed source replacement has a local atomic command-WAL/replay contract but no replicated deterministic-entry contract"),
+	nativewire.CommandTypedMetadataUpdate: rejectedRow(nativewire.CommandTypedMetadataUpdate, "CommandTypedMetadataUpdate", "typed_metadata_update", "WAL-supported", "CollectionUpdateBatchByID (typed metadata format 13)", "local_only_mutation_v1", "typed metadata update has a local partial command-WAL/replay contract but no replicated deterministic-entry contract"),
 
 	nativewire.CommandFlushCollection: rejectedRow(nativewire.CommandFlushCollection, "CommandFlushCollection", "flush_collection", "WAL-supported", "local durability barrier", "local_only_barrier_v1", "local durability barriers are not replicated command identity"),
 	nativewire.CommandFlushAll:        rejectedRow(nativewire.CommandFlushAll, "CommandFlushAll", "flush_all", "WAL-supported", "local durability barrier", "local_only_barrier_v1", "local durability barriers are not replicated command identity"),

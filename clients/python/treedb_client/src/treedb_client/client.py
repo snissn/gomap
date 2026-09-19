@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import copy
 import http.client
 import json
 import math
@@ -49,6 +50,7 @@ from .models import (
     ReplaceSourceByIDResponse,
     ScalarFieldDeclaration,
     ScalarFieldDeclarationLike,
+    UpdateMetadataByIDResponse,
     UpsertDocumentsResponse,
 )
 
@@ -350,6 +352,75 @@ class TreeDBClient:
             raise TreeDBProtocolError("source replacement response index/generation mismatch")
         if response.deleted_count > len(names) or response.inserted_count != len(live):
             raise TreeDBProtocolError("source replacement response count mismatch")
+        return response
+
+    def update_metadata_by_id(
+        self,
+        index: str,
+        ids: Sequence[str],
+        set: Mapping[str, Any],
+        unset: Sequence[str],
+        *,
+        expected_generation: int,
+        index_info: Optional[IndexInfo] = None,
+    ) -> UpdateMetadataByIDResponse:
+        """Atomically update metadata on existing explicit document IDs."""
+
+        if expected_generation is None:
+            raise InvalidRequestError("invalid_request", "expected_generation must be a positive integer")
+        _validate_expected_generation(expected_generation)
+        names = _list_of_strings(ids, "ids")
+        if not names:
+            raise InvalidRequestError("invalid_request", "ids must not be empty")
+        if any(not name or name != name.strip() for name in names):
+            raise InvalidRequestError("invalid_request", "ids must contain non-empty unpadded strings")
+        if len(dict.fromkeys(names)) != len(names):
+            raise InvalidRequestError("invalid_request", "ids contains duplicate IDs")
+        try:
+            for name in names:
+                name.encode("utf-8", errors="strict")
+        except UnicodeError as exc:
+            raise InvalidRequestError("invalid_request", "ids must be valid UTF-8") from exc
+        if not isinstance(set, Mapping):
+            raise InvalidRequestError("invalid_request", "set must be a mapping")
+        set_values = copy.deepcopy(dict(set))
+        unset_paths = _list_of_strings(unset, "unset")
+        _validate_metadata_update_paths(set_values, unset_paths)
+        try:
+            json.dumps(set_values, allow_nan=False, separators=(",", ":"))
+        except (TypeError, ValueError) as exc:
+            raise InvalidRequestError("invalid_request", "set values must be JSON-compatible") from exc
+
+        if self._native is not None:
+            from ._native import _section, _typed_metadata_update_request, _typed_metadata_update_response, _uint
+            if (index_info is None or index_info.name != index or index_info.extra.get("typed_input") is not True
+                    or index_info.vector_strategy != "column_graph" or index_info.generation != expected_generation):
+                raise TreeDBConfigError("native typed metadata update requires matching typed IndexInfo and generation")
+            sections = _typed_metadata_update_request(index, names, set_values, unset_paths, expected_generation)
+            sections += _section(4, _uint(time.time_ns() + int(self.timeout * 1e9)))
+            try:
+                body = self._native.command(68, 1, sections, "typed_metadata_update_versions")
+            except TreeDBProtocolError as exc:
+                if exc.native_error_code == 23:
+                    raise CommitAmbiguousError("commit_ambiguous", str(exc)) from exc
+                if exc.native_error_code == 18:
+                    raise RecoveryRequiredError("recovery_required", str(exc)) from exc
+                raise
+            matched, modified = _typed_metadata_update_response(body, expected_generation, len(names))
+            return UpdateMetadataByIDResponse(index=index_info, matched_count=matched, modified_count=modified)
+
+        request = {
+            "expected_generation": expected_generation,
+            "ids": names,
+            "set": set_values,
+            "unset": unset_paths,
+        }
+        payload = self._request("POST", self._index_path(index, "documents", "update_metadata_by_id"), request)
+        response = _parse_response("metadata update response", UpdateMetadataByIDResponse.from_dict, payload)
+        if response.index.name != index or response.index.generation != expected_generation:
+            raise TreeDBProtocolError("metadata update response index/generation mismatch")
+        if response.matched_count > len(names):
+            raise TreeDBProtocolError("metadata update response count mismatch")
         return response
 
     def delete_documents(
@@ -1179,6 +1250,20 @@ def _validate_expected_generation(expected_generation: Optional[int]) -> None:
     if (isinstance(expected_generation, bool) or not isinstance(expected_generation, int)
             or expected_generation <= 0 or expected_generation >= 1 << 64):
         raise InvalidRequestError("invalid_request", "expected_generation must be a positive integer")
+
+
+def _validate_metadata_update_paths(set_values: Mapping[str, Any], unset: Sequence[str]) -> None:
+    paths: list[str] = []
+    for path in [*set_values.keys(), *unset]:
+        if not isinstance(path, str) or not path.startswith("meta.") or any(not part for part in path[5:].split(".")):
+            raise InvalidRequestError("invalid_request", "metadata update paths must be dotted meta.* strings")
+        try:
+            path.encode("utf-8", errors="strict")
+        except UnicodeError as exc:
+            raise InvalidRequestError("invalid_request", "metadata update paths must be valid UTF-8") from exc
+        if any(path == previous or path.startswith(previous + ".") or previous.startswith(path + ".") for previous in paths):
+            raise InvalidRequestError("invalid_request", "metadata update paths must not overlap")
+        paths.append(path)
 
 
 def _add_expected_generation(request: dict[str, Any], expected_generation: Optional[int]) -> None:

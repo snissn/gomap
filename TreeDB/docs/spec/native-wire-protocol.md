@@ -1132,6 +1132,27 @@ generation, deleted count, and inserted count. Deleted count is the number of
 previously present delete IDs, including rows reinserted by overlap; inserted
 count equals the accepted live row count. No IDs are echoed.
 
+### Typed metadata update (68/v1, LocalOnly)
+
+`typed_metadata_update` is the capability-negotiated metadata-only mutation.
+Hello advertises `typed_metadata_update_versions=1` only for a configured
+standalone document service. Cluster submission and deterministic-entry
+encoding reject it; clients fail closed without HTTP fallback.
+
+Required sections are deadline (4) and `typed_metadata_update_request` (142).
+Section 142 is one bounded UTF-8 JSON object with exactly `index`, positive
+`expected_generation`, non-empty unique `ids`, `set`, and `unset`. Unknown
+fields, trailing JSON, non-`meta.*` paths, duplicate or ancestor/descendant path
+conflicts, non-JSON values, and protected or invalid schema paths fail closed.
+Declared metadata scalars require string values and cannot be unset. Missing IDs
+are skipped. The request has no vector or content field.
+
+Response section `typed_metadata_update_response` (143) contains three
+uvarints: generation, matched count, and modified count. Modified is at most
+matched, and matched is at most the request ID count. A fully admitted no-op
+returns matched/zero without a WAL or publication advance. Commit-ambiguous and
+recovery-required errors remain structured non-retry outcomes.
+
 ## 11. Typed Scalars
 
 Index and query scalar codes:

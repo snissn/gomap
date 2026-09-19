@@ -712,6 +712,13 @@ func v1CommandSchemas() []CommandSchema {
 			},
 		},
 		{
+			ID: CommandTypedMetadataUpdate, Version: 1, Name: "typed_metadata_update", Kind: CommandKindMutation, LocalOnly: true,
+			Sections: []SectionRule{
+				{ID: SectionDeadline, Name: "deadline", Required: true},
+				{ID: SectionTypedMetadataUpdateRequest, Name: "typed_metadata_update_request", Required: true},
+			},
+		},
+		{
 			ID:        CommandVectorStatus,
 			Version:   1,
 			Name:      "vector_status",

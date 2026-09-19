@@ -621,6 +621,36 @@ class TreeDBClientTests(unittest.TestCase):
             with self.subTest(generation=generation), self.assertRaises(InvalidRequestError):
                 TreeDBClient("http://localhost:1").replace_source_by_id("docs", [], [], expected_generation=generation)
 
+    def test_update_metadata_by_id_sends_no_vectors_and_validates_paths(self) -> None:
+        route = "/v1/indexes/docs/documents/update_metadata_by_id"
+        response = {"index": SAMPLE_INDEX, "matched_count": 1, "modified_count": 1}
+        with FixtureServer({("POST", route): (200, response, 0)}) as server:
+            client = TreeDBClient(server.base_url, timeout=1)
+            result = client.update_metadata_by_id(
+                "docs", ["a", "missing"], {"meta.acl": "new", "meta.rank": 2}, ["meta.old"], expected_generation=1
+            )
+            self.assertEqual((result.matched_count, result.modified_count), (1, 1))
+            body = json_body(server.records[0])
+            self.assertEqual(body["ids"], ["a", "missing"])
+            self.assertNotIn("embedding", json.dumps(body))
+        invalid = (
+            (["a", "a"], {"meta.x": 1}, []),
+            (["a"], {"content": "x"}, []),
+            (["a"], {"meta.x": 1}, ["meta.x"]),
+            (["a"], {"meta.x": 1}, ["meta.x.child"]),
+            ([], {"meta.x": 1}, []),
+        )
+        for ids, set_values, unset in invalid:
+            with self.subTest(ids=ids, set=set_values, unset=unset), self.assertRaises(InvalidRequestError):
+                TreeDBClient("http://localhost:1").update_metadata_by_id(
+                    "docs", ids, set_values, unset, expected_generation=1
+                )
+        for generation in (None, 0, -1, True, 1 << 64):
+            with self.subTest(generation=generation), self.assertRaises(InvalidRequestError):
+                TreeDBClient("http://localhost:1").update_metadata_by_id(
+                    "docs", ["a"], {}, [], expected_generation=generation
+                )
+
     def test_count_filter_search_and_delete_by_filter_parse_responses(self) -> None:
         routes = {
             ("POST", "/v1/indexes/docs/documents/count"): (200, {"index": SAMPLE_INDEX, "count": 2}, 0),

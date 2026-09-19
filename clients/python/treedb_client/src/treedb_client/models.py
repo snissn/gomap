@@ -640,6 +640,23 @@ class ReplaceSourceByIDResponse:
 
 
 @dataclass(frozen=True)
+class UpdateMetadataByIDResponse:
+    index: IndexInfo
+    matched_count: int
+    modified_count: int
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> "UpdateMetadataByIDResponse":
+        data = _as_mapping(data, "metadata update response")
+        _reject_unknown(data, ["index", "matched_count", "modified_count"], "metadata update response")
+        matched = _as_int(data["matched_count"], "matched_count")
+        modified = _as_int(data["modified_count"], "modified_count")
+        if matched < 0 or modified < 0 or modified > matched:
+            raise ValueError("metadata update counts are inconsistent")
+        return cls(index=IndexInfo.from_dict(data["index"]), matched_count=matched, modified_count=modified)
+
+
+@dataclass(frozen=True)
 class DeleteDocumentsResponse:
     index: IndexInfo
     deleted: int

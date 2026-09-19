@@ -753,7 +753,7 @@ func (s *Server) handleRequest(ctx context.Context, w io.Writer, state *connStat
 	responseBodySet := false
 	if err = s.rejectClusterRoutedLocalMetadataRead(cmd.Header.ID); err != nil {
 		// The common error path below records command/request counters.
-	} else if s.clusterSubmitter != nil && (cmd.Header.ID == iwire.CommandTypedDocumentUpsert || cmd.Header.ID == iwire.CommandTypedSourceReplace || (cmd.Header.ID == iwire.CommandGetMany && cmd.Header.Version == 2)) {
+	} else if s.clusterSubmitter != nil && (cmd.Header.ID == iwire.CommandTypedDocumentUpsert || cmd.Header.ID == iwire.CommandTypedSourceReplace || cmd.Header.ID == iwire.CommandTypedMetadataUpdate || (cmd.Header.ID == iwire.CommandGetMany && cmd.Header.Version == 2)) {
 		err = protocolError(iwire.ErrUnsupportedFeature, "local-only command is unavailable through cluster submission")
 	} else if s.clusterSubmitter != nil && cmd.Schema.Kind == iwire.CommandKindMutation {
 		responseSections, err = s.handleClusterMutation(ctx, header, cmd)
@@ -813,6 +813,8 @@ func (s *Server) handleRequest(ctx context.Context, w io.Writer, state *connStat
 			responseSections, err = s.handleTypedDocumentUpsert(ctx, cmd.Known)
 		case iwire.CommandTypedSourceReplace:
 			responseSections, err = s.handleTypedSourceReplace(ctx, cmd.Known)
+		case iwire.CommandTypedMetadataUpdate:
+			responseSections, err = s.handleTypedMetadataUpdate(ctx, cmd.Known)
 		case iwire.CommandStats:
 			responseSections = []iwire.Section{{ID: iwire.SectionResponseMeta, Bytes: appendStringMap(nil, s.Stats())}}
 		case iwire.CommandVectorStatus,
@@ -881,6 +883,9 @@ func (s *Server) writeHelloOK(w io.Writer, header iwire.Header, state *connState
 		}
 		if _, ok := s.registry.LookupCommand(iwire.CommandTypedSourceReplace, 1); ok {
 			caps["typed_source_replace_versions"] = "1"
+		}
+		if _, ok := s.registry.LookupCommand(iwire.CommandTypedMetadataUpdate, 1); ok {
+			caps["typed_metadata_update_versions"] = "1"
 		}
 		var versions []string
 		for _, version := range []uint64{iwire.DenseVectorSearchLegacyVersion, iwire.DenseVectorSearchTypedVersion, iwire.DenseVectorSearchTypedQuantizedVersion, iwire.DenseVectorSearchNormalizedVersion} {

@@ -159,6 +159,17 @@ func (h *Handler) serveDocumentOperation(w http.ResponseWriter, r *http.Request,
 			return
 		}
 		writeJSON(w, http.StatusOK, res)
+	case "update_metadata_by_id":
+		var req UpdateMetadataByIDRequest
+		if !h.decodeJSON(w, r, maxBodyBytes, &req) {
+			return
+		}
+		res, err := h.Service.UpdateMetadataByID(r.Context(), index, req)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, res)
 	case "delete":
 		var req DeleteDocumentsRequest
 		if !h.decodeJSON(w, r, maxBodyBytes, &req) {
