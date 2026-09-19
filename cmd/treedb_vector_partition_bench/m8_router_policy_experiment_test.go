@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/snissn/gomap/TreeDB/collections"
 	"math"
 	"os"
 	"path/filepath"
