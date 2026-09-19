@@ -1105,6 +1105,33 @@ an implied wire `synced` or Raft acknowledgment. Initial graph build and
 admission remain explicit separate operations. Versions 50/v1 and 64/v1,v2 are
 unchanged. Dispatch identity does not certify measured indexed-JSON counters.
 
+### Typed source replacement (67/v1, LocalOnly)
+
+`typed_source_replace` exposes the existing atomic explicit-ID source primitive;
+it is not a discovery, chunking, embedding, or client-composed mutation. Hello
+advertises `typed_source_replace_versions=1` only for a configured standalone
+document service. Cluster submission and deterministic-entry encoding reject
+the command. Command 66 remains reserved by the vector-insert work in #4734.
+
+Required sections are deadline (4), live IDs (102), live residual documents
+(103), typed carrier request (131), and explicit delete IDs
+`source_delete_ids` (140). Sections 102, 103, and 131 retain the 65/v1 positive
+row encoding. Delete-only and fully empty requests use the canonical empty live
+carrier: positive generation followed by row count 0, dimensions 0, and string
+column count 0; sections 102 and 103 are empty byte vectors. Command 65 continues
+to reject zero rows. Section 140 uses the existing bounded byte-vector encoding.
+
+IDs must be unique within each set. Cross-set overlap is valid and insertion
+wins. One request calls `ReplaceTypedSourceByID` once. Positive live rows publish
+the existing typed source payload (format 12); delete-only uses the existing
+source payload (format 10). A fully admitted empty request emits no WAL frame.
+There is no automatic retry after an ambiguous result.
+
+Response section `source_replace_response` (141) contains three uvarints:
+generation, deleted count, and inserted count. Deleted count is the number of
+previously present delete IDs, including rows reinserted by overlap; inserted
+count equals the accepted live row count. No IDs are echoed.
+
 ## 11. Typed Scalars
 
 Index and query scalar codes:
@@ -1179,6 +1206,12 @@ response construction fails, the server returns `commit_ambiguous`,
 `retryable=false` unless a durable idempotency record makes replay safe, and
 `commit_state=committed_or_unknown_after_commit`. The server must not report
 `not_committed` after a complete command frame may be recovered and replayed.
+
+If the backend instead reports that recovery is required, the native response
+uses `durability_unavailable` for v1 compatibility but MUST set
+`retryable=false`. The client must reopen and reconcile the database before
+issuing another mutation; it must not replay the failed request from the wire
+retry hint.
 
 If a command requested `ack_policy=flushed` or `ack_policy=synced` and the
 logical mutation committed but the requested barrier failed, the error must

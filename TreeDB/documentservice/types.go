@@ -174,6 +174,20 @@ type UpsertDocumentsResponse struct {
 	CompactEmbeddings int       `json:"compact_embeddings,omitempty"`
 }
 
+// ReplaceSourceByIDRequest atomically replaces one caller-bounded source
+// scope. DeleteIDs is explicit; the service never discovers source members.
+type ReplaceSourceByIDRequest struct {
+	ExpectedGeneration uint64     `json:"expected_generation"`
+	DeleteIDs          []string   `json:"delete_ids"`
+	Documents          []Document `json:"documents"`
+}
+
+type ReplaceSourceByIDResponse struct {
+	Index         IndexInfo `json:"index"`
+	DeletedCount  int       `json:"deleted_count"`
+	InsertedCount int       `json:"inserted_count"`
+}
+
 // DeleteDocumentsRequest deletes either explicit IDs or documents matching a
 // metadata filter. Supplying both IDs and Filter is rejected as ambiguous.
 type DeleteDocumentsRequest struct {

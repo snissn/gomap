@@ -384,6 +384,38 @@ POST /v1/indexes/{index}/documents/upsert
 Duplicate IDs in one request, missing embeddings, non-finite vector values, and
 dimension mismatches fail with `invalid_request`.
 
+## Atomically replace an explicit source
+
+```http
+POST /v1/indexes/{index}/documents/replace_source_by_id
+```
+
+```json
+{
+  "expected_generation": 1,
+  "delete_ids": ["source#0", "source#1", "source#2"],
+  "documents": [
+    {
+      "id": "source#0",
+      "content": "replacement chunk",
+      "embedding": [0.1, 0.2, 0.3],
+      "meta": {"source": "source"}
+    }
+  ]
+}
+```
+
+The caller supplies the complete bounded old-ID scope and every live replacement
+document. TreeDB does not discover, chunk, or embed the source and does not fetch
+old vectors. IDs may overlap across the two sets (insertion wins), but duplicates
+within either set are invalid. Empty `documents` is delete-only; both sets empty
+is an admitted no-op. The response contains `index`, `deleted_count`, and
+`inserted_count`. A positive `expected_generation` is mandatory.
+
+This operation maps to one `ReplaceTypedSourceByID` publication. A
+`commit_ambiguous` response may already be visible or recoverable and must not be
+blindly retried; `recovery_required` requires reopening/recovery first.
+
 ## Delete documents
 
 Delete by ID:
@@ -1016,6 +1048,9 @@ Codes used by this contract:
 - `index_not_found`
 - `index_unavailable`
 - `index_stale`
+- `snapshot_mismatch`
 - `conflict`
 - `unsupported`
+- `commit_ambiguous`
+- `recovery_required`
 - `internal`

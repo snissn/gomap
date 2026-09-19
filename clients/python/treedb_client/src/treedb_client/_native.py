@@ -101,14 +101,23 @@ def _vector(values):
 
 
 def _typed_upsert_request(index, documents, info):
+    return _typed_documents_request(index, documents, info, allow_empty=False)
+
+
+def _typed_documents_request(index, documents, info, *, allow_empty):
     """Serialize declared carriers directly; JSON contains residual fields only."""
     from .models import Document
     rows, dims = len(documents), info.dimension
-    if rows <= 0 or dims <= 0 or dims > 65536 or rows * dims * 4 > _MAX_FRAME:
+    if rows < 0 or dims <= 0 or dims > 65536 or rows * dims * 4 > _MAX_FRAME:
         raise TreeDBConfigError("typed batch dimensions exceed frame bounds")
     fields = [field.field for field in info.scalar_fields]
     if len(set(fields)) != len(fields) or any(field.value_type != "string" or not field.field.startswith("meta.") for field in info.scalar_fields):
         raise TreeDBConfigError("typed scalar schema requires unique declared metadata strings")
+    if rows == 0:
+        if not allow_empty:
+            raise TreeDBConfigError("typed batch dimensions exceed frame bounds")
+        payload = _bytes(index.encode("utf-8")) + _uint(info.generation) + _uint(0) + _uint(0) + _uint(0)
+        return _section(131, payload) + _section(102, _vector([])) + _section(103, _vector([])), []
     ids, residuals = [], []
     columns = [("content", [])] + [(field, []) for field in fields]
     packed = bytearray(rows * dims * 4)
@@ -151,6 +160,10 @@ def _typed_upsert_request(index, documents, info):
             raise TreeDBConfigError("invalid residual metadata") from exc
     if len(set(ids)) != rows:
         raise TreeDBConfigError("duplicate typed document IDs")
+    try:
+        encoded_ids = [name.encode("utf-8", errors="strict") for name in ids]
+    except UnicodeError as exc:
+        raise TreeDBConfigError("typed document IDs must be valid UTF-8") from exc
     payload = bytearray(_bytes(index.encode("utf-8")) + _uint(info.generation) + _uint(rows) + _uint(dims))
     payload.extend(packed)
     payload.extend(_uint(len(columns)))
@@ -158,10 +171,46 @@ def _typed_upsert_request(index, documents, info):
         payload.extend(_bytes(name.encode("utf-8")))
         for value in values:
             payload.extend(_bytes(value.encode("utf-8")))
-    sections = _section(131, payload) + _section(102, _vector([name.encode("utf-8") for name in ids])) + _section(103, _vector(residuals))
+    sections = _section(131, payload) + _section(102, _vector(encoded_ids)) + _section(103, _vector(residuals))
     if len(sections) + 128 > _MAX_FRAME:
         raise TreeDBConfigError("typed batch exceeds frame bounds")
     return sections, ids
+
+
+def _typed_source_replace_request(index, delete_ids, documents, info):
+    if isinstance(delete_ids, (str, bytes, bytearray)):
+        raise TreeDBConfigError("delete_ids must be a sequence of strings")
+    try:
+        names = list(delete_ids)
+    except TypeError as exc:
+        raise TreeDBConfigError("delete_ids must be a sequence of strings") from exc
+    if any(not isinstance(name, str) or not name or name != name.strip() for name in names):
+        raise TreeDBConfigError("delete_ids must contain non-empty unpadded strings")
+    if len(set(names)) != len(names):
+        raise TreeDBConfigError("duplicate source replacement delete IDs")
+    try:
+        encoded_names = [name.encode("utf-8", errors="strict") for name in names]
+    except UnicodeError as exc:
+        raise TreeDBConfigError("delete_ids must be valid UTF-8") from exc
+    sections, live_ids = _typed_documents_request(index, documents, info, allow_empty=True)
+    sections += _section(140, _vector(encoded_names))
+    if len(sections) + 128 > _MAX_FRAME:
+        raise TreeDBConfigError("typed source replacement exceeds frame bounds")
+    return sections, names, live_ids
+
+
+def _typed_source_replace_response(body, generation, delete_count, live_count):
+    sections = _sections(body, {141})
+    if 141 not in sections:
+        raise TreeDBProtocolError("typed source replacement response missing")
+    raw, offset, values = sections[141], 0, []
+    for _ in range(3):
+        value, offset = _read_uint(raw, offset)
+        values.append(value)
+    if (offset != len(raw) or values[0] != generation or values[1] > delete_count
+            or values[2] != live_count):
+        raise TreeDBProtocolError("typed source replacement response generation/count mismatch")
+    return values[1], values[2]
 
 
 def _typed_upsert_response(body, generation, rows):
@@ -934,7 +983,10 @@ class _NativeConnection:
                 raise TreeDBProtocolError("invalid native dense work proof", score_plane=score_plane) from work_error
             if score_plane_error is not None:
                 raise TreeDBProtocolError("invalid native dense score-plane proof", dense_work=work) from score_plane_error
-            raise TreeDBProtocolError(f"native error {code}: {error[offset:].decode('utf-8', errors='replace')}", dense_work=work, score_plane=score_plane)
+            raise TreeDBProtocolError(
+                f"native error {code}: {error[offset:].decode('utf-8', errors='replace')}",
+                dense_work=work, score_plane=score_plane, native_error_code=code,
+            )
         if kind != response_type:
             raise TreeDBProtocolError("unexpected native response frame")
         return payload

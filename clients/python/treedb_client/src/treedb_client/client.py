@@ -17,7 +17,9 @@ from collections.abc import Callable, Mapping, Sequence
 from typing import Any, Optional, TypeVar, Union
 
 from .errors import (
+    CommitAmbiguousError,
     InvalidRequestError,
+    RecoveryRequiredError,
     TreeDBConfigError,
     TreeDBProtocolError,
     TreeDBServiceError,
@@ -44,6 +46,7 @@ from .models import (
     KeywordSearchResponse,
     OptimizeIndexResponse,
     ResetIndexResponse,
+    ReplaceSourceByIDResponse,
     ScalarFieldDeclaration,
     ScalarFieldDeclarationLike,
     UpsertDocumentsResponse,
@@ -290,6 +293,64 @@ class TreeDBClient:
             request["defer_vector_index_rebuild"] = True
         payload = self._request("POST", self._index_path(index, "documents", "upsert"), request)
         return _parse_response("upsert response", UpsertDocumentsResponse.from_dict, payload)
+
+    def replace_source_by_id(
+        self,
+        index: str,
+        delete_ids: Sequence[str],
+        documents: Sequence[DocumentLike],
+        *,
+        expected_generation: int,
+        index_info: Optional[IndexInfo] = None,
+    ) -> ReplaceSourceByIDResponse:
+        """Atomically replace one explicit, caller-bounded source ID set."""
+
+        if expected_generation is None:
+            raise InvalidRequestError("invalid_request", "expected_generation must be a positive integer")
+        _validate_expected_generation(expected_generation)
+        names = _list_of_strings(delete_ids, "delete_ids")
+        if any(not name or name != name.strip() for name in names):
+            raise InvalidRequestError("invalid_request", "delete_ids must contain non-empty unpadded strings")
+        if len(set(names)) != len(names):
+            raise InvalidRequestError("invalid_request", "delete_ids contains duplicate IDs")
+        try:
+            for name in names:
+                name.encode("utf-8", errors="strict")
+        except UnicodeError as exc:
+            raise InvalidRequestError("invalid_request", "delete_ids must be valid UTF-8") from exc
+        live = list(documents)
+        if self._native is not None:
+            from ._native import _section, _typed_source_replace_request, _typed_source_replace_response, _uint
+            if (index_info is None or index_info.name != index or index_info.extra.get("typed_input") is not True
+                    or index_info.vector_strategy != "column_graph" or index_info.generation != expected_generation):
+                raise TreeDBConfigError("native typed source replacement requires matching typed IndexInfo and generation")
+            sections, sent_delete_ids, live_ids = _typed_source_replace_request(index, names, live, index_info)
+            sections += _section(4, _uint(time.time_ns() + int(self.timeout * 1e9)))
+            try:
+                body = self._native.command(67, 1, sections, "typed_source_replace_versions")
+            except TreeDBProtocolError as exc:
+                if exc.native_error_code == 23:
+                    raise CommitAmbiguousError("commit_ambiguous", str(exc)) from exc
+                if exc.native_error_code == 18:
+                    raise RecoveryRequiredError("recovery_required", str(exc)) from exc
+                raise
+            deleted, inserted = _typed_source_replace_response(
+                body, index_info.generation, len(sent_delete_ids), len(live_ids)
+            )
+            return ReplaceSourceByIDResponse(index=index_info, deleted_count=deleted, inserted_count=inserted)
+
+        request: dict[str, Any] = {
+            "expected_generation": expected_generation,
+            "delete_ids": names,
+            "documents": [_document_for_write(doc) for doc in live],
+        }
+        payload = self._request("POST", self._index_path(index, "documents", "replace_source_by_id"), request)
+        response = _parse_response("source replacement response", ReplaceSourceByIDResponse.from_dict, payload)
+        if response.index.name != index or response.index.generation != expected_generation:
+            raise TreeDBProtocolError("source replacement response index/generation mismatch")
+        if response.deleted_count > len(names) or response.inserted_count != len(live):
+            raise TreeDBProtocolError("source replacement response count mismatch")
+        return response
 
     def delete_documents(
         self,
@@ -1115,7 +1176,8 @@ def _normalize_timeout(timeout: Optional[float]) -> Optional[float]:
 def _validate_expected_generation(expected_generation: Optional[int]) -> None:
     if expected_generation is None:
         return
-    if isinstance(expected_generation, bool) or not isinstance(expected_generation, int) or expected_generation <= 0:
+    if (isinstance(expected_generation, bool) or not isinstance(expected_generation, int)
+            or expected_generation <= 0 or expected_generation >= 1 << 64):
         raise InvalidRequestError("invalid_request", "expected_generation must be a positive integer")
 
 

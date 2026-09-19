@@ -22,6 +22,8 @@ const (
 	CodeSnapshotMismatch ErrorCode = "snapshot_mismatch"
 	CodeConflict         ErrorCode = "conflict"
 	CodeUnsupported      ErrorCode = "unsupported"
+	CodeCommitAmbiguous  ErrorCode = "commit_ambiguous"
+	CodeRecoveryRequired ErrorCode = "recovery_required"
 	CodeInternal         ErrorCode = "internal"
 )
 
@@ -87,8 +89,10 @@ func httpStatusForError(err error) int {
 		return http.StatusNotFound
 	case CodeConflict, CodeIndexStale, CodeSnapshotMismatch:
 		return http.StatusConflict
-	case CodeIndexUnavailable:
+	case CodeIndexUnavailable, CodeRecoveryRequired:
 		return http.StatusServiceUnavailable
+	case CodeCommitAmbiguous:
+		return http.StatusInternalServerError
 	case CodeUnsupported:
 		return http.StatusNotImplemented
 	default:

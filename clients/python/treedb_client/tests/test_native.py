@@ -10,11 +10,11 @@ from unittest import mock
 
 import _support
 from treedb_client import TreeDBClient
-from treedb_client.errors import TreeDBConfigError, TreeDBProtocolError, TreeDBTimeoutError, TreeDBTransportError, UnsupportedError
+from treedb_client.errors import CommitAmbiguousError, RecoveryRequiredError, TreeDBConfigError, TreeDBProtocolError, TreeDBTimeoutError, TreeDBTransportError, UnsupportedError
 from treedb_client._native import _dense_work, _dense_quantized_options, _dense_score_plane
 from treedb_client._dense_work import DenseScorePlaneProof, DenseSearchWork, dense_document_ids_valid
 from treedb_client.client import _decode_json_body, _decode_native_dense_document_json
-from treedb_client._native import _HEADER, _NativeConnection, _dense_request, _dense_response, _decode_vector, _read_uint, _section, _sections, _string_map, _uint, _vector, _typed_upsert_request, _typed_upsert_response
+from treedb_client._native import _HEADER, _NativeConnection, _dense_request, _dense_response, _decode_vector, _read_uint, _section, _sections, _string_map, _uint, _vector, _typed_source_replace_request, _typed_source_replace_response, _typed_upsert_request, _typed_upsert_response
 
 
 def _bytes_for_test(value):
@@ -1157,6 +1157,27 @@ class NativeCodecTests(unittest.TestCase):
             with self.subTest(raw=raw), self.assertRaises(TreeDBProtocolError):
                 _typed_upsert_response(_section(132, raw), 1, 2)
 
+    def test_typed_source_replacement_empty_and_positive_carriers(self):
+        info = SimpleNamespace(dimension=2, generation=1, scalar_fields=[])
+        payload, delete_ids, live_ids = _typed_source_replace_request("a", ["a", "missing"], [], info)
+        sections = _sections(payload, {102, 103, 131, 140})
+        self.assertEqual(sections[131].hex(), "016101000000")
+        self.assertEqual(_decode_vector(sections[102], 0), [])
+        self.assertEqual(_decode_vector(sections[103], 0), [])
+        self.assertEqual(_decode_vector(sections[140], 2), [b"a", b"missing"])
+        self.assertEqual(delete_ids, ["a", "missing"])
+        self.assertEqual(live_ids, [])
+        row = {"id": "a", "content": "fresh", "embedding": [1, 0], "meta": {}}
+        payload, _, live_ids = _typed_source_replace_request("a", ["a"], [row], info)
+        self.assertEqual(live_ids, ["a"])
+        self.assertEqual(_typed_source_replace_response(_section(141, b"\x01\x01\x01"), 1, 1, 1), (1, 1))
+        for delete_ids in (["a", "a"], [" a"], [""], "a"):
+            with self.subTest(delete_ids=delete_ids), self.assertRaises(TreeDBConfigError):
+                _typed_source_replace_request("a", delete_ids, [], info)
+        for raw in (b"", b"\x02\x01\x00", b"\x01\x02\x00", b"\x01\x01\x02", b"\x01\x01\x01\x00"):
+            with self.subTest(raw=raw), self.assertRaises(TreeDBProtocolError):
+                _typed_source_replace_response(_section(141, raw), 1, 1, 1)
+
     def test_native_address_rejects_hostnames_before_networking(self):
         with mock.patch("socket.getaddrinfo", side_effect=AssertionError("resolver called")):
             for address in ("localhost:12", "example.org:12", "[localhost]:12", "[::1:12", "::1:12", "[fe80::1%eth0]:12"):
@@ -1427,12 +1448,33 @@ class NativeCodecTests(unittest.TestCase):
         with mock.patch.object(client, "_request", side_effect=AssertionError("HTTP fallback")):
             with self.assertRaises(TreeDBConfigError):
                 client.upsert_documents("a", [])
+            with self.assertRaises(TreeDBConfigError):
+                client.replace_source_by_id("a", [], [], expected_generation=1)
             for call in (lambda: client.delete_documents("a", []),
                          lambda: client.delete_by_filter("a", {"field": "meta.x", "operator": "==", "value": "x"})):
                 with self.assertRaises(UnsupportedError):
                     call()
             with self.assertRaises(TreeDBConfigError):
                 client.query_by_embedding("a", [1], 1)
+
+    def test_native_source_replacement_negotiates_and_preserves_outcome_errors(self):
+        client = TreeDBClient("http://localhost:1", native_address="127.0.0.1:2")
+        self.addCleanup(client.close)
+        info = SimpleNamespace(
+            name="a", generation=1, dimension=2, scalar_fields=[], vector_strategy="column_graph",
+            extra={"typed_input": True},
+        )
+        with mock.patch.object(client, "_request", side_effect=AssertionError("HTTP fallback")), \
+             mock.patch.object(client._native, "command", return_value=_section(141, b"\x01\x01\x00")) as command:
+            result = client.replace_source_by_id("a", ["old"], [], expected_generation=1, index_info=info)
+        self.assertEqual((result.deleted_count, result.inserted_count), (1, 0))
+        self.assertEqual(command.call_args.args[0:2], (67, 1))
+        self.assertEqual(command.call_args.args[3], "typed_source_replace_versions")
+        for code, error in ((23, CommitAmbiguousError), (18, RecoveryRequiredError)):
+            with self.subTest(code=code), mock.patch.object(
+                client._native, "command", side_effect=TreeDBProtocolError("native failure", native_error_code=code)
+            ), self.assertRaises(error):
+                client.replace_source_by_id("a", ["old"], [], expected_generation=1, index_info=info)
 
     def test_invalid_query_and_scalar_bounds(self):
         for query in ([float("nan")], [float("inf")], [-float("inf")], [1e100],
