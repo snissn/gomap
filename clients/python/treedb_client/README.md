@@ -379,13 +379,13 @@ for doc in hybrid.documents:
 ```
 
 Hybrid vectors use exact scoring by default. To select the admitted scalar-u8
-rerank path, set all three explicit fields shown above:
-`vector_query_mode="quantized_rerank"`, `quantized_index_name`, and
-`quantized_rerank_candidates` (zero lets the service use its effective vector
-candidate limit). The response records the selected values in `hybrid.plan` and
-the compact serving receipt in `hybrid.stats.vector_route`; no detailed query
-proof is produced for hybrid search. Returned documents omit embeddings unless
-`return_embedding=True`.
+rerank path, set `vector_query_mode="quantized_rerank"` and
+`quantized_index_name`. `quantized_rerank_candidates` is optional; omission or
+zero lets the service use its effective traversal width, while a nonzero value
+must cover the effective vector candidate limit. The response records the
+selected values in `hybrid.plan` and the compact serving receipt in
+`hybrid.stats.vector_route`; no detailed query proof is produced for hybrid
+search. Returned documents omit embeddings unless `return_embedding=True`.
 
 `max_chunks_per_parent` is optional and disabled when omitted or zero. A positive
 value preserves the service's fused order and source attribution while limiting
