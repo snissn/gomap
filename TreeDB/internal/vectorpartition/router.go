@@ -703,7 +703,8 @@ func RouteExactV1(model RouterModelV1, query []float32, candidateBudget, partiti
 
 // CheckedRouterScalarWorkV1 bounds every coordinate evaluated by a cosine
 // distance during construction. Memberships are disjoint within a hierarchy
-// depth, and a root-to-leaf path's split widths sum to at most quota-1.
+// depth. Along a root-to-leaf path, a width-k split consumes at least k quota
+// tokens and k-1 members before any child can continue.
 func CheckedRouterScalarWorkV1(populations []int, dimensions int, cfg RouterConfigV1) (int64, bool) {
 	if len(populations) == 0 || dimensions < 1 || cfg.BranchFactor < 2 || cfg.LeafSize < 1 || cfg.MaxDepth < 1 || cfg.MaxIterations < 1 {
 		return 0, false
@@ -759,13 +760,18 @@ func CheckedRouterScalarWorkV1(populations []int, dimensions int, cfg RouterConf
 		distancesPerVector := uint64(1) // root medoid pass.
 		for splits := 1; splits <= maxSplits; splits++ {
 			candidate := uint64(splits + 1) // one medoid pass per represented level.
-			totalWidth := quota - 1
-			if maxBranch <= (quota-1)/splits {
-				totalWidth = splits * maxBranch
+			extraCapacity := maxBranch - 2
+			prefixExtraCapacity := population - cfg.LeafSize - splits
+			if splits == 1 {
+				prefixExtraCapacity = 0
+			} else if extraCapacity <= prefixExtraCapacity/(splits-1) {
+				prefixExtraCapacity = (splits - 1) * extraCapacity
 			}
+			extraWidth := min(quota-1-2*splits, min(population-1-splits, extraCapacity+prefixExtraCapacity))
 			// Split cost is convex in width. Subject to widths in [2,maxBranch]
-			// and their quota-feasible sum, its maximum saturates all but at most
-			// one split at an endpoint.
+			// and quota/member-feasible sums, its maximum saturates all but at
+			// most one split at an endpoint. Put a saturated split last to respect
+			// the tighter continuation requirement on every preceding split.
 			if maxBranch == 2 {
 				var ok bool
 				candidate, ok = addSplitCosts(candidate, splits, 2)
@@ -773,9 +779,8 @@ func CheckedRouterScalarWorkV1(populations []int, dimensions int, cfg RouterConf
 					return 0, false
 				}
 			} else {
-				extraWidth := totalWidth - 2*splits
-				saturated := extraWidth / (maxBranch - 2)
-				remainder := extraWidth % (maxBranch - 2)
+				saturated := extraWidth / extraCapacity
+				remainder := extraWidth % extraCapacity
 				var ok bool
 				candidate, ok = addSplitCosts(candidate, saturated, maxBranch)
 				if !ok {

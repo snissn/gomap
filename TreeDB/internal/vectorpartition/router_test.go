@@ -265,6 +265,13 @@ func TestCheckedRouterScalarWorkBoundsAllLevelDistanceWorkV1(t *testing.T) {
 	if !ok || work != 4_210_688_000 {
 		t.Fatalf("wide quota-feasible router work=%d ok=%v want 4210688000", work, ok)
 	}
+	cfg.BranchFactor = 100
+	cfg.LeafSize = 900
+	cfg.RepresentativeBudget = 1_999
+	work, ok = CheckedRouterScalarWorkV1([]int{1_000}, 1, cfg)
+	if !ok || work != 10_301_000 {
+		t.Fatalf("member-limited router work=%d ok=%v want 10301000", work, ok)
+	}
 	if _, ok := CheckedRouterScalarWorkV1([]int{routerMaxVectors}, math.MaxInt, cfg); ok {
 		t.Fatal("overflowing router work was accepted")
 	}
