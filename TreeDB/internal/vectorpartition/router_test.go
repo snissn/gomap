@@ -238,22 +238,17 @@ func TestRepresentativeRouterExactOracleStableTieAndBudgets(t *testing.T) {
 	}
 }
 
-func TestCheckedRouterWorkUsesWidePairMultiplication(t *testing.T) {
-	const vectors = 50_000
-	work, ok := checkedRouterWorkV1(
-		[][]routerBuildVectorV1{make([]routerBuildVectorV1, vectors)},
-		1,
-		RouterConfigV1{
-			RepresentativeBudget: vectors,
-			BranchFactor:         1,
-			MaxIterations:        1,
-		},
-	)
-	if !ok {
-		t.Fatal("expected representable router work")
+func TestCheckedRouterScalarWorkBoundsAllLevelDistanceWorkV1(t *testing.T) {
+	cfg := DefaultRouterConfigV1()
+	work, ok := CheckedRouterScalarWorkV1(300_000, 128, cfg)
+	if !ok || work != 36_595_200_000 {
+		t.Fatalf("router work=%d ok=%v want 36595200000", work, ok)
 	}
-	if want := int64(vectors) * int64(vectors); work != want {
-		t.Fatalf("router work=%d want %d", work, want)
+	if work > 50_000_000_000 {
+		t.Fatalf("retained D4 envelope exceeds 50B: %d", work)
+	}
+	if _, ok := CheckedRouterScalarWorkV1(math.MaxUint64, 128, cfg); ok {
+		t.Fatal("overflowing router work was accepted")
 	}
 }
 

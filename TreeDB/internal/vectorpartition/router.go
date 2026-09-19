@@ -235,8 +235,11 @@ func BuildRouterV1(partitions []RouterPartitionV1, cfg RouterConfigV1) (RouterMo
 	if err != nil {
 		return model, err
 	}
-	work, ok := checkedRouterWorkV1(normalized, dimensions, cfg)
-	if !ok || work > cfg.MaxScalarWork {
+	work, ok := CheckedRouterScalarWorkV1(uint64(totalVectors), dimensions, cfg)
+	if !ok {
+		return model, errors.New("vectorpartition: router scalar-work bound overflows")
+	}
+	if work > cfg.MaxScalarWork {
 		return model, fmt.Errorf("vectorpartition: router scalar work=%d exceeds limit=%d", work, cfg.MaxScalarWork)
 	}
 
@@ -698,31 +701,59 @@ func RouteExactV1(model RouterModelV1, query []float32, candidateBudget, partiti
 	return result, nil
 }
 
-func checkedRouterWorkV1(partitions [][]routerBuildVectorV1, dimensions int, cfg RouterConfigV1) (int64, bool) {
-	var vectorRepresentativePairs int64
-	populations := make([]int, len(partitions))
-	for i, partition := range partitions {
-		populations[i] = len(partition)
-	}
-	quotas, err := ApportionRouterBudgetV2(populations, cfg.RepresentativeBudget)
-	if err != nil {
+// CheckedRouterScalarWorkV1 bounds every coordinate evaluated by a cosine
+// distance during construction. Memberships are disjoint within a hierarchy
+// depth, so the bound follows depth rather than multiplying each vector by its
+// domain's entire representative quota.
+func CheckedRouterScalarWorkV1(vectors uint64, dimensions int, cfg RouterConfigV1) (int64, bool) {
+	if vectors == 0 || dimensions < 1 || cfg.BranchFactor < 2 || cfg.MaxDepth < 1 || cfg.MaxIterations < 1 {
 		return 0, false
 	}
-	for i, partition := range partitions {
-		budget := quotas[i]
-		if len(partition) != 0 && int64(budget) > math.MaxInt64/int64(len(partition)) {
+	multiply := func(left, right uint64) (uint64, bool) {
+		if right != 0 && left > math.MaxInt64/right {
 			return 0, false
 		}
-		vectorRepresentativePairs += int64(len(partition)) * int64(budget)
+		return left * right, true
 	}
-	work := vectorRepresentativePairs
-	for _, multiplier := range []int{cfg.BranchFactor, cfg.MaxIterations, dimensions} {
-		if multiplier != 0 && work > math.MaxInt64/int64(multiplier) {
+	add := func(left, right uint64) (uint64, bool) {
+		if right > math.MaxInt64 || left > math.MaxInt64-right {
 			return 0, false
 		}
-		work *= int64(multiplier)
+		return left + right, true
 	}
-	return work, true
+	branch := uint64(cfg.BranchFactor)
+	initialization, ok := multiply(branch, branch-1)
+	if !ok {
+		return 0, false
+	}
+	initialization /= 2 // 1 + ... + (branch-1) farthest-first distances.
+	perIteration, ok := multiply(2*branch-1, uint64(cfg.MaxIterations))
+	if !ok {
+		return 0, false
+	}
+	perSplit, ok := add(initialization, perIteration) // assignment plus empty repair.
+	if !ok {
+		return 0, false
+	}
+	depth := uint64(cfg.MaxDepth)
+	splitLevels, ok := multiply(perSplit, depth)
+	if !ok {
+		return 0, false
+	}
+	medoidLevels, ok := add(depth, 1)
+	if !ok {
+		return 0, false
+	}
+	distancesPerVector, ok := add(splitLevels, medoidLevels) // one medoid pass per represented level.
+	if !ok {
+		return 0, false
+	}
+	work, ok := multiply(vectors, distancesPerVector)
+	if !ok {
+		return 0, false
+	}
+	work, ok = multiply(work, uint64(dimensions))
+	return int64(work), ok
 }
 
 func normalizeRouterVectorV1(values []float32) ([]float32, error) {
