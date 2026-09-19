@@ -3,11 +3,13 @@ package documentservice
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/collections"
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
 
 // TypedDocumentsRequest carries declared values separately from residual JSON.
@@ -18,6 +20,14 @@ type TypedDocumentsRequest struct {
 	IDs                [][]byte
 	Retained           [][]byte
 	Columns            []collections.TypedColumnBatch
+}
+
+// TypedSourceReplacementRequest is the native typed form of an explicit
+// source replacement. DeleteIDs and live IDs are validated independently;
+// overlap is permitted and insertion wins.
+type TypedSourceReplacementRequest struct {
+	DeleteIDs [][]byte
+	TypedDocumentsRequest
 }
 
 // UpsertTypedDocuments performs one atomic mixed upsert without reconstructing
@@ -63,43 +73,9 @@ func (s *Service) upsertTypedDocumentsAdmission(ctx context.Context, index strin
 	if !info.TypedInput {
 		return UpsertDocumentsResponse{}, serviceError(CodeUnsupported, "typed upsert requires declared typed input")
 	}
-	if len(req.IDs) == 0 || len(req.IDs) != len(req.Retained) || len(req.Columns) != 2+len(info.ScalarFields) {
-		return UpsertDocumentsResponse{}, serviceError(CodeInvalidRequest, "typed upsert shape does not match schema")
-	}
-	names := make([]string, len(req.IDs))
-	for i, id := range req.IDs {
-		names[i] = string(id)
-	}
-	if _, err := validateDocumentIDs(names); err != nil {
+	names, err := validateTypedDocumentsRequest(ctx, info, req, false)
+	if err != nil {
 		return UpsertDocumentsResponse{}, err
-	}
-	seen := make(map[string]bool, len(req.Columns))
-	for _, column := range req.Columns {
-		if seen[column.Name] {
-			return UpsertDocumentsResponse{}, serviceError(CodeInvalidRequest, "duplicate typed column")
-		}
-		seen[column.Name] = true
-		if column.Name == defaultEmbeddingField {
-			if len(column.Float32Vectors) != len(req.IDs) || len(column.Strings) != 0 {
-				return UpsertDocumentsResponse{}, serviceError(CodeInvalidRequest, "invalid typed vector shape")
-			}
-			for _, vector := range column.Float32Vectors {
-				if err := ctxErr(ctx); err != nil {
-					return UpsertDocumentsResponse{}, err
-				}
-				if err := validateEmbedding("embedding", vector, info.Dimension, info.Metric); err != nil {
-					return UpsertDocumentsResponse{}, err
-				}
-			}
-		} else {
-			valid := column.Name == defaultTextField
-			for _, field := range info.ScalarFields {
-				valid = valid || column.Name == field.Field
-			}
-			if !valid || len(column.Strings) != len(req.IDs) || len(column.Float32Vectors) != 0 {
-				return UpsertDocumentsResponse{}, serviceError(CodeInvalidRequest, "invalid typed string column")
-			}
-		}
 	}
 	if err := ctxErr(ctx); err != nil {
 		return UpsertDocumentsResponse{}, err
@@ -122,6 +98,160 @@ func (s *Service) upsertTypedDocumentsAdmission(ctx context.Context, index strin
 		return s.upsertTypedDocumentsAdmission(ctx, index, req, false)
 	}
 	return s.finishTypedDocuments(col, info, req.IDs, req.Retained, req.Columns, names, 0)
+}
+
+func validateTypedDocumentsRequest(ctx context.Context, info IndexInfo, req TypedDocumentsRequest, allowEmpty bool) ([]string, error) {
+	if len(req.IDs) == 0 {
+		if !allowEmpty || len(req.Retained) != 0 || len(req.Columns) != 0 {
+			return nil, serviceError(CodeInvalidRequest, "typed document shape does not match schema")
+		}
+		return []string{}, nil
+	}
+	if len(req.IDs) != len(req.Retained) || len(req.Columns) != 2+len(info.ScalarFields) {
+		return nil, serviceError(CodeInvalidRequest, "typed document shape does not match schema")
+	}
+	names := make([]string, len(req.IDs))
+	for i, id := range req.IDs {
+		names[i] = string(id)
+	}
+	if _, err := validateDocumentIDs(names); err != nil {
+		return nil, err
+	}
+	seen := make(map[string]bool, len(req.Columns))
+	for _, column := range req.Columns {
+		if seen[column.Name] {
+			return nil, serviceError(CodeInvalidRequest, "duplicate typed column")
+		}
+		seen[column.Name] = true
+		if column.Name == defaultEmbeddingField {
+			if len(column.Float32Vectors) != len(req.IDs) || len(column.Strings) != 0 {
+				return nil, serviceError(CodeInvalidRequest, "invalid typed vector shape")
+			}
+			for _, vector := range column.Float32Vectors {
+				if err := ctxErr(ctx); err != nil {
+					return nil, err
+				}
+				if err := validateEmbedding("embedding", vector, info.Dimension, info.Metric); err != nil {
+					return nil, err
+				}
+			}
+		} else {
+			valid := column.Name == defaultTextField
+			for _, field := range info.ScalarFields {
+				valid = valid || column.Name == field.Field
+			}
+			if !valid || len(column.Strings) != len(req.IDs) || len(column.Float32Vectors) != 0 {
+				return nil, serviceError(CodeInvalidRequest, "invalid typed string column")
+			}
+		}
+	}
+	return names, nil
+}
+
+// ReplaceSourceByID converts public documents to typed carriers once and then
+// publishes one explicit source replacement. It never discovers old IDs.
+func (s *Service) ReplaceSourceByID(ctx context.Context, index string, req ReplaceSourceByIDRequest) (ReplaceSourceByIDResponse, error) {
+	if s == nil {
+		return ReplaceSourceByIDResponse{}, serviceError(CodeIndexUnavailable, "document service has no collection manager")
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	col, info, err := s.openTypedSourceReplacement(ctx, index, req.ExpectedGeneration)
+	if err != nil {
+		return ReplaceSourceByIDResponse{}, err
+	}
+	deleteIDs, err := validatedByteDocumentIDs(req.DeleteIDs)
+	if err != nil {
+		return ReplaceSourceByIDResponse{}, err
+	}
+	live, _, _, err := typedDocumentsFromPublic(ctx, info, req.Documents)
+	if err != nil {
+		return ReplaceSourceByIDResponse{}, err
+	}
+	live.ExpectedGeneration = req.ExpectedGeneration
+	return replaceTypedSourceByIDLocked(ctx, col, info, deleteIDs, live)
+}
+
+// ReplaceTypedSourceByID is the native transport entry point. All request
+// slices are borrowed only for this synchronous call.
+func (s *Service) ReplaceTypedSourceByID(ctx context.Context, index string, req TypedSourceReplacementRequest) (ReplaceSourceByIDResponse, error) {
+	if s == nil {
+		return ReplaceSourceByIDResponse{}, serviceError(CodeIndexUnavailable, "document service has no collection manager")
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	col, info, err := s.openTypedSourceReplacement(ctx, index, req.ExpectedGeneration)
+	if err != nil {
+		return ReplaceSourceByIDResponse{}, err
+	}
+	deleteNames := make([]string, len(req.DeleteIDs))
+	for i, id := range req.DeleteIDs {
+		deleteNames[i] = string(id)
+	}
+	if _, err := validateDocumentIDs(deleteNames); err != nil {
+		return ReplaceSourceByIDResponse{}, err
+	}
+	return replaceTypedSourceByIDLocked(ctx, col, info, req.DeleteIDs, req.TypedDocumentsRequest)
+}
+
+func (s *Service) openTypedSourceReplacement(ctx context.Context, index string, generation uint64) (*collections.Collection, IndexInfo, error) {
+	if generation == 0 {
+		return nil, IndexInfo{}, serviceError(CodeInvalidRequest, "source replacement requires expected generation")
+	}
+	col, info, err := s.openIndex(ctx, index, generation)
+	if err != nil {
+		return nil, IndexInfo{}, err
+	}
+	if !info.TypedInput {
+		return nil, IndexInfo{}, serviceError(CodeUnsupported, "source replacement requires declared typed input")
+	}
+	return col, info, nil
+}
+
+func replaceTypedSourceByIDLocked(ctx context.Context, col *collections.Collection, info IndexInfo, deleteIDs [][]byte, live TypedDocumentsRequest) (ReplaceSourceByIDResponse, error) {
+	if live.ExpectedGeneration != info.Generation {
+		return ReplaceSourceByIDResponse{}, serviceError(CodeIndexStale, "source replacement generation changed")
+	}
+	if _, err := validateTypedDocumentsRequest(ctx, info, live, true); err != nil {
+		return ReplaceSourceByIDResponse{}, err
+	}
+	if err := ctxErr(ctx); err != nil {
+		return ReplaceSourceByIDResponse{}, err
+	}
+	deleted, err := col.ReplaceTypedSourceByID(deleteIDs, live.IDs, live.Retained, live.Columns)
+	if err != nil {
+		return ReplaceSourceByIDResponse{}, mapTypedSourceReplacementError(err)
+	}
+	return ReplaceSourceByIDResponse{Index: info, DeletedCount: deleted, InsertedCount: len(live.IDs)}, nil
+}
+
+func validatedByteDocumentIDs(names []string) ([][]byte, error) {
+	validated, err := validateDocumentIDs(names)
+	if err != nil {
+		return nil, err
+	}
+	ids := make([][]byte, len(validated))
+	for i := range validated {
+		ids[i] = []byte(validated[i])
+	}
+	return ids, nil
+}
+
+func mapTypedSourceReplacementError(err error) error {
+	switch {
+	case errors.Is(err, collections.ErrCommitAmbiguous):
+		return wrapServiceError(CodeCommitAmbiguous, "source replacement commit is ambiguous; reopen before deciding whether to retry", err)
+	case errors.Is(err, collections.ErrRecoveryRequired), errors.Is(err, backenddb.ErrRecoveryRequired):
+		return wrapServiceError(CodeRecoveryRequired, "source replacement requires database recovery", err)
+	case errors.Is(err, collections.ErrDurabilityUnavailable):
+		return wrapServiceError(CodeIndexUnavailable, "source replacement durability is unavailable", err)
+	case errors.Is(err, collections.ErrDocumentExists), errors.Is(err, collections.ErrUniqueIndexConflict):
+		return wrapServiceError(CodeConflict, "source replacement conflicts with a document outside its delete scope", err)
+	case errors.Is(err, collections.ErrDuplicateDocumentID):
+		return wrapServiceError(CodeInvalidRequest, "source replacement contains duplicate document IDs", err)
+	default:
+		return wrapServiceError(CodeInternal, "source replacement failed", err)
+	}
 }
 
 func (s *Service) optimizeTypedInput(ctx context.Context, col *collections.Collection, info IndexInfo, req OptimizeIndexRequest) (OptimizeIndexResponse, error) {
@@ -188,12 +318,24 @@ func (s *Service) optimizeTypedInput(ctx context.Context, col *collections.Colle
 }
 
 func (s *Service) upsertTypedDocuments(ctx context.Context, col *collections.Collection, info IndexInfo, req UpsertDocumentsRequest) (UpsertDocumentsResponse, error) {
-	names := make([]string, len(req.Documents))
-	for i := range req.Documents {
-		names[i] = req.Documents[i].ID
+	typed, names, compact, err := typedDocumentsFromPublic(ctx, info, req.Documents)
+	if err != nil {
+		return UpsertDocumentsResponse{}, err
+	}
+	return s.finishTypedDocuments(col, info, typed.IDs, typed.Retained, typed.Columns, names, compact)
+}
+
+func typedDocumentsFromPublic(ctx context.Context, info IndexInfo, documents []Document) (TypedDocumentsRequest, []string, int, error) {
+	var req TypedDocumentsRequest
+	if len(documents) == 0 {
+		return req, []string{}, 0, nil
+	}
+	names := make([]string, len(documents))
+	for i := range documents {
+		names[i] = documents[i].ID
 	}
 	if _, err := validateDocumentIDs(names); err != nil {
-		return UpsertDocumentsResponse{}, err
+		return req, nil, 0, err
 	}
 	ids := make([][]byte, len(names))
 	retained := make([][]byte, len(names))
@@ -204,19 +346,19 @@ func (s *Service) upsertTypedDocuments(ctx context.Context, col *collections.Col
 		columns[j+2] = collections.TypedColumnBatch{Name: field.Field, Strings: make([]string, len(names))}
 	}
 	compact := 0
-	for i, doc := range req.Documents {
+	for i, doc := range documents {
 		if err := ctxErr(ctx); err != nil {
-			return UpsertDocumentsResponse{}, err
+			return req, nil, 0, err
 		}
 		encoded, err := normalizeDocumentEmbedding(&doc, i)
 		if err != nil {
-			return UpsertDocumentsResponse{}, err
+			return req, nil, 0, err
 		}
 		if encoded {
 			compact++
 		}
 		if err := validateEmbedding(fmt.Sprintf("documents[%d].embedding", i), doc.Embedding, info.Dimension, info.Metric); err != nil {
-			return UpsertDocumentsResponse{}, err
+			return req, nil, 0, err
 		}
 		ids[i] = []byte(doc.ID)
 		columns[0].Float32Vectors[i] = doc.Embedding
@@ -226,7 +368,7 @@ func (s *Service) upsertTypedDocuments(ctx context.Context, col *collections.Col
 			value, ok := lookupFilterField(doc, field.Field)
 			str, stringOK := value.(string)
 			if !ok || !stringOK {
-				return UpsertDocumentsResponse{}, serviceErrorf(CodeInvalidRequest, "documents[%d].%s must be a string", i, field.Field)
+				return req, nil, 0, serviceErrorf(CodeInvalidRequest, "documents[%d].%s must be a string", i, field.Field)
 			}
 			columns[j+2].Strings[i] = str
 			path := strings.Split(strings.TrimPrefix(field.Field, "meta."), ".")
@@ -243,10 +385,11 @@ func (s *Service) upsertTypedDocuments(ctx context.Context, col *collections.Col
 			Meta map[string]any `json:"meta,omitempty"`
 		}{doc.ID, residual})
 		if err != nil {
-			return UpsertDocumentsResponse{}, wrapServiceError(CodeInvalidRequest, "retained metadata is not JSON-serializable", err)
+			return req, nil, 0, wrapServiceError(CodeInvalidRequest, "retained metadata is not JSON-serializable", err)
 		}
 	}
-	return s.finishTypedDocuments(col, info, ids, retained, columns, names, compact)
+	req.IDs, req.Retained, req.Columns = ids, retained, columns
+	return req, names, compact, nil
 }
 
 func (s *Service) finishTypedDocuments(col *collections.Collection, info IndexInfo, ids, retained [][]byte, columns []collections.TypedColumnBatch, names []string, compact int) (UpsertDocumentsResponse, error) {

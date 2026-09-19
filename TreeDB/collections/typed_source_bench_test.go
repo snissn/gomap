@@ -63,4 +63,65 @@ func BenchmarkTypedSourceReplacement(b *testing.B) {
 			b.ReportMetric(8, "rows/batch")
 		})
 	}
+	for _, liveRows := range []int{4, 0} {
+		name := "typed-shrink"
+		if liveRows == 0 {
+			name = "typed-delete-only"
+		}
+		b.Run(name, func(b *testing.B) {
+			if b.N > 64 {
+				b.Skip("bounded source diagnostic: use -benchtime=10x")
+			}
+			b.StopTimer()
+			_, db, c := openTypedMinimaCollection(b)
+			defer db.Close()
+			ids, retained := make([][]byte, 8), make([][]byte, 8)
+			columns := []TypedColumnBatch{{Name: "embedding", Float32Vectors: make([][]float32, 8)}, {Name: "content", Strings: make([]string, 8)}, {Name: "user", Strings: make([]string, 8)}, {Name: "path", Strings: make([]string, 8)}}
+			for i := range ids {
+				id := fmt.Sprintf("source%02d", i)
+				ids[i] = []byte(id)
+				retained[i] = []byte(fmt.Sprintf(`{"id":%q,"extra":"kept"}`, id))
+				columns[0].Float32Vectors[i] = []float32{1, 0, 0, 0, 0, 0, 0, 0}
+				columns[1].Strings[i], columns[2].Strings[i], columns[3].Strings[i] = "alpha beta", "u", "p"
+			}
+			if _, err := c.ReplaceTypedSourceByID(nil, ids, retained, columns); err != nil {
+				b.Fatal(err)
+			}
+			if _, err := c.RebuildVectorIndex("embedding_graph"); err != nil {
+				b.Fatal(err)
+			}
+			if err := c.reconcileTypedGraphPublication(typedGraphPublicationLimits{Rows: b.N * 24, Tombstones: b.N * 16, ValueSlots: b.N * 64, OwnedBytes: 8 << 20, EncodedOutputBytes: 64 << 20}, typedGraphColdLimits{ManifestRecords: 512, ManifestBytes: 2 << 20, AssetBytes: 16 << 20, DecodedTermBytes: 16 << 20}); err != nil {
+				b.Fatal(err)
+			}
+			liveColumns := make([]TypedColumnBatch, len(columns))
+			for i, column := range columns {
+				liveColumns[i].Name = column.Name
+				if column.Strings != nil {
+					liveColumns[i].Strings = column.Strings[:liveRows]
+				} else {
+					liveColumns[i].Float32Vectors = column.Float32Vectors[:liveRows]
+				}
+			}
+			if liveRows == 0 {
+				liveColumns = nil
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			b.StartTimer()
+			for i := 0; i < b.N; i++ {
+				deleted, err := c.ReplaceTypedSourceByID(ids, ids[:liveRows], retained[:liveRows], liveColumns)
+				if err != nil || deleted != 8 {
+					b.Fatalf("deleted=%d err=%v", deleted, err)
+				}
+				b.StopTimer()
+				if _, err := c.ReplaceTypedSourceByID(ids[:liveRows], ids, retained, columns); err != nil {
+					b.Fatal(err)
+				}
+				b.StartTimer()
+			}
+			b.StopTimer()
+			b.ReportMetric(float64(liveRows), "live-rows/batch")
+			b.ReportMetric(8, "delete-ids/batch")
+		})
+	}
 }

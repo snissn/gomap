@@ -190,6 +190,7 @@ func TestDecodeCommandEntryV1RejectsDDLBarriersReadsAndUnknowns(t *testing.T) {
 	for _, command := range []nativewire.CommandID{
 		nativewire.CommandDropCollection,
 		nativewire.CommandTypedDocumentUpsert,
+		nativewire.CommandTypedSourceReplace,
 		nativewire.CommandFlushCollection,
 		nativewire.CommandFlushAll,
 		nativewire.CommandCheckpoint,
@@ -205,6 +206,10 @@ func TestDecodeCommandEntryV1RejectsDDLBarriersReadsAndUnknowns(t *testing.T) {
 	typed := appendDeterministicEntryRaw(nativewire.CommandTypedDocumentUpsert, nil)
 	if _, err := DecodeCommandEntryV1(typed, DecodeOptions{}); codeOf(err) != ErrorUnsupportedCommandV1 {
 		t.Fatalf("local-only typed mutation err=%v code=%s, want unsupported command", err, codeOf(err))
+	}
+	typedSource := appendDeterministicEntryRaw(nativewire.CommandTypedSourceReplace, nil)
+	if _, err := DecodeCommandEntryV1(typedSource, DecodeOptions{}); codeOf(err) != ErrorUnsupportedCommandV1 {
+		t.Fatalf("local-only typed source mutation err=%v code=%s, want unsupported command", err, codeOf(err))
 	}
 	if row := ClassifyNativeWireCommandV1(nativewire.CommandID(9999)); row.Known {
 		t.Fatalf("unknown command classified as known: %+v", row)

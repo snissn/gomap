@@ -115,6 +115,18 @@
       "notes": "Typed upsert uses one atomic local typed-source command-WAL frame and existing typed-source replay. The native command is local-only: deterministic entry encoding and Raft application reject it. No replicated payload equivalence is claimed."
     },
     {
+      "nativewire_command": "CommandTypedSourceReplace",
+      "nativewire_fixture": "",
+      "nativewire_fixture_sha256": "",
+      "command_wal_kind": "CollectionReplaceSourceByID (typed format 12 or delete-only format 10)",
+      "command_wal_payload_format": "CollectionTypedSourcePayload (format 12) or CollectionReplaceSourceByIDV1 (format 10)",
+      "local_fixture": "",
+      "local_fixture_sha256": "",
+      "support_matrix_status": "WAL-supported",
+      "relationship": "local_only_mutation_v1",
+      "notes": "Explicit typed source replacement uses one local atomic source command-WAL frame and existing replay authority. Positive live rows use typed format 12; delete-only uses existing format 10. The native command is local-only and has no replicated payload equivalence."
+    },
+    {
       "nativewire_command": "CommandDeleteBatch",
       "nativewire_fixture": "TreeDB/internal/nativewire/testdata/v1/delete_batch_entry.hex",
       "nativewire_fixture_sha256": "0c371815884ce5959869143ed5168cd477ab9aee276825447b7f9636961608c6",

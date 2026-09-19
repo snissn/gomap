@@ -14,6 +14,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/TreeDB/collections"
@@ -2195,6 +2196,9 @@ func validateDocumentIDs(ids []string) ([]string, error) {
 	seen := make(map[string]struct{}, len(ids))
 	out := make([]string, len(ids))
 	for i, id := range ids {
+		if !utf8.ValidString(id) {
+			return nil, serviceErrorf(CodeInvalidRequest, "ids[%d] must be valid UTF-8", i)
+		}
 		trimmed := strings.TrimSpace(id)
 		if trimmed == "" {
 			return nil, serviceErrorf(CodeInvalidRequest, "ids[%d] must not be empty", i)

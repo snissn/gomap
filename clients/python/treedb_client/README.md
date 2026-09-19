@@ -102,8 +102,19 @@ write. Supply numeric embeddings (not base64); build/admission is still explicit
 including when `defer_vector_index_rebuild` is false. Successful mutations use
 the service's configured durability, not a new wire acknowledgment guarantee.
 
-Native delete/filter-delete remain unsupported; use an explicit HTTP control
-client for these operations. Other
+`replace_source_by_id(index, delete_ids, documents,
+expected_generation=info.generation, index_info=info)` uses negotiated
+local-only 67/v1 when native transport is configured, or one explicit HTTP
+request otherwise. It supplies a complete bounded old-ID set and live typed
+replacement rows to one atomic core operation; it never fetches old vectors,
+discovers chunks, or composes delete plus upsert. Overlap is valid and insertion
+wins. Empty documents perform delete-only, and an empty/empty request is a
+validated no-op. Missing capability or mismatched typed `IndexInfo` fails closed
+without HTTP fallback. `CommitAmbiguousError` and `RecoveryRequiredError` are
+non-retry signals unless the caller first establishes the stored outcome.
+
+Native general delete/filter-delete remain unsupported; use an explicit HTTP
+control client for those operations. Other
 existing HTTP APIs retain their existing transport. There is no native request
 retry or HTTP fallback after a native error. `native_command_version=2` is
 dispatch identity only; default-zero legacy work fields are unavailable typed

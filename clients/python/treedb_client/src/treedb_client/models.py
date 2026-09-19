@@ -624,6 +624,22 @@ class UpsertDocumentsResponse:
 
 
 @dataclass(frozen=True)
+class ReplaceSourceByIDResponse:
+    index: IndexInfo
+    deleted_count: int
+    inserted_count: int
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> "ReplaceSourceByIDResponse":
+        data = _as_mapping(data, "source replacement response")
+        deleted = _as_int(data["deleted_count"], "deleted_count")
+        inserted = _as_int(data["inserted_count"], "inserted_count")
+        if deleted < 0 or inserted < 0:
+            raise ValueError("source replacement counts must be non-negative")
+        return cls(index=IndexInfo.from_dict(data["index"]), deleted_count=deleted, inserted_count=inserted)
+
+
+@dataclass(frozen=True)
 class DeleteDocumentsResponse:
     index: IndexInfo
     deleted: int

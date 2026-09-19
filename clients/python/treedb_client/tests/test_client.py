@@ -601,6 +601,26 @@ class TreeDBClientTests(unittest.TestCase):
             self.assertEqual(documents[0], {"id": "model", "embedding_f32_le_b64": encoded})
             self.assertEqual(documents[1], {"id": "mapping", "embedding_f32_le_b64": encoded})
 
+    def test_replace_source_by_id_sends_one_explicit_atomic_request(self) -> None:
+        route = "/v1/indexes/docs/documents/replace_source_by_id"
+        response = {"index": SAMPLE_INDEX, "deleted_count": 2, "inserted_count": 1}
+        with FixtureServer({("POST", route): (200, response, 0)}) as server:
+            client = TreeDBClient(server.base_url, timeout=1)
+            result = client.replace_source_by_id(
+                "docs", ["source#0", "source#1", "missing"],
+                [Document(id="source#0", content="fresh", embedding=[1, 0], meta={"repo": "gomap"})],
+                expected_generation=1,
+            )
+            self.assertEqual((result.deleted_count, result.inserted_count), (2, 1))
+            self.assertEqual(len(server.records), 1)
+            body = json_body(server.records[0])
+            self.assertEqual(body["expected_generation"], 1)
+            self.assertEqual(body["delete_ids"], ["source#0", "source#1", "missing"])
+            self.assertEqual([doc["id"] for doc in body["documents"]], ["source#0"])
+        for generation in (None, 0, -1, True, 1 << 64):
+            with self.subTest(generation=generation), self.assertRaises(InvalidRequestError):
+                TreeDBClient("http://localhost:1").replace_source_by_id("docs", [], [], expected_generation=generation)
+
     def test_count_filter_search_and_delete_by_filter_parse_responses(self) -> None:
         routes = {
             ("POST", "/v1/indexes/docs/documents/count"): (200, {"index": SAMPLE_INDEX, "count": 2}, 0),
