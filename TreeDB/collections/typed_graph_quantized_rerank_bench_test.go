@@ -122,21 +122,31 @@ func BenchmarkTypedGraphHybridPublicRoutes4767(b *testing.B) {
 				return response
 			}
 			_ = search(fixture.vectors[0])
-			sample := search(fixture.vectors[1])
+			_ = search(fixture.vectors[1])
+			var quantizedScores, rerankCandidates, packedCalls, packedBytes float64
+			var candidatesFused, documentsFetched, embeddingOutputBytes float64
 			b.ReportAllocs()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
 				response := search(fixture.vectors[i%len(fixture.vectors)])
 				vectorSearchBenchSinkOrdinalV4 += int(response.Stats.CandidatesFused)
+				quantizedScores += float64(response.Stats.VectorQuantizedScoreCalls)
+				rerankCandidates += float64(response.Stats.VectorQuantizedRerankCandidates)
+				packedCalls += float64(response.Stats.VectorPackedExactScoreCalls)
+				packedBytes += float64(response.Stats.VectorPackedExactVectorBytesRead)
+				candidatesFused += float64(response.Stats.CandidatesFused)
+				documentsFetched += float64(response.Stats.DocumentsFetched)
+				embeddingOutputBytes += float64(response.Stats.EmbeddingOutputBytes)
 			}
 			b.StopTimer()
-			b.ReportMetric(float64(sample.Stats.VectorQuantizedScoreCalls), "quantized_scores/search")
-			b.ReportMetric(float64(sample.Stats.VectorQuantizedRerankCandidates), "rerank_candidates/search")
-			b.ReportMetric(float64(sample.Stats.VectorPackedExactScoreCalls), "packed_calls/search")
-			b.ReportMetric(float64(sample.Stats.VectorPackedExactVectorBytesRead), "packed_bytes/search")
-			b.ReportMetric(float64(sample.Stats.CandidatesFused), "candidates_fused/search")
-			b.ReportMetric(float64(sample.Stats.DocumentsFetched), "docs_fetched/search")
-			b.ReportMetric(float64(sample.Stats.EmbeddingOutputBytes), "embedding_output_bytes/search")
+			iterations := float64(b.N)
+			b.ReportMetric(quantizedScores/iterations, "quantized_scores/search")
+			b.ReportMetric(rerankCandidates/iterations, "rerank_candidates/search")
+			b.ReportMetric(packedCalls/iterations, "packed_calls/search")
+			b.ReportMetric(packedBytes/iterations, "packed_bytes/search")
+			b.ReportMetric(candidatesFused/iterations, "candidates_fused/search")
+			b.ReportMetric(documentsFetched/iterations, "docs_fetched/search")
+			b.ReportMetric(embeddingOutputBytes/iterations, "embedding_output_bytes/search")
 		})
 	}
 }

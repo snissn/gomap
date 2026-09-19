@@ -306,9 +306,11 @@ counter families:
 - vector: `vector_candidates_requested`, `vector_candidates_returned`,
   `vector_candidates_examined`, `vector_edges_visited`;
 - selected vector: `vector_route`, `vector_quantized_score_calls`,
+  `vector_quantized_code_bytes_read`,
   `vector_quantized_rerank_candidates`,
   `vector_quantized_rerank_exact_score_calls`,
-  `vector_packed_exact_score_calls`, and
+  `vector_packed_exact_score_calls`,
+  `vector_packed_exact_score_candidates`, and
   `vector_packed_exact_vector_bytes_read`;
 - scalar: `scalar_filter_lookups`, `scalar_filter_input_ids`,
   `scalar_filter_intersection_steps`, `scalar_filter_final_ids`,

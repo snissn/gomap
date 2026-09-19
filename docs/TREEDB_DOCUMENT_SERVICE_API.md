@@ -868,9 +868,10 @@ semantics as keyword search and require a non-empty text `query`; vector-only
 requests that supply lexical options are invalid. An explicit posting cap uses
 one fixed lexical source attempt rather than resetting the cap across adaptive
 candidate retries.
-Vector mode defaults to `exact`. `quantized_rerank` requires all three explicit
-fields shown above, an admitted typed cosine `column_graph`, and its named
-legacy scalar-u8/v1 plane. The rerank width is validated against the effective
+Vector mode defaults to `exact`. `quantized_rerank` requires the explicit mode,
+an admitted typed cosine `column_graph`, and its named legacy scalar-u8/v1
+plane. `quantized_rerank_candidates` is optional: omitted or zero selects the
+effective traversal width; a nonzero value must be at least the effective
 vector candidate limit. Selected hybrid uses fixed source budgets. A small
 complete filter may execute `typed_exact`, and an empty filter executes no
 vector work, but both validate the selected asset first. Quantized fields with

@@ -1551,6 +1551,7 @@ class HybridSearchStats:
     candidates_after_filter: int = 0
     documents_fetched: int = 0
     documents_missing: int = 0
+    embedding_output_bytes: int = 0
     full_document_scan_fallbacks: int = 0
     truncated: int = 0
     fail_closed: int = 0
@@ -1596,6 +1597,7 @@ class HybridSearchStats:
             "candidates_after_filter",
             "documents_fetched",
             "documents_missing",
+            "embedding_output_bytes",
             "full_document_scan_fallbacks",
             "truncated",
             "fail_closed",
@@ -1663,6 +1665,9 @@ class HybridSearchStats:
             candidates_after_filter=_as_optional_int_default(data.get("candidates_after_filter"), "hybrid stats.candidates_after_filter"),
             documents_fetched=_as_optional_int_default(data.get("documents_fetched"), "hybrid stats.documents_fetched"),
             documents_missing=_as_optional_int_default(data.get("documents_missing"), "hybrid stats.documents_missing"),
+            embedding_output_bytes=_as_optional_int_default(
+                data.get("embedding_output_bytes"), "hybrid stats.embedding_output_bytes"
+            ),
             full_document_scan_fallbacks=_as_optional_int_default(
                 data.get("full_document_scan_fallbacks"), "hybrid stats.full_document_scan_fallbacks"
             ),

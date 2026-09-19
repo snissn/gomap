@@ -510,6 +510,9 @@ func hybridCandidateBudgetAccumulateAttemptWork(dst *HybridSearchStats, src Hybr
 	dst.TextPhraseCandidatesMatched += src.TextPhraseCandidatesMatched
 	dst.VectorCandidatesExamined += src.VectorCandidatesExamined
 	dst.VectorEdgesVisited += src.VectorEdgesVisited
+	dst.VectorPackedExactScoreCalls += src.VectorPackedExactScoreCalls
+	dst.VectorPackedExactScoreCandidates += src.VectorPackedExactScoreCandidates
+	dst.VectorPackedExactVectorBytesRead += src.VectorPackedExactVectorBytesRead
 	dst.ScalarFilterRejected += src.ScalarFilterRejected
 	dst.DocumentsFetched += src.DocumentsFetched
 	dst.DocumentsMissing += src.DocumentsMissing
@@ -537,6 +540,9 @@ func hybridCandidateBudgetApplyAccumulatedWork(stats *HybridSearchStats, work Hy
 	stats.TextPhraseCandidatesMatched = work.TextPhraseCandidatesMatched
 	stats.VectorCandidatesExamined = work.VectorCandidatesExamined
 	stats.VectorEdgesVisited = work.VectorEdgesVisited
+	stats.VectorPackedExactScoreCalls = work.VectorPackedExactScoreCalls
+	stats.VectorPackedExactScoreCandidates = work.VectorPackedExactScoreCandidates
+	stats.VectorPackedExactVectorBytesRead = work.VectorPackedExactVectorBytesRead
 	stats.ScalarFilterRejected = work.ScalarFilterRejected
 	stats.DocumentsFetched = work.DocumentsFetched
 	stats.DocumentsMissing = work.DocumentsMissing

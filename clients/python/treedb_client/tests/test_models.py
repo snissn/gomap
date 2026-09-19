@@ -456,6 +456,7 @@ class KeywordHybridModelTests(unittest.TestCase):
                     "collapse_rejections": 3,
                     "collapse_exhaustions": 1,
                     "documents_fetched": 2,
+                    "embedding_output_bytes": 0,
                     "vector_route": {"available": True, "query_mode": "quantized_rerank", "route": "typed_hnsw"},
                     "vector_quantized_score_calls": 32,
                     "vector_quantized_rerank_exact_score_calls": 32,
@@ -483,6 +484,7 @@ class KeywordHybridModelTests(unittest.TestCase):
         self.assertEqual(response.stats.scalar_filter_final_ids, 1)
         self.assertEqual(response.stats.collapse_exhaustions, 1)
         self.assertEqual(response.stats.documents_fetched, 2)
+        self.assertEqual(response.stats.embedding_output_bytes, 0)
         self.assertEqual(response.stats.vector_route["route"], "typed_hnsw")
         self.assertEqual(response.stats.vector_quantized_score_calls, 32)
         self.assertEqual(response.stats.vector_quantized_rerank_exact_score_calls, 32)
