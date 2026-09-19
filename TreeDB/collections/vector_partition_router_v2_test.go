@@ -82,6 +82,19 @@ func TestVectorPartitionRouterV3HierarchyBudgetAndDurableNodeIdentity(t *testing
 	}
 }
 
+func TestVectorPartitionRouterV3ChecksCancellationAfterDomainSort(t *testing.T) {
+	router, _, _ := policyPersistedFixtureV1(t)
+	ctx := &vectorPartitionRouterDeadlineAfterErrContextV1{
+		Context: context.Background(), deadlineAfter: 5,
+	}
+	result, err := router.SearchWithContextV1(ctx, []float32{1, 0}, VectorPartitionRouterSearchOptionsV3{
+		Mode: VectorPartitionRouterModeApproxV1, ScoreBudget: len(router.model.Representatives), PartitionProbes: 2,
+	})
+	if !errors.Is(err, context.DeadlineExceeded) || result.Status.ScoreCalls != uint64(len(router.hierarchy.rootOrdinals)) {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+}
+
 func TestVectorPartitionRouterV3ConcurrentPinnedSearch(t *testing.T) {
 	router, _, _ := policyPersistedFixtureV1(t)
 	opts := VectorPartitionRouterSearchOptionsV3{Mode: VectorPartitionRouterModeApproxV1, ScoreBudget: 6, PartitionProbes: 1}

@@ -1680,6 +1680,9 @@ func (r *VectorPartitionRouterV1) routeVectorPartitionHierarchyLockedV3(ctx cont
 		}
 		return scratch.best[i].PartitionID < scratch.best[j].PartitionID
 	})
+	if err := ctx.Err(); err != nil {
+		return nil, scoreCalls, edges, err
+	}
 	result := append([]VectorPartitionRouterPartitionScoreV1(nil), scratch.best[:opts.PartitionProbes]...)
 	return result, scoreCalls, edges, nil
 }
