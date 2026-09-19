@@ -1144,6 +1144,8 @@ Section 142 is one bounded UTF-8 JSON object with exactly `index`, positive
 `expected_generation`, non-empty unique `ids`, `set`, and `unset`. Unknown
 fields, trailing JSON, non-`meta.*` paths, duplicate or ancestor/descendant path
 conflicts, non-JSON values, and protected or invalid schema paths fail closed.
+Raw invalid UTF-8 and unpaired JSON surrogate escapes are rejected before
+decoding, including nested string values and object keys.
 Declared metadata scalars require string values and cannot be unset. Missing IDs
 are skipped. The request has no vector or content field.
 

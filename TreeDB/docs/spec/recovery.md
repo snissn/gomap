@@ -235,6 +235,8 @@ after-images through the metadata-only planner. It resolves preserved full-row
 coordinates from the preceding authoritative snapshot; the WAL does not contain
 physical pointers or unchanged vectors. Missing rows, incompatible schema, or
 after-images changing content/vector/chunk linkage fail closed. A validated
+metadata after-image requires valid UTF-8 and paired JSON surrogate escapes;
+replay rejects lossy Unicode before decoding it. A validated
 object replacement preserves literal keys inside its JSON value;
 replay does not reinterpret them as dotted mutation paths. Validation descends
 only where a protected ancestor prevents a whole-value mutation. Empty-object

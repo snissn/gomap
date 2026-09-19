@@ -14,6 +14,7 @@ import (
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
+	"github.com/snissn/gomap/TreeDB/internal/strictjson"
 )
 
 // TypedMetadataUpdateResult counts existing IDs and actual changes separately.
@@ -102,8 +103,8 @@ func typedMetadataValidUTF8(value reflect.Value, depth int) bool {
 }
 
 func decodeTypedMetadataJSON(raw []byte, out any) error {
-	if !utf8.Valid(raw) || !json.Valid(raw) {
-		return errors.New("collections: metadata must be valid UTF-8 JSON")
+	if !strictjson.Valid(raw) {
+		return errors.New("collections: metadata must be lossless UTF-8 JSON")
 	}
 	d := json.NewDecoder(bytes.NewReader(raw))
 	d.UseNumber()

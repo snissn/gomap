@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/documentservice"
@@ -11,6 +12,32 @@ import (
 )
 
 const typedMetadataUpdateGolden = `{"expected_generation":7,"ids":["a","missing"],"index":"docs","set":{"meta.acl":"new","meta.rank":2},"unset":["meta.old"]}`
+
+func BenchmarkTypedMetadataUpdateDecode(b *testing.B) {
+	raw := []byte(typedMetadataUpdateGolden)
+	limits := iwire.DefaultLimits()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		if _, err := decodeTypedMetadataUpdate(raw, limits); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func TestTypedMetadataUpdateRejectsLossyUnicode(t *testing.T) {
+	for _, value := range []string{`"\ud800"`, `"\udc00"`, `"\ud800\uffff"`, `{"\udc00":1}`, `["\ud800"]`, "\"\xff\""} {
+		raw := strings.Replace(typedMetadataUpdateGolden, `"new"`, value, 1)
+		if _, err := decodeTypedMetadataUpdate([]byte(raw), iwire.DefaultLimits()); err == nil {
+			t.Fatalf("accepted lossy metadata %q", value)
+		}
+	}
+	for _, value := range []string{`"\ud83d\ude00"`, `"\\ud800"`, `"\ufffd"`} {
+		raw := strings.Replace(typedMetadataUpdateGolden, `"new"`, value, 1)
+		if _, err := decodeTypedMetadataUpdate([]byte(raw), iwire.DefaultLimits()); err != nil {
+			t.Fatalf("valid Unicode %q: %v", value, err)
+		}
+	}
+}
 
 func TestTypedMetadataUpdateGoldenBoundsAndRegistry(t *testing.T) {
 	limits := iwire.DefaultLimits()

@@ -1,6 +1,7 @@
 package documentservice
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,6 +10,8 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+
+	"github.com/snissn/gomap/TreeDB/internal/strictjson"
 )
 
 const defaultMaxRequestBytes = 16 << 20
@@ -273,7 +276,21 @@ func (h *Handler) serveSearchOperation(w http.ResponseWriter, r *http.Request, i
 func (h *Handler) decodeJSON(w http.ResponseWriter, r *http.Request, maxBodyBytes int64, dst any) bool {
 	body := http.MaxBytesReader(w, r.Body, maxBodyBytes)
 	defer func() { _ = body.Close() }()
-	dec := json.NewDecoder(body)
+	var input io.Reader = body
+	if _, metadata := dst.(*UpdateMetadataByIDRequest); metadata {
+		// Validate before encoding/json replaces invalid Unicode. Keep other
+		// document routes' established JSON semantics unchanged.
+		raw, err := io.ReadAll(body)
+		if err == nil && !strictjson.Valid(raw) {
+			err = errors.New("metadata request must be lossless UTF-8 JSON")
+		}
+		if err != nil {
+			writeError(w, wrapServiceError(CodeMalformedJSON, "malformed JSON request body", err))
+			return false
+		}
+		input = bytes.NewReader(raw)
+	}
+	dec := json.NewDecoder(input)
 	dec.UseNumber()
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(dst); err != nil {

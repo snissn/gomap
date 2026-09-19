@@ -120,7 +120,9 @@ returns exact `matched_count`/`modified_count`. It accepts no vector or content
 argument; unchanged scoring/content authority is preserved by the partial
 metadata WAL/publication path. Declared scalar metadata values must be strings
 and cannot be unset, paths cannot overlap, and the expected schema generation
-is mandatory. Native transport uses the independent local-only 68/v1
+is mandatory. Nested metadata strings and keys must encode losslessly as UTF-8;
+the client rejects unpaired surrogates before either transport sends a request.
+Native transport uses the independent local-only 68/v1
 `typed_metadata_update_versions` capability and fails closed without retry or
 HTTP fallback; HTTP uses one atomic `update_metadata_by_id` request.
 

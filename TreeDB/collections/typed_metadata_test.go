@@ -498,6 +498,19 @@ func TestTypedMetadataReplayRejectsProtectedAfterimages4769(t *testing.T) {
 			})
 		}
 	}
+	// A malformed retained value must fail before decoding can replace it.
+	for _, raw := range []string{`{"id":"a","meta":{"x":"\ud800"}}`, `{"id":"a","meta":{"\udc00":1}}`} {
+		corrupt := payload
+		corrupt.Documents = append([]commitlog.CollectionTypedMetadataDocument(nil), payload.Documents...)
+		corrupt.Documents[0].Retained = []byte(raw)
+		p, _, _, err := col.buildTypedMetadataPlan(ids, nil, nil, &corrupt)
+		if p != nil {
+			p.close()
+		}
+		if err == nil {
+			t.Fatalf("accepted lossy retained JSON: %s", raw)
+		}
+	}
 }
 
 func TestTypedMetadataReplayAcceptsProducedObjects4769(t *testing.T) {
@@ -678,15 +691,17 @@ func TestTypedMetadataRejectsNestedInvalidUTF8BeforePublication4769(t *testing.T
 	}
 	seq, root := dbCommitSeqAndSystemRoot(db)
 	for name, value := range map[string]any{
-		"string":       bad,
-		"object_value": map[string]any{"name": bad},
-		"object_key":   map[string]any{bad: "value"},
-		"array":        []any{"valid", map[string]any{"nested": []any{bad}}},
-		"typed_map":    map[string]string{"name": bad},
-		"typed_slice":  []namedString{namedString(bad)},
-		"pointer":      &bad,
-		"struct":       struct{ Name string }{bad},
-		"cycle":        cycle,
+		"string":            bad,
+		"raw_surrogate":     json.RawMessage(`"\ud800"`),
+		"raw_surrogate_key": json.RawMessage(`{"\udc00":1}`),
+		"object_value":      map[string]any{"name": bad},
+		"object_key":        map[string]any{bad: "value"},
+		"array":             []any{"valid", map[string]any{"nested": []any{bad}}},
+		"typed_map":         map[string]string{"name": bad},
+		"typed_slice":       []namedString{namedString(bad)},
+		"pointer":           &bad,
+		"struct":            struct{ Name string }{bad},
+		"cycle":             cycle,
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := col.UpdateTypedMetadataByID(ids, map[string]any{"meta.profile": value}, nil, metadataGeneration4769(col)); !errors.Is(err, ErrTypedMetadataInvalid) {

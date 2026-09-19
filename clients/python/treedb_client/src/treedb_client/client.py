@@ -388,9 +388,9 @@ class TreeDBClient:
         unset_paths = _list_of_strings(unset, "unset")
         _validate_metadata_update_paths(set_values, unset_paths)
         try:
-            json.dumps(set_values, allow_nan=False, separators=(",", ":"))
+            json.dumps(set_values, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8", errors="strict")
         except (TypeError, ValueError) as exc:
-            raise InvalidRequestError("invalid_request", "set values must be JSON-compatible") from exc
+            raise InvalidRequestError("invalid_request", "set values must be JSON-compatible UTF-8") from exc
 
         if self._native is not None:
             from ._native import _section, _typed_metadata_update_request, _typed_metadata_update_response, _uint

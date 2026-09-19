@@ -1,10 +1,12 @@
 package documentservice
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -144,6 +146,50 @@ func TestTypedMetadataUpdateValidationAndHTTPUnknownKeys(t *testing.T) {
 	NewHandler(&Service{}).ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), string(CodeMalformedJSON)) {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func BenchmarkTypedMetadataHTTPRequestDecode(b *testing.B) {
+	raw := []byte(`{"expected_generation":1,"ids":["a"],"set":{"meta.x":{"nested":1}},"unset":[]}`)
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		var req UpdateMetadataByIDRequest
+		r := &http.Request{Body: io.NopCloser(bytes.NewReader(raw))}
+		if !NewHandler(nil).decodeJSON(httptest.NewRecorder(), r, defaultMaxRequestBytes, &req) {
+			b.Fatal("decode metadata HTTP request")
+		}
+	}
+}
+
+func TestTypedMetadataHTTPRejectsLossyUnicode(t *testing.T) {
+	for _, value := range []string{`"\ud800"`, `{"\udc00":1}`, `["\ud800"]`, "\"\xff\""} {
+		recorder := httptest.NewRecorder()
+		body := `{"expected_generation":1,"ids":["a"],"set":{"meta.x":` + value + `},"unset":[]}`
+		NewHandler(&Service{}).ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/v1/indexes/docs/documents/update_metadata_by_id", strings.NewReader(body)))
+		if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), string(CodeMalformedJSON)) {
+			t.Fatalf("lossy Unicode %q: status=%d body=%s", value, recorder.Code, recorder.Body.String())
+		}
+	}
+}
+
+func TestTypedMetadataHTTPDecodePreservesUnicodeAndBounds(t *testing.T) {
+	for _, value := range []string{`"\ud83d\ude00"`, `"\\ud800"`, `"\ufffd"`} {
+		body := `{"expected_generation":1,"ids":["a"],"set":{"meta.x":` + value + `,"meta.n":9007199254740993},"unset":[]}`
+		var want string
+		if err := json.Unmarshal([]byte(value), &want); err != nil {
+			t.Fatal(err)
+		}
+		for _, limit := range []int64{int64(len(body)), int64(len(body) - 1)} {
+			var req UpdateMetadataByIDRequest
+			r := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+			ok := NewHandler(nil).decodeJSON(httptest.NewRecorder(), r, limit, &req)
+			if ok != (limit == int64(len(body))) {
+				t.Fatalf("limit=%d accepted=%v", limit, ok)
+			}
+			if ok && (req.Set["meta.x"] != want || req.Set["meta.n"] != json.Number("9007199254740993")) {
+				t.Fatalf("lossy decode: %+v", req.Set)
+			}
+		}
 	}
 }
 

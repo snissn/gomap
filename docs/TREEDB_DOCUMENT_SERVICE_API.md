@@ -442,6 +442,10 @@ require string values and are required, so they cannot be unset. Content,
 embedding/vector, ID, and chunk-linkage mutations are outside this operation.
 Metadata strings and object keys must be valid UTF-8, including nested values
 supplied through the Go API; invalid input is rejected before publication.
+Metadata JSON also rejects unpaired UTF-16 surrogate escapes before decoding,
+including HTTP/native requests and Go `json.RawMessage` values. Valid surrogate
+pairs and intentional U+FFFD characters remain supported. Other document routes
+retain their existing JSON semantics.
 An allowed `set` value is a whole JSON value: literal keys inside an object
 replacement are preserved as keys, including during recovery.
 Path-overlap checks scale with the input size and sorting, not all path pairs.

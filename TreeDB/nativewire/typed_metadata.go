@@ -11,6 +11,7 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/documentservice"
 	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
+	"github.com/snissn/gomap/TreeDB/internal/strictjson"
 )
 
 type typedMetadataUpdateCarrier struct {
@@ -22,6 +23,9 @@ func decodeTypedMetadataUpdate(raw []byte, limits iwire.Limits) (typedMetadataUp
 	var req typedMetadataUpdateCarrier
 	if len(raw) == 0 || uint64(len(raw)) > limits.MaxSectionLen {
 		return req, protocolError(iwire.ErrResourceExhausted, "typed metadata request exceeds bounds")
+	}
+	if !strictjson.Valid(raw) {
+		return req, protocolError(iwire.ErrMalformedFrame, "typed metadata request must be lossless UTF-8 JSON")
 	}
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &fields); err != nil {
