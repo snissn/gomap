@@ -19,20 +19,27 @@ import (
 // TypedMetadataUpdateResult counts existing IDs and actual changes separately.
 type TypedMetadataUpdateResult struct{ MatchedCount, ModifiedCount int }
 
+// ErrTypedMetadataInvalid distinguishes rejected input from storage corruption
+// or an ambiguous durable publication at the public service boundary.
+var ErrTypedMetadataInvalid = errors.New("collections: invalid typed metadata update")
+
 // UpdateTypedMetadataByID changes only meta.* fields, skipping missing IDs.
 // expectedGeneration is the schema generation, not a document version. Required
 // declared scalar fields cannot be unset. The batch is one atomic publication;
 // unchanged content/vectors remain in their existing physical rows and WAL
 // records contain only metadata after-images. Ambiguous errors must not be retried.
 func (c *Collection) UpdateTypedMetadataByID(ids [][]byte, set map[string]any, unset []string, expectedGeneration uint64) (TypedMetadataUpdateResult, error) {
+	if len(ids) == 0 {
+		return TypedMetadataUpdateResult{}, fmt.Errorf("%w: at least one ID is required", ErrTypedMetadataInvalid)
+	}
 	if expectedGeneration == 0 {
-		return TypedMetadataUpdateResult{}, errors.New("collections: expected_generation must be positive")
+		return TypedMetadataUpdateResult{}, fmt.Errorf("%w: expected_generation must be positive", ErrTypedMetadataInvalid)
 	}
 	ownedIDs := make([][]byte, len(ids))
 	seen := make(map[string]bool, len(ids))
 	for i, id := range ids {
 		if len(id) == 0 || !utf8.Valid(id) {
-			return TypedMetadataUpdateResult{}, errors.New("collections: metadata ID must be nonempty UTF-8")
+			return TypedMetadataUpdateResult{}, fmt.Errorf("%w: metadata ID must be nonempty UTF-8", ErrTypedMetadataInvalid)
 		}
 		if seen[string(id)] {
 			return TypedMetadataUpdateResult{}, ErrDuplicateDocumentID
@@ -41,15 +48,23 @@ func (c *Collection) UpdateTypedMetadataByID(ids [][]byte, set map[string]any, u
 		ownedIDs[i] = bytes.Clone(id)
 	}
 	slices.SortFunc(ownedIDs, bytes.Compare)
+	for path, value := range set {
+		if !utf8.ValidString(path) {
+			return TypedMetadataUpdateResult{}, ErrTypedMetadataInvalid
+		}
+		if s, ok := value.(string); ok && !utf8.ValidString(s) {
+			return TypedMetadataUpdateResult{}, ErrTypedMetadataInvalid
+		}
+	}
 	// Freeze JSON values before planning, reject non-JSON/NaN input, and keep
 	// numbers lossless when comparing existing retained JSON for no-op admission.
 	raw, err := json.Marshal(set)
 	if err != nil {
-		return TypedMetadataUpdateResult{}, err
+		return TypedMetadataUpdateResult{}, errors.Join(ErrTypedMetadataInvalid, err)
 	}
 	var ownedSet map[string]any
 	if err := decodeTypedMetadataJSON(raw, &ownedSet); err != nil {
-		return TypedMetadataUpdateResult{}, err
+		return TypedMetadataUpdateResult{}, errors.Join(ErrTypedMetadataInvalid, err)
 	}
 	return c.updateTypedMetadataByID(ownedIDs, ownedSet, slices.Clone(unset), expectedGeneration, nil, nil)
 }
@@ -149,7 +164,7 @@ func (c *Collection) updateTypedMetadataByID(ids [][]byte, set map[string]any, u
 	defer unlockCoverage()
 	if replayPayload == nil {
 		if err := validateTypedMetadataMutation(c.Meta(), set, unset, generation); err != nil {
-			return TypedMetadataUpdateResult{}, err
+			return TypedMetadataUpdateResult{}, errors.Join(ErrTypedMetadataInvalid, err)
 		}
 	}
 	if err := c.requireTypedBatchVectorAdmission(); err != nil {
@@ -355,14 +370,14 @@ func (c *Collection) buildTypedMetadataPlan(ids [][]byte, set map[string]any, un
 				}
 				changed, err := applyTypedMetadataPath(object, path, value, false)
 				if err != nil {
-					return nil, payload, result, err
+					return nil, payload, result, errors.Join(ErrTypedMetadataInvalid, err)
 				}
 				metadataChanged = metadataChanged || changed
 			}
 			for _, path := range unset {
 				changed, err := applyTypedMetadataPath(object, path, nil, true)
 				if err != nil {
-					return nil, payload, result, err
+					return nil, payload, result, errors.Join(ErrTypedMetadataInvalid, err)
 				}
 				metadataChanged = metadataChanged || changed
 			}
@@ -441,27 +456,34 @@ func (c *Collection) buildTypedMetadataPlan(ids [][]byte, set map[string]any, un
 	primary.Freeze()
 	add(collectionPrimaryRootName(plan.meta.Name), opts.dataStoragePolicy, primary)
 	if len(runtimes) > 0 && persistIndexStateForOptions(opts) {
-		stateTable := newCollectionRunTable(len(changed))
-		add(collectionIndexStateRootName(plan.meta.Name), opts.indexStateStoragePolicy, stateTable)
+		var stateTable memtable.Table
 		for _, update := range changed {
+			if !update.indexStateChanged {
+				continue
+			}
+			if stateTable == nil {
+				stateTable = newCollectionRunTable(len(changed))
+				add(collectionIndexStateRootName(plan.meta.Name), opts.indexStateStoragePolicy, stateTable)
+			}
 			raw, err := encodeRuntimeOrderedDocumentIndexState(update.newState, runtimes)
 			if err != nil {
 				return nil, payload, result, err
 			}
 			stateTable.SetSteal(bytes.Clone(update.documentID), raw)
 		}
-		stateTable.Freeze()
+		if stateTable != nil {
+			stateTable.Freeze()
+		}
 	}
 	for j, runtime := range runtimes {
-		table := newCollectionRunTable(0)
-		// Register ownership before fallible entry encoding.
-		plan.rootNames = append(plan.rootNames, runtimeSecondaryRootName(plan.meta.Name, runtime))
-		plan.baseRootIDs[plan.rootNames[len(plan.rootNames)-1]] = catalog.rootID(plan.rootNames[len(plan.rootNames)-1])
-		plan.policies = append(plan.policies, runtime.def.storagePolicy)
-		plan.deltaTables = append(plan.deltaTables, table)
+		var table memtable.Table
 		for _, update := range changed {
 			if !orderedDocumentIndexRuntimeChanged(update.oldState, update.newState, j) {
 				continue
+			}
+			if table == nil {
+				table = newCollectionRunTable(0)
+				add(runtimeSecondaryRootName(plan.meta.Name, runtime), runtime.def.storagePolicy, table)
 			}
 			for _, value := range update.oldState.valuesAt(j) {
 				if _, err := deleteCollectionSecondaryIndexEntryForValueType(table, runtime.def.valueType, value, update.documentID); err != nil {
@@ -474,7 +496,9 @@ func (c *Collection) buildTypedMetadataPlan(ids [][]byte, set map[string]any, un
 				}
 			}
 		}
-		table.Freeze()
+		if table != nil {
+			table.Freeze()
+		}
 	}
 	return plan, payload, result, nil
 }

@@ -678,6 +678,10 @@ func (v *CollectionReadView) visitDocumentScoringRowRefsByID(ids [][]byte, visit
 }
 
 func (v *CollectionReadView) visitDocumentRowRefsByIDMode(ids [][]byte, visit func([]byte, DocumentRowRef, bool) error, scoring bool) (DocumentMaterializationStats, error) {
+	decode := decodeColumnPrimaryRowLocatorBorrowedID
+	if scoring {
+		decode = decodeColumnScoringRowLocatorBorrowedID
+	}
 	if err := v.validateOpen(); err != nil {
 		return DocumentMaterializationStats{}, err
 	}
@@ -727,10 +731,7 @@ func (v *CollectionReadView) visitDocumentRowRefsByIDMode(ids [][]byte, visit fu
 		var ref DocumentRowRef
 		if found {
 			scratch = value
-			ref, err = decodeColumnPrimaryRowLocatorBorrowedID(id, value)
-			if scoring && err == nil {
-				ref, err = decodeColumnScoringRowLocatorBorrowedID(id, value)
-			}
+			ref, err = decode(id, value)
 			if err != nil {
 				return stats, err
 			}
@@ -752,6 +753,10 @@ func (v *CollectionReadView) visitDocumentRowRefsByIDMode(ids [][]byte, visit fu
 // Caller mapping work advances only during ordered delivery and stops at its
 // first error. A storage error aborts delivery of the current chunk.
 func (v *CollectionReadView) visitGroupedDocumentRowRefsByID(root string, ids [][]byte, visit func([]byte, DocumentRowRef, bool) error, stats DocumentMaterializationStats, scoring bool) (DocumentMaterializationStats, error) {
+	decode := decodeColumnPrimaryRowLocatorBorrowedID
+	if scoring {
+		decode = decodeColumnScoringRowLocatorBorrowedID
+	}
 	type coordinates struct {
 		generation, partID uint64
 		rowIndex           int
@@ -772,10 +777,7 @@ func (v *CollectionReadView) visitGroupedDocumentRowRefsByID(root string, ids []
 			// Retain the earliest invalid input, not the first storage callback.
 			// Nothing after it can be delivered; earlier callbacks may still fail.
 			if i < decodeErrIndex {
-				ref, err := decodeColumnPrimaryRowLocatorBorrowedID(id, value)
-				if scoring && err == nil {
-					ref, err = decodeColumnScoringRowLocatorBorrowedID(id, value)
-				}
+				ref, err := decode(id, value)
 				if err != nil {
 					decodeErr, decodeErrIndex = err, i
 				} else {
