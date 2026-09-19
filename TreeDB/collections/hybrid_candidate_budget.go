@@ -46,6 +46,11 @@ func (c *Collection) hybridSearchCandidatesWithBudgetPolicy(plan hybridSearchExe
 		mode = hybridCandidateBudgetPolicyAdaptive
 	}
 	if filterAllowSet != nil && len(filterAllowSet) == 0 {
+		if plan.text != nil {
+			if err := c.validateHybridTextCandidateQueryAgainstCurrentSnapshot(*plan.text); err != nil {
+				return nil, HybridSearchStats{}, hybridCandidateSourceError{source: HybridCandidateSourceText, err: err}
+			}
+		}
 		policy := HybridCandidateBudgetPolicyFixed
 		stop := HybridCandidateBudgetStopReasonFixedPolicy
 		fallback := HybridCandidateBudgetStopReasonNone

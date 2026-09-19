@@ -381,6 +381,45 @@ func TestHybridScalarFilterDefaultLookupBudgetFailClosed2687(t *testing.T) {
 	}
 }
 
+func TestSearchHybridEmptyScalarAllowSetUsesIndexAnalyzer4766(t *testing.T) {
+	_, d, col := openHybridScalarSearchExecutorFixture2505(t, []hybridSearchExecutorFixtureRow2505{{
+		id: "doc", title: "refund", body: "refund", city: "sea",
+	}})
+	defer func() { _ = d.Close() }()
+	if _, _, err := col.CreateTextIndex(TextIndexDefinition{
+		Name:            "stopwords",
+		Version:         TextIndexVersionV1,
+		AnalyzerOptions: &TextAnalyzerOptions{StopWords: []string{"why"}},
+		Fields:          []TextIndexField{{Field: "title"}, {Field: "body"}},
+	}); err != nil {
+		t.Fatalf("CreateTextIndex stopwords: %v", err)
+	}
+	filter := &HybridScalarFilter{IndexName: "city", Value: "missing"}
+	invalid, err := col.SearchHybrid(HybridSearchOptions{
+		TopK:         1,
+		Text:         &HybridTextQuery{IndexName: "stopwords", Query: "why AND refund", CandidateLimit: 1},
+		ScalarFilter: filter,
+	})
+	if !errors.Is(err, ErrHybridSearchUnsupported) {
+		t.Fatalf("invalid analyzer-dependent query err=%v want ErrHybridSearchUnsupported", err)
+	}
+	if invalid.Stats.FailClosed != 1 || invalid.Stats.FailClosedReason != HybridFailClosedReasonUnsupported || invalid.Stats.TextPostingsScanned != 0 {
+		t.Fatalf("invalid response=%+v want fail-closed before postings", invalid)
+	}
+
+	valid, err := col.SearchHybrid(HybridSearchOptions{
+		TopK:         1,
+		Text:         &HybridTextQuery{IndexName: "stopwords", Query: "refund AND why refund", CandidateLimit: 1},
+		ScalarFilter: filter,
+	})
+	if err != nil {
+		t.Fatalf("valid analyzer-dependent query: %v", err)
+	}
+	if len(valid.Results) != 0 || valid.Stats.FailClosed != 0 || valid.Stats.TextPostingsScanned != 0 {
+		t.Fatalf("valid response=%+v want empty success without postings", valid)
+	}
+}
+
 func TestHybridCandidateErrorFailClosedReasonSourceAware2505(t *testing.T) {
 	textErr := hybridCandidateSourceError{source: HybridCandidateSourceText, err: fmt.Errorf("%w: text unavailable without stats", ErrHybridSearchIndexUnavailable)}
 	if got := hybridCandidateErrorFailClosedReason(textErr); got != HybridFailClosedReasonTextIndexUnavailable {
