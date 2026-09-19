@@ -38,9 +38,9 @@ func TestM8QualityRetainedShortfallReplaysStaticEvidence(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = assets.Close() })
-	// Exercise the retained offline flat-HNSW diagnostic: w=1 cannot cover two
-	// domains even when its historical traversal completes successfully.
-	assets.policyDiagnosticWidth, assets.policyDiagnosticBeam = 1, int(assets.status.Representatives)
+	// The production hierarchy must score one root per domain before it can
+	// return a route. Exercise its typed, no-partial budget refusal.
+	approximateBudget := int(assets.manifest.DomainCount) - 1
 	h, err := newM8AttributionHarnessV1(assets)
 	if err != nil {
 		t.Fatal(err)
@@ -61,18 +61,18 @@ func TestM8QualityRetainedShortfallReplaysStaticEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cell, err := m8BuildAttributionV1(t.Context(), assets, homes, members, queries, truth, oracles, 2, 32, 10, 256, make([][]m8CanonicalResultV1, len(queries)), h)
+	cell, err := m8BuildAttributionV1(t.Context(), assets, homes, members, queries, truth, oracles, 2, 32, 10, approximateBudget, make([][]m8CanonicalResultV1, len(queries)), h)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if cell.Evidence.ApproximateRouterPartitionCoverageComplete {
 		t.Fatal("fixture did not exhaust unique-domain coverage")
 	}
-	row := m8ProductionRowV1{Status: "candidate_coverage_shortfall", Probes: 2, EfSearch: 32, Samples: len(queries)}
+	row := m8ProductionRowV1{Status: "router_score_budget_exhausted", Probes: 2, EfSearch: 32, Samples: len(queries)}
 	if err := m8AttachAttributionV1(&row, cell, cell.Local); err != nil {
 		t.Fatal(err)
 	}
-	report := m8ProductionReportV1{Dataset: fixture, RouterRepresentatives: assets.status.Representatives, Config: m8ProductionConfigEvidenceV1{TopK: 10, Partitions: 4, DomainCount: 4, PacksPerDomain: []int{1, 1, 1, 1}, RouterScoreBudget: 256, QualityDiagnostics: true}, Variant: &m3VariantDescriptorV1{DatabaseDirectory: dir}, Rows: []m8ProductionRowV1{row}}
+	report := m8ProductionReportV1{Dataset: fixture, RouterRepresentatives: assets.status.Representatives, Config: m8ProductionConfigEvidenceV1{TopK: 10, Partitions: 4, DomainCount: 4, PacksPerDomain: []int{1, 1, 1, 1}, RouterScoreBudget: approximateBudget, QualityDiagnostics: true}, Variant: &m3VariantDescriptorV1{DatabaseDirectory: dir}, Rows: []m8ProductionRowV1{row}}
 	// Failed producer rows carry no successful coordinator results or timings.
 	transcript := m8ProductionMeasurementTranscriptV1{Outcomes: []m8ProductionRowOutcomesV1{{}}}
 	if err := errors.Join(h.Close(), assets.Close()); err != nil {
