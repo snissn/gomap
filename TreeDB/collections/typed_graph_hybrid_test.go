@@ -154,7 +154,9 @@ func TestTypedGraphHybridScalarStrategiesPreserveSourceCandidates4767(t *testing
 	if _, err := col.RebuildVectorIndex("embedding_graph"); err != nil {
 		t.Fatal(err)
 	}
-	if err := col.EnsureColumnGraphServing(context.Background(), "embedding_graph", typedGraphPublicTestOptions()); err != nil {
+	serving := typedGraphPublicTestOptions()
+	serving.Filter.SourceIDs = 1
+	if err := col.EnsureColumnGraphServing(context.Background(), "embedding_graph", serving); err != nil {
 		t.Fatal(err)
 	}
 	for _, mode := range []VectorIndexQueryMode{VectorIndexQueryModeExact, VectorIndexQueryModeQuantizedRerank} {
@@ -189,6 +191,17 @@ func TestTypedGraphHybridScalarStrategiesPreserveSourceCandidates4767(t *testing
 				}
 			}
 		}
+	}
+	_, err := col.SearchHybrid(HybridSearchOptions{
+		TopK: 1,
+		Vector: &HybridVectorQuery{
+			IndexName: "embedding_graph", Query: columns[0].Float32Vectors[0], CandidateLimit: 1, EfSearch: 8,
+			QueryMode: VectorIndexQueryModeQuantizedRerank, QuantizedIndexName: "embedding.scalar_u8.legacy", QuantizedRerankCandidates: 2,
+		},
+		ScalarFilter: &HybridScalarFilter{And: []HybridScalarFilter{{IndexName: "path", Value: "missing"}, {IndexName: "path", Value: "source"}}},
+	})
+	if !errors.Is(err, ErrColumnGraphSearchBudget) {
+		t.Fatalf("empty conjunction skipped later leaf budget validation: %v", err)
 	}
 }
 
