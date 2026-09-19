@@ -1207,6 +1207,12 @@ response construction fails, the server returns `commit_ambiguous`,
 `commit_state=committed_or_unknown_after_commit`. The server must not report
 `not_committed` after a complete command frame may be recovered and replayed.
 
+If the backend instead reports that recovery is required, the native response
+uses `durability_unavailable` for v1 compatibility but MUST set
+`retryable=false`. The client must reopen and reconcile the database before
+issuing another mutation; it must not replay the failed request from the wire
+retry hint.
+
 If a command requested `ack_policy=flushed` or `ack_policy=synced` and the
 logical mutation committed but the requested barrier failed, the error must
 still expose the post-commit state. It must not look like an ordinary mutation
