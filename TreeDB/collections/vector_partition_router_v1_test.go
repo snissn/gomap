@@ -379,7 +379,7 @@ func TestPartitionRouterBuildPublishSearchReopenAndPinsV1(t *testing.T) {
 	cfg := internalrouter.DefaultRouterConfigV1()
 	cfg.BranchFactor = 2
 	cfg.LeafSize = 1
-	cfg.RepresentativeBudget = 6
+	cfg.RepresentativeBudget = 8
 	cfg.MaxDepth = 4
 	cfg.MaxIterations = 8
 	// The overlap membership is a second final placement for one source row.

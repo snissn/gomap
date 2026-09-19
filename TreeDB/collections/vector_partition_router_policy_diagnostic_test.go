@@ -42,7 +42,7 @@ func policyPersistedFixtureV1(t *testing.T) (*VectorPartitionRouterV1, *Collecti
 	cfg := internalrouter.DefaultRouterConfigV1()
 	cfg.BranchFactor = 2
 	cfg.LeafSize = 1
-	cfg.RepresentativeBudget = 6
+	cfg.RepresentativeBudget = 8
 	cfg.MaxDepth = 4
 	cfg.MaxIterations = 8
 	cfg.MaxScalarWork = 50_000_000_000
