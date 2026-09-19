@@ -17136,6 +17136,7 @@ type preparedBatchUpdate struct {
 }
 
 type updateBatchPlan struct {
+	metadataDocuments           []columnWriteDocument
 	typedProjection             *trustedFloat32Projection
 	results                     []UpdateBatchResult
 	stats                       CollectionUpdateStats
@@ -19520,6 +19521,15 @@ func (c *Collection) publishUpdateBatchPlanLocked(plan *updateBatchPlan, command
 			rootNames: cloneColumnPublishRootNames(coalescedRootNames), baseRootIDs: cloneColumnPublishBaseRootIDs(plan.baseRootIDs),
 			commandWALIntent: commandWALIntent, rawPublishLocked: true, operation: ColumnPublishOperationUpdate,
 			documents: columnDocuments, rows: plan.stats.Modified, rowRemainderBytes: plan.rowRemainderBytes,
+		}
+		if plan.metadataDocuments != nil {
+			immediateColumnInput.metadataOnly = true
+			immediateColumnInput.documents = plan.metadataDocuments
+			immediateColumnInput.declaredRowsReady = true
+			immediateColumnInput.declaredRows = make([]columnDeclaredRow, len(plan.metadataDocuments))
+			for i, doc := range plan.metadataDocuments {
+				immediateColumnInput.declaredRows[i] = columnDeclaredRow{ID: doc.ID, Values: doc.declaredValues, Preserved: doc.preserved}
+			}
 		}
 		var cleanup func()
 		immediateColumnInput, cleanup, err = c.prepareImmediateTypedGraphEncoded(immediateColumnInput, publishTables)

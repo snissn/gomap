@@ -47,7 +47,7 @@ func prepareTypedGraphServingFilter(ctx context.Context, keeper *collectionVecto
 		*workOut = work
 		recordTypedGraphFilterWork(work)
 	}()
-	if keeper == nil {
+	if keeper == nil || overlay.lastMetadataGeneration != 0 {
 		return prepareTypedGraphFilterUnmetered(ctx, overlay, filter, limits, &work)
 	}
 	candidate, compileErr := compileTypedGraphBaseFilter(overlay.base, filter, typedGraphBaseFilterLimits{typedGraphFilterLimits: limits, Clauses: hybridScalarMaxConjuncts, PredicateBytes: min(limits.SourceBytes, limits.MappingWork)})

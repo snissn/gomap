@@ -509,6 +509,26 @@ func replayCollectionReplaceSourceByIDCommandWAL(db *backenddb.DB, env commitlog
 }
 
 func replayCollectionUpdateBatchByIDCommandWAL(db *backenddb.DB, env commitlog.CommandEnvelope) error {
+	if env.PayloadFormat == commitlog.PayloadFormatCollectionTypedMetadataByIDV1 {
+		payload, err := commitlog.DecodeCollectionTypedMetadataPayload(env.Payload)
+		if err != nil {
+			return err
+		}
+		intent, err := db.NewCommandWALReplayIntent(env)
+		if err != nil {
+			return err
+		}
+		collection, err := newCommandWALReplayCollectionManager(db).openCollectionWithCommandWALIntent(payload.Collection, intent)
+		if err != nil {
+			return err
+		}
+		ids := make([][]byte, len(payload.Documents))
+		for i, row := range payload.Documents {
+			ids[i] = row.ID
+		}
+		_, err = collection.updateTypedMetadataByID(ids, nil, nil, 0, &payload, intent)
+		return err
+	}
 	if env.PayloadFormat == commitlog.PayloadFormatCollectionTypedBatchByIDV1 {
 		payload, err := commitlog.DecodeCollectionTypedBatchPayload(env.Payload)
 		if err != nil {

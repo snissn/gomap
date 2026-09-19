@@ -670,6 +670,14 @@ func (v *CollectionReadView) LookupDocumentRowRefsByID(ids [][]byte, opts Docume
 // visitDocumentRowRefsByID borrows IDs for synchronous consumption. Its caller
 // owns the read-view pin and foreground-read envelope for the whole operation.
 func (v *CollectionReadView) visitDocumentRowRefsByID(ids [][]byte, visit func([]byte, DocumentRowRef, bool) error) (DocumentMaterializationStats, error) {
+	return v.visitDocumentRowRefsByIDMode(ids, visit, false)
+}
+
+func (v *CollectionReadView) visitDocumentScoringRowRefsByID(ids [][]byte, visit func([]byte, DocumentRowRef, bool) error) (DocumentMaterializationStats, error) {
+	return v.visitDocumentRowRefsByIDMode(ids, visit, true)
+}
+
+func (v *CollectionReadView) visitDocumentRowRefsByIDMode(ids [][]byte, visit func([]byte, DocumentRowRef, bool) error, scoring bool) (DocumentMaterializationStats, error) {
 	if err := v.validateOpen(); err != nil {
 		return DocumentMaterializationStats{}, err
 	}
@@ -707,7 +715,7 @@ func (v *CollectionReadView) visitDocumentRowRefsByID(ids [][]byte, visit func([
 	// Match the existing tree batch reader's minimum grouping size. Small final-K
 	// lookups and overlay roots retain their direct point-read path.
 	if len(ids) >= 64 && len(v.catalog.overlayRootIDs(locatorRootName)) == 0 {
-		return v.visitGroupedDocumentRowRefsByID(locatorRootName, ids, visit, stats)
+		return v.visitGroupedDocumentRowRefsByID(locatorRootName, ids, visit, stats, scoring)
 	}
 	var scratch []byte
 	for _, id := range ids {
@@ -720,6 +728,9 @@ func (v *CollectionReadView) visitDocumentRowRefsByID(ids [][]byte, visit func([
 		if found {
 			scratch = value
 			ref, err = decodeColumnPrimaryRowLocatorBorrowedID(id, value)
+			if scoring && err == nil {
+				ref, err = decodeColumnScoringRowLocatorBorrowedID(id, value)
+			}
 			if err != nil {
 				return stats, err
 			}
@@ -740,7 +751,7 @@ func (v *CollectionReadView) visitDocumentRowRefsByID(ids [][]byte, visit func([
 // Lookup/miss counters include resolved read-ahead, not unfinished tree traversal.
 // Caller mapping work advances only during ordered delivery and stops at its
 // first error. A storage error aborts delivery of the current chunk.
-func (v *CollectionReadView) visitGroupedDocumentRowRefsByID(root string, ids [][]byte, visit func([]byte, DocumentRowRef, bool) error, stats DocumentMaterializationStats) (DocumentMaterializationStats, error) {
+func (v *CollectionReadView) visitGroupedDocumentRowRefsByID(root string, ids [][]byte, visit func([]byte, DocumentRowRef, bool) error, stats DocumentMaterializationStats, scoring bool) (DocumentMaterializationStats, error) {
 	type coordinates struct {
 		generation, partID uint64
 		rowIndex           int
@@ -762,6 +773,9 @@ func (v *CollectionReadView) visitGroupedDocumentRowRefsByID(root string, ids []
 			// Nothing after it can be delivered; earlier callbacks may still fail.
 			if i < decodeErrIndex {
 				ref, err := decodeColumnPrimaryRowLocatorBorrowedID(id, value)
+				if scoring && err == nil {
+					ref, err = decodeColumnScoringRowLocatorBorrowedID(id, value)
+				}
 				if err != nil {
 					decodeErr, decodeErrIndex = err, i
 				} else {
@@ -956,6 +970,29 @@ func (v *CollectionReadView) validateDocumentRowRefLatest(ref DocumentRowRef, st
 }
 
 func (v *CollectionReadView) fetchDocumentPointRow(view columnPhysicalScanSnapshotView, ref DocumentRowRef, projection columnPhysicalScanProjection, scratch *columnPhysicalRowReaderScratch, stats *DocumentMaterializationStats) (columnPhysicalVisibleRow, error) {
+	row, err := v.fetchDocumentPointRowUnresolved(view, ref, projection, scratch, stats)
+	if err != nil || row.Preserved == nil {
+		return row, err
+	}
+	var preservedScratch columnPhysicalRowReaderScratch
+	full, err := v.fetchDocumentPointRowUnresolved(view, row.Preserved.ref(row.ID), projection, &preservedScratch, stats)
+	if err != nil {
+		return columnPhysicalVisibleRow{}, err
+	}
+	if full.Preserved != nil || full.Deleted {
+		return columnPhysicalVisibleRow{}, errors.New("collections: metadata row must reference a live ordinary full row")
+	}
+	for colIdx, col := range view.Config.Columns {
+		output := projection.outputByColumn[colIdx]
+		if output >= 0 && !columnMetadataStoredColumn(col) {
+			// Copy the value, not the payload. Both blocks remain pinned by this view.
+			row.Values[output] = full.Values[output]
+		}
+	}
+	return row, nil
+}
+
+func (v *CollectionReadView) fetchDocumentPointRowUnresolved(view columnPhysicalScanSnapshotView, ref DocumentRowRef, projection columnPhysicalScanProjection, scratch *columnPhysicalRowReaderScratch, stats *DocumentMaterializationStats) (columnPhysicalVisibleRow, error) {
 	if stats != nil {
 		stats.PointRowFetches++
 	}
@@ -1484,6 +1521,7 @@ func documentRowLocatorCandidateNewer(a, b documentRowLocatorCandidate) bool {
 
 func columnPhysicalVisibleRowFromReaderRow(row columnPhysicalRowReaderRow) columnPhysicalVisibleRow {
 	return columnPhysicalVisibleRow{
+		Preserved:         row.Preserved,
 		Generation:        row.Generation,
 		PartID:            row.PartID,
 		AppliedCommandLSN: row.AppliedCommandLSN,

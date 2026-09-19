@@ -136,6 +136,9 @@ func (c *Collection) foldTypedGraphTimed(ctx context.Context, cold typedGraphCol
 	if err != nil {
 		return err
 	}
+	if copy.lastMetadataGeneration != 0 {
+		streamed = false
+	}
 	var rows []columnDeclaredRow
 	var graphRows []columnVectorGraphAssetRow
 	var vectorSource *columnVectorGraphTypedColumnVectorSource
@@ -373,8 +376,12 @@ func (c *Collection) installTypedGraphFold(ctx context.Context, captured columnS
 	}
 	// The lock-held current locator stream is independently charged. A valid
 	// captured budget does not bound post-capture writes or malformed roots.
-	if _, err := scanTypedGraphCaptureRoot(latest.snap, latest.catalog.rootID(collectionColumnRowLocatorRootName(latest.meta.Name)), &copy.remaining); err != nil {
+	var latestMetadataGeneration uint64
+	if _, err := scanTypedGraphCaptureRoot(latest.snap, latest.catalog.rootID(collectionColumnRowLocatorRootName(latest.meta.Name)), &copy.remaining, &latestMetadataGeneration); err != nil {
 		return err
+	}
+	if latestMetadataGeneration > captured.manifest.Generation {
+		return ErrConcurrentMutation
 	}
 	currentRecords := make([]columnManifestRecord, 0, len(baseRecords)+len(latest.records))
 	for _, record := range baseRecords {
