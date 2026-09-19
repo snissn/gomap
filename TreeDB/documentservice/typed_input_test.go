@@ -151,6 +151,67 @@ func TestServiceReplaceSourceByIDLifecycle(t *testing.T) {
 	}
 }
 
+// Measures the public service call, including validation, typed conversion and
+// durable publication. Fixture creation, graph build and restoring the source
+// after a shrink/delete are excluded; HTTP JSON decoding is not measured.
+func BenchmarkServiceTypedSourceReplacement(b *testing.B) {
+	for _, liveRows := range []int{8, 4, 0} {
+		b.Run(fmt.Sprintf("live%d", liveRows), func(b *testing.B) {
+			if b.N > 16 {
+				b.Skip("bounded source diagnostic: use -benchtime=10x")
+			}
+			svc, db := newTestService(b)
+			defer db.Close()
+			defer svc.Close()
+			ctx := context.Background()
+			info, err := svc.CreateIndex(ctx, CreateIndexRequest{
+				Name: "source-cost", Dimension: 8, TypedInput: true,
+				VectorIndexOptions: &BenchmarkVectorIndexOptions{Strategy: collections.VectorIndexStrategyColumnGraph, M: 2},
+				ScalarFields:       []ScalarFieldDeclaration{{Field: "meta.user_id", ValueType: ScalarFieldString}, {Field: "meta.fpath", ValueType: ScalarFieldString}},
+			})
+			if err != nil {
+				b.Fatal(err)
+			}
+			ids, docs := make([]string, 8), make([]Document, 8)
+			for i := range ids {
+				ids[i] = fmt.Sprintf("source%02d", i)
+				docs[i] = Document{ID: ids[i], Content: "alpha beta", Embedding: []float32{1, 0, 0, 0, 0, 0, 0, 0}, Meta: map[string]any{"user_id": "u", "fpath": "p", "extra": "kept"}}
+			}
+			if _, err := svc.ReplaceSourceByID(ctx, info.Name, ReplaceSourceByIDRequest{ExpectedGeneration: info.Generation, Documents: docs}); err != nil {
+				b.Fatal(err)
+			}
+			serving := typedServiceTestOptions()
+			if _, err := svc.OptimizeIndex(ctx, info.Name, OptimizeIndexRequest{ColumnGraphServing: &serving}); err != nil {
+				b.Fatal(err)
+			}
+			request := ReplaceSourceByIDRequest{ExpectedGeneration: info.Generation, DeleteIDs: ids, Documents: docs[:liveRows]}
+			wire, err := json.Marshal(request)
+			if err != nil {
+				b.Fatal(err)
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				out, err := svc.ReplaceSourceByID(ctx, info.Name, request)
+				if err != nil || out.DeletedCount != 8 || out.InsertedCount != liveRows {
+					b.Fatalf("replace=%+v err=%v", out, err)
+				}
+				if liveRows != 8 {
+					b.StopTimer()
+					if _, err := svc.ReplaceSourceByID(ctx, info.Name, ReplaceSourceByIDRequest{ExpectedGeneration: info.Generation, DeleteIDs: ids[:liveRows], Documents: docs}); err != nil {
+						b.Fatal(err)
+					}
+					b.StartTimer()
+				}
+			}
+			b.StopTimer()
+			b.ReportMetric(float64(liveRows), "live-rows/batch")
+			b.ReportMetric(8, "delete-ids/batch")
+			b.ReportMetric(float64(len(wire)), "request-json-B/batch")
+		})
+	}
+}
+
 func TestTypedSourceReplacementOutcomeErrorsRemainStructured(t *testing.T) {
 	for _, tc := range []struct {
 		err  error
