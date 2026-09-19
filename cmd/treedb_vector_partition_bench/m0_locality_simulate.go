@@ -168,7 +168,7 @@ func m0ValidateCaptureSplitPairV1(calibration, holdout m0LocalityCaptureV1, quer
 	if slices.Contains(seen, false) {
 		return errors.New("capture split coverage")
 	}
-	if !reflect.DeepEqual(calibration.Snapshots, holdout.Snapshots) {
+	if !reflect.DeepEqual(calibration.Snapshots, holdout.Snapshots) || !reflect.DeepEqual(calibration.PackIdentityNeutralSHA256, holdout.PackIdentityNeutralSHA256) {
 		return errors.New("capture snapshot identity")
 	}
 	return nil
@@ -185,6 +185,16 @@ func m0ReadCaptureV1(path string) (m0LocalityCaptureV1, string, error) {
 	}
 	if capture.Schema != "treedb_vector_partition_m0_exact_pack_trace_v3" || !m8SHA256V1(capture.Artifact) || !m8SHA256V1(capture.Descriptor) || capture.Source.SourceID == "" || !m8SHA256V1(capture.Source.Checksum) || capture.Source.Vectors < 1 || capture.Source.Dimensions < 1 || capture.Source.Metric == "" || !m8SHA256V1(capture.Manifest) || !m8SHA256V1(capture.ReadySet) || !m8SHA256V1(capture.RouterModel) || !m0CleanBuildIdentityValidV1(m0CleanBuildIdentityV1{BinarySHA256: capture.BinarySHA256, SourceRevision: capture.SourceRevision, VCSModified: capture.VCSModified}) || len(capture.Traces) == 0 || len(capture.Snapshots) == 0 || len(capture.Traces) != len(capture.Rows) {
 		return m0LocalityCaptureV1{}, "", errors.New("raw capture schema or trace payload")
+	}
+	if len(capture.PackIdentityNeutralSHA256) > 0 {
+		if len(capture.PackIdentityNeutralSHA256) != len(capture.Snapshots) {
+			return m0LocalityCaptureV1{}, "", errors.New("raw capture pack digest coverage")
+		}
+		for partition, digest := range capture.PackIdentityNeutralSHA256 {
+			if _, ok := capture.Snapshots[partition]; !ok || !m8SHA256V1(digest) {
+				return m0LocalityCaptureV1{}, "", errors.New("raw capture pack digest identity")
+			}
+		}
 	}
 	return capture, m0SHA256V1(raw), nil
 }

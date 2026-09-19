@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/snissn/gomap/TreeDB/collections"
 )
 
 func TestReplayM8ReportRequiresFrozenPinsV1(t *testing.T) {
@@ -177,6 +179,93 @@ func TestReplayM8ReportPlannedDiagnosticSizeV1(t *testing.T) {
 	// hash, strict decoding and pin checks. This is not a positive replay claim.
 	if err := run(testM8ReportReplayArgsV1(root, path, pins), &output); err == nil || !strings.Contains(err.Error(), "contained captured production profiles") || output.Len() != 0 {
 		t.Fatalf("planned report did not reach profile validation: %v output=%q", err, output.String())
+	}
+}
+
+func TestM8PlannedRouterPolicyReceiptSizeV1(t *testing.T) {
+	// This typed serialization fixture is not empirical policy/replay evidence.
+	// Cover the admitted one-cell representative shape, not an infeasible grid.
+	report, pins := testM8PlannedDiagnosticReportV1(t)
+	report.Dataset.Vectors, report.Dataset.Dimensions = 250000, 128
+	report.Config.Partitions, report.Config.DomainCount = 16, 16
+	report.Config.Probes, report.Config.EfSearch, report.Config.Concurrency = []int{2}, []int{96}, []int{1}
+	report.Config.RouterPolicyDiagnostics, report.Config.RouterPolicyWidth, report.Config.RouterCandidates = true, 64, 128
+	report.Rows = report.Rows[:1]
+	row := &report.Rows[0]
+	row.Probes, row.EfSearch = 2, 96
+	quality := row.Attribution.Quality
+	quality.Domains, quality.PackCosts = 16, make([]int64, 16)
+	for i := range quality.PackCosts {
+		quality.PackCosts[i] = 1
+	}
+	policies := &m8RouterPolicyEvidenceV1{Method: m8RouterPolicyExperimentMethodV1, RequestedWidth: 64, EffectiveWidth: 64, ApproximateBudget: 128, Queries: make([]m8RouterPolicyQueryV1, 512)}
+	for i := range quality.Queries {
+		q := &quality.Queries[i]
+		q.NoCoarseningDomains, q.ExactDomains, q.ApproximateDomains = []uint32{0, 1}, []uint32{0, 1}, []uint32{0, 1}
+		q.NoCoarseningPacks, q.ExactPacks, q.ApproximatePacks = 2, 2, 2
+		distance := []collections.VectorPartitionRouterPolicyDomainV1{
+			{Domain: 0, Distance: .01, Frequency: 1, WinningRepresentative: 0, WinningSourceOrdinal: 0},
+			{Domain: 1, Distance: .02, Frequency: 2, WinningRepresentative: 1, WinningSourceOrdinal: 1},
+		}
+		other := []collections.VectorPartitionRouterPolicyDomainV1{distance[1], distance[0]}
+		comparison := collections.VectorPartitionRouterPolicyComparisonV1{
+			Method: collections.VectorPartitionRouterPolicyDiagnosticMethodV1, Generation: 1, SourceGeneration: 1,
+			ModelSHA256: quality.ModelSHA256, QuerySHA256: q.QuerySHA256, Mode: collections.VectorPartitionRouterModeExactV1,
+			RepresentativeCount: 256, DomainCount: 16, CandidateBudget: 256, ReturnedWidth: 64, Probes: 2,
+			CollectionComplete: true, Collected: 256, UniqueReturned: 64, Candidates: 256,
+			CandidateSetSHA256: strings.Repeat("d", 64), CandidateSequenceSHA256: strings.Repeat("e", 64),
+			Distance: distance, Frequency: other, Hybrid: other,
+		}
+		coverage := &m8RouterPolicyCoverageV1{DistanceMask: 1023, FrequencyMask: 1023, HybridMask: 1023, DistancePacks: 2, FrequencyPacks: 2, HybridPacks: 2}
+		exact := m8RouterPolicyOutcomeV1{Status: "pass", Comparison: comparison, Coverage: coverage}
+		comparison.Mode, comparison.CandidateBudget, comparison.Collected, comparison.Candidates, comparison.Edges = collections.VectorPartitionRouterModeApproxV1, 128, 128, 128, 32768
+		policies.Queries[i] = m8RouterPolicyQueryV1{QuerySHA256: q.QuerySHA256, TruthSHA256: q.TruthSHA256,
+			Exact: exact, Approximate: m8RouterPolicyOutcomeV1{Status: "pass", Comparison: comparison, Coverage: coverage}}
+	}
+	row.Attribution.RouterPolicies = policies
+	report.Command = append(report.Command, "-m8-router-policy-diagnostics", "-m8-router-policy-width", "64", "-probes", "2", "-ef-search", "96", "-router-candidates", "128")
+	for _, item := range []struct {
+		value any
+		pin   *string
+	}{{report.Dataset, &pins.Fixture}, {report.Command, &pins.Command}} {
+		raw, err := json.Marshal(item.value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		*item.pin = fmt.Sprintf("%x", sha256.Sum256(raw))
+	}
+	root, err := m8CanonicalPathV1(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	report.MeasurementTranscript, err = m8WriteProductionMeasurementTranscriptV1(root, report, testM8MeasurementCellsV1(report))
+	if err != nil {
+		t.Fatal(err)
+	}
+	transcript, err := m8ReadProductionMeasurementTranscriptV1(report)
+	if err != nil {
+		t.Fatalf("strict typed policy transcript read: %v", err)
+	}
+	if len(transcript.Rows) != 1 || transcript.Rows[0].Attribution.RouterPolicies == nil || len(transcript.Rows[0].Attribution.RouterPolicies.Queries) != 512 {
+		t.Fatal("policy transcript dropped query evidence")
+	}
+	raw, err := json.MarshalIndent(report, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw = append(raw, '\n')
+	t.Logf("typed N250K/Q512/d128/D16 width64/P2/EF96/C128 policy report=%d transcript=%d bytes", len(raw), report.MeasurementTranscript.Bytes)
+	if int64(len(raw)) > m8DiagnosticRetainedMaxBytesV1 || report.MeasurementTranscript.Bytes > m8DiagnosticRetainedMaxBytesV1 {
+		t.Fatal("finite policy receipt exceeds unchanged 64MiB bound")
+	}
+	path := filepath.Join(root, "policy-report.json")
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	pins.Report = fmt.Sprintf("%x", sha256.Sum256(raw))
+	var output strings.Builder
+	if err := run(testM8ReportReplayArgsV1(root, path, pins), &output); err == nil || !strings.Contains(err.Error(), "contained captured production profiles") || output.Len() != 0 {
+		t.Fatalf("typed policy report did not reach missing-profile guard: %v output=%q", err, output.String())
 	}
 }
 

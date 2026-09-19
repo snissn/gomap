@@ -652,3 +652,144 @@ The coverage benchmark measures oracle CPU/allocation cost, **not ANN QPS**.
 All proposed performance comparisons retain identical datasets, score contracts,
 timer boundaries and populations. Query time is never derived from inverse
 concurrent throughput or combined write/search cycles.
+
+## Same-candidate router policy diagnostics (#4745)
+
+`-m8-router-policy-diagnostics` requires `-m8-quality-diagnostics`. It calls
+`CompareRankingPoliciesForDiagnosticsV1` on the existing immutable router owner,
+**outside the measured serving windows**, and compares three reducers on one
+returned candidate set: minimum distance, frequency, and frequency-first then
+distance. No public query policy, graph, persisted model, write placement, or
+Raft behavior changes. The default remains distance-only with no policy hashing,
+voting, diagnostic copies or traces.
+
+The hybrid prepends the most frequent domain, then retains the original distance
+order of every other domain. It does not swap two positions. Votes count unique
+returned representative identities, not graph visits, source anchors, member
+counts or physical pack copies. Equal frequency uses nearest distance then domain
+ID; representative-distance ties use the immutable model ordinal. Different
+centroids can share source anchors or coordinates and remain different votes.
+
+`-m8-router-policy-width W` selects the nearest W collected representatives before
+voting; zero uses the actual approximate candidate budget after its existing
+model-size clamp. Exact-reference collection scores **all representatives**,
+then takes nearest W. Approximate collection reuses the ordinary coupled
+`TopK=EfSearch=CandidateLimit` operation without changing entry policy. Returned
+width is not the number of vectors scored. This packet does not implement the
+separate hierarchy/budget experiment in #4748.
+
+A comparison preserves a permutation-invariant candidate-set digest separately
+from the collected sequence digest. Both bind model, query, score convention,
+collection mode, budget and width. Duplicate identities with conflicting scores
+are invalid. A valid set reaching too few domains is retained as
+`candidate_coverage_shortfall`, including its work and candidate identity, but
+**no partial route**. No retry, probe escalation or exact fallback fills gaps.
+Queries are not removed from the report because a policy cannot supply a route.
+
+M8 caches the immutable exact/approximate comparisons once per query and probe
+coordinate across local-EF and concurrency cells. Cache lookup still hashes the full
+query/truth population to reject changed inputs. Preflight therefore charges
+`2*queries*probes*EF-coordinates*concurrency-coordinates` population rechecks per
+variant: the conservative strict-replay maximum, including explicit replay and
+its attribution pass. The producer's smaller count is covered by that envelope;
+collector/reducer work remains charged once per probe. Each recheck includes
+query conversion/hash input, bounded truth-ID/score bytes and fixed digest
+headers. Dimension-sized scratch is charged separately from model-sized scratch.
+These are conservative admission work units, not measured CPU instructions.
+The retained-row validation and serialization bound is separate.
+
+It records all three truth
+masks, signed gained/lost bits, and **all expanded physical pack costs** using
+#4744's common canonical truth and membership. These are coverage diagnostics,
+not complete ANN search results under a new policy. Real local-search/QPS
+promotion remains #4750/#4753 work. A refused comparison has no inferred mask.
+The existing actual local/coordinator search remains on the ordinary route.
+
+The work planner separately charges full exact representative scoring, bounded
+approximate traversal, sorting/hashing, owned scalar results, and serialized
+report copies. Retained models use their actual validated representative count,
+read alongside domain counts under one open owner. New models use the existing
+M8 builder's default representative bound, not unrelated simulation flags.
+For a retained graph without a tighter preflight degree fact, the edge bound is
+conservatively `min(C,N)*(N+9)`; a large diagnostic may therefore require a
+smaller predeclared query/probe matrix. No cost or measured query is omitted after
+results are observed. There is no new full-corpus vector copy or second ANN
+engine. Returned policy prefixes use small owned buffers rather than retaining
+all-domain temporary arrays.
+
+The selected flags propagate to child commands and report/transcript identity.
+Strict retained replay opens fresh owners and recollects candidates and policies,
+including shortfalls, before accepting the report. A digest alone is not trusted
+as proof that the source actually produced those candidates. Old unselected
+reports remain unchanged and cannot silently contain new policy observations.
+
+### Development and validation commands
+
+For the same bounded development fixture shown above, add
+`-m8-router-policy-diagnostics -m8-router-policy-width 4`. Keep the initial
+matrix small, for example `-probes 1,2 -ef-search 32 -concurrency 1` and no local
+trace sampling. This is not a new qualified workload or permission to tune on
+previously opened final queries. The normal resource preflight still applies.
+
+```sh
+GOWORK=off go test ./TreeDB/collections -run '^TestVectorPartitionRouter' -count=1
+GOWORK=off go test ./cmd/treedb_vector_partition_bench -run '^TestM8(RouterPolicy|Quality)' -count=1
+GOWORK=off go test -race ./TreeDB/collections -run '^TestVectorPartitionRouter' -count=1
+GOWORK=off go test -race ./cmd/treedb_vector_partition_bench -run '^TestM8RouterPolicy' -count=1
+GOWORK=off go test ./cmd/treedb_vector_partition_bench -run '^$' \
+  -bench '^BenchmarkM8Router(OrdinaryPath|PolicyPrepared)V1$' -benchmem -count=5
+```
+
+`BenchmarkM8RouterOrdinaryPathV1` is the same prepared-router operation on the base
+and candidate source. `BenchmarkM8RouterPolicyPreparedV1` measures a feature-
+enabled collection plus three reducers and hashes, not a cache hit. Setup is
+outside both timers. Neither benchmark includes local pack ANN, document fetch,
+networking or Python; neither rate is end-user ANN QPS. The pure reducer benchmark
+separately measures ranking/allocation cost without any representative search.
+Publish every repetition and the exact source/toolchain/timer boundaries.
+
+Policy work preflight charges both the once-per-probe candidate comparisons and
+repeated query/truth checks, retained-row validation and scalar serialization
+across EF/concurrency cells. A cache hit removes representative search work,
+not the remaining bookkeeping or owned output cost.
+
+The shared approximate collector allocates its owned scalar candidate copy once
+at the bounded native return width. It does not grow an escaping append buffer
+per query or borrow a pooled native slice after releasing its scratch owner.
+Compare `BenchmarkM8RouterOrdinaryPathV1` against the parent and retain allocation
+counts as well as latency; helper extraction alone is not an overhead waiver.
+
+#### Draft review repairs for #4756
+
+Nearest-width, representative-identity, domain-distance and domain-frequency
+ordering reuse the existing cancellation-aware bounded merge sort. Diagnostic
+preparation polls through large intermediate copies and returns no policy routes
+on cancellation, allowing the owner read lock to be released. The extra bounded
+sort scratch is included in the model-memory envelope. This changes no ordinary
+serving reducer or selected candidate/digest definition.
+
+Regression commands:
+```sh
+GOWORK=off go test ./TreeDB/collections -run '^TestVectorPartitionRouterPolicy(NearestWidthSortCancellation|ReductionCancellationNoPartial)$'
+GOWORK=off go test ./cmd/treedb_vector_partition_bench -run '^TestM8RouterPolicyResourcePlan'
+```
+
+A prior draft's work bound omitted repeated population revalidation. Old checks
+on that bound do not qualify a new expanded diagnostic matrix; rerun current
+preflight rather than weakening the cap. Cached comparisons still reject input
+mutation and remain outside ordinary serving timers.
+
+The representative admission test checks the combined attribution, quality and
+policy work at N=100K/250K, Q=512 and d=128. It preserves the 200M work cap:
+C256 at width64/P2/EF96 must refuse, while the finite C128 cell must admit.
+The typed one-cell receipt test uses the actual producer and strict transcript
+reader under the unchanged 64MiB diagnostic cap. Neither test is empirical
+policy evidence or permission to expand the matrix after observing outcomes.
+
+Raw M0 captures optionally include each complete prepared pack's existing
+identity-neutral SHA256. Only the 32 membership-digest bytes are zeroed; levels,
+vectors, IDs, CSR, auxiliary data and all other headers/sections remain covered.
+Older captures without these hashes are readable but cannot prove full geometry
+parity. An empty-ordinal split can capture geometry without query outcomes; it
+still fails the locality reader's unchanged nonempty-trace admission. Analysis
+executable identity remains distinct from each original descriptor's bindings.

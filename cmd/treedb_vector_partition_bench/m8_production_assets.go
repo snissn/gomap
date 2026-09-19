@@ -225,26 +225,39 @@ func openM8ProductionExistingAssetSetV1(dir string) (_ *m8ProductionMultiGroupAs
 }
 
 func m8RetainedOracleDomainCountsV1(cfg config) ([]int, error) {
+	domains, _, err := m8RetainedOracleShapesV1(cfg)
+	return domains, err
+}
+
+// Read both shapes under the same validated retained owner. Opening the same
+// database again merely to count representatives wastes I/O and can mix states.
+func m8RetainedOracleShapesV1(cfg config) ([]int, []int, error) {
 	dirs := cfg.m8VariantDBs
 	if cfg.m8ExistingDB != "" {
 		dirs = []string{cfg.m8ExistingDB}
 	}
 	counts := make([]int, 0, len(dirs))
+	representativeCounts := make([]int, 0, len(dirs))
 	for _, dir := range dirs {
 		assets, err := openM8ProductionExistingAssetSetV1(dir)
 		if err != nil {
-			return nil, fmt.Errorf("open retained M8 manifest for work planning: %w", err)
+			return nil, nil, fmt.Errorf("open retained M8 manifest for work planning: %w", err)
 		}
 		partitions, domains := assets.manifest.PartitionCount, assets.manifest.DomainCount
+		representatives := assets.status.Representatives
 		if err := assets.Close(); err != nil {
-			return nil, fmt.Errorf("close retained M8 manifest after work planning: %w", err)
+			return nil, nil, fmt.Errorf("close retained M8 manifest after work planning: %w", err)
 		}
 		if uint64(partitions) != uint64(cfg.partitions) || domains < 1 || domains > partitions {
-			return nil, errors.New("retained M8 manifest does not match configured physical packs or logical domains")
+			return nil, nil, errors.New("retained M8 manifest does not match configured physical packs or logical domains")
+		}
+		if representatives < uint64(domains) || representatives > uint64(vectorpartition.DefaultRouterConfigV1().MaxRepresentatives) {
+			return nil, nil, errors.New("retained M8 representative count is outside the admitted model bounds")
 		}
 		counts = append(counts, int(domains))
+		representativeCounts = append(representativeCounts, int(representatives))
 	}
-	return counts, nil
+	return counts, representativeCounts, nil
 }
 
 func openM8ProductionExistingAssetSetModeV1(dir string, readOnly bool) (_ *m8ProductionMultiGroupAssetsV1, err error) {

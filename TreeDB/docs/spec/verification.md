@@ -2243,3 +2243,41 @@ resource and retained-asset/attribution verifiers; these boundary tests do not
 substitute for a complete successful replay of real retained artifacts. Its
 `REPLAY_ACCEPTED_NOT_QUALIFICATION` result does not assert a campaign or baseline
 acceptance and does not modify historical `validate-qualification`.
+
+## M8 same-candidate router policy diagnostics (#4745)
+
+`TreeDB/collections/vector_partition_router_policy_reduce_test.go` checks the
+hybrid golden across all 720 permutations and all probe prefixes, unique
+representative voting, conflicting duplicate rejection, nearest-width exact
+voting, deterministic ties, set/sequence identity, refusal receipts and owned
+prefix buffers. The digest-byte golden protects the documented encoding during
+allocation minimization.
+
+`vector_partition_router_policy_diagnostic_test.go` covers the real persisted
+router's shared candidate path, ordinary-result/work parity, unchanged ordinary
+counters, independent owner reopening, invalid selection, cancellation, close,
+concurrent readers and result ownership. The ordinary collector is shared, not
+reimplemented in a benchmark-only approximate search.
+
+`cmd/treedb_vector_partition_bench/m8_router_policy_experiment_test.go` covers
+explicit CLI/config/child selection, full-population coverage refusals, cached
+probe versus EF identity, actual physical pack cost, flags/source/query/candidate
+replay and independently reopened retained report verification. Work and byte
+preflight include actual retained model sizes. Failure receipts cannot be dropped
+or replaced by successful-only averages. These tests do not select a production
+policy, establish 100K/250K scaling, or release the graph-before-Raft gate.
+
+- Router-policy cache-hit work, dimension-sized scratch and overflow admission:
+  `TestM8RouterPolicyResourcePlanChargesEveryPopulationRecheck`,
+  `TestM8RouterPolicyResourcePlanChargesQueryScratchAndRejectsOverflow`.
+- Cancellation within nearest-width sorting and without partial policy results:
+  `TestVectorPartitionRouterPolicyNearestWidthSortCancellation`,
+  `TestVectorPartitionRouterPolicyReductionCancellationNoPartial`.
+- Combined representative admission and typed full-512-query receipt bytes:
+  `TestM8RouterPolicyRepresentativeCombinedAdmissionV1`,
+  `TestM8PlannedRouterPolicyReceiptSizeV1`. These source checks preserve the
+  original 200M work and 64MiB diagnostic caps; they are not policy outcomes.
+- Optional complete identity-neutral pack digest admission and split parity:
+  `TestM0ReadCaptureRequiresCleanBuildIdentity`,
+  `TestM0CaptureSplitPairRejectsLeakage`. Missing historical hashes do not prove
+  full geometry. Empty-ordinal geometry controls do not qualify as locality traces.
