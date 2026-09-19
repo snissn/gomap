@@ -47,7 +47,7 @@ func (c *Collection) hybridSearchCandidatesWithBudgetPolicy(plan hybridSearchExe
 	}
 	if filterAllowSet != nil && len(filterAllowSet) == 0 {
 		if plan.text != nil {
-			if err := c.validateHybridTextCandidateQueryAgainstCurrentSnapshot(*plan.text); err != nil {
+			if err := c.validateHybridTextCandidateQueryAtReadView(*plan.text, plan.readView); err != nil {
 				return nil, HybridSearchStats{}, hybridCandidateSourceError{source: HybridCandidateSourceText, err: err}
 			}
 		}
@@ -67,6 +67,11 @@ func (c *Collection) hybridSearchCandidatesWithBudgetPolicy(plan hybridSearchExe
 		return nil, stats, nil
 	}
 	if mode == hybridCandidateBudgetPolicyFixed {
+		return c.hybridSearchCandidatesFixedBudget(plan, candidateAllowSet, HybridCandidateBudgetStopReasonFixedPolicy, HybridCandidateBudgetStopReasonNone)
+	}
+	// Selected quantized traversal changes its shortlist as K/E/R change, so the
+	// exact-prefix proof used by adaptive RRF does not apply.
+	if hybridVectorQuerySelectsQuantizedRerank(plan.vector) {
 		return c.hybridSearchCandidatesFixedBudget(plan, candidateAllowSet, HybridCandidateBudgetStopReasonFixedPolicy, HybridCandidateBudgetStopReasonNone)
 	}
 	// An explicit postings cap is one request-wide guardrail. Adaptive retries

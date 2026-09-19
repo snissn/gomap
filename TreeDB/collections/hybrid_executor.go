@@ -33,6 +33,9 @@ const (
 type hybridSearchExecutionPlan struct {
 	public HybridSearchPlan
 
+	context                       context.Context
+	readView                      *CollectionReadView
+	readOwnerAcquireNanos         int64
 	text                          *HybridTextQuery
 	textCandidateScanBudget       int
 	vector                        *HybridVectorQuery
@@ -74,9 +77,9 @@ func (c *Collection) searchHybrid(opts HybridSearchOptions) (HybridSearchRespons
 	return c.searchHybridWithCandidateBudgetPolicy(opts, hybridCandidateBudgetPolicyDefault)
 }
 
-func (c *Collection) searchHybridWithCandidateBudgetPolicy(opts HybridSearchOptions, budgetPolicy hybridCandidateBudgetPolicyMode) (HybridSearchResponse, error) {
+func (c *Collection) searchHybridWithCandidateBudgetPolicy(opts HybridSearchOptions, budgetPolicy hybridCandidateBudgetPolicyMode) (response HybridSearchResponse, err error) {
 	plan, err := planHybridSearch(opts)
-	response := HybridSearchResponse{Plan: plan.public}
+	response = HybridSearchResponse{Plan: plan.public}
 	if err != nil {
 		return hybridSearchFailClosed(response, hybridPlanFailClosedReason(err), err)
 	}
@@ -85,6 +88,27 @@ func (c *Collection) searchHybridWithCandidateBudgetPolicy(opts HybridSearchOpti
 		return hybridSearchFailClosed(response, HybridFailClosedReasonSnapshotMismatch, fmt.Errorf("%w: hybrid search cannot flush current snapshot: %w", ErrHybridSearchIndexUnavailable, err))
 	}
 	baseState := hybridSearchDBStateToken(c.db)
+	if hybridVectorQuerySelectsQuantizedRerank(plan.vector) {
+		view, acquiredNanos, openErr := c.openTypedGraphHybridReadView(plan.context, plan.vector.IndexName)
+		if openErr != nil {
+			return hybridSearchFailClosed(response, HybridFailClosedReasonVectorIndexUnavailable, hybridVectorCandidateError(openErr, plan.vector.IndexName))
+		}
+		plan.readView = view
+		plan.readOwnerAcquireNanos = acquiredNanos
+		defer func() {
+			if closeErr := view.Close(); closeErr != nil {
+				if err == nil {
+					response, err = hybridSearchFailClosed(response, HybridFailClosedReasonSnapshotMismatch, closeErr)
+				} else {
+					err = errors.Join(err, closeErr)
+				}
+			}
+		}()
+		if validateErr := validateTypedGraphHybridSelectedAsset(plan.context, view, *plan.vector); validateErr != nil {
+			return hybridSearchFailClosed(response, HybridFailClosedReasonVectorIndexUnavailable, hybridVectorCandidateError(validateErr, plan.vector.IndexName))
+		}
+		baseState = hybridSearchSnapshotStateToken(view.snapshot)
+	}
 	response.Snapshot = hybridSearchSnapshotFromState(baseState)
 	if !baseState.available {
 		return hybridSearchFailClosed(response, HybridFailClosedReasonSnapshotMismatch, fmt.Errorf("%w: hybrid search current snapshot unavailable", ErrHybridSearchIndexUnavailable))
@@ -103,7 +127,11 @@ func (c *Collection) searchHybridWithCandidateBudgetPolicy(opts HybridSearchOpti
 			plan.scalarFilterStrategy != HybridScalarFilterStrategyPostfilter
 	}
 	if !plan.nativeVectorScalar {
-		allowSet, scalarStats, err = c.hybridScalarAllowSet(plan)
+		if plan.readView != nil {
+			allowSet, scalarStats, err = c.hybridScalarAllowSetAtReadView(plan, plan.readView)
+		} else {
+			allowSet, scalarStats, err = c.hybridScalarAllowSet(plan)
+		}
 		hybridMergeStats(&response.Stats, scalarStats)
 		if err != nil {
 			reason := HybridFailClosedReasonScalarFilterUnbounded
@@ -113,7 +141,7 @@ func (c *Collection) searchHybridWithCandidateBudgetPolicy(opts HybridSearchOpti
 			return hybridSearchFailClosed(response, reason, err)
 		}
 	}
-	if err := hybridSearchCheckCurrentSnapshot(hybridSearchDBStateToken(c.db), baseState); err != nil {
+	if err := hybridSearchCheckExecutionSnapshot(c, plan, baseState); err != nil {
 		return hybridSearchFailClosed(response, HybridFailClosedReasonSnapshotMismatch, err)
 	}
 
@@ -126,7 +154,7 @@ func (c *Collection) searchHybridWithCandidateBudgetPolicy(opts HybridSearchOpti
 	if err != nil {
 		return hybridSearchFailClosed(response, hybridStatsFailClosedReason(candidateStats, hybridCandidateErrorFailClosedReason(err)), err)
 	}
-	if err := hybridSearchCheckCurrentSnapshot(hybridSearchDBStateToken(c.db), baseState); err != nil {
+	if err := hybridSearchCheckExecutionSnapshot(c, plan, baseState); err != nil {
 		return hybridSearchFailClosed(response, HybridFailClosedReasonSnapshotMismatch, err)
 	}
 
@@ -159,24 +187,50 @@ func (c *Collection) searchHybridWithCandidateBudgetPolicy(opts HybridSearchOpti
 	}
 	response.Results = results
 
-	if err := hybridSearchCheckCurrentSnapshot(hybridSearchDBStateToken(c.db), baseState); err != nil {
+	if err := hybridSearchCheckExecutionSnapshot(c, plan, baseState); err != nil {
 		return hybridSearchFailClosed(response, HybridFailClosedReasonSnapshotMismatch, err)
 	}
 	if plan.resultMode == HybridResultModeFull {
-		if err := c.hybridFetchResultDocuments(&response, opts.DocumentFetchOptions, baseState); err != nil {
+		var fetchErr error
+		if plan.readView != nil {
+			fetchErr = c.hybridFetchResultDocumentsAtReadView(&response, opts.DocumentFetchOptions, baseState, plan.readView)
+		} else {
+			fetchErr = c.hybridFetchResultDocuments(&response, opts.DocumentFetchOptions, baseState)
+		}
+		if fetchErr != nil {
 			reason := HybridFailClosedReasonDocumentFetchUnavailable
-			if errors.Is(err, ErrHybridSearchStaleIndex) {
+			if errors.Is(fetchErr, ErrHybridSearchStaleIndex) {
 				reason = HybridFailClosedReasonSnapshotMismatch
 			}
-			return hybridSearchFailClosed(response, reason, err)
+			return hybridSearchFailClosed(response, reason, fetchErr)
 		}
 	}
 	hybridSetScalarFilterSelectivity(&response.Stats)
 	return response, nil
 }
 
+func hybridSearchCheckExecutionSnapshot(c *Collection, plan hybridSearchExecutionPlan, baseState hybridSearchStateToken) error {
+	if err := plan.context.Err(); err != nil {
+		return err
+	}
+	if plan.readView != nil {
+		if err := plan.readView.validateOpen(); err != nil {
+			return err
+		}
+		return hybridSearchCheckCurrentSnapshot(hybridSearchSnapshotStateToken(plan.readView.snapshot), baseState)
+	}
+	return hybridSearchCheckCurrentSnapshot(hybridSearchDBStateToken(c.db), baseState)
+}
+
 func planHybridSearch(opts HybridSearchOptions) (hybridSearchExecutionPlan, error) {
 	var plan hybridSearchExecutionPlan
+	plan.context = opts.Context
+	if plan.context == nil {
+		plan.context = context.Background()
+	}
+	if err := plan.context.Err(); err != nil {
+		return plan, err
+	}
 	if opts.TopK <= 0 {
 		return plan, fmt.Errorf("%w: hybrid search top_k must be positive", ErrHybridSearchUnsupported)
 	}
@@ -238,9 +292,18 @@ func planHybridSearch(opts HybridSearchOptions) (hybridSearchExecutionPlan, erro
 		if vector.CandidateLimit == 0 {
 			vector.CandidateLimit = hybridDefaultCandidateLimit(opts.TopK)
 		}
+		if err := validateHybridVectorCandidateQuery(vector); err != nil {
+			return plan, err
+		}
 		plan.vector = &vector
 		plan.vectorCandidateAllowSetBudget = vector.CandidateLimit
 		plan.public.VectorCandidateLimit = vector.CandidateLimit
+		plan.public.VectorQueryMode = vector.QueryMode
+		if plan.public.VectorQueryMode == "" {
+			plan.public.VectorQueryMode = VectorIndexQueryModeExact
+		}
+		plan.public.QuantizedIndexName = vector.QuantizedIndexName
+		plan.public.QuantizedRerankCandidates = vector.QuantizedRerankCandidates
 	}
 
 	strategy, err := normalizeHybridScalarFilterStrategy(opts.ScalarFilterStrategy, plan.text != nil, plan.vector != nil, opts.ScalarFilter != nil)
@@ -558,6 +621,66 @@ func (c *Collection) hybridScalarAllowSet(plan hybridSearchExecutionPlan) (hybri
 	return allowSet, stats, nil
 }
 
+func (c *Collection) hybridScalarAllowSetAtReadView(plan hybridSearchExecutionPlan, readView *CollectionReadView) (hybridScalarAllowSet, HybridSearchStats, error) {
+	if plan.scalarFilter == nil {
+		return nil, HybridSearchStats{}, nil
+	}
+	if readView == nil || readView.collection != c {
+		return nil, HybridSearchStats{}, ErrVectorIndexSnapshotMismatch
+	}
+	if err := readView.validateOpen(); err != nil {
+		return nil, HybridSearchStats{}, err
+	}
+	limit := plan.scalarLookupLimit
+	if limit <= 0 {
+		limit = plan.topK
+	}
+	aggregateLimit := plan.scalarAggregateLimit
+	if aggregateLimit <= 0 {
+		aggregateLimit = hybridScalarAggregateLimit(limit, hybridScalarFilterLookupCount(*plan.scalarFilter))
+	}
+	filters := plan.scalarFilter.And
+	if len(filters) == 0 {
+		filters = []HybridScalarFilter{*plan.scalarFilter}
+	}
+	lookup := hybridScalarLookupView{context: plan.context, snapshot: readView.snapshot, catalog: readView.catalog}
+	endRead := readView.beginForegroundRead()
+	defer endRead()
+	stats := HybridSearchStats{}
+	sets := make([]hybridScalarAllowSet, 0, len(filters))
+	for i := range filters {
+		stats.ScalarFilterLookups++
+		set, inputIDs, truncated, err := lookup.leafAllowSet(filters[i], limit)
+		stats.ScalarFilterInputIDs += inputIDs
+		if truncated {
+			stats.Truncated++
+		}
+		if err != nil {
+			return nil, stats, err
+		}
+		if stats.ScalarFilterInputIDs > uint64(aggregateLimit) {
+			stats.Truncated++
+			return nil, stats, fmt.Errorf("%w: hybrid scalar conjunction exceeded aggregate input-ID limit %d", ErrHybridSearchIndexUnavailable, aggregateLimit)
+		}
+		sets = append(sets, set)
+	}
+	sort.SliceStable(sets, func(i, j int) bool { return len(sets[i]) < len(sets[j]) })
+	allowSet := sets[0]
+	for i := 1; i < len(sets); i++ {
+		stats.ScalarFilterIntersectionSteps++
+		for id := range allowSet {
+			if _, ok := sets[i][id]; !ok {
+				delete(allowSet, id)
+			}
+		}
+	}
+	stats.ScalarFilterFinalIDs = uint64(len(allowSet))
+	if plan.scalarFilterStrategy == HybridScalarFilterStrategyPrefilter {
+		stats.ScalarPrefilterIDs = uint64(len(allowSet))
+	}
+	return allowSet, stats, nil
+}
+
 func (view *hybridScalarLookupView) leafProbe(filter HybridScalarFilter, limit int) (hybridScalarAllowSet, uint64, bool, error) {
 	return view.leafProbeBeforeCopy(filter, limit, 0, nil, nil)
 }
@@ -769,6 +892,9 @@ func (c *Collection) hybridSearchCandidates(plan hybridSearchExecutionPlan, allo
 			if plan.nativeVectorScalar || selectedTyped && allowSet != nil {
 				filter = plan.scalarFilter
 			}
+			if plan.readView != nil {
+				return c.searchHybridVectorCandidatesDeclaredScalarAtReadView(*plan.vector, filter, plan.readView, plan.readOwnerAcquireNanos)
+			}
 			return c.searchHybridVectorCandidatesDeclaredScalar(*plan.vector, filter)
 		}
 		return c.searchHybridVectorCandidatesWithAllowSetBudget(*plan.vector, allowSet, plan.vectorCandidateAllowSetBudget)
@@ -779,7 +905,7 @@ func (c *Collection) hybridSearchCandidates(plan hybridSearchExecutionPlan, allo
 	switch plan.scalarFilterStrategy {
 	case HybridScalarFilterStrategyTextFirst:
 		if plan.text != nil {
-			textResponse, textErr = c.searchHybridTextCandidatesWithScanBudget(*plan.text, allowSet, plan.textCandidateScanBudget)
+			textResponse, textErr = c.searchHybridTextCandidatesWithScanBudgetAtReadView(*plan.text, allowSet, plan.textCandidateScanBudget, plan.readView)
 		}
 		if textErr == nil && plan.vector != nil {
 			vectorResponse, vectorErr = searchVector()
@@ -789,7 +915,7 @@ func (c *Collection) hybridSearchCandidates(plan hybridSearchExecutionPlan, allo
 			vectorResponse, vectorErr = searchVector()
 		}
 		if vectorErr == nil && plan.text != nil {
-			textResponse, textErr = c.searchHybridTextCandidatesWithScanBudget(*plan.text, allowSet, plan.textCandidateScanBudget)
+			textResponse, textErr = c.searchHybridTextCandidatesWithScanBudgetAtReadView(*plan.text, allowSet, plan.textCandidateScanBudget, plan.readView)
 		}
 	default:
 		if plan.text != nil && plan.vector != nil {
@@ -799,11 +925,11 @@ func (c *Collection) hybridSearchCandidates(plan hybridSearchExecutionPlan, allo
 				defer wg.Done()
 				vectorResponse, vectorErr = searchVector()
 			}()
-			textResponse, textErr = c.searchHybridTextCandidatesWithScanBudget(*plan.text, allowSet, plan.textCandidateScanBudget)
+			textResponse, textErr = c.searchHybridTextCandidatesWithScanBudgetAtReadView(*plan.text, allowSet, plan.textCandidateScanBudget, plan.readView)
 			wg.Wait()
 		} else {
 			if plan.text != nil {
-				textResponse, textErr = c.searchHybridTextCandidatesWithScanBudget(*plan.text, allowSet, plan.textCandidateScanBudget)
+				textResponse, textErr = c.searchHybridTextCandidatesWithScanBudgetAtReadView(*plan.text, allowSet, plan.textCandidateScanBudget, plan.readView)
 			}
 			if plan.vector != nil {
 				vectorResponse, vectorErr = searchVector()
@@ -981,15 +1107,25 @@ func (c *Collection) hybridFetchResultDocuments(response *HybridSearchResponse, 
 	if response == nil || len(response.Results) == 0 {
 		return nil
 	}
-	ids := make([][]byte, len(response.Results))
-	for i := range response.Results {
-		ids[i] = response.Results[i].ID
-	}
 	view, err := c.OpenCollectionReadView()
 	if err != nil {
 		return fmt.Errorf("%w: hybrid final document read view unavailable: %w", ErrHybridSearchIndexUnavailable, err)
 	}
 	defer func() { _ = view.Close() }()
+	return c.hybridFetchResultDocumentsAtReadView(response, opts, baseState, view)
+}
+
+func (c *Collection) hybridFetchResultDocumentsAtReadView(response *HybridSearchResponse, opts DocumentFetchOptions, baseState hybridSearchStateToken, view *CollectionReadView) error {
+	if response == nil || len(response.Results) == 0 {
+		return nil
+	}
+	if view == nil || view.collection != c {
+		return fmt.Errorf("%w: hybrid final document read view unavailable", ErrHybridSearchIndexUnavailable)
+	}
+	ids := make([][]byte, len(response.Results))
+	for i := range response.Results {
+		ids[i] = response.Results[i].ID
+	}
 	if err := hybridSearchCheckCurrentSnapshot(hybridSearchSnapshotStateToken(view.snapshot), baseState); err != nil {
 		return err
 	}
@@ -1063,6 +1199,17 @@ func hybridMergeStats(dst *HybridSearchStats, src HybridSearchStats) {
 	dst.VectorCandidatesReturned += src.VectorCandidatesReturned
 	dst.VectorCandidatesExamined += src.VectorCandidatesExamined
 	dst.VectorEdgesVisited += src.VectorEdgesVisited
+	if src.VectorRoute != nil {
+		receipt := *src.VectorRoute
+		dst.VectorRoute = &receipt
+	}
+	dst.VectorQuantizedScoreCalls += src.VectorQuantizedScoreCalls
+	dst.VectorQuantizedCodeBytesRead += src.VectorQuantizedCodeBytesRead
+	dst.VectorQuantizedRerankCandidates += src.VectorQuantizedRerankCandidates
+	dst.VectorQuantizedRerankExactScoreCalls += src.VectorQuantizedRerankExactScoreCalls
+	dst.VectorPackedExactScoreCalls += src.VectorPackedExactScoreCalls
+	dst.VectorPackedExactScoreCandidates += src.VectorPackedExactScoreCandidates
+	dst.VectorPackedExactVectorBytesRead += src.VectorPackedExactVectorBytesRead
 	dst.ScalarPrefilterIDs += src.ScalarPrefilterIDs
 	dst.ScalarFilterLookups += src.ScalarFilterLookups
 	dst.ScalarFilterInputIDs += src.ScalarFilterInputIDs
@@ -1135,6 +1282,7 @@ func hybridMergeDocumentFetchStats(dst *HybridSearchStats, src DocumentMateriali
 	}
 	dst.DocumentsFetched += src.DocumentsFetched
 	dst.DocumentsMissing += src.DocumentsMissing
+	dst.EmbeddingOutputBytes += src.EmbeddingOutputBytes
 }
 
 func hybridSearchFailClosed(response HybridSearchResponse, reason HybridFailClosedReason, err error) (HybridSearchResponse, error) {

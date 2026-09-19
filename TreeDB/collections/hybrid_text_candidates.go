@@ -27,6 +27,10 @@ func (c *Collection) searchHybridTextCandidates(query HybridTextQuery, allowSet 
 }
 
 func (c *Collection) searchHybridTextCandidatesWithScanBudget(query HybridTextQuery, allowSet hybridScalarAllowSet, scanBudget int) (HybridCandidateResponse, error) {
+	return c.searchHybridTextCandidatesWithScanBudgetAtReadView(query, allowSet, scanBudget, nil)
+}
+
+func (c *Collection) searchHybridTextCandidatesWithScanBudgetAtReadView(query HybridTextQuery, allowSet hybridScalarAllowSet, scanBudget int, view *CollectionReadView) (HybridCandidateResponse, error) {
 	if c == nil {
 		return HybridCandidateResponse{}, errCollectionNil
 	}
@@ -48,7 +52,7 @@ func (c *Collection) searchHybridTextCandidatesWithScanBudget(query HybridTextQu
 	if query.IncludeTextMatches {
 		resultMode = textSearchResultTextMatchesOnly
 	}
-	textResponse, err := c.searchText(TextSearchOptions{
+	textOpts := TextSearchOptions{
 		IndexName:                query.IndexName,
 		Query:                    query.Query,
 		QueryMode:                query.QueryMode,
@@ -58,7 +62,14 @@ func (c *Collection) searchHybridTextCandidatesWithScanBudget(query HybridTextQu
 		MaxPostingsScanned:       query.MaxPostingsScanned,
 		IncludeDocuments:         false,
 		textV2AllowedDocumentIDs: allowSet,
-	}, resultMode)
+	}
+	var textResponse TextSearchResponse
+	var err error
+	if view == nil {
+		textResponse, err = c.searchText(textOpts, resultMode)
+	} else {
+		textResponse, err = c.searchTextAtReadView(textOpts, resultMode, view)
+	}
 	if err != nil {
 		response := HybridCandidateResponse{Stats: hybridTextCandidateStatsFromSearch(requested, textResponse.Stats, 0)}
 		response.Stats.FailClosed = 1
@@ -91,12 +102,18 @@ func validateHybridTextCandidateQuery(query HybridTextQuery) error {
 	return nil
 }
 
-// validateHybridTextCandidateQueryAgainstCurrentSnapshot runs the
-// analyzer-dependent parse that planning cannot perform. It is used only when
-// an empty scalar allow-set skips normal candidate generation.
-func (c *Collection) validateHybridTextCandidateQueryAgainstCurrentSnapshot(query HybridTextQuery) error {
+// validateHybridTextCandidateQueryAtReadView runs the analyzer-dependent parse
+// that planning cannot perform. It is used only when an empty scalar allow-set
+// skips normal candidate generation. A non-nil view is borrowed, not closed.
+func (c *Collection) validateHybridTextCandidateQueryAtReadView(query HybridTextQuery, view *CollectionReadView) error {
 	if c == nil || c.db == nil {
 		return hybridTextCandidateError(ErrTextIndexUnavailable, query.IndexName)
+	}
+	if view != nil {
+		if view.collection != c || view.validateOpen() != nil {
+			return hybridTextCandidateError(ErrTextIndexUnavailable, query.IndexName)
+		}
+		return validateHybridTextCandidateQueryAgainstCatalog(query, view.catalog)
 	}
 	snapshot := c.db.AcquireSnapshot()
 	if snapshot == nil {
@@ -107,11 +124,15 @@ func (c *Collection) validateHybridTextCandidateQueryAgainstCurrentSnapshot(quer
 	if err != nil || catalog == nil {
 		return hybridTextCandidateError(ErrTextIndexUnavailable, query.IndexName)
 	}
+	return validateHybridTextCandidateQueryAgainstCatalog(query, catalog)
+}
+
+func validateHybridTextCandidateQueryAgainstCatalog(query HybridTextQuery, catalog *collectionCatalog) error {
 	index, ok := findTextIndex(catalog.meta.TextIndexes, query.IndexName)
 	if !ok {
 		return hybridTextCandidateError(ErrIndexNotFound, query.IndexName)
 	}
-	_, _, err = parseTextSearchQueryWithModeAndOptions(index.Analyzer, index.AnalyzerOptions, query.Query, query.Operator, query.QueryMode)
+	_, _, err := parseTextSearchQueryWithModeAndOptions(index.Analyzer, index.AnalyzerOptions, query.Query, query.Operator, query.QueryMode)
 	if err != nil {
 		return hybridTextCandidateError(err, query.IndexName)
 	}

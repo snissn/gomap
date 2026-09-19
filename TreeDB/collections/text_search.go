@@ -323,6 +323,53 @@ func (c *Collection) searchText(opts TextSearchOptions, resultMode textSearchRes
 	if catalog == nil {
 		return response, errCollectionNotFound
 	}
+	return c.searchTextAtSnapshot(opts, resultMode, snap, catalog, response)
+}
+
+func (c *Collection) searchTextAtReadView(opts TextSearchOptions, resultMode textSearchResultMode, view *CollectionReadView) (TextSearchResponse, error) {
+	var response TextSearchResponse
+	if opts.Explain {
+		response.Explain = newTextSearchExplain(opts, resultMode)
+	}
+	if c == nil {
+		return response, errCollectionNil
+	}
+	if c.db == nil {
+		return response, errCollectionDBNil
+	}
+	if view == nil || view.collection != c {
+		return response, ErrVectorIndexSnapshotMismatch
+	}
+	if err := view.validateOpen(); err != nil {
+		return response, err
+	}
+	if err := ValidateIndexName(opts.IndexName); err != nil {
+		return response, err
+	}
+	if opts.TopK <= 0 {
+		return response, errors.New("collections: text search TopK must be positive")
+	}
+	if opts.CandidateLimit < 0 {
+		return response, errors.New("collections: text search CandidateLimit must be non-negative")
+	}
+	if opts.MaxPostingsScanned < 0 {
+		return response, errors.New("collections: text search MaxPostingsScanned must be non-negative")
+	}
+	if err := validateTextSearchPhraseOptions(opts); err != nil {
+		return textSearchFailClosed(response, textSearchFailClosedUnsupported, err)
+	}
+	if _, err := normalizeTextSearchQueryMode(opts.QueryMode); err != nil {
+		return response, err
+	}
+	if _, err := normalizeTextSearchOperator(opts.Operator); err != nil {
+		return response, err
+	}
+	endRead := view.beginForegroundRead()
+	defer endRead()
+	return c.searchTextAtSnapshot(opts, resultMode, view.snapshot, view.catalog, response)
+}
+
+func (c *Collection) searchTextAtSnapshot(opts TextSearchOptions, resultMode textSearchResultMode, snap *backenddb.Snapshot, catalog *collectionCatalog, response TextSearchResponse) (TextSearchResponse, error) {
 	idx, ok := findTextIndex(catalog.meta.TextIndexes, opts.IndexName)
 	if !ok {
 		return response, ErrIndexNotFound

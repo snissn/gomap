@@ -223,6 +223,33 @@ func TestTypedGraphPublicScalarU8QuantizedRerank(t *testing.T) {
 	if response, err := col.SearchVectorIndex(selected); !errors.Is(err, ErrHybridSearchUnsupported) || len(response.Results) != 0 {
 		t.Fatalf("owned-result Q2 route response=%+v err=%v", response, err)
 	}
+	hybrid, err := col.SearchHybrid(HybridSearchOptions{
+		TopK: 2,
+		Text: &HybridTextQuery{IndexName: "content", Query: "a", CandidateLimit: 3},
+		Vector: &HybridVectorQuery{
+			IndexName:                 selected.IndexName,
+			Query:                     selected.Query,
+			QueryMode:                 selected.QueryMode,
+			QuantizedIndexName:        selected.QuantizedIndexName,
+			QuantizedRerankCandidates: selected.QuantizedRerankCandidates,
+			CandidateLimit:            selected.TopK,
+			EfSearch:                  selected.EfSearch,
+		},
+		IncludeDocuments:     true,
+		DocumentFetchOptions: DocumentFetchOptions{ExcludePaths: []string{"embedding"}},
+	})
+	if err != nil {
+		t.Fatalf("public hybrid selected route: %v", err)
+	}
+	if len(hybrid.Results) != 2 || hybrid.Plan.VectorQueryMode != VectorIndexQueryModeQuantizedRerank || hybrid.Plan.QuantizedIndexName != selected.QuantizedIndexName || hybrid.Plan.QuantizedRerankCandidates != selected.QuantizedRerankCandidates {
+		t.Fatalf("public hybrid results=%+v plan=%+v", hybrid.Results, hybrid.Plan)
+	}
+	if hybrid.Stats.VectorRoute == nil || !hybrid.Stats.VectorRoute.Available || hybrid.Stats.VectorRoute.QueryMode != VectorIndexQueryModeQuantizedRerank || hybrid.Stats.VectorRoute.Route != "typed_hnsw" || hybrid.Stats.VectorRoute.QuantizedIndexName != selected.QuantizedIndexName {
+		t.Fatalf("public hybrid route receipt=%+v", hybrid.Stats.VectorRoute)
+	}
+	if hybrid.Stats.VectorQuantizedScoreCalls == 0 || hybrid.Stats.VectorQuantizedRerankCandidates == 0 || hybrid.Stats.VectorQuantizedRerankExactScoreCalls != hybrid.Stats.VectorQuantizedRerankCandidates || hybrid.Stats.DocumentsFetched != uint64(len(hybrid.Results)) || hybrid.Stats.EmbeddingOutputBytes != 0 || hybrid.Stats.FullDocumentScanFallbacks != 0 {
+		t.Fatalf("public hybrid stats=%+v", hybrid.Stats)
+	}
 	quantizedOnly := selected
 	quantizedOnly.QueryMode, quantizedOnly.QuantizedRerankCandidates = VectorIndexQueryModeQuantizedOnly, 0
 	if response, rejectedView, err := col.SearchVectorIndexWithBufferReadView(quantizedOnly, &buffer); !errors.Is(err, ErrHybridSearchUnsupported) || rejectedView != nil || len(response.Results) != 0 {

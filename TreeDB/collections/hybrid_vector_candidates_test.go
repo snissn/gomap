@@ -114,11 +114,6 @@ func TestSearchHybridVectorCandidatesUnsupportedShapesFailClosed2503(t *testing.
 			q.QuantizedIndexName = "embedding.scalar_u8.fast"
 			q.QuantizedRerankCandidates = 1
 		}},
-		{name: "valid_looking_quantized_rerank", mutate: func(q *HybridVectorQuery) {
-			q.QueryMode = VectorIndexQueryModeQuantizedRerank
-			q.QuantizedIndexName = "embedding.scalar_u8.fast"
-			q.QuantizedRerankCandidates = q.CandidateLimit
-		}},
 		{name: "negative_ef_search", mutate: func(q *HybridVectorQuery) { q.EfSearch = -1 }},
 	}
 	for _, tc := range tests {
@@ -139,6 +134,14 @@ func TestSearchHybridVectorCandidatesUnsupportedShapesFailClosed2503(t *testing.
 				t.Fatalf("stats=%+v want no document fetch or fallback on unsupported vector candidate shape", got.Stats)
 			}
 		})
+	}
+	selected := base
+	selected.QueryMode = VectorIndexQueryModeQuantizedRerank
+	selected.QuantizedIndexName = "embedding.scalar_u8.fast"
+	selected.QuantizedRerankCandidates = selected.CandidateLimit
+	got, err := col.SearchHybridVectorCandidates(selected)
+	if !errors.Is(err, ErrHybridSearchIndexUnavailable) || len(got.Candidates) != 0 || got.Stats.FailClosed != 1 || got.Stats.FailClosedReason != HybridFailClosedReasonVectorIndexUnavailable {
+		t.Fatalf("selected route without admitted typed asset response=%+v err=%v want vector unavailable", got, err)
 	}
 }
 

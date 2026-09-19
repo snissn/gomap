@@ -75,15 +75,59 @@ func (c *Collection) searchHybridVectorCandidatesDeclaredScalar(query HybridVect
 		return response, err
 	}
 	opts := hybridVectorSearchOptions(query)
-	opts.StatsMode = VectorIndexSearchStatsModeProduction
+	selected := hybridVectorQuerySelectsQuantizedRerank(&query)
+	if selected {
+		opts.StatsMode = VectorIndexSearchStatsModeMinimal
+	} else {
+		opts.StatsMode = VectorIndexSearchStatsModeProduction
+	}
 	opts.DeclaredScalarFilter = filter
 	var buffer VectorIndexSearchBuffer
-	vectorResponse, err := c.SearchVectorIndexWithBuffer(opts, &buffer)
+	var vectorResponse VectorIndexSearchResponse
+	var view *CollectionReadView
+	var err error
+	if selected {
+		vectorResponse, view, err = c.SearchVectorIndexWithBufferReadView(opts, &buffer)
+	} else {
+		vectorResponse, err = c.SearchVectorIndexWithBuffer(opts, &buffer)
+	}
 	if err != nil {
 		stats := hybridVectorCandidateStatsFromSearch(requested, vectorResponse.Stats, 0)
 		stats.FailClosed = 1
 		stats.FailClosedReason = hybridVectorCandidateFailClosedReason(err)
 		return HybridCandidateResponse{Stats: stats}, hybridVectorCandidateError(err, query.IndexName)
+	}
+	response, convertErr := hybridVectorCandidatesFromSearchResponse(requested, query.IndexName, vectorResponse)
+	if view != nil {
+		convertErr = errors.Join(convertErr, view.Close())
+	}
+	return response, convertErr
+}
+
+func (c *Collection) searchHybridVectorCandidatesDeclaredScalarAtReadView(query HybridVectorQuery, filter *HybridScalarFilter, view *CollectionReadView, ownerAcquireNanos int64) (HybridCandidateResponse, error) {
+	requested := query.CandidateLimit
+	if err := validateHybridVectorCandidateQuery(query); err != nil {
+		response := HybridCandidateResponse{Stats: hybridVectorCandidateStatsFromSearch(requested, VectorIndexSearchStats{}, 0)}
+		response.Stats.FailClosed = 1
+		response.Stats.FailClosedReason = HybridFailClosedReasonUnsupported
+		return response, err
+	}
+	if view == nil || view.typedGraphOwner == nil {
+		return HybridCandidateResponse{}, hybridVectorCandidateError(ErrVectorIndexSnapshotMismatch, query.IndexName)
+	}
+	opts := hybridVectorSearchOptions(query)
+	opts.StatsMode = VectorIndexSearchStatsModeMinimal
+	opts.DeclaredScalarFilter = filter
+	var buffer VectorIndexSearchBuffer
+	vectorResponse, gotView, err := c.searchTypedGraphServingWithOwner(opts, &buffer, true, view.typedGraphOwner, ownerAcquireNanos)
+	if err != nil {
+		stats := hybridVectorCandidateStatsFromSearch(requested, vectorResponse.Stats, 0)
+		stats.FailClosed = 1
+		stats.FailClosedReason = hybridVectorCandidateFailClosedReason(err)
+		return HybridCandidateResponse{Stats: stats}, hybridVectorCandidateError(err, query.IndexName)
+	}
+	if gotView != view {
+		return HybridCandidateResponse{}, hybridVectorCandidateError(ErrVectorIndexSnapshotMismatch, query.IndexName)
 	}
 	return hybridVectorCandidatesFromSearchResponse(requested, query.IndexName, vectorResponse)
 }
@@ -122,16 +166,18 @@ func validateHybridVectorCandidateQuery(query HybridVectorQuery) error {
 	if query.EfSearch < 0 {
 		return fmt.Errorf("%w: vector candidate ef_search cannot be negative", ErrHybridSearchUnsupported)
 	}
-	if query.QueryMode != "" && query.QueryMode != VectorIndexQueryModeExact {
+	mode, err := normalizeVectorIndexSearchQueryMode(query.QueryMode, query.QuantizedIndexName, query.QuantizedRerankCandidates, query.CandidateLimit)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrHybridSearchUnsupported, err)
+	}
+	if mode != columnVectorGraphNativeSearchQueryModeExact && mode != columnVectorGraphNativeSearchQueryModeQuantizedRerank {
 		return fmt.Errorf("%w: vector candidate query mode %q is unsupported by the vector candidate adapter", ErrHybridSearchUnsupported, query.QueryMode)
 	}
-	if query.QuantizedIndexName != "" {
-		return fmt.Errorf("%w: vector candidate quantized index %q is unsupported by the vector-only #2503 split", ErrHybridSearchUnsupported, query.QuantizedIndexName)
-	}
-	if query.QuantizedRerankCandidates != 0 {
-		return fmt.Errorf("%w: vector candidate quantized rerank candidates are unsupported by the vector-only #2503 split", ErrHybridSearchUnsupported)
-	}
 	return nil
+}
+
+func hybridVectorQuerySelectsQuantizedRerank(query *HybridVectorQuery) bool {
+	return query != nil && query.QueryMode == VectorIndexQueryModeQuantizedRerank
 }
 
 func (c *Collection) searchHybridVectorCandidatesAllowSet(query HybridVectorQuery, allowSet hybridScalarAllowSet) (HybridCandidateResponse, error) {
@@ -422,6 +468,17 @@ func hybridVectorCandidateStatsFromSearch(requested int, vectorStats VectorIndex
 		DocumentsFetched: vectorStats.DocumentsFetched,
 		DocumentsMissing: vectorStats.DocumentsMissing,
 	}
+	if vectorStats.ColumnGraphReceipt.Available {
+		receipt := vectorStats.ColumnGraphReceipt
+		stats.VectorRoute = &receipt
+	}
+	stats.VectorQuantizedScoreCalls = vectorStats.QuantizedScoreCalls
+	stats.VectorQuantizedCodeBytesRead = vectorStats.QuantizedCodeBytesRead
+	stats.VectorQuantizedRerankCandidates = vectorStats.QuantizedRerankCandidates
+	stats.VectorQuantizedRerankExactScoreCalls = vectorStats.QuantizedRerankExactScoreCalls
+	stats.VectorPackedExactScoreCalls = vectorStats.PackedExactScoreCalls
+	stats.VectorPackedExactScoreCandidates = vectorStats.PackedExactScoreCandidates
+	stats.VectorPackedExactVectorBytesRead = vectorStats.PackedExactVectorBytesRead
 	stats.ScalarFilterPlan = vectorStats.ScalarFilterPlan
 	stats.ScalarFilterInputIDs = vectorStats.ScalarFilterProbeIDs
 	stats.ScalarFilterProbeTruncated = vectorStats.ScalarFilterProbeTruncated
