@@ -262,22 +262,22 @@ func TestCheckedRouterScalarWorkBoundsAllLevelDistanceWorkV1(t *testing.T) {
 	cfg.MaxIterations = 1
 	cfg.RepresentativeBudget = 256
 	work, ok = CheckedRouterScalarWorkV1([]int{1_000}, 128, cfg)
-	if !ok || work != 4_210_816_000 {
-		t.Fatalf("wide quota-feasible router work=%d ok=%v want 4210816000", work, ok)
+	if !ok || work != 4_210_688_000 {
+		t.Fatalf("wide quota-feasible router work=%d ok=%v want 4210688000", work, ok)
 	}
 	cfg.BranchFactor = 100
 	cfg.LeafSize = 900
 	cfg.RepresentativeBudget = 1_999
 	work, ok = CheckedRouterScalarWorkV1([]int{1_000}, 1, cfg)
-	if !ok || work != 10_311_000 {
-		t.Fatalf("member-limited router work=%d ok=%v want 10311000", work, ok)
+	if !ok || work != 10_306_000 {
+		t.Fatalf("member-limited router work=%d ok=%v want 10306000", work, ok)
 	}
 	cfg.BranchFactor = 1_000
 	cfg.LeafSize = 1
 	cfg.MaxDepth = 2
 	work, ok = CheckedRouterScalarWorkV1([]int{1_000}, 64, cfg)
-	if !ok || work != 32_096_640_000 {
-		t.Fatalf("total-member-limited router work=%d ok=%v want 32096640000", work, ok)
+	if !ok || work != 32_096_256_000 {
+		t.Fatalf("total-member-limited router work=%d ok=%v want 32096256000", work, ok)
 	}
 	if _, ok := CheckedRouterScalarWorkV1([]int{routerMaxVectors}, math.MaxInt, cfg); ok {
 		t.Fatal("overflowing router work was accepted")
@@ -294,6 +294,73 @@ func TestCheckedRouterScalarWorkDoesNotCombineExclusiveCenterSelectionPathsV1(t 
 	work, ok := CheckedRouterScalarWorkV1([]int{1_200_000}, 128, cfg)
 	if !ok || work != 19_814_400_000 {
 		t.Fatalf("router work=%d ok=%v want 19814400000", work, ok)
+	}
+}
+
+func TestCheckedRouterScalarWorkPreservesTerminalFullWidthV1(t *testing.T) {
+	cfg := DefaultRouterConfigV1()
+	cfg.BranchFactor = 3
+	cfg.LeafSize = 1
+	cfg.MaxDepth = 2
+	cfg.MaxIterations = 1
+	cfg.RepresentativeBudget = 5
+	work, ok := CheckedRouterScalarWorkV1([]int{300_000}, 4_096, cfg)
+	if !ok || work != 15_974_400_000 {
+		t.Fatalf("router work=%d ok=%v want 15974400000", work, ok)
+	}
+}
+
+func TestCheckedRouterScalarWorkMatchesExhaustivePathOracleV1(t *testing.T) {
+	type state struct {
+		members int
+		budget  int
+		depth   int
+	}
+	for population := 1; population <= 10; population++ {
+		for budget := 1; budget <= 12; budget++ {
+			for branch := 2; branch <= 7; branch++ {
+				for depth := 1; depth <= 4; depth++ {
+					for leaf := 1; leaf <= population; leaf++ {
+						for iterations := 1; iterations <= 3; iterations++ {
+							cfg := DefaultRouterConfigV1()
+							cfg.BranchFactor = branch
+							cfg.LeafSize = leaf
+							cfg.RepresentativeBudget = budget
+							cfg.MaxDepth = depth
+							cfg.MaxIterations = iterations
+							memo := make(map[state]int)
+							var pathWork func(state) int
+							pathWork = func(current state) int {
+								if cached, ok := memo[current]; ok {
+									return cached
+								}
+								if current.members <= leaf || current.budget < 3 || current.depth >= depth {
+									return 0
+								}
+								requested := min(branch, min(current.members, current.budget-1))
+								best := 1 // one-center terminal failure.
+								for width := 2; width <= requested; width++ {
+									initialization := width * (width + 1) / 2
+									if width == requested {
+										initialization = width * (width - 1) / 2
+									}
+									split := initialization + iterations*(2*width-1)
+									child := state{members: current.members - width + 1, budget: current.budget - width, depth: current.depth + 1}
+									best = max(best, split+1+pathWork(child)) // child medoid pass.
+								}
+								memo[current] = best
+								return best
+							}
+							want := int64(population * (1 + pathWork(state{members: population, budget: budget}))) // root medoid pass.
+							got, ok := CheckedRouterScalarWorkV1([]int{population}, 1, cfg)
+							if !ok || got != want {
+								t.Fatalf("population=%d budget=%d branch=%d depth=%d leaf=%d iterations=%d: work=%d ok=%v want=%d", population, budget, branch, depth, leaf, iterations, got, ok, want)
+							}
+						}
+					}
+				}
+			}
+		}
 	}
 }
 

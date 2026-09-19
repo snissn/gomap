@@ -725,105 +725,218 @@ func CheckedRouterScalarWorkV1(populations []int, dimensions int, cfg RouterConf
 		}
 		return left + right, true
 	}
-	splitCost := func(branch int, relaxFailedSelection bool) (uint64, bool) {
+	type workCandidate struct {
+		work     uint64
+		feasible bool
+	}
+	var arithmeticOK = true
+	fullSplitCost := func(branch int) workCandidate {
 		width := uint64(branch)
-		initializationFactor := width - 1
-		iterationFactor := 2*width - 1
-		if relaxFailedSelection {
-			initializationFactor = width + 1
-			iterationFactor = 2*width + 1
-		}
-		initialization, ok := multiply(width, initializationFactor)
+		initialization, ok := multiply(width, width-1)
 		if !ok {
-			return 0, false
+			arithmeticOK = false
+			return workCandidate{}
 		}
 		initialization /= 2
-		perIteration, ok := multiply(iterationFactor, uint64(cfg.MaxIterations))
+		perIteration, ok := multiply(2*width-1, uint64(cfg.MaxIterations))
 		if !ok {
-			return 0, false
+			arithmeticOK = false
+			return workCandidate{}
 		}
-		return add(initialization, perIteration) // assignment plus empty repair.
+		work, ok := add(initialization, perIteration) // assignment plus empty repair.
+		if !ok {
+			arithmeticOK = false
+			return workCandidate{}
+		}
+		return workCandidate{work: work, feasible: true}
 	}
-	addSplitCosts := func(total uint64, count, branch int, relaxFailedSelection bool) (uint64, bool) {
+	earlySplitCost := func(branch int) workCandidate {
+		width := uint64(branch)
+		initialization, ok := multiply(width, width+1)
+		if !ok {
+			arithmeticOK = false
+			return workCandidate{}
+		}
+		initialization /= 2 // includes the paid scan that finds no next center.
+		perIteration, ok := multiply(2*width-1, uint64(cfg.MaxIterations))
+		if !ok {
+			arithmeticOK = false
+			return workCandidate{}
+		}
+		work, ok := add(initialization, perIteration)
+		if !ok {
+			arithmeticOK = false
+			return workCandidate{}
+		}
+		return workCandidate{work: work, feasible: true}
+	}
+	addCandidate := func(left, right workCandidate) workCandidate {
+		if !left.feasible || !right.feasible {
+			return workCandidate{}
+		}
+		work, ok := add(left.work, right.work)
+		if !ok {
+			arithmeticOK = false
+			return workCandidate{}
+		}
+		return workCandidate{work: work, feasible: true}
+	}
+	repeatCandidate := func(count int, candidate workCandidate) workCandidate {
 		if count == 0 {
-			return total, true
+			return workCandidate{feasible: true}
 		}
-		cost, ok := splitCost(branch, relaxFailedSelection)
+		if !candidate.feasible {
+			return workCandidate{}
+		}
+		work, ok := multiply(uint64(count), candidate.work)
 		if !ok {
-			return 0, false
+			arithmeticOK = false
+			return workCandidate{}
 		}
-		cost, ok = multiply(uint64(count), cost)
-		if !ok {
-			return 0, false
+		return workCandidate{work: work, feasible: true}
+	}
+	maxCandidate := func(left, right workCandidate) workCandidate {
+		if !left.feasible || right.feasible && right.work > left.work {
+			return right
 		}
-		return add(total, cost)
+		return left
+	}
+	// A continuing split either reaches the configured branch cap, or stops
+	// early after a paid non-progress scan. For a fixed total width, the latter
+	// cost is convex, so its maximum has only endpoint widths and one remainder.
+	maxEarlyOnlyCost := func(count, totalWidth, maxBranch int) workCandidate {
+		if count == 0 {
+			return workCandidate{feasible: totalWidth == 0}
+		}
+		if maxBranch <= 2 || totalWidth < 2*count || totalWidth > (maxBranch-1)*count {
+			return workCandidate{}
+		}
+		extraCapacity := maxBranch - 3
+		if extraCapacity == 0 {
+			if totalWidth != 2*count {
+				return workCandidate{}
+			}
+			return repeatCandidate(count, earlySplitCost(2))
+		}
+		extraWidth := totalWidth - 2*count
+		saturated := extraWidth / extraCapacity
+		remainder := extraWidth % extraCapacity
+		candidate := repeatCandidate(saturated, earlySplitCost(maxBranch-1))
+		remaining := count - saturated
+		if remainder > 0 {
+			candidate = addCandidate(candidate, earlySplitCost(2+remainder))
+			remaining--
+		}
+		return addCandidate(candidate, repeatCandidate(remaining, earlySplitCost(2)))
+	}
+	maxContinuingCost := func(count, totalWidth, maxBranch int) workCandidate {
+		if count == 0 {
+			return workCandidate{feasible: totalWidth == 0}
+		}
+		if totalWidth < 2*count || totalWidth > maxBranch*count {
+			return workCandidate{}
+		}
+		if maxBranch == 2 {
+			if totalWidth != 2*count {
+				return workCandidate{}
+			}
+			return repeatCandidate(count, fullSplitCost(2))
+		}
+		var best workCandidate
+		for fullCount := 0; fullCount <= count; fullCount++ {
+			early := maxEarlyOnlyCost(count-fullCount, totalWidth-fullCount*maxBranch, maxBranch)
+			if !early.feasible {
+				continue
+			}
+			candidate := addCandidate(repeatCandidate(fullCount, fullSplitCost(maxBranch)), early)
+			best = maxCandidate(best, candidate)
+		}
+		return best
+	}
+	// The final successful split always maximizes at its full requested width:
+	// f_full(k) = f_early(k-1) + 2*MaxIterations. When members or quota,
+	// rather than the branch cap, set that width, enumerate only the convex
+	// allocation vertices of the continuing prefix.
+	maxResourceFinalCost := func(prefixCount, combinedWidth, maxPrefixWidth, maxBranch int) workCandidate {
+		if maxBranch <= 2 {
+			return workCandidate{}
+		}
+		var best workCandidate
+		for fullCount := 0; fullCount <= prefixCount; fullCount++ {
+			earlyCount := prefixCount - fullCount
+			lowFinal := max(2, max(combinedWidth-maxPrefixWidth, combinedWidth-fullCount*maxBranch-(maxBranch-1)*earlyCount))
+			highFinal := min(maxBranch-1, min(combinedWidth-2*prefixCount, combinedWidth-fullCount*maxBranch-2*earlyCount))
+			if lowFinal > highFinal {
+				continue
+			}
+			evaluate := func(finalWidth int) {
+				earlyWidth := combinedWidth - finalWidth - fullCount*maxBranch
+				early := maxEarlyOnlyCost(earlyCount, earlyWidth, maxBranch)
+				if !early.feasible {
+					return
+				}
+				candidate := addCandidate(repeatCandidate(fullCount, fullSplitCost(maxBranch)), early)
+				candidate = addCandidate(candidate, fullSplitCost(finalWidth))
+				best = maxCandidate(best, candidate)
+			}
+			evaluate(lowFinal)
+			if highFinal != lowFinal {
+				evaluate(highFinal)
+			}
+			extraCapacity := maxBranch - 3
+			if extraCapacity == 0 {
+				continue
+			}
+			base := combinedWidth - fullCount*maxBranch - 2*earlyCount
+			minimumExtra := base - highFinal
+			maximumExtra := base - lowFinal
+			firstEndpoint := (minimumExtra + extraCapacity - 1) / extraCapacity
+			lastEndpoint := maximumExtra / extraCapacity
+			for endpoint := firstEndpoint; endpoint <= lastEndpoint; endpoint++ {
+				finalWidth := base - endpoint*extraCapacity
+				if finalWidth != lowFinal && finalWidth != highFinal {
+					evaluate(finalWidth)
+				}
+			}
+		}
+		return best
 	}
 	var work uint64
 	for i, population := range populations {
 		quota := quotas[i]
 		maxSplits := min(cfg.MaxDepth, min((quota-1)/2, max(0, population-cfg.LeafSize)))
 		maxBranch := min(cfg.BranchFactor, min(population, quota-1))
-		relaxFailedSelection := maxBranch > 2
-		if relaxFailedSelection {
-			// A full-width split has no failed selection scan. Map it to width-1;
-			// charging k*(k+1)/2 + I*(2*k+1) then also covers every narrower
-			// split that stops after a paid non-progress scan. The mapped path uses
-			// no more quota or members, and this cost remains convex.
-			maxBranch--
-		}
-		distancesPerVector := uint64(1) // root medoid pass.
-		if maxSplits > 0 {
-			distancesPerVector++ // root center selection can fail without a split.
+		best := workCandidate{work: 1, feasible: true} // root medoid pass.
+		for splits := 0; splits < maxSplits; splits++ {
+			maxWidth := min(splits*maxBranch, min(quota-3, population-cfg.LeafSize+splits-1))
+			if maxWidth < 2*splits {
+				continue
+			}
+			candidate := maxContinuingCost(splits, maxWidth, maxBranch)
+			candidate = addCandidate(workCandidate{work: uint64(splits + 2), feasible: true}, candidate) // medoids plus terminal failed scan.
+			best = maxCandidate(best, candidate)
 		}
 		for splits := 1; splits <= maxSplits; splits++ {
-			candidate := uint64(splits + 1) // one medoid pass per represented level.
-			if splits < maxSplits {
-				candidate++ // possible failed split after the last represented level.
+			prefixCount := splits - 1
+			maxPrefixWidth := min(prefixCount*maxBranch, min(quota-3, population-cfg.LeafSize+prefixCount-1))
+			if maxPrefixWidth < 2*prefixCount {
+				continue
 			}
-			extraCapacity := maxBranch - 2
-			prefixExtraCapacity := population - cfg.LeafSize - splits
-			if splits == 1 {
-				prefixExtraCapacity = 0
-			} else if extraCapacity <= prefixExtraCapacity/(splits-1) {
-				prefixExtraCapacity = (splits - 1) * extraCapacity
+			combinedWidth := min(population+prefixCount, quota-1)
+			candidate := workCandidate{}
+			branchPrefixWidth := min(maxPrefixWidth, combinedWidth-maxBranch)
+			if branchPrefixWidth >= 2*prefixCount {
+				candidate = maxContinuingCost(prefixCount, branchPrefixWidth, maxBranch)
+				candidate = addCandidate(candidate, fullSplitCost(maxBranch))
 			}
-			extraWidth := min(quota-1-2*splits, min(population-1-splits, extraCapacity+prefixExtraCapacity))
-			// Split cost is convex in width. Subject to widths in [2,maxBranch]
-			// and quota/member-feasible sums, its maximum saturates all but at
-			// most one split at an endpoint. Put a saturated split last to respect
-			// the tighter continuation requirement on every preceding split.
-			if maxBranch == 2 {
-				var ok bool
-				candidate, ok = addSplitCosts(candidate, splits, 2, relaxFailedSelection)
-				if !ok {
-					return 0, false
-				}
-			} else {
-				saturated := extraWidth / extraCapacity
-				remainder := extraWidth % extraCapacity
-				var ok bool
-				candidate, ok = addSplitCosts(candidate, saturated, maxBranch, relaxFailedSelection)
-				if !ok {
-					return 0, false
-				}
-				remaining := splits - saturated
-				if remainder > 0 {
-					candidate, ok = addSplitCosts(candidate, 1, 2+remainder, relaxFailedSelection)
-					if !ok {
-						return 0, false
-					}
-					remaining--
-				}
-				candidate, ok = addSplitCosts(candidate, remaining, 2, relaxFailedSelection)
-				if !ok {
-					return 0, false
-				}
-			}
-			if candidate > distancesPerVector {
-				distancesPerVector = candidate
-			}
+			candidate = maxCandidate(candidate, maxResourceFinalCost(prefixCount, combinedWidth, maxPrefixWidth, maxBranch))
+			candidate = addCandidate(workCandidate{work: uint64(splits + 1), feasible: true}, candidate) // one medoid per represented level.
+			best = maxCandidate(best, candidate)
 		}
-		domainWork, ok := multiply(uint64(population), distancesPerVector)
+		if !arithmeticOK || !best.feasible {
+			return 0, false
+		}
+		domainWork, ok := multiply(uint64(population), best.work)
 		if !ok {
 			return 0, false
 		}
