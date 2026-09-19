@@ -52,6 +52,20 @@ type hybridSearchExecutionPlan struct {
 	scalarAggregateLimit          int
 }
 
+var hybridSearchAfterReadOwnerAcquiredHookForTest struct {
+	sync.RWMutex
+	fn func(*Collection, *CollectionReadView)
+}
+
+func runHybridSearchAfterReadOwnerAcquiredHookForTest(c *Collection, view *CollectionReadView) {
+	hybridSearchAfterReadOwnerAcquiredHookForTest.RLock()
+	fn := hybridSearchAfterReadOwnerAcquiredHookForTest.fn
+	hybridSearchAfterReadOwnerAcquiredHookForTest.RUnlock()
+	if fn != nil {
+		fn(c, view)
+	}
+}
+
 type hybridSearchStateToken struct {
 	state     backenddb.StateToken
 	available bool
@@ -107,6 +121,7 @@ func (c *Collection) searchHybridWithCandidateBudgetPolicy(opts HybridSearchOpti
 		if validateErr := validateTypedGraphHybridSelectedAsset(plan.context, view, *plan.vector); validateErr != nil {
 			return hybridSearchFailClosed(response, HybridFailClosedReasonVectorIndexUnavailable, hybridVectorCandidateError(validateErr, plan.vector.IndexName))
 		}
+		runHybridSearchAfterReadOwnerAcquiredHookForTest(c, view)
 		baseState = hybridSearchSnapshotStateToken(view.snapshot)
 	}
 	response.Snapshot = hybridSearchSnapshotFromState(baseState)

@@ -3,6 +3,7 @@ package documentservice
 import (
 	"context"
 	"math"
+	"net/http"
 	"reflect"
 	"runtime"
 	"testing"
@@ -11,6 +12,99 @@ import (
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/workstats"
 )
+
+func TestServiceTypedHybridQuantizedRerankPublicRoute4767(t *testing.T) {
+	requireTypedServiceServingTest(t)
+	svc, db := newTestService(t)
+	defer func() { _ = svc.Close(); _ = db.Close() }()
+	ctx := context.Background()
+	create := CreateIndexRequest{
+		Name:       "hybrid-quantized-public",
+		Dimension:  2,
+		TypedInput: true,
+		VectorIndexOptions: &BenchmarkVectorIndexOptions{
+			Strategy: collections.VectorIndexStrategyColumnGraph,
+			QuantizedIndexes: []QuantizedIndexInfo{{
+				Name: "embedding.scalar_u8.public", Codec: collections.QuantizedVectorCodecScalarU8,
+			}},
+		},
+		ScalarFields: []ScalarFieldDeclaration{{Field: "meta.user_id", ValueType: ScalarFieldString}},
+	}
+	if _, err := svc.CreateIndex(ctx, create); err != nil {
+		t.Fatal(err)
+	}
+	docs := []Document{
+		{ID: "a", Content: "refund", Embedding: []float32{1, 0}, Meta: map[string]any{"user_id": "u"}},
+		{ID: "b", Content: "policy", Embedding: []float32{0.9, 0.1}, Meta: map[string]any{"user_id": "u"}},
+		{ID: "c", Content: "shipping", Embedding: []float32{0, 1}, Meta: map[string]any{"user_id": "v"}},
+	}
+	if _, err := svc.UpsertDocuments(ctx, create.Name, UpsertDocumentsRequest{Documents: docs, DeferVectorIndexRebuild: true}); err != nil {
+		t.Fatal(err)
+	}
+	serving := typedServiceTestOptions()
+	if _, err := svc.OptimizeIndex(ctx, create.Name, OptimizeIndexRequest{ColumnGraphServing: &serving}); err != nil {
+		t.Fatal(err)
+	}
+	request := HybridSearchRequest{
+		Query: "refund", QueryEmbedding: []float32{1, 0}, TopK: 2,
+		TextCandidateLimit: 3, VectorCandidateLimit: 3, EfSearch: 3,
+		VectorQueryMode:    collections.VectorIndexQueryModeQuantizedRerank,
+		QuantizedIndexName: "embedding.scalar_u8.public", QuantizedRerankCandidates: 3,
+	}
+	out, err := svc.SearchHybrid(ctx, create.Name, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Documents) != 2 || out.Plan.VectorQueryMode != collections.VectorIndexQueryModeQuantizedRerank || out.Plan.QuantizedIndexName != request.QuantizedIndexName || out.Plan.QuantizedRerankCandidates != 3 {
+		t.Fatalf("selected hybrid response=%+v", out)
+	}
+	for _, doc := range out.Documents {
+		if len(doc.Embedding) != 0 {
+			t.Fatalf("default hybrid response returned embedding: %+v", doc)
+		}
+	}
+	if out.Stats.VectorRoute == nil || out.Stats.VectorRoute.Route != "typed_hnsw" || out.Stats.VectorRoute.QueryMode != collections.VectorIndexQueryModeQuantizedRerank || out.Stats.VectorRoute.QuantizedIndexName != request.QuantizedIndexName || out.Stats.VectorQuantizedScoreCalls == 0 || out.Stats.VectorQuantizedRerankExactScoreCalls == 0 || out.Stats.DocumentsFetched != uint64(len(out.Documents)) || out.Stats.EmbeddingOutputBytes != 0 {
+		t.Fatalf("selected hybrid stats=%+v", out.Stats)
+	}
+	var httpOut HybridSearchResponse
+	postJSON(t, NewHandler(svc), "/v1/indexes/"+create.Name+"/search/hybrid", request, http.StatusOK, &httpOut)
+	if httpOut.Stats.VectorRoute == nil || httpOut.Stats.VectorRoute.QueryMode != collections.VectorIndexQueryModeQuantizedRerank || len(httpOut.Documents) != len(out.Documents) {
+		t.Fatalf("selected hybrid HTTP response=%+v", httpOut)
+	}
+
+	filteredRequest := request
+	filteredRequest.Filter = &Filter{Field: "meta.user_id", Operator: "==", Value: "u"}
+	filtered, err := svc.SearchHybrid(ctx, create.Name, filteredRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filtered.Stats.VectorRoute == nil || filtered.Stats.VectorRoute.Route != "typed_exact" || filtered.Stats.VectorQuantizedScoreCalls != 0 || filtered.Stats.VectorCandidatesReturned != 2 {
+		t.Fatalf("selected small-filter response=%+v", filtered)
+	}
+	emptyRequest := request
+	emptyRequest.Filter = &Filter{Field: "meta.user_id", Operator: "==", Value: "missing"}
+	empty, err := svc.SearchHybrid(ctx, create.Name, emptyRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(empty.Documents) != 0 || empty.Stats.VectorRoute != nil || empty.Stats.VectorCandidatesReturned != 0 || empty.Plan.VectorQueryMode != collections.VectorIndexQueryModeQuantizedRerank {
+		t.Fatalf("selected empty-filter response=%+v", empty)
+	}
+
+	for name, malformed := range map[string]HybridSearchRequest{
+		"fields without embedding":          {Query: "refund", TopK: 1, VectorQueryMode: collections.VectorIndexQueryModeQuantizedRerank, QuantizedIndexName: request.QuantizedIndexName},
+		"exact with quantized name":         {QueryEmbedding: []float32{1, 0}, TopK: 1, VectorQueryMode: collections.VectorIndexQueryModeExact, QuantizedIndexName: request.QuantizedIndexName},
+		"quantized only":                    {QueryEmbedding: []float32{1, 0}, TopK: 1, VectorQueryMode: collections.VectorIndexQueryModeQuantizedOnly, QuantizedIndexName: request.QuantizedIndexName},
+		"rerank below effective candidates": {QueryEmbedding: []float32{1, 0}, TopK: 1, VectorCandidateLimit: 3, VectorQueryMode: collections.VectorIndexQueryModeQuantizedRerank, QuantizedIndexName: request.QuantizedIndexName, QuantizedRerankCandidates: 2},
+		"unknown quantized index":           {QueryEmbedding: []float32{1, 0}, TopK: 1, VectorQueryMode: collections.VectorIndexQueryModeQuantizedRerank, QuantizedIndexName: "missing.scalar_u8"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := svc.SearchHybrid(ctx, create.Name, malformed); err == nil {
+				t.Fatal("malformed hybrid quantized request was accepted")
+			}
+		})
+	}
+}
 
 func TestServiceTypedHybridCurrentMutationLifecycle(t *testing.T) {
 	if runtime.GOOS != "linux" {
