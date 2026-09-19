@@ -3605,9 +3605,6 @@ func newTreeDBRepresentativeRouter(vectors [][]float64, partitions int, routerCo
 		return nil, err
 	}
 	h.candidates = scoreBudget
-	if scoreBudget < 1 {
-		return nil, errors.New("router benchmark requires a positive score budget")
-	}
 	return h, nil
 }
 

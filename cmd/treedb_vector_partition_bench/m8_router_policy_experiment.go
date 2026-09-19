@@ -333,7 +333,9 @@ func m8RouterPolicyEvidenceSelectionV1(cfg m8ProductionConfigEvidenceV1, routerR
 		return errors.New("policy requested/effective config mismatch")
 	}
 	for _, query := range e.Queries {
-		if query.Exact.Comparison.BeamWidth != diagnosticBeam || query.Approximate.Comparison.BeamWidth != diagnosticBeam {
+		if query.Exact.Comparison.RepresentativeCount != routerRepresentatives ||
+			query.Approximate.Comparison.RepresentativeCount != routerRepresentatives ||
+			query.Exact.Comparison.BeamWidth != diagnosticBeam || query.Approximate.Comparison.BeamWidth != diagnosticBeam {
 			return errors.New("policy beam config mismatch")
 		}
 	}

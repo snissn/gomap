@@ -212,6 +212,27 @@ func TestM8RouterPolicyTamperSelectionAndCandidateIdentity(t *testing.T) {
 	if err := m8RouterPolicyEvidenceSelectionV1(cfg, representatives, row); err != nil {
 		t.Fatal(err)
 	}
+	for name, mutate := range map[string]func(*m8RouterPolicyEvidenceV1){
+		"exact representative count": func(e *m8RouterPolicyEvidenceV1) {
+			e.Queries[0].Exact.Comparison.RepresentativeCount = representatives + 1
+		},
+		"approximate representative count": func(e *m8RouterPolicyEvidenceV1) {
+			e.Queries[0].Approximate.Comparison.RepresentativeCount = representatives + 1
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var altered m8RouterPolicyEvidenceV1
+			if err := json.Unmarshal(raw, &altered); err != nil {
+				t.Fatal(err)
+			}
+			mutate(&altered)
+			alteredRow := row
+			alteredRow.Attribution.RouterPolicies = &altered
+			if err := m8RouterPolicyEvidenceSelectionV1(cfg, representatives, alteredRow); err == nil {
+				t.Fatal("mismatched comparison model size accepted")
+			}
+		})
+	}
 	if err := m8RouterPolicyEvidenceSelectionV1(cfg, representatives-1, row); err == nil {
 		t.Fatal("mismatched persisted model size accepted")
 	}

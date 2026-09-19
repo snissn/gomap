@@ -183,6 +183,9 @@ func m0ReadCaptureV1(path string) (m0LocalityCaptureV1, string, error) {
 	if err := json.Unmarshal(raw, &capture); err != nil {
 		return m0LocalityCaptureV1{}, "", err
 	}
+	// V4 captures predate the persisted router-score budget and are
+	// intentionally incompatible. Regenerate both splits with
+	// m0-locality-capture before running m0-locality-simulate.
 	if capture.Schema != "treedb_vector_partition_m0_exact_pack_trace_v5" || capture.RouterScoreBudget < 1 || capture.RouterScoreBudget > collections.MaxVectorPartitionRouterScoreBudgetV3 || !m8SHA256V1(capture.Artifact) || !m8SHA256V1(capture.Descriptor) || capture.Source.SourceID == "" || !m8SHA256V1(capture.Source.Checksum) || capture.Source.Vectors < 1 || capture.Source.Dimensions < 1 || capture.Source.Metric == "" || !m8SHA256V1(capture.Manifest) || !m8SHA256V1(capture.ReadySet) || !m8SHA256V1(capture.RouterModel) || !m0CleanBuildIdentityValidV1(m0CleanBuildIdentityV1{BinarySHA256: capture.BinarySHA256, SourceRevision: capture.SourceRevision, VCSModified: capture.VCSModified}) || len(capture.Traces) == 0 || len(capture.Snapshots) == 0 || len(capture.Traces) != len(capture.Rows) {
 		return m0LocalityCaptureV1{}, "", errors.New("raw capture schema or trace payload")
 	}
