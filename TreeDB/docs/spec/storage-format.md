@@ -131,9 +131,9 @@ batches, applies the 4,096-entry cap to all names, and verifies the ranges,
 CRC32 values, and SHA-256 digests of every asset referenced by a non-deleting
 manifest before replacing the target namespace.
 
-VPM1 uses big-endian magic `0x56504d31` and wire version `4`, bounded
+VPM1 uses big-endian magic `0x56504d31` and wire version `5`, bounded
 length-prefixed fields and lists, one (exactly one) router-asset frame,
-canonical ordering, and an integrity digest. Version 4 has this fixed,
+canonical ordering, and an integrity digest. Version 5 has this fixed,
 untagged order:
 
 1. magic and `uint32` version;
@@ -149,19 +149,24 @@ untagged order:
    representative-membership, and partition-asset lists, in that order.
 
 Each placement is a `uint32` physical pack ID plus a length-prefixed group ID.
-Disjoint and overlap memberships name physical packs; representative
-memberships name logical domains. Every physical pack belongs to exactly one
-nonempty domain, while a domain may require one or more packs. Every asset
+Disjoint and overlap memberships are 12-byte source-ordinal/physical-pack
+pairs. Each 16-byte representative mapping is a source vector ordinal,
+logical-domain ID, and durable represented-node ID; source provenance may
+repeat within a domain, while the node ID distinguishes retained hierarchy
+nodes. Every physical pack belongs to exactly one nonempty domain, while a
+domain may require one or more packs. Every asset
 descriptor is a physical pack ID; length-prefixed logical ID,
 SHA-256 checksum, and optional membership digest; a `uint64` byte length; and
 a `ColumnAssetRef` containing length-prefixed kind/namespace, `uint64`
 generation/part ID, `uint32` file ID, `uint64` offset/length, and `uint32`
 CRC, in that order. Version 3 added the membership-digest string between the
-asset checksum and byte length; version 4 adds the domain-pack mapping.
+asset checksum and byte length; version 4 adds the domain-pack mapping, and
+version 5 extends each representative mapping from 12 to 16 bytes with the
+represented-node ID.
 Native partition HNSW assets require that SHA-256 digest; it binds the
 generation, partition, ordered authoritative stable IDs, and home/overlap
 membership kinds. There are no optional tagged fields and this pre-alpha
-decoder accepts only version 4; older directories require rebuild rather than
+decoder accepts only version 5; older directories require rebuild rather than
 migration.
 
 Partition-local `hnsw_search_pack_v1` assets use wire version 3 when rebuilt
@@ -203,22 +208,24 @@ closed. TreeDB is pre-alpha, so new M3 evidence directories may require
 rebuilding when this identity is required.
 
 VRP1 (the READY promotion payload, distinct from the VPR1 reclaim payload)
-uses ASCII magic `VRP1`, big-endian wire version `2`, and this fixed,
+uses ASCII magic `VRP1`, big-endian wire version `3`, and this fixed,
 untagged order:
 
 1. magic, `uint32` version, and `uint64` generation;
 2. the 32-byte building-manifest SHA-256 digest;
 3. `uint64` router generation and the 32-byte ready-manifest SHA-256 digest;
 4. the length-prefixed ready-set digest;
-5. a counted, canonically ordered representative-membership list;
+5. a counted, canonically ordered list of 16-byte source-ordinal,
+   logical-domain-ID, represented-node-ID mappings;
 6. an asset list containing exactly one router asset encoded with the VPM1
    asset frame; and
 7. a final 32-byte SHA-256 digest over all preceding bytes.
 
 The payload is capped at 16 MiB. Generation/router identity, digests, mapping
 order and bounds, the single router asset, trailing bytes, and canonical
-re-encoding are validated before the promotion is applied. Version 2 adds the
-representative mapping needed to reconstruct the ready manifest exactly.
+re-encoding are validated before the promotion is applied. Version 2 added the
+representative mapping needed to reconstruct the ready manifest exactly;
+version 3 adds its durable represented-node ID.
 Current pre-alpha readers reject older VRP1 versions; rebuild old DB
 directories instead of migrating in place.
 

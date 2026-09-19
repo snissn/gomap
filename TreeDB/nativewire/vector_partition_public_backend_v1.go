@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/snissn/gomap/TreeDB/collections"
 	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
 	"github.com/snissn/gomap/TreeDB/internal/raftplacement"
 	public "github.com/snissn/gomap/TreeDB/vectorpartition"
@@ -365,6 +366,12 @@ func publicBackendErrorV1(err error) error {
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		return &public.ErrorV1{Code: public.ErrorDeadlineExceededV1, Err: err}
+	}
+	// The public query does not choose the coordinator's score-call budget.
+	// Preserve exhaustion of that server-owned limit as availability rather
+	// than blaming a valid client request.
+	if errors.Is(err, collections.ErrVectorPartitionRouterScoreBudget) {
+		return &public.ErrorV1{Code: public.ErrorUnavailableV1, Err: err}
 	}
 	var coordinatorErr *VectorPartitionCoordinatorErrorV1
 	if errors.As(err, &coordinatorErr) {

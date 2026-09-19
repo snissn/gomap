@@ -23,6 +23,8 @@ failure is not a score-budget exhaustion. Per-response counters preserve
 `RouterEdges` separately from local shard work, including failed routing work.
 The public V1 adapter translates its own protocol version to coordinator V2
 and inherits explicit server-owned w/E/C; the public query API is unchanged.
+A server-owned C exhaustion retains the internal `budget_exceeded` cause but
+maps to public `unavailable`, not a malformed-client `invalid_request`.
 See the R section in `vector-partition-v1-contract.md` for format and rebuild
 requirements. Historical candidate-budget receipts cannot be relabeled as C.
 
