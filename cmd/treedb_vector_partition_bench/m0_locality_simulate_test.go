@@ -78,6 +78,15 @@ func TestM0CaptureSplitPairRejectsLeakage(t *testing.T) {
 	if err := m0ValidateCaptureSplitPairV1(calibration, holdout, 32); err != nil {
 		t.Fatal(err)
 	}
+	calibration.PackIdentityNeutralSHA256 = map[uint32]string{0: strings.Repeat("a", 64)}
+	holdout.PackIdentityNeutralSHA256 = map[uint32]string{0: strings.Repeat("b", 64)}
+	if err := m0ValidateCaptureSplitPairV1(calibration, holdout, 32); err == nil {
+		t.Fatal("accepted different full-pack geometry with equal snapshots")
+	}
+	holdout.PackIdentityNeutralSHA256[0] = calibration.PackIdentityNeutralSHA256[0]
+	if err := m0ValidateCaptureSplitPairV1(calibration, holdout, 32); err != nil {
+		t.Fatal(err)
+	}
 	holdout.Snapshots[0] = collections.VectorPartitionPackLayoutSnapshotV1{Rows: 1, RowOrdinals: []uint32{8}}
 	if err := m0ValidateCaptureSplitPairV1(calibration, holdout, 32); err == nil {
 		t.Fatal("accepted incompatible capture snapshots")
@@ -114,6 +123,24 @@ func TestM0ReadCaptureRequiresCleanBuildIdentity(t *testing.T) {
 	}
 	if _, _, err := m0ReadCaptureV1(write("clean.json", capture)); err != nil {
 		t.Fatal(err)
+	}
+	capture.PackIdentityNeutralSHA256 = map[uint32]string{0: sha}
+	got, _, err := m0ReadCaptureV1(write("pack-digest.json", capture))
+	if err != nil || !reflect.DeepEqual(got.PackIdentityNeutralSHA256, capture.PackIdentityNeutralSHA256) {
+		t.Fatalf("pack digest round-trip: %v %v", got.PackIdentityNeutralSHA256, err)
+	}
+	for name, digests := range map[string]map[uint32]string{
+		"invalid": {0: "not-sha256"},
+		"unknown": {1: sha},
+		"extra":   {0: sha, 1: sha},
+	} {
+		t.Run(name, func(t *testing.T) {
+			invalid := capture
+			invalid.PackIdentityNeutralSHA256 = digests
+			if _, _, err := m0ReadCaptureV1(write(name+".json", invalid)); err == nil {
+				t.Fatal("accepted invalid full-pack digest evidence")
+			}
+		})
 	}
 	capture.VCSModified = true
 	if _, _, err := m0ReadCaptureV1(write("modified.json", capture)); err == nil {

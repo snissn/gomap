@@ -287,6 +287,7 @@ class KeywordHybridModelTests(unittest.TestCase):
             expected_generation=3,
             query="refund policy",
             top_k=10,
+            text_query_mode="literal",
             operator="or",
             candidate_limit=100,
             max_postings_scanned=1000,
@@ -301,6 +302,7 @@ class KeywordHybridModelTests(unittest.TestCase):
                 "top_k": 10,
                 "return_embedding": True,
                 "expected_generation": 3,
+                "text_query_mode": "literal",
                 "operator": "or",
                 "candidate_limit": 100,
                 "max_postings_scanned": 1000,
@@ -344,8 +346,11 @@ class KeywordHybridModelTests(unittest.TestCase):
             query="refund policy",
             query_embedding=(0.1, 0.2),
             top_k=5,
+            text_query_mode="literal",
+            text_operator="and",
             candidate_limit=50,
             text_candidate_limit=25,
+            max_postings_scanned=1000,
             vector_candidate_limit=30,
             ef_search=64,
             max_chunks_per_parent=2,
@@ -371,11 +376,24 @@ class KeywordHybridModelTests(unittest.TestCase):
         self.assertEqual(payload["fusion"]["method"], "rrf")
         self.assertEqual(payload["fusion"]["source_order"], ["text", "vector"])
         self.assertEqual(payload["text_candidate_limit"], 25)
+        self.assertEqual(payload["text_query_mode"], "literal")
+        self.assertEqual(payload["text_operator"], "and")
+        self.assertEqual(payload["max_postings_scanned"], 1000)
         self.assertEqual(payload["max_chunks_per_parent"], 2)
         self.assertEqual(payload["filter"]["operator"], "AND")
         self.assertEqual(len(payload["filter"]["conditions"]), 2)
         self.assertEqual(payload["return_embedding"], False)
         self.assertNotIn("max_chunks_per_parent", HybridSearchRequest(top_k=1, query="refund").to_dict())
+
+    def test_lexical_request_options_fail_closed_locally(self) -> None:
+        with self.assertRaisesRegex(ValueError, "text_query_mode"):
+            KeywordSearchRequest(query="refund", top_k=1, text_query_mode="natural").to_dict()
+        with self.assertRaisesRegex(ValueError, "operator"):
+            KeywordSearchRequest(query="refund", top_k=1, operator="xor").to_dict()
+        with self.assertRaisesRegex(ValueError, "non-negative"):
+            KeywordSearchRequest(query="refund", top_k=1, max_postings_scanned=-1).to_dict()
+        with self.assertRaisesRegex(ValueError, "require query"):
+            HybridSearchRequest(top_k=1, query_embedding=[1.0], text_query_mode="literal").to_dict()
 
     def test_hybrid_response_parses_plan_snapshot_stats(self) -> None:
         response = HybridSearchResponse.from_dict(

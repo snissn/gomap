@@ -182,6 +182,7 @@ pages immediately; normal TreeDB root reachability/GC handles unreachable pages.
 type TextSearchOptions struct {
     IndexName            string
     Query                string
+    QueryMode            TextSearchQueryMode // "boolean" default, or "literal"
     Operator             TextSearchOperator // "or" default, or "and"
     TopK                 int
     CandidateLimit       int // optional candidate budget before scoring
@@ -192,18 +193,25 @@ type TextSearchOptions struct {
 }
 ```
 
-The parser accepts whitespace-separated terms and optional explicit `AND` or
-`OR` separators. Mixed `AND`/`OR`, phrases, and grouped syntax fail closed. Query
-terms are analyzed with the declared index analyzer.
+Omitted/`boolean` mode accepts whitespace-separated terms and optional explicit
+`AND` or `OR` separators. Mixed operators, phrases, and grouped syntax are
+invalid. `literal` mode instead analyzes the complete original string, so
+standalone connectives, quotes, and parentheses have no syntax meaning.
+`Operator` combines the resulting analyzer terms and defaults to OR. Structured
+`Phrase` remains separate and cannot be combined with literal mode. In both
+modes the declared analyzer—including configured stopwords—is authoritative.
 
 `SearchText` normalizes duplicate analyzed terms and serves the declared index
 version. Default/v2 indexes range-scan posting blocks, score from packed norms
 and term/field stats, and materialize document IDs from docmap blocks; explicit
 v1 indexes range-scan the legacy postings root and score from postings +
 text-state + text-stats. Neither path scans or ranks all collection documents.
-If candidate or postings budgets are exceeded, it returns `ErrTextIndexUnavailable`
-with truncation/fail-closed counters rather than returning silently incomplete
-rankings. Empty analyzed queries return an empty result set.
+If candidate or postings budgets are exceeded, it returns
+`ErrTextIndexUnavailable` with truncation/fail-closed counters rather than
+returning silently incomplete rankings. One `MaxPostingsScanned` allowance is
+consumed monotonically by initial scans, exact fallback after block-max work,
+and final match-attribution rescans; decoded rejected/stale entries count, while
+skipped block headers do not. Empty analyzed queries return an empty result set.
 
 Results expose response-owned document IDs, source index name, one-based lexical
 rank, higher-is-better BM25F score, score kind `bm25f`, optional matched

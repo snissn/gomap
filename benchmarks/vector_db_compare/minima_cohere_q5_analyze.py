@@ -79,6 +79,11 @@ HARNESS_TREE_PATHS = (
 PRODUCT_TREE_PATHS = (
     "TreeDB", "cmd/treedb-document-service", "internal", "go.mod", "go.sum",
 )
+NORMALIZED_CONSUMER_ONLY_PATHS = frozenset({
+    "benchmarks/vector_db_compare/minima_cohere_q5_analyze.py",
+    "benchmarks/vector_db_compare/test_minima_cohere_q5_analyze.py",
+    "benchmarks/vector_db_compare/cohere_scale_harness.md",
+})
 BOUNDED_MANIFEST_SCHEMA = "treedb_rag_minima_manifest/v2"
 BOUNDED_ARTIFACT_SCHEMA = "treedb_rag_application/minima_diagnostic_v1"
 BOUNDED_SQ8_ARTIFACT_SCHEMA = "treedb_rag_application/minima_quantized_diagnostic_v1"
@@ -711,13 +716,36 @@ def _source_trees(candidate_commit):
     )
 
 
-def validate_consumer_source(candidate_commit):
-    """Require the executing consumer and all local imports to equal the candidate."""
+def validate_consumer_source(candidate_commit, *, analyzer_commit=None):
+    """Bind source to the producer, or to an explicit consumer-only descendant."""
     source = Path(__file__).resolve().parents[2]
     paths = [*HARNESS_TREE_PATHS]
+    source_commit = candidate_commit
+    changed_paths = []
+    if analyzer_commit is not None:
+        if not valid_git_oid(analyzer_commit):
+            raise EvidenceError("normalized-v4 analyzer commit must be a full Git object ID")
+        source_commit = analyzer_commit
+        paths.extend(PRODUCT_TREE_PATHS)
+        try:
+            ancestor = subprocess.run(
+                ["git", "merge-base", "--is-ancestor", candidate_commit, analyzer_commit],
+                cwd=source, text=True, capture_output=True, timeout=30, check=False,
+            )
+            delta = subprocess.run(
+                ["git", "diff", "--name-only", "--no-renames", "-z", candidate_commit,
+                 analyzer_commit, "--", *paths],
+                cwd=source, text=True, capture_output=True, timeout=30, check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise EvidenceError(f"consumer-only source delta is unavailable: {exc}") from exc
+        changed_paths = sorted(set(delta.stdout.split("\0")) - {""})
+        if (ancestor.returncode or delta.returncode
+                or set(changed_paths) - NORMALIZED_CONSUMER_ONLY_PATHS):
+            raise EvidenceError("analyzer source is not a permitted consumer-only descendant")
     commands = (
-        ["git", "diff", "--quiet", candidate_commit, "--", *paths],
-        ["git", "diff", "--cached", "--quiet", candidate_commit, "--", *paths],
+        ["git", "diff", "--quiet", source_commit, "--", *paths],
+        ["git", "diff", "--cached", "--quiet", source_commit, "--", *paths],
     )
     try:
         for command in commands:
@@ -749,7 +777,7 @@ def validate_consumer_source(candidate_commit):
         relative = str(path.relative_to(source))
         try:
             completed = subprocess.run(
-                ["git", "show", f"{candidate_commit}:{relative}"], cwd=source,
+                ["git", "show", f"{source_commit}:{relative}"], cwd=source,
                 capture_output=True, timeout=30, check=False,
             )
         except (OSError, subprocess.TimeoutExpired) as exc:
@@ -757,17 +785,34 @@ def validate_consumer_source(candidate_commit):
         digest = hashlib.sha256(completed.stdout).hexdigest()
         if completed.returncode or digest != sha256_file(path):
             raise EvidenceError(f"executing consumer import differs from candidate: {relative}")
+        if analyzer_commit is not None and relative not in NORMALIZED_CONSUMER_ONLY_PATHS:
+            try:
+                producer_blob = subprocess.run(
+                    ["git", "show", f"{candidate_commit}:{relative}"], cwd=source,
+                    capture_output=True, timeout=30, check=False,
+                )
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                raise EvidenceError(f"producer import blob unavailable for {relative}: {exc}") from exc
+            if producer_blob.returncode or hashlib.sha256(producer_blob.stdout).hexdigest() != digest:
+                raise EvidenceError(f"consumer-only repair changed a producer import: {relative}")
         blobs[relative] = digest
-    harness_trees, _ = _source_trees(candidate_commit)
-    return {
+    harness_trees, _ = _source_trees(source_commit)
+    identity = {
         "candidate_commit": candidate_commit,
         "harness_trees": harness_trees,
         "analyzer_sha256": sha256_file(Path(__file__)),
         "imported_blobs_sha256": blobs,
     }
+    if analyzer_commit is not None:
+        identity.update({
+            "analyzer_commit": analyzer_commit,
+            "producer_harness_trees": _source_trees(candidate_commit)[0],
+            "consumer_only_changed_paths": changed_paths,
+        })
+    return identity
 
 
-def _go_binary_build(path, candidate_commit, expected_package):
+def _go_binary_build(path, candidate_commit, expected_package, *, require_trimpath=True):
     try:
         completed = subprocess.run(
             ["go", "version", "-m", str(path)], text=True, capture_output=True,
@@ -796,7 +841,7 @@ def _go_binary_build(path, candidate_commit, expected_package):
             or settings.get("vcs") != "git"
             or settings.get("vcs.revision") != candidate_commit
             or settings.get("vcs.modified") != "false"
-            or settings.get("-trimpath") != "true"):
+            or (require_trimpath and settings.get("-trimpath") != "true")):
         raise EvidenceError(f"Go executable is not a reproducible candidate build: {expected_package}")
     return {
         "go_version": go_version, "package": package, "module": module,
@@ -3312,12 +3357,17 @@ def _normalized_recompute_canonical_truth(dataset_paths, canonical_truth, canoni
 
 
 def _normalized_result_scores_match(ids, scores, query, normalized_vectors, normalized_queries):
+    if type(query) is not int or not 0 <= query < len(normalized_queries):
+        return False
     if ids == []:
-        return scores == [] and type(query) is int and 0 <= query < len(normalized_queries)
+        return scores == []
     try:
-        ordinals = np.asarray(
-            [int(identifier.removeprefix("row-")) for identifier in ids], dtype=np.int64,
-        )
+        ordinals = [int(identifier.removeprefix("row-")) for identifier in ids]
+        if any(not 0 <= ordinal < len(normalized_vectors)
+               or identifier != f"row-{ordinal:06d}"
+               for identifier, ordinal in zip(ids, ordinals)):
+            return False
+        ordinals = np.asarray(ordinals, dtype=np.int64)
         expected = np.clip(normalized_vectors[ordinals] @ normalized_queries[query], -1, 1)
         observed = np.asarray(scores, dtype=np.float64)
     except (AttributeError, IndexError, TypeError, ValueError):
@@ -3541,11 +3591,15 @@ def _normalized_validate_events(path, plan, mode, canonical_truth, original_trut
         if [(row.get("request_mode"), row.get("eligible"), row.get("query"))
                 for row in rows] != expected_curve:
             raise EvidenceError(f"normalized-v4 {mode} {label} curve is incomplete or reordered")
-    if any((before.get("ids"), before.get("scores"))
+    # Small filters are exhaustive; ANN candidates may legitimately change when
+    # process-local filter navigation warms or the graph is rebuilt on reopen.
+    if any(before["eligible"] <= 4096
+           and (before.get("ids"), before.get("scores"))
            != (after.get("ids"), after.get("scores"))
            for before, after in zip(fixed, reopened)):
         raise EvidenceError(f"normalized-v4 {mode} post-reopen search decisions changed")
     quality = {request_mode: [] for request_mode in expected_modes}
+    post_reopen_quality = {request_mode: [] for request_mode in expected_modes}
     for position, event in enumerate(fixed + reopened):
         request_mode, eligible, query = event.get("request_mode"), event.get("eligible"), event.get("query")
         ids, scores = event.get("ids"), event.get("scores")
@@ -3587,8 +3641,9 @@ def _normalized_validate_events(path, plan, mode, canonical_truth, original_trut
                     or proof.get("packed_score_candidates")
                         != event["route_identity"].get("packed_score_candidates")):
                 raise EvidenceError("normalized-v4 SQ8 diagnostic proof is not packed")
-        if position < len(fixed) and eligible == 500000:
-            quality[request_mode].append(recall)
+        if eligible == 500000:
+            phase_quality = quality if position < len(fixed) else post_reopen_quality
+            phase_quality[request_mode].append(recall)
 
     overlap = [row for row in searches if row.get("phase") == "overlap_search"]
     post_update = [row for row in searches if row.get("phase") == "post_update_visibility"]
@@ -3651,6 +3706,9 @@ def _normalized_validate_events(path, plan, mode, canonical_truth, original_trut
     return {
         "events": events, "fixed": fixed, "terminal": terminal[0],
         "quality": {key: statistics.mean(values) for key, values in quality.items()},
+        "post_reopen_quality": {
+            key: statistics.mean(values) for key, values in post_reopen_quality.items()
+        },
         "full_state": full[0],
     }
 
@@ -3744,12 +3802,11 @@ def _normalized_production_identity(route, mode, lane):
                 or packed_calls != 1 or packed_candidates > 64
                 or route["fp32_score_calls"] != packed_candidates):
             raise EvidenceError("normalized-v4 timed SQ8 client omitted packed work")
-    elif (route.get("rerank_candidates", 0) != 0
-            or route.get("quantized_index_name") != ""
-            or route.get("quantized_codec") != ""
-            or route.get("quantized_version") != 0
-            or route.get("quantized_score_calls", 0) != 0
-            or route.get("quantized_code_bytes_read", 0) != 0):
+    elif (any(type(route.get(field, "")) is not str or route.get(field, "") != ""
+              for field in ("quantized_index_name", "quantized_codec"))
+            or any(type(route.get(field, 0)) is not int or route.get(field, 0) != 0
+                   for field in ("rerank_candidates", "quantized_version",
+                                 "quantized_score_calls", "quantized_code_bytes_read"))):
         raise EvidenceError("normalized-v4 timed exact client crossed the SQ8 plane")
 
 
@@ -4150,8 +4207,8 @@ def _normalized_phase_timings(events):
     return result
 
 
-def _analyze_normalized(packet_path, packet, expected_sha256):
-    consumer_source = validate_consumer_source(packet["candidate_commit"])
+def _analyze_normalized(packet_path, packet, expected_sha256, *, analyzer_commit=None):
+    consumer_source = validate_consumer_source(packet["candidate_commit"], analyzer_commit=analyzer_commit)
     paths = resolve_normalized_inventory(packet_path, packet)
     dataset_paths, manifest = _normalized_dataset(packet, paths)
     service = _normalized_file(packet, paths, "inputs", "treedb_service_binary")
@@ -4159,9 +4216,11 @@ def _analyze_normalized(packet_path, packet, expected_sha256):
     go_builds = {
         "treedb_service_binary": _go_binary_build(
             service, packet["candidate_commit"], "github.com/snissn/gomap/cmd/treedb-document-service",
+            require_trimpath=False,
         ),
         "go_helper": _go_binary_build(
             helper, packet["candidate_commit"], "github.com/snissn/gomap/TreeDB/cmd/treedb_v4_production_gate",
+            require_trimpath=False,
         ),
     }
     plans = {
@@ -4190,16 +4249,25 @@ def _analyze_normalized(packet_path, packet, expected_sha256):
         ) for mode in ("exact", "sq8")
     }
     del normalized_vectors, normalized_queries
-    standalone_exact = evidence["exact"]["quality"]["exact"]
-    same_build_exact = evidence["sq8"]["quality"]["exact"]
-    sq8_quality = evidence["sq8"]["quality"]["quantized_rerank"]
-    quality_checks = {
-        "fp32_recall_at_least_0_90": same_build_exact >= .90,
-        "sq8_recall_at_least_0_90": sq8_quality >= .90,
-        "sq8_within_0_01_of_fp32": sq8_quality >= same_build_exact - .01,
-        "fp32_only_consistent": abs(standalone_exact - same_build_exact) <= .01,
-    }
-    failures = [f"quality: {name}" for name, passed in quality_checks.items() if not passed]
+    phase_quality = {}
+    failures = []
+    for phase in ("quality", "post_reopen_quality"):
+        standalone_exact = evidence["exact"][phase]["exact"]
+        same_build_exact = evidence["sq8"][phase]["exact"]
+        sq8_quality = evidence["sq8"][phase]["quantized_rerank"]
+        quality_checks = {
+            "fp32_recall_at_least_0_90": same_build_exact >= .90,
+            "sq8_recall_at_least_0_90": sq8_quality >= .90,
+            "sq8_within_0_01_of_fp32": sq8_quality >= same_build_exact - .01,
+            "fp32_only_consistent": abs(standalone_exact - same_build_exact) <= .01,
+        }
+        phase_quality[phase] = {
+            "standalone_fp32_recall_at_10": standalone_exact,
+            "same_build_fp32_recall_at_10": same_build_exact,
+            "sq8_recall_at_10": sq8_quality,
+            "checks": quality_checks,
+        }
+        failures.extend(f"{phase}: {name}" for name, passed in quality_checks.items() if not passed)
 
     matrix = read_json(
         _normalized_run_path(packet, paths, "sq8", "matrix"),
@@ -4275,10 +4343,8 @@ def _analyze_normalized(packet_path, packet, expected_sha256):
         "producer_coordinates": producer_coordinates,
         "go_binary_builds": go_builds,
         "quality": {
-            "standalone_fp32_recall_at_10": standalone_exact,
-            "same_build_fp32_recall_at_10": same_build_exact,
-            "sq8_recall_at_10": sq8_quality,
-            "checks": quality_checks,
+            **phase_quality["quality"],
+            "post_reopen": phase_quality["post_reopen_quality"],
             "original_cosine_reported": True,
         },
         "production_matrix": matrix_statistics,
@@ -4302,14 +4368,19 @@ def _analyze_normalized(packet_path, packet, expected_sha256):
             "the frozen 200 Cohere queries are observed qualification queries, not an unseen holdout",
             "SQ8 storage is an accepted additive derived plane; canonical FP32 remains authoritative",
             "phase file/category inventories are live observations, not atomic or post-shutdown totals",
-        ],
+        ] + ([
+            "untrimmed Go inputs are bound to frozen bytes and recorded build context; "
+            "reproducibility across arbitrary source paths is not claimed",
+        ] if any(build["build_settings"].get("-trimpath") != "true" for build in go_builds.values()) else []),
     }
 
 
-def _analyze(packet_path, expected_sha256, validator_runner):
+def _analyze(packet_path, expected_sha256, validator_runner, *, analyzer_commit=None):
     packet_path, packet = load_packet(packet_path, expected_sha256)
     if packet["schema"] == NORMALIZED_PACKET_SCHEMA:
-        return _analyze_normalized(packet_path, packet, expected_sha256)
+        return _analyze_normalized(packet_path, packet, expected_sha256, analyzer_commit=analyzer_commit)
+    if analyzer_commit is not None:
+        raise EvidenceError("analyzer commit override is supported only for normalized-v4 packets")
     consumer_source = validate_consumer_source(packet["candidate_commit"])
     paths = resolve_inventory(packet_path, packet)
     dataset_paths, _ = validate_dataset(packet, paths)
@@ -4395,9 +4466,9 @@ def _analyze(packet_path, expected_sha256, validator_runner):
     }
 
 
-def analyze(packet_path, expected_sha256, validator_runner=default_validator_runner):
+def analyze(packet_path, expected_sha256, validator_runner=default_validator_runner, *, analyzer_commit=None):
     try:
-        return _analyze(packet_path, expected_sha256, validator_runner)
+        return _analyze(packet_path, expected_sha256, validator_runner, analyzer_commit=analyzer_commit)
     except Exception as exc:
         schema = ANALYSIS_SCHEMA
         try:
@@ -4417,8 +4488,9 @@ def main():
     parser.add_argument("--packet", required=True, type=Path)
     parser.add_argument("--expected-packet-sha256", required=True)
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--analyzer-commit", help="reviewed consumer-only descendant; normalized-v4 only")
     args = parser.parse_args()
-    result = analyze(args.packet, args.expected_packet_sha256)
+    result = analyze(args.packet, args.expected_packet_sha256, analyzer_commit=args.analyzer_commit)
     raw = json.dumps(result, sort_keys=True, separators=(",", ":"), allow_nan=False).encode() + b"\n"
     with args.output.open("xb") as output:
         output.write(raw)

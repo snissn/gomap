@@ -753,6 +753,7 @@ Request:
 {
   "query": "refund policy",
   "top_k": 10,
+  "text_query_mode": "literal",
   "operator": "or",
   "candidate_limit": 1000,
   "max_postings_scanned": 100000,
@@ -760,13 +761,15 @@ Request:
   "return_embedding": false
 }
 ```
-`operator` is `or` (default) or `and`; explicit `AND`/`OR` in the query string is
-also understood by TreeDB text search. `candidate_limit` and
-`max_postings_scanned` are optional guardrails for unfiltered keyword search.
-When a metadata `filter` is supplied, `max_postings_scanned` is rejected with
-typed `unsupported` rather than ignored, because the filtered route currently
-cannot propagate that guardrail. Other guardrail or scalar allow-set truncation
-fails closed with `index_unavailable`; no incomplete ranking is returned.
+`text_query_mode` is `boolean` when omitted and `literal` when natural-language
+text should be analyzed without treating quotes, parentheses, or standalone
+`AND`/`OR` as syntax. `operator` is `or` (default) or `and` over the analyzed
+terms. In Boolean mode explicit connectives in `query` remain supported and
+must not conflict with an explicitly requested operator. `candidate_limit` and
+`max_postings_scanned` are optional guardrails with or without a metadata
+filter. The posting cap covers scan, fallback, and match-attribution work as one
+request allowance. Exhaustion or scalar allow-set truncation fails closed with
+`index_unavailable`; no incomplete ranking is returned.
 `filter` is supported only for fields declared in `scalar_fields` at index
 creation. Keyword/hybrid accepts equality and one/two-sided range leaves, either
 alone or joined by nested `AND`; same-field bounds are merged and different
@@ -826,6 +829,9 @@ Request:
   "query": "refund policy",
   "query_embedding": [0.1, 0.2, 0.3],
   "top_k": 10,
+  "text_query_mode": "literal",
+  "text_operator": "and",
+  "max_postings_scanned": 100000,
   "candidate_limit": 100,
   "text_candidate_limit": 100,
   "vector_candidate_limit": 100,
@@ -854,6 +860,11 @@ At least one of `query` or `query_embedding` is required. Supplying only `query`
 runs TreeDB text-only hybrid execution; supplying only `query_embedding` runs the
 collection vector source; supplying both uses deterministic reciprocal-rank
 fusion. `candidate_limit` is a shared default for omitted source-specific limits.
+`text_query_mode`, `text_operator`, and `max_postings_scanned` have the same
+semantics as keyword search and require a non-empty text `query`; vector-only
+requests that supply lexical options are invalid. An explicit posting cap uses
+one fixed lexical source attempt rather than resetting the cap across adaptive
+candidate retries.
 `max_chunks_per_parent` is disabled when omitted or zero and must otherwise be
 positive. When enabled, the executor walks the already-bounded fused order,
 keeps at most that many canonical `<parentID>#<ordinal>` built-in chunk IDs per

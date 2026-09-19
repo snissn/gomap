@@ -94,8 +94,12 @@ func TestHashicorpRaftProviderReadIndexReturnsProductionProofForLeader(t *testin
 	}
 	cluster.waitApplied(t, result.CommittedEntry.EntryID())
 
+	// The submit context can be nearly exhausted on slow runners; the proof
+	// read gets its own deadline so ReadIndex is not starved by commit time.
+	indexCtx, indexCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer indexCancel()
 	target := ReadIndexBarrier{NodeID: leader.id, GroupID: "group-a"}
-	proof, err := leader.provider.ReadIndex(ctx, target)
+	proof, err := leader.provider.ReadIndex(indexCtx, target)
 	if err != nil {
 		t.Fatalf("ReadIndex: %v", err)
 	}
@@ -110,7 +114,7 @@ func TestHashicorpRaftProviderReadIndexReturnsProductionProofForLeader(t *testin
 	if err := target.Check(proof); err != nil {
 		t.Fatalf("target.Check: %v", err)
 	}
-	progress, err := leader.fsm.WaitAppliedIndex(ctx, proof.AppliedIndexBarrier())
+	progress, err := leader.fsm.WaitAppliedIndex(indexCtx, proof.AppliedIndexBarrier())
 	if err != nil {
 		t.Fatalf("WaitAppliedIndex(%+v): %v progress=%+v", proof.AppliedIndexBarrier(), err, progress)
 	}

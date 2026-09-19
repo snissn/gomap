@@ -17,6 +17,7 @@ from typing import Optional
 
 import _support
 from treedb_client import Document, TreeDBClient, TreeDBClientError
+from treedb_client.errors import TreeDBProtocolError
 from treedb_client._dense_work import (
     dense_quantized_response_work_matches,
     dense_score_plane_byte_counters_match,
@@ -45,6 +46,37 @@ def _dense_work_without_filter_materialization(work):
         ordinal_growth_peak_bytes=0,
     )
     return replace(work, graph=replace(work.graph, filter=filter_work))
+
+
+def _process_group_has_live_members(pgid: int) -> bool:
+    """True while the process group holds a member that can still write.
+
+    Zombies ('Z' state) have already exited and released their files, so they
+    must not count — signal 0 alone would succeed for a zombie-only group and
+    burn the whole wait budget under a PID 1 that does not reap.
+    """
+    if os.path.isdir("/proc"):
+        for entry in os.listdir("/proc"):
+            if not entry.isdigit():
+                continue
+            try:
+                with open(f"/proc/{entry}/stat", "rb") as handle:
+                    stat = handle.read()
+            except OSError:
+                continue
+            rparen = stat.rfind(b")")
+            if rparen < 0:
+                continue
+            fields = stat[rparen + 1 :].split()
+            # fields[0]=state, fields[1]=ppid, fields[2]=pgrp
+            if len(fields) > 2 and int(fields[2]) == pgid and fields[0] != b"Z":
+                return True
+        return False
+    try:
+        os.killpg(pgid, 0)
+    except (ProcessLookupError, PermissionError):
+        return False
+    return True
 
 
 class TreeDBServiceProcess:
@@ -113,6 +145,16 @@ class TreeDBServiceProcess:
                 else:
                     self.proc.kill()
                 self.proc.wait(timeout=5)
+        # `go run` exits before its compiled child finishes shutdown writes
+        # into data_dir; draining the live members of the process group
+        # prevents ENOTEMPTY when the test's TemporaryDirectory cleans up
+        # right after stop().
+        if hasattr(os, "killpg"):
+            deadline = time.monotonic() + 15
+            while time.monotonic() < deadline:
+                if not _process_group_has_live_members(self.proc.pid):
+                    break
+                time.sleep(0.1)
         log_name = self.log.name
         self.log.close()
         try:
@@ -131,6 +173,48 @@ class TreeDBServiceProcess:
     "set TREEDB_CLIENT_RUN_INTEGRATION=1 and install Go to run TreeDB service integration tests",
 )
 class TreeDBClientIntegrationTests(unittest.TestCase):
+    def test_literal_and_bounded_filtered_lexical_search(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="treedb_lexical_client_") as data_dir:
+            service = TreeDBServiceProcess(_support.REPO_ROOT, data_dir)
+            try:
+                service.start()
+                with closing(TreeDBClient(service.base_url, timeout=10)) as client:
+                    client.ensure_index(
+                        "docs",
+                        2,
+                        scalar_fields=[{"field": "meta.tenant", "value_type": "string"}],
+                    )
+                    client.upsert_documents(
+                        "docs",
+                        [
+                            Document(id="a", content="alpha and refund policy", embedding=[1, 0], meta={"tenant": "t1"}),
+                            Document(id="b", content="refund policy", embedding=[0, 1], meta={"tenant": "t2"}),
+                        ],
+                    )
+                    wanted = {"field": "meta.tenant", "operator": "==", "value": "t1"}
+                    keyword = client.search_keyword(
+                        "docs",
+                        '("alpha") and refund',
+                        5,
+                        text_query_mode="literal",
+                        operator="and",
+                        max_postings_scanned=64,
+                        filter=wanted,
+                    )
+                    hybrid = client.search_hybrid(
+                        "docs",
+                        query='("alpha") and refund',
+                        top_k=5,
+                        text_query_mode="literal",
+                        text_operator="and",
+                        max_postings_scanned=64,
+                        filter=wanted,
+                    )
+                    self.assertEqual([doc.id for doc in keyword.documents], ["a"])
+                    self.assertEqual([doc.id for doc in hybrid.documents], ["a"])
+            finally:
+                service.stop()
+
     def test_native_public_listener_and_client_capability(self) -> None:
         """The native listener must belong to the same running public service."""
         with tempfile.TemporaryDirectory(prefix="treedb_native_client_") as data_dir:
@@ -354,6 +438,13 @@ class TreeDBClientIntegrationTests(unittest.TestCase):
                             self.assertEqual(native.upsert_documents("quantized", rows, index_info=info).upserted,
                                              len(rows))
                     control.optimize_index("quantized", column_graph_serving=limits)
+                    with closing(TreeDBClient(service.base_url, timeout=30, native_address=service.native_addr)) as rejected:
+                        # Finite zero vectors reach the server, which remains
+                        # the authority for zero-norm refusal. The existing
+                        # protocol rejection closes this connection.
+                        with self.assertRaisesRegex(TreeDBProtocolError, "native error 6: invalid command"):
+                            rejected.query_by_embedding("quantized", [0.0, 0.0], 5,
+                                ef_search=64, index_info=info)
                     with closing(TreeDBClient(service.base_url, timeout=30, native_address=service.native_addr)) as native:
                         response = native.query_by_embedding(
                             "quantized", [1.0, 0.0], 5,

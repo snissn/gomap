@@ -504,6 +504,114 @@ class Q5AnalyzeTest(unittest.TestCase):
                 self.assertRaisesRegex(analyzer.EvidenceError, "dirty"):
             analyzer.validate_consumer_source(COMMIT)
 
+    def test_normalized_build_admission_preserves_identity_without_requiring_trimpath(self):
+        package = "github.com/snissn/gomap/cmd/treedb-document-service"
+        base = "\n".join((
+            "/packet/service: go1.26.0", f"\tpath\t{package}",
+            "\tmod\tgithub.com/snissn/gomap\t(devel)", "\tbuild\tvcs=git",
+            f"\tbuild\tvcs.revision={COMMIT}", "\tbuild\tvcs.modified=false",
+        ))
+        for extra in ("", "\n\tbuild\t-trimpath=true"):
+            with self.subTest(trimpath=bool(extra)), mock.patch.object(
+                    analyzer.subprocess, "run", return_value=mock.Mock(returncode=0, stdout=base + extra)):
+                build = analyzer._go_binary_build(
+                    Path("/packet/service"), COMMIT, package, require_trimpath=False,
+                )
+                self.assertEqual(build["build_settings"].get("-trimpath"), "true" if extra else None)
+                self.assertEqual(build["build_settings"]["vcs.revision"], COMMIT)
+        for changed in (
+            base, base.replace("vcs.modified=false", "vcs.modified=true"),
+            base.replace(COMMIT, "b" * 40), base.replace(package, package + "-wrong"),
+            base.replace("vcs=git", "vcs=other"), base.replace("go1.26.0", "go1.25.0"),
+            base.replace("\tmod\tgithub.com/snissn/gomap", "\tmod\twrong/module"),
+        ):
+            with self.subTest(metadata=changed), mock.patch.object(
+                    analyzer.subprocess, "run", return_value=mock.Mock(returncode=0, stdout=changed)):
+                with self.assertRaises(analyzer.EvidenceError):
+                    analyzer._go_binary_build(Path("/packet/service"), COMMIT, package)
+                if changed != base:
+                    with self.assertRaises(analyzer.EvidenceError):
+                        analyzer._go_binary_build(
+                            Path("/packet/service"), COMMIT, package, require_trimpath=False,
+                        )
+
+    def test_normalized_consumer_reanalysis_is_bound_to_only_reviewed_offline_changes(self):
+        repair = "b" * 40
+        relative = "benchmarks/vector_db_compare/minima_cohere_q5_analyze.py"
+        allowed = [relative, "benchmarks/vector_db_compare/test_minima_cohere_q5_analyze.py",
+                   "benchmarks/vector_db_compare/cohere_scale_harness.md"]
+        raw = Path(analyzer.__file__).read_bytes()
+
+        def run(argv, **_kwargs):
+            if argv[1] == "show":
+                return mock.Mock(returncode=0, stdout=raw)
+            if argv[1] == "rev-parse":
+                return mock.Mock(returncode=0, stdout="c" * 40 + "\n")
+            if argv[1] == "diff" and "--name-only" in argv:
+                self.assertIn(COMMIT, argv)
+                self.assertIn(repair, argv)
+                self.assertIn("TreeDB", argv)
+                self.assertIn("clients/python/treedb_client", argv)
+                return mock.Mock(returncode=0, stdout="\0".join(allowed) + "\0")
+            if argv[1] == "merge-base":
+                return mock.Mock(returncode=0, stdout="")
+            if argv[1] == "diff":
+                self.assertIn(repair, argv)
+            return mock.Mock(returncode=0, stdout="")
+
+        with mock.patch.object(analyzer.sys, "modules", {}), \
+                mock.patch.object(analyzer.subprocess, "run", side_effect=run):
+            identity = analyzer.validate_consumer_source(COMMIT, analyzer_commit=repair)
+        self.assertEqual(identity["candidate_commit"], COMMIT)
+        self.assertEqual(identity["analyzer_commit"], repair)
+        self.assertEqual(identity["consumer_only_changed_paths"], sorted(allowed))
+        self.assertEqual(identity["analyzer_sha256"], hashlib.sha256(raw).hexdigest())
+        self.assertIn("producer_harness_trees", identity)
+
+        for changed in (
+            "TreeDB/collections/vector_index_rebuild.go", "go.mod", "internal/foo.go",
+            "cmd/treedb-document-service/main.go",
+            "benchmarks/vector_db_compare/minima_cohere_native_diagnostic.py",
+            "clients/python/treedb_client/src/treedb_client/native.py",
+        ):
+            def drift(argv, **kwargs):
+                if argv[1] == "diff" and "--name-only" in argv:
+                    return mock.Mock(returncode=0, stdout=changed + "\0")
+                return run(argv, **kwargs)
+            with self.subTest(changed=changed), mock.patch.object(analyzer.sys, "modules", {}), \
+                    mock.patch.object(analyzer.subprocess, "run", side_effect=drift), \
+                    self.assertRaisesRegex(analyzer.EvidenceError, "consumer-only"):
+                analyzer.validate_consumer_source(COMMIT, analyzer_commit=repair)
+        for operation in ("diff", "status", "show", "merge-base"):
+            def invalid(argv, **kwargs):
+                if argv[1] == operation:
+                    return mock.Mock(returncode=1, stdout=b"wrong blob" if operation == "show"
+                                     else "dirty or wrong revision")
+                return run(argv, **kwargs)
+            with self.subTest(operation=operation), mock.patch.object(analyzer.sys, "modules", {}), \
+                    mock.patch.object(analyzer.subprocess, "run", side_effect=invalid), \
+                    self.assertRaises(analyzer.EvidenceError):
+                analyzer.validate_consumer_source(COMMIT, analyzer_commit=repair)
+        with self.assertRaises(analyzer.EvidenceError):
+            analyzer.validate_consumer_source(COMMIT, analyzer_commit="not-a-commit")
+
+        def changed_import(argv, **kwargs):
+            if argv[1] == "show" and argv[2].endswith("minima_cohere_native_diagnostic.py"):
+                value = (b"changed producer import" if argv[2].startswith(COMMIT)
+                         else Path(analyzer.native.__file__).read_bytes())
+                return mock.Mock(returncode=0, stdout=value)
+            return run(argv, **kwargs)
+        with mock.patch.object(analyzer.sys, "modules", {"native": analyzer.native}), \
+                mock.patch.object(analyzer.subprocess, "run", side_effect=changed_import), \
+                self.assertRaisesRegex(analyzer.EvidenceError, "producer import"):
+            analyzer.validate_consumer_source(COMMIT, analyzer_commit=repair)
+
+    def test_analyzer_commit_override_is_normalized_only(self):
+        with mock.patch.object(analyzer, "load_packet", return_value=(Path("packet"), {
+                "schema": analyzer.PACKET_SCHEMA, "candidate_commit": COMMIT})), \
+                self.assertRaisesRegex(analyzer.EvidenceError, "normalized-v4"):
+            analyzer._analyze("packet", "a" * 64, lambda _: None, analyzer_commit="b" * 40)
+
     def test_inventory_has_one_path_and_hash_per_semantic_role(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -2323,8 +2431,7 @@ class Q5AnalyzeTest(unittest.TestCase):
         for field in ("quantized_index_name", "quantized_codec", "quantized_version"):
             changed = copy.deepcopy(direct)
             changed.pop(field)
-            with self.subTest(shape="client", field=field), self.assertRaisesRegex(
-                    analyzer.EvidenceError, "crossed the SQ8 plane"):
+            with self.subTest(shape="client", field=field):
                 analyzer._normalized_production_identity(changed, "exact", "service")
             changed = copy.deepcopy(collection)
             changed["receipt"].pop({
@@ -2336,6 +2443,26 @@ class Q5AnalyzeTest(unittest.TestCase):
                     analyzer.EvidenceError, "crossed score planes"):
                 analyzer._normalized_production_identity(
                     changed, "exact", "collection_search",
+                )
+
+        # Go omitempty drops all optional zero values; Python includes defaults.
+        omitted = json.loads(json.dumps({
+            key: value for key, value in direct.items()
+            if key not in ("quantized_index_name", "quantized_codec", "quantized_version")
+        }))
+        analyzer._normalized_production_identity(omitted, "exact", "go_native")
+        for field, invalid in (
+            ("quantized_index_name", "minima_sq8"), ("quantized_codec", "scalar_u8"),
+            ("quantized_version", 1), ("quantized_version", None),
+            ("quantized_version", False), ("quantized_version", 0.0),
+            ("quantized_score_calls", 1), ("quantized_score_calls", False),
+            ("quantized_code_bytes_read", None), ("rerank_candidates", "0"),
+            ("quantized_index_name", None), ("quantized_codec", None),
+        ):
+            with self.subTest(field=field, invalid=invalid), self.assertRaisesRegex(
+                    analyzer.EvidenceError, "crossed the SQ8 plane"):
+                analyzer._normalized_production_identity(
+                    {**omitted, field: invalid}, "exact", "go_native",
                 )
 
         changed = {**direct, "packed_vector_bytes_read": 1}
@@ -2542,6 +2669,93 @@ class Q5AnalyzeTest(unittest.TestCase):
                 identity, "quantized_rerank", eligible=5001,
                 filtered=True, result_count=10,
             )
+
+    def _normalized_lifecycle_result(self, eligible=500000, after_score=1.0, after_last_id=None):
+        # Exercise the real curve/score/quality checks with small source arrays;
+        # unrelated shutdown/route/projection checks have their own regressions.
+        ordinals = []
+        for row in range(500000):
+            if (row * 7919) % 500000 < eligible:
+                ordinals.append(row)
+                if len(ordinals) == 11:
+                    break
+        ids = [f"row-{row:06d}" for row in ordinals]
+        vectors = analyzer.np.tile([1.0, 0.0], (ordinals[-1] + 1, 1)).astype("float32")
+        queries = analyzer.np.tile([1.0, 0.0], (200, 1)).astype("float32")
+        truth = {str(eligible): [ids[:10] for _ in range(200)]}
+        plan = {"campaign_profile": analyzer.native.CAMPAIGN_PROFILE_NORMALIZED_V4,
+                "rss_only": False, "rows": 500000, "query_mode": "exact"}
+        calls = [{"event": "call", "phase": "initial_durable_ingest",
+                  "first_row": start, "rows": min(256, 500000 - start), "outcome": "completed"}
+                 for start in range(0, 500000, 256)]
+        phases = ("service_start", "schema_ensure", "initial_graph_build", "explicit_update",
+                  "native_get_many", "http_delete_file", "native_deleted_visibility",
+                  "reindex_replacement", "native_reinsert_visibility", "pre_close_fold", "close",
+                  "reopen", "idempotent_ensure", "reopen_graph_ensure",
+                  "verification_only_full_scroll", *("overlap_replace",) * 8)
+        calls.extend({"event": "call", "phase": phase, "outcome": "completed"} for phase in phases)
+
+        def search(phase, query, result_ids, scores, count=eligible):
+            return {"event": "search_result", "phase": phase, "request_mode": "exact",
+                    "eligible": count, "query": query, "ids": result_ids, "scores": scores,
+                    "recall": len(set(result_ids) & set(ids[:10])) / 10,
+                    "original_cosine_recall": len(set(result_ids) & set(ids[:10])) / 10,
+                    "command_version": 4, "diagnostics": True, "writer_active": False,
+                    "route_identity": {"execution_route": "typed_exact" if count <= 4096
+                                       else "typed_hnsw"}}
+
+        reopened_ids = sorted(ids[:9] + [after_last_id or ids[10]])
+        curves = [search(phase, query, result_ids, [score] * 10)
+                  for phase, result_ids, score in (
+                      ("fixed_coordinate_curve", ids[:10], 1.0),
+                      ("post_reopen_curve", reopened_ids, after_score))
+                  for query in range(200)]
+        mutable = [search("overlap_search", 0, [], [], 4097) for _ in range(256)]
+        mutable.extend(search(phase, 0, [], [], 0) for phase in (
+            "post_update_visibility", "post_replacement_visibility", "empty_user"))
+        full = {"event": "full_state_verified", "rows": 500000, "vectors_checked": 500000,
+                "projection_sha256": "expected", "maximum_vector_error": 0, "maximum_norm_error": 0}
+        terminal = {"event": "terminal", "qualification": "producer_gates_passed",
+                    "lifecycle_complete": True, "error": None, "final_disk_bytes": 100}
+        events = [{"event": "plan", "plan": plan}, *calls, *curves, *mutable, full, terminal]
+        with mock.patch.object(analyzer, "read_native_events", return_value=events), \
+                mock.patch.object(analyzer, "FULL_ELIGIBLE_COUNTS", [eligible]), \
+                mock.patch.object(analyzer.native, "validate_shutdowns"), \
+                mock.patch.object(analyzer, "_normalized_route_identity"), \
+                mock.patch.object(analyzer, "_normalized_dense_event"), \
+                mock.patch.object(analyzer, "_normalized_expected_projection_digest", return_value="expected"):
+            return analyzer._normalized_validate_events(
+                Path("unused"), plan, "exact", truth, truth, vectors, queries,
+            )
+
+    def test_normalized_lifecycle_validates_approximate_results_per_phase(self):
+        result = self._normalized_lifecycle_result()
+        self.assertEqual(result["quality"], {"exact": 1.0})
+        self.assertEqual(result["post_reopen_quality"], {"exact": .9})
+
+    def test_normalized_lifecycle_still_rejects_wrong_scores_and_exhaustive_changes(self):
+        with self.assertRaisesRegex(analyzer.EvidenceError, "result ordering"):
+            self._normalized_lifecycle_result(after_score=.5)
+        with self.assertRaisesRegex(analyzer.EvidenceError, "post-reopen search decisions"):
+            self._normalized_lifecycle_result(eligible=4096)
+
+    def test_normalized_lifecycle_rejects_negative_row_alias_after_reopen(self):
+        with self.assertRaisesRegex(analyzer.EvidenceError, "result ordering"):
+            self._normalized_lifecycle_result(after_last_id="row--00001")
+
+    def test_normalized_scores_reject_invalid_source_coordinates(self):
+        vectors = analyzer.np.array([[1.0, 0.0]], dtype="float32")
+        for identifier in ("row--00001", "row-000001", "row-0", "000000",
+                           "row-" + "9" * 100):
+            with self.subTest(identifier=identifier):
+                self.assertFalse(analyzer._normalized_result_scores_match(
+                    [identifier], [1.0], 0, vectors, vectors,
+                ))
+        for query in (-1, 1, False):
+            with self.subTest(query=query):
+                self.assertFalse(analyzer._normalized_result_scores_match(
+                    ["row-000000"], [1.0], query, vectors, vectors,
+                ))
 
     def test_normalized_terminal_requires_stopped_totals_and_all_clean_lifetimes(self):
         for mode, count in (("exact", 2), ("sq8", 3)):

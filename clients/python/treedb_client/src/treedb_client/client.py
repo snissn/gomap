@@ -455,11 +455,14 @@ class TreeDBClient:
                 or len(query_embedding) != index_info.dimension
             ):
                 raise TreeDBConfigError("normalized dense search requires matching selected typed IndexInfo")
-            try:
-                if not all(math.isfinite(float(value)) for value in query_embedding):
-                    raise ValueError()
-            except (TypeError, ValueError, OverflowError) as exc:
-                raise TreeDBConfigError("normalized dense query must be finite") from exc
+            # Native encoding owns conversion and finite/FP32 validation. Keep
+            # HTTP preflight here without traversing native inputs twice.
+            if self._native is None:
+                try:
+                    if not all(math.isfinite(float(value)) for value in query_embedding):
+                        raise ValueError()
+                except (TypeError, ValueError, OverflowError) as exc:
+                    raise TreeDBConfigError("normalized dense query must be finite") from exc
             if ef_search_value in (None, 0):
                 ef_search_value = index_info.vector_ef_search
             if type(ef_search_value) is not int or not 0 < ef_search_value < 1 << 63:
@@ -774,6 +777,7 @@ class TreeDBClient:
         query: str,
         top_k: int,
         *,
+        text_query_mode: Optional[str] = None,
         operator: Optional[str] = None,
         candidate_limit: Optional[int] = None,
         max_postings_scanned: Optional[int] = None,
@@ -795,6 +799,7 @@ class TreeDBClient:
             expected_generation=expected_generation,
             query=query,
             top_k=top_k,
+            text_query_mode=text_query_mode,
             operator=operator,
             candidate_limit=candidate_limit,
             max_postings_scanned=max_postings_scanned,
@@ -811,8 +816,11 @@ class TreeDBClient:
         query: Optional[str] = None,
         query_embedding: Optional[Sequence[float]] = None,
         top_k: int,
+        text_query_mode: Optional[str] = None,
+        text_operator: Optional[str] = None,
         candidate_limit: Optional[int] = None,
         text_candidate_limit: Optional[int] = None,
+        max_postings_scanned: Optional[int] = None,
         vector_candidate_limit: Optional[int] = None,
         ef_search: Optional[int] = None,
         max_chunks_per_parent: Optional[int] = None,
@@ -834,14 +842,21 @@ class TreeDBClient:
 
         if not query and query_embedding is None:
             raise InvalidRequestError("invalid_request", "search_hybrid requires query or query_embedding")
+        if not query and (
+            text_query_mode is not None or text_operator is not None or max_postings_scanned is not None
+        ):
+            raise InvalidRequestError("invalid_request", "search_hybrid lexical options require query")
         _validate_expected_generation(expected_generation)
         request = HybridSearchRequest(
             expected_generation=expected_generation,
             query=query,
             query_embedding=query_embedding,
             top_k=top_k,
+            text_query_mode=text_query_mode,
+            text_operator=text_operator,
             candidate_limit=candidate_limit,
             text_candidate_limit=text_candidate_limit,
+            max_postings_scanned=max_postings_scanned,
             vector_candidate_limit=vector_candidate_limit,
             ef_search=ef_search,
             max_chunks_per_parent=max_chunks_per_parent,

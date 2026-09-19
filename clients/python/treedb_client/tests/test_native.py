@@ -1435,7 +1435,8 @@ class NativeCodecTests(unittest.TestCase):
                 client.query_by_embedding("a", [1], 1)
 
     def test_invalid_query_and_scalar_bounds(self):
-        for query in ([float("inf")], [1e100], []):
+        for query in ([float("nan")], [float("inf")], [-float("inf")], [1e100],
+                      [10 ** 1000], [None], [object()], ["not a number"], []):
             with self.subTest(query=query), self.assertRaises(TreeDBConfigError):
                 _dense_request("a", query, 1, 0, 1, False, None)
         with self.assertRaises(TreeDBConfigError):
