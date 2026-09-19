@@ -29,13 +29,16 @@ help:
 # actual 'canonical benchmark'
 	@echo "  make deep-benchmark - run TreeDB Canonical Benchmark Report"
 # actual 'canonical benchmark'
-	@echo "  make test           - run go test in root + key dirs"
+	@echo "  make test           - run root-module tests once"
 	@echo "  make hooks          - install local git hooks (gofmt on commit)"
-	@echo "  make vet            - run go vet in root + key dirs"
+	@echo "  make vet            - run root-module vet once"
 	@echo "  make tidy           - go mod tidy (repo root)"
 	@echo "  make deps           - download deps (repo root)"
 	@echo "  make docs-check     - validate docs invariants"
+	@echo "  make workflow-check - test Makefile wiring (Python 3, no Go dependencies)"
+	@echo "  make check-nativewire - build, vet, and test the native-wire feature path"
 	@echo "  make build          - build useful binaries into ./$(BIN_DIR)"
+	@echo "  make build-native-server - build TreeDB native-wire server"
 	@echo "  make build-mongo-gateway - build TreeDB MongoDB gateway server"
 	@echo "  make run-mongo-gateway - run TreeDB MongoDB gateway server"
 	@echo "  make bench          - run unified bench"
@@ -66,7 +69,8 @@ hooks:
 	chmod +x .githooks/pre-commit
 
 .PHONY: test test-root test-hashdb test-treedb test-unified-bench
-test: test-root test-treedb test-unified-bench
+# TreeDB and unified_bench share the root module; ./... already includes them.
+test: test-root
 
 test-root:
 	go test ./...
@@ -85,7 +89,7 @@ test-race:
 	go test -race ./HashDB/... ./TreeDB/db ./TreeDB/caching ./TreeDB/internal/merging
 
 .PHONY: vet vet-root vet-hashdb vet-treedb vet-unified-bench
-vet: vet-root vet-treedb vet-unified-bench
+vet: vet-root
 
 vet-root:
 	go vet ./...
@@ -111,8 +115,8 @@ deps:
 docs-check:
 	bash ./scripts/docs_check.sh
 
-.PHONY: build build-hashdb build-treedb build-mongo-gateway treemap treemap-bin unified-bench benchprof collection-load-fixture collection-bench-matrix collection-canonical-bench-bin collection-canonical-bench treedb-out-of-core-smoke-bin treedb-out-of-core-smoke
-build: build-hashdb build-treedb build-mongo-gateway unified-bench benchprof collection-load-fixture collection-bench-matrix collection-canonical-bench-bin treedb-out-of-core-smoke-bin
+.PHONY: build build-hashdb build-treedb build-native-server build-mongo-gateway treemap treemap-bin unified-bench benchprof collection-load-fixture collection-bench-matrix collection-canonical-bench-bin collection-canonical-bench treedb-out-of-core-smoke-bin treedb-out-of-core-smoke
+build: build-hashdb build-treedb build-native-server build-mongo-gateway unified-bench benchprof collection-load-fixture collection-bench-matrix collection-canonical-bench-bin treedb-out-of-core-smoke-bin
 
 build-hashdb:
 	mkdir -p $(BIN_DIR)
@@ -131,7 +135,16 @@ build-treedb:
 
 build-native-server:
 	mkdir -p $(BIN_DIR)
-	go build -o $(BIN_DIR)/treedb-native-server ./cmd/treedb-native-server/main.go
+	go build -o $(BIN_DIR)/treedb-native-server ./cmd/treedb-native-server
+
+.PHONY: workflow-check check-nativewire
+workflow-check:
+	python3 .github/scripts/test_makefile_workflow.py
+
+# Reuse the existing package tests, including forced-pointer checkpoint/reopen.
+check-nativewire: build-native-server
+	go vet ./TreeDB/nativewire ./cmd/treedb-native-server
+	go test -count=1 ./TreeDB/nativewire ./cmd/treedb-native-server
 
 build-mongo-gateway:
 	mkdir -p $(BIN_DIR)
