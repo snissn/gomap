@@ -47,6 +47,7 @@ func TestServeTCPAndDialContext(t *testing.T) {
 
 func TestServeRejectsNilListener(t *testing.T) {
 	server := NewServer(ServerOptions{})
+	defer server.Close()
 	err := server.Serve(context.Background(), nil)
 	if !errors.Is(err, ErrNilListener) {
 		t.Fatalf("Serve nil listener err=%v want ErrNilListener", err)
@@ -96,6 +97,7 @@ func isExpectedServeShutdown(err error) bool {
 
 func TestNewInProcessClientLocalEndpoint(t *testing.T) {
 	server := NewServer(ServerOptions{})
+	defer server.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	client, cleanup, err := NewInProcessClient(ctx, server)
@@ -148,6 +150,7 @@ func TestServerCloseClosesInProcessClient(t *testing.T) {
 
 func TestNewInProcessClientNormalizesNilContext(t *testing.T) {
 	server := NewServer(ServerOptions{})
+	defer server.Close()
 	client, cleanup, err := NewInProcessClient(nil, server)
 	if err != nil {
 		t.Fatalf("NewInProcessClient nil context: %v", err)
@@ -160,6 +163,7 @@ func TestNewInProcessClientNormalizesNilContext(t *testing.T) {
 
 func TestNewInProcessClientMirrorsServerLimits(t *testing.T) {
 	server := NewServer(ServerOptions{Limits: iwire.Limits{MaxSections: 7}})
+	defer server.Close()
 	client, cleanup, err := NewInProcessClient(context.Background(), server)
 	if err != nil {
 		t.Fatalf("NewInProcessClient: %v", err)
@@ -172,6 +176,7 @@ func TestNewInProcessClientMirrorsServerLimits(t *testing.T) {
 
 func TestNewServerAcceptsPublicFrameLimit(t *testing.T) {
 	server := NewServer(ServerOptions{MaxFrameSize: 2 << 20})
+	defer server.Close()
 	if got := server.limits.MaxFrameSize; got != 2<<20 {
 		t.Fatalf("MaxFrameSize=%d want %d", got, 2<<20)
 	}
@@ -179,6 +184,7 @@ func TestNewServerAcceptsPublicFrameLimit(t *testing.T) {
 
 func TestServerRejectsOversizedResponseFrameBeforeWrite(t *testing.T) {
 	server := NewServer(ServerOptions{MaxFrameSize: uint64(iwire.FrameHeaderLenV1) + 1})
+	defer server.Close()
 	var output bytes.Buffer
 	err := server.writeSimpleFrameBuffered(&output, &connState{}, iwire.Header{Type: iwire.FrameResponse}, []byte{1, 2})
 	if got := codeOf(err); got != iwire.ErrResourceExhausted {
@@ -191,6 +197,7 @@ func TestServerRejectsOversizedResponseFrameBeforeWrite(t *testing.T) {
 
 func TestServerBufferedResponseScratchBoundsCapacity(t *testing.T) {
 	server := NewServer(ServerOptions{})
+	defer server.Close()
 	state := &connState{}
 	var output bytes.Buffer
 
@@ -259,6 +266,7 @@ func TestLocalEndpointBoundsConsumedFrame(t *testing.T) {
 func TestInProcessRoundTripRejectsOversizedRequestFrame(t *testing.T) {
 	maxFrameSize := uint64(iwire.FrameHeaderLenV1) + 128
 	server := NewServer(ServerOptions{Limits: iwire.Limits{MaxFrameSize: maxFrameSize}})
+	defer server.Close()
 	client, cleanup, err := NewInProcessClient(context.Background(), server)
 	if err != nil {
 		t.Fatalf("NewInProcessClient: %v", err)

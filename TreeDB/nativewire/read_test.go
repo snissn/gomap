@@ -700,6 +700,7 @@ func TestDecodeReadResultsRejectsTrailingTruncatedBytes(t *testing.T) {
 
 func TestIndexRangeByteOnlyLimitDoesNotBecomeQueryLimit(t *testing.T) {
 	server := NewServer(ServerOptions{})
+	defer server.Close()
 	_, opts, limits, err := server.indexRangeRequest([]iwire.Section{
 		{ID: iwire.SectionIndexName, Bytes: encodeIndexName("city")},
 		{ID: iwire.SectionCursorLimits, Bytes: encodeCursorLimits(CursorLimits{MaxBytes: 1 << 20})},
@@ -825,6 +826,7 @@ func TestCursorIdleTimeoutReap(t *testing.T) {
 	}
 	mgr := collections.NewCollectionManager(db)
 	server := NewServer(ServerOptions{Collections: mgr, Backend: db, CursorIdleTimeout: 20 * time.Millisecond})
+	defer server.Close()
 	client, _ := servePipe(t, server)
 	t.Cleanup(func() { _ = db.Close() })
 	seedReadCollection(t, mgr)
@@ -889,6 +891,7 @@ func TestOpenScanReportsTruncatedRetainedWindow(t *testing.T) {
 	}
 	mgr := collections.NewCollectionManager(db)
 	server := NewServer(ServerOptions{Collections: mgr, Backend: db, MaxScanDocuments: 1})
+	defer server.Close()
 	client, _ := servePipe(t, server)
 	t.Cleanup(func() { _ = db.Close() })
 	seedReadCollection(t, mgr)
@@ -919,6 +922,7 @@ func TestOpenScanReadMetadataCountsTowardSectionLimit(t *testing.T) {
 		MaxScanDocuments: 1,
 		Limits:           iwire.Limits{MaxSections: 4},
 	})
+	defer server.Close()
 	client, _ := servePipe(t, server)
 	t.Cleanup(func() { _ = db.Close() })
 	seedReadCollection(t, mgr)
@@ -945,6 +949,7 @@ func TestOpenScanReadMetadataAllowsNonTruncatedSectionLimit(t *testing.T) {
 		Backend:     db,
 		Limits:      iwire.Limits{MaxSections: 4},
 	})
+	defer server.Close()
 	client, _ := servePipe(t, server)
 	t.Cleanup(func() { _ = db.Close() })
 	seedReadCollection(t, mgr)
@@ -984,6 +989,7 @@ func TestGetManyReadMetadataCountsTowardSectionLimit(t *testing.T) {
 		Backend:     db,
 		Limits:      iwire.Limits{MaxSections: 2},
 	})
+	defer server.Close()
 	state := &connState{}
 	seedReadCollection(t, mgr)
 	t.Cleanup(func() { _ = db.Close() })
@@ -1004,6 +1010,7 @@ func TestOpenScanReportsTruncatedWhenCursorRetentionExceeded(t *testing.T) {
 	}
 	mgr := collections.NewCollectionManager(db)
 	server := NewServer(ServerOptions{Collections: mgr, Backend: db, MaxCursorRetainedBytes: 1})
+	defer server.Close()
 	client, _ := servePipe(t, server)
 	t.Cleanup(func() { _ = db.Close() })
 	seedReadCollection(t, mgr)
@@ -1048,6 +1055,7 @@ func TestOpenScanDefaultBatchHonorsFrameLimit(t *testing.T) {
 		DefaultCursorBatchSize: 10,
 		Limits:                 iwire.Limits{MaxFrameSize: 700},
 	})
+	defer server.Close()
 	client, _ := servePipe(t, server)
 	t.Cleanup(func() { _ = db.Close() })
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -1111,6 +1119,7 @@ func TestCursorIdleReaperRunsWithoutFollowupRequest(t *testing.T) {
 		Backend:           db,
 		CursorIdleTimeout: 20 * time.Millisecond,
 	})
+	defer server.Close()
 	client, _ := servePipe(t, server)
 	t.Cleanup(func() { _ = db.Close() })
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -1143,6 +1152,7 @@ func TestCursorConnectionCloseIncrementsClosedCounter(t *testing.T) {
 	mgr := collections.NewCollectionManager(db)
 	seedReadCollection(t, mgr)
 	server := NewServer(ServerOptions{Collections: mgr, Backend: db})
+	defer server.Close()
 	client, _ := servePipe(t, server)
 	t.Cleanup(func() { _ = db.Close() })
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -1176,6 +1186,7 @@ func TestInProcessClientCursorIdleReaperRunsWithoutFollowupRequest(t *testing.T)
 		Backend:           db,
 		CursorIdleTimeout: 20 * time.Millisecond,
 	})
+	defer server.Close()
 	t.Cleanup(func() { _ = db.Close() })
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()

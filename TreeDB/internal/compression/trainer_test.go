@@ -60,6 +60,7 @@ func TestTrainerRestartsCollectingWhenDegradedAndThrottled(t *testing.T) {
 	if tr == nil {
 		t.Fatalf("expected non-nil trainer")
 	}
+	defer tr.Close()
 	tr.collecting.Store(false)
 	tr.training.Store(true)
 	tr.degraded.Store(true)
@@ -130,6 +131,7 @@ func TestTrainerCanSelectExpandedDictCandidates(t *testing.T) {
 	if tr == nil {
 		t.Fatalf("expected non-nil trainer")
 	}
+	defer tr.Close()
 	tr.SetAutotuneCandidates([]int{32}, []int{96 << 10}, []int{96 << 10})
 
 	samples := make([][]byte, 128)
@@ -165,6 +167,7 @@ func TestNewTrainer_BootstrapMinRecordsClamp(t *testing.T) {
 	if tr == nil {
 		t.Fatalf("expected non-nil trainer")
 	}
+	defer tr.Close()
 	if got, want := tr.bootstrapMinRecords, uint64(DefaultTrainBootstrapMinRecords); got != want {
 		t.Fatalf("bootstrapMinRecords clamp: got=%d want=%d", got, want)
 	}
@@ -181,6 +184,7 @@ func TestNewTrainer_BootstrapMinRecordsRespectsLowerMinRecords(t *testing.T) {
 	if tr == nil {
 		t.Fatalf("expected non-nil trainer")
 	}
+	defer tr.Close()
 	if got, want := tr.bootstrapMinRecords, uint64(8); got != want {
 		t.Fatalf("bootstrapMinRecords respect lower minRecords: got=%d want=%d", got, want)
 	}

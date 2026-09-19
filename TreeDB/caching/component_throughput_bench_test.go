@@ -28,6 +28,7 @@ func BenchmarkComponentMemtableShardedSetParallel(b *testing.B) {
 	)
 
 	indexer := memtable.NewHashSortedIndexer()
+	defer indexer.Close()
 	shards := make([]benchMemtableShard, shardCount)
 	for i := range shards {
 		mt, err := memtable.NewWithCapacityModeAndIndexer(0, memtable.ModeHashSorted, indexer)
