@@ -24,7 +24,9 @@ per emitted child centroid. Residual quota is apportioned only among buckets
 that are large and shallow enough to recurse. The reference defaults are
 fanout 64 and minimum recursive cluster size 250. Initialization is a
 deterministic sampled traversal; empty-cluster repair reuses assignment
-distances. Identical vectors, leaf size, depth, insufficient quota, and failed
+distances. If a bucket's FP64 member sum has zero norm, its center is the
+normalized vector of the first member in canonical ordinal order. Identical
+vectors, leaf size, depth, insufficient quota, and failed
 non-unary splits stop subdivision. Unused tokens are reported, not filled with
 fabricated duplicate nodes. Physical packing does not multiply the
 logical-domain quota.
