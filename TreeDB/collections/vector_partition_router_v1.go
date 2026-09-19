@@ -814,37 +814,18 @@ func checkedVectorPartitionRouterScalarWorkV1(manifest VectorPartitionManifestV1
 		seenOverlapOrdinal[domain] = marker
 		counts[domain]++
 	}
-	var pairs uint64
 	populations := make([]int, len(counts))
 	for i, count := range counts {
-		if count > uint64(cfg.MaxVectors) {
+		if count == 0 || count > uint64(cfg.MaxVectors) || count > uint64(math.MaxInt) {
 			return 0, false
 		}
 		populations[i] = int(count)
 	}
-	quotas, err := internalrouter.ApportionRouterBudgetV2(populations, cfg.RepresentativeBudget)
-	if err != nil {
+	work, ok := internalrouter.CheckedRouterScalarWorkV1(populations, dimensions, cfg)
+	if !ok {
 		return 0, false
 	}
-	for i, count := range counts {
-		budget := uint64(quotas[i])
-		if budget != 0 && count > math.MaxUint64/budget {
-			return 0, false
-		}
-		product := count * budget
-		if pairs > math.MaxUint64-product {
-			return 0, false
-		}
-		pairs += product
-	}
-	work := pairs
-	for _, multiplier := range []uint64{uint64(cfg.BranchFactor), uint64(cfg.MaxIterations), uint64(dimensions)} {
-		if multiplier != 0 && work > math.MaxUint64/multiplier {
-			return 0, false
-		}
-		work *= multiplier
-	}
-	return work, true
+	return uint64(work), true
 }
 
 func estimateVectorPartitionRouterPackShapeBytesV1(rows uint64, dimensions, maxDepth int, def VectorIndexDefinition) (uint64, error) {
