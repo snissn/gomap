@@ -13,6 +13,9 @@ not run the independent smoke.
 The artifact is a reproducibility contract for downstream benchmark issues. A
 smoke artifact is **not** public claim-quality throughput evidence.
 
+Published lifecycle example: [TreeDB Cohere-10M load, build, cold-reopen, and
+search qualification](treedb_vectordbbench_cohere10m_lifecycle_2026-09-01.md).
+
 ## Quick smoke
 
 ```sh
