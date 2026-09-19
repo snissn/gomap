@@ -486,14 +486,15 @@ type BenchmarkVectorSearchIDsResponse struct {
 // index. Filters use the same bounded declared-scalar AND grammar as hybrid
 // search and never fall back to a document scan.
 type KeywordSearchRequest struct {
-	ExpectedGeneration uint64                         `json:"expected_generation,omitempty"`
-	Query              string                         `json:"query"`
-	TopK               int                            `json:"top_k"`
-	Operator           collections.TextSearchOperator `json:"operator,omitempty"`
-	CandidateLimit     int                            `json:"candidate_limit,omitempty"`
-	MaxPostingsScanned int                            `json:"max_postings_scanned,omitempty"`
-	Filter             *Filter                        `json:"filter,omitempty"`
-	ReturnEmbedding    bool                           `json:"return_embedding,omitempty"`
+	ExpectedGeneration uint64                          `json:"expected_generation,omitempty"`
+	Query              string                          `json:"query"`
+	TopK               int                             `json:"top_k"`
+	TextQueryMode      collections.TextSearchQueryMode `json:"text_query_mode,omitempty"`
+	Operator           collections.TextSearchOperator  `json:"operator,omitempty"`
+	CandidateLimit     int                             `json:"candidate_limit,omitempty"`
+	MaxPostingsScanned int                             `json:"max_postings_scanned,omitempty"`
+	Filter             *Filter                         `json:"filter,omitempty"`
+	ReturnEmbedding    bool                            `json:"return_embedding,omitempty"`
 }
 
 type KeywordSearchResponse struct {
@@ -536,7 +537,10 @@ type HybridSearchRequest struct {
 	Query                string                          `json:"query,omitempty"`
 	QueryEmbedding       []float32                       `json:"query_embedding,omitempty"`
 	TopK                 int                             `json:"top_k"`
+	TextQueryMode        collections.TextSearchQueryMode `json:"text_query_mode,omitempty"`
+	TextOperator         collections.TextSearchOperator  `json:"text_operator,omitempty"`
 	TextCandidateLimit   int                             `json:"text_candidate_limit,omitempty"`
+	MaxPostingsScanned   int                             `json:"max_postings_scanned,omitempty"`
 	VectorCandidateLimit int                             `json:"vector_candidate_limit,omitempty"`
 	CandidateLimit       int                             `json:"candidate_limit,omitempty"`
 	MaxChunksPerParent   int                             `json:"max_chunks_per_parent,omitempty"`

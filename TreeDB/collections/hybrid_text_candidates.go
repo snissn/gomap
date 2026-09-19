@@ -51,8 +51,11 @@ func (c *Collection) searchHybridTextCandidatesWithScanBudget(query HybridTextQu
 	textResponse, err := c.searchText(TextSearchOptions{
 		IndexName:                query.IndexName,
 		Query:                    query.Query,
+		QueryMode:                query.QueryMode,
+		Operator:                 query.Operator,
 		TopK:                     requested,
 		CandidateLimit:           hybridTextCandidateScanCandidateLimit(scanBudget),
+		MaxPostingsScanned:       query.MaxPostingsScanned,
 		IncludeDocuments:         false,
 		textV2AllowedDocumentIDs: allowSet,
 	}, resultMode)
@@ -69,6 +72,21 @@ func (c *Collection) searchHybridTextCandidatesWithScanBudget(query HybridTextQu
 func validateHybridTextCandidateQuery(query HybridTextQuery) error {
 	if query.CandidateLimit <= 0 {
 		return fmt.Errorf("%w: text candidate limit must be positive", ErrHybridSearchUnsupported)
+	}
+	if query.MaxPostingsScanned < 0 {
+		return fmt.Errorf("%w: text max_postings_scanned must be non-negative", ErrHybridSearchUnsupported)
+	}
+	mode, err := normalizeTextSearchQueryMode(query.QueryMode)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrHybridSearchUnsupported, err)
+	}
+	if _, err := normalizeTextSearchOperator(query.Operator); err != nil {
+		return fmt.Errorf("%w: %v", ErrHybridSearchUnsupported, err)
+	}
+	if mode == TextSearchQueryModeBoolean {
+		if err := validateTextSearchBooleanQuerySyntax(query.Query, query.Operator); err != nil {
+			return fmt.Errorf("%w: %v", ErrHybridSearchUnsupported, err)
+		}
 	}
 	return nil
 }

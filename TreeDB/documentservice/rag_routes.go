@@ -23,15 +23,15 @@ func (s *Service) searchKeywordWithScalarFilter(ctx context.Context, col *collec
 	if err != nil {
 		return KeywordSearchResponse{}, err
 	}
-	if operator == collections.TextSearchOperatorAND {
-		return KeywordSearchResponse{}, serviceError(CodeUnsupported, "operator \"and\" with a metadata filter is unsupported for keyword search; only the default \"or\" operator composes with bounded scalar allow-sets")
-	}
 	opts := collections.HybridSearchOptions{
 		TopK: req.TopK,
 		Text: &collections.HybridTextQuery{
 			IndexName:          defaultTextIndexName,
 			Query:              req.Query,
+			QueryMode:          req.TextQueryMode,
+			Operator:           operator,
 			CandidateLimit:     req.CandidateLimit,
+			MaxPostingsScanned: req.MaxPostingsScanned,
 			IncludeTextMatches: true,
 		},
 		ScalarFilter:         scalarFilter,
@@ -49,6 +49,9 @@ func (s *Service) searchKeywordWithScalarFilter(ctx context.Context, col *collec
 		return response, statsErr
 	}
 	if err != nil {
+		if errors.Is(err, collections.ErrHybridSearchUnsupported) {
+			return response, wrapServiceError(CodeInvalidRequest, "filtered keyword search request is invalid or unsupported", err)
+		}
 		return response, mappedHybridSearchError("filtered keyword search", err, hybrid.Stats)
 	}
 	return response, nil

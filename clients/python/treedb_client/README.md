@@ -343,8 +343,9 @@ print(bench_binary.ids)
 
 keyword = client.search_keyword(
     "docs",
-    query="dense scoring filters",
+    query='Which ("dense") scoring filters apply?',
     top_k=5,
+    text_query_mode="literal",
     operator="or",
     candidate_limit=1000,
     max_postings_scanned=100000,
@@ -352,10 +353,13 @@ keyword = client.search_keyword(
 
 hybrid = client.search_hybrid(
     "docs",
-    query="dense scoring filters",
+    query='Which ("dense") scoring filters apply?',
     query_embedding=[0.1, 0.2, 0.3],
     top_k=5,
+    text_query_mode="literal",
+    text_operator="or",
     text_candidate_limit=100,
+    max_postings_scanned=100000,
     vector_candidate_limit=100,
     ef_search=64,
     max_chunks_per_parent=2,
@@ -424,6 +428,13 @@ without partial ranking or a local/primary document scan. Truncation raises
 `IndexUnavailableError` with `scalar_filter_unbounded`. Hybrid plan/stats models
 expose lookup count, per-lookup and aggregate bounds, input IDs, intersection
 steps, and final IDs. The client never broadens a filter into a local scan.
+
+Keyword and hybrid requests default to Boolean lexical parsing. Set
+`text_query_mode="literal"` for natural-language input so quotes, parentheses,
+and standalone connectives are analyzed as text. `operator` (keyword) or
+`text_operator` (hybrid) then combines analyzed terms with OR/AND. A supplied
+`max_postings_scanned` remains active with filters and fails closed rather than
+being ignored; hybrid lexical options require a text query.
 
 ## Selected typed column graph lifecycle
 

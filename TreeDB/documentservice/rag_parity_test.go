@@ -7,6 +7,7 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -15,7 +16,7 @@ import (
 // service request/response schema itself is what is under test: filtered
 // keyword/hybrid retrieval, the dense route ann|exact selection, fail-closed
 // scalar truncation, and declaration-time scalar field schema echo.
-func ragParityPost(t *testing.T, handler *Handler, path string, body string) (int, map[string]any) {
+func ragParityPost(t testing.TB, handler *Handler, path string, body string) (int, map[string]any) {
 	t.Helper()
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, path, strings.NewReader(body))
 	rr := httptest.NewRecorder()
@@ -27,7 +28,7 @@ func ragParityPost(t *testing.T, handler *Handler, path string, body string) (in
 	return rr.Code, payload
 }
 
-func ragParityError(t *testing.T, payload map[string]any) (string, string) {
+func ragParityError(t testing.TB, payload map[string]any) (string, string) {
 	t.Helper()
 	errObj := ragParityObjectValue(t, payload["error"], "error")
 	code := ragParityStringValue(t, errObj["code"], "error.code")
@@ -35,7 +36,7 @@ func ragParityError(t *testing.T, payload map[string]any) (string, string) {
 	return code, message
 }
 
-func ragParityObjectValue(t *testing.T, value any, label string) map[string]any {
+func ragParityObjectValue(t testing.TB, value any, label string) map[string]any {
 	t.Helper()
 	object, ok := value.(map[string]any)
 	if !ok {
@@ -44,7 +45,7 @@ func ragParityObjectValue(t *testing.T, value any, label string) map[string]any 
 	return object
 }
 
-func ragParityArrayValue(t *testing.T, value any, label string) []any {
+func ragParityArrayValue(t testing.TB, value any, label string) []any {
 	t.Helper()
 	array, ok := value.([]any)
 	if !ok {
@@ -53,7 +54,7 @@ func ragParityArrayValue(t *testing.T, value any, label string) []any {
 	return array
 }
 
-func ragParityStringValue(t *testing.T, value any, label string) string {
+func ragParityStringValue(t testing.TB, value any, label string) string {
 	t.Helper()
 	text, ok := value.(string)
 	if !ok {
@@ -62,7 +63,7 @@ func ragParityStringValue(t *testing.T, value any, label string) string {
 	return text
 }
 
-func ragParityNumberValue(t *testing.T, value any, label string) float64 {
+func ragParityNumberValue(t testing.TB, value any, label string) float64 {
 	t.Helper()
 	number, ok := value.(float64)
 	if !ok {
@@ -71,7 +72,7 @@ func ragParityNumberValue(t *testing.T, value any, label string) float64 {
 	return number
 }
 
-func ragParityCreateIndex(t *testing.T, handler *Handler, name string) {
+func ragParityCreateIndex(t testing.TB, handler *Handler, name string) {
 	t.Helper()
 	body := `{"name":"` + name + `","dimension":4,"scalar_fields":[{"field":"meta.tenant","value_type":"string"},{"field":"meta.priority","value_type":"int64"}]}`
 	status, payload := ragParityPost(t, handler, "/v1/indexes", body)
@@ -104,7 +105,7 @@ func ragParityCreateIndex(t *testing.T, handler *Handler, name string) {
 	}
 }
 
-func ragParityUpsertTenantDocs(t *testing.T, handler *Handler, index string, docs []Document) {
+func ragParityUpsertTenantDocs(t testing.TB, handler *Handler, index string, docs []Document) {
 	t.Helper()
 	req := UpsertDocumentsRequest{Documents: docs}
 	raw, err := json.Marshal(req)
@@ -239,6 +240,153 @@ func TestHTTPMultiFieldANDKeywordHybridParity4292(t *testing.T) {
 	}
 }
 
+func TestHTTPLiteralAndBoundedFilteredLexicalSearch4766(t *testing.T) {
+	svc, db := newTestService(t)
+	defer db.Close()
+	handler := NewHandler(svc)
+	ragParityCreateIndex(t, handler, "docs")
+	ragParityUpsertTenantDocs(t, handler, "docs", ragParityTenantDocs())
+	filter := `"filter":{"field":"meta.tenant","operator":"==","value":"t1"}`
+
+	status, keyword := ragParityPost(t, handler, "/v1/indexes/docs/search/keyword",
+		`{"query":"\"alpha\" OR (shipping)","text_query_mode":"literal","operator":"or","top_k":10,"max_postings_scanned":64,`+filter+`}`)
+	if status != http.StatusOK {
+		code, message := ragParityError(t, keyword)
+		t.Fatalf("literal filtered keyword status=%d code=%s message=%q", status, code, message)
+	}
+	docs := ragParityArrayValue(t, keyword["documents"], "literal keyword documents")
+	if len(docs) != 1 || ragParityObjectValue(t, docs[0], "literal keyword document")["id"] != "t1-a" {
+		t.Fatalf("literal keyword documents=%s want t1-a", mustJSON(docs))
+	}
+
+	status, hybrid := ragParityPost(t, handler, "/v1/indexes/docs/search/hybrid",
+		`{"query":"(alpha) refund","text_query_mode":"literal","text_operator":"and","max_postings_scanned":64,"query_embedding":[1,0,0,0],"top_k":10,`+filter+`}`)
+	if status != http.StatusOK {
+		code, message := ragParityError(t, hybrid)
+		t.Fatalf("literal filtered hybrid status=%d code=%s message=%q", status, code, message)
+	}
+	for i, raw := range ragParityArrayValue(t, hybrid["documents"], "literal hybrid documents") {
+		doc := ragParityObjectValue(t, raw, fmt.Sprintf("literal hybrid document[%d]", i))
+		meta := ragParityObjectValue(t, doc["meta"], fmt.Sprintf("literal hybrid document[%d].meta", i))
+		if meta["tenant"] != "t1" {
+			t.Fatalf("literal hybrid leaked document %v tenant=%v", doc["id"], meta["tenant"])
+		}
+	}
+
+	status, exhausted := ragParityPost(t, handler, "/v1/indexes/docs/search/keyword",
+		`{"query":"refund policy","operator":"and","top_k":10,"max_postings_scanned":1,`+filter+`}`)
+	code, _ := ragParityError(t, exhausted)
+	if status == http.StatusOK || code != string(CodeIndexUnavailable) {
+		t.Fatalf("tiny-cap keyword status=%d body=%s want fail closed", status, mustJSON(exhausted))
+	}
+	if _, ok := exhausted["documents"]; ok {
+		t.Fatalf("tiny-cap keyword returned partial documents: %s", mustJSON(exhausted))
+	}
+}
+
+func TestHTTPBooleanOperatorConflictParity4766(t *testing.T) {
+	svc, db := newTestService(t)
+	defer db.Close()
+	handler := NewHandler(svc)
+	ragParityCreateIndex(t, handler, "docs")
+	ragParityUpsertTenantDocs(t, handler, "docs", ragParityTenantDocs())
+
+	for _, tc := range []struct {
+		name    string
+		body    string
+		wantIDs []string
+	}{
+		{name: "unfiltered", body: `{"query":"refund AND policy","top_k":5}`, wantIDs: []string{"t1-a", "t2-a"}},
+		{name: "filtered", body: `{"query":"refund AND policy","top_k":5,"filter":{"field":"meta.tenant","operator":"==","value":"t1"}}`, wantIDs: []string{"t1-a"}},
+	} {
+		t.Run(tc.name+"_omitted_operator", func(t *testing.T) {
+			status, payload := ragParityPost(t, handler, "/v1/indexes/docs/search/keyword", tc.body)
+			if status != http.StatusOK {
+				t.Fatalf("status=%d body=%s", status, mustJSON(payload))
+			}
+			docs := ragParityArrayValue(t, payload["documents"], "Boolean parity documents")
+			gotIDs := make([]string, len(docs))
+			for i, raw := range docs {
+				gotIDs[i] = ragParityStringValue(t, ragParityObjectValue(t, raw, "Boolean parity document")["id"], "Boolean parity document.id")
+			}
+			if !slices.Equal(gotIDs, tc.wantIDs) {
+				t.Fatalf("ids=%v want %v", gotIDs, tc.wantIDs)
+			}
+		})
+	}
+
+	bodies := []string{
+		`{"query":"refund AND policy","operator":"or","top_k":5}`,
+		`{"query":"refund AND policy","operator":"or","top_k":5,"filter":{"field":"meta.tenant","operator":"==","value":"t1"}}`,
+		`{"query":"refund AND policy","operator":"or","top_k":5,"filter":{"field":"meta.tenant","operator":"==","value":"missing"}}`,
+	}
+	for _, body := range bodies {
+		status, payload := ragParityPost(t, handler, "/v1/indexes/docs/search/keyword", body)
+		code, _ := ragParityError(t, payload)
+		if status == http.StatusOK || code != string(CodeInvalidRequest) {
+			t.Fatalf("conflicting Boolean request status=%d body=%s", status, mustJSON(payload))
+		}
+	}
+
+	status, payload := ragParityPost(t, handler, "/v1/indexes/docs/search/hybrid",
+		`{"query_embedding":[1,0,0,0],"text_query_mode":"literal","top_k":5,"filter":{"field":"meta.tenant","operator":"==","value":"missing"}}`)
+	code, _ := ragParityError(t, payload)
+	if status == http.StatusOK || code != string(CodeInvalidRequest) {
+		t.Fatalf("vector-only lexical options status=%d body=%s", status, mustJSON(payload))
+	}
+}
+
+func BenchmarkHTTPFilteredLexicalSearch4766(b *testing.B) {
+	svc, db := newTestService(b)
+	defer db.Close()
+	handler := NewHandler(svc)
+	ragParityCreateIndex(b, handler, "docs")
+	ragParityUpsertTenantDocs(b, handler, "docs", ragParityTenantDocs())
+
+	for _, tc := range []struct {
+		name string
+		path string
+		body string
+	}{
+		{
+			name: "filtered_or",
+			path: "/v1/indexes/docs/search/keyword",
+			body: `{"query":"refund policy","operator":"or","top_k":10,"max_postings_scanned":64,"filter":{"field":"meta.tenant","operator":"==","value":"t1"}}`,
+		},
+		{
+			name: "literal_and",
+			path: "/v1/indexes/docs/search/keyword",
+			body: `{"query":"(alpha) refund","text_query_mode":"literal","operator":"and","top_k":10,"max_postings_scanned":64,"filter":{"field":"meta.tenant","operator":"==","value":"t1"}}`,
+		},
+		{
+			name: "filtered_and_hybrid",
+			path: "/v1/indexes/docs/search/hybrid",
+			body: `{"query":"alpha refund","text_operator":"and","top_k":10,"max_postings_scanned":64,"filter":{"field":"meta.tenant","operator":"==","value":"t1"}}`,
+		},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			b.ReportAllocs()
+			var payload map[string]any
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				status, response := ragParityPost(b, handler, tc.path, tc.body)
+				if status != http.StatusOK {
+					b.Fatalf("status=%d body=%s", status, mustJSON(response))
+				}
+				payload = response
+			}
+			b.StopTimer()
+			stats := ragParityObjectValue(b, payload["stats"], "benchmark stats")
+			if postings, ok := stats["postings_scanned"]; ok {
+				b.ReportMetric(ragParityNumberValue(b, postings, "postings_scanned"), "postings/op")
+			} else if postings, ok := stats["text_postings_scanned"]; ok {
+				b.ReportMetric(ragParityNumberValue(b, postings, "text_postings_scanned"), "postings/op")
+			}
+			b.ReportMetric(ragParityNumberValue(b, stats["documents_fetched"], "documents_fetched"), "docs_fetched/op")
+		})
+	}
+}
+
 func TestHTTPFilteredSearchUnsupportedShapesFailClosedTyped(t *testing.T) {
 	svc, db := newTestService(t)
 	defer db.Close()
@@ -280,12 +428,6 @@ func TestHTTPFilteredSearchUnsupportedShapesFailClosedTyped(t *testing.T) {
 			name: "membership filter unsupported",
 			path: "/v1/indexes/docs/search/keyword",
 			body: `{"query":"refund","top_k":5,"filter":{"field":"meta.tenant","operator":"in","value":["t1"]}}`,
-			want: CodeUnsupported,
-		},
-		{
-			name: "keyword and-operator with filter unsupported",
-			path: "/v1/indexes/docs/search/keyword",
-			body: `{"query":"refund","top_k":5,"operator":"and","filter":{"field":"meta.tenant","operator":"==","value":"t1"}}`,
 			want: CodeUnsupported,
 		},
 	}

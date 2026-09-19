@@ -58,8 +58,12 @@ depend on a scan-all-documents fallback.
   value.
 - `Text *HybridTextQuery`: lexical candidate source.
   - `IndexName`: text index name.
-  - `Query`: text-query string. Grammar/analyzer semantics are owned by #1764.
+  - `Query`: text-query string.
+  - `QueryMode`: omitted/`boolean` preserves Boolean connectives;
+    `literal` analyzes the whole input without query syntax.
+  - `Operator`: omitted/OR or explicit AND over analyzed terms.
   - `CandidateLimit`: lexical candidate budget before fusion.
+  - `MaxPostingsScanned`: optional cumulative posting-entry cap.
   - `IncludeTextMatches`: optional compact field/term attribution. The zero
     value keeps text candidate generation score-only.
 - `Vector *HybridVectorQuery`: vector candidate source.
@@ -103,6 +107,9 @@ terms can still produce an exact top-N candidate list without fetching documents
 That internal guardrail remains finite and fail-closed: if postings or unique
 candidate work exceeds the implementation's safe budget, the query returns an
 unavailable/unsupported diagnostic rather than a partial ranking or primary scan.
+An explicit `MaxPostingsScanned` selects one fixed source attempt so adaptive
+candidate retries cannot reset it; lower-level scan, fallback, and final
+attribution share the same monotonic allowance.
 
 Scalar filters build finite indexed allow-sets. `HybridScalarFilter` preserves
 the original one-leaf `{IndexName, Value|Range}` shape and adds one flat ordered
@@ -118,7 +125,8 @@ index or truncation can never be hidden by an earlier empty predicate. Aggregate
 retained input is bounded by `lookup_limit * lookup_count`; complete sets are
 stable-sorted by cardinality and intersected smallest-first. Any incomplete
 lookup or snapshot/root change fails closed with no candidates. A complete empty
-intersection succeeds before text/vector work.
+intersection succeeds before text/vector work, but only after all source
+options—including lexical mode, operator, and budgets—are validated.
 
 v2 text search consumes the final allow-set during posting-block scans so
 scalar-filtered candidate generation can score only allowed documents while
