@@ -847,7 +847,7 @@ func m8QualificationCommandConfigV1(cfg config) m8ProductionConfigEvidenceV1 {
 		Probes: cfg.probes, Overlap: cfg.overlaps, TopK: cfg.topK, RecallTarget: cfg.recallTarget,
 		Concurrency: cfg.concurrency, Warmup: cfg.warmup, EffectiveWarmup: warmup,
 		EfSearch: cfg.efSearch, RouterScoreBudget: cfg.routerCandidates,
-		RouterSemantics: "global_all_level_spherical_krt_w_E_C_v2", RouterWidth: cfg.routerWidth, RouterBeam: cfg.routerBeam,
+		RouterSemantics: m8RouterSemanticsV3, RouterWidth: cfg.routerWidth, RouterBeam: cfg.routerBeam,
 		MaxExactTruthVisits: cfg.m8MaxExactTruthVisits, Seed: cfg.seed, QualityDiagnostics: cfg.m8QualityDiagnostics, QualityTraceQueries: cfg.m8QualityTraceQueries, RouterPolicyDiagnostics: cfg.m8RouterPolicyDiagnostics, RouterPolicyWidth: cfg.m8RouterPolicyWidth,
 	}
 }

@@ -33,6 +33,7 @@ import (
 
 const (
 	m8ProductionMultiGroupModeV1 = "production_multi_group"
+	m8RouterSemanticsV3          = "global_all_level_spherical_krt_w_E_C_v3"
 	m8PeakRSSScopeV1             = "process lifetime through preflight, warmup, measured query, endpoint-loss fault, and post-measurement attribution boundaries; includes retained top-k coordinator results and cached truth-membership attribution mappings"
 )
 
@@ -560,7 +561,7 @@ func runM8ProductionSingleVariantV1(cfg config, fixture fixtureManifest, vectors
 		RouterGlobalBudget: uint64(assets.router.Status().Config.RepresentativeBudget),
 		Command:            replayCommand, ExecutableSHA256: executableSHA256, BaseSHA: cfg.baseSHA, HeadSHA: cfg.headSHA, Dirty: m8GitDirtyInV1(cfg.sourceCheckout, cfg.out, cfg.profiles, cfg.m8MatrixOut, cfg.m8MatrixProfiles),
 		GoVersion: runtime.Version(), GOOS: runtime.GOOS, GOARCH: runtime.GOARCH, LogicalCPUs: runtime.NumCPU(), GOMAXPROCS: goMaxProcs, GoMemoryLimitBytes: goMemoryLimitBytes, Host: m8ProductionHostV1(cfg, assets.dir), Dataset: fixture, DatasetDirectory: datasetDirectory, TruthCacheDirectory: truthCacheDirectory, Variant: assets.descriptor,
-		Config:        m8ProductionConfigEvidenceV1{RaftGroups: cfg.raftGroups, RaftNodesPerGroup: cfg.raftNodes, Partitions: cfg.partitions, DomainCount: int(assets.manifest.DomainCount), PacksPerDomain: m8ManifestPacksPerDomainV1(assets.manifest), Probes: append([]int(nil), cfg.probes...), Overlap: append([]float64(nil), cfg.overlaps...), TopK: cfg.topK, RecallTarget: cfg.recallTarget, Concurrency: append([]int(nil), cfg.concurrency...), Warmup: cfg.warmup, EfSearch: append([]int(nil), cfg.efSearch...), RouterScoreBudget: cfg.routerCandidates, RouterSemantics: "global_all_level_spherical_krt_w_E_C_v2", RouterWidth: cfg.routerWidth, RouterBeam: cfg.routerBeam, MaxExactTruthVisits: cfg.m8MaxExactTruthVisits, Seed: cfg.seed, QualityDiagnostics: cfg.m8QualityDiagnostics, QualityTraceQueries: cfg.m8QualityTraceQueries, RouterPolicyDiagnostics: cfg.m8RouterPolicyDiagnostics, RouterPolicyWidth: cfg.m8RouterPolicyWidth},
+		Config:        m8ProductionConfigEvidenceV1{RaftGroups: cfg.raftGroups, RaftNodesPerGroup: cfg.raftNodes, Partitions: cfg.partitions, DomainCount: int(assets.manifest.DomainCount), PacksPerDomain: m8ManifestPacksPerDomainV1(assets.manifest), Probes: append([]int(nil), cfg.probes...), Overlap: append([]float64(nil), cfg.overlaps...), TopK: cfg.topK, RecallTarget: cfg.recallTarget, Concurrency: append([]int(nil), cfg.concurrency...), Warmup: cfg.warmup, EfSearch: append([]int(nil), cfg.efSearch...), RouterScoreBudget: cfg.routerCandidates, RouterSemantics: m8RouterSemanticsV3, RouterWidth: cfg.routerWidth, RouterBeam: cfg.routerBeam, MaxExactTruthVisits: cfg.m8MaxExactTruthVisits, Seed: cfg.seed, QualityDiagnostics: cfg.m8QualityDiagnostics, QualityTraceQueries: cfg.m8QualityTraceQueries, RouterPolicyDiagnostics: cfg.m8RouterPolicyDiagnostics, RouterPolicyWidth: cfg.m8RouterPolicyWidth},
 		BuildNanos:    buildNanos,
 		TruthCache:    truthCache,
 		Profiles:      m8ProductionProfileEvidenceV1{Directory: cfg.profiles, Status: "not_captured", Scope: "CPU, block, mutex, and trace cover measured query cells plus the endpoint-loss fault; heap is an end snapshot; allocs requires the captured baseline for differential analysis"},
@@ -1208,7 +1209,7 @@ func m8ArtifactNameV1(cfg config, fixture fixtureManifest, manifest collections.
 		Fixture: fixture,
 		Config: func() m8ProductionConfigEvidenceV1 {
 			count, _ := m8WarmupCountAndConcurrencyV1(cfg)
-			return m8ProductionConfigEvidenceV1{RaftGroups: cfg.raftGroups, RaftNodesPerGroup: cfg.raftNodes, Partitions: cfg.partitions, DomainCount: int(manifest.DomainCount), PacksPerDomain: m8ManifestPacksPerDomainV1(manifest), Probes: cfg.probes, Overlap: cfg.overlaps, TopK: cfg.topK, RecallTarget: cfg.recallTarget, Concurrency: cfg.concurrency, Warmup: cfg.warmup, EffectiveWarmup: count, EfSearch: cfg.efSearch, RouterScoreBudget: cfg.routerCandidates, RouterSemantics: "global_all_level_spherical_krt_w_E_C_v2", RouterWidth: cfg.routerWidth, RouterBeam: cfg.routerBeam, MaxExactTruthVisits: cfg.m8MaxExactTruthVisits, Seed: cfg.seed, QualityDiagnostics: cfg.m8QualityDiagnostics, QualityTraceQueries: cfg.m8QualityTraceQueries, RouterPolicyDiagnostics: cfg.m8RouterPolicyDiagnostics, RouterPolicyWidth: cfg.m8RouterPolicyWidth}
+			return m8ProductionConfigEvidenceV1{RaftGroups: cfg.raftGroups, RaftNodesPerGroup: cfg.raftNodes, Partitions: cfg.partitions, DomainCount: int(manifest.DomainCount), PacksPerDomain: m8ManifestPacksPerDomainV1(manifest), Probes: cfg.probes, Overlap: cfg.overlaps, TopK: cfg.topK, RecallTarget: cfg.recallTarget, Concurrency: cfg.concurrency, Warmup: cfg.warmup, EffectiveWarmup: count, EfSearch: cfg.efSearch, RouterScoreBudget: cfg.routerCandidates, RouterSemantics: m8RouterSemanticsV3, RouterWidth: cfg.routerWidth, RouterBeam: cfg.routerBeam, MaxExactTruthVisits: cfg.m8MaxExactTruthVisits, Seed: cfg.seed, QualityDiagnostics: cfg.m8QualityDiagnostics, QualityTraceQueries: cfg.m8QualityTraceQueries, RouterPolicyDiagnostics: cfg.m8RouterPolicyDiagnostics, RouterPolicyWidth: cfg.m8RouterPolicyWidth}
 		}(),
 		Assets: m8ArtifactAssetIdentityV1{
 			IntegrityDigest:  manifest.IntegrityDigest,
@@ -4484,7 +4485,7 @@ func validateM8ProductionReportWithProfilesV1(report m8ProductionReportV1, caps 
 		report.Config.Warmup < 0 || report.Config.RouterScoreBudget < 1 || report.RouterRepresentatives == 0 || report.BuildNanos <= 0 || report.TimedBoundary == "" || len(report.Limitations) == 0 {
 		return errors.New("missing or invalid M8 identity, topology, or timing metadata")
 	}
-	if report.Config.RouterSemantics != "global_all_level_spherical_krt_w_E_C_v2" || report.Config.RouterWidth < 1 || report.Config.RouterWidth > report.Config.RouterBeam || report.Config.RouterBeam > int(report.RouterRepresentatives) || report.Config.RouterScoreBudget > collections.MaxVectorPartitionRouterScoreBudgetV2 || report.RouterGlobalBudget < report.RouterRepresentatives {
+	if report.Config.RouterSemantics != m8RouterSemanticsV3 || report.Config.RouterWidth < 1 || report.Config.RouterWidth > report.Config.RouterBeam || report.Config.RouterBeam > int(report.RouterRepresentatives) || report.Config.RouterScoreBudget > collections.MaxVectorPartitionRouterScoreBudgetV2 || report.RouterGlobalBudget < report.RouterRepresentatives {
 		return errors.New("M8 requires explicit all-level router w/E/C identity")
 	}
 	expectedWarmup, _ := m8WarmupCountAndConcurrencyV1(config{warmup: report.Config.Warmup, concurrency: report.Config.Concurrency})

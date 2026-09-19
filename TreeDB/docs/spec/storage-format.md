@@ -15,17 +15,21 @@ descriptor, manifest, and schema evolution follows the fail-closed policy in
 ## All-level vector-partition router identity
 
 The global all-level spherical router uses model format
-`treedb_vector_partition_router_v2`, document-ID prefix `router/krt-hnsw-v2/`,
-and `VKR1` record version 2. Root-to-node entries persist node ID, population,
-subtree budget and true leaf/internal kind. Centers remain in the native HNSW
-FP32 plane; records bind their canonical model digest.
+`treedb_vector_partition_router_v3`, document-ID prefix `router/krt-hnsw-v3/`,
+and `VKR1` record version 3. A logical domain container has no persisted
+representative; its emitted bucket centroids are independent depth-zero roots.
+Root-to-node entries persist node ID, population, subtree budget and true
+leaf/internal kind. Centers remain in the native HNSW FP32 plane; records bind
+their canonical model digest.
 
 Partition manifest binary version 5 stores 16-byte representative mappings:
 source ordinal (8 bytes), logical domain (4), represented node (4). Source
 ordinal is provenance, not uniqueness. Membership records remain 12 bytes.
-READY-promotion payload version 3 uses the same new representative mapping;
-the enclosing lifecycle record version is unchanged. Old versions fail closed
-and require an asset rebuild; there is no mixed-format migration path.
+READY-promotion payload version 3 uses the same representative mapping; neither
+that payload nor manifest version 5 changes for router v3 because the encoded
+mapping shape is unchanged. The enclosing lifecycle record version is also
+unchanged. Old router versions fail closed and require an asset rebuild; there
+is no mixed-format migration path.
 Generation publication, reader pins and reachable asset/value-log retention
 are unchanged. See [the router contract](vector-partition-v1-contract.md).
 

@@ -4133,7 +4133,7 @@ func simulate(cfg config, m fixtureManifest, v, q [][]float64, probes int, overl
 		exactRouterStage.Searches = exactRouterEvidence.Searches
 		exactRouterStage.RepresentativeCount = cfg.router.open.Representatives
 		exactRouterStage.CandidateBudget = cfg.router.open.Representatives
-		exactRouterStage.RouterSemantics = "global_all_level_spherical_krt_w_E_C_v2"
+		exactRouterStage.RouterSemantics = m8RouterSemanticsV3
 		exactRouterStage.ReturnedWidth, exactRouterStage.BeamWidth = cfg.router.open.Representatives, cfg.router.open.Representatives
 		exactRouterStage.ScoreCalls = exactRouterEvidence.ScoreCalls
 		exactRouterStage.Candidates = exactRouterEvidence.Candidates
@@ -4284,7 +4284,7 @@ func validateResult(r runResult) error {
 		if (r.ResultKind == "router_local_path_evidence" || r.ResultKind == m6CoordinatorResultKindV1) &&
 			(s.Name == "exact_representative_routing" || s.Name == "approximate_representative_routing") {
 			if s.Searches != uint64(s.Queries) || s.RepresentativeCount == 0 ||
-				s.CandidateBudget == 0 || s.RouterSemantics != "global_all_level_spherical_krt_w_E_C_v2" ||
+				s.CandidateBudget == 0 || s.RouterSemantics != m8RouterSemanticsV3 ||
 				s.ReturnedWidth < 1 || s.ReturnedWidth > s.BeamWidth || s.BeamWidth > s.RepresentativeCount ||
 				s.ScoreCalls < s.Candidates || s.ScoreCalls > s.Searches*s.CandidateBudget ||
 				s.P50Nanos == 0 || s.P50Nanos > s.P95Nanos || s.P95Nanos > s.P99Nanos {

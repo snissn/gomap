@@ -50,7 +50,7 @@ func TestM8RouterPolicyExplicitCLISelection(t *testing.T) {
 func policyCellFixtureV1(t *testing.T, width, probes int) (*m8AttributionHarnessV1, [][]float64, [][]m8CanonicalResultV1, map[string]uint32, map[string][]uint32, m8AttributionCellV1) {
 	t.Helper()
 	h, queries, truth, homes, members := qualityFixtureV1(t, 0)
-	budget := int(h.assets.status.Representatives)
+	budget := defaultRouterScoreBudgetV2
 	if err := h.enableRouterPoliciesV1(width, budget); err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +88,7 @@ func TestM8RouterPolicyRealOwnerReplayAndOrdinaryParity(t *testing.T) {
 		t.Fatal(err)
 	}
 	oracles, _ := control.membershipOraclesV1(truth, homes, members, 2)
-	plain, err := m8BuildAttributionV1(t.Context(), h.assets, homes, members, queries, truth, oracles, 2, 32, 10, int(h.assets.status.Representatives), make([][]m8CanonicalResultV1, len(queries)), control)
+	plain, err := m8BuildAttributionV1(t.Context(), h.assets, homes, members, queries, truth, oracles, 2, 32, 10, defaultRouterScoreBudgetV2, make([][]m8CanonicalResultV1, len(queries)), control)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,23 +96,23 @@ func TestM8RouterPolicyRealOwnerReplayAndOrdinaryParity(t *testing.T) {
 	if !reflect.DeepEqual(cell, plain) {
 		t.Fatal("opt-in comparison changed ordinary attribution/search")
 	}
-	if err := control.enableRouterPoliciesV1(0, int(h.assets.status.Representatives)); err != nil {
+	if err := control.enableRouterPoliciesV1(0, defaultRouterScoreBudgetV2); err != nil {
 		t.Fatal(err)
 	}
-	replay, err := m8BuildAttributionV1(t.Context(), h.assets, homes, members, queries, truth, oracles, 2, 32, 10, int(h.assets.status.Representatives), make([][]m8CanonicalResultV1, len(queries)), control)
+	replay, err := m8BuildAttributionV1(t.Context(), h.assets, homes, members, queries, truth, oracles, 2, 32, 10, defaultRouterScoreBudgetV2, make([][]m8CanonicalResultV1, len(queries)), control)
 	if err != nil || !m8RouterPolicyReplayEqualV1(e, replay.Evidence.RouterPolicies) {
 		t.Fatal("independent owner replay differs", err)
 	}
 	// Local EF cannot change candidate-set or policy evidence. Cached values are
 	// immutable; a fresh replay independently recomputes before acceptance.
-	again, err := m8BuildAttributionV1(t.Context(), h.assets, homes, members, queries, truth, oracles, 2, 16, 10, int(h.assets.status.Representatives), make([][]m8CanonicalResultV1, len(queries)), h)
+	again, err := m8BuildAttributionV1(t.Context(), h.assets, homes, members, queries, truth, oracles, 2, 16, 10, defaultRouterScoreBudgetV2, make([][]m8CanonicalResultV1, len(queries)), h)
 	if err != nil || again.Evidence.RouterPolicies != e {
 		t.Fatal("EF rebuilt the policy candidate set", err)
 	}
 	changed := slices.Clone(queries)
 	changed[0] = slices.Clone(changed[0])
 	changed[0][0] += .01
-	if _, err := h.routerPolicyEvidenceV1(t.Context(), changed, truth, 2, int(h.assets.status.Representatives)); err == nil {
+	if _, err := h.routerPolicyEvidenceV1(t.Context(), changed, truth, 2, defaultRouterScoreBudgetV2); err == nil {
 		t.Fatal("changed query reused cache")
 	}
 	if _, err := h.routerPolicyEvidenceV1(t.Context(), queries, truth, 2, 1); err == nil {
@@ -120,7 +120,7 @@ func TestM8RouterPolicyRealOwnerReplayAndOrdinaryParity(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	if _, err := h.routerPolicyEvidenceV1(ctx, queries, truth, 2, int(h.assets.status.Representatives)); err == nil {
+	if _, err := h.routerPolicyEvidenceV1(ctx, queries, truth, 2, defaultRouterScoreBudgetV2); err == nil {
 		t.Fatal("cached diagnostic ignored cancellation")
 	}
 }

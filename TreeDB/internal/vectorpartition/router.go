@@ -48,8 +48,8 @@ type RouterConfigV1 struct {
 func DefaultRouterConfigV1() RouterConfigV1 {
 	return RouterConfigV1{
 		Seed:                 1,
-		BranchFactor:         4,
-		LeafSize:             64,
+		BranchFactor:         64,
+		LeafSize:             250,
 		RepresentativeBudget: 256,
 		MaxDepth:             8,
 		MaxIterations:        16,
@@ -72,8 +72,10 @@ type RouterPartitionV1 struct {
 	Vectors     []RouterVectorV1 `json:"vectors"`
 }
 
-// RouterHierarchyNodeV1 describes one persisted node. Every node, including
-// retained internal centers, has exactly one representative.
+// RouterHierarchyNodeV1 describes one persisted bucket centroid. Every node,
+// including retained internal centroids, has exactly one representative.
+// ParentNodeID zero denotes a top-level centroid emitted by an unrepresented
+// logical-domain container; a domain may therefore have several roots.
 type RouterHierarchyNodeV1 struct {
 	NodeID       uint32 `json:"node_id"`
 	ParentNodeID uint32 `json:"parent_node_id,omitempty"`
@@ -144,6 +146,8 @@ func ValidateRouterConfigV1(cfg RouterConfigV1) error {
 	switch {
 	case cfg.BranchFactor < 2:
 		return errors.New("vectorpartition: router branch factor must be at least 2")
+	case cfg.BranchFactor > routerMaxRepresentatives:
+		return errors.New("vectorpartition: router branch factor exceeds representative limit")
 	case cfg.LeafSize < 1:
 		return errors.New("vectorpartition: router leaf size must be positive")
 	case cfg.RepresentativeBudget < 1 || cfg.RepresentativeBudget > cfg.MaxRepresentatives:
@@ -244,7 +248,7 @@ func BuildRouterV1(partitions []RouterPartitionV1, cfg RouterConfigV1) (RouterMo
 	}
 
 	model = RouterModelV1{
-		Format:     "treedb_vector_partition_router_v2",
+		Format:     "treedb_vector_partition_router_v3",
 		Config:     cfg,
 		Dimensions: dimensions,
 		Metrics: RouterBuildMetricsV1{
@@ -259,20 +263,53 @@ func BuildRouterV1(partitions []RouterPartitionV1, cfg RouterConfigV1) (RouterMo
 		for i := range members {
 			members[i] = i
 		}
-		root := &routerBuildNodeV1{
-			record: RouterHierarchyNodeV1{
-				NodeID:      nextNodeID,
-				PartitionID: partition.PartitionID,
-				MemberCount: uint32(len(members)),
-				Leaf:        true,
-				Budget:      uint32(quotas[partitionOrdinal]),
-			},
+		quota := quotas[partitionOrdinal]
+		container := &routerBuildNodeV1{
+			record:  RouterHierarchyNodeV1{PartitionID: partition.PartitionID},
 			members: members,
-			path:    []uint32{nextNodeID},
 		}
-		nextNodeID++
-		root.center = routerSphericalCenterV2(vectors, members)
-		nodes := []*routerBuildNodeV1{root}
+		var nodes []*routerBuildNodeV1
+		rootWidth := min(cfg.BranchFactor, min(len(members), quota))
+		if rootWidth >= 2 && !routerIdenticalMembersV2(vectors, members) {
+			roots, iterations, repairs, err := routerSplitNodeV1(vectors, container, rootWidth, cfg, &nextNodeID, true)
+			model.Metrics.LloydIterations += iterations
+			model.Metrics.EmptyRepairs += repairs
+			if err != nil {
+				return RouterModelV1{}, fmt.Errorf("vectorpartition: router partition %d: %w", partition.PartitionID, err)
+			}
+			nodes = roots
+		}
+		if len(nodes) < 2 {
+			rootBudget := quota
+			if len(members) <= cfg.LeafSize {
+				rootBudget = 1
+			}
+			root := &routerBuildNodeV1{
+				record: RouterHierarchyNodeV1{
+					NodeID: nextNodeID, PartitionID: partition.PartitionID,
+					MemberCount: uint32(len(members)), Leaf: true, Budget: uint32(rootBudget),
+				},
+				members: members,
+				path:    []uint32{nextNodeID},
+				center:  routerSphericalCenterV2(vectors, members),
+			}
+			nextNodeID++
+			nodes = []*routerBuildNodeV1{root}
+		} else {
+			counts := make([]int, len(nodes))
+			eligible := make([]bool, len(nodes))
+			for i, root := range nodes {
+				counts[i] = len(root.members)
+				eligible[i] = len(root.members) > cfg.LeafSize && int(root.record.Depth) < cfg.MaxDepth
+			}
+			rootBudgets, err := apportionRouterSubtreeBudgetsV3(counts, eligible, quota)
+			if err != nil {
+				return RouterModelV1{}, err
+			}
+			for i, root := range nodes {
+				root.record.Budget = uint32(rootBudgets[i])
+			}
+		}
 		for cursor := 0; cursor < len(nodes); cursor++ {
 			parent := nodes[cursor]
 			remaining := int(parent.record.Budget) - 1
@@ -280,7 +317,7 @@ func BuildRouterV1(partitions []RouterPartitionV1, cfg RouterConfigV1) (RouterMo
 				continue
 			}
 			k := min(cfg.BranchFactor, min(len(parent.members), remaining))
-			children, iterations, repairs, err := routerSplitNodeV1(vectors, parent, k, cfg, &nextNodeID)
+			children, iterations, repairs, err := routerSplitNodeV1(vectors, parent, k, cfg, &nextNodeID, false)
 			model.Metrics.LloydIterations += iterations
 			model.Metrics.EmptyRepairs += repairs
 			if err != nil {
@@ -291,10 +328,12 @@ func BuildRouterV1(partitions []RouterPartitionV1, cfg RouterConfigV1) (RouterMo
 			}
 			parent.record.Leaf = false
 			counts := make([]int, len(children))
+			eligible := make([]bool, len(children))
 			for i, child := range children {
 				counts[i] = len(child.members)
+				eligible[i] = len(child.members) > cfg.LeafSize && int(child.record.Depth) < cfg.MaxDepth
 			}
-			childBudgets, err := ApportionRouterBudgetV2(counts, remaining)
+			childBudgets, err := apportionRouterSubtreeBudgetsV3(counts, eligible, remaining)
 			if err != nil {
 				return RouterModelV1{}, err
 			}
@@ -353,7 +392,7 @@ func ValidateRouterModelWithContextV1(ctx context.Context, model RouterModelV1) 
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if model.Format != "treedb_vector_partition_router_v2" {
+	if model.Format != "treedb_vector_partition_router_v3" {
 		return errors.New("vectorpartition: invalid router format")
 	}
 	if err := ValidateRouterConfigV1(model.Config); err != nil {
@@ -382,7 +421,7 @@ func ValidateRouterModelWithContextV1(ctx context.Context, model RouterModelV1) 
 		return errors.New("vectorpartition: invalid router build metrics")
 	}
 	nodes := make(map[uint32]RouterHierarchyNodeV1, len(model.Nodes))
-	roots := make(map[uint32]uint32)
+	roots := make(map[uint32][]RouterHierarchyNodeV1)
 	leaves := make(map[uint32]struct{})
 	childCounts := make(map[uint32]uint32)
 	childMembers := make(map[uint32]uint64)
@@ -390,6 +429,7 @@ func ValidateRouterModelWithContextV1(ctx context.Context, model RouterModelV1) 
 	children := make(map[uint32][]RouterHierarchyNodeV1)
 	totalVectors := uint64(0)
 	internalNodes := 0
+	rootSplitGroups := 0
 	for ordinal, node := range model.Nodes {
 		if ordinal&255 == 0 {
 			if err := ctx.Err(); err != nil {
@@ -407,10 +447,7 @@ func ValidateRouterModelWithContextV1(ctx context.Context, model RouterModelV1) 
 			if node.Depth != 0 {
 				return fmt.Errorf("vectorpartition: router root %d has nonzero depth", node.NodeID)
 			}
-			if _, exists := roots[node.PartitionID]; exists {
-				return fmt.Errorf("vectorpartition: duplicate router partition root %d", node.PartitionID)
-			}
-			roots[node.PartitionID] = node.NodeID
+			roots[node.PartitionID] = append(roots[node.PartitionID], node)
 			totalVectors += uint64(node.MemberCount)
 		} else {
 			parent, exists := nodes[node.ParentNodeID]
@@ -420,8 +457,8 @@ func ValidateRouterModelWithContextV1(ctx context.Context, model RouterModelV1) 
 			childCounts[node.ParentNodeID]++
 			childMembers[node.ParentNodeID] += uint64(node.MemberCount)
 			childBudgets[node.ParentNodeID] += uint64(node.Budget)
+			children[node.ParentNodeID] = append(children[node.ParentNodeID], node)
 		}
-		children[node.ParentNodeID] = append(children[node.ParentNodeID], node)
 		if node.Leaf {
 			leaves[node.NodeID] = struct{}{}
 		} else {
@@ -429,21 +466,62 @@ func ValidateRouterModelWithContextV1(ctx context.Context, model RouterModelV1) 
 		}
 		nodes[node.NodeID] = node
 	}
-	// Validate the same allocation at roots and every split. A valid digest must
-	// not bless altered quotas that happen to stay below the global ceiling.
+	// Validate domain quotas first, then the same eligible-only allocation at
+	// the virtual roots and every real split. A valid digest must not bless
+	// altered budgets that merely stay below the global ceiling.
+	partitionIDs := make([]uint32, 0, len(roots))
+	for partitionID := range roots {
+		partitionIDs = append(partitionIDs, partitionID)
+	}
+	sort.Slice(partitionIDs, func(i, j int) bool { return partitionIDs[i] < partitionIDs[j] })
+	populations := make([]int, len(partitionIDs))
+	for i, partitionID := range partitionIDs {
+		for _, root := range roots[partitionID] {
+			populations[i] += int(root.MemberCount)
+		}
+	}
+	quotas, err := ApportionRouterBudgetV2(populations, model.Config.RepresentativeBudget)
+	if err != nil {
+		return err
+	}
+	rootBudgetByPartition := make(map[uint32]int, len(roots))
+	for i, partitionID := range partitionIDs {
+		siblings := roots[partitionID]
+		if len(siblings) > model.Config.BranchFactor || len(siblings) > populations[i] || len(siblings) > quotas[i] {
+			return fmt.Errorf("vectorpartition: partition %d has invalid top-level centroid count", partitionID)
+		}
+		counts := make([]int, len(siblings))
+		eligible := make([]bool, len(siblings))
+		for j, root := range siblings {
+			counts[j] = int(root.MemberCount)
+			eligible[j] = counts[j] > model.Config.LeafSize && int(root.Depth) < model.Config.MaxDepth
+		}
+		budgets, err := apportionRouterSubtreeBudgetsV3(counts, eligible, quotas[i])
+		if err != nil {
+			return err
+		}
+		for j, root := range siblings {
+			if int(root.Budget) != budgets[j] {
+				return errors.New("vectorpartition: hierarchy root budget differs from canonical apportionment")
+			}
+			rootBudgetByPartition[partitionID] += int(root.Budget)
+		}
+		if len(siblings) > 1 {
+			rootSplitGroups++
+		}
+	}
 	for parentID, siblings := range children {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 		populations := make([]int, len(siblings))
+		eligible := make([]bool, len(siblings))
 		for i, child := range siblings {
 			populations[i] = int(child.MemberCount)
+			eligible[i] = populations[i] > model.Config.LeafSize && int(child.Depth) < model.Config.MaxDepth
 		}
-		budget := model.Config.RepresentativeBudget
-		if parentID != 0 {
-			budget = int(nodes[parentID].Budget) - 1
-		}
-		quotas, err := ApportionRouterBudgetV2(populations, budget)
+		budget := int(nodes[parentID].Budget) - 1
+		quotas, err := apportionRouterSubtreeBudgetsV3(populations, eligible, budget)
 		if err != nil {
 			return err
 		}
@@ -469,9 +547,10 @@ func ValidateRouterModelWithContextV1(ctx context.Context, model RouterModelV1) 
 			return fmt.Errorf("vectorpartition: router hierarchy node %d has invalid child totals", node.NodeID)
 		}
 	}
-	maxIterations := int64(internalNodes) * int64(model.Config.MaxIterations)
+	splitGroups := internalNodes + rootSplitGroups
+	maxIterations := int64(splitGroups) * int64(model.Config.MaxIterations)
 	maxRepairs := maxIterations * int64(model.Config.BranchFactor-1)
-	if int64(model.Metrics.LloydIterations) < int64(internalNodes) ||
+	if int64(model.Metrics.LloydIterations) < int64(splitGroups) ||
 		int64(model.Metrics.LloydIterations) > maxIterations ||
 		int64(model.Metrics.EmptyRepairs) > maxRepairs {
 		return errors.New("vectorpartition: router iteration metrics do not match hierarchy")
@@ -505,7 +584,7 @@ func ValidateRouterModelWithContextV1(ctx context.Context, model RouterModelV1) 
 		}
 		representedNodes[representative.NodeID] = struct{}{}
 		representativesPerPartition[representative.PartitionID]++
-		if representativesPerPartition[representative.PartitionID] > int(nodes[roots[representative.PartitionID]].Budget) {
+		if representativesPerPartition[representative.PartitionID] > rootBudgetByPartition[representative.PartitionID] {
 			return fmt.Errorf("vectorpartition: partition %d exceeds representative budget", representative.PartitionID)
 		}
 		if len(representative.Path) != int(representative.Depth)+1 ||
@@ -702,9 +781,9 @@ func RouteExactV1(model RouterModelV1, query []float32, candidateBudget, partiti
 }
 
 // CheckedRouterScalarWorkV1 bounds every coordinate evaluated by a cosine
-// distance during construction. Memberships are disjoint within a hierarchy
-// depth. Along a root-to-leaf path, a width-k split consumes at least k quota
-// tokens and k-1 members before any child can continue.
+// distance during construction. Sampled initialization and cached empty repair
+// add no distance calls. Memberships are disjoint at each hierarchy depth, and
+// every recursive width consumes that many remaining representative tokens.
 func CheckedRouterScalarWorkV1(populations []int, dimensions int, cfg RouterConfigV1) (int64, bool) {
 	if len(populations) == 0 || dimensions < 1 || cfg.BranchFactor < 2 || cfg.LeafSize < 1 || cfg.MaxDepth < 1 || cfg.MaxIterations < 1 {
 		return 0, false
@@ -720,223 +799,44 @@ func CheckedRouterScalarWorkV1(populations []int, dimensions int, cfg RouterConf
 		return left * right, true
 	}
 	add := func(left, right uint64) (uint64, bool) {
-		if right > math.MaxInt64 || left > math.MaxInt64-right {
+		if left > math.MaxInt64-right {
 			return 0, false
 		}
 		return left + right, true
 	}
-	type workCandidate struct {
-		work     uint64
-		feasible bool
-	}
-	var arithmeticOK = true
-	fullSplitCost := func(branch int) workCandidate {
-		width := uint64(branch)
-		initialization, ok := multiply(width, width-1)
-		if !ok {
-			arithmeticOK = false
-			return workCandidate{}
-		}
-		initialization /= 2
-		perIteration, ok := multiply(2*width-1, uint64(cfg.MaxIterations))
-		if !ok {
-			arithmeticOK = false
-			return workCandidate{}
-		}
-		work, ok := add(initialization, perIteration) // assignment plus empty repair.
-		if !ok {
-			arithmeticOK = false
-			return workCandidate{}
-		}
-		return workCandidate{work: work, feasible: true}
-	}
-	earlySplitCost := func(branch int) workCandidate {
-		width := uint64(branch)
-		initialization, ok := multiply(width, width+1)
-		if !ok {
-			arithmeticOK = false
-			return workCandidate{}
-		}
-		initialization /= 2 // includes the paid scan that finds no next center.
-		perIteration, ok := multiply(2*width-1, uint64(cfg.MaxIterations))
-		if !ok {
-			arithmeticOK = false
-			return workCandidate{}
-		}
-		work, ok := add(initialization, perIteration)
-		if !ok {
-			arithmeticOK = false
-			return workCandidate{}
-		}
-		return workCandidate{work: work, feasible: true}
-	}
-	addCandidate := func(left, right workCandidate) workCandidate {
-		if !left.feasible || !right.feasible {
-			return workCandidate{}
-		}
-		work, ok := add(left.work, right.work)
-		if !ok {
-			arithmeticOK = false
-			return workCandidate{}
-		}
-		return workCandidate{work: work, feasible: true}
-	}
-	repeatCandidate := func(count int, candidate workCandidate) workCandidate {
-		if count == 0 {
-			return workCandidate{feasible: true}
-		}
-		if !candidate.feasible {
-			return workCandidate{}
-		}
-		work, ok := multiply(uint64(count), candidate.work)
-		if !ok {
-			arithmeticOK = false
-			return workCandidate{}
-		}
-		return workCandidate{work: work, feasible: true}
-	}
-	maxCandidate := func(left, right workCandidate) workCandidate {
-		if !left.feasible || right.feasible && right.work > left.work {
-			return right
-		}
-		return left
-	}
-	// A continuing split either reaches the configured branch cap, or stops
-	// early after a paid non-progress scan. For a fixed total width, the latter
-	// cost is convex, so its maximum has only endpoint widths and one remainder.
-	maxEarlyOnlyCost := func(count, totalWidth, maxBranch int) workCandidate {
-		if count == 0 {
-			return workCandidate{feasible: totalWidth == 0}
-		}
-		if maxBranch <= 2 || totalWidth < 2*count || totalWidth > (maxBranch-1)*count {
-			return workCandidate{}
-		}
-		extraCapacity := maxBranch - 3
-		if extraCapacity == 0 {
-			if totalWidth != 2*count {
-				return workCandidate{}
-			}
-			return repeatCandidate(count, earlySplitCost(2))
-		}
-		extraWidth := totalWidth - 2*count
-		saturated := extraWidth / extraCapacity
-		remainder := extraWidth % extraCapacity
-		candidate := repeatCandidate(saturated, earlySplitCost(maxBranch-1))
-		remaining := count - saturated
-		if remainder > 0 {
-			candidate = addCandidate(candidate, earlySplitCost(2+remainder))
-			remaining--
-		}
-		return addCandidate(candidate, repeatCandidate(remaining, earlySplitCost(2)))
-	}
-	maxContinuingCost := func(count, totalWidth, maxBranch int) workCandidate {
-		if count == 0 {
-			return workCandidate{feasible: totalWidth == 0}
-		}
-		if totalWidth < 2*count || totalWidth > maxBranch*count {
-			return workCandidate{}
-		}
-		if maxBranch == 2 {
-			if totalWidth != 2*count {
-				return workCandidate{}
-			}
-			return repeatCandidate(count, fullSplitCost(2))
-		}
-		var best workCandidate
-		for fullCount := 0; fullCount <= count; fullCount++ {
-			early := maxEarlyOnlyCost(count-fullCount, totalWidth-fullCount*maxBranch, maxBranch)
-			if !early.feasible {
-				continue
-			}
-			candidate := addCandidate(repeatCandidate(fullCount, fullSplitCost(maxBranch)), early)
-			best = maxCandidate(best, candidate)
-		}
-		return best
-	}
-	// The final successful split always maximizes at its full requested width:
-	// f_full(k) = f_early(k-1) + 2*MaxIterations. When members or quota,
-	// rather than the branch cap, set that width, enumerate only the convex
-	// allocation vertices of the continuing prefix.
-	maxResourceFinalCost := func(prefixCount, combinedWidth, maxPrefixWidth, maxBranch int) workCandidate {
-		if maxBranch <= 2 {
-			return workCandidate{}
-		}
-		var best workCandidate
-		for fullCount := 0; fullCount <= prefixCount; fullCount++ {
-			earlyCount := prefixCount - fullCount
-			lowFinal := max(2, max(combinedWidth-maxPrefixWidth, combinedWidth-fullCount*maxBranch-(maxBranch-1)*earlyCount))
-			highFinal := min(maxBranch-1, min(combinedWidth-2*prefixCount, combinedWidth-fullCount*maxBranch-2*earlyCount))
-			if lowFinal > highFinal {
-				continue
-			}
-			evaluate := func(finalWidth int) {
-				earlyWidth := combinedWidth - finalWidth - fullCount*maxBranch
-				early := maxEarlyOnlyCost(earlyCount, earlyWidth, maxBranch)
-				if !early.feasible {
-					return
-				}
-				candidate := addCandidate(repeatCandidate(fullCount, fullSplitCost(maxBranch)), early)
-				candidate = addCandidate(candidate, fullSplitCost(finalWidth))
-				best = maxCandidate(best, candidate)
-			}
-			evaluate(lowFinal)
-			if highFinal != lowFinal {
-				evaluate(highFinal)
-			}
-			extraCapacity := maxBranch - 3
-			if extraCapacity == 0 {
-				continue
-			}
-			base := combinedWidth - fullCount*maxBranch - 2*earlyCount
-			minimumExtra := base - highFinal
-			maximumExtra := base - lowFinal
-			firstEndpoint := (minimumExtra + extraCapacity - 1) / extraCapacity
-			lastEndpoint := maximumExtra / extraCapacity
-			for endpoint := firstEndpoint; endpoint <= lastEndpoint; endpoint++ {
-				finalWidth := base - endpoint*extraCapacity
-				if finalWidth != lowFinal && finalWidth != highFinal {
-					evaluate(finalWidth)
-				}
-			}
-		}
-		return best
-	}
-	var work uint64
+
+	var total uint64
 	for i, population := range populations {
-		quota := quotas[i]
-		maxSplits := min(cfg.MaxDepth, min((quota-1)/2, max(0, population-cfg.LeafSize)))
-		maxBranch := min(cfg.BranchFactor, min(population, quota-1))
-		best := workCandidate{work: 1, feasible: true} // root medoid pass.
-		for splits := 0; splits < maxSplits; splits++ {
-			maxWidth := min(splits*maxBranch, min(quota-3, population-cfg.LeafSize+splits-1))
-			if maxWidth < 2*splits {
-				continue
-			}
-			candidate := maxContinuingCost(splits, maxWidth, maxBranch)
-			candidate = addCandidate(workCandidate{work: uint64(splits + 2), feasible: true}, candidate) // medoids plus terminal failed scan.
-			best = maxCandidate(best, candidate)
-		}
-		for splits := 1; splits <= maxSplits; splits++ {
-			prefixCount := splits - 1
-			maxPrefixWidth := min(prefixCount*maxBranch, min(quota-3, population-cfg.LeafSize+prefixCount-1))
-			if maxPrefixWidth < 2*prefixCount {
-				continue
-			}
-			combinedWidth := min(population+prefixCount, quota-1)
-			candidate := workCandidate{}
-			branchPrefixWidth := min(maxPrefixWidth, combinedWidth-maxBranch)
-			if branchPrefixWidth >= 2*prefixCount {
-				candidate = maxContinuingCost(prefixCount, branchPrefixWidth, maxBranch)
-				candidate = addCandidate(candidate, fullSplitCost(maxBranch))
-			}
-			candidate = maxCandidate(candidate, maxResourceFinalCost(prefixCount, combinedWidth, maxPrefixWidth, maxBranch))
-			candidate = addCandidate(workCandidate{work: uint64(splits + 1), feasible: true}, candidate) // one medoid per represented level.
-			best = maxCandidate(best, candidate)
-		}
-		if !arithmeticOK || !best.feasible {
+		if population < 1 {
 			return 0, false
 		}
-		domainWork, ok := multiply(uint64(population), best.work)
+		quota := quotas[i]
+		capacity := min(quota, 2*population-1)
+		rootWidth := min(cfg.BranchFactor, min(population, quota))
+		// Sampled initialization and cached empty-cluster repair perform no
+		// cosine-distance calls. At each depth member sets are disjoint. The
+		// sum of split widths cannot exceed the forest's node capacity, and a
+		// recursive level consumes at least two additional nodes.
+		recursiveLevels := 0
+		assignmentWidths := 0
+		if capacity >= 2 {
+			recursiveLevels = min(cfg.MaxDepth, (capacity-2)/2)
+			assignmentWidths = capacity
+			if recursiveLevels == 0 {
+				assignmentWidths = rootWidth
+			} else if cfg.BranchFactor <= (capacity-rootWidth)/recursiveLevels {
+				assignmentWidths = rootWidth + cfg.BranchFactor*recursiveLevels
+			}
+		}
+		assignmentCalls, ok := multiply(uint64(assignmentWidths), uint64(cfg.MaxIterations))
+		if !ok {
+			return 0, false
+		}
+		callsPerVector, ok := add(assignmentCalls, uint64(1+recursiveLevels))
+		if !ok {
+			return 0, false
+		}
+		domainWork, ok := multiply(uint64(population), callsPerVector)
 		if !ok {
 			return 0, false
 		}
@@ -944,14 +844,13 @@ func CheckedRouterScalarWorkV1(populations []int, dimensions int, cfg RouterConf
 		if !ok {
 			return 0, false
 		}
-		work, ok = add(work, domainWork)
+		total, ok = add(total, domainWork)
 		if !ok {
 			return 0, false
 		}
 	}
-	return int64(work), true
+	return int64(total), true
 }
-
 func normalizeRouterVectorV1(values []float32) ([]float32, error) {
 	if len(values) == 0 {
 		return nil, errors.New("vector is empty")
@@ -977,7 +876,7 @@ func normalizeRouterVectorV1(values []float32) ([]float32, error) {
 	return normalized, nil
 }
 
-func routerSplitNodeV1(vectors []routerBuildVectorV1, parent *routerBuildNodeV1, k int, cfg RouterConfigV1, nextNodeID *uint32) ([]*routerBuildNodeV1, int, int, error) {
+func routerSplitNodeV1(vectors []routerBuildVectorV1, parent *routerBuildNodeV1, k int, cfg RouterConfigV1, nextNodeID *uint32, virtual bool) ([]*routerBuildNodeV1, int, int, error) {
 	if k < 2 || k > len(parent.members) {
 		return nil, 0, 0, errors.New("invalid hierarchical split width")
 	}
@@ -987,6 +886,7 @@ func routerSplitNodeV1(vectors []routerBuildVectorV1, parent *routerBuildNodeV1,
 		return nil, 0, 0, nil
 	}
 	assignments := make([]int, len(parent.members))
+	assignmentDistances := make([]float64, len(parent.members))
 	for i := range assignments {
 		assignments[i] = -1
 	}
@@ -1009,6 +909,7 @@ func routerSplitNodeV1(vectors []routerBuildVectorV1, parent *routerBuildNodeV1,
 				assignments[memberOrdinal] = bestCenter
 				changed = true
 			}
+			assignmentDistances[memberOrdinal] = bestDistance
 			counts[bestCenter]++
 		}
 		for empty := 0; empty < k; empty++ {
@@ -1021,7 +922,7 @@ func routerSplitNodeV1(vectors []routerBuildVectorV1, parent *routerBuildNodeV1,
 				if counts[assigned] <= 1 {
 					continue
 				}
-				distance := routerCosineDistanceNormalizedV1(vectors[parent.members[memberOrdinal]].values, centers[assigned])
+				distance := assignmentDistances[memberOrdinal]
 				if donorMember < 0 || distance > donorDistance ||
 					distance == donorDistance && vectors[parent.members[memberOrdinal]].ordinal < vectors[parent.members[donorMember]].ordinal {
 					donorMember, donorDistance = memberOrdinal, distance
@@ -1050,6 +951,10 @@ func routerSplitNodeV1(vectors []routerBuildVectorV1, parent *routerBuildNodeV1,
 		}
 	}
 	children := make([]*routerBuildNodeV1, k)
+	childDepth := parent.record.Depth + 1
+	if virtual {
+		childDepth = 0
+	}
 	for centerOrdinal := 0; centerOrdinal < k; centerOrdinal++ {
 		members := make([]int, 0)
 		for memberOrdinal, assigned := range assignments {
@@ -1063,7 +968,7 @@ func routerSplitNodeV1(vectors []routerBuildVectorV1, parent *routerBuildNodeV1,
 			record: RouterHierarchyNodeV1{
 				ParentNodeID: parent.record.NodeID,
 				PartitionID:  parent.record.PartitionID,
-				Depth:        parent.record.Depth + 1,
+				Depth:        childDepth,
 				MemberCount:  uint32(len(members)),
 				Leaf:         true,
 			},
@@ -1081,7 +986,11 @@ func routerSplitNodeV1(vectors []routerBuildVectorV1, parent *routerBuildNodeV1,
 	for _, child := range children {
 		child.record.NodeID = *nextNodeID
 		*nextNodeID++
-		child.path = append(append([]uint32(nil), parent.path...), child.record.NodeID)
+		if virtual {
+			child.path = []uint32{child.record.NodeID}
+		} else {
+			child.path = append(append([]uint32(nil), parent.path...), child.record.NodeID)
+		}
 	}
 	return children, iterations, repairs, nil
 }
@@ -1089,45 +998,61 @@ func routerSplitNodeV1(vectors []routerBuildVectorV1, parent *routerBuildNodeV1,
 func routerInitialCentersV1(vectors []routerBuildVectorV1, node *routerBuildNodeV1, k int, seed int64) [][]float32 {
 	centers := make([][]float32, 0, k)
 	mixed := routerMix64V1(uint64(seed) ^ uint64(node.record.PartitionID)<<32 ^ uint64(node.record.NodeID))
-	first := int(mixed % uint64(len(node.members)))
-	centers = append(centers, append([]float32(nil), vectors[node.members[first]].values...))
-	selected := map[int]struct{}{node.members[first]: {}}
-	for len(centers) < k {
-		bestMember := -1
-		var bestDistance float64
-		for _, member := range node.members {
-			if _, exists := selected[member]; exists {
-				continue
-			}
-			duplicate := false
-			for _, center := range centers {
-				if slices.Equal(vectors[member].values, center) {
-					duplicate = true
-					break
-				}
-			}
-			if duplicate {
-				continue
-			}
-			minDistance := routerCosineDistanceNormalizedV1(vectors[member].values, centers[0])
-			for _, center := range centers[1:] {
-				distance := routerCosineDistanceNormalizedV1(vectors[member].values, center)
-				if distance < minDistance {
-					minDistance = distance
-				}
-			}
-			if bestMember < 0 || minDistance > bestDistance ||
-				minDistance == bestDistance && vectors[member].ordinal < vectors[bestMember].ordinal {
-				bestMember, bestDistance = member, minDistance
+	n := len(node.members)
+	start := int(mixed % uint64(n))
+	step := 1
+	if n > 1 {
+		step = int(routerMix64V1(mixed^0xd1b54a32d192ed03)%uint64(n-1)) + 1
+		for routerGCDV3(step, n) != 1 {
+			step++
+			if step == n {
+				step = 1
 			}
 		}
-		if bestMember < 0 || bestDistance <= 0 {
-			break
+	}
+	selectedByHash := make(map[uint64][]int, k)
+	cursor := start
+	for scanned := 0; scanned < n && len(centers) < k; scanned++ {
+		member := node.members[cursor]
+		cursor += step
+		if cursor >= n {
+			cursor -= n
 		}
-		selected[bestMember] = struct{}{}
-		centers = append(centers, append([]float32(nil), vectors[bestMember].values...))
+		hash := routerVectorBitsHashV3(vectors[member].values)
+		duplicate := false
+		for _, centerOrdinal := range selectedByHash[hash] {
+			if slices.Equal(vectors[member].values, centers[centerOrdinal]) {
+				duplicate = true
+				break
+			}
+		}
+		if duplicate {
+			continue
+		}
+		selectedByHash[hash] = append(selectedByHash[hash], len(centers))
+		centers = append(centers, append([]float32(nil), vectors[member].values...))
 	}
 	return centers
+}
+
+func routerVectorBitsHashV3(values []float32) uint64 {
+	hash := uint64(1469598103934665603)
+	for _, value := range values {
+		bits := math.Float32bits(value)
+		if value == 0 {
+			bits = 0
+		}
+		hash ^= uint64(bits)
+		hash *= 1099511628211
+	}
+	return hash
+}
+
+func routerGCDV3(left, right int) int {
+	for right != 0 {
+		left, right = right, left%right
+	}
+	return left
 }
 
 func routerSphericalCenterV2(vectors []routerBuildVectorV1, members []int) []float32 {

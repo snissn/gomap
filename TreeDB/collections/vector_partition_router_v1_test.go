@@ -100,8 +100,8 @@ func TestVectorPartitionRouterScalarWorkPreflightUsesLogicalDomainsV1(t *testing
 			{VectorOrdinal: 0, PartitionID: 0}, {VectorOrdinal: 1, PartitionID: 1},
 		},
 	}
-	if work, ok := checkedVectorPartitionRouterScalarWorkV1(manifest, cfg, 4); !ok || work != 8 {
-		t.Fatalf("domain scalar work=%d ok=%v want=8", work, ok)
+	if work, ok := checkedVectorPartitionRouterScalarWorkV1(manifest, cfg, 4); !ok || work != 56 {
+		t.Fatalf("domain scalar work=%d ok=%v want=56", work, ok)
 	}
 	manifest.SourceRowCount = 1
 	manifest.Memberships = manifest.Memberships[:1]
@@ -379,7 +379,7 @@ func TestPartitionRouterBuildPublishSearchReopenAndPinsV1(t *testing.T) {
 	cfg := internalrouter.DefaultRouterConfigV1()
 	cfg.BranchFactor = 2
 	cfg.LeafSize = 1
-	cfg.RepresentativeBudget = 6
+	cfg.RepresentativeBudget = 8
 	cfg.MaxDepth = 4
 	cfg.MaxIterations = 8
 	// The overlap membership is a second final placement for one source row.
@@ -643,10 +643,12 @@ func TestPartitionRouterRecordRejectsMalformedFiniteAndHierarchyV1(t *testing.T)
 	if got.NodeID != record.NodeID || got.Config != cfg {
 		t.Fatalf("record=%+v want=%+v", got, record)
 	}
-	legacy := append([]byte(nil), raw...)
-	legacy[4], legacy[5] = 1, 0
-	if _, err := decodeVectorPartitionRouterRecordV1(legacy); err == nil {
-		t.Fatal("accepted legacy leaf-only record version")
+	for _, version := range []byte{1, 2} {
+		legacy := append([]byte(nil), raw...)
+		legacy[4], legacy[5] = version, 0
+		if _, err := decodeVectorPartitionRouterRecordV1(legacy); err == nil {
+			t.Fatalf("accepted legacy router record version %d", version)
+		}
 	}
 	for _, malformed := range [][]byte{nil, raw[:len(raw)-1], append(append([]byte(nil), raw...), 1)} {
 		if _, err := decodeVectorPartitionRouterRecordV1(malformed); err == nil {

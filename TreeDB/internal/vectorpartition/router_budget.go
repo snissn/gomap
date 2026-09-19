@@ -9,8 +9,23 @@ import (
 // largest remainders with canonical input-order ties. A non-unary tree with n
 // members has at most 2*n-1 nodes. Unusable tokens remain unallocated.
 func ApportionRouterBudgetV2(populations []int, budget int) ([]int, error) {
+	eligible := make([]bool, len(populations))
+	for i := range eligible {
+		eligible[i] = true
+	}
+	return apportionRouterSubtreeBudgetsV3(populations, eligible, budget)
+}
+
+// apportionRouterSubtreeBudgetsV3 reserves the already-emitted centroid in
+// every bucket, then assigns residual tokens only to buckets large and deep
+// enough to recurse. Callers provide eligibility because leaf size and depth
+// are part of the versioned builder contract.
+func apportionRouterSubtreeBudgetsV3(populations []int, eligible []bool, budget int) ([]int, error) {
 	if len(populations) == 0 || budget < len(populations) || budget > routerMaxRepresentatives {
 		return nil, errors.New("vectorpartition: invalid global router budget")
+	}
+	if len(eligible) != len(populations) {
+		return nil, errors.New("vectorpartition: invalid router subtree eligibility")
 	}
 	out := make([]int, len(populations))
 	var capacity int64
@@ -18,7 +33,11 @@ func ApportionRouterBudgetV2(populations []int, budget int) ([]int, error) {
 		if n < 1 || n > routerMaxVectors {
 			return nil, errors.New("vectorpartition: invalid router population")
 		}
-		capacity += int64(2*n - 1)
+		if eligible[i] {
+			capacity += int64(2*n - 1)
+		} else {
+			capacity++
+		}
 		out[i] = 1
 	}
 	available := budget
@@ -33,7 +52,7 @@ func ApportionRouterBudgetV2(populations []int, budget int) ([]int, error) {
 	for remaining > 0 {
 		var weight int64
 		for i, n := range populations {
-			if out[i] < 2*n-1 {
+			if eligible[i] && out[i] < 2*n-1 {
 				weight += int64(n)
 			}
 		}
@@ -43,6 +62,9 @@ func ApportionRouterBudgetV2(populations []int, budget int) ([]int, error) {
 		pending := remaining
 		remainders := make([]remainder, 0, len(out))
 		for i, n := range populations {
+			if !eligible[i] {
+				continue
+			}
 			room := 2*n - 1 - out[i]
 			if room == 0 {
 				continue

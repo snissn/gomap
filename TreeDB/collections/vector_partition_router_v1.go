@@ -26,7 +26,7 @@ import (
 
 const (
 	vectorPartitionRouterRecordMagicV1   = uint32(0x564b5231) // VKR1
-	vectorPartitionRouterRecordVersionV1 = uint16(2)
+	vectorPartitionRouterRecordVersionV1 = uint16(3)
 	VectorPartitionRouterModeExactV1     = "exact"
 	VectorPartitionRouterModeApproxV1    = "approximate"
 )
@@ -435,7 +435,7 @@ func (c *Collection) BuildAndPublishVectorPartitionRouterV1(ctx context.Context,
 	ready.State = "ready"
 	ready.RouterGeneration = ready.Generation
 	ready.RouterAsset = VectorPartitionAssetV1{
-		ID:          "router/krt-hnsw-v2/" + modelDigest,
+		ID:          "router/krt-hnsw-v3/" + modelDigest,
 		Checksum:    hex.EncodeToString(sum[:]),
 		Bytes:       uint64(len(raw)),
 		PartitionID: 0,
@@ -1272,7 +1272,7 @@ func decodeVectorPartitionRouterModelWithContextV1(ctx context.Context, view *co
 		if ordinal == 0 {
 			digest = record.ModelDigest
 			model = internalrouter.RouterModelV1{
-				Format: "treedb_vector_partition_router_v2",
+				Format: "treedb_vector_partition_router_v3",
 				Config: record.Config, Dimensions: view.Header.Dimensions, Metrics: record.Metrics,
 			}
 		} else if record.ModelDigest != digest || record.Config != model.Config || record.Metrics != model.Metrics {

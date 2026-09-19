@@ -4,12 +4,15 @@
 
 The current producer uses report schema 5/result kind
 `m8_production_multi_group_evidence_v5`, explicitly binding
-`global_all_level_spherical_krt_w_E_C_v2`, global budget B, actual representative
+`global_all_level_spherical_krt_w_E_C_v3`, global budget B, actual representative
 count, returned width w, beam E and score budget C. Defaults are B=256, w=64,
 E=96, C=1024. CLI controls are `-router-global-budget`, `-router-width`,
 `-router-beam`, and `-router-score-budget`; incompatible settings are refused,
 not clamped. System-node config version 2 carries the same server-owned search
-coordinates. Old formats and retained reports are not relabeled as V2 evidence.
+coordinates. Router v3 treats each domain as a virtual container, emits genuine
+top-level bucket centroids, and defaults to fanout 64 and minimum cluster size
+250. Old v2 formats and retained reports remain historical and cannot replay as
+v3 evidence.
 
 Ordinary rows retain actual router score calls, distinct visits and edges,
 including failed work. Candidate-coverage, hard-score-budget, and mixed router

@@ -55,7 +55,7 @@ func TestVectorPartitionRouterV2IndependentBudgetsAndDurableNodeIdentity(t *test
 		t.Fatal(err)
 	}
 	defer second.Close()
-	if second.modelDigest != router.modelDigest || second.model.Nodes[0].Leaf || second.model.Nodes[0].Budget == 0 {
+	if second.modelDigest != router.modelDigest || !reflect.DeepEqual(second.model, router.model) {
 		t.Fatal("reopen changed hierarchy or allocation identity")
 	}
 	exact := opts

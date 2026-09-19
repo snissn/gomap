@@ -10,17 +10,26 @@ Consumes: the M1/M4/M5/M6 contracts in `vector-partition-raft-v1.md`,
 ### Router representation revision R (#4773)
 
 The public search API remains V1, but newly built routers use
-`treedb_vector_partition_router_v2`: a **global** representative budget B,
+`treedb_vector_partition_router_v3`: a **global** representative budget B,
 not B per domain. Canonically ordered nonempty logical domains reserve one
-root each. Remaining tokens are apportioned by integer largest remainders,
+token each before quotas are apportioned by integer largest remainders,
 weighted by membership count, with domain/node order breaking ties and a
-non-unary-tree capacity of `2*n-1`. Each node consumes one token before its
-remaining quota is apportioned to children. B below the domain count fails.
-Parents remain represented after splitting; every actual node contributes its
-normalized spherical center. Identical vectors, leaf size, depth, insufficient
-quota, and failed non-unary splits stop subdivision. Unused tokens are reported,
-not filled with fabricated duplicate nodes. Physical packing does not multiply
-the logical-domain quota.
+non-unary-forest capacity of `2*n-1`. B below the domain count fails.
+
+A logical domain is an unrepresented container. It learns and emits up to its
+quota of genuine spherical bucket centroids; it does not emit or charge an
+additional aggregate domain center. Every emitted centroid consumes one token.
+Splitting a retained centroid preserves that centroid and consumes one token
+per emitted child centroid. Residual quota is apportioned only among buckets
+that are large and shallow enough to recurse. The reference defaults are
+fanout 64 and minimum recursive cluster size 250. Initialization is a
+deterministic sampled traversal; empty-cluster repair reuses assignment
+distances. If a bucket's FP64 member sum has zero norm, its center is the
+normalized vector of the first member in canonical ordinal order. Identical
+vectors, leaf size, depth, insufficient quota, and failed
+non-unary splits stop subdivision. Unused tokens are reported, not filled with
+fabricated duplicate nodes. Physical packing does not multiply the
+logical-domain quota.
 
 Representative identity is `(logical domain, represented node ID)`. Source
 ordinal is provenance, may repeat at several levels, and is not a uniqueness
@@ -40,12 +49,13 @@ than requested is a separate coverage error. The explicit exact reference
 scores all representatives; use `w=E=N, C>=N` for the full-domain oracle. An
 exact scan truncated to w is only the matched-width representative reference.
 
-This is an intentional pre-alpha format break: manifest binary version 5,
-router record version 2, and ready-promotion payload version 3 replace earlier
-encodings. Representative records are 16 bytes (source ordinal, domain, node)
-instead of membership-shaped 12-byte records; path metadata retains leaf flags
-and quota. Rebuild old DB/benchmark directories; do not migrate or silently
-reinterpret old assets. Existing publication, generation pin, checkpoint,
+This is an intentional pre-alpha format break: router model/record/asset
+semantics are version 3. Manifest binary version 5 and ready-promotion payload
+version 3 remain current because their `(source ordinal, domain, represented
+node)` mapping did not change. Router records are 16-byte-identity records
+(source ordinal, domain, node); path metadata retains leaf flags and quota.
+Rebuild old DB/benchmark directories; do not migrate or silently reinterpret
+version-2 router assets. Existing publication, generation pin, checkpoint,
 reopen, GC/rewrite reachability, and persistent-value-log obligations remain.
 The mapped immutable owner retains vector storage; live owners still clone
 their retained vectors before the pin is released.

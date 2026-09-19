@@ -149,26 +149,25 @@ func TestKMeansRepresentativeRouterNonConvexFixture(t *testing.T) {
 	}
 }
 
-func TestKMeansRepresentativeRouterDoesNotFabricateIdenticalCenters(t *testing.T) {
+func TestKMeansRepresentativeRouterDoesNotFabricateEquivalentCenters(t *testing.T) {
 	cfg := routerTestConfigV1()
 	cfg.RepresentativeBudget = 3
 	model, err := BuildRouterV1([]RouterPartitionV1{{
 		PartitionID: 7,
 		Vectors: []RouterVectorV1{
 			{Ordinal: 1, Values: []float32{1, 0}},
-			{Ordinal: 2, Values: []float32{1, 0}},
-			{Ordinal: 3, Values: []float32{1, 0}},
-			{Ordinal: 4, Values: []float32{1, 0}},
+			{Ordinal: 2, Values: []float32{1, math.Float32frombits(1 << 31)}},
+			{Ordinal: 3, Values: []float32{0, 1}},
 		},
 	}}, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if model.Metrics.EmptyRepairs != 0 || model.Metrics.UnusedBudget != 2 {
-		t.Fatal("identical population must stop without fabricated duplicate centers")
+	if model.Metrics.EmptyRepairs != 0 || model.Metrics.UnusedBudget != 1 {
+		t.Fatal("equivalent signed-zero vectors must not fabricate duplicate centers")
 	}
-	if got := len(model.Representatives); got != 1 {
-		t.Fatalf("representatives=%d want 1", got)
+	if got := len(model.Representatives); got != 2 {
+		t.Fatalf("representatives=%d want 2", got)
 	}
 }
 
@@ -189,6 +188,7 @@ func TestPartitionRouterRejectsMalformedAndBoundedInputs(t *testing.T) {
 		{name: "zero norm", partitions: []RouterPartitionV1{{PartitionID: 1, Vectors: []RouterVectorV1{{Ordinal: 1, Values: []float32{0, 0}}}}}, contains: "norm"},
 		{name: "dimension mismatch", partitions: []RouterPartitionV1{{PartitionID: 1, Vectors: []RouterVectorV1{{Ordinal: 1, Values: []float32{1, 0}}, {Ordinal: 2, Values: []float32{1}}}}}, contains: "dimensions"},
 		{name: "duplicate ordinal", partitions: []RouterPartitionV1{{PartitionID: 1, Vectors: []RouterVectorV1{{Ordinal: 1, Values: []float32{1, 0}}, {Ordinal: 1, Values: []float32{0, 1}}}}}, contains: "duplicate"},
+		{name: "branch limit", partitions: valid, mutate: func(c *RouterConfigV1) { c.BranchFactor = routerMaxRepresentatives + 1 }, contains: "branch factor"},
 		{name: "work budget", partitions: valid, mutate: func(c *RouterConfigV1) { c.MaxScalarWork = 1 }, contains: "scalar work"},
 	}
 	for _, test := range tests {
@@ -241,8 +241,8 @@ func TestRepresentativeRouterExactOracleStableTieAndBudgets(t *testing.T) {
 func TestCheckedRouterScalarWorkBoundsAllLevelDistanceWorkV1(t *testing.T) {
 	cfg := DefaultRouterConfigV1()
 	work, ok := CheckedRouterScalarWorkV1([]int{75_000, 75_000, 75_000, 75_000}, 128, cfg)
-	if !ok || work != 36_595_200_000 {
-		t.Fatalf("router work=%d ok=%v want 36595200000", work, ok)
+	if !ok || work != 39_667_200_000 {
+		t.Fatalf("router work=%d ok=%v want 39667200000", work, ok)
 	}
 	if work > 50_000_000_000 {
 		t.Fatalf("retained D4 envelope exceeds 50B: %d", work)
@@ -254,30 +254,33 @@ func TestCheckedRouterScalarWorkBoundsAllLevelDistanceWorkV1(t *testing.T) {
 	}
 	cfg.RepresentativeBudget = 3
 	work, ok = CheckedRouterScalarWorkV1([]int{300_000}, 128, cfg)
-	if !ok || work != 1_958_400_000 {
-		t.Fatalf("quota-limited router work=%d ok=%v want 1958400000", work, ok)
+	if !ok || work != 1_881_600_000 {
+		t.Fatalf("quota-limited router work=%d ok=%v want 1881600000", work, ok)
 	}
 	cfg.BranchFactor = 256
 	cfg.MaxDepth = 64
 	cfg.MaxIterations = 1
 	cfg.RepresentativeBudget = 256
 	work, ok = CheckedRouterScalarWorkV1([]int{1_000}, 128, cfg)
-	if !ok || work != 4_210_688_000 {
-		t.Fatalf("wide quota-feasible router work=%d ok=%v want 4210688000", work, ok)
+	if !ok || work != 41_088_000 {
+		t.Fatalf("wide quota-feasible router work=%d ok=%v want 41088000", work, ok)
 	}
 	cfg.BranchFactor = 100
 	cfg.LeafSize = 900
+	cfg.MaxDepth = 8
+	cfg.MaxIterations = 16
 	cfg.RepresentativeBudget = 1_999
 	work, ok = CheckedRouterScalarWorkV1([]int{1_000}, 1, cfg)
-	if !ok || work != 10_306_000 {
-		t.Fatalf("member-limited router work=%d ok=%v want 10306000", work, ok)
+	if !ok || work != 14_409_000 {
+		t.Fatalf("member-limited router work=%d ok=%v want 14409000", work, ok)
 	}
 	cfg.BranchFactor = 1_000
 	cfg.LeafSize = 1
 	cfg.MaxDepth = 2
+	cfg.MaxIterations = 1
 	work, ok = CheckedRouterScalarWorkV1([]int{1_000}, 64, cfg)
-	if !ok || work != 32_096_256_000 {
-		t.Fatalf("total-member-limited router work=%d ok=%v want 32096256000", work, ok)
+	if !ok || work != 128_128_000 {
+		t.Fatalf("total-member-limited router work=%d ok=%v want 128128000", work, ok)
 	}
 	if _, ok := CheckedRouterScalarWorkV1([]int{routerMaxVectors}, math.MaxInt, cfg); ok {
 		t.Fatal("overflowing router work was accepted")
@@ -292,8 +295,8 @@ func TestCheckedRouterScalarWorkDoesNotCombineExclusiveCenterSelectionPathsV1(t 
 	cfg.MaxIterations = 42
 	cfg.RepresentativeBudget = 3
 	work, ok := CheckedRouterScalarWorkV1([]int{1_200_000}, 128, cfg)
-	if !ok || work != 19_814_400_000 {
-		t.Fatalf("router work=%d ok=%v want 19814400000", work, ok)
+	if !ok || work != 13_056_000_000 {
+		t.Fatalf("router work=%d ok=%v want 13056000000", work, ok)
 	}
 }
 
@@ -305,56 +308,95 @@ func TestCheckedRouterScalarWorkPreservesTerminalFullWidthV1(t *testing.T) {
 	cfg.MaxIterations = 1
 	cfg.RepresentativeBudget = 5
 	work, ok := CheckedRouterScalarWorkV1([]int{300_000}, 4_096, cfg)
-	if !ok || work != 15_974_400_000 {
-		t.Fatalf("router work=%d ok=%v want 15974400000", work, ok)
+	if !ok || work != 8_601_600_000 {
+		t.Fatalf("router work=%d ok=%v want 8601600000", work, ok)
 	}
 }
 
-func TestCheckedRouterScalarWorkMatchesExhaustivePathOracleV1(t *testing.T) {
-	type state struct {
-		members int
-		budget  int
-		depth   int
+func TestCheckedRouterScalarWorkCoversExhaustiveForestOracleV3(t *testing.T) {
+	type state struct{ members, budget, depth int }
+	compositions := func(total, parts int, visit func([]int)) {
+		values := make([]int, parts)
+		var walk func(int, int)
+		walk = func(at, remaining int) {
+			if at == parts-1 {
+				values[at] = remaining
+				visit(append([]int(nil), values...))
+				return
+			}
+			for value := 1; value <= remaining-(parts-at-1); value++ {
+				values[at] = value
+				walk(at+1, remaining-value)
+			}
+		}
+		walk(0, total)
 	}
-	for population := 1; population <= 10; population++ {
-		for budget := 1; budget <= 12; budget++ {
-			for branch := 2; branch <= 7; branch++ {
-				for depth := 1; depth <= 4; depth++ {
-					for leaf := 1; leaf <= population; leaf++ {
+	for population := 1; population <= 8; population++ {
+		for budget := 1; budget <= 10; budget++ {
+			for branch := 2; branch <= 4; branch++ {
+				for maxDepth := 1; maxDepth <= 3; maxDepth++ {
+					for leafSize := 1; leafSize <= population; leafSize++ {
 						for iterations := 1; iterations <= 3; iterations++ {
 							cfg := DefaultRouterConfigV1()
-							cfg.BranchFactor = branch
-							cfg.LeafSize = leaf
+							cfg.BranchFactor, cfg.LeafSize = branch, leafSize
+							cfg.MaxDepth, cfg.MaxIterations = maxDepth, iterations
 							cfg.RepresentativeBudget = budget
-							cfg.MaxDepth = depth
-							cfg.MaxIterations = iterations
+							quotas, err := ApportionRouterBudgetV2([]int{population}, budget)
+							if err != nil {
+								t.Fatal(err)
+							}
 							memo := make(map[state]int)
-							var pathWork func(state) int
-							pathWork = func(current state) int {
+							var subtree func(state) int
+							subtree = func(current state) int {
 								if cached, ok := memo[current]; ok {
 									return cached
 								}
-								if current.members <= leaf || current.budget < 3 || current.depth >= depth {
-									return 0
-								}
-								requested := min(branch, min(current.members, current.budget-1))
-								best := 1 // one-center terminal failure.
-								for width := 2; width <= requested; width++ {
-									initialization := width * (width + 1) / 2
-									if width == requested {
-										initialization = width * (width - 1) / 2
-									}
-									split := initialization + iterations*(2*width-1)
-									child := state{members: current.members - width + 1, budget: current.budget - width, depth: current.depth + 1}
-									best = max(best, split+1+pathWork(child)) // child medoid pass.
+								best := current.members // this centroid's medoid pass.
+								if current.members > leafSize && current.depth < maxDepth && current.budget >= 3 {
+									width := min(branch, min(current.members, current.budget-1))
+									compositions(current.members, width, func(counts []int) {
+										eligible := make([]bool, width)
+										for i, count := range counts {
+											eligible[i] = count > leafSize && current.depth+1 < maxDepth
+										}
+										childBudgets, err := apportionRouterSubtreeBudgetsV3(counts, eligible, current.budget-1)
+										if err != nil {
+											t.Fatal(err)
+										}
+										candidate := current.members + current.members*width*iterations
+										for i, count := range counts {
+											candidate += subtree(state{count, childBudgets[i], current.depth + 1})
+										}
+										best = max(best, candidate)
+									})
 								}
 								memo[current] = best
 								return best
 							}
-							want := int64(population * (1 + pathWork(state{members: population, budget: budget}))) // root medoid pass.
+							quota := quotas[0]
+							rootWidth := min(branch, min(population, quota))
+							oracle := population
+							if rootWidth >= 2 {
+								oracle = 0
+								compositions(population, rootWidth, func(counts []int) {
+									eligible := make([]bool, rootWidth)
+									for i, count := range counts {
+										eligible[i] = count > leafSize
+									}
+									rootBudgets, err := apportionRouterSubtreeBudgetsV3(counts, eligible, quota)
+									if err != nil {
+										t.Fatal(err)
+									}
+									candidate := population * rootWidth * iterations
+									for i, count := range counts {
+										candidate += subtree(state{count, rootBudgets[i], 0})
+									}
+									oracle = max(oracle, candidate)
+								})
+							}
 							got, ok := CheckedRouterScalarWorkV1([]int{population}, 1, cfg)
-							if !ok || got != want {
-								t.Fatalf("population=%d budget=%d branch=%d depth=%d leaf=%d iterations=%d: work=%d ok=%v want=%d", population, budget, branch, depth, leaf, iterations, got, ok, want)
+							if !ok || got < int64(oracle) {
+								t.Fatalf("population=%d budget=%d branch=%d depth=%d leaf=%d iterations=%d: work=%d ok=%v oracle=%d", population, budget, branch, maxDepth, leafSize, iterations, got, ok, oracle)
 							}
 						}
 					}
@@ -364,7 +406,7 @@ func TestCheckedRouterScalarWorkMatchesExhaustivePathOracleV1(t *testing.T) {
 	}
 }
 
-func TestCheckedRouterScalarWorkCoversFailedCenterSelectionV1(t *testing.T) {
+func TestRouterSampledInitializationKeepsDistinctRoundedDirectionsV3(t *testing.T) {
 	vectors := []routerBuildVectorV1{
 		{ordinal: 1, values: []float32{0.5718129277229309, -0.8203840851783752}},
 		{ordinal: 2, values: []float32{0.5718127489089966, -0.8203842043876648}},
@@ -379,8 +421,8 @@ func TestCheckedRouterScalarWorkCoversFailedCenterSelectionV1(t *testing.T) {
 		record:  RouterHierarchyNodeV1{NodeID: 1, PartitionID: 1},
 		members: []int{0, 1},
 	}
-	if centers := routerInitialCentersV1(vectors, parent, 2, 0); len(centers) != 1 {
-		t.Fatalf("initial centers=%d want 1 after the failed selection scan", len(centers))
+	if centers := routerInitialCentersV1(vectors, parent, 2, 0); len(centers) != 2 {
+		t.Fatalf("initial centers=%d want 2 distinct bitwise directions", len(centers))
 	}
 	cfg := DefaultRouterConfigV1()
 	cfg.BranchFactor = 2
@@ -389,8 +431,8 @@ func TestCheckedRouterScalarWorkCoversFailedCenterSelectionV1(t *testing.T) {
 	cfg.MaxIterations = 1
 	cfg.RepresentativeBudget = 3
 	work, ok := CheckedRouterScalarWorkV1([]int{2}, 2, cfg)
-	if !ok || work != 24 {
-		t.Fatalf("failed-selection router work=%d ok=%v want 24", work, ok)
+	if !ok || work != 12 {
+		t.Fatalf("sampled-initialization router work=%d ok=%v want 12", work, ok)
 	}
 }
 
@@ -415,7 +457,7 @@ func TestPartitionRouterModelValidationRejectsForgedMetadata(t *testing.T) {
 			candidate.Metrics.LloydIterations += candidate.Config.MaxIterations + 1
 		},
 		func(candidate *RouterModelV1) { candidate.Nodes[0].MemberCount-- },
-		func(candidate *RouterModelV1) { candidate.Nodes[1].ParentNodeID = 0 },
+		func(candidate *RouterModelV1) { candidate.Nodes[1].Depth++ },
 		func(candidate *RouterModelV1) { candidate.Representatives[0].MemberCount++ },
 		func(candidate *RouterModelV1) {
 			leafID := candidate.Representatives[0].NodeID
@@ -429,7 +471,7 @@ func TestPartitionRouterModelValidationRejectsForgedMetadata(t *testing.T) {
 		func(candidate *RouterModelV1) {
 			candidate.Representatives[1].NodeID = candidate.Representatives[0].NodeID
 		},
-		func(candidate *RouterModelV1) { candidate.Representatives[0].Values[1] *= .5 },
+		func(candidate *RouterModelV1) { candidate.Representatives[0].Values[0] *= .5 },
 	} {
 		candidate := model
 		candidate.Nodes = append([]RouterHierarchyNodeV1(nil), model.Nodes...)
@@ -463,6 +505,9 @@ func TestDefaultRouterConfigV1(t *testing.T) {
 	cfg := DefaultRouterConfigV1()
 	if cfg.RepresentativeBudget != 256 {
 		t.Fatalf("global representative budget=%d want 256", cfg.RepresentativeBudget)
+	}
+	if cfg.BranchFactor != 64 || cfg.LeafSize != 250 {
+		t.Fatalf("reference geometry fanout=%d leaf=%d want 64,250", cfg.BranchFactor, cfg.LeafSize)
 	}
 	if cfg.MaxIterations != 16 {
 		t.Fatalf("max iterations=%d want 16", cfg.MaxIterations)
