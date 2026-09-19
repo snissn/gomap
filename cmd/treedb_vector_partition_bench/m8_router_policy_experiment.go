@@ -493,8 +493,8 @@ func m8RouterPolicyRepresentativeBoundV1(cfg config, variant, domains, sourceRow
 	if cfg.m8ExistingDB != "" || len(cfg.m8VariantDBs) > 0 {
 		return 0, errors.New("retained policy diagnostics require actual representative counts")
 	}
-	// The new-assets M8 builder selects DefaultRouterConfigV1, not CLI simulation
-	// router flags. Derive the same bound; never assume it for a retained model.
-	bound := int64(vectorpartition.DefaultRouterConfigV1().RepresentativeBudget)
+	// The new-assets M8 builder uses the validated CLI router configuration.
+	// Derive its exact bound; never assume a configured bound for a retained model.
+	bound := int64(cfg.routerConfig.RepresentativeBudget)
 	return min(bound, 2*int64(sourceRows)-int64(domains)), nil
 }

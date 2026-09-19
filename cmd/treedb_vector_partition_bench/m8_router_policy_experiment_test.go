@@ -255,6 +255,30 @@ func TestM8RouterPolicyResourcePlanAndRetainedModel(t *testing.T) {
 	}
 }
 
+func TestM8RouterPolicyResourcePlanUsesConfiguredRepresentativeBudgetV1(t *testing.T) {
+	cfg, err := parseConfig(append(qualityCLIArgsV1(t), "-m8-quality-diagnostics", "-m8-router-policy-diagnostics"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := fixtureManifest{Vectors: 400, Queries: 2, Dimensions: 4}
+	defaultWork, defaultBytes, err := m8PlanRouterPolicyDiagnosticsV1(cfg, m, []int{4}, maxBenchmarkWorkUnits, maxFixtureBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.routerConfig.RepresentativeBudget = 512
+	bound, err := m8RouterPolicyRepresentativeBoundV1(cfg, 0, 4, m.Vectors)
+	if err != nil || bound != 512 {
+		t.Fatalf("configured representative bound = %d, %v", bound, err)
+	}
+	work, bytes, err := m8PlanRouterPolicyDiagnosticsV1(cfg, m, []int{4}, maxBenchmarkWorkUnits, maxFixtureBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if work <= defaultWork || bytes <= defaultBytes {
+		t.Fatalf("B=512 was not charged: work %d -> %d bytes %d -> %d", defaultWork, work, defaultBytes, bytes)
+	}
+}
+
 func TestM8RouterPolicyRetainedAttributionReplay(t *testing.T) {
 	requireM8PersistentAssetSupportV1(t)
 	fixture := m8QualificationFixturesV1[0]
