@@ -238,15 +238,15 @@ func TestM8ProductionReportRejectsUnexercisedDataGroupV1(t *testing.T) {
 		GeneratedAt: time.Now(), ExecutionID: strings.Repeat("e", 32), Command: []string{"m8-test"}, BaseSHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", HeadSHA: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
 		ExecutableSHA256: strings.Repeat("f", 64),
 		GoVersion:        "go1.test", GOOS: "linux", GOARCH: "amd64", LogicalCPUs: 1, GOMAXPROCS: 1, GoMemoryLimitBytes: 1,
-		Dataset: fixture, Config: m8ProductionConfigEvidenceV1{RaftGroups: 2, RaftNodesPerGroup: 3, Partitions: 4, Probes: []int{4}, Overlap: []float64{0}, TopK: 10, Concurrency: []int{1}, EfSearch: []int{10}, RouterScoreBudget: 4, RouterSemantics: m8RouterSemanticsV3, RouterWidth: 4, RouterBeam: 4}, BuildNanos: 1,
+		Dataset: fixture, Config: m8ProductionConfigEvidenceV1{RaftGroups: 2, RaftNodesPerGroup: 3, Partitions: 4, Probes: []int{4}, Overlap: []float64{0}, TopK: 10, Concurrency: []int{1}, EfSearch: []int{10}, RouterScoreBudget: defaultRouterScoreBudgetV2, RouterSemantics: m8RouterSemanticsV3, RouterWidth: 4, RouterBeam: 4}, BuildNanos: 1,
 		Topology:       nativewire.VectorPartitionM8ProductionMultiGroupEvidenceV1{Network: "tcp_loopback_serialized_m5_v1", LifecycleState: "active", ReadySetDigest: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", MetaGroup: "meta", MetaLeader: "meta-leader", MetaNodes: []string{"meta-a", "meta-b", "meta-c"}, MaxConcurrentShardRequests: 1, Groups: []nativewire.VectorPartitionM8ProductionGroupEvidenceV1{group("group-a", 1), group("group-b", 1)}},
 		RouterSessions: m8ProductionRouterSessionEvidenceV1{AfterWarmup: []nativewire.VectorPartitionCoordinatorRouterSessionStatsV1{{Identity: nativewire.VectorPartitionCoordinatorRouterSessionIdentityV1{Database: "default", Catalog: "default", Collection: "docs", IndexName: "embedding", IndexDefinitionDigest: "index-digest", SourceGeneration: 1, SourceChecksum: 2, SourceSchemaHash: 3, SourceRowCount: 4, PartitionGeneration: 5, ReadySetDigest: "ready-digest", RouterModelDigest: "model-digest"}, ColdOpens: 1, ManifestOpenAttempts: 1, Misses: 1, ReaderPins: 1, LeasePins: 1, LeaseReleases: 1}}, AfterMeasured: []nativewire.VectorPartitionCoordinatorRouterSessionStatsV1{{Identity: nativewire.VectorPartitionCoordinatorRouterSessionIdentityV1{Database: "default", Catalog: "default", Collection: "docs", IndexName: "embedding", IndexDefinitionDigest: "index-digest", SourceGeneration: 1, SourceChecksum: 2, SourceSchemaHash: 3, SourceRowCount: 4, PartitionGeneration: 5, ReadySetDigest: "ready-digest", RouterModelDigest: "model-digest"}, ColdOpens: 1, ManifestOpenAttempts: 1, Misses: 1, ReaderPins: 1, Hits: uint64(fixture.Queries), LeasePins: uint64(fixture.Queries) + 1, LeaseReleases: uint64(fixture.Queries) + 1}}},
-		Rows: []m8ProductionRowV1{{Status: "pass", Probes: 4, EfSearch: 10, Concurrency: 1, Samples: fixture.Queries, RecallAtK: 1, QPS: 1, P50Nanos: 1, P95Nanos: 2, P99Nanos: 3, MaxTotalNanos: 4, RouterMode: collections.VectorPartitionRouterModeApproxV1, RouterScoreBudget: 4, ExactParityChecked: true, ExactParityPassed: true, NoPartialResults: true, Attribution: m8ProductionAttributionV1{
+		Rows: []m8ProductionRowV1{{Status: "pass", Probes: 4, EfSearch: 10, Concurrency: 1, Samples: fixture.Queries, RecallAtK: 1, QPS: 1, P50Nanos: 1, P95Nanos: 2, P99Nanos: 3, MaxTotalNanos: 4, RouterMode: collections.VectorPartitionRouterModeApproxV1, RouterScoreBudget: defaultRouterScoreBudgetV2, ExactParityChecked: true, ExactParityPassed: true, NoPartialResults: true, Attribution: m8ProductionAttributionV1{
 			Contract: m8CanonicalResultContractV1, GlobalExactRecallAtK: 1, ExhaustivePartitionRecallAtK: 1,
 			ExhaustivePartitionIDParity: true, ExhaustivePartitionScoreParity: true,
 			ExactRepresentativeRecallAtK: 1, ApproximateRepresentativeRecallAtK: 1, LocalHNSWRecallAtK: 1, ApproximateLocalHNSWRecallAtK: 1, EndToEndRecallAtK: 1,
 			CoordinatorMergeIDParity: true, CoordinatorMergeScoreParity: true,
-			ApproximateRouterScoreBudget: 4, ApproximateRouterPartitionCoverageComplete: true,
+			ApproximateRouterScoreBudget: defaultRouterScoreBudgetV2, ApproximateRouterPartitionCoverageComplete: true,
 			LocalHNSWSearches: uint64(fixture.Queries) * 4, LocalHNSWSearchesByQuery: slices.Repeat([]uint32{4}, fixture.Queries), LocalHNSWCandidates: 4, LocalHNSWEdges: 4,
 			ApproximateLocalHNSWSearches: uint64(fixture.Queries) * 4, ApproximateLocalHNSWSearchesByQuery: slices.Repeat([]uint32{4}, fixture.Queries), ApproximateLocalHNSWCandidates: 4, ApproximateLocalHNSWEdges: 4,
 			ResidualLossOwners: []string{"none_observed"},
@@ -478,8 +478,8 @@ func TestM8ProductionReportRejectsUnexercisedDataGroupV1(t *testing.T) {
 			row.RouterMode = collections.VectorPartitionRouterModeExactV1
 		},
 		"candidate_budget_above_config": func(row *m8ProductionRowV1) {
-			row.RouterScoreBudget = 5
-			row.Attribution.ApproximateRouterScoreBudget = 5
+			row.RouterScoreBudget = report.Config.RouterScoreBudget + 1
+			row.Attribution.ApproximateRouterScoreBudget = report.Config.RouterScoreBudget + 1
 		},
 		"nonfinite_qps":     func(row *m8ProductionRowV1) { row.QPS = math.NaN() },
 		"unordered_latency": func(row *m8ProductionRowV1) { row.P95Nanos = row.P50Nanos - 1 },
@@ -966,7 +966,7 @@ func TestRetainedLocalHNSWVariantHarnessV1(t *testing.T) {
 		}
 	}
 	query := []float32{1, 1, 1}
-	route, err := source.router.SearchWithContextV1(t.Context(), query, collections.VectorPartitionRouterSearchOptionsV2{Mode: "approximate", ScoreBudget: 4, ReturnedWidth: 4, BeamWidth: 4, PartitionProbes: 2})
+	route, err := source.router.SearchWithContextV1(t.Context(), query, collections.VectorPartitionRouterSearchOptionsV2{Mode: "approximate", ScoreBudget: defaultRouterScoreBudgetV2, ReturnedWidth: 4, BeamWidth: 4, PartitionProbes: 2})
 	if err != nil {
 		t.Fatal(err)
 	}

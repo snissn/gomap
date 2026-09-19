@@ -1038,7 +1038,11 @@ func routerInitialCentersV1(vectors []routerBuildVectorV1, node *routerBuildNode
 func routerVectorBitsHashV3(values []float32) uint64 {
 	hash := uint64(1469598103934665603)
 	for _, value := range values {
-		hash ^= uint64(math.Float32bits(value))
+		bits := math.Float32bits(value)
+		if value == 0 {
+			bits = 0
+		}
+		hash ^= uint64(bits)
 		hash *= 1099511628211
 	}
 	return hash

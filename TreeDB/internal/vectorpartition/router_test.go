@@ -149,26 +149,25 @@ func TestKMeansRepresentativeRouterNonConvexFixture(t *testing.T) {
 	}
 }
 
-func TestKMeansRepresentativeRouterDoesNotFabricateIdenticalCenters(t *testing.T) {
+func TestKMeansRepresentativeRouterDoesNotFabricateEquivalentCenters(t *testing.T) {
 	cfg := routerTestConfigV1()
 	cfg.RepresentativeBudget = 3
 	model, err := BuildRouterV1([]RouterPartitionV1{{
 		PartitionID: 7,
 		Vectors: []RouterVectorV1{
 			{Ordinal: 1, Values: []float32{1, 0}},
-			{Ordinal: 2, Values: []float32{1, 0}},
-			{Ordinal: 3, Values: []float32{1, 0}},
-			{Ordinal: 4, Values: []float32{1, 0}},
+			{Ordinal: 2, Values: []float32{1, math.Float32frombits(1 << 31)}},
+			{Ordinal: 3, Values: []float32{0, 1}},
 		},
 	}}, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if model.Metrics.EmptyRepairs != 0 || model.Metrics.UnusedBudget != 2 {
-		t.Fatal("identical population must stop without fabricated duplicate centers")
+	if model.Metrics.EmptyRepairs != 0 || model.Metrics.UnusedBudget != 1 {
+		t.Fatal("equivalent signed-zero vectors must not fabricate duplicate centers")
 	}
-	if got := len(model.Representatives); got != 1 {
-		t.Fatalf("representatives=%d want 1", got)
+	if got := len(model.Representatives); got != 2 {
+		t.Fatalf("representatives=%d want 2", got)
 	}
 }
 

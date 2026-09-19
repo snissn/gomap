@@ -109,7 +109,7 @@ func TestM8QualityAttributionUsesRealPacksAndLegacyParity(t *testing.T) {
 		if err != nil || !reflect.DeepEqual(old, oracles) {
 			t.Fatalf("DP differs from subset oracle p=%d: %v", probes, err)
 		}
-		cell, err := m8BuildAttributionV1(t.Context(), h.assets, homes, members, queries, truth, oracles, probes, 32, 10, int(h.assets.status.Representatives), exhaustive, h)
+		cell, err := m8BuildAttributionV1(t.Context(), h.assets, homes, members, queries, truth, oracles, probes, 32, 10, defaultRouterScoreBudgetV2, exhaustive, h)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -124,7 +124,7 @@ func TestM8QualityAttributionUsesRealPacksAndLegacyParity(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		control, err := m8BuildAttributionV1(t.Context(), h.assets, homes, members, queries, truth, old, probes, 32, 10, int(h.assets.status.Representatives), make([][]m8CanonicalResultV1, len(queries)), plain)
+		control, err := m8BuildAttributionV1(t.Context(), h.assets, homes, members, queries, truth, old, probes, 32, 10, defaultRouterScoreBudgetV2, make([][]m8CanonicalResultV1, len(queries)), plain)
 		closeErr := plain.Close()
 		if err != nil || closeErr != nil {
 			t.Fatalf("legacy run=%v close=%v", err, closeErr)
@@ -143,7 +143,7 @@ func TestM8QualityAttributionUsesRealPacksAndLegacyParity(t *testing.T) {
 		if err := replay.enableQualityV1(t.Context(), queries, truth, homes, members, 1, m8CoverageLimitsV1{WorkUnits: maxBenchmarkWorkUnits, Bytes: maxFixtureBytes}); err != nil {
 			t.Fatal(err)
 		}
-		again, err := m8BuildAttributionV1(t.Context(), h.assets, homes, members, queries, truth, oracles, probes, 32, 10, int(h.assets.status.Representatives), make([][]m8CanonicalResultV1, len(queries)), replay)
+		again, err := m8BuildAttributionV1(t.Context(), h.assets, homes, members, queries, truth, oracles, probes, 32, 10, defaultRouterScoreBudgetV2, make([][]m8CanonicalResultV1, len(queries)), replay)
 		replay.Close()
 		if err != nil || !m8QualityReplayEqualV1(q, again.Evidence.Quality) {
 			t.Fatalf("reopen replay mismatch p=%d: %v", probes, err)
@@ -160,7 +160,7 @@ func TestM8QualityAttributionUsesRealPacksAndLegacyParity(t *testing.T) {
 func TestM8QualityEvidenceTamperAndSelection(t *testing.T) {
 	h, queries, truth, homes, members := qualityFixtureV1(t, 0)
 	oracles, _ := h.membershipOraclesV1(truth, homes, members, 2)
-	cell, err := m8BuildAttributionV1(t.Context(), h.assets, homes, members, queries, truth, oracles, 2, 32, 10, int(h.assets.status.Representatives), make([][]m8CanonicalResultV1, len(queries)), h)
+	cell, err := m8BuildAttributionV1(t.Context(), h.assets, homes, members, queries, truth, oracles, 2, 32, 10, defaultRouterScoreBudgetV2, make([][]m8CanonicalResultV1, len(queries)), h)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -286,7 +286,7 @@ func TestM8QualityCoordinatorMasksDoNotMutateOtherRows(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cell, err := m8BuildAttributionV1(t.Context(), h.assets, homes, members, queries, truth, oracles, 2, 32, 10, int(h.assets.status.Representatives), make([][]m8CanonicalResultV1, len(queries)), h)
+	cell, err := m8BuildAttributionV1(t.Context(), h.assets, homes, members, queries, truth, oracles, 2, 32, 10, defaultRouterScoreBudgetV2, make([][]m8CanonicalResultV1, len(queries)), h)
 	if err != nil {
 		t.Fatal(err)
 	}

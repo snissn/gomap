@@ -691,6 +691,7 @@ func TestVectorPartitionSystemNativeFourDaemonProcessLossAndRestartV1(t *testing
 	groups := []string{"group-a", "group-b", "group-c", "group-d"}
 	databases := make([]string, len(groups))
 	var generation uint64
+	routerRepresentatives := 0
 	for index := range groups {
 		assets, err := newM8ProductionMultiGroupAssetsV1(vectors, groups, 16)
 		if err != nil {
@@ -701,6 +702,11 @@ func TestVectorPartitionSystemNativeFourDaemonProcessLossAndRestartV1(t *testing
 			generation = assets.manifest.Generation
 		} else if assets.manifest.Generation != generation {
 			t.Fatalf("independent M3 generation=%d want %d", assets.manifest.Generation, generation)
+		}
+		if routerRepresentatives == 0 {
+			routerRepresentatives = int(assets.status.Representatives)
+		} else if int(assets.status.Representatives) != routerRepresentatives {
+			t.Fatalf("independent M3 representatives=%d want %d", assets.status.Representatives, routerRepresentatives)
 		}
 		assets.owned = false
 		if err := assets.Close(); err != nil {
@@ -723,7 +729,7 @@ func TestVectorPartitionSystemNativeFourDaemonProcessLossAndRestartV1(t *testing
 		states[index] = filepath.Join(root, "state-"+group)
 		ready[index] = filepath.Join(states[index], "ready.json")
 		config := vectorPartitionSystemNodeConfigV1{
-			SchemaVersion: 2, RouterWidth: 16, RouterBeam: 16, RouterScoreBudget: 1024, ResultKind: vectorPartitionSystemNodeConfigKindV1, Assembly: vectorPartitionSystemAssemblyV1,
+			SchemaVersion: 2, RouterWidth: routerRepresentatives, RouterBeam: routerRepresentatives, RouterScoreBudget: 1024, ResultKind: vectorPartitionSystemNodeConfigKindV1, Assembly: vectorPartitionSystemAssemblyV1,
 			Topology: "native_four_daemon_four_group", NodeID: "native-" + group, DatasetDirectory: dataset,
 			DatabaseDirectory: databases[index], StateDirectory: states[index], CapabilityKeyPath: capabilityKey, ReadyPath: ready[index],
 			LocalGroups: []vectorPartitionSystemLocalGroupV1{{GroupID: group, Listen: endpoints[group]}}, Endpoints: endpoints,
