@@ -884,7 +884,10 @@ func TestExternalBackendSeparatesInputAndOutputCaps(t *testing.T) {
 	}
 	input := raw
 	t.Setenv("TREE_DB_TEST_RESPONSE", string(raw))
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	// The external helper is spawned per call; process startup can exceed one
+	// second on loaded or slower CI runners, so the deadline only guards
+	// against a genuinely hung subprocess.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	got, err := RunExternalJSONForRequestWithLimits(ctx, []string{"sh", "-c", "printf '%s' \"$TREE_DB_TEST_RESPONSE\" > \"$1\""}, input, ExternalJSONLimits{MaxInput: len(input), MaxOutput: len(raw)}, a)
 	if err != nil {
