@@ -951,7 +951,7 @@ func (s *Server) writeError(w io.Writer, request iwire.Header, err error) error 
 	message := wireErrorMessage(code, err)
 	body, sectionErr := iwire.AppendSection(nil, iwire.Section{
 		ID:    iwire.SectionError,
-		Bytes: appendErrorPayload(nil, code, retryableError(code), message),
+		Bytes: appendErrorPayload(nil, code, retryableError(err, code), message),
 	})
 	if sectionErr != nil {
 		return sectionErr

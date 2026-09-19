@@ -24,6 +24,23 @@ func TestErrorCodeForMutationOutcomeOutranksContext(t *testing.T) {
 	}
 }
 
+func TestRetryableErrorKeepsRecoveryRequiredNonRetryable(t *testing.T) {
+	for _, err := range []error{
+		&documentservice.Error{Code: documentservice.CodeRecoveryRequired, Err: context.Canceled},
+		errors.Join(collections.ErrRecoveryRequired, context.DeadlineExceeded),
+		errors.Join(backenddb.ErrRecoveryRequired, context.Canceled),
+	} {
+		if code := errorCodeFor(err); code != iwire.ErrDurabilityUnavailable {
+			t.Fatalf("errorCodeFor(%v)=%v want=%v", err, code, iwire.ErrDurabilityUnavailable)
+		} else if retryableError(err, code) {
+			t.Fatalf("retryableError(%v, %v)=true want false", err, code)
+		}
+	}
+	if err := collections.ErrDurabilityUnavailable; !retryableError(err, errorCodeFor(err)) {
+		t.Fatal("ordinary durability-unavailable error must remain retryable")
+	}
+}
+
 func TestErrorCodeForPreservesWrappedDocumentServiceContextError(t *testing.T) {
 	for _, tc := range []struct {
 		name string
