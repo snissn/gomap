@@ -162,8 +162,12 @@ func TestM8RouterPolicyShortfallsRetainFullPopulation(t *testing.T) {
 }
 
 func TestM8RouterPolicyTamperSelectionAndCandidateIdentity(t *testing.T) {
-	_, queries, truth, _, _, cell := policyCellFixtureV1(t, 0, 2)
+	h, queries, truth, _, _, cell := policyCellFixtureV1(t, 0, 2)
 	e := cell.Evidence.RouterPolicies
+	representatives := int(h.assets.status.Representatives)
+	if e.EffectiveWidth == representatives {
+		t.Fatal("fixture does not distinguish diagnostic width from model size")
+	}
 	raw, err := json.Marshal(e)
 	if err != nil {
 		t.Fatal(err)
@@ -205,18 +209,18 @@ func TestM8RouterPolicyTamperSelectionAndCandidateIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := m8ProductionConfigEvidenceV1{QualityDiagnostics: true, RouterPolicyDiagnostics: true, TopK: 10, RouterScoreBudget: e.RouterScoreBudget}
-	if err := m8RouterPolicyEvidenceSelectionV1(cfg, e.EffectiveWidth, row); err != nil {
+	if err := m8RouterPolicyEvidenceSelectionV1(cfg, representatives, row); err != nil {
 		t.Fatal(err)
 	}
-	if err := m8RouterPolicyEvidenceSelectionV1(cfg, e.EffectiveWidth-1, row); err == nil {
+	if err := m8RouterPolicyEvidenceSelectionV1(cfg, representatives-1, row); err == nil {
 		t.Fatal("mismatched persisted model size accepted")
 	}
 	cfg.RouterPolicyDiagnostics = false
-	if err := m8RouterPolicyEvidenceSelectionV1(cfg, e.EffectiveWidth, row); err == nil {
+	if err := m8RouterPolicyEvidenceSelectionV1(cfg, representatives, row); err == nil {
 		t.Fatal("unselected policy data accepted")
 	}
 	row.Attribution.RouterPolicies = nil
-	if err := m8RouterPolicyEvidenceSelectionV1(cfg, e.EffectiveWidth, row); err != nil {
+	if err := m8RouterPolicyEvidenceSelectionV1(cfg, representatives, row); err != nil {
 		t.Fatal("legacy row refused", err)
 	}
 	cfg.RouterPolicyDiagnostics = true
