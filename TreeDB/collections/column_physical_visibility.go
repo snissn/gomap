@@ -172,7 +172,7 @@ func (c *Collection) scanColumnPhysicalVisibleRowsAtSnapshotForTargetsWithReadCa
 	rows := latest.rows
 	// Metadata versions retain full-row authority in older manifest assets.
 	// Resolve only the surviving metadata rows, not every historical version.
-	if err := c.resolveColumnMetadataRows(ctx, snap, catalog, cfg, projected, rows); err != nil {
+	if err := c.resolveColumnMetadataRows(ctx, snap, catalog, cfg, projected, readIntegrity, rows); err != nil {
 		return columnPhysicalVisibilityResult{Diagnostics: diag}, err
 	}
 	sort.Slice(rows, func(i, j int) bool {
@@ -252,13 +252,13 @@ func (c *Collection) latestColumnPhysicalVisibleRowAtSnapshot(
 	})
 	if err == nil && found && latest.Preserved != nil {
 		rows := []columnPhysicalVisibleRow{latest}
-		err = c.resolveColumnMetadataRows(nil, snap, catalog, cfg, projected, rows)
+		err = c.resolveColumnMetadataRows(nil, snap, catalog, cfg, projected, ColumnAssetReadIntegrityVerify, rows)
 		latest = rows[0]
 	}
 	return latest, diag, found, err
 }
 
-func (c *Collection) resolveColumnMetadataRows(ctx context.Context, snap *backenddb.Snapshot, catalog *collectionCatalog, cfg ColumnStoreConfig, projected []string, rows []columnPhysicalVisibleRow) error {
+func (c *Collection) resolveColumnMetadataRows(ctx context.Context, snap *backenddb.Snapshot, catalog *collectionCatalog, cfg ColumnStoreConfig, projected []string, readIntegrity ColumnAssetReadIntegrity, rows []columnPhysicalVisibleRow) error {
 	var view *CollectionReadView
 	defer func() {
 		if view != nil {
@@ -277,7 +277,7 @@ func (c *Collection) resolveColumnMetadataRows(ctx context.Context, snap *backen
 		}
 		if view == nil {
 			view = newCollectionReadViewAtSnapshot(c, snap, catalog, false, "")
-			if err := view.ensureAssetReadCaches(cfg, ColumnAssetReadIntegrityVerify); err != nil {
+			if err := view.ensureAssetReadCaches(cfg, readIntegrity); err != nil {
 				return err
 			}
 		}

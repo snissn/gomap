@@ -334,8 +334,8 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	// Metadata mutation uses existing exported compatibility schema/value types.
 	{path: "TreeDB/collections/column_metadata_row.go", classification: typedStorageLegacyCompatibility, matchingLines: 5, occurrences: 5},
 	{path: "TreeDB/collections/column_metadata_row_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 4, occurrences: 4},
-	{path: "TreeDB/collections/typed_metadata.go", classification: typedStorageLegacyCompatibility, matchingLines: 6, occurrences: 6},
-	{path: "TreeDB/collections/typed_metadata_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
+	{path: "TreeDB/collections/typed_metadata.go", classification: typedStorageLegacyCompatibility, matchingLines: 7, occurrences: 7},
+	{path: "TreeDB/collections/typed_metadata_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 7, occurrences: 7},
 	// Raft snapshot M1 fixture names the public compatibility configuration and
 	// stable typed-column append API while proving ready-manifest transport.
 	{path: "TreeDB/internal/raftfsm/raft_snapshot_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 5},

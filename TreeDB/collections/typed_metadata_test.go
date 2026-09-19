@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"reflect"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -97,11 +99,118 @@ func TestTypedMetadataCanceledResolutionDoesNotRead4769(t *testing.T) {
 	// preserved-row fetch tries to use one.
 	col := new(Collection)
 	rows := []columnPhysicalVisibleRow{{Preserved: &columnRowCoordinates{Generation: 1}}}
-	if err := col.resolveColumnMetadataRows(ctx, nil, nil, ColumnStoreConfig{}, nil, rows); !errors.Is(err, context.Canceled) {
+	if err := col.resolveColumnMetadataRows(ctx, nil, nil, ColumnStoreConfig{}, nil, ColumnAssetReadIntegrityVerify, rows); !errors.Is(err, context.Canceled) {
 		t.Fatalf("metadata resolution=%v", err)
 	}
 	if _, _, err := col.materializeColumnStoreCompactionRows(ctx, columnStoreCompactionState{}, ""); !errors.Is(err, context.Canceled) {
 		t.Fatalf("compaction scan=%v", err)
+	}
+}
+
+func TestTypedMetadataPreservedReadIntegrity4769(t *testing.T) {
+	for _, tc := range []struct {
+		name              string
+		mode              ColumnAssetReadIntegrity
+		warm              bool
+		wantChecksumError bool
+	}{
+		{"default", "", false, true},
+		{"verify", ColumnAssetReadIntegrityVerify, false, true},
+		{"skip_checksums", ColumnAssetReadIntegritySkipChecksums, false, false},
+		{"cached_verify_cold", ColumnAssetReadIntegrityCachedVerify, false, true},
+		{"cached_verify_warm", ColumnAssetReadIntegrityCachedVerify, true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resetColumnAssetVerifiedChecksumCacheForTest(t)
+			_, db, col, ids := seedTypedMetadata4769(t, 1, 8)
+			defer db.Close()
+			if _, err := col.UpdateTypedMetadataByID(ids, map[string]any{"meta.user_id": "new"}, nil, metadataGeneration4769(col)); err != nil {
+				t.Fatal(err)
+			}
+			state, closeState, err := col.loadColumnStoreCompactionState(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer closeState()
+			view := newCollectionReadViewAtSnapshot(col, state.snap, state.catalog, false, "")
+			defer view.Close()
+			physical, err := view.materializerColumnSnapshotView(state.cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var ref ColumnAssetRef
+			for _, asset := range physical.AssetRefs {
+				if asset.Reason == ColumnPublishOperationInsert {
+					ref = asset.Ref
+					break
+				}
+			}
+			root := db.ColumnAssetRootDir()
+			raw, err := readColumnPhysicalAssetFromManager(root, ref)
+			if err != nil {
+				t.Fatal(err)
+			}
+			offset := bytes.Index(raw, []byte("immutable searchable content"))
+			if offset < 0 {
+				t.Fatal("preserved full row has no content payload")
+			}
+			path, err := columnAssetSegmentPath(root, ref)
+			if err != nil {
+				t.Fatal(err)
+			}
+			file, err := os.OpenFile(path, os.O_RDWR, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer file.Close()
+			info, err := file.Stat()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.warm {
+				if !columnAssetVerifiedChecksumFileIdentityFromFile(file).valid {
+					t.Skip("cached verify reuse requires stable column asset file identity")
+				}
+				if _, err := col.scanColumnPhysicalVisibleRowsWithReadIntegrity(nil, tc.mode); err != nil {
+					t.Fatal(err)
+				}
+			}
+			// Change only a valid string byte, not a structural field. Cached
+			// verification intentionally trusts previously verified immutable files.
+			if _, err := file.WriteAt([]byte("I"), int64(ref.Offset)+int64(offset)); err != nil {
+				t.Fatal(err)
+			}
+			if tc.warm {
+				if err := os.Chtimes(path, info.ModTime(), info.ModTime()); err != nil {
+					t.Fatal(err)
+				}
+			}
+			check := func(route string, err error) {
+				t.Helper()
+				if tc.wantChecksumError {
+					if err == nil || !strings.Contains(err.Error(), "checksum") {
+						t.Fatalf("%s error=%v, want checksum rejection", route, err)
+					}
+				} else if err != nil {
+					t.Fatalf("%s: %v", route, err)
+				}
+			}
+			visible, err := col.scanColumnPhysicalVisibleRowsWithReadIntegrity([]string{"content"}, tc.mode)
+			check("visible rows", err)
+			if err == nil && (len(visible.Rows) != 1 || visible.Rows[0].Preserved == nil || visible.Rows[0].Values[0].String != "Immutable searchable content") {
+				t.Fatalf("preserved content not resolved: %+v", visible.Rows)
+			}
+			// This is the compaction read phase, before its graph-specific
+			// publication policy; no corrupted data is published by this test.
+			rows, _, err := col.materializeColumnStoreCompactionRows(context.Background(), state, tc.mode)
+			check("compaction rows", err)
+			if err == nil && len(rows) != 1 {
+				t.Fatalf("compaction rows=%d", len(rows))
+			}
+			if _, _, _, err := col.latestColumnPhysicalVisibleRowAtSnapshot(state.snap, state.catalog, ids[0], nil); err == nil || !strings.Contains(err.Error(), "checksum") {
+				t.Fatalf("default point read must remain strict: %v", err)
+			}
+		})
 	}
 }
 
