@@ -602,6 +602,7 @@ func BenchmarkTypedMetadataReplayPlan4769(b *testing.B) {
 				}
 				p.close()
 			}
+			b.StopTimer()
 		})
 	}
 }
