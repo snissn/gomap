@@ -465,7 +465,7 @@ func runM8ProductionSingleVariantV1(cfg config, fixture fixtureManifest, vectors
 			return err
 		}
 		if cfg.m8MembershipProbes != 0 {
-			artifact, err := m8RunMembershipFeasibilityV1(cfg, fixture, cfg.m8ExistingDB, descriptor)
+			artifact, err := m8RunMembershipFeasibilityV1(cfg, fixture, vectors, cfg.m8ExistingDB, descriptor)
 			if err != nil {
 				return fmt.Errorf("retained membership feasibility: %w", err)
 			}

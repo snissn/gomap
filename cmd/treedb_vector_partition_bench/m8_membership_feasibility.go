@@ -230,7 +230,7 @@ func m8MembershipExpandDomainsV1(domainPacks [][]uint32, domains []uint32, packL
 	return expanded, nil
 }
 
-func m8ComputeRetainedMembershipFeasibilityV1(cfg config, fixture fixtureManifest, dir string, descriptor m3VariantDescriptorV1) (_ m8MembershipFeasibilityV1, err error) {
+func m8ComputeRetainedMembershipFeasibilityV1(cfg config, fixture fixtureManifest, vectors [][]float64, dir string, descriptor m3VariantDescriptorV1) (_ m8MembershipFeasibilityV1, err error) {
 	assets, err := openM8ProductionExistingAssetSetModeV1(dir, true)
 	if err != nil {
 		return m8MembershipFeasibilityV1{}, err
@@ -247,7 +247,7 @@ func m8ComputeRetainedMembershipFeasibilityV1(cfg config, fixture fixtureManifes
 	if err != nil {
 		return m8MembershipFeasibilityV1{}, err
 	}
-	if err := m8ValidateExistingAssetsFixtureV1(assets.collection, manifest, fixture, fixtureVectors(fixture)); err != nil {
+	if err := m8ValidateExistingAssetsFixtureV1(assets.collection, manifest, fixture, vectors); err != nil {
 		return m8MembershipFeasibilityV1{}, fmt.Errorf("validate retained feasibility fixture: %w", err)
 	}
 	truth, truthEvidence, err := m8LoadOrComputeTruthV1(cfg.m8TruthCache, nil, manifest, fixture, make([][]float64, fixture.Queries), cfg.topK, cfg.m8TruthCacheSHA256)
@@ -476,8 +476,8 @@ func m8ReadMembershipFeasibilityV1(artifact m8MembershipFeasibilityArtifactV1) (
 	return result, m8ValidateMembershipFeasibilityV1(result)
 }
 
-func m8RunMembershipFeasibilityV1(cfg config, fixture fixtureManifest, dir string, descriptor m3VariantDescriptorV1) (m8MembershipFeasibilityArtifactV1, error) {
-	result, err := m8ComputeRetainedMembershipFeasibilityV1(cfg, fixture, dir, descriptor)
+func m8RunMembershipFeasibilityV1(cfg config, fixture fixtureManifest, vectors [][]float64, dir string, descriptor m3VariantDescriptorV1) (m8MembershipFeasibilityArtifactV1, error) {
+	result, err := m8ComputeRetainedMembershipFeasibilityV1(cfg, fixture, vectors, dir, descriptor)
 	if err != nil {
 		return m8MembershipFeasibilityArtifactV1{}, err
 	}
@@ -492,7 +492,7 @@ func m8ReplayMembershipFeasibilityV1(cfg config, fixture fixtureManifest, dir st
 	if err != nil {
 		return err
 	}
-	recomputed, err := m8ComputeRetainedMembershipFeasibilityV1(cfg, fixture, dir, descriptor)
+	recomputed, err := m8ComputeRetainedMembershipFeasibilityV1(cfg, fixture, fixtureVectors(fixture), dir, descriptor)
 	if err != nil {
 		return err
 	}
