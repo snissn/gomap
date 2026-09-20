@@ -463,7 +463,7 @@ func runM8ProductionSingleVariantV1(cfg config, fixture fixtureManifest, vectors
 	}
 	var assets *m8ProductionMultiGroupAssetsV1
 	if cfg.m8ExistingDB != "" {
-		assets, err = openM8ProductionMultiGroupExistingAssetsV1(cfg.m8ExistingDB, groups, cfg.partitions, fixture, vectors)
+		assets, err = openM8ProductionMultiGroupExistingAssetsWithPolicyV1(cfg.m8ExistingDB, groups, cfg.partitions, fixture, vectors, cfg.m8FinalOfflineGraph)
 	} else {
 		assets, err = newM8ProductionMultiGroupAssetsWithRouterV2(vectors, groups, cfg.partitions, cfg.routerConfig)
 	}

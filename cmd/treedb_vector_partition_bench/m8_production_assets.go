@@ -175,6 +175,10 @@ func (h *m8ProductionMultiGroupAssetsV1) Close() error {
 // of its manifest with only group placements relabeled; local pack files and
 // the retained source lifecycle stay unchanged.
 func openM8ProductionMultiGroupExistingAssetsV1(dir string, groups []string, partitions int, fixture fixtureManifest, vectors [][]float64) (_ *m8ProductionMultiGroupAssetsV1, err error) {
+	return openM8ProductionMultiGroupExistingAssetsWithPolicyV1(dir, groups, partitions, fixture, vectors, false)
+}
+
+func openM8ProductionMultiGroupExistingAssetsWithPolicyV1(dir string, groups []string, partitions int, fixture fixtureManifest, vectors [][]float64, allowOfflineGraphVariant bool) (_ *m8ProductionMultiGroupAssetsV1, err error) {
 	if dir == "" || len(groups) < 2 {
 		return nil, errors.New("M8 existing assets require a directory and two groups")
 	}
@@ -192,7 +196,7 @@ func openM8ProductionMultiGroupExistingAssetsV1(dir string, groups []string, par
 		return nil, err
 	}
 	if _, statErr := os.Stat(filepath.Join(dir, m3VariantDescriptorFileV1)); statErr == nil {
-		if err = m8BindRetainedM3DescriptorV1(h, fixture); err != nil {
+		if err = m8BindRetainedM3DescriptorWithPolicyV1(h, fixture, allowOfflineGraphVariant); err != nil {
 			return nil, err
 		}
 	} else if !errors.Is(statErr, os.ErrNotExist) {

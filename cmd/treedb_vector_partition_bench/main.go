@@ -160,6 +160,8 @@ type config struct {
 	m3MaxBenchmarkVisits               int64
 	m8CoordinatorLimits                nativewire.VectorPartitionCoordinatorLimitsV1
 	m8ShardLimits                      nativewire.VectorPartitionShardSearchLimitsV1
+	// The final qualifier alone admits its explicit offline M16 control.
+	m8FinalOfflineGraph bool
 }
 
 type kahipRequestPartitioner struct{}
