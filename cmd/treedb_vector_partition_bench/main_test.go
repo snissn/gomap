@@ -998,6 +998,8 @@ func TestM3OverlapPartitionIndexBuildsReopensAndSearchesNativePacks(t *testing.T
 		"-partition-hnsw-m", "32",
 		"-partition-hnsw-ef-construction", "256",
 		"-router-max-scalar-work", "50000000000",
+		"-shard-plan", "byte_bounded",
+		"-shard-plan-target-hot-bytes", strconv.FormatUint(uint64(vectorpartition.PackFixedOverheadBytesV1+8*(alignedRowBytesForTest(8)+vectorpartition.GraphIdentityOverheadPerRowV1)), 10),
 	}
 	var stdout bytes.Buffer
 	if err := runWithHermeticProvenance(t, args, &stdout); err != nil {
@@ -1007,7 +1009,7 @@ func TestM3OverlapPartitionIndexBuildsReopensAndSearchesNativePacks(t *testing.T
 	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
 		t.Fatal(err)
 	}
-	if report.ResultKind != "m3_native_partition_hnsw_evidence" || len(report.Rows) != 2 || !strings.HasPrefix(report.ReplicationGate, "passed:") {
+	if report.ResultKind != "m3_native_partition_hnsw_evidence" || report.LogicalDomains != 4 || report.Partitions != 12 || len(report.Rows) != 2 || !strings.HasPrefix(report.ReplicationGate, "passed:") {
 		t.Fatalf("report=%+v", report)
 	}
 	for name, mutate := range map[string]func(*m3PartitionIndexRow){
@@ -1026,7 +1028,9 @@ func TestM3OverlapPartitionIndexBuildsReopensAndSearchesNativePacks(t *testing.T
 		})
 	}
 	for _, row := range report.Rows {
-		if row.SourcePhysicalBytes <= 0 || row.PeakDerivedTemporaryBytes < row.FinalDerivedPhysicalBytes || row.FinalDerivedPhysicalBytes < int64(row.PackBytes) || row.PackBytes == 0 || row.PartitionHNSWM != partitionLocalHNSWDefaultM || row.LocalSearches != 8*4 || row.SearchRoute != collections.VectorPartitionSearchRouteHNSWSearchPackV1 || row.MissingAssets != 0 || row.CorruptAssets != 0 || row.StaleAssets != 0 || row.ExactLocalRecallAtK <= 0 || row.EdgesPerOp <= 0 || len(row.OverlapReplicas) != row.OverlapRealized || len(row.OverlapDestinationDiversity) != len(row.PartitionLoads) {
+		wantUnused := row.DomainCapacity*report.LogicalDomains - int(row.SourceRows) - row.OverlapRealized
+		if row.DomainCapacity != 19 || row.Capacity != 7 || row.OverlapUnusedCapacity != wantUnused ||
+			row.SourcePhysicalBytes <= 0 || row.PeakDerivedTemporaryBytes < row.FinalDerivedPhysicalBytes || row.FinalDerivedPhysicalBytes < int64(row.PackBytes) || row.PackBytes == 0 || row.PartitionHNSWM != partitionLocalHNSWDefaultM || row.LocalSearches != 8*12 || row.SearchRoute != collections.VectorPartitionSearchRouteHNSWSearchPackV1 || row.MissingAssets != 0 || row.CorruptAssets != 0 || row.StaleAssets != 0 || row.ExactLocalRecallAtK <= 0 || row.EdgesPerOp <= 0 || len(row.OverlapReplicas) != row.OverlapRealized || len(row.OverlapDestinationDiversity) != report.LogicalDomains {
 			t.Fatalf("M3 row=%+v", row)
 		}
 	}
@@ -1193,6 +1197,7 @@ func TestM3RouterPartitionsBindArtifactToNativeOrdinalsV1(t *testing.T) {
 		{VectorOrdinal: 0, Partition: 1, Home: true}, {VectorOrdinal: 1, Partition: 0, Home: true}, {VectorOrdinal: 1, Partition: 1}, {VectorOrdinal: 2, Partition: 1, Home: true},
 	}}
 	partitions, err := m3RouterPartitions(
+		vectorpartition.ShardPlanV1{},
 		artifact,
 		overlap,
 		[]int{2, 0, 1},

@@ -204,7 +204,11 @@ func m3VerifyShardGenerationMembershipsV1(record vectorpartition.ShardGeneration
 	if len(membershipOrdinals) != len(record.PackSummaries) {
 		return fmt.Errorf("shard generation record covers %d packs, materialization used %d", len(record.PackSummaries), len(membershipOrdinals))
 	}
+	if record.Plan.PacksPerDomain < 1 {
+		return errors.New("shard generation record has no physical pack geometry")
+	}
 	perPartition := make([][]int, len(membershipOrdinals))
+	packsPerDomain := record.Plan.PacksPerDomain
 	for _, membership := range record.Memberships {
 		if membership.Partition < 0 || membership.Partition >= len(perPartition) {
 			return fmt.Errorf("shard generation membership names partition %d outside the materialized %d", membership.Partition, len(perPartition))
@@ -216,7 +220,7 @@ func m3VerifyShardGenerationMembershipsV1(record vectorpartition.ShardGeneration
 		// assignment is immutable. Comparing only the (vector, partition) pairs
 		// would let a record flip a vector's home onto one of its overlap
 		// partitions with every pack row count and the overlap total unchanged.
-		if membership.Home != (membership.Partition == assignment[membership.VectorOrdinal]) {
+		if membership.Home != (membership.Partition/packsPerDomain == assignment[membership.VectorOrdinal]) {
 			return fmt.Errorf("shard generation membership vector %d partition %d declares home=%v against assignment %d",
 				membership.VectorOrdinal, membership.Partition, membership.Home, assignment[membership.VectorOrdinal])
 		}

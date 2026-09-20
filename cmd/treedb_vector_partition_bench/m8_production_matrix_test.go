@@ -1341,7 +1341,11 @@ func TestM8MatrixRequiresOneShardPlanAcrossVariantsV1(t *testing.T) {
 		d.OverlapRequested = int(math.Floor(d.OverlapRatio * float64(d.SourceRows)))
 		d.OverlapRealized, d.OverlapUseful, d.OverlapMemberships = d.OverlapRequested, d.OverlapRequested, d.OverlapRequested
 		d.OverlapRejected = 0
-		d.OverlapUnusedCapacity = d.Capacity*int(d.Partitions) - int(d.SourceRows) - d.OverlapRealized
+		totalCapacity, err := m3TotalMembershipCapacityV1(d.Capacity, int(d.Partitions), d.ShardPlan)
+		if err != nil {
+			t.Fatal(err)
+		}
+		d.OverlapUnusedCapacity = int(totalCapacity) - int(d.SourceRows) - d.OverlapRealized
 		// Loads must total the realized memberships and stay inside capacity.
 		loads := make([]int, d.Partitions)
 		for i := 0; i < int(d.SourceRows)+d.OverlapRealized; i++ {
@@ -1357,7 +1361,7 @@ func TestM8MatrixRequiresOneShardPlanAcrossVariantsV1(t *testing.T) {
 	// A different but equally valid envelope: same partition count and same
 	// capacity, larger per-pack membership budget.
 	wider, err := vectorpartition.PlanByteBoundedShardsV1(vectorpartition.ShardPlanInputV1{
-		Vectors: 8, Dimensions: 2, OverlapRatio: .2, Imbalance: vectorpartition.DefaultConfig().Imbalance,
+		Vectors: 8, Dimensions: 2, LogicalDomains: 2, OverlapRatio: .2, Imbalance: vectorpartition.DefaultConfig().Imbalance,
 		TargetHotBytes: uint64(vectorpartition.PackFixedOverheadBytesV1 + 4*(alignedRowBytesForTest(2)+vectorpartition.GraphIdentityOverheadPerRowV1)),
 	})
 	if err != nil {

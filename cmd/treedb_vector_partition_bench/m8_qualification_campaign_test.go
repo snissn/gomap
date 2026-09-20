@@ -2104,6 +2104,10 @@ func testM8QualificationRetainedDescriptorV1(t *testing.T, dir, head string, fix
 // build identity and manifest policy, so all three bindings are published as a
 // single self-consistent retained source.
 func testM8QualificationRetainedDescriptorWithShardPlanV1(t *testing.T, dir, head string, fixture fixtureManifest, variantID, assignment string, ratio float64, shardPlan vectorpartition.ShardPlanV1, sourceID ...func(int) string) m3VariantDescriptorV1 {
+	return testM8QualificationRetainedDescriptorWithShardPlanAndPartitionerV1(t, dir, head, fixture, variantID, assignment, ratio, shardPlan, vectorpartition.ReferencePartitioner{}, sourceID...)
+}
+
+func testM8QualificationRetainedDescriptorWithShardPlanAndPartitionerV1(t *testing.T, dir, head string, fixture fixtureManifest, variantID, assignment string, ratio float64, shardPlan vectorpartition.ShardPlanV1, partitioner vectorpartition.Partitioner, sourceID ...func(int) string) m3VariantDescriptorV1 {
 	t.Helper()
 	const partitions = 16
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -2122,7 +2126,7 @@ func testM8QualificationRetainedDescriptorWithShardPlanV1(t *testing.T, dir, hea
 	}
 	partition := vectorpartition.DefaultConfig()
 	partition.Partitions, partition.Seed, partition.MaxDistanceWork = partitions, fixture.Seed, 20_000_000_000
-	artifact, err := vectorpartition.BuildWithPartitioner(input, partition, vectorpartition.Source{SourceID: "qualification-test:" + fixture.Checksum}, vectorpartition.ReferencePartitioner{})
+	artifact, err := vectorpartition.BuildWithPartitioner(input, partition, vectorpartition.Source{SourceID: "qualification-test:" + fixture.Checksum}, partitioner)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2140,6 +2144,12 @@ func testM8QualificationRetainedDescriptorWithShardPlanV1(t *testing.T, dir, hea
 	overlap, err := vectorpartition.BuildOverlap(artifact, vectorpartition.OverlapConfig{Ratio: ratio, Capacity: capacity, RequireExact: true})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if shardPlan != (vectorpartition.ShardPlanV1{}) {
+		overlap, err = vectorpartition.PackDomainMembershipsV1(shardPlan, overlap)
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 	shardGenerationRaw, shardGenerationDigest, err := m3ShardGenerationRecordV1(shardPlan, ratio, overlap)
 	if err != nil {
@@ -2243,7 +2253,7 @@ func testM8QualificationRetainedDescriptorWithShardPlanV1(t *testing.T, dir, hea
 	for ordinal, id := range artifact.IDs {
 		routerVectors[ordinal] = valuesByID[id]
 	}
-	routerPartitions, err := m3RouterPartitions(artifact, overlap, sourceOrdinals, routerVectors)
+	routerPartitions, err := m3RouterPartitions(shardPlan, artifact, overlap, sourceOrdinals, routerVectors)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2251,7 +2261,7 @@ func testM8QualificationRetainedDescriptorWithShardPlanV1(t *testing.T, dir, hea
 	if err != nil {
 		t.Fatal(err)
 	}
-	inputs := make([]collections.VectorPartitionSearchAssetV1, partitions)
+	inputs := make([]collections.VectorPartitionSearchAssetV1, len(overlap.Loads))
 	for partition := range inputs {
 		inputs[partition] = collections.VectorPartitionSearchAssetV1{Source: source, Generation: generation, PartitionID: uint32(partition), Dimensions: fixture.Dimensions}
 	}
@@ -2271,7 +2281,7 @@ func testM8QualificationRetainedDescriptorWithShardPlanV1(t *testing.T, dir, hea
 	if err != nil {
 		t.Fatal(err)
 	}
-	routerBuild, err := col.BuildAndPublishVectorPartitionRouterV1(context.Background(), manifest, routerPartitions, collections.VectorPartitionRouterBuildOptionsV1{Config: routerConfig, AssetFileID: routerFileID, AssetPartID: uint64(partitions) + 1, M: partitionHNSWDegree, EfConstruction: 128, EfSearch: 128})
+	routerBuild, err := col.BuildAndPublishVectorPartitionRouterV1(context.Background(), manifest, routerPartitions, collections.VectorPartitionRouterBuildOptionsV1{Config: routerConfig, AssetFileID: routerFileID, AssetPartID: uint64(len(overlap.Loads)) + 1, M: partitionHNSWDegree, EfConstruction: 128, EfSearch: 128})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2296,7 +2306,11 @@ func testM8QualificationRetainedDescriptorWithShardPlanV1(t *testing.T, dir, hea
 	descriptor.SourceGeneration, descriptor.SourceChecksum, descriptor.SourceSchemaHash, descriptor.SourceRows = routerStatus.Manifest.SourceGeneration, routerStatus.Manifest.SourceChecksum, routerStatus.Manifest.SourceSchemaHash, routerStatus.Manifest.SourceRowCount
 	descriptor.PartitionGeneration, descriptor.RouterGeneration, descriptor.Partitions = routerStatus.Manifest.Generation, routerStatus.Manifest.RouterGeneration, routerStatus.Manifest.PartitionCount
 	descriptor.OverlapPolicy, descriptor.OverlapRealized, descriptor.OverlapRejected = routerStatus.Manifest.BalancePolicy, overlap.Used, overlap.Unspent
-	descriptor.OverlapUnusedCapacity = descriptor.Capacity*int(descriptor.Partitions) - int(descriptor.SourceRows) - descriptor.OverlapRealized
+	totalCapacity, err := m3TotalMembershipCapacityV1(descriptor.Capacity, int(descriptor.Partitions), descriptor.ShardPlan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	descriptor.OverlapUnusedCapacity = int(totalCapacity) - int(descriptor.SourceRows) - descriptor.OverlapRealized
 	descriptor.PartitionLoads = append([]int(nil), overlap.Loads...)
 	descriptor.OverlapMemberships, descriptor.RouterRepresentatives, descriptor.PersistentAssetBytes = len(routerStatus.Manifest.OverlapMemberships), uint64(len(routerStatus.Manifest.Representatives)), persistent
 	if err := validateM3VariantDescriptorV1(descriptor); err != nil {

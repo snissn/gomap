@@ -160,6 +160,9 @@ func runM0MaterializeMembershipV1(args []string, stdout io.Writer) (err error) {
 	if err = m0MaterializeRetainedDescriptorBindingV1(d, artifact, account); err != nil {
 		return err
 	}
+	if overlap, err = m0PackRetainedMembershipV1(d.ShardPlan, artifact, overlap); err != nil {
+		return err
+	}
 	source, rows, err := h.collection.VectorPartitionSourceOrdinalsV1(partitionHNSWIndex)
 	if err != nil {
 		return err
@@ -195,11 +198,15 @@ func runM0MaterializeMembershipV1(args []string, stdout io.Writer) (err error) {
 	updated.ArtifactSHA256, updated.GraphArtifactSHA256, updated.GraphBuildSHA256, updated.ArtifactBackend = account.AssignmentArtifactSHA256, account.GraphArtifactSHA256, graphBuild, artifact.Backend
 	updated.Source, updated.DatabaseDirectory = artifact.Source, clone
 	updated.SourceGeneration, updated.SourceChecksum, updated.SourceSchemaHash, updated.SourceRows, updated.SourceOrdinalDigest = source.Generation, source.Checksum, source.SchemaHash, source.RowCount, before
-	updated.Partitions, updated.PartitionHNSWM, updated.PartitionHNSWEfC, updated.PartitionConfig = uint32(artifact.Config.Partitions), variantM, variantEfC, artifact.Config
+	updated.Partitions, updated.PartitionHNSWM, updated.PartitionHNSWEfC, updated.PartitionConfig = uint32(len(overlap.Loads)), variantM, variantEfC, artifact.Config
 	updated.Capacity, updated.OverlapRequested, updated.OverlapRealized, updated.OverlapRejected = overlap.Capacity, overlap.Budget, overlap.Used, overlap.Unspent
 	updated.OverlapUseful, updated.OverlapFiller, updated.EdgeCutBefore, updated.EdgeCutAfter = overlap.Useful, overlap.Filler, overlap.EdgeCutBefore, overlap.EdgeCutAfter
 	updated.PartitionLoads, updated.OverlapMemberships = append([]int(nil), overlap.Loads...), overlap.Used
-	updated.OverlapUnusedCapacity = overlap.Capacity*len(overlap.Loads) - len(overlap.Memberships)
+	totalCapacity, err := m3TotalMembershipCapacityV1(overlap.Capacity, len(overlap.Loads), updated.ShardPlan)
+	if err != nil || totalCapacity < int64(len(overlap.Memberships)) || totalCapacity > int64(^uint(0)>>1) {
+		return errors.New("M0 overlap capacity accounting overflow")
+	}
+	updated.OverlapUnusedCapacity = int(totalCapacity) - len(overlap.Memberships)
 	shardGenerationRaw, shardGenerationDigest, err := m3ShardGenerationRecordV1(updated.ShardPlan, updated.OverlapRatio, overlap)
 	if err != nil {
 		return fmt.Errorf("M0 materialization shard generation: %w", err)
@@ -217,11 +224,11 @@ func runM0MaterializeMembershipV1(args []string, stdout io.Writer) (err error) {
 	if err != nil || vectorSource != source || len(vectorRows) != len(rows) {
 		return errors.New("retained router source identity")
 	}
-	routerParts, err := m0RouterPartitionsV1(artifact, overlap, sourceOrdinals, vectorRows)
+	routerParts, err := m0RouterPartitionsV1(updated.ShardPlan, artifact, overlap, sourceOrdinals, vectorRows)
 	if err != nil {
 		return err
 	}
-	inputs := make([]collections.VectorPartitionSearchAssetV1, artifact.Config.Partitions)
+	inputs := make([]collections.VectorPartitionSearchAssetV1, len(overlap.Loads))
 	for p := range inputs {
 		inputs[p] = collections.VectorPartitionSearchAssetV1{Source: source, Generation: generation, PartitionID: uint32(p), Dimensions: len(vectorRows[0].Values)}
 	}
@@ -269,11 +276,11 @@ func runM0MaterializeMembershipV1(args []string, stdout io.Writer) (err error) {
 		return err
 	}
 	h.status = h.router.Status()
-	if h.status.Manifest.State != "ready" || h.status.Manifest.Generation != generation || h.status.Manifest.PartitionCount != uint32(artifact.Config.Partitions) || h.status.Manifest.IntegrityDigest == "" || h.status.Manifest.ReadySetDigest == "" {
+	if h.status.Manifest.State != "ready" || h.status.Manifest.Generation != generation || h.status.Manifest.PartitionCount != uint32(len(overlap.Loads)) || h.status.Manifest.IntegrityDigest == "" || h.status.Manifest.ReadySetDigest == "" {
 		return errors.New("materialized membership manifest is not ready after reopen")
 	}
 	assetStatus, err := h.collection.VectorPartitionStatusV1(partitionHNSWIndex, generation)
-	if err != nil || !assetStatus.Active || !assetStatus.Ready || assetStatus.MissingAssets != 0 || assetStatus.CorruptAssets != 0 || assetStatus.StaleAssets != 0 || len(h.status.Manifest.Assets) != artifact.Config.Partitions {
+	if err != nil || !assetStatus.Active || !assetStatus.Ready || assetStatus.MissingAssets != 0 || assetStatus.CorruptAssets != 0 || assetStatus.StaleAssets != 0 || len(h.status.Manifest.Assets) != len(overlap.Loads) {
 		return errors.New("materialized membership asset status")
 	}
 	afterRowsSource, afterRows, err := h.collection.VectorPartitionSourceOrdinalsV1(partitionHNSWIndex)
@@ -391,6 +398,30 @@ func m0SelectedMembershipV1(artifact vectorpartition.Artifact, artifactRaw []byt
 	return overlap, selected, nil
 }
 
+// m0PackRetainedMembershipV1 preserves the frozen M0 membership selection but
+// binds it to the retained plan's logical-domain envelope before splitting it
+// into physical packs. A plan may reserve more capacity than M0 needed; that
+// ceiling slack must not change the account's canonical membership digest.
+func m0PackRetainedMembershipV1(plan vectorpartition.ShardPlanV1, artifact vectorpartition.Artifact, overlap vectorpartition.OverlapResult) (vectorpartition.OverlapResult, error) {
+	if plan == (vectorpartition.ShardPlanV1{}) {
+		return overlap, nil
+	}
+	if plan.LogicalDomains != artifact.Config.Partitions || len(overlap.Loads) != plan.LogicalDomains || plan.DomainOverlapCapacity < overlap.Capacity {
+		return vectorpartition.OverlapResult{}, errors.New("M0 retained shard plan does not bind assignment domains and capacity")
+	}
+	for _, load := range overlap.Loads {
+		if load > plan.DomainOverlapCapacity {
+			return vectorpartition.OverlapResult{}, errors.New("M0 retained shard plan is below selected domain load")
+		}
+	}
+	overlap.Capacity = plan.DomainOverlapCapacity
+	packed, err := vectorpartition.PackDomainMembershipsV1(plan, overlap)
+	if err != nil {
+		return vectorpartition.OverlapResult{}, fmt.Errorf("M0 physical shard packing: %w", err)
+	}
+	return packed, nil
+}
+
 // m0ReplaceShardGenerationRecordV1 replaces the source clone's immutable M3
 // record only after the rebuilt membership has produced a new bound record.
 // The clone is disposable on any error, so its old source record is never
@@ -429,7 +460,7 @@ func m0ReplaceShardGenerationRecordV1(dir string, raw []byte, digest string) err
 	return nil
 }
 
-func m0RouterPartitionsV1(artifact vectorpartition.Artifact, overlap vectorpartition.OverlapResult, sourceOrdinals []int, rows []collections.VectorPartitionRouterSourceRowV1) ([]vectorpartition.RouterPartitionV1, error) {
+func m0RouterPartitionsV1(plan vectorpartition.ShardPlanV1, artifact vectorpartition.Artifact, overlap vectorpartition.OverlapResult, sourceOrdinals []int, rows []collections.VectorPartitionRouterSourceRowV1) ([]vectorpartition.RouterPartitionV1, error) {
 	if len(sourceOrdinals) != len(artifact.IDs) || len(rows) != len(sourceOrdinals) || len(overlap.Memberships) < len(artifact.Assignment) {
 		return nil, errors.New("M0 router source shape")
 	}
@@ -442,12 +473,19 @@ func m0RouterPartitionsV1(artifact vectorpartition.Artifact, overlap vectorparti
 		byOrdinal[row.VectorOrdinal] = row
 		seen[row.VectorOrdinal] = true
 	}
-	parts := make([]vectorpartition.RouterPartitionV1, artifact.Config.Partitions)
+	partitionCount, packsPerDomain := artifact.Config.Partitions, 1
+	if plan != (vectorpartition.ShardPlanV1{}) {
+		partitionCount, packsPerDomain = plan.Partitions, plan.PacksPerDomain
+		if plan.LogicalDomains != artifact.Config.Partitions || len(overlap.Loads) != partitionCount {
+			return nil, errors.New("M0 router shard plan binding")
+		}
+	}
+	parts := make([]vectorpartition.RouterPartitionV1, partitionCount)
 	for p := range parts {
 		parts[p].PartitionID = uint32(p)
 	}
 	for _, membership := range overlap.Memberships {
-		if membership.VectorOrdinal < 0 || membership.VectorOrdinal >= len(sourceOrdinals) || membership.Partition < 0 || membership.Partition >= len(parts) || membership.Home != (artifact.Assignment[membership.VectorOrdinal] == membership.Partition) {
+		if membership.VectorOrdinal < 0 || membership.VectorOrdinal >= len(sourceOrdinals) || membership.Partition < 0 || membership.Partition >= len(parts) || membership.Home != (artifact.Assignment[membership.VectorOrdinal] == membership.Partition/packsPerDomain) {
 			return nil, errors.New("M0 router membership")
 		}
 		ordinal := sourceOrdinals[membership.VectorOrdinal]

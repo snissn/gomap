@@ -14,6 +14,18 @@ import (
 	"github.com/snissn/gomap/TreeDB/vectorpartition"
 )
 
+type m0BalancedPartitionerV1 struct{}
+
+func (m0BalancedPartitionerV1) Name() string    { return "m0_balanced_test" }
+func (m0BalancedPartitionerV1) License() string { return "test" }
+func (m0BalancedPartitionerV1) Partition(graph vectorpartition.Graph, partitions, _ int) ([]int, error) {
+	assignment := make([]int, len(graph.Neighbors))
+	for i := range assignment {
+		assignment[i] = i * partitions / len(assignment)
+	}
+	return assignment, nil
+}
+
 func TestM0MaterializeVariantV1OnlyAcceptsProductionVariants(t *testing.T) {
 	want := collections.VectorPartitionLocalGraphVariantConnectivityPreservingVamanaR64L256Alpha1_2V1
 	variant, m, efConstruction, err := m0MaterializeVariantV1(string(want))
@@ -328,17 +340,17 @@ func TestM0MaterializeByteBoundedMembershipReopensDisposableClone(t *testing.T) 
 	}
 	testM0MaterializeBuildIdentityV1(t)
 	root := t.TempDir()
-	fixture := fixtureManifest{SchemaVersion: 1, Fixture: "m0-byte-bounded-clone", Generator: fixtureGenerator, Arithmetic: fixtureArithmetic, Vectors: 40, Queries: 1, Dimensions: 4, Metric: "cosine", Seed: 17, Checksum: strings.Repeat("a", 64)}
+	fixture := fixtureManifest{SchemaVersion: 1, Fixture: "m0-byte-bounded-clone", Generator: fixtureGenerator, Arithmetic: fixtureArithmetic, Vectors: 100, Queries: 1, Dimensions: 4, Metric: "cosine", Seed: 17, Checksum: strings.Repeat("a", 64)}
 	sourceDB := filepath.Join(root, "source")
 	planConfig := vectorpartition.DefaultConfig()
 	plan, err := vectorpartition.PlanByteBoundedShardsV1(vectorpartition.ShardPlanInputV1{
-		Vectors: fixture.Vectors, Dimensions: fixture.Dimensions, OverlapRatio: m0OverlapRatioV1, Imbalance: planConfig.Imbalance,
-		TargetHotBytes: uint64(vectorpartition.PackFixedOverheadBytesV1 + 3*(alignedRowBytesForTest(fixture.Dimensions)+vectorpartition.GraphIdentityOverheadPerRowV1)),
+		Vectors: fixture.Vectors, Dimensions: fixture.Dimensions, LogicalDomains: 16, OverlapRatio: m0OverlapRatioV1, Imbalance: planConfig.Imbalance,
+		TargetHotBytes: uint64(vectorpartition.PackFixedOverheadBytesV1 + 4*(alignedRowBytesForTest(fixture.Dimensions)+vectorpartition.GraphIdentityOverheadPerRowV1)),
 	})
-	if err != nil || plan.Partitions != 16 {
+	if err != nil || plan.LogicalDomains != 16 || plan.Partitions != 32 || plan.PacksPerDomain != 2 || plan.DomainHomeCapacity != 7 || plan.DomainOverlapCapacity != 8 || plan.OverlapCapacity != 4 {
 		t.Fatalf("byte-bounded plan=%+v err=%v", plan, err)
 	}
-	sourceDescriptor := testM8QualificationRetainedDescriptorWithShardPlanV1(t, sourceDB, strings.Repeat("b", 40), fixture, "graph-overlap-020-v1", partitionAssignmentGraphV1, m0OverlapRatioV1, plan)
+	sourceDescriptor := testM8QualificationRetainedDescriptorWithShardPlanAndPartitionerV1(t, sourceDB, strings.Repeat("b", 40), fixture, "graph-overlap-020-v1", partitionAssignmentGraphV1, m0OverlapRatioV1, plan, m0BalancedPartitionerV1{})
 	vectors := fixtureVectors(fixture)
 	input := make([]vectorpartition.Vector, len(vectors))
 	for i := range vectors {
@@ -346,7 +358,7 @@ func TestM0MaterializeByteBoundedMembershipReopensDisposableClone(t *testing.T) 
 	}
 	config := vectorpartition.DefaultConfig()
 	config.Partitions, config.Seed, config.MaxDistanceWork = 16, fixture.Seed, 20_000_000_000
-	artifact, err := vectorpartition.BuildWithPartitioner(input, config, vectorpartition.Source{SourceID: "qualification-test:" + fixture.Checksum}, vectorpartition.ReferencePartitioner{})
+	artifact, err := vectorpartition.BuildWithPartitioner(input, config, vectorpartition.Source{SourceID: "qualification-test:" + fixture.Checksum}, m0BalancedPartitionerV1{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -356,7 +368,7 @@ func TestM0MaterializeByteBoundedMembershipReopensDisposableClone(t *testing.T) 
 		t.Fatal(err)
 	}
 	capacity, err := m3OverlapCapacityV1(artifact, m0OverlapRatioV1)
-	if err != nil || plan.OverlapCapacity != capacity || sourceDescriptor.ShardPlan != plan {
+	if err != nil || artifact.Metrics.Cap >= capacity || plan.DomainOverlapCapacity != capacity || sourceDescriptor.ShardPlan != plan {
 		t.Fatalf("byte-bounded source plan=%+v descriptor=%+v capacity=%d err=%v", plan, sourceDescriptor, capacity, err)
 	}
 	if err = m3VerifyRetainedShardGenerationV1(sourceDB, sourceDescriptor); err != nil {
@@ -418,8 +430,12 @@ func TestM0MaterializeByteBoundedMembershipReopensDisposableClone(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	zeroOrdinals := make([][]int, config.Partitions)
-	for _, membership := range zero.Memberships {
+	packedZero, err := m0PackRetainedMembershipV1(plan, artifact, zero)
+	if err != nil {
+		t.Fatal(err)
+	}
+	zeroOrdinals := make([][]int, plan.Partitions)
+	for _, membership := range packedZero.Memberships {
 		zeroOrdinals[membership.Partition] = append(zeroOrdinals[membership.Partition], membership.VectorOrdinal)
 	}
 	if err = m3VerifyShardGenerationMembershipsV1(retained, zeroOrdinals, artifact.Assignment); err != nil {
