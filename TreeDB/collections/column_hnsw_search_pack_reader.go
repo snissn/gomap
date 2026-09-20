@@ -352,12 +352,12 @@ func decodeColumnHNSWSearchPackEnvelopeMetadataWithContext(ctx context.Context, 
 		return columnHNSWSearchPack{}, opts, errors.New("collections: canonical partition hnsw graph parameters mismatch")
 	}
 	if version == columnHNSWSearchPackVersionV6 &&
-		(hnswPackU32(raw, columnHNSWSearchPackHeaderMOffset) != columnVamanaCanonicalPartitionM ||
-			hnswPackU32(raw, columnHNSWSearchPackHeaderEfConstructionOffset) != columnVamanaCanonicalPartitionL ||
+		(hnswPackU32(raw, columnHNSWSearchPackHeaderMOffset) != columnVamanaConnectivityPreservingPartitionM ||
+			hnswPackU32(raw, columnHNSWSearchPackHeaderEfConstructionOffset) != columnVamanaConnectivityPreservingPartitionL ||
 			hnswPackU64(raw, columnHNSWSearchPackHeaderEntryOrdinalOffset) != 0 ||
 			hnswPackU32(raw, columnHNSWSearchPackHeaderMaxLayerOffset) != 0 ||
 			hnswPackU32(raw, columnHNSWSearchPackHeaderAdjacencyLayerCount) != 1) {
-		return columnHNSWSearchPack{}, opts, errors.New("collections: canonical partition Vamana graph parameters mismatch")
+		return columnHNSWSearchPack{}, opts, errors.New("collections: connectivity-preserving partition Vamana graph parameters mismatch")
 	}
 	if rows64 == 0 {
 		if layerCount32 != 0 || maxLayer32 != columnHNSWSearchPackNoMaxLayer || hnswPackU64(raw, columnHNSWSearchPackHeaderEntryOrdinalOffset) != columnHNSWSearchPackNoEntryOrdinal {

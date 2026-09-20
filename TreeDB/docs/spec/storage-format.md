@@ -174,16 +174,18 @@ membership kinds. There are no optional tagged fields and this pre-alpha
 decoder accepts only version 6; older directories require rebuild rather than
 migration.
 
-Canonical partition-local `hnsw_search_pack_v1` assets use wire version 6.
+Production partition-local `hnsw_search_pack_v1` assets use wire version 6.
 Version 6 retains the version-2 176-byte header and required membership digest,
 fixes compatibility fields `M=32` (Vamana `R=64`) and
-`ef_construction=256` (Vamana `L=256`), and contains one flat native Vamana
-layer plus embedded normalized FP32 vectors. Repair edges, auxiliary CSR,
+`ef_construction=256` (Vamana `L=256`), and contains one flat native
+connectivity-preserving Vamana layer plus embedded normalized FP32 vectors.
+The deterministic reachability pass swaps existing native edges and cannot
+increase any row's degree. Separate repair graphs, auxiliary CSR,
 external-vector references, and search-time ordinal reseeding are forbidden.
 Versions 1 through 3 and 5 are historical offline formats; version 4 remains
 the non-partitioned topology-only column-graph format. Production partition
-opens require the explicit version-6 Vamana graph variant and fail closed
-otherwise.
+opens require the explicit version-6 connectivity-preserving Vamana graph
+variant and fail closed otherwise.
 
 The non-partitioned `column_graph` pack uses wire version 4 for
 `cosine_normalized_f32_v1`. Version 4 is topology-only: it omits the normalized

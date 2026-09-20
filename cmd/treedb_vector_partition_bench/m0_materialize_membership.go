@@ -40,7 +40,7 @@ type m0MaterializeReportV1 struct {
 var m0MaterializeBuildIdentityProviderV1 = m0CurrentCleanBuildIdentityV1
 
 func m0MaterializeVariantV1(raw string) (collections.VectorPartitionLocalGraphVariantV1, int, int, error) {
-	if variant := collections.VectorPartitionLocalGraphVariantV1(raw); variant == collections.VectorPartitionLocalGraphVariantCanonicalVamanaR64L256Alpha1_2V1 {
+	if variant := collections.VectorPartitionLocalGraphVariantV1(raw); variant == collections.VectorPartitionLocalGraphVariantConnectivityPreservingVamanaR64L256Alpha1_2V1 {
 		return variant, 32, 256, nil
 	}
 	return "", 0, 0, fmt.Errorf("M0 materialization unsupported production graph variant %q", raw)
@@ -70,7 +70,7 @@ func runM0MaterializeMembershipV1(args []string, stdout io.Writer) (err error) {
 	fs.StringVar(&root, "root", "", "task-local clone root")
 	fs.StringVar(&out, "out", "", "materialization report")
 	fs.StringVar(&mode, "mode", "zero", "membership mode: zero or useful_only_20")
-	fs.StringVar(&variantRaw, "variant", string(collections.VectorPartitionLocalGraphVariantCanonicalVamanaR64L256Alpha1_2V1), "production partition-local graph variant")
+	fs.StringVar(&variantRaw, "variant", string(collections.VectorPartitionLocalGraphVariantConnectivityPreservingVamanaR64L256Alpha1_2V1), "production partition-local graph variant")
 	if fs.Parse(args) != nil || fs.NArg() != 0 || sourceDB == "" || artifactPath == "" || graphArtifactPath == "" || membershipPath == "" || root == "" || out == "" || (mode != "zero" && mode != "useful_only_20") {
 		return errors.New("m0-materialize-membership requires source-db, artifact, graph-artifact, membership-report, root, out")
 	}

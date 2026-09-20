@@ -2334,19 +2334,21 @@ receipt remain the scaling qualification.
 GOWORK=off go test -count=1 ./cmd/treedb_vector_partition_bench -run 'Test(M3ConfiguredPartitionLocalHNSWBuildsCanonicalPacks|M8RetainedGraphVariantUsesManifestIdentityV1|M8ProductionReportRejectsUnexercisedDataGroupV1|ReplayM8Report)'
 ```
 
-## V canonical partition-local Vamana (#4787)
+## V connectivity-preserving partition-local Vamana (#4787)
 
 `vector_partition_vamana_v1_test.go` covers both frozen passes, construction
 search, outgoing replacement, reciprocal insertion, overflow pruning, alpha
-boundary, deterministic ties, candidate cap, current-neighbor union, degree,
-connectivity, finite inputs, singleton encoding, and cancellation. Version-6
-pack tests pin the one-layer R64/L256 identity and corruption rejection. The
-ordinary materialize/publish/search/checkpoint/reopen, recovery, pin, GC,
-score-budget, and stable-ID tests run through Vamana because it is the default;
-M18 HNSW remains an explicit offline historical variant.
+boundary, deterministic ties, candidate cap, current-neighbor union, and the
+degree-preserving entry-reachability pass, including an alternate-source case
+where the preferred reverse boundary would disconnect a reachable row.
+Version-6 pack tests pin that exact one-layer R64/L256 profile identity and
+corruption rejection. The ordinary materialize/publish/search/checkpoint/reopen,
+recovery, pin, GC, score-budget, and stable-ID tests run through this Vamana
+profile because it is the default; M18 HNSW remains an explicit offline
+historical variant.
 
 ```sh
-GOWORK=off go test -count=1 ./TreeDB/collections -run 'Test(VectorPartitionVamana|ColumnVamanaCanonicalPartitionPackV6|VectorPartitionLocalDefaultMaterializationVariantV1|VectorPartitionPersistentLocalSearcherReopenCorruptionAndPinsV1)'
+GOWORK=off go test -count=1 ./TreeDB/collections -run 'Test(VectorPartitionVamana|ColumnVamanaConnectivityPreservingPartitionPackV6|VectorPartitionLocalLayer0ReachabilityRepair|VectorPartitionLocalDefaultMaterializationVariantV1|VectorPartitionPersistentLocalSearcherReopenCorruptionAndPinsV1)'
 GOWORK=off go test -count=1 ./cmd/treedb_vector_partition_bench -run 'Test(M0MaterializeVariantV1OnlyAcceptsProductionVariants|M8RetainedGraphVariantUsesManifestIdentityV1|ReplayM8Report)'
 ```
 

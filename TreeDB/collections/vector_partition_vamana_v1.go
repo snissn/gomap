@@ -36,14 +36,16 @@ type vectorPartitionVamanaBuildStatsV1 struct {
 	OutgoingReplacements [2]uint64
 	ReciprocalInsertions [2]uint64
 	OverflowPrunes       [2]uint64
+	ConnectivityRepairs  int
 	MaxVisitedCandidates int
 	MaxRobustPrunePool   int
 }
 
 // buildVectorPartitionVamanaV1 implements the two-pass Vamana construction
-// from the DiskANN paper over one membership-bound partition. Rows are
-// reordered breadth-first from the centroid entry so the existing flat search
-// pack can keep its entry-at-zero contract.
+// from the DiskANN paper over one membership-bound partition, followed by the
+// shared degree-preserving entry-reachability pass required by the serving
+// contract. Rows are then reordered breadth-first from the centroid entry so
+// the existing flat search pack can keep its entry-at-zero contract.
 func buildVectorPartitionVamanaV1(ctx context.Context, rows []columnVectorGraphAssetRow, dimensions int) error {
 	return buildVectorPartitionVamanaWithStatsV1(ctx, rows, dimensions, nil)
 }
@@ -153,6 +155,19 @@ func buildVectorPartitionVamanaWithStatsV1(ctx context.Context, rows []columnVec
 				}
 			}
 		}
+	}
+	for ordinal := range rows {
+		rows[ordinal].Adjacency = adjacency[ordinal]
+	}
+	repairs, err := repairVectorPartitionLocalLayer0ReachabilityV1(rows, entry)
+	if err != nil {
+		return err
+	}
+	if stats != nil {
+		stats.ConnectivityRepairs = repairs
+	}
+	for ordinal := range rows {
+		adjacency[ordinal] = rows[ordinal].Adjacency
 	}
 	return vectorPartitionVamanaLocalityOrderV1(ctx, rows, adjacency, entry)
 }

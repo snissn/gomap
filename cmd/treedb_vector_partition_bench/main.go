@@ -1397,7 +1397,7 @@ func m3PartitionLocalHNSWConfigV1(cfg config) (int, int, error) {
 
 func m3PartitionLocalGraphVariantV1(m, efConstruction int) (collections.VectorPartitionLocalGraphVariantV1, error) {
 	if m == 32 && efConstruction == 256 {
-		return collections.VectorPartitionLocalGraphVariantCanonicalVamanaR64L256Alpha1_2V1, nil
+		return collections.VectorPartitionLocalGraphVariantConnectivityPreservingVamanaR64L256Alpha1_2V1, nil
 	}
 	return "", fmt.Errorf("unsupported production partition-local graph compatibility M/L=%d/%d", m, efConstruction)
 }

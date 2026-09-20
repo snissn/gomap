@@ -503,7 +503,7 @@ func m8RetainedGraphVariantV1(manifest collections.VectorPartitionManifestV1, de
 	if err != nil || m != descriptor.PartitionHNSWM || efConstruction != m3DescriptorPartitionHNSWEfCV1(descriptor) {
 		return "", false, errors.New("retained M8 descriptor local graph parameters do not match its graph variant")
 	}
-	offline := retained != collections.VectorPartitionLocalGraphVariantCanonicalVamanaR64L256Alpha1_2V1
+	offline := retained != collections.VectorPartitionLocalGraphVariantConnectivityPreservingVamanaR64L256Alpha1_2V1
 	if offline && !allowOffline {
 		return "", false, errors.New("retained M8 descriptor local graph construction is not production-selected")
 	}

@@ -729,15 +729,15 @@ func TestColumnHNSWCanonicalPartitionPackDoesNotReseedDisconnectedRowsV5(t *test
 	}
 }
 
-func TestColumnVamanaCanonicalPartitionPackV6(t *testing.T) {
+func TestColumnVamanaConnectivityPreservingPartitionPackV6(t *testing.T) {
 	input := testColumnHNSWSearchPackInput2312()
-	input.M = columnVamanaCanonicalPartitionM
-	input.EfConstruction = columnVamanaCanonicalPartitionL
+	input.M = columnVamanaConnectivityPreservingPartitionM
+	input.EfConstruction = columnVamanaConnectivityPreservingPartitionL
 	input.MaxLayer = 0
 	input.Levels = []uint16{0, 0, 0}
 	input.AdjacencyLayers = []columnHNSWSearchPackLayerInput{{Offsets: []uint64{0, 1, 2, 3}, Neighbors: []uint32{1, 2, 0}}}
 	input.MembershipDigest[0] = 1
-	input.CanonicalPartitionVamana = true
+	input.ConnectivityPreservingPartitionVamana = true
 	raw, err := encodeColumnHNSWSearchPack(input)
 	if err != nil {
 		t.Fatal(err)
@@ -749,13 +749,13 @@ func TestColumnVamanaCanonicalPartitionPackV6(t *testing.T) {
 	if pack.Header.Version != columnHNSWSearchPackVersionV6 || pack.Header.MaxLayer != 0 || len(pack.AdjacencyLayers) != 1 {
 		t.Fatalf("Vamana header=%+v layers=%d", pack.Header, len(pack.AdjacencyLayers))
 	}
-	badM := testColumnHNSWSearchPackPatchU32Header2312(raw, columnHNSWSearchPackHeaderMOffset, columnVamanaCanonicalPartitionM-1)
-	if _, err := decodeColumnHNSWSearchPack(badM, columnHNSWSearchPackDecodeOptions{ExpectedBaseIdentity: input.BaseIdentity}); err == nil || !strings.Contains(err.Error(), "canonical partition Vamana graph parameters mismatch") {
+	badM := testColumnHNSWSearchPackPatchU32Header2312(raw, columnHNSWSearchPackHeaderMOffset, columnVamanaConnectivityPreservingPartitionM-1)
+	if _, err := decodeColumnHNSWSearchPack(badM, columnHNSWSearchPackDecodeOptions{ExpectedBaseIdentity: input.BaseIdentity}); err == nil || !strings.Contains(err.Error(), "connectivity-preserving partition Vamana graph parameters mismatch") {
 		t.Fatalf("accepted noncanonical Vamana parameters: %v", err)
 	}
 	badEntry := append([]byte(nil), raw...)
 	putHNSWPackU64(badEntry, columnHNSWSearchPackHeaderEntryOrdinalOffset, 1)
-	if _, err := decodeColumnHNSWSearchPack(badEntry, columnHNSWSearchPackDecodeOptions{ExpectedBaseIdentity: input.BaseIdentity}); err == nil || !strings.Contains(err.Error(), "canonical partition Vamana graph parameters mismatch") {
+	if _, err := decodeColumnHNSWSearchPack(badEntry, columnHNSWSearchPackDecodeOptions{ExpectedBaseIdentity: input.BaseIdentity}); err == nil || !strings.Contains(err.Error(), "connectivity-preserving partition Vamana graph parameters mismatch") {
 		t.Fatalf("accepted noncanonical Vamana entry: %v", err)
 	}
 	disconnected := input

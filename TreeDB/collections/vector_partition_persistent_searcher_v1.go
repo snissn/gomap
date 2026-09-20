@@ -226,21 +226,20 @@ func buildVectorPartitionLocalAuxiliaryNavigationV1(rows []columnVectorGraphAsse
 	return buildVectorPartitionLocalAuxiliaryNavigationFromNativeLayer0V1(len(rows), entryOrdinal, levels, nativeOffsets, nativeNeighbors)
 }
 
-// repairVectorPartitionLocalLayer0ReciprocityV1 restores the cheapest missing
-// reverse boundary edge for each entry-unreachable region. HNSW insertion adds
-// links in both directions, but later degree pruning can discard the older
-// node's reciprocal link and strand the newer region. The repair swaps one
-// existing edge at the reachable endpoint, so every row keeps exactly the same
-// layer-0 degree and the persisted graph does not grow.
-func repairVectorPartitionLocalLayer0ReciprocityV1(rows []columnVectorGraphAssetRow, entryOrdinal int) (int, error) {
+// repairVectorPartitionLocalLayer0ReachabilityV1 restores entry reachability
+// without growing the graph. It prefers missing reverse boundary edges, then
+// tries the least unseen root from every reachable source. A swap is accepted
+// only when it reaches more rows without losing any row already reachable from
+// the entry, so every row keeps exactly the same layer-0 degree.
+func repairVectorPartitionLocalLayer0ReachabilityV1(rows []columnVectorGraphAssetRow, entryOrdinal int) (int, error) {
 	if len(rows) == 0 {
 		if entryOrdinal != -1 {
-			return 0, errors.New("partition-local reciprocal repair entry")
+			return 0, errors.New("partition-local reachability repair entry")
 		}
 		return 0, nil
 	}
 	if entryOrdinal < 0 || entryOrdinal >= len(rows) {
-		return 0, errors.New("partition-local reciprocal repair entry")
+		return 0, errors.New("partition-local reachability repair entry")
 	}
 	adjacency := make([][]uint32, len(rows))
 	suffixes := make([][]uint32, len(rows))
@@ -259,7 +258,7 @@ func repairVectorPartitionLocalLayer0ReciprocityV1(rows []columnVectorGraphAsset
 			ordinal := queue[head]
 			for _, neighbor := range adjacency[ordinal] {
 				if int(neighbor) >= len(rows) || neighbor == uint32(ordinal) {
-					return nil, 0, errors.New("partition-local reciprocal repair neighbor")
+					return nil, 0, errors.New("partition-local reachability repair neighbor")
 				}
 				if !seen[neighbor] {
 					seen[neighbor] = true
@@ -271,7 +270,7 @@ func repairVectorPartitionLocalLayer0ReciprocityV1(rows []columnVectorGraphAsset
 	}
 	similarity := func(left, right int) (float32, error) {
 		if len(rows[left].Vector) == 0 || len(rows[left].Vector) != len(rows[right].Vector) {
-			return 0, errors.New("partition-local reciprocal repair vector dimensions")
+			return 0, errors.New("partition-local reachability repair vector dimensions")
 		}
 		leftInvNorm, rightInvNorm := rows[left].InvNorm, rows[right].InvNorm
 		var err error
@@ -324,28 +323,6 @@ func repairVectorPartitionLocalLayer0ReciprocityV1(rows []columnVectorGraphAsset
 				boundaries = append(boundaries, scoredBoundary{source: int(neighbor), target: target, score: score})
 			}
 		}
-		if len(boundaries) == 0 {
-			root := -1
-			for ordinal := range seen {
-				if !seen[ordinal] {
-					root = ordinal
-					break
-				}
-			}
-			if root < 0 {
-				return 0, errors.New("partition-local reciprocal repair reachability")
-			}
-			for ordinal := range seen {
-				if !seen[ordinal] || len(adjacency[ordinal]) == 0 {
-					continue
-				}
-				score, scoreErr := similarity(ordinal, root)
-				if scoreErr != nil {
-					return 0, scoreErr
-				}
-				boundaries = append(boundaries, scoredBoundary{source: ordinal, target: root, score: score})
-			}
-		}
 		sort.Slice(boundaries, func(i, j int) bool {
 			if boundaries[i].score != boundaries[j].score {
 				return boundaries[i].score > boundaries[j].score
@@ -355,6 +332,34 @@ func repairVectorPartitionLocalLayer0ReciprocityV1(rows []columnVectorGraphAsset
 			}
 			return boundaries[i].target < boundaries[j].target
 		})
+		root := -1
+		for ordinal := range seen {
+			if !seen[ordinal] {
+				root = ordinal
+				break
+			}
+		}
+		if root < 0 {
+			return 0, errors.New("partition-local reachability repair invariant")
+		}
+		fallback := make([]scoredBoundary, 0, seenCount)
+		for ordinal := range seen {
+			if !seen[ordinal] || len(adjacency[ordinal]) == 0 {
+				continue
+			}
+			score, scoreErr := similarity(ordinal, root)
+			if scoreErr != nil {
+				return 0, scoreErr
+			}
+			fallback = append(fallback, scoredBoundary{source: ordinal, target: root, score: score})
+		}
+		sort.Slice(fallback, func(i, j int) bool {
+			if fallback[i].score != fallback[j].score {
+				return fallback[i].score > fallback[j].score
+			}
+			return fallback[i].source < fallback[j].source
+		})
+		boundaries = append(boundaries, fallback...)
 		repaired := false
 		for _, boundary := range boundaries {
 			drops := make([]scoredOrdinal, 0, len(adjacency[boundary.source]))
@@ -397,7 +402,7 @@ func repairVectorPartitionLocalLayer0ReciprocityV1(rows []columnVectorGraphAsset
 			}
 		}
 		if !repaired {
-			return 0, errors.New("partition-local reciprocal repair cannot preserve reachable rows")
+			return 0, errors.New("partition-local reachability repair cannot preserve reachable rows")
 		}
 	}
 	for ordinal := range rows {
@@ -575,10 +580,11 @@ func validateVectorPartitionLocalAuxiliaryNavigationFromNativeLayer0WithContextV
 type VectorPartitionLocalGraphVariantV1 string
 
 const (
-	// VectorPartitionLocalGraphVariantCanonicalVamanaR64L256Alpha1_2V1 is the
-	// production partition profile: original two-pass Vamana with R=64,
-	// construction list L=256, and final alpha=1.2.
-	VectorPartitionLocalGraphVariantCanonicalVamanaR64L256Alpha1_2V1 VectorPartitionLocalGraphVariantV1 = "canonical_vamana_r64_l256_alpha_1_2"
+	// VectorPartitionLocalGraphVariantConnectivityPreservingVamanaR64L256Alpha1_2V1
+	// is the production partition profile: two-pass Vamana with R=64,
+	// construction list L=256, final alpha=1.2, and a deterministic
+	// degree-preserving entry-reachability pass.
+	VectorPartitionLocalGraphVariantConnectivityPreservingVamanaR64L256Alpha1_2V1 VectorPartitionLocalGraphVariantV1 = "connectivity_preserving_vamana_r64_l256_alpha_1_2"
 	// VectorPartitionLocalGraphVariantCanonicalHNSWM18EfConstruction256V1 is
 	// the retained pre-Vamana production HNSW profile.
 	VectorPartitionLocalGraphVariantCanonicalHNSWM18EfConstruction256V1 VectorPartitionLocalGraphVariantV1 = "canonical_hnsw_m18_ef_construction_256"
@@ -624,12 +630,12 @@ const (
 	// VectorPartitionLocalGraphVariantAuxiliaryNavigationM32EfConstruction256V1
 	// is an offline-only auxiliary-navigation construction candidate.
 	VectorPartitionLocalGraphVariantAuxiliaryNavigationM32EfConstruction256V1 VectorPartitionLocalGraphVariantV1 = "auxiliary_navigation_m32_ef_construction_256"
-	vectorPartitionLocalDefaultGraphVariantV1                                                                    = VectorPartitionLocalGraphVariantCanonicalVamanaR64L256Alpha1_2V1
+	vectorPartitionLocalDefaultGraphVariantV1                                                                    = VectorPartitionLocalGraphVariantConnectivityPreservingVamanaR64L256Alpha1_2V1
 )
 
 func VectorPartitionLocalGraphVariantIdentityV1(variant VectorPartitionLocalGraphVariantV1) (string, error) {
 	switch variant {
-	case VectorPartitionLocalGraphVariantCanonicalVamanaR64L256Alpha1_2V1, VectorPartitionLocalGraphVariantCanonicalHNSWM18EfConstruction256V1, VectorPartitionLocalGraphVariantNativeV1, VectorPartitionLocalGraphVariantOverlayCurrentV1, VectorPartitionLocalGraphVariantAuxiliaryNavigationV1, VectorPartitionLocalGraphVariantAuxiliaryNavigationEfConstruction256V1, VectorPartitionLocalGraphVariantAuxiliaryNavigationEfConstruction512V1, VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1, VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0InitialMBackfillOffV1, VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0InitialMBackfillOnV1, VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MBackfillOffV1, VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MBackfillOnV1, VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MQualityPostfillV1, VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MRobustPruneV1, VectorPartitionLocalGraphVariantAuxiliaryNavigationM20EfConstruction256V1, VectorPartitionLocalGraphVariantAuxiliaryNavigationM22EfConstruction256V1, VectorPartitionLocalGraphVariantAuxiliaryNavigationM24EfConstruction256V1, VectorPartitionLocalGraphVariantAuxiliaryNavigationM32EfConstruction256V1:
+	case VectorPartitionLocalGraphVariantConnectivityPreservingVamanaR64L256Alpha1_2V1, VectorPartitionLocalGraphVariantCanonicalHNSWM18EfConstruction256V1, VectorPartitionLocalGraphVariantNativeV1, VectorPartitionLocalGraphVariantOverlayCurrentV1, VectorPartitionLocalGraphVariantAuxiliaryNavigationV1, VectorPartitionLocalGraphVariantAuxiliaryNavigationEfConstruction256V1, VectorPartitionLocalGraphVariantAuxiliaryNavigationEfConstruction512V1, VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1, VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0InitialMBackfillOffV1, VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0InitialMBackfillOnV1, VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MBackfillOffV1, VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MBackfillOnV1, VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MQualityPostfillV1, VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MRobustPruneV1, VectorPartitionLocalGraphVariantAuxiliaryNavigationM20EfConstruction256V1, VectorPartitionLocalGraphVariantAuxiliaryNavigationM22EfConstruction256V1, VectorPartitionLocalGraphVariantAuxiliaryNavigationM24EfConstruction256V1, VectorPartitionLocalGraphVariantAuxiliaryNavigationM32EfConstruction256V1:
 		return "partition_local_graph_delta_v1:" + string(variant), nil
 	default:
 		return "", fmt.Errorf("partition-local graph variant=%q", variant)
@@ -653,7 +659,7 @@ func vectorPartitionLocalGraphVariantMembershipDigestV1(membership [sha256.Size]
 // definition unchanged while selecting the identified local builder parameters.
 func vectorPartitionLocalGraphVariantDefinitionV1(def VectorIndexDefinition, variant VectorPartitionLocalGraphVariantV1) (VectorIndexDefinition, bool, error) {
 	switch variant {
-	case VectorPartitionLocalGraphVariantCanonicalVamanaR64L256Alpha1_2V1:
+	case VectorPartitionLocalGraphVariantConnectivityPreservingVamanaR64L256Alpha1_2V1:
 		// The pack's compatibility fields encode flat degree 2M=64 and L=256.
 		def.M, def.EfConstruction = 32, vectorPartitionVamanaSearchListV1
 		return def, false, nil
@@ -835,7 +841,7 @@ func buildVectorPartitionLocalGraphAdjacencyVariantWithConstructionTraceV1(rows 
 	if _, err := VectorPartitionLocalGraphVariantIdentityV1(variant); err != nil {
 		return vectorPartitionLocalAuxiliaryNavigationV1{}, err
 	}
-	if variant == VectorPartitionLocalGraphVariantCanonicalVamanaR64L256Alpha1_2V1 {
+	if variant == VectorPartitionLocalGraphVariantConnectivityPreservingVamanaR64L256Alpha1_2V1 {
 		if trace != nil {
 			return vectorPartitionLocalAuxiliaryNavigationV1{}, errors.New("partition-local Vamana does not emit HNSW construction evidence")
 		}
@@ -866,7 +872,7 @@ func buildVectorPartitionLocalGraphAdjacencyVariantWithConstructionTraceV1(rows 
 		}
 		return vectorPartitionLocalAuxiliaryNavigationV1{}, nil
 	case VectorPartitionLocalGraphVariantAuxiliaryNavigationV1, VectorPartitionLocalGraphVariantAuxiliaryNavigationEfConstruction256V1, VectorPartitionLocalGraphVariantAuxiliaryNavigationEfConstruction512V1, VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1, VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0InitialMBackfillOffV1, VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0InitialMBackfillOnV1, VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MBackfillOffV1, VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MBackfillOnV1, VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MQualityPostfillV1, VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MRobustPruneV1, VectorPartitionLocalGraphVariantAuxiliaryNavigationM20EfConstruction256V1, VectorPartitionLocalGraphVariantAuxiliaryNavigationM22EfConstruction256V1, VectorPartitionLocalGraphVariantAuxiliaryNavigationM24EfConstruction256V1, VectorPartitionLocalGraphVariantAuxiliaryNavigationM32EfConstruction256V1:
-		if _, err := repairVectorPartitionLocalLayer0ReciprocityV1(rows, 0); err != nil {
+		if _, err := repairVectorPartitionLocalLayer0ReachabilityV1(rows, 0); err != nil {
 			return vectorPartitionLocalAuxiliaryNavigationV1{}, err
 		}
 		if err := trace.reconcileVariantMutation(rows, "reciprocity_repair"); err != nil {
@@ -1468,7 +1474,7 @@ func (c *Collection) validateVectorPartitionAssetMembershipBindingsForGraphVaria
 		packVersion := columnHNSWSearchPackVersionV2
 		if expectAuxiliary {
 			packVersion = columnHNSWSearchPackVersionV3
-		} else if variant == VectorPartitionLocalGraphVariantCanonicalVamanaR64L256Alpha1_2V1 {
+		} else if variant == VectorPartitionLocalGraphVariantConnectivityPreservingVamanaR64L256Alpha1_2V1 {
 			packVersion = columnHNSWSearchPackVersionV6
 		} else if variant == VectorPartitionLocalGraphVariantCanonicalHNSWM18EfConstruction256V1 {
 			packVersion = columnHNSWSearchPackVersionV5
@@ -2132,7 +2138,7 @@ func (c *Collection) materializeVectorPartitionLocalSearchAssetsVariantV1(index 
 	if _, err := VectorPartitionLocalGraphVariantIdentityV1(variant); err != nil {
 		return nil, nil, fmt.Errorf("%w: %v", ErrVectorPartitionSearchUnavailable, err)
 	}
-	if evidence != nil && variant == VectorPartitionLocalGraphVariantCanonicalVamanaR64L256Alpha1_2V1 {
+	if evidence != nil && variant == VectorPartitionLocalGraphVariantConnectivityPreservingVamanaR64L256Alpha1_2V1 {
 		return nil, nil, fmt.Errorf("%w: Vamana uses pack validation rather than HNSW construction evidence", ErrVectorPartitionSearchUnavailable)
 	}
 	// The public materializer accepts a set of partition assets. Canonicalize it
@@ -2316,7 +2322,7 @@ func (c *Collection) materializeVectorPartitionLocalSearchAssetsVariantV1(index 
 		// membership digest and therefore fail closed on a native offline pack.
 		pack.MembershipDigest = vectorPartitionLocalGraphVariantMembershipDigestV1(membershipDigest, variant)
 		pack.CanonicalPartitionHNSW = variant == VectorPartitionLocalGraphVariantCanonicalHNSWM18EfConstruction256V1
-		pack.CanonicalPartitionVamana = variant == VectorPartitionLocalGraphVariantCanonicalVamanaR64L256Alpha1_2V1
+		pack.ConnectivityPreservingPartitionVamana = variant == VectorPartitionLocalGraphVariantConnectivityPreservingVamanaR64L256Alpha1_2V1
 		if hasAuxiliaryNavigation {
 			pack.HasAuxiliaryNavigation = true
 			pack.AuxiliaryNavigation = columnHNSWSearchPackLayerInput{Offsets: auxiliary.Offsets, Neighbors: auxiliary.Neighbors}
@@ -2857,7 +2863,7 @@ func (c *Collection) openVectorPartitionLocalSearcherForPreparedPartitionWithCon
 	packVersion := columnHNSWSearchPackVersionV2
 	if expectAuxiliaryNavigation {
 		packVersion = columnHNSWSearchPackVersionV3
-	} else if graphVariant == VectorPartitionLocalGraphVariantCanonicalVamanaR64L256Alpha1_2V1 {
+	} else if graphVariant == VectorPartitionLocalGraphVariantConnectivityPreservingVamanaR64L256Alpha1_2V1 {
 		packVersion = columnHNSWSearchPackVersionV6
 	} else if graphVariant == VectorPartitionLocalGraphVariantCanonicalHNSWM18EfConstruction256V1 {
 		packVersion = columnHNSWSearchPackVersionV5

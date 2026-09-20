@@ -155,3 +155,23 @@ func TestVectorPartitionVamanaSingletonAndNonFiniteInputV1(t *testing.T) {
 		t.Fatal("non-finite normalized vector accepted")
 	}
 }
+
+func TestVectorPartitionVamanaConnectivityRepairPreservesDegreeV1(t *testing.T) {
+	rows := []columnVectorGraphAssetRow{
+		{ID: []byte("a"), Vector: []float32{1, 0}, InvNorm: 1},
+		{ID: []byte("b"), Vector: []float32{1, 0}, InvNorm: 1},
+		{ID: []byte("c"), Vector: []float32{1, 0}, InvNorm: 1},
+	}
+	var stats vectorPartitionVamanaBuildStatsV1
+	if err := buildVectorPartitionVamanaWithStatsV1(context.Background(), rows, 2, &stats); err != nil {
+		t.Fatal(err)
+	}
+	if stats.ConnectivityRepairs == 0 {
+		t.Fatal("degenerate graph did not exercise connectivity repair")
+	}
+	for ordinal := range rows {
+		if len(rows[ordinal].Adjacency) > vectorPartitionVamanaDegreeV1 {
+			t.Fatalf("row %d degree=%d", ordinal, len(rows[ordinal].Adjacency))
+		}
+	}
+}

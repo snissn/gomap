@@ -24,7 +24,7 @@ import (
 //   - fixed little-endian header with magic/version, graph counts, row/dim/
 //     stride counts, cosine-normalized-dot metric, and base manifest identity;
 //   - version 2 extends that header with a required membership digest;
-//     canonical partition-local packs use the same layout as version 5;
+//     production partition-local packs use the same layout as versions 5/6;
 //   - fixed-width section directory immediately after the header;
 //   - section payloads use absolute offsets from the start of the pack;
 //   - every section declares alignment, element count, byte length, and CRC32;
@@ -45,13 +45,14 @@ const (
 	// Version 5 identifies the canonical partition-local HNSW profile. It uses
 	// the v2 layout but forbids repair and auxiliary navigation.
 	columnHNSWSearchPackVersionV5 = uint16(5)
-	// Version 6 identifies the canonical flat partition-local Vamana profile.
-	// It reuses the v2 layout and binds R=64/L=256 through compatibility fields.
-	columnHNSWSearchPackVersionV6              = uint16(6)
-	columnHNSWCanonicalPartitionM              = 18
-	columnHNSWCanonicalPartitionEfConstruction = 256
-	columnVamanaCanonicalPartitionM            = vectorPartitionVamanaDegreeV1 / 2
-	columnVamanaCanonicalPartitionL            = vectorPartitionVamanaSearchListV1
+	// Version 6 identifies the connectivity-preserving flat partition-local
+	// Vamana profile. It reuses the v2 layout and binds R=64/L=256 through
+	// compatibility fields.
+	columnHNSWSearchPackVersionV6                = uint16(6)
+	columnHNSWCanonicalPartitionM                = 18
+	columnHNSWCanonicalPartitionEfConstruction   = 256
+	columnVamanaConnectivityPreservingPartitionM = vectorPartitionVamanaDegreeV1 / 2
+	columnVamanaConnectivityPreservingPartitionL = vectorPartitionVamanaSearchListV1
 
 	columnHNSWSearchPackHeaderSize       = 144
 	columnHNSWSearchPackHeaderSizeV2     = 176
@@ -186,8 +187,8 @@ type columnHNSWSearchPackBuildInput struct {
 	MembershipDigest [sha256.Size]byte
 	// CanonicalPartitionHNSW emits the versioned production partition profile.
 	CanonicalPartitionHNSW bool
-	// CanonicalPartitionVamana emits the versioned production flat graph.
-	CanonicalPartitionVamana bool
+	// ConnectivityPreservingPartitionVamana emits the versioned production flat graph.
+	ConnectivityPreservingPartitionVamana bool
 	// HasAuxiliaryNavigation requires wire version 3 even when its CSR is
 	// empty, so connected partition packs cannot silently lose the channel.
 	HasAuxiliaryNavigation bool
@@ -445,7 +446,7 @@ func columnHNSWSearchPackWireLayout(input columnHNSWSearchPackBuildInput) (uint1
 	if input.ExternalNormalizedVectors {
 		return columnHNSWSearchPackVersionV4, columnHNSWSearchPackHeaderSizeV2
 	}
-	if input.CanonicalPartitionVamana {
+	if input.ConnectivityPreservingPartitionVamana {
 		return columnHNSWSearchPackVersionV6, columnHNSWSearchPackHeaderSizeV2
 	}
 	if input.CanonicalPartitionHNSW {
@@ -990,12 +991,12 @@ func decodeColumnHNSWSearchPack(raw []byte, opts columnHNSWSearchPackDecodeOptio
 		return columnHNSWSearchPack{}, errors.New("collections: canonical partition hnsw graph parameters mismatch")
 	}
 	if version == columnHNSWSearchPackVersionV6 &&
-		(hnswPackU32(raw, columnHNSWSearchPackHeaderMOffset) != columnVamanaCanonicalPartitionM ||
-			hnswPackU32(raw, columnHNSWSearchPackHeaderEfConstructionOffset) != columnVamanaCanonicalPartitionL ||
+		(hnswPackU32(raw, columnHNSWSearchPackHeaderMOffset) != columnVamanaConnectivityPreservingPartitionM ||
+			hnswPackU32(raw, columnHNSWSearchPackHeaderEfConstructionOffset) != columnVamanaConnectivityPreservingPartitionL ||
 			hnswPackU64(raw, columnHNSWSearchPackHeaderEntryOrdinalOffset) != 0 ||
 			hnswPackU32(raw, columnHNSWSearchPackHeaderMaxLayerOffset) != 0 ||
 			hnswPackU32(raw, columnHNSWSearchPackHeaderAdjacencyLayerCount) != 1) {
-		return columnHNSWSearchPack{}, errors.New("collections: canonical partition Vamana graph parameters mismatch")
+		return columnHNSWSearchPack{}, errors.New("collections: connectivity-preserving partition Vamana graph parameters mismatch")
 	}
 	if rows64 == 0 {
 		if layerCount32 != 0 || maxLayer32 != columnHNSWSearchPackNoMaxLayer || hnswPackU64(raw, columnHNSWSearchPackHeaderEntryOrdinalOffset) != columnHNSWSearchPackNoEntryOrdinal {
@@ -1156,7 +1157,7 @@ func validateColumnHNSWSearchPackBuildInputMode(input columnHNSWSearchPackBuildI
 		return fmt.Errorf("collections: hnsw search pack invalid rows/dimensions/stride=(%d,%d,%d)", input.Rows, input.Dimensions, input.VectorStride)
 	}
 	if input.ExternalNormalizedVectors {
-		if input.VectorStride != input.Dimensions || input.ExternalVectorDigest == ([sha256.Size]byte{}) || input.MembershipDigest != ([sha256.Size]byte{}) || input.HasAuxiliaryNavigation || input.CanonicalPartitionHNSW || input.CanonicalPartitionVamana || len(input.NormalizedVectors) != 0 {
+		if input.VectorStride != input.Dimensions || input.ExternalVectorDigest == ([sha256.Size]byte{}) || input.MembershipDigest != ([sha256.Size]byte{}) || input.HasAuxiliaryNavigation || input.CanonicalPartitionHNSW || input.ConnectivityPreservingPartitionVamana || len(input.NormalizedVectors) != 0 {
 			return errors.New("collections: topology-only hnsw search pack requires exact external vectors and no membership/auxiliary payload")
 		}
 	} else {
@@ -1167,11 +1168,11 @@ func validateColumnHNSWSearchPackBuildInputMode(input columnHNSWSearchPackBuildI
 	if input.CanonicalPartitionHNSW && (input.MembershipDigest == ([sha256.Size]byte{}) || input.HasAuxiliaryNavigation || input.M != columnHNSWCanonicalPartitionM || input.EfConstruction != columnHNSWCanonicalPartitionEfConstruction) {
 		return errors.New("collections: canonical partition hnsw requires membership identity and native adjacency only")
 	}
-	if input.CanonicalPartitionHNSW && input.CanonicalPartitionVamana {
+	if input.CanonicalPartitionHNSW && input.ConnectivityPreservingPartitionVamana {
 		return errors.New("collections: canonical partition graph profiles are mutually exclusive")
 	}
-	if input.CanonicalPartitionVamana && (input.Rows == 0 || input.MembershipDigest == ([sha256.Size]byte{}) || input.HasAuxiliaryNavigation || input.M != columnVamanaCanonicalPartitionM || input.EfConstruction != columnVamanaCanonicalPartitionL || input.EntryOrdinal != 0 || input.MaxLayer != 0 || len(input.AdjacencyLayers) != 1) {
-		return errors.New("collections: canonical partition Vamana requires membership identity and one flat native adjacency layer")
+	if input.ConnectivityPreservingPartitionVamana && (input.Rows == 0 || input.MembershipDigest == ([sha256.Size]byte{}) || input.HasAuxiliaryNavigation || input.M != columnVamanaConnectivityPreservingPartitionM || input.EfConstruction != columnVamanaConnectivityPreservingPartitionL || input.EntryOrdinal != 0 || input.MaxLayer != 0 || len(input.AdjacencyLayers) != 1) {
+		return errors.New("collections: connectivity-preserving partition Vamana requires membership identity and one flat native adjacency layer")
 	}
 	if input.Rows != 0 && input.VectorStride > math.MaxInt/input.Rows {
 		return errors.New("collections: hnsw search pack normalized vector count overflows int")
@@ -1222,7 +1223,7 @@ func validateColumnHNSWSearchPackBuildInputMode(input columnHNSWSearchPackBuildI
 		if err := validateColumnHNSWSearchPackAdjacency(layer, uint64(input.Rows), adjacency.Offsets, adjacency.Neighbors); err != nil {
 			return err
 		}
-		if input.CanonicalPartitionVamana && layer == 0 {
+		if input.ConnectivityPreservingPartitionVamana && layer == 0 {
 			if err := validateColumnVamanaPartitionGraphV1(context.Background(), adjacency.Offsets, adjacency.Neighbors); err != nil {
 				return err
 			}
@@ -1466,16 +1467,16 @@ func validateColumnVamanaPartitionGraphV1(ctx context.Context, offsets []uint64,
 			}
 		}
 		if offsets[row+1]-offsets[row] > vectorPartitionVamanaDegreeV1 {
-			return fmt.Errorf("collections: canonical partition Vamana row=%d exceeds degree=%d", row, vectorPartitionVamanaDegreeV1)
+			return fmt.Errorf("collections: connectivity-preserving partition Vamana row=%d exceeds degree=%d", row, vectorPartitionVamanaDegreeV1)
 		}
 		current := neighbors[offsets[row]:offsets[row+1]]
 		for i, neighbor := range current {
 			if int(neighbor) == row {
-				return fmt.Errorf("collections: canonical partition Vamana row=%d has self edge", row)
+				return fmt.Errorf("collections: connectivity-preserving partition Vamana row=%d has self edge", row)
 			}
 			for _, earlier := range current[:i] {
 				if earlier == neighbor {
-					return fmt.Errorf("collections: canonical partition Vamana row=%d has duplicate neighbor=%d", row, neighbor)
+					return fmt.Errorf("collections: connectivity-preserving partition Vamana row=%d has duplicate neighbor=%d", row, neighbor)
 				}
 			}
 		}
@@ -1502,7 +1503,7 @@ func validateColumnVamanaPartitionGraphV1(ctx context.Context, offsets []uint64,
 		}
 	}
 	if len(queue) != rows {
-		return fmt.Errorf("collections: canonical partition Vamana entry reaches %d of %d rows", len(queue), rows)
+		return fmt.Errorf("collections: connectivity-preserving partition Vamana entry reaches %d of %d rows", len(queue), rows)
 	}
 	return nil
 }

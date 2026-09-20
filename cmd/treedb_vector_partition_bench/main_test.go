@@ -1089,7 +1089,7 @@ func TestM3ConfiguredPartitionLocalHNSWBuildsCanonicalPacks(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, asset := range manifest.Assets {
-		if asset.GraphVariant != string(collections.VectorPartitionLocalGraphVariantCanonicalVamanaR64L256Alpha1_2V1) {
+		if asset.GraphVariant != string(collections.VectorPartitionLocalGraphVariantConnectivityPreservingVamanaR64L256Alpha1_2V1) {
 			t.Fatalf("partition %d graph variant=%q", asset.PartitionID, asset.GraphVariant)
 		}
 		searcher, err := col.OpenVectorPartitionLocalSearcherForGenerationV1(partitionHNSWIndex, manifest.Generation, asset.PartitionID)
@@ -1951,7 +1951,7 @@ func TestPartitionLocalHNSWConfigIsIndependentAndM3OnlyV1(t *testing.T) {
 	if m, efConstruction, err := m3PartitionLocalHNSWConfigV1(defaultCfg); err != nil || m != partitionLocalHNSWDefaultM || efConstruction != partitionLocalHNSWDefaultEfC {
 		t.Fatalf("default local HNSW M/eFC=%d/%d err=%v", m, efConstruction, err)
 	}
-	if variant, err := m3PartitionLocalGraphVariantV1(32, 256); err != nil || variant != collections.VectorPartitionLocalGraphVariantCanonicalVamanaR64L256Alpha1_2V1 {
+	if variant, err := m3PartitionLocalGraphVariantV1(32, 256); err != nil || variant != collections.VectorPartitionLocalGraphVariantConnectivityPreservingVamanaR64L256Alpha1_2V1 {
 		t.Fatalf("R64/L256 local variant=%q err=%v", variant, err)
 	}
 	if _, err := m3PartitionLocalGraphVariantV1(18, 256); err == nil {

@@ -15,7 +15,7 @@ import (
 )
 
 func TestM0MaterializeVariantV1OnlyAcceptsProductionVariants(t *testing.T) {
-	want := collections.VectorPartitionLocalGraphVariantCanonicalVamanaR64L256Alpha1_2V1
+	want := collections.VectorPartitionLocalGraphVariantConnectivityPreservingVamanaR64L256Alpha1_2V1
 	variant, m, efConstruction, err := m0MaterializeVariantV1(string(want))
 	if err != nil || variant != want || m != 32 || efConstruction != 256 {
 		t.Fatalf("variant %q = (%q,%d,%d,%v)", want, variant, m, efConstruction, err)
