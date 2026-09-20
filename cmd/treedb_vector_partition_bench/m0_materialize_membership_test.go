@@ -430,7 +430,7 @@ func TestM0MaterializeByteBoundedMembershipReopensDisposableClone(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	packedZero, err := vectorpartition.PackDomainMembershipsV1(plan, zero)
+	packedZero, err := m0PackRetainedMembershipV1(plan, artifact, zero)
 	if err != nil {
 		t.Fatal(err)
 	}
