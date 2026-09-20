@@ -2035,6 +2035,35 @@ func TestM8ProductionModeParsesCanonicalTopologyAndSweepsV1(t *testing.T) {
 	}
 }
 
+func TestM8MembershipFeasibilityConfigIsOneBoundedGateV1(t *testing.T) {
+	digest := strings.Repeat("a", 64)
+	base := []string{
+		"-mode", m8ProductionMultiGroupModeV1, "-dataset", fixturePath(t), "-out", t.TempDir(),
+		"-partitions", "16", "-raft-groups", "4", "-top-k", "10", "-m8-existing-db", "/retained/m8-assets",
+		"-m8-truth-cache", "/retained/truth", "-m8-truth-cache-sha256", digest,
+	}
+	valid := append(append([]string(nil), base...), "-m8-membership-probes", "2", "-m8-membership-pack-limit", "4")
+	cfg, err := parseConfig(valid)
+	if err != nil || cfg.m8MembershipProbes != 2 || cfg.m8MembershipPackLimit != 4 {
+		t.Fatalf("membership gate config=%+v err=%v", cfg, err)
+	}
+	for _, extra := range [][]string{
+		{"-m8-membership-probes", "2"},
+		{"-m8-membership-pack-limit", "4"},
+		{"-m8-membership-probes", "3", "-m8-membership-pack-limit", "4"},
+		{"-m8-membership-probes", "2", "-m8-membership-pack-limit", "17"},
+	} {
+		if _, err := parseConfig(append(append([]string(nil), base...), extra...)); err == nil {
+			t.Fatalf("accepted partial or unbounded membership gate %v", extra)
+		}
+	}
+	withoutTrustedTruth := append([]string(nil), base[:len(base)-4]...)
+	withoutTrustedTruth = append(withoutTrustedTruth, "-m8-membership-probes", "2", "-m8-membership-pack-limit", "4")
+	if _, err := parseConfig(withoutTrustedTruth); err == nil {
+		t.Fatal("accepted membership gate without independently trusted truth")
+	}
+}
+
 func TestM8BenchmarkWorkCapAndOverflowV1(t *testing.T) {
 	cfg := config{partitions: 4, overlaps: []float64{0, .2}, probes: []int{1, 4}, efSearch: []int{64, 128}, concurrency: []int{1, 2}, warmup: 3, topK: 2}
 	manifest := fixtureManifest{Vectors: 10, Queries: 5, Dimensions: 8}

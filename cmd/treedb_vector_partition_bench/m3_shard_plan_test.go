@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/snissn/gomap/TreeDB/collections"
 	"github.com/snissn/gomap/TreeDB/vectorpartition"
 )
 
@@ -147,6 +148,39 @@ func TestM3ShardPackBudgetRejectsOversizedPacksV1(t *testing.T) {
 	// -shard-plan off keeps the legacy path unplanned rather than half-checked.
 	if err := m3ValidateShardPackBudgetV1(vectorpartition.ShardPlanV1{}, overlap); err != nil {
 		t.Fatalf("unplanned build rejected: %v", err)
+	}
+}
+
+func TestM3ActualShardPackBytesStayInsidePlannedEnvelopeV1(t *testing.T) {
+	summaries := []vectorpartition.ShardPackSummaryV1{
+		{Partition: 0, Rows: 2, Bytes: 100},
+		{Partition: 1, Rows: 1, Bytes: 80},
+	}
+	assets := []collections.VectorPartitionAssetV1{
+		{PartitionID: 1, Bytes: 80},
+		{PartitionID: 0, Bytes: 99},
+	}
+	if err := m3ValidateActualShardPackBytesV1(assets, summaries); err != nil {
+		t.Fatal(err)
+	}
+	for name, mutate := range map[string]func([]collections.VectorPartitionAssetV1){
+		"over":      func(a []collections.VectorPartitionAssetV1) { a[0].Bytes++ },
+		"zero":      func(a []collections.VectorPartitionAssetV1) { a[1].Bytes = 0 },
+		"duplicate": func(a []collections.VectorPartitionAssetV1) { a[1].PartitionID = 1 },
+	} {
+		t.Run(name, func(t *testing.T) {
+			candidate := append([]collections.VectorPartitionAssetV1(nil), assets...)
+			mutate(candidate)
+			if err := m3ValidateActualShardPackBytesV1(candidate, summaries); err == nil {
+				t.Fatal("accepted pack bytes outside the planned envelope")
+			}
+		})
+	}
+	if err := m3ValidateActualShardPackBytesV1(assets[:1], summaries); err == nil {
+		t.Fatal("accepted incomplete pack coverage")
+	}
+	if err := m3ValidateActualShardPackBytesV1(assets, nil); err != nil {
+		t.Fatalf("unplanned packs rejected: %v", err)
 	}
 }
 

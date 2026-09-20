@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 
+	"github.com/snissn/gomap/TreeDB/collections"
 	"github.com/snissn/gomap/TreeDB/vectorpartition"
 )
 
@@ -74,6 +75,33 @@ func m3ValidateShardGenerationInputsV1(plan vectorpartition.ShardPlanV1, ratio f
 	for partition, load := range overlap.Loads {
 		if load != summaries[partition].Rows {
 			return fmt.Errorf("pack %d load=%d does not match membership-derived rows=%d", partition, load, summaries[partition].Rows)
+		}
+	}
+	return nil
+}
+
+// m3ValidateActualShardPackBytesV1 binds the planner's conservative per-pack
+// byte envelope to the immutable bytes the encoder actually produced. It runs
+// before manifest publication and again when retained assets are admitted.
+func m3ValidateActualShardPackBytesV1(assets []collections.VectorPartitionAssetV1, summaries []vectorpartition.ShardPackSummaryV1) error {
+	if len(summaries) == 0 {
+		return nil
+	}
+	if len(assets) != len(summaries) {
+		return fmt.Errorf("materialized %d shard packs for %d planned packs", len(assets), len(summaries))
+	}
+	seen := make([]bool, len(summaries))
+	for _, asset := range assets {
+		if asset.PartitionID >= uint32(len(summaries)) {
+			return fmt.Errorf("materialized shard pack %d is outside the canonical plan", asset.PartitionID)
+		}
+		partition := int(asset.PartitionID)
+		if seen[partition] || summaries[partition].Partition != partition {
+			return fmt.Errorf("materialized shard pack %d is duplicate or outside the canonical plan", asset.PartitionID)
+		}
+		seen[partition] = true
+		if asset.Bytes == 0 || asset.Bytes > summaries[partition].Bytes {
+			return fmt.Errorf("materialized shard pack %d bytes=%d outside planned envelope (0,%d]", partition, asset.Bytes, summaries[partition].Bytes)
 		}
 	}
 	return nil

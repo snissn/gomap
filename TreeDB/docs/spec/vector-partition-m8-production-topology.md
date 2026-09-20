@@ -122,23 +122,36 @@ measured query cells plus the unavailable-endpoint fault.
 The checked-in 10k path materializes persistent HNSW packs for CI. The retained
 1M path reuses graph-built M3/M5 packs. `-m8-variant-dbs` requires exactly three
 distinct immutable descriptors and executes them sequentially, one fresh OS
-process per variant so process peak RSS is attributable to that variant. The
-blocked matrix parent validates only the manifest and descriptors and does not
-materialize a second fixture corpus. Preflight planning applies the memory cap
-to one child's complete peak and multiplies the complete measured,
-warmup/preflight, and attribution work by the number of children:
+process per variant so process peak RSS is attributable to that variant.
+Preflight planning applies the memory cap to one child's complete peak and
+multiplies the complete measured, warmup/preflight, and attribution work by the
+number of children:
 
 1. graph assignment with disjoint memberships;
 2. graph assignment with bounded overlap `0.20`;
 3. stable-ID hash assignment with disjoint memberships as an attribution
    baseline.
 
-The matrix rejects missing, duplicated, mutable, or identity-mismatched
-variants rather than silently substituting a disjoint row. A declared overlap
-variant is incomplete unless its realized extra-membership count equals
-`floor(overlap_ratio * source_rows)`; incomplete materialization fails both the
-required-variant and overlap-storage gates even when its raw byte ratio is
-below the threshold. Exact correctness is owned by canonical source truth
+With `-m8-membership-probes P -m8-membership-pack-limit B`, the matrix parent
+first opens every retained source read-only, reuses the trusted exact-truth
+cache and final shard-generation memberships, and computes the joint logical
+domain/expanded-physical-pack recall ceiling for every query. The existing
+bounded joint mask DP is checked against an independent exhaustive singles/pairs
+enumerator for the admitted `P<=2` range. All physical packs owned by a selected
+logical domain are charged. The immutable result binds the fixture, truth
+artifact, build/manifest/ready-set/shard-generation identities, actual pack
+bytes, limits, per-query witness, and aggregate ceiling. Any insufficient
+variant stops the matrix before timed child processes; replay recomputes the
+result from the retained assets. This is a necessary membership-feasibility
+gate, not a serving recall or throughput claim.
+
+Materialized pack bytes are checked after encoding and before manifest/router
+publication against the byte-bounded plan's conservative per-pack envelope;
+retained admission checks the same invariant again. The matrix rejects missing,
+duplicated, mutable, or identity-mismatched variants rather than silently
+substituting a disjoint row. Useful-only overlap may leave requested capacity
+unused, but every realized extra membership must have positive cut reduction,
+no filler is accepted, and storage remains gated. Exact correctness is owned by canonical source truth
 versus the exhaustive exact partition union;
 the router, partition-local HNSW, transport, and coordinator merge retain
 separate recall/parity attribution. Approximate HNSW recall is judged by the

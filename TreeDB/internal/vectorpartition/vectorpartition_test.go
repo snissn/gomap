@@ -59,10 +59,64 @@ func TestDenseBallGraphAndPartitionDeterministic(t *testing.T) {
 	}
 	// MaxDistanceWork is intentionally persisted in Config so an artifact
 	// records the scalar-work safety envelope that constructed it.
-	if got, want := mustDigest(t, a), "b8a79eb002035b5104793e86e0c993fb4514350f37f60e49c0d5d19e983ef7c7"; got != want {
+	if got, want := mustDigest(t, a), "d5624dc94134da4616e3f718c67da31421b4c414ae9ed6a77e5a18424f20fdbd"; got != want {
 		t.Fatalf("tiny canonical graph/assignment bytes changed: got %s want %s", got, want)
 	}
 }
+
+func TestRecursivePivotSamplingIsDeterministicAndBucketSpecific(t *testing.T) {
+	ids := make([]int, 64)
+	otherBucket := make([]int, 64)
+	for i := range ids {
+		ids[i] = i
+		otherBucket[i] = i + len(ids)
+	}
+	first := samplePivotsV1(ids, 8, 17, 0)
+	if again := samplePivotsV1(ids, 8, 17, 0); !reflect.DeepEqual(first, again) {
+		t.Fatalf("same bucket sample changed: first=%v again=%v", first, again)
+	}
+	if next := samplePivotsV1(ids, 8, 17, 1); reflect.DeepEqual(first, next) {
+		t.Fatalf("repetitions reused pivot sample: %v", first)
+	}
+	if sibling := samplePivotsV1(otherBucket, 8, 17, 0); reflect.DeepEqual(first, sibling) {
+		t.Fatalf("distinct buckets reused pivot sample: %v", first)
+	}
+	if len(first) != 8 {
+		t.Fatalf("sample size=%d want=8", len(first))
+	}
+	for i, id := range first {
+		if id < 0 || id >= len(ids) || i > 0 && id <= first[i-1] {
+			t.Fatalf("sample is not a canonical bucket subset: %v", first)
+		}
+	}
+}
+
+func TestBuildCanonicalizesInputBeforeRecursiveSampling(t *testing.T) {
+	one, err := Build(fixture(), config())
+	if err != nil {
+		t.Fatal(err)
+	}
+	permuted := append([]Vector(nil), fixture()...)
+	for left, right := 0, len(permuted)-1; left < right; left, right = left+1, right-1 {
+		permuted[left], permuted[right] = permuted[right], permuted[left]
+	}
+	two, err := Build(permuted, config())
+	if err != nil {
+		t.Fatal(err)
+	}
+	oneJSON, err := CanonicalJSON(one)
+	if err != nil {
+		t.Fatal(err)
+	}
+	twoJSON, err := CanonicalJSON(two)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(oneJSON, twoJSON) {
+		t.Fatal("input permutation changed recursive graph artifact")
+	}
+}
+
 func TestBuildStableIDHashBaselineOwnsAssignmentAndPreservesSource(t *testing.T) {
 	source, err := Build(fixture(), config())
 	if err != nil {

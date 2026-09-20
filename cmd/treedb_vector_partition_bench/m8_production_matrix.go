@@ -23,27 +23,30 @@ import (
 var m8RequiredVariantIDsV1 = []string{"graph-disjoint-v1", "graph-overlap-020-v1", "stable-id-hash-disjoint-v1"}
 
 type m8ProductionMatrixV1 struct {
-	SchemaVersion               int                        `json:"schema_version"`
-	ResultKind                  string                     `json:"result_kind"`
-	Status                      string                     `json:"status"`
-	Disposition                 string                     `json:"disposition"`
-	GeneratedAt                 time.Time                  `json:"generated_at"`
-	ExecutionStartedAt          time.Time                  `json:"execution_started_at"`
-	ExecutionCompletedAt        time.Time                  `json:"execution_completed_at"`
-	Command                     []string                   `json:"exact_command"`
-	ExecutableSHA256            string                     `json:"executable_sha256"`
-	BaseSHA                     string                     `json:"base_sha"`
-	HeadSHA                     string                     `json:"head_sha"`
-	Dataset                     fixtureManifest            `json:"dataset"`
-	RequiredVariants            []string                   `json:"required_variants"`
-	Variants                    []m8ProductionReportV1     `json:"variants"`
-	Comparison                  []m8ProductionComparisonV1 `json:"comparison"`
-	Gates                       m8ProductionMatrixGatesV1  `json:"gates"`
-	OverlapMaterializationRatio float64                    `json:"overlap_materialization_ratio"`
-	OverlapStorageRatio         float64                    `json:"overlap_storage_ratio"`
-	OverlapDiagnostics          m8OverlapDiagnosticsV1     `json:"overlap_diagnostics"`
-	Decision                    []m8DecisionRowV1          `json:"decision_report"`
-	Limitations                 []string                   `json:"limitations"`
+	SchemaVersion               int                                 `json:"schema_version"`
+	ResultKind                  string                              `json:"result_kind"`
+	Status                      string                              `json:"status"`
+	Disposition                 string                              `json:"disposition"`
+	GeneratedAt                 time.Time                           `json:"generated_at"`
+	ExecutionStartedAt          time.Time                           `json:"execution_started_at"`
+	ExecutionCompletedAt        time.Time                           `json:"execution_completed_at"`
+	Command                     []string                            `json:"exact_command"`
+	ExecutableSHA256            string                              `json:"executable_sha256"`
+	BaseSHA                     string                              `json:"base_sha"`
+	HeadSHA                     string                              `json:"head_sha"`
+	Dataset                     fixtureManifest                     `json:"dataset"`
+	RequiredVariants            []string                            `json:"required_variants"`
+	Variants                    []m8ProductionReportV1              `json:"variants"`
+	Comparison                  []m8ProductionComparisonV1          `json:"comparison"`
+	Gates                       m8ProductionMatrixGatesV1           `json:"gates"`
+	OverlapMaterializationRatio float64                             `json:"overlap_materialization_ratio"`
+	OverlapStorageRatio         float64                             `json:"overlap_storage_ratio"`
+	OverlapDiagnostics          m8OverlapDiagnosticsV1              `json:"overlap_diagnostics"`
+	Decision                    []m8DecisionRowV1                   `json:"decision_report"`
+	MembershipProbes            int                                 `json:"membership_feasibility_logical_domain_limit,omitempty"`
+	MembershipPackLimit         int                                 `json:"membership_feasibility_physical_pack_limit,omitempty"`
+	MembershipFeasibility       []m8MembershipFeasibilityArtifactV1 `json:"membership_feasibility,omitempty"`
+	Limitations                 []string                            `json:"limitations"`
 }
 
 type m8OverlapDiagnosticsV1 struct {
@@ -168,6 +171,23 @@ func runM8ProductionMultiGroupV1(cfg config, fixture fixtureManifest, vectors, q
 	if err := os.MkdirAll(cfg.out, 0o755); err != nil {
 		return err
 	}
+	var membershipFeasibility []m8MembershipFeasibilityArtifactV1
+	if cfg.m8MembershipProbes != 0 {
+		membershipFeasibility = make([]m8MembershipFeasibilityArtifactV1, 0, len(m8RequiredVariantIDsV1))
+		for _, variantID := range m8RequiredVariantIDsV1 {
+			source := sourcesByVariant[variantID]
+			artifact, err := m8RunMembershipFeasibilityV1(cfg, fixture, source.dir, source.descriptor)
+			if err != nil {
+				return fmt.Errorf("M8 matrix membership feasibility %s: %w", variantID, err)
+			}
+			membershipFeasibility = append(membershipFeasibility, artifact)
+		}
+		for _, artifact := range membershipFeasibility {
+			if artifact.Result.Status != "sufficient" {
+				return fmt.Errorf("retained membership feasibility %s ceiling %.9f is below required recall %.9f (artifact %s)", artifact.Result.VariantID, artifact.Result.Ceiling, artifact.Result.RequiredRecall, artifact.Path)
+			}
+		}
+	}
 	ownedProfiles, err := m8CreateProductionMatrixProfileLeavesV1(cfg.profiles)
 	if err != nil {
 		return err
@@ -208,8 +228,20 @@ func runM8ProductionMultiGroupV1(cfg config, fixture fixtureManifest, vectors, q
 		}
 		reports = append(reports, report)
 	}
-	matrix, err := m8BuildProductionMatrixWithExecutionIntervalV1(cfg, fixture, reports, executionStartedAt, time.Now().UTC())
+	// Child reports intentionally exclude the parent-owned feasibility flags.
+	// Build their matrix under that child configuration, then attach and
+	// validate the complete parent-owned preflight evidence below.
+	buildCfg := cfg
+	buildCfg.m8MembershipProbes = 0
+	buildCfg.m8MembershipPackLimit = 0
+	matrix, err := m8BuildProductionMatrixWithExecutionIntervalV1(buildCfg, fixture, reports, executionStartedAt, time.Now().UTC())
 	if err != nil {
+		return err
+	}
+	matrix.MembershipProbes = cfg.m8MembershipProbes
+	matrix.MembershipPackLimit = cfg.m8MembershipPackLimit
+	matrix.MembershipFeasibility = membershipFeasibility
+	if err := validateM8ProductionMatrixV1(matrix); err != nil {
 		return err
 	}
 	raw, err := json.MarshalIndent(matrix, "", "  ")
@@ -374,7 +406,7 @@ func m8VariantProcessArgsV1(command []string, dir string, overlap float64, profi
 	if len(command) == 0 || dir == "" || math.IsNaN(overlap) || math.IsInf(overlap, 0) || overlap < 0 || overlap > 1 {
 		return nil, errors.New("M8 variant process requires a command, database, and finite overlap in [0,1]")
 	}
-	drop := map[string]bool{"m8-variant-dbs": true, "m8-existing-db": true, "overlap": true, "format": true, "profiles": true, "m8-matrix-out": true, "m8-matrix-profiles": true, "m8-truth-cache-sha256": true}
+	drop := map[string]bool{"m8-variant-dbs": true, "m8-existing-db": true, "overlap": true, "format": true, "profiles": true, "m8-matrix-out": true, "m8-matrix-profiles": true, "m8-truth-cache-sha256": true, "m8-membership-probes": true, "m8-membership-pack-limit": true}
 	// Forced child identity flags must precede every inherited argument. This is
 	// safe even for a defensively supplied positional argument because Go flag
 	// parsing stops at the first positional token.
@@ -516,9 +548,10 @@ func m8BuildProductionMatrixV1(cfg config, fixture fixtureManifest, reports []m8
 
 func m8BuildProductionMatrixWithExecutionIntervalV1(cfg config, fixture fixtureManifest, reports []m8ProductionReportV1, executionStartedAt, executionCompletedAt time.Time) (m8ProductionMatrixV1, error) {
 	matrix := m8ProductionMatrixV1{
-		SchemaVersion: 6, ResultKind: "m8_production_multi_variant_matrix_v6", Status: "incomplete", GeneratedAt: time.Now().UTC(), ExecutionStartedAt: executionStartedAt, ExecutionCompletedAt: executionCompletedAt,
+		SchemaVersion: 7, ResultKind: "m8_production_multi_variant_matrix_v7", Status: "incomplete", GeneratedAt: time.Now().UTC(), ExecutionStartedAt: executionStartedAt, ExecutionCompletedAt: executionCompletedAt,
 		Command: append([]string(nil), cfg.command...), BaseSHA: cfg.baseSHA, HeadSHA: cfg.headSHA, Dataset: fixture,
 		RequiredVariants: append([]string(nil), m8RequiredVariantIDsV1...), Variants: reports,
+		MembershipProbes: cfg.m8MembershipProbes, MembershipPackLimit: cfg.m8MembershipPackLimit,
 		Limitations: []string{"single-host loopback production-shaped topology; multi-host qualification remains owned by #3983", "no external-system or paper-scale comparison is claimed"},
 	}
 	if len(reports) != len(m8RequiredVariantIDsV1) {
@@ -694,6 +727,41 @@ func validateM8ProductionMatrixV1(matrix m8ProductionMatrixV1) error {
 	}
 	if matrix.ExecutionStartedAt.IsZero() || matrix.ExecutionCompletedAt.IsZero() || !matrix.ExecutionCompletedAt.After(matrix.ExecutionStartedAt) {
 		return errors.New("M8 matrix has an invalid execution interval")
+	}
+	if (matrix.MembershipProbes == 0) != (matrix.MembershipPackLimit == 0) {
+		return errors.New("M8 matrix has a partial membership feasibility configuration")
+	}
+	seenFeasibility := make(map[string]bool, len(matrix.MembershipFeasibility))
+	for _, artifact := range matrix.MembershipFeasibility {
+		var report *m8ProductionReportV1
+		for i := range matrix.Variants {
+			if matrix.Variants[i].Variant != nil && matrix.Variants[i].Variant.VariantID == artifact.Result.VariantID {
+				report = &matrix.Variants[i]
+				break
+			}
+		}
+		if seenFeasibility[artifact.Result.VariantID] || artifact.Path == "" || !m8SHA256V1(artifact.ArtifactSHA256) || m8ValidateMembershipFeasibilityV1(artifact.Result) != nil ||
+			report == nil || !m8MembershipFeasibilityMatchesReportV1(artifact.Result, *report, matrix.MembershipProbes, matrix.MembershipPackLimit) {
+			return errors.New("M8 matrix has invalid or duplicate membership feasibility evidence")
+		}
+		seenFeasibility[artifact.Result.VariantID] = true
+	}
+	if len(matrix.MembershipFeasibility) != 0 {
+		for _, variantID := range m8RequiredVariantIDsV1 {
+			if !seenFeasibility[variantID] {
+				return errors.New("M8 matrix membership feasibility set is incomplete")
+			}
+		}
+		if len(seenFeasibility) != len(m8RequiredVariantIDsV1) {
+			return errors.New("M8 matrix membership feasibility set has unexpected variants")
+		}
+		for _, artifact := range matrix.MembershipFeasibility {
+			if artifact.Result.Status != "sufficient" {
+				return errors.New("M8 matrix membership feasibility is insufficient")
+			}
+		}
+	} else if matrix.MembershipProbes != 0 {
+		return errors.New("M8 matrix is missing configured membership feasibility evidence")
 	}
 	type key struct {
 		variantID               string

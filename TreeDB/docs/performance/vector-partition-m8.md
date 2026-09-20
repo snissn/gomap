@@ -603,8 +603,21 @@ Independent domain and pack optima are not a joint feasibility certificate. For
 truth masks `[1023,31,992]` with pack costs `[8,1,1]`, one domain can cover ten
 hits and two packs can independently cover ten hits, but at most **one domain
 and two packs simultaneously** permits only five. The private, bounded joint
-oracle is tested against exhaustive subsets; this first producer reports the
-independent curves and actual route costs, not a joint-cap serving claim.
+oracle is tested against exhaustive subsets. The quality-attribution producer
+continues to report the independent curves and actual route costs; it does not
+silently reinterpret them as joint feasibility.
+
+The separate retained-asset preflight is enabled only by the paired
+`-m8-membership-probes` and `-m8-membership-pack-limit` flags. It reuses the
+trusted truth loader, final shard-generation memberships, pack ownership, and
+the joint DP before any timed child process. For every query it also exhaustively
+enumerates singles/pairs (`P<=2`), requires the same optimum as the DP, expands
+selected domains to all owned physical packs, and persists the exact witness.
+The artifact and replay bind the retained build, manifest, ready set, shard
+generation, membership digest, truth artifact, actual encoded pack bytes,
+limits, and recall target. A ceiling below the target fails before serving
+measurement. Passing proves only that retained membership can satisfy the
+declared joint limits; router and local-search loss remain measured separately.
 
 ### Commands and evidence boundary
 

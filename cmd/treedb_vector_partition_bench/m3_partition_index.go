@@ -514,6 +514,15 @@ func benchmarkM3PartitionIndexRow(cfg config, fixture fixtureManifest, artifactD
 	if err := sampler.Sample(); err != nil {
 		return m3PartitionIndexRow{}, err
 	}
+	if cfg.shardPlan != (vectorpartition.ShardPlanV1{}) {
+		summaries, err := vectorpartition.AccountShardPacksV1(cfg.shardPlan, overlap.Memberships)
+		if err != nil {
+			return m3PartitionIndexRow{}, err
+		}
+		if err := m3ValidateActualShardPackBytesV1(assets, summaries); err != nil {
+			return m3PartitionIndexRow{}, err
+		}
+	}
 	manifest.Assets = assets
 	manifest.Canonicalize()
 	if cfg.m3FinalOfflineGraph {

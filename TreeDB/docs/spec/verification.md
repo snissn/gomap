@@ -2334,6 +2334,23 @@ receipt remain the scaling qualification.
 GOWORK=off go test -count=1 ./cmd/treedb_vector_partition_bench -run 'Test(M3ConfiguredPartitionLocalHNSWBuildsCanonicalPacks|M8RetainedGraphVariantUsesManifestIdentityV1|M8ProductionReportRejectsUnexercisedDataGroupV1|ReplayM8Report)'
 ```
 
+## M bounded graph, pack bytes, and retained membership feasibility (#4775)
+
+`TreeDB/internal/vectorpartition` tests bind recursive current-bucket pivot
+sampling to the seed, repetition, and canonical bucket membership while
+preserving deterministic artifacts and input-order invariance. M3 shard tests
+reject zero, duplicate, incomplete, or over-envelope materialized packs before
+publication. The M8 feasibility tests compare the existing joint DP with an
+independent `P<=2` enumerator, charge complete expanded physical-pack ownership,
+bind the whole query population into the work plan, publish immutable evidence,
+and replay from the exact retained truth/membership/pack assets. Stale truth or
+shard-generation identity fails closed.
+
+```sh
+GOWORK=off go test -count=1 ./TreeDB/internal/vectorpartition -run 'Test(RecursivePivotSampling|BuildCanonicalizesInput)'
+GOWORK=off go test -count=1 ./cmd/treedb_vector_partition_bench -run 'Test(M3ActualShardPackBytes|M8Membership|M8RetainedMembershipFeasibility)'
+```
+
 ## M8 same-candidate router policy diagnostics (#4745)
 
 `TreeDB/collections/vector_partition_router_policy_reduce_test.go` checks the

@@ -158,6 +158,8 @@ type config struct {
 	m8RouterPolicyRepresentativeCounts []int
 	m8TruthCache                       string
 	m8TruthCacheSHA256                 string
+	m8MembershipProbes                 int
+	m8MembershipPackLimit              int
 	m3MaxBenchmarkVisits               int64
 	m8CoordinatorLimits                nativewire.VectorPartitionCoordinatorLimitsV1
 	m8ShardLimits                      nativewire.VectorPartitionShardSearchLimitsV1
@@ -996,6 +998,8 @@ func parseConfig(args []string) (config, error) {
 	fs.IntVar(&cfg.m8RouterPolicyWidth, "m8-router-policy-width", 0, "nearest returned representatives used by the offline flat-HNSW diagnostic; zero uses the bounded default")
 	fs.StringVar(&cfg.m8TruthCache, "m8-truth-cache", "", "external canonical exact-truth cache directory; identity-bound and fail-closed")
 	fs.StringVar(&cfg.m8TruthCacheSHA256, "m8-truth-cache-sha256", "", "independently trusted SHA-256 of the canonical truth-cache artifact required for cache reuse")
+	fs.IntVar(&cfg.m8MembershipProbes, "m8-membership-probes", 0, "read-only retained membership feasibility gate logical-domain limit; 1..2 with pack limit")
+	fs.IntVar(&cfg.m8MembershipPackLimit, "m8-membership-pack-limit", 0, "read-only retained membership feasibility gate expanded physical-pack limit")
 	fs.BoolVar(&cfg.m8FinalOfflineGraph, "m8-final-offline-graph", false, "replay the final qualifier's retained offline graph control")
 	fs.StringVar(&cfg.partitionAssignment, "partition-assignment", cfg.partitionAssignment, "partition assignment for partition/M3 stages: graph or stable_id_hash")
 	fs.StringVar(&cfg.shardPlanMode, "shard-plan", cfg.shardPlanMode, "off keeps -partitions authoritative; byte_bounded derives the M3 partition count and per-pack capacity from an explicit hot-byte budget before construction")
@@ -1056,6 +1060,9 @@ func parseConfig(args []string) (config, error) {
 		if decoded, err := hex.DecodeString(cfg.m8TruthCacheSHA256); err != nil || len(decoded) != sha256.Size {
 			return config{}, errors.New("-m8-truth-cache-sha256 must be lowercase 64-hex")
 		}
+	}
+	if (cfg.m8MembershipProbes == 0) != (cfg.m8MembershipPackLimit == 0) {
+		return config{}, errors.New("-m8-membership-probes and -m8-membership-pack-limit must be supplied together")
 	}
 	if cfg.mode != "" {
 		if cfg.mode != m8ProductionMultiGroupModeV1 || cfg.stage != "simulation" {
@@ -1183,6 +1190,9 @@ func parseConfig(args []string) (config, error) {
 	}
 	if cfg.m8QualityDiagnostics && (cfg.stage != m8ProductionMultiGroupModeV1 || cfg.topK > 10) || cfg.m8QualityTraceQueries < 0 || cfg.m8QualityTraceQueries > m8QualityTraceMaxQueriesV1 || cfg.m8QualityTraceQueries > 0 && !cfg.m8QualityDiagnostics {
 		return config{}, errors.New("quality diagnostics require production_multi_group, top-k <= 10, and a trace sample in [0,8]")
+	}
+	if cfg.m8MembershipProbes != 0 && (cfg.stage != m8ProductionMultiGroupModeV1 || cfg.m8MembershipProbes < 1 || cfg.m8MembershipProbes > 2 || cfg.m8MembershipPackLimit < 1 || cfg.m8MembershipPackLimit > cfg.partitions || cfg.topK > 10 || cfg.m8TruthCache == "" || cfg.m8TruthCacheSHA256 == "" || cfg.m8ExistingDB == "" && len(cfg.m8VariantDBs) == 0) {
+		return config{}, errors.New("membership feasibility requires retained production_multi_group assets, trusted truth cache, top-k <= 10, P in [1,2], and a bounded physical-pack limit")
 	}
 	if cfg.m8ExistingDB != "" && cfg.stage != m8ProductionMultiGroupModeV1 {
 		return config{}, errors.New("-m8-existing-db requires production_multi_group")
@@ -2204,6 +2214,8 @@ type m8BenchmarkWorkPlan struct {
 	MaxMembershipOracleSubsets        int64
 	MembershipOracleSubsetEvaluations int64
 	MembershipOracleWorkUnits         int64
+	MembershipFeasibilityWorkUnits    int64
+	MembershipFeasibilityScratchBytes int64
 	SelectedPartitionSetupWorkUnits   int64
 	AttributionLinearWorkUnits        int64
 	FinalMembershipLinearScans        int64
@@ -2282,6 +2294,22 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 	plan.RouterPolicyDiagnosticWorkUnits, plan.RouterPolicyDiagnosticBytes, err = m8PlanRouterPolicyDiagnosticsV1(cfg, m, oracleDomainCounts, capUnits, capBytes)
 	if err != nil {
 		return plan, err
+	}
+	if cfg.m8MembershipProbes != 0 {
+		for _, domains := range oracleDomainCounts {
+			work, scratch, err := m8MembershipFeasibilityPlanV1(m.Queries, min(cfg.topK, m.Vectors), domains, cfg.m8MembershipProbes)
+			if err != nil {
+				return plan, err
+			}
+			plan.MembershipFeasibilityWorkUnits, err = memoryAdd(plan.MembershipFeasibilityWorkUnits, work)
+			if err != nil {
+				return plan, err
+			}
+			plan.MembershipFeasibilityScratchBytes = max(plan.MembershipFeasibilityScratchBytes, scratch)
+		}
+		if plan.MembershipFeasibilityWorkUnits > capUnits || plan.MembershipFeasibilityScratchBytes > capBytes {
+			return plan, fmt.Errorf("modeled M8 membership feasibility exceeds resource caps: work=%d bytes=%d", plan.MembershipFeasibilityWorkUnits, plan.MembershipFeasibilityScratchBytes)
+		}
 	}
 	var membershipOracleSubsetsPerSweep int64
 	var membershipOracleWorkPerQuerySweep int64
@@ -2431,12 +2459,12 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 	if err != nil {
 		return plan, err
 	}
-	totalDiagnosticWork, err := memoryAdd(plan.AttributionDiagnosticWorkUnits, plan.QualityDiagnosticWorkUnits, plan.RouterPolicyDiagnosticWorkUnits)
+	totalDiagnosticWork, err := memoryAdd(plan.AttributionDiagnosticWorkUnits, plan.QualityDiagnosticWorkUnits, plan.RouterPolicyDiagnosticWorkUnits, plan.MembershipFeasibilityWorkUnits)
 	if err != nil {
 		return plan, err
 	}
-	if cfg.m8QualityDiagnostics && totalDiagnosticWork > capUnits {
-		return plan, fmt.Errorf("M8 combined attribution/quality work %d exceeds %d", totalDiagnosticWork, capUnits)
+	if (cfg.m8QualityDiagnostics || cfg.m8MembershipProbes != 0) && totalDiagnosticWork > capUnits {
+		return plan, fmt.Errorf("M8 combined attribution/diagnostic work %d exceeds %d", totalDiagnosticWork, capUnits)
 	}
 	if plan.AttributionDiagnosticWorkUnits > capUnits {
 		return plan, fmt.Errorf("modeled M8 attribution diagnostics exceed %d-operation cap: truth_results_per_query=%d truth_pairs_per_query=%d attribution_cells=%d max_memberships_per_truth_result=%d selected_partition_setup=%d linear_bookkeeping=%d linear_membership_scans=%d pair_comparisons=%d total=%d", capUnits, cfg.topK, truthPairs, attributionCells, maxFinalMemberships, plan.SelectedPartitionSetupWorkUnits, plan.AttributionLinearWorkUnits, plan.FinalMembershipLinearScans, plan.FinalMembershipPairComparisons, plan.AttributionDiagnosticWorkUnits)
