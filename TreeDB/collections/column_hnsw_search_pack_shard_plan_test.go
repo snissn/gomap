@@ -32,8 +32,8 @@ func TestSearchPackVectorStrideMatchesShardPlanChargeV1(t *testing.T) {
 }
 
 func TestSearchPackFramingFitsShardPlanReserveV1(t *testing.T) {
-	// V3 can carry every adjacency layer plus auxiliary navigation. Charge the
-	// worst directory and worst possible alignment padding for every section.
+	// Historical V3 has the widest valid section directory. Charge its worst
+	// directory and worst possible alignment padding for every section.
 	sections := 8 + 2*int(columnHNSWSearchPackMaxLayersDefault) + 2
 	maxFraming := columnHNSWSearchPackHeaderSizeV2 + sections*columnHNSWSearchPackSectionEntrySize + sections*int(columnHNSWSearchPackVectorSectionAlignment-1)
 	if vectorpartition.PackFixedOverheadBytesV1 < maxFraming {

@@ -70,29 +70,30 @@ Old #4744/#4745 receipts remain historical; neither rebuilding nor changing
 their labels makes them evidence for this revision. R does not change
 memberships or establish the final scaling/recall verdict.
 
-### Canonical partition-local HNSW revision L (#4774)
+### Connectivity-preserving partition-local Vamana revision V (#4787)
 
 Production partition-local search has one graph identity:
-`canonical_hnsw_m18_ef_construction_256`. It uses pack version 5 with initial
-degree `M`, layer-zero reciprocal capacity `2M`, upper-layer capacity `M`, and
-the complete construction search set preserved while descending layers. The
-pack contains only native HNSW topology and normalized FP32 vectors; repair
-edges, auxiliary navigation, external-vector references, and search-time
-ordinal reseeding are not production paths.
+`connectivity_preserving_vamana_r64_l256_alpha_1_2`. It uses pack version 6
+with final out-degree `R=64`, construction search list `L=256`, and two
+deterministic passes at alpha `1.0` then `1.2`. Construction and serving use
+exact FP32 squared L2 over the authoritative normalized vectors. The pack
+contains one flat native graph plus those vectors; separate repair graphs,
+auxiliary navigation, external-vector references, degree filler, and
+search-time ordinal reseeding are not production paths.
 
-Rows are inserted by ascending authoritative source ordinal. A document's
-level is deterministic: hash the XOR of the stable-ID and index-name xxhash64
-values as little-endian uint64, map the top 53 bits into `(0,1)`, take
-`floor(-ln(u)/ln(max(M,2)))`, and cap at 32; a zero final hash maps directly to
-level 32. Construction candidates tie by
-stable ID then native ordinal after distance; the pack is only BFS-remapped for
-locality after construction. Public results tie by stable ID after score.
+The entry is the exact centroid-nearest row with ordinal ties. Each pass uses a
+membership-bound deterministic permutation; GreedySearch returns expanded
+nodes and RobustPrune applies the source-distance/candidate-separation ratio
+directly to stored squared distances. A final degree-preserving native-edge
+swap pass requires every row to be reachable from the entry without increasing
+any row's degree. Public results tie by stable ID after score.
 
 VPM1 version 6 carries each partition asset's explicit graph variant, while the
 READY-promotion ready digest binds the reconstructed VPM1. Open and reopen
-require the canonical identity and pack version; historical or missing
-variants fail closed and require rebuild. Local score budgets cover immutable
-native traversal, deterministic final FP32 rescoring, and live-domain upper and
+require the connectivity-preserving Vamana identity and pack version;
+historical or missing variants fail closed and require rebuild. Local score
+budgets cover immutable
+native beam traversal, deterministic final FP32 rescoring, and live-domain
 layer-zero traversal across base, delta, and resumed passes; an exact scan
 charges only non-excluded rows. No path raises a budget, retries with a larger
 budget, or silently falls back to exact search.

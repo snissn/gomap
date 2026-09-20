@@ -1400,7 +1400,7 @@ func TestVectorPartitionStorageFormatContractDoc(t *testing.T) {
 		"added the membership-digest string between the\nasset checksum and byte length",
 		"version 6 adds the graph-variant string to every asset\nframe",
 		"decoder accepts only version 6",
-		"Canonical partition-local `hnsw_search_pack_v1` assets use wire version 5",
+		"Production partition-local `hnsw_search_pack_v1` assets use wire version 6",
 		"READY promotion payload, distinct from the VPR1 reclaim payload)\nuses ASCII magic `VRP1`, big-endian wire version `4`",
 		"The highest checkpoint epoch is the sole authority",
 		"VPR1 is the bounded, versioned, checksummed reclaim payload",

@@ -19,12 +19,12 @@ const (
 	// pinned by TestSearchPackVectorStrideMatchesShardPlanChargeV1 in
 	// TreeDB/collections.
 	FP32VectorSectionAlignmentBytesV1 = 16
-	// GraphIdentityOverheadPerRowV1 is a fixed per-row charge for HNSW
-	// adjacency, level metadata, and stable identity. It is not derived
+	// GraphIdentityOverheadPerRowV1 is a fixed per-row charge for production
+	// graph adjacency, graph metadata, and stable identity. It is not derived
 	// from host LLC or runtime pack inspection.
 	GraphIdentityOverheadPerRowV1 = 512
 	// PackFixedOverheadBytesV1 reserves format framing that is not attributable
-	// to a row: the V3 header, section directory, and alignment padding. The
+	// to a row: the pack header, section directory, and alignment padding. The
 	// collections format test pins this conservative reserve above the encoder's
 	// maximum framing requirement.
 	PackFixedOverheadBytesV1 = 16 << 10

@@ -1,9 +1,9 @@
 # TreeDB vector partitioning M3
 
-M3 derives optional, bounded ANN memberships and native partition-local HNSW
+M3 derives optional, bounded ANN memberships and native partition-local Vamana
 packs from the immutable M2 disjoint artifact. These are rebuildable search
 assets. They contain stable document IDs, validated FP32 vectors, row
-references, and HNSW topology; they never contain canonical documents or
+references, and graph topology; they never contain canonical documents or
 change `_id` token/Raft ownership.
 
 ## Deterministic overlap
@@ -126,24 +126,26 @@ order equals HNSW row order.
 2. derives a canonical SHA-256 over the partition generation, partition ID,
    and ordered authoritative stable-ID/home-or-overlap membership sequence;
 3. loads authoritative source rows for each home and overlap membership;
-4. constructs a fresh deterministic partition-local HNSW over exactly those
-   members with the production `M=18` / `ef_construction=256` profile;
-5. selects at most `M` outgoing neighbors during insertion, retains the normal
-   `2M` layer-0 / `M` upper-layer reciprocal caps, and descends construction
-   with the full ordered `SEARCH-LAYER` working set rather than one selected
-   neighbor; and
+4. constructs the deterministic two-pass Vamana core over exactly
+   those members: `R=64`, `L=256`, alpha `1.0` then `1.2`, centroid-nearest
+   entry, and two membership-bound permutations;
+5. applies exact squared L2 over the authoritative unit-normalized FP32 rows,
+   caps each RobustPrune pool at 750, inserts reciprocal edges with overflow
+   pruning, then applies deterministic degree-preserving edge swaps until every
+   final row is entry-reachable; and
 6. writes the native `hnsw_search_pack_v1` format through the column asset
    manager only after the actual encoded length exactly matches the preflight
    and remains within the 256 MiB cap.
 
 The returned descriptors are installed in M1's manifest, which binds each
 logical partition to its exact membership digest, graph variant, asset ref,
-length, CRC, and SHA-256. Production partition packs use wire version 5. They
-contain only the canonical native HNSW: no remapped source topology, repair
-pass, auxiliary-navigation CSR, external vector plane, or hidden exact-search
-fallback. Historical version-2 through version-4 and experimental graph
-variants remain offline diagnostics and cannot be published or opened as
-production assets.
+length, CRC, and SHA-256. Production partition packs use wire version 6. They
+contain only the connectivity-preserving Vamana native graph. The reachability
+swaps are part of that one bounded layer; there is no remapped source topology,
+separate repair graph, auxiliary-navigation CSR, external vector plane, or
+hidden exact-search fallback. Historical version-2 through version-5 and
+experimental graph variants remain offline diagnostics and cannot be published
+or opened as production assets.
 
 The column manifest keeps vector-index control state inline. Small records retain
 the existing version-2 encoding; records that would exceed the reserved inline
@@ -154,14 +156,14 @@ unbounded allocation during reopen or command-WAL replay.
 
 `OpenVectorPartitionLocalSearcherForGenerationV1` rechecks that binding after
 database close/reopen, maps or bounded-copies the pack, verifies the source
-identity, recomputed membership set, explicit canonical graph variant, and
-native HNSW header, and holds an M1 generation reader pin until `Close`.
+identity, recomputed membership set, explicit production graph variant, and
+native graph header, and holds an M1 generation reader pin until `Close`.
 Recovery never infers a graph variant from `M`, `ef_construction`, a checksum,
 or a header shape. Missing, corrupt, stale-generation, cross-membership,
 historical-format, or malformed assets fail closed. The manifest encoding is
 version 6; pre-alpha databases using earlier encodings must be rebuilt.
 
-`SearchWithMetrics` uses the no-document native HNSW route. Production version-5
+`SearchWithMetrics` uses the no-document native graph route. Production version-6
 search stops when its native frontier is empty; it never reseeds an unvisited
 ordinal. Callers may supply a strict score-call cap, and metrics report the
 combined native traversal and canonical result-rescore calls alongside

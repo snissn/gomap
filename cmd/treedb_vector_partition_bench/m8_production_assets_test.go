@@ -102,8 +102,8 @@ func TestM8RetainedM3ProvenanceRejectsMixedBuildV1(t *testing.T) {
 
 func TestM8RetainedGraphVariantUsesManifestIdentityV1(t *testing.T) {
 	def := collections.VectorIndexDefinition{M: 16, EfConstruction: 128}
-	descriptor := m3VariantDescriptorV1{PartitionHNSWM: 18, PartitionHNSWEfC: 256}
-	canonical := collections.VectorPartitionLocalGraphVariantCanonicalHNSWM18EfConstruction256V1
+	descriptor := m3VariantDescriptorV1{PartitionHNSWM: 32, PartitionHNSWEfC: 256}
+	canonical := collections.VectorPartitionLocalGraphVariantConnectivityPreservingVamanaR64L256Alpha1_2V1
 	manifest := collections.VectorPartitionManifestV1{Assets: []collections.VectorPartitionAssetV1{{GraphVariant: string(canonical)}, {GraphVariant: string(canonical)}}}
 	got, offline, err := m8RetainedGraphVariantV1(manifest, def, descriptor, false)
 	if err != nil || got != canonical || offline {
@@ -273,7 +273,7 @@ func TestM8ProductionReportRejectsUnexercisedDataGroupV1(t *testing.T) {
 		GeneratedAt: time.Now(), ExecutionID: strings.Repeat("e", 32), Command: []string{"m8-test"}, BaseSHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", HeadSHA: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
 		ExecutableSHA256: strings.Repeat("f", 64),
 		GoVersion:        "go1.test", GOOS: "linux", GOARCH: "amd64", LogicalCPUs: 1, GOMAXPROCS: 1, GoMemoryLimitBytes: 1,
-		Dataset: fixture, Config: m8ProductionConfigEvidenceV1{RaftGroups: 2, RaftNodesPerGroup: 3, Partitions: 4, Probes: []int{4}, Overlap: []float64{0}, TopK: 10, Concurrency: []int{1}, EfSearch: []int{10}, RouterScoreBudget: defaultRouterScoreBudgetV3, LocalScoreBudget: nativewire.DefaultVectorPartitionCoordinatorLimitsV1().MaxLocalScoreCalls, GraphVariant: string(collections.VectorPartitionLocalGraphVariantCanonicalHNSWM18EfConstruction256V1), RouterSemantics: m8RouterSemanticsV4}, BuildNanos: 1,
+		Dataset: fixture, Config: m8ProductionConfigEvidenceV1{RaftGroups: 2, RaftNodesPerGroup: 3, Partitions: 4, Probes: []int{4}, Overlap: []float64{0}, TopK: 10, Concurrency: []int{1}, EfSearch: []int{10}, RouterScoreBudget: defaultRouterScoreBudgetV3, LocalScoreBudget: nativewire.DefaultVectorPartitionCoordinatorLimitsV1().MaxLocalScoreCalls, GraphVariant: string(collections.VectorPartitionLocalGraphVariantConnectivityPreservingVamanaR64L256Alpha1_2V1), RouterSemantics: m8RouterSemanticsV4}, BuildNanos: 1,
 		Topology:       nativewire.VectorPartitionM8ProductionMultiGroupEvidenceV1{Network: "tcp_loopback_serialized_m5_v1", LifecycleState: "active", ReadySetDigest: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", MetaGroup: "meta", MetaLeader: "meta-leader", MetaNodes: []string{"meta-a", "meta-b", "meta-c"}, MaxConcurrentShardRequests: 1, Groups: []nativewire.VectorPartitionM8ProductionGroupEvidenceV1{group("group-a", 1), group("group-b", 1)}},
 		RouterSessions: m8ProductionRouterSessionEvidenceV1{AfterWarmup: []nativewire.VectorPartitionCoordinatorRouterSessionStatsV1{{Identity: nativewire.VectorPartitionCoordinatorRouterSessionIdentityV1{Database: "default", Catalog: "default", Collection: "docs", IndexName: "embedding", IndexDefinitionDigest: "index-digest", SourceGeneration: 1, SourceChecksum: 2, SourceSchemaHash: 3, SourceRowCount: 4, PartitionGeneration: 5, ReadySetDigest: "ready-digest", RouterModelDigest: "model-digest"}, ColdOpens: 1, ManifestOpenAttempts: 1, Misses: 1, ReaderPins: 1, LeasePins: 1, LeaseReleases: 1}}, AfterMeasured: []nativewire.VectorPartitionCoordinatorRouterSessionStatsV1{{Identity: nativewire.VectorPartitionCoordinatorRouterSessionIdentityV1{Database: "default", Catalog: "default", Collection: "docs", IndexName: "embedding", IndexDefinitionDigest: "index-digest", SourceGeneration: 1, SourceChecksum: 2, SourceSchemaHash: 3, SourceRowCount: 4, PartitionGeneration: 5, ReadySetDigest: "ready-digest", RouterModelDigest: "model-digest"}, ColdOpens: 1, ManifestOpenAttempts: 1, Misses: 1, ReaderPins: 1, Hits: uint64(fixture.Queries), LeasePins: uint64(fixture.Queries) + 1, LeaseReleases: uint64(fixture.Queries) + 1}}},
 		Rows: []m8ProductionRowV1{{Status: "pass", Probes: 4, EfSearch: 10, Concurrency: 1, Samples: fixture.Queries, RecallAtK: 1, QPS: 1, P50Nanos: 1, P95Nanos: 2, P99Nanos: 3, MaxTotalNanos: 4, RouterMode: collections.VectorPartitionRouterModeApproxV1, RouterScoreBudget: defaultRouterScoreBudgetV3, LocalScoreCalls: uint64(fixture.Queries), MaxLocalScoreCalls: 1, ExactParityChecked: true, ExactParityPassed: true, NoPartialResults: true, Attribution: m8ProductionAttributionV1{
@@ -738,7 +738,7 @@ func TestM8PartitionPackDiagnosticsFailClosedV1(t *testing.T) {
 		{PartitionID: 0, Rows: 3, ReachableRows: 3, TraversalRoots: 1, RowsByLayer: []uint64{3}, EdgesByLayer: []uint64{6}, Layer0DegreeLimit: 2, Layer0SaturatedRows: 3, Layer0ReciprocalEdges: 4, Layer0ReciprocalRatio: 4.0 / 6.0, Layer0Distances: distance(6), CombinedReachableRows: 3},
 		{PartitionID: 1, Rows: 2, ReachableRows: 1, TraversalRoots: 2, MaxLayer: 1, RowsByLayer: []uint64{2, 1}, EdgesByLayer: []uint64{2, 0}, Layer0DegreeLimit: 1, Layer0SaturatedRows: 2, Layer0ReciprocalEdges: 2, Layer0ReciprocalRatio: 1, Layer0Distances: distance(2), AuxiliaryEdges: 2, AuxiliaryCSRBytes: 32, AuxiliaryMaxDegree: 1, AuxiliaryDistances: distance(2), CombinedReachableRows: 2},
 	}
-	if !validM8PartitionPackDiagnosticsV1(valid, 2, []uint64{3, 2}) {
+	if !validM8PartitionPackDiagnosticsV1(valid, 2, []uint64{3, 2}, "") {
 		t.Fatal("rejected complete native-plus-auxiliary diagnostics")
 	}
 	for name, diagnostics := range map[string][]m8PartitionPackDiagnosticsV1{
@@ -776,17 +776,36 @@ func TestM8PartitionPackDiagnosticsFailClosedV1(t *testing.T) {
 		}()},
 	} {
 		t.Run(name, func(t *testing.T) {
-			if validM8PartitionPackDiagnosticsV1(diagnostics, 2, []uint64{3, 2}) {
+			if validM8PartitionPackDiagnosticsV1(diagnostics, 2, []uint64{3, 2}, "") {
 				t.Fatalf("accepted %s diagnostics: %+v", name, diagnostics)
 			}
 		})
+	}
+	vamana := []m8PartitionPackDiagnosticsV1{testM8NativePackDiagnosticsV1(0, 3), testM8NativePackDiagnosticsV1(1, 2)}
+	graphVariant := string(collections.VectorPartitionLocalGraphVariantConnectivityPreservingVamanaR64L256Alpha1_2V1)
+	if !validM8PartitionPackDiagnosticsV1(vamana, 2, []uint64{3, 2}, graphVariant) {
+		t.Fatal("rejected Vamana diagnostics with the declared R64 degree")
+	}
+	vamanaWithAuxiliary := append([]m8PartitionPackDiagnosticsV1(nil), vamana...)
+	vamanaWithAuxiliary[1].ReachableRows = 1
+	vamanaWithAuxiliary[1].TraversalRoots = 2
+	vamanaWithAuxiliary[1].AuxiliaryEdges = 2
+	vamanaWithAuxiliary[1].AuxiliaryCSRBytes = 32
+	vamanaWithAuxiliary[1].AuxiliaryMaxDegree = 1
+	vamanaWithAuxiliary[1].AuxiliaryDistances = distance(2)
+	if validM8PartitionPackDiagnosticsV1(vamanaWithAuxiliary, 2, []uint64{3, 2}, graphVariant) {
+		t.Fatal("accepted Vamana diagnostics that rely on auxiliary reachability")
+	}
+	vamana[0].Layer0DegreeLimit = 16
+	if validM8PartitionPackDiagnosticsV1(vamana, 2, []uint64{3, 2}, graphVariant) {
+		t.Fatal("accepted stale M16 diagnostics for the declared R64 Vamana graph")
 	}
 }
 
 func testM8NativePackDiagnosticsV1(partition uint32, rows uint64) m8PartitionPackDiagnosticsV1 {
 	return m8PartitionPackDiagnosticsV1{
 		PartitionID: partition, Rows: rows, ReachableRows: rows, TraversalRoots: 1,
-		RowsByLayer: []uint64{rows}, EdgesByLayer: []uint64{0}, Layer0DegreeLimit: 16,
+		RowsByLayer: []uint64{rows}, EdgesByLayer: []uint64{0}, Layer0DegreeLimit: 64,
 		CombinedReachableRows: rows,
 	}
 }

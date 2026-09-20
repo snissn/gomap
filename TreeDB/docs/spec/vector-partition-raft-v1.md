@@ -575,8 +575,9 @@ both the ready-set and whole-record integrity digests bind that mapping. Version
 5 extends each representative mapping with a nonzero represented-node ID.
 Version 6 adds an explicit graph variant to every asset descriptor. Router
 assets use an empty variant; partition-local assets require a recognized
-variant. The production `canonical_hnsw_m18_ef_construction_256` variant uses
-pack version 5 and fails closed on missing or different identity.
+variant. The production
+`connectivity_preserving_vamana_r64_l256_alpha_1_2` variant uses pack version 6
+and fails closed on missing or different identity.
 Representative mappings are canonical by logical domain and node ID; source
 ordinals remain provenance and may repeat for distinct nodes in one domain.
 

@@ -119,8 +119,8 @@ profile paths, limitations, and an explicit gate ledger. CPU, allocation
 baseline/final, heap, block, mutex, and execution trace profiles cover the
 measured query cells plus the unavailable-endpoint fault.
 
-The checked-in 10k path materializes persistent HNSW packs for CI. The retained
-1M path reuses graph-built M3/M5 packs. `-m8-variant-dbs` requires exactly three
+The checked-in 10k path materializes persistent production graph packs for CI.
+The retained 1M path reuses graph-built M3/M5 packs. `-m8-variant-dbs` requires exactly three
 distinct immutable descriptors and executes them sequentially, one fresh OS
 process per variant so process peak RSS is attributable to that variant.
 Preflight planning applies the memory cap to one child's complete peak and
@@ -153,8 +153,8 @@ substituting a disjoint row. Useful-only overlap may leave requested capacity
 unused, but every realized extra membership must have positive cut reduction,
 no filler is accepted, and storage remains gated. Exact correctness is owned by canonical source truth
 versus the exhaustive exact partition union;
-the router, partition-local HNSW, transport, and coordinator merge retain
-separate recall/parity attribution. Approximate HNSW recall is judged by the
+the router, partition-local graph search, transport, and coordinator merge retain
+separate recall/parity attribution. Approximate local graph recall is judged by the
 declared recall gate and is never described as exact exhaustive parity.
 The matrix may pass its coupled graph-acceptance gate only when one graph
 variant at one `(probes, ef_search, concurrency)` operating point passes recall,

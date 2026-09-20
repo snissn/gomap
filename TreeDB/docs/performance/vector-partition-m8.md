@@ -536,9 +536,9 @@ decode/validation/digest reconstruction per shard request while preserving
 generation and integrity guarantees. Overlap materialization and stable-hash
 attribution remain separately deferred.
 
-## Canonical partition-local HNSW readiness (#4744)
+## Historical canonical partition-local HNSW readiness (#4744)
 
-Production materialization now builds one explicit
+The superseded #4744 materialization built one explicit
 `canonical_hnsw_m18_ef_construction_256` partition-local graph. Its construction
 uses the standard `M` outgoing selection, `2M` layer-0 / `M` upper reciprocal
 caps, and preserves the full descending `SEARCH-LAYER` working set. It emits a
@@ -546,7 +546,9 @@ membership-bound version-5 native pack with no repair/auxiliary topology and no
 ordinal reseed when the query frontier empties. Manifest version 6 records the
 graph variant explicitly; publication, recovery, and production open reject
 historical or mixed variants instead of inferring identity from matching
-parameters.
+parameters. The corrected retained structured250K result reached recall@10
+`0.9072` at P2/EF96 with routed truth availability `1.0`; #4787 therefore
+replaced this profile rather than tuning it.
 
 The existing M8 producer now emits report/transcript schema 7, binding that
 exact graph identity and the local score-call budget, records total and
@@ -555,6 +557,21 @@ calls, and validates them against the configured cap. This is harness
 readiness, not retained evidence: the structured-250K, full-query `P<=2`, `EF<=96`,
 recall@10 `>=0.95` gate must run only from the reviewed landed product and
 harness identity.
+
+## Connectivity-preserving partition-local Vamana qualification (#4787)
+
+Production materialization now uses
+`connectivity_preserving_vamana_r64_l256_alpha_1_2`: pack version 6, `R=64`,
+`L=256`, alpha `1.0` then `1.2`, and a degree-preserving entry-reachability
+pass. The exact-head structured250K retained qualification at
+`eb4e754f81f114dd31110f772eee7501a38e25ce` searched all 1,000 queries and
+reached recall@10 `0.9816` at both concurrency 1 and 32 with routed truth
+availability `1.0`. All 250,000 rows were entry-reachable; 16 packs occupied
+207,241,896 durable bytes, maximum load was 15,668 under the 18,750 bound, and
+the measured M8 peak was 1,188,319,232 bytes with zero swap I/O. Exact-union,
+canonical-score, failure-honesty, replay, and concurrency-invariance gates
+passed. This qualifies the local graph only; membership feasibility and the
+final scaling decision remain with #4775 and #4753.
 
 ## Opt-in graph-quality attribution (#4744)
 

@@ -54,7 +54,7 @@ const (
 	maxSourceHNSWDegree                     = partitionHNSWDegree
 	maxPartitionLocalHNSWM                  = 32
 	partitionHNSWDefaultEfC                 = 128
-	partitionLocalHNSWDefaultM              = 18
+	partitionLocalHNSWDefaultM              = 32
 	partitionLocalHNSWDefaultEfC            = 256
 	maxPartitionHNSWEfC                     = 4_096
 	fixtureGenerator                        = "treedb_vector_partition_fixture_v2"
@@ -1016,8 +1016,8 @@ func parseConfig(args []string) (config, error) {
 	fs.IntVar(&cfg.partition.Pivots, "partition-pivots", cfg.partition.Pivots, "dense-ball pivots per recursive level")
 	fs.IntVar(&cfg.partition.MaxLeafBucket, "partition-max-leaf-bucket", cfg.partition.MaxLeafBucket, "maximum dense-ball leaf bucket")
 	fs.IntVar(&cfg.partition.Degree, "partition-degree", cfg.partition.Degree, "maximum canonical graph degree")
-	fs.IntVar(&cfg.partitionHNSWM, "partition-hnsw-m", 0, "persistent partition-local HNSW M for M3; zero inherits 18")
-	fs.IntVar(&cfg.partitionHNSWEfC, "partition-hnsw-ef-construction", 0, "persistent partition-local HNSW efConstruction for M3; zero inherits 256")
+	fs.IntVar(&cfg.partitionHNSWM, "partition-hnsw-m", 0, "partition-local graph compatibility M for M3; zero inherits 32 (Vamana R=64)")
+	fs.IntVar(&cfg.partitionHNSWEfC, "partition-hnsw-ef-construction", 0, "partition-local graph compatibility construction width for M3; zero inherits 256 (Vamana L=256)")
 	fs.Float64Var(&cfg.partition.Imbalance, "imbalance", cfg.partition.Imbalance, "partition imbalance epsilon")
 	fs.IntVar(&cfg.routerConfig.BranchFactor, "router-branch-factor", cfg.routerConfig.BranchFactor, "router hierarchical k-means branch factor")
 	fs.IntVar(&cfg.routerConfig.LeafSize, "router-leaf-size", cfg.routerConfig.LeafSize, "router leaf stop size")
@@ -1406,10 +1406,10 @@ func m3PartitionLocalHNSWConfigV1(cfg config) (int, int, error) {
 }
 
 func m3PartitionLocalGraphVariantV1(m, efConstruction int) (collections.VectorPartitionLocalGraphVariantV1, error) {
-	if m == 18 && efConstruction == 256 {
-		return collections.VectorPartitionLocalGraphVariantCanonicalHNSWM18EfConstruction256V1, nil
+	if m == 32 && efConstruction == 256 {
+		return collections.VectorPartitionLocalGraphVariantConnectivityPreservingVamanaR64L256Alpha1_2V1, nil
 	}
-	return "", fmt.Errorf("unsupported production partition-local HNSW M/efConstruction=%d/%d", m, efConstruction)
+	return "", fmt.Errorf("unsupported production partition-local graph compatibility M/L=%d/%d", m, efConstruction)
 }
 
 func m3PartitionLocalOfflineGraphVariantV1(m, efConstruction int) (collections.VectorPartitionLocalGraphVariantV1, error) {
@@ -1417,6 +1417,8 @@ func m3PartitionLocalOfflineGraphVariantV1(m, efConstruction int) (collections.V
 		return variant, nil
 	}
 	switch {
+	case m == 18 && efConstruction == 256:
+		return collections.VectorPartitionLocalGraphVariantCanonicalHNSWM18EfConstruction256V1, nil
 	case m == 16 && efConstruction == 128:
 		return collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationV1, nil
 	case m == 16 && efConstruction == 256:
@@ -1429,8 +1431,6 @@ func m3PartitionLocalOfflineGraphVariantV1(m, efConstruction int) (collections.V
 		return collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM22EfConstruction256V1, nil
 	case m == 24 && efConstruction == 256:
 		return collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM24EfConstruction256V1, nil
-	case m == 32 && efConstruction == 256:
-		return collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM32EfConstruction256V1, nil
 	default:
 		return "", fmt.Errorf("unsupported offline partition-local HNSW M/efConstruction=%d/%d", m, efConstruction)
 	}
