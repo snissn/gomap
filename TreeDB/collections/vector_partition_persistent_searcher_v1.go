@@ -1394,6 +1394,10 @@ func decodeVectorPartitionMembershipDigestV1(raw string) ([sha256.Size]byte, err
 }
 
 func (c *Collection) validateVectorPartitionAssetMembershipBindingsV1(manifest VectorPartitionManifestV1) error {
+	return c.validateVectorPartitionAssetMembershipBindingsForGraphVariantV1(manifest, VectorPartitionLocalGraphVariantCanonicalHNSWM18EfConstruction256V1)
+}
+
+func (c *Collection) validateVectorPartitionAssetMembershipBindingsForGraphVariantV1(manifest VectorPartitionManifestV1, expectedGraphVariant VectorPartitionLocalGraphVariantV1) error {
 	hasNative := false
 	for _, asset := range manifest.Assets {
 		if asset.ID == vectorPartitionLocalAssetIDV1(asset.PartitionID) {
@@ -1429,8 +1433,8 @@ func (c *Collection) validateVectorPartitionAssetMembershipBindingsV1(manifest V
 		if _, identityErr := VectorPartitionLocalGraphVariantIdentityV1(variant); identityErr != nil || vectorPartitionLocalGraphVariantMembershipDigestV1(want, variant) != got {
 			return fmt.Errorf("%w: descriptor membership digest mismatch partition=%d", ErrVectorPartitionSearchUnavailable, asset.PartitionID)
 		}
-		if variant != VectorPartitionLocalGraphVariantCanonicalHNSWM18EfConstruction256V1 {
-			return fmt.Errorf("%w: noncanonical production graph variant=%s", ErrVectorPartitionSearchUnavailable, variant)
+		if variant != expectedGraphVariant {
+			return fmt.Errorf("%w: graph variant=%s want=%s", ErrVectorPartitionSearchUnavailable, variant, expectedGraphVariant)
 		}
 		if asset.Ref.Kind != ColumnAssetKindTCS1HNSWSearchPack || asset.Ref.Length <= 0 || asset.Ref.Length > vectorPartitionSearchAssetMaxBytesV1 {
 			return fmt.Errorf("%w: native membership asset ref partition=%d", ErrVectorPartitionSearchUnavailable, asset.PartitionID)

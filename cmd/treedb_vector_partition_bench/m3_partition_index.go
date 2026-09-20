@@ -516,14 +516,24 @@ func benchmarkM3PartitionIndexRow(cfg config, fixture fixtureManifest, artifactD
 	}
 	manifest.Assets = assets
 	manifest.Canonicalize()
-	if err := col.PublishVectorPartitionManifestV1(manifest, nil); err != nil {
+	if cfg.m3FinalOfflineGraph {
+		err = col.PublishVectorPartitionManifestForOfflineAssetVariantV1(manifest, nil, localVariant)
+	} else {
+		err = col.PublishVectorPartitionManifestV1(manifest, nil)
+	}
+	if err != nil {
 		return m3PartitionIndexRow{}, err
 	}
 	routerFileID, err := m3RouterAssetFileID(generation)
 	if err != nil {
 		return m3PartitionIndexRow{}, err
 	}
-	routerStatus, err := col.BuildAndPublishVectorPartitionRouterV1(context.Background(), manifest, routerPartitions, m3RouterBuildOptionsV1(cfg.routerConfig, routerFileID, uint64(manifest.PartitionCount)+1))
+	var routerStatus collections.VectorPartitionRouterBuildStatusV1
+	if cfg.m3FinalOfflineGraph {
+		routerStatus, err = col.BuildAndPublishVectorPartitionRouterForOfflineAssetVariantV1(context.Background(), manifest, routerPartitions, m3RouterBuildOptionsV1(cfg.routerConfig, routerFileID, uint64(manifest.PartitionCount)+1), localVariant)
+	} else {
+		routerStatus, err = col.BuildAndPublishVectorPartitionRouterV1(context.Background(), manifest, routerPartitions, m3RouterBuildOptionsV1(cfg.routerConfig, routerFileID, uint64(manifest.PartitionCount)+1))
+	}
 	if err != nil {
 		return m3PartitionIndexRow{}, err
 	}

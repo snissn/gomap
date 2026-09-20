@@ -310,6 +310,7 @@ func openM8ProductionExistingAssetSetModeV1(dir string, readOnly bool) (_ *m8Pro
 	}
 	h.status = h.router.Status()
 	h.manifest = h.status.Manifest
+	h.graphVariant = collections.VectorPartitionLocalGraphVariantV1(m8ManifestGraphVariantV1(h.manifest))
 	return h, nil
 }
 
