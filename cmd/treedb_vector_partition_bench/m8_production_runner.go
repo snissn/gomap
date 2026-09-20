@@ -4148,7 +4148,8 @@ func m8ProductionGateValuesV1(ledger m8ProductionGateLedgerV1) []string {
 // structurally readable older pack can still contain disconnected directed
 // layer-0 components, so every configured partition must be reported exactly
 // once as either a fully reachable native pack or a fully reachable V3
-// native-plus-auxiliary pack.
+// native-plus-auxiliary pack. Vamana packs must be natively entry-reachable;
+// auxiliary repair is not part of their declared topology.
 func validM8PartitionPackDiagnosticsV1(diagnostics []m8PartitionPackDiagnosticsV1, partitions int, loads []uint64, graphVariant string) bool {
 	if partitions < 1 || len(diagnostics) != partitions || len(loads) != partitions {
 		return false
@@ -4182,6 +4183,9 @@ func validM8PartitionPackDiagnosticsV1(diagnostics []m8PartitionPackDiagnosticsV
 		}
 		nativeReachable := diagnostic.ReachableRows == diagnostic.Rows && diagnostic.TraversalRoots == 1
 		auxiliaryPresent := diagnostic.AuxiliaryEdges != 0 || diagnostic.AuxiliaryCSRBytes != 0 || diagnostic.AuxiliaryMaxDegree != 0
+		if expectedLayer0Degree != 0 && (!nativeReachable || auxiliaryPresent) {
+			return false
+		}
 		if auxiliaryPresent {
 			maxUint64 := ^uint64(0)
 			if diagnostic.Rows == maxUint64 || diagnostic.Rows+1 > maxUint64/8 || diagnostic.AuxiliaryEdges > maxUint64/4 ||

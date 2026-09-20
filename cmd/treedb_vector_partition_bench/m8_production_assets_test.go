@@ -786,6 +786,16 @@ func TestM8PartitionPackDiagnosticsFailClosedV1(t *testing.T) {
 	if !validM8PartitionPackDiagnosticsV1(vamana, 2, []uint64{3, 2}, graphVariant) {
 		t.Fatal("rejected Vamana diagnostics with the declared R64 degree")
 	}
+	vamanaWithAuxiliary := append([]m8PartitionPackDiagnosticsV1(nil), vamana...)
+	vamanaWithAuxiliary[1].ReachableRows = 1
+	vamanaWithAuxiliary[1].TraversalRoots = 2
+	vamanaWithAuxiliary[1].AuxiliaryEdges = 2
+	vamanaWithAuxiliary[1].AuxiliaryCSRBytes = 32
+	vamanaWithAuxiliary[1].AuxiliaryMaxDegree = 1
+	vamanaWithAuxiliary[1].AuxiliaryDistances = distance(2)
+	if validM8PartitionPackDiagnosticsV1(vamanaWithAuxiliary, 2, []uint64{3, 2}, graphVariant) {
+		t.Fatal("accepted Vamana diagnostics that rely on auxiliary reachability")
+	}
 	vamana[0].Layer0DegreeLimit = 16
 	if validM8PartitionPackDiagnosticsV1(vamana, 2, []uint64{3, 2}, graphVariant) {
 		t.Fatal("accepted stale M16 diagnostics for the declared R64 Vamana graph")
