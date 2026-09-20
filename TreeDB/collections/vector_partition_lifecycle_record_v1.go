@@ -23,7 +23,7 @@ const (
 	vectorPartitionLifecycleMaxBytesV1 = 64 << 20
 
 	vectorPartitionReadyPromotionMagicV1   = "VRP1"
-	vectorPartitionReadyPromotionVersionV1 = 3
+	vectorPartitionReadyPromotionVersionV1 = 4
 	// A promotion carries one router asset, the generation's computed
 	// representative mapping, and fixed-size digests. The mapping remains
 	// bounded below the lifecycle/store caps and avoids retaining a second full
@@ -137,10 +137,10 @@ func encodeVectorPartitionReadyPromotionCanonicalV1(p vectorPartitionReadyPromot
 	}
 	limits := DefaultVectorPartitionManifestLimits()
 	a := p.RouterAsset
-	// Fixed fields, six string lengths, representative/asset counts, and digest.
-	// V3 representatives carry 16 bytes, including the durable represented node.
-	encodedBytes := uint64(204) + 16*uint64(len(p.Representatives))
-	for _, s := range []string{p.ReadySetDigest, a.ID, a.Checksum, a.MembershipDigest, string(a.Ref.Kind), a.Ref.Namespace} {
+	// Fixed fields, seven string lengths, representative/asset counts, and digest.
+	// V3+ representatives carry 16 bytes, including the durable represented node.
+	encodedBytes := uint64(208) + 16*uint64(len(p.Representatives))
+	for _, s := range []string{p.ReadySetDigest, a.ID, a.Checksum, a.MembershipDigest, a.GraphVariant, string(a.Ref.Kind), a.Ref.Namespace} {
 		if len(s) > limits.MaxStringBytes {
 			return nil, fmt.Errorf("%w: ready promotion string cap", ErrVectorPartitionManifestInvalid)
 		}

@@ -1385,16 +1385,10 @@ func m3PartitionLocalHNSWConfigV1(cfg config) (int, int, error) {
 }
 
 func m3PartitionLocalGraphVariantV1(m, efConstruction int) (collections.VectorPartitionLocalGraphVariantV1, error) {
-	switch {
-	case m == 16 && efConstruction == 128:
-		return collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationV1, nil
-	case m == 18 && efConstruction == 256:
-		return collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1, nil
-	case m == 20 && efConstruction == 256:
-		return collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM20EfConstruction256V1, nil
-	default:
-		return "", fmt.Errorf("unsupported production partition-local HNSW M/efConstruction=%d/%d", m, efConstruction)
+	if m == 18 && efConstruction == 256 {
+		return collections.VectorPartitionLocalGraphVariantCanonicalHNSWM18EfConstruction256V1, nil
 	}
+	return "", fmt.Errorf("unsupported production partition-local HNSW M/efConstruction=%d/%d", m, efConstruction)
 }
 
 func m3PartitionLocalOfflineGraphVariantV1(m, efConstruction int) (collections.VectorPartitionLocalGraphVariantV1, error) {
@@ -1402,10 +1396,14 @@ func m3PartitionLocalOfflineGraphVariantV1(m, efConstruction int) (collections.V
 		return variant, nil
 	}
 	switch {
+	case m == 16 && efConstruction == 128:
+		return collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationV1, nil
 	case m == 16 && efConstruction == 256:
 		return collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationEfConstruction256V1, nil
 	case m == 16 && efConstruction == 512:
 		return collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationEfConstruction512V1, nil
+	case m == 20 && efConstruction == 256:
+		return collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM20EfConstruction256V1, nil
 	case m == 22 && efConstruction == 256:
 		return collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM22EfConstruction256V1, nil
 	case m == 24 && efConstruction == 256:

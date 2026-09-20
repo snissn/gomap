@@ -68,6 +68,7 @@ type vectorIndexNativeSearchState struct {
 
 type vectorIndexNativeSearchWork struct {
 	queryPreparations      int
+	scoreCalls             int
 	baseVisited            int
 	deltaPasses            int
 	deltaRetries           int
@@ -402,8 +403,15 @@ func (c *Collection) nativeVectorIndexMutationActive() bool {
 }
 
 func (view *vectorIndexSearchView) searchGraphOnlyWithBuffer(query []float32, topK, efSearch int, buffer *VectorIndexSearchBuffer) ([]VectorIndexSearchResult, error) {
+	return view.searchGraphOnlyWithScoreBudget(query, topK, efSearch, 0, buffer)
+}
+
+func (view *vectorIndexSearchView) searchGraphOnlyWithScoreBudget(query []float32, topK, efSearch, maxScoreCalls int, buffer *VectorIndexSearchBuffer) ([]VectorIndexSearchResult, error) {
 	if view == nil {
 		return nil, errors.New("collections: vector index search view is unavailable")
+	}
+	if maxScoreCalls < 0 {
+		return nil, errors.New("collections: vector index search score budget must not be negative")
 	}
 	if !view.sourceDocumentRootsValid {
 		return nil, fmt.Errorf("%w: native_runtime vector index %q does not cover current documents", ErrVectorIndexSearchUnavailable, view.name)
@@ -423,6 +431,13 @@ func (view *vectorIndexSearchView) searchGraphOnlyWithBuffer(query []float32, to
 		buffer.nativeSearchWork = vectorIndexNativeSearchWork{}
 		buffer.nativeSearchWork.queryPreparations = 1
 	}
+	buffer.nativeSearchScratch.startScoreTracking(maxScoreCalls)
+	defer func() {
+		if buffer.nativeSearchWorkEnabled {
+			buffer.nativeSearchWork.scoreCalls = buffer.nativeSearchScratch.scoreCalls
+		}
+		buffer.nativeSearchScratch.stopScoreTracking()
+	}()
 	if len(view.deltaNodes) == 0 {
 		results, err := searchVectorIndexViewPlane(query, queryNorm, prepared, topK, efSearch, view.nodes, view.entry, view.maxLevel, view.liveDocs, view, &buffer.nativeSearchScratch, &buffer.results, &buffer.idBytes)
 		if buffer.nativeSearchWorkEnabled {

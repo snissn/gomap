@@ -22,14 +22,13 @@ Root-to-node entries persist node ID, population, subtree budget and true
 leaf/internal kind. Centers remain in the native HNSW FP32 plane; records bind
 their canonical model digest.
 
-Partition manifest binary version 5 stores 16-byte representative mappings:
+Partition manifest binary version 6 stores 16-byte representative mappings:
 source ordinal (8 bytes), logical domain (4), represented node (4). Source
 ordinal is provenance, not uniqueness. Membership records remain 12 bytes.
-READY-promotion payload version 3 uses the same representative mapping; neither
-that payload nor manifest version 5 changes for router v3 because the encoded
-mapping shape is unchanged. The enclosing lifecycle record version is also
-unchanged. Old router versions fail closed and require an asset rebuild; there
-is no mixed-format migration path.
+Every partition-local asset descriptor also carries an explicit graph
+variant. READY-promotion payload version 4 uses the same representative mapping
+and graph-variant-bearing asset frame. Old versions fail closed and require an
+asset rebuild; there is no mixed-format migration path.
 Generation publication, reader pins and reachable asset/value-log retention
 are unchanged. See [the router contract](vector-partition-v1-contract.md).
 
@@ -135,9 +134,9 @@ batches, applies the 4,096-entry cap to all names, and verifies the ranges,
 CRC32 values, and SHA-256 digests of every asset referenced by a non-deleting
 manifest before replacing the target namespace.
 
-VPM1 uses big-endian magic `0x56504d31` and wire version `5`, bounded
+VPM1 uses big-endian magic `0x56504d31` and wire version `6`, bounded
 length-prefixed fields and lists, one (exactly one) router-asset frame,
-canonical ordering, and an integrity digest. Version 5 has this fixed,
+canonical ordering, and an integrity digest. Version 6 has this fixed,
 untagged order:
 
 1. magic and `uint32` version;
@@ -160,31 +159,29 @@ repeat within a domain, while the node ID distinguishes retained hierarchy
 nodes. Every physical pack belongs to exactly one nonempty domain, while a
 domain may require one or more packs. Every asset
 descriptor is a physical pack ID; length-prefixed logical ID,
-SHA-256 checksum, and optional membership digest; a `uint64` byte length; and
+SHA-256 checksum, optional membership digest, and graph variant; a `uint64` byte length; and
 a `ColumnAssetRef` containing length-prefixed kind/namespace, `uint64`
 generation/part ID, `uint32` file ID, `uint64` offset/length, and `uint32`
 CRC, in that order. Version 3 added the membership-digest string between the
 asset checksum and byte length; version 4 adds the domain-pack mapping, and
 version 5 extends each representative mapping from 12 to 16 bytes with the
-represented-node ID.
+represented-node ID, and version 6 adds the graph-variant string to every asset
+frame. Router assets use an empty variant; partition-local assets require a
+recognized explicit variant.
 Native partition HNSW assets require that SHA-256 digest; it binds the
 generation, partition, ordered authoritative stable IDs, and home/overlap
 membership kinds. There are no optional tagged fields and this pre-alpha
-decoder accepts only version 5; older directories require rebuild rather than
+decoder accepts only version 6; older directories require rebuild rather than
 migration.
 
-Partition-local `hnsw_search_pack_v1` assets use wire version 3 when rebuilt
-with the reachability repair. Version 3 retains the version-2 176-byte header
-and required membership digest, then adds exactly two checksum-covered CSR
-sections for auxiliary offsets and neighbors. The auxiliary CSR is present even
-when empty and must exactly contain the deterministic branching-factor-eight
-tree over native layer-0 directed-reachability roots (entry component first),
-plus one directed edge from every non-root row with a persisted upper HNSW
-level to its component root. Those seed anchors preserve ordinary upper-layer
-descent before layer-0 reaches the component bridge. Its ordinals, offsets,
-tree bridges, seed anchors, degree cap, edge total, source identity, and
-membership binding validate before a reader exposes a prepared view.
-Versions 1 and 2 retain their existing layouts and have no auxiliary channel.
+Canonical partition-local `hnsw_search_pack_v1` assets use wire version 5.
+Version 5 retains the version-2 176-byte header and required membership digest,
+fixes `M=18` and `ef_construction=256`, and contains only the native HNSW
+topology and embedded normalized FP32 vectors. Repair edges, auxiliary CSR,
+external-vector references, and search-time ordinal reseeding are forbidden.
+Versions 1 through 3 are historical offline formats; version 4 remains the
+non-partitioned topology-only column-graph format. Production partition opens
+require the explicit version-5 graph variant and fail closed otherwise.
 
 The non-partitioned `column_graph` pack uses wire version 4 for
 `cosine_normalized_f32_v1`. Version 4 is topology-only: it omits the normalized
@@ -212,7 +209,7 @@ closed. TreeDB is pre-alpha, so new M3 evidence directories may require
 rebuilding when this identity is required.
 
 VRP1 (the READY promotion payload, distinct from the VPR1 reclaim payload)
-uses ASCII magic `VRP1`, big-endian wire version `3`, and this fixed,
+uses ASCII magic `VRP1`, big-endian wire version `4`, and this fixed,
 untagged order:
 
 1. magic, `uint32` version, and `uint64` generation;
@@ -229,7 +226,8 @@ The payload is capped at 16 MiB. Generation/router identity, digests, mapping
 order and bounds, the single router asset, trailing bytes, and canonical
 re-encoding are validated before the promotion is applied. Version 2 added the
 representative mapping needed to reconstruct the ready manifest exactly;
-version 3 adds its durable represented-node ID.
+version 3 adds its durable represented-node ID; version 4 adds the graph variant
+to the router asset frame (which must be empty for that nonlocal asset).
 Current pre-alpha readers reject older VRP1 versions; rebuild old DB
 directories instead of migrating in place.
 

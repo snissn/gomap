@@ -34,7 +34,7 @@ func TestVectorPartitionShardSearchTCPBinaryFrameRoundTripV1(t *testing.T) {
 		ValidThroughUnixNano: 7, TargetGroupID: "group-a", GroupAppliedIndex: 8, MAC: "mac",
 	}
 	response := VectorPartitionShardSearchResponseV1{
-		Version: 1, RequestID: request.RequestID,
+		Version: VectorPartitionShardSearchVersionV1, RequestID: request.RequestID,
 		Proof:      VectorPartitionShardSearchProofV1{Kind: "read_index", ServingNode: "node-a", LeaderNode: "node-b", GroupID: "group-a", ReadySetDigest: "ready", ServingIdentityDigest: "identity", ReadTerm: 1, ReadIndex: 2, AppliedTerm: 3, AppliedIndex: 4, CatalogAppliedIndex: 5, GroupAppliedIndex: 6, SourceGeneration: 7, SourceChecksum: 8, SourceSchemaHash: 9, SourceRowCount: 10, PartitionGeneration: 11, RouterGeneration: 12},
 		Partials:   []VectorPartitionShardSearchPartialV1{{PartitionID: 3, Neighbors: []VectorPartitionShardSearchNeighborV1{{ID: "doc", Score: 0.5}}, Candidates: 13, Edges: 14, SearchRoute: "hnsw", PackBytes: 15, MappedBytes: 16, HeapBytes: 17, OpenNanos: 18}},
 		Partitions: 1, ReadProofs: 2, GenerationPins: 3, PartitionOpens: 4, Candidates: 5, Edges: 6, ResponseBytes: 7,
@@ -66,7 +66,7 @@ func TestVectorPartitionShardSearchTCPBinaryFrameRoundTripV1(t *testing.T) {
 	frames := []vectorPartitionShardSearchTCPFrameV1{
 		{Request: &request}, {Response: &response}, {Error: &vectorPartitionShardSearchTCPErrorV1{Code: VectorPartitionShardSearchErrorNotLeaderV1, GroupID: "group-a", LeaderHint: "node-b", Message: "moved"}}, {Probe: &vectorPartitionShardEndpointProbeV1{Version: 1}}, {ProbeResponse: &identity},
 	}
-	wantBytes := []int{490, 456, 37, 10, 952}
+	wantBytes := []int{498, 472, 37, 10, 952}
 	for i, frame := range frames {
 		raw, err := appendVectorPartitionShardSearchTCPFrameBodyV1(nil, frame)
 		if err != nil {
@@ -130,7 +130,7 @@ func TestVectorPartitionShardSearchTCPBinaryFrameRejectsMalformedV1(t *testing.T
 		}
 	}
 	badRequestVersion := append([]byte(nil), raw...)
-	binary.LittleEndian.PutUint32(badRequestVersion[6:10], 2)
+	binary.LittleEndian.PutUint32(badRequestVersion[6:10], VectorPartitionShardSearchVersionV1+1)
 	if _, err := decodeVectorPartitionShardSearchTCPFrameBodyV1(badRequestVersion); err == nil {
 		t.Fatal("accepted unsupported request version")
 	}
@@ -142,7 +142,7 @@ func TestVectorPartitionShardSearchTCPBinaryFrameRejectsMalformedV1(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	binary.LittleEndian.PutUint32(responseRaw[6:10], 2)
+	binary.LittleEndian.PutUint32(responseRaw[6:10], VectorPartitionShardSearchVersionV1+1)
 	if _, err := decodeVectorPartitionShardSearchTCPFrameBodyV1(responseRaw); err == nil {
 		t.Fatal("accepted unsupported response version")
 	}
@@ -241,7 +241,7 @@ func TestVectorPartitionShardSearchTCPBinaryBenchmarkWireSizesV1(t *testing.T) {
 		}
 	}
 	response := VectorPartitionShardSearchResponseV1{Version: VectorPartitionShardSearchVersionV1, RequestID: "benchmark", Partials: partials}
-	want := []int{372, 827}
+	want := []int{380, 851}
 	for i, frame := range []vectorPartitionShardSearchTCPFrameV1{{Request: &request}, {Response: &response}} {
 		raw, err := appendVectorPartitionShardSearchTCPFrameBodyV1(nil, frame)
 		if err != nil {
@@ -326,7 +326,7 @@ func TestVectorPartitionShardSearchTCPDispatcherReusesConnectionV1(t *testing.T)
 			}
 			accepts.Add(1)
 			go (VectorPartitionShardSearchTCPServerV1{Service: vectorPartitionShardSearchHandlerFuncV1(func(_ context.Context, r VectorPartitionShardSearchRequestV1) (VectorPartitionShardSearchResponseV1, error) {
-				return VectorPartitionShardSearchResponseV1{Version: 1, RequestID: r.RequestID}, nil
+				return VectorPartitionShardSearchResponseV1{Version: VectorPartitionShardSearchVersionV1, RequestID: r.RequestID}, nil
 			})}).ServeConn(context.Background(), conn)
 		}
 	}()
@@ -566,7 +566,7 @@ func TestVectorPartitionShardSearchTCPDispatcherReconnectsAfterIdleCloseAndFails
 						started <- struct{}{}
 						<-release
 					}
-					return VectorPartitionShardSearchResponseV1{Version: 1, RequestID: r.RequestID}, nil
+					return VectorPartitionShardSearchResponseV1{Version: VectorPartitionShardSearchVersionV1, RequestID: r.RequestID}, nil
 				})}).ServeConn(context.Background(), conn)
 				select {
 				case idleClosed <- struct{}{}:
@@ -652,7 +652,7 @@ func TestVectorPartitionShardSearchTCPDispatcherCancellationWhilePoolIsFullV1(t 
 	listener := newVectorPartitionShardSearchTCPListenerV1(t, vectorPartitionShardSearchHandlerFuncV1(func(context.Context, VectorPartitionShardSearchRequestV1) (VectorPartitionShardSearchResponseV1, error) {
 		started <- struct{}{}
 		<-release
-		return VectorPartitionShardSearchResponseV1{Version: 1}, nil
+		return VectorPartitionShardSearchResponseV1{Version: VectorPartitionShardSearchVersionV1}, nil
 	}))
 	dispatcher, err := newVectorPartitionShardSearchTCPDispatcherV1(map[raftcluster.GroupID]string{"group-a": listener.Addr().String()}, nil, poolSize, VectorPartitionShardSearchLimitsV1{})
 	if err != nil {
@@ -718,7 +718,7 @@ func TestVectorPartitionShardSearchTCPDispatcherDoesNotRetryServiceUnavailableV1
 
 func TestVectorPartitionShardSearchTCPDispatcherUsesLeaderNodeEndpointV1(t *testing.T) {
 	leader := newVectorPartitionShardSearchTCPListenerV1(t, vectorPartitionShardSearchHandlerFuncV1(func(_ context.Context, r VectorPartitionShardSearchRequestV1) (VectorPartitionShardSearchResponseV1, error) {
-		return VectorPartitionShardSearchResponseV1{Version: 1, RequestID: r.RequestID}, nil
+		return VectorPartitionShardSearchResponseV1{Version: VectorPartitionShardSearchVersionV1, RequestID: r.RequestID}, nil
 	}))
 	stale := newVectorPartitionShardSearchTCPListenerV1(t, vectorPartitionShardSearchHandlerFuncV1(func(context.Context, VectorPartitionShardSearchRequestV1) (VectorPartitionShardSearchResponseV1, error) {
 		return VectorPartitionShardSearchResponseV1{}, &VectorPartitionShardSearchErrorV1{Code: VectorPartitionShardSearchErrorNotLeaderV1, GroupID: "group-a", LeaderHint: "node-b", Err: errors.New("moved")}

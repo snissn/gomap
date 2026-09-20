@@ -131,6 +131,7 @@ func (l VectorPartitionManifestLimits) totalMembershipLimit() int {
 
 type VectorPartitionAssetV1 struct {
 	ID, Checksum, MembershipDigest string
+	GraphVariant                   string
 	PartitionID                    uint32 // physical search pack; RouterAsset is separate and remains zero.
 	Bytes                          uint64
 	Ref                            ColumnAssetRef
@@ -453,8 +454,14 @@ func totalMembershipsVPM(lists ...[]VectorPartitionMembershipV1) int {
 	return total
 }
 func validateAssetVPM(a VectorPartitionAssetV1, l VectorPartitionManifestLimits) error {
-	if a.ID == "" || len(a.ID) > l.MaxStringBytes || !isSHA256VPM(a.Checksum) || len(a.MembershipDigest) > l.MaxStringBytes || a.MembershipDigest != "" && !isSHA256VPM(a.MembershipDigest) || a.ID == vectorPartitionLocalAssetIDV1(a.PartitionID) && !isSHA256VPM(a.MembershipDigest) || a.Ref.Offset < 0 || a.Ref.Length < 0 || uint64(a.Ref.Length) != a.Bytes {
+	local := a.ID == vectorPartitionLocalAssetIDV1(a.PartitionID)
+	if a.ID == "" || len(a.ID) > l.MaxStringBytes || !isSHA256VPM(a.Checksum) || len(a.MembershipDigest) > l.MaxStringBytes || len(a.GraphVariant) > l.MaxStringBytes || a.MembershipDigest != "" && !isSHA256VPM(a.MembershipDigest) || local && !isSHA256VPM(a.MembershipDigest) || !local && a.GraphVariant != "" || a.Ref.Offset < 0 || a.Ref.Length < 0 || uint64(a.Ref.Length) != a.Bytes {
 		return fmt.Errorf("%w: asset", ErrVectorPartitionManifestInvalid)
+	}
+	if local {
+		if _, err := VectorPartitionLocalGraphVariantIdentityV1(VectorPartitionLocalGraphVariantV1(a.GraphVariant)); err != nil {
+			return fmt.Errorf("%w: asset graph variant", ErrVectorPartitionManifestInvalid)
+		}
 	}
 	if err := validateColumnAssetRefForPlan(a.Ref); err != nil {
 		return fmt.Errorf("%w: asset ref", ErrVectorPartitionManifestInvalid)
@@ -492,6 +499,9 @@ func encodedSizeWithContextVPM(ctx context.Context, m VectorPartitionManifestV1,
 			return err
 		}
 		if err := str(a.MembershipDigest); err != nil {
+			return err
+		}
+		if err := str(a.GraphVariant); err != nil {
 			return err
 		}
 		if err := str(string(a.Ref.Kind)); err != nil {
@@ -642,6 +652,7 @@ func (m VectorPartitionManifestV1) readyDigestWithContextV1(ctx context.Context)
 		writeStringVPM(h, a.ID)
 		writeStringVPM(h, a.Checksum)
 		writeStringVPM(h, a.MembershipDigest)
+		writeStringVPM(h, a.GraphVariant)
 		writeU64VPM(h, a.Bytes)
 		writeColumnAssetRefVPM(h, a.Ref)
 	}
@@ -652,6 +663,7 @@ func (m VectorPartitionManifestV1) readyDigestWithContextV1(ctx context.Context)
 	writeStringVPM(h, a.ID)
 	writeStringVPM(h, a.Checksum)
 	writeStringVPM(h, a.MembershipDigest)
+	writeStringVPM(h, a.GraphVariant)
 	writeU64VPM(h, a.Bytes)
 	writeColumnAssetRefVPM(h, a.Ref)
 	if err := ctx.Err(); err != nil {
@@ -1057,7 +1069,7 @@ func encodeVectorPartitionManifestWithContextV1(ctx context.Context, m VectorPar
 	var x [4]byte
 	binary.BigEndian.PutUint32(x[:], vectorPartitionManifestMagicV1)
 	b.Write(x[:])
-	putU32VPM(b, 5)
+	putU32VPM(b, 6)
 	for _, s := range []string{m.Format, m.State, m.Collection, m.IndexName, m.IndexDefinitionDigest, m.IntegrityDigest, m.BalancePolicy, m.ReadySetDigest} {
 		putStringVPM(b, s)
 	}
@@ -1123,12 +1135,12 @@ func preflightVectorPartitionManifestWithContextV1(ctx context.Context, m Vector
 				return err
 			}
 		}
-		if len(a.ID) > l.MaxStringBytes || len(a.Checksum) > l.MaxStringBytes || len(a.MembershipDigest) > l.MaxStringBytes || len(a.Ref.Namespace) > l.MaxStringBytes || len(a.Ref.Kind) > l.MaxStringBytes {
+		if len(a.ID) > l.MaxStringBytes || len(a.Checksum) > l.MaxStringBytes || len(a.MembershipDigest) > l.MaxStringBytes || len(a.GraphVariant) > l.MaxStringBytes || len(a.Ref.Namespace) > l.MaxStringBytes || len(a.Ref.Kind) > l.MaxStringBytes {
 			return fmt.Errorf("%w: string cap", ErrVectorPartitionManifestInvalid)
 		}
 	}
 	a := m.RouterAsset
-	if len(a.ID) > l.MaxStringBytes || len(a.Checksum) > l.MaxStringBytes || len(a.MembershipDigest) > l.MaxStringBytes || len(a.Ref.Namespace) > l.MaxStringBytes || len(a.Ref.Kind) > l.MaxStringBytes {
+	if len(a.ID) > l.MaxStringBytes || len(a.Checksum) > l.MaxStringBytes || len(a.MembershipDigest) > l.MaxStringBytes || len(a.GraphVariant) > l.MaxStringBytes || len(a.Ref.Namespace) > l.MaxStringBytes || len(a.Ref.Kind) > l.MaxStringBytes {
 		return fmt.Errorf("%w: string cap", ErrVectorPartitionManifestInvalid)
 	}
 	return ctx.Err()
@@ -1153,7 +1165,7 @@ func DecodeVectorPartitionManifestWithContextV1(ctx context.Context, raw []byte,
 		return VectorPartitionManifestV1{}, fmt.Errorf("%w: encoded bytes cap", ErrVectorPartitionManifestInvalid)
 	}
 	r := vpmReader{b: raw, l: l, ctx: ctx}
-	if r.u32() != vectorPartitionManifestMagicV1 || r.u32() != 5 {
+	if r.u32() != vectorPartitionManifestMagicV1 || r.u32() != 6 {
 		return VectorPartitionManifestV1{}, fmt.Errorf("%w: magic/version", ErrVectorPartitionManifestInvalid)
 	}
 	m := VectorPartitionManifestV1{}
@@ -1326,8 +1338,8 @@ func (r *vpmReader) allocationCount(max, minItemBytes int, label string) int {
 }
 
 func (r *vpmReader) assets() []VectorPartitionAssetV1 {
-	// partition + two empty strings + bytes + the shortest column reference.
-	const minAssetBytes = 4 + 4 + 4 + 4 + 8 + (4 + 4 + 8 + 8 + 4 + 8 + 8 + 4)
+	// partition + four empty strings + bytes + the shortest column reference.
+	const minAssetBytes = 4 + 4 + 4 + 4 + 4 + 8 + (4 + 4 + 8 + 8 + 4 + 8 + 8 + 4)
 	n := r.allocationCount(r.l.MaxAssets, minAssetBytes, "asset")
 	if r.err != nil {
 		return nil
@@ -1340,7 +1352,7 @@ func (r *vpmReader) assets() []VectorPartitionAssetV1 {
 		if i&1023 == 0 && r.canceled() {
 			return nil
 		}
-		x[i] = VectorPartitionAssetV1{PartitionID: r.u32(), ID: r.str(), Checksum: r.str(), MembershipDigest: r.str(), Bytes: r.u64(), Ref: r.columnRef()}
+		x[i] = VectorPartitionAssetV1{PartitionID: r.u32(), ID: r.str(), Checksum: r.str(), MembershipDigest: r.str(), GraphVariant: r.str(), Bytes: r.u64(), Ref: r.columnRef()}
 	}
 	return x
 }
@@ -1459,6 +1471,7 @@ func putAssetsVPM(b *bytes.Buffer, x []VectorPartitionAssetV1) {
 		putStringVPM(b, a.ID)
 		putStringVPM(b, a.Checksum)
 		putStringVPM(b, a.MembershipDigest)
+		putStringVPM(b, a.GraphVariant)
 		putU64VPM(b, a.Bytes)
 		putColumnAssetRefVPM(b, a.Ref)
 	}
@@ -1475,6 +1488,7 @@ func putAssetsWithContextVPM(ctx context.Context, b *bytes.Buffer, x []VectorPar
 		putStringVPM(b, a.ID)
 		putStringVPM(b, a.Checksum)
 		putStringVPM(b, a.MembershipDigest)
+		putStringVPM(b, a.GraphVariant)
 		putU64VPM(b, a.Bytes)
 		putColumnAssetRefVPM(b, a.Ref)
 	}

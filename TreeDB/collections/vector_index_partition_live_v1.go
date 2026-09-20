@@ -2088,7 +2088,7 @@ func (p *VectorIndexPartitionLiveSearchPinV1) DomainDeltaCountV1(domain uint32) 
 }
 
 func (p *VectorIndexPartitionLiveSearchPinV1) DomainSearchPreflightV1(domain uint32, opts VectorPartitionSearchOptionsV1) (uint64, uint64, error) {
-	if p == nil || opts.TopK <= 0 || opts.EfSearch <= 0 || opts.MaxStableIDBytes <= 0 {
+	if p == nil || opts.TopK <= 0 || opts.EfSearch <= 0 || opts.MaxScoreCalls < 0 || opts.MaxStableIDBytes <= 0 {
 		return 0, 0, ErrVectorIndexPartitionLiveUnavailableV1
 	}
 	pin, ok := p.domains[domain]
@@ -2118,7 +2118,7 @@ func (p *VectorIndexPartitionLiveSearchPinV1) DomainSearchPreflightV1(domain uin
 }
 
 func (p *VectorIndexPartitionLiveSearchPinV1) SearchDomainV1(ctx context.Context, domain uint32, query []float32, opts VectorPartitionSearchOptionsV1) ([]VectorPartitionSearchResultV1, VectorPartitionSearchMetricsV1, error) {
-	if p == nil {
+	if p == nil || opts.MaxScoreCalls < 0 {
 		return nil, VectorPartitionSearchMetricsV1{}, ErrVectorIndexPartitionLiveUnavailableV1
 	}
 	if ctx == nil {
@@ -2138,7 +2138,7 @@ func (p *VectorIndexPartitionLiveSearchPinV1) SearchDomainV1(ctx context.Context
 	buffer.nativeSearchWorkEnabled = true
 	buffer.nativeSearchScratch.context = ctx
 	defer func() { buffer.nativeSearchScratch.context = nil }()
-	results, err := pinned.view.searchGraphOnlyWithBuffer(query, opts.TopK, opts.EfSearch, &buffer)
+	results, err := pinned.view.searchGraphOnlyWithScoreBudget(query, opts.TopK, opts.EfSearch, opts.MaxScoreCalls, &buffer)
 	if err != nil {
 		return nil, VectorPartitionSearchMetricsV1{}, err
 	}
@@ -2147,5 +2147,5 @@ func (p *VectorIndexPartitionLiveSearchPinV1) SearchDomainV1(ctx context.Context
 		out[i] = VectorPartitionSearchResultV1{ID: string(result.ID), Score: float32(result.Score)}
 	}
 	candidates := uint64(buffer.nativeSearchWork.baseVisited + buffer.nativeSearchWork.deltaVisited)
-	return out, VectorPartitionSearchMetricsV1{Candidates: candidates, Route: VectorPartitionSearchRouteHNSWSearchPackV1}, nil
+	return out, VectorPartitionSearchMetricsV1{ScoreCalls: uint64(buffer.nativeSearchWork.scoreCalls), Candidates: candidates, Route: VectorPartitionSearchRouteHNSWSearchPackV1}, nil
 }

@@ -100,6 +100,35 @@ func TestM8RetainedM3ProvenanceRejectsMixedBuildV1(t *testing.T) {
 	}
 }
 
+func TestM8RetainedGraphVariantUsesManifestIdentityV1(t *testing.T) {
+	def := collections.VectorIndexDefinition{M: 16, EfConstruction: 128}
+	descriptor := m3VariantDescriptorV1{PartitionHNSWM: 18, PartitionHNSWEfC: 256}
+	canonical := collections.VectorPartitionLocalGraphVariantCanonicalHNSWM18EfConstruction256V1
+	manifest := collections.VectorPartitionManifestV1{Assets: []collections.VectorPartitionAssetV1{{GraphVariant: string(canonical)}, {GraphVariant: string(canonical)}}}
+	got, offline, err := m8RetainedGraphVariantV1(manifest, def, descriptor, false)
+	if err != nil || got != canonical || offline {
+		t.Fatalf("canonical variant=%q offline=%t err=%v", got, offline, err)
+	}
+	historical := collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1
+	manifest.Assets[0].GraphVariant, manifest.Assets[1].GraphVariant = string(historical), string(historical)
+	if _, _, err := m8RetainedGraphVariantV1(manifest, def, descriptor, false); err == nil {
+		t.Fatal("historical M18 graph admitted as production by matching M/efConstruction")
+	}
+	got, offline, err = m8RetainedGraphVariantV1(manifest, def, descriptor, true)
+	if err != nil || got != historical || !offline {
+		t.Fatalf("offline variant=%q offline=%t err=%v", got, offline, err)
+	}
+	manifest.Assets[1].GraphVariant = string(canonical)
+	if _, _, err := m8RetainedGraphVariantV1(manifest, def, descriptor, true); err == nil {
+		t.Fatal("mixed graph variants admitted")
+	}
+	manifest.Assets = manifest.Assets[:1]
+	descriptor.PartitionHNSWM = 20
+	if _, _, err := m8RetainedGraphVariantV1(manifest, def, descriptor, true); err == nil {
+		t.Fatal("graph variant admitted under mismatched descriptor parameters")
+	}
+}
+
 func TestM8BoundedWorkUsesFixedWorkerPoolV1(t *testing.T) {
 	var active, peak int32
 	m8RunBoundedWorkV1(32, 3, func(int) {
@@ -234,14 +263,14 @@ func TestM8ProductionReportRejectsUnexercisedDataGroupV1(t *testing.T) {
 		return out
 	}
 	report := m8ProductionReportV1{
-		SchemaVersion: 6, ResultKind: "m8_production_multi_group_evidence_v6", Mode: m8ProductionMultiGroupModeV1, ProductionEvidence: true,
+		SchemaVersion: 7, ResultKind: "m8_production_multi_group_evidence_v7", Mode: m8ProductionMultiGroupModeV1, ProductionEvidence: true,
 		GeneratedAt: time.Now(), ExecutionID: strings.Repeat("e", 32), Command: []string{"m8-test"}, BaseSHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", HeadSHA: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
 		ExecutableSHA256: strings.Repeat("f", 64),
 		GoVersion:        "go1.test", GOOS: "linux", GOARCH: "amd64", LogicalCPUs: 1, GOMAXPROCS: 1, GoMemoryLimitBytes: 1,
-		Dataset: fixture, Config: m8ProductionConfigEvidenceV1{RaftGroups: 2, RaftNodesPerGroup: 3, Partitions: 4, Probes: []int{4}, Overlap: []float64{0}, TopK: 10, Concurrency: []int{1}, EfSearch: []int{10}, RouterScoreBudget: defaultRouterScoreBudgetV3, RouterSemantics: m8RouterSemanticsV4}, BuildNanos: 1,
+		Dataset: fixture, Config: m8ProductionConfigEvidenceV1{RaftGroups: 2, RaftNodesPerGroup: 3, Partitions: 4, Probes: []int{4}, Overlap: []float64{0}, TopK: 10, Concurrency: []int{1}, EfSearch: []int{10}, RouterScoreBudget: defaultRouterScoreBudgetV3, LocalScoreBudget: nativewire.DefaultVectorPartitionCoordinatorLimitsV1().MaxLocalScoreCalls, GraphVariant: string(collections.VectorPartitionLocalGraphVariantCanonicalHNSWM18EfConstruction256V1), RouterSemantics: m8RouterSemanticsV4}, BuildNanos: 1,
 		Topology:       nativewire.VectorPartitionM8ProductionMultiGroupEvidenceV1{Network: "tcp_loopback_serialized_m5_v1", LifecycleState: "active", ReadySetDigest: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", MetaGroup: "meta", MetaLeader: "meta-leader", MetaNodes: []string{"meta-a", "meta-b", "meta-c"}, MaxConcurrentShardRequests: 1, Groups: []nativewire.VectorPartitionM8ProductionGroupEvidenceV1{group("group-a", 1), group("group-b", 1)}},
 		RouterSessions: m8ProductionRouterSessionEvidenceV1{AfterWarmup: []nativewire.VectorPartitionCoordinatorRouterSessionStatsV1{{Identity: nativewire.VectorPartitionCoordinatorRouterSessionIdentityV1{Database: "default", Catalog: "default", Collection: "docs", IndexName: "embedding", IndexDefinitionDigest: "index-digest", SourceGeneration: 1, SourceChecksum: 2, SourceSchemaHash: 3, SourceRowCount: 4, PartitionGeneration: 5, ReadySetDigest: "ready-digest", RouterModelDigest: "model-digest"}, ColdOpens: 1, ManifestOpenAttempts: 1, Misses: 1, ReaderPins: 1, LeasePins: 1, LeaseReleases: 1}}, AfterMeasured: []nativewire.VectorPartitionCoordinatorRouterSessionStatsV1{{Identity: nativewire.VectorPartitionCoordinatorRouterSessionIdentityV1{Database: "default", Catalog: "default", Collection: "docs", IndexName: "embedding", IndexDefinitionDigest: "index-digest", SourceGeneration: 1, SourceChecksum: 2, SourceSchemaHash: 3, SourceRowCount: 4, PartitionGeneration: 5, ReadySetDigest: "ready-digest", RouterModelDigest: "model-digest"}, ColdOpens: 1, ManifestOpenAttempts: 1, Misses: 1, ReaderPins: 1, Hits: uint64(fixture.Queries), LeasePins: uint64(fixture.Queries) + 1, LeaseReleases: uint64(fixture.Queries) + 1}}},
-		Rows: []m8ProductionRowV1{{Status: "pass", Probes: 4, EfSearch: 10, Concurrency: 1, Samples: fixture.Queries, RecallAtK: 1, QPS: 1, P50Nanos: 1, P95Nanos: 2, P99Nanos: 3, MaxTotalNanos: 4, RouterMode: collections.VectorPartitionRouterModeApproxV1, RouterScoreBudget: defaultRouterScoreBudgetV3, ExactParityChecked: true, ExactParityPassed: true, NoPartialResults: true, Attribution: m8ProductionAttributionV1{
+		Rows: []m8ProductionRowV1{{Status: "pass", Probes: 4, EfSearch: 10, Concurrency: 1, Samples: fixture.Queries, RecallAtK: 1, QPS: 1, P50Nanos: 1, P95Nanos: 2, P99Nanos: 3, MaxTotalNanos: 4, RouterMode: collections.VectorPartitionRouterModeApproxV1, RouterScoreBudget: defaultRouterScoreBudgetV3, LocalScoreCalls: uint64(fixture.Queries), MaxLocalScoreCalls: 1, ExactParityChecked: true, ExactParityPassed: true, NoPartialResults: true, Attribution: m8ProductionAttributionV1{
 			Contract: m8CanonicalResultContractV1, GlobalExactRecallAtK: 1, ExhaustivePartitionRecallAtK: 1,
 			ExhaustivePartitionIDParity: true, ExhaustivePartitionScoreParity: true,
 			ExactRepresentativeRecallAtK: 1, ApproximateRepresentativeRecallAtK: 1, LocalHNSWRecallAtK: 1, ApproximateLocalHNSWRecallAtK: 1, EndToEndRecallAtK: 1,
@@ -480,6 +509,12 @@ func TestM8ProductionReportRejectsUnexercisedDataGroupV1(t *testing.T) {
 		"candidate_budget_above_config": func(row *m8ProductionRowV1) {
 			row.RouterScoreBudget = report.Config.RouterScoreBudget + 1
 			row.Attribution.ApproximateRouterScoreBudget = report.Config.RouterScoreBudget + 1
+		},
+		"missing_local_score_calls": func(row *m8ProductionRowV1) {
+			row.LocalScoreCalls, row.MaxLocalScoreCalls = 0, 0
+		},
+		"local_score_max_exceeds_total": func(row *m8ProductionRowV1) {
+			row.MaxLocalScoreCalls = row.LocalScoreCalls + 1
 		},
 		"nonfinite_qps":     func(row *m8ProductionRowV1) { row.QPS = math.NaN() },
 		"unordered_latency": func(row *m8ProductionRowV1) { row.P95Nanos = row.P50Nanos - 1 },

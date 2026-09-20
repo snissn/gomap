@@ -132,6 +132,7 @@ func newBenchmarkEnvironment(collection *collections.Collection, status collecti
 		StatsMode:             servicewire.VectorPartitionShardSearchStatsBasicV1,
 		TopK:                  cfg.topK,
 		EfSearch:              cfg.efSearch,
+		ScoreCallsLimit:       servicewire.DefaultVectorPartitionShardSearchLimitsV1().MaxScoreCalls,
 		RequestBytesLimit:     64 << 10,
 		CandidateBytesLimit:   64 << 20,
 		ResponseBytesLimit:    64 << 20,
@@ -256,7 +257,7 @@ func (e *benchmarkEnvironment) measureWarmAndBaseline(ctx context.Context, cfg c
 	if lease.Searcher.Status().SearchRoute != m5RequiredRoute {
 		return serviceMeasurement{}, baselineMeasurement{}, sourceCacheReport{}, fmt.Errorf("direct baseline route=%q want %q", lease.Searcher.Status().SearchRoute, m5RequiredRoute)
 	}
-	searchOpts := collections.VectorPartitionSearchOptionsV1{TopK: cfg.topK, EfSearch: cfg.efSearch}
+	searchOpts := collections.VectorPartitionSearchOptionsV1{TopK: cfg.topK, EfSearch: cfg.efSearch, MaxScoreCalls: int(e.request.ScoreCallsLimit)}
 	for i := 0; i < cfg.baselineWarmup; i++ {
 		if _, metrics, searchErr := lease.Searcher.SearchWithOptionsV1(ctx, e.request.Query, searchOpts); searchErr != nil {
 			return serviceMeasurement{}, baselineMeasurement{}, sourceCacheReport{}, fmt.Errorf("baseline warmup %d: %w", i, searchErr)

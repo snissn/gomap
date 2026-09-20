@@ -700,6 +700,35 @@ func TestColumnHNSWSearchPackAuxiliaryNavigationUpperSeedAnchorV3(t *testing.T) 
 	}
 }
 
+func TestColumnHNSWCanonicalPartitionPackDoesNotReseedDisconnectedRowsV5(t *testing.T) {
+	input := testColumnHNSWSearchPackInput2312()
+	input.M = columnHNSWCanonicalPartitionM
+	input.EfConstruction = columnHNSWCanonicalPartitionEfConstruction
+	input.MaxLayer = 0
+	input.Levels = []uint16{0, 0, 0}
+	input.AdjacencyLayers = []columnHNSWSearchPackLayerInput{{Offsets: []uint64{0, 0, 0, 0}}}
+	input.MembershipDigest[0] = 1
+	input.CanonicalPartitionHNSW = true
+	raw, err := encodeColumnHNSWSearchPack(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, handle := testColumnHNSWSearchPackPreparedViewFromBytes2314(t, raw, mappedresource.SourceHeapCopy, input.BaseIdentity)
+	defer handle.Release()
+	var scratch columnVectorGraphNativeSearchScratch
+	results, stats, err := view.searchCosine([]float32{0, 1, 0}, columnVectorGraphNativeSearchOptions{TopK: 3, EfSearch: 3}, &scratch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.Header.Version != columnHNSWSearchPackVersionV5 || len(results) != 1 || results[0].Ordinal != 0 || stats.PreparedScoreCalls != 1 {
+		t.Fatalf("canonical disconnected search version=%d results=%+v stats=%+v", view.Header.Version, results, stats)
+	}
+	badM := testColumnHNSWSearchPackPatchU32Header2312(raw, columnHNSWSearchPackHeaderMOffset, columnHNSWCanonicalPartitionM-1)
+	if _, _, err := testColumnHNSWSearchPackPreparedViewFromBytesAllowErr2314(badM, mappedresource.SourceHeapCopy, input.BaseIdentity); err == nil || !strings.Contains(err.Error(), "canonical partition hnsw graph parameters mismatch") {
+		t.Fatalf("prepared reader accepted noncanonical v5 parameters: %v", err)
+	}
+}
+
 func TestColumnHNSWSearchPackDecodeRejectsCorruptEnvelope2312(t *testing.T) {
 	raw := testColumnHNSWSearchPackRaw2312(t)
 	cases := []struct {
@@ -719,7 +748,7 @@ func TestColumnHNSWSearchPackDecodeRejectsCorruptEnvelope2312(t *testing.T) {
 		},
 		{
 			name: "bad_version",
-			raw:  testColumnHNSWSearchPackPatchU16Header2312(raw, columnHNSWSearchPackHeaderVersionOffset, columnHNSWSearchPackVersionV4+1),
+			raw:  testColumnHNSWSearchPackPatchU16Header2312(raw, columnHNSWSearchPackHeaderVersionOffset, columnHNSWSearchPackVersionV5+1),
 			want: "unsupported hnsw_search_pack_v1 version",
 		},
 		{

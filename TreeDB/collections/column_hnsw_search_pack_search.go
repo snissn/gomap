@@ -303,6 +303,9 @@ func (v *columnHNSWSearchPackPreparedView) searchCosineWithContextFast(ctx conte
 		}
 		candidate, ok := scratch.popFrontierAccounting(&stats)
 		if !ok {
+			if v.Header.Version == columnHNSWSearchPackVersionV5 {
+				break
+			}
 			if len(scratch.top) >= efSearch {
 				break
 			}
@@ -655,6 +658,10 @@ func (v *columnHNSWSearchPackPreparedView) searchCosineWithContextTrace(ctx cont
 		}
 		candidate, ok := scratch.popFrontierAccounting(&stats)
 		if !ok {
+			if v.Header.Version == columnHNSWSearchPackVersionV5 {
+				termination = "frontier_empty"
+				break
+			}
 			if len(scratch.top) >= efSearch {
 				termination = "frontier_empty_retained_full"
 				break

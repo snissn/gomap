@@ -30,12 +30,12 @@ const (
 	vectorPartitionShardSearchTCPFrameProbeResponseV1 byte   = 5
 	// Fixed bytes include the frame-body header and every fixed-width request
 	// field plus the length prefix for each request string.
-	vectorPartitionShardSearchTCPRequestFixedBytesV1 uint64 = 171
+	vectorPartitionShardSearchTCPRequestFixedBytesV1 uint64 = 179
 	// The capability fixed bytes include its six string length prefixes.
 	vectorPartitionStrictCapabilityFixedBytesV1 uint64 = 84
 	// Response byte accounting excludes the request ID and six proof strings.
 	vectorPartitionShardSearchTCPResponseIdentityFieldsV1   uint64 = 7
-	vectorPartitionShardSearchTCPResponsePartialMinBytesV1         = 60
+	vectorPartitionShardSearchTCPResponsePartialMinBytesV1         = 68
 	vectorPartitionShardSearchTCPResponseNeighborMinBytesV1        = 8
 	vectorPartitionShardSearchTCPProbeResponseFixedBytesV1  uint64 = 934
 )
@@ -898,6 +898,7 @@ func appendVectorPartitionShardSearchTCPRequestV1(w *vectorPartitionShardSearchT
 	}
 	w.u32(uint32(r.TopK))
 	w.u32(uint32(r.EfSearch))
+	w.u64(r.ScoreCallsLimit)
 	w.i64(r.DeadlineUnixNano)
 	w.u64(r.RequestBytesLimit)
 	w.u64(r.CandidateBytesLimit)
@@ -956,6 +957,7 @@ func readVectorPartitionShardSearchTCPRequestV1(r *vectorPartitionShardSearchTCP
 		r.err = errors.New("M5 TCP search count overflows int")
 	}
 	value.TopK, value.EfSearch = int(topK), int(efSearch)
+	value.ScoreCallsLimit = r.u64()
 	value.DeadlineUnixNano = r.i64()
 	value.RequestBytesLimit, value.CandidateBytesLimit, value.ResponseBytesLimit = r.u64(), r.u64(), r.u64()
 	switch r.u8() {
@@ -1104,6 +1106,7 @@ func appendVectorPartitionShardSearchTCPResponseV1(w *vectorPartitionShardSearch
 			w.string(neighbor.ID)
 			w.f32(neighbor.Score)
 		}
+		w.u64(partial.ScoreCalls)
 		w.u64(partial.Candidates)
 		w.u64(partial.Edges)
 		w.string(partial.SearchRoute)
@@ -1112,7 +1115,7 @@ func appendVectorPartitionShardSearchTCPResponseV1(w *vectorPartitionShardSearch
 		w.u64(partial.HeapBytes)
 		w.u64(partial.OpenNanos)
 	}
-	for _, value := range []uint64{v.Partitions, v.ReadProofs, v.GenerationPins, v.PartitionOpens, v.Candidates, v.BaseCandidates, v.DeltaCandidates, v.BaseResults, v.DeltaResults, v.LiveDomainsSearched, v.LiveMutatedIDs, v.LiveIDs, v.Cutovers, v.RequestPathFullRebuilds, v.Edges, v.ResponseBytes, v.Timing.RouteOwnerNanos, v.Timing.ReadIndexApplyNanos, v.Timing.GenerationOpenNanos, v.Timing.SearchNanos, v.Timing.ResponseCopyNanos, v.Timing.TotalNanos} {
+	for _, value := range []uint64{v.Partitions, v.ReadProofs, v.GenerationPins, v.PartitionOpens, v.ScoreCalls, v.Candidates, v.BaseCandidates, v.DeltaCandidates, v.BaseResults, v.DeltaResults, v.LiveDomainsSearched, v.LiveMutatedIDs, v.LiveIDs, v.Cutovers, v.RequestPathFullRebuilds, v.Edges, v.ResponseBytes, v.Timing.RouteOwnerNanos, v.Timing.ReadIndexApplyNanos, v.Timing.GenerationOpenNanos, v.Timing.SearchNanos, v.Timing.ResponseCopyNanos, v.Timing.TotalNanos} {
 		w.u64(value)
 	}
 }
@@ -1144,12 +1147,12 @@ func readVectorPartitionShardSearchTCPResponseWithBoundsV1(r *vectorPartitionSha
 					partial.Neighbors = append(partial.Neighbors, neighbor)
 				}
 			}
-			partial.Candidates, partial.Edges = r.u64(), r.u64()
+			partial.ScoreCalls, partial.Candidates, partial.Edges = r.u64(), r.u64(), r.u64()
 			partial.SearchRoute = r.string()
 			partial.PackBytes, partial.MappedBytes, partial.HeapBytes, partial.OpenNanos = r.u64(), r.u64(), r.u64(), r.u64()
 		}
 	}
-	v.Partitions, v.ReadProofs, v.GenerationPins, v.PartitionOpens, v.Candidates = r.u64(), r.u64(), r.u64(), r.u64(), r.u64()
+	v.Partitions, v.ReadProofs, v.GenerationPins, v.PartitionOpens, v.ScoreCalls, v.Candidates = r.u64(), r.u64(), r.u64(), r.u64(), r.u64(), r.u64()
 	v.BaseCandidates, v.DeltaCandidates = r.u64(), r.u64()
 	v.BaseResults, v.DeltaResults, v.LiveDomainsSearched = r.u64(), r.u64(), r.u64()
 	v.LiveMutatedIDs, v.LiveIDs, v.Cutovers, v.RequestPathFullRebuilds = r.u64(), r.u64(), r.u64(), r.u64()

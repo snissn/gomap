@@ -256,7 +256,7 @@ func (d *m6LocalShardDispatcherV1) DispatchVectorPartitionShardSearchV1(ctx cont
 		candidates += visited
 		results += uint64(len(neighbors))
 		partials[i] = nativewire.VectorPartitionShardSearchPartialV1{
-			PartitionID: partitionID, Neighbors: neighbors, Candidates: visited,
+			PartitionID: partitionID, Neighbors: neighbors, ScoreCalls: visited, Candidates: visited,
 			SearchRoute: collections.VectorPartitionSearchRouteExactFP32ScanV1,
 		}
 	}
@@ -286,7 +286,7 @@ func (d *m6LocalShardDispatcherV1) DispatchVectorPartitionShardSearchV1(ctx cont
 			LiveRevision: request.LiveRevision, LiveCoverage: request.LiveCoverage,
 		},
 		Partials: partials, Partitions: uint64(len(partials)),
-		Candidates: candidates, BaseCandidates: candidates, BaseResults: results,
+		ScoreCalls: candidates, Candidates: candidates, BaseCandidates: candidates, BaseResults: results,
 		LiveDomainsSearched: uint64(len(request.LiveDomainIDs)), ResponseBytes: responseBytes,
 		Timing: nativewire.VectorPartitionShardSearchTimingV1{
 			SearchNanos: searchNanos, ResponseCopyNanos: responseNanos, TotalNanos: totalNanos,

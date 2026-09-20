@@ -2299,6 +2299,41 @@ publication, reopen, pin, and strict old-record rejection across the corrected
 multi-root topology. These are product and format gates, not retained
 qualification evidence.
 
+## L canonical partition-local HNSW (#4774)
+
+`TestVectorIndexCanonicalInsertPreservesUpperSearchSetForDescent` and
+`TestVectorIndexConstructionSearchDescendsWithFullSeedSet` cover full bounded
+SEARCH-LAYER descent across construction levels. The local-searcher exact/HNSW
+tests cover deterministic public rescoring, non-excluded exact work, and strict
+combined score budgets. The version-5 pack test rejects disconnected ordinal
+reseeding. Run:
+
+```sh
+GOWORK=off go test -count=1 ./TreeDB/collections -run 'Test(VectorIndexCanonicalInsertPreservesUpperSearchSetForDescent|VectorIndexConstructionSearchDescendsWithFullSeedSet|VectorPartitionLocalSearcherV1(ExactStableIDsAndPins|HNSWCanonicalizesFP32TieOrder|PinnedExactPackScanV1)|ColumnHNSWCanonicalPartitionPackDoesNotReseedDisconnectedRowsV5)'
+```
+
+Manifest mutation, READY-promotion round trip, explicit graph-variant identity,
+and persistent-searcher reopen/corruption tests own VPM1 v6, VRP1 v4, canonical
+pack v5, and recovery fail-closed behavior. Live-delta stale-ID exclusion stays
+under the standalone live-delta commands above. Shard/coordinator tests cover
+score-budget transport, per-query accounting even without optional statistics,
+cross-partition exhaustion, and corrupt or over-budget responses. Run:
+
+```sh
+GOWORK=off go test -count=1 ./TreeDB/collections -run 'Test(VectorPartitionManifestV1BinaryMutationAndResealMatrix|VectorPartitionReadyPromotionV1CanonicalRoundTripAndReconstruction|VectorPartitionLocalGraphVariantIdentityFailsClosedV1|VectorPartitionPersistentLocalSearcherReopenCorruptionAndPinsV1)'
+GOWORK=off go test -count=1 ./TreeDB/nativewire -run '^TestVectorPartition'
+```
+
+The M8 schema-7 producer/replay tests bind the manifest graph variant, full
+configured population, local score calls and caps, retained identity pins, and
+the `REPLAY_ACCEPTED_NOT_QUALIFICATION` boundary. They are harness-readiness
+gates only; the preregistered structured-250K retained run and explicit issue
+receipt remain the scaling qualification.
+
+```sh
+GOWORK=off go test -count=1 ./cmd/treedb_vector_partition_bench -run 'Test(M3ConfiguredPartitionLocalHNSWBuildsCanonicalPacks|M8RetainedGraphVariantUsesManifestIdentityV1|M8ProductionReportRejectsUnexercisedDataGroupV1|ReplayM8Report)'
+```
+
 ## M8 same-candidate router policy diagnostics (#4745)
 
 `TreeDB/collections/vector_partition_router_policy_reduce_test.go` checks the

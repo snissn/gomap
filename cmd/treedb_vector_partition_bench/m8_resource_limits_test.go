@@ -159,6 +159,9 @@ func TestM8ProductionResourcesReportRequestRouterBudgetV1(t *testing.T) {
 	if request.RouterMode != collections.VectorPartitionRouterModeApproxV1 || request.RouterScoreBudget != 7 {
 		t.Fatalf("request=%+v want approximate router budget 7", request)
 	}
+	if request.LocalScoreBudget != cfg.m8CoordinatorLimits.MaxLocalScoreCalls {
+		t.Fatalf("request local score budget=%d want=%d", request.LocalScoreBudget, cfg.m8CoordinatorLimits.MaxLocalScoreCalls)
+	}
 	warmup := m8ProductionWarmupRequestV1(assets, []float32{1}, "warmup-budget", 1, cfg)
 	if warmup.RouterMode != collections.VectorPartitionRouterModeApproxV1 || warmup.RouterScoreBudget != 7 || warmup.PartitionProbes != 4 {
 		t.Fatalf("warmup=%+v want approximate router budget 7", warmup)

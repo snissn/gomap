@@ -102,10 +102,10 @@ non-active and never exposes a partial router. Existing building-manifest
 fields cannot be rewritten during promotion. If M1 already declares
 representatives they must exactly match the computed domain/node/provenance
 records; otherwise the digest-bound READY promotion fills the complete mapping.
-Distinct represented nodes may share a source anchor. Manifest version 5 and
-READY-promotion payload version 3 carry the unchanged mapping shape; router
-model, record, and asset identity version 3 distinguish the corrected topology.
-Old router assets require rebuild.
+Distinct represented nodes may share a source anchor. Manifest version 6 and
+READY-promotion payload version 4 carry the mapping and per-asset graph variant;
+router model, record, and asset identity version 3 distinguish the corrected
+topology. Old router assets require rebuild.
 Every ready generation carries the mapping in both its manifest authority and
 the strict router records; open requires exact agreement.
 
@@ -554,12 +554,12 @@ with both original and superseded refs, and retains the reduced reclaim state
 until all segment debt is physically absent; the durable-root fallback
 generation can therefore delay, but never bypass, DELETE_COMPLETE.
 
-### V1 API/schema contract, VPM1 wire version 5, and bounds
+### V1 API/schema contract, VPM1 wire version 6, and bounds
 
 `V1` in public API, type, and schema names identifies that pre-alpha contract;
 it is distinct from the explicit VPM1 wire version.
 The canonical generation payload is binary `VPM1` (big-endian magic
-`0x56504d31`, version `5`), followed by fixed-order length-prefixed fields;
+`0x56504d31`, version `6`), followed by fixed-order length-prefixed fields;
 there are no tagged optional fields. The JSON form is an inspection/exchange
 encoding of that same record: unknown fields, a second JSON value, trailing
 bytes, and non-canonical ordering fail closed. VPM1 is embedded in VCP1
@@ -568,11 +568,15 @@ a whole-record SHA-256 integrity digest covering identity, policy, generations,
 placement, every membership family, and asset descriptors; this is separate
 from the ready-set asset contract. Version 3 adds each asset descriptor's
 optional membership digest. Native partition HNSW assets require it; the digest
-also appears in their pack wire-version-2 header and binds generation,
-partition, ordered authoritative stable IDs, and home/overlap kinds. Version 4
+also appears in their pack header and binds generation, partition, ordered
+authoritative stable IDs, and home/overlap kinds. Version 4
 adds the dense logical-domain count and complete canonical domain-pack mapping;
 both the ready-set and whole-record integrity digests bind that mapping. Version
 5 extends each representative mapping with a nonzero represented-node ID.
+Version 6 adds an explicit graph variant to every asset descriptor. Router
+assets use an empty variant; partition-local assets require a recognized
+variant. The production `canonical_hnsw_m18_ef_construction_256` variant uses
+pack version 5 and fails closed on missing or different identity.
 Representative mappings are canonical by logical domain and node ID; source
 ordinals remain provenance and may repeat for distinct nodes in one domain.
 
@@ -582,7 +586,7 @@ ordinals remain provenance and may repeat for distinct nodes in one domain.
 | domains | dense logical domain IDs and a complete domain-to-pack mapping | every physical pack appears exactly once and every domain is nonempty |
 | placement | dense physical pack ID to one Raft group, with many packs allowed per group | IDs are exactly `[0, partition_count)` and canonical |
 | memberships | one disjoint physical-pack membership per source ordinal; bounded pack overlap and logical-domain/node representatives with source-anchor provenance | ordinal/ID coverage, sorted order, per-vector and per-ID caps; represented node IDs are nonzero and unique within each logical domain; the same ordinal/pack pair cannot be both home and overlap |
-| assets | typed `ColumnAssetRef`, length, CRC, SHA-256 and logical asset ID for each physical pack plus router; native packs also carry the canonical membership digest | references are namespace-bound, unique, streamed and checksum-verified before every collection-authorized publication; native membership identity is recomputed from the authoritative source and must match both descriptor and pack header; router partition ID is exactly zero |
+| assets | typed `ColumnAssetRef`, length, CRC, SHA-256, logical asset ID, membership digest, and graph variant for each physical pack plus router | references are namespace-bound, unique, streamed and checksum-verified before every collection-authorized publication; native membership identity is recomputed from the authoritative source and must match both descriptor and pack header; partition-local graph variants are recognized explicitly; router partition ID is exactly zero |
 | ready set | SHA-256 over canonical domain-pack mapping, placements, pack assets and router descriptor | mismatches, mixed router/generation, incomplete mapping, or missing pack asset reject |
 
 Default decode limits are 16 MiB encoded bytes, 65,536 partitions, 1,048,576

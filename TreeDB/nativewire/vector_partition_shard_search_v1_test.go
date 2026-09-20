@@ -679,7 +679,7 @@ func TestVectorPartitionShardSearchLeaderGroupLocalReturnsOracleAndProofV1(t *te
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
-	if response.Version != 1 || response.RequestID != request.RequestID || len(response.Partials) != 2 {
+	if response.Version != VectorPartitionShardSearchVersionV1 || response.RequestID != request.RequestID || len(response.Partials) != 2 {
 		t.Fatalf("response identity=%+v", response)
 	}
 	if got := response.Proof; got.ServingNode != "node-a" || got.LeaderNode != "node-a" || got.GroupID != "group-a" ||
@@ -694,7 +694,7 @@ func TestVectorPartitionShardSearchLeaderGroupLocalReturnsOracleAndProofV1(t *te
 	if got := response.Partials[1].Neighbors; len(got) != 2 || got[0].ID != "d" || got[1].ID != "e" {
 		t.Fatalf("partition 1 neighbors=%+v", got)
 	}
-	if response.Candidates != 5 || response.ResponseBytes != 668 || response.Timing.ReadIndexApplyNanos == 0 {
+	if response.ScoreCalls != 5 || response.Candidates != 5 || response.ResponseBytes != 692 || response.Timing.ReadIndexApplyNanos == 0 {
 		t.Fatalf("response accounting=%+v", response)
 	}
 	if coordinator.callCount() != 1 {
@@ -707,6 +707,30 @@ func TestVectorPartitionShardSearchLeaderGroupLocalReturnsOracleAndProofV1(t *te
 	if stats.Requests != 1 || stats.Successes != 1 || stats.Errors != 0 || stats.Partitions != 2 ||
 		stats.ReadProofs != 1 {
 		t.Fatalf("stats=%+v", stats)
+	}
+}
+
+func TestVectorPartitionShardSearchScoreBudgetSpansPartitionsV1(t *testing.T) {
+	service, _, _ := newVectorPartitionShardSearchTestServiceV1(t, []raftplacement.VectorPartitionGroupV1{
+		{PartitionID: 0, GroupID: "group-a"},
+		{PartitionID: 1, GroupID: "group-a"},
+	}, map[uint32]collections.VectorPartitionSearchAssetV1{
+		0: vectorPartitionShardSearchAssetTestV1(0, []string{"a", "b", "c"}, [][]float32{{1, 0}, {0, 1}, {-1, 0}}),
+		1: vectorPartitionShardSearchAssetTestV1(1, []string{"d", "e"}, [][]float32{{1, 0}, {0, 1}}),
+	})
+	request := vectorPartitionShardSearchRequestTestV1([]uint32{0, 1})
+	request.ScoreCallsLimit = 4
+	_, err := service.Search(context.Background(), request)
+	assertVectorPartitionShardSearchCodeV1(t, err, VectorPartitionShardSearchErrorAssetsUnavailableV1)
+	request.ScoreCallsLimit = 5
+	response, err := service.Search(context.Background(), request)
+	if err != nil || response.ScoreCalls != 5 || len(response.Partials) != 2 || response.Partials[0].ScoreCalls != 3 || response.Partials[1].ScoreCalls != 2 {
+		t.Fatalf("bounded response=%+v err=%v", response, err)
+	}
+	request.StatsMode = VectorPartitionShardSearchStatsNoneV1
+	response, err = service.Search(context.Background(), request)
+	if err != nil || response.ScoreCalls != 5 || len(response.Partials) != 2 || response.Partials[0].ScoreCalls != 3 || response.Partials[1].ScoreCalls != 2 {
+		t.Fatalf("bounded non-stats response=%+v err=%v", response, err)
 	}
 }
 
@@ -1518,7 +1542,7 @@ func repeatVectorPartitionMembershipKindTestV1(count int, kind collections.Vecto
 
 func vectorPartitionShardSearchRequestTestV1(partitions []uint32) VectorPartitionShardSearchRequestV1 {
 	return VectorPartitionShardSearchRequestV1{
-		Version:               1,
+		Version:               VectorPartitionShardSearchVersionV1,
 		RequestID:             "request-1",
 		CancellationID:        "cancel-1",
 		Database:              "default",
@@ -1543,6 +1567,7 @@ func vectorPartitionShardSearchRequestTestV1(partitions []uint32) VectorPartitio
 		StatsMode:             VectorPartitionShardSearchStatsBasicV1,
 		TopK:                  2,
 		EfSearch:              4,
+		ScoreCallsLimit:       1_000_000,
 		RequestBytesLimit:     64 << 10,
 		CandidateBytesLimit:   1 << 20,
 		ResponseBytesLimit:    1 << 20,
