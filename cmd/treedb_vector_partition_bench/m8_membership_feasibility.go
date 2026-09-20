@@ -169,13 +169,16 @@ func m8MembershipEnumerateP2V1(masks []uint16, packCosts []int64, domainLimit in
 		return m8MembershipFeasibilityWitnessV1{}, errors.New("P<=2 membership enumeration exceeds resource limits")
 	}
 	best := m8MembershipFeasibilityWitnessV1{}
+	var bestDomains [2]uint32
 	consider := func(mask uint16, cost int64, domains ...uint32) {
 		if cost > packLimit {
 			return
 		}
-		candidate := m8MembershipFeasibilityWitnessV1{hits: bits.OnesCount16(mask), packCost: cost, mask: mask, domains: append([]uint32(nil), domains...)}
+		candidate := m8MembershipFeasibilityWitnessV1{hits: bits.OnesCount16(mask), packCost: cost, mask: mask, domains: domains}
 		if m8MembershipWitnessBetterV1(candidate, best) {
-			best = candidate
+			best.hits, best.packCost, best.mask = candidate.hits, candidate.packCost, candidate.mask
+			copy(bestDomains[:], domains)
+			best.domains = bestDomains[:len(domains)]
 		}
 	}
 	for i := range masks {
@@ -192,6 +195,7 @@ func m8MembershipEnumerateP2V1(masks []uint16, packCosts []int64, domainLimit in
 			}
 		}
 	}
+	best.domains = slices.Clone(best.domains)
 	return best, nil
 }
 

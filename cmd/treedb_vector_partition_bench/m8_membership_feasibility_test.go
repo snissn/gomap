@@ -60,21 +60,36 @@ func TestM8MembershipFeasibilityScratchIsChargedToPeakV1(t *testing.T) {
 		partitions: 4, overlaps: []float64{0}, probes: []int{2}, efSearch: []int{96}, concurrency: []int{1}, topK: 10,
 		m8MembershipProbes: 2, m8MembershipPackLimit: 2,
 	}
-	fixture := fixtureManifest{Vectors: 10, Queries: 1, Dimensions: 1}
+	fixture := fixtureManifest{Vectors: 10_000, Queries: 1, Dimensions: 1}
 	withScratch, err := validateM8BenchmarkWork(cfg, fixture, maxBenchmarkWorkUnits, maxFixtureBytes)
 	if err != nil {
 		t.Fatal(err)
 	}
-	without := cfg
-	without.m8MembershipProbes, without.m8MembershipPackLimit = 0, 0
-	withoutScratch, err := validateM8BenchmarkWork(without, fixture, maxBenchmarkWorkUnits, maxFixtureBytes)
+	if withScratch.MembershipFeasibilityScratchBytes <= 0 || withScratch.MembershipFeasibilityPopulationBytes <= 0 {
+		t.Fatalf("feasibility population or scratch is unmodeled: %+v", withScratch)
+	}
+	phase, err := memoryAdd(withScratch.FixtureResidentBytes, withScratch.SourceSnapshotBytes, withScratch.ExactTruthBytes, withScratch.MembershipFeasibilityPopulationBytes, withScratch.MembershipFeasibilityScratchBytes)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if withScratch.MembershipFeasibilityScratchBytes <= 0 || withScratch.ModeledPeakBytes <= withoutScratch.ModeledPeakBytes {
-		t.Fatalf("feasibility scratch is not charged to the modeled peak: with=%+v without=%+v", withScratch, withoutScratch)
+	phase, err = memoryScaleCeil(phase, memorySlackNumerator, memorySlackDenominator)
+	if err != nil || withScratch.ModeledPeakBytes < phase {
+		t.Fatalf("feasibility phase is not charged to the modeled peak: plan=%+v phase=%d err=%v", withScratch, phase, err)
 	}
-	if _, err := validateM8BenchmarkWork(cfg, fixture, maxBenchmarkWorkUnits, withScratch.ModeledPeakBytes-1); err == nil || !strings.Contains(err.Error(), "membership_feasibility_scratch_bytes=") {
+	larger := fixture
+	larger.Queries = 100
+	largerPlan, err := validateM8BenchmarkWork(cfg, larger, maxBenchmarkWorkUnits, maxFixtureBytes)
+	if err != nil || largerPlan.MembershipFeasibilityPopulationBytes <= withScratch.MembershipFeasibilityPopulationBytes {
+		t.Fatalf("feasibility population does not scale with queries: small=%d large=%d err=%v", withScratch.MembershipFeasibilityPopulationBytes, largerPlan.MembershipFeasibilityPopulationBytes, err)
+	}
+	matrix := cfg
+	matrix.m8VariantDBs = []string{"a", "b", "c"}
+	matrix.m8OracleDomainCounts = []int{4, 4, 4}
+	matrixPlan, err := validateM8BenchmarkWork(matrix, fixture, maxBenchmarkWorkUnits, maxFixtureBytes)
+	if err != nil || matrixPlan.MembershipFeasibilityPopulationBytes != 3*withScratch.MembershipFeasibilityPopulationBytes {
+		t.Fatalf("retained matrix feasibility populations are not cumulative: one=%d matrix=%d err=%v", withScratch.MembershipFeasibilityPopulationBytes, matrixPlan.MembershipFeasibilityPopulationBytes, err)
+	}
+	if _, err := validateM8BenchmarkWork(cfg, fixture, maxBenchmarkWorkUnits, withScratch.ModeledPeakBytes-1); err == nil || !strings.Contains(err.Error(), "membership_feasibility_population_bytes=") || !strings.Contains(err.Error(), "membership_feasibility_scratch_bytes=") {
 		t.Fatalf("near-cap feasibility run was admitted: %v", err)
 	}
 }
