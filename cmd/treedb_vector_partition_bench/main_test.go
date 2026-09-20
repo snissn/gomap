@@ -995,7 +995,7 @@ func TestM3OverlapPartitionIndexBuildsReopensAndSearchesNativePacks(t *testing.T
 		"-partition-pivots", "2",
 		"-partition-max-leaf-bucket", "8",
 		"-partition-degree", "4",
-		"-partition-hnsw-m", "18",
+		"-partition-hnsw-m", "32",
 		"-partition-hnsw-ef-construction", "256",
 		"-router-max-scalar-work", "50000000000",
 	}

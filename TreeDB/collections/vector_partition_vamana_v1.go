@@ -25,7 +25,7 @@ type vectorPartitionVamanaScratchV1 struct {
 	epoch      uint32
 	queue      vectorIndexMinCandidateHeap
 	best       vectorIndexMaxCandidateHeap
-	discovered []vectorIndexCandidate
+	expanded   []vectorIndexCandidate
 	candidates []vectorIndexCandidate
 	byNode     map[int]float32
 	removed    []bool
@@ -230,12 +230,11 @@ func (s *vectorPartitionVamanaScratchV1) greedySearch(entry, target int, vectors
 	}
 	s.queue = s.queue[:0]
 	s.best = s.best[:0]
-	s.discovered = s.discovered[:0]
+	s.expanded = s.expanded[:0]
 	visit := func(node int) {
 		s.visited[node] = s.epoch
 		distance := vectorPartitionVamanaDistanceV1(vectors, dimensions, target, node)
 		candidate := vectorIndexCandidate{nodeID: node, distance: distance}
-		s.discovered = append(s.discovered, candidate)
 		if len(s.best) < limit || vectorIndexCandidateLess(candidate, s.best[0]) {
 			s.queue.push(candidate)
 			s.best.pushBounded(candidate, limit)
@@ -247,6 +246,7 @@ func (s *vectorPartitionVamanaScratchV1) greedySearch(entry, target int, vectors
 		if len(s.best) >= limit && vectorIndexCandidateWorse(current, s.best[0]) {
 			break
 		}
+		s.expanded = append(s.expanded, current)
 		for _, raw := range adjacency[current.nodeID] {
 			neighbor := int(raw)
 			if s.visited[neighbor] != s.epoch {
@@ -254,14 +254,14 @@ func (s *vectorPartitionVamanaScratchV1) greedySearch(entry, target int, vectors
 			}
 		}
 	}
-	out := s.discovered[:0]
-	for _, candidate := range s.discovered {
+	out := s.expanded[:0]
+	for _, candidate := range s.expanded {
 		if candidate.nodeID != target {
 			out = append(out, candidate)
 		}
 	}
-	s.discovered = out
-	return s.discovered
+	s.expanded = out
+	return s.expanded
 }
 
 func (s *vectorPartitionVamanaScratchV1) robustPrune(source int, candidates []vectorIndexCandidate, vectors []float32, dimensions int, alpha float32, degree int, selected []uint32, stats *vectorPartitionVamanaBuildStatsV1) []uint32 {

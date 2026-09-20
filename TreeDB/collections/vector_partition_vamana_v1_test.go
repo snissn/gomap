@@ -133,7 +133,7 @@ func TestVectorPartitionVamanaGreedySearchAndCurrentNeighborUnionV1(t *testing.T
 		nodes[i] = visited[i].nodeID
 	}
 	slices.Sort(nodes)
-	if !slices.Equal(nodes, []int{0, 1, 2, 4}) {
+	if !slices.Equal(nodes, []int{0, 1, 4}) {
 		t.Fatalf("greedy visited=%v", nodes)
 	}
 	merged := vectorPartitionVamanaMergeCurrentNeighborsV1(nil, 3, visited[:1], []uint32{1}, vectors, 2)
