@@ -164,4 +164,20 @@ func TestPackDomainMembershipsV1DeterministicAndBounded(t *testing.T) {
 	if _, err := PackDomainMembershipsV1(plan, bad); err == nil {
 		t.Fatal("accepted logical loads unrelated to memberships")
 	}
+
+	smallPlan, err := PlanByteBoundedShardsV1(ShardPlanInputV1{
+		Vectors: 6, Dimensions: 2, LogicalDomains: 3, OverlapRatio: .5, Imbalance: 0,
+		TargetHotBytes: uint64(PackFixedOverheadBytesV1 + 2*(alignedRowBytesForTest(2)+GraphIdentityOverheadPerRowV1)),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tooSmall := OverlapResult{Capacity: 3, Loads: []int{1, 2, 3}, Memberships: []Membership{
+		{VectorOrdinal: 0, Partition: 0, Home: true},
+		{VectorOrdinal: 1, Partition: 1, Home: true}, {VectorOrdinal: 2, Partition: 1, Home: true},
+		{VectorOrdinal: 3, Partition: 2, Home: true}, {VectorOrdinal: 4, Partition: 2, Home: true}, {VectorOrdinal: 5, Partition: 2, Home: true},
+	}}
+	if _, err := PackDomainMembershipsV1(smallPlan, tooSmall); err == nil || !strings.Contains(err.Error(), "physical pack 1 is empty") {
+		t.Fatalf("undersized domain err=%v", err)
+	}
 }

@@ -14,6 +14,18 @@ import (
 	"github.com/snissn/gomap/TreeDB/vectorpartition"
 )
 
+type m0BalancedPartitionerV1 struct{}
+
+func (m0BalancedPartitionerV1) Name() string    { return "m0_balanced_test" }
+func (m0BalancedPartitionerV1) License() string { return "test" }
+func (m0BalancedPartitionerV1) Partition(graph vectorpartition.Graph, partitions, _ int) ([]int, error) {
+	assignment := make([]int, len(graph.Neighbors))
+	for i := range assignment {
+		assignment[i] = i * partitions / len(assignment)
+	}
+	return assignment, nil
+}
+
 func TestM0MaterializeVariantV1OnlyAcceptsProductionVariants(t *testing.T) {
 	want := collections.VectorPartitionLocalGraphVariantConnectivityPreservingVamanaR64L256Alpha1_2V1
 	variant, m, efConstruction, err := m0MaterializeVariantV1(string(want))
@@ -346,7 +358,7 @@ func TestM0MaterializeByteBoundedMembershipReopensDisposableClone(t *testing.T) 
 	}
 	config := vectorpartition.DefaultConfig()
 	config.Partitions, config.Seed, config.MaxDistanceWork = 16, fixture.Seed, 20_000_000_000
-	artifact, err := vectorpartition.BuildWithPartitioner(input, config, vectorpartition.Source{SourceID: "qualification-test:" + fixture.Checksum}, vectorpartition.ReferencePartitioner{})
+	artifact, err := vectorpartition.BuildWithPartitioner(input, config, vectorpartition.Source{SourceID: "qualification-test:" + fixture.Checksum}, m0BalancedPartitionerV1{})
 	if err != nil {
 		t.Fatal(err)
 	}
