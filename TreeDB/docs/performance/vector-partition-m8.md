@@ -64,6 +64,18 @@ Fixed-fixture calibration and final-qualification commands also keep their
 existing eligibility restrictions.
 Use the ordinary retained M3/M8 paths for this new, separately declared packet.
 
+M3 source, router-source, partition-local and M8 source ingestion share the
+same JSON batcher: at most 8,192 rows and 32 MiB of encoded IDs/documents plus
+their per-row command-WAL length fields. The byte bound leaves headroom below
+the unchanged 64 MiB command-frame cap; a single over-cap row is refused.
+High-dimensional real embeddings can require more publications than synthetic
+fixtures because decimal JSON is larger than the FP32 source. Batch splitting
+preserves source ordinals, IDs, values and durability; it changes setup costs,
+so retain actual build costs and never reuse older build timings as current.
+The loader reuses bounded batch slice headers and clears consumed document
+references after each synchronous insert; it does not retain all encoded rows.
+The fixture memory planner's row-based bound remains conservative.
+
 ## R all-level router evidence boundary (#4773)
 
 The retained #4773 producer used report schema 6/result kind
