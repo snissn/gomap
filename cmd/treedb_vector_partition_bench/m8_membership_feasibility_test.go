@@ -177,7 +177,8 @@ func TestM8RetainedMembershipFeasibilityReplaysExactAssetsV1(t *testing.T) {
 	fixture := m8QualificationFixturesV1[0]
 	fixture.Vectors, fixture.Dimensions, fixture.Queries = 256, 8, 8
 	_, queries := fixtureData(fixture)
-	fixture.Checksum = fixtureChecksumFromData(fixtureVectors(fixture), queries)
+	vectors := fixtureVectors(fixture)
+	fixture.Checksum = fixtureChecksumFromData(vectors, queries)
 	traversal, ok := vectorpartition.AlignedTraversalRowBytesV1(fixture.Dimensions)
 	if !ok {
 		t.Fatal("invalid traversal-row shape")
@@ -193,7 +194,7 @@ func TestM8RetainedMembershipFeasibilityReplaysExactAssetsV1(t *testing.T) {
 	descriptor := testM8QualificationRetainedDescriptorWithShardPlanV1(t, dir, strings.Repeat("a", 40), fixture, "graph-disjoint-v1", partitionAssignmentGraphV1, 0, plan)
 	truthDir, truth := testM8QualificationTruthCacheV1(t, root, fixture)
 	cfg := config{out: filepath.Join(root, "out"), m8TruthCache: truthDir, m8TruthCacheSHA256: truth.ArtifactSHA256, topK: 10, recallTarget: 0, m8MembershipProbes: 2, m8MembershipPackLimit: 2, maxBytes: 1 << 30}
-	artifact, err := m8RunMembershipFeasibilityV1(cfg, fixture, dir, descriptor)
+	artifact, err := m8RunMembershipFeasibilityV1(cfg, fixture, vectors, dir, descriptor)
 	if err != nil || artifact.Result.Status != "sufficient" {
 		t.Fatalf("artifact=%+v err=%v", artifact, err)
 	}
@@ -233,9 +234,12 @@ func TestM8RetainedMembershipFeasibilityReplaysExactAssetsV1(t *testing.T) {
 	if err := os.WriteFile(shardGenerationPath, shardGeneration, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	mismatchedFixture := fixture
-	mismatchedFixture.Seed++
-	if _, err := m8RunMembershipFeasibilityV1(cfg, mismatchedFixture, dir, descriptor); err == nil || !strings.Contains(err.Error(), "validate retained feasibility fixture") {
+	mismatchedVectors := make([][]float64, len(vectors))
+	for i := range vectors {
+		mismatchedVectors[i] = append([]float64(nil), vectors[i]...)
+	}
+	mismatchedVectors[0][0]++
+	if _, err := m8RunMembershipFeasibilityV1(cfg, fixture, mismatchedVectors, dir, descriptor); err == nil || !strings.Contains(err.Error(), "validate retained feasibility fixture") {
 		t.Fatalf("retained feasibility accepted mismatched fixture rows: %v", err)
 	}
 }
@@ -250,7 +254,7 @@ func TestM8MembershipFeasibilityRejectsUnplannedRetainedDBV1(t *testing.T) {
 	fixture.Checksum = fixtureChecksumFromData(fixtureVectors(fixture), queries)
 	dir := filepath.Join(t.TempDir(), "retained")
 	descriptor := testM8QualificationRetainedDescriptorV1(t, dir, strings.Repeat("a", 40), fixture, "graph-disjoint-v1", partitionAssignmentGraphV1, 0)
-	if _, err := m8ComputeRetainedMembershipFeasibilityV1(config{}, fixture, dir, descriptor); err == nil || !strings.Contains(err.Error(), "requires a byte-bounded shard plan") {
+	if _, err := m8ComputeRetainedMembershipFeasibilityV1(config{}, fixture, fixtureVectors(fixture), dir, descriptor); err == nil || !strings.Contains(err.Error(), "requires a byte-bounded shard plan") {
 		t.Fatalf("unplanned retained DB err=%v", err)
 	}
 }

@@ -176,7 +176,7 @@ func runM8ProductionMultiGroupV1(cfg config, fixture fixtureManifest, vectors, q
 		membershipFeasibility = make([]m8MembershipFeasibilityArtifactV1, 0, len(m8RequiredVariantIDsV1))
 		for _, variantID := range m8RequiredVariantIDsV1 {
 			source := sourcesByVariant[variantID]
-			artifact, err := m8RunMembershipFeasibilityV1(cfg, fixture, source.dir, source.descriptor)
+			artifact, err := m8RunMembershipFeasibilityV1(cfg, fixture, vectors, source.dir, source.descriptor)
 			if err != nil {
 				return fmt.Errorf("M8 matrix membership feasibility %s: %w", variantID, err)
 			}
