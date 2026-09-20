@@ -206,7 +206,7 @@ func (r *VectorPartitionRouterV1) partitionLiveRepresentativesV1() ([]vectorPart
 // building generation into a ready generation. Publication is the only
 // visibility point; cancellation or any validation failure leaves it building.
 func (c *Collection) BuildAndPublishVectorPartitionRouterV1(ctx context.Context, building VectorPartitionManifestV1, partitions []internalrouter.RouterPartitionV1, opts VectorPartitionRouterBuildOptionsV1) (status VectorPartitionRouterBuildStatusV1, resultErr error) {
-	return c.buildAndPublishVectorPartitionRouterForGraphVariantV1(ctx, building, partitions, opts, VectorPartitionLocalGraphVariantCanonicalHNSWM18EfConstruction256V1)
+	return c.buildAndPublishVectorPartitionRouterForGraphVariantV1(ctx, building, partitions, opts, vectorPartitionLocalDefaultGraphVariantV1)
 }
 
 // BuildAndPublishVectorPartitionRouterForOfflineAssetVariantV1 completes an

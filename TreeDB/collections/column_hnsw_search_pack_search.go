@@ -303,7 +303,7 @@ func (v *columnHNSWSearchPackPreparedView) searchCosineWithContextFast(ctx conte
 		}
 		candidate, ok := scratch.popFrontierAccounting(&stats)
 		if !ok {
-			if v.Header.Version == columnHNSWSearchPackVersionV5 {
+			if columnHNSWSearchPackStopsAtEmptyFrontier(v.Header.Version) {
 				break
 			}
 			if len(scratch.top) >= efSearch {
@@ -658,7 +658,7 @@ func (v *columnHNSWSearchPackPreparedView) searchCosineWithContextTrace(ctx cont
 		}
 		candidate, ok := scratch.popFrontierAccounting(&stats)
 		if !ok {
-			if v.Header.Version == columnHNSWSearchPackVersionV5 {
+			if columnHNSWSearchPackStopsAtEmptyFrontier(v.Header.Version) {
 				termination = "frontier_empty"
 				break
 			}
@@ -826,6 +826,10 @@ func (v *columnHNSWSearchPackPreparedView) searchCosineWithContextTrace(ctx cont
 func columnHNSWSearchPackNextCandidateSeed(start int, rowCount int, visitMarks []uint16, visitEpoch uint16) (int, bool) {
 	ordinal, ok, _ := columnHNSWSearchPackNextCandidateSeedWithContext(context.Background(), start, rowCount, visitMarks, visitEpoch)
 	return ordinal, ok
+}
+
+func columnHNSWSearchPackStopsAtEmptyFrontier(version uint16) bool {
+	return version == columnHNSWSearchPackVersionV5 || version == columnHNSWSearchPackVersionV6
 }
 
 func columnHNSWSearchPackNextCandidateSeedWithContext(ctx context.Context, start int, rowCount int, visitMarks []uint16, visitEpoch uint16) (int, bool, error) {

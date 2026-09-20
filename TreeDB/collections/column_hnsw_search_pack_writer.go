@@ -147,8 +147,8 @@ func buildColumnHNSWSearchPackInputWithoutVectors(def VectorIndexDefinition, gra
 	}
 	entryOrdinal := -1
 	if len(rows) > 0 {
-		// columnVectorGraphNativeLocalityOrder places the HNSW entry node first;
-		// rebuild keeps that order when serializing rows and state assets.
+		// The selected graph builder places its entry node first; rebuild keeps
+		// that order when serializing rows and state assets.
 		entryOrdinal = 0
 	}
 	return columnHNSWSearchPackBuildInput{
@@ -446,7 +446,7 @@ func validateColumnHNSWSearchPackAssetPayloadDirectFile(path string, ref ColumnA
 	version := hnswPackU16(prefix, columnHNSWSearchPackHeaderVersionOffset)
 	switch version {
 	case columnHNSWSearchPackVersionV1:
-	case columnHNSWSearchPackVersionV2, columnHNSWSearchPackVersionV3, columnHNSWSearchPackVersionV4, columnHNSWSearchPackVersionV5:
+	case columnHNSWSearchPackVersionV2, columnHNSWSearchPackVersionV3, columnHNSWSearchPackVersionV4, columnHNSWSearchPackVersionV5, columnHNSWSearchPackVersionV6:
 		headerSize = columnHNSWSearchPackHeaderSizeV2
 		if err := readColumnHNSWSearchPackFileAt(file, ref.Offset+columnHNSWSearchPackHeaderSize, prefix[columnHNSWSearchPackHeaderSize:headerSize]); err != nil {
 			return err
@@ -541,6 +541,11 @@ func validateColumnHNSWSearchPackDirectFileSections(file *os.File, baseOffset in
 		}
 		if err := validateColumnHNSWSearchPackDirectAdjacency(file, baseOffset, layer, rows, offsets, neighbors); err != nil {
 			return err
+		}
+		if pack.Header.Version == columnHNSWSearchPackVersionV6 && layer == 0 {
+			if err := validateColumnVamanaPartitionGraphDirectFileV1(file, baseOffset, rows, offsets, neighbors); err != nil {
+				return err
+			}
 		}
 	}
 	if pack.Header.HasAuxiliaryNavigation {
@@ -658,6 +663,57 @@ func validateColumnHNSWSearchPackDirectAdjacency(file *os.File, baseOffset int64
 			}
 		}
 		index += chunk / 4
+	}
+	return nil
+}
+
+func validateColumnVamanaPartitionGraphDirectFileV1(file *os.File, baseOffset int64, rows uint64, offsets, neighbors columnHNSWSearchPackSection) error {
+	if rows == 0 {
+		return nil
+	}
+	seen := make([]bool, int(rows))
+	queue := make([]uint32, 1, int(rows))
+	seen[0] = true
+	var offsetBytes [16]byte
+	var neighborBytes [vectorPartitionVamanaDegreeV1 * 4]byte
+	for head := 0; head < len(queue); head++ {
+		row := queue[head]
+		if err := readColumnHNSWSearchPackFileAt(file, baseOffset+int64(offsets.Offset)+int64(row)*8, offsetBytes[:]); err != nil {
+			return err
+		}
+		start, end := binary.LittleEndian.Uint64(offsetBytes[:8]), binary.LittleEndian.Uint64(offsetBytes[8:])
+		if end < start || end > neighbors.Count {
+			return errors.New("collections: connectivity-preserving partition Vamana offsets")
+		}
+		degree := end - start
+		if degree > vectorPartitionVamanaDegreeV1 {
+			return fmt.Errorf("collections: connectivity-preserving partition Vamana row=%d exceeds degree=%d", row, vectorPartitionVamanaDegreeV1)
+		}
+		current := neighborBytes[:degree*4]
+		if err := readColumnHNSWSearchPackFileAt(file, baseOffset+int64(neighbors.Offset+start*4), current); err != nil {
+			return err
+		}
+		for i := uint64(0); i < degree; i++ {
+			neighbor := binary.LittleEndian.Uint32(current[i*4:])
+			if uint64(neighbor) >= rows {
+				return fmt.Errorf("collections: connectivity-preserving partition Vamana row=%d neighbor=%d outside rows=%d", row, neighbor, rows)
+			}
+			if neighbor == row {
+				return fmt.Errorf("collections: connectivity-preserving partition Vamana row=%d has self edge", row)
+			}
+			for earlier := uint64(0); earlier < i; earlier++ {
+				if binary.LittleEndian.Uint32(current[earlier*4:]) == neighbor {
+					return fmt.Errorf("collections: connectivity-preserving partition Vamana row=%d has duplicate neighbor=%d", row, neighbor)
+				}
+			}
+			if !seen[neighbor] {
+				seen[neighbor] = true
+				queue = append(queue, neighbor)
+			}
+		}
+	}
+	if uint64(len(queue)) != rows {
+		return fmt.Errorf("collections: connectivity-preserving partition Vamana entry reaches %d of %d rows", len(queue), rows)
 	}
 	return nil
 }
