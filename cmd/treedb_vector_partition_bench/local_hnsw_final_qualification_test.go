@@ -428,4 +428,27 @@ func TestLocalHNSWFinalQualificationDescriptorsV1(t *testing.T) {
 	if err := localHNSWFinalQualificationDescriptorsV1(fixture, baseline, candidate, config{baseSHA: head, headSHA: head}, executable); err == nil {
 		t.Fatal("accepted source ordinal drift")
 	}
+	candidate = baseline
+	candidate.PartitionHNSWM, candidate.PartitionHNSWEfC = 18, 256
+	candidate.KaHIPPythonSHA256 = strings.Repeat("5", 64)
+	if err := localHNSWFinalQualificationDescriptorsV1(fixture, baseline, candidate, config{baseSHA: head, headSHA: head}, executable); err == nil {
+		t.Fatal("accepted paired interpreter drift")
+	}
+}
+
+func TestLocalHNSWFinalQualificationVariantBackendV1(t *testing.T) {
+	fixture := fixtureManifest{Seed: 4016}
+	variant := m3VariantDescriptorV1{
+		VariantID: "graph-overlap-020-v1", AssignmentBasis: partitionAssignmentGraphV1,
+		ArtifactSHA256: strings.Repeat("a", 64), GraphArtifactSHA256: strings.Repeat("a", 64),
+		ArtifactBackend:   "kahip_python_3.25_eco_symmetrized_v1_seed_4016",
+		KaHIPPythonSHA256: strings.Repeat("b", 64), KaHIPAdapterSHA256: kahipAdapterSHA256,
+	}
+	if !localHNSWFinalQualificationVariantBackendV1(variant, fixture) {
+		t.Fatal("rejected portable pinned KaHIP execution identity")
+	}
+	variant.KaHIPPythonSHA256 = ""
+	if localHNSWFinalQualificationVariantBackendV1(variant, fixture) {
+		t.Fatal("accepted missing interpreter provenance")
+	}
 }

@@ -256,7 +256,7 @@ func localHNSWFinalQualificationProductV1(checkout, productSHA, headSHA string) 
 }
 
 func localHNSWFinalQualificationDescriptorsV1(fixture fixtureManifest, baseline, candidate m3VariantDescriptorV1, cfg config, executableSHA string) error {
-	if !m8QualificationFixtureV1(fixture) || !m8QualificationM3SharedBuildCapsV1(baseline, fixture) || !m8QualificationM3SharedBuildCapsV1(candidate, fixture) || baseline.PartitionHNSWM != 16 || m3DescriptorPartitionHNSWEfCV1(baseline) != 128 || candidate.PartitionHNSWM != 18 || m3DescriptorPartitionHNSWEfCV1(candidate) != 256 || baseline.FixtureChecksum != fixture.Checksum || candidate.FixtureChecksum != fixture.Checksum || baseline.SourceRows != uint64(fixture.Vectors) || candidate.SourceRows != uint64(fixture.Vectors) || baseline.Partitions != 16 || candidate.Partitions != 16 || baseline.OverlapRatio != .2 || candidate.OverlapRatio != .2 || !m8QualificationVariantBackendV1(baseline, fixture) || !m8QualificationVariantBackendV1(candidate, fixture) {
+	if !m8QualificationFixtureV1(fixture) || !m8QualificationM3SharedBuildCapsV1(baseline, fixture) || !m8QualificationM3SharedBuildCapsV1(candidate, fixture) || baseline.PartitionHNSWM != 16 || m3DescriptorPartitionHNSWEfCV1(baseline) != 128 || candidate.PartitionHNSWM != 18 || m3DescriptorPartitionHNSWEfCV1(candidate) != 256 || baseline.FixtureChecksum != fixture.Checksum || candidate.FixtureChecksum != fixture.Checksum || baseline.SourceRows != uint64(fixture.Vectors) || candidate.SourceRows != uint64(fixture.Vectors) || baseline.Partitions != 16 || candidate.Partitions != 16 || baseline.OverlapRatio != .2 || candidate.OverlapRatio != .2 || !localHNSWFinalQualificationVariantBackendV1(baseline, fixture) || !localHNSWFinalQualificationVariantBackendV1(candidate, fixture) {
 		return errors.New("local HNSW final qualification retained definition")
 	}
 	if err := m8ValidateRetainedM3ProvenanceV1(cfg, baseline, executableSHA); err != nil {
@@ -265,8 +265,15 @@ func localHNSWFinalQualificationDescriptorsV1(fixture fixtureManifest, baseline,
 	if err := m8ValidateRetainedM3ProvenanceV1(cfg, candidate, executableSHA); err != nil {
 		return err
 	}
-	if !m8SHA256V1(baseline.SourceOrdinalDigest) || baseline.SourceOrdinalDigest != candidate.SourceOrdinalDigest || baseline.Source != candidate.Source || baseline.VariantID != candidate.VariantID || baseline.AssignmentBasis != candidate.AssignmentBasis || baseline.ArtifactSHA256 != candidate.ArtifactSHA256 || baseline.GraphArtifactSHA256 != candidate.GraphArtifactSHA256 || baseline.GraphBuildSHA256 != candidate.GraphBuildSHA256 || baseline.RouterConfig != candidate.RouterConfig || baseline.IndexDefinitionDigest != candidate.IndexDefinitionDigest || baseline.RouterAssetChecksum != candidate.RouterAssetChecksum || baseline.RouterModelDigest != candidate.RouterModelDigest || baseline.SourceGeneration != candidate.SourceGeneration || baseline.SourceChecksum != candidate.SourceChecksum || baseline.SourceSchemaHash != candidate.SourceSchemaHash || baseline.SourceRows != candidate.SourceRows {
+	if !m8SHA256V1(baseline.SourceOrdinalDigest) || baseline.SourceOrdinalDigest != candidate.SourceOrdinalDigest || baseline.Source != candidate.Source || baseline.VariantID != candidate.VariantID || baseline.AssignmentBasis != candidate.AssignmentBasis || baseline.ArtifactSHA256 != candidate.ArtifactSHA256 || baseline.GraphArtifactSHA256 != candidate.GraphArtifactSHA256 || baseline.GraphBuildSHA256 != candidate.GraphBuildSHA256 || baseline.KaHIPPythonSHA256 != candidate.KaHIPPythonSHA256 || baseline.KaHIPAdapterSHA256 != candidate.KaHIPAdapterSHA256 || baseline.RouterConfig != candidate.RouterConfig || baseline.IndexDefinitionDigest != candidate.IndexDefinitionDigest || baseline.RouterAssetChecksum != candidate.RouterAssetChecksum || baseline.RouterModelDigest != candidate.RouterModelDigest || baseline.SourceGeneration != candidate.SourceGeneration || baseline.SourceChecksum != candidate.SourceChecksum || baseline.SourceSchemaHash != candidate.SourceSchemaHash || baseline.SourceRows != candidate.SourceRows {
 		return errors.New("local HNSW final qualification retained source drift")
 	}
 	return nil
+}
+
+func localHNSWFinalQualificationVariantBackendV1(variant m3VariantDescriptorV1, fixture fixtureManifest) bool {
+	// The adapter verifies the exact KaHIP wheel RECORD and every payload. Keep
+	// the interpreter digest as paired provenance without tying replay to one
+	// retired host binary; the historical campaign gate remains frozen.
+	return variant.VariantID == "graph-overlap-020-v1" && variant.AssignmentBasis == partitionAssignmentGraphV1 && variant.ArtifactSHA256 == variant.GraphArtifactSHA256 && variant.ArtifactBackend == fmt.Sprintf("kahip_python_3.25_eco_symmetrized_v1_seed_%d", fixture.Seed) && m8SHA256V1(variant.KaHIPPythonSHA256) && variant.KaHIPAdapterSHA256 == kahipAdapterSHA256
 }
