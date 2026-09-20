@@ -270,6 +270,17 @@ func TestM3ShardGenerationDescriptorPersistsAndReopensV1(t *testing.T) {
 	if err := m3VerifyRetainedShardGenerationV1(dir, descriptor); err != nil {
 		t.Fatalf("matching record rejected: %v", err)
 	}
+	assets := []collections.VectorPartitionAssetV1{
+		{PartitionID: 0, Bytes: got.PackSummaries[0].Bytes},
+		{PartitionID: 1, Bytes: got.PackSummaries[1].Bytes},
+	}
+	if _, err := m3ValidateRetainedShardPackBytesV1(dir, descriptor, assets); err != nil {
+		t.Fatalf("matching retained pack bytes rejected: %v", err)
+	}
+	assets[0].Bytes++
+	if _, err := m3ValidateRetainedShardPackBytesV1(dir, descriptor, assets); err == nil {
+		t.Fatal("retained admission accepted a pack above its encoded byte envelope")
+	}
 	for name, mutate := range map[string]func(*m3VariantDescriptorV1){
 		"ratio":       func(c *m3VariantDescriptorV1) { c.OverlapRatio = 0 },
 		"capacity":    func(c *m3VariantDescriptorV1) { c.Capacity++ },

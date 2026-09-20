@@ -171,6 +171,23 @@ func m3VerifyRetainedShardGenerationV1(dir string, d m3VariantDescriptorV1) erro
 	return nil
 }
 
+func m3ValidateRetainedShardPackBytesV1(dir string, d m3VariantDescriptorV1, assets []collections.VectorPartitionAssetV1) (vectorpartition.ShardGenerationDescriptorV1, error) {
+	if d.ShardPlan == (vectorpartition.ShardPlanV1{}) {
+		return vectorpartition.ShardGenerationDescriptorV1{}, nil
+	}
+	if err := m3VerifyRetainedShardGenerationV1(dir, d); err != nil {
+		return vectorpartition.ShardGenerationDescriptorV1{}, err
+	}
+	record, err := m3ReadShardGenerationDescriptorV1(dir, d.ShardGenerationDigest)
+	if err != nil {
+		return vectorpartition.ShardGenerationDescriptorV1{}, err
+	}
+	if err := m3ValidateActualShardPackBytesV1(assets, record.PackSummaries); err != nil {
+		return vectorpartition.ShardGenerationDescriptorV1{}, err
+	}
+	return record, nil
+}
+
 // m3VerifyShardGenerationMembershipsV1 compares the record's individual
 // membership pairs against the per-partition artifact ordinals that actually
 // materialized the packs.

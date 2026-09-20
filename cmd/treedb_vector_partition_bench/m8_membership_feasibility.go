@@ -233,14 +233,8 @@ func m8ComputeRetainedMembershipFeasibilityV1(cfg config, fixture fixtureManifes
 	if err := m3DescriptorMatchesManifestV1(descriptor, fixture, manifest, assets.status.ModelDigest, assets.status.Config); err != nil {
 		return m8MembershipFeasibilityV1{}, err
 	}
-	if err := m3VerifyRetainedShardGenerationV1(dir, descriptor); err != nil {
-		return m8MembershipFeasibilityV1{}, err
-	}
-	record, err := m3ReadShardGenerationDescriptorV1(dir, descriptor.ShardGenerationDigest)
+	record, err := m3ValidateRetainedShardPackBytesV1(dir, descriptor, manifest.Assets)
 	if err != nil {
-		return m8MembershipFeasibilityV1{}, err
-	}
-	if err := m3ValidateActualShardPackBytesV1(manifest.Assets, record.PackSummaries); err != nil {
 		return m8MembershipFeasibilityV1{}, err
 	}
 	truth, truthEvidence, err := m8LoadOrComputeTruthV1(cfg.m8TruthCache, nil, manifest, fixture, make([][]float64, fixture.Queries), cfg.topK, cfg.m8TruthCacheSHA256)

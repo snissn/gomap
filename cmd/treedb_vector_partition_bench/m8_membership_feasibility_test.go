@@ -55,6 +55,30 @@ func TestM8MembershipFeasibilityPlanChargesWholePopulationV1(t *testing.T) {
 	}
 }
 
+func TestM8MembershipFeasibilityScratchIsChargedToPeakV1(t *testing.T) {
+	cfg := config{
+		partitions: 4, overlaps: []float64{0}, probes: []int{2}, efSearch: []int{96}, concurrency: []int{1}, topK: 10,
+		m8MembershipProbes: 2, m8MembershipPackLimit: 2,
+	}
+	fixture := fixtureManifest{Vectors: 10, Queries: 1, Dimensions: 1}
+	withScratch, err := validateM8BenchmarkWork(cfg, fixture, maxBenchmarkWorkUnits, maxFixtureBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	without := cfg
+	without.m8MembershipProbes, without.m8MembershipPackLimit = 0, 0
+	withoutScratch, err := validateM8BenchmarkWork(without, fixture, maxBenchmarkWorkUnits, maxFixtureBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if withScratch.MembershipFeasibilityScratchBytes <= 0 || withScratch.ModeledPeakBytes <= withoutScratch.ModeledPeakBytes {
+		t.Fatalf("feasibility scratch is not charged to the modeled peak: with=%+v without=%+v", withScratch, withoutScratch)
+	}
+	if _, err := validateM8BenchmarkWork(cfg, fixture, maxBenchmarkWorkUnits, withScratch.ModeledPeakBytes-1); err == nil || !strings.Contains(err.Error(), "membership_feasibility_scratch_bytes=") {
+		t.Fatalf("near-cap feasibility run was admitted: %v", err)
+	}
+}
+
 func TestM8MembershipPhysicalPackExpansionV1(t *testing.T) {
 	got, err := m8MembershipExpandDomainsV1([][]uint32{{1, 3}, {2, 4}}, []uint32{0, 1}, 4)
 	if err != nil || !reflect.DeepEqual(got, []uint32{1, 2, 3, 4}) {
@@ -134,6 +158,13 @@ func TestM8RetainedMembershipFeasibilityReplaysExactAssetsV1(t *testing.T) {
 	if !m8MembershipFeasibilityMatchesReportV1(artifact.Result, report, 2, 2) {
 		t.Fatal("exact retained feasibility identity did not bind to its report")
 	}
+	opened, err := openM8ProductionMultiGroupExistingAssetsWithPolicyV1(dir, []string{"g0", "g1"}, 16, fixture, fixtureVectors(fixture), false)
+	if err != nil {
+		t.Fatalf("normal retained admission rejected exact shard bytes: %v", err)
+	}
+	if err := opened.Close(); err != nil {
+		t.Fatal(err)
+	}
 	report.TruthCache.ArtifactSHA256 = strings.Repeat("f", 64)
 	if m8MembershipFeasibilityMatchesReportV1(artifact.Result, report, 2, 2) {
 		t.Fatal("stale truth identity bound to retained feasibility")
@@ -143,5 +174,9 @@ func TestM8RetainedMembershipFeasibilityReplaysExactAssetsV1(t *testing.T) {
 	}
 	if err := m8ReplayMembershipFeasibilityV1(cfg, fixture, dir, descriptor, artifact); err == nil {
 		t.Fatal("stale shard generation replay accepted")
+	}
+	if opened, err := openM8ProductionMultiGroupExistingAssetsWithPolicyV1(dir, []string{"g0", "g1"}, 16, fixture, fixtureVectors(fixture), false); err == nil {
+		_ = opened.Close()
+		t.Fatal("normal retained admission accepted a stale shard generation record without the optional feasibility gate")
 	}
 }
