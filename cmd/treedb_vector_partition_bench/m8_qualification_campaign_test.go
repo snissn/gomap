@@ -2133,7 +2133,7 @@ func testM8QualificationRetainedDescriptorWithShardPlanV1(t *testing.T, dir, hea
 			t.Fatal(err)
 		}
 	}
-	capacity, err := m3OverlapCapacityV1(artifact, ratio)
+	capacity, err := m3OverlapCapacityForPlanV1(shardPlan, artifact, ratio)
 	if err != nil {
 		t.Fatal(err)
 	}
