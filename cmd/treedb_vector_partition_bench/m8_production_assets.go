@@ -506,6 +506,9 @@ func m8RetainedGraphVariantV1(manifest collections.VectorPartitionManifestV1, de
 	if offline && !allowOffline {
 		return "", false, errors.New("retained M8 descriptor local HNSW construction is not production-selected")
 	}
+	if offline && (retained != collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationV1 || m != 16 || efConstruction != 128) {
+		return "", false, errors.New("retained M8 offline graph is not the final M16/eFC128 control")
+	}
 	return retained, offline, nil
 }
 
