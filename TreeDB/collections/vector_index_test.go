@@ -1720,6 +1720,61 @@ func TestVectorIndexCanonicalInsertPreservesUpperSearchSetForDescent(t *testing.
 	t.Fatalf("layer-0 descent lost non-selected upper seed; neighbors=%+v", index.nodes[inserted].neighbors[0])
 }
 
+func TestVectorIndexCanonicalConstructionUsesStableIDTies(t *testing.T) {
+	index, err := newVectorIndex(nil, VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 1, EfConstruction: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	vector := []float32{1, 0}
+	index.nodes = []vectorIndexNode{
+		index.newVectorIndexNode([]byte("z"), vector, 1),
+		index.newVectorIndexNode([]byte("a"), vector, 1),
+	}
+	index.nodes[0].neighbors[1] = []vectorIndexNeighbor{{nodeID: 1}}
+	index.nodes[0].neighbors[0] = []vectorIndexNeighbor{{nodeID: 1}}
+
+	if got := index.greedyNearestAtLayerLocked(vector, 1, nil, 0, 1); got != 0 {
+		t.Fatalf("default greedy tie=%d want native ordinal 0", got)
+	}
+	if got := index.greedyNearestAtLayerCanonicalConstructionLocked(vector, 1, nil, 0, 1); got != 1 {
+		t.Fatalf("canonical greedy tie=%d want stable-ID node 1", got)
+	}
+
+	var scratch vectorIndexSearchScratch
+	if got := index.searchLayerWithCandidateSeedsScratchLocked(vector, 1, nil, 0, nil, 1, 0, &scratch); len(got) != 1 || got[0].nodeID != 0 {
+		t.Fatalf("default bounded tie=%v want native ordinal 0", got)
+	}
+	if got := index.searchLayerWithCanonicalCandidateSeedsScratchLocked(vector, 1, nil, 0, nil, 1, 0, &scratch); len(got) != 1 || got[0].nodeID != 1 {
+		t.Fatalf("canonical bounded tie=%v want stable-ID node 1", got)
+	}
+
+	// The insertion path must select both canonical helpers: the upper greedy
+	// step moves 0 -> 1, then bounded layer-0 search keeps 1 over native node 0.
+	index.nodes[0].neighbors[0] = nil
+	index.nodes[1].neighbors[0] = []vectorIndexNeighbor{{nodeID: 0}}
+	index.entry, index.maxLevel = 0, 1
+	index.currentNode["z"], index.currentNode["a"] = 0, 1
+	index.layer0ConstructionPolicy = &vectorIndexLayer0ConstructionPolicyV1{initialSelectionFactor: 1, preserveSearchSet: true}
+	var documentID []byte
+	for i := 0; i < 1000; i++ {
+		candidate := []byte(fmt.Sprintf("canonical-stable-tie-%d", i))
+		if index.levelForDocumentID(candidate) == 0 {
+			documentID = candidate
+			break
+		}
+	}
+	if documentID == nil {
+		t.Fatal("no deterministic level-0 document ID found")
+	}
+	if err := index.insertVectorLocked(documentID, vector); err != nil {
+		t.Fatal(err)
+	}
+	inserted := len(index.nodes) - 1
+	if got := index.nodes[inserted].neighbors[0]; len(got) != 1 || got[0].nodeID != 1 {
+		t.Fatalf("canonical insertion tie=%v want stable-ID node 1", got)
+	}
+}
+
 func TestVectorIndexCurrentSearchCountsUpperLayerScoresInBound(t *testing.T) {
 	index, err := newVectorIndex(nil, VectorIndexOptions{
 		Name:       "embedding",
