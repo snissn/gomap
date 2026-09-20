@@ -114,6 +114,7 @@ type config struct {
 	memory                    benchmarkMemoryPlan
 	stage                     string
 	m3PersistDir              string
+	m3FinalOfflineGraph       bool
 	m8ExistingDB              string
 	m8VariantDBs              []string
 	m8OracleDomainCounts      []int
@@ -983,6 +984,7 @@ func parseConfig(args []string) (config, error) {
 	fs.StringVar(&cfg.m8MatrixOut, "m8-matrix-out", "", "internal matrix-wide output root for child cleanliness checks")
 	fs.StringVar(&cfg.m8MatrixProfiles, "m8-matrix-profiles", "", "internal matrix-wide profile root for child cleanliness checks")
 	fs.StringVar(&cfg.m3PersistDir, "m3-persist-db", "", "retain the single overlap,partition_index row as a persistent TreeDB directory for downstream service benchmarks")
+	fs.BoolVar(&cfg.m3FinalOfflineGraph, "m3-final-offline-graph", false, "materialize the final qualifier's retained M16/eFC128 offline graph control")
 	fs.StringVar(&cfg.m8ExistingDB, "m8-existing-db", "", "read-only existing TreeDB M3 asset directory for production_multi_group; never rebuilt or deleted")
 	fs.StringVar(&m8VariantDBs, "m8-variant-dbs", "", "comma-separated retained M3 directories for the strict three-variant production matrix")
 	fs.Uint64Var(&cfg.m8MaxRSSBytes, "m8-max-rss-bytes", cfg.m8MaxRSSBytes, "hard process peak-RSS acceptance bound for production_multi_group")
@@ -1169,6 +1171,9 @@ func parseConfig(args []string) (config, error) {
 	}
 	if cfg.m3PersistDir != "" && (cfg.stage != "overlap,partition_index" || len(cfg.overlaps) != 1) {
 		return config{}, errors.New("-m3-persist-db requires stage overlap,partition_index with exactly one overlap ratio")
+	}
+	if cfg.m3FinalOfflineGraph && (cfg.stage != "overlap,partition_index" || cfg.m3PersistDir == "" || cfg.partitionAssignment != partitionAssignmentGraphV1 || cfg.partitionHNSWM != 16 || cfg.partitionHNSWEfC != 128) {
+		return config{}, errors.New("-m3-final-offline-graph requires retained graph-assignment M3 with explicit M16/efConstruction128")
 	}
 	if cfg.routerCandidates < 1 || cfg.routerCandidates > collections.MaxVectorPartitionRouterScoreBudgetV3 {
 		return config{}, errors.New("router score budget must be in [1,1000000]")
