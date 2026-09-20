@@ -2288,13 +2288,26 @@ func newM8AttributionHarnessV1(assets *m8ProductionMultiGroupAssetsV1) (_ *m8Att
 		}
 	}()
 	for partition := range h.searchers {
-		searcher, err := assets.collection.OpenVectorPartitionLocalSearcherForGenerationV1(partitionHNSWIndex, assets.manifest.Generation, uint32(partition))
+		searcher, err := m8OpenExactVariantPartitionV1(context.Background(), assets, uint32(partition))
 		if err != nil {
 			return nil, fmt.Errorf("open M8 attribution partition %d: %w", partition, err)
 		}
 		h.searchers[partition] = searcher
 	}
 	return h, nil
+}
+
+func m8OpenExactVariantPartitionV1(ctx context.Context, assets *m8ProductionMultiGroupAssetsV1, partition uint32) (*collections.VectorPartitionLocalSearcherV1, error) {
+	if assets == nil || assets.collection == nil || assets.graphVariant == "" {
+		return nil, errors.New("incomplete M8 exact-variant assets")
+	}
+	for i := range assets.manifest.Assets {
+		asset := assets.manifest.Assets[i]
+		if asset.PartitionID == partition {
+			return assets.collection.OpenVectorPartitionLocalSearcherForOfflineAssetVariantWithContextV1(ctx, partitionHNSWIndex, assets.manifest, asset, assets.graphVariant)
+		}
+	}
+	return nil, fmt.Errorf("M8 exact-variant partition %d is missing", partition)
 }
 
 func (h *m8AttributionHarnessV1) Close() error {
@@ -3024,7 +3037,7 @@ func m8ExactPartitionUnionV1(ctx context.Context, assets *m8ProductionMultiGroup
 	}
 	merged := make([]m8CanonicalResultV1, 0, len(assets.manifest.Placements)*topK)
 	for partition := 0; partition < len(assets.manifest.Placements); partition++ {
-		searcher, err := assets.collection.OpenVectorPartitionLocalSearcherForGenerationV1(partitionHNSWIndex, assets.manifest.Generation, uint32(partition))
+		searcher, err := m8OpenExactVariantPartitionV1(ctx, assets, uint32(partition))
 		if err != nil {
 			return nil, err
 		}

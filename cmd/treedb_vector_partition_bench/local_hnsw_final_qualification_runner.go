@@ -15,6 +15,7 @@ import (
 
 const (
 	localHNSWFinalProductPullRequestV1 = 4784
+	localHNSWFinalProductMergeSHAV1    = "141fa336a59447daee4d5cff8f724dcdef96ff47"
 )
 
 func runLocalHNSWFinalQualificationV1(args []string, stdout io.Writer) error {
@@ -58,7 +59,7 @@ func runLocalHNSWFinalQualificationV1(args []string, stdout io.Writer) error {
 	}
 	var err error
 	baseSHA, headSHA, err = provenanceWithExplicitV1(baseSHA, headSHA)
-	if err != nil || baseSHA != localHNSWAttributionSourceLockV1 || !validLowerSHA(productSHA) {
+	if err != nil || baseSHA != localHNSWAttributionSourceLockV1 || productSHA != localHNSWFinalProductMergeSHAV1 {
 		return errors.New("local HNSW final qualification source lock")
 	}
 	sourceCheckout, err = localHNSWAttributionSourceCheckoutV1(sourceCheckout, baseSHA, headSHA)
