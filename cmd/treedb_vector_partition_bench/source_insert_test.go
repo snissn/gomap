@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/collections"
@@ -162,6 +163,9 @@ func BenchmarkPartitionSourceInsert(b *testing.B) {
 				}
 				if closeErr != nil {
 					b.Fatal(closeErr)
+				}
+				if err := os.RemoveAll(dir); err != nil {
+					b.Fatal(err)
 				}
 			}
 			b.ReportMetric(rows*float64(b.N)/b.Elapsed().Seconds(), "rows/s")
