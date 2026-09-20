@@ -770,6 +770,93 @@ func TestColumnVamanaConnectivityPreservingPartitionPackV6(t *testing.T) {
 	}
 }
 
+func TestColumnVamanaConnectivityPreservingPartitionPackDirectFileV6(t *testing.T) {
+	const rows = 66
+	input := testColumnHNSWSearchPackInput2312()
+	input.Rows = rows
+	input.M = columnVamanaConnectivityPreservingPartitionM
+	input.EfConstruction = columnVamanaConnectivityPreservingPartitionL
+	input.MaxLayer = 0
+	input.Levels = make([]uint16, rows)
+	input.NormalizedVectors = make([]float32, rows*input.VectorStride)
+	input.RowRefGenerations = make([]int64, rows)
+	input.RowRefPartIDs = make([]int64, rows)
+	input.RowRefRowIndexes = make([]int64, rows)
+	input.RowRefAppliedCommandLSN = make([]int64, rows)
+	input.DocumentIDOffsets = make([]uint64, rows+1)
+	input.DocumentIDBytes = bytes.Repeat([]byte{'a'}, rows)
+	for row := 0; row < rows; row++ {
+		input.NormalizedVectors[row*input.VectorStride] = 1
+		input.RowRefGenerations[row] = int64(input.BaseIdentity.ManifestGeneration)
+		input.RowRefPartIDs[row] = 1
+		input.RowRefRowIndexes[row] = int64(row)
+		input.RowRefAppliedCommandLSN[row] = int64(row + 1)
+		input.DocumentIDOffsets[row+1] = uint64(row + 1)
+	}
+	offsets := make([]uint64, rows+1)
+	offsets[1], offsets[2] = 64, 66
+	for row := 2; row < rows; row++ {
+		offsets[row+1] = 66
+	}
+	neighbors := make([]uint32, 0, 66)
+	for neighbor := uint32(1); neighbor <= 64; neighbor++ {
+		neighbors = append(neighbors, neighbor)
+	}
+	neighbors = append(neighbors, 65, 0)
+	input.AdjacencyLayers = []columnHNSWSearchPackLayerInput{{Offsets: offsets, Neighbors: neighbors}}
+	input.MembershipDigest[0] = 1
+	input.ConnectivityPreservingPartitionVamana = true
+	raw, err := encodeColumnHNSWSearchPack(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pack, err := decodeColumnHNSWSearchPack(raw, columnHNSWSearchPackDecodeOptions{ExpectedBaseIdentity: input.BaseIdentity, ExpectedMembershipDigest: input.MembershipDigest})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootDir := t.TempDir()
+	cfg := stableColumnAppendTestConfig("vamana-direct-v6")
+	appender, err := newColumnPhysicalAssetSegmentAppender(rootDir, cfg, 4787)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref, err := appender.appendKindWithAlignment(raw, ColumnAssetKindTCS1HNSWSearchPack, input.BaseIdentity.ManifestGeneration, 77, int64(columnHNSWSearchPackAlignment))
+	if closeErr := appender.close(); err != nil || closeErr != nil {
+		t.Fatalf("append/close Vamana pack err=%v close=%v", err, closeErr)
+	}
+	path, err := columnAssetSegmentPath(rootDir, ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	graph := columnVectorGraphManifestSnapshot{RowCount: input.Rows, BaseManifestGeneration: input.BaseIdentity.ManifestGeneration, BaseManifestChecksum: input.BaseIdentity.ManifestChecksum, BaseSchemaHash: input.BaseIdentity.SchemaHash}
+	def := VectorIndexDefinition{Dimensions: input.Dimensions, M: input.M, EfConstruction: input.EfConstruction, EfSearch: input.EfSearch}
+	if err := validateColumnHNSWSearchPackAssetPayloadDirectFile(path, ref, graph, def); err != nil {
+		t.Fatal(err)
+	}
+	offsetSection := mustColumnHNSWSearchPackSectionForTest4429(t, pack.Sections, columnHNSWSearchPackSectionAdjacencyOffsets, 0)
+	neighborSection := mustColumnHNSWSearchPackSectionForTest4429(t, pack.Sections, columnHNSWSearchPackSectionAdjacencyNeighbors, 0)
+	for _, test := range []struct {
+		name   string
+		mutate func([]byte)
+		want   string
+	}{
+		{"degree", func(changed []byte) { binary.LittleEndian.PutUint64(changed[offsetSection.Offset+8:], 65) }, "exceeds degree"},
+		{"duplicate", func(changed []byte) { binary.LittleEndian.PutUint32(changed[neighborSection.Offset+4:], 1) }, "duplicate neighbor"},
+		{"self", func(changed []byte) { binary.LittleEndian.PutUint32(changed[neighborSection.Offset:], 0) }, "self edge"},
+		{"disconnected", func(changed []byte) { binary.LittleEndian.PutUint32(changed[neighborSection.Offset+64*4:], 2) }, "entry reaches"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			changed := append([]byte(nil), raw...)
+			test.mutate(changed)
+			changedRef := rewriteColumnHNSWSearchPackChecksumsForTest4429(t, changed, ref, pack.Sections)
+			writeColumnVectorGraphAssetRawForTest2041(t, rootDir, ref, changed)
+			if err := validateColumnHNSWSearchPackAssetPayloadDirectFile(path, changedRef, graph, def); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("direct-file validation error=%v want %q", err, test.want)
+			}
+		})
+	}
+}
+
 func TestColumnCanonicalPartitionPacksStopAtEmptyFrontier(t *testing.T) {
 	if columnHNSWSearchPackStopsAtEmptyFrontier(columnHNSWSearchPackVersionV4) ||
 		!columnHNSWSearchPackStopsAtEmptyFrontier(columnHNSWSearchPackVersionV5) ||

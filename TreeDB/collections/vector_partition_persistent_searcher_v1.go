@@ -333,7 +333,11 @@ func repairVectorPartitionLocalLayer0ReachabilityV1(rows []columnVectorGraphAsse
 		}
 		return float32(dot), nil
 	}
+	blocked := make([]bool, len(rows))
 	selectDrop := func(source int) (int, error) {
+		if blocked[source] {
+			return -1, nil
+		}
 		position := -1
 		var weakest float32
 		for candidate, neighbor := range adjacency[source] {
@@ -347,6 +351,9 @@ func repairVectorPartitionLocalLayer0ReachabilityV1(rows []columnVectorGraphAsse
 			if position < 0 || score < weakest || score == weakest && neighbor > adjacency[source][position] {
 				position, weakest = candidate, score
 			}
+		}
+		if position < 0 {
+			blocked[source] = true
 		}
 		return position, nil
 	}

@@ -738,7 +738,7 @@ func TestM8PartitionPackDiagnosticsFailClosedV1(t *testing.T) {
 		{PartitionID: 0, Rows: 3, ReachableRows: 3, TraversalRoots: 1, RowsByLayer: []uint64{3}, EdgesByLayer: []uint64{6}, Layer0DegreeLimit: 2, Layer0SaturatedRows: 3, Layer0ReciprocalEdges: 4, Layer0ReciprocalRatio: 4.0 / 6.0, Layer0Distances: distance(6), CombinedReachableRows: 3},
 		{PartitionID: 1, Rows: 2, ReachableRows: 1, TraversalRoots: 2, MaxLayer: 1, RowsByLayer: []uint64{2, 1}, EdgesByLayer: []uint64{2, 0}, Layer0DegreeLimit: 1, Layer0SaturatedRows: 2, Layer0ReciprocalEdges: 2, Layer0ReciprocalRatio: 1, Layer0Distances: distance(2), AuxiliaryEdges: 2, AuxiliaryCSRBytes: 32, AuxiliaryMaxDegree: 1, AuxiliaryDistances: distance(2), CombinedReachableRows: 2},
 	}
-	if !validM8PartitionPackDiagnosticsV1(valid, 2, []uint64{3, 2}) {
+	if !validM8PartitionPackDiagnosticsV1(valid, 2, []uint64{3, 2}, "") {
 		t.Fatal("rejected complete native-plus-auxiliary diagnostics")
 	}
 	for name, diagnostics := range map[string][]m8PartitionPackDiagnosticsV1{
@@ -776,17 +776,26 @@ func TestM8PartitionPackDiagnosticsFailClosedV1(t *testing.T) {
 		}()},
 	} {
 		t.Run(name, func(t *testing.T) {
-			if validM8PartitionPackDiagnosticsV1(diagnostics, 2, []uint64{3, 2}) {
+			if validM8PartitionPackDiagnosticsV1(diagnostics, 2, []uint64{3, 2}, "") {
 				t.Fatalf("accepted %s diagnostics: %+v", name, diagnostics)
 			}
 		})
+	}
+	vamana := []m8PartitionPackDiagnosticsV1{testM8NativePackDiagnosticsV1(0, 3), testM8NativePackDiagnosticsV1(1, 2)}
+	graphVariant := string(collections.VectorPartitionLocalGraphVariantConnectivityPreservingVamanaR64L256Alpha1_2V1)
+	if !validM8PartitionPackDiagnosticsV1(vamana, 2, []uint64{3, 2}, graphVariant) {
+		t.Fatal("rejected Vamana diagnostics with the declared R64 degree")
+	}
+	vamana[0].Layer0DegreeLimit = 16
+	if validM8PartitionPackDiagnosticsV1(vamana, 2, []uint64{3, 2}, graphVariant) {
+		t.Fatal("accepted stale M16 diagnostics for the declared R64 Vamana graph")
 	}
 }
 
 func testM8NativePackDiagnosticsV1(partition uint32, rows uint64) m8PartitionPackDiagnosticsV1 {
 	return m8PartitionPackDiagnosticsV1{
 		PartitionID: partition, Rows: rows, ReachableRows: rows, TraversalRoots: 1,
-		RowsByLayer: []uint64{rows}, EdgesByLayer: []uint64{0}, Layer0DegreeLimit: 16,
+		RowsByLayer: []uint64{rows}, EdgesByLayer: []uint64{0}, Layer0DegreeLimit: 64,
 		CombinedReachableRows: rows,
 	}
 }

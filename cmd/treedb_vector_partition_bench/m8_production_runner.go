@@ -3876,7 +3876,7 @@ func m8RunUnavailableGroupV1(ctx context.Context, topology *nativewire.VectorPar
 func m8ProductionGateLedgerForReportV1(report m8ProductionReportV1) m8ProductionGateLedgerV1 {
 	ledger := m8ProductionGateLedgerV1{ExhaustiveParity: "not_run", FailureHonesty: "fail", PartitionPackReachability: "fail", Recall: "fail", ProbeReduction: "fail", EndToEndQPS: "fail", TailLatency: "fail", Balance: "fail", OverlapStorage: "fail", ResourceBounds: "fail", ExistingBehavior: "pending_full_required_suites"}
 	domainCount, _, validDomains := m8ProductionDomainLayoutV1(report.Config)
-	if validM8PartitionPackDiagnosticsV1(report.PackDiagnostics, report.Config.Partitions, report.Resources.PartitionLoads) {
+	if validM8PartitionPackDiagnosticsV1(report.PackDiagnostics, report.Config.Partitions, report.Resources.PartitionLoads, report.Config.GraphVariant) {
 		ledger.PartitionPackReachability = "pass"
 	}
 	var exhaustive []m8ProductionRowV1
@@ -4149,9 +4149,17 @@ func m8ProductionGateValuesV1(ledger m8ProductionGateLedgerV1) []string {
 // layer-0 components, so every configured partition must be reported exactly
 // once as either a fully reachable native pack or a fully reachable V3
 // native-plus-auxiliary pack.
-func validM8PartitionPackDiagnosticsV1(diagnostics []m8PartitionPackDiagnosticsV1, partitions int, loads []uint64) bool {
+func validM8PartitionPackDiagnosticsV1(diagnostics []m8PartitionPackDiagnosticsV1, partitions int, loads []uint64, graphVariant string) bool {
 	if partitions < 1 || len(diagnostics) != partitions || len(loads) != partitions {
 		return false
+	}
+	expectedLayer0Degree := uint64(0)
+	if graphVariant == string(collections.VectorPartitionLocalGraphVariantConnectivityPreservingVamanaR64L256Alpha1_2V1) {
+		m, _, err := collections.VectorPartitionLocalGraphVariantParametersV1(collections.VectorIndexDefinition{}, collections.VectorPartitionLocalGraphVariantConnectivityPreservingVamanaR64L256Alpha1_2V1)
+		if err != nil || m <= 0 {
+			return false
+		}
+		expectedLayer0Degree = uint64(2 * m)
 	}
 	seen := make([]bool, partitions)
 	for _, diagnostic := range diagnostics {
@@ -4163,7 +4171,7 @@ func validM8PartitionPackDiagnosticsV1(diagnostics []m8PartitionPackDiagnosticsV
 			return false
 		}
 		if diagnostic.MaxLayer < 0 || len(diagnostic.RowsByLayer) != diagnostic.MaxLayer+1 || len(diagnostic.EdgesByLayer) != len(diagnostic.RowsByLayer) ||
-			diagnostic.RowsByLayer[0] != diagnostic.Rows || diagnostic.Layer0DegreeLimit == 0 ||
+			diagnostic.RowsByLayer[0] != diagnostic.Rows || diagnostic.Layer0DegreeLimit == 0 || expectedLayer0Degree != 0 && diagnostic.Layer0DegreeLimit != expectedLayer0Degree ||
 			diagnostic.Layer0SaturatedRows > diagnostic.Rows || diagnostic.Layer0ZeroIndegreeRows > diagnostic.Rows ||
 			diagnostic.Layer0DuplicateEdges > diagnostic.EdgesByLayer[0] || diagnostic.Layer0ReciprocalEdges > diagnostic.EdgesByLayer[0] ||
 			diagnostic.Layer0Distances.Count != diagnostic.EdgesByLayer[0] ||
@@ -4571,7 +4579,7 @@ func validateM8ProductionReportWithProfilesV1(report m8ProductionReportV1, caps 
 	if err := validateM8ProductionMeasurementCellsV1(report.Config, int(report.RouterRepresentatives), report.Rows); err != nil {
 		return err
 	}
-	if !validM8PartitionLoadsV1(report) || !validM8PartitionPackDiagnosticsV1(report.PackDiagnostics, report.Config.Partitions, report.Resources.PartitionLoads) || report.GateLedger.PartitionPackReachability != "pass" {
+	if !validM8PartitionLoadsV1(report) || !validM8PartitionPackDiagnosticsV1(report.PackDiagnostics, report.Config.Partitions, report.Resources.PartitionLoads, report.Config.GraphVariant) || report.GateLedger.PartitionPackReachability != "pass" {
 		return errors.New("M8 report has incomplete or unreachable partition-pack diagnostics")
 	}
 	var measuredSamples uint64
