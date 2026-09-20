@@ -158,6 +158,8 @@ type config struct {
 	m8RouterPolicyRepresentativeCounts []int
 	m8TruthCache                       string
 	m8TruthCacheSHA256                 string
+	m8MembershipProbes                 int
+	m8MembershipPackLimit              int
 	m3MaxBenchmarkVisits               int64
 	m8CoordinatorLimits                nativewire.VectorPartitionCoordinatorLimitsV1
 	m8ShardLimits                      nativewire.VectorPartitionShardSearchLimitsV1
@@ -996,6 +998,8 @@ func parseConfig(args []string) (config, error) {
 	fs.IntVar(&cfg.m8RouterPolicyWidth, "m8-router-policy-width", 0, "nearest returned representatives used by the offline flat-HNSW diagnostic; zero uses the bounded default")
 	fs.StringVar(&cfg.m8TruthCache, "m8-truth-cache", "", "external canonical exact-truth cache directory; identity-bound and fail-closed")
 	fs.StringVar(&cfg.m8TruthCacheSHA256, "m8-truth-cache-sha256", "", "independently trusted SHA-256 of the canonical truth-cache artifact required for cache reuse")
+	fs.IntVar(&cfg.m8MembershipProbes, "m8-membership-probes", 0, "read-only retained membership feasibility gate logical-domain limit; 1..2 with pack limit")
+	fs.IntVar(&cfg.m8MembershipPackLimit, "m8-membership-pack-limit", 0, "read-only retained membership feasibility gate expanded physical-pack limit")
 	fs.BoolVar(&cfg.m8FinalOfflineGraph, "m8-final-offline-graph", false, "replay the final qualifier's retained offline graph control")
 	fs.StringVar(&cfg.partitionAssignment, "partition-assignment", cfg.partitionAssignment, "partition assignment for partition/M3 stages: graph or stable_id_hash")
 	fs.StringVar(&cfg.shardPlanMode, "shard-plan", cfg.shardPlanMode, "off keeps -partitions authoritative; byte_bounded derives the M3 partition count and per-pack capacity from an explicit hot-byte budget before construction")
@@ -1056,6 +1060,9 @@ func parseConfig(args []string) (config, error) {
 		if decoded, err := hex.DecodeString(cfg.m8TruthCacheSHA256); err != nil || len(decoded) != sha256.Size {
 			return config{}, errors.New("-m8-truth-cache-sha256 must be lowercase 64-hex")
 		}
+	}
+	if (cfg.m8MembershipProbes == 0) != (cfg.m8MembershipPackLimit == 0) {
+		return config{}, errors.New("-m8-membership-probes and -m8-membership-pack-limit must be supplied together")
 	}
 	if cfg.mode != "" {
 		if cfg.mode != m8ProductionMultiGroupModeV1 || cfg.stage != "simulation" {
@@ -1183,6 +1190,9 @@ func parseConfig(args []string) (config, error) {
 	}
 	if cfg.m8QualityDiagnostics && (cfg.stage != m8ProductionMultiGroupModeV1 || cfg.topK > 10) || cfg.m8QualityTraceQueries < 0 || cfg.m8QualityTraceQueries > m8QualityTraceMaxQueriesV1 || cfg.m8QualityTraceQueries > 0 && !cfg.m8QualityDiagnostics {
 		return config{}, errors.New("quality diagnostics require production_multi_group, top-k <= 10, and a trace sample in [0,8]")
+	}
+	if cfg.m8MembershipProbes != 0 && (cfg.stage != m8ProductionMultiGroupModeV1 || cfg.m8MembershipProbes < 1 || cfg.m8MembershipProbes > 2 || cfg.m8MembershipPackLimit < 1 || cfg.m8MembershipPackLimit > cfg.partitions || cfg.topK > 10 || cfg.m8TruthCache == "" || cfg.m8TruthCacheSHA256 == "" || cfg.m8ExistingDB == "" && len(cfg.m8VariantDBs) == 0) {
+		return config{}, errors.New("membership feasibility requires retained production_multi_group assets, trusted truth cache, top-k <= 10, P in [1,2], and a bounded physical-pack limit")
 	}
 	if cfg.m8ExistingDB != "" && cfg.stage != m8ProductionMultiGroupModeV1 {
 		return config{}, errors.New("-m8-existing-db requires production_multi_group")
@@ -2191,49 +2201,136 @@ type m3BenchmarkWorkPlan struct {
 }
 
 type m8BenchmarkWorkPlan struct {
-	QualityDiagnosticWorkUnits        int64
-	QualityDiagnosticBytes            int64
-	RouterPolicyDiagnosticWorkUnits   int64
-	RouterPolicyDiagnosticBytes       int64
-	FixtureChecksumVectorVisits       int64
-	ExactTruthVectorVisits            int64
-	ExactWorkVectorVisits             int64
-	MeasuredQueryRequests             int64
-	WarmupAndPreflightQueryRequests   int64
-	AttributionQueryPasses            int64
-	MaxMembershipOracleSubsets        int64
-	MembershipOracleSubsetEvaluations int64
-	MembershipOracleWorkUnits         int64
-	SelectedPartitionSetupWorkUnits   int64
-	AttributionLinearWorkUnits        int64
-	FinalMembershipLinearScans        int64
-	FinalMembershipPairComparisons    int64
-	AttributionDiagnosticWorkUnits    int64
-	QueryRequests                     int64
-	RetainedCoordinatorCells          int64
-	RetainedCoordinatorResults        int64
-	PreflightResponseBytes            int64
-	PreflightQueryConversionBytes     int64
-	CurrentCellOutcomes               int64
-	CurrentCellOutcomeBytes           int64
-	CurrentQueryConversionBytes       int64
-	FixtureResidentBytes              int64
-	SourceSnapshotBytes               int64
-	ExactTruthBytes                   int64
-	RetainedCoordinatorBytes          int64
-	RetainedAttributionMatrices       int64
-	RetainedAttributionResults        int64
-	RetainedAttributionBytes          int64
-	AttributionMergeScratchResults    int64
-	AttributionMergeScratchBytes      int64
-	AttributionLiveResultSets         int64
-	AttributionLiveResultBytes        int64
-	AttributionApproximateRouteBytes  int64
-	AttributionQueryConversionBytes   int64
-	AttributionPrimaryHomeMapBytes    int64
-	AttributionFinalMembershipBytes   int64
-	AttributionHomeBuildScratchBytes  int64
-	ModeledPeakBytes                  int64
+	QualityDiagnosticWorkUnits           int64
+	QualityDiagnosticBytes               int64
+	RouterPolicyDiagnosticWorkUnits      int64
+	RouterPolicyDiagnosticBytes          int64
+	FixtureChecksumVectorVisits          int64
+	ExactTruthVectorVisits               int64
+	ExactWorkVectorVisits                int64
+	MeasuredQueryRequests                int64
+	WarmupAndPreflightQueryRequests      int64
+	AttributionQueryPasses               int64
+	MaxMembershipOracleSubsets           int64
+	MembershipOracleSubsetEvaluations    int64
+	MembershipOracleWorkUnits            int64
+	MembershipFeasibilityWorkUnits       int64
+	MembershipFeasibilityScratchBytes    int64
+	MembershipFeasibilityPopulationBytes int64
+	MembershipFeasibilityRetainedBytes   int64
+	SelectedPartitionSetupWorkUnits      int64
+	AttributionLinearWorkUnits           int64
+	FinalMembershipLinearScans           int64
+	FinalMembershipPairComparisons       int64
+	AttributionDiagnosticWorkUnits       int64
+	QueryRequests                        int64
+	RetainedCoordinatorCells             int64
+	RetainedCoordinatorResults           int64
+	PreflightResponseBytes               int64
+	PreflightQueryConversionBytes        int64
+	CurrentCellOutcomes                  int64
+	CurrentCellOutcomeBytes              int64
+	CurrentQueryConversionBytes          int64
+	FixtureResidentBytes                 int64
+	SourceSnapshotBytes                  int64
+	ExactTruthBytes                      int64
+	RetainedCoordinatorBytes             int64
+	RetainedAttributionMatrices          int64
+	RetainedAttributionResults           int64
+	RetainedAttributionBytes             int64
+	AttributionMergeScratchResults       int64
+	AttributionMergeScratchBytes         int64
+	AttributionLiveResultSets            int64
+	AttributionLiveResultBytes           int64
+	AttributionApproximateRouteBytes     int64
+	AttributionQueryConversionBytes      int64
+	AttributionPrimaryHomeMapBytes       int64
+	AttributionFinalMembershipBytes      int64
+	AttributionHomeBuildScratchBytes     int64
+	ModeledPeakBytes                     int64
+}
+
+// m8MembershipFeasibilityPopulationBytesV1 separates the construction peak
+// from the immutable query/pack receipt retained after publication.
+func m8MembershipFeasibilityPopulationBytesV1(m fixtureManifest, cfg config, domains int) (population, retained int64, err error) {
+	if m.Vectors < 1 || m.Queries < 1 || cfg.topK < 1 || cfg.partitions < 1 || domains < 1 || domains > cfg.partitions || cfg.m8MembershipProbes < 1 || cfg.m8MembershipPackLimit < 1 || cfg.m8MembershipPackLimit > cfg.partitions {
+		return 0, 0, errors.New("cannot plan M8 membership feasibility population")
+	}
+	truthWidth := int64(min(cfg.topK, m.Vectors))
+	truthIDs, err := memoryMul(int64(m.Queries), truthWidth)
+	if err != nil {
+		return 0, 0, err
+	}
+	truthIDs = min(truthIDs, int64(m.Vectors))
+	maxPackMemberships := min(cfg.partitions, collections.DefaultVectorPartitionManifestLimits().MaxMembershipsPerVector+1)
+	maxDomainMemberships := min(domains, maxPackMemberships)
+
+	mapEntries, err := memoryMul(truthIDs, 6*memoryMapEntryBytes+2*int64(unsafe.Sizeof([]uint32{})))
+	if err != nil {
+		return 0, 0, err
+	}
+	membershipValues, err := memoryMul(2, truthIDs, int64(maxPackMemberships+maxDomainMemberships), int64(unsafe.Sizeof(uint32(0))))
+	if err != nil {
+		return 0, 0, err
+	}
+	queryEvidence, err := memoryMul(int64(m.Queries), int64(unsafe.Sizeof(m8MembershipFeasibilityQueryV1{}))+sha256.Size*2)
+	if err != nil {
+		return 0, 0, err
+	}
+	selectedDomains, err := memoryMul(2, int64(m.Queries), int64(cfg.m8MembershipProbes), int64(unsafe.Sizeof(uint32(0))))
+	if err != nil {
+		return 0, 0, err
+	}
+	expandedPacks, err := memoryMul(2, int64(m.Queries), int64(cfg.m8MembershipPackLimit), int64(unsafe.Sizeof(uint32(0))))
+	if err != nil {
+		return 0, 0, err
+	}
+	packEvidence, err := memoryMul(int64(cfg.partitions), int64(unsafe.Sizeof(m8MembershipFeasibilityPackV1{})))
+	if err != nil {
+		return 0, 0, err
+	}
+	retained, err = memoryAdd(queryEvidence, selectedDomains, expandedPacks, packEvidence)
+	if err != nil {
+		return 0, 0, err
+	}
+	domainHeaders, err := memoryMul(int64(domains), int64(unsafe.Sizeof([]uint32{})))
+	if err != nil {
+		return 0, 0, err
+	}
+	domainPackValues, err := memoryMul(2, int64(cfg.partitions), int64(unsafe.Sizeof(uint32(0))))
+	if err != nil {
+		return 0, 0, err
+	}
+	packOwnersAndCosts, err := memoryMul(int64(cfg.partitions), int64(unsafe.Sizeof(uint32(0)))+int64(unsafe.Sizeof(int64(0))))
+	if err != nil {
+		return 0, 0, err
+	}
+	domainPackLayout, err := memoryAdd(domainHeaders, domainPackValues, packOwnersAndCosts)
+	if err != nil {
+		return 0, 0, err
+	}
+	queryIDs, err := memoryMul(truthWidth, int64(unsafe.Sizeof("")))
+	if err != nil {
+		return 0, 0, err
+	}
+	coverageMasks, err := memoryMul(int64(domains), int64(unsafe.Sizeof(uint16(0))))
+	if err != nil {
+		return 0, 0, err
+	}
+	seenMemberships, err := memoryMul(int64(maxPackMemberships), memoryMapEntryBytes)
+	if err != nil {
+		return 0, 0, err
+	}
+	seenTruthIDs, err := memoryMul(truthWidth, memoryMapEntryBytes)
+	if err != nil {
+		return 0, 0, err
+	}
+	perQueryScratch, err := memoryAdd(queryIDs, coverageMasks, seenMemberships, seenTruthIDs)
+	if err != nil {
+		return 0, 0, err
+	}
+	population, err = memoryAdd(mapEntries, membershipValues, retained, domainPackLayout, perQueryScratch)
+	return population, retained, err
 }
 
 func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes int64) (m8BenchmarkWorkPlan, error) {
@@ -2282,6 +2379,34 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 	plan.RouterPolicyDiagnosticWorkUnits, plan.RouterPolicyDiagnosticBytes, err = m8PlanRouterPolicyDiagnosticsV1(cfg, m, oracleDomainCounts, capUnits, capBytes)
 	if err != nil {
 		return plan, err
+	}
+	if cfg.m8MembershipProbes != 0 {
+		for _, domains := range oracleDomainCounts {
+			work, scratch, err := m8MembershipFeasibilityPlanV1(m.Queries, min(cfg.topK, m.Vectors), domains, cfg.m8MembershipProbes)
+			if err != nil {
+				return plan, err
+			}
+			plan.MembershipFeasibilityWorkUnits, err = memoryAdd(plan.MembershipFeasibilityWorkUnits, work)
+			if err != nil {
+				return plan, err
+			}
+			plan.MembershipFeasibilityScratchBytes = max(plan.MembershipFeasibilityScratchBytes, scratch)
+			population, retained, err := m8MembershipFeasibilityPopulationBytesV1(m, cfg, domains)
+			if err != nil {
+				return plan, err
+			}
+			plan.MembershipFeasibilityPopulationBytes, err = memoryAdd(plan.MembershipFeasibilityPopulationBytes, population)
+			if err != nil {
+				return plan, err
+			}
+			plan.MembershipFeasibilityRetainedBytes, err = memoryAdd(plan.MembershipFeasibilityRetainedBytes, retained)
+			if err != nil {
+				return plan, err
+			}
+		}
+		if plan.MembershipFeasibilityWorkUnits > capUnits || plan.MembershipFeasibilityScratchBytes > capBytes || plan.MembershipFeasibilityPopulationBytes > capBytes {
+			return plan, fmt.Errorf("modeled M8 membership feasibility exceeds resource caps: work=%d scratch_bytes=%d population_bytes=%d", plan.MembershipFeasibilityWorkUnits, plan.MembershipFeasibilityScratchBytes, plan.MembershipFeasibilityPopulationBytes)
+		}
 	}
 	var membershipOracleSubsetsPerSweep int64
 	var membershipOracleWorkPerQuerySweep int64
@@ -2431,12 +2556,12 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 	if err != nil {
 		return plan, err
 	}
-	totalDiagnosticWork, err := memoryAdd(plan.AttributionDiagnosticWorkUnits, plan.QualityDiagnosticWorkUnits, plan.RouterPolicyDiagnosticWorkUnits)
+	totalDiagnosticWork, err := memoryAdd(plan.AttributionDiagnosticWorkUnits, plan.QualityDiagnosticWorkUnits, plan.RouterPolicyDiagnosticWorkUnits, plan.MembershipFeasibilityWorkUnits)
 	if err != nil {
 		return plan, err
 	}
-	if cfg.m8QualityDiagnostics && totalDiagnosticWork > capUnits {
-		return plan, fmt.Errorf("M8 combined attribution/quality work %d exceeds %d", totalDiagnosticWork, capUnits)
+	if (cfg.m8QualityDiagnostics || cfg.m8MembershipProbes != 0) && totalDiagnosticWork > capUnits {
+		return plan, fmt.Errorf("M8 combined attribution/diagnostic work %d exceeds %d", totalDiagnosticWork, capUnits)
 	}
 	if plan.AttributionDiagnosticWorkUnits > capUnits {
 		return plan, fmt.Errorf("modeled M8 attribution diagnostics exceed %d-operation cap: truth_results_per_query=%d truth_pairs_per_query=%d attribution_cells=%d max_memberships_per_truth_result=%d selected_partition_setup=%d linear_bookkeeping=%d linear_membership_scans=%d pair_comparisons=%d total=%d", capUnits, cfg.topK, truthPairs, attributionCells, maxFinalMemberships, plan.SelectedPartitionSetupWorkUnits, plan.AttributionLinearWorkUnits, plan.FinalMembershipLinearScans, plan.FinalMembershipPairComparisons, plan.AttributionDiagnosticWorkUnits)
@@ -2774,7 +2899,9 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 	if err != nil {
 		return plan, err
 	}
-	measurementBase, err := memoryAdd(plan.FixtureResidentBytes, plan.ExactTruthBytes, plan.RetainedCoordinatorBytes)
+	// The immutable feasibility receipt is attached to the report before warmup
+	// and remains live through measurement and attribution.
+	measurementBase, err := memoryAdd(plan.FixtureResidentBytes, plan.ExactTruthBytes, plan.MembershipFeasibilityRetainedBytes, plan.RetainedCoordinatorBytes)
 	if err != nil {
 		return plan, err
 	}
@@ -2782,7 +2909,11 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 	if err != nil {
 		return plan, err
 	}
-	preflightPeak, err := memoryAdd(plan.FixtureResidentBytes, plan.ExactTruthBytes, plan.PreflightResponseBytes, plan.PreflightQueryConversionBytes)
+	preflightPeak, err := memoryAdd(plan.FixtureResidentBytes, plan.ExactTruthBytes, plan.MembershipFeasibilityRetainedBytes, plan.PreflightResponseBytes, plan.PreflightQueryConversionBytes)
+	if err != nil {
+		return plan, err
+	}
+	membershipFeasibilityPeak, err := memoryAdd(plan.FixtureResidentBytes, plan.SourceSnapshotBytes, plan.ExactTruthBytes, plan.MembershipFeasibilityPopulationBytes, plan.MembershipFeasibilityScratchBytes)
 	if err != nil {
 		return plan, err
 	}
@@ -2798,13 +2929,13 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 	if err != nil {
 		return plan, err
 	}
-	peak := max(sourceOraclePeak, preflightPeak, measurementPeak, attributionHomeBuildPeak, attributionPeak)
+	peak := max(sourceOraclePeak, preflightPeak, membershipFeasibilityPeak, measurementPeak, attributionHomeBuildPeak, attributionPeak)
 	plan.ModeledPeakBytes, err = memoryScaleCeil(peak, memorySlackNumerator, memorySlackDenominator)
 	if err != nil {
 		return plan, err
 	}
 	if plan.ModeledPeakBytes > capBytes {
-		return plan, fmt.Errorf("modeled M8 benchmark-owned memory %d exceeds -max-fixture-bytes %d: fixture_resident_bytes=%d source_snapshot_bytes=%d exact_truth_bytes=%d retained_coordinator_cells=%d retained_coordinator_results=%d retained_coordinator_bytes=%d preflight_response_bytes=%d preflight_query_conversion_bytes=%d current_cell_outcomes=%d current_cell_outcome_bytes=%d current_query_conversion_bytes=%d retained_attribution_matrices=%d retained_attribution_results=%d retained_attribution_bytes=%d attribution_merge_scratch_results=%d attribution_merge_scratch_bytes=%d attribution_live_result_sets=%d attribution_live_result_bytes=%d attribution_approximate_route_bytes=%d attribution_query_conversion_bytes=%d attribution_primary_home_map_bytes=%d attribution_final_membership_bytes=%d attribution_home_build_scratch_bytes=%d", plan.ModeledPeakBytes, capBytes, plan.FixtureResidentBytes, plan.SourceSnapshotBytes, plan.ExactTruthBytes, plan.RetainedCoordinatorCells, plan.RetainedCoordinatorResults, plan.RetainedCoordinatorBytes, plan.PreflightResponseBytes, plan.PreflightQueryConversionBytes, plan.CurrentCellOutcomes, plan.CurrentCellOutcomeBytes, plan.CurrentQueryConversionBytes, plan.RetainedAttributionMatrices, plan.RetainedAttributionResults, plan.RetainedAttributionBytes, plan.AttributionMergeScratchResults, plan.AttributionMergeScratchBytes, plan.AttributionLiveResultSets, plan.AttributionLiveResultBytes, plan.AttributionApproximateRouteBytes, plan.AttributionQueryConversionBytes, plan.AttributionPrimaryHomeMapBytes, plan.AttributionFinalMembershipBytes, plan.AttributionHomeBuildScratchBytes)
+		return plan, fmt.Errorf("modeled M8 benchmark-owned memory %d exceeds -max-fixture-bytes %d: fixture_resident_bytes=%d source_snapshot_bytes=%d exact_truth_bytes=%d membership_feasibility_population_bytes=%d membership_feasibility_retained_bytes=%d membership_feasibility_scratch_bytes=%d retained_coordinator_cells=%d retained_coordinator_results=%d retained_coordinator_bytes=%d preflight_response_bytes=%d preflight_query_conversion_bytes=%d current_cell_outcomes=%d current_cell_outcome_bytes=%d current_query_conversion_bytes=%d retained_attribution_matrices=%d retained_attribution_results=%d retained_attribution_bytes=%d attribution_merge_scratch_results=%d attribution_merge_scratch_bytes=%d attribution_live_result_sets=%d attribution_live_result_bytes=%d attribution_approximate_route_bytes=%d attribution_query_conversion_bytes=%d attribution_primary_home_map_bytes=%d attribution_final_membership_bytes=%d attribution_home_build_scratch_bytes=%d", plan.ModeledPeakBytes, capBytes, plan.FixtureResidentBytes, plan.SourceSnapshotBytes, plan.ExactTruthBytes, plan.MembershipFeasibilityPopulationBytes, plan.MembershipFeasibilityRetainedBytes, plan.MembershipFeasibilityScratchBytes, plan.RetainedCoordinatorCells, plan.RetainedCoordinatorResults, plan.RetainedCoordinatorBytes, plan.PreflightResponseBytes, plan.PreflightQueryConversionBytes, plan.CurrentCellOutcomes, plan.CurrentCellOutcomeBytes, plan.CurrentQueryConversionBytes, plan.RetainedAttributionMatrices, plan.RetainedAttributionResults, plan.RetainedAttributionBytes, plan.AttributionMergeScratchResults, plan.AttributionMergeScratchBytes, plan.AttributionLiveResultSets, plan.AttributionLiveResultBytes, plan.AttributionApproximateRouteBytes, plan.AttributionQueryConversionBytes, plan.AttributionPrimaryHomeMapBytes, plan.AttributionFinalMembershipBytes, plan.AttributionHomeBuildScratchBytes)
 	}
 	return plan, nil
 }

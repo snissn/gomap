@@ -3069,6 +3069,13 @@ no plan must carry neither digest nor size. Deleting or editing either file
 makes the directory fail to reopen rather than reopening with unverified
 evidence.
 
+For a byte-bounded build, every encoded pack must have one canonical planned
+summary and a positive actual asset size no greater than that summary's
+conservative byte envelope. Construction checks this after encoding and before
+manifest/router publication; retained M8 admission checks it again against the
+immutable manifest and shard-generation record. Missing, duplicate, unplanned,
+zero-byte, or over-envelope packs fail closed.
+
 Unknown schema versions fail closed. TreeDB is pre-alpha: retained benchmark
 databases from earlier descriptor versions are rebuilt, not migrated.
 

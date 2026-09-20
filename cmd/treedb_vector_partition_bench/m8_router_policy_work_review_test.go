@@ -27,7 +27,7 @@ func TestM8RouterPolicyRepresentativeCombinedAdmissionV1(t *testing.T) {
 			}
 			cfg.routerCandidates = 256
 			refused, err := validateM8BenchmarkWork(cfg, m, maxBenchmarkWorkUnits, maxFixtureBytes)
-			if err == nil || !strings.Contains(err.Error(), "combined attribution/quality work") {
+			if err == nil || !strings.Contains(err.Error(), "combined attribution/diagnostic work") {
 				t.Fatalf("C256 did not refuse the combined work cap: %v", err)
 			}
 			t.Logf("C256 REFUSED before collection: attribution=%d quality=%d policy=%d: %v", refused.AttributionDiagnosticWorkUnits, refused.QualityDiagnosticWorkUnits, refused.RouterPolicyDiagnosticWorkUnits, err)

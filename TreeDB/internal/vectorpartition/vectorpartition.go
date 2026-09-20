@@ -547,10 +547,12 @@ func buildGraph(v []Vector, c Config) (Graph, error) {
 		limit = maxDistanceWork
 	}
 	budget := distanceBudget{remaining: limit}
+	ids := make([]int, n)
+	for i := range ids {
+		ids[i] = i
+	}
 	for rep := 0; rep < c.Repetitions; rep++ {
-		r := rand.New(rand.NewSource(c.Seed + int64(rep)*0x9e3779b))
-		order := r.Perm(n)
-		if err := carveDepth(v, order, c, sets, 0, &budget); err != nil {
+		if err := carveDepth(v, ids, c, sets, rep, 0, &budget); err != nil {
 			return Graph{}, err
 		}
 	}
@@ -701,7 +703,7 @@ func (b *distanceBudget) take(n int64) error {
 	return nil
 }
 
-func carveDepth(v []Vector, ids []int, c Config, sets []map[int]float64, depth int, budget *distanceBudget) error {
+func carveDepth(v []Vector, ids []int, c Config, sets []map[int]float64, repetition, depth int, budget *distanceBudget) error {
 	if len(ids) <= c.MaxLeafBucket {
 		for _, i := range ids {
 			nearest, err := nearest(v, ids, i, c.Degree, budget)
@@ -716,9 +718,9 @@ func carveDepth(v []Vector, ids []int, c Config, sets []map[int]float64, depth i
 	}
 	k := min(c.Pivots, len(ids))
 	if depth >= maxCarveDepth {
-		return carveChunks(v, ids, c, sets, depth, budget)
+		return carveChunks(v, ids, c, sets, repetition, depth, budget)
 	}
-	pivots := append([]int(nil), ids[:k]...)
+	pivots := samplePivotsV1(ids, k, c.Seed, repetition)
 	buckets := make([][]int, k)
 	for _, i := range ids {
 		if err := budget.take(int64(k) * int64(len(v[i].Values))); err != nil {
@@ -750,23 +752,62 @@ func carveDepth(v []Vector, ids []int, c Config, sets []map[int]float64, depth i
 		// A n-1 bucket can otherwise recurse one ordinal at a time on skewed
 		// geometry. Chunk the current membership deterministically instead.
 		if len(b) >= len(ids)-1 {
-			if err := carveChunks(v, b, c, sets, depth, budget); err != nil {
+			if err := carveChunks(v, b, c, sets, repetition, depth, budget); err != nil {
 				return err
 			}
 			continue
 		}
 		if len(b) > 0 {
-			if err := carveDepth(v, b, c, sets, depth+1, budget); err != nil {
+			if err := carveDepth(v, b, c, sets, repetition, depth+1, budget); err != nil {
 				return err
 			}
 		}
 	}
 	return nil
 }
-func carveChunks(v []Vector, ids []int, c Config, sets []map[int]float64, depth int, budget *distanceBudget) error {
-	for start := 0; start < len(ids); start += c.MaxLeafBucket {
-		end := min(start+c.MaxLeafBucket, len(ids))
-		if err := carveDepth(v, ids[start:end], c, sets, depth+1, budget); err != nil {
+
+// samplePivotsV1 takes a uniform bounded-memory sample from the canonical
+// current bucket. The seed binds the sample to the configured seed, repetition,
+// and exact bucket membership so recursive siblings do not inherit one global
+// permutation's correlated prefixes.
+func samplePivotsV1(ids []int, k int, seed int64, repetition int) []int {
+	r := bucketRandV1("pivots", ids, seed, repetition)
+	pivots := append([]int(nil), ids[:k]...)
+	for i := k; i < len(ids); i++ {
+		if replace := r.Intn(i + 1); replace < k {
+			pivots[replace] = ids[i]
+		}
+	}
+	sort.Ints(pivots)
+	return pivots
+}
+
+func bucketRandV1(scope string, ids []int, seed int64, repetition int) *rand.Rand {
+	h := sha256.New()
+	_, _ = h.Write([]byte("treedb/vectorpartition/" + scope + "/v1\x00"))
+	var raw [8]byte
+	binary.BigEndian.PutUint64(raw[:], uint64(seed))
+	_, _ = h.Write(raw[:])
+	binary.BigEndian.PutUint64(raw[:], uint64(repetition))
+	_, _ = h.Write(raw[:])
+	binary.BigEndian.PutUint64(raw[:], uint64(len(ids)))
+	_, _ = h.Write(raw[:])
+	for _, id := range ids {
+		binary.BigEndian.PutUint64(raw[:], uint64(id))
+		_, _ = h.Write(raw[:])
+	}
+	sum := h.Sum(nil)
+	return rand.New(rand.NewSource(int64(binary.BigEndian.Uint64(sum[:8]))))
+}
+
+func carveChunks(v []Vector, ids []int, c Config, sets []map[int]float64, repetition, depth int, budget *distanceBudget) error {
+	order := append([]int(nil), ids...)
+	bucketRandV1("chunks", ids, c.Seed, repetition).Shuffle(len(order), func(i, j int) {
+		order[i], order[j] = order[j], order[i]
+	})
+	for start := 0; start < len(order); start += c.MaxLeafBucket {
+		end := min(start+c.MaxLeafBucket, len(order))
+		if err := carveDepth(v, order[start:end], c, sets, repetition, depth+1, budget); err != nil {
 			return err
 		}
 	}

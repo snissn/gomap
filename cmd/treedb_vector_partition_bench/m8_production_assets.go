@@ -532,6 +532,9 @@ func m8BindRetainedM3DescriptorWithPolicyV1(h *m8ProductionMultiGroupAssetsV1, f
 	if err := m3DescriptorMatchesManifestV1(descriptor, fixture, h.status.Manifest, h.status.ModelDigest, h.status.Config); err != nil {
 		return err
 	}
+	if _, err := m3ValidateRetainedShardPackBytesV1(dir, descriptor, h.status.Manifest.Assets); err != nil {
+		return fmt.Errorf("validate retained M8 shard packs: %w", err)
+	}
 	var indexDefinition collections.VectorIndexDefinition
 	var indexDefinitionDigest string
 	for _, index := range h.collection.MetaView().VectorIndexes {

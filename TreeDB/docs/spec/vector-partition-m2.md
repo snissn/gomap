@@ -6,13 +6,16 @@ M2 supplies an offline, clean-room builder at
 router, overlap implementation, or runtime FFI.
 
 The reference builder accepts finite, equal-dimension cosine vectors with
-unique stable IDs. It orders IDs canonically, repeatedly samples pivots from a
-seeded permutation, permits the two nearest pivots at depth zero, uses one
-nearest pivot at deeper levels, chunks degenerate duplicate buckets, computes
-exact neighbors in bounded leaves, and unions them into a bounded directed
-graph. After the leaf sketch, exact duplicate bit-pattern classes receive
-deterministic zero-distance links between adjacent canonical ordinals. Required
-links are preserved while farther sketch candidates are pruned to the
+unique stable IDs. It orders IDs canonically and, for each repetition and
+recursive bucket, takes a deterministic reservoir sample whose seed binds the
+configured seed, repetition, and exact current membership. It permits the two
+nearest pivots at depth zero, uses one nearest pivot at deeper levels, chunks
+degenerate duplicate buckets, computes exact neighbors in bounded leaves, and
+unions them into a bounded directed graph. Recursive children therefore sample
+their own current bucket instead of inheriting correlated prefixes of one
+global permutation. After the leaf sketch, exact duplicate bit-pattern classes
+receive deterministic zero-distance links between adjacent canonical ordinals.
+Required links are preserved while farther sketch candidates are pruned to the
 configured degree; degree one uses a directed ordinal cycle. These links are
 corpus-only and keep identical vectors connected even when the class is larger
 than the degree or bounded pivot leaves separate its members. A

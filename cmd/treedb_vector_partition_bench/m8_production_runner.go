@@ -99,6 +99,7 @@ type m8ProductionReportV1 struct {
 	UntimedBoundary         m8ProductionResourceBoundaryV1                             `json:"untimed_resource_boundary"`
 	Resources               m8ProductionResourceEvidenceV1                             `json:"resources"`
 	TruthCache              m8TruthCacheEvidenceV1                                     `json:"canonical_truth_cache"`
+	MembershipFeasibility   *m8MembershipFeasibilityArtifactV1                         `json:"membership_feasibility,omitempty"`
 	TimedBoundary           string                                                     `json:"timed_boundary"`
 	Limitations             []string                                                   `json:"limitations"`
 }
@@ -126,6 +127,8 @@ type m8ProductionConfigEvidenceV1 struct {
 	GraphVariant            string    `json:"graph_variant"`
 	RouterSemantics         string    `json:"router_semantics"`
 	MaxExactTruthVisits     int64     `json:"max_exact_truth_visits,omitempty"`
+	MembershipProbes        int       `json:"membership_feasibility_logical_domain_limit,omitempty"`
+	MembershipPackLimit     int       `json:"membership_feasibility_physical_pack_limit,omitempty"`
 	Seed                    int64     `json:"seed"`
 }
 
@@ -452,6 +455,7 @@ func runM8ProductionSingleVariantV1(cfg config, fixture fixtureManifest, vectors
 	if err != nil {
 		return fmt.Errorf("hash M8 benchmark executable: %w", err)
 	}
+	var membershipFeasibility *m8MembershipFeasibilityArtifactV1
 	if cfg.m8ExistingDB != "" {
 		descriptor, err := m3ReadVariantDescriptorV1(cfg.m8ExistingDB)
 		if err != nil {
@@ -459,6 +463,16 @@ func runM8ProductionSingleVariantV1(cfg config, fixture fixtureManifest, vectors
 		}
 		if err := m8ValidateRetainedM3ProvenanceV1(cfg, descriptor, executableSHA256); err != nil {
 			return err
+		}
+		if cfg.m8MembershipProbes != 0 {
+			artifact, err := m8RunMembershipFeasibilityV1(cfg, fixture, vectors, cfg.m8ExistingDB, descriptor)
+			if err != nil {
+				return fmt.Errorf("retained membership feasibility: %w", err)
+			}
+			membershipFeasibility = &artifact
+			if artifact.Result.Status != "sufficient" {
+				return fmt.Errorf("retained membership feasibility ceiling %.9f is below required recall %.9f (artifact %s)", artifact.Result.Ceiling, artifact.Result.RequiredRecall, artifact.Path)
+			}
 		}
 	}
 	var assets *m8ProductionMultiGroupAssetsV1
@@ -564,11 +578,12 @@ func runM8ProductionSingleVariantV1(cfg config, fixture fixtureManifest, vectors
 		RouterGlobalBudget: uint64(assets.router.Status().Config.RepresentativeBudget),
 		Command:            replayCommand, ExecutableSHA256: executableSHA256, BaseSHA: cfg.baseSHA, HeadSHA: cfg.headSHA, Dirty: m8GitDirtyInV1(cfg.sourceCheckout, cfg.out, cfg.profiles, cfg.m8MatrixOut, cfg.m8MatrixProfiles),
 		GoVersion: runtime.Version(), GOOS: runtime.GOOS, GOARCH: runtime.GOARCH, LogicalCPUs: runtime.NumCPU(), GOMAXPROCS: goMaxProcs, GoMemoryLimitBytes: goMemoryLimitBytes, Host: m8ProductionHostV1(cfg, assets.dir), Dataset: fixture, DatasetDirectory: datasetDirectory, TruthCacheDirectory: truthCacheDirectory, Variant: assets.descriptor,
-		Config:        m8ProductionConfigEvidenceV1{RaftGroups: cfg.raftGroups, RaftNodesPerGroup: cfg.raftNodes, Partitions: cfg.partitions, DomainCount: int(assets.manifest.DomainCount), PacksPerDomain: m8ManifestPacksPerDomainV1(assets.manifest), Probes: append([]int(nil), cfg.probes...), Overlap: append([]float64(nil), cfg.overlaps...), TopK: cfg.topK, RecallTarget: cfg.recallTarget, Concurrency: append([]int(nil), cfg.concurrency...), Warmup: cfg.warmup, EfSearch: append([]int(nil), cfg.efSearch...), RouterScoreBudget: cfg.routerCandidates, LocalScoreBudget: cfg.m8CoordinatorLimits.MaxLocalScoreCalls, GraphVariant: string(assets.graphVariant), RouterSemantics: m8RouterSemanticsV4, MaxExactTruthVisits: cfg.m8MaxExactTruthVisits, Seed: cfg.seed, QualityDiagnostics: cfg.m8QualityDiagnostics, QualityTraceQueries: cfg.m8QualityTraceQueries, RouterPolicyDiagnostics: cfg.m8RouterPolicyDiagnostics, RouterPolicyWidth: cfg.m8RouterPolicyWidth},
-		BuildNanos:    buildNanos,
-		TruthCache:    truthCache,
-		Profiles:      m8ProductionProfileEvidenceV1{Directory: cfg.profiles, Status: "not_captured", Scope: "CPU, block, mutex, and trace cover measured query cells plus the endpoint-loss fault; heap is an end snapshot; allocs requires the captured baseline for differential analysis"},
-		TimedBoundary: "wall-clock query cells after topology, exhaustive endpoint preflight, and generation warmup; includes router, coordinator, TCP M5 serialization, Raft read-index/apply, persistent HNSW search, response merge, and caller scheduling; excludes topology construction, exact truth, preflight, warmup, post-measurement attribution, artifact encoding, and shutdown",
+		Config:                m8ProductionConfigEvidenceV1{RaftGroups: cfg.raftGroups, RaftNodesPerGroup: cfg.raftNodes, Partitions: cfg.partitions, DomainCount: int(assets.manifest.DomainCount), PacksPerDomain: m8ManifestPacksPerDomainV1(assets.manifest), Probes: append([]int(nil), cfg.probes...), Overlap: append([]float64(nil), cfg.overlaps...), TopK: cfg.topK, RecallTarget: cfg.recallTarget, Concurrency: append([]int(nil), cfg.concurrency...), Warmup: cfg.warmup, EfSearch: append([]int(nil), cfg.efSearch...), RouterScoreBudget: cfg.routerCandidates, LocalScoreBudget: cfg.m8CoordinatorLimits.MaxLocalScoreCalls, GraphVariant: string(assets.graphVariant), RouterSemantics: m8RouterSemanticsV4, MaxExactTruthVisits: cfg.m8MaxExactTruthVisits, MembershipProbes: cfg.m8MembershipProbes, MembershipPackLimit: cfg.m8MembershipPackLimit, Seed: cfg.seed, QualityDiagnostics: cfg.m8QualityDiagnostics, QualityTraceQueries: cfg.m8QualityTraceQueries, RouterPolicyDiagnostics: cfg.m8RouterPolicyDiagnostics, RouterPolicyWidth: cfg.m8RouterPolicyWidth},
+		BuildNanos:            buildNanos,
+		TruthCache:            truthCache,
+		MembershipFeasibility: membershipFeasibility,
+		Profiles:              m8ProductionProfileEvidenceV1{Directory: cfg.profiles, Status: "not_captured", Scope: "CPU, block, mutex, and trace cover measured query cells plus the endpoint-loss fault; heap is an end snapshot; allocs requires the captured baseline for differential analysis"},
+		TimedBoundary:         "wall-clock query cells after topology, exhaustive endpoint preflight, and generation warmup; includes router, coordinator, TCP M5 serialization, Raft read-index/apply, persistent partition-local graph search, response merge, and caller scheduling; excludes topology construction, exact truth, preflight, warmup, post-measurement attribution, artifact encoding, and shutdown",
 		Limitations: []string{
 			"loopback TCP with real serialized M5 messages and real in-memory HashiCorp Raft consensus; not a multi-host deployment",
 			"the checked-in 10k path materializes disjoint round-robin packs; -m8-existing-db reuses the retained graph-built M3 packs read-only",
@@ -4147,9 +4162,9 @@ func m8ProductionGateValuesV1(ledger m8ProductionGateLedgerV1) []string {
 // topology an acceptance condition, not merely an informational artifact. A
 // structurally readable older pack can still contain disconnected directed
 // layer-0 components, so every configured partition must be reported exactly
-// once as either a fully reachable native pack or a fully reachable V3
-// native-plus-auxiliary pack. Vamana packs must be natively entry-reachable;
-// auxiliary repair is not part of their declared topology.
+// once as either a fully reachable native production pack or a fully reachable
+// legacy V3 native-plus-auxiliary pack. Vamana packs must be natively
+// entry-reachable; auxiliary repair is not part of their declared topology.
 func validM8PartitionPackDiagnosticsV1(diagnostics []m8PartitionPackDiagnosticsV1, partitions int, loads []uint64, graphVariant string) bool {
 	if partitions < 1 || len(diagnostics) != partitions || len(loads) != partitions {
 		return false
@@ -4546,6 +4561,18 @@ func validateM8ProductionReportWithProfilesV1(report m8ProductionReportV1, caps 
 	}
 	if !validM8TruthCacheEvidenceV1(report.TruthCache, report.Dataset, report.Config.TopK) {
 		return errors.New("M8 canonical truth-cache evidence is not identity-bound")
+	}
+	if (report.Config.MembershipProbes == 0) != (report.Config.MembershipPackLimit == 0) {
+		return errors.New("M8 report has a partial membership feasibility configuration")
+	}
+	if report.Config.MembershipProbes != 0 {
+		if report.MembershipFeasibility == nil || report.MembershipFeasibility.Result.Status != "sufficient" || report.MembershipFeasibility.Path == "" || !m8SHA256V1(report.MembershipFeasibility.ArtifactSHA256) ||
+			m8ValidateMembershipFeasibilityV1(report.MembershipFeasibility.Result) != nil ||
+			!m8MembershipFeasibilityMatchesReportV1(report.MembershipFeasibility.Result, report, report.Config.MembershipProbes, report.Config.MembershipPackLimit) {
+			return errors.New("M8 report has invalid or insufficient membership feasibility evidence")
+		}
+	} else if report.MembershipFeasibility != nil {
+		return errors.New("M8 report has unconfigured membership feasibility evidence")
 	}
 	if report.Variant != nil {
 		variantRaw, encodeErr := m3VariantDescriptorJSONV1(*report.Variant)

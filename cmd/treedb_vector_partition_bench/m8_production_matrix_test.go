@@ -1077,7 +1077,7 @@ func TestM8MatrixParentDoesNotMaterializeFixtureV1(t *testing.T) {
 func TestM8VariantProcessArgsForceFreshSingleVariantV1(t *testing.T) {
 	oldDigest := strings.Repeat("a", 64)
 	trustedDigest := strings.Repeat("b", 64)
-	command := []string{"treedb_vector_partition_bench", "-mode", m8ProductionMultiGroupModeV1, "-dataset", "format", "-m8-variant-dbs", "/a,/b,/c", "-overlap=.1", "-format", "text", "-profiles", "/old", "-m8-matrix-out", "/old-out", "-m8-matrix-profiles", "/old-profiles", "-m8-truth-cache-sha256", oldDigest, "positional"}
+	command := []string{"treedb_vector_partition_bench", "-mode", m8ProductionMultiGroupModeV1, "-dataset", "format", "-m8-variant-dbs", "/a,/b,/c", "-overlap=.1", "-format", "text", "-profiles", "/old", "-m8-matrix-out", "/old-out", "-m8-matrix-profiles", "/old-profiles", "-m8-truth-cache-sha256", oldDigest, "-m8-membership-probes", "2", "-m8-membership-pack-limit=4", "positional"}
 	got, err := m8VariantProcessArgsV1(command, "/variant", .2, "/profiles/variant", "/matrix-out", "/matrix-profiles", trustedDigest)
 	if err != nil {
 		t.Fatal(err)
@@ -1087,7 +1087,7 @@ func TestM8VariantProcessArgsForceFreshSingleVariantV1(t *testing.T) {
 		t.Fatalf("child args=%v want prefix=%v", got, wantPrefix)
 	}
 	for _, arg := range got {
-		if strings.HasPrefix(arg, "-m8-variant-dbs") || strings.HasPrefix(arg, "--m8-variant-dbs") || arg == "/a,/b,/c" || arg == "/old" || arg == "/old-out" || arg == "/old-profiles" || arg == oldDigest {
+		if strings.HasPrefix(arg, "-m8-variant-dbs") || strings.HasPrefix(arg, "--m8-variant-dbs") || strings.HasPrefix(arg, "-m8-membership-") || arg == "/a,/b,/c" || arg == "/old" || arg == "/old-out" || arg == "/old-profiles" || arg == oldDigest {
 			t.Fatalf("child args retained matrix/old-profile argument: %v", got)
 		}
 	}

@@ -265,7 +265,7 @@ func m8ValidateQualificationCampaignWithVerifiersV1(root string, campaign m8Qual
 		if err := json.Unmarshal(raw, &matrix); err != nil {
 			return summary, fmt.Errorf("decode qualification matrix %s: %w", run.Path, err)
 		}
-		if matrix.SchemaVersion != 6 || matrix.ResultKind != "m8_production_multi_variant_matrix_v6" || matrix.BaseSHA != campaign.BaseSHA || matrix.HeadSHA != campaign.HeadSHA || !m8QualificationSHA256V1(matrix.ExecutableSHA256) || !m8QualificationGitSHAV1(matrix.BaseSHA) || !m8QualificationGitSHAV1(matrix.HeadSHA) {
+		if matrix.SchemaVersion != 7 || matrix.ResultKind != "m8_production_multi_variant_matrix_v7" || matrix.BaseSHA != campaign.BaseSHA || matrix.HeadSHA != campaign.HeadSHA || !m8QualificationSHA256V1(matrix.ExecutableSHA256) || !m8QualificationGitSHAV1(matrix.BaseSHA) || !m8QualificationGitSHAV1(matrix.HeadSHA) {
 			return summary, fmt.Errorf("qualification matrix %s has invalid schema/provenance/status", cleanPath)
 		}
 		if err := validateM8ProductionMatrixV1(matrix); err != nil {
@@ -833,6 +833,17 @@ func m8QualificationCommandWithExecutableV1(root, matrixDirectory string, report
 		}
 		cfg.m8RouterPolicyRepresentativeCounts = []int{int(report.RouterRepresentatives)}
 	}
+	if cfg.m8MembershipProbes != 0 {
+		if report.MembershipFeasibility == nil || report.MembershipFeasibility.Result.Status != "sufficient" {
+			return false
+		}
+		path, err := m8CanonicalPathV1(report.MembershipFeasibility.Path)
+		if err != nil || filepath.Dir(path) != matrixDirectory || m8ReplayMembershipFeasibilityV1(cfg, report.Dataset, existingDB, *report.Variant, *report.MembershipFeasibility) != nil {
+			return false
+		}
+	} else if report.MembershipFeasibility != nil {
+		return false
+	}
 	return reflect.DeepEqual(m8QualificationCommandConfigV1(cfg), m8CommandBoundProductionConfigV1(report.Config)) &&
 		cfg.m8MaxRSSBytes == report.Resources.PeakRSSCapBytes &&
 		cfg.m8MaxAssetBytes == report.Resources.PersistentAssetCap &&
@@ -847,7 +858,7 @@ func m8QualificationCommandConfigV1(cfg config) m8ProductionConfigEvidenceV1 {
 		Concurrency: cfg.concurrency, Warmup: cfg.warmup, EffectiveWarmup: warmup,
 		EfSearch: cfg.efSearch, RouterScoreBudget: cfg.routerCandidates, LocalScoreBudget: cfg.m8CoordinatorLimits.MaxLocalScoreCalls,
 		RouterSemantics:     m8RouterSemanticsV4,
-		MaxExactTruthVisits: cfg.m8MaxExactTruthVisits, Seed: cfg.seed, QualityDiagnostics: cfg.m8QualityDiagnostics, QualityTraceQueries: cfg.m8QualityTraceQueries, RouterPolicyDiagnostics: cfg.m8RouterPolicyDiagnostics, RouterPolicyWidth: cfg.m8RouterPolicyWidth,
+		MaxExactTruthVisits: cfg.m8MaxExactTruthVisits, MembershipProbes: cfg.m8MembershipProbes, MembershipPackLimit: cfg.m8MembershipPackLimit, Seed: cfg.seed, QualityDiagnostics: cfg.m8QualityDiagnostics, QualityTraceQueries: cfg.m8QualityTraceQueries, RouterPolicyDiagnostics: cfg.m8RouterPolicyDiagnostics, RouterPolicyWidth: cfg.m8RouterPolicyWidth,
 	}
 }
 
@@ -897,6 +908,8 @@ func m8QualificationMatrixCommandWithExecutableV1(root, matrixDirectory string, 
 	}
 	commandConfig := m8QualificationCommandConfigV1(cfg)
 	commandConfig.Overlap = nil
+	commandConfig.MembershipProbes = 0
+	commandConfig.MembershipPackLimit = 0
 	profileRoot := ""
 	oracleDomainCounts := make([]int, 0, len(m8RequiredVariantIDsV1))
 	variantDBs := make(map[string]bool, len(cfg.m8VariantDBs))
@@ -943,6 +956,25 @@ func m8QualificationMatrixCommandWithExecutableV1(root, matrixDirectory string, 
 		}
 	}
 	cfg.m8OracleDomainCounts = oracleDomainCounts
+	if cfg.m8MembershipProbes != 0 {
+		if len(matrix.MembershipFeasibility) != len(m8RequiredVariantIDsV1) {
+			return false
+		}
+		seen := make(map[string]bool, len(matrix.MembershipFeasibility))
+		for _, artifact := range matrix.MembershipFeasibility {
+			report := byID[artifact.Result.VariantID]
+			path, pathErr := m8CanonicalPathV1(artifact.Path)
+			if report == nil || report.Variant == nil || seen[artifact.Result.VariantID] || artifact.Result.Status != "sufficient" || pathErr != nil || filepath.Dir(path) != matrixDirectory || m8ReplayMembershipFeasibilityV1(cfg, matrix.Dataset, report.Variant.DatabaseDirectory, *report.Variant, artifact) != nil {
+				return false
+			}
+			seen[artifact.Result.VariantID] = true
+		}
+		if candidate := byID["graph-overlap-020-v1"]; candidate == nil || !seen[candidate.Variant.VariantID] {
+			return false
+		}
+	} else if len(matrix.MembershipFeasibility) != 0 {
+		return false
+	}
 	profiles, err := m8CanonicalPathV1(cfg.profiles)
 	return err == nil && profiles == profileRoot &&
 		m8QualificationCommandAdmissionV1(matrix.Command[1:], cfg, base.Dataset)

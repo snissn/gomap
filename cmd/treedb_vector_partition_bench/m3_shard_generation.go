@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 
+	"github.com/snissn/gomap/TreeDB/collections"
 	"github.com/snissn/gomap/TreeDB/vectorpartition"
 )
 
@@ -79,6 +80,33 @@ func m3ValidateShardGenerationInputsV1(plan vectorpartition.ShardPlanV1, ratio f
 	return nil
 }
 
+// m3ValidateActualShardPackBytesV1 binds the planner's conservative per-pack
+// byte envelope to the immutable bytes the encoder actually produced. It runs
+// before manifest publication and again when retained assets are admitted.
+func m3ValidateActualShardPackBytesV1(assets []collections.VectorPartitionAssetV1, summaries []vectorpartition.ShardPackSummaryV1) error {
+	if len(summaries) == 0 {
+		return nil
+	}
+	if len(assets) != len(summaries) {
+		return fmt.Errorf("materialized %d shard packs for %d planned packs", len(assets), len(summaries))
+	}
+	seen := make([]bool, len(summaries))
+	for _, asset := range assets {
+		if asset.PartitionID >= uint32(len(summaries)) {
+			return fmt.Errorf("materialized shard pack %d is outside the canonical plan", asset.PartitionID)
+		}
+		partition := int(asset.PartitionID)
+		if seen[partition] || summaries[partition].Partition != partition {
+			return fmt.Errorf("materialized shard pack %d is duplicate or outside the canonical plan", asset.PartitionID)
+		}
+		seen[partition] = true
+		if asset.Bytes == 0 || asset.Bytes > summaries[partition].Bytes {
+			return fmt.Errorf("materialized shard pack %d bytes=%d outside planned envelope (0,%d]", partition, asset.Bytes, summaries[partition].Bytes)
+		}
+	}
+	return nil
+}
+
 func m3WriteShardGenerationRecordV1(dir string, raw []byte, digest string) error {
 	if len(raw) == 0 {
 		return nil
@@ -141,6 +169,23 @@ func m3VerifyRetainedShardGenerationV1(dir string, d m3VariantDescriptorV1) erro
 		return fmt.Errorf("retained shard generation record covers %d vectors, descriptor declares %d source rows", record.Plan.Vectors, d.SourceRows)
 	}
 	return nil
+}
+
+func m3ValidateRetainedShardPackBytesV1(dir string, d m3VariantDescriptorV1, assets []collections.VectorPartitionAssetV1) (vectorpartition.ShardGenerationDescriptorV1, error) {
+	if d.ShardPlan == (vectorpartition.ShardPlanV1{}) {
+		return vectorpartition.ShardGenerationDescriptorV1{}, nil
+	}
+	if err := m3VerifyRetainedShardGenerationV1(dir, d); err != nil {
+		return vectorpartition.ShardGenerationDescriptorV1{}, err
+	}
+	record, err := m3ReadShardGenerationDescriptorV1(dir, d.ShardGenerationDigest)
+	if err != nil {
+		return vectorpartition.ShardGenerationDescriptorV1{}, err
+	}
+	if err := m3ValidateActualShardPackBytesV1(assets, record.PackSummaries); err != nil {
+		return vectorpartition.ShardGenerationDescriptorV1{}, err
+	}
+	return record, nil
 }
 
 // m3VerifyShardGenerationMembershipsV1 compares the record's individual

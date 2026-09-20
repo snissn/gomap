@@ -236,6 +236,15 @@ func runM0MaterializeMembershipV1(args []string, stdout io.Writer) (err error) {
 	if resources != nil {
 		resources.Release()
 	}
+	if updated.ShardPlan != (vectorpartition.ShardPlanV1{}) {
+		summaries, err := vectorpartition.AccountShardPacksV1(updated.ShardPlan, overlap.Memberships)
+		if err != nil {
+			return err
+		}
+		if err = m3ValidateActualShardPackBytesV1(assets, summaries); err != nil {
+			return err
+		}
+	}
 	manifest.Assets = assets
 	manifest.Canonicalize()
 	if err = h.collection.PublishVectorPartitionManifestV1(manifest, nil); err != nil {

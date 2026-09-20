@@ -59,10 +59,101 @@ func TestDenseBallGraphAndPartitionDeterministic(t *testing.T) {
 	}
 	// MaxDistanceWork is intentionally persisted in Config so an artifact
 	// records the scalar-work safety envelope that constructed it.
-	if got, want := mustDigest(t, a), "b8a79eb002035b5104793e86e0c993fb4514350f37f60e49c0d5d19e983ef7c7"; got != want {
+	if got, want := mustDigest(t, a), "22b7f3a1b62416116cf8cc32c3799d6e13a86fe7f604af25196b9a0b6bb07a8b"; got != want {
 		t.Fatalf("tiny canonical graph/assignment bytes changed: got %s want %s", got, want)
 	}
 }
+
+func TestRecursivePivotSamplingIsDeterministicAndBucketSpecific(t *testing.T) {
+	ids := make([]int, 64)
+	otherBucket := make([]int, 64)
+	for i := range ids {
+		ids[i] = i
+		otherBucket[i] = i + len(ids)
+	}
+	first := samplePivotsV1(ids, 8, 17, 0)
+	if again := samplePivotsV1(ids, 8, 17, 0); !reflect.DeepEqual(first, again) {
+		t.Fatalf("same bucket sample changed: first=%v again=%v", first, again)
+	}
+	if next := samplePivotsV1(ids, 8, 17, 1); reflect.DeepEqual(first, next) {
+		t.Fatalf("repetitions reused pivot sample: %v", first)
+	}
+	if sibling := samplePivotsV1(otherBucket, 8, 17, 0); reflect.DeepEqual(first, sibling) {
+		t.Fatalf("distinct buckets reused pivot sample: %v", first)
+	}
+	if len(first) != 8 {
+		t.Fatalf("sample size=%d want=8", len(first))
+	}
+	for i, id := range first {
+		if id < 0 || id >= len(ids) || i > 0 && id <= first[i-1] {
+			t.Fatalf("sample is not a canonical bucket subset: %v", first)
+		}
+	}
+}
+
+func TestDegenerateChunkFallbackVariesByRepetition(t *testing.T) {
+	vectors := make([]Vector, 32)
+	for i := range vectors {
+		vectors[i] = Vector{ID: fmt.Sprintf("v-%02d", i), Values: []float64{float64(i + 1), 0}}
+	}
+	c := config()
+	c.MaxLeafBucket, c.Degree, c.Repetitions, c.MaxEdges = 8, 8, 4, 1024
+	artifact, err := Build(vectors, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	adjacency := make([][]int, len(vectors))
+	for from, neighbors := range artifact.Graph.Neighbors {
+		for _, to := range neighbors {
+			adjacency[from] = append(adjacency[from], to)
+			adjacency[to] = append(adjacency[to], from)
+		}
+	}
+	seen, queue := make([]bool, len(vectors)), []int{0}
+	seen[0] = true
+	for len(queue) > 0 {
+		from := queue[0]
+		queue = queue[1:]
+		for _, to := range adjacency[from] {
+			if !seen[to] {
+				seen[to] = true
+				queue = append(queue, to)
+			}
+		}
+	}
+	for ordinal, reachable := range seen {
+		if !reachable {
+			t.Fatalf("degenerate chunk repetitions left ordinal %d disconnected: graph=%v", ordinal, artifact.Graph.Neighbors)
+		}
+	}
+}
+
+func TestBuildCanonicalizesInputBeforeRecursiveSampling(t *testing.T) {
+	one, err := Build(fixture(), config())
+	if err != nil {
+		t.Fatal(err)
+	}
+	permuted := append([]Vector(nil), fixture()...)
+	for left, right := 0, len(permuted)-1; left < right; left, right = left+1, right-1 {
+		permuted[left], permuted[right] = permuted[right], permuted[left]
+	}
+	two, err := Build(permuted, config())
+	if err != nil {
+		t.Fatal(err)
+	}
+	oneJSON, err := CanonicalJSON(one)
+	if err != nil {
+		t.Fatal(err)
+	}
+	twoJSON, err := CanonicalJSON(two)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(oneJSON, twoJSON) {
+		t.Fatal("input permutation changed recursive graph artifact")
+	}
+}
+
 func TestBuildStableIDHashBaselineOwnsAssignmentAndPreservesSource(t *testing.T) {
 	source, err := Build(fixture(), config())
 	if err != nil {

@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/snissn/gomap/TreeDB/collections"
 	"github.com/snissn/gomap/TreeDB/vectorpartition"
 )
 
@@ -150,6 +151,39 @@ func TestM3ShardPackBudgetRejectsOversizedPacksV1(t *testing.T) {
 	}
 }
 
+func TestM3ActualShardPackBytesStayInsidePlannedEnvelopeV1(t *testing.T) {
+	summaries := []vectorpartition.ShardPackSummaryV1{
+		{Partition: 0, Rows: 2, Bytes: 100},
+		{Partition: 1, Rows: 1, Bytes: 80},
+	}
+	assets := []collections.VectorPartitionAssetV1{
+		{PartitionID: 1, Bytes: 80},
+		{PartitionID: 0, Bytes: 99},
+	}
+	if err := m3ValidateActualShardPackBytesV1(assets, summaries); err != nil {
+		t.Fatal(err)
+	}
+	for name, mutate := range map[string]func([]collections.VectorPartitionAssetV1){
+		"over":      func(a []collections.VectorPartitionAssetV1) { a[0].Bytes++ },
+		"zero":      func(a []collections.VectorPartitionAssetV1) { a[1].Bytes = 0 },
+		"duplicate": func(a []collections.VectorPartitionAssetV1) { a[1].PartitionID = 1 },
+	} {
+		t.Run(name, func(t *testing.T) {
+			candidate := append([]collections.VectorPartitionAssetV1(nil), assets...)
+			mutate(candidate)
+			if err := m3ValidateActualShardPackBytesV1(candidate, summaries); err == nil {
+				t.Fatal("accepted pack bytes outside the planned envelope")
+			}
+		})
+	}
+	if err := m3ValidateActualShardPackBytesV1(assets[:1], summaries); err == nil {
+		t.Fatal("accepted incomplete pack coverage")
+	}
+	if err := m3ValidateActualShardPackBytesV1(assets, nil); err != nil {
+		t.Fatalf("unplanned packs rejected: %v", err)
+	}
+}
+
 // TestM3ShardGenerationDescriptorPersistsAndReopensV1 covers the retained
 // artifact itself: a byte-bounded build must leave a shard-generation record
 // that reopens under its bound digest, must refuse to overwrite it, and must
@@ -235,6 +269,17 @@ func TestM3ShardGenerationDescriptorPersistsAndReopensV1(t *testing.T) {
 	}
 	if err := m3VerifyRetainedShardGenerationV1(dir, descriptor); err != nil {
 		t.Fatalf("matching record rejected: %v", err)
+	}
+	assets := []collections.VectorPartitionAssetV1{
+		{PartitionID: 0, Bytes: got.PackSummaries[0].Bytes},
+		{PartitionID: 1, Bytes: got.PackSummaries[1].Bytes},
+	}
+	if _, err := m3ValidateRetainedShardPackBytesV1(dir, descriptor, assets); err != nil {
+		t.Fatalf("matching retained pack bytes rejected: %v", err)
+	}
+	assets[0].Bytes++
+	if _, err := m3ValidateRetainedShardPackBytesV1(dir, descriptor, assets); err == nil {
+		t.Fatal("retained admission accepted a pack above its encoded byte envelope")
 	}
 	for name, mutate := range map[string]func(*m3VariantDescriptorV1){
 		"ratio":       func(c *m3VariantDescriptorV1) { c.OverlapRatio = 0 },
