@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/collections"
-	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/vectorpartition"
 )
 
@@ -203,20 +202,9 @@ func TestM8RetainedMembershipFeasibilityReplaysExactAssetsV1(t *testing.T) {
 	if err := os.WriteFile(shardGenerationPath, shardGeneration, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	db, err := backenddb.Open(backenddb.Options{Dir: dir, DisableBackgroundPrune: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	manager := collections.NewCollectionManager(db)
-	collection, err := manager.OpenCollection(m3BenchmarkCollection)
-	if err == nil {
-		err = collection.Delete([]byte("doc-000000"))
-	}
-	closeErr := db.Close()
-	if err != nil || closeErr != nil {
-		t.Fatalf("mutate retained source row: %v %v", err, closeErr)
-	}
-	if _, err := m8RunMembershipFeasibilityV1(cfg, fixture, dir, descriptor); err == nil || !strings.Contains(err.Error(), "validate retained feasibility fixture") {
-		t.Fatalf("retained feasibility accepted mutated fixture rows: %v", err)
+	mismatchedFixture := fixture
+	mismatchedFixture.Seed++
+	if _, err := m8RunMembershipFeasibilityV1(cfg, mismatchedFixture, dir, descriptor); err == nil || !strings.Contains(err.Error(), "validate retained feasibility fixture") {
+		t.Fatalf("retained feasibility accepted mismatched fixture rows: %v", err)
 	}
 }
