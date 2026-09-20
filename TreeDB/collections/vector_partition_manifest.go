@@ -3474,7 +3474,7 @@ type VectorPartitionStatusV1 struct {
 // collection's currently declared vector-index definition before publication
 // and retains the standalone local-activation behavior.
 func (c *Collection) PublishVectorPartitionManifestV1(m VectorPartitionManifestV1, resources *rootpublication.StableResourceSet) error {
-	return c.publishVectorPartitionManifestModeV1(m, resources, true, VectorPartitionLocalGraphVariantCanonicalHNSWM18EfConstruction256V1)
+	return c.publishVectorPartitionManifestModeV1(m, resources, true, vectorPartitionLocalDefaultGraphVariantV1)
 }
 
 // PublishVectorPartitionManifestForOfflineAssetVariantV1 persists an explicit
@@ -3489,7 +3489,7 @@ func (c *Collection) PublishVectorPartitionManifestForOfflineAssetVariantV1(m Ve
 // therefore usable as M7 group-readiness evidence but cannot be served until
 // the replicated catalog/meta lifecycle activates it.
 func (c *Collection) StageVectorPartitionManifestV1(m VectorPartitionManifestV1, resources *rootpublication.StableResourceSet) error {
-	return c.publishVectorPartitionManifestModeV1(m, resources, false, VectorPartitionLocalGraphVariantCanonicalHNSWM18EfConstruction256V1)
+	return c.publishVectorPartitionManifestModeV1(m, resources, false, vectorPartitionLocalDefaultGraphVariantV1)
 }
 
 func (c *Collection) publishVectorPartitionManifestModeV1(m VectorPartitionManifestV1, resources *rootpublication.StableResourceSet, activate bool, expectedGraphVariant VectorPartitionLocalGraphVariantV1) error {

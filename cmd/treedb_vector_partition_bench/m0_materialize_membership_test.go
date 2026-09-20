@@ -15,9 +15,9 @@ import (
 )
 
 func TestM0MaterializeVariantV1OnlyAcceptsProductionVariants(t *testing.T) {
-	want := collections.VectorPartitionLocalGraphVariantCanonicalHNSWM18EfConstruction256V1
+	want := collections.VectorPartitionLocalGraphVariantCanonicalVamanaR64L256Alpha1_2V1
 	variant, m, efConstruction, err := m0MaterializeVariantV1(string(want))
-	if err != nil || variant != want || m != 18 || efConstruction != 256 {
+	if err != nil || variant != want || m != 32 || efConstruction != 256 {
 		t.Fatalf("variant %q = (%q,%d,%d,%v)", want, variant, m, efConstruction, err)
 	}
 	if _, _, _, err := m0MaterializeVariantV1(string(collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1)); err == nil {
@@ -157,7 +157,7 @@ func TestM0MaterializeMembershipReopensDisposableClone(t *testing.T) {
 		t.Fatalf("strict reopen: %v", err)
 	}
 	policy, ok := collections.ParseVectorPartitionOverlapPolicyV1(h.manifest.BalancePolicy)
-	if !ok || descriptor.PartitionHNSWM != 18 || descriptor.PartitionHNSWEfC != 256 || descriptor.ArtifactSHA256 != account.AssignmentArtifactSHA256 || descriptor.GraphArtifactSHA256 != account.GraphArtifactSHA256 || policy.BuildIdentityDigest != descriptor.BuildIdentityDigest || descriptor.OverlapMemberships != descriptor.OverlapRealized {
+	if !ok || descriptor.PartitionHNSWM != 32 || descriptor.PartitionHNSWEfC != 256 || descriptor.ArtifactSHA256 != account.AssignmentArtifactSHA256 || descriptor.GraphArtifactSHA256 != account.GraphArtifactSHA256 || policy.BuildIdentityDigest != descriptor.BuildIdentityDigest || descriptor.OverlapMemberships != descriptor.OverlapRealized {
 		_ = h.Close()
 		t.Fatalf("rewritten descriptor=%+v policy=%+v", descriptor, policy)
 	}

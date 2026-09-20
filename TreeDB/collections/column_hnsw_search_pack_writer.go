@@ -147,8 +147,8 @@ func buildColumnHNSWSearchPackInputWithoutVectors(def VectorIndexDefinition, gra
 	}
 	entryOrdinal := -1
 	if len(rows) > 0 {
-		// columnVectorGraphNativeLocalityOrder places the HNSW entry node first;
-		// rebuild keeps that order when serializing rows and state assets.
+		// The selected graph builder places its entry node first; rebuild keeps
+		// that order when serializing rows and state assets.
 		entryOrdinal = 0
 	}
 	return columnHNSWSearchPackBuildInput{
@@ -446,7 +446,7 @@ func validateColumnHNSWSearchPackAssetPayloadDirectFile(path string, ref ColumnA
 	version := hnswPackU16(prefix, columnHNSWSearchPackHeaderVersionOffset)
 	switch version {
 	case columnHNSWSearchPackVersionV1:
-	case columnHNSWSearchPackVersionV2, columnHNSWSearchPackVersionV3, columnHNSWSearchPackVersionV4, columnHNSWSearchPackVersionV5:
+	case columnHNSWSearchPackVersionV2, columnHNSWSearchPackVersionV3, columnHNSWSearchPackVersionV4, columnHNSWSearchPackVersionV5, columnHNSWSearchPackVersionV6:
 		headerSize = columnHNSWSearchPackHeaderSizeV2
 		if err := readColumnHNSWSearchPackFileAt(file, ref.Offset+columnHNSWSearchPackHeaderSize, prefix[columnHNSWSearchPackHeaderSize:headerSize]); err != nil {
 			return err

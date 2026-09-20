@@ -124,7 +124,7 @@ func TestValidateM0FrontierReportV1RejectsMixedIdentity(t *testing.T) {
 			}
 		}
 	}
-	report := m0FrontierReportV1{Schema: "treedb_vector_partition_m0_calibration_frontier_v3", ManifestIntegrity: sha, ReadySet: sha, PackBytes: 1, AssetChecksumsSHA256: sha, SourceGeneration: 1, SourceChecksum: 1, SourceSchemaHash: 1, SourceRows: 250000, PartitionGeneration: 2, PartitionCount: 32, RouterModelDigest: sha, Mode: "zero", MembershipSHA256: sha, MembershipReportSHA256: sha, GraphArtifactSHA256: sha, AssignmentArtifactSHA256: sha, DatasetManifestSHA256: sha, BinarySHA256: sha, SourceRevision: strings.Repeat("a", 40), CalibrationSHA256: sha, TruthSHA256: sha, RouterScoreBudget: 1024, TopK: 10, PartitionHNSWM: 18, PartitionHNSWEfC: 256, GraphVariant: string(collections.VectorPartitionLocalGraphVariantCanonicalHNSWM18EfConstruction256V1), Measurements: measurements, Cells: canonical}
+	report := m0FrontierReportV1{Schema: "treedb_vector_partition_m0_calibration_frontier_v3", ManifestIntegrity: sha, ReadySet: sha, PackBytes: 1, AssetChecksumsSHA256: sha, SourceGeneration: 1, SourceChecksum: 1, SourceSchemaHash: 1, SourceRows: 250000, PartitionGeneration: 2, PartitionCount: 32, RouterModelDigest: sha, Mode: "zero", MembershipSHA256: sha, MembershipReportSHA256: sha, GraphArtifactSHA256: sha, AssignmentArtifactSHA256: sha, DatasetManifestSHA256: sha, BinarySHA256: sha, SourceRevision: strings.Repeat("a", 40), CalibrationSHA256: sha, TruthSHA256: sha, RouterScoreBudget: 1024, TopK: 10, PartitionHNSWM: 32, PartitionHNSWEfC: 256, GraphVariant: string(collections.VectorPartitionLocalGraphVariantCanonicalVamanaR64L256Alpha1_2V1), Measurements: measurements, Cells: canonical}
 	if !validateM0FrontierReportV1(report, probes, efs, 1024) {
 		t.Fatal("valid report rejected")
 	}
@@ -132,6 +132,7 @@ func TestValidateM0FrontierReportV1RejectsMixedIdentity(t *testing.T) {
 		t.Fatal("mismatched score budget accepted")
 	}
 	report.GraphVariant = string(collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1)
+	report.PartitionHNSWM = 18
 	if validateM0FrontierReportV1(report, probes, efs, 1024) {
 		t.Fatal("offline graph variant accepted without its offline disposition")
 	}
@@ -139,7 +140,8 @@ func TestValidateM0FrontierReportV1RejectsMixedIdentity(t *testing.T) {
 	if !validateM0FrontierReportV1(report, probes, efs, 1024) {
 		t.Fatal("explicit offline graph variant rejected")
 	}
-	report.GraphVariant = string(collections.VectorPartitionLocalGraphVariantCanonicalHNSWM18EfConstruction256V1)
+	report.GraphVariant = string(collections.VectorPartitionLocalGraphVariantCanonicalVamanaR64L256Alpha1_2V1)
+	report.PartitionHNSWM = 32
 	report.OfflineGraphVariant = false
 	report.VCSModified = true
 	if validateM0FrontierReportV1(report, probes, efs, 1024) {

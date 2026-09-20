@@ -288,7 +288,7 @@ func decodeColumnHNSWSearchPackEnvelopeMetadataWithContext(ctx context.Context, 
 	headerSize := columnHNSWSearchPackHeaderSize
 	switch version {
 	case columnHNSWSearchPackVersionV1:
-	case columnHNSWSearchPackVersionV2, columnHNSWSearchPackVersionV3, columnHNSWSearchPackVersionV4, columnHNSWSearchPackVersionV5:
+	case columnHNSWSearchPackVersionV2, columnHNSWSearchPackVersionV3, columnHNSWSearchPackVersionV4, columnHNSWSearchPackVersionV5, columnHNSWSearchPackVersionV6:
 		headerSize = columnHNSWSearchPackHeaderSizeV2
 	default:
 		return columnHNSWSearchPack{}, opts, fmt.Errorf("collections: unsupported hnsw_search_pack_v1 version=%d", version)
@@ -351,6 +351,14 @@ func decodeColumnHNSWSearchPackEnvelopeMetadataWithContext(ctx context.Context, 
 			hnswPackU32(raw, columnHNSWSearchPackHeaderEfConstructionOffset) != columnHNSWCanonicalPartitionEfConstruction) {
 		return columnHNSWSearchPack{}, opts, errors.New("collections: canonical partition hnsw graph parameters mismatch")
 	}
+	if version == columnHNSWSearchPackVersionV6 &&
+		(hnswPackU32(raw, columnHNSWSearchPackHeaderMOffset) != columnVamanaCanonicalPartitionM ||
+			hnswPackU32(raw, columnHNSWSearchPackHeaderEfConstructionOffset) != columnVamanaCanonicalPartitionL ||
+			hnswPackU64(raw, columnHNSWSearchPackHeaderEntryOrdinalOffset) != 0 ||
+			hnswPackU32(raw, columnHNSWSearchPackHeaderMaxLayerOffset) != 0 ||
+			hnswPackU32(raw, columnHNSWSearchPackHeaderAdjacencyLayerCount) != 1) {
+		return columnHNSWSearchPack{}, opts, errors.New("collections: canonical partition Vamana graph parameters mismatch")
+	}
 	if rows64 == 0 {
 		if layerCount32 != 0 || maxLayer32 != columnHNSWSearchPackNoMaxLayer || hnswPackU64(raw, columnHNSWSearchPackHeaderEntryOrdinalOffset) != columnHNSWSearchPackNoEntryOrdinal {
 			return columnHNSWSearchPack{}, opts, errors.New("collections: hnsw_search_pack_v1 empty pack must use no-entry/no-layer sentinels")
@@ -377,7 +385,7 @@ func decodeColumnHNSWSearchPackEnvelopeMetadataWithContext(ctx context.Context, 
 	}
 	var membershipDigest [sha256.Size]byte
 	var externalVectorDigest [sha256.Size]byte
-	if version == columnHNSWSearchPackVersionV2 || version == columnHNSWSearchPackVersionV3 || version == columnHNSWSearchPackVersionV5 {
+	if version == columnHNSWSearchPackVersionV2 || version == columnHNSWSearchPackVersionV3 || version == columnHNSWSearchPackVersionV5 || version == columnHNSWSearchPackVersionV6 {
 		copy(membershipDigest[:], raw[columnHNSWSearchPackHeaderMembershipDigestOffset:columnHNSWSearchPackHeaderSizeV2])
 		if membershipDigest == ([sha256.Size]byte{}) {
 			return columnHNSWSearchPack{}, opts, fmt.Errorf("collections: hnsw_search_pack_v1 version %d missing membership digest", version)
@@ -684,6 +692,11 @@ func (v *columnHNSWSearchPackPreparedView) prepareSectionViewsWithContext(ctx co
 		}
 		if err := validateColumnHNSWSearchPackAdjacencyWithContext(ctx, layer, rows, offsets, neighbors); err != nil {
 			return err
+		}
+		if v.Header.Version == columnHNSWSearchPackVersionV6 && layer == 0 {
+			if err := validateColumnVamanaPartitionGraphV1(ctx, offsets, neighbors); err != nil {
+				return err
+			}
 		}
 		v.AdjacencyLayers[layer] = columnHNSWSearchPackPreparedLayer{Offsets: offsets, Neighbors: neighbors}
 	}

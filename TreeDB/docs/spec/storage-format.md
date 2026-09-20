@@ -168,20 +168,22 @@ version 5 extends each representative mapping from 12 to 16 bytes with the
 represented-node ID, and version 6 adds the graph-variant string to every asset
 frame. Router assets use an empty variant; partition-local assets require a
 recognized explicit variant.
-Native partition HNSW assets require that SHA-256 digest; it binds the
+Native partition graph assets require that SHA-256 digest; it binds the
 generation, partition, ordered authoritative stable IDs, and home/overlap
 membership kinds. There are no optional tagged fields and this pre-alpha
 decoder accepts only version 6; older directories require rebuild rather than
 migration.
 
-Canonical partition-local `hnsw_search_pack_v1` assets use wire version 5.
-Version 5 retains the version-2 176-byte header and required membership digest,
-fixes `M=18` and `ef_construction=256`, and contains only the native HNSW
-topology and embedded normalized FP32 vectors. Repair edges, auxiliary CSR,
+Canonical partition-local `hnsw_search_pack_v1` assets use wire version 6.
+Version 6 retains the version-2 176-byte header and required membership digest,
+fixes compatibility fields `M=32` (Vamana `R=64`) and
+`ef_construction=256` (Vamana `L=256`), and contains one flat native Vamana
+layer plus embedded normalized FP32 vectors. Repair edges, auxiliary CSR,
 external-vector references, and search-time ordinal reseeding are forbidden.
-Versions 1 through 3 are historical offline formats; version 4 remains the
-non-partitioned topology-only column-graph format. Production partition opens
-require the explicit version-5 graph variant and fail closed otherwise.
+Versions 1 through 3 and 5 are historical offline formats; version 4 remains
+the non-partitioned topology-only column-graph format. Production partition
+opens require the explicit version-6 Vamana graph variant and fail closed
+otherwise.
 
 The non-partitioned `column_graph` pack uses wire version 4 for
 `cosine_normalized_f32_v1`. Version 4 is topology-only: it omits the normalized

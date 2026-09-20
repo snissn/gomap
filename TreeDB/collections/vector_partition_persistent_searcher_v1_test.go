@@ -825,7 +825,7 @@ func TestVectorPartitionLocalGraphOverlayMutationChangesTraversalAndTopK(t *test
 }
 
 func TestVectorPartitionLocalDefaultMaterializationVariantV1(t *testing.T) {
-	if got, want := vectorPartitionLocalDefaultGraphVariantV1, VectorPartitionLocalGraphVariantCanonicalHNSWM18EfConstruction256V1; got != want {
+	if got, want := vectorPartitionLocalDefaultGraphVariantV1, VectorPartitionLocalGraphVariantCanonicalVamanaR64L256Alpha1_2V1; got != want {
 		t.Fatalf("default materialization variant=%q want %q", got, want)
 	}
 	def := VectorIndexDefinition{M: 16, EfConstruction: 128}
@@ -833,16 +833,19 @@ func TestVectorPartitionLocalDefaultMaterializationVariantV1(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if buildDef.M != 18 || buildDef.EfConstruction != 256 || hasAuxiliaryNavigation {
+	if buildDef.M != 32 || buildDef.EfConstruction != 256 || hasAuxiliaryNavigation {
 		t.Fatalf("default materialization definition=%+v auxiliary=%t", buildDef, hasAuxiliaryNavigation)
 	}
 	var membership [sha256.Size]byte
 	membership[0] = 1
-	if got, want := vectorPartitionLocalGraphVariantMembershipDigestV1(membership, vectorPartitionLocalDefaultGraphVariantV1), vectorPartitionLocalGraphVariantMembershipDigestV1(membership, VectorPartitionLocalGraphVariantCanonicalHNSWM18EfConstruction256V1); got != want {
-		t.Fatalf("default materialization membership identity=%x want M18 variant=%x", got, want)
+	if got, want := vectorPartitionLocalGraphVariantMembershipDigestV1(membership, vectorPartitionLocalDefaultGraphVariantV1), vectorPartitionLocalGraphVariantMembershipDigestV1(membership, VectorPartitionLocalGraphVariantCanonicalVamanaR64L256Alpha1_2V1); got != want {
+		t.Fatalf("default materialization membership identity=%x want Vamana variant=%x", got, want)
 	}
 	if got, m16 := vectorPartitionLocalGraphVariantMembershipDigestV1(membership, vectorPartitionLocalDefaultGraphVariantV1), vectorPartitionLocalGraphVariantMembershipDigestV1(membership, VectorPartitionLocalGraphVariantAuxiliaryNavigationV1); got == m16 {
 		t.Fatal("default materialization retained the M16/eFC128 membership identity")
+	}
+	if got, hnsw := vectorPartitionLocalGraphVariantMembershipDigestV1(membership, vectorPartitionLocalDefaultGraphVariantV1), vectorPartitionLocalGraphVariantMembershipDigestV1(membership, VectorPartitionLocalGraphVariantCanonicalHNSWM18EfConstruction256V1); got == hnsw {
+		t.Fatal("Vamana and historical HNSW share a membership identity")
 	}
 }
 
@@ -976,8 +979,8 @@ func TestVectorPartitionOfflineAuxiliaryConstructionVariantsV1(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := canonicalDigest, vectorPartitionLocalGraphVariantMembershipDigestV1(membershipDigest, VectorPartitionLocalGraphVariantCanonicalHNSWM18EfConstruction256V1); got != want {
-		t.Fatalf("default materializer membership digest=%x want M18 variant=%x", got, want)
+	if got, want := canonicalDigest, vectorPartitionLocalGraphVariantMembershipDigestV1(membershipDigest, VectorPartitionLocalGraphVariantCanonicalVamanaR64L256Alpha1_2V1); got != want {
+		t.Fatalf("default materializer membership digest=%x want Vamana variant=%x", got, want)
 	}
 	if canonicalDigest == vectorPartitionLocalGraphVariantMembershipDigestV1(membershipDigest, VectorPartitionLocalGraphVariantAuxiliaryNavigationV1) {
 		t.Fatal("default materializer retained the M16/eFC128 membership identity")
@@ -992,7 +995,7 @@ func TestVectorPartitionOfflineAuxiliaryConstructionVariantsV1(t *testing.T) {
 		t.Fatal(err)
 	}
 	canonicalPack, err := decodeColumnHNSWSearchPack(canonicalRaw, columnHNSWSearchPackDecodeOptions{ExpectedBaseIdentity: columnHNSWSearchPackBaseIdentity{ManifestGeneration: m.SourceGeneration, ManifestChecksum: m.SourceChecksum, SchemaHash: m.SourceSchemaHash}, ExpectedMembershipDigest: canonicalDigest})
-	if err != nil || canonicalPack.Header.M != 18 || canonicalPack.Header.EfConstruction != 256 || canonicalPack.Header.HasAuxiliaryNavigation || canonicalPack.Header.Version != columnHNSWSearchPackVersionV5 || canonical[0].GraphVariant != string(VectorPartitionLocalGraphVariantCanonicalHNSWM18EfConstruction256V1) {
+	if err != nil || canonicalPack.Header.M != 32 || canonicalPack.Header.EfConstruction != 256 || canonicalPack.Header.HasAuxiliaryNavigation || canonicalPack.Header.Version != columnHNSWSearchPackVersionV6 || canonical[0].GraphVariant != string(VectorPartitionLocalGraphVariantCanonicalVamanaR64L256Alpha1_2V1) {
 		t.Fatalf("default materializer pack=%+v err=%v", canonicalPack.Header, err)
 	}
 	if got := col.Meta().VectorIndexes[0]; got.M != def.M || got.EfConstruction != 128 || VectorIndexDefinitionDigestV1(got) != m.IndexDefinitionDigest {
@@ -1996,11 +1999,11 @@ func TestVectorPartitionNativePackMembershipBindingRejectsCrossManifestMixV1(t *
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got := hnswPackU16(raw, columnHNSWSearchPackHeaderVersionOffset); got != columnHNSWSearchPackVersionV5 {
-			t.Fatalf("pack version=%d want %d", got, columnHNSWSearchPackVersionV5)
+		if got := hnswPackU16(raw, columnHNSWSearchPackHeaderVersionOffset); got != columnHNSWSearchPackVersionV6 {
+			t.Fatalf("pack version=%d want %d", got, columnHNSWSearchPackVersionV6)
 		}
 		pack, err := decodeColumnHNSWSearchPack(raw, columnHNSWSearchPackDecodeOptions{ExpectedBaseIdentity: columnHNSWSearchPackBaseIdentity{ManifestGeneration: manifest.SourceGeneration, ManifestChecksum: manifest.SourceChecksum, SchemaHash: manifest.SourceSchemaHash}, ExpectedMembershipDigest: expected})
-		if err != nil || pack.Header.MembershipDigest != expected || pack.Header.HasAuxiliaryNavigation || pack.Header.M != 18 || pack.Header.EfConstruction != 256 || asset.GraphVariant != string(VectorPartitionLocalGraphVariantCanonicalHNSWM18EfConstruction256V1) {
+		if err != nil || pack.Header.MembershipDigest != expected || pack.Header.HasAuxiliaryNavigation || pack.Header.M != 32 || pack.Header.EfConstruction != 256 || asset.GraphVariant != string(VectorPartitionLocalGraphVariantCanonicalVamanaR64L256Alpha1_2V1) {
 			t.Fatalf("persisted membership header=%x expected=%x err=%v", pack.Header.MembershipDigest, expected, err)
 		}
 	}

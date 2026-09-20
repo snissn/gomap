@@ -729,6 +729,55 @@ func TestColumnHNSWCanonicalPartitionPackDoesNotReseedDisconnectedRowsV5(t *test
 	}
 }
 
+func TestColumnVamanaCanonicalPartitionPackV6(t *testing.T) {
+	input := testColumnHNSWSearchPackInput2312()
+	input.M = columnVamanaCanonicalPartitionM
+	input.EfConstruction = columnVamanaCanonicalPartitionL
+	input.MaxLayer = 0
+	input.Levels = []uint16{0, 0, 0}
+	input.AdjacencyLayers = []columnHNSWSearchPackLayerInput{{Offsets: []uint64{0, 1, 2, 3}, Neighbors: []uint32{1, 2, 0}}}
+	input.MembershipDigest[0] = 1
+	input.CanonicalPartitionVamana = true
+	raw, err := encodeColumnHNSWSearchPack(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pack, err := decodeColumnHNSWSearchPack(raw, columnHNSWSearchPackDecodeOptions{ExpectedBaseIdentity: input.BaseIdentity, ExpectedMembershipDigest: input.MembershipDigest})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pack.Header.Version != columnHNSWSearchPackVersionV6 || pack.Header.MaxLayer != 0 || len(pack.AdjacencyLayers) != 1 {
+		t.Fatalf("Vamana header=%+v layers=%d", pack.Header, len(pack.AdjacencyLayers))
+	}
+	badM := testColumnHNSWSearchPackPatchU32Header2312(raw, columnHNSWSearchPackHeaderMOffset, columnVamanaCanonicalPartitionM-1)
+	if _, err := decodeColumnHNSWSearchPack(badM, columnHNSWSearchPackDecodeOptions{ExpectedBaseIdentity: input.BaseIdentity}); err == nil || !strings.Contains(err.Error(), "canonical partition Vamana graph parameters mismatch") {
+		t.Fatalf("accepted noncanonical Vamana parameters: %v", err)
+	}
+	badEntry := append([]byte(nil), raw...)
+	putHNSWPackU64(badEntry, columnHNSWSearchPackHeaderEntryOrdinalOffset, 1)
+	if _, err := decodeColumnHNSWSearchPack(badEntry, columnHNSWSearchPackDecodeOptions{ExpectedBaseIdentity: input.BaseIdentity}); err == nil || !strings.Contains(err.Error(), "canonical partition Vamana graph parameters mismatch") {
+		t.Fatalf("accepted noncanonical Vamana entry: %v", err)
+	}
+	disconnected := input
+	disconnected.AdjacencyLayers = []columnHNSWSearchPackLayerInput{{Offsets: []uint64{0, 0, 0, 0}}}
+	if _, err := encodeColumnHNSWSearchPack(disconnected); err == nil || !strings.Contains(err.Error(), "entry reaches") {
+		t.Fatalf("accepted disconnected Vamana graph: %v", err)
+	}
+	selfEdge := input
+	selfEdge.AdjacencyLayers = []columnHNSWSearchPackLayerInput{{Offsets: []uint64{0, 1, 2, 3}, Neighbors: []uint32{0, 2, 0}}}
+	if _, err := encodeColumnHNSWSearchPack(selfEdge); err == nil || !strings.Contains(err.Error(), "self edge") {
+		t.Fatalf("accepted Vamana self edge: %v", err)
+	}
+}
+
+func TestColumnCanonicalPartitionPacksStopAtEmptyFrontier(t *testing.T) {
+	if columnHNSWSearchPackStopsAtEmptyFrontier(columnHNSWSearchPackVersionV4) ||
+		!columnHNSWSearchPackStopsAtEmptyFrontier(columnHNSWSearchPackVersionV5) ||
+		!columnHNSWSearchPackStopsAtEmptyFrontier(columnHNSWSearchPackVersionV6) {
+		t.Fatal("canonical partition reseed policy drifted")
+	}
+}
+
 func TestColumnHNSWSearchPackDecodeRejectsCorruptEnvelope2312(t *testing.T) {
 	raw := testColumnHNSWSearchPackRaw2312(t)
 	cases := []struct {
@@ -748,7 +797,7 @@ func TestColumnHNSWSearchPackDecodeRejectsCorruptEnvelope2312(t *testing.T) {
 		},
 		{
 			name: "bad_version",
-			raw:  testColumnHNSWSearchPackPatchU16Header2312(raw, columnHNSWSearchPackHeaderVersionOffset, columnHNSWSearchPackVersionV5+1),
+			raw:  testColumnHNSWSearchPackPatchU16Header2312(raw, columnHNSWSearchPackHeaderVersionOffset, 99),
 			want: "unsupported hnsw_search_pack_v1 version",
 		},
 		{

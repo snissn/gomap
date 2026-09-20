@@ -1077,7 +1077,7 @@ func TestM3ConfiguredPartitionLocalHNSWBuildsCanonicalPacks(t *testing.T) {
 		t.Fatalf("source index definition=%+v", meta.VectorIndexes)
 	}
 	descriptor, err := m3ReadVariantDescriptorV1(persist)
-	if err != nil || descriptor.PartitionHNSWM != 18 || m3DescriptorPartitionHNSWEfCV1(descriptor) != 256 {
+	if err != nil || descriptor.PartitionHNSWM != 32 || m3DescriptorPartitionHNSWEfCV1(descriptor) != 256 {
 		t.Fatalf("canonical descriptor=%+v err=%v", descriptor, err)
 	}
 	router, _, err := col.OpenVectorPartitionRouterV1(partitionHNSWIndex)
@@ -1089,7 +1089,7 @@ func TestM3ConfiguredPartitionLocalHNSWBuildsCanonicalPacks(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, asset := range manifest.Assets {
-		if asset.GraphVariant != string(collections.VectorPartitionLocalGraphVariantCanonicalHNSWM18EfConstruction256V1) {
+		if asset.GraphVariant != string(collections.VectorPartitionLocalGraphVariantCanonicalVamanaR64L256Alpha1_2V1) {
 			t.Fatalf("partition %d graph variant=%q", asset.PartitionID, asset.GraphVariant)
 		}
 		searcher, err := col.OpenVectorPartitionLocalSearcherForGenerationV1(partitionHNSWIndex, manifest.Generation, asset.PartitionID)
@@ -1951,8 +1951,11 @@ func TestPartitionLocalHNSWConfigIsIndependentAndM3OnlyV1(t *testing.T) {
 	if m, efConstruction, err := m3PartitionLocalHNSWConfigV1(defaultCfg); err != nil || m != partitionLocalHNSWDefaultM || efConstruction != partitionLocalHNSWDefaultEfC {
 		t.Fatalf("default local HNSW M/eFC=%d/%d err=%v", m, efConstruction, err)
 	}
-	if variant, err := m3PartitionLocalGraphVariantV1(18, 256); err != nil || variant != collections.VectorPartitionLocalGraphVariantCanonicalHNSWM18EfConstruction256V1 {
-		t.Fatalf("M18/eFC256 local variant=%q err=%v", variant, err)
+	if variant, err := m3PartitionLocalGraphVariantV1(32, 256); err != nil || variant != collections.VectorPartitionLocalGraphVariantCanonicalVamanaR64L256Alpha1_2V1 {
+		t.Fatalf("R64/L256 local variant=%q err=%v", variant, err)
+	}
+	if _, err := m3PartitionLocalGraphVariantV1(18, 256); err == nil {
+		t.Fatal("accepted retained HNSW M18/eFC256 as a production local construction variant")
 	}
 	if _, err := m3PartitionLocalGraphVariantV1(20, 256); err == nil {
 		t.Fatal("accepted offline M20/eFC256 as a production local construction variant")
