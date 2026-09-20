@@ -2104,6 +2104,10 @@ func testM8QualificationRetainedDescriptorV1(t *testing.T, dir, head string, fix
 // build identity and manifest policy, so all three bindings are published as a
 // single self-consistent retained source.
 func testM8QualificationRetainedDescriptorWithShardPlanV1(t *testing.T, dir, head string, fixture fixtureManifest, variantID, assignment string, ratio float64, shardPlan vectorpartition.ShardPlanV1, sourceID ...func(int) string) m3VariantDescriptorV1 {
+	return testM8QualificationRetainedDescriptorWithShardPlanAndPartitionerV1(t, dir, head, fixture, variantID, assignment, ratio, shardPlan, vectorpartition.ReferencePartitioner{}, sourceID...)
+}
+
+func testM8QualificationRetainedDescriptorWithShardPlanAndPartitionerV1(t *testing.T, dir, head string, fixture fixtureManifest, variantID, assignment string, ratio float64, shardPlan vectorpartition.ShardPlanV1, partitioner vectorpartition.Partitioner, sourceID ...func(int) string) m3VariantDescriptorV1 {
 	t.Helper()
 	const partitions = 16
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -2122,7 +2126,7 @@ func testM8QualificationRetainedDescriptorWithShardPlanV1(t *testing.T, dir, hea
 	}
 	partition := vectorpartition.DefaultConfig()
 	partition.Partitions, partition.Seed, partition.MaxDistanceWork = partitions, fixture.Seed, 20_000_000_000
-	artifact, err := vectorpartition.BuildWithPartitioner(input, partition, vectorpartition.Source{SourceID: "qualification-test:" + fixture.Checksum}, vectorpartition.ReferencePartitioner{})
+	artifact, err := vectorpartition.BuildWithPartitioner(input, partition, vectorpartition.Source{SourceID: "qualification-test:" + fixture.Checksum}, partitioner)
 	if err != nil {
 		t.Fatal(err)
 	}

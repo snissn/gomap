@@ -350,7 +350,7 @@ func TestM0MaterializeByteBoundedMembershipReopensDisposableClone(t *testing.T) 
 	if err != nil || plan.LogicalDomains != 16 || plan.Partitions != 32 || plan.PacksPerDomain != 2 {
 		t.Fatalf("byte-bounded plan=%+v err=%v", plan, err)
 	}
-	sourceDescriptor := testM8QualificationRetainedDescriptorWithShardPlanV1(t, sourceDB, strings.Repeat("b", 40), fixture, "graph-overlap-020-v1", partitionAssignmentGraphV1, m0OverlapRatioV1, plan)
+	sourceDescriptor := testM8QualificationRetainedDescriptorWithShardPlanAndPartitionerV1(t, sourceDB, strings.Repeat("b", 40), fixture, "graph-overlap-020-v1", partitionAssignmentGraphV1, m0OverlapRatioV1, plan, m0BalancedPartitionerV1{})
 	vectors := fixtureVectors(fixture)
 	input := make([]vectorpartition.Vector, len(vectors))
 	for i := range vectors {
