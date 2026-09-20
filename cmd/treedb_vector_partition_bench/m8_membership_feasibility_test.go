@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"math"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -65,7 +66,7 @@ func TestM8MembershipFeasibilityScratchIsChargedToPeakV1(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if withScratch.MembershipFeasibilityScratchBytes <= 0 || withScratch.MembershipFeasibilityPopulationBytes <= 0 {
+	if withScratch.MembershipFeasibilityScratchBytes <= 0 || withScratch.MembershipFeasibilityPopulationBytes <= 0 || withScratch.MembershipFeasibilityRetainedBytes <= 0 || withScratch.MembershipFeasibilityRetainedBytes >= withScratch.MembershipFeasibilityPopulationBytes {
 		t.Fatalf("feasibility population or scratch is unmodeled: %+v", withScratch)
 	}
 	phase, err := memoryAdd(withScratch.FixtureResidentBytes, withScratch.SourceSnapshotBytes, withScratch.ExactTruthBytes, withScratch.MembershipFeasibilityPopulationBytes, withScratch.MembershipFeasibilityScratchBytes)
@@ -89,8 +90,28 @@ func TestM8MembershipFeasibilityScratchIsChargedToPeakV1(t *testing.T) {
 	if err != nil || matrixPlan.MembershipFeasibilityPopulationBytes != 3*withScratch.MembershipFeasibilityPopulationBytes {
 		t.Fatalf("retained matrix feasibility populations are not cumulative: one=%d matrix=%d err=%v", withScratch.MembershipFeasibilityPopulationBytes, matrixPlan.MembershipFeasibilityPopulationBytes, err)
 	}
+	if matrixPlan.MembershipFeasibilityRetainedBytes != 3*withScratch.MembershipFeasibilityRetainedBytes {
+		t.Fatalf("retained matrix feasibility receipts are not cumulative: one=%d matrix=%d", withScratch.MembershipFeasibilityRetainedBytes, matrixPlan.MembershipFeasibilityRetainedBytes)
+	}
 	if _, err := validateM8BenchmarkWork(cfg, fixture, maxBenchmarkWorkUnits, withScratch.ModeledPeakBytes-1); err == nil || !strings.Contains(err.Error(), "membership_feasibility_population_bytes=") || !strings.Contains(err.Error(), "membership_feasibility_scratch_bytes=") {
 		t.Fatalf("near-cap feasibility run was admitted: %v", err)
+	}
+	retainedCfg := cfg
+	retainedCfg.probes = []int{1, 2}
+	retainedCfg.efSearch = []int{16, 24, 32, 40, 48, 56, 64, 72, 80, 88}
+	retainedCfg.concurrency = []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}
+	retainedFixture := fixtureManifest{Vectors: 100, Queries: 1_000, Dimensions: 1}
+	retainedPlan, err := validateM8BenchmarkWork(retainedCfg, retainedFixture, maxBenchmarkWorkUnits, math.MaxInt64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	retainedMeasurement, err := memoryAdd(retainedPlan.FixtureResidentBytes, retainedPlan.ExactTruthBytes, retainedPlan.MembershipFeasibilityRetainedBytes, retainedPlan.RetainedCoordinatorBytes, retainedPlan.CurrentCellOutcomeBytes, retainedPlan.CurrentQueryConversionBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	retainedMeasurement, err = memoryScaleCeil(retainedMeasurement, memorySlackNumerator, memorySlackDenominator)
+	if err != nil || retainedPlan.ModeledPeakBytes < retainedMeasurement {
+		t.Fatalf("retained feasibility receipt is omitted after preflight: plan=%+v measurement=%d err=%v", retainedPlan, retainedMeasurement, err)
 	}
 }
 
@@ -133,9 +154,19 @@ func TestM8MembershipArtifactIsImmutableV1(t *testing.T) {
 	if got, err := m8ReadMembershipFeasibilityV1(artifact); err != nil || !reflect.DeepEqual(got, result) {
 		t.Fatalf("read=%+v err=%v", got, err)
 	}
+	reused, err := m8PublishMembershipFeasibilityV1(filepath.Dir(artifact.Path), result)
+	if err != nil || !reflect.DeepEqual(reused, artifact) {
+		t.Fatalf("identical retry artifact=%+v want=%+v err=%v", reused, artifact, err)
+	}
 	artifact.Result.Status = "insufficient"
 	if _, err := m8ReadMembershipFeasibilityV1(artifact); err == nil {
 		t.Fatal("matrix copy tamper accepted")
+	}
+	if err := os.WriteFile(artifact.Path, []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m8PublishMembershipFeasibilityV1(filepath.Dir(artifact.Path), result); err == nil || !strings.Contains(err.Error(), "digest-prefix collision") {
+		t.Fatalf("conflicting retry err=%v", err)
 	}
 }
 
@@ -206,5 +237,20 @@ func TestM8RetainedMembershipFeasibilityReplaysExactAssetsV1(t *testing.T) {
 	mismatchedFixture.Seed++
 	if _, err := m8RunMembershipFeasibilityV1(cfg, mismatchedFixture, dir, descriptor); err == nil || !strings.Contains(err.Error(), "validate retained feasibility fixture") {
 		t.Fatalf("retained feasibility accepted mismatched fixture rows: %v", err)
+	}
+}
+
+func TestM8MembershipFeasibilityRejectsUnplannedRetainedDBV1(t *testing.T) {
+	if !collections.VectorPartitionNamespacePersistenceSupportedV1() {
+		t.Skip("vector partition namespace persistence unsupported")
+	}
+	fixture := m8QualificationFixturesV1[0]
+	fixture.Vectors, fixture.Dimensions, fixture.Queries = 64, 8, 4
+	_, queries := fixtureData(fixture)
+	fixture.Checksum = fixtureChecksumFromData(fixtureVectors(fixture), queries)
+	dir := filepath.Join(t.TempDir(), "retained")
+	descriptor := testM8QualificationRetainedDescriptorV1(t, dir, strings.Repeat("a", 40), fixture, "graph-disjoint-v1", partitionAssignmentGraphV1, 0)
+	if _, err := m8ComputeRetainedMembershipFeasibilityV1(config{}, fixture, dir, descriptor); err == nil || !strings.Contains(err.Error(), "requires a byte-bounded shard plan") {
+		t.Fatalf("unplanned retained DB err=%v", err)
 	}
 }
