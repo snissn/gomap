@@ -93,7 +93,7 @@ func parseVPMBinaryLayout(t testing.TB, raw []byte) vpmBinaryLayout {
 	if got := c.u32(); got != vectorPartitionManifestMagicV1 {
 		t.Fatalf("binary fixture magic=%#x", got)
 	}
-	if got := c.u32(); got != 5 {
+	if got := c.u32(); got != 6 {
 		t.Fatalf("binary fixture version=%d", got)
 	}
 	var layout vpmBinaryLayout
@@ -191,6 +191,7 @@ func (c *vpmBinaryLayoutCursor) columnRef() vpmBinaryColumnRef {
 func (c *vpmBinaryLayoutCursor) asset() vpmBinaryAssetItem {
 	start := c.off
 	partitionOffset := c.take(4).start
+	_ = c.str()
 	_ = c.str()
 	_ = c.str()
 	_ = c.str()

@@ -825,6 +825,7 @@ func (context *vectorIndexConstructionDecisionContextV1) recordWall(elapsed time
 type vectorIndexLayer0ConstructionPolicyV1 struct {
 	initialSelectionFactor int
 	backfill               bool
+	preserveSearchSet      bool
 	qualityPostfill        bool
 	robustPruneRefinement  bool
 }
@@ -2724,15 +2725,23 @@ func (idx *VectorIndex) insertVectorLocked(documentID []byte, vector []float32) 
 	for layer := idx.maxLevel; layer > level; layer-- {
 		entryPoint = idx.greedyNearestAtLayerLocked(vector, vectorNorm, prepared, entryPoint, layer)
 	}
+	var descentCandidates []vectorIndexCandidate
 	for layer := minInt(level, idx.maxLevel); layer >= 0; layer-- {
-		candidates := idx.searchLayerWithScratchLocked(vector, vectorNorm, prepared, entryPoint, idx.efConstruction, layer, &idx.insertScratch)
+		var candidates []vectorIndexCandidate
+		if idx.layer0ConstructionPolicy != nil && idx.layer0ConstructionPolicy.preserveSearchSet {
+			candidates = idx.searchLayerWithCandidateSeedsScratchLocked(vector, vectorNorm, prepared, entryPoint, descentCandidates, idx.efConstruction, layer, &idx.insertScratch)
+		} else {
+			candidates = idx.searchLayerWithScratchLocked(vector, vectorNorm, prepared, entryPoint, idx.efConstruction, layer, &idx.insertScratch)
+		}
 		selectionLimit := idx.maxNeighborsForLayer(layer)
 		if layer == 0 && idx.layer0ConstructionPolicy != nil {
 			selectionLimit = idx.m * idx.layer0ConstructionPolicy.initialSelectionFactor
 		}
 		neighbors := idx.selectLayerNeighborsLocked(vector, vectorNorm, prepared, candidates, layer, selectionLimit, nodeID)
 		idx.linkSelectedNeighborsLocked(nodeID, neighbors, layer)
-		if len(neighbors) > 0 {
+		if idx.layer0ConstructionPolicy != nil && idx.layer0ConstructionPolicy.preserveSearchSet {
+			descentCandidates = candidates
+		} else if len(neighbors) > 0 {
 			entryPoint = neighbors[0]
 		}
 	}
@@ -4884,6 +4893,10 @@ func (idx *VectorIndex) searchLayerWithScratchLocked(query []float32, queryNormS
 	return idx.searchLayerWithScratchModeLocked(query, queryNormSquared, prepared, entryPoint, limit, limit, layer, scratch, false)
 }
 
+func (idx *VectorIndex) searchLayerWithCandidateSeedsScratchLocked(query []float32, queryNormSquared float64, prepared *preparedFloat32CosineQuery, entryPoint int, seeds []vectorIndexCandidate, limit int, layer int, scratch *vectorIndexSearchScratch) []vectorIndexCandidate {
+	return idx.searchLayerWithCandidateSeedsScratchModeObservedLocked(query, queryNormSquared, prepared, entryPoint, seeds, limit, limit, layer, scratch, false, nil)
+}
+
 func (idx *VectorIndex) searchLayerWithScratchObservedLocked(query []float32, queryNormSquared float64, prepared *preparedFloat32CosineQuery, entryPoint int, limit int, layer int, scratch *vectorIndexSearchScratch, context *vectorIndexConstructionDecisionContextV1) []vectorIndexCandidate {
 	return idx.searchLayerWithScratchModeObservedLocked(query, queryNormSquared, prepared, entryPoint, limit, limit, layer, scratch, false, context)
 }
@@ -4897,14 +4910,11 @@ func (idx *VectorIndex) searchLayerWithScratchModeLocked(query []float32, queryN
 }
 
 func (idx *VectorIndex) searchLayerWithScratchModeObservedLocked(query []float32, queryNormSquared float64, prepared *preparedFloat32CosineQuery, entryPoint int, limit, explorationLimit int, layer int, scratch *vectorIndexSearchScratch, currentOnly bool, context *vectorIndexConstructionDecisionContextV1) []vectorIndexCandidate {
-	if entryPoint < 0 || entryPoint >= len(idx.nodes) || limit <= 0 {
-		return nil
-	}
-	if context != nil {
-		context.recordRow(entryPoint, false)
-	}
-	entryDistance := idx.distanceToNodeWithPreparedQueryLocked(query, queryNormSquared, prepared, entryPoint)
-	if math.IsInf(float64(entryDistance), 1) {
+	return idx.searchLayerWithCandidateSeedsScratchModeObservedLocked(query, queryNormSquared, prepared, entryPoint, nil, limit, explorationLimit, layer, scratch, currentOnly, context)
+}
+
+func (idx *VectorIndex) searchLayerWithCandidateSeedsScratchModeObservedLocked(query []float32, queryNormSquared float64, prepared *preparedFloat32CosineQuery, entryPoint int, seeds []vectorIndexCandidate, limit, explorationLimit int, layer int, scratch *vectorIndexSearchScratch, currentOnly bool, context *vectorIndexConstructionDecisionContextV1) []vectorIndexCandidate {
+	if limit <= 0 || explorationLimit <= 0 || (len(seeds) == 0 && (entryPoint < 0 || entryPoint >= len(idx.nodes))) {
 		return nil
 	}
 	if scratch == nil {
@@ -4912,16 +4922,30 @@ func (idx *VectorIndex) searchLayerWithScratchModeObservedLocked(query []float32
 	}
 	scratch.explorationLimit = explorationLimit
 	visited, mark := scratch.nextVisitedEpoch(len(idx.nodes))
-	visited[entryPoint] = mark
-	scratch.explored = 1
-	entry := vectorIndexCandidate{nodeID: entryPoint, distance: entryDistance}
 	queue := scratch.queue[:0]
-	queue.push(entry)
 	best := scratch.best[:0]
-	best.pushBounded(entry, explorationLimit)
 	liveBest := scratch.liveBest[:0]
-	if currentOnly && !idx.nodes[entryPoint].deleted {
-		liveBest.pushBounded(entry, limit)
+	if len(seeds) == 0 {
+		seeds = []vectorIndexCandidate{{nodeID: entryPoint, distance: idx.distanceToNodeWithPreparedQueryLocked(query, queryNormSquared, prepared, entryPoint)}}
+	}
+	scratch.explored = 0
+	for _, seed := range seeds {
+		if seed.nodeID < 0 || seed.nodeID >= len(idx.nodes) || idx.nodes[seed.nodeID].level < layer || visited[seed.nodeID] == mark || math.IsInf(float64(seed.distance), 1) {
+			continue
+		}
+		visited[seed.nodeID] = mark
+		scratch.explored++
+		if context != nil {
+			context.recordRow(seed.nodeID, false)
+		}
+		queue.push(seed)
+		best.pushBounded(seed, explorationLimit)
+		if currentOnly && !idx.nodes[seed.nodeID].deleted {
+			liveBest.pushBounded(seed, limit)
+		}
+	}
+	if len(best) == 0 {
+		return nil
 	}
 search:
 	for len(queue) > 0 {

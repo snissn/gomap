@@ -224,7 +224,7 @@ func (d *testVectorPartitionCoordinatorDispatcherV1) DispatchVectorPartitionShar
 		neighbors := slices.Clone(d.neighbors[partitionID])
 		partials[i] = VectorPartitionShardSearchPartialV1{
 			PartitionID: partitionID, Neighbors: neighbors,
-			Candidates: uint64(len(neighbors)), SearchRoute: collections.VectorPartitionSearchRouteExactFP32ScanV1,
+			ScoreCalls: uint64(len(neighbors)), Candidates: uint64(len(neighbors)), SearchRoute: collections.VectorPartitionSearchRouteExactFP32ScanV1,
 		}
 		candidates += uint64(len(neighbors))
 		for _, neighbor := range neighbors {
@@ -241,7 +241,7 @@ func (d *testVectorPartitionCoordinatorDispatcherV1) DispatchVectorPartitionShar
 			SourceSchemaHash: request.SourceSchemaHash, SourceRowCount: request.SourceRowCount,
 			PartitionGeneration: request.PartitionGeneration, RouterGeneration: request.RouterGeneration,
 		},
-		Partials: partials, Partitions: uint64(len(partials)), Candidates: candidates,
+		Partials: partials, Partitions: uint64(len(partials)), ScoreCalls: candidates, Candidates: candidates,
 		ResponseBytes: responseBytes,
 		Timing: VectorPartitionShardSearchTimingV1{
 			ReadIndexApplyNanos: 1, SearchNanos: 1, ResponseCopyNanos: 1, TotalNanos: 3,
@@ -369,7 +369,9 @@ func TestVectorPartitionCoordinatorCoalescesChunksDedupesAndMergesV1(t *testing.
 		[]raftplacement.GroupV1{{ID: "group-a", Members: []raftcluster.NodeID{"node-a"}, LeaderHint: "node-a"}},
 		owners, neighbors, VectorPartitionCoordinatorLimitsV1{},
 	)
-	response, err := coordinator.Search(context.Background(), testVectorPartitionCoordinatorRequestV1(partitions))
+	request := testVectorPartitionCoordinatorRequestV1(partitions)
+	request.LocalScoreBudget = partitions * 2
+	response, err := coordinator.Search(context.Background(), request)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -381,6 +383,7 @@ func TestVectorPartitionCoordinatorCoalescesChunksDedupesAndMergesV1(t *testing.
 	}
 	if response.Counters.SelectedPartitions != partitions || response.Counters.SelectedGroups != 1 ||
 		response.Counters.Requests != 2 || response.Counters.RPCs != 2 ||
+		response.Counters.LocalScoreCalls != partitions*2 ||
 		response.Counters.Duplicates != partitions-1 || response.Counters.ScoreDisagreements != partitions-1 {
 		t.Fatalf("counters=%+v", response.Counters)
 	}
@@ -390,6 +393,9 @@ func TestVectorPartitionCoordinatorCoalescesChunksDedupesAndMergesV1(t *testing.
 	if len(dispatcher.calls) != 2 || len(dispatcher.calls[0].PartitionIDs) != 32 ||
 		len(dispatcher.calls[1].PartitionIDs) != 1 {
 		t.Fatalf("calls=%+v", dispatcher.calls)
+	}
+	if got := dispatcher.calls[0].ScoreCallsLimit + dispatcher.calls[1].ScoreCallsLimit; got != uint64(request.LocalScoreBudget) {
+		t.Fatalf("score-call shares=%d want=%d", got, request.LocalScoreBudget)
 	}
 	var maxRequestBytes uint64
 	for _, call := range dispatcher.calls {

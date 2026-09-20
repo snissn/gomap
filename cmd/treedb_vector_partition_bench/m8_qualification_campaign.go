@@ -488,7 +488,7 @@ func m8QualificationFixtureV1(candidate fixtureManifest) bool {
 }
 
 func m8QualificationConfigV1(cfg m8ProductionConfigEvidenceV1, fixture fixtureManifest, overlap float64, _ int) bool {
-	return cfg.RaftGroups == 4 && cfg.RaftNodesPerGroup == 3 && cfg.Partitions == 16 && cfg.TopK == 10 && cfg.RecallTarget == .90 && cfg.Warmup == 0 && cfg.EffectiveWarmup == 0 && cfg.RouterScoreBudget == m8QualificationRouterCandidatesV1 && cfg.MaxExactTruthVisits == m8QualificationExactTruthCapV1(fixture) && cfg.Seed == fixture.Seed && slices.Equal(cfg.Probes, []int{1, 2, 4, 8, 16}) && slices.Equal(cfg.Concurrency, []int{1}) && slices.Equal(cfg.EfSearch, []int{128}) && slices.Equal(cfg.Overlap, []float64{overlap})
+	return cfg.RaftGroups == 4 && cfg.RaftNodesPerGroup == 3 && cfg.Partitions == 16 && cfg.TopK == 10 && cfg.RecallTarget == .90 && cfg.Warmup == 0 && cfg.EffectiveWarmup == 0 && cfg.RouterScoreBudget == m8QualificationRouterCandidatesV1 && cfg.LocalScoreBudget == nativewire.DefaultVectorPartitionCoordinatorLimitsV1().MaxLocalScoreCalls && cfg.MaxExactTruthVisits == m8QualificationExactTruthCapV1(fixture) && cfg.Seed == fixture.Seed && slices.Equal(cfg.Probes, []int{1, 2, 4, 8, 16}) && slices.Equal(cfg.Concurrency, []int{1}) && slices.Equal(cfg.EfSearch, []int{128}) && slices.Equal(cfg.Overlap, []float64{overlap})
 }
 
 func m8QualificationTrustedTruthCacheV1(root string, report m8ProductionReportV1) ([][]m8CanonicalResultV1, error) {
@@ -845,7 +845,7 @@ func m8QualificationCommandConfigV1(cfg config) m8ProductionConfigEvidenceV1 {
 		RaftGroups: cfg.raftGroups, RaftNodesPerGroup: cfg.raftNodes, Partitions: cfg.partitions,
 		Probes: cfg.probes, Overlap: cfg.overlaps, TopK: cfg.topK, RecallTarget: cfg.recallTarget,
 		Concurrency: cfg.concurrency, Warmup: cfg.warmup, EffectiveWarmup: warmup,
-		EfSearch: cfg.efSearch, RouterScoreBudget: cfg.routerCandidates,
+		EfSearch: cfg.efSearch, RouterScoreBudget: cfg.routerCandidates, LocalScoreBudget: cfg.m8CoordinatorLimits.MaxLocalScoreCalls,
 		RouterSemantics:     m8RouterSemanticsV4,
 		MaxExactTruthVisits: cfg.m8MaxExactTruthVisits, Seed: cfg.seed, QualityDiagnostics: cfg.m8QualityDiagnostics, QualityTraceQueries: cfg.m8QualityTraceQueries, RouterPolicyDiagnostics: cfg.m8RouterPolicyDiagnostics, RouterPolicyWidth: cfg.m8RouterPolicyWidth,
 	}
@@ -854,6 +854,7 @@ func m8QualificationCommandConfigV1(cfg config) m8ProductionConfigEvidenceV1 {
 func m8CommandBoundProductionConfigV1(cfg m8ProductionConfigEvidenceV1) m8ProductionConfigEvidenceV1 {
 	cfg.DomainCount = 0
 	cfg.PacksPerDomain = nil
+	cfg.GraphVariant = ""
 	return cfg
 }
 
@@ -1088,16 +1089,21 @@ func m8QualificationRouterMaxVectorsV1(source int) (int, bool) {
 	return source + overlap, true
 }
 
-func m8QualificationM3BuildCapsV1(variant m3VariantDescriptorV1, fixture fixtureManifest) bool {
+func m8QualificationM3SharedBuildCapsV1(variant m3VariantDescriptorV1, fixture fixtureManifest) bool {
 	partitionConfig, routerConfig, visits, ok := m8QualificationM3BuildConfigV1(fixture)
 	if !ok || variant.PartitionMaxDistanceWork != partitionConfig.MaxDistanceWork || variant.RouterMaxScalarWork != routerConfig.MaxScalarWork || variant.M3MaxBenchmarkVisits != visits || variant.PartitionConfig != partitionConfig || variant.RouterConfig != routerConfig {
 		return false
 	}
-	if _, err := m3PartitionLocalGraphVariantV1(variant.PartitionHNSWM, m3DescriptorPartitionHNSWEfCV1(variant)); err != nil {
-		return false
-	}
 	definition := partitionCollectionMetaWithDegree(m3BenchmarkCollection, fixture.Dimensions, partitionHNSWDegree).VectorIndexes[0]
 	return variant.IndexDefinitionDigest == collections.VectorIndexDefinitionDigestV1(definition)
+}
+
+func m8QualificationM3BuildCapsV1(variant m3VariantDescriptorV1, fixture fixtureManifest) bool {
+	if !m8QualificationM3SharedBuildCapsV1(variant, fixture) {
+		return false
+	}
+	_, err := m3PartitionLocalGraphVariantV1(variant.PartitionHNSWM, m3DescriptorPartitionHNSWEfCV1(variant))
+	return err == nil
 }
 
 func m8QualificationVariantBackendV1(variant m3VariantDescriptorV1, fixture fixtureManifest) bool {

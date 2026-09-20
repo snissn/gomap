@@ -2,7 +2,7 @@
 
 ## R all-level router evidence boundary (#4773)
 
-The current producer uses report schema 6/result kind
+The retained #4773 producer used report schema 6/result kind
 `m8_production_multi_group_evidence_v6`, explicitly binding
 `global_all_level_spherical_krt_hierarchical_C_v4`, global budget B, actual
 representative count, score budget C and probes P. Defaults are B=256 and
@@ -536,13 +536,32 @@ decode/validation/digest reconstruction per shard request while preserving
 generation and integrity guarantees. Overlap materialization and stable-hash
 attribution remain separately deferred.
 
+## Canonical partition-local HNSW readiness (#4744)
+
+Production materialization now builds one explicit
+`canonical_hnsw_m18_ef_construction_256` partition-local graph. Its construction
+uses the standard `M` outgoing selection, `2M` layer-0 / `M` upper reciprocal
+caps, and preserves the full descending `SEARCH-LAYER` working set. It emits a
+membership-bound version-5 native pack with no repair/auxiliary topology and no
+ordinal reseed when the query frontier empties. Manifest version 6 records the
+graph variant explicitly; publication, recovery, and production open reject
+historical or mixed variants instead of inferring identity from matching
+parameters.
+
+The existing M8 producer now emits report/transcript schema 7, binding that exact graph identity and the local
+score-call budget, records total and per-query maximum native scorer calls, and
+validates them against the configured cap. This is harness readiness, not
+retained evidence: the structured-250K, full-query `P<=2`, `EF<=96`,
+recall@10 `>=0.95` gate must run only from the reviewed landed product and
+harness identity.
+
 ## Opt-in graph-quality attribution (#4744)
 
 `-m8-quality-diagnostics` extends the existing `production_multi_group` M8
-producer and retained replay for top-k values from 1 through 10. It changes no
-serving router, graph construction, public query option, or default. Omission
-retains the historical subset-enumeration method and omits the new JSON fields;
-old receipts are not silently reinterpreted as new observations.
+producer and retained replay for top-k values from 1 through 10. The flag
+changes no serving router, graph construction, public query option, or default.
+Omission retains the historical subset-enumeration method and omits the new
+JSON fields; old receipts are not silently reinterpreted as new observations.
 
 The new `quality_diagnostics` object contains, for every query:
 

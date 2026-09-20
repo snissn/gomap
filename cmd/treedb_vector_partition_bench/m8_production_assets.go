@@ -31,6 +31,7 @@ type m8ProductionMultiGroupAssetsV1 struct {
 	groups          []string
 	assetSetDigests map[string]string
 	descriptor      *m3VariantDescriptorV1
+	graphVariant    collections.VectorPartitionLocalGraphVariantV1
 }
 
 func newM8ProductionMultiGroupAssetsV1(vectors [][]float64, groups []string, partitions int) (_ *m8ProductionMultiGroupAssetsV1, err error) {
@@ -139,6 +140,7 @@ func newM8ProductionMultiGroupAssetsWithRouterV2(vectors [][]float64, groups []s
 	if h.status.Manifest.State != "ready" || h.status.Manifest.Generation != generation {
 		return nil, fmt.Errorf("M8 router status=%+v", h.status)
 	}
+	h.graphVariant = collections.VectorPartitionLocalGraphVariantV1(m8ManifestGraphVariantV1(h.manifest))
 	for _, group := range groups {
 		h.assetSetDigests[group] = m8GroupAssetSetDigestV1(group, h.manifest)
 	}
@@ -202,6 +204,9 @@ func openM8ProductionMultiGroupExistingAssetsV1(dir string, groups []string, par
 	h.manifest, err = m8RelabelTopologyManifestV1(h.status.Manifest, groups)
 	if err != nil {
 		return nil, err
+	}
+	if h.graphVariant == "" {
+		h.graphVariant = collections.VectorPartitionLocalGraphVariantV1(m8ManifestGraphVariantV1(h.manifest))
 	}
 	for _, group := range groups {
 		h.assetSetDigests[group] = m8GroupAssetSetDigestV1(group, h.manifest)
@@ -471,6 +476,35 @@ func m8BindRetainedM3DescriptorV1(h *m8ProductionMultiGroupAssetsV1, fixture fix
 	return m8BindRetainedM3DescriptorWithPolicyV1(h, fixture, false)
 }
 
+func m8RetainedGraphVariantV1(manifest collections.VectorPartitionManifestV1, def collections.VectorIndexDefinition, descriptor m3VariantDescriptorV1, allowOffline bool) (collections.VectorPartitionLocalGraphVariantV1, bool, error) {
+	var retained collections.VectorPartitionLocalGraphVariantV1
+	for _, asset := range manifest.Assets {
+		if asset.GraphVariant == "" {
+			continue
+		}
+		variant := collections.VectorPartitionLocalGraphVariantV1(asset.GraphVariant)
+		if _, err := collections.VectorPartitionLocalGraphVariantIdentityV1(variant); err != nil {
+			return "", false, errors.New("retained M8 manifest has an unknown local graph variant")
+		}
+		if retained != "" && retained != variant {
+			return "", false, errors.New("retained M8 manifest mixes local graph variants")
+		}
+		retained = variant
+	}
+	if retained == "" {
+		return "", false, errors.New("retained M8 manifest has no local graph variant")
+	}
+	m, efConstruction, err := collections.VectorPartitionLocalGraphVariantParametersV1(def, retained)
+	if err != nil || m != descriptor.PartitionHNSWM || efConstruction != m3DescriptorPartitionHNSWEfCV1(descriptor) {
+		return "", false, errors.New("retained M8 descriptor local HNSW parameters do not match its graph variant")
+	}
+	offline := retained != collections.VectorPartitionLocalGraphVariantCanonicalHNSWM18EfConstruction256V1
+	if offline && !allowOffline {
+		return "", false, errors.New("retained M8 descriptor local HNSW construction is not production-selected")
+	}
+	return retained, offline, nil
+}
+
 func m8BindRetainedM3DescriptorWithPolicyV1(h *m8ProductionMultiGroupAssetsV1, fixture fixtureManifest, allowOfflineGraphVariant bool) error {
 	if h == nil || h.collection == nil || h.router == nil {
 		return errors.New("retained M8 assets are not open")
@@ -490,9 +524,11 @@ func m8BindRetainedM3DescriptorWithPolicyV1(h *m8ProductionMultiGroupAssetsV1, f
 	if err := m3DescriptorMatchesManifestV1(descriptor, fixture, h.status.Manifest, h.status.ModelDigest, h.status.Config); err != nil {
 		return err
 	}
+	var indexDefinition collections.VectorIndexDefinition
 	var indexDefinitionDigest string
 	for _, index := range h.collection.MetaView().VectorIndexes {
 		if index.Name == partitionHNSWIndex {
+			indexDefinition = index
 			indexDefinitionDigest = collections.VectorIndexDefinitionDigestV1(index)
 			break
 		}
@@ -508,19 +544,9 @@ func m8BindRetainedM3DescriptorWithPolicyV1(h *m8ProductionMultiGroupAssetsV1, f
 	if err != nil || digest != descriptor.SourceOrdinalDigest {
 		return errors.New("retained M8 source ordinal mapping does not match descriptor")
 	}
-	offlineGraphVariant := false
-	var retainedGraphVariant collections.VectorPartitionLocalGraphVariantV1
-	retainedGraphVariant, err = m3PartitionLocalGraphVariantV1(descriptor.PartitionHNSWM, m3DescriptorPartitionHNSWEfCV1(descriptor))
+	retainedGraphVariant, offlineGraphVariant, err := m8RetainedGraphVariantV1(h.manifest, indexDefinition, descriptor, allowOfflineGraphVariant)
 	if err != nil {
-		if !allowOfflineGraphVariant {
-			return errors.New("retained M8 descriptor local HNSW construction is not production-selected")
-		}
-		var offlineErr error
-		retainedGraphVariant, offlineErr = m3PartitionLocalOfflineGraphVariantV1(descriptor.PartitionHNSWM, m3DescriptorPartitionHNSWEfCV1(descriptor))
-		if offlineErr != nil {
-			return errors.New("retained M8 descriptor local HNSW construction is not a recognized offline variant")
-		}
-		offlineGraphVariant = true
+		return err
 	}
 	assetStatus, err := h.collection.VectorPartitionStatusV1(partitionHNSWIndex, h.status.Manifest.Generation)
 	if err != nil {
@@ -546,6 +572,7 @@ func m8BindRetainedM3DescriptorWithPolicyV1(h *m8ProductionMultiGroupAssetsV1, f
 			return fmt.Errorf("close retained M8 exact-variant partition asset %d: %w", asset.PartitionID, closeErr)
 		}
 	}
+	h.graphVariant = retainedGraphVariant
 	h.descriptor = &descriptor
 	return nil
 }

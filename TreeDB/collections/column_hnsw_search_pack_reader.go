@@ -288,7 +288,7 @@ func decodeColumnHNSWSearchPackEnvelopeMetadataWithContext(ctx context.Context, 
 	headerSize := columnHNSWSearchPackHeaderSize
 	switch version {
 	case columnHNSWSearchPackVersionV1:
-	case columnHNSWSearchPackVersionV2, columnHNSWSearchPackVersionV3, columnHNSWSearchPackVersionV4:
+	case columnHNSWSearchPackVersionV2, columnHNSWSearchPackVersionV3, columnHNSWSearchPackVersionV4, columnHNSWSearchPackVersionV5:
 		headerSize = columnHNSWSearchPackHeaderSizeV2
 	default:
 		return columnHNSWSearchPack{}, opts, fmt.Errorf("collections: unsupported hnsw_search_pack_v1 version=%d", version)
@@ -346,6 +346,11 @@ func decodeColumnHNSWSearchPackEnvelopeMetadataWithContext(ctx context.Context, 
 	if ef := hnswPackU32(raw, columnHNSWSearchPackHeaderEfSearchOffset); ef == 0 || uint64(ef) > uint64(math.MaxInt) {
 		return columnHNSWSearchPack{}, opts, fmt.Errorf("collections: hnsw_search_pack_v1 ef_search=%d must be positive", ef)
 	}
+	if version == columnHNSWSearchPackVersionV5 &&
+		(hnswPackU32(raw, columnHNSWSearchPackHeaderMOffset) != columnHNSWCanonicalPartitionM ||
+			hnswPackU32(raw, columnHNSWSearchPackHeaderEfConstructionOffset) != columnHNSWCanonicalPartitionEfConstruction) {
+		return columnHNSWSearchPack{}, opts, errors.New("collections: canonical partition hnsw graph parameters mismatch")
+	}
 	if rows64 == 0 {
 		if layerCount32 != 0 || maxLayer32 != columnHNSWSearchPackNoMaxLayer || hnswPackU64(raw, columnHNSWSearchPackHeaderEntryOrdinalOffset) != columnHNSWSearchPackNoEntryOrdinal {
 			return columnHNSWSearchPack{}, opts, errors.New("collections: hnsw_search_pack_v1 empty pack must use no-entry/no-layer sentinels")
@@ -372,7 +377,7 @@ func decodeColumnHNSWSearchPackEnvelopeMetadataWithContext(ctx context.Context, 
 	}
 	var membershipDigest [sha256.Size]byte
 	var externalVectorDigest [sha256.Size]byte
-	if version == columnHNSWSearchPackVersionV2 || version == columnHNSWSearchPackVersionV3 {
+	if version == columnHNSWSearchPackVersionV2 || version == columnHNSWSearchPackVersionV3 || version == columnHNSWSearchPackVersionV5 {
 		copy(membershipDigest[:], raw[columnHNSWSearchPackHeaderMembershipDigestOffset:columnHNSWSearchPackHeaderSizeV2])
 		if membershipDigest == ([sha256.Size]byte{}) {
 			return columnHNSWSearchPack{}, opts, fmt.Errorf("collections: hnsw_search_pack_v1 version %d missing membership digest", version)

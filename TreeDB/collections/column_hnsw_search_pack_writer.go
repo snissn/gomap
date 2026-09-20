@@ -446,7 +446,7 @@ func validateColumnHNSWSearchPackAssetPayloadDirectFile(path string, ref ColumnA
 	version := hnswPackU16(prefix, columnHNSWSearchPackHeaderVersionOffset)
 	switch version {
 	case columnHNSWSearchPackVersionV1:
-	case columnHNSWSearchPackVersionV2, columnHNSWSearchPackVersionV3, columnHNSWSearchPackVersionV4:
+	case columnHNSWSearchPackVersionV2, columnHNSWSearchPackVersionV3, columnHNSWSearchPackVersionV4, columnHNSWSearchPackVersionV5:
 		headerSize = columnHNSWSearchPackHeaderSizeV2
 		if err := readColumnHNSWSearchPackFileAt(file, ref.Offset+columnHNSWSearchPackHeaderSize, prefix[columnHNSWSearchPackHeaderSize:headerSize]); err != nil {
 			return err

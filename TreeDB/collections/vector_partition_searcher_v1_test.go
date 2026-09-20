@@ -37,6 +37,12 @@ func TestVectorPartitionLocalSearcherV1ExactStableIDsAndPins(t *testing.T) {
 	if _, err := s.SearchScratchBytesV1(VectorPartitionSearchOptionsV1{TopK: 1, MaxStableIDBytes: 1}); !errors.Is(err, ErrVectorPartitionSearchUnavailable) {
 		t.Fatalf("capped stable ID preflight err=%v", err)
 	}
+	if _, _, err := s.SearchWithOptionsV1(context.Background(), []float32{1, 0}, VectorPartitionSearchOptionsV1{TopK: 1, MaxScoreCalls: 1}); !errors.Is(err, ErrVectorPartitionSearchUnavailable) {
+		t.Fatalf("score-capped exact search err=%v", err)
+	}
+	if results, metrics, err := s.SearchWithOptionsV1(context.Background(), []float32{1, 0}, VectorPartitionSearchOptionsV1{TopK: 1, MaxScoreCalls: 2}); err != nil || len(results) != 1 || metrics.ScoreCalls != 2 {
+		t.Fatalf("bounded exact search results=%+v metrics=%+v err=%v", results, metrics, err)
+	}
 	if status, _, err := s.SearchPreflightV1(VectorPartitionSearchOptionsV1{TopK: 1, MaxStableIDBytes: 1}); !errors.Is(err, ErrVectorPartitionSearchUnavailable) || status.MaxStableIDBytes != 2 {
 		t.Fatalf("coherent capped preflight status=%+v err=%v", status, err)
 	}

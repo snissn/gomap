@@ -13,7 +13,7 @@ func TestM3PartitionLocalOfflineGraphVariantV1(t *testing.T) {
 		variant collections.VectorPartitionLocalGraphVariantV1
 	}{
 		{16, 128, collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationV1},
-		{18, 256, collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1},
+		{18, 256, collections.VectorPartitionLocalGraphVariantCanonicalHNSWM18EfConstruction256V1},
 		{20, 256, collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM20EfConstruction256V1},
 		{22, 256, collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM22EfConstruction256V1},
 	} {

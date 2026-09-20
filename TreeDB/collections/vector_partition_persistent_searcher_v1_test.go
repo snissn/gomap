@@ -819,7 +819,7 @@ func TestVectorPartitionLocalGraphOverlayMutationChangesTraversalAndTopK(t *test
 }
 
 func TestVectorPartitionLocalDefaultMaterializationVariantV1(t *testing.T) {
-	if got, want := vectorPartitionLocalDefaultGraphVariantV1, VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1; got != want {
+	if got, want := vectorPartitionLocalDefaultGraphVariantV1, VectorPartitionLocalGraphVariantCanonicalHNSWM18EfConstruction256V1; got != want {
 		t.Fatalf("default materialization variant=%q want %q", got, want)
 	}
 	def := VectorIndexDefinition{M: 16, EfConstruction: 128}
@@ -827,12 +827,12 @@ func TestVectorPartitionLocalDefaultMaterializationVariantV1(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if buildDef.M != 18 || buildDef.EfConstruction != 256 || !hasAuxiliaryNavigation {
+	if buildDef.M != 18 || buildDef.EfConstruction != 256 || hasAuxiliaryNavigation {
 		t.Fatalf("default materialization definition=%+v auxiliary=%t", buildDef, hasAuxiliaryNavigation)
 	}
 	var membership [sha256.Size]byte
 	membership[0] = 1
-	if got, want := vectorPartitionLocalGraphVariantMembershipDigestV1(membership, vectorPartitionLocalDefaultGraphVariantV1), vectorPartitionLocalGraphVariantMembershipDigestV1(membership, VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1); got != want {
+	if got, want := vectorPartitionLocalGraphVariantMembershipDigestV1(membership, vectorPartitionLocalDefaultGraphVariantV1), vectorPartitionLocalGraphVariantMembershipDigestV1(membership, VectorPartitionLocalGraphVariantCanonicalHNSWM18EfConstruction256V1); got != want {
 		t.Fatalf("default materialization membership identity=%x want M18 variant=%x", got, want)
 	}
 	if got, m16 := vectorPartitionLocalGraphVariantMembershipDigestV1(membership, vectorPartitionLocalDefaultGraphVariantV1), vectorPartitionLocalGraphVariantMembershipDigestV1(membership, VectorPartitionLocalGraphVariantAuxiliaryNavigationV1); got == m16 {
@@ -856,7 +856,7 @@ func TestVectorPartitionLayer0ConstructionPolicyCoordinatesV1(t *testing.T) {
 		{VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MRobustPruneV1, 2, false, false, true},
 	} {
 		policy, ok := vectorPartitionLocalGraphVariantLayer0ConstructionPolicyV1(test.variant)
-		if !ok || policy.initialSelectionFactor != test.initialFactor || policy.backfill != test.backfill || policy.qualityPostfill != test.postfill || policy.robustPruneRefinement != test.robust {
+		if !ok || policy.initialSelectionFactor != test.initialFactor || policy.backfill != test.backfill || policy.qualityPostfill != test.postfill || policy.robustPruneRefinement != test.robust || policy.preserveSearchSet {
 			t.Fatalf("variant=%q policy=%+v ok=%t", test.variant, policy, ok)
 		}
 		def, auxiliary, err := vectorPartitionLocalGraphVariantDefinitionV1(VectorIndexDefinition{M: 16, EfConstruction: 128}, test.variant)
@@ -869,6 +869,10 @@ func TestVectorPartitionLayer0ConstructionPolicyCoordinatesV1(t *testing.T) {
 	}
 	if _, ok := vectorPartitionLocalGraphVariantLayer0ConstructionPolicyV1(VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1); ok {
 		t.Fatal("production M18 control unexpectedly carries an experimental layer-0 construction policy")
+	}
+	policy, ok := vectorPartitionLocalGraphVariantLayer0ConstructionPolicyV1(VectorPartitionLocalGraphVariantCanonicalHNSWM18EfConstruction256V1)
+	if !ok || policy.initialSelectionFactor != 1 || !policy.backfill || !policy.preserveSearchSet {
+		t.Fatalf("canonical construction policy=%+v ok=%t", policy, ok)
 	}
 }
 
@@ -966,7 +970,7 @@ func TestVectorPartitionOfflineAuxiliaryConstructionVariantsV1(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := canonicalDigest, vectorPartitionLocalGraphVariantMembershipDigestV1(membershipDigest, VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1); got != want {
+	if got, want := canonicalDigest, vectorPartitionLocalGraphVariantMembershipDigestV1(membershipDigest, VectorPartitionLocalGraphVariantCanonicalHNSWM18EfConstruction256V1); got != want {
 		t.Fatalf("default materializer membership digest=%x want M18 variant=%x", got, want)
 	}
 	if canonicalDigest == vectorPartitionLocalGraphVariantMembershipDigestV1(membershipDigest, VectorPartitionLocalGraphVariantAuxiliaryNavigationV1) {
@@ -977,7 +981,7 @@ func TestVectorPartitionOfflineAuxiliaryConstructionVariantsV1(t *testing.T) {
 		t.Fatal(err)
 	}
 	canonicalPack, err := decodeColumnHNSWSearchPack(canonicalRaw, columnHNSWSearchPackDecodeOptions{ExpectedBaseIdentity: columnHNSWSearchPackBaseIdentity{ManifestGeneration: m.SourceGeneration, ManifestChecksum: m.SourceChecksum, SchemaHash: m.SourceSchemaHash}, ExpectedMembershipDigest: canonicalDigest})
-	if err != nil || canonicalPack.Header.M != 18 || canonicalPack.Header.EfConstruction != 256 || !canonicalPack.Header.HasAuxiliaryNavigation {
+	if err != nil || canonicalPack.Header.M != 18 || canonicalPack.Header.EfConstruction != 256 || canonicalPack.Header.HasAuxiliaryNavigation || canonicalPack.Header.Version != columnHNSWSearchPackVersionV5 || canonical[0].GraphVariant != string(VectorPartitionLocalGraphVariantCanonicalHNSWM18EfConstruction256V1) {
 		t.Fatalf("default materializer pack=%+v err=%v", canonicalPack.Header, err)
 	}
 	if got := col.Meta().VectorIndexes[0]; got.M != def.M || got.EfConstruction != 128 || VectorIndexDefinitionDigestV1(got) != m.IndexDefinitionDigest {
@@ -1208,19 +1212,18 @@ func TestVectorPartitionOfflineAuxiliaryConstructionVariantsV1(t *testing.T) {
 		if _, err := col.OpenVectorPartitionLocalSearcherForOfflineAssetVariantWithContextV1(t.Context(), def.Name, m, assets[0], wrongVariant); !errors.Is(err, ErrVectorPartitionSearchUnavailable) {
 			t.Fatalf("variant=%s exact open accepted descriptor variant=%s: %v", test.variant, wrongVariant, err)
 		}
+		productionManifest := m
+		productionManifest.Assets = assets
+		productionManifest.Canonicalize()
+		if err := col.validateVectorPartitionAssetMembershipBindingsV1(productionManifest); !errors.Is(err, ErrVectorPartitionSearchUnavailable) {
+			t.Fatalf("variant=%s production publication validation err=%v", test.variant, err)
+		}
 		members, err := vectorPartitionMembershipsForPartitionWithContextV1(t.Context(), m, 0)
 		if err != nil {
 			t.Fatal(err)
 		}
 		production, productionErr := col.openVectorPartitionLocalSearcherForPreparedPartitionWithContextV1(t.Context(), def.Name, m.Generation, 0, m.IndexDefinitionDigest, m.SourceGeneration, m.SourceChecksum, m.SourceSchemaHash, m.SourceRowCount, &assets[0], members, len(members), 0, false, "", false, false)
-		if test.variant == VectorPartitionLocalGraphVariantAuxiliaryNavigationV1 || test.variant == VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1 || test.variant == VectorPartitionLocalGraphVariantAuxiliaryNavigationM20EfConstruction256V1 {
-			if productionErr != nil {
-				t.Fatalf("variant=%s production open err=%v", test.variant, productionErr)
-			}
-			if err := production.Close(); err != nil {
-				t.Fatal(err)
-			}
-		} else if !errors.Is(productionErr, ErrVectorPartitionSearchUnavailable) {
+		if production != nil || !errors.Is(productionErr, ErrVectorPartitionSearchUnavailable) {
 			t.Fatalf("variant=%s production open err=%v", test.variant, productionErr)
 		}
 	}
@@ -1957,11 +1960,11 @@ func TestVectorPartitionNativePackMembershipBindingRejectsCrossManifestMixV1(t *
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got := hnswPackU16(raw, columnHNSWSearchPackHeaderVersionOffset); got != columnHNSWSearchPackVersionV3 {
-			t.Fatalf("pack version=%d want %d", got, columnHNSWSearchPackVersionV3)
+		if got := hnswPackU16(raw, columnHNSWSearchPackHeaderVersionOffset); got != columnHNSWSearchPackVersionV5 {
+			t.Fatalf("pack version=%d want %d", got, columnHNSWSearchPackVersionV5)
 		}
 		pack, err := decodeColumnHNSWSearchPack(raw, columnHNSWSearchPackDecodeOptions{ExpectedBaseIdentity: columnHNSWSearchPackBaseIdentity{ManifestGeneration: manifest.SourceGeneration, ManifestChecksum: manifest.SourceChecksum, SchemaHash: manifest.SourceSchemaHash}, ExpectedMembershipDigest: expected})
-		if err != nil || pack.Header.MembershipDigest != expected || !pack.Header.HasAuxiliaryNavigation {
+		if err != nil || pack.Header.MembershipDigest != expected || pack.Header.HasAuxiliaryNavigation || pack.Header.M != 18 || pack.Header.EfConstruction != 256 || asset.GraphVariant != string(VectorPartitionLocalGraphVariantCanonicalHNSWM18EfConstruction256V1) {
 			t.Fatalf("persisted membership header=%x expected=%x err=%v", pack.Header.MembershipDigest, expected, err)
 		}
 	}

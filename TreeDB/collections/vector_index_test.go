@@ -1630,6 +1630,41 @@ func TestVectorIndexSearchLayerScratchReusesBuffers(t *testing.T) {
 	}
 }
 
+func TestVectorIndexConstructionSearchDescendsWithFullSeedSet(t *testing.T) {
+	index, err := newVectorIndex(nil, VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	index.nodes = []vectorIndexNode{
+		{documentID: []byte("left"), vector: []float32{0, 1}, level: 0},
+		{documentID: []byte("left-tail"), vector: []float32{-1, 0}, level: 0},
+		{documentID: []byte("right"), vector: []float32{0.8, 0.2}, level: 0},
+		{documentID: []byte("target"), vector: []float32{1, 0}, level: 0},
+	}
+	index.nodes[0].neighbors = [][]vectorIndexNeighbor{{{nodeID: 1}}}
+	index.nodes[1].neighbors = [][]vectorIndexNeighbor{{{nodeID: 0}}}
+	index.nodes[2].neighbors = [][]vectorIndexNeighbor{{{nodeID: 3}}}
+	index.nodes[3].neighbors = [][]vectorIndexNeighbor{{{nodeID: 2}}}
+	for i := range index.nodes {
+		index.nodes[i].cacheVectorNorms()
+	}
+	query := []float32{1, 0}
+	norm := vectorNormSquared(query)
+	prepared, err := prepareFloat32CosineQuery(query, norm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seeds := []vectorIndexCandidate{
+		{nodeID: 0, distance: index.distanceToNodeWithPreparedQueryLocked(query, norm, &prepared, 0)},
+		{nodeID: 2, distance: index.distanceToNodeWithPreparedQueryLocked(query, norm, &prepared, 2)},
+	}
+	var scratch vectorIndexSearchScratch
+	got := index.searchLayerWithCandidateSeedsScratchLocked(query, norm, &prepared, 0, seeds, 4, 0, &scratch)
+	if len(got) != 4 || got[0].nodeID != 3 {
+		t.Fatalf("multi-seed construction search=%v", got)
+	}
+}
+
 func TestVectorIndexCurrentSearchCountsUpperLayerScoresInBound(t *testing.T) {
 	index, err := newVectorIndex(nil, VectorIndexOptions{
 		Name:       "embedding",

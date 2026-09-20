@@ -41,6 +41,11 @@ const (
 	// extension binds the exact canonical typed-column vector asset instead of
 	// carrying a second normalized FP32 section in the pack.
 	columnHNSWSearchPackVersionV4 = uint16(4)
+	// Version 5 identifies the canonical partition-local HNSW profile. It uses
+	// the v2 layout but forbids repair and auxiliary navigation.
+	columnHNSWSearchPackVersionV5              = uint16(5)
+	columnHNSWCanonicalPartitionM              = 18
+	columnHNSWCanonicalPartitionEfConstruction = 256
 
 	columnHNSWSearchPackHeaderSize       = 144
 	columnHNSWSearchPackHeaderSizeV2     = 176
@@ -173,6 +178,8 @@ type columnHNSWSearchPackBuildInput struct {
 	// packs require it and are emitted as wire version 2 so the exact canonical
 	// home/overlap set is part of the persisted header identity.
 	MembershipDigest [sha256.Size]byte
+	// CanonicalPartitionHNSW emits the versioned production partition profile.
+	CanonicalPartitionHNSW bool
 	// HasAuxiliaryNavigation requires wire version 3 even when its CSR is
 	// empty, so connected partition packs cannot silently lose the channel.
 	HasAuxiliaryNavigation bool
@@ -418,7 +425,7 @@ func finishColumnHNSWSearchPack(raw []byte, input columnHNSWSearchPackBuildInput
 	putHNSWPackU64(raw, columnHNSWSearchPackHeaderDataOffsetOffset, dataOffset)
 	putHNSWPackU64(raw, columnHNSWSearchPackHeaderDataLengthOffset, uint64(len(raw))-dataOffset)
 	putHNSWPackU32(raw, columnHNSWSearchPackHeaderDirectoryChecksumOffset, page.Checksum(directory))
-	if version == columnHNSWSearchPackVersionV2 || version == columnHNSWSearchPackVersionV3 {
+	if version == columnHNSWSearchPackVersionV2 || version == columnHNSWSearchPackVersionV3 || version == columnHNSWSearchPackVersionV5 {
 		copy(raw[columnHNSWSearchPackHeaderMembershipDigestOffset:], input.MembershipDigest[:])
 	} else if version == columnHNSWSearchPackVersionV4 {
 		copy(raw[columnHNSWSearchPackHeaderExternalVectorDigestOffset:], input.ExternalVectorDigest[:])
@@ -429,6 +436,9 @@ func finishColumnHNSWSearchPack(raw []byte, input columnHNSWSearchPackBuildInput
 func columnHNSWSearchPackWireLayout(input columnHNSWSearchPackBuildInput) (uint16, int) {
 	if input.ExternalNormalizedVectors {
 		return columnHNSWSearchPackVersionV4, columnHNSWSearchPackHeaderSizeV2
+	}
+	if input.CanonicalPartitionHNSW {
+		return columnHNSWSearchPackVersionV5, columnHNSWSearchPackHeaderSizeV2
 	}
 	version := columnHNSWSearchPackVersionV1
 	headerSize := columnHNSWSearchPackHeaderSize
@@ -904,7 +914,7 @@ func decodeColumnHNSWSearchPack(raw []byte, opts columnHNSWSearchPackDecodeOptio
 	headerSize := columnHNSWSearchPackHeaderSize
 	switch version {
 	case columnHNSWSearchPackVersionV1:
-	case columnHNSWSearchPackVersionV2, columnHNSWSearchPackVersionV3, columnHNSWSearchPackVersionV4:
+	case columnHNSWSearchPackVersionV2, columnHNSWSearchPackVersionV3, columnHNSWSearchPackVersionV4, columnHNSWSearchPackVersionV5:
 		headerSize = columnHNSWSearchPackHeaderSizeV2
 	default:
 		return columnHNSWSearchPack{}, fmt.Errorf("collections: unsupported hnsw_search_pack_v1 version=%d", version)
@@ -963,6 +973,11 @@ func decodeColumnHNSWSearchPack(raw []byte, opts columnHNSWSearchPackDecodeOptio
 	if ef := hnswPackU32(raw, columnHNSWSearchPackHeaderEfSearchOffset); ef == 0 || uint64(ef) > uint64(math.MaxInt) {
 		return columnHNSWSearchPack{}, fmt.Errorf("collections: hnsw_search_pack_v1 ef_search=%d must be positive", ef)
 	}
+	if version == columnHNSWSearchPackVersionV5 &&
+		(hnswPackU32(raw, columnHNSWSearchPackHeaderMOffset) != columnHNSWCanonicalPartitionM ||
+			hnswPackU32(raw, columnHNSWSearchPackHeaderEfConstructionOffset) != columnHNSWCanonicalPartitionEfConstruction) {
+		return columnHNSWSearchPack{}, errors.New("collections: canonical partition hnsw graph parameters mismatch")
+	}
 	if rows64 == 0 {
 		if layerCount32 != 0 || maxLayer32 != columnHNSWSearchPackNoMaxLayer || hnswPackU64(raw, columnHNSWSearchPackHeaderEntryOrdinalOffset) != columnHNSWSearchPackNoEntryOrdinal {
 			return columnHNSWSearchPack{}, errors.New("collections: hnsw_search_pack_v1 empty pack must use no-entry/no-layer sentinels")
@@ -989,7 +1004,7 @@ func decodeColumnHNSWSearchPack(raw []byte, opts columnHNSWSearchPackDecodeOptio
 	}
 	var membershipDigest [sha256.Size]byte
 	var externalVectorDigest [sha256.Size]byte
-	if version == columnHNSWSearchPackVersionV2 || version == columnHNSWSearchPackVersionV3 {
+	if version == columnHNSWSearchPackVersionV2 || version == columnHNSWSearchPackVersionV3 || version == columnHNSWSearchPackVersionV5 {
 		copy(membershipDigest[:], raw[columnHNSWSearchPackHeaderMembershipDigestOffset:columnHNSWSearchPackHeaderSizeV2])
 		if membershipDigest == ([sha256.Size]byte{}) {
 			return columnHNSWSearchPack{}, fmt.Errorf("collections: hnsw_search_pack_v1 version %d missing membership digest", version)
@@ -1122,13 +1137,16 @@ func validateColumnHNSWSearchPackBuildInputMode(input columnHNSWSearchPackBuildI
 		return fmt.Errorf("collections: hnsw search pack invalid rows/dimensions/stride=(%d,%d,%d)", input.Rows, input.Dimensions, input.VectorStride)
 	}
 	if input.ExternalNormalizedVectors {
-		if input.VectorStride != input.Dimensions || input.ExternalVectorDigest == ([sha256.Size]byte{}) || input.MembershipDigest != ([sha256.Size]byte{}) || input.HasAuxiliaryNavigation || len(input.NormalizedVectors) != 0 {
+		if input.VectorStride != input.Dimensions || input.ExternalVectorDigest == ([sha256.Size]byte{}) || input.MembershipDigest != ([sha256.Size]byte{}) || input.HasAuxiliaryNavigation || input.CanonicalPartitionHNSW || len(input.NormalizedVectors) != 0 {
 			return errors.New("collections: topology-only hnsw search pack requires exact external vectors and no membership/auxiliary payload")
 		}
 	} else {
 		if (input.VectorStride*4)%int(columnHNSWSearchPackVectorSectionAlignment) != 0 || input.ExternalVectorDigest != ([sha256.Size]byte{}) {
 			return errors.New("collections: embedded-vector hnsw search pack has invalid stride or external identity")
 		}
+	}
+	if input.CanonicalPartitionHNSW && (input.MembershipDigest == ([sha256.Size]byte{}) || input.HasAuxiliaryNavigation || input.M != columnHNSWCanonicalPartitionM || input.EfConstruction != columnHNSWCanonicalPartitionEfConstruction) {
+		return errors.New("collections: canonical partition hnsw requires membership identity and native adjacency only")
 	}
 	if input.Rows != 0 && input.VectorStride > math.MaxInt/input.Rows {
 		return errors.New("collections: hnsw search pack normalized vector count overflows int")

@@ -652,6 +652,7 @@ func (h *vectorPartitionSearchResultMaxHeapV1) down(parent int) {
 // VectorPartitionSearchMetricsV1 reports native and separately bounded
 // auxiliary traversal work for one local no-document search.
 type VectorPartitionSearchMetricsV1 struct {
+	ScoreCalls          uint64
 	Candidates          uint64
 	Edges               uint64
 	AuxiliaryEdges      uint64
@@ -667,8 +668,10 @@ type VectorPartitionSearchMetricsV1 struct {
 // immutable asset before either route materializes result IDs; zero leaves the
 // local searcher uncapped.
 type VectorPartitionSearchOptionsV1 struct {
-	TopK             int
-	EfSearch         int
+	TopK     int
+	EfSearch int
+	// MaxScoreCalls is a hard local vector-scoring budget; zero is uncapped.
+	MaxScoreCalls    int
 	MaxStableIDBytes int
 	// ExcludedStableIDs shadows immutable base rows that have a newer live
 	// owner or tombstone. The exclusion is applied before bounded top-K
@@ -689,7 +692,7 @@ type VectorPartitionSearchStatusV1 struct {
 	PackBytes, MappedBytes, HeapBytes                        uint64
 	OpenNanos                                                uint64
 	SearchRoute                                              string
-	Candidates, Edges                                        uint64
+	ScoreCalls, Candidates, Edges                            uint64
 	AuxiliaryEdges, AuxiliaryCandidates, AuxiliaryAdmissions uint64
 	ActivePins                                               uint64
 	Opened, Searches, Failures                               uint64
@@ -995,7 +998,7 @@ func (s *VectorPartitionLocalSearcherV1) SearchScratchBytesV1(opts VectorPartiti
 // Serving layers use it to validate a partition before any request traversal
 // without separately reacquiring the searcher mutex for Status.
 func (s *VectorPartitionLocalSearcherV1) SearchPreflightV1(opts VectorPartitionSearchOptionsV1) (VectorPartitionSearchStatusV1, uint64, error) {
-	if s == nil || opts.TopK < 1 || opts.EfSearch < 0 || opts.MaxStableIDBytes < 0 {
+	if s == nil || opts.TopK < 1 || opts.EfSearch < 0 || opts.MaxScoreCalls < 0 || opts.MaxStableIDBytes < 0 {
 		return VectorPartitionSearchStatusV1{}, 0, ErrVectorPartitionSearchUnavailable
 	}
 	s.mu.Lock()
@@ -1024,6 +1027,9 @@ func vectorPartitionSearchScratchBytesV1(opts VectorPartitionSearchOptionsV1, pr
 		return 0, fmt.Errorf("%w: stable ID bytes=%d exceeds limit=%d", ErrVectorPartitionSearchUnavailable, maxStableIDBytes, opts.MaxStableIDBytes)
 	}
 	if prepared == nil {
+		if opts.MaxScoreCalls > 0 && exactRows > opts.MaxScoreCalls {
+			return 0, fmt.Errorf("%w: exact score budget=%d rows=%d", ErrVectorPartitionSearchUnavailable, opts.MaxScoreCalls, exactRows)
+		}
 		return vectorPartitionExactSearchScratchBytesV1(exactRows, dimensions, opts.TopK)
 	}
 	rowCount := header.Rows
@@ -1208,7 +1214,7 @@ type VectorPartitionLocalSearcherV1 struct {
 	maxStableIDBytes                                         int
 	stableIDOrdinals                                         map[string]int
 	stableIDOrdinalBytes                                     uint64
-	candidates, edges                                        uint64
+	scoreCalls, candidates, edges                            uint64
 	auxiliaryEdges, auxiliaryCandidates, auxiliaryAdmissions uint64
 	scratch                                                  sync.Pool
 	scratchReady                                             bool
@@ -1837,7 +1843,7 @@ func (s *VectorPartitionLocalSearcherV1) searchWithOptionsV1(ctx context.Context
 		return nil, VectorPartitionSearchMetricsV1{}, err
 	}
 	defer s.Release()
-	if opts.TopK < 1 || opts.EfSearch < 0 || opts.MaxStableIDBytes < 0 || len(query) != s.asset.Dimensions {
+	if opts.TopK < 1 || opts.EfSearch < 0 || opts.MaxScoreCalls < 0 || opts.MaxStableIDBytes < 0 || len(query) != s.asset.Dimensions {
 		s.recordFailure()
 		return nil, VectorPartitionSearchMetricsV1{}, fmt.Errorf("%w: query bounds", ErrVectorPartitionSearchUnavailable)
 	}
@@ -1874,6 +1880,10 @@ func (s *VectorPartitionLocalSearcherV1) searchWithOptionsV1(ctx context.Context
 			OmitResultMaterialization:            true,
 			SuppressOmittedResultMaterialization: true,
 		}
+		if opts.MaxScoreCalls > 0 {
+			nativeOpts.CandidateLimit = opts.MaxScoreCalls
+			nativeOpts.StrictScoreBudget = true
+		}
 		var trace columnHNSWSearchPackAttributionTrace
 		if attribution != nil {
 			nativeOpts.StatsMode = columnVectorGraphNativeSearchStatsModeWorkAccounting
@@ -1901,7 +1911,7 @@ func (s *VectorPartitionLocalSearcherV1) searchWithOptionsV1(ctx context.Context
 			s.recordFailure()
 			return nil, VectorPartitionSearchMetricsV1{}, err
 		}
-		metrics := VectorPartitionSearchMetricsV1{Candidates: stats.Candidates, Edges: stats.Edges, AuxiliaryEdges: stats.AuxiliaryEdges, AuxiliaryCandidates: stats.AuxiliaryCandidates, AuxiliaryAdmissions: stats.AuxiliaryAdmissions, Route: VectorPartitionSearchRouteHNSWSearchPackV1}
+		metrics := VectorPartitionSearchMetricsV1{ScoreCalls: stats.PreparedScoreCalls, Candidates: stats.Candidates, Edges: stats.Edges, AuxiliaryEdges: stats.AuxiliaryEdges, AuxiliaryCandidates: stats.AuxiliaryCandidates, AuxiliaryAdmissions: stats.AuxiliaryAdmissions, Route: VectorPartitionSearchRouteHNSWSearchPackV1}
 		if attribution != nil {
 			h := sha256.New()
 			h.Write([]byte("treedb_vector_partition_search_attribution_v1/visited/"))
@@ -1937,6 +1947,7 @@ func (s *VectorPartitionLocalSearcherV1) searchWithOptionsV1(ctx context.Context
 		}
 		s.mu.Lock()
 		s.searches++
+		s.scoreCalls += metrics.ScoreCalls
 		s.candidates += metrics.Candidates
 		s.edges += metrics.Edges
 		s.auxiliaryEdges += metrics.AuxiliaryEdges
@@ -1955,6 +1966,10 @@ func (s *VectorPartitionLocalSearcherV1) searchWithOptionsV1(ctx context.Context
 		return nil, VectorPartitionSearchMetricsV1{}, err
 	}
 	limit := min(opts.TopK, len(s.asset.IDs))
+	if opts.MaxScoreCalls > 0 && len(s.asset.Vectors) > opts.MaxScoreCalls {
+		s.recordFailure()
+		return nil, VectorPartitionSearchMetricsV1{}, fmt.Errorf("%w: exact score budget=%d rows=%d", ErrVectorPartitionSearchUnavailable, opts.MaxScoreCalls, len(s.asset.Vectors))
+	}
 	top := make(vectorPartitionSearchResultMaxHeapV1, 0, limit)
 	var edges uint64
 	var candidates uint64
@@ -1998,10 +2013,11 @@ func (s *VectorPartitionLocalSearcherV1) searchWithOptionsV1(ctx context.Context
 	}
 	s.mu.Lock()
 	s.searches++
+	s.scoreCalls += candidates
 	s.candidates += candidates
 	s.edges += edges
 	s.mu.Unlock()
-	return out, VectorPartitionSearchMetricsV1{Candidates: candidates, Edges: edges, Route: VectorPartitionSearchRouteExactFP32ScanV1}, nil
+	return out, VectorPartitionSearchMetricsV1{ScoreCalls: candidates, Candidates: candidates, Edges: edges, Route: VectorPartitionSearchRouteExactFP32ScanV1}, nil
 }
 
 func vectorPartitionPreparedStableIDOrdinalsV1(view *columnHNSWSearchPackPreparedView) (map[string]int, error) {
@@ -2036,7 +2052,7 @@ func (s *VectorPartitionLocalSearcherV1) SearchExactWithOptionsV1(ctx context.Co
 		return nil, VectorPartitionSearchMetricsV1{}, err
 	}
 	defer s.Release()
-	if s.prepared == nil || opts.TopK < 1 || opts.EfSearch < 0 || opts.MaxStableIDBytes < 0 || len(query) != s.asset.Dimensions {
+	if s.prepared == nil || opts.TopK < 1 || opts.EfSearch < 0 || opts.MaxScoreCalls < 0 || opts.MaxStableIDBytes < 0 || len(query) != s.asset.Dimensions {
 		s.recordFailure()
 		return nil, VectorPartitionSearchMetricsV1{}, fmt.Errorf("%w: query bounds", ErrVectorPartitionSearchUnavailable)
 	}
@@ -2063,6 +2079,10 @@ func (s *VectorPartitionLocalSearcherV1) SearchExactWithOptionsV1(ctx context.Co
 		return nil, VectorPartitionSearchMetricsV1{}, err
 	}
 	rows, dims, stride := int(s.prepared.Header.Rows), s.asset.Dimensions, int(s.prepared.Header.VectorStride)
+	if opts.MaxScoreCalls > 0 && rows > opts.MaxScoreCalls {
+		s.recordFailure()
+		return nil, VectorPartitionSearchMetricsV1{}, fmt.Errorf("%w: exact score budget=%d rows=%d", ErrVectorPartitionSearchUnavailable, opts.MaxScoreCalls, rows)
+	}
 	limit := min(opts.TopK, rows)
 	top := make(vectorPartitionSearchRefResultMaxHeapV1, 0, limit)
 	for row := 0; row < rows; row++ {
@@ -2097,9 +2117,10 @@ func (s *VectorPartitionLocalSearcherV1) SearchExactWithOptionsV1(ctx context.Co
 	}
 	s.mu.Lock()
 	s.searches++
+	s.scoreCalls += uint64(rows)
 	s.candidates += uint64(rows)
 	s.mu.Unlock()
-	return out, VectorPartitionSearchMetricsV1{Candidates: uint64(rows), Route: VectorPartitionSearchRouteExactFP32ScanV1}, nil
+	return out, VectorPartitionSearchMetricsV1{ScoreCalls: uint64(rows), Candidates: uint64(rows), Route: VectorPartitionSearchRouteExactFP32ScanV1}, nil
 }
 
 func canonicalizeVectorPartitionNativeResultsV1(ctx context.Context, prepared *columnHNSWSearchPackPreparedView, query []float32, candidates []columnVectorGraphSearchCandidate, topK int) ([]VectorPartitionSearchResultV1, error) {
@@ -2198,7 +2219,7 @@ func (s *VectorPartitionLocalSearcherV1) Status() VectorPartitionSearchStatusV1 
 }
 
 func (s *VectorPartitionLocalSearcherV1) statusLockedV1() VectorPartitionSearchStatusV1 {
-	st := VectorPartitionSearchStatusV1{Generation: s.asset.Generation, PartitionID: s.asset.PartitionID, ActivePins: s.pins, Opened: s.opened, Searches: s.searches, Failures: s.failures, Retired: s.retired, HomeMemberships: s.homeMemberships, OverlapMemberships: s.overlapMemberships, MaxStableIDBytes: s.maxStableIDBytes, PackBytes: s.packBytes, MappedBytes: s.mappedBytes, HeapBytes: s.heapBytes + s.stableIDOrdinalBytes, OpenNanos: s.openNanos, SearchRoute: s.searchRoute, Candidates: s.candidates, Edges: s.edges, AuxiliaryEdges: s.auxiliaryEdges, AuxiliaryCandidates: s.auxiliaryCandidates, AuxiliaryAdmissions: s.auxiliaryAdmissions}
+	st := VectorPartitionSearchStatusV1{Generation: s.asset.Generation, PartitionID: s.asset.PartitionID, ActivePins: s.pins, Opened: s.opened, Searches: s.searches, Failures: s.failures, Retired: s.retired, HomeMemberships: s.homeMemberships, OverlapMemberships: s.overlapMemberships, MaxStableIDBytes: s.maxStableIDBytes, PackBytes: s.packBytes, MappedBytes: s.mappedBytes, HeapBytes: s.heapBytes + s.stableIDOrdinalBytes, OpenNanos: s.openNanos, SearchRoute: s.searchRoute, ScoreCalls: s.scoreCalls, Candidates: s.candidates, Edges: s.edges, AuxiliaryEdges: s.auxiliaryEdges, AuxiliaryCandidates: s.auxiliaryCandidates, AuxiliaryAdmissions: s.auxiliaryAdmissions}
 	if s.prepared != nil {
 		return st
 	}
