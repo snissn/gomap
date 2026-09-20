@@ -89,16 +89,17 @@ func TestVectorPartitionVamanaRobustPruneAlphaAndCandidateCapV1(t *testing.T) {
 	vector := func(angle float64) []float32 {
 		return []float32{float32(math.Cos(angle)), float32(math.Sin(angle))}
 	}
-	vectors := append(append(vector(0), vector(.1)...), vector(.94)...)
+	vectors := append(append(append(vector(0), vector(.1)...), vector(.94)...), vector(1.2)...)
 	candidates := []vectorIndexCandidate{
 		{nodeID: 1, distance: vectorPartitionVamanaDistanceV1(vectors, 2, 0, 1)},
 		{nodeID: 2, distance: vectorPartitionVamanaDistanceV1(vectors, 2, 0, 2)},
+		{nodeID: 3, distance: vectorPartitionVamanaDistanceV1(vectors, 2, 0, 3)},
 	}
 	if got := scratch.robustPrune(0, candidates, vectors, 2, 1, 64, nil, nil); !slices.Equal(got, []uint32{1}) {
 		t.Fatalf("alpha=1 prune=%v want [1]", got)
 	}
-	if got := scratch.robustPrune(0, candidates, vectors, 2, vectorPartitionVamanaFinalAlphaV1, 64, nil, nil); !slices.Equal(got, []uint32{1, 2}) {
-		t.Fatalf("alpha=1.2 prune=%v want [1 2]", got)
+	if got := scratch.robustPrune(0, candidates, vectors, 2, vectorPartitionVamanaFinalAlphaV1, 64, nil, nil); !slices.Equal(got, []uint32{1, 3}) {
+		t.Fatalf("staged alpha=1.2 prune=%v want [1 3]", got)
 	}
 
 	manyVectors := make([]float32, (vectorPartitionVamanaCandidateCapV1+2)*2)

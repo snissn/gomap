@@ -28,7 +28,9 @@ type vectorPartitionVamanaScratchV1 struct {
 	expanded   []vectorIndexCandidate
 	candidates []vectorIndexCandidate
 	byNode     map[int]float32
-	removed    []bool
+	occlusion  []float32
+	checked    []int
+	selected   []int
 }
 
 type vectorPartitionVamanaBuildStatsV1 struct {
@@ -308,27 +310,57 @@ func (s *vectorPartitionVamanaScratchV1) robustPrune(source int, candidates []ve
 	if cap(selected) < min(degree, len(pool)) {
 		selected = make([]uint32, 0, min(degree, len(pool)))
 	}
-	if cap(s.removed) < len(pool) {
-		s.removed = make([]bool, len(pool))
+	if cap(s.occlusion) < len(pool) {
+		s.occlusion = make([]float32, len(pool))
+		s.checked = make([]int, len(pool))
 	} else {
-		s.removed = s.removed[:len(pool)]
-		clear(s.removed)
+		s.occlusion = s.occlusion[:len(pool)]
+		s.checked = s.checked[:len(pool)]
+		clear(s.occlusion)
+		clear(s.checked)
 	}
-	for i := range pool {
-		if s.removed[i] {
-			continue
-		}
-		selected = append(selected, uint32(pool[i].nodeID))
-		if len(selected) == degree {
-			break
-		}
-		for j := i + 1; j < len(pool); j++ {
-			if !s.removed[j] && alpha*alpha*vectorPartitionVamanaDistanceV1(vectors, dimensions, pool[i].nodeID, pool[j].nodeID) <= pool[j].distance {
-				s.removed[j] = true
+	s.selected = s.selected[:0]
+	// DiskANN's production RobustPrune stages alpha from 1 and compares the
+	// distance ratio directly, including when the stored metric is squared L2.
+	for currentAlpha := float32(1); ; currentAlpha = min(alpha, currentAlpha*min(alpha, float32(1.2))) {
+		for i := range pool {
+			factor := s.occlusion[i]
+			if factor > currentAlpha {
+				continue
+			}
+			checked := s.checked[i]
+			for checked < len(s.selected) {
+				chosen := s.selected[checked]
+				checked++
+				if chosen >= i {
+					continue
+				}
+				separation := vectorPartitionVamanaDistanceV1(vectors, dimensions, pool[chosen].nodeID, pool[i].nodeID)
+				if separation == 0 {
+					factor = math.MaxFloat32
+				} else {
+					factor = max(factor, pool[i].distance/separation)
+				}
+				if factor > currentAlpha {
+					break
+				}
+			}
+			s.checked[i] = checked
+			s.occlusion[i] = factor
+			if factor > currentAlpha {
+				continue
+			}
+			s.occlusion[i] = math.MaxFloat32
+			s.selected = append(s.selected, i)
+			selected = append(selected, uint32(pool[i].nodeID))
+			if len(selected) == degree {
+				return selected
 			}
 		}
+		if currentAlpha == alpha {
+			return selected
+		}
 	}
-	return selected
 }
 
 func vectorPartitionVamanaLocalityOrderV1(ctx context.Context, rows []columnVectorGraphAssetRow, adjacency [][]uint32, entry int) error {
