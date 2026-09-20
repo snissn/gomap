@@ -67,13 +67,16 @@ const (
 	hnswDecodedDimensionBytes               = 32
 	memoryMapEntryBytes                     = 64
 	vectorPartitionInsertBatchRows          = 8_192
-	memorySlackNumerator                    = 5
-	memorySlackDenominator                  = 4
-	memoryBudgetScope                       = "modeled_peak_live_bytes_v1: contiguous generated float64 fixture/query matrices and row headers; exact/selected top-k candidates; representative routing; persisted router ingest JSON/IDs/slices and source-row capture; HNSW partition JSON plus decoded JSON/vector batch; HNSW query merge and cache; 25% allocation slack; excludes TreeDB engine/index internals, Go runtime/GC metadata, and artifact/CLI encoding"
-	benchmarkWorkScope                      = "benchmark_owned_vector_query_corpus_visits_v1: checksum exact truth once; mandatory truth plus enabled exhaustive/routing corpus passes for every probe/overlap row; excludes TreeDB HNSW engine-internal search work"
-	m8BenchmarkWorkScope                    = "m8_query_passes_v1: measured coordinator requests, warmup/endpoint preflight, cached exhaustive attribution, and exact/approximate/local-HNSW attribution passes; excludes the pre-existing canonical source oracle and engine-internal HNSW work"
-	partitionAssignmentGraphV1              = "graph"
-	partitionAssignmentStableIDHashV1       = "stable_id_hash"
+	// Bound full JSON command-WAL rows, not just their count. Leave ample
+	// header/envelope headroom below the default 64 MiB frame limit.
+	vectorPartitionInsertBatchBytes   = 32 << 20
+	memorySlackNumerator              = 5
+	memorySlackDenominator            = 4
+	memoryBudgetScope                 = "modeled_peak_live_bytes_v1: contiguous generated float64 fixture/query matrices and row headers; exact/selected top-k candidates; representative routing; persisted router ingest JSON/IDs/slices and source-row capture; HNSW partition JSON plus decoded JSON/vector batch; HNSW query merge and cache; 25% allocation slack; excludes TreeDB engine/index internals, Go runtime/GC metadata, and artifact/CLI encoding"
+	benchmarkWorkScope                = "benchmark_owned_vector_query_corpus_visits_v1: checksum exact truth once; mandatory truth plus enabled exhaustive/routing corpus passes for every probe/overlap row; excludes TreeDB HNSW engine-internal search work"
+	m8BenchmarkWorkScope              = "m8_query_passes_v1: measured coordinator requests, warmup/endpoint preflight, cached exhaustive attribution, and exact/approximate/local-HNSW attribution passes; excludes the pre-existing canonical source oracle and engine-internal HNSW work"
+	partitionAssignmentGraphV1        = "graph"
+	partitionAssignmentStableIDHashV1 = "stable_id_hash"
 	// shardPlanModeOffV1 keeps the operator-declared partition count
 	// authoritative and persists no shard plan. shardPlanModeByteBoundedV1
 	// makes the explicit hot-byte budget authoritative: an explicit -partitions
@@ -3937,46 +3940,53 @@ func partitionCollectionMetaWithDegree(name string, dims, degree int) *collectio
 
 func insertPartitionRows(col *collections.Collection, vectors [][]float64, partition, partitions int) error {
 	rowCount := moduloPartitionSize(len(vectors), partitions, partition)
-	inserted := 0
-	for next := partition; next < len(vectors); {
-		batchRows := min(vectorPartitionInsertBatchRows, rowCount-inserted)
-		ids := make([][]byte, 0, batchRows)
-		documents := make([][]byte, 0, batchRows)
-		for len(ids) < batchRows && next < len(vectors) {
-			vector := make([]float32, len(vectors[next]))
-			for dimension, value := range vectors[next] {
-				if math.IsNaN(value) || math.IsInf(value, 0) {
-					return fmt.Errorf("vector %d dimension %d is non-finite", next, dimension)
-				}
-				vector[dimension] = float32(value)
-			}
-			id := fmt.Sprintf("doc-%06d", next)
-			raw, err := json.Marshal(struct {
-				TimeUS    int64     `json:"time_us"`
-				Embedding []float32 `json:"embedding"`
-			}{
-				TimeUS:    int64(next + 1),
-				Embedding: vector,
-			})
-			if err != nil {
-				return err
-			}
-			ids = append(ids, []byte(id))
-			documents = append(documents, raw)
-			next += partitions
-		}
+	batchRows := min(vectorPartitionInsertBatchRows, rowCount)
+	ids := make([][]byte, 0, batchRows)
+	documents := make([][]byte, 0, batchRows)
+	batchBytes := 0
+	flush := func() error {
 		if len(ids) == 0 {
-			return fmt.Errorf("partition %d produced an empty insert batch", partition)
+			return nil
 		}
 		if _, err := col.InsertBatch(ids, documents); err != nil {
+			return fmt.Errorf("insert partition %d batch starting %s: %w", partition, ids[0], err)
+		}
+		clear(ids)
+		clear(documents)
+		ids, documents = ids[:0], documents[:0]
+		batchBytes = 0
+		return nil
+	}
+	for next := partition; next < len(vectors); next += partitions {
+		vector := make([]float32, len(vectors[next]))
+		for dimension, value := range vectors[next] {
+			if math.IsNaN(value) || math.IsInf(value, 0) {
+				return fmt.Errorf("vector %d dimension %d is non-finite", next, dimension)
+			}
+			vector[dimension] = float32(value)
+		}
+		id := fmt.Sprintf("doc-%06d", next)
+		raw, err := json.Marshal(struct {
+			TimeUS    int64     `json:"time_us"`
+			Embedding []float32 `json:"embedding"`
+		}{TimeUS: int64(next + 1), Embedding: vector})
+		if err != nil {
 			return err
 		}
-		inserted += len(ids)
+		rowBytes := len(id) + len(raw) + 8 // command-WAL ID/document length fields
+		if rowBytes > vectorPartitionInsertBatchBytes {
+			return fmt.Errorf("vector %d encoded row bytes=%d exceeds insert batch cap=%d", next, rowBytes, vectorPartitionInsertBatchBytes)
+		}
+		if len(ids) == batchRows || batchBytes+rowBytes > vectorPartitionInsertBatchBytes {
+			if err := flush(); err != nil {
+				return err
+			}
+		}
+		ids = append(ids, []byte(id))
+		documents = append(documents, raw)
+		batchBytes += rowBytes
 	}
-	if inserted != rowCount {
-		return fmt.Errorf("partition %d rows=%d want %d", partition, inserted, rowCount)
-	}
-	return nil
+	return flush()
 }
 
 func moduloPartitionSize(vectors, partitions, partition int) int {

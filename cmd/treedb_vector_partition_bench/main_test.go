@@ -612,9 +612,11 @@ func TestM6PreflightAllowsBoundedMillionVectorEvidenceV1(t *testing.T) {
 	}
 }
 
-func TestM3SourceLoadBoundsColumnGraphPublicationsV1(t *testing.T) {
+func TestM3SourceLoadRowCapRetainsLargeBatchesV1(t *testing.T) {
+	// Small documents still need only 123 publications; high-dimensional
+	// JSON may reach the byte cap first and correctly require more batches.
 	const acceptanceRows = 1_000_000
-	publications := (acceptanceRows + m3SourceInsertBatchRows - 1) / m3SourceInsertBatchRows
+	publications := (acceptanceRows + vectorPartitionInsertBatchRows - 1) / vectorPartitionInsertBatchRows
 	if publications != 123 {
 		t.Fatalf("1M-row M3 source publications=%d want 123", publications)
 	}

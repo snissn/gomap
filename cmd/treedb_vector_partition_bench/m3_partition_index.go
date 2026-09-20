@@ -23,10 +23,9 @@ import (
 )
 
 const (
-	m3ReportSchemaVersion   = 4
-	m3BenchmarkCollection   = "m3_partition_source"
-	m3WarmupPasses          = 1
-	m3SourceInsertBatchRows = 8 * 1024
+	m3ReportSchemaVersion = 4
+	m3BenchmarkCollection = "m3_partition_source"
+	m3WarmupPasses        = 1
 	// m3PartitionAssetFileIDBase reserves a benchmark-owned column-asset
 	// segment range, separate from the collection package's production ranges.
 	m3PartitionAssetFileIDBase uint64 = 40_000
@@ -914,32 +913,7 @@ func m3PartitionIndexDirectory(persist string) (dir string, cleanup bool, err er
 }
 
 func insertM3SourceRows(col *collections.Collection, vectors [][]float64) error {
-	// Keep the acceptance load to a bounded number of physical column-graph
-	// publications. Tiny batches retain thousands of superseded generations
-	// until the benchmark's deliberate close/reopen boundary; 8K rows keeps
-	// individual command-WAL frames bounded while reducing the 1M-row load to
-	// 123 publications.
-	for base := 0; base < len(vectors); base += m3SourceInsertBatchRows {
-		end := min(base+m3SourceInsertBatchRows, len(vectors))
-		ids := make([][]byte, end-base)
-		documents := make([][]byte, end-base)
-		for i := base; i < end; i++ {
-			vector := m3Float32Vector(vectors[i])
-			raw, err := json.Marshal(struct {
-				TimeUS    int64     `json:"time_us"`
-				Embedding []float32 `json:"embedding"`
-			}{TimeUS: int64(i + 1), Embedding: vector})
-			if err != nil {
-				return err
-			}
-			ids[i-base] = []byte(fmt.Sprintf("doc-%06d", i))
-			documents[i-base] = raw
-		}
-		if _, err := col.InsertBatch(ids, documents); err != nil {
-			return err
-		}
-	}
-	return nil
+	return insertPartitionRows(col, vectors, 0, 1)
 }
 
 func m3SourceOrdinalsByArtifactID(artifact vectorpartition.Artifact, rows []collections.VectorPartitionSourceOrdinalV1) ([]int, error) {
