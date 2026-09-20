@@ -246,9 +246,9 @@ func runM0MaterializeMembershipV1(args []string, stdout io.Writer) (err error) {
 		resources.Release()
 	}
 	if updated.ShardPlan != (vectorpartition.ShardPlanV1{}) {
-		summaries, accountErr := vectorpartition.AccountShardPacksV1(updated.ShardPlan, overlap.Memberships)
-		if accountErr != nil {
-			return accountErr
+		summaries, err := vectorpartition.AccountShardPacksV1(updated.ShardPlan, overlap.Memberships)
+		if err != nil {
+			return err
 		}
 		if err = m3ValidateActualShardPackBytesV1(assets, summaries); err != nil {
 			return err
