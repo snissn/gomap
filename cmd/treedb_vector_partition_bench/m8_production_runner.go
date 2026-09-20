@@ -1709,6 +1709,16 @@ func m8TruthCacheIdentityV1(fixture fixtureManifest, topK int) string {
 		Dimensions, TopK int
 		Metric, Contract string
 	}{fixture.Checksum, fixture.Dimensions, topK, fixture.Metric, collections.VectorPartitionCanonicalScoreContractV1})
+	if fixture.Generator == externalFixtureGeneratorV1 {
+		// Query-only consumers do not recompute the corpus/truth checksum. Bind
+		// their verified file hashes and shape too, so changing bytes plus a file
+		// hash cannot reuse a truth artifact carrying a stale fixture checksum.
+		b, _ = json.Marshal(struct {
+			Fixture  fixtureManifest
+			TopK     int
+			Contract string
+		}{fixture, topK, collections.VectorPartitionCanonicalScoreContractV1})
+	}
 	s := sha256.Sum256(b)
 	return hex.EncodeToString(s[:])
 }

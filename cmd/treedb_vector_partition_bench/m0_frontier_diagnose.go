@@ -100,6 +100,9 @@ func runM0FrontierDiagnoseV1(args []string, stdout io.Writer) error {
 	if err := validateFixture(fixture); err != nil {
 		return err
 	}
+	if !supportedFixtureGeneratorV1(fixture.Generator) {
+		return errors.New("historical M0 diagnostic requires a procedural fixture")
+	}
 	split, splitSHA, err := loadLocalHNSWQuerySplitV1(calibration)
 	if err != nil {
 		return err

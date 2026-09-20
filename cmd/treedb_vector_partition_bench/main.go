@@ -237,17 +237,18 @@ type partitionGraphDiagnosticsV1 struct {
 }
 
 type fixtureManifest struct {
-	SchemaVersion      int    `json:"schema_version"`
-	Fixture            string `json:"fixture"`
-	Generator          string `json:"generator"`
-	Arithmetic         string `json:"arithmetic"`
-	Vectors            int    `json:"vectors"`
-	Queries            int    `json:"queries"`
-	QueryOrdinalOffset int64  `json:"query_ordinal_offset,omitempty"`
-	Dimensions         int    `json:"dimensions"`
-	Metric             string `json:"metric"`
-	Seed               int64  `json:"seed"`
-	Checksum           string `json:"checksum"`
+	SchemaVersion      int                     `json:"schema_version"`
+	Fixture            string                  `json:"fixture"`
+	Generator          string                  `json:"generator"`
+	Arithmetic         string                  `json:"arithmetic"`
+	Vectors            int                     `json:"vectors"`
+	Queries            int                     `json:"queries"`
+	QueryOrdinalOffset int64                   `json:"query_ordinal_offset,omitempty"`
+	Dimensions         int                     `json:"dimensions"`
+	Metric             string                  `json:"metric"`
+	Seed               int64                   `json:"seed"`
+	Checksum           string                  `json:"checksum"`
+	External           externalFixtureSourceV1 `json:"external,omitzero"`
 }
 
 type neighbor struct {
@@ -555,6 +556,9 @@ func run(args []string, stdout io.Writer) error {
 	if len(args) > 0 && args[0] == "generate-fixture" {
 		return runGenerateFixture(args[1:], stdout)
 	}
+	if len(args) > 0 && args[0] == "import-fixture" {
+		return runImportFixtureV1(args[1:], stdout)
+	}
 	if len(args) > 0 && args[0] == "validate-qualification" {
 		return runValidateQualification(args[1:], stdout)
 	}
@@ -599,10 +603,21 @@ func runGenerateTruthCache(args []string, stdout io.Writer) error {
 		return errors.New("truth-cache seed/top-k does not match the bounded fixture")
 	}
 	visits, err := memoryMul(int64(fixture.Vectors), int64(fixture.Queries))
+	if err == nil && fixture.Generator == externalFixtureGeneratorV1 {
+		// One binary64 checksum pass and one canonical FP32 truth pass. These
+		// score contracts are distinct; both scans must be admitted explicitly.
+		visits, err = memoryMul(visits, 2)
+	}
 	if err != nil || visits > capVisits {
 		return fmt.Errorf("canonical exact truth visits exceed cap: visits=%d cap=%d", visits, capVisits)
 	}
-	corpus, queries := fixtureData(fixture)
+	corpus, queries, err := loadFixtureDataV1(dataset, fixture)
+	if err != nil {
+		return err
+	}
+	if fixture.Generator == externalFixtureGeneratorV1 && fixtureChecksumFromData(corpus, queries) != fixture.Checksum {
+		return errors.New("external fixture checksum does not match loaded vector/query/truth stream")
+	}
 	truth, err := m8ExactTruthFixtureV1(corpus, queries, topK)
 	if err != nil {
 		return err
@@ -828,12 +843,19 @@ func runWithRuntimeCapabilities(args []string, stdout io.Writer, capabilities be
 		// simulation-only query/truth stream, so verifying it here would recreate
 		// queries and exact truth that this stage deliberately does not own.
 		if cfg.stage == "partition" {
-			vectors := fixtureVectors(fixture)
-			var queries [][]float64
+			var vectors, queries [][]float64
 			if cfg.partitionTruthOracle {
-				vectors, queries = fixtureData(fixture)
+				vectors, queries, err = loadFixtureDataV1(cfg.dataset, fixture)
+				if err != nil {
+					return err
+				}
 				if fixtureChecksumFromData(vectors, queries) != fixture.Checksum {
 					return errors.New("fixture checksum does not match generated vector/query/truth stream")
+				}
+			} else {
+				vectors, err = loadFixtureVectorsV1(cfg.dataset, fixture)
+				if err != nil {
+					return err
 				}
 			}
 			return runPartitionStage(cfg, fixture, vectors, queries, stdout)
@@ -844,7 +866,10 @@ func runWithRuntimeCapabilities(args []string, stdout io.Writer, capabilities be
 		if _, err := validateM3BenchmarkWork(cfg, fixture, cfg.m3MaxBenchmarkVisits); err != nil {
 			return err
 		}
-		vectors, queries := fixtureData(fixture)
+		vectors, queries, err := loadFixtureDataV1(cfg.dataset, fixture)
+		if err != nil {
+			return err
+		}
 		if fixtureChecksumFromData(vectors, queries) != fixture.Checksum {
 			return errors.New("fixture checksum does not match generated vector/query/truth stream")
 		}
@@ -863,7 +888,10 @@ func runWithRuntimeCapabilities(args []string, stdout io.Writer, capabilities be
 	if cfg.memory.ModeledPeakBytes > cfg.maxBytes {
 		return fmt.Errorf("modeled peak benchmark-owned memory %d exceeds -max-fixture-bytes %d", cfg.memory.ModeledPeakBytes, cfg.maxBytes)
 	}
-	vectors, queries := fixtureData(fixture)
+	vectors, queries, err := loadFixtureDataV1(cfg.dataset, fixture)
+	if err != nil {
+		return err
+	}
 	if fixtureChecksumFromData(vectors, queries) != fixture.Checksum {
 		return errors.New("fixture checksum does not match generated vector/query/truth stream")
 	}
@@ -938,7 +966,10 @@ func m8ProductionFixtureDataV1(cfg config, fixture fixtureManifest) ([][]float64
 	if len(cfg.m8VariantDBs) > 0 {
 		return nil, nil, nil
 	}
-	vectors, queries := fixtureData(fixture)
+	vectors, queries, err := loadFixtureDataV1(cfg.dataset, fixture)
+	if err != nil {
+		return nil, nil, err
+	}
 	if fixtureChecksumFromData(vectors, queries) != fixture.Checksum {
 		return nil, nil, errors.New("fixture checksum does not match generated vector/query/truth stream")
 	}
@@ -2158,8 +2189,11 @@ func validateM3FixtureWithCaps(m fixtureManifest, capVectors int, capBytes int64
 }
 
 func validateFixtureSyntax(m fixtureManifest, capVectors int) error {
-	if m.SchemaVersion != schemaVersion || m.Fixture == "" || !supportedFixtureGeneratorV1(m.Generator) || m.Arithmetic != fixtureArithmetic || m.Vectors < 1 || m.Vectors > capVectors || m.Queries < 1 || m.Dimensions < 1 || m.Dimensions > maxDimensions || m.Metric != "cosine" || len(m.Checksum) != 64 {
+	if m.SchemaVersion != schemaVersion || m.Fixture == "" || (!supportedFixtureGeneratorV1(m.Generator) && m.Generator != externalFixtureGeneratorV1) || m.Arithmetic != fixtureArithmetic || m.Vectors < 1 || m.Vectors > capVectors || m.Queries < 1 || m.Dimensions < 1 || m.Dimensions > maxDimensions || m.Metric != "cosine" || len(m.Checksum) != 64 {
 		return errors.New("unsupported or malformed fixture manifest")
+	}
+	if err := validateExternalFixtureV1(m); err != nil {
+		return err
 	}
 	if err := validateFixtureQueryOrdinalsV1(m); err != nil {
 		return err
