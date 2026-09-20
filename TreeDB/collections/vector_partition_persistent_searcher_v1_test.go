@@ -153,6 +153,12 @@ func TestOpenVectorPartitionLocalSearcherForOfflineAssetV1FailsClosed(t *testing
 	if err := col.PublishVectorPartitionManifestV1(nativeManifest, nil); !errors.Is(err, ErrVectorPartitionSearchUnavailable) {
 		t.Fatalf("native offline pack publication err=%v", err)
 	}
+	if err := col.PublishVectorPartitionManifestForOfflineAssetVariantV1(nativeManifest, nil, VectorPartitionLocalGraphVariantAuxiliaryNavigationV1); !errors.Is(err, ErrVectorPartitionSearchUnavailable) {
+		t.Fatalf("mismatched offline pack publication err=%v", err)
+	}
+	if err := col.PublishVectorPartitionManifestForOfflineAssetVariantV1(nativeManifest, nil, VectorPartitionLocalGraphVariantNativeV1); err != nil {
+		t.Fatalf("explicit offline pack publication: %v", err)
+	}
 	wrongPartition := assets[0]
 	wrongPartition.PartitionID = 1
 	if _, err := col.OpenVectorPartitionLocalSearcherForOfflineAssetWithContextV1(t.Context(), def.Name, manifest, wrongPartition); !errors.Is(err, ErrVectorPartitionSearchUnavailable) {
@@ -1216,6 +1222,31 @@ func TestVectorPartitionOfflineAuxiliaryConstructionVariantsV1(t *testing.T) {
 		}
 		if _, err := col.OpenVectorPartitionLocalSearcherForOfflineAssetVariantWithContextV1(t.Context(), def.Name, m, assets[0], wrongVariant); !errors.Is(err, ErrVectorPartitionSearchUnavailable) {
 			t.Fatalf("variant=%s exact open accepted descriptor variant=%s: %v", test.variant, wrongVariant, err)
+		}
+		if test.variant == VectorPartitionLocalGraphVariantAuxiliaryNavigationV1 {
+			offlineManifest := m
+			offlineManifest.Assets = assets
+			plan, err := NewVectorPartitionGenerationSearchOpenPlanWithContextV1(t.Context(), offlineManifest)
+			if err != nil {
+				t.Fatal(err)
+			}
+			key := vectorPartitionReaderPinKeyV1(d.Dir(), col.name, def.Name, m.Generation)
+			vectorPartitionReaderPinsV1.Lock()
+			vectorPartitionReaderPinsV1.counts[key]++
+			vectorPartitionReaderPinsV1.Unlock()
+			pin := &VectorPartitionReaderPinV1{key: key}
+			planned, err := col.OpenVectorPartitionLocalSearcherForGenerationOfflineVariantSearchPlanWithContextV1(t.Context(), def.Name, m.Generation, 0, plan, pin, test.variant)
+			if err != nil {
+				pin.Release()
+				t.Fatalf("offline planned open: %v", err)
+			}
+			if err := planned.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := col.OpenVectorPartitionLocalSearcherForGenerationSearchPlanWithContextV1(t.Context(), def.Name, m.Generation, 0, plan, pin); !errors.Is(err, ErrVectorPartitionSearchUnavailable) {
+				t.Fatalf("ordinary planned open admitted offline variant: %v", err)
+			}
+			pin.Release()
 		}
 		productionManifest := m
 		productionManifest.Assets = assets

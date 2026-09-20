@@ -114,6 +114,7 @@ type config struct {
 	memory                    benchmarkMemoryPlan
 	stage                     string
 	m3PersistDir              string
+	m3FinalOfflineGraph       bool
 	m8ExistingDB              string
 	m8VariantDBs              []string
 	m8OracleDomainCounts      []int
@@ -160,6 +161,8 @@ type config struct {
 	m3MaxBenchmarkVisits               int64
 	m8CoordinatorLimits                nativewire.VectorPartitionCoordinatorLimitsV1
 	m8ShardLimits                      nativewire.VectorPartitionShardSearchLimitsV1
+	// The final qualifier and its exact child replay admit the offline M16 control.
+	m8FinalOfflineGraph bool
 }
 
 type kahipRequestPartitioner struct{}
@@ -981,6 +984,7 @@ func parseConfig(args []string) (config, error) {
 	fs.StringVar(&cfg.m8MatrixOut, "m8-matrix-out", "", "internal matrix-wide output root for child cleanliness checks")
 	fs.StringVar(&cfg.m8MatrixProfiles, "m8-matrix-profiles", "", "internal matrix-wide profile root for child cleanliness checks")
 	fs.StringVar(&cfg.m3PersistDir, "m3-persist-db", "", "retain the single overlap,partition_index row as a persistent TreeDB directory for downstream service benchmarks")
+	fs.BoolVar(&cfg.m3FinalOfflineGraph, "m3-final-offline-graph", false, "materialize the final qualifier's retained M16/eFC128 offline graph control")
 	fs.StringVar(&cfg.m8ExistingDB, "m8-existing-db", "", "read-only existing TreeDB M3 asset directory for production_multi_group; never rebuilt or deleted")
 	fs.StringVar(&m8VariantDBs, "m8-variant-dbs", "", "comma-separated retained M3 directories for the strict three-variant production matrix")
 	fs.Uint64Var(&cfg.m8MaxRSSBytes, "m8-max-rss-bytes", cfg.m8MaxRSSBytes, "hard process peak-RSS acceptance bound for production_multi_group")
@@ -992,6 +996,7 @@ func parseConfig(args []string) (config, error) {
 	fs.IntVar(&cfg.m8RouterPolicyWidth, "m8-router-policy-width", 0, "nearest returned representatives used by the offline flat-HNSW diagnostic; zero uses the bounded default")
 	fs.StringVar(&cfg.m8TruthCache, "m8-truth-cache", "", "external canonical exact-truth cache directory; identity-bound and fail-closed")
 	fs.StringVar(&cfg.m8TruthCacheSHA256, "m8-truth-cache-sha256", "", "independently trusted SHA-256 of the canonical truth-cache artifact required for cache reuse")
+	fs.BoolVar(&cfg.m8FinalOfflineGraph, "m8-final-offline-graph", false, "replay the final qualifier's retained offline graph control")
 	fs.StringVar(&cfg.partitionAssignment, "partition-assignment", cfg.partitionAssignment, "partition assignment for partition/M3 stages: graph or stable_id_hash")
 	fs.StringVar(&cfg.shardPlanMode, "shard-plan", cfg.shardPlanMode, "off keeps -partitions authoritative; byte_bounded derives the M3 partition count and per-pack capacity from an explicit hot-byte budget before construction")
 	fs.Uint64Var(&cfg.shardPlanTargetBytes, "shard-plan-target-hot-bytes", 0, "explicit per-pack hot-byte budget for -shard-plan byte_bounded; zero inherits the selected portable default")
@@ -1167,6 +1172,9 @@ func parseConfig(args []string) (config, error) {
 	if cfg.m3PersistDir != "" && (cfg.stage != "overlap,partition_index" || len(cfg.overlaps) != 1) {
 		return config{}, errors.New("-m3-persist-db requires stage overlap,partition_index with exactly one overlap ratio")
 	}
+	if cfg.m3FinalOfflineGraph && (cfg.stage != "overlap,partition_index" || cfg.m3PersistDir == "" || cfg.partitionAssignment != partitionAssignmentGraphV1 || cfg.partitionHNSWM != 16 || cfg.partitionHNSWEfC != 128) {
+		return config{}, errors.New("-m3-final-offline-graph requires retained graph-assignment M3 with explicit M16/efConstruction128")
+	}
 	if cfg.routerCandidates < 1 || cfg.routerCandidates > collections.MaxVectorPartitionRouterScoreBudgetV3 {
 		return config{}, errors.New("router score budget must be in [1,1000000]")
 	}
@@ -1178,6 +1186,9 @@ func parseConfig(args []string) (config, error) {
 	}
 	if cfg.m8ExistingDB != "" && cfg.stage != m8ProductionMultiGroupModeV1 {
 		return config{}, errors.New("-m8-existing-db requires production_multi_group")
+	}
+	if cfg.m8FinalOfflineGraph && (cfg.stage != m8ProductionMultiGroupModeV1 || cfg.m8ExistingDB == "" || len(cfg.m8VariantDBs) != 0) {
+		return config{}, errors.New("-m8-final-offline-graph requires production_multi_group with one existing database")
 	}
 	if len(cfg.m8VariantDBs) > 0 && (cfg.stage != m8ProductionMultiGroupModeV1 || cfg.m8ExistingDB != "" || len(cfg.m8VariantDBs) != 3) {
 		return config{}, errors.New("-m8-variant-dbs requires production_multi_group, exactly three directories, and no -m8-existing-db")

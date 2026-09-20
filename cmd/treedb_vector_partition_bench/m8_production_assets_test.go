@@ -114,8 +114,14 @@ func TestM8RetainedGraphVariantUsesManifestIdentityV1(t *testing.T) {
 	if _, _, err := m8RetainedGraphVariantV1(manifest, def, descriptor, false); err == nil {
 		t.Fatal("historical M18 graph admitted as production by matching M/efConstruction")
 	}
+	if _, _, err := m8RetainedGraphVariantV1(manifest, def, descriptor, true); err == nil {
+		t.Fatal("historical M18 graph admitted as the final offline control")
+	}
+	baseline := collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationV1
+	manifest.Assets[0].GraphVariant, manifest.Assets[1].GraphVariant = string(baseline), string(baseline)
+	descriptor.PartitionHNSWM, descriptor.PartitionHNSWEfC = 16, 128
 	got, offline, err = m8RetainedGraphVariantV1(manifest, def, descriptor, true)
-	if err != nil || got != historical || !offline {
+	if err != nil || got != baseline || !offline {
 		t.Fatalf("offline variant=%q offline=%t err=%v", got, offline, err)
 	}
 	manifest.Assets[1].GraphVariant = string(canonical)

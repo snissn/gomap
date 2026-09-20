@@ -1394,6 +1394,10 @@ func decodeVectorPartitionMembershipDigestV1(raw string) ([sha256.Size]byte, err
 }
 
 func (c *Collection) validateVectorPartitionAssetMembershipBindingsV1(manifest VectorPartitionManifestV1) error {
+	return c.validateVectorPartitionAssetMembershipBindingsForGraphVariantV1(manifest, VectorPartitionLocalGraphVariantCanonicalHNSWM18EfConstruction256V1)
+}
+
+func (c *Collection) validateVectorPartitionAssetMembershipBindingsForGraphVariantV1(manifest VectorPartitionManifestV1, expectedGraphVariant VectorPartitionLocalGraphVariantV1) error {
 	hasNative := false
 	for _, asset := range manifest.Assets {
 		if asset.ID == vectorPartitionLocalAssetIDV1(asset.PartitionID) {
@@ -1429,8 +1433,8 @@ func (c *Collection) validateVectorPartitionAssetMembershipBindingsV1(manifest V
 		if _, identityErr := VectorPartitionLocalGraphVariantIdentityV1(variant); identityErr != nil || vectorPartitionLocalGraphVariantMembershipDigestV1(want, variant) != got {
 			return fmt.Errorf("%w: descriptor membership digest mismatch partition=%d", ErrVectorPartitionSearchUnavailable, asset.PartitionID)
 		}
-		if variant != VectorPartitionLocalGraphVariantCanonicalHNSWM18EfConstruction256V1 {
-			return fmt.Errorf("%w: noncanonical production graph variant=%s", ErrVectorPartitionSearchUnavailable, variant)
+		if variant != expectedGraphVariant {
+			return fmt.Errorf("%w: graph variant=%s want=%s", ErrVectorPartitionSearchUnavailable, variant, expectedGraphVariant)
 		}
 		if asset.Ref.Kind != ColumnAssetKindTCS1HNSWSearchPack || asset.Ref.Length <= 0 || asset.Ref.Length > vectorPartitionSearchAssetMaxBytesV1 {
 			return fmt.Errorf("%w: native membership asset ref partition=%d", ErrVectorPartitionSearchUnavailable, asset.PartitionID)
@@ -2665,7 +2669,17 @@ func (c *Collection) OpenVectorPartitionLocalSearcherForGenerationWithContextV1(
 // the searcher without lifecycle I/O, while avoiding another manifest decode
 // and membership scan for every partition in one cold routed request.
 func (c *Collection) OpenVectorPartitionLocalSearcherForGenerationSearchPlanWithContextV1(ctx context.Context, index string, generation uint64, partition uint32, plan *VectorPartitionGenerationSearchOpenPlanV1, generationPin *VectorPartitionReaderPinV1) (*VectorPartitionLocalSearcherV1, error) {
-	return c.openVectorPartitionLocalSearcherForGenerationSearchPlanWithContextV1(ctx, index, generation, partition, plan, generationPin, false)
+	return c.openVectorPartitionLocalSearcherForGenerationSearchPlanWithContextV1(ctx, index, generation, partition, plan, generationPin, false, false, "")
+}
+
+// OpenVectorPartitionLocalSearcherForGenerationOfflineVariantSearchPlanWithContextV1
+// is the planned-open equivalent of the bounded offline attribution opener.
+// It never admits the variant through the ordinary production boundary.
+func (c *Collection) OpenVectorPartitionLocalSearcherForGenerationOfflineVariantSearchPlanWithContextV1(ctx context.Context, index string, generation uint64, partition uint32, plan *VectorPartitionGenerationSearchOpenPlanV1, generationPin *VectorPartitionReaderPinV1, expectedVariant VectorPartitionLocalGraphVariantV1) (*VectorPartitionLocalSearcherV1, error) {
+	if _, err := VectorPartitionLocalGraphVariantIdentityV1(expectedVariant); err != nil {
+		return nil, fmt.Errorf("%w: offline graph variant", ErrVectorPartitionSearchUnavailable)
+	}
+	return c.openVectorPartitionLocalSearcherForGenerationSearchPlanWithContextV1(ctx, index, generation, partition, plan, generationPin, false, true, expectedVariant)
 }
 
 // OpenVectorPartitionLocalSearcherForGenerationLiveSearchPlanWithContextV1
@@ -2675,10 +2689,10 @@ func (c *Collection) OpenVectorPartitionLocalSearcherForGenerationLiveSearchPlan
 	if plan == nil || !plan.liveRecovery {
 		return nil, fmt.Errorf("%w: live recovery plan", ErrVectorPartitionSearchUnavailable)
 	}
-	return c.openVectorPartitionLocalSearcherForGenerationSearchPlanWithContextV1(ctx, index, generation, partition, plan, generationPin, true)
+	return c.openVectorPartitionLocalSearcherForGenerationSearchPlanWithContextV1(ctx, index, generation, partition, plan, generationPin, true, false, "")
 }
 
-func (c *Collection) openVectorPartitionLocalSearcherForGenerationSearchPlanWithContextV1(ctx context.Context, index string, generation uint64, partition uint32, plan *VectorPartitionGenerationSearchOpenPlanV1, generationPin *VectorPartitionReaderPinV1, prepareStableIDOrdinals bool) (*VectorPartitionLocalSearcherV1, error) {
+func (c *Collection) openVectorPartitionLocalSearcherForGenerationSearchPlanWithContextV1(ctx context.Context, index string, generation uint64, partition uint32, plan *VectorPartitionGenerationSearchOpenPlanV1, generationPin *VectorPartitionReaderPinV1, prepareStableIDOrdinals, allowOfflineNative bool, expectedGraphVariant VectorPartitionLocalGraphVariantV1) (*VectorPartitionLocalSearcherV1, error) {
 	if c == nil || c.db == nil {
 		return nil, ErrVectorPartitionSearchUnavailable
 	}
@@ -2725,7 +2739,7 @@ func (c *Collection) openVectorPartitionLocalSearcherForGenerationSearchPlanWith
 	searcher, err := c.openVectorPartitionLocalSearcherForPreparedPartitionWithContextV1(
 		ctx, index, generation, partition,
 		plan.indexDefinitionDigest, plan.sourceGeneration, plan.sourceChecksum, plan.sourceSchemaHash, plan.sourceRowCount,
-		asset, members, home, overlap, false, "", prepareStableIDOrdinals, plan.liveRecovery,
+		asset, members, home, overlap, allowOfflineNative, expectedGraphVariant, prepareStableIDOrdinals, plan.liveRecovery,
 	)
 	if err != nil {
 		return nil, err

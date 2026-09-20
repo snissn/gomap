@@ -3474,7 +3474,14 @@ type VectorPartitionStatusV1 struct {
 // collection's currently declared vector-index definition before publication
 // and retains the standalone local-activation behavior.
 func (c *Collection) PublishVectorPartitionManifestV1(m VectorPartitionManifestV1, resources *rootpublication.StableResourceSet) error {
-	return c.publishVectorPartitionManifestModeV1(m, resources, true)
+	return c.publishVectorPartitionManifestModeV1(m, resources, true, VectorPartitionLocalGraphVariantCanonicalHNSWM18EfConstruction256V1)
+}
+
+// PublishVectorPartitionManifestForOfflineAssetVariantV1 persists an explicit
+// non-production graph variant for offline qualification. Ordinary publication
+// and serving remain pinned to the canonical production variant.
+func (c *Collection) PublishVectorPartitionManifestForOfflineAssetVariantV1(m VectorPartitionManifestV1, resources *rootpublication.StableResourceSet, variant VectorPartitionLocalGraphVariantV1) error {
+	return c.publishVectorPartitionManifestModeV1(m, resources, true, variant)
 }
 
 // StageVectorPartitionManifestV1 durably publishes a building or ready
@@ -3482,10 +3489,10 @@ func (c *Collection) PublishVectorPartitionManifestV1(m VectorPartitionManifestV
 // therefore usable as M7 group-readiness evidence but cannot be served until
 // the replicated catalog/meta lifecycle activates it.
 func (c *Collection) StageVectorPartitionManifestV1(m VectorPartitionManifestV1, resources *rootpublication.StableResourceSet) error {
-	return c.publishVectorPartitionManifestModeV1(m, resources, false)
+	return c.publishVectorPartitionManifestModeV1(m, resources, false, VectorPartitionLocalGraphVariantCanonicalHNSWM18EfConstruction256V1)
 }
 
-func (c *Collection) publishVectorPartitionManifestModeV1(m VectorPartitionManifestV1, resources *rootpublication.StableResourceSet, activate bool) error {
+func (c *Collection) publishVectorPartitionManifestModeV1(m VectorPartitionManifestV1, resources *rootpublication.StableResourceSet, activate bool, expectedGraphVariant VectorPartitionLocalGraphVariantV1) error {
 	if c == nil || c.db == nil {
 		if resources != nil {
 			resources.Release()
@@ -3503,6 +3510,9 @@ func (c *Collection) publishVectorPartitionManifestModeV1(m VectorPartitionManif
 		// Transfer ownership before any preflight or source check: every ready
 		// return path must release the producer's exact identity pins once.
 		defer resources.Release()
+	}
+	if _, err := VectorPartitionLocalGraphVariantIdentityV1(expectedGraphVariant); err != nil {
+		return err
 	}
 	if err := c.db.CheckStorageMaintenanceReady(); err != nil {
 		return err
@@ -3541,7 +3551,7 @@ func (c *Collection) publishVectorPartitionManifestModeV1(m VectorPartitionManif
 		if err := c.validateVectorPartitionSourceIdentityV1(m); err != nil {
 			return err
 		}
-		if err := c.validateVectorPartitionAssetMembershipBindingsV1(m); err != nil {
+		if err := c.validateVectorPartitionAssetMembershipBindingsForGraphVariantV1(m, expectedGraphVariant); err != nil {
 			return err
 		}
 		if m.State == "ready" {

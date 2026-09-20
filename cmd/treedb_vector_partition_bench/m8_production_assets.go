@@ -175,6 +175,10 @@ func (h *m8ProductionMultiGroupAssetsV1) Close() error {
 // of its manifest with only group placements relabeled; local pack files and
 // the retained source lifecycle stay unchanged.
 func openM8ProductionMultiGroupExistingAssetsV1(dir string, groups []string, partitions int, fixture fixtureManifest, vectors [][]float64) (_ *m8ProductionMultiGroupAssetsV1, err error) {
+	return openM8ProductionMultiGroupExistingAssetsWithPolicyV1(dir, groups, partitions, fixture, vectors, false)
+}
+
+func openM8ProductionMultiGroupExistingAssetsWithPolicyV1(dir string, groups []string, partitions int, fixture fixtureManifest, vectors [][]float64, allowOfflineGraphVariant bool) (_ *m8ProductionMultiGroupAssetsV1, err error) {
 	if dir == "" || len(groups) < 2 {
 		return nil, errors.New("M8 existing assets require a directory and two groups")
 	}
@@ -192,7 +196,7 @@ func openM8ProductionMultiGroupExistingAssetsV1(dir string, groups []string, par
 		return nil, err
 	}
 	if _, statErr := os.Stat(filepath.Join(dir, m3VariantDescriptorFileV1)); statErr == nil {
-		if err = m8BindRetainedM3DescriptorV1(h, fixture); err != nil {
+		if err = m8BindRetainedM3DescriptorWithPolicyV1(h, fixture, allowOfflineGraphVariant); err != nil {
 			return nil, err
 		}
 	} else if !errors.Is(statErr, os.ErrNotExist) {
@@ -306,6 +310,7 @@ func openM8ProductionExistingAssetSetModeV1(dir string, readOnly bool) (_ *m8Pro
 	}
 	h.status = h.router.Status()
 	h.manifest = h.status.Manifest
+	h.graphVariant = collections.VectorPartitionLocalGraphVariantV1(m8ManifestGraphVariantV1(h.manifest))
 	return h, nil
 }
 
@@ -501,6 +506,9 @@ func m8RetainedGraphVariantV1(manifest collections.VectorPartitionManifestV1, de
 	offline := retained != collections.VectorPartitionLocalGraphVariantCanonicalHNSWM18EfConstruction256V1
 	if offline && !allowOffline {
 		return "", false, errors.New("retained M8 descriptor local HNSW construction is not production-selected")
+	}
+	if offline && (retained != collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationV1 || m != 16 || efConstruction != 128) {
+		return "", false, errors.New("retained M8 offline graph is not the final M16/eFC128 control")
 	}
 	return retained, offline, nil
 }

@@ -206,6 +206,17 @@ func (r *VectorPartitionRouterV1) partitionLiveRepresentativesV1() ([]vectorPart
 // building generation into a ready generation. Publication is the only
 // visibility point; cancellation or any validation failure leaves it building.
 func (c *Collection) BuildAndPublishVectorPartitionRouterV1(ctx context.Context, building VectorPartitionManifestV1, partitions []internalrouter.RouterPartitionV1, opts VectorPartitionRouterBuildOptionsV1) (status VectorPartitionRouterBuildStatusV1, resultErr error) {
+	return c.buildAndPublishVectorPartitionRouterForGraphVariantV1(ctx, building, partitions, opts, VectorPartitionLocalGraphVariantCanonicalHNSWM18EfConstruction256V1)
+}
+
+// BuildAndPublishVectorPartitionRouterForOfflineAssetVariantV1 completes an
+// offline qualification generation without admitting its local graph variant
+// through the production publication path.
+func (c *Collection) BuildAndPublishVectorPartitionRouterForOfflineAssetVariantV1(ctx context.Context, building VectorPartitionManifestV1, partitions []internalrouter.RouterPartitionV1, opts VectorPartitionRouterBuildOptionsV1, variant VectorPartitionLocalGraphVariantV1) (status VectorPartitionRouterBuildStatusV1, resultErr error) {
+	return c.buildAndPublishVectorPartitionRouterForGraphVariantV1(ctx, building, partitions, opts, variant)
+}
+
+func (c *Collection) buildAndPublishVectorPartitionRouterForGraphVariantV1(ctx context.Context, building VectorPartitionManifestV1, partitions []internalrouter.RouterPartitionV1, opts VectorPartitionRouterBuildOptionsV1, expectedGraphVariant VectorPartitionLocalGraphVariantV1) (status VectorPartitionRouterBuildStatusV1, resultErr error) {
 	started := time.Now()
 	status.Generation = building.Generation
 	fail := func(err error) (VectorPartitionRouterBuildStatusV1, error) {
@@ -256,6 +267,9 @@ func (c *Collection) BuildAndPublishVectorPartitionRouterV1(ctx context.Context,
 	}
 	if building.IndexDefinitionDigest != VectorIndexDefinitionDigestV1(def) {
 		return fail(errors.New("collections: vector partition router index definition digest mismatch"))
+	}
+	if _, err := VectorPartitionLocalGraphVariantIdentityV1(expectedGraphVariant); err != nil {
+		return fail(err)
 	}
 	if opts.Config == (internalrouter.RouterConfigV1{}) {
 		opts.Config = internalrouter.DefaultRouterConfigV1()
@@ -462,7 +476,7 @@ func (c *Collection) BuildAndPublishVectorPartitionRouterV1(ctx context.Context,
 		return fail(err)
 	}
 	publishStarted := time.Now()
-	err = c.PublishVectorPartitionManifestV1(ready, resources)
+	err = c.publishVectorPartitionManifestModeV1(ready, resources, true, expectedGraphVariant)
 	status.PublishNanos = elapsedNanosVPR(publishStarted)
 	if err != nil {
 		return fail(err)

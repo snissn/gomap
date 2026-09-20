@@ -60,6 +60,7 @@ type m3PartitionIndexReport struct {
 	EnablementPolicy    string                `json:"enablement_policy"`
 	OwnershipBoundary   string                `json:"ownership_boundary"`
 	ExactCommand        []string              `json:"exact_command"`
+	OfflineGraphControl bool                  `json:"offline_graph_control,omitempty"`
 }
 
 type m3PartitionIndexRow struct {
@@ -151,6 +152,7 @@ func runM3PartitionIndexStage(cfg config, fixture fixtureManifest, artifact vect
 		EnablementPolicy:    "disabled_pending_clustered_1m_quality_or_probe_win",
 		OwnershipBoundary:   "derived stable IDs, validated FP32 vectors, and native HNSW packs only; canonical documents and Raft token ownership are unchanged",
 		ExactCommand:        append([]string(nil), cfg.command...),
+		OfflineGraphControl: cfg.m3FinalOfflineGraph,
 	}
 	if fixture.Vectors >= 1_000_000 {
 		report.MillionCorpus = "measured from supplied 1M corpus"
@@ -355,6 +357,9 @@ func benchmarkM3PartitionIndexRow(cfg config, fixture fixtureManifest, artifactD
 		return m3PartitionIndexRow{}, err
 	}
 	localVariant, err := m3PartitionLocalGraphVariantV1(partitionHNSWM, partitionHNSWEfConstruction)
+	if cfg.m3FinalOfflineGraph {
+		localVariant, err = m3PartitionLocalOfflineGraphVariantV1(partitionHNSWM, partitionHNSWEfConstruction)
+	}
 	if err != nil {
 		return m3PartitionIndexRow{}, err
 	}
@@ -511,14 +516,24 @@ func benchmarkM3PartitionIndexRow(cfg config, fixture fixtureManifest, artifactD
 	}
 	manifest.Assets = assets
 	manifest.Canonicalize()
-	if err := col.PublishVectorPartitionManifestV1(manifest, nil); err != nil {
+	if cfg.m3FinalOfflineGraph {
+		err = col.PublishVectorPartitionManifestForOfflineAssetVariantV1(manifest, nil, localVariant)
+	} else {
+		err = col.PublishVectorPartitionManifestV1(manifest, nil)
+	}
+	if err != nil {
 		return m3PartitionIndexRow{}, err
 	}
 	routerFileID, err := m3RouterAssetFileID(generation)
 	if err != nil {
 		return m3PartitionIndexRow{}, err
 	}
-	routerStatus, err := col.BuildAndPublishVectorPartitionRouterV1(context.Background(), manifest, routerPartitions, m3RouterBuildOptionsV1(cfg.routerConfig, routerFileID, uint64(manifest.PartitionCount)+1))
+	var routerStatus collections.VectorPartitionRouterBuildStatusV1
+	if cfg.m3FinalOfflineGraph {
+		routerStatus, err = col.BuildAndPublishVectorPartitionRouterForOfflineAssetVariantV1(context.Background(), manifest, routerPartitions, m3RouterBuildOptionsV1(cfg.routerConfig, routerFileID, uint64(manifest.PartitionCount)+1), localVariant)
+	} else {
+		routerStatus, err = col.BuildAndPublishVectorPartitionRouterV1(context.Background(), manifest, routerPartitions, m3RouterBuildOptionsV1(cfg.routerConfig, routerFileID, uint64(manifest.PartitionCount)+1))
+	}
 	if err != nil {
 		return m3PartitionIndexRow{}, err
 	}
@@ -604,6 +619,12 @@ func benchmarkM3PartitionIndexRow(cfg config, fixture fixtureManifest, artifactD
 	}
 	openStarted := time.Now()
 	searchers, err := openM3PartitionSearchers(cfg.partitions, func(partition uint32) (*collections.VectorPartitionLocalSearcherV1, error) {
+		if cfg.m3FinalOfflineGraph {
+			if int(partition) >= len(manifest.Assets) || manifest.Assets[partition].PartitionID != partition {
+				return nil, fmt.Errorf("offline M3 partition asset %d is unavailable", partition)
+			}
+			return col.OpenVectorPartitionLocalSearcherForOfflineAssetVariantWithContextV1(context.Background(), partitionHNSWIndex, manifest, manifest.Assets[partition], localVariant)
+		}
 		return col.OpenVectorPartitionLocalSearcherForGenerationV1(partitionHNSWIndex, generation, partition)
 	})
 	if err != nil {
@@ -1133,6 +1154,13 @@ func validateM3PartitionIndexReport(report m3PartitionIndexReport) error {
 		return errors.New("invalid M3 report identity")
 	}
 	for _, row := range report.Rows {
+		expectedStaleAssets := uint64(0)
+		if report.OfflineGraphControl {
+			expectedStaleAssets = uint64(len(row.PartitionLoads))
+			if row.PartitionHNSWM != 16 {
+				return fmt.Errorf("invalid offline M3 graph control: %+v", row)
+			}
+		}
 		wantBudgetFloat := math.Floor(row.Ratio * float64(row.SourceRows))
 		if math.IsNaN(row.Ratio) || math.IsInf(row.Ratio, 0) || row.Ratio < 0 || row.Ratio > 1 || wantBudgetFloat > float64(math.MaxInt) {
 			return fmt.Errorf("invalid M3 overlap target: ratio=%g source_rows=%d", row.Ratio, row.SourceRows)
@@ -1157,7 +1185,7 @@ func validateM3PartitionIndexReport(report m3PartitionIndexReport) error {
 		if row.OverlapUseful > 0 {
 			wantCutReductionPerUseful = float64(row.EdgeCutBefore-row.EdgeCutAfter) / float64(row.OverlapUseful)
 		}
-		if row.Budget != wantBudget || row.Used > wantBudget || row.OverlapRequested != wantBudget || row.OverlapRealized != row.Used || row.Budget < 0 || row.Used < 0 || row.Unspent != row.Budget-row.Used || row.Capacity < 1 || row.OverlapRejected != row.Unspent || row.OverlapUseful < 0 || row.OverlapFiller != 0 || row.OverlapUseful != row.OverlapRealized || row.OverlapUnusedCapacity != wantUnusedCapacity || row.CutReductionPerUsefulReplica != wantCutReductionPerUseful || row.ReplicationFactor < 1 || row.EdgeCutAfter > row.EdgeCutBefore || row.BuildWallNanos <= 0 || row.SourcePhysicalBytes <= 0 || row.PeakDerivedTemporaryBytes < row.FinalDerivedPhysicalBytes || row.FinalDerivedPhysicalBytes <= 0 || row.PackBytes == 0 || row.PartitionHNSWM < 2 || row.FinalDerivedPhysicalBytes < int64(row.PackBytes) || row.PhysicalBytesPerSourceVector <= 0 || row.SearcherOpenWallNanos <= 0 || row.PackOpenNanos == 0 || row.LocalSearches <= 0 || row.WarmNSPerOp <= 0 || row.WarmQPS <= 0 || row.CandidatesPerOp <= 0 || row.ExactLocalRecallAtK < 0 || row.ExactLocalRecallAtK > 1 || row.ManifestDigest == "" || row.SourceRows != uint64(report.Dataset.Vectors) || row.SearchRoute != collections.VectorPartitionSearchRouteHNSWSearchPackV1 || row.MissingAssets != 0 || row.CorruptAssets != 0 || row.StaleAssets != 0 {
+		if row.Budget != wantBudget || row.Used > wantBudget || row.OverlapRequested != wantBudget || row.OverlapRealized != row.Used || row.Budget < 0 || row.Used < 0 || row.Unspent != row.Budget-row.Used || row.Capacity < 1 || row.OverlapRejected != row.Unspent || row.OverlapUseful < 0 || row.OverlapFiller != 0 || row.OverlapUseful != row.OverlapRealized || row.OverlapUnusedCapacity != wantUnusedCapacity || row.CutReductionPerUsefulReplica != wantCutReductionPerUseful || row.ReplicationFactor < 1 || row.EdgeCutAfter > row.EdgeCutBefore || row.BuildWallNanos <= 0 || row.SourcePhysicalBytes <= 0 || row.PeakDerivedTemporaryBytes < row.FinalDerivedPhysicalBytes || row.FinalDerivedPhysicalBytes <= 0 || row.PackBytes == 0 || row.PartitionHNSWM < 2 || row.FinalDerivedPhysicalBytes < int64(row.PackBytes) || row.PhysicalBytesPerSourceVector <= 0 || row.SearcherOpenWallNanos <= 0 || row.PackOpenNanos == 0 || row.LocalSearches <= 0 || row.WarmNSPerOp <= 0 || row.WarmQPS <= 0 || row.CandidatesPerOp <= 0 || row.ExactLocalRecallAtK < 0 || row.ExactLocalRecallAtK > 1 || row.ManifestDigest == "" || row.SourceRows != uint64(report.Dataset.Vectors) || row.SearchRoute != collections.VectorPartitionSearchRouteHNSWSearchPackV1 || row.MissingAssets != 0 || row.CorruptAssets != 0 || row.StaleAssets != expectedStaleAssets {
 			return fmt.Errorf("invalid M3 evidence row: %+v", row)
 		}
 		if len(row.OverlapReplicas) != row.OverlapRealized || len(row.OverlapDestinationDiversity) != len(row.PartitionLoads) {
