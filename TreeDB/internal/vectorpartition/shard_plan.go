@@ -262,9 +262,11 @@ func (p ShardPlanV1) input() ShardPlanInputV1 {
 }
 
 // PackDomainMembershipsV1 deterministically splits each logical domain into
-// its byte-bounded physical packs. Logical graph assignment and useful-overlap
-// evidence remain unchanged; only the persisted membership destination moves
-// into pack space.
+// its byte-bounded physical packs. Home rows are assigned before replicas so
+// their physical packs remain stable across overlap variants of the same
+// logical assignment. Logical graph assignment and useful-overlap evidence
+// remain unchanged; only the persisted membership destination moves into pack
+// space.
 func PackDomainMembershipsV1(plan ShardPlanV1, logical OverlapResult) (OverlapResult, error) {
 	if plan.Partitions < 1 || plan.LogicalDomains < 1 || plan.PacksPerDomain < 1 ||
 		plan.LogicalDomains > maxPartitions || plan.PacksPerDomain > maxPartitions/plan.LogicalDomains ||
@@ -297,10 +299,42 @@ func PackDomainMembershipsV1(plan ShardPlanV1, logical OverlapResult) (OverlapRe
 		if len(memberships) != logical.Loads[domain] || len(memberships) > plan.DomainOverlapCapacity {
 			return OverlapResult{}, fmt.Errorf("vectorpartition: domain %d load does not match its bounded membership list", domain)
 		}
-		for i, membership := range memberships {
-			membership.Partition = domain*plan.PacksPerDomain + i%plan.PacksPerDomain
+		base := domain * plan.PacksPerDomain
+		homeCount := 0
+		for _, membership := range memberships {
+			if !membership.Home {
+				continue
+			}
+			membership.Partition = base + homeCount%plan.PacksPerDomain
+			if out.Loads[membership.Partition] >= plan.OverlapCapacity {
+				return OverlapResult{}, fmt.Errorf("vectorpartition: domain %d home rows exceed stable physical pack capacity", domain)
+			}
 			out.Loads[membership.Partition]++
 			out.Memberships = append(out.Memberships, membership)
+			homeCount++
+		}
+		replicaCursor := homeCount % plan.PacksPerDomain
+		for _, membership := range memberships {
+			if membership.Home {
+				continue
+			}
+			assigned := false
+			for offset := 0; offset < plan.PacksPerDomain; offset++ {
+				pack := (replicaCursor + offset) % plan.PacksPerDomain
+				partition := base + pack
+				if out.Loads[partition] >= plan.OverlapCapacity {
+					continue
+				}
+				membership.Partition = partition
+				out.Loads[partition]++
+				out.Memberships = append(out.Memberships, membership)
+				replicaCursor = (pack + 1) % plan.PacksPerDomain
+				assigned = true
+				break
+			}
+			if !assigned {
+				return OverlapResult{}, fmt.Errorf("vectorpartition: domain %d replicas exceed physical pack capacity", domain)
+			}
 		}
 	}
 	sort.Slice(out.Memberships, func(i, j int) bool {

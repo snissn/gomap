@@ -181,3 +181,56 @@ func TestPackDomainMembershipsV1DeterministicAndBounded(t *testing.T) {
 		t.Fatalf("undersized domain err=%v", err)
 	}
 }
+
+func TestPackDomainMembershipsV1KeepsHomePacksStableAcrossOverlapVariants(t *testing.T) {
+	plan, err := PlanByteBoundedShardsV1(ShardPlanInputV1{
+		Vectors: 8, Dimensions: 2, LogicalDomains: 2, OverlapRatio: .5, Imbalance: 0,
+		TargetHotBytes: uint64(PackFixedOverheadBytesV1 + 3*(alignedRowBytesForTest(2)+GraphIdentityOverheadPerRowV1)),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	zero := OverlapResult{Capacity: 6, Loads: []int{4, 4}, Memberships: []Membership{
+		{VectorOrdinal: 0, Partition: 0, Home: true},
+		{VectorOrdinal: 1, Partition: 1, Home: true},
+		{VectorOrdinal: 2, Partition: 0, Home: true},
+		{VectorOrdinal: 3, Partition: 1, Home: true},
+		{VectorOrdinal: 4, Partition: 0, Home: true},
+		{VectorOrdinal: 5, Partition: 1, Home: true},
+		{VectorOrdinal: 6, Partition: 0, Home: true},
+		{VectorOrdinal: 7, Partition: 1, Home: true},
+	}}
+	useful := OverlapResult{Capacity: 6, Budget: 2, Used: 2, Useful: 2, Loads: []int{5, 5}, Memberships: []Membership{
+		{VectorOrdinal: 0, Partition: 0, Home: true}, {VectorOrdinal: 0, Partition: 1},
+		{VectorOrdinal: 1, Partition: 0}, {VectorOrdinal: 1, Partition: 1, Home: true},
+		{VectorOrdinal: 2, Partition: 0, Home: true},
+		{VectorOrdinal: 3, Partition: 1, Home: true},
+		{VectorOrdinal: 4, Partition: 0, Home: true},
+		{VectorOrdinal: 5, Partition: 1, Home: true},
+		{VectorOrdinal: 6, Partition: 0, Home: true},
+		{VectorOrdinal: 7, Partition: 1, Home: true},
+	}}
+	packedZero, err := PackDomainMembershipsV1(plan, zero)
+	if err != nil {
+		t.Fatal(err)
+	}
+	packedUseful, err := PackDomainMembershipsV1(plan, useful)
+	if err != nil {
+		t.Fatal(err)
+	}
+	homePacks := func(memberships []Membership) []int {
+		packs := make([]int, plan.Vectors)
+		for _, membership := range memberships {
+			if membership.Home {
+				packs[membership.VectorOrdinal] = membership.Partition
+			}
+		}
+		return packs
+	}
+	if got, want := homePacks(packedUseful.Memberships), homePacks(packedZero.Memberships); !slices.Equal(got, want) {
+		t.Fatalf("home packs changed across overlap variants: useful=%v zero=%v", got, want)
+	}
+	if !slices.Equal(packedUseful.Loads, []int{3, 2, 3, 2}) {
+		t.Fatalf("useful loads=%v", packedUseful.Loads)
+	}
+}
