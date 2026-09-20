@@ -37,11 +37,12 @@ pre-alpha and does not migrate old generation descriptors.
 
 ### Byte-bounded shard planning
 
-`-shard-plan byte_bounded` makes an explicit per-pack hot-byte budget
-authoritative over partition construction. `PlanByteBoundedShardsV1` derives
-the partition count, home capacity, and per-pack membership capacity from the
-authoritative fixture row count and dimensions, the FP32 traversal-row width a
-row actually occupies, and fixed graph/identity overhead. The traversal charge
+`-shard-plan byte_bounded` keeps an explicit `-partitions` value as the logical
+graph-domain count and makes the per-pack hot-byte budget authoritative over
+physical storage. `PlanByteBoundedShardsV1` derives a uniform number of
+contiguous physical packs per logical domain plus the domain and pack
+capacities from the authoritative fixture row count and dimensions, the FP32
+traversal-row width a row actually occupies, and fixed graph/identity overhead. The traversal charge
 is `dimensions * 4` rounded up to the search pack's 16-byte vector-section
 alignment, because a materialized row occupies its padded stride; charging the
 unpadded width would let a tight target admit packs above their advertised
@@ -53,18 +54,20 @@ plan is unchanged. The planner never reads host LLC,
 and it fails closed before any allocation on overflow, an undersized target,
 or an impossible balance.
 
-The plan is derived before the artifact is built, so the packs the benchmark
-materializes are the packs the persisted plan describes. `-partitions` may be
-omitted, in which case the planned count is used; supplying a count that
-contradicts the plan fails closed rather than silently building a different
-geometry.
+The plan is derived before the artifact is built. The graph partitioner sees
+only the logical domain count; after useful overlap is selected in domain
+space, canonical memberships are deterministically striped across each
+domain's owned packs. The manifest publishes the resulting physical pack count
+and a complete `DomainPacks` mapping, while the router merges owned packs back
+into their logical domain. `-partitions` may be omitted to retain the legacy
+one-domain-per-derived-pack planner.
 
 The plan provisions an overlap *envelope*, which is derived from the largest
 requested `-overlap` value unless `-shard-plan-overlap-ratio` names one
 explicitly. A variant may materialize less than the envelope but never more, so
 comparison variants that materialize different ratios can share one geometry:
 a disjoint variant built with `-overlap 0 -shard-plan-overlap-ratio .2` gets the
-same partition count and per-pack capacity as the 0.20 variant, which is what
+same domain/pack geometry and per-pack capacity as the 0.20 variant, which is what
 the strict M8 matrix requires. Persistent M3 builds retain a single ratio, so
 without that flag a disjoint build would plan a different geometry (100k rows
 plan to 14 partitions at ratio 0 versus 16 at ratio 0.20; 250k to 35 versus
@@ -76,16 +79,18 @@ membership capacity, or hot-byte budget.
 For the selected 128-dimensional contract, the portable default total budget
 is 7,696,384 B: 7500 rows of 128-d FP32 plus 512 B fixed per-row overhead
 (7,680,000 B), and a conservative 16 KiB reserve for the pack header, section
-directory, and alignment. Thus 100k rows plan to 16 partitions and 250k rows
-plan to 40 partitions, both at 7500 memberships per pack. `-shard-plan off`
-(the default) keeps `-partitions`
-authoritative and persists no plan; a descriptor written without the planner
+directory, and alignment. With no explicit domain count, 100k rows plan to 16
+one-pack domains and 250k rows to 40. With 250k rows and explicit logical
+domains, D4 maps to P40, D16 to P48, and D40 to P40 at the selected 0.20
+envelope. `-shard-plan off` (the default) treats `-partitions` as both the
+logical and physical count and persists no plan; a descriptor written without the planner
 carries an entirely zero `shard_plan` rather than a reverse-engineered one.
 
 The plan is part of the M3 variant build-identity digest and is revalidated on
-reopen against the descriptor's own source rows, dimensions, partition count,
-capacity, imbalance, overlap ratio, and per-partition loads, so a zero, stale,
-or edited plan cannot survive reopen validation.
+reopen against the descriptor's own source rows, dimensions, logical domain
+count, physical pack count, capacities, imbalance, overlap ratio, complete
+domain-pack mapping, and per-pack loads, so a zero, stale, or edited plan cannot
+survive reopen validation.
 
 Because the plan changed both the descriptor shape and its integrity binding,
 the retained M3 variant descriptor is now

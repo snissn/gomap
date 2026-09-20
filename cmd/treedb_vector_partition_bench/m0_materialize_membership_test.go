@@ -332,10 +332,10 @@ func TestM0MaterializeByteBoundedMembershipReopensDisposableClone(t *testing.T) 
 	sourceDB := filepath.Join(root, "source")
 	planConfig := vectorpartition.DefaultConfig()
 	plan, err := vectorpartition.PlanByteBoundedShardsV1(vectorpartition.ShardPlanInputV1{
-		Vectors: fixture.Vectors, Dimensions: fixture.Dimensions, OverlapRatio: m0OverlapRatioV1, Imbalance: planConfig.Imbalance,
-		TargetHotBytes: uint64(vectorpartition.PackFixedOverheadBytesV1 + 3*(alignedRowBytesForTest(fixture.Dimensions)+vectorpartition.GraphIdentityOverheadPerRowV1)),
+		Vectors: fixture.Vectors, Dimensions: fixture.Dimensions, LogicalDomains: 16, OverlapRatio: m0OverlapRatioV1, Imbalance: planConfig.Imbalance,
+		TargetHotBytes: uint64(vectorpartition.PackFixedOverheadBytesV1 + 2*(alignedRowBytesForTest(fixture.Dimensions)+vectorpartition.GraphIdentityOverheadPerRowV1)),
 	})
-	if err != nil || plan.Partitions != 16 {
+	if err != nil || plan.LogicalDomains != 16 || plan.Partitions != 32 || plan.PacksPerDomain != 2 {
 		t.Fatalf("byte-bounded plan=%+v err=%v", plan, err)
 	}
 	sourceDescriptor := testM8QualificationRetainedDescriptorWithShardPlanV1(t, sourceDB, strings.Repeat("b", 40), fixture, "graph-overlap-020-v1", partitionAssignmentGraphV1, m0OverlapRatioV1, plan)
@@ -356,7 +356,7 @@ func TestM0MaterializeByteBoundedMembershipReopensDisposableClone(t *testing.T) 
 		t.Fatal(err)
 	}
 	capacity, err := m3OverlapCapacityV1(artifact, m0OverlapRatioV1)
-	if err != nil || plan.OverlapCapacity != capacity || sourceDescriptor.ShardPlan != plan {
+	if err != nil || plan.DomainOverlapCapacity != capacity || sourceDescriptor.ShardPlan != plan {
 		t.Fatalf("byte-bounded source plan=%+v descriptor=%+v capacity=%d err=%v", plan, sourceDescriptor, capacity, err)
 	}
 	if err = m3VerifyRetainedShardGenerationV1(sourceDB, sourceDescriptor); err != nil {
@@ -418,8 +418,12 @@ func TestM0MaterializeByteBoundedMembershipReopensDisposableClone(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	zeroOrdinals := make([][]int, config.Partitions)
-	for _, membership := range zero.Memberships {
+	packedZero, err := vectorpartition.PackDomainMembershipsV1(plan, zero)
+	if err != nil {
+		t.Fatal(err)
+	}
+	zeroOrdinals := make([][]int, plan.Partitions)
+	for _, membership := range packedZero.Memberships {
 		zeroOrdinals[membership.Partition] = append(zeroOrdinals[membership.Partition], membership.VectorOrdinal)
 	}
 	if err = m3VerifyShardGenerationMembershipsV1(retained, zeroOrdinals, artifact.Assignment); err != nil {

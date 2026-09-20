@@ -2141,6 +2141,12 @@ func testM8QualificationRetainedDescriptorWithShardPlanV1(t *testing.T, dir, hea
 	if err != nil {
 		t.Fatal(err)
 	}
+	if shardPlan != (vectorpartition.ShardPlanV1{}) {
+		overlap, err = vectorpartition.PackDomainMembershipsV1(shardPlan, overlap)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
 	shardGenerationRaw, shardGenerationDigest, err := m3ShardGenerationRecordV1(shardPlan, ratio, overlap)
 	if err != nil {
 		t.Fatal(err)
@@ -2243,7 +2249,7 @@ func testM8QualificationRetainedDescriptorWithShardPlanV1(t *testing.T, dir, hea
 	for ordinal, id := range artifact.IDs {
 		routerVectors[ordinal] = valuesByID[id]
 	}
-	routerPartitions, err := m3RouterPartitions(artifact, overlap, sourceOrdinals, routerVectors)
+	routerPartitions, err := m3RouterPartitions(shardPlan, artifact, overlap, sourceOrdinals, routerVectors)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2251,7 +2257,7 @@ func testM8QualificationRetainedDescriptorWithShardPlanV1(t *testing.T, dir, hea
 	if err != nil {
 		t.Fatal(err)
 	}
-	inputs := make([]collections.VectorPartitionSearchAssetV1, partitions)
+	inputs := make([]collections.VectorPartitionSearchAssetV1, len(overlap.Loads))
 	for partition := range inputs {
 		inputs[partition] = collections.VectorPartitionSearchAssetV1{Source: source, Generation: generation, PartitionID: uint32(partition), Dimensions: fixture.Dimensions}
 	}
@@ -2271,7 +2277,7 @@ func testM8QualificationRetainedDescriptorWithShardPlanV1(t *testing.T, dir, hea
 	if err != nil {
 		t.Fatal(err)
 	}
-	routerBuild, err := col.BuildAndPublishVectorPartitionRouterV1(context.Background(), manifest, routerPartitions, collections.VectorPartitionRouterBuildOptionsV1{Config: routerConfig, AssetFileID: routerFileID, AssetPartID: uint64(partitions) + 1, M: partitionHNSWDegree, EfConstruction: 128, EfSearch: 128})
+	routerBuild, err := col.BuildAndPublishVectorPartitionRouterV1(context.Background(), manifest, routerPartitions, collections.VectorPartitionRouterBuildOptionsV1{Config: routerConfig, AssetFileID: routerFileID, AssetPartID: uint64(len(overlap.Loads)) + 1, M: partitionHNSWDegree, EfConstruction: 128, EfSearch: 128})
 	if err != nil {
 		t.Fatal(err)
 	}

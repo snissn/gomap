@@ -76,8 +76,9 @@ const (
 	partitionAssignmentStableIDHashV1       = "stable_id_hash"
 	// shardPlanModeOffV1 keeps the operator-declared partition count
 	// authoritative and persists no shard plan. shardPlanModeByteBoundedV1
-	// makes the explicit hot-byte budget authoritative: the partition count and
-	// per-pack capacity are derived before any artifact is built.
+	// makes the explicit hot-byte budget authoritative: an explicit -partitions
+	// count remains the logical graph-domain count while physical packs and their
+	// capacities are derived before any artifact is built.
 	shardPlanModeOffV1         = "off"
 	shardPlanModeByteBoundedV1 = "byte_bounded"
 	// The canonical M8 corpus permits up to maxVectors primary memberships and
@@ -1002,7 +1003,7 @@ func parseConfig(args []string) (config, error) {
 	fs.IntVar(&cfg.m8MembershipPackLimit, "m8-membership-pack-limit", 0, "read-only retained membership feasibility gate expanded physical-pack limit")
 	fs.BoolVar(&cfg.m8FinalOfflineGraph, "m8-final-offline-graph", false, "replay the final qualifier's retained offline graph control")
 	fs.StringVar(&cfg.partitionAssignment, "partition-assignment", cfg.partitionAssignment, "partition assignment for partition/M3 stages: graph or stable_id_hash")
-	fs.StringVar(&cfg.shardPlanMode, "shard-plan", cfg.shardPlanMode, "off keeps -partitions authoritative; byte_bounded derives the M3 partition count and per-pack capacity from an explicit hot-byte budget before construction")
+	fs.StringVar(&cfg.shardPlanMode, "shard-plan", cfg.shardPlanMode, "off keeps -partitions as both logical and physical; byte_bounded treats it as the graph-domain count and derives physical packs from the hot-byte budget")
 	fs.Uint64Var(&cfg.shardPlanTargetBytes, "shard-plan-target-hot-bytes", 0, "explicit per-pack hot-byte budget for -shard-plan byte_bounded; zero inherits the selected portable default")
 	fs.Float64Var(&cfg.shardPlanRatio, "shard-plan-overlap-ratio", -1, "overlap ratio the byte-bounded plan provisions for; negative derives it from the largest -overlap value. Comparison variants that materialize different ratios share one geometry by planning for the same envelope")
 	fs.BoolVar(&cfg.partitionTruthOracle, "partition-truth-oracle", false, "emit exact truth primary-partition coverage diagnostic for -stage partition")
@@ -1106,10 +1107,10 @@ func parseConfig(args []string) (config, error) {
 			cfg.m8VariantDBs = append(cfg.m8VariantDBs, item)
 		}
 	}
-	// The byte-bounded planner owns the partition count. It needs the
+	// The byte-bounded planner owns the physical pack count. It needs the
 	// authoritative fixture row count and dimensions, which are only loaded
-	// after parsing, so leaving -partitions unset defers both the count and
-	// every partition-relative bound to applyByteBoundedShardPlanV1.
+	// after parsing, so leaving -partitions unset defers both logical domains
+	// and physical packs to applyByteBoundedShardPlanV1.
 	if cfg.shardPlanMode != shardPlanModeOffV1 && cfg.shardPlanMode != shardPlanModeByteBoundedV1 {
 		return config{}, fmt.Errorf("-shard-plan must be %q or %q", shardPlanModeOffV1, shardPlanModeByteBoundedV1)
 	}
@@ -1366,6 +1367,7 @@ func applyByteBoundedShardPlanV1(cfg config, fixture fixtureManifest) (config, e
 		return config{}, fmt.Errorf("-shard-plan-overlap-ratio %.4f is below the largest requested overlap %.4f", planningRatio, requested)
 	}
 	in := vectorpartition.DefaultShardPlanInputV1(fixture.Vectors, fixture.Dimensions)
+	in.LogicalDomains = cfg.partitions
 	in.OverlapRatio = planningRatio
 	in.Imbalance = cfg.partition.Imbalance
 	if cfg.shardPlanTargetBytes != 0 {
@@ -1375,14 +1377,11 @@ func applyByteBoundedShardPlanV1(cfg config, fixture fixtureManifest) (config, e
 	if err != nil {
 		return config{}, fmt.Errorf("plan byte-bounded shards: %w", err)
 	}
-	if cfg.partitions != 0 && cfg.partitions != plan.Partitions {
-		return config{}, fmt.Errorf("-partitions %d contradicts the byte-bounded plan: %d rows at %d target hot bytes require %d partitions", cfg.partitions, fixture.Vectors, plan.TargetHotBytes, plan.Partitions)
-	}
-	if err := validateProbesWithinPartitionsV1(cfg.probes, plan.Partitions); err != nil {
+	if err := validateProbesWithinPartitionsV1(cfg.probes, plan.LogicalDomains); err != nil {
 		return config{}, err
 	}
 	cfg.partitions = plan.Partitions
-	cfg.partition.Partitions = plan.Partitions
+	cfg.partition.Partitions = plan.LogicalDomains
 	cfg.shardPlan = plan
 	return cfg, nil
 }
@@ -1499,7 +1498,7 @@ func runPartitionStage(cfg config, fixture fixtureManifest, vectors, queries [][
 	}
 	report := partitionRun{SchemaVersion: 1, ResultKind: "offline_partition_builder", Dataset: fixture, Source: artifact.Source, Config: artifact.Config, Metrics: artifact.Metrics, BuildNanos: time.Since(started).Nanoseconds(), ArtifactSHA256: digest, BaseSHA: cfg.baseSHA, HeadSHA: cfg.headSHA, ArtifactPath: path, ArtifactBytes: int64(len(bytes))}
 	if len(queries) != 0 {
-		oracle, err := partitionTruthOracleForArtifactV1(vectors, queries, artifact.Assignment, artifact.Graph.Neighbors, cfg.partitions, cfg.topK)
+		oracle, err := partitionTruthOracleForArtifactV1(vectors, queries, artifact.Assignment, artifact.Graph.Neighbors, artifact.Config.Partitions, cfg.topK)
 		if err != nil {
 			return err
 		}

@@ -2,6 +2,7 @@ package vectorpartition
 
 import (
 	"math"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -93,5 +94,74 @@ func TestPlanByteBoundedShardsV1UsesExplicitTargetNotRuntimeLLC(t *testing.T) {
 	}
 	if got.TargetHotBytes != SelectedTargetHotBytesV1*2 || got.Partitions >= 40 {
 		t.Fatalf("explicit larger target must reduce partition count: %+v", got)
+	}
+}
+
+func TestPlanByteBoundedShardsV1SeparatesLogicalDomainsFromPhysicalPacks(t *testing.T) {
+	for _, tc := range []struct {
+		domains, packs, packsPerDomain, domainCapacity, packCapacity int
+	}{
+		{domains: 4, packs: 40, packsPerDomain: 10, domainCapacity: 75_000, packCapacity: 7_500},
+		{domains: 16, packs: 48, packsPerDomain: 3, domainCapacity: 18_750, packCapacity: 6_250},
+		{domains: 40, packs: 40, packsPerDomain: 1, domainCapacity: 7_500, packCapacity: 7_500},
+	} {
+		in := SelectedShardPlanRequestV1(250_000, 128)
+		in.LogicalDomains = tc.domains
+		got, err := PlanByteBoundedShardsV1(in)
+		if err != nil {
+			t.Fatalf("domains=%d: %v", tc.domains, err)
+		}
+		if got.LogicalDomains != tc.domains || got.Partitions != tc.packs || got.PacksPerDomain != tc.packsPerDomain ||
+			got.DomainOverlapCapacity != tc.domainCapacity || got.OverlapCapacity != tc.packCapacity {
+			t.Fatalf("domains=%d plan=%+v", tc.domains, got)
+		}
+	}
+}
+
+func TestPackDomainMembershipsV1DeterministicAndBounded(t *testing.T) {
+	in := ShardPlanInputV1{
+		Vectors: 8, Dimensions: 2, LogicalDomains: 2, OverlapRatio: .5, Imbalance: 0,
+		TargetHotBytes: uint64(PackFixedOverheadBytesV1 + 3*(alignedRowBytesForTest(2)+GraphIdentityOverheadPerRowV1)),
+	}
+	plan, err := PlanByteBoundedShardsV1(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	logical := OverlapResult{
+		Capacity: 6, Budget: 4, Used: 4, Useful: 4, Loads: []int{6, 6},
+		Memberships: []Membership{
+			{VectorOrdinal: 0, Partition: 0, Home: true}, {VectorOrdinal: 0, Partition: 1},
+			{VectorOrdinal: 1, Partition: 0, Home: true}, {VectorOrdinal: 1, Partition: 1},
+			{VectorOrdinal: 2, Partition: 0, Home: true},
+			{VectorOrdinal: 3, Partition: 0, Home: true},
+			{VectorOrdinal: 4, Partition: 0}, {VectorOrdinal: 4, Partition: 1, Home: true},
+			{VectorOrdinal: 5, Partition: 0}, {VectorOrdinal: 5, Partition: 1, Home: true},
+			{VectorOrdinal: 6, Partition: 1, Home: true},
+			{VectorOrdinal: 7, Partition: 1, Home: true},
+		},
+	}
+	first, err := PackDomainMembershipsV1(plan, logical)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := PackDomainMembershipsV1(plan, logical)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(first.Memberships, second.Memberships) || !slices.Equal(first.Loads, []int{3, 3, 3, 3}) || first.Capacity != 3 {
+		t.Fatalf("packed=%+v", first)
+	}
+	for _, membership := range first.Memberships {
+		gotDomain := membership.Partition / plan.PacksPerDomain
+		if !slices.ContainsFunc(logical.Memberships, func(candidate Membership) bool {
+			return candidate.VectorOrdinal == membership.VectorOrdinal && candidate.Home == membership.Home && candidate.Partition == gotDomain
+		}) {
+			t.Fatalf("membership escaped logical domain: %+v", membership)
+		}
+	}
+	bad := logical
+	bad.Loads = []int{5, 7}
+	if _, err := PackDomainMembershipsV1(plan, bad); err == nil {
+		t.Fatal("accepted logical loads unrelated to memberships")
 	}
 }

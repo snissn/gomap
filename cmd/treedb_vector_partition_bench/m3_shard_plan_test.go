@@ -32,13 +32,14 @@ func byteBoundedShardPlanConfigV1() config {
 // not from an operator-declared partition count.
 func TestByteBoundedShardPlanDerivesPartitionsBeforeConstructionV1(t *testing.T) {
 	for _, tc := range []struct {
-		name                  string
-		vectors               int
-		wantPartitions        int
-		contradictingPartions int
+		name              string
+		vectors           int
+		wantPartitions    int
+		explicitDomains   int
+		wantExplicitPacks int
 	}{
-		{"100k", 100_000, 16, 40},
-		{"250k", 250_000, 40, 16},
+		{"100k", 100_000, 16, 40, 40},
+		{"250k", 250_000, 40, 16, 48},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := byteBoundedShardPlanConfigV1()
@@ -57,12 +58,13 @@ func TestByteBoundedShardPlanDerivesPartitionsBeforeConstructionV1(t *testing.T)
 			if plan.HomeCapacity > plan.MaxMembershipsPerPack || plan.TargetHotBytes != vectorpartition.DefaultTargetHotBytesV1 {
 				t.Fatalf("plan home=%d target=%d", plan.HomeCapacity, plan.TargetHotBytes)
 			}
-			// A declared count that contradicts the budget must fail before any
-			// artifact, pack, or router asset is allocated.
-			contradicting := cfg
-			contradicting.partitions = tc.contradictingPartions
-			if _, err := applyByteBoundedShardPlanV1(contradicting, fixture); err == nil || !strings.Contains(err.Error(), "contradicts the byte-bounded plan") {
-				t.Fatalf("accepted -partitions %d against the %d-partition plan: %v", tc.contradictingPartions, tc.wantPartitions, err)
+			// An explicit count selects logical graph domains. The planner then
+			// derives enough physical packs for every domain's membership bound.
+			explicit := cfg
+			explicit.partitions = tc.explicitDomains
+			explicitPlan, err := applyByteBoundedShardPlanV1(explicit, fixture)
+			if err != nil || explicitPlan.shardPlan.LogicalDomains != tc.explicitDomains || explicitPlan.partitions != tc.wantExplicitPacks || explicitPlan.partition.Partitions != tc.explicitDomains {
+				t.Fatalf("domains=%d packs=%d graph=%d err=%v", explicitPlan.shardPlan.LogicalDomains, explicitPlan.partitions, explicitPlan.partition.Partitions, err)
 			}
 		})
 	}
@@ -311,6 +313,7 @@ func TestM3ShardGenerationDescriptorPersistsAndReopensV1(t *testing.T) {
 // must still be rejected against what materialized the packs.
 func TestM3ShardGenerationMembershipsBindMaterializationV1(t *testing.T) {
 	record := vectorpartition.ShardGenerationDescriptorV1{
+		Plan: vectorpartition.ShardPlanV1{PacksPerDomain: 1},
 		Memberships: []vectorpartition.Membership{
 			{VectorOrdinal: 0, Partition: 0, Home: true},
 			{VectorOrdinal: 1, Partition: 0, Home: true},
@@ -339,6 +342,7 @@ func TestM3ShardGenerationMembershipsBindMaterializationV1(t *testing.T) {
 	// every (vector, partition) pair, every pack row count, and the overlap
 	// total, so the home/overlap classification has to be bound too.
 	flipped := vectorpartition.ShardGenerationDescriptorV1{
+		Plan: vectorpartition.ShardPlanV1{PacksPerDomain: 1},
 		Memberships: []vectorpartition.Membership{
 			{VectorOrdinal: 0, Partition: 0, Home: true},
 			{VectorOrdinal: 1, Partition: 0},

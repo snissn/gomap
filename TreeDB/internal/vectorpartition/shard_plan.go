@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"sort"
 )
 
 const (
@@ -53,6 +54,7 @@ const (
 type ShardPlanInputV1 struct {
 	Vectors        int
 	Dimensions     int
+	LogicalDomains int
 	OverlapRatio   float64
 	Imbalance      float64
 	TargetHotBytes uint64
@@ -65,6 +67,10 @@ type ShardPlanRequestV1 = ShardPlanInputV1
 // ShardPlanV1 is the deterministic byte-bounded partition/capacity contract.
 type ShardPlanV1 struct {
 	Partitions            int     `json:"partitions"`
+	LogicalDomains        int     `json:"logical_domains"`
+	PacksPerDomain        int     `json:"packs_per_domain"`
+	DomainHomeCapacity    int     `json:"domain_home_capacity"`
+	DomainOverlapCapacity int     `json:"domain_overlap_capacity"`
 	HomeCapacity          int     `json:"home_capacity"`
 	OverlapCapacity       int     `json:"overlap_capacity"`
 	MaxMembershipsPerPack int     `json:"max_memberships_per_pack"`
@@ -131,7 +137,7 @@ func PlanByteBoundedShardsV1(in ShardPlanInputV1) (ShardPlanV1, error) {
 	if in.TargetHotBytes == 0 {
 		in.TargetHotBytes = DefaultTargetHotBytesV1
 	}
-	if in.Vectors < 1 || in.Vectors > maxVectors || in.Dimensions < 1 || in.Dimensions > maxDimensions || in.MaxPartitions < 1 || in.MaxPartitions > maxPartitions {
+	if in.Vectors < 1 || in.Vectors > maxVectors || in.Dimensions < 1 || in.Dimensions > maxDimensions || in.LogicalDomains < 0 || in.LogicalDomains > in.Vectors || in.MaxPartitions < 1 || in.MaxPartitions > maxPartitions {
 		return ShardPlanV1{}, errors.New("vectorpartition: invalid shard plan vector/dimension bounds")
 	}
 	if math.IsNaN(in.OverlapRatio) || math.IsInf(in.OverlapRatio, 0) || in.OverlapRatio < 0 || in.OverlapRatio > 1 {
@@ -166,6 +172,38 @@ func PlanByteBoundedShardsV1(in ShardPlanInputV1) (ShardPlanV1, error) {
 		return ShardPlanV1{}, errors.New("vectorpartition: planned memberships overflow")
 	}
 	maxRows := int(maxMemberships)
+	if in.LogicalDomains > 0 {
+		domainHomeCap := partitionCap(in.Vectors, in.LogicalDomains, in.Imbalance)
+		if domainHomeCap < 1 {
+			return ShardPlanV1{}, errors.New("vectorpartition: domain home capacity underflow")
+		}
+		domainOverlapCap, err := overlapCapacityForRequestedV1(in.Vectors, requested, in.LogicalDomains, domainHomeCap)
+		if err != nil {
+			return ShardPlanV1{}, err
+		}
+		packsPerDomain := (domainOverlapCap + maxRows - 1) / maxRows
+		if packsPerDomain < 1 || in.LogicalDomains > in.MaxPartitions/packsPerDomain {
+			return ShardPlanV1{}, fmt.Errorf("vectorpartition: impossible domain pack balance rows=%d domains=%d target_hot_bytes=%d", in.Vectors, in.LogicalDomains, in.TargetHotBytes)
+		}
+		partitions := in.LogicalDomains * packsPerDomain
+		if partitions > in.Vectors {
+			return ShardPlanV1{}, fmt.Errorf("vectorpartition: domain pack layout has %d packs for %d vectors", partitions, in.Vectors)
+		}
+		packCapacity := (domainOverlapCap + packsPerDomain - 1) / packsPerDomain
+		packHomeCapacity := packCapacity
+		if packsPerDomain == 1 {
+			packHomeCapacity = domainHomeCap
+		}
+		return ShardPlanV1{
+			Partitions: partitions, LogicalDomains: in.LogicalDomains, PacksPerDomain: packsPerDomain,
+			DomainHomeCapacity: domainHomeCap, DomainOverlapCapacity: domainOverlapCap,
+			HomeCapacity: packHomeCapacity, OverlapCapacity: packCapacity, MaxMembershipsPerPack: maxRows,
+			RequestedOverlap: requested, PlannedMemberships: total, TargetHotBytes: in.TargetHotBytes,
+			TraversalRowBytes: traversal, GraphIdentityOverhead: GraphIdentityOverheadPerRowV1,
+			PackFixedOverhead: PackFixedOverheadBytesV1, MaxPackBytes: in.TargetHotBytes,
+			OverlapRatio: in.OverlapRatio, Imbalance: in.Imbalance, Vectors: in.Vectors, Dimensions: in.Dimensions,
+		}, nil
+	}
 	partitions := (total + maxRows - 1) / maxRows
 	if partitions < 1 {
 		partitions = 1
@@ -185,6 +223,10 @@ func PlanByteBoundedShardsV1(in ShardPlanInputV1) (ShardPlanV1, error) {
 		if overlapCap <= maxRows && homeCap <= maxRows {
 			return ShardPlanV1{
 				Partitions:            partitions,
+				LogicalDomains:        partitions,
+				PacksPerDomain:        1,
+				DomainHomeCapacity:    homeCap,
+				DomainOverlapCapacity: overlapCap,
 				HomeCapacity:          homeCap,
 				OverlapCapacity:       overlapCap,
 				MaxMembershipsPerPack: maxRows,
@@ -212,10 +254,70 @@ func (p ShardPlanV1) input() ShardPlanInputV1 {
 	return ShardPlanInputV1{
 		Vectors:        p.Vectors,
 		Dimensions:     p.Dimensions,
+		LogicalDomains: p.LogicalDomains,
 		OverlapRatio:   p.OverlapRatio,
 		Imbalance:      p.Imbalance,
 		TargetHotBytes: p.TargetHotBytes,
 	}
+}
+
+// PackDomainMembershipsV1 deterministically splits each logical domain into
+// its byte-bounded physical packs. Logical graph assignment and useful-overlap
+// evidence remain unchanged; only the persisted membership destination moves
+// into pack space.
+func PackDomainMembershipsV1(plan ShardPlanV1, logical OverlapResult) (OverlapResult, error) {
+	if plan.Partitions < 1 || plan.LogicalDomains < 1 || plan.PacksPerDomain < 1 ||
+		plan.LogicalDomains > maxPartitions || plan.PacksPerDomain > maxPartitions/plan.LogicalDomains ||
+		plan.Partitions != plan.LogicalDomains*plan.PacksPerDomain || logical.Capacity != plan.DomainOverlapCapacity ||
+		len(logical.Loads) != plan.LogicalDomains || len(logical.Memberships) < plan.Vectors || len(logical.Memberships) > plan.PlannedMemberships {
+		return OverlapResult{}, errors.New("vectorpartition: invalid logical domain packing inputs")
+	}
+	domains := make([][]Membership, plan.LogicalDomains)
+	homes := make([]int, plan.Vectors)
+	for i, membership := range logical.Memberships {
+		if membership.VectorOrdinal < 0 || membership.VectorOrdinal >= plan.Vectors || membership.Partition < 0 || membership.Partition >= plan.LogicalDomains ||
+			(i > 0 && (membership.VectorOrdinal < logical.Memberships[i-1].VectorOrdinal || membership.VectorOrdinal == logical.Memberships[i-1].VectorOrdinal && membership.Partition <= logical.Memberships[i-1].Partition)) {
+			return OverlapResult{}, errors.New("vectorpartition: noncanonical logical domain membership")
+		}
+		if membership.Home {
+			homes[membership.VectorOrdinal]++
+		}
+		domains[membership.Partition] = append(domains[membership.Partition], membership)
+	}
+	for ordinal, count := range homes {
+		if count != 1 {
+			return OverlapResult{}, fmt.Errorf("vectorpartition: vector %d has %d logical homes", ordinal, count)
+		}
+	}
+	out := logical
+	out.Capacity = plan.OverlapCapacity
+	out.Loads = make([]int, plan.Partitions)
+	out.Memberships = make([]Membership, 0, len(logical.Memberships))
+	for domain, memberships := range domains {
+		if len(memberships) != logical.Loads[domain] || len(memberships) > plan.DomainOverlapCapacity {
+			return OverlapResult{}, fmt.Errorf("vectorpartition: domain %d load does not match its bounded membership list", domain)
+		}
+		for i, membership := range memberships {
+			membership.Partition = domain*plan.PacksPerDomain + i%plan.PacksPerDomain
+			out.Loads[membership.Partition]++
+			out.Memberships = append(out.Memberships, membership)
+		}
+	}
+	sort.Slice(out.Memberships, func(i, j int) bool {
+		if out.Memberships[i].VectorOrdinal != out.Memberships[j].VectorOrdinal {
+			return out.Memberships[i].VectorOrdinal < out.Memberships[j].VectorOrdinal
+		}
+		return out.Memberships[i].Partition < out.Memberships[j].Partition
+	})
+	for partition, load := range out.Loads {
+		if load == 0 {
+			return OverlapResult{}, fmt.Errorf("vectorpartition: physical pack %d is empty", partition)
+		}
+	}
+	if _, err := AccountShardPacksV1(plan, out.Memberships); err != nil {
+		return OverlapResult{}, err
+	}
+	return out, nil
 }
 
 func (p ShardPlanV1) request() ShardPlanInputV1 { return p.input() }
@@ -246,7 +348,7 @@ func SelectedOverlapConfigV1(capacity int) OverlapConfig {
 // without exactly one home, and on any pack that exceeds the planned home
 // capacity, membership capacity, or hot-byte budget.
 func AccountShardPacksV1(plan ShardPlanV1, memberships []Membership) ([]ShardPackSummaryV1, error) {
-	if plan.Partitions < 1 || plan.Partitions > maxPartitions || plan.Vectors < 1 || plan.Vectors > maxVectors ||
+	if plan.Partitions < 1 || plan.Partitions > maxPartitions || plan.LogicalDomains < 1 || plan.PacksPerDomain < 1 || plan.Partitions != plan.LogicalDomains*plan.PacksPerDomain || plan.Vectors < 1 || plan.Vectors > maxVectors ||
 		plan.HomeCapacity < 1 || plan.OverlapCapacity < plan.HomeCapacity || plan.MaxMembershipsPerPack < 1 ||
 		plan.TraversalRowBytes < 1 || plan.PackFixedOverhead < 1 || plan.MaxPackBytes != plan.TargetHotBytes || plan.PlannedMemberships < plan.Vectors {
 		return nil, errors.New("vectorpartition: invalid shard pack accounting inputs")

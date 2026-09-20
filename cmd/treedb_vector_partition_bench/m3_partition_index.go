@@ -53,6 +53,7 @@ type m3PartitionIndexReport struct {
 	GoVersion           string                `json:"go_version"`
 	Hardware            string                `json:"hardware_context"`
 	Partitions          int                   `json:"partitions"`
+	LogicalDomains      int                   `json:"logical_domains"`
 	TopK                int                   `json:"top_k"`
 	Rows                []m3PartitionIndexRow `json:"rows"`
 	ReplicationGate     string                `json:"replication_gate"`
@@ -147,6 +148,7 @@ func runM3PartitionIndexStage(cfg config, fixture fixtureManifest, artifact vect
 		GoVersion:           runtime.Version(),
 		Hardware:            runtime.GOARCH + "/" + runtime.GOOS,
 		Partitions:          cfg.partitions,
+		LogicalDomains:      artifact.Config.Partitions,
 		TopK:                cfg.topK,
 		MillionCorpus:       "unavailable: no 1M corpus was supplied",
 		EnablementPolicy:    "disabled_pending_clustered_1m_quality_or_probe_win",
@@ -168,6 +170,12 @@ func runM3PartitionIndexStage(cfg config, fixture fixtureManifest, artifact vect
 		overlap, err := vectorpartition.BuildOverlap(artifact, vectorpartition.OverlapConfig{Ratio: ratio, Capacity: capacity, UsefulOnly: true})
 		if err != nil {
 			return fmt.Errorf("build bounded overlap ratio %.4f: %w", ratio, err)
+		}
+		if cfg.shardPlan != (vectorpartition.ShardPlanV1{}) {
+			overlap, err = vectorpartition.PackDomainMembershipsV1(cfg.shardPlan, overlap)
+			if err != nil {
+				return fmt.Errorf("pack logical domains ratio %.4f: %w", ratio, err)
+			}
 		}
 		if err := m3ValidateShardPackBudgetV1(cfg.shardPlan, overlap); err != nil {
 			return fmt.Errorf("account byte-bounded packs ratio %.4f: %w", ratio, err)
@@ -210,8 +218,8 @@ func m3ValidateShardPlanGovernsArtifactV1(plan vectorpartition.ShardPlanV1, arti
 		return nil
 	}
 	if plan.Vectors != len(artifact.IDs) || plan.Dimensions != artifact.Source.Dimensions ||
-		plan.Partitions != artifact.Config.Partitions || plan.Imbalance != artifact.Config.Imbalance ||
-		plan.HomeCapacity != artifact.Metrics.Cap {
+		plan.LogicalDomains != artifact.Config.Partitions || plan.Imbalance != artifact.Config.Imbalance ||
+		plan.DomainHomeCapacity != artifact.Metrics.Cap {
 		return fmt.Errorf("byte-bounded plan %+v does not govern artifact rows=%d dimensions=%d partitions=%d cap=%d", plan, len(artifact.IDs), artifact.Source.Dimensions, artifact.Config.Partitions, artifact.Metrics.Cap)
 	}
 	for _, ratio := range ratios {
@@ -244,13 +252,12 @@ func m3ValidateShardPackBudgetV1(plan vectorpartition.ShardPlanV1, overlap vecto
 	return nil
 }
 
-// m3OverlapCapacityForPlanV1 declares the per-partition total-membership
-// capacity for one overlap ratio. Under a byte-bounded plan the capacity is the
-// planned one, so packs cannot exceed the advertised hot-byte budget; otherwise
-// it falls back to the operator-declared exact global target.
+// m3OverlapCapacityForPlanV1 declares the logical-domain total-membership
+// capacity used while selecting overlap. A byte-bounded plan subsequently
+// splits that bounded domain membership across its owned physical packs.
 func m3OverlapCapacityForPlanV1(plan vectorpartition.ShardPlanV1, artifact vectorpartition.Artifact, ratio float64) (int, error) {
 	if plan.Partitions != 0 {
-		return plan.OverlapCapacity, nil
+		return plan.DomainOverlapCapacity, nil
 	}
 	return m3OverlapCapacityV1(artifact, ratio)
 }
@@ -474,7 +481,7 @@ func benchmarkM3PartitionIndexRow(cfg config, fixture fixtureManifest, artifactD
 	if err != nil {
 		return m3PartitionIndexRow{}, err
 	}
-	routerPartitions, err := m3RouterPartitions(artifact, overlap, sourceOrdinals, vectors)
+	routerPartitions, err := m3RouterPartitions(cfg.shardPlan, artifact, overlap, sourceOrdinals, vectors)
 	if err != nil {
 		return m3PartitionIndexRow{}, err
 	}
@@ -951,7 +958,7 @@ func m3SourceOrdinalDigestV1(rows []collections.VectorPartitionSourceOrdinalV1) 
 	return fmt.Sprintf("%x", digest[:]), nil
 }
 
-func m3RouterPartitions(artifact vectorpartition.Artifact, overlap vectorpartition.OverlapResult, sourceOrdinals []int, vectors [][]float64) ([]vectorpartition.RouterPartitionV1, error) {
+func m3RouterPartitions(plan vectorpartition.ShardPlanV1, artifact vectorpartition.Artifact, overlap vectorpartition.OverlapResult, sourceOrdinals []int, vectors [][]float64) ([]vectorpartition.RouterPartitionV1, error) {
 	if len(artifact.Assignment) == 0 || len(artifact.Assignment) != len(sourceOrdinals) || len(vectors) != len(sourceOrdinals) ||
 		artifact.Config.Partitions < 1 || len(vectors[0]) < 1 || len(overlap.Memberships) < len(artifact.Assignment) {
 		return nil, errors.New("M3 router source shape mismatch")
@@ -960,7 +967,14 @@ func m3RouterPartitions(artifact vectorpartition.Artifact, overlap vectorpartiti
 	if len(vectors) > math.MaxInt/dimensions {
 		return nil, errors.New("M3 router vector backing size overflow")
 	}
-	counts := make([]int, artifact.Config.Partitions)
+	partitionCount, packsPerDomain := artifact.Config.Partitions, 1
+	if plan != (vectorpartition.ShardPlanV1{}) {
+		partitionCount, packsPerDomain = plan.Partitions, plan.PacksPerDomain
+	}
+	if plan != (vectorpartition.ShardPlanV1{}) && len(overlap.Loads) != partitionCount {
+		return nil, errors.New("M3 router pack count mismatch")
+	}
+	counts := make([]int, partitionCount)
 	seenSourceOrdinals := make([]bool, len(sourceOrdinals))
 	for ordinal, partition := range artifact.Assignment {
 		if partition < 0 || partition >= len(counts) || sourceOrdinals[ordinal] < 0 || sourceOrdinals[ordinal] >= len(vectors) || seenSourceOrdinals[sourceOrdinals[ordinal]] || len(vectors[ordinal]) != dimensions {
@@ -970,7 +984,7 @@ func m3RouterPartitions(artifact vectorpartition.Artifact, overlap vectorpartiti
 	}
 	seenMemberships := make(map[[2]int]struct{}, len(overlap.Memberships))
 	for _, membership := range overlap.Memberships {
-		if membership.VectorOrdinal < 0 || membership.VectorOrdinal >= len(vectors) || membership.Partition < 0 || membership.Partition >= len(counts) || membership.Home != (membership.Partition == artifact.Assignment[membership.VectorOrdinal]) {
+		if membership.VectorOrdinal < 0 || membership.VectorOrdinal >= len(vectors) || membership.Partition < 0 || membership.Partition >= len(counts) || membership.Home != (membership.Partition/packsPerDomain == artifact.Assignment[membership.VectorOrdinal]) {
 			return nil, errors.New("M3 final router membership is invalid")
 		}
 		key := [2]int{membership.VectorOrdinal, membership.Partition}
@@ -1034,19 +1048,27 @@ func m3BuildingManifest(meta collections.CollectionMeta, source collections.Vect
 		SourceSchemaHash:      source.SchemaHash,
 		SourceRowCount:        source.RowCount,
 		Generation:            generation,
-		PartitionCount:        uint32(artifact.Config.Partitions),
+		PartitionCount:        uint32(len(overlap.Loads)),
+		DomainCount:           uint32(artifact.Config.Partitions),
 		BalancePolicy:         policy,
 	}
-	membershipOrdinals := make([][]int, artifact.Config.Partitions)
-	for partition := 0; partition < artifact.Config.Partitions; partition++ {
-		manifest.Placements = append(manifest.Placements, collections.VectorPartitionPlacementV1{PartitionID: uint32(partition), GroupID: fmt.Sprintf("benchmark-group-%06d", partition)})
+	if manifest.PartitionCount%manifest.DomainCount != 0 {
+		return collections.VectorPartitionManifestV1{}, nil, errors.New("M3 physical packs do not divide logical domains")
 	}
-	for ordinal, partition := range artifact.Assignment {
-		manifest.Memberships = append(manifest.Memberships, collections.VectorPartitionMembershipV1{VectorOrdinal: uint64(sourceOrdinals[ordinal]), PartitionID: uint32(partition)})
+	packsPerDomain := int(manifest.PartitionCount / manifest.DomainCount)
+	membershipOrdinals := make([][]int, manifest.PartitionCount)
+	for partition := 0; partition < int(manifest.PartitionCount); partition++ {
+		manifest.Placements = append(manifest.Placements, collections.VectorPartitionPlacementV1{PartitionID: uint32(partition), GroupID: fmt.Sprintf("benchmark-group-%06d", partition)})
+		manifest.DomainPacks = append(manifest.DomainPacks, collections.VectorPartitionDomainPackV1{DomainID: uint32(partition / packsPerDomain), PackID: uint32(partition)})
 	}
 	for _, membership := range overlap.Memberships {
+		if membership.Partition/packsPerDomain != artifact.Assignment[membership.VectorOrdinal] && membership.Home {
+			return collections.VectorPartitionManifestV1{}, nil, errors.New("M3 packed home escaped its logical domain")
+		}
 		membershipOrdinals[membership.Partition] = append(membershipOrdinals[membership.Partition], membership.VectorOrdinal)
-		if !membership.Home {
+		if membership.Home {
+			manifest.Memberships = append(manifest.Memberships, collections.VectorPartitionMembershipV1{VectorOrdinal: uint64(sourceOrdinals[membership.VectorOrdinal]), PartitionID: uint32(membership.Partition)})
+		} else {
 			manifest.OverlapMemberships = append(manifest.OverlapMemberships, collections.VectorPartitionMembershipV1{VectorOrdinal: uint64(sourceOrdinals[membership.VectorOrdinal]), PartitionID: uint32(membership.Partition)})
 		}
 	}
@@ -1159,10 +1181,15 @@ func m3ReplicationGate(rows []m3PartitionIndexRow) string {
 }
 
 func validateM3PartitionIndexReport(report m3PartitionIndexReport) error {
-	if report.SchemaVersion != m3ReportSchemaVersion || report.ResultKind != "m3_native_partition_hnsw_evidence" || len(report.Rows) == 0 || !m8SHA256V1(report.ArtifactSHA256) || !m8SHA256V1(report.GraphArtifactSHA256) || !validSHA(report.BaseSHA) || !validSHA(report.HeadSHA) {
+	if report.SchemaVersion != m3ReportSchemaVersion || report.ResultKind != "m3_native_partition_hnsw_evidence" || len(report.Rows) == 0 ||
+		report.Partitions < 1 || report.LogicalDomains < 1 || report.LogicalDomains > report.Partitions || report.Partitions%report.LogicalDomains != 0 ||
+		!m8SHA256V1(report.ArtifactSHA256) || !m8SHA256V1(report.GraphArtifactSHA256) || !validSHA(report.BaseSHA) || !validSHA(report.HeadSHA) {
 		return errors.New("invalid M3 report identity")
 	}
 	for _, row := range report.Rows {
+		if len(row.PartitionLoads) != report.Partitions {
+			return fmt.Errorf("invalid M3 physical pack loads: %+v", row.PartitionLoads)
+		}
 		expectedStaleAssets := uint64(0)
 		if report.OfflineGraphControl {
 			expectedStaleAssets = uint64(len(row.PartitionLoads))
@@ -1197,14 +1224,14 @@ func validateM3PartitionIndexReport(report m3PartitionIndexReport) error {
 		if row.Budget != wantBudget || row.Used > wantBudget || row.OverlapRequested != wantBudget || row.OverlapRealized != row.Used || row.Budget < 0 || row.Used < 0 || row.Unspent != row.Budget-row.Used || row.Capacity < 1 || row.OverlapRejected != row.Unspent || row.OverlapUseful < 0 || row.OverlapFiller != 0 || row.OverlapUseful != row.OverlapRealized || row.OverlapUnusedCapacity != wantUnusedCapacity || row.CutReductionPerUsefulReplica != wantCutReductionPerUseful || row.ReplicationFactor < 1 || row.EdgeCutAfter > row.EdgeCutBefore || row.BuildWallNanos <= 0 || row.SourcePhysicalBytes <= 0 || row.PeakDerivedTemporaryBytes < row.FinalDerivedPhysicalBytes || row.FinalDerivedPhysicalBytes <= 0 || row.PackBytes == 0 || row.PartitionHNSWM < 2 || row.FinalDerivedPhysicalBytes < int64(row.PackBytes) || row.PhysicalBytesPerSourceVector <= 0 || row.SearcherOpenWallNanos <= 0 || row.PackOpenNanos == 0 || row.LocalSearches <= 0 || row.WarmNSPerOp <= 0 || row.WarmQPS <= 0 || row.CandidatesPerOp <= 0 || row.ExactLocalRecallAtK < 0 || row.ExactLocalRecallAtK > 1 || row.ManifestDigest == "" || row.SourceRows != uint64(report.Dataset.Vectors) || row.SearchRoute != collections.VectorPartitionSearchRouteHNSWSearchPackV1 || row.MissingAssets != 0 || row.CorruptAssets != 0 || row.StaleAssets != expectedStaleAssets {
 			return fmt.Errorf("invalid M3 evidence row: %+v", row)
 		}
-		if len(row.OverlapReplicas) != row.OverlapRealized || len(row.OverlapDestinationDiversity) != len(row.PartitionLoads) {
+		if len(row.OverlapReplicas) != row.OverlapRealized || len(row.OverlapDestinationDiversity) != report.LogicalDomains {
 			return fmt.Errorf("invalid M3 overlap replica evidence: %+v", row)
 		}
 		utility, useful, filler := 0, 0, 0
 		seenReplica := make(map[[2]uint64]struct{}, len(row.OverlapReplicas))
 		for _, replica := range row.OverlapReplicas {
 			key := [2]uint64{replica.SourceOrdinal, uint64(replica.Destination)}
-			if replica.Destination < 0 || replica.Destination >= len(row.PartitionLoads) || replica.Policy == "" || replica.Gain < 0 || (replica.Class != string(vectorpartition.ReplicaUtilityPositiveGainV1) && replica.Class != string(vectorpartition.ReplicaUtilityZeroUtilityV1)) {
+			if replica.Destination < 0 || replica.Destination >= report.LogicalDomains || replica.Policy == "" || replica.Gain < 0 || (replica.Class != string(vectorpartition.ReplicaUtilityPositiveGainV1) && replica.Class != string(vectorpartition.ReplicaUtilityZeroUtilityV1)) {
 				return fmt.Errorf("invalid M3 overlap replica: %+v", replica)
 			}
 			if _, duplicate := seenReplica[key]; duplicate {

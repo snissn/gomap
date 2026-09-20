@@ -466,6 +466,8 @@ func TestM3VariantDescriptorBindsReadyManifestV1(t *testing.T) {
 		RouterAsset:           collections.VectorPartitionAssetV1{Checksum: d.RouterAssetChecksum},
 		SourceGeneration:      d.SourceGeneration, SourceChecksum: d.SourceChecksum, SourceSchemaHash: d.SourceSchemaHash, SourceRowCount: d.SourceRows,
 		Generation: d.PartitionGeneration, RouterGeneration: d.RouterGeneration, PartitionCount: d.Partitions, BalancePolicy: d.OverlapPolicy,
+		DomainCount:        4,
+		DomainPacks:        []collections.VectorPartitionDomainPackV1{{DomainID: 0, PackID: 0}, {DomainID: 1, PackID: 1}, {DomainID: 2, PackID: 2}, {DomainID: 3, PackID: 3}},
 		Memberships:        []collections.VectorPartitionMembershipV1{{VectorOrdinal: 0, PartitionID: 0}, {VectorOrdinal: 1, PartitionID: 0}, {VectorOrdinal: 2, PartitionID: 1}, {VectorOrdinal: 3, PartitionID: 1}, {VectorOrdinal: 4, PartitionID: 2}, {VectorOrdinal: 5, PartitionID: 2}, {VectorOrdinal: 6, PartitionID: 3}, {VectorOrdinal: 7, PartitionID: 3}},
 		Representatives:    []collections.VectorPartitionRepresentativeV2{{VectorOrdinal: 0, PartitionID: 0, NodeID: 1}, {VectorOrdinal: 2, PartitionID: 1, NodeID: 1}, {VectorOrdinal: 4, PartitionID: 2, NodeID: 1}, {VectorOrdinal: 6, PartitionID: 3, NodeID: 1}},
 		OverlapMemberships: []collections.VectorPartitionMembershipV1{{VectorOrdinal: 7, PartitionID: 0}},

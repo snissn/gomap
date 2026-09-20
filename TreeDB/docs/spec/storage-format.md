@@ -3049,8 +3049,8 @@ that directory to reopen through the benchmark's retained-variant path.
 - `vector_partition_variant_v1.json` — the retained variant descriptor,
   `m3_persistent_variant_descriptor_v6`, capped at 1 MiB. Carries the build
   identity, source/artifact/router identities, overlap accounting, partition
-  loads, and (for byte-bounded builds) the shard plan, the SHA-256 of the
-  generation record, and that record's byte length.
+  loads, and (for byte-bounded builds) the logical-domain/physical-pack shard
+  plan, the SHA-256 of the generation record, and that record's byte length.
 - `vector_partition_shard_generation_v1.json` — the shard generation record,
   `treedb_vector_partition_shard_generation_v1` schema 1, capped at 256 MiB.
   Carries the byte-bounded plan, the overlap config, the full realized
@@ -3075,6 +3075,14 @@ conservative byte envelope. Construction checks this after encoding and before
 manifest/router publication; retained M8 admission checks it again against the
 immutable manifest and shard-generation record. Missing, duplicate, unplanned,
 zero-byte, or over-envelope packs fail closed.
+
+An explicit logical-domain plan stores `logical_domains`, `packs_per_domain`,
+domain capacities, and physical pack capacities. Membership selection remains
+in graph-domain space; the retained generation record stores the deterministic
+physical destinations. The ready manifest must carry the same physical
+`PartitionCount`, logical `DomainCount`, and a complete contiguous
+`DomainPacks` mapping. The router uses that mapping to merge all owned packs
+back into one logical-domain input.
 
 Unknown schema versions fail closed. TreeDB is pre-alpha: retained benchmark
 databases from earlier descriptor versions are rebuilt, not migrated.

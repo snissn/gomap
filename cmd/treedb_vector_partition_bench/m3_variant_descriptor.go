@@ -305,6 +305,10 @@ func validateM3VariantDescriptorV1(d m3VariantDescriptorV1) error {
 		return errors.New("M3 variant overlap target exceeds host integer range")
 	}
 	wantBudget := int(wantBudgetFloat)
+	logicalDomains := int(d.Partitions)
+	if d.ShardPlan != (vectorpartition.ShardPlanV1{}) {
+		logicalDomains = d.ShardPlan.LogicalDomains
+	}
 	wantBuildIdentity, err := m3VariantBuildIdentityDigestV1(d)
 	if err != nil {
 		return err
@@ -322,7 +326,7 @@ func validateM3VariantDescriptorV1(d m3VariantDescriptorV1) error {
 		!m8SHA256V1(d.GraphBuildSHA256) || !m8SHA256V1(d.BuildIdentityDigest) || d.BuildIdentityDigest != wantBuildIdentity ||
 		!m8SHA256V1(d.Source.Checksum) || !m8SHA256V1(d.SourceOrdinalDigest) || d.DatabaseDirectory == "" || !m8SHA256V1(d.ManifestIntegrity) || !m8SHA256V1(d.ReadySetDigest) ||
 		!m8SHA256V1(d.RouterAssetChecksum) || !m8SHA256V1(d.RouterModelDigest) || d.SourceGeneration == 0 || d.SourceRows == 0 ||
-		d.PartitionGeneration == 0 || d.RouterGeneration != d.PartitionGeneration || !m8SHA256V1(d.IndexDefinitionDigest) || d.PartitionHNSWM < 2 || d.PartitionHNSWM > maxPartitionLocalHNSWM || m3DescriptorPartitionHNSWEfCV1(d) < d.PartitionHNSWM || m3DescriptorPartitionHNSWEfCV1(d) > maxPartitionHNSWEfC || d.PartitionConfig.Partitions != int(d.Partitions) || d.PartitionConfig.MaxDistanceWork != d.PartitionMaxDistanceWork || d.PartitionMaxDistanceWork < 1 || d.RouterMaxScalarWork < 1 || d.M3MaxBenchmarkVisits < 1 || d.RouterRepresentatives == 0 || d.RouterRepresentatives > d.SourceRows || d.RouterConfig.MaxScalarWork != d.RouterMaxScalarWork || d.RouterRepresentatives > uint64(d.RouterConfig.MaxRepresentatives) || d.OverlapRequested != wantBudget || d.OverlapRealized > wantBudget || d.OverlapRequested < 0 || d.OverlapRealized < 0 || d.OverlapRejected < 0 || d.OverlapRequested != d.OverlapRealized+d.OverlapRejected || d.OverlapUseful < 0 || d.OverlapFiller != 0 || d.OverlapUseful != d.OverlapRealized || d.OverlapMemberships != d.OverlapRealized || d.EdgeCutBefore < d.EdgeCutAfter || d.EdgeCutAfter < 0 || d.OverlapUnusedCapacity != int(totalCapacity-usedCapacity) ||
+		d.PartitionGeneration == 0 || d.RouterGeneration != d.PartitionGeneration || !m8SHA256V1(d.IndexDefinitionDigest) || d.PartitionHNSWM < 2 || d.PartitionHNSWM > maxPartitionLocalHNSWM || m3DescriptorPartitionHNSWEfCV1(d) < d.PartitionHNSWM || m3DescriptorPartitionHNSWEfCV1(d) > maxPartitionHNSWEfC || d.PartitionConfig.Partitions != logicalDomains || d.PartitionConfig.MaxDistanceWork != d.PartitionMaxDistanceWork || d.PartitionMaxDistanceWork < 1 || d.RouterMaxScalarWork < 1 || d.M3MaxBenchmarkVisits < 1 || d.RouterRepresentatives == 0 || d.RouterRepresentatives > d.SourceRows || d.RouterConfig.MaxScalarWork != d.RouterMaxScalarWork || d.RouterRepresentatives > uint64(d.RouterConfig.MaxRepresentatives) || d.OverlapRequested != wantBudget || d.OverlapRealized > wantBudget || d.OverlapRequested < 0 || d.OverlapRealized < 0 || d.OverlapRejected < 0 || d.OverlapRequested != d.OverlapRealized+d.OverlapRejected || d.OverlapUseful < 0 || d.OverlapFiller != 0 || d.OverlapUseful != d.OverlapRealized || d.OverlapMemberships != d.OverlapRealized || d.EdgeCutBefore < d.EdgeCutAfter || d.EdgeCutAfter < 0 || d.OverlapUnusedCapacity != int(totalCapacity-usedCapacity) ||
 		len(d.PartitionLoads) != int(d.Partitions) || d.PersistentAssetBytes == 0 {
 		return errors.New("malformed M3 variant descriptor")
 	}
@@ -378,7 +382,7 @@ func m3ValidateDescriptorShardPlanV1(d m3VariantDescriptorV1) error {
 	}
 	recomputed, err := vectorpartition.PlanByteBoundedShardsV1(vectorpartition.ShardPlanInputV1{
 		Vectors: plan.Vectors, Dimensions: plan.Dimensions, OverlapRatio: plan.OverlapRatio,
-		Imbalance: plan.Imbalance, TargetHotBytes: plan.TargetHotBytes,
+		LogicalDomains: plan.LogicalDomains, Imbalance: plan.Imbalance, TargetHotBytes: plan.TargetHotBytes,
 	})
 	if err != nil {
 		return fmt.Errorf("M3 variant shard plan is not reproducible: %w", err)
@@ -395,6 +399,7 @@ func m3ValidateDescriptorShardPlanV1(d m3VariantDescriptorV1) error {
 	}
 	if uint64(plan.Vectors) != d.SourceRows || plan.Dimensions != d.Source.Dimensions ||
 		plan.Partitions != int(d.Partitions) || plan.OverlapCapacity != d.Capacity ||
+		plan.LogicalDomains != d.PartitionConfig.Partitions ||
 		plan.Imbalance != d.PartitionConfig.Imbalance || plan.OverlapRatio < d.OverlapRatio {
 		return errors.New("M3 variant shard plan does not bind the realized build")
 	}
@@ -434,6 +439,18 @@ func m3DescriptorMatchesManifestV1(d m3VariantDescriptorV1, fixture fixtureManif
 	}
 	if !slices.Equal(loads, d.PartitionLoads) {
 		return errors.New("M3 variant descriptor partition loads do not match the retained manifest")
+	}
+	logicalDomains, packsPerDomain := int(d.Partitions), 1
+	if d.ShardPlan != (vectorpartition.ShardPlanV1{}) {
+		logicalDomains, packsPerDomain = d.ShardPlan.LogicalDomains, d.ShardPlan.PacksPerDomain
+	}
+	if manifest.DomainCount != uint32(logicalDomains) || len(manifest.DomainPacks) != int(d.Partitions) {
+		return errors.New("M3 variant descriptor logical-domain pack layout is incomplete")
+	}
+	for pack, mapping := range manifest.DomainPacks {
+		if mapping.PackID != uint32(pack) || mapping.DomainID != uint32(pack/packsPerDomain) {
+			return errors.New("M3 variant descriptor logical-domain pack layout is not canonical")
+		}
 	}
 	var persistentAssetBytes uint64
 	for _, asset := range manifest.Assets {

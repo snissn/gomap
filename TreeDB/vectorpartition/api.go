@@ -139,6 +139,9 @@ func SelectedOverlapConfigV1(capacity int) OverlapConfig {
 func AccountShardPacksV1(plan ShardPlanV1, memberships []Membership) ([]ShardPackSummaryV1, error) {
 	return internal.AccountShardPacksV1(plan, memberships)
 }
+func PackDomainMembershipsV1(plan ShardPlanV1, logical OverlapResult) (OverlapResult, error) {
+	return internal.PackDomainMembershipsV1(plan, logical)
+}
 func NewShardGenerationDescriptorV1(plan ShardPlanV1, cfg OverlapConfig, overlap OverlapResult) (ShardGenerationDescriptorV1, error) {
 	return internal.NewShardGenerationDescriptorV1(plan, cfg, overlap)
 }
