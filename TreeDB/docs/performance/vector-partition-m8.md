@@ -1,5 +1,67 @@
 # Vector partition M8 production multi-group closeout
 
+## Frozen real-embedding fixtures (#4753)
+
+`import-fixture` admits existing FP32LE row-major data into the same M3/M8
+build, truth, serving, and retained-replay paths. It does not change placement,
+R/kRt routing, the accepted Vamana profile, or any qualification gate. The
+procedural `embedding_mixture` fixture is still synthetic; importing real data
+does not by itself establish real-data performance or scaling.
+
+The admitted source on LAN host `mikers@192.168.0.111` is the retained
+`YoKONCy/Cohere-1M-wikipedia-768d` mirror, revision
+`de34a7af7f436d7aceb4fecdda01490e552efdde`. Its source receipt and raw files
+are under `/home/mikers/gomap-q5-evidence/precollection-20260915/`.
+It is **not proven identical** to the unavailable historical VDBBench export.
+Although the mirror README says normalized, these raw files are not unit norm.
+The importer explicitly L2-normalizes in binary64 with FMA, rounds to FP32,
+and uses those same bytes for building and canonical truth. No supplied
+benchmark truth or IDs are reused; selected documents have stable ordinal IDs
+`doc-%06d`, and duplicate corpus vectors retain separate IDs.
+
+Frozen initial slice: train rows `[0,100000)`, test rows `[200,712)`, 768
+dimensions. The query slice avoids the documented earlier first 200 queries;
+this is not a claim that it has never been inspected by any other experiment.
+Run only after fresh host/resource admission; **no AWS/cloud execution**.
+
+```sh
+./treedb_vector_partition_bench import-fixture \
+  -train /home/mikers/gomap-q5-evidence/precollection-20260915/source/cohere_train.f32 \
+  -test /home/mikers/gomap-q5-evidence/precollection-20260915/source/cohere_test.f32 \
+  -train-sha256 d4bd7224f525ff1722ef4a77d0437a01c5f2c624857ead009f0a9c0e8e167961 \
+  -test-sha256 03139cf22783b7bac9278264cfc515682a268ca14162e0c850618eebfb811ab3 \
+  -source YoKONCy/Cohere-1M-wikipedia-768d \
+  -source-revision de34a7af7f436d7aceb4fecdda01490e552efdde \
+  -fixture cohere-wikipedia-100k-768-query200-711 \
+  -train-rows 1000000 -test-rows 1000 -train-offset 0 -test-offset 200 \
+  -vectors 100000 -queries 512 -dimensions 768 -seed 4017 \
+  -max-checksum-visits 51200000 -out /path/to/fresh/fixture
+
+./treedb_vector_partition_bench generate-truth-cache \
+  -dataset /path/to/fresh/fixture -out /path/to/fresh/truth \
+  -seed 4017 -top-k 10 -max-exact-truth-visits 102400000
+```
+
+Import streams and hashes each entire pinned source file but retains only the
+selected rows. Shape and byte/work caps precede allocation. It refuses zero or
+non-finite selected vectors, source hash/length mismatches, symlink files,
+and exact cross-split duplicates after normalization/FP32 rounding. Corpus
+duplicates are allowed. This is an exact-vector leakage check, not semantic
+deduplication or proof of independent sampling.
+
+The portable fixture contains only `fixture_manifest.json`, `documents.f32`,
+and `queries.f32`. The manifest records source hashes/revision/slices,
+normalization, output hashes/sizes, and the existing vector/query/truth
+checksum. Runtime loading verifies the selected files without renormalizing.
+External truth generation admits both the existing binary64 checksum pass and
+the canonical FP32 truth pass; its visit cap covers both. External truth-cache
+identity additionally binds the file hashes and source selection, preventing
+query-only consumers from reusing stale truth after a manifest/file change.
+The manifest is published last; a failed import is not a valid fixture and
+existing outputs are never overwritten. Historical fixed-fixture calibration
+and final-qualification commands keep their existing eligibility restrictions.
+Use the ordinary retained M3/M8 paths for this new, separately declared packet.
+
 ## R all-level router evidence boundary (#4773)
 
 The retained #4773 producer used report schema 6/result kind

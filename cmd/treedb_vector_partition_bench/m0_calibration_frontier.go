@@ -156,6 +156,9 @@ func runM0CalibrationFrontierV1(args []string, stdout io.Writer) error {
 	if e := validateFixture(fixture); e != nil {
 		return e
 	}
+	if !supportedFixtureGeneratorV1(fixture.Generator) {
+		return errors.New("historical M0 calibration requires a procedural fixture")
+	}
 	split, splitSHA, e := loadLocalHNSWQuerySplitV1(calibration)
 	if e != nil {
 		return e

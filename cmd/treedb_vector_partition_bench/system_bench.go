@@ -190,7 +190,10 @@ func runVectorPartitionSystemBenchWithCellV1(args []string, stdout io.Writer, ru
 	if err != nil {
 		return err
 	}
-	_, queries64 := fixtureData(fixture)
+	queries64, err := loadFixtureQueriesV1(dataset, fixture)
+	if err != nil {
+		return err
+	}
 	queries := make([][]float32, len(queries64))
 	for i := range queries64 {
 		queries[i] = make([]float32, len(queries64[i]))

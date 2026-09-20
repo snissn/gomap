@@ -603,7 +603,11 @@ func m8QualificationRetainedVariantV1(root string, report m8ProductionReportV1) 
 		return err
 	}
 	defer func() { err = errors.Join(err, assets.Close()) }()
-	if err := m8ValidateExistingAssetsFixtureV1(assets.collection, assets.status.Manifest, report.Dataset, fixtureVectors(report.Dataset)); err != nil {
+	vectors, err := loadFixtureVectorsV1(datasetDirectory, report.Dataset)
+	if err != nil {
+		return err
+	}
+	if err := m8ValidateExistingAssetsFixtureV1(assets.collection, assets.status.Manifest, report.Dataset, vectors); err != nil {
 		return fmt.Errorf("verify retained M3 source rows: %w", err)
 	}
 	if err := m8BindRetainedM3DescriptorV1(assets, report.Dataset); err != nil {
@@ -650,7 +654,14 @@ func m8QualificationRetainedAttributionV1(root string, report m8ProductionReport
 		return err
 	}
 	defer func() { err = errors.Join(err, harness.Close()) }()
-	_, queries := fixtureData(report.Dataset)
+	datasetDirectory, err := m8QualificationContainedPathV1(root, report.DatasetDirectory, "fixture dataset")
+	if err != nil {
+		return err
+	}
+	queries, err := loadFixtureQueriesV1(datasetDirectory, report.Dataset)
+	if err != nil {
+		return err
+	}
 	if len(queries) != len(truth) {
 		return errors.New("retained attribution query shape mismatch")
 	}

@@ -683,7 +683,10 @@ func openVectorPartitionSystemNodeV1(ctx context.Context, config vectorPartition
 	if err != nil {
 		return nil, err
 	}
-	vectors, _ := fixtureData(fixture)
+	vectors, err := loadFixtureVectorsV1(config.DatasetDirectory, fixture)
+	if err != nil {
+		return nil, err
+	}
 	capabilityKey, err := readVectorPartitionSystemCapabilityKeyV1(config.CapabilityKeyPath)
 	if err != nil {
 		return nil, err
