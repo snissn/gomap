@@ -313,10 +313,14 @@ func validateM3VariantDescriptorV1(d m3VariantDescriptorV1) error {
 	if err != nil {
 		return err
 	}
-	if d.Capacity < 1 || d.Partitions < 1 || uint64(d.Capacity) > math.MaxUint64/uint64(d.Partitions) {
+	if d.Capacity < 1 || d.Partitions < 1 {
 		return errors.New("malformed M3 variant descriptor")
 	}
-	totalCapacity := uint64(d.Capacity) * uint64(d.Partitions)
+	totalCapacityInt, err := m3TotalMembershipCapacityV1(d.Capacity, int(d.Partitions), d.ShardPlan)
+	if err != nil {
+		return errors.New("malformed M3 variant descriptor")
+	}
+	totalCapacity := uint64(totalCapacityInt)
 	usedCapacity := d.SourceRows + uint64(d.OverlapRealized)
 	if usedCapacity < d.SourceRows || usedCapacity > totalCapacity || totalCapacity-usedCapacity > uint64(math.MaxInt) {
 		return errors.New("malformed M3 variant descriptor")
@@ -406,6 +410,15 @@ func m3ValidateDescriptorShardPlanV1(d m3VariantDescriptorV1) error {
 	for partition, load := range d.PartitionLoads {
 		if load > plan.MaxMembershipsPerPack || uint64(load) > (plan.TargetHotBytes-uint64(plan.PackFixedOverhead))/uint64(rowBytes) {
 			return fmt.Errorf("M3 variant pack %d load=%d exceeds the byte-bounded plan", partition, load)
+		}
+	}
+	for domain := 0; domain < plan.LogicalDomains; domain++ {
+		var domainLoad int
+		for _, load := range d.PartitionLoads[domain*plan.PacksPerDomain : (domain+1)*plan.PacksPerDomain] {
+			domainLoad += load
+		}
+		if domainLoad > plan.DomainOverlapCapacity {
+			return fmt.Errorf("M3 variant domain %d load=%d exceeds the logical-domain plan", domain, domainLoad)
 		}
 	}
 	return nil

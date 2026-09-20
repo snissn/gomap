@@ -2306,7 +2306,11 @@ func testM8QualificationRetainedDescriptorWithShardPlanAndPartitionerV1(t *testi
 	descriptor.SourceGeneration, descriptor.SourceChecksum, descriptor.SourceSchemaHash, descriptor.SourceRows = routerStatus.Manifest.SourceGeneration, routerStatus.Manifest.SourceChecksum, routerStatus.Manifest.SourceSchemaHash, routerStatus.Manifest.SourceRowCount
 	descriptor.PartitionGeneration, descriptor.RouterGeneration, descriptor.Partitions = routerStatus.Manifest.Generation, routerStatus.Manifest.RouterGeneration, routerStatus.Manifest.PartitionCount
 	descriptor.OverlapPolicy, descriptor.OverlapRealized, descriptor.OverlapRejected = routerStatus.Manifest.BalancePolicy, overlap.Used, overlap.Unspent
-	descriptor.OverlapUnusedCapacity = descriptor.Capacity*int(descriptor.Partitions) - int(descriptor.SourceRows) - descriptor.OverlapRealized
+	totalCapacity, err := m3TotalMembershipCapacityV1(descriptor.Capacity, int(descriptor.Partitions), descriptor.ShardPlan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	descriptor.OverlapUnusedCapacity = int(totalCapacity) - int(descriptor.SourceRows) - descriptor.OverlapRealized
 	descriptor.PartitionLoads = append([]int(nil), overlap.Loads...)
 	descriptor.OverlapMemberships, descriptor.RouterRepresentatives, descriptor.PersistentAssetBytes = len(routerStatus.Manifest.OverlapMemberships), uint64(len(routerStatus.Manifest.Representatives)), persistent
 	if err := validateM3VariantDescriptorV1(descriptor); err != nil {

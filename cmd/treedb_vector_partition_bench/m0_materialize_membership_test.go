@@ -340,14 +340,14 @@ func TestM0MaterializeByteBoundedMembershipReopensDisposableClone(t *testing.T) 
 	}
 	testM0MaterializeBuildIdentityV1(t)
 	root := t.TempDir()
-	fixture := fixtureManifest{SchemaVersion: 1, Fixture: "m0-byte-bounded-clone", Generator: fixtureGenerator, Arithmetic: fixtureArithmetic, Vectors: 40, Queries: 1, Dimensions: 4, Metric: "cosine", Seed: 17, Checksum: strings.Repeat("a", 64)}
+	fixture := fixtureManifest{SchemaVersion: 1, Fixture: "m0-byte-bounded-clone", Generator: fixtureGenerator, Arithmetic: fixtureArithmetic, Vectors: 100, Queries: 1, Dimensions: 4, Metric: "cosine", Seed: 17, Checksum: strings.Repeat("a", 64)}
 	sourceDB := filepath.Join(root, "source")
 	planConfig := vectorpartition.DefaultConfig()
 	plan, err := vectorpartition.PlanByteBoundedShardsV1(vectorpartition.ShardPlanInputV1{
 		Vectors: fixture.Vectors, Dimensions: fixture.Dimensions, LogicalDomains: 16, OverlapRatio: m0OverlapRatioV1, Imbalance: planConfig.Imbalance,
-		TargetHotBytes: uint64(vectorpartition.PackFixedOverheadBytesV1 + 2*(alignedRowBytesForTest(fixture.Dimensions)+vectorpartition.GraphIdentityOverheadPerRowV1)),
+		TargetHotBytes: uint64(vectorpartition.PackFixedOverheadBytesV1 + 4*(alignedRowBytesForTest(fixture.Dimensions)+vectorpartition.GraphIdentityOverheadPerRowV1)),
 	})
-	if err != nil || plan.LogicalDomains != 16 || plan.Partitions != 32 || plan.PacksPerDomain != 2 {
+	if err != nil || plan.LogicalDomains != 16 || plan.Partitions != 32 || plan.PacksPerDomain != 2 || plan.DomainHomeCapacity != 7 || plan.DomainOverlapCapacity != 8 || plan.OverlapCapacity != 4 {
 		t.Fatalf("byte-bounded plan=%+v err=%v", plan, err)
 	}
 	sourceDescriptor := testM8QualificationRetainedDescriptorWithShardPlanAndPartitionerV1(t, sourceDB, strings.Repeat("b", 40), fixture, "graph-overlap-020-v1", partitionAssignmentGraphV1, m0OverlapRatioV1, plan, m0BalancedPartitionerV1{})
@@ -368,7 +368,7 @@ func TestM0MaterializeByteBoundedMembershipReopensDisposableClone(t *testing.T) 
 		t.Fatal(err)
 	}
 	capacity, err := m3OverlapCapacityV1(artifact, m0OverlapRatioV1)
-	if err != nil || plan.DomainOverlapCapacity != capacity || sourceDescriptor.ShardPlan != plan {
+	if err != nil || artifact.Metrics.Cap >= capacity || plan.DomainOverlapCapacity != capacity || sourceDescriptor.ShardPlan != plan {
 		t.Fatalf("byte-bounded source plan=%+v descriptor=%+v capacity=%d err=%v", plan, sourceDescriptor, capacity, err)
 	}
 	if err = m3VerifyRetainedShardGenerationV1(sourceDB, sourceDescriptor); err != nil {

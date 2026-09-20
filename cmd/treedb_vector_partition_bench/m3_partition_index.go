@@ -70,6 +70,7 @@ type m3PartitionIndexRow struct {
 	Used                         int                `json:"used"`
 	Unspent                      int                `json:"unspent"`
 	Capacity                     int                `json:"capacity"`
+	DomainCapacity               int                `json:"domain_capacity"`
 	OverlapRequested             int                `json:"overlap_requested"`
 	OverlapRealized              int                `json:"overlap_realized"`
 	OverlapRejected              int                `json:"overlap_rejected"`
@@ -260,6 +261,20 @@ func m3OverlapCapacityForPlanV1(plan vectorpartition.ShardPlanV1, artifact vecto
 		return plan.DomainOverlapCapacity, nil
 	}
 	return m3OverlapCapacityV1(artifact, ratio)
+}
+
+// m3TotalMembershipCapacityV1 separates the logical-domain envelope used to
+// select overlap from the per-pack envelope used after a byte-bounded split.
+// The split's ceiling slack is not additional logical overlap capacity.
+func m3TotalMembershipCapacityV1(packCapacity, physicalPartitions int, plan vectorpartition.ShardPlanV1) (int64, error) {
+	domainCapacity, logicalDomains := packCapacity, physicalPartitions
+	if plan != (vectorpartition.ShardPlanV1{}) {
+		domainCapacity, logicalDomains = plan.DomainOverlapCapacity, plan.LogicalDomains
+	}
+	if packCapacity < 1 || physicalPartitions < 1 || domainCapacity < 1 || logicalDomains < 1 {
+		return 0, errors.New("M3 overlap capacity accounting bounds")
+	}
+	return memoryMul(int64(domainCapacity), int64(logicalDomains))
 }
 
 // m3OverlapCapacityV1 keeps the immutable M2 home assignment and its
@@ -728,7 +743,7 @@ func benchmarkM3PartitionIndexRow(cfg config, fixture fixtureManifest, artifactD
 	if !cleanup {
 		persistentDBDir = dir
 	}
-	totalCapacity, err := memoryMul(int64(overlap.Capacity), int64(len(overlap.Loads)))
+	totalCapacity, err := m3TotalMembershipCapacityV1(overlap.Capacity, len(overlap.Loads), cfg.shardPlan)
 	if err != nil || totalCapacity < int64(len(overlap.Memberships)) || totalCapacity > int64(math.MaxInt) {
 		return m3PartitionIndexRow{}, errors.New("M3 overlap capacity accounting overflow")
 	}
@@ -742,6 +757,7 @@ func benchmarkM3PartitionIndexRow(cfg config, fixture fixtureManifest, artifactD
 		Used:                         overlap.Used,
 		Unspent:                      overlap.Unspent,
 		Capacity:                     overlap.Capacity,
+		DomainCapacity:               overlap.Capacity,
 		OverlapRequested:             overlap.Budget,
 		OverlapRealized:              overlap.Used,
 		OverlapRejected:              overlap.Unspent,
@@ -790,6 +806,9 @@ func benchmarkM3PartitionIndexRow(cfg config, fixture fixtureManifest, artifactD
 		CorruptAssets:                lifecycle.CorruptAssets,
 		StaleAssets:                  lifecycle.StaleAssets,
 		PersistentDBDir:              persistentDBDir,
+	}
+	if cfg.shardPlan != (vectorpartition.ShardPlanV1{}) {
+		row.DomainCapacity = cfg.shardPlan.DomainOverlapCapacity
 	}
 	row.OverlapReplicas = make([]m3OverlapReplica, len(overlap.Replicas))
 	for i, replica := range overlap.Replicas {
@@ -1202,16 +1221,31 @@ func validateM3PartitionIndexReport(report m3PartitionIndexReport) error {
 			return fmt.Errorf("invalid M3 overlap target: ratio=%g source_rows=%d", row.Ratio, row.SourceRows)
 		}
 		wantBudget := int(wantBudgetFloat)
-		totalCapacity, capacityErr := memoryMul(int64(row.Capacity), int64(len(row.PartitionLoads)))
+		totalCapacity, capacityErr := memoryMul(int64(row.DomainCapacity), int64(report.LogicalDomains))
 		if capacityErr != nil || row.SourceRows > math.MaxInt || totalCapacity < int64(row.SourceRows)+int64(row.OverlapRealized) {
 			return fmt.Errorf("invalid M3 overlap capacity evidence: %+v", row)
 		}
 		var loadTotal int64
-		for _, load := range row.PartitionLoads {
+		packsPerDomain := report.Partitions / report.LogicalDomains
+		packDomainCapacity, packCapacityErr := memoryMul(int64(row.Capacity), int64(packsPerDomain))
+		if packCapacityErr != nil || row.DomainCapacity < row.Capacity || int64(row.DomainCapacity) > packDomainCapacity {
+			return fmt.Errorf("invalid M3 logical-domain capacity evidence: %+v", row)
+		}
+		for partition, load := range row.PartitionLoads {
 			if load < 0 || load > row.Capacity {
 				return fmt.Errorf("invalid M3 partition load evidence: %+v", row)
 			}
 			loadTotal += int64(load)
+			domainStart := partition - partition%packsPerDomain
+			if partition%packsPerDomain == packsPerDomain-1 {
+				var domainLoad int64
+				for _, domainPackLoad := range row.PartitionLoads[domainStart : partition+1] {
+					domainLoad += int64(domainPackLoad)
+				}
+				if domainLoad > int64(row.DomainCapacity) {
+					return fmt.Errorf("invalid M3 logical-domain load evidence: %+v", row)
+				}
+			}
 		}
 		if loadTotal != int64(row.SourceRows)+int64(row.OverlapRealized) {
 			return fmt.Errorf("invalid M3 partition load total: %+v", row)
@@ -1221,7 +1255,7 @@ func validateM3PartitionIndexReport(report m3PartitionIndexReport) error {
 		if row.OverlapUseful > 0 {
 			wantCutReductionPerUseful = float64(row.EdgeCutBefore-row.EdgeCutAfter) / float64(row.OverlapUseful)
 		}
-		if row.Budget != wantBudget || row.Used > wantBudget || row.OverlapRequested != wantBudget || row.OverlapRealized != row.Used || row.Budget < 0 || row.Used < 0 || row.Unspent != row.Budget-row.Used || row.Capacity < 1 || row.OverlapRejected != row.Unspent || row.OverlapUseful < 0 || row.OverlapFiller != 0 || row.OverlapUseful != row.OverlapRealized || row.OverlapUnusedCapacity != wantUnusedCapacity || row.CutReductionPerUsefulReplica != wantCutReductionPerUseful || row.ReplicationFactor < 1 || row.EdgeCutAfter > row.EdgeCutBefore || row.BuildWallNanos <= 0 || row.SourcePhysicalBytes <= 0 || row.PeakDerivedTemporaryBytes < row.FinalDerivedPhysicalBytes || row.FinalDerivedPhysicalBytes <= 0 || row.PackBytes == 0 || row.PartitionHNSWM < 2 || row.FinalDerivedPhysicalBytes < int64(row.PackBytes) || row.PhysicalBytesPerSourceVector <= 0 || row.SearcherOpenWallNanos <= 0 || row.PackOpenNanos == 0 || row.LocalSearches <= 0 || row.WarmNSPerOp <= 0 || row.WarmQPS <= 0 || row.CandidatesPerOp <= 0 || row.ExactLocalRecallAtK < 0 || row.ExactLocalRecallAtK > 1 || row.ManifestDigest == "" || row.SourceRows != uint64(report.Dataset.Vectors) || row.SearchRoute != collections.VectorPartitionSearchRouteHNSWSearchPackV1 || row.MissingAssets != 0 || row.CorruptAssets != 0 || row.StaleAssets != expectedStaleAssets {
+		if row.Budget != wantBudget || row.Used > wantBudget || row.OverlapRequested != wantBudget || row.OverlapRealized != row.Used || row.Budget < 0 || row.Used < 0 || row.Unspent != row.Budget-row.Used || row.Capacity < 1 || row.DomainCapacity < 1 || row.OverlapRejected != row.Unspent || row.OverlapUseful < 0 || row.OverlapFiller != 0 || row.OverlapUseful != row.OverlapRealized || row.OverlapUnusedCapacity != wantUnusedCapacity || row.CutReductionPerUsefulReplica != wantCutReductionPerUseful || row.ReplicationFactor < 1 || row.EdgeCutAfter > row.EdgeCutBefore || row.BuildWallNanos <= 0 || row.SourcePhysicalBytes <= 0 || row.PeakDerivedTemporaryBytes < row.FinalDerivedPhysicalBytes || row.FinalDerivedPhysicalBytes <= 0 || row.PackBytes == 0 || row.PartitionHNSWM < 2 || row.FinalDerivedPhysicalBytes < int64(row.PackBytes) || row.PhysicalBytesPerSourceVector <= 0 || row.SearcherOpenWallNanos <= 0 || row.PackOpenNanos == 0 || row.LocalSearches <= 0 || row.WarmNSPerOp <= 0 || row.WarmQPS <= 0 || row.CandidatesPerOp <= 0 || row.ExactLocalRecallAtK < 0 || row.ExactLocalRecallAtK > 1 || row.ManifestDigest == "" || row.SourceRows != uint64(report.Dataset.Vectors) || row.SearchRoute != collections.VectorPartitionSearchRouteHNSWSearchPackV1 || row.MissingAssets != 0 || row.CorruptAssets != 0 || row.StaleAssets != expectedStaleAssets {
 			return fmt.Errorf("invalid M3 evidence row: %+v", row)
 		}
 		if len(row.OverlapReplicas) != row.OverlapRealized || len(row.OverlapDestinationDiversity) != report.LogicalDomains {
