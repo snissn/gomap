@@ -32,6 +32,7 @@ type VectorPartitionM8ProductionMultiGroupOptionsV1 struct {
 	Database, Catalog    string
 	CoordinatorLimits    VectorPartitionCoordinatorLimitsV1
 	ShardLimits          VectorPartitionShardSearchLimitsV1
+	OfflineGraphVariant  collections.VectorPartitionLocalGraphVariantV1
 }
 
 type VectorPartitionM8ProductionMultiGroupEvidenceV1 struct {
@@ -91,6 +92,11 @@ func NewVectorPartitionM8ProductionMultiGroupV1(ctx context.Context, opts Vector
 	}
 	if opts.Collection == nil || opts.RouterSource == nil || opts.Manifest.State != "ready" || len(opts.Manifest.Placements) < 4 {
 		return nil, errors.New("nativewire: M8 production topology requires ready persistent assets")
+	}
+	if opts.OfflineGraphVariant != "" {
+		if _, err := collections.VectorPartitionLocalGraphVariantIdentityV1(opts.OfflineGraphVariant); err != nil {
+			return nil, errors.New("nativewire: M8 offline graph variant is invalid")
+		}
 	}
 	coordinatorLimits, err := normalizeVectorPartitionCoordinatorLimitsV1(opts.CoordinatorLimits)
 	if err != nil {
@@ -192,6 +198,7 @@ func NewVectorPartitionM8ProductionMultiGroupV1(ctx context.Context, opts Vector
 		if sourceErr != nil {
 			return nil, sourceErr
 		}
+		source.offlineGraphVariant = opts.OfflineGraphVariant
 		service, serviceErr := NewVectorPartitionShardSearchServiceV1(VectorPartitionShardSearchServiceOptionsV1{Catalog: resolved, Placement: placement, LocalNodeID: h.data[group].LeaderID(), LocalGroupID: group, ReadCoordinator: h.data[group].ReadCoordinator(), GenerationSource: vectorPartitionM8TopologyGenerationSourceV1{source: source, manifest: opts.Manifest}, Limits: opts.ShardLimits})
 		if serviceErr != nil {
 			return nil, serviceErr

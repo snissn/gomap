@@ -517,11 +517,15 @@ func runM8ProductionSingleVariantV1(cfg config, fixture fixtureManifest, vectors
 			return errors.New("opened router exceeds policy work plan")
 		}
 	}
+	offlineGraphVariant := collections.VectorPartitionLocalGraphVariantV1("")
+	if cfg.m8FinalOfflineGraph {
+		offlineGraphVariant = assets.graphVariant
+	}
 	topologyCtx, cancelTopology := context.WithTimeout(context.Background(), 2*time.Minute)
 	topology, err := nativewire.NewVectorPartitionM8ProductionMultiGroupV1(topologyCtx, nativewire.VectorPartitionM8ProductionMultiGroupOptionsV1{
 		Collection: assets.collection, Manifest: assets.manifest, RouterSource: assets.RouterSource(),
 		GroupAssetSetDigests: assets.assetSetDigests, Database: "default", Catalog: "default",
-		CoordinatorLimits: cfg.m8CoordinatorLimits, ShardLimits: cfg.m8ShardLimits,
+		CoordinatorLimits: cfg.m8CoordinatorLimits, ShardLimits: cfg.m8ShardLimits, OfflineGraphVariant: offlineGraphVariant,
 	})
 	cancelTopology()
 	if err != nil {

@@ -47,6 +47,7 @@ type CollectionVectorPartitionGenerationSourceV1 struct {
 	Collection           *collections.Collection
 	replicatedCollection raftplacement.CollectionRefV1
 	replicatedLifecycle  VectorPartitionReplicatedLifecycleAuthorityV1
+	offlineGraphVariant  collections.VectorPartitionLocalGraphVariantV1
 
 	mu          sync.Mutex
 	entries     map[collectionVectorPartitionGenerationKeyV1]*collectionVectorPartitionGenerationCacheV1
@@ -583,6 +584,8 @@ func (e *collectionVectorPartitionGenerationCacheV1) openPartition(ctx context.C
 		var err error
 		if e.liveManifest.Generation != 0 {
 			searcher, err = e.collection.OpenVectorPartitionLocalSearcherForGenerationLiveSearchPlanWithContextV1(ctx, e.index, e.generation, partition, e.openPlan, e.pin)
+		} else if source.offlineGraphVariant != "" {
+			searcher, err = e.collection.OpenVectorPartitionLocalSearcherForGenerationOfflineVariantSearchPlanWithContextV1(ctx, e.index, e.generation, partition, e.openPlan, e.pin, source.offlineGraphVariant)
 		} else {
 			searcher, err = e.collection.OpenVectorPartitionLocalSearcherForGenerationSearchPlanWithContextV1(ctx, e.index, e.generation, partition, e.openPlan, e.pin)
 		}
