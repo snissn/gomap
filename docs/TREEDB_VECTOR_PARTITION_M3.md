@@ -164,8 +164,9 @@ version 6; pre-alpha databases using earlier encodings must be rebuilt.
 `SearchWithMetrics` uses the no-document native HNSW route. Production version-5
 search stops when its native frontier is empty; it never reseeds an unvisited
 ordinal. Callers may supply a strict score-call cap, and metrics report the
-actual native scorer calls alongside candidates/edges, route, pack/mapped/heap
-bytes, open time, searches, failures, memberships, and pins.
+combined native traversal and canonical result-rescore calls alongside
+candidates/edges, route, pack/mapped/heap bytes, open time, searches, failures,
+memberships, and pins.
 Lifecycle status independently re-verifies all referenced assets and reports
 missing, corrupt, and stale counts. Results are response-owned stable IDs and
 FP32 cosine scores only.

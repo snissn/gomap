@@ -1,6 +1,7 @@
 package collections
 
 import (
+	"errors"
 	"testing"
 	"time"
 )
@@ -330,7 +331,7 @@ func TestVectorIndexLiveDeltaExpandsForClusteredResults(t *testing.T) {
 	if work.deltaPasses != 4 || work.deltaRetries != 3 || work.deltaResumes != 3 || work.deltaInitialTopK != 16 || work.deltaTerminalTopK != 100 {
 		t.Fatalf("delta work=%+v want resumed 16-to-32-to-64-to-100 traversal", work)
 	}
-	if work.queryPreparations != 1 || work.baseVisited == 0 || work.deltaVisited == 0 || work.deltaVisited > len(deltaVectors) || !work.retryChangedMergedTopK {
+	if work.queryPreparations != 1 || work.baseVisited == 0 || work.deltaVisited == 0 || work.deltaVisited > len(deltaVectors) || work.scoreCalls <= work.baseVisited+work.deltaVisited || !work.retryChangedMergedTopK {
 		t.Fatalf("delta work=%+v want one query preparation, bounded unique delta visits, and a changed merged top-K", work)
 	}
 	if _, _, err := index.searchGraphOnlyWithBuffer(query, 100, 200, &buffer); err != nil {
@@ -344,6 +345,15 @@ func TestVectorIndexLiveDeltaExpandsForClusteredResults(t *testing.T) {
 		t.Fatal("search view is unavailable")
 	}
 	defer index.releaseSearchView(view)
+	var boundedBuffer VectorIndexSearchBuffer
+	boundedBuffer.nativeSearchWorkEnabled = true
+	bounded, err := view.searchGraphOnlyWithScoreBudget(query, 100, 200, work.scoreCalls, &boundedBuffer)
+	if err != nil || len(bounded) != len(results) || boundedBuffer.nativeSearchWork != work {
+		t.Fatalf("bounded results=%d work=%+v err=%v want results=%d work=%+v", len(bounded), boundedBuffer.nativeSearchWork, err, len(results), work)
+	}
+	if _, err := view.searchGraphOnlyWithScoreBudget(query, 100, 200, work.scoreCalls-1, &boundedBuffer); !errors.Is(err, ErrVectorPartitionSearchUnavailable) {
+		t.Fatalf("under-budget err=%v want partition search unavailable", err)
+	}
 	queryNorm, preparedQuery, _, err := prepareVectorIndexGraphOnlyQuery(query, view.metric, view.dimensions)
 	if err != nil {
 		t.Fatal(err)

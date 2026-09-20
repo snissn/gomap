@@ -2904,8 +2904,8 @@ func preflightVectorPartitionNativePackV1(rows, dimensions, degree int) error {
 func preflightVectorPartitionNativePackKnownBytesV1(rows, dimensions int, documentIDBytes uint64, capBytes int64) error {
 	// A single layer with no encoded neighbors is the smallest valid topology.
 	// The exact pass after graph construction still owns the final layer and
-	// adjacency counts; this pass only proves the already-known V3 lower bound.
-	_, err := exactVectorPartitionLocalGraphPackBytesV1(rows, dimensions, []uint64{0}, documentIDBytes, 0, true, capBytes)
+	// adjacency counts; this pass only proves the already-known native lower bound.
+	_, err := exactVectorPartitionLocalGraphPackBytesV1(rows, dimensions, []uint64{0}, documentIDBytes, 0, false, capBytes)
 	return err
 }
 

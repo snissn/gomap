@@ -660,6 +660,58 @@ func TestVectorIndexPartitionLiveDomainSearchBoundsV1(t *testing.T) {
 	}
 }
 
+func TestVectorIndexPartitionLiveDomainSearchScoreBudgetV1(t *testing.T) {
+	node := func(id string, vector []float32) vectorIndexNode {
+		return vectorIndexNode{
+			documentID:    []byte(id),
+			vector:        vector,
+			normSquared:   1,
+			cachedInvNorm: 1,
+			level:         1,
+			neighbors:     make([][]vectorIndexNeighbor, 2),
+		}
+	}
+	view := &vectorIndexSearchView{
+		nodes:                    []vectorIndexNode{node("base", []float32{1, 0})},
+		deltaNodes:               []vectorIndexNode{node("delta", []float32{0, 1})},
+		metric:                   VectorMetricCosine,
+		dimensions:               2,
+		m:                        2,
+		efSearch:                 1,
+		entry:                    0,
+		maxLevel:                 1,
+		deltaEntry:               0,
+		deltaMaxLevel:            1,
+		liveDocs:                 2,
+		deltaLiveDocs:            1,
+		sourceDocumentRootsValid: true,
+	}
+	pin := &VectorIndexPartitionLiveSearchPinV1{domains: map[uint32]vectorIndexPartitionLiveDomainPinV1{
+		0: {view: view, maxStableIDBytes: len("delta")},
+	}}
+	opts := VectorPartitionSearchOptionsV1{TopK: 1, EfSearch: 1, MaxStableIDBytes: 8}
+	uncapped, uncappedMetrics, err := pin.SearchDomainV1(t.Context(), 0, []float32{1, 0}, opts)
+	if err != nil || len(uncapped) != 1 || uncappedMetrics.ScoreCalls != 4 || uncappedMetrics.Candidates != 2 {
+		t.Fatalf("uncapped results=%+v metrics=%+v err=%v", uncapped, uncappedMetrics, err)
+	}
+	opts.MaxScoreCalls = int(uncappedMetrics.ScoreCalls)
+	bounded, boundedMetrics, err := pin.SearchDomainV1(t.Context(), 0, []float32{1, 0}, opts)
+	if err != nil || len(bounded) != 1 || bounded[0] != uncapped[0] || boundedMetrics != uncappedMetrics {
+		t.Fatalf("bounded results=%+v metrics=%+v err=%v want results=%+v metrics=%+v", bounded, boundedMetrics, err, uncapped, uncappedMetrics)
+	}
+	opts.MaxScoreCalls--
+	if results, metrics, err := pin.SearchDomainV1(t.Context(), 0, []float32{1, 0}, opts); !errors.Is(err, ErrVectorPartitionSearchUnavailable) || results != nil || metrics != (VectorPartitionSearchMetricsV1{}) {
+		t.Fatalf("under-budget results=%+v metrics=%+v err=%v", results, metrics, err)
+	}
+	opts.MaxScoreCalls = -1
+	if _, _, err := pin.DomainSearchPreflightV1(0, opts); !errors.Is(err, ErrVectorIndexPartitionLiveUnavailableV1) {
+		t.Fatalf("negative preflight err=%v want unavailable", err)
+	}
+	if _, _, err := pin.SearchDomainV1(t.Context(), 0, []float32{1, 0}, opts); !errors.Is(err, ErrVectorIndexPartitionLiveUnavailableV1) {
+		t.Fatalf("negative search err=%v want unavailable", err)
+	}
+}
+
 func TestVectorIndexPartitionLiveReplayRejectsDifferentInstalledCarrierV1(t *testing.T) {
 	requireVectorPartitionPersistenceV1(t)
 	_, database, collection, def, manifest := newVectorPartitionLiveProductionFixtureV1(t)

@@ -1012,12 +1012,19 @@ func (s *VectorPartitionLocalSearcherV1) SearchPreflightV1(opts VectorPartitionS
 	dimensions := s.asset.Dimensions
 	maxStableIDBytes := s.maxStableIDBytes
 	stableIDOrdinals := s.stableIDOrdinals
+	exactScoreRows := exactRows
+	if prepared == nil {
+		exactScoreRows = vectorPartitionExactScoreRowsV1(s.asset.IDs, opts.ExcludedStableIDs)
+	}
 	var header columnHNSWSearchPackHeader
 	if prepared != nil {
 		header = prepared.Header
 	}
 	s.mu.Unlock()
 
+	if prepared == nil && opts.MaxScoreCalls > 0 && exactScoreRows > opts.MaxScoreCalls {
+		return status, 0, fmt.Errorf("%w: exact score budget=%d rows=%d", ErrVectorPartitionSearchUnavailable, opts.MaxScoreCalls, exactScoreRows)
+	}
 	scratchBytes, err := vectorPartitionSearchScratchBytesV1(opts, prepared, exactRows, dimensions, maxStableIDBytes, stableIDOrdinals, header)
 	return status, scratchBytes, err
 }
@@ -1027,9 +1034,6 @@ func vectorPartitionSearchScratchBytesV1(opts VectorPartitionSearchOptionsV1, pr
 		return 0, fmt.Errorf("%w: stable ID bytes=%d exceeds limit=%d", ErrVectorPartitionSearchUnavailable, maxStableIDBytes, opts.MaxStableIDBytes)
 	}
 	if prepared == nil {
-		if opts.MaxScoreCalls > 0 && exactRows > opts.MaxScoreCalls {
-			return 0, fmt.Errorf("%w: exact score budget=%d rows=%d", ErrVectorPartitionSearchUnavailable, opts.MaxScoreCalls, exactRows)
-		}
 		return vectorPartitionExactSearchScratchBytesV1(exactRows, dimensions, opts.TopK)
 	}
 	rowCount := header.Rows
@@ -1906,12 +1910,20 @@ func (s *VectorPartitionLocalSearcherV1) searchWithOptionsV1(ctx context.Context
 			s.recordFailure()
 			return nil, VectorPartitionSearchMetricsV1{}, err
 		}
-		out, err := canonicalizeVectorPartitionNativeResultsExcludingV1(ctx, s.prepared, query, scratch.top, opts.TopK, opts.ExcludedStableIDs)
+		rescoreBudget := -1
+		if opts.MaxScoreCalls > 0 {
+			if stats.PreparedScoreCalls > uint64(opts.MaxScoreCalls) {
+				s.recordFailure()
+				return nil, VectorPartitionSearchMetricsV1{}, fmt.Errorf("%w: native score budget=%d calls=%d", ErrVectorPartitionSearchUnavailable, opts.MaxScoreCalls, stats.PreparedScoreCalls)
+			}
+			rescoreBudget = opts.MaxScoreCalls - int(stats.PreparedScoreCalls)
+		}
+		out, rescoreCalls, err := canonicalizeVectorPartitionNativeResultsExcludingBudgetedV1(ctx, s.prepared, query, scratch.top, opts.TopK, opts.ExcludedStableIDs, rescoreBudget)
 		if err != nil {
 			s.recordFailure()
 			return nil, VectorPartitionSearchMetricsV1{}, err
 		}
-		metrics := VectorPartitionSearchMetricsV1{ScoreCalls: stats.PreparedScoreCalls, Candidates: stats.Candidates, Edges: stats.Edges, AuxiliaryEdges: stats.AuxiliaryEdges, AuxiliaryCandidates: stats.AuxiliaryCandidates, AuxiliaryAdmissions: stats.AuxiliaryAdmissions, Route: VectorPartitionSearchRouteHNSWSearchPackV1}
+		metrics := VectorPartitionSearchMetricsV1{ScoreCalls: stats.PreparedScoreCalls + rescoreCalls, Candidates: stats.Candidates, Edges: stats.Edges, AuxiliaryEdges: stats.AuxiliaryEdges, AuxiliaryCandidates: stats.AuxiliaryCandidates, AuxiliaryAdmissions: stats.AuxiliaryAdmissions, Route: VectorPartitionSearchRouteHNSWSearchPackV1}
 		if attribution != nil {
 			h := sha256.New()
 			h.Write([]byte("treedb_vector_partition_search_attribution_v1/visited/"))
@@ -1966,9 +1978,10 @@ func (s *VectorPartitionLocalSearcherV1) searchWithOptionsV1(ctx context.Context
 		return nil, VectorPartitionSearchMetricsV1{}, err
 	}
 	limit := min(opts.TopK, len(s.asset.IDs))
-	if opts.MaxScoreCalls > 0 && len(s.asset.Vectors) > opts.MaxScoreCalls {
+	exactScoreRows := vectorPartitionExactScoreRowsV1(s.asset.IDs, opts.ExcludedStableIDs)
+	if opts.MaxScoreCalls > 0 && exactScoreRows > opts.MaxScoreCalls {
 		s.recordFailure()
-		return nil, VectorPartitionSearchMetricsV1{}, fmt.Errorf("%w: exact score budget=%d rows=%d", ErrVectorPartitionSearchUnavailable, opts.MaxScoreCalls, len(s.asset.Vectors))
+		return nil, VectorPartitionSearchMetricsV1{}, fmt.Errorf("%w: exact score budget=%d rows=%d", ErrVectorPartitionSearchUnavailable, opts.MaxScoreCalls, exactScoreRows)
 	}
 	top := make(vectorPartitionSearchResultMaxHeapV1, 0, limit)
 	var edges uint64
@@ -2124,10 +2137,11 @@ func (s *VectorPartitionLocalSearcherV1) SearchExactWithOptionsV1(ctx context.Co
 }
 
 func canonicalizeVectorPartitionNativeResultsV1(ctx context.Context, prepared *columnHNSWSearchPackPreparedView, query []float32, candidates []columnVectorGraphSearchCandidate, topK int) ([]VectorPartitionSearchResultV1, error) {
-	return canonicalizeVectorPartitionNativeResultsExcludingV1(ctx, prepared, query, candidates, topK, nil)
+	out, _, err := canonicalizeVectorPartitionNativeResultsExcludingBudgetedV1(ctx, prepared, query, candidates, topK, nil, -1)
+	return out, err
 }
 
-func canonicalizeVectorPartitionNativeResultsExcludingV1(ctx context.Context, prepared *columnHNSWSearchPackPreparedView, query []float32, candidates []columnVectorGraphSearchCandidate, topK int, excluded map[string]struct{}) ([]VectorPartitionSearchResultV1, error) {
+func canonicalizeVectorPartitionNativeResultsExcludingBudgetedV1(ctx context.Context, prepared *columnHNSWSearchPackPreparedView, query []float32, candidates []columnVectorGraphSearchCandidate, topK int, excluded map[string]struct{}, scoreBudget int) ([]VectorPartitionSearchResultV1, uint64, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -2135,39 +2149,44 @@ func canonicalizeVectorPartitionNativeResultsExcludingV1(ctx context.Context, pr
 	// the returned candidate scores with the deterministic public contract, then
 	// rebuild and drain the bounded heap before M5 publishes owned results.
 	if prepared == nil || len(query) != prepared.Header.Dimensions || topK < 1 {
-		return nil, ErrVectorPartitionSearchUnavailable
+		return nil, 0, ErrVectorPartitionSearchUnavailable
 	}
 	normalizedQuery, err := canonicalVectorPartitionNormalizeV1(query)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	limit := min(topK, len(candidates))
 	top := make(vectorPartitionSearchOrdinalResultMaxHeapV1, 0, limit)
+	var scoreCalls uint64
 	for i, candidate := range candidates {
 		if i&255 == 0 {
 			if err := ctx.Err(); err != nil {
-				return nil, err
+				return nil, scoreCalls, err
 			}
 		}
 		if candidate.ordinal < 0 || candidate.ordinal >= prepared.Header.Rows {
-			return nil, ErrVectorPartitionSearchUnavailable
+			return nil, scoreCalls, ErrVectorPartitionSearchUnavailable
 		}
 		idStart, idEnd := prepared.DocumentIDOffsets[candidate.ordinal], prepared.DocumentIDOffsets[candidate.ordinal+1]
 		if _, shadowed := excluded[string(prepared.DocumentIDBytes[idStart:idEnd])]; shadowed {
 			continue
 		}
+		if scoreBudget >= 0 && scoreCalls >= uint64(scoreBudget) {
+			return nil, scoreCalls, fmt.Errorf("%w: canonical result score budget=%d", ErrVectorPartitionSearchUnavailable, scoreBudget)
+		}
 		base := candidate.ordinal * prepared.Header.VectorStride
 		score, err := canonicalVectorPartitionNormalizedScoreV1(normalizedQuery, prepared.NormalizedVectors[base:base+prepared.Header.Dimensions])
 		if err != nil {
-			return nil, err
+			return nil, scoreCalls, err
 		}
+		scoreCalls++
 		top.pushBounded(prepared, limit, columnVectorGraphSearchCandidate{ordinal: candidate.ordinal, score: float64(score)})
 	}
 	out := make([]VectorPartitionSearchResultV1, len(top))
 	for completed, target := 0, len(out)-1; target >= 0; completed, target = completed+1, target-1 {
 		if completed&255 == 0 {
 			if err := ctx.Err(); err != nil {
-				return nil, err
+				return nil, scoreCalls, err
 			}
 		}
 		candidate := top.popWorst(prepared)
@@ -2175,9 +2194,19 @@ func canonicalizeVectorPartitionNativeResultsExcludingV1(ctx context.Context, pr
 		out[target] = VectorPartitionSearchResultV1{ID: string(prepared.DocumentIDBytes[idStart:idEnd]), Score: float32(candidate.score)}
 	}
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return nil, scoreCalls, err
 	}
-	return out, nil
+	return out, scoreCalls, nil
+}
+
+func vectorPartitionExactScoreRowsV1(ids []string, excluded map[string]struct{}) int {
+	rows := len(ids)
+	for _, id := range ids {
+		if _, skip := excluded[id]; skip {
+			rows--
+		}
+	}
+	return rows
 }
 
 func resetVectorPartitionNativeSearchScratchV1(scratch *columnVectorGraphNativeSearchScratch) {

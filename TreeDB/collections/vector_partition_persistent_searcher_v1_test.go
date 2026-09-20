@@ -976,6 +976,11 @@ func TestVectorPartitionOfflineAuxiliaryConstructionVariantsV1(t *testing.T) {
 	if canonicalDigest == vectorPartitionLocalGraphVariantMembershipDigestV1(membershipDigest, VectorPartitionLocalGraphVariantAuxiliaryNavigationV1) {
 		t.Fatal("default materializer retained the M16/eFC128 membership identity")
 	}
+	auxiliaryM18Control, auxiliaryM18Resources, err := col.MaterializeVectorPartitionLocalSearchAssetsVariantV1(def.Name, m, 1101, in, VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer auxiliaryM18Resources.Release()
 	canonicalRaw, err := readColumnPhysicalAssetFromManager(d.ColumnAssetRootDir(), canonical[0].Ref)
 	if err != nil {
 		t.Fatal(err)
@@ -1186,15 +1191,15 @@ func TestVectorPartitionOfflineAuxiliaryConstructionVariantsV1(t *testing.T) {
 			t.Fatalf("variant=%s exact open err=%v", test.variant, err)
 		}
 		if test.variant == VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MBackfillOnV1 {
-			canonicalSearcher, err := col.OpenVectorPartitionLocalSearcherForOfflineAssetVariantWithContextV1(t.Context(), def.Name, m, canonical[0], VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1)
+			canonicalSearcher, err := col.OpenVectorPartitionLocalSearcherForOfflineAssetVariantWithContextV1(t.Context(), def.Name, m, auxiliaryM18Control[0], VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1)
 			if err != nil {
 				t.Fatal(err)
 			}
 			got, gotErr := exact.PackIdentityNeutralSHA256ForOfflineV1()
 			want, wantErr := canonicalSearcher.PackIdentityNeutralSHA256ForOfflineV1()
 			closeErr := canonicalSearcher.Close()
-			if gotErr != nil || wantErr != nil || closeErr != nil || got != want || assets[0].Checksum == canonical[0].Checksum {
-				t.Fatalf("identity-neutral control got=%q want=%q errors=%v/%v/%v asset_checksums=%q/%q", got, want, gotErr, wantErr, closeErr, assets[0].Checksum, canonical[0].Checksum)
+			if gotErr != nil || wantErr != nil || closeErr != nil || got != want || assets[0].Checksum == auxiliaryM18Control[0].Checksum {
+				t.Fatalf("identity-neutral control got=%q want=%q errors=%v/%v/%v asset_checksums=%q/%q", got, want, gotErr, wantErr, closeErr, assets[0].Checksum, auxiliaryM18Control[0].Checksum)
 			}
 		}
 		if err := exact.Close(); err != nil {
@@ -2039,7 +2044,7 @@ func TestVectorPartitionNativePackExactCapRejectsWithoutDurableTraceV1(t *testin
 	if err := reader.Close(); err != nil {
 		t.Fatal(err)
 	}
-	exactBytes, err := exactVectorPartitionLocalGraphPackBytesV1(1, def.Dimensions, make([]uint64, level+1), uint64(len(id)), 0, true, vectorPartitionSearchAssetMaxBytesV1)
+	exactBytes, err := exactVectorPartitionLocalGraphPackBytesV1(1, def.Dimensions, make([]uint64, level+1), uint64(len(id)), 0, false, vectorPartitionSearchAssetMaxBytesV1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2077,7 +2082,7 @@ func TestVectorPartitionNativePackExactCapRejectsWithoutDurableTraceV1(t *testin
 
 func TestVectorPartitionNativePackKnownBytesPreflightUsesCallerCapV1(t *testing.T) {
 	const rows, dimensions = 2, 3
-	baseBytes, err := exactVectorPartitionLocalGraphPackBytesV1(rows, dimensions, []uint64{0}, 0, 0, true, vectorPartitionSearchAssetMaxBytesV1)
+	baseBytes, err := exactVectorPartitionLocalGraphPackBytesV1(rows, dimensions, []uint64{0}, 0, 0, false, vectorPartitionSearchAssetMaxBytesV1)
 	if err != nil {
 		t.Fatal(err)
 	}

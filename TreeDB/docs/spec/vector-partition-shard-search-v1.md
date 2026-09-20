@@ -160,12 +160,15 @@ underneath an active request.
 A concurrent activation can therefore make the requested generation old, but
 cannot mix old and new assets inside one accepted request.
 
-Each partial and the response report their actual score calls. Exhausting the
-budget fails before returning partial neighbors. The production coordinator
-has a separate 16,000,000-call request ceiling, distributes the selected budget
-across shard requests, and rejects any partial or aggregate that exceeds its
-assigned allowance. The native contract and TCP frame now use protocol version
-2; pre-alpha peers using the earlier layout must upgrade together.
+Each partial reports its immutable partition score calls. The response reports
+their sum plus live-domain score calls; that live excess is response-only
+provenance and is not assigned to an immutable partition partial. Exhausting
+the shared budget fails before returning partial neighbors. The production
+coordinator has a separate 16,000,000-call request ceiling, distributes the
+selected budget across shard requests, and rejects any partial or aggregate
+that exceeds its assigned allowance. The native contract and TCP frame now use
+protocol version 2; pre-alpha peers using the earlier layout must upgrade
+together.
 
 ## Stable failure classes
 

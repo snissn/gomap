@@ -51,9 +51,10 @@ uses the same domain reducer. No mode clamps C, retries with a larger budget,
 or falls back to exact search.
 
 This is an intentional pre-alpha format break: router model/record/asset
-semantics are version 3. Manifest binary version 5 and ready-promotion payload
-version 3 remain current because their `(source ordinal, domain, represented
-node)` mapping did not change. Router records are 16-byte-identity records
+semantics are version 3. Manifest binary version 6 carries every local asset's
+graph variant. Ready-promotion payload version 4 adopts the graph-variant-capable
+asset frame for its empty-variant router asset, and its ready digest binds the
+reconstructed manifest. Router records are 16-byte-identity records
 (source ordinal, domain, node); path metadata retains leaf flags and quota.
 Rebuild old DB/benchmark directories; do not migrate or silently reinterpret
 version-2 router assets. Existing publication, generation pin, checkpoint,
@@ -62,12 +63,43 @@ The mapped immutable owner retains vector storage; live owners still clone
 their retained vectors before the pin is released.
 
 The benchmark uses `-router-global-budget` and `-router-score-budget`. M8
-evidence is schema 6, system-node config is schema 3, and production routing
+evidence is schema 7, system-node config is schema 3, and production routing
 binds hierarchical C/P semantics. Width/beam remain only in the immutable
 offline flat-HNSW policy diagnostic and are not serving controls.
 Old #4744/#4745 receipts remain historical; neither rebuilding nor changing
-their labels makes them evidence for this revision. R does not correct local
-HNSW, change memberships, or establish the final scaling/recall verdict.
+their labels makes them evidence for this revision. R does not change
+memberships or establish the final scaling/recall verdict.
+
+### Canonical partition-local HNSW revision L (#4774)
+
+Production partition-local search has one graph identity:
+`canonical_hnsw_m18_ef_construction_256`. It uses pack version 5 with initial
+degree `M`, layer-zero reciprocal capacity `2M`, upper-layer capacity `M`, and
+the complete construction search set preserved while descending layers. The
+pack contains only native HNSW topology and normalized FP32 vectors; repair
+edges, auxiliary navigation, external-vector references, and search-time
+ordinal reseeding are not production paths.
+
+Rows are inserted by ascending authoritative source ordinal. A document's
+level is deterministic: hash the XOR of the stable-ID and index-name xxhash64
+values as little-endian uint64, map the top 53 bits into `(0,1)`, take
+`floor(-ln(u)/ln(max(M,2)))`, and cap at 32; a zero final hash maps directly to
+level 32. Construction candidates tie by
+stable ID then native ordinal after distance; the pack is only BFS-remapped for
+locality after construction. Public results tie by stable ID after score.
+
+VPM1 version 6 carries each partition asset's explicit graph variant, while the
+READY-promotion ready digest binds the reconstructed VPM1. Open and reopen
+require the canonical identity and pack version; historical or missing
+variants fail closed and require rebuild. Local score budgets cover immutable
+native traversal, deterministic final FP32 rescoring, and live-domain upper and
+layer-zero traversal across base, delta, and resumed passes; an exact scan
+charges only non-excluded rows. No path raises a budget, retries with a larger
+budget, or silently falls back to exact search.
+
+M8 schema 7 records the graph identity and local score calls/caps. That schema
+is harness readiness, not retained qualification: the preregistered
+structured-250K run and accepted issue receipt remain required.
 
 This document freezes the supported snapshot-bound graph-partitioned vector
 search V1 contract. It is an admission contract, not an enablement claim: the

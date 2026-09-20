@@ -548,10 +548,11 @@ graph variant explicitly; publication, recovery, and production open reject
 historical or mixed variants instead of inferring identity from matching
 parameters.
 
-The existing M8 producer now emits report/transcript schema 7, binding that exact graph identity and the local
-score-call budget, records total and per-query maximum native scorer calls, and
-validates them against the configured cap. This is harness readiness, not
-retained evidence: the structured-250K, full-query `P<=2`, `EF<=96`,
+The existing M8 producer now emits report/transcript schema 7, binding that
+exact graph identity and the local score-call budget, records total and
+per-query maximum combined native traversal and canonical result-rescore
+calls, and validates them against the configured cap. This is harness
+readiness, not retained evidence: the structured-250K, full-query `P<=2`, `EF<=96`,
 recall@10 `>=0.95` gate must run only from the reviewed landed product and
 harness identity.
 

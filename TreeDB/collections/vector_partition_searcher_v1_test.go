@@ -43,6 +43,13 @@ func TestVectorPartitionLocalSearcherV1ExactStableIDsAndPins(t *testing.T) {
 	if results, metrics, err := s.SearchWithOptionsV1(context.Background(), []float32{1, 0}, VectorPartitionSearchOptionsV1{TopK: 1, MaxScoreCalls: 2}); err != nil || len(results) != 1 || metrics.ScoreCalls != 2 {
 		t.Fatalf("bounded exact search results=%+v metrics=%+v err=%v", results, metrics, err)
 	}
+	excluded := VectorPartitionSearchOptionsV1{TopK: 1, MaxScoreCalls: 1, ExcludedStableIDs: map[string]struct{}{"bb": {}}}
+	if _, _, err := s.SearchPreflightV1(excluded); err != nil {
+		t.Fatalf("excluded exact preflight: %v", err)
+	}
+	if results, metrics, err := s.SearchWithOptionsV1(context.Background(), []float32{1, 0}, excluded); err != nil || len(results) != 1 || results[0].ID != "a" || metrics.ScoreCalls != 1 {
+		t.Fatalf("excluded exact search results=%+v metrics=%+v err=%v", results, metrics, err)
+	}
 	if status, _, err := s.SearchPreflightV1(VectorPartitionSearchOptionsV1{TopK: 1, MaxStableIDBytes: 1}); !errors.Is(err, ErrVectorPartitionSearchUnavailable) || status.MaxStableIDBytes != 2 {
 		t.Fatalf("coherent capped preflight status=%+v err=%v", status, err)
 	}
@@ -136,6 +143,17 @@ func TestVectorPartitionLocalSearcherV1HNSWCanonicalizesFP32TieOrder(t *testing.
 	}
 	if metrics.Route != VectorPartitionSearchRouteHNSWSearchPackV1 {
 		t.Fatalf("metrics=%+v", metrics)
+	}
+	if metrics.ScoreCalls <= metrics.Candidates {
+		t.Fatalf("canonical rescoring was not counted: metrics=%+v", metrics)
+	}
+	bounded := VectorPartitionSearchOptionsV1{TopK: 1, EfSearch: 3, MaxScoreCalls: int(metrics.ScoreCalls)}
+	if got, gotMetrics, err := searcher.SearchWithOptionsV1(context.Background(), []float32{1, 0, 0}, bounded); err != nil || len(got) != 1 || got[0] != results[0] || gotMetrics.ScoreCalls > metrics.ScoreCalls {
+		t.Fatalf("bounded HNSW results=%+v metrics=%+v err=%v", got, gotMetrics, err)
+	}
+	bounded.MaxScoreCalls = int(metrics.ScoreCalls) - 1
+	if _, _, err := searcher.SearchWithOptionsV1(context.Background(), []float32{1, 0, 0}, bounded); !errors.Is(err, ErrVectorPartitionSearchUnavailable) {
+		t.Fatalf("under-budget HNSW err=%v", err)
 	}
 	first := results[0]
 	repeated, repeatedMetrics, err := searcher.SearchWithOptionsV1(

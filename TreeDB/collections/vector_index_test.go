@@ -1665,6 +1665,61 @@ func TestVectorIndexConstructionSearchDescendsWithFullSeedSet(t *testing.T) {
 	}
 }
 
+func TestVectorIndexCanonicalInsertPreservesUpperSearchSetForDescent(t *testing.T) {
+	index, err := newVectorIndex(nil, VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 2, EfConstruction: 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+	vector := func(angle float64) []float32 { return []float32{float32(math.Cos(angle)), float32(math.Sin(angle))} }
+	index.nodes = []vectorIndexNode{
+		index.newVectorIndexNode([]byte("near"), vector(.10), 1),
+		index.newVectorIndexNode([]byte("shadowed-bridge"), vector(.11), 1),
+		index.newVectorIndexNode([]byte("diverse"), vector(-.50), 1),
+		index.newVectorIndexNode([]byte("hidden-best"), vector(0), 0),
+	}
+	connect := func(from, to, layer int) {
+		index.nodes[from].neighbors[layer] = append(index.nodes[from].neighbors[layer], vectorIndexNeighbor{nodeID: uint32(to), distance: index.distanceBetweenNodesLocked(from, to)})
+	}
+	connect(0, 1, 1)
+	connect(0, 2, 1)
+	connect(1, 0, 1)
+	connect(2, 0, 1)
+	connect(0, 2, 0)
+	connect(2, 0, 0)
+	connect(1, 3, 0)
+	connect(3, 1, 0)
+	index.entry, index.maxLevel = 0, 1
+	for nodeID := range index.nodes {
+		index.currentNode[string(index.nodes[nodeID].documentID)] = nodeID
+	}
+	index.layer0ConstructionPolicy = &vectorIndexLayer0ConstructionPolicyV1{initialSelectionFactor: 1, backfill: true, preserveSearchSet: true}
+
+	var documentID []byte
+	for i := 0; i < 1000; i++ {
+		candidate := []byte(fmt.Sprintf("canonical-descent-%d", i))
+		if index.levelForDocumentID(candidate) == 1 {
+			documentID = candidate
+			break
+		}
+	}
+	if documentID == nil {
+		t.Fatal("no deterministic level-1 document ID found")
+	}
+	if err := index.insertVectorLocked(documentID, vector(0)); err != nil {
+		t.Fatal(err)
+	}
+	inserted := len(index.nodes) - 1
+	if got := index.nodes[inserted].neighbors[1]; len(got) != 2 || got[0].nodeID != 0 || got[1].nodeID != 2 {
+		t.Fatalf("fixture did not select the expected upper neighbors: %+v", got)
+	}
+	for _, neighbor := range index.nodes[inserted].neighbors[0] {
+		if neighbor.nodeID == 3 {
+			return
+		}
+	}
+	t.Fatalf("layer-0 descent lost non-selected upper seed; neighbors=%+v", index.nodes[inserted].neighbors[0])
+}
+
 func TestVectorIndexCurrentSearchCountsUpperLayerScoresInBound(t *testing.T) {
 	index, err := newVectorIndex(nil, VectorIndexOptions{
 		Name:       "embedding",

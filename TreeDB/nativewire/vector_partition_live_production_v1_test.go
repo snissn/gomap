@@ -162,6 +162,30 @@ func TestVectorPartitionLiveProductionCoordinatorMutationAndColdReloadV1(t *test
 		if len(request.LiveDomainIDs) != 1 || request.LiveDomainIDs[0] != 0 {
 			t.Fatalf("initial live-domain request=%+v", request.LiveDomainIDs)
 		}
+		measured, err := services[request.TargetGroupID].Search(t.Context(), request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var baseScoreCalls uint64
+		for _, partial := range measured.Partials {
+			baseScoreCalls += partial.ScoreCalls
+		}
+		if measured.ScoreCalls <= baseScoreCalls {
+			t.Fatalf("live score calls=%d want greater than immutable partial sum=%d", measured.ScoreCalls, baseScoreCalls)
+		}
+		exactBudget := request
+		exactBudget.RequestID = "initial-live-exact-budget"
+		exactBudget.ScoreCallsLimit = measured.ScoreCalls
+		if response, err := services[request.TargetGroupID].Search(t.Context(), exactBudget); err != nil || response.ScoreCalls != measured.ScoreCalls {
+			t.Fatalf("exact live score budget response=%+v err=%v want score calls=%d", response, err, measured.ScoreCalls)
+		}
+		exactBudget.RequestID = "initial-live-under-budget"
+		exactBudget.ScoreCallsLimit--
+		if _, err := services[request.TargetGroupID].Search(t.Context(), exactBudget); err == nil {
+			t.Fatal("under-budget live search succeeded")
+		} else {
+			assertVectorPartitionShardSearchCodeV1(t, err, VectorPartitionShardSearchErrorAssetsUnavailableV1)
+		}
 		liveAssignments++
 	}
 	if len(initialRequests) != 2 || liveAssignments != 1 {

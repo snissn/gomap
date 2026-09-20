@@ -22,8 +22,8 @@ import (
 // Binary contract:
 //   - fixed little-endian header with magic/version, graph counts, row/dim/
 //     stride counts, cosine-normalized-dot metric, and base manifest identity;
-//   - version 2 extends that header with a required membership digest for
-//     partition-local packs; ordinary column-index packs remain version 1;
+//   - version 2 extends that header with a required membership digest;
+//     canonical partition-local packs use the same layout as version 5;
 //   - fixed-width section directory immediately after the header;
 //   - section payloads use absolute offsets from the start of the pack;
 //   - every section declares alignment, element count, byte length, and CRC32;
