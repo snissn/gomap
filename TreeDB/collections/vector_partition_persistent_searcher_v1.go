@@ -2,6 +2,7 @@ package collections
 
 import (
 	"bytes"
+	"container/heap"
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
@@ -196,6 +197,35 @@ type vectorPartitionLocalAuxiliaryNavigationV1 struct {
 	Neighbors []uint32
 }
 
+type vectorPartitionReachabilityBoundaryV1 struct {
+	source int
+	target int
+	score  float32
+}
+
+type vectorPartitionReachabilityBoundaryHeapV1 []vectorPartitionReachabilityBoundaryV1
+
+func (h vectorPartitionReachabilityBoundaryHeapV1) Len() int { return len(h) }
+func (h vectorPartitionReachabilityBoundaryHeapV1) Less(i, j int) bool {
+	if h[i].score != h[j].score {
+		return h[i].score > h[j].score
+	}
+	if h[i].source != h[j].source {
+		return h[i].source < h[j].source
+	}
+	return h[i].target < h[j].target
+}
+func (h vectorPartitionReachabilityBoundaryHeapV1) Swap(i, j int) { h[i], h[j] = h[j], h[i] }
+func (h *vectorPartitionReachabilityBoundaryHeapV1) Push(value any) {
+	*h = append(*h, value.(vectorPartitionReachabilityBoundaryV1))
+}
+func (h *vectorPartitionReachabilityBoundaryHeapV1) Pop() any {
+	old := *h
+	last := old[len(old)-1]
+	*h = old[:len(old)-1]
+	return last
+}
+
 // buildVectorPartitionLocalAuxiliaryNavigationV1 connects the deterministic
 // directed-reachability roots of the native layer-0 graph. The entry component
 // is root zero; each later root is the least unseen ordinal. A bidirectional
@@ -228,9 +258,10 @@ func buildVectorPartitionLocalAuxiliaryNavigationV1(rows []columnVectorGraphAsse
 
 // repairVectorPartitionLocalLayer0ReachabilityV1 restores entry reachability
 // without growing the graph. It prefers missing reverse boundary edges, then
-// tries the least unseen root from every reachable source. A swap is accepted
-// only when it reaches more rows without losing any row already reachable from
-// the entry, so every row keeps exactly the same layer-0 degree.
+// tries the least unseen root from every reachable source. Only non-tree edges
+// in the maintained entry-rooted spanning tree may be displaced; that keeps
+// every previously reachable row reachable without trial BFS scans. Every
+// accepted edge then extends the same tree through its newly reachable rows.
 func repairVectorPartitionLocalLayer0ReachabilityV1(rows []columnVectorGraphAssetRow, entryOrdinal int) (int, error) {
 	if len(rows) == 0 {
 		if entryOrdinal != -1 {
@@ -243,30 +274,40 @@ func repairVectorPartitionLocalLayer0ReachabilityV1(rows []columnVectorGraphAsse
 	}
 	adjacency := make([][]uint32, len(rows))
 	suffixes := make([][]uint32, len(rows))
+	incoming := make([][]int, len(rows))
 	for ordinal := range rows {
 		var err error
 		adjacency[ordinal], suffixes[ordinal], err = vectorPartitionLayer0AdjacencySplitV1(rows[ordinal].Adjacency)
 		if err != nil {
 			return 0, err
 		}
+		for _, neighbor := range adjacency[ordinal] {
+			if int(neighbor) >= len(rows) || neighbor == uint32(ordinal) {
+				return 0, errors.New("partition-local reachability repair neighbor")
+			}
+			incoming[neighbor] = append(incoming[neighbor], ordinal)
+		}
 	}
-	reachable := func() ([]bool, int, error) {
-		seen := make([]bool, len(rows))
-		queue := []int{entryOrdinal}
-		seen[entryOrdinal] = true
+	seen := make([]bool, len(rows))
+	parent := make([]int, len(rows))
+	for ordinal := range parent {
+		parent[ordinal] = -1
+	}
+	visit := func(root, rootParent int) []int {
+		queue := []int{root}
+		seen[root] = true
+		parent[root] = rootParent
 		for head := 0; head < len(queue); head++ {
 			ordinal := queue[head]
 			for _, neighbor := range adjacency[ordinal] {
-				if int(neighbor) >= len(rows) || neighbor == uint32(ordinal) {
-					return nil, 0, errors.New("partition-local reachability repair neighbor")
-				}
 				if !seen[neighbor] {
 					seen[neighbor] = true
+					parent[neighbor] = ordinal
 					queue = append(queue, int(neighbor))
 				}
 			}
 		}
-		return seen, len(queue), nil
+		return queue
 	}
 	similarity := func(left, right int) (float32, error) {
 		if len(rows[left].Vector) == 0 || len(rows[left].Vector) != len(rows[right].Vector) {
@@ -292,117 +333,110 @@ func repairVectorPartitionLocalLayer0ReachabilityV1(rows []columnVectorGraphAsse
 		}
 		return float32(dot), nil
 	}
-	type scoredOrdinal struct {
-		ordinal int
-		score   float32
+	selectDrop := func(source int) (int, error) {
+		position := -1
+		var weakest float32
+		for candidate, neighbor := range adjacency[source] {
+			if parent[neighbor] == source {
+				continue
+			}
+			score, err := similarity(source, int(neighbor))
+			if err != nil {
+				return -1, err
+			}
+			if position < 0 || score < weakest || score == weakest && neighbor > adjacency[source][position] {
+				position, weakest = candidate, score
+			}
+		}
+		return position, nil
 	}
-	type scoredBoundary struct {
-		source int
-		target int
-		score  float32
+	newlySeen := visit(entryOrdinal, -1)
+	seenCount := len(newlySeen)
+	boundaries := vectorPartitionReachabilityBoundaryHeapV1{}
+	pushBoundaries := func(sources []int) error {
+		for _, source := range sources {
+			for _, target := range incoming[source] {
+				if seen[target] {
+					continue
+				}
+				score, err := similarity(source, target)
+				if err != nil {
+					return err
+				}
+				heap.Push(&boundaries, vectorPartitionReachabilityBoundaryV1{source: source, target: target, score: score})
+			}
+		}
+		return nil
 	}
-	seen, seenCount, err := reachable()
-	if err != nil {
+	if err := pushBoundaries(newlySeen); err != nil {
 		return 0, err
 	}
 	repairs := 0
 	for seenCount < len(rows) {
-		boundaries := make([]scoredBoundary, 0)
-		for target := range seen {
-			if seen[target] {
+		selected := vectorPartitionReachabilityBoundaryV1{source: -1, target: -1}
+		drop := -1
+		for boundaries.Len() != 0 {
+			candidate := heap.Pop(&boundaries).(vectorPartitionReachabilityBoundaryV1)
+			if seen[candidate.target] {
 				continue
 			}
-			for _, neighbor := range adjacency[target] {
-				if !seen[neighbor] {
-					continue
-				}
-				score, scoreErr := similarity(int(neighbor), target)
-				if scoreErr != nil {
-					return 0, scoreErr
-				}
-				boundaries = append(boundaries, scoredBoundary{source: int(neighbor), target: target, score: score})
+			position, err := selectDrop(candidate.source)
+			if err != nil {
+				return 0, err
 			}
-		}
-		sort.Slice(boundaries, func(i, j int) bool {
-			if boundaries[i].score != boundaries[j].score {
-				return boundaries[i].score > boundaries[j].score
-			}
-			if boundaries[i].source != boundaries[j].source {
-				return boundaries[i].source < boundaries[j].source
-			}
-			return boundaries[i].target < boundaries[j].target
-		})
-		root := -1
-		for ordinal := range seen {
-			if !seen[ordinal] {
-				root = ordinal
+			if position >= 0 {
+				selected, drop = candidate, position
 				break
 			}
 		}
-		if root < 0 {
-			return 0, errors.New("partition-local reachability repair invariant")
-		}
-		fallback := make([]scoredBoundary, 0, seenCount)
-		for ordinal := range seen {
-			if !seen[ordinal] || len(adjacency[ordinal]) == 0 {
-				continue
-			}
-			score, scoreErr := similarity(ordinal, root)
-			if scoreErr != nil {
-				return 0, scoreErr
-			}
-			fallback = append(fallback, scoredBoundary{source: ordinal, target: root, score: score})
-		}
-		sort.Slice(fallback, func(i, j int) bool {
-			if fallback[i].score != fallback[j].score {
-				return fallback[i].score > fallback[j].score
-			}
-			return fallback[i].source < fallback[j].source
-		})
-		boundaries = append(boundaries, fallback...)
-		repaired := false
-		for _, boundary := range boundaries {
-			drops := make([]scoredOrdinal, 0, len(adjacency[boundary.source]))
-			for position, neighbor := range adjacency[boundary.source] {
-				score, scoreErr := similarity(boundary.source, int(neighbor))
-				if scoreErr != nil {
-					return 0, scoreErr
-				}
-				drops = append(drops, scoredOrdinal{ordinal: position, score: score})
-			}
-			sort.Slice(drops, func(i, j int) bool {
-				if drops[i].score != drops[j].score {
-					return drops[i].score < drops[j].score
-				}
-				return adjacency[boundary.source][drops[i].ordinal] > adjacency[boundary.source][drops[j].ordinal]
-			})
-			for _, drop := range drops {
-				prior := adjacency[boundary.source][drop.ordinal]
-				adjacency[boundary.source][drop.ordinal] = uint32(boundary.target)
-				nextSeen, nextCount, reachErr := reachable()
-				preserved := reachErr == nil && nextCount > seenCount
-				if preserved {
-					for ordinal := range seen {
-						if seen[ordinal] && !nextSeen[ordinal] {
-							preserved = false
-							break
-						}
-					}
-				}
-				if preserved {
-					seen, seenCount = nextSeen, nextCount
-					repairs++
-					repaired = true
+		if drop < 0 {
+			root := -1
+			for ordinal := range seen {
+				if !seen[ordinal] {
+					root = ordinal
 					break
 				}
-				adjacency[boundary.source][drop.ordinal] = prior
 			}
-			if repaired {
-				break
+			if root < 0 {
+				return 0, errors.New("partition-local reachability repair invariant")
+			}
+			for source := range seen {
+				if !seen[source] || len(adjacency[source]) == 0 {
+					continue
+				}
+				position, err := selectDrop(source)
+				if err != nil {
+					return 0, err
+				}
+				if position < 0 {
+					continue
+				}
+				score, err := similarity(source, root)
+				if err != nil {
+					return 0, err
+				}
+				if drop < 0 || score > selected.score || score == selected.score && source < selected.source {
+					selected = vectorPartitionReachabilityBoundaryV1{source: source, target: root, score: score}
+					drop = position
+				}
 			}
 		}
-		if !repaired {
+		if drop < 0 {
 			return 0, errors.New("partition-local reachability repair cannot preserve reachable rows")
+		}
+		prior := adjacency[selected.source][drop]
+		if parent[prior] == selected.source {
+			return 0, errors.New("partition-local reachability repair tree edge")
+		}
+		adjacency[selected.source][drop] = uint32(selected.target)
+		newlySeen = visit(selected.target, selected.source)
+		if len(newlySeen) == 0 {
+			return 0, errors.New("partition-local reachability repair did not extend reachability")
+		}
+		seenCount += len(newlySeen)
+		repairs++
+		if err := pushBoundaries(newlySeen); err != nil {
+			return 0, err
 		}
 	}
 	for ordinal := range rows {
