@@ -113,7 +113,7 @@ func TestM8RetainedMembershipFeasibilityReplaysExactAssetsV1(t *testing.T) {
 		t.Fatal("invalid traversal-row shape")
 	}
 	in := vectorpartition.DefaultShardPlanInputV1(fixture.Vectors, fixture.Dimensions)
-	in.TargetHotBytes = uint64(vectorpartition.PackFixedOverheadBytesV1 + 17*(traversal+vectorpartition.GraphIdentityOverheadPerRowV1))
+	in.TargetHotBytes = uint64(vectorpartition.PackFixedOverheadBytesV1 + 20*(traversal+vectorpartition.GraphIdentityOverheadPerRowV1))
 	plan, err := vectorpartition.PlanByteBoundedShardsV1(in)
 	if err != nil || plan.Partitions != 16 {
 		t.Fatalf("plan=%+v err=%v", plan, err)
