@@ -345,6 +345,7 @@ func TestExternalFixtureRetainedBuildAndReplayV1(t *testing.T) {
 		_ = assets.Close()
 		t.Fatal(err)
 	}
+	representatives := assets.status.Representatives
 	if err := assets.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -354,6 +355,30 @@ func TestExternalFixtureRetainedBuildAndReplayV1(t *testing.T) {
 		t.Fatal(err)
 	}
 	truthSHA := strings.TrimPrefix(strings.Fields(output.String())[1], "artifact_sha256=")
+	truth, _, err := m8ReadTruthCacheV1(m8TruthCacheArtifactPathV1(cache, m8TruthCacheIdentityV1(m, 10)), m, m.Queries, 10, uint64(m.Vectors), truthSHA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Exercise the retained attribution loader without collecting serving rows.
+	report := m8ProductionReportV1{Dataset: m, DatasetDirectory: dataset, Variant: &descriptor,
+		RouterRepresentatives: representatives, Config: m8ProductionConfigEvidenceV1{TopK: 10, RouterScoreBudget: 1024}}
+	if err := m8QualificationRetainedAttributionV1(root, report, truth, m8ProductionMeasurementTranscriptV1{}); err != nil {
+		t.Fatal(err)
+	}
+	report.DatasetDirectory = t.TempDir()
+	if err := m8QualificationRetainedAttributionV1(root, report, truth, m8ProductionMeasurementTranscriptV1{}); err == nil || !strings.Contains(err.Error(), "outside qualification root") {
+		t.Fatalf("external retained queries escaped qualification root: %v", err)
+	}
+	report.DatasetDirectory = dataset
+	if err := os.Rename(filepath.Join(dataset, "queries.f32"), filepath.Join(dataset, "queries.saved")); err != nil {
+		t.Fatal(err)
+	}
+	if err := m8QualificationRetainedAttributionV1(root, report, truth, m8ProductionMeasurementTranscriptV1{}); err == nil {
+		t.Fatal("retained attribution silently regenerated missing external queries")
+	}
+	if err := os.Rename(filepath.Join(dataset, "queries.saved"), filepath.Join(dataset, "queries.f32")); err != nil {
+		t.Fatal(err)
+	}
 	cfg := config{dataset: dataset, out: filepath.Join(root, "feasibility"), m8TruthCache: cache, m8TruthCacheSHA256: truthSHA,
 		topK: 10, recallTarget: 0, m8MembershipProbes: 2, m8MembershipPackLimit: 4, maxBytes: 1 << 30}
 	artifact, err := m8RunMembershipFeasibilityV1(cfg, m, vectors, dbDir, descriptor)

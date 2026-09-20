@@ -654,9 +654,12 @@ func m8QualificationRetainedAttributionV1(root string, report m8ProductionReport
 		return err
 	}
 	defer func() { err = errors.Join(err, harness.Close()) }()
-	datasetDirectory, err := m8QualificationContainedPathV1(root, report.DatasetDirectory, "fixture dataset")
-	if err != nil {
-		return err
+	datasetDirectory := report.DatasetDirectory
+	if report.Dataset.Generator == externalFixtureGeneratorV1 {
+		datasetDirectory, err = m8QualificationContainedPathV1(root, datasetDirectory, "fixture dataset")
+		if err != nil {
+			return err
+		}
 	}
 	queries, err := loadFixtureQueriesV1(datasetDirectory, report.Dataset)
 	if err != nil {
