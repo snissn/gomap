@@ -25,7 +25,7 @@ their canonical model digest.
 Partition manifest binary version 6 stores 16-byte representative mappings:
 source ordinal (8 bytes), logical domain (4), represented node (4). Source
 ordinal is provenance, not uniqueness. Membership records remain 12 bytes.
-Every partition-local asset descriptor also carries an explicit canonical graph
+Every partition-local asset descriptor also carries an explicit graph
 variant. READY-promotion payload version 4 uses the same representative mapping
 and graph-variant-bearing asset frame. Old versions fail closed and require an
 asset rebuild; there is no mixed-format migration path.
