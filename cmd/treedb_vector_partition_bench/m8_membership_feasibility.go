@@ -241,6 +241,9 @@ func m8ComputeRetainedMembershipFeasibilityV1(cfg config, fixture fixtureManifes
 	if err != nil {
 		return m8MembershipFeasibilityV1{}, err
 	}
+	if err := m8ValidateExistingAssetsFixtureV1(assets.collection, manifest, fixture, fixtureVectors(fixture)); err != nil {
+		return m8MembershipFeasibilityV1{}, fmt.Errorf("validate retained feasibility fixture: %w", err)
+	}
 	truth, truthEvidence, err := m8LoadOrComputeTruthV1(cfg.m8TruthCache, nil, manifest, fixture, make([][]float64, fixture.Queries), cfg.topK, cfg.m8TruthCacheSHA256)
 	if err != nil {
 		return m8MembershipFeasibilityV1{}, fmt.Errorf("load retained feasibility truth: %w", err)

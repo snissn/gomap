@@ -59,7 +59,7 @@ func TestDenseBallGraphAndPartitionDeterministic(t *testing.T) {
 	}
 	// MaxDistanceWork is intentionally persisted in Config so an artifact
 	// records the scalar-work safety envelope that constructed it.
-	if got, want := mustDigest(t, a), "d5624dc94134da4616e3f718c67da31421b4c414ae9ed6a77e5a18424f20fdbd"; got != want {
+	if got, want := mustDigest(t, a), "22b7f3a1b62416116cf8cc32c3799d6e13a86fe7f604af25196b9a0b6bb07a8b"; got != want {
 		t.Fatalf("tiny canonical graph/assignment bytes changed: got %s want %s", got, want)
 	}
 }
@@ -87,6 +87,43 @@ func TestRecursivePivotSamplingIsDeterministicAndBucketSpecific(t *testing.T) {
 	for i, id := range first {
 		if id < 0 || id >= len(ids) || i > 0 && id <= first[i-1] {
 			t.Fatalf("sample is not a canonical bucket subset: %v", first)
+		}
+	}
+}
+
+func TestDegenerateChunkFallbackVariesByRepetition(t *testing.T) {
+	vectors := make([]Vector, 32)
+	for i := range vectors {
+		vectors[i] = Vector{ID: fmt.Sprintf("v-%02d", i), Values: []float64{float64(i + 1), 0}}
+	}
+	c := config()
+	c.MaxLeafBucket, c.Degree, c.Repetitions, c.MaxEdges = 8, 8, 4, 1024
+	artifact, err := Build(vectors, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	adjacency := make([][]int, len(vectors))
+	for from, neighbors := range artifact.Graph.Neighbors {
+		for _, to := range neighbors {
+			adjacency[from] = append(adjacency[from], to)
+			adjacency[to] = append(adjacency[to], from)
+		}
+	}
+	seen, queue := make([]bool, len(vectors)), []int{0}
+	seen[0] = true
+	for len(queue) > 0 {
+		from := queue[0]
+		queue = queue[1:]
+		for _, to := range adjacency[from] {
+			if !seen[to] {
+				seen[to] = true
+				queue = append(queue, to)
+			}
+		}
+	}
+	for ordinal, reachable := range seen {
+		if !reachable {
+			t.Fatalf("degenerate chunk repetitions left ordinal %d disconnected: graph=%v", ordinal, artifact.Graph.Neighbors)
 		}
 	}
 }

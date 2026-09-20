@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/collections"
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/vectorpartition"
 )
 
@@ -184,7 +185,12 @@ func TestM8RetainedMembershipFeasibilityReplaysExactAssetsV1(t *testing.T) {
 	if m8MembershipFeasibilityMatchesReportV1(artifact.Result, report, 2, 2) {
 		t.Fatal("stale truth identity bound to retained feasibility")
 	}
-	if err := os.WriteFile(filepath.Join(dir, m3ShardGenerationFileV1), []byte("{}"), 0o644); err != nil {
+	shardGenerationPath := filepath.Join(dir, m3ShardGenerationFileV1)
+	shardGeneration, err := os.ReadFile(shardGenerationPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(shardGenerationPath, []byte("{}"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := m8ReplayMembershipFeasibilityV1(cfg, fixture, dir, descriptor, artifact); err == nil {
@@ -193,5 +199,24 @@ func TestM8RetainedMembershipFeasibilityReplaysExactAssetsV1(t *testing.T) {
 	if opened, err := openM8ProductionMultiGroupExistingAssetsWithPolicyV1(dir, []string{"g0", "g1"}, 16, fixture, fixtureVectors(fixture), false); err == nil {
 		_ = opened.Close()
 		t.Fatal("normal retained admission accepted a stale shard generation record without the optional feasibility gate")
+	}
+	if err := os.WriteFile(shardGenerationPath, shardGeneration, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	db, err := backenddb.Open(backenddb.Options{Dir: dir, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := collections.NewCollectionManager(db)
+	collection, err := manager.OpenCollection(m3BenchmarkCollection)
+	if err == nil {
+		err = collection.Delete([]byte("doc-000000"))
+	}
+	closeErr := db.Close()
+	if err != nil || closeErr != nil {
+		t.Fatalf("mutate retained source row: %v %v", err, closeErr)
+	}
+	if _, err := m8RunMembershipFeasibilityV1(cfg, fixture, dir, descriptor); err == nil || !strings.Contains(err.Error(), "validate retained feasibility fixture") {
+		t.Fatalf("retained feasibility accepted mutated fixture rows: %v", err)
 	}
 }

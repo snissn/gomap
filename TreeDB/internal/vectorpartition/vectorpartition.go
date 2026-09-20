@@ -771,8 +771,20 @@ func carveDepth(v []Vector, ids []int, c Config, sets []map[int]float64, repetit
 // and exact bucket membership so recursive siblings do not inherit one global
 // permutation's correlated prefixes.
 func samplePivotsV1(ids []int, k int, seed int64, repetition int) []int {
+	r := bucketRandV1("pivots", ids, seed, repetition)
+	pivots := append([]int(nil), ids[:k]...)
+	for i := k; i < len(ids); i++ {
+		if replace := r.Intn(i + 1); replace < k {
+			pivots[replace] = ids[i]
+		}
+	}
+	sort.Ints(pivots)
+	return pivots
+}
+
+func bucketRandV1(scope string, ids []int, seed int64, repetition int) *rand.Rand {
 	h := sha256.New()
-	_, _ = h.Write([]byte("treedb/vectorpartition/pivots/v1\x00"))
+	_, _ = h.Write([]byte("treedb/vectorpartition/" + scope + "/v1\x00"))
 	var raw [8]byte
 	binary.BigEndian.PutUint64(raw[:], uint64(seed))
 	_, _ = h.Write(raw[:])
@@ -785,21 +797,17 @@ func samplePivotsV1(ids []int, k int, seed int64, repetition int) []int {
 		_, _ = h.Write(raw[:])
 	}
 	sum := h.Sum(nil)
-	r := rand.New(rand.NewSource(int64(binary.BigEndian.Uint64(sum[:8]))))
-	pivots := append([]int(nil), ids[:k]...)
-	for i := k; i < len(ids); i++ {
-		if replace := r.Intn(i + 1); replace < k {
-			pivots[replace] = ids[i]
-		}
-	}
-	sort.Ints(pivots)
-	return pivots
+	return rand.New(rand.NewSource(int64(binary.BigEndian.Uint64(sum[:8]))))
 }
 
 func carveChunks(v []Vector, ids []int, c Config, sets []map[int]float64, repetition, depth int, budget *distanceBudget) error {
-	for start := 0; start < len(ids); start += c.MaxLeafBucket {
-		end := min(start+c.MaxLeafBucket, len(ids))
-		if err := carveDepth(v, ids[start:end], c, sets, repetition, depth+1, budget); err != nil {
+	order := append([]int(nil), ids...)
+	bucketRandV1("chunks", ids, c.Seed, repetition).Shuffle(len(order), func(i, j int) {
+		order[i], order[j] = order[j], order[i]
+	})
+	for start := 0; start < len(order); start += c.MaxLeafBucket {
+		end := min(start+c.MaxLeafBucket, len(order))
+		if err := carveDepth(v, order[start:end], c, sets, repetition, depth+1, budget); err != nil {
 			return err
 		}
 	}
