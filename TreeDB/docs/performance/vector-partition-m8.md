@@ -58,8 +58,10 @@ the canonical FP32 truth pass; its visit cap covers both. External truth-cache
 identity additionally binds the file hashes and source selection, preventing
 query-only consumers from reusing stale truth after a manifest/file change.
 The manifest is published last; a failed import is not a valid fixture and
-existing outputs are never overwritten. Historical fixed-fixture calibration
-and final-qualification commands keep their existing eligibility restrictions.
+existing outputs are never overwritten. Historical M0 locality capture remains
+procedural-only: its split/capture schema does not bind external query files.
+Fixed-fixture calibration and final-qualification commands also keep their
+existing eligibility restrictions.
 Use the ordinary retained M3/M8 paths for this new, separately declared packet.
 
 ## R all-level router evidence boundary (#4773)

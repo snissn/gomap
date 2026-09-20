@@ -122,6 +122,26 @@ func TestExternalFixtureImportRoundTripV1(t *testing.T) {
 	}
 }
 
+func TestExternalFixtureM0LocalityCaptureRefusedV1(t *testing.T) {
+	args, dataset := testExternalFixtureImportArgsV1(t)
+	if err := run(args, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	// The legacy split/capture identity does not bind external query files.
+	// Refuse this fixture before reading any queries or opening retained assets.
+	if err := os.Remove(filepath.Join(dataset, "queries.f32")); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(t.TempDir(), "capture.json")
+	err := run([]string{"m0-locality-capture", "-dataset", dataset, "-retained-db", "must-not-open", "-split", "must-not-open", "-out", out}, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "requires a procedural fixture") {
+		t.Fatalf("legacy capture accepted unsupported fixture: %v", err)
+	}
+	if _, err := os.Lstat(out); !os.IsNotExist(err) {
+		t.Fatal("unsupported capture published evidence")
+	}
+}
+
 func TestExternalFixtureImportBoundsV1(t *testing.T) {
 	for _, tc := range []struct{ flag, value string }{
 		{"-vectors", "1000001"}, {"-queries", "1000001"}, {"-dimensions", "4097"}, {"-test-offset", "7"},

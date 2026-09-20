@@ -82,6 +82,16 @@ func runM0LocalityCaptureV1(args []string, stdout io.Writer) error {
 	if fs.NArg() != 0 || dataset == "" || db == "" || splitPath == "" || out == "" || probes < 1 || scoreBudget < 1 || scoreBudget > collections.MaxVectorPartitionRouterScoreBudgetV3 || ef < 1 {
 		return errors.New("m0-locality-capture requires frozen inputs and positive bounded probes/router-score-budget/ef")
 	}
+	fixture, err := loadFixture(dataset)
+	if err != nil {
+		return err
+	}
+	if err := validateFixture(fixture); err != nil {
+		return err
+	}
+	if !supportedFixtureGeneratorV1(fixture.Generator) {
+		return errors.New("historical M0 locality capture requires a procedural fixture")
+	}
 	buildIdentity, err := m0CurrentCleanBuildIdentityV1()
 	if err != nil {
 		return err
@@ -108,13 +118,6 @@ func runM0LocalityCaptureV1(args []string, stdout io.Writer) error {
 			}
 			ordinals[id] = uint32(ordinal)
 		}
-	}
-	fixture, err := loadFixture(dataset)
-	if err != nil {
-		return err
-	}
-	if err := validateFixture(fixture); err != nil {
-		return err
 	}
 	queries, err := loadFixtureQueriesV1(dataset, fixture)
 	if err != nil {
