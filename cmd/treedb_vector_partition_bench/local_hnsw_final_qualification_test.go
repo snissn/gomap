@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -186,7 +187,7 @@ func TestLocalHNSWFinalQualificationInvokeV1(t *testing.T) {
 		localHNSWFinalQualificationTestGateEvidenceV1(&report)
 		return report, m8ProductionMeasurementTranscriptV1{ExecutionID: report.ExecutionID, Outcomes: []m8ProductionRowOutcomesV1{rowOutcome}}, reportPath, digest, nil
 	}, io.Discard)
-	if err != nil || len(children) != 48 || len(got) != 48 || got[0].m8ExistingDB != "a" || got[1].m8ExistingDB != "b" || got[24].m8ExistingDB != "c" || got[25].m8ExistingDB != "d" || got[0].probes[0] != 2 || got[0].efSearch[0] != 128 || got[1].efSearch[0] != 96 || !got[0].m8FinalOfflineGraph || got[1].m8FinalOfflineGraph {
+	if err != nil || len(children) != 48 || len(got) != 48 || got[0].m8ExistingDB != "a" || got[1].m8ExistingDB != "b" || got[24].m8ExistingDB != "c" || got[25].m8ExistingDB != "d" || got[0].probes[0] != 2 || got[0].efSearch[0] != 128 || got[1].efSearch[0] != 96 || !got[0].m8FinalOfflineGraph || got[1].m8FinalOfflineGraph || !slices.Contains(got[0].command, "-m8-final-offline-graph") || slices.Contains(got[1].command, "-m8-final-offline-graph") {
 		t.Fatalf("err=%v calls=%d", err, len(got))
 	}
 }

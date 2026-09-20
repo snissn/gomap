@@ -303,12 +303,14 @@ func localHNSWFinalQualificationChildConfigV1(base config, input localHNSWFinalQ
 		"-router-score-budget", strconv.Itoa(m8QualificationRouterCandidatesV1),
 		"-ef-search", strconv.Itoa(run.EFSearch),
 	}
+	if run.Variant == localHNSWFinalQualificationBaselineV1 {
+		args = append(args, "-m8-final-offline-graph")
+	}
 	child, err := parseConfig(args)
 	if err != nil {
 		return config{}, err
 	}
 	child.command = append([]string{base.command[0]}, args...)
-	child.m8FinalOfflineGraph = run.Variant == localHNSWFinalQualificationBaselineV1
 	return child, nil
 }
 

@@ -160,7 +160,7 @@ type config struct {
 	m3MaxBenchmarkVisits               int64
 	m8CoordinatorLimits                nativewire.VectorPartitionCoordinatorLimitsV1
 	m8ShardLimits                      nativewire.VectorPartitionShardSearchLimitsV1
-	// The final qualifier alone admits its explicit offline M16 control.
+	// The final qualifier and its exact child replay admit the offline M16 control.
 	m8FinalOfflineGraph bool
 }
 
@@ -994,6 +994,7 @@ func parseConfig(args []string) (config, error) {
 	fs.IntVar(&cfg.m8RouterPolicyWidth, "m8-router-policy-width", 0, "nearest returned representatives used by the offline flat-HNSW diagnostic; zero uses the bounded default")
 	fs.StringVar(&cfg.m8TruthCache, "m8-truth-cache", "", "external canonical exact-truth cache directory; identity-bound and fail-closed")
 	fs.StringVar(&cfg.m8TruthCacheSHA256, "m8-truth-cache-sha256", "", "independently trusted SHA-256 of the canonical truth-cache artifact required for cache reuse")
+	fs.BoolVar(&cfg.m8FinalOfflineGraph, "m8-final-offline-graph", false, "replay the final qualifier's retained offline graph control")
 	fs.StringVar(&cfg.partitionAssignment, "partition-assignment", cfg.partitionAssignment, "partition assignment for partition/M3 stages: graph or stable_id_hash")
 	fs.StringVar(&cfg.shardPlanMode, "shard-plan", cfg.shardPlanMode, "off keeps -partitions authoritative; byte_bounded derives the M3 partition count and per-pack capacity from an explicit hot-byte budget before construction")
 	fs.Uint64Var(&cfg.shardPlanTargetBytes, "shard-plan-target-hot-bytes", 0, "explicit per-pack hot-byte budget for -shard-plan byte_bounded; zero inherits the selected portable default")
@@ -1180,6 +1181,9 @@ func parseConfig(args []string) (config, error) {
 	}
 	if cfg.m8ExistingDB != "" && cfg.stage != m8ProductionMultiGroupModeV1 {
 		return config{}, errors.New("-m8-existing-db requires production_multi_group")
+	}
+	if cfg.m8FinalOfflineGraph && (cfg.stage != m8ProductionMultiGroupModeV1 || cfg.m8ExistingDB == "" || len(cfg.m8VariantDBs) != 0) {
+		return config{}, errors.New("-m8-final-offline-graph requires production_multi_group with one existing database")
 	}
 	if len(cfg.m8VariantDBs) > 0 && (cfg.stage != m8ProductionMultiGroupModeV1 || cfg.m8ExistingDB != "" || len(cfg.m8VariantDBs) != 3) {
 		return config{}, errors.New("-m8-variant-dbs requires production_multi_group, exactly three directories, and no -m8-existing-db")
