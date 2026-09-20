@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -14,6 +15,8 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+
+	"github.com/snissn/gomap/TreeDB/vectorpartition"
 )
 
 const (
@@ -237,6 +240,9 @@ func m8ComputeRetainedMembershipFeasibilityV1(cfg config, fixture fixtureManifes
 	if err := m3DescriptorMatchesManifestV1(descriptor, fixture, manifest, assets.status.ModelDigest, assets.status.Config); err != nil {
 		return m8MembershipFeasibilityV1{}, err
 	}
+	if descriptor.ShardPlan == (vectorpartition.ShardPlanV1{}) {
+		return m8MembershipFeasibilityV1{}, errors.New("retained membership feasibility requires a byte-bounded shard plan")
+	}
 	record, err := m3ValidateRetainedShardPackBytesV1(dir, descriptor, manifest.Assets)
 	if err != nil {
 		return m8MembershipFeasibilityV1{}, err
@@ -433,6 +439,16 @@ func m8PublishMembershipFeasibilityV1(out string, result m8MembershipFeasibility
 		return err
 	})
 	if err != nil {
+		if !linked && errors.Is(err, os.ErrExist) {
+			existing, readErr := readBoundedRegularFileV1(path, m8MembershipFeasibilityMaxBytesV1)
+			if readErr != nil {
+				return m8MembershipFeasibilityArtifactV1{}, fmt.Errorf("read existing membership feasibility artifact: %w", readErr)
+			}
+			if bytes.Equal(existing, raw) {
+				return m8MembershipFeasibilityArtifactV1{Path: path, ArtifactSHA256: digest, Result: result}, nil
+			}
+			return m8MembershipFeasibilityArtifactV1{}, errors.New("membership feasibility artifact digest-prefix collision")
+		}
 		if linked {
 			return m8MembershipFeasibilityArtifactV1{Path: path, ArtifactSHA256: digest, Result: result}, err
 		}
