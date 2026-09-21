@@ -150,17 +150,11 @@ func runM8ServingResourcesV1(args []string, stdout io.Writer) (runErr error) {
 	if err != nil {
 		return err
 	}
-	assets, err := openM8ProductionExistingAssetSetV1(parent.Variant.DatabaseDirectory)
+	assets, err := m8OpenServingResourceAssetsV1(parent, cfg)
 	if err != nil {
 		return err
 	}
 	defer func() { runErr = errors.Join(runErr, assets.Close()) }()
-	if err := m8BindRetainedM3DescriptorWithPolicyV1(assets, parent.Dataset, cfg.m8FinalOfflineGraph); err != nil {
-		return err
-	}
-	if !reflect.DeepEqual(assets.descriptor, parent.Variant) {
-		return errors.New("serving resource assets changed after replay")
-	}
 	host := m8ProductionHostV1(config{out: filepath.Dir(out), dataset: parent.DatasetDirectory}, assets.dir)
 	if host != parent.Host || runtime.Version() != parent.GoVersion || runtime.GOOS != parent.GOOS || runtime.GOARCH != parent.GOARCH || runtime.NumCPU() != parent.LogicalCPUs || runtime.GOMAXPROCS(0) != parent.GOMAXPROCS || debug.SetMemoryLimit(-1) != parent.GoMemoryLimitBytes {
 		return errors.New("serving resources require the parent host, mounts and runtime settings")
@@ -262,6 +256,27 @@ func runM8ServingResourcesV1(args []string, stdout io.Writer) (runErr error) {
 	}
 	_, err = fmt.Fprintln(stdout, "SERVING_RESOURCE_OBSERVATIONS_NOT_QUALIFICATION", out)
 	return err
+}
+
+func m8OpenServingResourceAssetsV1(parent m8ProductionReportV1, cfg config) (*m8ProductionMultiGroupAssetsV1, error) {
+	vectors, err := loadFixtureVectorsV1(parent.DatasetDirectory, parent.Dataset)
+	if err != nil {
+		return nil, err
+	}
+	groups := make([]string, len(parent.Topology.Groups))
+	for i, group := range parent.Topology.Groups {
+		groups[i] = group.GroupID
+	}
+	// Use the same validated serving view as the producer: retained M3
+	// placements are local, not the parent's multi-group placements or digests.
+	assets, err := openM8ProductionMultiGroupExistingAssetsWithPolicyV1(parent.Variant.DatabaseDirectory, groups, cfg.partitions, parent.Dataset, vectors, cfg.m8FinalOfflineGraph)
+	if err != nil {
+		return nil, err
+	}
+	if !reflect.DeepEqual(assets.descriptor, parent.Variant) {
+		return nil, errors.Join(errors.New("serving resource assets changed after replay"), assets.Close())
+	}
+	return assets, nil
 }
 
 func m8ServingResourceCellMatchesV1(cell m8ServingResourceCellV1, parent m8ProductionRowV1, expected m8ProductionRowOutcomesV1) error {

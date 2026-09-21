@@ -213,6 +213,12 @@ standard M8 profiler settings. It requires exact per-query IDs and score bits
 against parent repetition zero. A discrepancy remains a failed receipt, not a
 reason to select another parent repetition or query subset.
 
+Retained M3 assets are opened read-only through the producer's validated
+multi-group loader. It derives the serving placements and group asset digests
+from the authenticated parent group IDs; the persisted local placements and
+variant descriptor are not rewritten. Fixture validation and this setup finish
+before warmup and the resource snapshots.
+
 The JSONL contract is one header, all declared cells in order, and a complete
 footer binding the profiles. Each line is synced outside the worker window.
 Failed attempts/cells remain on disk; an absent footer is incomplete.
