@@ -102,15 +102,8 @@ func liveLifecycleOpenRetainedV1(t *testing.T) (vectorPartitionLiveProductionFix
 	if err != nil || fmt.Sprintf("%x", sha256.Sum256(raw)) != in.ManifestSHA256 {
 		t.Fatalf("manifest pin mismatch: %v", err)
 	}
-	if manifest.SourceRowCount != 100000 || manifest.DomainCount != 16 {
-		t.Fatal("retained fixture must be real100K/D16")
-	}
-	planInput := vectorpartition.SelectedShardPlanRequestV1(100000, 768)
-	planInput.LogicalDomains, planInput.TargetHotBytes = 16, 7696384
-	plan, err := vectorpartition.PlanByteBoundedShardsV1(planInput)
-	policy, valid := collections.ParseVectorPartitionOverlapPolicyV1(manifest.BalancePolicy)
-	if err != nil || !valid || policy.Budget != 20000 || policy.Realized == 0 || policy.Capacity != uint64(plan.DomainOverlapCapacity) || manifest.PartitionCount != uint32(plan.Partitions) {
-		t.Fatalf("retained fixture must be the selected 20%% overlap multi-pack asset: %v", err)
+	if err := validateLiveLifecycleRetainedGeometryV1(manifest); err != nil {
+		t.Fatal(err)
 	}
 	fixture := vectorPartitionLiveProductionFixtureV1{dir: in.DB, database: db, collection: col, manifest: manifest}
 	for _, def := range col.Meta().VectorIndexes {
@@ -149,6 +142,102 @@ func liveLifecycleOpenRetainedV1(t *testing.T) (vectorPartitionLiveProductionFix
 	liveLifecyclePlacementV1(t, &fixture)
 	ok = true
 	return fixture, vectors, queries, in.Probes
+}
+
+func validateLiveLifecycleRetainedGeometryV1(manifest collections.VectorPartitionManifestV1) error {
+	if manifest.SourceRowCount != 100000 || manifest.DomainCount != 16 {
+		return fmt.Errorf("retained fixture must be real100K/D16")
+	}
+	input := vectorpartition.SelectedShardPlanRequestV1(100000, 768)
+	input.LogicalDomains, input.TargetHotBytes = 16, 7696384
+	plan, err := vectorpartition.PlanByteBoundedShardsV1(input)
+	if err != nil {
+		return err
+	}
+	policy, valid := collections.ParseVectorPartitionOverlapPolicyV1(manifest.BalancePolicy)
+	// PackDomainMembershipsV1 replaces the logical-domain capacity with the
+	// per-pack capacity before M3 persists the policy. Do not compare units.
+	if !valid || policy.Budget != 20000 || policy.Realized == 0 || policy.Capacity != uint64(plan.OverlapCapacity) || manifest.PartitionCount != uint32(plan.Partitions) {
+		return fmt.Errorf("retained fixture must be the selected 20%% overlap multi-pack asset: policy=%+v packs=%d, want pack_capacity=%d packs=%d", policy, manifest.PartitionCount, plan.OverlapCapacity, plan.Partitions)
+	}
+	return nil
+}
+
+func TestVectorPartitionLiveRetainedGeometryV1(t *testing.T) {
+	manifest := collections.VectorPartitionManifestV1{SourceRowCount: 100000, DomainCount: 16, PartitionCount: 64}
+	for _, tc := range []struct {
+		name      string
+		capacity  uint64
+		budget    uint64
+		realized  uint64
+		packs     uint32
+		wantError bool
+	}{
+		{"physical-pack-capacity", 1875, 20000, 20000, 64, false},
+		{"logical-domain-capacity-is-not-pack-capacity", 7500, 20000, 20000, 64, true},
+		{"no-overlap", 1875, 20000, 0, 64, true},
+		{"disjoint-budget", 1875, 0, 0, 64, true},
+		{"wrong-pack-count", 1875, 20000, 20000, 16, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := manifest
+			m.PartitionCount = tc.packs
+			var err error
+			m.BalancePolicy, err = collections.FormatVectorPartitionOverlapPolicyV1(collections.VectorPartitionOverlapPolicyV1{Capacity: tc.capacity, Budget: tc.budget, Realized: tc.realized, Unspent: tc.budget - tc.realized})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := validateLiveLifecycleRetainedGeometryV1(m); (err != nil) != tc.wantError {
+				t.Fatalf("geometry error=%v, wantError=%v", err, tc.wantError)
+			}
+		})
+	}
+	manifest.BalancePolicy = "malformed"
+	if err := validateLiveLifecycleRetainedGeometryV1(manifest); err == nil {
+		t.Fatal("accepted malformed overlap policy")
+	}
+}
+
+// Match M3's actual encoded-byte boundary, not only AccountShardPacksV1's
+// modeled envelope, before publishing a replacement generation.
+func validateLiveLifecyclePackBytesV1(assets []collections.VectorPartitionAssetV1, accounts []vectorpartition.ShardPackSummaryV1) error {
+	if len(assets) != len(accounts) || len(accounts) == 0 {
+		return fmt.Errorf("materialized %d shard packs for %d planned packs", len(assets), len(accounts))
+	}
+	seen := make([]bool, len(accounts))
+	for _, asset := range assets {
+		p := asset.PartitionID
+		if p >= uint32(len(accounts)) || seen[p] || accounts[p].Partition != int(p) {
+			return fmt.Errorf("materialized shard pack %d is duplicate or outside the canonical plan", p)
+		}
+		seen[p] = true
+		if asset.Bytes == 0 || asset.Bytes > accounts[p].Bytes {
+			return fmt.Errorf("materialized shard pack %d bytes=%d outside planned envelope (0,%d]", p, asset.Bytes, accounts[p].Bytes)
+		}
+	}
+	return nil
+}
+
+func TestVectorPartitionLiveRetainedPackBytesV1(t *testing.T) {
+	accounts := []vectorpartition.ShardPackSummaryV1{{Partition: 0, Bytes: 100}, {Partition: 1, Bytes: 200}}
+	for _, tc := range []struct {
+		name      string
+		assets    []collections.VectorPartitionAssetV1
+		wantError bool
+	}{
+		{"valid", []collections.VectorPartitionAssetV1{{PartitionID: 0, Bytes: 100}, {PartitionID: 1, Bytes: 199}}, false},
+		{"missing", []collections.VectorPartitionAssetV1{{PartitionID: 0, Bytes: 100}}, true},
+		{"duplicate", []collections.VectorPartitionAssetV1{{PartitionID: 0, Bytes: 100}, {PartitionID: 0, Bytes: 100}}, true},
+		{"outside-plan", []collections.VectorPartitionAssetV1{{PartitionID: 0, Bytes: 100}, {PartitionID: 2, Bytes: 100}}, true},
+		{"zero", []collections.VectorPartitionAssetV1{{PartitionID: 0, Bytes: 0}, {PartitionID: 1, Bytes: 100}}, true},
+		{"oversized", []collections.VectorPartitionAssetV1{{PartitionID: 0, Bytes: 101}, {PartitionID: 1, Bytes: 100}}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := validateLiveLifecyclePackBytesV1(tc.assets, accounts); (err != nil) != tc.wantError {
+				t.Fatalf("pack byte error=%v, wantError=%v", err, tc.wantError)
+			}
+		})
+	}
 }
 
 // The live writer scans all representatives, unlike approximate query routing.
@@ -446,6 +535,9 @@ func liveLifecycleRebuildV1(t *testing.T, f vectorPartitionLiveProductionFixture
 		t.Fatal(err)
 	}
 	defer resources.Release()
+	if err := validateLiveLifecyclePackBytesV1(assets, accounts); err != nil {
+		t.Fatal(err)
+	}
 	m.Assets = assets
 	m.Canonicalize()
 	if err := f.collection.PublishVectorPartitionManifestV1(m, nil); err != nil {
