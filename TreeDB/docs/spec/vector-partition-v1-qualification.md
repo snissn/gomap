@@ -176,6 +176,14 @@ Every retained M3 and M8 command also carries exactly one explicit canonical
 checkout must be the clean Git toplevel at that head, rather than inheriting
 provenance from the replay process cwd or CI environment.
 
+Standalone `replay-m8-report` and its comparison/resource consumers also accept
+an explicitly pinned, canonical absolute checkout nested beneath the retained
+root, allowing completion runs to share retained sibling fixture/truth inputs.
+They still require the exact clean Git toplevel/head, exactly one matching
+source flag, contained artifacts, matching executable bytes/build metadata and
+all seven external replay pins. This does not relax the historical campaign's
+`<campaign-root>/source` requirement for either child or matrix evidence.
+
 `-max-vectors` remains the source-fixture admission cap. Each frozen M3 command
 also carries `-router-max-vectors`: 120000 for 100k and 300000 for 250k, which
 reserves the full 0.20-overlap final-membership shape for all three variants.
