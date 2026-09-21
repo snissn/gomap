@@ -362,7 +362,7 @@ func liveLifecycleReplaceV1(ctx context.Context, client *Client, vector []float3
 }
 
 func liveLifecycleReplaceIDV1(ctx context.Context, client *Client, collection, id string, vector []float32, marker int, ack AckPolicy) error {
-	doc, err := json.Marshal(map[string]any{"embedding": vector, "marker": marker})
+	doc, err := liveLifecycleDocumentV1(vector, marker)
 	if err != nil {
 		return err
 	}
@@ -371,6 +371,73 @@ func liveLifecycleReplaceIDV1(ctx context.Context, client *Client, collection, i
 		return fmt.Errorf("replace matched=%d modified=%d", matched, modified)
 	}
 	return err
+}
+
+func liveLifecycleDocumentV1(vector []float32, marker int) ([]byte, error) {
+	// The retained M3 source requires this sort column. doc-000000 starts at
+	// time_us=1; keep it fixed so marker-only writes do not change column data.
+	return json.Marshal(map[string]any{"embedding": vector, "marker": marker, "time_us": 1})
+}
+
+func liveLifecycleColumnsV1(dimensions int) *collections.ColumnStoreConfig {
+	return &collections.ColumnStoreConfig{
+		Enabled: true, RetainedPayload: collections.ColumnRetainedPayloadNonColumn,
+		Columns: []collections.ColumnStoreColumn{
+			{Name: "time_us", Path: "time_us", ValueType: collections.ColumnStoreValueInt64},
+			{Name: "embedding", Path: "embedding", Owner: collections.TypedStorageOwnerColumnPart, ValueType: collections.ColumnStoreValueFloat32Vector, VectorDims: dimensions},
+		},
+		SortKey: []collections.ColumnSortKey{{Column: "time_us"}},
+	}
+}
+
+func TestVectorPartitionLiveLifecycleDocumentSchemaV1(t *testing.T) {
+	dir := t.TempDir()
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+		t.Fatal(err)
+	}
+	db, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	manager := collections.NewCollectionManager(db)
+	if _, err := manager.CreateCollection(&collections.CollectionMeta{Name: "docs", Options: collections.CollectionOptions{DocumentFormat: collections.DocumentFormatJSON, ColumnStore: liveLifecycleColumnsV1(2)}}); err != nil {
+		t.Fatal(err)
+	}
+	col, err := manager.OpenCollection("docs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := col.Insert([]byte("a"), []byte(`{"embedding":[1,0]}`)); !errors.Is(err, collections.ErrColumnDeclaredValueUnsupported) {
+		t.Fatalf("missing required sort column: %v", err)
+	}
+	client, _ := liveLifecycleNativeClientV1(t, db)
+	ids := [][]byte{[]byte("a")}
+	if _, present, err := client.GetMany(t.Context(), "docs", ids); err != nil || len(present) != 1 || present[0] {
+		t.Fatalf("rejected insert became visible: %v err=%v", present, err)
+	}
+	doc, err := liveLifecycleDocumentV1([]float32{1, 0}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.InsertBatch(t.Context(), "docs", collections.DocumentFormatJSON, ids, [][]byte{doc}, AckSynced); err != nil {
+		t.Fatal(err)
+	}
+	if err := liveLifecycleReplaceIDV1(t.Context(), client, "docs", "a", []float32{0, 1}, 2, AckSynced); err != nil {
+		t.Fatal(err)
+	}
+	docs, present, err := client.GetMany(t.Context(), "docs", ids)
+	if err != nil || len(present) != 1 || !present[0] {
+		t.Fatalf("complete document missing: %v err=%v", present, err)
+	}
+	var got struct {
+		TimeUS    int64     `json:"time_us"`
+		Marker    int       `json:"marker"`
+		Embedding []float32 `json:"embedding"`
+	}
+	if err := json.Unmarshal(docs[0], &got); err != nil || got.TimeUS != 1 || got.Marker != 2 || !slices.Equal(got.Embedding, []float32{0, 1}) {
+		t.Fatalf("reconstructed document=%+v err=%v", got, err)
+	}
 }
 
 func TestVectorPartitionLiveSelectedLifecycleV1(t *testing.T) {
@@ -431,7 +498,9 @@ func TestVectorPartitionLiveSelectedLifecycleV1(t *testing.T) {
 		documents[i] = vectorPartitionLiveDocumentV1{id: id, vector: v, home: home, overlap: i == 0}
 		vectors[id] = v
 	}
-	fixture := newVectorPartitionLiveNativewireDocumentsV1(t, documents)
+	// Exercise M3's required scalar sort key and non-column retained payload
+	// through every mutation, reopen, crash and replacement phase in normal CI.
+	fixture := newVectorPartitionLiveNativewireDocumentsV1(t, documents, liveLifecycleColumnsV1(dimensions))
 	runVectorPartitionLiveLifecycleV1(t, fixture, vectors, queries, 1, "a", 32)
 }
 
@@ -448,6 +517,9 @@ func runVectorPartitionLiveLifecycleV1(t *testing.T, fixture vectorPartitionLive
 			_ = fixture.database.Close()
 		}
 	})
+	if len(vectors[changedID]) != fixture.definition.Dimensions {
+		t.Fatalf("mutation target %q is absent or has the wrong dimensions", changedID)
+	}
 	for _, asset := range fixture.manifest.Assets {
 		if asset.GraphVariant != string(collections.VectorPartitionLocalGraphVariantConnectivityPreservingVamanaR64L256Alpha1_2V1) {
 			t.Fatalf("wrong selected base graph: %s", asset.GraphVariant)
@@ -549,7 +621,10 @@ func runVectorPartitionLiveLifecycleV1(t *testing.T, fixture vectorPartitionLive
 		t.Fatal("declared deletion is not observable in baseline ANN results")
 	}
 
-	insert, _ := json.Marshal(map[string]any{"embedding": moves[0]})
+	insert, err := liveLifecycleDocumentV1(moves[0], 0)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, err := client.InsertBatch(t.Context(), fixture.manifest.Collection, collections.DocumentFormatJSON, [][]byte{[]byte("live")}, [][]byte{insert}, AckSynced); err != nil {
 		t.Fatal(err)
 	}
@@ -708,14 +783,16 @@ func runVectorPartitionLiveLifecycleV1(t *testing.T, fixture vectorPartitionLive
 		var a struct {
 			Embedding []float32 `json:"embedding"`
 			Marker    int       `json:"marker"`
+			TimeUS    int64     `json:"time_us"`
 		}
 		var live struct {
 			Embedding []float32 `json:"embedding"`
+			TimeUS    int64     `json:"time_us"`
 		}
-		if err := json.Unmarshal(docs[0], &a); err != nil || a.Marker != marker || !slices.Equal(a.Embedding, vector) {
+		if err := json.Unmarshal(docs[0], &a); err != nil || a.Marker != marker || a.TimeUS != 1 || !slices.Equal(a.Embedding, vector) {
 			t.Fatalf("recovered a marker=%d want=%d err=%v", a.Marker, marker, err)
 		}
-		if err := json.Unmarshal(docs[2], &live); err != nil || !slices.Equal(live.Embedding, moves[0]) {
+		if err := json.Unmarshal(docs[2], &live); err != nil || live.TimeUS != 1 || !slices.Equal(live.Embedding, moves[0]) {
 			t.Fatalf("recovered live embedding: %v", err)
 		}
 	}

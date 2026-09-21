@@ -587,7 +587,7 @@ func newVectorPartitionLiveNativewireFixtureV1(t testing.TB) vectorPartitionLive
 		{id: "b", vector: []float32{.8, .2}, home: 1},
 		{id: "c", vector: []float32{0, 1}, home: 2},
 		{id: "d", vector: []float32{.2, .8}, home: 2},
-	})
+	}, nil)
 }
 
 type vectorPartitionLiveDocumentV1 struct {
@@ -597,7 +597,7 @@ type vectorPartitionLiveDocumentV1 struct {
 	overlap bool
 }
 
-func newVectorPartitionLiveNativewireDocumentsV1(t testing.TB, documents []vectorPartitionLiveDocumentV1) vectorPartitionLiveProductionFixtureV1 {
+func newVectorPartitionLiveNativewireDocumentsV1(t testing.TB, documents []vectorPartitionLiveDocumentV1, columns *collections.ColumnStoreConfig) vectorPartitionLiveProductionFixtureV1 {
 	t.Helper()
 	if !collections.VectorPartitionNamespacePersistenceSupportedForTestingV1() {
 		t.Skip("vector partition namespace persistence unsupported on this platform")
@@ -615,7 +615,10 @@ func newVectorPartitionLiveNativewireDocumentsV1(t testing.TB, documents []vecto
 	if len(documents) > 4 {
 		definition.M, definition.EfConstruction, definition.EfSearch = 16, 128, 96
 	}
-	meta := collections.CollectionMeta{Name: "docs", Options: collections.CollectionOptions{DocumentFormat: collections.DocumentFormatJSON, ColumnStore: &collections.ColumnStoreConfig{Enabled: true, Columns: []collections.ColumnStoreColumn{{Name: "embedding", Path: "embedding", Owner: collections.TypedStorageOwnerColumnPart, ValueType: collections.ColumnStoreValueFloat32Vector, VectorDims: dimensions}}}}, VectorIndexes: []collections.VectorIndexDefinition{definition}}
+	if columns == nil {
+		columns = &collections.ColumnStoreConfig{Enabled: true, Columns: []collections.ColumnStoreColumn{{Name: "embedding", Path: "embedding", Owner: collections.TypedStorageOwnerColumnPart, ValueType: collections.ColumnStoreValueFloat32Vector, VectorDims: dimensions}}}
+	}
+	meta := collections.CollectionMeta{Name: "docs", Options: collections.CollectionOptions{DocumentFormat: collections.DocumentFormatJSON, ColumnStore: columns}, VectorIndexes: []collections.VectorIndexDefinition{definition}}
 	manager := collections.NewCollectionManager(database)
 	if _, err := manager.CreateCollection(&meta); err != nil {
 		database.Close()
@@ -765,7 +768,7 @@ func vectorPartitionLiveProductionStorageBytesV1(root string) (uint64, error) {
 
 func insertVectorPartitionLiveDocumentV1(t testing.TB, collection *collections.Collection, id string, vector []float32) {
 	t.Helper()
-	document, err := json.Marshal(map[string]any{"embedding": vector})
+	document, err := json.Marshal(map[string]any{"embedding": vector, "time_us": 1})
 	if err != nil {
 		t.Fatal(err)
 	}
