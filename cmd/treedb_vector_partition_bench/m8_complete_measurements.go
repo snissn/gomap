@@ -384,6 +384,11 @@ func m8AttachCompleteAttributionV1(row *m8ProductionRowV1, attribution m8Attribu
 	// failed measured request supplies no actual traversal or merge observation.
 	a.EndToEndRecallAtK = row.RecallAtK
 	a.ApproximateLocalToEndToEndLossAtK = a.ApproximateLocalHNSWRecallAtK - a.EndToEndRecallAtK
+	if !a.ApproximateRouterPartitionCoverageComplete {
+		// The offline population was not executed, so it cannot establish a
+		// loss (or gain) against the independently measured successes.
+		a.ApproximateLocalToEndToEndLossAtK = 0
+	}
 	a.ResidualLossOwners = m8AttributionLossOwnersV1(*a)
 	a.StageOwners = m8AttributionStageOwnersV1(*a)
 	return nil

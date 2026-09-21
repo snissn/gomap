@@ -577,7 +577,7 @@ func m8QualityEvidenceSelectionV1(cfg m8ProductionConfigEvidenceV1, row m8Produc
 			}
 			continue
 		}
-		if row.Attribution.ApproximateRouterPartitionCoverageComplete {
+		if row.Accounting != nil || row.Attribution.ApproximateRouterPartitionCoverageComplete {
 			if observed.CoordinatorReturned == nil || *observed.CoordinatorReturned & ^uint16((1<<uint(cfg.TopK))-1) != 0 {
 				return errors.New("missing or invalid measured coordinator truth mask")
 			}

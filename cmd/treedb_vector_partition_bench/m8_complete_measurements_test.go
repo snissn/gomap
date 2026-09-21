@@ -269,6 +269,17 @@ func TestM8RepeatedWindowWorkAndReceiptAdmission(t *testing.T) {
 	}
 }
 
+func TestM8RepeatedWindowsCannotEnterHistoricalCampaign(t *testing.T) {
+	fixture := m8QualificationFixturesV1[0]
+	cfg := m8ProductionConfigEvidenceV1{RaftGroups: 4, RaftNodesPerGroup: 3, Partitions: 16, TopK: 10, RecallTarget: .90, RouterScoreBudget: m8QualificationRouterCandidatesV1, LocalScoreBudget: nativewire.DefaultVectorPartitionCoordinatorLimitsV1().MaxLocalScoreCalls, MaxExactTruthVisits: m8QualificationExactTruthCapV1(fixture), Seed: fixture.Seed, Probes: []int{1, 2, 4, 8, 16}, Concurrency: []int{1}, EfSearch: []int{128}, Overlap: []float64{.2}}
+	for _, repetitions := range []int{0, 1, 2, 5} {
+		cfg.MeasuredRepetitions = repetitions
+		if got := m8QualificationConfigV1(cfg, fixture, .2, 0); got != (repetitions <= 1) {
+			t.Fatalf("historical campaign admitted repetitions=%d: %t", repetitions, got)
+		}
+	}
+}
+
 func TestM8IncompleteMeasurementsSurviveDiagnosticFailure(t *testing.T) {
 	row := m8CompleteMeasurementGoldenV1(t)
 	results := make([][]m8CanonicalResultV1, row.Samples)

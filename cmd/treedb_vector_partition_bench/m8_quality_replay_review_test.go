@@ -68,6 +68,10 @@ func TestM8QualityRetainedShortfallReplaysStaticEvidence(t *testing.T) {
 	if cell.Evidence.ApproximateRouterPartitionCoverageComplete {
 		t.Fatal("fixture did not exhaust unique-domain coverage")
 	}
+	control, err := m8BuildAttributionV1(t.Context(), assets, homes, members, queries, truth, oracles, 2, 32, 10, defaultRouterScoreBudgetV3, make([][]m8CanonicalResultV1, len(queries)), h)
+	if err != nil || !control.Evidence.ApproximateRouterPartitionCoverageComplete {
+		t.Fatalf("successful local control: %v", err)
+	}
 	row := m8ProductionRowV1{Status: "router_score_budget_exhausted", Probes: 2, EfSearch: 32, Samples: len(queries)}
 	if err := m8AttachAttributionV1(&row, cell, cell.Local); err != nil {
 		t.Fatal(err)
@@ -120,6 +124,53 @@ func TestM8QualityRetainedShortfallReplaysStaticEvidence(t *testing.T) {
 			t.Fatal("failed row contains local/coordinator observations")
 		}
 	}
+	t.Run("complete_mixed_population", func(t *testing.T) {
+		// Construct a mixed measured population from a real local result. The
+		// separately replayed static population has no approximate local result;
+		// it must neither erase that success nor invent a comparison against it.
+		mixed := m8ProductionRowV1{Probes: 2, EfSearch: 32, Concurrency: 1, Samples: len(queries), ElapsedNanos: 100, Accounting: &m8MeasurementAccountingV1{Contract: m8CompleteAttemptsV1, Attempts: []m8MeasuredAttemptV1{
+			{Class: "success", Dispatched: true, WorkObserved: true, TerminalNanos: 20, CoordinatorNanos: 10, TruthHits: m8IDHitCountV1(m8CanonicalIDsV1(truth[0]), m8CanonicalIDsV1(control.Local[0]))},
+			{Class: m8ProductionRouterScoreBudgetExhaustedV1, Dispatched: true, TerminalNanos: 20},
+			{Class: m8ProductionRouterScoreBudgetExhaustedV1, Dispatched: true, TerminalNanos: 20},
+		}}}
+		if err := m8SummarizeAttemptsV1(&mixed, 10); err != nil {
+			t.Fatal(err)
+		}
+		results := [][]m8CanonicalResultV1{control.Local[0], nil, nil}
+		if err := m8AttachAttributionV1(&mixed, cell, results); err != nil {
+			t.Fatal(err)
+		}
+		a := mixed.Attribution
+		last := a.StageOwners[len(a.StageOwners)-1]
+		if mixed.Status != "measurement_failure" || mixed.RecallAtK <= 0 || a.EndToEndRecallAtK != mixed.RecallAtK || a.CoordinatorMergeIDParity || a.CoordinatorMergeScoreParity || a.ApproximateLocalToEndToEndLossAtK != 0 || last.Owner != "offline_local_comparison_unavailable" || last.Active || last.Delta != 0 || !validM8AttributionV1(a, 10) {
+			t.Fatalf("mixed measurement lost or compared with unavailable evidence: %+v", mixed)
+		}
+		for i, q := range a.Quality.Queries {
+			if q.Actual != nil || (q.CoordinatorReturned != nil) != (i == 0) {
+				t.Fatal("invented local traversal or missing measured mask")
+			}
+		}
+		report.Rows = []m8ProductionRowV1{mixed}
+		report.Config.MeasurementAccounting = m8CompleteAttemptsV1
+		outcomes, err := m8ProductionMeasurementTranscriptOutcomesV1(report, []m8MeasuredCellV1{{rowIndex: 0, results: results, durations: []uint64{10, 0, 0}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		transcript := m8ProductionMeasurementTranscriptV1{Outcomes: outcomes}
+		if err := m8ValidateProductionMeasurementTranscriptOutcomesV1(transcript, report); err != nil {
+			t.Fatal(err)
+		}
+		if err := m8QualityEvidenceSelectionV1(report.Config, mixed); err != nil {
+			t.Fatal(err)
+		}
+		if err := m8QualificationRetainedAttributionV1(root, report, truth, transcript); err != nil {
+			t.Fatal("mixed evidence failed retained replay", err)
+		}
+		a.CoordinatorMergeIDParity = true
+		if validM8AttributionV1(a, 10) {
+			t.Fatal("invented comparison parity accepted")
+		}
+	})
 }
 
 func TestM8QualityTracePreparationCancellationDoesNotPublishCache(t *testing.T) {

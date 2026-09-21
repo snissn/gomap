@@ -32,7 +32,7 @@ func BenchmarkM8MeasuredNativeCellV1(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	if _, err := m8WarmProductionTopologyV1(ctx, topology.Coordinator(), assets, queries, config{topK: 10, efSearch: []int{96}, concurrency: []int{1}, warmup: 16}); err != nil {
+	if _, err := m8WarmProductionTopologyV1(ctx, topology.Coordinator(), assets, queries, config{topK: 10, probes: []int{4}, routerCandidates: defaultRouterScoreBudgetV3, efSearch: []int{96}, concurrency: []int{1}, warmup: 16}); err != nil {
 		b.Fatal(err)
 	}
 	b.ReportAllocs()

@@ -488,6 +488,11 @@ func m8QualificationFixtureV1(candidate fixtureManifest) bool {
 }
 
 func m8QualificationConfigV1(cfg m8ProductionConfigEvidenceV1, fixture fixtureManifest, overlap float64, _ int) bool {
+	// This frozen campaign has three independent runs, not repeated child
+	// windows. Its row selector must never silently choose one repetition.
+	if cfg.MeasuredRepetitions > 1 {
+		return false
+	}
 	return cfg.RaftGroups == 4 && cfg.RaftNodesPerGroup == 3 && cfg.Partitions == 16 && cfg.TopK == 10 && cfg.RecallTarget == .90 && cfg.Warmup == 0 && cfg.EffectiveWarmup == 0 && cfg.RouterScoreBudget == m8QualificationRouterCandidatesV1 && cfg.LocalScoreBudget == nativewire.DefaultVectorPartitionCoordinatorLimitsV1().MaxLocalScoreCalls && cfg.MaxExactTruthVisits == m8QualificationExactTruthCapV1(fixture) && cfg.Seed == fixture.Seed && slices.Equal(cfg.Probes, []int{1, 2, 4, 8, 16}) && slices.Equal(cfg.Concurrency, []int{1}) && slices.Equal(cfg.EfSearch, []int{128}) && slices.Equal(cfg.Overlap, []float64{overlap})
 }
 

@@ -191,6 +191,10 @@ resource work includes observed failure work; per-request maxima remain maxima.
 Measured coordinator/local parity covers successful requests only. Offline
 attribution remains separately labelled; failed requests do not prove a local
 navigation or merge-loss cause.
+If offline approximate coverage is incomplete, successful measured truth masks
+and service recall remain available, but local/coordinator parity is unclaimed.
+The final stage is `offline_local_comparison_unavailable` (inactive, zero delta),
+not a comparison against an invented zero-recall offline traversal.
 
 `-m8-measured-repetitions N` admits 1..10 windows per coordinate (default1).
 Repetition is part of row/transcript identity. Even-numbered blocks use the
@@ -201,6 +205,8 @@ work and independently checks each window's results. Selectors require every
 window at the chosen coordinate to complete and meet quality. Paired QPS/tail
 gates must pass for every same-repetition candidate/reference pair; neither a
 failed window nor a slower repetition can be discarded.
+The frozen historical qualification campaign rejects repeated child windows;
+its three independent runs retain their original meaning.
 
 Admission charges repeated requests, retained attempts/results, row copies and
 JSON encoding memory before topology execution. Complete reports/transcripts

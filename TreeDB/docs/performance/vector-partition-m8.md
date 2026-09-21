@@ -779,7 +779,7 @@ Captured production profiles are required; replay keeps the existing 4 GiB RSS,
 Legacy replay reports and explicitly selected diagnostic transcripts have a
 64 MiB retained-file cap; ordinary legacy transcripts and historical
 qualification retain their 2 MiB transcript, 16 MiB matrix and 1 MiB index caps.
-The explicit `complete_attempts_v1` contract admits128MiB reports/transcripts,
+The explicit `complete_attempts_v1` contract admits 128 MiB reports/transcripts,
 with earlier request/retention/serialization work and memory admission.
 
 ```sh
