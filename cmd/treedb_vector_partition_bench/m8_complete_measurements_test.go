@@ -440,6 +440,16 @@ func TestM8CompleteOutcomeReplayRetainsLiveValidatedResultCount(t *testing.T) {
 		"scores": func(_ *m8ProductionReportV1, transcript *m8ProductionMeasurementTranscriptV1) {
 			transcript.Outcomes[0].TopKScoreBits[0] = append(transcript.Outcomes[0].TopKScoreBits[0], math.Float32bits(.8))
 		},
+		"score order": func(_ *m8ProductionReportV1, transcript *m8ProductionMeasurementTranscriptV1) {
+			ids, scores := transcript.Outcomes[0].TopKIDs[1], transcript.Outcomes[0].TopKScoreBits[1]
+			ids[0], ids[1] = ids[1], ids[0]
+			scores[0], scores[1] = scores[1], scores[0]
+		},
+		"tie order": func(_ *m8ProductionReportV1, transcript *m8ProductionMeasurementTranscriptV1) {
+			ids, scores := transcript.Outcomes[0].TopKIDs[1], transcript.Outcomes[0].TopKScoreBits[1]
+			scores[1] = scores[0]
+			ids[0], ids[1] = ids[1], ids[0]
+		},
 		"failure count": func(report *m8ProductionReportV1, transcript *m8ProductionMeasurementTranscriptV1) {
 			report.Rows[0].Accounting.Attempts[2].ReturnedResults = 1
 			transcript.Rows[0].Accounting.Attempts[2].ReturnedResults = 1
@@ -451,6 +461,34 @@ func TestM8CompleteOutcomeReplayRetainsLiveValidatedResultCount(t *testing.T) {
 			rewrite(t, &report, transcript)
 			if _, err := m8ReadProductionMeasurementTranscriptV1(report); err == nil {
 				t.Fatal("accepted tampered complete outcome replay")
+			}
+		})
+	}
+}
+
+func TestM8ProductionOutcomeSampleCanonicalOrder(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		ids    []string
+		scores []float32
+		valid  bool
+	}{
+		{"empty", nil, nil, true},
+		{"singleton", []string{"doc-000000"}, []float32{.9}, true},
+		{"descending negative", []string{"doc-000001", "doc-000000"}, []float32{-.1, -.9}, true},
+		{"ascending ties", []string{"doc-000000", "doc-000001"}, []float32{.9, .9}, true},
+		{"signed zero ties", []string{"doc-000000", "doc-000001"}, []float32{math.Float32frombits(1 << 31), 0}, true},
+		{"ascending scores", []string{"doc-000001", "doc-000000"}, []float32{.1, .9}, false},
+		{"descending ties", []string{"doc-000001", "doc-000000"}, []float32{.9, .9}, false},
+		{"reversed signed zero ties", []string{"doc-000001", "doc-000000"}, []float32{0, math.Float32frombits(1 << 31)}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bits := make([]uint32, len(tc.scores))
+			for i, score := range tc.scores {
+				bits[i] = math.Float32bits(score)
+			}
+			if err := m8ValidateProductionOutcomeSampleV1(tc.ids, bits, len(tc.ids), 100); (err == nil) != tc.valid {
+				t.Fatalf("valid=%t: %v", tc.valid, err)
 			}
 		})
 	}

@@ -1205,10 +1205,16 @@ func m8ValidateProductionOutcomeSampleV1(ids []string, scoreBits []uint32, expec
 		}
 		seen[id] = true
 	}
-	for _, bits := range scoreBits {
+	for i, bits := range scoreBits {
 		score := math.Float32frombits(bits)
 		if math.IsNaN(float64(score)) || math.IsInf(float64(score), 0) {
 			return errors.New("M8 measurement transcript has nonfinite score bits")
+		}
+		if i > 0 {
+			previous := math.Float32frombits(scoreBits[i-1])
+			if previous < score || (previous == score && ids[i-1] > ids[i]) {
+				return errors.New("M8 measurement transcript has noncanonical result order")
+			}
 		}
 	}
 	return nil
