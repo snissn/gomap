@@ -701,28 +701,40 @@ func newVectorPartitionLiveNativewireDocumentsV1(t testing.TB, documents []vecto
 }
 
 func vectorPartitionLiveCoordinatorTopologyV1(f vectorPartitionLiveProductionFixtureV1) VectorPartitionCoordinatorTopologyV1 {
-	return VectorPartitionCoordinatorTopologyV1{Database: "default", Catalog: "default", Collection: "docs", CollectionGroupID: "group-a", IndexName: f.definition.Name, IndexDefinitionDigest: f.manifest.IndexDefinitionDigest, SourceGeneration: f.manifest.SourceGeneration, SourceChecksum: f.manifest.SourceChecksum, SourceSchemaHash: f.manifest.SourceSchemaHash, SourceRowCount: f.manifest.SourceRowCount, PartitionGeneration: f.manifest.Generation, Groups: []VectorPartitionCoordinatorTopologyGroupV1{{ID: "group-a", Members: []string{"node-a"}, LeaderHint: "node-a"}, {ID: "group-b", Members: []string{"node-b"}, LeaderHint: "node-b"}}, Partitions: []VectorPartitionCoordinatorTopologyPartitionV1{{PartitionID: 0, GroupID: "group-a"}, {PartitionID: 1, GroupID: "group-b"}, {PartitionID: 2, GroupID: "group-b"}}}
+	group, err := f.catalog.Resolve(f.placement.Collection)
+	if err != nil {
+		panic(err) // All callers construct a validated fixture catalog.
+	}
+	topology := VectorPartitionCoordinatorTopologyV1{Database: "default", Catalog: "default", Collection: f.manifest.Collection, CollectionGroupID: string(group), IndexName: f.definition.Name, IndexDefinitionDigest: f.manifest.IndexDefinitionDigest, SourceGeneration: f.manifest.SourceGeneration, SourceChecksum: f.manifest.SourceChecksum, SourceSchemaHash: f.manifest.SourceSchemaHash, SourceRowCount: f.manifest.SourceRowCount, PartitionGeneration: f.manifest.Generation}
+	for _, group := range f.catalog.Groups {
+		members := make([]string, len(group.Members))
+		for i, member := range group.Members {
+			members[i] = string(member)
+		}
+		topology.Groups = append(topology.Groups, VectorPartitionCoordinatorTopologyGroupV1{ID: string(group.ID), Members: members, LeaderHint: string(group.LeaderHint)})
+	}
+	for _, partition := range f.placement.Partitions {
+		topology.Partitions = append(topology.Partitions, VectorPartitionCoordinatorTopologyPartitionV1{PartitionID: partition.PartitionID, GroupID: string(partition.GroupID)})
+	}
+	return topology
 }
 
 func newVectorPartitionLiveProductionServicesV1(t testing.TB, fixture vectorPartitionLiveProductionFixtureV1) (map[raftcluster.GroupID]*VectorPartitionShardSearchServiceV1, []*CollectionVectorPartitionGenerationSourceV1) {
 	t.Helper()
 	services := make(map[raftcluster.GroupID]*VectorPartitionShardSearchServiceV1, 2)
 	sources := make([]*CollectionVectorPartitionGenerationSourceV1, 0, 2)
-	for _, group := range []struct {
-		id   raftcluster.GroupID
-		node raftcluster.NodeID
-	}{{"group-a", "node-a"}, {"group-b", "node-b"}} {
+	for _, group := range fixture.catalog.Groups {
 		source, err := NewCollectionVectorPartitionGenerationSourceV1(fixture.collection)
 		if err != nil {
 			t.Fatal(err)
 		}
 		read := &fakeVectorPartitionReadCoordinatorV1{
-			proof:    raftcluster.ReadIndexProof{NodeID: group.node, GroupID: group.id, Term: 1, Index: 1, HasQuorum: true, EvidenceKind: raftcluster.ReadIndexEvidenceProduction},
-			progress: raftcluster.AppliedProgress{NodeID: group.node, GroupID: group.id, Term: 1, Index: 1, HasApplied: true},
+			proof:    raftcluster.ReadIndexProof{NodeID: group.LeaderHint, GroupID: group.ID, Term: 1, Index: 1, HasQuorum: true, EvidenceKind: raftcluster.ReadIndexEvidenceProduction},
+			progress: raftcluster.AppliedProgress{NodeID: group.LeaderHint, GroupID: group.ID, Term: 1, Index: 1, HasApplied: true},
 		}
 		service, err := NewVectorPartitionShardSearchServiceV1(VectorPartitionShardSearchServiceOptionsV1{
-			Catalog: fixture.catalog, Placement: fixture.placement, LocalNodeID: group.node,
-			LocalGroupID: group.id, ReadCoordinator: read, GenerationSource: source,
+			Catalog: fixture.catalog, Placement: fixture.placement, LocalNodeID: group.LeaderHint,
+			LocalGroupID: group.ID, ReadCoordinator: read, GenerationSource: source,
 		})
 		if err != nil {
 			_ = source.Close()
@@ -731,7 +743,7 @@ func newVectorPartitionLiveProductionServicesV1(t testing.TB, fixture vectorPart
 			}
 			t.Fatal(err)
 		}
-		services[group.id] = service
+		services[group.ID] = service
 		sources = append(sources, source)
 	}
 	return services, sources

@@ -2210,12 +2210,20 @@ the actual revision/coverage, acknowledged-write freshness, exact physical
 pack expansion and every terminal attempt. Insert/delete/domain movement,
 metadata-only updates, cold sources, checkpoint-backed durable-ack crash,
 reopen and active-generation GC are checked separately, including native
-document visibility. `TestVectorPartitionLiveLifecycleReceiptRejectsV1`
-provides hostile population, freshness, route and score controls.
+document visibility. A quiesced full-source/partition/router replacement absorbs
+the overlay; a held old-generation reader pin fences deletion, and repeated
+reclamation plus physical absence and reopened new-generation searches are
+checked. Deletion must be observable in the initial ANN result, and cross-domain
+movement uses verified live owners, not inferred approximate-router winners.
+`TestVectorPartitionLiveLifecycleReceiptRejectsV1` provides hostile population,
+freshness, route and current-vector/tombstone score controls.
+`TestVectorPartitionLiveBoundedTruthV1` compares the unchanged-top-K plus touched
+delta oracle with a complete scan, including ties, replacements and deletions.
 See the [component gate runbook](../performance/vector-partition-m8.md#selected-product-standalone-lifecycle-component-gate-4753)
-for optional raw receipts and limits. The test read proof, procedural corpus
-and standalone binding do not establish real-data scale, replicated/public
-live serving, an immutable-base fold or retired-generation reclamation.
+for receipts and the opt-in pinned100K/768D real fixture. The default procedural
+corpus and test read proof do not establish real-data scale or replicated/public
+live serving. The maintenance-window replacement is not automatic online fold;
+adding the real-fixture path does not by itself earn a retained real-data pass.
 
 ```sh
 GOWORK=off go test -count=1 ./TreeDB/collections -run 'TestVectorIndexPartitionLive|TestVectorPartitionHNSWExcludesMoreThanTopKBeforeAdmission|TestVectorPartitionSearcherExcludesStaleBeforeTopK'
