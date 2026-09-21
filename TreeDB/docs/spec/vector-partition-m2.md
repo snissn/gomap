@@ -148,6 +148,11 @@ TREEDB_KAHIP_TEST_PYTHON=/path/to/pinned/python GOWORK=off \
   go test ./TreeDB/internal/vectorpartition -run TestHomePackingPinnedKaHIPV1 -count=1
 ```
 
+The matching construction allocation guardrail is
+`GOWORK=off go test ./TreeDB/internal/vectorpartition -run '^$' -bench BenchmarkDomainHomePackingV1 -benchmem`.
+It compares ordinal and explicit home application on identical 100K×768 byte
+geometry, not solver cost, ANN quality or serving throughput.
+
 ## Exporter-corpus builder and reproducibility evidence
 
 `cmd/treedb_vector_partition_build` consumes the repository-owned

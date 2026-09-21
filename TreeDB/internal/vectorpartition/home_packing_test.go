@@ -263,3 +263,40 @@ func TestHomePackingPinnedKaHIPV1(t *testing.T) {
 		}
 	}
 }
+
+// Construction-only allocation guardrail: identical logical membership and
+// byte geometry, with the separately measured solver outside this boundary.
+func BenchmarkDomainHomePackingV1(b *testing.B) {
+	plan, err := PlanByteBoundedShardsV1(ShardPlanInputV1{
+		Vectors: 100_000, Dimensions: 768, LogicalDomains: 16,
+		OverlapRatio: .2, Imbalance: .05, TargetHotBytes: 7_696_384,
+	})
+	if err != nil {
+		b.Fatal(err)
+	}
+	logical := OverlapResult{Capacity: plan.DomainOverlapCapacity, Loads: make([]int, plan.LogicalDomains)}
+	homes := make([]int, plan.Vectors)
+	for ordinal := range plan.Vectors {
+		domain := ordinal % plan.LogicalDomains
+		logical.Memberships = append(logical.Memberships, Membership{VectorOrdinal: ordinal, Partition: domain, Home: true})
+		logical.Loads[domain]++
+		homes[ordinal] = domain*plan.PacksPerDomain + (ordinal/plan.LogicalDomains)*plan.PacksPerDomain/(plan.Vectors/plan.LogicalDomains)
+	}
+	for _, explicit := range []bool{false, true} {
+		b.Run(fmt.Sprintf("explicit_homes=%t", explicit), func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				var packed OverlapResult
+				var err error
+				if explicit {
+					packed, err = PackDomainMembershipsWithHomesV1(plan, logical, homes)
+				} else {
+					packed, err = PackDomainMembershipsV1(plan, logical)
+				}
+				if err != nil || len(packed.Memberships) != plan.Vectors {
+					b.Fatalf("packing: %v", err)
+				}
+			}
+		})
+	}
+}
