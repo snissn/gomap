@@ -148,6 +148,9 @@ func m3VerifyRetainedShardGenerationV1(dir string, d m3VariantDescriptorV1) erro
 	if record.Plan != d.ShardPlan {
 		return errors.New("retained shard generation record does not describe the descriptor's plan")
 	}
+	if d.ShardPlan.PacksPerDomain > 1 && d.KaHIPAdapterSHA256 == kahipHomePackingAdapterSHA256 && record.HomePacking == nil {
+		return errors.New("retained selected-adapter multi-pack generation is missing its home-packing receipt")
+	}
 	if record.HomePacking != nil && (record.HomePacking.ParentSHA256 != d.ArtifactSHA256 || d.KaHIPAdapterSHA256 != kahipHomePackingAdapterSHA256) {
 		return errors.New("retained graph-aware homes do not bind the parent artifact and selected adapter")
 	}

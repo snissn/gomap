@@ -192,7 +192,7 @@ func TestM3ActualShardPackBytesStayInsidePlannedEnvelopeV1(t *testing.T) {
 // refuse a row ratio outside the planned envelope.
 func TestM3ShardGenerationDescriptorPersistsAndReopensV1(t *testing.T) {
 	plan, err := vectorpartition.PlanByteBoundedShardsV1(vectorpartition.ShardPlanInputV1{
-		Vectors: 4, Dimensions: 2, OverlapRatio: .5, Imbalance: 0,
+		Vectors: 4, Dimensions: 2, LogicalDomains: 1, OverlapRatio: .5, Imbalance: 0,
 		TargetHotBytes: uint64(vectorpartition.PackFixedOverheadBytesV1 + 3*(alignedRowBytesForTest(2)+vectorpartition.GraphIdentityOverheadPerRowV1)),
 	})
 	if err != nil {
@@ -291,6 +291,9 @@ func TestM3ShardGenerationDescriptorPersistsAndReopensV1(t *testing.T) {
 		"realized":    func(c *m3VariantDescriptorV1) { c.OverlapRealized = 0 },
 		"memberships": func(c *m3VariantDescriptorV1) { c.OverlapMemberships = 0 },
 		"source rows": func(c *m3VariantDescriptorV1) { c.SourceRows++ },
+		"missing home receipt": func(c *m3VariantDescriptorV1) {
+			c.KaHIPAdapterSHA256 = kahipHomePackingAdapterSHA256
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			candidate := descriptor

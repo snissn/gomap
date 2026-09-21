@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/collections"
+	"github.com/snissn/gomap/TreeDB/vectorpartition"
 )
 
 func testM8ScalingReportV1() m8ProductionReportV1 {
@@ -161,6 +162,77 @@ func TestM8ScalingLogicalUnionV1(t *testing.T) {
 	}
 	if _, err := m8LogicalMembershipDigestV1(collections.VectorPartitionManifestV1{}); err == nil {
 		t.Fatal("empty layout accepted")
+	}
+}
+
+func TestM8ScalingSameGeometryHomePackingV1(t *testing.T) {
+	plan, err := vectorpartition.PlanByteBoundedShardsV1(vectorpartition.ShardPlanInputV1{
+		Vectors: 100000, Dimensions: 768, LogicalDomains: 16, OverlapRatio: .2,
+		Imbalance: .05, TargetHotBytes: 7696384,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseline, candidate := testM8ScalingReportV1(), testM8ScalingReportV1()
+	for _, r := range []*m8ProductionReportV1{&baseline, &candidate} {
+		r.Config.DomainCount, r.Config.Partitions = 16, 64
+		r.Config.Probes = []int{5, 16}
+		r.Config.PacksPerDomain = make([]int, 16)
+		for i := range r.Config.PacksPerDomain {
+			r.Config.PacksPerDomain[i] = 4
+		}
+		r.Variant.Partitions, r.Variant.ShardPlan = 64, plan
+		r.Variant.ArtifactSHA256 = strings.Repeat("a", 64)
+		r.Variant.AssignmentBasis = partitionAssignmentGraphV1
+		r.Variant.ShardGenerationDigest = strings.Repeat("b", 64)
+		for i := range r.Rows {
+			if r.Rows[i].Probes == 1 {
+				r.Rows[i].Probes = 5
+			} else {
+				r.Rows[i].Probes = 16
+			}
+		}
+	}
+	baseline.Variant.KaHIPAdapterSHA256 = kahipAdapterSHA256
+	candidate.Variant.KaHIPAdapterSHA256 = kahipHomePackingAdapterSHA256
+	candidate.Variant.ShardGenerationDigest = strings.Repeat("c", 64)
+	pair := m8ScalingPairV1{Name: "homes", Kind: "same_geometry_home_packing", Baseline: "striped", Candidate: "graph", BaselineProbes: 5, CandidateProbes: 5}
+	union := strings.Repeat("d", 64)
+	result, err := m8CompareScalingPairV1(pair, baseline, candidate, union, union)
+	if err != nil || len(result.Blocks) != 10 || !result.AllMatchedQuality || result.AllQPS15Percent {
+		t.Fatalf("neutral candidate must retain all gate misses: %+v, %v", result, err)
+	}
+	raw, _ := json.Marshal(candidate)
+	for name, mutate := range map[string]func(*m8ProductionReportV1){
+		"adapter":    func(r *m8ProductionReportV1) { r.Variant.KaHIPAdapterSHA256 = kahipAdapterSHA256 },
+		"parent":     func(r *m8ProductionReportV1) { r.Variant.ArtifactSHA256 = strings.Repeat("e", 64) },
+		"plan":       func(r *m8ProductionReportV1) { r.Variant.ShardPlan.TargetHotBytes++ },
+		"overlap":    func(r *m8ProductionReportV1) { r.Variant.OverlapRatio = .2 },
+		"generation": func(r *m8ProductionReportV1) { r.Variant.ShardGenerationDigest = "" },
+		"assignment": func(r *m8ProductionReportV1) { r.Variant.AssignmentBasis = "hash" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			var bad m8ProductionReportV1
+			if err := json.Unmarshal(raw, &bad); err != nil {
+				t.Fatal(err)
+			}
+			mutate(&bad)
+			if _, err := m8CompareScalingPairV1(pair, baseline, bad, union, union); err == nil {
+				t.Fatal("changed construction admitted")
+			}
+		})
+	}
+	if _, err := m8CompareScalingPairV1(pair, baseline, candidate, union, strings.Repeat("e", 64)); err == nil {
+		t.Fatal("changed logical union admitted")
+	}
+	pair.CandidateProbes++
+	if _, err := m8CompareScalingPairV1(pair, baseline, candidate, union, union); err == nil {
+		t.Fatal("changed selected prefix admitted")
+	}
+	pair.CandidateProbes = pair.BaselineProbes
+	pair.Kind = "logical_packing"
+	if _, err := m8CompareScalingPairV1(pair, baseline, candidate, union, union); err == nil {
+		t.Fatal("new treatment relabelled as historical one-pack comparison")
 	}
 }
 

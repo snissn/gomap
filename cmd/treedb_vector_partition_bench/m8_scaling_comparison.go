@@ -173,7 +173,13 @@ func m8CompareScalingPairV1(pair m8ScalingPairV1, baseline, candidate m8Producti
 		return result, errors.New("comparison fixture/truth/host/runtime/source mismatch")
 	}
 	bv, cv := baseline.Variant, candidate.Variant
-	if !reflect.DeepEqual(bv.PartitionConfig, cv.PartitionConfig) || !reflect.DeepEqual(bv.RouterConfig, cv.RouterConfig) || bv.GraphBuildSHA256 != cv.GraphBuildSHA256 || bv.AssignmentBasis != cv.AssignmentBasis || bv.ArtifactBackend != cv.ArtifactBackend || bv.KaHIPPythonSHA256 != cv.KaHIPPythonSHA256 || bv.KaHIPAdapterSHA256 != cv.KaHIPAdapterSHA256 || bv.IndexDefinitionDigest != cv.IndexDefinitionDigest || bv.PartitionHNSWM != cv.PartitionHNSWM || m3DescriptorPartitionHNSWEfCV1(*bv) != m3DescriptorPartitionHNSWEfCV1(*cv) || bv.SourceOrdinalDigest != cv.SourceOrdinalDigest {
+	adapterMatches := bv.KaHIPAdapterSHA256 == cv.KaHIPAdapterSHA256
+	if pair.Kind == "same_geometry_home_packing" {
+		// This treatment changes only physical homes. Strict replay also requires
+		// the new adapter's multi-pack assets to carry their construction receipt.
+		adapterMatches = bv.KaHIPAdapterSHA256 == kahipAdapterSHA256 && cv.KaHIPAdapterSHA256 == kahipHomePackingAdapterSHA256
+	}
+	if !reflect.DeepEqual(bv.PartitionConfig, cv.PartitionConfig) || !reflect.DeepEqual(bv.RouterConfig, cv.RouterConfig) || bv.GraphBuildSHA256 != cv.GraphBuildSHA256 || bv.AssignmentBasis != cv.AssignmentBasis || bv.ArtifactBackend != cv.ArtifactBackend || bv.KaHIPPythonSHA256 != cv.KaHIPPythonSHA256 || !adapterMatches || bv.IndexDefinitionDigest != cv.IndexDefinitionDigest || bv.PartitionHNSWM != cv.PartitionHNSWM || m3DescriptorPartitionHNSWEfCV1(*bv) != m3DescriptorPartitionHNSWEfCV1(*cv) || bv.SourceOrdinalDigest != cv.SourceOrdinalDigest {
 		return result, errors.New("comparison graph/assignment/router/source-index mismatch")
 	}
 	bc, cc := baseline.Config, candidate.Config
@@ -194,6 +200,10 @@ func m8CompareScalingPairV1(pair m8ScalingPairV1, baseline, candidate m8Producti
 		}
 		bc.Partitions, cc.Partitions = 0, 0
 		bc.PacksPerDomain, cc.PacksPerDomain = nil, nil
+	case "same_geometry_home_packing":
+		if bv.ShardPlan != cv.ShardPlan || bv.ShardPlan.PacksPerDomain <= 1 || bv.Partitions != cv.Partitions || bv.OverlapRatio != 0 || cv.OverlapRatio != 0 || bc.Overlap[0] != 0 || cc.Overlap[0] != 0 || bv.AssignmentBasis != partitionAssignmentGraphV1 || !m8SHA256V1(bv.ArtifactSHA256) || bv.ArtifactSHA256 != cv.ArtifactSHA256 || !m8SHA256V1(bv.ShardGenerationDigest) || !m8SHA256V1(cv.ShardGenerationDigest) || !m8SHA256V1(baselineUnion) || baselineUnion != candidateUnion || pair.BaselineProbes != pair.CandidateProbes {
+			return result, errors.New("home packing requires disjoint multi-pack assets with identical plan, parent artifact, logical unions and probes")
+		}
 	default:
 		return result, errors.New("unsupported comparison kind")
 	}
