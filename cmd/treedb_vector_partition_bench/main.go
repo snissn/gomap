@@ -35,13 +35,16 @@ import (
 )
 
 const (
-	schemaVersion                           = 1
-	maxVectors                              = 1_000_000
-	maxDimensions                           = 4_096
-	maxPartitions                           = 16_384
-	kahipMaxDirectedEdges             int64 = 16_000_000
-	kahipAdapterMaxBytes                    = 64 << 10
-	kahipAdapterSHA256                      = "ae4ca8f5f26bd510a507a0f4ba50adaf1e5514ee9e20340cb9d494aba8f54825"
+	schemaVersion               = 1
+	maxVectors                  = 1_000_000
+	maxDimensions               = 4_096
+	maxPartitions               = 16_384
+	kahipMaxDirectedEdges int64 = 16_000_000
+	kahipAdapterMaxBytes        = 64 << 10
+	kahipAdapterSHA256          = "ae4ca8f5f26bd510a507a0f4ba50adaf1e5514ee9e20340cb9d494aba8f54825"
+	// Historical qualification pins above remain unchanged. New construction
+	// additionally performs within-domain graph-aware home packing.
+	kahipHomePackingAdapterSHA256           = "74ca1829a3be3ad7d7edcbcc6c566fc17b98e00d70e36742ebc5e0b29fd5627e"
 	kahipDefaultTimeout                     = 5 * time.Minute
 	kahipMinSeed                      int64 = -1 << 31
 	kahipMaxSeed                      int64 = 1<<31 - 1
@@ -128,6 +131,7 @@ type config struct {
 	shardPlanTargetBytes      uint64
 	shardPlanRatio            float64
 	shardPlan                 vectorpartition.ShardPlanV1
+	homePacking               *vectorpartition.HomePackingReceiptV1
 	kahipPython               string
 	kahipPythonSHA256         string
 	kahipScript               string
@@ -1307,8 +1311,8 @@ func parseConfig(args []string) (config, error) {
 		}
 		sum := sha256.Sum256(scriptBytes)
 		cfg.kahipAdapterSHA256 = hex.EncodeToString(sum[:])
-		if cfg.kahipAdapterSHA256 != kahipAdapterSHA256 {
-			return config{}, errors.New("-partition-kahip-script does not match the pinned adapter")
+		if _, err := kahipAdapterHomePackingV1(cfg.kahipAdapterSHA256); err != nil {
+			return config{}, err
 		}
 		cfg.kahipScript = script
 		cfg.kahipSource = string(scriptBytes)
@@ -1589,6 +1593,20 @@ func kahipOutputCap(input []byte, a vectorpartition.Artifact) int {
 
 func kahipAdapterCommand(cfg config) []string {
 	return []string{cfg.kahipPython, "-c", cfg.kahipSource}
+}
+
+// The explicitly supplied legacy adapter is the striped construction control.
+// Both arms can therefore be built by one exact benchmark executable without
+// relaxing retained-builder/serving provenance or falling back after a failure.
+func kahipAdapterHomePackingV1(digest string) (bool, error) {
+	switch digest {
+	case kahipAdapterSHA256:
+		return false, nil
+	case kahipHomePackingAdapterSHA256:
+		return true, nil
+	default:
+		return false, errors.New("-partition-kahip-script does not match a pinned adapter")
+	}
 }
 
 func validateKaHIPFinalGraphEnvelopeV1(vectors, degree int) error {

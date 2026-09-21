@@ -902,7 +902,7 @@ untrusted report:
   > /retained/comparison-result.json
 ```
 
-Only three pair kinds are admitted:
+Only four pair kinds are admitted:
 
 - `selected_exhaustive`: two coordinates in the same execution, with all
   logical domains as baseline and fewer selected domains as candidate.
@@ -912,6 +912,15 @@ Only three pair kinds are admitted:
   unchanged probes and exact logical-domain membership unions. The reducer
   reopens the pinned manifests and hashes sorted `(domain, source ordinal)`
   unions including replicas; physical pack digests cannot prove this equality.
+- `same_geometry_home_packing`: disjoint striped versus graph-aware homes,
+  with the exact same multi-pack plan, parent logical artifact, logical unions
+  and probes. Only this kind admits the pinned legacy-to-home-packing adapter
+  transition; strict retained replay requires the new construction receipt.
+  Build both controls with the same current executable/head, explicitly selecting
+  the pinned legacy adapter for striping. Reusing an old-built database with a
+  new producer fails the unchanged builder/serving provenance gate.
+  It changes neither packs searched nor serving settings and does not replace
+  the independent one-pack `logical_packing` gate.
 
 All pairs require the selected Vamana profile, C256/EF96, top 10, at least 95%
 recall, five complete repetitions at c1/c32, and equal fixture/truth, source

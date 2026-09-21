@@ -100,6 +100,66 @@ the KaHIP artifact
 was p1/p2/p4/p8/p16 `1.0`, cut `0`, load `6283/6563`. This is a bounded
 offline placement result, not a claim about graph quality or online serving.
 
+## Within-domain physical home packing (#4775)
+
+The existing `-partition-kahip-script` selector admits two exact pins: the current
+adapter constructs graph-aware homes; explicitly supplying the pinned legacy
+adapter constructs the striped comparison control. Build both arms with the same
+benchmark executable and source revision. An old-built database cannot be served
+under a new producer identity. No metadata rebinding or solver-failure fallback
+is admitted, and the legacy control never carries a graph-home receipt.
+
+The selected KaHIP M3 byte-bounded build with multiple physical packs per
+logical domain also uses `RunExternalHomePackingV1`. It does not repartition
+the logical assignment or change routing/search budgets. One request contains
+the unchanged validated parent artifact and byte plan. The pinned adapter
+derives each home's domain-induced graph in ascending parent-ordinal order,
+symmetrizes it without weights, and runs the same KaHIP 3.25 ECO solver with
+the parent seed and **packing epsilon zero**. Logical epsilon stays `.05`.
+Only one domain projection/CSR is live at a time; no vectors, queries or truth
+are supplied to this solve. The full parent/request hashes plus fixed policy
+bind the induced projection and its ordinal mapping.
+
+Go independently requires one home per vector inside its original domain,
+nonempty packs, and home load at most `ceil(actual domain homes / pack count)`
+as well as the byte plan's home/row/byte bounds. Too few homes, an invalid
+response, deadline, or solver failure rejects construction. There is no retry,
+balance repair, increased cap, or reference-backend fallback. The solution is
+computed once before the overlap-ratio loop; the existing canonical cyclic
+replica placement is unchanged. Reference CI fixtures retain the explicit
+ordinal control, not KaHIP provenance.
+
+M3 and the real retained lifecycle use a 256 MiB request cap and an
+`8 * source rows + 1024` response cap, within the existing external process
+envelope. The admitted parent is still bounded to 1M rows/16M directed edges;
+these are rejection ceilings, not a guarantee that every shape fits the byte
+cap or deadline. Construction temporarily retains canonical parent/request
+JSON, the Python-decoded parent, one domain projection/CSR, and O(rows) home
+arrays. The selected single worker and task cgroup bound the actual whole
+command; fixture preallocation checks are not a total Python/Go RSS model.
+No new serving allocation, cache, vector authority, or runtime dependency is
+introduced. Build CPU/wall/peak RSS and serving CPU/B/op remain qualification
+obligations, not inferred benefits from a lower graph cut.
+
+The existing generation record stores a narrow receipt and the homes already
+present in its membership list. Retained M0 materialization validates/reuses
+those homes without running a solver; a changed source rebuild solves afresh
+and binds the receipt into its build identity. Old evidence pins remain frozen;
+new adapter bytes do not qualify through historical campaign predicates.
+
+The opt-in native regression (including repeatability, empty induced graphs,
+and one-pack behavior) is:
+
+```sh
+TREEDB_KAHIP_TEST_PYTHON=/path/to/pinned/python GOWORK=off \
+  go test ./TreeDB/internal/vectorpartition -run TestHomePackingPinnedKaHIPV1 -count=1
+```
+
+The matching construction allocation guardrail is
+`GOWORK=off go test ./TreeDB/internal/vectorpartition -run '^$' -bench BenchmarkDomainHomePackingV1 -benchmem`.
+It compares ordinal and explicit home application on identical 100K×768 byte
+geometry, not solver cost, ANN quality or serving throughput.
+
 ## Exporter-corpus builder and reproducibility evidence
 
 `cmd/treedb_vector_partition_build` consumes the repository-owned

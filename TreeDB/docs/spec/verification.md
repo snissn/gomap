@@ -2,6 +2,17 @@
 
 This document maps specification invariants to existing tests and harnesses.
 
+Within-domain physical home packing: `TestDomainHomePackingKeepsCommunitiesV1`
+is the interleaved-community regression; `TestHomePackingBoundResponseAndRetainedReuseV1`
+checks bound requests, hostile responses, exact capacity and persisted homes
+across overlap variants. `TestHomePackingPinnedKaHIPV1` optionally executes the
+pinned native solver, including repeatability and empty/single-pack cases.
+`TestM0MaterializeByteBoundedMembershipReopensDisposableClone` retains non-striped homes
+through materialization/reopen. `BenchmarkDomainHomePackingV1` compares the
+100K-row packing/validation allocation boundary, excluding the separately
+measured solver and serving. These are construction checks, not qualification
+of the real-data serving improvement required by #4775/#4753.
+
 The global all-level spherical router is distinguished from the historical
 leaf-only model by `TestRouterGlobalBudgetRetainsInternalCenters`,
 `TestRouterGlobalBudgetDegenerateUnderfill`,

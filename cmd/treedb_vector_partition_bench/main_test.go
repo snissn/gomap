@@ -1749,7 +1749,7 @@ func TestKaHIPOfflineSelectorIsLimitedToGraphMaterializationV1(t *testing.T) {
 	for _, stage := range []string{"partition", "overlap,partition_index"} {
 		cfg, err := parseConfig(append(append([]string(nil), base...), "-stage", stage))
 		wantPythonSHA, hashErr := m8BenchmarkExecutableSHA256V1(python)
-		if err != nil || hashErr != nil || cfg.kahipPython != python || cfg.kahipPythonSHA256 != wantPythonSHA || cfg.kahipScript != script || cfg.kahipSource != string(adapter) || cfg.kahipAdapterSHA256 != kahipAdapterSHA256 || cfg.kahipTimeout != kahipDefaultTimeout {
+		if err != nil || hashErr != nil || cfg.kahipPython != python || cfg.kahipPythonSHA256 != wantPythonSHA || cfg.kahipScript != script || cfg.kahipSource != string(adapter) || cfg.kahipAdapterSHA256 != kahipHomePackingAdapterSHA256 || cfg.kahipTimeout != kahipDefaultTimeout {
 			t.Fatalf("stage=%s cfg=%+v err=%v", stage, cfg, err)
 		}
 		if command := kahipAdapterCommand(cfg); len(command) != 3 || command[0] != python || command[1] != "-c" || command[2] != string(adapter) {
@@ -1782,6 +1782,24 @@ func TestKaHIPOfflineSelectorIsLimitedToGraphMaterializationV1(t *testing.T) {
 	args = append(args, "-stage", "partition")
 	if _, err := parseConfig(args); err == nil {
 		t.Fatal("accepted modified KaHIP adapter")
+	}
+}
+
+func TestKaHIPHomePackingAdapterSelectionV1(t *testing.T) {
+	for _, tc := range []struct {
+		digest string
+		homes  bool
+		valid  bool
+	}{
+		{kahipAdapterSHA256, false, true},
+		{kahipHomePackingAdapterSHA256, true, true},
+		{"", false, false},
+		{strings.Repeat("a", 64), false, false},
+	} {
+		homes, err := kahipAdapterHomePackingV1(tc.digest)
+		if homes != tc.homes || (err == nil) != tc.valid {
+			t.Fatalf("adapter %q: homes=%t err=%v", tc.digest, homes, err)
+		}
 	}
 }
 

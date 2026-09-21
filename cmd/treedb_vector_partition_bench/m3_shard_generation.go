@@ -30,7 +30,7 @@ const (
 // It is produced before the build-identity digest so that digest binds the
 // record, and a retained row may materialize less than the planned envelope but
 // never more.
-func m3ShardGenerationRecordV1(plan vectorpartition.ShardPlanV1, ratio float64, overlap vectorpartition.OverlapResult) ([]byte, string, error) {
+func m3ShardGenerationRecordV1(plan vectorpartition.ShardPlanV1, ratio float64, overlap vectorpartition.OverlapResult, packing *vectorpartition.HomePackingReceiptV1) ([]byte, string, error) {
 	if plan.Partitions == 0 {
 		return nil, "", nil
 	}
@@ -43,6 +43,7 @@ func m3ShardGenerationRecordV1(plan vectorpartition.ShardPlanV1, ratio float64, 
 	if err != nil {
 		return nil, "", fmt.Errorf("build shard generation descriptor: %w", err)
 	}
+	descriptor.HomePacking = packing
 	raw, err := vectorpartition.CanonicalShardGenerationJSONV1(descriptor)
 	if err != nil {
 		return nil, "", fmt.Errorf("encode shard generation descriptor: %w", err)
@@ -146,6 +147,12 @@ func m3VerifyRetainedShardGenerationV1(dir string, d m3VariantDescriptorV1) erro
 	}
 	if record.Plan != d.ShardPlan {
 		return errors.New("retained shard generation record does not describe the descriptor's plan")
+	}
+	if d.ShardPlan.PacksPerDomain > 1 && d.KaHIPAdapterSHA256 == kahipHomePackingAdapterSHA256 && record.HomePacking == nil {
+		return errors.New("retained selected-adapter multi-pack generation is missing its home-packing receipt")
+	}
+	if record.HomePacking != nil && (record.HomePacking.ParentSHA256 != d.ArtifactSHA256 || d.KaHIPAdapterSHA256 != kahipHomePackingAdapterSHA256) {
+		return errors.New("retained graph-aware homes do not bind the parent artifact and selected adapter")
 	}
 	if record.OverlapConfig.Ratio != d.OverlapRatio || record.OverlapConfig.Capacity != d.Capacity {
 		return fmt.Errorf("retained shard generation record requests ratio %v capacity %d, descriptor declares %v/%d",

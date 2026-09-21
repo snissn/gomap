@@ -16,6 +16,7 @@ os.environ["OMP_NUM_THREADS"] = "1"
 
 WHEEL_SHA256 = "e6ea76524e9fc01b27e6f5c5f00b7eec71c94cbd1e84678ce2a14d64dfc9eda4"
 RECORD_SHA256 = "7ff011253147286fcebc9185573662bf31dbcfbab1944f9b4940032f49ea5217"
+HOME_PACKING_POLICY = "kahip_3_25_eco_induced_home_symmetrized_epsilon0_v1"
 
 
 def pinned_kahip():
@@ -55,8 +56,15 @@ if spec is None or spec.loader is None:
     raise SystemExit("pinned KaHIP native extension is invalid")
 kahip = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(kahip)
-with open(sys.argv[1], encoding="utf-8") as input_file:
-    artifact = json.load(input_file)
+with open(sys.argv[1], "rb") as input_file:
+    input_bytes = input_file.read()
+request_sha256 = hashlib.sha256(input_bytes).hexdigest()
+document = json.loads(input_bytes)
+del input_bytes
+packing = document.get("kind") == HOME_PACKING_POLICY
+if "kind" in document and not packing:
+    raise SystemExit("unsupported KaHIP request kind")
+artifact = document["parent"] if packing else document
 config = artifact["config"]
 partitions = config["partitions"]
 seed = config["seed"]
@@ -74,6 +82,69 @@ nodes = len(artifact["ids"])
 neighbors = artifact["graph"]["neighbors"]
 if nodes == 0 or nodes > 1_000_000 or partitions > nodes or len(neighbors) != nodes:
     raise SystemExit("invalid graph")
+
+if packing:
+    plan = document["plan"]
+    count = plan["packs_per_domain"]
+    assignment = artifact["assignment"]
+    if (
+        type(count) is not int or count < 1
+        or plan["logical_domains"] != partitions
+        or plan["partitions"] != partitions * count
+        or plan["partitions"] > 16_384
+        or plan["vectors"] != nodes
+        or len(assignment) != nodes
+    ):
+        raise SystemExit("invalid home packing plan")
+    domains = [[] for _ in range(partitions)]
+    directed = 0
+    for source, domain in enumerate(assignment):
+        if type(domain) is not int or not 0 <= domain < partitions:
+            raise SystemExit("invalid logical home")
+        domains[domain].append(source)  # ascending parent ordinal, never a new source
+        directed += len(neighbors[source])
+        if directed > 16_000_000:
+            raise SystemExit("selected KaHIP directed-edge envelope exceeded")
+        if any(type(target) is not int or target < 0 or target >= nodes or target == source for target in neighbors[source]):
+            raise SystemExit("invalid graph edge")
+    homes = [-1] * nodes
+    for domain, ordinals in enumerate(domains):
+        if len(ordinals) < count:
+            raise SystemExit("too few homes for nonempty physical packs")
+        if count == 1:
+            labels = [0] * len(ordinals)
+        else:
+            # Only this domain's projection/CSR is live. A cross-domain edge
+            # contributes nothing; no queries, vectors or truth enter the solve.
+            local = {ordinal: index for index, ordinal in enumerate(ordinals)}
+            rows = [set() for _ in ordinals]
+            for source in ordinals:
+                left = local[source]
+                for target in neighbors[source]:
+                    if assignment[target] == domain:
+                        right = local[target]
+                        rows[left].add(right)
+                        rows[right].add(left)
+            xadj, adjncy = [0], []
+            for row in rows:
+                adjncy.extend(sorted(row))
+                xadj.append(len(adjncy))
+            del rows, row, local
+            _, labels = kahip.kaffpa([1] * len(ordinals), xadj, [1] * len(adjncy), adjncy, count, 0.0, False, seed, 1)
+            del xadj, adjncy
+        if len(labels) != len(ordinals) or any(type(label) is not int or not 0 <= label < count for label in labels):
+            raise SystemExit("invalid KaHIP home labels")
+        loads = [0] * count
+        for ordinal, label in zip(ordinals, labels):
+            loads[label] += 1
+            homes[ordinal] = domain * count + label
+        cap = (len(ordinals) + count - 1) // count
+        if min(loads) < 1 or max(loads) > min(cap, plan["home_capacity"], plan["overlap_capacity"], plan["max_memberships_per_pack"]):
+            raise SystemExit("KaHIP home packing violates exact capacity")
+    with open(sys.argv[2], "w", encoding="utf-8") as output_file:
+        json.dump({"request_sha256": request_sha256, "policy": HOME_PACKING_POLICY, "homes": homes}, output_file, separators=(",", ":"))
+    raise SystemExit(0)
+
 rows = [set() for _ in range(nodes)]
 directed = 0
 for source, targets in enumerate(neighbors):

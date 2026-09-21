@@ -160,7 +160,14 @@ func runM0MaterializeMembershipV1(args []string, stdout io.Writer) (err error) {
 	if err = m0MaterializeRetainedDescriptorBindingV1(d, artifact, account); err != nil {
 		return err
 	}
-	if overlap, err = m0PackRetainedMembershipV1(d.ShardPlan, artifact, overlap); err != nil {
+	var retainedPacking vectorpartition.ShardGenerationDescriptorV1
+	if d.ShardPlan != (vectorpartition.ShardPlanV1{}) {
+		retainedPacking, err = m3ReadShardGenerationDescriptorV1(clone, d.ShardGenerationDigest)
+		if err != nil {
+			return err
+		}
+	}
+	if overlap, err = m0PackRetainedMembershipV1(retainedPacking, artifact, overlap); err != nil {
 		return err
 	}
 	source, rows, err := h.collection.VectorPartitionSourceOrdinalsV1(partitionHNSWIndex)
@@ -207,7 +214,7 @@ func runM0MaterializeMembershipV1(args []string, stdout io.Writer) (err error) {
 		return errors.New("M0 overlap capacity accounting overflow")
 	}
 	updated.OverlapUnusedCapacity = int(totalCapacity) - len(overlap.Memberships)
-	shardGenerationRaw, shardGenerationDigest, err := m3ShardGenerationRecordV1(updated.ShardPlan, updated.OverlapRatio, overlap)
+	shardGenerationRaw, shardGenerationDigest, err := m3ShardGenerationRecordV1(updated.ShardPlan, updated.OverlapRatio, overlap, retainedPacking.HomePacking)
 	if err != nil {
 		return fmt.Errorf("M0 materialization shard generation: %w", err)
 	}
@@ -402,7 +409,8 @@ func m0SelectedMembershipV1(artifact vectorpartition.Artifact, artifactRaw []byt
 // binds it to the retained plan's logical-domain envelope before splitting it
 // into physical packs. A plan may reserve more capacity than M0 needed; that
 // ceiling slack must not change the account's canonical membership digest.
-func m0PackRetainedMembershipV1(plan vectorpartition.ShardPlanV1, artifact vectorpartition.Artifact, overlap vectorpartition.OverlapResult) (vectorpartition.OverlapResult, error) {
+func m0PackRetainedMembershipV1(record vectorpartition.ShardGenerationDescriptorV1, artifact vectorpartition.Artifact, overlap vectorpartition.OverlapResult) (vectorpartition.OverlapResult, error) {
+	plan := record.Plan
 	if plan == (vectorpartition.ShardPlanV1{}) {
 		return overlap, nil
 	}
@@ -414,8 +422,17 @@ func m0PackRetainedMembershipV1(plan vectorpartition.ShardPlanV1, artifact vecto
 			return vectorpartition.OverlapResult{}, errors.New("M0 retained shard plan is below selected domain load")
 		}
 	}
+	homes, err := record.HomePacksV1()
+	if err != nil {
+		return vectorpartition.OverlapResult{}, err
+	}
+	if record.HomePacking != nil {
+		if err := vectorpartition.ValidateHomePackingV1(plan, artifact, homes, *record.HomePacking); err != nil {
+			return vectorpartition.OverlapResult{}, err
+		}
+	}
 	overlap.Capacity = plan.DomainOverlapCapacity
-	packed, err := vectorpartition.PackDomainMembershipsV1(plan, overlap)
+	packed, err := vectorpartition.PackDomainMembershipsWithHomesV1(plan, overlap, homes)
 	if err != nil {
 		return vectorpartition.OverlapResult{}, fmt.Errorf("M0 physical shard packing: %w", err)
 	}

@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -2213,10 +2214,10 @@ func testM8QualificationRetainedDescriptorV1(t *testing.T, dir, head string, fix
 // build identity and manifest policy, so all three bindings are published as a
 // single self-consistent retained source.
 func testM8QualificationRetainedDescriptorWithShardPlanV1(t *testing.T, dir, head string, fixture fixtureManifest, variantID, assignment string, ratio float64, shardPlan vectorpartition.ShardPlanV1, sourceID ...func(int) string) m3VariantDescriptorV1 {
-	return testM8QualificationRetainedDescriptorWithShardPlanAndPartitionerV1(t, dir, head, fixture, variantID, assignment, ratio, shardPlan, vectorpartition.ReferencePartitioner{}, sourceID...)
+	return testM8QualificationRetainedDescriptorWithShardPlanAndPartitionerV1(t, dir, head, fixture, variantID, assignment, ratio, shardPlan, vectorpartition.ReferencePartitioner{}, false, sourceID...)
 }
 
-func testM8QualificationRetainedDescriptorWithShardPlanAndPartitionerV1(t *testing.T, dir, head string, fixture fixtureManifest, variantID, assignment string, ratio float64, shardPlan vectorpartition.ShardPlanV1, partitioner vectorpartition.Partitioner, sourceID ...func(int) string) m3VariantDescriptorV1 {
+func testM8QualificationRetainedDescriptorWithShardPlanAndPartitionerV1(t *testing.T, dir, head string, fixture fixtureManifest, variantID, assignment string, ratio float64, shardPlan vectorpartition.ShardPlanV1, partitioner vectorpartition.Partitioner, graphHomes bool, sourceID ...func(int) string) m3VariantDescriptorV1 {
 	t.Helper()
 	const partitions = 16
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -2260,14 +2261,55 @@ func testM8QualificationRetainedDescriptorWithShardPlanAndPartitionerV1(t *testi
 			t.Fatal(err)
 		}
 	}
-	shardGenerationRaw, shardGenerationDigest, err := m3ShardGenerationRecordV1(shardPlan, ratio, overlap)
-	if err != nil {
-		t.Fatal(err)
-	}
 	if assignment == partitionAssignmentStableIDHashV1 {
 		artifact.Backend = "stable_id_hash_baseline_v1"
 	} else {
 		artifact.Backend = fmt.Sprintf("kahip_python_3.25_eco_symmetrized_v1_seed_%d", fixture.Seed)
+	}
+	var packing *vectorpartition.HomePackingReceiptV1
+	if graphHomes {
+		// Persistence protocol fixture, not native KaHIP evidence: rotate every
+		// pack label so an accidental return to ordinal striping is observable.
+		for i := range overlap.Memberships {
+			m := &overlap.Memberships[i]
+			m.Partition = m.Partition/shardPlan.PacksPerDomain*shardPlan.PacksPerDomain + (m.Partition+1)%shardPlan.PacksPerDomain
+		}
+		sort.Slice(overlap.Memberships, func(i, j int) bool {
+			left, right := overlap.Memberships[i], overlap.Memberships[j]
+			return left.VectorOrdinal < right.VectorOrdinal || left.VectorOrdinal == right.VectorOrdinal && left.Partition < right.Partition
+		})
+		overlap.Loads = make([]int, shardPlan.Partitions)
+		homes := make([]int, shardPlan.Vectors)
+		for _, m := range overlap.Memberships {
+			overlap.Loads[m.Partition]++
+			if m.Home {
+				homes[m.VectorOrdinal] = m.Partition
+			}
+		}
+		parentSHA, err := vectorpartition.Digest(artifact)
+		if err != nil {
+			t.Fatal(err)
+		}
+		request, err := json.Marshal(struct {
+			Kind   string                      `json:"kind"`
+			Parent vectorpartition.Artifact    `json:"parent"`
+			Plan   vectorpartition.ShardPlanV1 `json:"plan"`
+		}{vectorpartition.HomePackingPolicyV1, artifact, shardPlan})
+		if err != nil {
+			t.Fatal(err)
+		}
+		homeBytes, err := json.Marshal(homes)
+		if err != nil {
+			t.Fatal(err)
+		}
+		packing = &vectorpartition.HomePackingReceiptV1{Policy: vectorpartition.HomePackingPolicyV1, ParentSHA256: parentSHA, RequestSHA256: m0SHA256V1(request), HomesSHA256: m0SHA256V1(homeBytes)}
+		if err := vectorpartition.ValidateHomePackingV1(shardPlan, artifact, homes, *packing); err != nil {
+			t.Fatal(err)
+		}
+	}
+	shardGenerationRaw, shardGenerationDigest, err := m3ShardGenerationRecordV1(shardPlan, ratio, overlap, packing)
+	if err != nil {
+		t.Fatal(err)
 	}
 	artifactDigest, err := vectorpartition.Digest(artifact)
 	if err != nil {
@@ -2347,6 +2389,9 @@ func testM8QualificationRetainedDescriptorWithShardPlanAndPartitionerV1(t *testi
 	if assignment == partitionAssignmentGraphV1 && strings.HasPrefix(artifact.Backend, "kahip_python_") {
 		descriptor.KaHIPPythonSHA256 = m8QualificationKaHIPPythonSHA256V1
 		descriptor.KaHIPAdapterSHA256 = kahipAdapterSHA256
+		if packing != nil {
+			descriptor.KaHIPAdapterSHA256 = kahipHomePackingAdapterSHA256
+		}
 	}
 	descriptor.SourceOrdinalDigest = sourceOrdinalDigest
 	descriptor.BuildIdentityDigest, err = m3VariantBuildIdentityDigestV1(descriptor)

@@ -162,6 +162,31 @@ func runM3PartitionIndexStage(cfg config, fixture fixtureManifest, artifact vect
 	if err := m3ValidateShardPlanGovernsArtifactV1(cfg.shardPlan, artifact, ratios); err != nil {
 		return err
 	}
+	// One solve per parent/geometry, shared by every overlap ratio. Reference
+	// fixtures and the explicitly pinned legacy adapter keep striped homes;
+	// a selected home solver failure never falls back to that control.
+	graphHomes := false
+	if cfg.kahipPython != "" {
+		var err error
+		graphHomes, err = kahipAdapterHomePackingV1(cfg.kahipAdapterSHA256)
+		if err != nil {
+			return err
+		}
+	}
+	var homes []int
+	if cfg.shardPlan.PacksPerDomain > 1 && graphHomes {
+		ctx, cancel := context.WithTimeout(context.Background(), cfg.kahipTimeout)
+		var receipt vectorpartition.HomePackingReceiptV1
+		var err error
+		homes, receipt, err = vectorpartition.RunExternalHomePackingV1(ctx, kahipAdapterCommand(cfg), vectorpartition.ExternalJSONLimits{
+			MaxInput: m3ShardGenerationMaxBytesV1, MaxOutput: 8*cfg.shardPlan.Vectors + 1024,
+		}, cfg.shardPlan, artifact)
+		cancel()
+		if err != nil {
+			return fmt.Errorf("graph-aware physical home packing: %w", err)
+		}
+		cfg.homePacking = &receipt
+	}
 	for i, ratio := range ratios {
 		capacity, err := m3OverlapCapacityForPlanV1(cfg.shardPlan, artifact, ratio)
 		if err != nil {
@@ -172,7 +197,11 @@ func runM3PartitionIndexStage(cfg config, fixture fixtureManifest, artifact vect
 			return fmt.Errorf("build bounded overlap ratio %.4f: %w", ratio, err)
 		}
 		if cfg.shardPlan != (vectorpartition.ShardPlanV1{}) {
-			overlap, err = vectorpartition.PackDomainMembershipsV1(cfg.shardPlan, overlap)
+			if homes != nil {
+				overlap, err = vectorpartition.PackDomainMembershipsWithHomesV1(cfg.shardPlan, overlap, homes)
+			} else {
+				overlap, err = vectorpartition.PackDomainMembershipsV1(cfg.shardPlan, overlap)
+			}
 			if err != nil {
 				return fmt.Errorf("pack logical domains ratio %.4f: %w", ratio, err)
 			}
@@ -410,7 +439,7 @@ func benchmarkM3PartitionIndexRow(cfg config, fixture fixtureManifest, artifactD
 	var shardGenerationRaw []byte
 	var shardGenerationDigest string
 	if !cleanup {
-		shardGenerationRaw, shardGenerationDigest, err = m3ShardGenerationRecordV1(cfg.shardPlan, ratio, overlap)
+		shardGenerationRaw, shardGenerationDigest, err = m3ShardGenerationRecordV1(cfg.shardPlan, ratio, overlap, cfg.homePacking)
 		if err != nil {
 			return m3PartitionIndexRow{}, err
 		}
