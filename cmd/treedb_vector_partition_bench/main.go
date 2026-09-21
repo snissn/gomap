@@ -1202,7 +1202,7 @@ func parseConfig(args []string) (config, error) {
 			return config{}, fmt.Errorf("production_multi_group requires at most %d partitions", coordinatorLimits.MaxSelectedPartitions)
 		}
 		if len(cfg.concurrency) == 0 || len(cfg.efSearch) == 0 || cfg.warmup < 0 || cfg.warmup > 10_000 || cfg.m8MeasuredRepetitions < 1 || cfg.m8MeasuredRepetitions > 10 {
-			return config{}, errors.New("production_multi_group requires non-empty concurrency and ef-search sweeps")
+			return config{}, errors.New("production_multi_group requires non-empty concurrency and ef-search sweeps, warmup in [0,10000], and measured repetitions in [1,10]")
 		}
 		for _, value := range cfg.concurrency {
 			if value < 1 || value > 256 {
@@ -2279,6 +2279,9 @@ type m8BenchmarkWorkPlan struct {
 	SourceSnapshotBytes                  int64
 	ExactTruthBytes                      int64
 	RetainedCoordinatorBytes             int64
+	CompleteAttemptReceiptBytes          int64
+	QualityDiagnosticReceiptBytes        int64
+	RouterPolicyDiagnosticReceiptBytes   int64
 	MeasurementReceiptBytes              int64
 	RetainedAttributionMatrices          int64
 	RetainedAttributionResults           int64
@@ -2424,6 +2427,22 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 	plan.RouterPolicyDiagnosticWorkUnits, plan.RouterPolicyDiagnosticBytes, err = m8PlanRouterPolicyDiagnosticsV1(cfg, m, oracleDomainCounts, capUnits, capBytes)
 	if err != nil {
 		return plan, err
+	}
+	qualityCells, err := memoryMul(int64(len(cfg.probes)), int64(len(cfg.efSearch)))
+	if err != nil {
+		return plan, err
+	}
+	for _, domains := range oracleDomainCounts {
+		qualityRows, err := m8QualityDiagnosticRowBytesV1(cfg, m, domains, qualityCells)
+		if err != nil {
+			return plan, err
+		}
+		plan.QualityDiagnosticReceiptBytes = max(plan.QualityDiagnosticReceiptBytes, qualityRows)
+		policyRows, err := m8RouterPolicyDiagnosticReceiptBytesV1(cfg, m, domains)
+		if err != nil {
+			return plan, err
+		}
+		plan.RouterPolicyDiagnosticReceiptBytes = max(plan.RouterPolicyDiagnosticReceiptBytes, policyRows)
 	}
 	if cfg.m8MembershipProbes != 0 {
 		for _, domains := range oracleDomainCounts {
@@ -2771,8 +2790,9 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 	if err != nil {
 		return plan, err
 	}
-	// Bound complete terminal records, canonical IDs/scores/durations and row
-	// metadata before any measured work. Diagnostic payloads have separate bounds.
+	// Bound complete terminal records for every success, refusal, timeout,
+	// cancellation and invalid response, plus canonical IDs/scores/durations and
+	// ordinary row metadata before any measured work.
 	perQueryJSON, err := memoryMul(int64(cfg.topK), documentIDStorageBytes+16)
 	if err != nil {
 		return plan, err
@@ -2789,12 +2809,21 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 	if err != nil {
 		return plan, err
 	}
-	plan.MeasurementReceiptBytes, err = memoryMul(plan.RetainedCoordinatorCells, perCellJSON)
+	plan.CompleteAttemptReceiptBytes, err = memoryMul(plan.RetainedCoordinatorCells, perCellJSON)
+	if err != nil {
+		return plan, err
+	}
+	// Quality and router-policy evidence is copied into every repeated row and
+	// those rows are copied into the measurement transcript. Reuse the quality
+	// planner's row estimator and the router receipt's probe-width bound so the
+	// file cap cannot pass on the smaller ordinary-row model and fail only after
+	// collection.
+	plan.MeasurementReceiptBytes, err = memoryAdd(plan.CompleteAttemptReceiptBytes, plan.QualityDiagnosticReceiptBytes, plan.RouterPolicyDiagnosticReceiptBytes)
 	if err != nil {
 		return plan, err
 	}
 	if plan.MeasurementReceiptBytes > m8CompleteMeasurementMaxBytesV1 {
-		return plan, fmt.Errorf("complete M8 measurement receipt bound %d exceeds %d bytes; reduce the declared matrix", plan.MeasurementReceiptBytes, m8CompleteMeasurementMaxBytesV1)
+		return plan, fmt.Errorf("complete M8 measurement receipt bound %d exceeds %d bytes (attempts=%d quality_diagnostics=%d router_policy_diagnostics=%d); reduce the declared matrix", plan.MeasurementReceiptBytes, m8CompleteMeasurementMaxBytesV1, plan.CompleteAttemptReceiptBytes, plan.QualityDiagnosticReceiptBytes, plan.RouterPolicyDiagnosticReceiptBytes)
 	}
 	maxMeasuredProbes, maxEFSearch, maxConcurrency := 0, 0, 0
 	for _, probes := range cfg.probes {

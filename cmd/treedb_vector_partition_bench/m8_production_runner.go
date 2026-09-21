@@ -1145,24 +1145,8 @@ func m8ValidateProductionMeasurementTranscriptOutcomesV1(transcript m8Production
 				return errors.New("M8 measurement transcript timing sample count mismatch")
 			}
 			for sample, ids := range outcome.TopKIDs {
-				if len(ids) != min(report.Config.TopK, report.Dataset.Vectors) {
-					return errors.New("M8 measurement transcript outcome top-k count mismatch")
-				}
-				if len(outcome.TopKScoreBits[sample]) != len(ids) {
-					return errors.New("M8 measurement transcript outcome ID/score count mismatch")
-				}
-				seen := make(map[string]bool, len(ids))
-				for _, id := range ids {
-					if !m8FixtureDocumentIDValidV1(id, report.Dataset.Vectors) || seen[id] {
-						return errors.New("M8 measurement transcript has invalid query outcome ID")
-					}
-					seen[id] = true
-				}
-				for _, bits := range outcome.TopKScoreBits[sample] {
-					score := math.Float32frombits(bits)
-					if math.IsNaN(float64(score)) || math.IsInf(float64(score), 0) {
-						return errors.New("M8 measurement transcript has nonfinite score bits")
-					}
+				if err := m8ValidateProductionOutcomeSampleV1(ids, outcome.TopKScoreBits[sample], min(report.Config.TopK, report.Dataset.Vectors), report.Dataset.Vectors); err != nil {
+					return err
 				}
 			}
 			for _, duration := range outcome.TotalNanos {
@@ -1202,6 +1186,35 @@ func m8ValidateProductionMeasurementTranscriptOutcomesV1(transcript m8Production
 			}
 		} else if outcome.TopKIDs == nil || len(outcome.TopKIDs) != 0 || outcome.TopKScoreBits == nil || len(outcome.TopKScoreBits) != 0 || outcome.TotalNanos == nil || len(outcome.TotalNanos) != 0 || len(outcome.ExactRepresentativeTruthHits) != 0 {
 			return errors.New("M8 measurement transcript has outcomes for shortfall or unsupported row")
+		}
+	}
+	return nil
+}
+
+func m8ValidateProductionOutcomeSampleV1(ids []string, scoreBits []uint32, expectedWidth, datasetVectors int) error {
+	if expectedWidth < 0 || expectedWidth > datasetVectors || len(ids) != expectedWidth {
+		return errors.New("M8 measurement transcript outcome result count mismatch")
+	}
+	if len(scoreBits) != expectedWidth {
+		return errors.New("M8 measurement transcript outcome ID/score count mismatch")
+	}
+	seen := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		if !m8FixtureDocumentIDValidV1(id, datasetVectors) || seen[id] {
+			return errors.New("M8 measurement transcript has invalid query outcome ID")
+		}
+		seen[id] = true
+	}
+	for i, bits := range scoreBits {
+		score := math.Float32frombits(bits)
+		if math.IsNaN(float64(score)) || math.IsInf(float64(score), 0) {
+			return errors.New("M8 measurement transcript has nonfinite score bits")
+		}
+		if i > 0 {
+			previous := math.Float32frombits(scoreBits[i-1])
+			if previous < score || (previous == score && ids[i-1] > ids[i]) {
+				return errors.New("M8 measurement transcript has noncanonical result order")
+			}
 		}
 	}
 	return nil
@@ -3561,11 +3574,12 @@ func m8ReduceProductionOutcomeV1(outcome m8ProductionCellOutcomeV1, manifest col
 	attempt.WorkObserved = true
 	attempt.Counters, attempt.CoordinatorNanos = outcome.response.Counters, outcome.response.Timing.TotalNanos
 	got, shapeErr := m8ValidateCoordinatorResponseV1(outcome.response, manifest, probes, topK)
-	if shapeErr != nil || len(got) != min(topK, int(manifest.SourceRowCount)) || outcome.response.Timing.TotalNanos == 0 {
+	if shapeErr != nil || outcome.response.Timing.TotalNanos == 0 {
 		attempt.Class, attempt.PartialResponse = "invalid_response", hasPayload
 		return attempt, nil
 	}
 	attempt.Class = "success"
+	attempt.ReturnedResults = len(got)
 	// Canonical lists contain unique IDs. Intersect directly without temporary
 	// ID slices; keep linear work even for the largest admitted top-k.
 	wanted := make(map[string]struct{}, len(truth))

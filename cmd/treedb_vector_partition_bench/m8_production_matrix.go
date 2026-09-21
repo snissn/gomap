@@ -80,7 +80,7 @@ type m8DecisionRowV1 struct {
 type m8ProductionComparisonV1 struct {
 	Repetition           int                    `json:"repetition,omitempty"`
 	AccountingContract   string                 `json:"accounting_contract,omitempty"`
-	Measurement          m8MeasurementSummaryV1 `json:"measurement_summary,omitempty"`
+	Measurement          m8MeasurementSummaryV1 `json:"measurement_summary,omitzero"`
 	VariantID            string                 `json:"variant_id"`
 	Status               string                 `json:"status"`
 	AssignmentBasis      string                 `json:"assignment_basis"`
