@@ -13,6 +13,23 @@ import (
 // allocation and independently from the exact source-query visit envelope.
 const maxM8QualityMembershipsV1 = 1 + vectorpartition.MaxOverlapMembershipsPerVector
 
+func m8QualityDiagnosticRowBytesV1(cfg config, m fixtureManifest, domains int, cells int64) (int64, error) {
+	if !cfg.m8QualityDiagnostics {
+		return 0, nil
+	}
+	if m.Queries < 1 || domains < 1 || cells < 1 || len(cfg.concurrency) < 1 {
+		return 0, errors.New("invalid quality diagnostic row shape")
+	}
+	rowCopies, err := memoryMul(int64(m.Queries), cells, int64(len(cfg.concurrency)), int64(max(1, cfg.m8MeasuredRepetitions)))
+	if err != nil {
+		return 0, err
+	}
+	// This bounds the retained query record, its variable domain slices, and
+	// JSON punctuation/encoding. The factor of two also covers the immutable
+	// row copy held while the report or transcript is encoded.
+	return memoryMul(rowCopies, 2*(int64(unsafe.Sizeof(m8QualityQueryV1{}))+24*int64(domains)+256))
+}
+
 func m8QualityOwnedBoundsV1(k, domains, packs, queries, cells, traceQueries int, limits m8CoverageLimitsV1) (int64, int64, error) {
 	if k < 1 || k > 10 || domains < 1 || domains > packs || packs > maxPartitions || queries < 1 || cells < 1 || traceQueries < 0 || traceQueries > queries || traceQueries > m8QualityTraceMaxQueriesV1 || limits.WorkUnits < 1 || limits.Bytes < 1 {
 		return 0, 0, errors.New("invalid quality work shape or caps")
@@ -98,15 +115,15 @@ func m8PlanQualityDiagnosticsV1(cfg config, m fixtureManifest, domainCounts []in
 		// The cache owns one diagnostic per probe/EF cell. Each measured
 		// concurrency row additionally clones its small query records when
 		// attaching coordinator masks; JSON serialization also retains bytes.
-		rowCopies, err := memoryMul(int64(m.Queries), cells, int64(len(cfg.concurrency)), int64(max(1, cfg.m8MeasuredRepetitions)))
-		if err != nil {
-			return 0, 0, err
-		}
-		rowBytes, err := memoryMul(rowCopies, 2*(int64(unsafe.Sizeof(m8QualityQueryV1{}))+24*int64(d)+256))
+		rowBytes, err := m8QualityDiagnosticRowBytesV1(cfg, m, d, cells)
 		if err != nil {
 			return 0, 0, err
 		}
 		b, err = memoryAdd(b, rowBytes)
+		if err != nil {
+			return 0, 0, err
+		}
+		rowCopies, err := memoryMul(int64(m.Queries), cells, int64(len(cfg.concurrency)), int64(max(1, cfg.m8MeasuredRepetitions)))
 		if err != nil {
 			return 0, 0, err
 		}

@@ -140,6 +140,7 @@ type m8MeasuredAttemptV1 struct {
 	WorkObserved     bool                                            `json:"work_observed"`
 	Counters         nativewire.VectorPartitionCoordinatorCountersV1 `json:"counters"`
 	PartialResponse  bool                                            `json:"partial_response"`
+	ReturnedResults  int                                             `json:"returned_results"`
 	TruthHits        int                                             `json:"truth_hits"`
 }
 
@@ -183,7 +184,7 @@ func m8SummarizeAttemptsV1(row *m8ProductionRowV1, topK int) error {
 	terminal := make([]uint64, 0, row.Samples)
 	noPartial := true
 	for _, attempt := range row.Accounting.Attempts {
-		if attempt.TruthHits < 0 || attempt.TruthHits > topK || attempt.CoordinatorNanos > attempt.TerminalNanos {
+		if attempt.ReturnedResults < 0 || attempt.ReturnedResults > topK || attempt.TruthHits < 0 || attempt.TruthHits > attempt.ReturnedResults || attempt.CoordinatorNanos > attempt.TerminalNanos {
 			return errors.New("invalid M8 attempt truth or timing")
 		}
 		if !attempt.Dispatched {
@@ -222,8 +223,8 @@ func m8SummarizeAttemptsV1(row *m8ProductionRowV1, topK int) error {
 		default:
 			return errors.New("missing or unknown M8 attempt terminal class")
 		}
-		if attempt.Class != "success" && attempt.TruthHits != 0 {
-			return errors.New("failed M8 attempt claims successful truth hits")
+		if attempt.Class != "success" && (attempt.ReturnedResults != 0 || attempt.TruthHits != 0) {
+			return errors.New("failed M8 attempt claims successful results")
 		}
 		for _, pair := range [][2]uint64{
 			{work.RequestBytes, attempt.Counters.RequestBytes}, {work.ResponseBytes, attempt.Counters.ResponseBytes},
@@ -303,9 +304,10 @@ func m8ValidateCompleteOutcomesV1(report m8ProductionReportV1, row m8ProductionR
 	if len(outcome.TopKIDs) != row.Samples || len(outcome.TopKScoreBits) != row.Samples || len(outcome.TotalNanos) != row.Samples {
 		return errors.New("incomplete M8 terminal outcomes")
 	}
-	// Reuse the established canonical ID/score and latency validator for the
-	// successful population. Failure durations never enter success percentiles.
-	successes := m8ProductionRowOutcomesV1{}
+	// The result count is a retained claim from the live manifest-aware response
+	// validation. Replay binds that count to the retained IDs and score bits; it
+	// does not attempt to reconstruct selected-partition membership from a scalar.
+	successDurations := make([]uint64, 0, row.Accounting.Summary.Succeeded)
 	for i, attempt := range row.Accounting.Attempts {
 		if attempt.Class != "success" {
 			if len(outcome.TopKIDs[i]) != 0 || len(outcome.TopKScoreBits[i]) != 0 || outcome.TotalNanos[i] != 0 {
@@ -316,9 +318,10 @@ func m8ValidateCompleteOutcomesV1(report m8ProductionReportV1, row m8ProductionR
 		if outcome.TotalNanos[i] != attempt.CoordinatorNanos {
 			return errors.New("M8 successful latency differs from terminal record")
 		}
-		successes.TopKIDs = append(successes.TopKIDs, outcome.TopKIDs[i])
-		successes.TopKScoreBits = append(successes.TopKScoreBits, outcome.TopKScoreBits[i])
-		successes.TotalNanos = append(successes.TotalNanos, outcome.TotalNanos[i])
+		if err := m8ValidateProductionOutcomeSampleV1(outcome.TopKIDs[i], outcome.TopKScoreBits[i], attempt.ReturnedResults, report.Dataset.Vectors); err != nil {
+			return err
+		}
+		successDurations = append(successDurations, outcome.TotalNanos[i])
 	}
 	if len(outcome.ExactRepresentativeTruthHits) != 0 {
 		if len(outcome.ExactRepresentativeTruthHits) != row.Samples {
@@ -335,19 +338,21 @@ func m8ValidateCompleteOutcomesV1(report m8ProductionReportV1, row m8ProductionR
 			return errors.New("M8 routing hits disagree with attribution")
 		}
 	}
-	if len(successes.TotalNanos) == 0 {
+	if len(successDurations) == 0 {
 		return nil
 	}
-	row.Accounting = nil
-	row.Status, row.Samples = "pass", len(successes.TotalNanos)
-	row.MaxTotalNanos = 0
-	for _, duration := range successes.TotalNanos {
-		row.MaxTotalNanos = max(row.MaxTotalNanos, duration)
+	p50, p95, p99 := m8PercentileV1(successDurations, 50), m8PercentileV1(successDurations, 95), m8PercentileV1(successDurations, 99)
+	if row.P50Nanos != p50 || row.P95Nanos != p95 || row.P99Nanos != p99 {
+		return errors.New("M8 measurement transcript timings do not reproduce retained percentiles")
 	}
-	identity := m8ProductionRowOutcomeIdentityV1(row)
-	identity.TopKIDs, identity.TopKScoreBits, identity.TotalNanos = successes.TopKIDs, successes.TopKScoreBits, successes.TotalNanos
-	report.Rows = []m8ProductionRowV1{row}
-	return m8ValidateProductionMeasurementTranscriptOutcomesV1(m8ProductionMeasurementTranscriptV1{Outcomes: []m8ProductionRowOutcomesV1{identity}}, report)
+	minimumElapsed, ok := m8TotalNanosElapsedLowerBoundV1(successDurations, row.Concurrency)
+	if !ok {
+		return errors.New("M8 measurement transcript timing aggregate overflows")
+	}
+	if row.ElapsedNanos < minimumElapsed {
+		return errors.New("M8 measurement transcript timings exceed retained elapsed time")
+	}
+	return nil
 }
 
 func m8AttachCompleteAttributionV1(row *m8ProductionRowV1, attribution m8AttributionCellV1, results [][]m8CanonicalResultV1) error {

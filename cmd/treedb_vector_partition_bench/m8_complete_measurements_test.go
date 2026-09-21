@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,6 +18,20 @@ import (
 	"github.com/snissn/gomap/TreeDB/collections"
 	"github.com/snissn/gomap/TreeDB/nativewire"
 )
+
+func TestM8ProductionComparisonOmitsLegacyMeasurementSummary(t *testing.T) {
+	legacy, err := json.Marshal(m8ProductionComparisonV1{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, err := json.Marshal(m8ProductionComparisonV1{Measurement: m8MeasurementSummaryV1{Declared: 1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(legacy), "measurement_summary") || !strings.Contains(string(current), "measurement_summary") {
+		t.Fatalf("measurement summary JSON shape: legacy=%s current=%s", legacy, current)
+	}
+}
 
 func TestM8ProductionCanceledCellRetainsDeclaredPopulation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -38,9 +53,9 @@ func m8CompleteMeasurementGoldenV1(t testing.TB) m8ProductionRowV1 {
 	t.Helper()
 	row := m8ProductionRowV1{Samples: 100, Concurrency: 1, ElapsedNanos: uint64(time.Second), Accounting: &m8MeasurementAccountingV1{Contract: m8CompleteAttemptsV1, Attempts: make([]m8MeasuredAttemptV1, 100)}}
 	for i := range row.Accounting.Attempts {
-		a := m8MeasuredAttemptV1{Class: "success", Dispatched: true, TerminalNanos: 20, CoordinatorNanos: 10, WorkObserved: true, TruthHits: 9, Counters: nativewire.VectorPartitionCoordinatorCountersV1{RouterScoreCalls: 3}}
+		a := m8MeasuredAttemptV1{Class: "success", Dispatched: true, TerminalNanos: 20, CoordinatorNanos: 10, WorkObserved: true, ReturnedResults: 10, TruthHits: 9, Counters: nativewire.VectorPartitionCoordinatorCountersV1{RouterScoreCalls: 3}}
 		if i >= 90 {
-			a.Class, a.TruthHits = "timeout", 0
+			a.Class, a.ReturnedResults, a.TruthHits = "timeout", 0, 0
 			a.TerminalNanos, a.CoordinatorNanos, a.Counters.RouterScoreCalls = 200, 100, 7
 		}
 		row.Accounting.Attempts[i] = a
@@ -91,6 +106,8 @@ func TestM8CompleteMeasurementDenominatorsAndFailureWork(t *testing.T) {
 		"unknown terminal":       func(r *m8ProductionRowV1) { r.Accounting.Attempts[0].Class = "" },
 		"missing query":          func(r *m8ProductionRowV1) { r.Accounting.Attempts = r.Accounting.Attempts[:99] },
 		"failed hits":            func(r *m8ProductionRowV1) { r.Accounting.Attempts[99].TruthHits = 1 },
+		"failed results":         func(r *m8ProductionRowV1) { r.Accounting.Attempts[99].ReturnedResults = 1 },
+		"hits exceed results":    func(r *m8ProductionRowV1) { r.Accounting.Attempts[0].ReturnedResults = 8 },
 		"unobserved work":        func(r *m8ProductionRowV1) { r.Accounting.Attempts[0].WorkObserved = false },
 		"invented completion":    func(r *m8ProductionRowV1) { r.Accounting.Summary.Succeeded++ },
 		"filtered denominator":   func(r *m8ProductionRowV1) { r.RecallAtK = .9 },
@@ -178,7 +195,7 @@ func TestM8CompleteMeasurementTerminalClassesAndBounds(t *testing.T) {
 		t.Fatal("counter overflow accepted")
 	}
 	// Bind the compact JSON admission allowance to maximum-width native fields.
-	attempt := m8MeasuredAttemptV1{Class: m8ProductionCandidateCoverageShortfallV1, Dispatched: true, WorkObserved: true, PartialResponse: true, TerminalNanos: math.MaxUint64, CoordinatorNanos: math.MaxUint64, TruthHits: math.MaxInt}
+	attempt := m8MeasuredAttemptV1{Class: m8ProductionCandidateCoverageShortfallV1, Dispatched: true, WorkObserved: true, PartialResponse: true, TerminalNanos: math.MaxUint64, CoordinatorNanos: math.MaxUint64, ReturnedResults: math.MaxInt, TruthHits: math.MaxInt}
 	counters := reflect.ValueOf(&attempt.Counters).Elem()
 	for i := range counters.NumField() {
 		if counters.Field(i).Kind() != reflect.Uint64 {
@@ -228,7 +245,7 @@ func TestM8CompleteMeasuredQualityDoesNotInventFailureTraversal(t *testing.T) {
 		t.Fatal(err)
 	}
 	row := m8ProductionRowV1{Samples: len(queries), Probes: 4, Concurrency: 1, ElapsedNanos: 100, Accounting: &m8MeasurementAccountingV1{Contract: m8CompleteAttemptsV1, Attempts: []m8MeasuredAttemptV1{
-		{Class: "success", Dispatched: true, WorkObserved: true, TerminalNanos: 20, CoordinatorNanos: 10, TruthHits: m8IDHitCountV1(m8CanonicalIDsV1(truth[0]), m8CanonicalIDsV1(cell.Local[0]))},
+		{Class: "success", Dispatched: true, WorkObserved: true, TerminalNanos: 20, CoordinatorNanos: 10, ReturnedResults: len(cell.Local[0]), TruthHits: m8IDHitCountV1(m8CanonicalIDsV1(truth[0]), m8CanonicalIDsV1(cell.Local[0]))},
 		{Class: "timeout", Dispatched: true, TerminalNanos: 30},
 	}}}
 	if err := m8SummarizeAttemptsV1(&row, 10); err != nil {
@@ -266,6 +283,47 @@ func TestM8RepeatedWindowWorkAndReceiptAdmission(t *testing.T) {
 	fixture.Queries = 100_000
 	if _, err := validateM8BenchmarkWork(cfg, fixture, math.MaxInt64, math.MaxInt64); err == nil || !strings.Contains(err.Error(), "receipt bound") {
 		t.Fatalf("oversized receipt not rejected before collection: %v", err)
+	}
+}
+
+func TestM8CompleteAttemptReceiptBoundsMixedTerminalRowsV1(t *testing.T) {
+	cfg := config{partitions: 4, overlaps: []float64{0}, probes: []int{1}, efSearch: []int{64}, concurrency: []int{1}, topK: 10, m8MeasuredRepetitions: 1, m8MaxExactTruthVisits: math.MaxInt64}
+	fixture := fixtureManifest{Vectors: maxVectors, Queries: 2, Dimensions: 8}
+	plan, err := validateM8BenchmarkWork(cfg, fixture, math.MaxInt64, math.MaxInt64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	maxAttempt := func(class string, returned, hits int) m8MeasuredAttemptV1 {
+		a := m8MeasuredAttemptV1{Class: class, Dispatched: true, WorkObserved: true, PartialResponse: class != "success", TerminalNanos: math.MaxUint64, CoordinatorNanos: math.MaxUint64, ReturnedResults: returned, TruthHits: hits}
+		counters := reflect.ValueOf(&a.Counters).Elem()
+		for i := range counters.NumField() {
+			counters.Field(i).SetUint(math.MaxUint64)
+		}
+		return a
+	}
+	row := m8ProductionRowV1{Status: "measurement_failure", Samples: 2, Probes: 1, EfSearch: 64, Concurrency: 1, Accounting: &m8MeasurementAccountingV1{Contract: m8CompleteAttemptsV1, Attempts: []m8MeasuredAttemptV1{
+		maxAttempt("success", cfg.topK, cfg.topK),
+		maxAttempt("invalid_response", 0, 0),
+	}}}
+	ids := make([]string, cfg.topK)
+	scores := make([]uint32, cfg.topK)
+	for i := range ids {
+		ids[i], scores[i] = fmt.Sprintf("doc-%06d", maxVectors-1-i), math.MaxUint32
+	}
+	outcome := m8ProductionRowOutcomesV1{Status: row.Status, Samples: row.Samples, Probes: row.Probes, EfSearch: row.EfSearch, Concurrency: row.Concurrency,
+		TopKIDs:       [][]string{ids, {}},
+		TopKScoreBits: [][]uint32{scores, {}},
+		TotalNanos:    []uint64{math.MaxUint64, math.MaxUint64},
+	}
+	raw, err := json.Marshal(struct {
+		Rows     []m8ProductionRowV1         `json:"rows"`
+		Outcomes []m8ProductionRowOutcomesV1 `json:"outcomes"`
+	}{[]m8ProductionRowV1{row}, []m8ProductionRowOutcomesV1{outcome}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.QualityDiagnosticReceiptBytes != 0 || plan.RouterPolicyDiagnosticReceiptBytes != 0 || plan.MeasurementReceiptBytes != plan.CompleteAttemptReceiptBytes || int64(len(raw)) > plan.CompleteAttemptReceiptBytes {
+		t.Fatalf("mixed success/failure terminal receipt exceeds admission bound: encoded=%d plan=%+v", len(raw), plan)
 	}
 }
 
@@ -310,6 +368,129 @@ func TestM8IncompleteMeasurementsSurviveDiagnosticFailure(t *testing.T) {
 	}
 	if _, err := m8ReadProductionMeasurementTranscriptV1(report); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestM8CompleteOutcomeReplayRetainsLiveValidatedResultCount(t *testing.T) {
+	writeFixture := func(t *testing.T) (m8ProductionReportV1, m8ProductionMeasurementTranscriptV1) {
+		t.Helper()
+		row := m8ProductionRowV1{Samples: 3, Concurrency: 1, ElapsedNanos: 100, Accounting: &m8MeasurementAccountingV1{Contract: m8CompleteAttemptsV1, Attempts: []m8MeasuredAttemptV1{
+			{Class: "success", Dispatched: true, TerminalNanos: 20, CoordinatorNanos: 10, WorkObserved: true, ReturnedResults: 1, TruthHits: 1},
+			{Class: "success", Dispatched: true, TerminalNanos: 30, CoordinatorNanos: 20, WorkObserved: true, ReturnedResults: 10, TruthHits: 9},
+			{Class: "timeout", Dispatched: true, TerminalNanos: 40},
+		}}}
+		if err := m8SummarizeAttemptsV1(&row, 10); err != nil {
+			t.Fatal(err)
+		}
+		results := make([][]m8CanonicalResultV1, row.Samples)
+		results[0] = []m8CanonicalResultV1{{ID: "doc-000000", Score: .9}}
+		for i := range 10 {
+			results[1] = append(results[1], m8CanonicalResultV1{ID: fmt.Sprintf("doc-%06d", i), Score: float32(10 - i)})
+		}
+		report := m8ProductionReportV1{ExecutionID: strings.Repeat("b", 32), Dataset: fixtureManifest{Vectors: 100, Queries: 3}, Config: m8ProductionConfigEvidenceV1{TopK: 10, MeasurementAccounting: m8CompleteAttemptsV1}, Rows: []m8ProductionRowV1{row}}
+		report.Resources.PeakRSSMeasured, report.Resources.PeakRSSBytes = true, 1
+		dir := t.TempDir()
+		if err := m8WriteIncompleteMeasurementsV1(dir, report, []m8MeasuredCellV1{{rowIndex: 0, results: results, durations: []uint64{10, 20, 0}}}); err != nil {
+			t.Fatal(err)
+		}
+		reportRaw, err := os.ReadFile(filepath.Join(dir, "incomplete_"+report.ExecutionID, "report.json"))
+		if err != nil {
+			t.Fatalf("read complete-outcome fixture report: %v", err)
+		}
+		if err := json.Unmarshal(reportRaw, &report); err != nil {
+			t.Fatalf("decode complete-outcome fixture report: %v", err)
+		}
+		transcriptRaw, err := os.ReadFile(report.MeasurementTranscript.Path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var transcript m8ProductionMeasurementTranscriptV1
+		if err := json.Unmarshal(transcriptRaw, &transcript); err != nil {
+			t.Fatal(err)
+		}
+		return report, transcript
+	}
+
+	rewrite := func(t *testing.T, report *m8ProductionReportV1, transcript m8ProductionMeasurementTranscriptV1) {
+		t.Helper()
+		raw, err := json.Marshal(transcript)
+		if err != nil {
+			t.Fatalf("rewrite complete-outcome fixture: %v", err)
+		}
+		if err := os.WriteFile(report.MeasurementTranscript.Path, raw, 0o600); err != nil {
+			t.Fatalf("rewrite complete-outcome fixture: %v", err)
+		}
+		digest := sha256.Sum256(raw)
+		report.MeasurementTranscript.Bytes = int64(len(raw))
+		report.MeasurementTranscript.SHA256 = fmt.Sprintf("%x", digest)
+	}
+
+	report, _ := writeFixture(t)
+	if _, err := m8ReadProductionMeasurementTranscriptV1(report); err != nil {
+		t.Fatalf("sparse, full, and failed outcomes did not survive write/read replay: %v", err)
+	}
+	for name, mutate := range map[string]func(*m8ProductionReportV1, *m8ProductionMeasurementTranscriptV1){
+		"count": func(report *m8ProductionReportV1, transcript *m8ProductionMeasurementTranscriptV1) {
+			report.Rows[0].Accounting.Attempts[0].ReturnedResults = 2
+			transcript.Rows[0].Accounting.Attempts[0].ReturnedResults = 2
+		},
+		"IDs": func(_ *m8ProductionReportV1, transcript *m8ProductionMeasurementTranscriptV1) {
+			transcript.Outcomes[0].TopKIDs[0] = append(transcript.Outcomes[0].TopKIDs[0], "doc-000001")
+		},
+		"scores": func(_ *m8ProductionReportV1, transcript *m8ProductionMeasurementTranscriptV1) {
+			transcript.Outcomes[0].TopKScoreBits[0] = append(transcript.Outcomes[0].TopKScoreBits[0], math.Float32bits(.8))
+		},
+		"score order": func(_ *m8ProductionReportV1, transcript *m8ProductionMeasurementTranscriptV1) {
+			ids, scores := transcript.Outcomes[0].TopKIDs[1], transcript.Outcomes[0].TopKScoreBits[1]
+			ids[0], ids[1] = ids[1], ids[0]
+			scores[0], scores[1] = scores[1], scores[0]
+		},
+		"tie order": func(_ *m8ProductionReportV1, transcript *m8ProductionMeasurementTranscriptV1) {
+			ids, scores := transcript.Outcomes[0].TopKIDs[1], transcript.Outcomes[0].TopKScoreBits[1]
+			scores[1] = scores[0]
+			ids[0], ids[1] = ids[1], ids[0]
+		},
+		"failure count": func(report *m8ProductionReportV1, transcript *m8ProductionMeasurementTranscriptV1) {
+			report.Rows[0].Accounting.Attempts[2].ReturnedResults = 1
+			transcript.Rows[0].Accounting.Attempts[2].ReturnedResults = 1
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			report, transcript := writeFixture(t)
+			mutate(&report, &transcript)
+			rewrite(t, &report, transcript)
+			if _, err := m8ReadProductionMeasurementTranscriptV1(report); err == nil {
+				t.Fatal("accepted tampered complete outcome replay")
+			}
+		})
+	}
+}
+
+func TestM8ProductionOutcomeSampleCanonicalOrder(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		ids    []string
+		scores []float32
+		valid  bool
+	}{
+		{"empty", nil, nil, true},
+		{"singleton", []string{"doc-000000"}, []float32{.9}, true},
+		{"descending negative", []string{"doc-000001", "doc-000000"}, []float32{-.1, -.9}, true},
+		{"ascending ties", []string{"doc-000000", "doc-000001"}, []float32{.9, .9}, true},
+		{"signed zero ties", []string{"doc-000000", "doc-000001"}, []float32{math.Float32frombits(1 << 31), 0}, true},
+		{"ascending scores", []string{"doc-000001", "doc-000000"}, []float32{.1, .9}, false},
+		{"descending ties", []string{"doc-000001", "doc-000000"}, []float32{.9, .9}, false},
+		{"reversed signed zero ties", []string{"doc-000001", "doc-000000"}, []float32{0, math.Float32frombits(1 << 31)}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bits := make([]uint32, len(tc.scores))
+			for i, score := range tc.scores {
+				bits[i] = math.Float32bits(score)
+			}
+			if err := m8ValidateProductionOutcomeSampleV1(tc.ids, bits, len(tc.ids), 100); (err == nil) != tc.valid {
+				t.Fatalf("valid=%t: %v", tc.valid, err)
+			}
+		})
 	}
 }
 

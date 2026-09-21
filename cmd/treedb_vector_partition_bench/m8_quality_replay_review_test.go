@@ -129,7 +129,7 @@ func TestM8QualityRetainedShortfallReplaysStaticEvidence(t *testing.T) {
 		// separately replayed static population has no approximate local result;
 		// it must neither erase that success nor invent a comparison against it.
 		mixed := m8ProductionRowV1{Probes: 2, EfSearch: 32, Concurrency: 1, Samples: len(queries), ElapsedNanos: 100, Accounting: &m8MeasurementAccountingV1{Contract: m8CompleteAttemptsV1, Attempts: []m8MeasuredAttemptV1{
-			{Class: "success", Dispatched: true, WorkObserved: true, TerminalNanos: 20, CoordinatorNanos: 10, TruthHits: m8IDHitCountV1(m8CanonicalIDsV1(truth[0]), m8CanonicalIDsV1(control.Local[0]))},
+			{Class: "success", Dispatched: true, WorkObserved: true, TerminalNanos: 20, CoordinatorNanos: 10, ReturnedResults: len(control.Local[0]), TruthHits: m8IDHitCountV1(m8CanonicalIDsV1(truth[0]), m8CanonicalIDsV1(control.Local[0]))},
 			{Class: m8ProductionRouterScoreBudgetExhaustedV1, Dispatched: true, TerminalNanos: 20},
 			{Class: m8ProductionRouterScoreBudgetExhaustedV1, Dispatched: true, TerminalNanos: 20},
 		}}}

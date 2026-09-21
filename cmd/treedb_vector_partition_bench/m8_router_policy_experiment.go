@@ -59,6 +59,48 @@ type m8RouterPolicyCacheV1 struct {
 	byProbes map[int]*m8RouterPolicyEvidenceV1
 }
 
+const (
+	m8RouterPolicyQueryJSONMaxBytesV1 = 3072
+	m8RouterPolicyRouteJSONMaxBytesV1 = 160
+)
+
+func m8RouterPolicyDiagnosticReceiptBytesV1(cfg config, m fixtureManifest, domains int) (int64, error) {
+	if !cfg.m8RouterPolicyDiagnostics {
+		return 0, nil
+	}
+	if m.Queries < 1 || domains < 1 || len(cfg.probes) < 1 || len(cfg.efSearch) < 1 || len(cfg.concurrency) < 1 {
+		return 0, errors.New("invalid policy diagnostic row shape")
+	}
+	var probeSum int64
+	for _, probes := range cfg.probes {
+		if probes < 1 || probes > domains {
+			return 0, errors.New("invalid policy diagnostic receipt probes")
+		}
+		var err error
+		probeSum, err = memoryAdd(probeSum, int64(probes))
+		if err != nil {
+			return 0, err
+		}
+	}
+	// Each query record has exact and approximate comparisons. Each comparison
+	// retains three routes of exactly the row's probe width; it does not retain
+	// all domains. Keep this file bound separate from the larger resident-memory
+	// envelope below so the intended bounded diagnostic matrix remains usable.
+	fixed, err := memoryMul(int64(len(cfg.probes)), m8RouterPolicyQueryJSONMaxBytesV1)
+	if err != nil {
+		return 0, err
+	}
+	routes, err := memoryMul(probeSum, 2, 3, m8RouterPolicyRouteJSONMaxBytesV1)
+	if err != nil {
+		return 0, err
+	}
+	perSweep, err := memoryAdd(fixed, routes)
+	if err != nil {
+		return 0, err
+	}
+	return memoryMul(int64(m.Queries), int64(len(cfg.efSearch)), int64(len(cfg.concurrency)), int64(max(1, cfg.m8MeasuredRepetitions)), perSweep)
+}
+
 func m8RouterPolicyDiagnosticShapeV1(representatives, requestedWidth, approximateBudget int) (width, beam int) {
 	beam = min(representatives, defaultRouterPolicyDiagnosticBeamV1)
 	if requestedWidth == 0 {
