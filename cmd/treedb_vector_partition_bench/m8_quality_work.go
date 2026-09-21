@@ -98,7 +98,7 @@ func m8PlanQualityDiagnosticsV1(cfg config, m fixtureManifest, domainCounts []in
 		// The cache owns one diagnostic per probe/EF cell. Each measured
 		// concurrency row additionally clones its small query records when
 		// attaching coordinator masks; JSON serialization also retains bytes.
-		rowCopies, err := memoryMul(int64(m.Queries), cells, int64(len(cfg.concurrency)))
+		rowCopies, err := memoryMul(int64(m.Queries), cells, int64(len(cfg.concurrency)), int64(max(1, cfg.m8MeasuredRepetitions)))
 		if err != nil {
 			return 0, 0, err
 		}

@@ -161,6 +161,63 @@ variant at one `(probes, ef_search, concurrency)` operating point passes recall,
 probe reduction, matched-recall QPS, and matched-recall tail together; those
 gates cannot be assembled from different variants or different cells.
 
+### Complete measured windows
+
+New schema-7 producers declare `measurement_accounting=complete_attempts_v1`.
+Every declared query retains exactly one indexed terminal record: success,
+router refusal, timeout, cancellation, ordinary error, or invalid response.
+Dispatch status distinguishes canceled/unstarted work from dispatched requests.
+Successful siblings are retained when another request fails. Typed coordinator
+errors retain their observed counters and timing; unavailable work is marked
+unobserved, not inferred from a later offline traversal. A failure returning any
+neighbors or routing payload sets `partial_response` and fails all-or-error
+honesty. Invalid response payloads never contribute returned truth hits.
+
+Integer counts define separate denominators:
+
+- successful recall: returned truth hits / (successful requests * top-k);
+- service recall (the row's `recall_at_k`): returned truth hits /
+  (all declared requests * top-k), charging failures/unstarted work zero hits;
+- completion: successes / dispatched requests, or zero if none dispatched;
+- attempt rate: dispatched requests / measured cell elapsed seconds;
+- goodput (the row's `qps`): valid successes / that same elapsed window.
+
+Successful p50/p95/p99 use only coordinator latency for valid successes.
+Observed terminal durations include failed requests but are not fabricated
+successful latencies. No-success rows retain zero conditional statistics and
+fail. Every required query must succeed for a coordinate to pass, regardless
+of conditional recall or completion among a smaller dispatched subset. Aggregate
+resource work includes observed failure work; per-request maxima remain maxima.
+Measured coordinator/local parity covers successful requests only. Offline
+attribution remains separately labelled; failed requests do not prove a local
+navigation or merge-loss cause.
+
+`-m8-measured-repetitions N` admits 1..10 windows per coordinate (default1).
+Repetition is part of row/transcript identity. Even-numbered blocks use the
+declared coordinate order; odd-numbered blocks reverse it. Query identity/order,
+topology, warmup and assets remain fixed. All windows precede one untimed
+attribution pass, cached per probe/EF point; retained replay shares that static
+work and independently checks each window's results. Selectors require every
+window at the chosen coordinate to complete and meet quality. Paired QPS/tail
+gates must pass for every same-repetition candidate/reference pair; neither a
+failed window nor a slower repetition can be discarded.
+
+Admission charges repeated requests, retained attempts/results, row copies and
+JSON encoding memory before topology execution. Complete reports/transcripts
+have a128MiB file cap; diagnostics keep their own work/memory limits. Production
+reports use compact JSON. If a later diagnostic or validation step fails, the
+runner attempts to preserve completed rows and their hashed transcript under
+`OUT/incomplete_EXECUTION_ID/report.json`, status`incomplete_after_measurement`,
+with no gate ledger. This requires writable storage and is not crash recovery.
+The command still fails; strict replay refuses incomplete evidence. It never
+turns a partial run into qualification or invents remaining windows.
+
+Legacy schema-7 reports omit both the accounting contract and repetition count.
+They retain their old interpretation and bounds; discarded legacy refusal
+populations cannot be reconstructed or upgraded. Changed producer identities
+still require correctly built/pinned retained assets. Accounting does not waive
+source, executable, command, truth, profile, or descriptor provenance.
+
 The schema-5 retained descriptor records the full assignment artifact, its
 pre-assignment artifact provenance, and a graph-build digest over the source,
 graph configuration, canonical IDs, and graph only. Its canonical build-identity digest

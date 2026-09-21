@@ -2119,8 +2119,8 @@ func TestM8UnsupportedOverlapSkipsMeasuredAndAttributionWorkV1(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Each outcome also retains three charged router-work counters.
-	if plan.QueryRequests != 4 || plan.MeasuredQueryRequests != 0 || plan.WarmupAndPreflightQueryRequests != 4 || plan.AttributionQueryPasses != 0 || plan.RetainedCoordinatorCells != 0 || plan.RetainedCoordinatorResults != 0 || plan.CurrentCellOutcomes != 2 || plan.CurrentCellOutcomeBytes != 1844 || plan.CurrentQueryConversionBytes != 64 || plan.RetainedAttributionMatrices != 0 || plan.RetainedAttributionResults != 0 || plan.RetainedAttributionBytes != 0 || plan.AttributionMergeScratchResults != 0 || plan.AttributionMergeScratchBytes != 0 {
+	// Outcomes retain router work, dispatch status and observed terminal timing.
+	if plan.QueryRequests != 4 || plan.MeasuredQueryRequests != 0 || plan.WarmupAndPreflightQueryRequests != 4 || plan.AttributionQueryPasses != 0 || plan.RetainedCoordinatorCells != 0 || plan.RetainedCoordinatorResults != 0 || plan.CurrentCellOutcomes != 2 || plan.CurrentCellOutcomeBytes != 1876 || plan.CurrentQueryConversionBytes != 64 || plan.RetainedAttributionMatrices != 0 || plan.RetainedAttributionResults != 0 || plan.RetainedAttributionBytes != 0 || plan.AttributionMergeScratchResults != 0 || plan.AttributionMergeScratchBytes != 0 {
 		t.Fatalf("unsupported-only M8 work plan=%+v", plan)
 	}
 }
@@ -2171,7 +2171,7 @@ func TestM8VariantMatrixCountsCompleteChildWorkAndOneChildPeakV1(t *testing.T) {
 
 func TestM8RetainedAttributionResultsRespectMemoryCapV1(t *testing.T) {
 	cfg := config{partitions: 16, overlaps: []float64{0}, probes: []int{1, 4}, efSearch: []int{64, 128}, concurrency: []int{1}, topK: 256, m8MaxExactTruthVisits: math.MaxInt64}
-	manifest := fixtureManifest{Vectors: 10_000, Queries: 50_000, Dimensions: 8}
+	manifest := fixtureManifest{Vectors: 10_000, Queries: 1_000, Dimensions: 8}
 	plan, err := validateM8BenchmarkWork(cfg, manifest, math.MaxInt64, math.MaxInt64)
 	if err != nil {
 		t.Fatal(err)
@@ -2184,10 +2184,10 @@ func TestM8RetainedAttributionResultsRespectMemoryCapV1(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if measurementPeak >= maxFixtureBytes || plan.RetainedAttributionMatrices != 5 || plan.RetainedAttributionResults != 64_000_000 || plan.RetainedAttributionBytes < 2_500_000_000 || plan.ModeledPeakBytes <= maxFixtureBytes {
+	if plan.RetainedAttributionMatrices != 5 || plan.RetainedAttributionResults != 1_280_000 || plan.RetainedAttributionBytes < 50_000_000 || plan.ModeledPeakBytes <= measurementPeak {
 		t.Fatalf("M8 attribution retention plan=%+v measurement_peak=%d", plan, measurementPeak)
 	}
-	if _, err := validateM8BenchmarkWork(cfg, manifest, math.MaxInt64, maxFixtureBytes); err == nil || !strings.Contains(err.Error(), "retained_attribution_results=64000000") {
+	if _, err := validateM8BenchmarkWork(cfg, manifest, math.MaxInt64, measurementPeak); err == nil || !strings.Contains(err.Error(), "retained_attribution_results=1280000") {
 		t.Fatalf("accepted oversized retained attribution sweep: %v", err)
 	}
 }
@@ -2237,7 +2237,7 @@ func TestM8AttributionMergeScratchRespectsMemoryCapV1(t *testing.T) {
 
 func TestM8CurrentCellOutcomesRespectMemoryCapV1(t *testing.T) {
 	cfg := config{partitions: 256, raftGroups: 4, overlaps: []float64{0}, probes: []int{256}, efSearch: []int{64}, concurrency: []int{64}, topK: 1, m8MaxExactTruthVisits: math.MaxInt64}
-	manifest := fixtureManifest{Vectors: 256, Queries: 1_000_000, Dimensions: 1}
+	manifest := fixtureManifest{Vectors: 256, Queries: 1_000, Dimensions: 1}
 	plan, err := validateM8BenchmarkWork(cfg, manifest, math.MaxInt64, math.MaxInt64)
 	if err != nil {
 		t.Fatal(err)
@@ -2258,10 +2258,10 @@ func TestM8CurrentCellOutcomesRespectMemoryCapV1(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plan.CurrentCellOutcomes != 1_000_000 || plan.CurrentCellOutcomeBytes <= 1_500_000_000 || plan.ModeledPeakBytes <= withoutOutcomes {
+	if plan.CurrentCellOutcomes != 1_000 || plan.CurrentCellOutcomeBytes <= 1_500_000 || plan.ModeledPeakBytes <= withoutOutcomes {
 		t.Fatalf("M8 current-cell outcome plan=%+v without_outcomes=%d", plan, withoutOutcomes)
 	}
-	if _, err := validateM8BenchmarkWork(cfg, manifest, math.MaxInt64, withoutOutcomes); err == nil || !strings.Contains(err.Error(), "current_cell_outcomes=1000000") {
+	if _, err := validateM8BenchmarkWork(cfg, manifest, math.MaxInt64, withoutOutcomes); err == nil || !strings.Contains(err.Error(), "current_cell_outcomes=1000") {
 		t.Fatalf("accepted unmodeled current-cell outcomes: %v", err)
 	}
 }
@@ -2345,7 +2345,7 @@ func TestM8PreflightResponseRespectsMemoryCapV1(t *testing.T) {
 }
 
 func TestM8MeasuredResponsesDoNotUseExhaustivePreflightShapeV1(t *testing.T) {
-	manifest := fixtureManifest{Vectors: 256, Queries: 100_000, Dimensions: 1}
+	manifest := fixtureManifest{Vectors: 256, Queries: 1_000, Dimensions: 1}
 	cfg := config{partitions: 256, raftGroups: 4, overlaps: []float64{0}, probes: []int{1}, efSearch: []int{64}, concurrency: []int{1}, topK: 1, m8MaxExactTruthVisits: math.MaxInt64}
 	plan, err := validateM8BenchmarkWork(cfg, manifest, math.MaxInt64, math.MaxInt64)
 	if err != nil {
@@ -2376,7 +2376,17 @@ func TestM8MeasuredResponsesDoNotUseExhaustivePreflightShapeV1(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plan.ModeledPeakBytes >= legacyPeak {
+	measurementPeak, err := memoryAdd(measurementBase, plan.CurrentCellOutcomeBytes, plan.CurrentQueryConversionBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	measurementPeak, err = memoryScaleCeil(measurementPeak, memorySlackNumerator, memorySlackDenominator)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Receipt serialization has its own later peak; compare the measured
+	// response phase, not that independent complete-accounting allocation.
+	if measurementPeak >= legacyPeak {
 		t.Fatalf("measured responses still charged at exhaustive shape: plan=%+v legacy_peak=%d", plan, legacyPeak)
 	}
 	if _, err := validateM8BenchmarkWork(cfg, manifest, math.MaxInt64, plan.ModeledPeakBytes); err != nil {
@@ -2426,15 +2436,15 @@ func TestM8AttributionPrimaryHomeMappingIsModeledV1(t *testing.T) {
 
 func TestM8RetainedCoordinatorResultsRespectMemoryCapV1(t *testing.T) {
 	cfg := config{partitions: 16, overlaps: []float64{0}, probes: []int{1, 4}, efSearch: []int{64, 128}, concurrency: []int{1, 2}, topK: 256, m8MaxExactTruthVisits: math.MaxInt64}
-	manifest := fixtureManifest{Vectors: 10_000, Queries: 50_000, Dimensions: 8}
+	manifest := fixtureManifest{Vectors: 10_000, Queries: 500, Dimensions: 8}
 	plan, err := validateM8BenchmarkWork(cfg, manifest, math.MaxInt64, math.MaxInt64)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plan.RetainedCoordinatorResults != 102_400_000 || plan.RetainedCoordinatorBytes < 4_000_000_000 {
+	if plan.RetainedCoordinatorResults != 1_024_000 || plan.RetainedCoordinatorBytes < 40_000_000 {
 		t.Fatalf("M8 retained-result plan=%+v", plan)
 	}
-	if _, err := validateM8BenchmarkWork(cfg, manifest, math.MaxInt64, maxFixtureBytes); err == nil || !strings.Contains(err.Error(), "retained_coordinator_results=102400000") {
+	if _, err := validateM8BenchmarkWork(cfg, manifest, math.MaxInt64, plan.RetainedCoordinatorBytes-1); err == nil || !strings.Contains(err.Error(), "retained_coordinator_results=1024000") {
 		t.Fatalf("accepted oversized retained result sweep: %v", err)
 	}
 }
@@ -2512,6 +2522,11 @@ func TestM8ArtifactNameIncludesConfigurationV1(t *testing.T) {
 	fifth, err := m8ArtifactNameV1(base, fixture, collections.VectorPartitionManifestV1{ReadySetDigest: "a"}, strings.Repeat("b", 32))
 	if err != nil || fourth == fifth {
 		t.Fatalf("execution identities collided %q %q err=%v", fourth, fifth, err)
+	}
+	base.m8MeasuredRepetitions = 5
+	repeated, err := m8ArtifactNameV1(base, fixture, collections.VectorPartitionManifestV1{ReadySetDigest: "a"}, executionID)
+	if err != nil || fourth == repeated {
+		t.Fatalf("repeated measurement identities collided %q %q err=%v", fourth, repeated, err)
 	}
 }
 

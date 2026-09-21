@@ -78,29 +78,32 @@ type m8DecisionRowV1 struct {
 }
 
 type m8ProductionComparisonV1 struct {
-	VariantID            string  `json:"variant_id"`
-	Status               string  `json:"status"`
-	AssignmentBasis      string  `json:"assignment_basis"`
-	Overlap              float64 `json:"overlap"`
-	ArtifactSHA256       string  `json:"artifact_sha256"`
-	ReadySetDigest       string  `json:"ready_set_digest"`
-	RouterModelDigest    string  `json:"router_model_digest"`
-	Probes               int     `json:"probes"`
-	EfSearch             int     `json:"ef_search"`
-	Concurrency          int     `json:"concurrency"`
-	Samples              int     `json:"samples"`
-	RecallAtK            float64 `json:"recall_at_k"`
-	QPS                  float64 `json:"qps"`
-	P50Nanos             uint64  `json:"p50_nanos"`
-	P95Nanos             uint64  `json:"p95_nanos"`
-	P99Nanos             uint64  `json:"p99_nanos"`
-	MaxTotalNanos        uint64  `json:"max_total_nanos"`
-	RPCs                 uint64  `json:"rpcs"`
-	RequestBytes         uint64  `json:"request_bytes"`
-	CandidateBytes       uint64  `json:"candidate_bytes"`
-	ResponseBytes        uint64  `json:"response_bytes"`
-	PersistentAssetBytes uint64  `json:"persistent_asset_bytes"`
-	PeakRSSBytes         int64   `json:"peak_rss_bytes"`
+	Repetition           int                    `json:"repetition,omitempty"`
+	AccountingContract   string                 `json:"accounting_contract,omitempty"`
+	Measurement          m8MeasurementSummaryV1 `json:"measurement_summary,omitempty"`
+	VariantID            string                 `json:"variant_id"`
+	Status               string                 `json:"status"`
+	AssignmentBasis      string                 `json:"assignment_basis"`
+	Overlap              float64                `json:"overlap"`
+	ArtifactSHA256       string                 `json:"artifact_sha256"`
+	ReadySetDigest       string                 `json:"ready_set_digest"`
+	RouterModelDigest    string                 `json:"router_model_digest"`
+	Probes               int                    `json:"probes"`
+	EfSearch             int                    `json:"ef_search"`
+	Concurrency          int                    `json:"concurrency"`
+	Samples              int                    `json:"samples"`
+	RecallAtK            float64                `json:"recall_at_k"`
+	QPS                  float64                `json:"qps"`
+	P50Nanos             uint64                 `json:"p50_nanos"`
+	P95Nanos             uint64                 `json:"p95_nanos"`
+	P99Nanos             uint64                 `json:"p99_nanos"`
+	MaxTotalNanos        uint64                 `json:"max_total_nanos"`
+	RPCs                 uint64                 `json:"rpcs"`
+	RequestBytes         uint64                 `json:"request_bytes"`
+	CandidateBytes       uint64                 `json:"candidate_bytes"`
+	ResponseBytes        uint64                 `json:"response_bytes"`
+	PersistentAssetBytes uint64                 `json:"persistent_asset_bytes"`
+	PeakRSSBytes         int64                  `json:"peak_rss_bytes"`
 }
 
 type m8ProductionMatrixGatesV1 struct {
@@ -700,7 +703,10 @@ func m8BuildProductionMatrixWithExecutionIntervalV1(cfg config, fixture fixtureM
 		if a.EfSearch != b.EfSearch {
 			return a.EfSearch < b.EfSearch
 		}
-		return a.Concurrency < b.Concurrency
+		if a.Concurrency != b.Concurrency {
+			return a.Concurrency < b.Concurrency
+		}
+		return a.Repetition < b.Repetition
 	})
 	if err := validateM8ProductionMatrixV1(matrix); err != nil {
 		return m8ProductionMatrixV1{}, err
@@ -709,14 +715,20 @@ func m8BuildProductionMatrixWithExecutionIntervalV1(cfg config, fixture fixtureM
 }
 
 func m8ProductionComparisonForRowV1(report m8ProductionReportV1, row m8ProductionRowV1) m8ProductionComparisonV1 {
-	return m8ProductionComparisonV1{
-		VariantID: report.Variant.VariantID, Status: row.Status, AssignmentBasis: report.Variant.AssignmentBasis, Overlap: report.Variant.OverlapRatio,
+	comparison := m8ProductionComparisonV1{
+		Repetition: row.Repetition,
+		VariantID:  report.Variant.VariantID, Status: row.Status, AssignmentBasis: report.Variant.AssignmentBasis, Overlap: report.Variant.OverlapRatio,
 		ArtifactSHA256: report.Variant.ArtifactSHA256, ReadySetDigest: report.Variant.ReadySetDigest, RouterModelDigest: report.Variant.RouterModelDigest,
 		Probes: row.Probes, EfSearch: row.EfSearch, Concurrency: row.Concurrency, Samples: row.Samples, RecallAtK: row.RecallAtK,
 		QPS: row.QPS, P50Nanos: row.P50Nanos, P95Nanos: row.P95Nanos, P99Nanos: row.P99Nanos, MaxTotalNanos: row.MaxTotalNanos, RPCs: row.RPCs,
 		RequestBytes: row.RequestBytes, CandidateBytes: row.CandidateBytes, ResponseBytes: row.ResponseBytes,
 		PersistentAssetBytes: report.Resources.PersistentAssetBytes, PeakRSSBytes: report.Resources.PeakRSSBytes,
 	}
+	if row.Accounting != nil {
+		comparison.AccountingContract = row.Accounting.Contract
+		comparison.Measurement = row.Accounting.Summary
+	}
+	return comparison
 }
 
 // validateM8ProductionMatrixV1 binds every flattened comparison row to its
@@ -764,8 +776,8 @@ func validateM8ProductionMatrixV1(matrix m8ProductionMatrixV1) error {
 		return errors.New("M8 matrix is missing configured membership feasibility evidence")
 	}
 	type key struct {
-		variantID               string
-		probes, ef, concurrency int
+		variantID                           string
+		probes, ef, concurrency, repetition int
 	}
 	sources := make(map[key]m8ProductionComparisonV1)
 	for _, report := range matrix.Variants {
@@ -779,10 +791,10 @@ func validateM8ProductionMatrixV1(matrix m8ProductionMatrixV1) error {
 			if row.Status == "unsupported" {
 				continue
 			}
-			if row.Status != "pass" && row.Status != "fail" && !m8ProductionRouterRefusalStatusV1(row.Status) {
+			if row.Status != "pass" && row.Status != "fail" && !m8ProductionRouterRefusalStatusV1(row.Status) && !(row.Status == "measurement_failure" && row.Accounting != nil) {
 				return errors.New("M8 matrix contains an invalid measured row status")
 			}
-			k := key{report.Variant.VariantID, row.Probes, row.EfSearch, row.Concurrency}
+			k := key{report.Variant.VariantID, row.Probes, row.EfSearch, row.Concurrency, row.Repetition}
 			if _, exists := sources[k]; exists {
 				return errors.New("M8 matrix contains duplicate child comparison rows")
 			}
@@ -793,10 +805,10 @@ func validateM8ProductionMatrixV1(matrix m8ProductionMatrixV1) error {
 		return errors.New("M8 matrix comparison rows do not match child measurements")
 	}
 	for _, comparison := range matrix.Comparison {
-		if comparison.Status != "pass" && comparison.Status != "fail" && !m8ProductionRouterRefusalStatusV1(comparison.Status) {
+		if comparison.Status != "pass" && comparison.Status != "fail" && !m8ProductionRouterRefusalStatusV1(comparison.Status) && !(comparison.Status == "measurement_failure" && comparison.AccountingContract == m8CompleteAttemptsV1) {
 			return errors.New("M8 matrix comparison has an invalid measured status")
 		}
-		k := key{comparison.VariantID, comparison.Probes, comparison.EfSearch, comparison.Concurrency}
+		k := key{comparison.VariantID, comparison.Probes, comparison.EfSearch, comparison.Concurrency, comparison.Repetition}
 		if expected, ok := sources[k]; !ok || comparison != expected {
 			return errors.New("M8 matrix comparison does not match child measurement")
 		}
@@ -824,7 +836,7 @@ func m8DecisionReportV1(reports []m8ProductionReportV1) []m8DecisionRowV1 {
 		var selected *m8ProductionRowV1
 		for i := range report.Rows {
 			row := &report.Rows[i]
-			if row.Status != "pass" || row.Probes != targetProbes || selected != nil && (row.EfSearch > selected.EfSearch || row.EfSearch == selected.EfSearch && row.Concurrency >= selected.Concurrency) {
+			if !m8MeasuredCoordinateCompleteV1(report, *row) || row.Probes != targetProbes || selected != nil && (row.EfSearch > selected.EfSearch || row.EfSearch == selected.EfSearch && row.Concurrency >= selected.Concurrency) {
 				continue
 			}
 			selected = row
@@ -890,14 +902,14 @@ func m8ReportHasCoupledGateOperatingPointV1(report m8ProductionReportV1) bool {
 		return false
 	}
 	for _, candidate := range report.Rows {
-		if candidate.Status != "pass" || candidate.RecallAtK < report.Config.RecallTarget || candidate.Probes > domainCount/4 {
+		if !m8MeasuredCoordinateCompleteV1(report, candidate) || candidate.RecallAtK < report.Config.RecallTarget || candidate.Probes > domainCount/4 {
 			continue
 		}
 		for _, base := range report.Rows {
 			if base.Status != "pass" || base.Probes != domainCount || !base.Attribution.ExhaustivePartitionIDParity || !base.Attribution.ExhaustivePartitionScoreParity || base.Attribution.ExhaustivePartitionRecallAtK != 1 || base.RecallAtK < report.Config.RecallTarget || candidate.EfSearch != base.EfSearch || candidate.Concurrency != base.Concurrency {
 				continue
 			}
-			if candidate.QPS >= base.QPS*1.15 && candidate.P95Nanos <= base.P95Nanos {
+			if m8RepeatedPairGateV1(report, candidate, base, true, true) {
 				return true
 			}
 		}

@@ -776,9 +776,11 @@ embedded VCS metadata. The existing command verifier requires child `-out` and
 `-m8-existing-db`, `-profiles`, `-m8-matrix-profiles`, source and explicit caps.
 Captured production profiles are required; replay keeps the existing 4 GiB RSS,
 2 GiB asset and fixture-specific exact-truth caps.
-Current replay reports and explicitly selected diagnostic transcripts have a
-64 MiB retained-file cap; ordinary transcripts and historical qualification
-retain their 2 MiB transcript, 16 MiB matrix and 1 MiB index caps.
+Legacy replay reports and explicitly selected diagnostic transcripts have a
+64 MiB retained-file cap; ordinary legacy transcripts and historical
+qualification retain their 2 MiB transcript, 16 MiB matrix and 1 MiB index caps.
+The explicit `complete_attempts_v1` contract admits128MiB reports/transcripts,
+with earlier request/retention/serialization work and memory admission.
 
 ```sh
 /tmp/treedb_vector_partition_bench replay-m8-report \
@@ -794,6 +796,11 @@ Fixture and argv pins are SHA256 of Go `json.Marshal(fixtureManifest)` and
 `json.Marshal(report.Command)` respectively (no newline), frozen independently
 before measurement. Pin the generated fixture and canonical truth identities
 before observing benchmark outcomes; freeze receipt/file hashes at publication.
+The command pin is the producer-normalized argv, not necessarily the literal
+invocation: source/base/head arguments are normalized and a trusted truth-cache
+digest may be prepended. Derive that normalization from the frozen invocation
+and exact landed producer before collection; a post-run pin correction remains
+a provenance limitation, not a pristine prospective freeze.
 Do not derive all seven trusted pins from the report being checked. In
 particular, a truth-cache checksum alone does not freeze the query offset.
 The variant pin hashes `m3VariantDescriptorJSONV1` bytes (indented JSON plus
@@ -806,6 +813,55 @@ failures. This validates retained child evidence, not baseline acceptance,
 cross-variant overlap-storage conclusions, repeat/noise policy, held-out quality
 or historical campaign qualification. A successful bounded rehearsal is not the
 100K/250K empirical packet.
+
+### Repeated windows and complete attempt accounting (#4753)
+
+Add `-m8-measured-repetitions 5` to the frozen production command for five
+alternating-order blocks in one immutable topology. The option propagates to
+matrix children and is command-bound. It repeats measured windows, not asset
+construction or expensive offline attribution. This is a closed-loop client
+concurrency sweep, not an offered-arrival-rate or concurrent-write benchmark.
+All required repetitions remain in the report; no best-window selection.
+
+See the [complete-window contract](../spec/vector-partition-m8-production-topology.md#complete-measured-windows)
+for terminal classes and exact denominators. For100 top10 requests with90
+perfect successes and10 failures, successful recall is100%, service recall is90%,
+completion is90% and the row is rejected. A request canceled before dispatch
+still occupies the declared service denominator, with no fabricated work/time.
+Successful latency percentiles exclude failures, while terminal durations and
+observed failure work stay retained separately. Offline local-search results
+are not observations of a timed-out request's traversal.
+
+An incomplete post-measurement artifact preserves raw work, not a valid report:
+the producer exits nonzero and replay rejects it. Native mutation, concurrent
+search-under-write, reopen/GC quality, whole-collection references, matched-quality
+cost targets and representative100K/250K evidence remain separate #4753 gates.
+Historical fourfold probe-reduction gates are unchanged by wider profile selection.
+
+Allocation audit: measured workers retain one bounded native response/error
+slot per query, with dispatch and terminal-time fields and two clock reads.
+After timing, one terminal array and existing successful result/duration arrays
+own the receipt; no goroutine per query is added. The pure reducer uses two
+bounded uint64 buffers, sorts its owned success buffer once, and checks counter
+overflow. Direct truth-ID intersection avoids temporary ID slices. Diagnostic
+rows are copied only when attaching measured masks; the underlying static
+attribution is reused across concurrency/repetition windows in producer/replay.
+Encoding/decoding copies and repeated diagnostic-row work are charged at admission.
+No pool, unsafe reuse, new dependency, or product storage/wire format is added.
+
+```sh
+GOWORK=off go test ./cmd/treedb_vector_partition_bench \
+  -run 'TestM8(Complete|Repeated|Incomplete|ProductionCanceled|ProductionMultiGroupTopology10kTCP)' -count=1
+GOWORK=off go test ./cmd/treedb_vector_partition_bench -run '^$' \
+  -bench '^BenchmarkM8(CompleteAttemptReduction|MeasuredNativeCellV1)$' -benchmem -count=5
+```
+
+`BenchmarkM8CompleteAttemptReduction` measures100 retained records, not serving
+QPS. `BenchmarkM8MeasuredNativeCellV1` measures a complete16-query native
+TCP/coordinator cell, including reduction/accounting but excluding setup,
+truth and warmup. Run the identical benchmark file at base and candidate on
+one admitted Linux host; compare ns/cell, bytes/cell and allocations/cell.
+This guardrail is synthetic2048x128, not real768 scaling qualification.
 
 Focused verification:
 

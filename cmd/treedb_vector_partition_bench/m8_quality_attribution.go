@@ -556,7 +556,7 @@ func m8QualityEvidenceSelectionV1(cfg m8ProductionConfigEvidenceV1, row m8Produc
 	if cfg.TopK < 1 || cfg.TopK > 10 || cfg.QualityTraceQueries < 0 || cfg.QualityTraceQueries > m8QualityTraceMaxQueriesV1 {
 		return errors.New("invalid quality config")
 	}
-	if row.Status != "pass" && row.Status != "fail" && !m8ProductionRouterRefusalStatusV1(row.Status) {
+	if row.Accounting == nil && row.Status != "pass" && row.Status != "fail" && !m8ProductionRouterRefusalStatusV1(row.Status) {
 		if row.Attribution.Quality != nil {
 			return errors.New("unsupported row has quality evidence")
 		}
@@ -570,7 +570,13 @@ func m8QualityEvidenceSelectionV1(cfg m8ProductionConfigEvidenceV1, row m8Produc
 	if !ok || d != q.Domains || q.TraceQueries != cfg.QualityTraceQueries {
 		return errors.New("quality config/layout mismatch")
 	}
-	for _, observed := range q.Queries {
+	for i, observed := range q.Queries {
+		if row.Accounting != nil && (i >= len(row.Accounting.Attempts) || row.Accounting.Attempts[i].Class != "success") {
+			if observed.CoordinatorReturned != nil {
+				return errors.New("failed M8 attempt has measured truth observation")
+			}
+			continue
+		}
 		if row.Attribution.ApproximateRouterPartitionCoverageComplete {
 			if observed.CoordinatorReturned == nil || *observed.CoordinatorReturned & ^uint16((1<<uint(cfg.TopK))-1) != 0 {
 				return errors.New("missing or invalid measured coordinator truth mask")

@@ -1212,19 +1212,12 @@ func TestM8ProductionMultiGroupTopology10kTCPV1(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if shortfall.Status != m8ProductionCandidateCoverageShortfallV1 || len(shortfallResults) != len(shortfallQueries) {
+	if shortfall.Status != "measurement_failure" || len(shortfallResults) != len(shortfallQueries) {
 		t.Fatalf("candidate-coverage shortfall=%+v results=%d", shortfall, len(shortfallResults))
 	}
-	if shortfallDurations != nil {
-		t.Fatalf("candidate-coverage shortfall retained timings=%v", shortfallDurations)
-	}
+	assertM8MixedMeasurementV1(t, shortfall, shortfallResults, shortfallDurations, 3, 1)
 	if shortfall.MaxTotalNanos == 0 || shortfall.RequestBytes == 0 || shortfall.RPCs == 0 || shortfall.MaxRequests == 0 || shortfall.MaxRPCs == 0 {
 		t.Fatalf("candidate-coverage shortfall discarded coordinator work=%+v", shortfall)
-	}
-	for _, results := range shortfallResults {
-		if results != nil {
-			t.Fatalf("candidate-coverage shortfall retained a partial result: %+v", results)
-		}
 	}
 	scoreSource := &m8CoverageShortfallRouterSourceV1{VectorPartitionCoordinatorRouterSourceV1: assets.RouterSource(), firstErr: collections.ErrVectorPartitionRouterScoreBudget}
 	scoreTopology, err := nativewire.NewVectorPartitionM8ProductionMultiGroupV1(ctx, nativewire.VectorPartitionM8ProductionMultiGroupOptionsV1{Collection: assets.collection, Manifest: assets.manifest, RouterSource: scoreSource, GroupAssetSetDigests: assets.assetSetDigests, Database: "default", Catalog: "default"})
@@ -1236,14 +1229,10 @@ func TestM8ProductionMultiGroupTopology10kTCPV1(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if scoreRefusal.Status != m8ProductionRouterScoreBudgetExhaustedV1 || scoreRefusal.RouterScoreCalls < uint64(candidates) || len(scoreResults) != len(shortfallQueries) || scoreDurations != nil {
+	if scoreRefusal.Status != "measurement_failure" || scoreRefusal.RouterScoreCalls < uint64(candidates) || len(scoreResults) != len(shortfallQueries) {
 		t.Fatalf("score-budget refusal=%+v results=%d timings=%v", scoreRefusal, len(scoreResults), scoreDurations)
 	}
-	for _, results := range scoreResults {
-		if results != nil {
-			t.Fatalf("score-budget refusal retained a partial result: %+v", results)
-		}
-	}
+	assertM8MixedMeasurementV1(t, scoreRefusal, scoreResults, scoreDurations, 3, 1)
 	mixedSource := &m8CoverageShortfallRouterSourceV1{VectorPartitionCoordinatorRouterSourceV1: assets.RouterSource(), firstErr: collections.ErrVectorPartitionRouterScoreBudget, err: collections.ErrVectorPartitionRouterCandidateCoverageV1, barrier: &m8ApproximateSearchBarrierV1{waitFor: 4, release: make(chan struct{})}}
 	mixedTopology, err := nativewire.NewVectorPartitionM8ProductionMultiGroupV1(ctx, nativewire.VectorPartitionM8ProductionMultiGroupOptionsV1{Collection: assets.collection, Manifest: assets.manifest, RouterSource: mixedSource, GroupAssetSetDigests: assets.assetSetDigests, Database: "default", Catalog: "default"})
 	if err != nil {
@@ -1254,14 +1243,10 @@ func TestM8ProductionMultiGroupTopology10kTCPV1(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if mixedRefusal.Status != m8ProductionMixedRouterRefusalV1 || len(mixedResults) != len(shortfallQueries) || mixedDurations != nil {
+	if mixedRefusal.Status != "measurement_failure" || len(mixedResults) != len(shortfallQueries) {
 		t.Fatalf("mixed router refusal=%+v results=%d timings=%v", mixedRefusal, len(mixedResults), mixedDurations)
 	}
-	for _, results := range mixedResults {
-		if results != nil {
-			t.Fatalf("mixed router refusal retained a partial result: %+v", results)
-		}
-	}
+	assertM8MixedMeasurementV1(t, mixedRefusal, mixedResults, mixedDurations, 2, 2)
 	if row.Attribution.Contract != m8CanonicalResultContractV1 || row.Attribution.ExhaustivePartitionRecallAtK != 1 ||
 		row.Attribution.ExactRepresentativeRecallAtK != 1 || row.Attribution.ApproximateRepresentativeRecallAtK != 1 ||
 		row.Attribution.LocalHNSWRecallAtK != 1 || row.Attribution.ApproximateLocalHNSWRecallAtK != 1 || row.Attribution.EndToEndRecallAtK != 1 ||

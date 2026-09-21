@@ -320,7 +320,7 @@ func m8RouterPolicyEvidenceSelectionV1(cfg m8ProductionConfigEvidenceV1, routerR
 	if !cfg.QualityDiagnostics || routerRepresentatives < 1 || cfg.RouterPolicyWidth < 0 || effectiveWidth < 1 || effectiveWidth > diagnosticBeam {
 		return errors.New("invalid router policy configuration")
 	}
-	if row.Status != "pass" && row.Status != "fail" && !m8ProductionRouterRefusalStatusV1(row.Status) {
+	if row.Accounting == nil && row.Status != "pass" && row.Status != "fail" && !m8ProductionRouterRefusalStatusV1(row.Status) {
 		if e != nil {
 			return errors.New("unexecuted row has policy observations")
 		}
@@ -370,7 +370,7 @@ func m8PlanRouterPolicyDiagnosticsV1(cfg config, m fixtureManifest, domainCounts
 	// Bound the larger traversal, not their sum: these are separate executions.
 	// Count conversion/scalar work plus hash input bytes conservatively; these
 	// units are an admission envelope, not a claim about CPU cycles.
-	populationChecks, err := memoryMul(2, int64(m.Queries), int64(len(cfg.probes)), int64(len(cfg.efSearch)), int64(len(cfg.concurrency)))
+	populationChecks, err := memoryMul(2, int64(m.Queries), int64(len(cfg.probes)), int64(len(cfg.efSearch)), int64(len(cfg.concurrency)), int64(max(1, cfg.m8MeasuredRepetitions)))
 	if err != nil {
 		return 0, 0, err
 	}
@@ -441,7 +441,7 @@ func m8PlanRouterPolicyDiagnosticsV1(cfg config, m fixtureManifest, domainCounts
 		}
 		// Conservative resident/cache plus repeated JSON report/row copies. Cached
 		// values are shared read-only, but encoding can own its own byte buffers.
-		records, err := memoryMul(int64(m.Queries), int64(len(cfg.probes)), int64(len(cfg.efSearch)), int64(len(cfg.concurrency)))
+		records, err := memoryMul(int64(m.Queries), int64(len(cfg.probes)), int64(len(cfg.efSearch)), int64(len(cfg.concurrency)), int64(max(1, cfg.m8MeasuredRepetitions)))
 		if err != nil {
 			return 0, 0, err
 		}

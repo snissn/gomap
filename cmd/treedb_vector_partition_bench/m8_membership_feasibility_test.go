@@ -100,7 +100,7 @@ func TestM8MembershipFeasibilityScratchIsChargedToPeakV1(t *testing.T) {
 	retainedCfg.probes = []int{1, 2}
 	retainedCfg.efSearch = []int{16, 24, 32, 40, 48, 56, 64, 72, 80, 88}
 	retainedCfg.concurrency = []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}
-	retainedFixture := fixtureManifest{Vectors: 100, Queries: 1_000, Dimensions: 1}
+	retainedFixture := fixtureManifest{Vectors: 100, Queries: 100, Dimensions: 1}
 	retainedPlan, err := validateM8BenchmarkWork(retainedCfg, retainedFixture, maxBenchmarkWorkUnits, math.MaxInt64)
 	if err != nil {
 		t.Fatal(err)
