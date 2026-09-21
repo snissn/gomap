@@ -582,6 +582,22 @@ func BenchmarkVectorPartitionLiveProductionCoordinatorV1(b *testing.B) {
 }
 
 func newVectorPartitionLiveNativewireFixtureV1(t testing.TB) vectorPartitionLiveProductionFixtureV1 {
+	return newVectorPartitionLiveNativewireDocumentsV1(t, []vectorPartitionLiveDocumentV1{
+		{id: "a", vector: []float32{1, 0}, home: 0, overlap: true},
+		{id: "b", vector: []float32{.8, .2}, home: 1},
+		{id: "c", vector: []float32{0, 1}, home: 2},
+		{id: "d", vector: []float32{.2, .8}, home: 2},
+	})
+}
+
+type vectorPartitionLiveDocumentV1 struct {
+	id      string
+	vector  []float32
+	home    uint32
+	overlap bool
+}
+
+func newVectorPartitionLiveNativewireDocumentsV1(t testing.TB, documents []vectorPartitionLiveDocumentV1) vectorPartitionLiveProductionFixtureV1 {
 	t.Helper()
 	if !collections.VectorPartitionNamespacePersistenceSupportedForTestingV1() {
 		t.Skip("vector partition namespace persistence unsupported on this platform")
@@ -594,8 +610,12 @@ func newVectorPartitionLiveNativewireFixtureV1(t testing.TB) vectorPartitionLive
 	if err != nil {
 		t.Fatal(err)
 	}
-	definition := collections.VectorIndexDefinition{Name: "embedding_graph", Field: "embedding", Metric: collections.VectorMetricCosine, Dimensions: 2, M: 2, EfConstruction: 8, EfSearch: 8, Strategy: collections.VectorIndexStrategyColumnGraph}
-	meta := collections.CollectionMeta{Name: "docs", Options: collections.CollectionOptions{DocumentFormat: collections.DocumentFormatJSON, ColumnStore: &collections.ColumnStoreConfig{Enabled: true, Columns: []collections.ColumnStoreColumn{{Name: "embedding", Path: "embedding", Owner: collections.TypedStorageOwnerColumnPart, ValueType: collections.ColumnStoreValueFloat32Vector, VectorDims: 2}}}}, VectorIndexes: []collections.VectorIndexDefinition{definition}}
+	dimensions := len(documents[0].vector)
+	definition := collections.VectorIndexDefinition{Name: "embedding_graph", Field: "embedding", Metric: collections.VectorMetricCosine, Dimensions: dimensions, M: 2, EfConstruction: 8, EfSearch: 8, Strategy: collections.VectorIndexStrategyColumnGraph}
+	if len(documents) > 4 {
+		definition.M, definition.EfConstruction, definition.EfSearch = 16, 128, 96
+	}
+	meta := collections.CollectionMeta{Name: "docs", Options: collections.CollectionOptions{DocumentFormat: collections.DocumentFormatJSON, ColumnStore: &collections.ColumnStoreConfig{Enabled: true, Columns: []collections.ColumnStoreColumn{{Name: "embedding", Path: "embedding", Owner: collections.TypedStorageOwnerColumnPart, ValueType: collections.ColumnStoreValueFloat32Vector, VectorDims: dimensions}}}}, VectorIndexes: []collections.VectorIndexDefinition{definition}}
 	manager := collections.NewCollectionManager(database)
 	if _, err := manager.CreateCollection(&meta); err != nil {
 		database.Close()
@@ -606,16 +626,10 @@ func newVectorPartitionLiveNativewireFixtureV1(t testing.TB) vectorPartitionLive
 		database.Close()
 		t.Fatal(err)
 	}
-	for _, document := range []struct {
-		id     string
-		vector []float32
-	}{
-		{id: "a", vector: []float32{1, 0}},
-		{id: "b", vector: []float32{.8, .2}},
-		{id: "c", vector: []float32{0, 1}},
-		{id: "d", vector: []float32{.2, .8}},
-	} {
+	byID := make(map[string]vectorPartitionLiveDocumentV1, len(documents))
+	for _, document := range documents {
 		insertVectorPartitionLiveDocumentV1(t, collection, document.id, document.vector)
+		byID[document.id] = document
 	}
 	if _, err := collection.RebuildVectorIndex(definition.Name); err != nil {
 		database.Close()
@@ -637,16 +651,11 @@ func newVectorPartitionLiveNativewireFixtureV1(t testing.TB) vectorPartitionLive
 	}
 	parts := []internalrouter.RouterPartitionV1{{PartitionID: 0}, {PartitionID: 1}, {PartitionID: 2}}
 	for _, row := range rows {
-		id := string(row.DocumentID)
-		home := uint32(2)
-		if id == "a" {
-			home = 0
-		} else if id == "b" {
-			home = 1
-		}
+		document := byID[string(row.DocumentID)]
+		home := document.home
 		manifest.Memberships = append(manifest.Memberships, collections.VectorPartitionMembershipV1{VectorOrdinal: row.VectorOrdinal, PartitionID: home})
 		parts[home].Vectors = append(parts[home].Vectors, internalrouter.RouterVectorV1{Ordinal: row.VectorOrdinal, Values: append([]float32(nil), row.Values...), MembershipKind: string(collections.VectorPartitionMembershipHomeV1)})
-		if id == "a" {
+		if document.overlap {
 			manifest.OverlapMemberships = append(manifest.OverlapMemberships, collections.VectorPartitionMembershipV1{VectorOrdinal: row.VectorOrdinal, PartitionID: 1})
 			parts[1].Vectors = append(parts[1].Vectors, internalrouter.RouterVectorV1{Ordinal: row.VectorOrdinal, Values: append([]float32(nil), row.Values...), MembershipKind: string(collections.VectorPartitionMembershipOverlapV1)})
 		}
@@ -670,8 +679,8 @@ func newVectorPartitionLiveNativewireFixtureV1(t testing.TB) vectorPartitionLive
 	}
 	cfg := internalrouter.DefaultRouterConfigV1()
 	cfg.BranchFactor, cfg.LeafSize, cfg.RepresentativeBudget = 2, 1, len(parts)
-	cfg.MaxDepth, cfg.MaxIterations, cfg.MaxVectors = 4, 8, 8
-	cfg.MaxDimensions, cfg.MaxRepresentatives, cfg.MaxScalarWork = 8, 32, 1_000_000
+	cfg.MaxDepth, cfg.MaxIterations, cfg.MaxVectors = 4, 8, max(8, len(documents)*2)
+	cfg.MaxDimensions, cfg.MaxRepresentatives, cfg.MaxScalarWork = max(8, dimensions), 32, 100_000_000
 	if _, err := collection.BuildAndPublishVectorPartitionRouterV1(t.Context(), manifest, parts, collections.VectorPartitionRouterBuildOptionsV1{Config: cfg, AssetFileID: 9102, AssetPartID: 1, M: 2, EfConstruction: 8, EfSearch: 8}); err != nil {
 		database.Close()
 		t.Fatal(err)

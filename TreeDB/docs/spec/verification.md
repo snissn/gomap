@@ -2188,6 +2188,21 @@ profile nor response pack footprint is presented as retained overlay growth.
 These bounded local profiles do not replace the H-C qualification owned by
 #4249.
 
+`TestVectorPartitionLiveSelectedLifecycleV1` adds a bounded selected-product
+component gate:512 procedural768D rows, approximate routing, selected Vamana
+immutable packs and the native HNSW delta, TCP mutations/shard requests, and
+independent concurrent readers/writer. It validates canonical truth against
+the actual revision/coverage, acknowledged-write freshness, exact physical
+pack expansion and every terminal attempt. Insert/delete/domain movement,
+metadata-only updates, cold sources, checkpoint-backed durable-ack crash,
+reopen and active-generation GC are checked separately, including native
+document visibility. `TestVectorPartitionLiveLifecycleReceiptRejectsV1`
+provides hostile population, freshness, route and score controls.
+See the [component gate runbook](../performance/vector-partition-m8.md#selected-product-standalone-lifecycle-component-gate-4753)
+for optional raw receipts and limits. The test read proof, procedural corpus
+and standalone binding do not establish real-data scale, replicated/public
+live serving, an immutable-base fold or retired-generation reclamation.
+
 ```sh
 GOWORK=off go test -count=1 ./TreeDB/collections -run 'TestVectorIndexPartitionLive|TestVectorPartitionHNSWExcludesMoreThanTopKBeforeAdmission|TestVectorPartitionSearcherExcludesStaleBeforeTopK'
 GOWORK=off go test -count=1 ./TreeDB/nativewire -run 'Test(VectorPartitionLiveProduction|VectorPartitionCoordinator|VectorPartitionShardSearch|CollectionVectorPartitionGenerationSource)'
