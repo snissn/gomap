@@ -1103,13 +1103,13 @@ before launch. The input object supplies:
 lifecycle run, never choose it from lifecycle timing. Supply the retained
 generation/index and actual SHA256 values, and retain this configuration's hash.
 The constructor checks command-WAL eligibility, manifest/source identity,
-100K/768D/D16 shape, the selected20% overlap and multi-pack geometry, and pinned
+100K/768D/D16 shape, the selected 20% overlap and multi-pack geometry, and pinned
 512-query and canonical-truth files. Baseline truth must match exactly before
 mutation. Real runs require `GOMAP_SELECTED_LIVE_RECEIPTS`; pin the Python
 environment (including KaHIP) and enclosing command/source tree externally.
 
-Every quiescent phase uses all512 queries; each read worker traverses them twice
-in each4,096-query window, with8 concurrent replacements. The administrative
+Every quiescent phase uses all 512 queries; each read worker traverses them twice
+in each 4,096-query window, with 8 concurrent replacements. The administrative
 build reuses the selected affinity builder, pinned external KaHIP adapter,
 byte planner, useful-only overlap, Vamana materializer and existing router
 configuration. It preserves physical pack placement. The tiny default fixture
