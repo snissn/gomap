@@ -2876,6 +2876,17 @@ func TestM8CoordinatorResponseCanonicalShapeFailsClosedV1(t *testing.T) {
 	if got, err := m8ValidateCoordinatorResponseV1(response, sparseManifest, 2, 2); err != nil || len(got) != 1 {
 		t.Fatalf("valid sparse response got=%+v err=%v", got, err)
 	}
+	response.Timing.TotalNanos = 1
+	attempt, got := m8ReduceProductionOutcomeV1(
+		m8ProductionCellOutcomeV1{dispatched: true, terminalNanos: 1, response: response},
+		sparseManifest,
+		[]m8CanonicalResultV1{{ID: "a", Score: .9}},
+		2,
+		2,
+	)
+	if attempt.Class != "success" || attempt.TruthHits != 1 || len(got) != 1 {
+		t.Fatalf("valid sparse response was not retained as success: attempt=%+v got=%+v", attempt, got)
+	}
 	response.Neighbors = append(response.Neighbors,
 		nativewire.VectorPartitionCoordinatorNeighborV1{ID: "b", Score: .8},
 		nativewire.VectorPartitionCoordinatorNeighborV1{ID: "c", Score: .7},

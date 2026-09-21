@@ -3561,7 +3561,7 @@ func m8ReduceProductionOutcomeV1(outcome m8ProductionCellOutcomeV1, manifest col
 	attempt.WorkObserved = true
 	attempt.Counters, attempt.CoordinatorNanos = outcome.response.Counters, outcome.response.Timing.TotalNanos
 	got, shapeErr := m8ValidateCoordinatorResponseV1(outcome.response, manifest, probes, topK)
-	if shapeErr != nil || len(got) != min(topK, int(manifest.SourceRowCount)) || outcome.response.Timing.TotalNanos == 0 {
+	if shapeErr != nil || outcome.response.Timing.TotalNanos == 0 {
 		attempt.Class, attempt.PartialResponse = "invalid_response", hasPayload
 		return attempt, nil
 	}
