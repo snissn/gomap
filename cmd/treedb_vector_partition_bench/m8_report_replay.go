@@ -51,7 +51,7 @@ func runReplayM8ReportV1(args []string, stdout io.Writer) error {
 	if err != nil || canonicalPath != path {
 		return errors.New("replay report is not canonical and contained in root")
 	}
-	raw, err := readBoundedRegularFileV1(path, m8DiagnosticRetainedMaxBytesV1)
+	raw, err := readBoundedRegularFileV1(path, m8CompleteMeasurementMaxBytesV1)
 	if err != nil {
 		return fmt.Errorf("read replay report: %w", err)
 	}
@@ -66,6 +66,9 @@ func runReplayM8ReportV1(args []string, stdout io.Writer) error {
 	}
 	if err := decoder.Decode(new(any)); err != io.EOF {
 		return errors.New("replay report contains trailing JSON")
+	}
+	if report.Status == "incomplete_after_measurement" || len(raw) > m8DiagnosticRetainedMaxBytesV1 && report.Config.MeasurementAccounting != m8CompleteAttemptsV1 {
+		return errors.New("replay report is incomplete or exceeds its contract byte cap")
 	}
 	// Check all cheap frozen identities before profiles, external commands, truth
 	// decoding or corpus allocation. The loaded fixture is also compared with the

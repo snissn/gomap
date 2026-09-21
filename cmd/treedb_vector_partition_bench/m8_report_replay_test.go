@@ -393,7 +393,7 @@ func TestReplayM8ReportBoundedReceiptV1(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = file.Truncate(m8DiagnosticRetainedMaxBytesV1 + 1)
+	err = file.Truncate(m8CompleteMeasurementMaxBytesV1 + 1)
 	closeErr := file.Close()
 	if err != nil || closeErr != nil {
 		t.Fatalf("oversized receipt setup: %v %v", err, closeErr)

@@ -147,6 +147,7 @@ type config struct {
 	raftNodes                 int
 	concurrency               []int
 	warmup                    int
+	m8MeasuredRepetitions     int
 	profiles                  string
 	m8MatrixOut               string
 	m8MatrixProfiles          string
@@ -1016,6 +1017,7 @@ func parseConfig(args []string) (config, error) {
 	fs.IntVar(&cfg.raftNodes, "raft-nodes-per-group", 3, "M8 Raft members per data group (currently exactly 3)")
 	fs.StringVar(&concurrency, "concurrency", "1", "comma-separated M8 query concurrency")
 	fs.IntVar(&cfg.warmup, "warmup", cfg.warmup, "M8 minimum untimed topology warmup requests before the measured sweep (0 disables approximate warmup)")
+	fs.IntVar(&cfg.m8MeasuredRepetitions, "m8-measured-repetitions", 1, "M8 measured windows per coordinate (1..10); alternate coordinate order, share untimed attribution")
 	fs.StringVar(&efSearch, "ef-search", "128", "comma-separated M8 local HNSW ef_search values")
 	fs.StringVar(&cfg.profiles, "profiles", "", "M8 profile artifact directory")
 	fs.StringVar(&cfg.m8MatrixOut, "m8-matrix-out", "", "internal matrix-wide output root for child cleanliness checks")
@@ -1193,8 +1195,8 @@ func parseConfig(args []string) (config, error) {
 		if cfg.partitions > coordinatorLimits.MaxSelectedPartitions {
 			return config{}, fmt.Errorf("production_multi_group requires at most %d partitions", coordinatorLimits.MaxSelectedPartitions)
 		}
-		if len(cfg.concurrency) == 0 || len(cfg.efSearch) == 0 || cfg.warmup < 0 || cfg.warmup > 10_000 {
-			return config{}, errors.New("production_multi_group requires non-empty concurrency and ef-search sweeps")
+		if len(cfg.concurrency) == 0 || len(cfg.efSearch) == 0 || cfg.warmup < 0 || cfg.warmup > 10_000 || cfg.m8MeasuredRepetitions < 1 || cfg.m8MeasuredRepetitions > 10 {
+			return config{}, errors.New("production_multi_group requires non-empty concurrency and ef-search sweeps, warmup in [0,10000], and measured repetitions in [1,10]")
 		}
 		for _, value := range cfg.concurrency {
 			if value < 1 || value > 256 {
@@ -2271,6 +2273,10 @@ type m8BenchmarkWorkPlan struct {
 	SourceSnapshotBytes                  int64
 	ExactTruthBytes                      int64
 	RetainedCoordinatorBytes             int64
+	CompleteAttemptReceiptBytes          int64
+	QualityDiagnosticReceiptBytes        int64
+	RouterPolicyDiagnosticReceiptBytes   int64
+	MeasurementReceiptBytes              int64
 	RetainedAttributionMatrices          int64
 	RetainedAttributionResults           int64
 	RetainedAttributionBytes             int64
@@ -2415,6 +2421,22 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 	plan.RouterPolicyDiagnosticWorkUnits, plan.RouterPolicyDiagnosticBytes, err = m8PlanRouterPolicyDiagnosticsV1(cfg, m, oracleDomainCounts, capUnits, capBytes)
 	if err != nil {
 		return plan, err
+	}
+	qualityCells, err := memoryMul(int64(len(cfg.probes)), int64(len(cfg.efSearch)))
+	if err != nil {
+		return plan, err
+	}
+	for _, domains := range oracleDomainCounts {
+		qualityRows, err := m8QualityDiagnosticRowBytesV1(cfg, m, domains, qualityCells)
+		if err != nil {
+			return plan, err
+		}
+		plan.QualityDiagnosticReceiptBytes = max(plan.QualityDiagnosticReceiptBytes, qualityRows)
+		policyRows, err := m8RouterPolicyDiagnosticReceiptBytesV1(cfg, m, domains)
+		if err != nil {
+			return plan, err
+		}
+		plan.RouterPolicyDiagnosticReceiptBytes = max(plan.RouterPolicyDiagnosticReceiptBytes, policyRows)
 	}
 	if cfg.m8MembershipProbes != 0 {
 		for _, domains := range oracleDomainCounts {
@@ -2570,7 +2592,7 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 	if err != nil {
 		return plan, err
 	}
-	coordinatorParityWork, err := memoryMul(int64(m.Queries), int64(cfg.topK), supportedOverlaps, variantRuns, int64(len(cfg.probes)), int64(len(cfg.efSearch)), int64(len(cfg.concurrency)))
+	coordinatorParityWork, err := memoryMul(int64(m.Queries), int64(cfg.topK), supportedOverlaps, variantRuns, int64(len(cfg.probes)), int64(len(cfg.efSearch)), int64(len(cfg.concurrency)), int64(max(1, cfg.m8MeasuredRepetitions)))
 	if err != nil {
 		return plan, err
 	}
@@ -2631,7 +2653,7 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 	if exactWorkVisits > truthCap {
 		return m8BenchmarkWorkPlan{FixtureChecksumVectorVisits: fixtureChecksumVisits, ExactTruthVectorVisits: canonicalTruthVisits, ExactWorkVectorVisits: exactWorkVisits}, fmt.Errorf("modeled M8 exact source-query work exceeds %d-visit cap: fixture_checksum_vector_visits=%d exact_truth_vector_visits=%d exact_work_vector_visits=%d; set -m8-max-exact-truth-visits explicitly for a declared qualification run", truthCap, fixtureChecksumVisits, canonicalTruthVisits, exactWorkVisits)
 	}
-	measuredPerRun, err := memoryMul(supportedOverlaps, int64(len(cfg.probes)), int64(len(cfg.efSearch)), int64(len(cfg.concurrency)), int64(m.Queries))
+	measuredPerRun, err := memoryMul(supportedOverlaps, int64(len(cfg.probes)), int64(len(cfg.efSearch)), int64(len(cfg.concurrency)), int64(m.Queries), int64(max(1, cfg.m8MeasuredRepetitions)))
 	if err != nil {
 		return m8BenchmarkWorkPlan{}, err
 	}
@@ -2734,7 +2756,7 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 		return plan, err
 	}
 
-	plan.RetainedCoordinatorCells, err = memoryMul(supportedOverlaps, int64(len(cfg.probes)), int64(len(cfg.efSearch)), int64(len(cfg.concurrency)))
+	plan.RetainedCoordinatorCells, err = memoryMul(supportedOverlaps, int64(len(cfg.probes)), int64(len(cfg.efSearch)), int64(len(cfg.concurrency)), int64(max(1, cfg.m8MeasuredRepetitions)))
 	if err != nil {
 		return plan, err
 	}
@@ -2750,9 +2772,52 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 	if err != nil {
 		return plan, err
 	}
+	attemptBytes, err := memoryMul(int64(m.Queries), int64(unsafe.Sizeof(m8MeasuredAttemptV1{}))+8)
+	if err != nil {
+		return plan, err
+	}
+	perCellResults, err = memoryAdd(perCellResults, attemptBytes, int64(unsafe.Sizeof(m8MeasurementAccountingV1{})))
+	if err != nil {
+		return plan, err
+	}
 	plan.RetainedCoordinatorBytes, err = memoryMul(plan.RetainedCoordinatorCells, perCellResults)
 	if err != nil {
 		return plan, err
+	}
+	// Bound complete terminal records for every success, refusal, timeout,
+	// cancellation and invalid response, plus canonical IDs/scores/durations and
+	// ordinary row metadata before any measured work.
+	perQueryJSON, err := memoryMul(int64(cfg.topK), documentIDStorageBytes+16)
+	if err != nil {
+		return plan, err
+	}
+	perQueryJSON, err = memoryAdd(perQueryJSON, m8AttemptJSONMaxBytesV1, 128)
+	if err != nil {
+		return plan, err
+	}
+	perCellJSON, err := memoryMul(int64(m.Queries), perQueryJSON)
+	if err != nil {
+		return plan, err
+	}
+	perCellJSON, err = memoryAdd(perCellJSON, 64<<10)
+	if err != nil {
+		return plan, err
+	}
+	plan.CompleteAttemptReceiptBytes, err = memoryMul(plan.RetainedCoordinatorCells, perCellJSON)
+	if err != nil {
+		return plan, err
+	}
+	// Quality and router-policy evidence is copied into every repeated row and
+	// those rows are copied into the measurement transcript. Reuse the quality
+	// planner's row estimator and the router receipt's probe-width bound so the
+	// file cap cannot pass on the smaller ordinary-row model and fail only after
+	// collection.
+	plan.MeasurementReceiptBytes, err = memoryAdd(plan.CompleteAttemptReceiptBytes, plan.QualityDiagnosticReceiptBytes, plan.RouterPolicyDiagnosticReceiptBytes)
+	if err != nil {
+		return plan, err
+	}
+	if plan.MeasurementReceiptBytes > m8CompleteMeasurementMaxBytesV1 {
+		return plan, fmt.Errorf("complete M8 measurement receipt bound %d exceeds %d bytes (attempts=%d quality_diagnostics=%d router_policy_diagnostics=%d); reduce the declared matrix", plan.MeasurementReceiptBytes, m8CompleteMeasurementMaxBytesV1, plan.CompleteAttemptReceiptBytes, plan.QualityDiagnosticReceiptBytes, plan.RouterPolicyDiagnosticReceiptBytes)
 	}
 	maxMeasuredProbes, maxEFSearch, maxConcurrency := 0, 0, 0
 	for _, probes := range cfg.probes {
@@ -2965,7 +3030,18 @@ func validateM8BenchmarkWork(cfg config, m fixtureManifest, capUnits, capBytes i
 	if err != nil {
 		return plan, err
 	}
-	peak := max(sourceOraclePeak, preflightPeak, membershipFeasibilityPeak, measurementPeak, attributionHomeBuildPeak, attributionPeak)
+	// Transcript/report encoding and validation can coexist with retained rows.
+	// Charge encoder growth, copied output and decoded receipt independently of
+	// the existing diagnostic cache/serialization envelope.
+	serializationScratch, err := memoryMul(plan.MeasurementReceiptBytes, 4)
+	if err != nil {
+		return plan, err
+	}
+	serializationPeak, err := memoryAdd(attributionPeak, serializationScratch)
+	if err != nil {
+		return plan, err
+	}
+	peak := max(sourceOraclePeak, preflightPeak, membershipFeasibilityPeak, measurementPeak, attributionHomeBuildPeak, attributionPeak, serializationPeak)
 	plan.ModeledPeakBytes, err = memoryScaleCeil(peak, memorySlackNumerator, memorySlackDenominator)
 	if err != nil {
 		return plan, err

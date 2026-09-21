@@ -488,6 +488,11 @@ func m8QualificationFixtureV1(candidate fixtureManifest) bool {
 }
 
 func m8QualificationConfigV1(cfg m8ProductionConfigEvidenceV1, fixture fixtureManifest, overlap float64, _ int) bool {
+	// This frozen campaign has three independent runs, not repeated child
+	// windows. Its row selector must never silently choose one repetition.
+	if cfg.MeasuredRepetitions > 1 {
+		return false
+	}
 	return cfg.RaftGroups == 4 && cfg.RaftNodesPerGroup == 3 && cfg.Partitions == 16 && cfg.TopK == 10 && cfg.RecallTarget == .90 && cfg.Warmup == 0 && cfg.EffectiveWarmup == 0 && cfg.RouterScoreBudget == m8QualificationRouterCandidatesV1 && cfg.LocalScoreBudget == nativewire.DefaultVectorPartitionCoordinatorLimitsV1().MaxLocalScoreCalls && cfg.MaxExactTruthVisits == m8QualificationExactTruthCapV1(fixture) && cfg.Seed == fixture.Seed && slices.Equal(cfg.Probes, []int{1, 2, 4, 8, 16}) && slices.Equal(cfg.Concurrency, []int{1}) && slices.Equal(cfg.EfSearch, []int{128}) && slices.Equal(cfg.Overlap, []float64{overlap})
 }
 
@@ -686,6 +691,7 @@ func m8QualificationRetainedAttributionV1(root string, report m8ProductionReport
 		}
 	}
 	exhaustive := make([][]m8CanonicalResultV1, len(queries))
+	cachedCells := make(map[string]m8AttributionCellV1)
 	for rowIndex, row := range report.Rows {
 		if err := m8QualityEvidenceSelectionV1(report.Config, row); err != nil {
 			return err
@@ -703,16 +709,38 @@ func m8QualificationRetainedAttributionV1(root string, report m8ProductionReport
 			}
 		}
 		qualityRefusal := report.Config.QualityDiagnostics && m8ProductionRouterRefusalStatusV1(row.Status)
-		if row.Status != "pass" && row.Status != "fail" && !qualityRefusal {
+		if row.Accounting == nil && row.Status != "pass" && row.Status != "fail" && !qualityRefusal {
 			continue
 		}
-		membershipOracles, err := harness.membershipOraclesV1(truth, primaryHomes, finalMemberships, row.Probes)
-		if err != nil {
-			return err
+		key := m8AttributionKeyV1(row.Probes, row.EfSearch)
+		cell, cached := cachedCells[key]
+		if !cached {
+			membershipOracles, err := harness.membershipOraclesV1(truth, primaryHomes, finalMemberships, row.Probes)
+			if err != nil {
+				return err
+			}
+			cell, err = m8BuildAttributionV1(context.Background(), assets, primaryHomes, finalMemberships, queries, truth, membershipOracles, row.Probes, row.EfSearch, report.Config.TopK, approximateCandidates, exhaustive, harness)
+			if err != nil {
+				return err
+			}
+			cachedCells[key] = cell
 		}
-		cell, err := m8BuildAttributionV1(context.Background(), assets, primaryHomes, finalMemberships, queries, truth, membershipOracles, row.Probes, row.EfSearch, report.Config.TopK, approximateCandidates, exhaustive, harness)
-		if err != nil {
-			return err
+		if row.Accounting != nil {
+			outcome := transcript.Outcomes[rowIndex]
+			results := make([][]m8CanonicalResultV1, len(queries))
+			for q, ids := range outcome.TopKIDs {
+				for j, id := range ids {
+					results[q] = append(results[q], m8CanonicalResultV1{ID: id, Score: math.Float32frombits(outcome.TopKScoreBits[q][j])})
+				}
+			}
+			replayed := row
+			if err := m8AttachAttributionV1(&replayed, cell, results); err != nil {
+				return err
+			}
+			if !reflect.DeepEqual(replayed.Attribution, row.Attribution) {
+				return errors.New("complete M8 attribution does not reproduce retained report")
+			}
+			continue
 		}
 		if qualityRefusal {
 			// Failed serving does not make static source/model/coverage claims
@@ -867,7 +895,8 @@ func m8QualificationCommandWithExecutableV1(root, matrixDirectory string, report
 func m8QualificationCommandConfigV1(cfg config) m8ProductionConfigEvidenceV1 {
 	warmup, _ := m8WarmupCountAndConcurrencyV1(cfg)
 	return m8ProductionConfigEvidenceV1{
-		RaftGroups: cfg.raftGroups, RaftNodesPerGroup: cfg.raftNodes, Partitions: cfg.partitions,
+		MeasuredRepetitions: max(1, cfg.m8MeasuredRepetitions),
+		RaftGroups:          cfg.raftGroups, RaftNodesPerGroup: cfg.raftNodes, Partitions: cfg.partitions,
 		Probes: cfg.probes, Overlap: cfg.overlaps, TopK: cfg.topK, RecallTarget: cfg.recallTarget,
 		Concurrency: cfg.concurrency, Warmup: cfg.warmup, EffectiveWarmup: warmup,
 		EfSearch: cfg.efSearch, RouterScoreBudget: cfg.routerCandidates, LocalScoreBudget: cfg.m8CoordinatorLimits.MaxLocalScoreCalls,
@@ -877,6 +906,9 @@ func m8QualificationCommandConfigV1(cfg config) m8ProductionConfigEvidenceV1 {
 }
 
 func m8CommandBoundProductionConfigV1(cfg m8ProductionConfigEvidenceV1) m8ProductionConfigEvidenceV1 {
+	// Accounting is fixed by the retained producer identity, not a CLI choice.
+	cfg.MeasurementAccounting = ""
+	cfg.MeasuredRepetitions = max(1, cfg.MeasuredRepetitions)
 	cfg.DomainCount = 0
 	cfg.PacksPerDomain = nil
 	cfg.GraphVariant = ""
@@ -1300,6 +1332,15 @@ func m8QualificationMeasurementTranscriptOutcomesV1(root string, report m8Produc
 		return m8ProductionMeasurementTranscriptV1{}, errors.New("measurement transcript outcome/truth shape mismatch")
 	}
 	for rowIndex, row := range report.Rows {
+		if row.Accounting != nil {
+			for query, ids := range transcript.Outcomes[rowIndex].TopKIDs {
+				hits := m8IDHitCountV1(m8CanonicalIDsV1(truth[query]), ids)
+				if hits != row.Accounting.Attempts[query].TruthHits {
+					return m8ProductionMeasurementTranscriptV1{}, errors.New("M8 per-attempt truth hits do not match anchored truth")
+				}
+			}
+			continue
+		}
 		if row.Status != "pass" && row.Status != "fail" {
 			continue
 		}

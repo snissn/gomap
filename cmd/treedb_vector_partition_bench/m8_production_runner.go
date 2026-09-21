@@ -105,6 +105,8 @@ type m8ProductionReportV1 struct {
 }
 
 type m8ProductionConfigEvidenceV1 struct {
+	MeasurementAccounting   string    `json:"measurement_accounting,omitempty"`
+	MeasuredRepetitions     int       `json:"measured_repetitions,omitempty"`
 	QualityDiagnostics      bool      `json:"quality_diagnostics,omitempty"`
 	QualityTraceQueries     int       `json:"quality_trace_queries,omitempty"`
 	RouterPolicyDiagnostics bool      `json:"router_policy_diagnostics,omitempty"`
@@ -155,6 +157,7 @@ type m8ProductionMeasurementTranscriptV1 struct {
 // rather than another self-reported recall aggregate. Scores are deliberately
 // omitted: canonical recall is an ID-set metric.
 type m8ProductionRowOutcomesV1 struct {
+	Repetition                   int        `json:"repetition,omitempty"`
 	Overlap                      float64    `json:"overlap"`
 	Probes                       int        `json:"probes"`
 	EfSearch                     int        `json:"ef_search"`
@@ -170,6 +173,8 @@ type m8ProductionRowOutcomesV1 struct {
 // m8ProductionAttributionV1 keeps each lossy boundary visible. Recall is
 // always measured against the same canonical global FP32-score oracle.
 type m8ProductionAttributionV1 struct {
+	MeasuredSuccesses    int                       `json:"measured_successes,omitempty"`
+	MeasuredFailures     int                       `json:"measured_failures,omitempty"`
 	Quality              *m8QualityAttributionV1   `json:"quality_diagnostics,omitempty"`
 	RouterPolicies       *m8RouterPolicyEvidenceV1 `json:"router_policy_diagnostics,omitempty"`
 	Contract             string                    `json:"contract"`
@@ -260,48 +265,50 @@ type m8PartitionPackDiagnosticsV1 struct {
 }
 
 type m8ProductionRowV1 struct {
-	VariantID              string                    `json:"variant_id,omitempty"`
-	Status                 string                    `json:"status"`
-	UnsupportedReason      string                    `json:"unsupported_reason,omitempty"`
-	Overlap                float64                   `json:"overlap"`
-	Probes                 int                       `json:"probes,omitempty"`
-	EfSearch               int                       `json:"ef_search,omitempty"`
-	Concurrency            int                       `json:"concurrency,omitempty"`
-	RouterMode             string                    `json:"router_mode,omitempty"`
-	RouterScoreBudget      int                       `json:"router_score_budget,omitempty"`
-	RouterScoreCalls       uint64                    `json:"router_score_calls"`
-	LocalScoreCalls        uint64                    `json:"local_score_calls"`
-	RouterVisited          uint64                    `json:"router_visited"`
-	RouterEdges            uint64                    `json:"router_edges"`
-	Samples                int                       `json:"samples,omitempty"`
-	RecallAtK              float64                   `json:"recall_at_k"`
-	QPS                    float64                   `json:"qps,omitempty"`
-	ElapsedNanos           uint64                    `json:"elapsed_nanos,omitempty"`
-	P50Nanos               uint64                    `json:"p50_nanos,omitempty"`
-	P95Nanos               uint64                    `json:"p95_nanos,omitempty"`
-	P99Nanos               uint64                    `json:"p99_nanos,omitempty"`
-	MaxTotalNanos          uint64                    `json:"max_total_nanos,omitempty"`
-	RequestBytes           uint64                    `json:"request_bytes,omitempty"`
-	ResponseBytes          uint64                    `json:"response_bytes,omitempty"`
-	CandidateBytes         uint64                    `json:"candidate_bytes,omitempty"`
-	RPCs                   uint64                    `json:"rpcs,omitempty"`
-	MaxRequests            uint64                    `json:"max_requests_per_query,omitempty"`
-	MaxRPCs                uint64                    `json:"max_rpcs_per_query,omitempty"`
-	MaxRetries             uint64                    `json:"max_retries_per_query,omitempty"`
-	MaxRedirects           uint64                    `json:"max_redirects_per_query,omitempty"`
-	MaxRequestBytes        uint64                    `json:"max_request_bytes_per_query,omitempty"`
-	MaxResponseBytes       uint64                    `json:"max_response_bytes_per_query,omitempty"`
-	MaxCandidateBytes      uint64                    `json:"max_candidate_bytes_per_query,omitempty"`
-	MaxMergeEntries        uint64                    `json:"max_merge_entries_per_query,omitempty"`
-	MaxShardPartitions     uint64                    `json:"max_shard_partitions,omitempty"`
-	MaxShardRequestBytes   uint64                    `json:"max_shard_request_bytes,omitempty"`
-	MaxShardResponseBytes  uint64                    `json:"max_shard_response_bytes,omitempty"`
-	MaxShardCandidateBytes uint64                    `json:"max_shard_candidate_bytes,omitempty"`
-	MaxLocalScoreCalls     uint64                    `json:"max_local_score_calls_per_query,omitempty"`
-	ExactParityChecked     bool                      `json:"exact_all_partition_parity_checked"`
-	ExactParityPassed      bool                      `json:"exact_all_partition_parity_passed"`
-	NoPartialResults       bool                      `json:"no_partial_results"`
-	Attribution            m8ProductionAttributionV1 `json:"recall_attribution"`
+	Repetition             int                        `json:"repetition,omitempty"`
+	Accounting             *m8MeasurementAccountingV1 `json:"measurement_accounting,omitempty"`
+	VariantID              string                     `json:"variant_id,omitempty"`
+	Status                 string                     `json:"status"`
+	UnsupportedReason      string                     `json:"unsupported_reason,omitempty"`
+	Overlap                float64                    `json:"overlap"`
+	Probes                 int                        `json:"probes,omitempty"`
+	EfSearch               int                        `json:"ef_search,omitempty"`
+	Concurrency            int                        `json:"concurrency,omitempty"`
+	RouterMode             string                     `json:"router_mode,omitempty"`
+	RouterScoreBudget      int                        `json:"router_score_budget,omitempty"`
+	RouterScoreCalls       uint64                     `json:"router_score_calls"`
+	LocalScoreCalls        uint64                     `json:"local_score_calls"`
+	RouterVisited          uint64                     `json:"router_visited"`
+	RouterEdges            uint64                     `json:"router_edges"`
+	Samples                int                        `json:"samples,omitempty"`
+	RecallAtK              float64                    `json:"recall_at_k"`
+	QPS                    float64                    `json:"qps,omitempty"`
+	ElapsedNanos           uint64                     `json:"elapsed_nanos,omitempty"`
+	P50Nanos               uint64                     `json:"p50_nanos,omitempty"`
+	P95Nanos               uint64                     `json:"p95_nanos,omitempty"`
+	P99Nanos               uint64                     `json:"p99_nanos,omitempty"`
+	MaxTotalNanos          uint64                     `json:"max_total_nanos,omitempty"`
+	RequestBytes           uint64                     `json:"request_bytes,omitempty"`
+	ResponseBytes          uint64                     `json:"response_bytes,omitempty"`
+	CandidateBytes         uint64                     `json:"candidate_bytes,omitempty"`
+	RPCs                   uint64                     `json:"rpcs,omitempty"`
+	MaxRequests            uint64                     `json:"max_requests_per_query,omitempty"`
+	MaxRPCs                uint64                     `json:"max_rpcs_per_query,omitempty"`
+	MaxRetries             uint64                     `json:"max_retries_per_query,omitempty"`
+	MaxRedirects           uint64                     `json:"max_redirects_per_query,omitempty"`
+	MaxRequestBytes        uint64                     `json:"max_request_bytes_per_query,omitempty"`
+	MaxResponseBytes       uint64                     `json:"max_response_bytes_per_query,omitempty"`
+	MaxCandidateBytes      uint64                     `json:"max_candidate_bytes_per_query,omitempty"`
+	MaxMergeEntries        uint64                     `json:"max_merge_entries_per_query,omitempty"`
+	MaxShardPartitions     uint64                     `json:"max_shard_partitions,omitempty"`
+	MaxShardRequestBytes   uint64                     `json:"max_shard_request_bytes,omitempty"`
+	MaxShardResponseBytes  uint64                     `json:"max_shard_response_bytes,omitempty"`
+	MaxShardCandidateBytes uint64                     `json:"max_shard_candidate_bytes,omitempty"`
+	MaxLocalScoreCalls     uint64                     `json:"max_local_score_calls_per_query,omitempty"`
+	ExactParityChecked     bool                       `json:"exact_all_partition_parity_checked"`
+	ExactParityPassed      bool                       `json:"exact_all_partition_parity_passed"`
+	NoPartialResults       bool                       `json:"no_partial_results"`
+	Attribution            m8ProductionAttributionV1  `json:"recall_attribution"`
 }
 
 const (
@@ -591,6 +598,8 @@ func runM8ProductionSingleVariantV1(cfg config, fixture fixtureManifest, vectors
 		},
 	}
 	report.Config.EffectiveWarmup, _ = m8WarmupCountAndConcurrencyV1(cfg)
+	report.Config.MeasurementAccounting = m8CompleteAttemptsV1
+	report.Config.MeasuredRepetitions = max(1, cfg.m8MeasuredRepetitions)
 	report.RouterSessions.BeforeWarmup = topology.Coordinator().Stats().RouterSessions
 	if cfg.profiles != "" {
 		if err := os.MkdirAll(cfg.profiles, 0o755); err != nil {
@@ -616,33 +625,29 @@ func runM8ProductionSingleVariantV1(cfg config, fixture fixtureManifest, vectors
 			}
 		}
 	}()
-	measuredCells := make([]m8MeasuredCellV1, 0, len(cfg.overlaps)*len(cfg.probes)*len(cfg.efSearch)*len(cfg.concurrency))
-	for _, overlap := range cfg.overlaps {
+	order := m8MeasurementOrderV1(report.Config)
+	measuredCells := make([]m8MeasuredCellV1, 0, len(order))
+	defer func() {
+		if runErr != nil && !profileReportPublished && len(measuredCells) > 0 {
+			runErr = errors.Join(runErr, m8WriteIncompleteMeasurementsV1(cfg.out, report, measuredCells))
+		}
+	}()
+	for _, coordinate := range order {
+		overlap := math.Float64frombits(coordinate.overlap)
+		probes, ef, concurrency := coordinate.probes, coordinate.efSearch, coordinate.concurrency
 		if assets.descriptor == nil && overlap != 0 {
-			for _, probes := range cfg.probes {
-				for _, ef := range cfg.efSearch {
-					for _, concurrency := range cfg.concurrency {
-						report.Rows = append(report.Rows, m8ProductionRowV1{Status: "unsupported", UnsupportedReason: "nonzero overlap requires an immutable retained M3 variant descriptor", Overlap: overlap, Probes: probes, EfSearch: ef, Concurrency: concurrency})
-					}
-				}
-			}
+			report.Rows = append(report.Rows, m8ProductionRowV1{Status: "unsupported", UnsupportedReason: "nonzero overlap requires an immutable retained M3 variant descriptor", Overlap: overlap, Probes: probes, EfSearch: ef, Concurrency: concurrency, Repetition: coordinate.repetition})
 			continue
 		}
-		for _, probes := range cfg.probes {
-			for _, ef := range cfg.efSearch {
-				for _, concurrency := range cfg.concurrency {
-					row, results, durations, rowErr := m8RunProductionCellV1(context.Background(), topology.Coordinator(), assets, queries, truth, probes, ef, concurrency, cfg.topK, cfg.routerCandidates, cfg.m8CoordinatorLimits.MaxCandidateBytes)
-					if rowErr != nil {
-						return fmt.Errorf("M8 production cell probes=%d ef=%d concurrency=%d: %w", probes, ef, concurrency, rowErr)
-					}
-					row.Overlap = overlap
-					if assets.descriptor != nil {
-						row.VariantID = assets.descriptor.VariantID
-					}
-					report.Rows = append(report.Rows, row)
-					measuredCells = append(measuredCells, m8MeasuredCellV1{rowIndex: len(report.Rows) - 1, probes: probes, efSearch: ef, results: results, durations: durations})
-				}
-			}
+		row, results, durations, rowErr := m8RunProductionCellV1(context.Background(), topology.Coordinator(), assets, queries, truth, probes, ef, concurrency, cfg.topK, cfg.routerCandidates, cfg.m8CoordinatorLimits.MaxCandidateBytes)
+		row.Overlap, row.Repetition = overlap, coordinate.repetition
+		if assets.descriptor != nil {
+			row.VariantID = assets.descriptor.VariantID
+		}
+		report.Rows = append(report.Rows, row)
+		measuredCells = append(measuredCells, m8MeasuredCellV1{rowIndex: len(report.Rows) - 1, probes: probes, efSearch: ef, results: results, durations: durations})
+		if rowErr != nil {
+			return fmt.Errorf("M8 production cell probes=%d ef=%d concurrency=%d: %w", probes, ef, concurrency, rowErr)
 		}
 	}
 	report.RouterSessions.AfterMeasured = topology.Coordinator().Stats().RouterSessions
@@ -768,11 +773,14 @@ func runM8ProductionSingleVariantV1(cfg config, fixture fixtureManifest, vectors
 	if err := validateM8ProductionReportV1(report, m8ProductionResourceCapsV1{PersistentAssetBytes: cfg.m8MaxAssetBytes, PeakRSSBytes: cfg.m8MaxRSSBytes}); err != nil {
 		return fmt.Errorf("validate M8 production report: %w", err)
 	}
-	raw, err := json.MarshalIndent(report, "", "  ")
+	raw, err := json.Marshal(report)
 	if err != nil {
 		return err
 	}
 	raw = append(raw, '\n')
+	if len(raw) > m8CompleteMeasurementMaxBytesV1 {
+		return errors.New("M8 report exceeds complete measurement byte cap")
+	}
 	name, err := m8ArtifactNameV1(cfg, fixture, assets.manifest, report.ExecutionID)
 	if err != nil {
 		return err
@@ -873,7 +881,14 @@ func m8ProductionExecutionEvidenceDigestV1(executionID string, artifacts []m8Pro
 // the historical qualification or default-off transcript limits.
 const m8DiagnosticRetainedMaxBytesV1 = 64 << 20
 
+// Complete terminal records retain bounded coordinator counters per query.
+// Legacy campaign artifacts keep their original caps.
+const m8CompleteMeasurementMaxBytesV1 = 128 << 20
+
 func m8ProductionMeasurementTranscriptByteCapV1(report m8ProductionReportV1) int64 {
+	if report.Config.MeasurementAccounting == m8CompleteAttemptsV1 {
+		return m8CompleteMeasurementMaxBytesV1
+	}
 	if report.Config.QualityDiagnostics {
 		return m8DiagnosticRetainedMaxBytesV1
 	}
@@ -980,7 +995,7 @@ func validM8ProductionMeasurementTranscriptV1(report m8ProductionReportV1) bool 
 }
 
 func m8ProductionRowOutcomeIdentityV1(row m8ProductionRowV1) m8ProductionRowOutcomesV1 {
-	return m8ProductionRowOutcomesV1{Overlap: row.Overlap, Probes: row.Probes, EfSearch: row.EfSearch, Concurrency: row.Concurrency, Status: row.Status, Samples: row.Samples}
+	return m8ProductionRowOutcomesV1{Repetition: row.Repetition, Overlap: row.Overlap, Probes: row.Probes, EfSearch: row.EfSearch, Concurrency: row.Concurrency, Status: row.Status, Samples: row.Samples}
 }
 
 func m8ProductionMeasurementTranscriptOutcomesV1(report m8ProductionReportV1, measuredCells []m8MeasuredCellV1) ([]m8ProductionRowOutcomesV1, error) {
@@ -997,7 +1012,7 @@ func m8ProductionMeasurementTranscriptOutcomesV1(report m8ProductionReportV1, me
 	outcomes := make([]m8ProductionRowOutcomesV1, len(report.Rows))
 	for i, row := range report.Rows {
 		outcome := m8ProductionRowOutcomeIdentityV1(row)
-		if row.Status == "pass" || row.Status == "fail" {
+		if row.Accounting != nil || row.Status == "pass" || row.Status == "fail" {
 			measured, ok := byRow[i]
 			if !ok || len(measured.results) != row.Samples || len(measured.durations) != row.Samples || (measured.routingHits != nil && len(measured.routingHits) != row.Samples) {
 				return nil, errors.New("M8 measurement transcript has incomplete query outcomes")
@@ -1034,7 +1049,7 @@ func m8ProductionMeasurementTranscriptMaxBytesV1(report m8ProductionReportV1) (i
 	idBytes := int64(len(fmt.Sprintf("doc-%06d", report.Dataset.Vectors-1)))
 	var resultCount, durationCount int64
 	for _, row := range report.Rows {
-		if row.Status != "pass" && row.Status != "fail" {
+		if row.Accounting == nil && row.Status != "pass" && row.Status != "fail" {
 			continue
 		}
 		if row.Samples < 0 {
@@ -1076,7 +1091,7 @@ func m8ProductionMeasurementTranscriptMaxBytesV1(report m8ProductionReportV1) (i
 		return 0, err
 	}
 	overhead := int64(64 << 10)
-	if report.Config.QualityDiagnostics {
+	if report.Config.QualityDiagnostics || report.Config.MeasurementAccounting != "" {
 		// Diagnostics retain per-query curves, routes and masks in Rows. Account
 		// for their exact immutable JSON copy, not the ordinary-row allowance.
 		rows, err := json.Marshal(report.Rows)
@@ -1110,8 +1125,14 @@ func m8ValidateProductionMeasurementTranscriptOutcomesV1(transcript m8Production
 	for i, row := range report.Rows {
 		outcome := transcript.Outcomes[i]
 		identity := m8ProductionRowOutcomeIdentityV1(row)
-		if identity.Overlap != outcome.Overlap || identity.Probes != outcome.Probes || identity.EfSearch != outcome.EfSearch || identity.Concurrency != outcome.Concurrency || identity.Status != outcome.Status || identity.Samples != outcome.Samples {
+		if identity.Repetition != outcome.Repetition || identity.Overlap != outcome.Overlap || identity.Probes != outcome.Probes || identity.EfSearch != outcome.EfSearch || identity.Concurrency != outcome.Concurrency || identity.Status != outcome.Status || identity.Samples != outcome.Samples {
 			return errors.New("M8 measurement transcript outcome cell does not match report row")
+		}
+		if row.Accounting != nil {
+			if err := m8ValidateCompleteOutcomesV1(report, row, outcome); err != nil {
+				return err
+			}
+			continue
 		}
 		if row.Status == "pass" || row.Status == "fail" {
 			if len(outcome.TopKIDs) != row.Samples {
@@ -1124,24 +1145,8 @@ func m8ValidateProductionMeasurementTranscriptOutcomesV1(transcript m8Production
 				return errors.New("M8 measurement transcript timing sample count mismatch")
 			}
 			for sample, ids := range outcome.TopKIDs {
-				if len(ids) != min(report.Config.TopK, report.Dataset.Vectors) {
-					return errors.New("M8 measurement transcript outcome top-k count mismatch")
-				}
-				if len(outcome.TopKScoreBits[sample]) != len(ids) {
-					return errors.New("M8 measurement transcript outcome ID/score count mismatch")
-				}
-				seen := make(map[string]bool, len(ids))
-				for _, id := range ids {
-					if !m8FixtureDocumentIDValidV1(id, report.Dataset.Vectors) || seen[id] {
-						return errors.New("M8 measurement transcript has invalid query outcome ID")
-					}
-					seen[id] = true
-				}
-				for _, bits := range outcome.TopKScoreBits[sample] {
-					score := math.Float32frombits(bits)
-					if math.IsNaN(float64(score)) || math.IsInf(float64(score), 0) {
-						return errors.New("M8 measurement transcript has nonfinite score bits")
-					}
+				if err := m8ValidateProductionOutcomeSampleV1(ids, outcome.TopKScoreBits[sample], min(report.Config.TopK, report.Dataset.Vectors), report.Dataset.Vectors); err != nil {
+					return err
 				}
 			}
 			for _, duration := range outcome.TotalNanos {
@@ -1181,6 +1186,35 @@ func m8ValidateProductionMeasurementTranscriptOutcomesV1(transcript m8Production
 			}
 		} else if outcome.TopKIDs == nil || len(outcome.TopKIDs) != 0 || outcome.TopKScoreBits == nil || len(outcome.TopKScoreBits) != 0 || outcome.TotalNanos == nil || len(outcome.TotalNanos) != 0 || len(outcome.ExactRepresentativeTruthHits) != 0 {
 			return errors.New("M8 measurement transcript has outcomes for shortfall or unsupported row")
+		}
+	}
+	return nil
+}
+
+func m8ValidateProductionOutcomeSampleV1(ids []string, scoreBits []uint32, expectedWidth, datasetVectors int) error {
+	if expectedWidth < 0 || expectedWidth > datasetVectors || len(ids) != expectedWidth {
+		return errors.New("M8 measurement transcript outcome result count mismatch")
+	}
+	if len(scoreBits) != expectedWidth {
+		return errors.New("M8 measurement transcript outcome ID/score count mismatch")
+	}
+	seen := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		if !m8FixtureDocumentIDValidV1(id, datasetVectors) || seen[id] {
+			return errors.New("M8 measurement transcript has invalid query outcome ID")
+		}
+		seen[id] = true
+	}
+	for i, bits := range scoreBits {
+		score := math.Float32frombits(bits)
+		if math.IsNaN(float64(score)) || math.IsInf(float64(score), 0) {
+			return errors.New("M8 measurement transcript has nonfinite score bits")
+		}
+		if i > 0 {
+			previous := math.Float32frombits(scoreBits[i-1])
+			if previous < score || (previous == score && ids[i-1] > ids[i]) {
+				return errors.New("M8 measurement transcript has noncanonical result order")
+			}
 		}
 	}
 	return nil
@@ -1227,7 +1261,7 @@ func m8ArtifactNameV1(cfg config, fixture fixtureManifest, manifest collections.
 		Fixture: fixture,
 		Config: func() m8ProductionConfigEvidenceV1 {
 			count, _ := m8WarmupCountAndConcurrencyV1(cfg)
-			return m8ProductionConfigEvidenceV1{RaftGroups: cfg.raftGroups, RaftNodesPerGroup: cfg.raftNodes, Partitions: cfg.partitions, DomainCount: int(manifest.DomainCount), PacksPerDomain: m8ManifestPacksPerDomainV1(manifest), Probes: cfg.probes, Overlap: cfg.overlaps, TopK: cfg.topK, RecallTarget: cfg.recallTarget, Concurrency: cfg.concurrency, Warmup: cfg.warmup, EffectiveWarmup: count, EfSearch: cfg.efSearch, RouterScoreBudget: cfg.routerCandidates, LocalScoreBudget: cfg.m8CoordinatorLimits.MaxLocalScoreCalls, GraphVariant: m8ManifestGraphVariantV1(manifest), RouterSemantics: m8RouterSemanticsV4, MaxExactTruthVisits: cfg.m8MaxExactTruthVisits, Seed: cfg.seed, QualityDiagnostics: cfg.m8QualityDiagnostics, QualityTraceQueries: cfg.m8QualityTraceQueries, RouterPolicyDiagnostics: cfg.m8RouterPolicyDiagnostics, RouterPolicyWidth: cfg.m8RouterPolicyWidth}
+			return m8ProductionConfigEvidenceV1{MeasurementAccounting: m8CompleteAttemptsV1, MeasuredRepetitions: max(1, cfg.m8MeasuredRepetitions), RaftGroups: cfg.raftGroups, RaftNodesPerGroup: cfg.raftNodes, Partitions: cfg.partitions, DomainCount: int(manifest.DomainCount), PacksPerDomain: m8ManifestPacksPerDomainV1(manifest), Probes: cfg.probes, Overlap: cfg.overlaps, TopK: cfg.topK, RecallTarget: cfg.recallTarget, Concurrency: cfg.concurrency, Warmup: cfg.warmup, EffectiveWarmup: count, EfSearch: cfg.efSearch, RouterScoreBudget: cfg.routerCandidates, LocalScoreBudget: cfg.m8CoordinatorLimits.MaxLocalScoreCalls, GraphVariant: m8ManifestGraphVariantV1(manifest), RouterSemantics: m8RouterSemanticsV4, MaxExactTruthVisits: cfg.m8MaxExactTruthVisits, Seed: cfg.seed, QualityDiagnostics: cfg.m8QualityDiagnostics, QualityTraceQueries: cfg.m8QualityTraceQueries, RouterPolicyDiagnostics: cfg.m8RouterPolicyDiagnostics, RouterPolicyWidth: cfg.m8RouterPolicyWidth}
 		}(),
 		Assets: m8ArtifactAssetIdentityV1{
 			IntegrityDigest:  manifest.IntegrityDigest,
@@ -3437,8 +3471,10 @@ func m8ConfiguredRPCsV1(requests, retries uint64, retriesOK bool) (uint64, bool)
 }
 
 type m8ProductionCellOutcomeV1 struct {
-	response nativewire.VectorPartitionCoordinatorResponseV1
-	err      error
+	response      nativewire.VectorPartitionCoordinatorResponseV1
+	err           error
+	dispatched    bool
+	terminalNanos uint64
 }
 
 func m8AccumulateProductionRowCountersV1(row *m8ProductionRowV1, counters nativewire.VectorPartitionCoordinatorCountersV1) {
@@ -3481,7 +3517,10 @@ func m8RunProductionCellV1(ctx context.Context, coordinator *nativewire.VectorPa
 		}
 		requestCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
+		outcomes[index].dispatched = true
+		requestStarted := time.Now()
 		outcomes[index].response, outcomes[index].err = coordinator.Search(requestCtx, m8ProductionApproximateRequestV1(assets, query, fmt.Sprintf("m8-q-%06d-p-%04d-ef-%06d-c-%03d", index, probes, efSearch, concurrency), probes, efSearch, topK, routerCandidates, candidateBytesLimit))
+		outcomes[index].terminalNanos = uint64(time.Since(requestStarted))
 	})
 	elapsedNanos := uint64(time.Since(started))
 	if elapsedNanos == 0 {
@@ -3492,57 +3531,67 @@ func m8RunProductionCellV1(ctx context.Context, coordinator *nativewire.VectorPa
 	// attribution, never by this measured all-partition ANN row.
 	row := m8ProductionRowV1{Status: "pass", Probes: probes, EfSearch: efSearch, Concurrency: concurrency, RouterMode: collections.VectorPartitionRouterModeApproxV1, RouterScoreBudget: m8ProductionApproximateRouterScoreBudgetV1(assets, routerCandidates), Samples: len(queries)}
 	canonicalResults := make([][]m8CanonicalResultV1, len(outcomes))
-	durations := make([]uint64, 0, len(outcomes))
-	var recallSum float64
-	coverageShortfall, scoreBudgetExhausted := false, false
-	for index, outcome := range outcomes {
-		if outcome.err != nil {
-			if m8ProductionRouterRefusalErrorV1(outcome.err) {
-				var coordinatorErr *nativewire.VectorPartitionCoordinatorErrorV1
-				if errors.As(outcome.err, &coordinatorErr) {
-					m8AccumulateProductionRowCountersV1(&row, coordinatorErr.Counters)
-					row.MaxTotalNanos = max(row.MaxTotalNanos, coordinatorErr.Timing.TotalNanos)
-				}
-				coverageShortfall = coverageShortfall || errors.Is(outcome.err, collections.ErrVectorPartitionRouterCandidateCoverageV1)
-				scoreBudgetExhausted = scoreBudgetExhausted || errors.Is(outcome.err, collections.ErrVectorPartitionRouterScoreBudget)
-				continue
-			}
-			return row, nil, nil, fmt.Errorf("query %d: %w", index, outcome.err)
-		}
-		got, shapeErr := m8ValidateCoordinatorResponseV1(outcome.response, assets.manifest, probes, topK)
-		if shapeErr != nil {
-			return row, nil, nil, fmt.Errorf("query %d response shape: %w", index, shapeErr)
-		}
-		canonicalResults[index] = got
-		recallSum += m8CanonicalRecallV1(truth[index], got)
-		durations = append(durations, outcome.response.Timing.TotalNanos)
-		m8AccumulateProductionRowCountersV1(&row, outcome.response.Counters)
-	}
-	if coverageShortfall || scoreBudgetExhausted {
-		switch {
-		case coverageShortfall && scoreBudgetExhausted:
-			row.Status = m8ProductionMixedRouterRefusalV1
-		case scoreBudgetExhausted:
-			row.Status = m8ProductionRouterScoreBudgetExhaustedV1
-		default:
-			row.Status = m8ProductionCandidateCoverageShortfallV1
-		}
-		row.NoPartialResults = true
-		row.ElapsedNanos = elapsedNanos
-		for _, outcome := range outcomes {
-			row.MaxTotalNanos = max(row.MaxTotalNanos, outcome.response.Timing.TotalNanos)
-		}
-		return row, make([][]m8CanonicalResultV1, len(outcomes)), nil, nil
-	}
-	row.NoPartialResults = true
-	row.RecallAtK = recallSum / float64(len(outcomes))
+	durations := make([]uint64, len(outcomes))
 	row.ElapsedNanos = elapsedNanos
-	row.QPS, _ = m8ProductionQPSV1(row.Samples, row.ElapsedNanos)
-	row.P50Nanos, row.P95Nanos, row.P99Nanos = m8PercentileV1(durations, 50), m8PercentileV1(durations, 95), m8PercentileV1(durations, 99)
-	for _, duration := range durations {
-		row.MaxTotalNanos = max(row.MaxTotalNanos, duration)
+	row.Accounting = &m8MeasurementAccountingV1{Contract: m8CompleteAttemptsV1, Attempts: make([]m8MeasuredAttemptV1, len(outcomes))}
+	for index, outcome := range outcomes {
+		attempt, results := m8ReduceProductionOutcomeV1(outcome, assets.manifest, truth[index], probes, topK)
+		row.Accounting.Attempts[index], canonicalResults[index] = attempt, results
+		if attempt.Class == "success" {
+			durations[index] = attempt.CoordinatorNanos
+		}
+	}
+	if err := m8SummarizeAttemptsV1(&row, topK); err != nil {
+		return row, canonicalResults, durations, err
 	}
 	return row, canonicalResults, durations, nil
+}
+
+// Keep error classification and response validation outside the serving timer.
+// The terminal record owns observed work, including typed coordinator failures.
+func m8ReduceProductionOutcomeV1(outcome m8ProductionCellOutcomeV1, manifest collections.VectorPartitionManifestV1, truth []m8CanonicalResultV1, probes, topK int) (m8MeasuredAttemptV1, []m8CanonicalResultV1) {
+	attempt := m8MeasuredAttemptV1{Dispatched: outcome.dispatched, TerminalNanos: outcome.terminalNanos}
+	hasPayload := len(outcome.response.Neighbors) != 0 || len(outcome.response.ProbedGroups) != 0 || len(outcome.response.ProbedDomains) != 0 || len(outcome.response.ProbedPacks) != 0 || len(outcome.response.ProbedPartitions) != 0
+	if outcome.err != nil {
+		attempt.Class, attempt.PartialResponse = "error", hasPayload
+		switch {
+		case errors.Is(outcome.err, collections.ErrVectorPartitionRouterCandidateCoverageV1):
+			attempt.Class = m8ProductionCandidateCoverageShortfallV1
+		case errors.Is(outcome.err, collections.ErrVectorPartitionRouterScoreBudget):
+			attempt.Class = m8ProductionRouterScoreBudgetExhaustedV1
+		case errors.Is(outcome.err, context.DeadlineExceeded):
+			attempt.Class = "timeout"
+		case errors.Is(outcome.err, context.Canceled):
+			attempt.Class = "canceled"
+		}
+		var coordinatorErr *nativewire.VectorPartitionCoordinatorErrorV1
+		if errors.As(outcome.err, &coordinatorErr) {
+			attempt.WorkObserved = true
+			attempt.Counters, attempt.CoordinatorNanos = coordinatorErr.Counters, coordinatorErr.Timing.TotalNanos
+		}
+		return attempt, nil
+	}
+	attempt.WorkObserved = true
+	attempt.Counters, attempt.CoordinatorNanos = outcome.response.Counters, outcome.response.Timing.TotalNanos
+	got, shapeErr := m8ValidateCoordinatorResponseV1(outcome.response, manifest, probes, topK)
+	if shapeErr != nil || outcome.response.Timing.TotalNanos == 0 {
+		attempt.Class, attempt.PartialResponse = "invalid_response", hasPayload
+		return attempt, nil
+	}
+	attempt.Class = "success"
+	attempt.ReturnedResults = len(got)
+	// Canonical lists contain unique IDs. Intersect directly without temporary
+	// ID slices; keep linear work even for the largest admitted top-k.
+	wanted := make(map[string]struct{}, len(truth))
+	for _, want := range truth {
+		wanted[want.ID] = struct{}{}
+	}
+	for _, result := range got {
+		if _, ok := wanted[result.ID]; ok {
+			attempt.TruthHits++
+		}
+	}
+	return attempt, got
 }
 
 func m8ProductionQPSV1(samples int, elapsedNanos uint64) (float64, bool) {
@@ -3558,6 +3607,9 @@ func m8AttachAttributionV1(row *m8ProductionRowV1, attribution m8AttributionCell
 		return errors.New("M8 attribution result cardinality mismatch")
 	}
 	row.Attribution = attribution.Evidence
+	if row.Accounting != nil {
+		return m8AttachCompleteAttributionV1(row, attribution, coordinatorResults)
+	}
 	if m8ProductionRouterRefusalStatusV1(row.Status) {
 		if row.Attribution.Quality != nil {
 			q := *row.Attribution.Quality
@@ -3742,12 +3794,17 @@ func m8AttributionLossOwnersV1(attribution m8ProductionAttributionV1) []string {
 		owners = append(owners, "approximate_representative_routing")
 	}
 	if !attribution.ApproximateRouterPartitionCoverageComplete {
+		if attribution.MeasuredFailures > 0 {
+			owners = append(owners, "measurement_failure_unattributed")
+		}
 		return owners
 	}
 	if attribution.ApproximateLocalHNSWRecallAtK+epsilon < attribution.ApproximateRepresentativeRecallAtK {
 		owners = append(owners, "partition_local_hnsw")
 	}
-	if !attribution.CoordinatorMergeIDParity || !attribution.CoordinatorMergeScoreParity || attribution.EndToEndRecallAtK+epsilon < attribution.ApproximateLocalHNSWRecallAtK {
+	if attribution.MeasuredFailures > 0 {
+		owners = append(owners, "measurement_failure_unattributed")
+	} else if !attribution.CoordinatorMergeIDParity || !attribution.CoordinatorMergeScoreParity || attribution.EndToEndRecallAtK+epsilon < attribution.ApproximateLocalHNSWRecallAtK {
 		owners = append(owners, "coordinator_merge_or_transport")
 	}
 	if len(owners) == 0 {
@@ -3777,6 +3834,13 @@ func m8AttributionStageOwnersV1(attribution m8ProductionAttributionV1) []m8Attri
 	}
 	out[1].Active = math.Abs(out[1].Delta) > epsilon
 	out[3].Active = out[3].Active || !attribution.ExhaustivePartitionIDParity || !attribution.ExhaustivePartitionScoreParity
+	if attribution.MeasuredFailures > 0 {
+		out[len(out)-1].Owner = "measurement_failure_unattributed"
+		out[len(out)-1].Active = true
+	}
+	if attribution.MeasuredSuccesses+attribution.MeasuredFailures > 0 && !attribution.ApproximateRouterPartitionCoverageComplete {
+		out[len(out)-1] = m8AttributionStageOwnerV1{Stage: "approximate_local_hnsw_to_end_to_end", Owner: "offline_local_comparison_unavailable"}
+	}
 	return out
 }
 
@@ -3907,7 +3971,7 @@ func m8ProductionGateLedgerForReportV1(report m8ProductionReportV1) m8Production
 	var exhaustive []m8ProductionRowV1
 	var candidates []m8ProductionRowV1
 	for _, row := range report.Rows {
-		if row.Status != "pass" {
+		if !m8MeasuredCoordinateCompleteV1(report, row) {
 			continue
 		}
 		if validDomains && row.Probes == domainCount {
@@ -3931,16 +3995,21 @@ func m8ProductionGateLedgerForReportV1(report m8ProductionReportV1) m8Production
 			if candidate.EfSearch != base.EfSearch || candidate.Concurrency != base.Concurrency {
 				continue
 			}
-			if candidate.QPS >= base.QPS*1.15 {
+			if m8RepeatedPairGateV1(report, candidate, base, true, false) {
 				ledger.EndToEndQPS = "pass"
 			}
-			if candidate.P95Nanos <= base.P95Nanos {
+			if m8RepeatedPairGateV1(report, candidate, base, false, true) {
 				ledger.TailLatency = "pass"
 			}
 		}
 	}
 	if report.Failure.Passed {
 		ledger.FailureHonesty = "pass"
+	}
+	for _, row := range report.Rows {
+		if row.Accounting != nil && !row.NoPartialResults {
+			ledger.FailureHonesty = "fail"
+		}
 	}
 	if report.Resources.BalanceHardCap > 0 && report.Resources.MaxPartitionLoad <= report.Resources.BalanceHardCap {
 		ledger.Balance = "pass"
@@ -4623,7 +4692,7 @@ func validateM8ProductionReportWithProfilesV1(report m8ProductionReportV1, caps 
 	if !validM8PartitionLoadsV1(report) || !validM8PartitionPackDiagnosticsV1(report.PackDiagnostics, report.Config.Partitions, report.Resources.PartitionLoads, report.Config.GraphVariant) || report.GateLedger.PartitionPackReachability != "pass" {
 		return errors.New("M8 report has incomplete or unreachable partition-pack diagnostics")
 	}
-	var measuredSamples uint64
+	var measuredSamples, minimumMeasuredSamples uint64
 	for _, row := range report.Rows {
 		if row.Status == "unsupported" {
 			if row.UnsupportedReason == "" || row.Overlap == 0 {
@@ -4646,6 +4715,23 @@ func validateM8ProductionReportWithProfilesV1(report m8ProductionReportV1, caps 
 		if row.ElapsedNanos < row.MaxTotalNanos {
 			return errors.New("M8 cell elapsed is shorter than its slowest request")
 		}
+		if row.Accounting != nil {
+			if err := m8ValidateAttemptAccountingV1(row, report.Config.TopK); err != nil {
+				return err
+			}
+			if row.Probes < 1 || row.Probes > domainCount || row.EfSearch < report.Config.TopK || row.Concurrency < 1 || row.Samples != report.Dataset.Queries || row.RouterMode != collections.VectorPartitionRouterModeApproxV1 || row.RouterScoreBudget > report.Config.RouterScoreBudget || row.RouterScoreBudget != row.Attribution.ApproximateRouterScoreBudget || row.ExactParityChecked || row.ExactParityPassed || !validExactLocalSearches || row.Attribution.LocalHNSWCandidates == 0 || !validM8AttributionV1(row.Attribution, report.Config.TopK) || row.Attribution.MeasuredSuccesses != row.Accounting.Summary.Succeeded || row.Attribution.MeasuredFailures != row.Samples-row.Accounting.Summary.Succeeded || row.Attribution.EndToEndRecallAtK != row.RecallAtK || row.Attribution.ApproximateRouterPartitionCoverageComplete && !validApproximateLocalSearches {
+				return errors.New("malformed complete M8 measurement row")
+			}
+			if row.Accounting.Summary.Succeeded > 0 && (row.RouterScoreBudget < row.Probes || row.LocalScoreCalls == 0 || row.MaxLocalScoreCalls == 0 || row.MaxLocalScoreCalls > row.LocalScoreCalls) {
+				return errors.New("successful M8 attempts lack measured local work")
+			}
+			if uint64(row.Accounting.Summary.Dispatched) > math.MaxUint64-measuredSamples {
+				return errors.New("M8 measured sample count overflow")
+			}
+			measuredSamples += uint64(row.Accounting.Summary.Dispatched)
+			minimumMeasuredSamples += uint64(row.Accounting.Summary.Succeeded)
+			continue
+		}
 		if m8ProductionRouterRefusalStatusV1(row.Status) {
 			if row.Probes < 1 || row.Probes > domainCount ||
 				row.EfSearch < report.Config.TopK || row.Concurrency < 1 || row.Samples != report.Dataset.Queries ||
@@ -4661,6 +4747,7 @@ func validateM8ProductionReportWithProfilesV1(report m8ProductionReportV1, caps 
 				return errors.New("M8 measured sample count overflow")
 			}
 			measuredSamples += rowSamples
+			minimumMeasuredSamples += rowSamples
 			continue
 		}
 		expectedQPS, qpsOK := m8ProductionQPSV1(row.Samples, row.ElapsedNanos)
@@ -4686,8 +4773,9 @@ func validateM8ProductionReportWithProfilesV1(report m8ProductionReportV1, caps 
 			return errors.New("M8 measured sample count overflow")
 		}
 		measuredSamples += rowSamples
+		minimumMeasuredSamples += rowSamples
 	}
-	if !validM8RouterSessionEvidenceV1(report.RouterSessions, measuredSamples) {
+	if !validM8RouterSessionEvidenceRangeV1(report.RouterSessions, minimumMeasuredSamples, measuredSamples) {
 		return errors.New("incomplete M8 router-session evidence")
 	}
 	if !validM8ResourceLimitComparisonsV1(report, caps) {
@@ -4702,7 +4790,7 @@ func validateM8ProductionReportWithProfilesV1(report m8ProductionReportV1, caps 
 		report.Failure.ResourceBoundary.WallClockNanos == 0 || report.Failure.ResourceBoundary.Maxima.Requests == 0 ||
 		report.Failure.ResourceBoundary.Maxima.RPCs == 0 || report.Failure.ResourceBoundary.Maxima.RequestBytes == 0 ||
 		report.Failure.ResourceBoundary.Maxima.ShardPartitions == 0 || report.Failure.ResourceBoundary.Maxima.ShardRequestBytes == 0 ||
-		report.GateLedger.FailureHonesty != "pass" || report.Resources.PersistentAssetBytes == 0 ||
+		report.GateLedger.FailureHonesty != m8ProductionGateLedgerForReportV1(report).FailureHonesty || report.Resources.PersistentAssetBytes == 0 ||
 		report.Resources.PeakRSSMeasured && report.Resources.PeakRSSScope != m8PeakRSSScopeV1 {
 		return errors.New("incomplete M8 failure or resource evidence")
 	}
@@ -4768,9 +4856,19 @@ type m8ProductionMeasurementCellKeyV1 struct {
 	probes      int
 	efSearch    int
 	concurrency int
+	repetition  int
 }
 
 func validateM8ProductionMeasurementCellsV1(cfg m8ProductionConfigEvidenceV1, routerRepresentatives int, rows []m8ProductionRowV1) error {
+	if cfg.MeasuredRepetitions < 0 || cfg.MeasuredRepetitions > 10 || cfg.MeasurementAccounting != "" && cfg.MeasurementAccounting != m8CompleteAttemptsV1 {
+		return errors.New("invalid M8 measurement contract or repetition count")
+	}
+	if cfg.MeasurementAccounting == "" && cfg.MeasuredRepetitions != 0 {
+		return errors.New("repeated M8 windows require complete attempt accounting")
+	}
+	if cfg.MeasurementAccounting != "" && cfg.MeasuredRepetitions < 1 {
+		return errors.New("complete M8 measurements require an explicit repetition count")
+	}
 	domainCount, _, ok := m8ProductionDomainLayoutV1(cfg)
 	if !ok {
 		return errors.New("M8 logical-domain pack layout is invalid")
@@ -4800,7 +4898,7 @@ func validateM8ProductionMeasurementCellsV1(cfg m8ProductionConfigEvidenceV1, ro
 		}
 	}
 	expected := 1
-	for _, axis := range []int{len(cfg.Overlap), len(cfg.Probes), len(cfg.EfSearch), len(cfg.Concurrency)} {
+	for _, axis := range []int{len(cfg.Overlap), len(cfg.Probes), len(cfg.EfSearch), len(cfg.Concurrency), max(1, cfg.MeasuredRepetitions)} {
 		if expected > math.MaxInt/axis {
 			return errors.New("M8 measurement cell count overflow")
 		}
@@ -4810,23 +4908,24 @@ func validateM8ProductionMeasurementCellsV1(cfg m8ProductionConfigEvidenceV1, ro
 		return errors.New("M8 rows do not exactly cover configured measurement cells")
 	}
 	configured := make(map[m8ProductionMeasurementCellKeyV1]struct{}, expected)
-	for _, overlap := range cfg.Overlap {
-		for _, probes := range cfg.Probes {
-			for _, efSearch := range cfg.EfSearch {
-				for _, concurrency := range cfg.Concurrency {
-					configured[m8ProductionMeasurementCellKeyV1{math.Float64bits(overlap), probes, efSearch, concurrency}] = struct{}{}
-				}
-			}
-		}
+	order := m8MeasurementOrderV1(cfg)
+	for _, cell := range order {
+		configured[cell] = struct{}{}
 	}
-	for _, row := range rows {
+	for i, row := range rows {
+		if (row.Accounting != nil) != (cfg.MeasurementAccounting != "" && row.Status != "unsupported") {
+			return errors.New("M8 row accounting differs from declared contract")
+		}
 		if err := m8QualityEvidenceSelectionV1(cfg, row); err != nil {
 			return err
 		}
 		if err := m8RouterPolicyEvidenceSelectionV1(cfg, routerRepresentatives, row); err != nil {
 			return err
 		}
-		key := m8ProductionMeasurementCellKeyV1{math.Float64bits(row.Overlap), row.Probes, row.EfSearch, row.Concurrency}
+		key := m8ProductionMeasurementCellKeyV1{math.Float64bits(row.Overlap), row.Probes, row.EfSearch, row.Concurrency, row.Repetition}
+		if cfg.MeasurementAccounting != "" && key != order[i] {
+			return errors.New("M8 rows do not preserve alternating measurement order")
+		}
 		if _, ok := configured[key]; !ok {
 			return errors.New("M8 row uses an unconfigured measurement cell")
 		}
@@ -4962,7 +5061,14 @@ func validM8AttributionV1(attribution m8ProductionAttributionV1, topK int) bool 
 			return false
 		}
 		near := func(a, b float64) bool { return math.Abs(a-b) <= 1e-12 }
-		if attribution.FinalMembershipOracleRecallAtK+1e-12 < attribution.PrimaryHomeOracleRecallAtK || attribution.FinalMembershipOracleRecallAtK+1e-12 < attribution.ExactRepresentativeRecallAtK || attribution.ExactRepresentativeRecallAtK+1e-12 < attribution.LocalHNSWRecallAtK || attribution.ApproximateRepresentativeRecallAtK+1e-12 < attribution.ApproximateLocalHNSWRecallAtK || !near(attribution.PrimaryHomeOracleRegretAtK, 1-attribution.PrimaryHomeOracleRecallAtK) || !near(attribution.FinalMembershipOracleRegretAtK, 1-attribution.FinalMembershipOracleRecallAtK) || !near(attribution.PrimaryToFinalMembershipGainAtK, attribution.FinalMembershipOracleRecallAtK-attribution.PrimaryHomeOracleRecallAtK) || !near(attribution.FinalMembershipToExactLossAtK, attribution.FinalMembershipOracleRecallAtK-attribution.ExactRepresentativeRecallAtK) || !near(attribution.ExactToApproximateLossAtK, attribution.ExactRepresentativeRecallAtK-attribution.ApproximateRepresentativeRecallAtK) || !near(attribution.ExactToLocalHNSWLossAtK, attribution.ExactRepresentativeRecallAtK-attribution.LocalHNSWRecallAtK) || !near(attribution.ApproximateToLocalHNSWLossAtK, attribution.ApproximateRepresentativeRecallAtK-attribution.ApproximateLocalHNSWRecallAtK) || !near(attribution.ApproximateLocalToEndToEndLossAtK, attribution.ApproximateLocalHNSWRecallAtK-attribution.EndToEndRecallAtK) {
+		localToEndToEndLoss := attribution.ApproximateLocalHNSWRecallAtK - attribution.EndToEndRecallAtK
+		if attribution.MeasuredSuccesses+attribution.MeasuredFailures > 0 && !attribution.ApproximateRouterPartitionCoverageComplete {
+			localToEndToEndLoss = 0
+			if attribution.CoordinatorMergeIDParity || attribution.CoordinatorMergeScoreParity {
+				return false
+			}
+		}
+		if attribution.FinalMembershipOracleRecallAtK+1e-12 < attribution.PrimaryHomeOracleRecallAtK || attribution.FinalMembershipOracleRecallAtK+1e-12 < attribution.ExactRepresentativeRecallAtK || attribution.ExactRepresentativeRecallAtK+1e-12 < attribution.LocalHNSWRecallAtK || attribution.ApproximateRepresentativeRecallAtK+1e-12 < attribution.ApproximateLocalHNSWRecallAtK || !near(attribution.PrimaryHomeOracleRegretAtK, 1-attribution.PrimaryHomeOracleRecallAtK) || !near(attribution.FinalMembershipOracleRegretAtK, 1-attribution.FinalMembershipOracleRecallAtK) || !near(attribution.PrimaryToFinalMembershipGainAtK, attribution.FinalMembershipOracleRecallAtK-attribution.PrimaryHomeOracleRecallAtK) || !near(attribution.FinalMembershipToExactLossAtK, attribution.FinalMembershipOracleRecallAtK-attribution.ExactRepresentativeRecallAtK) || !near(attribution.ExactToApproximateLossAtK, attribution.ExactRepresentativeRecallAtK-attribution.ApproximateRepresentativeRecallAtK) || !near(attribution.ExactToLocalHNSWLossAtK, attribution.ExactRepresentativeRecallAtK-attribution.LocalHNSWRecallAtK) || !near(attribution.ApproximateToLocalHNSWLossAtK, attribution.ApproximateRepresentativeRecallAtK-attribution.ApproximateLocalHNSWRecallAtK) || !near(attribution.ApproximateLocalToEndToEndLossAtK, localToEndToEndLoss) {
 			return false
 		}
 	}
@@ -4970,6 +5076,10 @@ func validM8AttributionV1(attribution m8ProductionAttributionV1, topK int) bool 
 }
 
 func validM8RouterSessionEvidenceV1(evidence m8ProductionRouterSessionEvidenceV1, expectedMeasuredSamples uint64) bool {
+	return validM8RouterSessionEvidenceRangeV1(evidence, expectedMeasuredSamples, expectedMeasuredSamples)
+}
+
+func validM8RouterSessionEvidenceRangeV1(evidence m8ProductionRouterSessionEvidenceV1, minimum, maximum uint64) bool {
 	if len(evidence.BeforeWarmup) != 0 || len(evidence.AfterWarmup) == 0 || len(evidence.AfterMeasured) == 0 {
 		return false
 	}
@@ -5021,8 +5131,7 @@ func validM8RouterSessionEvidenceV1(evidence m8ProductionRouterSessionEvidenceV1
 		measuredLeaseReleases += releaseDelta
 		seen[measured.Identity] = true
 	}
-	return measuredHits == expectedMeasuredSamples && measuredLeasePins == expectedMeasuredSamples &&
-		measuredLeaseReleases == expectedMeasuredSamples
+	return minimum <= maximum && measuredHits >= minimum && measuredHits <= maximum && measuredLeasePins == measuredHits && measuredLeaseReleases == measuredHits
 }
 
 func m8CanonicalRouterSessionIdentityV1(evidence m8ProductionRouterSessionEvidenceV1) (nativewire.VectorPartitionCoordinatorRouterSessionIdentityV1, bool) {

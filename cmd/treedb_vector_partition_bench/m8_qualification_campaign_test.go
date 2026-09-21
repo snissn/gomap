@@ -1605,6 +1605,9 @@ func TestM8QualificationBoundedJSONEvidenceV1(t *testing.T) {
 	})
 	t.Run("transcript_outcome_shape", func(t *testing.T) {
 		report := testM8QualificationReportV1(t, m8QualificationFrozenBaseSHAV1, m8QualificationFixturesV1[0], testM3VariantDescriptorV1(t.TempDir()), 125)
+		if !validM8ProductionMeasurementTranscriptV1(report) {
+			t.Fatal("valid legacy outcome transcript rejected before mutation")
+		}
 		raw, err := os.ReadFile(report.MeasurementTranscript.Path)
 		if err != nil {
 			t.Fatal(err)
@@ -1646,6 +1649,18 @@ func TestM8QualificationBoundedJSONEvidenceV1(t *testing.T) {
 			},
 			"score_nonfinite": func(value *m8ProductionMeasurementTranscriptV1) {
 				value.Outcomes[0].TopKScoreBits[0][0] = math.Float32bits(float32(math.Inf(1)))
+			},
+			"score_order": func(value *m8ProductionMeasurementTranscriptV1) {
+				ids, scores := value.Outcomes[0].TopKIDs[0], value.Outcomes[0].TopKScoreBits[0]
+				ids[0], ids[1] = ids[1], ids[0]
+				scores[0], scores[1] = scores[1], scores[0]
+			},
+			"tie_order": func(value *m8ProductionMeasurementTranscriptV1) {
+				ids, scores := value.Outcomes[0].TopKIDs[0], value.Outcomes[0].TopKScoreBits[0]
+				scores[1] = scores[0]
+				if ids[0] < ids[1] {
+					ids[0], ids[1] = ids[1], ids[0]
+				}
 			},
 		} {
 			t.Run(name, func(t *testing.T) {
@@ -3296,7 +3311,7 @@ func testM8MeasurementCellsV1(report m8ProductionReportV1) []m8MeasuredCellV1 {
 			for query := range results {
 				results[query] = make([]m8CanonicalResultV1, min(report.Config.TopK, report.Dataset.Vectors))
 				for rank := range results[query] {
-					results[query][rank] = m8CanonicalResultV1{ID: fmt.Sprintf("doc-%06d", len(results[query])-1-rank)}
+					results[query][rank] = m8CanonicalResultV1{ID: fmt.Sprintf("doc-%06d", len(results[query])-1-rank), Score: float32(len(results[query]) - rank)}
 				}
 			}
 		}
