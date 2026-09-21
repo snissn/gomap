@@ -102,6 +102,13 @@ offline placement result, not a claim about graph quality or online serving.
 
 ## Within-domain physical home packing (#4775)
 
+The existing `-partition-kahip-script` selector admits two exact pins: the current
+adapter constructs graph-aware homes; explicitly supplying the pinned legacy
+adapter constructs the striped comparison control. Build both arms with the same
+benchmark executable and source revision. An old-built database cannot be served
+under a new producer identity. No metadata rebinding or solver-failure fallback
+is admitted, and the legacy control never carries a graph-home receipt.
+
 The selected KaHIP M3 byte-bounded build with multiple physical packs per
 logical domain also uses `RunExternalHomePackingV1`. It does not repartition
 the logical assignment or change routing/search budgets. One request contains

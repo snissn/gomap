@@ -916,6 +916,9 @@ Only four pair kinds are admitted:
   with the exact same multi-pack plan, parent logical artifact, logical unions
   and probes. Only this kind admits the pinned legacy-to-home-packing adapter
   transition; strict retained replay requires the new construction receipt.
+  Build both controls with the same current executable/head, explicitly selecting
+  the pinned legacy adapter for striping. Reusing an old-built database with a
+  new producer fails the unchanged builder/serving provenance gate.
   It changes neither packs searched nor serving settings and does not replace
   the independent one-pack `logical_packing` gate.
 

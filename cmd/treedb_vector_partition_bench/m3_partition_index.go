@@ -163,10 +163,18 @@ func runM3PartitionIndexStage(cfg config, fixture fixtureManifest, artifact vect
 		return err
 	}
 	// One solve per parent/geometry, shared by every overlap ratio. Reference
-	// CI fixtures keep their explicitly non-KaHIP ordinal control; a selected
-	// production solver failure is never retried or replaced by that control.
+	// fixtures and the explicitly pinned legacy adapter keep striped homes;
+	// a selected home solver failure never falls back to that control.
+	graphHomes := false
+	if cfg.kahipPython != "" {
+		var err error
+		graphHomes, err = kahipAdapterHomePackingV1(cfg.kahipAdapterSHA256)
+		if err != nil {
+			return err
+		}
+	}
 	var homes []int
-	if cfg.shardPlan.PacksPerDomain > 1 && cfg.kahipPython != "" {
+	if cfg.shardPlan.PacksPerDomain > 1 && graphHomes {
 		ctx, cancel := context.WithTimeout(context.Background(), cfg.kahipTimeout)
 		var receipt vectorpartition.HomePackingReceiptV1
 		var err error

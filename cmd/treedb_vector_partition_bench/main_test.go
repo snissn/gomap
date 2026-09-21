@@ -1785,6 +1785,24 @@ func TestKaHIPOfflineSelectorIsLimitedToGraphMaterializationV1(t *testing.T) {
 	}
 }
 
+func TestKaHIPHomePackingAdapterSelectionV1(t *testing.T) {
+	for _, tc := range []struct {
+		digest string
+		homes  bool
+		valid  bool
+	}{
+		{kahipAdapterSHA256, false, true},
+		{kahipHomePackingAdapterSHA256, true, true},
+		{"", false, false},
+		{strings.Repeat("a", 64), false, false},
+	} {
+		homes, err := kahipAdapterHomePackingV1(tc.digest)
+		if homes != tc.homes || (err == nil) != tc.valid {
+			t.Fatalf("adapter %q: homes=%t err=%v", tc.digest, homes, err)
+		}
+	}
+}
+
 func TestKaHIPOutputCapAllowsCanonicalLabelGrowthV1(t *testing.T) {
 	a := vectorpartition.Artifact{IDs: make([]string, 1_000_000)}
 	if got, want := kahipOutputCap(make([]byte, 10), a), 5_001_034; got != want {
