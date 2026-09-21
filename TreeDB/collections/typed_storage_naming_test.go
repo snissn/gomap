@@ -392,9 +392,10 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	// and value type names to fold the live carrier into document publication.
 	{path: "TreeDB/collections/vector_index_partition_live_replay_v1.go", classification: typedStorageLegacyCompatibility, matchingLines: 4, occurrences: 4},
 	{path: "TreeDB/collections/vector_index_partition_live_v1_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
-	// #4324's nativewire integration fixture uses the exported compatibility
-	// schema names to configure one typed-column vector source.
-	{path: "TreeDB/nativewire/vector_partition_live_production_v1_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 4},
+	// #4324's nativewire integration fixtures use the exported compatibility
+	// schema names to configure typed-column vector and sorted-scalar sources.
+	{path: "TreeDB/nativewire/vector_partition_live_production_v1_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 3, occurrences: 5},
+	{path: "TreeDB/nativewire/vector_partition_live_lifecycle_v1_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 6, occurrences: 6},
 	{path: "TreeDB/mongo_gateway/filter_writes_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 5, occurrences: 6},
 	{path: "TreeDB/collections/column_int64_query.go", classification: typedStorageLegacyDerived, matchingLines: 2, occurrences: 2},
 	{path: "TreeDB/collections/column_int64_values_asset.go", classification: typedStorageLegacyDerived, matchingLines: 10, occurrences: 10},
