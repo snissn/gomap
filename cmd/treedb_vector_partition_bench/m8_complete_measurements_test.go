@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -52,9 +53,9 @@ func m8CompleteMeasurementGoldenV1(t testing.TB) m8ProductionRowV1 {
 	t.Helper()
 	row := m8ProductionRowV1{Samples: 100, Concurrency: 1, ElapsedNanos: uint64(time.Second), Accounting: &m8MeasurementAccountingV1{Contract: m8CompleteAttemptsV1, Attempts: make([]m8MeasuredAttemptV1, 100)}}
 	for i := range row.Accounting.Attempts {
-		a := m8MeasuredAttemptV1{Class: "success", Dispatched: true, TerminalNanos: 20, CoordinatorNanos: 10, WorkObserved: true, TruthHits: 9, Counters: nativewire.VectorPartitionCoordinatorCountersV1{RouterScoreCalls: 3}}
+		a := m8MeasuredAttemptV1{Class: "success", Dispatched: true, TerminalNanos: 20, CoordinatorNanos: 10, WorkObserved: true, ReturnedResults: 10, TruthHits: 9, Counters: nativewire.VectorPartitionCoordinatorCountersV1{RouterScoreCalls: 3}}
 		if i >= 90 {
-			a.Class, a.TruthHits = "timeout", 0
+			a.Class, a.ReturnedResults, a.TruthHits = "timeout", 0, 0
 			a.TerminalNanos, a.CoordinatorNanos, a.Counters.RouterScoreCalls = 200, 100, 7
 		}
 		row.Accounting.Attempts[i] = a
@@ -105,6 +106,8 @@ func TestM8CompleteMeasurementDenominatorsAndFailureWork(t *testing.T) {
 		"unknown terminal":       func(r *m8ProductionRowV1) { r.Accounting.Attempts[0].Class = "" },
 		"missing query":          func(r *m8ProductionRowV1) { r.Accounting.Attempts = r.Accounting.Attempts[:99] },
 		"failed hits":            func(r *m8ProductionRowV1) { r.Accounting.Attempts[99].TruthHits = 1 },
+		"failed results":         func(r *m8ProductionRowV1) { r.Accounting.Attempts[99].ReturnedResults = 1 },
+		"hits exceed results":    func(r *m8ProductionRowV1) { r.Accounting.Attempts[0].ReturnedResults = 8 },
 		"unobserved work":        func(r *m8ProductionRowV1) { r.Accounting.Attempts[0].WorkObserved = false },
 		"invented completion":    func(r *m8ProductionRowV1) { r.Accounting.Summary.Succeeded++ },
 		"filtered denominator":   func(r *m8ProductionRowV1) { r.RecallAtK = .9 },
@@ -192,7 +195,7 @@ func TestM8CompleteMeasurementTerminalClassesAndBounds(t *testing.T) {
 		t.Fatal("counter overflow accepted")
 	}
 	// Bind the compact JSON admission allowance to maximum-width native fields.
-	attempt := m8MeasuredAttemptV1{Class: m8ProductionCandidateCoverageShortfallV1, Dispatched: true, WorkObserved: true, PartialResponse: true, TerminalNanos: math.MaxUint64, CoordinatorNanos: math.MaxUint64, TruthHits: math.MaxInt}
+	attempt := m8MeasuredAttemptV1{Class: m8ProductionCandidateCoverageShortfallV1, Dispatched: true, WorkObserved: true, PartialResponse: true, TerminalNanos: math.MaxUint64, CoordinatorNanos: math.MaxUint64, ReturnedResults: math.MaxInt, TruthHits: math.MaxInt}
 	counters := reflect.ValueOf(&attempt.Counters).Elem()
 	for i := range counters.NumField() {
 		if counters.Field(i).Kind() != reflect.Uint64 {
@@ -242,7 +245,7 @@ func TestM8CompleteMeasuredQualityDoesNotInventFailureTraversal(t *testing.T) {
 		t.Fatal(err)
 	}
 	row := m8ProductionRowV1{Samples: len(queries), Probes: 4, Concurrency: 1, ElapsedNanos: 100, Accounting: &m8MeasurementAccountingV1{Contract: m8CompleteAttemptsV1, Attempts: []m8MeasuredAttemptV1{
-		{Class: "success", Dispatched: true, WorkObserved: true, TerminalNanos: 20, CoordinatorNanos: 10, TruthHits: m8IDHitCountV1(m8CanonicalIDsV1(truth[0]), m8CanonicalIDsV1(cell.Local[0]))},
+		{Class: "success", Dispatched: true, WorkObserved: true, TerminalNanos: 20, CoordinatorNanos: 10, ReturnedResults: len(cell.Local[0]), TruthHits: m8IDHitCountV1(m8CanonicalIDsV1(truth[0]), m8CanonicalIDsV1(cell.Local[0]))},
 		{Class: "timeout", Dispatched: true, TerminalNanos: 30},
 	}}}
 	if err := m8SummarizeAttemptsV1(&row, 10); err != nil {
@@ -324,6 +327,91 @@ func TestM8IncompleteMeasurementsSurviveDiagnosticFailure(t *testing.T) {
 	}
 	if _, err := m8ReadProductionMeasurementTranscriptV1(report); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestM8CompleteOutcomeReplayRetainsLiveValidatedResultCount(t *testing.T) {
+	writeFixture := func(t *testing.T) (m8ProductionReportV1, m8ProductionMeasurementTranscriptV1) {
+		t.Helper()
+		row := m8ProductionRowV1{Samples: 3, Concurrency: 1, ElapsedNanos: 100, Accounting: &m8MeasurementAccountingV1{Contract: m8CompleteAttemptsV1, Attempts: []m8MeasuredAttemptV1{
+			{Class: "success", Dispatched: true, TerminalNanos: 20, CoordinatorNanos: 10, WorkObserved: true, ReturnedResults: 1, TruthHits: 1},
+			{Class: "success", Dispatched: true, TerminalNanos: 30, CoordinatorNanos: 20, WorkObserved: true, ReturnedResults: 10, TruthHits: 9},
+			{Class: "timeout", Dispatched: true, TerminalNanos: 40},
+		}}}
+		if err := m8SummarizeAttemptsV1(&row, 10); err != nil {
+			t.Fatal(err)
+		}
+		results := make([][]m8CanonicalResultV1, row.Samples)
+		results[0] = []m8CanonicalResultV1{{ID: "doc-000000", Score: .9}}
+		for i := range 10 {
+			results[1] = append(results[1], m8CanonicalResultV1{ID: fmt.Sprintf("doc-%06d", i), Score: float32(10 - i)})
+		}
+		report := m8ProductionReportV1{ExecutionID: strings.Repeat("b", 32), Dataset: fixtureManifest{Vectors: 100, Queries: 3}, Config: m8ProductionConfigEvidenceV1{TopK: 10, MeasurementAccounting: m8CompleteAttemptsV1}, Rows: []m8ProductionRowV1{row}}
+		report.Resources.PeakRSSMeasured, report.Resources.PeakRSSBytes = true, 1
+		dir := t.TempDir()
+		if err := m8WriteIncompleteMeasurementsV1(dir, report, []m8MeasuredCellV1{{rowIndex: 0, results: results, durations: []uint64{10, 20, 0}}}); err != nil {
+			t.Fatal(err)
+		}
+		reportRaw, err := os.ReadFile(filepath.Join(dir, "incomplete_"+report.ExecutionID, "report.json"))
+		if err != nil {
+			t.Fatalf("read complete-outcome fixture report: %v", err)
+		}
+		if err := json.Unmarshal(reportRaw, &report); err != nil {
+			t.Fatalf("decode complete-outcome fixture report: %v", err)
+		}
+		transcriptRaw, err := os.ReadFile(report.MeasurementTranscript.Path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var transcript m8ProductionMeasurementTranscriptV1
+		if err := json.Unmarshal(transcriptRaw, &transcript); err != nil {
+			t.Fatal(err)
+		}
+		return report, transcript
+	}
+
+	rewrite := func(t *testing.T, report *m8ProductionReportV1, transcript m8ProductionMeasurementTranscriptV1) {
+		t.Helper()
+		raw, err := json.Marshal(transcript)
+		if err != nil {
+			t.Fatalf("rewrite complete-outcome fixture: %v", err)
+		}
+		if err := os.WriteFile(report.MeasurementTranscript.Path, raw, 0o600); err != nil {
+			t.Fatalf("rewrite complete-outcome fixture: %v", err)
+		}
+		digest := sha256.Sum256(raw)
+		report.MeasurementTranscript.Bytes = int64(len(raw))
+		report.MeasurementTranscript.SHA256 = fmt.Sprintf("%x", digest)
+	}
+
+	report, _ := writeFixture(t)
+	if _, err := m8ReadProductionMeasurementTranscriptV1(report); err != nil {
+		t.Fatalf("sparse, full, and failed outcomes did not survive write/read replay: %v", err)
+	}
+	for name, mutate := range map[string]func(*m8ProductionReportV1, *m8ProductionMeasurementTranscriptV1){
+		"count": func(report *m8ProductionReportV1, transcript *m8ProductionMeasurementTranscriptV1) {
+			report.Rows[0].Accounting.Attempts[0].ReturnedResults = 2
+			transcript.Rows[0].Accounting.Attempts[0].ReturnedResults = 2
+		},
+		"IDs": func(_ *m8ProductionReportV1, transcript *m8ProductionMeasurementTranscriptV1) {
+			transcript.Outcomes[0].TopKIDs[0] = append(transcript.Outcomes[0].TopKIDs[0], "doc-000001")
+		},
+		"scores": func(_ *m8ProductionReportV1, transcript *m8ProductionMeasurementTranscriptV1) {
+			transcript.Outcomes[0].TopKScoreBits[0] = append(transcript.Outcomes[0].TopKScoreBits[0], math.Float32bits(.8))
+		},
+		"failure count": func(report *m8ProductionReportV1, transcript *m8ProductionMeasurementTranscriptV1) {
+			report.Rows[0].Accounting.Attempts[2].ReturnedResults = 1
+			transcript.Rows[0].Accounting.Attempts[2].ReturnedResults = 1
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			report, transcript := writeFixture(t)
+			mutate(&report, &transcript)
+			rewrite(t, &report, transcript)
+			if _, err := m8ReadProductionMeasurementTranscriptV1(report); err == nil {
+				t.Fatal("accepted tampered complete outcome replay")
+			}
+		})
 	}
 }
 

@@ -2884,7 +2884,7 @@ func TestM8CoordinatorResponseCanonicalShapeFailsClosedV1(t *testing.T) {
 		2,
 		2,
 	)
-	if attempt.Class != "success" || attempt.TruthHits != 1 || len(got) != 1 {
+	if attempt.Class != "success" || attempt.ReturnedResults != 1 || attempt.TruthHits != 1 || len(got) != 1 {
 		t.Fatalf("valid sparse response was not retained as success: attempt=%+v got=%+v", attempt, got)
 	}
 	response.Neighbors = append(response.Neighbors,
