@@ -515,16 +515,47 @@ func TestDefaultRouterConfigV1(t *testing.T) {
 	if cfg.MaxScalarWork != routerDefaultScalarWork {
 		t.Fatalf("max scalar work=%d want default %d", cfg.MaxScalarWork, routerDefaultScalarWork)
 	}
-	for _, work := range []int64{50_000_000_000, 0, 50_000_000_001} {
+	for _, work := range []int64{50_000_000_000, 100_000_000_000, 0, 100_000_000_001} {
 		cfg := cfg
 		cfg.MaxScalarWork = work
 		err := ValidateRouterConfigV1(cfg)
-		if work == 50_000_000_000 && err != nil {
-			t.Fatalf("explicit 50B scalar-work cap rejected: %v", err)
+		if work > 0 && work <= 100_000_000_000 && err != nil {
+			t.Fatalf("explicit scalar-work cap %d rejected: %v", work, err)
 		}
-		if work != 50_000_000_000 && err == nil {
+		if (work == 0 || work > 100_000_000_000) && err == nil {
 			t.Fatalf("invalid scalar-work cap %d accepted", work)
 		}
+	}
+}
+
+func TestRouterWorkCapExtensionPreservesGeometryV1(t *testing.T) {
+	cfg := DefaultRouterConfigV1()
+	if cfg.MaxScalarWork != 20_000_000_000 {
+		t.Fatal("extension changed default admission")
+	}
+	work, ok := CheckedRouterScalarWorkV1([]int{30_000, 30_000, 30_000, 30_000}, 768, cfg)
+	if !ok || work != 95_201_280_000 || work <= 50_000_000_000 || work > 100_000_000_000 {
+		t.Fatalf("real D4 conservative bound=%d ok=%v", work, ok)
+	}
+	parts := []RouterPartitionV1{{PartitionID: 0, Vectors: []RouterVectorV1{
+		{Ordinal: 0, Values: []float32{1, 0}},
+		{Ordinal: 1, Values: []float32{0, 1}},
+		{Ordinal: 2, Values: []float32{-1, 0}},
+	}}}
+	cfg = routerTestConfigV1()
+	before, err := BuildRouterV1(parts, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.MaxScalarWork = 100_000_000_000
+	after, err := BuildRouterV1(parts, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The recorded cap changes; no clustering or representative work does.
+	after.Config = before.Config
+	if !reflect.DeepEqual(before, after) {
+		t.Fatal("admitted work cap changed router geometry or metrics")
 	}
 }
 

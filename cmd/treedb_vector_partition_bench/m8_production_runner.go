@@ -3505,7 +3505,14 @@ func m8AccumulateProductionRowCountersV1(row *m8ProductionRowV1, counters native
 }
 
 func m8RunProductionCellV1(ctx context.Context, coordinator *nativewire.VectorPartitionCoordinatorV1, assets *m8ProductionMultiGroupAssetsV1, queries [][]float64, truth [][]m8CanonicalResultV1, probes, efSearch, concurrency, topK, routerCandidates int, candidateBytesLimit uint64) (m8ProductionRowV1, [][]m8CanonicalResultV1, []uint64, error) {
+	return m8RunProductionCellWithResourcesV1(ctx, coordinator, assets, queries, truth, probes, efSearch, concurrency, topK, routerCandidates, candidateBytesLimit, nil)
+}
+
+func m8RunProductionCellWithResourcesV1(ctx context.Context, coordinator *nativewire.VectorPartitionCoordinatorV1, assets *m8ProductionMultiGroupAssetsV1, queries [][]float64, truth [][]m8CanonicalResultV1, probes, efSearch, concurrency, topK, routerCandidates int, candidateBytesLimit uint64, resources *m8ServingResourcesV1) (m8ProductionRowV1, [][]m8CanonicalResultV1, []uint64, error) {
 	outcomes := make([]m8ProductionCellOutcomeV1, len(queries))
+	if resources != nil {
+		resources.Before = m8ServingResourceSnapshotV1()
+	}
 	started := time.Now()
 	m8RunBoundedWorkV1(len(queries), concurrency, func(index int) {
 		query := m8Query32V1(queries[index])
@@ -3523,6 +3530,10 @@ func m8RunProductionCellV1(ctx context.Context, coordinator *nativewire.VectorPa
 		outcomes[index].terminalNanos = uint64(time.Since(requestStarted))
 	})
 	elapsedNanos := uint64(time.Since(started))
+	if resources != nil {
+		resources.After = m8ServingResourceSnapshotV1()
+		resources.WorkerWallNanos = elapsedNanos
+	}
 	if elapsedNanos == 0 {
 		return m8ProductionRowV1{}, nil, nil, errors.New("M8 production cell elapsed time is zero")
 	}

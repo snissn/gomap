@@ -3463,6 +3463,10 @@ func TestExplicitPartitionCapacityOverridesV1(t *testing.T) {
 	if got, want := cfg.routerConfig.MaxScalarWork, int64(50_000_000_000); got != want {
 		t.Fatalf("Router MaxScalarWork=%d want %d", got, want)
 	}
+	extended, err := parseConfig(args("-router-max-scalar-work", "100000000000"))
+	if err != nil || extended.routerConfig.MaxScalarWork != 100_000_000_000 {
+		t.Fatalf("explicit extended router cap cfg=%+v err=%v", extended.routerConfig, err)
+	}
 	if got, want := cfg.routerConfig.MaxVectors, cfg.maxVectors; got != want {
 		t.Fatalf("Router MaxVectors=%d want inherited %d", got, want)
 	}
@@ -3475,7 +3479,7 @@ func TestExplicitPartitionCapacityOverridesV1(t *testing.T) {
 			t.Fatalf("router membership cap %s error=%v", value, err)
 		}
 	}
-	if _, err := parseConfig(args("-router-max-scalar-work", "50000000001")); err == nil || !strings.Contains(err.Error(), "router max scalar work") {
+	if _, err := parseConfig(args("-router-max-scalar-work", "100000000001")); err == nil || !strings.Contains(err.Error(), "router max scalar work") {
 		t.Fatalf("router scalar hard-cap error=%v", err)
 	}
 	if got, want := cfg.m3MaxBenchmarkVisits, int64(3_000_000_000); got != want {

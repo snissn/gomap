@@ -572,6 +572,9 @@ func run(args []string, stdout io.Writer) error {
 	if len(args) > 0 && args[0] == "whole-collection-reference" {
 		return runM8WholeCollectionReferenceV1(args[1:], stdout)
 	}
+	if len(args) > 0 && args[0] == "serving-resources" {
+		return runM8ServingResourcesV1(args[1:], stdout)
+	}
 	if len(args) > 0 && args[0] == "compare-m8-scaling" {
 		return runM8ScalingComparisonV1(args[1:], stdout)
 	}
@@ -1068,7 +1071,7 @@ func parseConfig(args []string) (config, error) {
 	fs.IntVar(&cfg.routerConfig.MaxDepth, "router-max-depth", cfg.routerConfig.MaxDepth, "router hierarchy depth bound")
 	fs.IntVar(&cfg.routerConfig.MaxIterations, "router-max-iterations", cfg.routerConfig.MaxIterations, "router Lloyd iteration bound")
 	fs.IntVar(&routerMaxVectors, "router-max-vectors", 0, "router final-membership cap; zero inherits -max-vectors")
-	fs.Int64Var(&cfg.routerConfig.MaxScalarWork, "router-max-scalar-work", cfg.routerConfig.MaxScalarWork, "offline router distance-coordinate-work cap (1..50000000000)")
+	fs.Int64Var(&cfg.routerConfig.MaxScalarWork, "router-max-scalar-work", cfg.routerConfig.MaxScalarWork, "offline router distance-coordinate-work cap (1..100000000000; default 20000000000)")
 	fs.Uint64Var(&cfg.routerConfig.MaxRouterBytes, "router-max-bytes", cfg.routerConfig.MaxRouterBytes, "hard conservative persisted router-pack byte cap")
 	fs.IntVar(&cfg.routerCandidates, "router-score-budget", cfg.routerCandidates, "actual hierarchical representative score-call ceiling")
 	fs.IntVar(&cfg.sourceHNSWDegree, "source-hnsw-degree", cfg.sourceHNSWDegree, "source column_graph HNSW degree (1..16; default 16)")

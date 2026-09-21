@@ -72,10 +72,19 @@ match every child/matrix report and both corpus campaigns.
 Every M3 build command binds its corpus-specific
 `-partition-max-distance-work` and `-router-max-scalar-work` alongside its
 independent M3 visit cap. The router's default remains 20B and the explicit
-offline ceiling is 50B. The immutable M3 descriptor records both parsed build
+offline ceiling for this historical campaign is 50B. The immutable M3 descriptor records both parsed build
 caps and the complete parsed partition-builder configuration, so campaign
 validation rejects a retained candidate built above its corpus-specific envelope
 even when its artifact bytes otherwise match.
+
+The builder additionally admits an explicit `-router-max-scalar-work` up to
+100B for separately declared experiments. This does not change the 20B default,
+the conservative all-level distance-coordinate bound, or the historical
+qualification envelopes above. In particular, the 100k/768-dimensional D4
+20%-overlap bound is 95,201,280,000 coordinates: a retained 50B admission
+rejection remains a rejection, and a 100B rebuild needs new source/build
+provenance and prospective measurements. A larger cap is permission to attempt
+bounded work, not measured cost, improved routing, or qualification.
 
 For graph-disjoint and graph-overlap builds, the same schema-v5 descriptor also
 binds the selected KaHIP Python executable SHA-256 and the pinned adapter
@@ -170,3 +179,51 @@ provenance from the replay process cwd or CI environment.
 `-max-vectors` remains the source-fixture admission cap. Each frozen M3 command
 also carries `-router-max-vectors`: 120000 for 100k and 300000 for 250k, which
 reserves the full 0.20-overlap final-membership shape for all three variants.
+
+## Prospective serving resource companion
+
+`treedb_vector_partition_bench serving-resources` observes process resources
+for one repetition of every coordinate of a strictly replayed M8 parent:
+
+```sh
+treedb_vector_partition_bench serving-resources \
+  -out /retained/new-observation/resources.jsonl \
+  -profiles /retained/new-observation/profiles \
+  -source-checkout /retained/collector-source \
+  -head-sha COLLECTOR_HEAD -executable-sha256 COLLECTOR_SHA256 \
+  -- ALL_ORIGINAL_REPLAY_M8_REPORT_ARGUMENTS
+```
+
+The output file and profile directory must not exist. Freeze the new collector
+source/binary, unchanged serving-runtime blobs, exact command and parent pins
+before collection. The parent still requires its original producer/builder
+executable and all seven external replay pins; the new collector cannot replace
+those identities. Parent attempts must all complete and meet their declared
+quality in every repetition. The companion uses the original full query set,
+coordinates, warmup, host/mounts, Go runtime limits, native TCP/Raft topology and
+standard M8 profiler settings. It requires exact per-query IDs and score bits
+against parent repetition zero. A discrepancy remains a failed receipt, not a
+reason to select another parent repetition or query subset.
+
+The JSONL contract is one header, all declared cells in order, and a complete
+footer binding the profiles. Each line is synced outside the worker window.
+Failed attempts/cells remain on disk; an absent footer is incomplete.
+The header separately identifies the collector and old producer. Cells reuse
+the complete-attempt records and retain raw `TotalAlloc`, `Mallocs` and process
+CPU before/after counters plus snapshot duration and worker wall time.
+The bounded reader rejects source/header mismatch, incomplete/duplicate cells,
+decreasing/unavailable counters, changed results, and missing/trailing footer.
+Its expected header is an external frozen input, not trust inferred from the
+receipt itself; the parent and transcript must first pass strict replay.
+
+The measurement is **whole co-located process resources during serving**:
+coordinator/client, TCP shards, Raft/background work, request preparation,
+dispatch, and Go runtime/GC. Receipt-slot preallocation, topology/setup, warmup,
+post-response validation, attribution and serialization are outside snapshots.
+CPU is read after `ReadMemStats`, so its delta includes the final memory
+snapshot overhead; worker wall excludes both snapshots. Do not subtract wall
+snapshot duration from CPU, force GC, or infer isolated search CPU/heap.
+Per-attempt CPU, B/op and allocs/op are the respective counter deltas divided
+by **all declared attempts**, never just successful requests. The companion is
+a prospective observation, not allocations for historical timing runs, a new
+M8 report version, a statistical resource-improvement claim, or qualification.

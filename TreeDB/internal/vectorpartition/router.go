@@ -25,7 +25,7 @@ const (
 	routerMaxDepth           = 64
 	routerMaxIterations      = 1024
 	routerDefaultScalarWork  = int64(20_000_000_000)
-	routerMaxScalarWork      = int64(50_000_000_000)
+	routerMaxScalarWork      = int64(100_000_000_000)
 	routerMaxBytes           = uint64(1 << 30)
 )
 
