@@ -18,6 +18,20 @@ import (
 	"github.com/snissn/gomap/TreeDB/nativewire"
 )
 
+func TestM8ProductionComparisonOmitsLegacyMeasurementSummary(t *testing.T) {
+	legacy, err := json.Marshal(m8ProductionComparisonV1{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, err := json.Marshal(m8ProductionComparisonV1{Measurement: m8MeasurementSummaryV1{Declared: 1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(legacy), "measurement_summary") || !strings.Contains(string(current), "measurement_summary") {
+		t.Fatalf("measurement summary JSON shape: legacy=%s current=%s", legacy, current)
+	}
+}
+
 func TestM8ProductionCanceledCellRetainsDeclaredPopulation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

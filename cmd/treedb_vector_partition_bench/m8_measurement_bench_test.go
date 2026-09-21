@@ -21,9 +21,9 @@ func BenchmarkM8MeasuredNativeCellV1(b *testing.B) {
 		b.Fatal(err)
 	}
 	defer assets.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	setupCtx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
-	topology, err := nativewire.NewVectorPartitionM8ProductionMultiGroupV1(ctx, nativewire.VectorPartitionM8ProductionMultiGroupOptionsV1{Collection: assets.collection, Manifest: assets.manifest, RouterSource: assets.RouterSource(), GroupAssetSetDigests: assets.assetSetDigests, Database: "default", Catalog: "default"})
+	topology, err := nativewire.NewVectorPartitionM8ProductionMultiGroupV1(setupCtx, nativewire.VectorPartitionM8ProductionMultiGroupOptionsV1{Collection: assets.collection, Manifest: assets.manifest, RouterSource: assets.RouterSource(), GroupAssetSetDigests: assets.assetSetDigests, Database: "default", Catalog: "default"})
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -32,13 +32,14 @@ func BenchmarkM8MeasuredNativeCellV1(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	if _, err := m8WarmProductionTopologyV1(ctx, topology.Coordinator(), assets, queries, config{topK: 10, probes: []int{4}, routerCandidates: defaultRouterScoreBudgetV3, efSearch: []int{96}, concurrency: []int{1}, warmup: 16}); err != nil {
+	if _, err := m8WarmProductionTopologyV1(setupCtx, topology.Coordinator(), assets, queries, config{topK: 10, probes: []int{4}, routerCandidates: defaultRouterScoreBudgetV3, efSearch: []int{96}, concurrency: []int{1}, warmup: 16}); err != nil {
 		b.Fatal(err)
 	}
+	measurementCtx := context.Background()
 	b.ReportAllocs()
 	b.ResetTimer()
 	for b.Loop() {
-		row, _, _, err := m8RunProductionCellV1(ctx, topology.Coordinator(), assets, queries, truth, 4, 96, 1, 10, defaultRouterScoreBudgetV3, nativewire.DefaultVectorPartitionCoordinatorLimitsV1().MaxCandidateBytes)
+		row, _, _, err := m8RunProductionCellV1(measurementCtx, topology.Coordinator(), assets, queries, truth, 4, 96, 1, 10, defaultRouterScoreBudgetV3, nativewire.DefaultVectorPartitionCoordinatorLimitsV1().MaxCandidateBytes)
 		if err != nil || row.Status != "pass" || row.RPCs == 0 || row.LocalScoreCalls == 0 {
 			b.Fatalf("not a valid native measured cell: %v %+v", err, row)
 		}

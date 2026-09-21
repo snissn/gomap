@@ -1196,7 +1196,7 @@ func parseConfig(args []string) (config, error) {
 			return config{}, fmt.Errorf("production_multi_group requires at most %d partitions", coordinatorLimits.MaxSelectedPartitions)
 		}
 		if len(cfg.concurrency) == 0 || len(cfg.efSearch) == 0 || cfg.warmup < 0 || cfg.warmup > 10_000 || cfg.m8MeasuredRepetitions < 1 || cfg.m8MeasuredRepetitions > 10 {
-			return config{}, errors.New("production_multi_group requires non-empty concurrency and ef-search sweeps")
+			return config{}, errors.New("production_multi_group requires non-empty concurrency and ef-search sweeps, warmup in [0,10000], and measured repetitions in [1,10]")
 		}
 		for _, value := range cfg.concurrency {
 			if value < 1 || value > 256 {
