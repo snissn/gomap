@@ -3,13 +3,65 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"path/filepath"
 	"reflect"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/nativewire"
 )
+
+func TestM8ServingResourcesRetainedTopologyV1(t *testing.T) {
+	requireM8PersistentAssetSupportV1(t)
+	fixture := m8QualificationFixturesV1[0]
+	fixture.Vectors, fixture.Dimensions, fixture.Queries = 256, 8, 8
+	vectors, queries := fixtureData(fixture)
+	fixture.Checksum = fixtureChecksumFromData(vectors, queries)
+	root := t.TempDir()
+	descriptor := testM8QualificationRetainedDescriptorV1(t, filepath.Join(root, "m3"), strings.Repeat("a", 40), fixture, "graph-disjoint-v1", partitionAssignmentGraphV1, 0)
+	parent := m8ProductionReportV1{Dataset: fixture, DatasetDirectory: testM8QualificationDatasetDirectoryV1(t, root, fixture), Variant: &descriptor}
+	for _, group := range []string{"m8-data-group-00", "m8-data-group-01", "m8-data-group-02", "m8-data-group-03"} {
+		parent.Topology.Groups = append(parent.Topology.Groups, nativewire.VectorPartitionM8ProductionGroupEvidenceV1{GroupID: group})
+	}
+	cfg := config{partitions: 16, raftGroups: 4, topK: 10, probes: []int{16}, efSearch: []int{96}, routerCandidates: 256, concurrency: []int{1, 32}, warmup: 4}
+	assets, err := m8OpenServingResourceAssetsV1(parent, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer assets.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), m8ProductionTopologyTestTimeoutV1)
+	defer cancel()
+	topology, err := nativewire.NewVectorPartitionM8ProductionMultiGroupV1(ctx, nativewire.VectorPartitionM8ProductionMultiGroupOptionsV1{Collection: assets.collection, Manifest: assets.manifest, RouterSource: assets.RouterSource(), GroupAssetSetDigests: assets.assetSetDigests, Database: "default", Catalog: "default"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer topology.Close()
+	for _, placement := range assets.manifest.Placements {
+		want := parent.Topology.Groups[int(placement.PartitionID)%len(parent.Topology.Groups)].GroupID
+		if placement.GroupID != want || assets.assetSetDigests[want] == "" {
+			t.Fatalf("retained placement/digest differs from parent topology: %+v", placement)
+		}
+	}
+	truth, err := m8ExactTruthFixtureV1(vectors, queries, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m8WarmProductionTopologyV1(ctx, topology.Coordinator(), assets, queries, cfg); err != nil {
+		t.Fatal(err)
+	}
+	for _, concurrency := range cfg.concurrency {
+		var resources m8ServingResourcesV1
+		row, _, _, err := m8RunProductionCellWithResourcesV1(ctx, topology.Coordinator(), assets, queries, truth, 16, 96, concurrency, 10, 256, 64<<20, &resources)
+		if err != nil || resources.validate() != nil || row.RecallAtK != 1 || row.Samples != len(queries) {
+			t.Fatalf("retained resource cell c%d: row=%+v resources=%+v err=%v", concurrency, row, resources, err)
+		}
+	}
+	if !reflect.DeepEqual(assets.descriptor, &descriptor) || reflect.DeepEqual(assets.manifest.Placements, assets.status.Manifest.Placements) {
+		t.Fatal("descriptor changed or retained local placements were used unchanged")
+	}
+}
 
 func TestM8ServingResourceCountersV1(t *testing.T) {
 	valid := m8ServingResourcesV1{
