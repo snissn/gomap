@@ -313,7 +313,8 @@ func m8ValidateQualificationCampaignWithVerifiersV1(root string, campaign m8Qual
 					return summary, fmt.Errorf("qualification matrix %s has unreadable measurement transcript: %w", cleanPath, err)
 				}
 			}
-			if !m8QualificationCommandWithExecutableV1(resolvedRoot, filepath.Dir(resolvedPath), *report, commandExecutable) || report.ExecutableSHA256 != matrix.ExecutableSHA256 {
+			if !m8QualificationCommandWithExecutableV1(resolvedRoot, filepath.Dir(resolvedPath), *report, commandExecutable) ||
+				!m8QualificationExactFlagV1(report.Command[1:], "-source-checkout", filepath.Join(resolvedRoot, "source")) || report.ExecutableSHA256 != matrix.ExecutableSHA256 {
 				return summary, fmt.Errorf("qualification matrix %s has command/config mismatch", cleanPath)
 			}
 			if executableSHA256 != "" && executableSHA256 != report.ExecutableSHA256 {
@@ -408,7 +409,8 @@ func m8ValidateQualificationCampaignWithVerifiersV1(root string, campaign m8Qual
 				selected = report
 			}
 		}
-		if !m8QualificationMatrixCommandWithExecutableV1(resolvedRoot, filepath.Dir(resolvedPath), matrix, commandExecutable) {
+		if !m8QualificationMatrixCommandWithExecutableV1(resolvedRoot, filepath.Dir(resolvedPath), matrix, commandExecutable) ||
+			!m8QualificationExactFlagV1(matrix.Command[1:], "-source-checkout", filepath.Join(resolvedRoot, "source")) {
 			return summary, fmt.Errorf("qualification matrix %s has command/config mismatch", cleanPath)
 		}
 		if err := m8ValidateQualificationMatrixDerivationV1(matrix); err != nil {
@@ -1027,12 +1029,10 @@ func m8QualificationMatrixCommandWithExecutableV1(root, matrixDirectory string, 
 }
 
 func m8QualificationSourceCheckoutV1(root string, args []string, cfg config) bool {
-	want, err := m8QualificationContainedPathV1(root, filepath.Join(root, "source"), "source checkout")
-	if err != nil {
-		return false
-	}
-	got, err := m8CanonicalPathV1(cfg.sourceCheckout)
-	if err != nil || got != want || !m8QualificationExactFlagV1(args, "-source-checkout", want) {
+	// Retained replay may share sibling inputs across nested completion runs.
+	// The historical campaign enforces ROOT/source at its own boundary above.
+	want, err := m8QualificationContainedPathV1(root, cfg.sourceCheckout, "source checkout")
+	if err != nil || cfg.sourceCheckout != want || !m8QualificationExactFlagV1(args, "-source-checkout", want) {
 		return false
 	}
 	checkout, err := m8SourceCheckoutV1(want, cfg.headSHA)

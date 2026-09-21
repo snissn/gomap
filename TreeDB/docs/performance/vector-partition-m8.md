@@ -769,8 +769,13 @@ its retained descriptor/truth checks.
 For a current-contract retained child report, `replay-m8-report` reuses the
 existing production validators without the historical campaign's fixture
 whitelist. It accepts only the existing M8 report schema, not a new campaign
-format. All artifacts must be under a canonical retained root, with the clean
-source checkout at `ROOT/source`. The retained benchmark must have matching clean
+format. All artifacts must be under a canonical retained root. The explicitly
+pinned `-source-checkout` must name a canonical absolute, clean Git toplevel at
+the recorded head beneath that root; a nested completion checkout may share
+sibling fixture/truth inputs. Root itself, outside paths, symlink aliases,
+noncanonical spellings, and missing or duplicate source flags reject. The
+historical `validate-qualification` campaign still requires `ROOT/source` for
+both child and matrix commands. The retained benchmark must have matching clean
 embedded VCS metadata. The existing command verifier requires child `-out` and
 `-m8-matrix-out` to equal the report directory, plus matching
 `-m8-existing-db`, `-profiles`, `-m8-matrix-profiles`, source and explicit caps.

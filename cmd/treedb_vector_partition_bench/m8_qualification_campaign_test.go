@@ -74,6 +74,57 @@ func TestM8QualificationCampaignBindsThreeHashedRepeatsV1(t *testing.T) {
 	if summary.P2QPSMedian != 200 || summary.P16QPSMedian != 100 || summary.P2P95Min != 87 || summary.P2P95Median != 162 || summary.P2P95Max != 237 || summary.P16P95Min != 101 || summary.P16P95Median != 176 || summary.P16P95Max != 251 {
 		t.Fatalf("summary=%+v", summary)
 	}
+	t.Run("nested_source_is_replay_only", func(t *testing.T) {
+		source := filepath.Join(root, "completion", "source")
+		if output, err := exec.Command("git", "clone", "--quiet", "--no-hardlinks", filepath.Join(root, "source"), source).CombinedOutput(); err != nil {
+			t.Fatalf("clone nested source: %v: %s", err, output)
+		}
+		path := filepath.Join(root, campaign.Runs[0].Path)
+		original, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, child := range []bool{true, false} {
+			t.Run(fmt.Sprintf("child_%t", child), func(t *testing.T) {
+				t.Cleanup(func() {
+					if err := os.WriteFile(path, original, 0o644); err != nil {
+						t.Fatal(err)
+					}
+				})
+				var matrix m8ProductionMatrixV1
+				if err := json.Unmarshal(original, &matrix); err != nil {
+					t.Fatal(err)
+				}
+				verify := func(string, string, string, string) bool { return true }
+				if child {
+					report := &matrix.Variants[0]
+					testM8QualificationReplaceCommandFlagV1(t, report.Command, "-source-checkout", source)
+					if !m8QualificationCommandWithExecutableV1(root, filepath.Dir(path), *report, verify) {
+						t.Fatal("replay rejected nested source with original sibling inputs")
+					}
+				} else {
+					testM8QualificationReplaceCommandFlagV1(t, matrix.Command, "-source-checkout", source)
+					if !m8QualificationMatrixCommandWithExecutableV1(root, filepath.Dir(path), matrix, verify) {
+						t.Fatal("command verifier rejected nested source")
+					}
+				}
+				raw, err := json.Marshal(matrix)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, raw, 0o644); err != nil {
+					t.Fatal(err)
+				}
+				digest := sha256.Sum256(raw)
+				bad := campaign
+				bad.Runs = slices.Clone(campaign.Runs)
+				bad.Runs[0].SHA256 = hex.EncodeToString(digest[:])
+				if _, err := testM8ValidateQualificationCampaignV1(root, bad); err == nil || !strings.Contains(err.Error(), "command/config mismatch") {
+					t.Fatalf("historical campaign accepted nested source or rejected elsewhere: %v", err)
+				}
+			})
+		}
+	})
 	t.Run("publication_completion", func(t *testing.T) {
 		var matrix m8ProductionMatrixV1
 		raw, err := os.ReadFile(filepath.Join(root, campaign.Runs[0].Path))
@@ -1185,6 +1236,49 @@ func TestM8QualificationSourceCheckoutV1(t *testing.T) {
 		root, source, head := newCheckout(t)
 		if !valid(root, source, head) {
 			t.Fatal("rejected clean retained source checkout")
+		}
+	})
+	t.Run("nested_and_path_guards", func(t *testing.T) {
+		root, source, head := newCheckout(t)
+		nested := filepath.Join(root, "completion", "source")
+		if output, err := exec.Command("git", "clone", "--quiet", "--no-hardlinks", source, nested).CombinedOutput(); err != nil {
+			t.Fatalf("clone nested source: %v: %s", err, output)
+		}
+		if !valid(root, nested, head) {
+			t.Fatal("rejected clean nested source checkout")
+		}
+		outsideRoot, outside, outsideHead := newCheckout(t)
+		alias := filepath.Join(root, "source-alias")
+		escape := filepath.Join(root, "source-escape")
+		if err := os.Symlink(nested, alias); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(outside, escape); err != nil {
+			t.Fatal(err)
+		}
+		cwd, err := os.Getwd()
+		if err != nil {
+			t.Fatal(err)
+		}
+		relative, err := filepath.Rel(cwd, nested)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for name, path := range map[string]string{
+			"outside": outside, "symlink_escape": escape, "symlink_alias": alias,
+			"relative": relative, "noncanonical": nested + "/../source", "non_toplevel": filepath.Join(nested, ".git"),
+		} {
+			if valid(root, path, head) {
+				t.Errorf("accepted %s source checkout", name)
+			}
+		}
+		if !valid(outsideRoot, outside, outsideHead) || valid(outside, outside, outsideHead) {
+			t.Fatal("outside fixture invalid or root itself accepted as source checkout")
+		}
+		for _, args := range [][]string{nil, {"-source-checkout", source}, {"-source-checkout", nested, "--source-checkout=" + nested}} {
+			if m8QualificationSourceCheckoutV1(root, args, config{sourceCheckout: nested, headSHA: head}) {
+				t.Errorf("accepted missing, mismatched or duplicate source flag: %v", args)
+			}
 		}
 	})
 	for name, mutate := range map[string]func(*testing.T, string, string){
