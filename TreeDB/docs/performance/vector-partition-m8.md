@@ -863,6 +863,76 @@ truth and warmup. Run the identical benchmark file at base and candidate on
 one admitted Linux host; compare ns/cell, bytes/cell and allocations/cell.
 This guardrail is synthetic2048x128, not real768 scaling qualification.
 
+### Selected-product standalone lifecycle component gate (#4753)
+
+`TestVectorPartitionLiveSelectedLifecycleV1` extends the existing standalone
+live fixture, not the M8 replicated authority or public strict/fast/pinned API.
+It uses the ordinary selected connectivity-preserving Vamana immutable packs,
+the native mutable HNSW live delta, approximate router C256, P1 and EF96.
+The procedural fixture has512 vectors of768 dimensions, two logical domains,
+three physical packs and two local shard groups. Domain0 spans two packs/groups;
+domain1 has one pack. This is deliberately a correctness fixture, **not real
+embeddings, learned partition quality, a scale result or a Raft read proof**.
+The existing fixture read coordinator still supplies test proofs.
+
+Both writes and shard searches cross the existing TCP codecs. Four independent
+read workers execute4,096 queries while one writer performs32 `AckSynced`
+replacements moving a stable ID between domains. A query-only window uses the
+same query count, concurrency, router and EF. The gate requires overlapping
+intervals, at least two searched revisions and a subsequent query after a write
+acknowledgment. Short windows that finish before any durable acknowledgment
+do not pass merely because the writer goroutine started.
+
+Canonical FP32 truth is computed outside the windows for each admitted corpus
+state. Every query joins its actual revision **and** coverage to that truth;
+queries starting after a write acknowledgment cannot use an earlier state.
+Quiescent after-write/cold/reopen/GC phases require the exact current identity.
+The validator rejects missing/duplicate attempts, failures, partial top-K,
+stale IDs/scores, fallback/rebuilds, and incomplete domain-to-pack expansion.
+Each phase independently requires95% recall; the small corpus is not allowed
+to compensate for a broken recovery phase by pooling results.
+
+The same test covers insertion, deletion, replacement/domain movement,
+metadata-only replacement without owner/live-ID/cutover growth, cold source
+reload, checkpoint/close/reopen, active-generation preservation through column
+asset GC, and process exit immediately after a durable native acknowledgment.
+Native `GetMany` verifies recovered embeddings, metadata and inserted/deleted
+IDs separately from ANN results. `AckSynced` is checkpoint-backed; this is not
+an uncheckpointed WAL-only crash. Existing collection tests continue to own
+cutover/pinned-reader and retired-generation reclamation controls. Active
+generation GC is **not** an immutable-base fold or a retired-generation reclaim.
+
+On Linux, retain raw component attempts optionally with:
+
+```sh
+LIFECYCLE_OUT=$(mktemp -d /tmp/gomap_selected_lifecycle_XXXXXX)
+GOWORK=off GOMAP_SELECTED_LIVE_RECEIPTS="$LIFECYCLE_OUT" \
+  go test ./TreeDB/nativewire -run '^TestVectorPartitionLiveSelectedLifecycleV1$' \
+  -count=3 -timeout=10m -v
+GOWORK=off go test -race ./TreeDB/nativewire \
+  -run 'TestVectorPartitionLive(LifecycleReceipt|SelectedLifecycle|Production)' -count=1 -timeout=10m
+```
+
+Each uniquely created receipt contains phase, manifest, queries, actual native
+responses, terminal intervals, revision-bound truth and (for the concurrent
+population) all write intervals/outcomes. The test logs its path/hash before
+query validation; failed attempts are not removed. Preserve the enclosing
+exact source tree, command, environment, output and exit status too. Receipts
+are explicitly `standalone_components_not_qualification`; they are not M8
+reports and cannot be passed to the M8 qualification/replay consumer. A process
+crash or unwritable receipt directory is not promised recoverable evidence.
+Without the environment variable the test does no receipt-file I/O.
+
+The bounded arrays have one slot per declared read/write; truth and serialization
+run outside measurement. Query durations measure individual native coordinator
+calls, write durations measure calls through durable acknowledgment, and the
+combined window includes writer status capture. These are distinct quantities;
+do not invert combined-window throughput to claim query latency. No production
+hot path, storage format, router policy or wire command is added or changed.
+Representative real-data lifecycle, public/Raft live serving, immutable fold,
+retired-generation end-to-end qualification and the final #4772 handoff remain
+separate obligations, not inferred passes from this gate.
+
 Focused verification:
 
 ```sh
