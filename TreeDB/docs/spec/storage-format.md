@@ -3057,6 +3057,14 @@ that directory to reopen through the benchmark's retained-variant path.
   membership list, its SHA-256, and the membership-derived per-pack
   home/overlap/total row and byte summaries. Roughly 5 MB at 100k rows and
   15 MB at 250k rows with the selected 0.2 overlap ratio.
+  Graph-aware home construction additionally carries optional `home_packing`:
+  the fixed policy, canonical parent SHA-256, exact request SHA-256, and
+  SHA-256 of the physical home array in parent ordinal order. The array itself
+  is not duplicated: it is reconstructed from the `Home` memberships.
+  Decode checks its digest, nonempty packs and exact within-domain home-load
+  bound; retained admission also binds the parent and selected adapter to the
+  variant descriptor. M0 revalidates the full parent/request before reuse.
+  Absence is the legacy ordinal-control record, never new solver evidence.
 
 Both are written once with `O_EXCL` and `fsync`, and are never rewritten in
 place; a rebuild uses a fresh directory. The pair is fail-closed on reopen: a

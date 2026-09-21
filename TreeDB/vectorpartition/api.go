@@ -42,6 +42,7 @@ type ShardPlanRequestV1 = internal.ShardPlanRequestV1
 type ShardPlanV1 = internal.ShardPlanV1
 type ShardPackSummaryV1 = internal.ShardPackSummaryV1
 type ShardGenerationDescriptorV1 = internal.ShardGenerationDescriptorV1
+type HomePackingReceiptV1 = internal.HomePackingReceiptV1
 
 const (
 	SchemaVersion                     = internal.SchemaVersion
@@ -62,6 +63,7 @@ const (
 	SelectedSearchableRowsPerPackV1   = internal.SelectedSearchableRowsPerPackV1
 	ShardGenerationDescriptorSchemaV1 = internal.ShardGenerationDescriptorSchemaV1
 	ShardGenerationDescriptorKindV1   = internal.ShardGenerationDescriptorKindV1
+	HomePackingPolicyV1               = internal.HomePackingPolicyV1
 )
 
 func DefaultConfig() Config         { return internal.DefaultConfig() }
@@ -141,6 +143,15 @@ func AccountShardPacksV1(plan ShardPlanV1, memberships []Membership) ([]ShardPac
 }
 func PackDomainMembershipsV1(plan ShardPlanV1, logical OverlapResult) (OverlapResult, error) {
 	return internal.PackDomainMembershipsV1(plan, logical)
+}
+func PackDomainMembershipsWithHomesV1(plan ShardPlanV1, logical OverlapResult, homes []int) (OverlapResult, error) {
+	return internal.PackDomainMembershipsWithHomesV1(plan, logical, homes)
+}
+func RunExternalHomePackingV1(ctx context.Context, command []string, limits ExternalJSONLimits, plan ShardPlanV1, parent Artifact) ([]int, HomePackingReceiptV1, error) {
+	return internal.RunExternalHomePackingV1(ctx, command, limits, plan, parent)
+}
+func ValidateHomePackingV1(plan ShardPlanV1, parent Artifact, homes []int, receipt HomePackingReceiptV1) error {
+	return internal.ValidateHomePackingV1(plan, parent, homes, receipt)
 }
 func NewShardGenerationDescriptorV1(plan ShardPlanV1, cfg OverlapConfig, overlap OverlapResult) (ShardGenerationDescriptorV1, error) {
 	return internal.NewShardGenerationDescriptorV1(plan, cfg, overlap)

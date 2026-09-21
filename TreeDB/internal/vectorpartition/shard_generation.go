@@ -21,13 +21,14 @@ const (
 // realized useful-only membership digest. Pre-alpha: unknown versions fail
 // closed; there is no migration path.
 type ShardGenerationDescriptorV1 struct {
-	SchemaVersion    int                  `json:"schema_version"`
-	ResultKind       string               `json:"result_kind"`
-	Plan             ShardPlanV1          `json:"plan"`
-	OverlapConfig    OverlapConfig        `json:"overlap_config"`
-	Memberships      []Membership         `json:"memberships"`
-	MembershipDigest string               `json:"membership_digest"`
-	PackSummaries    []ShardPackSummaryV1 `json:"pack_summaries"`
+	SchemaVersion    int                   `json:"schema_version"`
+	ResultKind       string                `json:"result_kind"`
+	Plan             ShardPlanV1           `json:"plan"`
+	OverlapConfig    OverlapConfig         `json:"overlap_config"`
+	Memberships      []Membership          `json:"memberships"`
+	MembershipDigest string                `json:"membership_digest"`
+	PackSummaries    []ShardPackSummaryV1  `json:"pack_summaries"`
+	HomePacking      *HomePackingReceiptV1 `json:"home_packing,omitempty"`
 }
 
 func NewShardGenerationDescriptorV1(plan ShardPlanV1, cfg OverlapConfig, overlap OverlapResult) (ShardGenerationDescriptorV1, error) {
@@ -155,7 +156,41 @@ func ValidateShardGenerationDescriptorV1(d ShardGenerationDescriptorV1) error {
 	if d.MembershipDigest != digest {
 		return errors.New("vectorpartition: shard generation membership digest mismatch")
 	}
+	if d.HomePacking != nil {
+		r := d.HomePacking
+		homes := d.homePacksV1()
+		if r.Policy != HomePackingPolicyV1 || !validHomePackingDigestV1(r.ParentSHA256) || !validHomePackingDigestV1(r.RequestSHA256) || r.HomesSHA256 != homePacksDigestV1(homes) {
+			return errors.New("vectorpartition: shard generation home packing receipt mismatch")
+		}
+		domains := make([]int, len(homes))
+		for ordinal, pack := range homes {
+			domains[ordinal] = pack / d.Plan.PacksPerDomain
+		}
+		if err := validateHomePacksV1(d.Plan, domains, homes); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+// HomePacksV1 returns the persisted homes, never rerunning or guessing a
+// packing policy. Callers with the parent artifact additionally rebind its
+// receipt through ValidateHomePackingV1 before reusing these assignments.
+func (d ShardGenerationDescriptorV1) HomePacksV1() ([]int, error) {
+	if err := ValidateShardGenerationDescriptorV1(d); err != nil {
+		return nil, err
+	}
+	return d.homePacksV1(), nil
+}
+
+func (d ShardGenerationDescriptorV1) homePacksV1() []int {
+	homes := make([]int, d.Plan.Vectors)
+	for _, membership := range d.Memberships {
+		if membership.Home {
+			homes[membership.VectorOrdinal] = membership.Partition
+		}
+	}
+	return homes
 }
 
 func MembershipDigestV1(memberships []Membership) (string, error) {

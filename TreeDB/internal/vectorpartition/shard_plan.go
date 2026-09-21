@@ -268,6 +268,20 @@ func (p ShardPlanV1) input() ShardPlanInputV1 {
 // remain unchanged; only the persisted membership destination moves into pack
 // space.
 func PackDomainMembershipsV1(plan ShardPlanV1, logical OverlapResult) (OverlapResult, error) {
+	return packDomainMembershipsV1(plan, logical, nil)
+}
+
+// PackDomainMembershipsWithHomesV1 applies an independently validated physical
+// home map. Replica order and bounded cyclic placement are identical to V1
+// striping; logical unions and all overlap evidence are unchanged.
+func PackDomainMembershipsWithHomesV1(plan ShardPlanV1, logical OverlapResult, homes []int) (OverlapResult, error) {
+	if len(homes) != plan.Vectors || homes == nil {
+		return OverlapResult{}, errors.New("vectorpartition: physical home map is required")
+	}
+	return packDomainMembershipsV1(plan, logical, homes)
+}
+
+func packDomainMembershipsV1(plan ShardPlanV1, logical OverlapResult, physicalHomes []int) (OverlapResult, error) {
 	if plan.Partitions < 1 || plan.LogicalDomains < 1 || plan.PacksPerDomain < 1 ||
 		plan.LogicalDomains > maxPartitions || plan.PacksPerDomain > maxPartitions/plan.LogicalDomains ||
 		plan.Partitions != plan.LogicalDomains*plan.PacksPerDomain || logical.Capacity != plan.DomainOverlapCapacity ||
@@ -291,6 +305,17 @@ func PackDomainMembershipsV1(plan ShardPlanV1, logical OverlapResult) (OverlapRe
 			return OverlapResult{}, fmt.Errorf("vectorpartition: vector %d has %d logical homes", ordinal, count)
 		}
 	}
+	if physicalHomes != nil {
+		// Reuse the completed home-count scratch for logical home labels.
+		for _, membership := range logical.Memberships {
+			if membership.Home {
+				homes[membership.VectorOrdinal] = membership.Partition
+			}
+		}
+		if err := validateHomePacksV1(plan, homes, physicalHomes); err != nil {
+			return OverlapResult{}, err
+		}
+	}
 	out := logical
 	out.Capacity = plan.OverlapCapacity
 	out.Loads = make([]int, plan.Partitions)
@@ -306,6 +331,9 @@ func PackDomainMembershipsV1(plan ShardPlanV1, logical OverlapResult) (OverlapRe
 				continue
 			}
 			membership.Partition = base + homeCount%plan.PacksPerDomain
+			if physicalHomes != nil {
+				membership.Partition = physicalHomes[membership.VectorOrdinal]
+			}
 			if out.Loads[membership.Partition] >= plan.OverlapCapacity {
 				return OverlapResult{}, fmt.Errorf("vectorpartition: domain %d home rows exceed stable physical pack capacity", domain)
 			}

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -335,6 +336,14 @@ func TestM0MaterializeUsefulMembershipReopensDisposableClone(t *testing.T) {
 // must replace the sidecar rather than leave its old membership provenance
 // under the rewritten descriptor.
 func TestM0MaterializeByteBoundedMembershipReopensDisposableClone(t *testing.T) {
+	for _, graphHomes := range []bool{false, true} {
+		t.Run(fmt.Sprintf("graph_homes=%v", graphHomes), func(t *testing.T) {
+			testM0MaterializeByteBoundedMembershipReopensDisposableClone(t, graphHomes)
+		})
+	}
+}
+
+func testM0MaterializeByteBoundedMembershipReopensDisposableClone(t *testing.T, graphHomes bool) {
 	if !collections.VectorPartitionNamespacePersistenceSupportedV1() {
 		t.Skip("vector partition namespace persistence unsupported")
 	}
@@ -350,7 +359,7 @@ func TestM0MaterializeByteBoundedMembershipReopensDisposableClone(t *testing.T) 
 	if err != nil || plan.LogicalDomains != 16 || plan.Partitions != 32 || plan.PacksPerDomain != 2 || plan.DomainHomeCapacity != 7 || plan.DomainOverlapCapacity != 8 || plan.OverlapCapacity != 4 {
 		t.Fatalf("byte-bounded plan=%+v err=%v", plan, err)
 	}
-	sourceDescriptor := testM8QualificationRetainedDescriptorWithShardPlanAndPartitionerV1(t, sourceDB, strings.Repeat("b", 40), fixture, "graph-overlap-020-v1", partitionAssignmentGraphV1, m0OverlapRatioV1, plan, m0BalancedPartitionerV1{})
+	sourceDescriptor := testM8QualificationRetainedDescriptorWithShardPlanAndPartitionerV1(t, sourceDB, strings.Repeat("b", 40), fixture, "graph-overlap-020-v1", partitionAssignmentGraphV1, m0OverlapRatioV1, plan, m0BalancedPartitionerV1{}, graphHomes)
 	vectors := fixtureVectors(fixture)
 	input := make([]vectorpartition.Vector, len(vectors))
 	for i := range vectors {
@@ -430,7 +439,22 @@ func TestM0MaterializeByteBoundedMembershipReopensDisposableClone(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	packedZero, err := m0PackRetainedMembershipV1(plan, artifact, zero)
+	if (retained.HomePacking != nil) != graphHomes {
+		t.Fatal("home packing receipt lost")
+	}
+	original, err := m3ReadShardGenerationDescriptorV1(sourceDB, sourceDescriptor.ShardGenerationDigest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantHomes, err := original.HomePacksV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotHomes, err := retained.HomePacksV1()
+	if err != nil || !reflect.DeepEqual(gotHomes, wantHomes) {
+		t.Fatalf("materialization changed retained homes: %v", err)
+	}
+	packedZero, err := m0PackRetainedMembershipV1(retained, artifact, zero)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -434,6 +434,8 @@ func liveLifecycleRebuildV1(t *testing.T, f vectorPartitionLiveProductionFixture
 	if err != nil {
 		t.Fatal(err)
 	}
+	var homes []int
+	var packing *vectorpartition.HomePackingReceiptV1
 	if real {
 		in := liveLifecycleRetainedInputForV1(t)
 		liveLifecycleReadPinnedV1(t, in.Python, in.PythonSHA256)
@@ -449,6 +451,16 @@ func liveLifecycleRebuildV1(t *testing.T, f vectorPartitionLiveProductionFixture
 		if err != nil {
 			t.Fatal(err)
 		}
+		ctx, cancel = context.WithTimeout(t.Context(), 5*time.Minute)
+		var receipt vectorpartition.HomePackingReceiptV1
+		homes, receipt, err = vectorpartition.RunExternalHomePackingV1(ctx, []string{in.Python, "-c", string(adapter)}, vectorpartition.ExternalJSONLimits{
+			MaxInput: 256 << 20, MaxOutput: 8*len(rows) + 1024,
+		}, plan, artifact)
+		cancel()
+		if err != nil {
+			t.Fatal(err)
+		}
+		packing = &receipt
 	}
 	digest, err := vectorpartition.Digest(artifact)
 	if err != nil {
@@ -459,7 +471,11 @@ func liveLifecycleRebuildV1(t *testing.T, f vectorPartitionLiveProductionFixture
 	if err != nil {
 		t.Fatal(err)
 	}
-	overlap, err = vectorpartition.PackDomainMembershipsV1(plan, overlap)
+	if homes != nil {
+		overlap, err = vectorpartition.PackDomainMembershipsWithHomesV1(plan, overlap, homes)
+	} else {
+		overlap, err = vectorpartition.PackDomainMembershipsV1(plan, overlap)
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -468,12 +484,13 @@ func liveLifecycleRebuildV1(t *testing.T, f vectorPartitionLiveProductionFixture
 		t.Fatal(err)
 	}
 	build := struct {
-		Artifact string
-		Config   vectorpartition.Config
-		Router   vectorpartition.RouterConfigV1
-		Plan     vectorpartition.ShardPlanV1
-		Overlap  vectorpartition.OverlapConfig
-	}{digest, config, routerConfig, plan, overlapConfig}
+		Artifact    string
+		Config      vectorpartition.Config
+		Router      vectorpartition.RouterConfigV1
+		Plan        vectorpartition.ShardPlanV1
+		Overlap     vectorpartition.OverlapConfig
+		HomePacking *vectorpartition.HomePackingReceiptV1
+	}{digest, config, routerConfig, plan, overlapConfig, packing}
 	raw, err := json.Marshal(build)
 	if err != nil {
 		t.Fatal(err)

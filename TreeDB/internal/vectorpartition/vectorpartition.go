@@ -1322,30 +1322,43 @@ func RunExternalJSONForRequestWithLimits(ctx context.Context, command []string, 
 	if err := validateExpectedSource(expected); err != nil {
 		return Artifact{}, err
 	}
-	if ctx == nil {
-		return Artifact{}, errors.New("external backend requires context deadline")
-	}
-	if _, ok := ctx.Deadline(); !ok {
-		return Artifact{}, errors.New("external backend requires context deadline")
-	}
-	if len(command) == 0 || limits.MaxInput < 1 || limits.MaxInput > maxExternalJSONBytes || limits.MaxOutput < 1 || limits.MaxOutput > maxExternalJSONBytes {
-		return Artifact{}, errors.New("invalid external backend command")
-	}
 	if len(input) > limits.MaxInput {
 		return Artifact{}, errors.New("external partition backend input exceeds cap")
 	}
 	if !bytes.Equal(input, canonicalRequest) {
 		return Artifact{}, errors.New("external backend input does not match requested artifact")
 	}
-	dir, err := os.MkdirTemp("", "treedb-vectorpartition-backend-*")
+	raw, err := runExternalJSONBytes(ctx, command, input, limits)
 	if err != nil {
 		return Artifact{}, err
+	}
+	return DecodeArtifactForRequest(raw, limits.MaxOutput, request)
+}
+
+// Shared process/file envelope; each caller validates its own typed request and
+// response. This is offline construction only, never a serving dependency.
+func runExternalJSONBytes(ctx context.Context, command []string, input []byte, limits ExternalJSONLimits) ([]byte, error) {
+	if ctx == nil {
+		return nil, errors.New("external backend requires context deadline")
+	}
+	if _, ok := ctx.Deadline(); !ok {
+		return nil, errors.New("external backend requires context deadline")
+	}
+	if len(command) == 0 || limits.MaxInput < 1 || limits.MaxInput > maxExternalJSONBytes || limits.MaxOutput < 1 || limits.MaxOutput > maxExternalJSONBytes {
+		return nil, errors.New("invalid external backend command")
+	}
+	if len(input) > limits.MaxInput {
+		return nil, errors.New("external partition backend input exceeds cap")
+	}
+	dir, err := os.MkdirTemp("", "treedb-vectorpartition-backend-*")
+	if err != nil {
+		return nil, err
 	}
 	defer os.RemoveAll(dir)
 	in := filepath.Join(dir, "input.json")
 	out := filepath.Join(dir, "output.json")
 	if err = os.WriteFile(in, input, 0600); err != nil {
-		return Artifact{}, err
+		return nil, err
 	}
 	cmd := exec.CommandContext(ctx, command[0], append(command[1:], in, out)...)
 	configureExternalCommand(cmd)
@@ -1357,24 +1370,24 @@ func RunExternalJSONForRequestWithLimits(ctx context.Context, command []string, 
 	// exits normally cannot leave a pipe-holding child behind.
 	cleanupExternalCommand(cmd)
 	if e != nil {
-		return Artifact{}, fmt.Errorf("external partition backend: %w: %s", e, bytes.TrimSpace(stderr.Bytes()))
+		return nil, fmt.Errorf("external partition backend: %w: %s", e, bytes.TrimSpace(stderr.Bytes()))
 	}
 	if stderr.exceeded {
-		return Artifact{}, errors.New("external partition backend stderr exceeds cap")
+		return nil, errors.New("external partition backend stderr exceeds cap")
 	}
 	f, e := os.Open(out)
 	if e != nil {
-		return Artifact{}, e
+		return nil, e
 	}
 	defer f.Close()
 	raw, e := io.ReadAll(io.LimitReader(f, int64(limits.MaxOutput)+1))
 	if e != nil {
-		return Artifact{}, e
+		return nil, e
 	}
 	if len(raw) > limits.MaxOutput {
-		return Artifact{}, errors.New("external partition backend output exceeds cap")
+		return nil, errors.New("external partition backend output exceeds cap")
 	}
-	return DecodeArtifactForRequest(raw, limits.MaxOutput, request)
+	return raw, nil
 }
 
 func validateExpectedSource(s Source) error {
