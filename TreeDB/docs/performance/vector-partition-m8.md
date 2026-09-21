@@ -863,6 +863,131 @@ truth and warmup. Run the identical benchmark file at base and candidate on
 one admitted Linux host; compare ns/cell, bytes/cell and allocations/cell.
 This guardrail is synthetic2048x128, not real768 scaling qualification.
 
+### Fixed cross-report comparisons and ordinary reference (#4753)
+
+These commands complete measurement apparatus, not qualification. Keep the
+historical campaign and failed profiles unchanged. Freeze a small named set
+of questions before collection; do not select winning repetitions or expand a
+Cartesian tuning grid. The already-inspected real768 query slice is
+selection-used, not a fresh holdout. A predecessor experiment still needs its
+own clearly identified product and measurement-only harness construction;
+neither command relabels older assets or compares HNSW-to-Vamana as a
+partitioning gain.
+
+`compare-m8-scaling` joins strictly replayed child reports using a bounded JSON
+plan (up to eight named reports and eight pairs). `replay_args` is the complete
+argument array from `replay-m8-report` above, without that command word. Keep
+fixture/command/coordinate choices prospective and freeze report/file pins at
+publication; independently publish the complete plan hash before reduction.
+
+```json
+{
+  "reports": [{"name": "overlap", "replay_args": ["-root", "/retained/root", "-report", "/retained/root/child/report.json", "...all seven external pins..."]}],
+  "pairs": [{"name": "selected-v-exhaustive", "kind": "selected_exhaustive", "baseline": "overlap", "candidate": "overlap", "baseline_probes": 16, "candidate_probes": 4}]
+}
+```
+
+The example is structural: replace the abbreviated arguments with all seven
+real pins. Invoke with the independently frozen hash, not one copied from an
+untrusted report:
+
+```sh
+./treedb_vector_partition_bench compare-m8-scaling \
+  -plan /retained/comparison-plan.json -plan-sha256 "$COMPARISON_PLAN_SHA256" \
+  > /retained/comparison-result.json
+```
+
+Only three pair kinds are admitted:
+
+- `selected_exhaustive`: two coordinates in the same execution, with all
+  logical domains as baseline and fewer selected domains as candidate.
+- `disjoint_overlap`: disjoint baseline and 20% overlap candidate; explicitly
+  named probe coordinates may differ, all other serving settings must match.
+- `logical_packing`: one pack/domain baseline and multi-pack candidate, with
+  unchanged probes and exact logical-domain membership unions. The reducer
+  reopens the pinned manifests and hashes sorted `(domain, source ordinal)`
+  unions including replicas; physical pack digests cannot prove this equality.
+
+All pairs require the selected Vamana profile, C256/EF96, top 10, at least 95%
+recall, five complete repetitions at c1/c32, and equal fixture/truth, source
+build, observable host/mount and runtime identities. Source graph, partitioner,
+ordinary source-index definition and router configuration must also match.
+Record hostname, isolation/admission and competing jobs externally: equality
+of CPU/memory/kernel/mount fields alone does not uniquely identify a machine.
+Missing or duplicate blocks reject. Failed blocks remain present and fail
+matched quality; ratios are unavailable (zero) for those blocks. Each of the
+ten matched blocks independently tests 1.15x QPS and no p95 regression at the
+configured recall target, including targets above 95%. These
+flags are observations, not automatic acceptance of an overlap or packing
+tradeoff. The output retains every input row/status/ledger and resource/build
+fields; raw attempt arrays stay in the externally pinned original reports.
+Its status is `COMPARISON_REDUCED_NOT_QUALIFICATION`. The original fourfold
+probe-reduction gate, storage/build costs, domain/scale axes and final supported
+envelope are still independent obligations. A retained-open timing is not a
+fresh asset-build cost. Predecessor and ordinary-reference joins are excluded.
+Matching repetition indices does not prove interleaved execution: publish
+actual collection order and host admission separately, and do not present
+sequential cross-report windows as order-balanced causal evidence.
+
+`whole-collection-reference` uses the retained M3 source's existing ordinary
+cosine `column_graph` HNSW index. It does not reinsert documents, build an
+alternative index or install a serving endpoint. Before searching, it strictly
+replays the parent and requires the same executable, retained descriptor,
+observable host/mounts and Go runtime settings. Supply a fresh absolute output
+path and one to three prospectively declared EF values:
+
+```sh
+./treedb_vector_partition_bench whole-collection-reference \
+  -out /retained/ordinary-reference.jsonl -ef-search 96,256,512 \
+  -concurrency 1,32 -repetitions 5 -warmup 64 -- \
+  -root "$RETAINED_ROOT" -report "$RETAINED_REPORT" \
+  -report-sha256 "$REPORT_SHA256" -fixture-sha256 "$FIXTURE_SHA256" \
+  -command-sha256 "$COMMAND_SHA256" -executable-sha256 "$EXECUTABLE_SHA256" \
+  -variant-descriptor-sha256 "$VARIANT_DESCRIPTOR_SHA256" \
+  -truth-artifact-sha256 "$TRUTH_ARTIFACT_SHA256" \
+  -truth-content-sha256 "$TRUTH_CONTENT_SHA256"
+```
+
+The synced JSONL contains one header, every planned cell (alternating order per
+repetition), and a completion footer. Publish its SHA256 with the command,
+process exit status and external `/usr/bin/time -v` CPU/RSS receipt. A missing
+footer/cell or nonzero exit is incomplete; a footer is not quality acceptance.
+Errors, invalid results and setup failures remain in the declared population,
+with zero service-quality credit. Each successful query retains owned IDs,
+ordinals, returned ordinary float64 score bits, caller duration and route/work
+stats. Graph ordinals are not fixture row numbers; canonical global FP32 truth
+document IDs define quality. Ordinary cosine scores
+are **not** claimed to be the partition scorer or an exact FP32 score oracle.
+
+One public searcher/buffer per worker amortizes setup and preserves snapshot
+ownership. Per-call timing excludes copying borrowed results into receipts;
+phase wall includes dispatch and that bounded copy. Setup and warmup are
+separate. Process `TotalAlloc`/`Mallocs` deltas cover the complete timed phase,
+including ID ownership and worker dispatch, but exclude preallocated receipt
+slots, setup and warmup. Peak RSS covers the whole process including replay;
+it is not per-query heap. No per-query goroutine or custom pool is added.
+The limits are at most 4096 queries, five repetitions and six coordinates.
+This unprofiled **in-process ordinary HNSW** reference is contextual: it cannot
+establish a same-transport/same-algorithm causal speedup over profiled native
+TCP partition serving. Select only declared matching-quality coordinates and
+retain all rejected EF/quality outcomes. It is not Raft or final qualification.
+
+```sh
+GOWORK=off go test ./cmd/treedb_vector_partition_bench \
+  -run '^Test(M8Scaling|M8WholeCollection|ReplayM8Report)' -count=1
+GOWORK=off go test -race ./cmd/treedb_vector_partition_bench \
+  -run '^TestM8WholeCollectionReadOnlyPublicPathV1$' -count=1
+GOWORK=off go test ./cmd/treedb_vector_partition_bench -run '^$' \
+  -bench '^BenchmarkM8WholeCollectionReferenceV1$' -benchtime=5x -benchmem -count=3
+```
+
+The persistent test/benchmark requires Linux and uses 128 procedural 16D vectors,
+64 queries. It proves read-only reopen, public-path selection, owned receipts,
+concurrency and retention of a malformed query among successful queries. It
+does not qualify real-data scale. Standard benchmark ns/op/B/op include setup,
+warmup and receipt slots; `measured-B/query` and `measured-allocs/query` use only
+the labelled phase boundary.
+
 ### Selected-product standalone lifecycle component gate (#4753)
 
 `TestVectorPartitionLiveSelectedLifecycleV1` extends the existing standalone

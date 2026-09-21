@@ -20,6 +20,13 @@ type m8ReportReplayPinsV1 struct {
 }
 
 func runReplayM8ReportV1(args []string, stdout io.Writer) error {
+	return replayM8ReportV1(args, stdout, nil)
+}
+
+// A caller may consume the decoded report only after the existing strict replay
+// has accepted every identity, transcript and retained asset. Do not duplicate
+// that trust boundary in comparison tools.
+func replayM8ReportV1(args []string, stdout io.Writer, accepted *m8ProductionReportV1) error {
 	fs := flag.NewFlagSet("treedb_vector_partition_bench replay-m8-report", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	var root, path string
@@ -112,6 +119,9 @@ func runReplayM8ReportV1(args []string, stdout io.Writer) error {
 	}
 	if err := m8QualificationRetainedAttributionV1(root, report, truth, transcript); err != nil {
 		return fmt.Errorf("replay retained attribution: %w", err)
+	}
+	if accepted != nil {
+		*accepted = report
 	}
 	_, err = fmt.Fprintf(stdout, "REPLAY_ACCEPTED_NOT_QUALIFICATION report_sha256=%s rows=%d\n", pins.Report, len(report.Rows))
 	return err
