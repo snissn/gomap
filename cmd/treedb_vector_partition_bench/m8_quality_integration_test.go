@@ -268,6 +268,9 @@ func TestM8QualityWorkPlannerChargesOnceAndRejectsBeforeAllocation(t *testing.T)
 	if old.QualityDiagnosticBytes != 0 || old.MembershipOracleSubsetEvaluations == 0 {
 		t.Fatal("legacy accounting reinterpreted")
 	}
+	if plan.QualityDiagnosticReceiptBytes <= 0 || plan.RouterPolicyDiagnosticReceiptBytes != 0 || plan.MeasurementReceiptBytes != old.MeasurementReceiptBytes+plan.QualityDiagnosticReceiptBytes {
+		t.Fatalf("quality row receipt omitted from file cap: legacy=%+v diagnostic=%+v", old, plan)
+	}
 	if _, err := validateM8BenchmarkWork(cfg, fixture, 1, maxFixtureBytes); err == nil {
 		t.Fatal("work cap ignored")
 	}
@@ -277,6 +280,52 @@ func TestM8QualityWorkPlannerChargesOnceAndRejectsBeforeAllocation(t *testing.T)
 	cfg.m8QualityTraceQueries = 3
 	if _, err := validateM8BenchmarkWork(cfg, fixture, maxBenchmarkWorkUnits, maxFixtureBytes); err == nil {
 		t.Fatal("sample exceeds query population")
+	}
+}
+
+func TestM8QualityDiagnosticRowsCannotPassReceiptPreflightV1(t *testing.T) {
+	cfg, err := parseConfig(append(qualityCLIArgsV1(t), "-m8-quality-diagnostics"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// This population remains below the ordinary complete-attempt receipt cap,
+	// but its repeated quality rows make the actual report/transcript shape too
+	// large. Admission must reject it before collection begins.
+	fixture := fixtureManifest{Vectors: 96, Queries: 25_000, Dimensions: 4}
+	ordinary := cfg
+	ordinary.m8QualityDiagnostics = false
+	if _, err := validateM8BenchmarkWork(ordinary, fixture, math.MaxInt64, math.MaxInt64); err != nil {
+		t.Fatalf("ordinary control unexpectedly rejected: %v", err)
+	}
+	if _, err := validateM8BenchmarkWork(cfg, fixture, math.MaxInt64, math.MaxInt64); err == nil || !strings.Contains(err.Error(), "receipt bound") || !strings.Contains(err.Error(), "quality_diagnostics=") {
+		t.Fatalf("diagnostic rows passed receipt preflight: %v", err)
+	}
+}
+
+func TestM8QualityReceiptRecordBoundsJSONV1(t *testing.T) {
+	const domains = 40
+	values := make([]uint32, domains)
+	costs := make([]int64, 11)
+	for i := range values {
+		values[i] = domains - 1
+	}
+	for i := range costs {
+		costs[i] = math.MaxInt64
+	}
+	mask := uint16(math.MaxUint16)
+	curve := m8CoverageCurveV1{Method: m8CoverageCostMethodV1, TruthCount: 10, MinimumCosts: costs, WorkBound: math.MaxInt64, ScratchBytes: math.MaxInt64}
+	query := m8QualityQueryV1{QuerySHA256: strings.Repeat("a", 64), TruthSHA256: strings.Repeat("b", 64), DomainCost: curve, PackCost: curve,
+		NoCoarseningDomains: values, NoCoarseningMask: mask, NoCoarseningPacks: math.MaxInt64, ExactDomains: values, ExactMask: mask, ExactPacks: math.MaxInt64,
+		ApproximateDomains: values, ApproximateMask: &mask, ApproximatePacks: math.MaxInt64, NoCoarseningToExactLost: mask, NoCoarseningToExactGained: mask,
+		ExactToApproximateLost: &mask, ExactToApproximateGained: &mask, Actual: &m8ObservedTruthMasksV1{Available: mask, Scored: &mask, Retained: &mask, Returned: mask}, CoordinatorReturned: &mask}
+	raw, err := json.Marshal(query)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := config{m8QualityDiagnostics: true, concurrency: []int{1}}
+	bound, err := m8QualityDiagnosticRowBytesV1(cfg, fixtureManifest{Queries: 1}, domains, 1)
+	if err != nil || int64(len(raw)) > bound {
+		t.Fatalf("quality query JSON exceeds receipt estimator: encoded=%d bound=%d err=%v", len(raw), bound, err)
 	}
 }
 

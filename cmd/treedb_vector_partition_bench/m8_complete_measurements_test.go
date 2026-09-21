@@ -286,6 +286,47 @@ func TestM8RepeatedWindowWorkAndReceiptAdmission(t *testing.T) {
 	}
 }
 
+func TestM8CompleteAttemptReceiptBoundsMixedTerminalRowsV1(t *testing.T) {
+	cfg := config{partitions: 4, overlaps: []float64{0}, probes: []int{1}, efSearch: []int{64}, concurrency: []int{1}, topK: 10, m8MeasuredRepetitions: 1, m8MaxExactTruthVisits: math.MaxInt64}
+	fixture := fixtureManifest{Vectors: maxVectors, Queries: 2, Dimensions: 8}
+	plan, err := validateM8BenchmarkWork(cfg, fixture, math.MaxInt64, math.MaxInt64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	maxAttempt := func(class string, returned, hits int) m8MeasuredAttemptV1 {
+		a := m8MeasuredAttemptV1{Class: class, Dispatched: true, WorkObserved: true, PartialResponse: class != "success", TerminalNanos: math.MaxUint64, CoordinatorNanos: math.MaxUint64, ReturnedResults: returned, TruthHits: hits}
+		counters := reflect.ValueOf(&a.Counters).Elem()
+		for i := range counters.NumField() {
+			counters.Field(i).SetUint(math.MaxUint64)
+		}
+		return a
+	}
+	row := m8ProductionRowV1{Status: "measurement_failure", Samples: 2, Probes: 1, EfSearch: 64, Concurrency: 1, Accounting: &m8MeasurementAccountingV1{Contract: m8CompleteAttemptsV1, Attempts: []m8MeasuredAttemptV1{
+		maxAttempt("success", cfg.topK, cfg.topK),
+		maxAttempt("invalid_response", 0, 0),
+	}}}
+	ids := make([]string, cfg.topK)
+	scores := make([]uint32, cfg.topK)
+	for i := range ids {
+		ids[i], scores[i] = fmt.Sprintf("doc-%06d", maxVectors-1-i), math.MaxUint32
+	}
+	outcome := m8ProductionRowOutcomesV1{Status: row.Status, Samples: row.Samples, Probes: row.Probes, EfSearch: row.EfSearch, Concurrency: row.Concurrency,
+		TopKIDs:       [][]string{ids, {}},
+		TopKScoreBits: [][]uint32{scores, {}},
+		TotalNanos:    []uint64{math.MaxUint64, math.MaxUint64},
+	}
+	raw, err := json.Marshal(struct {
+		Rows     []m8ProductionRowV1         `json:"rows"`
+		Outcomes []m8ProductionRowOutcomesV1 `json:"outcomes"`
+	}{[]m8ProductionRowV1{row}, []m8ProductionRowOutcomesV1{outcome}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.QualityDiagnosticReceiptBytes != 0 || plan.RouterPolicyDiagnosticReceiptBytes != 0 || plan.MeasurementReceiptBytes != plan.CompleteAttemptReceiptBytes || int64(len(raw)) > plan.CompleteAttemptReceiptBytes {
+		t.Fatalf("mixed success/failure terminal receipt exceeds admission bound: encoded=%d plan=%+v", len(raw), plan)
+	}
+}
+
 func TestM8RepeatedWindowsCannotEnterHistoricalCampaign(t *testing.T) {
 	fixture := m8QualificationFixturesV1[0]
 	cfg := m8ProductionConfigEvidenceV1{RaftGroups: 4, RaftNodesPerGroup: 3, Partitions: 16, TopK: 10, RecallTarget: .90, RouterScoreBudget: m8QualificationRouterCandidatesV1, LocalScoreBudget: nativewire.DefaultVectorPartitionCoordinatorLimitsV1().MaxLocalScoreCalls, MaxExactTruthVisits: m8QualificationExactTruthCapV1(fixture), Seed: fixture.Seed, Probes: []int{1, 2, 4, 8, 16}, Concurrency: []int{1}, EfSearch: []int{128}, Overlap: []float64{.2}}

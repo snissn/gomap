@@ -12,6 +12,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/snissn/gomap/TreeDB/collections"
 )
 
 func TestM8RouterPolicyExplicitCLISelection(t *testing.T) {
@@ -269,6 +271,20 @@ func TestM8RouterPolicyResourcePlanAndRetainedModel(t *testing.T) {
 	if _, _, err := m8PlanRouterPolicyDiagnosticsV1(cfg, m, []int{4}, maxBenchmarkWorkUnits, bytes-1); err == nil {
 		t.Fatal("byte cap ignored")
 	}
+	routerPlan, err := validateM8BenchmarkWork(cfg, m, math.MaxInt64, math.MaxInt64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	qualityOnly := cfg
+	qualityOnly.m8RouterPolicyDiagnostics = false
+	qualityOnly.m8RouterPolicyWidth = 0
+	qualityPlan, err := validateM8BenchmarkWork(qualityOnly, m, math.MaxInt64, math.MaxInt64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if routerPlan.RouterPolicyDiagnosticReceiptBytes <= 0 || routerPlan.MeasurementReceiptBytes != qualityPlan.MeasurementReceiptBytes+routerPlan.RouterPolicyDiagnosticReceiptBytes {
+		t.Fatalf("router-policy row receipt omitted from file cap: quality=%+v router=%+v", qualityPlan, routerPlan)
+	}
 	cfg.m8ExistingDB = "retained"
 	if _, _, err := m8PlanRouterPolicyDiagnosticsV1(cfg, m, []int{4}, maxBenchmarkWorkUnits, maxFixtureBytes); err == nil {
 		t.Fatal("assumed default model for retained input")
@@ -285,6 +301,69 @@ func TestM8RouterPolicyResourcePlanAndRetainedModel(t *testing.T) {
 	cfg.m8RouterPolicyWidth = 0
 	if w, b, err := m8PlanRouterPolicyDiagnosticsV1(cfg, m, nil, 1, 1); err != nil || w != 0 || b != 0 {
 		t.Fatal("disabled mode allocated/planned work")
+	}
+}
+
+func TestM8RouterPolicyRowsCannotPassReceiptPreflightV1(t *testing.T) {
+	cfg, err := parseConfig(append(qualityCLIArgsV1(t), "-m8-quality-diagnostics", "-m8-router-policy-diagnostics"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture := fixtureManifest{Vectors: 96, Queries: 15_000, Dimensions: 4}
+	qualityOnly := cfg
+	qualityOnly.m8RouterPolicyDiagnostics = false
+	qualityOnly.m8RouterPolicyWidth = 0
+	if _, err := validateM8BenchmarkWork(qualityOnly, fixture, math.MaxInt64, math.MaxInt64); err != nil {
+		t.Fatalf("quality-only control unexpectedly rejected: %v", err)
+	}
+	if _, err := validateM8BenchmarkWork(cfg, fixture, math.MaxInt64, math.MaxInt64); err == nil || !strings.Contains(err.Error(), "receipt bound") || !strings.Contains(err.Error(), "router_policy_diagnostics=") {
+		t.Fatalf("router-policy rows passed receipt preflight: %v", err)
+	}
+}
+
+func TestM8RouterPolicyReceiptRecordBoundsJSONV1(t *testing.T) {
+	const probes = 16
+	route := collections.VectorPartitionRouterPolicyDomainV1{Domain: maxPartitions - 1, Distance: 2, Frequency: collections.MaxVectorPartitionRouterScoreBudgetV3, WinningRepresentative: maxVectors - 1, WinningSourceOrdinal: maxVectors - 1}
+	routes := make([]collections.VectorPartitionRouterPolicyDomainV1, probes)
+	for i := range routes {
+		routes[i] = route
+	}
+	comparison := collections.VectorPartitionRouterPolicyComparisonV1{
+		Method: collections.VectorPartitionRouterPolicyDiagnosticMethodV1, Generation: math.MaxUint64, SourceGeneration: math.MaxUint64,
+		ModelSHA256: strings.Repeat("a", 64), QuerySHA256: strings.Repeat("b", 64), Mode: collections.VectorPartitionRouterModeApproxV1,
+		RepresentativeCount: maxVectors, DomainCount: maxPartitions, ScoreBudget: collections.MaxVectorPartitionRouterScoreBudgetV3,
+		ReturnedWidth: defaultRouterPolicyDiagnosticWidthV1, BeamWidth: defaultRouterPolicyDiagnosticBeamV1, ScoreCalls: collections.MaxVectorPartitionRouterScoreBudgetV3,
+		Probes: probes, CollectionComplete: true, Collected: collections.MaxVectorPartitionRouterScoreBudgetV3, UniqueReturned: defaultRouterPolicyDiagnosticWidthV1,
+		Candidates: collections.MaxVectorPartitionRouterScoreBudgetV3, Edges: math.MaxUint64, CandidateSetSHA256: strings.Repeat("c", 64), CandidateSequenceSHA256: strings.Repeat("d", 64),
+		Distance: routes, Frequency: routes, Hybrid: routes,
+	}
+	outcome := m8RouterPolicyOutcomeV1{Status: m8ProductionCandidateCoverageShortfallV1, Comparison: comparison, Coverage: &m8RouterPolicyCoverageV1{DistanceMask: math.MaxUint16, FrequencyMask: math.MaxUint16, HybridMask: math.MaxUint16, DistancePacks: math.MaxInt64, FrequencyPacks: math.MaxInt64, HybridPacks: math.MaxInt64, HybridLost: math.MaxUint16, HybridGained: math.MaxUint16, FrequencyLost: math.MaxUint16, FrequencyGained: math.MaxUint16}}
+	raw, err := json.Marshal(m8RouterPolicyQueryV1{QuerySHA256: strings.Repeat("e", 64), TruthSHA256: strings.Repeat("f", 64), Exact: outcome, Approximate: outcome})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bound := m8RouterPolicyQueryJSONMaxBytesV1 + 2*3*probes*m8RouterPolicyRouteJSONMaxBytesV1
+	if len(raw) > bound {
+		t.Fatalf("router-policy query JSON exceeds receipt estimator: encoded=%d bound=%d", len(raw), bound)
+	}
+}
+
+func TestM8DiagnosticReceiptKeepsPlanned512QueryMatrixV1(t *testing.T) {
+	cfg, err := parseConfig(append(qualityCLIArgsV1(t), "-m8-quality-diagnostics", "-m8-router-policy-diagnostics"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.partitions = 40
+	cfg.probes = []int{1, 2, 4, 8, 16}
+	cfg.efSearch = []int{64, 128, 256}
+	cfg.concurrency = []int{1}
+	cfg.m8MaxExactTruthVisits = math.MaxInt64
+	plan, err := validateM8BenchmarkWork(cfg, fixtureManifest{Vectors: 250_000, Queries: 512, Dimensions: 768}, math.MaxInt64, math.MaxInt64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.CompleteAttemptReceiptBytes <= 0 || plan.QualityDiagnosticReceiptBytes <= 0 || plan.RouterPolicyDiagnosticReceiptBytes <= 0 || plan.MeasurementReceiptBytes >= m8CompleteMeasurementMaxBytesV1 {
+		t.Fatalf("planned 512-query x 15-cell D40 diagnostic receipt changed: %+v", plan)
 	}
 }
 
