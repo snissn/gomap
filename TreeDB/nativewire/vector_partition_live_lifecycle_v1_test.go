@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"math"
 	"net"
 	"os"
@@ -14,7 +15,6 @@ import (
 	"reflect"
 	"slices"
 	"sort"
-	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -30,6 +30,9 @@ type liveLifecycleIdentityV1 struct{ revision, coverage uint64 }
 type liveLifecycleTruthV1 struct {
 	scores map[string]float32
 	top    map[string]bool
+	// Large fixtures share immutable base vectors and retain only tiny deltas.
+	base, delta map[string][]float32
+	scorer      *collections.CanonicalVectorPartitionCosineScorerV1
 }
 type liveLifecycleAttemptV1 struct {
 	id                int
@@ -70,6 +73,10 @@ func retainLiveLifecycleV1(t *testing.T, phase string, manifest collections.Vect
 		Scores             map[string]float32
 		Top                map[string]bool
 	}
+	type delta struct {
+		Revision, Coverage uint64
+		Vectors            map[string][]float32
+	}
 	receipt := struct {
 		Scope, Phase, Fixture string
 		Manifest              collections.VectorPartitionManifestV1
@@ -77,7 +84,11 @@ func retainLiveLifecycleV1(t *testing.T, phase string, manifest collections.Vect
 		Attempts              []attempt
 		Writes                []write
 		Truth                 []truthCell
+		Deltas                []delta
 	}{Scope: "standalone_components_not_qualification", Phase: phase, Fixture: "procedural_512x768_v1", Manifest: manifest, Queries: queries}
+	if manifest.Collection != "docs" {
+		receipt.Fixture = "retained_real_embeddings_copy"
+	}
 	for _, a := range attempts {
 		outcome := "response_returned"
 		if a.started.IsZero() {
@@ -96,7 +107,20 @@ func retainLiveLifecycleV1(t *testing.T, phase string, manifest collections.Vect
 		}
 		receipt.Writes = append(receipt.Writes, write{w.started, w.finished, w.identity.revision, w.identity.coverage, outcome})
 	}
+	used := make(map[liveLifecycleIdentityV1]bool)
+	for _, a := range attempts {
+		used[liveLifecycleIdentityV1{a.response.LiveRevision, a.response.LiveCoverage}] = true
+	}
+	for _, w := range writes {
+		used[w.identity] = true
+	}
 	for key, cells := range truth {
+		if !used[key] {
+			continue
+		}
+		if len(cells) != 0 {
+			receipt.Deltas = append(receipt.Deltas, delta{key.revision, key.coverage, cells[0].delta})
+		}
 		for q, cell := range cells {
 			receipt.Truth = append(receipt.Truth, truthCell{key.revision, key.coverage, q, cell.scores, cell.top})
 		}
@@ -111,6 +135,22 @@ func retainLiveLifecycleV1(t *testing.T, phase string, manifest collections.Vect
 		}
 		return a.Query < b.Query
 	})
+	sort.Slice(receipt.Deltas, func(i, j int) bool {
+		a, b := receipt.Deltas[i], receipt.Deltas[j]
+		if a.Revision != b.Revision {
+			return a.Revision < b.Revision
+		}
+		return a.Coverage < b.Coverage
+	})
+	retainLiveLifecycleJSONV1(t, phase, receipt)
+}
+
+func retainLiveLifecycleJSONV1(t *testing.T, phase string, receipt any) {
+	t.Helper()
+	dir := os.Getenv("GOMAP_SELECTED_LIVE_RECEIPTS")
+	if dir == "" {
+		return
+	}
 	raw, err := json.Marshal(receipt)
 	if err != nil {
 		t.Fatal(err)
@@ -160,7 +200,7 @@ func liveLifecycleTruthForV1(t *testing.T, vectors map[string][]float32, queries
 
 // Failed/absent attempts never disappear from the denominator. Exact truth is
 // computed outside search windows and joined to BOTH revision and coverage.
-func validateLiveLifecycleAttemptsV1(attempts []liveLifecycleAttemptV1, expected, k int, generation uint64, truth map[liveLifecycleIdentityV1][]liveLifecycleTruthV1) (int, error) {
+func validateLiveLifecycleAttemptsV1(attempts []liveLifecycleAttemptV1, expected, k int, generation uint64, truth map[liveLifecycleIdentityV1][]liveLifecycleTruthV1, routes ...liveLifecycleRouteV1) (int, error) {
 	if len(attempts) != expected || expected < 1 || k < 1 {
 		return 0, errors.New("incomplete attempt population")
 	}
@@ -179,18 +219,25 @@ func validateLiveLifecycleAttemptsV1(attempts []liveLifecycleAttemptV1, expected
 		if !ok || a.query < 0 || a.query >= len(cells) || r.PartitionGeneration != generation {
 			return hits, errors.New("unknown searched revision/coverage/generation")
 		}
-		if len(r.Neighbors) != k || r.Counters.ExactScanPartitions != 0 || r.Counters.RequestPathFullRebuilds != 0 || r.Counters.Failures != 0 ||
-			r.Counters.SelectedDomains != 1 || r.Counters.LiveDomainsSearched != 1 || r.Counters.SelectedPacks < 1 || r.Counters.SelectedPacks > 2 ||
-			r.Counters.SelectedPartitions != r.Counters.SelectedPacks || r.Counters.HNSWServedPartitions != r.Counters.SelectedPacks {
-			return hits, errors.New("incomplete native route or result")
-		}
 		// This fixture deliberately gives domain 0 two packs in two groups and
 		// domain 1 one pack. A vague 1..2 pack count cannot prove full routing.
 		wantPacks := []uint32{0, 1}
+		wantDomains := []uint32{uint32(a.query)}
 		if a.query == 1 {
 			wantPacks = []uint32{2}
 		}
-		if !slices.Equal(r.ProbedDomains, []uint32{uint32(a.query)}) || !slices.Equal(r.ProbedPacks, wantPacks) ||
+		if len(routes) != 0 {
+			if a.query >= len(routes) {
+				return hits, errors.New("missing expected route")
+			}
+			wantDomains, wantPacks = routes[a.query].domains, routes[a.query].packs
+		}
+		if len(r.Neighbors) != k || r.Counters.ExactScanPartitions != 0 || r.Counters.RequestPathFullRebuilds != 0 || r.Counters.Failures != 0 ||
+			r.Counters.SelectedDomains != uint64(len(wantDomains)) || r.Counters.LiveDomainsSearched != uint64(len(wantDomains)) ||
+			r.Counters.SelectedPartitions != r.Counters.SelectedPacks || r.Counters.HNSWServedPartitions != r.Counters.SelectedPacks {
+			return hits, errors.New("incomplete native route or result")
+		}
+		if !slices.Equal(r.ProbedDomains, wantDomains) || !slices.Equal(r.ProbedPacks, wantPacks) ||
 			!slices.Equal(r.ProbedPartitions, wantPacks) || r.Counters.SelectedPacks != uint64(len(wantPacks)) {
 			return hits, errors.New("missing, duplicated, or misassigned pack")
 		}
@@ -198,6 +245,20 @@ func validateLiveLifecycleAttemptsV1(attempts []liveLifecycleAttemptV1, expected
 		ids := make(map[string]bool, k)
 		for i, n := range r.Neighbors {
 			score, present := cell.scores[n.ID]
+			if cell.scorer != nil {
+				vector, changed := cell.delta[n.ID]
+				if !changed {
+					vector = cell.base[n.ID]
+				}
+				present = vector != nil
+				if present {
+					var err error
+					score, err = cell.scorer.ScoreV1(vector)
+					if err != nil {
+						return hits, err
+					}
+				}
+			}
 			if !present || ids[n.ID] || math.Float32bits(score) != math.Float32bits(n.Score) {
 				return hits, errors.New("stale, duplicate, or noncanonical result")
 			}
@@ -297,11 +358,15 @@ func liveLifecycleTCPReaderV1(t *testing.T, fixture vectorPartitionLiveProductio
 }
 
 func liveLifecycleReplaceV1(ctx context.Context, client *Client, vector []float32, marker int, ack AckPolicy) error {
+	return liveLifecycleReplaceIDV1(ctx, client, "docs", "a", vector, marker, ack)
+}
+
+func liveLifecycleReplaceIDV1(ctx context.Context, client *Client, collection, id string, vector []float32, marker int, ack AckPolicy) error {
 	doc, err := json.Marshal(map[string]any{"embedding": vector, "marker": marker})
 	if err != nil {
 		return err
 	}
-	matched, modified, err := client.ReplaceBatch(ctx, "docs", collections.DocumentFormatJSON, [][]byte{[]byte("a")}, [][]byte{doc}, ack)
+	matched, modified, err := client.ReplaceBatch(ctx, collection, collections.DocumentFormatJSON, [][]byte{[]byte(id)}, [][]byte{doc}, ack)
 	if err == nil && (matched != 1 || modified != 1) {
 		return fmt.Errorf("replace matched=%d modified=%d", matched, modified)
 	}
@@ -309,23 +374,23 @@ func liveLifecycleReplaceV1(ctx context.Context, client *Client, vector []float3
 }
 
 func TestVectorPartitionLiveSelectedLifecycleV1(t *testing.T) {
-	const dimensions, rows, topK, workers, perWorker, mutations = 768, 512, 10, 4, 1024, 32
+	const dimensions, rows = 768, 512
 	queries := [][]float32{make([]float32, dimensions), make([]float32, dimensions)}
 	queries[0][0], queries[1][1] = 1, 1
-	if dir := os.Getenv("GOMAP_SELECTED_LIVE_CRASH_DIR"); dir != "" {
-		generation, err := strconv.ParseUint(os.Getenv("GOMAP_SELECTED_LIVE_GENERATION"), 10, 64)
+	if raw := os.Getenv("GOMAP_SELECTED_LIVE_CRASH"); raw != "" {
+		var crash liveLifecycleCrashV1
+		if err := json.Unmarshal([]byte(raw), &crash); err != nil {
+			t.Fatal(err)
+		}
+		db, err := backenddb.Open(backenddb.Options{Dir: crash.Dir, DisableBackgroundPrune: true})
 		if err != nil {
 			t.Fatal(err)
 		}
-		db, err := backenddb.Open(backenddb.Options{Dir: dir, DisableBackgroundPrune: true})
+		col, err := collections.NewCollectionManager(db).OpenCollection(crash.Collection)
 		if err != nil {
 			t.Fatal(err)
 		}
-		col, err := collections.NewCollectionManager(db).OpenCollection("docs")
-		if err != nil {
-			t.Fatal(err)
-		}
-		manifest, err := col.ActiveVectorPartitionManifestForLiveRecoveryWithContextV1(t.Context(), "embedding_graph", generation)
+		manifest, err := col.ActiveVectorPartitionManifestForLiveRecoveryWithContextV1(t.Context(), crash.Index, crash.Generation)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -333,12 +398,17 @@ func TestVectorPartitionLiveSelectedLifecycleV1(t *testing.T) {
 			t.Fatal(err)
 		}
 		client, _ := liveLifecycleNativeClientV1(t, db)
-		if err := liveLifecycleReplaceV1(t.Context(), client, queries[0], 999, AckSynced); err != nil {
+		if err := liveLifecycleReplaceIDV1(t.Context(), client, crash.Collection, crash.ID, crash.Vector, 999, AckSynced); err != nil {
 			t.Fatal(err)
 		}
 		// AckSynced is checkpoint-backed. No additional checkpoint or clean
 		// DB/server close follows its acknowledgment; this is not a WAL-only test.
 		os.Exit(23)
+	}
+	if os.Getenv("GOMAP_SELECTED_LIVE_FIXTURE") != "" {
+		fixture, vectors, queries, probes := liveLifecycleOpenRetainedV1(t)
+		runVectorPartitionLiveLifecycleV1(t, fixture, vectors, queries, probes, "doc-000000", 8)
+		return
 	}
 
 	documents := make([]vectorPartitionLiveDocumentV1, rows)
@@ -362,6 +432,17 @@ func TestVectorPartitionLiveSelectedLifecycleV1(t *testing.T) {
 		vectors[id] = v
 	}
 	fixture := newVectorPartitionLiveNativewireDocumentsV1(t, documents)
+	runVectorPartitionLiveLifecycleV1(t, fixture, vectors, queries, 1, "a", 32)
+}
+
+type liveLifecycleCrashV1 struct {
+	Dir, Collection, Index, ID string
+	Generation                 uint64
+	Vector                     []float32
+}
+
+func runVectorPartitionLiveLifecycleV1(t *testing.T, fixture vectorPartitionLiveProductionFixtureV1, vectors map[string][]float32, queries [][]float32, probes int, changedID string, mutations int) {
+	const topK, workers, perWorker = 10, 4, 1024
 	t.Cleanup(func() {
 		if fixture.database != nil {
 			_ = fixture.database.Close()
@@ -372,14 +453,40 @@ func TestVectorPartitionLiveSelectedLifecycleV1(t *testing.T) {
 			t.Fatalf("wrong selected base graph: %s", asset.GraphVariant)
 		}
 	}
+	routes := liveLifecycleRoutesV1(t, fixture, queries, probes)
+	moves := [2][]float32{queries[0], nil}
+	for q := 1; q < len(queries); q++ {
+		if routes[q].domains[0] != routes[0].domains[0] {
+			moves[1] = queries[q]
+			break
+		}
+	}
+	if moves[1] == nil {
+		t.Fatal("fixture has no cross-domain mutation vectors")
+	}
+	// Pick by canonical truth, not observed ANN success. Require that this
+	// relevant deletion is actually visible in the baseline search below.
+	baseline := liveLifecycleUnchangedTruthV1(t, vectors, queries[:1], nil, topK)
+	ids := slices.Sorted(maps.Keys(baseline[0].top))
+	deletedID := ids[0]
+	if deletedID == changedID {
+		deletedID = ids[1]
+	}
+	unchanged := liveLifecycleUnchangedTruthV1(t, maps.Clone(vectors), queries, []string{changedID, deletedID, "live"}, topK)
+	truthFor := func() []liveLifecycleTruthV1 {
+		return liveLifecycleDeltaTruthV1(t, unchanged, map[string][]float32{changedID: vectors[changedID], deletedID: vectors[deletedID], "live": vectors["live"]})
+	}
+	if fixture.manifest.Collection != "docs" {
+		liveLifecycleValidateRetainedTruthV1(t, truthFor())
+	}
 	client, closeClient := liveLifecycleNativeClientV1(t, fixture.database)
 	coordinator, closeReader := liveLifecycleTCPReaderV1(t, fixture)
 	request := VectorPartitionCoordinatorRequestV1{
-		Version: VectorPartitionCoordinatorVersionV1, Database: "default", Catalog: "default", Collection: "docs", IndexName: fixture.definition.Name,
+		Version: VectorPartitionCoordinatorVersionV1, Database: "default", Catalog: "default", Collection: fixture.manifest.Collection, IndexName: fixture.definition.Name,
 		IndexDefinitionDigest: collections.VectorIndexDefinitionDigestV1(fixture.definition), Metric: VectorPartitionShardSearchMetricCosineV1,
-		RouterMode: collections.VectorPartitionRouterModeApproxV1, RouterScoreBudget: 256, PartitionProbes: 1,
+		RouterMode: collections.VectorPartitionRouterModeApproxV1, RouterScoreBudget: 256, PartitionProbes: probes,
 		Consistency: VectorPartitionShardSearchConsistencySnapshotV1, StatsMode: VectorPartitionShardSearchStatsBasicV1,
-		TopK: topK, EfSearch: 96, RequestBytesLimit: 1 << 20, CandidateBytesLimit: 8 << 20, ResponseBytesLimit: 1 << 20, MergeEntriesLimit: 3 * topK,
+		TopK: topK, EfSearch: 96, RequestBytesLimit: 1 << 20, CandidateBytesLimit: 8 << 20, ResponseBytesLimit: 1 << 20, MergeEntriesLimit: int(fixture.manifest.PartitionCount) * topK,
 	}
 	search := func(id, query int) liveLifecycleAttemptV1 {
 		r := request
@@ -389,6 +496,13 @@ func TestVectorPartitionLiveSelectedLifecycleV1(t *testing.T) {
 		a.response, a.err = coordinator.Search(t.Context(), r)
 		a.finished = time.Now()
 		return a
+	}
+	searchAll := func() []liveLifecycleAttemptV1 {
+		attempts := make([]liveLifecycleAttemptV1, len(queries))
+		for q := range queries {
+			attempts[q] = search(q, q)
+		}
+		return attempts
 	}
 	truth := make(map[liveLifecycleIdentityV1][]liveLifecycleTruthV1)
 	var current liveLifecycleIdentityV1
@@ -413,7 +527,7 @@ func TestVectorPartitionLiveSelectedLifecycleV1(t *testing.T) {
 				t.Fatalf("%s write %d: %+v", phase, i, w)
 			}
 		}
-		hits, err := validateLiveLifecycleAttemptsV1(attempts, len(attempts), topK, fixture.manifest.Generation, truth)
+		hits, err := validateLiveLifecycleAttemptsV1(attempts, len(attempts), topK, fixture.manifest.Generation, truth, routes...)
 		var elapsed time.Duration
 		for _, a := range attempts {
 			elapsed += a.finished.Sub(a.started)
@@ -428,33 +542,37 @@ func TestVectorPartitionLiveSelectedLifecycleV1(t *testing.T) {
 	}
 	// The first search installs the normal standalone binding; never create a
 	// benchmark-only delta or substitute a direct local-search result.
-	initial := []liveLifecycleAttemptV1{search(0, 0), search(1, 1)}
-	remember(liveLifecycleTruthForV1(t, vectors, queries, topK))
+	initial := searchAll()
+	remember(truthFor())
 	check("initial", initial)
+	if !slices.ContainsFunc(initial[0].response.Neighbors, func(n VectorPartitionCoordinatorNeighborV1) bool { return n.ID == deletedID }) {
+		t.Fatal("declared deletion is not observable in baseline ANN results")
+	}
 
-	insert, _ := json.Marshal(map[string]any{"embedding": queries[0]})
-	if _, err := client.InsertBatch(t.Context(), "docs", collections.DocumentFormatJSON, [][]byte{[]byte("live")}, [][]byte{insert}, AckSynced); err != nil {
+	insert, _ := json.Marshal(map[string]any{"embedding": moves[0]})
+	if _, err := client.InsertBatch(t.Context(), fixture.manifest.Collection, collections.DocumentFormatJSON, [][]byte{[]byte("live")}, [][]byte{insert}, AckSynced); err != nil {
 		t.Fatal(err)
 	}
-	vectors["live"] = queries[0]
-	if deleted, err := client.DeleteBatch(t.Context(), "docs", [][]byte{[]byte("doc-0001")}, AckSynced); err != nil || deleted != 1 {
+	vectors["live"] = moves[0]
+	if deleted, err := client.DeleteBatch(t.Context(), fixture.manifest.Collection, [][]byte{[]byte(deletedID)}, AckSynced); err != nil || deleted != 1 {
 		t.Fatalf("delete=%d err=%v", deleted, err)
 	}
-	delete(vectors, "doc-0001")
-	if err := liveLifecycleReplaceV1(t.Context(), client, queries[1], 1, AckSynced); err != nil {
+	delete(vectors, deletedID)
+	if err := liveLifecycleReplaceIDV1(t.Context(), client, fixture.manifest.Collection, changedID, moves[1], 1, AckSynced); err != nil {
 		t.Fatal(err)
 	}
-	vectors["a"] = queries[1]
-	beforeMeta := remember(liveLifecycleTruthForV1(t, vectors, queries, topK))
-	check("insert-delete-move", []liveLifecycleAttemptV1{search(0, 0), search(1, 1)})
-	if err := liveLifecycleReplaceV1(t.Context(), client, queries[1], 2, AckSynced); err != nil {
+	vectors[changedID] = moves[1]
+	liveLifecycleCheckOwnersV1(t, fixture, changedID, deletedID, moves[0])
+	beforeMeta := remember(truthFor())
+	check("insert-delete-move", searchAll())
+	if err := liveLifecycleReplaceIDV1(t.Context(), client, fixture.manifest.Collection, changedID, moves[1], 2, AckSynced); err != nil {
 		t.Fatal(err)
 	}
-	afterMeta := remember(liveLifecycleTruthForV1(t, vectors, queries, topK))
+	afterMeta := remember(truthFor())
 	if beforeMeta.MutatedIDs != afterMeta.MutatedIDs || beforeMeta.LiveIDs != afterMeta.LiveIDs || beforeMeta.Cutovers != afterMeta.Cutovers {
 		t.Fatalf("metadata grew live state: before=%+v after=%+v", beforeMeta, afterMeta)
 	}
-	docs, present, err := client.GetMany(t.Context(), "docs", [][]byte{[]byte("a"), []byte("doc-0001"), []byte("live")})
+	docs, present, err := client.GetMany(t.Context(), fixture.manifest.Collection, [][]byte{[]byte(changedID), []byte(deletedID), []byte("live")})
 	if err != nil || !reflect.DeepEqual(present, []bool{true, false, true}) {
 		t.Fatalf("document visibility=%v err=%v", present, err)
 	}
@@ -464,15 +582,15 @@ func TestVectorPartitionLiveSelectedLifecycleV1(t *testing.T) {
 	if err := json.Unmarshal(docs[0], &metadata); err != nil || metadata.Marker != 2 {
 		t.Fatalf("metadata=%+v err=%v", metadata, err)
 	}
-	check("metadata-only", []liveLifecycleAttemptV1{search(0, 0), search(1, 1)})
+	check("metadata-only", searchAll())
 
 	// Precompute two independently scored corpus states; only one writer may
 	// publish them. Status capture is untimed writer bookkeeping, not a search
 	// pin held across writes and not an inferred revision increment.
 	states := make([][]liveLifecycleTruthV1, 2)
 	for state := range states {
-		vectors["a"] = queries[state]
-		states[state] = liveLifecycleTruthForV1(t, vectors, queries, topK)
+		vectors[changedID] = moves[state]
+		states[state] = truthFor()
 	}
 	startReaders := func(attempts []liveLifecycleAttemptV1, start <-chan struct{}, wg *sync.WaitGroup) {
 		for worker := range workers {
@@ -482,7 +600,7 @@ func TestVectorPartitionLiveSelectedLifecycleV1(t *testing.T) {
 				<-start
 				for i := range perWorker {
 					id := worker*perWorker + i
-					attempts[id] = search(id, i%2)
+					attempts[id] = search(id, i%len(queries))
 				}
 			}()
 		}
@@ -506,7 +624,7 @@ func TestVectorPartitionLiveSelectedLifecycleV1(t *testing.T) {
 		<-start
 		for i := range writes {
 			w := liveLifecycleWriteV1{started: time.Now()}
-			w.err = liveLifecycleReplaceV1(t.Context(), client, queries[i%2], i+3, AckSynced)
+			w.err = liveLifecycleReplaceIDV1(t.Context(), client, fixture.manifest.Collection, changedID, moves[i%2], i+3, AckSynced)
 			w.finished = time.Now()
 			if w.err == nil {
 				var s collections.VectorIndexPartitionLiveStatusV1
@@ -550,12 +668,12 @@ func TestVectorPartitionLiveSelectedLifecycleV1(t *testing.T) {
 	if overlaps == 0 || len(revisions) < 2 || !progressed {
 		t.Fatalf("no concurrent progress: overlapping_queries=%d revisions=%d progressed=%v", overlaps, len(revisions), progressed)
 	}
-	t.Logf("scope=standalone-components fixture=procedural rows=%d dims=%d domains=2 packs=3 reads=%d writes=%d overlapping_queries=%d revisions=%d window_ns=%d sum_write_ns=%d", rows, dimensions, len(attempts), len(writes), overlaps, len(revisions), window, writeNanos)
+	t.Logf("scope=standalone-components rows=%d dims=%d domains=%d packs=%d reads=%d writes=%d overlapping_queries=%d revisions=%d window_ns=%d sum_write_ns=%d", fixture.manifest.SourceRowCount, fixture.definition.Dimensions, fixture.manifest.DomainCount, fixture.manifest.PartitionCount, len(attempts), len(writes), overlaps, len(revisions), window, writeNanos)
 	current = writes[len(writes)-1].identity
-	check("after-write", []liveLifecycleAttemptV1{search(0, 0), search(1, 1)})
+	check("after-write", searchAll())
 	closeReader()
 	coordinator, closeReader = liveLifecycleTCPReaderV1(t, fixture)
-	check("cold-source", []liveLifecycleAttemptV1{search(0, 0), search(1, 1)})
+	check("cold-source", searchAll())
 	if err := client.CheckpointWithAck(t.Context(), AckSynced); err != nil {
 		t.Fatal(err)
 	}
@@ -571,19 +689,19 @@ func TestVectorPartitionLiveSelectedLifecycleV1(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		fixture.collection, err = collections.NewCollectionManager(fixture.database).OpenCollection("docs")
+		fixture.collection, err = collections.NewCollectionManager(fixture.database).OpenCollection(fixture.manifest.Collection)
 		if err != nil {
 			t.Fatal(err)
 		}
 		coordinator, closeReader = liveLifecycleTCPReaderV1(t, fixture)
 	}
 	reopen()
-	check("checkpoint-reopen", []liveLifecycleAttemptV1{search(0, 0), search(1, 1)})
+	check("checkpoint-reopen", searchAll())
 	checkDocuments := func(marker int, vector []float32) {
 		t.Helper()
 		reader, closeNative := liveLifecycleNativeClientV1(t, fixture.database)
 		defer closeNative()
-		docs, present, err := reader.GetMany(t.Context(), "docs", [][]byte{[]byte("a"), []byte("doc-0001"), []byte("live")})
+		docs, present, err := reader.GetMany(t.Context(), fixture.manifest.Collection, [][]byte{[]byte(changedID), []byte(deletedID), []byte("live")})
 		if err != nil || !reflect.DeepEqual(present, []bool{true, false, true}) {
 			t.Fatalf("recovered document visibility=%v err=%v", present, err)
 		}
@@ -597,18 +715,18 @@ func TestVectorPartitionLiveSelectedLifecycleV1(t *testing.T) {
 		if err := json.Unmarshal(docs[0], &a); err != nil || a.Marker != marker || !slices.Equal(a.Embedding, vector) {
 			t.Fatalf("recovered a marker=%d want=%d err=%v", a.Marker, marker, err)
 		}
-		if err := json.Unmarshal(docs[2], &live); err != nil || !slices.Equal(live.Embedding, queries[0]) {
+		if err := json.Unmarshal(docs[2], &live); err != nil || !slices.Equal(live.Embedding, moves[0]) {
 			t.Fatalf("recovered live embedding: %v", err)
 		}
 	}
-	checkDocuments(mutations+2, queries[(mutations-1)%2])
+	checkDocuments(mutations+2, moves[(mutations-1)%2])
 	closeReader()
 	if _, err := fixture.collection.ColumnAssetGC(t.Context(), collections.ColumnAssetGCOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	coordinator, closeReader = liveLifecycleTCPReaderV1(t, fixture)
-	check("active-generation-after-gc", []liveLifecycleAttemptV1{search(0, 0), search(1, 1)})
-	checkDocuments(mutations+2, queries[(mutations-1)%2])
+	check("active-generation-after-gc", searchAll())
+	checkDocuments(mutations+2, moves[(mutations-1)%2])
 	closeReader()
 	if err := fixture.database.Close(); err != nil {
 		t.Fatal(err)
@@ -617,18 +735,87 @@ func TestVectorPartitionLiveSelectedLifecycleV1(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 60*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestVectorPartitionLiveSelectedLifecycleV1$")
-	cmd.Env = append(os.Environ(), "GOMAP_SELECTED_LIVE_CRASH_DIR="+fixture.dir, "GOMAP_SELECTED_LIVE_GENERATION="+strconv.FormatUint(fixture.manifest.Generation, 10))
+	crash, err := json.Marshal(liveLifecycleCrashV1{Dir: fixture.dir, Collection: fixture.manifest.Collection, Index: fixture.definition.Name, ID: changedID, Generation: fixture.manifest.Generation, Vector: moves[0]})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd.Env = append(os.Environ(), "GOMAP_SELECTED_LIVE_CRASH="+string(crash))
 	output, err := cmd.CombinedOutput()
 	var exit *exec.ExitError
 	if !errors.As(err, &exit) || exit.ExitCode() != 23 {
 		t.Fatalf("durable-ack crash helper: %v\n%s", err, output)
 	}
 	reopen()
-	recovered := []liveLifecycleAttemptV1{search(0, 0), search(1, 1)}
-	vectors["a"] = queries[0]
-	remember(liveLifecycleTruthForV1(t, vectors, queries, topK))
+	recovered := searchAll()
+	vectors[changedID] = moves[0]
+	remember(truthFor())
 	check("durable-ack-crash-reopen", recovered)
-	checkDocuments(999, queries[0])
+	checkDocuments(999, moves[0])
+	closeReader()
+	old := fixture.manifest
+	retiredPin, err := fixture.collection.AcquireVectorPartitionReaderPinV1(old.IndexName, old.Generation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer retiredPin.Release()
+	oldPaths := liveLifecycleAssetPathsV1(t, fixture.database.ColumnAssetRootDir(), old)
+	fixture.manifest = liveLifecycleRebuildV1(t, fixture, vectors)
+	if err := fixture.collection.EnsureVectorPartitionLiveBindingV1(t.Context(), fixture.manifest); err != nil {
+		t.Fatal(err)
+	}
+	if pin, err := fixture.collection.AcquireVectorPartitionLiveSearchPinV1(old); err == nil {
+		pin.Release()
+		t.Fatal("old generation retained live authority")
+	}
+	status, err := liveLifecycleStatusV1(fixture.collection, fixture.manifest)
+	if err != nil || status.MutatedIDs != 0 || status.LiveIDs != 0 {
+		t.Fatalf("replacement did not absorb overlay: %+v err=%v", status, err)
+	}
+	liveLifecyclePlacementV1(t, &fixture)
+	routes = liveLifecycleRoutesV1(t, fixture, queries, probes)
+	request.MergeEntriesLimit = int(fixture.manifest.PartitionCount) * topK
+	// Revisions are generation-relative; never join the new base to old truth.
+	truth = make(map[liveLifecycleIdentityV1][]liveLifecycleTruthV1)
+	remember(truthFor())
+	coordinator, closeReader = liveLifecycleTCPReaderV1(t, fixture)
+	check("administrative-generation-replacement", searchAll())
+	checkDocuments(999, moves[0])
+	closeReader()
+	if err := fixture.collection.DeleteVectorPartitionGenerationV1(old.IndexName, old.Generation, collections.VectorPartitionCleanupEligibilityV1{}); err == nil {
+		t.Fatal("retired reader pin did not fence deletion")
+	}
+	retiredPin.Release()
+	// All test-owned readers, catalog/topology owners and build resources have
+	// been released. This is a standalone maintenance window, not online fold.
+	if err := fixture.collection.DeleteVectorPartitionGenerationV1(old.IndexName, old.Generation, collections.VectorPartitionCleanupEligibilityV1{}); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		stats, err := fixture.collection.ReclaimVectorPartitionGenerationV1(t.Context(), old.IndexName, old.Generation)
+		if err != nil {
+			t.Fatal(err)
+		}
+		retainLiveLifecycleJSONV1(t, "reclaim", stats)
+	}
+	for _, path := range oldPaths {
+		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("old asset still present: %s err=%v", path, err)
+		}
+	}
+	if err := fixture.database.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.database.Close(); err != nil {
+		t.Fatal(err)
+	}
+	fixture.database = nil
+	reopen()
+	check("new-generation-after-reclaim-reopen", searchAll())
+	checkDocuments(999, moves[0])
+	closeReader()
+	if _, err := fixture.collection.ReclaimVectorPartitionGenerationV1(t.Context(), old.IndexName, old.Generation); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestVectorPartitionLiveLifecycleReceiptRejectsV1(t *testing.T) {
@@ -688,5 +875,21 @@ func TestVectorPartitionLiveLifecycleReceiptRejectsV1(t *testing.T) {
 	w.finished = base.started.Add(time.Nanosecond)
 	if err := validateLiveLifecycleFreshnessV1([]liveLifecycleAttemptV1{base}, key, []liveLifecycleWriteV1{w}); err != nil {
 		t.Fatalf("rejected legitimate in-flight old pin: %v", err)
+	}
+	// Exercise the bounded real-fixture scorer path, not only legacy scores.
+	vectors := map[string][]float32{"a": {1, 0}, "deleted": {1, 0}, "other": {0, 1}}
+	unchanged := liveLifecycleUnchangedTruthV1(t, vectors, [][]float32{{1, 0}}, []string{"a", "deleted"}, 1)
+	truth[key] = liveLifecycleDeltaTruthV1(t, unchanged, map[string][]float32{"a": {1, 1}, "deleted": nil})
+	a := base
+	a.response.Neighbors = []VectorPartitionCoordinatorNeighborV1{{ID: "a", Score: truth[key][0].scores["a"]}}
+	route := liveLifecycleRouteV1{domains: []uint32{0}, packs: []uint32{0, 1}}
+	if hits, err := validateLiveLifecycleAttemptsV1([]liveLifecycleAttemptV1{a}, 1, 1, 3, truth, route); err != nil || hits != 1 {
+		t.Fatalf("bounded current truth hits=%d err=%v", hits, err)
+	}
+	for _, stale := range []VectorPartitionCoordinatorNeighborV1{{ID: "a", Score: 1}, {ID: "deleted", Score: 1}} {
+		a.response.Neighbors = []VectorPartitionCoordinatorNeighborV1{stale}
+		if _, err := validateLiveLifecycleAttemptsV1([]liveLifecycleAttemptV1{a}, 1, 1, 3, truth, route); err == nil {
+			t.Fatalf("accepted stale bounded truth: %+v", stale)
+		}
 	}
 }

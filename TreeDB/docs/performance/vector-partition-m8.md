@@ -1009,7 +1009,15 @@ acknowledgment. Short windows that finish before any durable acknowledgment
 do not pass merely because the writer goroutine started.
 
 Canonical FP32 truth is computed outside the windows for each admitted corpus
-state. Every query joins its actual revision **and** coverage to that truth;
+state. The immutable source is shared; each query retains the unchanged top-K
+and scores every touched ID for each revision. This is exact for this declared
+mutation schedule, including deletion, without storing a full corpus-sized
+score map per query/revision. Returned scores are recomputed from the current
+vector (or rejected for a tombstone). The deleted ID is chosen deterministically
+from the first query's canonical top-K and must occur in its initial ANN result.
+An independent live-domain scan verifies that the two mutation vectors have
+different actual owners; approximate routing winners alone are insufficient.
+Every query joins its actual revision **and** coverage to that truth;
 queries starting after a write acknowledgment cannot use an earlier state.
 Quiescent after-write/cold/reopen/GC phases require the exact current identity.
 The validator rejects missing/duplicate attempts, failures, partial top-K,
@@ -1023,9 +1031,15 @@ reload, checkpoint/close/reopen, active-generation preservation through column
 asset GC, and process exit immediately after a durable native acknowledgment.
 Native `GetMany` verifies recovered embeddings, metadata and inserted/deleted
 IDs separately from ANN results. `AckSynced` is checkpoint-backed; this is not
-an uncheckpointed WAL-only crash. Existing collection tests continue to own
-cutover/pinned-reader and retired-generation reclamation controls. Active
-generation GC is **not** an immutable-base fold or a retired-generation reclaim.
+an uncheckpointed WAL-only crash. After recovery, a separate maintenance window
+rebuilds the current source and a new immutable partition/router generation,
+rebinds it and verifies the overlay is empty. Artifact stable IDs are explicitly
+resolved to current source ordinals. A retained old-generation reader pin must
+prevent deletion; releasing it permits deletion and repeated reclamation. The
+test checks physical old-asset removal and searches after reopening the new
+generation. Active-generation GC is not substituted for this sequence.
+Writers and coordinator sources are quiesced during replacement; this does
+**not** establish automatic online folding or online coordinator-pin fencing.
 
 On Linux, retain raw component attempts optionally with:
 
@@ -1040,7 +1054,10 @@ GOWORK=off go test -race ./TreeDB/nativewire \
 
 Each uniquely created receipt contains phase, manifest, queries, actual native
 responses, terminal intervals, revision-bound truth and (for the concurrent
-population) all write intervals/outcomes. The test logs its path/hash before
+population) all write intervals/outcomes. Only identities used by that phase
+are serialized, with each revision's delta vectors recorded once. Separate
+receipts retain actual live owners, the administrative build and reclamation.
+The test logs its path/hash before
 query validation; failed attempts are not removed. Preserve the enclosing
 exact source tree, command, environment, output and exit status too. Receipts
 are explicitly `standalone_components_not_qualification`; they are not M8
@@ -1054,9 +1071,63 @@ calls, write durations measure calls through durable acknowledgment, and the
 combined window includes writer status capture. These are distinct quantities;
 do not invert combined-window throughput to claim query latency. No production
 hot path, storage format, router policy or wire command is added or changed.
-Representative real-data lifecycle, public/Raft live serving, immutable fold,
-retired-generation end-to-end qualification and the final #4772 handoff remain
-separate obligations, not inferred passes from this gate.
+Public/Raft live serving, automatic online folding and the final #4772 handoff
+remain separate obligations, not inferred passes from this gate.
+
+#### Opt-in retained real-data lifecycle
+
+The same driver accepts `GOMAP_SELECTED_LIVE_FIXTURE=/absolute/input.json`.
+Use only a separately copied and path-rebound **real100k-d16-overlap-multi**
+asset; never point it at a frozen serving DB. Its final path component must be
+`mutable-lifecycle-copy`. Preserve original/copy hashes and the restore receipt
+before launch. The input object supplies:
+
+```json
+{
+  "DB": "/absolute/mutable-lifecycle-copy",
+  "Queries": "/absolute/real100k/fixture/queries.f32",
+  "Truth": "/absolute/real100k/truth/canonical-truth.json",
+  "ManifestSHA256": "SHA256 of json.Marshal of the prepared manifest",
+  "Collection": "m3_partition_source",
+  "Index": "the retained index name",
+  "Generation": 1,
+  "Probes": 5,
+  "Python": "/absolute/pinned/python3.10",
+  "PythonSHA256": "64 lowercase hex digits",
+  "Adapter": "/absolute/scripts/treedb_kahip_partition.py",
+  "AdapterSHA256": "64 lowercase hex digits"
+}
+```
+
+`Probes` above is illustrative: freeze the selected serving prefix before this
+lifecycle run, never choose it from lifecycle timing. Supply the retained
+generation/index and actual SHA256 values, and retain this configuration's hash.
+The constructor checks command-WAL eligibility, manifest/source identity,
+100K/768D/D16 shape, the selected20% overlap and multi-pack geometry, and pinned
+512-query and canonical-truth files. Baseline truth must match exactly before
+mutation. Real runs require `GOMAP_SELECTED_LIVE_RECEIPTS`; pin the Python
+environment (including KaHIP) and enclosing command/source tree externally.
+
+Every quiescent phase uses all512 queries; each read worker traverses them twice
+in each4,096-query window, with8 concurrent replacements. The administrative
+build reuses the selected affinity builder, pinned external KaHIP adapter,
+byte planner, useful-only overlap, Vamana materializer and existing router
+configuration. It preserves physical pack placement. The tiny default fixture
+uses the reference partitioner solely for bounded CI correctness; it is not a
+substitute for the real run. Neither mode changes production paths or wire APIs.
+
+After the apparatus is reviewed/landed, resource-admit the Linux run (separate
+from timed serving), retain raw failures and use an appropriate bounded timeout:
+
+```sh
+GOWORK=off GOMAP_SELECTED_LIVE_FIXTURE=/absolute/input.json \
+  GOMAP_SELECTED_LIVE_RECEIPTS=/absolute/receipts \
+  go test ./TreeDB/nativewire -run '^TestVectorPartitionLiveSelectedLifecycleV1$' \
+  -count=1 -timeout=60m -v
+```
+
+This opt-in path supplies measurement apparatus, not an already-earned real-data
+lifecycle pass. Retained results and the supported envelope belong to #4753.
 
 Focused verification:
 
