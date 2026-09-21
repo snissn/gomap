@@ -2188,6 +2188,20 @@ profile nor response pack footprint is presented as retained overlay growth.
 These bounded local profiles do not replace the H-C qualification owned by
 #4249.
 
+`TestM8ScalingComparisonCompleteBlocksV1`,
+`TestM8ScalingComparisonIdentityAndPackingV1` and
+`TestM8ScalingLogicalUnionV1` check five complete comparison blocks, failed-row
+retention, frozen identity/settings and unchanged logical membership across
+physical packing. `TestM8WholeCollectionPopulationV1` and
+`TestM8WholeCollectionAdmissionV1` cover complete ordinary-reference outcomes
+and refusal before output creation. On Linux,
+`TestM8WholeCollectionReadOnlyPublicPathV1` verifies persisted-source reopen,
+ordinary public search with worker-owned buffers at c1/c32, path counters,
+truth-ID recall, error retention and unchanged source identity. These are
+measurement-apparatus checks, not final qualification; the ordinary HNSW
+in-process reference is not a same-algorithm/native-TCP comparator. See the
+[comparison runbook](../performance/vector-partition-m8.md#fixed-cross-report-comparisons-and-ordinary-reference-4753).
+
 `TestVectorPartitionLiveSelectedLifecycleV1` adds a bounded selected-product
 component gate:512 procedural768D rows, approximate routing, selected Vamana
 immutable packs and the native HNSW delta, TCP mutations/shard requests, and

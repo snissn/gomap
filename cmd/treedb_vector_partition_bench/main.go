@@ -569,6 +569,12 @@ func run(args []string, stdout io.Writer) error {
 	if len(args) > 0 && args[0] == "replay-m8-report" {
 		return runReplayM8ReportV1(args[1:], stdout)
 	}
+	if len(args) > 0 && args[0] == "whole-collection-reference" {
+		return runM8WholeCollectionReferenceV1(args[1:], stdout)
+	}
+	if len(args) > 0 && args[0] == "compare-m8-scaling" {
+		return runM8ScalingComparisonV1(args[1:], stdout)
+	}
 	return runWithRuntimeCapabilities(args, stdout, currentBenchmarkRuntimeCapabilities())
 }
 
