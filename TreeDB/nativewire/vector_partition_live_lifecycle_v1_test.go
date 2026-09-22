@@ -520,10 +520,18 @@ func runVectorPartitionLiveLifecycleV1(t *testing.T, fixture vectorPartitionLive
 	if len(vectors[changedID]) != fixture.definition.Dimensions {
 		t.Fatalf("mutation target %q is absent or has the wrong dimensions", changedID)
 	}
+	rootGraphs := 0
 	for _, asset := range fixture.manifest.Assets {
+		if asset.GraphVariant == "" {
+			continue
+		}
+		rootGraphs++
 		if asset.GraphVariant != string(collections.VectorPartitionLocalGraphVariantConnectivityPreservingVamanaR64L256Alpha1_2V1) {
 			t.Fatalf("wrong selected base graph: %s", asset.GraphVariant)
 		}
+	}
+	if rootGraphs == 0 {
+		t.Fatal("selected base graph is absent")
 	}
 	routes := liveLifecycleRoutesV1(t, fixture, queries, probes)
 	moves := [2][]float32{queries[0], nil}
