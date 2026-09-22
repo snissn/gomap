@@ -198,10 +198,18 @@ For eligible no-secondary-index JSON collections using semantic-stream retained
 payload, `PrepareInsertBatchOwned` can move ID sorting, duplicate preflight,
 retained block encoding, and declared-row extraction ahead of the ordered
 publisher. It owns the input buffers and has no command LSN or publication
-lease. The `maxOwnedBytes` argument screens the input and estimated preparation
-headroom before encoding, then rejects a prepared payload whose charged backing
-exceeds the limit. `OwnedBytes` reports that retained backing. The admission
-estimate does not bound all transient parser or publisher allocations. A later
+lease. The `maxOwnedBytes` argument screens the input and estimates a separate
+envelope for each retained block before workers start. Each block checks its
+raw size before encoding and its retained output before joining the prepared
+batch. Rare JSON paths grow only as values arrive rather than reserving every
+row in the block. The final capacity check rejects a prepared payload whose
+charged backing plus a commit reserve exceeds the limit; `OwnedBytes` reports
+the retained backing and `ReservedBytes` includes the commit reserve. The
+input-derived preparation and commit reserves are conservative estimates, not
+a proven strict peak bound for parser maps, encoder scratch, typed part build,
+or ordered WAL/publication. Prepared mode rejects documents over 128 KiB or
+beyond the cursor's depth and descriptor limits; the ordinary path remains the
+fallback. A later
 `Commit` rechecks persisted conflicts and schema under the normal insert path
 before WAL admission. One caller can
 prepare batch N+1 while a single committer publishes N; neither a queued

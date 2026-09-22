@@ -15,6 +15,9 @@ import (
 
 var ErrPreparedInsertIneligible = errors.New("collections: prepared insert ineligible")
 
+const preparedInsertMaxRows = 16 << 10
+const preparedInsertMaxDocumentBytes = 128 << 10
+
 // PreparedInsertBatch owns its input slices until Commit or Abandon. The caller
 // must not mutate or reuse IDs and documents after handing them to Prepare.
 // It owns no durable identity or asset; only Commit may publish the batch.
@@ -26,6 +29,7 @@ type PreparedInsertBatch struct {
 	retained       columnRetainedPayloadStorageDocuments
 	prepareElapsed time.Duration
 	ownedBytes     int64
+	commitReserve  int64
 	state          atomic.Uint32
 }
 
@@ -70,6 +74,32 @@ func preparedInsertAdmissionBytes(inputBytes int64, rows, columns int) int64 {
 	return inputBytes*32 + int64(rows)*int64(columns)*256
 }
 
+// Commit retains the prepared input while it clones result IDs, constructs the
+// command-WAL payload and root runs, and builds typed scalar batches and string
+// dictionaries. This estimate admits a token; it is not a proven peak bound.
+func preparedInsertCommitReserveBytes(ownedBytes int64, rows, columns int) int64 {
+	const maxInt64 = int64(^uint64(0) >> 1)
+	if ownedBytes > maxInt64/3 || int64(rows) > maxInt64/512 || columns > 0 && int64(rows) > maxInt64/int64(columns)/512 {
+		return maxInt64
+	}
+	return saturatingAddNonNegativeInt64(ownedBytes*3, int64(rows)*int64(columns)*512+8<<20)
+}
+
+func preparedInsertBoundedScalarColumns(columns []ColumnStoreColumn) bool {
+	for _, column := range columns {
+		switch column.ValueType {
+		case ColumnStoreValueBool, ColumnStoreValueInt8, ColumnStoreValueUint8,
+			ColumnStoreValueInt16, ColumnStoreValueUint16, ColumnStoreValueInt32,
+			ColumnStoreValueUint32, ColumnStoreValueInt64, ColumnStoreValueUint64,
+			ColumnStoreValueFloat16, ColumnStoreValueBFloat16, ColumnStoreValueFloat32,
+			ColumnStoreValueDouble, ColumnStoreValueString:
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 func preparedSemanticStreamBackingBytes(table memtable.Table) (int64, error) {
 	if table == nil {
 		return 0, fmt.Errorf("%w: missing semantic-stream blocks", ErrPreparedInsertIneligible)
@@ -98,9 +128,10 @@ func preparedDeclaredBackingBytes(rows []columnDeclaredRow) int64 {
 }
 
 // PrepareInsertBatchOwned prepares the no-index JSON semantic-stream path.
-// maxOwnedBytes limits the retained request and prepared payload. Conservative
+// maxOwnedBytes limits the retained request and prepared payload. Estimated
 // headroom rejects large requests before encoding; a post-encode capacity check
-// can also reject a batch. Callers may use ordinary InsertBatch on ineligibility.
+// can also reject a batch. These estimates are not a strict transient heap
+// bound. Callers may use ordinary InsertBatch on ineligibility.
 func (c *Collection) PrepareInsertBatchOwned(ids, documents [][]byte, maxOwnedBytes int64) (*PreparedInsertBatch, error) {
 	if c == nil {
 		return nil, errCollectionNil
@@ -114,9 +145,17 @@ func (c *Collection) PrepareInsertBatchOwned(ids, documents [][]byte, maxOwnedBy
 	if len(ids) == 0 || maxOwnedBytes <= 0 {
 		return nil, fmt.Errorf("%w: empty batch or byte limit", ErrPreparedInsertIneligible)
 	}
+	if len(ids) > preparedInsertMaxRows {
+		return nil, fmt.Errorf("%w: batch has %d rows, maximum %d", ErrPreparedInsertIneligible, len(ids), preparedInsertMaxRows)
+	}
 	for _, id := range ids {
 		if len(id) == 0 {
 			return nil, errors.New("collections: document id cannot be empty")
+		}
+	}
+	for _, document := range documents {
+		if len(document) > preparedInsertMaxDocumentBytes {
+			return nil, fmt.Errorf("%w: document has %d bytes, maximum %d", ErrPreparedInsertIneligible, len(document), preparedInsertMaxDocumentBytes)
 		}
 	}
 	inputBytes := preparedInsertInputBytes(ids, documents)
@@ -148,6 +187,9 @@ func (c *Collection) PrepareInsertBatchOwned(ids, documents [][]byte, maxOwnedBy
 		columnRetainedPayloadEffectiveEncoding(cfg) != ColumnRetainedPayloadEncodingSemanticStreamV1 {
 		return nil, fmt.Errorf("%w: requires no-index JSON semantic-stream column store", ErrPreparedInsertIneligible)
 	}
+	if !preparedInsertBoundedScalarColumns(cfg.Columns) {
+		return nil, fmt.Errorf("%w: commit budget supports scalar columns only", ErrPreparedInsertIneligible)
+	}
 	if err := c.requireColumnStoreCommandWAL(meta, nil); err != nil {
 		return nil, err
 	}
@@ -175,7 +217,7 @@ func (c *Collection) PrepareInsertBatchOwned(ids, documents [][]byte, maxOwnedBy
 		orderedIDs[i], orderedDocs[i] = entries[i].id, entries[i].document
 	}
 	start := time.Now()
-	retained, err := prepareColumnRetainedPayloadInsertBatchStorageDocumentsWithIDs(*cfg, orderedIDs, orderedDocs, nil)
+	retained, err := prepareColumnRetainedSemanticStreamV1StorageDocumentsWithIDsBudget(*cfg, orderedIDs, orderedDocs, maxOwnedBytes)
 	if err != nil {
 		return nil, err
 	}
@@ -195,14 +237,15 @@ func (c *Collection) PrepareInsertBatchOwned(ids, documents [][]byte, maxOwnedBy
 		return nil, err
 	}
 	ownedBytes += semanticBytes
-	if ownedBytes > maxOwnedBytes {
+	commitReserve := preparedInsertCommitReserveBytes(ownedBytes, len(ids), len(cfg.Columns))
+	if ownedBytes > maxOwnedBytes || commitReserve > maxOwnedBytes-ownedBytes {
 		if retained.semanticStreamBlocks != nil {
 			resetCollectionRunTable(retained.semanticStreamBlocks)
 		}
-		return nil, fmt.Errorf("%w: prepared bytes %d exceed %d", ErrPreparedInsertIneligible, ownedBytes, maxOwnedBytes)
+		return nil, fmt.Errorf("%w: prepared bytes %d plus commit reserve %d exceed %d", ErrPreparedInsertIneligible, ownedBytes, commitReserve, maxOwnedBytes)
 	}
 	return &PreparedInsertBatch{collection: c, meta: preparedInsertSchemaMeta(meta), ids: ids, documents: documents,
-		entries: entries, retained: retained, prepareElapsed: time.Since(start), ownedBytes: ownedBytes}, nil
+		entries: entries, retained: retained, prepareElapsed: time.Since(start), ownedBytes: ownedBytes, commitReserve: commitReserve}, nil
 }
 
 func (p *PreparedInsertBatch) OwnedBytes() int64 {
@@ -210,6 +253,16 @@ func (p *PreparedInsertBatch) OwnedBytes() int64 {
 		return 0
 	}
 	return p.ownedBytes
+}
+
+// ReservedBytes includes the preparation's retained backing and estimated
+// commit headroom admitted against maxOwnedBytes. It is not heap telemetry or
+// a proven strict transient bound.
+func (p *PreparedInsertBatch) ReservedBytes() int64 {
+	if p == nil {
+		return 0
+	}
+	return p.ownedBytes + p.commitReserve
 }
 
 func (p *PreparedInsertBatch) release() {

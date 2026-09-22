@@ -41,6 +41,8 @@ var (
 // block, avoiding per-document parser allocation while keeping all ownership
 // local to the prepare worker.
 type columnRetainedSemanticStreamV1JSONCursor struct {
+	maxDepth        int
+	maxDescriptors  int
 	document        []byte
 	pos             int
 	nodeStack       [64]columnRetainedSemanticStreamV1JSONCursorNode
@@ -49,6 +51,20 @@ type columnRetainedSemanticStreamV1JSONCursor struct {
 	members         []columnRetainedSemanticStreamV1JSONCursorMember
 	unescapeScratch []byte
 	pathInterner    *columnRetainedSemanticStreamV1PathSegmentInterner
+}
+
+func (c *columnRetainedSemanticStreamV1JSONCursor) depthLimit() int {
+	if c.maxDepth > 0 {
+		return c.maxDepth
+	}
+	return columnRetainedSemanticStreamV1JSONCursorMaxDepth
+}
+
+func (c *columnRetainedSemanticStreamV1JSONCursor) descriptorLimit() int {
+	if c.maxDescriptors > 0 {
+		return c.maxDescriptors
+	}
+	return columnRetainedSemanticStreamV1JSONCursorMaxDescriptors
 }
 
 type columnRetainedSemanticStreamV1JSONCursorNode struct {
@@ -106,7 +122,7 @@ func (c *columnRetainedSemanticStreamV1JSONCursor) parseDocument(document []byte
 }
 
 func (c *columnRetainedSemanticStreamV1JSONCursor) parseValue(depth int, retainObject bool) (int, error) {
-	if depth > columnRetainedSemanticStreamV1JSONCursorMaxDepth {
+	if depth > c.depthLimit() {
 		return 0, errColumnRetainedSemanticStreamV1JSONCursorDepth
 	}
 	c.skipSpace()
@@ -206,7 +222,7 @@ func (c *columnRetainedSemanticStreamV1JSONCursor) parseObject(depth int) (int, 
 		if err != nil {
 			return 0, err
 		}
-		if len(c.members) >= columnRetainedSemanticStreamV1JSONCursorMaxDescriptors {
+		if len(c.members) >= c.descriptorLimit() {
 			return 0, errColumnRetainedSemanticStreamV1JSONCursorScratch
 		}
 		memberIdx := len(c.members)
@@ -377,7 +393,7 @@ func (c *columnRetainedSemanticStreamV1JSONCursor) scanNumber() error {
 }
 
 func (c *columnRetainedSemanticStreamV1JSONCursor) appendNode(valueType jsonparser.ValueType, rawStart, rawEnd, valueStart, valueEnd, firstMember int) (int, error) {
-	if len(c.nodes) >= columnRetainedSemanticStreamV1JSONCursorMaxDescriptors {
+	if len(c.nodes) >= c.descriptorLimit() {
 		return 0, errColumnRetainedSemanticStreamV1JSONCursorScratch
 	}
 	idx := len(c.nodes)

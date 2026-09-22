@@ -2,7 +2,10 @@ package collections
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -18,7 +21,7 @@ func TestPreparedInsertOverlapsOrderedCommit(t *testing.T) {
 	defer func() { _ = d.Close() }()
 	col := createColumnRetainedSemanticStreamCollection(t, d, "events")
 	docs := [][]byte{[]byte(`{"row_id":1,"kind":"one"}`), []byte(`{"row_id":2,"kind":"two"}`)}
-	first, err := col.PrepareInsertBatchOwned([][]byte{[]byte("b")}, docs[:1], 1<<20)
+	first, err := col.PrepareInsertBatchOwned([][]byte{[]byte("b")}, docs[:1], 16<<20)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,7 +39,7 @@ func TestPreparedInsertOverlapsOrderedCommit(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("commit did not reach publication")
 	}
-	second, err := col.PrepareInsertBatchOwned([][]byte{[]byte("a")}, docs[1:], 1<<20)
+	second, err := col.PrepareInsertBatchOwned([][]byte{[]byte("a")}, docs[1:], 16<<20)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,12 +83,15 @@ func TestPreparedInsertSortedValuesAndReopen(t *testing.T) {
 		[]byte(`{"row_id":1,"kind":"a"}`),
 		[]byte(`{"row_id":2,"kind":"m","extra":{"nested":true}}`),
 	}
-	prepared, err := col.PrepareInsertBatchOwned(ids, docs, 1<<20)
+	prepared, err := col.PrepareInsertBatchOwned(ids, docs, 16<<20)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if prepared.OwnedBytes() <= 0 || prepared.OwnedBytes() > 1<<20 {
+	if prepared.OwnedBytes() <= 0 || prepared.OwnedBytes() > 16<<20 {
 		t.Fatalf("owned bytes=%d", prepared.OwnedBytes())
+	}
+	if prepared.ReservedBytes() <= prepared.OwnedBytes() || prepared.ReservedBytes() > 16<<20 {
+		t.Fatalf("reservation=%d owned=%d", prepared.ReservedBytes(), prepared.OwnedBytes())
 	}
 	resultIDs, err := prepared.Commit()
 	if err != nil {
@@ -147,7 +153,7 @@ func TestPreparedInsertAbandonBoundsAndLateConflict(t *testing.T) {
 	if _, err := col.PrepareInsertBatchOwned([][]byte{id}, [][]byte{doc}, 1); !errors.Is(err, ErrPreparedInsertIneligible) {
 		t.Fatalf("oversized prepare error=%v", err)
 	}
-	prepared, err := col.PrepareInsertBatchOwned([][]byte{id}, [][]byte{doc}, 1<<20)
+	prepared, err := col.PrepareInsertBatchOwned([][]byte{id}, [][]byte{doc}, 16<<20)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -161,7 +167,7 @@ func TestPreparedInsertAbandonBoundsAndLateConflict(t *testing.T) {
 	if got, err := col.Get(id); err != nil || got != nil {
 		t.Fatalf("abandoned prepare published a row: %s, %v", got, err)
 	}
-	prepared, err = col.PrepareInsertBatchOwned([][]byte{id}, [][]byte{doc}, 1<<20)
+	prepared, err = col.PrepareInsertBatchOwned([][]byte{id}, [][]byte{doc}, 16<<20)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -171,7 +177,7 @@ func TestPreparedInsertAbandonBoundsAndLateConflict(t *testing.T) {
 	if _, err := prepared.Commit(); !errors.Is(err, ErrDocumentExists) {
 		t.Fatalf("late conflict error=%v, want document exists", err)
 	}
-	if _, err := col.PrepareInsertBatchOwned([][]byte{id, id}, [][]byte{doc, doc}, 1<<20); !errors.Is(err, ErrDuplicateDocumentID) {
+	if _, err := col.PrepareInsertBatchOwned([][]byte{id, id}, [][]byte{doc, doc}, 16<<20); !errors.Is(err, ErrDuplicateDocumentID) {
 		t.Fatalf("within-batch duplicate error=%v", err)
 	}
 }
@@ -183,7 +189,7 @@ func TestPreparedInsertCheckpointBeforeCommitAndReopen(t *testing.T) {
 	col := createColumnRetainedSemanticStreamCollection(t, d, "events")
 	id, doc := []byte("checkpoint-row"), []byte(`{"row_id":41,"kind":"checkpoint"}`)
 	beforeLSN := d.State().AppliedCommandLSN
-	prepared, err := col.PrepareInsertBatchOwned([][]byte{id}, [][]byte{doc}, 1<<20)
+	prepared, err := col.PrepareInsertBatchOwned([][]byte{id}, [][]byte{doc}, 16<<20)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -223,7 +229,7 @@ func TestPreparedInsertRejectsMismatchedCapturedSchema(t *testing.T) {
 	defer func() { _ = d.Close() }()
 	col := createColumnRetainedSemanticStreamCollection(t, d, "events")
 	id := []byte("schema-row")
-	prepared, err := col.PrepareInsertBatchOwned([][]byte{id}, [][]byte{[]byte(`{"row_id":42,"kind":"one","payload":"value"}`)}, 1<<20)
+	prepared, err := col.PrepareInsertBatchOwned([][]byte{id}, [][]byte{[]byte(`{"row_id":42,"kind":"one","payload":"value"}`)}, 16<<20)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -239,5 +245,75 @@ func TestPreparedInsertRejectsMismatchedCapturedSchema(t *testing.T) {
 	}
 	if got, err := openColumnRetainedPlacementCollection(t, d, "events").Get(id); err != nil || got != nil {
 		t.Fatalf("rejected row visible: %s, %v", got, err)
+	}
+}
+
+func TestPreparedInsertRarePathsStayWithinBudget(t *testing.T) {
+	dir := t.TempDir()
+	enableColumnRetainedPlacementCommandWAL(t, dir)
+	d := openColumnRetainedPlacementDB(t, dir, backenddb.Options{})
+	defer func() { _ = d.Close() }()
+	col := createColumnRetainedSemanticStreamCollection(t, d, "events")
+	var document strings.Builder
+	document.WriteString(`{"row_id":1,"kind":"many"`)
+	for i := 0; i < 512; i++ {
+		fmt.Fprintf(&document, `,"field_%d":%d`, i, i)
+	}
+	document.WriteByte('}')
+	prepared, err := col.PrepareInsertBatchOwned([][]byte{[]byte("wide")}, [][]byte{[]byte(document.String())}, 16<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prepared.OwnedBytes() > 16<<20 {
+		t.Fatalf("owned bytes=%d exceed budget", prepared.OwnedBytes())
+	}
+	if _, err := prepared.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	got, err := col.Get([]byte("wide"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var gotObject, wantObject map[string]any
+	if err := json.Unmarshal(got, &gotObject); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal([]byte(document.String()), &wantObject); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(gotObject, wantObject) {
+		t.Fatal("wide row changed after commit")
+	}
+}
+
+func TestPreparedInsertRejectsUnsupportedStructuralShapesBeforeCommit(t *testing.T) {
+	dir := t.TempDir()
+	enableColumnRetainedPlacementCommandWAL(t, dir)
+	d := openColumnRetainedPlacementDB(t, dir, backenddb.Options{})
+	defer func() { _ = d.Close() }()
+	col := createColumnRetainedSemanticStreamCollection(t, d, "events")
+
+	deep := `{"row_id":1,"kind":"deep","extra":`
+	for range preparedSemanticStreamMaxCursorDepth + 1 {
+		deep += `{"nested":`
+	}
+	deep += `true` + strings.Repeat("}", preparedSemanticStreamMaxCursorDepth+1) + `}`
+	wide := `{"row_id":2,"kind":"wide"`
+	for i := 0; i < preparedSemanticStreamMaxCursorDescriptors+1; i++ {
+		wide += fmt.Sprintf(`,"field_%d":%d`, i, i)
+	}
+	wide += `}`
+	oversize := `{"row_id":3,"kind":"oversize","extra":"` + strings.Repeat("x", preparedInsertMaxDocumentBytes) + `"}`
+	for i, document := range []string{deep, wide, oversize} {
+		id := []byte(fmt.Sprintf("shape-%d", i))
+		if _, err := col.PrepareInsertBatchOwned([][]byte{id}, [][]byte{[]byte(document)}, 32<<20); !errors.Is(err, ErrPreparedInsertIneligible) {
+			t.Errorf("shape %d prepared error=%v, want ineligible", i, err)
+		}
+		if got, err := col.Get(id); err != nil || got != nil {
+			t.Errorf("shape %d visible after rejected prepare: %s, %v", i, got, err)
+		}
+		if _, err := col.InsertBatch([][]byte{id}, [][]byte{[]byte(document)}); err != nil {
+			t.Errorf("shape %d ordinary fallback: %v", i, err)
+		}
 	}
 }
