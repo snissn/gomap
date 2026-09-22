@@ -29,27 +29,39 @@ import (
 func peerCredentialsFixtureV1(t testing.TB, cluster, node string) *PeerCredentialsV1 {
 	t.Helper()
 	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	now := time.Now()
 	ca := &x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "test cluster CA"}, NotBefore: now.Add(-time.Hour), NotAfter: now.Add(time.Hour), IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign}
 	caDER, err := x509.CreateCertificate(rand.Reader, ca, ca, &caKey.PublicKey, caKey)
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	leafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	identity := &url.URL{Scheme: "spiffe", Host: "treedb", Path: "/cluster/" + cluster + "/node/" + node}
 	leaf := &x509.Certificate{SerialNumber: big.NewInt(2), NotBefore: now.Add(-time.Hour), NotAfter: now.Add(time.Hour), URIs: []*url.URL{identity}, IPAddresses: []net.IP{net.ParseIP("127.0.0.1")}, KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth}}
 	leafDER, err := x509.CreateCertificate(rand.Reader, leaf, ca, &leafKey.PublicKey, caKey)
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	keyDER, err := x509.MarshalPKCS8PrivateKey(leafKey)
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	root := t.TempDir()
 	credentials := &PeerCredentialsV1{TrustRootsFile: filepath.Join(root, "ca.pem"), CertificateFile: filepath.Join(root, "node.pem"), PrivateKeyFile: filepath.Join(root, "node-key.pem")}
 	for path, block := range map[string]*pem.Block{
-		credentials.TrustRootsFile: {Type: "CERTIFICATE", Bytes: caDER},
+		credentials.TrustRootsFile:  {Type: "CERTIFICATE", Bytes: caDER},
 		credentials.CertificateFile: {Type: "CERTIFICATE", Bytes: leafDER},
-		credentials.PrivateKeyFile: {Type: "PRIVATE KEY", Bytes: keyDER},
+		credentials.PrivateKeyFile:  {Type: "PRIVATE KEY", Bytes: keyDER},
 	} {
-		if err := os.WriteFile(path, pem.EncodeToMemory(block), 0600); err != nil { t.Fatal(err) }
+		if err := os.WriteFile(path, pem.EncodeToMemory(block), 0600); err != nil {
+			t.Fatal(err)
+		}
 	}
 	return credentials
 }
@@ -62,7 +74,9 @@ func TestUnknownPeerCannotSubmitOrInstallSnapshotV1(t *testing.T) {
 	config.ClusterID = "security-conformance"
 	config.Credentials = peerCredentialsFixtureV1(t, config.ClusterID, string(config.NodeID))
 	node, err := OpenFixedPeerTCPRuntimeV1(config)
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer node.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -71,29 +85,43 @@ func TestUnknownPeerCannotSubmitOrInstallSnapshotV1(t *testing.T) {
 		return e == nil && s.CatalogRaft.State == "Leader" && len(s.Groups) == 1 && s.Groups[0].State == "Leader"
 	})
 	catalog := raftplacement.CatalogV1{
-		Groups: []raftplacement.GroupV1{{ID: "group-a", Members: []raftcluster.NodeID{config.NodeID}}},
+		Groups:     []raftplacement.GroupV1{{ID: "group-a", Members: []raftcluster.NodeID{config.NodeID}}},
 		Placements: []raftplacement.CollectionPlacementV1{{Collection: raftplacement.CollectionRefV1{Database: "default", Catalog: "default", Collection: "unauthorized"}, GroupID: "group-a"}},
 	}
 	record, err := raftplacement.NewCatalogMetaRecordV1(1, catalog)
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	command, err := raftplacement.EncodeCatalogMetaCommandV1(raftplacement.CatalogMetaCommandV1{Record: record})
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	// Fixture publication uses the actual local production provider; it does
 	// not grant the credential-free network client any authority.
-	if _, _, err := node.meta.SubmitCatalogMetaCommandV1(ctx, command); err != nil { t.Fatal(err) }
+	if _, _, err := node.meta.SubmitCatalogMetaCommandV1(ctx, command); err != nil {
+		t.Fatal(err)
+	}
 	request := ClusterRouteRequest{Database: "default", Catalog: "default", Collection: "unauthorized", Shape: ClusterRouteShapeCollection}
 	route, err := node.route(ctx, request)
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	status, err := node.Status(ctx)
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	metadata := ClusterRequestMetadata{AckPolicy: iwire.AckRaftCommitted}
 	ApplyClusterRouteMetadata(&metadata, request, route)
 	body, err := json.Marshal(fixedPeerRequestV1{Entry: fixedPeerCreateEntryV1(t, "unauthorized", status.Groups[0].CatalogVersion), Metadata: metadata})
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	// The inventory/configuration digest is intentionally known to the
 	// attacker. It must never substitute for an authenticated certificate.
 	req, err := http.NewRequestWithContext(ctx, "POST", "http://"+config.ListenAddress+"/v1/submit", bytes.NewReader(body))
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	req.Header.Set("X-TreeDB-Node", string(config.NodeID))
 	req.Header.Set("X-TreeDB-Config", node.client.digest)
 	transport := &http.Transport{Proxy: nil}
@@ -107,7 +135,9 @@ func TestUnknownPeerCannotSubmitOrInstallSnapshotV1(t *testing.T) {
 		}
 	}
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	stream := &sparseCatalogRecordingStreamV1{Listener: listener, dialed: make(chan net.Conn, 1)}
 	unauthorized := hraft.NewNetworkTransport(stream, 1, time.Second, io.Discard)
 	defer unauthorized.Close()

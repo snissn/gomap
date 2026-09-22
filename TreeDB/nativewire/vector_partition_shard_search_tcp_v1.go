@@ -160,7 +160,7 @@ func (d *VectorPartitionShardSearchTCPDispatcherV1) DispatchVectorPartitionShard
 	case d.requestSlots <- struct{}{}:
 		defer func() { <-d.requestSlots }()
 	default:
-		return VectorPartitionShardSearchResponseV1{}, &VectorPartitionShardSearchErrorV1{Code: VectorPartitionShardSearchErrorGroupUnavailableV1, GroupID: request.TargetGroupID, Err: raftcluster.ErrAdmissionUnavailable}
+		return VectorPartitionShardSearchResponseV1{}, &VectorPartitionShardSearchErrorV1{Code: VectorPartitionShardSearchErrorGroupUnavailableV1, GroupID: request.TargetGroupID, Err: fmt.Errorf("%w: shard dispatcher request slots exhausted (%d/%d)", raftcluster.ErrAdmissionUnavailable, len(d.requestSlots), cap(d.requestSlots))}
 	}
 	for attempt := 0; ; attempt++ {
 		response, err := d.dispatchVectorPartitionShardSearchOnceV1(ctx, request)

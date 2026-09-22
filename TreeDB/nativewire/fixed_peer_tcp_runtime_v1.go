@@ -65,7 +65,7 @@ type FixedPeerTCPGroupV1 struct {
 type FixedPeerTCPConfigV1 struct {
 	// ClusterID is an optional stable bootstrap identity. Empty retains the
 	// legacy exact-configuration identity. It never authorizes topology edits.
-	ClusterID                         string `json:",omitempty"`
+	ClusterID                         string             `json:",omitempty"`
 	Credentials                       *PeerCredentialsV1 `json:",omitempty"`
 	NodeID                            raftcluster.NodeID
 	DataRoot, RaftRoot, ListenAddress string

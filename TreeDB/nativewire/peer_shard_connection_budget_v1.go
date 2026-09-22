@@ -2,6 +2,7 @@ package nativewire
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"sync"
 
@@ -38,14 +39,14 @@ func (d *VectorPartitionShardSearchTCPDispatcherV1) dialBounded(ctx context.Cont
 	case d.connectionSlots <- struct{}{}:
 	default:
 		if !d.evictIdleConnection() {
-			return nil, raftcluster.ErrAdmissionUnavailable
+			return nil, fmt.Errorf("%w: shard socket budget exhausted (%d/%d), no idle socket", raftcluster.ErrAdmissionUnavailable, len(d.connectionSlots), cap(d.connectionSlots))
 		}
 		// Another dial may win the freed token. Never queue unbounded callers
 		// or evict arbitrary additional sockets in a retry loop.
 		select {
 		case d.connectionSlots <- struct{}{}:
 		default:
-			return nil, raftcluster.ErrAdmissionUnavailable
+			return nil, fmt.Errorf("%w: shard socket budget consumed during idle eviction", raftcluster.ErrAdmissionUnavailable)
 		}
 	}
 	dialCtx, cancel := context.WithCancel(ctx)
