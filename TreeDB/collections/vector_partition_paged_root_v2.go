@@ -28,16 +28,16 @@ var ErrVectorPartitionPagedRuntimeUnsupportedV2 = errors.New("collections: paged
 // SourceSnapshotSetDigest binds shard snapshot revisions independently of
 // per-document mutation revisions carried by source rows.
 type VectorPartitionPagedRootV2 struct {
-	PlacementEpoch uint64
-	SourceMapEpoch uint64
-	SourceMapDigest string
+	PlacementEpoch          uint64
+	SourceMapEpoch          uint64
+	SourceMapDigest         string
 	SourceSnapshotSetDigest string
-	GraphProfileDigest string
-	DomainCount uint64
-	PhysicalPackCount uint64
-	SourceRowCount uint64
-	MetadataDirectory VectorPartitionAssetV1
-	SourceShardDirectory VectorPartitionAssetV1
+	GraphProfileDigest      string
+	DomainCount             uint64
+	PhysicalPackCount       uint64
+	SourceRowCount          uint64
+	MetadataDirectory       VectorPartitionAssetV1
+	SourceShardDirectory    VectorPartitionAssetV1
 }
 
 func (m VectorPartitionManifestV1) isPagedRootV2() bool {
@@ -153,14 +153,14 @@ func (m VectorPartitionManifestV1) pagedReadyDigestV2(ctx context.Context) (stri
 		return "", err
 	}
 	return pagedRootJSONDigestV2(struct {
-		Format string
-		Collection string
-		IndexName string
+		Format                string
+		Collection            string
+		IndexName             string
 		IndexDefinitionDigest string
-		Generation uint64
-		Root *VectorPartitionPagedRootV2
-		RouterGeneration uint64
-		RouterAsset VectorPartitionAssetV1
+		Generation            uint64
+		Root                  *VectorPartitionPagedRootV2
+		RouterGeneration      uint64
+		RouterAsset           VectorPartitionAssetV1
 	}{m.Format, m.Collection, m.IndexName, m.IndexDefinitionDigest, m.Generation, m.PagedRootV2, m.RouterGeneration, m.RouterAsset})
 }
 

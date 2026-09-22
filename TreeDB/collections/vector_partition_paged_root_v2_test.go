@@ -16,23 +16,23 @@ func testVectorPartitionPagedRootV2(t testing.TB) VectorPartitionManifestV1 {
 	source.ID = "vector_partition_source_root_v2"
 	metadata.PartitionID, source.PartitionID = 0, 0
 	m := VectorPartitionManifestV1{
-		Format: VectorPartitionManifestFormatV2,
-		State: "building",
-		Collection: legacy.Collection,
-		IndexName: legacy.IndexName,
+		Format:                VectorPartitionManifestFormatV2,
+		State:                 "building",
+		Collection:            legacy.Collection,
+		IndexName:             legacy.IndexName,
 		IndexDefinitionDigest: legacy.IndexDefinitionDigest,
-		Generation: legacy.Generation,
+		Generation:            legacy.Generation,
 		PagedRootV2: &VectorPartitionPagedRootV2{
-			PlacementEpoch: 11,
-			SourceMapEpoch: 3,
-			SourceMapDigest: strings.Repeat("c", 64),
+			PlacementEpoch:          11,
+			SourceMapEpoch:          3,
+			SourceMapDigest:         strings.Repeat("c", 64),
 			SourceSnapshotSetDigest: strings.Repeat("d", 64),
-			GraphProfileDigest: strings.Repeat("e", 64),
-			DomainCount: 4,
-			PhysicalPackCount: 16,
-			SourceRowCount: 1 << 40,
-			MetadataDirectory: metadata,
-			SourceShardDirectory: source,
+			GraphProfileDigest:      strings.Repeat("e", 64),
+			DomainCount:             4,
+			PhysicalPackCount:       16,
+			SourceRowCount:          1 << 40,
+			MetadataDirectory:       metadata,
+			SourceShardDirectory:    source,
 		},
 	}
 	if err := m.canonicalizeWithContextV1(t.Context()); err != nil {
@@ -76,7 +76,10 @@ func TestVectorPartitionPagedRootCodecV2(t *testing.T) {
 }
 
 func TestVectorPartitionPagedRootBindsIdentityAndRejectsMixedV2(t *testing.T) {
-	for _, tc := range []struct { name string; change func(*VectorPartitionManifestV1) }{
+	for _, tc := range []struct {
+		name   string
+		change func(*VectorPartitionManifestV1)
+	}{
 		{"missing root", func(m *VectorPartitionManifestV1) { m.PagedRootV2 = nil }},
 		{"legacy format", func(m *VectorPartitionManifestV1) { m.Format = VectorPartitionManifestFormatV1 }},
 		{"legacy rows", func(m *VectorPartitionManifestV1) { m.SourceRowCount = 1 }},
@@ -88,7 +91,9 @@ func TestVectorPartitionPagedRootBindsIdentityAndRejectsMixedV2(t *testing.T) {
 		{"source revisions", func(m *VectorPartitionManifestV1) { m.PagedRootV2.SourceSnapshotSetDigest = strings.Repeat("a", 64) }},
 		{"profile", func(m *VectorPartitionManifestV1) { m.PagedRootV2.GraphProfileDigest = strings.Repeat("a", 64) }},
 		{"page directory", func(m *VectorPartitionManifestV1) { m.PagedRootV2.MetadataDirectory.Checksum = strings.Repeat("a", 64) }},
-		{"source directory", func(m *VectorPartitionManifestV1) { m.PagedRootV2.SourceShardDirectory.Checksum = strings.Repeat("a", 64) }},
+		{"source directory", func(m *VectorPartitionManifestV1) {
+			m.PagedRootV2.SourceShardDirectory.Checksum = strings.Repeat("a", 64)
+		}},
 		{"count", func(m *VectorPartitionManifestV1) { m.PagedRootV2.SourceRowCount++ }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
