@@ -29,6 +29,21 @@ type PreparedInsertBatch struct {
 	state          atomic.Uint32
 }
 
+// Capture only stable schema. Manifest progress grows with committed parts and
+// is re-read at publication; copying it into every queued batch would make
+// pipeline-owned memory grow with the database rather than the batch.
+func preparedInsertSchemaMeta(meta CollectionMeta) CollectionMeta {
+	if meta.Options.ColumnStore != nil {
+		cfg := *meta.Options.ColumnStore
+		cfg.ActiveManifest = nil
+		cfg.RecoveryAuthoritativeManifest = nil
+		cfg.RecoveryAuthoritativeAppliedCommandLSN = 0
+		cfg.PhysicalMutationParts = 0
+		meta.Options.ColumnStore = &cfg
+	}
+	return copyCollectionMeta(meta)
+}
+
 func preparedInsertInputBytes(ids, documents [][]byte) int64 {
 	const maxInt64 = int64(^uint64(0) >> 1)
 	outerCapacity := int64(cap(ids)) + int64(cap(documents))
@@ -186,7 +201,7 @@ func (c *Collection) PrepareInsertBatchOwned(ids, documents [][]byte, maxOwnedBy
 		}
 		return nil, fmt.Errorf("%w: prepared bytes %d exceed %d", ErrPreparedInsertIneligible, ownedBytes, maxOwnedBytes)
 	}
-	return &PreparedInsertBatch{collection: c, meta: copyCollectionMeta(meta), ids: ids, documents: documents,
+	return &PreparedInsertBatch{collection: c, meta: preparedInsertSchemaMeta(meta), ids: ids, documents: documents,
 		entries: entries, retained: retained, prepareElapsed: time.Since(start), ownedBytes: ownedBytes}, nil
 }
 
@@ -202,6 +217,8 @@ func (p *PreparedInsertBatch) release() {
 		resetCollectionRunTable(p.retained.semanticStreamBlocks)
 	}
 	p.ids, p.documents, p.entries, p.retained = nil, nil, nil, columnRetainedPayloadStorageDocuments{}
+	p.meta = CollectionMeta{}
+	p.collection = nil
 }
 
 // Abandon discards uncommitted memory. It never changes durable state.

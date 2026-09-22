@@ -45,6 +45,12 @@ func TestPreparedInsertOverlapsOrderedCommit(t *testing.T) {
 		t.Fatalf("commit acknowledged before release: %v", err)
 	default:
 	}
+	if got, err := col.Get([]byte("b")); err != nil || got != nil {
+		t.Fatalf("first batch visible before ordered publication: %s, %v", got, err)
+	}
+	if got, err := col.Get([]byte("a")); err != nil || got != nil {
+		t.Fatalf("second prepared batch visible before its commit: %s, %v", got, err)
+	}
 	close(release)
 	if err := <-committed; err != nil {
 		t.Fatal(err)
@@ -84,6 +90,9 @@ func TestPreparedInsertSortedValuesAndReopen(t *testing.T) {
 	resultIDs, err := prepared.Commit()
 	if err != nil {
 		t.Fatal(err)
+	}
+	if prepared.collection != nil || prepared.meta.Name != "" || prepared.retained.semanticStreamBlocks != nil {
+		t.Fatal("consumed batch still retains collection or prepared buffers")
 	}
 	for i := range ids {
 		if !bytes.Equal(resultIDs[i], ids[i]) {
@@ -143,6 +152,9 @@ func TestPreparedInsertAbandonBoundsAndLateConflict(t *testing.T) {
 		t.Fatal(err)
 	}
 	prepared.Abandon()
+	if prepared.collection != nil || prepared.meta.Name != "" || prepared.retained.semanticStreamBlocks != nil {
+		t.Fatal("abandoned batch still retains collection or prepared buffers")
+	}
 	if _, err := prepared.Commit(); err == nil {
 		t.Fatal("abandoned commit succeeded")
 	}

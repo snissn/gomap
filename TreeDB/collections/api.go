@@ -12024,7 +12024,7 @@ func (c *Collection) insertBatchOnceWithLockState(
 	}
 	meta := catalog.meta
 	c.meta = meta
-	if prepared := execOpts.prepared; prepared != nil && !sameCollectionMetaIgnoringColumnManifestProgress(meta, prepared.meta) {
+	if prepared := execOpts.prepared; prepared != nil && !sameCollectionMeta(preparedInsertSchemaMeta(meta), prepared.meta) {
 		closePlanningSnapshot()
 		return nil, fmt.Errorf("collections: concurrent schema modification detected for %q", prepared.meta.Name)
 	}
@@ -12981,7 +12981,7 @@ func (c *Collection) insertBatchNoIndex(
 		Documents: len(documents),
 		Indexes:   len(c.meta.Indexes),
 	}
-	if prepared := execOpts.prepared; prepared != nil && !sameCollectionMetaIgnoringColumnManifestProgress(c.meta, prepared.meta) {
+	if prepared := execOpts.prepared; prepared != nil && !sameCollectionMeta(preparedInsertSchemaMeta(c.meta), prepared.meta) {
 		_ = snap.Close()
 		return nil, fmt.Errorf("collections: concurrent schema modification detected for %q", prepared.meta.Name)
 	}
