@@ -12,6 +12,7 @@ on:
       - 'TreeDB/collections/vector_partition_router_v1.go'
       - 'TreeDB/internal/raftplacement/source_shard_v2*'
       - 'TreeDB/internal/vectorpartition/source_snapshot*_v2*'
+      - 'TreeDB/internal/sourcepartition/*.go'
       - 'TreeDB/nativewire/vector_partition_owner*'
       - 'TreeDB/nativewire/vector_partition_generation_source_v1.go'
       - 'TreeDB/nativewire/vector_partition_production_node_v1.go'
@@ -51,7 +52,7 @@ jobs:
           set -euo pipefail
           git rev-parse HEAD
           go version
-          mapfile -t files < <(git diff --name-only --diff-filter=AM 0d10c1605f8887f9a1cd7e3cb910014a5b23cfe3 HEAD -- 'TreeDB/collections/*.go' 'TreeDB/nativewire/*.go' 'TreeDB/internal/raftplacement/*.go' 'TreeDB/internal/vectorpartition/*.go')
+          mapfile -t files < <(git diff --name-only --diff-filter=AM 0d10c1605f8887f9a1cd7e3cb910014a5b23cfe3 HEAD -- 'TreeDB/collections/*.go' 'TreeDB/nativewire/*.go' 'TreeDB/internal/raftplacement/*.go' 'TreeDB/internal/vectorpartition/*.go' 'TreeDB/internal/sourcepartition/*.go')
           gofmt -d "${files[@]}" || true
           if [[ -n "$(gofmt -l "${files[@]}")" ]]; then
             for file in "${files[@]}"; do
@@ -67,7 +68,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          go test ./TreeDB/collections ./TreeDB/internal/raftplacement ./TreeDB/internal/vectorpartition ./TreeDB/nativewire -run 'Test(VectorPartitionOwnerSearchOpenPlan|OwnerGenerationSource|SourceShardMap|SourceSnapshot|VectorPartitionPagedRoot|VectorPartitionManifestV1|VectorPartitionManifestContextDigest)' -count=3 -timeout=10m -v | tee owner-local-tests.txt
+          go test ./TreeDB/collections ./TreeDB/internal/raftplacement ./TreeDB/internal/sourcepartition ./TreeDB/internal/vectorpartition ./TreeDB/nativewire -run 'Test(VectorPartitionOwnerSearchOpenPlan|OwnerGenerationSource|SourceShardMap|SourceSnapshot|VectorPartitionPagedRoot|VectorPartitionManifestV1|VectorPartitionManifestContextDigest)' -count=3 -timeout=10m -v | tee owner-local-tests.txt
       - name: Exact baseline schema-6 compatibility
         shell: bash
         run: |
@@ -85,12 +86,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          go test ./TreeDB/collections ./TreeDB/internal/raftplacement ./TreeDB/internal/vectorpartition -run '^$' -bench '^Benchmark(VectorPartitionOwnerSearchOpenPlan|SourceShardMapResolveDocumentID|SourceSnapshotChunkVerification|SourceSnapshotChunkDecode)V2$' -benchmem -benchtime=200ms -count=3 | tee owner-local-bench.txt
+          go test ./TreeDB/collections ./TreeDB/internal/raftplacement ./TreeDB/internal/sourcepartition ./TreeDB/internal/vectorpartition -run '^$' -bench '^Benchmark(VectorPartitionOwnerSearchOpenPlan|SourceShardMapResolveDocumentID|SourceSnapshotChunkVerification|SourceSnapshotChunkDecode)V2$' -benchmem -benchtime=200ms -count=3 | tee owner-local-bench.txt
       - name: Owner plan and source race conformance
         shell: bash
         run: |
           set -euo pipefail
-          go test -race ./TreeDB/collections ./TreeDB/internal/raftplacement ./TreeDB/internal/vectorpartition ./TreeDB/nativewire -run 'Test(VectorPartitionOwnerSearchOpenPlan|OwnerGenerationSource|SourceShardMap|SourceSnapshot|VectorPartitionPagedRoot|VectorPartitionManifestContextDigest)' -count=1 -timeout=10m -v | tee owner-local-race.txt
+          go test -race ./TreeDB/collections ./TreeDB/internal/raftplacement ./TreeDB/internal/sourcepartition ./TreeDB/internal/vectorpartition ./TreeDB/nativewire -run 'Test(VectorPartitionOwnerSearchOpenPlan|OwnerGenerationSource|SourceShardMap|SourceSnapshot|VectorPartitionPagedRoot|VectorPartitionManifestContextDigest)' -count=1 -timeout=10m -v | tee owner-local-race.txt
       - name: Upload focused evidence
         if: always()
         uses: actions/upload-artifact@v4

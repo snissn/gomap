@@ -56,6 +56,9 @@ func TestSourceShardMapBoundImmutableLookupV2(t *testing.T) {
 		t.Fatal(err)
 	}
 	digest := input.Digest
+	if digest != "394447277b9a94741458c9678959e505cc6da38dbf84705ff9fbc1677a5e3caf" {
+		t.Fatalf("source map digest changed during pure codec extraction: %s", digest)
+	}
 	input.Epoch++
 	input.Shards[0].GroupID = "group-b"
 	input.Shards[0].ShardID = "changed"

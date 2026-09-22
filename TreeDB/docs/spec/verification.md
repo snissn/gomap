@@ -2579,3 +2579,23 @@ This fixture lives with the final metadata child, not in a separate harness PR.
 
 
 Draft source-snapshot V2 checks in `internal/vectorpartition/source_snapshot*_v2_test.go` compare the bounded streaming Merkle accumulator with a separate small-fixture tree, exercise checkpoint resume at every chunk, reject changed identities, missing/reordered/duplicate rows, corrupt/truncated codec bytes and excessive row/ID lengths, preserve original-source ordinal provenance, and decode a bounded local chunk when the declared global source row count reaches uint64 maximum. The scoped owner-local workflow runs these tests repeatedly and under race instrumentation, and records chunk verification/decode allocations. These are codec checks only. The ordinary paged load, canonical source authority, atomic durable import, bounded build, reachability and node-local memory evidence required by #4808 remain open.
+## Sparse catalog runtime
+
+| Invariant | Test / harness |
+| --- | --- |
+| Nonvoting, storage-free ingress reaches production durable remote ownership without wrong-group mutation | `TestSparseCatalogNonVoterIngressRoutesWithVerifiedProofV1` |
+| More than 32 inventory nodes do not enlarge catalog voting or local hosting | `TestSparseCatalogConfigAcceptsMoreThan32NodesWithThreeVotersV1` |
+| Oversized inventory/metadata/local hosting refuses before stores open | `TestSparseCatalogResourceBoundsRefuseBeforeOpeningV1` |
+| Stable cluster identity never waives exact persisted topology | `TestSparseCatalogExplicitIdentityRequiresExactReopenV1` |
+| Missing, conflicting, future and stale metadata refuse; consumer publication/read authority refuses; epoch refresh reacquires authority | `TestSparseCatalogConsumerRejectsTamperedRouteV1` |
+| Nonvoting data owner survives exact restart/catalog leader failover, then refuses fresh writes after authority loss | `TestSparseCatalogNonVoterDataOwnerFailoverAndAuthorityLossV1` |
+| Global client admission is independent and bounded | `TestSparseCatalogClientAdmissionIsBoundedAndIndependentV1` |
+| Saturated ingress/forward capacity cannot force nested authoritative read RPCs | `TestSparseCatalogSaturationPreservesAuthoritativeReadProgressV1` |
+| Closing a runtime interrupts an already accepted idle Raft connection without waiting for a remote node to close | `TestSparseCatalogRuntimeCloseInterruptsIdleRaftConnectionV1` and sparse catalog race tests |
+| Matched all-voter baseline/candidate and enabled consumer cost with process resources | `BenchmarkSparseCatalogRemoteOwnerCreateV1`, `.github/workflows/sparse-catalog-qualification.yml` |
+
+The 40-node inventory case is configuration/control-plane evidence, not 40 live
+machines. These local cases do not close distributed ANN, authentication, EC2
+failure-domain, or horizontal-scaling qualification in #4805/#4250/#3983.
+
+Source-map V2 pure token/coverage/codec checks live in `internal/sourcepartition`; `raftplacement` separately checks every referenced group against its resolved catalog. `TestSourceShardMapCanonicalCodecAndPriorDigestV2` freezes the pre-extraction V2 digest and refuses unknown, duplicate, changed or noncanonical encoded content. Collection-side validation of a map is not publication or source-root authority.
