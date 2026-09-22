@@ -44,18 +44,26 @@ func TestWriterBlockCompressionZSTDCohereShapeRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	w.SetBlockCompression(BlockCodecZSTD, true)
-	ptrs, stats, err := w.AppendFrameWithStatsInto(0, nil, records, make([]page.ValuePtr, recordCount))
-	if err != nil {
-		_ = w.Close()
-		t.Fatal(err)
-	}
-	if !stats.Kept || stats.StoredPayloadBytes*5 >= stats.RawPayloadBytes*3 {
-		_ = w.Close()
-		t.Fatalf("unexpected compression: %+v", stats)
-	}
-	if cap(w.rawScratch) != 0 || cap(w.blockScratch) != 0 {
-		_ = w.Close()
-		t.Fatalf("eligible parts path staged payload copies: raw=%d encoded=%d", cap(w.rawScratch), cap(w.blockScratch))
+	var ptrs []page.ValuePtr
+	var want []Record
+	// A one-record frame uses EncodeAll; surrounding frames use streaming.
+	single := []Record{{RID: 61, Value: bytes.Repeat([]byte("single-frame-"), 32<<10)}}
+	for frame, input := range [][]Record{records, single, records} {
+		framePtrs, stats, err := w.AppendFrameWithStatsInto(0, nil, input, make([]page.ValuePtr, len(input)))
+		if err != nil {
+			_ = w.Close()
+			t.Fatal(err)
+		}
+		if !stats.Kept || stats.StoredPayloadBytes*5 >= stats.RawPayloadBytes*3 {
+			_ = w.Close()
+			t.Fatalf("frame %d: unexpected compression: %+v", frame, stats)
+		}
+		if frame == 0 && (cap(w.rawScratch) != 0 || cap(w.blockScratch) != 0) {
+			_ = w.Close()
+			t.Fatalf("eligible parts path staged payload copies: raw=%d encoded=%d", cap(w.rawScratch), cap(w.blockScratch))
+		}
+		ptrs = append(ptrs, framePtrs...)
+		want = append(want, input...)
 	}
 	if err := w.Close(); err != nil {
 		t.Fatal(err)
@@ -75,7 +83,7 @@ func TestWriterBlockCompressionZSTDCohereShapeRoundTrip(t *testing.T) {
 		if err != nil {
 			t.Fatalf("read %d: %v", i, err)
 		}
-		if !bytes.Equal(got, records[i].Value) {
+		if !bytes.Equal(got, want[i].Value) {
 			t.Fatalf("value %d mismatch", i)
 		}
 	}
@@ -93,7 +101,12 @@ func TestWriterBlockCompressionZSTDPartsFallsBackToRaw(t *testing.T) {
 		records[i] = Record{RID: uint64(i + 1), Value: value}
 	}
 
-	w := NewWriterWithSink(io.Discard, page.ValueLogFileID(1))
+	path := filepath.Join(t.TempDir(), "value-000001.log")
+	w, err := NewWriter(path, page.ValueLogFileID(1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = w.Close() })
 	w.SetBlockCompression(BlockCodecZSTD, true)
 	_, stats, err := w.AppendFrameWithStatsInto(0, nil, records, make([]page.ValuePtr, recordCount))
 	if err != nil {
@@ -104,6 +117,36 @@ func TestWriterBlockCompressionZSTDPartsFallsBackToRaw(t *testing.T) {
 	}
 	if cap(w.blockScratch) != 0 {
 		t.Fatalf("eligible raw fallback staged encoded payload: %d", cap(w.blockScratch))
+	}
+	// Reuse the pool after a streaming write hit the incompressible-size limit.
+	raw := bytes.Repeat([]byte("after-fallback-"), 16<<10)
+	encoded, err := encodeBlockPayload(BlockCodecZSTD, raw, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := decodeBlockPayload(uint8(BlockCodecZSTD), encoded, uint32(len(raw)), nil)
+	if err != nil || !bytes.Equal(decoded, raw) {
+		t.Fatalf("EncodeAll after fallback: mismatch or error %v", err)
+	}
+	w.ResetCompressionHints()
+	recovered := cohereBlockRecords(recordCount)
+	ptrs, stats, err := w.AppendFrameWithStatsInto(0, nil, recovered, make([]page.ValuePtr, recordCount))
+	if err != nil || !stats.Kept {
+		t.Fatalf("stream after fallback: stats=%+v err=%v", stats, err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reader, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	for i, ptr := range ptrs {
+		got, err := ReadAtWithDict(reader, ptr, true, nil, nil, nil, templ.DecodeOptions{})
+		if err != nil || !bytes.Equal(got, recovered[i].Value) {
+			t.Fatalf("stream after fallback row %d: mismatch or error %v", i, err)
+		}
 	}
 }
 

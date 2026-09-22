@@ -485,6 +485,61 @@ func TestColumnRetainedSemanticStreamV1DenseRowsStayImplicit3218(t *testing.T) {
 	}
 }
 
+func TestColumnRetainedSemanticStreamV1PathCapacityFollowsOccupancy(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		rows, first int
+		stride      int
+		hint        int
+	}{
+		{"dense", 4096, 0, 1, 4096},
+		{"sparse_from_zero", 4096, 0, 64, 4096},
+		{"sparse_late", 4096, 1000, 64, 4096},
+		{"late_dense_burst", 4096, 2048, 1, 4096},
+		{"last_row", 4096, 4095, 1, 4096},
+		{"small_block", 7, 0, 1, 7},
+		{"no_hint", 67, 0, 3, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			streams := newColumnRetainedSemanticStreamStreams()
+			path := []string{"payload", "value"}
+			key := columnRetainedSemanticStreamPathKey(path)
+			raw := []byte(`"value"`)
+			reference := &columnRetainedSemanticStreamPath{segments: path, rawValues: make([][]byte, 0, tc.rows)}
+			for row := tc.first; row < tc.rows; row += tc.stride {
+				streams.appendValue(path, uint64(row), raw, tc.hint)
+				reference.appendValue(uint64(row), raw)
+				if row == tc.first && tc.hint > 16 && cap(streams.byKey[key].rawValues) > 16 {
+					t.Fatalf("first value reserved whole-block capacity: %d", cap(streams.byKey[key].rawValues))
+				}
+			}
+			stream := streams.byKey[key]
+			if reference.rows == nil && stream.rows != nil {
+				t.Fatal("dense row ordinals must remain implicit")
+			}
+			if tc.stride == 64 && (cap(stream.rawValues) > 128 || cap(stream.rows) > 128) {
+				t.Fatalf("sparse stream overallocated: values=%d rows=%d", cap(stream.rawValues), cap(stream.rows))
+			}
+			for i := range stream.rawValues {
+				if &stream.rawValues[i][0] != &raw[0] {
+					t.Fatal("capacity growth copied borrowed raw values")
+				}
+			}
+			want, err := encodeColumnRetainedSemanticStreamV1BlockFromStreams(tc.rows, &columnRetainedSemanticStreamStreams{byKey: map[string]*columnRetainedSemanticStreamPath{key: reference}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := encodeColumnRetainedSemanticStreamV1BlockFromStreams(tc.rows, streams)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(got, want) {
+				t.Fatal("capacity sizing changed encoded block bytes")
+			}
+		})
+	}
+}
+
 func TestColumnRetainedSemanticStreamV1PathSegmentInternerReusesSkipTraversalSegments3206(t *testing.T) {
 	cfg := ColumnStoreConfig{
 		Enabled: true,

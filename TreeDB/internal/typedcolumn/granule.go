@@ -838,7 +838,6 @@ func putZstdEncoder(enc *zstd.Encoder) {
 	if enc == nil {
 		return
 	}
-	enc.Reset(nil)
 	zstdEncoderPool.Put(enc)
 }
 

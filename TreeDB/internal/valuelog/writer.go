@@ -2428,6 +2428,8 @@ func (w *Writer) appendBlockFrameWithStats(records []Record, rawPayloadBytes int
 			encodedFrame = w.encLimiter.buf
 			w.encLimiter.buf = nil
 			w.encLimiter.limit = 0
+			// Detach the writer only for streaming use; EncodeAll needs no reset.
+			enc.Reset(nil)
 			putBlockZstdEncoder(enc)
 			if encodeErr == nil {
 				encoded = encodedFrame[encodedStart:]

@@ -91,11 +91,19 @@ func (s *columnRetainedSemanticStreamStreams) appendValue(path []string, row uin
 		if stream == nil {
 			stream = &columnRetainedSemanticStreamPath{
 				segments:  append([]string(nil), path...),
-				rawValues: make([][]byte, 0, streamEntryCapacity),
+				rawValues: make([][]byte, 0, min(16, streamEntryCapacity)),
 			}
 			s.byKey[key] = stream
 		}
 		current.stream = stream
+	}
+	// Rare paths should not reserve a whole block. Once the small initial
+	// buffer fills, use observed occupancy to avoid repeated dense-path growth.
+	if n := len(stream.rawValues); n > 0 && n == cap(stream.rawValues) && n < streamEntryCapacity {
+		capacity := min(streamEntryCapacity, (n+1)*streamEntryCapacity/(int(row)+1))
+		if capacity > n {
+			stream.rawValues = slices.Grow(stream.rawValues, capacity-n)
+		}
 	}
 	stream.appendValue(row, raw)
 }
