@@ -41,6 +41,19 @@ type VectorPartitionSourceImportProgressV2 struct {
 	Snapshot       VectorPartitionSourceSnapshotV2
 }
 
+// VectorPartitionSourceImportStatsV2 counts actual work in this import call.
+// DirectoryRecordsRead includes the exact safety fallback when it is needed;
+// a fallback scan is exposed rather than reported as bounded metadata work.
+type VectorPartitionSourceImportStatsV2 struct {
+	DirectoryRecordsRead uint64
+	FallbackRecordsRead  uint64
+	CommandPayloadBytes  uint64
+	SourceProgressReads  uint64
+	SourceLeafBytes      uint64
+	SourceRows           uint64
+	SourceProofNodes     uint64
+}
+
 type sourceImportBindingV2 struct {
 	Snapshot     vectorpartition.SourceSnapshotV2
 	IndexName    string
@@ -66,7 +79,20 @@ type sourceImportBindingRecordV2 struct {
 
 const maxSourceImportBindingBytesV2 = 3000
 
+// MaxVectorPartitionSourceImportInputBytesV2 is the pre-projection input cap.
+// The complete encoded WAL command has a separate 768 KiB ceiling, including
+// source metadata. Callers choose the immutable RowsPerChunk accordingly.
+const MaxVectorPartitionSourceImportInputBytesV2 = 512 << 10
+
 type sourceImportPublicationV2 struct {
+	stats           *VectorPartitionSourceImportStatsV2
+	completed       vectorpartition.SourceSnapshotV2
+	seal            []byte
+	snapshot        vectorpartition.SourceSnapshotV2
+	chunkIndex      uint64
+	leafDigest      [sha256.Size]byte
+	leafBytes       []byte
+	proofNodes      []vectorpartition.SourceSnapshotNodeV2
 	bindingKey      string
 	binding         []byte
 	progressKey     string
@@ -104,6 +130,18 @@ func VectorPartitionSourceSchemaDigestV2(cfg ColumnStoreConfig) ([sha256.Size]by
 // and bind GroupID to its local canonical group before invocation. A validated
 // map or completed local snapshot is not a catalog/generation certificate.
 func (c *Collection) ImportVectorPartitionSourceChunkV2(ownership sourcepartition.ResolvedSourceShardMapV2, input VectorPartitionSourceImportChunkV2, ids, retained [][]byte, columns []TypedColumnBatch) (VectorPartitionSourceImportProgressV2, error) {
+	return c.importVectorPartitionSourceChunkV2(ownership, input, ids, retained, columns, nil)
+}
+
+// ImportVectorPartitionSourceChunkWithStatsV2 is the same public durable path
+// with measured directory, progress and encoded-command work.
+func (c *Collection) ImportVectorPartitionSourceChunkWithStatsV2(ownership sourcepartition.ResolvedSourceShardMapV2, input VectorPartitionSourceImportChunkV2, ids, retained [][]byte, columns []TypedColumnBatch) (VectorPartitionSourceImportProgressV2, VectorPartitionSourceImportStatsV2, error) {
+	var stats VectorPartitionSourceImportStatsV2
+	progress, err := c.importVectorPartitionSourceChunkV2(ownership, input, ids, retained, columns, &stats)
+	return progress, stats, err
+}
+
+func (c *Collection) importVectorPartitionSourceChunkV2(ownership sourcepartition.ResolvedSourceShardMapV2, input VectorPartitionSourceImportChunkV2, ids, retained [][]byte, columns []TypedColumnBatch, stats *VectorPartitionSourceImportStatsV2) (VectorPartitionSourceImportProgressV2, error) {
 	var zero VectorPartitionSourceImportProgressV2
 	if c == nil || c.db == nil {
 		return zero, errCollectionNil
@@ -156,7 +194,7 @@ func (c *Collection) ImportVectorPartitionSourceChunkV2(ownership sourcepartitio
 		orderedIDs[i] = bytes.Clone(id)
 	}
 	metadata := sourceImportCommandMetadataV2{Version: 2, OrderedIDs: orderedIDs, Binding: sourceImportBindingV2{Snapshot: input.Snapshot, IndexName: input.IndexName, VectorColumn: input.VectorColumn, GroupID: input.GroupID, Start: owner.Start, End: owner.End}, ChunkIndex: input.ChunkIndex, DocumentRevisions: slices.Clone(input.DocumentRevisions), LegacyOrigins: input.LegacyOrigins}
-	return c.importSourceChunkSchemaLockedV2(metadata, ids, retained, projection, nil, nil)
+	return c.importSourceChunkSchemaLockedV2(metadata, ids, retained, projection, nil, nil, stats)
 }
 
 func sourceImportChunkFromProjectionV2(meta CollectionMeta, command sourceImportCommandMetadataV2, ids [][]byte, projection *trustedFloat32Projection) (vectorpartition.SourceChunkV2, error) {
@@ -270,8 +308,16 @@ func decodeSourceImportJSONV2(raw []byte, out any) error {
 	return nil
 }
 
-func (c *Collection) importSourceChunkSchemaLockedV2(command sourceImportCommandMetadataV2, ids, retained [][]byte, projection *trustedFloat32Projection, replay *backenddb.CommandWALIntent, hooks *sourcePublicationHooks) (VectorPartitionSourceImportProgressV2, error) {
+func (c *Collection) importSourceChunkSchemaLockedV2(command sourceImportCommandMetadataV2, ids, retained [][]byte, projection *trustedFloat32Projection, replay *backenddb.CommandWALIntent, hooks *sourcePublicationHooks, diagnostics ...*VectorPartitionSourceImportStatsV2) (VectorPartitionSourceImportProgressV2, error) {
+	var stats *VectorPartitionSourceImportStatsV2
+	if len(diagnostics) != 0 {
+		stats = diagnostics[0]
+	}
+
 	var zero VectorPartitionSourceImportProgressV2
+	if cfg := c.Meta().Options.ColumnStore; cfg != nil && cfg.ActiveManifest != nil && cfg.ActiveManifest.Format != columnSourceDirectoryFormatV2 {
+		return zero, errors.New("collections: source import refuses mixed legacy column manifest")
+	}
 	chunk, err := sourceImportChunkFromProjectionV2(c.Meta(), command, ids, projection)
 	if err != nil {
 		return zero, err
@@ -291,6 +337,9 @@ func (c *Collection) importSourceChunkSchemaLockedV2(command sourceImportCommand
 	payload, err := commitlog.EncodeCollectionSourceImportPayloadV2(commitlog.CollectionSourceImportPayloadV2{Metadata: metadata, Inserted: typed})
 	if err != nil {
 		return zero, err
+	}
+	if stats != nil {
+		stats.CommandPayloadBytes = uint64(len(payload))
 	}
 	binding, err := json.Marshal(sourceImportBindingRecordV2{Version: 2, Binding: command.Binding})
 	if err != nil {
@@ -312,12 +361,16 @@ func (c *Collection) importSourceChunkSchemaLockedV2(command sourceImportCommand
 		if snap == nil {
 			return zero, backenddb.ErrClosed
 		}
+		if stats != nil {
+			stats.SourceProgressReads += 4
+		}
 		previous, present, readErr := getSystemValue(snap, progressKey)
 		existingReceipt, receiptPresent, receiptErr := getSystemValue(snap, receiptKey)
 		storedBinding, bindingPresent, bindingErr := getSystemValue(snap, progressKey+":binding")
+		storedSeal, sealPresent, sealErr := getSystemValue(snap, progressKey+":seal")
 		_ = snap.Close()
-		if readErr != nil || receiptErr != nil || bindingErr != nil {
-			return zero, errors.Join(readErr, receiptErr, bindingErr)
+		if readErr != nil || receiptErr != nil || bindingErr != nil || sealErr != nil {
+			return zero, errors.Join(readErr, receiptErr, bindingErr, sealErr)
 		}
 		if bindingPresent != present || (present && !bytes.Equal(storedBinding, binding)) {
 			return zero, errors.New("collections: changed immutable source import identity or partial progress")
@@ -336,12 +389,36 @@ func (c *Collection) importSourceChunkSchemaLockedV2(command sourceImportCommand
 			if !present || !bytes.Equal(existingReceipt, receipt[:]) || command.ChunkIndex >= acc.ImportedChunks() {
 				return zero, errors.New("collections: changed or inconsistent source import retry")
 			}
-			return sourceImportPublicProgressV2(command.Binding.Snapshot, acc)
+			result, err := sourceImportPublicProgressV2(command.Binding.Snapshot, acc)
+			if err != nil {
+				return zero, err
+			}
+			if result.Complete != sealPresent {
+				return zero, errors.New("collections: source retry completion seal mismatch")
+			}
+			if sealPresent {
+				if _, err := decodeSourceImportSealV2(storedSeal, result.Snapshot); err != nil {
+					return zero, err
+				}
+			}
+			return result, nil
+		}
+		if sealPresent {
+			return zero, errors.New("collections: source import is already sealed")
 		}
 		if command.ChunkIndex != acc.ImportedChunks() {
 			return zero, errors.New("collections: missing, replayed or reordered source import range")
 		}
-		if err := acc.Append(chunk); err != nil {
+		proofNodes, err := acc.AppendNodesV2(chunk)
+		if err != nil {
+			return zero, err
+		}
+		leafBytes, err := vectorpartition.EncodeSourceLeafV2(command.Binding.Snapshot, chunk)
+		if err != nil {
+			return zero, err
+		}
+		leafDigest, err := vectorpartition.SourceChunkDigestV2(command.Binding.Snapshot, chunk)
+		if err != nil {
 			return zero, err
 		}
 		checkpoint, err := acc.MarshalCheckpoint()
@@ -352,7 +429,19 @@ func (c *Collection) importSourceChunkSchemaLockedV2(command sourceImportCommand
 		if err != nil {
 			return zero, err
 		}
-		plan, err := c.buildSourceReplacementPlan(nil, ids, retained, nil, replay, hooks, projection, false)
+		if result.Complete {
+			finalNodes, err := acc.FinalProofNodesV2()
+			if err != nil {
+				return zero, err
+			}
+			proofNodes = append(proofNodes, finalNodes...)
+		}
+		if stats != nil {
+			stats.SourceLeafBytes = uint64(len(leafBytes))
+			stats.SourceRows = uint64(len(chunk.Rows))
+			stats.SourceProofNodes = uint64(len(proofNodes))
+		}
+		plan, err := c.buildSourceReplacementPlanWithSourceImportV2(nil, ids, retained, nil, replay, hooks, projection, false, true)
 		if err != nil {
 			if isRetriableCollectionMutationError(err) {
 				lastErr = err
@@ -361,7 +450,7 @@ func (c *Collection) importSourceChunkSchemaLockedV2(command sourceImportCommand
 			}
 			return zero, err
 		}
-		plan.sourceImportV2 = &sourceImportPublicationV2{bindingKey: progressKey + ":binding", binding: binding, progressKey: progressKey, previous: previous, previousPresent: present, next: checkpoint, receiptKey: receiptKey, receipt: receipt}
+		plan.sourceImportV2 = &sourceImportPublicationV2{stats: stats, completed: result.Snapshot, snapshot: command.Binding.Snapshot, chunkIndex: command.ChunkIndex, leafDigest: leafDigest, leafBytes: leafBytes, proofNodes: proofNodes, bindingKey: progressKey + ":binding", binding: binding, progressKey: progressKey, previous: previous, previousPresent: present, next: checkpoint, receiptKey: receiptKey, receipt: receipt}
 		if replay != nil {
 			plan.commandWAL = replay
 		} else {
@@ -438,17 +527,27 @@ func (c *Collection) appendSourceImportSystemDeltaV2(it iterator.UnsafeIterator,
 	if snap == nil {
 		return fail(backenddb.ErrClosed)
 	}
+	if publication.stats != nil {
+		publication.stats.SourceProgressReads += 4
+	}
 	current, present, err := getSystemValue(snap, publication.progressKey)
 	_, receiptPresent, receiptErr := getSystemValue(snap, publication.receiptKey)
 	currentBinding, bindingPresent, bindingErr := getSystemValue(snap, publication.bindingKey)
+	_, sealPresent, sealErr := getSystemValue(snap, publication.progressKey+":seal")
 	_ = snap.Close()
-	if err != nil || receiptErr != nil || bindingErr != nil {
-		return fail(errors.Join(err, receiptErr, bindingErr))
+	if err != nil || receiptErr != nil || bindingErr != nil || sealErr != nil {
+		return fail(errors.Join(err, receiptErr, bindingErr, sealErr))
 	}
-	if present != publication.previousPresent || !bytes.Equal(current, publication.previous) || receiptPresent || bindingPresent != present || (bindingPresent && !bytes.Equal(currentBinding, publication.binding)) {
+	if sealPresent || present != publication.previousPresent || !bytes.Equal(current, publication.previous) || receiptPresent || bindingPresent != present || (bindingPresent && !bytes.Equal(currentBinding, publication.binding)) {
 		return fail(errConcurrentRootModification(c.meta.Name, "source_import_v2"))
 	}
 	base.entries = append(base.entries, systemTargetEntry{key: []byte(publication.progressKey), value: bytes.Clone(publication.next)}, systemTargetEntry{key: []byte(publication.receiptKey), value: bytes.Clone(publication.receipt[:])})
+	if publication.completed.Digest != ([sha256.Size]byte{}) {
+		if len(publication.seal) != sourceImportSealBytesV2 {
+			return fail(errors.New("collections: completed source import lacks directory seal"))
+		}
+		base.entries = append(base.entries, systemTargetEntry{key: []byte(publication.progressKey + ":seal"), value: bytes.Clone(publication.seal)})
+	}
 	if !bindingPresent {
 		base.entries = append(base.entries, systemTargetEntry{key: []byte(publication.bindingKey), value: bytes.Clone(publication.binding)})
 	}
@@ -512,7 +611,7 @@ func replayCollectionSourceImportV2(db *backenddb.DB, env commitlog.CommandEnvel
 }
 
 func sourceImportInputBoundsV2(ids, retained [][]byte, columns []TypedColumnBatch) error {
-	remaining := sourcepartition.MaxSourceImportBytesV2
+	remaining := MaxVectorPartitionSourceImportInputBytesV2
 	take := func(n int) bool {
 		if n < 0 || n > remaining {
 			return false
@@ -546,4 +645,26 @@ func sourceImportInputBoundsV2(ids, retained [][]byte, columns []TypedColumnBatc
 		}
 	}
 	return nil
+}
+
+func sourceImportDirectoryPrefixV2(progressKey string) string {
+	digest := sha256.Sum256([]byte(progressKey))
+	return "\x13column-source-directory/v2/source/" + hex.EncodeToString(digest[:]) + "/"
+}
+
+func (p *sourceImportPublicationV2) sourceRecordsV2() []columnManifestRecord {
+	prefix := sourceImportDirectoryPrefixV2(p.progressKey)
+	records := make([]columnManifestRecord, 0, 2+len(p.leafBytes)/columnSourceDirectoryPageBytesV2+len(p.proofNodes))
+	metadata := binary.BigEndian.AppendUint64(nil, uint64(len(p.leafBytes)))
+	metadata = append(metadata, p.leafDigest[:]...)
+	records = append(records, columnManifestRecord{key: columnSourceDirectoryKeyV2(prefix+"chunk/", p.chunkIndex, 0), value: metadata})
+	for off, page := 0, uint64(1); off < len(p.leafBytes); page++ {
+		end := min(off+columnSourceDirectoryPageBytesV2, len(p.leafBytes))
+		records = append(records, columnManifestRecord{key: columnSourceDirectoryKeyV2(prefix+"chunk/", p.chunkIndex, page), value: bytes.Clone(p.leafBytes[off:end])})
+		off = end
+	}
+	for _, n := range p.proofNodes {
+		records = append(records, columnManifestRecord{key: columnSourceDirectoryKeyV2(prefix+"node/", uint64(n.Level), n.Index), value: bytes.Clone(n.Digest[:])})
+	}
+	return records
 }

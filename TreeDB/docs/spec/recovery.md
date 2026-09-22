@@ -664,3 +664,13 @@ After successful open:
 2. RID join (when present) must be exact; no synthetic value reconstruction is permitted.
 3. Commit-log cleanup occurs only after successful replay.
 4. Value-log segments are not deleted as part of normal replay cleanup.
+
+
+## Draft source import V2 recovery
+
+Format14 source import uses the existing command-WAL `CollectionReplaceSourceByID` executor and ordered root publication. The source directory, immutable row/proof records, primary rows, column assets, row locators, checkpoint and receipt share that publication. Exact retries compare the complete command receipt; changed retries, gaps and existing exact IDs refuse. Replay preserves the explicit input ordinal order even though the typed command payload sorts IDs. The completed source root is reconstructed from the fixed checkpoint.
+
+An explicit `tcd2` source directory retains `SCL2` source bytes and Merkle nodes in the existing B-tree root, so verification does not require an old WAL segment or a later mutable document value. After checkpoint/reopen the public source reader verifies the requested local bytes against the expected completed snapshot. This local recovery path does not admit canonical source authority or enable schema7 ANN serving. Source-directory lifecycle/GC and cross-node source admission remain draft qualification work.
+
+
+`SIS2` completion bindings and historical directory headers retain the original semantic root across later imports. Explicit V2 asset discovery participates in ordinary recoverable-root/GC protection, with fail-closed metadata budgets. Replay retains the same immutable source identity and exact rows even if physical segment packing differs. Destructive GC/held-source tests and race qualification remain required on each candidate; canonical source admission and owner-only paged ANN lifecycle are still gated.

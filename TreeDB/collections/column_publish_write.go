@@ -109,6 +109,13 @@ func (c *Collection) requireColumnStoreCommandWAL(meta CollectionMeta, commandWA
 }
 
 func requireColumnStoreWriteOperationSupported(meta CollectionMeta, operation ColumnPublishOperation) error {
+	return requireColumnStoreWriteOperationSupportedWithSourceImportV2(meta, operation, false)
+}
+
+func requireColumnStoreWriteOperationSupportedWithSourceImportV2(meta CollectionMeta, operation ColumnPublishOperation, sourceImport bool) error {
+	if cfg := meta.Options.ColumnStore; cfg != nil && cfg.ActiveManifest != nil && cfg.ActiveManifest.Format == columnSourceDirectoryFormatV2 && (!sourceImport || operation != ColumnPublishOperationInsert) {
+		return fmt.Errorf("%w: incremental source directory requires explicit source import V2", backenddb.ErrCommandWALRejected)
+	}
 	if !columnStoreWriteEnabled(meta) {
 		return nil
 	}
@@ -160,7 +167,7 @@ func (c *Collection) publishRootDeltaGroupMaybeColumn(ordered []backenddb.Ordere
 	if err := c.requireColumnStoreCommandWAL(input.meta, input.commandWALIntent); err != nil {
 		return 0, nil, CollectionMeta{}, nil, err
 	}
-	if err := requireColumnStoreWriteOperationSupported(input.meta, input.operation); err != nil {
+	if err := requireColumnStoreWriteOperationSupportedWithSourceImportV2(input.meta, input.operation, input.sourceImportV2 != nil); err != nil {
 		return 0, nil, CollectionMeta{}, nil, err
 	}
 	if !columnStoreWriteEnabled(input.meta) {
@@ -402,7 +409,7 @@ func (c *Collection) publishRootDeltaBatchGroupMaybeColumn(ordered []backenddb.O
 	if err := c.requireColumnStoreCommandWAL(input.meta, input.commandWALIntent); err != nil {
 		return 0, nil, CollectionMeta{}, nil, err
 	}
-	if err := requireColumnStoreWriteOperationSupported(input.meta, input.operation); err != nil {
+	if err := requireColumnStoreWriteOperationSupportedWithSourceImportV2(input.meta, input.operation, input.sourceImportV2 != nil); err != nil {
 		return 0, nil, CollectionMeta{}, nil, err
 	}
 	if !columnStoreWriteEnabled(input.meta) {
@@ -1020,22 +1027,42 @@ func (c *Collection) prepareColumnPublishPlanLease(input columnWritePublishInput
 	if appliedCommandLSN == 0 {
 		return nil, errors.New("collections: column publish lease requires a reserved AppliedCommandLSN")
 	}
-	currentRecords, err := c.loadColumnManifestRecordsForPublish(baseManifestRootID, input.meta.Name, *cfg)
+	var currentRecords []columnManifestRecord
+	var sourceDirectory *columnSourceDirectoryAppendV2
+	var err error
+	if input.sourceImportV2 != nil {
+		sourceDirectory, err = c.prepareColumnSourceDirectoryAppendV2(input, baseManifestRootID)
+	} else {
+		if cfg.ActiveManifest != nil && cfg.ActiveManifest.Format == columnSourceDirectoryFormatV2 {
+			return nil, errors.New("collections: source directory requires explicit V2 publication")
+		}
+		currentRecords, err = c.loadColumnManifestRecordsForPublish(baseManifestRootID, input.meta.Name, *cfg)
+	}
 	if err != nil {
 		return nil, err
 	}
 	_, replay := input.commandWALIntent.ReplayAssignedLSN()
 	if !replay && input.selectStableResource != nil && input.operation == ColumnPublishOperationInsert && len(input.sourceDeleteDocuments) == 0 &&
 		columnStoreTypedScalarIndexesSupported(input.meta) && columnStoreConfigNeedsDirectViewTypedColumnAlignment(*cfg) {
-		// Prefer the highest live owned file ID in the sorted manifest.
-		end := sort.Search(len(currentRecords), func(i int) bool {
-			return bytes.Compare(currentRecords[i].key, []byte(columnManifestSegmentOwnershipRecordPrefix+"\xff\xff\xff\xff\x00")) >= 0
-		})
-		if end > 0 && bytes.HasPrefix(currentRecords[end-1].key, columnManifestSegmentOwnershipRecordPrefixBytes) {
-			marker, selectErr := decodeColumnManifestSegmentOwnership(currentRecords[end-1].key, currentRecords[end-1].value)
-			if selectErr != nil {
-				return nil, selectErr
+		// V2 carries one exact active-segment witness in its bounded directory.
+		// Legacy manifests keep their existing highest-live-file selection.
+		var selected *columnManifestSegmentOwnership
+		if sourceDirectory != nil {
+			selected = sourceDirectory.activeSegment
+		} else {
+			end := sort.Search(len(currentRecords), func(i int) bool {
+				return bytes.Compare(currentRecords[i].key, []byte(columnManifestSegmentOwnershipRecordPrefix+"\xff\xff\xff\xff\x00")) >= 0
+			})
+			if end > 0 && bytes.HasPrefix(currentRecords[end-1].key, columnManifestSegmentOwnershipRecordPrefixBytes) {
+				marker, selectErr := decodeColumnManifestSegmentOwnership(currentRecords[end-1].key, currentRecords[end-1].value)
+				if selectErr != nil {
+					return nil, selectErr
+				}
+				selected = &marker
 			}
+		}
+		if selected != nil {
+			marker := *selected
 			if marker.Frontier < uint64(columnPhysicalAssetSegmentTargetBytes) {
 				selector, selectErr := marker.selector()
 				if selectErr != nil {
@@ -1051,6 +1078,7 @@ func (c *Collection) prepareColumnPublishPlanLease(input columnWritePublishInput
 		}
 	}
 	plan, err := BuildColumnPublishPlan(ColumnPublishPlanInput{
+		sourceDirectoryV2:        sourceDirectory,
 		Collection:               input.meta.Name,
 		ColumnStore:              cfg,
 		ColumnStoreNormalized:    true,

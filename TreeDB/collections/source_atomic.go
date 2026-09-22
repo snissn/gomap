@@ -188,6 +188,14 @@ func (c *Collection) replaceSourceDocumentsAtomicModeSchemaLocked(parentID []byt
 }
 
 func (c *Collection) buildSourceReplacementPlan(deleteIDs, insertIDs, insertDocs [][]byte, deletePlanner sourceReplacementDeletePlanner, replay *backenddb.CommandWALIntent, hooks *sourcePublicationHooks, projection *trustedFloat32Projection, upsert bool) (*sourceReplacementPlan, error) {
+	return c.buildSourceReplacementPlanWithSourceImportV2(deleteIDs, insertIDs, insertDocs, deletePlanner, replay, hooks, projection, upsert, false)
+}
+
+func (c *Collection) buildSourceReplacementPlanWithSourceImportV2(deleteIDs, insertIDs, insertDocs [][]byte, deletePlanner sourceReplacementDeletePlanner, replay *backenddb.CommandWALIntent, hooks *sourcePublicationHooks, projection *trustedFloat32Projection, upsert, sourceImport bool) (*sourceReplacementPlan, error) {
+	if sourceImport && (upsert || len(deleteIDs) != 0 || deletePlanner != nil) {
+		return nil, errors.New("collections: source import cannot delete or replace rows")
+	}
+
 	snap := c.db.AcquireSnapshot()
 	if snap == nil {
 		return nil, backenddb.ErrClosed
@@ -220,10 +228,12 @@ func (c *Collection) buildSourceReplacementPlan(deleteIDs, insertIDs, insertDocs
 		}
 		plannerOptions.typedProjection = projection
 	}
-	if err := requireColumnStoreWriteOperationSupported(meta, ColumnPublishOperationDelete); err != nil {
-		return fail(err)
+	if !sourceImport {
+		if err := requireColumnStoreWriteOperationSupported(meta, ColumnPublishOperationDelete); err != nil {
+			return fail(err)
+		}
 	}
-	if err := requireColumnStoreWriteOperationSupported(meta, ColumnPublishOperationInsert); err != nil {
+	if err := requireColumnStoreWriteOperationSupportedWithSourceImportV2(meta, ColumnPublishOperationInsert, sourceImport); err != nil {
 		return fail(err)
 	}
 	plan.meta = meta

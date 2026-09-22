@@ -5,6 +5,16 @@ on:
     paths:
       - 'TreeDB/collections/vector_partition_owner*'
       - 'TreeDB/collections/vector_partition_source_import_v2*'
+      - 'TreeDB/collections/vector_partition_source_reader_v2*'
+      - 'TreeDB/collections/column_source_directory*v2*'
+      - 'TreeDB/collections/column_asset_gc.go'
+      - 'TreeDB/collections/column_asset_reachability.go'
+      - 'TreeDB/collections/column_store.go'
+      - 'TreeDB/collections/column_publish_plan.go'
+      - 'TreeDB/collections/stable_resource.go'
+      - 'TreeDB/collections/column_physical_scan.go'
+      - 'TreeDB/collections/column_physical_visibility.go'
+      - 'TreeDB/collections/typed_column_publication.go'
       - 'TreeDB/collections/source_atomic.go'
       - 'TreeDB/collections/column_publish_write.go'
       - 'TreeDB/collections/command_wal.go'
@@ -100,13 +110,18 @@ jobs:
         run: |
           set -euo pipefail
           go test ./TreeDB/collections ./TreeDB/internal/commitlog ./TreeDB/internal/raftplacement ./TreeDB/internal/sourcepartition ./TreeDB/internal/vectorpartition -run '^$' -bench '^Benchmark(VectorPartitionOwnerSearchOpenPlan|SourceShardMapResolveDocumentID|SourceSnapshotChunkVerification|SourceSnapshotChunkDecode)V2$' -benchmem -benchtime=200ms -count=3 | tee owner-local-bench.txt
+      - name: Public source import allocation and dependency growth
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test ./TreeDB/collections -run '^$' -bench '^BenchmarkVectorPartitionSourceImportDirectoryV2$' -benchmem -benchtime=20x -count=3 | tee owner-local-import-bench.txt
       - name: Owner plan and source race conformance
         shell: bash
         run: |
           set -euo pipefail
           go test -race ./TreeDB/collections ./TreeDB/internal/commitlog ./TreeDB/internal/raftplacement ./TreeDB/internal/sourcepartition ./TreeDB/internal/vectorpartition ./TreeDB/nativewire -run 'Test(VectorPartitionSourceImport|CollectionSourceImport|TypedSource|TypedMinimaInsertAndReplay|VectorPartitionOwnerSearchOpenPlan|OwnerGenerationSource|SourceShardMap|SourceSnapshot|VectorPartitionPagedRoot|VectorPartitionManifestContextDigest)' -count=1 -timeout=10m -v | tee owner-local-race.txt
       - name: Retain verified development inputs
-        if: always()
+        if: ${{ always() && github.event_name == 'workflow_dispatch' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -130,7 +145,7 @@ jobs:
           [[ "$p2_bundle_bytes" -le 2147483648 ]]
           sha256sum gofmt go-toolchain.tar.gz go-modules.tar.gz source.tar.gz | tee SHA256SUMS
       - name: Upload verified development inputs
-        if: always()
+        if: ${{ always() && github.event_name == 'workflow_dispatch' }}
         uses: actions/upload-artifact@v4
         with:
           name: p2-development-inputs-${{ github.event.pull_request.head.sha || github.sha }}

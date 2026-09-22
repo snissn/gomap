@@ -633,6 +633,10 @@ func (c *Collection) typedColumnPartRefForGeneration(snap *backenddb.Snapshot, r
 }
 
 func (c *Collection) typedColumnPartRefForGenerationWithCache(snap *backenddb.Snapshot, rootID uint64, cfg ColumnStoreConfig, generation uint64, cache *typedColumnPartReconstructionCache) (columnManifestAssetRefForScan, bool, error) {
+	if cfg.ActiveManifest != nil && cfg.ActiveManifest.Format == columnSourceDirectoryFormatV2 {
+		ref, err := sourceDirectoryPartRefAtSnapshotV2(snap, rootID, cfg, generation, typedColumnPartAssetPartID, ColumnAssetKindTCS1TypedColumnPart)
+		return ref, err == nil, err
+	}
 	if cache != nil && cache.Prepared != nil {
 		ref, found := materializerPartRef(cache.Prepared.TypedColumnPartRefs, generation, typedColumnPartAssetPartID)
 		return ref, found, nil

@@ -2,10 +2,13 @@ package collections
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
@@ -13,7 +16,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/vectorpartition"
 )
 
-func sourceImportFixtureV2(t *testing.T, c *Collection, rows uint64) (sourcepartition.ResolvedSourceShardMapV2, VectorPartitionSourceImportChunkV2) {
+func sourceImportFixtureV2(t testing.TB, c *Collection, rows uint64) (sourcepartition.ResolvedSourceShardMapV2, VectorPartitionSourceImportChunkV2) {
 	t.Helper()
 	m, err := sourcepartition.CanonicalSourceShardMapV2(sourcepartition.SourceShardMapV2{Format: sourcepartition.SourceShardMapFormatV2, Collection: sourcepartition.CollectionRefV2{Database: "default", Catalog: "default", Collection: c.Meta().Name}, Epoch: 7, TokenAlgorithm: sourcepartition.DocumentIDTokenAlgorithmV2, Shards: []sourcepartition.SourceShardV2{{ShardID: "source-a", GroupID: "group-a", Start: 0, End: ^uint64(0)}}})
 	if err != nil {
@@ -249,5 +252,256 @@ func TestVectorPartitionSourceImportUsesIncrementalDirectoryV2(t *testing.T) {
 	identity := c.Meta().Options.ColumnStore.ActiveManifest
 	if identity == nil || identity.Format != "tcd2" || identity.Version != 2 {
 		t.Fatalf("source import retained full TCS1 manifest instead of V2 incremental directory: %+v", identity)
+	}
+}
+
+func TestVectorPartitionSourceImportBoundsBeforeWALV2(t *testing.T) {
+	dir, d, c := openTypedMinimaCollection(t)
+	defer d.Close()
+	ownership, input := sourceImportFixtureV2(t, c, 2)
+	input.DocumentRevisions = []uint64{1, 2}
+	ids, retained, columns := sourceImportRowsV2("b", "a")
+	before := len(collectionCommandWALFrames(t, dir))
+	columns[1].Strings[0] = strings.Repeat("x", MaxVectorPartitionSourceImportInputBytesV2)
+	if _, err := c.ImportVectorPartitionSourceChunkV2(ownership, input, ids, retained, columns); err == nil {
+		t.Fatal("oversized input accepted")
+	}
+	if len(collectionCommandWALFrames(t, dir)) != before {
+		t.Fatal("oversized input appended WAL")
+	}
+	ownership, input = sourceImportFixtureV2(t, c, 32)
+	input.Snapshot.RowsPerChunk = 32
+	names := make([]string, 32)
+	input.DocumentRevisions = make([]uint64, 32)
+	input.LegacyOrigins = make([]*VectorPartitionSourceOrdinalOriginV2, 32)
+	for i := range names {
+		names[i] = fmt.Sprintf("doc-%d", i)
+		input.DocumentRevisions[i] = uint64(i + 1)
+		input.LegacyOrigins[i] = &VectorPartitionSourceOrdinalOriginV2{CollectionScope: strings.Repeat("s", 4096), IndexDefinitionDigest: input.Snapshot.IndexDefinitionDigest, Generation: 1, RowCount: 32, Ordinal: uint64(i)}
+	}
+	ids, retained, columns = sourceImportRowsV2(names...)
+	if _, err := c.ImportVectorPartitionSourceChunkV2(ownership, input, ids, retained, columns); err == nil {
+		t.Fatal("oversized source metadata accepted")
+	}
+	if len(collectionCommandWALFrames(t, dir)) != before {
+		t.Fatal("oversized metadata appended WAL")
+	}
+}
+
+func TestVectorPartitionSourceImportRetainsAuthenticatedBytesAfterCheckpointV2(t *testing.T) {
+	dir, d, c := openTypedMinimaCollection(t)
+	ownership, input := sourceImportFixtureV2(t, c, 5)
+	var complete VectorPartitionSourceImportProgressV2
+	for chunk := uint64(0); chunk < 3; chunk++ {
+		input.ChunkIndex = chunk
+		names := []string{fmt.Sprintf("row-%d", 2*chunk), fmt.Sprintf("row-%d", 2*chunk+1)}
+		input.DocumentRevisions = []uint64{101 + 2*chunk, 102 + 2*chunk}
+		if chunk == 2 {
+			names = names[:1]
+			input.DocumentRevisions = input.DocumentRevisions[:1]
+		}
+		ids, retained, columns := sourceImportRowsV2(names...)
+		var err error
+		complete, err = c.ImportVectorPartitionSourceChunkV2(ownership, input, ids, retained, columns)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !complete.Complete {
+		t.Fatal("source not complete")
+	}
+	if err := d.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatal(err)
+	}
+	d = openTypedMinimaDB(t, dir)
+	defer d.Close()
+	c, err := NewCollectionManager(d).OpenCollection("minima")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader, err := c.OpenVectorPartitionSourceSnapshotV2(complete.Snapshot, input.IndexName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	for chunk := uint64(0); chunk < 3; chunk++ {
+		got, err := reader.ReadChunk(chunk)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.MetadataReads > 68+got.EncodedBytes/columnSourceDirectoryPageBytesV2 {
+			t.Fatalf("unbounded proof/fragment reads: %+v", got)
+		}
+		for i, row := range got.Chunk.Rows {
+			if row.LocalOrdinal != 2*chunk+uint64(i) || row.DocumentRevision != 101+row.LocalOrdinal || string(row.DocumentID) != fmt.Sprintf("row-%d", row.LocalOrdinal) || row.Values[0] != 1 {
+				t.Fatalf("source row changed after checkpoint: %+v", row)
+			}
+		}
+		if err := vectorpartition.VerifySourceChunkV2(complete.Snapshot, complete.Snapshot.Digest, got.Chunk, got.Proof); err != nil {
+			t.Fatal(err)
+		}
+	}
+	wrong := complete.Snapshot
+	wrong.SnapshotRevision++
+	if _, err := c.OpenVectorPartitionSourceSnapshotV2(wrong, input.IndexName); err == nil {
+		t.Fatal("wrong immutable revision admitted")
+	}
+	if err := reader.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reader.ReadChunk(0); err == nil {
+		t.Fatal("closed source reader remained usable")
+	}
+}
+
+func TestVectorPartitionSourceImportRefusesLegacyMutationBeforeWALV2(t *testing.T) {
+	dir, d, c := openTypedMinimaCollection(t)
+	defer d.Close()
+	ownership, input := sourceImportFixtureV2(t, c, 2)
+	input.DocumentRevisions = []uint64{1, 2}
+	ids, retained, columns := sourceImportRowsV2("a", "b")
+	if _, err := c.ImportVectorPartitionSourceChunkV2(ownership, input, ids, retained, columns); err != nil {
+		t.Fatal(err)
+	}
+	before := len(collectionCommandWALFrames(t, dir))
+	ids, retained, columns = sourceImportRowsV2("c")
+	if _, _, err := c.InsertTypedBatchWithStats(ids, retained, columns); err == nil {
+		t.Fatal("legacy insert accepted V2 source directory")
+	}
+	if len(collectionCommandWALFrames(t, dir)) != before {
+		t.Fatal("unsupported legacy mutation appended WAL")
+	}
+	if _, err := c.Get([]byte("a")); err != nil {
+		t.Fatalf("legacy refusal poisoned source DB: %v", err)
+	}
+}
+
+func BenchmarkVectorPartitionSourceImportDirectoryV2(b *testing.B) {
+	for _, prior := range []int{32, 1024} {
+		b.Run(fmt.Sprintf("prior_chunks=%d", prior), func(b *testing.B) {
+			_, d, c := openTypedMinimaCollection(b)
+			defer d.Close()
+			ownership, input := sourceImportFixtureV2(b, c, 2*uint64(prior+b.N))
+			input.DocumentRevisions = []uint64{1, 2}
+			importAt := func(index int) (VectorPartitionSourceImportStatsV2, error) {
+				input.ChunkIndex = uint64(index)
+				ids, retained, columns := sourceImportRowsV2(fmt.Sprintf("row-%020d", 2*index), fmt.Sprintf("row-%020d", 2*index+1))
+				_, stats, err := c.ImportVectorPartitionSourceChunkWithStatsV2(ownership, input, ids, retained, columns)
+				return stats, err
+			}
+			for i := 0; i < prior; i++ {
+				if _, err := importAt(i); err != nil {
+					b.Fatal(err)
+				}
+			}
+			if err := d.Checkpoint(); err != nil {
+				b.Fatal(err)
+			}
+			before := d.Stats()
+			var reads, fallback, leaves, rows uint64
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				stats, err := importAt(prior + i)
+				if err != nil {
+					b.Fatal(err)
+				}
+				reads += stats.DirectoryRecordsRead
+				fallback += stats.FallbackRecordsRead
+				leaves += stats.SourceLeafBytes
+				rows += stats.SourceRows
+			}
+			b.StopTimer()
+			if err := d.Checkpoint(); err != nil {
+				b.Fatal(err)
+			}
+			after := d.Stats()
+			value := func(stats map[string]string, key string) float64 {
+				v, e := strconv.ParseUint(stats[key], 10, 64)
+				if e != nil {
+					b.Fatalf("missing metric %s: %v", key, e)
+				}
+				return float64(v)
+			}
+			b.ReportMetric(value(after, "treedb.durable_root.manifest.bytes"), "dependency_stream_bytes")
+			b.ReportMetric(value(after, "treedb.durable_root.manifest.entries"), "dependency_stream_items")
+			b.ReportMetric((value(after, "treedb.durable_root.manifest_build.bytes_encoded")-value(before, "treedb.durable_root.manifest_build.bytes_encoded"))/float64(b.N), "dependency_encoded_bytes/op")
+			b.ReportMetric(float64(leaves)/float64(b.N), "source_leaf_bytes/op")
+			b.ReportMetric(float64(rows)/float64(b.N), "source_rows/op")
+			b.ReportMetric(float64(reads)/float64(b.N), "directory_records/op")
+			b.ReportMetric(float64(fallback)/float64(b.N), "fallback_records/op")
+		})
+	}
+}
+
+func TestVectorPartitionSourceImportRetainedSealAndGCV2(t *testing.T) {
+	_, d, c := openTypedMinimaCollection(t)
+	defer d.Close()
+	ownership, input := sourceImportFixtureV2(t, c, 2)
+	input.DocumentRevisions = []uint64{1, 2}
+	ids, retained, columns := sourceImportRowsV2("first-a", "first-b")
+	first, err := c.ImportVectorPartitionSourceChunkV2(ownership, input, ids, retained, columns)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader, err := c.OpenVectorPartitionSourceSnapshotV2(first.Snapshot, input.IndexName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	commitment := reader.Commitment()
+	if commitment.DirectoryGeneration != 1 || commitment.Snapshot != first.Snapshot || commitment.DirectoryDigest == ([sha256.Size]byte{}) {
+		t.Fatalf("missing committed seal: %+v", commitment)
+	}
+	input.Snapshot.SnapshotRevision++
+	ids, retained, columns = sourceImportRowsV2("second-a", "second-b")
+	if _, err := c.ImportVectorPartitionSourceChunkV2(ownership, input, ids, retained, columns); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
+	current, err := c.OpenVectorPartitionSourceSnapshotV2(first.Snapshot, input.IndexName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer current.Close()
+	if current.Commitment() != commitment {
+		t.Fatal("later import changed immutable source directory seal")
+	}
+	candidate := writeColumnAssetGCCandidateSegmentM15B(t, d.ColumnAssetRootDir(), c, 777, []byte("unreferenced-source-gc-candidate"))
+	candidate.Generation = 1
+	stats, err := c.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{CandidateRefs: []ColumnAssetRef{candidate}})
+	if err != nil {
+		t.Fatalf("V2 source GC refused: %+v: %v", stats, err)
+	}
+	for _, r := range []*VectorPartitionSourceReaderV2{reader, current} {
+		got, err := r.ReadChunk(0)
+		if err != nil || string(got.Chunk.Rows[0].DocumentID) != "first-a" {
+			t.Fatalf("GC lost retained source: %+v %v", got, err)
+		}
+	}
+	// The old physical root may conservatively retain the unknown candidate
+	// through replay. Release it, while keeping the old source revision open
+	// against the current root; only then require actual unrelated deletion.
+	if err := reader.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
+	stats, err = c.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{CandidateRefs: []ColumnAssetRef{candidate}})
+	if err != nil || stats.SegmentsDeleted != 1 {
+		t.Fatalf("source GC after old-root release: %+v %v", stats, err)
+	}
+	got, err := current.ReadChunk(0)
+	if err != nil || string(got.Chunk.Rows[0].DocumentID) != "first-a" {
+		t.Fatalf("destructive GC lost old source bytes: %+v %v", got, err)
 	}
 }

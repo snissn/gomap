@@ -3,8 +3,12 @@ package commitlog
 import "encoding/binary"
 
 const (
-	MaxSourceImportMetadataBytesV2 = 2 << 20
-	MaxSourceImportPayloadBytesV2  = 24 << 20
+	// The complete encoded command frame, including all metadata/bindings,
+	// remains below the secure native 1 MiB frame profile. Transport admission
+	// must still account for its own envelope and refuse before sending.
+	MaxSourceImportCommandBytesV2  = 768 << 10
+	MaxSourceImportMetadataBytesV2 = 64 << 10
+	MaxSourceImportPayloadBytesV2  = MaxSourceImportCommandBytesV2 - commandFrameHeaderSize
 )
 
 // CollectionSourceImportPayloadV2 is one atomic typed row/import-progress
@@ -16,7 +20,10 @@ type CollectionSourceImportPayloadV2 struct {
 }
 
 func EncodeCollectionSourceImportPayloadV2(input CollectionSourceImportPayloadV2) ([]byte, error) {
-	if len(input.Metadata) == 0 || len(input.Metadata) > MaxSourceImportMetadataBytesV2 || input.Inserted.LegacyProjection {
+	if len(input.Metadata) > MaxSourceImportMetadataBytesV2 {
+		return nil, ErrRecordTooLarge
+	}
+	if len(input.Metadata) == 0 || input.Inserted.LegacyProjection {
 		return nil, ErrCorrupt
 	}
 	rows, err := EncodeCollectionTypedBatchPayload(input.Inserted)

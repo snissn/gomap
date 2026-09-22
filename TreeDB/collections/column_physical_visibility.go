@@ -224,6 +224,9 @@ func (c *Collection) latestColumnPhysicalVisibleRowAtSnapshot(
 	if catalog == nil {
 		return columnPhysicalVisibleRow{}, columnPhysicalScanDiagnostics{}, false, errCollectionNotFound
 	}
+	if cfg := catalog.meta.Options.ColumnStore; cfg != nil && cfg.ActiveManifest != nil && cfg.ActiveManifest.Format == columnSourceDirectoryFormatV2 {
+		return c.sourceDirectoryVisibleRowAtSnapshotV2(snap, catalog, id, projected)
+	}
 	cfgPtr := catalog.meta.Options.ColumnStore
 	columnStoreEnabled := cfgPtr != nil
 	var cfg ColumnStoreConfig

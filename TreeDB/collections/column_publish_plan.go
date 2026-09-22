@@ -110,6 +110,7 @@ type ColumnPreparedAsset struct {
 // ColumnPublishPlanInput contains the normalized collection state and stage
 // hooks required to build an atomic column manifest publish plan.
 type ColumnPublishPlanInput struct {
+	sourceDirectoryV2        *columnSourceDirectoryAppendV2
 	Collection               string
 	ColumnStore              *ColumnStoreConfig
 	ColumnStoreNormalized    bool
@@ -272,11 +273,12 @@ type ColumnPublishPlan struct {
 // ColumnManifestRootDelta is the ordered-root publish descriptor for the
 // collection column manifest root.
 type ColumnManifestRootDelta struct {
-	RootName       string
-	BaseRootID     uint64
-	StoragePolicy  RootStoragePolicy
-	Identity       ColumnManifestIdentity
-	IdentityRecord [columnManifestIdentityRecordSize]byte
+	sourceDirectoryV2 *columnSourceDirectoryAppendV2
+	RootName          string
+	BaseRootID        uint64
+	StoragePolicy     RootStoragePolicy
+	Identity          ColumnManifestIdentity
+	IdentityRecord    [columnManifestIdentityRecordSize]byte
 	// Records is the complete logical post-state manifest used for checksum,
 	// durability-closure, and correctness validation.
 	Records []columnManifestRecord
@@ -553,6 +555,9 @@ func BuildColumnPublishPlan(input ColumnPublishPlanInput) (_ ColumnPublishPlan, 
 // OrderedRootPublishInput converts the root delta into a backend ordered-root
 // publish input while preserving the already-validated identity record bytes.
 func (delta ColumnManifestRootDelta) OrderedRootPublishInput() (backenddb.OrderedRootPublishInput, error) {
+	if delta.sourceDirectoryV2 != nil {
+		return backenddb.OrderedRootPublishInput{}, errors.New("collections: incremental source directory requires root delta publication")
+	}
 	if delta.RootName == "" {
 		return backenddb.OrderedRootPublishInput{}, errors.New("collections: column manifest root delta missing root name")
 	}
@@ -827,6 +832,9 @@ func prepareColumnPublishAssets(input ColumnPublishPlanInput, cfg ColumnStoreCon
 }
 
 func encodeColumnPublishManifest(input ColumnPublishPlanInput, cfg ColumnStoreConfig, prepared ColumnPublishPreparedAssets) (ColumnPublishManifestEncodeResult, error) {
+	if input.sourceDirectoryV2 != nil {
+		return encodeColumnSourceDirectoryManifestV2(input, cfg, prepared)
+	}
 	if input.Hooks.EncodeManifest == nil {
 		return ColumnPublishManifestEncodeResult{}, errors.New("collections: column publish manifest encode hook is required")
 	}
@@ -885,14 +893,15 @@ func buildColumnPublishRootDelta(input ColumnPublishPlanInput, cfg ColumnStoreCo
 		return ColumnManifestRootDelta{}, err
 	}
 	return ColumnManifestRootDelta{
-		RootName:       cfg.ManifestRoot.Name,
-		BaseRootID:     input.BaseManifestRootID,
-		StoragePolicy:  cfg.ManifestRoot.StoragePolicy,
-		Identity:       manifest.Identity,
-		IdentityRecord: encodeColumnManifestIdentityRecordArray(manifest.Identity),
-		Records:        manifest.Records,
-		Mutations:      mutations,
-		MutationDelta:  true,
+		sourceDirectoryV2: input.sourceDirectoryV2,
+		RootName:          cfg.ManifestRoot.Name,
+		BaseRootID:        input.BaseManifestRootID,
+		StoragePolicy:     cfg.ManifestRoot.StoragePolicy,
+		Identity:          manifest.Identity,
+		IdentityRecord:    encodeColumnManifestIdentityRecordArray(manifest.Identity),
+		Records:           manifest.Records,
+		Mutations:         mutations,
+		MutationDelta:     true,
 	}, nil
 }
 
@@ -951,6 +960,12 @@ func validateColumnManifestRootDeltaForPlan(delta ColumnManifestRootDelta, curre
 	}
 	if delta.IdentityRecord != encodeColumnManifestIdentityRecordArray(identity) {
 		return errors.New("identity record does not match manifest identity")
+	}
+	if delta.Identity.Format == columnSourceDirectoryFormatV2 {
+		return validateColumnSourceDirectoryDeltaV2(delta)
+	}
+	if delta.sourceDirectoryV2 != nil {
+		return errors.New("collections: mixed source directory delta")
 	}
 	if len(delta.Records) == 0 {
 		return errors.New("manifest records omitted")

@@ -205,6 +205,9 @@ func stableColumnManifestDurableRequirementsWithWork(records []columnManifestRec
 }
 
 func stableColumnManifestDurablePublication(current []columnManifestRecord, delta ColumnManifestRootDelta, activeGeneration uint64, expectedNamespace string) (rootpublication.StableLogicalObligationRequirements, rootpublication.StableLogicalObligationMutation, func() (rootpublication.StableLogicalObligationRequirements, rootpublication.StableResourceClosureWork, error), rootpublication.StableResourceClosureWork, error) {
+	if delta.sourceDirectoryV2 != nil {
+		return sourceDirectoryDurablePublicationV2(delta, expectedNamespace)
+	}
 	var work rootpublication.StableResourceClosureWork
 	var mutation rootpublication.StableLogicalObligationMutation
 	var err error

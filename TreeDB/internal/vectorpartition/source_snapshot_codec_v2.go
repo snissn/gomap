@@ -79,6 +79,21 @@ func EncodeSourceChunkV2(s SourceSnapshotV2, chunk SourceChunkV2, proof SourceCh
 	if err := VerifySourceChunkV2(s, s.Digest, chunk, proof); err != nil {
 		return nil, err
 	}
+	return encodeSourceRowsV2(s, s.Digest, chunk, proof, "SCK2")
+}
+
+// EncodeSourceLeafV2 retains immutable local rows before the whole snapshot is
+// sealed. Its digest binds the snapshot header and actual rows, but grants no
+// source authority. Publication must commit these bytes with import progress.
+func EncodeSourceLeafV2(s SourceSnapshotV2, chunk SourceChunkV2) ([]byte, error) {
+	digest, err := SourceChunkDigestV2(s, chunk)
+	if err != nil {
+		return nil, err
+	}
+	return encodeSourceRowsV2(s, digest, chunk, SourceChunkProofV2{}, "SCL2")
+}
+
+func encodeSourceRowsV2(s SourceSnapshotV2, identity [sha256.Size]byte, chunk SourceChunkV2, proof SourceChunkProofV2, magic string) ([]byte, error) {
 	size := 4 + sha256.Size + 8 + 4 + 1 + sha256.Size*len(proof.Siblings)
 	for _, row := range chunk.Rows {
 		size += 8 + 8 + 4 + len(row.DocumentID) + 1 + 4*len(row.Values)
@@ -90,8 +105,8 @@ func EncodeSourceChunkV2(s SourceSnapshotV2, chunk SourceChunkV2, proof SourceCh
 		return nil, fmt.Errorf("%w: encoded chunk bytes cap", ErrInvalidSourceSnapshotV2)
 	}
 	out := make([]byte, 0, size)
-	out = append(out, "SCK2"...)
-	out = append(out, s.Digest[:]...)
+	out = append(out, magic...)
+	out = append(out, identity[:]...)
 	out = binary.BigEndian.AppendUint64(out, chunk.Index)
 	out = binary.BigEndian.AppendUint32(out, uint32(len(chunk.Rows)))
 	for _, row := range chunk.Rows {
@@ -127,15 +142,37 @@ func EncodeSourceChunkV2(s SourceSnapshotV2, chunk SourceChunkV2, proof SourceCh
 // canonical shard's row count. It verifies actual bytes against expectedDigest
 // before returning a chunk; admission of that digest belongs to the caller.
 func DecodeSourceChunkV2(s SourceSnapshotV2, expectedDigest [sha256.Size]byte, raw []byte) (SourceChunkV2, SourceChunkProofV2, error) {
+	return decodeSourceRowsV2(s, expectedDigest, raw, false)
+}
+
+// DecodeSourceLeafV2 validates immutable local row bytes against an expected
+// leaf digest. Serving still requires the snapshot's independently admitted
+// root and a complete proof through VerifySourceChunkV2.
+func DecodeSourceLeafV2(s SourceSnapshotV2, expectedLeaf [sha256.Size]byte, raw []byte) (SourceChunkV2, error) {
+	chunk, _, err := decodeSourceRowsV2(s, expectedLeaf, raw, true)
+	return chunk, err
+}
+
+func decodeSourceRowsV2(s SourceSnapshotV2, expectedDigest [sha256.Size]byte, raw []byte, leaf bool) (SourceChunkV2, SourceChunkProofV2, error) {
 	invalid := func(reason string) (SourceChunkV2, SourceChunkProofV2, error) {
 		return SourceChunkV2{}, SourceChunkProofV2{}, fmt.Errorf("%w: %s", ErrInvalidSourceSnapshotV2, reason)
 	}
-	if len(raw) > MaxSourceChunkBytesV2 || len(raw) < 4+sha256.Size+8+4+1 || string(raw[:4]) != "SCK2" || expectedDigest == ([sha256.Size]byte{}) || s.Digest != expectedDigest || !bytes.Equal(raw[4:4+sha256.Size], expectedDigest[:]) {
+	magic := "SCK2"
+	if leaf {
+		magic = "SCL2"
+	}
+	if len(raw) > MaxSourceChunkBytesV2 || len(raw) < 4+sha256.Size+8+4+1 || string(raw[:4]) != magic || expectedDigest == ([sha256.Size]byte{}) || !bytes.Equal(raw[4:4+sha256.Size], expectedDigest[:]) {
 		return invalid("chunk encoding, cap or expected identity")
 	}
-	sealed, err := SealSourceSnapshotV2(s, s.MerkleRoot)
-	if err != nil || sealed.Digest != expectedDigest {
-		return invalid("snapshot identity")
+	if leaf {
+		if _, err := s.headerDigestV2(); err != nil {
+			return invalid("source header")
+		}
+	} else {
+		sealed, err := SealSourceSnapshotV2(s, s.MerkleRoot)
+		if err != nil || s.Digest != expectedDigest || sealed.Digest != expectedDigest {
+			return invalid("snapshot identity")
+		}
 	}
 	index := binary.BigEndian.Uint64(raw[4+sha256.Size:])
 	rows := binary.BigEndian.Uint32(raw[4+sha256.Size+8:])
@@ -192,7 +229,15 @@ func DecodeSourceChunkV2(s SourceSnapshotV2, expectedDigest [sha256.Size]byte, r
 	for i := range proof.Siblings {
 		copy(proof.Siblings[i][:], r.take(sha256.Size))
 	}
-	if err := VerifySourceChunkV2(s, expectedDigest, chunk, proof); err != nil {
+	if leaf {
+		if len(proof.Siblings) != 0 {
+			return invalid("local leaf contains serving proof")
+		}
+		digest, err := SourceChunkDigestV2(s, chunk)
+		if err != nil || digest != expectedDigest {
+			return invalid("immutable source leaf bytes")
+		}
+	} else if err := VerifySourceChunkV2(s, expectedDigest, chunk, proof); err != nil {
 		return SourceChunkV2{}, SourceChunkProofV2{}, err
 	}
 	return chunk, proof, nil
