@@ -134,7 +134,7 @@ batches, applies the 4,096-entry cap to all names, and verifies the ranges,
 CRC32 values, and SHA-256 digests of every asset referenced by a non-deleting
 manifest before replacing the target namespace.
 
-VPM1 uses big-endian magic `0x56504d31` and wire version `6`, bounded
+The default VPM1 uses big-endian magic `0x56504d31` and wire version `6`, bounded
 length-prefixed fields and lists, one (exactly one) router-asset frame,
 canonical ordering, and an integrity digest. Version 6 has this fixed,
 untagged order:
@@ -150,6 +150,29 @@ untagged order:
 4. exactly one router asset;
 5. counted physical-pack placement, disjoint-membership, overlap-membership,
    representative-membership, and partition-asset lists, in that order.
+
+The draft #4808 paged codec adds wire schema `7` under the same magic. Its
+header is magic, `uint32(7)`, and a big-endian `uint32` payload byte length;
+the remaining bytes are one canonical JSON `VectorPartitionManifestV1`
+envelope with format `vector_partition_paged_manifest_v2` and non-nil
+`PagedRootV2`. The entire record is capped at 64 KiB. Inline source identity,
+row/pack/domain counts, balance policy and membership/layout/asset lists must
+be empty or zero; their actual global identity and counts are in the paged
+root. The root binds placement/source-map epochs, map/snapshot-set/profile
+SHA-256 digests and two content-addressed page-directory assets. Root asset
+frames are capped at 1 MiB. JSON keys/order/whitespace and nil empty-list
+representation must match canonical re-encoding; mixed formats, unknown
+fields, truncated/trailing records and digest changes are refused.
+
+The schema-7 integrity digest is SHA-256 of the canonical envelope JSON with
+its `IntegrityDigest` empty. Its ready digest binds format, collection/index
+identity, generation, complete paged root and router identity in declared
+field order. This codec alone does not enable durable paged publication:
+legacy publication, search/build/router and reclaim APIs refuse it while
+page traversal, shard verification, transitive reachability and capability
+admission remain incomplete. A decoded schema-7 root is not READY evidence.
+Schema-6 encoding and hashes remain unchanged; its nil `PagedRootV2` JSON
+field is omitted. Old binaries refuse schema 7 at their version check.
 
 Each placement is a `uint32` physical pack ID plus a length-prefixed group ID.
 Disjoint and overlap memberships are 12-byte source-ordinal/physical-pack

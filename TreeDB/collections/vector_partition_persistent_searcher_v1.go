@@ -1125,6 +1125,9 @@ func parseVectorPartitionLocalSectionChunkAssetIDV1(partition uint32, id string)
 }
 
 func vectorPartitionDomainLayoutV1(manifest VectorPartitionManifestV1) ([]uint32, []uint32, error) {
+	if err := manifest.requireInlineRuntimeV1(); err != nil {
+		return nil, nil, err
+	}
 	if manifest.DomainCount == 0 || manifest.DomainCount > manifest.PartitionCount || len(manifest.DomainPacks) != int(manifest.PartitionCount) {
 		return nil, nil, fmt.Errorf("%w: domain layout", ErrVectorPartitionSearchUnavailable)
 	}
@@ -1461,6 +1464,9 @@ type VectorPartitionGenerationSearchOpenPlanV1 struct {
 // generation manifest once for bounded per-partition lookup. The returned plan
 // does not retain or expose the caller's manifest slices.
 func NewVectorPartitionGenerationSearchOpenPlanWithContextV1(ctx context.Context, manifest VectorPartitionManifestV1) (*VectorPartitionGenerationSearchOpenPlanV1, error) {
+	if err := manifest.requireInlineRuntimeV1(); err != nil {
+		return nil, err
+	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -1751,6 +1757,9 @@ func (c *Collection) validateVectorPartitionAssetMembershipBindingsV1(manifest V
 }
 
 func (c *Collection) validateVectorPartitionAssetMembershipBindingsForGraphVariantV1(manifest VectorPartitionManifestV1, expectedGraphVariant VectorPartitionLocalGraphVariantV1) error {
+	if err := manifest.requireInlineRuntimeV1(); err != nil {
+		return err
+	}
 	hasNative := false
 	chunkedDomains := false
 	for _, asset := range manifest.Assets {
@@ -2500,6 +2509,9 @@ func vectorPartitionConstructionSelectionsEqualV1(actual, replayed []VectorParti
 }
 
 func (c *Collection) materializeVectorPartitionLocalSearchAssetsVariantV1(index string, manifest VectorPartitionManifestV1, fileID uint32, inputs []VectorPartitionSearchAssetV1, maxAssetBytes int64, variant VectorPartitionLocalGraphVariantV1, evidence *VectorPartitionConstructionEvidenceV1, boundedEvidence bool) ([]VectorPartitionAssetV1, *rootpublication.StableResourceSet, error) {
+	if err := manifest.requireInlineRuntimeV1(); err != nil {
+		return nil, nil, err
+	}
 	generation := manifest.Generation
 	if c == nil || c.db == nil || generation == 0 || len(inputs) == 0 || maxAssetBytes <= 0 || maxAssetBytes > vectorPartitionSearchAssetMaxBytesV1 {
 		return nil, nil, ErrVectorPartitionSearchUnavailable
@@ -2998,6 +3010,9 @@ func (c *Collection) OpenVectorPartitionLocalSearcherForOfflineAssetVariantWithC
 }
 
 func (c *Collection) openVectorPartitionLocalSearcherForOfflineAssetWithContextV1(ctx context.Context, index string, manifest VectorPartitionManifestV1, asset VectorPartitionAssetV1, expectedVariant VectorPartitionLocalGraphVariantV1) (*VectorPartitionLocalSearcherV1, error) {
+	if err := manifest.requireInlineRuntimeV1(); err != nil {
+		return nil, err
+	}
 	if c == nil || c.db == nil || ctx == nil {
 		return nil, ErrVectorPartitionSearchUnavailable
 	}

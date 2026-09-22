@@ -175,6 +175,9 @@ type VectorPartitionManifestV1 struct {
 	Assets                                                             []VectorPartitionAssetV1
 	RouterAsset                                                        VectorPartitionAssetV1
 	ReadySetDigest                                                     string
+	// PagedRootV2 is the explicit schema-7 alternative to the inline schema-6
+	// source/layout fields. Nil is omitted to preserve every legacy JSON byte.
+	PagedRootV2 *VectorPartitionPagedRootV2 `json:",omitempty"`
 }
 
 var vectorPartitionManifestIntegrityFieldNamesV1 = [...]string{
@@ -201,6 +204,7 @@ var vectorPartitionManifestIntegrityFieldNamesV1 = [...]string{
 	"Assets",
 	"RouterAsset",
 	"ReadySetDigest",
+	"PagedRootV2",
 }
 
 var vectorPartitionDomainPacksIntegrityFieldV1 = []byte(`,"DomainPacks":`)
@@ -214,7 +218,11 @@ func validateVectorPartitionManifestIntegrityShapeV1() error {
 	}
 	for i, want := range vectorPartitionManifestIntegrityFieldNamesV1 {
 		field := typ.Field(i)
-		if field.Name != want || field.PkgPath != "" || field.Tag.Get("json") != "" {
+		wantTag := ""
+		if want == "PagedRootV2" {
+			wantTag = ",omitempty"
+		}
+		if field.Name != want || field.PkgPath != "" || field.Tag.Get("json") != wantTag {
 			return fmt.Errorf("%w: integrity field %d is %q exported=%t json=%q want %q without tag", ErrVectorPartitionManifestInvalid, i, field.Name, field.PkgPath == "", field.Tag.Get("json"), want)
 		}
 	}
@@ -276,6 +284,9 @@ func (m VectorPartitionManifestV1) validateWithContextV1(ctx context.Context, l 
 	}
 	if l.MaxBytes <= 0 {
 		l = DefaultVectorPartitionManifestLimits()
+	}
+	if m.Format == VectorPartitionManifestFormatV2 || m.PagedRootV2 != nil {
+		return m.validatePagedRootWithContextV2(ctx, l, true)
 	}
 	if m.Format != VectorPartitionManifestFormatV1 || (m.State != "building" && m.State != "ready") || m.Collection == "" || m.IndexName == "" || !isSHA256VPM(m.IndexDefinitionDigest) || !isSHA256VPM(m.IntegrityDigest) || m.Generation == 0 || m.SourceGeneration == 0 || m.SourceRowCount == 0 || m.PartitionCount == 0 || int(m.PartitionCount) > l.MaxPartitions || m.DomainCount == 0 || m.DomainCount > m.PartitionCount {
 		return fmt.Errorf("%w: identity or partition bounds", ErrVectorPartitionManifestInvalid)
@@ -699,6 +710,9 @@ func (m VectorPartitionManifestV1) readyDigestWithContextV1(ctx context.Context)
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	if m.Format == VectorPartitionManifestFormatV2 || m.PagedRootV2 != nil {
+		return m.pagedReadyDigestV2(ctx)
+	}
 	h := sha256.New()
 	writeU32VPM(h, m.DomainCount)
 	writeU32VPM(h, uint32(len(m.DomainPacks)))
@@ -758,6 +772,9 @@ func (m *VectorPartitionManifestV1) canonicalizeWithContextV1(ctx context.Contex
 	}
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	if m.Format == VectorPartitionManifestFormatV2 || m.PagedRootV2 != nil {
+		return m.canonicalizePagedRootV2(ctx)
 	}
 	// Normalize empty lists so the semantic digest does not distinguish an
 	// in-memory nil from the decoder's zero-length allocation.
@@ -851,6 +868,9 @@ func (m VectorPartitionManifestV1) integrityDigestWithContextV1(ctx context.Cont
 	}
 	if vectorPartitionManifestIntegrityShapeErrV1 != nil {
 		return "", vectorPartitionManifestIntegrityShapeErrV1
+	}
+	if m.Format == VectorPartitionManifestFormatV2 || m.PagedRootV2 != nil {
+		return m.pagedIntegrityDigestV2(ctx)
 	}
 	m.IntegrityDigest = ""
 	h := sha256.New()
@@ -1124,6 +1144,9 @@ func encodeVectorPartitionManifestWithContextV1(ctx context.Context, m VectorPar
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	if m.Format == VectorPartitionManifestFormatV2 || m.PagedRootV2 != nil {
+		return encodeVectorPartitionPagedRootV2(ctx, m)
+	}
 	limits := DefaultVectorPartitionManifestLimits()
 	if err := preflightVectorPartitionManifestWithContextV1(ctx, m, limits); err != nil {
 		return nil, err
@@ -1184,6 +1207,9 @@ func preflightVectorPartitionManifestWithContextV1(ctx context.Context, m Vector
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	if m.Format == VectorPartitionManifestFormatV2 || m.PagedRootV2 != nil {
+		return m.validatePagedRootWithContextV2(ctx, l, false)
+	}
 	if int64(m.PartitionCount) > int64(l.MaxPartitions) || len(m.DomainPacks) > l.MaxPartitions || len(m.Placements) > l.MaxPartitions || len(m.Assets) > l.MaxAssets || len(m.Memberships) > l.MaxMemberships || len(m.OverlapMemberships) > l.MaxMemberships || len(m.Representatives) > l.MaxMemberships || (totalMembershipsVPM(m.Memberships, m.OverlapMemberships)+len(m.Representatives)) > l.totalMembershipLimit() {
 		return fmt.Errorf("%w: list cap", ErrVectorPartitionManifestInvalid)
 	}
@@ -1236,6 +1262,9 @@ func DecodeVectorPartitionManifestWithContextV1(ctx context.Context, raw []byte,
 	}
 	if len(raw) > l.MaxBytes {
 		return VectorPartitionManifestV1{}, fmt.Errorf("%w: encoded bytes cap", ErrVectorPartitionManifestInvalid)
+	}
+	if len(raw) >= 8 && binary.BigEndian.Uint32(raw[:4]) == vectorPartitionManifestMagicV1 && binary.BigEndian.Uint32(raw[4:8]) == 7 {
+		return decodeVectorPartitionPagedRootV2(ctx, raw, l)
 	}
 	r := vpmReader{b: raw, l: l, ctx: ctx}
 	if r.u32() != vectorPartitionManifestMagicV1 || r.u32() != 6 {
@@ -2006,6 +2035,9 @@ func vectorPartitionReclaimRefsFromManifestV1(m VectorPartitionManifestV1) []Col
 }
 
 func newVectorPartitionReclaimStateV1(m VectorPartitionManifestV1) (vectorPartitionReclaimStateV1, error) {
+	if err := m.requireInlineRuntimeV1(); err != nil {
+		return vectorPartitionReclaimStateV1{}, err
+	}
 	if err := m.Validate(DefaultVectorPartitionManifestLimits()); err != nil {
 		return vectorPartitionReclaimStateV1{}, err
 	}
@@ -3584,6 +3616,9 @@ func (c *Collection) publishVectorPartitionManifestModeV1(m VectorPartitionManif
 		// return path must release the producer's exact identity pins once.
 		defer resources.Release()
 	}
+	if err := m.requireInlineRuntimeV1(); err != nil {
+		return err
+	}
 	if _, err := VectorPartitionLocalGraphVariantIdentityV1(expectedGraphVariant); err != nil {
 		return err
 	}
@@ -3691,6 +3726,9 @@ func syncVectorPartitionActiveAuthorityFromStoreV1(root string, store *VectorPar
 // builder-supplied copy. VectorIndexStatus validates TVIS against the active
 // manifest and its typed assets before this snapshot is inspected.
 func (c *Collection) validateVectorPartitionSourceIdentityV1(m VectorPartitionManifestV1) error {
+	if err := m.requireInlineRuntimeV1(); err != nil {
+		return err
+	}
 	identity, err := c.VectorPartitionSourceIdentityV1(m.IndexName)
 	if err != nil {
 		return err

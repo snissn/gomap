@@ -4,6 +4,12 @@ on:
   pull_request:
     paths:
       - 'TreeDB/collections/vector_partition_owner*'
+      - 'TreeDB/collections/vector_partition_paged_root_v2*'
+      - 'TreeDB/collections/vector_partition_legacy_compat_v2_test.go'
+      - 'TreeDB/collections/vector_partition_manifest.go'
+      - 'TreeDB/collections/vector_partition_lifecycle*'
+      - 'TreeDB/collections/vector_partition_persistent_searcher_v1.go'
+      - 'TreeDB/collections/vector_partition_router_v1.go'
       - 'TreeDB/internal/raftplacement/source_shard_v2*'
       - 'TreeDB/nativewire/vector_partition_owner*'
       - 'TreeDB/nativewire/vector_partition_generation_source_v1.go'
@@ -44,7 +50,7 @@ jobs:
           set -euo pipefail
           git rev-parse HEAD
           go version
-          files=(TreeDB/collections/vector_partition_owner*.go TreeDB/internal/raftplacement/source_shard_v2*.go TreeDB/nativewire/vector_partition_owner*.go TreeDB/nativewire/vector_partition_generation_source_v1.go TreeDB/nativewire/vector_partition_production_node_v1.go)
+          mapfile -t files < <(git diff --name-only --diff-filter=AM 0d10c1605f8887f9a1cd7e3cb910014a5b23cfe3 HEAD -- 'TreeDB/collections/*.go' 'TreeDB/nativewire/*.go' 'TreeDB/internal/raftplacement/*.go')
           gofmt -d "${files[@]}" || true
           if [[ -n "$(gofmt -l "${files[@]}")" ]]; then
             for file in "${files[@]}"; do
@@ -60,7 +66,20 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          go test ./TreeDB/collections ./TreeDB/internal/raftplacement ./TreeDB/nativewire -run 'Test(VectorPartitionOwnerSearchOpenPlan|OwnerGenerationSource|SourceShardMap)' -count=3 -timeout=10m -v | tee owner-local-tests.txt
+          go test ./TreeDB/collections ./TreeDB/internal/raftplacement ./TreeDB/nativewire -run 'Test(VectorPartitionOwnerSearchOpenPlan|OwnerGenerationSource|SourceShardMap|VectorPartitionPagedRoot|VectorPartitionManifestV1|VectorPartitionManifestContextDigest)' -count=3 -timeout=10m -v | tee owner-local-tests.txt
+      - name: Exact baseline schema-6 compatibility
+        shell: bash
+        run: |
+          set -euo pipefail
+          p2_base_dir="$RUNNER_TEMP/p2-schema6-base"
+          git worktree add --detach "$p2_base_dir" 0d10c1605f8887f9a1cd7e3cb910014a5b23cfe3
+          cp TreeDB/collections/vector_partition_legacy_compat_v2_test.go "$p2_base_dir/TreeDB/collections/"
+          go test ./TreeDB/collections -run '^TestVectorPartitionLegacyByteCompatibilityProbeV2$' -count=1 -v | tee owner-local-schema6-head.txt
+          go -C "$p2_base_dir" test ./TreeDB/collections -run '^TestVectorPartitionLegacyByteCompatibilityProbeV2$' -count=1 -v | tee owner-local-schema6-base.txt
+          p2_head_digest="$(sed -n '/^VPM_SCHEMA6_COMPAT=/p' owner-local-schema6-head.txt)"
+          p2_base_digest="$(sed -n '/^VPM_SCHEMA6_COMPAT=/p' owner-local-schema6-base.txt)"
+          [[ -n "$p2_base_digest" && "$p2_head_digest" == "$p2_base_digest" ]]
+          git worktree remove --force "$p2_base_dir"
       - name: Constructor allocation comparison
         shell: bash
         run: |
@@ -70,7 +89,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          go test -race ./TreeDB/collections ./TreeDB/internal/raftplacement ./TreeDB/nativewire -run 'Test(VectorPartitionOwnerSearchOpenPlan|OwnerGenerationSource|SourceShardMap)' -count=1 -timeout=10m -v | tee owner-local-race.txt
+          go test -race ./TreeDB/collections ./TreeDB/internal/raftplacement ./TreeDB/nativewire -run 'Test(VectorPartitionOwnerSearchOpenPlan|OwnerGenerationSource|SourceShardMap|VectorPartitionPagedRoot|VectorPartitionManifestContextDigest)' -count=1 -timeout=10m -v | tee owner-local-race.txt
       - name: Upload focused evidence
         if: always()
         uses: actions/upload-artifact@v4

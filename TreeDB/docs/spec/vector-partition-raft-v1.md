@@ -49,6 +49,22 @@ not yet admit source maps into catalog authority, enable V1 token mutation
 routing, bind an authoritative shard snapshot, or atomically persist import
 progress. Those production integrations remain part of #4808.
 
+The draft paged-root codec uses an explicit `vector_partition_paged_manifest_v2`
+discriminant with VPM binary schema 7. Its 64 KiB envelope binds content-addressed
+metadata/source directory roots, source-map epoch/digest, source snapshot-set
+digest, placement epoch, graph profile and complete-generation counts. Root
+decoding never sizes an allocation from the generation row/domain counts.
+Schema 7 stores a canonical, length-delimited JSON payload; schema 6 keeps its
+existing binary and JSON bytes and hashes. The optional `PagedRootV2` field is
+omitted for schema 6. Mixed inline source/layout state and paged roots fail.
+
+This codec is not runtime admission. Existing publication, materialization,
+search-plan, router and reclaim paths explicitly refuse the paged variant;
+old binaries reject schema 7. Public owner-local page traversal, capability
+negotiation, verified shard snapshots, complete page resource reachability and
+durable publication/recovery must be implemented before this gate is enabled.
+In particular, a valid root digest alone must not become READY evidence.
+
 ## M1 durable lifecycle
 
 Each ready manifest stores typed `ColumnAssetRef`s, not paths. Every physical

@@ -350,6 +350,11 @@ func vectorPartitionLifecycleManifestWithContextV1(ctx context.Context, state ve
 		return VectorPartitionManifestV1{}, os.ErrNotExist
 	}
 	manifest := *entry.Manifest
+	if manifest.PagedRootV2 != nil {
+		root := *manifest.PagedRootV2
+		manifest.PagedRootV2 = &root
+		return manifest, ctx.Err()
+	}
 	copyChunked := func(length int, copyRange func(int, int)) error {
 		for offset := 0; offset < length; offset += 1024 {
 			if err := ctx.Err(); err != nil {
@@ -443,6 +448,9 @@ func (s *VectorPartitionStoreV1) stageVectorPartitionManifestLifecycleV1(m Vecto
 }
 
 func (s *VectorPartitionStoreV1) persistVectorPartitionManifestLifecycleModeV1(m VectorPartitionManifestV1, activate bool) error {
+	if err := m.requireInlineRuntimeV1(); err != nil {
+		return err
+	}
 	loaded, present, err := s.loadVectorPartitionLifecycleAuthorityV1(m.Collection, m.IndexName)
 	if err != nil {
 		return err
@@ -816,6 +824,9 @@ func (c *Collection) VectorPartitionStatusV1(index string, generation uint64) (V
 	}
 	manifest, err := vectorPartitionLifecycleManifestV1(loaded.state, generation, false)
 	if err != nil {
+		return VectorPartitionStatusV1{}, err
+	}
+	if err := manifest.requireInlineRuntimeV1(); err != nil {
 		return VectorPartitionStatusV1{}, err
 	}
 	groups := make(map[string]struct{}, len(manifest.Placements))

@@ -2122,6 +2122,23 @@ source verification, resumable import/build, recovery and reachability coverage.
 The scoped `owner-local-metadata-qualification.yml` workflow records exact-head
 Go version, focused/race checks and constructor benchmark evidence.
 
+`TestSourceShardMapDocumentTokenIdentityV2` pins exact-byte token vectors;
+`TestSourceShardMapBoundImmutableLookupV2` and
+`TestSourceShardMapRefusesIdentityCoverageDriftV2` exercise immutable lookup,
+wrong-shard refusal, epoch/collection/digest drift and complete range coverage.
+`TestSourceShardMapSameTokenRangeDoesNotAliasIDsV2` checks exact-ID duplicate
+semantics and caller input lifetime. `BenchmarkSourceShardMapResolveDocumentIDV2`
+measures the enabled token/lookup cost; map validation does not grant catalog
+authority or persist import progress.
+
+The draft `TestVectorPartitionPagedRoot*V2` cases cover the 64 KiB root codec,
+mixed inline/paged refusal, root/directory/source/placement digest bindings,
+copied root lifetime, legacy runtime/reclaim refusal and count-independent
+root decode allocation. `TestVectorPartitionLegacyByteCompatibilityProbeV2`
+uses only schema-6 APIs and the same fixture on the candidate and exact D0
+base; the hosted workflow compares binary, JSON, integrity and ready digests.
+These are format guards, not paged public-open or full P2 readiness evidence.
+
 # Vector partition V1 correctness and approximation verification
 
 The snapshot-bound V1 admission contract has disjoint exact and ANN gates. The

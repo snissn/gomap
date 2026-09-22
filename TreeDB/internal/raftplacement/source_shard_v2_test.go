@@ -13,9 +13,9 @@ func sourceShardMapFixtureV2(t testing.TB) (ResolvedCatalogV1, SourceShardMapV2)
 		t.Fatal(err)
 	}
 	m, err := catalog.CanonicalSourceShardMapV2(SourceShardMapV2{
-		Format: SourceShardMapFormatV2,
-		Collection: CollectionRefV1{Database: "default", Catalog: "default", Collection: "documents"},
-		Epoch: 7,
+		Format:         SourceShardMapFormatV2,
+		Collection:     CollectionRefV1{Database: "default", Catalog: "default", Collection: "documents"},
+		Epoch:          7,
 		TokenAlgorithm: DocumentIDTokenAlgorithmV2,
 		Shards: []SourceShardV2{
 			{ShardID: "source-a", GroupID: "group-a", Start: 0, End: (1 << 63) - 1},
@@ -29,7 +29,10 @@ func sourceShardMapFixtureV2(t testing.TB) (ResolvedCatalogV1, SourceShardMapV2)
 }
 
 func TestSourceShardMapDocumentTokenIdentityV2(t *testing.T) {
-	for _, tc := range []struct { id []byte; want uint64 }{
+	for _, tc := range []struct {
+		id   []byte
+		want uint64
+	}{
 		{[]byte("a"), 0x50bef51bd7c90063},
 		{[]byte("document-123"), 0xe02774b2a304fc4a},
 		{[]byte{0, 255}, 0xe04f161b78878bbb},
@@ -75,7 +78,10 @@ func TestSourceShardMapBoundImmutableLookupV2(t *testing.T) {
 }
 
 func TestSourceShardMapRefusesIdentityCoverageDriftV2(t *testing.T) {
-	for _, tc := range []struct { name string; mutate func(*SourceShardMapV2) }{
+	for _, tc := range []struct {
+		name   string
+		mutate func(*SourceShardMapV2)
+	}{
 		{"epoch", func(m *SourceShardMapV2) { m.Epoch = 0 }},
 		{"changed epoch", func(m *SourceShardMapV2) { m.Epoch++ }},
 		{"algorithm", func(m *SourceShardMapV2) { m.TokenAlgorithm = "ann_partition" }},

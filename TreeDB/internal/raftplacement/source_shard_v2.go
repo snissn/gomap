@@ -14,11 +14,11 @@ import (
 )
 
 const (
-	SourceShardMapFormatV2 = "canonical_source_shard_map_v2"
+	SourceShardMapFormatV2     = "canonical_source_shard_map_v2"
 	DocumentIDTokenAlgorithmV2 = "sha256_prefix64_document_id_v2"
-	MaxSourceShardsV2 = 1 << 16
+	MaxSourceShardsV2          = 1 << 16
 	MaxSourceDocumentIDBytesV2 = 4096
-	MaxSourceImportBytesV2 = 16 << 20
+	MaxSourceImportBytesV2     = 16 << 20
 )
 
 var ErrInvalidSourceShardMapV2 = errors.New("raftplacement: invalid canonical source shard map")
@@ -28,8 +28,8 @@ var ErrInvalidSourceShardMapV2 = errors.New("raftplacement: invalid canonical so
 type SourceShardV2 struct {
 	ShardID string
 	GroupID raftcluster.GroupID
-	Start uint64
-	End uint64
+	Start   uint64
+	End     uint64
 }
 
 // SourceShardMapV2 is an immutable, digest-bound source ownership description.
@@ -37,19 +37,19 @@ type SourceShardV2 struct {
 // simulation-only token mutation route. Its epoch and digest must be bound by
 // the generation's admitted V2 root before production use.
 type SourceShardMapV2 struct {
-	Format string
-	Collection CollectionRefV1
-	Epoch uint64
+	Format         string
+	Collection     CollectionRefV1
+	Epoch          uint64
 	TokenAlgorithm string
-	Shards []SourceShardV2
-	Digest string
+	Shards         []SourceShardV2
+	Digest         string
 }
 
 type ResolvedSourceShardMapV2 struct {
 	collection CollectionRefV1
-	epoch uint64
-	digest string
-	ring ResolvedTokenRingPlanV1
+	epoch      uint64
+	digest     string
+	ring       ResolvedTokenRingPlanV1
 }
 
 // DocumentIDTokenV2 hashes the exact ID bytes, without normalization. Token
@@ -122,8 +122,8 @@ func (c ResolvedCatalogV1) ValidateSourceShardMapV2(input SourceShardMapV2) (Res
 }
 
 func (m ResolvedSourceShardMapV2) Collection() CollectionRefV1 { return m.collection }
-func (m ResolvedSourceShardMapV2) Epoch() uint64 { return m.epoch }
-func (m ResolvedSourceShardMapV2) Digest() string { return m.digest }
+func (m ResolvedSourceShardMapV2) Epoch() uint64               { return m.epoch }
+func (m ResolvedSourceShardMapV2) Digest() string              { return m.digest }
 
 func (m ResolvedSourceShardMapV2) ResolveDocumentID(id []byte) (SourceShardV2, error) {
 	token, err := DocumentIDTokenV2(id)

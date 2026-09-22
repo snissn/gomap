@@ -42,6 +42,9 @@ type vectorPartitionOwnerSearchPartitionV2 struct {
 // It does not make acquisition/decoding of that input owner-local. Paged roots
 // and shard-local source readers have separate admission requirements.
 func NewVectorPartitionGenerationOwnerSearchOpenPlanWithContextV2(ctx context.Context, manifest VectorPartitionManifestV1, groupID string) (*VectorPartitionGenerationOwnerSearchOpenPlanV2, error) {
+	if err := manifest.requireInlineRuntimeV1(); err != nil {
+		return nil, err
+	}
 	if ctx == nil {
 		ctx = context.Background()
 	}

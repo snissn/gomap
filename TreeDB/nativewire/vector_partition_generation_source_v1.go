@@ -267,6 +267,9 @@ func (s *CollectionVectorPartitionGenerationSourceV1) loadGeneration(ctx context
 		}
 		return nil, fmt.Errorf("%w: generation status: %v", ErrVectorPartitionShardSearchGenerationMismatch, err)
 	}
+	if manifest.Format == collections.VectorPartitionManifestFormatV2 || manifest.PagedRootV2 != nil {
+		return nil, collections.ErrVectorPartitionPagedRuntimeUnsupportedV2
+	}
 	if s.ownerGroupID != "" && (s.replicatedLifecycle == nil || s.offlineGraphVariant != "" || manifest.IntegrityDigest != s.ownerManifestDigest) {
 		return nil, fmt.Errorf("%w: owner generation root binding", ErrVectorPartitionShardSearchGenerationMismatch)
 	}
