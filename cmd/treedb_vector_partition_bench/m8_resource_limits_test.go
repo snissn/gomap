@@ -40,14 +40,27 @@ func TestM8ConfiguredProbesUseLogicalDomainCountV1(t *testing.T) {
 }
 
 func TestM8LocalSearchFanoutIsOneGraphPerDomainV1(t *testing.T) {
-	if !m8LocalSearchFanoutValidV1([]uint32{1, 1}, 2, 2, 1) {
+	packsPerDomain := []int{2, 1}
+	if !m8LocalSearchFanoutValidV1([]uint32{1, 1}, 2, 2, 1, packsPerDomain, true) {
 		t.Fatal("rejected one local graph search per selected domain")
 	}
-	if m8LocalSearchFanoutValidV1([]uint32{3}, 3, 1, 1) {
+	if m8LocalSearchFanoutValidV1([]uint32{2}, 2, 1, 1, packsPerDomain, true) {
 		t.Fatal("accepted physical-pack fanout for one selected domain")
 	}
-	if !m8LocalSearchFanoutValidV1([]uint32{2}, 2, 1, 2) {
+	if !m8LocalSearchFanoutValidV1([]uint32{2}, 2, 1, 2, packsPerDomain, true) {
 		t.Fatal("rejected two selected domain graphs")
+	}
+	if !m8LocalSearchFanoutValidV1([]uint32{1, 2}, 3, 2, 1, packsPerDomain, false) {
+		t.Fatal("rejected exact per-pack fanout for selected offline domains")
+	}
+	if m8LocalSearchFanoutValidV1([]uint32{3}, 3, 1, 1, packsPerDomain, false) {
+		t.Fatal("accepted impossible one-domain offline fanout")
+	}
+	if !m8LocalSearchFanoutValidV1([]uint32{3}, 3, 1, 2, packsPerDomain, false) {
+		t.Fatal("rejected exact two-domain offline fanout")
+	}
+	if m8LocalSearchFanoutValidV1([]uint32{3}, 2, 1, 2, packsPerDomain, false) {
+		t.Fatal("accepted offline fanout with inconsistent aggregate")
 	}
 }
 

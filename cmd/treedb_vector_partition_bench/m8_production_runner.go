@@ -1294,6 +1294,11 @@ func m8ManifestGraphVariantV1(manifest collections.VectorPartitionManifestV1) st
 	return variant
 }
 
+func m8ManifestUsesDomainGraphsV1(manifest collections.VectorPartitionManifestV1) bool {
+	return manifest.DomainCount < manifest.PartitionCount &&
+		m8ManifestGraphVariantV1(manifest) == string(collections.VectorPartitionLocalGraphVariantConnectivityPreservingVamanaR64L256Alpha1_2V1)
+}
+
 type m8ProfileCaptureV1 struct {
 	dir            string
 	cpu, traceFile *os.File
@@ -2347,7 +2352,7 @@ func newM8AttributionHarnessV1(assets *m8ProductionMultiGroupAssetsV1) (_ *m8Att
 		}
 		seen[placement.PartitionID] = true
 	}
-	domainGraphs := assets.graphVariant == collections.VectorPartitionLocalGraphVariantConnectivityPreservingVamanaR64L256Alpha1_2V1 && assets.manifest.DomainCount < assets.manifest.PartitionCount
+	domainGraphs := m8ManifestUsesDomainGraphsV1(assets.manifest)
 	servingPartitions, err := m8ServingPartitionsV1(assets.manifest, domainGraphs)
 	if err != nil {
 		return nil, err
@@ -3190,7 +3195,7 @@ func m8ExactPartitionUnionV1(ctx context.Context, assets *m8ProductionMultiGroup
 		}
 		seen[placement.PartitionID] = struct{}{}
 	}
-	domainGraphs := assets.graphVariant == collections.VectorPartitionLocalGraphVariantConnectivityPreservingVamanaR64L256Alpha1_2V1 && assets.manifest.DomainCount < assets.manifest.PartitionCount
+	domainGraphs := m8ManifestUsesDomainGraphsV1(assets.manifest)
 	servingPartitions, err := m8ServingPartitionsV1(assets.manifest, domainGraphs)
 	if err != nil {
 		return nil, err
@@ -3803,6 +3808,7 @@ func m8ValidateCoordinatorResponseV1(response nativewire.VectorPartitionCoordina
 	seenDomains := make(map[uint32]struct{}, probes)
 	expectedPacks := make([]uint32, 0, probes)
 	selectedPhysicalPacks := make(map[uint32]struct{}, partitionCount)
+	domainGraphs := m8ManifestUsesDomainGraphsV1(manifest)
 	for _, domain := range response.ProbedDomains {
 		if domain >= uint32(domainCount) {
 			return nil, errors.New("coordinator response contains an out-of-range domain")
@@ -3820,10 +3826,10 @@ func m8ValidateCoordinatorResponseV1(response nativewire.VectorPartitionCoordina
 		for _, mapping := range manifest.DomainPacks {
 			if mapping.DomainID == domain {
 				selectedPhysicalPacks[mapping.PackID] = struct{}{}
-				if !found {
+				if !domainGraphs || !found {
 					expectedPacks = append(expectedPacks, mapping.PackID)
-					found = true
 				}
+				found = true
 			}
 		}
 		if !found {
@@ -4776,7 +4782,7 @@ func validateM8ProductionReportWithProfilesV1(report m8ProductionReportV1, caps 
 	if report.Config.EffectiveWarmup != expectedWarmup {
 		return errors.New("invalid M8 effective warmup count")
 	}
-	domainCount, _, ok := m8ProductionDomainLayoutV1(report.Config)
+	domainCount, packsPerDomain, ok := m8ProductionDomainLayoutV1(report.Config)
 	if !ok {
 		return errors.New("invalid M8 logical-domain pack layout")
 	}
@@ -4855,8 +4861,9 @@ func validateM8ProductionReportWithProfilesV1(report m8ProductionReportV1, caps 
 			row.LocalScoreCalls > uint64(row.Samples)*uint64(report.Config.LocalScoreBudget) || row.MaxLocalScoreCalls > uint64(report.Config.LocalScoreBudget) {
 			return errors.New("M8 search work exceeds its explicit score-call budget")
 		}
-		validExactLocalSearches := m8LocalSearchFanoutValidV1(row.Attribution.LocalHNSWSearchesByQuery, row.Attribution.LocalHNSWSearches, row.Samples, row.Probes)
-		validApproximateLocalSearches := m8LocalSearchFanoutValidV1(row.Attribution.ApproximateLocalHNSWSearchesByQuery, row.Attribution.ApproximateLocalHNSWSearches, row.Samples, row.Probes)
+		domainGraphs := report.Config.GraphVariant == string(collections.VectorPartitionLocalGraphVariantConnectivityPreservingVamanaR64L256Alpha1_2V1) && domainCount < report.Config.Partitions
+		validExactLocalSearches := m8LocalSearchFanoutValidV1(row.Attribution.LocalHNSWSearchesByQuery, row.Attribution.LocalHNSWSearches, row.Samples, row.Probes, packsPerDomain, domainGraphs)
+		validApproximateLocalSearches := m8LocalSearchFanoutValidV1(row.Attribution.ApproximateLocalHNSWSearchesByQuery, row.Attribution.ApproximateLocalHNSWSearches, row.Samples, row.Probes, packsPerDomain, domainGraphs)
 		if row.ElapsedNanos < row.MaxTotalNanos {
 			return errors.New("M8 cell elapsed is shorter than its slowest request")
 		}
@@ -5132,16 +5139,46 @@ func m8ProductionDomainLayoutV1(cfg m8ProductionConfigEvidenceV1) (int, []int, b
 	return cfg.DomainCount, cfg.PacksPerDomain, total == cfg.Partitions
 }
 
-func m8LocalSearchFanoutValidV1(fanout []uint32, aggregate uint64, samples, probes int) bool {
-	if samples < 1 || probes < 1 || uint64(probes) > math.MaxUint32 || len(fanout) != samples || uint64(samples) > math.MaxUint64/uint64(probes) {
+func m8LocalSearchFanoutValidV1(fanout []uint32, aggregate uint64, samples, probes int, packsPerDomain []int, domainGraphs bool) bool {
+	if samples < 1 || probes < 1 || probes > len(packsPerDomain) || len(fanout) != samples {
 		return false
 	}
-	for _, searches := range fanout {
-		if searches != uint32(probes) {
+	totalPacks := 0
+	for _, packs := range packsPerDomain {
+		if packs < 1 || totalPacks > math.MaxUint32-packs {
 			return false
 		}
+		totalPacks += packs
 	}
-	return aggregate == uint64(samples)*uint64(probes)
+	possible := make([][]bool, probes+1)
+	for picked := range possible {
+		possible[picked] = make([]bool, totalPacks+1)
+	}
+	possible[0][0] = true
+	for _, packs := range packsPerDomain {
+		for picked := probes - 1; picked >= 0; picked-- {
+			for sum := 0; sum+packs <= totalPacks; sum++ {
+				if possible[picked][sum] {
+					possible[picked+1][sum+packs] = true
+				}
+			}
+		}
+	}
+	var measured uint64
+	for _, searches := range fanout {
+		if domainGraphs {
+			if searches != uint32(probes) {
+				return false
+			}
+		} else if int(searches) > totalPacks || !possible[probes][searches] {
+			return false
+		}
+		if measured > math.MaxUint64-uint64(searches) {
+			return false
+		}
+		measured += uint64(searches)
+	}
+	return aggregate == measured
 }
 
 func validM8AttributionV1(attribution m8ProductionAttributionV1, topK int) bool {

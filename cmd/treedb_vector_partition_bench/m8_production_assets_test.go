@@ -358,6 +358,26 @@ func TestM8ProductionReportRejectsUnexercisedDataGroupV1(t *testing.T) {
 	if err := testM8ValidateProductionReportV1(multiPack); err != nil {
 		t.Fatalf("one-domain/four-pack report rejected: %v", err)
 	}
+	offline := multiPack
+	offline.Variant = nil
+	offline.Config.GraphVariant = string(collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationV1)
+	offline.PackDiagnostics = diagnostics(loads)
+	offline.Rows = append([]m8ProductionRowV1(nil), multiPack.Rows...)
+	offline.Rows[0].Attribution.LocalHNSWSearches = uint64(fixture.Queries) * 4
+	offline.Rows[0].Attribution.LocalHNSWSearchesByQuery = slices.Repeat([]uint32{4}, fixture.Queries)
+	offline.Rows[0].Attribution.ApproximateLocalHNSWSearches = uint64(fixture.Queries) * 4
+	offline.Rows[0].Attribution.ApproximateLocalHNSWSearchesByQuery = slices.Repeat([]uint32{4}, fixture.Queries)
+	offline.GateLedger = m8ProductionGateLedgerForReportV1(offline)
+	if err := testM8ValidateProductionReportV1(offline); err != nil {
+		t.Fatalf("one-domain/four-pack offline report rejected: %v", err)
+	}
+	invalidOffline := offline
+	invalidOffline.Rows = append([]m8ProductionRowV1(nil), offline.Rows...)
+	invalidOffline.Rows[0].Attribution.LocalHNSWSearches = uint64(fixture.Queries) * 3
+	invalidOffline.Rows[0].Attribution.LocalHNSWSearchesByQuery = slices.Repeat([]uint32{3}, fixture.Queries)
+	if err := testM8ValidateProductionReportV1(invalidOffline); err == nil {
+		t.Fatal("accepted one-domain/four-pack offline report with impossible fanout")
+	}
 	multiPack.Rows[0].Attribution.LocalHNSWSearches--
 	if err := testM8ValidateProductionReportV1(multiPack); err == nil {
 		t.Fatal("accepted one-domain/four-pack report with a missing local search")
