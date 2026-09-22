@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
 )
@@ -15,10 +16,12 @@ import (
 // consensus or routing implementation. Reuse the runtime's transport on all
 // listeners and dispatchers belonging to that node.
 type PeerTransportV1 struct {
-	security  *peerTransportSecurityV1
-	admission *peerNodeAdmissionV1
-	node      raftcluster.NodeID
-	groups    map[raftcluster.GroupID]map[raftcluster.NodeID]bool
+	security     *peerTransportSecurityV1
+	admission    *peerNodeAdmissionV1
+	node         raftcluster.NodeID
+	groups       map[raftcluster.GroupID]map[raftcluster.NodeID]bool
+	configDigest string
+	localLimits  PeerNodeLimitsV1
 }
 
 // NewPeerTransportV1 loads a credentialed fixed-peer configuration without
@@ -51,6 +54,20 @@ func peerTransportFromSecurityV1(config FixedPeerTCPConfigV1, security *peerTran
 		return nil, err
 	}
 	transport := &PeerTransportV1{security: security, admission: admission, node: config.NodeID, groups: make(map[raftcluster.GroupID]map[raftcluster.NodeID]bool, len(config.Groups)+1)}
+	_, transport.configDigest, err = validateFixedPeerConfigV1(config)
+	if err != nil {
+		admission.close()
+		return nil, err
+	}
+	var limits PeerNodeLimitsV1
+	if config.ResourceLimits != nil {
+		limits = *config.ResourceLimits
+	}
+	transport.localLimits, err = normalizePeerNodeLimitsV1(limits)
+	if err != nil {
+		admission.close()
+		return nil, err
+	}
 	add := func(group FixedPeerTCPGroupV1) {
 		members := make(map[raftcluster.NodeID]bool, len(group.Peers))
 		for _, member := range group.Peers {
@@ -80,6 +97,35 @@ func peerPrivateEndpointV1(address string) bool {
 	}
 	value, err := netip.ParseAddrPort(address)
 	return err == nil && value.String() == address && value.Port() != 0 && !value.Addr().Is4In6() && (value.Addr().IsPrivate() || value.Addr().IsLoopback())
+}
+
+// ProbeShardEndpointV1 uses the existing endpoint probe over authenticated
+// transport and verifies the expected group as well as the certificate node.
+func (p *PeerTransportV1) ProbeShardEndpointV1(ctx context.Context, endpoint string, node raftcluster.NodeID, group raftcluster.GroupID) (VectorPartitionShardEndpointIdentityV1, error) {
+	var identity VectorPartitionShardEndpointIdentityV1
+	if p == nil || !p.groups[group][node] {
+		return identity, errPeerAuthenticationV1
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	work, err := p.admission.work("shard:"+string(group), peerRequestsV1, 64<<10)
+	if err != nil {
+		return identity, err
+	}
+	defer work.release()
+	conn, err := p.dialScope(ctx, endpoint, node, "shard:"+string(group))
+	if err != nil {
+		return identity, err
+	}
+	defer conn.Close()
+	identity, err = probeVectorPartitionShardConnV1(ctx, conn)
+	if err == nil && identity.GroupID != string(group) {
+		err = errPeerAuthenticationV1
+	}
+	return identity, err
 }
 
 func (p *PeerTransportV1) dial(ctx context.Context, address string, node raftcluster.NodeID) (net.Conn, error) {
@@ -122,7 +168,9 @@ func (p *PeerTransportV1) DialNativeContextV1(ctx context.Context, address strin
 		return nil, err
 	}
 	client := NewClientWithMaxFrameSize(conn, peerNativeDefaultFrameV1)
-	client.limits.MaxByteVectorItems = int(peerNativeDefaultFrameV1/32)
+	client.limits.MaxByteVectorItems = int(peerNativeDefaultFrameV1 / 32)
+	client.limits.MaxByteVectorBytes = peerNativeDefaultFrameV1
+	client.limits.MaxSectionLen = peerNativeDefaultFrameV1
 	client.peerAdmission = p.admission
 	if err := client.Hello(ctx); err != nil {
 		_ = client.Close()

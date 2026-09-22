@@ -40,6 +40,8 @@ jobs:
         run: go test -race ./TreeDB/nativewire -run 'Test(ManyIdleEndpointsRespectGlobalConnectionBudgetV1|PeerShard|VectorPartitionShardSearchTCP|HotGroupCannotExhaustUnrelatedGroupAdmissionV1|UnknownPeerCannotSubmitOrInstallSnapshotV1|PeerSecurity|PeerCredential)' -count=1 -timeout=6m -v
       - name: Retained serving topology guardrail
         run: go test ./cmd/treedb_vector_partition_bench -run '^TestM8ServingResourcesRetainedTopologyV1$' -count=1 -timeout=4m -v
+      - name: Replicated admission and pipeline shutdown under race
+        run: go test -race ./TreeDB/nativewire -run '^$' -bench '^BenchmarkPeerSecurityRemoteOwnerCreateV1$/MutualTLS/Sparse$' -benchtime=10x -count=1 -timeout=4m -v
       - name: Credential-free peer regression
         if: ${{ !cancelled() }}
         run: go test ./TreeDB/nativewire -run 'Test(UnknownPeerCannotSubmitOrInstallSnapshotV1|PeerSecurity|PeerCredential)' -count=3 -timeout=4m -v

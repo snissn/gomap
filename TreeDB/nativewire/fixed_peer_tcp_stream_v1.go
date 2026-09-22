@@ -29,6 +29,7 @@ type fixedPeerTCPStreamV1 struct {
 	admission  *peerNodeAdmissionV1
 	scope      string
 	peerNodes  map[hraft.ServerAddress]raftcluster.NodeID
+	timeout    time.Duration
 }
 
 type fixedPeerTCPConnV1 struct {
@@ -60,7 +61,7 @@ func newFixedPeerTCPTransportWithAdmissionV1(listen string, advertised net.Addr,
 	ctx, cancel := context.WithCancel(context.Background())
 	stream := &fixedPeerTCPStreamV1{
 		Listener: listener, advertised: advertised, ctx: ctx, cancel: cancel,
-		conns: make(map[*fixedPeerTCPConnV1]struct{}), security: security, admission: admission, scope: scope,
+		conns: make(map[*fixedPeerTCPConnV1]struct{}), security: security, admission: admission, scope: scope, timeout: timeout,
 	}
 	if security != nil {
 		allowed := make(map[raftcluster.NodeID]bool, len(peers))
@@ -93,6 +94,10 @@ func (s *fixedPeerTCPStreamV1) Accept() (net.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
+	conn, err = newPeerRaftWireConnV1(conn, s.admission, s.scope, true, s.timeout)
+	if err != nil {
+		return nil, err
+	}
 	return s.track(conn)
 }
 
@@ -112,6 +117,10 @@ func (s *fixedPeerTCPStreamV1) Dial(address hraft.ServerAddress, timeout time.Du
 			return plain(ctx)
 		}
 		conn, err := s.security.dialUsing(ctx, string(address), node, dial)
+		if err != nil {
+			return nil, err
+		}
+		conn, err = newPeerRaftWireConnV1(conn, s.admission, s.scope, false, timeout)
 		if err != nil {
 			return nil, err
 		}

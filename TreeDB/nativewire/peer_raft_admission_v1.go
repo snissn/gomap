@@ -16,13 +16,13 @@ import (
 type peerRaftTransportV1 struct {
 	*hraft.NetworkTransport
 	admission *peerNodeAdmissionV1
-	scope string
-	catalog bool
-	inbox chan hraft.RPC
-	ctx context.Context
-	cancel context.CancelFunc
+	scope     string
+	catalog   bool
+	inbox     chan hraft.RPC
+	ctx       context.Context
+	cancel    context.CancelFunc
 	closeOnce sync.Once
-	closeErr error
+	closeErr  error
 }
 
 func newPeerRaftTransportV1(network *hraft.NetworkTransport, admission *peerNodeAdmissionV1, scope string, catalog bool) *peerRaftTransportV1 {
@@ -35,45 +35,58 @@ func newPeerRaftTransportV1(network *hraft.NetworkTransport, admission *peerNode
 func (t *peerRaftTransportV1) Consumer() <-chan hraft.RPC { return t.inbox }
 
 func (t *peerRaftTransportV1) snapshotBytes(size int64) (int64, error) {
-	if size < 0 || (t.catalog && size > fixedPeerMaxRPCBytesV1) { return 0, raftcluster.ErrRouteTargetUnsupported }
-	if t.catalog { return 4*size + (64<<10), nil }
+	if size < 0 || (t.catalog && size > fixedPeerMaxRPCBytesV1) {
+		return 0, raftcluster.ErrRouteTargetUnsupported
+	}
+	if t.catalog {
+		return 4*size + (64 << 10), nil
+	}
 	// The existing data installer streams its files and bounds the archive
 	// header at 1 MiB. It never buffers a whole database snapshot.
-	return 4*int64(raftcluster.RaftSnapshotArchiveHeaderMaxBytes) + (64<<10), nil
+	return 4*int64(raftcluster.RaftSnapshotArchiveHeaderMaxBytes) + (64 << 10), nil
 }
 
 func (t *peerRaftTransportV1) receive() {
 	for {
 		select {
-		case <-t.ctx.Done(): return
-		case rpc := <-t.NetworkTransport.Consumer():
+		case <-t.ctx.Done():
+			return
+		case rpc, ok := <-t.NetworkTransport.Consumer():
+			if !ok {
+				return
+			}
 			var snapshot peerWorkLeaseV1
 			var err error
 			if command, ok := rpc.Command.(*hraft.InstallSnapshotRequest); ok {
 				var bytes int64
 				bytes, err = t.snapshotBytes(command.Size)
-				if err == nil { snapshot, err = t.admission.work(t.scope, peerSnapshotsV1, bytes) }
+				if err == nil {
+					snapshot, err = t.admission.work(t.scope, peerSnapshotsV1, bytes)
+				}
 			}
-			var request peerResourceLeaseV1
-			if err == nil { request, err = t.admission.acquire(t.scope, peerRequestsV1, 1) }
-			if err != nil { snapshot.release(); rpc.Respond(nil, err); continue }
+			if err != nil {
+				snapshot.release()
+				rpc.Respond(nil, err)
+				continue
+			}
 			response := make(chan hraft.RPCResponse, 1)
 			forward := rpc
 			forward.RespChan = response
 			select {
 			case t.inbox <- forward:
-				// The request lease bounds these response waiters. Hold snapshot
+				// The stream request lease bounds these response waiters. Hold snapshot
 				// capacity until the FSM actually finishes, including restore errors.
-				go func(original hraft.RPC, request peerResourceLeaseV1, snapshot peerWorkLeaseV1) {
-					defer request.release()
+				go func(original hraft.RPC, snapshot peerWorkLeaseV1) {
 					defer snapshot.release()
 					select {
-					case result := <-response: original.Respond(result.Response, result.Error)
-					case <-t.ctx.Done(): original.Respond(nil, hraft.ErrTransportShutdown)
+					case result := <-response:
+						original.Respond(result.Response, result.Error)
+					case <-t.ctx.Done():
+						original.Respond(nil, hraft.ErrTransportShutdown)
 					}
-				}(rpc, request, snapshot)
+				}(rpc, snapshot)
 			default:
-				request.release(); snapshot.release()
+				snapshot.release()
 				rpc.Respond(nil, raftcluster.ErrAdmissionUnavailable)
 			}
 		}
@@ -82,9 +95,13 @@ func (t *peerRaftTransportV1) receive() {
 
 func (t *peerRaftTransportV1) InstallSnapshot(id hraft.ServerID, target hraft.ServerAddress, args *hraft.InstallSnapshotRequest, response *hraft.InstallSnapshotResponse, data io.Reader) error {
 	bytes, err := t.snapshotBytes(args.Size)
-	if err != nil { return err }
+	if err != nil {
+		return err
+	}
 	work, err := t.admission.work(t.scope, peerSnapshotsV1, bytes)
-	if err != nil { return err }
+	if err != nil {
+		return err
+	}
 	defer work.release()
 	return t.NetworkTransport.InstallSnapshot(id, target, args, response, data)
 }

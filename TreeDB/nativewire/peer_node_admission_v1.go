@@ -112,10 +112,10 @@ func newPeerNodeAdmissionV1(config FixedPeerTCPConfigV1) (*peerNodeAdmissionV1, 
 	add("control-forward", peerResourceAmountsV1{0, 1, 64 << 10})
 	add("native", peerResourceAmountsV1{1, 1, 64 << 10})
 	for _, group := range config.Groups {
-		add("shard:"+string(group.ID), peerResourceAmountsV1{1, 1, 64 << 10})
+		add("shard:"+string(group.ID), peerResourceAmountsV1{1, 1, 1 << 20})
 	}
 	for group := range config.RaftListen {
-		add("raft:"+string(group), peerResourceAmountsV1{4, 1, 64 << 10})
+		add("raft:"+string(group), peerResourceAmountsV1{4, 1, 4 << 20})
 	}
 	for kind, remaining := range a.sharedLimits {
 		if remaining <= 0 {

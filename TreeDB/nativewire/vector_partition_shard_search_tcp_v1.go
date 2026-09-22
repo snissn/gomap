@@ -196,11 +196,17 @@ func (d *VectorPartitionShardSearchTCPDispatcherV1) DispatchVectorPartitionShard
 	}
 	if d.peerAdmission != nil {
 		requestBytes, err := vectorPartitionCoordinatorShardRequestBytesV1(request)
-		if err != nil || requestBytes > uint64(d.maxRequestFrame) { return VectorPartitionShardSearchResponseV1{}, raftcluster.ErrRouteTargetUnsupported }
+		if err != nil || requestBytes > uint64(d.maxRequestFrame) {
+			return VectorPartitionShardSearchResponseV1{}, raftcluster.ErrRouteTargetUnsupported
+		}
 		bound, err := peerShardResponseFrameV1(request, d.maxResponseFrame)
-		if err != nil { return VectorPartitionShardSearchResponseV1{}, err }
+		if err != nil {
+			return VectorPartitionShardSearchResponseV1{}, err
+		}
 		work, err := d.peerAdmission.work("shard:"+string(request.TargetGroupID), peerRequestsV1, int64(requestBytes)*8+int64(bound)*2)
-		if err != nil { return VectorPartitionShardSearchResponseV1{}, &VectorPartitionShardSearchErrorV1{Code: VectorPartitionShardSearchErrorGroupUnavailableV1, GroupID: request.TargetGroupID, Err: err} }
+		if err != nil {
+			return VectorPartitionShardSearchResponseV1{}, &VectorPartitionShardSearchErrorV1{Code: VectorPartitionShardSearchErrorGroupUnavailableV1, GroupID: request.TargetGroupID, Err: err}
+		}
 		defer work.release()
 	}
 	for attempt := 0; ; attempt++ {
@@ -244,7 +250,12 @@ func (d *VectorPartitionShardSearchTCPDispatcherV1) dispatchVectorPartitionShard
 		return VectorPartitionShardSearchResponseV1{}, vectorPartitionShardSearchTCPRetryableTransportErrorV1(requestCtx, request.TargetGroupID, err)
 	}
 	responseFrame := d.maxResponseFrame
-	if d.peerAdmission != nil { responseFrame, err = peerShardResponseFrameV1(request, responseFrame); if err != nil { return VectorPartitionShardSearchResponseV1{}, err } }
+	if d.peerAdmission != nil {
+		responseFrame, err = peerShardResponseFrameV1(request, responseFrame)
+		if err != nil {
+			return VectorPartitionShardSearchResponseV1{}, err
+		}
+	}
 	frame, err = readVectorPartitionShardSearchTCPResponseFrameV1(conn, responseFrame, request)
 	if err != nil {
 		if request.DeadlineUnixNano != 0 && !time.Now().Before(time.Unix(0, request.DeadlineUnixNano)) {
@@ -500,7 +511,9 @@ func (s VectorPartitionShardSearchTCPServerV1) serveAdmittedConnV1(ctx context.C
 	maxFrame := s.MaxFrame
 	if maxFrame == 0 {
 		maxFrame = vectorPartitionShardSearchTCPMaxFrameBytesV1
-		if s.PeerTransport != nil { maxFrame = uint32(DefaultVectorPartitionShardSearchLimitsV1().MaxRequestBytes) }
+		if s.PeerTransport != nil {
+			maxFrame = uint32(DefaultVectorPartitionShardSearchLimitsV1().MaxRequestBytes)
+		}
 	}
 	maxResponseFrame := s.MaxResponseFrame
 	if maxResponseFrame == 0 {
@@ -517,13 +530,16 @@ func (s VectorPartitionShardSearchTCPServerV1) serveAdmittedConnV1(ctx context.C
 	if initialTimeout == 0 {
 		initialTimeout = 5 * time.Second
 	}
-	for s.serveOneFrameV1(ctx, conn, maxFrame, maxResponseFrame, initialTimeout) {}
+	for s.serveOneFrameV1(ctx, conn, maxFrame, maxResponseFrame, initialTimeout) {
+	}
 }
 
 func (s VectorPartitionShardSearchTCPServerV1) serveOneFrameV1(ctx context.Context, conn net.Conn, maxFrame, maxResponseFrame uint32, initialTimeout time.Duration) bool {
 	_ = conn.SetReadDeadline(time.Now().Add(initialTimeout))
 	var admission *peerNodeAdmissionV1
-	if s.PeerTransport != nil { admission = s.PeerTransport.admission }
+	if s.PeerTransport != nil {
+		admission = s.PeerTransport.admission
+	}
 	frame, work, err := readPeerShardFrameV1(conn, maxFrame, admission, "shard:"+string(s.PeerGroupID))
 	defer work.release()
 	_ = conn.SetReadDeadline(time.Time{})
@@ -556,9 +572,13 @@ func (s VectorPartitionShardSearchTCPServerV1) serveOneFrameV1(ctx context.Conte
 		return false
 	}
 	if admission != nil {
-		if frame.Request.TargetGroupID != s.PeerGroupID { return false }
+		if frame.Request.TargetGroupID != s.PeerGroupID {
+			return false
+		}
 		bound, err := peerShardResponseFrameV1(*frame.Request, maxResponseFrame)
-		if err != nil { return false }
+		if err != nil {
+			return false
+		}
 		maxResponseFrame = bound
 		response, err := admission.acquire("shard:"+string(s.PeerGroupID), peerBytesV1, int64(bound)*2)
 		if err != nil {
@@ -621,6 +641,11 @@ func ProbeVectorPartitionShardEndpointV1(ctx context.Context, endpoint string) (
 		return identity, err
 	}
 	defer conn.Close()
+	return probeVectorPartitionShardConnV1(probeCtx, conn)
+}
+
+func probeVectorPartitionShardConnV1(probeCtx context.Context, conn net.Conn) (VectorPartitionShardEndpointIdentityV1, error) {
+	var identity VectorPartitionShardEndpointIdentityV1
 	if err := vectorPartitionShardSearchTCPDeadlineV1(probeCtx, 0, conn); err != nil {
 		return identity, err
 	}
@@ -663,7 +688,7 @@ func (e vectorPartitionShardSearchTCPErrorV1) toError() error {
 }
 
 func writeVectorPartitionShardSearchTCPFrameV1(w io.Writer, frame vectorPartitionShardSearchTCPFrameV1, max uint32) error {
-	raw, err := appendVectorPartitionShardSearchTCPFrameBodyV1(nil, frame)
+	raw, err := appendVectorPartitionShardSearchTCPFrameBodyBoundedV1(nil, frame, uint64(max))
 	if err != nil {
 		return err
 	}
@@ -719,17 +744,38 @@ func readVectorPartitionShardSearchTCPFrameWithResponseBoundsV1(r io.Reader, max
 type vectorPartitionShardSearchTCPBodyWriterV1 struct {
 	body []byte
 	err  error
+	max  uint64
+}
+
+func (w *vectorPartitionShardSearchTCPBodyWriterV1) reserve(n uint64) bool {
+	if w.err != nil {
+		return false
+	}
+	if w.max != 0 && (uint64(len(w.body)) > w.max || n > w.max-uint64(len(w.body))) {
+		w.err = errors.New("M5 TCP encoded frame exceeds byte bound")
+		return false
+	}
+	return true
 }
 
 func (w *vectorPartitionShardSearchTCPBodyWriterV1) u8(v byte) {
+	if !w.reserve(1) {
+		return
+	}
 	w.body = append(w.body, v)
 }
 
 func (w *vectorPartitionShardSearchTCPBodyWriterV1) u32(v uint32) {
+	if !w.reserve(4) {
+		return
+	}
 	w.body = binary.LittleEndian.AppendUint32(w.body, v)
 }
 
 func (w *vectorPartitionShardSearchTCPBodyWriterV1) u64(v uint64) {
+	if !w.reserve(8) {
+		return
+	}
 	w.body = binary.LittleEndian.AppendUint64(w.body, v)
 }
 
@@ -746,6 +792,9 @@ func (w *vectorPartitionShardSearchTCPBodyWriterV1) f32(v float32) {
 }
 
 func (w *vectorPartitionShardSearchTCPBodyWriterV1) string(v string) {
+	if !w.reserve(uint64(len(v)) + 4) {
+		return
+	}
 	if uint64(len(v)) > math.MaxUint32 && w.err == nil {
 		w.err = errors.New("M5 TCP string exceeds uint32")
 		return
@@ -847,6 +896,10 @@ func (r *vectorPartitionShardSearchTCPBodyReaderV1) done() error {
 }
 
 func appendVectorPartitionShardSearchTCPFrameBodyV1(dst []byte, frame vectorPartitionShardSearchTCPFrameV1) ([]byte, error) {
+	return appendVectorPartitionShardSearchTCPFrameBodyBoundedV1(dst, frame, 0)
+}
+
+func appendVectorPartitionShardSearchTCPFrameBodyBoundedV1(dst []byte, frame vectorPartitionShardSearchTCPFrameV1, max uint64) ([]byte, error) {
 	count := 0
 	typ := byte(0)
 	if frame.Request != nil {
@@ -885,9 +938,12 @@ func appendVectorPartitionShardSearchTCPFrameBodyV1(dst []byte, frame vectorPart
 		case vectorPartitionShardSearchTCPFrameProbeV1:
 			capacity = 16
 		}
+		if max != 0 && uint64(capacity) > max {
+			return nil, errors.New("M5 TCP encoded frame exceeds byte bound")
+		}
 		dst = make([]byte, 0, capacity)
 	}
-	w := vectorPartitionShardSearchTCPBodyWriterV1{body: dst}
+	w := vectorPartitionShardSearchTCPBodyWriterV1{body: dst, max: max}
 	w.u8(vectorPartitionShardSearchTCPFrameVersionV1)
 	w.u8(typ)
 	w.u32(0)

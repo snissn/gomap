@@ -320,7 +320,9 @@ func NewServer(opts ServerOptions) *Server {
 	defaultLimits := iwire.DefaultLimits()
 	if limits.MaxFrameSize == 0 {
 		limits.MaxFrameSize = defaultLimits.MaxFrameSize
-		if opts.PeerTransport != nil { limits.MaxFrameSize = peerNativeDefaultFrameV1 }
+		if opts.PeerTransport != nil {
+			limits.MaxFrameSize = peerNativeDefaultFrameV1
+		}
 	}
 	if limits.MaxHeaderLen == 0 {
 		limits.MaxHeaderLen = defaultLimits.MaxHeaderLen
@@ -338,6 +340,8 @@ func NewServer(opts ServerOptions) *Server {
 		limits.MaxByteVectorBytes = defaultLimits.MaxByteVectorBytes
 	}
 	if opts.PeerTransport != nil {
+		limits.MaxByteVectorBytes = min(limits.MaxByteVectorBytes, limits.MaxFrameSize)
+		limits.MaxSectionLen = min(limits.MaxSectionLen, limits.MaxFrameSize)
 		limits.MaxByteVectorItems = min(limits.MaxByteVectorItems, int(max(1, min(uint64(defaultLimits.MaxByteVectorItems), limits.MaxFrameSize/32))))
 	}
 	maxInFlight := opts.MaxInFlight
@@ -525,7 +529,9 @@ func (s *Server) serveRegisteredConn(ctx context.Context, conn net.Conn) error {
 		var admit func(uint64) error
 		if s.peerTransport != nil {
 			admit = func(uint64) error {
-				if s.limits.MaxFrameSize > 64<<20 { return raftcluster.ErrAdmissionUnavailable }
+				if s.limits.MaxFrameSize > 64<<20 {
+					return raftcluster.ErrAdmissionUnavailable
+				}
 				var err error
 				work, err = s.peerTransport.admission.work("native", peerRequestsV1, int64(s.limits.MaxFrameSize)*4)
 				return err
@@ -534,7 +540,11 @@ func (s *Server) serveRegisteredConn(ctx context.Context, conn net.Conn) error {
 		header, body, err := readFrameIntoAdmissionV1(conn, s.limits, state.readBody, admit)
 		if err != nil {
 			work.release()
-			if errors.Is(err, raftcluster.ErrAdmissionUnavailable) { _ = s.writeError(conn, header, protocolError(iwire.ErrResourceExhausted, "node request/byte admission unavailable")); return err }
+			if errors.Is(err, raftcluster.ErrAdmissionUnavailable) {
+				_ = conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+				_ = s.writeError(conn, header, protocolError(iwire.ErrResourceExhausted, "node request/byte admission unavailable"))
+				return err
+			}
 			if errors.Is(err, io.EOF) {
 				return nil
 			}

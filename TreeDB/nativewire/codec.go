@@ -33,7 +33,9 @@ func readFrameIntoAdmissionV1(r io.Reader, limits iwire.Limits, dst []byte, admi
 		return iwire.Header{}, nil, err
 	}
 	if admit != nil {
-		if err := admit(header.BodyLen); err != nil { return header, nil, err }
+		if err := admit(header.BodyLen); err != nil {
+			return header, nil, err
+		}
 	}
 	if header.BodyLen == 0 {
 		return header, nil, nil

@@ -204,9 +204,13 @@ func (c *Client) roundTripLockedStreamVersion(ctx context.Context, streamID uint
 		return iwire.Header{}, nil, ctx.Err()
 	}
 	if c.peerAdmission != nil {
-		if uint64(len(body))+uint64(iwire.FrameHeaderLenV1) > c.limits.MaxFrameSize { return iwire.Header{}, nil, protocolError(iwire.ErrResourceExhausted, "authenticated native frame exceeds bound") }
+		if uint64(len(body))+uint64(iwire.FrameHeaderLenV1) > c.limits.MaxFrameSize {
+			return iwire.Header{}, nil, protocolError(iwire.ErrResourceExhausted, "authenticated native frame exceeds bound")
+		}
 		work, err := c.peerAdmission.work("native", peerRequestsV1, int64(c.limits.MaxFrameSize)*4)
-		if err != nil { return iwire.Header{}, nil, err }
+		if err != nil {
+			return iwire.Header{}, nil, err
+		}
 		defer work.release()
 	}
 	requestID := c.nextReq.Add(1)
@@ -266,9 +270,13 @@ func (c *Client) roundTripLockedDiscardResponse(ctx context.Context, typ iwire.F
 		return ctx.Err()
 	}
 	if c.peerAdmission != nil {
-		if uint64(len(body))+uint64(iwire.FrameHeaderLenV1) > c.limits.MaxFrameSize { return protocolError(iwire.ErrResourceExhausted, "authenticated native frame exceeds bound") }
+		if uint64(len(body))+uint64(iwire.FrameHeaderLenV1) > c.limits.MaxFrameSize {
+			return protocolError(iwire.ErrResourceExhausted, "authenticated native frame exceeds bound")
+		}
 		work, err := c.peerAdmission.work("native", peerRequestsV1, int64(c.limits.MaxFrameSize)*4)
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 		defer work.release()
 	}
 	requestID := c.nextReq.Add(1)
