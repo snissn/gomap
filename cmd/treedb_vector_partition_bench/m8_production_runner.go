@@ -2412,6 +2412,13 @@ func (h *m8AttributionHarnessV1) route(ctx context.Context, query []float32, pro
 	for i, partition := range result.Partitions {
 		domains[i] = partition.PartitionID
 	}
+	return h.partitionsForDomains(domains)
+}
+
+func (h *m8AttributionHarnessV1) partitionsForDomains(domains []uint32) ([]uint32, error) {
+	if h == nil || h.assets == nil {
+		return nil, errors.New("incomplete M8 attribution harness")
+	}
 	if h.domainGraphs {
 		return m8AttributionAnchorsForDomainsV1(h.assets.manifest, len(h.searchers), domains)
 	}

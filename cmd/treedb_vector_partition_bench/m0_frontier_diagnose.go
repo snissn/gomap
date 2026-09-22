@@ -169,14 +169,12 @@ func runM0FrontierDiagnoseV1(args []string, stdout io.Writer) error {
 		}
 		childParent[child] = parent
 	}
-	searchers := make([]*collections.VectorPartitionLocalSearcherV1, len(h.manifest.Assets))
-	defer closeM3PartitionSearchers(searchers)
-	for i, a := range h.manifest.Assets {
-		searchers[i], err = h.collection.OpenVectorPartitionLocalSearcherForOfflineAssetWithContextV1(context.Background(), h.manifest.IndexName, h.manifest, a)
-		if err != nil {
-			return err
-		}
+	harness, err := newM8AttributionHarnessV1(h)
+	if err != nil {
+		return err
 	}
+	defer harness.Close()
+	searchers := harness.searchers
 	members, err := m0FrontierMembershipOracleV1(h)
 	if err != nil {
 		return err
@@ -200,9 +198,14 @@ func runM0FrontierDiagnoseV1(args []string, stdout io.Writer) error {
 		}
 		row := m0FrontierDiagnosticQueryV1{Query: ordinal, Route: make([]uint32, 4)}
 		routePacks := make([][]uint32, 4)
+		routeSearchPartitions := make([][]uint32, 4)
 		for i, r := range routed.Partitions {
 			row.Route[i] = r.PartitionID
 			routePacks[i], err = m8AttributionPacksForDomainsV1(h.manifest, len(searchers), []uint32{r.PartitionID})
+			if err != nil {
+				return err
+			}
+			routeSearchPartitions[i], err = harness.partitionsForDomains([]uint32{r.PartitionID})
 			if err != nil {
 				return err
 			}
@@ -265,7 +268,7 @@ func runM0FrontierDiagnoseV1(args []string, stdout io.Writer) error {
 			report.ExactTruthRankSlots[rank]++
 		}
 		var prior []m8CanonicalResultV1
-		for rank, packs := range routePacks {
+		for rank, packs := range routeSearchPartitions {
 			combined := append([]m8CanonicalResultV1(nil), prior...)
 			for _, pack := range packs {
 				got, _, _, e := searchers[pack].SearchWithAttributionV1(context.Background(), q, collections.VectorPartitionSearchOptionsV1{TopK: 10, EfSearch: ef})

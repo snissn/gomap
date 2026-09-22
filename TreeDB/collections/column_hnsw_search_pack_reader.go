@@ -340,6 +340,9 @@ func newColumnHNSWSearchPackPreparedViewFromSectionHandlesWithContext(ctx contex
 	if pack.Header.Version != columnHNSWSearchPackVersionV6 {
 		return nil, errors.New("collections: chunked hnsw_search_pack_v1 version")
 	}
+	if err := validateColumnHNSWSearchPackChunkedGeometry(raw, pack); err != nil {
+		return nil, err
+	}
 	allHandles := make([]*mappedresource.Handle, 0)
 	view := &columnHNSWSearchPackPreparedView{
 		Header: pack.Header, Sections: append([]columnHNSWSearchPackSection(nil), pack.Sections...),
@@ -1360,6 +1363,25 @@ func (v *columnHNSWSearchPackPreparedView) int64DirectView(raw []byte, kind colu
 		return nil, fmt.Errorf("collections: hnsw_search_pack_v1 %s direct view: %w", kind, err)
 	}
 	return view, nil
+}
+
+func validateColumnHNSWSearchPackChunkedGeometry(root []byte, pack columnHNSWSearchPack) error {
+	wantRoot := columnHNSWSearchPackHeaderSizeV2 + len(pack.Sections)*columnHNSWSearchPackSectionEntrySize
+	if len(root) != wantRoot {
+		return errors.New("collections: chunked hnsw_search_pack_v1 root geometry")
+	}
+	cursor := pack.Header.DataOffset
+	for _, section := range pack.Sections {
+		offset, ok := alignColumnHNSWSearchPackUint64(cursor, uint64(section.Alignment))
+		if !ok || section.Offset != offset || section.Length > ^uint64(0)-section.Offset {
+			return fmt.Errorf("collections: chunked hnsw_search_pack_v1 section %s[%d] geometry", section.Kind, section.Index)
+		}
+		cursor = section.Offset + section.Length
+	}
+	if cursor != pack.Header.TotalLength {
+		return errors.New("collections: chunked hnsw_search_pack_v1 trailing geometry")
+	}
+	return nil
 }
 
 func (v *columnHNSWSearchPackPreparedView) sectionDirectBytes(raw []byte, section columnHNSWSearchPackSection, elemBytes uintptr, typeName string) ([]byte, error) {

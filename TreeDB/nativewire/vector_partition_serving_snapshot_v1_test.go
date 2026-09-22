@@ -214,6 +214,16 @@ func TestVectorPartitionServingSnapshotPublicationRejectsAssetSetMismatchV1(t *t
 	}
 }
 
+func TestVectorPartitionServingSnapshotPublicationRejectsSplitDomainOwnershipV1(t *testing.T) {
+	fixture := newVectorPartitionServingSnapshotFixtureV1(t)
+	fixture.router.status.Manifest.DomainCount = 1
+	fixture.router.status.Manifest.DomainPacks = []collections.VectorPartitionDomainPackV1{{DomainID: 0, PackID: 0}, {DomainID: 0, PackID: 1}}
+	fixture.router.status.Partitions = 1
+	if err := fixture.publisher.PublishV1(t.Context()); !errors.Is(err, ErrVectorPartitionCoordinatorRouteMismatch) {
+		t.Fatalf("split domain publication error=%v", err)
+	}
+}
+
 func TestVectorPartitionServingSnapshotPublicationClosesMalformedLeaseV1(t *testing.T) {
 	fixture := newVectorPartitionServingSnapshotFixtureV1(t)
 	malformedCloses := 0

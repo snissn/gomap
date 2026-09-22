@@ -2137,7 +2137,7 @@ mapped-handle leaks. Manifest, coordinator and M8 tests separately require
 canonical gap-free IDs, co-location and one domain anchor/search/partial.
 
 ```sh
-GOWORK=off go test ./TreeDB/collections ./TreeDB/nativewire \
+GOWORK=off go test ./TreeDB/collections ./TreeDB/nativewire ./cmd/treedb_vector_partition_bench \
   -run 'Test(VectorPartitionDomainPack|VectorPartitionCoordinator|M8LocalSearchFanoutIsOneGraphPerDomain)' -count=1
 ```
 

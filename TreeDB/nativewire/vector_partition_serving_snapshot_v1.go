@@ -346,12 +346,22 @@ func (p *VectorPartitionServingSnapshotPublisherV1) buildSnapshotV1(ctx context.
 		}
 		snapshot.partitions[group] = make(map[uint32]*VectorPartitionPartitionSearchLeaseV1)
 		for domain := 0; domain+1 < len(snapshot.router.session.domainPackOffsets); domain++ {
-			start := snapshot.router.session.domainPackOffsets[domain]
-			if start < 0 || start >= len(snapshot.router.session.domainPacks) {
+			start, end := snapshot.router.session.domainPackOffsets[domain], snapshot.router.session.domainPackOffsets[domain+1]
+			if start < 0 || end <= start || end > len(snapshot.router.session.domainPacks) {
 				return fail(ErrVectorPartitionCoordinatorRouteMismatch)
 			}
 			partitionID := snapshot.router.session.domainPacks[start].PackID
-			if int(partitionID) >= len(placement.Partitions) || placement.Partitions[partitionID].PartitionID != partitionID || placement.Partitions[partitionID].GroupID != group {
+			if int(partitionID) >= len(placement.Partitions) || placement.Partitions[partitionID].PartitionID != partitionID {
+				return fail(ErrVectorPartitionCoordinatorRouteMismatch)
+			}
+			owner := placement.Partitions[partitionID].GroupID
+			for _, mapping := range snapshot.router.session.domainPacks[start:end] {
+				packID := mapping.PackID
+				if int(packID) >= len(placement.Partitions) || placement.Partitions[packID].PartitionID != packID || placement.Partitions[packID].GroupID != owner {
+					return fail(ErrVectorPartitionCoordinatorRouteMismatch)
+				}
+			}
+			if owner != group {
 				continue
 			}
 			lease, openErr := generation.OpenPartition(ctx, partitionID)

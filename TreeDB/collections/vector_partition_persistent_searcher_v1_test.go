@@ -2218,6 +2218,43 @@ func TestVectorPartitionDomainPackSectionsOpenWithoutReassemblyV1(t *testing.T) 
 		}
 		sections[key] = append(sections[key], acquire(i))
 	}
+	rejectRoot := func(name string, mutate func([]byte)) {
+		t.Run(name, func(t *testing.T) {
+			payload := append([]byte(nil), payloads[0].payload...)
+			mutate(payload)
+			malformed, err := manager.AcquireBytes(mappedresource.Key{Class: mappedresource.ClassTypedColumnAsset, Namespace: "test", Kind: "domain-chunk", Generation: 11, PartID: 8, FileID: uint32(100 + len(name)), Length: int64(len(payload))}, scope, mappedresource.SourceHeapCopy, payload, mappedresource.AcquireOptions{Reason: "malformed domain chunk test"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if view, err := newColumnHNSWSearchPackPreparedViewFromSectionHandlesWithContext(t.Context(), manager, malformed, sections, columnHNSWSearchPackDecodeOptions{ExpectedBaseIdentity: input.BaseIdentity, ExpectedMembershipDigest: input.MembershipDigest}); err == nil {
+				_ = view.Close()
+				t.Fatal("accepted malformed chunk root geometry")
+			}
+			if err := malformed.Release(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+	rejectRoot("trailing logical gap", func(payload []byte) {
+		dataOffset := hnswPackU64(payload, columnHNSWSearchPackHeaderDataOffsetOffset)
+		putHNSWPackU64(payload, columnHNSWSearchPackHeaderTotalLengthOffset, ^uint64(0))
+		putHNSWPackU64(payload, columnHNSWSearchPackHeaderDataLengthOffset, ^uint64(0)-dataOffset)
+	})
+	rejectRoot("inter-section gap", func(payload []byte) {
+		count := int(hnswPackU32(payload, columnHNSWSearchPackHeaderSectionCountOffset))
+		entry := columnHNSWSearchPackHeaderSizeV2 + (count-1)*columnHNSWSearchPackSectionEntrySize
+		delta := uint64(hnswPackU16(payload, entry+columnHNSWSearchPackEntryAlignmentOffset))
+		putHNSWPackU64(payload, entry+columnHNSWSearchPackEntrySectionOffset, hnswPackU64(payload, entry+columnHNSWSearchPackEntrySectionOffset)+delta)
+		putHNSWPackU64(payload, columnHNSWSearchPackHeaderTotalLengthOffset, hnswPackU64(payload, columnHNSWSearchPackHeaderTotalLengthOffset)+delta)
+		putHNSWPackU64(payload, columnHNSWSearchPackHeaderDataLengthOffset, hnswPackU64(payload, columnHNSWSearchPackHeaderDataLengthOffset)+delta)
+		directoryOffset := hnswPackU64(payload, columnHNSWSearchPackHeaderDirectoryOffsetOffset)
+		directoryLength := hnswPackU64(payload, columnHNSWSearchPackHeaderDirectoryLengthOffset)
+		checksum, err := columnHNSWSearchPackChecksumWithContext(t.Context(), payload[directoryOffset:directoryOffset+directoryLength])
+		if err != nil {
+			t.Fatal(err)
+		}
+		putHNSWPackU32(payload, columnHNSWSearchPackHeaderDirectoryChecksumOffset, checksum)
+	})
 	view, err := newColumnHNSWSearchPackPreparedViewFromSectionHandlesWithContext(t.Context(), manager, root, sections, columnHNSWSearchPackDecodeOptions{ExpectedBaseIdentity: input.BaseIdentity, ExpectedMembershipDigest: input.MembershipDigest})
 	if err != nil {
 		_ = root.Release()

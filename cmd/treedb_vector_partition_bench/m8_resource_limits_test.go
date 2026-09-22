@@ -66,6 +66,11 @@ func TestM8AttributionExpandsLogicalDomainsToPhysicalPacksV1(t *testing.T) {
 	if _, err := m8AttributionPacksForDomainsV1(manifest, 3, []uint32{0, 0}); err == nil {
 		t.Fatal("accepted duplicate routed domain")
 	}
+	harness := &m8AttributionHarnessV1{assets: &m8ProductionMultiGroupAssetsV1{manifest: manifest}, searchers: make([]*collections.VectorPartitionLocalSearcherV1, 3), domainGraphs: true}
+	got, err = harness.partitionsForDomains([]uint32{0, 1})
+	if err != nil || !slices.Equal(got, []uint32{0, 2}) {
+		t.Fatalf("domain graph search partitions=%v err=%v want [0 2]", got, err)
+	}
 }
 
 func TestM8RetainedDomainGraphRequiresChunkedAnchorsV1(t *testing.T) {
