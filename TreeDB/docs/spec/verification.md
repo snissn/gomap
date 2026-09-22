@@ -2546,6 +2546,7 @@ This fixture lives with the final metadata child, not in a separate harness PR.
 | Nonvoting data owner survives exact restart/catalog leader failover, then refuses fresh writes after authority loss | `TestSparseCatalogNonVoterDataOwnerFailoverAndAuthorityLossV1` |
 | Global client admission is independent and bounded | `TestSparseCatalogClientAdmissionIsBoundedAndIndependentV1` |
 | Saturated ingress/forward capacity cannot force nested authoritative read RPCs | `TestSparseCatalogSaturationPreservesAuthoritativeReadProgressV1` |
+| Closing a runtime interrupts an already accepted idle Raft connection without waiting for a remote node to close | `TestSparseCatalogRuntimeCloseInterruptsIdleRaftConnectionV1` and sparse catalog race tests |
 | Matched all-voter baseline/candidate and enabled consumer cost with process resources | `BenchmarkSparseCatalogRemoteOwnerCreateV1`, `.github/workflows/sparse-catalog-qualification.yml` |
 
 The 40-node inventory case is configuration/control-plane evidence, not 40 live

@@ -52,7 +52,7 @@ func TestSparseCatalogConfigAcceptsMoreThan32NodesWithThreeVotersV1(t *testing.T
 }
 
 func TestSparseCatalogResourceBoundsRefuseBeforeOpeningV1(t *testing.T) {
-	for _, kind := range []string{"nodes", "groups", "hosted", "identity", "features"} {
+	for _, kind := range []string{"nodes", "groups", "hosted", "identity", "utf8-identity", "utf8-path", "features"} {
 		t.Run(kind, func(t *testing.T) {
 			c := fixedPeerTestConfigsV1(t)[0]
 			switch kind {
@@ -69,6 +69,10 @@ func TestSparseCatalogResourceBoundsRefuseBeforeOpeningV1(t *testing.T) {
 				}
 			case "identity":
 				c.ClusterID = "bad\ncluster"
+			case "utf8-identity":
+				c.ClusterID = string([]byte{0xff})
+			case "utf8-path":
+				c.DataRoot += string([]byte{0xff})
 			case "features":
 				c.Catalog.Features.Required = make([]raftcluster.RequiredFeature, 65)
 			}

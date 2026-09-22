@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptrace"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -151,11 +152,11 @@ func validateFixedPeerConfigV1(c FixedPeerTCPConfigV1) (FixedPeerTCPConfigV1, st
 	}
 	addresses := map[string]bool{}
 	addressOK := func(address string) bool {
-		addr, e := net.ResolveTCPAddr("tcp", address)
-		if e != nil || addr.IP == nil || addr.IP.IsUnspecified() || addr.Port <= 0 || addresses[addr.String()] || addr.String() != address {
+		addr, e := netip.ParseAddrPort(address)
+		if e != nil || addr.Addr().IsUnspecified() || addr.Addr().Is4In6() || addr.Port() == 0 || addresses[address] || addr.String() != address {
 			return false
 		}
-		addresses[addr.String()] = true
+		addresses[address] = true
 		return true
 	}
 	nodes := map[raftcluster.NodeID]bool{}
@@ -239,8 +240,8 @@ func validateFixedPeerConfigV1(c FixedPeerTCPConfigV1) (FixedPeerTCPConfigV1, st
 			return invalid("explicit raft listen address required")
 		}
 	}
-	slices.SortFunc(c.Nodes, func(a, b FixedPeerTCPNodeV1) int { return bytes.Compare([]byte(a.ID), []byte(b.ID)) })
-	slices.SortFunc(c.Groups, func(a, b FixedPeerTCPGroupV1) int { return bytes.Compare([]byte(a.ID), []byte(b.ID)) })
+	slices.SortFunc(c.Nodes, func(a, b FixedPeerTCPNodeV1) int { return strings.Compare(string(a.ID), string(b.ID)) })
+	slices.SortFunc(c.Groups, func(a, b FixedPeerTCPGroupV1) int { return strings.Compare(string(a.ID), string(b.ID)) })
 	if err := preflightFixedPeerConfigV1(c); err != nil {
 		return c, "", err
 	}
@@ -339,7 +340,7 @@ func OpenFixedPeerTCPRuntimeV1(config FixedPeerTCPConfigV1) (*FixedPeerTCPRuntim
 		if e != nil {
 			return fail(e)
 		}
-		transport, e := hraft.NewTCPTransport(listen, addr, 4, r.config.RequestTimeout, io.Discard)
+		transport, e := newFixedPeerTCPTransportV1(listen, addr, r.config.RequestTimeout)
 		if e != nil {
 			return fail(e)
 		}
@@ -445,6 +446,7 @@ func (r *FixedPeerTCPRuntimeV1) Close() error {
 		}
 		for _, t := range r.transports {
 			errs = append(errs, t.Close())
+			t.CloseStreams()
 		}
 		for _, d := range r.data {
 			if d.fsm != nil {

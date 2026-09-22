@@ -14,6 +14,9 @@ Build the small node command with
 `GOWORK=off go build ./cmd/treedb-fixed-peer`, then run
 `./treedb-fixed-peer -config /absolute/path/node.json` once per member.
 SIGINT/SIGTERM closes HTTP admission, Raft providers/transports, FSMs, and DBs.
+The TCP stream layer owns accepted and dialed sockets. Close interrupts their
+idle reads and cancels pending dials before releasing connection pools; it does
+not depend on another node shutting down to release local Raft handlers.
 The initial stdout JSON is local status, **not readiness**.
 
 The JSON is `nativewire.FixedPeerTCPConfigV1` (strict fields, maximum 1 MiB):
@@ -37,10 +40,11 @@ most 1,024 inventory nodes, 128 declared data groups, 32 locally hosted data
 groups plus an optional catalog group, and 32 voters per group. These are
 admission limits, not measured deployment capacities. A three-voter catalog
 does not grow when data nodes are added. Identity strings are bounded to 128
-bytes without path separators, control characters, or surrounding whitespace.
+bytes of valid UTF-8 without path separators, control characters, or surrounding whitespace.
 Configuration containers and a conservative 1 MiB escaped-JSON byte budget are
 checked before copying caller input or creating stores/listeners. The normalized
-shared encoding is checked again. The catalog group and all its voters require
+shared encoding is checked again. Numeric advertised addresses are parsed without
+DNS resolution. The catalog group and all its voters require
 `treedb.raftcluster.catalog_meta_authority` V1 alongside
 `treedb.raftcluster.single_group_provider` V1. Data groups may use the default
 single-group floor. Vector lifecycle requirements are refused in this slice.
@@ -168,3 +172,50 @@ test logs recovery time. These are local conformance measurements,
 not multi-host or horizontal-scale evidence. No comparable in-process durable
 remote-owner create benchmark exists; other command benchmarks are not a
 substitute for an apples-to-apples regression control.
+
+## Sparse catalog qualification and allocation audit
+
+Run the sparse conformance and resource harness with:
+
+```sh
+GOWORK=off go test ./TreeDB/nativewire -run 'TestSparseCatalog' -count=3 -v
+GOWORK=off go test -race ./TreeDB/nativewire -run 'TestSparseCatalog' -count=1 -v
+GOWORK=off go test ./TreeDB/nativewire -run '^$' -bench '^BenchmarkSparseCatalogRemoteOwnerCreateV1$' -benchtime=25x -count=3 -benchmem -v
+GOWORK=off go test ./TreeDB/nativewire -run '^$' -bench '^BenchmarkSparseCatalogConfigV1$' -benchtime=100x -count=3 -benchmem
+```
+
+The scoped qualification workflow checks out the exact PR base and head, copies
+only the identical test-only benchmark harness into the base, and alternates
+three base/candidate runs on one Linux runner/toolchain. `AllVoters` uses four
+processes/four catalog voters and unchanged durable remote-owner create semantics
+on both versions. `Sparse` uses the same four processes/data groups with three
+catalog voters and a nonvoting ingress. `Inventory40` retains those four active
+processes and declares 36 additional dormant endpoints. Its result measures
+inventory overhead, not 40-instance throughput. Neither four catalog voters nor
+the existing two-voter data group is a recommended HA topology.
+
+`route_ns/op` includes route resolution and its quorum fence before the timed
+write section. Standard `ns/op`, `B/op` and `allocs/op` measure the parent/client
+durable-write section. Child `nodes_B/op`/`nodes_allocs/op` include the sum of each
+node's Go allocation deltas, background Raft activity and bounded test metrics
+reporting between samples. Each child's before/after heap, Go-reserved memory,
+GC count/pause, goroutines, descriptors, threads, Linux RSS and Linux peak RSS
+are logged. `nodes_RSS_bytes` sums retained samples; `sum_node_peak_RSS_bytes`
+is the sum of individual process high-water marks, an upper bound on simultaneous
+aggregate peak, not a simultaneous-peak sample. Child CPU is logged at shutdown.
+The metrics collector is test-only stdin/stdout instrumentation and does not
+add a production diagnostics or mutation endpoint.
+
+| Frequency / lifetime | Allocation and resource contract |
+| --- | --- |
+| Configuration, retained for client/runtime lifetime | Preflight bounds lengths and worst-case escaped bytes before cloning. Clone node/group/peer/feature containers once; remove the former full JSON encode/decode clone. Preserve caller isolation. The shared digest encoding remains one bounded startup allocation. |
+| Runtime open, until close | Build one endpoint map and one entry per declared data group; open providers, transports, stores and apply state only for locally hosted groups. A consumer allocates no catalog authority. |
+| Per RPC, until response completion | Use indexed destination lookup, independent fixed admission channels and reusable HTTP pools. Request JSON, response bytes and existing decode/route metadata remain bounded transient allocations; no inventory-sized per-call status slice is built. |
+| Per supported mutation | Retain existing deterministic entry decode, complete route comparison, owner forwarding and durable Raft/FSM/idempotency path. Remote consumer validation pays an explicit catalog round trip instead of maintaining replicated local state. |
+| Maintenance / reconnect | No watch stream, lease cache, consumer catalog snapshot, all-inventory polling or preconnected peer mesh. HTTP idle connections expire and are globally bounded. Raft sockets have one connection-lifetime tracking entry and shutdown closes it. Restart reads the exact local manifest and subsequent operations acquire fresh authority. |
+
+Configuration benchmarks vary nodes (4/40/1,024) and declared groups (2/32/128),
+report encoded bytes and constructor allocations, and do not open runtime stores.
+Measurements are local conformance evidence; multi-host/network/AZ-byte evidence
+and representative horizontal scaling remain in #4250, with fault evidence in
+#3983. No EC2 or ANN quality/capacity claim follows from these cases.

@@ -4,12 +4,13 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
 )
 
 func fixedPeerIdentityV1(value string) bool {
-	if len(value) == 0 || len(value) > 128 || strings.TrimSpace(value) != value ||
+	if len(value) == 0 || len(value) > 128 || !utf8.ValidString(value) || strings.TrimSpace(value) != value ||
 		value == "." || value == ".." || strings.ContainsAny(value, "/\\") {
 		return false
 	}
@@ -50,7 +51,8 @@ func preflightFixedPeerConfigV1(c FixedPeerTCPConfigV1) error {
 	if !fixedPeerIdentityV1(string(c.NodeID)) || (c.ClusterID != "" && !fixedPeerIdentityV1(c.ClusterID)) {
 		return invalid("invalid bounded node or cluster identity")
 	}
-	if len(c.DataRoot) > 4096 || len(c.RaftRoot) > 4096 || len(c.ListenAddress) > 128 {
+	if len(c.DataRoot) > 4096 || len(c.RaftRoot) > 4096 || len(c.ListenAddress) > 128 ||
+		!utf8.ValidString(c.DataRoot) || !utf8.ValidString(c.RaftRoot) {
 		return invalid("local path or address exceeds byte budget")
 	}
 	budget := fixedPeerMaxConfigBytesV1 - 1024 - 6*(len(c.DataRoot)+len(c.RaftRoot)+len(c.ListenAddress)+len(c.NodeID)+len(c.ClusterID))
