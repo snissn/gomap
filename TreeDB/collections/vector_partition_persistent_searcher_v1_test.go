@@ -2272,6 +2272,47 @@ func TestVectorPartitionDomainPackSectionsOpenWithoutReassemblyV1(t *testing.T) 
 	if !reflect.DeepEqual(got, want) || !reflect.DeepEqual(gotTrace, wantTrace) || gotStats.PreparedScoreCalls != wantStats.PreparedScoreCalls || gotStats.VisitedNodes != wantStats.VisitedNodes {
 		t.Fatalf("chunk parity results=%t trace=%t scores=%d/%d visited=%d/%d", reflect.DeepEqual(got, want), reflect.DeepEqual(gotTrace, wantTrace), gotStats.PreparedScoreCalls, wantStats.PreparedScoreCalls, gotStats.VisitedNodes, wantStats.VisitedNodes)
 	}
+	trace := VectorPartitionSearchAttributionV1{Schema: "treedb_vector_partition_search_attribution_v1", LevelOrdinals: gotTrace.LevelOrdinals, ScoreOrdinals: gotTrace.ScoreOrdinals}
+	for _, read := range gotTrace.AdjacencyReads {
+		trace.AdjacencyReads = append(trace.AdjacencyReads, VectorPartitionSearchPageReadV1{Layer: read.Layer, Ordinal: read.Ordinal, Auxiliary: read.Auxiliary})
+	}
+	monolithicSearcher := &VectorPartitionLocalSearcherV1{asset: VectorPartitionSearchAssetV1{Dimensions: input.Dimensions}, prepared: monolithic, opened: 1}
+	chunkedSearcher := &VectorPartitionLocalSearcherV1{asset: VectorPartitionSearchAssetV1{Dimensions: input.Dimensions}, prepared: view, opened: 1}
+	monolithicDigest, err := monolithicSearcher.PackIdentityNeutralSHA256ForOfflineV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	chunkedDigest, err := chunkedSearcher.PackIdentityNeutralSHA256ForOfflineV1()
+	if err != nil || chunkedDigest != monolithicDigest {
+		t.Fatalf("chunked identity-neutral digest=%q want=%q err=%v", chunkedDigest, monolithicDigest, err)
+	}
+	ordinals := make(map[string]uint32, rows)
+	for row := 0; row < rows; row++ {
+		ordinals[fmt.Sprintf("id-%03d", row)] = uint32(row)
+	}
+	monolithicSnapshot, err := monolithicSearcher.PackLayoutSnapshotV1(ordinals)
+	if err != nil {
+		t.Fatal(err)
+	}
+	chunkedSnapshot, err := chunkedSearcher.PackLayoutSnapshotV1(ordinals)
+	if err != nil || len(chunkedSnapshot.PhysicalExtents) != len(payloads) {
+		t.Fatalf("chunked snapshot extents=%d want=%d err=%v", len(chunkedSnapshot.PhysicalExtents), len(payloads), err)
+	}
+	monolithicSnapshot.Namespace, monolithicSnapshot.FileID, monolithicSnapshot.BaseOffset = "", 0, 0
+	chunkedSnapshot.Namespace, chunkedSnapshot.FileID, chunkedSnapshot.BaseOffset = "", 0, 0
+	monolithicSnapshot.PhysicalExtents, chunkedSnapshot.PhysicalExtents = nil, nil
+	if !reflect.DeepEqual(chunkedSnapshot, monolithicSnapshot) {
+		t.Fatal("chunked layout geometry differs from the monolithic pack")
+	}
+	pages, err := chunkedSearcher.PageAttributionForTraceV1(trace, 64)
+	if err != nil || len(pages.Tokens) == 0 {
+		t.Fatalf("chunked page attribution=%+v err=%v", pages, err)
+	}
+	for _, token := range pages.Tokens {
+		if token.FileID <= 1 {
+			t.Fatalf("chunked page attribution used root asset: %+v", token)
+		}
+	}
 	wantCanonical, err := canonicalizeVectorPartitionNativeResultsV1(t.Context(), monolithic, query, wantScratch.top, 10)
 	if err != nil {
 		t.Fatal(err)

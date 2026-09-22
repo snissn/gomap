@@ -25,6 +25,70 @@ var _ [columnHNSWSearchPackHeaderMembershipDigestOffset + sha256.Size - columnHN
 
 var ErrVectorPartitionSearchUnavailable = errors.New("collections: vector partition search unavailable")
 
+type vectorPartitionPackPhysicalExtentV1 struct {
+	logicalOffset uint64
+	bytes         []byte
+	namespace     string
+	fileID        uint32
+	baseOffset    uint64
+}
+
+func vectorPartitionPackPhysicalExtentsV1(pack *columnHNSWSearchPackPreparedView) ([]vectorPartitionPackPhysicalExtentV1, error) {
+	if pack == nil || pack.handle == nil || pack.handle.Released() || pack.Header.TotalLength == 0 {
+		return nil, ErrVectorPartitionSearchUnavailable
+	}
+	add := func(out []vectorPartitionPackPhysicalExtentV1, logicalOffset uint64, handleBytes []byte, namespace string, fileID uint32, offset int64) ([]vectorPartitionPackPhysicalExtentV1, error) {
+		if len(handleBytes) == 0 || offset < 0 || uint64(len(handleBytes)) > pack.Header.TotalLength || logicalOffset > pack.Header.TotalLength-uint64(len(handleBytes)) {
+			return nil, ErrVectorPartitionSearchUnavailable
+		}
+		return append(out, vectorPartitionPackPhysicalExtentV1{logicalOffset: logicalOffset, bytes: handleBytes, namespace: namespace, fileID: fileID, baseOffset: uint64(offset)}), nil
+	}
+	rootKey, rootBytes := pack.handle.Key(), pack.handle.Bytes()
+	if len(pack.handles) == 0 {
+		if uint64(len(rootBytes)) != pack.Header.TotalLength {
+			return nil, ErrVectorPartitionSearchUnavailable
+		}
+		return add(nil, 0, rootBytes, rootKey.Namespace, rootKey.FileID, rootKey.Offset)
+	}
+	out, err := add(nil, 0, rootBytes, rootKey.Namespace, rootKey.FileID, rootKey.Offset)
+	if err != nil {
+		return nil, err
+	}
+	handleIndex := 0
+	for _, section := range pack.Sections {
+		var sectionOffset uint64
+		for sectionOffset < section.Length {
+			if handleIndex >= len(pack.handles) {
+				return nil, ErrVectorPartitionSearchUnavailable
+			}
+			handle := pack.handles[handleIndex]
+			handleIndex++
+			if handle == nil || handle.Released() {
+				return nil, ErrVectorPartitionSearchUnavailable
+			}
+			key, raw := handle.Key(), handle.Bytes()
+			if uint64(len(raw)) > section.Length-sectionOffset {
+				return nil, ErrVectorPartitionSearchUnavailable
+			}
+			out, err = add(out, section.Offset+sectionOffset, raw, key.Namespace, key.FileID, key.Offset)
+			if err != nil {
+				return nil, err
+			}
+			sectionOffset += uint64(len(raw))
+		}
+	}
+	if handleIndex != len(pack.handles) {
+		return nil, ErrVectorPartitionSearchUnavailable
+	}
+	for i := 1; i < len(out); i++ {
+		previousEnd := out[i-1].logicalOffset + uint64(len(out[i-1].bytes))
+		if out[i].logicalOffset < previousEnd {
+			return nil, ErrVectorPartitionSearchUnavailable
+		}
+	}
+	return out, nil
+}
+
 // VectorPartitionCanonicalScoreContractV1 names the score bits published by
 // vector-partition search. Both operands are normalized in FP32, their dot
 // product is accumulated left-to-right in binary64, and the result is rounded
@@ -106,16 +170,42 @@ func (s *VectorPartitionLocalSearcherV1) PackIdentityNeutralSHA256ForOfflineV1()
 	if pack == nil || pack.validateLive() != nil || pack.handle == nil || pack.handle.Released() {
 		return "", ErrVectorPartitionSearchUnavailable
 	}
-	raw := pack.handle.Bytes()
-	if len(raw) < columnHNSWSearchPackHeaderSizeV2 {
+	extents, err := vectorPartitionPackPhysicalExtentsV1(pack)
+	if err != nil || len(extents) == 0 || len(extents[0].bytes) < columnHNSWSearchPackHeaderSizeV2 {
 		return "", ErrVectorPartitionSearchUnavailable
 	}
 	h := sha256.New()
 	h.Write([]byte("treedb/vector-partition/local-pack/identity-neutral/v1"))
-	h.Write(raw[:columnHNSWSearchPackHeaderMembershipDigestOffset])
 	var zero [sha256.Size]byte
-	h.Write(zero[:])
-	h.Write(raw[columnHNSWSearchPackHeaderSizeV2:])
+	writeZeros := func(count uint64) {
+		for count > 0 {
+			n := min(count, uint64(len(zero)))
+			h.Write(zero[:n])
+			count -= n
+		}
+	}
+	var cursor uint64
+	for _, extent := range extents {
+		if extent.logicalOffset < cursor {
+			return "", ErrVectorPartitionSearchUnavailable
+		}
+		writeZeros(extent.logicalOffset - cursor)
+		start, end := extent.logicalOffset, extent.logicalOffset+uint64(len(extent.bytes))
+		membershipStart, membershipEnd := uint64(columnHNSWSearchPackHeaderMembershipDigestOffset), uint64(columnHNSWSearchPackHeaderSizeV2)
+		if start < membershipEnd && end > membershipStart {
+			left := membershipStart - start
+			h.Write(extent.bytes[:left])
+			writeZeros(membershipEnd - membershipStart)
+			h.Write(extent.bytes[membershipEnd-start:])
+		} else {
+			h.Write(extent.bytes)
+		}
+		cursor = end
+	}
+	if cursor > pack.Header.TotalLength {
+		return "", ErrVectorPartitionSearchUnavailable
+	}
+	writeZeros(pack.Header.TotalLength - cursor)
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
@@ -1590,24 +1680,33 @@ func (s *VectorPartitionLocalSearcherV1) PackDocumentIDsForOfflineTraceWithConte
 // VectorPartitionPackLayoutSnapshotV1 is an offline serialization seam for
 // layout simulations. It exposes no vectors or IDs, only immutable pack row
 // geometry needed to remap recorded traversal reads.
+type VectorPartitionPackLayoutExtentV1 struct {
+	LogicalOffset uint64 `json:"logical_offset"`
+	Length        uint64 `json:"length"`
+	Namespace     string `json:"namespace"`
+	FileID        uint32 `json:"file_id"`
+	BaseOffset    uint64 `json:"base_offset"`
+}
+
 type VectorPartitionPackLayoutSnapshotV1 struct {
-	Namespace                     string     `json:"namespace"`
-	FileID                        uint32     `json:"file_id"`
-	BaseOffset                    uint64     `json:"base_offset"`
-	Rows                          int        `json:"rows"`
-	EntryOrdinal                  int        `json:"entry_ordinal"`
-	RowOrdinals                   []uint32   `json:"row_ordinals"`
-	VectorStride                  int        `json:"vector_stride"`
-	VectorOffset                  uint64     `json:"vector_offset"`
-	LevelsOffset                  uint64     `json:"levels_offset"`
-	LayerOffsets                  [][]uint64 `json:"layer_offsets"`
-	LayerNeighbors                [][]uint32 `json:"layer_neighbors"`
-	LayerOffsetsSectionOffsets    []uint64   `json:"layer_offsets_section_offsets"`
-	LayerNeighborOffsets          []uint64   `json:"layer_neighbor_offsets"`
-	AuxiliaryOffsets              []uint64   `json:"auxiliary_offsets,omitempty"`
-	AuxiliaryNeighbors            []uint32   `json:"auxiliary_neighbors,omitempty"`
-	AuxiliaryOffsetsSectionOffset uint64     `json:"auxiliary_offsets_section_offset,omitempty"`
-	AuxiliaryNeighborOffset       uint64     `json:"auxiliary_neighbor_offset,omitempty"`
+	Namespace                     string                              `json:"namespace"`
+	FileID                        uint32                              `json:"file_id"`
+	BaseOffset                    uint64                              `json:"base_offset"`
+	PhysicalExtents               []VectorPartitionPackLayoutExtentV1 `json:"physical_extents,omitempty"`
+	Rows                          int                                 `json:"rows"`
+	EntryOrdinal                  int                                 `json:"entry_ordinal"`
+	RowOrdinals                   []uint32                            `json:"row_ordinals"`
+	VectorStride                  int                                 `json:"vector_stride"`
+	VectorOffset                  uint64                              `json:"vector_offset"`
+	LevelsOffset                  uint64                              `json:"levels_offset"`
+	LayerOffsets                  [][]uint64                          `json:"layer_offsets"`
+	LayerNeighbors                [][]uint32                          `json:"layer_neighbors"`
+	LayerOffsetsSectionOffsets    []uint64                            `json:"layer_offsets_section_offsets"`
+	LayerNeighborOffsets          []uint64                            `json:"layer_neighbor_offsets"`
+	AuxiliaryOffsets              []uint64                            `json:"auxiliary_offsets,omitempty"`
+	AuxiliaryNeighbors            []uint32                            `json:"auxiliary_neighbors,omitempty"`
+	AuxiliaryOffsetsSectionOffset uint64                              `json:"auxiliary_offsets_section_offset,omitempty"`
+	AuxiliaryNeighborOffset       uint64                              `json:"auxiliary_neighbor_offset,omitempty"`
 }
 
 func (s *VectorPartitionLocalSearcherV1) PackLayoutSnapshotV1(ordinals map[string]uint32) (VectorPartitionPackLayoutSnapshotV1, error) {
@@ -1624,10 +1723,9 @@ func (s *VectorPartitionLocalSearcherV1) PackLayoutSnapshotV1(ordinals map[strin
 	if pack == nil || pack.validateLive() != nil {
 		return VectorPartitionPackLayoutSnapshotV1{}, ErrVectorPartitionSearchUnavailable
 	}
-	if len(pack.handles) != 0 {
-		// The legacy snapshot schema has one physical file identity and cannot
-		// truthfully describe independently stored section chunks.
-		return VectorPartitionPackLayoutSnapshotV1{}, ErrVectorPartitionSearchUnavailable
+	extents, err := vectorPartitionPackPhysicalExtentsV1(pack)
+	if err != nil {
+		return VectorPartitionPackLayoutSnapshotV1{}, err
 	}
 	key := pack.handle.Key()
 	if key.Offset < 0 {
@@ -1646,16 +1744,22 @@ func (s *VectorPartitionLocalSearcherV1) PackLayoutSnapshotV1(ordinals map[strin
 		LayerOffsetsSectionOffsets: make([]uint64, len(pack.AdjacencyLayers)),
 		LayerNeighborOffsets:       make([]uint64, len(pack.AdjacencyLayers)),
 	}
+	if len(pack.handles) != 0 {
+		out.PhysicalExtents = make([]VectorPartitionPackLayoutExtentV1, len(extents))
+		for i, extent := range extents {
+			out.PhysicalExtents[i] = VectorPartitionPackLayoutExtentV1{LogicalOffset: extent.logicalOffset, Length: uint64(len(extent.bytes)), Namespace: extent.namespace, FileID: extent.fileID, BaseOffset: extent.baseOffset}
+		}
+	}
 	if len(ordinals) == 0 {
 		return VectorPartitionPackLayoutSnapshotV1{}, ErrVectorPartitionSearchUnavailable
 	}
 	seen := make(map[uint32]struct{}, pack.Header.Rows)
 	for ordinal := range out.RowOrdinals {
-		start, end := pack.DocumentIDOffsets[ordinal], pack.DocumentIDOffsets[ordinal+1]
-		if end < start || end > uint64(len(pack.DocumentIDBytes)) {
+		id, ok := pack.documentIDForOrdinal(ordinal)
+		if !ok {
 			return VectorPartitionPackLayoutSnapshotV1{}, ErrVectorPartitionSearchUnavailable
 		}
-		row, ok := ordinals[string(pack.DocumentIDBytes[start:end])]
+		row, ok := ordinals[string(id)]
 		if !ok {
 			return VectorPartitionPackLayoutSnapshotV1{}, ErrVectorPartitionSearchUnavailable
 		}
@@ -1685,9 +1789,13 @@ func (s *VectorPartitionLocalSearcherV1) PackLayoutSnapshotV1(ordinals map[strin
 			out.AuxiliaryNeighborOffset = x.Offset
 		}
 	}
-	for layer, x := range pack.AdjacencyLayers {
-		out.LayerOffsets[layer] = append([]uint64(nil), x.Offsets...)
-		out.LayerNeighbors[layer] = append([]uint32(nil), x.Neighbors...)
+	for layer := range pack.AdjacencyLayers {
+		for _, chunk := range pack.adjacencyOffsetChunks[layer].values {
+			out.LayerOffsets[layer] = append(out.LayerOffsets[layer], chunk...)
+		}
+		for _, chunk := range pack.adjacencyNeighborChunks[layer].values {
+			out.LayerNeighbors[layer] = append(out.LayerNeighbors[layer], chunk...)
+		}
 	}
 	if pack.Header.HasAuxiliaryNavigation {
 		out.AuxiliaryOffsets = append([]uint64(nil), pack.AuxiliaryNavigation.Offsets...)
@@ -1727,8 +1835,9 @@ func (s *VectorPartitionLocalSearcherV1) PageAttributionForTraceV1(trace VectorP
 	if pack == nil || pack.validateLive() != nil {
 		return VectorPartitionSearchPageAttributionV1{}, ErrVectorPartitionSearchUnavailable
 	}
-	if len(pack.handles) != 0 {
-		return VectorPartitionSearchPageAttributionV1{}, ErrVectorPartitionSearchUnavailable
+	extents, err := vectorPartitionPackPhysicalExtentsV1(pack)
+	if err != nil {
+		return VectorPartitionSearchPageAttributionV1{}, err
 	}
 	find := func(kind columnHNSWSearchPackSectionKind, index uint16) (columnHNSWSearchPackSection, bool) {
 		for _, x := range pack.Sections {
@@ -1746,10 +1855,6 @@ func (s *VectorPartitionLocalSearcherV1) PageAttributionForTraceV1(trace VectorP
 	if !ok {
 		return VectorPartitionSearchPageAttributionV1{}, ErrVectorPartitionSearchUnavailable
 	}
-	key := pack.handle.Key()
-	if key.Offset < 0 {
-		return VectorPartitionSearchPageAttributionV1{}, ErrVectorPartitionSearchUnavailable
-	}
 	all, vs, as := map[VectorPartitionSearchPageTokenV1]struct{}{}, map[VectorPartitionSearchPageTokenV1]struct{}{}, map[VectorPartitionSearchPageTokenV1]struct{}{}
 	var adjacencyAccesses uint64
 	add := func(start, length uint64, sets ...map[VectorPartitionSearchPageTokenV1]struct{}) error {
@@ -1759,21 +1864,40 @@ func (s *VectorPartitionLocalSearcherV1) PageAttributionForTraceV1(trace VectorP
 		if start > ^uint64(0)-length {
 			return ErrVectorPartitionSearchUnavailable
 		}
-		if uint64(key.Offset) > ^uint64(0)-start {
-			return ErrVectorPartitionSearchUnavailable
-		}
-		physical := uint64(key.Offset) + start
-		for p := physical / pageBytes; p <= (physical+length-1)/pageBytes; p++ {
-			token := VectorPartitionSearchPageTokenV1{Namespace: key.Namespace, FileID: key.FileID, Page: p}
-			all[token] = struct{}{}
-			for _, set := range sets {
-				set[token] = struct{}{}
+		end, cursor := start+length, start
+		for _, extent := range extents {
+			extentEnd := extent.logicalOffset + uint64(len(extent.bytes))
+			if extentEnd <= cursor {
+				continue
 			}
-			if p == ^uint64(0) {
-				break
+			if extent.logicalOffset > cursor {
+				return ErrVectorPartitionSearchUnavailable
+			}
+			segmentEnd := min(end, extentEnd)
+			delta, segmentLength := cursor-extent.logicalOffset, segmentEnd-cursor
+			if extent.baseOffset > ^uint64(0)-delta {
+				return ErrVectorPartitionSearchUnavailable
+			}
+			physical := extent.baseOffset + delta
+			if physical > ^uint64(0)-(segmentLength-1) {
+				return ErrVectorPartitionSearchUnavailable
+			}
+			for p := physical / pageBytes; p <= (physical+segmentLength-1)/pageBytes; p++ {
+				token := VectorPartitionSearchPageTokenV1{Namespace: extent.namespace, FileID: extent.fileID, Page: p}
+				all[token] = struct{}{}
+				for _, set := range sets {
+					set[token] = struct{}{}
+				}
+				if p == ^uint64(0) {
+					break
+				}
+			}
+			cursor = segmentEnd
+			if cursor == end {
+				return nil
 			}
 		}
-		return nil
+		return ErrVectorPartitionSearchUnavailable
 	}
 	for _, ordinal := range trace.ScoreOrdinals {
 		if int(ordinal) >= pack.Header.Rows {
@@ -1812,15 +1936,22 @@ func (s *VectorPartitionLocalSearcherV1) PageAttributionForTraceV1(trace VectorP
 		if !ok {
 			return VectorPartitionSearchPageAttributionV1{}, ErrVectorPartitionSearchUnavailable
 		}
-		var layer columnHNSWSearchPackPreparedLayer
+		var start, end uint64
 		if read.Auxiliary {
-			layer = pack.AuxiliaryNavigation
-		} else if read.Layer >= 0 && read.Layer < len(pack.AdjacencyLayers) {
-			layer = pack.AdjacencyLayers[read.Layer]
+			if read.Ordinal+1 >= len(pack.AuxiliaryNavigation.Offsets) {
+				return VectorPartitionSearchPageAttributionV1{}, ErrVectorPartitionSearchUnavailable
+			}
+			start, end = pack.AuxiliaryNavigation.Offsets[read.Ordinal], pack.AuxiliaryNavigation.Offsets[read.Ordinal+1]
+		} else if read.Layer >= 0 && read.Layer < len(pack.adjacencyOffsetChunks) {
+			var startOK, endOK bool
+			start, startOK = pack.adjacencyOffsetChunks[read.Layer].at(uint64(read.Ordinal))
+			end, endOK = pack.adjacencyOffsetChunks[read.Layer].at(uint64(read.Ordinal + 1))
+			if !startOK || !endOK {
+				return VectorPartitionSearchPageAttributionV1{}, ErrVectorPartitionSearchUnavailable
+			}
 		} else {
 			return VectorPartitionSearchPageAttributionV1{}, ErrVectorPartitionSearchUnavailable
 		}
-		start, end := layer.Offsets[read.Ordinal], layer.Offsets[read.Ordinal+1]
 		if end < start {
 			return VectorPartitionSearchPageAttributionV1{}, ErrVectorPartitionSearchUnavailable
 		}

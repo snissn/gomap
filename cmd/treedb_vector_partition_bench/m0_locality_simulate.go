@@ -321,6 +321,46 @@ func m0ValidateSnapshotV1(snapshot collections.VectorPartitionPackLayoutSnapshot
 	if len(snapshot.AuxiliaryOffsets) == 0 && (len(snapshot.AuxiliaryNeighbors) != 0 || snapshot.AuxiliaryOffsetsSectionOffset != 0 || snapshot.AuxiliaryNeighborOffset != 0) {
 		return errors.New("unexpected auxiliary geometry")
 	}
+	if len(snapshot.PhysicalExtents) != 0 {
+		var previousEnd uint64
+		for i, extent := range snapshot.PhysicalExtents {
+			if extent.Length == 0 || extent.Namespace == "" || extent.FileID == 0 || extent.LogicalOffset > ^uint64(0)-extent.Length || extent.BaseOffset > ^uint64(0)-extent.Length || i > 0 && extent.LogicalOffset < previousEnd {
+				return errors.New("snapshot physical extents")
+			}
+			previousEnd = extent.LogicalOffset + extent.Length
+		}
+		check := func(offset, count, width uint64) error {
+			if width == 0 || count > ^uint64(0)/width {
+				return errors.New("snapshot physical range")
+			}
+			return m0VisitPhysicalRangesV1(snapshot, offset, count*width, func(string, uint32, uint64, uint64) error { return nil })
+		}
+		if uint64(snapshot.Rows) > ^uint64(0)/uint64(snapshot.VectorStride) {
+			return errors.New("snapshot physical range")
+		}
+		if err := check(snapshot.VectorOffset, uint64(snapshot.Rows)*uint64(snapshot.VectorStride), 4); err != nil {
+			return err
+		}
+		if err := check(snapshot.LevelsOffset, uint64(snapshot.Rows), 2); err != nil {
+			return err
+		}
+		for layer := range snapshot.LayerOffsets {
+			if err := check(snapshot.LayerOffsetsSectionOffsets[layer], uint64(snapshot.Rows)+1, 8); err != nil {
+				return err
+			}
+			if err := check(snapshot.LayerNeighborOffsets[layer], uint64(len(snapshot.LayerNeighbors[layer])), 4); err != nil {
+				return err
+			}
+		}
+		if len(snapshot.AuxiliaryOffsets) != 0 {
+			if err := check(snapshot.AuxiliaryOffsetsSectionOffset, uint64(snapshot.Rows)+1, 8); err != nil {
+				return err
+			}
+			if err := check(snapshot.AuxiliaryNeighborOffset, uint64(len(snapshot.AuxiliaryNeighbors)), 4); err != nil {
+				return err
+			}
+		}
+	}
 	return nil
 }
 
@@ -609,18 +649,54 @@ func m0AddAdjacencyV1(all, local map[m0PageTokenV1]struct{}, snapshot collection
 }
 
 func m0AddRangeV1(tokens map[m0PageTokenV1]struct{}, snapshot collections.VectorPartitionPackLayoutSnapshotV1, offset, length uint64) error {
+	return m0VisitPhysicalRangesV1(snapshot, offset, length, func(namespace string, fileID uint32, physical, segmentLength uint64) error {
+		for page := physical / m0PageBytesV1; page <= (physical+segmentLength-1)/m0PageBytesV1; page++ {
+			tokens[m0PageTokenV1{Namespace: namespace, FileID: fileID, Page: page}] = struct{}{}
+			if page == ^uint64(0) {
+				break
+			}
+		}
+		return nil
+	})
+}
+
+func m0VisitPhysicalRangesV1(snapshot collections.VectorPartitionPackLayoutSnapshotV1, offset, length uint64, visit func(string, uint32, uint64, uint64) error) error {
 	if length == 0 {
 		return nil
 	}
-	if offset > ^uint64(0)-length || snapshot.BaseOffset > ^uint64(0)-offset {
+	if visit == nil || offset > ^uint64(0)-length {
 		return errors.New("page range")
 	}
-	physical := snapshot.BaseOffset + offset
-	for page := physical / m0PageBytesV1; page <= (physical+length-1)/m0PageBytesV1; page++ {
-		tokens[m0PageTokenV1{Namespace: snapshot.Namespace, FileID: snapshot.FileID, Page: page}] = struct{}{}
-		if page == ^uint64(0) {
-			break
+	if len(snapshot.PhysicalExtents) == 0 {
+		if snapshot.BaseOffset > ^uint64(0)-offset || snapshot.BaseOffset+offset > ^uint64(0)-(length-1) {
+			return errors.New("page range")
+		}
+		return visit(snapshot.Namespace, snapshot.FileID, snapshot.BaseOffset+offset, length)
+	}
+	end, cursor := offset+length, offset
+	for _, extent := range snapshot.PhysicalExtents {
+		if extent.Length == 0 || extent.LogicalOffset > ^uint64(0)-extent.Length {
+			return errors.New("page range")
+		}
+		extentEnd := extent.LogicalOffset + extent.Length
+		if extentEnd <= cursor {
+			continue
+		}
+		if extent.LogicalOffset > cursor {
+			return errors.New("page range gap")
+		}
+		segmentEnd := min(end, extentEnd)
+		delta, segmentLength := cursor-extent.LogicalOffset, segmentEnd-cursor
+		if extent.BaseOffset > ^uint64(0)-delta || extent.BaseOffset+delta > ^uint64(0)-(segmentLength-1) {
+			return errors.New("page range")
+		}
+		if err := visit(extent.Namespace, extent.FileID, extent.BaseOffset+delta, segmentLength); err != nil {
+			return err
+		}
+		cursor = segmentEnd
+		if cursor == end {
+			return nil
 		}
 	}
-	return nil
+	return errors.New("page range gap")
 }
