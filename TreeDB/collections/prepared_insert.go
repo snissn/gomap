@@ -87,12 +87,13 @@ func preparedInsertCommitReserveBytes(ownedBytes int64, rows, columns int) int64
 
 func preparedInsertBoundedScalarColumns(columns []ColumnStoreColumn) bool {
 	for _, column := range columns {
+		// Other scalar types take the full-batch declared-row extractor before
+		// the bounded semantic cursor runs. Keep them on ordinary InsertBatch.
+		if column.Path == "" || !columnDeclaredJSONParserValueSupported(column.ValueType) {
+			return false
+		}
 		switch column.ValueType {
-		case ColumnStoreValueBool, ColumnStoreValueInt8, ColumnStoreValueUint8,
-			ColumnStoreValueInt16, ColumnStoreValueUint16, ColumnStoreValueInt32,
-			ColumnStoreValueUint32, ColumnStoreValueInt64, ColumnStoreValueUint64,
-			ColumnStoreValueFloat16, ColumnStoreValueBFloat16, ColumnStoreValueFloat32,
-			ColumnStoreValueDouble, ColumnStoreValueString:
+		case ColumnStoreValueInt64, ColumnStoreValueString:
 		default:
 			return false
 		}
@@ -188,7 +189,7 @@ func (c *Collection) PrepareInsertBatchOwned(ids, documents [][]byte, maxOwnedBy
 		return nil, fmt.Errorf("%w: requires no-index JSON semantic-stream column store", ErrPreparedInsertIneligible)
 	}
 	if !preparedInsertBoundedScalarColumns(cfg.Columns) {
-		return nil, fmt.Errorf("%w: commit budget supports scalar columns only", ErrPreparedInsertIneligible)
+		return nil, fmt.Errorf("%w: prepared declared-row cursor supports nonempty Int64/String column paths only", ErrPreparedInsertIneligible)
 	}
 	if err := c.requireColumnStoreCommandWAL(meta, nil); err != nil {
 		return nil, err

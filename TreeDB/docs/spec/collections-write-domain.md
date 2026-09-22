@@ -208,8 +208,10 @@ the retained backing and `ReservedBytes` includes the commit reserve. The
 input-derived preparation and commit reserves are conservative estimates, not
 a proven strict peak bound for parser maps, encoder scratch, typed part build,
 or ordered WAL/publication. Prepared mode rejects documents over 128 KiB or
-beyond the cursor's depth and descriptor limits; the ordinary path remains the
-fallback. A later
+beyond the cursor's depth and descriptor limits. Declared columns must have
+nonempty paths and Int64 or String values; other scalar types use the ordinary
+path because they currently take a full-batch extractor before the bounded
+cursor. The ordinary path remains the fallback. A later
 `Commit` rechecks persisted conflicts and schema under the normal insert path
 before WAL admission. One caller can
 prepare batch N+1 while a single committer publishes N; neither a queued

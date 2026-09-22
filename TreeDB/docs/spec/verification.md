@@ -10,7 +10,12 @@ and typed values, caller-buffer reuse, one-shot commit, durable reopen),
 `TestPreparedInsertAbandonBoundsAndLateConflict` (oversized admission,
 abandonment, duplicate precedence, and authoritative late conflict),
 `TestPreparedInsertCheckpointBeforeCommitAndReopen` (private prepare across a
-checkpoint and durable reopen), and
+checkpoint and durable reopen),
+`TestPreparedInsertValueLogBlockPointerSurvivesReopenAndGC` (persistent block
+pointer and GC reachability), `TestPreparedInsertCrashRecoveryCuts` (durable
+acknowledgment and WAL/asset/installation process-loss cuts),
+`TestPreparedInsertFallsBackBeforeUnboundedDeclaredRowExtraction` (unsupported
+scalar type uses ordinary insertion), and
 `TestPreparedInsertRejectsMismatchedCapturedSchema` (commit-time catalog
 validation).
 `BenchmarkPreparedInsertPublicPath` compares ordinary, prepared serial, and

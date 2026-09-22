@@ -2,16 +2,22 @@ package collections
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"os/exec"
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
+	"github.com/snissn/gomap/TreeDB/page"
 )
 
 func TestPreparedInsertOverlapsOrderedCommit(t *testing.T) {
@@ -222,6 +228,134 @@ func TestPreparedInsertCheckpointBeforeCommitAndReopen(t *testing.T) {
 	}
 }
 
+func TestPreparedInsertValueLogBlockPointerSurvivesReopenAndGC(t *testing.T) {
+	dir := t.TempDir()
+	enableColumnRetainedPlacementCommandWAL(t, dir)
+	d := openColumnRetainedPlacementDB(t, dir, backenddb.Options{})
+	col := createColumnRetainedSemanticStreamCollection(t, d, "events")
+	ids, docs := retainedSemanticStreamDocuments(96)
+	prepared, err := col.PrepareInsertBatchOwned(ids, docs, 32<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := prepared.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	blockKey, row, ptr := requireColumnRetainedSemanticStreamLocatorAndBlockPointer(t, d, "events", ids[17])
+	if row != 17 || !page.IsValueLogFileID(ptr.FileID) {
+		t.Fatalf("prepared locator row=%d pointer=%+v", row, ptr)
+	}
+	if err := d.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatal(err)
+	}
+	d = openColumnRetainedPlacementDB(t, dir, backenddb.Options{})
+	defer func() { _ = d.Close() }()
+	col = openColumnRetainedPlacementCollection(t, d, "events")
+	if _, err := d.ValueLogGC(context.Background(), backenddb.ValueLogGCOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	reopenedKey, reopenedRow, reopenedPtr := requireColumnRetainedSemanticStreamLocatorAndBlockPointer(t, d, "events", ids[17])
+	if !bytes.Equal(reopenedKey, blockKey) || reopenedRow != row || reopenedPtr != ptr {
+		t.Fatalf("prepared block changed after reopen and GC: row %d/%d pointer %+v/%+v", reopenedRow, row, reopenedPtr, ptr)
+	}
+	got, err := col.Get(ids[17])
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertRetainedSemanticStreamDocument(t, got, 17)
+}
+
+func TestPreparedInsertCrashRecoveryCuts(t *testing.T) {
+	const id = "prepared-cut-row"
+	doc := []byte(`{"row_id":51,"kind":"crash-cut"}`)
+	opts := backenddb.Options{CommandWAL: true, ResolvedProfile: backenddb.ProfileCommandWALDurable}
+	if dir := os.Getenv("GOMAP_PREPARED_INSERT_CRASH_DIR"); dir != "" {
+		d := openColumnRetainedPlacementDB(t, dir, opts)
+		col := openColumnRetainedPlacementCollection(t, d, "events")
+		prepared, err := col.PrepareInsertBatchOwned([][]byte{[]byte(id)}, [][]byte{doc}, 16<<20)
+		if err != nil {
+			t.Fatal(err)
+		}
+		mode := os.Getenv("GOMAP_PREPARED_INSERT_CRASH_MODE")
+		injected := errors.New("prepared commit crash cut")
+		var fired atomic.Bool
+		if mode != "ack" {
+			resource, point := durabilitycut.ResourceCommandWAL, durabilitycut.BeforeDependencyAppend
+			switch mode {
+			case "wal_after_lsn_assignment":
+				point = durabilitycut.AfterDependencyAppend
+			case "wal_after_sync":
+				point = durabilitycut.AfterDependencyFileSync
+			case "asset_before_sync":
+				resource, point = durabilitycut.ResourceAuxiliary, durabilitycut.BeforeDependencyFileSync
+			case "before_applied_lsn_install":
+				resource, point = durabilitycut.ResourceMeta, durabilitycut.BeforeAppliedLSNAdvance
+			case "after_applied_lsn_install":
+				resource, point = durabilitycut.ResourceMeta, durabilitycut.AfterAppliedLSNAdvance
+			case "wal_before_append":
+			default:
+				t.Fatalf("unknown crash mode %q", mode)
+			}
+			durabilitycut.Install(func(event durabilitycut.Event) error {
+				if event.Resource == resource && event.Point == point && fired.CompareAndSwap(false, true) {
+					return injected
+				}
+				return nil
+			})
+		}
+		_, err = prepared.Commit()
+		if mode == "ack" {
+			if err != nil {
+				t.Fatal(err)
+			}
+		} else if !fired.Load() || !errors.Is(err, injected) {
+			t.Fatalf("cut %s fired=%t err=%v", mode, fired.Load(), err)
+		}
+		os.Exit(0) // Simulate process loss without Close or deferred sync.
+	}
+	for _, mode := range []string{"ack", "wal_before_append", "wal_after_lsn_assignment", "wal_after_sync", "asset_before_sync", "before_applied_lsn_install", "after_applied_lsn_install"} {
+		t.Run(mode, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}, DurabilityProfile: backenddb.ProfileCommandWALDurable}); err != nil {
+				t.Fatal(err)
+			}
+			d := openColumnRetainedPlacementDB(t, dir, opts)
+			createColumnRetainedSemanticStreamCollection(t, d, "events")
+			if err := d.Close(); err != nil {
+				t.Fatal(err)
+			}
+			cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestPreparedInsertCrashRecoveryCuts$")
+			cmd.Env = append(os.Environ(), "GOMAP_PREPARED_INSERT_CRASH_DIR="+dir, "GOMAP_PREPARED_INSERT_CRASH_MODE="+mode)
+			if output, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("child %s: %v\n%s", mode, err, output)
+			}
+			d = openColumnRetainedPlacementDB(t, dir, opts)
+			defer d.Close()
+			col := openColumnRetainedPlacementCollection(t, d, "events")
+			got, err := col.Get([]byte(id))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if mode == "wal_before_append" {
+				if got != nil {
+					t.Fatalf("pre-WAL cut recovered uncommitted row: %s", got)
+				}
+			} else if mode == "wal_after_lsn_assignment" {
+				// An append without a successful sync is ambiguous. Recovery may
+				// select the complete frame or discard its unsynced suffix.
+				if got != nil && !bytes.Equal(got, doc) {
+					t.Fatalf("post-append cut recovered wrong row: %s", got)
+				}
+			} else if !bytes.Equal(got, doc) {
+				t.Fatalf("%s recovered row=%s, want %s", mode, got, doc)
+			}
+		})
+	}
+}
+
 func TestPreparedInsertRejectsMismatchedCapturedSchema(t *testing.T) {
 	dir := t.TempDir()
 	enableColumnRetainedPlacementCommandWAL(t, dir)
@@ -315,5 +449,33 @@ func TestPreparedInsertRejectsUnsupportedStructuralShapesBeforeCommit(t *testing
 		if _, err := col.InsertBatch([][]byte{id}, [][]byte{[]byte(document)}); err != nil {
 			t.Errorf("shape %d ordinary fallback: %v", i, err)
 		}
+	}
+}
+
+func TestPreparedInsertFallsBackBeforeUnboundedDeclaredRowExtraction(t *testing.T) {
+	dir := t.TempDir()
+	enableColumnRetainedPlacementCommandWAL(t, dir)
+	d := openColumnRetainedPlacementDB(t, dir, backenddb.Options{})
+	defer d.Close()
+	meta := CollectionMeta{Name: "events", Options: CollectionOptions{DocumentFormat: DocumentFormatJSON, ColumnStore: &ColumnStoreConfig{
+		Enabled: true,
+		Columns: []ColumnStoreColumn{{Name: "row_id", Path: "row_id", ValueType: ColumnStoreValueInt64, Owner: TypedStorageOwnerRowAsset},
+			{Name: "active", Path: "active", ValueType: ColumnStoreValueBool, Owner: TypedStorageOwnerColumnPart}},
+		RetainedPayload: ColumnRetainedPayloadNonColumn, RetainedPayloadEncoding: ColumnRetainedPayloadEncodingSemanticStreamV1,
+		Reconstruction: ColumnReconstructionRetainedPayloadAndColumns,
+	}}}
+	if _, err := NewCollectionManager(d).CreateCollection(&meta); err != nil {
+		t.Fatal(err)
+	}
+	col := openColumnRetainedPlacementCollection(t, d, "events")
+	id, doc := []byte("bool-row"), []byte(`{"row_id":7,"active":true}`)
+	if _, err := col.PrepareInsertBatchOwned([][]byte{id}, [][]byte{doc}, 16<<20); !errors.Is(err, ErrPreparedInsertIneligible) {
+		t.Fatalf("unsupported declared-row parser shape prepared: %v", err)
+	}
+	if _, err := col.InsertBatch([][]byte{id}, [][]byte{doc}); err != nil {
+		t.Fatalf("ordinary fallback: %v", err)
+	}
+	if got, err := col.Get(id); err != nil || !bytes.Equal(got, doc) {
+		t.Fatalf("ordinary fallback row=%s, err=%v", got, err)
 	}
 }
