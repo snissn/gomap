@@ -434,7 +434,9 @@ func OpenFixedPeerTCPRuntimeV1(config FixedPeerTCPConfigV1) (*FixedPeerTCPRuntim
 		if e != nil {
 			return fail(e)
 		}
-		localEntries = append(localEntries, raftcluster.GroupSubmitterV1{GroupID: g.ID, Submitter: submitter})
+		var bounded raftcluster.CommandSubmitterV1 = submitter
+		if admission != nil { bounded = peerBudgetSubmitterV1{SingleGroupSubmitter: submitter, admission: admission, scope: "raft:"+string(g.ID)} }
+		localEntries = append(localEntries, raftcluster.GroupSubmitterV1{GroupID: g.ID, Submitter: bounded})
 	}
 	if len(localEntries) > 0 {
 		registry, e := raftcluster.NewGroupSubmitterRegistryV1(localEntries)
@@ -691,6 +693,8 @@ func (r *FixedPeerTCPRuntimeV1) serve(w http.ResponseWriter, request *http.Reque
 	w.Header().Set("Content-Type", "application/json")
 	reply := fixedPeerReplyV1{NodeID: r.config.NodeID, ConfigDigest: r.client.digest}
 	var err error
+	var nodeWork peerWorkLeaseV1
+	defer nodeWork.release()
 	defer func() {
 		if err != nil {
 			reply.Error = err.Error()
@@ -721,6 +725,11 @@ func (r *FixedPeerTCPRuntimeV1) serve(w http.ResponseWriter, request *http.Reque
 				return
 			}
 		}
+	}
+	if r.client.peerTransport != nil {
+		if request.ContentLength < 0 || request.ContentLength > fixedPeerMaxRPCBytesV1 { err = raftcluster.ErrRouteTargetUnsupported; return }
+		nodeWork, err = r.client.peerTransport.admission.work(peerControlScopeV1(request.URL.Path), peerRequestsV1, peerControlBytesV1(request.ContentLength))
+		if err != nil { return }
 	}
 	// The dependency order is ingress -> forward -> status/catalog-read. Give
 	// each stage bounded capacity so callers cannot starve their own callees.
@@ -786,6 +795,11 @@ func (r *FixedPeerTCPRuntimeV1) serve(w http.ResponseWriter, request *http.Reque
 		}
 		if err = r.validateCatalog(command.Record.Catalog); err != nil {
 			return
+		}
+		if r.client.peerTransport != nil {
+			work, e := r.client.peerTransport.admission.work("raft:"+string(r.config.Catalog.ID), peerProposalsV1, int64(len(body.Entry))*4)
+			if e != nil { err = e; return }
+			defer work.release()
 		}
 		_, _, err = r.meta.SubmitCatalogMetaCommandV1(ctx, body.Entry)
 		if err == nil {
@@ -857,6 +871,13 @@ func (c *FixedPeerTCPClientV1) call(ctx context.Context, node raftcluster.NodeID
 		defer func() { <-calls }()
 	default:
 		return reply, raftcluster.ErrAdmissionUnavailable
+	}
+	if c.peerTransport != nil {
+		bound, err := preflightPeerRequestBytesV1(body)
+		if err != nil { return reply, err }
+		work, err := c.peerTransport.admission.work(peerControlScopeV1(operation), peerRequestsV1, peerControlBytesV1(bound))
+		if err != nil { return reply, err }
+		defer work.release()
 	}
 	raw, err := json.Marshal(body)
 	if err != nil {

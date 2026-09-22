@@ -401,4 +401,3 @@ func BenchmarkSparseCatalogConfigV1(b *testing.B) {
 		}
 	}
 }
-
