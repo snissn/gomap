@@ -1411,6 +1411,7 @@ func (c *VectorPartitionCoordinatorV1) plan(ctx context.Context, request VectorP
 		return nil, nil, nil, zero, ErrVectorPartitionCoordinatorGenerationMismatch
 	}
 	selected := make([]uint32, 0, len(routed))
+	servingRows := make([]uint64, len(partitionRows))
 	byGroup := make(map[raftcluster.GroupID][]uint32)
 	seen := make(map[uint32]struct{}, len(routed))
 	for _, score := range routed {
@@ -1423,18 +1424,33 @@ func (c *VectorPartitionCoordinatorV1) plan(ctx context.Context, request VectorP
 		}
 		seen[score.PartitionID] = struct{}{}
 		start, end := domainPackOffsets[score.PartitionID], domainPackOffsets[score.PartitionID+1]
-		if start < 0 || end < start || end > len(domainPacks) {
+		if start < 0 || end <= start || end > len(domainPacks) {
 			return nil, nil, nil, zero, ErrVectorPartitionCoordinatorGenerationMismatch
 		}
+		anchor := domainPacks[start].PackID
+		if int(anchor) >= len(c.placement.Partitions) || int(anchor) >= len(servingRows) {
+			return nil, nil, nil, zero, ErrVectorPartitionCoordinatorGenerationMismatch
+		}
+		groupID := c.placement.Partitions[anchor].GroupID
 		for _, mapping := range domainPacks[start:end] {
 			packID := mapping.PackID
-			selected = append(selected, packID)
-			groupID := c.placement.Partitions[packID].GroupID
-			if _, ok := c.groups[groupID]; !ok {
+			if int(packID) >= len(c.placement.Partitions) || int(packID) >= len(partitionRows) {
+				return nil, nil, nil, zero, ErrVectorPartitionCoordinatorGenerationMismatch
+			}
+			if c.placement.Partitions[packID].GroupID != groupID {
 				return nil, nil, nil, zero, ErrVectorPartitionCoordinatorRouteMismatch
 			}
-			byGroup[groupID] = append(byGroup[groupID], packID)
+			var ok bool
+			servingRows[anchor], ok = addUint64V1(servingRows[anchor], partitionRows[packID])
+			if !ok {
+				return nil, nil, nil, zero, ErrVectorPartitionCoordinatorBudgetExceeded
+			}
 		}
+		if _, ok := c.groups[groupID]; !ok {
+			return nil, nil, nil, zero, ErrVectorPartitionCoordinatorRouteMismatch
+		}
+		selected = append(selected, anchor)
+		byGroup[groupID] = append(byGroup[groupID], anchor)
 	}
 	if len(selected) > c.limits.MaxSelectedPartitions {
 		return nil, nil, nil, zero, ErrVectorPartitionCoordinatorBudgetExceeded
@@ -1461,7 +1477,7 @@ func (c *VectorPartitionCoordinatorV1) plan(ctx context.Context, request VectorP
 	var totalRequestBytes, totalResponseReservation uint64
 	var ok bool
 	candidateRows, totalCandidateWeight, err := vectorPartitionCoordinatorCandidateRowsV1(
-		ctx, partitionRows, selected,
+		ctx, servingRows, selected,
 	)
 	if err != nil {
 		return nil, nil, nil, zero, err

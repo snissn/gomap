@@ -649,6 +649,33 @@ canonical-score, failure-honesty, replay, and concurrency-invariance gates
 passed. This qualifies the local graph only; membership feasibility and the
 final scaling decision remain with #4775 and #4753.
 
+## Domain-level Vamana chunking apparatus (#4775)
+
+The current scaling treatment removes physical-pack search multiplication. M3
+materializes one unchanged `R=64/L=256/alpha=1.2` version-6 graph for each
+complete logical-domain union and persists its existing sections as bounded,
+co-located assets. M8 translates retained physical memberships to the domain
+anchor, combines their load, and opens one searcher per routed domain. M5 emits
+one partial for that domain. Storage chunks never become router choices or ANN
+search units.
+
+The root and every nonempty section chunk are verified before serving. Search
+uses direct typed chunk views and one traversal state; it performs no full-pack
+reassembly. Response resource receipts include required/opened/accessed section
+chunk counts plus actual mapped/heap bytes, including retained chunk-directory
+metadata and conservative per-handle bookkeeping. The ordinary one-asset V6
+path has zero section chunks and keeps its previous behavior.
+
+Implementation tests require byte-equivalent unchunked/chunked results,
+traversal events, termination, score calls and canonical top 10; they also
+exercise a cross-chunk graph edge, strict chunk identities, empty sections,
+one-byte-over atomic records, mixed generations, cancellation and handle
+release. These are correctness/apparatus gates only. Performance acceptance
+still requires the frozen real100Kx768, C256, top-10, EF96 paired comparison:
+at least 1.15x QPS, no p95 regression and at least 95% recall at concurrency 1
+and 32, with reduced navigation/serving CPU. No result from a procedural or
+synthetic fixture qualifies that gate.
+
 ## Opt-in graph-quality attribution (#4744)
 
 `-m8-quality-diagnostics` extends the existing `production_multi_group` M8

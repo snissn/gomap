@@ -345,11 +345,16 @@ func (p *VectorPartitionServingSnapshotPublisherV1) buildSnapshotV1(ctx context.
 			return fail(err)
 		}
 		snapshot.partitions[group] = make(map[uint32]*VectorPartitionPartitionSearchLeaseV1)
-		for _, partition := range placement.Partitions {
-			if partition.GroupID != group {
+		for domain := 0; domain+1 < len(snapshot.router.session.domainPackOffsets); domain++ {
+			start := snapshot.router.session.domainPackOffsets[domain]
+			if start < 0 || start >= len(snapshot.router.session.domainPacks) {
+				return fail(ErrVectorPartitionCoordinatorRouteMismatch)
+			}
+			partitionID := snapshot.router.session.domainPacks[start].PackID
+			if int(partitionID) >= len(placement.Partitions) || placement.Partitions[partitionID].PartitionID != partitionID || placement.Partitions[partitionID].GroupID != group {
 				continue
 			}
-			lease, openErr := generation.OpenPartition(ctx, partition.PartitionID)
+			lease, openErr := generation.OpenPartition(ctx, partitionID)
 			if openErr != nil {
 				return fail(openErr)
 			}
@@ -360,7 +365,7 @@ func (p *VectorPartitionServingSnapshotPublisherV1) buildSnapshotV1(ctx context.
 				return fail(ErrVectorPartitionShardSearchAssetsUnavailable)
 			}
 			counts.partitionOpens++
-			snapshot.partitions[group][partition.PartitionID] = lease
+			snapshot.partitions[group][partitionID] = lease
 		}
 		if len(snapshot.partitions[group]) == 0 {
 			return fail(fmt.Errorf("%w: group %q owns no partitions", ErrVectorPartitionShardSearchAssetsUnavailable, group))

@@ -417,16 +417,14 @@ func TestVectorPartitionCoordinatorCoalescesChunksDedupesAndMergesV1(t *testing.
 	}
 }
 
-func TestVectorPartitionCoordinatorExpandsOneDomainToAllRequiredPacksV1(t *testing.T) {
-	owners := []raftcluster.GroupID{"group-a", "group-b"}
+func TestVectorPartitionCoordinatorDispatchesOneDomainAnchorV1(t *testing.T) {
+	owners := []raftcluster.GroupID{"group-a", "group-a"}
 	neighbors := map[uint32][]VectorPartitionShardSearchNeighborV1{
-		0: {{ID: "pack-0", Score: .9}},
-		1: {{ID: "pack-1", Score: .8}},
+		0: {{ID: "pack-0", Score: .9}, {ID: "pack-1", Score: .8}},
 	}
 	coordinator, source, dispatcher := testVectorPartitionCoordinatorV1(t,
 		[]raftplacement.GroupV1{
 			{ID: "group-a", Members: []raftcluster.NodeID{"node-a"}, LeaderHint: "node-a"},
-			{ID: "group-b", Members: []raftcluster.NodeID{"node-b"}, LeaderHint: "node-b"},
 		}, owners, neighbors, VectorPartitionCoordinatorLimitsV1{},
 	)
 	source.router.status.Manifest.DomainCount = 1
@@ -444,11 +442,37 @@ func TestVectorPartitionCoordinatorExpandsOneDomainToAllRequiredPacksV1(t *testi
 		t.Fatal(err)
 	}
 	if !slices.Equal(response.ProbedDomains, []uint32{0}) ||
-		!slices.Equal(response.ProbedPacks, []uint32{0, 1}) ||
+		!slices.Equal(response.ProbedPacks, []uint32{0}) ||
 		!slices.Equal(response.ProbedPartitions, response.ProbedPacks) ||
-		response.Counters.SelectedDomains != 1 || response.Counters.SelectedPacks != 2 ||
-		response.Counters.SelectedPartitions != 2 || len(dispatcher.calls) != 2 {
+		response.Counters.SelectedDomains != 1 || response.Counters.SelectedPacks != 1 ||
+		response.Counters.SelectedPartitions != 1 || len(dispatcher.calls) != 1 ||
+		!slices.Equal(dispatcher.calls[0].PartitionIDs, []uint32{0}) {
 		t.Fatalf("response=%+v calls=%+v", response, dispatcher.calls)
+	}
+}
+
+func TestVectorPartitionCoordinatorRejectsSplitDomainOwnershipV1(t *testing.T) {
+	coordinator, source, dispatcher := testVectorPartitionCoordinatorV1(t,
+		[]raftplacement.GroupV1{
+			{ID: "group-a", Members: []raftcluster.NodeID{"node-a"}, LeaderHint: "node-a"},
+			{ID: "group-b", Members: []raftcluster.NodeID{"node-b"}, LeaderHint: "node-b"},
+		},
+		[]raftcluster.GroupID{"group-a", "group-b"},
+		map[uint32][]VectorPartitionShardSearchNeighborV1{0: {{ID: "pack-0", Score: .9}}},
+		VectorPartitionCoordinatorLimitsV1{},
+	)
+	source.router.status.Manifest.DomainCount = 1
+	source.router.status.Manifest.DomainPacks = []collections.VectorPartitionDomainPackV1{
+		{DomainID: 0, PackID: 0}, {DomainID: 0, PackID: 1},
+	}
+	source.router.status.Partitions = 1
+	source.router.partitions = source.router.partitions[:1]
+
+	request := testVectorPartitionCoordinatorRequestV1(1)
+	request.RouterScoreBudget = int(source.router.status.Representatives)
+	_, err := coordinator.Search(t.Context(), request)
+	if !errors.Is(err, ErrVectorPartitionCoordinatorRouteMismatch) || len(dispatcher.calls) != 0 {
+		t.Fatalf("err=%v calls=%+v", err, dispatcher.calls)
 	}
 }
 
@@ -456,12 +480,10 @@ func TestVectorPartitionCoordinatorPinsDomainPacksWithSessionOffsetsV1(t *testin
 	coordinator, source, _ := testVectorPartitionCoordinatorV1(t,
 		[]raftplacement.GroupV1{
 			{ID: "group-a", Members: []raftcluster.NodeID{"node-a"}, LeaderHint: "node-a"},
-			{ID: "group-b", Members: []raftcluster.NodeID{"node-b"}, LeaderHint: "node-b"},
 		},
-		[]raftcluster.GroupID{"group-a", "group-b"},
+		[]raftcluster.GroupID{"group-a", "group-a"},
 		map[uint32][]VectorPartitionShardSearchNeighborV1{
-			0: {{ID: "pack-0", Score: .9}},
-			1: {{ID: "pack-1", Score: .8}},
+			0: {{ID: "pack-0", Score: .9}, {ID: "pack-1", Score: .8}},
 		},
 		VectorPartitionCoordinatorLimitsV1{},
 	)
@@ -480,7 +502,7 @@ func TestVectorPartitionCoordinatorPinsDomainPacksWithSessionOffsetsV1(t *testin
 
 	source.router.status.Manifest.DomainPacks[0].PackID = 99
 	response, err := coordinator.Search(t.Context(), request)
-	if err != nil || !slices.Equal(response.ProbedPacks, []uint32{0, 1}) {
+	if err != nil || !slices.Equal(response.ProbedPacks, []uint32{0}) {
 		t.Fatalf("response=%+v err=%v", response, err)
 	}
 }

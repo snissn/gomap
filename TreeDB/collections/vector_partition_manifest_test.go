@@ -3080,6 +3080,52 @@ func TestVectorPartitionManifestV1BindsLogicalDomainsToPhysicalPacks(t *testing.
 	}
 }
 
+func TestVectorPartitionManifestV1AcceptsOnlyCoLocatedDomainChunks(t *testing.T) {
+	m := testVectorPartitionManifestV1()
+	m.DomainCount = 1
+	m.DomainPacks = []VectorPartitionDomainPackV1{{DomainID: 0, PackID: 0}, {DomainID: 0, PackID: 1}}
+	m.Placements = []VectorPartitionPlacementV1{{PartitionID: 0, GroupID: "raft-a"}, {PartitionID: 1, GroupID: "raft-a"}}
+	membershipDigest := strings.Repeat("c", 64)
+	m.Assets = []VectorPartitionAssetV1{
+		{ID: vectorPartitionLocalAssetIDV1(0), PartitionID: 0, Checksum: strings.Repeat("b", 64), MembershipDigest: membershipDigest, GraphVariant: string(VectorPartitionLocalGraphVariantConnectivityPreservingVamanaR64L256Alpha1_2V1), Bytes: 12, Ref: ColumnAssetRef{Kind: ColumnAssetKindTCS1PartImage, Namespace: "test", Generation: 7, PartID: 1, FileID: 1, Length: 12}},
+		{ID: vectorPartitionLocalSectionChunkAssetIDV1(0, columnHNSWSearchPackSectionKey{kind: columnHNSWSearchPackSectionNormalizedVectors}, 0), PartitionID: 0, Checksum: strings.Repeat("b", 64), MembershipDigest: membershipDigest, Bytes: 13, Ref: ColumnAssetRef{Kind: ColumnAssetKindTCS1PartImage, Namespace: "test", Generation: 7, PartID: 2, FileID: 2, Length: 13}},
+	}
+	m.Canonicalize()
+	if err := m.Validate(DefaultVectorPartitionManifestLimits()); err != nil {
+		t.Fatalf("co-located domain chunks: %v", err)
+	}
+
+	split := m
+	split.Placements = append([]VectorPartitionPlacementV1(nil), m.Placements...)
+	split.Placements[1].GroupID = "raft-b"
+	split.Canonicalize()
+	if err := split.Validate(DefaultVectorPartitionManifestLimits()); err == nil {
+		t.Fatal("accepted split domain chunk ownership")
+	}
+
+	missingRoot := m
+	missingRoot.Assets = append([]VectorPartitionAssetV1(nil), m.Assets[1:]...)
+	missingRoot.Canonicalize()
+	if err := missingRoot.Validate(DefaultVectorPartitionManifestLimits()); err == nil {
+		t.Fatal("accepted chunked domain without root asset")
+	}
+
+	legacy := m
+	legacy.Assets = []VectorPartitionAssetV1{m.Assets[0]}
+	legacy.Canonicalize()
+	if err := legacy.Validate(DefaultVectorPartitionManifestLimits()); err == nil {
+		t.Fatal("accepted legacy per-pack assets for a multi-pack domain")
+	}
+
+	missingChunk := m
+	missingChunk.Assets = append([]VectorPartitionAssetV1(nil), m.Assets...)
+	missingChunk.Assets[1].ID = vectorPartitionLocalSectionChunkAssetIDV1(0, columnHNSWSearchPackSectionKey{kind: columnHNSWSearchPackSectionNormalizedVectors}, 1)
+	missingChunk.Canonicalize()
+	if err := missingChunk.Validate(DefaultVectorPartitionManifestLimits()); err == nil {
+		t.Fatal("accepted domain chunk sequence without chunk zero")
+	}
+}
+
 func scaledVectorPartitionManifestV1(rows int) VectorPartitionManifestV1 {
 	m := testVectorPartitionManifestV1()
 	m.SourceRowCount = uint64(rows)

@@ -320,10 +320,11 @@ func liveLifecycleRoutesV1(t *testing.T, f vectorPartitionLiveProductionFixtureV
 			for _, pack := range f.manifest.DomainPacks {
 				if pack.DomainID == domain.PartitionID {
 					routes[q].packs = append(routes[q].packs, pack.PackID)
+					break
 				}
 			}
 		}
-		if len(routes[q].domains) != probes || len(routes[q].packs) < probes {
+		if len(routes[q].domains) != probes || len(routes[q].packs) != probes {
 			t.Fatal("incomplete expected route")
 		}
 	}

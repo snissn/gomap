@@ -2915,18 +2915,21 @@ func TestM8CoordinatorResponseCanonicalShapeFailsClosedV1(t *testing.T) {
 	multiPack := manifest
 	multiPack.DomainCount = 1
 	multiPack.DomainPacks = []collections.VectorPartitionDomainPackV1{{DomainID: 0, PackID: 0}, {DomainID: 0, PackID: 1}, {DomainID: 0, PackID: 2}, {DomainID: 0, PackID: 3}}
+	for i := range multiPack.Placements {
+		multiPack.Placements[i].GroupID = "group-a"
+	}
 	response.Neighbors = response.Neighbors[:2]
 	response.ProbedDomains = []uint32{0}
-	response.ProbedPacks = []uint32{0, 1, 2, 3}
-	response.ProbedPartitions = []uint32{0, 1, 2, 3}
-	response.ProbedGroups = append(response.ProbedGroups[:0], "group-a", "group-b")
+	response.ProbedPacks = []uint32{0}
+	response.ProbedPartitions = []uint32{0}
+	response.ProbedGroups = append(response.ProbedGroups[:0], "group-a")
 	if got, err := m8ValidateCoordinatorResponseV1(response, multiPack, 1, 2); err != nil || len(got) != 2 {
 		t.Fatalf("valid multi-pack domain got=%+v err=%v", got, err)
 	}
-	response.ProbedPacks = response.ProbedPacks[:3]
-	response.ProbedPartitions = response.ProbedPartitions[:3]
+	response.ProbedPacks = []uint32{1}
+	response.ProbedPartitions = []uint32{1}
 	if _, err := m8ValidateCoordinatorResponseV1(response, multiPack, 1, 2); err == nil {
-		t.Fatal("accepted incomplete physical-pack expansion")
+		t.Fatal("accepted non-anchor physical pack")
 	}
 }
 

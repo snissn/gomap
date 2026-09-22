@@ -36,7 +36,7 @@ func TestVectorPartitionShardSearchTCPBinaryFrameRoundTripV1(t *testing.T) {
 	response := VectorPartitionShardSearchResponseV1{
 		Version: VectorPartitionShardSearchVersionV1, RequestID: request.RequestID,
 		Proof:      VectorPartitionShardSearchProofV1{Kind: "read_index", ServingNode: "node-a", LeaderNode: "node-b", GroupID: "group-a", ReadySetDigest: "ready", ServingIdentityDigest: "identity", ReadTerm: 1, ReadIndex: 2, AppliedTerm: 3, AppliedIndex: 4, CatalogAppliedIndex: 5, GroupAppliedIndex: 6, SourceGeneration: 7, SourceChecksum: 8, SourceSchemaHash: 9, SourceRowCount: 10, PartitionGeneration: 11, RouterGeneration: 12},
-		Partials:   []VectorPartitionShardSearchPartialV1{{PartitionID: 3, Neighbors: []VectorPartitionShardSearchNeighborV1{{ID: "doc", Score: 0.5}}, Candidates: 13, Edges: 14, SearchRoute: "hnsw", PackBytes: 15, MappedBytes: 16, HeapBytes: 17, OpenNanos: 18}},
+		Partials:   []VectorPartitionShardSearchPartialV1{{PartitionID: 3, Neighbors: []VectorPartitionShardSearchNeighborV1{{ID: "doc", Score: 0.5}}, Candidates: 13, Edges: 14, SearchRoute: "hnsw", PackBytes: 15, MappedBytes: 16, HeapBytes: 17, RequiredChunks: 2, OpenedChunks: 2, AccessedChunks: 2, OpenNanos: 18}},
 		Partitions: 1, ReadProofs: 2, GenerationPins: 3, PartitionOpens: 4, Candidates: 5, Edges: 6, ResponseBytes: 7,
 		Timing: VectorPartitionShardSearchTimingV1{RouteOwnerNanos: 8, ReadIndexApplyNanos: 9, GenerationOpenNanos: 10, SearchNanos: 11, ResponseCopyNanos: 12, TotalNanos: 13},
 	}
@@ -66,7 +66,7 @@ func TestVectorPartitionShardSearchTCPBinaryFrameRoundTripV1(t *testing.T) {
 	frames := []vectorPartitionShardSearchTCPFrameV1{
 		{Request: &request}, {Response: &response}, {Error: &vectorPartitionShardSearchTCPErrorV1{Code: VectorPartitionShardSearchErrorNotLeaderV1, GroupID: "group-a", LeaderHint: "node-b", Message: "moved"}}, {Probe: &vectorPartitionShardEndpointProbeV1{Version: 1}}, {ProbeResponse: &identity},
 	}
-	wantBytes := []int{498, 472, 37, 10, 952}
+	wantBytes := []int{498, 496, 37, 10, 952}
 	for i, frame := range frames {
 		raw, err := appendVectorPartitionShardSearchTCPFrameBodyV1(nil, frame)
 		if err != nil {
@@ -95,7 +95,7 @@ func TestVectorPartitionShardSearchTCPBinaryFrameRoundTripV1(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantProbe := []byte{2, 4, 0, 0, 0, 0, 1, 0, 0, 0}
+	wantProbe := []byte{3, 4, 0, 0, 0, 0, 1, 0, 0, 0}
 	if !bytes.Equal(probe, wantProbe) {
 		t.Fatalf("probe=%x want=%x", probe, wantProbe)
 	}
@@ -241,7 +241,7 @@ func TestVectorPartitionShardSearchTCPBinaryBenchmarkWireSizesV1(t *testing.T) {
 		}
 	}
 	response := VectorPartitionShardSearchResponseV1{Version: VectorPartitionShardSearchVersionV1, RequestID: "benchmark", Partials: partials}
-	want := []int{380, 851}
+	want := []int{380, 899}
 	for i, frame := range []vectorPartitionShardSearchTCPFrameV1{{Request: &request}, {Response: &response}} {
 		raw, err := appendVectorPartitionShardSearchTCPFrameBodyV1(nil, frame)
 		if err != nil {

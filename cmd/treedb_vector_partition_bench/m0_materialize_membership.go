@@ -255,7 +255,7 @@ func runM0MaterializeMembershipV1(args []string, stdout io.Writer) (err error) {
 		if err != nil {
 			return err
 		}
-		if err = m3ValidateActualShardPackBytesV1(assets, summaries); err != nil {
+		if err = m3ValidateActualShardPackBytesV1(assets, summaries, updated.ShardPlan.PacksPerDomain); err != nil {
 			return err
 		}
 	}

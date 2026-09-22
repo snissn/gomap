@@ -1104,6 +1104,222 @@ func vectorPartitionLocalAssetIDV1(partition uint32) string {
 	return fmt.Sprintf("hnsw_search_pack_v1/partition/%d", partition)
 }
 
+func vectorPartitionLocalSectionChunkAssetIDV1(partition uint32, key columnHNSWSearchPackSectionKey, chunk uint32) string {
+	return fmt.Sprintf("%s/section/%02d/%05d/chunk/%08d", vectorPartitionLocalAssetIDV1(partition), key.kind, key.index, chunk)
+}
+
+func parseVectorPartitionLocalSectionChunkAssetIDV1(partition uint32, id string) (columnHNSWSearchPackSectionKey, uint32, error) {
+	prefix := vectorPartitionLocalAssetIDV1(partition) + "/section/"
+	parts := strings.Split(strings.TrimPrefix(id, prefix), "/")
+	if !strings.HasPrefix(id, prefix) || len(parts) != 4 || parts[2] != "chunk" {
+		return columnHNSWSearchPackSectionKey{}, 0, errors.New("domain section chunk asset id")
+	}
+	kind, kindErr := strconv.ParseUint(parts[0], 10, 16)
+	index, indexErr := strconv.ParseUint(parts[1], 10, 16)
+	chunk, chunkErr := strconv.ParseUint(parts[3], 10, 32)
+	key := columnHNSWSearchPackSectionKey{kind: columnHNSWSearchPackSectionKind(kind), index: uint16(index)}
+	if kindErr != nil || indexErr != nil || chunkErr != nil || vectorPartitionLocalSectionChunkAssetIDV1(partition, key, uint32(chunk)) != id {
+		return columnHNSWSearchPackSectionKey{}, 0, errors.New("domain section chunk asset id")
+	}
+	return key, uint32(chunk), nil
+}
+
+func vectorPartitionDomainLayoutV1(manifest VectorPartitionManifestV1) ([]uint32, []uint32, error) {
+	if manifest.DomainCount == 0 || manifest.DomainCount > manifest.PartitionCount || len(manifest.DomainPacks) != int(manifest.PartitionCount) {
+		return nil, nil, fmt.Errorf("%w: domain layout", ErrVectorPartitionSearchUnavailable)
+	}
+	anchors := make([]uint32, manifest.DomainCount)
+	anchorForPack := make([]uint32, manifest.PartitionCount)
+	seen := make([]bool, manifest.PartitionCount)
+	groups := make([]string, manifest.PartitionCount)
+	for _, placement := range manifest.Placements {
+		if placement.PartitionID >= manifest.PartitionCount || groups[placement.PartitionID] != "" {
+			return nil, nil, fmt.Errorf("%w: domain placement", ErrVectorPartitionSearchUnavailable)
+		}
+		groups[placement.PartitionID] = placement.GroupID
+	}
+	var lastDomain uint32
+	for i, mapping := range manifest.DomainPacks {
+		if mapping.DomainID >= manifest.DomainCount || mapping.PackID >= manifest.PartitionCount || seen[mapping.PackID] ||
+			(i == 0 && mapping.DomainID != 0) || (i > 0 && (mapping.DomainID < lastDomain || mapping.DomainID > lastDomain+1)) {
+			return nil, nil, fmt.Errorf("%w: domain layout", ErrVectorPartitionSearchUnavailable)
+		}
+		if i == 0 || mapping.DomainID != lastDomain {
+			anchors[mapping.DomainID] = mapping.PackID
+			lastDomain = mapping.DomainID
+		}
+		anchor := anchors[mapping.DomainID]
+		if len(manifest.Placements) != 0 && (groups[anchor] == "" || groups[mapping.PackID] != groups[anchor]) {
+			return nil, nil, fmt.Errorf("%w: split domain ownership", ErrVectorPartitionSearchUnavailable)
+		}
+		anchorForPack[mapping.PackID] = anchor
+		seen[mapping.PackID] = true
+	}
+	if lastDomain+1 != manifest.DomainCount {
+		return nil, nil, fmt.Errorf("%w: missing domain", ErrVectorPartitionSearchUnavailable)
+	}
+	for pack, ok := range seen {
+		if !ok {
+			return nil, nil, fmt.Errorf("%w: missing domain pack %d", ErrVectorPartitionSearchUnavailable, pack)
+		}
+	}
+	return anchors, anchorForPack, nil
+}
+
+func vectorPartitionServingMembershipListsV1(manifest VectorPartitionManifestV1, anchorForPack []uint32) ([]VectorPartitionMembershipV1, []VectorPartitionMembershipV1, error) {
+	type key struct {
+		ordinal uint64
+		anchor  uint32
+	}
+	kinds := make(map[key]VectorPartitionMembershipKindV1, len(manifest.Memberships)+len(manifest.OverlapMemberships))
+	add := func(memberships []VectorPartitionMembershipV1, kind VectorPartitionMembershipKindV1) error {
+		for _, membership := range memberships {
+			if membership.PartitionID >= uint32(len(anchorForPack)) {
+				return fmt.Errorf("%w: membership partition", ErrVectorPartitionSearchUnavailable)
+			}
+			k := key{ordinal: membership.VectorOrdinal, anchor: anchorForPack[membership.PartitionID]}
+			if prior, ok := kinds[k]; !ok || kind == VectorPartitionMembershipHomeV1 || prior != VectorPartitionMembershipHomeV1 {
+				kinds[k] = kind
+			}
+		}
+		return nil
+	}
+	if err := add(manifest.Memberships, VectorPartitionMembershipHomeV1); err != nil {
+		return nil, nil, err
+	}
+	if err := add(manifest.OverlapMemberships, VectorPartitionMembershipOverlapV1); err != nil {
+		return nil, nil, err
+	}
+	home := make([]VectorPartitionMembershipV1, 0, len(manifest.Memberships))
+	overlap := make([]VectorPartitionMembershipV1, 0, len(manifest.OverlapMemberships))
+	for k, kind := range kinds {
+		membership := VectorPartitionMembershipV1{VectorOrdinal: k.ordinal, PartitionID: k.anchor}
+		if kind == VectorPartitionMembershipHomeV1 {
+			home = append(home, membership)
+		} else {
+			overlap = append(overlap, membership)
+		}
+	}
+	sort.Slice(home, func(i, j int) bool { return vectorPartitionMembershipLessV1(home[i], home[j]) })
+	sort.Slice(overlap, func(i, j int) bool { return vectorPartitionMembershipLessV1(overlap[i], overlap[j]) })
+	return home, overlap, nil
+}
+
+type vectorPartitionDomainAssetPayloadV1 struct {
+	id                 string
+	payload            []byte
+	membershipDigest   string
+	graphVariant       string
+	partition          uint32
+	constructionSource int
+}
+
+func splitVectorPartitionDomainSearchPackV1(raw []byte, partition uint32, maxAssetBytes int64) ([]vectorPartitionDomainAssetPayloadV1, error) {
+	if maxAssetBytes <= 0 {
+		return nil, fmt.Errorf("%w: domain asset byte cap", ErrVectorPartitionSearchUnavailable)
+	}
+	pack, _, err := decodeColumnHNSWSearchPackEnvelopeWithContext(context.Background(), raw, columnHNSWSearchPackDecodeOptions{})
+	if err != nil || pack.Header.Version != columnHNSWSearchPackVersionV6 {
+		return nil, fmt.Errorf("%w: domain Vamana pack", ErrVectorPartitionSearchUnavailable)
+	}
+	rootBytes := columnHNSWSearchPackHeaderSizeV2 + len(pack.Sections)*columnHNSWSearchPackSectionEntrySize
+	if rootBytes > len(raw) || int64(rootBytes) > maxAssetBytes {
+		return nil, fmt.Errorf("%w: domain root byte cap", ErrVectorPartitionSearchUnavailable)
+	}
+	digest := hex.EncodeToString(raw[columnHNSWSearchPackHeaderMembershipDigestOffset:columnHNSWSearchPackHeaderSizeV2])
+	out := []vectorPartitionDomainAssetPayloadV1{{
+		id: vectorPartitionLocalAssetIDV1(partition), payload: raw[:rootBytes], membershipDigest: digest,
+		graphVariant: string(vectorPartitionLocalDefaultGraphVariantV1), partition: partition,
+	}}
+	for _, section := range pack.Sections {
+		if section.Offset > uint64(len(raw)) || section.Length > uint64(len(raw))-section.Offset {
+			return nil, fmt.Errorf("%w: domain section bounds", ErrVectorPartitionSearchUnavailable)
+		}
+		ranges, err := vectorPartitionDomainSectionChunkRangesV1(raw, pack, section, uint64(maxAssetBytes))
+		if err != nil {
+			return nil, err
+		}
+		key := columnHNSWSearchPackSectionKey{kind: section.Kind, index: section.Index}
+		for chunk, bounds := range ranges {
+			start, end := section.Offset+bounds[0], section.Offset+bounds[1]
+			out = append(out, vectorPartitionDomainAssetPayloadV1{
+				id:      vectorPartitionLocalSectionChunkAssetIDV1(partition, key, uint32(chunk)),
+				payload: raw[start:end], partition: partition,
+			})
+		}
+	}
+	return out, nil
+}
+
+func vectorPartitionDomainSectionChunkRangesV1(raw []byte, pack columnHNSWSearchPack, section columnHNSWSearchPackSection, capBytes uint64) ([][2]uint64, error) {
+	if section.Length == 0 {
+		return nil, nil
+	}
+	unit := uint64(0)
+	var boundaries []uint64
+	switch section.Kind {
+	case columnHNSWSearchPackSectionNormalizedVectors:
+		unit = uint64(pack.Header.VectorStride) * 4
+	case columnHNSWSearchPackSectionLevels:
+		unit = 2
+	case columnHNSWSearchPackSectionAdjacencyOffsets,
+		columnHNSWSearchPackSectionRowRefGeneration,
+		columnHNSWSearchPackSectionRowRefPartID,
+		columnHNSWSearchPackSectionRowRefRowIndex,
+		columnHNSWSearchPackSectionRowRefAppliedLSN,
+		columnHNSWSearchPackSectionDocumentIDOffsets:
+		unit = 8
+	case columnHNSWSearchPackSectionAdjacencyNeighbors:
+		offsetsSection, err := columnHNSWSearchPackFindSection(pack.Sections, columnHNSWSearchPackSectionAdjacencyOffsets, section.Index)
+		if err != nil {
+			return nil, fmt.Errorf("%w: adjacency section index", ErrVectorPartitionSearchUnavailable)
+		}
+		offsets := decodeUint64SliceLE(raw[offsetsSection.Offset : offsetsSection.Offset+offsetsSection.Length])
+		boundaries = make([]uint64, len(offsets))
+		for i, offset := range offsets {
+			boundaries[i] = offset * 4
+		}
+	case columnHNSWSearchPackSectionDocumentIDBytes:
+		offsetsSection, err := columnHNSWSearchPackFindSection(pack.Sections, columnHNSWSearchPackSectionDocumentIDOffsets, 0)
+		if err != nil {
+			return nil, fmt.Errorf("%w: document id offsets", ErrVectorPartitionSearchUnavailable)
+		}
+		boundaries = decodeUint64SliceLE(raw[offsetsSection.Offset : offsetsSection.Offset+offsetsSection.Length])
+	default:
+		return nil, fmt.Errorf("%w: unsupported domain section %s", ErrVectorPartitionSearchUnavailable, section.Kind)
+	}
+	if unit != 0 {
+		if unit > capBytes || section.Length%unit != 0 {
+			return nil, fmt.Errorf("%w: indivisible domain section %s", ErrVectorPartitionSearchUnavailable, section.Kind)
+		}
+		chunkBytes := capBytes / unit * unit
+		out := make([][2]uint64, 0, (section.Length+chunkBytes-1)/chunkBytes)
+		for start := uint64(0); start < section.Length; start += chunkBytes {
+			end := min(start+chunkBytes, section.Length)
+			out = append(out, [2]uint64{start, end})
+		}
+		return out, nil
+	}
+	if len(boundaries) == 0 || boundaries[0] != 0 || boundaries[len(boundaries)-1] != section.Length {
+		return nil, fmt.Errorf("%w: domain section boundaries %s", ErrVectorPartitionSearchUnavailable, section.Kind)
+	}
+	out := make([][2]uint64, 0, (section.Length+capBytes-1)/capBytes)
+	for startIndex := 0; startIndex < len(boundaries)-1; {
+		start := boundaries[startIndex]
+		limit := min(start+capBytes, section.Length)
+		endIndex := sort.Search(len(boundaries), func(i int) bool { return boundaries[i] > limit }) - 1
+		for endIndex > startIndex && boundaries[endIndex] == start {
+			endIndex--
+		}
+		if endIndex <= startIndex {
+			return nil, fmt.Errorf("%w: indivisible domain section %s record=%d", ErrVectorPartitionSearchUnavailable, section.Kind, startIndex)
+		}
+		out = append(out, [2]uint64{start, boundaries[endIndex]})
+		startIndex = endIndex
+	}
+	return out, nil
+}
+
 func vectorPartitionMembershipsForPartitionV1(manifest VectorPartitionManifestV1, partition uint32) []vectorPartitionMembershipSourceV1 {
 	members, _ := vectorPartitionMembershipsForPartitionWithContextV1(context.Background(), manifest, partition)
 	return members
@@ -1188,6 +1404,7 @@ type VectorPartitionGenerationSearchOpenPlanV1 struct {
 	generation            uint64
 	partitionCount        uint32
 	assets                []VectorPartitionAssetV1
+	assetGroups           [][]VectorPartitionAssetV1
 	assetPresent          []bool
 	members               []vectorPartitionMembershipSourceV1
 	memberOffsets         []int
@@ -1227,10 +1444,29 @@ func NewVectorPartitionGenerationSearchOpenPlanWithContextV1(ctx context.Context
 		generation:            manifest.Generation,
 		partitionCount:        manifest.PartitionCount,
 		assets:                make([]VectorPartitionAssetV1, partitionCount),
+		assetGroups:           make([][]VectorPartitionAssetV1, partitionCount),
 		assetPresent:          make([]bool, partitionCount),
 		memberOffsets:         make([]int, partitionCount+1),
 		homeCounts:            make([]int, partitionCount),
 		overlapCounts:         make([]int, partitionCount),
+	}
+	domainMode := false
+	for _, asset := range manifest.Assets {
+		if strings.HasPrefix(asset.ID, vectorPartitionLocalAssetIDV1(asset.PartitionID)+"/section/") {
+			domainMode = true
+			break
+		}
+	}
+	homeMemberships, overlapMemberships := manifest.Memberships, manifest.OverlapMemberships
+	if domainMode {
+		_, anchorForPack, err := vectorPartitionDomainLayoutV1(manifest)
+		if err != nil {
+			return nil, err
+		}
+		homeMemberships, overlapMemberships, err = vectorPartitionServingMembershipListsV1(manifest, anchorForPack)
+		if err != nil {
+			return nil, err
+		}
 	}
 	for i, asset := range manifest.Assets {
 		if i&1023 == 0 {
@@ -1238,10 +1474,16 @@ func NewVectorPartitionGenerationSearchOpenPlanWithContextV1(ctx context.Context
 				return nil, err
 			}
 		}
-		if asset.PartitionID >= manifest.PartitionCount || asset.ID != vectorPartitionLocalAssetIDV1(asset.PartitionID) {
+		if asset.PartitionID >= manifest.PartitionCount {
 			continue
 		}
 		partition := int(asset.PartitionID)
+		if asset.ID == vectorPartitionLocalAssetIDV1(asset.PartitionID) || strings.HasPrefix(asset.ID, vectorPartitionLocalAssetIDV1(asset.PartitionID)+"/section/") {
+			plan.assetGroups[partition] = append(plan.assetGroups[partition], asset)
+		}
+		if asset.ID != vectorPartitionLocalAssetIDV1(asset.PartitionID) {
+			continue
+		}
 		if plan.assetPresent[partition] {
 			return nil, fmt.Errorf("%w: duplicate partition search asset %d", ErrVectorPartitionSearchUnavailable, asset.PartitionID)
 		}
@@ -1262,10 +1504,10 @@ func NewVectorPartitionGenerationSearchOpenPlanWithContextV1(ctx context.Context
 		}
 		return nil
 	}
-	if err := countMembership(manifest.Memberships, plan.homeCounts); err != nil {
+	if err := countMembership(homeMemberships, plan.homeCounts); err != nil {
 		return nil, err
 	}
-	if err := countMembership(manifest.OverlapMemberships, plan.overlapCounts); err != nil {
+	if err := countMembership(overlapMemberships, plan.overlapCounts); err != nil {
 		return nil, err
 	}
 	for partition := 0; partition < partitionCount; partition++ {
@@ -1280,10 +1522,10 @@ func NewVectorPartitionGenerationSearchOpenPlanWithContextV1(ctx context.Context
 	}
 	plan.members = make([]vectorPartitionMembershipSourceV1, plan.memberOffsets[partitionCount])
 	next := append([]int(nil), plan.memberOffsets[:partitionCount]...)
-	if err := appendVectorPartitionMembershipsToPlanV1(ctx, plan, manifest.Memberships, VectorPartitionMembershipHomeV1, next); err != nil {
+	if err := appendVectorPartitionMembershipsToPlanV1(ctx, plan, homeMemberships, VectorPartitionMembershipHomeV1, next); err != nil {
 		return nil, err
 	}
-	if err := appendVectorPartitionMembershipsToPlanV1(ctx, plan, manifest.OverlapMemberships, VectorPartitionMembershipOverlapV1, next); err != nil {
+	if err := appendVectorPartitionMembershipsToPlanV1(ctx, plan, overlapMemberships, VectorPartitionMembershipOverlapV1, next); err != nil {
 		return nil, err
 	}
 	// The digest verifier makes and canonically sorts its own bounded copy.
@@ -1360,6 +1602,13 @@ func (p *VectorPartitionGenerationSearchOpenPlanV1) partition(partition uint32) 
 	}
 	i := int(partition)
 	return &p.assets[i], p.members[p.memberOffsets[i]:p.memberOffsets[i+1]], p.homeCounts[i], p.overlapCounts[i], nil
+}
+
+func (p *VectorPartitionGenerationSearchOpenPlanV1) partitionAssets(partition uint32) []VectorPartitionAssetV1 {
+	if p == nil || partition >= p.partitionCount || int(partition) >= len(p.assetGroups) {
+		return nil
+	}
+	return p.assetGroups[partition]
 }
 
 func vectorPartitionMembershipDigestV1(reader *columnVectorGraphPhysicalRowReader, generation uint64, partition uint32, members []vectorPartitionMembershipSourceV1) ([sha256.Size]byte, error) {
@@ -1459,10 +1708,13 @@ func (c *Collection) validateVectorPartitionAssetMembershipBindingsV1(manifest V
 
 func (c *Collection) validateVectorPartitionAssetMembershipBindingsForGraphVariantV1(manifest VectorPartitionManifestV1, expectedGraphVariant VectorPartitionLocalGraphVariantV1) error {
 	hasNative := false
+	chunkedDomains := false
 	for _, asset := range manifest.Assets {
 		if asset.ID == vectorPartitionLocalAssetIDV1(asset.PartitionID) {
 			hasNative = true
-			break
+		}
+		if strings.HasPrefix(asset.ID, vectorPartitionLocalAssetIDV1(asset.PartitionID)+"/section/") {
+			chunkedDomains = true
 		}
 	}
 	if !hasNative {
@@ -1477,6 +1729,13 @@ func (c *Collection) validateVectorPartitionAssetMembershipBindingsForGraphVaria
 		return fmt.Errorf("%w: membership source reader: %v", ErrVectorPartitionSearchUnavailable, err)
 	}
 	defer reader.Close()
+	var plan *VectorPartitionGenerationSearchOpenPlanV1
+	if chunkedDomains {
+		plan, err = NewVectorPartitionGenerationSearchOpenPlanWithContextV1(context.Background(), manifest)
+		if err != nil {
+			return err
+		}
+	}
 	for _, asset := range manifest.Assets {
 		if asset.ID != vectorPartitionLocalAssetIDV1(asset.PartitionID) {
 			continue
@@ -1485,7 +1744,14 @@ func (c *Collection) validateVectorPartitionAssetMembershipBindingsForGraphVaria
 		if err != nil {
 			return err
 		}
-		want, err := vectorPartitionMembershipDigestV1(reader, manifest.Generation, asset.PartitionID, vectorPartitionMembershipsForPartitionV1(manifest, asset.PartitionID))
+		members := vectorPartitionMembershipsForPartitionV1(manifest, asset.PartitionID)
+		if plan != nil {
+			_, members, _, _, err = plan.partition(asset.PartitionID)
+			if err != nil {
+				return err
+			}
+		}
+		want, err := vectorPartitionMembershipDigestV1(reader, manifest.Generation, asset.PartitionID, members)
 		if err != nil {
 			return err
 		}
@@ -1498,6 +1764,24 @@ func (c *Collection) validateVectorPartitionAssetMembershipBindingsForGraphVaria
 		}
 		if asset.Ref.Kind != ColumnAssetKindTCS1HNSWSearchPack || asset.Ref.Length <= 0 || asset.Ref.Length > vectorPartitionSearchAssetMaxBytesV1 {
 			return fmt.Errorf("%w: native membership asset ref partition=%d", ErrVectorPartitionSearchUnavailable, asset.PartitionID)
+		}
+		if plan != nil {
+			home, overlap := 0, 0
+			for _, member := range members {
+				if member.kind == VectorPartitionMembershipHomeV1 {
+					home++
+				} else {
+					overlap++
+				}
+			}
+			searcher, openErr := c.openVectorPartitionLocalSearcherForPreparedAssetsWithContextV1(context.Background(), manifest.IndexName, manifest.Generation, asset.PartitionID, manifest.IndexDefinitionDigest, manifest.SourceGeneration, manifest.SourceChecksum, manifest.SourceSchemaHash, manifest.SourceRowCount, &asset, plan.partitionAssets(asset.PartitionID), members, home, overlap, true, variant, false, false)
+			if openErr != nil {
+				return openErr
+			}
+			if closeErr := searcher.Close(); closeErr != nil {
+				return closeErr
+			}
+			continue
 		}
 		raw, err := readColumnPhysicalAssetFromManager(c.db.ColumnAssetRootDir(), asset.Ref)
 		if err != nil {
@@ -2217,30 +2501,61 @@ func (c *Collection) materializeVectorPartitionLocalSearchAssetsVariantV1(index 
 		return nil, nil, fmt.Errorf("%w: source reader: %v", ErrVectorPartitionSearchUnavailable, err)
 	}
 	defer reader.Close()
-	members := make(map[uint32][]vectorPartitionMembershipSourceV1)
-	for _, x := range manifest.Memberships {
-		if x.VectorOrdinal >= manifest.SourceRowCount {
-			return nil, nil, fmt.Errorf("%w: source ordinal", ErrVectorPartitionSearchUnavailable)
-		}
-		members[x.PartitionID] = append(members[x.PartitionID], vectorPartitionMembershipSourceV1{int(x.VectorOrdinal), VectorPartitionMembershipHomeV1})
-	}
-	for _, x := range manifest.OverlapMemberships {
-		if x.VectorOrdinal >= manifest.SourceRowCount {
-			return nil, nil, fmt.Errorf("%w: source ordinal", ErrVectorPartitionSearchUnavailable)
-		}
-		members[x.PartitionID] = append(members[x.PartitionID], vectorPartitionMembershipSourceV1{int(x.VectorOrdinal), VectorPartitionMembershipOverlapV1})
-	}
-	items := make([]StableColumnPhysicalAssetAppend, len(inputs))
-	partitions := make([]VectorPartitionConstructionPartitionEvidenceV1, len(inputs))
 	seenParts := make(map[uint32]struct{}, len(inputs))
-	for i, in := range inputs {
-		if in.Generation != generation || in.Dimensions != def.Dimensions || in.Source.Generation != manifest.SourceGeneration || in.Source.Checksum != manifest.SourceChecksum || in.Source.SchemaHash != manifest.SourceSchemaHash || in.Source.RowCount != manifest.SourceRowCount {
+	inputsByPartition := make(map[uint32]VectorPartitionSearchAssetV1, len(inputs))
+	for _, in := range inputs {
+		if in.Generation != generation || in.PartitionID >= manifest.PartitionCount || in.Dimensions != def.Dimensions || in.Source.Generation != manifest.SourceGeneration || in.Source.Checksum != manifest.SourceChecksum || in.Source.SchemaHash != manifest.SourceSchemaHash || in.Source.RowCount != manifest.SourceRowCount {
 			return nil, nil, fmt.Errorf("%w: generation mismatch", ErrVectorPartitionSearchUnavailable)
 		}
 		if _, duplicate := seenParts[in.PartitionID]; duplicate {
 			return nil, nil, fmt.Errorf("%w: duplicate partition", ErrVectorPartitionSearchUnavailable)
 		}
 		seenParts[in.PartitionID] = struct{}{}
+		inputsByPartition[in.PartitionID] = in
+	}
+	domainMode := variant == vectorPartitionLocalDefaultGraphVariantV1 && manifest.DomainCount > 0 && manifest.DomainCount < manifest.PartitionCount
+	buildInputs := inputs
+	homeMemberships, overlapMemberships := manifest.Memberships, manifest.OverlapMemberships
+	if domainMode {
+		anchors, anchorForPack, err := vectorPartitionDomainLayoutV1(manifest)
+		if err != nil || len(inputs) != int(manifest.PartitionCount) {
+			return nil, nil, fmt.Errorf("%w: complete domain input", ErrVectorPartitionSearchUnavailable)
+		}
+		buildInputs = make([]VectorPartitionSearchAssetV1, len(anchors))
+		for i, anchor := range anchors {
+			in, ok := inputsByPartition[anchor]
+			if !ok {
+				return nil, nil, fmt.Errorf("%w: missing domain anchor %d", ErrVectorPartitionSearchUnavailable, anchor)
+			}
+			buildInputs[i] = in
+		}
+		for partition := uint32(0); partition < manifest.PartitionCount; partition++ {
+			if _, ok := inputsByPartition[partition]; !ok {
+				return nil, nil, fmt.Errorf("%w: missing physical pack %d", ErrVectorPartitionSearchUnavailable, partition)
+			}
+		}
+		homeMemberships, overlapMemberships, err = vectorPartitionServingMembershipListsV1(manifest, anchorForPack)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+	members := make(map[uint32][]vectorPartitionMembershipSourceV1)
+	for _, x := range homeMemberships {
+		if x.VectorOrdinal >= manifest.SourceRowCount {
+			return nil, nil, fmt.Errorf("%w: source ordinal", ErrVectorPartitionSearchUnavailable)
+		}
+		members[x.PartitionID] = append(members[x.PartitionID], vectorPartitionMembershipSourceV1{int(x.VectorOrdinal), VectorPartitionMembershipHomeV1})
+	}
+	for _, x := range overlapMemberships {
+		if x.VectorOrdinal >= manifest.SourceRowCount {
+			return nil, nil, fmt.Errorf("%w: source ordinal", ErrVectorPartitionSearchUnavailable)
+		}
+		members[x.PartitionID] = append(members[x.PartitionID], vectorPartitionMembershipSourceV1{int(x.VectorOrdinal), VectorPartitionMembershipOverlapV1})
+	}
+	items := make([]StableColumnPhysicalAssetAppend, 0, len(buildInputs))
+	pending := make([]vectorPartitionDomainAssetPayloadV1, 0, len(buildInputs))
+	partitions := make([]VectorPartitionConstructionPartitionEvidenceV1, len(buildInputs))
+	for i, in := range buildInputs {
 		selected := members[in.PartitionID]
 		if len(selected) == 0 {
 			return nil, nil, fmt.Errorf("%w: partition has no canonical memberships", ErrVectorPartitionSearchUnavailable)
@@ -2272,7 +2587,11 @@ func (c *Collection) materializeVectorPartitionLocalSearchAssetsVariantV1(index 
 		// The caller's cap can be narrower than the public maximum used by the
 		// shape-only preflight. Reject the known fixed-width and stable-ID lower
 		// bound before copying vectors or constructing the partition-local graph.
-		if err := preflightVectorPartitionNativePackKnownBytesV1(len(sourceRows), buildDef.Dimensions, documentIDBytes, maxAssetBytes); err != nil {
+		packCap := maxAssetBytes
+		if domainMode {
+			packCap = math.MaxInt64
+		}
+		if err := preflightVectorPartitionNativePackKnownBytesV1(len(sourceRows), buildDef.Dimensions, documentIDBytes, packCap); err != nil {
 			return nil, nil, fmt.Errorf("retained variant partition %d byte preflight: %w", in.PartitionID, err)
 		}
 		// The partition owns a fresh local graph. Source ordinals provide a stable
@@ -2349,7 +2668,7 @@ func (c *Collection) materializeVectorPartitionLocalSearchAssetsVariantV1(index 
 		if hasAuxiliaryNavigation {
 			auxiliaryNeighbors = uint64(len(auxiliary.Neighbors))
 		}
-		exactPackBytes, err := exactVectorPartitionLocalGraphPackBytesV1(len(rows), buildDef.Dimensions, neighborCounts, documentIDBytes, auxiliaryNeighbors, hasAuxiliaryNavigation, maxAssetBytes)
+		exactPackBytes, err := exactVectorPartitionLocalGraphPackBytesV1(len(rows), buildDef.Dimensions, neighborCounts, documentIDBytes, auxiliaryNeighbors, hasAuxiliaryNavigation, packCap)
 		if err != nil {
 			return nil, nil, fmt.Errorf("retained variant partition %d exact pack bytes: %w", in.PartitionID, err)
 		}
@@ -2372,12 +2691,23 @@ func (c *Collection) materializeVectorPartitionLocalSearchAssetsVariantV1(index 
 		if err != nil {
 			return nil, nil, fmt.Errorf("retained variant partition %d encode pack: %w", in.PartitionID, err)
 		}
-		if int64(len(raw)) != exactPackBytes || int64(len(raw)) > maxAssetBytes {
-			return nil, nil, fmt.Errorf("%w: encoded native pack bytes=%d exact=%d cap=%d", ErrVectorPartitionSearchUnavailable, len(raw), exactPackBytes, maxAssetBytes)
+		if int64(len(raw)) != exactPackBytes || (!domainMode && int64(len(raw)) > maxAssetBytes) {
+			return nil, nil, fmt.Errorf("%w: encoded native pack bytes=%d exact=%d cap=%d", ErrVectorPartitionSearchUnavailable, len(raw), exactPackBytes, packCap)
 		}
 		// Column assets reserve physical part ID zero; logical partitions are
 		// zero-based, so persist their unambiguous +1 representation.
-		items[i] = StableColumnPhysicalAssetAppend{Payload: raw, Kind: ColumnAssetKindTCS1HNSWSearchPack, Generation: generation, PartID: uint64(in.PartitionID) + 1}
+		payloads := []vectorPartitionDomainAssetPayloadV1{{id: vectorPartitionLocalAssetIDV1(in.PartitionID), payload: raw, membershipDigest: hex.EncodeToString(pack.MembershipDigest[:]), graphVariant: string(variant), partition: in.PartitionID}}
+		if domainMode {
+			payloads, err = splitVectorPartitionDomainSearchPackV1(raw, in.PartitionID, maxAssetBytes)
+			if err != nil {
+				return nil, nil, err
+			}
+		}
+		for j := range payloads {
+			payloads[j].constructionSource = i
+			pending = append(pending, payloads[j])
+			items = append(items, StableColumnPhysicalAssetAppend{Payload: payloads[j].payload, Kind: ColumnAssetKindTCS1HNSWSearchPack, Generation: generation, PartID: uint64(in.PartitionID) + 1})
+		}
 		if trace != nil {
 			partition := VectorPartitionConstructionPartitionEvidenceV1{PartitionID: in.PartitionID, NativeInsertionOrdinals: append([]int(nil), trace.nativeInsertionOrdinals...), PruneKeeps: trace.pruneKeeps, CompactLifecycle: trace.compactLifecycle, PostfillEdges: trace.postfillEdges, TraceMode: "compact"}
 			if trace.detailed {
@@ -2411,16 +2741,16 @@ func (c *Collection) materializeVectorPartitionLocalSearchAssetsVariantV1(index 
 	if err != nil {
 		return nil, nil, fmt.Errorf("retained variant append packs: %w", err)
 	}
-	out := make([]VectorPartitionAssetV1, len(inputs))
-	for i := range inputs {
+	out := make([]VectorPartitionAssetV1, len(pending))
+	for i := range pending {
 		sum := sha256.Sum256(items[i].Payload)
-		headerDigest := items[i].Payload[columnHNSWSearchPackHeaderMembershipDigestOffset:columnHNSWSearchPackHeaderSizeV2]
-		out[i] = VectorPartitionAssetV1{ID: vectorPartitionLocalAssetIDV1(inputs[i].PartitionID), PartitionID: inputs[i].PartitionID, Checksum: hex.EncodeToString(sum[:]), MembershipDigest: hex.EncodeToString(headerDigest), GraphVariant: string(variant), Bytes: uint64(len(items[i].Payload)), Ref: refs[i]}
-		if out[i].Ref.PartID != uint64(inputs[i].PartitionID)+1 {
+		payload := pending[i]
+		out[i] = VectorPartitionAssetV1{ID: payload.id, PartitionID: payload.partition, Checksum: hex.EncodeToString(sum[:]), MembershipDigest: payload.membershipDigest, GraphVariant: payload.graphVariant, Bytes: uint64(len(items[i].Payload)), Ref: refs[i]}
+		if out[i].Ref.PartID != uint64(payload.partition)+1 {
 			return nil, nil, fmt.Errorf("%w: partition ref", ErrVectorPartitionSearchUnavailable)
 		}
 		if evidence != nil {
-			partition := partitions[i]
+			partition := partitions[payload.constructionSource]
 			if partition.PartitionID != out[i].PartitionID || len(partition.NativeInsertionOrdinals) == 0 {
 				return nil, nil, fmt.Errorf("%w: construction trace", ErrVectorPartitionSearchUnavailable)
 			}
@@ -2697,29 +3027,18 @@ func (c *Collection) OpenVectorPartitionLocalSearcherForGenerationWithContextV1(
 	if !ok || m.IndexName != index || m.IndexDefinitionDigest != VectorIndexDefinitionDigestV1(def) || def.Metric != VectorMetricCosine || def.Encoding != VectorIndexEncodingFloat32 {
 		return nil, fmt.Errorf("%w: stale index definition", ErrVectorPartitionSearchUnavailable)
 	}
-	var asset *VectorPartitionAssetV1
-	for i := range m.Assets {
-		if m.Assets[i].PartitionID == partition && m.Assets[i].ID == vectorPartitionLocalAssetIDV1(partition) {
-			asset = &m.Assets[i]
-			break
-		}
-	}
-	members, err := vectorPartitionMembershipsForPartitionWithContextV1(ctx, m, partition)
+	plan, err := NewVectorPartitionGenerationSearchOpenPlanWithContextV1(ctx, m)
 	if err != nil {
 		return nil, err
 	}
-	home, overlap := 0, 0
-	for _, member := range members {
-		if member.kind == VectorPartitionMembershipHomeV1 {
-			home++
-		} else if member.kind == VectorPartitionMembershipOverlapV1 {
-			overlap++
-		}
+	asset, members, home, overlap, err := plan.partition(partition)
+	if err != nil {
+		return nil, err
 	}
-	searcher, err := c.openVectorPartitionLocalSearcherForPreparedPartitionWithContextV1(
+	searcher, err := c.openVectorPartitionLocalSearcherForPreparedAssetsWithContextV1(
 		ctx, index, generation, partition,
 		m.IndexDefinitionDigest, m.SourceGeneration, m.SourceChecksum, m.SourceSchemaHash, m.SourceRowCount,
-		asset, members, home, overlap, false, "", false, false,
+		asset, plan.partitionAssets(partition), members, home, overlap, false, "", false, false,
 	)
 	if err != nil {
 		return nil, err
@@ -2802,10 +3121,10 @@ func (c *Collection) openVectorPartitionLocalSearcherForGenerationSearchPlanWith
 	if err != nil {
 		return nil, err
 	}
-	searcher, err := c.openVectorPartitionLocalSearcherForPreparedPartitionWithContextV1(
+	searcher, err := c.openVectorPartitionLocalSearcherForPreparedAssetsWithContextV1(
 		ctx, index, generation, partition,
 		plan.indexDefinitionDigest, plan.sourceGeneration, plan.sourceChecksum, plan.sourceSchemaHash, plan.sourceRowCount,
-		asset, members, home, overlap, allowOfflineNative, expectedGraphVariant, prepareStableIDOrdinals, plan.liveRecovery,
+		asset, plan.partitionAssets(partition), members, home, overlap, allowOfflineNative, expectedGraphVariant, prepareStableIDOrdinals, plan.liveRecovery,
 	)
 	if err != nil {
 		return nil, err
@@ -2826,6 +3145,29 @@ func (c *Collection) openVectorPartitionLocalSearcherForPreparedPartitionWithCon
 	sourceSchemaHash uint64,
 	sourceRowCount uint64,
 	asset *VectorPartitionAssetV1,
+	members []vectorPartitionMembershipSourceV1,
+	home int,
+	overlap int,
+	allowOfflineNative bool,
+	expectedGraphVariant VectorPartitionLocalGraphVariantV1,
+	prepareStableIDOrdinals bool,
+	allowLiveRecovery bool,
+) (*VectorPartitionLocalSearcherV1, error) {
+	return c.openVectorPartitionLocalSearcherForPreparedAssetsWithContextV1(ctx, index, generation, partition, indexDefinitionDigest, sourceGeneration, sourceChecksum, sourceSchemaHash, sourceRowCount, asset, nil, members, home, overlap, allowOfflineNative, expectedGraphVariant, prepareStableIDOrdinals, allowLiveRecovery)
+}
+
+func (c *Collection) openVectorPartitionLocalSearcherForPreparedAssetsWithContextV1(
+	ctx context.Context,
+	index string,
+	generation uint64,
+	partition uint32,
+	indexDefinitionDigest string,
+	sourceGeneration uint64,
+	sourceChecksum uint64,
+	sourceSchemaHash uint64,
+	sourceRowCount uint64,
+	asset *VectorPartitionAssetV1,
+	assetGroup []VectorPartitionAssetV1,
 	members []vectorPartitionMembershipSourceV1,
 	home int,
 	overlap int,
@@ -2887,18 +3229,21 @@ func (c *Collection) openVectorPartitionLocalSearcherForPreparedPartitionWithCon
 		return nil, fmt.Errorf("%w: descriptor membership digest mismatch", ErrVectorPartitionSearchUnavailable)
 	}
 	namespace := c.meta.Options.ColumnStore.AssetManager.Namespace
-	if err := verifyVectorPartitionAssetsWithContextV1(ctx, c.db.ColumnAssetRootDir(), namespace, []VectorPartitionAssetV1{*asset}); err != nil {
+	if len(assetGroup) == 0 {
+		assetGroup = []VectorPartitionAssetV1{*asset}
+	}
+	if err := verifyVectorPartitionAssetsWithContextV1(ctx, c.db.ColumnAssetRootDir(), namespace, assetGroup); err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return nil, err
 		}
 		return nil, fmt.Errorf("%w: %v", ErrVectorPartitionSearchUnavailable, err)
 	}
-	path, err := columnAssetSegmentPath(c.db.ColumnAssetRootDir(), asset.Ref)
-	if err != nil {
-		return nil, err
-	}
-	if asset.Ref.Length > vectorPartitionSearchAssetMaxBytesV1 {
-		return nil, fmt.Errorf("%w: asset byte cap", ErrVectorPartitionSearchUnavailable)
+	var packBytes uint64
+	for _, part := range assetGroup {
+		if part.PartitionID != partition || part.Ref.Kind != ColumnAssetKindTCS1HNSWSearchPack || part.Ref.Generation != generation || part.Ref.PartID != uint64(partition)+1 || part.Ref.Length <= 0 || part.Ref.Length > vectorPartitionSearchAssetMaxBytesV1 || uint64(part.Ref.Length) > ^uint64(0)-packBytes {
+			return nil, fmt.Errorf("%w: chunk asset identity", ErrVectorPartitionSearchUnavailable)
+		}
+		packBytes += uint64(part.Ref.Length)
 	}
 	manager := mappedresource.NewManager()
 	packVersion := columnHNSWSearchPackVersionV2
@@ -2909,9 +3254,16 @@ func (c *Collection) openVectorPartitionLocalSearcherForPreparedPartitionWithCon
 	} else if graphVariant == VectorPartitionLocalGraphVariantCanonicalHNSWM18EfConstruction256V1 {
 		packVersion = columnHNSWSearchPackVersionV5
 	}
-	key := mappedresource.Key{Class: mappedresource.ClassTypedColumnAsset, Namespace: asset.Ref.Namespace, Kind: string(asset.Ref.Kind), Generation: asset.Ref.Generation, PartID: asset.Ref.PartID, FileID: asset.Ref.FileID, Offset: asset.Ref.Offset, Length: asset.Ref.Length, Checksum: uint64(asset.Ref.Checksum), Version: packVersion, Encoding: columnVectorIndexStateEncodingHNSWSearchPackV1, Section: mappedresource.Section{Kind: string(columnVectorIndexStateAssetRoleHNSWSearchPack), Category: string(ColumnAssetKindTCS1HNSWSearchPack), Name: asset.ID}}
+	acquire := func(part VectorPartitionAssetV1) (*mappedresource.Handle, error) {
+		path, err := columnAssetSegmentPath(c.db.ColumnAssetRootDir(), part.Ref)
+		if err != nil {
+			return nil, err
+		}
+		key := mappedresource.Key{Class: mappedresource.ClassTypedColumnAsset, Namespace: part.Ref.Namespace, Kind: string(part.Ref.Kind), Generation: part.Ref.Generation, PartID: part.Ref.PartID, FileID: part.Ref.FileID, Offset: part.Ref.Offset, Length: part.Ref.Length, Checksum: uint64(part.Ref.Checksum), Version: packVersion, Encoding: columnVectorIndexStateEncodingHNSWSearchPackV1, Section: mappedresource.Section{Kind: string(columnVectorIndexStateAssetRoleHNSWSearchPack), Category: string(ColumnAssetKindTCS1HNSWSearchPack), Name: part.ID}}
+		return manager.AcquireFileRange(key, mappedresource.Scope{Kind: mappedresource.ScopePreparedSearch, ID: "vector_partition/" + strconv.FormatUint(generation, 10), Collection: c.name, Namespace: part.Ref.Namespace, Generation: generation, Reason: "vector partition native HNSW"}, path, mappedresource.AcquireOptions{Reason: "vector partition native HNSW", ValidationMode: mappedresource.ValidationVerify, PreferMapped: true, AllowHeapCopy: true, ResourceRoot: c.db.ColumnAssetRootDir(), ResourcePath: path})
+	}
 	openStarted := time.Now()
-	h, err := manager.AcquireFileRange(key, mappedresource.Scope{Kind: mappedresource.ScopePreparedSearch, ID: "vector_partition/" + strconv.FormatUint(generation, 10), Collection: c.name, Namespace: asset.Ref.Namespace, Generation: generation, Reason: "vector partition native HNSW"}, path, mappedresource.AcquireOptions{Reason: "vector partition native HNSW", ValidationMode: mappedresource.ValidationVerify, PreferMapped: true, AllowHeapCopy: true, ResourceRoot: c.db.ColumnAssetRootDir(), ResourcePath: path})
+	h, err := acquire(*asset)
 	if err != nil {
 		return nil, err
 	}
@@ -2919,7 +3271,89 @@ func (c *Collection) openVectorPartitionLocalSearcherForPreparedPartitionWithCon
 		_ = h.Release()
 		return nil, err
 	}
-	view, err := newColumnHNSWSearchPackPreparedViewFromHandle(manager, h, columnHNSWSearchPackDecodeOptions{ExpectedBaseIdentity: columnHNSWSearchPackBaseIdentity{ManifestGeneration: sourceGeneration, ManifestChecksum: sourceChecksum, SchemaHash: sourceSchemaHash}, ExpectedMembershipDigest: expectedMembershipDigest})
+	decodeOpts := columnHNSWSearchPackDecodeOptions{ExpectedBaseIdentity: columnHNSWSearchPackBaseIdentity{ManifestGeneration: sourceGeneration, ManifestChecksum: sourceChecksum, SchemaHash: sourceSchemaHash}, ExpectedMembershipDigest: expectedMembershipDigest}
+	var view *columnHNSWSearchPackPreparedView
+	if len(assetGroup) == 1 {
+		view, err = newColumnHNSWSearchPackPreparedViewFromHandle(manager, h, decodeOpts)
+	} else {
+		rootRaw := h.Bytes()
+		if len(rootRaw) < columnHNSWSearchPackHeaderSizeV2 {
+			err = errors.New("chunked root header")
+		} else {
+			metadata, _, decodeErr := decodeColumnHNSWSearchPackEnvelopeMetadataWithContext(ctx, rootRaw, hnswPackU64(rootRaw, columnHNSWSearchPackHeaderTotalLengthOffset), decodeOpts, false)
+			if decodeErr != nil {
+				err = decodeErr
+			} else {
+				type chunkAsset struct {
+					ordinal uint32
+					asset   VectorPartitionAssetV1
+				}
+				bySection := make(map[columnHNSWSearchPackSectionKey][]chunkAsset, len(metadata.Sections))
+				for _, part := range assetGroup {
+					if part.ID == asset.ID {
+						continue
+					}
+					key, ordinal, parseErr := parseVectorPartitionLocalSectionChunkAssetIDV1(partition, part.ID)
+					if parseErr != nil {
+						err = parseErr
+						break
+					}
+					bySection[key] = append(bySection[key], chunkAsset{ordinal: ordinal, asset: part})
+				}
+				sectionHandles := make(map[columnHNSWSearchPackSectionKey][]*mappedresource.Handle, len(metadata.Sections))
+				expected := make(map[columnHNSWSearchPackSectionKey]struct{}, len(metadata.Sections))
+				for _, section := range metadata.Sections {
+					if err != nil {
+						break
+					}
+					key := columnHNSWSearchPackSectionKey{kind: section.Kind, index: section.Index}
+					expected[key] = struct{}{}
+					parts := bySection[key]
+					if section.Length == 0 {
+						if len(parts) != 0 {
+							err = fmt.Errorf("unexpected empty-section chunk %s[%d]", section.Kind, section.Index)
+						}
+						continue
+					}
+					if len(parts) == 0 {
+						err = fmt.Errorf("missing chunk %s[%d]", section.Kind, section.Index)
+						break
+					}
+					sort.Slice(parts, func(i, j int) bool { return parts[i].ordinal < parts[j].ordinal })
+					for i, part := range parts {
+						if part.ordinal != uint32(i) {
+							err = fmt.Errorf("noncanonical chunk sequence %s[%d]", section.Kind, section.Index)
+							break
+						}
+						sectionHandle, acquireErr := acquire(part.asset)
+						if acquireErr != nil {
+							err = acquireErr
+							break
+						}
+						sectionHandles[key] = append(sectionHandles[key], sectionHandle)
+					}
+				}
+				if err == nil {
+					for key := range bySection {
+						if _, ok := expected[key]; !ok {
+							err = fmt.Errorf("unexpected chunk section %s[%d]", key.kind, key.index)
+							break
+						}
+					}
+				}
+				if err == nil {
+					view, err = newColumnHNSWSearchPackPreparedViewFromSectionHandlesWithContext(ctx, manager, h, sectionHandles, decodeOpts)
+				}
+				if err != nil {
+					for _, handles := range sectionHandles {
+						for _, sectionHandle := range handles {
+							_ = sectionHandle.Release()
+						}
+					}
+				}
+			}
+		}
+	}
 	if err != nil {
 		_ = h.Release()
 		return nil, fmt.Errorf("%w: %v", ErrVectorPartitionSearchUnavailable, err)
@@ -2958,7 +3392,10 @@ func (c *Collection) openVectorPartitionLocalSearcherForPreparedPartitionWithCon
 			stableIDOrdinalBytes += uint64(len(id))
 		}
 	}
-	s := &VectorPartitionLocalSearcherV1{asset: VectorPartitionSearchAssetV1{Generation: generation, PartitionID: partition, Dimensions: view.Header.Dimensions}, prepared: view, opened: 1, homeMemberships: home, overlapMemberships: overlap, packBytes: uint64(asset.Ref.Length), mappedBytes: view.mappedBytes, heapBytes: view.heapCopyBytes, openNanos: view.openNanos, searchRoute: VectorPartitionSearchRouteHNSWSearchPackV1, maxStableIDBytes: maxStableIDBytes, stableIDOrdinals: stableIDOrdinals, stableIDOrdinalBytes: stableIDOrdinalBytes}
+	// Every section chunk has already been acquired, checksum-verified and
+	// semantically validated by the successful prepared-view open.
+	sectionChunks := uint64(len(assetGroup) - 1)
+	s := &VectorPartitionLocalSearcherV1{asset: VectorPartitionSearchAssetV1{Generation: generation, PartitionID: partition, Dimensions: view.Header.Dimensions}, prepared: view, opened: 1, homeMemberships: home, overlapMemberships: overlap, packBytes: packBytes, mappedBytes: view.mappedBytes, heapBytes: view.heapCopyBytes + view.chunkMetaBytes, sectionChunks: sectionChunks, openNanos: view.openNanos, searchRoute: VectorPartitionSearchRouteHNSWSearchPackV1, maxStableIDBytes: maxStableIDBytes, stableIDOrdinals: stableIDOrdinals, stableIDOrdinalBytes: stableIDOrdinalBytes}
 	return s, nil
 }
 
@@ -2970,14 +3407,9 @@ func preflightVectorPartitionNativePackV1(rows, dimensions, degree int) error {
 	if err != nil {
 		return fmt.Errorf("%w: native pack stride: %v", ErrVectorPartitionSearchUnavailable, err)
 	}
-	// Reject impossible packs before allocating rows, normalized vectors, or
-	// adjacency. This is a conservative minimum: encoding performs the exact
-	// final byte cap after source IDs/topology are known.
-	perRow := int64(stride)*4 + 2 + 8*6
-	if degree <= math.MaxInt/2 {
-		perRow += int64(degree*2) * 4
-	}
-	if int64(rows) > vectorPartitionSearchAssetMaxBytesV1/perRow {
+	// Domain packs split fixed-width planes at row boundaries. Only one row is
+	// indivisible here; the splitter owns each emitted asset's size limit.
+	if int64(stride)*4 > vectorPartitionSearchAssetMaxBytesV1 {
 		return fmt.Errorf("%w: native pack byte cap", ErrVectorPartitionSearchUnavailable)
 	}
 	return nil

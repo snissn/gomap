@@ -72,6 +72,7 @@ type m8QualityCacheV1 struct {
 	queries        []m8QualityCachedQueryV1
 	packDomains    []uint32
 	packCosts      []int64
+	domainGraphs   bool
 	traceQueries   int
 	packIDs        [][]string
 	traceValidated []bool
@@ -154,7 +155,7 @@ func (h *m8AttributionHarnessV1) enableQualityV1(ctx context.Context, queries []
 	if domains != len(costs) {
 		return errors.New("quality membership/layout disagreement")
 	}
-	cache := &m8QualityCacheV1{packDomains: owners, packCosts: costs, traceQueries: traceQueries, limits: limits, queries: make([]m8QualityCachedQueryV1, len(queries))}
+	cache := &m8QualityCacheV1{packDomains: owners, packCosts: costs, domainGraphs: h.domainGraphs, traceQueries: traceQueries, limits: limits, queries: make([]m8QualityCachedQueryV1, len(queries))}
 	if traceQueries > 0 {
 		cache.packIDs = make([][]string, len(owners))
 		cache.traceValidated = make([]bool, len(owners))
@@ -245,11 +246,8 @@ func (h *m8AttributionHarnessV1) exactQualityUnionV1(ctx context.Context, i int,
 	if q.querySHA256 != m8QualityQueryDigestV1(query) || q.truthSHA256 != m8QualityTruthDigestV1(truth) {
 		return nil, errors.New("quality exact pass changed query/truth")
 	}
-	packs := make([]uint32, len(h.searchers))
-	for p := range packs {
-		packs[p] = uint32(p)
-	}
-	bests := make([]m8ExactPackBestV1, len(packs))
+	packs := slices.Clone(h.servingPartitions)
+	bests := make([]m8ExactPackBestV1, len(h.searchers))
 	got, _, err := h.searchWithMetricsAndBestsV1(ctx, query, packs, k, k, true, bests)
 	if err != nil {
 		return nil, err
@@ -284,6 +282,9 @@ func (c *m8QualityCacheV1) domainsForPacksV1(packs []uint32) ([]uint32, error) {
 			seenD[d] = true
 			out = append(out, d)
 		}
+	}
+	if c.domainGraphs {
+		return out, nil
 	}
 	for _, d := range out {
 		if counts[d] != c.packCosts[d] {

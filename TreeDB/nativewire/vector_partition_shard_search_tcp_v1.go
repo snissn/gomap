@@ -22,7 +22,7 @@ import (
 const (
 	vectorPartitionShardSearchTCPMaxFrameBytesV1      uint32 = 64 << 20
 	vectorPartitionShardSearchTCPMinFrameBytesV1      uint64 = 4 << 10
-	vectorPartitionShardSearchTCPFrameVersionV1       byte   = 2
+	vectorPartitionShardSearchTCPFrameVersionV1       byte   = 3
 	vectorPartitionShardSearchTCPFrameRequestV1       byte   = 1
 	vectorPartitionShardSearchTCPFrameResponseV1      byte   = 2
 	vectorPartitionShardSearchTCPFrameErrorV1         byte   = 3
@@ -35,7 +35,7 @@ const (
 	vectorPartitionStrictCapabilityFixedBytesV1 uint64 = 84
 	// Response byte accounting excludes the request ID and six proof strings.
 	vectorPartitionShardSearchTCPResponseIdentityFieldsV1   uint64 = 7
-	vectorPartitionShardSearchTCPResponsePartialMinBytesV1         = 68
+	vectorPartitionShardSearchTCPResponsePartialMinBytesV1         = 92
 	vectorPartitionShardSearchTCPResponseNeighborMinBytesV1        = 8
 	vectorPartitionShardSearchTCPProbeResponseFixedBytesV1  uint64 = 934
 )
@@ -1113,6 +1113,9 @@ func appendVectorPartitionShardSearchTCPResponseV1(w *vectorPartitionShardSearch
 		w.u64(partial.PackBytes)
 		w.u64(partial.MappedBytes)
 		w.u64(partial.HeapBytes)
+		w.u64(partial.RequiredChunks)
+		w.u64(partial.OpenedChunks)
+		w.u64(partial.AccessedChunks)
 		w.u64(partial.OpenNanos)
 	}
 	for _, value := range []uint64{v.Partitions, v.ReadProofs, v.GenerationPins, v.PartitionOpens, v.ScoreCalls, v.Candidates, v.BaseCandidates, v.DeltaCandidates, v.BaseResults, v.DeltaResults, v.LiveDomainsSearched, v.LiveMutatedIDs, v.LiveIDs, v.Cutovers, v.RequestPathFullRebuilds, v.Edges, v.ResponseBytes, v.Timing.RouteOwnerNanos, v.Timing.ReadIndexApplyNanos, v.Timing.GenerationOpenNanos, v.Timing.SearchNanos, v.Timing.ResponseCopyNanos, v.Timing.TotalNanos} {
@@ -1149,7 +1152,9 @@ func readVectorPartitionShardSearchTCPResponseWithBoundsV1(r *vectorPartitionSha
 			}
 			partial.ScoreCalls, partial.Candidates, partial.Edges = r.u64(), r.u64(), r.u64()
 			partial.SearchRoute = r.string()
-			partial.PackBytes, partial.MappedBytes, partial.HeapBytes, partial.OpenNanos = r.u64(), r.u64(), r.u64(), r.u64()
+			partial.PackBytes, partial.MappedBytes, partial.HeapBytes = r.u64(), r.u64(), r.u64()
+			partial.RequiredChunks, partial.OpenedChunks, partial.AccessedChunks = r.u64(), r.u64(), r.u64()
+			partial.OpenNanos = r.u64()
 		}
 	}
 	v.Partitions, v.ReadProofs, v.GenerationPins, v.PartitionOpens, v.ScoreCalls, v.Candidates = r.u64(), r.u64(), r.u64(), r.u64(), r.u64(), r.u64()

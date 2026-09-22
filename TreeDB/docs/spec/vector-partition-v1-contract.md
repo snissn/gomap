@@ -102,6 +102,38 @@ M8 schema 7 records the graph identity and local score calls/caps. That schema
 is harness readiness, not retained qualification: the preregistered
 structured-250K run and accepted issue receipt remain required.
 
+### One graph per logical domain over bounded chunks (#4775)
+
+When a logical domain contains several physical membership packs, production
+materialization builds the accepted version-6 Vamana graph once over the
+domain's complete canonical membership union. The domain's lowest pack ID is
+its serving `PartitionID`; routing, placement, open, traversal, top-k and the
+shard response use that ID once. The remaining physical pack IDs remain
+membership/build inputs and do not create additional searchers, frontiers or
+partials.
+
+Persistence uses one metadata root plus immutable section chunks under the
+same partition and generation. Chunk IDs are canonical
+`section/<kind>/<index>/chunk/<ordinal>` paths. Vectors split only between
+whole padded rows, adjacency neighbors only between complete CSR lists,
+document bytes only between complete IDs, and fixed-width planes only between
+elements. Empty sections emit no chunk. Every nonempty root section must have
+one gap-free, nonduplicated exact cover; missing, stale, foreign, truncated,
+oversized, mixed-generation or cross-owner groups fail activation. A single
+indivisible row, list or ID above the per-asset bound also fails.
+
+Open pins and validates the complete chunk set but does not concatenate it.
+Search retains the original global ordinals, graph entry, edge order, one
+frontier, one stop decision and one top-k heap while resolving vectors, CSR,
+row refs and IDs through chunk-aware views. Batched scoring may split a tile at
+a vector-chunk boundary without changing candidate order or score accounting.
+The shard partial reports section `required_chunks`, `opened_chunks` and
+`accessed_chunks`; a successful open reports the same count for all three
+because every required chunk has been acquired, checksum-read and semantically
+validated before the request can run. Mapped and heap bytes charge the actual
+backing extents, including mmap page prefixes, retained chunk directories and
+conservative per-handle bookkeeping.
+
 This document freezes the supported snapshot-bound graph-partitioned vector
 search V1 contract. It is an admission contract, not an enablement claim: the
 feature remains internal and experimental/off until its owning rollout gate
@@ -134,11 +166,13 @@ An `exact_partition_union_v1` result is conformant only when all of these hold:
    `route_mismatch`; it is not folded into `generation_mismatch`.
 2. Where routing is used, the exact representative route scores every persisted
    representative and selects unique logical domains deterministically by
-   `(distance, domain_id)`. Every selected domain expands to all of its required
-   physical search packs. Representative selection is not a substitute for
-   an exhaustive exact union.
-3. The union covers every canonical physical search pack exactly as named by
-   the accepted generation. Each pack is searched with `exact_fp32_scan_v1`;
+   `(distance, domain_id)`. In the domain-graph format every selected domain
+   expands to its one serving anchor; historical one-graph-per-pack generations
+   remain rejected rather than silently mixed. Representative selection is not
+   a substitute for an exhaustive exact union.
+3. The union covers every canonical logical-domain membership exactly as named
+   by the accepted generation. Each domain graph is searched with
+   `exact_fp32_scan_v1` for this exact classification;
    overlap may yield repeated stable IDs but may not create a second logical
    document.
 4. Scores use the canonical FP32 cosine contract. Global dedupe keeps the best score per stable ID and final top-k ordering is `(score descending, stable ID bytewise ascending)`. Equal-score ties and duplicate arrival order therefore

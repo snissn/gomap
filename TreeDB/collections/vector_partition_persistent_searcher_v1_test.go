@@ -1641,8 +1641,8 @@ func TestVectorPartitionNativePackPreflightAndLayeredAdjacencyV1(t *testing.T) {
 	if err := preflightVectorPartitionNativePackV1(1, 3, 2); err != nil {
 		t.Fatal(err)
 	}
-	if err := preflightVectorPartitionNativePackV1(1_000_000, 4096, 16); !errors.Is(err, ErrVectorPartitionSearchUnavailable) {
-		t.Fatalf("over-cap preflight err=%v", err)
+	if err := preflightVectorPartitionNativePackV1(1_000_000, 4096, 16); err != nil {
+		t.Fatalf("chunkable whole-plane preflight err=%v", err)
 	}
 	source := []uint32{columnVectorGraphLayeredAdjacencyMagic, 1, 3, 2, 3, 4, 2, 2, 4}
 	got, err := remapVectorPartitionAdjacencyV1(source, map[int]int{2: 0, 4: 1}, 0)
@@ -2054,6 +2054,312 @@ func TestVectorPartitionNativePackMembershipBindingRejectsCrossManifestMixV1(t *
 	duplicate.Canonicalize()
 	if err := duplicate.Validate(DefaultVectorPartitionManifestLimits()); !errors.Is(err, ErrVectorPartitionManifestInvalid) {
 		t.Fatalf("duplicate home/overlap membership err=%v", err)
+	}
+}
+
+func TestVectorPartitionDomainPackMaterializesOneChunkedSearcherV1(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
+	_, d, col, def := openColumnGraphTypedColumnVectorTestCollection1782(t, 3, 2, []columnGraphRebuildInputRowV2A{
+		{id: "a", vector: []float32{1, 0, 0}},
+		{id: "b", vector: []float32{0, 1, 0}},
+	})
+	defer d.Close()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatal(err)
+	}
+	source, err := col.VectorPartitionSourceIdentityV1(def.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest := testVectorPartitionManifestV1()
+	manifest.State, manifest.RouterGeneration, manifest.RouterAsset, manifest.ReadySetDigest = "building", 0, VectorPartitionAssetV1{}, ""
+	manifest.Collection, manifest.IndexName, manifest.IndexDefinitionDigest = col.name, def.Name, VectorIndexDefinitionDigestV1(def)
+	manifest.Generation = 611
+	manifest.SourceGeneration, manifest.SourceChecksum, manifest.SourceSchemaHash, manifest.SourceRowCount = source.Generation, source.Checksum, source.SchemaHash, source.RowCount
+	manifest.DomainCount = 1
+	manifest.DomainPacks = []VectorPartitionDomainPackV1{{DomainID: 0, PackID: 0}, {DomainID: 0, PackID: 1}}
+	manifest.Placements = []VectorPartitionPlacementV1{{PartitionID: 0, GroupID: "group-a"}, {PartitionID: 1, GroupID: "group-a"}}
+	manifest.Memberships = []VectorPartitionMembershipV1{{VectorOrdinal: 0, PartitionID: 0}, {VectorOrdinal: 1, PartitionID: 1}}
+	manifest.Canonicalize()
+	inputs := []VectorPartitionSearchAssetV1{
+		{Source: source, Generation: manifest.Generation, PartitionID: 0, Dimensions: def.Dimensions},
+		{Source: source, Generation: manifest.Generation, PartitionID: 1, Dimensions: def.Dimensions},
+	}
+	assets, resources, err := col.MaterializeVectorPartitionLocalSearchAssetsV1(def.Name, manifest, 1961, inputs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resources.Release()
+	if len(assets) < 2 {
+		t.Fatalf("domain assets=%+v", assets)
+	}
+	for i, asset := range assets {
+		if asset.PartitionID != 0 || i == 0 && asset.ID != vectorPartitionLocalAssetIDV1(0) || i > 0 && !strings.HasPrefix(asset.ID, vectorPartitionLocalAssetIDV1(0)+"/section/") {
+			t.Fatalf("domain asset[%d]=%+v", i, asset)
+		}
+	}
+	manifest.Assets = assets
+	manifest.Canonicalize()
+	if err := col.PublishVectorPartitionManifestV1(manifest, nil); err != nil {
+		t.Fatal(err)
+	}
+	searcher, err := col.OpenVectorPartitionLocalSearcherForGenerationV1(def.Name, manifest.Generation, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer searcher.Close()
+	got, err := searcher.Search([]float32{0, 1, 0}, 1)
+	if err != nil || len(got) != 1 || got[0].ID != "b" {
+		t.Fatalf("cross-pack search=%+v err=%v", got, err)
+	}
+	status := searcher.Status()
+	wantChunks := uint64(len(assets) - 1)
+	if status.RequiredChunks != wantChunks || status.OpenedChunks != wantChunks || status.AccessedChunks != wantChunks || status.HeapBytes == 0 {
+		t.Fatalf("chunk accounting required/opened/accessed=%d/%d/%d want=%d", status.RequiredChunks, status.OpenedChunks, status.AccessedChunks, wantChunks)
+	}
+	plan, err := NewVectorPartitionGenerationSearchOpenPlanWithContextV1(t.Context(), manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, members, home, overlap, err := plan.partition(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	openAttempt := func(name string, ctx context.Context, group []VectorPartitionAssetV1, wantCanceled bool) {
+		t.Helper()
+		before := mappedresource.GlobalStats().ActiveHandles
+		opened, openErr := col.openVectorPartitionLocalSearcherForPreparedAssetsWithContextV1(ctx, def.Name, manifest.Generation, 0, manifest.IndexDefinitionDigest, manifest.SourceGeneration, manifest.SourceChecksum, manifest.SourceSchemaHash, manifest.SourceRowCount, root, group, members, home, overlap, false, vectorPartitionLocalDefaultGraphVariantV1, false, false)
+		if opened != nil {
+			_ = opened.Close()
+		}
+		if openErr == nil || wantCanceled && !errors.Is(openErr, context.Canceled) {
+			t.Fatalf("%s open err=%v", name, openErr)
+		}
+		if after := mappedresource.GlobalStats().ActiveHandles; after != before {
+			t.Fatalf("%s leaked mapped handles before=%d after=%d", name, before, after)
+		}
+	}
+	group := plan.partitionAssets(0)
+	openAttempt("missing", t.Context(), append([]VectorPartitionAssetV1(nil), group[:len(group)-1]...), false)
+	duplicate := append([]VectorPartitionAssetV1(nil), group...)
+	duplicate = append(duplicate, group[len(group)-1])
+	openAttempt("duplicate", t.Context(), duplicate, false)
+	mixed := append([]VectorPartitionAssetV1(nil), group...)
+	mixed[len(mixed)-1].Ref.Generation++
+	openAttempt("mixed generation", t.Context(), mixed, false)
+	canceled, cancel := context.WithCancel(t.Context())
+	cancel()
+	openAttempt("canceled", canceled, group, true)
+	if _, err := col.OpenVectorPartitionLocalSearcherForGenerationV1(def.Name, manifest.Generation, 1); !errors.Is(err, ErrVectorPartitionSearchUnavailable) {
+		t.Fatalf("non-anchor open err=%v", err)
+	}
+}
+
+func TestVectorPartitionDomainPackSectionsOpenWithoutReassemblyV1(t *testing.T) {
+	input := testColumnHNSWSearchPackInput2312()
+	const rows = 128
+	input.Rows = rows
+	input.M = columnVamanaConnectivityPreservingPartitionM
+	input.EfConstruction = columnVamanaConnectivityPreservingPartitionL
+	input.MaxLayer = 0
+	input.NormalizedVectors = make([]float32, rows*input.VectorStride)
+	input.Levels = make([]uint16, rows)
+	offsets := make([]uint64, rows+1)
+	neighbors := make([]uint32, 0, rows*2)
+	input.RowRefGenerations = make([]int64, rows)
+	input.RowRefPartIDs = make([]int64, rows)
+	input.RowRefRowIndexes = make([]int64, rows)
+	input.RowRefAppliedCommandLSN = make([]int64, rows)
+	input.DocumentIDOffsets = make([]uint64, rows+1)
+	input.DocumentIDBytes = nil
+	for row := 0; row < rows; row++ {
+		input.NormalizedVectors[row*input.VectorStride+row%input.Dimensions] = 1
+		neighbors = append(neighbors, uint32((row+1)%rows), uint32((row+rows-1)%rows))
+		offsets[row+1] = uint64(len(neighbors))
+		input.RowRefGenerations[row] = int64(input.BaseIdentity.ManifestGeneration)
+		input.RowRefPartIDs[row] = 1
+		input.RowRefRowIndexes[row] = int64(row)
+		input.RowRefAppliedCommandLSN[row] = int64(row + 1)
+		input.DocumentIDBytes = fmt.Appendf(input.DocumentIDBytes, "id-%03d", row)
+		input.DocumentIDOffsets[row+1] = uint64(len(input.DocumentIDBytes))
+	}
+	input.AdjacencyLayers = []columnHNSWSearchPackLayerInput{{Offsets: offsets, Neighbors: neighbors}}
+	input.MembershipDigest[0] = 1
+	input.ConnectivityPreservingPartitionVamana = true
+	raw, err := encodeColumnHNSWSearchPack(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	monolithic, _ := testColumnHNSWSearchPackPreparedViewFromBytes2314(t, raw, mappedresource.SourceHeapCopy, input.BaseIdentity)
+	defer monolithic.Close()
+	payloads, err := splitVectorPartitionDomainSearchPackV1(raw, 7, 700)
+	if err != nil || len(payloads) < 2 {
+		t.Fatalf("split payloads=%d err=%v", len(payloads), err)
+	}
+	manager := mappedresource.NewManager()
+	scope := mappedresource.Scope{Kind: mappedresource.ScopePreparedSearch, ID: "domain-chunks", Namespace: "test", Generation: 11}
+	acquire := func(i int) *mappedresource.Handle {
+		payload := payloads[i].payload
+		handle, err := manager.AcquireBytes(mappedresource.Key{Class: mappedresource.ClassTypedColumnAsset, Namespace: "test", Kind: "domain-chunk", Generation: 11, PartID: 8, FileID: uint32(i + 1), Length: int64(len(payload))}, scope, mappedresource.SourceHeapCopy, payload, mappedresource.AcquireOptions{Reason: "domain chunk test"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return handle
+	}
+	root := acquire(0)
+	sections := make(map[columnHNSWSearchPackSectionKey][]*mappedresource.Handle)
+	for i := 1; i < len(payloads); i++ {
+		key, chunk, err := parseVectorPartitionLocalSectionChunkAssetIDV1(7, payloads[i].id)
+		if err != nil || chunk != uint32(len(sections[key])) {
+			t.Fatalf("chunk id=%q ordinal=%d err=%v", payloads[i].id, chunk, err)
+		}
+		sections[key] = append(sections[key], acquire(i))
+	}
+	view, err := newColumnHNSWSearchPackPreparedViewFromSectionHandlesWithContext(t.Context(), manager, root, sections, columnHNSWSearchPackDecodeOptions{ExpectedBaseIdentity: input.BaseIdentity, ExpectedMembershipDigest: input.MembershipDigest})
+	if err != nil {
+		_ = root.Release()
+		for _, handles := range sections {
+			for _, handle := range handles {
+				_ = handle.Release()
+			}
+		}
+		t.Fatal(err)
+	}
+	defer view.Close()
+	storedBytes := 0
+	for _, payload := range payloads {
+		storedBytes += len(payload.payload)
+	}
+	if view.Header.Version != columnHNSWSearchPackVersionV6 || view.normalizedVectorChunks.length != uint64(input.Rows*input.VectorStride) || len(view.normalizedVectorChunks.values) < 2 || len(view.adjacencyNeighborChunks[0].values) < 2 || len(view.documentIDByteChunks.values) < 2 || view.heapCopyBytes != uint64(storedBytes) || view.chunkMetaBytes == 0 {
+		t.Fatalf("chunked view header=%+v vectors=%d chunks=(%d,%d,%d) bytes=%d metadata=%d stored=%d", view.Header, view.normalizedVectorChunks.length, len(view.normalizedVectorChunks.values), len(view.adjacencyNeighborChunks[0].values), len(view.documentIDByteChunks.values), view.heapCopyBytes, view.chunkMetaBytes, storedBytes)
+	}
+	oneHandle := *view
+	oneHandle.handles = make([]*mappedresource.Handle, 1)
+	twoHandles := *view
+	twoHandles.handles = make([]*mappedresource.Handle, 2)
+	if growth := twoHandles.retainedChunkMetadataBytes() - oneHandle.retainedChunkMetadataBytes(); growth < mappedresource.ConservativeHandleMetadataBytes() {
+		t.Fatalf("per-handle metadata growth=%d want at least %d", growth, mappedresource.ConservativeHandleMetadataBytes())
+	}
+	for name, chunks := range map[string][][]byte{
+		"unused trailing chunk": append(append([][]byte(nil), view.documentIDByteChunks.values...), []byte{'x'}),
+		"trailing bytes": func() [][]byte {
+			chunks := append([][]byte(nil), view.documentIDByteChunks.values...)
+			chunks[len(chunks)-1] = append(append([]byte(nil), chunks[len(chunks)-1]...), 'x')
+			return chunks
+		}(),
+	} {
+		invalid := *view
+		invalid.documentIDByteChunks = newColumnHNSWSearchPackPreparedChunks(chunks)
+		if err := invalid.validateChunkedDocumentIDsWithContext(t.Context(), uint64(input.Rows)); err == nil {
+			t.Fatalf("accepted %s", name)
+		}
+	}
+	opts := columnVectorGraphNativeSearchOptions{TopK: 10, EfSearch: 64, StatsMode: columnVectorGraphNativeSearchStatsModeFullDiagnostics}
+	query := []float32{1, 0, 0}
+	var wantScratch, gotScratch columnVectorGraphNativeSearchScratch
+	var wantTrace, gotTrace columnHNSWSearchPackAttributionTrace
+	want, wantStats, err := monolithic.searchCosineWithContextTrace(t.Context(), query, opts, &wantScratch, &wantTrace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, gotStats, err := view.searchCosineWithContextTrace(t.Context(), query, opts, &gotScratch, &gotTrace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, want) || !reflect.DeepEqual(gotTrace, wantTrace) || gotStats.PreparedScoreCalls != wantStats.PreparedScoreCalls || gotStats.VisitedNodes != wantStats.VisitedNodes {
+		t.Fatalf("chunk parity results=%t trace=%t scores=%d/%d visited=%d/%d", reflect.DeepEqual(got, want), reflect.DeepEqual(gotTrace, wantTrace), gotStats.PreparedScoreCalls, wantStats.PreparedScoreCalls, gotStats.VisitedNodes, wantStats.VisitedNodes)
+	}
+	wantCanonical, err := canonicalizeVectorPartitionNativeResultsV1(t.Context(), monolithic, query, wantScratch.top, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotCanonical, err := canonicalizeVectorPartitionNativeResultsV1(t.Context(), view, query, gotScratch.top, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(gotCanonical, wantCanonical) {
+		t.Fatalf("canonical top10 got=%+v want=%+v", gotCanonical, wantCanonical)
+	}
+	chunkForOrdinal := func(ordinal int) int {
+		start := uint64(ordinal) * uint64(view.Header.VectorStride)
+		return sort.Search(len(view.normalizedVectorChunks.values), func(i int) bool { return view.normalizedVectorChunks.starts[i+1] > start })
+	}
+	crossed := false
+	for _, event := range gotTrace.EdgeEvents {
+		if event.NewlyVisited && chunkForOrdinal(event.SourceOrdinal) != chunkForOrdinal(event.DestinationOrdinal) {
+			crossed = true
+			break
+		}
+	}
+	if !crossed {
+		t.Fatal("chunked traversal did not follow a cross-chunk edge in the shared frontier")
+	}
+}
+
+func TestVectorPartitionDomainPackRejectsOneByteOversizeRecordV1(t *testing.T) {
+	input := testColumnHNSWSearchPackInput2312()
+	input.Rows = 1
+	input.M = columnVamanaConnectivityPreservingPartitionM
+	input.EfConstruction = columnVamanaConnectivityPreservingPartitionL
+	input.MaxLayer = 0
+	input.NormalizedVectors = []float32{1, 0, 0, 0}
+	input.Levels = []uint16{0}
+	input.AdjacencyLayers = []columnHNSWSearchPackLayerInput{{Offsets: []uint64{0, 0}}}
+	input.RowRefGenerations = []int64{int64(input.BaseIdentity.ManifestGeneration)}
+	input.RowRefPartIDs = []int64{1}
+	input.RowRefRowIndexes = []int64{0}
+	input.RowRefAppliedCommandLSN = []int64{1}
+	input.DocumentIDOffsets = []uint64{0, 700}
+	input.DocumentIDBytes = make([]byte, 700)
+	input.MembershipDigest[0] = 1
+	input.ConnectivityPreservingPartitionVamana = true
+	raw, err := encodeColumnHNSWSearchPack(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payloads, err := splitVectorPartitionDomainSearchPackV1(raw, 0, 700)
+	if err != nil {
+		t.Fatalf("exact-bound record: %v", err)
+	}
+	for _, payload := range payloads[1:] {
+		key, _, err := parseVectorPartitionLocalSectionChunkAssetIDV1(0, payload.id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if key.kind == columnHNSWSearchPackSectionAdjacencyNeighbors {
+			t.Fatalf("empty adjacency emitted asset %q", payload.id)
+		}
+	}
+	input.DocumentIDOffsets[1]++
+	input.DocumentIDBytes = append(input.DocumentIDBytes, 0)
+	raw, err = encodeColumnHNSWSearchPack(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := splitVectorPartitionDomainSearchPackV1(raw, 0, 700); !errors.Is(err, ErrVectorPartitionSearchUnavailable) || !strings.Contains(err.Error(), "indivisible") {
+		t.Fatalf("one-byte-over record err=%v", err)
+	}
+}
+
+func TestVectorPartitionChunkedSingletonScoringUsesLogicalDimensionsV1(t *testing.T) {
+	const dimensions, stride = 65, 72
+	vectors := make([]float32, 2*stride)
+	vectors[0], vectors[1], vectors[64] = 1, 1, 1
+	query := make([]float32, stride)
+	query[0], query[1], query[64] = 1, -1, float32(math.Ldexp(1, -25))
+	view := &columnHNSWSearchPackPreparedView{Header: columnHNSWSearchPackHeader{Rows: 2, Dimensions: dimensions, VectorStride: stride}}
+	view.normalizedVectorChunks = newColumnHNSWSearchPackPreparedChunks([][]float32{vectors[:stride], vectors[stride:]})
+	want, err := view.scoreOrdinal(query, 0, columnVectorGraphScoreBatchModeIndexed, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var scratch columnVectorGraphNativeSearchScratch
+	got, err := view.scoreRowIDs(query, []uint32{0}, nil, columnVectorGraphScoreBatchModeIndexed, &scratch, nil)
+	if err != nil || len(got) != 1 || math.Float64bits(got[0]) != math.Float64bits(want) {
+		t.Fatalf("singleton chunked score=%v want=%v err=%v", got, want, err)
+	}
+	if cap(scratch.segmentedScoreRowIDs) != 0 {
+		t.Fatal("singleton chunked score used padded segmented batch path")
 	}
 }
 

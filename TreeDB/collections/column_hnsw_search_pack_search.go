@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"sort"
 
 	"github.com/snissn/gomap/TreeDB/internal/vectorops"
 )
@@ -854,10 +855,17 @@ func columnHNSWSearchPackNextCandidateSeedWithContext(ctx context.Context, start
 }
 
 func (v *columnHNSWSearchPackPreparedView) maxLayerForOrdinal(ordinal int) (int, error) {
-	if v == nil || ordinal < 0 || ordinal >= len(v.Levels) {
+	if v == nil || ordinal < 0 || ordinal >= v.Header.Rows {
 		return 0, fmt.Errorf("collections: hnsw_search_pack_v1 max-layer ordinal=%d unavailable", ordinal)
 	}
-	return int(v.Levels[ordinal]), nil
+	level, ok := v.levelChunks.at(uint64(ordinal))
+	if !ok && ordinal < len(v.Levels) {
+		level, ok = v.Levels[ordinal], true
+	}
+	if !ok {
+		return 0, fmt.Errorf("collections: hnsw_search_pack_v1 max-layer ordinal=%d unavailable", ordinal)
+	}
+	return int(level), nil
 }
 
 func (v *columnHNSWSearchPackPreparedView) greedyNearestAtLayer(normalizedQuery []float32, entryOrdinal int, layer int, scoreBatchMode columnVectorGraphScoreBatchMode, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats, countLoopEdges bool, loopEdgeVisits *uint64) (int, error) {
@@ -1088,7 +1096,7 @@ func (v *columnHNSWSearchPackPreparedView) scoreAndPushFrontierVisitedTile(norma
 	if len(rowIDs) == 0 {
 		return nil
 	}
-	if scoreBatchMode != columnVectorGraphScoreBatchModeScalar && len(rowIDs) > 1 && scratch != nil && len(normalizedQuery) >= v.Header.VectorStride {
+	if scoreBatchMode != columnVectorGraphScoreBatchModeScalar && len(rowIDs) > 1 && scratch != nil && len(normalizedQuery) >= v.Header.VectorStride && len(v.NormalizedVectors) == v.Header.Rows*v.Header.VectorStride {
 		scratch.scoreTileDots = ensureColumnVectorGraphNativeFloat32Scratch(scratch.scoreTileDots, len(rowIDs))
 		dots := scratch.scoreTileDots[:len(rowIDs)]
 		scoreStart := columnVectorGraphNativeSearchStartDistanceKernel(stats)
@@ -1143,7 +1151,7 @@ func (v *columnHNSWSearchPackPreparedView) scoreAndPushFrontierVisitedTileFast(n
 	if len(rowIDs) == 0 {
 		return nil
 	}
-	if scoreBatchMode != columnVectorGraphScoreBatchModeScalar && len(rowIDs) > 1 && scratch != nil && len(normalizedQuery) >= v.Header.VectorStride {
+	if scoreBatchMode != columnVectorGraphScoreBatchModeScalar && len(rowIDs) > 1 && scratch != nil && len(normalizedQuery) >= v.Header.VectorStride && len(v.NormalizedVectors) == v.Header.Rows*v.Header.VectorStride {
 		scratch.scoreTileDots = ensureColumnVectorGraphNativeFloat32Scratch(scratch.scoreTileDots, len(rowIDs))
 		dots := scratch.scoreTileDots[:len(rowIDs)]
 		scoreStart := columnVectorGraphNativeSearchStartDistanceKernel(stats)
@@ -1185,12 +1193,13 @@ func (v *columnHNSWSearchPackPreparedView) scoreOrdinal(normalizedQuery []float3
 	if v == nil || ordinal < 0 || ordinal >= v.Header.Rows {
 		return 0, fmt.Errorf("collections: hnsw_search_pack_v1 vector ordinal=%d unavailable", ordinal)
 	}
-	start := ordinal * v.Header.VectorStride
-	end := start + v.Header.Dimensions
-	if start < 0 || end < start || end > len(v.NormalizedVectors) || len(normalizedQuery) < v.Header.Dimensions {
+	if len(normalizedQuery) < v.Header.Dimensions {
 		return 0, fmt.Errorf("collections: hnsw_search_pack_v1 vector ordinal=%d shape mismatch", ordinal)
 	}
-	vector := v.NormalizedVectors[start:end]
+	vector, ok := v.normalizedVectorForOrdinal(ordinal)
+	if !ok {
+		return 0, fmt.Errorf("collections: hnsw_search_pack_v1 vector ordinal=%d crosses a chunk", ordinal)
+	}
 	scoreStart := columnVectorGraphNativeSearchStartDistanceKernel(stats)
 	score := float64(vectorDotProductFloat32(normalizedQuery[:v.Header.Dimensions], vector))
 	if v.Header.ExternalNormalizedVectors {
@@ -1202,6 +1211,21 @@ func (v *columnHNSWSearchPackPreparedView) scoreOrdinal(normalizedQuery []float3
 	v.recordScoreStats(stats, 1)
 	_ = scratch
 	return score, nil
+}
+
+func (v *columnHNSWSearchPackPreparedView) normalizedVectorForOrdinal(ordinal int) ([]float32, bool) {
+	if v == nil || ordinal < 0 || ordinal >= v.Header.Rows {
+		return nil, false
+	}
+	start := uint64(ordinal * v.Header.VectorStride)
+	if vector, ok := v.normalizedVectorChunks.span(start, start+uint64(v.Header.Dimensions)); ok {
+		return vector, true
+	}
+	end := start + uint64(v.Header.Dimensions)
+	if end > uint64(len(v.NormalizedVectors)) || end > uint64(math.MaxInt) {
+		return nil, false
+	}
+	return v.NormalizedVectors[int(start):int(end)], true
 }
 
 func (v *columnHNSWSearchPackPreparedView) scoreRowIDs(normalizedQuery []float32, rowIDs []uint32, dst []float64, scoreBatchMode columnVectorGraphScoreBatchMode, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) ([]float64, error) {
@@ -1243,7 +1267,7 @@ func (v *columnHNSWSearchPackPreparedView) scoreRowIDs(normalizedQuery []float32
 		}
 		return dst, nil
 	}
-	if scoreBatchMode != columnVectorGraphScoreBatchModeScalar && len(rowIDs) > 1 && scratch != nil && len(normalizedQuery) >= v.Header.VectorStride {
+	if scoreBatchMode != columnVectorGraphScoreBatchModeScalar && len(rowIDs) > 1 && scratch != nil && len(normalizedQuery) >= v.Header.VectorStride && len(v.NormalizedVectors) == v.Header.Rows*v.Header.VectorStride {
 		scratch.scoreTileDots = ensureColumnVectorGraphNativeFloat32Scratch(scratch.scoreTileDots, len(rowIDs))
 		dots := scratch.scoreTileDots[:len(rowIDs)]
 		scoreStart := columnVectorGraphNativeSearchStartDistanceKernel(stats)
@@ -1261,6 +1285,11 @@ func (v *columnHNSWSearchPackPreparedView) scoreRowIDs(normalizedQuery []float32
 			return dst, nil
 		}
 	}
+	if scoreBatchMode != columnVectorGraphScoreBatchModeScalar && len(rowIDs) > 1 && scratch != nil && len(normalizedQuery) >= v.Header.VectorStride && len(v.normalizedVectorChunks.values) > 1 {
+		if scores, ok := v.scoreSegmentedRowIDs(normalizedQuery, rowIDs, dst, scratch, stats); ok {
+			return scores, nil
+		}
+	}
 	scoreStart := columnVectorGraphNativeSearchStartDistanceKernel(stats)
 	for i, rowID := range rowIDs {
 		score, err := v.scoreOrdinal(normalizedQuery, int(rowID), scoreBatchMode, scratch, nil)
@@ -1276,6 +1305,64 @@ func (v *columnHNSWSearchPackPreparedView) scoreRowIDs(normalizedQuery []float32
 	recordColumnHNSWSearchPackScoreBatchStats(stats, len(rowIDs), optimized, !optimized)
 	v.recordScoreStats(stats, len(rowIDs))
 	return dst, nil
+}
+
+func (v *columnHNSWSearchPackPreparedView) scoreSegmentedRowIDs(normalizedQuery []float32, rowIDs []uint32, dst []float64, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) ([]float64, bool) {
+	if v == nil || scratch == nil || v.Header.VectorStride <= 0 || len(normalizedQuery) < v.Header.VectorStride {
+		return dst[:0], false
+	}
+	chunkForRow := func(row uint32) (int, uint32, bool) {
+		start := uint64(row) * uint64(v.Header.VectorStride)
+		if row >= uint32(v.Header.Rows) || start >= v.normalizedVectorChunks.length {
+			return 0, 0, false
+		}
+		chunk := sort.Search(len(v.normalizedVectorChunks.values), func(i int) bool { return v.normalizedVectorChunks.starts[i+1] > start })
+		if chunk >= len(v.normalizedVectorChunks.values) {
+			return 0, 0, false
+		}
+		local := start - v.normalizedVectorChunks.starts[chunk]
+		if local%uint64(v.Header.VectorStride) != 0 || local/uint64(v.Header.VectorStride) > math.MaxUint32 {
+			return 0, 0, false
+		}
+		return chunk, uint32(local / uint64(v.Header.VectorStride)), true
+	}
+	scratch.segmentedScoreRowIDs = ensureColumnVectorGraphNativeUint32Scratch(scratch.segmentedScoreRowIDs, len(rowIDs))
+	scratch.scoreTileDots = ensureColumnVectorGraphNativeFloat32Scratch(scratch.scoreTileDots, len(rowIDs))
+	for runStart := 0; runStart < len(rowIDs); {
+		chunk, _, ok := chunkForRow(rowIDs[runStart])
+		if !ok {
+			return dst[:0], false
+		}
+		runEnd := runStart + 1
+		for runEnd < len(rowIDs) {
+			next, _, nextOK := chunkForRow(rowIDs[runEnd])
+			if !nextOK || next != chunk {
+				break
+			}
+			runEnd++
+		}
+		localRows := scratch.segmentedScoreRowIDs[:runEnd-runStart]
+		for i, row := range rowIDs[runStart:runEnd] {
+			_, localRows[i], ok = chunkForRow(row)
+			if !ok {
+				return dst[:0], false
+			}
+		}
+		dots := scratch.scoreTileDots[:runEnd-runStart]
+		scoreStart := columnVectorGraphNativeSearchStartDistanceKernel(stats)
+		status := vectorops.DotFloat32IndexedPrevalidated(dots, v.normalizedVectorChunks.values[chunk], normalizedQuery[:v.Header.VectorStride], localRows, v.Header.VectorStride)
+		columnVectorGraphNativeSearchFinishDistanceKernel(stats, scoreStart)
+		if status.Invalid || status.Rows != len(localRows) {
+			return dst[:0], false
+		}
+		for i, dot := range dots {
+			dst[runStart+i] = float64(dot)
+		}
+		recordColumnHNSWSearchPackScoreBatchStats(stats, len(localRows), status.Optimized, status.Fallback)
+		runStart = runEnd
+	}
+	v.recordScoreStats(stats, len(rowIDs))
+	return dst, true
 }
 
 func recordColumnHNSWSearchPackScoreBatchStats(stats *columnVectorGraphNativeSearchStats, tileSize int, optimized bool, scalarFallback bool) {
@@ -1304,19 +1391,34 @@ func (v *columnHNSWSearchPackPreparedView) recordScoreStats(stats *columnVectorG
 }
 
 func (v *columnHNSWSearchPackPreparedView) adjacencyLayerForOrdinal(ordinal int, layer int, stats *columnVectorGraphNativeSearchStats) ([]uint32, error) {
-	if v == nil || layer < 0 || layer >= len(v.AdjacencyLayers) || ordinal < 0 || ordinal >= v.Header.Rows {
+	if v == nil || layer < 0 || ordinal < 0 || ordinal >= v.Header.Rows {
 		return nil, fmt.Errorf("collections: hnsw_search_pack_v1 adjacency ordinal=%d layer=%d unavailable", ordinal, layer)
 	}
-	adjacency := v.AdjacencyLayers[layer]
-	if ordinal+1 >= len(adjacency.Offsets) {
+	if layer >= len(v.adjacencyOffsetChunks) || layer >= len(v.adjacencyNeighborChunks) {
+		if layer >= len(v.AdjacencyLayers) || ordinal+1 >= len(v.AdjacencyLayers[layer].Offsets) {
+			return nil, fmt.Errorf("collections: hnsw_search_pack_v1 adjacency ordinal=%d layer=%d unavailable", ordinal, layer)
+		}
+		adjacency := v.AdjacencyLayers[layer]
+		start64, end64 := adjacency.Offsets[ordinal], adjacency.Offsets[ordinal+1]
+		if end64 < start64 || end64 > uint64(len(adjacency.Neighbors)) || end64 > uint64(math.MaxInt) {
+			return nil, fmt.Errorf("collections: hnsw_search_pack_v1 adjacency ordinal=%d layer=%d bounds invalid", ordinal, layer)
+		}
+		neighbors := adjacency.Neighbors[int(start64):int(end64)]
+		v.recordAdjacencyStats(stats, len(neighbors))
+		return neighbors, nil
+	}
+	start64, sok := v.adjacencyOffsetChunks[layer].at(uint64(ordinal))
+	end64, eok := v.adjacencyOffsetChunks[layer].at(uint64(ordinal + 1))
+	if !sok || !eok {
 		return nil, fmt.Errorf("collections: hnsw_search_pack_v1 adjacency ordinal=%d layer=%d offsets unavailable", ordinal, layer)
 	}
-	start64 := adjacency.Offsets[ordinal]
-	end64 := adjacency.Offsets[ordinal+1]
-	if end64 < start64 || end64 > uint64(len(adjacency.Neighbors)) || end64 > uint64(math.MaxInt) {
+	if end64 < start64 || end64 > v.adjacencyNeighborChunks[layer].length || end64 > uint64(math.MaxInt) {
 		return nil, fmt.Errorf("collections: hnsw_search_pack_v1 adjacency ordinal=%d layer=%d bounds invalid", ordinal, layer)
 	}
-	neighbors := adjacency.Neighbors[int(start64):int(end64)]
+	neighbors, ok := v.adjacencyNeighborChunks[layer].span(start64, end64)
+	if !ok {
+		return nil, fmt.Errorf("collections: hnsw_search_pack_v1 adjacency ordinal=%d layer=%d crosses a chunk", ordinal, layer)
+	}
 	v.recordAdjacencyStats(stats, len(neighbors))
 	return neighbors, nil
 }
@@ -1401,26 +1503,37 @@ func (v *columnHNSWSearchPackPreparedView) fetchTopSearchResults(scratch *column
 }
 
 func (v *columnHNSWSearchPackPreparedView) documentIDForOrdinal(ordinal int) ([]byte, bool) {
-	if v == nil || ordinal < 0 || ordinal >= v.Header.Rows || ordinal+1 >= len(v.DocumentIDOffsets) {
+	if v == nil || ordinal < 0 || ordinal >= v.Header.Rows {
 		return nil, false
 	}
-	start64 := v.DocumentIDOffsets[ordinal]
-	end64 := v.DocumentIDOffsets[ordinal+1]
-	if end64 < start64 || end64 > uint64(len(v.DocumentIDBytes)) || end64 > uint64(math.MaxInt) {
+	start64, sok := v.documentIDOffsetChunks.at(uint64(ordinal))
+	end64, eok := v.documentIDOffsetChunks.at(uint64(ordinal + 1))
+	if (!sok || !eok) && ordinal+1 < len(v.DocumentIDOffsets) {
+		start64, end64, sok, eok = v.DocumentIDOffsets[ordinal], v.DocumentIDOffsets[ordinal+1], true, true
+		if end64 < start64 || end64 > uint64(len(v.DocumentIDBytes)) || end64 > uint64(math.MaxInt) {
+			return nil, false
+		}
+		return v.DocumentIDBytes[int(start64):int(end64)], true
+	}
+	if !sok || !eok || end64 < start64 || end64 > v.documentIDByteChunks.length || end64 > uint64(math.MaxInt) {
 		return nil, false
 	}
-	return v.DocumentIDBytes[int(start64):int(end64)], true
+	return v.documentIDByteChunks.span(start64, end64)
 }
 
 func (v *columnHNSWSearchPackPreparedView) rowRefForOrdinal(ordinal int) (DocumentRowRef, bool) {
-	if v == nil || ordinal < 0 || ordinal >= v.Header.Rows || ordinal >= len(v.RowRefGenerations) || ordinal >= len(v.RowRefPartIDs) || ordinal >= len(v.RowRefRowIndexes) || ordinal >= len(v.RowRefAppliedLSNs) {
+	if v == nil || ordinal < 0 || ordinal >= v.Header.Rows {
 		return DocumentRowRef{}, false
 	}
-	generation := v.RowRefGenerations[ordinal]
-	partID := v.RowRefPartIDs[ordinal]
-	rowIndex := v.RowRefRowIndexes[ordinal]
-	appliedLSN := v.RowRefAppliedLSNs[ordinal]
-	if generation <= 0 || partID <= 0 || rowIndex < 0 || appliedLSN <= 0 {
+	generation, gok := v.rowRefGenerationChunks.at(uint64(ordinal))
+	partID, pok := v.rowRefPartIDChunks.at(uint64(ordinal))
+	rowIndex, rok := v.rowRefRowIndexChunks.at(uint64(ordinal))
+	appliedLSN, aok := v.rowRefAppliedLSNChunks.at(uint64(ordinal))
+	if (!gok || !pok || !rok || !aok) && ordinal < len(v.RowRefGenerations) && ordinal < len(v.RowRefPartIDs) && ordinal < len(v.RowRefRowIndexes) && ordinal < len(v.RowRefAppliedLSNs) {
+		generation, partID, rowIndex, appliedLSN = v.RowRefGenerations[ordinal], v.RowRefPartIDs[ordinal], v.RowRefRowIndexes[ordinal], v.RowRefAppliedLSNs[ordinal]
+		gok, pok, rok, aok = true, true, true, true
+	}
+	if !gok || !pok || !rok || !aok || generation <= 0 || partID <= 0 || rowIndex < 0 || appliedLSN <= 0 {
 		return DocumentRowRef{}, false
 	}
 	return DocumentRowRef{

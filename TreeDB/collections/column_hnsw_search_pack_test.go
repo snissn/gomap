@@ -270,7 +270,10 @@ func TestColumnHNSWSearchPackPreparedAssetValidationMapped4429(t *testing.T) {
 		}
 		return
 	}
-	if stats.TotalMappedBytes != uint64(ref.Length) || stats.TotalHeapCopyBytes != 0 || stats.ActiveHandles != 0 || stats.ActiveMappedBytes != 0 || stats.ActiveHeapCopyBytes != 0 {
+	pageSize := int64(os.Getpagesize())
+	mappedLength := ref.Offset%pageSize + ref.Length
+	wantMappedBytes := (mappedLength + pageSize - 1) / pageSize * pageSize
+	if stats.TotalMappedBytes != uint64(wantMappedBytes) || stats.TotalHeapCopyBytes != 0 || stats.ActiveHandles != 0 || stats.ActiveMappedBytes != 0 || stats.ActiveHeapCopyBytes != 0 {
 		t.Fatalf("validation mappedresource stats=%+v want one released mapped range and no heap copy", stats)
 	}
 
@@ -1379,7 +1382,11 @@ func TestColumnHNSWSearchPackPreparedViewMappedFile2314(t *testing.T) {
 		t.Fatalf("heap source status=%s want heap", view.status)
 	}
 	stats := view.routeStats(columnHNSWSearchPackPreparedStatusMissing, 0)
-	if stats.HNSWSearchPackActive != 1 || stats.HNSWSearchPackActiveHandles != 1 || stats.HNSWSearchPackMappedBytes+stats.HNSWSearchPackHeapCopyBytes != uint64(len(raw)) {
+	wantBytes := uint64(len(raw))
+	if handle.Source() == mappedresource.SourceMapped {
+		wantBytes = uint64(handle.AccountedBytes())
+	}
+	if stats.HNSWSearchPackActive != 1 || stats.HNSWSearchPackActiveHandles != 1 || stats.HNSWSearchPackMappedBytes+stats.HNSWSearchPackHeapCopyBytes != wantBytes {
 		t.Fatalf("mapped file stats=%+v source=%s", stats, handle.Source())
 	}
 	if err := view.Close(); err != nil {

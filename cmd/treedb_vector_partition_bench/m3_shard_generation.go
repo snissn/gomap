@@ -82,27 +82,41 @@ func m3ValidateShardGenerationInputsV1(plan vectorpartition.ShardPlanV1, ratio f
 }
 
 // m3ValidateActualShardPackBytesV1 binds the planner's conservative per-pack
-// byte envelope to the immutable bytes the encoder actually produced. It runs
-// before manifest publication and again when retained assets are admitted.
-func m3ValidateActualShardPackBytesV1(assets []collections.VectorPartitionAssetV1, summaries []vectorpartition.ShardPackSummaryV1) error {
+// byte envelope to the immutable bytes the encoder actually produced. Domain
+// graphs may span several physical-pack envelopes and several storage chunks.
+func m3ValidateActualShardPackBytesV1(assets []collections.VectorPartitionAssetV1, summaries []vectorpartition.ShardPackSummaryV1, packsPerDomain int) error {
 	if len(summaries) == 0 {
 		return nil
 	}
-	if len(assets) != len(summaries) {
-		return fmt.Errorf("materialized %d shard packs for %d planned packs", len(assets), len(summaries))
+	if packsPerDomain < 1 || len(summaries)%packsPerDomain != 0 {
+		return errors.New("planned shard packs do not form complete domains")
 	}
-	seen := make([]bool, len(summaries))
+	domains := len(summaries) / packsPerDomain
+	planned := make([]uint64, domains)
+	actual := make([]uint64, domains)
+	for partition, summary := range summaries {
+		if summary.Partition != partition || planned[partition/packsPerDomain] > ^uint64(0)-summary.Bytes {
+			return fmt.Errorf("planned shard pack %d is noncanonical or overflows its domain", partition)
+		}
+		planned[partition/packsPerDomain] += summary.Bytes
+	}
 	for _, asset := range assets {
 		if asset.PartitionID >= uint32(len(summaries)) {
 			return fmt.Errorf("materialized shard pack %d is outside the canonical plan", asset.PartitionID)
 		}
 		partition := int(asset.PartitionID)
-		if seen[partition] || summaries[partition].Partition != partition {
-			return fmt.Errorf("materialized shard pack %d is duplicate or outside the canonical plan", asset.PartitionID)
+		if partition%packsPerDomain != 0 {
+			return fmt.Errorf("materialized shard pack %d is not a domain anchor", asset.PartitionID)
 		}
-		seen[partition] = true
-		if asset.Bytes == 0 || asset.Bytes > summaries[partition].Bytes {
-			return fmt.Errorf("materialized shard pack %d bytes=%d outside planned envelope (0,%d]", partition, asset.Bytes, summaries[partition].Bytes)
+		domain := partition / packsPerDomain
+		if actual[domain] > ^uint64(0)-asset.Bytes {
+			return fmt.Errorf("materialized domain %d byte accounting overflow", domain)
+		}
+		actual[domain] += asset.Bytes
+	}
+	for domain := range planned {
+		if actual[domain] == 0 || actual[domain] > planned[domain] {
+			return fmt.Errorf("materialized domain %d bytes=%d outside planned envelope (0,%d]", domain, actual[domain], planned[domain])
 		}
 	}
 	return nil
@@ -189,7 +203,7 @@ func m3ValidateRetainedShardPackBytesV1(dir string, d m3VariantDescriptorV1, ass
 	if err != nil {
 		return vectorpartition.ShardGenerationDescriptorV1{}, err
 	}
-	if err := m3ValidateActualShardPackBytesV1(assets, record.PackSummaries); err != nil {
+	if err := m3ValidateActualShardPackBytesV1(assets, record.PackSummaries, record.Plan.PacksPerDomain); err != nil {
 		return vectorpartition.ShardGenerationDescriptorV1{}, err
 	}
 	return record, nil

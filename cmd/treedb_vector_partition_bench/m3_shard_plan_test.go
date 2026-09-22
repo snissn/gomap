@@ -1,6 +1,7 @@
 package main
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 
@@ -162,7 +163,7 @@ func TestM3ActualShardPackBytesStayInsidePlannedEnvelopeV1(t *testing.T) {
 		{PartitionID: 1, Bytes: 80},
 		{PartitionID: 0, Bytes: 99},
 	}
-	if err := m3ValidateActualShardPackBytesV1(assets, summaries); err != nil {
+	if err := m3ValidateActualShardPackBytesV1(assets, summaries, 1); err != nil {
 		t.Fatal(err)
 	}
 	for name, mutate := range map[string]func([]collections.VectorPartitionAssetV1){
@@ -173,16 +174,48 @@ func TestM3ActualShardPackBytesStayInsidePlannedEnvelopeV1(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			candidate := append([]collections.VectorPartitionAssetV1(nil), assets...)
 			mutate(candidate)
-			if err := m3ValidateActualShardPackBytesV1(candidate, summaries); err == nil {
+			if err := m3ValidateActualShardPackBytesV1(candidate, summaries, 1); err == nil {
 				t.Fatal("accepted pack bytes outside the planned envelope")
 			}
 		})
 	}
-	if err := m3ValidateActualShardPackBytesV1(assets[:1], summaries); err == nil {
+	if err := m3ValidateActualShardPackBytesV1(assets[:1], summaries, 1); err == nil {
 		t.Fatal("accepted incomplete pack coverage")
 	}
-	if err := m3ValidateActualShardPackBytesV1(assets, nil); err != nil {
+	if err := m3ValidateActualShardPackBytesV1(assets, nil, 1); err != nil {
 		t.Fatalf("unplanned packs rejected: %v", err)
+	}
+	domainSummaries := []vectorpartition.ShardPackSummaryV1{
+		{Partition: 0, Bytes: 40}, {Partition: 1, Bytes: 60},
+		{Partition: 2, Bytes: 30}, {Partition: 3, Bytes: 50},
+	}
+	domainAssets := []collections.VectorPartitionAssetV1{
+		{PartitionID: 0, Bytes: 20}, {PartitionID: 0, Bytes: 80},
+		{PartitionID: 2, Bytes: 80},
+	}
+	if err := m3ValidateActualShardPackBytesV1(domainAssets, domainSummaries, 2); err != nil {
+		t.Fatalf("domain chunks rejected: %v", err)
+	}
+	domainAssets[0].PartitionID = 1
+	if err := m3ValidateActualShardPackBytesV1(domainAssets, domainSummaries, 2); err == nil {
+		t.Fatal("accepted a chunk on a non-anchor pack")
+	}
+}
+
+func TestM3ServingPartitionsCoalescePhysicalDomainPacksV1(t *testing.T) {
+	manifest := collections.VectorPartitionManifestV1{
+		PartitionCount: 4, DomainCount: 2,
+		DomainPacks: []collections.VectorPartitionDomainPackV1{
+			{DomainID: 0, PackID: 0}, {DomainID: 0, PackID: 1},
+			{DomainID: 1, PackID: 2}, {DomainID: 1, PackID: 3},
+		},
+	}
+	partitions, members, err := m3ServingPartitionsV1(manifest, [][]int{{3, 1}, {2, 1}, {5}, {4}}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(partitions, []uint32{0, 2}) || !reflect.DeepEqual(members, [][]int{{1, 2, 3}, {4, 5}}) {
+		t.Fatalf("serving partitions=%v members=%v", partitions, members)
 	}
 }
 
@@ -272,12 +305,16 @@ func TestM3ShardGenerationDescriptorPersistsAndReopensV1(t *testing.T) {
 	if err := m3VerifyRetainedShardGenerationV1(dir, descriptor); err != nil {
 		t.Fatalf("matching record rejected: %v", err)
 	}
-	assets := []collections.VectorPartitionAssetV1{
-		{PartitionID: 0, Bytes: got.PackSummaries[0].Bytes},
-		{PartitionID: 1, Bytes: got.PackSummaries[1].Bytes},
-	}
+	assets := []collections.VectorPartitionAssetV1{{
+		PartitionID: 0,
+		Bytes:       got.PackSummaries[0].Bytes + got.PackSummaries[1].Bytes,
+	}}
 	if _, err := m3ValidateRetainedShardPackBytesV1(dir, descriptor, assets); err != nil {
 		t.Fatalf("matching retained pack bytes rejected: %v", err)
+	}
+	legacyPerPack := append(append([]collections.VectorPartitionAssetV1(nil), assets...), collections.VectorPartitionAssetV1{PartitionID: 1, Bytes: got.PackSummaries[1].Bytes})
+	if _, err := m3ValidateRetainedShardPackBytesV1(dir, descriptor, legacyPerPack); err == nil {
+		t.Fatal("accepted legacy per-pack materialization for a domain graph")
 	}
 	assets[0].Bytes++
 	if _, err := m3ValidateRetainedShardPackBytesV1(dir, descriptor, assets); err == nil {

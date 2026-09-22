@@ -150,7 +150,7 @@ func TestVectorPartitionLiveProductionCoordinatorMutationAndColdReloadV1(t *test
 	}
 
 	initial := search("initial", []float32{1, 0})
-	if len(initial.Neighbors) != 1 || initial.Neighbors[0].ID != "a" || initial.Counters.SelectedPacks != 2 || initial.Counters.LiveDomainsSearched != 1 {
+	if len(initial.Neighbors) != 1 || initial.Neighbors[0].ID != "a" || initial.Counters.SelectedPacks != 1 || initial.Counters.LiveDomainsSearched != 1 {
 		t.Fatalf("initial response=%+v", initial)
 	}
 	initialRequests := dispatcher.requests("initial")
@@ -164,7 +164,7 @@ func TestVectorPartitionLiveProductionCoordinatorMutationAndColdReloadV1(t *test
 		}
 		liveAssignments++
 	}
-	if len(initialRequests) != 2 || liveAssignments != 1 {
+	if len(initialRequests) != 1 || liveAssignments != 1 {
 		t.Fatalf("initial request assignments=%+v", initialRequests)
 	}
 	initialStats := []CollectionVectorPartitionGenerationCacheStatsV1{sources[0].Stats(), sources[1].Stats()}
@@ -650,7 +650,7 @@ func newVectorPartitionLiveNativewireDocumentsV1(t testing.TB, documents []vecto
 		Generation: source.Generation + 100, PartitionCount: 3, DomainCount: 2,
 		DomainPacks:   []collections.VectorPartitionDomainPackV1{{DomainID: 0, PackID: 0}, {DomainID: 0, PackID: 1}, {DomainID: 1, PackID: 2}},
 		BalancePolicy: "disjoint_v1",
-		Placements:    []collections.VectorPartitionPlacementV1{{PartitionID: 0, GroupID: "group-a"}, {PartitionID: 1, GroupID: "group-b"}, {PartitionID: 2, GroupID: "group-b"}},
+		Placements:    []collections.VectorPartitionPlacementV1{{PartitionID: 0, GroupID: "group-a"}, {PartitionID: 1, GroupID: "group-a"}, {PartitionID: 2, GroupID: "group-b"}},
 	}
 	parts := []internalrouter.RouterPartitionV1{{PartitionID: 0}, {PartitionID: 1}, {PartitionID: 2}}
 	for _, row := range rows {
@@ -699,7 +699,7 @@ func newVectorPartitionLiveNativewireDocumentsV1(t testing.TB, documents []vecto
 		database.Close()
 		t.Fatal(err)
 	}
-	placement := raftplacement.VectorPartitionPlacementRecordV1{Collection: ref, IndexName: definition.Name, IndexDefinitionDigest: ready.IndexDefinitionDigest, SourceGeneration: ready.SourceGeneration, SourceChecksum: ready.SourceChecksum, SourceSchemaHash: ready.SourceSchemaHash, SourceRowCount: ready.SourceRowCount, PartitionGeneration: ready.Generation, PartitionCount: ready.PartitionCount, Partitions: []raftplacement.VectorPartitionGroupV1{{PartitionID: 0, GroupID: "group-a"}, {PartitionID: 1, GroupID: "group-b"}, {PartitionID: 2, GroupID: "group-b"}}}
+	placement := raftplacement.VectorPartitionPlacementRecordV1{Collection: ref, IndexName: definition.Name, IndexDefinitionDigest: ready.IndexDefinitionDigest, SourceGeneration: ready.SourceGeneration, SourceChecksum: ready.SourceChecksum, SourceSchemaHash: ready.SourceSchemaHash, SourceRowCount: ready.SourceRowCount, PartitionGeneration: ready.Generation, PartitionCount: ready.PartitionCount, Partitions: []raftplacement.VectorPartitionGroupV1{{PartitionID: 0, GroupID: "group-a"}, {PartitionID: 1, GroupID: "group-a"}, {PartitionID: 2, GroupID: "group-b"}}}
 	return vectorPartitionLiveProductionFixtureV1{dir: dir, database: database, collection: collection, definition: definition, manifest: ready, catalog: catalog, placement: placement}
 }
 

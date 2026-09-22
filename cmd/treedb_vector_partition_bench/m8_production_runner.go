@@ -2323,10 +2323,12 @@ func m8CanonicalRecallV1(want, got []m8CanonicalResultV1) float64 {
 }
 
 type m8AttributionHarnessV1 struct {
-	quality   *m8QualityCacheV1
-	policies  *m8RouterPolicyCacheV1
-	assets    *m8ProductionMultiGroupAssetsV1
-	searchers []*collections.VectorPartitionLocalSearcherV1
+	quality           *m8QualityCacheV1
+	policies          *m8RouterPolicyCacheV1
+	assets            *m8ProductionMultiGroupAssetsV1
+	searchers         []*collections.VectorPartitionLocalSearcherV1
+	servingPartitions []uint32
+	domainGraphs      bool
 }
 
 func newM8AttributionHarnessV1(assets *m8ProductionMultiGroupAssetsV1) (_ *m8AttributionHarnessV1, resultErr error) {
@@ -2340,14 +2342,19 @@ func newM8AttributionHarnessV1(assets *m8ProductionMultiGroupAssetsV1) (_ *m8Att
 		}
 		seen[placement.PartitionID] = true
 	}
-	h := &m8AttributionHarnessV1{assets: assets, searchers: make([]*collections.VectorPartitionLocalSearcherV1, assets.manifest.PartitionCount)}
+	domainGraphs := assets.graphVariant == collections.VectorPartitionLocalGraphVariantConnectivityPreservingVamanaR64L256Alpha1_2V1 && assets.manifest.DomainCount < assets.manifest.PartitionCount
+	servingPartitions, err := m8ServingPartitionsV1(assets.manifest, domainGraphs)
+	if err != nil {
+		return nil, err
+	}
+	h := &m8AttributionHarnessV1{assets: assets, searchers: make([]*collections.VectorPartitionLocalSearcherV1, assets.manifest.PartitionCount), servingPartitions: servingPartitions, domainGraphs: domainGraphs}
 	defer func() {
 		if resultErr != nil {
 			resultErr = errors.Join(resultErr, h.Close())
 		}
 	}()
-	for partition := range h.searchers {
-		searcher, err := m8OpenExactVariantPartitionV1(context.Background(), assets, uint32(partition))
+	for _, partition := range h.servingPartitions {
+		searcher, err := m8OpenExactVariantPartitionV1(context.Background(), assets, partition)
 		if err != nil {
 			return nil, fmt.Errorf("open M8 attribution partition %d: %w", partition, err)
 		}
@@ -2359,6 +2366,9 @@ func newM8AttributionHarnessV1(assets *m8ProductionMultiGroupAssetsV1) (_ *m8Att
 func m8OpenExactVariantPartitionV1(ctx context.Context, assets *m8ProductionMultiGroupAssetsV1, partition uint32) (*collections.VectorPartitionLocalSearcherV1, error) {
 	if assets == nil || assets.collection == nil || assets.graphVariant == "" {
 		return nil, errors.New("incomplete M8 exact-variant assets")
+	}
+	if assets.graphVariant == collections.VectorPartitionLocalGraphVariantConnectivityPreservingVamanaR64L256Alpha1_2V1 {
+		return assets.collection.OpenVectorPartitionLocalSearcherForGenerationWithContextV1(ctx, partitionHNSWIndex, assets.manifest.Generation, partition)
 	}
 	for i := range assets.manifest.Assets {
 		asset := assets.manifest.Assets[i]
@@ -2397,7 +2407,50 @@ func (h *m8AttributionHarnessV1) route(ctx context.Context, query []float32, pro
 	for i, partition := range result.Partitions {
 		domains[i] = partition.PartitionID
 	}
+	if h.domainGraphs {
+		return m8AttributionAnchorsForDomainsV1(h.assets.manifest, len(h.searchers), domains)
+	}
 	return m8AttributionPacksForDomainsV1(h.assets.manifest, len(h.searchers), domains)
+}
+
+func m8ServingPartitionsV1(manifest collections.VectorPartitionManifestV1, domainGraphs bool) ([]uint32, error) {
+	if !domainGraphs {
+		partitions := make([]uint32, manifest.PartitionCount)
+		for i := range partitions {
+			partitions[i] = uint32(i)
+		}
+		return partitions, nil
+	}
+	domains := make([]uint32, manifest.DomainCount)
+	for i := range domains {
+		domains[i] = uint32(i)
+	}
+	return m8AttributionAnchorsForDomainsV1(manifest, int(manifest.PartitionCount), domains)
+}
+
+func m8AttributionAnchorsForDomainsV1(manifest collections.VectorPartitionManifestV1, searcherCount int, domains []uint32) ([]uint32, error) {
+	packs, err := m8AttributionPacksForDomainsV1(manifest, searcherCount, domains)
+	if err != nil {
+		return nil, err
+	}
+	anchors := make([]uint32, 0, len(domains))
+	for _, domain := range domains {
+		found := false
+		for _, mapping := range manifest.DomainPacks {
+			if mapping.DomainID == domain {
+				anchors = append(anchors, mapping.PackID)
+				found = true
+				break
+			}
+		}
+		if !found {
+			return nil, errors.New("M8 attribution routed domain has no anchor")
+		}
+	}
+	if len(packs) < len(anchors) {
+		return nil, errors.New("M8 attribution domain-pack coverage is incomplete")
+	}
+	return anchors, nil
 }
 
 func m8AttributionPacksForDomainsV1(manifest collections.VectorPartitionManifestV1, searcherCount int, domains []uint32) ([]uint32, error) {
@@ -2489,16 +2542,16 @@ func (h *m8AttributionHarnessV1) searchWithMetricsAndBestsV1(ctx context.Context
 }
 
 func (h *m8AttributionHarnessV1) packDiagnostics() ([]m8PartitionPackDiagnosticsV1, error) {
-	diagnostics := make([]m8PartitionPackDiagnosticsV1, len(h.searchers))
+	diagnostics := make([]m8PartitionPackDiagnosticsV1, 0, len(h.servingPartitions))
 	for partition, searcher := range h.searchers {
 		if searcher == nil {
-			return nil, fmt.Errorf("M8 partition %d diagnostics: missing searcher", partition)
+			continue
 		}
 		pack, err := searcher.PackDiagnosticsV1()
 		if err != nil {
 			return nil, fmt.Errorf("M8 partition %d diagnostics: %w", partition, err)
 		}
-		diagnostics[partition] = m8PartitionPackDiagnosticsV1{
+		diagnostics = append(diagnostics, m8PartitionPackDiagnosticsV1{
 			PartitionID: uint32(partition), Rows: pack.Rows, ReachableRows: pack.ReachableRows,
 			TraversalRoots: pack.TraversalRoots, MaxLayer: pack.MaxLayer,
 			RowsByLayer: append([]uint64(nil), pack.RowsByLayer...), EdgesByLayer: append([]uint64(nil), pack.EdgesByLayer...),
@@ -2509,7 +2562,10 @@ func (h *m8AttributionHarnessV1) packDiagnostics() ([]m8PartitionPackDiagnostics
 			AuxiliaryEdges:  pack.AuxiliaryEdges, AuxiliaryCSRBytes: pack.AuxiliaryCSRBytes,
 			AuxiliaryMaxDegree: pack.AuxiliaryMaxDegree, AuxiliaryDistances: pack.AuxiliaryDistances,
 			CombinedReachableRows: pack.CombinedReachableRows,
-		}
+		})
+	}
+	if len(diagnostics) != len(h.servingPartitions) {
+		return nil, errors.New("M8 serving partition diagnostics are incomplete")
 	}
 	return diagnostics, nil
 }
@@ -2785,6 +2841,30 @@ func m8OracleDomainMembershipsV1(primaryHomes map[string]uint32, finalMembership
 	return domainHomes, domainMemberships, domains, nil
 }
 
+func m8ServingMembershipsV1(primaryHomes map[string]uint32, finalMemberships map[string][]uint32, manifest collections.VectorPartitionManifestV1) (map[string]uint32, map[string][]uint32, error) {
+	domainHomes, domainMemberships, domains, err := m8OracleDomainMembershipsV1(primaryHomes, finalMemberships, manifest)
+	if err != nil {
+		return nil, nil, err
+	}
+	anchors, err := m8ServingPartitionsV1(manifest, true)
+	if err != nil || len(anchors) != domains {
+		return nil, nil, errors.New("M8 serving membership anchors are incomplete")
+	}
+	servingHomes := make(map[string]uint32, len(domainHomes))
+	for id, domain := range domainHomes {
+		servingHomes[id] = anchors[domain]
+	}
+	servingMemberships := make(map[string][]uint32, len(domainMemberships))
+	for id, ownedDomains := range domainMemberships {
+		servingMemberships[id] = make([]uint32, len(ownedDomains))
+		for i, domain := range ownedDomains {
+			servingMemberships[id][i] = anchors[domain]
+		}
+		slices.Sort(servingMemberships[id])
+	}
+	return servingHomes, servingMemberships, nil
+}
+
 // m8TruthHomePartitionDiagnosticsV1 measures the selected-partition coverage
 // of the canonical truth set and the truth set's primary-home concentration.
 func m8TruthHomePartitionDiagnosticsV1(truth []m8CanonicalResultV1, selected []uint32, homes map[string]uint32) (coverage, distinctHomes, pairColocation float64, err error) {
@@ -2891,6 +2971,14 @@ func m8BuildAttributionV1(ctx context.Context, assets *m8ProductionMultiGroupAss
 	if len(primaryHomes) == 0 || len(finalMemberships) == 0 || len(membershipOracles) != len(queries) {
 		return m8AttributionCellV1{}, errors.New("M8 attribution requires a cached truth-home mapping")
 	}
+	diagnosticHomes, diagnosticMemberships := primaryHomes, finalMemberships
+	if harness.domainGraphs {
+		var err error
+		diagnosticHomes, diagnosticMemberships, err = m8ServingMembershipsV1(primaryHomes, finalMemberships, assets.manifest)
+		if err != nil {
+			return m8AttributionCellV1{}, err
+		}
+	}
 	cell := m8AttributionCellV1{Evidence: m8ProductionAttributionV1{
 		Contract: m8CanonicalResultContractV1, GlobalExactRecallAtK: 1,
 		OracleStagesComplete:        true,
@@ -2908,10 +2996,7 @@ func m8BuildAttributionV1(ctx context.Context, assets *m8ProductionMultiGroupAss
 	if cell.Evidence.Quality != nil {
 		cell.qualityTruth = truth
 	}
-	allPartitions := make([]uint32, len(harness.searchers))
-	for i := range allPartitions {
-		allPartitions[i] = uint32(i)
-	}
+	allPartitions := slices.Clone(harness.servingPartitions)
 	// Route every query before starting either approximate search stage. A
 	// typed router refusal invalidates the cell's approximate evidence, so
 	// retaining complete-query approximate work would be misleading.
@@ -2967,14 +3052,14 @@ func m8BuildAttributionV1(ctx context.Context, assets *m8ProductionMultiGroupAss
 		if err != nil {
 			return cell, err
 		}
-		coverage, homes, pairColocation, err := m8TruthHomePartitionDiagnosticsV1(truth[i], exactPartitions, primaryHomes)
+		coverage, homes, pairColocation, err := m8TruthHomePartitionDiagnosticsV1(truth[i], exactPartitions, diagnosticHomes)
 		if err != nil {
 			return cell, fmt.Errorf("M8 exact routing truth-home diagnostics query=%d: %w", i, err)
 		}
 		exactTruthHomeCoverage += coverage
 		truthHomePartitions += homes
 		truthHomePairColocation += pairColocation
-		finalCoverage, finalPartitions, finalPairColocation, overlapContribution, duplicateCoverage, retained, err := m8TruthFinalMembershipDiagnosticsV1(truth[i], exactPartitions, finalMemberships, primaryHomes)
+		finalCoverage, finalPartitions, finalPairColocation, overlapContribution, duplicateCoverage, retained, err := m8TruthFinalMembershipDiagnosticsV1(truth[i], exactPartitions, diagnosticMemberships, diagnosticHomes)
 		if err != nil {
 			return cell, fmt.Errorf("M8 exact routing final-membership diagnostics query=%d: %w", i, err)
 		}
@@ -3077,9 +3162,8 @@ func m8BuildAttributionV1(ctx context.Context, assets *m8ProductionMultiGroupAss
 	return cell, nil
 }
 
-// m8ExactPartitionUnionV1 scans every generation-pinned partition pack and
-// returns canonical FP32 score results. It fails closed unless the caller
-// supplies the complete manifest partition set.
+// m8ExactPartitionUnionV1 scans every generation-pinned serving graph and
+// returns canonical FP32 score results.
 func m8ExactPartitionUnionV1(ctx context.Context, assets *m8ProductionMultiGroupAssetsV1, query []float64, topK int) ([]m8CanonicalResultV1, error) {
 	if assets == nil || len(assets.manifest.Placements) != int(assets.manifest.PartitionCount) {
 		return nil, errors.New("incomplete M8 partition manifest")
@@ -3094,9 +3178,14 @@ func m8ExactPartitionUnionV1(ctx context.Context, assets *m8ProductionMultiGroup
 		}
 		seen[placement.PartitionID] = struct{}{}
 	}
-	merged := make([]m8CanonicalResultV1, 0, len(assets.manifest.Placements)*topK)
-	for partition := 0; partition < len(assets.manifest.Placements); partition++ {
-		searcher, err := m8OpenExactVariantPartitionV1(ctx, assets, uint32(partition))
+	domainGraphs := assets.graphVariant == collections.VectorPartitionLocalGraphVariantConnectivityPreservingVamanaR64L256Alpha1_2V1 && assets.manifest.DomainCount < assets.manifest.PartitionCount
+	servingPartitions, err := m8ServingPartitionsV1(assets.manifest, domainGraphs)
+	if err != nil {
+		return nil, err
+	}
+	merged := make([]m8CanonicalResultV1, 0, len(servingPartitions)*topK)
+	for _, partition := range servingPartitions {
+		searcher, err := m8OpenExactVariantPartitionV1(ctx, assets, partition)
 		if err != nil {
 			return nil, err
 		}
@@ -3700,7 +3789,8 @@ func m8ValidateCoordinatorResponseV1(response nativewire.VectorPartitionCoordina
 		return nil, errors.New("coordinator response violates canonical score/stable-ID order")
 	}
 	seenDomains := make(map[uint32]struct{}, probes)
-	expectedPacks := make([]uint32, 0, len(response.ProbedPacks))
+	expectedPacks := make([]uint32, 0, probes)
+	selectedPhysicalPacks := make(map[uint32]struct{}, partitionCount)
 	for _, domain := range response.ProbedDomains {
 		if domain >= uint32(domainCount) {
 			return nil, errors.New("coordinator response contains an out-of-range domain")
@@ -3711,15 +3801,20 @@ func m8ValidateCoordinatorResponseV1(response nativewire.VectorPartitionCoordina
 		seenDomains[domain] = struct{}{}
 		if identityDomains {
 			expectedPacks = append(expectedPacks, domain)
+			selectedPhysicalPacks[domain] = struct{}{}
 			continue
 		}
-		before := len(expectedPacks)
+		found := false
 		for _, mapping := range manifest.DomainPacks {
 			if mapping.DomainID == domain {
-				expectedPacks = append(expectedPacks, mapping.PackID)
+				selectedPhysicalPacks[mapping.PackID] = struct{}{}
+				if !found {
+					expectedPacks = append(expectedPacks, mapping.PackID)
+					found = true
+				}
 			}
 		}
-		if len(expectedPacks) == before {
+		if !found {
 			return nil, errors.New("manifest contains a domain without a physical pack")
 		}
 	}
@@ -3770,7 +3865,7 @@ func m8ValidateCoordinatorResponseV1(response nativewire.VectorPartitionCoordina
 			if membership.PartitionID >= manifest.PartitionCount || membership.VectorOrdinal >= manifest.SourceRowCount {
 				return nil, errors.New("manifest contains an invalid coordinator membership")
 			}
-			if _, selected := seenPartitions[membership.PartitionID]; selected {
+			if _, selected := selectedPhysicalPacks[membership.PartitionID]; selected {
 				selectedOrdinals[membership.VectorOrdinal] = struct{}{}
 			}
 		}
@@ -3976,7 +4071,7 @@ func m8RunUnavailableGroupV1(ctx context.Context, topology *nativewire.VectorPar
 func m8ProductionGateLedgerForReportV1(report m8ProductionReportV1) m8ProductionGateLedgerV1 {
 	ledger := m8ProductionGateLedgerV1{ExhaustiveParity: "not_run", FailureHonesty: "fail", PartitionPackReachability: "fail", Recall: "fail", ProbeReduction: "fail", EndToEndQPS: "fail", TailLatency: "fail", Balance: "fail", OverlapStorage: "fail", ResourceBounds: "fail", ExistingBehavior: "pending_full_required_suites"}
 	domainCount, _, validDomains := m8ProductionDomainLayoutV1(report.Config)
-	if validM8PartitionPackDiagnosticsV1(report.PackDiagnostics, report.Config.Partitions, report.Resources.PartitionLoads, report.Config.GraphVariant) {
+	if validM8PartitionPackDiagnosticsV1(report.PackDiagnostics, report.Config.Partitions, report.Resources.PartitionLoads, report.Config.GraphVariant, report.Config.PacksPerDomain) {
 		ledger.PartitionPackReachability = "pass"
 	}
 	var exhaustive []m8ProductionRowV1
@@ -4255,8 +4350,8 @@ func m8ProductionGateValuesV1(ledger m8ProductionGateLedgerV1) []string {
 // once as either a fully reachable native production pack or a fully reachable
 // legacy V3 native-plus-auxiliary pack. Vamana packs must be natively
 // entry-reachable; auxiliary repair is not part of their declared topology.
-func validM8PartitionPackDiagnosticsV1(diagnostics []m8PartitionPackDiagnosticsV1, partitions int, loads []uint64, graphVariant string) bool {
-	if partitions < 1 || len(diagnostics) != partitions || len(loads) != partitions {
+func validM8PartitionPackDiagnosticsV1(diagnostics []m8PartitionPackDiagnosticsV1, partitions int, loads []uint64, graphVariant string, packsPerDomain []int) bool {
+	if partitions < 1 || len(loads) != partitions {
 		return false
 	}
 	expectedLayer0Degree := uint64(0)
@@ -4267,11 +4362,38 @@ func validM8PartitionPackDiagnosticsV1(diagnostics []m8PartitionPackDiagnosticsV
 		}
 		expectedLayer0Degree = uint64(2 * m)
 	}
+	expectedLoads := make(map[int]uint64, partitions)
+	if expectedLayer0Degree != 0 && len(packsPerDomain) > 0 {
+		pack := 0
+		for _, count := range packsPerDomain {
+			if count < 1 || count > partitions-pack {
+				return false
+			}
+			for _, load := range loads[pack : pack+count] {
+				if expectedLoads[pack] > ^uint64(0)-load {
+					return false
+				}
+				expectedLoads[pack] += load
+			}
+			pack += count
+		}
+		if pack != partitions {
+			return false
+		}
+	} else {
+		for partition, load := range loads {
+			expectedLoads[partition] = load
+		}
+	}
+	if len(diagnostics) != len(expectedLoads) {
+		return false
+	}
 	seen := make([]bool, partitions)
 	for _, diagnostic := range diagnostics {
 		partition := int(diagnostic.PartitionID)
-		if partition < 0 || partition >= partitions || seen[partition] || diagnostic.Rows == 0 ||
-			diagnostic.Rows != loads[partition] || diagnostic.ReachableRows == 0 || diagnostic.ReachableRows > diagnostic.Rows ||
+		expectedRows, expected := expectedLoads[partition]
+		if partition < 0 || partition >= partitions || !expected || seen[partition] || diagnostic.Rows == 0 ||
+			diagnostic.Rows != expectedRows || diagnostic.ReachableRows == 0 || diagnostic.ReachableRows > diagnostic.Rows ||
 			diagnostic.TraversalRoots == 0 || diagnostic.TraversalRoots > diagnostic.Rows ||
 			(diagnostic.ReachableRows < diagnostic.Rows && diagnostic.TraversalRoots == 1) {
 			return false
@@ -4642,7 +4764,7 @@ func validateM8ProductionReportWithProfilesV1(report m8ProductionReportV1, caps 
 	if report.Config.EffectiveWarmup != expectedWarmup {
 		return errors.New("invalid M8 effective warmup count")
 	}
-	domainCount, packsPerDomain, ok := m8ProductionDomainLayoutV1(report.Config)
+	domainCount, _, ok := m8ProductionDomainLayoutV1(report.Config)
 	if !ok {
 		return errors.New("invalid M8 logical-domain pack layout")
 	}
@@ -4700,7 +4822,7 @@ func validateM8ProductionReportWithProfilesV1(report m8ProductionReportV1, caps 
 	if err := validateM8ProductionMeasurementCellsV1(report.Config, int(report.RouterRepresentatives), report.Rows); err != nil {
 		return err
 	}
-	if !validM8PartitionLoadsV1(report) || !validM8PartitionPackDiagnosticsV1(report.PackDiagnostics, report.Config.Partitions, report.Resources.PartitionLoads, report.Config.GraphVariant) || report.GateLedger.PartitionPackReachability != "pass" {
+	if !validM8PartitionLoadsV1(report) || !validM8PartitionPackDiagnosticsV1(report.PackDiagnostics, report.Config.Partitions, report.Resources.PartitionLoads, report.Config.GraphVariant, report.Config.PacksPerDomain) || report.GateLedger.PartitionPackReachability != "pass" {
 		return errors.New("M8 report has incomplete or unreachable partition-pack diagnostics")
 	}
 	var measuredSamples, minimumMeasuredSamples uint64
@@ -4721,8 +4843,8 @@ func validateM8ProductionReportWithProfilesV1(report m8ProductionReportV1, caps 
 			row.LocalScoreCalls > uint64(row.Samples)*uint64(report.Config.LocalScoreBudget) || row.MaxLocalScoreCalls > uint64(report.Config.LocalScoreBudget) {
 			return errors.New("M8 search work exceeds its explicit score-call budget")
 		}
-		validExactLocalSearches := m8LocalSearchFanoutValidV1(row.Attribution.LocalHNSWSearchesByQuery, row.Attribution.LocalHNSWSearches, row.Samples, row.Probes, packsPerDomain)
-		validApproximateLocalSearches := m8LocalSearchFanoutValidV1(row.Attribution.ApproximateLocalHNSWSearchesByQuery, row.Attribution.ApproximateLocalHNSWSearches, row.Samples, row.Probes, packsPerDomain)
+		validExactLocalSearches := m8LocalSearchFanoutValidV1(row.Attribution.LocalHNSWSearchesByQuery, row.Attribution.LocalHNSWSearches, row.Samples, row.Probes)
+		validApproximateLocalSearches := m8LocalSearchFanoutValidV1(row.Attribution.ApproximateLocalHNSWSearchesByQuery, row.Attribution.ApproximateLocalHNSWSearches, row.Samples, row.Probes)
 		if row.ElapsedNanos < row.MaxTotalNanos {
 			return errors.New("M8 cell elapsed is shorter than its slowest request")
 		}
@@ -4998,41 +5120,16 @@ func m8ProductionDomainLayoutV1(cfg m8ProductionConfigEvidenceV1) (int, []int, b
 	return cfg.DomainCount, cfg.PacksPerDomain, total == cfg.Partitions
 }
 
-func m8LocalSearchFanoutValidV1(fanout []uint32, aggregate uint64, samples, probes int, packsPerDomain []int) bool {
-	if samples < 1 || probes < 1 || probes > len(packsPerDomain) || len(fanout) != samples {
+func m8LocalSearchFanoutValidV1(fanout []uint32, aggregate uint64, samples, probes int) bool {
+	if samples < 1 || probes < 1 || uint64(probes) > math.MaxUint32 || len(fanout) != samples || uint64(samples) > math.MaxUint64/uint64(probes) {
 		return false
 	}
-	totalPacks := 0
-	for _, count := range packsPerDomain {
-		if count < 1 || count > math.MaxInt-totalPacks {
-			return false
-		}
-		totalPacks += count
-	}
-	reachable := make([][]bool, probes+1)
-	for selected := range reachable {
-		reachable[selected] = make([]bool, totalPacks+1)
-	}
-	reachable[0][0] = true
-	seen := 0
-	for _, count := range packsPerDomain {
-		for selected := min(probes, seen+1); selected > 0; selected-- {
-			for prior := totalPacks - count; prior >= 0; prior-- {
-				if reachable[selected-1][prior] {
-					reachable[selected][prior+count] = true
-				}
-			}
-		}
-		seen++
-	}
-	var total uint64
 	for _, searches := range fanout {
-		if uint64(searches) > uint64(totalPacks) || !reachable[probes][int(searches)] || total > math.MaxUint64-uint64(searches) {
+		if searches != uint32(probes) {
 			return false
 		}
-		total += uint64(searches)
 	}
-	return total == aggregate
+	return aggregate == uint64(samples)*uint64(probes)
 }
 
 func validM8AttributionV1(attribution m8ProductionAttributionV1, topK int) bool {

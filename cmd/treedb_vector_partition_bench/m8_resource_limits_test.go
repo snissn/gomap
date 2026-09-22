@@ -39,15 +39,15 @@ func TestM8ConfiguredProbesUseLogicalDomainCountV1(t *testing.T) {
 	}
 }
 
-func TestM8LocalSearchFanoutRequiresAchievableDomainSubsetV1(t *testing.T) {
-	if !m8LocalSearchFanoutValidV1([]uint32{1, 3}, 4, 2, 1, []int{1, 3}) {
-		t.Fatal("rejected achievable one-domain fanouts")
+func TestM8LocalSearchFanoutIsOneGraphPerDomainV1(t *testing.T) {
+	if !m8LocalSearchFanoutValidV1([]uint32{1, 1}, 2, 2, 1) {
+		t.Fatal("rejected one local graph search per selected domain")
 	}
-	if m8LocalSearchFanoutValidV1([]uint32{2}, 2, 1, 1, []int{1, 3}) {
-		t.Fatal("accepted fanout between achievable one-domain totals")
+	if m8LocalSearchFanoutValidV1([]uint32{3}, 3, 1, 1) {
+		t.Fatal("accepted physical-pack fanout for one selected domain")
 	}
-	if !m8LocalSearchFanoutValidV1([]uint32{4}, 4, 1, 2, []int{1, 3}) {
-		t.Fatal("rejected achievable two-domain fanout")
+	if !m8LocalSearchFanoutValidV1([]uint32{2}, 2, 1, 2) {
+		t.Fatal("rejected two selected domain graphs")
 	}
 }
 
@@ -65,6 +65,26 @@ func TestM8AttributionExpandsLogicalDomainsToPhysicalPacksV1(t *testing.T) {
 	}
 	if _, err := m8AttributionPacksForDomainsV1(manifest, 3, []uint32{0, 0}); err == nil {
 		t.Fatal("accepted duplicate routed domain")
+	}
+}
+
+func TestM8RetainedDomainGraphRequiresChunkedAnchorsV1(t *testing.T) {
+	manifest := collections.VectorPartitionManifestV1{
+		PartitionCount: 3,
+		DomainCount:    2,
+		DomainPacks: []collections.VectorPartitionDomainPackV1{
+			{DomainID: 0, PackID: 0}, {DomainID: 0, PackID: 1}, {DomainID: 1, PackID: 2},
+		},
+		Assets: []collections.VectorPartitionAssetV1{{ID: "hnsw_search_pack_v1/partition/0"}},
+	}
+	variant := collections.VectorPartitionLocalGraphVariantConnectivityPreservingVamanaR64L256Alpha1_2V1
+	if _, err := m8RetainedDomainGraphAnchorsV1(manifest, variant); err == nil {
+		t.Fatal("accepted legacy per-pack Vamana assets as a domain graph")
+	}
+	manifest.Assets = append(manifest.Assets, collections.VectorPartitionAssetV1{ID: "hnsw_search_pack_v1/partition/0/section/01/00000"})
+	anchors, err := m8RetainedDomainGraphAnchorsV1(manifest, variant)
+	if err != nil || !slices.Equal(anchors, []uint32{0, 2}) {
+		t.Fatalf("chunked anchors=%v err=%v", anchors, err)
 	}
 }
 

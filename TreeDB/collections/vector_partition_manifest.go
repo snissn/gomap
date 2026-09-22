@@ -374,7 +374,39 @@ func (m VectorPartitionManifestV1) validateWithContextV1(ctx context.Context, l 
 	lastID := ""
 	lastAssetPartition := uint32(0)
 	assetCoverage := make(map[uint32]struct{}, m.PartitionCount)
+	rootCoverage := make(map[uint32]struct{}, m.DomainCount)
+	chunkedDomains := false
+	hasNativeRoots := false
+	for _, asset := range m.Assets {
+		if asset.ID == vectorPartitionLocalAssetIDV1(asset.PartitionID) {
+			hasNativeRoots = true
+		}
+		if strings.HasPrefix(asset.ID, vectorPartitionLocalAssetIDV1(asset.PartitionID)+"/section/") {
+			chunkedDomains = true
+		}
+	}
+	if m.DomainCount < m.PartitionCount && hasNativeRoots && !chunkedDomains {
+		return fmt.Errorf("%w: multi-pack domains require one chunked graph per domain", ErrVectorPartitionManifestInvalid)
+	}
+	var domainAnchors map[uint32]struct{}
+	if chunkedDomains {
+		if m.DomainCount >= m.PartitionCount {
+			return fmt.Errorf("%w: chunked domain layout", ErrVectorPartitionManifestInvalid)
+		}
+		anchors, _, err := vectorPartitionDomainLayoutV1(m)
+		if err != nil {
+			return fmt.Errorf("%w: chunked domain ownership", ErrVectorPartitionManifestInvalid)
+		}
+		domainAnchors = make(map[uint32]struct{}, len(anchors))
+		for _, anchor := range anchors {
+			domainAnchors[anchor] = struct{}{}
+		}
+	}
 	assetRefs := make(map[ColumnAssetRef]struct{}, len(m.Assets)+1)
+	nextChunk := make(map[struct {
+		partition uint32
+		section   columnHNSWSearchPackSectionKey
+	}]uint32)
 	var referencedBytes uint64
 	for i, a := range m.Assets {
 		if i&1023 == 0 {
@@ -388,7 +420,26 @@ func (m VectorPartitionManifestV1) validateWithContextV1(ctx context.Context, l 
 		if a.PartitionID >= m.PartitionCount || (lastID != "" && (a.PartitionID < lastAssetPartition || a.PartitionID == lastAssetPartition && a.ID <= lastID)) {
 			return fmt.Errorf("%w: noncanonical assets", ErrVectorPartitionManifestInvalid)
 		}
+		if chunkedDomains {
+			if _, ok := domainAnchors[a.PartitionID]; !ok {
+				return fmt.Errorf("%w: non-domain chunk asset", ErrVectorPartitionManifestInvalid)
+			}
+			if a.ID != vectorPartitionLocalAssetIDV1(a.PartitionID) {
+				section, chunk, err := parseVectorPartitionLocalSectionChunkAssetIDV1(a.PartitionID, a.ID)
+				sequence := struct {
+					partition uint32
+					section   columnHNSWSearchPackSectionKey
+				}{a.PartitionID, section}
+				if err != nil || chunk != nextChunk[sequence] {
+					return fmt.Errorf("%w: noncanonical domain chunk asset", ErrVectorPartitionManifestInvalid)
+				}
+				nextChunk[sequence]++
+			}
+		}
 		assetCoverage[a.PartitionID] = struct{}{}
+		if a.ID == vectorPartitionLocalAssetIDV1(a.PartitionID) {
+			rootCoverage[a.PartitionID] = struct{}{}
+		}
 		if a.Bytes > vectorPartitionMaxAssetBytesV1 || referencedBytes > vectorPartitionMaxReferencedBytesV1-a.Bytes {
 			return fmt.Errorf("%w: asset byte cap", ErrVectorPartitionManifestInvalid)
 		}
@@ -413,6 +464,15 @@ func (m VectorPartitionManifestV1) validateWithContextV1(ctx context.Context, l 
 			if err := ctx.Err(); err != nil {
 				return err
 			}
+		}
+		if _, anchor := domainAnchors[partitionID]; chunkedDomains && anchor {
+			if _, ok := rootCoverage[partitionID]; !ok {
+				return fmt.Errorf("%w: missing domain root asset %d", ErrVectorPartitionManifestInvalid, partitionID)
+			}
+			continue
+		}
+		if chunkedDomains {
+			continue
 		}
 		if _, ok := assetCoverage[partitionID]; !ok {
 			return fmt.Errorf("%w: missing partition asset %d", ErrVectorPartitionManifestInvalid, partitionID)

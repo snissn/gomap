@@ -860,6 +860,13 @@ func (c *Collection) VectorPartitionStatusV1(index string, generation uint64) (V
 	}
 	var missingAssets, corruptAssets, staleAssets uint64
 	statusAssets := append([]VectorPartitionAssetV1(nil), manifest.Assets...)
+	chunkedDomains := false
+	for _, asset := range manifest.Assets {
+		if strings.HasPrefix(asset.ID, vectorPartitionLocalAssetIDV1(asset.PartitionID)+"/section/") {
+			chunkedDomains = true
+			break
+		}
+	}
 	if manifest.State == "ready" {
 		statusAssets = append(statusAssets, manifest.RouterAsset)
 	}
@@ -883,12 +890,17 @@ func (c *Collection) VectorPartitionStatusV1(index string, generation uint64) (V
 			}
 			continue
 		}
-		if asset.ID == vectorPartitionLocalAssetIDV1(asset.PartitionID) {
+		if !chunkedDomains && asset.ID == vectorPartitionLocalAssetIDV1(asset.PartitionID) {
 			singleAssetManifest := manifest
 			singleAssetManifest.Assets = []VectorPartitionAssetV1{asset}
 			if err := c.validateVectorPartitionAssetMembershipBindingsV1(singleAssetManifest); err != nil {
 				staleAssets++
 			}
+		}
+	}
+	if chunkedDomains && missingAssets == 0 && corruptAssets == 0 {
+		if err := c.validateVectorPartitionAssetMembershipBindingsV1(manifest); err != nil {
+			staleAssets++
 		}
 	}
 	return VectorPartitionStatusV1{
