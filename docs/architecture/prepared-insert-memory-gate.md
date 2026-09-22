@@ -6,12 +6,17 @@ peak heap or complete in-flight byte cap. The draft #4819 implementation must
 not be described or merged as satisfying that acceptance gate.
 
 The enforced checks are 16,384 rows per call, 128 KiB per document, prepared
-JSON cursor depth/descriptor limits, per-block raw/output checks, and a
+JSON cursor depth/descriptor/key limits, per-block path/entry-header limits,
+pre-allocation raw/output checks, and a
 post-preparation capacity charge. `ErrPreparedInsertResourceLimit` is distinct
 from configuration `ErrPreparedInsertIneligible`. A bounded caller must stop on
 resource rejection; only unsupported configuration may use ordinary
 `InsertBatch`. JSONBench's target lane has a 1 MiB source-line ceiling, a
-source-batch ceiling, and one queued successor. Non-target layouts retain the
+source-batch ceiling of at most 16 MiB, and one queued successor. It now holds producer and
+committer credits in one reservation ledger and acquires source credit before
+cloning each row; a successor source slot remains available while the depth-zero
+consumer prepares. `EnginePeakReservedBytes` reports peak reserved credit plus
+fixed source scratch. Non-target layouts retain the
 ordinary input policy. These controls bound some inputs and concurrency, not
 the heap used to process admitted input.
 
@@ -28,14 +33,14 @@ bytes, respectively.
 
 Allocation sites still requiring a pre-allocation bound or quota-aware builder:
 
-- `columnRetainedSemanticStreamStreams.appendValue` grows path keys, the
-  `byKey` map, per-path values and interned strings while collecting documents.
-  The prepared cursor restricts shape, but the current admission formula does
-  not prove a worst-case capacity for these allocations.
-- `encodeStreamsWithRawLimitMeasured` and `encodeWithRawLimit` can hold raw,
-  zstd `EncodeAll` output, copied stored output, and compressor scratch at once.
-  The raw hint and post-encode checks do not charge the maximum coexistence or
-  zstd workspace before allocation.
+- The prepared cursor/interner now rejects oversized keys, paths, and entry
+  headers before their slice growth. The `byKey` and trie maps and per-path
+  values still need a worst-case capacity ledger tied to the admitted block
+  budget, including temporary copies and retained backing.
+- `encodeStreamsWithRawLimitMeasured` checks the raw size hint before its raw
+  allocation, and `encodeWithRawLimit` checks zstd's maximum output size before
+  encoding. These checks still need a combined accounting of raw, compressed,
+  copied output, live stream state, and zstd workspace.
 - Ordered `Commit` retains the prepared token while
   `prepareColumnWritePublishInputBeforeCommandWAL`, typed string/int64 asset
   builders in `column_publish_write.go`, column-part/image construction, and

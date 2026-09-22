@@ -467,6 +467,49 @@ func TestPreparedInsertRarePathsStayWithinBudget(t *testing.T) {
 	}
 }
 
+func TestPreparedInsertRejectsBlockPathGrowthBeforePublication(t *testing.T) {
+	dir := t.TempDir()
+	enableColumnRetainedPlacementCommandWAL(t, dir)
+	d := openColumnRetainedPlacementDB(t, dir, backenddb.Options{})
+	defer func() { _ = d.Close() }()
+	col := createColumnRetainedSemanticStreamCollection(t, d, "events")
+	ids := [][]byte{[]byte("wide-a"), []byte("wide-b")}
+	documents := make([][]byte, len(ids))
+	for row := range documents {
+		var document strings.Builder
+		fmt.Fprintf(&document, `{"row_id":%d,"kind":"wide"`, row+1)
+		for field := 0; field < 600; field++ {
+			fmt.Fprintf(&document, `,"field_%d_%d":%d`, row, field, field)
+		}
+		document.WriteByte('}')
+		documents[row] = []byte(document.String())
+	}
+	if _, err := col.PrepareInsertBatchOwned(ids, documents, 64<<20); !errors.Is(err, ErrPreparedInsertResourceLimit) {
+		t.Fatalf("block path limit: %v", err)
+	}
+	for _, id := range ids {
+		if got, err := col.Get(id); err != nil || got != nil {
+			t.Fatalf("rejected row %q became visible: %s, %v", id, got, err)
+		}
+	}
+}
+
+func TestPreparedInsertRejectsOversizedPathKeyBeforePublication(t *testing.T) {
+	dir := t.TempDir()
+	enableColumnRetainedPlacementCommandWAL(t, dir)
+	d := openColumnRetainedPlacementDB(t, dir, backenddb.Options{})
+	defer func() { _ = d.Close() }()
+	col := createColumnRetainedSemanticStreamCollection(t, d, "events")
+	id := []byte("long-path")
+	document := []byte(`{"row_id":1,"kind":"wide","` + strings.Repeat("a", preparedSemanticStreamMaxKeyBytes+1) + `":1}`)
+	if _, err := col.PrepareInsertBatchOwned([][]byte{id}, [][]byte{document}, 32<<20); !errors.Is(err, ErrPreparedInsertResourceLimit) {
+		t.Fatalf("path-key limit: %v", err)
+	}
+	if got, err := col.Get(id); err != nil || got != nil {
+		t.Fatalf("rejected row became visible: %s, %v", got, err)
+	}
+}
+
 func TestPreparedInsertRejectsUnsupportedStructuralShapesBeforeCommit(t *testing.T) {
 	dir := t.TempDir()
 	enableColumnRetainedPlacementCommandWAL(t, dir)

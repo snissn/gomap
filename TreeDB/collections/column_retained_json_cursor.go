@@ -43,6 +43,7 @@ var (
 type columnRetainedSemanticStreamV1JSONCursor struct {
 	maxDepth        int
 	maxDescriptors  int
+	maxKeyBytes     int
 	document        []byte
 	pos             int
 	nodeStack       [64]columnRetainedSemanticStreamV1JSONCursorNode
@@ -468,6 +469,9 @@ func collectColumnRetainedSemanticStreamV1JSONCursorDocument(cfg ColumnStoreConf
 	if err := cursor.collectObject(root, nil, row, streamEntryCapacity, skip, streams, declared, valuesRaw); err != nil {
 		return nil, err
 	}
+	if streams.err != nil {
+		return nil, streams.err
+	}
 	if declared == nil {
 		return nil, nil
 	}
@@ -552,6 +556,9 @@ func (c *columnRetainedSemanticStreamV1JSONCursor) collectObject(nodeIdx int, pa
 	if len(values) == 0 {
 		if len(path) > 0 {
 			appendColumnRetainedSemanticStreamValueNoCopy(path, row, []byte("{}"), streamEntryCapacity, streams)
+			if streams.err != nil {
+				return streams.err
+			}
 		}
 		return nil
 	}
@@ -604,9 +611,15 @@ func (c *columnRetainedSemanticStreamV1JSONCursor) collectObject(nodeIdx int, pa
 			continue
 		}
 		appendColumnRetainedSemanticStreamValueNoCopy(nextPath, row, c.raw(node), streamEntryCapacity, streams)
+		if streams.err != nil {
+			return streams.err
+		}
 	}
 	if !retainedAny && len(path) > 0 {
 		appendColumnRetainedSemanticStreamValueNoCopy(path, row, []byte("{}"), streamEntryCapacity, streams)
+		if streams.err != nil {
+			return streams.err
+		}
 	}
 	return nil
 }
@@ -671,6 +684,9 @@ func (c *columnRetainedSemanticStreamV1JSONCursor) declaredRaw(node columnRetain
 
 func (c *columnRetainedSemanticStreamV1JSONCursor) memberKey(member columnRetainedSemanticStreamV1JSONCursorMember) (string, error) {
 	key := c.document[member.keyStart:member.keyEnd]
+	if c.maxKeyBytes > 0 && len(key) > c.maxKeyBytes {
+		return "", fmt.Errorf("%w: retained key exceeds %d bytes", ErrPreparedInsertResourceLimit, c.maxKeyBytes)
+	}
 	if bytes.IndexByte(key, '\\') >= 0 {
 		decoded, err := jsonparser.Unescape(key, c.unescapeScratch[:0])
 		if err != nil {
@@ -679,5 +695,9 @@ func (c *columnRetainedSemanticStreamV1JSONCursor) memberKey(member columnRetain
 		key = decoded
 		c.unescapeScratch = decoded[:0]
 	}
-	return c.pathInterner.intern(key), nil
+	value := c.pathInterner.intern(key)
+	if c.pathInterner.err != nil {
+		return "", c.pathInterner.err
+	}
+	return value, nil
 }

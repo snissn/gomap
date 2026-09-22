@@ -3,6 +3,7 @@ package collections
 import (
 	"bytes"
 	"crypto/sha256"
+	"errors"
 	"slices"
 	"testing"
 	"unsafe"
@@ -543,4 +544,78 @@ func columnRetainedSemanticStreamV1TestBytesAliasBytes(value, source []byte) boo
 	valuePtr := uintptr(unsafe.Pointer(unsafe.SliceData(value)))
 	sourcePtr := uintptr(unsafe.Pointer(unsafe.SliceData(source)))
 	return valuePtr >= sourcePtr && valuePtr < sourcePtr+uintptr(len(source))
+}
+
+func TestPreparedSemanticStreamStoredBlockEncodingRejectsBeforeOutputAllocation(t *testing.T) {
+	streams := newColumnRetainedSemanticStreamStreams()
+	streams.appendValue([]string{"field"}, 0, []byte(`"value"`), 0)
+	raw, err := encodeColumnRetainedSemanticStreamV1RawBlockFromStreams(1, streams)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoder, err := newColumnRetainedSemanticStreamV1StoredBlockEncoder()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer encoder.close()
+	if _, err := encoder.encodeWithRawLimitBudget(raw, len(raw), int64(len(raw))); !errors.Is(err, ErrPreparedInsertResourceLimit) {
+		t.Fatalf("small encoding budget: %v", err)
+	}
+	maximumCompressed := encoder.enc.MaxEncodedSize(len(raw))
+	budget := int64(cap(raw) + 2*maximumCompressed + len(columnRetainedSemanticStreamV1BlockZSTDMagic) + 10)
+	stored, err := encoder.encodeWithRawLimitBudget(raw, len(raw), budget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := decodeColumnRetainedSemanticStreamV1StoredBlock(stored)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(decoded, raw) {
+		t.Fatalf("decoded block changed: got %q want %q", decoded, raw)
+	}
+}
+
+func TestPreparedSemanticStreamTransfersUncompressedRawScratch(t *testing.T) {
+	streams := newColumnRetainedSemanticStreamStreams()
+	streams.appendValue([]string{"field"}, 0, []byte(`"value"`), 0)
+	encoder, err := newColumnRetainedSemanticStreamV1StoredBlockEncoder()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer encoder.close()
+	encoder.outputBudget = 1 << 20
+	block, _, _, err := encoder.encodeStreamsWithRawLimitMeasured(1, streams, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.HasPrefix(block, columnRetainedSemanticStreamV1BlockMagic) {
+		t.Fatalf("raw block has wrong magic: %q", block)
+	}
+	if encoder.rawBlockScratch != nil {
+		t.Fatal("prepared raw block remained aliased by encoder scratch")
+	}
+}
+
+func TestPreparedSemanticStreamEntryHeadersRejectBeforeGrowth(t *testing.T) {
+	streams := newColumnRetainedSemanticStreamStreams()
+	streams.maxEntries = 2
+	streams.maxEntryHeaderBytes = 256
+	path := []string{"field"}
+	streams.appendValue(path, 0, []byte("1"), 0)
+	streams.appendValue(path, 1, []byte("2"), 0)
+	if streams.err != nil || streams.entries != 2 {
+		t.Fatalf("two admitted entries: entries=%d err=%v", streams.entries, streams.err)
+	}
+	streams.appendValue(path, 2, []byte("3"), 0)
+	if !errors.Is(streams.err, ErrPreparedInsertResourceLimit) || streams.entries != 2 {
+		t.Fatalf("entry cap: entries=%d err=%v", streams.entries, streams.err)
+	}
+	other := newColumnRetainedSemanticStreamStreams()
+	other.maxEntries = 2
+	other.maxEntryHeaderBytes = 1
+	other.appendValue(path, 0, []byte("1"), 0)
+	if !errors.Is(other.err, ErrPreparedInsertResourceLimit) || other.entries != 0 {
+		t.Fatalf("header byte cap: entries=%d err=%v", other.entries, other.err)
+	}
 }

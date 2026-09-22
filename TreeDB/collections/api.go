@@ -12357,6 +12357,11 @@ func (c *Collection) insertBatchOnceWithLockState(
 		}
 		defer releaseCommandWALRawStage()
 		if bufferedCommandWALIntent != nil && c.db != nil {
+			// Checkpoint teardown drains collection write domains while holding
+			// the raw publish barrier. Do not wait for that barrier while still
+			// holding this domain's mutation lock. The validator below reacquires
+			// mutation and rechecks schema, roots, and persisted conflicts.
+			unlockIfLocked()
 			unlockCommandWALRawStage = c.db.LockCommandWALStaging()
 			if err := c.drainCommandWALStageCoordinatorBeforeMutationWithHeldRawPublishLock(); err != nil {
 				closePlanningSnapshot()

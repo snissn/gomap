@@ -36,6 +36,13 @@ const preparedSemanticStreamEncoderReserveBytes = 8 << 20
 const preparedSemanticStreamBatchReserveBytes = 1 << 20
 const preparedSemanticStreamMaxCursorDepth = 16
 const preparedSemanticStreamMaxCursorDescriptors = 1024
+const preparedSemanticStreamMaxBlockPaths = 1024
+const preparedSemanticStreamMaxKeyBytes = 256
+const preparedSemanticStreamMaxPathBytes = 512
+const preparedSemanticStreamMaxInternedSegments = 2048
+const preparedSemanticStreamMaxInternedKeyBytes = 512 << 10
+const preparedSemanticStreamMaxBlockEntries = 128 << 10
+const preparedSemanticStreamMaxEntryHeaderBytes = 16 << 20
 const defaultColumnRetainedSemanticStreamV1DecodeCacheBlocks = 16
 const minColumnRetainedSemanticStreamV1DecodeCacheRows = 64
 const minColumnRetainedSemanticStreamV1DecodeCacheRowsPerBlock = 512
@@ -61,8 +68,16 @@ type columnRetainedSemanticStreamPath struct {
 }
 
 type columnRetainedSemanticStreamStreams struct {
-	byKey map[string]*columnRetainedSemanticStreamPath
-	root  columnRetainedSemanticStreamPathNode
+	byKey                map[string]*columnRetainedSemanticStreamPath
+	root                 columnRetainedSemanticStreamPathNode
+	maxPaths             int // zero on the ordinary path
+	maxPathBytes         int
+	maxEntries           int
+	maxEntryHeaderBytes  int64
+	entries              int
+	entryHeaderBytes     int64
+	peakEntryHeaderBytes int64
+	err                  error
 }
 
 type columnRetainedSemanticStreamPathNode struct {
@@ -77,8 +92,29 @@ func newColumnRetainedSemanticStreamStreams() *columnRetainedSemanticStreamStrea
 }
 
 func (s *columnRetainedSemanticStreamStreams) appendValue(path []string, row uint64, raw []byte, streamEntryCapacity int) {
+	if s.err != nil {
+		return
+	}
+	if s.maxEntries > 0 && s.entries >= s.maxEntries {
+		s.err = fmt.Errorf("%w: retained block has more than %d entries", ErrPreparedInsertResourceLimit, s.maxEntries)
+		return
+	}
+	if s.maxPathBytes > 0 {
+		pathBytes := 0
+		for _, segment := range path {
+			pathBytes += columnRetainedSemanticStreamDecimalSize(len(segment)) + 2 + len(segment)
+			if pathBytes > s.maxPathBytes {
+				s.err = fmt.Errorf("%w: retained path exceeds %d bytes", ErrPreparedInsertResourceLimit, s.maxPathBytes)
+				return
+			}
+		}
+	}
 	current := &s.root
 	for _, segment := range path {
+		if s.maxPaths > 0 && current.children[segment] == nil && len(s.byKey) >= s.maxPaths {
+			s.err = fmt.Errorf("%w: retained block has more than %d paths", ErrPreparedInsertResourceLimit, s.maxPaths)
+			return
+		}
 		if current.children == nil {
 			current.children = make(map[string]*columnRetainedSemanticStreamPathNode)
 		}
@@ -91,6 +127,10 @@ func (s *columnRetainedSemanticStreamStreams) appendValue(path []string, row uin
 	}
 	stream := current.stream
 	if stream == nil {
+		if s.maxPaths > 0 && len(s.byKey) >= s.maxPaths {
+			s.err = fmt.Errorf("%w: retained block has more than %d paths", ErrPreparedInsertResourceLimit, s.maxPaths)
+			return
+		}
 		key := columnRetainedSemanticStreamPathKey(path)
 		stream = s.byKey[key]
 		if stream == nil {
@@ -102,7 +142,71 @@ func (s *columnRetainedSemanticStreamStreams) appendValue(path []string, row uin
 		}
 		current.stream = stream
 	}
-	stream.appendValue(row, raw)
+	if s.maxEntries > 0 {
+		s.appendPreparedValue(stream, row, raw)
+	} else {
+		stream.appendValue(row, raw)
+	}
+}
+
+// Reserve the new backing while the old slice still exists. Explicit growth
+// makes both retained capacity and the copy-time peak predictable.
+func (s *columnRetainedSemanticStreamStreams) reserveEntryHeaderGrowth(oldCap, newCap, elementBytes int) bool {
+	allocation := int64(newCap) * int64(elementBytes)
+	peak := s.entryHeaderBytes + allocation
+	if s.maxEntryHeaderBytes > 0 && peak > s.maxEntryHeaderBytes {
+		s.err = fmt.Errorf("%w: retained entry headers need %d bytes, maximum %d", ErrPreparedInsertResourceLimit, peak, s.maxEntryHeaderBytes)
+		return false
+	}
+	if peak > s.peakEntryHeaderBytes {
+		s.peakEntryHeaderBytes = peak
+	}
+	s.entryHeaderBytes += int64(newCap-oldCap) * int64(elementBytes)
+	return true
+}
+
+func (s *columnRetainedSemanticStreamStreams) appendPreparedValue(p *columnRetainedSemanticStreamPath, row uint64, raw []byte) {
+	if len(p.rawValues) == cap(p.rawValues) {
+		newCap := max(1, 2*cap(p.rawValues))
+		if newCap > s.maxEntries {
+			newCap = s.maxEntries
+		}
+		if !s.reserveEntryHeaderGrowth(cap(p.rawValues), newCap, int(unsafe.Sizeof([]byte{}))) {
+			return
+		}
+		grown := make([][]byte, len(p.rawValues), newCap)
+		copy(grown, p.rawValues)
+		p.rawValues = grown
+	}
+	if p.rows != nil {
+		if len(p.rows) == cap(p.rows) {
+			newCap := max(1, 2*cap(p.rows))
+			if newCap > s.maxEntries {
+				newCap = s.maxEntries
+			}
+			if !s.reserveEntryHeaderGrowth(cap(p.rows), newCap, int(unsafe.Sizeof(uint64(0)))) {
+				return
+			}
+			grown := make([]uint64, len(p.rows), newCap)
+			copy(grown, p.rows)
+			p.rows = grown
+		}
+		p.rows = append(p.rows, row)
+	} else if row != uint64(len(p.rawValues)) {
+		capacity := cap(p.rawValues)
+		if !s.reserveEntryHeaderGrowth(0, capacity, int(unsafe.Sizeof(uint64(0)))) {
+			return
+		}
+		p.rows = make([]uint64, len(p.rawValues), capacity)
+		for i := range p.rawValues {
+			p.rows[i] = uint64(i)
+		}
+		p.rows = append(p.rows, row)
+	}
+	p.rawValueBytes += len(raw)
+	p.valueLengthUvarintBytes += columnRetainedSemanticStreamV1UvarintSize(uint64(len(raw)))
+	p.rawValues = append(p.rawValues, raw)
+	s.entries++
 }
 
 func (p *columnRetainedSemanticStreamPath) appendValue(row uint64, raw []byte) {
@@ -138,6 +242,7 @@ type columnRetainedSemanticStreamV1DecodedBlock struct {
 type columnRetainedSemanticStreamV1StoredBlockEncoder struct {
 	enc             *zstd.Encoder
 	rawBlockScratch []byte
+	outputBudget    int64 // prepared-only raw/compressed/wrapper peak; workspace is reserved separately
 }
 
 type columnRetainedSemanticStreamV1PreparedBlock struct {
@@ -195,8 +300,12 @@ type columnRetainedSemanticStreamV1DeclaredPathTrie struct {
 }
 
 type columnRetainedSemanticStreamV1PathSegmentInterner struct {
-	values   []string
-	segments map[string]string
+	values    []string
+	segments  map[string]string
+	maxValues int
+	maxBytes  int
+	usedBytes int
+	err       error
 }
 
 const columnRetainedSemanticStreamV1PathSegmentInternerLinearLimit = 16
@@ -205,12 +314,18 @@ func (i *columnRetainedSemanticStreamV1PathSegmentInterner) intern(key []byte) s
 	if i == nil {
 		return string(key)
 	}
+	if i.err != nil {
+		return ""
+	}
 	if len(key) == 0 {
 		return ""
 	}
 	if i.segments != nil {
 		if value, ok := i.segments[string(key)]; ok {
 			return value
+		}
+		if !i.admit(key, len(i.segments)) {
+			return ""
 		}
 		value := string(key)
 		i.segments[value] = value
@@ -220,6 +335,9 @@ func (i *columnRetainedSemanticStreamV1PathSegmentInterner) intern(key []byte) s
 		if columnRetainedSemanticStreamV1StringBytesEqual(value, key) {
 			return value
 		}
+	}
+	if !i.admit(key, len(i.values)) {
+		return ""
 	}
 	value := string(key)
 	i.values = append(i.values, value)
@@ -231,6 +349,15 @@ func (i *columnRetainedSemanticStreamV1PathSegmentInterner) intern(key []byte) s
 		i.values = nil
 	}
 	return value
+}
+
+func (i *columnRetainedSemanticStreamV1PathSegmentInterner) admit(key []byte, values int) bool {
+	if i.maxValues > 0 && values >= i.maxValues || i.maxBytes > 0 && len(key) > i.maxBytes-i.usedBytes {
+		i.err = fmt.Errorf("%w: retained path interner exceeds prepared key budget", ErrPreparedInsertResourceLimit)
+		return false
+	}
+	i.usedBytes += len(key)
+	return true
 }
 
 func columnRetainedSemanticStreamV1StringBytesEqual(value string, key []byte) bool {
@@ -680,7 +807,17 @@ func prepareColumnRetainedSemanticStreamV1StorageBlockWithIDs(
 	}
 	var metrics columnRetainedSemanticStreamV1PrepareMetrics
 	streams := newColumnRetainedSemanticStreamStreams()
+	if blockBudget > 0 {
+		streams.maxPaths = preparedSemanticStreamMaxBlockPaths
+		streams.maxPathBytes = preparedSemanticStreamMaxPathBytes
+		streams.maxEntries = preparedSemanticStreamMaxBlockEntries
+		streams.maxEntryHeaderBytes = preparedSemanticStreamMaxEntryHeaderBytes
+	}
 	pathInterner := &columnRetainedSemanticStreamV1PathSegmentInterner{}
+	if blockBudget > 0 {
+		pathInterner.maxValues = preparedSemanticStreamMaxInternedSegments
+		pathInterner.maxBytes = preparedSemanticStreamMaxInternedKeyBytes
+	}
 	// Only generic retained JSON needs the structural cursor. Keep the root
 	// object fast path allocation-free.
 	var jsonCursor *columnRetainedSemanticStreamV1JSONCursor
@@ -726,6 +863,7 @@ func prepareColumnRetainedSemanticStreamV1StorageBlockWithIDs(
 			if blockBudget > 0 {
 				jsonCursor.maxDepth = preparedSemanticStreamMaxCursorDepth
 				jsonCursor.maxDescriptors = preparedSemanticStreamMaxCursorDescriptors
+				jsonCursor.maxKeyBytes = preparedSemanticStreamMaxKeyBytes
 			}
 		}
 		values, err := collectColumnRetainedSemanticStreamV1JSONCursorDocument(cfg, retainedSkipTrie, documents[i], uint64(row), streamEntryCapacity, streams, pathInterner, declaredPathTrie, declaredValuesDest, declaredStringInterner, jsonCursor)
@@ -767,6 +905,14 @@ func prepareColumnRetainedSemanticStreamV1StorageBlockWithIDs(
 	storedBlockEncoder, err := newColumnRetainedSemanticStreamV1StoredBlockEncoder()
 	if err != nil {
 		return columnRetainedSemanticStreamV1PreparedBlock{}, err
+	}
+	if blockBudget > 0 {
+		// A pooled buffer can be much larger than this block. Prepared raw
+		// output takes ownership of its backing, so size it from this block's
+		// checked hint instead of inheriting unrelated pooled capacity.
+		putColumnRetainedSemanticStreamV1RawBlockScratch(storedBlockEncoder.rawBlockScratch)
+		storedBlockEncoder.rawBlockScratch = nil
+		storedBlockEncoder.outputBudget = blockBudget
 	}
 	metrics.BlockEncoderSetup = time.Since(encoderStart)
 	defer storedBlockEncoder.close()
@@ -1667,17 +1813,42 @@ func (e *columnRetainedSemanticStreamV1StoredBlockEncoder) encodeStreamsWithRawL
 
 func (e *columnRetainedSemanticStreamV1StoredBlockEncoder) encodeStreamsWithRawLimitMeasured(rows int, streams *columnRetainedSemanticStreamStreams, compressedRawLimit int) ([]byte, time.Duration, time.Duration, error) {
 	rawStart := time.Now()
+	if e.outputBudget > 0 {
+		// The raw builder allocates from sizeHint before the stored-block
+		// encoder sees the result. Count a pooled old scratch and its replacement
+		// together when growth is necessary.
+		keys := make([]string, 0, len(streams.byKey))
+		for key := range streams.byKey {
+			keys = append(keys, key)
+		}
+		sizeHint := columnRetainedSemanticStreamV1RawBlockSizeHint(rows, keys, streams)
+		rawCapacity := cap(e.rawBlockScratch)
+		oldCapacity := 0
+		if rawCapacity < sizeHint {
+			oldCapacity = rawCapacity
+			rawCapacity = sizeHint + columnRetainedSemanticStreamV1RawBlockScratchGrowthSlack(sizeHint)
+		}
+		if int64(rawCapacity+oldCapacity+cap(keys)*int(unsafe.Sizeof(""))) > e.outputBudget {
+			return nil, time.Since(rawStart), 0, fmt.Errorf("%w: retained raw block scratch exceeds encoding budget %d", ErrPreparedInsertResourceLimit, e.outputBudget)
+		}
+	}
 	raw, err := encodeColumnRetainedSemanticStreamV1RawBlockFromStreamsInto(rows, streams, e.rawBlockScratch)
 	if err != nil {
 		return nil, time.Since(rawStart), 0, err
 	}
 	rawDuration := time.Since(rawStart)
 	storedStart := time.Now()
-	block, err := e.encodeWithRawLimit(raw, compressedRawLimit)
+	block, err := e.encodeWithRawLimitBudget(raw, compressedRawLimit, e.outputBudget)
 	if err != nil {
 		return nil, rawDuration, time.Since(storedStart), err
 	}
 	if columnRetainedSemanticStreamSlicesShareStart(block, raw) {
+		if e.outputBudget > 0 {
+			// The prepared block takes ownership of the raw buffer. Keeping a
+			// scratch copy would add a second raw-sized allocation to the peak.
+			e.rawBlockScratch = nil
+			return block, rawDuration, time.Since(storedStart), nil
+		}
 		block = append([]byte(nil), block...)
 	}
 	storedDuration := time.Since(storedStart)
@@ -1698,8 +1869,17 @@ func columnRetainedSemanticStreamSlicesShareStart(a, b []byte) bool {
 }
 
 func (e *columnRetainedSemanticStreamV1StoredBlockEncoder) encodeWithRawLimit(raw []byte, compressedRawLimit int) ([]byte, error) {
+	return e.encodeWithRawLimitBudget(raw, compressedRawLimit, 0)
+}
+
+// The prepared variant reserves the worst-case zstd output and wrapper before
+// EncodeAll. The ordinary path keeps its historical allocation behavior.
+func (e *columnRetainedSemanticStreamV1StoredBlockEncoder) encodeWithRawLimitBudget(raw []byte, compressedRawLimit int, outputBudget int64) ([]byte, error) {
 	if !bytes.HasPrefix(raw, columnRetainedSemanticStreamV1BlockMagic) {
 		return nil, errors.New("collections: retained block is not semantic-stream-v1 encoded")
+	}
+	if outputBudget > 0 && int64(cap(raw)) > outputBudget {
+		return nil, fmt.Errorf("%w: retained block raw capacity %d exceeds encoding budget %d", ErrPreparedInsertResourceLimit, cap(raw), outputBudget)
 	}
 	if compressedRawLimit > 0 && len(raw) > compressedRawLimit {
 		return raw, nil
@@ -1707,7 +1887,18 @@ func (e *columnRetainedSemanticStreamV1StoredBlockEncoder) encodeWithRawLimit(ra
 	if e == nil || e.enc == nil {
 		return nil, errors.New("collections: semantic-stream-v1 retained block zstd encoder is closed")
 	}
-	compressed := e.enc.EncodeAll(raw, nil)
+	var compressed []byte
+	if outputBudget > 0 {
+		maximumCompressed := e.enc.MaxEncodedSize(len(raw))
+		wrapperMaximum := len(columnRetainedSemanticStreamV1BlockZSTDMagic) + binary.MaxVarintLen64 + maximumCompressed
+		peak := int64(cap(raw)) + int64(maximumCompressed) + int64(wrapperMaximum)
+		if peak > outputBudget {
+			return nil, fmt.Errorf("%w: retained block output peak %d exceeds encoding budget %d", ErrPreparedInsertResourceLimit, peak, outputBudget)
+		}
+		compressed = e.enc.EncodeAll(raw, make([]byte, 0, maximumCompressed))
+	} else {
+		compressed = e.enc.EncodeAll(raw, nil)
+	}
 	out := make([]byte, 0, len(columnRetainedSemanticStreamV1BlockZSTDMagic)+binary.MaxVarintLen64+len(compressed))
 	out = append(out, columnRetainedSemanticStreamV1BlockZSTDMagic...)
 	out = binary.AppendUvarint(out, uint64(len(raw)))
