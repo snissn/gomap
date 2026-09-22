@@ -50,6 +50,19 @@ func TestVectorPartitionProductionAssetBindingsAllowSingleOwnerV1(t *testing.T) 
 	if _, err := vectorPartitionM8ValidateAssetsV1(manifest, digests); err == nil {
 		t.Fatal("M8 accepted a single owner")
 	}
+
+	manifest.Assets = append(manifest.Assets, collections.VectorPartitionAssetV1{
+		ID: "unused-partition-0", Checksum: strings.Repeat("3", 64), PartitionID: 0, Bytes: 1,
+		Ref: collections.ColumnAssetRef{Kind: collections.ColumnAssetKindTCS1PartImage, Namespace: "test", Generation: 4, PartID: 3, FileID: 3, Length: 1},
+	})
+	manifest.Canonicalize()
+	if err := manifest.Validate(collections.DefaultVectorPartitionManifestLimits()); err != nil {
+		t.Fatalf("duplicate-partition fixture must remain manifest-valid: %v", err)
+	}
+	digests["group-a"] = vectorPartitionM8GroupAssetSetDigestV1("group-a", manifest)
+	if _, err := vectorPartitionValidateAssetBindingsV1(manifest, digests); err == nil {
+		t.Fatal("production asset bindings accepted an unused descriptor for an unsplit partition")
+	}
 }
 
 func TestVectorPartitionProductionAssetBindingsAllowCoLocatedDomainChunksV1(t *testing.T) {
