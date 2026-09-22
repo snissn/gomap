@@ -3,6 +3,7 @@ package nativewire
 import (
 	"context"
 	"errors"
+	"os"
 	"testing"
 	"time"
 
@@ -12,7 +13,31 @@ import (
 )
 
 func TestPeerSecurityReadinessNeedsQuorumAndDrainPreservesStatusV1(t *testing.T) {
-	configs := fixedPeerTestConfigsV1(t)
+	for _, ownsData := range []bool{false, true} {
+		name := "storage-free-consumer"
+		if ownsData {
+			name = "data-owner-consumer"
+		}
+		t.Run(name, func(t *testing.T) { peerSecurityReadinessSparseV1(t, ownsData) })
+	}
+}
+
+func peerSecurityReadinessSparseV1(t *testing.T, ownsData bool) {
+	configs := sparseCatalogTestConfigsV1(t)
+	if ownsData {
+		group := configs[0].Groups[0]
+		// Move this fixed test group's owner to the existing catalog consumer.
+		// This happens before opening any stores; it is not live reconfiguration.
+		group.Peers = append([]raftcluster.Peer(nil), group.Peers...)
+		group.Peers[0].ID = configs[3].NodeID
+		group.BootstrapNode = configs[3].NodeID
+		address := configs[0].RaftListen[group.ID]
+		delete(configs[0].RaftListen, group.ID)
+		configs[3].RaftListen[group.ID] = address
+		for i := range configs {
+			configs[i].Groups[0] = group
+		}
+	}
 	ca := newPeerCAFixtureV1(t)
 	nodes := make([]*FixedPeerTCPRuntimeV1, len(configs))
 	for i := range configs {
@@ -44,7 +69,14 @@ func TestPeerSecurityReadinessNeedsQuorumAndDrainPreservesStatusV1(t *testing.T)
 		}
 		return false
 	})
-	catalog := raftplacement.CatalogV1{Groups: []raftplacement.GroupV1{{ID: "group-a", Members: []raftcluster.NodeID{"ingress"}}, {ID: "group-b", Members: []raftcluster.NodeID{"owner-1", "owner-2"}}}}
+	catalog := raftplacement.CatalogV1{}
+	for _, group := range configs[0].Groups {
+		var members []raftcluster.NodeID
+		for _, peer := range group.Peers {
+			members = append(members, peer.ID)
+		}
+		catalog.Groups = append(catalog.Groups, raftplacement.GroupV1{ID: group.ID, Members: members})
+	}
 	for _, group := range configs[0].Groups {
 		catalog.Placements = append(catalog.Placements, raftplacement.CollectionPlacementV1{Collection: raftplacement.CollectionRefV1{Database: "default", Catalog: "default", Collection: string(group.ID)}, GroupID: group.ID})
 	}
@@ -62,7 +94,7 @@ func TestPeerSecurityReadinessNeedsQuorumAndDrainPreservesStatusV1(t *testing.T)
 	fixedPeerWaitV1(t, ctx, func() bool {
 		for _, node := range nodes {
 			status, err := node.Status(ctx)
-			if err != nil || status.Catalog.Epoch != 1 {
+			if err != nil || (node.meta != nil && status.Catalog.Epoch != 1) {
 				return false
 			}
 			for _, group := range status.Groups {
@@ -100,7 +132,7 @@ func TestPeerSecurityReadinessNeedsQuorumAndDrainPreservesStatusV1(t *testing.T)
 		}
 	}
 	fixedPeerWaitV1(t, ctx, func() bool {
-		for _, config := range configs {
+		for _, config := range configs[:3] {
 			report, err := client.ReadinessV1(ctx, config.NodeID)
 			if err != nil || !report.Live || !report.Ready {
 				return false
@@ -108,6 +140,18 @@ func TestPeerSecurityReadinessNeedsQuorumAndDrainPreservesStatusV1(t *testing.T)
 		}
 		return true
 	})
+	if report, err := client.ReadinessV1(ctx, configs[3].NodeID); err != nil || !report.Ready || report.CatalogEpoch != 1 {
+		t.Fatalf("healthy catalog consumer never ready: %+v %v", report, err)
+	}
+	consumer := nodes[3]
+	if consumer.meta != nil || consumer.authority != nil {
+		t.Fatal("consumer installed local catalog authority")
+	}
+	if !ownsData {
+		if _, err := os.Stat(configs[3].DataRoot); !os.IsNotExist(err) {
+			t.Fatalf("consumer opened data root: %v", err)
+		}
+	}
 	nodes[0].BeginDrainV1()
 	observer := nodes[1].client
 	if _, err := observer.Status(ctx, configs[0].NodeID); err != nil {
@@ -127,4 +171,19 @@ func TestPeerSecurityReadinessNeedsQuorumAndDrainPreservesStatusV1(t *testing.T)
 	if report, err := observer.ReadinessV1(ctx, configs[1].NodeID); err == nil || !report.Live || report.Ready {
 		t.Fatalf("missing data quorum advertised readiness: %+v %v", report, err)
 	}
+	// Readiness is local-group scoped: a healthy consumer must not inherit a
+	// different data group's outage while the catalog still has quorum.
+	if report, err := observer.ReadinessV1(ctx, configs[3].NodeID); err != nil || !report.Ready {
+		t.Fatalf("healthy sparse consumer: %+v %v", report, err)
+	}
+	if err := nodes[0].Close(); err != nil {
+		t.Fatal(err)
+	}
+	if report, err := observer.ReadinessV1(ctx, configs[3].NodeID); err == nil || !report.Live || report.Ready {
+		t.Fatalf("consumer cached catalog readiness after quorum loss: %+v %v", report, err)
+	}
+	if consumer.meta != nil || consumer.authority != nil {
+		t.Fatal("readiness manufactured local catalog authority")
+	}
+
 }

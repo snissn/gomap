@@ -10,6 +10,7 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
 	"github.com/snissn/gomap/TreeDB/internal/raftentry"
+	"github.com/snissn/gomap/TreeDB/internal/raftplacement"
 )
 
 type FixedPeerConfigIdentityV1 struct {
@@ -105,7 +106,18 @@ func (r *FixedPeerTCPRuntimeV1) readinessV1(ctx context.Context) (FixedPeerReadi
 		report.Error = "node is draining or closed"
 		return report, raftcluster.ErrAdmissionUnavailable
 	}
-	catalog, err := r.catalogFence(ctx)
+	var catalog raftplacement.CatalogMetaStatusV1
+	var err error
+	if r.meta == nil {
+		// Consumers have no local catalog authority to fence. Resolve the
+		// leader afresh and require its request-scoped quorum/applied fence,
+		// just as consumer routing does. Never install or cache this reply.
+		var reply fixedPeerReplyV1
+		reply, err = r.catalogConsumerCall(ctx, "catalog-read", fixedPeerRequestV1{})
+		catalog = reply.Catalog
+	} else {
+		catalog, err = r.catalogFence(ctx)
+	}
 	if err != nil {
 		report.Error = err.Error()
 		return report, err

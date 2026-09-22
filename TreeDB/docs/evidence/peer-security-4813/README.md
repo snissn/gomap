@@ -58,6 +58,41 @@ before the full pre-decode/pipeline byte accounting was installed. They are not
 substitutes for the later full-boundary cost. Final operations/IP-counter changes
 must retain their own current-head measurements before merge.
 
+## Operations-head confirmation
+
+Exact operations source `f13699dff6ebfc1bbd8243e696394f7fecc4f14d` passed
+[public cost job106868617427](https://github.com/snissn/gomap/actions/runs/35763949327/job/106868617427)
+and [security/operations qualify106868616735](https://github.com/snissn/gomap/actions/runs/35763949327/job/106868616735).
+All 12 records are in [`measurements-f13699d.jsonl`](measurements-f13699d.jsonl).
+Sparse plain/TLS medians were 6.508654/6.690200 ms (+2.79%); Inventory40
+6.331073/6.725239 ms (+6.23%). Allocations/retained process resources remain in
+the same measured range as the prior full-boundary source. The difference between
+these short runs is not evidence of a speedup; both records are retained.
+
+The separate P1 qualification
+[job106868623042](https://github.com/snissn/gomap/actions/runs/35763949196/job/106868623042)
+failed a snapshot-restart route assertion with `catalog meta unavailable` after
+its fixture waited only for observational `State=Leader`. Thirty local repetitions
+passed (32.494s), so no deterministic local reproduction or production regression
+is claimed. The fixture now waits for actual catalog/data quorum/apply readiness
+**after reopen**, before its unchanged one-shot snapshot/version/mutation/stale
+assertions. It retries only these precondition reads; mutation retries are not
+introduced. The stronger fixture passed three repetitions under race (4.303s)
+and must pass the subsequent exact-head hosted gate before merge.
+
+Independent review of `f13699d` found that readiness always attempted a local
+catalog fence, making catalog consumers permanently unready. A new real TLS
+four-node sparse test reproduced the failure for both a storage-free consumer and
+a data-owning consumer: `Live=true Ready=false CatalogEpoch=0` with
+`catalog meta unavailable`, despite initialized remote quorum and durable data
+commands (1.539s). The fix uses the existing request-scoped catalog leader read
+for consumers, without installing/caching local authority. Both sparse variants
+also check unrelated data-group outage, loss of catalog quorum, and no invented
+local stores/authority. Combined with the stronger snapshot fixture, three local
+race repetitions passed in 11.606s. The exact reviewed finding is
+[4074786847](https://github.com/snissn/gomap/pull/4817#discussion_r4074786847);
+subsequent head CI and independent review remain required.
+
 ## Allocation/lifetime audit
 
 - Startup: one bounded normalized configuration clone/hash, group/identity/IP
