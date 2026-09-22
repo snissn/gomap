@@ -122,6 +122,7 @@ type FixedPeerTCPClientV1 struct {
 	addresses        map[raftcluster.NodeID]string
 	calls, readCalls chan struct{}
 	security         *peerTransportSecurityV1
+	peerTransport    *PeerTransportV1
 }
 
 func validateFixedPeerConfigV1(c FixedPeerTCPConfigV1) (FixedPeerTCPConfigV1, string, error) {
@@ -314,7 +315,7 @@ func NewFixedPeerTCPClientV1(config FixedPeerTCPConfigV1) (*FixedPeerTCPClientV1
 	for _, node := range c.Nodes {
 		addresses[node.ID] = node.Address
 	}
-	return &FixedPeerTCPClientV1{config: c, digest: digest, http: newHTTPClient(), readHTTP: newHTTPClient(), addresses: addresses, calls: make(chan struct{}, fixedPeerClientInflightV1), readCalls: make(chan struct{}, fixedPeerClientInflightV1), security: security}, nil
+	return &FixedPeerTCPClientV1{config: c, digest: digest, http: newHTTPClient(), readHTTP: newHTTPClient(), addresses: addresses, calls: make(chan struct{}, fixedPeerClientInflightV1), readCalls: make(chan struct{}, fixedPeerClientInflightV1), security: security, peerTransport: peerTransportFromSecurityV1(c, security)}, nil
 }
 
 func OpenFixedPeerTCPRuntimeV1(config FixedPeerTCPConfigV1) (*FixedPeerTCPRuntimeV1, error) {

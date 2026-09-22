@@ -401,6 +401,8 @@ func vectorPartitionShardSearchTCPReconnectableV1(err error) bool {
 // VectorPartitionShardSearchTCPServerV1 serves one M5 service over the same
 // bounded framing contract used by the dispatcher.
 type VectorPartitionShardSearchTCPServerV1 struct {
+	PeerTransport            *PeerTransportV1
+	PeerGroupID              raftcluster.GroupID
 	Service                  VectorPartitionShardSearchHandlerV1
 	EndpointIdentity         VectorPartitionShardEndpointIdentityV1
 	EndpointIdentityProvider func() VectorPartitionShardEndpointIdentityV1

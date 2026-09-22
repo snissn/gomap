@@ -31,9 +31,9 @@ func peerCredentialsFixtureV1(t testing.TB, cluster, node string) *PeerCredentia
 }
 
 type peerCAFixtureV1 struct {
-	key *ecdsa.PrivateKey
+	key         *ecdsa.PrivateKey
 	certificate *x509.Certificate
-	der []byte
+	der         []byte
 }
 
 func newPeerCAFixtureV1(t testing.TB) *peerCAFixtureV1 {
@@ -59,7 +59,9 @@ func (ca *peerCAFixtureV1) issue(t testing.TB, cluster, node string, notBefore, 
 	}
 	identity := &url.URL{Scheme: "spiffe", Host: "treedb", Path: "/cluster/" + cluster + "/node/" + node}
 	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 120))
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	leaf := &x509.Certificate{SerialNumber: serial, NotBefore: notBefore, NotAfter: notAfter, URIs: []*url.URL{identity}, IPAddresses: []net.IP{net.ParseIP("127.0.0.1")}, KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth}}
 	leafDER, err := x509.CreateCertificate(rand.Reader, leaf, ca.certificate, &leafKey.PublicKey, ca.key)
 	if err != nil {

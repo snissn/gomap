@@ -122,7 +122,11 @@ func TestPeerShardCloseCancelsPendingDialV1(t *testing.T) {
 func TestHotGroupCannotExhaustUnrelatedGroupAdmissionV1(t *testing.T) {
 	release := make(chan struct{})
 	defer func() {
-		select { case <-release: default: close(release) }
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
 	}()
 	hot := newVectorPartitionShardSearchTCPListenerV1(t, vectorPartitionShardSearchHandlerFuncV1(func(ctx context.Context, request VectorPartitionShardSearchRequestV1) (VectorPartitionShardSearchResponseV1, error) {
 		select {
@@ -136,7 +140,9 @@ func TestHotGroupCannotExhaustUnrelatedGroupAdmissionV1(t *testing.T) {
 		return VectorPartitionShardSearchResponseV1{Version: VectorPartitionShardSearchVersionV1, RequestID: request.RequestID}, nil
 	}))
 	dispatcher, err := NewVectorPartitionShardSearchTCPDispatcherV1(map[raftcluster.GroupID]string{"hot": hot.Addr().String(), "cold": cold.Addr().String()})
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer dispatcher.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -158,6 +164,8 @@ func TestHotGroupCannotExhaustUnrelatedGroupAdmissionV1(t *testing.T) {
 	}
 	close(release)
 	for i := 0; i < count; i++ {
-		if err := <-done; err != nil { t.Fatal(err) }
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
 	}
 }

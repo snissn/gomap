@@ -76,6 +76,7 @@ const (
 
 // ServerOptions configures a native-wire server.
 type ServerOptions struct {
+	PeerTransport                   *PeerTransportV1
 	Limits                          iwire.Limits
 	MaxFrameSize                    uint64
 	MaxInFlight                     int
@@ -103,6 +104,7 @@ type ServerOptions struct {
 
 // Server serves native-wire control and command frames for TreeDB.
 type Server struct {
+	peerTransport                   *PeerTransportV1
 	limits                          iwire.Limits
 	maxInFlight                     int
 	maxConnections                  int
@@ -389,6 +391,7 @@ func NewServer(opts ServerOptions) *Server {
 		insertBatchCombineDrainYields = defaultInsertBatchCombineDrainYields
 	}
 	server := &Server{
+		peerTransport:                   opts.PeerTransport,
 		limits:                          limits,
 		maxInFlight:                     maxInFlight,
 		maxConnections:                  maxConnections,
@@ -1191,3 +1194,4 @@ func (s *Server) Stats() map[string]string {
 	}
 	return out
 }
+
