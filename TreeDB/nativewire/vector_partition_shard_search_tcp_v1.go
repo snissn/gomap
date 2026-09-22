@@ -152,7 +152,7 @@ func (d *VectorPartitionShardSearchTCPDispatcherV1) DispatchVectorPartitionShard
 		ctx = context.Background()
 	}
 	if err := ctx.Err(); err != nil {
-		return VectorPartitionShardSearchResponseV1{}, err
+		return VectorPartitionShardSearchResponseV1{}, vectorPartitionShardSearchTCPTransportErrorV1(ctx, request.TargetGroupID, err)
 	}
 	// Bound active callers and pool waiters together, across all endpoints.
 	// Refusal happens before encoding or sending a search request.

@@ -1601,3 +1601,18 @@ encode/decode/dispatch nanoseconds.
    and future cluster routing.
 5. Whether `visible` should remain the standalone default once native clients
    move beyond benchmark and compatibility work.
+
+## Fixed-peer catalog consumers
+
+The separate [private fixed-peer HTTP/TCP adapter](fixed-peer-tcp-runtime-v1.md)
+allows configured ingress/data nodes outside the catalog voting group. Its
+internal `catalog-route` and `catalog-validate` operations run a fresh catalog
+leader quorum fence; they do not add public native-wire command IDs, sections,
+wire versions, mutation kinds, or acknowledgement policies. Existing command
+matrices and generated wire registries are unchanged.
+
+The actual deterministic command remains bound to collection route metadata at
+ingress and at the local owner. The owner validates current catalog proof before
+production Raft submission. Pre-send admission refusals remain definite;
+post-send lost mutation responses retain commit ambiguity. Catalog status from
+a consumer carries no local applied-progress or readiness claim.

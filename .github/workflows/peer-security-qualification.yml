@@ -33,12 +33,17 @@ jobs:
           git rev-parse HEAD
           go version
       - name: Global connection and peer authorization regressions
-        run: go test ./TreeDB/nativewire -run 'Test(ManyIdleEndpointsRespectGlobalConnectionBudgetV1|PeerShard|VectorPartitionShardSearchTCP|UnknownPeerCannotSubmitOrInstallSnapshotV1|HotGroupCannotExhaustUnrelatedGroupAdmissionV1)' -count=3 -timeout=6m -v
+        run: go test ./TreeDB/nativewire -run 'Test(ManyIdleEndpointsRespectGlobalConnectionBudgetV1|PeerShard|VectorPartitionShardSearchTCP|HotGroupCannotExhaustUnrelatedGroupAdmissionV1)' -count=3 -timeout=6m -v
       - name: Resource and TCP race checks
         run: go test -race ./TreeDB/nativewire -run 'Test(ManyIdleEndpointsRespectGlobalConnectionBudgetV1|PeerShard|VectorPartitionShardSearchTCP)' -count=1 -timeout=6m -v
+      - name: Retained serving topology guardrail
+        run: go test ./cmd/treedb_vector_partition_bench -run '^TestM8ServingResourcesRetainedTopologyV1$' -count=1 -timeout=4m -v
+      - name: Credential-free peer regression
+        run: go test ./TreeDB/nativewire -run '^TestUnknownPeerCannotSubmitOrInstallSnapshotV1$' -count=1 -timeout=4m -v
       - name: Formatting
+        if: ${{ !cancelled() }}
         run: |
-          files="TreeDB/nativewire/peer_shard_connection_budget_v1.go TreeDB/nativewire/vector_partition_global_connection_budget_v1_test.go TreeDB/nativewire/vector_partition_shard_search_tcp_v1.go"
+          files="TreeDB/nativewire/peer_shard_connection_budget_v1.go TreeDB/nativewire/vector_partition_global_connection_budget_v1_test.go TreeDB/nativewire/vector_partition_shard_search_tcp_v1.go TreeDB/nativewire/fixed_peer_tcp_runtime_v1.go TreeDB/nativewire/fixed_peer_security_v1_test.go TreeDB/nativewire/peer_credentials_v1.go"
           gofmt -d $files || true
           bad=$(gofmt -l $files)
           if [ -n "$bad" ]; then
