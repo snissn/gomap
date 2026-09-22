@@ -105,6 +105,39 @@ jobs:
         run: |
           set -euo pipefail
           go test -race ./TreeDB/collections ./TreeDB/internal/commitlog ./TreeDB/internal/raftplacement ./TreeDB/internal/sourcepartition ./TreeDB/internal/vectorpartition ./TreeDB/nativewire -run 'Test(VectorPartitionSourceImport|CollectionSourceImport|TypedSource|TypedMinimaInsertAndReplay|VectorPartitionOwnerSearchOpenPlan|OwnerGenerationSource|SourceShardMap|SourceSnapshot|VectorPartitionPagedRoot|VectorPartitionManifestContextDigest)' -count=1 -timeout=10m -v | tee owner-local-race.txt
+      - name: Retain verified development inputs
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          p2_bundle_dir="$RUNNER_TEMP/p2-development-inputs"
+          mkdir -p "$p2_bundle_dir"
+          go version | tee "$p2_bundle_dir/provenance.txt"
+          git rev-parse HEAD | tee -a "$p2_bundle_dir/provenance.txt"
+          go env GOOS GOARCH | tee -a "$p2_bundle_dir/provenance.txt"
+          go mod download
+          go mod verify | tee -a "$p2_bundle_dir/provenance.txt"
+          p2_toolchain_dir="$(go env GOROOT)"
+          p2_module_dir="$(go env GOMODCACHE)"
+          # Archive only public, verified development inputs. No .git, home,
+          # Actions environment, credentials, or runtime database is included.
+          cp "$p2_toolchain_dir/bin/gofmt" "$p2_bundle_dir/gofmt"
+          tar -czf "$p2_bundle_dir/go-toolchain.tar.gz" -C "$p2_toolchain_dir" .
+          tar -czf "$p2_bundle_dir/go-modules.tar.gz" -C "$p2_module_dir" .
+          git archive --format=tar.gz -o "$p2_bundle_dir/source.tar.gz" HEAD
+          cd "$p2_bundle_dir"
+          p2_bundle_bytes="$(du -sb . | cut -f1)"
+          [[ "$p2_bundle_bytes" -le 2147483648 ]]
+          sha256sum gofmt go-toolchain.tar.gz go-modules.tar.gz source.tar.gz | tee SHA256SUMS
+      - name: Upload verified development inputs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: p2-development-inputs-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/p2-development-inputs/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
       - name: Upload focused evidence
         if: always()
         uses: actions/upload-artifact@v4

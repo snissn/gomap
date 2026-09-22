@@ -80,7 +80,9 @@ func TestVectorPartitionSourceImportAtomicResumeAndReplayV2(t *testing.T) {
 	progressRaw, progressPresent, progressErr := getSystemValue(snap, progressKey)
 	bindingRaw, bindingPresent, bindingErr := getSystemValue(snap, progressKey+":binding")
 	_ = snap.Close()
-	if progressErr != nil || bindingErr != nil || !progressPresent || !bindingPresent || len(progressRaw) > 3000 || len(bindingRaw) > 3000 { t.Fatalf("unbounded or missing durable source progress: %d %d %v %v", len(progressRaw), len(bindingRaw), progressErr, bindingErr) }
+	if progressErr != nil || bindingErr != nil || !progressPresent || !bindingPresent || len(progressRaw) > 3000 || len(bindingRaw) > 3000 {
+		t.Fatalf("unbounded or missing durable source progress: %d %d %v %v", len(progressRaw), len(bindingRaw), progressErr, bindingErr)
+	}
 	after := collectionCommandWALFrames(t, dir)
 	if len(after) != len(before)+1 || after[len(after)-1].PayloadFormat != commitlog.PayloadFormatCollectionSourceImportV2 {
 		t.Fatal("range did not use exactly one format-14 WAL command")
@@ -229,5 +231,23 @@ func TestVectorPartitionSourceImportPublicationBoundaryV2(t *testing.T) {
 	retry, err := c.ImportVectorPartitionSourceChunkV2(ownership, input, ids, retained, columns)
 	if err != nil || !retry.Complete || retry.ImportedChunks != 1 {
 		t.Fatalf("ambiguous exact retry: %+v %v", retry, err)
+	}
+}
+
+// The explicit V2 source path must select an incremental authenticated
+// directory. A bounded input batch alone is insufficient: the legacy TCS1
+// publisher scans and re-encodes every prior manifest record on each import.
+func TestVectorPartitionSourceImportUsesIncrementalDirectoryV2(t *testing.T) {
+	_, d, c := openTypedMinimaCollection(t)
+	defer d.Close()
+	ownership, input := sourceImportFixtureV2(t, c, 2)
+	input.DocumentRevisions = []uint64{1, 2}
+	ids, retained, columns := sourceImportRowsV2("b", "a")
+	if _, err := c.ImportVectorPartitionSourceChunkV2(ownership, input, ids, retained, columns); err != nil {
+		t.Fatal(err)
+	}
+	identity := c.Meta().Options.ColumnStore.ActiveManifest
+	if identity == nil || identity.Format != "tcd2" || identity.Version != 2 {
+		t.Fatalf("source import retained full TCS1 manifest instead of V2 incremental directory: %+v", identity)
 	}
 }

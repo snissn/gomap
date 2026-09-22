@@ -67,8 +67,8 @@ type sourceImportBindingRecordV2 struct {
 const maxSourceImportBindingBytesV2 = 3000
 
 type sourceImportPublicationV2 struct {
-	bindingKey string
-	binding []byte
+	bindingKey      string
+	binding         []byte
 	progressKey     string
 	previous        []byte
 	previousPresent bool
@@ -293,8 +293,12 @@ func (c *Collection) importSourceChunkSchemaLockedV2(command sourceImportCommand
 		return zero, err
 	}
 	binding, err := json.Marshal(sourceImportBindingRecordV2{Version: 2, Binding: command.Binding})
-	if err != nil { return zero, err }
-	if len(binding) > maxSourceImportBindingBytesV2 { return zero, errors.New("collections: source import binding bytes cap") }
+	if err != nil {
+		return zero, err
+	}
+	if len(binding) > maxSourceImportBindingBytesV2 {
+		return zero, errors.New("collections: source import binding bytes cap")
+	}
 	receipt := sourceImportReceiptV2(payload)
 	progressKey, receiptKey := sourceImportKeysV2(c.Meta().Name, command.Binding, command.ChunkIndex)
 	unlockMutation := c.lockMutation()
@@ -315,14 +319,18 @@ func (c *Collection) importSourceChunkSchemaLockedV2(command sourceImportCommand
 		if readErr != nil || receiptErr != nil || bindingErr != nil {
 			return zero, errors.Join(readErr, receiptErr, bindingErr)
 		}
-		if bindingPresent != present || (present && !bytes.Equal(storedBinding, binding)) { return zero, errors.New("collections: changed immutable source import identity or partial progress") }
+		if bindingPresent != present || (present && !bytes.Equal(storedBinding, binding)) {
+			return zero, errors.New("collections: changed immutable source import identity or partial progress")
+		}
 		acc, err := vectorpartition.NewSourceSnapshotAccumulatorV2(command.Binding.Snapshot)
 		if err != nil {
 			return zero, err
 		}
 		if present {
 			acc, err = vectorpartition.RestoreSourceSnapshotAccumulatorV2(command.Binding.Snapshot, previous)
-			if err != nil { return zero, err }
+			if err != nil {
+				return zero, err
+			}
 		}
 		if receiptPresent {
 			if !present || !bytes.Equal(existingReceipt, receipt[:]) || command.ChunkIndex >= acc.ImportedChunks() {
@@ -341,7 +349,9 @@ func (c *Collection) importSourceChunkSchemaLockedV2(command sourceImportCommand
 			return zero, err
 		}
 		result, err := sourceImportPublicProgressV2(command.Binding.Snapshot, acc)
-		if err != nil { return zero, err }
+		if err != nil {
+			return zero, err
+		}
 		plan, err := c.buildSourceReplacementPlan(nil, ids, retained, nil, replay, hooks, projection, false)
 		if err != nil {
 			if isRetriableCollectionMutationError(err) {
@@ -351,7 +361,7 @@ func (c *Collection) importSourceChunkSchemaLockedV2(command sourceImportCommand
 			}
 			return zero, err
 		}
-		plan.sourceImportV2 = &sourceImportPublicationV2{bindingKey: progressKey+":binding", binding: binding, progressKey: progressKey, previous: previous, previousPresent: present, next: checkpoint, receiptKey: receiptKey, receipt: receipt}
+		plan.sourceImportV2 = &sourceImportPublicationV2{bindingKey: progressKey + ":binding", binding: binding, progressKey: progressKey, previous: previous, previousPresent: present, next: checkpoint, receiptKey: receiptKey, receipt: receipt}
 		if replay != nil {
 			plan.commandWAL = replay
 		} else {
@@ -382,7 +392,9 @@ func (c *Collection) importSourceChunkSchemaLockedV2(command sourceImportCommand
 			c.invalidateRegisteredVectorIndexDocumentCoverage()
 			notifyErr = commitAmbiguousError("source import vector maintenance", notifyErr)
 		}
-		if err := c.invalidateVectorIndexCoverageOnAcceptedMutation(errors.Join(publishErr, notifyErr)); err != nil { return zero, err }
+		if err := c.invalidateVectorIndexCoverageOnAcceptedMutation(errors.Join(publishErr, notifyErr)); err != nil {
+			return zero, err
+		}
 		return result, nil
 	}
 	return zero, collectionMutationRetryExhausted(lastErr)
@@ -392,7 +404,9 @@ func sourceImportPublicProgressV2(snapshot vectorpartition.SourceSnapshotV2, acc
 	out := VectorPartitionSourceImportProgressV2{ImportedChunks: acc.ImportedChunks()}
 	if acc.ImportedChunks() == snapshot.ChunkCount() {
 		sealed, err := acc.Finish()
-		if err != nil { return VectorPartitionSourceImportProgressV2{}, err }
+		if err != nil {
+			return VectorPartitionSourceImportProgressV2{}, err
+		}
 		out.Complete, out.Snapshot = true, sealed
 	}
 	return out, nil
@@ -435,7 +449,9 @@ func (c *Collection) appendSourceImportSystemDeltaV2(it iterator.UnsafeIterator,
 		return fail(errConcurrentRootModification(c.meta.Name, "source_import_v2"))
 	}
 	base.entries = append(base.entries, systemTargetEntry{key: []byte(publication.progressKey), value: bytes.Clone(publication.next)}, systemTargetEntry{key: []byte(publication.receiptKey), value: bytes.Clone(publication.receipt[:])})
-	if !bindingPresent { base.entries = append(base.entries, systemTargetEntry{key: []byte(publication.bindingKey), value: bytes.Clone(publication.binding)}) }
+	if !bindingPresent {
+		base.entries = append(base.entries, systemTargetEntry{key: []byte(publication.bindingKey), value: bytes.Clone(publication.binding)})
+	}
 	sort.Slice(base.entries, func(i, j int) bool { return bytes.Compare(base.entries[i].key, base.entries[j].key) < 0 })
 	for i := 1; i < len(base.entries); i++ {
 		if bytes.Equal(base.entries[i-1].key, base.entries[i].key) {
