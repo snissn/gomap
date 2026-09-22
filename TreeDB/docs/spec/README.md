@@ -249,7 +249,7 @@ Given pre-alpha status, this is a living spec that tracks implementation.
 
 ## Design Proposals (Non-Normative)
 
-- `TreeDB/docs/spec/distributed-partition-ec2-target.md`
+- [Distributed partition EC2 target](distributed-partition-ec2-target.md)
   - target architecture for #4805: canonical source ownership, derived ANN
     visibility, bounded many-group Raft, recovery and EC2 qualification;
     proposed behavior, not an implemented deployment or performance claim.

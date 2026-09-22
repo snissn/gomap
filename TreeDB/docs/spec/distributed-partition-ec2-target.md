@@ -55,6 +55,17 @@ identifies a physical pack, while some router/search APIs use partition language
 for logical domains or a domain anchor. Integration must preserve explicit
 `DomainID` → pack IDs → owner mappings; do not globally rename or reinterpret IDs.
 
+Canonical source and derived ANN partitions may share a Raft group or occupy
+different groups. When colocated, they share the group's ordered log/apply stream,
+but retain distinct source/domain identities and placement bindings. Canonical
+commit still records projection intent durably; it does not itself prove that
+the derived index has reached the promised visibility frontier. Recovery replays
+canonical state and pending projections in log order with idempotent,
+revision-monotonic derived apply. A colocated optimization may combine effects
+only if it proves the same commit/visibility contract. Moving either role must
+validate its catalog placement epoch independently; sharing a group never
+authorizes the other role's ownership change.
+
 Raft replication and ANN overlap are different multipliers. Replication protects
 an owner's state; overlap adds derived membership in another ANN domain.
 Account for both independently in storage, transfer, build and query metrics.
