@@ -32,7 +32,8 @@ type m0FrontierDiagnosticBindingV1 struct {
 	StableID        string `json:"stable_id"`
 	DocumentID      string `json:"document_id"`
 	SourceOrdinal   int    `json:"source_ordinal"`
-	AssignedPack    int    `json:"assigned_pack"`
+	AssignedDomain  int    `json:"assigned_domain"`
+	ManifestDomain  uint32 `json:"manifest_domain"`
 	ManifestPack    uint32 `json:"manifest_pack"`
 }
 type m0FrontierRouterSweepCellV1 struct {
@@ -228,14 +229,12 @@ func runM0FrontierDiagnoseV1(args []string, stdout io.Writer) error {
 				if !ok {
 					return errors.New("M0 diagnostic truth ID absent from graph artifact")
 				}
-			siblingSelected:
-				for _, packs := range routePacks {
-					for _, pack := range packs {
-						if childParent[int(pack)] == parent {
-							report.ApproxMissSiblingSelected++
-							break siblingSelected
-						}
-					}
+				siblingSelected, err := m0FrontierRouteHasParentV1(childParent, row.Route, parent)
+				if err != nil {
+					return err
+				}
+				if siblingSelected {
+					report.ApproxMissSiblingSelected++
 				}
 			}
 		}
@@ -405,6 +404,20 @@ func m0FrontierSameIDsV1(a, b []m8CanonicalResultV1) bool {
 	return true
 }
 
+func m0FrontierRouteHasParentV1(childParent map[int]int, route []uint32, parent int) (bool, error) {
+	selected := false
+	for _, domain := range route {
+		candidate, ok := childParent[int(domain)]
+		if !ok {
+			return false, errors.New("M0 diagnostic routed domain absent from assignment")
+		}
+		if candidate == parent {
+			selected = true
+		}
+	}
+	return selected, nil
+}
+
 func m0FrontierBindingChecksV1(h *m8ProductionMultiGroupAssetsV1, artifact vectorpartition.Artifact) ([]m0FrontierDiagnosticBindingV1, error) {
 	_, sourceRows, err := h.collection.VectorPartitionSourceOrdinalsV1(partitionHNSWIndex)
 	if err != nil {
@@ -432,16 +445,24 @@ func m0FrontierBindingChecksV1(h *m8ProductionMultiGroupAssetsV1, artifact vecto
 		}
 		home[m.VectorOrdinal] = m.PartitionID
 	}
+	packDomains, _, err := m8QualityPackOwnersV1(h.manifest)
+	if err != nil {
+		return nil, err
+	}
 	samples := []int{0, len(artifact.IDs) / 7, len(artifact.IDs) / 3, len(artifact.IDs) / 2, 2 * len(artifact.IDs) / 3, 6 * len(artifact.IDs) / 7, len(artifact.IDs) - 1}
 	out := make([]m0FrontierDiagnosticBindingV1, 0, len(samples))
 	for _, ordinal := range samples {
 		source := mapping[ordinal]
 		pack, ok := home[uint64(source)]
 		doc := docs[uint64(source)]
-		if !ok || doc == "" || pack != uint32(artifact.Assignment[ordinal]) {
-			return nil, errors.New("M0 diagnostic source ID pack binding")
+		if !ok || doc == "" || int(pack) >= len(packDomains) {
+			return nil, errors.New("M0 diagnostic source ID physical pack binding")
 		}
-		out = append(out, m0FrontierDiagnosticBindingV1{ArtifactOrdinal: ordinal, StableID: artifact.IDs[ordinal], DocumentID: doc, SourceOrdinal: source, AssignedPack: artifact.Assignment[ordinal], ManifestPack: pack})
+		domain := packDomains[pack]
+		if domain != uint32(artifact.Assignment[ordinal]) {
+			return nil, errors.New("M0 diagnostic source ID domain binding")
+		}
+		out = append(out, m0FrontierDiagnosticBindingV1{ArtifactOrdinal: ordinal, StableID: artifact.IDs[ordinal], DocumentID: doc, SourceOrdinal: source, AssignedDomain: artifact.Assignment[ordinal], ManifestDomain: domain, ManifestPack: pack})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ArtifactOrdinal < out[j].ArtifactOrdinal })
 	return out, nil
