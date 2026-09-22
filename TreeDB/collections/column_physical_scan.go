@@ -410,6 +410,10 @@ func (c *Collection) prepareColumnPhysicalScanSnapshotViewAtSnapshotWithSidecars
 	columnStoreEnabled bool,
 	filter columnManifestScanSidecarFilter,
 ) (columnPhysicalScanSnapshotView, error) {
+	if cfg.ActiveManifest != nil && cfg.ActiveManifest.Format == columnSourceDirectoryFormatV2 {
+		return columnPhysicalScanSnapshotView{}, errors.New("collections: incremental source directory requires explicit V2 reader")
+	}
+
 	if c == nil {
 		return columnPhysicalScanSnapshotView{}, errCollectionNil
 	}

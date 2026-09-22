@@ -23,6 +23,7 @@ type sourcePublicationHooks struct {
 }
 
 type sourceReplacementPlan struct {
+	sourceImportV2   *sourceImportPublicationV2
 	meta             CollectionMeta
 	catalog          *collectionCatalog
 	snap             *backenddb.Snapshot
@@ -187,6 +188,14 @@ func (c *Collection) replaceSourceDocumentsAtomicModeSchemaLocked(parentID []byt
 }
 
 func (c *Collection) buildSourceReplacementPlan(deleteIDs, insertIDs, insertDocs [][]byte, deletePlanner sourceReplacementDeletePlanner, replay *backenddb.CommandWALIntent, hooks *sourcePublicationHooks, projection *trustedFloat32Projection, upsert bool) (*sourceReplacementPlan, error) {
+	return c.buildSourceReplacementPlanWithSourceImportV2(deleteIDs, insertIDs, insertDocs, deletePlanner, replay, hooks, projection, upsert, false)
+}
+
+func (c *Collection) buildSourceReplacementPlanWithSourceImportV2(deleteIDs, insertIDs, insertDocs [][]byte, deletePlanner sourceReplacementDeletePlanner, replay *backenddb.CommandWALIntent, hooks *sourcePublicationHooks, projection *trustedFloat32Projection, upsert, sourceImport bool) (*sourceReplacementPlan, error) {
+	if sourceImport && (upsert || len(deleteIDs) != 0 || deletePlanner != nil) {
+		return nil, errors.New("collections: source import cannot delete or replace rows")
+	}
+
 	snap := c.db.AcquireSnapshot()
 	if snap == nil {
 		return nil, backenddb.ErrClosed
@@ -219,10 +228,12 @@ func (c *Collection) buildSourceReplacementPlan(deleteIDs, insertIDs, insertDocs
 		}
 		plannerOptions.typedProjection = projection
 	}
-	if err := requireColumnStoreWriteOperationSupported(meta, ColumnPublishOperationDelete); err != nil {
-		return fail(err)
+	if !sourceImport {
+		if err := requireColumnStoreWriteOperationSupported(meta, ColumnPublishOperationDelete); err != nil {
+			return fail(err)
+		}
 	}
-	if err := requireColumnStoreWriteOperationSupported(meta, ColumnPublishOperationInsert); err != nil {
+	if err := requireColumnStoreWriteOperationSupportedWithSourceImportV2(meta, ColumnPublishOperationInsert, sourceImport); err != nil {
 		return fail(err)
 	}
 	plan.meta = meta
@@ -633,7 +644,7 @@ func (c *Collection) publishSourceReplacementPlan(plan *sourceReplacementPlan, h
 		immediateColumnInput = columnWritePublishInput{
 			meta: plan.meta, catalog: plan.catalog, baseCommitSeq: plan.baseCommitSeq, baseSystemRoot: plan.baseSystemRoot,
 			rootNames: cloneColumnPublishRootNames(rootNames), baseRootIDs: cloneColumnPublishBaseRootIDs(plan.baseRootIDs),
-			commandWALIntent: plan.commandWAL, rawPublishLocked: true, operation: operation,
+			commandWALIntent: plan.commandWAL, rawPublishLocked: true, operation: operation, sourceImportV2: plan.sourceImportV2,
 			documents: plan.insertColumnDocs, sourceDeleteDocuments: plan.deleteColumnDocs, rows: len(plan.insertColumnDocs), insertStats: insertStats,
 		}
 		var cleanup func()
@@ -673,7 +684,7 @@ func (c *Collection) publishSourceReplacementPlan(plan *sourceReplacementPlan, h
 		input := columnWritePublishInput{
 			meta: plan.meta, baseCommitSeq: plan.baseCommitSeq, baseSystemRoot: plan.baseSystemRoot,
 			rootNames: cloneColumnPublishRootNames(rootNames), baseRootIDs: cloneColumnPublishBaseRootIDs(plan.baseRootIDs),
-			commandWALIntent: plan.commandWAL, rawPublishLocked: plan.commandWAL != nil,
+			commandWALIntent: plan.commandWAL, rawPublishLocked: plan.commandWAL != nil, sourceImportV2: plan.sourceImportV2,
 		}
 		newSystemRoot, rootIDs, err = c.publishRootDeltaBatchGroupWithoutColumn(ordered, preflight, input)
 		return err

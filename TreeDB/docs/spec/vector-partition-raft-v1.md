@@ -8,6 +8,63 @@ and M6 owns transport-neutral coordinator fanout and merged top-k in
 `vector-partition-coordinator-v1.md`. A production remote transport and
 multi-group acceptance remain M8 work.
 
+## Owner-scoped search-plan entrypoint
+
+`NewVectorPartitionGenerationOwnerSearchOpenPlanWithContextV2` constructs a
+distinct sparse plan for one owner from an already admitted V1 manifest. The
+plan retains only that owner's assets and memberships, preserves original
+source ordinals, and preserves one graph/anchor plus the complete colocated
+chunk set per logical domain. Home membership wins over overlap within a
+domain, exactly as in the V1 domain normalization. Unknown owners, incomplete
+local placement, split domain ownership, and remote partition opens fail.
+
+`NewCollectionVectorPartitionGenerationSourceForOwnerReplicatedLifecycleV2`
+binds that selection to an expected stored manifest integrity digest. Both
+cold loads and warm hits retain replicated lifecycle admission. Local opens
+reuse the production asset/source verifier and generation pins; this API does
+not grant standalone live-recovery or offline-graph authority. The production
+node exposes the opt-in `OwnerScopedSearchPlanV2` option. A different stored
+root is rejected before a logical placement overlay could mask it.
+
+This is intermediate substrate for [#4808](https://github.com/snissn/gomap/issues/4808).
+Cold loads still decode the complete V1 manifest, retain its complete placement
+directory, and use the existing source reader. Input scanning remains global.
+The V1 format, caps and default path are unchanged. This entrypoint does not
+establish paged generation loading, shard-local source storage, resumable
+distributed construction, or the EC2 target contract. Those requirements and
+their public-path allocation/page-read gates remain open under #4808.
+
+The additive `raftplacement.SourceShardMapV2` substrate separates canonical
+document ownership from ANN routing. Its digest binds collection identity,
+map epoch, the explicit token algorithm, stable shard IDs, known groups and
+complete nonoverlapping inclusive token ranges. `DocumentIDTokenV2` is the
+big-endian first 64 bits of SHA-256 over the ASCII prefix
+`gomap/canonical-document-id-token/v2`, one zero byte, the big-endian uint64
+ID-byte length, and the exact ID bytes. IDs are not normalized. A token is only
+a shard selector: exact IDs remain distinct keys, including on token collision.
+Validation owns its lookup state, refuses wrong-shard import IDs and checks
+exact duplicates within a bounded input range; existing durable collection
+uniqueness must also reject duplicates from earlier ranges. This substrate does
+not yet admit source maps into catalog authority, enable V1 token mutation
+routing, bind an authoritative shard snapshot, or atomically persist import
+progress. Those production integrations remain part of #4808.
+
+The draft paged-root codec uses an explicit `vector_partition_paged_manifest_v2`
+discriminant with VPM binary schema 7. Its 64 KiB envelope binds content-addressed
+metadata/source directory roots, source-map epoch/digest, source snapshot-set
+digest, placement epoch, graph profile and complete-generation counts. Root
+decoding never sizes an allocation from the generation row/domain counts.
+Schema 7 stores a canonical, length-delimited JSON payload; schema 6 keeps its
+existing binary and JSON bytes and hashes. The optional `PagedRootV2` field is
+omitted for schema 6. Mixed inline source/layout state and paged roots fail.
+
+This codec is not runtime admission. Existing publication, materialization,
+search-plan, router and reclaim paths explicitly refuse the paged variant;
+old binaries reject schema 7. Public owner-local page traversal, capability
+negotiation, verified shard snapshots, complete page resource reachability and
+durable publication/recovery must be implemented before this gate is enabled.
+In particular, a valid root digest alone must not become READY evidence.
+
 ## M1 durable lifecycle
 
 Each ready manifest stores typed `ColumnAssetRef`s, not paths. Every physical
@@ -699,3 +756,6 @@ GOWORK=off go test ./cmd/treedb_vector_partition_bench ./cmd/treedb_vector_datas
 GOWORK=off go test ./cmd/treedb_vector_partition_bench -run 'Test.*(Fixture|Truth|Oracle|Manifest|Deterministic|Malformed|Cap).*' -count=1
 GOWORK=off go test ./TreeDB/internal/vectorpartition ./TreeDB/collections -run 'Test.*(KMeans|Representative|PartitionRouter|HNSW).*' -count=1
 ```
+
+
+Draft local source import V2 uses the existing typed source-replacement root publication and command-WAL boundary to insert one bounded source chunk with its import checkpoint and exact range receipt. Public admission checks the complete structurally validated source map, group, exact document IDs, schema and index identity; no upsert/replacement is provided. Per-document revisions remain independent of snapshot revision and ordinal. The format-14 WAL payload retains explicit original ID order because the existing typed payload sorts document IDs. An exact retry returns durable progress; a changed retry, gap, nonowner ID or existing ID refuses. The Raft caller still must admit the map and bind the local group. This local storage API does not publish canonical source or ANN authority. Immutable source chunk retention/proof retrieval, capability admission and the ordinary paged serving path remain incomplete; schema7 remains gated.

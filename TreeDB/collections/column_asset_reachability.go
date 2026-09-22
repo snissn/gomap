@@ -371,7 +371,7 @@ func (c *Collection) planColumnAssetReachabilityOnce(ctx context.Context, opts c
 	if err := ctx.Err(); err != nil {
 		return ColumnAssetReachabilityPlan{ProtectOnly: true}, nil, err
 	}
-	view, closeView, err := c.prepareColumnPhysicalScanSnapshotViewWithContextAndSidecarsAndBudget(ctx, columnManifestScanAllSidecars(), opts.MaxManifestRecords, opts.MaxManifestBytes)
+	view, closeView, err := c.prepareColumnAssetReachabilitySnapshotV2(ctx, opts.MaxManifestRecords, opts.MaxManifestBytes)
 	if closeView != nil {
 		defer closeView()
 	}

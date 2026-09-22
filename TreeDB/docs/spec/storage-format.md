@@ -134,7 +134,7 @@ batches, applies the 4,096-entry cap to all names, and verifies the ranges,
 CRC32 values, and SHA-256 digests of every asset referenced by a non-deleting
 manifest before replacing the target namespace.
 
-VPM1 uses big-endian magic `0x56504d31` and wire version `6`, bounded
+The default VPM1 uses big-endian magic `0x56504d31` and wire version `6`, bounded
 length-prefixed fields and lists, one (exactly one) router-asset frame,
 canonical ordering, and an integrity digest. Version 6 has this fixed,
 untagged order:
@@ -150,6 +150,29 @@ untagged order:
 4. exactly one router asset;
 5. counted physical-pack placement, disjoint-membership, overlap-membership,
    representative-membership, and partition-asset lists, in that order.
+
+The draft #4808 paged codec adds wire schema `7` under the same magic. Its
+header is magic, `uint32(7)`, and a big-endian `uint32` payload byte length;
+the remaining bytes are one canonical JSON `VectorPartitionManifestV1`
+envelope with format `vector_partition_paged_manifest_v2` and non-nil
+`PagedRootV2`. The entire record is capped at 64 KiB. Inline source identity,
+row/pack/domain counts, balance policy and membership/layout/asset lists must
+be empty or zero; their actual global identity and counts are in the paged
+root. The root binds placement/source-map epochs, map/snapshot-set/profile
+SHA-256 digests and two content-addressed page-directory assets. Root asset
+frames are capped at 1 MiB. JSON keys/order/whitespace and nil empty-list
+representation must match canonical re-encoding; mixed formats, unknown
+fields, truncated/trailing records and digest changes are refused.
+
+The schema-7 integrity digest is SHA-256 of the canonical envelope JSON with
+its `IntegrityDigest` empty. Its ready digest binds format, collection/index
+identity, generation, complete paged root and router identity in declared
+field order. This codec alone does not enable durable paged publication:
+legacy publication, search/build/router and reclaim APIs refuse it while
+page traversal, shard verification, transitive reachability and capability
+admission remain incomplete. A decoded schema-7 root is not READY evidence.
+Schema-6 encoding and hashes remain unchanged; its nil `PagedRootV2` JSON
+field is omitted. Old binaries refuse schema 7 at their version check.
 
 Each placement is a `uint32` physical pack ID plus a length-prefixed group ID.
 Disjoint and overlap memberships are 12-byte source-ordinal/physical-pack
@@ -3359,3 +3382,35 @@ asset reachability resolves that specific pin only to an existing, validated,
 positive offsets-section pin with matching physical identity and scope; it never
 fabricates an extent or ignores an unknown/malformed pin. This rare cold path
 scans active pins for the companion and does not add a second registry.
+
+
+#### Draft bounded source snapshot V2 primitives
+
+The explicit V2 source identity binds collection scope, stable canonical ShardID, immutable snapshot revision, shard-local ordinal namespace, source-map epoch/digest, schema and index-definition digests, float32 little-endian encoding, dimensions, row count and rows per chunk. Snapshot revision and document revision are separate fields. Optional retained legacy ordinals also bind their original collection/index/source identity. None of these content hashes independently grants source authority.
+
+Chunks contain at most 256 rows and 8 MiB of encoded bytes, with IDs capped at 4096 bytes and Merkle proofs at 64 sibling hashes. `SCK2` contains the admitted snapshot digest, chunk index, complete contiguous rows and proof. The decoder owns its returned bytes, checks lengths before row/vector allocation, and verifies actual IDs, row revisions and vector bytes against the expected snapshot identity. Hash inputs use domain-separated V2 encodings. A valid chunk proof does not establish complete ANN-domain membership.
+
+`SAC2` is a fixed 2124-byte streaming-import checkpoint: semantic source header digest, processed chunk count, 64 accumulator slots and a domain-separated checksum. Occupancy follows the binary chunk count. Its checksum detects corruption; it is not an authority certificate. The explicit importer publishes checkpoint, exact range receipt and rows in the same durable root transaction. The codecs do not enable schema7 publication or grant source authority.
+
+
+Draft command-WAL payload format14 (`CollectionReplaceSourceByID`) encloses bounded V2 import metadata and the existing typed-row payload. Metadata binds the immutable source descriptor, source group/token range, index/vector column, chunk index, explicit original ID order, document revisions and legacy source provenance. The typed payload remains canonical in ID order. Range receipts hash the full command, including retained and non-vector typed values. The collection publishes source progress and receipt entries inside the same existing system-root transaction as row/column roots. Format10/12 behavior is unchanged. Format14 does not grant source-authority admission. Its complete command frame is capped at 768 KiB, including the fixed frame header and every metadata/typed-payload byte; metadata is capped at 64 KiB. Public import preflight caps raw input at 512 KiB before typed projection.
+
+The draft import progress representation stores a raw fixed-size `SAC2` checkpoint separately from an immutable canonical binding record (maximum 3000 bytes) and a 32-byte range receipt. All records publish in the same system-root transaction as the rows. This avoids JSON/base64 inflation overflowing a 4 KiB tree leaf; a semantic hosted failure at `0b4e822` established the need. A completed root is recomputed from the validated checkpoint instead of duplicating a full descriptor inside the progress value.
+
+
+#### Explicit incremental source directory V2
+
+Only the explicit V2 source importer creates `tcd2`, manifest version 2, in the existing collection column-manifest B-tree root. It refuses a pre-existing TCS1 manifest instead of migrating it. Default TCS1 encoding is unchanged. Older binaries reject the new format/version. Legacy mutation methods refuse it before appending a WAL command, and legacy full-scan/build readers refuse before dereferencing its records.
+
+The fixed 2252-byte `TCD2` header retains generation, row/part counts, local applied LSN, collection/schema/source-map identity, a 64-hash append frontier, semantic directory digest and full-header checksum. The semantic digest excludes local WAL position, physical part count, B-tree page IDs and physical asset addresses. Each directory leaf binds the canonical source chunk digest, immutable binding and complete command receipt. The existing row/typed-column asset codecs remain unchanged; fresh asset-reference records, directory frontier, immutable source records and source Merkle nodes append in the same ordered root publication as primary rows and row locators. Ordinary Get uses exact locator/part lookups on this explicit path.
+
+`SCL2` retains a bounded immutable source leaf before whole-snapshot sealing. Its row framing is shared with `SCK2`, but it carries the leaf digest and no serving proof. It cannot be decoded as an authenticated serving chunk. Source bytes are split into 2048-byte B-tree records, with a bounded length/digest record and immutable subtree hashes keyed by level and index. Existing COW-root reachability protects these records; they are not a separate filesystem sidecar. Snapshot readers reconstruct only the requested leaf and at most 64 sibling hashes, then verify actual IDs, revisions and FP32 bytes against the caller's independently admitted snapshot root. Import completion, durable retry and checkpoint reopen do not confer catalog authority by themselves.
+
+The existing stable-resource append certification protects prior physical assets. Its exact full-manifest fallback remains visible in import diagnostics; any use defeats a bounded per-import metadata claim and requires further qualification. Complete page/source lifecycle qualification, canonical source-root admission, public owner-only paged ANN loading/building and schema7 runtime admission remain unfinished in draft #4816 / #4808.
+
+
+At import completion, `SIS2` stores the completed snapshot digest, directory generation and semantic directory root (76 bytes) in that same system-root publication. A source reader validates the immutable seal against the retained historical directory header; later imports cannot substitute their current root for the original completion binding. This is a local commitment, not source-group authority.
+
+The directory retains one bounded active-segment ownership witness. Appends reuse an existing segment only through the existing retained-resource selector and exact parent/child identity/frontier checks; segments rotate at the existing 16 MiB limit. This reduces physical-file churn without changing pin, WAL or replay authority. The V2 GC consumer reads only asset-reference prefixes, validates complete header part/row coverage, and uses the existing recoverable-root, replay and deletion guards. Discovery refuses beyond one million asset metadata records or 64 MiB (or tighter caller bounds) before deletion. Immutable source bytes/proof pages remain protected by COW root snapshots. Legacy scan/build APIs remain refused.
+
+Public import diagnostics count actual directory reads, fallback reads, source rows/leaf bytes/proof-node writes and command payload bytes. Constant directory reads do not imply constant total storage work: the existing DPM V1 durable dependency stream includes retained logical obligations. The public benchmark reports selected stream bytes/items and encoding work as well as allocations; this retained dependency growth remains an unresolved scale requirement.

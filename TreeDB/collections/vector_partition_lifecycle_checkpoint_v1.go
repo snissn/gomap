@@ -73,6 +73,10 @@ func cloneVectorPartitionManifestForCheckpointWithContextV1(ctx context.Context,
 	if err := ctx.Err(); err != nil {
 		return VectorPartitionManifestV1{}, err
 	}
+	if m.PagedRootV2 != nil {
+		root := *m.PagedRootV2
+		m.PagedRootV2 = &root
+	}
 	var err error
 	if m.DomainPacks, err = cloneVectorPartitionSliceWithContextV1(ctx, m.DomainPacks); err != nil {
 		return VectorPartitionManifestV1{}, err
