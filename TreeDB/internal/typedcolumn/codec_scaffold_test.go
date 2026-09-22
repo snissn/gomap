@@ -1,7 +1,9 @@
 package typedcolumn
 
 import (
+	"bytes"
 	"math"
+	"math/rand"
 	"slices"
 	"strings"
 	"testing"
@@ -56,6 +58,34 @@ func TestTypedColumnZstdDecodeCapsDeclaredRawBytes1952(t *testing.T) {
 	_, err = decodeZstdPayload("test", stored, 16, make([]byte, 0, 16))
 	if err == nil || !strings.Contains(err.Error(), "zstd decode") {
 		t.Fatalf("decodeZstdPayload err=%v want capped zstd decode failure", err)
+	}
+}
+
+func TestTypedColumnZstdRepeatedEncodeAllRoundTrip(t *testing.T) {
+	noise := make([]byte, 256<<10)
+	if _, err := rand.New(rand.NewSource(1)).Read(noise); err != nil {
+		t.Fatal(err)
+	}
+	large := bytes.Repeat([]byte("column-compression-"), 16<<10)
+	var scratch []byte
+	for i, raw := range [][]byte{{42}, large, noise, large, {43}} {
+		selection, err := admitCompressionInto(scratch[:0], raw, 0, CompressionZSTD)
+		if err != nil {
+			t.Fatalf("encode %d: %v", i, err)
+		}
+		scratch = selection.Scratch
+		got := selection.Payload
+		if selection.Actual == CompressionZSTD {
+			got, err = decodeZstdPayload("repeated encode", got, len(raw), nil)
+			if err != nil {
+				t.Fatalf("decode %d: %v", i, err)
+			}
+		} else if selection.Actual != CompressionNone {
+			t.Fatalf("encode %d: unexpected compression %v", i, selection.Actual)
+		}
+		if !bytes.Equal(got, raw) {
+			t.Fatalf("round trip %d mismatch", i)
+		}
 	}
 }
 
