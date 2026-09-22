@@ -1641,7 +1641,10 @@ func TestVectorPartitionNativePackPreflightAndLayeredAdjacencyV1(t *testing.T) {
 	if err := preflightVectorPartitionNativePackV1(1, 3, 2); err != nil {
 		t.Fatal(err)
 	}
-	if err := preflightVectorPartitionNativePackV1(1_000_000, 4096, 16); err != nil {
+	if err := preflightVectorPartitionNativePackV1(1_000_000, 3, 64); !errors.Is(err, ErrVectorPartitionSearchUnavailable) {
+		t.Fatalf("oversized unsplit preflight err=%v", err)
+	}
+	if err := preflightVectorPartitionChunkedNativePackV1(1_000_000, 4096, 16); err != nil {
 		t.Fatalf("chunkable whole-plane preflight err=%v", err)
 	}
 	source := []uint32{columnVectorGraphLayeredAdjacencyMagic, 1, 3, 2, 3, 4, 2, 2, 4}

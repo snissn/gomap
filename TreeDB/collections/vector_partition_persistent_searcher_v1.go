@@ -2564,7 +2564,11 @@ func (c *Collection) materializeVectorPartitionLocalSearchAssetsVariantV1(index 
 		if err != nil {
 			return nil, nil, fmt.Errorf("retained variant partition %d membership digest: %w", in.PartitionID, err)
 		}
-		if err := preflightVectorPartitionNativePackV1(len(selected), buildDef.Dimensions, buildDef.M); err != nil {
+		packPreflight := preflightVectorPartitionNativePackV1
+		if domainMode {
+			packPreflight = preflightVectorPartitionChunkedNativePackV1
+		}
+		if err := packPreflight(len(selected), buildDef.Dimensions, buildDef.M); err != nil {
 			return nil, nil, fmt.Errorf("retained variant partition %d pack preflight: %w", in.PartitionID, err)
 		}
 		type selectedRow struct {
@@ -3399,13 +3403,38 @@ func (c *Collection) openVectorPartitionLocalSearcherForPreparedAssetsWithContex
 	return s, nil
 }
 
-func preflightVectorPartitionNativePackV1(rows, dimensions, degree int) error {
+func vectorPartitionNativePackShapeV1(rows, dimensions, degree int) (int, error) {
 	if rows < 1 || rows > 1_000_000 || dimensions < 1 || dimensions > 4096 || degree < 1 {
-		return fmt.Errorf("%w: native pack shape cap", ErrVectorPartitionSearchUnavailable)
+		return 0, fmt.Errorf("%w: native pack shape cap", ErrVectorPartitionSearchUnavailable)
 	}
 	stride, err := columnHNSWSearchPackVectorStrideForDimensions(dimensions)
 	if err != nil {
-		return fmt.Errorf("%w: native pack stride: %v", ErrVectorPartitionSearchUnavailable, err)
+		return 0, fmt.Errorf("%w: native pack stride: %v", ErrVectorPartitionSearchUnavailable, err)
+	}
+	return stride, nil
+}
+
+func preflightVectorPartitionNativePackV1(rows, dimensions, degree int) error {
+	stride, err := vectorPartitionNativePackShapeV1(rows, dimensions, degree)
+	if err != nil {
+		return err
+	}
+	// Reject impossible unsplit packs before allocating rows, normalized vectors,
+	// or adjacency. Encoding performs the exact check after IDs/topology are known.
+	perRow := int64(stride)*4 + 2 + 8*6
+	if degree <= math.MaxInt/2 {
+		perRow += int64(degree*2) * 4
+	}
+	if int64(rows) > vectorPartitionSearchAssetMaxBytesV1/perRow {
+		return fmt.Errorf("%w: native pack byte cap", ErrVectorPartitionSearchUnavailable)
+	}
+	return nil
+}
+
+func preflightVectorPartitionChunkedNativePackV1(rows, dimensions, degree int) error {
+	stride, err := vectorPartitionNativePackShapeV1(rows, dimensions, degree)
+	if err != nil {
+		return err
 	}
 	// Domain packs split fixed-width planes at row boundaries. Only one row is
 	// indivisible here; the splitter owns each emitted asset's size limit.
@@ -3428,7 +3457,7 @@ func exactVectorPartitionNativePackBytesV1(rows, dimensions int, neighborCounts 
 }
 
 func exactVectorPartitionLocalGraphPackBytesV1(rows, dimensions int, neighborCounts []uint64, documentIDBytes, auxiliaryNeighbors uint64, hasAuxiliaryNavigation bool, capBytes int64) (int64, error) {
-	if err := preflightVectorPartitionNativePackV1(rows, dimensions, 1); err != nil {
+	if _, err := vectorPartitionNativePackShapeV1(rows, dimensions, 1); err != nil {
 		return 0, err
 	}
 	if len(neighborCounts) < 1 || len(neighborCounts) > int(columnHNSWSearchPackMaxLayersDefault) || capBytes <= 0 {
