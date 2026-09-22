@@ -3,141 +3,202 @@
 package sourcepartition
 
 import (
-    "bytes"
-    "crypto/sha256"
-    "encoding/binary"
-    "encoding/hex"
-    "encoding/json"
-    "errors"
-    "fmt"
-    "hash"
-    "slices"
-    "sort"
-    "strings"
-    "unicode/utf8"
+	"bytes"
+	"crypto/sha256"
+	"encoding/binary"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"hash"
+	"slices"
+	"sort"
+	"strings"
+	"unicode/utf8"
 )
 
 const (
-    SourceShardMapFormatV2 = "canonical_source_shard_map_v2"
-    DocumentIDTokenAlgorithmV2 = "sha256_prefix64_document_id_v2"
-    MaxSourceShardsV2 = 1 << 16
-    MaxSourceDocumentIDBytesV2 = 4096
-    MaxSourceImportBytesV2 = 16 << 20
-    MaxSourceShardMapBytesV2 = 32 << 20
+	SourceShardMapFormatV2     = "canonical_source_shard_map_v2"
+	DocumentIDTokenAlgorithmV2 = "sha256_prefix64_document_id_v2"
+	MaxSourceShardsV2          = 1 << 16
+	MaxSourceDocumentIDBytesV2 = 4096
+	MaxSourceImportBytesV2     = 16 << 20
+	MaxSourceShardMapBytesV2   = 32 << 20
 )
 
 var ErrInvalidSourceShardMapV2 = errors.New("sourcepartition: invalid canonical source shard map")
 
-type CollectionRefV2 struct { Database, Catalog, Collection string }
-type SourceShardV2 struct { ShardID, GroupID string; Start, End uint64 }
+type CollectionRefV2 struct{ Database, Catalog, Collection string }
+type SourceShardV2 struct {
+	ShardID, GroupID string
+	Start, End       uint64
+}
 type SourceShardMapV2 struct {
-    Format string
-    Collection CollectionRefV2
-    Epoch uint64
-    TokenAlgorithm string
-    Shards []SourceShardV2
-    Digest string
+	Format         string
+	Collection     CollectionRefV2
+	Epoch          uint64
+	TokenAlgorithm string
+	Shards         []SourceShardV2
+	Digest         string
 }
 
 // ResolvedSourceShardMapV2 is immutable structural validation, not authority.
 // Its private state prevents later caller mutation from rerouting an import.
-type ResolvedSourceShardMapV2 struct { value SourceShardMapV2 }
+type ResolvedSourceShardMapV2 struct{ value SourceShardMapV2 }
 
 func validScopeV2(value string) bool {
-    return value != "" && len(value) <= 128 && !strings.ContainsAny(value, "\x00/:") && strings.TrimSpace(value) == value && utf8.ValidString(value)
+	return value != "" && len(value) <= 128 && !strings.ContainsAny(value, "\x00/:") && strings.TrimSpace(value) == value && utf8.ValidString(value)
 }
 func validIDV2(value string) bool {
-    if value == "" || len(value) > 128 || value == "." || value == ".." { return false }
-    for _, ch := range value {
-        if !((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '-' || ch == '_' || ch == '.') { return false }
-    }
-    return true
+	if value == "" || len(value) > 128 || value == "." || value == ".." {
+		return false
+	}
+	for _, ch := range value {
+		if !((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '-' || ch == '_' || ch == '.') {
+			return false
+		}
+	}
+	return true
 }
 
 // CanonicalSourceShardMapV2 checks complete, nonoverlapping uint64 coverage and
 // exact stable shard IDs. The caller separately admits every group via catalog.
 func CanonicalSourceShardMapV2(input SourceShardMapV2) (SourceShardMapV2, error) {
-    if input.Format != SourceShardMapFormatV2 || input.TokenAlgorithm != DocumentIDTokenAlgorithmV2 || input.Epoch == 0 || len(input.Shards) == 0 || len(input.Shards) > MaxSourceShardsV2 || !validScopeV2(input.Collection.Database) || !validScopeV2(input.Collection.Catalog) || !validScopeV2(input.Collection.Collection) {
-        return SourceShardMapV2{}, fmt.Errorf("%w: map header or bound", ErrInvalidSourceShardMapV2)
-    }
-    out := input
-    out.Shards = slices.Clone(input.Shards)
-    seen := make(map[string]struct{}, len(out.Shards))
-    for _, shard := range out.Shards {
-        if !validIDV2(shard.ShardID) || !validIDV2(shard.GroupID) || shard.Start > shard.End { return SourceShardMapV2{}, fmt.Errorf("%w: shard identity or range", ErrInvalidSourceShardMapV2) }
-        if _, ok := seen[shard.ShardID]; ok { return SourceShardMapV2{}, fmt.Errorf("%w: duplicate shard", ErrInvalidSourceShardMapV2) }
-        seen[shard.ShardID] = struct{}{}
-    }
-    slices.SortFunc(out.Shards, func(a,b SourceShardV2) int { if a.Start < b.Start { return -1 }; if a.Start > b.Start { return 1 }; return strings.Compare(a.ShardID,b.ShardID) })
-    if out.Shards[0].Start != 0 || out.Shards[len(out.Shards)-1].End != ^uint64(0) { return SourceShardMapV2{}, fmt.Errorf("%w: incomplete coverage", ErrInvalidSourceShardMapV2) }
-    for i:=1; i<len(out.Shards); i++ {
-        previous := out.Shards[i-1]
-        if previous.End == ^uint64(0) || out.Shards[i].Start != previous.End+1 { return SourceShardMapV2{}, fmt.Errorf("%w: gap or overlap", ErrInvalidSourceShardMapV2) }
-    }
-    out.Digest = sourceShardMapDigestV2(out)
-    return out,nil
+	if input.Format != SourceShardMapFormatV2 || input.TokenAlgorithm != DocumentIDTokenAlgorithmV2 || input.Epoch == 0 || len(input.Shards) == 0 || len(input.Shards) > MaxSourceShardsV2 || !validScopeV2(input.Collection.Database) || !validScopeV2(input.Collection.Catalog) || !validScopeV2(input.Collection.Collection) {
+		return SourceShardMapV2{}, fmt.Errorf("%w: map header or bound", ErrInvalidSourceShardMapV2)
+	}
+	out := input
+	out.Shards = slices.Clone(input.Shards)
+	seen := make(map[string]struct{}, len(out.Shards))
+	for _, shard := range out.Shards {
+		if !validIDV2(shard.ShardID) || !validIDV2(shard.GroupID) || shard.Start > shard.End {
+			return SourceShardMapV2{}, fmt.Errorf("%w: shard identity or range", ErrInvalidSourceShardMapV2)
+		}
+		if _, ok := seen[shard.ShardID]; ok {
+			return SourceShardMapV2{}, fmt.Errorf("%w: duplicate shard", ErrInvalidSourceShardMapV2)
+		}
+		seen[shard.ShardID] = struct{}{}
+	}
+	slices.SortFunc(out.Shards, func(a, b SourceShardV2) int {
+		if a.Start < b.Start {
+			return -1
+		}
+		if a.Start > b.Start {
+			return 1
+		}
+		return strings.Compare(a.ShardID, b.ShardID)
+	})
+	if out.Shards[0].Start != 0 || out.Shards[len(out.Shards)-1].End != ^uint64(0) {
+		return SourceShardMapV2{}, fmt.Errorf("%w: incomplete coverage", ErrInvalidSourceShardMapV2)
+	}
+	for i := 1; i < len(out.Shards); i++ {
+		previous := out.Shards[i-1]
+		if previous.End == ^uint64(0) || out.Shards[i].Start != previous.End+1 {
+			return SourceShardMapV2{}, fmt.Errorf("%w: gap or overlap", ErrInvalidSourceShardMapV2)
+		}
+	}
+	out.Digest = sourceShardMapDigestV2(out)
+	return out, nil
 }
 
-func ValidateSourceShardMapV2(input SourceShardMapV2) (ResolvedSourceShardMapV2,error) {
-    out,err:=CanonicalSourceShardMapV2(input)
-    if err!=nil { return ResolvedSourceShardMapV2{},err }
-    if input.Digest != out.Digest || !slices.Equal(input.Shards,out.Shards) { return ResolvedSourceShardMapV2{},fmt.Errorf("%w: noncanonical order or digest",ErrInvalidSourceShardMapV2) }
-    return ResolvedSourceShardMapV2{value:out},nil
+func ValidateSourceShardMapV2(input SourceShardMapV2) (ResolvedSourceShardMapV2, error) {
+	out, err := CanonicalSourceShardMapV2(input)
+	if err != nil {
+		return ResolvedSourceShardMapV2{}, err
+	}
+	if input.Digest != out.Digest || !slices.Equal(input.Shards, out.Shards) {
+		return ResolvedSourceShardMapV2{}, fmt.Errorf("%w: noncanonical order or digest", ErrInvalidSourceShardMapV2)
+	}
+	return ResolvedSourceShardMapV2{value: out}, nil
 }
 
 func (m ResolvedSourceShardMapV2) Collection() CollectionRefV2 { return m.value.Collection }
-func (m ResolvedSourceShardMapV2) Epoch() uint64 { return m.value.Epoch }
-func (m ResolvedSourceShardMapV2) Digest() string { return m.value.Digest }
-func (m ResolvedSourceShardMapV2) Copy() SourceShardMapV2 { out:=m.value; out.Shards=slices.Clone(out.Shards); return out }
-func (m ResolvedSourceShardMapV2) ResolveDocumentID(id []byte) (SourceShardV2,error) {
-    token,err:=DocumentIDTokenV2(id)
-    if err!=nil { return SourceShardV2{},err }
-    i:=sort.Search(len(m.value.Shards),func(i int)bool{return m.value.Shards[i].End>=token})
-    if i==len(m.value.Shards) || token<m.value.Shards[i].Start { return SourceShardV2{},fmt.Errorf("%w: unassigned ID token",ErrInvalidSourceShardMapV2) }
-    return m.value.Shards[i],nil
+func (m ResolvedSourceShardMapV2) Epoch() uint64               { return m.value.Epoch }
+func (m ResolvedSourceShardMapV2) Digest() string              { return m.value.Digest }
+func (m ResolvedSourceShardMapV2) Copy() SourceShardMapV2 {
+	out := m.value
+	out.Shards = slices.Clone(out.Shards)
+	return out
+}
+func (m ResolvedSourceShardMapV2) ResolveDocumentID(id []byte) (SourceShardV2, error) {
+	token, err := DocumentIDTokenV2(id)
+	if err != nil {
+		return SourceShardV2{}, err
+	}
+	i := sort.Search(len(m.value.Shards), func(i int) bool { return m.value.Shards[i].End >= token })
+	if i == len(m.value.Shards) || token < m.value.Shards[i].Start {
+		return SourceShardV2{}, fmt.Errorf("%w: unassigned ID token", ErrInvalidSourceShardMapV2)
+	}
+	return m.value.Shards[i], nil
 }
 
 // EncodeSourceShardMapV2 encodes canonical content only, never an admission.
-func EncodeSourceShardMapV2(input SourceShardMapV2) ([]byte,error) {
-    if _,err:=ValidateSourceShardMapV2(input); err!=nil { return nil,err }
-    raw,err:=json.Marshal(input)
-    if err!=nil { return nil,err }
-    if len(raw)>MaxSourceShardMapBytesV2 { return nil,fmt.Errorf("%w: bytes cap",ErrInvalidSourceShardMapV2) }
-    return raw,nil
+func EncodeSourceShardMapV2(input SourceShardMapV2) ([]byte, error) {
+	if _, err := ValidateSourceShardMapV2(input); err != nil {
+		return nil, err
+	}
+	raw, err := json.Marshal(input)
+	if err != nil {
+		return nil, err
+	}
+	if len(raw) > MaxSourceShardMapBytesV2 {
+		return nil, fmt.Errorf("%w: bytes cap", ErrInvalidSourceShardMapV2)
+	}
+	return raw, nil
 }
-func DecodeSourceShardMapV2(raw []byte) (ResolvedSourceShardMapV2,error) {
-    if len(raw)==0 || len(raw)>MaxSourceShardMapBytesV2 { return ResolvedSourceShardMapV2{},fmt.Errorf("%w: bytes cap",ErrInvalidSourceShardMapV2) }
-    // Decode the directory as raw bytes first, then bound each entry before
-    // growing the slice. JSON's ordinary slice decoder would allocate by an
-    // attacker's entry count before the structural shard-count check.
-    var wire struct {
-        Format string
-        Collection CollectionRefV2
-        Epoch uint64
-        TokenAlgorithm string
-        Shards json.RawMessage
-        Digest string
-    }
-    decoder:=json.NewDecoder(bytes.NewReader(raw)); decoder.DisallowUnknownFields()
-    if err:=decoder.Decode(&wire); err!=nil { return ResolvedSourceShardMapV2{},errors.Join(ErrInvalidSourceShardMapV2,err) }
-    input:=SourceShardMapV2{Format:wire.Format,Collection:wire.Collection,Epoch:wire.Epoch,TokenAlgorithm:wire.TokenAlgorithm,Digest:wire.Digest}
-    shards:=json.NewDecoder(bytes.NewReader(wire.Shards)); shards.DisallowUnknownFields()
-    opening,err:=shards.Token()
-    if err!=nil || opening!=json.Delim('[') { return ResolvedSourceShardMapV2{},fmt.Errorf("%w: shard directory array",ErrInvalidSourceShardMapV2) }
-    for shards.More() {
-        if len(input.Shards)>=MaxSourceShardsV2 { return ResolvedSourceShardMapV2{},fmt.Errorf("%w: shard count cap",ErrInvalidSourceShardMapV2) }
-        var shard SourceShardV2
-        if err:=shards.Decode(&shard);err!=nil{return ResolvedSourceShardMapV2{},errors.Join(ErrInvalidSourceShardMapV2,err)}
-        if !validIDV2(shard.ShardID)||!validIDV2(shard.GroupID){return ResolvedSourceShardMapV2{},fmt.Errorf("%w: shard identity",ErrInvalidSourceShardMapV2)}
-        input.Shards=append(input.Shards,shard)
-    }
-    closing,err:=shards.Token()
-    if err!=nil||closing!=json.Delim(']'){return ResolvedSourceShardMapV2{},fmt.Errorf("%w: shard directory end",ErrInvalidSourceShardMapV2)}
-    out,err:=ValidateSourceShardMapV2(input)
-    if err!=nil { return ResolvedSourceShardMapV2{},err }
-    canonical,err:=json.Marshal(out.value)
-    if err!=nil || !bytes.Equal(canonical,raw) { return ResolvedSourceShardMapV2{},fmt.Errorf("%w: noncanonical encoded map",ErrInvalidSourceShardMapV2) }
-    return out,nil
+func DecodeSourceShardMapV2(raw []byte) (ResolvedSourceShardMapV2, error) {
+	if len(raw) == 0 || len(raw) > MaxSourceShardMapBytesV2 {
+		return ResolvedSourceShardMapV2{}, fmt.Errorf("%w: bytes cap", ErrInvalidSourceShardMapV2)
+	}
+	// Decode the directory as raw bytes first, then bound each entry before
+	// growing the slice. JSON's ordinary slice decoder would allocate by an
+	// attacker's entry count before the structural shard-count check.
+	var wire struct {
+		Format         string
+		Collection     CollectionRefV2
+		Epoch          uint64
+		TokenAlgorithm string
+		Shards         json.RawMessage
+		Digest         string
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&wire); err != nil {
+		return ResolvedSourceShardMapV2{}, errors.Join(ErrInvalidSourceShardMapV2, err)
+	}
+	input := SourceShardMapV2{Format: wire.Format, Collection: wire.Collection, Epoch: wire.Epoch, TokenAlgorithm: wire.TokenAlgorithm, Digest: wire.Digest}
+	shards := json.NewDecoder(bytes.NewReader(wire.Shards))
+	shards.DisallowUnknownFields()
+	opening, err := shards.Token()
+	if err != nil || opening != json.Delim('[') {
+		return ResolvedSourceShardMapV2{}, fmt.Errorf("%w: shard directory array", ErrInvalidSourceShardMapV2)
+	}
+	for shards.More() {
+		if len(input.Shards) >= MaxSourceShardsV2 {
+			return ResolvedSourceShardMapV2{}, fmt.Errorf("%w: shard count cap", ErrInvalidSourceShardMapV2)
+		}
+		var shard SourceShardV2
+		if err := shards.Decode(&shard); err != nil {
+			return ResolvedSourceShardMapV2{}, errors.Join(ErrInvalidSourceShardMapV2, err)
+		}
+		if !validIDV2(shard.ShardID) || !validIDV2(shard.GroupID) {
+			return ResolvedSourceShardMapV2{}, fmt.Errorf("%w: shard identity", ErrInvalidSourceShardMapV2)
+		}
+		input.Shards = append(input.Shards, shard)
+	}
+	closing, err := shards.Token()
+	if err != nil || closing != json.Delim(']') {
+		return ResolvedSourceShardMapV2{}, fmt.Errorf("%w: shard directory end", ErrInvalidSourceShardMapV2)
+	}
+	out, err := ValidateSourceShardMapV2(input)
+	if err != nil {
+		return ResolvedSourceShardMapV2{}, err
+	}
+	canonical, err := json.Marshal(out.value)
+	if err != nil || !bytes.Equal(canonical, raw) {
+		return ResolvedSourceShardMapV2{}, fmt.Errorf("%w: noncanonical encoded map", ErrInvalidSourceShardMapV2)
+	}
+	return out, nil
 }
 
 func DocumentIDTokenV2(id []byte) (uint64, error) {

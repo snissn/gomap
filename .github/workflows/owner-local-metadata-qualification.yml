@@ -4,6 +4,12 @@ on:
   pull_request:
     paths:
       - 'TreeDB/collections/vector_partition_owner*'
+      - 'TreeDB/collections/vector_partition_source_import_v2*'
+      - 'TreeDB/collections/source_atomic.go'
+      - 'TreeDB/collections/column_publish_write.go'
+      - 'TreeDB/collections/command_wal.go'
+      - 'TreeDB/internal/commitlog/command_source_import_v2*'
+      - 'TreeDB/internal/commitlog/command_frame.go'
       - 'TreeDB/collections/vector_partition_paged_root_v2*'
       - 'TreeDB/collections/vector_partition_legacy_compat_v2_test.go'
       - 'TreeDB/collections/vector_partition_manifest.go'
@@ -52,7 +58,7 @@ jobs:
           set -euo pipefail
           git rev-parse HEAD
           go version
-          mapfile -t files < <(git diff --name-only --diff-filter=AM 0d10c1605f8887f9a1cd7e3cb910014a5b23cfe3 HEAD -- 'TreeDB/collections/*.go' 'TreeDB/nativewire/*.go' 'TreeDB/internal/raftplacement/*.go' 'TreeDB/internal/vectorpartition/*.go' 'TreeDB/internal/sourcepartition/*.go')
+          mapfile -t files < <(git diff --name-only --diff-filter=AM 0d10c1605f8887f9a1cd7e3cb910014a5b23cfe3 HEAD -- 'TreeDB/collections/*.go' 'TreeDB/nativewire/*.go' 'TreeDB/internal/raftplacement/*.go' 'TreeDB/internal/vectorpartition/*.go' 'TreeDB/internal/sourcepartition/*.go' 'TreeDB/internal/commitlog/*.go')
           gofmt -d "${files[@]}" || true
           if [[ -n "$(gofmt -l "${files[@]}")" ]]; then
             for file in "${files[@]}"; do
@@ -68,7 +74,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          go test ./TreeDB/collections ./TreeDB/internal/raftplacement ./TreeDB/internal/sourcepartition ./TreeDB/internal/vectorpartition ./TreeDB/nativewire -run 'Test(VectorPartitionOwnerSearchOpenPlan|OwnerGenerationSource|SourceShardMap|SourceSnapshot|VectorPartitionPagedRoot|VectorPartitionManifestV1|VectorPartitionManifestContextDigest)' -count=3 -timeout=10m -v | tee owner-local-tests.txt
+          go test ./TreeDB/collections ./TreeDB/internal/commitlog ./TreeDB/internal/raftplacement ./TreeDB/internal/sourcepartition ./TreeDB/internal/vectorpartition ./TreeDB/nativewire -run 'Test(VectorPartitionSourceImport|CollectionSourceImport|TypedSource|TypedMinimaInsertAndReplay|VectorPartitionOwnerSearchOpenPlan|OwnerGenerationSource|SourceShardMap|SourceSnapshot|VectorPartitionPagedRoot|VectorPartitionManifestV1|VectorPartitionManifestContextDigest)' -count=3 -timeout=10m -v | tee owner-local-tests.txt
       - name: Exact baseline schema-6 compatibility
         shell: bash
         run: |
@@ -86,12 +92,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          go test ./TreeDB/collections ./TreeDB/internal/raftplacement ./TreeDB/internal/sourcepartition ./TreeDB/internal/vectorpartition -run '^$' -bench '^Benchmark(VectorPartitionOwnerSearchOpenPlan|SourceShardMapResolveDocumentID|SourceSnapshotChunkVerification|SourceSnapshotChunkDecode)V2$' -benchmem -benchtime=200ms -count=3 | tee owner-local-bench.txt
+          go test ./TreeDB/collections ./TreeDB/internal/commitlog ./TreeDB/internal/raftplacement ./TreeDB/internal/sourcepartition ./TreeDB/internal/vectorpartition -run '^$' -bench '^Benchmark(VectorPartitionOwnerSearchOpenPlan|SourceShardMapResolveDocumentID|SourceSnapshotChunkVerification|SourceSnapshotChunkDecode)V2$' -benchmem -benchtime=200ms -count=3 | tee owner-local-bench.txt
       - name: Owner plan and source race conformance
         shell: bash
         run: |
           set -euo pipefail
-          go test -race ./TreeDB/collections ./TreeDB/internal/raftplacement ./TreeDB/internal/sourcepartition ./TreeDB/internal/vectorpartition ./TreeDB/nativewire -run 'Test(VectorPartitionOwnerSearchOpenPlan|OwnerGenerationSource|SourceShardMap|SourceSnapshot|VectorPartitionPagedRoot|VectorPartitionManifestContextDigest)' -count=1 -timeout=10m -v | tee owner-local-race.txt
+          go test -race ./TreeDB/collections ./TreeDB/internal/commitlog ./TreeDB/internal/raftplacement ./TreeDB/internal/sourcepartition ./TreeDB/internal/vectorpartition ./TreeDB/nativewire -run 'Test(VectorPartitionSourceImport|CollectionSourceImport|TypedSource|TypedMinimaInsertAndReplay|VectorPartitionOwnerSearchOpenPlan|OwnerGenerationSource|SourceShardMap|SourceSnapshot|VectorPartitionPagedRoot|VectorPartitionManifestContextDigest)' -count=1 -timeout=10m -v | tee owner-local-race.txt
       - name: Upload focused evidence
         if: always()
         uses: actions/upload-artifact@v4

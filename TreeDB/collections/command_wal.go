@@ -451,6 +451,9 @@ func replayCollectionDeleteBatchByIDCommandWAL(db *backenddb.DB, env commitlog.C
 }
 
 func replayCollectionReplaceSourceByIDCommandWAL(db *backenddb.DB, env commitlog.CommandEnvelope) error {
+	if env.PayloadFormat == commitlog.PayloadFormatCollectionSourceImportV2 {
+		return replayCollectionSourceImportV2(db, env)
+	}
 	if env.PayloadFormat == commitlog.PayloadFormatCollectionTypedSourceByIDV1 {
 		payload, err := commitlog.DecodeCollectionTypedSourcePayload(env.Payload)
 		if err != nil {

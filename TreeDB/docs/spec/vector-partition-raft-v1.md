@@ -756,3 +756,6 @@ GOWORK=off go test ./cmd/treedb_vector_partition_bench ./cmd/treedb_vector_datas
 GOWORK=off go test ./cmd/treedb_vector_partition_bench -run 'Test.*(Fixture|Truth|Oracle|Manifest|Deterministic|Malformed|Cap).*' -count=1
 GOWORK=off go test ./TreeDB/internal/vectorpartition ./TreeDB/collections -run 'Test.*(KMeans|Representative|PartitionRouter|HNSW).*' -count=1
 ```
+
+
+Draft local source import V2 uses the existing typed source-replacement root publication and command-WAL boundary to insert one bounded source chunk with its import checkpoint and exact range receipt. Public admission checks the complete structurally validated source map, group, exact document IDs, schema and index identity; no upsert/replacement is provided. Per-document revisions remain independent of snapshot revision and ordinal. The format-14 WAL payload retains explicit original ID order because the existing typed payload sorts document IDs. An exact retry returns durable progress; a changed retry, gap, nonowner ID or existing ID refuses. The Raft caller still must admit the map and bind the local group. This local storage API does not publish canonical source or ANN authority. Immutable source chunk retention/proof retrieval, capability admission and the ordinary paged serving path remain incomplete; schema7 remains gated.

@@ -36,6 +36,7 @@ func setColumnPhysicalAssetPreparationAfterPrepareTestHook(hook func(ColumnPubli
 }
 
 type columnWritePublishInput struct {
+	sourceImportV2 *sourceImportPublicationV2
 	metadataOnly         bool
 	candidateAdmission   *typedGraphFoldAssetAdmission
 	selectStableResource func(rootpublication.StableResourceSelector) (*rootpublication.StableResourceSet, error)
@@ -325,6 +326,9 @@ func (c *Collection) publishRootDeltaGroupMaybeColumn(ordered []backenddb.Ordere
 		}
 		iter, nextMeta, err := c.buildRootDescriptorAndColumnManifestSystemDeltaIteratorAndMetaForMeta(input.meta, input.baseCommitSeq, input.baseSystemRoot, rootNames, baseRootIDs, rootIDs, plan)
 		if err == nil {
+			iter, err = c.appendSourceImportSystemDeltaV2(iter, input.sourceImportV2)
+		}
+		if err == nil {
 			updatedMeta = nextMeta
 		}
 		return iter, err
@@ -591,6 +595,9 @@ func (c *Collection) publishRootDeltaBatchGroupMaybeColumn(ordered []backenddb.O
 			return nil, columnPublishPlanLSNMismatchError(input.meta, ctx.AppliedCommandLSN, plan.AppliedCommandLSN)
 		}
 		iter, nextMeta, err := c.buildRootDescriptorAndColumnManifestSystemDeltaIteratorAndMetaForMeta(input.meta, input.baseCommitSeq, input.baseSystemRoot, rootNames, baseRootIDs, rootIDs, plan)
+		if err == nil {
+			iter, err = c.appendSourceImportSystemDeltaV2(iter, input.sourceImportV2)
+		}
 		if err == nil {
 			updatedMeta = nextMeta
 		}
@@ -959,15 +966,15 @@ func (c *Collection) publishRootDeltaGroupWithoutColumn(ordered []backenddb.Orde
 	if input.commandWALIntent != nil {
 		if input.rawPublishLocked {
 			return c.db.PublishStagedOrderedRootDeltaGroupWithCommandWALAndSystemDeltaBuilder(ordered, input.commandWALIntent, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
-				return c.buildRootDescriptorSystemDeltaIteratorForMeta(input.meta, input.baseCommitSeq, input.baseSystemRoot, input.rootNames, input.baseRootIDs, rootIDs)
+				return c.buildSourceImportRootSystemDeltaV2(input, rootIDs)
 			})
 		}
 		return c.db.PublishOrderedRootDeltaGroupWithCommandWALAndSystemDeltaBuilder(ordered, input.commandWALIntent, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
-			return c.buildRootDescriptorSystemDeltaIteratorForMeta(input.meta, input.baseCommitSeq, input.baseSystemRoot, input.rootNames, input.baseRootIDs, rootIDs)
+			return c.buildSourceImportRootSystemDeltaV2(input, rootIDs)
 		})
 	}
 	return c.db.PublishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
-		return c.buildRootDescriptorSystemDeltaIteratorForMeta(input.meta, input.baseCommitSeq, input.baseSystemRoot, input.rootNames, input.baseRootIDs, rootIDs)
+		return c.buildSourceImportRootSystemDeltaV2(input, rootIDs)
 	})
 }
 
@@ -976,29 +983,29 @@ func (c *Collection) publishRootDeltaBatchGroupWithoutColumn(ordered []backenddb
 		if preflight != nil {
 			if input.rawPublishLocked {
 				return c.db.PublishStagedOrderedRootDeltaBatchGroupWithPreflightCommandWALAndSystemDeltaBuilder(ordered, preflight, input.commandWALIntent, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
-					return c.buildRootDescriptorSystemDeltaIteratorForMeta(input.meta, input.baseCommitSeq, input.baseSystemRoot, input.rootNames, input.baseRootIDs, rootIDs)
+					return c.buildSourceImportRootSystemDeltaV2(input, rootIDs)
 				})
 			}
 			return c.db.PublishOrderedRootDeltaBatchGroupWithPreflightCommandWALAndSystemDeltaBuilder(ordered, preflight, input.commandWALIntent, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
-				return c.buildRootDescriptorSystemDeltaIteratorForMeta(input.meta, input.baseCommitSeq, input.baseSystemRoot, input.rootNames, input.baseRootIDs, rootIDs)
+				return c.buildSourceImportRootSystemDeltaV2(input, rootIDs)
 			})
 		}
 		if input.rawPublishLocked {
 			return c.db.PublishStagedOrderedRootDeltaBatchGroupWithCommandWALAndSystemDeltaBuilder(ordered, input.commandWALIntent, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
-				return c.buildRootDescriptorSystemDeltaIteratorForMeta(input.meta, input.baseCommitSeq, input.baseSystemRoot, input.rootNames, input.baseRootIDs, rootIDs)
+				return c.buildSourceImportRootSystemDeltaV2(input, rootIDs)
 			})
 		}
 		return c.db.PublishOrderedRootDeltaBatchGroupWithCommandWALAndSystemDeltaBuilder(ordered, input.commandWALIntent, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
-			return c.buildRootDescriptorSystemDeltaIteratorForMeta(input.meta, input.baseCommitSeq, input.baseSystemRoot, input.rootNames, input.baseRootIDs, rootIDs)
+			return c.buildSourceImportRootSystemDeltaV2(input, rootIDs)
 		})
 	}
 	if preflight != nil {
 		return c.db.PublishOrderedRootDeltaBatchGroupWithPreflightAndSystemDeltaBuilder(ordered, preflight, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
-			return c.buildRootDescriptorSystemDeltaIteratorForMeta(input.meta, input.baseCommitSeq, input.baseSystemRoot, input.rootNames, input.baseRootIDs, rootIDs)
+			return c.buildSourceImportRootSystemDeltaV2(input, rootIDs)
 		})
 	}
 	return c.db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
-		return c.buildRootDescriptorSystemDeltaIteratorForMeta(input.meta, input.baseCommitSeq, input.baseSystemRoot, input.rootNames, input.baseRootIDs, rootIDs)
+		return c.buildSourceImportRootSystemDeltaV2(input, rootIDs)
 	})
 }
 

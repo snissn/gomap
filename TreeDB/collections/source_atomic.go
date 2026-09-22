@@ -23,6 +23,7 @@ type sourcePublicationHooks struct {
 }
 
 type sourceReplacementPlan struct {
+	sourceImportV2 *sourceImportPublicationV2
 	meta             CollectionMeta
 	catalog          *collectionCatalog
 	snap             *backenddb.Snapshot
@@ -633,7 +634,7 @@ func (c *Collection) publishSourceReplacementPlan(plan *sourceReplacementPlan, h
 		immediateColumnInput = columnWritePublishInput{
 			meta: plan.meta, catalog: plan.catalog, baseCommitSeq: plan.baseCommitSeq, baseSystemRoot: plan.baseSystemRoot,
 			rootNames: cloneColumnPublishRootNames(rootNames), baseRootIDs: cloneColumnPublishBaseRootIDs(plan.baseRootIDs),
-			commandWALIntent: plan.commandWAL, rawPublishLocked: true, operation: operation,
+			commandWALIntent: plan.commandWAL, rawPublishLocked: true, operation: operation, sourceImportV2: plan.sourceImportV2,
 			documents: plan.insertColumnDocs, sourceDeleteDocuments: plan.deleteColumnDocs, rows: len(plan.insertColumnDocs), insertStats: insertStats,
 		}
 		var cleanup func()
@@ -673,7 +674,7 @@ func (c *Collection) publishSourceReplacementPlan(plan *sourceReplacementPlan, h
 		input := columnWritePublishInput{
 			meta: plan.meta, baseCommitSeq: plan.baseCommitSeq, baseSystemRoot: plan.baseSystemRoot,
 			rootNames: cloneColumnPublishRootNames(rootNames), baseRootIDs: cloneColumnPublishBaseRootIDs(plan.baseRootIDs),
-			commandWALIntent: plan.commandWAL, rawPublishLocked: plan.commandWAL != nil,
+			commandWALIntent: plan.commandWAL, rawPublishLocked: plan.commandWAL != nil, sourceImportV2: plan.sourceImportV2,
 		}
 		newSystemRoot, rootIDs, err = c.publishRootDeltaBatchGroupWithoutColumn(ordered, preflight, input)
 		return err
