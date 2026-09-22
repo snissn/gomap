@@ -34,6 +34,21 @@ establish paged generation loading, shard-local source storage, resumable
 distributed construction, or the EC2 target contract. Those requirements and
 their public-path allocation/page-read gates remain open under #4808.
 
+The additive `raftplacement.SourceShardMapV2` substrate separates canonical
+document ownership from ANN routing. Its digest binds collection identity,
+map epoch, the explicit token algorithm, stable shard IDs, known groups and
+complete nonoverlapping inclusive token ranges. `DocumentIDTokenV2` is the
+big-endian first 64 bits of SHA-256 over the ASCII prefix
+`gomap/canonical-document-id-token/v2`, one zero byte, the big-endian uint64
+ID-byte length, and the exact ID bytes. IDs are not normalized. A token is only
+a shard selector: exact IDs remain distinct keys, including on token collision.
+Validation owns its lookup state, refuses wrong-shard import IDs and checks
+exact duplicates within a bounded input range; existing durable collection
+uniqueness must also reject duplicates from earlier ranges. This substrate does
+not yet admit source maps into catalog authority, enable V1 token mutation
+routing, bind an authoritative shard snapshot, or atomically persist import
+progress. Those production integrations remain part of #4808.
+
 ## M1 durable lifecycle
 
 Each ready manifest stores typed `ColumnAssetRef`s, not paths. Every physical

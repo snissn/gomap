@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - 'TreeDB/collections/vector_partition_owner*'
+      - 'TreeDB/internal/raftplacement/source_shard_v2*'
       - 'TreeDB/nativewire/vector_partition_owner*'
       - 'TreeDB/nativewire/vector_partition_generation_source_v1.go'
       - 'TreeDB/nativewire/vector_partition_production_node_v1.go'
@@ -43,7 +44,7 @@ jobs:
           set -euo pipefail
           git rev-parse HEAD
           go version
-          files=(TreeDB/collections/vector_partition_owner*.go TreeDB/nativewire/vector_partition_owner*.go TreeDB/nativewire/vector_partition_generation_source_v1.go TreeDB/nativewire/vector_partition_production_node_v1.go)
+          files=(TreeDB/collections/vector_partition_owner*.go TreeDB/internal/raftplacement/source_shard_v2*.go TreeDB/nativewire/vector_partition_owner*.go TreeDB/nativewire/vector_partition_generation_source_v1.go TreeDB/nativewire/vector_partition_production_node_v1.go)
           gofmt -d "${files[@]}" || true
           if [[ -n "$(gofmt -l "${files[@]}")" ]]; then
             for file in "${files[@]}"; do
@@ -59,17 +60,17 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          go test ./TreeDB/collections ./TreeDB/nativewire -run 'Test(VectorPartitionOwnerSearchOpenPlan|OwnerGenerationSource)' -count=3 -timeout=10m -v | tee owner-local-tests.txt
+          go test ./TreeDB/collections ./TreeDB/internal/raftplacement ./TreeDB/nativewire -run 'Test(VectorPartitionOwnerSearchOpenPlan|OwnerGenerationSource|SourceShardMap)' -count=3 -timeout=10m -v | tee owner-local-tests.txt
       - name: Constructor allocation comparison
         shell: bash
         run: |
           set -euo pipefail
-          go test ./TreeDB/collections -run '^$' -bench '^BenchmarkVectorPartitionOwnerSearchOpenPlanV2$' -benchmem -benchtime=200ms -count=3 | tee owner-local-bench.txt
+          go test ./TreeDB/collections ./TreeDB/internal/raftplacement -run '^$' -bench '^Benchmark(VectorPartitionOwnerSearchOpenPlan|SourceShardMapResolveDocumentID)V2$' -benchmem -benchtime=200ms -count=3 | tee owner-local-bench.txt
       - name: Owner plan and source race conformance
         shell: bash
         run: |
           set -euo pipefail
-          go test -race ./TreeDB/collections ./TreeDB/nativewire -run 'Test(VectorPartitionOwnerSearchOpenPlan|OwnerGenerationSource)' -count=1 -timeout=10m -v | tee owner-local-race.txt
+          go test -race ./TreeDB/collections ./TreeDB/internal/raftplacement ./TreeDB/nativewire -run 'Test(VectorPartitionOwnerSearchOpenPlan|OwnerGenerationSource|SourceShardMap)' -count=1 -timeout=10m -v | tee owner-local-race.txt
       - name: Upload focused evidence
         if: always()
         uses: actions/upload-artifact@v4
