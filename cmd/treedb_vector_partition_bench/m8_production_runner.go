@@ -5144,11 +5144,33 @@ func m8LocalSearchFanoutValidV1(fanout []uint32, aggregate uint64, samples, prob
 		return false
 	}
 	totalPacks := 0
+	uniformPacks := packsPerDomain[0]
 	for _, packs := range packsPerDomain {
 		if packs < 1 || totalPacks > math.MaxUint32-packs {
 			return false
 		}
 		totalPacks += packs
+		if packs != uniformPacks {
+			uniformPacks = 0
+		}
+	}
+	expectedSearches := 0
+	if domainGraphs {
+		expectedSearches = probes
+	} else if uniformPacks > 0 {
+		expectedSearches = probes * uniformPacks
+	} else if probes == len(packsPerDomain) {
+		expectedSearches = totalPacks
+	}
+	if expectedSearches > 0 {
+		var measured uint64
+		for _, searches := range fanout {
+			if searches != uint32(expectedSearches) || measured > math.MaxUint64-uint64(searches) {
+				return false
+			}
+			measured += uint64(searches)
+		}
+		return aggregate == measured
 	}
 	possible := make([][]bool, probes+1)
 	for picked := range possible {
@@ -5166,11 +5188,7 @@ func m8LocalSearchFanoutValidV1(fanout []uint32, aggregate uint64, samples, prob
 	}
 	var measured uint64
 	for _, searches := range fanout {
-		if domainGraphs {
-			if searches != uint32(probes) {
-				return false
-			}
-		} else if int(searches) > totalPacks || !possible[probes][searches] {
+		if int(searches) > totalPacks || !possible[probes][searches] {
 			return false
 		}
 		if measured > math.MaxUint64-uint64(searches) {

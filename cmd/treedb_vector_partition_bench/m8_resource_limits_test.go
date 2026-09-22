@@ -64,6 +64,18 @@ func TestM8LocalSearchFanoutIsOneGraphPerDomainV1(t *testing.T) {
 	}
 }
 
+func TestM8LocalSearchFanoutLargeUniformLayoutV1(t *testing.T) {
+	packsPerDomain := make([]int, 16_384)
+	for i := range packsPerDomain {
+		packsPerDomain[i] = 1
+	}
+	for _, domainGraphs := range []bool{true, false} {
+		if !m8LocalSearchFanoutValidV1([]uint32{16_384}, 16_384, 1, 16_384, packsPerDomain, domainGraphs) {
+			t.Fatalf("rejected large uniform layout domain_graphs=%t", domainGraphs)
+		}
+	}
+}
+
 func TestM8AttributionExpandsLogicalDomainsToPhysicalPacksV1(t *testing.T) {
 	manifest := collections.VectorPartitionManifestV1{
 		PartitionCount: 3,

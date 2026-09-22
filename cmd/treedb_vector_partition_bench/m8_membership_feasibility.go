@@ -255,6 +255,7 @@ func m8ComputeRetainedMembershipFeasibilityV1(cfg config, fixture fixtureManifes
 	if err != nil {
 		return m8MembershipFeasibilityV1{}, err
 	}
+	domainGraphs := m8ManifestUsesDomainGraphsV1(manifest)
 	if err := m8ValidateExistingAssetsFixtureV1(assets.collection, manifest, fixture, vectors); err != nil {
 		return m8MembershipFeasibilityV1{}, fmt.Errorf("validate retained feasibility fixture: %w", err)
 	}
@@ -314,7 +315,7 @@ func m8ComputeRetainedMembershipFeasibilityV1(cfg config, fixture fixtureManifes
 			return m8MembershipFeasibilityV1{}, errors.New("retained asset pack is outside feasibility layout")
 		}
 		graph := &result.DomainGraphs[packDomains[pack]]
-		if asset.PartitionID != graph.AnchorPackID {
+		if domainGraphs && asset.PartitionID != graph.AnchorPackID {
 			return m8MembershipFeasibilityV1{}, errors.New("retained graph asset is not bound to its domain anchor")
 		}
 		if asset.Bytes > math.MaxUint64-graph.ActualBytes || asset.Bytes > math.MaxUint64-result.ActualGraphBytes {

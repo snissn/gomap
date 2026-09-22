@@ -1140,6 +1140,19 @@ func TestM3FinalOfflineGraphBuildsRetainedControlPacks(t *testing.T) {
 		t.Fatal(err)
 	}
 	vectors, _ := fixtureData(fixture)
+	truthDir, truth := testM8QualificationTruthCacheV1(t, t.TempDir(), fixture)
+	feasibilityConfig := config{
+		out: t.TempDir(), m8TruthCache: truthDir, m8TruthCacheSHA256: truth.ArtifactSHA256,
+		topK: 10, recallTarget: 0, m8MembershipProbes: 1,
+		m8MembershipPackLimit: descriptor.ShardPlan.PacksPerDomain, maxBytes: 1 << 30,
+	}
+	feasibility, err := m8RunMembershipFeasibilityV1(feasibilityConfig, fixture, vectors, persist, descriptor)
+	if err != nil || feasibility.Result.Status != "sufficient" {
+		t.Fatalf("offline membership feasibility=%+v err=%v", feasibility.Result, err)
+	}
+	if err := m8ReplayMembershipFeasibilityV1(feasibilityConfig, fixture, persist, descriptor, feasibility); err != nil {
+		t.Fatalf("replay offline membership feasibility: %v", err)
+	}
 	assets, err := openM8ProductionMultiGroupExistingAssetsWithPolicyV1(
 		persist, []string{"m8-data-group-a", "m8-data-group-b"}, report.Partitions, fixture, vectors, true,
 	)
@@ -1147,6 +1160,28 @@ func TestM3FinalOfflineGraphBuildsRetainedControlPacks(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer assets.Close()
+	packDomains, _, err := m8QualityPackOwnersV1(assets.manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantAssets := make([]int, assets.manifest.DomainCount)
+	var wantBytes, siblingBytes uint64
+	for _, asset := range assets.manifest.Assets {
+		domain := packDomains[asset.PartitionID]
+		wantAssets[domain]++
+		wantBytes += asset.Bytes
+		if asset.PartitionID != feasibility.Result.DomainGraphs[domain].AnchorPackID {
+			siblingBytes += asset.Bytes
+		}
+	}
+	if feasibility.Result.ActualGraphBytes != wantBytes || siblingBytes == 0 {
+		t.Fatalf("offline feasibility bytes=%d want=%d sibling=%d", feasibility.Result.ActualGraphBytes, wantBytes, siblingBytes)
+	}
+	for domain, graph := range feasibility.Result.DomainGraphs {
+		if graph.AssetCount != wantAssets[domain] || graph.AssetCount != descriptor.ShardPlan.PacksPerDomain {
+			t.Fatalf("offline domain %d graph evidence=%+v want assets=%d", domain, graph, wantAssets[domain])
+		}
+	}
 	ctx, cancel := context.WithTimeout(t.Context(), m8ProductionTopologyTestTimeoutV1)
 	defer cancel()
 	topology, err := nativewire.NewVectorPartitionM8ProductionMultiGroupV1(ctx, nativewire.VectorPartitionM8ProductionMultiGroupOptionsV1{
