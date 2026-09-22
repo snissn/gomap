@@ -53,7 +53,9 @@ func newFixedPeerTCPTransportWithAdmissionV1(listen string, advertised net.Addr,
 	}
 	if admission != nil {
 		listener, err = admission.listener(listener)
-		if err != nil { return nil, err }
+		if err != nil {
+			return nil, err
+		}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	stream := &fixedPeerTCPStreamV1{
@@ -104,7 +106,9 @@ func (s *fixedPeerTCPStreamV1) Dial(address hraft.ServerAddress, timeout time.Du
 		defer cancel()
 		dial := func(ctx context.Context, address string) (net.Conn, error) {
 			plain := func(ctx context.Context) (net.Conn, error) { return (&net.Dialer{}).DialContext(ctx, "tcp", address) }
-			if s.admission != nil { return s.admission.dial(ctx, s.scope, plain) }
+			if s.admission != nil {
+				return s.admission.dial(ctx, s.scope, plain)
+			}
 			return plain(ctx)
 		}
 		conn, err := s.security.dialUsing(ctx, string(address), node, dial)

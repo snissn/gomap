@@ -44,7 +44,7 @@ jobs:
       - name: Formatting
         if: ${{ !cancelled() }}
         run: |
-          files="TreeDB/nativewire/peer_*.go TreeDB/nativewire/vector_partition_global_connection_budget_v1_test.go TreeDB/nativewire/vector_partition_shard_search_tcp_v1.go TreeDB/nativewire/fixed_peer_tcp_runtime_v1.go TreeDB/nativewire/fixed_peer_security_v1_test.go TreeDB/nativewire/fixed_peer_tcp_stream_v1.go TreeDB/nativewire/fixed_peer_sparse_catalog_v1.go TreeDB/nativewire/server.go TreeDB/nativewire/listener.go"
+          files="TreeDB/nativewire/peer_*.go TreeDB/nativewire/vector_partition_global_connection_budget_v1_test.go TreeDB/nativewire/vector_partition_shard_search_tcp_v1.go TreeDB/nativewire/fixed_peer_tcp_runtime_v1.go TreeDB/nativewire/fixed_peer_security_v1_test.go TreeDB/nativewire/fixed_peer_tcp_stream_v1.go TreeDB/nativewire/fixed_peer_sparse_catalog_v1.go TreeDB/nativewire/server.go TreeDB/nativewire/listener.go TreeDB/nativewire/sparse_catalog_bench_test.go"
           gofmt -d $files || true
           bad=$(gofmt -l $files)
           if [ -n "$bad" ]; then
@@ -57,3 +57,26 @@ jobs:
             exit 1
           fi
 
+  public-path-cost:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Equivalent plaintext and authenticated durable traffic
+        run: |
+          mkdir -p peer-public-path-cost
+          git rev-parse HEAD | tee peer-public-path-cost/source.txt
+          go version | tee peer-public-path-cost/toolchain.txt
+          sha256sum TreeDB/nativewire/sparse_catalog_bench_test.go TreeDB/nativewire/peer_security_bench_test.go | tee peer-public-path-cost/harness.txt
+          go test ./TreeDB/nativewire -run '^$' -bench '^BenchmarkPeerSecurityRemoteOwnerCreateV1$/(Plain|MutualTLS)/(Sparse|Inventory40)$' -benchtime=25x -count=3 -benchmem -timeout=12m -v | tee peer-public-path-cost/measurements.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: peer-public-path-cost-${{ github.event.pull_request.head.sha || github.sha }}
+          path: peer-public-path-cost/

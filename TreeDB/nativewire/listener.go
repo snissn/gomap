@@ -29,7 +29,9 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 	if s.peerTransport != nil {
 		var err error
 		ln, err = s.peerTransport.admission.listener(ln)
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 		defer ln.Close()
 	}
 	if !s.registerListener(ln) {
@@ -60,7 +62,9 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 		if s.peerTransport != nil {
 			conn, err = s.peerTransport.admission.accept(conn, "native")
 			if err != nil {
-				if errors.Is(err, net.ErrClosed) { return nil }
+				if errors.Is(err, net.ErrClosed) {
+					return nil
+				}
 				continue
 			}
 		}
@@ -253,4 +257,3 @@ func (e *localEndpoint) roundTripVersion(ctx context.Context, streamID uint64, t
 	}
 	return header, response, nil
 }
-

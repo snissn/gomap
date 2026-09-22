@@ -463,11 +463,15 @@ type VectorPartitionShardSearchHandlerV1 interface {
 }
 
 func (s VectorPartitionShardSearchTCPServerV1) ServeConn(ctx context.Context, conn net.Conn) {
-	if conn == nil { return }
+	if conn == nil {
+		return
+	}
 	if s.PeerTransport != nil {
 		var err error
 		conn, err = s.PeerTransport.admission.accept(conn, "shard:"+string(s.PeerGroupID))
-		if err != nil { return }
+		if err != nil {
+			return
+		}
 	}
 	s.serveAdmittedConnV1(ctx, conn)
 }
@@ -477,7 +481,9 @@ func (s VectorPartitionShardSearchTCPServerV1) serveAdmittedConnV1(ctx context.C
 	if s.PeerTransport != nil {
 		var err error
 		conn, err = s.PeerTransport.accept(ctx, conn, s.PeerGroupID)
-		if err != nil { return }
+		if err != nil {
+			return
+		}
 	}
 	maxFrame := s.MaxFrame
 	if maxFrame == 0 {

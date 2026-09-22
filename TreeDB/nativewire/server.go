@@ -470,7 +470,9 @@ func (s *Server) ServeConn(ctx context.Context, conn net.Conn) error {
 	if s.peerTransport != nil {
 		var err error
 		conn, err = s.peerTransport.admission.accept(conn, "native")
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 	}
 	if !s.registerConn(conn) {
 		_ = conn.Close()
@@ -486,7 +488,9 @@ func (s *Server) serveRegisteredConn(ctx context.Context, conn net.Conn) error {
 	if s.peerTransport != nil {
 		var err error
 		conn, err = s.peerTransport.accept(ctx, conn, "")
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 	}
 
 	state := &connState{id: uint64(s.nextConn.Add(1))}
@@ -1204,4 +1208,3 @@ func (s *Server) Stats() map[string]string {
 	}
 	return out
 }
-
