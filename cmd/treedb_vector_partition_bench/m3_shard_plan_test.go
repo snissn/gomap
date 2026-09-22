@@ -163,7 +163,7 @@ func TestM3ActualShardPackBytesStayInsidePlannedEnvelopeV1(t *testing.T) {
 		{PartitionID: 1, Bytes: 80},
 		{PartitionID: 0, Bytes: 99},
 	}
-	if err := m3ValidateActualShardPackBytesV1(assets, summaries, 1); err != nil {
+	if err := m3ValidateActualShardPackBytesV1(assets, summaries, 1, false); err != nil {
 		t.Fatal(err)
 	}
 	for name, mutate := range map[string]func([]collections.VectorPartitionAssetV1){
@@ -174,15 +174,15 @@ func TestM3ActualShardPackBytesStayInsidePlannedEnvelopeV1(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			candidate := append([]collections.VectorPartitionAssetV1(nil), assets...)
 			mutate(candidate)
-			if err := m3ValidateActualShardPackBytesV1(candidate, summaries, 1); err == nil {
+			if err := m3ValidateActualShardPackBytesV1(candidate, summaries, 1, false); err == nil {
 				t.Fatal("accepted pack bytes outside the planned envelope")
 			}
 		})
 	}
-	if err := m3ValidateActualShardPackBytesV1(assets[:1], summaries, 1); err == nil {
+	if err := m3ValidateActualShardPackBytesV1(assets[:1], summaries, 1, false); err == nil {
 		t.Fatal("accepted incomplete pack coverage")
 	}
-	if err := m3ValidateActualShardPackBytesV1(assets, nil, 1); err != nil {
+	if err := m3ValidateActualShardPackBytesV1(assets, nil, 1, false); err != nil {
 		t.Fatalf("unplanned packs rejected: %v", err)
 	}
 	domainSummaries := []vectorpartition.ShardPackSummaryV1{
@@ -193,12 +193,31 @@ func TestM3ActualShardPackBytesStayInsidePlannedEnvelopeV1(t *testing.T) {
 		{PartitionID: 0, Bytes: 20}, {PartitionID: 0, Bytes: 80},
 		{PartitionID: 2, Bytes: 80},
 	}
-	if err := m3ValidateActualShardPackBytesV1(domainAssets, domainSummaries, 2); err != nil {
+	if err := m3ValidateActualShardPackBytesV1(domainAssets, domainSummaries, 2, true); err != nil {
 		t.Fatalf("domain chunks rejected: %v", err)
 	}
 	domainAssets[0].PartitionID = 1
-	if err := m3ValidateActualShardPackBytesV1(domainAssets, domainSummaries, 2); err == nil {
+	if err := m3ValidateActualShardPackBytesV1(domainAssets, domainSummaries, 2, true); err == nil {
 		t.Fatal("accepted a chunk on a non-anchor pack")
+	}
+
+	perPack := []collections.VectorPartitionAssetV1{{PartitionID: 0, Bytes: 40}, {PartitionID: 1, Bytes: 60}, {PartitionID: 2, Bytes: 30}, {PartitionID: 3, Bytes: 50}}
+	if err := m3ValidateActualShardPackBytesV1(perPack, domainSummaries, 2, false); err != nil {
+		t.Fatalf("offline per-pack assets rejected: %v", err)
+	}
+	for name, mutate := range map[string]func([]collections.VectorPartitionAssetV1){
+		"missing":     func(a []collections.VectorPartitionAssetV1) { a[3] = a[2] },
+		"duplicate":   func(a []collections.VectorPartitionAssetV1) { a[1].PartitionID = 0 },
+		"nonexistent": func(a []collections.VectorPartitionAssetV1) { a[1].PartitionID = 4 },
+		"oversized":   func(a []collections.VectorPartitionAssetV1) { a[1].Bytes++ },
+	} {
+		t.Run("offline "+name, func(t *testing.T) {
+			candidate := append([]collections.VectorPartitionAssetV1(nil), perPack...)
+			mutate(candidate)
+			if err := m3ValidateActualShardPackBytesV1(candidate, domainSummaries, 2, false); err == nil {
+				t.Fatal("accepted invalid offline per-pack assets")
+			}
+		})
 	}
 }
 
@@ -301,6 +320,7 @@ func TestM3ShardGenerationDescriptorPersistsAndReopensV1(t *testing.T) {
 		ShardPlan: plan, ShardGenerationDigest: digest, OverlapRatio: plan.OverlapRatio,
 		Capacity: plan.OverlapCapacity, PartitionLoads: []int{3, 2},
 		OverlapRealized: 1, OverlapMemberships: 1, SourceRows: uint64(plan.Vectors),
+		PartitionHNSWM: 32, PartitionHNSWEfC: 256,
 	}
 	if err := m3VerifyRetainedShardGenerationV1(dir, descriptor); err != nil {
 		t.Fatalf("matching record rejected: %v", err)

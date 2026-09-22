@@ -614,7 +614,8 @@ func benchmarkM3PartitionIndexRow(cfg config, fixture fixtureManifest, artifactD
 		if err != nil {
 			return m3PartitionIndexRow{}, err
 		}
-		if err := m3ValidateActualShardPackBytesV1(assets, summaries, cfg.shardPlan.PacksPerDomain); err != nil {
+		domainGraphs := localVariant == collections.VectorPartitionLocalGraphVariantConnectivityPreservingVamanaR64L256Alpha1_2V1 && cfg.shardPlan.PacksPerDomain > 1
+		if err := m3ValidateActualShardPackBytesV1(assets, summaries, cfg.shardPlan.PacksPerDomain, domainGraphs); err != nil {
 			return m3PartitionIndexRow{}, err
 		}
 	}

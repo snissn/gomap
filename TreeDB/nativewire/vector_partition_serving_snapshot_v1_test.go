@@ -3,6 +3,7 @@ package nativewire
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -100,6 +101,29 @@ func TestVectorPartitionProductionAssetBindingsAllowCoLocatedDomainChunksV1(t *t
 	if err != nil || len(groups) != 2 || groups[0] != "group-a" || groups[1] != "group-b" {
 		t.Fatalf("chunked production asset bindings groups=%v err=%v", groups, err)
 	}
+
+	unsplit := manifest
+	unsplit.Assets = make([]collections.VectorPartitionAssetV1, unsplit.PartitionCount)
+	for partition := range unsplit.Assets {
+		unsplit.Assets[partition] = asset(fmt.Sprintf("hnsw_search_pack_v1/partition/%d", partition), uint32(partition), uint64(10+partition), true)
+		unsplit.Assets[partition].GraphVariant = string(collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationV1)
+	}
+	unsplit.Canonicalize()
+	unsplitDigests := map[string]string{
+		"group-a": vectorPartitionM8GroupAssetSetDigestV1("group-a", unsplit),
+		"group-b": vectorPartitionM8GroupAssetSetDigestV1("group-b", unsplit),
+	}
+	if _, err := vectorPartitionM8ValidateAssetsV1(unsplit, unsplitDigests); err != nil {
+		t.Fatalf("multi-pack unsplit asset bindings: %v", err)
+	}
+	unsplit.Assets = append(unsplit.Assets, asset("unused-partition-0", 0, 20, false))
+	unsplit.Canonicalize()
+	unsplitDigests["group-a"] = vectorPartitionM8GroupAssetSetDigestV1("group-a", unsplit)
+	unsplitDigests["group-b"] = vectorPartitionM8GroupAssetSetDigestV1("group-b", unsplit)
+	if _, err := vectorPartitionValidateAssetBindingsV1(unsplit, unsplitDigests); err == nil {
+		t.Fatal("production asset bindings accepted an unused descriptor for a multi-pack unsplit layout")
+	}
+
 	manifest.Placements[1].GroupID = "group-b"
 	manifest.Canonicalize()
 	if _, err := vectorPartitionValidateAssetBindingsV1(manifest, digests); err == nil {

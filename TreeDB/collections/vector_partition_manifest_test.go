@@ -3086,8 +3086,14 @@ func TestVectorPartitionManifestV1AcceptsOnlyCoLocatedDomainChunks(t *testing.T)
 	m.DomainPacks = []VectorPartitionDomainPackV1{{DomainID: 0, PackID: 0}, {DomainID: 0, PackID: 1}}
 	m.Placements = []VectorPartitionPlacementV1{{PartitionID: 0, GroupID: "raft-a"}, {PartitionID: 1, GroupID: "raft-a"}}
 	membershipDigest := strings.Repeat("c", 64)
+	root := func(partition uint32, file uint32, variant VectorPartitionLocalGraphVariantV1) VectorPartitionAssetV1 {
+		return VectorPartitionAssetV1{
+			ID: vectorPartitionLocalAssetIDV1(partition), PartitionID: partition, Checksum: strings.Repeat("b", 64), MembershipDigest: membershipDigest, GraphVariant: string(variant), Bytes: 12,
+			Ref: ColumnAssetRef{Kind: ColumnAssetKindTCS1PartImage, Namespace: "test", Generation: 7, PartID: uint64(file), FileID: file, Length: 12},
+		}
+	}
 	m.Assets = []VectorPartitionAssetV1{
-		{ID: vectorPartitionLocalAssetIDV1(0), PartitionID: 0, Checksum: strings.Repeat("b", 64), MembershipDigest: membershipDigest, GraphVariant: string(VectorPartitionLocalGraphVariantConnectivityPreservingVamanaR64L256Alpha1_2V1), Bytes: 12, Ref: ColumnAssetRef{Kind: ColumnAssetKindTCS1PartImage, Namespace: "test", Generation: 7, PartID: 1, FileID: 1, Length: 12}},
+		root(0, 1, VectorPartitionLocalGraphVariantConnectivityPreservingVamanaR64L256Alpha1_2V1),
 		{ID: vectorPartitionLocalSectionChunkAssetIDV1(0, columnHNSWSearchPackSectionKey{kind: columnHNSWSearchPackSectionNormalizedVectors}, 0), PartitionID: 0, Checksum: strings.Repeat("b", 64), MembershipDigest: membershipDigest, Bytes: 13, Ref: ColumnAssetRef{Kind: ColumnAssetKindTCS1PartImage, Namespace: "test", Generation: 7, PartID: 2, FileID: 2, Length: 13}},
 	}
 	m.Canonicalize()
@@ -3111,10 +3117,34 @@ func TestVectorPartitionManifestV1AcceptsOnlyCoLocatedDomainChunks(t *testing.T)
 	}
 
 	legacy := m
-	legacy.Assets = []VectorPartitionAssetV1{m.Assets[0]}
+	legacy.Assets = []VectorPartitionAssetV1{
+		root(0, 1, VectorPartitionLocalGraphVariantConnectivityPreservingVamanaR64L256Alpha1_2V1),
+		root(1, 2, VectorPartitionLocalGraphVariantConnectivityPreservingVamanaR64L256Alpha1_2V1),
+	}
 	legacy.Canonicalize()
 	if err := legacy.Validate(DefaultVectorPartitionManifestLimits()); err == nil {
 		t.Fatal("accepted legacy per-pack assets for a multi-pack domain")
+	}
+
+	for _, variant := range []VectorPartitionLocalGraphVariantV1{
+		VectorPartitionLocalGraphVariantNativeV1,
+		VectorPartitionLocalGraphVariantCanonicalHNSWM18EfConstruction256V1,
+		VectorPartitionLocalGraphVariantAuxiliaryNavigationV1,
+	} {
+		unsplit := m
+		unsplit.Assets = []VectorPartitionAssetV1{root(0, 1, variant), root(1, 2, variant)}
+		unsplit.Canonicalize()
+		if err := unsplit.Validate(DefaultVectorPartitionManifestLimits()); err != nil {
+			t.Fatalf("multi-pack offline variant %q: %v", variant, err)
+		}
+	}
+
+	wrongVariant := m
+	wrongVariant.Assets = append([]VectorPartitionAssetV1(nil), m.Assets...)
+	wrongVariant.Assets[0].GraphVariant = string(VectorPartitionLocalGraphVariantAuxiliaryNavigationV1)
+	wrongVariant.Canonicalize()
+	if err := wrongVariant.Validate(DefaultVectorPartitionManifestLimits()); err == nil {
+		t.Fatal("accepted domain chunks for a non-Vamana variant")
 	}
 
 	missingChunk := m

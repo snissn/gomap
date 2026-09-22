@@ -376,17 +376,25 @@ func (m VectorPartitionManifestV1) validateWithContextV1(ctx context.Context, l 
 	assetCoverage := make(map[uint32]struct{}, m.PartitionCount)
 	rootCoverage := make(map[uint32]struct{}, m.DomainCount)
 	chunkedDomains := false
-	hasNativeRoots := false
+	hasVamanaRoots := false
+	hasOtherNativeRoots := false
 	for _, asset := range m.Assets {
 		if asset.ID == vectorPartitionLocalAssetIDV1(asset.PartitionID) {
-			hasNativeRoots = true
+			if VectorPartitionLocalGraphVariantV1(asset.GraphVariant) == vectorPartitionLocalDefaultGraphVariantV1 {
+				hasVamanaRoots = true
+			} else {
+				hasOtherNativeRoots = true
+			}
 		}
 		if strings.HasPrefix(asset.ID, vectorPartitionLocalAssetIDV1(asset.PartitionID)+"/section/") {
 			chunkedDomains = true
 		}
 	}
-	if m.DomainCount < m.PartitionCount && hasNativeRoots && !chunkedDomains {
+	if m.DomainCount < m.PartitionCount && hasVamanaRoots && !chunkedDomains {
 		return fmt.Errorf("%w: multi-pack domains require one chunked graph per domain", ErrVectorPartitionManifestInvalid)
+	}
+	if chunkedDomains && (!hasVamanaRoots || hasOtherNativeRoots) {
+		return fmt.Errorf("%w: domain chunks require the production Vamana graph variant", ErrVectorPartitionManifestInvalid)
 	}
 	var domainAnchors map[uint32]struct{}
 	if chunkedDomains {

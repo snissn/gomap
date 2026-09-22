@@ -81,22 +81,45 @@ func m3ValidateShardGenerationInputsV1(plan vectorpartition.ShardPlanV1, ratio f
 	return nil
 }
 
-// m3ValidateActualShardPackBytesV1 binds the planner's conservative per-pack
-// byte envelope to the immutable bytes the encoder actually produced. Domain
-// graphs may span several physical-pack envelopes and several storage chunks.
-func m3ValidateActualShardPackBytesV1(assets []collections.VectorPartitionAssetV1, summaries []vectorpartition.ShardPackSummaryV1, packsPerDomain int) error {
+// m3ValidateActualShardPackBytesV1 binds the planner's conservative byte
+// envelope to the immutable bytes the encoder actually produced. Production
+// domain graphs share their physical-pack envelopes across storage chunks;
+// offline graph variants retain one independently bounded asset per pack.
+func m3ValidateActualShardPackBytesV1(assets []collections.VectorPartitionAssetV1, summaries []vectorpartition.ShardPackSummaryV1, packsPerDomain int, domainGraphs bool) error {
 	if len(summaries) == 0 {
 		return nil
 	}
 	if packsPerDomain < 1 || len(summaries)%packsPerDomain != 0 {
 		return errors.New("planned shard packs do not form complete domains")
 	}
+	for partition, summary := range summaries {
+		if summary.Partition != partition {
+			return fmt.Errorf("planned shard pack %d is noncanonical", partition)
+		}
+	}
+	if !domainGraphs {
+		if len(assets) != len(summaries) {
+			return fmt.Errorf("materialized shard packs=%d want=%d", len(assets), len(summaries))
+		}
+		seen := make([]bool, len(summaries))
+		for _, asset := range assets {
+			if asset.PartitionID >= uint32(len(summaries)) {
+				return fmt.Errorf("materialized shard pack %d is outside the canonical plan", asset.PartitionID)
+			}
+			partition := int(asset.PartitionID)
+			if seen[partition] || asset.Bytes == 0 || asset.Bytes > summaries[partition].Bytes {
+				return fmt.Errorf("materialized shard pack %d bytes=%d outside planned envelope (0,%d]", partition, asset.Bytes, summaries[partition].Bytes)
+			}
+			seen[partition] = true
+		}
+		return nil
+	}
 	domains := len(summaries) / packsPerDomain
 	planned := make([]uint64, domains)
 	actual := make([]uint64, domains)
 	for partition, summary := range summaries {
-		if summary.Partition != partition || planned[partition/packsPerDomain] > ^uint64(0)-summary.Bytes {
-			return fmt.Errorf("planned shard pack %d is noncanonical or overflows its domain", partition)
+		if planned[partition/packsPerDomain] > ^uint64(0)-summary.Bytes {
+			return fmt.Errorf("planned shard pack %d overflows its domain", partition)
 		}
 		planned[partition/packsPerDomain] += summary.Bytes
 	}
@@ -203,7 +226,8 @@ func m3ValidateRetainedShardPackBytesV1(dir string, d m3VariantDescriptorV1, ass
 	if err != nil {
 		return vectorpartition.ShardGenerationDescriptorV1{}, err
 	}
-	if err := m3ValidateActualShardPackBytesV1(assets, record.PackSummaries, record.Plan.PacksPerDomain); err != nil {
+	domainGraphs := d.PartitionHNSWM == 32 && m3DescriptorPartitionHNSWEfCV1(d) == 256 && record.Plan.PacksPerDomain > 1
+	if err := m3ValidateActualShardPackBytesV1(assets, record.PackSummaries, record.Plan.PacksPerDomain, domainGraphs); err != nil {
 		return vectorpartition.ShardGenerationDescriptorV1{}, err
 	}
 	return record, nil

@@ -256,7 +256,7 @@ func runM0MaterializeMembershipV1(args []string, stdout io.Writer) (err error) {
 		if err != nil {
 			return err
 		}
-		if err = m3ValidateActualShardPackBytesV1(assets, shardSummaries, updated.ShardPlan.PacksPerDomain); err != nil {
+		if err = m3ValidateActualShardPackBytesV1(assets, shardSummaries, updated.ShardPlan.PacksPerDomain, updated.ShardPlan.PacksPerDomain > 1); err != nil {
 			return err
 		}
 	}
@@ -292,7 +292,7 @@ func runM0MaterializeMembershipV1(args []string, stdout io.Writer) (err error) {
 		return errors.New("materialized membership asset status")
 	}
 	if len(shardSummaries) > 0 {
-		if err = m3ValidateActualShardPackBytesV1(h.status.Manifest.Assets, shardSummaries, updated.ShardPlan.PacksPerDomain); err != nil {
+		if err = m3ValidateActualShardPackBytesV1(h.status.Manifest.Assets, shardSummaries, updated.ShardPlan.PacksPerDomain, updated.ShardPlan.PacksPerDomain > 1); err != nil {
 			return fmt.Errorf("materialized membership asset status: %w", err)
 		}
 	}

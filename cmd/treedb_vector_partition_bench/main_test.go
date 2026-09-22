@@ -1115,10 +1115,12 @@ func TestM3FinalOfflineGraphBuildsRetainedControlPacks(t *testing.T) {
 	persist := filepath.Join(t.TempDir(), "offline-control")
 	args := []string{
 		"-dataset", writeFixtureForTest(t, 64, 8, 8), "-out", t.TempDir(), "-m3-persist-db", persist,
-		"-partitions", "16", "-probes", "1", "-overlap", "0", "-top-k", "4", "-stage", "overlap,partition_index",
+		"-partitions", "4", "-probes", "1", "-overlap", "0", "-top-k", "4", "-stage", "overlap,partition_index",
 		"-partition-repetitions", "1", "-partition-pivots", "2", "-partition-max-leaf-bucket", "8", "-partition-degree", "4",
 		"-partition-hnsw-m", "16", "-partition-hnsw-ef-construction", "128", "-m3-final-offline-graph",
 		"-router-max-scalar-work", "50000000000",
+		"-shard-plan", "byte_bounded",
+		"-shard-plan-target-hot-bytes", strconv.FormatUint(uint64(vectorpartition.PackFixedOverheadBytesV1+8*(alignedRowBytesForTest(8)+vectorpartition.GraphIdentityOverheadPerRowV1)), 10),
 	}
 	var stdout bytes.Buffer
 	if err := runWithHermeticProvenance(t, args, &stdout); err != nil {
@@ -1129,7 +1131,7 @@ func TestM3FinalOfflineGraphBuildsRetainedControlPacks(t *testing.T) {
 		t.Fatal(err)
 	}
 	descriptor, err := m3ReadVariantDescriptorV1(persist)
-	if err != nil || !report.OfflineGraphControl || len(report.Rows) != 1 || report.Rows[0].StaleAssets != 16 || descriptor.PartitionHNSWM != 16 || m3DescriptorPartitionHNSWEfCV1(descriptor) != 128 {
+	if err != nil || !report.OfflineGraphControl || report.LogicalDomains != 4 || report.Partitions <= report.LogicalDomains || len(report.Rows) != 1 || report.Rows[0].StaleAssets != uint64(report.Partitions) || descriptor.ShardPlan.PacksPerDomain <= 1 || descriptor.PartitionHNSWM != 16 || m3DescriptorPartitionHNSWEfCV1(descriptor) != 128 {
 		t.Fatalf("offline report=%+v descriptor=%+v err=%v", report, descriptor, err)
 	}
 }

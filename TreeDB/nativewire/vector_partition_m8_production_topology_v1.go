@@ -290,7 +290,11 @@ func vectorPartitionValidateAssetBindingsV1(m collections.VectorPartitionManifes
 	if m.State != "ready" || m.RouterGeneration != m.Generation || m.RouterAsset.ID == "" || m.RouterAsset.Checksum == "" || m.RouterAsset.Bytes == 0 {
 		return nil, errors.New("nativewire: M8 requires a ready manifest with router asset")
 	}
-	if m.DomainCount == m.PartitionCount && len(m.Assets) != int(m.PartitionCount) {
+	assetPartitions := make(map[uint32]struct{}, min(len(m.Assets), int(m.PartitionCount)))
+	for _, asset := range m.Assets {
+		assetPartitions[asset.PartitionID] = struct{}{}
+	}
+	if len(assetPartitions) == int(m.PartitionCount) && len(m.Assets) != int(m.PartitionCount) {
 		return nil, errors.New("nativewire: unsplit partitions require exactly one asset each")
 	}
 	groupOwners := map[string]bool{}
