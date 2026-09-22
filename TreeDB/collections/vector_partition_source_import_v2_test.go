@@ -505,3 +505,52 @@ func TestVectorPartitionSourceImportRetainedSealAndGCV2(t *testing.T) {
 		t.Fatalf("destructive GC lost old source bytes: %+v %v", got, err)
 	}
 }
+
+// One further bounded public import must not re-encode all retained dependency
+// obligations at its checkpoint. Permit a generous logarithmic/COW budget while
+// increasing retained history 32-fold; count real canonical encoding, not the
+// constant TCD2 directory lookups or helper-only output size.
+func TestVectorPartitionSourceImportDependencyEncodingDoesNotScaleWithHistoryV2(t *testing.T) {
+	measure := func(prior int) uint64 {
+		_, d, c := openTypedMinimaCollection(t)
+		defer d.Close()
+		ownership, input := sourceImportFixtureV2(t, c, 2*uint64(prior+1))
+		input.DocumentRevisions = []uint64{1, 2}
+		put := func(i int) {
+			input.ChunkIndex = uint64(i)
+			ids, retained, columns := sourceImportRowsV2(fmt.Sprintf("history-%020d", 2*i), fmt.Sprintf("history-%020d", 2*i+1))
+			if _, err := c.ImportVectorPartitionSourceChunkV2(ownership, input, ids, retained, columns); err != nil {
+				t.Fatal(err)
+			}
+		}
+		for i := 0; i < prior; i++ {
+			put(i)
+		}
+		if err := d.Checkpoint(); err != nil {
+			t.Fatal(err)
+		}
+		read := func() uint64 {
+			raw := d.Stats()["treedb.durable_root.manifest_build.bytes_encoded"]
+			n, err := strconv.ParseUint(raw, 10, 64)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return n
+		}
+		before := read()
+		put(prior)
+		if err := d.Checkpoint(); err != nil {
+			t.Fatal(err)
+		}
+		after := read()
+		if after < before {
+			t.Fatal("dependency encoding counter regressed")
+		}
+		return after - before
+	}
+	small, large := measure(32), measure(1024)
+	t.Logf("one two-row import+checkpoint: prior32=%d prior1024=%d canonical dependency bytes", small, large)
+	if large > 4*small+(64<<10) {
+		t.Fatalf("public source import re-encodes retained dependency history: small=%d large=%d budget=%d", small, large, 4*small+(64<<10))
+	}
+}
