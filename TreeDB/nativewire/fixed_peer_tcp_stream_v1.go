@@ -26,6 +26,8 @@ type fixedPeerTCPStreamV1 struct {
 	closeOnce  sync.Once
 	closeErr   error
 	security   *peerTransportSecurityV1
+	admission  *peerNodeAdmissionV1
+	scope      string
 	peerNodes  map[hraft.ServerAddress]raftcluster.NodeID
 }
 
@@ -41,14 +43,22 @@ func newFixedPeerTCPTransportV1(listen string, advertised net.Addr, timeout time
 }
 
 func newFixedPeerTCPTransportWithSecurityV1(listen string, advertised net.Addr, timeout time.Duration, security *peerTransportSecurityV1, peers []raftcluster.Peer) (*hraft.NetworkTransport, error) {
+	return newFixedPeerTCPTransportWithAdmissionV1(listen, advertised, timeout, security, peers, nil, "")
+}
+
+func newFixedPeerTCPTransportWithAdmissionV1(listen string, advertised net.Addr, timeout time.Duration, security *peerTransportSecurityV1, peers []raftcluster.Peer, admission *peerNodeAdmissionV1, scope string) (*hraft.NetworkTransport, error) {
 	listener, err := net.Listen("tcp", listen)
 	if err != nil {
 		return nil, err
 	}
+	if admission != nil {
+		listener, err = admission.listener(listener)
+		if err != nil { return nil, err }
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	stream := &fixedPeerTCPStreamV1{
 		Listener: listener, advertised: advertised, ctx: ctx, cancel: cancel,
-		conns: make(map[*fixedPeerTCPConnV1]struct{}), security: security,
+		conns: make(map[*fixedPeerTCPConnV1]struct{}), security: security, admission: admission, scope: scope,
 	}
 	if security != nil {
 		allowed := make(map[raftcluster.NodeID]bool, len(peers))
@@ -57,7 +67,7 @@ func newFixedPeerTCPTransportWithSecurityV1(listen string, advertised net.Addr, 
 			allowed[peer.ID] = true
 			stream.peerNodes[hraft.ServerAddress(peer.Address)] = peer.ID
 		}
-		stream.Listener = &peerSecureListenerV1{Listener: listener, security: security, allowed: allowed}
+		stream.Listener = &peerSecureListenerV1{Listener: listener, security: security, allowed: allowed, admission: admission, scope: scope}
 	}
 	return hraft.NewNetworkTransport(stream, 4, timeout, io.Discard), nil
 }
@@ -92,7 +102,12 @@ func (s *fixedPeerTCPStreamV1) Dial(address hraft.ServerAddress, timeout time.Du
 		}
 		ctx, cancel := context.WithTimeout(s.ctx, timeout)
 		defer cancel()
-		conn, err := s.security.dial(ctx, string(address), node)
+		dial := func(ctx context.Context, address string) (net.Conn, error) {
+			plain := func(ctx context.Context) (net.Conn, error) { return (&net.Dialer{}).DialContext(ctx, "tcp", address) }
+			if s.admission != nil { return s.admission.dial(ctx, s.scope, plain) }
+			return plain(ctx)
+		}
+		conn, err := s.security.dialUsing(ctx, string(address), node, dial)
 		if err != nil {
 			return nil, err
 		}

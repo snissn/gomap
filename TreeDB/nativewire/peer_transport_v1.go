@@ -16,6 +16,7 @@ import (
 // listeners and dispatchers belonging to that node.
 type PeerTransportV1 struct {
 	security *peerTransportSecurityV1
+	admission *peerNodeAdmissionV1
 	node raftcluster.NodeID
 	groups map[raftcluster.GroupID]map[raftcluster.NodeID]bool
 }
@@ -30,12 +31,14 @@ func NewPeerTransportV1(config FixedPeerTCPConfigV1) (*PeerTransportV1, error) {
 	for i, node := range config.Nodes { nodes[i] = node.ID }
 	security, err := newPeerTransportSecurityV1(config.ClusterID, config.NodeID, *config.Credentials, nodes)
 	if err != nil { return nil, err }
-	return peerTransportFromSecurityV1(config, security), nil
+	return peerTransportFromSecurityV1(config, security)
 }
 
-func peerTransportFromSecurityV1(config FixedPeerTCPConfigV1, security *peerTransportSecurityV1) *PeerTransportV1 {
-	if security == nil { return nil }
-	transport := &PeerTransportV1{security: security, node: config.NodeID, groups: make(map[raftcluster.GroupID]map[raftcluster.NodeID]bool, len(config.Groups)+1)}
+func peerTransportFromSecurityV1(config FixedPeerTCPConfigV1, security *peerTransportSecurityV1) (*PeerTransportV1, error) {
+	if security == nil { return nil, nil }
+	admission, err := newPeerNodeAdmissionV1(config)
+	if err != nil { return nil, err }
+	transport := &PeerTransportV1{security: security, admission: admission, node: config.NodeID, groups: make(map[raftcluster.GroupID]map[raftcluster.NodeID]bool, len(config.Groups)+1)}
 	add := func(group FixedPeerTCPGroupV1) {
 		members := make(map[raftcluster.NodeID]bool, len(group.Peers))
 		for _, member := range group.Peers { members[member.ID] = true }
@@ -43,7 +46,7 @@ func peerTransportFromSecurityV1(config FixedPeerTCPConfigV1, security *peerTran
 	}
 	add(config.Catalog)
 	for _, group := range config.Groups { add(group) }
-	return transport
+	return transport, nil
 }
 
 // PeerTransportV1 returns the identity shared by this runtime's transports.
@@ -60,9 +63,15 @@ func peerPrivateEndpointV1(address string) bool {
 }
 
 func (p *PeerTransportV1) dial(ctx context.Context, address string, node raftcluster.NodeID) (net.Conn, error) {
+	return p.dialScope(ctx, address, node, "native")
+}
+
+func (p *PeerTransportV1) dialScope(ctx context.Context, address string, node raftcluster.NodeID, scope string) (net.Conn, error) {
 	if p == nil || p.security == nil || !peerPrivateEndpointV1(address) { return nil, errPeerAuthenticationV1 }
 	if ctx == nil { ctx = context.Background() }
-	return p.security.dial(ctx, address, node)
+	return p.security.dialUsing(ctx, address, node, func(ctx context.Context, address string) (net.Conn, error) {
+		return p.admission.dial(ctx, scope, func(ctx context.Context) (net.Conn, error) { return (&net.Dialer{}).DialContext(ctx, "tcp", address) })
+	})
 }
 
 func (p *PeerTransportV1) accept(ctx context.Context, raw net.Conn, group raftcluster.GroupID) (net.Conn, error) {
@@ -92,6 +101,7 @@ func (p *PeerTransportV1) DialNativeContextV1(ctx context.Context, address strin
 func NewAuthenticatedVectorPartitionShardSearchTCPDispatcherV1(transport *PeerTransportV1, endpoints map[raftcluster.GroupID]string, nodeEndpoints map[raftcluster.GroupID]map[raftcluster.NodeID]string) (*VectorPartitionShardSearchTCPDispatcherV1, error) {
 	if transport == nil || transport.security == nil || len(endpoints) == 0 || len(endpoints) > 128 || len(nodeEndpoints) != len(endpoints) { return nil, errPeerAuthenticationV1 }
 	identities := make(map[string]raftcluster.NodeID)
+	scopes := make(map[string]string)
 	for group, endpoint := range endpoints {
 		members := nodeEndpoints[group]
 		if len(group) > 128 || len(members) == 0 || len(members) > fixedPeerMaxPeersV1 { return nil, raftcluster.ErrInvalidConfig }
@@ -100,6 +110,8 @@ func NewAuthenticatedVectorPartitionShardSearchTCPDispatcherV1(transport *PeerTr
 			if !transport.groups[group][node] || !peerPrivateEndpointV1(address) { return nil, errPeerAuthenticationV1 }
 			if old := identities[address]; old != "" && old != node { return nil, raftcluster.ErrInvalidConfig }
 			identities[address] = node
+			if old := scopes[address]; old != "" && old != "shard:"+string(group) { return nil, raftcluster.ErrInvalidConfig }
+			scopes[address] = "shard:"+string(group)
 			found = found || endpoint == address
 		}
 		if !found { return nil, fmt.Errorf("%w: shard fallback lacks an authenticated group owner", raftcluster.ErrInvalidConfig) }
@@ -108,7 +120,19 @@ func NewAuthenticatedVectorPartitionShardSearchTCPDispatcherV1(transport *PeerTr
 	if err != nil { return nil, err }
 	dispatcher.dial = func(ctx context.Context, network, address string) (net.Conn, error) {
 		if network != "tcp" || identities[address] == "" { return nil, errPeerAuthenticationV1 }
-		return transport.dial(ctx, address, identities[address])
+		return transport.dialScope(ctx, address, identities[address], scopes[address])
 	}
 	return dispatcher, nil
+}
+
+// Close cancels pending dials and closes all sockets charged to this node.
+func (p *PeerTransportV1) Close() error {
+	if p == nil { return nil }
+	return p.admission.close()
+}
+
+// ResourceStatsV1 includes every transport sharing this node handle.
+func (p *PeerTransportV1) ResourceStatsV1() PeerNodeResourceStatsV1 {
+	if p == nil { return PeerNodeResourceStatsV1{} }
+	return p.admission.snapshot()
 }

@@ -25,6 +25,7 @@ func peerTransportFixtureV1(t *testing.T) (*PeerTransportV1, FixedPeerTCPConfigV
 
 func TestPeerSecurityNativeBoundaryV1(t *testing.T) {
 	transport, config := peerTransportFixtureV1(t)
+	defer transport.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -53,6 +54,7 @@ func TestPeerSecurityNativeBoundaryV1(t *testing.T) {
 
 func TestPeerSecurityShardBoundaryV1(t *testing.T) {
 	transport, config := peerTransportFixtureV1(t)
+	defer transport.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -66,9 +68,7 @@ func TestPeerSecurityShardBoundaryV1(t *testing.T) {
 			return VectorPartitionShardSearchResponseV1{Version: VectorPartitionShardSearchVersionV1, RequestID: request.RequestID}, nil
 		}),
 	}
-	go func() {
-		for { conn, err := listener.Accept(); if err != nil { return }; go server.ServeConn(ctx, conn) }
-	}()
+	go func() { _ = server.Serve(ctx, listener) }()
 	endpoints := map[raftcluster.GroupID]string{config.Groups[0].ID: listener.Addr().String()}
 	plain, err := NewVectorPartitionShardSearchTCPDispatcherV1(endpoints)
 	if err != nil { t.Fatal(err) }

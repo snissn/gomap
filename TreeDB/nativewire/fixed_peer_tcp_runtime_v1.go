@@ -67,6 +67,7 @@ type FixedPeerTCPConfigV1 struct {
 	// legacy exact-configuration identity. It never authorizes topology edits.
 	ClusterID                         string             `json:",omitempty"`
 	Credentials                       *PeerCredentialsV1 `json:",omitempty"`
+	ResourceLimits                    *PeerNodeLimitsV1 `json:",omitempty"`
 	NodeID                            raftcluster.NodeID
 	DataRoot, RaftRoot, ListenAddress string
 	RaftListen                        map[raftcluster.GroupID]string
@@ -77,6 +78,7 @@ type FixedPeerTCPConfigV1 struct {
 }
 
 type FixedPeerTCPStatusV1 struct {
+	Resources PeerNodeResourceStatsV1 `json:",omitempty"`
 	ClusterID, CatalogRole               string
 	NodeID                               raftcluster.NodeID
 	Address, ConfigDigest, RecoveryState string
@@ -132,6 +134,11 @@ func validateFixedPeerConfigV1(c FixedPeerTCPConfigV1) (FixedPeerTCPConfigV1, st
 		return c, "", err
 	}
 	c.Nodes = slices.Clone(c.Nodes)
+	if c.ResourceLimits != nil {
+		limits, err := normalizePeerNodeLimitsV1(*c.ResourceLimits)
+		if err != nil || c.Credentials == nil { return c, "", fmt.Errorf("%w: resource limits require valid authenticated configuration", raftcluster.ErrInvalidConfig) }
+		c.ResourceLimits = &limits
+	}
 	if c.Credentials != nil {
 		credentials := *c.Credentials
 		c.Credentials = &credentials
@@ -261,6 +268,7 @@ func validateFixedPeerConfigV1(c FixedPeerTCPConfigV1) (FixedPeerTCPConfigV1, st
 	shared.RaftRoot = ""
 	shared.ListenAddress = ""
 	shared.RaftListen = nil
+	shared.ResourceLimits = nil
 	if shared.Credentials != nil {
 		// Bind authenticated mode in the shared identity, but never equate
 		// different nodes' local credential filenames or private keys.
@@ -296,6 +304,8 @@ func NewFixedPeerTCPClientV1(config FixedPeerTCPConfigV1) (*FixedPeerTCPClientV1
 			return nil, err
 		}
 	}
+	peerTransport, err := peerTransportFromSecurityV1(c, security)
+	if err != nil { return nil, err }
 	newHTTPClient := func() *http.Client {
 		transport := &http.Transport{Proxy: nil, MaxConnsPerHost: 8, MaxIdleConns: fixedPeerClientInflightV1, MaxIdleConnsPerHost: 4, IdleConnTimeout: c.RequestTimeout, ResponseHeaderTimeout: c.RequestTimeout}
 		if security != nil {
@@ -304,7 +314,7 @@ func NewFixedPeerTCPClientV1(config FixedPeerTCPConfigV1) (*FixedPeerTCPClientV1
 				if network != "tcp" || node == "" {
 					return nil, raftcluster.ErrRouteTargetUnknown
 				}
-				return security.dial(ctx, address, node)
+				return peerTransport.dialScope(ctx, address, node, "control")
 			}
 		}
 		return &http.Client{Timeout: c.RequestTimeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }, Transport: transport}
@@ -315,7 +325,7 @@ func NewFixedPeerTCPClientV1(config FixedPeerTCPConfigV1) (*FixedPeerTCPClientV1
 	for _, node := range c.Nodes {
 		addresses[node.ID] = node.Address
 	}
-	return &FixedPeerTCPClientV1{config: c, digest: digest, http: newHTTPClient(), readHTTP: newHTTPClient(), addresses: addresses, calls: make(chan struct{}, fixedPeerClientInflightV1), readCalls: make(chan struct{}, fixedPeerClientInflightV1), security: security, peerTransport: peerTransportFromSecurityV1(c, security)}, nil
+	return &FixedPeerTCPClientV1{config: c, digest: digest, http: newHTTPClient(), readHTTP: newHTTPClient(), addresses: addresses, calls: make(chan struct{}, fixedPeerClientInflightV1), readCalls: make(chan struct{}, fixedPeerClientInflightV1), security: security, peerTransport: peerTransport}, nil
 }
 
 func OpenFixedPeerTCPRuntimeV1(config FixedPeerTCPConfigV1) (*FixedPeerTCPRuntimeV1, error) {
@@ -379,7 +389,9 @@ func OpenFixedPeerTCPRuntimeV1(config FixedPeerTCPConfigV1) (*FixedPeerTCPRuntim
 		if e != nil {
 			return fail(e)
 		}
-		transport, e := newFixedPeerTCPTransportWithSecurityV1(listen, addr, r.config.RequestTimeout, client.security, g.Peers)
+		var admission *peerNodeAdmissionV1
+		if client.peerTransport != nil { admission = client.peerTransport.admission }
+		transport, e := newFixedPeerTCPTransportWithAdmissionV1(listen, addr, r.config.RequestTimeout, client.security, g.Peers, admission, "raft:"+string(g.ID))
 		if e != nil {
 			return fail(e)
 		}
@@ -441,7 +453,9 @@ func OpenFixedPeerTCPRuntimeV1(config FixedPeerTCPConfigV1) (*FixedPeerTCPRuntim
 		return fail(err)
 	}
 	if client.security != nil {
-		r.listener = &peerSecureListenerV1{Listener: r.listener, security: client.security}
+		r.listener, err = client.peerTransport.admission.listener(r.listener)
+		if err != nil { return fail(err) }
+		r.listener = &peerSecureListenerV1{Listener: r.listener, security: client.security, admission: client.peerTransport.admission, scope: "control"}
 	}
 	r.server = &http.Server{Handler: http.HandlerFunc(r.serve), ReadHeaderTimeout: r.config.RequestTimeout, ReadTimeout: r.config.RequestTimeout, WriteTimeout: 2 * r.config.RequestTimeout, IdleTimeout: r.config.RequestTimeout, MaxHeaderBytes: 4096}
 	go func() { _ = r.server.Serve(r.listener) }()
@@ -508,6 +522,7 @@ func (r *FixedPeerTCPRuntimeV1) Close() error {
 
 func (r *FixedPeerTCPRuntimeV1) Status(ctx context.Context) (FixedPeerTCPStatusV1, error) {
 	s := FixedPeerTCPStatusV1{NodeID: r.config.NodeID, ClusterID: r.config.ClusterID, ConfigDigest: r.client.digest, CatalogRole: "consumer", RecoveryState: "new", Address: r.client.addresses[r.config.NodeID]}
+	if r.client.peerTransport != nil { s.Resources = r.client.peerTransport.ResourceStatsV1() }
 	if r.meta != nil {
 		s.CatalogRole = "voter"
 		s.CatalogRaft = r.meta.RuntimeStatusV1()
@@ -949,6 +964,7 @@ func (c *FixedPeerTCPClientV1) Close() {
 	if c != nil {
 		c.http.CloseIdleConnections()
 		c.readHTTP.CloseIdleConnections()
+		if c.peerTransport != nil { _ = c.peerTransport.Close() }
 	}
 }
 

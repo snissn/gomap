@@ -44,7 +44,7 @@ jobs:
       - name: Formatting
         if: ${{ !cancelled() }}
         run: |
-          files="TreeDB/nativewire/peer_*.go TreeDB/nativewire/vector_partition_global_connection_budget_v1_test.go TreeDB/nativewire/vector_partition_shard_search_tcp_v1.go TreeDB/nativewire/fixed_peer_tcp_runtime_v1.go TreeDB/nativewire/fixed_peer_security_v1_test.go TreeDB/nativewire/fixed_peer_tcp_stream_v1.go TreeDB/nativewire/fixed_peer_sparse_catalog_v1.go"
+          files="TreeDB/nativewire/peer_*.go TreeDB/nativewire/vector_partition_global_connection_budget_v1_test.go TreeDB/nativewire/vector_partition_shard_search_tcp_v1.go TreeDB/nativewire/fixed_peer_tcp_runtime_v1.go TreeDB/nativewire/fixed_peer_security_v1_test.go TreeDB/nativewire/fixed_peer_tcp_stream_v1.go TreeDB/nativewire/fixed_peer_sparse_catalog_v1.go TreeDB/nativewire/server.go TreeDB/nativewire/listener.go"
           gofmt -d $files || true
           bad=$(gofmt -l $files)
           if [ -n "$bad" ]; then
@@ -57,38 +57,3 @@ jobs:
             exit 1
           fi
 
-  paired-topology-diagnosis:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-          fetch-depth: 1
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-          cache: false
-      - name: Compare exact P1 baseline and current topology result
-        env:
-          BASE_SHA: 1271d2ed425a67d18474ea076e53cf0e9d3f18a2
-        run: |
-          git rev-parse HEAD
-          go version
-          git fetch --depth=1 origin "$BASE_SHA"
-          git worktree add --detach "$RUNNER_TEMP/peer-topology-base" "$BASE_SHA"
-          mkdir -p peer-topology-diagnosis
-          set +e
-          go -C "$RUNNER_TEMP/peer-topology-base" test ./cmd/treedb_vector_partition_bench -run '^TestM8ServingResourcesRetainedTopologyV1$' -count=1 -timeout=4m -v > peer-topology-diagnosis/base.txt 2>&1
-          base_result=$?
-          cat peer-topology-diagnosis/base.txt
-          go test ./cmd/treedb_vector_partition_bench -run '^TestM8ServingResourcesRetainedTopologyV1$' -count=1 -timeout=4m -v > peer-topology-diagnosis/head.txt 2>&1
-          head_result=$?
-          cat peer-topology-diagnosis/head.txt
-          echo "base_exit=$base_result head_exit=$head_result"
-          test "$base_result" -eq 0 && test "$head_result" -eq 0
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: peer-topology-diagnosis-${{ github.event.pull_request.head.sha || github.sha }}
-          path: peer-topology-diagnosis/

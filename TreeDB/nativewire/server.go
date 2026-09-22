@@ -467,6 +467,11 @@ func (s *Server) ServeConn(ctx context.Context, conn net.Conn) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	if s.peerTransport != nil {
+		var err error
+		conn, err = s.peerTransport.admission.accept(conn, "native")
+		if err != nil { return err }
+	}
 	if !s.registerConn(conn) {
 		_ = conn.Close()
 		return ErrServerClosed
@@ -478,6 +483,11 @@ func (s *Server) serveRegisteredConn(ctx context.Context, conn net.Conn) error {
 	logDebug("serveRegisteredConn")
 	defer s.unregisterConn(conn)
 	defer conn.Close()
+	if s.peerTransport != nil {
+		var err error
+		conn, err = s.peerTransport.accept(ctx, conn, "")
+		if err != nil { return err }
+	}
 
 	state := &connState{id: uint64(s.nextConn.Add(1))}
 	defer s.killCursorsForOwner(state.id)

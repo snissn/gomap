@@ -173,13 +173,17 @@ func (s *peerTransportSecurityV1) serverConn(conn net.Conn, allowed map[raftclus
 }
 
 func (s *peerTransportSecurityV1) dial(ctx context.Context, address string, expected raftcluster.NodeID) (net.Conn, error) {
+	return s.dialUsing(ctx, address, expected, func(ctx context.Context, address string) (net.Conn, error) { return (&net.Dialer{}).DialContext(ctx, "tcp", address) })
+}
+
+func (s *peerTransportSecurityV1) dialUsing(ctx context.Context, address string, expected raftcluster.NodeID, dial func(context.Context, string) (net.Conn, error)) (net.Conn, error) {
 	ctx, cancel := context.WithTimeout(ctx, peerHandshakeTimeoutV1)
 	defer cancel()
 	host, _, err := net.SplitHostPort(address)
 	if err != nil || expected == "" {
 		return nil, raftcluster.ErrInvalidConfig
 	}
-	raw, err := (&net.Dialer{}).DialContext(ctx, "tcp", address)
+	raw, err := dial(ctx, address)
 	if err != nil {
 		return nil, err
 	}
@@ -210,6 +214,8 @@ type peerSecureListenerV1 struct {
 	net.Listener
 	security *peerTransportSecurityV1
 	allowed  map[raftcluster.NodeID]bool
+	admission *peerNodeAdmissionV1
+	scope string
 }
 
 func peerVerifiedChainExpiryV1(chains [][]*x509.Certificate) time.Time {
@@ -223,11 +229,15 @@ func peerVerifiedChainExpiryV1(chains [][]*x509.Certificate) time.Time {
 }
 
 func (l *peerSecureListenerV1) Accept() (net.Conn, error) {
-	conn, err := l.Listener.Accept()
-	if err != nil {
-		return nil, err
+	for {
+		conn, err := l.Listener.Accept()
+		if err != nil { return nil, err }
+		if l.admission != nil {
+			conn, err = l.admission.accept(conn, l.scope)
+			if err != nil { if errors.Is(err, net.ErrClosed) { return nil, err }; continue }
+		}
+		return l.security.serverConn(conn, l.allowed), nil
 	}
-	return l.security.serverConn(conn, l.allowed), nil
 }
 
 // Keep socket deadlines no later than either certificate's expiry. This also
