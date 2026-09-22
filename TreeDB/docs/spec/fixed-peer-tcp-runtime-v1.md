@@ -219,3 +219,6 @@ report encoded bytes and constructor allocations, and do not open runtime stores
 Measurements are local conformance evidence; multi-host/network/AZ-byte evidence
 and representative horizontal scaling remain in #4250, with fault evidence in
 #3983. No EC2 or ANN quality/capacity claim follows from these cases.
+
+The initial matched results and per-node samples are retained in
+[P1 sparse catalog evidence](../evidence/sparse-catalog-4807/README.md).
