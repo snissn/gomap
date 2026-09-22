@@ -569,3 +569,34 @@ func TestPreparedInsertFallsBackBeforeUnboundedDeclaredRowExtraction(t *testing.
 		t.Fatalf("ordinary fallback row=%s, err=%v", got, err)
 	}
 }
+
+func TestPreparedInsertSixScalarColumnsUseOrdinaryPath(t *testing.T) {
+	dir := t.TempDir()
+	enableColumnRetainedPlacementCommandWAL(t, dir)
+	d := openColumnRetainedPlacementDB(t, dir, backenddb.Options{})
+	defer d.Close()
+	columns := make([]ColumnStoreColumn, 6)
+	for i := range columns {
+		name := fmt.Sprintf("field_%d", i)
+		columns[i] = ColumnStoreColumn{Name: name, Path: name, ValueType: ColumnStoreValueString, Owner: TypedStorageOwnerColumnPart}
+	}
+	meta := CollectionMeta{Name: "wide", Options: CollectionOptions{DocumentFormat: DocumentFormatJSON, ColumnStore: &ColumnStoreConfig{
+		Enabled: true, Columns: columns,
+		RetainedPayload: ColumnRetainedPayloadNonColumn, RetainedPayloadEncoding: ColumnRetainedPayloadEncodingSemanticStreamV1,
+		Reconstruction: ColumnReconstructionRetainedPayloadAndColumns,
+	}}}
+	if _, err := NewCollectionManager(d).CreateCollection(&meta); err != nil {
+		t.Fatal(err)
+	}
+	col := openColumnRetainedPlacementCollection(t, d, "wide")
+	id, doc := []byte("wide-row"), []byte(`{"field_0":"a","field_1":"b","field_2":"c","field_3":"d","field_4":"e","field_5":"f"}`)
+	if _, err := col.PrepareInsertBatchOwned([][]byte{id}, [][]byte{doc}, 16<<20); !errors.Is(err, ErrPreparedInsertIneligible) || errors.Is(err, ErrPreparedInsertResourceLimit) {
+		t.Fatalf("six-column prepared error=%v, want configuration ineligibility", err)
+	}
+	if _, err := col.InsertBatch([][]byte{id}, [][]byte{doc}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := col.Get(id); err != nil || !bytes.Equal(got, doc) {
+		t.Fatalf("ordinary six-column row=%s, err=%v", got, err)
+	}
+}

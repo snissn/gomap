@@ -22,6 +22,7 @@ var ErrPreparedInsertResourceLimit = errors.New("collections: prepared insert re
 
 const preparedInsertMaxRows = 16 << 10
 const preparedInsertMaxDocumentBytes = 128 << 10
+const preparedInsertMaxScalarColumns = 5
 
 // PreparedInsertBatch owns its input slices until Commit or Abandon. The caller
 // must not mutate or reuse IDs and documents after handing them to Prepare.
@@ -91,6 +92,9 @@ func preparedInsertCommitReserveBytes(ownedBytes int64, rows, columns int) int64
 }
 
 func preparedInsertBoundedScalarColumns(columns []ColumnStoreColumn) bool {
+	if len(columns) == 0 || len(columns) > preparedInsertMaxScalarColumns {
+		return false
+	}
 	for _, column := range columns {
 		// Other scalar types take the full-batch declared-row extractor before
 		// the bounded semantic cursor runs. Keep them on ordinary InsertBatch.
@@ -183,7 +187,7 @@ func (c *Collection) PrepareInsertBatchOwned(ids, documents [][]byte, maxOwnedBy
 		return nil, fmt.Errorf("%w: requires no-index JSON semantic-stream column store", ErrPreparedInsertIneligible)
 	}
 	if !preparedInsertBoundedScalarColumns(cfg.Columns) {
-		return nil, fmt.Errorf("%w: prepared declared-row cursor supports nonempty Int64/String column paths only", ErrPreparedInsertIneligible)
+		return nil, fmt.Errorf("%w: prepared declared-row cursor supports one to %d nonempty Int64/String column paths", ErrPreparedInsertIneligible, preparedInsertMaxScalarColumns)
 	}
 	if maxOwnedBytes <= 0 {
 		return nil, fmt.Errorf("%w: byte limit %d", ErrPreparedInsertResourceLimit, maxOwnedBytes)

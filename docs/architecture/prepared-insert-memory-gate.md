@@ -5,7 +5,8 @@ eligible no-index JSON semantic-stream path, but `maxOwnedBytes` is not a strict
 peak heap or complete in-flight byte cap. The draft #4819 implementation must
 not be described or merged as satisfying that acceptance gate.
 
-The enforced checks are 16,384 rows per call, 128 KiB per document, prepared
+The enforced checks are 16,384 rows per call, 128 KiB per document, at most
+five Int64/String declared columns, prepared
 JSON cursor depth/descriptor/key limits, per-block path/entry-header limits,
 pre-allocation raw/output checks, and a
 post-preparation capacity charge. `ErrPreparedInsertResourceLimit` is distinct

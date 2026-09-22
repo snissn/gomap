@@ -208,8 +208,9 @@ the retained backing and `ReservedBytes` includes the commit reserve. The
 input-derived preparation and commit reserves are conservative estimates, not
 a proven strict peak bound for parser maps, encoder scratch, typed part build,
 or ordered WAL/publication. Prepared mode rejects documents over 128 KiB or
-beyond the cursor's depth and descriptor limits. Declared columns must have
-nonempty paths and Int64 or String values; other scalar types use the ordinary
+beyond the cursor's depth and descriptor limits. Prepared mode admits one to
+five declared columns with nonempty paths and Int64 or String values; wider
+schemas and other scalar types use the ordinary
 path because they currently take a full-batch extractor before the bounded
 cursor. Resource and structural limits return `ErrPreparedInsertResourceLimit`,
 which is distinct from `ErrPreparedInsertIneligible`, so a bounded caller fails
