@@ -2233,13 +2233,12 @@ func TestVectorPartitionDomainPackSectionsOpenWithoutReassemblyV1(t *testing.T) 
 	if view.Header.Version != columnHNSWSearchPackVersionV6 || view.normalizedVectorChunks.length != uint64(input.Rows*input.VectorStride) || len(view.normalizedVectorChunks.values) < 2 || len(view.adjacencyNeighborChunks[0].values) < 2 || len(view.documentIDByteChunks.values) < 2 || view.heapCopyBytes != uint64(storedBytes) || view.chunkMetaBytes == 0 {
 		t.Fatalf("chunked view header=%+v vectors=%d chunks=(%d,%d,%d) bytes=%d metadata=%d stored=%d", view.Header, view.normalizedVectorChunks.length, len(view.normalizedVectorChunks.values), len(view.adjacencyNeighborChunks[0].values), len(view.documentIDByteChunks.values), view.heapCopyBytes, view.chunkMetaBytes, storedBytes)
 	}
-	oneHandle := *view
-	oneHandle.handles = make([]*mappedresource.Handle, 1)
-	twoHandles := *view
-	twoHandles.handles = make([]*mappedresource.Handle, 2)
+	oneHandle := columnHNSWSearchPackPreparedView{handles: make([]*mappedresource.Handle, 1)}
+	twoHandles := columnHNSWSearchPackPreparedView{handles: make([]*mappedresource.Handle, 2)}
 	if growth := twoHandles.retainedChunkMetadataBytes() - oneHandle.retainedChunkMetadataBytes(); growth < mappedresource.ConservativeHandleMetadataBytes() {
 		t.Fatalf("per-handle metadata growth=%d want at least %d", growth, mappedresource.ConservativeHandleMetadataBytes())
 	}
+	originalDocumentIDByteChunks := view.documentIDByteChunks
 	for name, chunks := range map[string][][]byte{
 		"unused trailing chunk": append(append([][]byte(nil), view.documentIDByteChunks.values...), []byte{'x'}),
 		"trailing bytes": func() [][]byte {
@@ -2248,9 +2247,10 @@ func TestVectorPartitionDomainPackSectionsOpenWithoutReassemblyV1(t *testing.T) 
 			return chunks
 		}(),
 	} {
-		invalid := *view
-		invalid.documentIDByteChunks = newColumnHNSWSearchPackPreparedChunks(chunks)
-		if err := invalid.validateChunkedDocumentIDsWithContext(t.Context(), uint64(input.Rows)); err == nil {
+		view.documentIDByteChunks = newColumnHNSWSearchPackPreparedChunks(chunks)
+		err := view.validateChunkedDocumentIDsWithContext(t.Context(), uint64(input.Rows))
+		view.documentIDByteChunks = originalDocumentIDByteChunks
+		if err == nil {
 			t.Fatalf("accepted %s", name)
 		}
 	}
