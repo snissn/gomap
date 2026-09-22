@@ -342,6 +342,28 @@ Interpretation:
 - The checkpoint/reopen block is included because durability examples should
   cross a persisted boundary.
 
+For a no-index JSON collection configured with
+`RetainedPayloadEncoding: collections.ColumnRetainedPayloadEncodingSemanticStreamV1`,
+the caller may prepare the next batch while a single goroutine commits the
+previous one. Ownership of the ID and document buffers transfers at preparation;
+do not mutate or reuse them until `Commit` or `Abandon` returns:
+
+```go
+prepared, err := col.PrepareInsertBatchOwned(ids, docs, 512<<20)
+if err != nil {
+    log.Fatal(err)
+}
+defer prepared.Abandon() // harmless after Commit; releases on early return
+resultIDs, err := prepared.Commit()
+if err != nil { log.Fatal(err) }
+_ = resultIDs // returned in caller input order
+```
+
+Preparation does not make rows visible or durable. Keep one ordered committer;
+the successful `Commit` has the same WAL and publication boundary as
+`InsertBatch`. A non-eligible schema or oversized request returns
+`ErrPreparedInsertIneligible` before admission.
+
 ## Runnable package benchmark
 
 Use the package benchmark when you want repeatable counters for the current

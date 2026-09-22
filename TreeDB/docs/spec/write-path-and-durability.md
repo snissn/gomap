@@ -115,6 +115,14 @@ serialization locks are held.
 
 ### 0.2 Normative mode and API matrix
 
+`Collection.PrepareInsertBatchOwned` is private, identity-free work for an
+eligible JSON semantic-stream insert. Its result is not a publication state,
+command-WAL frame, or acknowledgment. Only `PreparedInsertBatch.Commit` enters
+the ordinary ordered insertion/publication path; it preserves the selected
+profile's WAL, asset-sync, recovery, and acknowledgment requirements in this
+matrix. Abandoning preparation cannot advance the durable frontier or grant GC
+authority over an asset.
+
 These canonical profiles define the current public surface. `bench_unsafe` is
 explicitly outside the production guarantee.
 

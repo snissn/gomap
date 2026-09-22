@@ -2,6 +2,21 @@
 
 This document maps specification invariants to existing tests and harnesses.
 
+Prepared no-index JSON semantic-stream insertion is covered by
+`TestPreparedInsertOverlapsOrderedCommit` (batch N+1 prepares while N is held
+before publication, with no early acknowledgment),
+`TestPreparedInsertSortedValuesAndReopen` (caller-order IDs, sorted retained
+and typed values, caller-buffer reuse, one-shot commit, durable reopen),
+`TestPreparedInsertAbandonBoundsAndLateConflict` (oversized admission,
+abandonment, duplicate precedence, and authoritative late conflict),
+`TestPreparedInsertCheckpointBeforeCommitAndReopen` (private prepare across a
+checkpoint and durable reopen), and
+`TestPreparedInsertRejectsMismatchedCapturedSchema` (commit-time catalog
+validation).
+`BenchmarkPreparedInsertPublicPath` compares ordinary, prepared serial, and
+one-ahead public insertion with the real WAL/publication path. These tests do
+not replace the JSONBench real-data load and query comparison.
+
 Within-domain physical home packing: `TestDomainHomePackingKeepsCommunitiesV1`
 is the interleaved-community regression; `TestHomePackingBoundResponseAndRetainedReuseV1`
 checks bound requests, hostile responses, exact capacity and persisted homes

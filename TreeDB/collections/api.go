@@ -11623,6 +11623,7 @@ type insertBatchExecutionOptions struct {
 	returnResultIDs          bool
 	insertStats              *CollectionInsertStats
 	trustedFloat32Projection *trustedFloat32Projection
+	prepared                 *PreparedInsertBatch
 }
 
 func (c *Collection) recordInsertBatchStats(stats CollectionInsertStats, execOpts insertBatchExecutionOptions) {
@@ -12023,6 +12024,10 @@ func (c *Collection) insertBatchOnceWithLockState(
 	}
 	meta := catalog.meta
 	c.meta = meta
+	if prepared := execOpts.prepared; prepared != nil && !sameCollectionMetaIgnoringColumnManifestProgress(meta, prepared.meta) {
+		closePlanningSnapshot()
+		return nil, fmt.Errorf("collections: concurrent schema modification detected for %q", prepared.meta.Name)
+	}
 	if err := validateTrustedFloat32ProjectionMeta(meta, execOpts.trustedFloat32Projection); err != nil {
 		closePlanningSnapshot()
 		return nil, err
@@ -12976,22 +12981,26 @@ func (c *Collection) insertBatchNoIndex(
 		Documents: len(documents),
 		Indexes:   len(c.meta.Indexes),
 	}
+	if prepared := execOpts.prepared; prepared != nil && !sameCollectionMetaIgnoringColumnManifestProgress(c.meta, prepared.meta) {
+		_ = snap.Close()
+		return nil, fmt.Errorf("collections: concurrent schema modification detected for %q", prepared.meta.Name)
+	}
 	resultIDs, err := cloneBatchDocumentIDs(ids)
 	if err != nil {
 		_ = snap.Close()
 		return nil, err
 	}
-	entries := make([]noIndexBatchEntry, len(documents))
-	for i := range documents {
-		id := resultIDs[i]
-		entries[i] = noIndexBatchEntry{
-			id:       id,
-			document: documents[i],
+	var entries []noIndexBatchEntry
+	if prepared := execOpts.prepared; prepared != nil {
+		entries = prepared.entries
+	} else {
+		entries = make([]noIndexBatchEntry, len(documents))
+		for i := range documents {
+			id := resultIDs[i]
+			entries[i] = noIndexBatchEntry{id: id, document: documents[i]}
 		}
+		sort.Slice(entries, func(i, j int) bool { return bytes.Compare(entries[i].id, entries[j].id) < 0 })
 	}
-	sort.Slice(entries, func(i, j int) bool {
-		return bytes.Compare(entries[i].id, entries[j].id) < 0
-	})
 	phaseStart := time.Now()
 	for i := 1; i < len(entries); i++ {
 		if bytes.Equal(entries[i-1].id, entries[i].id) {
@@ -13028,7 +13037,14 @@ func (c *Collection) insertBatchNoIndex(
 	if columnStoreNeedsRetainedPayloadTransform(c.meta) {
 		phaseStart = time.Now()
 		var prepared columnRetainedPayloadStorageDocuments
-		if projection := execOpts.trustedFloat32Projection; projection != nil && projection.retainedJSON != nil {
+		if execOpts.prepared != nil {
+			prepared = execOpts.prepared.retained
+			retainedDocuments = prepared.documents
+			retainedTemplateRecords = prepared.templateRecords
+			retainedSemanticStreamBlocks = prepared.semanticStreamBlocks
+			retainedDeclaredRows = prepared.declaredRows
+			retainedDeclaredRowsReady = prepared.declaredRowsReady
+		} else if projection := execOpts.trustedFloat32Projection; projection != nil && projection.retainedJSON != nil {
 			retainedByID, err := validateTrustedFloat32ProjectionRetainedJSON(ids, projection)
 			if err != nil {
 				return nil, err
@@ -13059,6 +13075,9 @@ func (c *Collection) insertBatchNoIndex(
 			retainedDeclaredRowsReady = prepared.declaredRowsReady
 		}
 		stats.RetainedPayloadPrepare = time.Since(phaseStart)
+		if execOpts.prepared != nil {
+			stats.RetainedPayloadPrepare = execOpts.prepared.prepareElapsed
+		}
 		stats.RetainedPayloadRows = len(entries)
 		if retainedDeclaredRowsReady {
 			stats.RetainedPayloadDeclaredRows = len(retainedDeclaredRows)
@@ -13174,7 +13193,9 @@ func (c *Collection) insertBatchNoIndex(
 			return nil, err
 		}
 		streamPublishTable := retainedSemanticStreamBlocks
-		retainedSemanticStreamTables = append(retainedSemanticStreamTables, retainedSemanticStreamBlocks)
+		if execOpts.prepared == nil {
+			retainedSemanticStreamTables = append(retainedSemanticStreamTables, retainedSemanticStreamBlocks)
+		}
 		phaseStart := time.Now()
 		if pointerizedStreamTable, pointerized, pointerizeStats, err := pointerizeCollectionRunTableValuesForRootWithStats(c.db, c.meta, streamRootName, retainedSemanticStreamBlocks); err != nil {
 			return nil, err

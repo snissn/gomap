@@ -628,6 +628,15 @@ published output; new typed adapters should supply residual-only payloads.
 
 ## Troubleshooting
 
+For full-retained JSON ingestion, `BenchmarkPreparedInsertPublicPath` measures
+ordinary `InsertBatch`, prepared serial commit, and one-ahead prepared commit
+through the public WAL/asset path. The JSONBench `-engine-prepare-depth 0/1`
+comparison holds raw-input pipeline depth constant. Record load wall time,
+engine prepare/commit overlap, allocation bytes per row, peak RSS, and durable
+storage in matched fresh-DB runs; the helper-only retained-block benchmark is
+not a throughput claim. Preparation owns caller buffers, while typed part
+construction and all durability barriers remain in ordered commit.
+
 | Symptom | What it means | Action |
 | --- | --- | --- |
 | `document_materializations/op` is non-zero in a direct aggregate row | You may be measuring fallback or public response materialization. | Use the `typed_column_part` aggregate sub-benchmark and inspect the benchmark name. |

@@ -192,9 +192,26 @@ benchmark-only unsupported-production mode says otherwise.
 During private planning, canonical command payloads, external refs, uniqueness
 reservations, publish inputs, and schema/index barrier state are not reachable
 from any read, scan, uniqueness check, update/delete planner, queued unit,
-publishing unit, or pending-state merge. The writer prepares and protects
-required external refs, appends the typed command WAL frame through the
-shared commit-log journal, and applies through the normal executor. In the
+publishing unit, or pending-state merge.
+
+For eligible no-secondary-index JSON collections using semantic-stream retained
+payload, `PrepareInsertBatchOwned` can move ID sorting, duplicate preflight,
+retained block encoding, and declared-row extraction ahead of the ordered
+publisher. It owns the input buffers and has no command LSN or publication
+lease. The `maxOwnedBytes` argument screens the input and estimated preparation
+headroom before encoding, then rejects a prepared payload whose charged backing
+exceeds the limit. `OwnedBytes` reports that retained backing. The admission
+estimate does not bound all transient parser or publisher allocations. A later
+`Commit` rechecks persisted conflicts and schema under the normal insert path
+before WAL admission. One caller can
+prepare batch N+1 while a single committer publishes N; neither a queued
+object nor an abandoned object is acknowledged or visible. Typed part creation,
+dictionary finalization, asset sync, root installation, and GC authority remain
+in the ordered publication path. The on-disk format and replay rules are unchanged.
+
+The writer prepares and protects required external refs, appends the typed
+command WAL frame through the shared commit-log journal, and applies through the
+normal executor. In the
 durable profile, stable complete frame closure precedes visibility and success;
 the relaxed profile may lead sync as specified by the canonical matrix. WAL
 cleanup requires sealed-root coverage plus `AppliedLSN` and protection of both
