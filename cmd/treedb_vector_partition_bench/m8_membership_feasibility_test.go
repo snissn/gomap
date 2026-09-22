@@ -142,10 +142,11 @@ func TestM8MembershipArtifactIsImmutableV1(t *testing.T) {
 	result := m8MembershipFeasibilityV1{
 		SchemaVersion: 1, ResultKind: "m8_membership_feasibility_v1", Method: m8MembershipFeasibilityMethodV1, Status: "sufficient", VariantID: "graph-overlap-020-v1",
 		FixtureChecksum: digest, TruthIdentity: "truth", TruthArtifactSHA256: digest, BuildIdentityDigest: digest, ManifestIntegrity: digest, ReadySetDigest: digest, ShardGenerationDigest: digest, MembershipDigest: digest,
-		SourceVectors: 1, LogicalDomains: 1, PhysicalPacks: 1, DomainLimit: 1, PackLimit: 1, RequiredRecall: 1, TotalHits: 1, PossibleHits: 1, Ceiling: 1, ActualPackBytes: 10, ActualBytesPerVector: 10,
+		SourceVectors: 1, LogicalDomains: 1, PhysicalPacks: 1, DomainLimit: 1, PackLimit: 1, RequiredRecall: 1, TotalHits: 1, PossibleHits: 1, Ceiling: 1, ActualGraphBytes: 10, ActualBytesPerVector: 10,
 		WorkBound: 20, ScratchBytes: 48,
-		Packs:   []m8MembershipFeasibilityPackV1{{PackID: 0, DomainID: 0, PlannedBytes: 10, ActualBytes: 10}},
-		Queries: []m8MembershipFeasibilityQueryV1{{QueryOrdinal: 0, TruthSHA256: digest, TruthCount: 1, Hits: 1, Recall: 1, CoverageMask: 1, SelectedDomain: []uint32{0}, ExpandedPacks: []uint32{0}, PackCost: 1}},
+		Packs:        []m8MembershipFeasibilityPackV1{{PackID: 0, DomainID: 0, PlannedBytes: 10}},
+		DomainGraphs: []m8MembershipFeasibilityDomainGraphV1{{DomainID: 0, AnchorPackID: 0, PlannedBytes: 10, ActualBytes: 10, AssetCount: 1}},
+		Queries:      []m8MembershipFeasibilityQueryV1{{QueryOrdinal: 0, TruthSHA256: digest, TruthCount: 1, Hits: 1, Recall: 1, CoverageMask: 1, SelectedDomain: []uint32{0}, ExpandedPacks: []uint32{0}, PackCost: 1}},
 	}
 	artifact, err := m8PublishMembershipFeasibilityV1(t.TempDir(), result)
 	if err != nil {
@@ -175,37 +176,42 @@ func TestM8RetainedMembershipFeasibilityReplaysExactAssetsV1(t *testing.T) {
 		t.Skip("vector partition namespace persistence unsupported")
 	}
 	fixture := m8QualificationFixturesV1[0]
-	fixture.Vectors, fixture.Dimensions, fixture.Queries = 256, 8, 8
+	fixture.Vectors, fixture.Dimensions, fixture.Queries = 100, 4, 8
 	_, queries := fixtureData(fixture)
 	vectors := fixtureVectors(fixture)
 	fixture.Checksum = fixtureChecksumFromData(vectors, queries)
-	traversal, ok := vectorpartition.AlignedTraversalRowBytesV1(fixture.Dimensions)
-	if !ok {
-		t.Fatal("invalid traversal-row shape")
-	}
-	in := vectorpartition.DefaultShardPlanInputV1(fixture.Vectors, fixture.Dimensions)
-	in.TargetHotBytes = uint64(vectorpartition.PackFixedOverheadBytesV1 + 20*(traversal+vectorpartition.GraphIdentityOverheadPerRowV1))
-	plan, err := vectorpartition.PlanByteBoundedShardsV1(in)
-	if err != nil || plan.Partitions != 16 {
+	planConfig := vectorpartition.DefaultConfig()
+	plan, err := vectorpartition.PlanByteBoundedShardsV1(vectorpartition.ShardPlanInputV1{
+		Vectors: fixture.Vectors, Dimensions: fixture.Dimensions, LogicalDomains: 16, OverlapRatio: m0OverlapRatioV1, Imbalance: planConfig.Imbalance,
+		TargetHotBytes: uint64(vectorpartition.PackFixedOverheadBytesV1 + 4*(alignedRowBytesForTest(fixture.Dimensions)+vectorpartition.GraphIdentityOverheadPerRowV1)),
+	})
+	if err != nil || plan.LogicalDomains != 16 || plan.Partitions != 32 || plan.PacksPerDomain != 2 {
 		t.Fatalf("plan=%+v err=%v", plan, err)
 	}
 	root := t.TempDir()
 	dir := filepath.Join(root, "retained")
 	descriptor := testM8QualificationRetainedDescriptorWithShardPlanV1(t, dir, strings.Repeat("a", 40), fixture, "graph-disjoint-v1", partitionAssignmentGraphV1, 0, plan)
 	truthDir, truth := testM8QualificationTruthCacheV1(t, root, fixture)
-	cfg := config{out: filepath.Join(root, "out"), m8TruthCache: truthDir, m8TruthCacheSHA256: truth.ArtifactSHA256, topK: 10, recallTarget: 0, m8MembershipProbes: 2, m8MembershipPackLimit: 2, maxBytes: 1 << 30}
+	cfg := config{out: filepath.Join(root, "out"), m8TruthCache: truthDir, m8TruthCacheSHA256: truth.ArtifactSHA256, topK: 10, recallTarget: 0, m8MembershipProbes: 2, m8MembershipPackLimit: 4, maxBytes: 1 << 30}
 	artifact, err := m8RunMembershipFeasibilityV1(cfg, fixture, vectors, dir, descriptor)
 	if err != nil || artifact.Result.Status != "sufficient" {
 		t.Fatalf("artifact=%+v err=%v", artifact, err)
 	}
+	assets := 0
+	for _, graph := range artifact.Result.DomainGraphs {
+		assets += graph.AssetCount
+	}
+	if len(artifact.Result.Packs) != 32 || len(artifact.Result.DomainGraphs) != 16 || artifact.Result.ActualGraphBytes == 0 || assets <= 16 {
+		t.Fatalf("split-domain feasibility evidence=%+v", artifact.Result)
+	}
 	if err := m8ReplayMembershipFeasibilityV1(cfg, fixture, dir, descriptor, artifact); err != nil {
 		t.Fatal(err)
 	}
-	report := m8ProductionReportV1{Dataset: fixture, TruthCache: truth, Variant: &descriptor, Config: m8ProductionConfigEvidenceV1{Partitions: 16, DomainCount: 16, TopK: 10, RecallTarget: 0}}
-	if !m8MembershipFeasibilityMatchesReportV1(artifact.Result, report, 2, 2) {
+	report := m8ProductionReportV1{Dataset: fixture, TruthCache: truth, Variant: &descriptor, Config: m8ProductionConfigEvidenceV1{Partitions: 32, DomainCount: 16, TopK: 10, RecallTarget: 0}}
+	if !m8MembershipFeasibilityMatchesReportV1(artifact.Result, report, 2, 4) {
 		t.Fatal("exact retained feasibility identity did not bind to its report")
 	}
-	opened, err := openM8ProductionMultiGroupExistingAssetsWithPolicyV1(dir, []string{"g0", "g1"}, 16, fixture, fixtureVectors(fixture), false)
+	opened, err := openM8ProductionMultiGroupExistingAssetsWithPolicyV1(dir, []string{"g0", "g1"}, 32, fixture, fixtureVectors(fixture), false)
 	if err != nil {
 		t.Fatalf("normal retained admission rejected exact shard bytes: %v", err)
 	}
@@ -213,7 +219,7 @@ func TestM8RetainedMembershipFeasibilityReplaysExactAssetsV1(t *testing.T) {
 		t.Fatal(err)
 	}
 	report.TruthCache.ArtifactSHA256 = strings.Repeat("f", 64)
-	if m8MembershipFeasibilityMatchesReportV1(artifact.Result, report, 2, 2) {
+	if m8MembershipFeasibilityMatchesReportV1(artifact.Result, report, 2, 4) {
 		t.Fatal("stale truth identity bound to retained feasibility")
 	}
 	shardGenerationPath := filepath.Join(dir, m3ShardGenerationFileV1)
@@ -227,7 +233,7 @@ func TestM8RetainedMembershipFeasibilityReplaysExactAssetsV1(t *testing.T) {
 	if err := m8ReplayMembershipFeasibilityV1(cfg, fixture, dir, descriptor, artifact); err == nil {
 		t.Fatal("stale shard generation replay accepted")
 	}
-	if opened, err := openM8ProductionMultiGroupExistingAssetsWithPolicyV1(dir, []string{"g0", "g1"}, 16, fixture, fixtureVectors(fixture), false); err == nil {
+	if opened, err := openM8ProductionMultiGroupExistingAssetsWithPolicyV1(dir, []string{"g0", "g1"}, 32, fixture, fixtureVectors(fixture), false); err == nil {
 		_ = opened.Close()
 		t.Fatal("normal retained admission accepted a stale shard generation record without the optional feasibility gate")
 	}

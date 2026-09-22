@@ -39,15 +39,40 @@ func TestM8ConfiguredProbesUseLogicalDomainCountV1(t *testing.T) {
 	}
 }
 
-func TestM8LocalSearchFanoutRequiresAchievableDomainSubsetV1(t *testing.T) {
-	if !m8LocalSearchFanoutValidV1([]uint32{1, 3}, 4, 2, 1, []int{1, 3}) {
-		t.Fatal("rejected achievable one-domain fanouts")
+func TestM8LocalSearchFanoutIsOneGraphPerDomainV1(t *testing.T) {
+	packsPerDomain := []int{2, 1}
+	if !m8LocalSearchFanoutValidV1([]uint32{1, 1}, 2, 2, 1, packsPerDomain, true) {
+		t.Fatal("rejected one local graph search per selected domain")
 	}
-	if m8LocalSearchFanoutValidV1([]uint32{2}, 2, 1, 1, []int{1, 3}) {
-		t.Fatal("accepted fanout between achievable one-domain totals")
+	if m8LocalSearchFanoutValidV1([]uint32{2}, 2, 1, 1, packsPerDomain, true) {
+		t.Fatal("accepted physical-pack fanout for one selected domain")
 	}
-	if !m8LocalSearchFanoutValidV1([]uint32{4}, 4, 1, 2, []int{1, 3}) {
-		t.Fatal("rejected achievable two-domain fanout")
+	if !m8LocalSearchFanoutValidV1([]uint32{2}, 2, 1, 2, packsPerDomain, true) {
+		t.Fatal("rejected two selected domain graphs")
+	}
+	if !m8LocalSearchFanoutValidV1([]uint32{1, 2}, 3, 2, 1, packsPerDomain, false) {
+		t.Fatal("rejected exact per-pack fanout for selected offline domains")
+	}
+	if m8LocalSearchFanoutValidV1([]uint32{3}, 3, 1, 1, packsPerDomain, false) {
+		t.Fatal("accepted impossible one-domain offline fanout")
+	}
+	if !m8LocalSearchFanoutValidV1([]uint32{3}, 3, 1, 2, packsPerDomain, false) {
+		t.Fatal("rejected exact two-domain offline fanout")
+	}
+	if m8LocalSearchFanoutValidV1([]uint32{3}, 2, 1, 2, packsPerDomain, false) {
+		t.Fatal("accepted offline fanout with inconsistent aggregate")
+	}
+}
+
+func TestM8LocalSearchFanoutLargeUniformLayoutV1(t *testing.T) {
+	packsPerDomain := make([]int, 16_384)
+	for i := range packsPerDomain {
+		packsPerDomain[i] = 1
+	}
+	for _, domainGraphs := range []bool{true, false} {
+		if !m8LocalSearchFanoutValidV1([]uint32{16_384}, 16_384, 1, 16_384, packsPerDomain, domainGraphs) {
+			t.Fatalf("rejected large uniform layout domain_graphs=%t", domainGraphs)
+		}
 	}
 }
 
@@ -65,6 +90,31 @@ func TestM8AttributionExpandsLogicalDomainsToPhysicalPacksV1(t *testing.T) {
 	}
 	if _, err := m8AttributionPacksForDomainsV1(manifest, 3, []uint32{0, 0}); err == nil {
 		t.Fatal("accepted duplicate routed domain")
+	}
+	harness := &m8AttributionHarnessV1{assets: &m8ProductionMultiGroupAssetsV1{manifest: manifest}, searchers: make([]*collections.VectorPartitionLocalSearcherV1, 3), domainGraphs: true}
+	got, err = harness.partitionsForDomains([]uint32{0, 1})
+	if err != nil || !slices.Equal(got, []uint32{0, 2}) {
+		t.Fatalf("domain graph search partitions=%v err=%v want [0 2]", got, err)
+	}
+}
+
+func TestM8RetainedDomainGraphRequiresChunkedAnchorsV1(t *testing.T) {
+	manifest := collections.VectorPartitionManifestV1{
+		PartitionCount: 3,
+		DomainCount:    2,
+		DomainPacks: []collections.VectorPartitionDomainPackV1{
+			{DomainID: 0, PackID: 0}, {DomainID: 0, PackID: 1}, {DomainID: 1, PackID: 2},
+		},
+		Assets: []collections.VectorPartitionAssetV1{{ID: "hnsw_search_pack_v1/partition/0"}},
+	}
+	variant := collections.VectorPartitionLocalGraphVariantConnectivityPreservingVamanaR64L256Alpha1_2V1
+	if _, err := m8RetainedDomainGraphAnchorsV1(manifest, variant); err == nil {
+		t.Fatal("accepted legacy per-pack Vamana assets as a domain graph")
+	}
+	manifest.Assets = append(manifest.Assets, collections.VectorPartitionAssetV1{ID: "hnsw_search_pack_v1/partition/0/section/01/00000"})
+	anchors, err := m8RetainedDomainGraphAnchorsV1(manifest, variant)
+	if err != nil || !slices.Equal(anchors, []uint32{0, 2}) {
+		t.Fatalf("chunked anchors=%v err=%v", anchors, err)
 	}
 }
 

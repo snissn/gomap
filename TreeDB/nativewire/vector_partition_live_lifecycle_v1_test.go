@@ -219,9 +219,9 @@ func validateLiveLifecycleAttemptsV1(attempts []liveLifecycleAttemptV1, expected
 		if !ok || a.query < 0 || a.query >= len(cells) || r.PartitionGeneration != generation {
 			return hits, errors.New("unknown searched revision/coverage/generation")
 		}
-		// This fixture deliberately gives domain 0 two packs in two groups and
-		// domain 1 one pack. A vague 1..2 pack count cannot prove full routing.
-		wantPacks := []uint32{0, 1}
+		// Each logical domain is served by its first physical pack, whose chunked
+		// graph contains the complete domain membership.
+		wantPacks := []uint32{0}
 		wantDomains := []uint32{uint32(a.query)}
 		if a.query == 1 {
 			wantPacks = []uint32{2}
@@ -520,10 +520,18 @@ func runVectorPartitionLiveLifecycleV1(t *testing.T, fixture vectorPartitionLive
 	if len(vectors[changedID]) != fixture.definition.Dimensions {
 		t.Fatalf("mutation target %q is absent or has the wrong dimensions", changedID)
 	}
+	rootGraphs := 0
 	for _, asset := range fixture.manifest.Assets {
+		if asset.GraphVariant == "" {
+			continue
+		}
+		rootGraphs++
 		if asset.GraphVariant != string(collections.VectorPartitionLocalGraphVariantConnectivityPreservingVamanaR64L256Alpha1_2V1) {
 			t.Fatalf("wrong selected base graph: %s", asset.GraphVariant)
 		}
+	}
+	if rootGraphs == 0 {
+		t.Fatal("selected base graph is absent")
 	}
 	routes := liveLifecycleRoutesV1(t, fixture, queries, probes)
 	moves := [2][]float32{queries[0], nil}
@@ -900,8 +908,8 @@ func TestVectorPartitionLiveLifecycleReceiptRejectsV1(t *testing.T) {
 	truth := map[liveLifecycleIdentityV1][]liveLifecycleTruthV1{key: {{scores: map[string]float32{"a": 1}, top: map[string]bool{"a": true}}}}
 	base := liveLifecycleAttemptV1{id: 0, started: time.Now(), finished: time.Now().Add(time.Second), response: VectorPartitionCoordinatorResponseV1{
 		PartitionGeneration: 3, LiveRevision: 1, LiveCoverage: 2, Neighbors: []VectorPartitionCoordinatorNeighborV1{{ID: "a", Score: 1}},
-		ProbedDomains: []uint32{0}, ProbedPacks: []uint32{0, 1}, ProbedPartitions: []uint32{0, 1},
-		Counters: VectorPartitionCoordinatorCountersV1{SelectedDomains: 1, SelectedPacks: 2, SelectedPartitions: 2, HNSWServedPartitions: 2, LiveDomainsSearched: 1},
+		ProbedDomains: []uint32{0}, ProbedPacks: []uint32{0}, ProbedPartitions: []uint32{0},
+		Counters: VectorPartitionCoordinatorCountersV1{SelectedDomains: 1, SelectedPacks: 1, SelectedPartitions: 1, HNSWServedPartitions: 1, LiveDomainsSearched: 1},
 	}}
 	if hits, err := validateLiveLifecycleAttemptsV1([]liveLifecycleAttemptV1{base}, 1, 1, 3, truth); err != nil || hits != 1 {
 		t.Fatalf("valid hits=%d err=%v", hits, err)
@@ -923,7 +931,7 @@ func TestVectorPartitionLiveLifecycleReceiptRejectsV1(t *testing.T) {
 			a.response.Neighbors = []VectorPartitionCoordinatorNeighborV1{{ID: "a", Score: .9}}
 		}},
 		{"fallback", func(a *liveLifecycleAttemptV1) { a.response.Counters.ExactScanPartitions = 1 }},
-		{"missing-pack", func(a *liveLifecycleAttemptV1) { a.response.ProbedPacks = []uint32{0} }},
+		{"missing-pack", func(a *liveLifecycleAttemptV1) { a.response.ProbedPacks = nil }},
 		{"duplicate-pack", func(a *liveLifecycleAttemptV1) { a.response.ProbedPacks = []uint32{0, 0} }},
 		{"wrong-domain", func(a *liveLifecycleAttemptV1) { a.response.ProbedDomains = []uint32{1} }},
 	} {
@@ -959,7 +967,7 @@ func TestVectorPartitionLiveLifecycleReceiptRejectsV1(t *testing.T) {
 	truth[key] = liveLifecycleDeltaTruthV1(t, unchanged, map[string][]float32{"a": {1, 1}, "deleted": nil})
 	a := base
 	a.response.Neighbors = []VectorPartitionCoordinatorNeighborV1{{ID: "a", Score: truth[key][0].scores["a"]}}
-	route := liveLifecycleRouteV1{domains: []uint32{0}, packs: []uint32{0, 1}}
+	route := liveLifecycleRouteV1{domains: []uint32{0}, packs: []uint32{0}}
 	if hits, err := validateLiveLifecycleAttemptsV1([]liveLifecycleAttemptV1{a}, 1, 1, 3, truth, route); err != nil || hits != 1 {
 		t.Fatalf("bounded current truth hits=%d err=%v", hits, err)
 	}

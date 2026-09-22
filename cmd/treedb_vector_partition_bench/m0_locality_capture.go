@@ -152,33 +152,26 @@ func runM0LocalityCaptureV1(args []string, stdout io.Writer) error {
 	if int(assets.manifest.DomainCount) < probes {
 		return errors.New("probes exceed retained routing domains")
 	}
-	// Open/verify each immutable pack once. Reopening inside the query loop
-	// would measure checksum/open work rather than traversal page locality.
-	searchers := make([]*collections.VectorPartitionLocalSearcherV1, assets.manifest.PartitionCount)
-	defer func() {
-		for _, s := range searchers {
-			if s != nil {
-				_ = s.Close()
-			}
-		}
-	}()
-	for p := range searchers {
-		searchers[p], err = assets.collection.OpenVectorPartitionLocalSearcherForGenerationV1(partitionHNSWIndex, assets.manifest.Generation, uint32(p))
-		if err != nil {
-			return err
-		}
+	// Reuse the serving harness so a multi-pack domain opens and routes to its
+	// one searchable anchor instead of treating every physical pack as a graph.
+	harness, err := newM8AttributionHarnessV1(assets)
+	if err != nil {
+		return err
 	}
+	defer harness.Close()
+	searchers := harness.searchers
 	snapshots := map[uint32]collections.VectorPartitionPackLayoutSnapshotV1{}
 	var packDigests map[uint32]string
 	if rawTraces {
-		packDigests = make(map[uint32]string, len(searchers))
-		for p, s := range searchers {
+		packDigests = make(map[uint32]string, len(harness.servingPartitions))
+		for _, p := range harness.servingPartitions {
+			s := searchers[p]
 			snapshot, e := s.PackLayoutSnapshotV1(ordinals)
 			if e != nil {
 				return e
 			}
-			snapshots[uint32(p)] = snapshot
-			packDigests[uint32(p)], e = s.PackIdentityNeutralSHA256ForOfflineV1()
+			snapshots[p] = snapshot
+			packDigests[p], e = s.PackIdentityNeutralSHA256ForOfflineV1()
 			if e != nil {
 				return e
 			}
@@ -190,7 +183,7 @@ func runM0LocalityCaptureV1(args []string, stdout io.Writer) error {
 			return errors.New("split ordinal")
 		}
 		q := m8Query32V1(queries[ordinal])
-		route, err := localHNSWAttributionQueryRouteV1(context.Background(), assets, q, scoreBudget, probes)
+		route, err := harness.route(context.Background(), q, probes, collections.VectorPartitionRouterModeApproxV1, scoreBudget)
 		if err != nil {
 			return err
 		}

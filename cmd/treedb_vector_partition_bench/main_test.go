@@ -1032,7 +1032,7 @@ func TestM3OverlapPartitionIndexBuildsReopensAndSearchesNativePacks(t *testing.T
 	for _, row := range report.Rows {
 		wantUnused := row.DomainCapacity*report.LogicalDomains - int(row.SourceRows) - row.OverlapRealized
 		if row.DomainCapacity != 19 || row.Capacity != 7 || row.OverlapUnusedCapacity != wantUnused ||
-			row.SourcePhysicalBytes <= 0 || row.PeakDerivedTemporaryBytes < row.FinalDerivedPhysicalBytes || row.FinalDerivedPhysicalBytes < int64(row.PackBytes) || row.PackBytes == 0 || row.PartitionHNSWM != partitionLocalHNSWDefaultM || row.LocalSearches != 8*12 || row.SearchRoute != collections.VectorPartitionSearchRouteHNSWSearchPackV1 || row.MissingAssets != 0 || row.CorruptAssets != 0 || row.StaleAssets != 0 || row.ExactLocalRecallAtK <= 0 || row.EdgesPerOp <= 0 || len(row.OverlapReplicas) != row.OverlapRealized || len(row.OverlapDestinationDiversity) != report.LogicalDomains {
+			row.SourcePhysicalBytes <= 0 || row.PeakDerivedTemporaryBytes < row.FinalDerivedPhysicalBytes || row.FinalDerivedPhysicalBytes < int64(row.PackBytes) || row.PackBytes == 0 || row.PartitionHNSWM != partitionLocalHNSWDefaultM || row.LocalSearches != row.Queries*report.LogicalDomains || row.SearchRoute != collections.VectorPartitionSearchRouteHNSWSearchPackV1 || row.MissingAssets != 0 || row.CorruptAssets != 0 || row.StaleAssets != 0 || row.ExactLocalRecallAtK <= 0 || row.EdgesPerOp <= 0 || len(row.OverlapReplicas) != row.OverlapRealized || len(row.OverlapDestinationDiversity) != report.LogicalDomains {
 			t.Fatalf("M3 row=%+v", row)
 		}
 	}
@@ -1113,12 +1113,15 @@ func TestM3FinalOfflineGraphBuildsRetainedControlPacks(t *testing.T) {
 		t.Skip("durable M1 lifecycle publication is unsupported; native pack codec coverage remains platform-neutral in TreeDB/collections")
 	}
 	persist := filepath.Join(t.TempDir(), "offline-control")
+	fixtureDir := writeFixtureForTest(t, 64, 8, 8)
 	args := []string{
-		"-dataset", writeFixtureForTest(t, 64, 8, 8), "-out", t.TempDir(), "-m3-persist-db", persist,
-		"-partitions", "16", "-probes", "1", "-overlap", "0", "-top-k", "4", "-stage", "overlap,partition_index",
+		"-dataset", fixtureDir, "-out", t.TempDir(), "-m3-persist-db", persist,
+		"-partitions", "4", "-probes", "1", "-overlap", "0", "-top-k", "4", "-stage", "overlap,partition_index",
 		"-partition-repetitions", "1", "-partition-pivots", "2", "-partition-max-leaf-bucket", "8", "-partition-degree", "4",
 		"-partition-hnsw-m", "16", "-partition-hnsw-ef-construction", "128", "-m3-final-offline-graph",
 		"-router-max-scalar-work", "50000000000",
+		"-shard-plan", "byte_bounded",
+		"-shard-plan-target-hot-bytes", strconv.FormatUint(uint64(vectorpartition.PackFixedOverheadBytesV1+8*(alignedRowBytesForTest(8)+vectorpartition.GraphIdentityOverheadPerRowV1)), 10),
 	}
 	var stdout bytes.Buffer
 	if err := runWithHermeticProvenance(t, args, &stdout); err != nil {
@@ -1129,8 +1132,112 @@ func TestM3FinalOfflineGraphBuildsRetainedControlPacks(t *testing.T) {
 		t.Fatal(err)
 	}
 	descriptor, err := m3ReadVariantDescriptorV1(persist)
-	if err != nil || !report.OfflineGraphControl || len(report.Rows) != 1 || report.Rows[0].StaleAssets != 16 || descriptor.PartitionHNSWM != 16 || m3DescriptorPartitionHNSWEfCV1(descriptor) != 128 {
+	if err != nil || !report.OfflineGraphControl || report.LogicalDomains != 4 || report.Partitions <= report.LogicalDomains || len(report.Rows) != 1 || report.Rows[0].StaleAssets != uint64(report.Partitions) || descriptor.ShardPlan.PacksPerDomain <= 1 || descriptor.PartitionHNSWM != 16 || m3DescriptorPartitionHNSWEfCV1(descriptor) != 128 {
 		t.Fatalf("offline report=%+v descriptor=%+v err=%v", report, descriptor, err)
+	}
+	fixture, err := loadFixture(fixtureDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	vectors, _ := fixtureData(fixture)
+	truthDir, truth := testM8QualificationTruthCacheV1(t, t.TempDir(), fixture)
+	feasibilityConfig := config{
+		out: t.TempDir(), m8TruthCache: truthDir, m8TruthCacheSHA256: truth.ArtifactSHA256,
+		topK: 10, recallTarget: 0, m8MembershipProbes: 1,
+		m8MembershipPackLimit: descriptor.ShardPlan.PacksPerDomain, maxBytes: 1 << 30,
+	}
+	feasibility, err := m8RunMembershipFeasibilityV1(feasibilityConfig, fixture, vectors, persist, descriptor)
+	if err != nil || feasibility.Result.Status != "sufficient" {
+		t.Fatalf("offline membership feasibility=%+v err=%v", feasibility.Result, err)
+	}
+	if err := m8ReplayMembershipFeasibilityV1(feasibilityConfig, fixture, persist, descriptor, feasibility); err != nil {
+		t.Fatalf("replay offline membership feasibility: %v", err)
+	}
+	assets, err := openM8ProductionMultiGroupExistingAssetsWithPolicyV1(
+		persist, []string{"m8-data-group-a", "m8-data-group-b"}, report.Partitions, fixture, vectors, true,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer assets.Close()
+	packDomains, _, err := m8QualityPackOwnersV1(assets.manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantAssets := make([]int, assets.manifest.DomainCount)
+	var wantBytes, siblingBytes uint64
+	for _, asset := range assets.manifest.Assets {
+		domain := packDomains[asset.PartitionID]
+		wantAssets[domain]++
+		wantBytes += asset.Bytes
+		if asset.PartitionID != feasibility.Result.DomainGraphs[domain].AnchorPackID {
+			siblingBytes += asset.Bytes
+		}
+	}
+	if feasibility.Result.ActualGraphBytes != wantBytes || siblingBytes == 0 {
+		t.Fatalf("offline feasibility bytes=%d want=%d sibling=%d", feasibility.Result.ActualGraphBytes, wantBytes, siblingBytes)
+	}
+	for domain, graph := range feasibility.Result.DomainGraphs {
+		if graph.AssetCount != wantAssets[domain] || graph.AssetCount != descriptor.ShardPlan.PacksPerDomain {
+			t.Fatalf("offline domain %d graph evidence=%+v want assets=%d", domain, graph, wantAssets[domain])
+		}
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), m8ProductionTopologyTestTimeoutV1)
+	defer cancel()
+	topology, err := nativewire.NewVectorPartitionM8ProductionMultiGroupV1(ctx, nativewire.VectorPartitionM8ProductionMultiGroupOptionsV1{
+		Collection: assets.collection, Manifest: assets.manifest, RouterSource: assets.RouterSource(),
+		GroupAssetSetDigests: assets.assetSetDigests, Database: "default", Catalog: "default", OfflineGraphVariant: assets.graphVariant,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer topology.Close()
+
+	var siblingPack uint32
+	foundSibling := false
+	for i := 1; i < len(assets.manifest.DomainPacks); i++ {
+		if assets.manifest.DomainPacks[i-1].DomainID == assets.manifest.DomainPacks[i].DomainID {
+			siblingPack, foundSibling = assets.manifest.DomainPacks[i].PackID, true
+			break
+		}
+	}
+	var siblingOrdinal uint64
+	foundOrdinal := false
+	for _, membership := range assets.manifest.Memberships {
+		if membership.PartitionID == siblingPack {
+			siblingOrdinal, foundOrdinal = membership.VectorOrdinal, true
+			break
+		}
+	}
+	if !foundSibling || !foundOrdinal || siblingOrdinal >= uint64(len(vectors)) {
+		t.Fatalf("offline sibling pack=%d found=%t ordinal=%d found=%t", siblingPack, foundSibling, siblingOrdinal, foundOrdinal)
+	}
+	response, err := topology.Coordinator().Search(ctx, m8ProductionExhaustiveRequestV1(
+		assets, m8Query32V1(vectors[siblingOrdinal]), "offline-sibling-pack", 128, 4, 0,
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantPacks := make([]uint32, 0, len(assets.manifest.DomainPacks))
+	for _, domain := range response.ProbedDomains {
+		for _, mapping := range assets.manifest.DomainPacks {
+			if mapping.DomainID == domain {
+				wantPacks = append(wantPacks, mapping.PackID)
+			}
+		}
+	}
+	wantID := fmt.Sprintf("doc-%06d", siblingOrdinal)
+	foundNeighbor := false
+	for _, neighbor := range response.Neighbors {
+		foundNeighbor = foundNeighbor || neighbor.ID == wantID
+	}
+	if !slices.Equal(response.ProbedPacks, wantPacks) || !slices.Equal(response.ProbedPartitions, wantPacks) ||
+		response.Counters.SelectedDomains != uint64(assets.manifest.DomainCount) || response.Counters.SelectedPacks != uint64(assets.manifest.PartitionCount) ||
+		!foundNeighbor {
+		t.Fatalf("offline response=%+v want packs=%v sibling=%s", response, wantPacks, wantID)
+	}
+	if _, err := m8ValidateCoordinatorResponseV1(response, assets.manifest, int(assets.manifest.DomainCount), 4); err != nil {
+		t.Fatalf("offline coordinator receipt: %v", err)
 	}
 }
 
@@ -2915,18 +3022,42 @@ func TestM8CoordinatorResponseCanonicalShapeFailsClosedV1(t *testing.T) {
 	multiPack := manifest
 	multiPack.DomainCount = 1
 	multiPack.DomainPacks = []collections.VectorPartitionDomainPackV1{{DomainID: 0, PackID: 0}, {DomainID: 0, PackID: 1}, {DomainID: 0, PackID: 2}, {DomainID: 0, PackID: 3}}
+	multiPack.Assets = []collections.VectorPartitionAssetV1{
+		{ID: "hnsw_search_pack_v1/partition/0", GraphVariant: string(collections.VectorPartitionLocalGraphVariantConnectivityPreservingVamanaR64L256Alpha1_2V1)},
+		{ID: "hnsw_search_pack_v1/partition/0/section/01/00000"},
+	}
+	for i := range multiPack.Placements {
+		multiPack.Placements[i].GroupID = "group-a"
+	}
 	response.Neighbors = response.Neighbors[:2]
 	response.ProbedDomains = []uint32{0}
-	response.ProbedPacks = []uint32{0, 1, 2, 3}
-	response.ProbedPartitions = []uint32{0, 1, 2, 3}
-	response.ProbedGroups = append(response.ProbedGroups[:0], "group-a", "group-b")
+	response.ProbedPacks = []uint32{0}
+	response.ProbedPartitions = []uint32{0}
+	response.ProbedGroups = append(response.ProbedGroups[:0], "group-a")
 	if got, err := m8ValidateCoordinatorResponseV1(response, multiPack, 1, 2); err != nil || len(got) != 2 {
 		t.Fatalf("valid multi-pack domain got=%+v err=%v", got, err)
 	}
+	response.ProbedPacks = []uint32{1}
+	response.ProbedPartitions = []uint32{1}
+	if _, err := m8ValidateCoordinatorResponseV1(response, multiPack, 1, 2); err == nil {
+		t.Fatal("accepted non-anchor physical pack")
+	}
+	offline := multiPack
+	offline.Assets = []collections.VectorPartitionAssetV1{
+		{ID: "hnsw_search_pack_v1/partition/0", GraphVariant: string(collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationV1)},
+		{ID: "hnsw_search_pack_v1/partition/1", GraphVariant: string(collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationV1)},
+		{ID: "hnsw_search_pack_v1/partition/2", GraphVariant: string(collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationV1)},
+		{ID: "hnsw_search_pack_v1/partition/3", GraphVariant: string(collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationV1)},
+	}
+	response.ProbedPacks = []uint32{0, 1, 2, 3}
+	response.ProbedPartitions = slices.Clone(response.ProbedPacks)
+	if got, err := m8ValidateCoordinatorResponseV1(response, offline, 1, 2); err != nil || len(got) != 2 {
+		t.Fatalf("valid offline multi-pack domain got=%+v err=%v", got, err)
+	}
 	response.ProbedPacks = response.ProbedPacks[:3]
 	response.ProbedPartitions = response.ProbedPartitions[:3]
-	if _, err := m8ValidateCoordinatorResponseV1(response, multiPack, 1, 2); err == nil {
-		t.Fatal("accepted incomplete physical-pack expansion")
+	if _, err := m8ValidateCoordinatorResponseV1(response, offline, 1, 2); err == nil {
+		t.Fatal("accepted offline domain missing a physical pack")
 	}
 }
 

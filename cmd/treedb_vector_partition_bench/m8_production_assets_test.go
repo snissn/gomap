@@ -104,13 +104,16 @@ func TestM8RetainedGraphVariantUsesManifestIdentityV1(t *testing.T) {
 	def := collections.VectorIndexDefinition{M: 16, EfConstruction: 128}
 	descriptor := m3VariantDescriptorV1{PartitionHNSWM: 32, PartitionHNSWEfC: 256}
 	canonical := collections.VectorPartitionLocalGraphVariantConnectivityPreservingVamanaR64L256Alpha1_2V1
-	manifest := collections.VectorPartitionManifestV1{Assets: []collections.VectorPartitionAssetV1{{GraphVariant: string(canonical)}, {GraphVariant: string(canonical)}}}
+	manifest := collections.VectorPartitionManifestV1{Assets: []collections.VectorPartitionAssetV1{{GraphVariant: string(canonical)}, {}, {GraphVariant: string(canonical)}}}
+	if got := m8ManifestGraphVariantV1(manifest); got != string(canonical) {
+		t.Fatalf("chunked manifest variant=%q want=%q", got, canonical)
+	}
 	got, offline, err := m8RetainedGraphVariantV1(manifest, def, descriptor, false)
 	if err != nil || got != canonical || offline {
 		t.Fatalf("canonical variant=%q offline=%t err=%v", got, offline, err)
 	}
 	historical := collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1
-	manifest.Assets[0].GraphVariant, manifest.Assets[1].GraphVariant = string(historical), string(historical)
+	manifest.Assets[0].GraphVariant, manifest.Assets[2].GraphVariant = string(historical), string(historical)
 	if _, _, err := m8RetainedGraphVariantV1(manifest, def, descriptor, false); err == nil {
 		t.Fatal("historical M18 graph admitted as production by matching M/efConstruction")
 	}
@@ -118,13 +121,16 @@ func TestM8RetainedGraphVariantUsesManifestIdentityV1(t *testing.T) {
 		t.Fatal("historical M18 graph admitted as the final offline control")
 	}
 	baseline := collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationV1
-	manifest.Assets[0].GraphVariant, manifest.Assets[1].GraphVariant = string(baseline), string(baseline)
+	manifest.Assets[0].GraphVariant, manifest.Assets[2].GraphVariant = string(baseline), string(baseline)
 	descriptor.PartitionHNSWM, descriptor.PartitionHNSWEfC = 16, 128
 	got, offline, err = m8RetainedGraphVariantV1(manifest, def, descriptor, true)
 	if err != nil || got != baseline || !offline {
 		t.Fatalf("offline variant=%q offline=%t err=%v", got, offline, err)
 	}
 	manifest.Assets[1].GraphVariant = string(canonical)
+	if got := m8ManifestGraphVariantV1(manifest); got != "" {
+		t.Fatalf("mixed manifest variant=%q", got)
+	}
 	if _, _, err := m8RetainedGraphVariantV1(manifest, def, descriptor, true); err == nil {
 		t.Fatal("mixed graph variants admitted")
 	}
@@ -334,14 +340,43 @@ func TestM8ProductionReportRejectsUnexercisedDataGroupV1(t *testing.T) {
 	multiPack.Config.DomainCount = 1
 	multiPack.Config.PacksPerDomain = []int{4}
 	multiPack.Config.Probes = []int{1}
+	domainRows := uint64(0)
+	for _, load := range loads {
+		domainRows += load
+	}
+	multiPack.PackDiagnostics = []m8PartitionPackDiagnosticsV1{testM8NativePackDiagnosticsV1(0, domainRows)}
 	multiPack.Rows = append([]m8ProductionRowV1(nil), report.Rows...)
 	multiPack.Rows[0].Probes = 1
+	multiPack.Rows[0].Attribution.LocalHNSWSearches = uint64(fixture.Queries)
+	multiPack.Rows[0].Attribution.LocalHNSWSearchesByQuery = slices.Repeat([]uint32{1}, fixture.Queries)
+	multiPack.Rows[0].Attribution.ApproximateLocalHNSWSearches = uint64(fixture.Queries)
+	multiPack.Rows[0].Attribution.ApproximateLocalHNSWSearchesByQuery = slices.Repeat([]uint32{1}, fixture.Queries)
 	multiPack.GateLedger = m8ProductionGateLedgerForReportV1(multiPack)
 	if multiPack.GateLedger.ExhaustiveParity != "pass" {
 		t.Fatalf("logical-domain exhaustive row ledger=%+v", multiPack.GateLedger)
 	}
 	if err := testM8ValidateProductionReportV1(multiPack); err != nil {
 		t.Fatalf("one-domain/four-pack report rejected: %v", err)
+	}
+	offline := multiPack
+	offline.Variant = nil
+	offline.Config.GraphVariant = string(collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationV1)
+	offline.PackDiagnostics = diagnostics(loads)
+	offline.Rows = append([]m8ProductionRowV1(nil), multiPack.Rows...)
+	offline.Rows[0].Attribution.LocalHNSWSearches = uint64(fixture.Queries) * 4
+	offline.Rows[0].Attribution.LocalHNSWSearchesByQuery = slices.Repeat([]uint32{4}, fixture.Queries)
+	offline.Rows[0].Attribution.ApproximateLocalHNSWSearches = uint64(fixture.Queries) * 4
+	offline.Rows[0].Attribution.ApproximateLocalHNSWSearchesByQuery = slices.Repeat([]uint32{4}, fixture.Queries)
+	offline.GateLedger = m8ProductionGateLedgerForReportV1(offline)
+	if err := testM8ValidateProductionReportV1(offline); err != nil {
+		t.Fatalf("one-domain/four-pack offline report rejected: %v", err)
+	}
+	invalidOffline := offline
+	invalidOffline.Rows = append([]m8ProductionRowV1(nil), offline.Rows...)
+	invalidOffline.Rows[0].Attribution.LocalHNSWSearches = uint64(fixture.Queries) * 3
+	invalidOffline.Rows[0].Attribution.LocalHNSWSearchesByQuery = slices.Repeat([]uint32{3}, fixture.Queries)
+	if err := testM8ValidateProductionReportV1(invalidOffline); err == nil {
+		t.Fatal("accepted one-domain/four-pack offline report with impossible fanout")
 	}
 	multiPack.Rows[0].Attribution.LocalHNSWSearches--
 	if err := testM8ValidateProductionReportV1(multiPack); err == nil {
@@ -738,7 +773,7 @@ func TestM8PartitionPackDiagnosticsFailClosedV1(t *testing.T) {
 		{PartitionID: 0, Rows: 3, ReachableRows: 3, TraversalRoots: 1, RowsByLayer: []uint64{3}, EdgesByLayer: []uint64{6}, Layer0DegreeLimit: 2, Layer0SaturatedRows: 3, Layer0ReciprocalEdges: 4, Layer0ReciprocalRatio: 4.0 / 6.0, Layer0Distances: distance(6), CombinedReachableRows: 3},
 		{PartitionID: 1, Rows: 2, ReachableRows: 1, TraversalRoots: 2, MaxLayer: 1, RowsByLayer: []uint64{2, 1}, EdgesByLayer: []uint64{2, 0}, Layer0DegreeLimit: 1, Layer0SaturatedRows: 2, Layer0ReciprocalEdges: 2, Layer0ReciprocalRatio: 1, Layer0Distances: distance(2), AuxiliaryEdges: 2, AuxiliaryCSRBytes: 32, AuxiliaryMaxDegree: 1, AuxiliaryDistances: distance(2), CombinedReachableRows: 2},
 	}
-	if !validM8PartitionPackDiagnosticsV1(valid, 2, []uint64{3, 2}, "") {
+	if !validM8PartitionPackDiagnosticsV1(valid, 2, []uint64{3, 2}, "", []int{1, 1}) {
 		t.Fatal("rejected complete native-plus-auxiliary diagnostics")
 	}
 	for name, diagnostics := range map[string][]m8PartitionPackDiagnosticsV1{
@@ -776,15 +811,18 @@ func TestM8PartitionPackDiagnosticsFailClosedV1(t *testing.T) {
 		}()},
 	} {
 		t.Run(name, func(t *testing.T) {
-			if validM8PartitionPackDiagnosticsV1(diagnostics, 2, []uint64{3, 2}, "") {
+			if validM8PartitionPackDiagnosticsV1(diagnostics, 2, []uint64{3, 2}, "", []int{1, 1}) {
 				t.Fatalf("accepted %s diagnostics: %+v", name, diagnostics)
 			}
 		})
 	}
 	vamana := []m8PartitionPackDiagnosticsV1{testM8NativePackDiagnosticsV1(0, 3), testM8NativePackDiagnosticsV1(1, 2)}
 	graphVariant := string(collections.VectorPartitionLocalGraphVariantConnectivityPreservingVamanaR64L256Alpha1_2V1)
-	if !validM8PartitionPackDiagnosticsV1(vamana, 2, []uint64{3, 2}, graphVariant) {
+	if !validM8PartitionPackDiagnosticsV1(vamana, 2, []uint64{3, 2}, graphVariant, []int{1, 1}) {
 		t.Fatal("rejected Vamana diagnostics with the declared R64 degree")
+	}
+	if !validM8PartitionPackDiagnosticsV1([]m8PartitionPackDiagnosticsV1{testM8NativePackDiagnosticsV1(0, 5)}, 2, []uint64{3, 2}, graphVariant, []int{2}) {
+		t.Fatal("rejected one Vamana diagnostic spanning two physical packs")
 	}
 	vamanaWithAuxiliary := append([]m8PartitionPackDiagnosticsV1(nil), vamana...)
 	vamanaWithAuxiliary[1].ReachableRows = 1
@@ -793,11 +831,11 @@ func TestM8PartitionPackDiagnosticsFailClosedV1(t *testing.T) {
 	vamanaWithAuxiliary[1].AuxiliaryCSRBytes = 32
 	vamanaWithAuxiliary[1].AuxiliaryMaxDegree = 1
 	vamanaWithAuxiliary[1].AuxiliaryDistances = distance(2)
-	if validM8PartitionPackDiagnosticsV1(vamanaWithAuxiliary, 2, []uint64{3, 2}, graphVariant) {
+	if validM8PartitionPackDiagnosticsV1(vamanaWithAuxiliary, 2, []uint64{3, 2}, graphVariant, []int{1, 1}) {
 		t.Fatal("accepted Vamana diagnostics that rely on auxiliary reachability")
 	}
 	vamana[0].Layer0DegreeLimit = 16
-	if validM8PartitionPackDiagnosticsV1(vamana, 2, []uint64{3, 2}, graphVariant) {
+	if validM8PartitionPackDiagnosticsV1(vamana, 2, []uint64{3, 2}, graphVariant, []int{1, 1}) {
 		t.Fatal("accepted stale M16 diagnostics for the declared R64 Vamana graph")
 	}
 }

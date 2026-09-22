@@ -290,24 +290,15 @@ func vectorPartitionValidateAssetBindingsV1(m collections.VectorPartitionManifes
 	if m.State != "ready" || m.RouterGeneration != m.Generation || m.RouterAsset.ID == "" || m.RouterAsset.Checksum == "" || m.RouterAsset.Bytes == 0 {
 		return nil, errors.New("nativewire: M8 requires a ready manifest with router asset")
 	}
-	placementSeen := map[string]bool{}
-	groupOwners := map[string]bool{}
-	asset := map[uint32]bool{}
-	for _, a := range m.Assets {
-		if asset[a.PartitionID] {
-			return nil, fmt.Errorf("nativewire: M8 duplicate asset for partition %d", a.PartitionID)
-		}
-		asset[a.PartitionID] = true
+	assetPartitions := make(map[uint32]struct{}, min(len(m.Assets), int(m.PartitionCount)))
+	for _, asset := range m.Assets {
+		assetPartitions[asset.PartitionID] = struct{}{}
 	}
+	if len(assetPartitions) == int(m.PartitionCount) && len(m.Assets) != int(m.PartitionCount) {
+		return nil, errors.New("nativewire: unsplit partitions require exactly one asset each")
+	}
+	groupOwners := map[string]bool{}
 	for _, p := range m.Placements {
-		key := fmt.Sprintf("%s/%d", p.GroupID, p.PartitionID)
-		if placementSeen[key] {
-			return nil, fmt.Errorf("nativewire: M8 duplicate placement for partition %d", p.PartitionID)
-		}
-		placementSeen[key] = true
-		if !asset[p.PartitionID] {
-			return nil, fmt.Errorf("nativewire: M8 partition %d has no asset", p.PartitionID)
-		}
 		groupOwners[p.GroupID] = true
 	}
 	out := make([]raftcluster.GroupID, 0, len(groupOwners))

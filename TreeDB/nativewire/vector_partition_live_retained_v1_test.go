@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"maps"
@@ -200,40 +201,75 @@ func TestVectorPartitionLiveRetainedGeometryV1(t *testing.T) {
 
 // Match M3's actual encoded-byte boundary, not only AccountShardPacksV1's
 // modeled envelope, before publishing a replacement generation.
-func validateLiveLifecyclePackBytesV1(assets []collections.VectorPartitionAssetV1, accounts []vectorpartition.ShardPackSummaryV1) error {
-	if len(assets) != len(accounts) || len(accounts) == 0 {
-		return fmt.Errorf("materialized %d shard packs for %d planned packs", len(assets), len(accounts))
+func validateLiveLifecycleDomainAssetBytesV1(manifest collections.VectorPartitionManifestV1, assets []collections.VectorPartitionAssetV1, accounts []vectorpartition.ShardPackSummaryV1) error {
+	if manifest.DomainCount == 0 || manifest.DomainCount > manifest.PartitionCount || len(accounts) != int(manifest.PartitionCount) || len(manifest.DomainPacks) != len(accounts) || len(assets) == 0 {
+		return errors.New("invalid lifecycle domain asset accounting shape")
 	}
-	seen := make([]bool, len(accounts))
-	for _, asset := range assets {
-		p := asset.PartitionID
-		if p >= uint32(len(accounts)) || seen[p] || accounts[p].Partition != int(p) {
-			return fmt.Errorf("materialized shard pack %d is duplicate or outside the canonical plan", p)
+	planned := make([]uint64, manifest.DomainCount)
+	seenPacks := make([]bool, manifest.PartitionCount)
+	seenDomains := make([]bool, manifest.DomainCount)
+	anchorDomains := make(map[uint32]uint32, manifest.DomainCount)
+	for _, mapping := range manifest.DomainPacks {
+		if mapping.DomainID >= manifest.DomainCount || mapping.PackID >= manifest.PartitionCount || seenPacks[mapping.PackID] || accounts[mapping.PackID].Partition != int(mapping.PackID) || accounts[mapping.PackID].Bytes == 0 {
+			return errors.New("invalid lifecycle physical pack accounting")
 		}
-		seen[p] = true
-		if asset.Bytes == 0 || asset.Bytes > accounts[p].Bytes {
-			return fmt.Errorf("materialized shard pack %d bytes=%d outside planned envelope (0,%d]", p, asset.Bytes, accounts[p].Bytes)
+		seenPacks[mapping.PackID] = true
+		if !seenDomains[mapping.DomainID] {
+			anchorDomains[mapping.PackID] = mapping.DomainID
+			seenDomains[mapping.DomainID] = true
+		}
+		if ^uint64(0)-planned[mapping.DomainID] < accounts[mapping.PackID].Bytes {
+			return errors.New("lifecycle planned domain bytes overflow")
+		}
+		planned[mapping.DomainID] += accounts[mapping.PackID].Bytes
+	}
+	for _, seen := range seenPacks {
+		if !seen {
+			return errors.New("lifecycle physical pack accounting is incomplete")
+		}
+	}
+	for _, seen := range seenDomains {
+		if !seen {
+			return errors.New("lifecycle domain accounting is incomplete")
+		}
+	}
+	actual := make([]uint64, manifest.DomainCount)
+	roots := make([]int, manifest.DomainCount)
+	for _, asset := range assets {
+		domain, ok := anchorDomains[asset.PartitionID]
+		if !ok || asset.Bytes == 0 || ^uint64(0)-actual[domain] < asset.Bytes {
+			return fmt.Errorf("invalid lifecycle domain asset partition=%d bytes=%d", asset.PartitionID, asset.Bytes)
+		}
+		actual[domain] += asset.Bytes
+		if asset.GraphVariant != "" {
+			roots[domain]++
+		}
+	}
+	for domain := range actual {
+		if roots[domain] != 1 || actual[domain] == 0 || actual[domain] > planned[domain] {
+			return fmt.Errorf("lifecycle domain %d assets=%d roots=%d outside planned envelope (0,%d]", domain, actual[domain], roots[domain], planned[domain])
 		}
 	}
 	return nil
 }
 
 func TestVectorPartitionLiveRetainedPackBytesV1(t *testing.T) {
-	accounts := []vectorpartition.ShardPackSummaryV1{{Partition: 0, Bytes: 100}, {Partition: 1, Bytes: 200}}
+	manifest := collections.VectorPartitionManifestV1{DomainCount: 2, PartitionCount: 4, DomainPacks: []collections.VectorPartitionDomainPackV1{{DomainID: 0, PackID: 0}, {DomainID: 0, PackID: 1}, {DomainID: 1, PackID: 2}, {DomainID: 1, PackID: 3}}}
+	accounts := []vectorpartition.ShardPackSummaryV1{{Partition: 0, Bytes: 100}, {Partition: 1, Bytes: 100}, {Partition: 2, Bytes: 100}, {Partition: 3, Bytes: 100}}
 	for _, tc := range []struct {
 		name      string
 		assets    []collections.VectorPartitionAssetV1
 		wantError bool
 	}{
-		{"valid", []collections.VectorPartitionAssetV1{{PartitionID: 0, Bytes: 100}, {PartitionID: 1, Bytes: 199}}, false},
-		{"missing", []collections.VectorPartitionAssetV1{{PartitionID: 0, Bytes: 100}}, true},
-		{"duplicate", []collections.VectorPartitionAssetV1{{PartitionID: 0, Bytes: 100}, {PartitionID: 0, Bytes: 100}}, true},
-		{"outside-plan", []collections.VectorPartitionAssetV1{{PartitionID: 0, Bytes: 100}, {PartitionID: 2, Bytes: 100}}, true},
-		{"zero", []collections.VectorPartitionAssetV1{{PartitionID: 0, Bytes: 0}, {PartitionID: 1, Bytes: 100}}, true},
-		{"oversized", []collections.VectorPartitionAssetV1{{PartitionID: 0, Bytes: 101}, {PartitionID: 1, Bytes: 100}}, true},
+		{"valid-chunks", []collections.VectorPartitionAssetV1{{PartitionID: 0, Bytes: 20, GraphVariant: "v6"}, {PartitionID: 0, Bytes: 130}, {PartitionID: 2, Bytes: 20, GraphVariant: "v6"}, {PartitionID: 2, Bytes: 170}}, false},
+		{"missing-domain", []collections.VectorPartitionAssetV1{{PartitionID: 0, Bytes: 20, GraphVariant: "v6"}, {PartitionID: 0, Bytes: 130}}, true},
+		{"duplicate-root", []collections.VectorPartitionAssetV1{{PartitionID: 0, Bytes: 20, GraphVariant: "v6"}, {PartitionID: 0, Bytes: 20, GraphVariant: "v6"}, {PartitionID: 2, Bytes: 20, GraphVariant: "v6"}}, true},
+		{"non-anchor", []collections.VectorPartitionAssetV1{{PartitionID: 1, Bytes: 20, GraphVariant: "v6"}, {PartitionID: 2, Bytes: 20, GraphVariant: "v6"}}, true},
+		{"zero", []collections.VectorPartitionAssetV1{{PartitionID: 0, Bytes: 0, GraphVariant: "v6"}, {PartitionID: 2, Bytes: 20, GraphVariant: "v6"}}, true},
+		{"oversized-domain", []collections.VectorPartitionAssetV1{{PartitionID: 0, Bytes: 20, GraphVariant: "v6"}, {PartitionID: 0, Bytes: 181}, {PartitionID: 2, Bytes: 20, GraphVariant: "v6"}}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if err := validateLiveLifecyclePackBytesV1(tc.assets, accounts); (err != nil) != tc.wantError {
+			if err := validateLiveLifecycleDomainAssetBytesV1(manifest, tc.assets, accounts); (err != nil) != tc.wantError {
 				t.Fatalf("pack byte error=%v, wantError=%v", err, tc.wantError)
 			}
 		})
@@ -320,10 +356,11 @@ func liveLifecycleRoutesV1(t *testing.T, f vectorPartitionLiveProductionFixtureV
 			for _, pack := range f.manifest.DomainPacks {
 				if pack.DomainID == domain.PartitionID {
 					routes[q].packs = append(routes[q].packs, pack.PackID)
+					break
 				}
 			}
 		}
-		if len(routes[q].domains) != probes || len(routes[q].packs) < probes {
+		if len(routes[q].domains) != probes || len(routes[q].packs) != probes {
 			t.Fatal("incomplete expected route")
 		}
 	}
@@ -506,8 +543,9 @@ func liveLifecycleRebuildV1(t *testing.T, f vectorPartitionLiveProductionFixture
 	parts := make([]vectorpartition.RouterPartitionV1, plan.Partitions)
 	inputs := make([]collections.VectorPartitionSearchAssetV1, plan.Partitions)
 	for p := range parts {
-		m.DomainPacks = append(m.DomainPacks, collections.VectorPartitionDomainPackV1{DomainID: uint32(p / plan.PacksPerDomain), PackID: uint32(p)})
-		m.Placements = append(m.Placements, collections.VectorPartitionPlacementV1{PartitionID: uint32(p), GroupID: fmt.Sprintf("lifecycle-group-%d", p%4)})
+		domain := p / plan.PacksPerDomain
+		m.DomainPacks = append(m.DomainPacks, collections.VectorPartitionDomainPackV1{DomainID: uint32(domain), PackID: uint32(p)})
+		m.Placements = append(m.Placements, collections.VectorPartitionPlacementV1{PartitionID: uint32(p), GroupID: fmt.Sprintf("lifecycle-group-%d", domain)})
 		parts[p].PartitionID = uint32(p)
 		inputs[p] = collections.VectorPartitionSearchAssetV1{Source: source, Generation: m.Generation, PartitionID: uint32(p), Dimensions: f.definition.Dimensions}
 	}
@@ -552,7 +590,7 @@ func liveLifecycleRebuildV1(t *testing.T, f vectorPartitionLiveProductionFixture
 		t.Fatal(err)
 	}
 	defer resources.Release()
-	if err := validateLiveLifecyclePackBytesV1(assets, accounts); err != nil {
+	if err := validateLiveLifecycleDomainAssetBytesV1(m, assets, accounts); err != nil {
 		t.Fatal(err)
 	}
 	m.Assets = assets

@@ -2358,7 +2358,11 @@ func m8MembershipFeasibilityPopulationBytesV1(m fixtureManifest, cfg config, dom
 	if err != nil {
 		return 0, 0, err
 	}
-	retained, err = memoryAdd(queryEvidence, selectedDomains, expandedPacks, packEvidence)
+	domainGraphEvidence, err := memoryMul(int64(domains), int64(unsafe.Sizeof(m8MembershipFeasibilityDomainGraphV1{})))
+	if err != nil {
+		return 0, 0, err
+	}
+	retained, err = memoryAdd(queryEvidence, selectedDomains, expandedPacks, packEvidence, domainGraphEvidence)
 	if err != nil {
 		return 0, 0, err
 	}

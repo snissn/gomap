@@ -377,6 +377,51 @@ func openM3PartitionSearchers(count int, open func(uint32) (*collections.VectorP
 	return searchers, nil
 }
 
+func m3ServingPartitionsV1(manifest collections.VectorPartitionManifestV1, membershipOrdinals [][]int, domainGraph bool) ([]uint32, [][]int, error) {
+	if len(membershipOrdinals) != int(manifest.PartitionCount) {
+		return nil, nil, errors.New("M3 serving memberships do not cover every physical pack")
+	}
+	if !domainGraph {
+		partitions := make([]uint32, manifest.PartitionCount)
+		for i := range partitions {
+			partitions[i] = uint32(i)
+		}
+		return partitions, membershipOrdinals, nil
+	}
+	if manifest.DomainCount == 0 || manifest.DomainCount >= manifest.PartitionCount || len(manifest.DomainPacks) != int(manifest.PartitionCount) {
+		return nil, nil, errors.New("M3 domain graph has invalid physical-pack geometry")
+	}
+	anchors := make([]uint32, manifest.DomainCount)
+	seenPacks := make([]bool, manifest.PartitionCount)
+	ordinals := make([]map[int]struct{}, manifest.DomainCount)
+	for i, mapping := range manifest.DomainPacks {
+		if mapping.DomainID >= manifest.DomainCount || mapping.PackID >= manifest.PartitionCount || seenPacks[mapping.PackID] ||
+			(i == 0 && mapping.DomainID != 0) || (i > 0 && (mapping.DomainID < manifest.DomainPacks[i-1].DomainID || mapping.DomainID > manifest.DomainPacks[i-1].DomainID+1)) {
+			return nil, nil, errors.New("M3 domain graph has a noncanonical domain mapping")
+		}
+		seenPacks[mapping.PackID] = true
+		if i == 0 || mapping.DomainID != manifest.DomainPacks[i-1].DomainID {
+			anchors[mapping.DomainID] = mapping.PackID
+			ordinals[mapping.DomainID] = make(map[int]struct{})
+		}
+		for _, ordinal := range membershipOrdinals[mapping.PackID] {
+			ordinals[mapping.DomainID][ordinal] = struct{}{}
+		}
+	}
+	servingOrdinals := make([][]int, manifest.DomainCount)
+	for domain, set := range ordinals {
+		if set == nil {
+			return nil, nil, fmt.Errorf("M3 domain graph is missing domain %d", domain)
+		}
+		servingOrdinals[domain] = make([]int, 0, len(set))
+		for ordinal := range set {
+			servingOrdinals[domain] = append(servingOrdinals[domain], ordinal)
+		}
+		sort.Ints(servingOrdinals[domain])
+	}
+	return anchors, servingOrdinals, nil
+}
+
 func benchmarkM3PartitionIndexRow(cfg config, fixture fixtureManifest, artifactDigest, graphArtifactDigest, graphBuildDigest string, vectors, queries [][]float64, artifact vectorpartition.Artifact, overlap vectorpartition.OverlapResult, ratio float64, generation uint64) (_ m3PartitionIndexRow, resultErr error) {
 	dir, cleanup, err := m3PartitionIndexDirectory(cfg.m3PersistDir)
 	if err != nil {
@@ -569,7 +614,8 @@ func benchmarkM3PartitionIndexRow(cfg config, fixture fixtureManifest, artifactD
 		if err != nil {
 			return m3PartitionIndexRow{}, err
 		}
-		if err := m3ValidateActualShardPackBytesV1(assets, summaries); err != nil {
+		domainGraphs := localVariant == collections.VectorPartitionLocalGraphVariantConnectivityPreservingVamanaR64L256Alpha1_2V1 && cfg.shardPlan.PacksPerDomain > 1
+		if err := m3ValidateActualShardPackBytesV1(assets, summaries, cfg.shardPlan.PacksPerDomain, domainGraphs); err != nil {
 			return m3PartitionIndexRow{}, err
 		}
 	}
@@ -676,9 +722,15 @@ func benchmarkM3PartitionIndexRow(cfg config, fixture fixtureManifest, artifactD
 	if routerRuntime.Config != cfg.routerConfig {
 		return m3PartitionIndexRow{}, errors.New("reopened M3 router configuration does not match parsed configuration")
 	}
+	servingPartitions, servingMembershipOrdinals, err := m3ServingPartitionsV1(manifest, membershipOrdinals,
+		localVariant == collections.VectorPartitionLocalGraphVariantConnectivityPreservingVamanaR64L256Alpha1_2V1 && manifest.DomainCount < manifest.PartitionCount)
+	if err != nil {
+		return m3PartitionIndexRow{}, err
+	}
 	openStarted := time.Now()
-	searchers, err := openM3PartitionSearchers(cfg.partitions, func(partition uint32) (*collections.VectorPartitionLocalSearcherV1, error) {
-		if cfg.m3FinalOfflineGraph {
+	searchers, err := openM3PartitionSearchers(len(servingPartitions), func(slot uint32) (*collections.VectorPartitionLocalSearcherV1, error) {
+		partition := servingPartitions[slot]
+		if cfg.m3FinalOfflineGraph && localVariant != collections.VectorPartitionLocalGraphVariantConnectivityPreservingVamanaR64L256Alpha1_2V1 {
 			if int(partition) >= len(manifest.Assets) || manifest.Assets[partition].PartitionID != partition {
 				return nil, fmt.Errorf("offline M3 partition asset %d is unavailable", partition)
 			}
@@ -698,14 +750,14 @@ func benchmarkM3PartitionIndexRow(cfg config, fixture fixtureManifest, artifactD
 	var correctnessSearches int
 	for _, query := range queries {
 		query32 := m3Float32Vector(query)
-		for partition, searcher := range searchers {
-			topK := min(cfg.topK, len(membershipOrdinals[partition]))
+		for slot, searcher := range searchers {
+			topK := min(cfg.topK, len(servingMembershipOrdinals[slot]))
 			got, _, err := searcher.SearchWithMetrics(query32, topK)
 			if err != nil {
 				return m3PartitionIndexRow{}, err
 			}
-			want := m3ExactPartitionTopK(vectors, query32, membershipOrdinals[partition], topK)
-			if err := validateM3AuthoritativeScores(got, vectors, query32, membershipOrdinals[partition]); err != nil {
+			want := m3ExactPartitionTopK(vectors, query32, servingMembershipOrdinals[slot], topK)
+			if err := validateM3AuthoritativeScores(got, vectors, query32, servingMembershipOrdinals[slot]); err != nil {
 				return m3PartitionIndexRow{}, err
 			}
 			recallTotal += m3ResultRecall(want, got)
@@ -716,8 +768,8 @@ func benchmarkM3PartitionIndexRow(cfg config, fixture fixtureManifest, artifactD
 	for pass := 0; pass < m3WarmupPasses; pass++ {
 		for _, query := range queries {
 			query32 := m3Float32Vector(query)
-			for partition, searcher := range searchers {
-				if _, _, err := searcher.SearchWithMetrics(query32, min(cfg.topK, len(membershipOrdinals[partition]))); err != nil {
+			for slot, searcher := range searchers {
+				if _, _, err := searcher.SearchWithMetrics(query32, min(cfg.topK, len(servingMembershipOrdinals[slot]))); err != nil {
 					return m3PartitionIndexRow{}, err
 				}
 			}
@@ -731,13 +783,13 @@ func benchmarkM3PartitionIndexRow(cfg config, fixture fixtureManifest, artifactD
 	timedOps := 0
 	for _, query := range queries {
 		query32 := m3Float32Vector(query)
-		for partition, searcher := range searchers {
-			_, stats, err := searcher.SearchWithMetrics(query32, min(cfg.topK, len(membershipOrdinals[partition])))
+		for slot, searcher := range searchers {
+			_, stats, err := searcher.SearchWithMetrics(query32, min(cfg.topK, len(servingMembershipOrdinals[slot])))
 			if err != nil {
 				return m3PartitionIndexRow{}, err
 			}
 			if stats.Route != collections.VectorPartitionSearchRouteHNSWSearchPackV1 {
-				return m3PartitionIndexRow{}, fmt.Errorf("partition %d search route=%q", partition, stats.Route)
+				return m3PartitionIndexRow{}, fmt.Errorf("partition %d search route=%q", servingPartitions[slot], stats.Route)
 			}
 			candidates += stats.Candidates
 			edges += stats.Edges
@@ -1080,8 +1132,9 @@ func m3BuildingManifest(meta collections.CollectionMeta, source collections.Vect
 	packsPerDomain := int(manifest.PartitionCount / manifest.DomainCount)
 	membershipOrdinals := make([][]int, manifest.PartitionCount)
 	for partition := 0; partition < int(manifest.PartitionCount); partition++ {
-		manifest.Placements = append(manifest.Placements, collections.VectorPartitionPlacementV1{PartitionID: uint32(partition), GroupID: fmt.Sprintf("benchmark-group-%06d", partition)})
-		manifest.DomainPacks = append(manifest.DomainPacks, collections.VectorPartitionDomainPackV1{DomainID: uint32(partition / packsPerDomain), PackID: uint32(partition)})
+		domain := partition / packsPerDomain
+		manifest.Placements = append(manifest.Placements, collections.VectorPartitionPlacementV1{PartitionID: uint32(partition), GroupID: fmt.Sprintf("benchmark-group-%06d", domain)})
+		manifest.DomainPacks = append(manifest.DomainPacks, collections.VectorPartitionDomainPackV1{DomainID: uint32(domain), PackID: uint32(partition)})
 	}
 	for _, membership := range overlap.Memberships {
 		if membership.Partition/packsPerDomain != artifact.Assignment[membership.VectorOrdinal] && membership.Home {

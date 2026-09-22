@@ -574,18 +574,46 @@ func m8BindRetainedM3DescriptorWithPolicyV1(h *m8ProductionMultiGroupAssetsV1, f
 		assetStatus.MissingAssets != 0 || assetStatus.CorruptAssets != 0 || assetStatus.StaleAssets != expectedStaleAssets {
 		return fmt.Errorf("retained M8 partition assets are unavailable: ready=%t active=%t missing=%d corrupt=%d stale=%d", assetStatus.Ready, assetStatus.Active, assetStatus.MissingAssets, assetStatus.CorruptAssets, assetStatus.StaleAssets)
 	}
-	for _, asset := range h.manifest.Assets {
-		searcher, openErr := h.collection.OpenVectorPartitionLocalSearcherForOfflineAssetVariantWithContextV1(context.Background(), h.manifest.IndexName, h.manifest, asset, retainedGraphVariant)
-		if openErr != nil {
-			return fmt.Errorf("retained M8 exact-variant partition asset %d: %w", asset.PartitionID, openErr)
+	anchors, err := m8RetainedDomainGraphAnchorsV1(h.manifest, retainedGraphVariant)
+	if err != nil {
+		return err
+	}
+	if anchors != nil {
+		for _, anchor := range anchors {
+			searcher, openErr := h.collection.OpenVectorPartitionLocalSearcherForGenerationWithContextV1(context.Background(), h.manifest.IndexName, h.manifest.Generation, anchor)
+			if openErr != nil {
+				return fmt.Errorf("retained M8 domain graph anchor %d: %w", anchor, openErr)
+			}
+			if closeErr := searcher.Close(); closeErr != nil {
+				return fmt.Errorf("close retained M8 domain graph anchor %d: %w", anchor, closeErr)
+			}
 		}
-		if closeErr := searcher.Close(); closeErr != nil {
-			return fmt.Errorf("close retained M8 exact-variant partition asset %d: %w", asset.PartitionID, closeErr)
+	} else {
+		for _, asset := range h.manifest.Assets {
+			searcher, openErr := h.collection.OpenVectorPartitionLocalSearcherForOfflineAssetVariantWithContextV1(context.Background(), h.manifest.IndexName, h.manifest, asset, retainedGraphVariant)
+			if openErr != nil {
+				return fmt.Errorf("retained M8 exact-variant partition asset %d: %w", asset.PartitionID, openErr)
+			}
+			if closeErr := searcher.Close(); closeErr != nil {
+				return fmt.Errorf("close retained M8 exact-variant partition asset %d: %w", asset.PartitionID, closeErr)
+			}
 		}
 	}
 	h.graphVariant = retainedGraphVariant
 	h.descriptor = &descriptor
 	return nil
+}
+
+func m8RetainedDomainGraphAnchorsV1(manifest collections.VectorPartitionManifestV1, variant collections.VectorPartitionLocalGraphVariantV1) ([]uint32, error) {
+	if variant != collections.VectorPartitionLocalGraphVariantConnectivityPreservingVamanaR64L256Alpha1_2V1 || manifest.DomainCount >= manifest.PartitionCount {
+		return nil, nil
+	}
+	for _, asset := range manifest.Assets {
+		if strings.Contains(asset.ID, "/section/") {
+			return m8ServingPartitionsV1(manifest, true)
+		}
+	}
+	return nil, errors.New("retained M8 multi-pack Vamana assets require domain graph rematerialization")
 }
 
 // m8ValidateExistingAssetsFixtureV1 prevents a retained M3 corpus from being
@@ -665,8 +693,21 @@ func m8RelabelTopologyManifestV1(local collections.VectorPartitionManifestV1, gr
 	}
 	cloned := local
 	cloned.Placements = append([]collections.VectorPartitionPlacementV1(nil), local.Placements...)
+	packDomains := make([]uint32, local.PartitionCount)
+	seenPacks := make([]bool, local.PartitionCount)
+	for _, mapping := range local.DomainPacks {
+		if mapping.PackID >= local.PartitionCount || mapping.DomainID >= local.DomainCount || seenPacks[mapping.PackID] {
+			return collections.VectorPartitionManifestV1{}, errors.New("M8 topology has an invalid domain-pack mapping")
+		}
+		packDomains[mapping.PackID] = mapping.DomainID
+		seenPacks[mapping.PackID] = true
+	}
 	for i := range cloned.Placements {
-		cloned.Placements[i].GroupID = groups[int(cloned.Placements[i].PartitionID)%len(groups)]
+		partition := cloned.Placements[i].PartitionID
+		if partition >= local.PartitionCount || !seenPacks[partition] {
+			return collections.VectorPartitionManifestV1{}, errors.New("M8 topology placement has no logical domain")
+		}
+		cloned.Placements[i].GroupID = groups[int(packDomains[partition])%len(groups)]
 	}
 	cloned.Canonicalize()
 	if err := cloned.Validate(collections.DefaultVectorPartitionManifestLimits()); err != nil {

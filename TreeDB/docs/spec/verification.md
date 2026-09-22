@@ -2125,6 +2125,22 @@ GOWORK=off go test -count=1 ./cmd/treedb_vector_partition_bench -run 'Test(M8Pro
 GOWORK=off go test -count=1 ./TreeDB/docs -run TestDocsVectorPartitionV1CorrectnessAndApproximationContract
 ```
 
+The #4775 domain-graph storage gate is
+`TestVectorPartitionDomainPackSectionsOpenWithoutReassemblyV1`,
+`TestVectorPartitionDomainPackMaterializesOneChunkedSearcherV1`, and
+`TestVectorPartitionDomainPackRejectsOneByteOversizeRecordV1`. Together they
+compare an unchunked and forced-split V6 graph through the same traversal and
+canonical top-10 path, require an in-frontier cross-chunk edge, prove one
+searcher plus truthful chunk receipts for a multi-pack domain, and reject
+missing, duplicate, mixed-generation, canceled and indivisible inputs without
+mapped-handle leaks. Manifest, coordinator and M8 tests separately require
+canonical gap-free IDs, co-location and one domain anchor/search/partial.
+
+```sh
+GOWORK=off go test ./TreeDB/collections ./TreeDB/nativewire ./cmd/treedb_vector_partition_bench \
+  -run 'Test(VectorPartitionDomainPack|VectorPartitionCoordinator|M8LocalSearchFanoutIsOneGraphPerDomain)' -count=1
+```
+
 # Vector partition standalone live-delta verification
 
 The #4324 extension keeps one immutable partition generation bound to the

@@ -580,7 +580,7 @@ func TestVectorPartitionHNSWSearchScratchIncludesOrdinalHandoffResultsV1(t *test
 		uint64(topK)*uint64(unsafe.Sizeof(DocumentRowRef{})) +
 		uint64(topK)*uint64(unsafe.Sizeof(bool(false))) +
 		uint64(degree)*uint64(unsafe.Sizeof(float64(0))) +
-		uint64(degree)*uint64(unsafe.Sizeof(uint32(0))) +
+		uint64(degree)*uint64(unsafe.Sizeof(uint32(0)))*2 +
 		uint64(degree)*uint64(unsafe.Sizeof(float32(0))) +
 		uint64(vectorStride)*uint64(unsafe.Sizeof(float32(0)))
 	wantConverted := uint64(topK) * uint64(unsafe.Sizeof(columnVectorGraphSearchCandidate{})+unsafe.Sizeof(VectorPartitionSearchResultV1{}))

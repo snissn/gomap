@@ -24,3 +24,16 @@ func TestM0FrontierRouterSweepCompleteV1(t *testing.T) {
 		t.Fatal("duplicate sweep accepted")
 	}
 }
+
+func TestM0FrontierRouteHasParentV1(t *testing.T) {
+	childParent := map[int]int{0: 0, 1: 1}
+	if got, err := m0FrontierRouteHasParentV1(childParent, []uint32{1}, 0); err != nil || got {
+		t.Fatalf("unselected parent zero got=%v err=%v", got, err)
+	}
+	if got, err := m0FrontierRouteHasParentV1(childParent, []uint32{1, 0}, 0); err != nil || !got {
+		t.Fatalf("selected parent zero got=%v err=%v", got, err)
+	}
+	if _, err := m0FrontierRouteHasParentV1(childParent, []uint32{0, 16}, 0); err == nil {
+		t.Fatal("physical pack ID accepted as logical domain")
+	}
+}

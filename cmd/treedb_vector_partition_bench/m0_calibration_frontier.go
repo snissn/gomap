@@ -82,6 +82,7 @@ type m0FrontierQueryRouteV1 struct {
 	Ordinal          int
 	Route            []uint32
 	Packs            []uint32
+	SearchPartitions []uint32
 	RoutingMissSlots uint64
 }
 
@@ -193,14 +194,12 @@ func runM0CalibrationFrontierV1(args []string, stdout io.Writer) error {
 	if e = m0FrontierMembershipTopologyV1(assignmentArtifact, graphArtifact, account, selected, fixture, h); e != nil {
 		return e
 	}
-	searchers := make([]*collections.VectorPartitionLocalSearcherV1, len(h.manifest.Assets))
-	defer closeM3PartitionSearchers(searchers)
-	for i, a := range h.manifest.Assets {
-		searchers[i], e = h.collection.OpenVectorPartitionLocalSearcherForOfflineAssetWithContextV1(context.Background(), h.manifest.IndexName, h.manifest, a)
-		if e != nil {
-			return e
-		}
+	harness, e := newM8AttributionHarnessV1(h)
+	if e != nil {
+		return e
 	}
+	defer harness.Close()
+	searchers := harness.searchers
 	idMemberships, e := m0FrontierMembershipOracleV1(h)
 	if e != nil {
 		return e
@@ -223,7 +222,7 @@ func runM0CalibrationFrontierV1(args []string, stdout io.Writer) error {
 	}
 	routes := make(map[int][]m0FrontierQueryRouteV1, len(probes))
 	for _, p := range probes {
-		routes[p], e = m0FrontierRoutesV1(h, split.Ordinals, queries, truth, idMemberships, p, scoreBudget)
+		routes[p], e = m0FrontierRoutesV1(h, harness, split.Ordinals, queries, truth, idMemberships, p, scoreBudget)
 		if e != nil {
 			return e
 		}
@@ -273,7 +272,7 @@ func m0FrontierAccountV1(path string, manifest collections.VectorPartitionManife
 		return account, m0MembershipModeV1{}, "", err
 	}
 	policy, ok := collections.ParseVectorPartitionOverlapPolicyV1(manifest.BalancePolicy)
-	if !ok || account.Schema != "treedb_vector_partition_m0_membership_account_v1" || account.Partitions < 4 || account.Partitions > math.MaxUint32 || manifest.PartitionCount != uint32(account.Partitions) || descriptor.ArtifactSHA256 != account.AssignmentArtifactSHA256 || policy.BuildIdentityDigest != descriptor.BuildIdentityDigest {
+	if !ok || account.Schema != "treedb_vector_partition_m0_membership_account_v1" || account.Partitions < 4 || account.Partitions > math.MaxUint32 || manifest.DomainCount != uint32(account.Partitions) || descriptor.ArtifactSHA256 != account.AssignmentArtifactSHA256 || policy.BuildIdentityDigest != descriptor.BuildIdentityDigest {
 		return account, m0MembershipModeV1{}, "", errors.New("M0 frontier membership binding")
 	}
 	var zero, useful, exact *m0MembershipModeV1
@@ -440,7 +439,7 @@ func m0FrontierCellBuildV1(h *m8ProductionMultiGroupAssetsV1, searchers []*colle
 		c.SelectedDomains += uint64(len(routeInput.Route))
 		c.SelectedPacks += uint64(len(routeInput.Packs))
 		var found []m8CanonicalResultV1
-		for _, partition := range routeInput.Packs {
+		for _, partition := range routeInput.SearchPartitions {
 			if int(partition) >= len(searchers) || searchers[partition] == nil {
 				return c, errors.New("M0 routed pack")
 			}
@@ -467,7 +466,7 @@ func m0FrontierCellBuildV1(h *m8ProductionMultiGroupAssetsV1, searchers []*colle
 		if _, err := fmt.Fprintf(resultHash, "%d/%v\n", ordinal, found); err != nil {
 			return c, err
 		}
-		if _, err := fmt.Fprintf(workHash, "%d/%d/%d/%d/%d/%d\n", ordinal, len(routeInput.Route), len(routeInput.Packs), routeInput.RoutingMissSlots, c.Candidates, c.Edges); err != nil {
+		if _, err := fmt.Fprintf(workHash, "%d/%d/%d/%d/%d/%d/%d\n", ordinal, len(routeInput.Route), len(routeInput.Packs), len(routeInput.SearchPartitions), routeInput.RoutingMissSlots, c.Candidates, c.Edges); err != nil {
 			return c, err
 		}
 	}
@@ -521,8 +520,8 @@ func m0FrontierAggregateV1(measurements, canonical []m0FrontierCellV1, queries i
 	return out, nil
 }
 
-func m0FrontierRoutesV1(h *m8ProductionMultiGroupAssetsV1, ordinals []int, queries [][]float64, truth [][]m8CanonicalResultV1, idMemberships map[string][]uint32, probes, scoreBudget int) ([]m0FrontierQueryRouteV1, error) {
-	if h == nil || probes < 1 || probes > int(h.manifest.DomainCount) {
+func m0FrontierRoutesV1(h *m8ProductionMultiGroupAssetsV1, harness *m8AttributionHarnessV1, ordinals []int, queries [][]float64, truth [][]m8CanonicalResultV1, idMemberships map[string][]uint32, probes, scoreBudget int) ([]m0FrontierQueryRouteV1, error) {
+	if h == nil || harness == nil || harness.assets != h || probes < 1 || probes > int(h.manifest.DomainCount) {
 		return nil, errors.New("M0 route domains")
 	}
 	out := make([]m0FrontierQueryRouteV1, 0, len(ordinals))
@@ -539,7 +538,11 @@ func m0FrontierRoutesV1(h *m8ProductionMultiGroupAssetsV1, ordinals []int, queri
 		for i, x := range r.Partitions {
 			route[i] = x.PartitionID
 		}
-		packs, e := m8AttributionPacksForDomainsV1(h.manifest, len(h.manifest.Assets), route)
+		packs, e := m8AttributionPacksForDomainsV1(h.manifest, len(harness.searchers), route)
+		if e != nil {
+			return nil, e
+		}
+		searchPartitions, e := harness.partitionsForDomains(route)
 		if e != nil {
 			return nil, e
 		}
@@ -561,7 +564,7 @@ func m0FrontierRoutesV1(h *m8ProductionMultiGroupAssetsV1, ordinals []int, queri
 				miss++
 			}
 		}
-		out = append(out, m0FrontierQueryRouteV1{Ordinal: ordinal, Route: route, Packs: packs, RoutingMissSlots: miss})
+		out = append(out, m0FrontierQueryRouteV1{Ordinal: ordinal, Route: route, Packs: packs, SearchPartitions: searchPartitions, RoutingMissSlots: miss})
 	}
 	return out, nil
 }
@@ -638,7 +641,7 @@ func m0FrontierMembershipTopologyV1(path, graphPath string, account m0Membership
 		return errors.New("M0 frontier assignment artifact binding")
 	}
 	artifact, err := vectorpartition.DecodeArtifact(raw, len(raw))
-	if err != nil || artifact.Config.Partitions != account.Partitions || uint32(account.Partitions) != h.manifest.PartitionCount {
+	if err != nil || artifact.Config.Partitions != account.Partitions || uint32(account.Partitions) != h.manifest.DomainCount {
 		return errors.New("M0 frontier assignment artifact")
 	}
 	graphRaw, err := os.ReadFile(graphPath)
@@ -674,6 +677,16 @@ func m0FrontierMembershipTopologyV1(path, graphPath string, account m0Membership
 	digest, err := m0MembershipDigestV1(overlap.Memberships)
 	if err != nil || digest != selected.MembershipSHA256 {
 		return errors.New("M0 frontier selected membership")
+	}
+	if descriptor.ShardPlan != (vectorpartition.ShardPlanV1{}) {
+		record, err := m3ValidateRetainedShardPackBytesV1(h.dir, descriptor, h.manifest.Assets)
+		if err != nil {
+			return err
+		}
+		overlap, err = m0PackRetainedMembershipV1(record, artifact, overlap)
+		if err != nil {
+			return err
+		}
 	}
 	_, rows, err := h.collection.VectorPartitionSourceOrdinalsV1(partitionHNSWIndex)
 	if err != nil {

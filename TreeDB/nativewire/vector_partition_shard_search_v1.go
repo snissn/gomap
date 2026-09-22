@@ -23,11 +23,11 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/raftplacement"
 )
 
-const VectorPartitionShardSearchVersionV1 uint32 = 2
+const VectorPartitionShardSearchVersionV1 uint32 = 3
 
 const (
 	vectorPartitionShardSearchResponseEnvelopeBytesV1 uint64 = 352
-	vectorPartitionShardSearchPartialEnvelopeBytesV1  uint64 = 136
+	vectorPartitionShardSearchPartialEnvelopeBytesV1  uint64 = 160
 	vectorPartitionDuplicateLinearThresholdV1                = 16
 )
 
@@ -191,6 +191,9 @@ type VectorPartitionShardSearchPartialV1 struct {
 	PackBytes                     uint64
 	MappedBytes                   uint64
 	HeapBytes                     uint64
+	RequiredChunks                uint64
+	OpenedChunks                  uint64
+	AccessedChunks                uint64
 	OpenNanos                     uint64
 }
 
@@ -775,14 +778,17 @@ func (s *VectorPartitionShardSearchServiceV1) Search(ctx context.Context, reques
 			return response, s.wrapError(fmt.Errorf("%w: actual candidate bytes", ErrVectorPartitionShardSearchInvalidRequest), groupID)
 		}
 		partials[i] = VectorPartitionShardSearchPartialV1{
-			PartitionID: request.PartitionIDs[i],
-			Neighbors:   make([]VectorPartitionShardSearchNeighborV1, len(results)),
-			ScoreCalls:  metrics.ScoreCalls,
-			SearchRoute: metrics.Route,
-			PackBytes:   status.PackBytes,
-			MappedBytes: status.MappedBytes,
-			HeapBytes:   status.HeapBytes,
-			OpenNanos:   status.OpenNanos,
+			PartitionID:    request.PartitionIDs[i],
+			Neighbors:      make([]VectorPartitionShardSearchNeighborV1, len(results)),
+			ScoreCalls:     metrics.ScoreCalls,
+			SearchRoute:    metrics.Route,
+			PackBytes:      status.PackBytes,
+			MappedBytes:    status.MappedBytes,
+			HeapBytes:      status.HeapBytes,
+			RequiredChunks: status.RequiredChunks,
+			OpenedChunks:   status.OpenedChunks,
+			AccessedChunks: status.AccessedChunks,
+			OpenNanos:      status.OpenNanos,
 		}
 		if request.StatsMode == VectorPartitionShardSearchStatsBasicV1 {
 			partials[i].Candidates = metrics.Candidates
@@ -1179,6 +1185,7 @@ func (s *VectorPartitionShardSearchServiceV1) validateResponse(ctx context.Conte
 			return 0, err
 		}
 		if partial.PartitionID != r.PartitionIDs[i] || len(partial.Neighbors) > r.TopK ||
+			partial.RequiredChunks != partial.OpenedChunks || partial.RequiredChunks != partial.AccessedChunks ||
 			partial.SearchRoute != collections.VectorPartitionSearchRouteHNSWSearchPackV1 &&
 				partial.SearchRoute != collections.VectorPartitionSearchRouteExactFP32ScanV1 {
 			return 0, fmt.Errorf("%w: malformed partition envelope", ErrVectorPartitionShardSearchAssetsUnavailable)

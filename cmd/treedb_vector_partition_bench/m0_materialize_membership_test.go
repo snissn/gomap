@@ -469,6 +469,23 @@ func testM0MaterializeByteBoundedMembershipReopensDisposableClone(t *testing.T, 
 	if err != nil {
 		t.Fatalf("strict byte-bounded reopen: %v", err)
 	}
+	if h.manifest.PartitionCount != 32 || h.manifest.DomainCount != 16 || len(h.manifest.Assets) == int(h.manifest.PartitionCount) {
+		t.Fatalf("strict byte-bounded topology partitions=%d domains=%d assets=%d", h.manifest.PartitionCount, h.manifest.DomainCount, len(h.manifest.Assets))
+	}
+	bindings, err := m0FrontierBindingChecksV1(h, artifact)
+	if err != nil {
+		t.Fatalf("split-plan diagnostic bindings: %v", err)
+	}
+	hasSplitPack := false
+	for _, binding := range bindings {
+		if binding.AssignedDomain != int(binding.ManifestDomain) {
+			t.Fatalf("diagnostic domain binding=%+v", binding)
+		}
+		hasSplitPack = hasSplitPack || binding.ManifestPack >= h.manifest.DomainCount
+	}
+	if !hasSplitPack {
+		t.Fatalf("diagnostic bindings did not cover a split physical pack: %+v", bindings)
+	}
 	if err = h.Close(); err != nil {
 		t.Fatal(err)
 	}

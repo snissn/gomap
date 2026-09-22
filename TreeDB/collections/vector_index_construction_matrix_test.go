@@ -220,7 +220,9 @@ func TestColumnGraphRebuildReleasesConstructionMatrixBeforePublication4542(t *te
 		t.Fatal("timed out waiting for post-preparation publication boundary")
 	}
 	close(resume)
-	wantMappedBytes := int64(len(rows) * dimensions * 4)
+	pageSize := int64(os.Getpagesize())
+	mappedLength := int64(len(rows) * dimensions * 4)
+	wantMappedBytes := (mappedLength + pageSize - 1) / pageSize * pageSize
 	if stagedHandles != 1 || stagedMappedBytes != wantMappedBytes {
 		t.Fatalf("staged construction matrix handles=%d mapped_bytes=%d want 1/%d", stagedHandles, stagedMappedBytes, wantMappedBytes)
 	}

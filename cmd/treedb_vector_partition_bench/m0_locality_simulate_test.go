@@ -191,6 +191,28 @@ func TestM0SnapshotRejectsOverflowingVectorStride(t *testing.T) {
 	}
 }
 
+func TestM0AddRangeUsesChunkPhysicalIdentities(t *testing.T) {
+	snapshot := collections.VectorPartitionPackLayoutSnapshotV1{PhysicalExtents: []collections.VectorPartitionPackLayoutExtentV1{
+		{LogicalOffset: 100, Length: 4096, Namespace: "pack", FileID: 7, BaseOffset: 0},
+		{LogicalOffset: 4196, Length: 4096, Namespace: "pack", FileID: 8, BaseOffset: 4096},
+	}}
+	tokens := map[m0PageTokenV1]struct{}{}
+	if err := m0AddRangeV1(tokens, snapshot, 4190, 12); err != nil {
+		t.Fatal(err)
+	}
+	want := map[m0PageTokenV1]struct{}{
+		{Namespace: "pack", FileID: 7, Page: 0}: {},
+		{Namespace: "pack", FileID: 8, Page: 1}: {},
+	}
+	if !reflect.DeepEqual(tokens, want) {
+		t.Fatalf("tokens=%v want=%v", tokens, want)
+	}
+	snapshot.PhysicalExtents[1].LogicalOffset++
+	if err := m0AddRangeV1(map[m0PageTokenV1]struct{}{}, snapshot, 4190, 12); err == nil {
+		t.Fatal("accepted a logical gap between physical chunks")
+	}
+}
+
 func TestM0EdgeWindowExpiresOldPlacement(t *testing.T) {
 	snapshot := collections.VectorPartitionPackLayoutSnapshotV1{
 		Rows: 5, EntryOrdinal: 0, RowOrdinals: []uint32{0, 1, 2, 3, 4}, VectorStride: 512, VectorOffset: 1,

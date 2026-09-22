@@ -401,6 +401,7 @@ type vectorPartitionCoordinatorRouterSessionV1 struct {
 	partitionRows     []uint64
 	domainPackOffsets []int
 	domainPacks       []collections.VectorPartitionDomainPackV1
+	domainGraphs      bool
 	stats             *vectorPartitionCoordinatorRouterSessionStatsV1
 	refs              uint64
 	retired, closing  bool
@@ -582,6 +583,7 @@ func (c *VectorPartitionCoordinatorV1) acquireRouterSessionV1(ctx context.Contex
 		var partitionRows []uint64
 		var domainPackOffsets []int
 		var domainPacks []collections.VectorPartitionDomainPackV1
+		var domainGraphs bool
 		if err == nil && router != nil {
 			status := router.Status()
 			status.Manifest.DomainPacks = slices.Clone(status.Manifest.DomainPacks)
@@ -590,10 +592,31 @@ func (c *VectorPartitionCoordinatorV1) acquireRouterSessionV1(ctx context.Contex
 				err = c.validateRouterStatus(status, domainPackOffsets)
 			}
 			if err == nil {
-				partitionRows, err = vectorPartitionCoordinatorPartitionRowsV1(ctx, status.Manifest)
+				for domain := range len(domainPackOffsets) - 1 {
+					anchor := status.Manifest.DomainPacks[domainPackOffsets[domain]].PackID
+					groupID := c.placement.Partitions[anchor].GroupID
+					for _, mapping := range status.Manifest.DomainPacks[domainPackOffsets[domain]:domainPackOffsets[domain+1]] {
+						if c.placement.Partitions[mapping.PackID].GroupID != groupID {
+							err = fmt.Errorf("%w: split domain %d ownership", ErrVectorPartitionCoordinatorRouteMismatch, domain)
+							break
+						}
+					}
+					if err != nil {
+						break
+					}
+				}
 			}
 			if err == nil {
 				domainPacks = status.Manifest.DomainPacks
+				domainGraphs = vectorPartitionCoordinatorUsesDomainGraphsV1(status.Manifest)
+				if domainGraphs {
+					partitionRows, err = collections.VectorPartitionDomainGraphRowCountsV1(ctx, status.Manifest)
+					if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+						err = fmt.Errorf("%w: %v", ErrVectorPartitionCoordinatorGenerationMismatch, err)
+					}
+				} else {
+					partitionRows, err = vectorPartitionCoordinatorPartitionRowsV1(ctx, status.Manifest)
+				}
 			}
 		}
 		c.sessionMu.Lock()
@@ -606,7 +629,8 @@ func (c *VectorPartitionCoordinatorV1) acquireRouterSessionV1(ctx context.Contex
 		}
 		if err == nil {
 			session := &vectorPartitionCoordinatorRouterSessionV1{
-				router: router, partitionRows: partitionRows, domainPackOffsets: domainPackOffsets, domainPacks: domainPacks, stats: stats, refs: 1,
+				router: router, partitionRows: partitionRows, domainPackOffsets: domainPackOffsets, domainPacks: domainPacks,
+				domainGraphs: domainGraphs, stats: stats, refs: 1,
 			}
 			c.sessions[key] = session
 			c.leases++
@@ -910,6 +934,7 @@ func (c *VectorPartitionCoordinatorV1) searchV1(ctx context.Context, request Vec
 	var partitionRows []uint64
 	var domainPackOffsets []int
 	var domainPacks []collections.VectorPartitionDomainPackV1
+	var domainGraphs bool
 	if strict == nil {
 		routerLease, err = c.acquireRouterSessionV1(requestCtx, request.IndexName, c.placement.PartitionGeneration)
 		if err != nil {
@@ -924,11 +949,13 @@ func (c *VectorPartitionCoordinatorV1) searchV1(ctx context.Context, request Vec
 		partitionRows = routerLease.session.partitionRows
 		domainPackOffsets = routerLease.session.domainPackOffsets
 		domainPacks = routerLease.session.domainPacks
+		domainGraphs = routerLease.session.domainGraphs
 	} else {
 		router = strict.snapshot.snapshot.router.session.router
 		partitionRows = strict.snapshot.snapshot.router.session.partitionRows
 		domainPackOffsets = strict.snapshot.snapshot.router.session.domainPackOffsets
 		domainPacks = strict.snapshot.snapshot.router.session.domainPacks
+		domainGraphs = strict.snapshot.snapshot.router.session.domainGraphs
 	}
 	response.Timing.RouterOpenNanos = elapsedNanosV1(openStarted)
 	if router == nil {
@@ -1000,7 +1027,7 @@ func (c *VectorPartitionCoordinatorV1) searchV1(ctx context.Context, request Vec
 	}
 
 	placementStarted := time.Now()
-	tasks, selectedPartitions, selectedGroups, budget, err := c.plan(requestCtx, request, status, domainPackOffsets, domainPacks, partitionRows, replicatedReadySetDigest, routed.Partitions, strict, livePin)
+	tasks, selectedPartitions, selectedGroups, budget, err := c.plan(requestCtx, request, status, domainPackOffsets, domainPacks, domainGraphs, partitionRows, replicatedReadySetDigest, routed.Partitions, strict, livePin)
 	response.Timing.PlacementNanos = elapsedNanosV1(placementStarted)
 	if err != nil {
 		return response, c.wrapError(err, "")
@@ -1377,6 +1404,18 @@ func vectorPartitionCoordinatorDomainPackOffsetsV1(manifest collections.VectorPa
 	return offsets, nil
 }
 
+func vectorPartitionCoordinatorUsesDomainGraphsV1(manifest collections.VectorPartitionManifestV1) bool {
+	if manifest.DomainCount >= manifest.PartitionCount {
+		return false
+	}
+	root, section := false, false
+	for _, asset := range manifest.Assets {
+		root = root || asset.GraphVariant == string(collections.VectorPartitionLocalGraphVariantConnectivityPreservingVamanaR64L256Alpha1_2V1)
+		section = section || strings.Contains(asset.ID, "/section/")
+	}
+	return root && section
+}
+
 func vectorPartitionCoordinatorRouterStatusInvalidatesSessionV1(err error) bool {
 	return errors.Is(err, ErrVectorPartitionCoordinatorGenerationMismatch) ||
 		errors.Is(err, ErrVectorPartitionCoordinatorRouteMismatch)
@@ -1396,7 +1435,7 @@ type vectorPartitionCoordinatorTaskV1 struct {
 	queuedAt      time.Time
 }
 
-func (c *VectorPartitionCoordinatorV1) plan(ctx context.Context, request VectorPartitionCoordinatorRequestV1, status collections.VectorPartitionRouterRuntimeStatusV1, domainPackOffsets []int, domainPacks []collections.VectorPartitionDomainPackV1, partitionRows []uint64, readySetDigest string, routed []collections.VectorPartitionRouterPartitionScoreV1, strict *vectorPartitionCoordinatorStrictSearchV1, livePin *collections.VectorIndexPartitionLiveSearchPinV1) ([]vectorPartitionCoordinatorTaskV1, []uint32, []raftcluster.GroupID, vectorPartitionCoordinatorBudgetV1, error) {
+func (c *VectorPartitionCoordinatorV1) plan(ctx context.Context, request VectorPartitionCoordinatorRequestV1, status collections.VectorPartitionRouterRuntimeStatusV1, domainPackOffsets []int, domainPacks []collections.VectorPartitionDomainPackV1, domainGraphs bool, partitionRows []uint64, readySetDigest string, routed []collections.VectorPartitionRouterPartitionScoreV1, strict *vectorPartitionCoordinatorStrictSearchV1, livePin *collections.VectorIndexPartitionLiveSearchPinV1) ([]vectorPartitionCoordinatorTaskV1, []uint32, []raftcluster.GroupID, vectorPartitionCoordinatorBudgetV1, error) {
 	var zero vectorPartitionCoordinatorBudgetV1
 	if ctx == nil {
 		ctx = context.Background()
@@ -1411,6 +1450,7 @@ func (c *VectorPartitionCoordinatorV1) plan(ctx context.Context, request VectorP
 		return nil, nil, nil, zero, ErrVectorPartitionCoordinatorGenerationMismatch
 	}
 	selected := make([]uint32, 0, len(routed))
+	servingRows := make([]uint64, len(partitionRows))
 	byGroup := make(map[raftcluster.GroupID][]uint32)
 	seen := make(map[uint32]struct{}, len(routed))
 	for _, score := range routed {
@@ -1423,17 +1463,35 @@ func (c *VectorPartitionCoordinatorV1) plan(ctx context.Context, request VectorP
 		}
 		seen[score.PartitionID] = struct{}{}
 		start, end := domainPackOffsets[score.PartitionID], domainPackOffsets[score.PartitionID+1]
-		if start < 0 || end < start || end > len(domainPacks) {
+		if start < 0 || end <= start || end > len(domainPacks) {
 			return nil, nil, nil, zero, ErrVectorPartitionCoordinatorGenerationMismatch
 		}
+		anchor := domainPacks[start].PackID
+		if int(anchor) >= len(c.placement.Partitions) || int(anchor) >= len(servingRows) {
+			return nil, nil, nil, zero, ErrVectorPartitionCoordinatorGenerationMismatch
+		}
+		groupID := c.placement.Partitions[anchor].GroupID
 		for _, mapping := range domainPacks[start:end] {
 			packID := mapping.PackID
-			selected = append(selected, packID)
-			groupID := c.placement.Partitions[packID].GroupID
-			if _, ok := c.groups[groupID]; !ok {
+			if int(packID) >= len(c.placement.Partitions) || int(packID) >= len(partitionRows) {
+				return nil, nil, nil, zero, ErrVectorPartitionCoordinatorGenerationMismatch
+			}
+			if c.placement.Partitions[packID].GroupID != groupID {
 				return nil, nil, nil, zero, ErrVectorPartitionCoordinatorRouteMismatch
 			}
-			byGroup[groupID] = append(byGroup[groupID], packID)
+			if !domainGraphs {
+				servingRows[packID] = partitionRows[packID]
+				selected = append(selected, packID)
+				byGroup[groupID] = append(byGroup[groupID], packID)
+			}
+		}
+		if _, ok := c.groups[groupID]; !ok {
+			return nil, nil, nil, zero, ErrVectorPartitionCoordinatorRouteMismatch
+		}
+		if domainGraphs {
+			servingRows[anchor] = partitionRows[anchor]
+			selected = append(selected, anchor)
+			byGroup[groupID] = append(byGroup[groupID], anchor)
 		}
 	}
 	if len(selected) > c.limits.MaxSelectedPartitions {
@@ -1461,7 +1519,7 @@ func (c *VectorPartitionCoordinatorV1) plan(ctx context.Context, request VectorP
 	var totalRequestBytes, totalResponseReservation uint64
 	var ok bool
 	candidateRows, totalCandidateWeight, err := vectorPartitionCoordinatorCandidateRowsV1(
-		ctx, partitionRows, selected,
+		ctx, servingRows, selected,
 	)
 	if err != nil {
 		return nil, nil, nil, zero, err

@@ -345,22 +345,44 @@ func (p *VectorPartitionServingSnapshotPublisherV1) buildSnapshotV1(ctx context.
 			return fail(err)
 		}
 		snapshot.partitions[group] = make(map[uint32]*VectorPartitionPartitionSearchLeaseV1)
-		for _, partition := range placement.Partitions {
-			if partition.GroupID != group {
+		for domain := 0; domain+1 < len(snapshot.router.session.domainPackOffsets); domain++ {
+			start, end := snapshot.router.session.domainPackOffsets[domain], snapshot.router.session.domainPackOffsets[domain+1]
+			if start < 0 || end <= start || end > len(snapshot.router.session.domainPacks) {
+				return fail(ErrVectorPartitionCoordinatorRouteMismatch)
+			}
+			anchor := snapshot.router.session.domainPacks[start].PackID
+			if int(anchor) >= len(placement.Partitions) || placement.Partitions[anchor].PartitionID != anchor {
+				return fail(ErrVectorPartitionCoordinatorRouteMismatch)
+			}
+			owner := placement.Partitions[anchor].GroupID
+			for _, mapping := range snapshot.router.session.domainPacks[start:end] {
+				packID := mapping.PackID
+				if int(packID) >= len(placement.Partitions) || placement.Partitions[packID].PartitionID != packID || placement.Partitions[packID].GroupID != owner {
+					return fail(ErrVectorPartitionCoordinatorRouteMismatch)
+				}
+			}
+			if owner != group {
 				continue
 			}
-			lease, openErr := generation.OpenPartition(ctx, partition.PartitionID)
-			if openErr != nil {
-				return fail(openErr)
+			packs := snapshot.router.session.domainPacks[start:end]
+			if snapshot.router.session.domainGraphs {
+				packs = packs[:1]
 			}
-			if lease == nil || lease.Searcher == nil {
-				if lease != nil {
-					return fail(errors.Join(ErrVectorPartitionShardSearchAssetsUnavailable, lease.Close()))
+			for _, mapping := range packs {
+				partitionID := mapping.PackID
+				lease, openErr := generation.OpenPartition(ctx, partitionID)
+				if openErr != nil {
+					return fail(openErr)
 				}
-				return fail(ErrVectorPartitionShardSearchAssetsUnavailable)
+				if lease == nil || lease.Searcher == nil {
+					if lease != nil {
+						return fail(errors.Join(ErrVectorPartitionShardSearchAssetsUnavailable, lease.Close()))
+					}
+					return fail(ErrVectorPartitionShardSearchAssetsUnavailable)
+				}
+				counts.partitionOpens++
+				snapshot.partitions[group][partitionID] = lease
 			}
-			counts.partitionOpens++
-			snapshot.partitions[group][partition.PartitionID] = lease
 		}
 		if len(snapshot.partitions[group]) == 0 {
 			return fail(fmt.Errorf("%w: group %q owns no partitions", ErrVectorPartitionShardSearchAssetsUnavailable, group))
