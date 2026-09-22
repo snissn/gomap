@@ -23,7 +23,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
-          fetch-depth: 0
+          fetch-depth: 1
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
@@ -39,7 +39,7 @@ jobs:
           for file in "${files[@]}"; do
             [[ -f "$file" ]] && present+=("$file")
           done
-          gofmt -d "${present[@]}"
+          gofmt -d "${present[@]}" || true
           if [[ -n "$(gofmt -l "${present[@]}")" ]]; then
             for file in "${present[@]}"; do
               if [[ -n "$(gofmt -l "$file")" ]]; then
@@ -59,3 +59,57 @@ jobs:
           GOWORK: "off"
         run: go test -race ./TreeDB/nativewire -run 'TestSparseCatalog' -count=1 -timeout=8m -v
 
+  paired-performance:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 1
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Build exact pair with identical test-only measurement harness
+        shell: bash
+        env:
+          GOWORK: "off"
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$(git rev-parse HEAD)" == "$HEAD_SHA" ]]
+          go version
+          uname -a
+          lscpu
+          git fetch --no-tags --depth=1 origin "$BASE_SHA"
+          git worktree add --detach "$RUNNER_TEMP/sparse-base" "$BASE_SHA"
+          [[ "$(git -C "$RUNNER_TEMP/sparse-base" rev-parse HEAD)" == "$BASE_SHA" ]]
+          cp TreeDB/nativewire/sparse_catalog_bench_test.go "$RUNNER_TEMP/sparse-base/TreeDB/nativewire/sparse_catalog_bench_test.go"
+          sha256sum TreeDB/nativewire/sparse_catalog_bench_test.go "$RUNNER_TEMP/sparse-base/TreeDB/nativewire/sparse_catalog_bench_test.go"
+          go test -c -o "$RUNNER_TEMP/sparse-head.test" ./TreeDB/nativewire
+          cd "$RUNNER_TEMP/sparse-base"
+          go test -c -o "$RUNNER_TEMP/sparse-base.test" ./TreeDB/nativewire
+      - name: Paired durable remote-owner and enabled-path resource measurements
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          mkdir -p sparse-catalog-evidence
+          printf 'base=%s\nhead=%s\n' "$BASE_SHA" "$HEAD_SHA" > sparse-catalog-evidence/pair.txt
+          for repeat in 1 2 3; do
+            "$RUNNER_TEMP/sparse-base.test" -test.run='^$' -test.bench='^BenchmarkSparseCatalogRemoteOwnerCreateV1$/^AllVoters$' -test.benchtime=25x -test.count=1 -test.benchmem -test.v -test.timeout=3m | tee "sparse-catalog-evidence/base-$repeat.txt"
+            "$RUNNER_TEMP/sparse-head.test" -test.run='^$' -test.bench='^BenchmarkSparseCatalogRemoteOwnerCreateV1$' -test.benchtime=25x -test.count=1 -test.benchmem -test.v -test.timeout=5m | tee "sparse-catalog-evidence/head-$repeat.txt"
+          done
+          "$RUNNER_TEMP/sparse-base.test" -test.run='^$' -test.bench='^BenchmarkSparseCatalogConfigV1$/^Nodes4Groups2$' -test.benchtime=100x -test.count=3 -test.benchmem | tee sparse-catalog-evidence/base-config.txt
+          "$RUNNER_TEMP/sparse-head.test" -test.run='^$' -test.bench='^BenchmarkSparseCatalogConfigV1$' -test.benchtime=100x -test.count=3 -test.benchmem | tee sparse-catalog-evidence/head-config.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sparse-catalog-evidence-${{ github.event.pull_request.head.sha }}
+          path: sparse-catalog-evidence/
+          if-no-files-found: warn

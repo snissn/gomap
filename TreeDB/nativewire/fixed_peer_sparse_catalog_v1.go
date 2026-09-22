@@ -104,4 +104,3 @@ func preflightFixedPeerConfigV1(c FixedPeerTCPConfigV1) error {
 	}
 	return nil
 }
-
