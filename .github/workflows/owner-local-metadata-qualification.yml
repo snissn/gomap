@@ -1,0 +1,82 @@
+name: "Owner-local metadata qualification"
+
+on:
+  pull_request:
+    paths:
+      - 'TreeDB/collections/vector_partition_owner*'
+      - 'TreeDB/nativewire/vector_partition_owner*'
+      - 'TreeDB/nativewire/vector_partition_generation_source_v1.go'
+      - 'TreeDB/nativewire/vector_partition_production_node_v1.go'
+      - '.github/workflows/owner-local-metadata-qualification.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: owner-local-metadata-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  qualify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      GOWORK: "off"
+      GOMAXPROCS: "2"
+      GOMEMLIMIT: "4GiB"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Exact source and formatting
+        id: formatting
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rev-parse HEAD
+          go version
+          files=(TreeDB/collections/vector_partition_owner*.go TreeDB/nativewire/vector_partition_owner*.go TreeDB/nativewire/vector_partition_generation_source_v1.go TreeDB/nativewire/vector_partition_production_node_v1.go)
+          gofmt -d "${files[@]}"
+          if [[ -n "$(gofmt -l "${files[@]}")" ]]; then
+            for file in "${files[@]}"; do
+              if [[ -n "$(gofmt -l "$file")" ]]; then
+                echo "FORMATTED_FILE=$file"
+                gofmt "$file" | base64 -w0
+                echo
+              fi
+            done
+            exit 1
+          fi
+      - name: Owner plan and public generation-source conformance
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test ./TreeDB/collections ./TreeDB/nativewire -run 'Test(VectorPartitionOwnerSearchOpenPlan|OwnerGenerationSource)' -count=3 -timeout=10m -v | tee owner-local-tests.txt
+      - name: Constructor allocation comparison
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test ./TreeDB/collections -run '^$' -bench '^BenchmarkVectorPartitionOwnerSearchOpenPlanV2$' -benchmem -benchtime=200ms -count=3 | tee owner-local-bench.txt
+      - name: Owner plan and source race conformance
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test -race ./TreeDB/collections ./TreeDB/nativewire -run 'Test(VectorPartitionOwnerSearchOpenPlan|OwnerGenerationSource)' -count=1 -timeout=10m -v | tee owner-local-race.txt
+      - name: Upload focused evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: owner-local-metadata-${{ github.event.pull_request.head.sha || github.sha }}
+          path: owner-local-*.txt
+          if-no-files-found: ignore
+      - name: Require formatting
+        if: ${{ always() && steps.formatting.outcome == 'failure' }}
+        run: exit 1

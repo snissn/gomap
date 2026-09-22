@@ -2096,6 +2096,32 @@ It does not claim ANN query serving. Reader pins cover only this generation's
 local cleanup lifecycle; they do not imply a query-serving or cluster-cutover
 contract.
 
+# Vector partition owner-scoped search-plan verification
+
+The #4808 intermediate owner-plan path has separate metadata-retention and
+public-open checks. `TestVectorPartitionOwnerSearchOpenPlanDoesNotRetainRemoteMembershipsV2`
+requires one local membership despite remote memberships and verifies owned
+input lifetime. `TestVectorPartitionOwnerSearchOpenPlanPreservesColocatedDomainV2`
+covers complete domain chunks, home-wins normalization and split-owner refusal.
+`TestVectorPartitionOwnerSearchOpenPlanRefusesInvalidOwnerSelectionV2` covers
+unknown owners, invalid placement and cancellation.
+
+`TestOwnerGenerationSourceOpensOnlyBoundLocalDomainV2` reaches real collection
+assets through the public generation source and checks cold/warm authority and
+remote refusal. `TestOwnerGenerationSourceRejectsDifferentStoredRootV2` and
+`TestOwnerGenerationSourcePreservesColdSourceVerificationV2` cover root/source
+drift without a live-recovery exemption.
+
+`TestVectorPartitionOwnerSearchOpenPlanAllocationGrowthV2` and
+`BenchmarkVectorPartitionOwnerSearchOpenPlanV2` measure constructor allocations
+with fixed local data and increasing remote membership input. They exclude V1
+manifest acquisition/decoding and source opening, so they do not prove bounded
+public generation loading. Full #4808 acceptance still requires remote-page-read
+refusal and allocation-growth evidence through public load/open, shard-local
+source verification, resumable import/build, recovery and reachability coverage.
+The scoped `owner-local-metadata-qualification.yml` workflow records exact-head
+Go version, focused/race checks and constructor benchmark evidence.
+
 # Vector partition V1 correctness and approximation verification
 
 The snapshot-bound V1 admission contract has disjoint exact and ANN gates. The

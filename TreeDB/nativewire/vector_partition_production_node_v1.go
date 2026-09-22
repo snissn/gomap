@@ -50,6 +50,10 @@ type VectorPartitionProductionNodeOptionsV1 struct {
 	MaxPinnedSessions          int
 	MaxPinnedSessionAge        time.Duration
 	MaxRetainedSnapshots       int
+	// OwnerScopedSearchPlanV2 retains only each local group's search-plan metadata.
+	// It requires an exact stored manifest match and does not enable paged roots
+	// or shard-local source storage. The default V1 path is unchanged.
+	OwnerScopedSearchPlanV2 bool
 }
 
 type VectorPartitionProductionNodeGroupEvidenceV1 struct {
@@ -271,7 +275,13 @@ func NewVectorPartitionProductionNodeV1(ctx context.Context, opts VectorPartitio
 	generationSources := make(map[raftcluster.GroupID]VectorPartitionGenerationSourceV1, len(local))
 	for group, listener := range local {
 		group := group
-		source, sourceErr := NewCollectionVectorPartitionGenerationSourceForReplicatedLifecycleV1(opts.Collection, placement.Collection, replicated)
+		var source *CollectionVectorPartitionGenerationSourceV1
+		var sourceErr error
+		if opts.OwnerScopedSearchPlanV2 {
+			source, sourceErr = NewCollectionVectorPartitionGenerationSourceForOwnerReplicatedLifecycleV2(opts.Collection, placement.Collection, replicated, group, opts.Manifest.IntegrityDigest)
+		} else {
+			source, sourceErr = NewCollectionVectorPartitionGenerationSourceForReplicatedLifecycleV1(opts.Collection, placement.Collection, replicated)
+		}
 		if sourceErr != nil {
 			return nil, sourceErr
 		}

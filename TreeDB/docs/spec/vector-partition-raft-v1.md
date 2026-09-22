@@ -8,6 +8,32 @@ and M6 owns transport-neutral coordinator fanout and merged top-k in
 `vector-partition-coordinator-v1.md`. A production remote transport and
 multi-group acceptance remain M8 work.
 
+## Owner-scoped search-plan entrypoint
+
+`NewVectorPartitionGenerationOwnerSearchOpenPlanWithContextV2` constructs a
+distinct sparse plan for one owner from an already admitted V1 manifest. The
+plan retains only that owner's assets and memberships, preserves original
+source ordinals, and preserves one graph/anchor plus the complete colocated
+chunk set per logical domain. Home membership wins over overlap within a
+domain, exactly as in the V1 domain normalization. Unknown owners, incomplete
+local placement, split domain ownership, and remote partition opens fail.
+
+`NewCollectionVectorPartitionGenerationSourceForOwnerReplicatedLifecycleV2`
+binds that selection to an expected stored manifest integrity digest. Both
+cold loads and warm hits retain replicated lifecycle admission. Local opens
+reuse the production asset/source verifier and generation pins; this API does
+not grant standalone live-recovery or offline-graph authority. The production
+node exposes the opt-in `OwnerScopedSearchPlanV2` option. A different stored
+root is rejected before a logical placement overlay could mask it.
+
+This is intermediate substrate for [#4808](https://github.com/snissn/gomap/issues/4808).
+Cold loads still decode the complete V1 manifest, retain its complete placement
+directory, and use the existing source reader. Input scanning remains global.
+The V1 format, caps and default path are unchanged. This entrypoint does not
+establish paged generation loading, shard-local source storage, resumable
+distributed construction, or the EC2 target contract. Those requirements and
+their public-path allocation/page-read gates remain open under #4808.
+
 ## M1 durable lifecycle
 
 Each ready manifest stores typed `ColumnAssetRef`s, not paths. Every physical
