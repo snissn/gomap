@@ -27,6 +27,16 @@ import (
 )
 
 func peerCredentialsFixtureV1(t testing.TB, cluster, node string) *PeerCredentialsV1 {
+	return newPeerCAFixtureV1(t).issue(t, cluster, node, time.Now().Add(-time.Hour), time.Now().Add(time.Hour))
+}
+
+type peerCAFixtureV1 struct {
+	key *ecdsa.PrivateKey
+	certificate *x509.Certificate
+	der []byte
+}
+
+func newPeerCAFixtureV1(t testing.TB) *peerCAFixtureV1 {
 	t.Helper()
 	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -38,13 +48,20 @@ func peerCredentialsFixtureV1(t testing.TB, cluster, node string) *PeerCredentia
 	if err != nil {
 		t.Fatal(err)
 	}
+	return &peerCAFixtureV1{key: caKey, certificate: ca, der: caDER}
+}
+
+func (ca *peerCAFixtureV1) issue(t testing.TB, cluster, node string, notBefore, notAfter time.Time) *PeerCredentialsV1 {
+	t.Helper()
 	leafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatal(err)
 	}
 	identity := &url.URL{Scheme: "spiffe", Host: "treedb", Path: "/cluster/" + cluster + "/node/" + node}
-	leaf := &x509.Certificate{SerialNumber: big.NewInt(2), NotBefore: now.Add(-time.Hour), NotAfter: now.Add(time.Hour), URIs: []*url.URL{identity}, IPAddresses: []net.IP{net.ParseIP("127.0.0.1")}, KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth}}
-	leafDER, err := x509.CreateCertificate(rand.Reader, leaf, ca, &leafKey.PublicKey, caKey)
+	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 120))
+	if err != nil { t.Fatal(err) }
+	leaf := &x509.Certificate{SerialNumber: serial, NotBefore: notBefore, NotAfter: notAfter, URIs: []*url.URL{identity}, IPAddresses: []net.IP{net.ParseIP("127.0.0.1")}, KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth}}
+	leafDER, err := x509.CreateCertificate(rand.Reader, leaf, ca.certificate, &leafKey.PublicKey, ca.key)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +72,7 @@ func peerCredentialsFixtureV1(t testing.TB, cluster, node string) *PeerCredentia
 	root := t.TempDir()
 	credentials := &PeerCredentialsV1{TrustRootsFile: filepath.Join(root, "ca.pem"), CertificateFile: filepath.Join(root, "node.pem"), PrivateKeyFile: filepath.Join(root, "node-key.pem")}
 	for path, block := range map[string]*pem.Block{
-		credentials.TrustRootsFile:  {Type: "CERTIFICATE", Bytes: caDER},
+		credentials.TrustRootsFile:  {Type: "CERTIFICATE", Bytes: ca.der},
 		credentials.CertificateFile: {Type: "CERTIFICATE", Bytes: leafDER},
 		credentials.PrivateKeyFile:  {Type: "PRIVATE KEY", Bytes: keyDER},
 	} {

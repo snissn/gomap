@@ -11,7 +11,8 @@ import (
 
 const (
 	vectorPartitionShardSearchTCPGlobalConnectionsV1 = 64
-	vectorPartitionShardSearchTCPGlobalRequestsV1    = 64
+	vectorPartitionShardSearchTCPGlobalRequestsV1    = 256
+	vectorPartitionShardSearchTCPGroupRequestsV1     = 32
 )
 
 // One token covers a dial in progress or a socket's entire lifetime, including

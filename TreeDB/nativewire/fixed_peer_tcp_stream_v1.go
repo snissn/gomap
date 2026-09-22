@@ -9,6 +9,7 @@ import (
 	"time"
 
 	hraft "github.com/hashicorp/raft"
+	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
 )
 
 // The upstream NetworkTransport closes its listener, but an accepted connection
@@ -24,6 +25,8 @@ type fixedPeerTCPStreamV1 struct {
 	conns      map[*fixedPeerTCPConnV1]struct{}
 	closeOnce  sync.Once
 	closeErr   error
+	security   *peerTransportSecurityV1
+	peerNodes  map[hraft.ServerAddress]raftcluster.NodeID
 }
 
 type fixedPeerTCPConnV1 struct {
@@ -34,6 +37,10 @@ type fixedPeerTCPConnV1 struct {
 }
 
 func newFixedPeerTCPTransportV1(listen string, advertised net.Addr, timeout time.Duration) (*hraft.NetworkTransport, error) {
+	return newFixedPeerTCPTransportWithSecurityV1(listen, advertised, timeout, nil, nil)
+}
+
+func newFixedPeerTCPTransportWithSecurityV1(listen string, advertised net.Addr, timeout time.Duration, security *peerTransportSecurityV1, peers []raftcluster.Peer) (*hraft.NetworkTransport, error) {
 	listener, err := net.Listen("tcp", listen)
 	if err != nil {
 		return nil, err
@@ -41,7 +48,16 @@ func newFixedPeerTCPTransportV1(listen string, advertised net.Addr, timeout time
 	ctx, cancel := context.WithCancel(context.Background())
 	stream := &fixedPeerTCPStreamV1{
 		Listener: listener, advertised: advertised, ctx: ctx, cancel: cancel,
-		conns: make(map[*fixedPeerTCPConnV1]struct{}),
+		conns: make(map[*fixedPeerTCPConnV1]struct{}), security: security,
+	}
+	if security != nil {
+		allowed := make(map[raftcluster.NodeID]bool, len(peers))
+		stream.peerNodes = make(map[hraft.ServerAddress]raftcluster.NodeID, len(peers))
+		for _, peer := range peers {
+			allowed[peer.ID] = true
+			stream.peerNodes[hraft.ServerAddress(peer.Address)] = peer.ID
+		}
+		stream.Listener = &peerSecureListenerV1{Listener: listener, security: security, allowed: allowed}
 	}
 	return hraft.NewNetworkTransport(stream, 4, timeout, io.Discard), nil
 }
@@ -69,6 +85,19 @@ func (s *fixedPeerTCPStreamV1) Accept() (net.Conn, error) {
 }
 
 func (s *fixedPeerTCPStreamV1) Dial(address hraft.ServerAddress, timeout time.Duration) (net.Conn, error) {
+	if s.security != nil {
+		node := s.peerNodes[address]
+		if node == "" {
+			return nil, errPeerAuthenticationV1
+		}
+		ctx, cancel := context.WithTimeout(s.ctx, timeout)
+		defer cancel()
+		conn, err := s.security.dial(ctx, string(address), node)
+		if err != nil {
+			return nil, err
+		}
+		return s.track(conn)
+	}
 	dialer := net.Dialer{Timeout: timeout}
 	conn, err := dialer.DialContext(s.ctx, "tcp", string(address))
 	if err != nil {

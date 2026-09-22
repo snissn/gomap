@@ -118,3 +118,46 @@ func TestPeerShardCloseCancelsPendingDialV1(t *testing.T) {
 		t.Fatal("closed pending dial retained admission")
 	}
 }
+
+func TestHotGroupCannotExhaustUnrelatedGroupAdmissionV1(t *testing.T) {
+	release := make(chan struct{})
+	defer func() {
+		select { case <-release: default: close(release) }
+	}()
+	hot := newVectorPartitionShardSearchTCPListenerV1(t, vectorPartitionShardSearchHandlerFuncV1(func(ctx context.Context, request VectorPartitionShardSearchRequestV1) (VectorPartitionShardSearchResponseV1, error) {
+		select {
+		case <-release:
+			return VectorPartitionShardSearchResponseV1{Version: VectorPartitionShardSearchVersionV1, RequestID: request.RequestID}, nil
+		case <-ctx.Done():
+			return VectorPartitionShardSearchResponseV1{}, ctx.Err()
+		}
+	}))
+	cold := newVectorPartitionShardSearchTCPListenerV1(t, vectorPartitionShardSearchHandlerFuncV1(func(_ context.Context, request VectorPartitionShardSearchRequestV1) (VectorPartitionShardSearchResponseV1, error) {
+		return VectorPartitionShardSearchResponseV1{Version: VectorPartitionShardSearchVersionV1, RequestID: request.RequestID}, nil
+	}))
+	dispatcher, err := NewVectorPartitionShardSearchTCPDispatcherV1(map[raftcluster.GroupID]string{"hot": hot.Addr().String(), "cold": cold.Addr().String()})
+	if err != nil { t.Fatal(err) }
+	defer dispatcher.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	count := cap(dispatcher.groupRequests["hot"])
+	done := make(chan error, count)
+	for i := 0; i < count; i++ {
+		go func(i int) {
+			_, err := dispatcher.DispatchVectorPartitionShardSearchV1(ctx, VectorPartitionShardSearchRequestV1{TargetGroupID: "hot", RequestID: fmt.Sprintf("hot-%d", i)})
+			done <- err
+		}(i)
+	}
+	fixedPeerWaitV1(t, ctx, func() bool { return len(dispatcher.groupRequests["hot"]) == count })
+	if _, err := dispatcher.DispatchVectorPartitionShardSearchV1(ctx, VectorPartitionShardSearchRequestV1{TargetGroupID: "hot", RequestID: "overflow"}); !errors.Is(err, raftcluster.ErrAdmissionUnavailable) {
+		t.Fatalf("hot group overflow=%v", err)
+	}
+	response, err := dispatcher.DispatchVectorPartitionShardSearchV1(ctx, VectorPartitionShardSearchRequestV1{TargetGroupID: "cold", RequestID: "independent"})
+	if err != nil || response.RequestID != "independent" {
+		t.Fatalf("hot group starved unrelated owner: %+v error=%v", response, err)
+	}
+	close(release)
+	for i := 0; i < count; i++ {
+		if err := <-done; err != nil { t.Fatal(err) }
+	}
+}

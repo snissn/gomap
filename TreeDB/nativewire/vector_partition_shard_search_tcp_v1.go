@@ -53,6 +53,8 @@ type VectorPartitionShardSearchTCPDispatcherV1 struct {
 	maxConnectionsPerEndpoint int
 	connectionSlots           chan struct{}
 	requestSlots              chan struct{}
+	groupRequests             map[raftcluster.GroupID]chan struct{}
+	groupReserved             map[raftcluster.GroupID]chan struct{}
 	lifetime                  context.Context
 	cancel                    context.CancelFunc
 	mu                        sync.Mutex
@@ -90,6 +92,9 @@ func NewVectorPartitionShardSearchTCPDispatcherWithNodeEndpointsV1(endpoints map
 func newVectorPartitionShardSearchTCPDispatcherV1(endpoints map[raftcluster.GroupID]string, nodeEndpoints map[raftcluster.GroupID]map[raftcluster.NodeID]string, maxConnectionsPerEndpoint int, limits VectorPartitionShardSearchLimitsV1) (*VectorPartitionShardSearchTCPDispatcherV1, error) {
 	if len(endpoints) == 0 {
 		return nil, errors.New("nativewire: M5 TCP dispatcher requires endpoints")
+	}
+	if len(endpoints) > 128 {
+		return nil, errors.New("nativewire: shard dispatcher exceeds 128 declared owner groups")
 	}
 	if maxConnectionsPerEndpoint < 1 {
 		return nil, errors.New("nativewire: M5 TCP dispatcher requires a positive per-endpoint connection limit")
@@ -129,6 +134,12 @@ func newVectorPartitionShardSearchTCPDispatcherV1(endpoints map[raftcluster.Grou
 		copyNodeEndpoints[group] = copyNodes
 	}
 	lifetime, cancel := context.WithCancel(context.Background())
+	groupRequests := make(map[raftcluster.GroupID]chan struct{}, len(endpoints))
+	groupReserved := make(map[raftcluster.GroupID]chan struct{}, len(endpoints))
+	for group := range endpoints {
+		groupRequests[group] = make(chan struct{}, vectorPartitionShardSearchTCPGroupRequestsV1)
+		groupReserved[group] = make(chan struct{}, 1)
+	}
 	return &VectorPartitionShardSearchTCPDispatcherV1{
 		lifetime:                  lifetime,
 		cancel:                    cancel,
@@ -140,7 +151,9 @@ func newVectorPartitionShardSearchTCPDispatcherV1(endpoints map[raftcluster.Grou
 		maxConnectionsPerEndpoint: maxConnectionsPerEndpoint,
 		pools:                     make(map[string]*vectorPartitionShardSearchTCPEndpointPoolV1),
 		connectionSlots:           make(chan struct{}, vectorPartitionShardSearchTCPGlobalConnectionsV1),
-		requestSlots:              make(chan struct{}, vectorPartitionShardSearchTCPGlobalRequestsV1),
+		requestSlots:              make(chan struct{}, vectorPartitionShardSearchTCPGlobalRequestsV1-len(endpoints)),
+		groupRequests:             groupRequests,
+		groupReserved:             groupReserved,
 	}, nil
 }
 
@@ -156,11 +169,29 @@ func (d *VectorPartitionShardSearchTCPDispatcherV1) DispatchVectorPartitionShard
 	}
 	// Bound active callers and pool waiters together, across all endpoints.
 	// Refusal happens before encoding or sending a search request.
+	groupSlots := d.groupRequests[request.TargetGroupID]
+	if groupSlots == nil {
+		return VectorPartitionShardSearchResponseV1{}, &VectorPartitionShardSearchErrorV1{Code: VectorPartitionShardSearchErrorUnknownOwnerV1, GroupID: request.TargetGroupID, Err: ErrVectorPartitionShardSearchRouteMismatch}
+	}
 	select {
-	case d.requestSlots <- struct{}{}:
-		defer func() { <-d.requestSlots }()
+	case groupSlots <- struct{}{}:
+		defer func() { <-groupSlots }()
 	default:
-		return VectorPartitionShardSearchResponseV1{}, &VectorPartitionShardSearchErrorV1{Code: VectorPartitionShardSearchErrorGroupUnavailableV1, GroupID: request.TargetGroupID, Err: fmt.Errorf("%w: shard dispatcher request slots exhausted (%d/%d)", raftcluster.ErrAdmissionUnavailable, len(d.requestSlots), cap(d.requestSlots))}
+		return VectorPartitionShardSearchResponseV1{}, &VectorPartitionShardSearchErrorV1{Code: VectorPartitionShardSearchErrorGroupUnavailableV1, GroupID: request.TargetGroupID, Err: fmt.Errorf("%w: shard group request slots exhausted (%d/%d)", raftcluster.ErrAdmissionUnavailable, len(groupSlots), cap(groupSlots))}
+	}
+	// Reserve one slot for every declared group; the remaining shared slots
+	// can absorb bursts without allowing hot groups to consume that reserve.
+	reserved := d.groupReserved[request.TargetGroupID]
+	select {
+	case reserved <- struct{}{}:
+		defer func() { <-reserved }()
+	default:
+		select {
+		case d.requestSlots <- struct{}{}:
+			defer func() { <-d.requestSlots }()
+		default:
+			return VectorPartitionShardSearchResponseV1{}, &VectorPartitionShardSearchErrorV1{Code: VectorPartitionShardSearchErrorGroupUnavailableV1, GroupID: request.TargetGroupID, Err: fmt.Errorf("%w: shard shared request slots exhausted (%d/%d)", raftcluster.ErrAdmissionUnavailable, len(d.requestSlots), cap(d.requestSlots))}
+		}
 	}
 	for attempt := 0; ; attempt++ {
 		response, err := d.dispatchVectorPartitionShardSearchOnceV1(ctx, request)
