@@ -15,11 +15,11 @@ import (
 )
 
 const (
-	SourceSnapshotVersionV2 uint32 = 2
-	SourceSnapshotEncodingV2 = "float32_le_v2"
-	MaxSourceChunkRowsV2 = 256
-	MaxSourceChunkBytesV2 = 8 << 20
-	MaxSourceChunkIDBytesV2 = 4096
+	SourceSnapshotVersionV2  uint32 = 2
+	SourceSnapshotEncodingV2        = "float32_le_v2"
+	MaxSourceChunkRowsV2            = 256
+	MaxSourceChunkBytesV2           = 8 << 20
+	MaxSourceChunkIDBytesV2         = 4096
 )
 
 var ErrInvalidSourceSnapshotV2 = errors.New("vectorpartition: invalid source snapshot")
@@ -29,46 +29,46 @@ var ErrInvalidSourceSnapshotV2 = errors.New("vectorpartition: invalid source sna
 // serving must obtain ExpectedDigest from the canonical source authority and
 // bind it to the committed generation before accepting any chunk proof.
 type SourceSnapshotV2 struct {
-	Version uint32
-	CollectionScope string
-	ShardID string
-	SnapshotRevision uint64
-	OrdinalNamespace string
-	SourceMapEpoch uint64
-	SourceMapDigest [sha256.Size]byte
-	SchemaDigest [sha256.Size]byte
+	Version               uint32
+	CollectionScope       string
+	ShardID               string
+	SnapshotRevision      uint64
+	OrdinalNamespace      string
+	SourceMapEpoch        uint64
+	SourceMapDigest       [sha256.Size]byte
+	SchemaDigest          [sha256.Size]byte
 	IndexDefinitionDigest [sha256.Size]byte
-	Encoding string
-	Dimensions uint32
-	RowCount uint64
-	RowsPerChunk uint32
-	MerkleRoot [sha256.Size]byte
-	Digest [sha256.Size]byte
+	Encoding              string
+	Dimensions            uint32
+	RowCount              uint64
+	RowsPerChunk          uint32
+	MerkleRoot            [sha256.Size]byte
+	Digest                [sha256.Size]byte
 }
 
 // SourceOrdinalOriginV2 gives a retained legacy ordinal its original source
 // identity. A bare legacy ordinal is never a globally meaningful ID.
 type SourceOrdinalOriginV2 struct {
-	CollectionScope string
+	CollectionScope       string
 	IndexDefinitionDigest [sha256.Size]byte
-	Generation uint64
-	Checksum uint64
-	SchemaHash uint64
-	RowCount uint64
-	Ordinal uint64
+	Generation            uint64
+	Checksum              uint64
+	SchemaHash            uint64
+	RowCount              uint64
+	Ordinal               uint64
 }
 
 type SourceRowV2 struct {
-	LocalOrdinal uint64
-	DocumentID []byte
+	LocalOrdinal     uint64
+	DocumentID       []byte
 	DocumentRevision uint64
-	Values []float32
-	LegacyOrigin *SourceOrdinalOriginV2
+	Values           []float32
+	LegacyOrigin     *SourceOrdinalOriginV2
 }
 
 type SourceChunkV2 struct {
 	Index uint64
-	Rows []SourceRowV2
+	Rows  []SourceRowV2
 }
 
 type SourceChunkProofV2 struct {
@@ -147,7 +147,7 @@ func sourceChunkDigestForHeaderV2(s SourceSnapshotV2, header [sha256.Size]byte, 
 		return zero, fmt.Errorf("%w: chunk index", ErrInvalidSourceSnapshotV2)
 	}
 	start := chunk.Index * uint64(s.RowsPerChunk)
-	rows := min(uint64(s.RowsPerChunk), s.RowCount-start)
+	rows := minSourceSnapshotUint64V2(uint64(s.RowsPerChunk), s.RowCount-start)
 	if uint64(len(chunk.Rows)) != rows {
 		return zero, fmt.Errorf("%w: missing or extra chunk rows", ErrInvalidSourceSnapshotV2)
 	}
@@ -223,7 +223,7 @@ func VerifySourceChunkV2(s SourceSnapshotV2, expectedDigest [sha256.Size]byte, c
 	if err != nil || sealed.Digest != expectedDigest {
 		return fmt.Errorf("%w: snapshot identity changed", ErrInvalidSourceSnapshotV2)
 	}
-	height := bits.Len64(s.ChunkCount()-1)
+	height := bits.Len64(s.ChunkCount() - 1)
 	if len(proof.Siblings) != height {
 		return fmt.Errorf("%w: proof height", ErrInvalidSourceSnapshotV2)
 	}
@@ -251,9 +251,9 @@ func VerifySourceChunkV2(s SourceSnapshotV2, expectedDigest [sha256.Size]byte, c
 // accumulator deliberately does not retain a global ID map or grant authority.
 type SourceSnapshotAccumulatorV2 struct {
 	snapshot SourceSnapshotV2
-	header [sha256.Size]byte
-	count uint64
-	levels [64][sha256.Size]byte
+	header   [sha256.Size]byte
+	count    uint64
+	levels   [64][sha256.Size]byte
 }
 
 func NewSourceSnapshotAccumulatorV2(s SourceSnapshotV2) (SourceSnapshotAccumulatorV2, error) {
@@ -287,7 +287,7 @@ func (a SourceSnapshotAccumulatorV2) Finish() (SourceSnapshotV2, error) {
 	if a.header == ([sha256.Size]byte{}) || a.count == 0 || a.count != a.snapshot.ChunkCount() {
 		return SourceSnapshotV2{}, fmt.Errorf("%w: incomplete source snapshot", ErrInvalidSourceSnapshotV2)
 	}
-	height := bits.Len64(a.count-1)
+	height := bits.Len64(a.count - 1)
 	var root [sha256.Size]byte
 	if a.count&(a.count-1) == 0 {
 		root = a.levels[height]
@@ -341,4 +341,11 @@ func writeSourceSnapshotUintV2(h hash.Hash, value uint64) {
 	var encoded [8]byte
 	binary.BigEndian.PutUint64(encoded[:], value)
 	_, _ = h.Write(encoded[:])
+}
+
+func minSourceSnapshotUint64V2(a, b uint64) uint64 {
+	if a < b {
+		return a
+	}
+	return b
 }

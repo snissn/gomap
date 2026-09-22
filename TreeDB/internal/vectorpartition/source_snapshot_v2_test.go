@@ -10,29 +10,29 @@ import (
 
 func sourceSnapshotFixtureV2(rows uint64) SourceSnapshotV2 {
 	return SourceSnapshotV2{
-		Version: SourceSnapshotVersionV2,
-		CollectionScope: "default/default/documents",
-		ShardID: "source-a",
-		SnapshotRevision: 12,
-		OrdinalNamespace: "source-a-native-v2",
-		SourceMapEpoch: 9,
-		SourceMapDigest: sha256.Sum256([]byte("source-map")),
-		SchemaDigest: sha256.Sum256([]byte("source-schema")),
+		Version:               SourceSnapshotVersionV2,
+		CollectionScope:       "default/default/documents",
+		ShardID:               "source-a",
+		SnapshotRevision:      12,
+		OrdinalNamespace:      "source-a-native-v2",
+		SourceMapEpoch:        9,
+		SourceMapDigest:       sha256.Sum256([]byte("source-map")),
+		SchemaDigest:          sha256.Sum256([]byte("source-schema")),
 		IndexDefinitionDigest: sha256.Sum256([]byte("embedding-definition")),
-		Encoding: SourceSnapshotEncodingV2,
-		Dimensions: 3,
-		RowCount: rows,
-		RowsPerChunk: 2,
+		Encoding:              SourceSnapshotEncodingV2,
+		Dimensions:            3,
+		RowCount:              rows,
+		RowsPerChunk:          2,
 	}
 }
 
 func sourceChunkFixtureV2(s SourceSnapshotV2, index uint64) SourceChunkV2 {
 	start := index * uint64(s.RowsPerChunk)
-	rows := min(uint64(s.RowsPerChunk), s.RowCount-start)
+	rows := minSourceSnapshotUint64V2(uint64(s.RowsPerChunk), s.RowCount-start)
 	chunk := SourceChunkV2{Index: index, Rows: make([]SourceRowV2, rows)}
 	for i := range chunk.Rows {
-		ordinal := start+uint64(i)
-		chunk.Rows[i] = SourceRowV2{LocalOrdinal: ordinal, DocumentID: []byte(fmt.Sprintf("document-%d", ordinal)), DocumentRevision: 100+ordinal, Values: []float32{float32(ordinal), 1, -2}}
+		ordinal := start + uint64(i)
+		chunk.Rows[i] = SourceRowV2{LocalOrdinal: ordinal, DocumentID: []byte(fmt.Sprintf("document-%d", ordinal)), DocumentRevision: 100 + ordinal, Values: []float32{float32(ordinal), 1, -2}}
 	}
 	return chunk
 }
@@ -113,7 +113,10 @@ func TestSourceSnapshotBoundedAccumulatorAndProofV2(t *testing.T) {
 
 func TestSourceSnapshotRefusesCorruptOrIncompleteChunkV2(t *testing.T) {
 	s, levels := sourceSnapshotReferenceTreeV2(t, sourceSnapshotFixtureV2(7))
-	for _, tc := range []struct { name string; change func(*SourceSnapshotV2, *SourceChunkV2, *SourceChunkProofV2) }{
+	for _, tc := range []struct {
+		name   string
+		change func(*SourceSnapshotV2, *SourceChunkV2, *SourceChunkProofV2)
+	}{
 		{"snapshot revision", func(s *SourceSnapshotV2, _ *SourceChunkV2, _ *SourceChunkProofV2) { s.SnapshotRevision++ }},
 		{"shard", func(s *SourceSnapshotV2, _ *SourceChunkV2, _ *SourceChunkProofV2) { s.ShardID = "source-b" }},
 		{"namespace", func(s *SourceSnapshotV2, _ *SourceChunkV2, _ *SourceChunkProofV2) { s.OrdinalNamespace = "wrong" }},
@@ -121,12 +124,20 @@ func TestSourceSnapshotRefusesCorruptOrIncompleteChunkV2(t *testing.T) {
 		{"encoding", func(s *SourceSnapshotV2, _ *SourceChunkV2, _ *SourceChunkProofV2) { s.Encoding = "other" }},
 		{"row revision", func(_ *SourceSnapshotV2, c *SourceChunkV2, _ *SourceChunkProofV2) { c.Rows[0].DocumentRevision++ }},
 		{"zero row revision", func(_ *SourceSnapshotV2, c *SourceChunkV2, _ *SourceChunkProofV2) { c.Rows[0].DocumentRevision = 0 }},
-		{"ID", func(_ *SourceSnapshotV2, c *SourceChunkV2, _ *SourceChunkProofV2) { c.Rows[0].DocumentID = []byte("changed") }},
-		{"duplicate ID", func(_ *SourceSnapshotV2, c *SourceChunkV2, _ *SourceChunkProofV2) { c.Rows[1].DocumentID = c.Rows[0].DocumentID }},
+		{"ID", func(_ *SourceSnapshotV2, c *SourceChunkV2, _ *SourceChunkProofV2) {
+			c.Rows[0].DocumentID = []byte("changed")
+		}},
+		{"duplicate ID", func(_ *SourceSnapshotV2, c *SourceChunkV2, _ *SourceChunkProofV2) {
+			c.Rows[1].DocumentID = c.Rows[0].DocumentID
+		}},
 		{"vector", func(_ *SourceSnapshotV2, c *SourceChunkV2, _ *SourceChunkProofV2) { c.Rows[0].Values[0]++ }},
-		{"nonfinite", func(_ *SourceSnapshotV2, c *SourceChunkV2, _ *SourceChunkProofV2) { c.Rows[0].Values[0] = float32(math.NaN()) }},
+		{"nonfinite", func(_ *SourceSnapshotV2, c *SourceChunkV2, _ *SourceChunkProofV2) {
+			c.Rows[0].Values[0] = float32(math.NaN())
+		}},
 		{"missing", func(_ *SourceSnapshotV2, c *SourceChunkV2, _ *SourceChunkProofV2) { c.Rows = c.Rows[:1] }},
-		{"reordered", func(_ *SourceSnapshotV2, c *SourceChunkV2, _ *SourceChunkProofV2) { c.Rows[0], c.Rows[1] = c.Rows[1], c.Rows[0] }},
+		{"reordered", func(_ *SourceSnapshotV2, c *SourceChunkV2, _ *SourceChunkProofV2) {
+			c.Rows[0], c.Rows[1] = c.Rows[1], c.Rows[0]
+		}},
 		{"wrong chunk", func(_ *SourceSnapshotV2, c *SourceChunkV2, _ *SourceChunkProofV2) { c.Index++ }},
 		{"proof height", func(_ *SourceSnapshotV2, _ *SourceChunkV2, p *SourceChunkProofV2) { p.Siblings = p.Siblings[:1] }},
 		{"proof root", func(_ *SourceSnapshotV2, _ *SourceChunkV2, p *SourceChunkProofV2) { p.Siblings[0][0] ^= 1 }},

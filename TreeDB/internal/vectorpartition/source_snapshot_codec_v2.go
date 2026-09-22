@@ -139,11 +139,11 @@ func DecodeSourceChunkV2(s SourceSnapshotV2, expectedDigest [sha256.Size]byte, r
 	}
 	index := binary.BigEndian.Uint64(raw[4+sha256.Size:])
 	rows := binary.BigEndian.Uint32(raw[4+sha256.Size+8:])
-	if index >= s.ChunkCount() || uint64(rows) != min(uint64(s.RowsPerChunk), s.RowCount-index*uint64(s.RowsPerChunk)) {
+	if index >= s.ChunkCount() || uint64(rows) != minSourceSnapshotUint64V2(uint64(s.RowsPerChunk), s.RowCount-index*uint64(s.RowsPerChunk)) {
 		return invalid("chunk index or row count")
 	}
 	r := sourceChunkReaderV2{raw: raw[4+sha256.Size+8+4:]}
-	vectorBytes := uint64(s.Dimensions)*4
+	vectorBytes := uint64(s.Dimensions) * 4
 	if uint64(rows)*(8+8+4+1+1+vectorBytes)+1 > uint64(len(r.raw)) {
 		return invalid("truncated row payload")
 	}
@@ -199,7 +199,7 @@ func DecodeSourceChunkV2(s SourceSnapshotV2, expectedDigest [sha256.Size]byte, r
 }
 
 type sourceChunkReaderV2 struct {
-	raw []byte
+	raw    []byte
 	failed bool
 }
 
@@ -215,12 +215,16 @@ func (r *sourceChunkReaderV2) take(n int) []byte {
 
 func (r *sourceChunkReaderV2) u32() uint32 {
 	raw := r.take(4)
-	if len(raw) != 4 { return 0 }
+	if len(raw) != 4 {
+		return 0
+	}
 	return binary.BigEndian.Uint32(raw)
 }
 
 func (r *sourceChunkReaderV2) u64() uint64 {
 	raw := r.take(8)
-	if len(raw) != 8 { return 0 }
+	if len(raw) != 8 {
+		return 0
+	}
 	return binary.BigEndian.Uint64(raw)
 }
