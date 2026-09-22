@@ -250,12 +250,13 @@ func runM0MaterializeMembershipV1(args []string, stdout io.Writer) (err error) {
 	if resources != nil {
 		resources.Release()
 	}
+	var shardSummaries []vectorpartition.ShardPackSummaryV1
 	if updated.ShardPlan != (vectorpartition.ShardPlanV1{}) {
-		summaries, err := vectorpartition.AccountShardPacksV1(updated.ShardPlan, overlap.Memberships)
+		shardSummaries, err = vectorpartition.AccountShardPacksV1(updated.ShardPlan, overlap.Memberships)
 		if err != nil {
 			return err
 		}
-		if err = m3ValidateActualShardPackBytesV1(assets, summaries, updated.ShardPlan.PacksPerDomain); err != nil {
+		if err = m3ValidateActualShardPackBytesV1(assets, shardSummaries, updated.ShardPlan.PacksPerDomain); err != nil {
 			return err
 		}
 	}
@@ -287,8 +288,13 @@ func runM0MaterializeMembershipV1(args []string, stdout io.Writer) (err error) {
 		return errors.New("materialized membership manifest is not ready after reopen")
 	}
 	assetStatus, err := h.collection.VectorPartitionStatusV1(partitionHNSWIndex, generation)
-	if err != nil || !assetStatus.Active || !assetStatus.Ready || assetStatus.MissingAssets != 0 || assetStatus.CorruptAssets != 0 || assetStatus.StaleAssets != 0 || len(h.status.Manifest.Assets) != len(overlap.Loads) {
+	if err != nil || !assetStatus.Active || !assetStatus.Ready || assetStatus.MissingAssets != 0 || assetStatus.CorruptAssets != 0 || assetStatus.StaleAssets != 0 {
 		return errors.New("materialized membership asset status")
+	}
+	if len(shardSummaries) > 0 {
+		if err = m3ValidateActualShardPackBytesV1(h.status.Manifest.Assets, shardSummaries, updated.ShardPlan.PacksPerDomain); err != nil {
+			return fmt.Errorf("materialized membership asset status: %w", err)
+		}
 	}
 	afterRowsSource, afterRows, err := h.collection.VectorPartitionSourceOrdinalsV1(partitionHNSWIndex)
 	if err != nil {

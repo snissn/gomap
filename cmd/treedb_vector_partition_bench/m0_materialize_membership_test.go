@@ -469,6 +469,9 @@ func testM0MaterializeByteBoundedMembershipReopensDisposableClone(t *testing.T, 
 	if err != nil {
 		t.Fatalf("strict byte-bounded reopen: %v", err)
 	}
+	if h.manifest.PartitionCount != 32 || h.manifest.DomainCount != 16 || len(h.manifest.Assets) == int(h.manifest.PartitionCount) {
+		t.Fatalf("strict byte-bounded topology partitions=%d domains=%d assets=%d", h.manifest.PartitionCount, h.manifest.DomainCount, len(h.manifest.Assets))
+	}
 	if err = h.Close(); err != nil {
 		t.Fatal(err)
 	}

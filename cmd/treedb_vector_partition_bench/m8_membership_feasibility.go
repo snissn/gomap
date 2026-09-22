@@ -28,7 +28,14 @@ type m8MembershipFeasibilityPackV1 struct {
 	PackID       uint32 `json:"pack_id"`
 	DomainID     uint32 `json:"domain_id"`
 	PlannedBytes uint64 `json:"planned_bytes"`
+}
+
+type m8MembershipFeasibilityDomainGraphV1 struct {
+	DomainID     uint32 `json:"domain_id"`
+	AnchorPackID uint32 `json:"anchor_pack_id"`
+	PlannedBytes uint64 `json:"planned_bytes"`
 	ActualBytes  uint64 `json:"actual_bytes"`
+	AssetCount   int    `json:"asset_count"`
 }
 
 type m8MembershipFeasibilityQueryV1 struct {
@@ -44,34 +51,35 @@ type m8MembershipFeasibilityQueryV1 struct {
 }
 
 type m8MembershipFeasibilityV1 struct {
-	SchemaVersion         int                              `json:"schema_version"`
-	ResultKind            string                           `json:"result_kind"`
-	Method                string                           `json:"method"`
-	Status                string                           `json:"status"`
-	VariantID             string                           `json:"variant_id"`
-	FixtureChecksum       string                           `json:"fixture_checksum"`
-	TruthIdentity         string                           `json:"truth_identity"`
-	TruthArtifactSHA256   string                           `json:"truth_artifact_sha256"`
-	BuildIdentityDigest   string                           `json:"build_identity_digest"`
-	ManifestIntegrity     string                           `json:"manifest_integrity"`
-	ReadySetDigest        string                           `json:"ready_set_digest"`
-	ShardGenerationDigest string                           `json:"shard_generation_digest"`
-	MembershipDigest      string                           `json:"membership_digest"`
-	SourceVectors         int                              `json:"source_vectors"`
-	LogicalDomains        int                              `json:"logical_domains"`
-	PhysicalPacks         int                              `json:"physical_packs"`
-	DomainLimit           int                              `json:"logical_domain_limit"`
-	PackLimit             int64                            `json:"physical_pack_limit"`
-	RequiredRecall        float64                          `json:"required_recall"`
-	TotalHits             int                              `json:"total_hits"`
-	PossibleHits          int                              `json:"possible_hits"`
-	Ceiling               float64                          `json:"membership_recall_ceiling"`
-	ActualPackBytes       uint64                           `json:"actual_pack_bytes"`
-	ActualBytesPerVector  float64                          `json:"actual_pack_bytes_per_source_vector"`
-	WorkBound             int64                            `json:"work_bound"`
-	ScratchBytes          int64                            `json:"scratch_bytes"`
-	Packs                 []m8MembershipFeasibilityPackV1  `json:"packs"`
-	Queries               []m8MembershipFeasibilityQueryV1 `json:"queries"`
+	SchemaVersion         int                                    `json:"schema_version"`
+	ResultKind            string                                 `json:"result_kind"`
+	Method                string                                 `json:"method"`
+	Status                string                                 `json:"status"`
+	VariantID             string                                 `json:"variant_id"`
+	FixtureChecksum       string                                 `json:"fixture_checksum"`
+	TruthIdentity         string                                 `json:"truth_identity"`
+	TruthArtifactSHA256   string                                 `json:"truth_artifact_sha256"`
+	BuildIdentityDigest   string                                 `json:"build_identity_digest"`
+	ManifestIntegrity     string                                 `json:"manifest_integrity"`
+	ReadySetDigest        string                                 `json:"ready_set_digest"`
+	ShardGenerationDigest string                                 `json:"shard_generation_digest"`
+	MembershipDigest      string                                 `json:"membership_digest"`
+	SourceVectors         int                                    `json:"source_vectors"`
+	LogicalDomains        int                                    `json:"logical_domains"`
+	PhysicalPacks         int                                    `json:"physical_packs"`
+	DomainLimit           int                                    `json:"logical_domain_limit"`
+	PackLimit             int64                                  `json:"physical_pack_limit"`
+	RequiredRecall        float64                                `json:"required_recall"`
+	TotalHits             int                                    `json:"total_hits"`
+	PossibleHits          int                                    `json:"possible_hits"`
+	Ceiling               float64                                `json:"membership_recall_ceiling"`
+	ActualGraphBytes      uint64                                 `json:"actual_domain_graph_bytes"`
+	ActualBytesPerVector  float64                                `json:"actual_domain_graph_bytes_per_source_vector"`
+	WorkBound             int64                                  `json:"work_bound"`
+	ScratchBytes          int64                                  `json:"scratch_bytes"`
+	Packs                 []m8MembershipFeasibilityPackV1        `json:"packs"`
+	DomainGraphs          []m8MembershipFeasibilityDomainGraphV1 `json:"domain_graphs"`
+	Queries               []m8MembershipFeasibilityQueryV1       `json:"queries"`
 }
 
 type m8MembershipFeasibilityArtifactV1 struct {
@@ -279,7 +287,7 @@ func m8ComputeRetainedMembershipFeasibilityV1(cfg config, fixture fixtureManifes
 		BuildIdentityDigest: descriptor.BuildIdentityDigest, ManifestIntegrity: manifest.IntegrityDigest, ReadySetDigest: manifest.ReadySetDigest,
 		ShardGenerationDigest: descriptor.ShardGenerationDigest, MembershipDigest: record.MembershipDigest,
 		SourceVectors: fixture.Vectors, LogicalDomains: len(packCosts), PhysicalPacks: len(packDomains), DomainLimit: cfg.m8MembershipProbes, PackLimit: int64(cfg.m8MembershipPackLimit), RequiredRecall: cfg.recallTarget,
-		Queries: make([]m8MembershipFeasibilityQueryV1, len(truth)), Packs: make([]m8MembershipFeasibilityPackV1, len(manifest.Assets)),
+		Queries: make([]m8MembershipFeasibilityQueryV1, len(truth)), Packs: make([]m8MembershipFeasibilityPackV1, len(packDomains)), DomainGraphs: make([]m8MembershipFeasibilityDomainGraphV1, len(packCosts)),
 	}
 	result.WorkBound, result.ScratchBytes, err = m8MembershipFeasibilityPlanV1(len(truth), min(cfg.topK, fixture.Vectors), len(packCosts), cfg.m8MembershipProbes)
 	if err != nil {
@@ -288,18 +296,35 @@ func m8ComputeRetainedMembershipFeasibilityV1(cfg config, fixture fixtureManifes
 	if result.WorkBound > maxBenchmarkWorkUnits || result.ScratchBytes > cfg.maxBytes {
 		return m8MembershipFeasibilityV1{}, fmt.Errorf("membership feasibility exceeds resource limits: work=%d bytes=%d", result.WorkBound, result.ScratchBytes)
 	}
+	for pack, domain := range packDomains {
+		summary := record.PackSummaries[pack]
+		graph := &result.DomainGraphs[domain]
+		if graph.PlannedBytes > math.MaxUint64-summary.Bytes {
+			return m8MembershipFeasibilityV1{}, errors.New("retained planned domain graph bytes overflow")
+		}
+		if graph.PlannedBytes == 0 {
+			graph.DomainID, graph.AnchorPackID = domain, uint32(pack)
+		}
+		graph.PlannedBytes += summary.Bytes
+		result.Packs[pack] = m8MembershipFeasibilityPackV1{PackID: uint32(pack), DomainID: domain, PlannedBytes: summary.Bytes}
+	}
 	for _, asset := range manifest.Assets {
 		pack := int(asset.PartitionID)
 		if pack >= len(result.Packs) {
 			return m8MembershipFeasibilityV1{}, errors.New("retained asset pack is outside feasibility layout")
 		}
-		result.Packs[pack] = m8MembershipFeasibilityPackV1{PackID: asset.PartitionID, DomainID: packDomains[pack], PlannedBytes: record.PackSummaries[pack].Bytes, ActualBytes: asset.Bytes}
-		if asset.Bytes > math.MaxUint64-result.ActualPackBytes {
-			return m8MembershipFeasibilityV1{}, errors.New("retained actual pack bytes overflow")
+		graph := &result.DomainGraphs[packDomains[pack]]
+		if asset.PartitionID != graph.AnchorPackID {
+			return m8MembershipFeasibilityV1{}, errors.New("retained graph asset is not bound to its domain anchor")
 		}
-		result.ActualPackBytes += asset.Bytes
+		if asset.Bytes > math.MaxUint64-graph.ActualBytes || asset.Bytes > math.MaxUint64-result.ActualGraphBytes {
+			return m8MembershipFeasibilityV1{}, errors.New("retained actual domain graph bytes overflow")
+		}
+		graph.ActualBytes += asset.Bytes
+		graph.AssetCount++
+		result.ActualGraphBytes += asset.Bytes
 	}
-	result.ActualBytesPerVector = float64(result.ActualPackBytes) / float64(fixture.Vectors)
+	result.ActualBytesPerVector = float64(result.ActualGraphBytes) / float64(fixture.Vectors)
 	limits := m8CoverageLimitsV1{WorkUnits: maxBenchmarkWorkUnits, Bytes: cfg.maxBytes}
 	for query, row := range truth {
 		result.PossibleHits += len(row)
@@ -346,24 +371,26 @@ func m8ValidateMembershipFeasibilityV1(result m8MembershipFeasibilityV1) error {
 		!m8SHA256V1(result.ManifestIntegrity) || !m8SHA256V1(result.ReadySetDigest) || !m8SHA256V1(result.ShardGenerationDigest) || !m8SHA256V1(result.MembershipDigest) ||
 		result.SourceVectors < 1 || result.LogicalDomains < 1 || result.PhysicalPacks < result.LogicalDomains || result.PhysicalPacks > maxPartitions ||
 		result.DomainLimit < 1 || result.DomainLimit > 2 || result.DomainLimit > result.LogicalDomains || result.PackLimit < 1 || result.PackLimit > int64(result.PhysicalPacks) ||
-		math.IsNaN(result.RequiredRecall) || math.IsInf(result.RequiredRecall, 0) || result.RequiredRecall < 0 || result.RequiredRecall > 1 || len(result.Packs) != result.PhysicalPacks || len(result.Queries) == 0 {
+		math.IsNaN(result.RequiredRecall) || math.IsInf(result.RequiredRecall, 0) || result.RequiredRecall < 0 || result.RequiredRecall > 1 || len(result.Packs) != result.PhysicalPacks || len(result.DomainGraphs) != result.LogicalDomains || len(result.Queries) == 0 {
 		return errors.New("invalid membership feasibility identity or shape")
 	}
 	domainPacks := make([][]uint32, result.LogicalDomains)
-	var actualBytes uint64
+	domainPlanned := make([]uint64, result.LogicalDomains)
 	for i, pack := range result.Packs {
-		if pack.PackID != uint32(i) || int(pack.DomainID) >= result.LogicalDomains || pack.PlannedBytes == 0 || pack.ActualBytes == 0 || pack.ActualBytes > pack.PlannedBytes || pack.ActualBytes > math.MaxUint64-actualBytes {
+		if pack.PackID != uint32(i) || int(pack.DomainID) >= result.LogicalDomains || pack.PlannedBytes == 0 || pack.PlannedBytes > math.MaxUint64-domainPlanned[pack.DomainID] {
 			return errors.New("invalid membership feasibility pack evidence")
 		}
-		actualBytes += pack.ActualBytes
+		domainPlanned[pack.DomainID] += pack.PlannedBytes
 		domainPacks[pack.DomainID] = append(domainPacks[pack.DomainID], pack.PackID)
 	}
-	for _, packs := range domainPacks {
-		if len(packs) == 0 {
+	var actualBytes uint64
+	for domain, graph := range result.DomainGraphs {
+		if len(domainPacks[domain]) == 0 || graph.DomainID != uint32(domain) || graph.AnchorPackID != domainPacks[domain][0] || graph.PlannedBytes != domainPlanned[domain] || graph.ActualBytes == 0 || graph.ActualBytes > graph.PlannedBytes || graph.AssetCount < 1 || graph.ActualBytes > math.MaxUint64-actualBytes {
 			return errors.New("membership feasibility logical domain has no physical pack")
 		}
+		actualBytes += graph.ActualBytes
 	}
-	if actualBytes != result.ActualPackBytes || result.ActualBytesPerVector != float64(actualBytes)/float64(result.SourceVectors) || math.IsNaN(result.ActualBytesPerVector) || math.IsInf(result.ActualBytesPerVector, 0) {
+	if actualBytes != result.ActualGraphBytes || result.ActualBytesPerVector != float64(actualBytes)/float64(result.SourceVectors) || math.IsNaN(result.ActualBytesPerVector) || math.IsInf(result.ActualBytesPerVector, 0) {
 		return errors.New("membership feasibility actual-byte evidence disagrees")
 	}
 	wantWork, wantScratch, err := m8MembershipFeasibilityPlanV1(len(result.Queries), result.Queries[0].TruthCount, result.LogicalDomains, result.DomainLimit)

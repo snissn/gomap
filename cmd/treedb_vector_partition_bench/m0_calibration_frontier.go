@@ -272,7 +272,7 @@ func m0FrontierAccountV1(path string, manifest collections.VectorPartitionManife
 		return account, m0MembershipModeV1{}, "", err
 	}
 	policy, ok := collections.ParseVectorPartitionOverlapPolicyV1(manifest.BalancePolicy)
-	if !ok || account.Schema != "treedb_vector_partition_m0_membership_account_v1" || account.Partitions < 4 || account.Partitions > math.MaxUint32 || manifest.PartitionCount != uint32(account.Partitions) || descriptor.ArtifactSHA256 != account.AssignmentArtifactSHA256 || policy.BuildIdentityDigest != descriptor.BuildIdentityDigest {
+	if !ok || account.Schema != "treedb_vector_partition_m0_membership_account_v1" || account.Partitions < 4 || account.Partitions > math.MaxUint32 || manifest.DomainCount != uint32(account.Partitions) || descriptor.ArtifactSHA256 != account.AssignmentArtifactSHA256 || policy.BuildIdentityDigest != descriptor.BuildIdentityDigest {
 		return account, m0MembershipModeV1{}, "", errors.New("M0 frontier membership binding")
 	}
 	var zero, useful, exact *m0MembershipModeV1
@@ -641,7 +641,7 @@ func m0FrontierMembershipTopologyV1(path, graphPath string, account m0Membership
 		return errors.New("M0 frontier assignment artifact binding")
 	}
 	artifact, err := vectorpartition.DecodeArtifact(raw, len(raw))
-	if err != nil || artifact.Config.Partitions != account.Partitions || uint32(account.Partitions) != h.manifest.PartitionCount {
+	if err != nil || artifact.Config.Partitions != account.Partitions || uint32(account.Partitions) != h.manifest.DomainCount {
 		return errors.New("M0 frontier assignment artifact")
 	}
 	graphRaw, err := os.ReadFile(graphPath)
@@ -677,6 +677,16 @@ func m0FrontierMembershipTopologyV1(path, graphPath string, account m0Membership
 	digest, err := m0MembershipDigestV1(overlap.Memberships)
 	if err != nil || digest != selected.MembershipSHA256 {
 		return errors.New("M0 frontier selected membership")
+	}
+	if descriptor.ShardPlan != (vectorpartition.ShardPlanV1{}) {
+		record, err := m3ValidateRetainedShardPackBytesV1(h.dir, descriptor, h.manifest.Assets)
+		if err != nil {
+			return err
+		}
+		overlap, err = m0PackRetainedMembershipV1(record, artifact, overlap)
+		if err != nil {
+			return err
+		}
 	}
 	_, rows, err := h.collection.VectorPartitionSourceOrdinalsV1(partitionHNSWIndex)
 	if err != nil {

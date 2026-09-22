@@ -139,7 +139,7 @@ func runM0FrontierDiagnoseV1(args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	if account.AssignmentArtifactSHA256 != m0SHA256V1(raw) || artifact.Config.Partitions != int(h.manifest.PartitionCount) {
+	if account.AssignmentArtifactSHA256 != m0SHA256V1(raw) || artifact.Config.Partitions != int(h.manifest.DomainCount) {
 		return errors.New("M0 diagnostic artifact binding")
 	}
 	if err := m0FrontierMembershipTopologyV1(artifactPath, graphArtifactPath, account, selected, fixture, h); err != nil {

@@ -33,7 +33,7 @@ func TestM0FrontierAccountSeparatesAssignmentAndBuildIdentityV1(t *testing.T) {
 		t.Fatal(err)
 	}
 	descriptor := m3VariantDescriptorV1{ArtifactSHA256: assignment, BuildIdentityDigest: buildIdentity}
-	if _, _, _, err := m0FrontierAccountV1(path, collections.VectorPartitionManifestV1{PartitionCount: 4, BalancePolicy: policy}, descriptor, "zero"); err != nil {
+	if _, _, _, err := m0FrontierAccountV1(path, collections.VectorPartitionManifestV1{PartitionCount: 8, DomainCount: 4, BalancePolicy: policy}, descriptor, "zero"); err != nil {
 		t.Fatalf("frontier account rejected separately bound identities: %v", err)
 	}
 }
