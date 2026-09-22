@@ -1,0 +1,36 @@
+name: Peer security and global admission qualification
+
+on:
+  pull_request:
+    paths:
+      - 'TreeDB/nativewire/fixed_peer*'
+      - 'TreeDB/nativewire/peer_*'
+      - 'TreeDB/nativewire/vector_partition_global_connection_budget_v1_test.go'
+      - 'TreeDB/nativewire/vector_partition_shard_search_tcp_v1.go'
+      - 'TreeDB/nativewire/server.go'
+      - 'TreeDB/nativewire/listener.go'
+      - '.github/workflows/peer-security-qualification.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  qualify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 1
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Exact source and toolchain
+        run: |
+          git rev-parse HEAD
+          go version
+      - name: Global connection and peer authorization regressions
+        run: go test ./TreeDB/nativewire -run 'Test(ManyIdleEndpointsRespectGlobalConnectionBudgetV1|UnknownPeerCannotSubmitOrInstallSnapshotV1|HotGroupCannotExhaustUnrelatedGroupAdmissionV1)$' -count=1 -timeout=4m -v
