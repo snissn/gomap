@@ -2240,6 +2240,23 @@ func TestVectorPartitionDomainPackSectionsOpenWithoutReassemblyV1(t *testing.T) 
 		putHNSWPackU64(payload, columnHNSWSearchPackHeaderTotalLengthOffset, ^uint64(0))
 		putHNSWPackU64(payload, columnHNSWSearchPackHeaderDataLengthOffset, ^uint64(0)-dataOffset)
 	})
+	rejectRoot("leading logical gap", func(payload []byte) {
+		const delta = uint64(1) << 40
+		putHNSWPackU64(payload, columnHNSWSearchPackHeaderDataOffsetOffset, hnswPackU64(payload, columnHNSWSearchPackHeaderDataOffsetOffset)+delta)
+		putHNSWPackU64(payload, columnHNSWSearchPackHeaderTotalLengthOffset, hnswPackU64(payload, columnHNSWSearchPackHeaderTotalLengthOffset)+delta)
+		count := int(hnswPackU32(payload, columnHNSWSearchPackHeaderSectionCountOffset))
+		for i := 0; i < count; i++ {
+			entry := columnHNSWSearchPackHeaderSizeV2 + i*columnHNSWSearchPackSectionEntrySize
+			putHNSWPackU64(payload, entry+columnHNSWSearchPackEntrySectionOffset, hnswPackU64(payload, entry+columnHNSWSearchPackEntrySectionOffset)+delta)
+		}
+		directoryOffset := hnswPackU64(payload, columnHNSWSearchPackHeaderDirectoryOffsetOffset)
+		directoryLength := hnswPackU64(payload, columnHNSWSearchPackHeaderDirectoryLengthOffset)
+		checksum, err := columnHNSWSearchPackChecksumWithContext(t.Context(), payload[directoryOffset:directoryOffset+directoryLength])
+		if err != nil {
+			t.Fatal(err)
+		}
+		putHNSWPackU32(payload, columnHNSWSearchPackHeaderDirectoryChecksumOffset, checksum)
+	})
 	rejectRoot("inter-section gap", func(payload []byte) {
 		count := int(hnswPackU32(payload, columnHNSWSearchPackHeaderSectionCountOffset))
 		entry := columnHNSWSearchPackHeaderSizeV2 + (count-1)*columnHNSWSearchPackSectionEntrySize

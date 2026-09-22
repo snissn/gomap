@@ -1370,6 +1370,10 @@ func validateColumnHNSWSearchPackChunkedGeometry(root []byte, pack columnHNSWSea
 	if len(root) != wantRoot {
 		return errors.New("collections: chunked hnsw_search_pack_v1 root geometry")
 	}
+	wantDataOffset, ok := alignColumnHNSWSearchPackUint64(uint64(wantRoot), uint64(columnHNSWSearchPackAlignment))
+	if !ok || pack.Header.DataOffset != wantDataOffset {
+		return errors.New("collections: chunked hnsw_search_pack_v1 data offset geometry")
+	}
 	cursor := pack.Header.DataOffset
 	for _, section := range pack.Sections {
 		offset, ok := alignColumnHNSWSearchPackUint64(cursor, uint64(section.Alignment))

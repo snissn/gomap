@@ -538,7 +538,7 @@ func m0FrontierRoutesV1(h *m8ProductionMultiGroupAssetsV1, harness *m8Attributio
 		for i, x := range r.Partitions {
 			route[i] = x.PartitionID
 		}
-		packs, e := m8AttributionPacksForDomainsV1(h.manifest, len(h.manifest.Assets), route)
+		packs, e := m8AttributionPacksForDomainsV1(h.manifest, len(harness.searchers), route)
 		if e != nil {
 			return nil, e
 		}
