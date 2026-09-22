@@ -592,11 +592,31 @@ func (c *VectorPartitionCoordinatorV1) acquireRouterSessionV1(ctx context.Contex
 				err = c.validateRouterStatus(status, domainPackOffsets)
 			}
 			if err == nil {
-				partitionRows, err = vectorPartitionCoordinatorPartitionRowsV1(ctx, status.Manifest)
+				for domain := range len(domainPackOffsets) - 1 {
+					anchor := status.Manifest.DomainPacks[domainPackOffsets[domain]].PackID
+					groupID := c.placement.Partitions[anchor].GroupID
+					for _, mapping := range status.Manifest.DomainPacks[domainPackOffsets[domain]:domainPackOffsets[domain+1]] {
+						if c.placement.Partitions[mapping.PackID].GroupID != groupID {
+							err = fmt.Errorf("%w: split domain %d ownership", ErrVectorPartitionCoordinatorRouteMismatch, domain)
+							break
+						}
+					}
+					if err != nil {
+						break
+					}
+				}
 			}
 			if err == nil {
 				domainPacks = status.Manifest.DomainPacks
 				domainGraphs = vectorPartitionCoordinatorUsesDomainGraphsV1(status.Manifest)
+				if domainGraphs {
+					partitionRows, err = collections.VectorPartitionDomainGraphRowCountsV1(ctx, status.Manifest)
+					if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+						err = fmt.Errorf("%w: %v", ErrVectorPartitionCoordinatorGenerationMismatch, err)
+					}
+				} else {
+					partitionRows, err = vectorPartitionCoordinatorPartitionRowsV1(ctx, status.Manifest)
+				}
 			}
 		}
 		c.sessionMu.Lock()
@@ -1459,13 +1479,7 @@ func (c *VectorPartitionCoordinatorV1) plan(ctx context.Context, request VectorP
 			if c.placement.Partitions[packID].GroupID != groupID {
 				return nil, nil, nil, zero, ErrVectorPartitionCoordinatorRouteMismatch
 			}
-			if domainGraphs {
-				var ok bool
-				servingRows[anchor], ok = addUint64V1(servingRows[anchor], partitionRows[packID])
-				if !ok {
-					return nil, nil, nil, zero, ErrVectorPartitionCoordinatorBudgetExceeded
-				}
-			} else {
+			if !domainGraphs {
 				servingRows[packID] = partitionRows[packID]
 				selected = append(selected, packID)
 				byGroup[groupID] = append(byGroup[groupID], packID)
@@ -1475,6 +1489,7 @@ func (c *VectorPartitionCoordinatorV1) plan(ctx context.Context, request VectorP
 			return nil, nil, nil, zero, ErrVectorPartitionCoordinatorRouteMismatch
 		}
 		if domainGraphs {
+			servingRows[anchor] = partitionRows[anchor]
 			selected = append(selected, anchor)
 			byGroup[groupID] = append(byGroup[groupID], anchor)
 		}

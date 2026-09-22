@@ -2158,6 +2158,38 @@ func TestVectorPartitionDomainPackMaterializesOneChunkedSearcherV1(t *testing.T)
 	}
 }
 
+func TestVectorPartitionDomainGraphRowCountsMatchServingMembershipsV1(t *testing.T) {
+	manifest := VectorPartitionManifestV1{
+		PartitionCount: 4,
+		DomainCount:    2,
+		DomainPacks: []VectorPartitionDomainPackV1{
+			{DomainID: 0, PackID: 0}, {DomainID: 0, PackID: 1}, {DomainID: 0, PackID: 2},
+			{DomainID: 1, PackID: 3},
+		},
+		Memberships: []VectorPartitionMembershipV1{
+			{VectorOrdinal: 0, PartitionID: 0},
+			{VectorOrdinal: 1, PartitionID: 3},
+			{VectorOrdinal: 2, PartitionID: 3},
+		},
+		OverlapMemberships: []VectorPartitionMembershipV1{
+			{VectorOrdinal: 0, PartitionID: 1},
+			{VectorOrdinal: 0, PartitionID: 2},
+			{VectorOrdinal: 1, PartitionID: 0},
+			{VectorOrdinal: 2, PartitionID: 0},
+			{VectorOrdinal: 2, PartitionID: 1},
+		},
+	}
+	rows, err := VectorPartitionDomainGraphRowCountsV1(t.Context(), manifest)
+	if err != nil || !slices.Equal(rows, []uint64{3, 0, 0, 2}) {
+		t.Fatalf("rows=%v err=%v", rows, err)
+	}
+	canceled, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, err := VectorPartitionDomainGraphRowCountsV1(canceled, manifest); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled row count err=%v", err)
+	}
+}
+
 func TestVectorPartitionDomainPackSectionsOpenWithoutReassemblyV1(t *testing.T) {
 	input := testColumnHNSWSearchPackInput2312()
 	const rows = 128
@@ -2203,7 +2235,11 @@ func TestVectorPartitionDomainPackSectionsOpenWithoutReassemblyV1(t *testing.T) 
 	scope := mappedresource.Scope{Kind: mappedresource.ScopePreparedSearch, ID: "domain-chunks", Namespace: "test", Generation: 11}
 	acquire := func(i int) *mappedresource.Handle {
 		payload := payloads[i].payload
-		handle, err := manager.AcquireBytes(mappedresource.Key{Class: mappedresource.ClassTypedColumnAsset, Namespace: "test", Kind: "domain-chunk", Generation: 11, PartID: 8, FileID: uint32(i + 1), Length: int64(len(payload))}, scope, mappedresource.SourceHeapCopy, payload, mappedresource.AcquireOptions{Reason: "domain chunk test"})
+		checksum, err := columnHNSWSearchPackChecksumWithContext(t.Context(), payload)
+		if err != nil || checksum == 0 {
+			t.Fatalf("payload checksum=%08x err=%v", checksum, err)
+		}
+		handle, err := manager.AcquireBytes(mappedresource.Key{Class: mappedresource.ClassTypedColumnAsset, Namespace: "test", Kind: "domain-chunk", Generation: 11, PartID: 8, FileID: uint32(i + 1), Length: int64(len(payload)), Checksum: uint64(checksum)}, scope, mappedresource.SourceHeapCopy, payload, mappedresource.AcquireOptions{Reason: "domain chunk test"})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -2217,6 +2253,62 @@ func TestVectorPartitionDomainPackSectionsOpenWithoutReassemblyV1(t *testing.T) 
 			t.Fatalf("chunk id=%q ordinal=%d err=%v", payloads[i].id, chunk, err)
 		}
 		sections[key] = append(sections[key], acquire(i))
+	}
+	badHandle := func(fileID uint32, payload []byte) *mappedresource.Handle {
+		checksum, err := columnHNSWSearchPackChecksumWithContext(t.Context(), payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wrong := checksum ^ 1
+		if wrong == 0 {
+			wrong = 2
+		}
+		handle, err := manager.AcquireBytes(mappedresource.Key{Class: mappedresource.ClassTypedColumnAsset, Namespace: "test", Kind: "domain-chunk", Generation: 11, PartID: 8, FileID: fileID, Length: int64(len(payload)), Checksum: uint64(wrong)}, scope, mappedresource.SourceHeapCopy, payload, mappedresource.AcquireOptions{Reason: "bad domain chunk checksum test"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return handle
+	}
+	t.Run("root handle checksum", func(t *testing.T) {
+		malformed := badHandle(200, payloads[0].payload)
+		if view, err := newColumnHNSWSearchPackPreparedViewFromSectionHandlesWithContext(t.Context(), manager, malformed, sections, columnHNSWSearchPackDecodeOptions{ExpectedBaseIdentity: input.BaseIdentity, ExpectedMembershipDigest: input.MembershipDigest}); err == nil || !strings.Contains(err.Error(), "checksum") {
+			if view != nil {
+				_ = view.Close()
+			}
+			t.Fatalf("root checksum err=%v", err)
+		}
+		if err := malformed.Release(); err != nil {
+			t.Fatal(err)
+		}
+	})
+	t.Run("section handle checksum", func(t *testing.T) {
+		key, chunk, err := parseVectorPartitionLocalSectionChunkAssetIDV1(7, payloads[1].id)
+		if err != nil || chunk != 0 {
+			t.Fatalf("section key=%+v chunk=%d err=%v", key, chunk, err)
+		}
+		malformed := badHandle(201, payloads[1].payload)
+		badSections := make(map[columnHNSWSearchPackSectionKey][]*mappedresource.Handle, len(sections))
+		for sectionKey, handles := range sections {
+			badSections[sectionKey] = append([]*mappedresource.Handle(nil), handles...)
+		}
+		badSections[key][0] = malformed
+		if view, err := newColumnHNSWSearchPackPreparedViewFromSectionHandlesWithContext(t.Context(), manager, root, badSections, columnHNSWSearchPackDecodeOptions{ExpectedBaseIdentity: input.BaseIdentity, ExpectedMembershipDigest: input.MembershipDigest}); err == nil || !strings.Contains(err.Error(), "checksum") {
+			if view != nil {
+				_ = view.Close()
+			}
+			t.Fatalf("section checksum err=%v", err)
+		}
+		if err := malformed.Release(); err != nil {
+			t.Fatal(err)
+		}
+	})
+	canceled, cancel := context.WithCancel(t.Context())
+	cancel()
+	if view, err := newColumnHNSWSearchPackPreparedViewFromSectionHandlesWithContext(canceled, manager, root, sections, columnHNSWSearchPackDecodeOptions{ExpectedBaseIdentity: input.BaseIdentity, ExpectedMembershipDigest: input.MembershipDigest}); !errors.Is(err, context.Canceled) {
+		if view != nil {
+			_ = view.Close()
+		}
+		t.Fatalf("canceled chunk open err=%v", err)
 	}
 	rejectRoot := func(name string, mutate func([]byte)) {
 		t.Run(name, func(t *testing.T) {

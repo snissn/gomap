@@ -435,12 +435,23 @@ func TestVectorPartitionCoordinatorDispatchesOneDomainAnchorV1(t *testing.T) {
 		{ID: "hnsw_search_pack_v1/partition/0", GraphVariant: string(collections.VectorPartitionLocalGraphVariantConnectivityPreservingVamanaR64L256Alpha1_2V1)},
 		{ID: "hnsw_search_pack_v1/partition/0/section/01/00000"},
 	}
+	source.router.status.Manifest.OverlapMemberships = []collections.VectorPartitionMembershipV1{
+		{VectorOrdinal: 0, PartitionID: 1},
+		{VectorOrdinal: 1, PartitionID: 1},
+	}
 	source.router.status.Partitions = 1
 	source.router.partitions = source.router.partitions[:1]
 
 	request := testVectorPartitionCoordinatorRequestV1(1)
 	request.RouterScoreBudget = int(source.router.status.Representatives)
 	request.MergeEntriesLimit = 6
+	_, candidateBytesLimit, err := vectorPartitionCoordinatorCandidateFloorsV1(
+		[]uint64{2, 0}, []uint32{0}, len(request.Query), request.TopK, request.EfSearch,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.CandidateBytesLimit = candidateBytesLimit
 	response, err := coordinator.Search(t.Context(), request)
 	if err != nil {
 		t.Fatal(err)

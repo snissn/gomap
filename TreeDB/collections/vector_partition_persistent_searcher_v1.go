@@ -1166,18 +1166,30 @@ func vectorPartitionDomainLayoutV1(manifest VectorPartitionManifestV1) ([]uint32
 	return anchors, anchorForPack, nil
 }
 
-func vectorPartitionServingMembershipListsV1(manifest VectorPartitionManifestV1, anchorForPack []uint32) ([]VectorPartitionMembershipV1, []VectorPartitionMembershipV1, error) {
-	type key struct {
-		ordinal uint64
-		anchor  uint32
+type vectorPartitionServingMembershipKeyV1 struct {
+	ordinal uint64
+	anchor  uint32
+}
+
+func vectorPartitionServingMembershipKindsV1(ctx context.Context, manifest VectorPartitionManifestV1, anchorForPack []uint32) (map[vectorPartitionServingMembershipKeyV1]VectorPartitionMembershipKindV1, error) {
+	if ctx == nil {
+		ctx = context.Background()
 	}
-	kinds := make(map[key]VectorPartitionMembershipKindV1, len(manifest.Memberships)+len(manifest.OverlapMemberships))
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	kinds := make(map[vectorPartitionServingMembershipKeyV1]VectorPartitionMembershipKindV1, len(manifest.Memberships)+len(manifest.OverlapMemberships))
 	add := func(memberships []VectorPartitionMembershipV1, kind VectorPartitionMembershipKindV1) error {
-		for _, membership := range memberships {
+		for i, membership := range memberships {
+			if i&1023 == 0 {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+			}
 			if membership.PartitionID >= uint32(len(anchorForPack)) {
 				return fmt.Errorf("%w: membership partition", ErrVectorPartitionSearchUnavailable)
 			}
-			k := key{ordinal: membership.VectorOrdinal, anchor: anchorForPack[membership.PartitionID]}
+			k := vectorPartitionServingMembershipKeyV1{ordinal: membership.VectorOrdinal, anchor: anchorForPack[membership.PartitionID]}
 			if prior, ok := kinds[k]; !ok || kind == VectorPartitionMembershipHomeV1 || prior != VectorPartitionMembershipHomeV1 {
 				kinds[k] = kind
 			}
@@ -1185,9 +1197,20 @@ func vectorPartitionServingMembershipListsV1(manifest VectorPartitionManifestV1,
 		return nil
 	}
 	if err := add(manifest.Memberships, VectorPartitionMembershipHomeV1); err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	if err := add(manifest.OverlapMemberships, VectorPartitionMembershipOverlapV1); err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return kinds, nil
+}
+
+func vectorPartitionServingMembershipListsV1(manifest VectorPartitionManifestV1, anchorForPack []uint32) ([]VectorPartitionMembershipV1, []VectorPartitionMembershipV1, error) {
+	kinds, err := vectorPartitionServingMembershipKindsV1(context.Background(), manifest, anchorForPack)
+	if err != nil {
 		return nil, nil, err
 	}
 	home := make([]VectorPartitionMembershipV1, 0, len(manifest.Memberships))
@@ -1203,6 +1226,27 @@ func vectorPartitionServingMembershipListsV1(manifest VectorPartitionManifestV1,
 	sort.Slice(home, func(i, j int) bool { return vectorPartitionMembershipLessV1(home[i], home[j]) })
 	sort.Slice(overlap, func(i, j int) bool { return vectorPartitionMembershipLessV1(overlap[i], overlap[j]) })
 	return home, overlap, nil
+}
+
+// VectorPartitionDomainGraphRowCountsV1 returns the exact serving-row counts
+// produced by domain-graph membership normalization, keyed by domain anchor.
+func VectorPartitionDomainGraphRowCountsV1(ctx context.Context, manifest VectorPartitionManifestV1) ([]uint64, error) {
+	_, anchorForPack, err := vectorPartitionDomainLayoutV1(manifest)
+	if err != nil {
+		return nil, err
+	}
+	kinds, err := vectorPartitionServingMembershipKindsV1(ctx, manifest, anchorForPack)
+	if err != nil {
+		return nil, err
+	}
+	rows := make([]uint64, manifest.PartitionCount)
+	for key := range kinds {
+		if rows[key.anchor] == math.MaxUint64 {
+			return nil, fmt.Errorf("%w: membership rows", ErrVectorPartitionSearchUnavailable)
+		}
+		rows[key.anchor]++
+	}
+	return rows, nil
 }
 
 type vectorPartitionDomainAssetPayloadV1 struct {

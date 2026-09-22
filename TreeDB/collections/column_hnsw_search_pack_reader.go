@@ -271,14 +271,8 @@ func newColumnHNSWSearchPackPreparedViewFromHandleWithContext(ctx context.Contex
 	if len(raw) == 0 {
 		return nil, errors.New("collections: hnsw_search_pack_v1 prepared view has empty bytes")
 	}
-	if key := handle.Key(); key.Checksum != 0 {
-		got, err := columnHNSWSearchPackChecksumWithContext(ctx, raw)
-		if err != nil {
-			return nil, err
-		}
-		if got != uint32(key.Checksum) {
-			return nil, fmt.Errorf("collections: hnsw_search_pack_v1 checksum=%08x want %08x", got, uint32(key.Checksum))
-		}
+	if err := validateColumnHNSWSearchPackHandleChecksumWithContext(ctx, handle); err != nil {
+		return nil, err
 	}
 	pack, opts, err := decodeColumnHNSWSearchPackEnvelopeWithContext(ctx, raw, opts)
 	if err != nil {
@@ -332,6 +326,9 @@ func newColumnHNSWSearchPackPreparedViewFromSectionHandlesWithContext(ctx contex
 	if len(raw) < columnHNSWSearchPackHeaderSizeV2 {
 		return nil, errors.New("collections: chunked hnsw_search_pack_v1 root is truncated")
 	}
+	if err := validateColumnHNSWSearchPackHandleChecksumWithContext(ctx, root); err != nil {
+		return nil, err
+	}
 	totalLength := hnswPackU64(raw, columnHNSWSearchPackHeaderTotalLengthOffset)
 	pack, opts, err := decodeColumnHNSWSearchPackEnvelopeMetadataWithContext(ctx, raw, totalLength, opts, false)
 	if err != nil {
@@ -360,6 +357,9 @@ func newColumnHNSWSearchPackPreparedViewFromSectionHandlesWithContext(ctx contex
 		for _, h := range handles {
 			if h == nil || h.Released() || len(h.Bytes()) == 0 || uint64(len(h.Bytes())) > section.Length-length {
 				return nil, fmt.Errorf("collections: chunked hnsw_search_pack_v1 section %s[%d] extent", section.Kind, section.Index)
+			}
+			if err := validateColumnHNSWSearchPackHandleChecksumWithContext(ctx, h); err != nil {
+				return nil, err
 			}
 			bytes := h.Bytes()
 			length += uint64(len(bytes))
@@ -408,6 +408,21 @@ func newColumnHNSWSearchPackPreparedViewFromSectionHandlesWithContext(ctx contex
 		return nil, err
 	}
 	return view, ctx.Err()
+}
+
+func validateColumnHNSWSearchPackHandleChecksumWithContext(ctx context.Context, handle *mappedresource.Handle) error {
+	key := handle.Key()
+	if key.Checksum == 0 {
+		return nil
+	}
+	got, err := columnHNSWSearchPackChecksumWithContext(ctx, handle.Bytes())
+	if err != nil {
+		return err
+	}
+	if got != uint32(key.Checksum) {
+		return fmt.Errorf("collections: hnsw_search_pack_v1 checksum=%08x want %08x", got, uint32(key.Checksum))
+	}
+	return nil
 }
 
 func (v *columnHNSWSearchPackPreparedView) retainedChunkMetadataBytes() uint64 {
