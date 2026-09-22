@@ -12,8 +12,9 @@ abandonment, duplicate precedence, and authoritative late conflict),
 `TestPreparedInsertCheckpointBeforeCommitAndReopen` (private prepare across a
 checkpoint and durable reopen),
 `TestPreparedInsertValueLogBlockPointerSurvivesReopenAndGC` (persistent block
-pointer and GC reachability), `TestPreparedInsertCrashRecoveryCuts` (durable
-acknowledgment and WAL/asset/installation process-loss cuts),
+pointer and GC reachability), `TestPreparedInsertCrashRecoveryCuts` (observed
+WAL sync before durable acknowledgment and WAL/asset/applied-LSN cuts during
+commit, plus queued root-installation cuts under checkpoint),
 `TestPreparedInsertFallsBackBeforeUnboundedDeclaredRowExtraction` (unsupported
 scalar type uses ordinary insertion), and
 `TestPreparedInsertRejectsMismatchedCapturedSchema` (commit-time catalog

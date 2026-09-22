@@ -26,6 +26,7 @@ func TestPreparedInsertOverlapsOrderedCommit(t *testing.T) {
 	d := openColumnRetainedPlacementDB(t, dir, backenddb.Options{})
 	defer func() { _ = d.Close() }()
 	col := createColumnRetainedSemanticStreamCollection(t, d, "events")
+	sibling := createColumnRetainedSemanticStreamCollection(t, d, "sibling")
 	docs := [][]byte{[]byte(`{"row_id":1,"kind":"one"}`), []byte(`{"row_id":2,"kind":"two"}`)}
 	first, err := col.PrepareInsertBatchOwned([][]byte{[]byte("b")}, docs[:1], 16<<20)
 	if err != nil {
@@ -60,9 +61,27 @@ func TestPreparedInsertOverlapsOrderedCommit(t *testing.T) {
 	if got, err := col.Get([]byte("a")); err != nil || got != nil {
 		t.Fatalf("second prepared batch visible before its commit: %s, %v", got, err)
 	}
+	// Launch an ordinary sibling writer while the prepared commit is held.
+	// The start signal is before its InsertBatch call; this checks liveness
+	// after release, not where inside the write path it was blocked.
+	siblingStarted, siblingDone := make(chan struct{}), make(chan error, 1)
+	go func() {
+		close(siblingStarted)
+		_, err := sibling.InsertBatch([][]byte{[]byte("s")}, [][]byte{[]byte(`{"row_id":3,"kind":"sibling"}`)})
+		siblingDone <- err
+	}()
+	<-siblingStarted
 	close(release)
 	if err := <-committed; err != nil {
 		t.Fatal(err)
+	}
+	select {
+	case err := <-siblingDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("sibling ordinary writer stalled behind prepared commit")
 	}
 	ids, err := second.Commit()
 	if err != nil {
@@ -75,6 +94,9 @@ func TestPreparedInsertOverlapsOrderedCommit(t *testing.T) {
 		if _, err := col.Get(id); err != nil {
 			t.Fatalf("Get %q: %v", id, err)
 		}
+	}
+	if got, err := sibling.Get([]byte("s")); err != nil || !bytes.Contains(got, []byte(`"sibling"`)) {
+		t.Fatalf("sibling ordinary row=%s, %v", got, err)
 	}
 }
 
@@ -282,7 +304,14 @@ func TestPreparedInsertCrashRecoveryCuts(t *testing.T) {
 		mode := os.Getenv("GOMAP_PREPARED_INSERT_CRASH_MODE")
 		injected := errors.New("prepared commit crash cut")
 		var fired atomic.Bool
-		if mode != "ack" {
+		if mode == "ack" {
+			durabilitycut.Install(func(event durabilitycut.Event) error {
+				if event.Resource == durabilitycut.ResourceCommandWAL && event.Point == durabilitycut.AfterDependencyFileSync {
+					fired.Store(true)
+				}
+				return nil
+			})
+		} else {
 			resource, point := durabilitycut.ResourceCommandWAL, durabilitycut.BeforeDependencyAppend
 			switch mode {
 			case "wal_after_lsn_assignment":
@@ -291,10 +320,14 @@ func TestPreparedInsertCrashRecoveryCuts(t *testing.T) {
 				point = durabilitycut.AfterDependencyFileSync
 			case "asset_before_sync":
 				resource, point = durabilitycut.ResourceAuxiliary, durabilitycut.BeforeDependencyFileSync
-			case "before_applied_lsn_install":
+			case "before_applied_lsn_candidate":
 				resource, point = durabilitycut.ResourceMeta, durabilitycut.BeforeAppliedLSNAdvance
-			case "after_applied_lsn_install":
+			case "after_applied_lsn_candidate":
 				resource, point = durabilitycut.ResourceMeta, durabilitycut.AfterAppliedLSNAdvance
+			case "before_seal_write":
+				resource, point = durabilitycut.ResourceSeal, durabilitycut.BeforePublicationSealWrite
+			case "before_meta_write":
+				resource, point = durabilitycut.ResourceMeta, durabilitycut.BeforeMetaWrite
 			case "wal_before_append":
 			default:
 				t.Fatalf("unknown crash mode %q", mode)
@@ -307,16 +340,21 @@ func TestPreparedInsertCrashRecoveryCuts(t *testing.T) {
 			})
 		}
 		_, err = prepared.Commit()
+		if (mode == "before_seal_write" || mode == "before_meta_write") && err == nil {
+			// Command-WAL acknowledgment can precede queued root installation.
+			// Checkpoint waits for that installation while the cut is active.
+			err = d.Checkpoint()
+		}
 		if mode == "ack" {
-			if err != nil {
-				t.Fatal(err)
+			if err != nil || !fired.Load() {
+				t.Fatalf("durable prepared acknowledgment err=%v WAL sync observed=%t", err, fired.Load())
 			}
 		} else if !fired.Load() || !errors.Is(err, injected) {
 			t.Fatalf("cut %s fired=%t err=%v", mode, fired.Load(), err)
 		}
 		os.Exit(0) // Simulate process loss without Close or deferred sync.
 	}
-	for _, mode := range []string{"ack", "wal_before_append", "wal_after_lsn_assignment", "wal_after_sync", "asset_before_sync", "before_applied_lsn_install", "after_applied_lsn_install"} {
+	for _, mode := range []string{"ack", "wal_before_append", "wal_after_lsn_assignment", "wal_after_sync", "asset_before_sync", "before_applied_lsn_candidate", "after_applied_lsn_candidate", "before_seal_write", "before_meta_write"} {
 		t.Run(mode, func(t *testing.T) {
 			dir := t.TempDir()
 			if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}, DurabilityProfile: backenddb.ProfileCommandWALDurable}); err != nil {
