@@ -56,8 +56,8 @@ func ownerPlanAllocationManifestV2(remote int) VectorPartitionManifestV1 {
 	manifest := VectorPartitionManifestV1{
 		Collection: "docs", IndexName: "embedding", IndexDefinitionDigest: "definition",
 		Generation: 7, PartitionCount: 2, SourceRowCount: uint64(remote + 1),
-		Placements: []VectorPartitionPlacementV1{{PartitionID: 0, GroupID: "local"}, {PartitionID: 1, GroupID: "remote"}},
-		Assets: []VectorPartitionAssetV1{{ID: vectorPartitionLocalAssetIDV1(0), PartitionID: 0}, {ID: vectorPartitionLocalAssetIDV1(1), PartitionID: 1}},
+		Placements:  []VectorPartitionPlacementV1{{PartitionID: 0, GroupID: "local"}, {PartitionID: 1, GroupID: "remote"}},
+		Assets:      []VectorPartitionAssetV1{{ID: vectorPartitionLocalAssetIDV1(0), PartitionID: 0}, {ID: vectorPartitionLocalAssetIDV1(1), PartitionID: 1}},
 		Memberships: make([]VectorPartitionMembershipV1, remote+1),
 	}
 	for i := 1; i <= remote; i++ {
@@ -113,8 +113,8 @@ func TestVectorPartitionOwnerSearchOpenPlanRefusesInvalidOwnerSelectionV2(t *tes
 	manifest := VectorPartitionManifestV1{
 		Collection: "docs", IndexName: "embedding", IndexDefinitionDigest: "definition",
 		Generation: 7, PartitionCount: 2,
-		Placements: []VectorPartitionPlacementV1{{PartitionID: 0, GroupID: "local"}, {PartitionID: 1, GroupID: "remote"}},
-		Assets: []VectorPartitionAssetV1{{ID: vectorPartitionLocalAssetIDV1(0), PartitionID: 0}},
+		Placements:  []VectorPartitionPlacementV1{{PartitionID: 0, GroupID: "local"}, {PartitionID: 1, GroupID: "remote"}},
+		Assets:      []VectorPartitionAssetV1{{ID: vectorPartitionLocalAssetIDV1(0), PartitionID: 0}},
 		Memberships: []VectorPartitionMembershipV1{{VectorOrdinal: 0, PartitionID: 0}},
 	}
 	for _, owner := range []string{"", "unknown"} {

@@ -44,7 +44,7 @@ jobs:
           git rev-parse HEAD
           go version
           files=(TreeDB/collections/vector_partition_owner*.go TreeDB/nativewire/vector_partition_owner*.go TreeDB/nativewire/vector_partition_generation_source_v1.go TreeDB/nativewire/vector_partition_production_node_v1.go)
-          gofmt -d "${files[@]}"
+          gofmt -d "${files[@]}" || true
           if [[ -n "$(gofmt -l "${files[@]}")" ]]; then
             for file in "${files[@]}"; do
               if [[ -n "$(gofmt -l "$file")" ]]; then

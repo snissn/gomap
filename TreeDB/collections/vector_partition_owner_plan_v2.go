@@ -89,7 +89,7 @@ func NewVectorPartitionGenerationOwnerSearchOpenPlanWithContextV2(ctx context.Co
 		collection: manifest.Collection, indexName: manifest.IndexName,
 		indexDefinitionDigest: manifest.IndexDefinitionDigest, integrityDigest: manifest.IntegrityDigest,
 		owner: groupID, generation: manifest.Generation,
-		source: VectorPartitionSourceIdentityV1{Generation: manifest.SourceGeneration, Checksum: manifest.SourceChecksum, SchemaHash: manifest.SourceSchemaHash, RowCount: manifest.SourceRowCount},
+		source:     VectorPartitionSourceIdentityV1{Generation: manifest.SourceGeneration, Checksum: manifest.SourceChecksum, SchemaHash: manifest.SourceSchemaHash, RowCount: manifest.SourceRowCount},
 		partitions: make(map[uint32]*vectorPartitionOwnerSearchPartitionV2),
 	}
 	for _, anchor := range anchorForLocalPack {
@@ -128,6 +128,9 @@ func NewVectorPartitionGenerationOwnerSearchOpenPlanWithContextV2(ctx context.Co
 			}
 			if member.PartitionID >= manifest.PartitionCount {
 				return fmt.Errorf("%w: owner membership partition", ErrVectorPartitionSearchUnavailable)
+			}
+			if member.VectorOrdinal > uint64(^uint(0)>>1) {
+				return fmt.Errorf("%w: owner membership ordinal overflow", ErrVectorPartitionSearchUnavailable)
 			}
 			anchor, local := anchorForLocalPack[member.PartitionID]
 			if !local {
@@ -172,7 +175,7 @@ func NewVectorPartitionGenerationOwnerSearchOpenPlanWithContextV2(ctx context.Co
 		part := plan.partitions[key.anchor]
 		index := part.start
 		part.start++
-		plan.members[index] = vectorPartitionMembershipSourceV1{ordinal: key.ordinal, kind: kind}
+		plan.members[index] = vectorPartitionMembershipSourceV1{ordinal: int(key.ordinal), kind: kind}
 	}
 	for _, part := range plan.partitions {
 		part.start -= part.home + part.overlap
