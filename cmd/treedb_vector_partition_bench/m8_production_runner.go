@@ -1281,7 +1281,12 @@ func m8ArtifactNameV1(cfg config, fixture fixtureManifest, manifest collections.
 func m8ManifestGraphVariantV1(manifest collections.VectorPartitionManifestV1) string {
 	variant := ""
 	for _, asset := range manifest.Assets {
-		if asset.GraphVariant == "" || variant != "" && asset.GraphVariant != variant {
+		// Section chunks intentionally carry no graph variant; the manifest
+		// binds that identity to each domain's root search-pack asset.
+		if asset.GraphVariant == "" {
+			continue
+		}
+		if variant != "" && asset.GraphVariant != variant {
 			return ""
 		}
 		variant = asset.GraphVariant

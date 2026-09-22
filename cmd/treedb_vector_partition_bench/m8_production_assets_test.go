@@ -104,13 +104,16 @@ func TestM8RetainedGraphVariantUsesManifestIdentityV1(t *testing.T) {
 	def := collections.VectorIndexDefinition{M: 16, EfConstruction: 128}
 	descriptor := m3VariantDescriptorV1{PartitionHNSWM: 32, PartitionHNSWEfC: 256}
 	canonical := collections.VectorPartitionLocalGraphVariantConnectivityPreservingVamanaR64L256Alpha1_2V1
-	manifest := collections.VectorPartitionManifestV1{Assets: []collections.VectorPartitionAssetV1{{GraphVariant: string(canonical)}, {GraphVariant: string(canonical)}}}
+	manifest := collections.VectorPartitionManifestV1{Assets: []collections.VectorPartitionAssetV1{{GraphVariant: string(canonical)}, {}, {GraphVariant: string(canonical)}}}
+	if got := m8ManifestGraphVariantV1(manifest); got != string(canonical) {
+		t.Fatalf("chunked manifest variant=%q want=%q", got, canonical)
+	}
 	got, offline, err := m8RetainedGraphVariantV1(manifest, def, descriptor, false)
 	if err != nil || got != canonical || offline {
 		t.Fatalf("canonical variant=%q offline=%t err=%v", got, offline, err)
 	}
 	historical := collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1
-	manifest.Assets[0].GraphVariant, manifest.Assets[1].GraphVariant = string(historical), string(historical)
+	manifest.Assets[0].GraphVariant, manifest.Assets[2].GraphVariant = string(historical), string(historical)
 	if _, _, err := m8RetainedGraphVariantV1(manifest, def, descriptor, false); err == nil {
 		t.Fatal("historical M18 graph admitted as production by matching M/efConstruction")
 	}
@@ -118,13 +121,16 @@ func TestM8RetainedGraphVariantUsesManifestIdentityV1(t *testing.T) {
 		t.Fatal("historical M18 graph admitted as the final offline control")
 	}
 	baseline := collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationV1
-	manifest.Assets[0].GraphVariant, manifest.Assets[1].GraphVariant = string(baseline), string(baseline)
+	manifest.Assets[0].GraphVariant, manifest.Assets[2].GraphVariant = string(baseline), string(baseline)
 	descriptor.PartitionHNSWM, descriptor.PartitionHNSWEfC = 16, 128
 	got, offline, err = m8RetainedGraphVariantV1(manifest, def, descriptor, true)
 	if err != nil || got != baseline || !offline {
 		t.Fatalf("offline variant=%q offline=%t err=%v", got, offline, err)
 	}
 	manifest.Assets[1].GraphVariant = string(canonical)
+	if got := m8ManifestGraphVariantV1(manifest); got != "" {
+		t.Fatalf("mixed manifest variant=%q", got)
+	}
 	if _, _, err := m8RetainedGraphVariantV1(manifest, def, descriptor, true); err == nil {
 		t.Fatal("mixed graph variants admitted")
 	}
