@@ -741,6 +741,7 @@ type fixedPeerRequestV1 struct {
 	Route    ClusterRouteRequest
 }
 type fixedPeerReplyV1 struct {
+	Diagnostics  *FixedPeerDiagnosticsV1     `json:",omitempty"`
 	Readiness    *FixedPeerReadinessV1       `json:",omitempty"`
 	ReadProof    *raftcluster.ReadIndexProof `json:",omitempty"`
 	NodeID       raftcluster.NodeID
@@ -813,7 +814,7 @@ func (r *FixedPeerTCPRuntimeV1) serve(w http.ResponseWriter, request *http.Reque
 		requests = r.forwards
 	case "/v1/status", "/v1/catalog-read", "/v1/catalog-route", "/v1/catalog-validate", "/v1/group-read-proof":
 		requests = r.reads
-	case "/v1/readiness":
+	case "/v1/readiness", "/v1/diagnostics":
 		requests = r.diagnostics
 	}
 	select {
@@ -843,6 +844,10 @@ func (r *FixedPeerTCPRuntimeV1) serve(w http.ResponseWriter, request *http.Reque
 	switch request.URL.Path {
 	case "/v1/status":
 		reply.Status, err = r.Status(ctx)
+	case "/v1/diagnostics":
+		var report FixedPeerDiagnosticsV1
+		report, err = r.diagnosticsV1(ctx)
+		reply.Diagnostics = &report
 	case "/v1/readiness":
 		var report FixedPeerReadinessV1
 		report, err = r.readinessV1(ctx)
@@ -958,7 +963,7 @@ func (c *FixedPeerTCPClientV1) call(ctx context.Context, node raftcluster.NodeID
 	// Read and mutation admission are independent, globally bounded per
 	// client, and have no unbounded waiter queue. Refusal precedes any send.
 	httpClient, calls := c.http, c.calls
-	if operation == "status" || operation == "catalog-read" || operation == "catalog-route" || operation == "catalog-validate" || operation == "readiness" || operation == "group-read-proof" {
+	if operation == "status" || operation == "catalog-read" || operation == "catalog-route" || operation == "catalog-validate" || operation == "readiness" || operation == "diagnostics" || operation == "group-read-proof" {
 		httpClient, calls = c.readHTTP, c.readCalls
 	}
 	select {

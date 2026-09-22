@@ -17,12 +17,19 @@ SIGINT/SIGTERM closes HTTP admission, Raft providers/transports, FSMs, and DBs.
 The TCP stream layer owns accepted and dialed sockets. Close interrupts their
 idle reads and cancels pending dials before releasing connection pools; it does
 not depend on another node shutting down to release local Raft handlers.
-The initial stdout JSON is local status, **not readiness**.
+The initial stdout JSON identifies the binary and normalized configuration; it is **not readiness**.
+Use `-mode ready` for fresh quorum/apply evidence, `-mode status` for observational
+Raft state, and `-mode diagnostics` for process/disk/network counters. `-mode inspect`
+validates and hashes configuration without opening credentials, stores, listeners
+or cloud resources. `-expected-binary-sha256` refuses a different executable
+before any network/store activity.
 
 The JSON is `nativewire.FixedPeerTCPConfigV1` (strict fields, maximum 1 MiB):
 
 | Field | Contract |
 | --- | --- |
+| `Credentials` | Node-local absolute `TrustRootsFile`, `CertificateFile`, `PrivateKeyFile` PEM paths. The production command requires them; legacy plaintext is an explicit `-trusted-network-test` fixture only. |
+| `ResourceLimits` | Local shared connection/request/byte/proposal/snapshot and per-scope capacities. Omitted fields select bounded defaults; impossible group reservations refuse before stores open. |
 | `ClusterID` | Optional stable bootstrap identity. Empty preserves the legacy configuration digest and manifest encoding; a nonempty value is part of both. It does not authorize topology edits. |
 | `NodeID` | Unique local identity, present in `Nodes`; catalog membership is optional. |
 | `Nodes` | Shared list of `{ID, Address}` private RPC endpoints. |
@@ -120,11 +127,65 @@ bounds, not tuned throughput targets. Authoritative catalog handlers use a local
 Raft fence directly and never issue a nested catalog HTTP request while holding
 a read slot. Inventory growth alone opens no peer connections or remote stores.
 
-Both the private HTTP protocol and HashiCorp TCP transport require a **trusted,
-isolated private network**. Configuration digests detect mismatches; they are not
-credentials or cryptographic peer authentication. Do not expose these listeners
-to untrusted clients or the public internet. TLS/authentication, live membership,
-rebalance, fault qualification, and multi-host/cloud deployment are not provided.
+Authenticated configuration uses TLS 1.3 with mutual certificate verification on
+control, Raft, snapshots, native-wire and shard TCP. A certificate carries exactly
+one `spiffe://treedb/cluster/<escaped-cluster>/node/<escaped-node>` URI plus the
+normal SAN and client/server EKUs. Trust, validity, exact cluster/node, destination
+identity and group membership are checked; configuration digests remain mismatch
+detection, not credentials. Advertised endpoints must be canonical private or
+loopback IPs. No plaintext fallback, TLS session resumption or mutation retry is
+introduced. Certificate-chain expiry bounds existing connection deadlines.
+
+Use the runtime's `PeerTransportV1()` for every local native/shard listener and
+coordinator/client (`NewFixedPeerTCPClientWithTransportV1` for borrowed control
+clients). A second independently created handle is a second budget: do not create
+one per listener. Borrowed client close closes its HTTP pools, not the node handle.
+Credential paths and limits stay local; authenticated mode and cluster identity
+are bound into the shared digest. Replace credential contents at the same paths
+and restart one compatible voter at a time; there is no live credential watcher.
+Never edit a persistent manifest to downgrade to plaintext.
+
+The shared default budget is 512 connections, 512 admitted requests, 256 MiB
+inflight bytes, 64 proposals and four snapshots, with per-scope defaults of 64
+connections, 64 requests, 64 MiB, at most eight proposals, and one snapshot.
+Reservations preserve control/read/diagnostic progress and separate hosted groups;
+all configured reservations must fit the declared node capacity. Raise the
+explicit capacity when the declared inventory requires it. Admission rejects
+without queues. Native frames default to 1 MiB; shard requests to 64 KiB, 32
+partitions and top-k 256. These bounds do not enable any otherwise unsupported
+vector operation. The standalone shard dispatcher additionally caps 64 aggregate
+active/idle/pending sockets and 256 requests, with 32 requests per group and one
+reserved request per declared group. Only idle sockets are evicted.
+
+Raft MessagePack lengths, nesting and containers are checked before upstream
+allocation. Bounded connection buffers and request copies are charged before
+consumption. Secure append batches currently carry at most one log entry;
+HashiCorp pipelining remains enabled with budget leases held through real futures.
+This is a throughput qualification constraint, not a claim that bulk catch-up is
+fast. Incoming/outgoing snapshot admission and a per-group snapshot slot last
+through actual installation/response, so stalled transfers cannot occupy all
+snapshot capacity. Byte accounting bounds admitted transport/proposal/snapshot
+buffers; it is not a hard bound on kernel socket buffers, caller-owned values or
+the whole storage-engine heap. P2/storage working-set qualification remains separate.
+
+Secure persistent roots contain matching `fixed-peer-storage-v1.json` records
+before stores open. Loss of one paired root, nonempty roots without identity,
+mismatched pairs or overlapping resolved paths refuse startup. Reopened nodes
+never bootstrap a new Raft group. Losing **both** roots is indistinguishable from
+fresh empty storage without deployment inventory; restore/replacement must follow
+the external volume identity and backup runbook. A partial first initialization
+also fails closed. Consumers need only their persistent Raft/config root.
+
+`BeginDrainV1` refuses new public mutations/native/shard work while preserving
+consensus and observational control operations; `Close` drains HTTP and interrupts
+all owned streams before provider shutdown. Readiness obtains a fresh catalog
+fence and a leader ReadIndex proof for each locally hosted data group, and checks
+local durable/consensus applied progress. It is never a reusable read capability
+or proof that an ANN generation is ready. A group with no durable applied command
+remains unready. One unavailable hosted group makes the node unready.
+
+See the [EC2 operations guide](../operations/fixed-peer-ec2.md) for deployment,
+paired backup/restore, rolling changes and actual network/AZ evidence boundaries.
 
 `Status` reports configured members/features/endpoints, leader/term, Raft commit,
 Raft applied, durable FSM applied, catalog epoch/digest, shared config digest, and
@@ -222,3 +283,30 @@ and representative horizontal scaling remain in #4250, with fault evidence in
 
 The initial matched results and per-node samples are retained in
 [P1 sparse catalog evidence](../evidence/sparse-catalog-4807/README.md).
+
+## Authenticated transport and operations qualification
+
+The `peer-security-qualification.yml` workflow tests the exact PR head, including
+unknown/expired/wrong-cluster peers, plaintext native/shard denial, certificate
+rotation/reopen/downgrade refusal, pre-decode exhaustion, global idle-socket bounds,
+hot-group progress, a stalled real snapshot, durable replicated writes and
+pipeline shutdown under the race detector, quorum readiness, drain, and missing
+persistent roots. The existing retained M8 topology test remains a guardrail.
+
+`PeerNodeResourceStatsV1.Current/Peak/Rejected` indices are connections, requests,
+inflight bytes, proposals and snapshots. `NetworkStatsV1` is a diagnostics-only
+snapshot of a bounded startup IP inventory plus one unknown bucket. It records
+raw TCP stream bytes, including TLS handshakes, and asserts no authenticated
+identity from the IP address. `DiagnosticsV1` reuses the existing process-runtime
+counter schema, reports Linux process CPU, current/high-water RSS, descriptors,
+filesystem free/total capacity without corpus directory walks, and host interface
+counters. Missing/unsupported counters are listed in `Unavailable`. Compare
+leader/commit/Raft-applied/durable-applied observations to compute distribution and
+lag; admission Current/Peak/Rejected expose queued-work avoidance and overload.
+
+Public-path plaintext/TLS measurements use the same existing durable remote-owner
+create operation, four real processes and three repeats for both sparse and
+40-entry inventories. They include parent allocations, aggregate child allocations
+and per-node RSS/FDs/goroutines. The dormant inventory is not a 40-machine run.
+See [P7 evidence](../evidence/peer-security-4813/README.md); no EC2, ANN-quality or
+horizontal-speedup acceptance follows from these local measurements.

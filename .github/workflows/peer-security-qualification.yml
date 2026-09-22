@@ -11,6 +11,8 @@ on:
       - 'TreeDB/nativewire/listener.go'
       - 'TreeDB/nativewire/client.go'
       - 'TreeDB/nativewire/codec.go'
+      - 'cmd/treedb-fixed-peer/**'
+      - 'scripts/treedb_peer_*.py'
       - '.github/workflows/peer-security-qualification.yml'
   workflow_dispatch:
 
@@ -45,10 +47,15 @@ jobs:
       - name: Credential-free peer regression
         if: ${{ !cancelled() }}
         run: go test ./TreeDB/nativewire -run 'Test(UnknownPeerCannotSubmitOrInstallSnapshotV1|PeerSecurity|PeerCredential)' -count=3 -timeout=4m -v
+      - name: Operational command and deployment contract
+        if: ${{ !cancelled() }}
+        run: |
+          go test -race ./cmd/treedb-fixed-peer -count=1 -timeout=2m
+          python3 -m unittest discover -s scripts -p 'treedb_peer_*test.py' -v
       - name: Formatting
         if: ${{ !cancelled() }}
         run: |
-          files="TreeDB/nativewire/peer_*.go TreeDB/nativewire/vector_partition_global_connection_budget_v1_test.go TreeDB/nativewire/vector_partition_shard_search_tcp_v1.go TreeDB/nativewire/fixed_peer_tcp_runtime_v1.go TreeDB/nativewire/fixed_peer_security_v1_test.go TreeDB/nativewire/fixed_peer_tcp_stream_v1.go TreeDB/nativewire/fixed_peer_sparse_catalog_v1.go TreeDB/nativewire/server.go TreeDB/nativewire/listener.go TreeDB/nativewire/client.go TreeDB/nativewire/codec.go TreeDB/nativewire/sparse_catalog_bench_test.go"
+          files="TreeDB/nativewire/peer_*.go TreeDB/nativewire/vector_partition_global_connection_budget_v1_test.go TreeDB/nativewire/vector_partition_shard_search_tcp_v1.go TreeDB/nativewire/fixed_peer_tcp_runtime_v1.go TreeDB/nativewire/fixed_peer_security_v1_test.go TreeDB/nativewire/fixed_peer_tcp_stream_v1.go TreeDB/nativewire/fixed_peer_sparse_catalog_v1.go TreeDB/nativewire/server.go TreeDB/nativewire/listener.go TreeDB/nativewire/client.go TreeDB/nativewire/codec.go TreeDB/nativewire/sparse_catalog_bench_test.go cmd/treedb-fixed-peer/*.go"
           gofmt -d $files || true
           bad=$(gofmt -l $files)
           if [ -n "$bad" ]; then

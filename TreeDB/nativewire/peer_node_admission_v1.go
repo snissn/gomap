@@ -65,6 +65,8 @@ type peerNodeAdmissionV1 struct {
 	cancel       context.CancelFunc
 	read         atomic.Uint64
 	written      atomic.Uint64
+	network      map[string]*peerIPBytesV1
+	unknown      peerIPBytesV1
 	draining     atomic.Bool
 }
 
@@ -125,6 +127,7 @@ func newPeerNodeAdmissionV1(config FixedPeerTCPConfigV1) (*peerNodeAdmissionV1, 
 		}
 	}
 	a.ctx, a.cancel = context.WithCancel(context.Background())
+	a.network = peerNetworkInventoryV1(config)
 	return a, nil
 }
 
@@ -215,7 +218,7 @@ func (a *peerNodeAdmissionV1) dial(ctx context.Context, scope string, dial func(
 }
 
 func (a *peerNodeAdmissionV1) track(raw net.Conn, lease peerResourceLeaseV1) (net.Conn, error) {
-	conn := &peerNodeConnV1{Conn: raw, owner: a, lease: lease}
+	conn := &peerNodeConnV1{Conn: raw, owner: a, lease: lease, network: a.networkForV1(raw.RemoteAddr())}
 	a.mu.Lock()
 	if a.stats.Closed {
 		a.mu.Unlock()
@@ -277,10 +280,11 @@ func (a *peerNodeAdmissionV1) close() error {
 
 type peerNodeConnV1 struct {
 	net.Conn
-	owner *peerNodeAdmissionV1
-	lease peerResourceLeaseV1
-	once  sync.Once
-	err   error
+	owner   *peerNodeAdmissionV1
+	lease   peerResourceLeaseV1
+	network *peerIPBytesV1
+	once    sync.Once
+	err     error
 }
 
 func (c *peerNodeConnV1) Close() error {
@@ -297,11 +301,13 @@ func (c *peerNodeConnV1) Close() error {
 func (c *peerNodeConnV1) Read(p []byte) (int, error) {
 	n, err := c.Conn.Read(p)
 	c.owner.read.Add(uint64(n))
+	c.network.read.Add(uint64(n))
 	return n, err
 }
 func (c *peerNodeConnV1) Write(p []byte) (int, error) {
 	n, err := c.Conn.Write(p)
 	c.owner.written.Add(uint64(n))
+	c.network.written.Add(uint64(n))
 	return n, err
 }
 

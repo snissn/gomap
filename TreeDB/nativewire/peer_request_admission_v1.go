@@ -42,7 +42,7 @@ func peerControlScopeV1(operation string) string {
 	switch strings.TrimPrefix(operation, "/v1/") {
 	case "status", "catalog-read", "catalog-route", "catalog-validate", "group-read-proof":
 		return "control-read"
-	case "readiness":
+	case "readiness", "diagnostics":
 		return "control-diagnostics"
 	case "forward":
 		return "control-forward"
