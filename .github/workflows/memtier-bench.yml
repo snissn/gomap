@@ -1,0 +1,78 @@
+name: "memtier: perf matrix"
+
+on:
+  workflow_dispatch:
+    inputs:
+      keys_list:
+        description: "Comma-separated key counts"
+        required: false
+        default: "100000"
+      clients_list:
+        description: "Comma-separated clients per thread"
+        required: false
+        default: "50"
+      threads_list:
+        description: "Comma-separated thread counts"
+        required: false
+        default: "4"
+      pipeline_list:
+        description: "Comma-separated pipeline depths"
+        required: false
+        default: "1,16"
+      data_list:
+        description: "Comma-separated data sizes"
+        required: false
+        default: "128,1024"
+      ratio_list:
+        description: "Comma-separated ratios (e.g. 1:1)"
+        required: false
+        default: "1:1"
+      keypattern_list:
+        description: "Comma-separated key patterns (e.g. R:R)"
+        required: false
+        default: "R:R"
+      test_time:
+        description: "Seconds per run"
+        required: false
+        default: "10"
+
+permissions:
+  contents: read
+
+jobs:
+  bench:
+    name: memtier (linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: |
+            go.sum
+
+      - name: Run memtier bench
+        env:
+          USE_DOCKER: "1"
+          MEMTIER_USE_DOCKER: "1"
+          BENCH_SERVERS: "hashdb,treedb,redis,valkey,dragonfly"
+          KEYS_LIST: ${{ inputs.keys_list }}
+          CLIENTS_LIST: ${{ inputs.clients_list }}
+          THREADS_LIST: ${{ inputs.threads_list }}
+          PIPELINE_LIST: ${{ inputs.pipeline_list }}
+          DATA_LIST: ${{ inputs.data_list }}
+          RATIO_LIST: ${{ inputs.ratio_list }}
+          KEYPATTERN_LIST: ${{ inputs.keypattern_list }}
+          TEST_TIME: ${{ inputs.test_time }}
+        run: ./scripts/memtier_bench.sh
+
+      - name: Upload memtier results
+        uses: actions/upload-artifact@v4
+        with:
+          name: memtier_bench_results
+          path: artifacts/memtier_bench_results.*

@@ -1,0 +1,48 @@
+File: treedb_vector_partition_bench
+Build ID: 6e601df17e91fc834d40505729b45018b8011783
+Type: delay
+Time: 2026-08-09 14:09:33 HST
+Showing nodes accounting for 21949.25us, 99.52% of 22055.44us total
+Dropped 72 nodes (cum <= 110.28us)
+Showing top 40 nodes out of 47
+      flat  flat%   sum%        cum   cum%
+21949.25us 99.52% 99.52% 21949.25us 99.52%  sync.(*Mutex).Unlock (partial-inline)
+         0     0% 99.52% 21428.72us 97.16%  github.com/hashicorp/raft.(*raftState).goFunc.func1
+         0     0% 99.52% 11078.59us 50.23%  github.com/hashicorp/raft-boltdb/v2.(*BoltStore).GetLog
+         0     0% 99.52% 11078.59us 50.23%  github.com/hashicorp/raft.(*Raft).pipelineReplicate
+         0     0% 99.52% 11078.59us 50.23%  github.com/hashicorp/raft.(*Raft).pipelineSend
+         0     0% 99.52% 11078.59us 50.23%  github.com/hashicorp/raft.(*Raft).replicate
+         0     0% 99.52% 11078.59us 50.23%  github.com/hashicorp/raft.(*Raft).setupAppendEntries
+         0     0% 99.52% 11078.59us 50.23%  github.com/hashicorp/raft.(*Raft).startStopReplication.func1
+         0     0% 99.52% 11072.42us 50.20%  github.com/hashicorp/raft.(*Raft).setPreviousLog
+         0     0% 99.52% 10932.55us 49.57%  github.com/hashicorp/raft-boltdb/v2.(*BoltStore).GetLog.deferwrap2
+         0     0% 99.52% 10932.55us 49.57%  go.etcd.io/bbolt.(*DB).removeTx
+         0     0% 99.52% 10932.55us 49.57%  go.etcd.io/bbolt.(*Tx).Rollback
+         0     0% 99.52% 10932.55us 49.57%  go.etcd.io/bbolt.(*Tx).close
+         0     0% 99.52% 10932.55us 49.57%  go.etcd.io/bbolt.(*Tx).nonPhysicalRollback
+         0     0% 99.52% 10266.22us 46.55%  github.com/hashicorp/raft-boltdb/v2.(*BoltStore).StoreLogs
+         0     0% 99.52% 10266.22us 46.55%  github.com/hashicorp/raft.(*Raft).run
+         0     0% 99.52% 10263.26us 46.53%  github.com/hashicorp/raft.(*Raft).run-fm
+         0     0% 99.52% 10259.10us 46.52%  go.etcd.io/bbolt.(*Tx).Commit
+         0     0% 99.52% 10237.66us 46.42%  github.com/hashicorp/raft.(*Raft).dispatchLogs
+         0     0% 99.52% 10237.66us 46.42%  github.com/hashicorp/raft.(*Raft).leaderLoop
+         0     0% 99.52% 10237.66us 46.42%  github.com/hashicorp/raft.(*Raft).runLeader
+         0     0% 99.52% 10233.50us 46.40%  go.etcd.io/bbolt.(*Tx).writeMeta
+         0     0% 99.52%   523.49us  2.37%  github.com/snissn/gomap/TreeDB/collections.(*Collection).OpenVectorPartitionLocalSearcherForGenerationSearchPlanWithContextV1
+         0     0% 99.52%   523.49us  2.37%  github.com/snissn/gomap/TreeDB/collections.(*Collection).openVectorPartitionLocalSearcherForPreparedPartitionWithContextV1
+         0     0% 99.52%   523.49us  2.37%  github.com/snissn/gomap/TreeDB/collections.(*columnVectorGraphAdjacencyDirectSources).Close
+         0     0% 99.52%   523.49us  2.37%  github.com/snissn/gomap/TreeDB/collections.(*columnVectorGraphLayer0AdjacencyDirectSource).Close
+         0     0% 99.52%   523.49us  2.37%  github.com/snissn/gomap/TreeDB/collections.(*columnVectorGraphPhysicalRowReader).Close
+         0     0% 99.52%   523.49us  2.37%  github.com/snissn/gomap/TreeDB/collections.(*columnVectorGraphPhysicalRowReader).releaseSharedPreparedSearch
+         0     0% 99.52%   523.49us  2.37%  github.com/snissn/gomap/TreeDB/collections.(*columnVectorGraphSharedPreparedSearch).close
+         0     0% 99.52%   523.49us  2.37%  github.com/snissn/gomap/TreeDB/collections.(*columnVectorGraphSharedPreparedSearchRef).release
+         0     0% 99.52%   523.49us  2.37%  github.com/snissn/gomap/TreeDB/collections.(*columnVectorGraphSharedPreparedSearchRef).release.func1
+         0     0% 99.52%   523.49us  2.37%  github.com/snissn/gomap/TreeDB/collections.releaseMappedResourceHandle (inline)
+         0     0% 99.52%   523.49us  2.37%  github.com/snissn/gomap/TreeDB/internal/mappedresource.(*Handle).Release
+         0     0% 99.52%   523.49us  2.37%  github.com/snissn/gomap/TreeDB/internal/mappedresource.(*Manager).AcquireFileRange.func1
+         0     0% 99.52%   523.49us  2.37%  github.com/snissn/gomap/TreeDB/internal/mappedresource.munmapFile (inline)
+         0     0% 99.52%   523.49us  2.37%  github.com/snissn/gomap/TreeDB/nativewire.(*VectorPartitionProductionTopologyV1).serve.func1.2
+         0     0% 99.52%   523.49us  2.37%  github.com/snissn/gomap/TreeDB/nativewire.(*VectorPartitionShardSearchServiceV1).Search
+         0     0% 99.52%   523.49us  2.37%  github.com/snissn/gomap/TreeDB/nativewire.(*collectionVectorPartitionGenerationCacheV1).openPartition
+         0     0% 99.52%   523.49us  2.37%  github.com/snissn/gomap/TreeDB/nativewire.(*collectionVectorPartitionGenerationLeaseV1).OpenPartition
+         0     0% 99.52%   523.49us  2.37%  github.com/snissn/gomap/TreeDB/nativewire.(*vectorPartitionProductionNodePinnedGenerationV1).OpenPartition

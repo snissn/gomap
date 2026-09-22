@@ -1,0 +1,48 @@
+File: treedb_vector_partition_bench
+Build ID: 6e601df17e91fc834d40505729b45018b8011783
+Type: delay
+Time: 2026-08-09 14:07:00 HST
+Showing nodes accounting for 2684.78s, 100% of 2684.86s total
+Dropped 87 nodes (cum <= 13.42s)
+Showing top 40 nodes out of 63
+      flat  flat%   sum%        cum   cum%
+  2347.25s 87.43% 87.43%   2347.25s 87.43%  runtime.selectgo
+         0     0% 87.43%    798.24s 29.73%  main.(*vectorPartitionOperationsTCPServerV1).serve
+         0     0% 87.43%    798.24s 29.73%  main.(*vectorPartitionOperationsTCPServerV1).start.func1.1
+         0     0% 87.43%    798.24s 29.73%  github.com/snissn/gomap/TreeDB/vectorpartition.(*OperationsV1).Search
+         0     0% 87.43%    658.21s 24.52%  github.com/snissn/gomap/TreeDB/internal/raftcluster.(*CatalogMetaRaftProviderV1).LinearizableCatalogMetaAppliedIndexV1
+         0     0% 87.43%    622.79s 23.20%  github.com/snissn/gomap/TreeDB/internal/raftcluster.waitHashicorpRaftFuture
+         0     0% 87.43%    622.33s 23.18%  github.com/hashicorp/raft.(*deferError).Error
+         0     0% 87.43%    622.33s 23.18%  github.com/snissn/gomap/TreeDB/internal/raftcluster.waitHashicorpRaftFuture.func1
+         0     0% 87.43%    536.33s 19.98%  github.com/snissn/gomap/TreeDB/nativewire.(*VectorPartitionPublicBackendV1).SearchVectorPartitionV1
+         0     0% 87.43%    536.33s 19.98%  github.com/snissn/gomap/TreeDB/vectorpartition.(*ServiceV1).Search
+         0     0% 87.43%    536.33s 19.98%  github.com/snissn/gomap/TreeDB/nativewire.(*VectorPartitionCoordinatorV1).Search
+         0     0% 87.43%    511.10s 19.04%  github.com/hashicorp/raft.(*raftState).goFunc.func1
+         0     0% 87.43%    396.30s 14.76%  github.com/snissn/gomap/TreeDB/nativewire.(*LinearizableCatalogVectorPartitionLifecycleAuthorityV1).ValidateVectorPartitionGenerationSearchV1
+         0     0% 87.43%    321.91s 11.99%  github.com/snissn/gomap/TreeDB/nativewire.vectorPartitionShardSearchTCPInterruptOnCancelV1.func2
+         0     0% 87.43%    267.07s  9.95%  github.com/snissn/gomap/TreeDB/nativewire.(*VectorPartitionCoordinatorV1).validateReplicatedLifecycle
+         0     0% 87.43%    261.91s  9.76%  github.com/snissn/gomap/TreeDB/nativewire.(*VectorPartitionPublicBackendV1).OperationsHealthV1
+         0     0% 87.43%    261.91s  9.76%  github.com/snissn/gomap/TreeDB/nativewire.(*VectorPartitionPublicBackendV1).OperationsHealthV1-fm
+         0     0% 87.43%    261.91s  9.76%  github.com/snissn/gomap/TreeDB/vectorpartition.(*OperationsV1).Status
+         0     0% 87.43%    252.32s  9.40%  github.com/snissn/gomap/TreeDB/nativewire.(*VectorPartitionCoordinatorV1).dispatch
+   252.32s  9.40% 96.82%    252.32s  9.40%  sync.(*WaitGroup).Wait
+         0     0% 96.82%    141.76s  5.28%  github.com/snissn/gomap/TreeDB/nativewire.(*VectorPartitionProductionTopologyV1).serve.func1.2
+         0     0% 96.82%    141.76s  5.28%  github.com/snissn/gomap/TreeDB/nativewire.VectorPartitionShardSearchTCPServerV1.ServeConn
+         0     0% 96.82%    141.75s  5.28%  github.com/snissn/gomap/TreeDB/nativewire.(*VectorPartitionShardSearchServiceV1).Search
+         0     0% 96.82%    138.59s  5.16%  github.com/snissn/gomap/TreeDB/nativewire.(*CollectionVectorPartitionGenerationSourceV1).PinVectorPartitionGenerationV1
+         0     0% 96.82%    138.59s  5.16%  github.com/snissn/gomap/TreeDB/nativewire.(*vectorPartitionProductionNodeGenerationSourceV1).PinVectorPartitionGenerationV1
+         0     0% 96.82%    138.59s  5.16%  github.com/snissn/gomap/TreeDB/nativewire.vectorPartitionProductionNodeGenerationSourceV1.PinVectorPartitionGenerationV1
+         0     0% 96.82%    129.23s  4.81%  github.com/snissn/gomap/TreeDB/nativewire.(*CollectionVectorPartitionGenerationSourceV1).validateActive
+         0     0% 96.82%    114.08s  4.25%  github.com/hashicorp/raft.(*Raft).pipelineDecode
+         0     0% 96.82%    114.08s  4.25%  github.com/hashicorp/raft.(*Raft).pipelineReplicate.func1
+         0     0% 96.82%    113.95s  4.24%  github.com/hashicorp/raft.(*inmemPipeline).decodeResponses
+         0     0% 96.82%    113.95s  4.24%  github.com/hashicorp/raft.newInmemPipeline.gowrap1
+         0     0% 96.82%    113.82s  4.24%  github.com/hashicorp/raft.(*Raft).pipelineReplicate
+         0     0% 96.82%    113.82s  4.24%  github.com/hashicorp/raft.(*Raft).replicate
+         0     0% 96.82%    113.82s  4.24%  github.com/hashicorp/raft.(*Raft).startStopReplication.func1
+         0     0% 96.82%    111.33s  4.15%  github.com/hashicorp/raft.(*Raft).heartbeat
+         0     0% 96.82%    111.33s  4.15%  github.com/hashicorp/raft.(*Raft).replicate.func1
+         0     0% 96.82%     95.46s  3.56%  github.com/hashicorp/raft.(*Raft).run
+         0     0% 96.82%     95.46s  3.56%  github.com/hashicorp/raft.(*Raft).run-fm
+    85.20s  3.17%   100%     85.20s  3.17%  runtime.chanrecv1
+         0     0%   100%     76.40s  2.85%  github.com/hashicorp/raft.(*Raft).runFSM

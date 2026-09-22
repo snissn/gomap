@@ -1,0 +1,42 @@
+File: treedb_vector_partition_bench
+Type: delay
+Showing nodes accounting for 17974624.98us, 92.90% of 19348540.02us total
+Dropped 499 nodes (cum <= 96742.70us)
+      flat  flat%   sum%        cum   cum%
+         0     0%     0% 17658552.81us 91.27%  github.com/hashicorp/raft.(*raftState).goFunc.func1
+10092760.34us 52.16% 52.16% 10092782.67us 52.16%  runtime.chansend1
+         0     0% 52.16% 9987625.94us 51.62%  github.com/hashicorp/raft.(*Raft).run
+         0     0% 52.16% 8076118.49us 41.74%  github.com/hashicorp/raft.(*Raft).leaderLoop
+         0     0% 52.16% 8076118.49us 41.74%  github.com/hashicorp/raft.(*Raft).runLeader
+         0     0% 52.16% 7413006.05us 38.31%  github.com/hashicorp/raft.(*Raft).runFSM
+         0     0% 52.16% 7412919.14us 38.31%  github.com/hashicorp/raft.(*Raft).runFSM.func1
+         0     0% 52.16% 7412919.14us 38.31%  github.com/hashicorp/raft.(*Raft).runFSM.func1.1
+5996609.58us 30.99% 83.16% 5996609.58us 30.99%  runtime.selectnbrecv
+         0     0% 83.16% 1911507.45us  9.88%  github.com/hashicorp/raft.(*Raft).runFollower
+  644.48us 0.0033% 83.16% 1911310.59us  9.88%  github.com/hashicorp/raft.(*Raft).appendEntries
+         0     0% 83.16% 1911310.59us  9.88%  github.com/hashicorp/raft.(*Raft).processRPC
+1461207.70us  7.55% 90.71% 1461647.83us  7.55%  runtime.selectgo
+         0     0% 90.71% 1378107.13us  7.12%  github.com/hashicorp/raft.(*Raft).appendEntries.func1
+    1.73us 8.9e-06% 90.71% 578602.05us  2.99%  github.com/hashicorp/raft.(*Raft).processLogs
+423284.48us  2.19% 92.90% 423287.75us  2.19%  runtime.selectnbsend
+         0     0% 92.90% 314144.45us  1.62%  github.com/hashicorp/raft.(*Raft).dispatchLogs
+         0     0% 92.90% 293544.08us  1.52%  main.(*vectorPartitionOperationsTCPServerV1).serve
+         0     0% 92.90% 293544.08us  1.52%  main.(*vectorPartitionOperationsTCPServerV1).start.func1.1
+         0     0% 92.90% 293232.46us  1.52%  github.com/snissn/gomap/TreeDB/vectorpartition.(*OperationsV1).Search
+         0     0% 92.90% 274153.98us  1.42%  github.com/snissn/gomap/TreeDB/internal/raftcluster.(*CatalogMetaRaftProviderV1).LinearizableCatalogMetaAppliedIndexV1
+         0     0% 92.90% 234349.94us  1.21%  github.com/hashicorp/raft.(*Raft).pipelineReplicate
+         0     0% 92.90% 234349.94us  1.21%  github.com/hashicorp/raft.(*Raft).replicate
+         0     0% 92.90% 234349.94us  1.21%  github.com/hashicorp/raft.(*Raft).startStopReplication.func1
+    0.51us 2.6e-06% 92.90% 234202.55us  1.21%  github.com/hashicorp/raft.(*Raft).pipelineSend
+         0     0% 92.90% 232734.59us  1.20%  github.com/hashicorp/raft.(*inmemPipeline).AppendEntries
+         0     0% 92.90% 231057.73us  1.19%  github.com/snissn/gomap/TreeDB/nativewire.(*VectorPartitionPublicBackendV1).SearchVectorPartitionV1
+         0     0% 92.90% 231057.73us  1.19%  github.com/snissn/gomap/TreeDB/vectorpartition.(*ServiceV1).Search
+  102.40us 0.00053% 92.90% 221258.56us  1.14%  github.com/snissn/gomap/TreeDB/nativewire.(*VectorPartitionCoordinatorV1).Search
+         0     0% 92.90% 213058.30us  1.10%  github.com/hashicorp/raft.(*Raft).VerifyLeader
+         0     0% 92.90% 212168.96us  1.10%  github.com/snissn/gomap/TreeDB/nativewire.(*LinearizableCatalogVectorPartitionLifecycleAuthorityV1).ValidateVectorPartitionGenerationSearchV1
+         0     0% 92.90% 202903.80us  1.05%  github.com/snissn/gomap/TreeDB/nativewire.(*VectorPartitionProductionTopologyV1).serve.func1.2
+         0     0% 92.90% 202903.80us  1.05%  github.com/snissn/gomap/TreeDB/nativewire.VectorPartitionShardSearchTCPServerV1.ServeConn
+         0     0% 92.90% 200827.20us  1.04%  github.com/snissn/gomap/TreeDB/nativewire.(*VectorPartitionCoordinatorV1).validateReplicatedLifecycle
+   13.76us 7.1e-05% 92.90% 140490.05us  0.73%  github.com/hashicorp/raft.(*Raft).verifyLeader
+         0     0% 92.90% 132844.80us  0.69%  github.com/snissn/gomap/TreeDB/nativewire.(*VectorPartitionShardSearchServiceV1).Search
+         0     0% 92.90% 106104.64us  0.55%  github.com/hashicorp/raft.(*Raft).Barrier

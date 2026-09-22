@@ -1,0 +1,505 @@
+package collections
+
+import (
+	"context"
+	"errors"
+	"time"
+
+	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
+	"github.com/snissn/gomap/TreeDB/internal/workstats"
+)
+
+// ColumnGraphServingOptions is explicit process-local admission for the selected
+// durable typed column_graph route. Reapply it after opening a DB. Limits are
+// immutable across collection handles until that DB closes; zero is not a default.
+type ColumnGraphServingOptions struct {
+	Publication                ColumnGraphPublicationLimits
+	Owners                     ColumnGraphReadOwnerLimits
+	CandidateOutput            ColumnGraphCandidateOutputLimits
+	Maintenance                ColumnGraphMaintenanceLimits
+	Filter                     ColumnGraphFilterLimits
+	FoldRows, SearchCandidates int
+}
+
+type ColumnGraphPublicationLimits = typedGraphPublicationLimits
+type ColumnGraphReadOwnerLimits = typedGraphReadOwnerLimits
+type ColumnGraphPhysicalResourceLimits = typedGraphPhysicalResourceLimits
+type ColumnGraphColdLimits = typedGraphColdLimits
+type ColumnGraphCandidateOutputLimits = typedGraphFoldAssetLimits
+type ColumnGraphMaintenanceLimits = typedGraphWorkEpochLimits
+
+// ColumnGraphFilterLimits bounds cumulative preparation work, including selective
+// discovery and any full fallback. MappingWork admits ordinal-mapping bounds,
+// secondary point requests, temporary encoded-prefix/key payload byte bounds,
+// and cached-base inverse/predicate/escaped-value and exact-rank scan bounds;
+// it is not a comparison count or a total Go heap bound.
+type ColumnGraphFilterLimits = typedGraphFilterLimits
+type ColumnGraphMaintenanceStats = typedGraphWorkEpochStats
+
+// Backpressure sentinels preserve distinct caller actions: fold/maintenance,
+// release held readers, or reduce query work. Use errors.Is, not error text.
+var (
+	ErrColumnGraphFoldNeeded   = errTypedGraphOverlayFoldNeeded
+	ErrColumnGraphOwnerBudget  = errTypedGraphOwnerBudget
+	ErrColumnGraphSearchBudget = errTypedGraphSearchBudget
+)
+
+// ValidateColumnGraphServingOptions rejects incomplete explicit admission
+// limits with ErrColumnGraphSearchBudget. It performs no I/O and does not
+// select a serving policy.
+func ValidateColumnGraphServingOptions(opts ColumnGraphServingOptions) error {
+	p, o, f, m := opts.Publication, opts.Owners, opts.Filter, opts.Maintenance
+	if p.Rows <= 0 || p.Tombstones <= 0 || p.ValueSlots <= 0 || p.OwnedBytes <= 0 || p.EncodedOutputBytes <= 0 || !typedGraphReadOwnerLimitsValid(o) || opts.CandidateOutput.Bytes <= 0 || opts.CandidateOutput.AppenderAttempts <= 0 || opts.FoldRows <= 0 || opts.SearchCandidates <= 0 || f.SourceIDs <= 0 || f.SourceBytes <= 0 || f.RetainedBytes <= 0 || f.MappingWork <= 0 || f.InspectedEntries <= 0 || m.NativeEntries <= 0 || m.ColumnSegments <= 0 || m.ManifestRecords <= 0 || m.LifecycleEntries <= 0 || m.NativeBytes <= 0 || m.ColumnBytes <= 0 || m.ManifestBytes <= 0 || m.RetainedBytes <= 0 || m.PagerPages == 0 {
+		return errTypedGraphSearchBudget
+	}
+	return nil
+}
+
+type typedGraphServingPolicy struct {
+	index   string
+	options ColumnGraphServingOptions
+}
+
+func (c *Collection) typedGraphServingPolicy() *typedGraphServingPolicy {
+	if c == nil || c.db == nil {
+		return nil
+	}
+	coord := c.collectionSchemaCoordinator()
+	if coord == nil {
+		return nil
+	}
+	return coord.typedGraphServing.Load()
+}
+
+// EnsureColumnGraphServing performs bounded cold reconciliation and admission.
+// The declared typed graph must have been built explicitly. Repeated ensure on
+// unchanged authority is idempotent; searches never invoke this operation.
+func (c *Collection) EnsureColumnGraphServing(ctx context.Context, index string, opts ColumnGraphServingOptions) error {
+	if ctx == nil || c == nil || c.db == nil || !c.db.CommandWALEnabled() {
+		return ErrHybridSearchUnsupported
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := ValidateIndexName(index); err != nil {
+		return err
+	}
+	if err := ValidateColumnGraphServingOptions(opts); err != nil {
+		return err
+	}
+	p, o, m := opts.Publication, opts.Owners, opts.Maintenance
+	coord := c.collectionSchemaCoordinator()
+	policy := &typedGraphServingPolicy{index: index, options: opts}
+	if old := coord.typedGraphServing.Load(); old != nil && *old != *policy {
+		return ErrConcurrentMutation
+	}
+	def, err := c.declaredVectorIndexDefinition(index)
+	if err != nil {
+		return err
+	}
+	if def.Strategy != VectorIndexStrategyColumnGraph {
+		return ErrHybridSearchUnsupported
+	}
+	if !coord.typedGraphServing.CompareAndSwap(nil, policy) {
+		if old := coord.typedGraphServing.Load(); old == nil || *old != *policy {
+			return ErrConcurrentMutation
+		}
+	}
+	if !rootpublication.StableRelativeNamespaceSupported() {
+		return errors.Join(errColumnVectorGraphSharedPreparedSearchNotEligible, rootpublication.ErrNamespacePersistenceUnsupported)
+	}
+	before := coord.typedPublication.Load()
+	wasReady := before != nil && before.servingAdmitted && !before.invalid && before.servingBase != nil
+	if err := c.reconcileTypedGraphPublicationWithContext(ctx, p, o.Cold); err != nil {
+		return err
+	}
+	if _, err := coord.bindTypedGraphFoldAssetAdmission(opts.CandidateOutput); err != nil {
+		return err
+	}
+	if err := c.prepareTypedGraphServingMetadata(ctx, o.Cold); err != nil {
+		return err
+	}
+	// Metadata preparation just validated exact catalog authority under the
+	// existing exclusion. A concurrent admitted suffix/fold may advance the
+	// immutable pointer without requiring another cold activation or debt reset.
+	if state := coord.typedPublication.Load(); wasReady && state != nil && !state.invalid && state.servingAdmitted && state.servingBase != nil {
+		// Admission belongs to the shared authority, but its optional prepared
+		// keeper belongs to this handle. Explicit Ensure warms new handles too.
+		if state.servingBase.graph.RowCount == 0 {
+			c.invalidateTypedGraphStaleBaseKeeper(index)
+			return nil
+		}
+		_, err := c.acquireTypedGraphCapturedBaseCacheWithContext(ctx, index, o)
+		if err == nil {
+			// A concurrent fold may have passed cleanup during the warm.
+			c.invalidateTypedGraphStaleBaseKeeper(index)
+		}
+		return err
+	}
+	prepared := coord.typedPublication.Load()
+	if prepared == nil || prepared.invalid || prepared.servingBase == nil {
+		return ErrVectorIndexSnapshotMismatch
+	}
+	if _, err := c.renewTypedGraphWorkEpoch(ctx, m); err != nil {
+		return err
+	}
+	// An exact empty base has no shared prepared search holder to warm. Its
+	// coherent owner still serves the mutable suffix; the CAS below binds this
+	// decision to the validated immutable state rather than a cache result.
+	var warmed *collectionVectorIndexPreparedSearch
+	if prepared.servingBase.graph.RowCount != 0 {
+		warmed, err = c.acquireTypedGraphCapturedBaseCacheWithContext(ctx, index, o)
+		if err != nil {
+			return err
+		}
+	}
+	ready := *prepared
+	ready.servingAdmitted = true
+	if err := WithVectorPartitionStorageBarrierWithContextV1(ctx, c.db.Dir(), func() error {
+		if !coord.typedPublication.CompareAndSwap(prepared, &ready) {
+			return ErrConcurrentMutation
+		}
+		return nil
+	}); err != nil {
+		// A late captured-base build is only an accelerator, never authority.
+		// Release this rejected keeper without invalidating a newer cache entry
+		// or any independently retained read-view owner.
+		if warmed != nil {
+			c.invalidateCollectionVectorIndexPreparedSearch(collectionVectorIndexPreparedSearchCacheSlot{family: collectionVectorIndexPreparedSearchFamilyCapturedBase, indexName: index}, warmed)
+		}
+		return err
+	}
+	if ready.servingBase.graph.RowCount == 0 {
+		c.invalidateTypedGraphStaleBaseKeeper(index)
+	}
+	return nil
+}
+
+// FoldColumnGraphServing performs explicit bounded rebuild and maintenance.
+// Errors preserve fail-closed state and are never hidden by a retry loop.
+func (c *Collection) FoldColumnGraphServing(ctx context.Context, index string) (err error) {
+	workstats.Fold.Public.Attempts.Add(1)
+	defer func() { workstats.Fold.Public.Finish(err == nil) }()
+	p := c.typedGraphServingPolicy()
+	if p == nil || p.index != index || ctx == nil {
+		return ErrVectorIndexSearchUnavailable
+	}
+	if err := c.foldTypedGraph(ctx, p.options.Owners.Cold, p.options.FoldRows, p.options.CandidateOutput, nil); err != nil {
+		return err
+	}
+	// Publication already installed its ready immutable state. Checkpoint and
+	// bounded reclamation remain outside install admission; neither is a reason
+	// to expose an invalid serving frontier. Retire the stale keeper before GC;
+	// caller-held read owners and in-flight replacement builds retain exact pins.
+	c.retireTypedGraphCapturedBaseKeepers(index)
+	maintenance := backenddb.LeafGenerationMaintenanceLimits{
+		NativeEntries: p.options.Maintenance.NativeEntries,
+		NativeBytes:   p.options.Maintenance.NativeBytes,
+		PagerPages:    p.options.Maintenance.PagerPages,
+	}
+	_, err = c.db.LeafGenerationPackRunOnce(ctx, backenddb.LeafGenerationPackFromPlanOptions{
+		Sync: true, MaxGenerations: p.options.Maintenance.NativeEntries, MaxBytesToCopy: p.options.Maintenance.NativeBytes,
+		MaintenanceLimits: maintenance,
+	})
+	if err != nil {
+		return err
+	}
+	// Whole-dead generations need no copying and are deliberately excluded
+	// from pack candidates. Their fallback horizon and GC still need service.
+	if err := c.db.RefreshCommandWALCheckpointFallback(); err != nil {
+		return err
+	}
+	if _, err := c.db.LeafGenerationGC(ctx, backenddb.LeafGenerationGCOptions{MaintenanceLimits: maintenance}); err != nil {
+		return err
+	}
+	if _, err := c.renewTypedGraphWorkEpoch(ctx, p.options.Maintenance); err != nil {
+		return err
+	}
+	if state := c.collectionSchemaCoordinator().typedPublication.Load(); state != nil && !state.invalid && state.servingAdmitted && state.servingBase != nil && state.servingBase.graph.RowCount == 0 {
+		// Empty publication needs no optional shared prepared search holder.
+		c.invalidateTypedGraphStaleBaseKeeper(index)
+		return nil
+	}
+	_, err = c.acquireTypedGraphCapturedBaseCacheWithContext(ctx, index, p.options.Owners)
+	if err == nil {
+		// A concurrent fold may have passed cleanup while this build
+		// was in flight. Recheck after installing our optional keeper.
+		c.invalidateTypedGraphStaleBaseKeeper(index)
+	}
+	return err
+}
+
+// Idle sibling handles do not observe publication and self-invalidate. Visit
+// their existing manager registrations through the shared collection domains;
+// no new keeper registry or ownership of independently held readers is needed.
+func (c *Collection) retireTypedGraphCapturedBaseKeepers(index string) {
+	handles := []*Collection{c}
+	for _, domain := range c.collectionSchemaCoordinator().snapshotDomains() {
+		m := domain.manager
+		if m == nil {
+			continue
+		}
+		m.collectionsMu.RLock()
+		for handle := range m.collections {
+			if handle != c && handle.collectionName() == c.collectionName() {
+				handles = append(handles, handle)
+			}
+		}
+		m.collectionsMu.RUnlock()
+	}
+	for _, handle := range handles {
+		handle.invalidateTypedGraphStaleBaseKeeper(index)
+	}
+}
+
+// A build may finish after another handle's fold has swept idle keepers, even
+// before this handle first registers with its manager. Recheck the completed
+// keeper against current immutable base identity; suffix-only advances keep
+// that identity. Exact-object invalidation leaves replacements and owners alone.
+func (c *Collection) invalidateTypedGraphStaleBaseKeeper(index string) {
+	slot := collectionVectorIndexPreparedSearchCacheSlot{family: collectionVectorIndexPreparedSearchFamilyCapturedBase, indexName: index}
+	coord := c.collectionSchemaCoordinator()
+	var old *collectionVectorIndexPreparedSearch
+	c.vectorBufferedSearchMu.Lock()
+	if entry := c.vectorBufferedSearch[slot]; entry != nil && !entry.building {
+		old = entry.prepared
+	}
+	c.vectorBufferedSearchMu.Unlock()
+	if old != nil {
+		old.mu.RLock()
+		stale := true
+		if state := coord.typedPublication.Load(); state != nil && !state.invalid && state.servingAdmitted && state.servingBase != nil && !old.closed && old.capturedBase != nil && old.capturedBase.holderRef() != nil {
+			currentKey, err := state.servingBase.servingPreparedSearchKey(c)
+			stale = state.servingBase.graph.RowCount == 0 || err != nil || currentKey != old.capturedBase.holderRef().key
+		}
+		old.mu.RUnlock()
+		if stale {
+			c.invalidateCollectionVectorIndexPreparedSearch(slot, old)
+		}
+	}
+}
+
+// RenewColumnGraphServing renews attempted-work allowance only after successful
+// bounded maintenance. It does not fold a suffix or release caller-held views.
+func (c *Collection) RenewColumnGraphServing(ctx context.Context, index string) (ColumnGraphMaintenanceStats, error) {
+	p := c.typedGraphServingPolicy()
+	if p == nil || p.index != index || ctx == nil {
+		return ColumnGraphMaintenanceStats{}, ErrVectorIndexSearchUnavailable
+	}
+	return c.renewTypedGraphWorkEpoch(ctx, p.options.Maintenance)
+}
+
+// searchTypedGraphServing owns both public typed serving wrappers. Q2's
+// quantized rerank exception is intentionally callable only from the read-view
+// wrapper: a buffer-only caller cannot preserve the captured owner needed for
+// the coherent mutable base/suffix/fetch contract.
+func (c *Collection) searchTypedGraphServing(opts VectorIndexSearchOptions, buffer *VectorIndexSearchBuffer, allowSelectedQuantizedRerank bool) (response VectorIndexSearchResponse, view *CollectionReadView, err error) {
+	response, view, _, err = c.searchTypedGraphServingWithOwner(opts, buffer, allowSelectedQuantizedRerank, nil, 0, false)
+	return response, view, err
+}
+
+// searchTypedGraphServingWithOwner is the one typed serving implementation for
+// public dense/vector calls and owner-bound hybrid vector phases. A supplied
+// owner is borrowed and remains the caller's responsibility.
+func (c *Collection) searchTypedGraphServingWithOwner(opts VectorIndexSearchOptions, buffer *VectorIndexSearchBuffer, allowSelectedQuantizedRerank bool, boundOwner *typedGraphReadOwner, boundAcquireNanos int64, shortCircuitEmptyFilter bool) (response VectorIndexSearchResponse, view *CollectionReadView, filterWork ColumnGraphFilterWork, err error) {
+	workstats.Graph.Requests.Attempts.Add(1)
+	includeProof := opts.StatsMode == VectorIndexSearchStatsModeProduction
+	var stats typedGraphOverlaySearchStats
+	var snapshot ColumnGraphQuerySnapshot
+	var scorePlane *ColumnGraphScorePlaneWork
+	defer func() {
+		workstats.Graph.Requests.Finish(err == nil)
+		if !includeProof {
+			return
+		}
+		work := stats.work()
+		work.Completed = err == nil
+		work.Filter = filterWork
+		work.Snapshot = snapshot
+		if scorePlane != nil && scorePlane.Available {
+			scorePlane.Completed = err == nil
+			scorePlane.Snapshot = snapshot
+			if err != nil && scorePlane.Reason == "" {
+				scorePlane.Reason = err.Error()
+			}
+			work.ScorePlane = *scorePlane
+		}
+		response.Stats.ColumnGraphWork = work
+	}()
+	if err = validateCollectionVectorIndexSearchWithBufferOptions(opts, buffer); err != nil {
+		return
+	}
+	buffer.Reset()
+	p := c.typedGraphServingPolicy()
+	if p == nil || p.index != opts.IndexName {
+		return response, nil, filterWork, ErrVectorIndexSearchUnavailable
+	}
+	queryMode, modeErr := normalizeVectorIndexSearchQueryMode(opts.QueryMode, opts.QuantizedIndexName, opts.QuantizedRerankCandidates, opts.TopK)
+	if modeErr != nil {
+		return response, nil, filterWork, modeErr
+	}
+	if queryMode == columnVectorGraphNativeSearchQueryModeQuantizedRerank && !allowSelectedQuantizedRerank {
+		return response, nil, filterWork, ErrHybridSearchUnsupported
+	}
+	unsupportedMode := queryMode != columnVectorGraphNativeSearchQueryModeExact && queryMode != columnVectorGraphNativeSearchQueryModeQuantizedRerank
+	unsupportedStats := opts.StatsMode != VectorIndexSearchStatsModeMinimal && opts.StatsMode != VectorIndexSearchStatsModeProduction
+	if unsupportedMode || unsupportedStats || opts.MaxDecodedBlocks != 0 {
+		return response, nil, filterWork, ErrHybridSearchUnsupported
+	}
+	if opts.Context != nil {
+		if err = opts.Context.Err(); err != nil {
+			return
+		}
+	}
+	ctx := opts.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	owner := boundOwner
+	ownerBorrowed := owner != nil
+	acquiredNanos := boundAcquireNanos
+	if owner == nil {
+		started := time.Now()
+		owner, err = c.openTypedGraphReadOwnerWithContext(ctx, p.options.Owners)
+		acquiredNanos = time.Since(started).Nanoseconds()
+		if err != nil {
+			return response, nil, filterWork, err
+		}
+	} else if owner.closed || owner.overlay == nil || owner.overlay.base == nil || owner.overlay.base.collection != c || owner.overlay.current == nil {
+		return response, nil, filterWork, ErrVectorIndexSnapshotMismatch
+	}
+	snapshot = owner.querySnapshot()
+	defer func() {
+		if err != nil {
+			if !ownerBorrowed {
+				err = errors.Join(err, owner.Close())
+			}
+			buffer.Reset()
+			response.Results = nil
+		}
+	}()
+	var filter *typedGraphPreparedFilter
+	if opts.DeclaredScalarFilter != nil {
+		keeper := c.borrowTypedGraphFilterKeeper(owner, p.index)
+		if keeper != nil {
+			defer keeper.mu.RUnlock()
+		}
+		filter, err = prepareTypedGraphServingFilter(ctx, keeper, owner.overlay, *opts.DeclaredScalarFilter, p.options.Filter, &filterWork)
+	}
+	if err == nil && shortCircuitEmptyFilter && filter != nil && filter.count == 0 {
+		if err = ctx.Err(); err != nil {
+			return response, nil, filterWork, err
+		}
+		view = owner.overlay.current
+		view.typedGraphOwner = owner
+		return response, view, filterWork, nil
+	}
+	if err == nil {
+		if queryMode == columnVectorGraphNativeSearchQueryModeQuantizedRerank {
+			response.Results, stats, scorePlane, err = owner.searchScalarU8QuantizedRerankWithContext(ctx, opts, filter, p.options.SearchCandidates, buffer, includeProof)
+		} else if filter == nil {
+			response.Results, stats, err = owner.overlay.searchWithContext(ctx, opts.Query, opts.TopK, opts.EfSearch, p.options.SearchCandidates, buffer)
+		} else {
+			response.Results, stats, err = owner.overlay.searchPreparedFilterWithContext(ctx, filter, opts.Query, opts.TopK, opts.EfSearch, p.options.SearchCandidates, buffer)
+		}
+	}
+	if err != nil {
+		return response, nil, filterWork, err
+	}
+	if opts.Context != nil {
+		if err = opts.Context.Err(); err != nil {
+			return response, nil, filterWork, err
+		}
+	}
+	response.IndexName, response.Strategy, response.Path = p.index, VectorIndexStrategyColumnGraph, VectorIndexSearchPathColumnGraphNativeReader
+	response.Stats = vectorIndexSearchStatsFromInternal(stats.Base, owner.overlay.base.reader.Stats())
+	receipt := ColumnGraphRouteReceipt{
+		Available:                 true,
+		Representation:            owner.overlay.base.reader.def.Representation,
+		QueryMode:                 opts.QueryMode,
+		Route:                     stats.Route,
+		SchemaHash:                snapshot.SchemaHash,
+		SchemaGeneration:          snapshot.SchemaGeneration,
+		BaseManifestGeneration:    snapshot.BaseManifest.Generation,
+		BaseManifestChecksum:      snapshot.BaseManifest.Checksum,
+		CurrentManifestGeneration: snapshot.CurrentManifest.Generation,
+		CurrentManifestChecksum:   snapshot.CurrentManifest.Checksum,
+		CurrentCoverageLSN:        snapshot.CurrentCoverageLSN,
+		ResultCount:               uint64(len(response.Results)),
+	}
+	if receipt.QueryMode == "" {
+		receipt.QueryMode = VectorIndexQueryModeExact
+	}
+	if receipt.QueryMode == VectorIndexQueryModeQuantizedRerank {
+		receipt.QuantizedIndexName = opts.QuantizedIndexName
+		receipt.QuantizedCodec = QuantizedVectorCodecScalarU8
+		receipt.QuantizedVersion = 1
+	}
+	response.Stats.ColumnGraphReceipt = receipt
+	// Preserve the logical pack source diagnostics captured when this exact
+	// holder was assembled. The serving route may use either its mmap view or
+	// its admitted pool-owned parent fallback, but that physical choice does not
+	// change the selected typed prepared-search algorithm.
+	owner.overlay.base.routeStats.apply(&response.Stats)
+	response.Stats.ColumnGraphOwnerAcquireNanos = acquiredNanos
+	response.Stats.ColumnGraphDeltaScored = uint64(stats.DeltaScored)
+	response.Stats.SearchRouteColumnGraphPrepared = 1
+	response.Stats.SearchRouteColumnGraphFallback = 0
+	if stats.Route == "typed_hnsw" {
+		response.Stats.SearchRouteHNSWSearchPack = 1
+	}
+	response.Status = VectorIndexStatus{Name: p.index, Definition: owner.overlay.base.reader.def, Strategy: response.Strategy, Loaded: true, State: VectorIndexStateColumnGraphLoaded}
+	view = owner.overlay.current
+	view.typedGraphOwner = owner
+	return response, view, filterWork, nil
+}
+
+func (c *Collection) openTypedGraphHybridReadView(ctx context.Context, index string) (*CollectionReadView, int64, error) {
+	p := c.typedGraphServingPolicy()
+	if p == nil || p.index != index {
+		return nil, 0, ErrVectorIndexSearchUnavailable
+	}
+	started := time.Now()
+	owner, err := c.openTypedGraphReadOwnerWithContext(ctx, p.options.Owners)
+	acquiredNanos := time.Since(started).Nanoseconds()
+	if err != nil {
+		return nil, acquiredNanos, err
+	}
+	if owner.overlay == nil || owner.overlay.current == nil {
+		return nil, acquiredNanos, errors.Join(ErrVectorIndexSnapshotMismatch, owner.Close())
+	}
+	view := owner.overlay.current
+	view.typedGraphOwner = owner
+	return view, acquiredNanos, nil
+}
+
+func validateTypedGraphHybridSelectedAsset(ctx context.Context, view *CollectionReadView, query HybridVectorQuery) error {
+	if view == nil || view.typedGraphOwner == nil || view.typedGraphOwner.closed || view.typedGraphOwner.overlay == nil || view.typedGraphOwner.overlay.base == nil {
+		return ErrVectorIndexSnapshotMismatch
+	}
+	mode, err := normalizeVectorIndexSearchQueryMode(query.QueryMode, query.QuantizedIndexName, query.QuantizedRerankCandidates, query.CandidateLimit)
+	if err != nil {
+		return err
+	}
+	if mode != columnVectorGraphNativeSearchQueryModeQuantizedRerank {
+		return ErrHybridSearchUnsupported
+	}
+	owner := view.typedGraphOwner
+	reader := owner.overlay.base.reader
+	if len(query.Query) != reader.def.Dimensions {
+		return errColumnVectorGraphNativeSearchQueryDimensionMismatch
+	}
+	if vectorIndexUsesCosineNormalizedF32V1(reader.def) {
+		if _, err := cosineNormalizedF32V1InputInvNorm(query.Query, reader.def.Dimensions); err != nil {
+			return err
+		}
+	} else if _, err := typedGraphStableCosineQueryInvNorm(query.Query); err != nil {
+		return err
+	}
+	q, err := typedGraphQuantizedRerankLegacyScalarU8Definition(reader, query.QuantizedIndexName)
+	if err != nil {
+		return err
+	}
+	return owner.attachTypedGraphLegacyScalarU8QuantizedAssetWithContext(ctx, q.Name)
+}

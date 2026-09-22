@@ -1,0 +1,636 @@
+# TreeDB retained RAG application baseline runbook (#4289)
+
+## Minima native-path development (#4614)
+
+Minima is a separate workload from the retained application baseline below.
+Its execution contract is
+[minima-native-execution.md](../spec/minima-native-execution.md). The Go command
+owns manifests and evidence validation; the Python runner executes real client
+requests against the document service. The selected `column_graph` product and
+the measured harness have separate review and evidence gates; neither a harness
+change nor a bounded diagnostic is a full-scale performance result.
+
+Qdrant queries use its explicit filtered exact mode as the result-equivalent
+correctness, mutation, reopen, and payload reference. Qdrant is not the matched
+ANN performance comparator or a denominator for TreeDB performance gates;
+separate approximate-search probes remain quality diagnostics.
+The frozen bounded manifests may exercise this Qdrant lifecycle, but their
+diagnostic schema cannot satisfy full qualification.
+
+The [retained full qualification report](../evidence/minima-native-qualification-4620/README.md)
+records the failed, incomplete a0992241 attempt and the earlier failure. Neither
+provides full qualification; M4/M5 remain open and D1 requires an actual M5 pass.
+
+Use a clean, committed **standalone clone** and a writable `/mnt/fast4tb` mount.
+The Go 1.26.0 toolchain on the development runner omits VCS stamping in linked
+worktrees; the binary provenance check rejects those builds. Do not inject a
+revision string or disable validation to work around it.
+
+```sh
+mountpoint -q /mnt/fast4tb && test -w /mnt/fast4tb
+MINIMA_RUN=$(mktemp -d /mnt/fast4tb/gomap-minima-bounded-XXXXXX)
+mkdir -p "$MINIMA_RUN/tmp"
+TMPDIR="$MINIMA_RUN/tmp" GOWORK=off MODE=bounded-50k \
+  RUN_DIR="$MINIMA_RUN" MINIMA_WALL_SECONDS=600 \
+  scripts/bench_minima_qualification.sh
+```
+
+Linux GNU `timeout` bounds the entire command, including builds, to 600 seconds
+plus a 10-second forced-stop grace period. Individual service requests and
+startup are bounded at 120 seconds. A timeout/failure is incomplete evidence,
+not permission to reuse a previous output. Use a fresh run directory every time.
+`MODE=bounded-250k`, `MODE=bounded-500k` and `MODE=bounded-1000k` select
+250,000, 500,000 and 1,000,000 total rows; `MINIMA_WALL_SECONDS` sets an
+explicit run budget. These totals span all scenarios. They preserve the 4,097
+cutoff but not the full fixture's <1% sparse case. All emit a diagnostic schema
+that cannot pass full qualification. `MODE=representative` retains the frozen
+full workload and its existing validation.
+
+The larger bounded fixtures reuse the 50K/250K generator's scaling rule while
+small/empty controls, the 4,097 crossover, five narrow
+matches, 256-row batches and 1,328 concurrent inserts stay fixed. Initial
+ingest therefore writes `total - 1328` rows; final state has `total - 1` rows.
+Generate manifests with `-workload=minima -dump-minima-manifest <path>
+-minima-bounded-total-rows 500000` (or `1000000`). Go and Python both reject
+unknown fixture names or changed frozen hashes. Freeze each generated manifest
+separately before measured execution; these fixtures diagnose scaling and do
+not change full qualification limits or demonstrate a performance result.
+
+A completed bounded artifact must still prove its manifest operations, timed
+reader/writer overlap, reindex/reopen, and final-state scroll. Diagnostic-only
+status prevents full qualification; it does not excuse missing lifecycle work.
+
+The Q5 packet consumer has one narrower historical-control disposition. It may
+retain either that clean completed 50K `native_runtime` lifecycle control or the
+exact #4617 failure described under **M0 baseline limitation** below. The latter
+must have only the `broad_10pct` initial-oracle failure, the frozen expected IDs,
+zero results, `complete_finite_ann`, `bounded_complete_set`, positive integral
+visited/scored work with visited equal to scored and scored no greater than
+4,096, and no scan fallback. Duplicate scenario/raw counters must agree. The
+other ANN snapshots keep their frozen routes and membership counts while their
+positive integral traversal work may include at most 4,096 seed-row visits
+above scored work. It is failed recall evidence, not lifecycle or latency
+evidence. No timeout, cleanup/provenance failure, additional mismatch, different
+row count, changed route, or contradictory completion evidence is equivalent.
+The SQ8 bounded control remains clean-completion-only.
+
+The historical shell lane defaults to `native_runtime` for baseline reproduction.
+The Python runner also supports explicit `--strategy column_graph` with declared
+typed input and native binary hot-path transport. Supply
+`--column-graph-serving /path/to/serving.json`: an explicit JSON object matching
+the public `column_graph_serving` options, sized for the fixture. Missing limits
+fail before service launch. The runner builds/adopts the graph after initial
+load, folds before close, and ensures existing graph assets after reopen; it
+does not substitute an exact document scan or recreate an in-memory runtime.
+
+The retained bounded-500K closure used to size the active serving packet has
+3,911 exact base refs totaling 3,277,982,150 bytes; its 101 segment files total
+3,277,986,056 bytes. That is about 3.278 GB of mapped/fallback potential per
+holder, not the configured 32 GiB logical `AssetBytes` ceiling. With
+`Owners=8`, the packet therefore declares independent 32 GiB mapped and
+fallback ceilings (enough for roughly eight to ten overlapping holders), 32,768
+segment/descriptor slots, and 1 GiB of deterministic modeled inventory
+headroom. Recompute these values from the regenerated exact base closure when
+the fixture or holder-overlap policy changes; do not copy test constants or
+derive physical limits from logical asset limits.
+
+For this development lane, invoke the Python runner directly with the same
+manifest, service binary and source provenance as the baseline:
+
+```sh
+PYTHONPATH=clients/python/treedb_client/src python3 \
+  benchmarks/vector_db_compare/minima_treedb_runner.py \
+  --strategy column_graph --transport native \
+  --column-graph-serving "$MINIMA_SERVING_LIMITS" \
+  --ef-construction 32 --ef-search "$MINIMA_EF_SEARCH" \
+  --native-address 127.0.0.1:17122 \
+  --manifest "$MINIMA_MANIFEST" --service-bin "$MINIMA_SERVICE_BINARY" \
+  --data-dir "$MINIMA_TYPED_RUN/db" --output "$MINIMA_TYPED_RUN/result.json" \
+  --collection minima --operation-timeout 120 --startup-timeout 120
+```
+
+The `column_graph` Minima profile defaults construction EF to 32 and records and
+verifies the effective value; `--ef-construction` overrides it. Set these paths
+and `MINIMA_EF_SEARCH` explicitly before running. The query-EF default remains
+128, not a qualified typed configuration: predeclare query EF and limits, then
+complete whole-population semantic checks before repetitions. Do not tune an
+individual failed row. Use a fresh task directory on `/mnt/fast4tb`,
+a committed clean source/binary pair and a bounded manifest, never the final
+holdout for calibration. Wrap the invocation in the same bounded wall deadline
+as above. `--transport http` is the typed-storage HTTP bridge: use a separate
+fresh database with identical fixture and serving limits. Control-plane create,
+maintenance, count, ID/filter delete and final-state scroll remain explicit HTTP
+calls. Native batch upsert carries indexed FP32/string fields without JSON;
+search and separate batch retrieval return the requested full documents. Flexible
+residual payload and final document decoding may still use JSON. Each thread
+owns its native connection, and the aggregate client closes both transports
+before the single shared service is stopped.
+
+Native retrieval is one `GetMany` request, unlike the historical per-ID HTTP
+retrieve loop. Preserve fetched IDs/content/metadata and report that granularity
+change rather than attributing it solely to storage. Native selected GetMany
+also fetches stored embeddings; the historical runner normalizes retrieval to
+payload fields and its HTTP retrieve loop omits embedding echo. Explicitly
+match/document projections when comparing these operations.
+
+### Bounded scalar-u8 rerank diagnostic (#4687)
+
+The SQ8 application arm is a separate opt-in bounded diagnostic. It does not
+modify the exact/native-v2 default or the measured-v1 workflow below. Use a
+clean committed standalone checkout, a reviewed nonempty serving-limits JSON
+object, an independently frozen and reviewed launch plan, native transport,
+and a fresh packet whose only pre-created child is an
+empty `tmp/` directory:
+
+```sh
+mountpoint -q /mnt/fast4tb && test -w /mnt/fast4tb
+MINIMA_SERVING_LIMITS=/mnt/fast4tb/reviewed/minima-serving.json
+test -s "$MINIMA_SERVING_LIMITS"
+MINIMA_REVIEW=/mnt/fast4tb/reviewed/minima-sq8-50k
+mkdir -p "$MINIMA_REVIEW"
+GOWORK=off go build -o "$MINIMA_REVIEW/treedb-rag-benchmark" ./TreeDB/cmd/treedb_rag_benchmark
+"$MINIMA_REVIEW/treedb-rag-benchmark" -workload=minima \
+  -dump-minima-manifest "$MINIMA_REVIEW/manifest.json" -minima-bounded-total-rows 50000
+PYTHONPATH=clients/python/treedb_client/src python3 \
+  benchmarks/vector_db_compare/minima_treedb_runner.py \
+  --manifest "$MINIMA_REVIEW/manifest.json" \
+  --strategy column_graph --transport native --profile command_wal_durable \
+  --column-graph-serving "$MINIMA_SERVING_LIMITS" --ef-construction 32 \
+  --query-mode quantized_rerank --quantized-index-name minima_sq8 \
+  --ef-search 64 --quantized-rerank-candidates 64 \
+  --write-quantized-plan "$MINIMA_REVIEW/plan.json"
+MINIMA_PLAN_SHA=$(sha256sum "$MINIMA_REVIEW/plan.json" | awk '{print $1}')
+# Review plan.json before retaining this digest as the external execution pin.
+MINIMA_SQ8_RUN=$(mktemp -d /mnt/fast4tb/gomap-minima-sq8-XXXXXX)
+mkdir -p "$MINIMA_SQ8_RUN/tmp"
+TMPDIR="$MINIMA_SQ8_RUN/tmp" GOWORK=off \
+  RUN_DIR="$MINIMA_SQ8_RUN" MODE=bounded-50k \
+  TREEDB_PROFILE=command_wal_durable \
+  TREEDB_STRATEGY=column_graph TREEDB_TRANSPORT=native \
+  TREEDB_NATIVE_ADDRESS=127.0.0.1:17122 \
+  TREEDB_COLUMN_GRAPH_SERVING="$MINIMA_SERVING_LIMITS" \
+  TREEDB_QUANTIZED_PLAN="$MINIMA_REVIEW/plan.json" \
+  MINIMA_EXPECTED_QUANTIZED_PLAN_SHA256="$MINIMA_PLAN_SHA" \
+  TREEDB_QUERY_MODE=quantized_rerank \
+  TREEDB_QUANTIZED_INDEX_NAME=minima_sq8 \
+  TREEDB_EF_SEARCH=64 TREEDB_QUANTIZED_RERANK_CANDIDATES=64 \
+  scripts/bench_minima_qualification.sh
+```
+
+The wrapper validates the profile, exact plan bytes and external pin, serving
+JSON, `R=EF`, and all owned
+destinations before building or dumping a manifest. The emitted
+`treedb_rag_application/minima_quantized_diagnostic_v1` envelope is always
+nonqualifying. Its validator joins every native-v3 public call to the lifecycle
+trace and one allowed operation state. The plan binds the bounded manifest
+identity, quantized profile, fixed graph `M=16`, construction EF, serving limits, transport and
+durability before the database or output exists. The validator requires exact rank for typed-empty and
+filtered typed-exact populations through 4,096, and requires live canonical FP32 full
+documents plus consistent scalar-u8/rerank work for larger populations. Owner
+manifest generation and coverage advance by the exact number of completed
+mutation commands; one identity is required at each advance, and the synchronous
+pre-close fold must be identical across pre-close, reopen and final evidence. A
+missing or mismatched owner, route, generation, counter, output field, phase,
+or restart/mutation state fails the artifact. Preserve failed packets; do not
+reuse a directory or overwrite evidence.
+
+This addition does not change unified-bench or benchprof artifact names,
+profile-directory defaults, parsers, or producer-consumer contracts.
+
+### Measured collection and trusted comparison
+
+The separate `treedb_rag_application/minima_measured_v1` envelope records actual
+owned `dense_work`, public-operation request sequences, drained phase work and
+process lifetimes. Historical diagnostic envelopes retain dispatch-only proof
+with unavailable counters. They do not satisfy the measured contract.
+
+`MODE=measured` uses supplied manifest bytes, a pinned existing Python environment
+and prebuilt naturally stamped service/comparator binaries. It does not generate
+another manifest, build binaries or install packages. The run and backend output
+directories must be fresh. Explicit `TREEDB_COLLECTION` and `QDRANT_COLLECTION`
+names must match the frozen configuration; measured launchers do not invent names.
+GNU `timeout` bounds the entire measured invocation, including both backends and
+comparison, with a 10-second kill grace after TERM. Measured mode requires an
+explicit positive-integer `MINIMA_WALL_SECONDS`; it has no default. The frozen
+collection plan must budget for the sequential TreeDB and Qdrant lifecycles plus
+comparison. The 600-second default applies only to legacy bounded diagnostics.
+A timeout is incomplete evidence. For example, with all inputs and options fixed
+by that plan:
+
+```sh
+taskset --cpu-list "$MINIMA_CPU_AFFINITY" env \
+  MODE=measured RUN_DIR="$MINIMA_MEASURED_RUN" \
+  TREEDB_COLLECTION="$MINIMA_TREEDB_COLLECTION" \
+  QDRANT_COLLECTION="$MINIMA_QDRANT_COLLECTION" \
+  MANIFEST_PATH="$MINIMA_MANIFEST" \
+  VENV="$MINIMA_PINNED_VENV" \
+  TREEDB_SERVICE_BIN="$MINIMA_SERVICE_BINARY" \
+  MINIMA_COMPARATOR_BIN="$MINIMA_COMPARATOR_BINARY" \
+  MINIMA_EXPECTED_COMMIT="$MINIMA_HARNESS_COMMIT" \
+  MINIMA_FREEZE="$MINIMA_FREEZE_FILE" \
+  MINIMA_EXPECTED_FREEZE_SHA256="$MINIMA_FREEZE_SHA256" \
+  TREEDB_STRATEGY=column_graph TREEDB_TRANSPORT=native \
+  TREEDB_NATIVE_ADDRESS=127.0.0.1:17122 \
+  TREEDB_COLUMN_GRAPH_SERVING="$MINIMA_SERVING_LIMITS" \
+  TREEDB_EF_SEARCH="$MINIMA_EF_SEARCH" \
+  QDRANT_CPUSET_CPUS="$MINIMA_CPU_AFFINITY" \
+  MINIMA_WALL_SECONDS="${MINIMA_WALL_SECONDS:?set the reviewed deadline in seconds}" \
+  scripts/bench_minima_qualification.sh
+```
+
+The externally reviewed freeze file binds the manifest's exact input hash and
+semantic hashes, clean harness/product ancestry, client and harness source hashes,
+natural binary hashes, serving JSON, transport, affinity and backend options.
+The comparator receives both `-minima-freeze` and
+`-minima-expected-freeze-sha256`; an artifact cannot supply its own trust anchor.
+A pending calibration freeze is allowed only for bounded, nonqualifying runs.
+A full freeze requires three distinct reviewed bounded-pair hashes and the
+reviewed overhead disposition. The freeze's `reviewed_product_commit` identifies
+the reviewed landed product commit, using its squash-merge SHA when applicable.
+It must be a Git ancestor of the harness. A pre-squash review SHA is separate
+provenance: verify tree equality with the landed commit before freezing, and do
+not pass that review SHA as `reviewed_product_commit`.
+
+Measured Qdrant supports the launcher's owned Docker deployment only and requires
+an explicit `QDRANT_CPUSET_CPUS` before launch. The runner checks the actual
+container PID, image ID, repository digest, mapped HTTP port
+and durable storage mount. The container runs `/qdrant/qdrant` directly under the
+collector's numeric UID:GID so the measured PID owns the executable and listener
+and permits host process inspection. Snapshot and initialization paths stay
+inside `/qdrant/storage`. The runner verifies these facts before its first
+resource capture, brackets inspection with Linux process identity and repeats
+it after restart. Both servers' actual CPU affinities must equal the freeze; a
+Go thread setting alone is not an allocation of CPUs. Legacy deployments remain
+available outside measured collection.
+
+Setup ends before initial ingestion; load includes fixture-dependent batch
+preparation, durable writes and Build/readiness. Restart includes shutdown,
+open/replay, reconnect and Ensure, and ends before parity queries. Request records
+represent declared wrapped public operations: readiness may poll several RPCs.
+The final scroll retains raw full-state/full-vector results and TreeDB per-page
+call samples; internal Qdrant scroll RPCs are not separate ledger entries. Native
+retrieval is separately counted from search materialization. The
+live final disk/resource endpoint is captured once before cleanup; actual
+terminal work and owned exit evidence are attached afterward.
+
+Qdrant's CPU/RSS/disk restart segments use the last pre-stop sample and the
+actual post-startup-ready baseline. Costs in that resource observation gap are
+unavailable; the wall timer still includes the full restart. The explicit
+`resource_availability.restart` marker also leaves Qdrant through-exit peak RSS
+unavailable. TreeDB's numeric restart origin remains derived zero CPU/RSS plus
+old-end disk, separate from its actual first-work and owned `wait4` evidence.
+
+The accepted bounded characterization contains **four full lifecycle runs and
+six separate bridge lifetimes**: three measured native lifecycle baselines, one
+additional fresh lifecycle with added capture disabled, and three measured/control
+bridge pairs. Each bridge compares HTTP/native searches and explicitly matched
+full-vector retrieval on the completed final DB, with counterbalanced transport
+order. This does not measure HTTP ingestion or replicated load overhead. The
+single full-lifecycle overhead pair is one observation. Keep bridge artifacts
+separate from the already completed lifecycle ledger.
+
+For the control, the direct TreeDB runner accepts `--measured` and
+`--legacy-diagnostic-control` with the same pinned inputs. It disables only added
+work/listener/proof normalization capture; ordinary product proof decoding,
+legacy phase/resource sampling and correctness checks remain. Block and mutex
+sampling rates are zero on both sides. Unless historical `--diagnostics-dir` is
+explicitly requested, the control starts no stats listener. Missing control work,
+allocation and terminal proof remains unavailable. No numerical allocation or
+noise allowance is established by this collection plan.
+
+In the historical diagnostic envelope, `resource_measurement.peak_rss_bytes`
+is the maximum measured Linux service process-lifetime `VmHWM` through the
+captured segment endpoints. Per-process
+identity and source are retained. Measured peaks bind to each segment's service
+PID and Linux start-time identity, and to the ordered old/new restart boundary;
+CPU/RSS `ps` samples additionally require the same nonempty Linux PID/start-time
+identity before and after sampling. Deltas require matching PIDs and lifetime
+identities at both endpoints; unavailable or changed lifetimes are not valid
+zero-cost samples.
+Both baseline and end samples belong to that same lifetime; contradictory or
+unrelated process samples are rejected. It is not the sum of peaks, whole-host memory,
+or a phase-specific peak. The historical `rss_bytes` field retains its old
+endpoint-growth meaning. Missing allocation, live-heap or client-memory evidence
+remains unavailable; use focused Go benchmarks/profiles for allocation budgets
+before optimizing each affected production feature.
+
+The measured TreeDB peak gate instead uses the maximum exclusive Linux `wait4`
+`ru_maxrss` across both owned service lifetimes, through actual exit. The
+controller does not use `Popen.poll`/`wait` to reap those children. Missing exit,
+terminal cleanup, process identity or required producer availability fails
+qualification. Cumulative work and `TotalAlloc`/`Mallocs` use same-origin deltas;
+startup's absolute package-init totals remain separately visible. Heap and cache
+gauges may decrease and are not treated as cumulative counters.
+
+### M0 baseline limitation
+
+The first public bounded-50k run at `8eb50f829` (unchanged TreeDB production
+code from `c2781c147`) completed load in 10.627 seconds, then failed: the
+`broad_10pct` filter had 1,000 valid IDs but `complete_finite_ann` returned none
+(2,064 visited/scored, zero admitted). This is failed recall evidence, not a
+completed latency result. The 2,064 count is that run's historical observation,
+not the regression's semantic identity. The old runtime exact cap is 512, and
+its complete finite branch lacks the eligible-region seeding used by its
+broad-filter branch.
+Keep this fixture/oracle as a native-path regression; do not retune it to hide
+the failure. The already-defined bounded-250k shape is the separate M0
+characterization candidate. Neither shape certifies the full sparse case.
+
+Focused harness validation:
+
+```sh
+GOWORK=off go test ./TreeDB/cmd/treedb_rag_benchmark \
+  -run '^TestMinima' -count=1 -timeout=120s
+python3 -m unittest discover -s benchmarks/vector_db_compare -p 'test_minima*runner.py'
+bash scripts/bench_minima_qualification_test.sh
+bash scripts/bench_minima_qdrant_test.sh
+make docs-check
+```
+
+## Retained application baseline (not Minima)
+
+This runbook reproduces the repaired M1 application baseline. The historical
+C1 code is retained only as an unfiltered hashing regression cell; it is not a
+product or ingestion claim. The authoritative artifact schema is
+`treedb_rag_application_baseline/v3`.
+
+Product base: `99929cdeb2ae2ec1e411236c853eb36942075d72` (accepted #4293 and
+#4294). Harness revision used by the committed baseline:
+`43e9568e0059806b9a7f735a5e383800880d1865`.
+
+## What the repaired harness proves
+
+- Recall claims fail unless the returned ranking depth is at least K. The
+  retained quality rows report only @5 and @10.
+- One declared dimension is checked against corpus, query, index, and vector
+  widths for each embedding cell.
+- Embedding timing stops before independently declared judgments are loaded.
+- Pre-generated child-row setup is never labeled source ingestion. The
+  ingestion rows time `Collection.IngestSources`, vector publication, and
+  checkpoint end to end on a fresh DB.
+- Judgments are committed separately for unfiltered, tenant, tenant+workspace,
+  and tenant+workspace+range contexts. Validation rejects a child or parent
+  outside the declared context.
+- Final QPS/p99 evidence requires at least 1,000 timed queries and three
+  repetitions. The committed rows use 1,008 samples and forward/reverse/forward
+  query order.
+- Artifact guards reject cross-tenant/workspace results, unbounded document
+  fetch, full-document-scan fallback, and parent-cap violations. Comparison
+  identities bind work, projection, and quality digests.
+- Final evidence reads `debug.ReadBuildInfo` and rejects an absent, dirty, or
+  mismatched `vcs.revision`; the CLI harness SHA is an assertion, not an
+  override. `config_sha256` covers only TopK/candidate/index parameters,
+  warmup/repetition/sample counts, and ingestion repetitions, so paths, command,
+  revisions, and host provenance cannot split matched workload identities.
+- Warmup query ordinal rotates through the complete committed query set,
+  independently of timed samples.
+- Direct score-only quality attribution comes from separate untimed compact
+  queries with identical work, route, and filter. Timed score-only rows retain
+  zero document fetches and never publish projection-stripped attribution as
+  zero.
+
+## Application fixture
+
+`treedb-rag-application/v1` contains 19 initial sources and 57 chunks. One
+lifecycle-only source is deterministically deleted, leaving 18 sources and 54
+chunks. Every source has three 128-rune chunks, a valid #4293 parent ID,
+`tenant_id`, `workspace_id`, source URI/type, ACL tags, and update year. There
+are two tenants and two workspaces. Billing, outage, and access judgments are
+human-declared categorical labels rather than outputs of either scoring
+function. Each query has duplicate-heavy relevant chunks from the same parent.
+
+The lifecycle performs unchanged re-ingest, an updated source replacement,
+source+children deletion, checkpoint, close, cold reopen, and byte-identical
+child snapshot validation. Before and after reopen it also executes the
+fixture-known `guidance` text query, exact native vector-index queries for every
+live child vector, and `updated_year` scalar-index lookups. Both sides must
+equal the exact live fixture set; stale, missing, corrupt, or false parity fails
+the M1 run and artifact writer. Parent metadata remains in the source-ingestion
+collection. Because #4290 has not propagated it to children, all tenant rows
+fail closed as typed capability evidence.
+
+Query rows use the exact stored child bytes produced by `IngestSources`.
+After the cold-reopen check those bytes are projected, without re-chunking or
+re-embedding, into the document-service column-graph collection used by both
+direct and HTTP cells. This insert-only query projection is setup, excluded
+from query timing, and is not reported as source ingestion.
+
+## Embedding cells
+
+### Hashing regression
+
+The built-in deterministic hashing provider remains the hermetic regression
+cell at 64 dimensions. Its digest binds the provider name, dimensions, and
+fixture digest.
+
+### Independent semantic cell
+
+- model: `sentence-transformers/all-MiniLM-L6-v2`
+- revision: `1110a243fdf4706b3f48f1d95db1a4f5529b4d41`
+- license: Apache-2.0
+- dimensions: 384
+- preprocessing: `SentenceTransformer.encode(normalize_embeddings=True)` with
+  the pinned model tokenizer and `max_seq_length=256`
+- corpus license: MIT (the repository-owned fixture)
+- input manifest: `cmd/treedb_rag_benchmark/testdata/semantic_inputs.json`
+- vectors: `cmd/treedb_rag_benchmark/testdata/semantic_vectors.json`
+- canonical vector digest:
+  `aff8b31fad35f45c862c943b19717ddf9979b09726b2ac9352e159a4815663a4`
+
+Regeneration has no Go/runtime dependency:
+
+```sh
+python3 TreeDB/cmd/treedb_rag_benchmark/testdata/generate_semantic_vectors.py \
+  --inputs TreeDB/cmd/treedb_rag_benchmark/testdata/semantic_inputs.json \
+  --output TreeDB/cmd/treedb_rag_benchmark/testdata/semantic_vectors.json
+```
+
+The committed generation used sentence-transformers 5.4.1, transformers 5.8.0,
+and torch 2.11.0. `TestApplicationFixtureAndSemanticVectorsAreStable` verifies
+model/revision/license/dimensions, fixture coverage, and the canonical digest.
+No model or tokenizer is loaded by the Go benchmark.
+
+## Row matrix and unsupported capabilities
+
+The artifact retains the Cartesian matrix for text/vector/hybrid,
+score-only/fetch-topk, four filter contexts, collapse disabled/enabled cap 2,
+direct/HTTP, hashing/semantic, and c1/c4. Supported baseline cells are the 36
+unfiltered, collapse-disabled direct rows plus HTTP fetch rows. Every supported
+cell uses the declared column-graph ANN product route. Offline exhaustive
+cosine controls over the exact hash-bound vectors are reported separately and
+never counted as product QPS or fallback work.
+
+The remaining 348 rows have zero results and exact
+`*main.capabilityError` evidence:
+
+- #4290: `source_metadata_not_propagated`
+- #4292: `multi_field_filter_unavailable`
+- #4291: `parent_collapse_unavailable`
+- service contract: `http_score_only_route_unavailable`
+- #4284 fault boundary: `storage_boundary_fault_injection_unavailable`
+
+No unsupported row is silently skipped, partially ranked, or substituted with
+an exact fallback.
+
+## Exact commands
+
+```sh
+export PATH="$HOME/.gvm/gos/go1.26.0/bin:$PATH"
+export GOROOT="$HOME/.gvm/gos/go1.26.0"
+export CGO_ENABLED=1
+export GOCACHE="$HOME/.cache/gomap-go126"
+export GOWORK=off
+
+SOURCE_ROOT="$PWD"
+rm -rf /tmp/gomap-rag-evidence-43e9568e0
+git clone --no-checkout "$SOURCE_ROOT" /tmp/gomap-rag-evidence-43e9568e0
+git -C /tmp/gomap-rag-evidence-43e9568e0 \
+  checkout 43e9568e0059806b9a7f735a5e383800880d1865
+cd /tmp/gomap-rag-evidence-43e9568e0
+
+go build -buildvcs=true -trimpath \
+  -o /tmp/treedb_rag_benchmark_43e9568e0 \
+  ./TreeDB/cmd/treedb_rag_benchmark
+go version -m /tmp/treedb_rag_benchmark_43e9568e0
+
+/tmp/treedb_rag_benchmark_43e9568e0 \
+  -out-dir "$SOURCE_ROOT/TreeDB/docs/benchmarks/treedb_rag_application_baseline_2026-08-23" \
+  -dir /tmp/gomap-4289-rag-baseline-db-43e9568e0-go126 \
+  -product-base-sha 99929cdeb2ae2ec1e411236c853eb36942075d72 \
+  -harness-revision 43e9568e0059806b9a7f735a5e383800880d1865 \
+  -host-note "Apple M3 arm64, macOS 26.2, 8 logical CPUs, quiet local host, Go 1.26.0, CGO_ENABLED=1"
+```
+
+A bounded diagnostic uses `-smoke`. Its authority is
+`DIAGNOSTIC_NOT_FINAL_EVIDENCE`; it cannot emit a final p99/QPS claim.
+
+## Frozen M1 numbers and #4284 gate
+
+Host: Apple M3, Darwin arm64, 8 logical CPUs, Go 1.26.0, CGO enabled.
+
+Actual final repaired fresh-DB end-to-end source docs/s:
+`160.18, 232.21, 283.00, 291.75, 297.29` in execution order. Median/p95 are
+`283.00 / 296.18` docs/s. Median/p95 allocation is
+`2,163,595 / 2,577,008` B/source. Every repetition reopened with identical
+parent/child and queried text/vector/scalar index state. The retained artifact
+binds harness `43e9568e0059806b9a7f735a5e383800880d1865`.
+The commit is retained on remote branch `evidence/4289-retained-harness`, so a
+normal clone can resolve and inspect the exact checkout.
+
+The historical 37.59 docs/s / 132 GiB-per-operation regime did not reproduce.
+The final repaired M1 artifact replaced the earlier evidence-integrity sample
+before #4284 candidate construction. Its prospective frozen #4284/#4288
+objective is:
+
+- source docs/s >= `325.45` (15% over the retained M1 median);
+- B/source <= `1,947,235` (10% below the retained M1 median);
+- all structural, durability, and matched-quality gates remain mandatory.
+
+Noise policy: fresh DB per ingestion repetition; median is the decision
+statistic and p95 is disclosed; query rows use three counterbalanced
+repetitions; an unexplained >10% QPS or p99 regression blocks an unaffected
+matched-quality row. Base/final work, projection, quality, fixture, config, and
+vector digests must match exactly.
+
+Representative hashing c1 rows (QPS / p99 ms): text score
+`24,967.58 / 0.0631`, vector score `69,989.97 / 0.0269`, hybrid score
+`18,279.29 / 0.0734`, and HTTP hybrid fetch `1,634.47 / 1.0138`.
+Representative semantic c1 rows: text score `24,734.90 / 0.0683`, vector score
+`60,905.41 / 0.0199`, hybrid score `17,451.46 / 0.1527`, and HTTP hybrid fetch
+`409.96 / 4.5564`.
+
+## Durable artifacts
+
+`TreeDB/docs/benchmarks/treedb_rag_application_baseline_2026-08-23/` contains:
+
+- `treedb_rag_application_baseline.json`: raw rows, 1,008 latency samples per
+  supported cell, ingestion repetitions, counters, failures, lifecycle, and
+  frozen gates;
+- `treedb_rag_application_baseline.md`: the human summary;
+- `treedb_rag_application_manifest.json`: SHA-256 and byte length for both
+  artifacts plus product/harness/binary/fixture/config/vector bindings.
+
+The retained explicit DB root is
+`/tmp/gomap-4289-rag-baseline-db-43e9568e0-go126`. All DB handles, document
+services, and HTTP servers are closed after collection. The DB root is retained
+only for local forensic inspection; the committed raw artifacts are the durable
+repository evidence.
+
+## Focused validation
+
+```sh
+go test ./TreeDB/cmd/treedb_rag_benchmark -count=1
+go vet ./TreeDB/cmd/treedb_rag_benchmark
+go test ./TreeDB/collections \
+  -run 'TestIngestSources|TestChunkChildren|TestReopen' -count=1
+go test ./TreeDB/documentservice \
+  -run 'Test.*RAG|TestHTTP.*Search|Test.*Parity' -count=1
+python3 -m py_compile \
+  TreeDB/cmd/treedb_rag_benchmark/testdata/generate_semantic_vectors.py
+```
+
+These gates cover metric hand calculations, dimension/timing/filter corruption,
+fixture/vector stability, insufficient-sample rejection, counter corruption,
+source lifecycle/reopen, direct/service smoke, and artifact hashing.
+
+### Bounded ingest and Build attribution
+
+`benchmarks/vector_db_compare/minima_treedb_probe.py` reuses the native Minima
+client and service for one fresh initial ingest at 250K, 500K, or 1M. It records
+existing stats after every acknowledged 256-row batch, outside the request
+interval. Two fixed eight-second CPU observations cover the first and last 32
+full batches. Allocation endpoints include process/background work; pprof
+allocation samples may lag GC. The observer changes scheduling, so these are
+nonqualifying attribution records, separate from ordinary lifecycle timings.
+
+Prepare a clean, reviewed source and naturally stamped service binary, then bind
+all source/harness blobs, dependencies, manifest, serving configuration, launch
+wrapper and binary before collection. The `--binding` JSON requires
+`source_commit`, `binary` (absolute path), `binary_sha256`, `manifest_sha256`,
+`serving` (absolute path), `serving_sha256`, and Boolean `build_profile`. The strict existing manifest
+validator checks fixture identity and hashes. Use a fresh packet directory on
+`/mnt/fast4tb`; retain failures and never rerun into its output directory.
+
+The packet must supply an independently reviewed `launch.py` and `run.sh`; these
+are environment-specific packet inputs, not generated by the probe. The launcher
+checks `launch-authorization.json` (`authorized: true` and a `sha256` path map),
+fresh output, a clean source tree, free disk, and exclusive process/port ownership;
+it records `execution.json` and the SHA-256 of `command.log` after exit. Bind the
+launcher, command, pinned interpreter, imported dependencies, and all repository
+Python sources in that map. The command sets both the benchmark directory and
+`clients/python/treedb_client/src` from the frozen source on `PYTHONPATH`.
+
+Launch through that packet wrapper with a 600-second timeout, six-CPU affinity, GOMAXPROCS=6,
+GOMEMLIMIT=4GiB, and exclusive ownership of loopback ports 17220/17221/17222:
+
+```sh
+"$PYTHON" "$PACKET/launch.py"
+```
+
+The wrapped command invokes `minima_treedb_probe.py` with `--binary`, `--binding`,
+`--manifest`, `--serving`, and fresh `--output "$PACKET/run"` paths. Direct probe
+invocation does not produce the wrapper records and cannot pass analysis.
+
+Adding `--build-profile` to that wrapped command appends one call through the ordinary initial Build boundary.
+It retains the existing optimize response (including `status.column_graph_build`
+and optimize timing), allocation endpoints, and a fixed 60-second CPU profile.
+The profiler must be active before Build and remain active through completion;
+overrunning the window fails the diagnostic. Idle remainder is included in CPU
+samples, not in the separately recorded Build request interval. Stage timers
+are nested. The initial Build's serving admission produces one successful renew;
+ingest still requires zero graph/Fold work. No query workload follows this probe.
+
+After the owned service and wrapper have exited and their ports are free, use:
+
+```sh
+PYTHONPATH="$SOURCE/benchmarks/vector_db_compare:$SOURCE/clients/python/treedb_client/src" \
+  "$PYTHON" "$SOURCE/benchmarks/vector_db_compare/minima_treedb_probe_analyze.py" \
+  --packet "$PACKET" --manifest "$MANIFEST" --source "$SOURCE"
+```
+
+The analyzer requires the wrapper's `execution.json`, `command.log`, and
+`launch-authorization.json` SHA-256 map. It validates all batch coordinates,
+identities, acknowledgements, profile coverage, bound inputs, work counters and
+cleanup before writing `run-verification.json` and `run-attribution.json`.
+Run the ordinary measured lifecycle separately for Build/Fold/reopen, mutation,
+full payload and final-state correctness; the probe does not replace those gates.

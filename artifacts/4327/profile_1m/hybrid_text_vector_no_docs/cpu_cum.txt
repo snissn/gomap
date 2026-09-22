@@ -1,0 +1,33 @@
+File: treedb_text_hybrid_scale
+Type: cpu
+Time: 2026-08-24 17:26:44 HST
+Duration: 3.75s, Total samples = 4.37s (116.55%)
+Showing nodes accounting for 0.10s, 2.29% of 4.37s total
+Dropped 151 nodes (cum <= 0.02s)
+Showing top 25 nodes out of 157
+      flat  flat%   sum%        cum   cum%
+         0     0%     0%      2.25s 51.49%  github.com/snissn/gomap/TreeDB/collections.(*Collection).SearchHybrid
+         0     0%     0%      2.25s 51.49%  github.com/snissn/gomap/TreeDB/collections.(*Collection).searchHybrid (inline)
+         0     0%     0%      2.25s 51.49%  github.com/snissn/gomap/TreeDB/collections.(*Collection).searchHybridWithCandidateBudgetPolicy
+         0     0%     0%      2.25s 51.49%  main.main
+         0     0%     0%      2.25s 51.49%  main.run
+         0     0%     0%      2.25s 51.49%  main.runHybridQueryRow
+         0     0%     0%      2.25s 51.49%  main.runQueryMatrix
+         0     0%     0%      2.25s 51.49%  runtime.main
+         0     0%     0%      1.43s 32.72%  github.com/snissn/gomap/TreeDB/collections.(*Collection).hybridSearchCandidates
+         0     0%     0%      1.43s 32.72%  github.com/snissn/gomap/TreeDB/collections.(*Collection).hybridSearchCandidatesFixedBudget
+         0     0%     0%      1.43s 32.72%  github.com/snissn/gomap/TreeDB/collections.(*Collection).hybridSearchCandidatesWithBudgetPolicy
+         0     0%     0%      1.43s 32.72%  github.com/snissn/gomap/TreeDB/collections.(*Collection).searchHybridTextCandidatesWithScanBudget
+         0     0%     0%      1.43s 32.72%  runtime.systemstack
+         0     0%     0%      1.42s 32.49%  github.com/snissn/gomap/TreeDB/collections.(*Collection).searchText
+     0.02s  0.46%  0.46%      1.42s 32.49%  github.com/snissn/gomap/TreeDB/collections.executeTextV2ORBlockMaxSearchAtSnapshot
+         0     0%  0.46%      1.42s 32.49%  github.com/snissn/gomap/TreeDB/collections.executeTextV2SearchAtSnapshot
+     0.06s  1.37%  1.83%      0.82s 18.76%  github.com/snissn/gomap/TreeDB/collections.FuseHybridSearchCandidates
+         0     0%  1.83%      0.82s 18.76%  github.com/snissn/gomap/TreeDB/collections.hybridFusePlannedCandidates
+         0     0%  1.83%      0.77s 17.62%  github.com/snissn/gomap/TreeDB/collections.skipTextV2ORBlockMaxLowUpperWindow
+         0     0%  1.83%      0.69s 15.79%  runtime.gcBgMarkWorker.func2
+     0.01s  0.23%  2.06%      0.69s 15.79%  runtime.gcDrain
+     0.01s  0.23%  2.29%      0.59s 13.50%  github.com/snissn/gomap/TreeDB/collections.visitTextV2ORBlockMaxCandidate
+         0     0%  2.29%      0.56s 12.81%  runtime.(*mheap).alloc.func1
+         0     0%  2.29%      0.56s 12.81%  runtime.(*mheap).allocSpan
+         0     0%  2.29%      0.56s 12.81%  sort.Slice

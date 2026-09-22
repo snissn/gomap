@@ -1,0 +1,47 @@
+{
+  "schema": "treedb-mvcc-public-trace-v1",
+  "commits": [
+    {"timestamp": 10, "mutations": [{"key_hex": "610062", "value_hex": "74656e"}]},
+    {"timestamp": 15, "mutations": [{"key_hex": "", "value_hex": "656d707479"}]},
+    {"timestamp": 20, "mutations": [{"key_hex": "ff", "value_hex": "7477656e7479"}]},
+    {"timestamp": 30, "mutations": [{"key_hex": "610062", "value_hex": "746869727479"}]},
+    {"timestamp": 35, "mutations": [{"key_hex": "ff", "delete": true}]},
+    {"timestamp": 40, "mutations": [{"key_hex": "610062", "delete": true}]},
+    {"timestamp": 50, "mutations": [{"key_hex": "610062", "value_hex": ""}]}
+  ],
+  "reads_before_floor": [
+    {"key_hex": "610062", "read_timestamp": 9, "state": "absent", "version": 0, "value_hex": ""},
+    {"key_hex": "610062", "read_timestamp": 10, "state": "present", "version": 10, "value_hex": "74656e"},
+    {"key_hex": "610062", "read_timestamp": 39, "state": "present", "version": 30, "value_hex": "746869727479"},
+    {"key_hex": "610062", "read_timestamp": 40, "state": "tombstone", "version": 40, "value_hex": ""},
+    {"key_hex": "610062", "read_timestamp": 50, "state": "present", "version": 50, "value_hex": ""},
+    {"key_hex": "ff", "read_timestamp": 34, "state": "present", "version": 20, "value_hex": "7477656e7479"},
+    {"key_hex": "ff", "read_timestamp": 35, "state": "tombstone", "version": 35, "value_hex": ""}
+  ],
+  "versions_before_floor": [
+    "@15:present:656d707479",
+    "610062@50:present:",
+    "610062@40:tombstone:",
+    "610062@30:present:746869727479",
+    "610062@10:present:74656e",
+    "ff@35:tombstone:",
+    "ff@20:present:7477656e7479"
+  ],
+  "discard_floor": 30,
+  "prune": {"visited": 7, "skipped": 3, "retained": 6, "pruned": 1},
+  "reads_after_prune": [
+    {"key_hex": "610062", "read_timestamp": 31, "state": "present", "version": 30, "value_hex": "746869727479"},
+    {"key_hex": "610062", "read_timestamp": 40, "state": "tombstone", "version": 40, "value_hex": ""},
+    {"key_hex": "610062", "read_timestamp": 50, "state": "present", "version": 50, "value_hex": ""},
+    {"key_hex": "ff", "read_timestamp": 31, "state": "present", "version": 20, "value_hex": "7477656e7479"},
+    {"key_hex": "ff", "read_timestamp": 35, "state": "tombstone", "version": 35, "value_hex": ""}
+  ],
+  "versions_after_prune": [
+    "@15:present:656d707479",
+    "610062@50:present:",
+    "610062@40:tombstone:",
+    "610062@30:present:746869727479",
+    "ff@35:tombstone:",
+    "ff@20:present:7477656e7479"
+  ]
+}

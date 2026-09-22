@@ -1,0 +1,240 @@
+{
+  "schema_version": 1,
+  "result_kind": "vector_partition_local_system_qualification_plan_v1",
+  "status": "planned_no_measurement",
+  "issue": 4019,
+  "accepted_inputs": {
+    "qualification_head_sha": "eed54bc0b9ec3b705e9170be26ab069bdc9b9771",
+    "campaign_index_path": "TreeDB/docs/evidence/vector-partition-qualification-4027/eed54bc0/campaign.json",
+    "campaign_index_sha256": "c20f11bb38898fd0d5907330bec3df80db29df14e44962a8766502e757849aa2",
+    "validator_stdout_sha256": "b1c2a147fb74725565ef72a111f1bd72549637564956cdf7d69a60f0ef166410",
+    "operations_api": "github.com/snissn/gomap/TreeDB/vectorpartition.OperationsV1",
+    "operations_search": "OperationsV1.Search",
+    "operations_readiness": "OperationsV1.Status",
+    "corpora": [
+      {
+        "id": "embedding_mixture_100k",
+        "vectors": 100000,
+        "queries": 1000,
+        "dimensions": 128,
+        "seed": 4017,
+        "metric": "cosine",
+        "top_k": 10,
+        "fixture_checksum": "ecc2224f386932e580e4956f2cfa852140d3134625971c3511bc0d5feddf9b95",
+        "manifest_sha256": "2548153084bd8a1c4dad91cd26033c870ab6e8fc9a354326f910e5d876e8919f",
+        "truth_identity": "accdb76c693e2da99333b9327efc0e3d83ba630b25a8ba2b6820f5a6f6e38937",
+        "truth_artifact_sha256": "0e9bce9465c9e1fa70c7833364e88c332bc831cfc52c628c90085e1c3068763c",
+        "truth_sha256": "6e17b00a04ad86ad4b13507e6afc1ae38d323280b3a0aa8405bce88b222fa1bc"
+      },
+      {
+        "id": "embedding_mixture_250k",
+        "vectors": 250000,
+        "queries": 1000,
+        "dimensions": 128,
+        "seed": 4016,
+        "metric": "cosine",
+        "top_k": 10,
+        "fixture_checksum": "d0c7c82ba868853aae9a4280161003d72714ad1701d41ed3169c2fa94d470d69",
+        "manifest_sha256": "14194cca83e94d776baf78897e423ba505d51b342cc189845e6b271945502025",
+        "truth_identity": "f1fab20b88cd3dcdd6e95a284400983230b1432b36bd4d73e321e251159795ab",
+        "truth_artifact_sha256": "5a518c1cb8182edc685ab692dc17a6974655572f426a4b97c10482fd1643f04e",
+        "truth_sha256": "89b84125e518f33cc30bc1e4e9defcc0639378d7108fb180f56ec2dc91d6f254"
+      }
+    ]
+  },
+  "workload": {
+    "serial_system_rows": true,
+    "repetitions": 3,
+    "concurrency": [1, 8, 32, 64],
+    "important_concurrency": [1, 8, 32],
+    "saturation_concurrency": 64,
+    "warmup_queries_per_cell": 1000,
+    "cache_state": "fresh_persistent_state_per_repetition; reopen_or_reconnect_before_search; no_os_cache_drop; warm_each_cell_immediately_before_timing",
+    "durability_state": "durable_build_then_checkpoint_or_flush_before_reopen_or_reconnect",
+    "budget_order_by_repetition": ["forward", "reverse", "deterministic_rotation"],
+    "deterministic_rotation_offset": 1,
+    "matched_recall_floor": 0.9,
+    "tree_db": {
+      "variant": "graph-overlap-020-v1",
+      "partitions": 16,
+      "groups": 4,
+      "router_candidates": 256,
+      "ef_search": 128,
+      "search_budgets": [
+        {"probes": 1},
+        {"probes": 2},
+        {"probes": 4},
+        {"probes": 8},
+        {"probes": 16}
+      ],
+      "selected_budget": {"probes": 2},
+      "exhaustive_partition_budget": {"probes": 16}
+    },
+    "milvus": {
+      "index": "HNSW",
+      "metric": "COSINE",
+      "M": 16,
+      "efConstruction": 128,
+      "search_budgets": [
+        {"ef": 16},
+        {"ef": 32},
+        {"ef": 64},
+        {"ef": 128},
+        {"ef": 256},
+        {"ef": 512}
+      ]
+    },
+    "pgvector": {
+      "index": "hnsw",
+      "metric": "vector_cosine_ops",
+      "m": 16,
+      "ef_construction": 128,
+      "search_budgets": [
+        {"ef_search": 16},
+        {"ef_search": 32},
+        {"ef_search": 64},
+        {"ef_search": 128},
+        {"ef_search": 256},
+        {"ef_search": 512}
+      ]
+    }
+  },
+  "resource_envelope": {
+    "host_cpu_model": "11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz",
+    "logical_cpus": 12,
+    "cpu_set": "0-11",
+    "memory_limit_bytes": 25769803776,
+    "swap_limit_bytes": 0,
+    "pids_limit": 4096,
+    "storage_root": "/mnt/fast4tb/<campaign-root>",
+    "storage_filesystem": "ext4",
+    "minimum_free_bytes": 107374182400,
+    "enforcement": "cgroup_v2_for_native_and_docker_limits_for_containers",
+    "noise_policy": "no_concurrent_benchmark_or_build; record host load and invalidate any tainted repetition",
+    "accounting": "sum every process and container in the complete system row, including sidecars"
+  },
+  "artifact_contract": {
+    "schema_version": 1,
+    "result_kind": "vector_partition_local_system_qualification_v1",
+    "allowed_status": ["valid", "failed", "unsupported", "incomplete"],
+    "required_phases": ["load", "index_build", "checkpoint_or_flush", "reopen_or_reconnect", "readiness", "warmup", "search", "cleanup"],
+    "required_resources": ["cpu_seconds", "peak_rss_bytes", "persistent_bytes", "temporary_bytes", "network_rx_bytes", "network_tx_bytes", "swap_bytes"],
+    "required_search_metrics": ["queries", "completed_queries", "result_count", "errors", "timeouts", "recall_at_10", "qps", "p50_nanos", "p95_nanos", "p99_nanos"],
+    "required_host_fields": ["cpu_model", "logical_cpus", "memory_bytes", "kernel", "storage_filesystem", "storage_root", "storage_free_bytes", "docker_version", "go_version", "python_version"],
+    "required_provenance_fields": ["artifact_root", "commands_path", "commands_sha256", "environment_path", "environment_sha256", "started_at", "completed_at"],
+    "required_noise_fields": ["valid", "load_1", "load_5", "load_15"],
+    "tree_db_counters": ["selected_partitions", "selected_groups", "requests", "rpcs", "retries", "redirects", "candidates", "edges", "query_bytes", "request_bytes", "candidate_bytes", "response_bytes"],
+    "tree_db_positive_counters": ["selected_partitions", "selected_groups", "requests", "rpcs", "candidates", "edges", "query_bytes", "request_bytes", "candidate_bytes", "response_bytes"],
+    "tree_db_timings": ["router_open", "router_search", "placement", "queue", "rpc", "network", "read_index_apply", "generation_open", "shard_search", "response", "dedupe", "merge", "total"],
+    "tree_db_positive_timings": ["router_search", "rpc", "read_index_apply", "shard_search", "total"],
+    "complete_status": "complete",
+    "nonclaim": "external relative ranking is observational and same-host results are not multi-host evidence"
+  },
+  "rows": [
+    {
+      "id": "treedb_single_daemon",
+      "system": "treedb",
+      "boundary": {
+        "client": "bounded_tcp_benchmark_client",
+        "service": "vectorpartition.OperationsV1.Search",
+        "topology": "single_daemon_four_group",
+        "processes": 1,
+        "containers": 0,
+        "group_ownership": "all_four_groups_in_one_daemon"
+      },
+      "pinned_identity": {
+        "source_revision": "<source_head_sha>",
+        "vcs_modified": false,
+        "go_version": "go1.26.0"
+      },
+      "required_identity_fields": ["binary_sha256", "source_revision", "vcs_modified", "go_version", "topology_identity_sha256"],
+      "search_budget": "tree_db"
+    },
+    {
+      "id": "treedb_native_multi_daemon",
+      "system": "treedb",
+      "boundary": {
+        "client": "bounded_tcp_benchmark_client",
+        "service": "vectorpartition.OperationsV1.Search",
+        "topology": "native_four_daemon_four_group",
+        "processes": 4,
+        "containers": 0,
+        "group_ownership": "one_group_per_daemon; daemon_zero_also_owns_client_coordinator"
+      },
+      "pinned_identity": {
+        "source_revision": "<source_head_sha>",
+        "vcs_modified": false,
+        "go_version": "go1.26.0"
+      },
+      "required_identity_fields": ["binary_sha256", "source_revision", "vcs_modified", "go_version", "topology_identity_sha256"],
+      "search_budget": "tree_db"
+    },
+    {
+      "id": "treedb_container_multi_daemon",
+      "system": "treedb",
+      "boundary": {
+        "client": "bounded_tcp_benchmark_client_over_isolated_docker_bridge",
+        "service": "vectorpartition.OperationsV1.Search",
+        "topology": "container_four_daemon_four_group",
+        "processes": 4,
+        "containers": 4,
+        "group_ownership": "one_group_per_container; container_zero_also_owns_client_coordinator"
+      },
+      "pinned_identity": {
+        "source_revision": "<source_head_sha>",
+        "vcs_modified": false,
+        "go_version": "go1.26.0",
+        "network": "one_fresh_internal_docker_bridge",
+        "volume_policy": "one_fresh_host_root_and_unique_in_container_destination_per_container"
+      },
+      "required_identity_fields": ["binary_sha256", "image_sha256", "source_revision", "vcs_modified", "go_version", "network", "volume_policy", "topology_identity_sha256"],
+      "search_budget": "tree_db"
+    },
+    {
+      "id": "milvus_standalone",
+      "system": "milvus",
+      "boundary": {
+        "client": "pymilvus.MilvusClient",
+        "service": "Milvus Standalone gRPC",
+        "topology": "official_standalone_compose",
+        "processes": 3,
+        "containers": 3,
+        "group_ownership": "milvus_standalone_plus_official_etcd_and_minio_sidecars"
+      },
+      "pinned_identity": {
+        "server_version": "2.6.20",
+        "client_package": "pymilvus==2.6.16",
+        "compose_url": "https://github.com/milvus-io/milvus/releases/download/v2.6.20/milvus-standalone-docker-compose.yml",
+        "compose_sha256": "9e0e8187e197ce23d3da3e63c19bc20189782f96bacb97287f8fcee80ba628c3",
+        "milvus_image": "milvusdb/milvus:v2.6.20@sha256:e514fced2aa26cf3b94e7de20986fe9e535159fde08f9934d245d0e1a909c18c",
+        "etcd_image": "quay.io/coreos/etcd:v3.5.25@sha256:dc2bdc588d2adc5272204a1fff7f1d89f31e8caacea78fdf509fd409d7162a9d",
+        "minio_image": "minio/minio:RELEASE.2024-12-18T13-15-44Z@sha256:34c8e2f52a5984492555427fee07254c80036bdb7079bb91679232abd7a4fa20",
+        "network": "one_fresh_internal_docker_bridge",
+        "volume_policy": "fresh_etcd_minio_milvus_volumes_per_repetition"
+      },
+      "required_identity_fields": ["server_version", "client_package", "compose_url", "compose_sha256", "milvus_image", "etcd_image", "minio_image", "network", "volume_policy", "topology_identity_sha256"],
+      "search_budget": "milvus"
+    },
+    {
+      "id": "postgres_pgvector",
+      "system": "pgvector",
+      "boundary": {
+        "client": "psycopg.Connection",
+        "service": "PostgreSQL wire protocol",
+        "topology": "single_postgres_container",
+        "processes": 1,
+        "containers": 1,
+        "group_ownership": "one_postgresql_server"
+      },
+      "pinned_identity": {
+        "postgres_version": "16.14",
+        "pgvector_version": "0.8.6",
+        "client_package": "psycopg[binary]==3.3.4",
+        "image": "pgvector/pgvector:pg16@sha256:84a355869251af1a3379cfc9fa7b4dbf962c03f642a4bb7b339a203925071c43",
+        "volume_policy": "one_fresh_postgresql_data_volume_per_repetition"
+      },
+      "required_identity_fields": ["postgres_version", "pgvector_version", "client_package", "image", "volume_policy", "topology_identity_sha256"],
+      "search_budget": "pgvector"
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "schema": "treedb.mongo-gateway.compat-diff.fixture",
+  "version": 1,
+  "id": "collstats-bounded",
+  "capability_id": "diagnostics.dbstats-and-collstats",
+  "expectation": "supported",
+  "database": "compat",
+  "collection": "records",
+  "smoke": false,
+  "seed": [{"_id":"a"}, {"_id":"b"}],
+  "normalize_response_envelope_order": true,
+  "normalize_fields": ["ns"],
+  "ignore_fields": ["size", "avgObjSize", "storageSize", "capped", "max", "maxSize", "totalIndexSize", "indexSizes", "indexDetails", "scaleFactor", "ok"],
+  "command": {"collStats":"records"}
+}

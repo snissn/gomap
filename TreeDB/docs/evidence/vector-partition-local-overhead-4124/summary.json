@@ -1,0 +1,606 @@
+{
+  "conclusion": {
+    "all_absolute_cells_improved_over_pre_optimization": true,
+    "broader_topology_matrix_run": false,
+    "original_100k_p16_c32_failure_repaired": true,
+    "reason": "The minimum decisive replay failed its frozen timing gate; an unchanged broader topology replay cannot qualify the M18/eFC256 candidate."
+  },
+  "disposition": "no_qualification",
+  "execution": {
+    "approval_sha": "200768c1ac63b73ee62a3c2819ab8dee134f2b49",
+    "base_sha": "fac59220f5ca5e7d9bbbce3d31c95fad708c6070",
+    "binary_sha256": "ebd5edb6b51da170ace8a77809192ecba746aa6d87f7b6525c10df6a07bedea7b",
+    "exit_code": 1,
+    "finished_at": "2026-08-12T12:41:20Z",
+    "max_rss_kib": 1963868,
+    "source_head": "6a2a34a8abdba5dd157856dccd4f580872327598",
+    "started_at": "2026-08-12T10:21:37Z",
+    "vcs_modified": false,
+    "wall_seconds": 8382
+  },
+  "inputs": {
+    "calibration_sha256": "077ec68492638dfe4f3cd589e125a769149130666533491e50143767f28ea46f",
+    "graph_regenerated": false,
+    "graph_sha256": {
+      "100k": "3916da3febc7c5a1ecad39488ee259e63103eda1dc6b27231a530e2169e9808b",
+      "250k": "57ad36d923c5fdb701a082727fd24efdcf0c6ac0e24efeda28ca11f232a65f1d"
+    },
+    "holdout_sha256": "b25cc80df7d03294949f3ce3ef70f14e10692d1127d14e45b9081e07e8196e28"
+  },
+  "inventory": {
+    "artifact_bytes": 219811033,
+    "artifact_files": 432,
+    "artifact_tree_sha256": "387e32029a8eeab64892d1d3f42e757242e84fddd5f9edc3b754bdaaf5815fdd",
+    "profiles": 336,
+    "raw_root": "/mnt/fast4tb/gomap-4124-runtime/final-6a2a34a8/final/qualification-48cell-merged-stack-attempt2",
+    "rc_sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865",
+    "reports": 48,
+    "stderr_sha256": "800384884108443c3d2e42606a3fa8e00e770343295edb08c747f02a967df4bf",
+    "stdout_sha256": "d9b941b3c10cb3451d5ca5e40cb70692c632e0dddac16fcc9e66789f04eb62cb",
+    "time_sha256": "5b72d28baea9fcda674d8bf27fbd932ed41e52f1c47641974e8b14443ee52f2b",
+    "transcripts": 48
+  },
+  "result": {
+    "cells": [
+      {
+        "concurrency": 1,
+        "corpus": "250k",
+        "local_candidates": 3578711,
+        "local_edges": 8492876,
+        "p95_nanos_median": 770830,
+        "p95_nanos_values": [
+          770046,
+          770830,
+          771836
+        ],
+        "post_over_pre_p95": 0.5837197890572702,
+        "post_over_pre_qps": 1.75359359321424,
+        "pre_optimization_p95_nanos_median": 1320548,
+        "pre_optimization_qps_median": 867.6452263950897,
+        "probes": 2,
+        "qps_median": 1521.497110189348,
+        "qps_values": [
+          1520.929376062678,
+          1521.497110189348,
+          1533.5843838574226
+        ],
+        "recall": 0.9358999999999934,
+        "repetitions": 3,
+        "routing_recall": 0.9981,
+        "variant": "m16_efc128"
+      },
+      {
+        "concurrency": 32,
+        "corpus": "250k",
+        "local_candidates": 3578711,
+        "local_edges": 8492876,
+        "p95_nanos_median": 6686554,
+        "p95_nanos_values": [
+          6443714,
+          6686554,
+          6712832
+        ],
+        "post_over_pre_p95": 0.5783842514674874,
+        "post_over_pre_qps": 1.6906461625339169,
+        "pre_optimization_p95_nanos_median": 11560747,
+        "pre_optimization_qps_median": 4192.612122711552,
+        "probes": 2,
+        "qps_median": 7088.223596255464,
+        "qps_values": [
+          7024.7452340914515,
+          7088.223596255464,
+          7115.125281382749
+        ],
+        "recall": 0.9358999999999934,
+        "repetitions": 3,
+        "routing_recall": 0.9981,
+        "variant": "m16_efc128"
+      },
+      {
+        "concurrency": 1,
+        "corpus": "250k",
+        "local_candidates": 16934670,
+        "local_edges": 68816118,
+        "p95_nanos_median": 1927727,
+        "p95_nanos_values": [
+          1882339,
+          1927727,
+          1947834
+        ],
+        "post_over_pre_p95": 0.6758993047910096,
+        "post_over_pre_qps": 1.5210566342196956,
+        "pre_optimization_p95_nanos_median": 2852092,
+        "pre_optimization_qps_median": 427.66958857443575,
+        "probes": 16,
+        "qps_median": 650.5096649551532,
+        "qps_values": [
+          641.3751563614105,
+          650.5096649551532,
+          659.9646669568527
+        ],
+        "recall": 0.9376999999999933,
+        "repetitions": 3,
+        "routing_recall": 1,
+        "variant": "m16_efc128"
+      },
+      {
+        "concurrency": 32,
+        "corpus": "250k",
+        "local_candidates": 16934670,
+        "local_edges": 68816118,
+        "p95_nanos_median": 27498600,
+        "p95_nanos_values": [
+          25593011,
+          27498600,
+          30774013
+        ],
+        "post_over_pre_p95": 0.6773665986038689,
+        "post_over_pre_qps": 1.4015035812638368,
+        "pre_optimization_p95_nanos_median": 40596333,
+        "pre_optimization_qps_median": 1092.9062869340166,
+        "probes": 16,
+        "qps_median": 1531.7120751237867,
+        "qps_values": [
+          1351.8662169074455,
+          1531.7120751237867,
+          1606.4744751182413
+        ],
+        "recall": 0.9376999999999933,
+        "repetitions": 3,
+        "routing_recall": 1,
+        "variant": "m16_efc128"
+      },
+      {
+        "concurrency": 1,
+        "corpus": "250k",
+        "local_candidates": 3952860,
+        "local_edges": 9497570,
+        "p95_nanos_median": 855312,
+        "p95_nanos_values": [
+          809362,
+          855312,
+          971777
+        ],
+        "post_over_pre_p95": 0.6403186201113973,
+        "post_over_pre_qps": 1.6655654535842177,
+        "pre_optimization_p95_nanos_median": 1335760,
+        "pre_optimization_qps_median": 844.1248134699414,
+        "probes": 2,
+        "qps_median": 1405.945127828756,
+        "qps_values": [
+          1248.100046940918,
+          1405.945127828756,
+          1451.930147152772
+        ],
+        "recall": 0.9579999999999946,
+        "repetitions": 3,
+        "routing_recall": 0.9981,
+        "variant": "m18_efc256"
+      },
+      {
+        "concurrency": 32,
+        "corpus": "250k",
+        "local_candidates": 3952860,
+        "local_edges": 9497570,
+        "p95_nanos_median": 7535994,
+        "p95_nanos_values": [
+          6740877,
+          7535994,
+          8302459
+        ],
+        "post_over_pre_p95": 0.6144661393092713,
+        "post_over_pre_qps": 1.6063843307968224,
+        "pre_optimization_p95_nanos_median": 12264295,
+        "pre_optimization_qps_median": 3995.4859958135935,
+        "probes": 2,
+        "qps_median": 6418.286097593095,
+        "qps_values": [
+          5902.022751270754,
+          6418.286097593095,
+          6817.224013701584
+        ],
+        "recall": 0.9579999999999946,
+        "repetitions": 3,
+        "routing_recall": 0.9981,
+        "variant": "m18_efc256"
+      },
+      {
+        "concurrency": 1,
+        "corpus": "250k",
+        "local_candidates": 18557501,
+        "local_edges": 76736370,
+        "p95_nanos_median": 2048333,
+        "p95_nanos_values": [
+          1990691,
+          2048333,
+          2169223
+        ],
+        "post_over_pre_p95": 0.7073095184654431,
+        "post_over_pre_qps": 1.4408341208614075,
+        "pre_optimization_p95_nanos_median": 2895950,
+        "pre_optimization_qps_median": 412.8720344589804,
+        "probes": 16,
+        "qps_median": 594.8801147979658,
+        "qps_values": [
+          579.9605214493483,
+          594.8801147979658,
+          621.4399901309364
+        ],
+        "recall": 0.9597999999999947,
+        "repetitions": 3,
+        "routing_recall": 1,
+        "variant": "m18_efc256"
+      },
+      {
+        "concurrency": 32,
+        "corpus": "250k",
+        "local_candidates": 18557501,
+        "local_edges": 76736370,
+        "p95_nanos_median": 28298852,
+        "p95_nanos_values": [
+          27917694,
+          28298852,
+          28545755
+        ],
+        "post_over_pre_p95": 0.701653818029337,
+        "post_over_pre_qps": 1.3911119397178078,
+        "pre_optimization_p95_nanos_median": 40331644,
+        "pre_optimization_qps_median": 1049.5220935551865,
+        "probes": 16,
+        "qps_median": 1460.00271534225,
+        "qps_values": [
+          1431.8904175981681,
+          1460.00271534225,
+          1474.3294938176293
+        ],
+        "recall": 0.9597999999999947,
+        "repetitions": 3,
+        "routing_recall": 1,
+        "variant": "m18_efc256"
+      },
+      {
+        "concurrency": 1,
+        "corpus": "100k",
+        "local_candidates": 3660617,
+        "local_edges": 8376700,
+        "p95_nanos_median": 763524,
+        "p95_nanos_values": [
+          761546,
+          763524,
+          768094
+        ],
+        "post_over_pre_p95": 0.6772834646018523,
+        "post_over_pre_qps": 1.5263162612577603,
+        "pre_optimization_p95_nanos_median": 1127333,
+        "pre_optimization_qps_median": 1084.1603308336933,
+        "probes": 2,
+        "qps_median": 1654.7715427620592,
+        "qps_values": [
+          1642.732643435562,
+          1654.7715427620592,
+          1666.4556156178007
+        ],
+        "recall": 0.9860999999999979,
+        "repetitions": 3,
+        "routing_recall": 0.998,
+        "variant": "m16_efc128"
+      },
+      {
+        "concurrency": 32,
+        "corpus": "100k",
+        "local_candidates": 3660617,
+        "local_edges": 8376700,
+        "p95_nanos_median": 6193043,
+        "p95_nanos_values": [
+          6029118,
+          6193043,
+          6577688
+        ],
+        "post_over_pre_p95": 0.665915594789787,
+        "post_over_pre_qps": 1.4657147849996885,
+        "pre_optimization_p95_nanos_median": 9300042,
+        "pre_optimization_qps_median": 5029.74313453894,
+        "probes": 2,
+        "qps_median": 7372.168877044402,
+        "qps_values": [
+          7268.117224904343,
+          7372.168877044402,
+          7480.856954606721
+        ],
+        "recall": 0.9860999999999979,
+        "repetitions": 3,
+        "routing_recall": 0.998,
+        "variant": "m16_efc128"
+      },
+      {
+        "concurrency": 1,
+        "corpus": "100k",
+        "local_candidates": 27443527,
+        "local_edges": 67227667,
+        "p95_nanos_median": 2062166,
+        "p95_nanos_values": [
+          2049252,
+          2062166,
+          2276682
+        ],
+        "post_over_pre_p95": 0.8083051964901525,
+        "post_over_pre_qps": 1.2428860803033197,
+        "pre_optimization_p95_nanos_median": 2551222,
+        "pre_optimization_qps_median": 448.38757132301004,
+        "probes": 16,
+        "qps_median": 557.2946709783812,
+        "qps_values": [
+          515.2811406649585,
+          557.2946709783812,
+          559.7449260283926
+        ],
+        "recall": 0.9880999999999979,
+        "repetitions": 3,
+        "routing_recall": 1,
+        "variant": "m16_efc128"
+      },
+      {
+        "concurrency": 32,
+        "corpus": "100k",
+        "local_candidates": 27443527,
+        "local_edges": 67227667,
+        "p95_nanos_median": 33949667,
+        "p95_nanos_values": [
+          32877912,
+          33949667,
+          35336108
+        ],
+        "post_over_pre_p95": 0.8019556050502581,
+        "post_over_pre_qps": 1.2081976027083778,
+        "pre_optimization_p95_nanos_median": 42333599,
+        "pre_optimization_qps_median": 998.7083265780702,
+        "probes": 16,
+        "qps_median": 1206.6370059765202,
+        "qps_values": [
+          1186.0489239962533,
+          1206.6370059765202,
+          1247.5084620650935
+        ],
+        "recall": 0.9880999999999979,
+        "repetitions": 3,
+        "routing_recall": 1,
+        "variant": "m16_efc128"
+      },
+      {
+        "concurrency": 1,
+        "corpus": "100k",
+        "local_candidates": 3962475,
+        "local_edges": 9406282,
+        "p95_nanos_median": 773736,
+        "p95_nanos_values": [
+          773239,
+          773736,
+          859670
+        ],
+        "post_over_pre_p95": 0.7027811107185256,
+        "post_over_pre_qps": 1.4864749101749721,
+        "pre_optimization_p95_nanos_median": 1100963,
+        "pre_optimization_qps_median": 1102.0571228585216,
+        "probes": 2,
+        "qps_median": 1638.180262708809,
+        "qps_values": [
+          1461.0429943240451,
+          1638.180262708809,
+          1638.9256672458505
+        ],
+        "recall": 0.9909999999999988,
+        "repetitions": 3,
+        "routing_recall": 0.998,
+        "variant": "m18_efc256"
+      },
+      {
+        "concurrency": 32,
+        "corpus": "100k",
+        "local_candidates": 3962475,
+        "local_edges": 9406282,
+        "p95_nanos_median": 7320955,
+        "p95_nanos_values": [
+          6744555,
+          7320955,
+          7514594
+        ],
+        "post_over_pre_p95": 0.7883375505326291,
+        "post_over_pre_qps": 1.2784131535343188,
+        "pre_optimization_p95_nanos_median": 9286574,
+        "pre_optimization_qps_median": 5085.879603538597,
+        "probes": 2,
+        "qps_median": 6501.855382455648,
+        "qps_values": [
+          6194.186546562546,
+          6501.855382455648,
+          7125.069711682059
+        ],
+        "recall": 0.9909999999999988,
+        "repetitions": 3,
+        "routing_recall": 0.998,
+        "variant": "m18_efc256"
+      },
+      {
+        "concurrency": 1,
+        "corpus": "100k",
+        "local_candidates": 29879721,
+        "local_edges": 75454780,
+        "p95_nanos_median": 2183568,
+        "p95_nanos_values": [
+          2110080,
+          2183568,
+          2264372
+        ],
+        "post_over_pre_p95": 0.7852067131195379,
+        "post_over_pre_qps": 1.308599760876,
+        "pre_optimization_p95_nanos_median": 2780883,
+        "pre_optimization_qps_median": 407.0801092100188,
+        "probes": 16,
+        "qps_median": 532.7049335696066,
+        "qps_values": [
+          503.02353563822555,
+          532.7049335696066,
+          542.1562714370453
+        ],
+        "recall": 0.9929999999999988,
+        "repetitions": 3,
+        "routing_recall": 1,
+        "variant": "m18_efc256"
+      },
+      {
+        "concurrency": 32,
+        "corpus": "100k",
+        "local_candidates": 29879721,
+        "local_edges": 75454780,
+        "p95_nanos_median": 35540758,
+        "p95_nanos_values": [
+          32622309,
+          35540758,
+          37503776
+        ],
+        "post_over_pre_p95": 0.6101902587245946,
+        "post_over_pre_qps": 1.4670741774527774,
+        "pre_optimization_p95_nanos_median": 58245371,
+        "pre_optimization_qps_median": 780.4179324235847,
+        "probes": 16,
+        "qps_median": 1144.9309962797277,
+        "qps_values": [
+          1122.8604534090748,
+          1144.9309962797277,
+          1241.834730193951
+        ],
+        "recall": 0.9929999999999988,
+        "repetitions": 3,
+        "routing_recall": 1,
+        "variant": "m18_efc256"
+      }
+    ],
+    "cells_completed": 48,
+    "failed_gates": [
+      {
+        "candidate_over_baseline_p95": 1.1095987442107857,
+        "candidate_over_baseline_qps": 0.9240537615308309,
+        "concurrency": 1,
+        "corpus": "250k",
+        "p95_ceiling": 1.1,
+        "pass": false,
+        "probes": 2,
+        "qps_floor": 0.9
+      },
+      {
+        "candidate_over_baseline_p95": 1.12703703581845,
+        "candidate_over_baseline_qps": 0.9054858400606492,
+        "concurrency": 32,
+        "corpus": "250k",
+        "p95_ceiling": 1.1,
+        "pass": false,
+        "probes": 2,
+        "qps_floor": 0.9
+      },
+      {
+        "candidate_over_baseline_p95": 1.1821256529302315,
+        "candidate_over_baseline_qps": 0.8819460718949681,
+        "concurrency": 32,
+        "corpus": "100k",
+        "p95_ceiling": 1.1,
+        "pass": false,
+        "probes": 2,
+        "qps_floor": 0.9
+      }
+    ],
+    "quality": {
+      "100k_candidate_p16_recall": 0.9929999999999988,
+      "100k_candidate_p2_recall": 0.9909999999999988,
+      "250k_candidate_p16_recall": 0.9597999999999947,
+      "250k_candidate_p2_recall": 0.9579999999999946
+    },
+    "query_errors": 0,
+    "query_redirects": 0,
+    "query_retries": 0,
+    "query_timeouts": 0,
+    "timing_gates": [
+      {
+        "candidate_over_baseline_p95": 1.1095987442107857,
+        "candidate_over_baseline_qps": 0.9240537615308309,
+        "concurrency": 1,
+        "corpus": "250k",
+        "p95_ceiling": 1.1,
+        "pass": false,
+        "probes": 2,
+        "qps_floor": 0.9
+      },
+      {
+        "candidate_over_baseline_p95": 1.12703703581845,
+        "candidate_over_baseline_qps": 0.9054858400606492,
+        "concurrency": 32,
+        "corpus": "250k",
+        "p95_ceiling": 1.1,
+        "pass": false,
+        "probes": 2,
+        "qps_floor": 0.9
+      },
+      {
+        "candidate_over_baseline_p95": 1.0625638381368316,
+        "candidate_over_baseline_qps": 0.9144831304527619,
+        "concurrency": 1,
+        "corpus": "250k",
+        "p95_ceiling": 1.1,
+        "pass": true,
+        "probes": 16,
+        "qps_floor": 0.9
+      },
+      {
+        "candidate_over_baseline_p95": 1.0291015542609443,
+        "candidate_over_baseline_qps": 0.9531835251897838,
+        "concurrency": 32,
+        "corpus": "250k",
+        "p95_ceiling": 1.1,
+        "pass": true,
+        "probes": 16,
+        "qps_floor": 0.9
+      },
+      {
+        "candidate_over_baseline_p95": 1.0133748251528438,
+        "candidate_over_baseline_qps": 0.9899736733292157,
+        "concurrency": 1,
+        "corpus": "100k",
+        "p95_ceiling": 1.1,
+        "pass": true,
+        "probes": 2,
+        "qps_floor": 0.9
+      },
+      {
+        "candidate_over_baseline_p95": 1.1821256529302315,
+        "candidate_over_baseline_qps": 0.8819460718949681,
+        "concurrency": 32,
+        "corpus": "100k",
+        "p95_ceiling": 1.1,
+        "pass": false,
+        "probes": 2,
+        "qps_floor": 0.9
+      },
+      {
+        "candidate_over_baseline_p95": 1.058871109309338,
+        "candidate_over_baseline_qps": 0.9558765969076914,
+        "concurrency": 1,
+        "corpus": "100k",
+        "p95_ceiling": 1.1,
+        "pass": true,
+        "probes": 16,
+        "qps_floor": 0.9
+      },
+      {
+        "candidate_over_baseline_p95": 1.0468661739745488,
+        "candidate_over_baseline_qps": 0.9488611658757685,
+        "concurrency": 32,
+        "corpus": "100k",
+        "p95_ceiling": 1.1,
+        "pass": true,
+        "probes": 16,
+        "qps_floor": 0.9
+      }
+    ]
+  },
+  "schema": "treedb_vector_local_overhead_reprofile_v1",
+  "status": "timing_gate_failed"
+}

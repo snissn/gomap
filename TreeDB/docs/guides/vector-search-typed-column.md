@@ -1,0 +1,803 @@
+# Vector Search with Typed-Column Dense Sections
+
+TreeDB can publish fixed-dimension `float32_vector` fields into typed-column dense
+sections and can run the `column_graph` native-reader search path over persisted
+physical assets. This guide explains how to place vector payloads, where to keep
+metadata, and how to measure search without overclaiming maturity.
+
+TreeDB remains **pre-alpha**. Vector storage metadata, graph/search APIs, and
+on-disk formats may change. Rebuild demo/benchmark DB directories across branch
+changes.
+
+The opt-in
+[`cosine_normalized_f32_v1`](../spec/cosine-normalized-f32-v1.md)
+representation stores one canonical normalized FP32 plane and uses scalar-u8
+candidates with packed FP32 rerank. It is enabled for Go collection and
+document-service typed input and exposed through negotiated native command64/v4,
+HTTP, and Python. `return_embedding` defaults to false. When true it
+returns the canonical normalized value, not the caller's original magnitude or
+bit pattern.
+
+## Recommended layout
+
+Use the supported typed schema and native batch APIs for indexed values. The
+producer keeps typed-row metadata beside its aligned FP32 image in a fresh
+batch/fold output, so obsolete or failed attempts can be reclaimed without
+leaving unknown prefixes in live files. Do not add a separate JSON-indexed or side-copy store to manage that
+lifecycle. Captured bases and active readers still retain their exact assets;
+generation placement does not itself enable public mutable graph serving.
+The existing manager rescans for reclaimed low-band IDs at high-water exhaustion;
+exclusive creation still protects occupied files. A fully occupied band fails
+closed. Bounded maintenance and backpressure remain necessary even when retained
+column bytes plateau; ID reuse is not a physical-capacity guarantee.
+Append metrics named `SharedSegmentAppend*` and `DirectViewSegmentAppend*`
+classify physical file-ID bands, not optimized-reader capability. Selected fresh
+files use the regular band and still carry aligned, directly readable FP32;
+a nonzero shared-band append count is not evidence of a JSON or copied reader.
+
+Current mutation boundary: explicit experimental public admission is available
+through `EnsureColumnGraphServing`; typed writes alone do not activate it.
+The selected consumer reuses an immutable graph
+and cold scalar plan, binds bounded current typed changes, and materializes only
+results from that current pin. Its explicitly labeled exact path covers complete
+eligible sets up to 4,096; larger supported sets use bounded ANN, with exhaustion
+reported as an error. See the [admission and ownership contract](../spec/typed-column-graph-search-admission.md).
+
+## Explicit mutable serving lifecycle
+
+Open native collection-root callers through the public TreeDB wrapper. Use
+`treedb.OptionsFor(treedb.ProfileCommandWALDurable, rootDir)` and
+`treedb.OpenBackendWithCachedLeafLogStatsAndDeferredVectorBuildMaintenance`, as
+in `cmd/treedb-document-service/main.go`. This returns the backend root APIs with
+the cached leaf-log wiring, live statistics, and deferred-build maintenance
+control. `OpenBackendWithCachedLeafLog` is the simpler helper when those
+additional controls are not needed. Keep the returned cleanup function and
+original root directory: close request views and cached search resources, drain
+collection writes, then call cleanup; reopen the original root directory, not
+the backend's resolved `maindb` directory. Stop using live statistics before
+cleanup.
+
+Setting `backenddb.Options.ResolvedProfile` alone does **not** apply public
+profile tuning or cached-layer wiring. In particular, a raw command-WAL backend
+can produce native collection DATA-root leaf-log records while global leaf
+generation tracking/maintenance is disabled. Do not use that configuration as
+a substitute for the service profile in performance or storage qualification.
+Check the opened database's `treedb.leaf_generation.enabled` statistic, and
+report actual maintenance activity separately from enabled capability. The
+public open helper does not itself admit mutable graph serving or prove bounded
+steady-state storage.
+
+For the selected command-WAL durable schema, load typed batches and explicitly
+build the declared graph with `RebuildVectorIndex` before calling
+`EnsureColumnGraphServing(ctx, index, limits)`. Initial loading/building remains
+part of query-ready time and peak memory; it is not retroactively covered by
+ongoing-work admission. This route supports the selected string/FP32 schema,
+not every schema illustrated elsewhere in this guide.
+
+The complete selected lifecycle requires either mmap-direct prepared graph views
+or admitted descriptor-backed holder fallback, plus exact relative namespace
+authority for destructive asset maintenance. Windows currently lacks that
+namespace authority: ordinary typed read-at fallback is still available, but is
+not evidence for this prepared serving lifecycle. Do not ignore admission or
+maintenance errors to claim the optimized route is ready. Unsupported
+destructive maintenance deletes nothing and does not renew the attempted-work
+allowance.
+
+An empty built graph can be ensured and searched (zero results), then receive
+typed inserts. Deleting all rows and folding back to an empty base is also
+supported, including reopen and re-ensure. Empty bases need no optional prepared
+search cache holder; admission, same-owner fetch lifetime, and positive limits
+still apply. See `TestTypedGraphPublicEmptyLifecycle`.
+
+Supply positive `ColumnGraphServingOptions` limits for publication, owners and
+cold discovery, **owner physical resources**, candidate output, maintenance,
+filtering, fold rows, and search candidates. In particular,
+`Owners.Physical.{segments,descriptors,mapped_bytes,fallback_bytes,inventory_bytes}`
+is mandatory and independent of logical `Owners.AssetBytes` and
+`Owners.StateBytes`; zero is not an automatic default.
+
+Size the physical group for every holder generation that `Owners` permits to
+overlap. One holder admits its complete exact base closure before opening any
+OS resource: `segments` is the number of distinct segment `FileID`s,
+`descriptors` conservatively allows one fallback descriptor per segment,
+`mapped_bytes` is the sum of page-rounded maximum authorized prefix ends,
+and `fallback_bytes` is the sum of unique exact base-ref lengths. The latter is
+an authorized holder-source fallback ceiling: materializer-only refs can make it
+conservative, while request-local materializer copies are not holder fallback
+live bytes. `inventory_bytes` is a deterministic modeled charge for retained
+holder/ref/segment/guardian/cache-entry metadata, not measured heap or RSS.
+Live and in-flight resources are accounted separately, and old/new holders on
+sibling collection handles or generations add until each holder actually
+closes.
+
+Size all groups from workload evidence; the runnable
+`TestTypedGraphPublicSameOwnerServing` fixture shows the full lifecycle.
+Configuration is process-local, shared across collection handles, and immutable
+until DB close. Reapply the same explicit policy after reopen. A failed setup can
+leave that policy selected with writes and queries fenced; fix the cause and
+retry setup, not a different fallback.
+
+For ordinary selected serving, search with explicit
+`QueryMode: VectorIndexQueryModeExact` and
+`StatsMode: VectorIndexSearchStatsModeMinimal` (or production stats). The Q2
+exception is intentionally narrow: the same selected
+`SearchVectorIndexWithBufferReadView` route also admits
+`VectorIndexQueryModeQuantizedRerank` for one explicitly named **legacy**
+`scalar_u8` v1 plane. It does not admit `quantized_only`, calibrated scalar-u8,
+RaBitQ, BRQ, Hybrid, or the benchmark wire entry points. The canonical public
+typed dense route is command-64/v4: production carries compact route identity,
+while explicit diagnostics carries dense work and the sibling packed
+score-plane proof. Legacy command-64/v3 remains the noncanonical scalar-u8
+contract. Other unsupported controls are
+rejected rather than ignored. For full documents use the returned read view,
+fetch from that **same view**, and close it after fetching. Do not open a fresh
+view between search and fetch: publication can change the current collection in
+between. Buffered IDs remain buffer-owned; plain `SearchVectorIndex` returns
+owned results. Indexed filtering/scoring stays typed; retained flexible payloads
+may be decoded when fetching final results.
+
+### Selected mutable scalar-u8 rerank
+
+Use this Q2 route only after `EnsureColumnGraphServing` has admitted the typed
+index and a declared legacy scalar-u8 v1 code plane has been rebuilt with it:
+
+```go
+response, view, err := col.SearchVectorIndexWithBufferReadView(
+    collections.VectorIndexSearchOptions{
+        IndexName:                 "embedding_graph",
+        Query:                     query,
+        QueryMode:                 collections.VectorIndexQueryModeQuantizedRerank,
+        QuantizedIndexName:        "embedding.scalar_u8.legacy",
+        QuantizedRerankCandidates: 32,
+        TopK:                      10,
+        EfSearch:                  64,
+        StatsMode:                 collections.VectorIndexSearchStatsModeMinimal,
+    },
+    &buffer,
+)
+if err != nil {
+    return err
+}
+defer view.Close()
+consumeTopK(response.Results)
+```
+
+The captured read owner is the lifetime boundary for the immutable base, current
+suffix, filter plan, final typed FP32 reads, IDs, and fetch. Its shared prepared
+holder owns the named scalar code resource; request readers attach a non-owning
+reference, so no query reopens or copies the full code plane. A zero-row base
+still validates its selected immutable scalar image before it returns an empty
+or suffix-only answer, but retains no empty scorer/resource. Asset failures are
+fail-closed and never turn this request into exact or document-scan search.
+
+The route validates `TopK` and `EfSearch` up front; when an explicit nonzero
+rerank width is supplied, it must be at least `TopK` (zero selects the default
+`E0` width). Its raw base width is deliberately larger than the final rerank
+width when shadows are possible: `A` is the pre-shadow base domain, `S` the
+conservative shadow allowance, `E0 = min(A, max(TopK, requested EF or the index
+default))`, `Rcap = min(A, E0, requested rerank width or E0)`, and
+`C = min(A, E0 + S)`. It asks Q1 for at most raw `C`, removes
+shadows/ineligible rows afterwards, keeps at most `E0` live candidates,
+exact-reranks at most `Rcap`, and does not refill. Positive `SearchCandidates`
+reserves the eligible suffix (`D`) and `Rcap` first; the remaining scalar
+allowance must be strictly greater than `C`. Complete eligible filters of at
+most 4,096 rows intentionally exact-score typed vectors instead; 4,097+
+exercises ANN. Final scores use the stable FP32 cosine distance with FP64 inverse
+norms, not quantized estimates or the packed raw-dot scorer. See
+the [quantized score-plane contract](../spec/quantized-vector-index.md#selected-typed-read-view-legacy-scalar-u8-rerank-4685)
+for the exact budget/empty-base rules and Q2's internal proof boundary.
+
+Dense requests preserve their supplied context through the captured owner,
+scalar posting/locator preparation, prepared ANN traversal, exact scoring, and
+suffix/result merging. Physical scan checks include tombstones and shadowed
+entries, even when no live IDs are returned. Bounded loops check periodically;
+existing in-place sorts and individual storage/codec operations finish before
+the next check. Cancellation is not a hard wall-clock interrupt. It returns no
+partial results, releases the request owner, and preserves completed work in
+`dense_work` error prefixes. An absent context keeps the ordinary behavior.
+This does not add a context parameter to the public Hybrid API.
+
+The existing captured-base keeper retains the first eight distinct supported
+string filters per index, including their exact preparation limits and compiled
+bounds. Same-key cold requests share one preparation. Entries own immutable row
+selections and predicates; they retain no request snapshot or mutation suffix.
+Every query opens its own current owner. Cached binding removes shadowed/deleted
+base rows and evaluates current typed suffix values before scoring and full
+fetch. When a nonempty suffix has at least as many IDs as the cached plan's
+original source work, ordinary current-snapshot preparation handles that query;
+the cached entry stays available. This simple cost estimate avoids scanning a
+large suffix for an empty or narrow filter. A changed base/schema cannot reuse
+the old selection. Unsupported filters, a full keeper, or a keeper being retired
+also use ordinary current-snapshot preparation.
+
+Known selection/predicate backing is charged under `Owners.StateBytes` until
+keeper closure. Insufficient retained-state allowance leaves the successful
+request uncached. Closing or replacing a keeper waits for queries already using
+its entries; new queries do not join a retiring keeper. This can couple maintenance
+latency to active query duration. It is not a separate document or vector cache.
+Cold preparation and suffix binding share the declared per-request filter budget;
+a cold miss can exhaust it even when a warm bind fits. Filter work reports actual
+cold posting work only when performed and changed-ID checks when binding. Mapping
+work also charges suffix predicates/escaped values and exact-rank enumeration; these are
+admitted bounds, not a total comparison or heap measurement. Compiled predicate
+bounds are separately limited by the smaller of `SourceBytes` and `MappingWork`.
+
+Point reconstruction of nonnullable raw FP32 columns decodes only requested
+vector rows, not an entire part into per-row union values. The existing per-view
+reconstruction entry retains validated raw descriptors: mapped bytes remain
+pinned by that view's read cache; read-at fallback owns just the retained raw
+vector blocks because its source scratch is reusable. Returned vectors/documents
+own their output. Primary-ID permutation and descriptor setup still scale with
+part rows, and other column types retain their existing reconstruction paths;
+this is not an O(top-k) claim for the entire public request.
+
+Use `FoldColumnGraphServing` explicitly when the suffix needs folding and
+`RenewColumnGraphServing` for an admitted maintenance/work epoch. Configured
+`RebuildVectorIndex` follows the fold route. Use `errors.Is` with
+`ErrColumnGraphFoldNeeded`, `ErrColumnGraphOwnerBudget`, and
+`ErrColumnGraphSearchBudget` to distinguish maintenance, caller-held reader
+pressure, and query work. Releasing readers is not interchangeable with folding.
+Successful fold publication installs the ready immutable typed state within the
+existing publication exclusion. Checkpointing and bounded epoch maintenance stay
+outside that exclusion; healthy requests are not rejected merely because those
+steps remain in progress. They may wait for existing admission locks. Actual
+ambiguous publication failures remain fenced and require explicit recovery;
+queries never reconcile or silently search stale authority.
+An overlapping setup may return `ErrConcurrentMutation`; its exact rejected
+captured-base keeper is released without closing newer cache entries or held
+read views. Explicit setup retry is a caller lifecycle decision, not a query
+fallback.
+
+Final prepared-cache warming in Ensure and Fold honors the caller context while
+waiting for the storage barrier or another cache builder. Canceling a waiter
+does not cancel or invalidate another caller's builder. Cancellation is not a
+rollback of earlier successful publication or maintenance work.
+On a serving-holder cache miss, the first caller constructs synchronously from
+an independently acquired current snapshot and exact-base guardian pin. If that
+caller is canceled after construction starts, it observes cancellation only
+after the build has completed or fully rolled back; later waiters remain
+promptly cancelable and do not cancel the shared builder.
+Cold manifest-budget preflights also retain that context and check it every
+256 records and at scan completion. This does not promise preemption inside
+every subsequent synchronous decoder operation.
+Ordinary `WarmVectorIndexPreparedSearch` and buffered prepared searches likewise
+honor `VectorIndexSearchOptions.Context` while their exact or quantized builder
+waits for the storage barrier; canceling that wait leaves no installed cache entry.
+
+Renewal may reject a stale recovery-root plan when concurrent database
+publication changes its authority. An explicit subsequent full renewal obtains
+a fresh plan; keep this bounded by the caller's maintenance deadline and count
+the rejection. Never retry an ambiguous write on that basis. See the
+[maintenance error contract](../spec/typed-asset-maintenance-1788.md#explicit-typed-column_graph-serving-admission).
+
+This is an experimental API checkpoint, not completed minima qualification.
+Public request allocations still grow with corpus size. Ensure-enabled
+insert/replace/delete/reinsert acknowledgements now have subprocess-exit replay
+coverage through ordinary open, re-ensure, filtered/unfiltered search and full
+fetch. A forced post-capture stale setup test covers exact keeper release and
+held-owner readability. These are process-death tests, not power-loss or full
+fold-cutover qualification. Deterministic post-publication read/write and blocked-
+seal replay tests cover the cutover boundary; scaled foreground latency and
+end-to-end qualification still require measured gates. See the
+[operational contract](../spec/typed-asset-maintenance-1788.md#explicit-typed-column_graph-serving-admission)
+and `BenchmarkTypedGraphPublicServing` for the current measured boundary.
+
+| Data | Recommended owner | Why |
+| --- | --- | --- |
+| Embedding/vector payload | `typed_column_part` fixed-dimension `float32_vector` | Contiguous row-major `float32` sections can be viewed directly after validation. |
+| Document title/body/source text | Retained document / residual payload | Usually needed only after top-k; keep flexible. |
+| Filter/sort metadata | `typed_row_asset` or scalar `typed_column_part` depending on query shape | Use typed-row for point reconstruction; use typed-column when filtering/scanning dominates. |
+| Vector graph/ANN data | `derived_accelerator` plus TVIS control state | It accelerates search but is not the authoritative owner of the embedding field. Current healthy rebuilds do not publish duplicate physical graph row payloads. |
+| Adjacency list | typed-column `uint32_list` assets owned by vector-index state | `raw_uint32_offsets_list` is the physical encoding for HNSW adjacency state. Legacy `column_graph` adjacency direct sources and the `adjacency_layout: "uint32_offsets_list"` selector are quarantined compatibility only; new graph builds should not publish those graph-specific source assets or legacy graph row adjacency payloads. |
+| Ordinal-to-base-row references | vector-index state `row_refs` assets (`int64` / `raw_int64`) | Search uses row-ref state to map HNSW ordinals to base rows and to materialize documents without an ID-to-row-ref locator lookup. |
+| Returned opaque document IDs | vector-index state `document_ids` asset (`bytes` / `raw_bytes_offsets`) | Exact arbitrary binary IDs are opaque bytes state. Legacy graph row ID bytes are compatibility or quarantine fallback only. |
+| Optional quantized score planes | vector-index state `quantized_codes` assets (`byte_vector` / `raw_fixed_bytes` for legacy `scalar_u8`, or config-hashed scalar_u8 codes plus `quantized_alpha` metadata for explicit per-granule alpha mode; `packed_bit_vector` / `raw_packed_bit_vector` plus side arrays for `rabitq_1bit` and prototype `brq_1bit`) | Declared score planes are derived assets for explicit `quantized_only` and `quantized_rerank` modes. They are not authoritative vector storage and fail closed when missing, stale, mismatched, unsupported, or unprepared. Omitted `scalar_u8_calibration` remains legacy after the #2845 no-promote gate; per-granule-alpha scalar_u8 scoring is explicit opt-in. |
+
+Best practice: keep vector payloads out of retained JSON for search-heavy
+workloads when the typed-column vector section is the intended search data plane.
+Keep metadata/final documents separate so search/scoring does not fetch full
+JSON unless the caller requests it.
+
+## Illustrative collection metadata
+
+This snippet shows the current shape. Use the runnable demo below for a
+copy/paste validation command.
+
+```go
+meta := &collections.CollectionMeta{
+    Name: "docs",
+    Options: collections.CollectionOptions{
+        DocumentFormat: collections.DocumentFormatJSON,
+        ColumnStore: &collections.ColumnStoreConfig{
+            Enabled: true,
+            RetainedPayload: collections.ColumnRetainedPayloadNonColumn,
+            Columns: []collections.ColumnStoreColumn{
+                {Name: "doc_id", Path: "doc_id", ValueType: collections.ColumnStoreValueString, Owner: collections.TypedStorageOwnerRowAsset, Dictionary: true},
+                {Name: "published_at", Path: "published_at", ValueType: collections.ColumnStoreValueInt64, Owner: collections.TypedStorageOwnerRowAsset},
+                {Name: "embedding", Path: "embedding", ValueType: collections.ColumnStoreValueFloat32Vector, Owner: collections.TypedStorageOwnerColumnPart, VectorDims: 128},
+            },
+        },
+    },
+    VectorIndexes: []collections.VectorIndexDefinition{{
+        Name:       "embedding_graph",
+        Field:      "embedding",
+        Metric:     collections.VectorMetricCosine,
+        Dimensions: 128,
+        M:          16,
+        Strategy:   collections.VectorIndexStrategyColumnGraph,
+        Representation: collections.VectorIndexRepresentationCosineNormalizedF32V1,
+        QuantizedIndexes: []collections.QuantizedVectorIndexDefinition{{
+            Name: "embedding.scalar_u8.fast", // codec/version default to scalar_u8 v1
+        }, {
+            Name:  "embedding.rabitq_1bit.fast",
+            Codec: "rabitq_1bit",
+            Version: 1,
+        }},
+    }},
+}
+```
+
+Ownership rules:
+
+- `embedding` has one authoritative owner: `typed_column_part`.
+- The graph is a derived accelerator tied to the owner/generation.
+- A quantized score plane is also derived state. It can be selected only through
+  explicit quantized query modes and must not mask stale/missing assets with an
+  exact fallback.
+- The retained document can still hold source text or metadata, but do not treat
+  a retained duplicate embedding as the search source of truth.
+
+## Optional quantized query modes
+
+The default/zero query mode is exact and preserves current prepared float32
+scoring. To use a declared `scalar_u8`, `rabitq_1bit`, or prototype `brq_1bit`
+score plane, select it explicitly:
+
+```go
+estimated, err := searcher.Search(collections.VectorIndexSearcherSearchOptions{
+    Query:              query,
+    QueryMode:          collections.VectorIndexQueryModeQuantizedOnly,
+    QuantizedIndexName: "embedding.scalar_u8.fast",
+    TopK:               10,
+    EfSearch:           128,
+})
+
+reranked, err := searcher.Search(collections.VectorIndexSearcherSearchOptions{
+    Query:                     query,
+    QueryMode:                 collections.VectorIndexQueryModeQuantizedRerank,
+    QuantizedIndexName:        "embedding.scalar_u8.fast",
+    QuantizedRerankCandidates: 32,
+    TopK:                      10,
+    EfSearch:                  128,
+})
+```
+
+`quantized_only` returns estimated selected-codec scores and should report
+`search_route_quantized_only=1`, `quantized_scorer_active=1`, and zero exact
+vector/norm reads in stats. `quantized_rerank` reports
+`search_route_quantized_rerank=1`, keeps quantized traversal over the normalized
+`ef_search` pool, trims to `QuantizedRerankCandidates`, exact-reranks that
+shortlist, and returns exact cosine scores. See
+[`quantized-vector-index.md`](../spec/quantized-vector-index.md),
+[`rabitq-closeout-2454.md`](../spec/rabitq-closeout-2454.md), and
+[`vector-search-closeout-2483.md`](../spec/vector-search-closeout-2483.md) for
+benchmark commands, RaBitQ/BRQ storage/recall evidence, and current no-speedup /
+crossover-pending caveats.
+
+## Retained-payload final-fetch policy
+
+For vector-heavy responses, start with `ColumnRetainedPayloadNonColumn`. It keeps
+residual/non-column fields in the primary retained payload, reconstructs declared
+typed fields from typed storage when callers need full documents, and avoids
+storing a second copy of declared typed fields such as `embedding` in the primary
+row value. This is the storage-efficient full-document path.
+
+For projection-oriented responses, also use `ColumnRetainedPayloadNonColumn` and
+apply the opt-in `ProjectionOrientedVectorDocumentFetchPreset` helper. The preset
+sets `IncludeDocuments=true` and configures `DocumentFetchOptions` to exclude the
+vector field declared by `VectorIndexDefinition.Field` (for example
+`ExcludePaths: []string{"embedding"}`) when the response does not return
+embeddings. This is the post-#1875/#1903 baseline and is the recommended default
+starting point for vector search APIs that fetch top-k documents but normally
+suppress the vector payload.
+
+```go
+fetchPreset, err := collections.ProjectionOrientedVectorDocumentFetchPreset(def)
+if err != nil {
+    // Current projection supports top-level JSON vector fields only.
+    return err
+}
+opts := collections.VectorIndexSearcherSearchOptions{
+    Query:    query,
+    TopK:     10,
+    EfSearch: 128,
+}
+fetchPreset.ApplyToSearcherSearchOptions(&opts)
+response, err := searcher.Search(opts)
+```
+
+Use `ProjectionOrientedVectorDocumentFetchPresetForField` when the vector field
+path comes from a custom API surface rather than an already-loaded
+`VectorIndexDefinition`.
+
+`ColumnRetainedPayloadFull` is supported for latency-oriented compatibility: the
+full retained document can be fetched directly from the primary root/value-log
+record without typed-storage JSON reconstruction. It duplicates storage with the
+typed assets, so choose it only after local post-projection benchmarks prove it
+wins for a workload that really needs full documents. Full-retained projection is
+not a cheap projection path: it still fetches and decodes the full retained JSON
+before applying the projection.
+
+`ColumnRetainedPayloadNone` is storage-minimal but should be used only when
+non-column retained fields are not needed. Final documents reconstructed under
+this policy omit residual fields such as source body text or display-only tags.
+
+Account for bytes and write amplification explicitly when comparing policies:
+input document bytes, retained-payload bytes, typed-column/typed-row asset bytes,
+graph asset bytes, total DB directory bytes, and write amplification
+(`db_dir_B_total / input_doc_B_total`). Value-log pointers referenced by primary
+rows are persistent storage managed by reachability, GC, and rewrite/compaction;
+they are not ephemeral WAL records or transient large-value records. See the
+[value-log lifecycle spec](../spec/value-log-lifecycle.md) for storage-lifetime
+rules.
+
+Recommended retained-payload policy matrix command:
+
+```sh
+GOWORK=off go test ./TreeDB/collections \
+  -run '^$' \
+  -bench 'BenchmarkOpenVectorIndexSearcherColumnGraphRetainedPayloadPolicy1876$' \
+  -benchmem \
+  -benchtime=500ms \
+  -count=5
+```
+
+Focused helper-route validation for the #1903 preset:
+
+```sh
+GOWORK=off go test ./TreeDB/collections \
+  -run '^$' \
+  -bench 'BenchmarkOpenVectorIndexSearcherProjectionOrientedFetchPreset1903$' \
+  -benchmem \
+  -benchtime=500ms \
+  -count=5
+```
+
+The benchmark opens/builds the fixture and reusable searcher outside the timed
+loop, then times steady-state search plus top-k document fetch. Report
+`doc_fetch_ns/search`, typed-column counters, JSON reconstruction counters,
+`output_B/search`, retained/input/storage byte counters, and
+`write_amplification`. The #1876 retained-payload policy matrix did not justify
+making full-retained payloads a new default latency preset: non-column plus
+embedding exclusion was fastest among document-producing modes, while
+full-retained full documents reduced allocations but had higher `ns/op` and
+duplicated storage.
+The matrix should be rerun after document reconstruction optimizations land;
+[#1887](https://github.com/snissn/gomap/issues/1887) remains a pending follow-up
+before making stronger default recommendations.
+
+## Runnable smoke demo
+
+Run a deterministic synthetic close/reopen demo:
+
+```sh
+go run ./cmd/treedb_column_graph_demo \
+  -dir /tmp/treedb-column-graph-doc-smoke \
+  -reset \
+  -rows 64 \
+  -dims 8 \
+  -degree 4 \
+  -top-k 5 \
+  -ef-search 32 \
+  -max-decoded-blocks 2
+```
+
+Expected output shape:
+
+```text
+TreeDB column_graph native-reader demo
+db_dir=/tmp/treedb-column-graph-doc-smoke rows=64 dims=8 degree=4 top_k=5 ef_search=32
+rebuild status=column_graph_loaded loaded=true reason=
+search path=column_graph_native_reader status=column_graph_loaded loaded=true results=5 include_docs=false doc_projection=none
+stats candidates=... edges=... row_fetches=0 cache_hits=0 cache_misses=0 decoded_blocks=0 granules_touched=0 physical_B=0 max_resident_B=0 docs_fetched=0 doc_output_B=0 doc_fields_skipped=0
+result[0] id=doc-... ordinal=... score=...
+```
+
+Interpretation:
+
+- `search path=column_graph_native_reader` means the native reader path was used.
+- `docs_fetched=0` means search/scoring did not materialize final documents.
+- `physical_B=0` and `row_fetches=0` on current healthy rebuilds mean search did
+  not read legacy graph row payloads. Non-zero values indicate an explicit
+  legacy compatibility path or a benchmark using old physical graph fixtures.
+- Add `-include-docs` when you intentionally want projected final document
+  fetch included; the demo applies
+  `ProjectionOrientedVectorDocumentFetchPresetForField("embedding")`, so
+  documents omit the embedding field and `docs_fetched` plus
+  `doc_fields_skipped` should be non-zero. Add `-include-doc-embedding` only
+  for explicit full-document/embedding-echo comparison runs.
+
+## Dense-section microbenchmarks
+
+Use this to isolate dense vector section scan/direct-view behavior from the
+collection graph search layer:
+
+```sh
+go test -run '^$' \
+  -bench 'BenchmarkTypedColumnVectorDense(DirectView|Section)Scan' \
+  -benchmem \
+  -benchtime=100x \
+  -count=1 \
+  ./TreeDB/internal/typedcolumn
+```
+
+Expected interpretation:
+
+- Direct-view scan variants should report `0 B/op` and `0 allocs/op` in the core
+  loop when the section is valid for direct view.
+- Section/decode scan variants may allocate because they exercise safe decode
+  paths.
+- Direct views are valid only while the mappedresource handle is live and only
+  after lifetime, range, checksum/integrity policy, endian/format, length, and
+  alignment validation.
+
+## Vector search benchmark tiers
+
+Use the tier aliases below when you need a quick serial/parallel matrix with
+clear timing boundaries. All six aliases use the same synthetic shape:
+`rows=1024`, `dims=128`, `M=16`, `topK=10`, and `efSearch=128`. Setup,
+fixture load, graph rebuild, searcher open, and warmup are outside the timed
+loop; each timed operation is one no-document search.
+
+```sh
+GOMAXPROCS=8 go test ./TreeDB/collections \
+  -run '^$' \
+  -bench '^BenchmarkVectorSearch(CoreGraphSerialTypedColumn1961|CoreGraphParallelTypedColumn1961|PublicSearchSerialTypedColumn1961|PublicSearchParallelTypedColumn1961|ReusableBufferSerialTypedColumn1961|ReusableBufferParallelTypedColumn1961)$' \
+  -benchmem \
+  -benchtime=2s \
+  -count=5
+```
+
+Report both `ns/op` and the explicit `ops/sec` metric emitted by the benchmark
+helpers. For parallel benchmarks, `ops/sec` is the aggregate operation rate
+implied by Go's parallel `ns/op` measurement. Always include `B/op`,
+`allocs/op`, and the direct/fallback counters
+(`adjacency_prepared_csr_mmap_direct/search`,
+`adjacency_typed_list_mmap_direct/search`,
+`adjacency_typed_list_scratch_decodes/search`, `norm_mmap_direct/search`,
+`norm_scratch_decodes/search`, `vector_mmap_direct/search`, and
+`vector_scratch_decodes/search`). Legacy aliases such as
+`adjacency_mmap_direct/search` remain compatibility telemetry, not the primary
+healthy-path adjacency proof; generic typed-list counters are fallback evidence
+once prepared CSR adjacency is active.
+
+| Tier alias | Canonical benchmark | Boundary |
+| --- | --- | --- |
+| `BenchmarkVectorSearchCoreGraphSerialTypedColumn1961` | `BenchmarkColumnVectorGraphNativeSearchCosineTypedColumnV3` | Core reader `SearchCosine`; graph traversal/scoring/top-k only, no public response materialization. |
+| `BenchmarkVectorSearchCoreGraphParallelTypedColumn1961` | `BenchmarkColumnVectorGraphNativeSearchCosineParallelTypedColumnV3` | Same core boundary with one reader/scratch per worker. |
+| `BenchmarkVectorSearchPublicSearchSerialTypedColumn1961` | `BenchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderV4` | Existing public `VectorIndexSearcher.Search`; response-owned result and ID buffers; no documents. |
+| `BenchmarkVectorSearchPublicSearchParallelTypedColumn1961` | `BenchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderParallelV4` | Existing public `Search` with one opened searcher per worker; no documents. |
+| `BenchmarkVectorSearchReusableBufferSerialTypedColumn1961` | `BenchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderReusableBufferV4` | Public no-document `SearchWithBuffer`; caller-owned reusable result/ID storage. |
+| `BenchmarkVectorSearchReusableBufferParallelTypedColumn1961` | `BenchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderReusableBufferParallelV4` | Reusable-buffer path with one independent searcher and buffer per worker. |
+
+Use the reusable-buffer tier only for no-document callers that can honor the
+buffer lifetime contract. `VectorIndexSearcher.SearchWithBuffer` and
+`Collection.SearchVectorIndexWithBuffer` reject `IncludeDocuments`; callers that
+fetch documents should continue using `Search`/`SearchVectorIndex`, or run the
+no-document search first and explicitly call
+`CollectionReadView.FetchDocumentsForVectorIndexSearchResults` outside the ANN
+hot path. In either split shape, report the document-fetch counters separately.
+A `VectorIndexSearchBuffer` is not concurrency-safe, and returned `Results`/`ID`
+slices are valid only until the same buffer is reused or reset.
+
+Use the #2037 truth matrix when comparing legacy/direct graph-row controls,
+current TVIS/base typed-column routing, and combined prepared typed-column rows
+with stable labels:
+
+```sh
+GOMAXPROCS=8 GOWORK=off go test ./TreeDB/collections \
+  -run '^$' \
+  -bench '^BenchmarkColumnVectorGraphSearchTruthMatrix2037$' \
+  -benchmem \
+  -benchtime=500ms \
+  -count=5
+```
+
+The truth-matrix row labels, final #2043 evidence table, and profile caveats are
+specified in
+[`typed-column-graph-search-benchmark-matrix.md`](../spec/typed-column-graph-search-benchmark-matrix.md).
+As of #2043, healthy current-format `current_tvis_base_typed_column` rows select
+the combined prepared view rather than an unprepared hot-loop source route. Treat
+that as the admitted current-format route for architecture/readiness/correctness,
+not proof that the prepared path beats the old legacy graph-row direct control:
+the closeout run kept graph-only search zero-allocation and fallback-free, but
+#2035 is not fully performance-satisfied. The final matrix legacy/current
+`graph_only` rows are also not apples-to-apples storage-path evidence because
+the legacy control visits 612 edges/search while current prepared rows visit 3340
+edges/search (about 5.5x). The #2043 focused adjacency-access microbenchmark is
+not an end-to-end search benchmark; it only shows prepared CSR adjacency access
+is not the source of that mismatch. #1979 adds opt-in benchmark-debug
+batchability/control-flow counters on the #2091 topology-parity fixture: the
+bounded `ef_search=128` row's 612 visited edges are mostly already-visited
+layer-0 skips over degree-16 neighbor tiles, while exact mode scores all 8192
+candidates and visits 100748 edges/search. #2098 adds an opt-in prepared
+single-part indexed-scoring fast path with scalar/default result-equivalence
+coverage, but indexed scoring remains non-default until broader #2035 promotion
+evidence justifies a runtime change. Use #1980 for frontier/top-k or
+already-visited optimization if future profiles continue to justify it, and keep
+#1977 normalized vectors deferred until a prototype beats raw vectors plus
+inverse norms including storage/rebuild cost.
+
+## USearch comparison boundary
+
+See `vector-search-high-qps-collection-api.md` for the final collection API
+boundary, route guardrails, and profile capture notes. Use
+`scripts/bench_vector_search_compare.sh` for the optional external ANN baseline.
+Its current production comparison benchmark is
+`BenchmarkCollectionVectorUSearchProductionCompare`:
+
+- `TreeDB_CollectionSearchVectorIndexNoDocsOneShot` times the public
+  collection-level no-document convenience API. Exact healthy calls use the
+  cached `hnsw_search_pack_v1` route with `open_searcher_calls/op=0` and
+  `open_setup_in_timed_loop=0`, but still allocate response-owned result/ID
+  storage. Use this row as the response-owned convenience route, not the
+  zero-allocation target.
+- `TreeDB_SearchWithBuffer` / `TreeDB_SearchWithBufferParallel` time persisted
+  `column_graph` search through `Collection.OpenVectorIndexSearcher` and
+  `VectorIndexSearcher.SearchWithBuffer`; setup, inserts, rebuild, open, and
+  warmup are outside the timed loop. Parallel rows use one searcher and one
+  `VectorIndexSearchBuffer` per worker.
+- `TreeDB_CollectionSearchVectorIndexWithBuffer` times the collection-level
+  caller-owned result-buffer seam on a warmed collection-owned prepared cache.
+  It mirrors the `SearchWithBuffer` no-document route contract: exact mode,
+  caller-owned buffer, no documents/projection, and the healthy
+  `hnsw_search_pack_v1` route. Cache warmup/build happens outside the timed
+  loop; report `open_searcher_calls/op=0`, `open_setup_in_timed_loop=0`,
+  `response_owned_result_alloc/op=0`, and collection prepared-cache counters.
+- `TreeDB_CollectionSearchVectorIndexWithDocumentsOneShot` is an explicit
+  with-documents/materialization row. It reports `docs_fetched/search`, document
+  bytes/output bytes, and document fetch sub-counters; do not include it in
+  high-QPS no-document success claims.
+- `USearch_Search` / `USearch_SearchParallel` time the pure in-memory USearch Go
+  binding with cosine/f32 HNSW.
+- Both sides use the same deterministic synthetic vector/query generator and the
+  same docs, dims, `M`, `efConstruction`, `efSearch`, `topK`, and `-cpu` list.
+  TreeDB vectors cross the collection JSON insert/rebuild boundary; USearch is
+  built directly from generated float32 vectors, so describe that data boundary
+  when publishing numbers.
+
+Quick c=1/c=8 smoke (the script runs one `go test -cpu=<n>` block per
+`CPU_LIST` entry so worker counts stay explicit):
+
+```sh
+TREEDB_VECTOR_BENCH_DOCS=10000 TREEDB_VECTOR_BENCH_DIMS=64 \
+  TREEDB_VECTOR_BENCH_EF_SEARCH=128 CPU_LIST=1,8 COUNT=1 BENCHTIME=1x \
+  scripts/bench_vector_search_compare.sh
+```
+
+Older `BenchmarkCollectionVectorIndex*` and graph-only rows remain useful
+historical controls, but they are not the current persisted production
+no-document fast path. The response-owned
+`TreeDB_CollectionSearchVectorIndexNoDocsOneShot` row should use the cached pack
+route but still reports convenience-wrapper allocations; use the buffered rows
+for zero-allocation high-QPS production claims. With-document one-shot rows still
+include setup/open and document materialization cost per operation.
+
+The broader legacy/canonical matrix remains useful when comparing with older
+artifacts or when you also need one-shot open/setup names:
+
+```sh
+go test ./TreeDB/collections \
+  -run '^$' \
+  -bench 'Benchmark(ColumnVectorGraphNativeSearchCosineV3|ColumnVectorGraphNativeSearchCosineParallelV3|OpenVectorIndexSearcherColumnGraphNativeReaderSetupV6|OpenVectorIndexSearcherColumnGraphNativeReaderV4|SearchVectorIndexColumnGraphNativeReaderV4|SearchVectorIndexColumnGraphNativeReaderWithDocumentsExcludeEmbedding1875|SearchVectorIndexColumnGraphNativeReaderWithDocumentsV4)$' \
+  -benchmem \
+  -benchtime=500ms \
+  -count=5
+```
+
+Read the benchmark names and row labels before comparing numbers:
+
+| Benchmark category | What is timed |
+| --- | --- |
+| `OpenVectorIndexSearcher...Setup...` | Native-reader setup/open only; no search. |
+| `ColumnVectorGraphNativeSearchCosine...` | Lower-level graph traversal/scoring/top-k over the physical reader. |
+| `OpenVectorIndexSearcher...V4` | Reusable searcher steady-state query; setup/open outside timed loop. |
+| `SearchVectorIndex...V4` | Public response-owned search; exact no-doc collection convenience rows use the cached pack route when healthy, while with-doc/unsupported one-shot rows include setup/open inside each operation. |
+| `...ReusableBuffer...` | Opened public no-document search with caller-owned reusable response buffers. |
+| `...WithDocumentsExcludeEmbedding1875` | Preferred projection-oriented final-fetch row: search plus post-top-k documents with the vector field excluded. |
+| `...WithDocumentsV4` | Explicit full-document comparison row: search plus post-top-k documents including the vector field. |
+
+Profile public response allocation and the reusable-buffer ceiling separately:
+
+```sh
+OUT=$(mktemp -d /tmp/treedb_vector_search_response_XXXXXX)
+GOMAXPROCS=8 go test ./TreeDB/collections -run '^$' \
+  -bench '^BenchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderV4$|^BenchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderReusableBufferV4$' \
+  -benchmem -count=1 -benchtime=5s \
+  -cpuprofile "$OUT/cpu.pprof" -memprofile "$OUT/mem.pprof"
+go tool pprof -top -nodecount=40 "$OUT/cpu.pprof" > "$OUT/cpu_top.txt"
+go tool pprof -top -alloc_space -nodecount=40 "$OUT/mem.pprof" > "$OUT/alloc_space_top.txt"
+```
+
+## Search/fetch timing boundary
+
+Selected admitted graph owners reuse the existing prepared-reader identity key
+from immutable base metadata. It is constructed at setup/fold, charged as
+retained metadata, and rebuilt for a new base or reopen. This does not replace
+snapshot validation or extend the lifetime of a caller's read view. Ordinary
+and quantized prepared-reader paths retain their existing key construction.
+
+Typed point reconstruction validates the complete primary-ID sequence. Identity
+row order uses an implicit locator instead of a per-row reverse map; physically
+permuted parts retain the validated reverse-map path. This does not eliminate
+primary-column decoding or other part setup, and is not a claim that full fetch
+allocation is independent of part size.
+
+Recommended service/query flow:
+
+1. Build or load the vector graph for the current generation.
+2. Open a reusable `OpenVectorIndexSearcher` per worker for steady-state queries.
+3. Search/scoring phase returns top-k IDs and scores without full document fetch.
+4. Fetch full documents only for the final top-k results when the caller needs
+   them, either by setting `IncludeDocuments=true` on an explicitly labeled
+   with-documents search row or by calling
+   `CollectionReadView.FetchDocumentsForVectorIndexSearchResults` as a separate
+   fetch/materialization phase.
+
+Do not compare a reusable-searcher benchmark to a one-shot public API benchmark
+without calling out setup/open cost. Do not compare a search-only benchmark to a
+with-documents benchmark without reporting `docs_fetched/search` and allocation
+counters.
+
+## Current limitations
+
+| Limitation | Status/link |
+| --- | --- |
+| Native vector graph reads from typed-column dense sections are landed for the current `column_graph` path, but broader vector product tuning remains pre-alpha. | [#1782](https://github.com/snissn/gomap/issues/1782), [column graph native vector search spec](../spec/column-graph-native-vector-search.md). |
+| Certified all-layer `column_graph` adjacency direct sources are legacy compatibility only; #1989 quarantines them after #1987/#1988 moved adjacency publication/search to generic `uint32_list` vector-index state. Row-asset adjacency remains a legacy/corruption fallback, and dense fixed-degree compatibility remains a separate fallback path. | [#1989](https://github.com/snissn/gomap/issues/1989), [#1987](https://github.com/snissn/gomap/issues/1987), [#1988](https://github.com/snissn/gomap/issues/1988) |
+| SIMD/vectorized dense-section kernels are follow-up optimization work. | [#1790](https://github.com/snissn/gomap/issues/1790) |
+| Row+column COW maintenance uses shared reachability and active mappedresource pin protection for typed assets; vector graph bytes remain derived, not authoritative. | [#1788](https://github.com/snissn/gomap/issues/1788), parent [#1736](https://github.com/snissn/gomap/issues/1736), [maintenance spec](../spec/typed-asset-maintenance-1788.md) |
+| Nullable/missing vector and adjacency typed-column support remains staged/fail-closed. | See typed-column adapter/spec caveats and follow-up roadmap. |
+| Graph-search prepared-view admission is tiered by generic typed-column optimized-consumer capability. | See [typed-column optimized-consumer capabilities](../spec/typed-column-optimized-consumer-capabilities.md), [prepared graph-search runtime views](../spec/typed-column-graph-search-prepared-views.md), and the [#2044 admission table](../spec/typed-column-graph-search-admission.md); #2046 owns reusable direct-view certifiers. |
+| `scalar_u8`, pure-Go `rabitq_1bit`, and prototype `brq_1bit` score planes are behavior/storage/recall evidence, not a speedup claim or universal replacement. | See the [#1926/#2454/#2481 quantized score-plane spec](../spec/quantized-vector-index.md), [RaBitQ closeout](../spec/rabitq-closeout-2454.md), and [#2483 vector closeout](../spec/vector-search-closeout-2483.md). PQ/OPQ/residual codecs, accelerated RaBitQ backends, batch/control-flow, and windowing optimizations are future work. |
+
+## Best practices
+
+- Store vector payloads in fixed-dimension `float32_vector` typed-column dense
+  sections where possible.
+- Keep one authoritative owner per vector field; graph/index data is derived.
+- Keep source documents and metadata out of the search/scoring hot loop.
+- Use retained document or typed-row metadata for final fetch and display data;
+  use typed-column scalar metadata only when filters/scans justify it.
+- Treat vector-index `row_refs` as the healthy ordinal-to-base-row mapping. Do
+  not treat graph row ID scans as the target row-reference source.
+- Treat vector-index `document_ids` bytes state as the healthy returned-ID
+  source. Graph row ID bytes are compatibility fallback only and should be
+  counted when used.
+- Treat healthy current-format graph-search state as requiring the `mmap_direct`
+  optimized-consumer tier from the typed-column capability matrix, the
+  role-specific prepared runtime views in
+  [`typed-column-graph-search-prepared-views.md`](../spec/typed-column-graph-search-prepared-views.md),
+  and the readiness status in
+  [`typed-column-graph-search-admission.md`](../spec/typed-column-graph-search-admission.md)
+  unless #2044 explicitly admits a weaker tier with benchmark, allocation, and
+  memory evidence.
+- Prefer reusable searchers for serving throughput; use one-shot APIs when you
+  intentionally want setup/open included.
+- Run checkpoint/reopen demos when proving durable manifest/root discovery.
+- Use stable row counts, dimensions, degree, top-k, `ef-search`, and random/data
+  seeds when collecting profiles.
+- Report `docs_fetched`, candidates/search, edges/search, physical bytes,
+  `B/op`, and `allocs/op` with every vector benchmark summary.
+
+## Troubleshooting
+
+| Symptom | Likely cause | Fix |
+| --- | --- | --- |
+| Demo fails to load column graph | Invalid dimensions, unsupported metadata, or command-WAL/format setup problem. | Use the exact demo command first; then change one flag at a time. |
+| `docs_fetched` is non-zero in a search-only comparison | You included final document materialization. | Drop `-include-docs` or move document fetch into a separate benchmark row. |
+| Search benchmark allocates heavily | You may be timing setup/open, public document materialization, or fallback decode. | Compare reusable-searcher vs one-shot names and inspect allocation profiles. |
+| Results differ across branches | On-disk formats/APIs are pre-alpha. | Rebuild DB directories and rerun with the same rows/dims/degree/top-k/seed. |
+| Adjacency typed-list counters show scratch decodes or legacy fallback | The vector-index state `uint32_list` direct source is missing, stale, disabled, or failed validation. Current healthy indexes fail closed when no legacy graph row asset is available; old fixtures may report explicit compatibility fallback. | Rebuild the graph so vector-index state owns certified `uint32_list` / `raw_uint32_offsets_list` adjacency assets. Treat old `column_graph` adjacency-source assets as compatibility-only, not a fix target. |
+| `row_ref_vector_source_legacy_graph_ids` is non-zero | A legacy physical graph row asset was used to map graph ordinals to base typed-column rows because row-ref state was missing or stale. | Rebuild the graph so TVIS publishes `row_refs` assets; keep graph ID reads only as explicit compatibility fallback. |
+| `result_id_graph_fallbacks` is non-zero | A legacy physical graph row asset supplied returned IDs because vector-index document-ID bytes state was missing or failed validation. Current healthy indexes fail closed instead of silently recanonicalizing graph row IDs. | Rebuild the graph so TVIS publishes `document_ids` bytes assets; inspect `result_id_state_validation_failures` for corrupt or stale state. |

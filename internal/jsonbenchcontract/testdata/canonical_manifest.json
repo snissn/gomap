@@ -1,0 +1,105 @@
+{
+  "schema_version": "gomap-jsonbench-canonical/v2",
+  "canonical": true,
+  "pins": {
+    "gomap_commit": "d1b2d909ee6a1fd409d63ef895245c04b0f1376f",
+    "jsonbench_commit": "7886cc3ff909e733b3aa5d68aa8203db67349be2",
+    "clickhouse_version": "26.4.2.10",
+    "dataset": {
+      "identity": "bluesky/smoke.json.gz",
+      "requested_rows": 1000,
+      "valid_rows": 1000,
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+  },
+  "host": {
+    "identity": "deterministic-smoke/linux-amd64"
+  },
+  "artifact_root": ".",
+  "treedb": {
+    "requested_profile": "durable",
+    "result_paths": [
+      "smoke_result.json",
+      "smoke_result_2.json",
+      "smoke_result_3.json",
+      "smoke_result_4.json",
+      "smoke_result_5.json"
+    ],
+    "row_selector": {
+      "storage_layout": "column-store-full-prepared",
+      "projection": "full"
+    }
+  },
+  "clickhouse": {
+    "result_paths": [
+      "clickhouse_result.json",
+      "clickhouse_result_2.json",
+      "clickhouse_result_3.json",
+      "clickhouse_result_4.json",
+      "clickhouse_result_5.json"
+    ]
+  },
+  "comparison": {
+    "query_mode": "one_shot_end_to_end",
+    "aggregate_metadata_mode": "no_aggregate_metadata",
+    "fallback_policy": "forbid",
+    "cache_policy": "drop-os-page-cache-not-required",
+    "warmth_policy": "cold-open-one-shot",
+    "attempts": 5,
+    "query_order": ["q1", "q2", "q3", "q4", "q5", "qexpr"],
+    "statistic": "median",
+    "query_max_ratio": 1.5,
+    "load_max_ratio": 1.5,
+    "q4_regression_max_ratio": 1.05,
+    "target_revision_policy": "revise only with linked same-host evidence and tracker approval",
+    "validation_policy": "canonical-result-hash-and-reconstruction"
+  },
+  "validation": {
+    "status": "passed",
+    "artifact": "validation/reconstruction.json",
+    "timing_boundary": "outside_measured_intervals",
+    "result_hashes_validated": true,
+    "reconstruction_validated": true
+  },
+  "counters": {
+    "visible_base_generations": {"value": 1, "source": "smoke"},
+    "visible_delta_generations": {"value": 0, "source": "smoke"},
+    "tombstones_applied": {"value": 0, "source": "smoke"},
+    "parts_decoded": {"value": 0, "source": "smoke"},
+    "query_time_dictionaries_built": {"value": 0, "source": "smoke"},
+    "query_time_ranks_built": {"value": 0, "source": "smoke"},
+    "query_time_offsets_built": {"value": 0, "source": "smoke"},
+    "document_fallbacks": {"value": 0, "source": "smoke"},
+    "row_fallbacks": {"value": 0, "source": "smoke"},
+    "result_hash_validated": {"value": 1, "source": "smoke"}
+  },
+  "resources": [
+    {
+      "scope": "query/q2",
+      "source_kind": "go_benchmem",
+      "artifact": "q2.bench.txt",
+      "sample_count": 5,
+      "metrics": {"ns_per_op": 1000, "bytes_per_op": 1024, "allocs_per_op": 4}
+    },
+    {
+      "scope": "query/q3",
+      "source_kind": "go_benchmem",
+      "artifact": "q3.bench.txt",
+      "sample_count": 5,
+      "metrics": {"ns_per_op": 1000, "bytes_per_op": 1024, "allocs_per_op": 4}
+    },
+    {
+      "scope": "query/q5",
+      "source_kind": "go_benchmem",
+      "artifact": "q5.bench.txt",
+      "sample_count": 5,
+      "metrics": {"ns_per_op": 1000, "bytes_per_op": 1024, "allocs_per_op": 4}
+    },
+    {
+      "scope": "load",
+      "source_kind": "process_peak",
+      "artifact": "load.time-v.txt",
+      "metrics": {"peak_rss_bytes": 4096}
+    }
+  ]
+}

@@ -1,0 +1,77 @@
+{
+  "schema_version": 1,
+  "result_kind": "vector_partition_system_topology_v1",
+  "assembly": "production_public_v1",
+  "topology": "native_four_daemon_four_group",
+  "nodes": [
+    {
+      "node_id": "native-group-a",
+      "node_config_sha256": "e68280bf8527d4d0c5d63f1a035c9b0f772ee719d4be63dbe129f527884ab580",
+      "database_directory": "/mnt/fast4tb/gomap-4090-vector-onramp-profile-6c83bd1e/runs/native-default/repeat-1/database-native-group-a",
+      "state_directory": "/mnt/fast4tb/gomap-4090-vector-onramp-profile-6c83bd1e/runs/native-default/repeat-1/state-native-group-a",
+      "ready_path": "/mnt/fast4tb/gomap-4090-vector-onramp-profile-6c83bd1e/runs/native-default/repeat-1/state-native-group-a/ready.json",
+      "public_listen": "127.0.0.1:56909",
+      "local_groups": [
+        {
+          "group_id": "group-a",
+          "listen": "127.0.0.1:51253"
+        }
+      ]
+    },
+    {
+      "node_id": "native-group-b",
+      "node_config_sha256": "5abc50a768901a7dbc9f5c81e00046bf546f413f7da0777c9e624ba810d8795d",
+      "database_directory": "/mnt/fast4tb/gomap-4090-vector-onramp-profile-6c83bd1e/runs/native-default/repeat-1/database-native-group-b",
+      "state_directory": "/mnt/fast4tb/gomap-4090-vector-onramp-profile-6c83bd1e/runs/native-default/repeat-1/state-native-group-b",
+      "ready_path": "/mnt/fast4tb/gomap-4090-vector-onramp-profile-6c83bd1e/runs/native-default/repeat-1/state-native-group-b/ready.json",
+      "local_groups": [
+        {
+          "group_id": "group-b",
+          "listen": "127.0.0.1:44963"
+        }
+      ]
+    },
+    {
+      "node_id": "native-group-c",
+      "node_config_sha256": "9ee2b04c193797113830d29031505733bd574378310cf9a194c778fa63451185",
+      "database_directory": "/mnt/fast4tb/gomap-4090-vector-onramp-profile-6c83bd1e/runs/native-default/repeat-1/database-native-group-c",
+      "state_directory": "/mnt/fast4tb/gomap-4090-vector-onramp-profile-6c83bd1e/runs/native-default/repeat-1/state-native-group-c",
+      "ready_path": "/mnt/fast4tb/gomap-4090-vector-onramp-profile-6c83bd1e/runs/native-default/repeat-1/state-native-group-c/ready.json",
+      "local_groups": [
+        {
+          "group_id": "group-c",
+          "listen": "127.0.0.1:33649"
+        }
+      ]
+    },
+    {
+      "node_id": "native-group-d",
+      "node_config_sha256": "6032050ecd78ffa7bdcfd3d5c6c62aaebf4215b611799651ed09f6118769c3ec",
+      "database_directory": "/mnt/fast4tb/gomap-4090-vector-onramp-profile-6c83bd1e/runs/native-default/repeat-1/database-native-group-d",
+      "state_directory": "/mnt/fast4tb/gomap-4090-vector-onramp-profile-6c83bd1e/runs/native-default/repeat-1/state-native-group-d",
+      "ready_path": "/mnt/fast4tb/gomap-4090-vector-onramp-profile-6c83bd1e/runs/native-default/repeat-1/state-native-group-d/ready.json",
+      "local_groups": [
+        {
+          "group_id": "group-d",
+          "listen": "127.0.0.1:42325"
+        }
+      ]
+    }
+  ],
+  "dataset_directory": "/mnt/fast4tb/gomap-4027-qualification-campaign-eed54bc0/250k/dataset",
+  "endpoints": {
+    "group-a": "127.0.0.1:51253",
+    "group-b": "127.0.0.1:44963",
+    "group-c": "127.0.0.1:33649",
+    "group-d": "127.0.0.1:42325"
+  },
+  "group_applied_indexes": {
+    "group-a": 1,
+    "group-b": 1,
+    "group-c": 1,
+    "group-d": 1
+  },
+  "public_route": "vectorpartition.OperationsV1.Search",
+  "m8_loopback": false,
+  "topology_identity_sha256": "632e76cfe303d96279afed9019cdb4b933a4895dcadac5277dfd5a7bef4d0cbd"
+}

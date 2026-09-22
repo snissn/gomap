@@ -1,0 +1,41 @@
+File: treedb_vector_partition_bench
+Type: delay
+Showing nodes accounting for 56.69s, 99.29% of 57.09s total
+Dropped 269 nodes (cum <= 0.29s)
+      flat  flat%   sum%        cum   cum%
+         0     0%     0%     37.53s 65.73%  github.com/hashicorp/raft-boltdb/v2.(*BoltStore).StoreLogs
+         0     0%     0%     37.53s 65.73%  github.com/hashicorp/raft.(*Raft).run
+         0     0%     0%     37.53s 65.73%  github.com/hashicorp/raft.(*raftState).goFunc.func1
+         0     0%     0%     37.53s 65.73%  go.etcd.io/bbolt.(*Tx).Commit
+         0     0%     0%     36.95s 64.73%  go.etcd.io/bbolt.fdatasync
+    36.95s 64.73% 64.73%     36.95s 64.73%  syscall.Fdatasync
+         0     0% 64.73%     25.25s 44.23%  github.com/hashicorp/raft.(*Raft).appendEntries
+         0     0% 64.73%     25.25s 44.23%  github.com/hashicorp/raft.(*Raft).processRPC
+         0     0% 64.73%     25.25s 44.23%  github.com/hashicorp/raft.(*Raft).runFollower
+         0     0% 64.73%     23.78s 41.66%  go.etcd.io/bbolt.(*Tx).write
+         0     0% 64.73%     18.64s 32.66%  runtime/pprof.profileWriter
+    18.64s 32.66% 97.39%     18.64s 32.66%  runtime.(*profBuf).read
+         0     0% 97.39%     18.64s 32.66%  runtime/pprof.readProfile
+         0     0% 97.39%     13.62s 23.86%  go.etcd.io/bbolt.(*Tx).writeMeta
+         0     0% 97.39%     12.28s 21.51%  github.com/hashicorp/raft.(*Raft).dispatchLogs
+         0     0% 97.39%     12.28s 21.51%  github.com/hashicorp/raft.(*Raft).leaderLoop
+         0     0% 97.39%     12.28s 21.51%  github.com/hashicorp/raft.(*Raft).runLeader
+         0     0% 97.39%      0.64s  1.12%  github.com/snissn/gomap/TreeDB/nativewire.(*VectorPartitionProductionTopologyV1).serve.func1.2
+         0     0% 97.39%      0.64s  1.12%  github.com/snissn/gomap/TreeDB/nativewire.VectorPartitionShardSearchTCPServerV1.ServeConn
+         0     0% 97.39%      0.45s  0.79%  internal/poll.(*FD).Pwrite
+         0     0% 97.39%      0.45s  0.79%  os.(*File).WriteAt
+     0.45s  0.79% 98.18%      0.45s  0.79%  syscall.pwrite
+         0     0% 98.18%      0.42s  0.73%  github.com/snissn/gomap/TreeDB/nativewire.(*VectorPartitionShardSearchServiceV1).Search
+         0     0% 98.18%      0.41s  0.72%  github.com/snissn/gomap/TreeDB/collections.(*Collection).OpenVectorPartitionLocalSearcherForGenerationSearchPlanWithContextV1
+         0     0% 98.18%      0.41s  0.72%  github.com/snissn/gomap/TreeDB/nativewire.(*collectionVectorPartitionGenerationCacheV1).openPartition
+         0     0% 98.18%      0.41s  0.72%  github.com/snissn/gomap/TreeDB/nativewire.(*collectionVectorPartitionGenerationLeaseV1).OpenPartition
+         0     0% 98.18%      0.41s  0.72%  github.com/snissn/gomap/TreeDB/collections.(*Collection).openVectorPartitionLocalSearcherForPreparedPartitionWithContextV1
+         0     0% 98.18%      0.32s  0.56%  internal/poll.(*FD).Write
+     0.32s  0.56% 98.74%      0.32s  0.56%  syscall.write
+         0     0% 98.74%      0.32s  0.56%  net.(*conn).Write
+         0     0% 98.74%      0.32s  0.56%  net.(*netFD).Write
+         0     0% 98.74%      0.31s  0.55%  internal/poll.(*FD).Pread
+         0     0% 98.74%      0.31s  0.55%  os.(*File).ReadAt
+     0.31s  0.55% 99.29%      0.31s  0.55%  syscall.pread
+         0     0% 99.29%      0.30s  0.52%  github.com/snissn/gomap/TreeDB/collections.(*Collection).openColumnVectorGraphPhysicalRowReader
+         0     0% 99.29%      0.30s  0.52%  github.com/snissn/gomap/TreeDB/collections.(*Collection).openColumnVectorGraphPhysicalRowReaderAtSnapshot

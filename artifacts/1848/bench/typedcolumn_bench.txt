@@ -1,0 +1,12 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/snissn/gomap/TreeDB/internal/typedcolumn
+cpu: Apple M3
+BenchmarkTypedColumnDenseFloat32Dot1790/optimized_simd_axiomhq-8         	   22870	     52116 ns/op	10060010840 elements/s	     19188 ops/s	  78593835 rows/s	       0 B/op	       0 allocs/op
+BenchmarkTypedColumnDenseFloat32Dot1790/scalar_portable-8                	    3811	    315525 ns/op	1661639350 elements/s	      3169 ops/s	  12981557 rows/s	       0 B/op	       0 allocs/op
+BenchmarkTypedColumnVectorDenseDirectViewScan-8                          	   99358	     12257 ns/op	         1.000 direct_views/op	1336753127 elements/s	     65536 heap_copy_B	         0 mapped_B	  83547070 rows/s	         0 scratch_decodes/op	       0 B/op	       0 allocs/op
+BenchmarkTypedColumnVectorDenseMmapHeapDirectViewScan/mapped-8           	  100530	     12383 ns/op	         1.000 direct_views/op	1323133120 elements/s	         0 heap_copy_B	     65536 mapped_B	  82695820 rows/s	         0 scratch_decodes/op	       0 B/op	       0 allocs/op
+BenchmarkTypedColumnVectorDenseMmapHeapDirectViewScan/heap-8             	   99135	     12200 ns/op	         1.000 direct_views/op	1342936524 elements/s	     65536 heap_copy_B	         0 mapped_B	  83933533 rows/s	         0 scratch_decodes/op	       0 B/op	       0 allocs/op
+BenchmarkTypedColumnVectorDenseSectionScan-8                             	   39943	     30485 ns/op	 537443588 elements/s	  33590224 rows/s	  131168 B/op	       6 allocs/op
+PASS
+ok  	github.com/snissn/gomap/TreeDB/internal/typedcolumn	9.182s

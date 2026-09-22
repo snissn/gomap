@@ -1,0 +1,23 @@
+	Command being timed: "/mnt/fast4tb/tmp/issue4001_exactinvariants_bench -dataset /mnt/fast4tb/tmp/treedb_m6_1m_safe_TEzTe1/fixture -out /mnt/fast4tb/tmp/issue4001_exactinvariants_overlap_out_TALe4v -m3-persist-db /mnt/fast4tb/tmp/issue4001_exactinvariants_overlap_db_72Xw7b -format json -stage overlap,partition_index -partitions 16 -top-k 10 -overlap 0.20 -partition-assignment graph -partition-repetitions 1 -partition-pivots 8 -partition-max-leaf-bucket 32 -partition-degree 4 -partition-hnsw-m 16"
+	User time (seconds): 863.17
+	System time (seconds): 71.36
+	Percent of CPU this job got: 118%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 13:09.77
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 3815924
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 205
+	Minor (reclaiming a frame) page faults: 6098933
+	Voluntary context switches: 1213546
+	Involuntary context switches: 242002
+	Swaps: 0
+	File system inputs: 464
+	File system outputs: 2950520
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0

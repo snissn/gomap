@@ -1,0 +1,91 @@
+File: collections.test
+Type: alloc_space
+Time: 2026-05-25 16:45:34 HST
+Showing nodes accounting for 2.31GB, 98.57% of 2.34GB total
+Dropped 196 nodes (cum <= 0.01GB)
+      flat  flat%   sum%        cum   cum%
+    0.27GB 11.73% 11.73%     0.27GB 11.73%  bytes.growSlice
+    0.18GB  7.64% 19.37%     0.18GB  7.64%  github.com/snissn/gomap/TreeDB/internal/commitlog.DecodeCollectionInsertBatchByIDPayload
+    0.17GB  7.36% 26.73%     0.26GB 11.30%  github.com/snissn/gomap/TreeDB/internal/typedcolumn.(*columnPartImageBuilder).build
+    0.15GB  6.28% 33.01%     0.24GB 10.10%  github.com/snissn/gomap/TreeDB/internal/commitlog.EncodeCollectionInsertBatchByIDPayload
+    0.15GB  6.28% 39.29%     0.24GB 10.10%  github.com/snissn/gomap/TreeDB/internal/commitlog.encodeCommandFrameTo
+    0.13GB  5.68% 44.97%     0.16GB  7.01%  github.com/snissn/gomap/TreeDB/internal/commitlog.NewWriterWithOptions
+    0.11GB  4.78% 49.74%     1.94GB 82.82%  github.com/snissn/gomap/TreeDB/collections.(*Collection).insertBatchNoIndex
+    0.10GB  4.47% 54.21%     0.11GB  4.54%  github.com/snissn/gomap/TreeDB/collections.extractColumnDeclaredRowsFromJSONDocuments
+    0.10GB  4.46% 58.67%     0.10GB  4.46%  github.com/snissn/gomap/TreeDB/collections.projectColumnDeclaredRowsForColumns
+    0.09GB  3.82% 62.50%     2.03GB 86.65%  github.com/snissn/gomap/TreeDB/collections.insertTypedColumnStringPredicateBenchRows
+    0.09GB  3.82% 66.32%     0.09GB  3.82%  github.com/snissn/gomap/TreeDB/collections.collectionDocumentsFromNoIndexEntries (inline)
+    0.09GB  3.82% 70.14%     0.09GB  3.82%  github.com/snissn/gomap/TreeDB/collections.columnWriteDocumentsFromNoIndexEntries (inline)
+    0.09GB  3.82% 73.96%     0.09GB  3.82%  github.com/snissn/gomap/TreeDB/internal/commitlog.canonicalCollectionDocuments
+    0.08GB  3.27% 77.23%     0.08GB  3.27%  github.com/snissn/gomap/TreeDB/collections.readColumnPhysicalAssetFromManagerIntoWithIntegrity
+    0.07GB  3.19% 80.42%     0.08GB  3.23%  github.com/snissn/gomap/TreeDB/internal/typedcolumn.(*columnPartImageBuilder).addRowLocatorsSection
+    0.07GB  3.18% 83.60%     0.07GB  3.18%  github.com/snissn/gomap/TreeDB/batch.(*Batch).Reserve (inline)
+    0.07GB  3.18% 86.79%     0.07GB  3.18%  github.com/snissn/gomap/TreeDB/internal/memtable.getAppendOnlyEntries
+    0.06GB  2.71% 89.49%     0.06GB  2.71%  github.com/snissn/gomap/TreeDB/collections.cloneBatchDocumentIDs
+    0.05GB  2.23% 91.72%     0.05GB  2.23%  github.com/snissn/gomap/TreeDB/collections.typedColumnStringPredicateBenchKinds (inline)
+    0.03GB  1.34% 93.06%     0.03GB  1.34%  bufio.NewWriterSize (inline)
+    0.03GB  1.28% 94.34%     0.03GB  1.28%  github.com/snissn/gomap/TreeDB/collections.typedColumnAdapterRowsFromDeclaredRows
+    0.03GB  1.28% 95.62%     0.07GB  3.03%  github.com/snissn/gomap/TreeDB/collections.buildTypedColumnAdapterPart
+    0.02GB  0.95% 96.57%     0.04GB  1.75%  github.com/snissn/gomap/TreeDB/internal/typedcolumn.(*ColumnPartBuilder).Build
+    0.02GB  0.72% 97.29%     0.02GB  0.72%  github.com/snissn/gomap/TreeDB/internal/typedcolumn.(*columnPartImageBuilder).addColumnDataSections
+    0.01GB  0.64% 97.93%     0.01GB  0.64%  github.com/snissn/gomap/TreeDB/collections.buildColumnInt64ValuesAssetForColumn
+    0.01GB  0.64% 98.57%     0.01GB  0.64%  github.com/snissn/gomap/TreeDB/internal/typedcolumn.(*ColumnPartBuilder).sortedOrder
+         0     0% 98.57%     0.15GB  6.32%  bytes.(*Buffer).Write
+         0     0% 98.57%     0.13GB  5.40%  bytes.(*Buffer).WriteString
+         0     0% 98.57%     0.27GB 11.73%  bytes.(*Buffer).grow
+         0     0% 98.57%     1.94GB 82.82%  github.com/snissn/gomap/TreeDB/collections.(*Collection).InsertBatch
+         0     0% 98.57%     0.76GB 32.45%  github.com/snissn/gomap/TreeDB/collections.(*Collection).buildColumnPublishPlanForCommandWALContext
+         0     0% 98.57%     0.76GB 32.45%  github.com/snissn/gomap/TreeDB/collections.(*Collection).buildColumnPublishPlanForCommandWALContext.func1
+         0     0% 98.57%     1.94GB 82.82%  github.com/snissn/gomap/TreeDB/collections.(*Collection).insertBatch (inline)
+         0     0% 98.57%     1.36GB 58.16%  github.com/snissn/gomap/TreeDB/collections.(*Collection).insertBatchNoIndex.func4
+         0     0% 98.57%     1.94GB 82.82%  github.com/snissn/gomap/TreeDB/collections.(*Collection).insertBatchOnce
+         0     0% 98.57%     1.94GB 82.82%  github.com/snissn/gomap/TreeDB/collections.(*Collection).insertBatchOnceWithLockState
+         0     0% 98.57%     1.94GB 82.82%  github.com/snissn/gomap/TreeDB/collections.(*Collection).insertBatchWithCommandWALIntent
+         0     0% 98.57%     1.94GB 82.82%  github.com/snissn/gomap/TreeDB/collections.(*Collection).insertBatchWithCommandWALIntent.func1
+         0     0% 98.57%     0.24GB 10.10%  github.com/snissn/gomap/TreeDB/collections.(*Collection).newCollectionInsertCommandWALIntent
+         0     0% 98.57%     0.76GB 32.45%  github.com/snissn/gomap/TreeDB/collections.(*Collection).prepareColumnPhysicalAssetRowsForCommand
+         0     0% 98.57%     0.76GB 32.45%  github.com/snissn/gomap/TreeDB/collections.(*Collection).prepareColumnPhysicalAssetsForCommand
+         0     0% 98.57%     1.27GB 54.34%  github.com/snissn/gomap/TreeDB/collections.(*Collection).publishRootDeltaGroupMaybeColumn
+         0     0% 98.57%     0.76GB 32.45%  github.com/snissn/gomap/TreeDB/collections.(*Collection).publishRootDeltaGroupMaybeColumn.func1
+         0     0% 98.57%     1.36GB 58.16%  github.com/snissn/gomap/TreeDB/collections.(*Collection).withCommandWALPublishCoordinator
+         0     0% 98.57%     0.26GB 11.30%  github.com/snissn/gomap/TreeDB/collections.(*typedColumnAdapterPart).buildImage
+         0     0% 98.57%     0.06GB  2.55%  github.com/snissn/gomap/TreeDB/collections.BenchmarkTypedColumnStringPredicatePreparedHot
+         0     0% 98.57%     2.28GB 97.34%  github.com/snissn/gomap/TreeDB/collections.BenchmarkTypedColumnStringPredicatePreparedHot.func1
+         0     0% 98.57%     0.76GB 32.45%  github.com/snissn/gomap/TreeDB/collections.BuildColumnPublishPlan
+         0     0% 98.57%     0.01GB  0.64%  github.com/snissn/gomap/TreeDB/collections.buildColumnInt64ValuesAssets
+         0     0% 98.57%     0.37GB 15.62%  github.com/snissn/gomap/TreeDB/collections.buildTypedColumnPartImageForDeclaredRows
+         0     0% 98.57%     0.03GB  1.15%  github.com/snissn/gomap/TreeDB/collections.encodeColumnInt64ValuesAsset
+         0     0% 98.57%     0.25GB 10.58%  github.com/snissn/gomap/TreeDB/collections.encodeColumnPhysicalAsset
+         0     0% 98.57%     0.07GB  3.18%  github.com/snissn/gomap/TreeDB/collections.newCollectionRunTable (inline)
+         0     0% 98.57%     0.17GB  7.26%  github.com/snissn/gomap/TreeDB/collections.openCollectionCommandWALDB
+         0     0% 98.57%     0.17GB  7.26%  github.com/snissn/gomap/TreeDB/collections.openTypedColumnInt64ScanDB
+         0     0% 98.57%     0.76GB 32.45%  github.com/snissn/gomap/TreeDB/collections.prepareColumnPublishAssets
+         0     0% 98.57%     0.11GB  4.54%  github.com/snissn/gomap/TreeDB/collections.prepareColumnWritePublishInputBeforeCommandWAL
+         0     0% 98.57%     0.08GB  3.27%  github.com/snissn/gomap/TreeDB/collections.prepareTypedColumnStringPredicatePreparedHotRunnerForTargets
+         0     0% 98.57%     0.08GB  3.27%  github.com/snissn/gomap/TreeDB/collections.readColumnPhysicalAssetFromManager
+         0     0% 98.57%     0.08GB  3.27%  github.com/snissn/gomap/TreeDB/collections.readColumnPhysicalAssetFromManagerInto (inline)
+         0     0% 98.57%     1.94GB 82.82%  github.com/snissn/gomap/TreeDB/collections.retryInsertBatchMutation
+         0     0% 98.57%     0.17GB  7.26%  github.com/snissn/gomap/TreeDB/collections.setupTypedColumnStringPredicateBenchCollection
+         0     0% 98.57%     0.03GB  1.17%  github.com/snissn/gomap/TreeDB/collections.writeManifestBytes
+         0     0% 98.57%     0.16GB  6.74%  github.com/snissn/gomap/TreeDB/collections.writeManifestString
+         0     0% 98.57%     0.12GB  5.32%  github.com/snissn/gomap/TreeDB/collections.writeManifestUint64 (inline)
+         0     0% 98.57%     1.17GB 49.81%  github.com/snissn/gomap/TreeDB/db.(*DB).PublishOrderedRootDeltaGroupWithPreflightCommandWALContextRootBuilderAndSystemDeltaBuilder (inline)
+         0     0% 98.57%     0.33GB 13.93%  github.com/snissn/gomap/TreeDB/db.(*DB).appendCommandWALIntent
+         0     0% 98.57%     0.33GB 13.93%  github.com/snissn/gomap/TreeDB/db.(*DB).appendPublicCommandWALIntent
+         0     0% 98.57%     1.17GB 49.81%  github.com/snissn/gomap/TreeDB/db.(*DB).publishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBuilder
+         0     0% 98.57%     0.08GB  3.43%  github.com/snissn/gomap/TreeDB/db.(*DB).publishOrderedRootDeltaIterator
+         0     0% 98.57%     0.17GB  7.26%  github.com/snissn/gomap/TreeDB/db.Open
+         0     0% 98.57%     0.17GB  7.26%  github.com/snissn/gomap/TreeDB/db.openWithLock
+         0     0% 98.57%     0.07GB  3.18%  github.com/snissn/gomap/TreeDB/db.orderedRootDeltaBatchFromIterator
+         0     0% 98.57%     0.33GB 13.93%  github.com/snissn/gomap/TreeDB/internal/commitlog.(*CommandJournal).AppendCommand
+         0     0% 98.57%     0.24GB 10.10%  github.com/snissn/gomap/TreeDB/internal/commitlog.(*Writer).AppendCommand
+         0     0% 98.57%     0.16GB  7.01%  github.com/snissn/gomap/TreeDB/internal/commitlog.OpenCommandJournal
+         0     0% 98.57%     0.18GB  7.64%  github.com/snissn/gomap/TreeDB/internal/commitlog.validateCommandEnvelopeForEncode
+         0     0% 98.57%     0.18GB  7.64%  github.com/snissn/gomap/TreeDB/internal/commitlog.validateCommandEnvelopePayload
+         0     0% 98.57%     0.07GB  3.18%  github.com/snissn/gomap/TreeDB/internal/memtable.NewAppendOnlyWithEntryCapacity
+         0     0% 98.57%     0.07GB  3.18%  github.com/snissn/gomap/TreeDB/internal/memtable.newAppendOnlyWithInitialEntries (inline)
+         0     0% 98.57%     0.04GB  1.75%  github.com/snissn/gomap/TreeDB/internal/typedcolumn.BuildColumnPart
+         0     0% 98.57%     0.26GB 11.30%  github.com/snissn/gomap/TreeDB/internal/typedcolumn.BuildColumnPartImage
+         0     0% 98.57%     1.14GB 48.53%  testing.(*B).launch
+         0     0% 98.57%     1.20GB 51.36%  testing.(*B).run1.func1
+         0     0% 98.57%     2.34GB 99.89%  testing.(*B).runN

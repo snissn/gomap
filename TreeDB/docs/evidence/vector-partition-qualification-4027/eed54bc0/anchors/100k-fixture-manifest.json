@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "fixture": "deterministic_100000",
+  "generator": "treedb_vector_partition_embedding_mixture_v1",
+  "arithmetic": "ieee754_binary64_explicit_fma_v1",
+  "vectors": 100000,
+  "queries": 1000,
+  "dimensions": 128,
+  "metric": "cosine",
+  "seed": 4017,
+  "checksum": "ecc2224f386932e580e4956f2cfa852140d3134625971c3511bc0d5feddf9b95"
+}

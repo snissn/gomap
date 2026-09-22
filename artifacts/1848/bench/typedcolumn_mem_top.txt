@@ -1,0 +1,13 @@
+File: typedcolumn.test
+Type: alloc_space
+Time: 2026-05-25 19:26:22 HST
+Showing nodes accounting for 6.21GB, 99.49% of 6.24GB total
+Dropped 74 nodes (cum <= 0.03GB)
+      flat  flat%   sum%        cum   cum%
+    3.11GB 49.82% 49.82%     3.11GB 49.83%  github.com/snissn/gomap/TreeDB/internal/typedcolumn.DecodeRawFloat32VectorPayload
+    3.10GB 49.67% 99.49%     6.21GB 99.55%  github.com/snissn/gomap/TreeDB/internal/typedcolumn.denseFloat32ColumnInto
+         0     0% 99.49%     6.21GB 99.55%  github.com/snissn/gomap/TreeDB/internal/typedcolumn.(*ColumnPart).DenseFloat32VectorColumn
+         0     0% 99.49%     3.11GB 49.88%  github.com/snissn/gomap/TreeDB/internal/typedcolumn.(*GranuleReader).DecodeFloat32VectorInto
+         0     0% 99.49%     6.21GB 99.58%  github.com/snissn/gomap/TreeDB/internal/typedcolumn.BenchmarkTypedColumnVectorDenseSectionScan
+         0     0% 99.49%     6.21GB 99.59%  testing.(*B).launch
+         0     0% 99.49%     6.23GB 99.92%  testing.(*B).runN

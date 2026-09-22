@@ -1,0 +1,48 @@
+File: treedb_vector_partition_bench
+Build ID: 6e601df17e91fc834d40505729b45018b8011783
+Type: delay
+Time: 2026-08-09 14:11:55 HST
+Showing nodes accounting for 15.24ms, 99.04% of 15.39ms total
+Dropped 131 nodes (cum <= 0.08ms)
+Showing top 40 nodes out of 51
+      flat  flat%   sum%        cum   cum%
+   14.71ms 95.57% 95.57%    14.71ms 95.57%  sync.(*Mutex).Unlock (partial-inline)
+         0     0% 95.57%    13.02ms 84.58%  github.com/hashicorp/raft.(*raftState).goFunc.func1
+         0     0% 95.57%    12.50ms 81.23%  github.com/hashicorp/raft.(*Raft).run
+         0     0% 95.57%    12.50ms 81.23%  github.com/hashicorp/raft-boltdb/v2.(*BoltStore).StoreLogs
+         0     0% 95.57%    12.50ms 81.23%  github.com/hashicorp/raft.(*Raft).run-fm
+         0     0% 95.57%    12.48ms 81.09%  github.com/hashicorp/raft.(*Raft).leaderLoop
+         0     0% 95.57%    12.48ms 81.09%  github.com/hashicorp/raft.(*Raft).runLeader
+         0     0% 95.57%    12.48ms 81.09%  github.com/hashicorp/raft.(*Raft).dispatchLogs
+         0     0% 95.57%    12.42ms 80.69%  go.etcd.io/bbolt.(*Tx).Commit
+         0     0% 95.57%    12.28ms 79.76%  go.etcd.io/bbolt.(*Tx).writeMeta
+         0     0% 95.57%     1.71ms 11.11%  github.com/snissn/gomap/TreeDB/nativewire.(*VectorPartitionProductionTopologyV1).serve.func1.2
+         0     0% 95.57%     1.71ms 11.11%  github.com/snissn/gomap/TreeDB/nativewire.(*VectorPartitionShardSearchServiceV1).Search
+         0     0% 95.57%     1.71ms 11.11%  github.com/snissn/gomap/TreeDB/nativewire.VectorPartitionShardSearchTCPServerV1.ServeConn
+         0     0% 95.57%     1.70ms 11.03%  github.com/snissn/gomap/TreeDB/collections.(*VectorPartitionLocalSearcherV1).SearchPreflightV1
+    0.53ms  3.47% 99.04%     0.53ms  3.47%  runtime.unlock (partial-inline)
+         0     0% 99.04%     0.51ms  3.31%  github.com/hashicorp/raft-boltdb/v2.(*BoltStore).GetLog
+         0     0% 99.04%     0.51ms  3.31%  github.com/hashicorp/raft.(*Raft).pipelineReplicate
+         0     0% 99.04%     0.51ms  3.31%  github.com/hashicorp/raft.(*Raft).pipelineSend
+         0     0% 99.04%     0.51ms  3.31%  github.com/hashicorp/raft.(*Raft).replicate
+         0     0% 99.04%     0.51ms  3.31%  github.com/hashicorp/raft.(*Raft).setupAppendEntries
+         0     0% 99.04%     0.51ms  3.31%  github.com/hashicorp/raft.(*Raft).startStopReplication.func1
+         0     0% 99.04%     0.42ms  2.72%  github.com/hashicorp/raft.(*Raft).setNewLogs
+         0     0% 99.04%     0.38ms  2.44%  github.com/hashicorp/raft-boltdb/v2.(*BoltStore).GetLog.deferwrap2
+         0     0% 99.04%     0.38ms  2.44%  go.etcd.io/bbolt.(*DB).removeTx
+         0     0% 99.04%     0.38ms  2.44%  go.etcd.io/bbolt.(*Tx).Rollback
+         0     0% 99.04%     0.38ms  2.44%  go.etcd.io/bbolt.(*Tx).close
+         0     0% 99.04%     0.38ms  2.44%  go.etcd.io/bbolt.(*Tx).nonPhysicalRollback
+         0     0% 99.04%     0.34ms  2.21%  runtime.mcall
+         0     0% 99.04%     0.33ms  2.15%  runtime.park_m
+         0     0% 99.04%     0.33ms  2.14%  runtime.chanparkcommit
+         0     0% 99.04%     0.22ms  1.40%  go.etcd.io/bbolt.(*DB).Begin
+         0     0% 99.04%     0.18ms  1.14%  runtime.systemstack
+         0     0% 99.04%     0.16ms  1.05%  runtime.gcMarkDone
+         0     0% 99.04%     0.16ms  1.05%  runtime.gcBgMarkWorker
+         0     0% 99.04%     0.14ms  0.94%  go.etcd.io/bbolt.(*DB).allocate
+         0     0% 99.04%     0.14ms  0.94%  go.etcd.io/bbolt.(*DB).mmap
+         0     0% 99.04%     0.14ms  0.94%  go.etcd.io/bbolt.(*Tx).allocate
+         0     0% 99.04%     0.14ms  0.94%  go.etcd.io/bbolt.(*Tx).commitFreelist
+         0     0% 99.04%     0.13ms  0.87%  go.etcd.io/bbolt.(*DB).beginTx
+         0     0% 99.04%     0.12ms  0.81%  runtime.deferreturn

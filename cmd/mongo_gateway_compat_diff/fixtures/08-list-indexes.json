@@ -1,0 +1,14 @@
+{
+  "schema": "treedb.mongo-gateway.compat-diff.fixture",
+  "version": 1,
+  "id": "list-indexes",
+  "capability_id": "metadata.createindexes-listindexes-and-dropindexes",
+  "expectation": "supported",
+  "database": "compat",
+  "collection": "records",
+  "smoke": false,
+  "normalize_cursor_namespace": true,
+  "normalize_cursor_envelope_order": true,
+  "seed": [{"_id": "user-1", "score": {"$numberInt": "7"}}],
+  "command": {"listIndexes": "records", "cursor": {}}
+}

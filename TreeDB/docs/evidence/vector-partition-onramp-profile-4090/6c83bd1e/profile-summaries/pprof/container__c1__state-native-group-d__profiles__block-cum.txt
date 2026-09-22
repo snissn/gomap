@@ -1,0 +1,35 @@
+File: treedb_vector_partition_bench
+Build ID: 6e601df17e91fc834d40505729b45018b8011783
+Type: delay
+Time: 2026-08-09 14:11:11 HST
+Showing nodes accounting for 1881.25s, 100% of 1881.25s total
+Dropped 64 nodes (cum <= 9.41s)
+      flat  flat%   sum%        cum   cum%
+  1687.63s 89.71% 89.71%   1687.63s 89.71%  runtime.selectgo
+         0     0% 89.71%   1312.67s 69.78%  github.com/hashicorp/raft.(*raftState).goFunc.func1
+         0     0% 89.71%    363.67s 19.33%  github.com/hashicorp/raft.(*Raft).run
+         0     0% 89.71%    363.67s 19.33%  github.com/hashicorp/raft.(*Raft).run-fm
+         0     0% 89.71%    258.15s 13.72%  github.com/hashicorp/raft.(*Raft).pipelineDecode
+         0     0% 89.71%    258.15s 13.72%  github.com/hashicorp/raft.(*Raft).pipelineReplicate.func1
+         0     0% 89.71%    258.03s 13.72%  github.com/hashicorp/raft.(*inmemPipeline).decodeResponses
+         0     0% 89.71%    258.03s 13.72%  github.com/hashicorp/raft.newInmemPipeline.gowrap1
+         0     0% 89.71%    257.74s 13.70%  github.com/hashicorp/raft.(*Raft).pipelineReplicate
+         0     0% 89.71%    257.74s 13.70%  github.com/hashicorp/raft.(*Raft).replicate
+         0     0% 89.71%    257.74s 13.70%  github.com/hashicorp/raft.(*Raft).startStopReplication.func1
+         0     0% 89.71%    255.20s 13.57%  github.com/hashicorp/raft.(*Raft).heartbeat
+         0     0% 89.71%    255.20s 13.57%  github.com/hashicorp/raft.(*Raft).replicate.func1
+         0     0% 89.71%    247.40s 13.15%  github.com/hashicorp/raft.(*Raft).runFollower
+   193.63s 10.29%   100%    193.63s 10.29%  runtime.chanrecv1
+         0     0%   100%    177.90s  9.46%  github.com/hashicorp/raft.(*Raft).runFSM
+         0     0%   100%    177.90s  9.46%  github.com/hashicorp/raft.(*Raft).runFSM-fm
+         0     0%   100%    129.06s  6.86%  runtime.(*wakeableSleep).sleep
+         0     0%   100%    116.27s  6.18%  github.com/hashicorp/raft.(*Raft).leaderLoop
+         0     0%   100%    116.27s  6.18%  github.com/hashicorp/raft.(*Raft).runLeader
+         0     0%   100%    100.01s  5.32%  github.com/hashicorp/raft.(*Raft).runLeader.gowrap1
+         0     0%   100%    100.01s  5.32%  github.com/hashicorp/raft.emitLogStoreMetrics
+         0     0%   100%     64.56s  3.43%  runtime.traceStartReadCPU.func1
+         0     0%   100%     64.56s  3.43%  main.main
+         0     0%   100%     64.56s  3.43%  main.run
+         0     0%   100%     64.56s  3.43%  main.runVectorPartitionSystemNodeV1
+         0     0%   100%     64.56s  3.43%  runtime.main
+         0     0%   100%     64.49s  3.43%  runtime.(*traceAdvancerState).start.func1

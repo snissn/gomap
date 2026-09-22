@@ -1,0 +1,321 @@
+{
+  "schema": "treedb-rag-semantic-inputs/v1",
+  "fixture_sha256": "df71c11510a64b09a4b991a17a9062c8090dddf2d0a1e993b19bebd37d4c5db2",
+  "inputs": [
+    {
+      "kind": "chunk",
+      "id": "src-billing-alpha-red-new:initial:0",
+      "text": "billing refund invoice charge dispute account ledger remedy guidance alpha new workspace red update legacy part 1. billing refun"
+    },
+    {
+      "kind": "chunk",
+      "id": "src-billing-alpha-red-new:initial:1",
+      "text": "billing refund invoice charge dispute account ledger remedy guidance alpha new workspace red update legacy part 2. billing refun"
+    },
+    {
+      "kind": "chunk",
+      "id": "src-billing-alpha-red-new:initial:2",
+      "text": "billing refund invoice charge dispute account ledger remedy guidance alpha new workspace red update legacy part 3. billing refun"
+    },
+    {
+      "kind": "chunk",
+      "id": "src-billing-alpha-red-new:final:0",
+      "text": "billing refund invoice charge dispute account ledger remedy guidance alpha new workspace red update current part 1. billing refu"
+    },
+    {
+      "kind": "chunk",
+      "id": "src-billing-alpha-red-new:final:1",
+      "text": "billing refund invoice charge dispute account ledger remedy guidance alpha new workspace red update current part 2. billing refu"
+    },
+    {
+      "kind": "chunk",
+      "id": "src-billing-alpha-red-new:final:2",
+      "text": "billing refund invoice charge dispute account ledger remedy guidance alpha new workspace red update current part 3. billing refu"
+    },
+    {
+      "kind": "chunk",
+      "id": "src-billing-alpha-red-old:initial:0",
+      "text": "billing refund invoice charge dispute account ledger remedy guidance alpha old workspace red update current part 1. billing refu"
+    },
+    {
+      "kind": "chunk",
+      "id": "src-billing-alpha-red-old:initial:1",
+      "text": "billing refund invoice charge dispute account ledger remedy guidance alpha old workspace red update current part 2. billing refu"
+    },
+    {
+      "kind": "chunk",
+      "id": "src-billing-alpha-red-old:initial:2",
+      "text": "billing refund invoice charge dispute account ledger remedy guidance alpha old workspace red update current part 3. billing refu"
+    },
+    {
+      "kind": "chunk",
+      "id": "src-billing-alpha-blue-new:initial:0",
+      "text": "billing refund invoice charge dispute account ledger remedy guidance alpha new workspace blue update current part 1. billing ref"
+    },
+    {
+      "kind": "chunk",
+      "id": "src-billing-alpha-blue-new:initial:1",
+      "text": "billing refund invoice charge dispute account ledger remedy guidance alpha new workspace blue update current part 2. billing ref"
+    },
+    {
+      "kind": "chunk",
+      "id": "src-billing-alpha-blue-new:initial:2",
+      "text": "billing refund invoice charge dispute account ledger remedy guidance alpha new workspace blue update current part 3. billing ref"
+    },
+    {
+      "kind": "chunk",
+      "id": "src-billing-beta-red-new:initial:0",
+      "text": "billing refund invoice charge dispute account ledger remedy guidance beta new workspace red update current part 1. billing refun"
+    },
+    {
+      "kind": "chunk",
+      "id": "src-billing-beta-red-new:initial:1",
+      "text": "billing refund invoice charge dispute account ledger remedy guidance beta new workspace red update current part 2. billing refun"
+    },
+    {
+      "kind": "chunk",
+      "id": "src-billing-beta-red-new:initial:2",
+      "text": "billing refund invoice charge dispute account ledger remedy guidance beta new workspace red update current part 3. billing refun"
+    },
+    {
+      "kind": "chunk",
+      "id": "src-billing-beta-blue-new:initial:0",
+      "text": "billing refund invoice charge dispute account ledger remedy guidance beta new workspace blue update current part 1. billing refu"
+    },
+    {
+      "kind": "chunk",
+      "id": "src-billing-beta-blue-new:initial:1",
+      "text": "billing refund invoice charge dispute account ledger remedy guidance beta new workspace blue update current part 2. billing refu"
+    },
+    {
+      "kind": "chunk",
+      "id": "src-billing-beta-blue-new:initial:2",
+      "text": "billing refund invoice charge dispute account ledger remedy guidance beta new workspace blue update current part 3. billing refu"
+    },
+    {
+      "kind": "chunk",
+      "id": "src-billing-beta-blue-old:initial:0",
+      "text": "billing refund invoice charge dispute account ledger remedy guidance beta old workspace blue update current part 1. billing refu"
+    },
+    {
+      "kind": "chunk",
+      "id": "src-billing-beta-blue-old:initial:1",
+      "text": "billing refund invoice charge dispute account ledger remedy guidance beta old workspace blue update current part 2. billing refu"
+    },
+    {
+      "kind": "chunk",
+      "id": "src-billing-beta-blue-old:initial:2",
+      "text": "billing refund invoice charge dispute account ledger remedy guidance beta old workspace blue update current part 3. billing refu"
+    },
+    {
+      "kind": "chunk",
+      "id": "src-outage-alpha-red-new:initial:0",
+      "text": "service outage incident recovery availability failover status guidance alpha new workspace red update current part 1. service ou"
+    },
+    {
+      "kind": "chunk",
+      "id": "src-outage-alpha-red-new:initial:1",
+      "text": "service outage incident recovery availability failover status guidance alpha new workspace red update current part 2. service ou"
+    },
+    {
+      "kind": "chunk",
+      "id": "src-outage-alpha-red-new:initial:2",
+      "text": "service outage incident recovery availability failover status guidance alpha new workspace red update current part 3. service ou"
+    },
+    {
+      "kind": "chunk",
+      "id": "src-outage-alpha-red-old:initial:0",
+      "text": "service outage incident recovery availability failover status guidance alpha old workspace red update current part 1. service ou"
+    },
+    {
+      "kind": "chunk",
+      "id": "src-outage-alpha-red-old:initial:1",
+      "text": "service outage incident recovery availability failover status guidance alpha old workspace red update current part 2. service ou"
+    },
+    {
+      "kind": "chunk",
+      "id": "src-outage-alpha-red-old:initial:2",
+      "text": "service outage incident recovery availability failover status guidance alpha old workspace red update current part 3. service ou"
+    },
+    {
+      "kind": "chunk",
+      "id": "src-outage-alpha-blue-new:initial:0",
+      "text": "service outage incident recovery availability failover status guidance alpha new workspace blue update current part 1. service o"
+    },
+    {
+      "kind": "chunk",
+      "id": "src-outage-alpha-blue-new:initial:1",
+      "text": "service outage incident recovery availability failover status guidance alpha new workspace blue update current part 2. service o"
+    },
+    {
+      "kind": "chunk",
+      "id": "src-outage-alpha-blue-new:initial:2",
+      "text": "service outage incident recovery availability failover status guidance alpha new workspace blue update current part 3. service o"
+    },
+    {
+      "kind": "chunk",
+      "id": "src-outage-beta-red-new:initial:0",
+      "text": "service outage incident recovery availability failover status guidance beta new workspace red update current part 1. service out"
+    },
+    {
+      "kind": "chunk",
+      "id": "src-outage-beta-red-new:initial:1",
+      "text": "service outage incident recovery availability failover status guidance beta new workspace red update current part 2. service out"
+    },
+    {
+      "kind": "chunk",
+      "id": "src-outage-beta-red-new:initial:2",
+      "text": "service outage incident recovery availability failover status guidance beta new workspace red update current part 3. service out"
+    },
+    {
+      "kind": "chunk",
+      "id": "src-outage-beta-blue-new:initial:0",
+      "text": "service outage incident recovery availability failover status guidance beta new workspace blue update current part 1. service ou"
+    },
+    {
+      "kind": "chunk",
+      "id": "src-outage-beta-blue-new:initial:1",
+      "text": "service outage incident recovery availability failover status guidance beta new workspace blue update current part 2. service ou"
+    },
+    {
+      "kind": "chunk",
+      "id": "src-outage-beta-blue-new:initial:2",
+      "text": "service outage incident recovery availability failover status guidance beta new workspace blue update current part 3. service ou"
+    },
+    {
+      "kind": "chunk",
+      "id": "src-outage-beta-blue-old:initial:0",
+      "text": "service outage incident recovery availability failover status guidance beta old workspace blue update current part 1. service ou"
+    },
+    {
+      "kind": "chunk",
+      "id": "src-outage-beta-blue-old:initial:1",
+      "text": "service outage incident recovery availability failover status guidance beta old workspace blue update current part 2. service ou"
+    },
+    {
+      "kind": "chunk",
+      "id": "src-outage-beta-blue-old:initial:2",
+      "text": "service outage incident recovery availability failover status guidance beta old workspace blue update current part 3. service ou"
+    },
+    {
+      "kind": "chunk",
+      "id": "src-access-alpha-red-new:initial:0",
+      "text": "account access login permission authentication recovery security guidance alpha new workspace red update current part 1. account"
+    },
+    {
+      "kind": "chunk",
+      "id": "src-access-alpha-red-new:initial:1",
+      "text": "account access login permission authentication recovery security guidance alpha new workspace red update current part 2. account"
+    },
+    {
+      "kind": "chunk",
+      "id": "src-access-alpha-red-new:initial:2",
+      "text": "account access login permission authentication recovery security guidance alpha new workspace red update current part 3. account"
+    },
+    {
+      "kind": "chunk",
+      "id": "src-access-alpha-red-old:initial:0",
+      "text": "account access login permission authentication recovery security guidance alpha old workspace red update current part 1. account"
+    },
+    {
+      "kind": "chunk",
+      "id": "src-access-alpha-red-old:initial:1",
+      "text": "account access login permission authentication recovery security guidance alpha old workspace red update current part 2. account"
+    },
+    {
+      "kind": "chunk",
+      "id": "src-access-alpha-red-old:initial:2",
+      "text": "account access login permission authentication recovery security guidance alpha old workspace red update current part 3. account"
+    },
+    {
+      "kind": "chunk",
+      "id": "src-access-alpha-blue-new:initial:0",
+      "text": "account access login permission authentication recovery security guidance alpha new workspace blue update current part 1. accoun"
+    },
+    {
+      "kind": "chunk",
+      "id": "src-access-alpha-blue-new:initial:1",
+      "text": "account access login permission authentication recovery security guidance alpha new workspace blue update current part 2. accoun"
+    },
+    {
+      "kind": "chunk",
+      "id": "src-access-alpha-blue-new:initial:2",
+      "text": "account access login permission authentication recovery security guidance alpha new workspace blue update current part 3. accoun"
+    },
+    {
+      "kind": "chunk",
+      "id": "src-access-beta-red-new:initial:0",
+      "text": "account access login permission authentication recovery security guidance beta new workspace red update current part 1. account "
+    },
+    {
+      "kind": "chunk",
+      "id": "src-access-beta-red-new:initial:1",
+      "text": "account access login permission authentication recovery security guidance beta new workspace red update current part 2. account "
+    },
+    {
+      "kind": "chunk",
+      "id": "src-access-beta-red-new:initial:2",
+      "text": "account access login permission authentication recovery security guidance beta new workspace red update current part 3. account "
+    },
+    {
+      "kind": "chunk",
+      "id": "src-access-beta-blue-new:initial:0",
+      "text": "account access login permission authentication recovery security guidance beta new workspace blue update current part 1. account"
+    },
+    {
+      "kind": "chunk",
+      "id": "src-access-beta-blue-new:initial:1",
+      "text": "account access login permission authentication recovery security guidance beta new workspace blue update current part 2. account"
+    },
+    {
+      "kind": "chunk",
+      "id": "src-access-beta-blue-new:initial:2",
+      "text": "account access login permission authentication recovery security guidance beta new workspace blue update current part 3. account"
+    },
+    {
+      "kind": "chunk",
+      "id": "src-access-beta-blue-old:initial:0",
+      "text": "account access login permission authentication recovery security guidance beta old workspace blue update current part 1. account"
+    },
+    {
+      "kind": "chunk",
+      "id": "src-access-beta-blue-old:initial:1",
+      "text": "account access login permission authentication recovery security guidance beta old workspace blue update current part 2. account"
+    },
+    {
+      "kind": "chunk",
+      "id": "src-access-beta-blue-old:initial:2",
+      "text": "account access login permission authentication recovery security guidance beta old workspace blue update current part 3. account"
+    },
+    {
+      "kind": "chunk",
+      "id": "src-lifecycle-beta-blue-old:initial:0",
+      "text": "lifecycle deletion tombstone reopen durability evidence guidance beta old workspace blue update deleted part 1. lifecycle deleti"
+    },
+    {
+      "kind": "chunk",
+      "id": "src-lifecycle-beta-blue-old:initial:1",
+      "text": "lifecycle deletion tombstone reopen durability evidence guidance beta old workspace blue update deleted part 2. lifecycle deleti"
+    },
+    {
+      "kind": "chunk",
+      "id": "src-lifecycle-beta-blue-old:initial:2",
+      "text": "lifecycle deletion tombstone reopen durability evidence guidance beta old workspace blue update deleted part 3. lifecycle deleti"
+    },
+    {
+      "kind": "query",
+      "id": "q-billing",
+      "text": "refund invoice charge dispute account ledger remedy"
+    },
+    {
+      "kind": "query",
+      "id": "q-outage",
+      "text": "service outage incident recovery availability failover"
+    },
+    {
+      "kind": "query",
+      "id": "q-access",
+      "text": "account access login permission authentication recovery"
+    }
+  ]
+}

@@ -1,0 +1,217 @@
+{
+  "note": "Descriptive extract of retained partial measured reports, not a replacement validator or complete measured envelope",
+  "attempt": "full-a0992241",
+  "source_commit": "a0992241ed117b39a286625321cb9fd3f5c569c2",
+  "comparator": {
+    "schema": "treedb_rag_application/minima_measured_v1",
+    "state": "partial",
+    "passing": false,
+    "failures": [
+      "TreeDBProtocolError: native error 21: catalog changed",
+      "initial exact oracle mismatch for all_match",
+      "RuntimeError: timed query 1 does not match its frozen oracle",
+      "fail-closed validator: treedb evidence has wrong backend envelope\nqdrant evidence has wrong backend envelope"
+    ],
+    "readiness_recommendation": "not_evaluated"
+  },
+  "full_qualification": false,
+  "population": {
+    "corpus_rows": 2500384,
+    "initial_acknowledged_rows": 2499056,
+    "expected_final_rows": 2500383,
+    "scenarios": [
+      {
+        "name": "small",
+        "shape": "small",
+        "corpus_rows": 128,
+        "eligible_start": 16,
+        "eligible_rows": 16,
+        "filter": "user_id",
+        "user_id": "small-user",
+        "selectivity": 0.125,
+        "closer_cross_tenant_distractor_rows": 16,
+        "generator": "ordinal-v3:id=minima/<scenario>/<ordinal:06d>;content=minima:<scenario>:<ordinal>;vector=[s,sqrt(1-s*s),0x6],s=0.9-ordinal*0.000003;oracle=cosine(float32(vector),float32([1,0x7]));defaults=<scenario>-other-user-%02d(ordinal%31),/<scenario>/other/%02d.txt(ordinal%97)"
+      },
+      {
+        "name": "all_match",
+        "shape": "representative",
+        "corpus_rows": 500000,
+        "eligible_start": 0,
+        "eligible_rows": 500000,
+        "filter": "user_id",
+        "user_id": "all-user",
+        "selectivity": 1,
+        "closer_cross_tenant_distractor_rows": 0,
+        "generator": "ordinal-v3:id=minima/<scenario>/<ordinal:06d>;content=minima:<scenario>:<ordinal>;vector=[s,sqrt(1-s*s),0x6],s=0.9-ordinal*0.000003;oracle=cosine(float32(vector),float32([1,0x7]));defaults=<scenario>-other-user-%02d(ordinal%31),/<scenario>/other/%02d.txt(ordinal%97)"
+      },
+      {
+        "name": "over_limit_4097",
+        "shape": "representative",
+        "corpus_rows": 500000,
+        "eligible_start": 1000,
+        "eligible_rows": 4097,
+        "filter": "user_id",
+        "user_id": "over-user",
+        "selectivity": 0.008194,
+        "closer_cross_tenant_distractor_rows": 1000,
+        "generator": "ordinal-v3:id=minima/<scenario>/<ordinal:06d>;content=minima:<scenario>:<ordinal>;vector=[s,sqrt(1-s*s),0x6],s=0.9-ordinal*0.000003;oracle=cosine(float32(vector),float32([1,0x7]));defaults=<scenario>-other-user-%02d(ordinal%31),/<scenario>/other/%02d.txt(ordinal%97)"
+      },
+      {
+        "name": "broad_10pct",
+        "shape": "representative",
+        "corpus_rows": 500000,
+        "eligible_start": 20000,
+        "eligible_rows": 50000,
+        "filter": "user_id",
+        "user_id": "broad-user",
+        "selectivity": 0.1,
+        "closer_cross_tenant_distractor_rows": 20000,
+        "generator": "ordinal-v3:id=minima/<scenario>/<ordinal:06d>;content=minima:<scenario>:<ordinal>;vector=[s,sqrt(1-s*s),0x6],s=0.9-ordinal*0.000003;oracle=cosine(float32(vector),float32([1,0x7]));defaults=<scenario>-other-user-%02d(ordinal%31),/<scenario>/other/%02d.txt(ordinal%97)"
+      },
+      {
+        "name": "sparse_over_limit",
+        "shape": "representative",
+        "corpus_rows": 500000,
+        "eligible_start": 100000,
+        "eligible_rows": 4097,
+        "filter": "user_id",
+        "user_id": "sparse-user",
+        "selectivity": 0.008194,
+        "closer_cross_tenant_distractor_rows": 100000,
+        "generator": "ordinal-v3:id=minima/<scenario>/<ordinal:06d>;content=minima:<scenario>:<ordinal>;vector=[s,sqrt(1-s*s),0x6],s=0.9-ordinal*0.000003;oracle=cosine(float32(vector),float32([1,0x7]));defaults=<scenario>-other-user-%02d(ordinal%31),/<scenario>/other/%02d.txt(ordinal%97)"
+      },
+      {
+        "name": "mixed_broad_narrow",
+        "shape": "representative",
+        "corpus_rows": 500000,
+        "eligible_start": 10020,
+        "eligible_rows": 5,
+        "broad_start": 10000,
+        "broad_rows": 50000,
+        "narrow_start": 10020,
+        "narrow_rows": 5,
+        "filter": "user_id+fpath",
+        "user_id": "mixed-user",
+        "fpath": "/mixed/target.txt",
+        "selectivity": 1e-05,
+        "closer_cross_tenant_distractor_rows": 10000,
+        "generator": "ordinal-v3:id=minima/<scenario>/<ordinal:06d>;content=minima:<scenario>:<ordinal>;vector=[s,sqrt(1-s*s),0x6],s=0.9-ordinal*0.000003;oracle=cosine(float32(vector),float32([1,0x7]));defaults=<scenario>-other-user-%02d(ordinal%31),/<scenario>/other/%02d.txt(ordinal%97)"
+      },
+      {
+        "name": "empty_user",
+        "shape": "small",
+        "corpus_rows": 128,
+        "eligible_start": 0,
+        "eligible_rows": 0,
+        "filter": "user_id",
+        "user_id": "missing-user",
+        "selectivity": 0,
+        "closer_cross_tenant_distractor_rows": 0,
+        "generator": "ordinal-v3:id=minima/<scenario>/<ordinal:06d>;content=minima:<scenario>:<ordinal>;vector=[s,sqrt(1-s*s),0x6],s=0.9-ordinal*0.000003;oracle=cosine(float32(vector),float32([1,0x7]));defaults=<scenario>-other-user-%02d(ordinal%31),/<scenario>/other/%02d.txt(ordinal%97)"
+      },
+      {
+        "name": "empty_file",
+        "shape": "small",
+        "corpus_rows": 128,
+        "eligible_start": 0,
+        "eligible_rows": 0,
+        "broad_start": 16,
+        "broad_rows": 16,
+        "filter": "user_id+fpath",
+        "user_id": "empty-file-user",
+        "fpath": "/empty_file/missing.txt",
+        "selectivity": 0,
+        "closer_cross_tenant_distractor_rows": 0,
+        "generator": "ordinal-v3:id=minima/<scenario>/<ordinal:06d>;content=minima:<scenario>:<ordinal>;vector=[s,sqrt(1-s*s),0x6],s=0.9-ordinal*0.000003;oracle=cosine(float32(vector),float32([1,0x7]));defaults=<scenario>-other-user-%02d(ordinal%31),/<scenario>/other/%02d.txt(ordinal%97)"
+      }
+    ]
+  },
+  "gates": {
+    "durable_load": {
+      "value_ns": 1428488260565,
+      "cap_ns": 1200000000000,
+      "status": "FAIL"
+    },
+    "owned_through_exit_peak": {
+      "value_bytes": 9948377088,
+      "cap_bytes": 9126805504,
+      "status": "FAIL"
+    },
+    "timed_outer_query_p50": {
+      "value_ns": null,
+      "cap_ns": 2127956,
+      "required_samples": 1024,
+      "committed_samples": 0,
+      "status": "UNAVAILABLE"
+    },
+    "restart_through_ensure": {
+      "value_ns": null,
+      "cap_ns": 20000000000,
+      "status": "UNAVAILABLE"
+    },
+    "final_regular_live_disk_including_wal": {
+      "value_bytes": null,
+      "cap_bytes": 2967728546,
+      "status": "UNAVAILABLE"
+    },
+    "treedb_full_quality_lifecycle": {
+      "status": "INCOMPLETE",
+      "failure": "native error 21: catalog changed before first owner snapshot/filter/scoring"
+    },
+    "qdrant_quality": {
+      "status": "FAIL",
+      "initial_all_match_ids": [
+        1,
+        2,
+        10,
+        12,
+        20
+      ],
+      "expected_ids": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "initial_overlap": 0.4,
+      "max_position_score_delta": 4.80011001160463e-05,
+      "score_tolerance": 1e-06,
+      "committed_timed_queries": 0
+    }
+  },
+  "treedb_initial": {
+    "load_ns": 1428488260565,
+    "owned_exit_peak_bytes": 9948377088,
+    "acknowledged_initial_rows": 2499056,
+    "initial_batch_requests": 9768,
+    "initial_total_alloc_bytes": 624999143256,
+    "initial_mallocs": 2764759388,
+    "timed_search_available": false,
+    "final_disk_available": false,
+    "restart_available": false,
+    "initial_http_control_records_excluding_build": 2,
+    "initial_native_batch_duration_ns": 1332667877845,
+    "initial_other_http_control_duration_ns": 3484485896,
+    "initial_build_duration_ns": 85708360719
+  },
+  "qdrant_initial_load_ns": 219438361210,
+  "allocation_per_acknowledged_row": {
+    "bytes": 250094.0928318533,
+    "mallocs": 1106.3215021992305
+  },
+  "unavailable": [
+    "full 1024-query latency distribution",
+    "completed mixed mutation/maintenance trace",
+    "restart/reopen parity",
+    "final qualification scroll",
+    "final live disk gate",
+    "matched qualification"
+  ],
+  "issue_disposition": {
+    "4614": "OPEN",
+    "4619": "OPEN",
+    "4620": "OPEN",
+    "4621": "BLOCKED_ON_M5_PASS"
+  }
+}

@@ -1,0 +1,511 @@
+{
+  "schema_version": "treedb_text_v2_phase2_gap_synthesis/v1",
+  "classification_basis": "phase-2 target taxonomy plus captured scoreboard rows; ahead/near require comparable external rows, while missing or non-equivalent external rows stay behind/far by evidence gap rather than parity claim",
+  "external_baselines": [
+    {
+      "system": "SQLite FTS5",
+      "status": "available",
+      "evidence": "captured scoreboard row(s): sqlite_common_10k",
+      "caveat": "embedded FTS baseline; rowid+bm25 retrieval is not Lucene/Tantivy/Bleve analyzer or query-parser parity"
+    },
+    {
+      "system": "Bleve",
+      "status": "unavailable",
+      "evidence": "not run in unit test",
+      "caveat": "requires a pinned Go harness with the same corpus, analyzer, query semantics, and result-order checks"
+    },
+    {
+      "system": "Tantivy",
+      "status": "unavailable",
+      "evidence": "not run in unit test",
+      "caveat": "requires a pinned Rust/Tantivy harness with the same corpus, analyzer, query semantics, and result-order checks"
+    },
+    {
+      "system": "Lucene",
+      "status": "unavailable",
+      "evidence": "not run in unit test",
+      "caveat": "requires a pinned Lucene/JMH or OpenSearch run with the same corpus, analyzer, query semantics, and result-order checks"
+    }
+  ],
+  "benchmark_targets": [
+    {
+      "shape_id": "single_term_common",
+      "shape": "single-term common",
+      "description": "High-document-frequency BM25F top-k term with exact block-max skipping.",
+      "primary_issue": "#2835",
+      "required_rows": [
+        "TreeDB 10k and 100k blockmax_common_topk",
+        "SQLite FTS5/Lucene/Tantivy/Bleve common-term top-k rows"
+      ],
+      "required_counters": [
+        "docs_fetched/search=0",
+        "full_doc_fallbacks/search=0",
+        "fail_closed/search=0",
+        "text_state_lookups/search=0",
+        "text_match_details/search=0",
+        "posting_blocks_visited/search",
+        "posting_blocks_skipped/search",
+        "threshold_updates/search"
+      ]
+    },
+    {
+      "shape_id": "single_term_rare",
+      "shape": "single-term rare",
+      "description": "Low-document-frequency BM25F top-k term where decode/setup overhead dominates.",
+      "primary_issue": "#2835",
+      "required_rows": [
+        "TreeDB rare term score-only 10k/100k/1M",
+        "SQLite FTS5/Lucene/Tantivy/Bleve rare-term top-k rows"
+      ],
+      "required_counters": [
+        "docs_fetched/search=0",
+        "full_doc_fallbacks/search=0",
+        "fail_closed/search=0",
+        "text_state_lookups/search=0",
+        "text_match_details/search=0"
+      ]
+    },
+    {
+      "shape_id": "multi_term_and",
+      "shape": "multi-term AND",
+      "description": "Exact BM25F conjunction over multiple query terms with deterministic ranking.",
+      "primary_issue": "#2837",
+      "required_rows": [
+        "TreeDB multi_term_and score-only 10k/100k/1M",
+        "SQLite FTS5/Lucene/Tantivy/Bleve explicit AND rows"
+      ],
+      "required_counters": [
+        "docs_fetched/search=0",
+        "full_doc_fallbacks/search=0",
+        "fail_closed/search=0",
+        "text_state_lookups/search=0",
+        "text_match_details/search=0",
+        "posting_blocks_visited/search",
+        "candidates_scored/search"
+      ]
+    },
+    {
+      "shape_id": "multi_term_or_wand",
+      "shape": "multi-term OR/WAND",
+      "description": "Exact BM25F disjunction with block-max/WAND pruning and deterministic ranking.",
+      "primary_issue": "#2836",
+      "required_rows": [
+        "TreeDB or_common/or_common_rare/or_high_frequency blockmax and exhaustive rows",
+        "Lucene/Tantivy/Bleve OR/WAND rows",
+        "SQLite FTS5 OR row if semantics are made explicit"
+      ],
+      "required_counters": [
+        "docs_fetched/search=0",
+        "full_doc_fallbacks/search=0",
+        "fail_closed/search=0",
+        "text_state_lookups/search=0",
+        "text_match_details/search=0",
+        "posting_blocks_visited/search",
+        "posting_blocks_skipped/search",
+        "threshold_updates/search",
+        "blockmax_fallbacks/search",
+        "candidates_scored/search"
+      ]
+    },
+    {
+      "shape_id": "phrase",
+      "shape": "phrase/proximity",
+      "description": "Bounded position-lane phrase/proximity query over StorePositions text-v2 indexes.",
+      "primary_issue": "#2839",
+      "required_rows": [
+        "TreeDB phrase exact/slop 10k/100k",
+        "Lucene/Tantivy/Bleve phrase/proximity rows with analyzer notes"
+      ],
+      "required_counters": [
+        "docs_fetched/search=0",
+        "full_doc_fallbacks/search=0",
+        "fail_closed/search=0",
+        "text_state_lookups/search=0",
+        "text_match_details/search=0",
+        "position_lookups/search",
+        "phrase_candidates_checked/search",
+        "phrase_candidates_matched/search"
+      ]
+    },
+    {
+      "shape_id": "hybrid_text_scalar",
+      "shape": "hybrid text+scalar",
+      "description": "BM25F candidate generation composed with indexed scalar filtering without full-document fetch.",
+      "primary_issue": "#2836",
+      "required_rows": [
+        "TreeDB text_scalar and hybrid_scalar no-doc rows at rare/broad selectivity",
+        "Lucene/Tantivy/Bleve equivalent filter rows or documented non-equivalence"
+      ],
+      "required_counters": [
+        "docs_fetched/search=0",
+        "full_doc_fallbacks/search=0",
+        "fail_closed/search=0",
+        "text_state_lookups/search=0",
+        "text_match_details/search=0",
+        "posting_blocks_visited/search",
+        "posting_blocks_skipped/search",
+        "threshold_updates/search",
+        "scalar_prefilter_ids/search",
+        "text_candidates/search"
+      ]
+    },
+    {
+      "shape_id": "index_build_ingest",
+      "shape": "index build/ingest",
+      "description": "Text-v2 CreateTextIndex backfill and maintained insert/update/delete throughput.",
+      "primary_issue": "#2835",
+      "required_rows": [
+        "TreeDB CreateTextIndex/backfill and InsertBatch text-v2 rows",
+        "SQLite FTS5/Lucene/Tantivy/Bleve build rows with WAL/checkpoint boundary"
+      ],
+      "required_counters": [
+        "rows/s",
+        "B/op",
+        "allocs/op",
+        "index_bytes/doc",
+        "posting_blocks/doc",
+        "write_amp_entries/doc"
+      ]
+    },
+    {
+      "shape_id": "index_size",
+      "shape": "index size",
+      "description": "Durable text index bytes/doc, separating primary payload, WAL, value-log, and text-v2 roots.",
+      "primary_issue": "#2835",
+      "required_rows": [
+        "TreeDB durable text-v2 bytes/doc after checkpoint and rewrite",
+        "SQLite FTS5/Lucene/Tantivy/Bleve index bytes/doc after equivalent optimize/vacuum"
+      ],
+      "required_counters": [
+        "storage_bytes",
+        "storage_bytes_per_doc",
+        "index_bytes/doc",
+        "value-log bytes",
+        "WAL excluded"
+      ]
+    },
+    {
+      "shape_id": "reopen",
+      "shape": "reopen/recovery",
+      "description": "Close/open and post-reopen text/hybrid probe latency with snapshot-bound roots.",
+      "primary_issue": "#2837",
+      "required_rows": [
+        "TreeDB scale harness reopen probe at 10k/1M/10M",
+        "External engine reopen/open-reader rows where embedded equivalents exist"
+      ],
+      "required_counters": [
+        "close_seconds",
+        "open_seconds",
+        "probe_seconds",
+        "docs_fetched/search=0",
+        "fail_closed/search=0"
+      ]
+    },
+    {
+      "shape_id": "maintenance_rewrite",
+      "shape": "maintenance/rewrite",
+      "description": "Bounded logical text-v2 rewrite plus normal TreeDB physical reclamation and post-rewrite search probes.",
+      "primary_issue": "#2840",
+      "required_rows": [
+        "TreeDB RewriteTextIndex/MaintainTextIndexes rows with stale-posting debt",
+        "External optimize/merge rows if used as a comparator"
+      ],
+      "required_counters": [
+        "stale_postings_purged/op",
+        "tombstones_purged/op",
+        "posting_blocks_read/op",
+        "posting_blocks_written/op",
+        "rewrite seconds",
+        "post-rewrite search ns/op"
+      ]
+    }
+  ],
+  "gap_classifications": [
+    {
+      "shape_id": "index_size",
+      "shape": "index size",
+      "classification": "far_behind",
+      "priority": 1,
+      "primary_issue": "#2835",
+      "treedb_evidence": "TreeDB durable text-v2 bytes/doc is not captured in the current scoreboard run",
+      "external_evidence": "no comparable external row captured; SQLite FTS5=not_captured; Bleve=unavailable (not run in unit test); Tantivy=unavailable (not run in unit test); Lucene=unavailable (not run in unit test)",
+      "rationale": "phase-1 scoreboard has external storage rows but lacks a durable TreeDB text-v2 bytes/doc row, so footprint parity is the first evidence and optimization gap",
+      "required_follow_up_rows": [
+        "TreeDB durable text-v2 bytes/doc after checkpoint and rewrite",
+        "SQLite FTS5/Lucene/Tantivy/Bleve index bytes/doc after equivalent optimize/vacuum"
+      ],
+      "non_equivalent_semantics": [
+        "storage/build boundaries must state WAL inclusion, checkpoint/optimize/vacuum state, and retained primary-payload treatment"
+      ]
+    },
+    {
+      "shape_id": "single_term_common",
+      "shape": "single-term common",
+      "classification": "behind_but_tractable",
+      "priority": 2,
+      "primary_issue": "#2835",
+      "treedb_evidence": "captured 1 row(s): treedb_common_10k/BenchmarkTextV2BlockMaxCommonTerm2628/blockmax_common_topk ns/op=1100000, storage=144 B/doc",
+      "external_evidence": "captured 1 row(s): sqlite_common_10k/sqlite_fts5/common_term_no_docs ns/op=1000000, storage=128 B/doc",
+      "rationale": "TreeDB has exact block-max common-term evidence, but comparable Lucene/Tantivy/Bleve/SQLite rows and bytes/doc context are missing",
+      "required_follow_up_rows": [
+        "TreeDB 10k and 100k blockmax_common_topk",
+        "SQLite FTS5/Lucene/Tantivy/Bleve common-term top-k rows"
+      ],
+      "non_equivalent_semantics": [
+        "TreeDB simple analyzer/BM25F weighting is not automatically equivalent to SQLite unicode61/porter, Bleve analyzers, Tantivy tokenizers, or Lucene analyzers",
+        "explicit AND/OR query semantics must be pinned before latency ratios are parity evidence"
+      ]
+    },
+    {
+      "shape_id": "multi_term_or_wand",
+      "shape": "multi-term OR/WAND",
+      "classification": "behind_but_tractable",
+      "priority": 3,
+      "primary_issue": "#2836",
+      "treedb_evidence": "#2812 landed exact multi-term OR/WAND block-max rows; current scoreboard run did not capture them",
+      "external_evidence": "no comparable external row captured; SQLite FTS5=not_captured; Bleve=unavailable (not run in unit test); Tantivy=unavailable (not run in unit test); Lucene=unavailable (not run in unit test)",
+      "rationale": "exact OR/WAND block-max landed in phase 1, but scalar-aware pruning and external OR/WAND rows are still required before parity claims",
+      "required_follow_up_rows": [
+        "TreeDB or_common/or_common_rare/or_high_frequency blockmax and exhaustive rows",
+        "Lucene/Tantivy/Bleve OR/WAND rows",
+        "SQLite FTS5 OR row if semantics are made explicit"
+      ],
+      "non_equivalent_semantics": [
+        "TreeDB simple analyzer/BM25F weighting is not automatically equivalent to SQLite unicode61/porter, Bleve analyzers, Tantivy tokenizers, or Lucene analyzers",
+        "explicit AND/OR query semantics must be pinned before latency ratios are parity evidence"
+      ]
+    },
+    {
+      "shape_id": "hybrid_text_scalar",
+      "shape": "hybrid text+scalar",
+      "classification": "behind_but_tractable",
+      "priority": 4,
+      "primary_issue": "#2836",
+      "treedb_evidence": "#2810 scoreboard includes zero-doc hybrid/scalar row support; rerun with scalar selectivity rows if absent",
+      "external_evidence": "no comparable external row captured; SQLite FTS5=not_captured; Bleve=unavailable (not run in unit test); Tantivy=unavailable (not run in unit test); Lucene=unavailable (not run in unit test)",
+      "rationale": "TreeDB has zero-document hybrid/scalar rows, but industry baselines are non-equivalent or unavailable and scalar-aware WAND counters need expansion",
+      "required_follow_up_rows": [
+        "TreeDB text_scalar and hybrid_scalar no-doc rows at rare/broad selectivity",
+        "Lucene/Tantivy/Bleve equivalent filter rows or documented non-equivalence"
+      ],
+      "non_equivalent_semantics": [
+        "SQLite FTS5 is not a hybrid text+scalar engine by itself",
+        "Lucene/Tantivy/Bleve filter semantics and whether filters are pre- or post-score must be documented"
+      ]
+    },
+    {
+      "shape_id": "index_build_ingest",
+      "shape": "index build/ingest",
+      "classification": "behind_but_tractable",
+      "priority": 5,
+      "primary_issue": "#2835",
+      "treedb_evidence": "#2810/#2813 harnesses include build/backfill/ingest rows; current scoreboard run did not capture a text-only equivalent",
+      "external_evidence": "no comparable external row captured; SQLite FTS5=not_captured; Bleve=unavailable (not run in unit test); Tantivy=unavailable (not run in unit test); Lucene=unavailable (not run in unit test)",
+      "rationale": "build and ingest rows exist but are not yet separated into text-only durable bytes/doc and external-equivalent build boundaries",
+      "required_follow_up_rows": [
+        "TreeDB CreateTextIndex/backfill and InsertBatch text-v2 rows",
+        "SQLite FTS5/Lucene/Tantivy/Bleve build rows with WAL/checkpoint boundary"
+      ],
+      "non_equivalent_semantics": [
+        "storage/build boundaries must state WAL inclusion, checkpoint/optimize/vacuum state, and retained primary-payload treatment"
+      ]
+    },
+    {
+      "shape_id": "phrase",
+      "shape": "phrase/proximity",
+      "classification": "behind_but_tractable",
+      "priority": 6,
+      "primary_issue": "#2839",
+      "treedb_evidence": "#2815 landed bounded phrase/proximity rows; current scoreboard run did not capture them",
+      "external_evidence": "no comparable external row captured; SQLite FTS5=not_captured; Bleve=unavailable (not run in unit test); Tantivy=unavailable (not run in unit test); Lucene=unavailable (not run in unit test)",
+      "rationale": "bounded phrase/proximity exists, but Lucene/Tantivy/Bleve phrase semantics and analyzer behavior are broader and unmeasured",
+      "required_follow_up_rows": [
+        "TreeDB phrase exact/slop 10k/100k",
+        "Lucene/Tantivy/Bleve phrase/proximity rows with analyzer notes"
+      ],
+      "non_equivalent_semantics": [
+        "TreeDB phrase/proximity is structured and bounded over StorePositions indexes; it is not a Lucene-compatible query DSL",
+        "slop, stopword position gaps, and unsupported stemming/synonym expansion must be recorded per row"
+      ]
+    },
+    {
+      "shape_id": "reopen",
+      "shape": "reopen/recovery",
+      "classification": "behind_but_tractable",
+      "priority": 7,
+      "primary_issue": "#2837",
+      "treedb_evidence": "#2813 scale harness includes reopen probes; current scoreboard run did not capture reopen rows",
+      "external_evidence": "no comparable external row captured; SQLite FTS5=not_captured; Bleve=unavailable (not run in unit test); Tantivy=unavailable (not run in unit test); Lucene=unavailable (not run in unit test)",
+      "rationale": "scale harness covers reopen, but phase-2 needs refreshed 1M/10M rows and external open-reader comparators where feasible",
+      "required_follow_up_rows": [
+        "TreeDB scale harness reopen probe at 10k/1M/10M",
+        "External engine reopen/open-reader rows where embedded equivalents exist"
+      ],
+      "non_equivalent_semantics": [
+        "storage/build boundaries must state WAL inclusion, checkpoint/optimize/vacuum state, and retained primary-payload treatment"
+      ]
+    },
+    {
+      "shape_id": "maintenance_rewrite",
+      "shape": "maintenance/rewrite",
+      "classification": "behind_but_tractable",
+      "priority": 8,
+      "primary_issue": "#2840",
+      "treedb_evidence": "#2814 maintenance policy and #2813 scale harness include rewrite/maintenance rows; current scoreboard run did not capture them",
+      "external_evidence": "no comparable external row captured; SQLite FTS5=not_captured; Bleve=unavailable (not run in unit test); Tantivy=unavailable (not run in unit test); Lucene=unavailable (not run in unit test)",
+      "rationale": "bounded rewrite/maintenance exists, but phase-2 needs debt, duration, and post-maintenance search rows at larger scale",
+      "required_follow_up_rows": [
+        "TreeDB RewriteTextIndex/MaintainTextIndexes rows with stale-posting debt",
+        "External optimize/merge rows if used as a comparator"
+      ],
+      "non_equivalent_semantics": [
+        "storage/build boundaries must state WAL inclusion, checkpoint/optimize/vacuum state, and retained primary-payload treatment"
+      ]
+    },
+    {
+      "shape_id": "multi_term_and",
+      "shape": "multi-term AND",
+      "classification": "behind_but_tractable",
+      "priority": 9,
+      "primary_issue": "#2837",
+      "treedb_evidence": "phase-1 text-v2 contract and scale harness define exact multi-term AND rows; current scoreboard run did not capture them",
+      "external_evidence": "no comparable external row captured; SQLite FTS5=not_captured; Bleve=unavailable (not run in unit test); Tantivy=unavailable (not run in unit test); Lucene=unavailable (not run in unit test)",
+      "rationale": "exact AND serving exists, but current scoreboard lacks external conjunction rows and scale refreshes",
+      "required_follow_up_rows": [
+        "TreeDB multi_term_and score-only 10k/100k/1M",
+        "SQLite FTS5/Lucene/Tantivy/Bleve explicit AND rows"
+      ],
+      "non_equivalent_semantics": [
+        "TreeDB simple analyzer/BM25F weighting is not automatically equivalent to SQLite unicode61/porter, Bleve analyzers, Tantivy tokenizers, or Lucene analyzers",
+        "explicit AND/OR query semantics must be pinned before latency ratios are parity evidence"
+      ]
+    },
+    {
+      "shape_id": "single_term_rare",
+      "shape": "single-term rare",
+      "classification": "behind_but_tractable",
+      "priority": 10,
+      "primary_issue": "#2835",
+      "treedb_evidence": "scale harness defines rare-term score-only rows; current scoreboard run did not capture them",
+      "external_evidence": "no comparable external row captured; SQLite FTS5=not_captured; Bleve=unavailable (not run in unit test); Tantivy=unavailable (not run in unit test); Lucene=unavailable (not run in unit test)",
+      "rationale": "rare-term serving should be tractable, but phase-2 needs explicit rows because setup/decode overhead can dominate",
+      "required_follow_up_rows": [
+        "TreeDB rare term score-only 10k/100k/1M",
+        "SQLite FTS5/Lucene/Tantivy/Bleve rare-term top-k rows"
+      ],
+      "non_equivalent_semantics": [
+        "TreeDB simple analyzer/BM25F weighting is not automatically equivalent to SQLite unicode61/porter, Bleve analyzers, Tantivy tokenizers, or Lucene analyzers",
+        "explicit AND/OR query semantics must be pinned before latency ratios are parity evidence"
+      ]
+    }
+  ],
+  "priority_order": [
+    {
+      "priority": 1,
+      "shape_id": "index_size",
+      "primary_issue": "#2835",
+      "rationale": "phase-1 scoreboard has external storage rows but lacks a durable TreeDB text-v2 bytes/doc row, so footprint parity is the first evidence and optimization gap",
+      "required_follow_up_rows": [
+        "TreeDB durable text-v2 bytes/doc after checkpoint and rewrite",
+        "SQLite FTS5/Lucene/Tantivy/Bleve index bytes/doc after equivalent optimize/vacuum"
+      ]
+    },
+    {
+      "priority": 2,
+      "shape_id": "single_term_common",
+      "primary_issue": "#2835",
+      "rationale": "TreeDB has exact block-max common-term evidence, but comparable Lucene/Tantivy/Bleve/SQLite rows and bytes/doc context are missing",
+      "required_follow_up_rows": [
+        "TreeDB 10k and 100k blockmax_common_topk",
+        "SQLite FTS5/Lucene/Tantivy/Bleve common-term top-k rows"
+      ]
+    },
+    {
+      "priority": 3,
+      "shape_id": "multi_term_or_wand",
+      "primary_issue": "#2836",
+      "rationale": "exact OR/WAND block-max landed in phase 1, but scalar-aware pruning and external OR/WAND rows are still required before parity claims",
+      "required_follow_up_rows": [
+        "TreeDB or_common/or_common_rare/or_high_frequency blockmax and exhaustive rows",
+        "Lucene/Tantivy/Bleve OR/WAND rows",
+        "SQLite FTS5 OR row if semantics are made explicit"
+      ]
+    },
+    {
+      "priority": 4,
+      "shape_id": "hybrid_text_scalar",
+      "primary_issue": "#2836",
+      "rationale": "TreeDB has zero-document hybrid/scalar rows, but industry baselines are non-equivalent or unavailable and scalar-aware WAND counters need expansion",
+      "required_follow_up_rows": [
+        "TreeDB text_scalar and hybrid_scalar no-doc rows at rare/broad selectivity",
+        "Lucene/Tantivy/Bleve equivalent filter rows or documented non-equivalence"
+      ]
+    },
+    {
+      "priority": 5,
+      "shape_id": "index_build_ingest",
+      "primary_issue": "#2835",
+      "rationale": "build and ingest rows exist but are not yet separated into text-only durable bytes/doc and external-equivalent build boundaries",
+      "required_follow_up_rows": [
+        "TreeDB CreateTextIndex/backfill and InsertBatch text-v2 rows",
+        "SQLite FTS5/Lucene/Tantivy/Bleve build rows with WAL/checkpoint boundary"
+      ]
+    },
+    {
+      "priority": 6,
+      "shape_id": "phrase",
+      "primary_issue": "#2839",
+      "rationale": "bounded phrase/proximity exists, but Lucene/Tantivy/Bleve phrase semantics and analyzer behavior are broader and unmeasured",
+      "required_follow_up_rows": [
+        "TreeDB phrase exact/slop 10k/100k",
+        "Lucene/Tantivy/Bleve phrase/proximity rows with analyzer notes"
+      ]
+    },
+    {
+      "priority": 7,
+      "shape_id": "reopen",
+      "primary_issue": "#2837",
+      "rationale": "scale harness covers reopen, but phase-2 needs refreshed 1M/10M rows and external open-reader comparators where feasible",
+      "required_follow_up_rows": [
+        "TreeDB scale harness reopen probe at 10k/1M/10M",
+        "External engine reopen/open-reader rows where embedded equivalents exist"
+      ]
+    },
+    {
+      "priority": 8,
+      "shape_id": "maintenance_rewrite",
+      "primary_issue": "#2840",
+      "rationale": "bounded rewrite/maintenance exists, but phase-2 needs debt, duration, and post-maintenance search rows at larger scale",
+      "required_follow_up_rows": [
+        "TreeDB RewriteTextIndex/MaintainTextIndexes rows with stale-posting debt",
+        "External optimize/merge rows if used as a comparator"
+      ]
+    },
+    {
+      "priority": 9,
+      "shape_id": "multi_term_and",
+      "primary_issue": "#2837",
+      "rationale": "exact AND serving exists, but current scoreboard lacks external conjunction rows and scale refreshes",
+      "required_follow_up_rows": [
+        "TreeDB multi_term_and score-only 10k/100k/1M",
+        "SQLite FTS5/Lucene/Tantivy/Bleve explicit AND rows"
+      ]
+    },
+    {
+      "priority": 10,
+      "shape_id": "single_term_rare",
+      "primary_issue": "#2835",
+      "rationale": "rare-term serving should be tractable, but phase-2 needs explicit rows because setup/decode overhead can dominate",
+      "required_follow_up_rows": [
+        "TreeDB rare term score-only 10k/100k/1M",
+        "SQLite FTS5/Lucene/Tantivy/Bleve rare-term top-k rows"
+      ]
+    }
+  ],
+  "analyzer_semantics_notes": [
+    "Do not compare TreeDB BM25F rows with external BM25/BM25F rows unless analyzer, field weights, top-k, query operator, and final-document fetch boundaries are pinned.",
+    "SQLite FTS5 default rows are useful embedded baselines, but they are not Lucene/Tantivy/Bleve analyzer or query-parser parity.",
+    "Phrase/proximity rows must record StorePositions, slop, stopword behavior, and unsupported stemming/synonym states; unsupported states must fail closed.",
+    "Candidate-generation rows must keep full-document fetch counters at zero; final-fetch rows belong in separate tables."
+  ]
+}

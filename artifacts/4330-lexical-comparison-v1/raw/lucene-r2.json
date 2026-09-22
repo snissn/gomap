@@ -1,0 +1,489 @@
+{
+  "build": {
+    "checkpointed": true,
+    "cpu": {
+      "status": "ok",
+      "unit": "nanoseconds",
+      "value": 1221513000
+    },
+    "docs_per_second": 8060.746592394948,
+    "elapsed_nanos": 1240579875,
+    "peak_rss": {
+      "reason": "Standard Java process APIs do not expose process-lifetime peak RSS",
+      "status": "unsupported"
+    }
+  },
+  "cases": [
+    {
+      "equivalent": true,
+      "id": "common",
+      "reopen_result_digest": "32055f75762e1bc6d5caf948100d7005401d8ea6d53bfda1e0d45ad4f13efd40",
+      "reopen_result_ids": [
+        "doc-000000",
+        "doc-000001",
+        "doc-000002",
+        "doc-000003",
+        "doc-000004",
+        "doc-000005",
+        "doc-000006",
+        "doc-000007",
+        "doc-000009",
+        "doc-000008"
+      ],
+      "result_digest": "32055f75762e1bc6d5caf948100d7005401d8ea6d53bfda1e0d45ad4f13efd40",
+      "result_ids": [
+        "doc-000000",
+        "doc-000001",
+        "doc-000002",
+        "doc-000003",
+        "doc-000004",
+        "doc-000005",
+        "doc-000006",
+        "doc-000007",
+        "doc-000009",
+        "doc-000008"
+      ],
+      "route": {
+        "fallback": false,
+        "intended": true,
+        "name": "lucene_inverted_index_bm25",
+        "proof": {
+          "query_class": "TermQuery",
+          "reader_documents": 10000
+        }
+      },
+      "samples_nanos": [
+        426500,
+        414792,
+        433709,
+        2030916,
+        435666,
+        414208,
+        406041,
+        401625,
+        421875,
+        412083,
+        1645500,
+        416250,
+        417916,
+        405500,
+        410917,
+        415542,
+        610667,
+        400167,
+        410667,
+        400000
+      ],
+      "status": "ok",
+      "timed_out": false
+    },
+    {
+      "equivalent": true,
+      "id": "rare",
+      "reopen_result_digest": "d1e8f7e714d80caa330129cd3ef396355c46b9eda93e8ceeaae231865bd1aee0",
+      "reopen_result_ids": [
+        "doc-000010",
+        "doc-000011",
+        "doc-000012",
+        "doc-000013",
+        "doc-000014",
+        "doc-000015",
+        "doc-000016",
+        "doc-000017",
+        "doc-000018",
+        "doc-000019"
+      ],
+      "result_digest": "d1e8f7e714d80caa330129cd3ef396355c46b9eda93e8ceeaae231865bd1aee0",
+      "result_ids": [
+        "doc-000010",
+        "doc-000011",
+        "doc-000012",
+        "doc-000013",
+        "doc-000014",
+        "doc-000015",
+        "doc-000016",
+        "doc-000017",
+        "doc-000018",
+        "doc-000019"
+      ],
+      "route": {
+        "fallback": false,
+        "intended": true,
+        "name": "lucene_inverted_index_bm25",
+        "proof": {
+          "query_class": "TermQuery",
+          "reader_documents": 10000
+        }
+      },
+      "samples_nanos": [
+        755166,
+        230667,
+        236917,
+        215708,
+        218750,
+        215083,
+        263958,
+        216583,
+        210125,
+        213709,
+        224833,
+        212542,
+        210125,
+        208708,
+        215125,
+        210416,
+        216584,
+        214916,
+        209166,
+        211667
+      ],
+      "status": "ok",
+      "timed_out": false
+    },
+    {
+      "equivalent": true,
+      "id": "and",
+      "reopen_result_digest": "ec83fcd96024576cbb2628ca36dd60d1bdf129216c6d71b8d5e7a44a5065953d",
+      "reopen_result_ids": [
+        "doc-000020",
+        "doc-000021",
+        "doc-000022",
+        "doc-000023",
+        "doc-000024",
+        "doc-000025",
+        "doc-000026",
+        "doc-000027",
+        "doc-000028",
+        "doc-000029"
+      ],
+      "result_digest": "ec83fcd96024576cbb2628ca36dd60d1bdf129216c6d71b8d5e7a44a5065953d",
+      "result_ids": [
+        "doc-000020",
+        "doc-000021",
+        "doc-000022",
+        "doc-000023",
+        "doc-000024",
+        "doc-000025",
+        "doc-000026",
+        "doc-000027",
+        "doc-000028",
+        "doc-000029"
+      ],
+      "route": {
+        "fallback": false,
+        "intended": true,
+        "name": "lucene_inverted_index_bm25",
+        "proof": {
+          "query_class": "BooleanQuery",
+          "reader_documents": 10000
+        }
+      },
+      "samples_nanos": [
+        292833,
+        271541,
+        272292,
+        271834,
+        1158875,
+        284334,
+        1171625,
+        274000,
+        392625,
+        274250,
+        272208,
+        268417,
+        264792,
+        273125,
+        346625,
+        285167,
+        306625,
+        270500,
+        266625,
+        266834
+      ],
+      "status": "ok",
+      "timed_out": false
+    },
+    {
+      "equivalent": true,
+      "id": "or",
+      "reopen_result_digest": "d3a21b7de5119f9bf360bf76da508e0778a2ddb502717efdcc4d4abd0b0ca9d8",
+      "reopen_result_ids": [
+        "doc-000070",
+        "doc-000071",
+        "doc-000072",
+        "doc-000073",
+        "doc-000074",
+        "doc-000075",
+        "doc-000076",
+        "doc-000077",
+        "doc-000078",
+        "doc-000079"
+      ],
+      "result_digest": "d3a21b7de5119f9bf360bf76da508e0778a2ddb502717efdcc4d4abd0b0ca9d8",
+      "result_ids": [
+        "doc-000070",
+        "doc-000071",
+        "doc-000072",
+        "doc-000073",
+        "doc-000074",
+        "doc-000075",
+        "doc-000076",
+        "doc-000077",
+        "doc-000078",
+        "doc-000079"
+      ],
+      "route": {
+        "fallback": false,
+        "intended": true,
+        "name": "lucene_inverted_index_bm25",
+        "proof": {
+          "query_class": "BooleanQuery",
+          "reader_documents": 10000
+        }
+      },
+      "samples_nanos": [
+        2565417,
+        259125,
+        260417,
+        257000,
+        1025666,
+        263333,
+        257208,
+        250584,
+        251250,
+        253250,
+        250958,
+        351583,
+        251958,
+        715833,
+        639417,
+        252042,
+        250042,
+        247625,
+        254792,
+        248833
+      ],
+      "status": "ok",
+      "timed_out": false
+    },
+    {
+      "equivalent": true,
+      "id": "phrase",
+      "reopen_result_digest": "8088cbb0b34ee919fde96c27663d90a54e722216b390e032842cdc7ae04d5696",
+      "reopen_result_ids": [
+        "doc-000090",
+        "doc-000091",
+        "doc-000092",
+        "doc-000093",
+        "doc-000094",
+        "doc-000095",
+        "doc-000096",
+        "doc-000097",
+        "doc-000098",
+        "doc-000099"
+      ],
+      "result_digest": "8088cbb0b34ee919fde96c27663d90a54e722216b390e032842cdc7ae04d5696",
+      "result_ids": [
+        "doc-000090",
+        "doc-000091",
+        "doc-000092",
+        "doc-000093",
+        "doc-000094",
+        "doc-000095",
+        "doc-000096",
+        "doc-000097",
+        "doc-000098",
+        "doc-000099"
+      ],
+      "route": {
+        "fallback": false,
+        "intended": true,
+        "name": "lucene_inverted_index_bm25",
+        "proof": {
+          "query_class": "BooleanQuery",
+          "reader_documents": 10000
+        }
+      },
+      "samples_nanos": [
+        3707958,
+        382708,
+        378708,
+        370000,
+        355292,
+        357042,
+        354875,
+        356792,
+        363125,
+        600375,
+        355125,
+        358334,
+        353250,
+        360458,
+        368417,
+        358250,
+        359417,
+        437791,
+        405833,
+        411542
+      ],
+      "status": "ok",
+      "timed_out": false
+    },
+    {
+      "equivalent": true,
+      "id": "scalar_filtered",
+      "reopen_result_digest": "efbd9f605d29312de95b30ea2d42e875a7e9c79acbfabe73748ed2b115672fa0",
+      "reopen_result_ids": [
+        "doc-000100",
+        "doc-000101",
+        "doc-000102",
+        "doc-000103",
+        "doc-000104",
+        "doc-000105",
+        "doc-000106",
+        "doc-000107",
+        "doc-000108",
+        "doc-000109"
+      ],
+      "result_digest": "efbd9f605d29312de95b30ea2d42e875a7e9c79acbfabe73748ed2b115672fa0",
+      "result_ids": [
+        "doc-000100",
+        "doc-000101",
+        "doc-000102",
+        "doc-000103",
+        "doc-000104",
+        "doc-000105",
+        "doc-000106",
+        "doc-000107",
+        "doc-000108",
+        "doc-000109"
+      ],
+      "route": {
+        "fallback": false,
+        "intended": true,
+        "name": "lucene_inverted_index_bm25",
+        "proof": {
+          "query_class": "BooleanQuery",
+          "reader_documents": 10000
+        }
+      },
+      "samples_nanos": [
+        196125,
+        195625,
+        833209,
+        205375,
+        195500,
+        197042,
+        196208,
+        201458,
+        193958,
+        193709,
+        195292,
+        205292,
+        196833,
+        198209,
+        200458,
+        194833,
+        202625,
+        194125,
+        199666,
+        195250
+      ],
+      "status": "ok",
+      "timed_out": false
+    }
+  ],
+  "command": [
+    "mvn",
+    "-q",
+    "compile",
+    "exec:java",
+    "-Dexec.args=--manifest $REPO/benchmarks/text_hybrid_scoreboard/lexical_manifest.json --corpus $RUN/corpus.tsv --out $RUN/raw/lucene-r2.json --repetition 2 --index $RUN/indexes/lucene-r2"
+  ],
+  "config": {
+    "analyzer": "StandardAnalyzer",
+    "build_timing_boundary": "after frozen TSV parse; includes engine document materialization, index setup, checkpoint, and close",
+    "compound_file": false,
+    "jvm_execution": "-XX:ActiveProcessorCount=1 -XX:+UseSerialGC -XX:-TieredCompilation -XX:CICompilerCount=1 -Xbatch",
+    "merge_scheduler": "SerialMergeScheduler",
+    "phrase_filter_fields": [
+      "title",
+      "body"
+    ],
+    "phrase_scoring": "weighted terms scored; title/body phrase OR applied as FILTER",
+    "scoring_contract": "pinned_bm25f",
+    "similarity": "BM25(k1=1.2,b=0.75)",
+    "stored_source_fields": [
+      "id",
+      "title",
+      "body",
+      "tenant"
+    ],
+    "tie_break": "score,id",
+    "top_k": 10,
+    "weighted_field_materialization": "title repeated 3x then body for term scoring, including phrase-qualified rows",
+    "working_directory": "$RUN/dependency_work/lucene_adapter"
+  },
+  "corpus": {
+    "document_count": 10000,
+    "sha256": "fe5b9d106a099d5c29d3327a8424b7f6d57f248b8802225b2d7bb3719062a227"
+  },
+  "engine": {
+    "family": "lucene_family",
+    "id": "lucene",
+    "name": "Apache Lucene",
+    "version": "9.12.1"
+  },
+  "environment": {
+    "contract": {
+      "build_cpu_metric": "process CPU nanoseconds",
+      "engine_process_concurrency": 1,
+      "filesystem_identity_policy": "runner output, corpus, index, and result artifact must have the same decimal POSIX st_dev identity",
+      "latency_clock": "monotonic wall clock",
+      "memory_limit_policy": "inherit one detected host address-space limit; adapters do not raise or lower it",
+      "peak_rss_metric": "process lifetime peak resident bytes when the runtime exposes it; otherwise typed unsupported",
+      "query_concurrency": 1,
+      "resource_scope": "single adapter process per retained repetition",
+      "runtime_cpu_parallelism": 1
+    },
+    "execution": {
+      "engine_process_concurrency": 1,
+      "query_concurrency": 1,
+      "runtime_cpu_parallelism": 1
+    },
+    "filesystem": {
+      "corpus_store_id": "16777232",
+      "index_store_id": "16777232",
+      "result_store_id": "16777232",
+      "runner_device_id": "16777232",
+      "same_filesystem": true
+    },
+    "memory": {
+      "adapter_changed_limit": false,
+      "detected_address_space_limit": "unlimited",
+      "detection_source": "runner_rlimit",
+      "jvm_max_heap_bytes": 4294901760,
+      "matches_runner_detected": true
+    }
+  },
+  "manifest_sha256": "a268cb2e59f4a63d8bcc7a0047fe85fe2195bef62a536f9b54bcae6f4b568d8f",
+  "reopen": {
+    "performed": true,
+    "result_digest": "61b4e26f72eacfb5c7f8d1ecbdffc6b0ef69a7b17daa24b6a7ec60b29561b4b0",
+    "verified": true
+  },
+  "repetition": 2,
+  "schema_version": "treedb_lexical_result/v1",
+  "status": "ok",
+  "storage": {
+    "durable_bytes": 335311,
+    "transient_bytes": 0,
+    "wal_bytes": 0
+  },
+  "versions": {
+    "java": "26.0.2.1",
+    "lucene": "9.12.1",
+    "platform": "Mac OS X/aarch64",
+    "vm": "OpenJDK 64-Bit Server VM"
+  }
+}

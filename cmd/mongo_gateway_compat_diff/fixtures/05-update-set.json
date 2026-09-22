@@ -1,0 +1,13 @@
+{
+  "schema": "treedb.mongo-gateway.compat-diff.fixture",
+  "version": 1,
+  "id": "update-set-by-id",
+  "capability_id": "crud.updateone-set-by-id",
+  "expectation": "supported",
+  "database": "compat",
+  "collection": "records",
+  "smoke": false,
+  "normalize_response_envelope_order": true,
+  "seed": [{"_id": "user-1", "score": {"$numberInt": "7"}}],
+  "command": {"update": "records", "updates": [{"q": {"_id": "user-1"}, "u": {"$set": {"score": {"$numberInt": "8"}}}, "multi": false, "upsert": false}]}
+}

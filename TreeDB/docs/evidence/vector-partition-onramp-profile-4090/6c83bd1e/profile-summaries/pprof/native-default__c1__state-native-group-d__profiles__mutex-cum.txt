@@ -1,0 +1,48 @@
+File: treedb_vector_partition_bench
+Build ID: 6e601df17e91fc834d40505729b45018b8011783
+Type: delay
+Time: 2026-08-09 14:06:07 HST
+Showing nodes accounting for 2992.88us, 100% of 2992.88us total
+Dropped 95 nodes (cum <= 14.96us)
+Showing top 40 nodes out of 72
+      flat  flat%   sum%        cum   cum%
+ 2730.42us 91.23% 91.23%  2730.42us 91.23%  runtime.unlock (partial-inline)
+         0     0% 91.23%  2448.71us 81.82%  runtime.systemstack
+         0     0% 91.23%  2433.34us 81.30%  runtime.gcBgMarkWorker
+         0     0% 91.23%  1952.36us 65.23%  runtime.gcMarkDone
+         0     0% 91.23%  1926.11us 64.36%  runtime.forEachP (inline)
+         0     0% 91.23%  1926.11us 64.36%  runtime.forEachPInternal
+         0     0% 91.23%  1902.95us 63.58%  runtime.gcMarkTermination
+         0     0% 91.23%  1876.69us 62.71%  runtime.gcMarkTermination.forEachP.func7
+         0     0% 91.23%   480.97us 16.07%  runtime.gcBgMarkWorker.func2
+         0     0% 91.23%   480.97us 16.07%  runtime.gcDrain
+         0     0% 91.23%   480.97us 16.07%  runtime.getempty
+         0     0% 91.23%   480.97us 16.07%  runtime.markroot
+         0     0% 91.23%   480.97us 16.07%  runtime.markroot.func1
+         0     0% 91.23%   480.97us 16.07%  runtime.scanframeworker
+         0     0% 91.23%   480.97us 16.07%  runtime.scanstack
+         0     0% 91.23%   480.85us 16.07%  runtime.(*mheap).allocManual
+         0     0% 91.23%   480.85us 16.07%  runtime.(*mheap).allocSpan
+         0     0% 91.23%   480.85us 16.07%  runtime.getempty.func1
+         0     0% 91.23%   395.75us 13.22%  runtime.scanblock
+         0     0% 91.23%   390.79us 13.06%  runtime.gcDrainMarkWorkerIdle (inline)
+         0     0% 91.23%   326.50us 10.91%  runtime.(*stackScanState).putPtr
+         0     0% 91.23%   199.84us  6.68%  runtime.mcall
+         0     0% 91.23%   190.53us  6.37%  runtime.goschedImpl
+         0     0% 91.23%   188.98us  6.31%  github.com/hashicorp/raft.(*raftState).goFunc.func1
+  185.51us  6.20% 97.43%   185.51us  6.20%  sync.(*Mutex).Unlock
+         0     0% 97.43%   108.78us  3.63%  runtime.gosched_m
+         0     0% 97.43%    91.10us  3.04%  runtime.schedule
+         0     0% 97.43%    91.06us  3.04%  runtime.park_m
+         0     0% 97.43%    90.18us  3.01%  runtime.gcDrainMarkWorkerDedicated (inline)
+         0     0% 97.43%    85.23us  2.85%  runtime.(*stackScanState).addObject
+         0     0% 97.43%    81.75us  2.73%  runtime.gopreempt_m (inline)
+         0     0% 97.43%    81.75us  2.73%  runtime.morestack
+         0     0% 97.43%    81.75us  2.73%  runtime.newstack
+   76.95us  2.57%   100%    76.95us  2.57%  runtime._LostContendedRuntimeLock
+         0     0%   100%    69.92us  2.34%  github.com/hashicorp/raft-boltdb/v2.(*BoltStore).StoreLogs
+         0     0%   100%    69.92us  2.34%  github.com/hashicorp/raft.(*Raft).appendEntries
+         0     0%   100%    69.92us  2.34%  github.com/hashicorp/raft.(*Raft).processRPC
+         0     0%   100%    69.92us  2.34%  github.com/hashicorp/raft.(*Raft).run
+         0     0%   100%    69.92us  2.34%  github.com/hashicorp/raft.(*Raft).run-fm
+         0     0%   100%    69.92us  2.34%  github.com/hashicorp/raft.(*Raft).runFollower

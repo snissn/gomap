@@ -1,0 +1,94 @@
+{
+  "milestone": "PR4",
+  "tracker": "https://github.com/snissn/gomap/issues/1529",
+  "branch": "codex/user-command-wal-pr4",
+  "base_commit": "0bdf612dec20ded2ea73780394d18329402afe14",
+  "go_version": "go version go1.25.7 linux/amd64",
+  "platform": "linux/amd64 Intel i5-11400F",
+  "durability_modes": [
+    "DurabilityWALOffRelaxed baseline",
+    "DurabilityWALOnRelaxed command_wal_v1 benchmark",
+    "command_wal_v1 recovery open"
+  ],
+  "command_kinds": [
+    "CollectionInsertBatchByID",
+    "CollectionDeleteBatchByID"
+  ],
+  "matrix_status_changes": {
+    "collection_insert_explicit_id": "WAL-supported for JSON, BSON, and template-v1 stored documents through normal collection executor",
+    "collection_delete_explicit_id": "WAL-supported; missing IDs are idempotent no-ops and replay advances AppliedCommandLSN",
+    "collection_catalog_create": "WAL-rejected until catalog command milestone"
+  },
+  "golden_fixtures": {
+    "TreeDB/internal/commitlog/testdata/command_wal_v1_collection_insert_by_id.hex": "bc0f11dfca58fabb7b5596dda201e62bb7170d6d1e347d5d234c42821b6dd91c",
+    "TreeDB/internal/commitlog/testdata/command_wal_v1_collection_delete_by_id.hex": "eb7162bc4c5c8b7dbe32692d10524293fd4c4ea00783f821861c7baa8e1c54a2"
+  },
+  "crash_recovery_scenarios": [
+    "unapplied CollectionInsertBatchByID frame replays after reopen and advances AppliedCommandLSN",
+    "unapplied CollectionInsertBatchByID frame replays template-v1 stored documents without callback/resolver nondeterminism",
+    "unapplied CollectionDeleteBatchByID frame deletes existing IDs, ignores missing IDs, and advances AppliedCommandLSN",
+    "missing-only CollectionDeleteBatchByID frame publishes a no-op AppliedCommandLSN advancement"
+  ],
+  "normal_path_scenarios": [
+    "public InsertBatch appends one command frame and publishes roots with AppliedCommandLSN=1",
+    "catalog CreateCollection returns ErrCommandWALUnsupported while command_wal_v1 is active"
+  ],
+  "runtime_assertions": [
+    "ordered-root publish appends command WAL before root visibility and advances AppliedCommandLSN in the same finalize boundary",
+    "post-append finalize failure poisons the handle before commit serialization is released",
+    "collection command replay installs a temporary recovery snapshot view before invoking normal collection executors"
+  ],
+  "performance_gate": {
+    "required": true,
+    "status": "failed_strict_parity_plus_historical_evidence",
+    "throughput_gate_operator": ">",
+    "thresholds": {
+      "insert_unindexed_min_ratio": 1.01,
+      "insert_indexed_min_ratio": 1.01,
+      "delete_unindexed_min_ratio": 1.01,
+      "delete_indexed_min_ratio": 1.01,
+      "allocation_regression_allowed": false,
+      "all_throughput_gates_must_exceed_ratio": 1.01
+    },
+    "rationale": "The recorded PR4 local microbenchmark artifact is retained as historical evidence, but it is no longer accepted as a passing performance gate under the final strict parity-plus policy. Required command-WAL throughput lanes must be strictly greater than 1.01x of the WAL-off baseline; these recorded PR4 lanes are sub-parity and therefore fail the gate.",
+    "benchmark_command": "GOWORK=off go test ./TreeDB/collections -run '^$' -bench 'BenchmarkCollectionCommandWAL(InsertBatch|DeleteBatch)ByID' -benchtime=200x -benchmem -count=3",
+    "artifacts": {
+      "artifacts/command-wal/pr4/collection-insert-delete-microbench.txt": "da0b87f9c7b4736596ec049523da5d6d030595e033fe8aca3fb6821b617f63ac",
+      "artifacts/command-wal/pr4/collection-insert-delete-microbench-benchstat.txt": "71736ea11922d839efa8427cb287382790915576923f14cbe409bab4bab4ea5b"
+    },
+    "summary": {
+      "insert_unindexed_command_wal_docs_per_sec": "873k docs/s median-ish benchstat row; baseline WAL-off 1.205M docs/s",
+      "insert_unindexed_command_wal_to_wal_off_docs_per_sec_ratio": 0.7246,
+      "insert_indexed_command_wal_docs_per_sec": "480k docs/s; baseline WAL-off 482k docs/s",
+      "insert_indexed_command_wal_to_wal_off_docs_per_sec_ratio": 0.9952,
+      "delete_unindexed_command_wal_docs_per_sec": "808k docs/s; baseline WAL-off 867k docs/s",
+      "delete_unindexed_command_wal_to_wal_off_docs_per_sec_ratio": 0.9318,
+      "delete_indexed_command_wal_docs_per_sec": "383k docs/s; baseline WAL-off 408k docs/s",
+      "delete_indexed_command_wal_to_wal_off_docs_per_sec_ratio": 0.9397,
+      "failing_lanes": [
+        "insert_unindexed",
+        "insert_indexed",
+        "delete_unindexed",
+        "delete_indexed"
+      ],
+      "allocation_note": "payload encoders avoid per-document clone allocation before frame copy; command mode still records expected extra frame payload and publish bookkeeping allocations"
+    }
+  },
+  "local_validation_commands": [
+    "GOWORK=off go test ./TreeDB/collections -run 'TestCollectionCommandWAL' -count=1 -v",
+    "GOWORK=off go test ./TreeDB/internal/commitlog ./TreeDB/collections",
+    "GOWORK=off go test ./TreeDB/db -run 'TestCommandWAL|TestPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder|TestPublishOrderedRootDeltaGroupWithSystemBuilder' -count=1",
+    "GOWORK=off go test ./TreeDB/collections -run '^$' -bench 'BenchmarkCollectionCommandWAL(InsertBatch|DeleteBatch)ByID' -benchtime=200x -benchmem -count=3"
+  ],
+  "unsupported_modes": [
+    "catalog create/update/drop commands remain WAL-rejected until PR6",
+    "query-wide collection mutations remain outside PR4",
+    "legacy raw WAL payloads remain unsupported in command_wal_v1 directories"
+  ],
+  "cleanup_debt": {
+    "oldest_unapplied_lsn": 0,
+    "external_ref_retained_bytes": 0,
+    "notes": "PR4 collection command payloads embed explicit IDs and stored document bytes; no external refs are introduced."
+  },
+  "implementation_commit": "branch head commit for codex/user-command-wal-pr4; see PR head SHA"
+}

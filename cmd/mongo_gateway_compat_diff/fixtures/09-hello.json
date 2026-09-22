@@ -1,0 +1,11 @@
+{
+  "schema": "treedb.mongo-gateway.compat-diff.fixture",
+  "version": 1,
+  "id": "hello",
+  "capability_id": "wire.hello-command",
+  "expectation": "supported",
+  "database": "compat",
+  "collection": "records",
+  "smoke": false,
+  "command": {"hello": 1}
+}

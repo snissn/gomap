@@ -1,0 +1,74 @@
+{
+  "command_version": 2,
+  "dense_work": {
+    "completed": true,
+    "graph": {
+      "available": true,
+      "base_ann_scored": 0,
+      "base_candidates": 0,
+      "base_edges": 0,
+      "base_result_ids": 5,
+      "base_shadowed": 0,
+      "completed": true,
+      "delta_scored": 0,
+      "exact_base_scored": 16,
+      "filter": {
+        "attempted": true,
+        "completed": true,
+        "eligible_rows": 16,
+        "inspected_entries": 16,
+        "mapping_work_charged": 288,
+        "ordinal_growth_peak_bytes": 640,
+        "retained_bytes": 640,
+        "scratch_id_bytes": 304,
+        "scratch_rows": 16,
+        "source_bytes": 304,
+        "source_ids": 16
+      },
+      "route": "typed_exact",
+      "snapshot": {
+        "available": true,
+        "base_coverage_lsn": 197,
+        "base_manifest": {
+          "checksum": 1682465792222184887,
+          "format": "tcs1",
+          "generation": 195,
+          "version": 1
+        },
+        "current_coverage_lsn": 197,
+        "current_manifest": {
+          "checksum": 1682465792222184887,
+          "format": "tcs1",
+          "generation": 195,
+          "version": 1
+        },
+        "schema_generation": 1,
+        "schema_hash": 8675168599612762399
+      }
+    },
+    "output": {
+      "attempted": true,
+      "completed": true,
+      "fetched": 5,
+      "json_reconstruction_rows": 5,
+      "missing": 0,
+      "output_bytes": 590,
+      "requested": 5,
+      "retained_payload_fetches": 5,
+      "typed_column_rows": 0
+    },
+    "version": 1
+  },
+  "ended_monotonic_ns": 425941235314732,
+  "expected_generation": 1,
+  "lifetime_ordinal": 0,
+  "operation": "search",
+  "operation_name": "warmup_search",
+  "outcome": "success",
+  "phase": "warmup_search",
+  "request_sequence": 200,
+  "result_count": 5,
+  "scenario": "small",
+  "started_monotonic_ns": 425941234291752,
+  "transport": "native"
+}

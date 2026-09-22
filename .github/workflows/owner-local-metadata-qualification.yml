@@ -1,0 +1,103 @@
+name: "Owner-local metadata qualification"
+
+on:
+  pull_request:
+    paths:
+      - 'TreeDB/collections/vector_partition_owner*'
+      - 'TreeDB/collections/vector_partition_paged_root_v2*'
+      - 'TreeDB/collections/vector_partition_legacy_compat_v2_test.go'
+      - 'TreeDB/collections/vector_partition_manifest.go'
+      - 'TreeDB/collections/vector_partition_lifecycle*'
+      - 'TreeDB/collections/vector_partition_persistent_searcher_v1.go'
+      - 'TreeDB/collections/vector_partition_router_v1.go'
+      - 'TreeDB/internal/raftplacement/source_shard_v2*'
+      - 'TreeDB/internal/vectorpartition/source_snapshot*_v2*'
+      - 'TreeDB/nativewire/vector_partition_owner*'
+      - 'TreeDB/nativewire/vector_partition_generation_source_v1.go'
+      - 'TreeDB/nativewire/vector_partition_production_node_v1.go'
+      - '.github/workflows/owner-local-metadata-qualification.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: owner-local-metadata-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  qualify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      GOWORK: "off"
+      GOMAXPROCS: "2"
+      GOMEMLIMIT: "4GiB"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Exact source and formatting
+        id: formatting
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rev-parse HEAD
+          go version
+          mapfile -t files < <(git diff --name-only --diff-filter=AM 0d10c1605f8887f9a1cd7e3cb910014a5b23cfe3 HEAD -- 'TreeDB/collections/*.go' 'TreeDB/nativewire/*.go' 'TreeDB/internal/raftplacement/*.go' 'TreeDB/internal/vectorpartition/*.go')
+          gofmt -d "${files[@]}" || true
+          if [[ -n "$(gofmt -l "${files[@]}")" ]]; then
+            for file in "${files[@]}"; do
+              if [[ -n "$(gofmt -l "$file")" ]]; then
+                echo "FORMATTED_FILE=$file"
+                gofmt "$file" | base64 -w0
+                echo
+              fi
+            done
+            exit 1
+          fi
+      - name: Owner plan and public generation-source conformance
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test ./TreeDB/collections ./TreeDB/internal/raftplacement ./TreeDB/internal/vectorpartition ./TreeDB/nativewire -run 'Test(VectorPartitionOwnerSearchOpenPlan|OwnerGenerationSource|SourceShardMap|SourceSnapshot|VectorPartitionPagedRoot|VectorPartitionManifestV1|VectorPartitionManifestContextDigest)' -count=3 -timeout=10m -v | tee owner-local-tests.txt
+      - name: Exact baseline schema-6 compatibility
+        shell: bash
+        run: |
+          set -euo pipefail
+          p2_base_dir="$RUNNER_TEMP/p2-schema6-base"
+          git worktree add --detach "$p2_base_dir" 0d10c1605f8887f9a1cd7e3cb910014a5b23cfe3
+          cp TreeDB/collections/vector_partition_legacy_compat_v2_test.go "$p2_base_dir/TreeDB/collections/"
+          go test ./TreeDB/collections -run '^TestVectorPartitionLegacyByteCompatibilityProbeV2$' -count=1 -v | tee owner-local-schema6-head.txt
+          go -C "$p2_base_dir" test ./TreeDB/collections -run '^TestVectorPartitionLegacyByteCompatibilityProbeV2$' -count=1 -v | tee owner-local-schema6-base.txt
+          p2_head_digest="$(sed -n '/^VPM_SCHEMA6_COMPAT=/p' owner-local-schema6-head.txt)"
+          p2_base_digest="$(sed -n '/^VPM_SCHEMA6_COMPAT=/p' owner-local-schema6-base.txt)"
+          [[ -n "$p2_base_digest" && "$p2_head_digest" == "$p2_base_digest" ]]
+          git worktree remove --force "$p2_base_dir"
+      - name: Constructor allocation comparison
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test ./TreeDB/collections ./TreeDB/internal/raftplacement ./TreeDB/internal/vectorpartition -run '^$' -bench '^Benchmark(VectorPartitionOwnerSearchOpenPlan|SourceShardMapResolveDocumentID|SourceSnapshotChunkVerification|SourceSnapshotChunkDecode)V2$' -benchmem -benchtime=200ms -count=3 | tee owner-local-bench.txt
+      - name: Owner plan and source race conformance
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test -race ./TreeDB/collections ./TreeDB/internal/raftplacement ./TreeDB/internal/vectorpartition ./TreeDB/nativewire -run 'Test(VectorPartitionOwnerSearchOpenPlan|OwnerGenerationSource|SourceShardMap|SourceSnapshot|VectorPartitionPagedRoot|VectorPartitionManifestContextDigest)' -count=1 -timeout=10m -v | tee owner-local-race.txt
+      - name: Upload focused evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: owner-local-metadata-${{ github.event.pull_request.head.sha || github.sha }}
+          path: owner-local-*.txt
+          if-no-files-found: ignore
+      - name: Require formatting
+        if: ${{ always() && steps.formatting.outcome == 'failure' }}
+        run: exit 1

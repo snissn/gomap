@@ -1,0 +1,58 @@
+source,series,qps,recall,latency,filterRatio
+VDBBench live 1M,ZillizCloud-8cu-perf,13316.2336,0.9383,2,0
+VDBBench live 1M,ZillizCloud-8cu-perf,12837.5287,0.9588,2.1,0
+VDBBench live 1M,ZillizCloud-8cu-perf,12248.9154,0.9687,2.2,0
+VDBBench live 1M,ZillizCloud-8cu-perf,11501.6652,0.9785,2.2,0
+VDBBench live 1M,ZillizCloud-8cu-perf,10566.6823,0.9838,2.4,0
+VDBBench live 1M,ZillizCloud-8cu-perf,9227.318,0.9893,2.7,0
+VDBBench live 1M,ZillizCloud-8cu-perf,8320.4606,0.9919,2.9,0
+VDBBench live 1M,ZillizCloud-8cu-perf,7524.9879,0.9931,3.2,0
+VDBBench live 1M,ZillizCloud-8cu-perf,6813.2439,0.9939,3.5,0
+VDBBench live 1M,ElasticCloud-8c60g-force_merge,2808.2421,0.8815,9.5,0
+VDBBench live 1M,ElasticCloud-8c60g-force_merge,2353.8935,0.9143,17.1,0
+VDBBench live 1M,ElasticCloud-8c60g-force_merge,2030.4249,0.9306,10.6,0
+VDBBench live 1M,ElasticCloud-8c60g-force_merge,1804.8996,0.9405,12.3,0
+VDBBench live 1M,ElasticCloud-8c60g-force_merge,1623.8421,0.9479,11.8,0
+VDBBench live 1M,ElasticCloud-8c60g-force_merge,1482.3772,0.9546,12.1,0
+VDBBench live 1M,Milvus-16c64g-sq4u-fp16-force_merge,10333.9072,0.889,2,0
+VDBBench live 1M,Milvus-16c64g-sq4u-fp16-force_merge,9575.6863,0.9189,2.3,0
+VDBBench live 1M,Milvus-16c64g-sq4u-fp16-force_merge,8596.7694,0.9416,2.4,0
+VDBBench live 1M,Milvus-16c64g-sq4u-fp16-force_merge,7704.3625,0.9541,2.7,0
+VDBBench live 1M,Milvus-16c64g-sq4u-fp16-force_merge,7023.6735,0.962,3,0
+VDBBench live 1M,Milvus-16c64g-sq4u-fp16-force_merge,6031.3725,0.971,3.3,0
+VDBBench live 1M,Milvus-16c64g-sq4u-fp16-force_merge,5258.1868,0.9768,3.6,0
+VDBBench live 1M,Milvus-16c64g-sq8-force_merge,5973.0024,0.9192,2.4,0
+VDBBench live 1M,Milvus-16c64g-sq8-force_merge,5416.5758,0.9334,2.6,0
+VDBBench live 1M,Milvus-16c64g-sq8-force_merge,4771.4324,0.9479,2.8,0
+VDBBench live 1M,Milvus-16c64g-sq8-force_merge,4006.3994,0.9609,3.2,0
+VDBBench live 1M,Milvus-16c64g-sq8-force_merge,3441.7597,0.9682,3.5,0
+VDBBench live 1M,Milvus-16c64g-sq8-force_merge,3040.6216,0.9734,3.7,0
+VDBBench live 1M,Milvus-16c64g-sq8-force_merge,2446.7373,0.9791,4.3,0
+VDBBench live 1M,Milvus-16c64g-sq8-force_merge,2084.6245,0.9819,5,0
+VDBBench live 1M,OpenSearch-16c128g,950.6332,0.914,13.2,0
+VDBBench live 1M,OpenSearch-16c128g,823.2224,0.9434,13.5,0
+VDBBench live 1M,OpenSearch-16c128g,743.9815,0.9583,14.8,0
+VDBBench live 1M,OpenSearch-16c128g,683.1873,0.9677,15.7,0
+VDBBench live 1M,OpenSearch-16c128g,619.7468,0.9738,17.2,0
+VDBBench live 1M,OpenSearch-16c128g,537.4082,0.9809,18.8,0
+VDBBench live 1M,OpenSearch-16c128g,474.9941,0.9848,20.9,0
+VDBBench live 1M,OpenSearch-16c128g-force_merge,3055.0123,0.9066,7.2,0
+VDBBench live 1M,OpenSearch-16c128g-force_merge,3013.4439,0.9268,6.9,0
+VDBBench live 1M,OpenSearch-16c128g-force_merge,2801.7241,0.9476,7.4,0
+VDBBench live 1M,OpenSearch-16c128g-force_merge,2590.3809,0.9679,8.6,0
+VDBBench live 1M,OpenSearch-16c128g-force_merge,2291.2159,0.9764,8.9,0
+VDBBench live 1M,Pinecone-p2.x8-1node,1146.5286,0.9262,13.7,0
+VDBBench live 1M,QdrantCloud-16c64g,1242.428,0.9474,6.4,0
+VDBBench live 1M,QdrantCloud-16c64g,1111.3633,0.955,7,0
+VDBBench live 1M,QdrantCloud-16c64g,955.4701,0.9629,7.2,0
+VDBBench live 1M,QdrantCloud-16c64g,783.5207,0.971,7.7,0
+VDBBench live 1M,QdrantCloud-16c64g,470.8546,0.9835,9.5,0
+VDBBench live 1M,TurboPuffer,798.328,0.8993,56.7,0
+TreeDB c6i run,TreeDB baseline quantized_only_ef150,19949.1827,0.88,1.7,0
+TreeDB c6i run,TreeDB baseline rerank_ef150_r150,18961.8329,0.939,1.8,0
+TreeDB c6i run,TreeDB baseline rerank_ef350_r300,10152.0505,0.9809,2.7,0
+TreeDB c6i run,TreeDB baseline FP32 ef150 single pair,10381.8969,0.9433,2.6,0
+TreeDB c6i run,TreeDB candidate quantized_only_ef150,29506.1508,0.88,1.1,0
+TreeDB c6i run,TreeDB candidate rerank_ef150_r150,25862.7348,0.939,1.2,0
+TreeDB c6i run,TreeDB candidate rerank_ef350_r300,12820.9961,0.9809,2.1,0
+TreeDB c6i run,TreeDB candidate FP32 ef150 single pair,13886.9354,0.9433,2,0

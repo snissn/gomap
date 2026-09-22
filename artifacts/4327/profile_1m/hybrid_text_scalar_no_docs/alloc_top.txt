@@ -1,0 +1,32 @@
+File: treedb_text_hybrid_scale
+Type: alloc_space
+Time: 2026-08-24 17:22:09 HST
+Showing nodes accounting for 4970064.54kB, 98.87% of 5026866.50kB total
+Dropped 174 nodes (cum <= 25134.33kB)
+Showing top 25 nodes out of 43
+      flat  flat%   sum%        cum   cum%
+1403689.62kB 27.92% 27.92% 1403689.62kB 27.92%  github.com/snissn/gomap/TreeDB/collections.decodeTextV2SearchNormBlock
+1213358.62kB 24.14% 52.06% 1213358.62kB 24.14%  github.com/snissn/gomap/TreeDB/collections.decodeTextV2SearchDocMapBlock
+701746.73kB 13.96% 66.02% 701746.73kB 13.96%  github.com/snissn/gomap/TreeDB/tree.(*Tree).lookupLeafValueView
+499981.50kB  9.95% 75.97% 3918111.18kB 77.94%  github.com/snissn/gomap/TreeDB/collections.executeTextV2ORBlockMaxSearchAtSnapshot
+480548.81kB  9.56% 85.53% 480578.44kB  9.56%  github.com/snissn/gomap/TreeDB/collections.FuseHybridSearchCandidates
+196640.62kB  3.91% 89.44% 196640.62kB  3.91%  github.com/snissn/gomap/TreeDB/collections.(*Collection).FindByIndexRange.func1
+  164160kB  3.27% 92.70%   164160kB  3.27%  github.com/snissn/gomap/TreeDB/collections.hybridTextCandidatesFromSearchResponse
+109743.36kB  2.18% 94.89% 330847.16kB  6.58%  github.com/snissn/gomap/TreeDB/collections.(*Collection).hybridScalarLeafAllowSet
+94730.47kB  1.88% 96.77% 131351.64kB  2.61%  github.com/snissn/gomap/TreeDB/collections.newTextV2SearchOrdinalAllowSet
+62043.32kB  1.23% 98.01% 1658632.62kB 33.00%  github.com/snissn/gomap/TreeDB/collections.(*textV2SearchBlockCache).normBlockAtOptional
+43401.35kB  0.86% 98.87% 1759342.09kB 35.00%  github.com/snissn/gomap/TreeDB/collections.(*textV2SearchBlockCache).docMapBlockAtOptional
+   19.92kB 0.0004% 98.87% 4213795.13kB 83.83%  github.com/snissn/gomap/TreeDB/collections.(*Collection).hybridSearchCandidates
+    0.20kB 4e-06% 98.87% 5026376.45kB   100%  main.runHybridQueryRow
+         0     0% 98.87% 221091.30kB  4.40%  github.com/snissn/gomap/TreeDB/collections.(*Collection).FindByIndexRange
+         0     0% 98.87% 221091.30kB  4.40%  github.com/snissn/gomap/TreeDB/collections.(*Collection).FindByIndexValueLimit
+         0     0% 98.87% 5025223.46kB   100%  github.com/snissn/gomap/TreeDB/collections.(*Collection).SearchHybrid
+         0     0% 98.87% 221091.30kB  4.40%  github.com/snissn/gomap/TreeDB/collections.(*Collection).findByIndexValue
+         0     0% 98.87% 330847.16kB  6.58%  github.com/snissn/gomap/TreeDB/collections.(*Collection).hybridScalarAllowSet
+         0     0% 98.87% 4213795.13kB 83.83%  github.com/snissn/gomap/TreeDB/collections.(*Collection).hybridSearchCandidatesFixedBudget
+         0     0% 98.87% 4213795.13kB 83.83%  github.com/snissn/gomap/TreeDB/collections.(*Collection).hybridSearchCandidatesWithBudgetPolicy
+         0     0% 98.87% 221091.30kB  4.40%  github.com/snissn/gomap/TreeDB/collections.(*Collection).scanIndexRange
+         0     0% 98.87% 5025223.46kB   100%  github.com/snissn/gomap/TreeDB/collections.(*Collection).searchHybrid (inline)
+         0     0% 98.87% 4213775.21kB 83.83%  github.com/snissn/gomap/TreeDB/collections.(*Collection).searchHybridTextCandidatesWithScanBudget
+         0     0% 98.87% 5025223.46kB   100%  github.com/snissn/gomap/TreeDB/collections.(*Collection).searchHybridWithCandidateBudgetPolicy
+         0     0% 98.87% 4049615.21kB 80.56%  github.com/snissn/gomap/TreeDB/collections.(*Collection).searchText

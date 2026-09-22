@@ -1,0 +1,639 @@
+# Typed-Column Adapter and Durable Vector/Adjacency Publication (#1754/#1755/#1756/#1783)
+
+Status: current implementation note for issues #1754, #1755, #1756, and #1783 under parent tracker #1744.
+Typed-column schema/version evolution and migration policy is defined in
+`typed-column-schema-evolution.md`. Logical capability status and admission
+rules are defined in `typed-column-semantics.md`; physical layout/codec
+capabilities are defined in `typed-column-layout-capabilities.md`; aligned
+fixed-width direct-view certification rules are defined in
+`typed-column-direct-view-alignment.md`.
+
+`TreeDB/collections/typed_column_adapter.go` adapts the transplanted
+`TreeDB/internal/typedcolumn` data plane to TreeDB typed-storage field metadata,
+legacy `ColumnStoreValueType` compatibility names, retained-payload test seams,
+and #1736 `mappedresource` section access.
+
+The #1754 adapter seam maps TreeDB metadata to `typedcolumn` parts. Issue #1755
+adds an opt-in durable scalar publication path for explicit
+`typed_column_part` owners: collection manifests can now reference immutable
+`tcs1_typed_column_part` assets beside the compatibility typed-row `TCPA` row
+locator/typed-row asset. Existing `ColumnStoreConfig` metadata still resolves to
+`typed_row_asset` unless a column explicitly sets `Owner:
+typed_column_part`.
+
+Issue `#1756` extends that path with fixed-dimension `float32_vector` dense
+sections. Issue `#1783` adds authoritative fixed-degree `adjacency_list` dense
+sections for columns that declare positive `adjacency_degree`. These issues do
+not switch vector graph/search planning to typed-column sections and do not make
+derived accelerators authoritative.
+
+## Type Matrix
+
+This table describes durable representation only. Query/planner operation
+support is governed by `typed-column-semantics.md` and is resolved at prepare
+time.
+
+| TreeDB declared type | adapter / #1755 publication status | Representation |
+| --- | --- | --- |
+| `bool` | represented | `typedcolumn.ColumnTypeBool` bitpack/RLE encoding. |
+| `int64` | represented | `typedcolumn.ColumnTypeInt64` delta-varint by default. Explicit `fixed_width_encoding: "little_endian"` on a non-null `typed_column_part` int64 column selects uncompressed `raw_int64` little-endian payload bytes. |
+| `float32` | represented | Default compatibility layout remains a raw int64 column carrying `math.Float32bits` in the low 32 bits; these bits must not be treated as int64 ordering/sum/min/max/stats/pruning semantics or native direct-view evidence. Explicit `fixed_width_encoding: "little_endian"` on a non-null `typed_column_part` float32 column selects native uncompressed `raw_float32` little-endian IEEE-754 payload bytes. |
+| `double` / `float64` | represented | Default compatibility layout remains a raw int64 column carrying `math.Float64bits`; these bits must not be treated as int64 ordering/sum/min/max/stats/pruning semantics or native direct-view evidence. Explicit `fixed_width_encoding: "little_endian"` on a non-null `typed_column_part` double column selects native uncompressed `raw_float64` little-endian IEEE-754 payload bytes. |
+| `string` | represented | Low-cardinality uint32 codes plus typed-column dictionary section metadata; code order must not imply lexical range/prefix unless dictionary order and collation proof are supplied. |
+| `int8`/`uint8`/`int16`/`uint16`/`int32`/`uint32` | represented | Non-null raw fixed-width little-endian primitive scalar sections with matching `typedcolumn.ColumnType*` and `raw_*` encodings. Values round-trip without widening in storage; int64-compatible stats/pruning are published for these widths. |
+| `uint64` | represented | Non-null raw fixed-width little-endian `uint64` sections. Values round-trip without lossy conversion; int64-compatible stats/pruning are deliberately absent until a native uint64 stats/pruning payload exists. |
+| `float16`/`bfloat16` | represented | Non-null raw 16-bit bit payload sections (`raw_float16`/`raw_bfloat16`). Bits are preserved exactly, including NaN payloads, infinities, and signed zero; the adapter does not define arithmetic float semantics. |
+| `float32_vector` | represented | Fixed-dimension row-major dense little-endian `float32` sections with `vector_dims` as elements per row; active typed-column direct-view candidate after certification/read-time checks. |
+| `uint32_list` | represented | Generic non-null variable-width integer-list sections using `raw_uint32_offsets_list`: a `uint64` sentinel offsets substream (`rows+1`) plus flattened little-endian `uint32` values. Writer, owned fallback reader, and certified direct-view reader are generic and do not require adjacency semantics. |
+| `bytes` | represented | Generic non-null opaque byte payload sections using `raw_bytes_offsets`: a `uint64` sentinel offsets substream (`rows+1`) plus exact concatenated byte values. Empty byte slices, NUL bytes, and non-UTF-8 bytes are preserved exactly; the primitive is not text/dictionary/string semantics. |
+| `adjacency_list` | represented for dense compatibility; legacy offsets-list compatibility reader | Empty `adjacency_layout` keeps fixed-degree row-major dense little-endian `uint32` sections with `adjacency_degree` as elements per row. `adjacency_layout: "uint32_offsets_list"` selects the #1915/#1916/#1901 variable-list compatibility path (`uint64` offsets plus `uint32` values) on the same value type for safe writer/fallback-reader publication and certified direct views. #1989 quarantines graph-specific storage integration; primary list storage is generic `uint32_list`. |
+
+## Primitive scalar adapter boundary (#1929)
+
+Primitive scalar `typed_column_part` owners are non-null in this phase and use
+uncompressed raw little-endian fixed-width sections. The storage-facing public
+value types are `ColumnStoreValueInt8`, `ColumnStoreValueUint8`,
+`ColumnStoreValueInt16`, `ColumnStoreValueUint16`, `ColumnStoreValueInt32`,
+`ColumnStoreValueUint32`, `ColumnStoreValueUint64`, `ColumnStoreValueFloat16`,
+and `ColumnStoreValueBFloat16`. Multi-byte values are encoded little-endian.
+`float16` and `bfloat16` values are supplied and reconstructed as raw `uint16`
+bits; the adapter preserves bit patterns but does not parse decimal float16 or
+bfloat16 numbers from JSON.
+
+## Dense numeric vector adapter boundary (#1930)
+
+Dense numeric vector `typed_column_part` owners are non-null in this phase and
+use uncompressed row-major fixed-width sections with positive `elements_per_row`.
+The generic dense vector value types are `uint8_vector`, `int8_vector`,
+`uint16_vector`, `int16_vector`, `uint32_vector`, `int32_vector`,
+`uint64_vector`, `int64_vector`, `float16_vector`, `bfloat16_vector`, and
+`float64_vector`. Multi-byte elements are encoded little-endian; `float16` and
+`bfloat16` vector elements are raw `uint16` bit payloads. The existing
+`float32_vector` compatibility type remains supported on its legacy encoding,
+and `uint32_vector` is separate from `adjacency_list` graph semantics.
+
+## `uint32_list` adapter naming boundary (#1984)
+
+`typed-column-uint32-list-semantics.md` defines the generic logical primitive
+that #1985 admits through the adapter. The preferred public compatibility
+constant is `ColumnStoreValueUint32List` with string `uint32_list`; #1985 adds
+that code vocabulary, adapter mapping, conformance tests, writer/fallback
+reader/direct-view paths, and naming regression updates.
+
+When admitted, `uint32_list` uses `raw_uint32_offsets_list` as the physical
+encoding: a first-class offsets/size substream of little-endian `uint64` sentinel
+offsets (`rows+1`, `offsets[0] == 0`) plus a flattened little-endian `uint32`
+values substream. Offset/length-only adapter APIs may read and validate offsets
+without decoding values, but full row-value reconstruction must validate the
+values section and fail closed on missing, corrupt, mismatched, compressed,
+nullable, or nested list assets. The current `ColumnStoreValueAdjacencyList` and
+`adjacency_layout` selector remain legacy/consumer-specific compatibility, not
+the generic primitive.
+
+## `bytes` adapter naming boundary (#2010)
+
+`bytes` is a generic typed-column primitive for opaque binary payloads. It is
+consumer-neutral storage machinery and is not named after document IDs, graph row
+IDs, or any vector-index state consumer. The v1 shape is non-null: every row has
+one byte slice, and empty slices are represented by equal adjacent offsets.
+Nullable/default/nested byte-list variants are out of scope and must fail closed.
+
+The physical encoding is `raw_bytes_offsets`: one column-wide little-endian
+`uint64` offsets section with length `row_count + 1` and `offsets[0] == 0`, plus
+one column-wide values section containing the exact concatenation of row bytes.
+Validation requires monotonic host-int-bounded offsets and a final offset equal
+to the values byte length. Owned fallback reads copy offsets and values; certified
+direct views expose offsets and byte values tied to mapped-resource lifetimes.
+JSON ingestion represents a `bytes` value as an array of integer byte values in
+`[0,255]`; string/base64/text forms are intentionally not accepted by this
+primitive. No UTF-8, collation, dictionary order, lexical range, or scalar string
+operation is implied by this primitive.
+
+Nullable scalar adapter support uses `nullable_int64` as the carrier encoding
+for bool, int64, float32, double, and low-cardinality string fields: explicit
+JSON null maps to null bitmap rows, omitted paths map to default/missing bitmap
+rows, and present values map to the encoded carrier payload (`0/1` bools,
+int64s, float bit patterns, or string dictionary codes). Vector and adjacency
+nullable/missing support remains staged/fail-closed; `adjacency_list`
+`typed_column_part` owners using the dense compatibility layout must declare
+positive `adjacency_degree` and each present row must contain exactly that many
+uint32 neighbors. Offsets-list adjacency uses explicit `adjacency_layout:
+"uint32_offsets_list"`; it must not be inferred from a missing degree and is
+supported by the safe #1915 writer/fallback reader path plus the #1916 certified
+primitive direct-view reader wired through the adapter in #1917. Column-graph
+rebuild/search now publishes and consumes generic `uint32_list` vector-index
+state; #1989 keeps graph-specific offsets-list adjacency sources compatibility-only
+rather than the datastore target. Serialized typed-column images publish
+offsets-list columns as one global
+`row_count + 1` little-endian `uint64` offsets section plus one global flattened
+`uint32` values section, even when the typed-column part has multiple codec
+blocks/granules.
+
+Adapter input rows are keyed by `TypedStorageField.Path`, not by display `Name`.
+When `Name != Path`, the physical column name may use `Name`, but decoded rows
+are restored under `Path`; display-name-only input fails closed. Adapter images
+are fixed-schema: reads fail closed if the image contains unexpected columns or
+is missing any expected field column/primary-id column. The adapter must reject
+schema hash, field ownership, value type, `vector_dims`, `adjacency_degree`, fixed-width metadata,
+image/descriptor version, and manifest ref mismatches from adapter descriptors,
+manifest identities, or refs before row materialization whenever those compact
+records are sufficient.
+
+## Durable Publication / Reconstruction Seam (#1755)
+
+For inserts and updates with scalar, fixed-dimension vector, fixed-degree dense
+adjacency, or current explicit offsets-list variable adjacency `typed_column_part`
+owners, TreeDB writes:
+
+- a compatibility `tcs1_part_image`/`TCPA` typed-row asset containing row IDs,
+  tombstones, and any `typed_row_asset` owned fields;
+- a `tcs1_typed_column_part` asset containing the authoritative scalar,
+  fixed-dimension `float32_vector`, fixed-degree dense `adjacency_list`, and
+  explicit offsets-list variable `adjacency_list` `typed_column_part` values for
+  the same generation.
+
+Manifest part records classify these assets as `base`, `delta`, or `tombstone`.
+Insert/base spans use `base`; updates use `delta`; deletes publish only a
+`tombstone` typed-row asset. Retained-payload reconstruction and direct typed
+int64 scans resolve latest-visible identity from the typed-row base/delta/
+tombstone lineage, then read the matching typed-column part by row index for the
+winning non-deleted generation. For nullable typed-column fields, reconstruction
+must preserve source-document intent: present/non-null rows write the declared
+path and value, explicit-null rows write the declared path with JSON null, and
+missing/default rows leave the declared path absent from the retained-payload
+reconstruction. Reopen/recovery uses the manifest refs and existing typed asset
+manager paths; typed-column refs participate in reachability and rewrite/GC
+eligibility as durable typed-storage assets.
+
+## Production Compression Policy (#2297)
+
+Production `typed_column_part` publication now derives compression from
+normalized `ColumnStoreConfig` metadata instead of relying on benchmark
+environment variables. The default `typed_column_compression` is `lz4`, and the
+default `typed_column_section_compression` is `zstd` for eligible whole-image
+sections when the block compression policy is also defaulted. Explicit
+non-default block compression policies still drive the section default unless
+`typed_column_section_compression` is set directly. `none` is an explicit
+isolation policy. Unsupported codecs such as `zstd_dict` fail closed at metadata
+normalization until their durable encode/decode path is implemented.
+
+The default policy applies typed-column block compression only to layout families
+that the current production validator admits, currently bool, int64, and
+low-cardinality string carrier columns. Other durable layout families stay
+uncompressed under the production policy rather than making a collection
+unwritable. Whole-image section compression is applied only to eligible sections
+whose raw byte length is recoverable from existing image metadata; zstd is
+production-supported for those whole-image sections, while public production
+typed-column block compression still rejects zstd. Compression is retained only
+when the stored payload is strictly smaller than the encoded raw payload. The
+benchmark-relaxed environment override can still force compression requests for
+experiments and keeps its fail-closed behavior for unsupported
+layout families.
+
+## Resource Seam
+
+`typedColumnAdapterResourceReader` acquires typed-column image sections through
+issue #1736 `mappedresource.Manager` handles. Tests cover file-backed mmap-or-heap
+reads and heap reads for the same section bytes. Fixed-width adapter reads use
+mappedresource typed-view validation for `[]int64`, `[]float32`, `[]float64`,
+and `[]uint32` buffers. Offsets-list adapter reads use paired `[]uint64`
+offsets and `[]uint32` values handles and classify mmap direct, heap-copy typed,
+scratch decode, stale-handle, source-unsupported, absolute-offset-unaligned, and
+actual-pointer-unaligned outcomes separately. Durable typed-column asset reads
+use the typed asset read cache with `mappedresource.ClassTypedColumnAsset` when a
+manager is supplied.
+
+## Retained Payload Seam
+
+`typedColumnAdapterRetainedPayloadSplitRestore` reuses the production
+retained-payload split/restore helpers as an internal test seam. It does not alter
+production retained-payload behavior.
+
+### Typed indexed-write authority
+
+Selecting a typed storage owner is not sufficient to prove a typed ingestion
+path: document-based insertion may still extract declared/indexed fields from
+JSON before publication. For a schema-aware writer, the accepted typed values
+must feed scalar keys, text analysis, vector storage, and command-WAL replay.
+Retained non-column JSON is residual response data, not an alternate index-value
+source. Reject overlapping retained fields instead of choosing one copy silently.
+
+The Minima representation uses `typed_row_asset` strings for `content`,
+`meta.user_id`, and `meta.fpath`, and a `typed_column_part` FP32 vector for
+`embedding`. Updating or deleting a row must use its latest visible typed
+generation or persisted derived index state to remove old postings. Rebuilding
+JSON solely to rediscover those old values moves the same cost into maintenance
+and does not satisfy the native-write contract.
+
+`InsertTypedBatchWithStats` and `ReplaceTypedBatch` accept row-aligned
+`TypedColumnBatch` carriers for all declared columns. Their initial supported
+schema is non-null UTF-8 string typed-row fields and finite, fixed-dimensional
+FP32 typed-column vectors, with a JSON document format and a retained non-column
+JSON payload. Scalar indexes must be single-field string indexes (not multikey or
+composite); text fields must refer to declared strings; vector indexes must use
+matching `column_graph` fields/dimensions. Cosine vectors must have nonzero
+magnitude. Unsupported schemas fail closed rather than selecting a JSON fallback.
+These restrictions apply to these typed-input methods, not to every storage
+type or generic collection API.
+
+`UpsertTypedBatch` uses the same carriers and atomically combines existing-ID
+replacement with missing-ID insertion through the existing source publisher.
+Its return count includes all previously present IDs, including unchanged rows.
+Equal retained bytes (after outer-whitespace trimming) and bitwise-equal typed
+values are omitted from both sides of the publication and replay payload. An
+all-unchanged batch appends no WAL frame and publishes no new version; a mixed
+batch uses one existing typed-source frame for changed/new rows. Uniqueness is
+checked against the final batch state, including swaps. Duplicate input IDs are
+rejected before publication. Ambiguous accepted errors must not be retried
+blindly. Explicit `ReplaceTypedSourceByID` keeps its existing replacement
+semantics; it does not acquire this no-op optimization implicitly.
+
+Separately registered ad-hoc runtime vector indexes are not `column_graph`
+metadata declarations. Their write-maintenance path may reconstruct documents;
+the typed-input APIs therefore reject that combination before admission rather
+than silently maintaining a second runtime index through JSON. Use the declared
+`column_graph` strategy for this contract. Generic collection APIs retain their
+separate supported behavior.
+
+The call validates against current collection metadata under the existing schema
+read lock and takes ownership of accepted input bytes before returning. There
+is no reusable caller-prepared handle whose lifetime can outlast schema changes.
+Callers must not mutate input concurrently with admission. Replacement is a
+complete row replacement for matched IDs; missing IDs are not inserted, and
+unchanged rows report no modification. Unchanged means identical retained bytes
+after trimming surrounding whitespace, string values, and FP32 vector bits;
+interior JSON bytes remain significant, and changing only a vector element's
+sign of zero is a modification. The existing command-WAL no-op record may still
+advance the applied LSN without replacing a row. Use the existing explicit-ID
+delete APIs to remove rows.
+
+Keep reconstruction at explicit output boundaries, including a document-returning
+read or a caller's document update callback. A callback is executed once at
+admission; recovery consumes its accepted final replacement, never the callback.
+Typed writes retain the existing command-frame atomicity and durability profile;
+they do not create a separate durable overlay or bypass duplicate/unique checks.
+Selected dense service calls expose an owned versioned `dense_work` containing
+actual graph/filter/output work and the acquired owner's schema, base/current
+manifest identities and coverage. Error prefixes preserve acquired identity;
+unavailable proof never certifies zero. This uses the existing search owner and
+materializer stats without another authority registry or per-request process
+snapshot. Native 64/v2 and HTTP/Python carry the same proof. Public typed
+quantized rerank uses 64/v3 and a sibling score-plane proof while the frozen
+dense-work shape remains unchanged; separate GetMany continues to work without
+graph admission and retains process phase accounting.
+
+See [Minima native execution](minima-native-execution.md) for the required path
+proof and [storage format](storage-format.md) for typed command bytes.
+
+## Fixed-Width Payload Safety (#1737/#1756)
+
+When `fixed_width_encoding: "little_endian"` is selected on non-null scalar
+`typed_column_part` fields, `int64`, `float32`, and `double` use native
+uncompressed little-endian raw payload sections (`raw_int64`, `raw_float32`, and
+`raw_float64`). Native scalar float payloads preserve IEEE-754 bits exactly,
+including NaN payloads, non-canonical NaNs, infinities, finite extrema, and
+`+0`/`-0`. Metadata/control records, nullable/default wrappers, compression
+payloads, sortable keys, and physical row assets are outside this native scalar
+payload rule.
+
+`float32_vector` typed-column data is stored as uncompressed raw little-endian
+`float32` payloads. Default/dense `adjacency_list` typed-column data is stored as
+uncompressed raw little-endian `uint32` payloads with exactly
+`adjacency_degree` elements per row. The #1915 offsets-list selector instead
+uses `uint64` offsets plus flattened `uint32` values; #1916 can expose paired
+primitive direct views after certification/read-time checks or decode through
+safe owned fallback slices. The `typedcolumn` image builder keeps sections
+relatively aligned; current
+direct-view eligibility also requires absolute storage alignment
+(`asset_ref.offset + section/block offset`) and actual Go pointer alignment at
+view construction time. Readers must validate
+lifetime, range, length, endian mode, absolute offset alignment, source, and
+actual pointer alignment through #1736 `mappedresource` handles before exposing
+mmap direct typed views; heap-copy typed views and scratch decodes are safe
+fallbacks but not zero-copy speedup evidence. #1737 standardizes payload bytes
+and helpers only; production unsafe reader rollout remains in downstream #1886
+children.
+
+## Query, Predicate, and Allocation Boundary
+
+The explicit typed-column int64 predicate scan supports only non-nullable int64
+`typed_column_part` fields today. If the requested typed-column field is
+nullable, or if nullable metadata is observed on the direct typed-column int64
+path, the scan fails closed with `ErrColumnQueryPlanUnsupported`; it must not
+fall back to full-document reconstruction/materialization, and it must not treat
+null or missing rows as integer zero. The int64 and string prepared paths consume
+the semantic capability matrix during prepare; int64 prepared aggregate planning
+also consumes the layout/codec capability contract so `delta_varint` remains a
+streaming decode layout while explicit `raw_int64` uses a safe little-endian byte
+reducer. Broader optimizer routing, string predicate expansion, aggregate
+integration, #1849 zero-copy direct views, and vector/adjacency nullable scans
+are deferred to follow-up issues.
+
+Direct typed-column predicate paths must preserve hot-path allocation discipline
+and should actively remove existing avoidable allocations or obvious local
+overhead in the touched path when that cleanup is bounded and testable. Use
+typed-column sections, decoder scratch, setup-time decoder/metadata construction,
+direct validated views, and pre-sized output buffers rather than per-row maps,
+wrappers, interface values, closures, or string conversions. Nullable/missing
+codec, scan, and reconstruction merge benchmarks must time the core typed-column
+hot loop separately from public document materialization and target 0 allocs/op
+after setup. Touched inner loops must be measurably no worse, and preferably
+better, on `B/op` and `allocs/op`; if benchmarks or allocation profiles expose
+allocations in touched functions, the PR must fix them or explicitly call out why
+they are out of scope with a linked follow-up recommendation. Any remaining
+hot-path allocation requires baseline-versus-final `B/op`/`allocs/op` evidence
+and an allocation profile/top that names and justifies the source or defers it
+with rationale. Future typed-column format/schema changes must state whether
+they preserve 0-alloc/near-0-alloc decode and scan paths or introduce an explicit
+benchmarked fallback. These allocation targets do not relax checksum, lifetime,
+schema, or fail-closed validation.
+
+## Typed graph publication and lifecycle (#4618)
+
+The internal, explicitly initialized publication seam maintains a derived typed
+suffix at the accepted collection frontier. Public mutable graph serving composes
+this seam through explicit
+[`EnsureColumnGraphServing`](typed-asset-maintenance-1788.md#explicit-typed-column_graph-serving-admission),
+including re-ensure after reopen; typed writes alone do not activate it.
+Both ordered-root publication
+variants share the seam; recovery tests may initialize it through isolated
+test instrumentation before the real typed replay executor.
+
+Buffered durable acknowledgements reserve cumulative physical rows, tombstones,
+declared-value slots, and ID/string/FP32 payload bytes before WAL append. Scalar
+receipts follow the existing buffered document owners through synchronous and
+asynchronous publication. Pending-to-installed transfer does not release the
+total admission charge. Proven pre-append rejection releases its reservation;
+uncertain accepted work retains debt and invalidates derived readiness. An
+invalid initialized state cannot be mistaken for a disabled feature. Encoded
+asset bytes are measured after installation, not claimed as a pre-WAL physical
+byte bound. These internal limits are explicit fixture/admission inputs, not
+production defaults.
+
+The DB/collection coordinator owns the immutable frontier across collection
+managers. Exact predecessor, pager, schema, and collection root-role checks
+prevent reuse across an accepted-root/install gap. Unrelated collection commits
+do not alone invalidate it. Changed rows reuse owned typed payloads; bounded
+suffix row headers are merged and unchanged vector norms reused. No retained
+document JSON is used to construct this derived state. Public bootstrap,
+bounded physical folding and retirement compose the lifecycle mechanisms below;
+none follows merely from maintaining a suffix.
+
+The internal buffered-insert route can additionally reserve encoded output with
+an explicit positive `EncodedOutputBytes` limit. Zero preserves the earlier
+logical-only internal mode; it is not physical admission. Reservation uses the
+prepared retained primary/scalar output, selected typed-image and generated
+locator/manifest/control bounds, and V2 text
+posting/position/block framing before primary value-log pointerization and WAL
+acknowledgement. Pointerization runs under the existing validated staging
+ownership in this enabled route. Flush checks its finished native tables against
+the reserved bound before appending typed assets or pointerizing those tables.
+The existing receipt carries only scalar costs, not another document copy.
+
+An attempted append keeps its encoded charge even if the append fails, its pins
+are released, publication is rejected, or logical reconciliation succeeds. A
+retry reserves another attempt; successful flush transfers logical pending debt
+without refunding encoded output. This is a conservative encoded-output ledger,
+not a disk quota: it excludes WAL, index/COW pages, segment padding, allocator
+scratch, and pre-existing unreachable storage. Fold output and global physical
+residency/reclamation remain separate admission obligations.
+Buffered V2 reservations can
+duplicate tail and pending-ID costs across receipts. Pending IDs include the
+active buffer plus queued and detached publishing units under existing domain
+ownership; a pin already reflecting a publishing unit is conservatively charged
+again rather than omitting a possible predecessor.
+
+Immediate insert, typed batch replacement, single-document replacement,
+delete/delete-batch and atomic source publication reserve the selected typed
+image and generated locator bounds plus their finished native table output
+before pointerization. Locator admission includes each ID, fixed-width live
+coordinates or a deletion tombstone, and root-entry framing. Source replacement
+conservatively charges both removals and inserts, including overlapping IDs.
+Generated manifest and system-control sizes are prepared once at lifecycle
+initialization/reconciliation and carried as scalar costs in the existing
+immutable publication state. Control metadata includes maximum-width future
+identities, command frontier and mutation counters, plus root descriptors and
+document generation. Normal writes add these costs without marshaling another
+metadata image or scanning the retained manifest; only newly emitted manifest
+records are charged. Actual control metadata remains JSON, not indexed data.
+Their receipt borrows the producing plan's exact document/source-delete order
+and prepared value-header identity through synchronous publication. Rejection
+before a command is assigned refunds logical pending debt, but not attempted
+encoded output; an assigned/ambiguous command retains its charge. Existing
+no-op command frames remain possible without new encoded-output debt.
+
+Typed projections pass their prepared rows directly. Legacy JSON replacement
+and source APIs move their existing one-time declared-row preparation earlier;
+this does not add another extraction, but those legacy producers are not
+zero-JSON. `ReplaceTypedSourceByID` supplies explicit delete IDs and typed
+inserted rows to that same atomic source publisher. Its scalar/text planner and
+declared-row writer reuse the typed projection; format 12 carries those values
+through command replay without rebuilding indexed fields from retained JSON.
+The API uses the typed batch schema/carrier and input-ownership contract,
+validates admission before draining, and preserves one atomic same-ID
+delete/reinsert (insertion wins). Empty insertion permits nil columns and uses
+the existing delete-only source frame. Public setup reconstructs bounded retained
+inventory after reopen; attempted-work renewal requires successful reclamation
+and inventory through the maintenance contract. This producer alone does not
+enable public mutable serving.
+
+An internal coherent owner can bind an already reconciled publication frontier
+to the persisted base aliases and one current snapshot. Cross-manager accepted
+buffers are drained at owner setup; exact authority mismatch remains unavailable.
+The owner shares immutable suffix rows and norms without decoding them again,
+reuses the existing prepared graph, and pins the whole base/current typed asset
+union through lazy final-result materialization. Explicit owner/state/asset
+limits count owner-retained state once per shared frontier and retain its charge
+until the last owner closes. These are scoped owner charges, not a claim to bound
+unowned current state, pending assets, caches, or total physical retirement.
+Metadata and decoded working terms have separate setup bounds. This internal
+seam alone does not enable public mutable graph serving; public Ensure composes
+physical pre-ack admission, bounded folding, and lifecycle resource limits.
+
+An internal captured-base slot in the existing collection prepared-search cache
+can retain an immutable shared graph reference and exact typed-asset lease,
+without a snapshot, catalog, or suffix. Warm acquisition runs outside the
+storage barrier; single-build waiters hold neither that barrier nor the cache
+mutex. Refresh overlaps predecessor and successor references, charging both
+against explicit owner/asset and known metadata-backing limits before mapping.
+Lease capacities, identity bytes, vector-location/ordinal/part arrays and
+layer/pack metadata are charged conservatively per keeper even when shared.
+Manager bookkeeping, allocator overhead and temporary decode work are not a
+claimed total heap bound. Read owners additionally reserve the same conservative
+holder backing bound and their known lease/key/owner descriptors before mapping,
+including repeated owners of one suffix state. Those charges survive keeper
+Close and are released only after the read owner's resources close. Suffix
+payloads remain charged once per immutable state; shared holder backing is
+deliberately charged per owner rather than deduplicated. This covers known
+retired-holder backing, not allocator overhead, temporary preparation or the
+remaining global physical/fold budget. Cache Close and existing manager/DB cleanup release
+the keeper; query owners independently retain their current pins and scratch.
+An empty base has no shared holder and this internal warm route is unavailable;
+the existing coherent empty/suffix-only owner remains supported. Warming is not
+an identity handshake: a concurrent base cutover can require a fresh owner to
+build another holder. It does not authorize stale serving or remove current
+owner setup costs. The admitted public mutable route reuses this same keeper.
+
+Unpublished captured-frontier asset preparation reuses the ordinary row/typed
+encoder with an explicit captured generation and real applied command LSN. It
+chooses a row part beyond the captured part IDs (overflow is rejected) while
+preserving the reader-required typed part ID 2. The ordinary command wrapper
+still advances its predecessor generation. Reconstruction identifies the unique
+non-delete row part in each generation, rather than assuming row part 1; this
+also distinguishes source replacement's live rows from its same-generation
+tombstones. Ambiguous live parts and invalid role/reason/key identities fail
+closed. Fixture tests combine compacted T assets with real post-T mutations and
+exercise mixed-generation scan, locator coordinates, point fetch and typed
+reconstruction. Prepared stable resources are retained until transfer or
+release, not deleted by age.
+
+The internal `foldTypedGraph` maintenance operation now composes this producer
+with native HNSW/TVIS preparation and TGBA2 independent root replacement. It
+drains registered write domains for capture T, retains a snapshot and exact
+asset lease, then releases collection admission while materializing typed rows
+and constructing the candidate. Install drains again, rejects a changed base,
+schema or pager, and merges actual post-T part records under the latest U
+header. A sorted current-locator scan remaps surviving pre-T rows; post-T
+updates, deletes and reinserts retain their published coordinates. No per-row
+current point probes or indexed JSON reconstruction are used.
+
+The existing maintenance publisher atomically installs current manifest/locator
+roots and independent captured T primary/scalar/locator/manifest roots with
+the exact resource closure. Unchanged empty roots are retained, not submitted
+as no-op maintenance rewrites. No command-WAL frame or logical LSN is added.
+Derived publication state is fenced on success or ambiguous acceptance and
+reconciled after collection locks are released. One explicit checkpoint follows
+a successful install outside those locks. Old read owners keep their leases;
+they are never force-closed, and existing attempted encoded debt is not reset.
+
+Admission allows one candidate per collection across managers. Explicit input
+row, manifest, asset-byte and per-decoder-term limits apply to captured and
+install-time views; native root copy work uses the existing capture ceilings.
+The shared initial/rebuild/fold/replay ceilings are 32,000,000 raw entries and
+4 GiB of charged key/value/flags/revision work. Current and prior captured roots
+are charged separately even when identical, including tombstones; fold also
+charges its latest locator and reserves manifest growth. Persistent value
+pointers charge their descriptor without resolving the payload.
+
+The declared Minima envelope allows at most 2.6M raw entries in each primary,
+locator and two single-valued scalar roots at every current/prior/latest
+boundary, with at most 128 charged bytes per row entry. Each raw manifest stream
+separately allows 65,537 entries and 64 MiB of key/value bytes. For its declared
+identities and 33 graph layers, the pinned arithmetic including manifest growth
+is 23,531,078 entries and 3,130,614,880 charged bytes. These conditions include
+retained deletes and changed scalar keys; live-row or live-manifest limits alone
+do not establish them. Wider values, more indexes or accumulated raw history
+remain subject to the same finite ceilings and can fail closed.
+
+These are not a summed transient heap or global disk guarantee. Both the
+current locator scan and native root construction remain N-dependent under
+write admission, and the publisher builds roots under its existing writer
+lock. Unpublished candidates release resource handles, leaving unreferenced
+physical output to existing reclamation.
+
+Internal fold callers must also supply positive candidate-output byte and
+appender-attempt limits. Their identity is fixed for the collection coordinator
+across attempts and managers. Existing row append sessions and graph resource
+owners share one admission receipt: it charges exact padded bytes before each
+write (before combined batch-buffer allocation), and charges an appender attempt
+before opening/creating a segment. The latter also bounds empty files left by
+rejected retries. Attempted charges survive partial writes, stale/canceled
+candidates, logical reconciliation and handle closure; they are separate from
+ordinary mixed encoded-output debt. No successful or failed GC counter refunds
+these charges. They do not include pre-existing/reopened inventory, encoder
+scratch, pager output or whole-process memory. Public admission also requires
+coherent inventory/reclamation and combined known-workspace bounds; attempted
+output accounting alone establishes neither public activation nor qualified
+pause/storage bounds.
+
+The internal `renewTypedGraphWorkEpoch` boundary can renew both attempted-work
+allowances after successful bounded column reclamation and a complete retained
+inventory. It excludes folds across managers, drains under schema admission,
+then takes the existing storage barrier and mutation lock. Pending receipts must
+be zero; current state objects, typed payload/header ownership and retained read
+owners must fit the admitted retained budget. Open owners are never force-closed.
+Fixed coordinator limits cannot be raised on a rejected retry. Cancellation,
+incomplete planning, cleanup failure and residual pressure retain attempted debt;
+GC byte counters are never subtracted from mixed encoded work.
+
+Configure this boundary before the first participating fold. Configured folds
+retain captured asset references as internal candidates in the existing lifecycle
+registry before releasing capture ownership; these are cleanup provenance, not
+new live pins. Current roots, recoverable roots and real readers still protect
+them. Successful GC prunes only references whose files are absent under the same
+storage authority, preserving mixed and pinned survivors. Recovery-root manifest
+decoding uses the same input preflight, and replay-candidate reads have an
+explicit input-byte ceiling. This provenance is process-local. Restart cleanup
+uses persisted root/replay closure and bounded inventory; fresh per-attempt
+output prevents failed prefixes from becoming part of later live files. This is
+not permission to mark/sweep unknown files or discard unproven prefix gaps.
+
+Native policy is deliberately finite: bounded streaming directory inspection
+counts unknown and empty entries and file lengths, and the existing cheap
+freelist snapshot distinguishes total index pages from reusable space. Above the
+configured residual envelope, renewal fails closed before any native full scan.
+Callers may perform existing explicit native maintenance and retry. Renewal does
+not invoke `CompactStorage`, `Prune`, or a new reclamation engine. Directory file
+lengths are not allocated blocks, and encoded-work allowances do not predict
+index/COW amplification or provide a physical quota. Nonempty vector-partition
+state is outside this selected path. Public Ensure also configures combined
+fold/discovery workspace admission. Measured sustained resource behavior is a
+separate qualification obligation, not a consequence of renewing counters.
+
+Explicit internal cold reconciliation can bootstrap a captured base and its
+current typed suffix after normal `Open`, without replay instrumentation. It
+drains pre-existing feature-off buffers before enabling limits. Once enabled,
+failure leaves a nonnil invalid marker; backend recovery-required errors remain
+fenced. Only a synthetic drainer carrying the schema-exclusive caller's token
+may publish acknowledged pending receipts through invalid derived state. Receipt
+coverage checks admitted ID order and immutable value-header ownership, not just
+aggregate counts. A successful drain consumes pending charges once; failed cold
+preparation retains the total charge until authoritative reconciliation succeeds.
+
+Cold setup bounds each manifest's record count and encoded metadata bytes before
+decoding, cumulative suffix asset bytes, physical versions/tombstones/value slots,
+and each decoded payload/header term. These separate term limits are not a summed
+process-heap ceiling. Temporary existing lifecycle leases protect suffix assets
+during decoding; final catalog verification and installation use the storage
+maintenance barrier. Unchanged-frontier reuse avoids suffix decoding. This is
+explicit internal setup, not automatic public reopening or per-query rebuilding.
+
+Collection manager construction establishes the existing DB-owned asset-registry
+cleanup hook while the backend still accepts registration. A first buffered
+typed flush during `Close` therefore uses that owner instead of registering a
+hook after shutdown begins; failed closed construction admits no new manager
+hooks. Managers share the DB identity and cleanup removes it after their flushes.
+An empty typed graph rebuild verifies both primary and row-locator roots are
+empty, including repeated rebuilds and reopen, rather than falling back to JSON
+or trusting a zero manifest row count alone.
+
+Typed document-ID locator resolution uses the captured catalog and snapshot.
+Requests of at least 64 IDs without locator overlays reuse the tree's grouped
+reader in chunks of at most 512 IDs; pager leaves use that reader's fallback.
+Smaller requests and overlay roots retain point reads. Only scalar coordinates
+are buffered, and callbacks are delivered in input order with borrowed IDs;
+public row-ref and full-document outputs retain their existing ownership.
+Delivery stops at the first callback error, including cancellation or an error
+wrapping a missing-key sentinel. Decode errors follow the earlier input prefix;
+a storage failure aborts delivery of its entire current chunk. Grouped lookup
+and miss counters include resolved read-ahead, even after the eventual callback
+stop, but do not count unfinished tree traversal as resolved locators. Mapping
+work remains separate and advances only through delivered callbacks. This does
+not weaken filter admission, root ownership, or full-output requirements.
+
+## Boundary
+
+Production `TreeDB/collections` imports of `TreeDB/internal/typedcolumn` stay
+limited to the adapter seam and scoped vector-graph source/reader seams.
+Publication/reopen logic calls through those seams. Query/vector search
+integration remains graph-owned by the vector-index issues. The active adapter
+stack consumes certified typed-column `float32_vector` payloads and generic
+`uint32_list` / `raw_uint32_offsets_list` variable-list payloads; physical
+row-asset direct views and legacy dense adjacency direct views remain
+fallback/deferred. This path publishes fixed-dimension `float32_vector`,
+fixed-degree dense `adjacency_list`, compatibility offsets-list
+`adjacency_list`, and primary generic `uint32_list` values. `column_graph`
+rebuilds publish HNSW adjacency through vector-index state `uint32_list` assets;
+#1989 quarantines old per-layer graph-source assets as compatibility-only. New
+storage work must route through generic `uint32_list` typed-column assets and
+vector-index state; see `typed-column-uint32-list-adjacency-quarantine.md`.

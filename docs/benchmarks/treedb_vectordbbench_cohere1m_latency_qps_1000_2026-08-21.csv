@@ -1,0 +1,10 @@
+category,system,p99_latency_ms,qps,recall,mode,ef_search,rerank_candidates,repeats,source
+TreeDB c6i.8xlarge,TreeDB c6i.8xlarge u8 + FP32 rerank,1.0,33749.9027,0.939,quantized_rerank,150,150,3,TreeDB retained run median
+public VDBBench,ZillizCloud-8cu-perf,2.0,13316.2336,0.9383,,,,,https://zilliz.com/vdbbench-leaderboard?dataset=vectorSearch
+public VDBBench,Milvus-16c64g-sq4u-fp16-force_merge,2.3,9575.6863,0.9189,,,,,https://zilliz.com/vdbbench-leaderboard?dataset=vectorSearch
+public VDBBench,Milvus-16c64g-sq8-force_merge,2.4,5973.0024,0.9192,,,,,https://zilliz.com/vdbbench-leaderboard?dataset=vectorSearch
+public VDBBench,OpenSearch-16c128g-force_merge,7.2,3055.0123,0.9066,,,,,https://zilliz.com/vdbbench-leaderboard?dataset=vectorSearch
+public VDBBench,ElasticCloud-8c60g-force_merge,17.1,2353.8935,0.9143,,,,,https://zilliz.com/vdbbench-leaderboard?dataset=vectorSearch
+public VDBBench,QdrantCloud-16c64g,6.4,1242.428,0.9474,,,,,https://zilliz.com/vdbbench-leaderboard?dataset=vectorSearch
+public VDBBench,Pinecone-p2.x8-1node,13.7,1146.5286,0.9262,,,,,https://zilliz.com/vdbbench-leaderboard?dataset=vectorSearch
+public VDBBench,OpenSearch-16c128g,13.2,950.6332,0.914,,,,,https://zilliz.com/vdbbench-leaderboard?dataset=vectorSearch

@@ -1,0 +1,110 @@
+{
+  "tracker": "https://github.com/snissn/gomap/issues/1529",
+  "milestone": "PR1 typed commit-log frames and feature gate",
+  "branch": "codex/user-command-wal-pr1",
+  "base_commit": "6e32961e2a0a472e3be03e1caa91c15c739d9ba9",
+  "go_version": "go1.25.7 linux/amd64",
+  "platform": "linux/amd64",
+  "durability_mode": "format-gated command WAL bytes only; production raw KV WAL remains legacy until PR3",
+  "sync_policy": "existing commit-log segment header, CRC, compression, flush, and sync paths reused",
+  "command_support_matrix_version": "TreeDB/docs/spec/user-command-wal.md PR1 matrix update",
+  "command_kinds_touched": [
+    "RawKVBatch",
+    "CollectionInsertBatchByID placeholder",
+    "CatalogMutationPlaceholder"
+  ],
+  "matrix_status_changes": [
+    "Raw KV set/delete/batch: PR1 frame-supported, production WAL-supported after PR3",
+    "CollectionInsertBatchByID: placeholder fixture only",
+    "CatalogMutation: placeholder fixture only"
+  ],
+  "passed_tests": [
+    "TestCommandWALFormatGoldenV1EmptySegment",
+    "TestCommandWALFormatGoldenV1RawKVBatch",
+    "TestCommandWALFormatGoldenV1CollectionInsertBatchByID",
+    "TestCommandWALFormatGoldenV1CatalogMutationPlaceholder",
+    "TestCommandWALFormatRejectsUnsupportedRequiredVersion",
+    "TestCommandWALFormatRejectsUnsupportedEncodeVersion",
+    "TestCommandWALFormatRejectsUnknownRequiredKind",
+    "TestCommandWALFormatRejectsUnknownCriticalFlag",
+    "TestCommandWALFormatSkipsUnknownNonCriticalExtensionOnlyWhenAllowed",
+    "TestCommandWALFormatRoundTripExternalRefs",
+    "TestCommandWALFormatRejectsMalformedLengthBeforeAllocation",
+    "TestCommandWALFormatRejectsHeaderPayloadDigestAndTrailerMismatch",
+    "TestCommandWALFeatureGateRejectsLegacyRawPayload",
+    "TestCommandWALFeatureGateRequiresCleanLegacyWALBeforeActivation",
+    "TestCommandWALFeatureGateRequiresCleanLegacyValueWALBeforeActivation",
+    "TestSaveFormatConfigCommandWALRequiresCleanActivation",
+    "TestCommandWALRequiredFeatureFailsClosedUntilExecutionEnabled",
+    "TestCommandWALNoCollectionSegmentFamilyCreated",
+    "TestCommandWALTerminalShortHeaderIgnored",
+    "TestCommandWALDuplicateLSNFailsClosed",
+    "TestCommandWALDuplicateLSNAcrossSegmentsFailsClosed",
+    "TestCommandWALRawKVBatchOneLSNAtomic",
+    "TestCommandWALRawKVBatchPreservesEmptySetValue",
+    "TestCommandWALRawKVBatchScanUsesPayloadBackedViews",
+    "TestCommandWALAppendCommandRejectsMaxSegmentBeforeEncode",
+    "TestValidateFormatRequiredFeatureGateRejectsMalformedRequiredFeatureFile",
+    "TestCommandWALExistingCoverageInventoryMapsLegacyWALTests",
+    "TestCommandWALLegacyRawEncodingTestsHaveTypedFrameEquivalents"
+  ],
+  "fuzz_targets": [
+    "FuzzCommandWALDecodeFrame"
+  ],
+  "race_tests": [],
+  "crash_scenarios": [
+    "terminal short header classified as ErrCommandWALTerminalTail",
+    "corrupt complete physical segment CRC fails closed",
+    "payload digest mismatch fails closed",
+    "duplicate LSN fails closed during single-segment and segment-family scans"
+  ],
+  "golden_fixture_digests": {
+    "TreeDB/internal/commitlog/testdata/command_wal_v1_raw_kv_batch.hex": "39be9d61152b42a65ec7b79be562dd1ab4a8e04cfc7fa98b0ede97ec08bb8cf9",
+    "TreeDB/internal/commitlog/testdata/command_wal_v1_collection_insert_placeholder.hex": "78b322757c095555310d0fb9537757c9c8fad4bae4397273a9d369504595eb29",
+    "TreeDB/internal/commitlog/testdata/command_wal_v1_catalog_placeholder.hex": "45c24490f6f5f7186cacb020a182394d2774da80ad3a15760599ad5cc234a8ba"
+  },
+  "benchmark_commands": [
+    "GOWORK=off go test ./TreeDB/internal/commitlog -run '^$' -bench 'Benchmark(CommandWALRawKVBatchPayload(Encode|Decode|Scan)|CommandWALFrame(Encode|Decode)|WriterAppend(CommandRawKVBatch|BatchLegacyRawKV))' -benchmem -benchtime=200ms -count=6"
+  ],
+  "metrics_names": [
+    "CommandWALRawKVBatchPayloadEncode ns/op B/op allocs/op MB/s",
+    "CommandWALRawKVBatchPayloadDecode ns/op B/op allocs/op MB/s",
+    "CommandWALRawKVBatchPayloadScan ns/op B/op allocs/op",
+    "CommandWALFrameEncode ns/op B/op allocs/op MB/s",
+    "CommandWALFrameDecode ns/op B/op allocs/op MB/s",
+    "WriterAppendCommandRawKVBatch ns/op B/op allocs/op MB/s",
+    "WriterAppendBatchLegacyRawKV ns/op B/op allocs/op MB/s"
+  ],
+  "unsupported_commands": [
+    "production command_wal_v1 DB open returns ErrCommandWALUnsupported until execution/recovery lands",
+    "legacy raw commitlog payloads are rejected by command-frame reader"
+  ],
+  "cleanup_debt": "not introduced in PR1; cleanup proof starts in PR2",
+  "oldest_unapplied_lsn": null,
+  "external_ref_retained_byte_summaries": "external-ref frame encoding is round-trip tested; retention accounting starts in later PRs",
+  "local_validation_commands": [
+    "GOWORK=off go test ./TreeDB ./TreeDB/internal/commitlog ./TreeDB/docs",
+    "GOWORK=off go test ./TreeDB/db -run 'TestCommandWAL|TestValidateFormatRequiredFeatureGate|TestSaveFormatConfig|TestLoadFormatConfig'",
+    "GOWORK=off go test ./TreeDB/internal/commitlog -run 'TestCommandWAL|TestWriterAppendCommand'",
+    "GOWORK=off go test ./TreeDB/internal/commitlog -run '^$' -fuzz=FuzzCommandWALDecodeFrame -fuzztime=5s",
+    "GOWORK=off go test ./TreeDB/internal/commitlog -run '^$' -bench 'Benchmark(CommandWALRawKVBatchPayload(Encode|Decode|Scan)|CommandWALFrame(Encode|Decode)|WriterAppend(CommandRawKVBatch|BatchLegacyRawKV))' -benchmem -benchtime=200ms -count=6",
+    "git diff --check"
+  ],
+  "known_gaps": [
+    "production raw KV writes are not converted until PR3",
+    "AppliedCommandLSN publish/checkpoint plumbing starts in PR2",
+    "collection and catalog placeholders are durable-byte fixtures only"
+  ],
+  "implementation_commit": "PR head",
+  "benchmark_artifacts": [
+    "artifacts/command-wal/pr1/microbench.txt",
+    "artifacts/command-wal/pr1/microbench-benchstat.txt"
+  ],
+  "benchmark_summary": {
+    "append_command_allocs_per_op": "0 across all measured batch shapes",
+    "append_command_throughput": "benchstat median: 663 MiB/s for 1x64B, 888 MiB/s for 16x64B, 896 MiB/s for 128x64B, 955 MiB/s for 16x1024B",
+    "payload_scan_allocs_per_op": "0 across all measured batch shapes",
+    "frame_encode_decode_allocs_per_op": "1 allocation for returned frame/payload ownership",
+    "owning_payload_decode_allocs_per_op": "copies keys/values by design; use ScanRawKVBatchPayload for replay-style zero-copy application"
+  }
+}

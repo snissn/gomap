@@ -1,0 +1,17 @@
+{
+  "schema": "treedb.mongo-gateway.compat-diff.fixture",
+  "version": 1,
+  "id": "delete-many-bounded-natural-order",
+  "capability_id": "crud.bounded-multi-write-and-batch-ordering",
+  "expectation": "supported",
+  "database": "compat",
+  "collection": "records",
+  "smoke": false,
+  "normalize_response_envelope_order": true,
+  "seed": [
+    {"_id": "first", "group": "a"},
+    {"_id": "second", "group": "a"},
+    {"_id": "third", "group": "b"}
+  ],
+  "command": {"delete": "records", "deletes": [{"q": {"group": "a"}, "limit": {"$numberInt": "0"}}]}
+}

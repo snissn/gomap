@@ -1,0 +1,47 @@
+File: collections.test
+Type: cpu
+Time: 2026-05-25 19:27:03 HST
+Duration: 1.84s, Total samples = 1.42s (77.19%)
+Showing nodes accounting for 1.42s, 100% of 1.42s total
+      flat  flat%   sum%        cum   cum%
+     1.35s 95.07% 95.07%      1.37s 96.48%  github.com/snissn/gomap/TreeDB/collections.BenchmarkTypedColumnAdjacencyDenseDirectViewScan
+     0.02s  1.41% 96.48%      0.02s  1.41%  runtime.asyncPreempt
+     0.01s   0.7% 97.18%      0.01s   0.7%  runtime.kevent
+     0.01s   0.7% 97.89%      0.01s   0.7%  runtime.madvise
+     0.01s   0.7% 98.59%      0.01s   0.7%  runtime.typePointers.next
+     0.01s   0.7% 99.30%      0.01s   0.7%  syscall.syscall
+     0.01s   0.7%   100%      0.01s   0.7%  syscall.syscallPtr
+         0     0%   100%      0.01s   0.7%  internal/poll.(*FD).OpenDir
+         0     0%   100%      0.01s   0.7%  internal/syscall/unix.Unlinkat (inline)
+         0     0%   100%      0.01s   0.7%  os.(*File).Readdirnames
+         0     0%   100%      0.01s   0.7%  os.(*File).readdir
+         0     0%   100%      0.02s  1.41%  os.RemoveAll (inline)
+         0     0%   100%      0.01s   0.7%  os.ignoringEINTR (inline)
+         0     0%   100%      0.02s  1.41%  os.removeAll
+         0     0%   100%      0.02s  1.41%  os.removeAllFrom
+         0     0%   100%      0.01s   0.7%  os.removeAllFrom.removefileat.func1 (inline)
+         0     0%   100%      0.01s   0.7%  os.removefileat (inline)
+         0     0%   100%      0.01s   0.7%  runtime.(*mheap).alloc.func1
+         0     0%   100%      0.01s   0.7%  runtime.(*mheap).allocSpan
+         0     0%   100%      0.01s   0.7%  runtime.findRunnable
+         0     0%   100%      0.01s   0.7%  runtime.gcBgMarkWorker
+         0     0%   100%      0.01s   0.7%  runtime.gcBgMarkWorker.func2
+         0     0%   100%      0.01s   0.7%  runtime.gcDrain
+         0     0%   100%      0.01s   0.7%  runtime.gcDrainMarkWorkerDedicated (inline)
+         0     0%   100%      0.01s   0.7%  runtime.mcall
+         0     0%   100%      0.01s   0.7%  runtime.netpoll
+         0     0%   100%      0.01s   0.7%  runtime.park_m
+         0     0%   100%      0.01s   0.7%  runtime.scanobject
+         0     0%   100%      0.01s   0.7%  runtime.schedule
+         0     0%   100%      0.01s   0.7%  runtime.sysUsed (inline)
+         0     0%   100%      0.01s   0.7%  runtime.sysUsedOS (inline)
+         0     0%   100%      0.02s  1.41%  runtime.systemstack
+         0     0%   100%      0.01s   0.7%  syscall.fdopendir
+         0     0%   100%      0.01s   0.7%  syscall.unlinkat
+         0     0%   100%      1.39s 97.89%  testing.(*B).launch
+         0     0%   100%      1.39s 97.89%  testing.(*B).runN
+         0     0%   100%      0.02s  1.41%  testing.(*B).runN.func1
+         0     0%   100%      0.02s  1.41%  testing.(*common).Cleanup.func1
+         0     0%   100%      0.02s  1.41%  testing.(*common).TempDir.func2
+         0     0%   100%      0.02s  1.41%  testing.(*common).runCleanup
+         0     0%   100%      0.02s  1.41%  testing.removeAll

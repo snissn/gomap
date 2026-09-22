@@ -1,0 +1,33 @@
+File: treedb_text_hybrid_scale
+Type: cpu
+Time: 2026-08-24 17:26:44 HST
+Duration: 3.75s, Total samples = 4370ms (116.55%)
+Showing nodes accounting for 3090ms, 70.71% of 4370ms total
+Dropped 151 nodes (cum <= 21.85ms)
+Showing top 25 nodes out of 157
+      flat  flat%   sum%        cum   cum%
+     520ms 11.90% 11.90%      520ms 11.90%  runtime.madvise
+     300ms  6.86% 18.76%      300ms  6.86%  runtime.memmove
+     250ms  5.72% 24.49%      290ms  6.64%  github.com/snissn/gomap/TreeDB/collections.FuseHybridSearchCandidates.func1
+     250ms  5.72% 30.21%      250ms  5.72%  runtime.pthread_cond_signal
+     220ms  5.03% 35.24%      220ms  5.03%  runtime.pthread_cond_wait
+     190ms  4.35% 39.59%      190ms  4.35%  runtime.pthread_kill
+     150ms  3.43% 43.02%      240ms  5.49%  github.com/snissn/gomap/TreeDB/collections.(*textCursor).readUvarint
+     110ms  2.52% 45.54%      340ms  7.78%  runtime.scanObject
+     100ms  2.29% 47.83%      290ms  6.64%  github.com/snissn/gomap/TreeDB/collections.decodeTextV2SearchNormBlock
+      90ms  2.06% 49.89%       90ms  2.06%  encoding/binary.Uvarint (inline)
+      90ms  2.06% 51.95%      110ms  2.52%  runtime.findObject
+      70ms  1.60% 53.55%      390ms  8.92%  github.com/snissn/gomap/TreeDB/collections.(*textV2SearchBlockCache).minFieldLengthsInRange
+      70ms  1.60% 55.15%      120ms  2.75%  github.com/snissn/gomap/TreeDB/collections.(*textV2SearchTopK).addCandidate.func1 (inline)
+      70ms  1.60% 56.75%       70ms  1.60%  github.com/snissn/gomap/TreeDB/collections.sortColumnVectorGraphResultOrderByOrdinal.func1
+      70ms  1.60% 58.35%       70ms  1.60%  runtime.kevent
+      70ms  1.60% 59.95%      430ms  9.84%  sort.partition_func
+      60ms  1.37% 61.33%      820ms 18.76%  github.com/snissn/gomap/TreeDB/collections.FuseHybridSearchCandidates
+      60ms  1.37% 62.70%      180ms  4.12%  sort.Search
+      50ms  1.14% 63.84%       50ms  1.14%  github.com/snissn/gomap/TreeDB/collections.(*hybridFusionAccumulator).add
+      50ms  1.14% 64.99%       50ms  1.14%  github.com/snissn/gomap/TreeDB/collections.textV2TopCandidateLess
+      50ms  1.14% 66.13%       60ms  1.37%  github.com/snissn/gomap/TreeDB/node.(*Node).SearchInternalChildID
+      50ms  1.14% 67.28%       80ms  1.83%  runtime.mapaccess2_faststr
+      50ms  1.14% 68.42%       50ms  1.14%  runtime.memclrNoHeapPointers
+      50ms  1.14% 69.57%       60ms  1.37%  runtime.tryDeferToSpanScan
+      50ms  1.14% 70.71%       60ms  1.37%  runtime.typePointers.next

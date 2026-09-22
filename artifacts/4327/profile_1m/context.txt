@@ -1,0 +1,9 @@
+timestamp=2026-08-25T03:20:26Z
+repo=/Users/michaelseiler/orca/workspaces/gomap/4327-highdf-requalification
+branch=codex/4327-highdf-requalification
+commit=d83b70cfc16d85fbe1bba60c37bd010dacc46c7f
+base_sha=6b07740e25bf663b2df3594ed74532601c23ac96
+go=go version go1.26.0 darwin/arm64
+cpu=Apple M3
+allocation_scope=fixture sampling disabled before run; MemProfileRate=1 starts after warm selected query
+raw_profiles=/tmp/4327_profile_1m_20260824_172026 (transient; removed after pprof summaries)

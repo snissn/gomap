@@ -1,0 +1,339 @@
+package collections
+
+import (
+	"fmt"
+	"reflect"
+	"runtime"
+	"testing"
+)
+
+func TestColumnPhysicalVisibilityIndexReplacementReusesAndClearsValues(t *testing.T) {
+	for _, reserve := range []int{0, 4} {
+		t.Run(fmt.Sprint(reserve), func(t *testing.T) {
+			idx := columnPhysicalVisibilityIndex{reserveValuesPerRow: reserve}
+			values := []columnDeclaredValue{{Present: true, Float32Vector: []float32{1, 2}}, {Present: true, StringBytes: []byte("owned")}}
+			row := columnPhysicalScanRowView{ID: []byte("hot"), AppliedCommandLSN: 1, Values: values}
+			idx.upsert(row)
+			idx.upsert(columnPhysicalScanRowView{ID: []byte("cold"), AppliedCommandLSN: 1, Values: values})
+			span := idx.rows[0].Values
+			arenaLen := len(idx.valuesArena)
+			for version := uint64(2); version <= 32; version++ {
+				row.AppliedCommandLSN = version
+				row.Values = values[:1]
+				values[0].Float32Vector[0] = float32(version)
+				idx.upsert(row)
+				if &idx.rows[0].Values[0] != &span[0] || len(idx.valuesArena) != arenaLen {
+					t.Fatal("replacement allocated another row span")
+				}
+				if idx.rows[0].Values[0].Float32Vector[0] != float32(version) || !reflect.DeepEqual(span[1], columnDeclaredValue{}) {
+					t.Fatal("replacement lost its value or retained the old tail")
+				}
+			}
+			values[0].Float32Vector[0], values[1].StringBytes[0] = 99, 'X'
+			if idx.rows[0].Values[0].Float32Vector[0] != 32 || idx.rows[1].Values[0].Float32Vector[0] != 1 || string(idx.rows[1].Values[1].StringBytes) != "owned" {
+				t.Fatal("replacement aliased scanner scratch or an adjacent row")
+			}
+			row.AppliedCommandLSN++
+			row.Values = make([]columnDeclaredValue, 5) // Grow beyond either initial reservation.
+			row.Values[0] = values[0]
+			idx.upsert(row)
+			if !reflect.DeepEqual(span, make([]columnDeclaredValue, len(span))) {
+				t.Fatal("growth retained payloads in the abandoned span")
+			}
+			span = idx.rows[0].Values
+			row.AppliedCommandLSN++
+			row.Deleted = true
+			idx.upsert(row)
+			if idx.rows[0].Values != nil || !reflect.DeepEqual(span, make([]columnDeclaredValue, len(span))) {
+				t.Fatal("deletion retained row values")
+			}
+		})
+	}
+}
+
+func BenchmarkColumnPhysicalVisibilityReplacementHistory(b *testing.B) {
+	for _, versions := range []int{1, 16} {
+		b.Run(fmt.Sprint(versions), func(b *testing.B) {
+			ids := make([][]byte, 1024+versions)
+			for i := range ids {
+				ids[i] = []byte(fmt.Sprint(i))
+			}
+			values := []columnDeclaredValue{{Present: true, Int64: 1}}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for range b.N {
+				idx := columnPhysicalVisibilityIndex{reserveValuesPerRow: 4}
+				for version := range versions {
+					// Leave one cold row among each round of hot-row replacements.
+					idx.upsert(columnPhysicalScanRowView{ID: ids[1024+version], AppliedCommandLSN: 1, Values: values})
+					for _, id := range ids[:1024] {
+						idx.upsert(columnPhysicalScanRowView{ID: id, AppliedCommandLSN: uint64(version + 1), Values: values})
+					}
+				}
+				runtime.KeepAlive(idx)
+			}
+		})
+	}
+}
+
+func TestColumnPhysicalVisibilityIndexReservedValuesRemainRowOwned(t *testing.T) {
+	const width = 4
+	idx := columnPhysicalVisibilityIndex{reserveValuesPerRow: width}
+	// Cross an arena boundary, and include live rows without row-owned values.
+	for i := range 1100 {
+		var values []columnDeclaredValue
+		if i%2 == 0 {
+			values = []columnDeclaredValue{{Present: true, Int64: int64(i)}}
+		}
+		idx.upsert(columnPhysicalScanRowView{ID: []byte(fmt.Sprint(i)), AppliedCommandLSN: 1, Values: values})
+	}
+	idx.upsert(columnPhysicalScanRowView{ID: []byte("0"), AppliedCommandLSN: 2, Values: []columnDeclaredValue{{Present: true, Int64: -1}}})
+	beforeDelete := len(idx.valuesArena)
+	idx.upsert(columnPhysicalScanRowView{ID: []byte("deleted"), AppliedCommandLSN: 2, Deleted: true})
+	if len(idx.valuesArena) != beforeDelete || idx.rows[1100].Values != nil {
+		t.Fatal("deleted row reserved values")
+	}
+	full := []columnDeclaredValue{
+		{Present: true, StringBytes: []byte("owned")},
+		{Present: true, Float32Vector: []float32{1, 2}},
+		{Present: true, Bytes: []byte{3, 4}},
+		{Present: true, Int64: 42},
+	}
+	want := cloneColumnDeclaredValues(full)
+	for i := range 1100 {
+		row := &idx.rows[i]
+		if len(row.Values) != 1-i%2 || cap(row.Values) != width {
+			t.Fatalf("row %d len/cap=%d/%d", i, len(row.Values), cap(row.Values))
+		}
+		if i%2 == 0 {
+			expected := int64(i)
+			if i == 0 {
+				expected = -1
+			}
+			if row.Values[0].Int64 != expected {
+				t.Fatalf("row %d overwritten by an adjacent expansion", i)
+			}
+		}
+		row.Values = cloneColumnDeclaredValuesInto(row.Values, full)
+	}
+	full[0].StringBytes[0], full[1].Float32Vector[0], full[2].Bytes[0] = 'X', 99, 99
+	for i := range 1100 {
+		if !reflect.DeepEqual(idx.rows[i].Values, want) {
+			t.Fatalf("row %d values aliased another row or reconstruction scratch", i)
+		}
+	}
+}
+
+func TestColumnPhysicalVisibilityIndexUpsertKeepsLatestAndClonesID2378(t *testing.T) {
+	var idx columnPhysicalVisibilityIndex
+	id := []byte("row-1")
+	value := []byte("old")
+	idx.upsert(columnPhysicalScanRowView{
+		AppliedCommandLSN: 2,
+		ID:                id,
+		Values: []columnDeclaredValue{
+			{Present: true, StringBytes: value},
+		},
+	})
+
+	id[0] = 'X'
+	value[0] = 'X'
+	if len(idx.rows) != 1 {
+		t.Fatalf("rows=%d want 1", len(idx.rows))
+	}
+	if got := string(idx.rows[0].ID); got != "row-1" {
+		t.Fatalf("ID aliased scanner scratch: got %q", got)
+	}
+	if got := string(idx.rows[0].Values[0].StringBytes); got != "old" {
+		t.Fatalf("value aliased scanner scratch: got %q", got)
+	}
+
+	idx.upsert(columnPhysicalScanRowView{
+		AppliedCommandLSN: 1,
+		ID:                []byte("row-1"),
+		Values: []columnDeclaredValue{
+			{Present: true, StringBytes: []byte("older")},
+		},
+	})
+	if got := string(idx.rows[0].Values[0].StringBytes); got != "old" {
+		t.Fatalf("older row replaced visible row: got %q", got)
+	}
+
+	idx.upsert(columnPhysicalScanRowView{
+		AppliedCommandLSN: 3,
+		ID:                []byte("row-1"),
+		Deleted:           true,
+	})
+	if len(idx.rows) != 1 {
+		t.Fatalf("delete duplicated row: rows=%d", len(idx.rows))
+	}
+	if !idx.rows[0].Deleted || idx.rows[0].Values != nil {
+		t.Fatalf("delete not visible: deleted=%t values=%v", idx.rows[0].Deleted, idx.rows[0].Values)
+	}
+
+	idx.upsert(columnPhysicalScanRowView{
+		AppliedCommandLSN: 4,
+		ID:                []byte("row-1"),
+		Values: []columnDeclaredValue{
+			{Present: true, StringBytes: []byte("new")},
+		},
+	})
+	if idx.rows[0].Deleted {
+		t.Fatalf("newer insert did not replace delete")
+	}
+	if got := string(idx.rows[0].Values[0].StringBytes); got != "new" {
+		t.Fatalf("newer row value=%q want new", got)
+	}
+}
+
+func TestColumnPhysicalVisibilityIndexUpsertHandlesHashBucketCollision2378(t *testing.T) {
+	var idx columnPhysicalVisibilityIndex
+	targetID := []byte("target")
+	targetHash := columnPhysicalQueryHashBytes(targetID)
+	idx.rows = append(idx.rows, columnPhysicalVisibleRow{ID: []byte("different")})
+	idx.byHash = map[uint64][]int{
+		targetHash: {0},
+	}
+
+	idx.upsert(columnPhysicalScanRowView{
+		AppliedCommandLSN: 1,
+		ID:                targetID,
+		Values: []columnDeclaredValue{
+			{Present: true, StringBytes: []byte("first")},
+		},
+	})
+	if len(idx.rows) != 2 {
+		t.Fatalf("rows=%d want 2 after collision insert", len(idx.rows))
+	}
+	if got := len(idx.byHash[targetHash]); got != 2 {
+		t.Fatalf("collision bucket len=%d want 2", got)
+	}
+
+	idx.upsert(columnPhysicalScanRowView{
+		AppliedCommandLSN: 2,
+		ID:                []byte("target"),
+		Values: []columnDeclaredValue{
+			{Present: true, StringBytes: []byte("second")},
+		},
+	})
+	if len(idx.rows) != 2 {
+		t.Fatalf("matching collision bucket row duplicated: rows=%d", len(idx.rows))
+	}
+	if got := len(idx.byHash[targetHash]); got != 2 {
+		t.Fatalf("collision bucket grew on update: len=%d", got)
+	}
+	if got := string(idx.rows[1].Values[0].StringBytes); got != "second" {
+		t.Fatalf("collision bucket update value=%q want second", got)
+	}
+}
+
+func TestColumnPhysicalVisibilityIndexUpsertLatestTieBreakers2378(t *testing.T) {
+	var idx columnPhysicalVisibilityIndex
+	upsert := func(lsn, generation, partID uint64, rowIndex int, value string) {
+		idx.upsert(columnPhysicalScanRowView{
+			AppliedCommandLSN: lsn,
+			Generation:        generation,
+			PartID:            partID,
+			RowIndex:          rowIndex,
+			ID:                []byte("row"),
+			Values: []columnDeclaredValue{
+				{Present: true, StringBytes: []byte(value)},
+			},
+		})
+		if len(idx.rows) != 1 {
+			t.Fatalf("rows=%d want 1 after %q", len(idx.rows), value)
+		}
+	}
+	want := func(value string) {
+		if got := string(idx.rows[0].Values[0].StringBytes); got != value {
+			t.Fatalf("visible value=%q want %q", got, value)
+		}
+	}
+
+	upsert(10, 1, 1, 1, "base")
+	upsert(9, 100, 100, 100, "older-lsn")
+	want("base")
+	upsert(10, 2, 1, 1, "newer-generation")
+	want("newer-generation")
+	upsert(10, 2, 0, 100, "older-part")
+	want("newer-generation")
+	upsert(10, 2, 3, 1, "newer-part")
+	want("newer-part")
+	upsert(10, 2, 3, 0, "older-row")
+	want("newer-part")
+	upsert(10, 2, 3, 2, "newer-row")
+	want("newer-row")
+	upsert(11, 0, 0, 0, "newer-lsn")
+	want("newer-lsn")
+}
+
+func TestColumnPhysicalVisibilityIndexUpsertIndexesUniqueIDs2378(t *testing.T) {
+	var idx columnPhysicalVisibilityIndex
+	const rows = 4096
+	for i := 0; i < rows; i++ {
+		idx.upsert(columnPhysicalScanRowView{
+			AppliedCommandLSN: uint64(i + 1),
+			ID:                []byte(fmt.Sprintf("row-%06d", i)),
+		})
+	}
+	if len(idx.rows) != rows {
+		t.Fatalf("rows=%d want %d", len(idx.rows), rows)
+	}
+	positions := 0
+	for hash, bucket := range idx.byHash {
+		if len(bucket) == 0 {
+			t.Fatalf("empty bucket for hash %d", hash)
+		}
+		for _, pos := range bucket {
+			if pos < 0 || pos >= len(idx.rows) {
+				t.Fatalf("bucket hash %d has out-of-range pos %d", hash, pos)
+			}
+			if got := columnPhysicalQueryHashBytes(idx.rows[pos].ID); got != hash {
+				t.Fatalf("bucket hash mismatch for pos %d: got %d want %d", pos, got, hash)
+			}
+			positions++
+		}
+	}
+	if positions != rows {
+		t.Fatalf("indexed positions=%d want %d", positions, rows)
+	}
+}
+
+func TestColumnPhysicalVisibilityIndexClonesSliceBackedValues1930(t *testing.T) {
+	var idx columnPhysicalVisibilityIndex
+	values := []columnDeclaredValue{
+		{Type: ColumnStoreValueFloat32Vector, Present: true, Float32Vector: []float32{1, 2, 3}},
+		{Type: ColumnStoreValueUint8Vector, Present: true, DenseNumericVector: []byte{4, 5, 6}},
+		{Type: ColumnStoreValueUint32List, Present: true, Uint32List: []uint32{7, 8}},
+		{Type: ColumnStoreValueAdjacencyList, Present: true, AdjacencyList: []uint32{9, 10}},
+		{Type: ColumnStoreValueBytes, Present: true, Bytes: []byte{11, 12}},
+		{Type: ColumnStoreValueString, Present: true, StringBytes: []byte("before")},
+	}
+	cloned := idx.cloneColumnDeclaredValues(nil, values)
+
+	values[0].Float32Vector[0] = 101
+	values[1].DenseNumericVector[0] = 102
+	values[2].Uint32List[0] = 103
+	values[3].AdjacencyList[0] = 104
+	values[4].Bytes[0] = 105
+	values[5].StringBytes[0] = 'X'
+
+	if got := cloned[0].Float32Vector[0]; got != 1 {
+		t.Fatalf("Float32Vector aliased scanner scratch: got %v", got)
+	}
+	if got := cloned[1].DenseNumericVector[0]; got != 4 {
+		t.Fatalf("DenseNumericVector aliased scanner scratch: got %v", got)
+	}
+	if got := cloned[2].Uint32List[0]; got != 7 {
+		t.Fatalf("Uint32List aliased scanner scratch: got %v", got)
+	}
+	if got := cloned[3].AdjacencyList[0]; got != 9 {
+		t.Fatalf("AdjacencyList aliased scanner scratch: got %v", got)
+	}
+	if got := cloned[4].Bytes[0]; got != 11 {
+		t.Fatalf("Bytes aliased scanner scratch: got %v", got)
+	}
+	if got := string(cloned[5].StringBytes); got != "before" {
+		t.Fatalf("StringBytes aliased scanner scratch: got %q", got)
+	}
+}

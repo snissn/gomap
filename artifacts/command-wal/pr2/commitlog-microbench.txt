@@ -1,0 +1,36 @@
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB/internal/commitlog
+cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
+BenchmarkWriterAppendCommandRawKVBatch/ops_1_value_64-12 	 1000000	       263.6 ns/op	 732.13 MB/s	       0 B/op	       0 allocs/op
+BenchmarkWriterAppendCommandRawKVBatch/ops_1_value_64-12 	 1000000	       264.3 ns/op	 730.18 MB/s	       0 B/op	       0 allocs/op
+BenchmarkWriterAppendCommandRawKVBatch/ops_1_value_64-12 	 1000000	       270.5 ns/op	 713.43 MB/s	       0 B/op	       0 allocs/op
+BenchmarkWriterAppendCommandRawKVBatch/ops_1_value_64-12 	 1000000	       261.0 ns/op	 739.42 MB/s	       0 B/op	       0 allocs/op
+BenchmarkWriterAppendCommandRawKVBatch/ops_1_value_64-12 	 1000000	       262.9 ns/op	 734.02 MB/s	       0 B/op	       0 allocs/op
+BenchmarkWriterAppendCommandRawKVBatch/ops_1_value_64-12 	 1000000	       268.2 ns/op	 719.62 MB/s	       0 B/op	       0 allocs/op
+BenchmarkWriterAppendCommandRawKVBatch/ops_16_value_64-12         	  155689	      1477 ns/op	 973.32 MB/s	       0 B/op	       0 allocs/op
+BenchmarkWriterAppendCommandRawKVBatch/ops_16_value_64-12         	  160969	      1492 ns/op	 964.12 MB/s	       0 B/op	       0 allocs/op
+BenchmarkWriterAppendCommandRawKVBatch/ops_16_value_64-12         	  164593	      1484 ns/op	 969.16 MB/s	       0 B/op	       0 allocs/op
+BenchmarkWriterAppendCommandRawKVBatch/ops_16_value_64-12         	  164582	      1515 ns/op	 949.20 MB/s	       0 B/op	       0 allocs/op
+BenchmarkWriterAppendCommandRawKVBatch/ops_16_value_64-12         	  164216	      1535 ns/op	 937.06 MB/s	       0 B/op	       0 allocs/op
+BenchmarkWriterAppendCommandRawKVBatch/ops_16_value_64-12         	  162193	      1497 ns/op	 960.49 MB/s	       0 B/op	       0 allocs/op
+BenchmarkWriterAppendCommandRawKVBatch/ops_128_value_64-12        	   21920	     11200 ns/op	 958.40 MB/s	       0 B/op	       0 allocs/op
+BenchmarkWriterAppendCommandRawKVBatch/ops_128_value_64-12        	   21991	     10876 ns/op	 986.90 MB/s	       0 B/op	       0 allocs/op
+BenchmarkWriterAppendCommandRawKVBatch/ops_128_value_64-12        	   21592	     11022 ns/op	 973.89 MB/s	       0 B/op	       0 allocs/op
+BenchmarkWriterAppendCommandRawKVBatch/ops_128_value_64-12        	   20595	     12035 ns/op	 891.91 MB/s	       0 B/op	       0 allocs/op
+BenchmarkWriterAppendCommandRawKVBatch/ops_128_value_64-12        	   20941	     11298 ns/op	 950.07 MB/s	       0 B/op	       0 allocs/op
+BenchmarkWriterAppendCommandRawKVBatch/ops_128_value_64-12        	   20798	     11462 ns/op	 936.49 MB/s	       0 B/op	       0 allocs/op
+BenchmarkWriterAppendCommandRawKVBatch/ops_16_value_1024-12       	   14768	     16408 ns/op	1023.79 MB/s	       0 B/op	       0 allocs/op
+BenchmarkWriterAppendCommandRawKVBatch/ops_16_value_1024-12       	   14540	     15948 ns/op	1053.32 MB/s	       0 B/op	       0 allocs/op
+BenchmarkWriterAppendCommandRawKVBatch/ops_16_value_1024-12       	   15140	     15930 ns/op	1054.50 MB/s	       0 B/op	       0 allocs/op
+BenchmarkWriterAppendCommandRawKVBatch/ops_16_value_1024-12       	   14260	     16363 ns/op	1026.58 MB/s	       0 B/op	       0 allocs/op
+BenchmarkWriterAppendCommandRawKVBatch/ops_16_value_1024-12       	   14548	     16891 ns/op	 994.50 MB/s	       0 B/op	       0 allocs/op
+BenchmarkWriterAppendCommandRawKVBatch/ops_16_value_1024-12       	   14995	     15976 ns/op	1051.43 MB/s	       0 B/op	       0 allocs/op
+BenchmarkCommandJournalAllocateAndAppendRawKVBatch-12             	 1000000	       274.9 ns/op	 127.31 MB/s	       0 B/op	       0 allocs/op
+BenchmarkCommandJournalAllocateAndAppendRawKVBatch-12             	 1000000	       264.0 ns/op	 132.55 MB/s	       0 B/op	       0 allocs/op
+BenchmarkCommandJournalAllocateAndAppendRawKVBatch-12             	 1000000	       291.6 ns/op	 120.04 MB/s	       0 B/op	       0 allocs/op
+BenchmarkCommandJournalAllocateAndAppendRawKVBatch-12             	 1000000	       276.7 ns/op	 126.49 MB/s	       0 B/op	       0 allocs/op
+BenchmarkCommandJournalAllocateAndAppendRawKVBatch-12             	 1000000	       269.5 ns/op	 129.85 MB/s	       0 B/op	       0 allocs/op
+BenchmarkCommandJournalAllocateAndAppendRawKVBatch-12             	 1000000	       340.1 ns/op	 102.91 MB/s	       0 B/op	       0 allocs/op
+PASS
+ok  	github.com/snissn/gomap/TreeDB/internal/commitlog	11.778s

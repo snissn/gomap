@@ -1,0 +1,292 @@
+package collections
+
+import (
+	"encoding/json"
+	"fmt"
+	"reflect"
+	"runtime"
+	"testing"
+	"unsafe"
+)
+
+func TestVectorIndexConstructionDecisionObserverPreservesFrozenPrefix4461(t *testing.T) {
+	const (
+		rowCount   = 96
+		dimensions = 16
+	)
+	rows := vectorIndexReciprocalParityRows4257(rowCount, dimensions, true)
+	off := buildVectorIndexDecisionObserver4461(t, rows, nil)
+	firstObserver := &vectorIndexConstructionDecisionObserverV1{}
+	first := buildVectorIndexDecisionObserver4461(t, rows, firstObserver)
+	secondObserver := &vectorIndexConstructionDecisionObserverV1{}
+	second := buildVectorIndexDecisionObserver4461(t, rows, secondObserver)
+
+	wantTopology := snapshotVectorIndexTopology4257(off)
+	wantSearch := snapshotVectorIndexSearches4257(t, off, rows)
+	wantMeta := vectorIndexDecisionMetadata4461(off)
+	for name, index := range map[string]*VectorIndex{"observer-on": first, "observer-repeat": second} {
+		if got := snapshotVectorIndexTopology4257(index); !reflect.DeepEqual(got, wantTopology) {
+			t.Fatalf("%s changed topology", name)
+		}
+		if got := snapshotVectorIndexSearches4257(t, index, rows); !reflect.DeepEqual(got, wantSearch) {
+			t.Fatalf("%s changed search results", name)
+		}
+		if got := vectorIndexDecisionMetadata4461(index); got != wantMeta {
+			t.Fatalf("%s metadata=%+v want %+v", name, got, wantMeta)
+		}
+		if index.frozenPrefixBatches == 0 {
+			t.Fatalf("%s did not use frozen-prefix construction", name)
+		}
+	}
+	firstStats, secondStats := firstObserver.snapshot(), secondObserver.snapshot()
+	firstPhases := []VectorIndexConstructionDecisionPhaseSnapshot{firstStats.Planning, firstStats.Reciprocal}
+	secondPhases := []VectorIndexConstructionDecisionPhaseSnapshot{secondStats.Planning, secondStats.Reciprocal}
+	for phase := range firstPhases {
+		firstPhase, secondPhase := firstPhases[phase], secondPhases[phase]
+		if firstPhase.DigestXOR == 0 || firstPhase.DigestSum == 0 || firstPhase.Decisions == 0 {
+			t.Fatalf("phase %d missing decision evidence: %+v", phase, firstPhase)
+		}
+		if firstPhase.DigestXOR != secondPhase.DigestXOR || firstPhase.DigestSum != secondPhase.DigestSum {
+			t.Fatalf("phase %d digest changed: first=%x/%x second=%x/%x", phase, firstPhase.DigestXOR, firstPhase.DigestSum, secondPhase.DigestXOR, secondPhase.DigestSum)
+		}
+		if firstPhase.DirectExactFP32Rows+firstPhase.IndexedExactFP32Rows == 0 ||
+			firstPhase.DirectExactFP32Calls+firstPhase.IndexedExactFP32Calls == 0 ||
+			firstPhase.ExactFP32Dimensions == 0 {
+			t.Fatalf("phase %d invalid bounded row/call evidence: %+v", phase, firstPhase)
+		}
+		if firstPhase.ApproximateScoreRows != 0 || firstPhase.ApproximateScoreCalls != 0 {
+			t.Fatalf("phase %d exact route reported approximate scores: %+v", phase, firstPhase)
+		}
+		if firstPhase.UniqueRowPairs+firstPhase.RepeatedRowPairs+firstPhase.RowPairReplacements != firstPhase.DirectExactFP32Rows+firstPhase.IndexedExactFP32Rows {
+			t.Fatalf("phase %d row-pair sketch lost scored rows: %+v", phase, firstPhase)
+		}
+		if firstPhase.Accepted+firstPhase.Rejected != firstPhase.DiversityPredicates ||
+			firstPhase.DiversityCandidates == 0 ||
+			firstPhase.DiversityComparisonsExecuted == 0 ||
+			firstPhase.DiversityComparisonsRequested < firstPhase.DiversityComparisonsExecuted {
+			t.Fatalf("phase %d inconsistent diversity accounting: %+v", phase, firstPhase)
+		}
+	}
+	if size := unsafe.Sizeof(*firstObserver); size > 70<<10 {
+		t.Fatalf("observer size=%d exceeds 70 KiB", size)
+	}
+	replacementObserver := &vectorIndexConstructionDecisionObserverV1{}
+	replacementContext := vectorIndexConstructionDecisionContextV1{observer: replacementObserver, phase: vectorIndexConstructionDecisionPlanning, dimensions: dimensions}
+	for pair := 0; pair < vectorIndexConstructionDecisionPairSlots*2; pair++ {
+		replacementContext.recordRowFrom(pair, pair+1, false)
+	}
+	replacementStats := replacementObserver.snapshot().Planning
+	if replacementStats.RowPairReplacements == 0 || replacementStats.Saturated {
+		t.Fatalf("rolling row-pair sketch replacements=%d saturated=%t", replacementStats.RowPairReplacements, replacementStats.Saturated)
+	}
+
+	dir := t.TempDir()
+	db := openCollectionCommandWALDB(t, dir)
+	mgr := NewCollectionManager(db)
+	def := VectorIndexDefinition{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: dimensions, M: 16, EfConstruction: 64, Strategy: VectorIndexStrategyNativeRuntime}
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs", Options: CollectionOptions{DocumentFormat: DocumentFormatJSON}, VectorIndexes: []VectorIndexDefinition{def}}); err != nil {
+		t.Fatal(err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatal(err)
+	}
+	persisted := col.registeredVectorIndex(def.Name)
+	persisted.decisionObserver = &vectorIndexConstructionDecisionObserverV1{}
+	ids, documents := vectorIndexDecisionDocuments4461(t, rows)
+	if _, err = col.InsertBatch(ids, documents); err != nil {
+		t.Fatal(err)
+	}
+	if got := snapshotVectorIndexTopology4257(persisted); !reflect.DeepEqual(got, wantTopology) {
+		t.Fatal("native observer build changed topology")
+	}
+	persistedMeta := persisted.persistMetaLocked()
+	if status, saveErr := persisted.SaveNativeSnapshot(); saveErr != nil || !status.Loaded {
+		t.Fatalf("SaveNativeSnapshot status=%+v err=%v", status, saveErr)
+	}
+	if err = db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = reopened.Close() }()
+	reopenedCol, err := NewCollectionManager(reopened).OpenCollection("docs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded, status, err := reopenedCol.LoadNativeVectorIndexSnapshot(vectorIndexOptionsFromDefinition(def))
+	if err != nil || loaded == nil || !status.Loaded {
+		t.Fatalf("LoadNativeVectorIndexSnapshot loaded=%v status=%+v err=%v", loaded != nil, status, err)
+	}
+	if got := snapshotVectorIndexTopology4257(loaded); !reflect.DeepEqual(got, wantTopology) {
+		t.Fatal("reopened topology changed")
+	}
+	if got := snapshotVectorIndexSearches4257(t, loaded, rows); !reflect.DeepEqual(got, wantSearch) {
+		t.Fatal("reopened search results changed")
+	}
+	if got := loaded.persistMetaLocked(); !reflect.DeepEqual(got, persistedMeta) {
+		t.Fatalf("reopened metadata=%+v want %+v", got, persistedMeta)
+	}
+}
+
+func TestVectorIndexConstructionDecisionObserverWorkerLocalReduction(t *testing.T) {
+	if runtime.GOMAXPROCS(0) < 2 {
+		t.Skip("requires more than one construction worker")
+	}
+	rows := vectorIndexReciprocalParityRows4257(96, 16, true)
+	serialObserver, parallelObserver := &vectorIndexConstructionDecisionObserverV1{}, &vectorIndexConstructionDecisionObserverV1{}
+	buildVectorIndexDecisionObserverWorkers4587(t, rows, serialObserver, 1)
+	buildVectorIndexDecisionObserverWorkers4587(t, rows, parallelObserver, 2)
+	serial, parallel := serialObserver.snapshot(), parallelObserver.snapshot()
+	for phase, pair := range [][2]*VectorIndexConstructionDecisionPhaseSnapshot{
+		{&serial.Planning, &parallel.Planning}, {&serial.Reciprocal, &parallel.Reciprocal},
+	} {
+		pair[0].ActiveWallNanos, pair[1].ActiveWallNanos = 0, 0
+		pair[0].UniqueRowPairs, pair[1].UniqueRowPairs = 0, 0
+		pair[0].RepeatedRowPairs, pair[1].RepeatedRowPairs = 0, 0
+		pair[0].RowPairReplacements, pair[1].RowPairReplacements = 0, 0
+		if !reflect.DeepEqual(*pair[0], *pair[1]) {
+			t.Fatalf("phase %d worker-local reduction changed exact accounting:\nserial=%+v\nparallel=%+v", phase, *pair[0], *pair[1])
+		}
+	}
+}
+
+func TestVectorIndexConstructionDecisionObserverRecordsZeroWallSample(t *testing.T) {
+	observer := &vectorIndexConstructionDecisionObserverV1{}
+	context := vectorIndexConstructionDecisionContextV1{observer: observer, phase: vectorIndexConstructionDecisionPlanning}
+	context.recordWall(0)
+	if got := observer.snapshot().Planning.ActiveWallNanos; got != 1 {
+		t.Fatalf("active wall nanos=%d want 1", got)
+	}
+}
+
+func BenchmarkVectorIndexConstructionDecisionObserver768D(b *testing.B) {
+	rows := vectorIndexReciprocalParityRows4257(1024, 768, true)
+	for _, observed := range []bool{false, true} {
+		b.Run(fmt.Sprintf("observed=%t", observed), func(b *testing.B) {
+			for b.Loop() {
+				var observer *vectorIndexConstructionDecisionObserverV1
+				if observed {
+					observer = &vectorIndexConstructionDecisionObserverV1{}
+				}
+				buildVectorIndexDecisionObserverWorkers4587(b, rows, observer, 2)
+			}
+		})
+	}
+}
+
+func TestVectorIndexConstructionDecisionObserverCountsUpperLayerGreedyScores(t *testing.T) {
+	const dimensions = 16
+	rows := vectorIndexReciprocalParityRows4257(96, dimensions, true)
+	index := buildVectorIndexDecisionObserver4461(t, rows, nil)
+	if index.maxLevel <= 0 {
+		t.Fatal("fixture did not produce an upper graph layer")
+	}
+	query := rows[len(rows)-1]
+	norm := vectorNormSquared(query)
+	prepared, err := prepareFloat32CosineQuery(query, norm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := index.greedyNearestAtLayerLocked(query, norm, &prepared, index.entry, index.maxLevel)
+	observer := &vectorIndexConstructionDecisionObserverV1{}
+	context := &vectorIndexConstructionDecisionContextV1{
+		observer: observer, phase: vectorIndexConstructionDecisionPlanning,
+		source: len(index.nodes), layer: index.maxLevel, dimensions: dimensions,
+	}
+	got := index.greedyNearestAtLayerObservedLocked(query, norm, &prepared, index.entry, index.maxLevel, context)
+	if got != want {
+		t.Fatalf("observed upper-layer greedy result=%d want %d", got, want)
+	}
+	stats := observer.snapshot().Planning
+	if stats.DirectExactFP32Rows == 0 ||
+		stats.DirectExactFP32Calls != stats.DirectExactFP32Rows ||
+		stats.ExactFP32Dimensions != stats.DirectExactFP32Rows*uint64(dimensions) {
+		t.Fatalf("upper-layer greedy scoring not fully accounted: %+v", stats)
+	}
+}
+
+func TestVectorIndexConstructionDecisionObserverCountsReciprocalCandidateScores(t *testing.T) {
+	const dimensions = 16
+	rows := vectorIndexReciprocalParityRows4257(96, dimensions, true)
+	index := buildVectorIndexDecisionObserver4461(t, rows, nil)
+	fromNodeID, toNodeID := -1, -1
+	for source := range index.nodes {
+		neighbors := index.nodes[source].neighbors[0]
+		if len(neighbors) == 0 {
+			continue
+		}
+		fromNodeID = source
+		toNodeID = int(neighbors[len(neighbors)-1].nodeID)
+		index.nodes[source].neighbors[0] = neighbors[:len(neighbors)-1]
+		break
+	}
+	if fromNodeID < 0 {
+		t.Fatal("fixture has no reciprocal edge to replay")
+	}
+	observer := &vectorIndexConstructionDecisionObserverV1{}
+	index.decisionObserver = observer
+	link := vectorIndexFrozenPrefixReciprocalLink{fromNodeID: fromNodeID, toNodeID: toNodeID, layer: 0}
+	if pruned := index.linkFrozenPrefixReciprocalGroupLocked([]vectorIndexFrozenPrefixReciprocalLink{link}, nil); pruned {
+		t.Fatal("single reciprocal candidate unexpectedly pruned")
+	}
+	stats := observer.snapshot().Reciprocal
+	if stats.DirectExactFP32Rows != 1 ||
+		stats.DirectExactFP32Calls != 1 ||
+		stats.ExactFP32Dimensions != uint64(dimensions) {
+		t.Fatalf("reciprocal candidate score accounting=%+v", stats)
+	}
+}
+
+type vectorIndexDecisionMetadataSnapshot4461 struct {
+	entry, maxLevel, dimensions, m, efConstruction int
+	mutationSeq, frozenPrefixBatches               uint64
+}
+
+func vectorIndexDecisionMetadata4461(index *VectorIndex) vectorIndexDecisionMetadataSnapshot4461 {
+	return vectorIndexDecisionMetadataSnapshot4461{index.entry, index.maxLevel, index.dimensions, index.m, index.efConstruction, index.mutationSeq, index.frozenPrefixBatches}
+}
+
+// buildVectorIndexDecisionObserver4461 is also the post-merge analysis seam:
+// a focused same-package test can load preserved source rows and snapshot the
+// returned observer without changing the production builder.
+func buildVectorIndexDecisionObserver4461(t testing.TB, rows [][]float32, observer *vectorIndexConstructionDecisionObserverV1) *VectorIndex {
+	return buildVectorIndexDecisionObserverWorkers4587(t, rows, observer, 0)
+}
+
+func buildVectorIndexDecisionObserverWorkers4587(t testing.TB, rows [][]float32, observer *vectorIndexConstructionDecisionObserverV1, workers int) *VectorIndex {
+	t.Helper()
+	index, err := newVectorIndex(nil, VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: len(rows[0]), M: 16, EfConstruction: 64})
+	if err != nil {
+		t.Fatal(err)
+	}
+	index.setNativePersistent(true)
+	index.decisionObserver = observer
+	index.constructionWorkers = workers
+	ids := make([][]byte, len(rows))
+	for row := range ids {
+		ids[row] = []byte(fmt.Sprintf("doc-%04d", row))
+	}
+	if err := index.insertVectorBatchLocked(ids, rows); err != nil {
+		t.Fatal(err)
+	}
+	return index
+}
+
+func vectorIndexDecisionDocuments4461(t testing.TB, rows [][]float32) ([][]byte, [][]byte) {
+	t.Helper()
+	ids := make([][]byte, len(rows))
+	documents := make([][]byte, len(rows))
+	for row := range rows {
+		ids[row] = []byte(fmt.Sprintf("doc-%04d", row))
+		var err error
+		documents[row], err = json.Marshal(map[string]any{"embedding": rows[row]})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	return ids, documents
+}

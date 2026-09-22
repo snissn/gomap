@@ -1,0 +1,2312 @@
+{
+  "generated_at": "2026-05-09T17:59:47Z",
+  "data_path": "$JSONBENCH_DATA",
+  "limit": 1000000,
+  "rows": 1000000,
+  "files": [
+    "$JSONBENCH_DATA/file_0001.json.gz"
+  ],
+  "input_bytes": 135176827,
+  "rows_per_granule": 8192,
+  "load_duration": 5439432834,
+  "clickhouse_local": {
+    "system": "ClickHouse",
+    "version": "26.4.3.1",
+    "os": "Darwin 25.2.0 arm64",
+    "machine": "local-machine",
+    "dataset_size": 1000000,
+    "num_loaded_documents": 1000000,
+    "total_size": 101786238,
+    "data_size": 101761540,
+    "index_size": 24559,
+    "result": [
+      [
+        0.014
+      ],
+      [
+        0.027
+      ],
+      [
+        0.014
+      ],
+      [
+        0.013
+      ],
+      [
+        0.013
+      ]
+    ]
+  },
+  "remaining_treedb": {
+    "enabled": true,
+    "document_format": "bson",
+    "storage_policy": "compressed",
+    "db_dir": "artifacts/colgranule_remaining_treedb-clickhouse-bson",
+    "rows": 1000000,
+    "raw_document_bytes": 357429419,
+    "load_seconds": 7.125662167,
+    "flush_seconds": 0.690930667,
+    "checkpoint_seconds": 0.012062166,
+    "before_compact_bytes": 224591244,
+    "before_compact_files": 12,
+    "after_compact_bytes": 54670992,
+    "after_compact_files": 15,
+    "compaction_seconds": 0.277217292,
+    "fully_compacted": true,
+    "compacted_bytes_per_row": 54.670992,
+    "rewrite_duration_seconds": 2.286188709,
+    "rewrite_records_copied": 1000000,
+    "rewrite_value_bytes": 357429419,
+    "rewrite_source_bytes": 210028730,
+    "stored_shape": "original JSON object converted to bson with ClickHouse typed JSON paths removed"
+  },
+  "remaining_treedb_json": {
+    "enabled": true,
+    "document_format": "json",
+    "storage_policy": "compressed",
+    "db_dir": "artifacts/colgranule_remaining_treedb-clickhouse-json",
+    "rows": 1000000,
+    "raw_document_bytes": 339735546,
+    "load_seconds": 10.71054175,
+    "flush_seconds": 0.00000225,
+    "checkpoint_seconds": 0.005373042,
+    "before_compact_bytes": 204388645,
+    "before_compact_files": 12,
+    "after_compact_bytes": 52170488,
+    "after_compact_files": 15,
+    "compaction_seconds": 0.263503167,
+    "fully_compacted": true,
+    "compacted_bytes_per_row": 52.170488,
+    "rewrite_duration_seconds": 2.5812239999999997,
+    "rewrite_records_copied": 1000000,
+    "rewrite_value_bytes": 339735546,
+    "rewrite_source_bytes": 189847262,
+    "stored_shape": "original JSON object converted to json with ClickHouse typed JSON paths removed"
+  },
+  "remaining_treedb_template_v1": {
+    "enabled": true,
+    "document_format": "template-v1",
+    "storage_policy": "compressed",
+    "db_dir": "artifacts/colgranule_remaining_treedb-clickhouse-template-v1",
+    "rows": 1000000,
+    "raw_document_bytes": 583083877,
+    "load_seconds": 16.346635167,
+    "flush_seconds": 0.000002,
+    "checkpoint_seconds": 0.008127125,
+    "before_compact_bytes": 211077380,
+    "before_compact_files": 12,
+    "after_compact_bytes": 49830135,
+    "after_compact_files": 15,
+    "compaction_seconds": 0.261680166,
+    "fully_compacted": true,
+    "compacted_bytes_per_row": 49.830135,
+    "rewrite_duration_seconds": 2.724573,
+    "rewrite_records_copied": 1000471,
+    "rewrite_value_bytes": 259230751,
+    "rewrite_source_bytes": 196774129,
+    "stored_shape": "original JSON object converted to template-v1 with ClickHouse typed JSON paths removed"
+  },
+  "conservative_remaining_treedb_bson": {
+    "enabled": true,
+    "document_format": "bson",
+    "storage_policy": "compressed",
+    "db_dir": "artifacts/colgranule_remaining_treedb-conservative-bson",
+    "rows": 1000000,
+    "raw_document_bytes": 474461494,
+    "load_seconds": 8.318509917,
+    "flush_seconds": 0.958310791,
+    "checkpoint_seconds": 0.014027417,
+    "before_compact_bytes": 251114357,
+    "before_compact_files": 12,
+    "after_compact_bytes": 56830020,
+    "after_compact_files": 15,
+    "compaction_seconds": 0.278716708,
+    "fully_compacted": true,
+    "compacted_bytes_per_row": 56.83002,
+    "rewrite_duration_seconds": 2.676045833,
+    "rewrite_records_copied": 1000000,
+    "rewrite_value_bytes": 474461494,
+    "rewrite_source_bytes": 236599318,
+    "stored_shape": "original JSON object converted to bson with only top-level time_us removed"
+  },
+  "conservative_remaining_treedb_json": {
+    "enabled": true,
+    "document_format": "json",
+    "storage_policy": "compressed",
+    "db_dir": "artifacts/colgranule_remaining_treedb-conservative-json",
+    "rows": 1000000,
+    "raw_document_bytes": 452778277,
+    "load_seconds": 7.237409125,
+    "flush_seconds": 0.000002458,
+    "checkpoint_seconds": 0.01229275,
+    "before_compact_bytes": 240990990,
+    "before_compact_files": 12,
+    "after_compact_bytes": 54941263,
+    "after_compact_files": 15,
+    "compaction_seconds": 0.276657458,
+    "fully_compacted": true,
+    "compacted_bytes_per_row": 54.941263,
+    "rewrite_duration_seconds": 2.23182975,
+    "rewrite_records_copied": 1000000,
+    "rewrite_value_bytes": 452778277,
+    "rewrite_source_bytes": 226357173,
+    "stored_shape": "original JSON object converted to json with only top-level time_us removed"
+  },
+  "conservative_remaining_treedb_template_v1": {
+    "enabled": true,
+    "document_format": "template-v1",
+    "storage_policy": "compressed",
+    "db_dir": "artifacts/colgranule_remaining_treedb-conservative-template-v1",
+    "rows": 1000000,
+    "raw_document_bytes": 684158576,
+    "load_seconds": 13.574857458,
+    "flush_seconds": 0.000003042,
+    "checkpoint_seconds": 0.0071365,
+    "before_compact_bytes": 229026542,
+    "before_compact_files": 12,
+    "after_compact_bytes": 50678982,
+    "after_compact_files": 15,
+    "compaction_seconds": 0.286167416,
+    "fully_compacted": true,
+    "compacted_bytes_per_row": 50.678982,
+    "rewrite_duration_seconds": 2.348455917,
+    "rewrite_records_copied": 1000471,
+    "rewrite_value_bytes": 329422732,
+    "rewrite_source_bytes": 214435592,
+    "stored_shape": "original JSON object converted to template-v1 with only top-level time_us removed"
+  },
+  "raw_treedb_json": {
+    "enabled": true,
+    "document_format": "raw_json_value",
+    "storage_policy": "raw_key_value",
+    "db_dir": "artifacts/colgranule_remaining_treedb-raw-json",
+    "rows": 1000000,
+    "raw_document_bytes": 479778277,
+    "load_seconds": 2.723452833,
+    "flush_seconds": 0,
+    "checkpoint_seconds": 0.26248925,
+    "before_compact_bytes": 226266965,
+    "before_compact_files": 13,
+    "after_compact_bytes": 268058973,
+    "after_compact_files": 17,
+    "compaction_seconds": 0.362239333,
+    "fully_compacted": true,
+    "compacted_bytes_per_row": 268.058973,
+    "rewrite_duration_seconds": 2.30362225,
+    "rewrite_records_copied": 1000000,
+    "rewrite_value_bytes": 479778277,
+    "rewrite_source_bytes": 201775473,
+    "stored_shape": "TreeDB key/value rows with documentID(row) as key and original JSON line bytes as value"
+  },
+  "query_timings": [
+    {
+      "query": "Q1",
+      "description": "Top event types",
+      "attempts": [
+        4296209,
+        4308250,
+        4315000,
+        4283542,
+        4301959
+      ],
+      "best": 4283542,
+      "result_rows": 15,
+      "result_digest": 3906528342281810551
+    },
+    {
+      "query": "Q2",
+      "description": "Top event types with unique users",
+      "attempts": [
+        40265292,
+        39667958,
+        39758833,
+        39485833,
+        38895208
+      ],
+      "best": 38895208,
+      "result_rows": 13,
+      "result_digest": 9430444926585105556
+    },
+    {
+      "query": "Q3",
+      "description": "Event counts by hour",
+      "attempts": [
+        6769458,
+        6641333,
+        6630792,
+        6639625,
+        6642916
+      ],
+      "best": 6630792,
+      "result_rows": 3,
+      "result_digest": 168717824705789449
+    },
+    {
+      "query": "Q4",
+      "description": "Top 3 post veterans",
+      "attempts": [
+        10332542,
+        9953208,
+        9935750,
+        9940916,
+        9868500
+      ],
+      "best": 9868500,
+      "result_rows": 3,
+      "result_digest": 10448264336791507833
+    },
+    {
+      "query": "Q5",
+      "description": "Top 3 users with longest activity",
+      "attempts": [
+        10205958,
+        10195458,
+        10150917,
+        10026584,
+        10070084
+      ],
+      "best": 10026584,
+      "result_rows": 3,
+      "result_digest": 8472777325008135056
+    }
+  ],
+  "column_summaries": [
+    {
+      "Column": "cid_bytes",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 1,
+      "RequestedCompression": 0,
+      "ActualCompressionMix": {
+        "0": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 8000000,
+      "StoredBytes": 8000000,
+      "EncodeDuration": 1895875,
+      "DecodeDuration": 2279667,
+      "RangeScanDuration": 1162750,
+      "RangeScanMatches": 0
+    },
+    {
+      "Column": "cid_bytes",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 1,
+      "RequestedCompression": 1,
+      "ActualCompressionMix": {
+        "1": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 8000000,
+      "StoredBytes": 503178,
+      "EncodeDuration": 2871083,
+      "DecodeDuration": 3193875,
+      "RangeScanDuration": 2603000,
+      "RangeScanMatches": 0
+    },
+    {
+      "Column": "cid_bytes",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 1,
+      "RequestedCompression": 2,
+      "ActualCompressionMix": {
+        "2": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 8000000,
+      "StoredBytes": 317971,
+      "EncodeDuration": 4285000,
+      "DecodeDuration": 2739125,
+      "RangeScanDuration": 2056292,
+      "RangeScanMatches": 0
+    },
+    {
+      "Column": "cid_bytes",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 2,
+      "RequestedCompression": 0,
+      "ActualCompressionMix": {
+        "0": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 1000000,
+      "StoredBytes": 1000000,
+      "EncodeDuration": 3559750,
+      "DecodeDuration": 2707667,
+      "RangeScanDuration": 2203667,
+      "RangeScanMatches": 0
+    },
+    {
+      "Column": "cid_bytes",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 2,
+      "RequestedCompression": 1,
+      "ActualCompressionMix": {
+        "1": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 1000000,
+      "StoredBytes": 127657,
+      "EncodeDuration": 4000667,
+      "DecodeDuration": 3376750,
+      "RangeScanDuration": 2860834,
+      "RangeScanMatches": 0
+    },
+    {
+      "Column": "cid_bytes",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 2,
+      "RequestedCompression": 2,
+      "ActualCompressionMix": {
+        "2": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 1000000,
+      "StoredBytes": 144683,
+      "EncodeDuration": 4273958,
+      "DecodeDuration": 3316750,
+      "RangeScanDuration": 2764041,
+      "RangeScanMatches": 0
+    },
+    {
+      "Column": "commit_collection_code",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 1,
+      "RequestedCompression": 0,
+      "ActualCompressionMix": {
+        "0": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 8000000,
+      "StoredBytes": 8000000,
+      "EncodeDuration": 1638583,
+      "DecodeDuration": 1778542,
+      "RangeScanDuration": 972375,
+      "RangeScanMatches": 14040
+    },
+    {
+      "Column": "commit_collection_code",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 1,
+      "RequestedCompression": 1,
+      "ActualCompressionMix": {
+        "1": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 8000000,
+      "StoredBytes": 1363781,
+      "EncodeDuration": 7485291,
+      "DecodeDuration": 5151625,
+      "RangeScanDuration": 3871083,
+      "RangeScanMatches": 14040
+    },
+    {
+      "Column": "commit_collection_code",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 1,
+      "RequestedCompression": 2,
+      "ActualCompressionMix": {
+        "2": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 8000000,
+      "StoredBytes": 1769494,
+      "EncodeDuration": 10517625,
+      "DecodeDuration": 4448250,
+      "RangeScanDuration": 3588334,
+      "RangeScanMatches": 14040
+    },
+    {
+      "Column": "commit_collection_code",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 2,
+      "RequestedCompression": 0,
+      "ActualCompressionMix": {
+        "0": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 1000000,
+      "StoredBytes": 1000000,
+      "EncodeDuration": 3441250,
+      "DecodeDuration": 2724417,
+      "RangeScanDuration": 2084459,
+      "RangeScanMatches": 14040
+    },
+    {
+      "Column": "commit_collection_code",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 2,
+      "RequestedCompression": 1,
+      "ActualCompressionMix": {
+        "1": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 1000000,
+      "StoredBytes": 537086,
+      "EncodeDuration": 5453500,
+      "DecodeDuration": 4603459,
+      "RangeScanDuration": 2862333,
+      "RangeScanMatches": 14040
+    },
+    {
+      "Column": "commit_collection_code",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 2,
+      "RequestedCompression": 2,
+      "ActualCompressionMix": {
+        "2": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 1000000,
+      "StoredBytes": 613390,
+      "EncodeDuration": 5926875,
+      "DecodeDuration": 4690792,
+      "RangeScanDuration": 2875833,
+      "RangeScanMatches": 14040
+    },
+    {
+      "Column": "commit_operation_code",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 1,
+      "RequestedCompression": 0,
+      "ActualCompressionMix": {
+        "0": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 8000000,
+      "StoredBytes": 8000000,
+      "EncodeDuration": 1653542,
+      "DecodeDuration": 1792084,
+      "RangeScanDuration": 1104542,
+      "RangeScanMatches": 5328
+    },
+    {
+      "Column": "commit_operation_code",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 1,
+      "RequestedCompression": 1,
+      "ActualCompressionMix": {
+        "1": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 8000000,
+      "StoredBytes": 483057,
+      "EncodeDuration": 2768375,
+      "DecodeDuration": 2681500,
+      "RangeScanDuration": 2098666,
+      "RangeScanMatches": 5328
+    },
+    {
+      "Column": "commit_operation_code",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 1,
+      "RequestedCompression": 2,
+      "ActualCompressionMix": {
+        "2": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 8000000,
+      "StoredBytes": 301424,
+      "EncodeDuration": 3551083,
+      "DecodeDuration": 3034542,
+      "RangeScanDuration": 2034458,
+      "RangeScanMatches": 5328
+    },
+    {
+      "Column": "commit_operation_code",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 2,
+      "RequestedCompression": 0,
+      "ActualCompressionMix": {
+        "0": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 1000000,
+      "StoredBytes": 1000000,
+      "EncodeDuration": 3386042,
+      "DecodeDuration": 2828667,
+      "RangeScanDuration": 2269000,
+      "RangeScanMatches": 5328
+    },
+    {
+      "Column": "commit_operation_code",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 2,
+      "RequestedCompression": 1,
+      "ActualCompressionMix": {
+        "1": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 1000000,
+      "StoredBytes": 148297,
+      "EncodeDuration": 4137791,
+      "DecodeDuration": 3203834,
+      "RangeScanDuration": 2737958,
+      "RangeScanMatches": 5328
+    },
+    {
+      "Column": "commit_operation_code",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 2,
+      "RequestedCompression": 2,
+      "ActualCompressionMix": {
+        "2": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 1000000,
+      "StoredBytes": 168739,
+      "EncodeDuration": 4422666,
+      "DecodeDuration": 3266417,
+      "RangeScanDuration": 2816292,
+      "RangeScanMatches": 5328
+    },
+    {
+      "Column": "commit_rev_bytes",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 1,
+      "RequestedCompression": 0,
+      "ActualCompressionMix": {
+        "0": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 8000000,
+      "StoredBytes": 8000000,
+      "EncodeDuration": 1632208,
+      "DecodeDuration": 2600417,
+      "RangeScanDuration": 924291,
+      "RangeScanMatches": 0
+    },
+    {
+      "Column": "commit_rev_bytes",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 1,
+      "RequestedCompression": 1,
+      "ActualCompressionMix": {
+        "1": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 8000000,
+      "StoredBytes": 393838,
+      "EncodeDuration": 2044292,
+      "DecodeDuration": 2835917,
+      "RangeScanDuration": 1857250,
+      "RangeScanMatches": 0
+    },
+    {
+      "Column": "commit_rev_bytes",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 1,
+      "RequestedCompression": 2,
+      "ActualCompressionMix": {
+        "2": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 8000000,
+      "StoredBytes": 75050,
+      "EncodeDuration": 2639666,
+      "DecodeDuration": 2246625,
+      "RangeScanDuration": 1507625,
+      "RangeScanMatches": 0
+    },
+    {
+      "Column": "commit_rev_bytes",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 2,
+      "RequestedCompression": 0,
+      "ActualCompressionMix": {
+        "0": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 1000000,
+      "StoredBytes": 1000000,
+      "EncodeDuration": 3538083,
+      "DecodeDuration": 3140625,
+      "RangeScanDuration": 2152125,
+      "RangeScanMatches": 0
+    },
+    {
+      "Column": "commit_rev_bytes",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 2,
+      "RequestedCompression": 1,
+      "ActualCompressionMix": {
+        "1": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 1000000,
+      "StoredBytes": 58457,
+      "EncodeDuration": 3518459,
+      "DecodeDuration": 2803584,
+      "RangeScanDuration": 2256542,
+      "RangeScanMatches": 0
+    },
+    {
+      "Column": "commit_rev_bytes",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 2,
+      "RequestedCompression": 2,
+      "ActualCompressionMix": {
+        "2": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 1000000,
+      "StoredBytes": 31257,
+      "EncodeDuration": 3620208,
+      "DecodeDuration": 3158917,
+      "RangeScanDuration": 2575625,
+      "RangeScanMatches": 0
+    },
+    {
+      "Column": "commit_rkey_bytes",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 1,
+      "RequestedCompression": 0,
+      "ActualCompressionMix": {
+        "0": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 8000000,
+      "StoredBytes": 8000000,
+      "EncodeDuration": 1693500,
+      "DecodeDuration": 1689250,
+      "RangeScanDuration": 998917,
+      "RangeScanMatches": 0
+    },
+    {
+      "Column": "commit_rkey_bytes",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 1,
+      "RequestedCompression": 1,
+      "ActualCompressionMix": {
+        "1": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 8000000,
+      "StoredBytes": 420284,
+      "EncodeDuration": 2315000,
+      "DecodeDuration": 3044834,
+      "RangeScanDuration": 1834875,
+      "RangeScanMatches": 0
+    },
+    {
+      "Column": "commit_rkey_bytes",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 1,
+      "RequestedCompression": 2,
+      "ActualCompressionMix": {
+        "2": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 8000000,
+      "StoredBytes": 147447,
+      "EncodeDuration": 2950709,
+      "DecodeDuration": 2508625,
+      "RangeScanDuration": 1727458,
+      "RangeScanMatches": 0
+    },
+    {
+      "Column": "commit_rkey_bytes",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 2,
+      "RequestedCompression": 0,
+      "ActualCompressionMix": {
+        "0": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 1000000,
+      "StoredBytes": 1000000,
+      "EncodeDuration": 3409583,
+      "DecodeDuration": 2726666,
+      "RangeScanDuration": 2100917,
+      "RangeScanMatches": 0
+    },
+    {
+      "Column": "commit_rkey_bytes",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 2,
+      "RequestedCompression": 1,
+      "ActualCompressionMix": {
+        "1": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 1000000,
+      "StoredBytes": 86947,
+      "EncodeDuration": 3715250,
+      "DecodeDuration": 3522334,
+      "RangeScanDuration": 2499250,
+      "RangeScanMatches": 0
+    },
+    {
+      "Column": "commit_rkey_bytes",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 2,
+      "RequestedCompression": 2,
+      "ActualCompressionMix": {
+        "2": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 1000000,
+      "StoredBytes": 86179,
+      "EncodeDuration": 3916625,
+      "DecodeDuration": 3182417,
+      "RangeScanDuration": 2630500,
+      "RangeScanMatches": 0
+    },
+    {
+      "Column": "did_bytes",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 1,
+      "RequestedCompression": 0,
+      "ActualCompressionMix": {
+        "0": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 8000000,
+      "StoredBytes": 8000000,
+      "EncodeDuration": 1628959,
+      "DecodeDuration": 1779541,
+      "RangeScanDuration": 24792,
+      "RangeScanMatches": 0
+    },
+    {
+      "Column": "did_bytes",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 1,
+      "RequestedCompression": 1,
+      "ActualCompressionMix": {
+        "1": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 8000000,
+      "StoredBytes": 375999,
+      "EncodeDuration": 1849209,
+      "DecodeDuration": 2968084,
+      "RangeScanDuration": 40542,
+      "RangeScanMatches": 0
+    },
+    {
+      "Column": "did_bytes",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 1,
+      "RequestedCompression": 2,
+      "ActualCompressionMix": {
+        "2": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 8000000,
+      "StoredBytes": 34582,
+      "EncodeDuration": 2534458,
+      "DecodeDuration": 2581416,
+      "RangeScanDuration": 35208,
+      "RangeScanMatches": 0
+    },
+    {
+      "Column": "did_bytes",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 2,
+      "RequestedCompression": 0,
+      "ActualCompressionMix": {
+        "0": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 1000000,
+      "StoredBytes": 1000000,
+      "EncodeDuration": 3499750,
+      "DecodeDuration": 3032792,
+      "RangeScanDuration": 42375,
+      "RangeScanMatches": 0
+    },
+    {
+      "Column": "did_bytes",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 2,
+      "RequestedCompression": 1,
+      "ActualCompressionMix": {
+        "1": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 1000000,
+      "StoredBytes": 47502,
+      "EncodeDuration": 3512917,
+      "DecodeDuration": 2972125,
+      "RangeScanDuration": 44750,
+      "RangeScanMatches": 0
+    },
+    {
+      "Column": "did_bytes",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 2,
+      "RequestedCompression": 2,
+      "ActualCompressionMix": {
+        "2": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 1000000,
+      "StoredBytes": 6749,
+      "EncodeDuration": 3483791,
+      "DecodeDuration": 4307208,
+      "RangeScanDuration": 55167,
+      "RangeScanMatches": 0
+    },
+    {
+      "Column": "did_code",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 1,
+      "RequestedCompression": 0,
+      "ActualCompressionMix": {
+        "0": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 8000000,
+      "StoredBytes": 8000000,
+      "EncodeDuration": 1611042,
+      "DecodeDuration": 1682416,
+      "RangeScanDuration": 1645042,
+      "RangeScanMatches": 13681
+    },
+    {
+      "Column": "did_code",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 1,
+      "RequestedCompression": 1,
+      "ActualCompressionMix": {
+        "1": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 8000000,
+      "StoredBytes": 3815890,
+      "EncodeDuration": 10440125,
+      "DecodeDuration": 6736167,
+      "RangeScanDuration": 4765833,
+      "RangeScanMatches": 13681
+    },
+    {
+      "Column": "did_code",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 1,
+      "RequestedCompression": 2,
+      "ActualCompressionMix": {
+        "2": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 8000000,
+      "StoredBytes": 3505416,
+      "EncodeDuration": 15016958,
+      "DecodeDuration": 5822500,
+      "RangeScanDuration": 4306500,
+      "RangeScanMatches": 13681
+    },
+    {
+      "Column": "did_code",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 2,
+      "RequestedCompression": 0,
+      "ActualCompressionMix": {
+        "0": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 2401719,
+      "StoredBytes": 2401719,
+      "EncodeDuration": 5850417,
+      "DecodeDuration": 5198625,
+      "RangeScanDuration": 3811334,
+      "RangeScanMatches": 13681
+    },
+    {
+      "Column": "did_code",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 2,
+      "RequestedCompression": 1,
+      "ActualCompressionMix": {
+        "1": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 2401719,
+      "StoredBytes": 2343888,
+      "EncodeDuration": 6321416,
+      "DecodeDuration": 5686917,
+      "RangeScanDuration": 4034875,
+      "RangeScanMatches": 13681
+    },
+    {
+      "Column": "did_code",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 2,
+      "RequestedCompression": 2,
+      "ActualCompressionMix": {
+        "2": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 2401719,
+      "StoredBytes": 2321001,
+      "EncodeDuration": 8605458,
+      "DecodeDuration": 5560083,
+      "RangeScanDuration": 4025167,
+      "RangeScanMatches": 13681
+    },
+    {
+      "Column": "kind_code",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 1,
+      "RequestedCompression": 0,
+      "ActualCompressionMix": {
+        "0": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 8000000,
+      "StoredBytes": 8000000,
+      "EncodeDuration": 1699250,
+      "DecodeDuration": 1821708,
+      "RangeScanDuration": 912958,
+      "RangeScanMatches": 994672
+    },
+    {
+      "Column": "kind_code",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 1,
+      "RequestedCompression": 1,
+      "ActualCompressionMix": {
+        "1": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 8000000,
+      "StoredBytes": 388956,
+      "EncodeDuration": 2063208,
+      "DecodeDuration": 3352500,
+      "RangeScanDuration": 2121250,
+      "RangeScanMatches": 994672
+    },
+    {
+      "Column": "kind_code",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 1,
+      "RequestedCompression": 2,
+      "ActualCompressionMix": {
+        "2": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 8000000,
+      "StoredBytes": 66507,
+      "EncodeDuration": 2667083,
+      "DecodeDuration": 2277875,
+      "RangeScanDuration": 1487834,
+      "RangeScanMatches": 994672
+    },
+    {
+      "Column": "kind_code",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 2,
+      "RequestedCompression": 0,
+      "ActualCompressionMix": {
+        "0": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 1000000,
+      "StoredBytes": 1000000,
+      "EncodeDuration": 3388125,
+      "DecodeDuration": 2704000,
+      "RangeScanDuration": 2039375,
+      "RangeScanMatches": 994672
+    },
+    {
+      "Column": "kind_code",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 2,
+      "RequestedCompression": 1,
+      "ActualCompressionMix": {
+        "1": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 1000000,
+      "StoredBytes": 58567,
+      "EncodeDuration": 3532208,
+      "DecodeDuration": 3120208,
+      "RangeScanDuration": 2288583,
+      "RangeScanMatches": 994672
+    },
+    {
+      "Column": "kind_code",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 2,
+      "RequestedCompression": 2,
+      "ActualCompressionMix": {
+        "2": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 1000000,
+      "StoredBytes": 31312,
+      "EncodeDuration": 3637500,
+      "DecodeDuration": 3584250,
+      "RangeScanDuration": 2528625,
+      "RangeScanMatches": 994672
+    },
+    {
+      "Column": "line_bytes",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 1,
+      "RequestedCompression": 0,
+      "ActualCompressionMix": {
+        "0": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 8000000,
+      "StoredBytes": 8000000,
+      "EncodeDuration": 1598959,
+      "DecodeDuration": 1665667,
+      "RangeScanDuration": 69583,
+      "RangeScanMatches": 0
+    },
+    {
+      "Column": "line_bytes",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 1,
+      "RequestedCompression": 1,
+      "ActualCompressionMix": {
+        "1": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 8000000,
+      "StoredBytes": 1567568,
+      "EncodeDuration": 8289208,
+      "DecodeDuration": 4968125,
+      "RangeScanDuration": 341209,
+      "RangeScanMatches": 0
+    },
+    {
+      "Column": "line_bytes",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 1,
+      "RequestedCompression": 2,
+      "ActualCompressionMix": {
+        "2": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 8000000,
+      "StoredBytes": 1918019,
+      "EncodeDuration": 11222125,
+      "DecodeDuration": 4940833,
+      "RangeScanDuration": 319042,
+      "RangeScanMatches": 0
+    },
+    {
+      "Column": "line_bytes",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 2,
+      "RequestedCompression": 0,
+      "ActualCompressionMix": {
+        "0": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 1495892,
+      "StoredBytes": 1495892,
+      "EncodeDuration": 6331750,
+      "DecodeDuration": 5126625,
+      "RangeScanDuration": 361750,
+      "RangeScanMatches": 0
+    },
+    {
+      "Column": "line_bytes",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 2,
+      "RequestedCompression": 1,
+      "ActualCompressionMix": {
+        "1": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 1495892,
+      "StoredBytes": 952538,
+      "EncodeDuration": 9168083,
+      "DecodeDuration": 6494625,
+      "RangeScanDuration": 459709,
+      "RangeScanMatches": 0
+    },
+    {
+      "Column": "line_bytes",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 2,
+      "RequestedCompression": 2,
+      "ActualCompressionMix": {
+        "2": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 1495892,
+      "StoredBytes": 1008386,
+      "EncodeDuration": 9771792,
+      "DecodeDuration": 6178041,
+      "RangeScanDuration": 444417,
+      "RangeScanMatches": 0
+    },
+    {
+      "Column": "record_created_at_unix_ms",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 1,
+      "RequestedCompression": 0,
+      "ActualCompressionMix": {
+        "0": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 8000000,
+      "StoredBytes": 8000000,
+      "EncodeDuration": 1671666,
+      "DecodeDuration": 1973375,
+      "RangeScanDuration": 1188625,
+      "RangeScanMatches": 0
+    },
+    {
+      "Column": "record_created_at_unix_ms",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 1,
+      "RequestedCompression": 1,
+      "ActualCompressionMix": {
+        "1": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 8000000,
+      "StoredBytes": 4078138,
+      "EncodeDuration": 11624750,
+      "DecodeDuration": 6453417,
+      "RangeScanDuration": 5872542,
+      "RangeScanMatches": 0
+    },
+    {
+      "Column": "record_created_at_unix_ms",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 1,
+      "RequestedCompression": 2,
+      "ActualCompressionMix": {
+        "2": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 8000000,
+      "StoredBytes": 3850216,
+      "EncodeDuration": 16528000,
+      "DecodeDuration": 6421291,
+      "RangeScanDuration": 5701958,
+      "RangeScanMatches": 0
+    },
+    {
+      "Column": "record_created_at_unix_ms",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 2,
+      "RequestedCompression": 0,
+      "ActualCompressionMix": {
+        "0": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 3007639,
+      "StoredBytes": 3007639,
+      "EncodeDuration": 7005208,
+      "DecodeDuration": 6479958,
+      "RangeScanDuration": 5844167,
+      "RangeScanMatches": 0
+    },
+    {
+      "Column": "record_created_at_unix_ms",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 2,
+      "RequestedCompression": 1,
+      "ActualCompressionMix": {
+        "1": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 3007639,
+      "StoredBytes": 2968163,
+      "EncodeDuration": 7750959,
+      "DecodeDuration": 6644875,
+      "RangeScanDuration": 6105333,
+      "RangeScanMatches": 0
+    },
+    {
+      "Column": "record_created_at_unix_ms",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 2,
+      "RequestedCompression": 2,
+      "ActualCompressionMix": {
+        "0": 8,
+        "2": 115
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 3007639,
+      "StoredBytes": 2973046,
+      "EncodeDuration": 9129084,
+      "DecodeDuration": 6693209,
+      "RangeScanDuration": 6027625,
+      "RangeScanMatches": 0
+    },
+    {
+      "Column": "record_has_reply",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 1,
+      "RequestedCompression": 0,
+      "ActualCompressionMix": {
+        "0": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 8000000,
+      "StoredBytes": 8000000,
+      "EncodeDuration": 1671792,
+      "DecodeDuration": 1958709,
+      "RangeScanDuration": 1180500,
+      "RangeScanMatches": 954566
+    },
+    {
+      "Column": "record_has_reply",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 1,
+      "RequestedCompression": 1,
+      "ActualCompressionMix": {
+        "1": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 8000000,
+      "StoredBytes": 462747,
+      "EncodeDuration": 2602625,
+      "DecodeDuration": 3043209,
+      "RangeScanDuration": 2454916,
+      "RangeScanMatches": 954566
+    },
+    {
+      "Column": "record_has_reply",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 1,
+      "RequestedCompression": 2,
+      "ActualCompressionMix": {
+        "2": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 8000000,
+      "StoredBytes": 261670,
+      "EncodeDuration": 3440458,
+      "DecodeDuration": 5242958,
+      "RangeScanDuration": 4514667,
+      "RangeScanMatches": 954566
+    },
+    {
+      "Column": "record_has_reply",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 2,
+      "RequestedCompression": 0,
+      "ActualCompressionMix": {
+        "0": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 1000000,
+      "StoredBytes": 1000000,
+      "EncodeDuration": 3432709,
+      "DecodeDuration": 3016792,
+      "RangeScanDuration": 2233458,
+      "RangeScanMatches": 954566
+    },
+    {
+      "Column": "record_has_reply",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 2,
+      "RequestedCompression": 1,
+      "ActualCompressionMix": {
+        "1": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 1000000,
+      "StoredBytes": 144988,
+      "EncodeDuration": 4006750,
+      "DecodeDuration": 3096958,
+      "RangeScanDuration": 2762208,
+      "RangeScanMatches": 954566
+    },
+    {
+      "Column": "record_has_reply",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 2,
+      "RequestedCompression": 2,
+      "ActualCompressionMix": {
+        "2": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 1000000,
+      "StoredBytes": 167973,
+      "EncodeDuration": 4358584,
+      "DecodeDuration": 3316625,
+      "RangeScanDuration": 2836667,
+      "RangeScanMatches": 954566
+    },
+    {
+      "Column": "record_has_subject",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 1,
+      "RequestedCompression": 0,
+      "ActualCompressionMix": {
+        "0": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 8000000,
+      "StoredBytes": 8000000,
+      "EncodeDuration": 1752375,
+      "DecodeDuration": 2051041,
+      "RangeScanDuration": 1691833,
+      "RangeScanMatches": 138240
+    },
+    {
+      "Column": "record_has_subject",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 1,
+      "RequestedCompression": 1,
+      "ActualCompressionMix": {
+        "1": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 8000000,
+      "StoredBytes": 800289,
+      "EncodeDuration": 4370208,
+      "DecodeDuration": 3675500,
+      "RangeScanDuration": 3633042,
+      "RangeScanMatches": 138240
+    },
+    {
+      "Column": "record_has_subject",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 1,
+      "RequestedCompression": 2,
+      "ActualCompressionMix": {
+        "2": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 8000000,
+      "StoredBytes": 892686,
+      "EncodeDuration": 10331584,
+      "DecodeDuration": 4646041,
+      "RangeScanDuration": 4026666,
+      "RangeScanMatches": 138240
+    },
+    {
+      "Column": "record_has_subject",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 2,
+      "RequestedCompression": 0,
+      "ActualCompressionMix": {
+        "0": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 1000000,
+      "StoredBytes": 1000000,
+      "EncodeDuration": 3555416,
+      "DecodeDuration": 3095084,
+      "RangeScanDuration": 2729292,
+      "RangeScanMatches": 138240
+    },
+    {
+      "Column": "record_has_subject",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 2,
+      "RequestedCompression": 1,
+      "ActualCompressionMix": {
+        "1": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 1000000,
+      "StoredBytes": 261203,
+      "EncodeDuration": 4542916,
+      "DecodeDuration": 3445250,
+      "RangeScanDuration": 3562084,
+      "RangeScanMatches": 138240
+    },
+    {
+      "Column": "record_has_subject",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 2,
+      "RequestedCompression": 2,
+      "ActualCompressionMix": {
+        "2": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 1000000,
+      "StoredBytes": 300622,
+      "EncodeDuration": 5147750,
+      "DecodeDuration": 3521917,
+      "RangeScanDuration": 3494625,
+      "RangeScanMatches": 138240
+    },
+    {
+      "Column": "record_langs_count",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 1,
+      "RequestedCompression": 0,
+      "ActualCompressionMix": {
+        "0": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 8000000,
+      "StoredBytes": 8000000,
+      "EncodeDuration": 1815709,
+      "DecodeDuration": 2493042,
+      "RangeScanDuration": 1256084,
+      "RangeScanMatches": 77066
+    },
+    {
+      "Column": "record_langs_count",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 1,
+      "RequestedCompression": 1,
+      "ActualCompressionMix": {
+        "1": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 8000000,
+      "StoredBytes": 530708,
+      "EncodeDuration": 3065208,
+      "DecodeDuration": 3225333,
+      "RangeScanDuration": 2783041,
+      "RangeScanMatches": 77066
+    },
+    {
+      "Column": "record_langs_count",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 1,
+      "RequestedCompression": 2,
+      "ActualCompressionMix": {
+        "2": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 8000000,
+      "StoredBytes": 409312,
+      "EncodeDuration": 4158500,
+      "DecodeDuration": 5997083,
+      "RangeScanDuration": 5561000,
+      "RangeScanMatches": 77066
+    },
+    {
+      "Column": "record_langs_count",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 2,
+      "RequestedCompression": 0,
+      "ActualCompressionMix": {
+        "0": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 1000000,
+      "StoredBytes": 1000000,
+      "EncodeDuration": 3397083,
+      "DecodeDuration": 2659542,
+      "RangeScanDuration": 2383667,
+      "RangeScanMatches": 77066
+    },
+    {
+      "Column": "record_langs_count",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 2,
+      "RequestedCompression": 1,
+      "ActualCompressionMix": {
+        "1": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 1000000,
+      "StoredBytes": 192851,
+      "EncodeDuration": 4254417,
+      "DecodeDuration": 3416750,
+      "RangeScanDuration": 3009125,
+      "RangeScanMatches": 77066
+    },
+    {
+      "Column": "record_langs_count",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 2,
+      "RequestedCompression": 2,
+      "ActualCompressionMix": {
+        "2": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 1000000,
+      "StoredBytes": 223469,
+      "EncodeDuration": 4653834,
+      "DecodeDuration": 3575292,
+      "RangeScanDuration": 3051334,
+      "RangeScanMatches": 77066
+    },
+    {
+      "Column": "record_subject_string_bytes",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 1,
+      "RequestedCompression": 0,
+      "ActualCompressionMix": {
+        "0": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 8000000,
+      "StoredBytes": 8000000,
+      "EncodeDuration": 2618834,
+      "DecodeDuration": 2065583,
+      "RangeScanDuration": 746292,
+      "RangeScanMatches": 0
+    },
+    {
+      "Column": "record_subject_string_bytes",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 1,
+      "RequestedCompression": 1,
+      "ActualCompressionMix": {
+        "1": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 8000000,
+      "StoredBytes": 916427,
+      "EncodeDuration": 5426500,
+      "DecodeDuration": 4414042,
+      "RangeScanDuration": 3516375,
+      "RangeScanMatches": 0
+    },
+    {
+      "Column": "record_subject_string_bytes",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 1,
+      "RequestedCompression": 2,
+      "ActualCompressionMix": {
+        "2": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 8000000,
+      "StoredBytes": 1105301,
+      "EncodeDuration": 7978125,
+      "DecodeDuration": 5866208,
+      "RangeScanDuration": 4556250,
+      "RangeScanMatches": 0
+    },
+    {
+      "Column": "record_subject_string_bytes",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 2,
+      "RequestedCompression": 0,
+      "ActualCompressionMix": {
+        "0": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 1001231,
+      "StoredBytes": 1001231,
+      "EncodeDuration": 3410542,
+      "DecodeDuration": 2693666,
+      "RangeScanDuration": 1902042,
+      "RangeScanMatches": 0
+    },
+    {
+      "Column": "record_subject_string_bytes",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 2,
+      "RequestedCompression": 1,
+      "ActualCompressionMix": {
+        "1": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 1001231,
+      "StoredBytes": 347079,
+      "EncodeDuration": 4792250,
+      "DecodeDuration": 3325625,
+      "RangeScanDuration": 2511542,
+      "RangeScanMatches": 0
+    },
+    {
+      "Column": "record_subject_string_bytes",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 2,
+      "RequestedCompression": 2,
+      "ActualCompressionMix": {
+        "2": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 1001231,
+      "StoredBytes": 387822,
+      "EncodeDuration": 5677833,
+      "DecodeDuration": 3607458,
+      "RangeScanDuration": 2722792,
+      "RangeScanMatches": 0
+    },
+    {
+      "Column": "record_text_bytes",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 1,
+      "RequestedCompression": 0,
+      "ActualCompressionMix": {
+        "0": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 8000000,
+      "StoredBytes": 8000000,
+      "EncodeDuration": 2782166,
+      "DecodeDuration": 2284292,
+      "RangeScanDuration": 569750,
+      "RangeScanMatches": 25
+    },
+    {
+      "Column": "record_text_bytes",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 1,
+      "RequestedCompression": 1,
+      "ActualCompressionMix": {
+        "1": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 8000000,
+      "StoredBytes": 627621,
+      "EncodeDuration": 3892334,
+      "DecodeDuration": 3764917,
+      "RangeScanDuration": 2021750,
+      "RangeScanMatches": 25
+    },
+    {
+      "Column": "record_text_bytes",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 1,
+      "RequestedCompression": 2,
+      "ActualCompressionMix": {
+        "2": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 8000000,
+      "StoredBytes": 492980,
+      "EncodeDuration": 4930250,
+      "DecodeDuration": 7588042,
+      "RangeScanDuration": 4077708,
+      "RangeScanMatches": 25
+    },
+    {
+      "Column": "record_text_bytes",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 2,
+      "RequestedCompression": 0,
+      "ActualCompressionMix": {
+        "0": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 1083152,
+      "StoredBytes": 1083152,
+      "EncodeDuration": 3878166,
+      "DecodeDuration": 3245167,
+      "RangeScanDuration": 3453334,
+      "RangeScanMatches": 25
+    },
+    {
+      "Column": "record_text_bytes",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 2,
+      "RequestedCompression": 1,
+      "ActualCompressionMix": {
+        "1": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 1083152,
+      "StoredBytes": 372759,
+      "EncodeDuration": 5417000,
+      "DecodeDuration": 3901375,
+      "RangeScanDuration": 2299583,
+      "RangeScanMatches": 25
+    },
+    {
+      "Column": "record_text_bytes",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 2,
+      "RequestedCompression": 2,
+      "ActualCompressionMix": {
+        "2": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 1083152,
+      "StoredBytes": 401782,
+      "EncodeDuration": 6562792,
+      "DecodeDuration": 3954375,
+      "RangeScanDuration": 2306750,
+      "RangeScanMatches": 25
+    },
+    {
+      "Column": "record_type_code",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 1,
+      "RequestedCompression": 0,
+      "ActualCompressionMix": {
+        "0": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 8000000,
+      "StoredBytes": 8000000,
+      "EncodeDuration": 2511208,
+      "DecodeDuration": 1919916,
+      "RangeScanDuration": 1462667,
+      "RangeScanMatches": 13838
+    },
+    {
+      "Column": "record_type_code",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 1,
+      "RequestedCompression": 1,
+      "ActualCompressionMix": {
+        "1": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 8000000,
+      "StoredBytes": 1389487,
+      "EncodeDuration": 8182542,
+      "DecodeDuration": 4573417,
+      "RangeScanDuration": 4196417,
+      "RangeScanMatches": 13838
+    },
+    {
+      "Column": "record_type_code",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 1,
+      "RequestedCompression": 2,
+      "ActualCompressionMix": {
+        "2": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 8000000,
+      "StoredBytes": 1811941,
+      "EncodeDuration": 10638250,
+      "DecodeDuration": 4617666,
+      "RangeScanDuration": 3510583,
+      "RangeScanMatches": 13838
+    },
+    {
+      "Column": "record_type_code",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 2,
+      "RequestedCompression": 0,
+      "ActualCompressionMix": {
+        "0": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 1000000,
+      "StoredBytes": 1000000,
+      "EncodeDuration": 3467667,
+      "DecodeDuration": 2833125,
+      "RangeScanDuration": 2133250,
+      "RangeScanMatches": 13838
+    },
+    {
+      "Column": "record_type_code",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 2,
+      "RequestedCompression": 1,
+      "ActualCompressionMix": {
+        "1": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 1000000,
+      "StoredBytes": 571548,
+      "EncodeDuration": 5870417,
+      "DecodeDuration": 3603042,
+      "RangeScanDuration": 2895542,
+      "RangeScanMatches": 13838
+    },
+    {
+      "Column": "record_type_code",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 2,
+      "RequestedCompression": 2,
+      "ActualCompressionMix": {
+        "2": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 1000000,
+      "StoredBytes": 658413,
+      "EncodeDuration": 5828041,
+      "DecodeDuration": 3456917,
+      "RangeScanDuration": 2751709,
+      "RangeScanMatches": 13838
+    },
+    {
+      "Column": "row_index",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 1,
+      "RequestedCompression": 0,
+      "ActualCompressionMix": {
+        "0": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 8000000,
+      "StoredBytes": 8000000,
+      "EncodeDuration": 1693333,
+      "DecodeDuration": 2906417,
+      "RangeScanDuration": 30958,
+      "RangeScanMatches": 15625
+    },
+    {
+      "Column": "row_index",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 1,
+      "RequestedCompression": 1,
+      "ActualCompressionMix": {
+        "1": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 8000000,
+      "StoredBytes": 4002443,
+      "EncodeDuration": 7794000,
+      "DecodeDuration": 4367041,
+      "RangeScanDuration": 68167,
+      "RangeScanMatches": 15625
+    },
+    {
+      "Column": "row_index",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 1,
+      "RequestedCompression": 2,
+      "ActualCompressionMix": {
+        "2": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 8000000,
+      "StoredBytes": 4003725,
+      "EncodeDuration": 12174084,
+      "DecodeDuration": 5245250,
+      "RangeScanDuration": 84166,
+      "RangeScanMatches": 15625
+    },
+    {
+      "Column": "row_index",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 2,
+      "RequestedCompression": 0,
+      "ActualCompressionMix": {
+        "0": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 1000244,
+      "StoredBytes": 1000244,
+      "EncodeDuration": 3503125,
+      "DecodeDuration": 3625916,
+      "RangeScanDuration": 45042,
+      "RangeScanMatches": 15625
+    },
+    {
+      "Column": "row_index",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 2,
+      "RequestedCompression": 1,
+      "ActualCompressionMix": {
+        "1": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 1000244,
+      "StoredBytes": 47733,
+      "EncodeDuration": 3456750,
+      "DecodeDuration": 2839750,
+      "RangeScanDuration": 43584,
+      "RangeScanMatches": 15625
+    },
+    {
+      "Column": "row_index",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 2,
+      "RequestedCompression": 2,
+      "ActualCompressionMix": {
+        "2": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 1000244,
+      "StoredBytes": 6738,
+      "EncodeDuration": 3495417,
+      "DecodeDuration": 4041458,
+      "RangeScanDuration": 67625,
+      "RangeScanMatches": 15625
+    },
+    {
+      "Column": "time_us",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 1,
+      "RequestedCompression": 0,
+      "ActualCompressionMix": {
+        "0": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 8000000,
+      "StoredBytes": 8000000,
+      "EncodeDuration": 1690167,
+      "DecodeDuration": 1733666,
+      "RangeScanDuration": 34583,
+      "RangeScanMatches": 15022
+    },
+    {
+      "Column": "time_us",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 1,
+      "RequestedCompression": 1,
+      "ActualCompressionMix": {
+        "1": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 8000000,
+      "StoredBytes": 5005356,
+      "EncodeDuration": 11325625,
+      "DecodeDuration": 4301458,
+      "RangeScanDuration": 95417,
+      "RangeScanMatches": 15022
+    },
+    {
+      "Column": "time_us",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 1,
+      "RequestedCompression": 2,
+      "ActualCompressionMix": {
+        "2": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 8000000,
+      "StoredBytes": 5028110,
+      "EncodeDuration": 15764708,
+      "DecodeDuration": 5200583,
+      "RangeScanDuration": 112291,
+      "RangeScanMatches": 15022
+    },
+    {
+      "Column": "time_us",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 2,
+      "RequestedCompression": 0,
+      "ActualCompressionMix": {
+        "0": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 2007816,
+      "StoredBytes": 2007816,
+      "EncodeDuration": 3569500,
+      "DecodeDuration": 3342500,
+      "RangeScanDuration": 84375,
+      "RangeScanMatches": 15022
+    },
+    {
+      "Column": "time_us",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 2,
+      "RequestedCompression": 1,
+      "ActualCompressionMix": {
+        "1": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 2007816,
+      "StoredBytes": 2008563,
+      "EncodeDuration": 3862708,
+      "DecodeDuration": 3361042,
+      "RangeScanDuration": 78625,
+      "RangeScanMatches": 15022
+    },
+    {
+      "Column": "time_us",
+      "Rows": 1000000,
+      "Granules": 123,
+      "Encoding": 2,
+      "RequestedCompression": 2,
+      "ActualCompressionMix": {
+        "0": 123
+      },
+      "ValueBytes": 8000000,
+      "EncodedRawBytes": 2007816,
+      "StoredBytes": 2007816,
+      "EncodeDuration": 4010125,
+      "DecodeDuration": 3331292,
+      "RangeScanDuration": 71083,
+      "RangeScanMatches": 15022
+    }
+  ],
+  "best_column_storage": [
+    {
+      "column": "cid_bytes",
+      "encoding": 2,
+      "requested_compression": 1,
+      "stored_bytes": 127657,
+      "value_bytes": 8000000,
+      "ratio_vs_values": 0.015957125,
+      "actual_compression_mix": {
+        "1": 123
+      }
+    },
+    {
+      "column": "commit_collection_code",
+      "encoding": 2,
+      "requested_compression": 1,
+      "stored_bytes": 537086,
+      "value_bytes": 8000000,
+      "ratio_vs_values": 0.06713575,
+      "actual_compression_mix": {
+        "1": 123
+      }
+    },
+    {
+      "column": "commit_operation_code",
+      "encoding": 2,
+      "requested_compression": 1,
+      "stored_bytes": 148297,
+      "value_bytes": 8000000,
+      "ratio_vs_values": 0.018537125,
+      "actual_compression_mix": {
+        "1": 123
+      }
+    },
+    {
+      "column": "commit_rev_bytes",
+      "encoding": 2,
+      "requested_compression": 2,
+      "stored_bytes": 31257,
+      "value_bytes": 8000000,
+      "ratio_vs_values": 0.003907125,
+      "actual_compression_mix": {
+        "2": 123
+      }
+    },
+    {
+      "column": "commit_rkey_bytes",
+      "encoding": 2,
+      "requested_compression": 2,
+      "stored_bytes": 86179,
+      "value_bytes": 8000000,
+      "ratio_vs_values": 0.010772375,
+      "actual_compression_mix": {
+        "2": 123
+      }
+    },
+    {
+      "column": "did_bytes",
+      "encoding": 2,
+      "requested_compression": 2,
+      "stored_bytes": 6749,
+      "value_bytes": 8000000,
+      "ratio_vs_values": 0.000843625,
+      "actual_compression_mix": {
+        "2": 123
+      }
+    },
+    {
+      "column": "did_code",
+      "encoding": 2,
+      "requested_compression": 2,
+      "stored_bytes": 2321001,
+      "value_bytes": 8000000,
+      "ratio_vs_values": 0.290125125,
+      "actual_compression_mix": {
+        "2": 123
+      }
+    },
+    {
+      "column": "kind_code",
+      "encoding": 2,
+      "requested_compression": 2,
+      "stored_bytes": 31312,
+      "value_bytes": 8000000,
+      "ratio_vs_values": 0.003914,
+      "actual_compression_mix": {
+        "2": 123
+      }
+    },
+    {
+      "column": "line_bytes",
+      "encoding": 2,
+      "requested_compression": 1,
+      "stored_bytes": 952538,
+      "value_bytes": 8000000,
+      "ratio_vs_values": 0.11906725,
+      "actual_compression_mix": {
+        "1": 123
+      }
+    },
+    {
+      "column": "record_created_at_unix_ms",
+      "encoding": 2,
+      "requested_compression": 1,
+      "stored_bytes": 2968163,
+      "value_bytes": 8000000,
+      "ratio_vs_values": 0.371020375,
+      "actual_compression_mix": {
+        "1": 123
+      }
+    },
+    {
+      "column": "record_has_reply",
+      "encoding": 2,
+      "requested_compression": 1,
+      "stored_bytes": 144988,
+      "value_bytes": 8000000,
+      "ratio_vs_values": 0.0181235,
+      "actual_compression_mix": {
+        "1": 123
+      }
+    },
+    {
+      "column": "record_has_subject",
+      "encoding": 2,
+      "requested_compression": 1,
+      "stored_bytes": 261203,
+      "value_bytes": 8000000,
+      "ratio_vs_values": 0.032650375,
+      "actual_compression_mix": {
+        "1": 123
+      }
+    },
+    {
+      "column": "record_langs_count",
+      "encoding": 2,
+      "requested_compression": 1,
+      "stored_bytes": 192851,
+      "value_bytes": 8000000,
+      "ratio_vs_values": 0.024106375,
+      "actual_compression_mix": {
+        "1": 123
+      }
+    },
+    {
+      "column": "record_subject_string_bytes",
+      "encoding": 2,
+      "requested_compression": 1,
+      "stored_bytes": 347079,
+      "value_bytes": 8000000,
+      "ratio_vs_values": 0.043384875,
+      "actual_compression_mix": {
+        "1": 123
+      }
+    },
+    {
+      "column": "record_text_bytes",
+      "encoding": 2,
+      "requested_compression": 1,
+      "stored_bytes": 372759,
+      "value_bytes": 8000000,
+      "ratio_vs_values": 0.046594875,
+      "actual_compression_mix": {
+        "1": 123
+      }
+    },
+    {
+      "column": "record_type_code",
+      "encoding": 2,
+      "requested_compression": 1,
+      "stored_bytes": 571548,
+      "value_bytes": 8000000,
+      "ratio_vs_values": 0.0714435,
+      "actual_compression_mix": {
+        "1": 123
+      }
+    },
+    {
+      "column": "row_index",
+      "encoding": 2,
+      "requested_compression": 2,
+      "stored_bytes": 6738,
+      "value_bytes": 8000000,
+      "ratio_vs_values": 0.00084225,
+      "actual_compression_mix": {
+        "2": 123
+      }
+    },
+    {
+      "column": "time_us",
+      "encoding": 2,
+      "requested_compression": 0,
+      "stored_bytes": 2007816,
+      "value_bytes": 8000000,
+      "ratio_vs_values": 0.250977,
+      "actual_compression_mix": {
+        "0": 123
+      }
+    }
+  ]
+}

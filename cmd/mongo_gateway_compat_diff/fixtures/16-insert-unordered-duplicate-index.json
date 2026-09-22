@@ -1,0 +1,14 @@
+{
+  "schema": "treedb.mongo-gateway.compat-diff.fixture",
+  "version": 1,
+  "id": "insert-unordered-duplicate-index",
+  "capability_id": "crud.bounded-multi-write-and-batch-ordering",
+  "expectation": "supported",
+  "database": "compat",
+  "collection": "records",
+  "smoke": false,
+  "normalize_response_envelope_order": true,
+  "ignore_fields": ["writeErrors.0.code", "writeErrors.0.codeName", "writeErrors.0.errmsg"],
+  "seed": [{"_id": "taken"}],
+  "command": {"insert": "records", "ordered": false, "documents": [{"_id": "first"}, {"_id": "taken"}, {"_id": "later"}]}
+}

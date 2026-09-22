@@ -1,0 +1,58 @@
+{
+  "completed_monotonic_nanos": 1492347789572512,
+  "phases": {
+    "checkpoint_or_flush": 0,
+    "cleanup": 933625731,
+    "index_build": 0,
+    "load": 3260703003,
+    "readiness": 23860505096,
+    "reopen_or_reconnect": 23860505096,
+    "search": 6799507430,
+    "warmup": 9588030966
+  },
+  "resources": {
+    "allocations": [
+      {
+        "cpuset_cpus": "0-2",
+        "memory_bytes": 6442450944,
+        "memory_swap_bytes": 6442450944,
+        "pids_limit": 768
+      },
+      {
+        "cpuset_cpus": "3-5",
+        "memory_bytes": 6442450944,
+        "memory_swap_bytes": 6442450944,
+        "pids_limit": 768
+      },
+      {
+        "cpuset_cpus": "6-8",
+        "memory_bytes": 6442450944,
+        "memory_swap_bytes": 6442450944,
+        "pids_limit": 768
+      },
+      {
+        "cpuset_cpus": "9-11",
+        "memory_bytes": 6442450944,
+        "memory_swap_bytes": 6442450944,
+        "pids_limit": 768
+      }
+    ],
+    "container_ids": [
+      "9002886e3eaa25cc98d1670c9cd373e160bda611b980bd512a51d566cbac758c",
+      "e40aba788f2cb12404b68d53e39d71ba773d69b371d47b6a1d45f2c4b7156f2d",
+      "915582aa8b27bb8b04af1468bf1d74f905c345f18cdfce52be065a52de968c85",
+      "f50459c7819eca0cffb61963fc02a8c1658514b8e61f8d30af96b6cb93379b43"
+    ],
+    "cpu_seconds": 61.15141,
+    "image_sha256": "sha256:63845dd3d628b68514606286b49cd4bbb1fb488011532c836ea36ee184cde80d",
+    "network": "gomap4090-250k-profile-c32",
+    "network_rx_bytes": 250170688,
+    "network_tx_bytes": 2407186,
+    "peak_rss_bytes": 3144286208,
+    "persistent_bytes": 4259461632,
+    "profile_concurrency": 32,
+    "swap_bytes": 0,
+    "temporary_bytes": 11405685
+  },
+  "started_monotonic_nanos": 1492303347200286
+}

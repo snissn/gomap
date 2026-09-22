@@ -1,0 +1,12 @@
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB
+cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
+BenchmarkPublicCommandWALRawKVSet/command_wal=false-12         	      50	      7035 ns/op	    142144 sets/s	   10741 B/op	       5 allocs/op
+BenchmarkPublicCommandWALRawKVSet/command_wal=true-12          	      50	      3080 ns/op	    324637 sets/s	   10618 B/op	       5 allocs/op
+BenchmarkPublicCommandWALRawKVBatchWrite/batch_size=64/command_wal=false-12         	      50	     32365 ns/op	        64.00 sets/batch	   1977457 sets/s	   33049 B/op	     153 allocs/op
+BenchmarkPublicCommandWALRawKVBatchWrite/batch_size=64/command_wal=true-12          	      50	     22154 ns/op	        64.00 sets/batch	   2888908 sets/s	   16368 B/op	     149 allocs/op
+BenchmarkPublicCommandWALRawKVBatchWrite/batch_size=1024/command_wal=false-12       	      50	    361551 ns/op	      1024 sets/batch	   2832243 sets/s	  473518 B/op	    2079 allocs/op
+BenchmarkPublicCommandWALRawKVBatchWrite/batch_size=1024/command_wal=true-12        	      50	    247168 ns/op	      1024 sets/batch	   4142929 sets/s	  216408 B/op	    2076 allocs/op
+PASS
+ok  	github.com/snissn/gomap/TreeDB	1.195s

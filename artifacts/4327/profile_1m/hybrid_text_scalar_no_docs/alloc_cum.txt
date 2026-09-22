@@ -1,0 +1,32 @@
+File: treedb_text_hybrid_scale
+Type: alloc_space
+Time: 2026-08-24 17:22:09 HST
+Showing nodes accounting for 3222494.55kB, 64.11% of 5026866.50kB total
+Dropped 174 nodes (cum <= 25134.33kB)
+Showing top 25 nodes out of 43
+      flat  flat%   sum%        cum   cum%
+         0     0%     0% 5026385.90kB   100%  main.main
+         0     0%     0% 5026385.90kB   100%  main.run
+         0     0%     0% 5026385.90kB   100%  runtime.main
+    0.20kB 4e-06% 4e-06% 5026376.45kB   100%  main.runHybridQueryRow
+         0     0% 4e-06% 5026376.45kB   100%  main.runQueryMatrix
+         0     0% 4e-06% 5025223.46kB   100%  github.com/snissn/gomap/TreeDB/collections.(*Collection).SearchHybrid
+         0     0% 4e-06% 5025223.46kB   100%  github.com/snissn/gomap/TreeDB/collections.(*Collection).searchHybrid (inline)
+         0     0% 4e-06% 5025223.46kB   100%  github.com/snissn/gomap/TreeDB/collections.(*Collection).searchHybridWithCandidateBudgetPolicy
+   19.92kB 0.0004% 0.0004% 4213795.13kB 83.83%  github.com/snissn/gomap/TreeDB/collections.(*Collection).hybridSearchCandidates
+         0     0% 0.0004% 4213795.13kB 83.83%  github.com/snissn/gomap/TreeDB/collections.(*Collection).hybridSearchCandidatesFixedBudget
+         0     0% 0.0004% 4213795.13kB 83.83%  github.com/snissn/gomap/TreeDB/collections.(*Collection).hybridSearchCandidatesWithBudgetPolicy
+         0     0% 0.0004% 4213775.21kB 83.83%  github.com/snissn/gomap/TreeDB/collections.(*Collection).searchHybridTextCandidatesWithScanBudget
+         0     0% 0.0004% 4049615.21kB 80.56%  github.com/snissn/gomap/TreeDB/collections.(*Collection).searchText
+         0     0% 0.0004% 4049598.61kB 80.56%  github.com/snissn/gomap/TreeDB/collections.executeTextV2SearchAtSnapshot
+499981.50kB  9.95%  9.95% 3918111.18kB 77.94%  github.com/snissn/gomap/TreeDB/collections.executeTextV2ORBlockMaxSearchAtSnapshot
+         0     0%  9.95% 3417999.70kB 67.99%  github.com/snissn/gomap/TreeDB/collections.visitTextV2ORBlockMaxCandidate
+         0     0%  9.95% 1759342.09kB 35.00%  github.com/snissn/gomap/TreeDB/collections.(*textV2SearchBlockCache).docMapBlockAt
+43401.35kB  0.86% 10.81% 1759342.09kB 35.00%  github.com/snissn/gomap/TreeDB/collections.(*textV2SearchBlockCache).docMapBlockAtOptional
+         0     0% 10.81% 1759342.09kB 35.00%  github.com/snissn/gomap/TreeDB/collections.(*textV2SearchBlockCache).docMapEntry
+         0     0% 10.81% 1658632.62kB 33.00%  github.com/snissn/gomap/TreeDB/collections.(*textV2SearchBlockCache).normBlockAt
+62043.32kB  1.23% 12.04% 1658632.62kB 33.00%  github.com/snissn/gomap/TreeDB/collections.(*textV2SearchBlockCache).normBlockAtOptional
+         0     0% 12.04% 1658632.62kB 33.00%  github.com/snissn/gomap/TreeDB/collections.(*textV2SearchBlockCache).normEntry
+1403689.62kB 27.92% 39.97% 1403689.62kB 27.92%  github.com/snissn/gomap/TreeDB/collections.decodeTextV2SearchNormBlock
+1213358.62kB 24.14% 64.11% 1213358.62kB 24.14%  github.com/snissn/gomap/TreeDB/collections.decodeTextV2SearchDocMapBlock
+         0     0% 64.11% 701828.80kB 13.96%  github.com/snissn/gomap/TreeDB/collections.collectionGetAppendAtCatalogRoot

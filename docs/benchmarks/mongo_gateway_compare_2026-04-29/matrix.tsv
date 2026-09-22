@@ -1,0 +1,13 @@
+target	documents	secondary_indexes	raw_json	physical_bytes
+treedb	1000	0	raw/treedb_docs_1000_idx_0.json	1867776
+mongo	1000	0	raw/mongo_docs_1000_idx_0.json	314687488
+treedb	1000	1	raw/treedb_docs_1000_idx_1.json	3702784
+mongo	1000	1	raw/mongo_docs_1000_idx_1.json	314691584
+treedb	1000	2	raw/treedb_docs_1000_idx_2.json	4751360
+mongo	1000	2	raw/mongo_docs_1000_idx_2.json	314695680
+treedb	10000	0	raw/treedb_docs_10000_idx_0.json	6062080
+mongo	10000	0	raw/mongo_docs_10000_idx_0.json	314687488
+treedb	10000	1	raw/treedb_docs_10000_idx_1.json	10256384
+mongo	10000	1	raw/mongo_docs_10000_idx_1.json	314691584
+treedb	10000	2	raw/treedb_docs_10000_idx_2.json	12877824
+mongo	10000	2	raw/mongo_docs_10000_idx_2.json	314695680

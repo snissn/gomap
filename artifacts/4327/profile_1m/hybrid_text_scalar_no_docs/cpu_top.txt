@@ -1,0 +1,33 @@
+File: treedb_text_hybrid_scale
+Type: cpu
+Time: 2026-08-24 17:25:24 HST
+Duration: 3.96s, Total samples = 4.11s (103.75%)
+Showing nodes accounting for 3.05s, 74.21% of 4.11s total
+Dropped 112 nodes (cum <= 0.02s)
+Showing top 25 nodes out of 156
+      flat  flat%   sum%        cum   cum%
+     0.67s 16.30% 16.30%      0.67s 16.30%  runtime.madvise
+     0.26s  6.33% 22.63%      0.37s  9.00%  github.com/snissn/gomap/TreeDB/collections.(*textCursor).readUvarint
+     0.22s  5.35% 27.98%      0.22s  5.35%  runtime.pthread_cond_signal
+     0.19s  4.62% 32.60%      0.19s  4.62%  runtime.pthread_cond_wait
+     0.14s  3.41% 36.01%      0.14s  3.41%  cmpbody
+     0.14s  3.41% 39.42%      0.18s  4.38%  runtime.findObject
+     0.11s  2.68% 42.09%      0.11s  2.68%  encoding/binary.Uvarint (inline)
+     0.11s  2.68% 44.77%      0.37s  9.00%  github.com/snissn/gomap/TreeDB/collections.(*textV2ANDBlockMaxTermState).ensureDecoded
+     0.11s  2.68% 47.45%      0.28s  6.81%  sort.Search (inline)
+     0.10s  2.43% 49.88%      0.10s  2.43%  runtime.memclrNoHeapPointers
+     0.10s  2.43% 52.31%      0.10s  2.43%  runtime.pthread_kill
+     0.09s  2.19% 54.50%      0.23s  5.60%  github.com/snissn/gomap/TreeDB/collections.(*textV2PostingBlockEntryScanner).Next
+     0.09s  2.19% 56.69%      0.16s  3.89%  github.com/snissn/gomap/TreeDB/collections.(*textV2SearchTopK).addCandidate.func1 (inline)
+     0.08s  1.95% 58.64%      0.31s  7.54%  runtime.scanObject
+     0.08s  1.95% 60.58%      0.16s  3.89%  slices.partitionOrdered[go.shape.string]
+     0.07s  1.70% 62.29%      0.11s  2.68%  github.com/snissn/gomap/TreeDB/node.(*Node).SearchLeaf
+     0.07s  1.70% 63.99%      0.07s  1.70%  runtime.memmove
+     0.07s  1.70% 65.69%      0.07s  1.70%  runtime.usleep
+     0.06s  1.46% 67.15%      0.31s  7.54%  github.com/snissn/gomap/TreeDB/collections.decodeTextV2SearchNormBlock
+     0.06s  1.46% 68.61%      0.07s  1.70%  github.com/snissn/gomap/TreeDB/collections.textV2TopCandidateLess
+     0.06s  1.46% 70.07%      0.08s  1.95%  runtime.mapaccess2_fast64
+     0.05s  1.22% 71.29%      0.05s  1.22%  runtime.kevent
+     0.04s  0.97% 72.26%      0.14s  3.41%  github.com/snissn/gomap/TreeDB/collections.advanceTextV2BlockMaxStatePastCurrent
+     0.04s  0.97% 73.24%      0.04s  0.97%  github.com/snissn/gomap/TreeDB/collections.validateTextV2BlockEntry
+     0.04s  0.97% 74.21%      0.04s  0.97%  runtime.typePointers.next

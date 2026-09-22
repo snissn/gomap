@@ -1,0 +1,77 @@
+{
+  "schema_version": 1,
+  "result_kind": "vector_partition_system_topology_v1",
+  "assembly": "production_public_v1",
+  "topology": "native_four_daemon_four_group",
+  "nodes": [
+    {
+      "node_id": "native-group-a",
+      "node_config_sha256": "cb9f3d07a423788e228e84dd1c4bcbdb3415997056c5a37fc871b20de9c3747e",
+      "database_directory": "/mnt/fast4tb/gomap-4019-m2-topology-tax-evidence-95c60cbe/verified-runs/native_four_daemon_four_group/repeat-1/database-native-group-a",
+      "state_directory": "/mnt/fast4tb/gomap-4019-m2-topology-tax-evidence-95c60cbe/verified-runs/native_four_daemon_four_group/repeat-1/state-native-group-a",
+      "ready_path": "/mnt/fast4tb/gomap-4019-m2-topology-tax-evidence-95c60cbe/verified-runs/native_four_daemon_four_group/repeat-1/state-native-group-a/ready.json",
+      "public_listen": "127.0.0.1:44677",
+      "local_groups": [
+        {
+          "group_id": "group-a",
+          "listen": "127.0.0.1:60879"
+        }
+      ]
+    },
+    {
+      "node_id": "native-group-b",
+      "node_config_sha256": "794b6065198d14ae0331012582ebaee7a7e7ad558aa95d89789b63017063a5fd",
+      "database_directory": "/mnt/fast4tb/gomap-4019-m2-topology-tax-evidence-95c60cbe/verified-runs/native_four_daemon_four_group/repeat-1/database-native-group-b",
+      "state_directory": "/mnt/fast4tb/gomap-4019-m2-topology-tax-evidence-95c60cbe/verified-runs/native_four_daemon_four_group/repeat-1/state-native-group-b",
+      "ready_path": "/mnt/fast4tb/gomap-4019-m2-topology-tax-evidence-95c60cbe/verified-runs/native_four_daemon_four_group/repeat-1/state-native-group-b/ready.json",
+      "local_groups": [
+        {
+          "group_id": "group-b",
+          "listen": "127.0.0.1:57853"
+        }
+      ]
+    },
+    {
+      "node_id": "native-group-c",
+      "node_config_sha256": "e91cb520268945fb7f9a6e396aa3dbbd9ff3f09ae8cd40762b866bea892c4bf6",
+      "database_directory": "/mnt/fast4tb/gomap-4019-m2-topology-tax-evidence-95c60cbe/verified-runs/native_four_daemon_four_group/repeat-1/database-native-group-c",
+      "state_directory": "/mnt/fast4tb/gomap-4019-m2-topology-tax-evidence-95c60cbe/verified-runs/native_four_daemon_four_group/repeat-1/state-native-group-c",
+      "ready_path": "/mnt/fast4tb/gomap-4019-m2-topology-tax-evidence-95c60cbe/verified-runs/native_four_daemon_four_group/repeat-1/state-native-group-c/ready.json",
+      "local_groups": [
+        {
+          "group_id": "group-c",
+          "listen": "127.0.0.1:45545"
+        }
+      ]
+    },
+    {
+      "node_id": "native-group-d",
+      "node_config_sha256": "511459d35830c9ad2b2ed0adc5708d359edc4bbb7f6d175609f9932e8b929474",
+      "database_directory": "/mnt/fast4tb/gomap-4019-m2-topology-tax-evidence-95c60cbe/verified-runs/native_four_daemon_four_group/repeat-1/database-native-group-d",
+      "state_directory": "/mnt/fast4tb/gomap-4019-m2-topology-tax-evidence-95c60cbe/verified-runs/native_four_daemon_four_group/repeat-1/state-native-group-d",
+      "ready_path": "/mnt/fast4tb/gomap-4019-m2-topology-tax-evidence-95c60cbe/verified-runs/native_four_daemon_four_group/repeat-1/state-native-group-d/ready.json",
+      "local_groups": [
+        {
+          "group_id": "group-d",
+          "listen": "127.0.0.1:47825"
+        }
+      ]
+    }
+  ],
+  "dataset_directory": "/mnt/fast4tb/gomap-4027-qualification-campaign-eed54bc0/100k/dataset",
+  "endpoints": {
+    "group-a": "127.0.0.1:60879",
+    "group-b": "127.0.0.1:57853",
+    "group-c": "127.0.0.1:45545",
+    "group-d": "127.0.0.1:47825"
+  },
+  "group_applied_indexes": {
+    "group-a": 1,
+    "group-b": 1,
+    "group-c": 1,
+    "group-d": 1
+  },
+  "public_route": "vectorpartition.OperationsV1.Search",
+  "m8_loopback": false,
+  "topology_identity_sha256": "bf67330402e4e67ef441fb8ecd55e46e06b03de44b75f613674a5ab129519c5e"
+}

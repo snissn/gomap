@@ -1,0 +1,81 @@
+{
+  "schema_version": 1,
+  "result_kind": "vector_partition_system_topology_v1",
+  "assembly": "production_public_v1",
+  "topology": "native_four_daemon_four_group",
+  "nodes": [
+    {
+      "node_id": "native-group-a",
+      "node_config_sha256": "51ae003d5a88a3683d885f7d4703401fcbd231bf2b9718f097e5678627f45a3e",
+      "database_directory": "/mnt/fast4tb/gomap-4090-vector-onramp-profile-6c83bd1e/profiles/native-budgeted/c32/database-native-group-a",
+      "state_directory": "/mnt/fast4tb/gomap-4090-vector-onramp-profile-6c83bd1e/profiles/native-budgeted/c32/state-native-group-a",
+      "ready_path": "/mnt/fast4tb/gomap-4090-vector-onramp-profile-6c83bd1e/profiles/native-budgeted/c32/state-native-group-a/ready.json",
+      "profile_directory": "/mnt/fast4tb/gomap-4090-vector-onramp-profile-6c83bd1e/profiles/native-budgeted/c32/state-native-group-a/profiles",
+      "public_listen": "127.0.0.1:40001",
+      "local_groups": [
+        {
+          "group_id": "group-a",
+          "listen": "127.0.0.1:34523"
+        }
+      ]
+    },
+    {
+      "node_id": "native-group-b",
+      "node_config_sha256": "9842218d7c6ec15ffa3f2831819c6028c985d3fb8f191312fdac78ac69a25306",
+      "database_directory": "/mnt/fast4tb/gomap-4090-vector-onramp-profile-6c83bd1e/profiles/native-budgeted/c32/database-native-group-b",
+      "state_directory": "/mnt/fast4tb/gomap-4090-vector-onramp-profile-6c83bd1e/profiles/native-budgeted/c32/state-native-group-b",
+      "ready_path": "/mnt/fast4tb/gomap-4090-vector-onramp-profile-6c83bd1e/profiles/native-budgeted/c32/state-native-group-b/ready.json",
+      "profile_directory": "/mnt/fast4tb/gomap-4090-vector-onramp-profile-6c83bd1e/profiles/native-budgeted/c32/state-native-group-b/profiles",
+      "local_groups": [
+        {
+          "group_id": "group-b",
+          "listen": "127.0.0.1:41337"
+        }
+      ]
+    },
+    {
+      "node_id": "native-group-c",
+      "node_config_sha256": "36648ef7f5f6152f009c6058ec477c500722cb5e9f6414c7fe4d67b24655aa14",
+      "database_directory": "/mnt/fast4tb/gomap-4090-vector-onramp-profile-6c83bd1e/profiles/native-budgeted/c32/database-native-group-c",
+      "state_directory": "/mnt/fast4tb/gomap-4090-vector-onramp-profile-6c83bd1e/profiles/native-budgeted/c32/state-native-group-c",
+      "ready_path": "/mnt/fast4tb/gomap-4090-vector-onramp-profile-6c83bd1e/profiles/native-budgeted/c32/state-native-group-c/ready.json",
+      "profile_directory": "/mnt/fast4tb/gomap-4090-vector-onramp-profile-6c83bd1e/profiles/native-budgeted/c32/state-native-group-c/profiles",
+      "local_groups": [
+        {
+          "group_id": "group-c",
+          "listen": "127.0.0.1:37403"
+        }
+      ]
+    },
+    {
+      "node_id": "native-group-d",
+      "node_config_sha256": "69b1ae8b8eca385df0a8d25834e74de162004cb097d71e190bdc9217cc91cf8a",
+      "database_directory": "/mnt/fast4tb/gomap-4090-vector-onramp-profile-6c83bd1e/profiles/native-budgeted/c32/database-native-group-d",
+      "state_directory": "/mnt/fast4tb/gomap-4090-vector-onramp-profile-6c83bd1e/profiles/native-budgeted/c32/state-native-group-d",
+      "ready_path": "/mnt/fast4tb/gomap-4090-vector-onramp-profile-6c83bd1e/profiles/native-budgeted/c32/state-native-group-d/ready.json",
+      "profile_directory": "/mnt/fast4tb/gomap-4090-vector-onramp-profile-6c83bd1e/profiles/native-budgeted/c32/state-native-group-d/profiles",
+      "local_groups": [
+        {
+          "group_id": "group-d",
+          "listen": "127.0.0.1:55087"
+        }
+      ]
+    }
+  ],
+  "dataset_directory": "/mnt/fast4tb/gomap-4027-qualification-campaign-eed54bc0/250k/dataset",
+  "endpoints": {
+    "group-a": "127.0.0.1:34523",
+    "group-b": "127.0.0.1:41337",
+    "group-c": "127.0.0.1:37403",
+    "group-d": "127.0.0.1:55087"
+  },
+  "group_applied_indexes": {
+    "group-a": 1,
+    "group-b": 1,
+    "group-c": 1,
+    "group-d": 1
+  },
+  "public_route": "vectorpartition.OperationsV1.Search",
+  "m8_loopback": false,
+  "topology_identity_sha256": "75c7ea7f3743ddaefd13f205a89c61539022e6f05cf2bf8c66359efba110547d"
+}

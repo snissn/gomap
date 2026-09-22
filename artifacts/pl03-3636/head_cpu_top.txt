@@ -1,0 +1,168 @@
+File: db.test
+Build ID: aec548f23f4a22c39551131ee436f29c437405fd
+Type: cpu
+Time: 2026-07-09 20:02:11 HST
+Duration: 3.88s, Total samples = 4.11s (106.00%)
+Showing nodes accounting for 3.35s, 81.51% of 4.11s total
+Dropped 226 nodes (cum <= 0.02s)
+      flat  flat%   sum%        cum   cum%
+     0.33s  8.03%  8.03%      0.33s  8.03%  internal/runtime/maps.ctrlGroup.matchH2 (inline)
+     0.28s  6.81% 14.84%      0.28s  6.81%  internal/runtime/syscall/linux.Syscall6
+     0.22s  5.35% 20.19%      0.73s 17.76%  runtime.mapaccess2_fast64
+     0.21s  5.11% 25.30%      0.52s 12.65%  internal/runtime/maps.(*table).uncheckedPutSlot
+     0.18s  4.38% 29.68%      1.21s 29.44%  runtime.mapassign_fast64
+     0.17s  4.14% 33.82%      0.42s 10.22%  runtime.mapassign_fast32
+     0.16s  3.89% 37.71%      2.36s 57.42%  github.com/snissn/gomap/TreeDB/db.(*DB).scanCompactStorageAudit.func1
+     0.13s  3.16% 40.88%      0.20s  4.87%  internal/runtime/maps.(*Map).putSlotSmallFast32
+     0.13s  3.16% 44.04%      0.13s  3.16%  runtime.memhash64
+     0.12s  2.92% 46.96%      0.12s  2.92%  internal/runtime/maps.(*groupReference).key (inline)
+     0.10s  2.43% 49.39%      0.10s  2.43%  internal/runtime/maps.(*groupReference).elem (inline)
+     0.10s  2.43% 51.82%      0.67s 16.30%  internal/runtime/maps.(*table).split
+     0.09s  2.19% 54.01%      0.13s  3.16%  runtime.mapaccess1_fast32
+     0.09s  2.19% 56.20%      0.09s  2.19%  runtime.memmove
+     0.06s  1.46% 57.66%      0.06s  1.46%  internal/runtime/maps.(*Map).directoryIndex (inline)
+     0.06s  1.46% 59.12%      0.06s  1.46%  internal/runtime/maps.h1 (inline)
+     0.05s  1.22% 60.34%      0.60s 14.60%  github.com/snissn/gomap/TreeDB/db.(*DB).scanCompactStorageAudit.func4
+     0.05s  1.22% 61.56%      0.09s  2.19%  github.com/snissn/gomap/TreeDB/node.(*Node).leafColumnarPrefixV2ValueMetaAt
+     0.05s  1.22% 62.77%      0.05s  1.22%  internal/runtime/maps.(*Map).Used (inline)
+     0.05s  1.22% 63.99%      0.05s  1.22%  internal/runtime/maps.(*Map).directoryAt (inline)
+     0.05s  1.22% 65.21%      0.05s  1.22%  internal/runtime/maps.(*groupsReference).group (inline)
+     0.05s  1.22% 66.42%      0.05s  1.22%  internal/runtime/maps.probeSeq.next (inline)
+     0.05s  1.22% 67.64%      0.09s  2.19%  runtime.scanblock
+     0.04s  0.97% 68.61%      0.16s  3.89%  github.com/snissn/gomap/TreeDB/node.(*Node).getLeafValueViewColumnarPrefixV2
+     0.04s  0.97% 69.59%      0.04s  0.97%  github.com/snissn/gomap/TreeDB/node.(*Node).leafColumnarPrefixV2EnsureMeta
+     0.04s  0.97% 70.56%      0.04s  0.97%  runtime.futex
+     0.04s  0.97% 71.53%      0.04s  0.97%  runtime.memhash32
+     0.03s  0.73% 72.26%      0.03s  0.73%  internal/runtime/maps.ctrlGroup.matchEmptyOrDeleted (inline)
+     0.03s  0.73% 72.99%      0.03s  0.73%  internal/runtime/maps.h2 (inline)
+     0.03s  0.73% 73.72%      0.11s  2.68%  internal/runtime/maps.typedmemmove
+     0.03s  0.73% 74.45%      0.03s  0.73%  runtime.memclrNoHeapPointers
+     0.03s  0.73% 75.18%      0.09s  2.19%  runtime.scanObject
+     0.03s  0.73% 75.91%      0.06s  1.46%  runtime.tryDeferToSpanScan
+     0.03s  0.73% 76.64%      0.08s  1.95%  runtime.typedmemmove
+     0.02s  0.49% 77.13%      0.04s  0.97%  github.com/snissn/gomap/TreeDB/db.(*leafPageReadCache).getToWithState
+     0.02s  0.49% 77.62%      0.21s  5.11%  github.com/snissn/gomap/TreeDB/node.(*Node).GetLeafValueView
+     0.02s  0.49% 78.10%      0.10s  2.43%  internal/runtime/maps.(*table).reset
+     0.02s  0.49% 78.59%      0.03s  0.73%  os.newFile
+     0.02s  0.49% 79.08%      0.05s  1.22%  runtime.(*mcache).releaseAll
+     0.01s  0.24% 79.32%      3.74s 91.00%  github.com/snissn/gomap/TreeDB/db.BenchmarkCompactStorageSharedAudit
+     0.01s  0.24% 79.56%      0.03s  0.73%  internal/filepathlite.Clean
+     0.01s  0.24% 79.81%      0.13s  3.16%  internal/runtime/maps.(*table).grow
+     0.01s  0.24% 80.05%      0.25s  6.08%  os.ReadDir
+     0.01s  0.24% 80.29%      0.08s  1.95%  path/filepath.join
+     0.01s  0.24% 80.54%      0.06s  1.46%  runtime.growslice
+     0.01s  0.24% 80.78%      0.08s  1.95%  runtime.mallocgcSmallNoscan
+     0.01s  0.24% 81.02%      0.05s  1.22%  runtime.scanSpan
+     0.01s  0.24% 81.27%      0.05s  1.22%  runtime.stopm
+     0.01s  0.24% 81.51%      0.05s  1.22%  strings.Join
+         0     0% 81.51%      3.65s 88.81%  github.com/snissn/gomap/TreeDB/db.(*DB).CompactStoragePlan (inline)
+         0     0% 81.51%      0.09s  2.19%  github.com/snissn/gomap/TreeDB/db.(*DB).acquireCompactStorageAuditInputAttempt
+         0     0% 81.51%      3.65s 88.81%  github.com/snissn/gomap/TreeDB/db.(*DB).compactStorage
+         0     0% 81.51%      3.23s 78.59%  github.com/snissn/gomap/TreeDB/db.(*DB).compactStorageSharedAudit
+         0     0% 81.51%      0.03s  0.73%  github.com/snissn/gomap/TreeDB/db.(*DB).compactStorageValueLogGCFromAudit
+         0     0% 81.51%      0.04s  0.97%  github.com/snissn/gomap/TreeDB/db.(*DB).isLeafLogValueFile
+         0     0% 81.51%      0.05s  1.22%  github.com/snissn/gomap/TreeDB/db.(*DB).leafGenerationGroupedFrameInfo
+         0     0% 81.51%      3.50s 85.16%  github.com/snissn/gomap/TreeDB/db.(*DB).populateCompactStorageAudit
+         0     0% 81.51%      0.09s  2.19%  github.com/snissn/gomap/TreeDB/db.(*DB).prepareCompactStorageAuditTopology
+         0     0% 81.51%      3.12s 75.91%  github.com/snissn/gomap/TreeDB/db.(*DB).scanCompactStorageAudit
+         0     0% 81.51%      2.41s 58.64%  github.com/snissn/gomap/TreeDB/db.(*DB).scanCompactStorageAudit.func2
+         0     0% 81.51%      2.46s 59.85%  github.com/snissn/gomap/TreeDB/db.(*DB).scanCompactStorageAudit.func3
+         0     0% 81.51%      2.46s 59.85%  github.com/snissn/gomap/TreeDB/db.(*DB).scanCompactStorageAudit.func3.1
+         0     0% 81.51%      0.05s  1.22%  github.com/snissn/gomap/TreeDB/db.(*DB).scanLeafGenerationPtrTotals
+         0     0% 81.51%      0.04s  0.97%  github.com/snissn/gomap/TreeDB/db.(*DB).valueOnlyValueLogFiles
+         0     0% 81.51%      0.03s  0.73%  github.com/snissn/gomap/TreeDB/db.(*leafGenerationGroupedFrameScanCache).store
+         0     0% 81.51%      0.28s  6.81%  github.com/snissn/gomap/TreeDB/db.compactStoragePathUsage
+         0     0% 81.51%      0.33s  8.03%  github.com/snissn/gomap/TreeDB/db.compactStorageUsage
+         0     0% 81.51%      0.07s  1.70%  github.com/snissn/gomap/TreeDB/db.resolveStorageLayout
+         0     0% 81.51%      0.04s  0.97%  github.com/snissn/gomap/TreeDB/db.valueReader.ReadLeafLogPageUnsafeToWithState
+         0     0% 81.51%      0.07s  1.70%  github.com/snissn/gomap/TreeDB/internal/valuelog.(*Manager).Refresh
+         0     0% 81.51%      0.07s  1.70%  github.com/snissn/gomap/TreeDB/internal/valuelog.listSegments
+         0     0% 81.51%      2.46s 59.85%  github.com/snissn/gomap/TreeDB/node.(*Node).WalkInternalChildren
+         0     0% 81.51%      0.04s  0.97%  internal/poll.(*FD).Close
+         0     0% 81.51%      0.07s  1.70%  internal/poll.(*FD).ReadDirent
+         0     0% 81.51%      0.04s  0.97%  internal/poll.(*FD).decref
+         0     0% 81.51%      0.04s  0.97%  internal/poll.(*FD).destroy
+         0     0% 81.51%      0.04s  0.97%  internal/poll.(*SysFile).destroy (inline)
+         0     0% 81.51%      0.08s  1.95%  internal/poll.ignoringEINTRIO (inline)
+         0     0% 81.51%      0.80s 19.46%  internal/runtime/maps.(*table).rehash
+         0     0% 81.51%      0.03s  0.73%  internal/runtime/maps.NewMap
+         0     0% 81.51%      0.08s  1.95%  internal/runtime/maps.newGroups (inline)
+         0     0% 81.51%      0.13s  3.16%  internal/runtime/maps.newTable
+         0     0% 81.51%      0.08s  1.95%  internal/runtime/maps.newarray
+         0     0% 81.51%      0.06s  1.46%  os.(*File).Close
+         0     0% 81.51%      0.08s  1.95%  os.(*File).ReadDir
+         0     0% 81.51%      0.08s  1.95%  os.(*File).readdir
+         0     0% 81.51%      0.06s  1.46%  os.(*file).close
+         0     0% 81.51%      0.06s  1.46%  os.Lstat
+         0     0% 81.51%      0.05s  1.22%  os.Stat
+         0     0% 81.51%      0.16s  3.89%  os.ignoringEINTR (inline)
+         0     0% 81.51%      0.06s  1.46%  os.lstatNolog
+         0     0% 81.51%      0.05s  1.22%  os.lstatNolog.func1 (inline)
+         0     0% 81.51%      0.07s  1.70%  os.open
+         0     0% 81.51%      0.10s  2.43%  os.openDir
+         0     0% 81.51%      0.10s  2.43%  os.openDirNolog
+         0     0% 81.51%      0.07s  1.70%  os.openDirNolog.func1 (inline)
+         0     0% 81.51%      0.05s  1.22%  os.statNolog
+         0     0% 81.51%      0.04s  0.97%  os.statNolog.func1 (inline)
+         0     0% 81.51%      0.03s  0.73%  path/filepath.Clean (inline)
+         0     0% 81.51%      0.08s  1.95%  path/filepath.Join (inline)
+         0     0% 81.51%      0.25s  6.08%  path/filepath.WalkDir
+         0     0% 81.51%      0.20s  4.87%  path/filepath.walkDir
+         0     0% 81.51%      0.07s  1.70%  runtime.(*mcache).nextFree
+         0     0% 81.51%      0.07s  1.70%  runtime.(*mcache).refill
+         0     0% 81.51%      0.07s  1.70%  runtime.(*mcentral).cacheSpan
+         0     0% 81.51%      0.04s  0.97%  runtime.(*mcentral).grow
+         0     0% 81.51%      0.04s  0.97%  runtime.(*mheap).alloc
+         0     0% 81.51%      0.04s  0.97%  runtime.(*mheap).alloc.func1
+         0     0% 81.51%      0.03s  0.73%  runtime.(*mheap).allocSpan
+         0     0% 81.51%      0.03s  0.73%  runtime.(*sweepLocked).sweep
+         0     0% 81.51%      0.04s  0.97%  runtime.ReadMemStats
+         0     0% 81.51%      0.04s  0.97%  runtime.ReadMemStats.func1
+         0     0% 81.51%      0.03s  0.73%  runtime.bgsweep
+         0     0% 81.51%      0.03s  0.73%  runtime.callers
+         0     0% 81.51%      0.03s  0.73%  runtime.callers.func1
+         0     0% 81.51%      0.03s  0.73%  runtime.deductAssistCredit
+         0     0% 81.51%      0.07s  1.70%  runtime.findRunnable
+         0     0% 81.51%      0.04s  0.97%  runtime.flushallmcaches
+         0     0% 81.51%      0.04s  0.97%  runtime.flushmcache
+         0     0% 81.51%      0.03s  0.73%  runtime.gcAssistAlloc
+         0     0% 81.51%      0.03s  0.73%  runtime.gcAssistAlloc.func2
+         0     0% 81.51%      0.03s  0.73%  runtime.gcAssistAlloc1
+         0     0% 81.51%      0.25s  6.08%  runtime.gcBgMarkWorker
+         0     0% 81.51%      0.23s  5.60%  runtime.gcBgMarkWorker.func2
+         0     0% 81.51%      0.23s  5.60%  runtime.gcDrain
+         0     0% 81.51%      0.14s  3.41%  runtime.gcDrainMarkWorkerDedicated (inline)
+         0     0% 81.51%      0.09s  2.19%  runtime.gcDrainMarkWorkerIdle (inline)
+         0     0% 81.51%      0.03s  0.73%  runtime.gcDrainN
+         0     0% 81.51%      0.03s  0.73%  runtime.gcstopm
+         0     0% 81.51%      0.04s  0.97%  runtime.mProf_Malloc
+         0     0% 81.51%      0.03s  0.73%  runtime.makemap
+         0     0% 81.51%      0.19s  4.62%  runtime.mallocgc
+         0     0% 81.51%      0.04s  0.97%  runtime.mallocgcSmallScanHeader
+         0     0% 81.51%      0.03s  0.73%  runtime.mallocgcSmallScanNoHeader
+         0     0% 81.51%      0.12s  2.92%  runtime.markroot
+         0     0% 81.51%      0.04s  0.97%  runtime.markroot.func1
+         0     0% 81.51%      0.08s  1.95%  runtime.markrootBlock
+         0     0% 81.51%      0.07s  1.70%  runtime.mcall
+         0     0% 81.51%      0.08s  1.95%  runtime.newarray
+         0     0% 81.51%      0.05s  1.22%  runtime.newobject
+         0     0% 81.51%      0.07s  1.70%  runtime.park_m
+         0     0% 81.51%      0.04s  0.97%  runtime.profilealloc
+         0     0% 81.51%      0.04s  0.97%  runtime.readmemstats_m
+         0     0% 81.51%      0.04s  0.97%  runtime.scanstack
+         0     0% 81.51%      0.08s  1.95%  runtime.schedule
+         0     0% 81.51%      0.42s 10.22%  runtime.systemstack
+         0     0% 81.51%      0.04s  0.97%  syscall.Close
+         0     0% 81.51%      0.07s  1.70%  syscall.Getdents
+         0     0% 81.51%      0.05s  1.22%  syscall.Lstat (inline)
+         0     0% 81.51%      0.07s  1.70%  syscall.Open (inline)
+         0     0% 81.51%      0.28s  6.81%  syscall.RawSyscall6
+         0     0% 81.51%      0.07s  1.70%  syscall.ReadDirent (inline)
+         0     0% 81.51%      0.04s  0.97%  syscall.Stat (inline)
+         0     0% 81.51%      0.12s  2.92%  syscall.Syscall
+         0     0% 81.51%      0.17s  4.14%  syscall.Syscall6
+         0     0% 81.51%      0.09s  2.19%  syscall.fstatat
+         0     0% 81.51%      0.07s  1.70%  syscall.openat
+         0     0% 81.51%      0.03s  0.73%  testing.(*B).StopTimer
+         0     0% 81.51%      3.74s 91.00%  testing.(*B).launch
+         0     0% 81.51%      3.74s 91.00%  testing.(*B).runN

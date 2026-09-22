@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "result_kind": "vector_partition_system_node_ready_v1",
+  "assembly": "production_public_v1",
+  "topology": "native_four_daemon_four_group",
+  "node_id": "native-group-d",
+  "pid": 1273925,
+  "public_route": "vectorpartition.OperationsV1.Search",
+  "production_topology": true,
+  "m8_loopback": false,
+  "database_directory": "/mnt/fast4tb/gomap-4090-vector-onramp-profile-6c83bd1e/runs/native-budgeted/repeat-1/database-native-group-d",
+  "state_directory": "/mnt/fast4tb/gomap-4090-vector-onramp-profile-6c83bd1e/runs/native-budgeted/repeat-1/state-native-group-d",
+  "source_revision": "6c83bd1e1f8b0a0aab29bf0fe1cc846fdc944580",
+  "vcs_modified": false,
+  "executable_sha256": "00b6594b4d14b13169bd4cdc114020d79904facb5c139359602d661a9a7ce99b",
+  "node_config_sha256": "93d91fe5760f20a356f285791a98c2d36601fe572ae4eb847c70bedd48914feb",
+  "logical_cpus": 3,
+  "gomaxprocs": 3,
+  "go_memory_limit": 9223372036854775807,
+  "effective_cpu_set": "9-11",
+  "lifecycle_state": "active",
+  "groups": [
+    {
+      "group_id": "group-d",
+      "endpoint": "127.0.0.1:55315",
+      "leader_id": "node-a",
+      "applied_index": 3,
+      "proves_production_consensus": true
+    }
+  ]
+}

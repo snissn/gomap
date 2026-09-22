@@ -1,0 +1,12 @@
+Sat May 16 03:57:12 UTC 2026
+go version go1.25.7 linux/amd64
+Linux mikers-B560-DS3H-AC-Y1 6.8.0-110-generic #110~22.04.1-Ubuntu SMP PREEMPT_DYNAMIC Fri Mar 27 12:43:08 UTC  x86_64 x86_64 x86_64 GNU/Linux
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB/collections
+cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
+BenchmarkCollectionCommandWALCreateCollection/command_wal=false-12         	     100	     54876 ns/op	     18223 collections/s	   62432 B/op	     194 allocs/op
+BenchmarkCollectionCommandWALCreateCollection/command_wal=true-12          	     100	     19264 ns/op	     51910 collections/s	    2110 B/op	      38 allocs/op
+BenchmarkCollectionCommandWALRejectedIndexDDL-12                           	     100	       429.4 ns/op	   2329102 rejects/s	     195 B/op	       3 allocs/op
+PASS
+ok  	github.com/snissn/gomap/TreeDB/collections	0.082s

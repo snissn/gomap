@@ -1,0 +1,390 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+cd "$ROOT"
+
+MODE=${MODE:-representative}
+if [[ "$MODE" == measured && ( -z "${TREEDB_COLLECTION:-}" || -z "${QDRANT_COLLECTION:-}" ) ]]; then
+	printf '%s\n' 'MODE=measured requires explicit TREEDB_COLLECTION and QDRANT_COLLECTION' >&2
+	exit 2
+fi
+MANIFEST_PATH_INPUT=${MANIFEST_PATH:-}
+if [[ -z "${RUN_DIR:-}" ]]; then
+	RUN_DIR=$(mktemp -d "${TMPDIR:-/tmp}/gomap_minima_qualification_XXXXXXXXXX")
+fi
+MANIFEST_PATH=${MANIFEST_PATH:-$RUN_DIR/minima_manifest.json}
+TREEDB_EVIDENCE=${TREEDB_EVIDENCE:-$RUN_DIR/treedb_backend.json}
+QDRANT_EVIDENCE=${QDRANT_EVIDENCE:-$RUN_DIR/qdrant_backend.json}
+OUTPUT_PATH=${OUTPUT_PATH:-$RUN_DIR/minima_qualification.json}
+REPORT_PATH=${REPORT_PATH:-$RUN_DIR/minima_qualification.md}
+TREEDB_DATA_DIR=${TREEDB_DATA_DIR:-$RUN_DIR/treedb-data}
+TREEDB_URL=${TREEDB_URL:-http://127.0.0.1:17120}
+TREEDB_COLLECTION=${TREEDB_COLLECTION:-gomap_minima_${RANDOM}_$$}
+TREEDB_PROFILE=${TREEDB_PROFILE:-command_wal_durable}
+TREEDB_STRATEGY=${TREEDB_STRATEGY:-native_runtime}
+TREEDB_EF_SEARCH=${TREEDB_EF_SEARCH:-128}
+TREEDB_QUERY_MODE=${TREEDB_QUERY_MODE:-exact}
+TREEDB_QUANTIZED_INDEX_NAME=${TREEDB_QUANTIZED_INDEX_NAME:-}
+TREEDB_QUANTIZED_RERANK_CANDIDATES=${TREEDB_QUANTIZED_RERANK_CANDIDATES:-}
+TREEDB_QUANTIZED_PLAN=${TREEDB_QUANTIZED_PLAN:-}
+MINIMA_EXPECTED_QUANTIZED_PLAN_SHA256=${MINIMA_EXPECTED_QUANTIZED_PLAN_SHA256:-}
+TREEDB_OPERATION_TIMEOUT=${TREEDB_OPERATION_TIMEOUT:-120}
+TREEDB_STARTUP_TIMEOUT=${TREEDB_STARTUP_TIMEOUT:-3600}
+TREEDB_DIAGNOSTICS_DIR=${TREEDB_DIAGNOSTICS_DIR:-}
+TREEDB_DIAGNOSTICS_URL=${TREEDB_DIAGNOSTICS_URL:-http://127.0.0.1:17121}
+TREEDB_DIAGNOSTIC_SLOW_SECONDS=${TREEDB_DIAGNOSTIC_SLOW_SECONDS:-30}
+TREEDB_DIAGNOSTIC_PROFILE_SECONDS=${TREEDB_DIAGNOSTIC_PROFILE_SECONDS:-5}
+TREEDB_DIAGNOSTIC_CAPTURE_TIMEOUT=${TREEDB_DIAGNOSTIC_CAPTURE_TIMEOUT:-10}
+TREEDB_DIAGNOSTIC_RESUME_SCENARIO=${TREEDB_DIAGNOSTIC_RESUME_SCENARIO:-}
+TREEDB_DIAGNOSTIC_RESUME_START=${TREEDB_DIAGNOSTIC_RESUME_START:-}
+RECOMMENDATION=${RECOMMENDATION:-ready_with_alpha_limitations}
+PYTHON=${PYTHON:-python3}
+EXPECTED_COMMIT=""
+TREEDB_SERVICE_BIN=${TREEDB_SERVICE_BIN:-$RUN_DIR/bin/treedb-document-service}
+MINIMA_COMPARATOR_BIN=${MINIMA_COMPARATOR_BIN:-$RUN_DIR/bin/treedb-rag-benchmark}
+treedb_measured_args=()
+comparator_measured_args=()
+treedb_quantized_args=()
+comparator_quantized_args=()
+
+validate_column_graph_serving() {
+	"$PYTHON" -c '
+import json, sys
+raw = open(sys.argv[1], "rb").read((1 << 20) + 1)
+if len(raw) > 1 << 20:
+    raise ValueError("serving JSON exceeds 1 MiB")
+def strict_object(pairs):
+    value = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValueError("duplicate key")
+        value[key] = item
+    return value
+def reject_constant(value):
+    raise ValueError("nonfinite " + value)
+value = json.loads(raw.decode("utf-8"), object_pairs_hook=strict_object,
+                   parse_constant=reject_constant)
+shape = {
+    "Publication": {key: None for key in ("Rows", "Tombstones", "ValueSlots", "OwnedBytes", "EncodedOutputBytes")},
+    "Owners": {**{key: None for key in ("Owners", "States", "StateBytes", "AssetBytes")},
+               "Cold": {key: None for key in ("ManifestRecords", "ManifestBytes", "AssetBytes", "DecodedTermBytes")},
+               "Physical": {key: None for key in ("segments", "descriptors", "mapped_bytes",
+                                                    "fallback_bytes", "inventory_bytes")}},
+    "CandidateOutput": {key: None for key in ("Bytes", "AppenderAttempts")},
+    "Maintenance": {key: None for key in ("NativeEntries", "ColumnSegments", "ManifestRecords",
+                                             "LifecycleEntries", "NativeBytes", "ColumnBytes",
+                                             "ManifestBytes", "RetainedBytes", "PagerPages")},
+    "Filter": {key: None for key in ("SourceIDs", "SourceBytes", "RetainedBytes", "MappingWork", "InspectedEntries")},
+    "FoldRows": None, "SearchCandidates": None,
+}
+def validate(actual, expected):
+    if type(actual) is not dict or set(actual) != set(expected):
+        raise ValueError("serving schema mismatch")
+    for key, nested in expected.items():
+        if nested is None:
+            limit = 1 << (64 if key == "PagerPages" else 63)
+            if type(actual[key]) is not int or not 0 < actual[key] < limit:
+                raise ValueError("serving limits must be positive Go-compatible integers")
+        else:
+            validate(actual[key], nested)
+validate(value, shape)
+if len(sys.argv) == 3 and not 5 <= int(sys.argv[2]) < 1 << 63:
+    raise ValueError("EF must satisfy TopK <= EF < 2**63")
+' "$@"
+}
+
+if [[ "$TREEDB_OPERATION_TIMEOUT" != "120" ]]; then
+	printf 'TREEDB_OPERATION_TIMEOUT must be exactly 120 for Minima validation, got %q\n' \
+		"$TREEDB_OPERATION_TIMEOUT" >&2
+	exit 2
+fi
+if [[ "$TREEDB_QUERY_MODE" == exact ]]; then
+	if [[ -n "$TREEDB_QUANTIZED_INDEX_NAME" || -n "$TREEDB_QUANTIZED_RERANK_CANDIDATES" ||
+		-n "$TREEDB_QUANTIZED_PLAN" || -n "$MINIMA_EXPECTED_QUANTIZED_PLAN_SHA256" ]]; then
+		printf '%s\n' 'TREEDB_QUERY_MODE=exact does not accept quantized options' >&2
+		exit 2
+	fi
+elif [[ "$TREEDB_QUERY_MODE" == quantized_rerank ]]; then
+	if [[ ! "$MODE" =~ ^bounded-(50k|250k|500k|1000k)$ ||
+		"$TREEDB_STRATEGY" != column_graph || "${TREEDB_TRANSPORT:-}" != native ||
+		"$TREEDB_PROFILE" != command_wal_durable ||
+		-z "${TREEDB_COLUMN_GRAPH_SERVING:-}" || ! -f "$TREEDB_COLUMN_GRAPH_SERVING" ||
+		-z "$TREEDB_QUANTIZED_PLAN" || ! -f "$TREEDB_QUANTIZED_PLAN" ||
+		! "$MINIMA_EXPECTED_QUANTIZED_PLAN_SHA256" =~ ^[0-9a-f]{64}$ ||
+		-z "${TREEDB_NATIVE_ADDRESS:-}" || "$TREEDB_QUANTIZED_INDEX_NAME" != minima_sq8 ||
+		! "$TREEDB_EF_SEARCH" =~ ^[1-9][0-9]*$ ||
+		! "$TREEDB_QUANTIZED_RERANK_CANDIDATES" =~ ^[1-9][0-9]*$ ||
+		"$TREEDB_QUANTIZED_RERANK_CANDIDATES" != "$TREEDB_EF_SEARCH" ]]; then
+		printf '%s\n' 'quantized Minima requires bounded mode, command_wal_durable, column_graph/native, reviewed plan+SHA pin, serving/native address, minima_sq8, and TopK <= R=EF in the native integer range' >&2
+		exit 2
+	fi
+	if ! validate_column_graph_serving "$TREEDB_COLUMN_GRAPH_SERVING" "$TREEDB_EF_SEARCH"; then
+		printf '%s\n' 'quantized Minima requires the exact positive-integer ColumnGraphServingOptions schema' >&2
+		exit 2
+	fi
+	plan_bytes=$(wc -c <"$TREEDB_QUANTIZED_PLAN")
+	if ((plan_bytes > 1048576)); then
+		printf '%s\n' 'quantized Minima plan exceeds 1 MiB' >&2
+		exit 2
+	fi
+	read -r actual_plan_sha256 _ < <(sha256sum -- "$TREEDB_QUANTIZED_PLAN")
+	if [[ "$actual_plan_sha256" != "$MINIMA_EXPECTED_QUANTIZED_PLAN_SHA256" ]]; then
+		printf '%s\n' 'quantized Minima plan bytes do not match the reviewed SHA-256 pin' >&2
+		exit 2
+	fi
+	if [[ -e "$RUN_DIR" ]]; then
+		if [[ ! -d "$RUN_DIR" || -n "$(find "$RUN_DIR" -mindepth 1 -maxdepth 1 ! -name tmp -print -quit)" ||
+			( -e "$RUN_DIR/tmp" && ( ! -d "$RUN_DIR/tmp" || -n "$(find "$RUN_DIR/tmp" -mindepth 1 -print -quit)" ) ) ]]; then
+			printf '%s\n' 'quantized Minima requires a fresh RUN_DIR (an empty tmp/ child is allowed)' >&2
+			exit 2
+		fi
+	fi
+	for destination in "$MANIFEST_PATH" "$TREEDB_EVIDENCE" "$OUTPUT_PATH" "$REPORT_PATH" "$TREEDB_DATA_DIR" "$RUN_DIR/bin"; do
+		if [[ -e "$destination" ]]; then
+			printf 'quantized Minima destination already exists: %s\n' "$destination" >&2
+			exit 2
+		fi
+	done
+	treedb_quantized_args=(
+		--transport native --native-address "$TREEDB_NATIVE_ADDRESS"
+		--column-graph-serving "$TREEDB_COLUMN_GRAPH_SERVING"
+		--quantized-plan "$TREEDB_QUANTIZED_PLAN"
+		--expected-quantized-plan-sha256 "$MINIMA_EXPECTED_QUANTIZED_PLAN_SHA256"
+		--query-mode quantized_rerank --quantized-index-name minima_sq8
+		--quantized-rerank-candidates "$TREEDB_QUANTIZED_RERANK_CANDIDATES"
+	)
+	comparator_quantized_args=(
+		-minima-quantized-plan "$TREEDB_QUANTIZED_PLAN"
+		-minima-expected-quantized-plan-sha256 "$MINIMA_EXPECTED_QUANTIZED_PLAN_SHA256"
+	)
+else
+	printf 'unsupported TREEDB_QUERY_MODE=%s (use exact or quantized_rerank)\n' "$TREEDB_QUERY_MODE" >&2
+	exit 2
+fi
+
+# Re-exec before measured setup populates its output directories. Export the
+# chosen run directory so automatic temporary paths survive the one wrapper.
+case "$MODE" in
+bounded-50k|bounded-250k|bounded-500k|bounded-1000k|measured)
+	wall_seconds=${MINIMA_WALL_SECONDS:-}
+	if [[ "$MODE" != measured ]]; then
+		wall_seconds=${wall_seconds:-600}
+	fi
+	if [[ ! "$wall_seconds" =~ ^[1-9][0-9]*$ ]]; then
+		printf '%s\n' 'MINIMA_WALL_SECONDS must be a positive integer' >&2
+		exit 2
+	fi
+	if [[ "${MINIMA_WALL_WRAPPED:-}" != "1" ]]; then
+		export RUN_DIR MINIMA_WALL_WRAPPED=1
+		exec timeout --signal=TERM --kill-after=10s "${wall_seconds}s" "$ROOT/scripts/bench_minima_qualification.sh"
+	fi
+	;;
+esac
+
+treedb_diagnostic_args=()
+if [[ -n "$TREEDB_DIAGNOSTICS_DIR" ]]; then
+	treedb_diagnostic_args+=(
+		--diagnostics-dir "$TREEDB_DIAGNOSTICS_DIR"
+		--diagnostics-url "$TREEDB_DIAGNOSTICS_URL"
+		--diagnostic-slow-seconds "$TREEDB_DIAGNOSTIC_SLOW_SECONDS"
+		--diagnostic-profile-seconds "$TREEDB_DIAGNOSTIC_PROFILE_SECONDS"
+		--diagnostic-capture-timeout "$TREEDB_DIAGNOSTIC_CAPTURE_TIMEOUT"
+	)
+fi
+
+if [[ "$MODE" == measured ]]; then
+	if [[ -z "$MANIFEST_PATH_INPUT" || ! -f "$MANIFEST_PATH" ||
+		-z "${MINIMA_FREEZE:-}" || ! -f "$MINIMA_FREEZE" ||
+		! "${MINIMA_EXPECTED_FREEZE_SHA256:-}" =~ ^[0-9a-f]{64}$ ||
+		! -x "$TREEDB_SERVICE_BIN" || ! -x "$MINIMA_COMPARATOR_BIN" ||
+		! -x "${VENV:-}/bin/python" ]]; then
+		printf '%s\n' 'MODE=measured requires supplied MANIFEST_PATH, MINIMA_FREEZE, MINIMA_EXPECTED_FREEZE_SHA256, prebuilt TREEDB_SERVICE_BIN/MINIMA_COMPARATOR_BIN and pinned VENV.' >&2
+		exit 2
+	fi
+	PYTHON="$VENV/bin/python"
+	if [[ -e "$RUN_DIR" && ( ! -d "$RUN_DIR" || -n "$(find "$RUN_DIR" -mindepth 1 -maxdepth 1 -print -quit)" ) ]]; then
+		printf '%s\n' 'MODE=measured requires a fresh empty RUN_DIR; retained evidence must not be overwritten.' >&2
+		exit 2
+	fi
+	for destination in "$TREEDB_EVIDENCE" "$QDRANT_EVIDENCE" "$OUTPUT_PATH" "$REPORT_PATH" "$TREEDB_DATA_DIR"; do
+		if [[ -e "$destination" ]]; then
+			printf 'measured destination already exists: %s\n' "$destination" >&2
+			exit 2
+		fi
+	done
+	if [[ "$TREEDB_STRATEGY" != column_graph || ! "${TREEDB_TRANSPORT:-}" =~ ^(http|native)$ ||
+		-z "${TREEDB_COLUMN_GRAPH_SERVING:-}" || ! -f "$TREEDB_COLUMN_GRAPH_SERVING" ||
+		( "$TREEDB_TRANSPORT" == native && -z "${TREEDB_NATIVE_ADDRESS:-}" ) ]]; then
+		printf '%s\n' 'Measured TreeDB requires TREEDB_STRATEGY=column_graph, explicit TREEDB_TRANSPORT and TREEDB_COLUMN_GRAPH_SERVING; native also requires TREEDB_NATIVE_ADDRESS.' >&2
+		exit 2
+	fi
+	if ! validate_column_graph_serving "$TREEDB_COLUMN_GRAPH_SERVING"; then
+		printf '%s\n' 'Measured TreeDB requires the exact positive-integer ColumnGraphServingOptions schema' >&2
+		exit 2
+	fi
+	treedb_measured_args=(--measured --freeze "$MINIMA_FREEZE"
+		--expected-freeze-sha256 "$MINIMA_EXPECTED_FREEZE_SHA256" --comparator-bin "$MINIMA_COMPARATOR_BIN"
+		--transport "$TREEDB_TRANSPORT" --column-graph-serving "$TREEDB_COLUMN_GRAPH_SERVING"
+		--diagnostics-url "$TREEDB_DIAGNOSTICS_URL")
+	if [[ "$TREEDB_TRANSPORT" == native ]]; then
+		treedb_measured_args+=(--native-address "$TREEDB_NATIVE_ADDRESS")
+	fi
+	comparator_measured_args=(-minima-freeze "$MINIMA_FREEZE" -minima-expected-freeze-sha256 "$MINIMA_EXPECTED_FREEZE_SHA256")
+	mkdir -p "$RUN_DIR"
+else
+	mkdir -p "$RUN_DIR/bin"
+fi
+
+case "$MODE" in
+bounded-50k|bounded-250k|bounded-500k|bounded-1000k)
+	rows=${MODE#bounded-}
+	rows=$((${rows%k} * 1000))
+	go build -o "$RUN_DIR/bin/treedb-document-service" -buildvcs=true ./cmd/treedb-document-service
+	go build -o "$RUN_DIR/bin/treedb-rag-benchmark" ./TreeDB/cmd/treedb_rag_benchmark
+	"$RUN_DIR/bin/treedb-rag-benchmark" -workload=minima -dump-minima-manifest "$MANIFEST_PATH" -minima-bounded-total-rows "$rows"
+	printf '%s\n' 'Bounded diagnostic: total rows across scenarios; 4097 crossover retained, full <1% sparse selectivity excluded; cannot qualify.' >&2
+	PYTHONPATH=clients/python/treedb_client/src "$PYTHON" benchmarks/vector_db_compare/minima_treedb_runner.py \
+		--manifest "$MANIFEST_PATH" --output "$TREEDB_EVIDENCE" \
+		--service-bin "$RUN_DIR/bin/treedb-document-service" --url "$TREEDB_URL" \
+		--data-dir "$TREEDB_DATA_DIR" --collection "$TREEDB_COLLECTION" --profile "$TREEDB_PROFILE" \
+		--strategy "$TREEDB_STRATEGY" --operation-timeout "$TREEDB_OPERATION_TIMEOUT" \
+		--startup-timeout 120 --ef-search "$TREEDB_EF_SEARCH" \
+		${treedb_quantized_args[@]+"${treedb_quantized_args[@]}"} \
+		${treedb_diagnostic_args[@]+"${treedb_diagnostic_args[@]}"}
+	"$RUN_DIR/bin/treedb-rag-benchmark" -workload=minima -validate-minima-artifact "$TREEDB_EVIDENCE" \
+		-minima-expected-commit "$(git rev-parse HEAD)" \
+		${comparator_quantized_args[@]+"${comparator_quantized_args[@]}"}
+	exit 0
+	;;
+representative|measured)
+	EXPECTED_COMMIT=${MINIMA_EXPECTED_COMMIT:-$(git rev-parse origin/main)}
+	HEAD_COMMIT=$(git rev-parse HEAD)
+	if [[ ! "$EXPECTED_COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
+		printf 'representative Minima expected commit must be a full 40-hex SHA, got %q\n' "$EXPECTED_COMMIT" >&2
+		exit 2
+	fi
+	if [[ "$HEAD_COMMIT" != "$EXPECTED_COMMIT" ]]; then
+		printf 'representative Minima checkout HEAD %s does not match frozen target %s\n' "$HEAD_COMMIT" "$EXPECTED_COMMIT" >&2
+		exit 2
+	fi
+	;;
+diagnostic-resume)
+	if [[ -z "$TREEDB_DIAGNOSTICS_DIR" || -z "$TREEDB_DIAGNOSTIC_RESUME_SCENARIO" || -z "$TREEDB_DIAGNOSTIC_RESUME_START" ]]; then
+		printf '%s\n' 'MODE=diagnostic-resume requires TREEDB_DIAGNOSTICS_DIR, TREEDB_DIAGNOSTIC_RESUME_SCENARIO, and TREEDB_DIAGNOSTIC_RESUME_START.' >&2
+		exit 2
+	fi
+	treedb_diagnostic_args+=(
+		--diagnostic-resume-scenario "$TREEDB_DIAGNOSTIC_RESUME_SCENARIO"
+		--diagnostic-resume-start "$TREEDB_DIAGNOSTIC_RESUME_START"
+	)
+	;;
+small)
+	printf '%s\n' 'MODE=small runs the real TreeDB small-scenario lifecycle and emits nonpassing partial evidence.' >&2
+	go build -o "$RUN_DIR/bin/treedb-document-service" -buildvcs=true ./cmd/treedb-document-service
+	go build -o "$RUN_DIR/bin/treedb-rag-benchmark" ./TreeDB/cmd/treedb_rag_benchmark
+	"$RUN_DIR/bin/treedb-rag-benchmark" -workload=minima -dump-minima-manifest "$MANIFEST_PATH"
+	treedb_status=0
+	PYTHONPATH=clients/python/treedb_client/src "$PYTHON" \
+		benchmarks/vector_db_compare/minima_treedb_runner.py \
+		--small \
+		--strategy "$TREEDB_STRATEGY" \
+		--manifest "$MANIFEST_PATH" \
+		--output "$TREEDB_EVIDENCE" \
+		--service-bin "$RUN_DIR/bin/treedb-document-service" \
+		--url "$TREEDB_URL" \
+		--data-dir "$TREEDB_DATA_DIR" \
+		--collection "$TREEDB_COLLECTION" \
+		--profile "$TREEDB_PROFILE" \
+		--operation-timeout "$TREEDB_OPERATION_TIMEOUT" \
+		--startup-timeout "$TREEDB_STARTUP_TIMEOUT" \
+		--ef-search "$TREEDB_EF_SEARCH" \
+		${treedb_diagnostic_args[@]+"${treedb_diagnostic_args[@]}"} ||
+		treedb_status=$?
+	"$RUN_DIR/bin/treedb-rag-benchmark" -workload=minima -validate-minima-artifact "$TREEDB_EVIDENCE"
+	printf 'small manifest: %s\nvalidated partial TreeDB evidence: %s\n' "$MANIFEST_PATH" "$TREEDB_EVIDENCE"
+	exit "$treedb_status"
+	;;
+*)
+	printf 'unsupported MODE=%s (use measured, small, representative, diagnostic-resume, bounded-50k, bounded-250k, bounded-500k, or bounded-1000k)\n' "$MODE" >&2
+	exit 2
+	;;
+esac
+
+# The representative workload is frozen at 500,000 rows per representative
+# scenario and 1,024 timed queries. Changing those values requires a new
+# preflight manifest and hashes rather than an environment-only override.
+if [[ "$MODE" != measured ]]; then
+	go build -o "$TREEDB_SERVICE_BIN" -buildvcs=true ./cmd/treedb-document-service
+	go build -o "$MINIMA_COMPARATOR_BIN" ./TreeDB/cmd/treedb_rag_benchmark
+	"$MINIMA_COMPARATOR_BIN" -workload=minima -dump-minima-manifest "$MANIFEST_PATH"
+fi
+
+treedb_status=0
+PYTHONPATH=clients/python/treedb_client/src "$PYTHON" \
+	benchmarks/vector_db_compare/minima_treedb_runner.py \
+	--strategy "$TREEDB_STRATEGY" \
+	--manifest "$MANIFEST_PATH" \
+	--output "$TREEDB_EVIDENCE" \
+	--service-bin "$TREEDB_SERVICE_BIN" \
+	--url "$TREEDB_URL" \
+	--data-dir "$TREEDB_DATA_DIR" \
+	--collection "$TREEDB_COLLECTION" \
+	--profile "$TREEDB_PROFILE" \
+	--ef-search "$TREEDB_EF_SEARCH" \
+	--operation-timeout "$TREEDB_OPERATION_TIMEOUT" \
+	--startup-timeout "$TREEDB_STARTUP_TIMEOUT" \
+	${treedb_measured_args[@]+"${treedb_measured_args[@]}"} \
+	${treedb_diagnostic_args[@]+"${treedb_diagnostic_args[@]}"} ||
+	treedb_status=$?
+
+if [[ "$MODE" == "diagnostic-resume" ]]; then
+	printf 'diagnostic manifest: %s\nnonqualifying TreeDB evidence: %s\ndiagnostic profiles: %s\n' \
+		"$MANIFEST_PATH" "$TREEDB_EVIDENCE" "$TREEDB_DIAGNOSTICS_DIR"
+	exit "$treedb_status"
+fi
+
+qdrant_status=0
+if [[ "$(uname -s)" == "Darwin" && -z "${QDRANT_BIN:-}" && -z "${QDRANT_SERVER_PID:-}" ]]; then
+	printf '%s\n' 'Representative qualification on Darwin requires QDRANT_BIN or an external QDRANT_SERVER_PID so RSS/CPU evidence is available.' >&2
+	qdrant_status=2
+else
+	RUN_DIR="$RUN_DIR/qdrant" \
+	MINIMA_MEASURED="$([[ "$MODE" == measured ]] && printf true || printf false)" \
+	MINIMA_COMPARATOR_BIN="$MINIMA_COMPARATOR_BIN" \
+	MINIMA_FREEZE="${MINIMA_FREEZE:-}" \
+	MINIMA_EXPECTED_FREEZE_SHA256="${MINIMA_EXPECTED_FREEZE_SHA256:-}" \
+	VENV="${VENV:-$RUN_DIR/qdrant/venv}" \
+	MANIFEST_PATH="$MANIFEST_PATH" \
+	OUTPUT_PATH="$QDRANT_EVIDENCE" \
+		scripts/bench_minima_qdrant.sh ||
+		qdrant_status=$?
+fi
+
+comparator_status=0
+if [[ -f "$TREEDB_EVIDENCE" && -f "$QDRANT_EVIDENCE" ]]; then
+	"$MINIMA_COMPARATOR_BIN" \
+		-workload=minima \
+		-minima-treedb-evidence "$TREEDB_EVIDENCE" \
+		-minima-qdrant-evidence "$QDRANT_EVIDENCE" \
+		-minima-output "$OUTPUT_PATH" \
+		-minima-report "$REPORT_PATH" \
+		-minima-recommendation "$RECOMMENDATION" \
+		-minima-expected-commit "$EXPECTED_COMMIT" \
+		${comparator_measured_args[@]+"${comparator_measured_args[@]}"} ||
+		comparator_status=$?
+else
+	comparator_status=2
+	printf 'comparator not evaluated: evidence exists TreeDB=%s Qdrant=%s\n' \
+		"$([[ -f "$TREEDB_EVIDENCE" ]] && printf true || printf false)" \
+		"$([[ -f "$QDRANT_EVIDENCE" ]] && printf true || printf false)" >&2
+fi
+
+printf 'manifest: %s\nTreeDB evidence: %s\nQdrant evidence: %s\nqualification artifact: %s\nreport: %s\n' \
+	"$MANIFEST_PATH" "$TREEDB_EVIDENCE" "$QDRANT_EVIDENCE" "$OUTPUT_PATH" "$REPORT_PATH"
+
+if ((treedb_status != 0 || qdrant_status != 0 || comparator_status != 0)); then
+	printf 'qualification failed: TreeDB=%d Qdrant=%d comparator=%d\n' \
+		"$treedb_status" "$qdrant_status" "$comparator_status" >&2
+	exit 1
+fi

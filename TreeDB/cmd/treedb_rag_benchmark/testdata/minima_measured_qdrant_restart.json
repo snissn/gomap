@@ -1,0 +1,157 @@
+{
+  "source_sha256": "b77c1d831858a96522c36d0362cd35584fbf284aa03e9b5f7bc015a0b419c201",
+  "restart_boundary": {
+    "hook_identity": "/mnt/fast4tb/gomap-minima-execution-4614-PITU17/artifacts/m4/resume-harness-cli-f0a292e4/run/qdrant/restart-qdrant.sh",
+    "new_linux_process_identity": "3966934:42692677",
+    "new_pid": 3966934,
+    "new_process_identity": "Mon Sep 7 21:10:41 2026 /qdrant/qdrant",
+    "old_linux_process_identity": "3966399:42692013",
+    "old_pid": 3966399,
+    "old_process_identity": "Mon Sep 7 21:10:35 2026 /qdrant/qdrant",
+    "pid_changed": true,
+    "verified": true
+  },
+  "phase": {
+    "classification": "production_path",
+    "duration_nanos": 1845847226,
+    "end_nanos": 426928033118606,
+    "name": "restart_open_readiness",
+    "resource_segments": [
+      {
+        "end": {
+          "availability": {
+            "allocs_per_op": "unavailable",
+            "bytes_per_op": "unavailable",
+            "cpu_seconds": "Qdrant server PID 3966399",
+            "disk_bytes": "/mnt/fast4tb/gomap-minima-execution-4614-PITU17/artifacts/m4/resume-harness-cli-f0a292e4/run/qdrant/qdrant-storage",
+            "measurement_error": "",
+            "rss_bytes": "Qdrant server PID 3966399"
+          },
+          "captured": true,
+          "cpu_seconds": 1.0,
+          "disk_bytes": 319068561,
+          "lifetime_ordinal": 0,
+          "linux_process_identity": "3966399:42692013",
+          "peak_rss": {
+            "availability": "measured",
+            "bytes": 160817152,
+            "pid": 3966399,
+            "process_identity": "3966399:42692013",
+            "scope": "process_lifetime_through_sample",
+            "source": "/proc/<pid>/status:VmHWM"
+          },
+          "pid": 3966399,
+          "process_identity": "Mon Sep 7 21:10:35 2026 /qdrant/qdrant",
+          "rss_bytes": 160817152
+        },
+        "start": {
+          "availability": {
+            "allocs_per_op": "unavailable",
+            "bytes_per_op": "unavailable",
+            "cpu_seconds": "Qdrant server PID 3966399",
+            "disk_bytes": "/mnt/fast4tb/gomap-minima-execution-4614-PITU17/artifacts/m4/resume-harness-cli-f0a292e4/run/qdrant/qdrant-storage",
+            "measurement_error": "",
+            "rss_bytes": "Qdrant server PID 3966399"
+          },
+          "captured": true,
+          "cpu_seconds": 1.0,
+          "disk_bytes": 319068561,
+          "lifetime_ordinal": 0,
+          "linux_process_identity": "3966399:42692013",
+          "peak_rss": {
+            "availability": "measured",
+            "bytes": 160817152,
+            "pid": 3966399,
+            "process_identity": "3966399:42692013",
+            "scope": "process_lifetime_through_sample",
+            "source": "/proc/<pid>/status:VmHWM"
+          },
+          "pid": 3966399,
+          "process_identity": "Mon Sep 7 21:10:35 2026 /qdrant/qdrant",
+          "rss_bytes": 160817152
+        }
+      },
+      {
+        "end": {
+          "availability": {
+            "allocs_per_op": "unavailable",
+            "bytes_per_op": "unavailable",
+            "cpu_seconds": "Qdrant server PID 3966934",
+            "disk_bytes": "/mnt/fast4tb/gomap-minima-execution-4614-PITU17/artifacts/m4/resume-harness-cli-f0a292e4/run/qdrant/qdrant-storage",
+            "measurement_error": "",
+            "rss_bytes": "Qdrant server PID 3966934"
+          },
+          "captured": true,
+          "cpu_seconds": 0.0,
+          "disk_bytes": 320518814,
+          "lifetime_ordinal": 1,
+          "linux_process_identity": "3966934:42692677",
+          "peak_rss": {
+            "availability": "measured",
+            "bytes": 275521536,
+            "pid": 3966934,
+            "process_identity": "3966934:42692677",
+            "scope": "process_lifetime_through_sample",
+            "source": "/proc/<pid>/status:VmHWM"
+          },
+          "pid": 3966934,
+          "process_identity": "Mon Sep 7 21:10:41 2026 /qdrant/qdrant",
+          "rss_bytes": 275521536
+        },
+        "start": {
+          "availability": {
+            "allocs_per_op": "unavailable",
+            "bytes_per_op": "unavailable",
+            "cpu_seconds": "Qdrant server PID 3966934",
+            "disk_bytes": "/mnt/fast4tb/gomap-minima-execution-4614-PITU17/artifacts/m4/resume-harness-cli-f0a292e4/run/qdrant/qdrant-storage",
+            "measurement_error": "",
+            "rss_bytes": "Qdrant server PID 3966934"
+          },
+          "captured": true,
+          "cpu_seconds": 0.0,
+          "disk_bytes": 319068561,
+          "lifetime_ordinal": 1,
+          "linux_process_identity": "3966934:42692677",
+          "peak_rss": {
+            "availability": "measured",
+            "bytes": 275521536,
+            "pid": 3966934,
+            "process_identity": "3966934:42692677",
+            "scope": "process_lifetime_through_sample",
+            "source": "/proc/<pid>/status:VmHWM"
+          },
+          "pid": 3966934,
+          "process_identity": "Mon Sep 7 21:10:41 2026 /qdrant/qdrant",
+          "rss_bytes": 0
+        }
+      }
+    ],
+    "sample_count": 3,
+    "sample_duration_nanos": 38887844,
+    "start_nanos": 426926187271380
+  },
+  "actual_new_baseline": {
+    "availability": {
+      "allocs_per_op": "unavailable",
+      "bytes_per_op": "unavailable",
+      "cpu_seconds": "Qdrant server PID 3966934",
+      "disk_bytes": "/mnt/fast4tb/gomap-minima-execution-4614-PITU17/artifacts/m4/resume-harness-cli-f0a292e4/run/qdrant/qdrant-storage",
+      "measurement_error": "",
+      "rss_bytes": "Qdrant server PID 3966934"
+    },
+    "captured": true,
+    "cpu_seconds": 0.0,
+    "disk_bytes": 320518814,
+    "linux_process_identity": "3966934:42692677",
+    "peak_rss": {
+      "availability": "measured",
+      "bytes": 273063936,
+      "pid": 3966934,
+      "process_identity": "3966934:42692677",
+      "scope": "process_lifetime_through_sample",
+      "source": "/proc/<pid>/status:VmHWM"
+    },
+    "pid": 3966934,
+    "rss_bytes": 273063936
+  }
+}

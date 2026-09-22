@@ -1,0 +1,88 @@
+{
+  "target": "treedb",
+  "treedb_dir": "/tmp/gomap_mongo_gateway_compare_20260429/treedb_data/docs_1000_idx_1",
+  "database": "mongo_gateway_compare_docs_1000_idx_1",
+  "collection": "docs",
+  "documents": 1000,
+  "secondary_indexes": 1,
+  "phases": [
+    {
+      "name": "load_insert_many",
+      "operations": 1000,
+      "driver_calls": 2,
+      "duration_ms": 16.47,
+      "ops_per_sec": 60716.417294221435,
+      "latency_micros": {
+        "p50": 7162,
+        "p95": 8335,
+        "p99": 8335
+      }
+    },
+    {
+      "name": "id_find_one",
+      "operations": 1000,
+      "driver_calls": 1000,
+      "duration_ms": 81.854,
+      "ops_per_sec": 12216.735740497768,
+      "latency_micros": {
+        "p50": 76,
+        "p95": 94,
+        "p99": 203
+      }
+    },
+    {
+      "name": "email_find_one",
+      "operations": 1000,
+      "driver_calls": 1000,
+      "duration_ms": 86.579,
+      "ops_per_sec": 11550.034095123148,
+      "latency_micros": {
+        "p50": 79,
+        "p95": 103,
+        "p99": 204
+      }
+    },
+    {
+      "name": "age_range_limit_10",
+      "operations": 100,
+      "driver_calls": 100,
+      "duration_ms": 929.57,
+      "ops_per_sec": 107.57662005989927,
+      "latency_micros": {
+        "p50": 9269,
+        "p95": 9614,
+        "p99": 9947
+      }
+    },
+    {
+      "name": "id_update_set",
+      "operations": 100,
+      "driver_calls": 100,
+      "duration_ms": 16.78,
+      "ops_per_sec": 5959.446443706293,
+      "latency_micros": {
+        "p50": 150,
+        "p95": 213,
+        "p99": 414
+      }
+    }
+  ],
+  "treedb_disk_after_load": {
+    "total_bytes": 786808,
+    "paths": {
+      "LOCK": 12,
+      "format.json": 336,
+      "index.db": 786432,
+      "vlog_ref_counts.meta": 28
+    }
+  },
+  "treedb_disk_after_checkpoint": {
+    "total_bytes": 3670392,
+    "paths": {
+      "LOCK": 12,
+      "format.json": 336,
+      "index.db": 3670016,
+      "vlog_ref_counts.meta": 28
+    }
+  }
+}

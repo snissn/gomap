@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "result_kind": "vector_partition_system_node_ready_v1",
+  "assembly": "production_public_v1",
+  "topology": "native_four_daemon_four_group",
+  "node_id": "native-group-b",
+  "pid": 2349023,
+  "public_route": "vectorpartition.OperationsV1.Search",
+  "production_topology": true,
+  "m8_loopback": false,
+  "database_directory": "/mnt/fast4tb/gomap-4019-m2-topology-tax-evidence-95c60cbe/verified-runs/native_four_daemon_four_group/repeat-1/database-native-group-b",
+  "state_directory": "/mnt/fast4tb/gomap-4019-m2-topology-tax-evidence-95c60cbe/verified-runs/native_four_daemon_four_group/repeat-1/state-native-group-b",
+  "source_revision": "95c60cbef0b0cb824a74a29e9304784e76745d9d",
+  "vcs_modified": false,
+  "executable_sha256": "b8d12f98778698ed74db4a905e2bb6b2925840702664beb6fab9e402c4f913d1",
+  "node_config_sha256": "794b6065198d14ae0331012582ebaee7a7e7ad558aa95d89789b63017063a5fd",
+  "lifecycle_state": "active",
+  "groups": [
+    {
+      "group_id": "group-b",
+      "endpoint": "127.0.0.1:57853",
+      "leader_id": "node-b",
+      "applied_index": 3,
+      "proves_production_consensus": true
+    }
+  ]
+}

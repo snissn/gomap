@@ -1,0 +1,13 @@
+{
+  "schema": "treedb.mongo-gateway.compat-diff.fixture",
+  "version": 1,
+  "id": "count-supported",
+  "capability_id": "read-command.count-filter-skip-limit",
+  "expectation": "supported",
+  "database": "compat",
+  "collection": "records",
+  "smoke": false,
+  "seed": [{"_id":"a","score":{"$numberInt":"1"}}, {"_id":"b","score":{"$numberInt":"2"}}],
+  "normalize_response_envelope_order": true,
+  "command": {"count":"records","query":{"score":{"$gte":{"$numberInt":"1"}}}}
+}

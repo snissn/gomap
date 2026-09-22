@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "result_kind": "vector_partition_v1_qualification_attribution_v1",
+  "status": "experimental_off_gate_failures_not_1m_qualified",
+  "blocking_follow_up": "#4022",
+  "parent_acceptance": "https://github.com/snissn/gomap/issues/4012#issuecomment-5123955990",
+  "measured_code_head": "a2b2ad40b796",
+  "fixture": {"kind":"local_embedding_mixture_calibration","vectors":100000,"queries":1000,"dimensions":128,"metric":"cosine","seed":4017,"checksum":"ecc2224f386932e580e4956f2cfa852140d3134625971c3511bc0d5feddf9b95","scope":"not_required_1m"},
+  "truth": {"contract":"fp32_normalized_cosine_binary64_accum_score_desc_stable_id_asc_best_duplicate_v1","authoritative_cache_identity":"accdb76c693e2da99333b9327efc0e3d83ba630b25a8ba2b6820f5a6f6e38937","historical_pre_hardening_cache_identity":"3a8605017166fca50d4a85d28ad44e17e9abac9828a6795cdae25f238042624a","historical_artifact_reuse_not_reusable_after_hardening":true,"disjoint_compute_nanos":46531550247,"overlap_reuse_load_nanos":6761515},
+  "topology": {"partitions":16,"raft_groups":4,"nodes_per_group":3,"transport":"tcp_loopback_serialized_m5_v1"},
+  "attribution": {"stable_hash_p4":0.2578,"graph_overlap_p4":0.7201,"exact_routing_p4":0.7291,"ef_p4":{"64":0.7201,"128":0.7279,"256":0.7289},"ef_p16":{"64":0.9924,"128":0.999,"256":0.9998},"owner":"graph_router_primary_partition_locality_at_quarter_probe_budget"},
+  "gates": {"exact_partition_union_parity":"pass","failure_honesty":"pass","balance":"pass","overlap_storage":"pass_1.2002x","quarter_probe_recall_ge_090":"fail_0.7201","probe_reduction":"fail","matched_recall_qps":"fail_no_target_row","matched_recall_tail":"fail_no_target_row","required_1m":"deferred_requires_explicit_work_time_resource_calibration"},
+  "repeats": {"runs":3,"p4":{"recall":0.7201,"qps_median":50.96762724566287,"qps_range":[38.957053307919566,51.0583649126661],"p95_ms_median":30.980773,"p95_ms_range":[29.590312,46.256897]},"p16":{"recall":0.9924,"qps_median":45.444061581835896,"qps_range":[38.30153640654342,46.672391648155234],"p95_ms_median":34.493601,"p95_ms_range":[33.704847,47.056089]}},
+  "concurrency": {"p4_c16":{"recall":0.7201,"qps":126.40229642716955,"p95_ms":218.700072},"p4_c64":{"recall":0.7201,"qps":93.50123186722921,"p95_ms":978.510104},"p16_c16":{"recall":0.9924,"qps":91.25145855053826,"p95_ms":299.688544},"p16_c64":{"recall":0.9924,"qps":163.95218587968898,"p95_ms":524.46338}},
+  "published_artifact_root": "TreeDB/docs/spec/artifacts/vector-partition-v1-qualification-4015",
+  "local_provenance_root": "/mnt/fast4tb/gomap-4015-embedding100k",
+  "retained_runs": [
+    {"role":"graph_disjoint","out":"m8-default","asset":"graph-default","probes":"1,2,4,8,16","overlap":"0","ef_search":"64","concurrency":"1"},
+    {"role":"graph_overlap","out":"m8-overlap","asset":"graph-overlap-020","probes":"1,2,4,8,16","overlap":".2","ef_search":"64","concurrency":"1"},
+    {"role":"stable_hash","out":"m8-stable-id-hash","asset":"stable-id-hash-disjoint","probes":"4,16","overlap":"0","ef_search":"64","concurrency":"1"},
+    {"role":"overlap_ef","out":"m8-overlap-ef128-256","asset":"graph-overlap-020","probes":"4,16","overlap":".2","ef_search":"128,256","concurrency":"1"},
+    {"role":"overlap_concurrency","out":"m8-overlap-concurrency16-64","asset":"graph-overlap-020","probes":"4,16","overlap":".2","ef_search":"64","concurrency":"16,64"},
+    {"role":"overlap_repeat_2","out":"m8-overlap-repeat-2","asset":"graph-overlap-020","probes":"4,16","overlap":".2","ef_search":"64","concurrency":"1"},
+    {"role":"overlap_repeat_3","out":"m8-overlap-repeat-3","asset":"graph-overlap-020","probes":"4,16","overlap":".2","ef_search":"64","concurrency":"1"}
+  ],
+  "commands": {"canonical":"go run ./cmd/treedb_vector_partition_bench -mode production_multi_group -dataset /mnt/fast4tb/gomap-4015-fixtures/embedding_mixture_100k -out <artifact-out> -m8-truth-cache /mnt/fast4tb/gomap-4015-embedding100k/truth-cache -m8-truth-cache-sha256 bf59243ed023eb4f1770a01373113b5f0f5a845d554d8b47318285dd7f8a4a62 -m8-existing-db <retained-M3-asset> -partitions 16 -raft-groups 4 -probes <cells> -overlap <ratio> -ef-search <cells> -concurrency <cells> -top-k 10 -seed 4017 -m8-max-exact-truth-visits 200000000 -format text"},
+  "raw_artifacts": [
+    {"role":"graph_disjoint_m2","path":"TreeDB/docs/spec/artifacts/vector-partition-v1-qualification-4015/graph-disjoint-m2.json","sha256":"2cd948e3b6c6edc2aac232d40074992e7638bb95851bd74ea04ae8015b092154"},
+    {"role":"graph_disjoint_m3","path":"TreeDB/docs/spec/artifacts/vector-partition-v1-qualification-4015/graph-disjoint-m3.json","sha256":"d417eacafc99216c535500df327c1e428929ca44c458592a6160a08331b64b1c"},
+    {"role":"graph_disjoint_m8","path":"TreeDB/docs/spec/artifacts/vector-partition-v1-qualification-4015/graph-disjoint-m8.json","sha256":"123c9135f3374827c16e52946dde138860bcfbf49b3985b7a235e75c35c7198e"},
+    {"role":"graph_overlap_020_m2","path":"TreeDB/docs/spec/artifacts/vector-partition-v1-qualification-4015/graph-overlap-020-m2.json","sha256":"4b4870b8ca350fb503ea630cf7af9ddb28c5d98e65104fc8df35bea2d2b946b8"},
+    {"role":"graph_overlap_020_m3","path":"TreeDB/docs/spec/artifacts/vector-partition-v1-qualification-4015/graph-overlap-020-m3.json","sha256":"129bccba7d5bbe619c1d495458a9c945370b56913f61e5de2e3c93bdf5ea819b"},
+    {"role":"graph_overlap_020_m8","path":"TreeDB/docs/spec/artifacts/vector-partition-v1-qualification-4015/graph-overlap-020-m8.json","sha256":"4a6c794f78df3512de1b925769bd2c2f8eddb3ff05d80017e0bee3db5fa77cbd"},
+    {"role":"graph_overlap_020_ef_m8","path":"TreeDB/docs/spec/artifacts/vector-partition-v1-qualification-4015/graph-overlap-020-ef-m8.json","sha256":"4e542184ab00e77e2f44e4e7d59992e99b16d25dc06f037509221d8d0f4422a1"},
+    {"role":"graph_overlap_020_concurrency_m8","path":"TreeDB/docs/spec/artifacts/vector-partition-v1-qualification-4015/graph-overlap-020-concurrency-m8.json","sha256":"bab1d706684af6817f948c6412b42c56d17efe1c5f56c3ba40c679ceb6ededdc"},
+    {"role":"graph_overlap_020_repeat_2_m8","path":"TreeDB/docs/spec/artifacts/vector-partition-v1-qualification-4015/graph-overlap-020-repeat-2-m8.json","sha256":"919abe7ab4d372afc9293c50716148ef080b05a8e61fe00c27c590fbca3ff6c3"},
+    {"role":"graph_overlap_020_repeat_3_m8","path":"TreeDB/docs/spec/artifacts/vector-partition-v1-qualification-4015/graph-overlap-020-repeat-3-m8.json","sha256":"b0ae43d4b68cc4e57e9d3b74d5308657b61a7d9be238e870182c1b5d22190cc5"},
+    {"role":"stable_id_hash_disjoint_m2","path":"TreeDB/docs/spec/artifacts/vector-partition-v1-qualification-4015/stable-id-hash-disjoint-m2.json","sha256":"473bec607a8f8c90036b28d9694a6dc1bc083c8cc3eb974682ad2f0deff76519"},
+    {"role":"stable_id_hash_disjoint_m3","path":"TreeDB/docs/spec/artifacts/vector-partition-v1-qualification-4015/stable-id-hash-disjoint-m3.json","sha256":"86ec0afa0d7740cb51f0e7e4e095c13d5e1ff4dbca5177408b28e7fdd82849f3"},
+    {"role":"stable_id_hash_disjoint_m8","path":"TreeDB/docs/spec/artifacts/vector-partition-v1-qualification-4015/stable-id-hash-disjoint-m8.json","sha256":"9ad6c8de7a3432a6f8ce49c5f29eaf1a9629247eb725a59a4203ee341d30875d"}
+  ]
+}

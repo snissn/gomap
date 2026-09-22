@@ -1,0 +1,1603 @@
+# TreeDB Native Wire Protocol v1
+
+Status: normative for code that advertises native-wire v1. Distributed/Raft
+behavior remains target/non-normative until cluster mode lands.
+
+TreeDB is pre-alpha. This document defines the target native network protocol
+shape for TreeDB collections and raw ordered-key operations. It is intended to
+guide implementation, benchmark work, and the future Raft/distributed database
+surface. Sections marked distributed or Raft target do not describe current
+single-node server behavior.
+
+Normative keywords are conformance requirements for code that advertises
+native-wire v1. Until a phase lands, unmatched requirements are design
+constraints. Any PR that changes frame layout, command IDs, section IDs,
+deterministic encoding, benchmark labels, or observability keys MUST update this
+document, the roadmap, relevant codec/golden tests, and benchmark documentation
+in the same change.
+
+### Normalized-cosine v4 contract
+
+Native command64/v4 implements the opt-in
+`cosine_normalized_f32_v1` representation specified in
+[`cosine-normalized-f32-v1.md`](cosine-normalized-f32-v1.md). Go and Python
+clients negotiate v4 explicitly. A v1/v2/v3 request for this representation
+fails closed before search instead of using legacy score semantics.
+
+The v4 production envelope carries framing, bounds, negotiated score contract,
+captured owner/generation, IDs/scores, and projected documents. It carries no
+full score-plane proof unless diagnostic mode was requested. With
+`return_embedding=false` it performs and carries no output embedding work;
+true returns canonical normalized vectors. Legacy command versions remain
+unchanged below.
+
+## 1. Decision
+
+TreeDB SHOULD use a native binary protocol for its production data plane.
+
+OpenRPC, OpenAPI, Swagger, and JSON-RPC style descriptions are intentionally
+not the canonical TreeDB network protocol. They can be useful for generated
+admin clients or human-readable documentation, but their JSON object model,
+field-name repetition, generic map decoding, HTTP request shape, and awkward
+streaming/backpressure semantics are the wrong default costs for the TreeDB hot
+path.
+
+The native protocol MUST be designed so the same logical command schema can also
+produce future deterministic Raft command entries. Transport fields, tracing,
+deadlines, negotiated compression choices, and socket-level request identifiers
+MUST NOT be part of the replicated command identity.
+
+## 2. Goals
+
+1. Provide a fast collection-native network protocol.
+2. Keep command payloads vectorized for insert/get/query batches.
+3. Avoid JSON/BSON command envelopes on the hot path.
+4. Preserve TreeDB's existing collection document formats:
+   - JSON document bytes,
+   - native BSON document bytes,
+   - template-v1 stored documents and template records.
+5. Make durability and consistency semantics explicit per request.
+6. Leave room for streaming reads, backpressure, cancellation, compression,
+   authentication, and future cluster routing.
+7. Define a clean boundary between client wire frames and future Raft log
+   entries.
+
+## 3. Non-Goals
+
+The v1 protocol does not initially require:
+
+1. MongoDB compatibility.
+2. Redis/RESP compatibility.
+3. OpenRPC or JSON-RPC compatibility.
+4. Arbitrary SQL execution.
+5. Cross-node distributed query execution.
+6. Server-side WASM execution.
+7. A stable public compatibility promise before TreeDB exits pre-alpha.
+
+MongoDB and Redis compatibility layers MAY continue to exist as adapters, but
+they MUST NOT define the native TreeDB protocol or future Raft log format.
+
+## 4. Layering
+
+The protocol has three layers:
+
+1. **Transport frame:** connection-local framing, request IDs, stream IDs,
+   frame type, and frame flags.
+2. **Command payload:** versioned command IDs and typed sections.
+3. **Deterministic command entry:** a canonical subset of the command payload
+   suitable for future Raft replication.
+
+Only layer 3 is eligible for Raft log storage. Layer 1 MUST be excluded from
+Raft entries. Layer 2 MAY contain optional client/server convenience sections
+that are also excluded from deterministic entries unless explicitly marked as
+deterministic command input.
+
+User-command WAL is local crash-recovery durability state and is not a Raft log
+entry. Native-wire deterministic command entries describe logical mutations;
+each node that applies such a command must still satisfy the local
+user-command-WAL recoverability, root-publication, and applied-LSN rule before
+reporting local or Raft-backed success for collection mutations. Local command
+WAL payloads should reuse or wrap these deterministic command-entry schemas so
+the single-node WAL and future Raft paths do not grow separate mutation
+encoders.
+
+Protocol compatibility is based on exact transport-version matching and explicit
+feature negotiation, not best-effort decoding of unknown required fields.
+Unknown required frame flags, section flags, command IDs, command versions, or
+critical sections MUST fail fast with a structured error. Unknown advisory
+fields MAY be ignored.
+
+## 5. Transport
+
+The primary transports are:
+
+- TCP,
+- Unix domain sockets,
+- in-process benchmark transport.
+
+TLS and authentication are negotiated above the raw connection or through a
+future authenticated transport wrapper. The frame format does not require HTTP.
+
+### 5.1 Fixed Frame Header
+
+All fixed-width integers are little-endian. Variable-length integers use unsigned
+base-128 varints.
+
+Primitive payload encodings:
+
+- `uvarint`: unsigned base-128, least-significant 7-bit group first, high bit set
+  on every non-final byte. Senders MUST use the shortest encoding; receivers
+  MUST reject encodings that overflow `uint64` or exceed 10 bytes.
+- `varint`: signed `int64` encoded by zig-zag mapping to `uvarint`
+  (`n >= 0 => n*2`, `n < 0 => (-n*2)-1`).
+- `bool`: one byte, `0=false`, `1=true`; all other values are malformed.
+- `string`: `uvarint` byte length followed by UTF-8 bytes. Command-specific
+  validators may impose a narrower grammar, such as collection or index names.
+- `bytes`: `uvarint` byte length followed by exactly that many opaque bytes,
+  except where a containing structure already supplies an explicit length.
+- Optional fields are represented by section or field presence, not by an
+  implicit null encoding. A section schema that contains optional scalar fields
+  MUST define an explicit presence mechanism, such as a field-count prefix,
+  fixed presence bitmap, or command-specific sentinel, and MUST define the
+  default value used when the field is absent.
+
+```text
+offset  size  field
+0       4     magic = "TDB1"
+4       2     header_len
+6       2     version_major
+8       2     version_minor
+10      2     frame_type
+12      4     frame_flags
+16      8     stream_id
+24      8     request_id
+32      8     body_len
+```
+
+The initial fixed header length is 40 bytes. `header_len` allows future fixed
+header extensions. Receivers MUST reject frames whose `header_len` is smaller
+than 40 or larger than their configured maximum fixed-header length.
+
+The frame body begins at byte offset `header_len`. v1 senders MUST set
+`header_len=40` unless a fixed-header extension has been negotiated. Receivers
+that accept `header_len > 40` MUST skip bytes `[40, header_len)` before reading
+the body. Unknown fixed-header extensions are invalid unless explicitly
+negotiated.
+
+`body_len` is the number of bytes following the header. Receivers MUST enforce a
+negotiated maximum frame size.
+
+`frame_flags` use the low 16 bits for required semantics and the high 16 bits
+for advisory semantics. A receiver MUST reject a frame with an unknown required
+flag bit. A receiver MAY ignore unknown advisory flag bits. Frame flags are
+transport metadata and MUST NOT be copied into deterministic command entries
+unless a command schema explicitly promotes the same logical meaning into a
+deterministic command flag.
+
+### 5.2 Frame Types
+
+Initial frame types:
+
+```text
+1  hello
+2  hello_ok
+3  request
+4  response
+5  data
+6  error
+7  cancel
+8  ping
+9  pong
+10 goaway
+```
+
+`request_id` identifies one client request on a connection. Servers MAY process
+pipelined requests out of order unless the command explicitly requires ordering.
+Clients MUST match responses by `request_id`.
+
+`stream_id` identifies a logical stream or cursor. Non-streaming requests and
+initial cursor-open requests use `stream_id=0`. For v1 cursors,
+`cursor_next`/`cursor_close` requests MUST carry the server-assigned cursor ID
+in a `cursor_ref` section. Clients SHOULD also set `stream_id` to the same
+cursor ID for transport observability; servers MUST reject a request where a
+non-zero `stream_id` disagrees with `cursor_ref`. Responses MAY echo the cursor
+ID in `stream_id`. Negotiated push-streaming extensions MAY use the same
+`request_id` with a non-zero `stream_id`.
+
+v1 cursor delivery is pull-based. `open_scan` returns a server-assigned cursor
+ID in `cursor_meta.stream_id` and MAY return an initial batch. Each
+`cursor_next` or `cursor_close` is a new request with a new `request_id`, a
+`cursor_ref` body section, and normally the cursor ID in `stream_id`. The server
+returns at most one batch per `cursor_next`. EOF, `cursor_close`, idle timeout,
+cancel, or any terminal cursor error releases the cursor. The `data` frame type
+is reserved for a separately negotiated push-streaming extension and MUST NOT be
+used for v1 cursors.
+
+A `cancel` frame targets the `request_id` in its header. `stream_id=0` cancels
+the whole request; non-zero `stream_id` cancels that cursor or stream. Cancel is
+best-effort: clients MUST tolerate a successful response racing with cancel.
+After observing cancel, servers SHOULD stop work promptly, release cursor state,
+and return `canceled` if no terminal response has already been sent.
+
+v1 read backpressure is expressed by `cursor_next` maximum item count,
+`cursor_next` maximum response bytes, negotiated maximum frame size, and
+negotiated maximum in-flight requests and cursors. Servers MUST NOT send
+unbounded unsolicited frames.
+
+`goaway` indicates that the peer will accept no new requests on the connection.
+Its body is a `response_meta` section encoded as a string map. The map MUST
+include `last_accepted_request_id` encoded as an unsigned decimal string and MAY
+include `error_code` encoded as an unsigned decimal string plus an optional
+human-readable `message`. Clients MAY retry requests with IDs greater than
+`last_accepted_request_id` when the command and idempotency policy allow retry.
+
+Each request moves through frame decode, schema validation, admission, dispatch,
+engine execution, response encode, and terminal cleanup. A request MUST emit at
+most one terminal response or error. Cursor-open commands create server-owned
+cursor state only after admission succeeds. EOF, `cursor_close`, cancel, idle
+timeout, connection close, or terminal cursor error MUST release that state.
+Mutation dispatch MUST resolve connection-local handles and catalog guards before
+execution. Distributed mode MUST canonicalize and admit deterministic command
+bytes before applying the mutation.
+
+### 5.3 Body Sections
+
+Frame bodies are a sequence of typed sections:
+
+```text
+section_id     uvarint
+section_flags  uvarint
+section_len    uvarint
+section_bytes  bytes[section_len]
+```
+
+`section_flags & 1` marks a section as critical. Unknown critical sections MUST
+fail the frame. Unknown non-critical sections MUST be ignored. Unknown
+`section_flags` bits are required semantics and MUST fail the frame unless the
+command schema or negotiated feature explicitly defines them.
+
+Sections SHOULD be ordered by increasing `section_id`, but receivers MUST NOT
+depend on order unless a command schema says a repeated section is ordered.
+Deterministic command-entry encoders MUST sort deterministic sections by
+`section_id` and MUST reject duplicate non-repeatable deterministic sections.
+
+Each command schema MUST list required sections, optional sections, allowed
+multiplicity, ordering significance, and whether each section is deterministic
+command input. Duplicate singleton sections and missing required sections MUST
+be rejected as `invalid_command`.
+
+### 5.4 Common Sections
+
+Initial common section IDs:
+
+```text
+1  command_header
+2  error
+3  capability_set
+4  deadline
+5  trace_context
+6  ack_policy
+7  consistency_policy
+8  idempotency_key
+9  checksum
+10 compression
+11 response_meta
+12 cursor_meta
+```
+
+`ack_policy`, `consistency_policy`, deadlines, tracing, compression, and
+response-shaping sections are common request/transport policy. They are not
+deterministic command input. Schema registries must mark `ack_policy`
+non-deterministic for every command version, and deterministic-entry encoders
+must strip it before canonical entry construction.
+
+Command-specific sections start at `100`.
+
+Initial command-specific section IDs used by v1 commands and responses:
+
+```text
+100 collection_ref
+101 document_format
+102 document_ids              byte_vector
+103 documents                 byte_vector
+104 template_records optional byte_vector
+105 expected_catalog_version
+106 replacement_mode
+107 collection_meta
+108 index_definition
+109 index_name
+110 collection_handle
+111 index_value
+112 index_lower_bound
+113 index_upper_bound
+114 cursor_ref                uvarint cursor_id
+115 cursor_limits             uvarint max_items, uvarint max_bytes
+116 presence_bitmap           bitset, least-significant bit first
+117 truncated                 bool
+118 status_vector             byte_vector of per-item status records, reserved
+119 catalog_guard             CatalogGuardV1
+120 existence_guard           ExistenceGuardV1
+121 update_field_names        byte_vector
+122 update_field_values       byte_vector of BSON typed raw values
+```
+
+`cursor_limits` encodes both fields. A zero `max_items` or `max_bytes` means
+"no client-specified limit" for that dimension; servers still enforce
+negotiated and configured limits. `presence_bitmap` has exactly
+`ceil(result_count/8)` bytes, where bit `i` says whether result `i` is present.
+`status_vector` is reserved for a future command version that defines partial
+success records; v1 all-or-nothing commands MUST NOT emit it.
+
+`update_field_names` and `update_field_values` are used by `update_bson_set`.
+They MUST have identical item counts and at least one item. `update_field_names`
+items are UTF-8 field-name bytes. v1 `update_bson_set` supports top-level BSON
+field names only: names MUST NOT be empty, `_id`, contain `.`, contain NUL, or
+start with `$`. Each `update_field_values` item is one byte of BSON type followed
+by that type's raw BSON value bytes, matching `bson.RawValue{Type, Value}`.
+
+### 5.5 Byte Vectors
+
+Batch-oriented fields use byte-vector encoding:
+
+```text
+count          uvarint
+lengths[count] uvarint
+payload_bytes  bytes[sum(lengths)]
+```
+
+This avoids per-item maps and keeps IDs, documents, keys, and values compact.
+Implementations SHOULD parse byte vectors into offset tables or borrowed slices
+instead of allocating one object per element.
+
+Byte vectors do not encode nulls. Optional or missing results MUST use a
+separate presence bitmap or status vector whose item count exactly matches the
+byte-vector count required by the command. After a decoder reads `count` and
+then exactly `count` length varints, the remaining bytes in that same
+byte-vector payload are `payload_bytes`. Decoders MUST reject length overflows,
+truncated payloads, extra bytes, and any byte vector where `sum(lengths) !=
+len(payload_bytes)`.
+
+### 5.6 Response Metadata
+
+Successful responses SHOULD include `response_meta` when the command touches
+durability, consistency, catalog state, or cluster routing. Response metadata is
+not deterministic command input.
+
+Initial response metadata fields:
+
+```text
+actual_ack_policy        uvarint optional
+actual_consistency       uvarint optional
+commit_state             uvarint optional
+durability_mode          uvarint optional
+commit_seq              uvarint optional
+catalog_version         uvarint optional
+applied_log_index       uvarint optional
+serving_node_id         bytes optional
+leader_node_id          bytes optional
+```
+
+`commit_state` values:
+
+```text
+0 unknown
+1 not_committed
+2 committed_recoverable
+3 committed_or_unknown_after_commit
+```
+
+`durability_mode` values:
+
+```text
+1 durable
+2 wal_on_relaxed
+3 wal_off_relaxed
+```
+
+Single-node implementations may omit cluster fields. Cluster implementations
+SHOULD report `applied_log_index` and serving/leader node identity for reads
+whose freshness matters.
+
+## 6. Handshake
+
+The client MUST send `hello` before ordinary requests. The server replies with
+`hello_ok` or `error`.
+
+`hello` may carry capability, trace-context, and compression sections. An empty
+body is valid. The current protocol does not select a transport version from the
+body; the frame header must already use the exact supported version.
+
+`hello_ok` returns:
+
+- exact `protocol_major` and `protocol_minor` capabilities,
+- server maximum frame size,
+- selected compression policy,
+- supported command IDs,
+- supported document formats,
+- durability/consistency modes,
+- server feature bits.
+
+Feature negotiation MUST be explicit. A client MUST NOT assume support for a
+command, document format, compression codec, query operator, or consistency mode
+that the server did not advertise.
+
+The current transport version is exactly 1.1. `hello`, `hello_ok`, and every
+ordinary frame MUST carry header version 1.1; receivers MUST reject every other
+major or minor version before command dispatch. `hello_ok` advertises that exact
+version in its capability set, but v1 does not negotiate or fall back between
+transport versions. Command and feature capabilities remain explicitly
+negotiated.
+
+## 7. Command Header
+
+Every `request` frame has a `command_header` section:
+
+```text
+command_id       uvarint
+command_version  uvarint
+command_flags    uvarint
+```
+
+Command versions are per-command schema versions. A server MAY support multiple
+versions of the same command during pre-alpha development, but the selected
+schema MUST be explicit in every request.
+
+Once a `command_id + command_version` is admitted to a deterministic command
+entry, its deterministic semantics are immutable for that Raft log lineage.
+Section IDs MUST NOT be reused with different meanings. Semantic changes,
+canonical encoding changes, or changed default behavior require a new
+`command_version` or `entry_version`. Mixed-version clusters MUST only advertise
+command versions that every voting replica can decode and apply
+deterministically.
+
+`command_flags` are command payload metadata, not transport metadata. Flags that
+affect mutation semantics MUST be part of deterministic command-entry encoding.
+Flags that only affect response shaping, tracing, or pagination MUST NOT be
+replicated.
+
+Initial response-shaping flags:
+
+```text
+bit 0 omit_result_ids
+bit 1 omit_response_meta
+```
+
+`omit_result_ids` asks successful mutation responses to omit result ID vectors
+when the command can otherwise report success through `response_meta`. Servers
+MAY still return result IDs to older clients or for commands that require them;
+clients that set this flag MUST NOT depend on IDs being present.
+
+`omit_response_meta` asks successful responses to omit advisory response
+metadata when the client only needs success/error signaling. Servers MUST still
+satisfy the requested ack/consistency policy before returning success; this flag
+only shapes the success response body and MUST NOT change command semantics.
+
+## 8. Document Formats
+
+Document format codes:
+
+```text
+0 default
+1 json
+2 bson
+3 template_v1
+```
+
+The native protocol carries stored document bytes without wrapping them in a
+JSON command object.
+
+For BSON collections, the server SHOULD validate BSON once while decoding the
+request and then call the trusted BSON insertion path.
+
+For template-v1 collections, the protocol MUST support both:
+
+- current self-contained `TD1I` per-document insert envelopes,
+- a batch-level template-record section that lets clients send each template
+  record once per batch.
+
+The batch-level template section is preferred for native clients because it
+matches the collection root model: template records, primary documents,
+index-state, and secondary-index postings are one logical collection mutation
+group.
+
+Deterministic entries replicate logical mutation input: collection identity,
+document IDs, stored document bytes, template records when required, command
+flags, and catalog guards. Secondary-index postings, index-state deltas, backend
+root IDs, value-log offsets, flush artifacts, and other node-local derived
+storage state MUST be regenerated by the state machine and MUST NOT be
+replicated unless a future command version explicitly freezes that
+representation.
+
+## 9. Collection References and Metadata
+
+`collection_ref` supports two forms:
+
+```text
+1 collection_name
+2 connection_local_handle
+```
+
+Collection names are request input and API/display text. They are not replay
+identity for replicated mutating commands. Connection-local handles are a
+transport optimization returned by `open_collection`; they are never valid
+outside the connection that received them and MUST NOT appear in deterministic
+command entries. Before a mutating command is appended as a deterministic entry,
+names and handles must be resolved to `CatalogGuardV1` stable IDs.
+
+Collection metadata commands SHOULD use the same logical fields as the current
+`CollectionMeta` and `IndexDefinition` model:
+
+```text
+collection_name
+document_format
+allow_array_values_in_index
+data_root_storage_policy
+index_state_storage_policy
+buffered_indexed_write_policy
+index_name
+index_field
+index_value_type
+index_unique
+index_multi_key
+index_storage_policy
+vector_indexes
+quantized_indexes
+scalar_u8_calibration
+```
+
+The current nativewire collection metadata frame version is `5`; version `5`
+includes persisted scalar_u8 calibration semantics for quantized vector indexes.
+Metadata mutation responses SHOULD include the resulting catalog version or
+equivalent schema guard. Later single-node mutation requests MAY use
+`expected_catalog_version` to fail fast when a client planned against stale
+metadata. Replicated deterministic mutation entries MUST use `CatalogGuardV1`.
+
+For distributed mode, collection and index mutation entries MUST include a
+deterministic catalog guard with stable IDs resolved from committed metadata.
+Connection-local handles and unguarded client names MUST be resolved before
+append and MUST NOT be stored in the deterministic entry.
+
+Canonical guard sections:
+
+```text
+CatalogGuardV1 {
+    CollectionUID           uuid128
+    CollectionGeneration    uint64
+    SchemaEpoch             uint64
+    LogicalCatalogDigest    bytes32
+    ExpectedName            string optional diagnostic/existence guard
+    IndexGuards             repeated {
+        IndexUID            uuid128
+        IndexGeneration     uint64
+        DefinitionDigest    bytes32
+    }
+}
+
+ExistenceGuardV1 {
+    TargetKind              collection | index
+    ExpectedState           absent | present
+    StableName              string
+    ExistingUID             uuid128 optional
+    AssignedUID             uuid128 optional for create
+    CatalogEpoch            uint64
+}
+```
+
+Metadata commands must include deterministic existence guards and stable
+assigned IDs when they are encoded as replicated commands. Guard mismatch is a
+deterministic state-machine result and must update idempotency state with the
+failure outcome.
+
+## 10. Initial Command Set
+
+The v1 implementation SHOULD start with the smallest surface that can replace
+the current Mongo raw-wire benchmark path for native clients.
+
+### 10.1 Control Commands
+
+```text
+10 create_collection
+11 list_collections
+12 create_index
+13 list_indexes
+14 drop_index
+15 open_collection
+16 close_collection
+17 drop_collection
+```
+
+`open_collection` MAY return a connection-local collection handle. Handles are
+an optimization only. The deterministic command entry MUST use stable collection
+names or stable collection IDs from committed metadata, not connection-local
+handles.
+
+### 10.2 Mutation Commands
+
+```text
+30 insert_batch
+31 replace_batch
+32 delete_batch
+33 flush_collection
+34 flush_all
+35 checkpoint
+36 update_bson_set
+```
+
+`insert_batch`, `replace_batch`, `delete_batch`, and `update_bson_set` are
+logical mutation commands. `flush_collection`, `flush_all`, and `checkpoint` are
+local durability barriers in v1 and MUST NOT be replicated as Raft state-machine
+commands unless a future distributed barrier command gives them explicit
+consensus semantics.
+An `ack_policy` common section may be present on mutation requests, but it is
+request/response policy only and is not part of deterministic command identity.
+
+`insert_batch` sections:
+
+```text
+100 collection_ref
+101 document_format
+102 document_ids byte_vector
+103 documents byte_vector
+104 template_records optional byte_vector
+105 expected_catalog_version optional
+119 catalog_guard required for distributed mode
+```
+
+`replace_batch` sections:
+
+```text
+100 collection_ref
+101 document_format
+102 document_ids byte_vector
+103 documents byte_vector
+104 template_records optional byte_vector
+105 expected_catalog_version optional
+106 replacement_mode
+119 catalog_guard required for distributed mode
+```
+
+`delete_batch` sections:
+
+```text
+100 collection_ref
+102 document_ids byte_vector
+105 expected_catalog_version optional
+119 catalog_guard required for distributed mode
+```
+
+`update_bson_set` sections:
+
+```text
+100 collection_ref
+102 document_ids byte_vector, exactly one item
+105 expected_catalog_version optional
+121 update_field_names byte_vector
+122 update_field_values byte_vector
+119 catalog_guard required for distributed mode
+```
+
+`update_bson_set` applies one or more top-level BSON `$set` field assignments
+to exactly one BSON document. Missing IDs return `matched_count=0` and
+`modified_count=0`; unchanged values return `matched_count=1` and
+`modified_count=0`.
+
+Duplicate IDs in one mutation batch MUST be rejected unless a future command
+schema explicitly defines ordered same-ID semantics.
+
+In distributed mode, mutation entries MUST carry either `idempotency_key` or
+`client_id + client_sequence`. The identity is scoped to the cluster/database
+and is part of state-machine deduplication state. Reuse of the same identity
+with the same canonical command digest MUST return the prior outcome. Reuse with
+a different digest MUST fail with `idempotency_conflict`. Transport `request_id`
+MUST NOT participate in this identity.
+
+Single-node mutation retries are not exactly-once unless the server persists a
+durable idempotency record with the logical mutation outcome. If a client times
+out or disconnects after commit but before response, retry may observe duplicate
+document IDs or unique-index conflicts from the prior commit. Non-idempotent
+updates must be guarded by application-level version/compare predicates or a
+durable idempotency key before clients can treat blind retry as safe.
+
+Mutation responses SHOULD include:
+
+```text
+matched_count optional
+modified_count optional
+inserted_count optional
+deleted_count optional
+result_ids optional byte_vector, omitted when omit_result_ids is honored
+per_item_status optional status_vector
+response_meta optional, omitted when omit_response_meta is honored
+```
+
+`per_item_status` is required when a command can partially classify items while
+still returning an overall command error or partial-success result in a later
+schema. The initial v1 mutation commands SHOULD remain all-or-nothing unless a
+command version explicitly defines partial success.
+
+### 10.3 Read Commands
+
+```text
+50 get_many
+51 index_lookup
+52 index_range
+53 open_scan
+54 cursor_next
+55 cursor_close
+56 explain
+57 stats
+```
+
+`get_many` returns results in request order. Missing documents are represented
+with an explicit presence bitmap or result-status vector; missing values MUST
+not be confused with present empty documents.
+
+`index_lookup` is equality lookup over one typed secondary index value.
+
+`index_range` is a bounded range over one typed secondary index. Bounds are
+encoded as typed scalar sections, not as JSON filter objects.
+
+`open_scan` creates a cursor over a primary or secondary ordered range. Cursors
+MUST have server-side byte, document-count, and idle-time limits.
+
+Read responses SHOULD use:
+
+```text
+presence_bitmap optional
+document_ids optional byte_vector
+documents optional byte_vector
+values optional byte_vector
+truncated optional bool
+cursor_meta optional
+response_meta optional
+```
+
+For `get_many`, result order MUST match request key order. For index and scan
+commands, result order MUST match the ordered root or index order selected by
+the command.
+
+`cursor_meta` SHOULD include:
+
+```text
+stream_id
+batch_items
+batch_bytes
+has_more
+server_cursor_deadline optional
+```
+
+`cursor_next` requests MUST include `cursor_ref` and `cursor_limits` sections.
+The `cursor_limits` section MUST include a maximum item count, maximum response
+bytes, or both. `cursor_close` requests MUST include `cursor_ref`. Servers MAY
+return fewer results than requested. A response with
+`has_more=false` is terminal and releases the cursor. A `cursor_not_found` error
+is terminal for the named cursor but not for the connection.
+
+### 10.4 Vector Search Commands
+
+```text
+58 vector_status
+59 vector_search_strict
+60 vector_search_fast
+61 vector_pin_search_snapshot
+62 vector_search_pinned
+63 vector_close_pinned_snapshot
+```
+
+These are connection-local read commands and never deterministic mutation or
+command-WAL entries. Every command requires the generic `deadline` section and
+uses the existing native-wire framing, bounded operation context,
+connection limits, cancellation, and error frames. Their direct binary sections
+are:
+
+```text
+123 vector_search_request
+124 vector_fast_options
+125 vector_pin_options
+126 vector_search_response
+127 vector_fast_evidence
+128 vector_status
+```
+
+The request carries float32 query values, generation, metric, search budgets,
+limits, and deadline directly; the response carries ordered document IDs,
+float32 scores, counters, and stage timings directly. JSON, reflection, generic
+maps, and string-form float conversion are not part of this route. One
+`vector_pin_search_snapshot` is owned by its connection and MUST be released by
+the close command or by connection teardown. Strict, fast, and pinned searches
+retain their public `vectorpartition.OperationsV1` consistency and validation
+semantics; native wire changes only the transport representation.
+
+### 10.1. Document-service dense search
+
+Command `64 dense_vector_search` is a LocalOnly read, never a deterministic
+mutation or command-WAL entry. Version 1 selects the cosine float32
+`native_runtime` service route. Version 2 selects the explicitly admitted,
+persisted typed-input `column_graph` service route. Version 3 selects the same
+typed owner path with the explicitly negotiated legacy scalar-u8/v1 quantized
+rerank score plane. A mismatched strategy or capability fails closed; no
+version permits the legacy full-document scan route. Typed native filter
+planning may choose bounded exact scoring internally.
+
+Versions 1 and 2 require `deadline` (4) and `dense_search_request` (129).
+Version 3 additionally requires the critical `dense_search_quantized_options`
+(135). Request
+payload order is: length-prefixed UTF-8 index name; uvarint top-K, efSearch and
+expected generation; one-byte return-embedding bool; uvarint dimensions then
+packed little-endian FP32 query; uvarint filter-leaf count then AND-conjoined
+leaves. Each leaf contains a length-prefixed field, one-byte operator
+(`1 ==`, `2 >`, `3 >=`, `4 <`, `5 <=`), and a typed value: `1` UTF-8 string,
+`2` bool, `3` signed zigzag int64, or `4` little-endian float64. Existing bounds
+include 16 filter levels and 64 leaves; unsupported operators fail closed.
+Version 3 requires a positive efSearch. A caller using the index default resolves
+it from generation-bound index metadata before encoding, so the score-plane
+`requested_ef_search` is the authenticated candidate-width bound; raw zero is
+rejected by both the native client and server. Versions 1 and 2 retain their
+existing zero/default behavior.
+
+Response sections are ordered IDs (102), requested JSON documents (103), and
+`dense_search_response` (130). The metadata payload contains one route byte,
+uvarint candidates, exact-fallbacks, full-document-scan-fallbacks, result count,
+then one little-endian float64 score per result. Version 1 retains its legacy
+native-runtime bool byte (successful route `1`). Version 2 requires route tag
+`2`. Cross-version tags are rejected. Tag 2 identifies validated dispatch,
+**not measured execution-work evidence**. Version 2 additionally requires the
+critical `dense_search_work` section (134), independently versioned below.
+Version 3 requires route tag `3`, the same critical section 134, and the
+separately versioned critical `dense_search_score_plane_proof` section (136).
+Section 135 is encoded as version `1`, mode tag `1` (`quantized_rerank`), a
+length-prefixed UTF-8 quantized index name, and a bounded uvarint rerank
+candidate limit (zero selects the owner-normalized limit). It carries no
+codec/calibration declaration; those are capability- and index-metadata
+validated by the service. Section 136 is owned score-plane evidence and never
+extends section 134 or the v2 response schema. It includes version/flags,
+requested/effective mode and route tags, owned reason/name/codec strings,
+candidate/call/byte counters, and the captured base/current manifest and
+coverage snapshot. In section-136 version 1, flag bit 0 means score-plane
+available, bit 1 means execution completed, and bit 2 independently means the
+captured snapshot is available; all other flag bits are invalid. This keeps
+incomplete error prefixes distinguishable from completed proofs without
+deriving snapshot availability from the outer proof bit. Missing, duplicate, stale, malformed, unsupported-codec,
+unknown-name, or out-of-bound options fail closed.
+Sections 134, 135, and 136 carry the section critical flag whenever present;
+consumers reject a required instance whose critical flag is absent.
+
+Every available section-134 or section-136 snapshot requires a nonzero acquired
+vector schema hash and generation, nonzero base/current coverage LSNs with current not
+behind base, and nonzero generation/checksum identities for both manifests,
+with manifest version exactly 1 and current manifest generation not behind the
+captured base manifest generation. An unavailable snapshot is the exact zero
+value.
+
+Completed public v3 proofs use this producer/consumer route matrix. `E`, `C`,
+and `R` denote normalized candidate width, raw candidate width, and rerank cap.
+
+| Score-plane route | Filter/cardinality | Planning and scoring invariants |
+|---|---|---|
+| `typed_empty` | A completed filter is required and eligible rows are zero | Result and all score/retained/live/actual counters are zero. `E/C/R` may be nonzero because planning can precede removal of shadowed filter matches. |
+| `typed_exact` | Without a filter, the base domain is empty. A filter has positive eligibility; with a nonzero `E`, eligible rows are at most 4096. | Whenever `E` is zero, `C`, small-filter calls, and base-shadowed are zero, so exact work is suffix-only. Filtered total exact calls equal eligible rows. Result count is `min(top-K, total exact calls)`. |
+| `quantized_rerank` | A filtered route has more than 4096 eligible rows. | `E/C/R` are positive; small-filter calls are zero; base-shadowed is no greater than raw retained; live shortlist is `min(E, raw retained - base shadowed)`; actual rerank is `min(live shortlist, R)`. Result count is `min(top-K, total exact calls)`. |
+
+For every route, completed proofs have an empty reason and available incomplete
+proofs have a nonempty producer error reason. Graph base-edge work is zero,
+quantized calls equal graph base-ANN scoring, exact base calls equal graph
+exact-base/result-ID counts, and exact suffix calls equal graph delta scoring.
+Every completed or incomplete proof pair also preserves the producer prefix
+bounds: graph base candidates do not exceed quantized calls; `R = min(E,
+requested rerank candidates or E)`; the positive v3 EF bounds `E`; retained candidates
+do not exceed quantized calls or `C`; live candidates do not exceed retained
+candidates or `E`; and actual reranks do not exceed live candidates or `R` and
+equal completed exact-base rerank calls. A zero `E` additionally requires zero
+`C`, small-filter calls, and graph base-shadowed work. Graph base candidates may be lower than
+quantized calls because public minimal stats do not require that optional count.
+These prefix bounds intentionally do not infer byte equalities or a
+nonzero-width base-shadowed relation before completion. Returned exact cosine scores are
+finite and within `[-1.000001, 1.000001]`, allowing only bounded FP32 rounding.
+Returned IDs are valid UTF-8, nonempty, free of leading or trailing Unicode
+White_Space as defined by Go `unicode.IsSpace`, and unique, matching
+document-service write admission. In particular, the C0 information separators
+U+001C through U+001F are not whitespace in this contract.
+
+Requested documents are fetched from the search's same read owner before
+release. Content/meta are returned; embedding echo is opt-in through the
+return-embedding bool (default false), as on HTTP. Stored FP32 embeddings are
+reconstructed as JSON numbers, not packed result vectors. Command 64 packs the
+query and command 65 packs ingest vectors; document response sections remain JSON.
+Version-3 consumers decode each JSON document before exposure, require unique
+exactly named top-level fields and an `id` equal to the corresponding
+section-102 ID, reject response-only/write-only or unknown top-level fields,
+require unique keys recursively throughout metadata, preserve integral metadata
+precision while checking the requested filter,
+and require a finite, dimension-matched `embedding` exactly when
+return-embedding is true. When that embedding is present, consumers recompute
+the FP32 cosine score and require it to match the result-envelope score within
+`1e-6` absolute tolerance.
+
+#### Canonical normalized production envelope (64/v4)
+
+Version 4 is disjoint from the legacy v2/v3 typed envelopes. It requires
+`deadline` (4), `dense_search_request` (129), and critical
+`dense_search_normalized_options` (137). The options payload is version `1`,
+representation tag `1` (`cosine_normalized_f32_v1`), mode tag `1` (exact) or
+`2` (scalar-u8 rerank), a bounded quantized-index name, and `R`. Exact requires
+an empty name and `R=0`; scalar-u8 rerank requires a nonempty declared name and
+`R >= top-K`. Both modes require positive generation and `E`; omitted defaults
+are resolved from caller-held generation-bound index metadata before encoding.
+The optional critical `dense_search_diagnostics` section (139), whose payload
+is exactly version `1`, enables diagnostics. Missing v4 negotiation, an older
+command version, unknown tags, malformed options, or a representation mismatch
+fails before search.
+
+Production responses contain exactly ordered IDs (102), requested JSON
+documents (103), `dense_search_response` (130), and critical
+`dense_search_route_identity` (138). Section 130 is version `1`, result count,
+then one little-endian float64 score per result. Section 138 version `1` binds
+the representation, requested mode, executed empty/exact/HNSW route, optional
+scalar-u8 identity, request flags, captured schema/manifest owner, E/R/top-K,
+result count, candidate-code reads, FP32 scoring reads, packed-batch work, and
+embedding projection work. Its owner identities and byte/count products are
+validated independently by the service and client. Nonempty results require
+positive FP32 scoring work; scalar-u8 HNSW also requires positive candidate-code
+work. Packed counters cover live base rows only: one batch if any remain, zero
+if shadow suppression leaves only mutable suffix results. Suffix rows are
+separately exact-scored by the packed strided FP32 kernel. For scalar-u8,
+FP32 score calls equal packed base candidates plus exact suffix calls; an
+unchanged base/current manifest permits no suffix work. IDs/documents/metadata
+have flags zero; route and
+diagnostic sections have exactly the critical flag. Unknown flags or sections,
+duplicate sections, invalid counts, non-finite/out-of-range scores, invalid IDs,
+unordered results, and document/request-shape mismatches fail closed.
+
+Diagnostic v4 adds critical `dense_search_work` (134). Scalar-u8 diagnostic
+responses also add critical `dense_search_score_plane_proof` (136) using wire
+version `2`, which appends packed-batch calls/candidates/bytes and the forbidden
+stable-scorer count to the v1 proof. Diagnostic observation cannot change IDs or
+scores. Production constructs and serializes neither proof and performs no
+diagnostic-only work accounting.
+
+Version-4 clients decode each returned document once. With
+`return_embedding=false` the document must omit `embedding`, and route identity
+must prove zero output embedding reads, bytes, and encoded bytes. With true, the
+document contains the stored canonical normalized vector with the declared
+dimension and finite components. V4 never recomputes result scores from returned
+embeddings. Go result ID/document slices borrow the client response buffer until
+the next call; route identity and optional proofs are owned values. Python owns
+the converted result models.
+
+Section 134 version 1 contains exactly 38 minimal uint64 uvarints, in this order:
+
+| Positions (zero-based) | Values |
+|---|---|
+| 0–2 | proof version (`1`), flags, executed route |
+| 3–9 | base ANN scored, base candidates, base edges, delta scored, exact base scored, base shadowed, base result IDs |
+| 10–18 | filter eligible rows, source IDs, source bytes, inspected entries, mapping work charged, retained bytes, scratch ID bytes, scratch rows, ordinal growth peak bytes |
+| 19–22 | captured schema hash, schema generation, base coverage LSN, current coverage LSN |
+| 23–26 | base manifest generation, format tag, version, checksum |
+| 27–30 | current manifest generation, format tag, version, checksum |
+| 31–37 | output requested, fetched, missing, output bytes, retained payload fetches, JSON reconstruction rows, typed column rows |
+
+Flags bits 0–7 respectively mean service completed, graph available, graph
+completed, filter attempted, filter completed, captured snapshot available,
+output attempted, output completed. Other bits are invalid. Route tags are
+`0` no executed branch, `1` typed empty, `2` typed exact, `3` typed HNSW.
+Manifest format tags are `0` empty and `1` `tcs1`; manifest version fits uint16.
+Every available snapshot carries complete base and current manifest identities:
+generation, version, and checksum are nonzero (the empty format tag retains its
+canonical `tcs1` compatibility meaning). Equal manifest generations require
+equal normalized identities and coverage LSNs. That unchanged frontier has no
+delta scores or shadowed base rows, no suffix score calls or bytes, and no raw
+candidate-width shadow allowance.
+Unknown versions/tags, missing or duplicate sections, nonminimal/overflowing
+integers, truncation and trailing bytes fail closed. Unavailable/unattempted
+groups contain zero values. Successful responses require completed graph and
+output, fetched=requested=result count, no missing rows, retained payload
+fetches=JSON reconstruction rows=result count, typed column rows no greater
+than result count, and output bytes equal the sum of materialized document byte
+lengths. When a filter was requested, every decoded result document must also
+satisfy that exact filter; filter-work cardinality alone is not result-membership
+proof. Output bytes exclude framing and HTTP JSON encoding.
+
+The snapshot comes from the actual acquired owner, including base/current
+manifest identities and coverage, and remains owned after owner close or client
+buffer reuse. It is not the requested generation or a later diagnostics read.
+Current coverage LSN is never lower than base coverage LSN.
+Schema generation is the acquired vector definition's generation; the service's
+aggregate generation may be higher when it includes a newer text-index
+generation, but it is never lower. A native response binds this upper bound to
+the admitted nonzero expected generation; HTTP binds it to the returned
+positive uint64 index generation.
+Filter cardinality is final only on completed preparation; mapping work is an
+admitted composite bound: ordinal mapping, submitted secondary point requests,
+and temporary encoded-prefix/key payload bounds for selective string EQ AND.
+Posting source counts include probes and fallback rereads, excluding point keys
+and rejected lookahead IDs; physical inspection includes lookahead and tombstones.
+Retained/growth bytes measure ordinal capacity, and scratch rows/ID bytes are
+logical peaks. Other work fields count actual producer work,
+including prefixes before an error. No per-request process snapshot is taken.
+
+The existing FrameError may also carry these critical sections beside its
+unchanged error section (2), for legacy 64/v2 and 64/v3 and diagnostic 64/v4.
+Production v4 errors carry no diagnostic proof. Pre-service failures may omit
+unavailable evidence. A later native encoding failure preserves completed
+service/graph/output and score-plane prefixes. Quantized clients bind the
+request-bearing score plane and captured generation before retaining the remote
+error. Dense-work v1 has no query/index/filter-value digest, so an exact v4
+error proof is retained only as debugging detail and the error is reclassified
+as consistency-unavailable rather than treated as request-authenticated.
+Completion does not certify wire delivery.
+Version 1 never emits or accepts section 134 and retains its response/error
+bytes. The Go response owns its fixed proof value independently of borrowed
+result documents; `WireError.DenseWork` is optional owned error detail. If
+either proof section is malformed, clients reject it while preserving the
+independently decoded valid sibling on the protocol error.
+After section framing is safe, missing, duplicate, or malformed error metadata
+and unknown critical error siblings likewise cannot erase independently valid
+section-134 or section-136 proof.
+
+Hello capabilities advertise `dense_vector_search_versions` as a comma-separated
+set derived from registered command versions and an available standalone
+document service. `get_many_versions=1` similarly requires its registered
+standalone collection read implementation. `max_frame_size` reports the server
+frame bound. Missing capability is not support; new clients must fail closed.
+The document-service index capability `typed_dense_quantized_rerank` is a
+separate typed negotiation bit; benchmark `quantized_vector_search`,
+`quantized_rerank`, and `scalar_u8_quantized_rerank` do not imply it.
+These extensible capability-map entries do not change existing frame versions.
+GetMany (50/v1) remains unchanged: it is a batched transport over local per-ID
+reads, without an expected-generation guard or a batch-wide snapshot promise.
+
+### Selected typed GetMany (50/v2, LocalOnly)
+
+Hello adds `2` to `get_many_versions` only when that version is registered and
+the standalone document service is configured. Required sections are deadline
+(4), named collection reference (100), document IDs (102), and
+`expected_generation` (133: one positive uvarint, no trailing bytes). Handles,
+cluster submission, and explicit read-consistency policies are unsupported.
+
+The service captures one collection read view, validates selected typed schema
+and generation against that captured catalog, and materializes all IDs on the
+same view. Existing buffered-write flushing is retained. Graph build/admission
+is not required. The owned response encoding is unchanged from 50/v1, including
+request order, duplicate IDs, and missing-document presence bits. The view is
+closed before return. This is a separate retrieval snapshot, not the preceding
+search owner's snapshot. Full documents include stored FP32 embeddings as JSON
+numbers, with no embedding-projection argument. There is no response-local
+`dense_work` section or changed list/result contract; process
+`work.output.get_many` observes selected attempts/completions/errors and actual
+output prefixes.
+
+### Typed document upsert (65/v1, LocalOnly)
+
+`typed_document_upsert` is a separate local mutation, never a deterministic
+replicated entry or a reinterpretation of insert-batch. Hello advertises
+`typed_document_upsert_versions=1` only with a registered command and configured
+standalone document service. Cluster submission rejects it before mutation.
+
+Required sections are deadline (4), IDs (102), documents (103), and
+`typed_upsert_request` (131). IDs and documents use existing byte-vector encoding;
+documents here contain **only residual JSON** with matching ID, never declared
+embedding, content, or scalar values. Section 131 contains, in order:
+
+- Length-prefixed UTF-8 index name; positive uvarint expected generation.
+- Positive uvarint row count and dimensions; row-major little-endian FP32 values.
+- Positive uvarint string-column count; for each column, a length-prefixed UTF-8
+  name followed by exactly row-count length-prefixed UTF-8 string values.
+
+The vector column is implicitly named `embedding`; named string columns must
+exactly match persisted `content` and declared string scalars. Duplicate,
+missing, unknown columns, dimension/count mismatch, invalid values, residual
+ownership violations and stale generations fail closed. Existing frame/vector
+limits bound decoding; dimensions are additionally capped at 65536. No trailing
+bytes are permitted. Deadline bounds use the existing context-aware service
+and synchronous core mutation; no arbitrary decoder/lock preemption is claimed.
+
+The decoder borrows IDs/residual bytes only during the synchronous call and
+owns one flat FP32 allocation with capped row views. The existing typed planner
+owns published data and performs one atomic mixed upsert, without per-ID
+existence requests or whole-document JSON reconstruction. Unchanged matches
+count as updated but do not create additional row/WAL changes.
+
+Response section `typed_upsert_response` (132) contains four uvarints:
+generation, upserted count, inserted count, updated count. The latter two sum to
+the request row count, as does upserted. No IDs are echoed; callers retain their
+request IDs. Success has the configured service/core durability contract, not
+an implied wire `synced` or Raft acknowledgment. Initial graph build and
+admission remain explicit separate operations. Versions 50/v1 and 64/v1,v2 are
+unchanged. Dispatch identity does not certify measured indexed-JSON counters.
+
+### Typed source replacement (67/v1, LocalOnly)
+
+`typed_source_replace` exposes the existing atomic explicit-ID source primitive;
+it is not a discovery, chunking, embedding, or client-composed mutation. Hello
+advertises `typed_source_replace_versions=1` only for a configured standalone
+document service. Cluster submission and deterministic-entry encoding reject
+the command. Command 66 remains reserved by the vector-insert work in #4734.
+
+Required sections are deadline (4), live IDs (102), live residual documents
+(103), typed carrier request (131), and explicit delete IDs
+`source_delete_ids` (140). Sections 102, 103, and 131 retain the 65/v1 positive
+row encoding. Delete-only and fully empty requests use the canonical empty live
+carrier: positive generation followed by row count 0, dimensions 0, and string
+column count 0; sections 102 and 103 are empty byte vectors. Command 65 continues
+to reject zero rows. Section 140 uses the existing bounded byte-vector encoding.
+
+IDs must be unique within each set. Cross-set overlap is valid and insertion
+wins. One request calls `ReplaceTypedSourceByID` once. Positive live rows publish
+the existing typed source payload (format 12); delete-only uses the existing
+source payload (format 10). A fully admitted empty request emits no WAL frame.
+There is no automatic retry after an ambiguous result.
+
+Response section `source_replace_response` (141) contains three uvarints:
+generation, deleted count, and inserted count. Deleted count is the number of
+previously present delete IDs, including rows reinserted by overlap; inserted
+count equals the accepted live row count. No IDs are echoed.
+
+### Typed metadata update (68/v1, LocalOnly)
+
+`typed_metadata_update` is the capability-negotiated metadata-only mutation.
+Hello advertises `typed_metadata_update_versions=1` only for a configured
+standalone document service. Cluster submission and deterministic-entry
+encoding reject it; clients fail closed without HTTP fallback.
+
+Required sections are deadline (4) and `typed_metadata_update_request` (142).
+Section 142 is one bounded UTF-8 JSON object with exactly `index`, positive
+`expected_generation`, non-empty unique `ids`, `set`, and `unset`. Unknown
+fields, trailing JSON, non-`meta.*` paths, duplicate or ancestor/descendant path
+conflicts, non-JSON values, and protected or invalid schema paths fail closed.
+Raw invalid UTF-8 and unpaired JSON surrogate escapes are rejected before
+decoding, including nested string values and object keys.
+Declared metadata scalars require string values and cannot be unset. Missing IDs
+are skipped. The request has no vector or content field.
+
+Response section `typed_metadata_update_response` (143) contains three
+uvarints: generation, matched count, and modified count. Modified is at most
+matched, and matched is at most the request ID count. A fully admitted no-op
+returns matched/zero without a WAL or publication advance. Commit-ambiguous and
+recovery-required errors remain structured non-retry outcomes.
+
+## 11. Typed Scalars
+
+Index and query scalar codes:
+
+```text
+1 string
+2 bool
+3 int64
+4 double
+5 bytes
+6 null
+```
+
+Index query commands MUST use the index definition's declared value type. The
+wire scalar encoding is logical. The internal secondary-index key encoding
+remains an implementation detail unless a future server-to-server command
+explicitly freezes it.
+
+## 12. Durability and Consistency Policies
+
+The `ack_policy` section requests the minimum acknowledgement boundary for a
+mutation:
+
+```text
+1 visible
+2 flushed
+3 synced
+4 raft_committed
+```
+
+`visible` means the mutation is visible to reads through the serving process or
+owning write domain. For V1 WAL-on collection modes this also requires local
+command-WAL recoverability: the command frame and required external refs are
+recoverable, and the normal executor has installed the mutation in the
+process-visible write domain. It does not require root publication or
+`AppliedLSN` advancement. For WAL-off relaxed mode this is process-local
+visibility only.
+
+`flushed` means all touched collection state for the command has been published
+to backend roots, and WAL-backed commands have `AppliedLSN` advanced in the same
+backend commit.
+
+`synced` means `flushed` plus an fsync-capable local durability boundary. A
+server running a mode that cannot provide fsync for the touched state MUST fail
+with `durability_unavailable`; it must not reinterpret `synced` as a relaxed
+checkpoint.
+
+`raft_committed` is reserved for distributed mode. It means consensus commit
+plus the cluster-defined local apply/recoverability rule. It is not local WAL
+append and is not part of deterministic command identity.
+
+If `ack_policy` is absent, the server uses its advertised default. The initial
+single-node native server SHOULD default to `visible`, but clients that need a
+publication or sync boundary SHOULD ask for `flushed` or `synced` explicitly.
+
+A server MUST either satisfy the requested minimum policy or fail the request.
+It MUST NOT silently downgrade `synced` to a relaxed or checkpoint-only
+guarantee. Successful responses SHOULD report `actual_ack_policy`.
+Local policies are ordered only within the local family:
+`visible < flushed < synced`. `raft_committed` is a named cluster policy and
+must not be treated as a numeric extension of local durability ordering unless a
+future cluster spec explicitly defines the implied local durability level.
+
+If validation succeeds but required external-ref preparation/protection or
+command-WAL append fails before a complete command frame becomes recoverable, the
+server returns `durability_unavailable`, `retryable=true`,
+`commit_state=not_committed`, and the mutation must not be visible.
+
+If a complete command frame reached the required local boundary but root
+publication, `AppliedLSN` advancement, visible install, flush, checkpoint, or
+response construction fails, the server returns `commit_ambiguous`,
+`retryable=false` unless a durable idempotency record makes replay safe, and
+`commit_state=committed_or_unknown_after_commit`. The server must not report
+`not_committed` after a complete command frame may be recovered and replayed.
+
+If the backend instead reports that recovery is required, the native response
+uses `durability_unavailable` for v1 compatibility but MUST set
+`retryable=false`. The client must reopen and reconcile the database before
+issuing another mutation; it must not replay the failed request from the wire
+retry hint.
+
+If a command requested `ack_policy=flushed` or `ack_policy=synced` and the
+logical mutation committed but the requested barrier failed, the error must
+still expose the post-commit state. It must not look like an ordinary mutation
+rejection.
+
+Read `consistency_policy` values:
+
+```text
+1 local_stale
+2 leader_read
+3 linearizable
+4 lease_read
+```
+
+Single-node servers MAY treat `leader_read`, `linearizable`, and `lease_read` as
+equivalent when no cluster is configured, but they MUST report the actual mode in
+the response.
+
+The current token/ring cluster implementation recognizes `get_many` with
+exactly one document ID and maps it with `DocumentIDTokenV1` to one catalog
+owner. The public nativewire read then fails closed with route class
+`owner_store_unbound` before invoking a read coordinator or observing the local
+collection. A catalog owner and read-index proof do not establish that the
+serving `CollectionManager` is the exact applied store for that owner; no
+production Raft/store identity binding currently exists.
+
+`GroupRoutedReadIndexCoordinator` is internal downstream scaffolding only. It
+can validate owner selection and read-index-before-apply ordering, but it does
+not bind collection-store identity and cannot enable public reads. Therefore
+there is no enabled-path latency claim or benchmark for token/ring reads.
+Multi-ID reads, non-route-key queries, scans, secondary/unique-index reads, and
+cross-shard reads also fail closed; no scatter, follower-read, lease-read,
+global ordering, or global unique coordination is implied.
+
+All token/ring document mutations fail closed until authoritative collection
+and index metadata is structurally bound to the exact owner route proof.
+Gateway-local collection metadata is not authoritative for a remote owner,
+including when it reports no indexes. Routed `list_collections`,
+`list_indexes`, and `open_collection` requests also fail closed instead of
+returning gateway-local metadata. Collection-placement mutations remain
+supported. Rejected public read routes expose only request/error/unsupported
+and `owner_store_unbound` counters under
+`treedb.native_wire.cluster_read_route.*`; no success, read-index, leader, or
+follower-path counter is emitted for this disabled path.
+
+## 13. Error Model
+
+The v1 `error` section uses stable numeric codes plus a retry hint and a
+human-readable message:
+
+```text
+code       uvarint
+retryable  bool
+message    string
+```
+
+The `string` encoding is the base protocol string encoding from section 3.
+Machine-readable request or stream metadata MAY be carried in a sibling
+`response_meta` string map. Typed error detail values are not frozen in v1; a
+future command or negotiated feature must define a separate critical detail
+section before typed details are emitted.
+
+Default error messages and metadata must be redacted. They must not include raw
+documents, raw user keys, raw document IDs, raw collection names, raw index
+names, raw root names, tenant-sensitive path components, or absolute host paths.
+Use stable error codes, counts, sizes, collection UIDs, file IDs, offsets,
+checksums, and keyed hashes by default. Raw diagnostic values require an
+explicit local admin/debug mode outside the default wire response.
+
+Initial error classes:
+
+```text
+1 malformed_frame
+2 unsupported_version
+3 unsupported_feature
+4 auth_required
+5 permission_denied
+6 invalid_command
+7 collection_not_found
+8 index_not_found
+9 duplicate_document_id
+10 document_exists
+11 unique_index_conflict
+12 catalog_version_mismatch
+13 read_only
+14 timeout
+15 canceled
+16 resource_exhausted
+17 internal
+18 durability_unavailable
+19 consistency_unavailable
+20 cursor_not_found
+21 catalog_changed
+22 idempotency_conflict
+23 commit_ambiguous
+```
+
+Errors that map to current collection duplicate-key conditions SHOULD preserve a
+stable duplicate-key class so clients can handle inserts and unique-index
+conflicts uniformly.
+
+Error frames MUST carry the target `request_id` when the error is
+request-scoped and the target `stream_id` when stream-scoped. A request-scoped
+error is terminal for that request. A stream-scoped error is terminal for that
+stream or cursor.
+
+`malformed_frame`, invalid header length, frame-size violations, and unsupported
+post-handshake versions are connection-fatal. The server MAY send `goaway` or an
+`error` frame before closing when safe.
+
+## 14. Deterministic Command Entry v1
+
+Future Raft log entries SHOULD use a deterministic command-entry envelope. The
+R2 implementation includes a v1 encoder/decoder, and compatible implementations
+MUST follow the byte layout below.
+
+```text
+entry_magic[4] = "TDC1"
+entry_version = uvarint(1)
+command_id = uvarint
+command_version = uvarint
+command_flags = uvarint
+section_count = uvarint
+repeat section_count:
+  section_id = uvarint
+  section_len = uvarint
+  section_payload[section_len]
+```
+
+Deterministic entries MUST use one canonical encoding:
+
+- minimal unsigned base-128 varints for variable integers,
+- sections sorted by `section_id`,
+- command-defined ordering for repeated sections,
+- no duplicate non-repeatable sections,
+- exact bytes for document IDs, document payloads, template records, and scalar
+  query values,
+- no map iteration order.
+
+The v1 envelope itself carries only deterministic command flags. R2/v1 defines
+no deterministic command flags yet; compatible v1 encoders MUST write
+`command_flags = 0`, and v1 decoders MUST reject non-zero `command_flags` as
+reserved for future versions. Response shaping flags such as omitted result IDs
+or omitted response metadata are stripped before entry encoding because they do
+not change logical state.
+
+Unknown, ignored, transport-only, or non-critical convenience sections MUST NOT
+be copied into the deterministic entry. Optional fields MUST either be omitted
+or encoded with explicit defaults according to the command schema; both forms
+MUST NOT be accepted for the same `command_version`.
+
+`ack_policy` is a common request section, but it is never deterministic command
+input. Encoders must strip it before deterministic-entry construction.
+
+The deterministic Raft command set is an allowlist. Logical metadata mutations
+and logical collection mutations MAY be replicated. Reads, cursors, explain,
+stats, open/close handles, `ack_policy`, `consistency_policy`, deadlines,
+cancellation, checksums, compression framing, flush, checkpoint, and other local
+durability or response-shaping controls MUST NOT be replicated as command
+identity. If a distributed barrier is needed, define it as a separate
+deterministic no-op or barrier command with explicit semantics.
+
+The following MUST NOT be included in deterministic command entries:
+
+- connection-local request IDs,
+- stream IDs,
+- transport deadlines,
+- trace context,
+- `ack_policy` and `consistency_policy`,
+- negotiated compression choices,
+- non-deterministic server timestamps,
+- response-shaping hints that do not change state.
+
+The following SHOULD be included when present:
+
+- collection metadata mutation input,
+- collection mutation IDs and document bytes,
+- `CatalogGuardV1` or legacy `expected_catalog_version` conflict guard,
+- idempotency key or `client_id + client_sequence`,
+- deterministic command flags.
+
+In distributed mode, mutating entries MUST include the idempotency identity and
+catalog guard rules described above. Clients may omit those sections for a
+single-node pre-alpha server only when the advertised command schema permits it.
+
+Commands that are read-only, cursor-only, or response-shaping only SHOULD NOT be
+encoded as Raft entries. Write-producing future features, such as server-side
+callbacks, MUST either log their fully expanded deterministic mutation batch or
+define a deterministic replay envelope with module hash and all deterministic
+inputs needed to reproduce the same writes.
+
+Raft implementations MAY store deterministic entries directly or wrap them in a
+larger consensus-layer entry that also carries term/index metadata.
+
+## 15. Implementation Conformance
+
+Implementation guidance is expanded in
+`TreeDB/docs/spec/native-wire-implementation-guidelines.md`. The rules below are
+part of the protocol contract for code that advertises native-wire v1.
+
+### 15.1 Append-Time Determinism Gate
+
+In distributed mode, the leader MUST pass every mutating request through an
+append-time determinism gate before Raft append:
+
+1. decode the wire request using the negotiated command schema,
+2. reject unsupported command versions, unknown required sections, duplicate
+   singleton sections, and non-deterministic sections,
+3. resolve connection-local handles and client names to committed stable catalog
+   identities,
+4. verify that the command is in the deterministic command allowlist,
+5. require an idempotency identity and catalog guard,
+6. encode the command with the canonical command-entry encoder,
+7. compute the canonical command digest over the exact entry bytes,
+8. append only those canonical bytes to Raft.
+
+Followers MUST apply committed command-entry bytes directly. They MUST NOT
+reconstruct entries from wire frames, negotiated connection features, local
+defaults, map iteration order, timestamps, handles, or transport metadata.
+
+### 15.2 Canonical Encoder Registry
+
+Each replicated `command_id + command_version` MUST have exactly one canonical
+encoder and decoder. Generic section copying is not sufficient for Raft entry
+construction.
+
+The command schema MUST define deterministic sections, field order inside each
+section, optional-field defaults, repeated-section ordering, scalar encoding,
+and rejection rules. A command version MUST NOT accept both omitted and
+explicit-default encodings for the same logical value.
+
+Canonical encoders MUST reject inputs that cannot be represented with one stable
+byte form. Any future replicated scalar that admits multiple encodings, such as
+floating NaN values, MUST either define a canonical representation or be
+rejected.
+
+### 15.3 Catalog Guards and Stable IDs
+
+Catalog guards are evaluated by the state machine at apply time. Leader-side
+validation is only a preflight optimization. A committed command whose guard
+does not match the applied catalog state MUST produce the same deterministic
+failure on every replica and MUST still update idempotency state for that
+command identity.
+
+Create/drop collection and create/drop index commands MUST encode deterministic
+existence guards, stable names, and any stable IDs assigned by committed catalog
+state. Replicas MUST NOT allocate catalog IDs from local randomness, wall-clock
+time, process-local counters outside the log, or map iteration order.
+
+### 15.4 State-Machine Boundary
+
+Raft entries replicate logical state-machine input only. Applying an entry may
+derive secondary-index postings, index-state deltas, value-log writes, backend
+roots, flush artifacts, and physical file layout locally. Those derived
+artifacts MUST NOT influence later logical command results except through
+committed logical state.
+
+The apply path MUST NOT depend on wall-clock time, process-global randomness,
+goroutine scheduling, map iteration order, local value-log offsets, local flush
+timing, or local maintenance decisions. Snapshots MUST include logical catalog
+state, collection contents, index definitions, and idempotency records; they
+need not preserve byte-identical local storage layout.
+
+### 15.5 Local-Only Commands
+
+`open_collection`, `close_collection`, cursors, reads, `explain`, `stats`,
+`flush_collection`, `flush_all`, `checkpoint`, value-log GC, value-log rewrite,
+and physical maintenance commands are local-only in v1.
+
+Cluster servers MUST NOT satisfy `ack_policy=raft_committed` by appending these
+commands to Raft. They MUST either execute them as local operations with
+response metadata naming the serving node, reject them as `invalid_command`, or
+define a future deterministic distributed barrier command with explicit
+consensus semantics.
+
+### 15.6 Mixed-Version Cluster Admission
+
+In cluster mode, `hello_ok` MUST distinguish locally implemented command
+versions from cluster-admitted command versions. A leader MUST only admit
+deterministic entries whose `entry_version`, `command_id`, `command_version`,
+and required feature bits can be decoded and applied by every current voting
+replica for the Raft group.
+
+Rolling upgrades MUST keep new deterministic command versions disabled until the
+membership and feature floor prove that all voting replicas can replay them. A
+node that cannot decode an already committed entry version MUST refuse to join
+as a voting replica for that log lineage.
+
+## 16. Benchmark and Observability Requirements
+
+R0d MUST establish codec-level nativewire microbenchmarks before native
+client/server modes publish end-to-end numbers. These package benchmarks SHOULD
+use the `BenchmarkNativewire...` prefix and cover:
+
+- fixed frame-header encode/decode,
+- command-header encode/decode,
+- section-envelope encode/decode,
+- byte-vector encode/decode across ID and document-shaped batches,
+- request body decode plus schema validation for every command schema marked
+  `BenchmarkRequired`,
+- deterministic command-entry encoding for every replicated benchmark case.
+
+R0d benchmarks SHOULD report `B/op`, `allocs/op`, bytes processed per second,
+and `wire_B/item` where a command carries a batch. Reusable hot paths for
+section decoding, byte-vector decoding, schema validation, and deterministic
+entry encoding SHOULD have allocation guard tests proving zero allocations after
+scratch warmup. Allocating compatibility APIs MAY remain available, but
+benchmark labels MUST distinguish allocating and scratch/reuse paths.
+
+Every later native-wire implementation round MUST close with a benchmark and
+profile pass before publishing the next feature round. R1 closeout MUST compare
+direct collection calls, native-wire in-process dispatch, and native-wire TCP
+dispatch. Later closeouts MUST benchmark the primary feature path introduced by
+that round, capture profiles for the dominant workload, and document any
+material regression, optimization, or deferred performance follow-up.
+
+The first implementation MUST add native client modes beside the existing Mongo
+gateway client modes:
+
+```text
+native-wire-tcp
+native-wire-inproc
+```
+
+Benchmark reports MUST label native-wire results separately from:
+
+- direct in-process collection calls,
+- Mongo driver paths,
+- Mongo raw-wire paths.
+
+Native-wire benchmarks SHOULD include:
+
+- insert load throughput,
+- get/get-many throughput,
+- equality/range index lookup throughput,
+- cursor scan throughput,
+- allocation profile,
+- per-frame byte overhead,
+- server encode/decode/dispatch overhead,
+- frames and bytes in/out,
+- request count and item count,
+- cursor count,
+- error and cancellation totals.
+
+Native-wire benchmark PRs MUST update `cmd/unified_bench` labels and tests before
+publishing native-wire results. Native-wire TCP and in-process results MUST NOT
+be reported under `native-fastpath`.
+
+The native server SHOULD expose stable `treedb.native_wire.*` stats through the
+same stats path consumed by `unified-bench` and `benchprof`. Minimum counters are
+connections opened/closed, frames in/out, bytes in/out, malformed frames,
+requests started/completed/failed/canceled/timed out, in-flight requests, open
+cursors, cursor closes/timeouts, per-command request/error counts, and
+encode/decode/dispatch nanoseconds.
+
+## 17. Open Questions
+
+1. Whether v1 should support raw ordered-KV commands alongside collection
+   commands, or keep raw-KV access as a later capability.
+2. Whether connection-local collection handles are worth the complexity in v1.
+3. Which compression codecs should be allowed on the wire initially.
+4. How authentication and authorization should map onto collections, indexes,
+   and future cluster routing.
+5. Whether `visible` should remain the standalone default once native clients
+   move beyond benchmark and compatibility work.

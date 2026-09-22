@@ -1,0 +1,48 @@
+File: treedb_vector_partition_bench
+Build ID: 6e601df17e91fc834d40505729b45018b8011783
+Type: delay
+Time: 2026-08-09 14:06:07 HST
+Showing nodes accounting for 7470.45us, 98.40% of 7592.03us total
+Dropped 186 nodes (cum <= 37.96us)
+Showing top 40 nodes out of 86
+      flat  flat%   sum%        cum   cum%
+ 6437.52us 84.79% 84.79%  6437.52us 84.79%  runtime.unlock (partial-inline)
+         0     0% 84.79%  5976.06us 78.71%  runtime.systemstack
+         0     0% 84.79%  5802.23us 76.43%  runtime.gcBgMarkWorker
+         0     0% 84.79%  5252.02us 69.18%  runtime.forEachP (inline)
+         0     0% 84.79%  5252.02us 69.18%  runtime.forEachPInternal
+         0     0% 84.79%  5250.71us 69.16%  runtime.gcMarkDone
+         0     0% 84.79%  5238.35us 69.00%  runtime.gcMarkTermination
+         0     0% 84.79%  5238.35us 69.00%  runtime.gcMarkTermination.forEachP.func7
+ 1032.93us 13.61% 98.40%  1032.93us 13.61%  sync.(*Mutex).Unlock (partial-inline)
+         0     0% 98.40%   686.69us  9.04%  github.com/snissn/gomap/TreeDB/nativewire.(*VectorPartitionCoordinatorV1).dispatch.func1
+         0     0% 98.40%   686.69us  9.04%  github.com/snissn/gomap/TreeDB/nativewire.(*VectorPartitionCoordinatorV1).dispatchTask
+         0     0% 98.40%   686.69us  9.04%  github.com/snissn/gomap/TreeDB/nativewire.(*VectorPartitionShardSearchTCPDispatcherV1).DispatchVectorPartitionShardSearchV1
+         0     0% 98.40%   686.69us  9.04%  github.com/snissn/gomap/TreeDB/nativewire.(*VectorPartitionShardSearchTCPDispatcherV1).dispatchVectorPartitionShardSearchOnceV1
+         0     0% 98.40%   665.61us  8.77%  context.(*cancelCtx).propagateCancel
+         0     0% 98.40%   665.61us  8.77%  context.WithDeadline (inline)
+         0     0% 98.40%   665.61us  8.77%  context.WithDeadlineCause
+         0     0% 98.40%   665.61us  8.77%  github.com/snissn/gomap/TreeDB/nativewire.vectorPartitionShardSearchTCPRequestContextV1
+         0     0% 98.40%   567.26us  7.47%  runtime.(*mheap).allocSpan
+         0     0% 98.40%   551.52us  7.26%  runtime.gcBgMarkWorker.func2
+         0     0% 98.40%   551.52us  7.26%  runtime.gcDrain
+         0     0% 98.40%   551.52us  7.26%  runtime.getempty
+         0     0% 98.40%   551.52us  7.26%  runtime.markroot
+         0     0% 98.40%   551.52us  7.26%  runtime.markroot.func1
+         0     0% 98.40%   551.52us  7.26%  runtime.scanframeworker
+         0     0% 98.40%   551.52us  7.26%  runtime.scanstack
+         0     0% 98.40%   551.41us  7.26%  runtime.(*mheap).allocManual
+         0     0% 98.40%   551.41us  7.26%  runtime.getempty.func1
+         0     0% 98.40%   474.43us  6.25%  runtime.scanblock
+         0     0% 98.40%   470.93us  6.20%  github.com/hashicorp/raft.(*raftState).goFunc.func1
+         0     0% 98.40%   419.44us  5.52%  runtime.gcDrainMarkWorkerIdle (inline)
+         0     0% 98.40%   404.14us  5.32%  runtime.(*stackScanState).putPtr
+         0     0% 98.40%   358.59us  4.72%  runtime.schedule
+         0     0% 98.40%   323.09us  4.26%  context.(*cancelCtx).Done
+         0     0% 98.40%   314.09us  4.14%  runtime.mcall
+         0     0% 98.40%   306.85us  4.04%  github.com/hashicorp/raft-boltdb/v2.(*BoltStore).StoreLogs
+         0     0% 98.40%   306.85us  4.04%  github.com/hashicorp/raft.(*Raft).run
+         0     0% 98.40%   298.40us  3.93%  go.etcd.io/bbolt.(*Tx).Commit
+         0     0% 98.40%   271.07us  3.57%  runtime.park_m
+         0     0% 98.40%   261.42us  3.44%  github.com/hashicorp/raft.(*Raft).appendEntries
+         0     0% 98.40%   261.42us  3.44%  github.com/hashicorp/raft.(*Raft).processRPC

@@ -1,0 +1,48 @@
+File: treedb_vector_partition_bench
+Build ID: 6e601df17e91fc834d40505729b45018b8011783
+Type: delay
+Time: 2026-08-09 14:07:00 HST
+Showing nodes accounting for 35.74ms, 99.86% of 35.79ms total
+Dropped 203 nodes (cum <= 0.18ms)
+Showing top 40 nodes out of 59
+      flat  flat%   sum%        cum   cum%
+   30.59ms 85.48% 85.48%    30.59ms 85.48%  sync.(*Mutex).Unlock (partial-inline)
+         0     0% 85.48%    27.61ms 77.15%  github.com/hashicorp/raft.(*raftState).goFunc.func1
+         0     0% 85.48%    27.21ms 76.02%  github.com/hashicorp/raft-boltdb/v2.(*BoltStore).StoreLogs
+         0     0% 85.48%    27.21ms 76.02%  github.com/hashicorp/raft.(*Raft).run
+         0     0% 85.48%    27.19ms 75.96%  go.etcd.io/bbolt.(*Tx).Commit
+         0     0% 85.48%    27.15ms 75.85%  github.com/hashicorp/raft.(*Raft).run-fm
+         0     0% 85.48%    27.13ms 75.79%  go.etcd.io/bbolt.(*Tx).writeMeta
+         0     0% 85.48%    27.08ms 75.68%  github.com/hashicorp/raft.(*Raft).dispatchLogs
+         0     0% 85.48%    27.08ms 75.68%  github.com/hashicorp/raft.(*Raft).leaderLoop
+         0     0% 85.48%    27.08ms 75.68%  github.com/hashicorp/raft.(*Raft).runLeader
+    5.15ms 14.38% 99.86%     5.15ms 14.38%  runtime.unlock (partial-inline)
+         0     0% 99.86%     4.43ms 12.37%  runtime.systemstack
+         0     0% 99.86%     4.25ms 11.87%  runtime.gcBgMarkWorker
+         0     0% 99.86%     4.08ms 11.40%  runtime.forEachP (inline)
+         0     0% 99.86%     4.08ms 11.40%  runtime.forEachPInternal
+         0     0% 99.86%     4.08ms 11.39%  runtime.gcMarkDone
+         0     0% 99.86%     4.07ms 11.38%  runtime.gcMarkTermination
+         0     0% 99.86%     4.07ms 11.38%  runtime.gcMarkTermination.forEachP.func7
+         0     0% 99.86%     3.19ms  8.91%  github.com/snissn/gomap/TreeDB/nativewire.(*VectorPartitionProductionTopologyV1).serve.func1.2
+         0     0% 99.86%     3.19ms  8.91%  github.com/snissn/gomap/TreeDB/nativewire.(*VectorPartitionShardSearchServiceV1).Search
+         0     0% 99.86%     3.19ms  8.91%  github.com/snissn/gomap/TreeDB/nativewire.VectorPartitionShardSearchTCPServerV1.ServeConn
+         0     0% 99.86%     3.07ms  8.59%  github.com/snissn/gomap/TreeDB/nativewire.(*collectionVectorPartitionGenerationCacheV1).openPartition
+         0     0% 99.86%     3.07ms  8.59%  github.com/snissn/gomap/TreeDB/nativewire.(*collectionVectorPartitionGenerationLeaseV1).OpenPartition
+         0     0% 99.86%     3.07ms  8.59%  github.com/snissn/gomap/TreeDB/nativewire.(*vectorPartitionProductionNodePinnedGenerationV1).OpenPartition
+         0     0% 99.86%     3.07ms  8.58%  github.com/snissn/gomap/TreeDB/collections.(*Collection).OpenVectorPartitionLocalSearcherForGenerationSearchPlanWithContextV1
+         0     0% 99.86%     3.07ms  8.58%  github.com/snissn/gomap/TreeDB/collections.(*Collection).openVectorPartitionLocalSearcherForPreparedPartitionWithContextV1
+         0     0% 99.86%     3.06ms  8.54%  sync.(*Once).Do (inline)
+         0     0% 99.86%     3.06ms  8.54%  sync.(*Once).doSlow
+         0     0% 99.86%     3.06ms  8.54%  github.com/snissn/gomap/TreeDB/collections.(*columnVectorGraphPhysicalRowReader).Close
+         0     0% 99.86%     3.06ms  8.54%  github.com/snissn/gomap/TreeDB/collections.(*columnVectorGraphPhysicalRowReader).releaseSharedPreparedSearch
+         0     0% 99.86%     3.06ms  8.54%  github.com/snissn/gomap/TreeDB/collections.(*columnVectorGraphSharedPreparedSearch).close
+         0     0% 99.86%     3.06ms  8.54%  github.com/snissn/gomap/TreeDB/collections.(*columnVectorGraphSharedPreparedSearchRef).release
+         0     0% 99.86%     3.06ms  8.54%  github.com/snissn/gomap/TreeDB/collections.(*columnVectorGraphSharedPreparedSearchRef).release.func1
+         0     0% 99.86%     3.06ms  8.54%  github.com/snissn/gomap/TreeDB/internal/mappedresource.(*Handle).Release
+         0     0% 99.86%     3.06ms  8.54%  github.com/snissn/gomap/TreeDB/internal/mappedresource.(*Manager).AcquireFileRange.func1
+         0     0% 99.86%     3.06ms  8.54%  github.com/snissn/gomap/TreeDB/internal/mappedresource.munmapFile (inline)
+         0     0% 99.86%     3.06ms  8.54%  syscall.(*mmapper).Munmap
+         0     0% 99.86%     3.06ms  8.54%  syscall.Munmap (inline)
+         0     0% 99.86%     3.03ms  8.47%  github.com/snissn/gomap/TreeDB/collections.(*columnVectorGraphAdjacencyDirectSources).Close
+         0     0% 99.86%     3.03ms  8.47%  github.com/snissn/gomap/TreeDB/collections.(*columnVectorGraphLayer0AdjacencyDirectSource).Close

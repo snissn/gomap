@@ -1,0 +1,80 @@
+{
+  "binary_sha256": "261e2097e73383da147852e0e848f43ff450abfc18ad2408a954ec11683fe95d",
+  "cells": [
+    {
+      "catalog_reads": 1004,
+      "concurrency": 1,
+      "p95_nanos": 1527093,
+      "qps": 760.2140435550526,
+      "recall_at_10": 0.9246999999999927,
+      "search_mode": "strict",
+      "serving_refresh_reads": 4,
+      "session_pins": 0,
+      "snapshot_pins": 1000,
+      "strict_reads": 1000
+    },
+    {
+      "catalog_reads": 1001,
+      "concurrency": 32,
+      "p95_nanos": 23260292,
+      "qps": 2258.6108879459252,
+      "recall_at_10": 0.9246999999999927,
+      "search_mode": "strict",
+      "serving_refresh_reads": 1,
+      "session_pins": 0,
+      "snapshot_pins": 1000,
+      "strict_reads": 1000
+    },
+    {
+      "catalog_reads": 4,
+      "concurrency": 1,
+      "p95_nanos": 1518633,
+      "qps": 771.5397116138093,
+      "recall_at_10": 0.9246999999999927,
+      "search_mode": "fast",
+      "serving_refresh_reads": 4,
+      "session_pins": 0,
+      "snapshot_pins": 1000,
+      "strict_reads": 0
+    },
+    {
+      "catalog_reads": 0,
+      "concurrency": 32,
+      "p95_nanos": 24670387,
+      "qps": 2170.42269238044,
+      "recall_at_10": 0.9246999999999927,
+      "search_mode": "fast",
+      "serving_refresh_reads": 0,
+      "session_pins": 0,
+      "snapshot_pins": 1000,
+      "strict_reads": 0
+    },
+    {
+      "catalog_reads": 4,
+      "concurrency": 1,
+      "p95_nanos": 1476050,
+      "qps": 778.569625648869,
+      "recall_at_10": 0.9246999999999927,
+      "search_mode": "pinned",
+      "serving_refresh_reads": 4,
+      "session_pins": 1,
+      "snapshot_pins": 0,
+      "strict_reads": 0
+    },
+    {
+      "catalog_reads": 0,
+      "concurrency": 32,
+      "p95_nanos": 23047795,
+      "qps": 2351.8416102784813,
+      "recall_at_10": 0.9246999999999927,
+      "search_mode": "pinned",
+      "serving_refresh_reads": 0,
+      "session_pins": 32,
+      "snapshot_pins": 0,
+      "strict_reads": 0
+    }
+  ],
+  "result_kind": "vector_partition_fast_search_reference_v1",
+  "schema_version": 1,
+  "source_head": "359a60f5730b2fcddd0c73927054705a6f123bc4"
+}

@@ -1,0 +1,41 @@
+{
+  "tracker": "https://github.com/snissn/gomap/issues/1529",
+  "milestone": "PR8 native-wire and Raft alignment closeout",
+  "branch": "codex/user-command-wal-pr8",
+  "base_branch": "codex/user-command-wal-pr7",
+  "implementation_commit": "pr-head",
+  "go_version": "go1.25.7",
+  "platform": "linux/amd64",
+  "command_support_matrix_version": "TreeDB/docs/spec/command-wal-support-matrix.json version 1",
+  "alignment_manifest": "TreeDB/docs/spec/command-wal-nativewire-alignment.json version 1",
+  "features": [
+    "machine-readable native-wire to command-WAL alignment manifest",
+    "fixture digest gates for native-wire deterministic entries and local command-WAL frames",
+    "docs tests for local ack policy and recoverability semantics",
+    "docs tests for Raft/local command boundary and lowered-equivalent or kind-only V1 relationships"
+  ],
+  "passed_tests": [
+    "TestCommandWALNativeWireAlignmentManifestCoverage",
+    "TestNativeWireAndLocalCommandDigestStable",
+    "TestNativeWireAckFlushedRequiresRootPublishAndAppliedLSN",
+    "TestNativeWirePostFramePublishFailureCommitAmbiguous",
+    "TestRaftApplyDoesNotReportRecoverableBeforeCommandWALAppliedLSN",
+    "TestRaftCommandEntryAndLocalCommandPayloadUseSharedCanonicalSchema",
+    "TestDeterministicEntryReplicatedGoldenFixtures",
+    "TestDeterministicEntryStableAcrossTransportOnlySections"
+  ],
+  "local_validation_commands": [
+    "git diff --check",
+    "GOWORK=off go test ./TreeDB/docs -run 'TestCommandWALNativeWireAlignmentManifestCoverage|TestNativeWireAndLocalCommandDigestStable|TestNativeWireAckFlushedRequiresRootPublishAndAppliedLSN|TestNativeWirePostFramePublishFailureCommitAmbiguous|TestRaftApplyDoesNotReportRecoverableBeforeCommandWALAppliedLSN|TestRaftCommandEntryAndLocalCommandPayloadUseSharedCanonicalSchema' -count=1",
+    "GOWORK=off go test ./TreeDB/docs ./TreeDB/internal/nativewire -run 'TestCommandWAL|TestNativeWire|TestRaft|TestDeterministicEntryReplicatedGoldenFixtures|TestDeterministicEntryStableAcrossTransportOnlySections' -count=1"
+  ],
+  "performance_gate": {
+    "required": false,
+    "rationale": "PR8 adds docs, manifests, and conformance tests only. It does not add runtime native-wire to command-WAL translation, digesting, or hot-path code."
+  },
+  "unsupported_modes": [
+    "native-wire create/drop index deterministic fixtures remain pinned but WAL-rejected until catalog index command WAL support lands",
+    "raft_committed remains future distributed mode and is not treated as local command-WAL append"
+  ],
+  "alignment_manifest_note": "lowered_kind_only_v1 entries are command-kind/status evidence only; lowered_equivalent_v1 is reserved for matched logical fixture inputs."
+}

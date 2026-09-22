@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "fixture": "qualification_high_entropy_1000000",
+  "generator": "treedb_vector_partition_high_entropy_synthetic_v1",
+  "arithmetic": "ieee754_binary64_explicit_fma_v1",
+  "vectors": 1000000,
+  "queries": 1000,
+  "dimensions": 128,
+  "metric": "cosine",
+  "seed": 4015,
+  "checksum": "08a920e81d8ce5a0b19d1a4d051d5f408a688192eee971cbfc09d1b8c362a3c3"
+}
