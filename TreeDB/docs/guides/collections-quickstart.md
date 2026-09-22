@@ -361,8 +361,10 @@ _ = resultIDs // returned in caller input order
 
 Preparation does not make rows visible or durable. Keep one ordered committer;
 the successful `Commit` has the same WAL and publication boundary as
-`InsertBatch`. A non-eligible schema or oversized request returns
-`ErrPreparedInsertIneligible` before admission.
+`InsertBatch`. An unsupported schema returns `ErrPreparedInsertIneligible`;
+oversized or structurally limited input returns the distinct
+`ErrPreparedInsertResourceLimit`. A bounded caller must not retry the latter
+through ordinary `InsertBatch`.
 
 ## Runnable package benchmark
 

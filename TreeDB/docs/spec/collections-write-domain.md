@@ -211,9 +211,9 @@ or ordered WAL/publication. Prepared mode rejects documents over 128 KiB or
 beyond the cursor's depth and descriptor limits. Declared columns must have
 nonempty paths and Int64 or String values; other scalar types use the ordinary
 path because they currently take a full-batch extractor before the bounded
-cursor. Resource and structural limits return `ErrPreparedInsertResourceLimit`
-(also matching `ErrPreparedInsertIneligible`) so a bounded caller can fail
-closed. Unsupported collection configurations return only
+cursor. Resource and structural limits return `ErrPreparedInsertResourceLimit`,
+which is distinct from `ErrPreparedInsertIneligible`, so a bounded caller fails
+closed by default. Unsupported collection configurations return
 `ErrPreparedInsertIneligible` and can use ordinary `InsertBatch`. A later
 `Commit` rechecks persisted conflicts and schema under the normal insert path
 before WAL admission. One caller can
