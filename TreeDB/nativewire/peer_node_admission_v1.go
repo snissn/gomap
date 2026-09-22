@@ -65,6 +65,7 @@ type peerNodeAdmissionV1 struct {
 	cancel       context.CancelFunc
 	read         atomic.Uint64
 	written      atomic.Uint64
+	draining     atomic.Bool
 }
 
 func normalizePeerNodeLimitsV1(value PeerNodeLimitsV1) (PeerNodeLimitsV1, error) {
@@ -108,6 +109,7 @@ func newPeerNodeAdmissionV1(config FixedPeerTCPConfigV1) (*peerNodeAdmissionV1, 
 	}
 	add("control", peerResourceAmountsV1{4, 0, 0})
 	add("control-read", peerResourceAmountsV1{0, 4, 16 << 20})
+	add("control-diagnostics", peerResourceAmountsV1{0, 1, 4 << 20})
 	add("control-write", peerResourceAmountsV1{0, 1, 64 << 10})
 	add("control-forward", peerResourceAmountsV1{0, 1, 64 << 10})
 	add("native", peerResourceAmountsV1{1, 1, 64 << 10})

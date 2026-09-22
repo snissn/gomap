@@ -99,6 +99,9 @@ type fixedPeerDataV1 struct {
 }
 
 type FixedPeerTCPRuntimeV1 struct {
+	diagnostics   chan struct{}
+	draining      atomic.Bool
+	closed        atomic.Bool
 	config        FixedPeerTCPConfigV1
 	client        *FixedPeerTCPClientV1
 	authority     *raftplacement.CatalogMetaAuthorityV1
@@ -372,7 +375,7 @@ func OpenFixedPeerTCPRuntimeV1(config FixedPeerTCPConfigV1) (*FixedPeerTCPRuntim
 	if err != nil {
 		return nil, err
 	}
-	r := &FixedPeerTCPRuntimeV1{config: client.config, client: client, data: map[raftcluster.GroupID]*fixedPeerDataV1{}, requests: make(chan struct{}, 32), forwards: make(chan struct{}, 32), reads: make(chan struct{}, 32)}
+	r := &FixedPeerTCPRuntimeV1{config: client.config, client: client, data: map[raftcluster.GroupID]*fixedPeerDataV1{}, requests: make(chan struct{}, 32), forwards: make(chan struct{}, 32), reads: make(chan struct{}, 32), diagnostics: make(chan struct{}, 4)}
 	if _, hosted := r.config.RaftListen[r.config.Catalog.ID]; hosted {
 		r.authority = raftplacement.NewCatalogMetaAuthorityV1()
 	}
@@ -539,6 +542,7 @@ func (r *FixedPeerTCPRuntimeV1) Close() error {
 		return nil
 	}
 	r.closeOnce.Do(func() {
+		r.BeginDrainV1()
 		var errs []error
 		if r.server != nil {
 			ctx, cancel := context.WithTimeout(context.Background(), r.config.RequestTimeout)
@@ -574,6 +578,7 @@ func (r *FixedPeerTCPRuntimeV1) Close() error {
 		if r.client != nil {
 			r.client.Close()
 		}
+		r.closed.Store(true)
 		r.closeErr = errors.Join(errs...)
 	})
 	return r.closeErr
@@ -728,6 +733,8 @@ type fixedPeerRequestV1 struct {
 	Route    ClusterRouteRequest
 }
 type fixedPeerReplyV1 struct {
+	Readiness    *FixedPeerReadinessV1       `json:",omitempty"`
+	ReadProof    *raftcluster.ReadIndexProof `json:",omitempty"`
 	NodeID       raftcluster.NodeID
 	ConfigDigest string
 	Error        string
@@ -776,6 +783,10 @@ func (r *FixedPeerTCPRuntimeV1) serve(w http.ResponseWriter, request *http.Reque
 			}
 		}
 	}
+	if r.draining.Load() && (request.URL.Path == "/v1/submit" || request.URL.Path == "/v1/forward" || request.URL.Path == "/v1/catalog-publish") {
+		err = raftcluster.ErrAdmissionUnavailable
+		return
+	}
 	if r.client.peerTransport != nil {
 		if request.ContentLength < 0 || request.ContentLength > fixedPeerMaxRPCBytesV1 {
 			err = raftcluster.ErrRouteTargetUnsupported
@@ -792,8 +803,10 @@ func (r *FixedPeerTCPRuntimeV1) serve(w http.ResponseWriter, request *http.Reque
 	switch request.URL.Path {
 	case "/v1/forward":
 		requests = r.forwards
-	case "/v1/status", "/v1/catalog-read", "/v1/catalog-route", "/v1/catalog-validate":
+	case "/v1/status", "/v1/catalog-read", "/v1/catalog-route", "/v1/catalog-validate", "/v1/group-read-proof":
 		requests = r.reads
+	case "/v1/readiness":
+		requests = r.diagnostics
 	}
 	select {
 	case requests <- struct{}{}:
@@ -822,6 +835,22 @@ func (r *FixedPeerTCPRuntimeV1) serve(w http.ResponseWriter, request *http.Reque
 	switch request.URL.Path {
 	case "/v1/status":
 		reply.Status, err = r.Status(ctx)
+	case "/v1/readiness":
+		var report FixedPeerReadinessV1
+		report, err = r.readinessV1(ctx)
+		reply.Readiness = &report
+	case "/v1/group-read-proof":
+		group := raftcluster.GroupID(body.Metadata.ClusterRouteGroupID)
+		local := r.data[group]
+		if local == nil {
+			err = raftcluster.ErrRouteTargetUnknown
+			return
+		}
+		var proof raftcluster.ReadIndexProof
+		proof, err = local.provider.ReadIndex(ctx, raftcluster.ReadIndexBarrier{NodeID: r.config.NodeID, GroupID: group})
+		if err == nil {
+			reply.ReadProof = &proof
+		}
 	case "/v1/catalog-read":
 		reply.Catalog, err = r.localCatalogFence(ctx)
 	case "/v1/catalog-route", "/v1/catalog-validate":
@@ -921,7 +950,7 @@ func (c *FixedPeerTCPClientV1) call(ctx context.Context, node raftcluster.NodeID
 	// Read and mutation admission are independent, globally bounded per
 	// client, and have no unbounded waiter queue. Refusal precedes any send.
 	httpClient, calls := c.http, c.calls
-	if operation == "status" || operation == "catalog-read" || operation == "catalog-route" || operation == "catalog-validate" {
+	if operation == "status" || operation == "catalog-read" || operation == "catalog-route" || operation == "catalog-validate" || operation == "readiness" || operation == "group-read-proof" {
 		httpClient, calls = c.readHTTP, c.readCalls
 	}
 	select {
