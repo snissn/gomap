@@ -121,7 +121,9 @@ func (p *PeerTransportV1) DialNativeContextV1(ctx context.Context, address strin
 	if err != nil {
 		return nil, err
 	}
-	client := NewClient(conn)
+	client := NewClientWithMaxFrameSize(conn, peerNativeDefaultFrameV1)
+	client.limits.MaxByteVectorItems = int(peerNativeDefaultFrameV1/32)
+	client.peerAdmission = p.admission
 	if err := client.Hello(ctx); err != nil {
 		_ = client.Close()
 		return nil, err
@@ -167,6 +169,7 @@ func NewAuthenticatedVectorPartitionShardSearchTCPDispatcherV1(transport *PeerTr
 	if err != nil {
 		return nil, err
 	}
+	dispatcher.peerAdmission = transport.admission
 	dispatcher.dial = func(ctx context.Context, network, address string) (net.Conn, error) {
 		if network != "tcp" || identities[address] == "" {
 			return nil, errPeerAuthenticationV1

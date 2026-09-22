@@ -105,7 +105,7 @@ type FixedPeerTCPRuntimeV1 struct {
 	meta          *raftcluster.CatalogMetaRaftProviderV1
 	data          map[raftcluster.GroupID]*fixedPeerDataV1
 	local, routed *raftcluster.GroupRoutedSubmitter
-	transports    []*hraft.NetworkTransport
+	transports    []interface { Close() error; CloseStreams() }
 	server        *http.Server
 	listener      net.Listener
 	reopened      bool
@@ -401,7 +401,12 @@ func OpenFixedPeerTCPRuntimeV1(config FixedPeerTCPConfigV1) (*FixedPeerTCPRuntim
 		if e != nil {
 			return fail(e)
 		}
-		r.transports = append(r.transports, transport)
+		var providerTransport hraft.Transport = transport
+		if admission != nil {
+			bounded := newPeerRaftTransportV1(transport, admission, "raft:"+string(g.ID), g.ID == r.config.Catalog.ID)
+			providerTransport = bounded
+			r.transports = append(r.transports, bounded)
+		} else { r.transports = append(r.transports, transport) }
 		cfg := raftcluster.Config{Dir: filepath.Join(r.config.DataRoot, string(g.ID)), ClusterDir: r.config.RaftRoot, DisableSideStores: true, NodeID: r.config.NodeID, GroupID: g.ID, Peers: g.Peers, Features: g.Features}
 		raftConfig := hraft.DefaultConfig()
 		raftConfig.HeartbeatTimeout = r.config.RaftTimeout
@@ -410,7 +415,7 @@ func OpenFixedPeerTCPRuntimeV1(config FixedPeerTCPConfigV1) (*FixedPeerTCPRuntim
 		raftConfig.LogOutput = io.Discard
 		bootstrap := g.BootstrapNode == r.config.NodeID
 		if i == 0 {
-			r.meta, e = raftcluster.OpenCatalogMetaRaftProviderV1(raftcluster.CatalogMetaRaftProviderOptionsV1{Cluster: cfg, State: r.authority, Transport: transport, RaftConfig: raftConfig, Bootstrap: bootstrap, ApplyTimeout: r.config.RequestTimeout})
+			r.meta, e = raftcluster.OpenCatalogMetaRaftProviderV1(raftcluster.CatalogMetaRaftProviderOptionsV1{Cluster: cfg, State: r.authority, Transport: providerTransport, RaftConfig: raftConfig, Bootstrap: bootstrap, ApplyTimeout: r.config.RequestTimeout})
 			if e != nil {
 				return fail(e)
 			}
@@ -426,7 +431,7 @@ func OpenFixedPeerTCPRuntimeV1(config FixedPeerTCPConfigV1) (*FixedPeerTCPRuntim
 		if e != nil {
 			return fail(e)
 		}
-		d.provider, e = raftcluster.OpenHashicorpRaftProvider(raftcluster.HashicorpRaftProviderOptions{Cluster: cfg, Applier: d.fsm, Transport: transport, RaftConfig: raftConfig, Bootstrap: bootstrap, ApplyTimeout: r.config.RequestTimeout})
+		d.provider, e = raftcluster.OpenHashicorpRaftProvider(raftcluster.HashicorpRaftProviderOptions{Cluster: cfg, Applier: d.fsm, Transport: providerTransport, RaftConfig: raftConfig, Bootstrap: bootstrap, ApplyTimeout: r.config.RequestTimeout})
 		if e != nil {
 			return fail(e)
 		}
@@ -502,6 +507,10 @@ func (r *FixedPeerTCPRuntimeV1) Close() error {
 		} else if r.listener != nil {
 			errs = append(errs, r.listener.Close())
 		}
+		for _, t := range r.transports {
+			errs = append(errs, t.Close())
+			t.CloseStreams()
+		}
 		if r.meta != nil {
 			errs = append(errs, r.meta.Close())
 		}
@@ -509,10 +518,6 @@ func (r *FixedPeerTCPRuntimeV1) Close() error {
 			if d.provider != nil {
 				errs = append(errs, d.provider.Close())
 			}
-		}
-		for _, t := range r.transports {
-			errs = append(errs, t.Close())
-			t.CloseStreams()
 		}
 		for _, d := range r.data {
 			if d.fsm != nil {

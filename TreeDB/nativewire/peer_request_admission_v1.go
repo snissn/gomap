@@ -8,6 +8,11 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/raftentry"
 )
 
+// Authenticated native traffic starts with a 1 MiB frame profile; legacy
+// native-wire framing remains unchanged. Applications can set a server limit
+// explicitly within their declared node byte capacity.
+const peerNativeDefaultFrameV1 = 1 << 20
+
 type peerWorkLeaseV1 struct {
 	request peerResourceLeaseV1
 	bytes peerResourceLeaseV1

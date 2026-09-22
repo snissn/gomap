@@ -45,6 +45,7 @@ const (
 // in-process registry: every request and response crosses a serialized socket
 // boundary before the coordinator can consume it.
 type VectorPartitionShardSearchTCPDispatcherV1 struct {
+	peerAdmission             *peerNodeAdmissionV1
 	endpoints                 map[raftcluster.GroupID]string
 	nodeEndpoints             map[raftcluster.GroupID]map[raftcluster.NodeID]string
 	dial                      func(context.Context, string, string) (net.Conn, error)
@@ -193,6 +194,15 @@ func (d *VectorPartitionShardSearchTCPDispatcherV1) DispatchVectorPartitionShard
 			return VectorPartitionShardSearchResponseV1{}, &VectorPartitionShardSearchErrorV1{Code: VectorPartitionShardSearchErrorGroupUnavailableV1, GroupID: request.TargetGroupID, Err: fmt.Errorf("%w: shard shared request slots exhausted (%d/%d)", raftcluster.ErrAdmissionUnavailable, len(d.requestSlots), cap(d.requestSlots))}
 		}
 	}
+	if d.peerAdmission != nil {
+		requestBytes, err := vectorPartitionCoordinatorShardRequestBytesV1(request)
+		if err != nil || requestBytes > uint64(d.maxRequestFrame) { return VectorPartitionShardSearchResponseV1{}, raftcluster.ErrRouteTargetUnsupported }
+		bound, err := peerShardResponseFrameV1(request, d.maxResponseFrame)
+		if err != nil { return VectorPartitionShardSearchResponseV1{}, err }
+		work, err := d.peerAdmission.work("shard:"+string(request.TargetGroupID), peerRequestsV1, int64(requestBytes)*8+int64(bound)*2)
+		if err != nil { return VectorPartitionShardSearchResponseV1{}, &VectorPartitionShardSearchErrorV1{Code: VectorPartitionShardSearchErrorGroupUnavailableV1, GroupID: request.TargetGroupID, Err: err} }
+		defer work.release()
+	}
 	for attempt := 0; ; attempt++ {
 		response, err := d.dispatchVectorPartitionShardSearchOnceV1(ctx, request)
 		if err == nil || attempt != 0 || ctx.Err() != nil || !vectorPartitionShardSearchTCPReconnectableV1(err) {
@@ -233,7 +243,9 @@ func (d *VectorPartitionShardSearchTCPDispatcherV1) dispatchVectorPartitionShard
 	if err := writeVectorPartitionShardSearchTCPFrameV1(conn, frame, d.maxRequestFrame); err != nil {
 		return VectorPartitionShardSearchResponseV1{}, vectorPartitionShardSearchTCPRetryableTransportErrorV1(requestCtx, request.TargetGroupID, err)
 	}
-	frame, err = readVectorPartitionShardSearchTCPResponseFrameV1(conn, d.maxResponseFrame, request)
+	responseFrame := d.maxResponseFrame
+	if d.peerAdmission != nil { responseFrame, err = peerShardResponseFrameV1(request, responseFrame); if err != nil { return VectorPartitionShardSearchResponseV1{}, err } }
+	frame, err = readVectorPartitionShardSearchTCPResponseFrameV1(conn, responseFrame, request)
 	if err != nil {
 		if request.DeadlineUnixNano != 0 && !time.Now().Before(time.Unix(0, request.DeadlineUnixNano)) {
 			return VectorPartitionShardSearchResponseV1{}, &VectorPartitionShardSearchErrorV1{Code: VectorPartitionShardSearchErrorDeadlineV1, GroupID: request.TargetGroupID, Err: context.DeadlineExceeded}
@@ -488,6 +500,7 @@ func (s VectorPartitionShardSearchTCPServerV1) serveAdmittedConnV1(ctx context.C
 	maxFrame := s.MaxFrame
 	if maxFrame == 0 {
 		maxFrame = vectorPartitionShardSearchTCPMaxFrameBytesV1
+		if s.PeerTransport != nil { maxFrame = uint32(DefaultVectorPartitionShardSearchLimitsV1().MaxRequestBytes) }
 	}
 	maxResponseFrame := s.MaxResponseFrame
 	if maxResponseFrame == 0 {
@@ -504,60 +517,78 @@ func (s VectorPartitionShardSearchTCPServerV1) serveAdmittedConnV1(ctx context.C
 	if initialTimeout == 0 {
 		initialTimeout = 5 * time.Second
 	}
-	for {
-		_ = conn.SetReadDeadline(time.Now().Add(initialTimeout))
-		frame, err := readVectorPartitionShardSearchTCPFrameV1(conn, maxFrame)
-		_ = conn.SetReadDeadline(time.Time{})
-		if err != nil {
-			return
-		}
-		if frame.Probe != nil && frame.Request == nil && frame.Response == nil && frame.Error == nil && frame.ProbeResponse == nil {
-			identity := s.EndpointIdentity
-			if s.EndpointIdentityProvider != nil {
-				identity = s.EndpointIdentityProvider()
-			}
-			if frame.Probe.Version != 1 || identity.Version != 1 || identity.GroupID == "" || identity.InstanceIdentity == "" {
-				_ = s.writeFrame(conn, vectorPartitionShardSearchTCPFrameV1{Error: &vectorPartitionShardSearchTCPErrorV1{Code: VectorPartitionShardSearchErrorInvalidRequestV1, Message: "M5 endpoint identity is unavailable"}}, maxResponseFrame, time.Now().Add(initialTimeout))
-				return
-			}
-			if s.writeFrame(conn, vectorPartitionShardSearchTCPFrameV1{ProbeResponse: &identity}, maxResponseFrame, time.Now().Add(initialTimeout)) != nil {
-				return
-			}
-			continue
-		}
-		if frame.Request == nil || frame.Probe != nil || frame.Response != nil || frame.Error != nil || frame.ProbeResponse != nil {
-			// A peer that sends no frame (or never reads) must not strand this server
-			// goroutine while we try to report the bounded framing failure.
-			_ = conn.SetWriteDeadline(time.Now().Add(initialTimeout))
-			_ = writeVectorPartitionShardSearchTCPFrameV1(conn, vectorPartitionShardSearchTCPFrameV1{Error: &vectorPartitionShardSearchTCPErrorV1{Code: VectorPartitionShardSearchErrorInvalidRequestV1, Message: "invalid M5 TCP request"}}, maxResponseFrame)
-			return
-		}
-		if s.Service == nil {
-			_ = s.writeFrame(conn, vectorPartitionShardSearchTCPFrameV1{Error: &vectorPartitionShardSearchTCPErrorV1{Code: VectorPartitionShardSearchErrorGroupUnavailableV1, GroupID: frame.Request.TargetGroupID, Message: "M5 service is unavailable"}}, maxResponseFrame, time.Now().Add(initialTimeout))
-			return
-		}
-		requestCtx, cancel := vectorPartitionShardSearchTCPRequestContextV1(ctx, frame.Request.DeadlineUnixNano)
-		stopPeerMonitor := vectorPartitionShardSearchTCPMonitorPeerDisconnectV1(conn, requestCtx, cancel)
-		response, err := s.Service.Search(requestCtx, *frame.Request)
-		peerInput := stopPeerMonitor()
-		cancel()
-		if peerInput {
-			return
-		}
-		writeDeadline := time.Now().Add(initialTimeout)
-		if deadline, ok := requestCtx.Deadline(); ok {
-			writeDeadline = deadline
-		}
-		if err != nil {
-			if s.writeFrame(conn, vectorPartitionShardSearchTCPFrameV1{Error: vectorPartitionShardSearchTCPErrorFromErrorV1(err)}, maxResponseFrame, writeDeadline) != nil {
-				return
-			}
-			continue
-		}
-		if s.writeFrame(conn, vectorPartitionShardSearchTCPFrameV1{Response: &response}, maxResponseFrame, writeDeadline) != nil {
-			return
-		}
+	for s.serveOneFrameV1(ctx, conn, maxFrame, maxResponseFrame, initialTimeout) {}
+}
+
+func (s VectorPartitionShardSearchTCPServerV1) serveOneFrameV1(ctx context.Context, conn net.Conn, maxFrame, maxResponseFrame uint32, initialTimeout time.Duration) bool {
+	_ = conn.SetReadDeadline(time.Now().Add(initialTimeout))
+	var admission *peerNodeAdmissionV1
+	if s.PeerTransport != nil { admission = s.PeerTransport.admission }
+	frame, work, err := readPeerShardFrameV1(conn, maxFrame, admission, "shard:"+string(s.PeerGroupID))
+	defer work.release()
+	_ = conn.SetReadDeadline(time.Time{})
+	if err != nil {
+		return false
 	}
+	if frame.Probe != nil && frame.Request == nil && frame.Response == nil && frame.Error == nil && frame.ProbeResponse == nil {
+		identity := s.EndpointIdentity
+		if s.EndpointIdentityProvider != nil {
+			identity = s.EndpointIdentityProvider()
+		}
+		if frame.Probe.Version != 1 || identity.Version != 1 || identity.GroupID == "" || identity.InstanceIdentity == "" {
+			_ = s.writeFrame(conn, vectorPartitionShardSearchTCPFrameV1{Error: &vectorPartitionShardSearchTCPErrorV1{Code: VectorPartitionShardSearchErrorInvalidRequestV1, Message: "M5 endpoint identity is unavailable"}}, maxResponseFrame, time.Now().Add(initialTimeout))
+			return false
+		}
+		if s.writeFrame(conn, vectorPartitionShardSearchTCPFrameV1{ProbeResponse: &identity}, maxResponseFrame, time.Now().Add(initialTimeout)) != nil {
+			return false
+		}
+		return true
+	}
+	if frame.Request == nil || frame.Probe != nil || frame.Response != nil || frame.Error != nil || frame.ProbeResponse != nil {
+		// A peer that sends no frame (or never reads) must not strand this server
+		// goroutine while we try to report the bounded framing failure.
+		_ = conn.SetWriteDeadline(time.Now().Add(initialTimeout))
+		_ = writeVectorPartitionShardSearchTCPFrameV1(conn, vectorPartitionShardSearchTCPFrameV1{Error: &vectorPartitionShardSearchTCPErrorV1{Code: VectorPartitionShardSearchErrorInvalidRequestV1, Message: "invalid M5 TCP request"}}, maxResponseFrame)
+		return false
+	}
+	if s.Service == nil {
+		_ = s.writeFrame(conn, vectorPartitionShardSearchTCPFrameV1{Error: &vectorPartitionShardSearchTCPErrorV1{Code: VectorPartitionShardSearchErrorGroupUnavailableV1, GroupID: frame.Request.TargetGroupID, Message: "M5 service is unavailable"}}, maxResponseFrame, time.Now().Add(initialTimeout))
+		return false
+	}
+	if admission != nil {
+		if frame.Request.TargetGroupID != s.PeerGroupID { return false }
+		bound, err := peerShardResponseFrameV1(*frame.Request, maxResponseFrame)
+		if err != nil { return false }
+		maxResponseFrame = bound
+		response, err := admission.acquire("shard:"+string(s.PeerGroupID), peerBytesV1, int64(bound)*2)
+		if err != nil {
+			_ = s.writeFrame(conn, vectorPartitionShardSearchTCPFrameV1{Error: &vectorPartitionShardSearchTCPErrorV1{Code: VectorPartitionShardSearchErrorGroupUnavailableV1, GroupID: frame.Request.TargetGroupID, Message: err.Error()}}, uint32(vectorPartitionShardSearchTCPMinFrameBytesV1), time.Now().Add(initialTimeout))
+			return true
+		}
+		defer response.release()
+	}
+	requestCtx, cancel := vectorPartitionShardSearchTCPRequestContextV1(ctx, frame.Request.DeadlineUnixNano)
+	stopPeerMonitor := vectorPartitionShardSearchTCPMonitorPeerDisconnectV1(conn, requestCtx, cancel)
+	response, err := s.Service.Search(requestCtx, *frame.Request)
+	peerInput := stopPeerMonitor()
+	cancel()
+	if peerInput {
+		return false
+	}
+	writeDeadline := time.Now().Add(initialTimeout)
+	if deadline, ok := requestCtx.Deadline(); ok {
+		writeDeadline = deadline
+	}
+	if err != nil {
+		if s.writeFrame(conn, vectorPartitionShardSearchTCPFrameV1{Error: vectorPartitionShardSearchTCPErrorFromErrorV1(err)}, maxResponseFrame, writeDeadline) != nil {
+			return false
+		}
+		return true
+	}
+	if s.writeFrame(conn, vectorPartitionShardSearchTCPFrameV1{Response: &response}, maxResponseFrame, writeDeadline) != nil {
+		return false
+	}
+	return true
 }
 
 func (s VectorPartitionShardSearchTCPServerV1) writeFrame(conn net.Conn, frame vectorPartitionShardSearchTCPFrameV1, maxFrame uint32, deadline time.Time) error {

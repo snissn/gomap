@@ -20,6 +20,10 @@ func readFrame(r io.Reader, limits iwire.Limits) (iwire.Header, []byte, error) {
 }
 
 func readFrameInto(r io.Reader, limits iwire.Limits, dst []byte) (iwire.Header, []byte, error) {
+	return readFrameIntoAdmissionV1(r, limits, dst, nil)
+}
+
+func readFrameIntoAdmissionV1(r io.Reader, limits iwire.Limits, dst []byte, admit func(uint64) error) (iwire.Header, []byte, error) {
 	var headerBuf [iwire.FrameHeaderLenV1]byte
 	if _, err := io.ReadFull(r, headerBuf[:]); err != nil {
 		return iwire.Header{}, nil, err
@@ -27,6 +31,9 @@ func readFrameInto(r io.Reader, limits iwire.Limits, dst []byte) (iwire.Header, 
 	header, err := iwire.DecodeHeader(headerBuf[:], limits)
 	if err != nil {
 		return iwire.Header{}, nil, err
+	}
+	if admit != nil {
+		if err := admit(header.BodyLen); err != nil { return header, nil, err }
 	}
 	if header.BodyLen == 0 {
 		return header, nil, nil
