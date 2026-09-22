@@ -27,7 +27,7 @@ type PeerTransportV1 struct {
 // NewPeerTransportV1 loads a credentialed fixed-peer configuration without
 // opening stores or bootstrapping Raft. Credential-free configuration refuses.
 func NewPeerTransportV1(config FixedPeerTCPConfigV1) (*PeerTransportV1, error) {
-	config, _, err := validateFixedPeerConfigV1(config)
+	config, digest, err := validateFixedPeerConfigV1(config)
 	if err != nil {
 		return nil, err
 	}
@@ -42,10 +42,10 @@ func NewPeerTransportV1(config FixedPeerTCPConfigV1) (*PeerTransportV1, error) {
 	if err != nil {
 		return nil, err
 	}
-	return peerTransportFromSecurityV1(config, security)
+	return peerTransportFromSecurityV1(config, security, digest)
 }
 
-func peerTransportFromSecurityV1(config FixedPeerTCPConfigV1, security *peerTransportSecurityV1) (*PeerTransportV1, error) {
+func peerTransportFromSecurityV1(config FixedPeerTCPConfigV1, security *peerTransportSecurityV1, digest string) (*PeerTransportV1, error) {
 	if security == nil {
 		return nil, nil
 	}
@@ -54,11 +54,7 @@ func peerTransportFromSecurityV1(config FixedPeerTCPConfigV1, security *peerTran
 		return nil, err
 	}
 	transport := &PeerTransportV1{security: security, admission: admission, node: config.NodeID, groups: make(map[raftcluster.GroupID]map[raftcluster.NodeID]bool, len(config.Groups)+1)}
-	_, transport.configDigest, err = validateFixedPeerConfigV1(config)
-	if err != nil {
-		admission.close()
-		return nil, err
-	}
+	transport.configDigest = digest
 	var limits PeerNodeLimitsV1
 	if config.ResourceLimits != nil {
 		limits = *config.ResourceLimits

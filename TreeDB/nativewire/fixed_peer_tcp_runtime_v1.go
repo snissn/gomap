@@ -343,7 +343,7 @@ func newFixedPeerTCPClientV1(config FixedPeerTCPConfigV1, shared *PeerTransportV
 	}
 	peerTransport := shared
 	if peerTransport == nil {
-		peerTransport, err = peerTransportFromSecurityV1(c, security)
+		peerTransport, err = peerTransportFromSecurityV1(c, security, digest)
 		if err != nil {
 			return nil, err
 		}
@@ -380,13 +380,18 @@ func OpenFixedPeerTCPRuntimeV1(config FixedPeerTCPConfigV1) (*FixedPeerTCPRuntim
 		r.authority = raftplacement.NewCatalogMetaAuthorityV1()
 	}
 	fail := func(err error) (*FixedPeerTCPRuntimeV1, error) { _ = r.Close(); return nil, err }
+	raw, _ := json.Marshal(r.config)
+	if r.config.Credentials != nil {
+		if err := preparePeerStorageV1(r.config, raw); err != nil {
+			return fail(err)
+		}
+	}
 	// Persist exact local configuration before opening any stores. A partial or
 	// modified manifest refuses startup instead of silently reusing identities.
 	if err := os.MkdirAll(r.config.RaftRoot, 0700); err != nil {
 		return fail(err)
 	}
 	manifest := filepath.Join(r.config.RaftRoot, "fixed-peer-v1.json")
-	raw, _ := json.Marshal(r.config)
 	old, err := os.ReadFile(manifest)
 	switch {
 	case err == nil:
@@ -459,6 +464,9 @@ func OpenFixedPeerTCPRuntimeV1(config FixedPeerTCPConfigV1) (*FixedPeerTCPRuntim
 			raftConfig.MaxAppendEntries = 1
 		}
 		bootstrap := g.BootstrapNode == r.config.NodeID
+		if r.config.Credentials != nil && r.reopened {
+			bootstrap = false
+		}
 		if i == 0 {
 			r.meta, e = raftcluster.OpenCatalogMetaRaftProviderV1(raftcluster.CatalogMetaRaftProviderOptionsV1{Cluster: cfg, State: r.authority, Transport: providerTransport, RaftConfig: raftConfig, Bootstrap: bootstrap, ApplyTimeout: r.config.RequestTimeout})
 			if e != nil {
