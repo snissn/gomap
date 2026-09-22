@@ -15,10 +15,10 @@ import (
 
 var ErrPreparedInsertIneligible = errors.New("collections: prepared insert ineligible")
 
-// ErrPreparedInsertResourceLimit identifies a size or structural limit. It
-// also matches ErrPreparedInsertIneligible, but callers with bounded-memory
-// policies must fail closed rather than retrying through ordinary InsertBatch.
-var ErrPreparedInsertResourceLimit = fmt.Errorf("%w: resource limit", ErrPreparedInsertIneligible)
+// ErrPreparedInsertResourceLimit identifies a size or structural limit. It is
+// distinct from ineligibility so callers cannot accidentally retry a rejected
+// batch through ordinary InsertBatch.
+var ErrPreparedInsertResourceLimit = errors.New("collections: prepared insert resource limit")
 
 const preparedInsertMaxRows = 16 << 10
 const preparedInsertMaxDocumentBytes = 128 << 10
@@ -137,7 +137,8 @@ func preparedDeclaredBackingBytes(rows []columnDeclaredRow) int64 {
 // maxOwnedBytes limits the retained request and prepared payload. Estimated
 // headroom rejects large requests before encoding; a post-encode capacity check
 // can also reject a batch. These estimates are not a strict transient heap
-// bound. Callers may use ordinary InsertBatch on ineligibility.
+// bound. Callers may use ordinary InsertBatch only on configuration
+// ineligibility; resource-limit errors must fail closed in bounded callers.
 func (c *Collection) PrepareInsertBatchOwned(ids, documents [][]byte, maxOwnedBytes int64) (*PreparedInsertBatch, error) {
 	if c == nil {
 		return nil, errCollectionNil

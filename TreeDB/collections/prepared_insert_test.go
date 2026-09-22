@@ -178,7 +178,7 @@ func TestPreparedInsertAbandonBoundsAndLateConflict(t *testing.T) {
 	col := createColumnRetainedSemanticStreamCollection(t, d, "events")
 	id := []byte("id")
 	doc := []byte(`{"row_id":1,"kind":"first"}`)
-	if _, err := col.PrepareInsertBatchOwned([][]byte{id}, [][]byte{doc}, 1); !errors.Is(err, ErrPreparedInsertResourceLimit) {
+	if _, err := col.PrepareInsertBatchOwned([][]byte{id}, [][]byte{doc}, 1); !errors.Is(err, ErrPreparedInsertResourceLimit) || errors.Is(err, ErrPreparedInsertIneligible) {
 		t.Fatalf("oversized prepare error=%v", err)
 	}
 	prepared, err := col.PrepareInsertBatchOwned([][]byte{id}, [][]byte{doc}, 16<<20)
@@ -487,7 +487,7 @@ func TestPreparedInsertRejectsUnsupportedStructuralShapesBeforeCommit(t *testing
 	oversize := `{"row_id":3,"kind":"oversize","extra":"` + strings.Repeat("x", preparedInsertMaxDocumentBytes) + `"}`
 	for i, document := range []string{deep, wide, oversize} {
 		id := []byte(fmt.Sprintf("shape-%d", i))
-		if _, err := col.PrepareInsertBatchOwned([][]byte{id}, [][]byte{[]byte(document)}, 32<<20); !errors.Is(err, ErrPreparedInsertResourceLimit) {
+		if _, err := col.PrepareInsertBatchOwned([][]byte{id}, [][]byte{[]byte(document)}, 32<<20); !errors.Is(err, ErrPreparedInsertResourceLimit) || errors.Is(err, ErrPreparedInsertIneligible) {
 			t.Errorf("shape %d prepared error=%v, want resource limit", i, err)
 		}
 		if got, err := col.Get(id); err != nil || got != nil {
