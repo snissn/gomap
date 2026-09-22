@@ -3382,3 +3382,12 @@ asset reachability resolves that specific pin only to an existing, validated,
 positive offsets-section pin with matching physical identity and scope; it never
 fabricates an extent or ignores an unknown/malformed pin. This rare cold path
 scans active pins for the companion and does not add a second registry.
+
+
+#### Draft bounded source snapshot V2 primitives
+
+The explicit V2 source identity binds collection scope, stable canonical ShardID, immutable snapshot revision, shard-local ordinal namespace, source-map epoch/digest, schema and index-definition digests, float32 little-endian encoding, dimensions, row count and rows per chunk. Snapshot revision and document revision are separate fields. Optional retained legacy ordinals also bind their original collection/index/source identity. None of these content hashes independently grants source authority.
+
+Chunks contain at most 256 rows and 8 MiB of encoded bytes, with IDs capped at 4096 bytes and Merkle proofs at 64 sibling hashes. `SCK2` contains the admitted snapshot digest, chunk index, complete contiguous rows and proof. The decoder owns its returned bytes, checks lengths before row/vector allocation, and verifies actual IDs, row revisions and vector bytes against the expected snapshot identity. Hash inputs use domain-separated V2 encodings. A valid chunk proof does not establish complete ANN-domain membership.
+
+`SAC2` is a fixed 2124-byte streaming-import checkpoint: semantic source header digest, processed chunk count, 64 accumulator slots and a domain-separated checksum. Occupancy follows the binary chunk count. Its checksum detects corruption; it is not an authority certificate. The eventual importer must publish checkpoint, exact range receipt and rows in the same durable root transaction. These codecs do not yet enable schema7 publication, import, source authority admission or serving.

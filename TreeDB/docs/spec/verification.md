@@ -2576,3 +2576,6 @@ do not return. This proves metadata eligibility filtering, not an independent
 server-side authorization policy. Small selective allow-sets retain their
 truthful typed-exact route.
 This fixture lives with the final metadata child, not in a separate harness PR.
+
+
+Draft source-snapshot V2 checks in `internal/vectorpartition/source_snapshot*_v2_test.go` compare the bounded streaming Merkle accumulator with a separate small-fixture tree, exercise checkpoint resume at every chunk, reject changed identities, missing/reordered/duplicate rows, corrupt/truncated codec bytes and excessive row/ID lengths, preserve original-source ordinal provenance, and decode a bounded local chunk when the declared global source row count reaches uint64 maximum. The scoped owner-local workflow runs these tests repeatedly and under race instrumentation, and records chunk verification/decode allocations. These are codec checks only. The ordinary paged load, canonical source authority, atomic durable import, bounded build, reachability and node-local memory evidence required by #4808 remain open.
