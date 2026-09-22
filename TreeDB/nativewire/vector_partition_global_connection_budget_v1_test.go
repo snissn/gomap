@@ -2,7 +2,10 @@ package nativewire
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -47,5 +50,71 @@ func TestManyIdleEndpointsRespectGlobalConnectionBudgetV1(t *testing.T) {
 	dispatcher.mu.Unlock()
 	if retained > connectionBudget {
 		t.Fatalf("retained %d connections after visiting %d owners; global budget is %d", retained, endpointCount, connectionBudget)
+	}
+}
+
+func TestPeerShardBudgetRefusalPrecedesDialV1(t *testing.T) {
+	dispatcher, err := NewVectorPartitionShardSearchTCPDispatcherV1(map[raftcluster.GroupID]string{"owner": "127.0.0.1:1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dispatcher.Close()
+	var dials atomic.Int64
+	dispatcher.dial = func(context.Context, string, string) (net.Conn, error) {
+		dials.Add(1)
+		return nil, errors.New("unexpected dial")
+	}
+	// Model all tokens held by active sockets. No idle eviction is possible.
+	for i := 0; i < cap(dispatcher.connectionSlots); i++ {
+		dispatcher.connectionSlots <- struct{}{}
+	}
+	request := VectorPartitionShardSearchRequestV1{TargetGroupID: "owner", RequestID: "over-budget"}
+	_, err = dispatcher.DispatchVectorPartitionShardSearchV1(context.Background(), request)
+	if !errors.Is(err, raftcluster.ErrAdmissionUnavailable) || dials.Load() != 0 {
+		t.Fatalf("budget refusal must precede dial and reconnect: dials=%d error=%v", dials.Load(), err)
+	}
+	for i := 0; i < cap(dispatcher.connectionSlots); i++ {
+		<-dispatcher.connectionSlots
+	}
+	if len(dispatcher.requestSlots) != 0 {
+		t.Fatal("refused request retained admission")
+	}
+}
+
+func TestPeerShardCloseCancelsPendingDialV1(t *testing.T) {
+	dispatcher, err := NewVectorPartitionShardSearchTCPDispatcherV1(map[raftcluster.GroupID]string{"owner": "127.0.0.1:1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dispatcher.Close()
+	started := make(chan struct{})
+	dispatcher.dial = func(ctx context.Context, _, _ string) (net.Conn, error) {
+		close(started)
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := dispatcher.DispatchVectorPartitionShardSearchV1(context.Background(), VectorPartitionShardSearchRequestV1{TargetGroupID: "owner"})
+		done <- err
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("dial did not begin")
+	}
+	if err := dispatcher.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("closed dispatcher completed a search")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("dispatcher close did not interrupt pending dial")
+	}
+	if len(dispatcher.connectionSlots) != 0 || len(dispatcher.requestSlots) != 0 {
+		t.Fatal("closed pending dial retained admission")
 	}
 }

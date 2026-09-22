@@ -51,6 +51,10 @@ type VectorPartitionShardSearchTCPDispatcherV1 struct {
 	maxRequestFrame           uint32
 	maxResponseFrame          uint32
 	maxConnectionsPerEndpoint int
+	connectionSlots           chan struct{}
+	requestSlots              chan struct{}
+	lifetime                  context.Context
+	cancel                    context.CancelFunc
 	mu                        sync.Mutex
 	pools                     map[string]*vectorPartitionShardSearchTCPEndpointPoolV1
 	closed                    bool
@@ -124,7 +128,10 @@ func newVectorPartitionShardSearchTCPDispatcherV1(endpoints map[raftcluster.Grou
 		}
 		copyNodeEndpoints[group] = copyNodes
 	}
+	lifetime, cancel := context.WithCancel(context.Background())
 	return &VectorPartitionShardSearchTCPDispatcherV1{
+		lifetime:                  lifetime,
+		cancel:                    cancel,
 		endpoints:                 copyEndpoints,
 		nodeEndpoints:             copyNodeEndpoints,
 		dial:                      dialer.DialContext,
@@ -132,6 +139,8 @@ func newVectorPartitionShardSearchTCPDispatcherV1(endpoints map[raftcluster.Grou
 		maxResponseFrame:          maxResponseFrame,
 		maxConnectionsPerEndpoint: maxConnectionsPerEndpoint,
 		pools:                     make(map[string]*vectorPartitionShardSearchTCPEndpointPoolV1),
+		connectionSlots:           make(chan struct{}, vectorPartitionShardSearchTCPGlobalConnectionsV1),
+		requestSlots:              make(chan struct{}, vectorPartitionShardSearchTCPGlobalRequestsV1),
 	}, nil
 }
 
@@ -141,6 +150,17 @@ func (d *VectorPartitionShardSearchTCPDispatcherV1) DispatchVectorPartitionShard
 	}
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return VectorPartitionShardSearchResponseV1{}, err
+	}
+	// Bound active callers and pool waiters together, across all endpoints.
+	// Refusal happens before encoding or sending a search request.
+	select {
+	case d.requestSlots <- struct{}{}:
+		defer func() { <-d.requestSlots }()
+	default:
+		return VectorPartitionShardSearchResponseV1{}, &VectorPartitionShardSearchErrorV1{Code: VectorPartitionShardSearchErrorGroupUnavailableV1, GroupID: request.TargetGroupID, Err: raftcluster.ErrAdmissionUnavailable}
 	}
 	for attempt := 0; ; attempt++ {
 		response, err := d.dispatchVectorPartitionShardSearchOnceV1(ctx, request)
@@ -166,6 +186,9 @@ func (d *VectorPartitionShardSearchTCPDispatcherV1) dispatchVectorPartitionShard
 	}
 	pool, conn, err := d.acquire(requestCtx, endpoint)
 	if err != nil {
+		if errors.Is(err, raftcluster.ErrAdmissionUnavailable) {
+			return VectorPartitionShardSearchResponseV1{}, &VectorPartitionShardSearchErrorV1{Code: VectorPartitionShardSearchErrorGroupUnavailableV1, GroupID: request.TargetGroupID, Err: err}
+		}
 		return VectorPartitionShardSearchResponseV1{}, vectorPartitionShardSearchTCPRetryableTransportErrorV1(requestCtx, request.TargetGroupID, err)
 	}
 	reusable := false
@@ -221,7 +244,7 @@ func (d *VectorPartitionShardSearchTCPDispatcherV1) acquire(ctx context.Context,
 		d.pools[endpoint] = pool
 	}
 	d.mu.Unlock()
-	conn, err := pool.acquire(ctx, d.dial, endpoint)
+	conn, err := pool.acquire(ctx, d.dialBounded, endpoint)
 	return pool, conn, err
 }
 
@@ -252,6 +275,7 @@ func (p *vectorPartitionShardSearchTCPEndpointPoolV1) acquire(ctx context.Contex
 	}
 	if n := len(p.idle); n != 0 {
 		conn := p.idle[n-1]
+		p.idle[n-1] = nil
 		p.idle = p.idle[:n-1]
 		p.mu.Unlock()
 		return conn, nil
@@ -323,6 +347,7 @@ func (d *VectorPartitionShardSearchTCPDispatcherV1) Close() error {
 		return nil
 	}
 	d.closed = true
+	d.cancel()
 	pools := d.pools
 	d.pools = make(map[string]*vectorPartitionShardSearchTCPEndpointPoolV1)
 	d.mu.Unlock()
