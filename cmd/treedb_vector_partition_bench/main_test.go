@@ -1183,9 +1183,13 @@ func TestM3FinalOfflineGraphBuildsRetainedControlPacks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantPacks := make([]uint32, len(assets.manifest.DomainPacks))
-	for i, mapping := range assets.manifest.DomainPacks {
-		wantPacks[i] = mapping.PackID
+	wantPacks := make([]uint32, 0, len(assets.manifest.DomainPacks))
+	for _, domain := range response.ProbedDomains {
+		for _, mapping := range assets.manifest.DomainPacks {
+			if mapping.DomainID == domain {
+				wantPacks = append(wantPacks, mapping.PackID)
+			}
+		}
 	}
 	wantID := fmt.Sprintf("doc-%06d", siblingOrdinal)
 	foundNeighbor := false
