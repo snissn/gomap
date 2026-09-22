@@ -1,0 +1,61 @@
+name: "Sparse catalog qualification"
+
+on:
+  pull_request:
+    paths:
+      - 'TreeDB/nativewire/fixed_peer*'
+      - 'TreeDB/nativewire/sparse_catalog*'
+      - '.github/workflows/sparse-catalog-qualification.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sparse-catalog-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  qualify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Exact source and formatting
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rev-parse HEAD
+          go version
+          files=(TreeDB/nativewire/fixed_peer*.go TreeDB/nativewire/sparse_catalog*.go)
+          present=()
+          for file in "${files[@]}"; do
+            [[ -f "$file" ]] && present+=("$file")
+          done
+          gofmt -d "${present[@]}"
+          if [[ -n "$(gofmt -l "${present[@]}")" ]]; then
+            for file in "${present[@]}"; do
+              if [[ -n "$(gofmt -l "$file")" ]]; then
+                echo "FORMATTED_FILE=$file"
+                gofmt "$file" | base64 -w0
+                echo
+              fi
+            done
+            exit 1
+          fi
+      - name: Sparse catalog and existing fixed-peer conformance
+        env:
+          GOWORK: "off"
+        run: go test ./TreeDB/nativewire -run 'Test(SparseCatalog|FixedPeer)' -count=3 -timeout=8m -v
+      - name: Sparse catalog race conformance
+        env:
+          GOWORK: "off"
+        run: go test -race ./TreeDB/nativewire -run 'TestSparseCatalog' -count=1 -timeout=8m -v
+

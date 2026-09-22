@@ -209,3 +209,4 @@ func sparseCatalogTestConfigsV1(t testing.TB) []FixedPeerTCPConfigV1 {
 	}
 	return configs
 }
+
