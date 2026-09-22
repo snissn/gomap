@@ -10,7 +10,7 @@ and typed values, caller-buffer reuse, one-shot commit, durable reopen),
 `TestPreparedInsertAbandonBoundsAndLateConflict` (oversized admission,
 abandonment, duplicate precedence, and authoritative late conflict),
 `TestPreparedInsertCheckpointBeforeCommitAndReopen` (private prepare across a
-checkpoint and durable reopen),
+sibling ordinary write, checkpoint, and durable reopen),
 `TestPreparedInsertValueLogBlockPointerSurvivesReopenAndGC` (persistent block
 pointer and GC reachability), `TestPreparedInsertCrashRecoveryCuts` (observed
 WAL sync before durable acknowledgment and WAL/asset/applied-LSN cuts during

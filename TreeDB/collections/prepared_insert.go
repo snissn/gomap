@@ -15,6 +15,11 @@ import (
 
 var ErrPreparedInsertIneligible = errors.New("collections: prepared insert ineligible")
 
+// ErrPreparedInsertResourceLimit identifies a size or structural limit. It
+// also matches ErrPreparedInsertIneligible, but callers with bounded-memory
+// policies must fail closed rather than retrying through ordinary InsertBatch.
+var ErrPreparedInsertResourceLimit = fmt.Errorf("%w: resource limit", ErrPreparedInsertIneligible)
+
 const preparedInsertMaxRows = 16 << 10
 const preparedInsertMaxDocumentBytes = 128 << 10
 
@@ -143,25 +148,13 @@ func (c *Collection) PrepareInsertBatchOwned(ids, documents [][]byte, maxOwnedBy
 	if len(ids) != len(documents) {
 		return nil, errors.New("collections: caller-provided batch ids length mismatch")
 	}
-	if len(ids) == 0 || maxOwnedBytes <= 0 {
+	if len(ids) == 0 {
 		return nil, fmt.Errorf("%w: empty batch or byte limit", ErrPreparedInsertIneligible)
-	}
-	if len(ids) > preparedInsertMaxRows {
-		return nil, fmt.Errorf("%w: batch has %d rows, maximum %d", ErrPreparedInsertIneligible, len(ids), preparedInsertMaxRows)
 	}
 	for _, id := range ids {
 		if len(id) == 0 {
 			return nil, errors.New("collections: document id cannot be empty")
 		}
-	}
-	for _, document := range documents {
-		if len(document) > preparedInsertMaxDocumentBytes {
-			return nil, fmt.Errorf("%w: document has %d bytes, maximum %d", ErrPreparedInsertIneligible, len(document), preparedInsertMaxDocumentBytes)
-		}
-	}
-	inputBytes := preparedInsertInputBytes(ids, documents)
-	if inputBytes > maxOwnedBytes {
-		return nil, fmt.Errorf("%w: input bytes %d exceed %d", ErrPreparedInsertIneligible, inputBytes, maxOwnedBytes)
 	}
 	unlockSchema := c.lockCollectionSchemaRead()
 	defer unlockSchema()
@@ -191,6 +184,21 @@ func (c *Collection) PrepareInsertBatchOwned(ids, documents [][]byte, maxOwnedBy
 	if !preparedInsertBoundedScalarColumns(cfg.Columns) {
 		return nil, fmt.Errorf("%w: prepared declared-row cursor supports nonempty Int64/String column paths only", ErrPreparedInsertIneligible)
 	}
+	if maxOwnedBytes <= 0 {
+		return nil, fmt.Errorf("%w: byte limit %d", ErrPreparedInsertResourceLimit, maxOwnedBytes)
+	}
+	if len(ids) > preparedInsertMaxRows {
+		return nil, fmt.Errorf("%w: batch has %d rows, maximum %d", ErrPreparedInsertResourceLimit, len(ids), preparedInsertMaxRows)
+	}
+	for _, document := range documents {
+		if len(document) > preparedInsertMaxDocumentBytes {
+			return nil, fmt.Errorf("%w: document has %d bytes, maximum %d", ErrPreparedInsertResourceLimit, len(document), preparedInsertMaxDocumentBytes)
+		}
+	}
+	inputBytes := preparedInsertInputBytes(ids, documents)
+	if inputBytes > maxOwnedBytes {
+		return nil, fmt.Errorf("%w: input bytes %d exceed %d", ErrPreparedInsertResourceLimit, inputBytes, maxOwnedBytes)
+	}
 	if err := c.requireColumnStoreCommandWAL(meta, nil); err != nil {
 		return nil, err
 	}
@@ -198,7 +206,7 @@ func (c *Collection) PrepareInsertBatchOwned(ids, documents [][]byte, maxOwnedBy
 		return nil, err
 	}
 	if preparedInsertAdmissionBytes(inputBytes, len(ids), len(cfg.Columns)) > maxOwnedBytes {
-		return nil, fmt.Errorf("%w: input needs semantic preparation headroom within %d bytes", ErrPreparedInsertIneligible, maxOwnedBytes)
+		return nil, fmt.Errorf("%w: input needs semantic preparation headroom within %d bytes", ErrPreparedInsertResourceLimit, maxOwnedBytes)
 	}
 	entries := make([]noIndexBatchEntry, len(ids))
 	for i := range ids {
@@ -243,7 +251,7 @@ func (c *Collection) PrepareInsertBatchOwned(ids, documents [][]byte, maxOwnedBy
 		if retained.semanticStreamBlocks != nil {
 			resetCollectionRunTable(retained.semanticStreamBlocks)
 		}
-		return nil, fmt.Errorf("%w: prepared bytes %d plus commit reserve %d exceed %d", ErrPreparedInsertIneligible, ownedBytes, commitReserve, maxOwnedBytes)
+		return nil, fmt.Errorf("%w: prepared bytes %d plus commit reserve %d exceed %d", ErrPreparedInsertResourceLimit, ownedBytes, commitReserve, maxOwnedBytes)
 	}
 	return &PreparedInsertBatch{collection: c, meta: preparedInsertSchemaMeta(meta), ids: ids, documents: documents,
 		entries: entries, retained: retained, prepareElapsed: time.Since(start), ownedBytes: ownedBytes, commitReserve: commitReserve}, nil

@@ -178,7 +178,7 @@ func TestPreparedInsertAbandonBoundsAndLateConflict(t *testing.T) {
 	col := createColumnRetainedSemanticStreamCollection(t, d, "events")
 	id := []byte("id")
 	doc := []byte(`{"row_id":1,"kind":"first"}`)
-	if _, err := col.PrepareInsertBatchOwned([][]byte{id}, [][]byte{doc}, 1); !errors.Is(err, ErrPreparedInsertIneligible) {
+	if _, err := col.PrepareInsertBatchOwned([][]byte{id}, [][]byte{doc}, 1); !errors.Is(err, ErrPreparedInsertResourceLimit) {
 		t.Fatalf("oversized prepare error=%v", err)
 	}
 	prepared, err := col.PrepareInsertBatchOwned([][]byte{id}, [][]byte{doc}, 16<<20)
@@ -215,7 +215,9 @@ func TestPreparedInsertCheckpointBeforeCommitAndReopen(t *testing.T) {
 	enableColumnRetainedPlacementCommandWAL(t, dir)
 	d := openColumnRetainedPlacementDB(t, dir, backenddb.Options{})
 	col := createColumnRetainedSemanticStreamCollection(t, d, "events")
+	sibling := createColumnRetainedSemanticStreamCollection(t, d, "sibling")
 	id, doc := []byte("checkpoint-row"), []byte(`{"row_id":41,"kind":"checkpoint"}`)
+	siblingID, siblingDoc := []byte("sibling-row"), []byte(`{"row_id":42,"kind":"ordinary"}`)
 	beforeLSN := d.State().AppliedCommandLSN
 	prepared, err := col.PrepareInsertBatchOwned([][]byte{id}, [][]byte{doc}, 16<<20)
 	if err != nil {
@@ -223,6 +225,9 @@ func TestPreparedInsertCheckpointBeforeCommitAndReopen(t *testing.T) {
 	}
 	if got := d.State().AppliedCommandLSN; got != beforeLSN {
 		t.Fatalf("prepare advanced command LSN from %d to %d", beforeLSN, got)
+	}
+	if _, err := sibling.InsertBatch([][]byte{siblingID}, [][]byte{siblingDoc}); err != nil {
+		t.Fatal(err)
 	}
 	if err := d.Checkpoint(); err != nil {
 		t.Fatal(err)
@@ -247,6 +252,10 @@ func TestPreparedInsertCheckpointBeforeCommitAndReopen(t *testing.T) {
 	col = openColumnRetainedPlacementCollection(t, d, "events")
 	if got, err := col.Get(id); err != nil || !bytes.Equal(got, doc) {
 		t.Fatalf("reopened committed row=%s, %v want %s", got, err, doc)
+	}
+	sibling = openColumnRetainedPlacementCollection(t, d, "sibling")
+	if got, err := sibling.Get(siblingID); err != nil || !bytes.Equal(got, siblingDoc) {
+		t.Fatalf("reopened sibling row=%s, %v want %s", got, err, siblingDoc)
 	}
 }
 
@@ -478,8 +487,8 @@ func TestPreparedInsertRejectsUnsupportedStructuralShapesBeforeCommit(t *testing
 	oversize := `{"row_id":3,"kind":"oversize","extra":"` + strings.Repeat("x", preparedInsertMaxDocumentBytes) + `"}`
 	for i, document := range []string{deep, wide, oversize} {
 		id := []byte(fmt.Sprintf("shape-%d", i))
-		if _, err := col.PrepareInsertBatchOwned([][]byte{id}, [][]byte{[]byte(document)}, 32<<20); !errors.Is(err, ErrPreparedInsertIneligible) {
-			t.Errorf("shape %d prepared error=%v, want ineligible", i, err)
+		if _, err := col.PrepareInsertBatchOwned([][]byte{id}, [][]byte{[]byte(document)}, 32<<20); !errors.Is(err, ErrPreparedInsertResourceLimit) {
+			t.Errorf("shape %d prepared error=%v, want resource limit", i, err)
 		}
 		if got, err := col.Get(id); err != nil || got != nil {
 			t.Errorf("shape %d visible after rejected prepare: %s, %v", i, got, err)
@@ -507,7 +516,7 @@ func TestPreparedInsertFallsBackBeforeUnboundedDeclaredRowExtraction(t *testing.
 	}
 	col := openColumnRetainedPlacementCollection(t, d, "events")
 	id, doc := []byte("bool-row"), []byte(`{"row_id":7,"active":true}`)
-	if _, err := col.PrepareInsertBatchOwned([][]byte{id}, [][]byte{doc}, 16<<20); !errors.Is(err, ErrPreparedInsertIneligible) {
+	if _, err := col.PrepareInsertBatchOwned([][]byte{id}, [][]byte{doc}, 16<<20); !errors.Is(err, ErrPreparedInsertIneligible) || errors.Is(err, ErrPreparedInsertResourceLimit) {
 		t.Fatalf("unsupported declared-row parser shape prepared: %v", err)
 	}
 	if _, err := col.InsertBatch([][]byte{id}, [][]byte{doc}); err != nil {
