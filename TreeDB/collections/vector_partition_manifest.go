@@ -375,6 +375,7 @@ func (m VectorPartitionManifestV1) validateWithContextV1(ctx context.Context, l 
 	lastAssetPartition := uint32(0)
 	assetCoverage := make(map[uint32]struct{}, m.PartitionCount)
 	rootCoverage := make(map[uint32]struct{}, m.DomainCount)
+	chunkCoverage := make(map[uint32]struct{}, m.DomainCount)
 	chunkedDomains := false
 	hasVamanaRoots := false
 	hasOtherNativeRoots := false
@@ -442,6 +443,7 @@ func (m VectorPartitionManifestV1) validateWithContextV1(ctx context.Context, l 
 					return fmt.Errorf("%w: noncanonical domain chunk asset", ErrVectorPartitionManifestInvalid)
 				}
 				nextChunk[sequence]++
+				chunkCoverage[a.PartitionID] = struct{}{}
 			}
 		}
 		assetCoverage[a.PartitionID] = struct{}{}
@@ -476,6 +478,9 @@ func (m VectorPartitionManifestV1) validateWithContextV1(ctx context.Context, l 
 		if _, anchor := domainAnchors[partitionID]; chunkedDomains && anchor {
 			if _, ok := rootCoverage[partitionID]; !ok {
 				return fmt.Errorf("%w: missing domain root asset %d", ErrVectorPartitionManifestInvalid, partitionID)
+			}
+			if _, ok := chunkCoverage[partitionID]; !ok {
+				return fmt.Errorf("%w: missing domain chunk asset %d", ErrVectorPartitionManifestInvalid, partitionID)
 			}
 			continue
 		}

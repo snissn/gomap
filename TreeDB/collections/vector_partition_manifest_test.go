@@ -3154,6 +3154,24 @@ func TestVectorPartitionManifestV1AcceptsOnlyCoLocatedDomainChunks(t *testing.T)
 	if err := missingChunk.Validate(DefaultVectorPartitionManifestLimits()); err == nil {
 		t.Fatal("accepted domain chunk sequence without chunk zero")
 	}
+
+	mixedCoverage := m
+	mixedCoverage.PartitionCount = 4
+	mixedCoverage.DomainCount = 2
+	mixedCoverage.DomainPacks = []VectorPartitionDomainPackV1{
+		{DomainID: 0, PackID: 0}, {DomainID: 0, PackID: 1},
+		{DomainID: 1, PackID: 2}, {DomainID: 1, PackID: 3},
+	}
+	mixedCoverage.Placements = []VectorPartitionPlacementV1{
+		{PartitionID: 0, GroupID: "raft-a"}, {PartitionID: 1, GroupID: "raft-a"},
+		{PartitionID: 2, GroupID: "raft-a"}, {PartitionID: 3, GroupID: "raft-a"},
+	}
+	mixedCoverage.Assets = append(append([]VectorPartitionAssetV1(nil), m.Assets...),
+		root(2, 3, VectorPartitionLocalGraphVariantConnectivityPreservingVamanaR64L256Alpha1_2V1))
+	mixedCoverage.Canonicalize()
+	if err := mixedCoverage.Validate(DefaultVectorPartitionManifestLimits()); err == nil {
+		t.Fatal("accepted mixed chunked domains with a root-only anchor")
+	}
 }
 
 func scaledVectorPartitionManifestV1(rows int) VectorPartitionManifestV1 {
