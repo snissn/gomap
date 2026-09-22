@@ -10,6 +10,8 @@ on:
       - 'TreeDB/collections/command_wal.go'
       - 'TreeDB/internal/commitlog/command_source_import_v2*'
       - 'TreeDB/internal/commitlog/command_frame.go'
+      - 'TreeDB/docs/command_wal_matrix_test.go'
+      - 'TreeDB/docs/spec/command-wal-support-matrix.json'
       - 'TreeDB/collections/vector_partition_paged_root_v2*'
       - 'TreeDB/collections/vector_partition_legacy_compat_v2_test.go'
       - 'TreeDB/collections/vector_partition_manifest.go'
@@ -58,7 +60,7 @@ jobs:
           set -euo pipefail
           git rev-parse HEAD
           go version
-          mapfile -t files < <(git diff --name-only --diff-filter=AM 0d10c1605f8887f9a1cd7e3cb910014a5b23cfe3 HEAD -- 'TreeDB/collections/*.go' 'TreeDB/nativewire/*.go' 'TreeDB/internal/raftplacement/*.go' 'TreeDB/internal/vectorpartition/*.go' 'TreeDB/internal/sourcepartition/*.go' 'TreeDB/internal/commitlog/*.go')
+          mapfile -t files < <(git diff --name-only --diff-filter=AM 0d10c1605f8887f9a1cd7e3cb910014a5b23cfe3 HEAD -- 'TreeDB/collections/*.go' 'TreeDB/nativewire/*.go' 'TreeDB/internal/raftplacement/*.go' 'TreeDB/internal/vectorpartition/*.go' 'TreeDB/internal/sourcepartition/*.go' 'TreeDB/internal/commitlog/*.go' 'TreeDB/docs/*.go')
           gofmt -d "${files[@]}" || true
           if [[ -n "$(gofmt -l "${files[@]}")" ]]; then
             for file in "${files[@]}"; do
@@ -88,6 +90,11 @@ jobs:
           p2_base_digest="$(sed -n '/^VPM_SCHEMA6_COMPAT=/p' owner-local-schema6-base.txt)"
           [[ -n "$p2_base_digest" && "$p2_head_digest" == "$p2_base_digest" ]]
           git worktree remove --force "$p2_base_dir"
+      - name: Command-WAL support matrix
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test ./TreeDB/docs -run '^TestCommandWALSupportMatrix' -count=1 -timeout=2m -v | tee owner-local-command-matrix.txt
       - name: Constructor allocation comparison
         shell: bash
         run: |

@@ -23,7 +23,7 @@ type sourcePublicationHooks struct {
 }
 
 type sourceReplacementPlan struct {
-	sourceImportV2 *sourceImportPublicationV2
+	sourceImportV2   *sourceImportPublicationV2
 	meta             CollectionMeta
 	catalog          *collectionCatalog
 	snap             *backenddb.Snapshot

@@ -110,7 +110,7 @@ const (
 	PayloadFormatCollectionTypedBatchByIDV1     PayloadFormat = 11
 	PayloadFormatCollectionTypedSourceByIDV1    PayloadFormat = 12
 	PayloadFormatCollectionTypedMetadataByIDV1  PayloadFormat = 13
-	PayloadFormatCollectionSourceImportV2      PayloadFormat = 14
+	PayloadFormatCollectionSourceImportV2       PayloadFormat = 14
 )
 
 // RawKVOp is a deterministic raw key/value mutation inside a RawKVBatch

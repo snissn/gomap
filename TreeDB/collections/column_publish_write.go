@@ -36,7 +36,7 @@ func setColumnPhysicalAssetPreparationAfterPrepareTestHook(hook func(ColumnPubli
 }
 
 type columnWritePublishInput struct {
-	sourceImportV2 *sourceImportPublicationV2
+	sourceImportV2       *sourceImportPublicationV2
 	metadataOnly         bool
 	candidateAdmission   *typedGraphFoldAssetAdmission
 	selectStableResource func(rootpublication.StableResourceSelector) (*rootpublication.StableResourceSet, error)
