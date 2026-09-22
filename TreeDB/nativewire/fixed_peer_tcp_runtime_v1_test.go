@@ -519,7 +519,7 @@ func fixedPeerPersistentBytesV1(t testing.TB, configs []FixedPeerTCPConfigV1) in
 }
 
 func TestFixedPeerTCPConfigRefusesInvalidAndChangedIdentityV1(t *testing.T) {
-	for _, name := range []string{"duplicate-node", "duplicate-address", "duplicate-raft", "feature-floor", "missing-bootstrap", "overlapping-roots", "missing-listen", "rpc-listen-mismatch", "raft-listen-mismatch", "orphan-node"} {
+	for _, name := range []string{"duplicate-node", "duplicate-address", "duplicate-raft", "feature-floor", "missing-bootstrap", "overlapping-roots", "missing-listen", "rpc-listen-mismatch", "raft-listen-mismatch", "unknown-peer"} {
 		t.Run(name, func(t *testing.T) {
 			c := fixedPeerTestConfigsV1(t)[0]
 			switch name {
@@ -541,8 +541,8 @@ func TestFixedPeerTCPConfigRefusesInvalidAndChangedIdentityV1(t *testing.T) {
 				c.ListenAddress = c.Nodes[1].Address
 			case "raft-listen-mismatch":
 				c.RaftListen[c.Catalog.ID] = c.Catalog.Peers[1].Address
-			case "orphan-node":
-				c.Catalog.Peers = c.Catalog.Peers[:2]
+			case "unknown-peer":
+				c.Catalog.Peers[2].ID = "unknown"
 			}
 			if client, err := NewFixedPeerTCPClientV1(c); err == nil {
 				client.Close()
