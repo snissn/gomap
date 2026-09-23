@@ -246,13 +246,14 @@ type columnRetainedSemanticStreamV1StoredBlockEncoder struct {
 }
 
 type columnRetainedSemanticStreamV1PreparedBlock struct {
-	start    int
-	rows     int
-	blockKey []byte
-	block    []byte
-	locators [][]byte
-	declared []columnDeclaredRow
-	metrics  columnRetainedSemanticStreamV1PrepareMetrics
+	start                      int
+	rows                       int
+	blockKey                   []byte
+	block                      []byte
+	locators                   [][]byte
+	declared                   []columnDeclaredRow
+	declaredStringBackingBytes int64
+	metrics                    columnRetainedSemanticStreamV1PrepareMetrics
 }
 
 type columnRetainedSemanticStreamV1PrepareMetrics struct {
@@ -733,6 +734,7 @@ func prepareColumnRetainedSemanticStreamV1StorageDocumentsWithIDsBudget(cfg Colu
 	blockTable := newCollectionRunTable(blockCount)
 	for blockIdx := range preparedBlocks {
 		prepared := preparedBlocks[blockIdx]
+		out.declaredStringBackingBytes += prepared.declaredStringBackingBytes
 		copy(out.documents[prepared.start:prepared.start+prepared.rows], prepared.locators)
 		if len(prepared.declared) > 0 {
 			copy(out.declaredRows[prepared.start:prepared.start+prepared.rows], prepared.declared)
@@ -944,13 +946,14 @@ func prepareColumnRetainedSemanticStreamV1StorageBlockWithIDs(
 	}
 	metrics.BlockFinalize = time.Since(finalizeStart)
 	prepared := columnRetainedSemanticStreamV1PreparedBlock{
-		start:    start,
-		rows:     rows,
-		blockKey: blockKey,
-		block:    block,
-		locators: locators,
-		declared: declaredRows,
-		metrics:  metrics,
+		start:                      start,
+		rows:                       rows,
+		blockKey:                   blockKey,
+		block:                      block,
+		locators:                   locators,
+		declared:                   declaredRows,
+		declaredStringBackingBytes: declaredStringInterner.ownedStringBytes(),
+		metrics:                    metrics,
 	}
 	if blockBudget > 0 && preparedSemanticStreamBlockBackingBytes(prepared) > blockBudget-preparedSemanticStreamEncoderReserveBytes {
 		return columnRetainedSemanticStreamV1PreparedBlock{}, fmt.Errorf("%w: retained block %d exceeds output budget", ErrPreparedInsertResourceLimit, start)
@@ -959,14 +962,14 @@ func prepareColumnRetainedSemanticStreamV1StorageBlockWithIDs(
 }
 
 func preparedSemanticStreamBlockBackingBytes(block columnRetainedSemanticStreamV1PreparedBlock) int64 {
-	bytes := int64(cap(block.block) + cap(block.blockKey) + cap(block.locators)*int(unsafe.Sizeof([]byte{})) + cap(block.declared)*int(unsafe.Sizeof(columnDeclaredRow{})))
+	bytes := int64(cap(block.block)+cap(block.blockKey)+cap(block.locators)*int(unsafe.Sizeof([]byte{}))+cap(block.declared)*int(unsafe.Sizeof(columnDeclaredRow{}))) + block.declaredStringBackingBytes
 	for _, locator := range block.locators {
 		bytes = saturatingAddNonNegativeInt64(bytes, int64(len(locator)))
 	}
 	for _, row := range block.declared {
 		bytes = saturatingAddNonNegativeInt64(bytes, int64(cap(row.ID)+cap(row.Values)*int(unsafe.Sizeof(columnDeclaredValue{}))))
 		for _, value := range row.Values {
-			bytes = saturatingAddNonNegativeInt64(bytes, int64(len(value.String)+cap(value.Float32Vector)*4+cap(value.DenseNumericVector)+cap(value.Uint32List)*4+cap(value.AdjacencyList)*4+cap(value.Bytes)+cap(value.StringBytes)))
+			bytes = saturatingAddNonNegativeInt64(bytes, int64(cap(value.Float32Vector)*4+cap(value.DenseNumericVector)+cap(value.Uint32List)*4+cap(value.AdjacencyList)*4+cap(value.Bytes)+cap(value.StringBytes)))
 		}
 	}
 	return bytes

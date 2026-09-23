@@ -11,6 +11,7 @@ import (
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
+	"github.com/snissn/gomap/TreeDB/internal/typedcolumn"
 )
 
 var ErrPreparedInsertIneligible = errors.New("collections: prepared insert ineligible")
@@ -90,6 +91,20 @@ func preparedInsertInputBytes(ids, documents [][]byte) int64 {
 		bytes = saturatingAddNonNegativeInt64(bytes, int64(cap(documents[i])))
 	}
 	return bytes
+}
+
+func preparedInsertUnusedOuterSlotsEmpty(ids, documents [][]byte) bool {
+	for _, id := range ids[len(ids):cap(ids)] {
+		if id != nil {
+			return false
+		}
+	}
+	for _, document := range documents[len(documents):cap(documents)] {
+		if document != nil {
+			return false
+		}
+	}
+	return true
 }
 
 // The retained semantic encoder can hold token/path scratch and compressed
@@ -182,14 +197,14 @@ func preparedSemanticStreamBackingBytes(table memtable.Table) (int64, error) {
 	return appendOnly.EntryBackingBytes() + appendOnly.EntryBufferCapacityBytes() + int64(appendOnly.Len())*256, nil // index/map overhead
 }
 
-func preparedDeclaredBackingBytes(rows []columnDeclaredRow) int64 {
-	owned := int64(cap(rows)) * int64(unsafe.Sizeof(columnDeclaredRow{}))
+func preparedDeclaredBackingBytes(rows []columnDeclaredRow, stringBackingBytes int64) int64 {
+	owned := int64(cap(rows))*int64(unsafe.Sizeof(columnDeclaredRow{})) + stringBackingBytes
 	for i := range rows {
 		owned += int64(cap(rows[i].ID))
 		owned += int64(cap(rows[i].Values)) * int64(unsafe.Sizeof(columnDeclaredValue{}))
 		for j := range rows[i].Values {
 			v := &rows[i].Values[j]
-			owned += int64(len(v.String) + cap(v.Float32Vector)*4 + cap(v.DenseNumericVector) +
+			owned += int64(cap(v.Float32Vector)*4 + cap(v.DenseNumericVector) +
 				cap(v.Uint32List)*4 + cap(v.AdjacencyList)*4 + cap(v.Bytes) + cap(v.StringBytes))
 		}
 	}
@@ -223,6 +238,24 @@ func preparedTypedBatchBackingBytes(prepared *typedColumnAdapterPreparedBatch) i
 	}
 	owned += int64(len(prepared.Options.DictionaryModes)) * mapEntryCharge
 	return owned
+}
+
+// The production scalar granule codec is LZ4. Benchmark-relaxed overrides may
+// select ZSTD granules, whose encoder workspace is outside the prepared scalar
+// bound. Image sections can still use the production ZSTD policy.
+func preparedTypedBatchHasZSTDGranule(prepared *typedColumnAdapterPreparedBatch) bool {
+	if prepared == nil {
+		return false
+	}
+	if prepared.Options.DefaultCompression == typedcolumn.CompressionZSTD {
+		return true
+	}
+	for _, column := range prepared.Columns {
+		if column.Definition.Compression == typedcolumn.CompressionZSTD {
+			return true
+		}
+	}
+	return false
 }
 
 // PrepareInsertBatchOwned prepares the no-index JSON semantic-stream path.
@@ -306,6 +339,9 @@ func (c *Collection) PrepareInsertBatchOwned(ids, documents [][]byte, maxOwnedBy
 	if inputBytes > maxOwnedBytes {
 		return nil, fmt.Errorf("%w: input bytes %d exceed %d", ErrPreparedInsertResourceLimit, inputBytes, maxOwnedBytes)
 	}
+	if !preparedInsertUnusedOuterSlotsEmpty(ids, documents) {
+		return nil, fmt.Errorf("%w: unused outer-slice slots retain uncharged buffers", ErrPreparedInsertResourceLimit)
+	}
 	if err := c.requireColumnStoreCommandWAL(meta, nil); err != nil {
 		return nil, err
 	}
@@ -346,12 +382,18 @@ func (c *Collection) PrepareInsertBatchOwned(ids, documents [][]byte, maxOwnedBy
 			}
 			return nil, err
 		}
+		if preparedTypedBatchHasZSTDGranule(typedBatch) {
+			if retained.semanticStreamBlocks != nil {
+				resetCollectionRunTable(retained.semanticStreamBlocks)
+			}
+			return nil, fmt.Errorf("%w: ZSTD typed granules are outside prepared insert eligibility", ErrPreparedInsertIneligible)
+		}
 	}
 	// Charge backing capacities, including the semantic block arena. The caller
 	// controls the size of the one batch admitted to this preparation path.
 	ownedBytes := inputBytes + int64(cap(entries))*int64(unsafe.Sizeof(noIndexBatchEntry{})) +
 		int64(cap(orderedIDs)+cap(orderedDocs)+cap(retained.documents))*int64(unsafe.Sizeof([]byte{})) +
-		preparedDeclaredBackingBytes(retained.declaredRows)
+		preparedDeclaredBackingBytes(retained.declaredRows, retained.declaredStringBackingBytes)
 	for _, document := range retained.documents {
 		ownedBytes += int64(cap(document))
 	}

@@ -21,7 +21,7 @@ const (
 	vacuumTestDocumentValue     = "document"
 )
 
-func TestCollectionRootDescriptorBudgetPreflightPointerBacked(t *testing.T) {
+func TestPreparedCollectionRootDescriptorBudgetRejectsPointerBeforeDecode(t *testing.T) {
 	dir := t.TempDir()
 	d := openVacuumPointerDescriptorFixture(t, vacuumPointerDescriptorOptions(dir))
 	defer func() { _ = d.Close() }()
@@ -35,34 +35,15 @@ func TestCollectionRootDescriptorBudgetPreflightPointerBacked(t *testing.T) {
 	if err != nil || !it.Valid() {
 		t.Fatalf("pointer descriptor iterator: %v", err)
 	}
-	_, ptr, flags := it.UnsafeEntry()
+	_, _, flags := it.UnsafeEntry()
 	if flags&node.FlagPointer == 0 {
 		t.Fatalf("descriptor flags=%x, want pointer", flags)
 	}
 	if err := it.Close(); err != nil {
 		t.Fatal(err)
 	}
-	wantBytes := int64(len(vacuumTestCollectionRootKey)) + int64(page.ValuePtrRecordLength(ptr))
-	check := func(entries int, bytes int64) error {
-		return checkCollectionRootDescriptorBudgetFromRoot(snap.idx.pager, &snap.reader, root, entries, bytes)
-	}
-	if err := check(1, wantBytes); err != nil {
-		t.Fatalf("exact descriptor budget: %v", err)
-	}
-	if err := d.CheckCollectionRootDescriptorBudget(1, wantBytes); err != nil {
-		t.Fatalf("DB preflight descriptor budget: %v", err)
-	}
-	if err := d.CheckPreparedCollectionRootDescriptorBudget(1, wantBytes, 1); err != nil {
-		t.Fatalf("prepared descriptor topology: %v", err)
-	}
-	if err := d.CheckPreparedCollectionRootDescriptorBudget(1, wantBytes, 0); !errors.Is(err, ErrCollectionRootDescriptorBudget) {
-		t.Fatalf("zero root-ID budget error=%v, want descriptor budget rejection", err)
-	}
-	if err := check(0, 1<<20); !errors.Is(err, ErrCollectionRootDescriptorBudget) {
-		t.Fatalf("entry-limit error=%v, want descriptor budget", err)
-	}
-	if err := check(1, wantBytes-1); !errors.Is(err, ErrCollectionRootDescriptorBudget) {
-		t.Fatalf("byte-limit error=%v, want descriptor budget", err)
+	if err := d.CheckPreparedCollectionRootDescriptorBudget(1, 1<<20, 1); !errors.Is(err, ErrCollectionRootDescriptorBudget) {
+		t.Fatalf("pointer-backed prepared descriptor error=%v, want budget rejection", err)
 	}
 }
 
@@ -85,9 +66,6 @@ func TestPreparedCollectionRootDescriptorBudgetRejectsAliases(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatal(err)
-	}
-	if err := d.CheckCollectionRootDescriptorBudget(2, 1<<20); err != nil {
-		t.Fatalf("ordinary descriptor shape should remain valid: %v", err)
 	}
 	if err := d.CheckPreparedCollectionRootDescriptorBudget(2, 1<<20, 2); !errors.Is(err, ErrCollectionRootDescriptorBudget) {
 		t.Fatalf("prepared aliased descriptor error=%v, want budget rejection", err)

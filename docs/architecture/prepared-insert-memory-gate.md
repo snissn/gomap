@@ -20,8 +20,11 @@ batch. Read-only inspection of the retained 10M Bluesky database with the
 current source found 3,127 root entries (including the identity record),
 753,928 combined key/value bytes, and no pointer-backed entries. The final
 current-head 10M run still has to revalidate the ceiling.
-The prepared catalog preflight also rejects more than 4,096 descriptor root IDs
-or nonzero aliases between descriptors, the system root, and the user root.
+The prepared catalog preflight also rejects pointer-backed descriptors, more
+than 4,096 descriptor root IDs, or nonzero aliases between descriptors, the
+system root, and the user root. A caller may explicitly use ordinary
+`InsertBatch` for a pointer-backed catalog; the bounded loader fails closed on
+resource rejection.
 This removes one known cause of candidate-wide reference projection after WAL,
 but does not prove that the publisher's exact reference delta is always
 available. Warm and first-publication paths still need an explicit witness.
@@ -74,8 +77,16 @@ Allocation sites still requiring a pre-allocation bound or quota-aware builder:
 
 The concrete ownership ledger for the eligible scalar lane is below. A bound
 must include old and replacement backing simultaneously when a slice or map
-grows. The accounting is for memory owned by this load pipeline, not unrelated
-database page-cache residency or the process's total heap.
+grows. The #4819 byte gate covers memory additionally owned or retained by the
+pipeline: the producer's next source batch, the prepared token and its transient
+builders, and named commit inputs and waiting results while both batches are
+live. Shared input backing is charged once across handoff. Existing pager,
+zipper, and value-log Manager publication scratch used by the same ordered
+`InsertBatch` commit is baseline DB work, outside this incremental pipeline
+credit; whole-process peak RSS remains a separate measured guardrail. In
+particular, excluding baseline publisher scratch does not exclude the collection
+WAL payload/frame, typed buffers or image, result IDs, or catalog backing newly
+kept alive by a queued prepared token.
 
 | Stage | Current finite inputs | Allocation that still needs admission |
 | --- | --- | --- |
@@ -84,44 +95,18 @@ database page-cache residency or the process's total heap.
 | Stored block | Raw size hint and `zstd.Encoder.MaxEncodedSize` are checked before their large output buffers | Raw, compressed, wrapper, and returned block coexist; the pinned encoder's internal workspace and small encoder-owned dynamic buffers need a source-derived bound. The present 8 MiB workspace allowance is an estimate. |
 | Ordered insert | Prepared token remains live; IDs and document lengths are already known | Result-ID arena/slice, command document headers, the exact-sized collection command payload and V2 WAL frame, primary/stream run tables and iterator materialization, and pointerization buffers. |
 | Typed preparation and publication | At most five Int64/String columns and 16,384 prepared declared rows; existing manifest preflight allows at most 4,096 inline records and 1 MiB of key/value bytes before WAL | Preparation builds the adapter batch/null/default arrays and string dictionaries, but only charges final retained backing. Admit temporary old/new dictionary maps, sorted values, and recode arrays before growth. Commit builds sorted row order/locators, encoded granules, part sections, full image copy, manifest/sidecars, and old-plus-new backing on growth. The existing FP32 encoded-image bound does not cover this scalar transient path. The finite manifest input still needs a worst-case allocation ledger for its decoder and next-generation copies. |
-| Durable root | One ordered committer; prepared commits preflight at most 4,096 catalog root descriptors and 1 MiB each of encoded and decoded key/value bytes before WAL append | The initial primary and retained-stream iterators now share a pre-WAL materialization budget: their length hints are checked before entry-buffer reserve, each actual entry is checked before append, and the charge includes old/new pooled entry backing plus borrowed payload lengths. That budget is drawn from the **estimated** commit reserve, so it is not yet a total-memory proof. Context/system deltas, root-apply zipper/backing, root-ID slices, `vacuumCollect` old/new entries, pointer scratch, and two-pass coexistence still need a bound. Pointer-backed descriptors require an inspectable raw record/frame shape; compressed, template-coded, and compact-leaf forms fail closed before decode. |
+| Ordered handoff | One committer; prepared commits preflight at most 4,096 inline catalog root descriptors and 1 MiB of combined key/value bytes before WAL append | The initial primary and retained-stream iterators share a materialization budget, but it comes from the **estimated** commit reserve. Charge any collection-owned run/iterator backing that is additionally retained during successor preparation. Existing pager/zipper/Manager publication scratch is baseline DB work; preserve the existing pre-WAL validation and recovery checks, and report its effect in whole-process RSS. |
 
-The value-log resource path has two distinct unbounded snapshots after command
-WAL append. The common `captureRegisteredDurableValueLogResourcesV1` now pins
-only referenced IDs through `Manager.CurrentSubsetNoRefresh`, so unrelated
-registrations cannot enlarge that capture. If exact reference projection
-declines, `scanCandidateValueLogReferencesWithCountsV1` still takes a full
-`CurrentSetNoRefresh` at `durable_root_runtime.go:418` and on each candidate
-rebind at `:548`; its per-segment tracker maps and root scan also need a
-ceiling. Independently, `prepareRootPublicationVisibleInstallV1` takes a full
-manager set at `root_publication_activation.go:338` and installs it as the
-visible `DBState.ValueLogSet`. A count sampled before WAL does not cap either
-snapshot because other producers can register segments without holding the
-ordered publisher's write lock. A prepared-only path needs a pinned,
-pre-admitted candidate resource set carried through scan, finalization, and
-visible installation, plus bounded additions for segments created by root
-application; a checked late snapshot could fail safely under the byte ceiling
-but would be a post-append ambiguity, not clean batch admission. Ordinary
-snapshot and GC pin semantics must remain intact.
-The first target batch cannot evade this by requiring an exact root-apply
-reference delta: `orderedRootCollectionDescriptorTransitionsCoveredByDelta`
-returns false when there are no base descriptor entries, so the publisher can
-clear `exactValueLogRefDelta` after WAL append and enter the candidate scan.
-Any prepared-only scan optimization needs a first-publication regression and
-must prove the reader's exact segment set and recovery/GC pins, not assume that
-warm-root behavior also covers an empty root.
-The replay inline leaf writer can create or rotate a registered segment for
-each emitted outer-leaf page. In the command-WAL path, primary/context roots
-are applied after append, then the system delta is built and applied. The
-number of emitted pages is not currently admitted before WAL or limited by the
-root builders. Thus even a pinned, pre-WAL manager set cannot yet reserve a
-proven allowance for command-created segment IDs. A prepared-only publication
-profile would have to bound the inputs and relevant base-tree topology before
-append, enforce a page-output budget in the zipper, bulk builder, and leaf
-writer, and carry the pinned base set plus charged producer IDs through every
-candidate rebind and visible installation. A resource-limit failure first
-discovered by those builders after append would poison an acknowledged command;
-it cannot be the normal oversized-batch rejection path.
+The ordered root publisher may still scan candidate value-log references on
+the first publication and take a full Manager snapshot at visible install. It
+may rewrite outer-leaf pages and allocate zipper scratch according to existing
+database size and tree shape. Those are existing synchronous publication costs,
+not storage newly owned by the one-ahead preparation queue. The prepared path
+must leave their GC pins, recovery semantics, and post-WAL ambiguity intact.
+Their whole-process RSS contribution must be measured; `ReservedBytes` must not
+be described as a process-heap bound. If a collection-layer run, WAL input,
+typed asset or result buffer is retained across the overlap, however, it belongs
+in the incremental ledger even when the ordered publisher consumes it.
 
 The shared credit has to cover a committing token and its reserved commit scratch
 *before* admitting its successor, with a guaranteed source slot for the depth-zero
@@ -136,13 +121,10 @@ case, not a clean oversized-batch rejection. Post-append allocation checks may
 detect a broken invariant, but cannot be the admission policy.
 The publisher materializes the initial ordered iterators before its serialized
 preflight. The prepared path now limits that phase before its entry-buffer
-allocation, but the budget is still based on estimated commit headroom. Context
-and system deltas are built after WAL append; their entire worst-case credit
-must be reserved before append, rather than rejected by a later builder.
-
-A true configured total in-flight cap needs checked growth in those builders and
-a shared admission/reservation spanning the producer, prepared successor,
-committer, and waiting results. It then needs adversarial high-cardinality and
-incompressible-input tests, fault/recovery checks, and new same-head throughput
-and RSS measurements. Accepting only the current incremental input/retained
-limits would change #4819's stated strict-memory acceptance contract.
+allocation, but the budget is still based on estimated commit headroom. A true
+configured incremental cap needs checked growth for the named pipeline owners
+and a shared admission/reservation spanning the producer, prepared successor,
+committer and waiting results. It then needs adversarial high-cardinality and
+incompressible-input tests, fault/recovery checks, and new same-head throughput,
+live-heap and RSS measurements. The current heuristic charges do not yet pass
+that gate.

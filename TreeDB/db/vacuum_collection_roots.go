@@ -190,29 +190,10 @@ func vacuumCollectCollectionEntries(ctx context.Context, snap *Snapshot) ([]coll
 	return vacuumCollectCollectionEntriesFromRoot(ctx, snap.idx.pager, &snap.reader, snap.state.SystemRootPageID)
 }
 
-// CheckCollectionRootDescriptorBudget checks the current system root without
-// materializing its collection descriptors. maxBytes limits both encoded
-// descriptor bytes and decoded pointer values. Pointer-backed descriptors must
-// have a directly inspectable raw shape; compressed, template-coded, and
-// compact-leaf values are rejected before decoding. Callers publishing a root
-// must hold the ordered-root write lock while using this preflight result.
-func (db *DB) CheckCollectionRootDescriptorBudget(maxEntries int, maxBytes int64) error {
-	if db == nil || db.closing.Load() {
-		return ErrClosed
-	}
-	idx := db.idx.Load()
-	if idx == nil {
-		return ErrClosed
-	}
-	db.mu.RLock()
-	root := db.meta.SystemRootPageID
-	db.mu.RUnlock()
-	return checkCollectionRootDescriptorBudgetFromRoot(idx.pager, db.valueLogManager, root, maxEntries, maxBytes)
-}
-
-// CheckPreparedCollectionRootDescriptorBudget also excludes alias topologies
-// whose later root transition may require a full candidate projection. The
-// caller must hold the ordered-root write lock from this check through publish.
+// CheckPreparedCollectionRootDescriptorBudget rejects pointer-backed
+// descriptors and alias topologies before their later root transition can
+// require unbounded pointer decoding or candidate projection. The caller must
+// hold the ordered-root write lock from this check through publish.
 func (db *DB) CheckPreparedCollectionRootDescriptorBudget(maxEntries int, maxBytes int64, maxRootIDs int) error {
 	if maxRootIDs <= 0 {
 		return ErrCollectionRootDescriptorBudget
@@ -230,10 +211,6 @@ func (db *DB) CheckPreparedCollectionRootDescriptorBudget(maxEntries int, maxByt
 	return checkCollectionRootDescriptorBudgetFromRootWithTopology(idx.pager, db.valueLogManager, root, userRoot, maxEntries, maxBytes, maxRootIDs)
 }
 
-func checkCollectionRootDescriptorBudgetFromRoot(p *pager.Pager, reader tree.SlabReader, root uint64, maxEntries int, maxBytes int64) error {
-	return checkCollectionRootDescriptorBudgetFromRootWithTopology(p, reader, root, 0, maxEntries, maxBytes, 0)
-}
-
 func checkCollectionRootDescriptorBudgetFromRootWithTopology(p *pager.Pager, reader tree.SlabReader, root, userRoot uint64, maxEntries int, maxBytes int64, maxRootIDs int) error {
 	if maxEntries < 0 || maxBytes < 0 {
 		return ErrCollectionRootDescriptorBudget
@@ -246,10 +223,8 @@ func checkCollectionRootDescriptorBudgetFromRootWithTopology(p *pager.Pager, rea
 	}
 	count := 0
 	var size int64
-	var decodedSize int64
 	var rootIDsSeen map[uint64]struct{}
 	var rootIDCount int
-	var pointerScratch []byte
 	if maxRootIDs > 0 {
 		rootIDsSeen = make(map[uint64]struct{})
 	}
@@ -261,54 +236,22 @@ func checkCollectionRootDescriptorBudgetFromRootWithTopology(p *pager.Pager, rea
 			if !bytes.HasPrefix(key, prefix) {
 				break
 			}
-			val, ptr, flags := it.UnsafeEntry()
-			valueBytes := len(val)
-			decodedBytes := int64(valueBytes)
+			val, _, flags := it.UnsafeEntry()
 			if flags&node.FlagPointer != 0 {
-				valueBytes = int(page.ValuePtrRecordLength(ptr))
-				if valueBytes == 0 {
-					_ = it.Close()
-					return fmt.Errorf("%w: collection root descriptor pointer has no record length hint", ErrCollectionRootDescriptorBudget)
-				}
-				inspector, ok := reader.(rawValueShapeReader)
-				if !ok {
-					_ = it.Close()
-					return fmt.Errorf("%w: collection root descriptor pointer has no bounded reader", ErrCollectionRootDescriptorBudget)
-				}
-				decodedLimit := maxBytes
-				if !overlay {
-					decodedLimit = 8
-				}
-				var err error
-				decodedBytes, err = inspector.InspectRawValueLength(ptr, decodedLimit)
-				if err != nil {
-					_ = it.Close()
-					return fmt.Errorf("%w: inspect collection root descriptor pointer: %v", ErrCollectionRootDescriptorBudget, err)
-				}
-			}
-			if (!overlay && decodedBytes != 8) || decodedBytes%8 != 0 {
 				_ = it.Close()
-				return fmt.Errorf("%w: invalid decoded collection root descriptor length %d", ErrCollectionRootDescriptorBudget, decodedBytes)
+				return fmt.Errorf("%w: pointer-backed collection root descriptor", ErrCollectionRootDescriptorBudget)
+			}
+			if (!overlay && len(val) != 8) || len(val)%8 != 0 {
+				_ = it.Close()
+				return fmt.Errorf("%w: invalid collection root descriptor length %d", ErrCollectionRootDescriptorBudget, len(val))
 			}
 			// Subtraction avoids integer overflow on malformed or oversized
-			// catalog entries, and rejects before pointer value materialization.
-			if count >= maxEntries || int64(len(key)) > maxBytes-size || int64(valueBytes) > maxBytes-size-int64(len(key)) || decodedBytes > maxBytes-decodedSize-int64(len(key)) {
+			// inline catalog entries.
+			if count >= maxEntries || int64(len(key)) > maxBytes-size || int64(len(val)) > maxBytes-size-int64(len(key)) {
 				_ = it.Close()
 				return fmt.Errorf("%w: entries>%d or bytes>%d", ErrCollectionRootDescriptorBudget, maxEntries, maxBytes)
 			}
 			if rootIDsSeen != nil {
-				if flags&node.FlagPointer != 0 {
-					var err error
-					val, pointerScratch, err = vacuumCollectionRootDescriptorValue(reader, key, val, ptr, flags, pointerScratch)
-					if err != nil {
-						_ = it.Close()
-						return fmt.Errorf("%w: unsupported descriptor pointer: %v", ErrCollectionRootDescriptorBudget, err)
-					}
-					if int64(len(val)) != decodedBytes {
-						_ = it.Close()
-						return fmt.Errorf("%w: descriptor pointer decoded %d bytes, inspected %d", ErrCollectionRootDescriptorBudget, len(val), decodedBytes)
-					}
-				}
 				if len(val)/8 > maxRootIDs-rootIDCount {
 					_ = it.Close()
 					return fmt.Errorf("%w: more than %d descriptor root IDs", ErrCollectionRootDescriptorBudget, maxRootIDs)
@@ -331,8 +274,7 @@ func checkCollectionRootDescriptorBudgetFromRootWithTopology(p *pager.Pager, rea
 				}
 			}
 			count++
-			size += int64(len(key) + valueBytes)
-			decodedSize += int64(len(key)) + decodedBytes
+			size += int64(len(key) + len(val))
 			it.Next()
 		}
 		if err := it.Error(); err != nil {

@@ -479,6 +479,25 @@ type columnDeclaredStringInterner struct {
 	lookup map[string]string
 }
 
+// Each interned string has one cloned backing even when many declared rows
+// refer to it. The lookup map uses those same strings as keys and values.
+func (i *columnDeclaredStringInterner) ownedStringBytes() int64 {
+	if i == nil {
+		return 0
+	}
+	var owned int64
+	if i.lookup != nil {
+		for value := range i.lookup {
+			owned += int64(len(value))
+		}
+	} else {
+		for _, value := range i.values {
+			owned += int64(len(value))
+		}
+	}
+	return owned
+}
+
 const columnDeclaredStringInternerLinearLimit = 16
 
 func (i *columnDeclaredStringInterner) intern(value []byte) string {

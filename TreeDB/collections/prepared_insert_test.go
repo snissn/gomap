@@ -30,7 +30,7 @@ func TestPreparedInsertOverlapsOrderedCommit(t *testing.T) {
 	col := createColumnRetainedSemanticStreamCollection(t, d, "events")
 	sibling := createColumnRetainedSemanticStreamCollection(t, d, "sibling")
 	docs := [][]byte{[]byte(`{"row_id":1,"kind":"one"}`), []byte(`{"row_id":2,"kind":"two"}`)}
-	first, err := col.PrepareInsertBatchOwned([][]byte{[]byte("b")}, docs[:1], 16<<20)
+	first, err := col.PrepareInsertBatchOwned([][]byte{[]byte("b")}, [][]byte{docs[0]}, 16<<20)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,7 +48,7 @@ func TestPreparedInsertOverlapsOrderedCommit(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("commit did not reach publication")
 	}
-	second, err := col.PrepareInsertBatchOwned([][]byte{[]byte("a")}, docs[1:], 16<<20)
+	second, err := col.PrepareInsertBatchOwned([][]byte{[]byte("a")}, [][]byte{docs[1]}, 16<<20)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -296,6 +296,63 @@ func TestPreparedInsertSortedValuesAndReopen(t *testing.T) {
 		if err != nil || !bytes.Equal(got, wantDocs[i]) {
 			t.Fatalf("reopen Get %q=%s, %v want %s", wantIDs[i], got, err, wantDocs[i])
 		}
+	}
+}
+
+func TestPreparedInsertRejectsHiddenOuterSliceOwners(t *testing.T) {
+	dir := t.TempDir()
+	enableColumnRetainedPlacementCommandWAL(t, dir)
+	d := openColumnRetainedPlacementDB(t, dir, backenddb.Options{})
+	defer func() { _ = d.Close() }()
+	col := createColumnRetainedSemanticStreamCollection(t, d, "events")
+	id, doc := []byte("a"), []byte(`{"row_id":1,"kind":"one"}`)
+	for _, tc := range []struct {
+		name      string
+		ids, docs [][]byte
+	}{
+		{name: "id_tail", ids: [][]byte{id, make([]byte, 1<<20)}[:1], docs: [][]byte{doc}},
+		{name: "document_tail", ids: [][]byte{id}, docs: [][]byte{doc, make([]byte, 1<<20)}[:1]},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			before := d.CommandWALNextLSN()
+			prepared, err := col.PrepareInsertBatchOwned(tc.ids, tc.docs, 16<<20)
+			if prepared != nil || !errors.Is(err, ErrPreparedInsertResourceLimit) {
+				t.Fatalf("prepare=(%v,%v), want resource limit for hidden outer owner", prepared, err)
+			}
+			if got := d.CommandWALNextLSN(); got != before {
+				t.Fatalf("rejected outer owner advanced command WAL next LSN from %d to %d", before, got)
+			}
+		})
+	}
+	// A partially filled outer allocation is eligible when the unused slots
+	// cannot retain any backing. The final JSONBench batch has this shape.
+	ids, docs := make([][]byte, 1, 2), make([][]byte, 1, 2)
+	ids[0], docs[0] = id, doc
+	prepared, err := col.PrepareInsertBatchOwned(ids, docs, 16<<20)
+	if err != nil {
+		t.Fatalf("nil-tail prepare: %v", err)
+	}
+	prepared.Abandon()
+}
+
+func TestPreparedInsertChargesInternedDeclaredStringOnce(t *testing.T) {
+	dir := t.TempDir()
+	enableColumnRetainedPlacementCommandWAL(t, dir)
+	d := openColumnRetainedPlacementDB(t, dir, backenddb.Options{})
+	defer func() { _ = d.Close() }()
+	col := createColumnRetainedSemanticStreamCollection(t, d, "events")
+	ids := [][]byte{[]byte("a"), []byte("b")}
+	docs := [][]byte{
+		[]byte(`{"row_id":1,"kind":"repeated"}`),
+		[]byte(`{"row_id":2,"kind":"repeated"}`),
+	}
+	prepared, err := col.PrepareInsertBatchOwned(ids, docs, 16<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer prepared.Abandon()
+	if got, want := prepared.retained.declaredStringBackingBytes, int64(len("repeated")); got != want {
+		t.Fatalf("declared string backing=%d want one interned copy %d", got, want)
 	}
 }
 
@@ -952,8 +1009,47 @@ func TestPreparedInsertThreeAggregateSpecsRemainEligible(t *testing.T) {
 	if prepared.typedBatch == nil || prepared.typedBatch.Options.PartID != 0 {
 		t.Fatalf("three-spec target missing identity-free typed batch: %+v", prepared.typedBatch)
 	}
+	if got := prepared.typedBatch.Options.DefaultCompression; got != typedcolumn.CompressionLZ4 {
+		t.Fatalf("target typed granule compression=%s, want LZ4", got)
+	}
+	if got := prepared.typedBatch.Options.SectionCompression; got != typedcolumn.CompressionZSTD {
+		t.Fatalf("target typed section compression=%s, want ZSTD", got)
+	}
 	prepared.Abandon()
 	if got := d.CommandWALNextLSN(); got != before {
 		t.Fatalf("preparation advanced command WAL next LSN from %d to %d", before, got)
+	}
+}
+
+func TestPreparedInsertRejectsZSTDGranuleOverrideBeforeCommandWAL(t *testing.T) {
+	dir := t.TempDir()
+	enableColumnRetainedPlacementCommandWAL(t, dir)
+	d := openColumnRetainedPlacementDB(t, dir, backenddb.Options{})
+	defer func() { _ = d.Close() }()
+	meta := CollectionMeta{Name: "events", Options: CollectionOptions{DocumentFormat: DocumentFormatJSON, ColumnStore: &ColumnStoreConfig{
+		Enabled: true,
+		Columns: []ColumnStoreColumn{
+			{Name: "row_id", Path: "row_id", ValueType: ColumnStoreValueInt64, Owner: TypedStorageOwnerRowAsset},
+			{Name: "kind", Path: "kind", ValueType: ColumnStoreValueString, Owner: TypedStorageOwnerColumnPart, Dictionary: true},
+		},
+		ProfileSupport:  ColumnStoreProfileBenchmarkRelaxed,
+		RetainedPayload: ColumnRetainedPayloadNonColumn, RetainedPayloadEncoding: ColumnRetainedPayloadEncodingSemanticStreamV1,
+		Reconstruction: ColumnReconstructionRetainedPayloadAndColumns,
+	}}}
+	if _, err := NewCollectionManager(d).CreateCollection(&meta); err != nil {
+		t.Fatal(err)
+	}
+	col := openColumnRetainedPlacementCollection(t, d, meta.Name)
+	t.Setenv(typedColumnBenchmarkCompressionEnv, "zstd")
+	before := d.CommandWALNextLSN()
+	prepared, err := col.PrepareInsertBatchOwned([][]byte{[]byte("a")}, [][]byte{[]byte(`{"row_id":1,"kind":"one"}`)}, 32<<20)
+	if prepared != nil || !errors.Is(err, ErrPreparedInsertIneligible) {
+		t.Fatalf("ZSTD-granule override prepare=(%v,%v), want configuration ineligibility", prepared, err)
+	}
+	if got := d.CommandWALNextLSN(); got != before {
+		t.Fatalf("rejected override advanced command WAL next LSN from %d to %d", before, got)
+	}
+	if err := d.CheckCommandWALPublishReady(); err != nil {
+		t.Fatalf("rejected override poisoned command WAL: %v", err)
 	}
 }
