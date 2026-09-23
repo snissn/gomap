@@ -19,6 +19,10 @@ type unsafeToReader interface {
 	ReadUnsafeTo(ptr page.ValuePtr, dst []byte) ([]byte, bool, error)
 }
 
+type rawValueShapeReader interface {
+	InspectRawValueLength(ptr page.ValuePtr, maxDecoded int64) (int64, error)
+}
+
 type readChecksumCapability interface {
 	ReadChecksumEnabled() bool
 }
@@ -91,6 +95,17 @@ func (r valueReader) ReadUnsafeTo(ptr page.ValuePtr, dst []byte) ([]byte, bool, 
 		return nil, false, err
 	}
 	return val, false, nil
+}
+
+func (r valueReader) InspectRawValueLength(ptr page.ValuePtr, maxDecoded int64) (int64, error) {
+	if r.vlogs == nil {
+		return 0, errors.New("treedb: missing value-log reader")
+	}
+	inspector, ok := r.vlogs.(rawValueShapeReader)
+	if !ok {
+		return 0, errors.New("treedb: value-log reader does not support raw shape inspection")
+	}
+	return inspector.InspectRawValueLength(ptr, maxDecoded)
 }
 
 func (r valueReader) ReadLeafLogPageUnsafeTo(ptr page.LeafLogPtr, dst []byte) ([]byte, bool, error) {

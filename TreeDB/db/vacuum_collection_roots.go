@@ -191,8 +191,10 @@ func vacuumCollectCollectionEntries(ctx context.Context, snap *Snapshot) ([]coll
 }
 
 // CheckCollectionRootDescriptorBudget checks the current system root without
-// materializing its collection descriptors. maxBytes limits encoded descriptor
-// bytes; it does not bound decoded pointer values. Callers publishing a root
+// materializing its collection descriptors. maxBytes limits both encoded
+// descriptor bytes and decoded pointer values. Pointer-backed descriptors must
+// have a directly inspectable raw shape; compressed, template-coded, and
+// compact-leaf values are rejected before decoding. Callers publishing a root
 // must hold the ordered-root write lock while using this preflight result.
 func (db *DB) CheckCollectionRootDescriptorBudget(maxEntries int, maxBytes int64) error {
 	if db == nil || db.closing.Load() {
@@ -220,6 +222,7 @@ func checkCollectionRootDescriptorBudgetFromRoot(p *pager.Pager, reader tree.Sla
 	}
 	count := 0
 	var size int64
+	var decodedSize int64
 	for _, prefix := range [][]byte{vacuumCollectionRootOverlayDescriptorPrefixBytes, vacuumCollectionRootDescriptorPrefixBytes} {
 		it := tree.New(p, reader, root).IteratorWithOptions(prefix, vacuumDescriptorPrefixEnd(prefix), tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
 		for it.Valid() {
@@ -229,21 +232,42 @@ func checkCollectionRootDescriptorBudgetFromRoot(p *pager.Pager, reader tree.Sla
 			}
 			val, ptr, flags := it.UnsafeEntry()
 			valueBytes := len(val)
+			decodedBytes := int64(valueBytes)
 			if flags&node.FlagPointer != 0 {
 				valueBytes = int(page.ValuePtrRecordLength(ptr))
 				if valueBytes == 0 {
 					_ = it.Close()
 					return fmt.Errorf("%w: collection root descriptor pointer has no record length hint", ErrCollectionRootDescriptorBudget)
 				}
+				inspector, ok := reader.(rawValueShapeReader)
+				if !ok {
+					_ = it.Close()
+					return fmt.Errorf("%w: collection root descriptor pointer has no bounded reader", ErrCollectionRootDescriptorBudget)
+				}
+				decodedLimit := maxBytes
+				if !bytes.Equal(prefix, vacuumCollectionRootOverlayDescriptorPrefixBytes) {
+					decodedLimit = 8
+				}
+				var err error
+				decodedBytes, err = inspector.InspectRawValueLength(ptr, decodedLimit)
+				if err != nil {
+					_ = it.Close()
+					return fmt.Errorf("%w: inspect collection root descriptor pointer: %v", ErrCollectionRootDescriptorBudget, err)
+				}
+			}
+			if (!bytes.Equal(prefix, vacuumCollectionRootOverlayDescriptorPrefixBytes) && decodedBytes != 8) || decodedBytes%8 != 0 {
+				_ = it.Close()
+				return fmt.Errorf("%w: invalid decoded collection root descriptor length %d", ErrCollectionRootDescriptorBudget, decodedBytes)
 			}
 			// Subtraction avoids integer overflow on malformed or oversized
 			// catalog entries, and rejects before pointer value materialization.
-			if count >= maxEntries || int64(len(key)) > maxBytes-size || int64(valueBytes) > maxBytes-size-int64(len(key)) {
+			if count >= maxEntries || int64(len(key)) > maxBytes-size || int64(valueBytes) > maxBytes-size-int64(len(key)) || decodedBytes > maxBytes-decodedSize-int64(len(key)) {
 				_ = it.Close()
 				return fmt.Errorf("%w: entries>%d or bytes>%d", ErrCollectionRootDescriptorBudget, maxEntries, maxBytes)
 			}
 			count++
 			size += int64(len(key) + valueBytes)
+			decodedSize += int64(len(key)) + decodedBytes
 			it.Next()
 		}
 		if err := it.Error(); err != nil {
