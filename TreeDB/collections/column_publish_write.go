@@ -36,6 +36,7 @@ func setColumnPhysicalAssetPreparationAfterPrepareTestHook(hook func(ColumnPubli
 }
 
 type columnWritePublishInput struct {
+	preparedInsert       bool
 	metadataOnly         bool
 	candidateAdmission   *typedGraphFoldAssetAdmission
 	selectStableResource func(rootpublication.StableResourceSelector) (*rootpublication.StableResourceSet, error)
@@ -671,7 +672,18 @@ func (c *Collection) columnPublishRootDescriptorPreflight(input columnWritePubli
 		if input.catalog == nil || input.catalog.pager != c.db.Pager() {
 			return fmt.Errorf("%w: concurrent index generation replacement detected", ErrConcurrentMutation)
 		}
-		return c.validateColumnPublishRootDescriptorPreflight(input.meta, input.baseCommitSeq, input.baseSystemRoot, rootNames, baseRootIDs)
+		if err := c.validateColumnPublishRootDescriptorPreflight(input.meta, input.baseCommitSeq, input.baseSystemRoot, rootNames, baseRootIDs); err != nil {
+			return err
+		}
+		if input.preparedInsert {
+			if err := c.db.CheckCollectionRootDescriptorBudget(preparedInsertMaxRootDescriptors, preparedInsertMaxRootDescriptorBytes); err != nil {
+				if errors.Is(err, backenddb.ErrCollectionRootDescriptorBudget) {
+					return fmt.Errorf("%w: collection root descriptors exceed %d entries or %d encoded bytes", ErrPreparedInsertResourceLimit, preparedInsertMaxRootDescriptors, preparedInsertMaxRootDescriptorBytes)
+				}
+				return err
+			}
+		}
+		return nil
 	}
 }
 

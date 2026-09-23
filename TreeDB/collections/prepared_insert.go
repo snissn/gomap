@@ -23,6 +23,8 @@ var ErrPreparedInsertResourceLimit = errors.New("collections: prepared insert re
 const preparedInsertMaxRows = 16 << 10
 const preparedInsertMaxDocumentBytes = 128 << 10
 const preparedInsertMaxScalarColumns = 5
+const preparedInsertMaxRootDescriptors = 4096
+const preparedInsertMaxRootDescriptorBytes = 1 << 20
 
 // PreparedInsertBatch owns its input slices until Commit or Abandon. The caller
 // must not mutate or reuse IDs and documents after handing them to Prepare.

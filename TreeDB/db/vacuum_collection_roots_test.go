@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
 	"reflect"
 	"runtime"
 	"testing"
@@ -18,6 +19,45 @@ const (
 	vacuumTestDocumentKey       = "doc/u1"
 	vacuumTestDocumentValue     = "document"
 )
+
+func TestCollectionRootDescriptorBudgetPreflightPointerBacked(t *testing.T) {
+	dir := t.TempDir()
+	d := openVacuumPointerDescriptorFixture(t, vacuumPointerDescriptorOptions(dir))
+	defer func() { _ = d.Close() }()
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("missing snapshot")
+	}
+	defer func() { _ = snap.Close() }()
+	root := snap.state.SystemRootPageID
+	it, err := snap.IteratorAtRootWithOptions(root, []byte(vacuumTestCollectionRootKey), nil, IteratorOptions{Mode: IteratorModePointerProjection})
+	if err != nil || !it.Valid() {
+		t.Fatalf("pointer descriptor iterator: %v", err)
+	}
+	_, ptr, flags := it.UnsafeEntry()
+	if flags&node.FlagPointer == 0 {
+		t.Fatalf("descriptor flags=%x, want pointer", flags)
+	}
+	if err := it.Close(); err != nil {
+		t.Fatal(err)
+	}
+	wantBytes := int64(len(vacuumTestCollectionRootKey)) + int64(page.ValuePtrRecordLength(ptr))
+	check := func(entries int, bytes int64) error {
+		return checkCollectionRootDescriptorBudgetFromRoot(snap.idx.pager, &snap.reader, root, entries, bytes)
+	}
+	if err := check(1, wantBytes); err != nil {
+		t.Fatalf("exact descriptor budget: %v", err)
+	}
+	if err := d.CheckCollectionRootDescriptorBudget(1, wantBytes); err != nil {
+		t.Fatalf("DB preflight descriptor budget: %v", err)
+	}
+	if err := check(0, 1<<20); !errors.Is(err, ErrCollectionRootDescriptorBudget) {
+		t.Fatalf("entry-limit error=%v, want descriptor budget", err)
+	}
+	if err := check(1, wantBytes-1); !errors.Is(err, ErrCollectionRootDescriptorBudget) {
+		t.Fatalf("byte-limit error=%v, want descriptor budget", err)
+	}
+}
 
 func TestVacuumIndexOffline_PreservesCollectionRootFromPointerBackedDescriptor(t *testing.T) {
 	dir := t.TempDir()

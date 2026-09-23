@@ -26,6 +26,7 @@ const (
 var (
 	vacuumCollectionRootDescriptorPrefixBytes        = []byte(vacuumCollectionRootDescriptorPrefix)
 	vacuumCollectionRootOverlayDescriptorPrefixBytes = []byte(vacuumCollectionRootOverlayDescriptorPrefix)
+	ErrCollectionRootDescriptorBudget                = errors.New("db: collection root descriptor budget exceeded")
 )
 
 type vacuumCollectionRootDescriptor struct {
@@ -187,6 +188,73 @@ func vacuumCollectCollectionEntries(ctx context.Context, snap *Snapshot) ([]coll
 		return nil, errors.New("vacuum: missing collection snapshot")
 	}
 	return vacuumCollectCollectionEntriesFromRoot(ctx, snap.idx.pager, &snap.reader, snap.state.SystemRootPageID)
+}
+
+// CheckCollectionRootDescriptorBudget checks the current system root without
+// materializing its collection descriptors. maxBytes limits encoded descriptor
+// bytes; it does not bound decoded pointer values. Callers publishing a root
+// must hold the ordered-root write lock while using this preflight result.
+func (db *DB) CheckCollectionRootDescriptorBudget(maxEntries int, maxBytes int64) error {
+	if db == nil || db.closing.Load() {
+		return ErrClosed
+	}
+	idx := db.idx.Load()
+	if idx == nil {
+		return ErrClosed
+	}
+	db.mu.RLock()
+	root := db.meta.SystemRootPageID
+	db.mu.RUnlock()
+	return checkCollectionRootDescriptorBudgetFromRoot(idx.pager, db.valueLogManager, root, maxEntries, maxBytes)
+}
+
+func checkCollectionRootDescriptorBudgetFromRoot(p *pager.Pager, reader tree.SlabReader, root uint64, maxEntries int, maxBytes int64) error {
+	if maxEntries < 0 || maxBytes < 0 {
+		return ErrCollectionRootDescriptorBudget
+	}
+	if p == nil {
+		return errors.New("db: missing pager for collection root descriptor budget")
+	}
+	if root == 0 {
+		return nil
+	}
+	count := 0
+	var size int64
+	for _, prefix := range [][]byte{vacuumCollectionRootOverlayDescriptorPrefixBytes, vacuumCollectionRootDescriptorPrefixBytes} {
+		it := tree.New(p, reader, root).IteratorWithOptions(prefix, vacuumDescriptorPrefixEnd(prefix), tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
+		for it.Valid() {
+			key := it.UnsafeKey()
+			if !bytes.HasPrefix(key, prefix) {
+				break
+			}
+			val, ptr, flags := it.UnsafeEntry()
+			valueBytes := len(val)
+			if flags&node.FlagPointer != 0 {
+				valueBytes = int(page.ValuePtrRecordLength(ptr))
+				if valueBytes == 0 {
+					_ = it.Close()
+					return fmt.Errorf("%w: collection root descriptor pointer has no record length hint", ErrCollectionRootDescriptorBudget)
+				}
+			}
+			// Subtraction avoids integer overflow on malformed or oversized
+			// catalog entries, and rejects before pointer value materialization.
+			if count >= maxEntries || int64(len(key)) > maxBytes-size || int64(valueBytes) > maxBytes-size-int64(len(key)) {
+				_ = it.Close()
+				return fmt.Errorf("%w: entries>%d or bytes>%d", ErrCollectionRootDescriptorBudget, maxEntries, maxBytes)
+			}
+			count++
+			size += int64(len(key) + valueBytes)
+			it.Next()
+		}
+		if err := it.Error(); err != nil {
+			_ = it.Close()
+			return err
+		}
+		if err := it.Close(); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func vacuumCollectCollectionEntriesFromRoot(ctx context.Context, p *pager.Pager, reader tree.SlabReader, systemRootID uint64) ([]collectionEntry, error) {

@@ -50,6 +50,36 @@ Allocation sites still requiring a pre-allocation bound or quota-aware builder:
   bound their transient buffers or auxiliary maps. These steps must stay in
   ordered commit to preserve identity, sync, and recovery semantics.
 
+The concrete ownership ledger for the eligible scalar lane is below. A bound
+must include old and replacement backing simultaneously when a slice or map
+grows. The accounting is for memory owned by this load pipeline, not unrelated
+database page-cache residency or the process's total heap.
+
+| Stage | Current finite inputs | Allocation that still needs admission |
+| --- | --- | --- |
+| Source producer | One 1 MiB line and at most 10 MiB of source batch payload; one queued successor | Scanner/gzip scratch, outer slice backing, and the exact-capacity JSON clone must all be charged to the same source token before growth. |
+| Prepared stream | At most 16,384 rows, five scalar columns, four 4,096-row blocks, 1,024 paths per block, 131,072 stream entries per block, and 16 MiB of per-path entry headers per block | Cursor descriptor slices, path/interner maps and trie nodes, per-path value/row slice old-plus-new capacity, declared values and string backing. The current `input*32` test is not a proof for these allocations. |
+| Stored block | Raw size hint and `zstd.Encoder.MaxEncodedSize` are checked before their large output buffers | Raw, compressed, wrapper, and returned block coexist; the pinned encoder's internal workspace and small encoder-owned dynamic buffers need a source-derived bound. The present 8 MiB workspace allowance is an estimate. |
+| Ordered insert | Prepared token remains live; IDs and document lengths are already known | Result-ID arena/slice, command document headers, the exact-sized collection command payload and V2 WAL frame, primary/stream run tables and iterator materialization, and pointerization buffers. |
+| Typed publication | At most five Int64/String columns and 16,384 prepared declared rows | Adapter batch/null/default arrays, string dictionary maps/slices, sorted row order/locators, encoded granules, part sections, full image copy, manifest/sidecars, and old-plus-new backing on growth. The existing FP32 encoded-image bound does not cover this scalar transient path. |
+| Durable root | One ordered committer; prepared commits preflight at most 4,096 catalog root descriptors and 1 MiB of encoded key/value bytes before WAL append | Ordered/context/system deltas are materialized into batches; root apply uses temporary zipper/backing; descriptor publication retains old/new collection-root entries. The current check counts pointer record-length hints, which may be smaller than decoded values; pointer decode, root-ID slices, `vacuumCollect` old/new slice capacity, pointer scratch, and two-pass coexistence still need a bound. |
+
+The shared credit has to cover a committing token and its reserved commit scratch
+*before* admitting its successor, with a guaranteed source slot for the depth-zero
+control. Both depths need the same source policy so the engine-overlap comparison
+does not silently remove ordinary producer/consumer overlap. Any structural or
+budget rejection must happen before its corresponding allocation and return
+`ErrPreparedInsertResourceLimit`; ordinary `InsertBatch` is only a fallback for
+unsupported configuration.
+The commit reservation must be settled before `appendPublicCommandWALIntent`:
+a resource rejection after its append is an ambiguous accepted-write/recovery
+case, not a clean oversized-batch rejection. Post-append allocation checks may
+detect a broken invariant, but cannot be the admission policy.
+The publisher materializes the initial ordered iterators even before its
+serialized preflight; context and system deltas are built after the WAL append.
+Both phases therefore need conservative credit reserved before their first
+allocation, rather than a rejection from the existing serialized preflight.
+
 A true 512 MiB total in-flight cap needs checked growth in those builders and
 a shared admission/reservation spanning the producer, prepared successor,
 committer, and waiting results. It then needs adversarial high-cardinality and

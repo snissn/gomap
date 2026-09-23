@@ -13303,6 +13303,7 @@ func (c *Collection) insertBatchNoIndex(
 				defer func() { _ = current.Close() }()
 			}
 			newSystemRoot, rootIDs, publishMeta, publishRootNames, err = c.publishRootDeltaGroupMaybeColumn(ordered, columnWritePublishInput{
+				preparedInsert:    execOpts.prepared != nil,
 				meta:              c.meta,
 				catalog:           catalog,
 				baseCommitSeq:     baseCommitSeq,
