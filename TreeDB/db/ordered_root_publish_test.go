@@ -4244,7 +4244,7 @@ func TestApplyOrderedRootDeltaBatchGroupRoots_MixedOptInStartsParallelBeforeSeri
 		{BaseRoot: 0, Delta: deltaA, ParallelApply: true},
 		{BaseRoot: baseRootB, Delta: deltaB},
 		{BaseRoot: 0, Delta: deltaC, ParallelApply: true},
-	}, serialAlloc, coldAlloc, OrderedRootSpanNativeRouteMultiIndexGroupPublish, "test mixed group root apply", false)
+	}, serialAlloc, coldAlloc, OrderedRootSpanNativeRouteMultiIndexGroupPublish, "test mixed group root apply", false, false, nil)
 	if !parallel {
 		t.Fatal("expected mixed group to use parallel apply")
 	}
@@ -5998,7 +5998,7 @@ func assertValueLogRefTrackerMatchesFullScan(t *testing.T, db *DB) {
 
 func TestOrderedRootDeltaBatchGroupApplyErrorContext(t *testing.T) {
 	db := &DB{}
-	results, parallel := db.applyOrderedRootDeltaBatchGroupRoots(nil, []OrderedRootDeltaBatchPublishInput{{BaseRoot: 42}}, nil, nil, OrderedRootSpanNativeRouteCommandWALPublish, "test root apply", false)
+	results, parallel := db.applyOrderedRootDeltaBatchGroupRoots(nil, []OrderedRootDeltaBatchPublishInput{{BaseRoot: 42}}, nil, nil, OrderedRootSpanNativeRouteCommandWALPublish, "test root apply", false, false, nil)
 	if parallel || len(results) != 1 || results[0].err == nil {
 		t.Fatalf("results=%+v parallel=%t", results, parallel)
 	}

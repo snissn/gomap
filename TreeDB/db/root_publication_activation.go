@@ -47,6 +47,7 @@ type rootPublicationVisibleMemberV1 struct {
 	prepared         *freelist.PreparedCOWCandidateV1
 	resources        *rootpublication.StableResourceSet
 	install          *rootPublicationVisibleInstallV1
+	preparedLimits   *PreparedRootPublicationLimits
 	activated        bool
 	resourcesAdopted bool
 }
@@ -159,6 +160,10 @@ func (db *DB) acquireCommandWALPublicationBuilderV1() (*rootpublication.BuilderT
 }
 
 func (runtime *rootPublicationRuntimeV1) cloneVisibleStableResource(selector rootpublication.StableResourceSelector) (*rootpublication.StableResourceSet, error) {
+	return runtime.cloneVisibleStableResourceWithMax(selector, -1)
+}
+
+func (runtime *rootPublicationRuntimeV1) cloneVisibleStableResourceWithMax(selector rootpublication.StableResourceSelector, maxResources int) (*rootpublication.StableResourceSet, error) {
 	if runtime == nil {
 		return nil, rootpublication.ErrResourceOwnership
 	}
@@ -166,6 +171,9 @@ func (runtime *rootPublicationRuntimeV1) cloneVisibleStableResource(selector roo
 	defer runtime.mu.Unlock()
 	if runtime.poison != nil {
 		return nil, runtime.poison
+	}
+	if maxResources >= 0 && runtime.visibleResources.Len() > maxResources {
+		return nil, fmt.Errorf("prepared visible resources: %d exceed limit %d", runtime.visibleResources.Len(), maxResources)
 	}
 	return rootpublication.CloneStableResourceForSelector(runtime.visibleResources, selector)
 }
@@ -176,6 +184,10 @@ func (runtime *rootPublicationRuntimeV1) cloneVisibleResources() (*rootpublicati
 }
 
 func (runtime *rootPublicationRuntimeV1) cloneVisibleResourcesWithWork() (*rootpublication.StableResourceSet, rootpublication.StableResourceClosureWork, error) {
+	return runtime.cloneVisibleResourcesWithWorkMax(-1)
+}
+
+func (runtime *rootPublicationRuntimeV1) cloneVisibleResourcesWithWorkMax(maxResources int) (*rootpublication.StableResourceSet, rootpublication.StableResourceClosureWork, error) {
 	if runtime == nil {
 		return nil, rootpublication.StableResourceClosureWork{}, errors.New("missing root-publication runtime")
 	}
@@ -183,6 +195,9 @@ func (runtime *rootPublicationRuntimeV1) cloneVisibleResourcesWithWork() (*rootp
 	defer runtime.mu.Unlock()
 	if runtime.poison != nil {
 		return nil, rootpublication.StableResourceClosureWork{}, runtime.poison
+	}
+	if maxResources >= 0 && runtime.visibleResources.Len() > maxResources {
+		return nil, rootpublication.StableResourceClosureWork{}, fmt.Errorf("prepared visible resources: %d exceed limit %d", runtime.visibleResources.Len(), maxResources)
 	}
 	resources, work, err := rootpublication.CloneStableResourceSetForLogicalObligationsWithWork(
 		runtime.visibleResources, rootpublication.StableLogicalObligationRequirements{},
@@ -335,7 +350,11 @@ func (db *DB) prepareRootPublicationVisibleInstallV1(
 		conditionalMutation:         opts.conditionalMutation,
 	}
 	if db.valueLogManager != nil {
-		install.valueLogSet = db.valueLogManager.CurrentSetNoRefresh()
+		var err error
+		install.valueLogSet, err = db.currentValueLogSetForPublication(opts.preparedLimits)
+		if err != nil {
+			return nil, err
+		}
 	}
 	abort := true
 	defer func() {
@@ -356,7 +375,7 @@ func (db *DB) prepareRootPublicationVisibleInstallV1(
 		install.leafGenerationView = db.leafGenerationViewForManifest(leafManifest)
 	}
 	if db.leafPageLog != nil {
-		staged, err := db.stagedLeafGenerationManifestWithPendingResult(manifestBasis, 0, next.CommitSeq)
+		staged, err := db.stagedLeafGenerationManifestWithPendingResultAndLimit(manifestBasis, 0, next.CommitSeq, opts.preparedLimits)
 		if err != nil {
 			return nil, err
 		}
@@ -509,6 +528,7 @@ func (runtime *rootPublicationRuntimeV1) prepareVisibleCandidate(
 	dependencyBytes uint64,
 	indexBytes uint64,
 	timing *CommandWALPublishTiming,
+	limits *PreparedRootPublicationLimits,
 ) (_ *rootpublication.PreparedRootCandidate, err error) {
 	if runtime == nil || runtime.db == nil || runtime.idx == nil || install == nil {
 		return nil, errors.New("missing visible root candidate input")
@@ -547,7 +567,11 @@ func (runtime *rootPublicationRuntimeV1) prepareVisibleCandidate(
 		})
 	}
 	cowPrepareStart := time.Now()
-	prepared, err := runtime.idx.allocator.PrepareCOWCandidateRetiringV1(
+	var cowLimits *freelist.COWPrepareLimitsV1
+	if limits != nil {
+		cowLimits = &limits.FreelistCOW
+	}
+	prepared, err := runtime.idx.allocator.PrepareCOWCandidateRetiringWithLimitsV1(
 		generationID,
 		next.CommitSeq,
 		rootPublicationLogicalCandidateIDV1(runtime.lineage, generationID, next),
@@ -555,6 +579,7 @@ func (runtime *rootPublicationRuntimeV1) prepareVisibleCandidate(
 		retirements,
 		0,
 		freelist.NewCandidatePageSinkV1(),
+		cowLimits,
 	)
 	if timing != nil {
 		timing.FinalizeCandidateCOWPrepare += time.Since(cowPrepareStart)
@@ -596,7 +621,7 @@ func (runtime *rootPublicationRuntimeV1) prepareVisibleCandidate(
 	install.post.commitSeq = next.CommitSeq
 	member := &rootPublicationVisibleMemberV1{
 		sequence: next.CommitSeq, next: next, prepared: prepared,
-		resources: visibleResources, install: install,
+		resources: visibleResources, install: install, preparedLimits: limits,
 	}
 
 	transaction, err := rootpublication.NewDurableRootTransaction(rootpublication.DurableRootTransactionSpec{
@@ -604,6 +629,14 @@ func (runtime *rootPublicationRuntimeV1) prepareVisibleCandidate(
 		Activate: func(input rootpublication.DurableRootCallbackInput) error {
 			if input.PreparedCOW != member.prepared || input.Sequence != member.sequence {
 				return rootpublication.ErrDurableRootOwnership
+			}
+			if limits != nil {
+				runtime.mu.Lock()
+				over := len(runtime.visibleMembers) >= limits.MaxVisibleMembers || len(runtime.debt) >= limits.MaxAllocatorDebt
+				runtime.mu.Unlock()
+				if over {
+					return errors.New("prepared visible root runtime exceeds admission limits")
+				}
 			}
 			if err := member.install.activate(func() error {
 				return runtime.idx.allocator.ActivateCOWCandidateV1(member.prepared)
@@ -705,7 +738,11 @@ func (db *DB) finalizeQueuedRootPublicationV1(
 		return post, prePublishErr(errors.New("incomplete queued root-publication handoff"))
 	}
 	visibleBaseCloneStart := time.Now()
-	visibleBase, visibleBaseWork, err := runtime.cloneVisibleResourcesWithWork()
+	maxVisibleResources := -1
+	if opts.preparedLimits != nil {
+		maxVisibleResources = opts.preparedLimits.MaxVisibleResources
+	}
+	visibleBase, visibleBaseWork, err := runtime.cloneVisibleResourcesWithWorkMax(maxVisibleResources)
 	candidateTiming.FinalizeCandidateVisibleBaseClone += time.Since(visibleBaseCloneStart)
 	candidateTiming.FinalizeCandidateResourceWork.Add(visibleBaseWork)
 	if err != nil {
@@ -720,6 +757,7 @@ func (db *DB) finalizeQueuedRootPublicationV1(
 		opts.durableResourceAppendMutation, opts.durableResourceRequirementWork, opts.durableResourceRequirementsFallback,
 		opts.valueLogPublicationLocked,
 		&candidateTiming, &scanned,
+		opts.preparedLimits,
 	)
 	if err != nil {
 		return post, prePublishErr(fmt.Errorf("capture queued root dependencies: %w", err))
@@ -777,7 +815,7 @@ func (db *DB) finalizeQueuedRootPublicationV1(
 	}
 	candidate, err := runtime.prepareVisibleCandidate(
 		next, retired, resources, install,
-		dependencyBytes, 0, &candidateTiming,
+		dependencyBytes, 0, &candidateTiming, opts.preparedLimits,
 	)
 	if err != nil {
 		return post, prePublishErr(err)
@@ -860,7 +898,11 @@ func (db *DB) finalizeQueuedRootPublicationV1(
 	if opts.publishTiming != nil {
 		opts.publishTiming.FinalizeAdmissionWait += time.Since(admissionStart)
 	}
-	if syncWrite && !db.commandWAL {
+	// Prepared callers charge the seal resource clone, manifest, COW candidate,
+	// and debt prefix in their fixed publisher tranche. Keep their admission
+	// token live until the coordinator has completed that work, including on
+	// command-WAL databases where ordinary commits may return after admission.
+	if opts.preparedLimits != nil || (syncWrite && !db.commandWAL) {
 		durabilityStart := time.Now()
 		if err := runtime.coordinator.WaitThrough(context.Background(), next.CommitSeq); err != nil {
 			if opts.publishTiming != nil {
@@ -931,6 +973,14 @@ func (runtime *rootPublicationRuntimeV1) Prepare(ctx context.Context, candidate 
 	}
 	if len(runtime.debt) == 0 || runtime.debt[len(runtime.debt)-1] != member.prepared {
 		return fmt.Errorf("%w: visible allocator debt is not the captured prefix", rootpublication.ErrDurableRootLineage)
+	}
+	limits := member.preparedLimits
+	if limits != nil {
+		if member.resources == nil || member.resources.Len() > limits.MaxVisibleResources ||
+			len(runtime.debt) >= limits.MaxAllocatorDebt || len(runtime.seals) >= limits.MaxSeals ||
+			len(runtime.debt)+1 > limits.MaxSealPrefixEntries {
+			return errors.New("prepared root-publication seal exceeds admission limits")
+		}
 	}
 	// Seals from retryable attempts may be interleaved in allocator debt, but
 	// every logical member captured by the coordinator must appear exactly once
@@ -1033,7 +1083,11 @@ func (runtime *rootPublicationRuntimeV1) Prepare(ctx context.Context, candidate 
 	}
 	generationID := liveGeneration.GenerationID() + 1
 	auxiliaryCount := int(manifest.PageCount()) + 1
-	prepared, err := runtime.idx.allocator.PrepareCOWCandidateRetiringV1(
+	var cowLimits *freelist.COWPrepareLimitsV1
+	if limits != nil {
+		cowLimits = &limits.FreelistCOW
+	}
+	prepared, err := runtime.idx.allocator.PrepareCOWCandidateRetiringWithLimitsV1(
 		generationID,
 		member.next.CommitSeq,
 		rootPublicationSealCandidateIDV1(base, member.next, generationID),
@@ -1041,6 +1095,7 @@ func (runtime *rootPublicationRuntimeV1) Prepare(ctx context.Context, candidate 
 		retirements,
 		auxiliaryCount,
 		freelist.NewCandidatePageSinkV1(),
+		cowLimits,
 	)
 	if err != nil {
 		return fmt.Errorf("prepare root-publication seal generation: %w", err)
@@ -1099,12 +1154,12 @@ func (runtime *rootPublicationRuntimeV1) Prepare(ctx context.Context, candidate 
 	if err != nil {
 		return err
 	}
+	prefix := append([]*freelist.PreparedCOWCandidateV1(nil), runtime.debt...)
+	prefix = append(prefix, prepared)
 	if err := runtime.idx.allocator.ActivateCOWCandidateV1(prepared); err != nil {
 		return fmt.Errorf("activate root-publication seal generation: %w", err)
 	}
 	preparedOwned = false
-	prefix := append([]*freelist.PreparedCOWCandidateV1(nil), runtime.debt...)
-	prefix = append(prefix, prepared)
 	seal := &rootPublicationSealV1{
 		latestSequence: member.next.CommitSeq, groupLength: group.Len(),
 		idx: runtime.idx, base: base, next: next, resources: resources, manifest: manifest,

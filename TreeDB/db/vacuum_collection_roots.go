@@ -289,6 +289,13 @@ func checkCollectionRootDescriptorBudgetFromRootWithTopology(p *pager.Pager, rea
 }
 
 func vacuumCollectCollectionEntriesFromRoot(ctx context.Context, p *pager.Pager, reader tree.SlabReader, systemRootID uint64) ([]collectionEntry, error) {
+	return vacuumCollectCollectionEntriesFromRootWithLimits(ctx, p, reader, systemRootID, -1, -1, -1)
+}
+
+// A prepared command passes its pre-WAL descriptor census here again before
+// the post-WAL collector allocates keys and root-ID slices. Ordinary callers
+// retain the unrestricted collector through the wrapper above.
+func vacuumCollectCollectionEntriesFromRootWithLimits(ctx context.Context, p *pager.Pager, reader tree.SlabReader, systemRootID uint64, maxEntries int, maxBytes int64, maxRootIDs int) ([]collectionEntry, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -304,6 +311,8 @@ func vacuumCollectCollectionEntriesFromRoot(ctx context.Context, p *pager.Pager,
 
 	var out []collectionEntry
 	var pointerScratch []byte
+	var copiedBytes int64
+	var copiedRootIDs int
 	descriptorPrefixes := []struct {
 		prefix    []byte
 		end       []byte
@@ -326,6 +335,16 @@ func vacuumCollectCollectionEntriesFromRoot(ctx context.Context, p *pager.Pager,
 				break
 			}
 			val, ptr, flags := it.UnsafeEntry()
+			if maxEntries >= 0 {
+				if flags&node.FlagPointer != 0 || len(out) >= maxEntries || len(val)%8 != 0 ||
+					int64(len(key)) > maxBytes-copiedBytes || int64(len(val)) > maxBytes-copiedBytes-int64(len(key)) ||
+					len(val)/8 > maxRootIDs-copiedRootIDs {
+					_ = it.Close()
+					return nil, ErrCollectionRootDescriptorBudget
+				}
+				copiedBytes += int64(len(key) + len(val))
+				copiedRootIDs += len(val) / 8
+			}
 			var err error
 			val, pointerScratch, err = vacuumCollectionRootDescriptorValue(reader, key, val, ptr, flags, pointerScratch)
 			if err != nil {

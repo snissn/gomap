@@ -332,6 +332,14 @@ func (iter *pendingValueLogAppendPtrCollectingIterator) OrderedUniqueUnsafeItera
 	return ok && trusted.OrderedUniqueUnsafeIterator()
 }
 
+func (iter *pendingValueLogAppendPtrCollectingIterator) Len() int {
+	hint, ok := iter.UnsafeIterator.(orderedRootLenHintIterator)
+	if !ok {
+		return -1
+	}
+	return hint.Len()
+}
+
 func (db *DB) releasePendingValueLogAppendPtrCollector(collector *pendingValueLogAppendPtrCollectingIterator) {
 	if db == nil || collector == nil || len(collector.ptrCounts) == 0 {
 		return

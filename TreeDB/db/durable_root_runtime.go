@@ -364,6 +364,10 @@ func (db *DB) scanCandidateValueLogReferencesV1(idx *indexGen, next page.MetaPag
 }
 
 func (db *DB) scanCandidateValueLogReferencesWithCountsV1(idx *indexGen, next page.MetaPageBody, valueLogPublicationLocked bool, scanned *candidateValueLogRefCountsV1) (map[uint32]struct{}, error) {
+	return db.scanCandidateValueLogReferencesWithCountsAndLimitsV1(idx, next, valueLogPublicationLocked, scanned, nil)
+}
+
+func (db *DB) scanCandidateValueLogReferencesWithCountsAndLimitsV1(idx *indexGen, next page.MetaPageBody, valueLogPublicationLocked bool, scanned *candidateValueLogRefCountsV1, limits *PreparedRootPublicationLimits) (map[uint32]struct{}, error) {
 	var snapshot *Snapshot
 	if valueLogPublicationLocked {
 		snapshot = db.acquireSnapshotWithValueLogPublicationLockHeld()
@@ -380,7 +384,10 @@ func (db *DB) scanCandidateValueLogReferencesWithCountsV1(idx *indexGen, next pa
 		if db.state.Load() != nil || db.valueLogManager == nil {
 			return nil, errors.New("capture candidate dependency snapshot")
 		}
-		set := db.valueLogManager.CurrentSetNoRefresh()
+		set, err := db.currentValueLogSetForPublication(limits)
+		if err != nil {
+			return nil, err
+		}
 		candidateState := DBState{
 			ValueLogSet:                set,
 			LeafGenerations:            db.currentLeafGenerationView(),
@@ -396,7 +403,7 @@ func (db *DB) scanCandidateValueLogReferencesWithCountsV1(idx *indexGen, next pa
 			reader:            newValueReader(set),
 			registryShardHint: snapshotShardHintUnset,
 		}
-		references, scanErr := db.scanCandidateExternalReferencesWithCountsV1(recoverySnapshot, scanned)
+		references, scanErr := db.scanCandidateExternalReferencesWithCountsAndLimitsV1(recoverySnapshot, scanned, limits)
 		closeErr := recoverySnapshot.Close()
 		if scanErr != nil || closeErr != nil {
 			return nil, errors.Join(scanErr, closeErr)
@@ -415,7 +422,11 @@ func (db *DB) scanCandidateValueLogReferencesWithCountsV1(idx *indexGen, next pa
 	// this scan, while the visible snapshot may still carry the pre-publication
 	// value-log set. Rebind this private candidate view to a fresh manager set so
 	// traversing a newly reachable outer leaf never consults the stale set.
-	freshSet := db.valueLogManager.CurrentSetNoRefresh()
+	freshSet, err := db.currentValueLogSetForPublication(limits)
+	if err != nil {
+		_ = snapshot.Close()
+		return nil, err
+	}
 	if len(freshSet.Files) == 0 {
 		_ = db.valueLogManager.Release(freshSet)
 		freshSet = nil
@@ -434,7 +445,7 @@ func (db *DB) scanCandidateValueLogReferencesWithCountsV1(idx *indexGen, next pa
 			return nil, fmt.Errorf("release stale candidate dependency set: %w", err)
 		}
 	}
-	references, scanErr := db.scanCandidateExternalReferencesWithCountsV1(snapshot, scanned)
+	references, scanErr := db.scanCandidateExternalReferencesWithCountsAndLimitsV1(snapshot, scanned, limits)
 	closeErr := snapshot.Close()
 	if scanErr != nil || closeErr != nil {
 		return nil, errors.Join(scanErr, closeErr)
@@ -452,6 +463,10 @@ func (db *DB) scanCandidateExternalReferencesV1(snapshot *Snapshot) (map[uint32]
 }
 
 func (db *DB) scanCandidateExternalReferencesWithCountsV1(snapshot *Snapshot, scanned *candidateValueLogRefCountsV1) (map[uint32]struct{}, error) {
+	return db.scanCandidateExternalReferencesWithCountsAndLimitsV1(snapshot, scanned, nil)
+}
+
+func (db *DB) scanCandidateExternalReferencesWithCountsAndLimitsV1(snapshot *Snapshot, scanned *candidateValueLogRefCountsV1, limits *PreparedRootPublicationLimits) (map[uint32]struct{}, error) {
 	if db == nil || db.valueLogManager == nil || snapshot == nil || snapshot.state == nil || snapshot.idx == nil || snapshot.idx.pager == nil {
 		return nil, errors.New("scan candidate external references: missing snapshot state")
 	}
@@ -473,7 +488,7 @@ func (db *DB) scanCandidateExternalReferencesWithCountsV1(snapshot *Snapshot, sc
 		if err := db.requireDurableValueLogReferencesRegisteredV1(references); err != nil {
 			return err
 		}
-		return db.rebindCandidateValueLogSetV1(snapshot)
+		return db.rebindCandidateValueLogSetWithLimitsV1(snapshot, limits)
 	}
 	registerValuePointers := func(rootIDs []uint64) error {
 		result, err := db.maintenanceReachabilityScan(context.Background(), snapshot, maintenanceReachabilityScanOptions{
@@ -489,7 +504,7 @@ func (db *DB) scanCandidateExternalReferencesWithCountsV1(snapshot *Snapshot, sc
 		if err := db.requireDurableValueLogReferencesRegisteredV1(references); err != nil {
 			return err
 		}
-		return db.rebindCandidateValueLogSetV1(snapshot)
+		return db.rebindCandidateValueLogSetWithLimitsV1(snapshot, limits)
 	}
 	// Raw outer-leaf pointers can be discovered without dereferencing their
 	// segments. Register those exact canonical files first so an unreported but
@@ -542,10 +557,17 @@ func (db *DB) scanCandidateExternalReferencesWithCountsV1(snapshot *Snapshot, sc
 // from the manager's already-registered files. It never scans the filesystem;
 // the caller must register every newly discovered canonical segment first.
 func (db *DB) rebindCandidateValueLogSetV1(snapshot *Snapshot) error {
+	return db.rebindCandidateValueLogSetWithLimitsV1(snapshot, nil)
+}
+
+func (db *DB) rebindCandidateValueLogSetWithLimitsV1(snapshot *Snapshot, limits *PreparedRootPublicationLimits) error {
 	if db == nil || db.valueLogManager == nil || snapshot == nil || snapshot.state == nil {
 		return errors.New("rebind candidate value-log set: missing snapshot state")
 	}
-	fresh := db.valueLogManager.CurrentSetNoRefresh()
+	fresh, err := db.currentValueLogSetForPublication(limits)
+	if err != nil {
+		return err
+	}
 	old := snapshot.state.ValueLogSet
 	oldPinned := snapshot.vlogPinned
 	state := *snapshot.state
@@ -603,6 +625,10 @@ func (db *DB) requireDurableValueLogReferencesRegisteredV1(references map[uint32
 }
 
 func (db *DB) captureDurableValueLogResourcesV1(idx *indexGen, next page.MetaPageBody, delta *valueLogRefDelta, exactPackedFileIDs map[uint32]struct{}, valueLogPublicationLocked bool, scanned *candidateValueLogRefCountsV1) (*rootpublication.StableResourceSet, error) {
+	return db.captureDurableValueLogResourcesWithLimitsV1(idx, next, delta, exactPackedFileIDs, valueLogPublicationLocked, scanned, nil)
+}
+
+func (db *DB) captureDurableValueLogResourcesWithLimitsV1(idx *indexGen, next page.MetaPageBody, delta *valueLogRefDelta, exactPackedFileIDs map[uint32]struct{}, valueLogPublicationLocked bool, scanned *candidateValueLogRefCountsV1, limits *PreparedRootPublicationLimits) (*rootpublication.StableResourceSet, error) {
 	if db.valueLogManager == nil {
 		return nil, nil
 	}
@@ -611,7 +637,7 @@ func (db *DB) captureDurableValueLogResourcesV1(idx *indexGen, next page.MetaPag
 		return nil, err
 	}
 	if !projected {
-		references, err = db.scanCandidateValueLogReferencesWithCountsV1(idx, next, valueLogPublicationLocked, scanned)
+		references, err = db.scanCandidateValueLogReferencesWithCountsAndLimitsV1(idx, next, valueLogPublicationLocked, scanned, limits)
 		if err != nil {
 			return nil, err
 		}
@@ -629,7 +655,7 @@ func (db *DB) captureDurableValueLogResourcesV1(idx *indexGen, next page.MetaPag
 	if err := db.requireDurableValueLogReferencesRegisteredV1(references); err != nil {
 		return nil, err
 	}
-	return db.captureRegisteredDurableValueLogResourcesV1(references)
+	return db.captureRegisteredDurableValueLogResourcesWithLimitsV1(references, limits)
 }
 
 // planOuterLeafBaseDependencyReuseV1 recognizes the common COW transition in
@@ -791,10 +817,10 @@ func (db *DB) captureDurableRootResourcesV1(idx *indexGen, next page.MetaPageBod
 // built while an earlier group is syncing inherits every transitive resource
 // that remains reachable from the immediately preceding visible root.
 func (db *DB) captureDurableRootResourcesFromBaseV1(idx *indexGen, next page.MetaPageBody, delta *valueLogRefDelta, base *rootpublication.StableResourceSet, additional *rootpublication.StableResourceSet, requirements rootpublication.StableLogicalObligationRequirements, mutation rootpublication.StableLogicalObligationMutation, appendMutation rootpublication.StableLogicalObligationMutation, requirementWork rootpublication.StableResourceClosureWork, requirementsFallback func() (rootpublication.StableLogicalObligationRequirements, rootpublication.StableResourceClosureWork, error), valueLogPublicationLocked bool, timing *CommandWALPublishTiming) (*rootpublication.StableResourceSet, error) {
-	return db.captureDurableRootResourcesFromBaseWithRefCountsV1(idx, next, delta, base, additional, requirements, mutation, appendMutation, requirementWork, requirementsFallback, valueLogPublicationLocked, timing, nil)
+	return db.captureDurableRootResourcesFromBaseWithRefCountsV1(idx, next, delta, base, additional, requirements, mutation, appendMutation, requirementWork, requirementsFallback, valueLogPublicationLocked, timing, nil, nil)
 }
 
-func (db *DB) captureDurableRootResourcesFromBaseWithRefCountsV1(idx *indexGen, next page.MetaPageBody, delta *valueLogRefDelta, base *rootpublication.StableResourceSet, additional *rootpublication.StableResourceSet, requirements rootpublication.StableLogicalObligationRequirements, mutation rootpublication.StableLogicalObligationMutation, appendMutation rootpublication.StableLogicalObligationMutation, requirementWork rootpublication.StableResourceClosureWork, requirementsFallback func() (rootpublication.StableLogicalObligationRequirements, rootpublication.StableResourceClosureWork, error), valueLogPublicationLocked bool, timing *CommandWALPublishTiming, scanned *candidateValueLogRefCountsV1) (*rootpublication.StableResourceSet, error) {
+func (db *DB) captureDurableRootResourcesFromBaseWithRefCountsV1(idx *indexGen, next page.MetaPageBody, delta *valueLogRefDelta, base *rootpublication.StableResourceSet, additional *rootpublication.StableResourceSet, requirements rootpublication.StableLogicalObligationRequirements, mutation rootpublication.StableLogicalObligationMutation, appendMutation rootpublication.StableLogicalObligationMutation, requirementWork rootpublication.StableResourceClosureWork, requirementsFallback func() (rootpublication.StableLogicalObligationRequirements, rootpublication.StableResourceClosureWork, error), valueLogPublicationLocked bool, timing *CommandWALPublishTiming, scanned *candidateValueLogRefCountsV1, limits *PreparedRootPublicationLimits) (*rootpublication.StableResourceSet, error) {
 	if additional != nil {
 		defer additional.Release()
 	}
@@ -956,9 +982,9 @@ func (db *DB) captureDurableRootResourcesFromBaseWithRefCountsV1(idx *indexGen, 
 		for fileID := range exactPackedFileIDs {
 			delete(freshOuterLeafReferences, fileID)
 		}
-		fresh, err = db.captureRegisteredDurableValueLogResourcesV1(freshOuterLeafReferences)
+		fresh, err = db.captureRegisteredDurableValueLogResourcesWithLimitsV1(freshOuterLeafReferences, limits)
 	} else {
-		fresh, err = db.captureDurableValueLogResourcesV1(idx, next, delta, exactPackedFileIDs, valueLogPublicationLocked, scanned)
+		fresh, err = db.captureDurableValueLogResourcesWithLimitsV1(idx, next, delta, exactPackedFileIDs, valueLogPublicationLocked, scanned, limits)
 	}
 	if err != nil {
 		return nil, err
@@ -1019,8 +1045,15 @@ func (db *DB) captureDurableRootResourcesFromBaseWithRefCountsV1(idx *indexGen, 
 }
 
 func (db *DB) captureRegisteredDurableValueLogResourcesV1(references map[uint32]struct{}) (*rootpublication.StableResourceSet, error) {
+	return db.captureRegisteredDurableValueLogResourcesWithLimitsV1(references, nil)
+}
+
+func (db *DB) captureRegisteredDurableValueLogResourcesWithLimitsV1(references map[uint32]struct{}, limits *PreparedRootPublicationLimits) (*rootpublication.StableResourceSet, error) {
 	if db == nil || db.valueLogManager == nil || len(references) == 0 {
 		return nil, nil
+	}
+	if limits != nil && len(references) > limits.MaxRegisteredValueLogFiles {
+		return nil, fmt.Errorf("candidate value-log references: %d files exceed prepared limit %d", len(references), limits.MaxRegisteredValueLogFiles)
 	}
 	set := db.valueLogManager.CurrentSubsetNoRefresh(references)
 	defer func() { _ = db.valueLogManager.Release(set) }()

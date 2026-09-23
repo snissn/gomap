@@ -1,107 +1,131 @@
 # Prepared insert memory gate (#4819)
 
-The byte gate applies to **incremental pipeline-owned memory**, independently
-of the number of rows already stored. It covers the next source batch, the
-prepared token and its transient builders, and collection-owned commit inputs
-that coexist with that token. A handed-off input backing is charged once.
-Existing pager, zipper, and value-log Manager publication scratch used by an
-ordinary ordered commit is baseline DB work; whole-process RSS is a separate
-measured guardrail. `ReservedBytes` is admission credit, not measured heap.
+This document records the current behavior of the prepared insert lane and
+the remaining acceptance gates for its loader integration.
 
-`PrepareInsertBatchOwned` accepts at most 16,384 rows, 1,024 bytes per ID,
-and 128 KiB per document on the no-index JSON semantic-stream lane. It
-supports at most five Int64/String paths of at most 1,024 bytes, a 512-byte
-asset namespace, and three validated aggregate-metadata specs with bounded
-predicates. It charges outer ID/document slices, element capacities, prepared
-runs, declared rows, semantic blocks, typed backing, and a 32 KiB stable-schema
-copy reserve. Unused outer-slice slots must be nil. The public owned-buffer
-contract requires each ID/document capacity to describe its full non-aliased
-allocation; Go cannot discover a larger backing hidden by a full-sliced view.
-Before allocating the ordered entry and row-header arrays, preparation checks
-128 bytes per row plus 1 MiB of batch overhead against the remaining credit.
+The byte gate covers all memory owned by an admitted request: source backing,
+the prepared token, ordered-commit materialization, command WAL and frame
+scratch, value-log output, root rewriting, pager and zipper output, freelist
+copy-on-write state, Manager scans and sets, and visible installation. A
+handed-off backing is charged once. `ReservedBytes` is admission credit rather
+than heap or process-RSS telemetry.
 
-The stream path partitions preparation credit across at most four concurrent
-4,096-row blocks. Each block checks a source-derived fixed reserve before
-cursor/raw/zstd allocation, then debits quota before path, trie, map,
-interned-string, and entry-header growth. Limits include 1,024 cursor
-descriptors, 1,024 paths, 131,072 entries, and 16 MiB of entry headers per
-block. Typed scalar preparation borrows the already charged declared strings;
-it checks a temporary dictionary/map allowance before building vectors and
-final dictionaries, then charges retained typed backing. Prepared compressed
-blocks return unowned raw scratch to the process-wide pool, which retains at
-most four 8 MiB buffers. JSONBench permanently reserves that 32 MiB idle
-capacity in its shared lane ledger; in-use scratch remains charged to its
-prepared block. Raw fallback blocks take ownership of their backing and do
-not return it to the pool.
-The prepared zstd encoder appends into a nil destination. Its fixed block
-reserve includes the old and replacement destination backings at slice growth
-and the exact stored wrapper; this avoids an otherwise unused maximum-size
-output allocation. The separate 8 MiB encoder-workspace charge follows from
-the pinned `github.com/snissn/compress` fork (see `zstd/encoder_options.go`,
-`enc_fast.go`, `enc_base.go`, `blockenc.go`, `fse_encoder.go`, and
-`huff0/compress.go`). The nil-writer, concurrency-one, dictionary-free,
-CRC-free, low-memory `SpeedFastest` encoder uses one 64 KiB block and a 1 MiB
-window. Its history is at most the window plus one 128 KiB maximum block;
-the fast hash table is 256 KiB. A block has at most 64 KiB of literals and
-at most `ceil(64 KiB/3)` 16-byte sequences. Charging three times each
-maximum for old and replacement Go slice backing, plus 32 bytes per sequence
-and two block lengths for encoded block output, leaves under 6 MiB for these
-buffers even with allocator rounding. The remaining 2 MiB covers the bounded
-Huffman/FSE tables and one-block compression scratch; the fork's parallel
-four-stream Huffman branch is disabled. The raw input, append-grown final
-zstd destination, and stored wrapper are charged separately by the block
-output reserve. A multi-block incompressible/compressible test exercises the
-destination-growth and wrapper paths. A change to the pinned encoder options
-or fork requires rederiving this charge before prepared admission is enabled.
+The engine gate is closed for the supported no-index JSON semantic-stream
+lane. End-to-end JSONBench acceptance remains open until the exact-head 1M and
+10M runs report throughput, query hashes, admission telemetry, and peak RSS.
+The current 2 GiB per-token ceiling in focused tests and the public benchmark
+is a candidate, not a loader default. The loader may use a larger
+source-justified ceiling when the full shared-lane ledger and real 16K/RSS
+witness require it.
 
-Before creating the token, the engine reserves separate ordered-commit credit
-for initial primary/stream iterator materialization, result IDs and command
-WAL/frame/run/pointerization buffers, typed part/image, row asset,
-dictionary/int64/aggregate sidecars, and catalog/manifest copies. The two
-input iterators share one materialization budget. Pre-WAL catalog checks
-reject a manifest above 4,096 inline records or 1 MiB of key/value bytes,
-pointer-backed root descriptors, and unsupported root aliases. The retained
-10M diagnostic catalog had 3,127 entries and 753,928 key/value bytes; the
-final exact-head run must revalidate that whole-collection ceiling.
+## Source and preparation envelope
 
-| Owner | Current admission method | Remaining proof work |
-| --- | --- | --- |
-| Source and queued successor | JSONBench reserves exact-capacity source backing before clone, including scanner scratch and outer headers; one source slot stays available to depth zero. | Verify final 1M/10M counters and report RSS beside credit. |
-| Stream cursor and retained block | Source-derived fixed reserve plus per-growth block quota; final retained capacity charge. Pinned single-encoder workspace fits its separate 8 MiB charge as derived above. | Recheck the source-derived charge whenever the pinned encoder or its options change. |
-| Typed preparation | Prebuild reserve of 4,224 bytes per row-column cell plus 8 MiB; final vector/dictionary capacity charge. | Confirm transient map growth and dictionary-mode restrictions cover every eligible config. |
-| Ordered commit | Separate source-derived allowances for materialization, WAL/runs, typed image, row asset, sidecars, and catalog. | Complete the allocation-site audit for typed section compression/workspace and aggregate maps, including old/new backing during growth. |
+`PrepareInsertBatchOwned` admits at most 16,384 rows, 1,024 bytes per ID, and
+128 KiB per document. The lane supports at most five Int64/String paths of at
+most 1,024 bytes, a 512-byte asset namespace, and three validated aggregate
+metadata specs. It charges outer ID/document slices, element capacities,
+prepared runs, declared rows, semantic blocks, typed backing, and a 32 KiB
+stable-schema copy reserve. Unused outer-slice slots must be nil. Each element
+capacity must describe its complete non-aliased allocation because Go cannot
+discover backing hidden by a full-slice expression.
 
-The ordered-commit formula is conservative admission work in progress. Its
-WAL/run term separately allows three published-input copies for command
-payload and old/new V2 frame scratch, three for result IDs and pointerized
-run keys/values, 2,048 bytes per row for run/header/ref backing, and 8 MiB
-fixed overhead. A near-16K high-entropy test and a 512-row maximum-length-ID
-test exercise acceptance and clean pre-WAL rejection. The row-asset allowance
-uses the sum of string lengths across all source rows, rather than distinct
-interned backing: its binary length-prefix writer serializes each row value
-and `bytes.Buffer` can hold old and replacement backing while growing. The
-aggregate allowance likewise sums each group string across source rows and
-specs, covering repeated groups emitted by separate entry sets. A repeated
-8 KiB group test rejects insufficient credit before WAL and commits with the
-derived adequate credit. The typed/image and aggregate terms still need a
-complete source-backed proof before the strict byte gate can be marked passed.
-A resource rejection after command-WAL append is an ambiguous accepted-write/
-recovery case, not normal admission.
+Preparation partitions scratch across at most four concurrent 4,096-row
+blocks. Each block checks its fixed reserve before cursor, raw, and zstd
+allocation, then debits quota before path, trie, map, interned-string, and
+entry-header growth. The process-wide raw pool retains at most four 8 MiB
+buffers; JSONBench must hold the corresponding 32 MiB shared-lane credit even
+when they are idle. The pinned, single-worker zstd encoder has a separate 8
+MiB workspace allowance. Changing that encoder or its options requires
+rederiving the allowance.
 
-The ordered publisher may still perform a first-publication candidate scan,
-read the Manager's registered file set, and rewrite outer-leaf pages. These
-are existing synchronous publication costs rather than memory newly retained
-by the one-ahead queue. Prepared commits preserve their GC pins, recovery,
-and post-WAL ambiguity semantics. Any collection-owned WAL, typed, run,
-manifest, or waiting-result backing coexisting with the successor remains
-inside incremental credit even when the DB publisher consumes it.
+Preparation validates source semantics before existing-ID conflicts. A
+prepared malformed document therefore returns its source-validation error;
+an otherwise valid prepared token checks the current root and conflicts at
+Commit. Ordinary `InsertBatch` retains its existing conflict-first behavior.
 
-The JSONBench lane holds producer and committer credit in one ledger. Depth
-zero retains input producer/consumer overlap; depth one may prepare the next
-token while the sole ordered committer publishes its predecessor. Both use
-the same source policy. `ErrPreparedInsertResourceLimit` must fail closed and
-must not be retried through ordinary `InsertBatch`; only unsupported config
-may fall back. Final acceptance needs exact-head adversarial, durability and
-no-LSN rejection tests, paired 1M/10M throughput and query hashes, allocated
-bytes per row, live owned backing, and peak RSS. Diagnostic runs are not that
-final evidence.
+## Ordered commit and publisher tranche
+
+Before Prepare returns, the token holds separate credit for initial iterator
+materialization, result IDs, command WAL/frame/run/pointerization buffers,
+typed images, row assets, sidecars, catalog/manifest copies, both system-delta
+materializations, and the ordered root publisher. The publisher tranche is
+fixed for the admitted engine envelope:
+
+```text
+P = 8,192 existing pager pages
+F = 32 registered value-log files
+V = 64 visible resources/members
+Q = 237,942 total output pages across the root group
+
+publisher bytes = Q*4096 + P*4096
+                + (P+Q)*(512+256)
+                + 3*64 MiB + 64 MiB + 128 MiB
+                = 1,599,848,960 bytes
+```
+
+The page images cover pager/zipper output. The per-page terms cover root-scan
+maps and COW collections. The record terms cover encoded, decoded, and
+selected value-log records plus the grouped-frame cache. The fixed term covers
+Manager/resource sets, historical leaf-generation clones and maps,
+descriptors, builders, bounded seal/debt slices, and other slice growth. This
+tranche is part of `PreparedInsertBatch.ReservedBytes()` before a successor
+may be admitted and remains held through Commit or Abandon.
+
+Under the serialized publication lock, the prepared route profiles the exact
+captured primary, stream, manifest, locator, and system roots. It rejects
+non-point shapes, excessive depth/base traversal, total output above `Q`, more
+than 4,096 manifest or descriptor records, more than 1 MiB of their key/value
+bytes, pointer-backed descriptors, unsupported aliases, and manifest deletes.
+The system-delta source is captured before WAL and checked again before each
+post-WAL materialization. Materialized batches use a fresh exact-capacity
+entry array so pooled backing cannot exceed the charged source bound.
+
+The same pre-WAL profile covers every full-set or clone source: pager pages,
+all Manager files including zombies, every historical leaf generation and
+file-ID slice, pending leaf file IDs, value-log read record/cache
+configuration, visible resources and members, allocator debt, seals, seal
+prefixes, and every collection in the live freelist COW transaction and
+reservation ledger. Warm zipper applies share one output counter across pager
+allocations and value-log leaf appends and check it before the allocation.
+Allocation sites recheck mutable counts under their own locks before
+allocating. Value-log decode checks the configured record bound before output
+allocation and rejects zstd frames without a finite content size. Any bound
+violation after command-WAL append is a broken admission invariant;
+publication fails through the existing poison/recovery path rather than
+retrying the batch.
+
+Ordinary command-WAL publication may return after coordinator admission. The
+prepared route instead waits through its exact commit sequence before Commit
+returns. The resource/manifest clone, seal COW candidate, and allocator-debt
+prefix therefore finish while the request still holds the fixed publisher
+tranche; the caller cannot retire the token credit while that seal work is
+still pending.
+
+## Current bounded evidence
+
+The warm 16K five-root focused witness profiled 33,170 primary pages, 74 stream
+pages, 8,294 manifest pages, 32,952 locator pages, and 92 system pages: 74,582
+total, below `Q`. Its base profile had 273 pager pages, two Manager files, four
+visible resources, one visible member, and a valid COW profile with high-water
+291, 41 retired pages, one changed chunk, and 225 ledger owners. A near-limit
+high-entropy 16K batch reserved 2,014,371,990 bytes and completed inside the
+candidate 2 GiB ceiling.
+
+Five one-iteration public-path 4x16K runs observed median wall times of 86.6
+ms for ordinary insert, 158.3 ms for prepared serial, and 146.2 ms for the
+prepared pipeline. The prepared modes now include the exact-sequence
+durability wait described above and held a maximum token of 1,971,047,420
+bytes. In an already-built test binary, macOS `/usr/bin/time -l` reported
+240,893,952 bytes maximum resident set size and 215,368,496 bytes peak memory
+footprint for those repeated runs. The committed near-limit 16K high-entropy
+witness reserved 2,014,371,990 bytes and reported 141,115,392 bytes maximum
+RSS. These figures exercise the public path and guard against obvious
+reservation/RSS regressions; they do not replace the required exact-head
+1M/10M JSONBench evidence.
+
+JSONBench must reserve exact-capacity source backing before cloning, retain
+one source slot at depth zero, and keep the token's full `ReservedBytes()` in
+the shared producer/committer ledger until Commit or Abandon. It must not
+shrink the token credit after Prepare. `ErrPreparedInsertResourceLimit` fails
+closed and must not fall back to ordinary `InsertBatch`; only an unsupported
+configuration may do so.

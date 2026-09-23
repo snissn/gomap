@@ -1347,6 +1347,44 @@ type Manager struct {
 	deferredDeletionSync        func(dir string, resource durabilitycut.Resource) error
 }
 
+// PreparedReadProfile reports the configuration that bounds value-log reads
+// made while planning and publishing a prepared ordered-root mutation. It is
+// allocation-free; callers must account for both encoded and decoded record
+// scratch before entering a read path.
+type PreparedReadProfile struct {
+	RegisteredFiles              uint64
+	MaxRecordBytes               int64
+	HasDictionaryLookup          bool
+	HasTemplateLookup            bool
+	TemplateMaxDecodedBytes      int
+	TemplateDefinitionCacheSize  int
+	GroupedFrameCacheEntries     int
+	GroupedFrameCacheMaxRawBytes int
+	GroupedFrameCacheMaxBytes    int64
+}
+
+func (m *Manager) PreparedReadProfile() PreparedReadProfile {
+	var profile PreparedReadProfile
+	if m == nil {
+		return profile
+	}
+	m.mu.RLock()
+	profile.RegisteredFiles = uint64(len(m.files))
+	profile.HasDictionaryLookup = m.dictLookup != nil
+	profile.HasTemplateLookup = m.templateLookup != nil
+	profile.TemplateMaxDecodedBytes = m.templateDecodeOpts.MaxDecodedBytes
+	profile.TemplateDefinitionCacheSize = m.templateDecodeOpts.DefCacheSize
+	profile.GroupedFrameCacheEntries = m.groupedFrameCacheEntries
+	profile.GroupedFrameCacheMaxRawBytes = m.groupedFrameCacheMaxRaw
+	profile.GroupedFrameCacheMaxBytes = m.groupedFrameCacheMaxBytes
+	m.mu.RUnlock()
+	// MaxRecordSize is a process configuration variable rather than Manager
+	// state. Production sets it before opening DBs; concurrent mutation is not
+	// supported by the record readers themselves.
+	profile.MaxRecordBytes = limits.MaxRecordSize
+	return profile
+}
+
 func NewManager(dir string) (*Manager, error) {
 	return NewManagerWithStableResourcePinRegistry(dir, nil)
 }
@@ -1999,6 +2037,33 @@ func (m *Manager) CurrentSetNoRefresh() *Set {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.currentSetLocked()
+}
+
+// RegisteredFileCountNoRefresh includes zombie entries because a later
+// CurrentSetNoRefresh still walks the complete registered-file table.
+func (m *Manager) RegisteredFileCountNoRefresh() int {
+	if m == nil {
+		return 0
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return len(m.files)
+}
+
+// CurrentSetNoRefreshWithMaxFiles has the same membership and pinning semantics
+// as CurrentSetNoRefresh, but rejects before allocating a snapshot when the
+// registered file table exceeds maxFiles. The count and snapshot are protected
+// by the same lock, including when registrations race with this call.
+func (m *Manager) CurrentSetNoRefreshWithMaxFiles(maxFiles int) (*Set, error) {
+	if maxFiles < 0 {
+		return nil, fmt.Errorf("value log snapshot: negative file limit %d", maxFiles)
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if len(m.files) > maxFiles {
+		return nil, fmt.Errorf("value log snapshot: %d registered files exceed limit %d", len(m.files), maxFiles)
+	}
+	return m.currentSetLocked(), nil
 }
 
 // CurrentSubsetNoRefresh pins only registered, non-zombie files named by ids.

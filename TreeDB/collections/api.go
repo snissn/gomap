@@ -11971,6 +11971,19 @@ func (c *Collection) insertBatchOnceWithLockState(
 		}, execOpts)
 		return nil, nil
 	}
+	if execOpts.prepared != nil && c.writeDomain != nil {
+		// A prepared request owns credit for its own ordered commit. Draining
+		// earlier buffered work here would allocate and publish before its
+		// pre-WAL admission callback, outside that credit.
+		domain := c.writeDomain
+		domain.mu.RLock()
+		pending := domain.count != 0 || hasBufferedNoIndexTableWritesLocked(domain) ||
+			hasBufferedIndexedPendingWrites(domain) || domain.indexedAsyncFlushRunning()
+		domain.mu.RUnlock()
+		if pending {
+			return nil, fmt.Errorf("%w: buffered collection writes must drain before prepared commit", ErrPreparedInsertResourceLimit)
+		}
+	}
 	skipInitialNoIndexFlush := false
 	commandWALActive := c.commandWALActive(commandWALIntent)
 	commandWALNoIndexBufferCandidate := c.canBufferCommandWALNoIndexInsertBatch(c.meta, c.meta.Options.DocumentFormat, commandWALIntent, len(documents))
@@ -12009,7 +12022,13 @@ func (c *Collection) insertBatchOnceWithLockState(
 			snap = nil
 		}
 	}
-	catalog, err := c.catalogForSnapshot(snap)
+	var catalog *collectionCatalog
+	var err error
+	if prepared := execOpts.prepared; prepared != nil {
+		catalog, err = c.catalogForPreparedInsertSnapshot(snap, prepared.meta)
+	} else {
+		catalog, err = c.catalogForSnapshot(snap)
+	}
 	if err != nil {
 		closePlanningSnapshot()
 		return nil, err
@@ -12075,6 +12094,10 @@ func (c *Collection) insertBatchOnceWithLockState(
 	indexedMemtablesEnabled := (!commandWALActive && c.shouldBufferIndexedInserts(meta)) || commandWALNoIndexBufferedMode || commandWALIndexedBufferEnabled
 	bufferIndexedInserts := (!commandWALActive && c.shouldBufferIndexedInsertBatch(meta, len(documents))) || commandWALBufferedMode
 	if indexedMemtablesEnabled && !bufferIndexedInserts {
+		if execOpts.prepared != nil {
+			closePlanningSnapshot()
+			return nil, fmt.Errorf("%w: indexed planning is outside prepared insert eligibility", ErrPreparedInsertResourceLimit)
+		}
 		closePlanningSnapshot()
 		if err := c.flushBufferedWritesWithVectorAdmissionLocked(); err != nil {
 			return nil, err
@@ -13265,7 +13288,13 @@ func (c *Collection) insertBatchNoIndex(
 		if current == nil {
 			return nil, backenddb.ErrClosed
 		}
-		currentCatalog, refreshErr := c.catalogForSnapshot(current)
+		var currentCatalog *collectionCatalog
+		var refreshErr error
+		if execOpts.prepared != nil {
+			currentCatalog, refreshErr = c.catalogForPreparedInsertSnapshot(current, execOpts.prepared.meta)
+		} else {
+			currentCatalog, refreshErr = c.catalogForSnapshot(current)
+		}
 		if refreshErr != nil {
 			_ = current.Close()
 			return nil, refreshErr

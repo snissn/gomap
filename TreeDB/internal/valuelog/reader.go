@@ -48,7 +48,18 @@ func getNoDictDecoder() (*zstd.Decoder, error) {
 			return dec, nil
 		}
 	}
-	return zstd.NewReader(nil)
+	// Callers size DecodeAll's destination to the record's checked raw length.
+	// Reject a larger frame declaration before the decoder can allocate it.
+	// A single block decoder bounds the workspace retained by this pooled
+	// decoder. The window ceiling matches the pinned fork's default. The
+	// decoded-memory ceiling is tighter than its 64 GiB default; the default
+	// value-log record-size limit is 64 MiB.
+	return zstd.NewReader(nil,
+		zstd.WithDecodeAllCapLimit(true),
+		zstd.WithDecoderConcurrency(1),
+		zstd.WithDecoderMaxWindow(512<<20),
+		zstd.WithDecoderMaxMemory(1<<30),
+	)
 }
 
 func putNoDictDecoder(dec *zstd.Decoder) {
@@ -754,9 +765,12 @@ func decodeFramePayloadTo(header FrameHeader, payload []byte, dictLookup DictLoo
 		} else if cap(dst) < int(rawLen) {
 			dst = make([]byte, 0, rawLen)
 		} else {
-			dst = dst[:0]
+			dst = dst[:0:rawLen]
 		}
 		return decodeBlockPayload(header.Reserved, payload, rawLen, dst)
+	}
+	if err := checkZstdFrameContentSize(payload, rawLen); err != nil {
+		return nil, err
 	}
 
 	var dec *zstd.Decoder
@@ -798,7 +812,7 @@ func decodeFramePayloadTo(header FrameHeader, payload []byte, dictLookup DictLoo
 		if cap(dst) < int(rawLen) {
 			dst = make([]byte, 0, rawLen)
 		} else {
-			dst = dst[:0]
+			dst = dst[:0:rawLen]
 		}
 	}
 	out, err := dec.DecodeAll(payload, dst)
@@ -809,6 +823,20 @@ func decodeFramePayloadTo(header FrameHeader, payload []byte, dictLookup DictLoo
 		return nil, ErrCorrupt
 	}
 	return out, nil
+}
+
+// checkZstdFrameContentSize rejects frames whose output cannot be bounded from
+// their header. DecodeAll may otherwise grow dst by one full block before its
+// configured output-size check observes an unknown-size streaming frame.
+func checkZstdFrameContentSize(payload []byte, rawLen uint32) error {
+	var header zstd.Header
+	if err := header.Decode(payload); err != nil {
+		return err
+	}
+	if header.Skippable || !header.HasFCS || header.FrameContentSize != uint64(rawLen) {
+		return zstd.ErrDecoderSizeExceeded
+	}
+	return nil
 }
 
 func ReadAt(f *os.File, ptr page.ValuePtr, verifyCRC bool) ([]byte, error) {

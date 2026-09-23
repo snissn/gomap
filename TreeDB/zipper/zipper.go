@@ -23,6 +23,41 @@ type PageAllocator interface {
 	Alloc(hint uint64) (uint64, error)
 }
 
+// ErrOutputPageLimit reports that a prepared apply reached its admitted
+// output-page ceiling before allocating or appending another page.
+var ErrOutputPageLimit = errors.New("zipper: output page limit exceeded")
+
+type outputPageLimiter struct {
+	mu   sync.Mutex
+	max  uint64
+	used uint64
+}
+
+func (l *outputPageLimiter) reserve(count uint64) error {
+	if l == nil || count == 0 {
+		return nil
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if count > l.max-l.used {
+		return ErrOutputPageLimit
+	}
+	l.used += count
+	return nil
+}
+
+type outputLimitedPageAllocator struct {
+	PageAllocator
+	limit *outputPageLimiter
+}
+
+func (a *outputLimitedPageAllocator) Alloc(hint uint64) (uint64, error) {
+	if err := a.limit.reserve(1); err != nil {
+		return 0, err
+	}
+	return a.PageAllocator.Alloc(hint)
+}
+
 type LeafPageLog interface {
 	AppendLeafPage(leafPage []byte) (page.LeafLogPtr, error)
 }
@@ -137,6 +172,10 @@ func putOuterLeafBuildPage(p *outerLeafBuildPage) {
 type Zipper struct {
 	pager     *pager.Pager
 	allocator PageAllocator
+	// outputPageLimit is shared with allocator. Pager-backed output is charged
+	// by the allocator wrapper; value-log-backed leaf output is charged at the
+	// append sites below.
+	outputPageLimit *outputPageLimiter
 
 	outerLeavesInValueLog bool
 	leafPageLog           LeafPageLog
@@ -1291,6 +1330,18 @@ func (z *Zipper) CloneWithPagerAllocator(p *pager.Pager, a PageAllocator) *Zippe
 	}
 }
 
+// SetOutputPageLimit installs a per-zipper allocation guard. The caller must
+// use a private zipper clone: this method also wraps its allocator so the
+// ceiling is checked before pager growth, rather than from metrics after Apply.
+func (z *Zipper) SetOutputPageLimit(max uint64) {
+	if z == nil || max == 0 {
+		return
+	}
+	limit := &outputPageLimiter{max: max}
+	z.allocator = &outputLimitedPageAllocator{PageAllocator: z.allocator, limit: limit}
+	z.outputPageLimit = limit
+}
+
 // SetFillTargets configures soft-full thresholds for newly written pages.
 // Targets are in parts-per-million where 1_000_000 means "allow full pages".
 func (z *Zipper) SetFillTargets(leafPPM, internalPPM uint32) {
@@ -1553,6 +1604,30 @@ func (z *Zipper) internalSoftFull(b *node.Builder, entrySize int) bool {
 		return false
 	}
 	return b.FreeSpace() < entrySize+node.DirectoryEntrySize+z.internalReserveBytes
+}
+
+// CanFitTwoPurePointInternalChildren reports whether every fresh internal page
+// can accept two child references whose keys are at most maxKeyBytes. A pure
+// point apply can use this to bound additional root-split levels geometrically.
+// The base-delta calculation includes both low and high fences, its footer,
+// and the worst total key bytes; a shared prefix reduces, rather than
+// increases, that total.
+func (z *Zipper) CanFitTwoPurePointInternalChildren(maxKeyBytes uint32) bool {
+	if z == nil || maxKeyBytes > uint32(page.PageSize) {
+		return false
+	}
+	keyBytes := int(maxKeyBytes)
+	entryFixed := 2 + 8 + node.DirectoryEntrySize
+	extra := 0
+	if z.indexInternalBaseDelta {
+		entryFixed = 2 + 4 + node.DirectoryEntrySize
+		// u16 fence lengths/prefix length and u64 base child ID.
+		extra = 14 + 2*keyBytes
+	} else if z.outerLeavesInValueLog {
+		entryFixed = 2 + page.LogRecordRefSize + node.DirectoryEntrySize
+	}
+	need := node.NodeHeaderSize + extra + 2*(entryFixed+keyBytes) + z.internalReserveBytes
+	return need <= page.PageSize
 }
 
 func (z *Zipper) shouldRunMaintenance(ops []batch.Entry) (maintenance bool, deleteCount int) {
@@ -2062,6 +2137,9 @@ func (z *Zipper) persistLeafPageDataToLogWithCacheOwnership(log LeafPageLog, lea
 	if log == nil {
 		return page.ChildRef{}, errors.New("zipper: missing leaf page log")
 	}
+	if err := z.outputPageLimit.reserve(1); err != nil {
+		return page.ChildRef{}, err
+	}
 	appendStart := time.Now()
 	ptr, err := log.AppendLeafPage(leafPage)
 	recordZipperLeafLogOutputAppend(metrics, time.Since(appendStart), 1, err == nil)
@@ -2086,6 +2164,9 @@ func (z *Zipper) persistPreparedLeafPageDataTo(leafPage []byte, preparedPayload 
 
 func (z *Zipper) persistPreparedLeafPageDataToLog(log LeafPageLog, leafPage []byte, preparedPayload []byte, metrics *adaptive.Metrics) (page.ChildRef, error) {
 	if prepared, ok := log.(LeafPagePreparedLog); ok {
+		if err := z.outputPageLimit.reserve(1); err != nil {
+			return page.ChildRef{}, err
+		}
 		appendStart := time.Now()
 		ptr, err := prepared.AppendPreparedLeafPage(leafPage, preparedPayload)
 		appendWait := time.Since(appendStart)
@@ -2124,6 +2205,9 @@ func (z *Zipper) persistPreparedLeafPageBatchDataToLog(log LeafPageLog, leafPage
 		return nil, fmt.Errorf("zipper: prepared leaf payload count %d for %d pages", len(preparedPayloads), len(leafPages))
 	}
 	if refBatcher, ok := log.(LeafPagePreparedChildRefBatchLog); ok {
+		if err := z.outputPageLimit.reserve(uint64(len(leafPages))); err != nil {
+			return nil, err
+		}
 		appendStart := time.Now()
 		out, err := refBatcher.AppendPreparedLeafPageChildRefs(leafPages, preparedPayloads, refs)
 		appendWait := time.Since(appendStart)
@@ -2150,6 +2234,9 @@ func (z *Zipper) persistPreparedLeafPageBatchDataToLog(log LeafPageLog, leafPage
 	preparedBatcher, ok := log.(LeafPagePreparedBatchLog)
 	if !ok {
 		return z.persistLeafPageBatchDataToLog(log, leafPages, refs, metrics)
+	}
+	if err := z.outputPageLimit.reserve(uint64(len(leafPages))); err != nil {
+		return nil, err
 	}
 	appendStart := time.Now()
 	ptrs, err := preparedBatcher.AppendPreparedLeafPages(leafPages, preparedPayloads)
@@ -2240,6 +2327,9 @@ func (z *Zipper) persistLeafPageBatchDataToLog(log LeafPageLog, leafPages [][]by
 			refs[i] = ref
 		}
 		return refs, nil
+	}
+	if err := z.outputPageLimit.reserve(uint64(len(leafPages))); err != nil {
+		return nil, err
 	}
 	appendStart := time.Now()
 	ptrs, err := batcher.AppendLeafPages(leafPages)

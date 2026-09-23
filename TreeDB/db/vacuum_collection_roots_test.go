@@ -21,6 +21,53 @@ const (
 	vacuumTestDocumentValue     = "document"
 )
 
+func TestVacuumCollectCollectionEntriesFromRootWithLimits(t *testing.T) {
+	d, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = d.Close() }()
+	_, _, err = d.PublishOrderedRootGroupWithSystemBuilder([]OrderedRootPublishInput{{
+		BaseRoot:      0,
+		Iter:          mustFrozenSystemMemtable(t, "doc/u1", "document").NewIterator(nil, nil),
+		StoragePolicy: OrderedRootStoragePagerLeaves,
+	}}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		return mustFrozenRawMemtable(t, vacuumTestCollectionRootKey, encodeCollectionRootDescriptorRootID(rootIDs[0])).NewIterator(nil, nil), nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("missing snapshot")
+	}
+	defer func() { _ = snap.Close() }()
+	root := snap.state.SystemRootPageID
+	collect := func(entries int, bytes int64, roots int) ([]collectionEntry, error) {
+		return vacuumCollectCollectionEntriesFromRootWithLimits(context.Background(), snap.idx.pager, &snap.reader, root, entries, bytes, roots)
+	}
+	exactBytes := int64(len(vacuumTestCollectionRootKey) + 8)
+	got, err := collect(1, exactBytes, 1)
+	if err != nil || len(got) != 1 || string(got[0].key) != vacuumTestCollectionRootKey || len(got[0].sourceRootIDs) != 1 {
+		t.Fatalf("exact descriptor budget: entries=%v err=%v", got, err)
+	}
+	for _, tc := range []struct {
+		name           string
+		entries, roots int
+		bytes          int64
+	}{
+		{name: "entry", entries: 0, bytes: exactBytes, roots: 1},
+		{name: "bytes", entries: 1, bytes: exactBytes - 1, roots: 1},
+		{name: "root IDs", entries: 1, bytes: exactBytes, roots: 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := collect(tc.entries, tc.bytes, tc.roots); !errors.Is(err, ErrCollectionRootDescriptorBudget) {
+				t.Fatalf("bounded descriptor scan error=%v, want budget rejection", err)
+			}
+		})
+	}
+}
+
 func TestPreparedCollectionRootDescriptorBudgetRejectsPointerBeforeDecode(t *testing.T) {
 	dir := t.TempDir()
 	d := openVacuumPointerDescriptorFixture(t, vacuumPointerDescriptorOptions(dir))

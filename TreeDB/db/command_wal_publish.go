@@ -39,6 +39,7 @@ func (mutation conditionalCommitMutation) record(db *DB, commitSeq uint64) {
 }
 
 type finalizeCommitOptions struct {
+	preparedLimits              *PreparedRootPublicationLimits
 	commandWALPublish           bool
 	appliedCommandLSN           uint64
 	appliedRanges               []CommandWALLSNRange

@@ -66,6 +66,20 @@ func TestRecoverableRootSetCloneStableResourceForExactRoot(t *testing.T) {
 	resources.Release()
 }
 
+func TestPreparedVisibleSelectorChecksCurrentSizeBeforeClone(t *testing.T) {
+	resources, selector := dbSelectorFixture(t)
+	defer resources.Release()
+	runtime := &rootPublicationRuntimeV1{visibleResources: resources}
+	if selected, err := runtime.cloneVisibleStableResourceWithMax(selector, 0); selected != nil || err == nil {
+		t.Fatalf("over-limit selector selected=%v err=%v", selected, err)
+	}
+	selected, err := runtime.cloneVisibleStableResourceWithMax(selector, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selected.Release()
+}
+
 func TestCommandWALPublishContextVisibleSelectorExpires(t *testing.T) {
 	if got, err := (CommandWALPublishContext{}).CloneVisibleStableResource(rootpublication.StableResourceSelector{}); got != nil || !errors.Is(err, rootpublication.ErrResourceOwnership) {
 		t.Fatalf("nil selected=%v err=%v", got, err)

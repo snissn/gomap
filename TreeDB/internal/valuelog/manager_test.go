@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/snissn/gomap/TreeDB/internal/limits"
 	"github.com/snissn/gomap/TreeDB/page"
 	templ "github.com/snissn/gomap/TreeDB/template"
 )
@@ -61,6 +62,35 @@ func TestManagerRemoveSegmentIfUnpinnedNil(t *testing.T) {
 	}
 }
 
+func TestManagerPreparedReadProfileReportsAdmissionInputs(t *testing.T) {
+	var nilManager *Manager
+	if got := nilManager.PreparedReadProfile(); got != (PreparedReadProfile{}) {
+		t.Fatalf("nil manager profile=%+v", got)
+	}
+	mgr := &Manager{
+		files:                     map[uint32]*File{1: {}, 2: {}},
+		groupedFrameCacheEntries:  2048,
+		groupedFrameCacheMaxRaw:   1 << 20,
+		groupedFrameCacheMaxBytes: 64 << 20,
+	}
+	check := func(wantDict, wantTemplate bool, wantBudget int64, wantTemplateDecoded, wantTemplateCache int) {
+		t.Helper()
+		got := mgr.PreparedReadProfile()
+		if got.RegisteredFiles != 2 || got.MaxRecordBytes != limits.MaxRecordSize ||
+			got.HasDictionaryLookup != wantDict || got.HasTemplateLookup != wantTemplate ||
+			got.TemplateMaxDecodedBytes != wantTemplateDecoded || got.TemplateDefinitionCacheSize != wantTemplateCache ||
+			got.GroupedFrameCacheEntries != 2048 || got.GroupedFrameCacheMaxRawBytes != 1<<20 ||
+			got.GroupedFrameCacheMaxBytes != wantBudget {
+			t.Fatalf("prepared read profile=%+v", got)
+		}
+	}
+	check(false, false, 64<<20, 0, 0)
+	mgr.SetDictLookup(func(uint64) ([]byte, error) { return nil, nil })
+	mgr.SetTemplateLookup(func(uint64) ([]byte, error) { return nil, nil }, templ.DecodeOptions{MaxDecodedBytes: 2 << 20, DefCacheSize: 17})
+	mgr.SetGroupedFrameCacheMaxBytes(0)
+	check(true, true, 0, 2<<20, 17)
+}
+
 func TestManagerCurrentSubsetNoRefreshPinsOnlyRequestedSegments(t *testing.T) {
 	manager := &Manager{files: map[uint32]*File{1: {}, 2: {}, 3: {}, 4: {}}}
 	manager.files[3].IsZombie.Store(true)
@@ -84,6 +114,32 @@ func TestManagerCurrentSubsetNoRefreshPinsOnlyRequestedSegments(t *testing.T) {
 		if got := manager.files[id].RefCount.Load(); got != 0 {
 			t.Fatalf("file %d pin count after release=%d", id, got)
 		}
+	}
+}
+
+func TestManagerCurrentSetNoRefreshWithMaxFilesRejectsBeforePin(t *testing.T) {
+	mgr := &Manager{files: map[uint32]*File{1: {}, 2: {}, 3: {}}}
+	mgr.files[3].IsZombie.Store(true)
+	if got := mgr.RegisteredFileCountNoRefresh(); got != 3 {
+		t.Fatalf("registered count=%d, want 3 including zombie", got)
+	}
+	if set, err := mgr.CurrentSetNoRefreshWithMaxFiles(2); err == nil || set != nil {
+		t.Fatalf("oversized snapshot: set=%v err=%v", set, err)
+	}
+	for id, file := range mgr.files {
+		if got := file.RefCount.Load(); got != 0 {
+			t.Fatalf("rejected snapshot pinned file %d: %d", id, got)
+		}
+	}
+	set, err := mgr.CurrentSetNoRefreshWithMaxFiles(3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(set.Files) != 2 || set.Files[1] == nil || set.Files[2] == nil || set.Files[3] != nil {
+		t.Fatalf("bounded snapshot changed membership: %v", set.Files)
+	}
+	if err := mgr.Release(set); err != nil {
+		t.Fatal(err)
 	}
 }
 

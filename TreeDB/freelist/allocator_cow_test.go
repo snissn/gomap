@@ -27,6 +27,108 @@ func materializeAllocatorCOWCandidateForTest(t *testing.T, p *pager.Pager, prepa
 	}
 }
 
+func TestAllocatorCOWPrepareProfileCountsLiveTransaction(t *testing.T) {
+	p, err := pager.Open(filepath.Join(t.TempDir(), "index.db"), 64*1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	if _, err := p.Alloc(4); err != nil {
+		t.Fatal(err)
+	}
+	allocator := New(p, 0)
+	if err := allocator.EnableCOWV1(MustNewFreelistGenerationV1(1, 4, nil, nil), NewReservationLedger()); err != nil {
+		t.Fatal(err)
+	}
+	if got := allocator.COWPrepareProfileV1(); !got.Valid || got.HighWater != 4 || got.AllocatedPages != 0 {
+		t.Fatalf("initial profile=%+v", got)
+	}
+	pageID, err := allocator.Alloc(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := allocator.RetireCOWV1([]uint64{pageID}, 1); err != nil {
+		t.Fatal(err)
+	}
+	profile := allocator.COWPrepareProfileV1()
+	if profile.HighWater != 5 || profile.RetiredPages != 1 || profile.AllocatedPages != 1 || profile.ChangedChunks != 1 {
+		t.Fatalf("live profile=%+v", profile)
+	}
+	ledger := allocator.cow.ledger
+	var candidate CandidateIDV1
+	candidate[0] = 1
+	ledger.mu.Lock()
+	ledger.owners[1<<39] = candidate
+	ledger.candidates[candidate] = &reservation{tailReserved: true, tailStart: 1 << 38, tailCount: 2}
+	ledger.burnedTails = append(ledger.burnedTails, reservationInterval{start: 1 << 40, count: 3})
+	ledger.mu.Unlock()
+	profile = allocator.COWPrepareProfileV1()
+	if profile.LedgerOwners != 1 || profile.LedgerCandidates != 1 || profile.LedgerBurnedTailRanges != 1 || profile.LedgerHighestReservedEnd != (1<<40)+3 {
+		t.Fatalf("ledger profile=%+v", profile)
+	}
+}
+
+func TestAllocatorCOWPrepareLimitsRejectBeforeClone(t *testing.T) {
+	p, err := pager.Open(filepath.Join(t.TempDir(), "index.db"), 64*1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	if _, err := p.Alloc(4); err != nil {
+		t.Fatal(err)
+	}
+	allocator := New(p, 0)
+	if err := allocator.EnableCOWV1(MustNewFreelistGenerationV1(1, 4, nil, nil), NewReservationLedger()); err != nil {
+		t.Fatal(err)
+	}
+	beforeTxn := allocator.cow.txn
+	var candidate CandidateIDV1
+	candidate[0] = 1
+	prepared, err := allocator.PrepareCOWCandidateRetiringWithLimitsV1(
+		2, 2, candidate, ReuseCapability{}, nil, 0, failingPageSinkV1{}, &COWPrepareLimitsV1{},
+	)
+	if prepared != nil || !errors.Is(err, ErrGenerationFormat) {
+		t.Fatalf("prepared=%v err=%v, want pre-clone limit rejection", prepared, err)
+	}
+	if allocator.cow.txn != beforeTxn || allocator.cow.prepared != nil {
+		t.Fatal("limit rejection changed the allocator transaction")
+	}
+}
+
+func TestCOWPrepareProfileLimitsCoverEveryCopiedCollection(t *testing.T) {
+	limits := COWPrepareLimitsV1{
+		MaxHighWater: 10, MaxRetiredPages: 10, MaxAllocatedPages: 10,
+		MaxAbandonedAppendExtents: 10, MaxChangedChunks: 10,
+		MaxReplacedMetadataPages: 10, MaxBaseReservationExtents: 10,
+		MaxBaseMetadataPages: 10, MaxLedgerOwners: 10,
+		MaxLedgerCandidates: 10, MaxLedgerBurnedTailRanges: 10,
+		MaxLedgerHighestReservedEnd: 10,
+	}
+	tests := map[string]func(*COWPrepareProfileV1){
+		"high water":                  func(p *COWPrepareProfileV1) { p.HighWater = 11 },
+		"retired pages":               func(p *COWPrepareProfileV1) { p.RetiredPages = 11 },
+		"allocated pages":             func(p *COWPrepareProfileV1) { p.AllocatedPages = 11 },
+		"abandoned append extents":    func(p *COWPrepareProfileV1) { p.AbandonedAppendExtents = 11 },
+		"changed chunks":              func(p *COWPrepareProfileV1) { p.ChangedChunks = 11 },
+		"replaced metadata pages":     func(p *COWPrepareProfileV1) { p.ReplacedMetadataPages = 11 },
+		"base reservation extents":    func(p *COWPrepareProfileV1) { p.BaseReservationExtents = 11 },
+		"base metadata pages":         func(p *COWPrepareProfileV1) { p.BaseMetadataPages = 11 },
+		"ledger owners":               func(p *COWPrepareProfileV1) { p.LedgerOwners = 11 },
+		"ledger candidates":           func(p *COWPrepareProfileV1) { p.LedgerCandidates = 11 },
+		"ledger burned tail ranges":   func(p *COWPrepareProfileV1) { p.LedgerBurnedTailRanges = 11 },
+		"ledger highest reserved end": func(p *COWPrepareProfileV1) { p.LedgerHighestReservedEnd = 11 },
+	}
+	for name, exceed := range tests {
+		t.Run(name, func(t *testing.T) {
+			profile := COWPrepareProfileV1{Valid: true}
+			exceed(&profile)
+			if err := CheckCOWPrepareProfileLimitsV1(profile, limits); !errors.Is(err, ErrGenerationFormat) {
+				t.Fatalf("profile=%+v error=%v, want limit rejection", profile, err)
+			}
+		})
+	}
+}
+
 func TestAllocatorFailedCOWCandidateWakesBlockedAllocation(t *testing.T) {
 	p, err := pager.Open(filepath.Join(t.TempDir(), "index.db"), 64*1024)
 	if err != nil {

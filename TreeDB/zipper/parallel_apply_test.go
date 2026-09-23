@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -137,6 +138,43 @@ func buildParallelApplyBatch(t *testing.T, count int, prefix string) *batch.Batc
 		}
 	}
 	return b
+}
+
+func TestApplyWithOptionsConcurrencyOneSuppressesAutomaticInternalParallelMerge(t *testing.T) {
+	prior := runtime.GOMAXPROCS(4)
+	defer runtime.GOMAXPROCS(prior)
+	_, z := newParallelApplyTestZipper(t)
+	seedRoot := newParallelApplyEmptyLeafRoot(t, z)
+	seed := buildParallelApplyBatch(t, 12000, "base")
+	rootID, _, _, err := z.Apply(seedRoot, seed)
+	_ = seed.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	update := batch.New(panicValueReader{}, page.DefaultInlineThreshold)
+	for i := 0; i < 4000; i++ {
+		for suffix := byte('a'); suffix <= 'b'; suffix++ {
+			key := []byte(fmt.Sprintf("key-%06d-%c", i, suffix))
+			if err := update.Set(key, []byte("upd")); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	defer func() { _ = update.Close() }()
+	_, _, ordinary, err := z.Apply(rootID, update)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ordinary.ZipperInternalParallelMerges == 0 {
+		t.Fatalf("control did not reach automatic internal parallel merge: %+v", ordinary)
+	}
+	serial, err := z.ApplyWithOptions(rootID, update, ApplyOptions{ParallelApplyConcurrency: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if serial.Metrics.ZipperInternalMerges == 0 || serial.Metrics.ZipperInternalParallelMerges != 0 {
+		t.Fatalf("serial apply internal merges=%d parallel=%d", serial.Metrics.ZipperInternalMerges, serial.Metrics.ZipperInternalParallelMerges)
+	}
 }
 
 func TestResolveParallelApplyWorkersBoundsAndThresholds(t *testing.T) {

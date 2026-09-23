@@ -127,9 +127,17 @@ Preparation enforces finite row, document, cursor, and schema limits before
 the ordered publisher assigns an LSN. A resource-limit error must not be
 retried through ordinary `InsertBatch` by a bounded caller; an unsupported
 configuration may use ordinary insertion. The memory credit applies to
-incremental pipeline-owned input, token, WAL input, typed, and sidecar buffers.
-Existing pager, zipper, and value-log Manager publication scratch remains part
-of the baseline ordered commit and is measured separately through process RSS.
+all request-owned source, prepared, WAL, typed, sidecar, pager, zipper,
+value-log Manager, visible-install, and sealed-root publication work. The
+prepared caller must retain that credit until `Commit` returns.
+
+`PreparedInsertBatch.Commit` therefore waits through sealed-root publication
+for its exact commit sequence, including in command-WAL profiles where an
+ordinary write may acknowledge after its command-frame boundary and before
+root sealing. This stronger prepared completion boundary keeps the fixed
+publisher credit live through resource and manifest cloning, seal COW
+preparation, and allocator-debt prefix construction. It does not change the
+ordinary acknowledgement column in the profile matrix below.
 
 These canonical profiles define the current public surface. `bench_unsafe` is
 explicitly outside the production guarantee.

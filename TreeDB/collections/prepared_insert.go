@@ -9,7 +9,6 @@ import (
 	"time"
 	"unsafe"
 
-	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 )
 
@@ -131,14 +130,14 @@ func preparedTypedScalarPrepareReserve(rows, columns int) int64 {
 // root materialization; typed part and compressed image; row asset; fused row
 // sidecars; and bounded catalog/manifest cloning. The prepared backing is
 // charged separately. N <= 16K, C <= 5, and the row/column image codecs are
-// restricted by preparation eligibility. Existing pager, zipper, and asset
-// manager publication scratch is baseline DB work, not pipeline-owned memory.
+// restricted by preparation eligibility. The caller adds the separate fixed
+// publisher allowance before it returns the prepared token.
 type preparedInsertCommitBudget struct {
 	materialization int64
 	total           int64
 }
 
-func preparedInsertCommitReserveBytes(publishedBytes, keyBytes, stringBytes, rowAssetStringBytes, aggregateGroupBytes int64, rows, columns, typedColumns, granules int) preparedInsertCommitBudget {
+func preparedInsertCommitReserveBytes(publishedBytes, keyBytes, typedDictionaryStringBytes, rowAssetStringBytes, aggregateGroupBytes int64, rows, columns, typedColumns, granules int) preparedInsertCommitBudget {
 	n := int64(rows)
 	c := int64(columns)
 	tc := int64(typedColumns)
@@ -160,7 +159,7 @@ func preparedInsertCommitReserveBytes(publishedBytes, keyBytes, stringBytes, row
 	// BuildColumnPartImage retains sections, a final image, and ZSTD workspace.
 	typed := int64(0)
 	if typedColumns > 0 {
-		typed = preparedInsertMul(12, stringBytes)
+		typed = preparedInsertMul(12, typedDictionaryStringBytes)
 		typed = saturatingAddNonNegativeInt64(typed, preparedInsertMul(1024, preparedInsertMul(n, tc)))
 		typed = saturatingAddNonNegativeInt64(typed, preparedInsertMul(4096, preparedInsertMul(g, tc+1)))
 		typed = saturatingAddNonNegativeInt64(typed, 64<<20)
@@ -176,9 +175,9 @@ func preparedInsertCommitReserveBytes(publishedBytes, keyBytes, stringBytes, row
 	// their encoded assets coexist with the row and typed outputs.
 	sidecars := preparedInsertMul(1024, preparedInsertMul(n, c+3))
 	// Aggregate entry sets can serialize a group again in each granule. Charge
-	// the per-row source lengths across all specs, as well as distinct strings
-	// copied into dictionary sidecars.
-	sidecars = saturatingAddNonNegativeInt64(sidecars, preparedInsertMul(6, saturatingAddNonNegativeInt64(stringBytes, aggregateGroupBytes)))
+	// the per-row source lengths across all specs and row-owned dictionaries.
+	sidecarStringBytes := saturatingAddNonNegativeInt64(rowAssetStringBytes, aggregateGroupBytes)
+	sidecars = saturatingAddNonNegativeInt64(sidecars, preparedInsertMul(6, sidecarStringBytes))
 	sidecars = saturatingAddNonNegativeInt64(sidecars, 16<<20)
 	// Pre-WAL gates cap the existing manifest and root-descriptor inputs at
 	// 4096 records and 1 MiB inline bytes each.
@@ -188,6 +187,23 @@ func preparedInsertCommitReserveBytes(publishedBytes, keyBytes, stringBytes, row
 		total = saturatingAddNonNegativeInt64(total, allowance)
 	}
 	return preparedInsertCommitBudget{materialization: materialization, total: total}
+}
+
+// A string interned once in declared rows can appear in several column
+// dictionaries. The image serializes each column dictionary independently, so
+// charge per-column dictionary keys before Commit rather than the unique
+// interned backing size.
+func preparedTypedDictionaryStringBytes(prepared *typedColumnAdapterPreparedBatch) int64 {
+	if prepared == nil {
+		return 0
+	}
+	var total int64
+	for _, column := range prepared.Columns {
+		for value := range column.Dictionary {
+			total = saturatingAddNonNegativeInt64(total, int64(len(value)))
+		}
+	}
+	return total
 }
 
 // These source totals are read from the prepared declared rows without cloning
@@ -336,11 +352,13 @@ func preparedTypedBatchBackingBytes(prepared *typedColumnAdapterPreparedBatch) i
 }
 
 // PrepareInsertBatchOwned prepares the no-index JSON semantic-stream path.
-// maxOwnedBytes limits the retained request and prepared payload. Estimated
-// headroom rejects large requests before encoding; a post-encode capacity check
-// can also reject a batch. These estimates are not a strict transient heap
-// bound. Callers may use ordinary InsertBatch only on configuration
-// ineligibility; resource-limit errors must fail closed in bounded callers.
+// maxOwnedBytes limits the retained request plus source-derived preparation,
+// commit, WAL, and ordered-publication credit. Fixed reserves reject large
+// requests before their covered allocations, and retained capacities are
+// checked after encoding. The result is an admission bound for request-owned
+// memory rather than heap or process-RSS telemetry. Callers may use ordinary
+// InsertBatch only on configuration ineligibility; resource-limit errors must
+// fail closed in bounded callers.
 func (c *Collection) PrepareInsertBatchOwned(ids, documents [][]byte, maxOwnedBytes int64) (*PreparedInsertBatch, error) {
 	if c == nil {
 		return nil, errCollectionNil
@@ -364,17 +382,15 @@ func (c *Collection) PrepareInsertBatchOwned(ids, documents [][]byte, maxOwnedBy
 	if err := c.ensureWriteDomainOpen(); err != nil {
 		return nil, err
 	}
-	snap := c.db.AcquireSnapshot()
-	if snap == nil {
-		return nil, backenddb.ErrClosed
-	}
-	defer func() { _ = snap.Close() }()
-	catalog, err := c.catalogForSnapshot(snap)
-	if err != nil {
-		return nil, err
-	}
+	// The catalog is immutable and its pointer is guarded by catalogMu.
+	// Preparation needs only schema; Commit binds it to the current root and
+	// checks conflicts before WAL. Avoid snapshot pins and catalog/root reads
+	// before the request's publication budget is admitted.
+	c.catalogMu.RLock()
+	catalog := c.catalog
+	c.catalogMu.RUnlock()
 	if catalog == nil {
-		return nil, errCollectionNotFound
+		return nil, fmt.Errorf("%w: collection catalog is not cached", ErrPreparedInsertResourceLimit)
 	}
 	meta := catalog.meta
 	cfg := meta.Options.ColumnStore
@@ -443,9 +459,6 @@ func (c *Collection) PrepareInsertBatchOwned(ids, documents [][]byte, maxOwnedBy
 		if bytes.Equal(entries[i-1].id, entries[i].id) {
 			return nil, ErrDuplicateDocumentID
 		}
-	}
-	if err := rejectNoIndexBatchDocumentConflicts(snap, catalog, collectionPrimaryRootName(meta.Name), entries); err != nil {
-		return nil, err
 	}
 	orderedIDs, orderedDocs := make([][]byte, len(entries)), make([][]byte, len(entries))
 	for i := range entries {
@@ -524,8 +537,9 @@ func (c *Collection) PrepareInsertBatchOwned(ids, documents [][]byte, maxOwnedBy
 	publishedBytes := saturatingAddNonNegativeInt64(inputBytes, retainedDocumentBytes)
 	publishedBytes = saturatingAddNonNegativeInt64(publishedBytes, semanticBytes)
 	rowAssetStringBytes, aggregateGroupBytes := preparedInsertRepeatedStringBytes(*cfg, retained.declaredRows)
-	commitBudget := preparedInsertCommitReserveBytes(publishedBytes, keyBytes, retained.declaredStringBackingBytes, rowAssetStringBytes, aggregateGroupBytes,
+	commitBudget := preparedInsertCommitReserveBytes(publishedBytes, keyBytes, preparedTypedDictionaryStringBytes(typedBatch), rowAssetStringBytes, aggregateGroupBytes,
 		len(ids), len(cfg.Columns), typedColumns, granules)
+	commitBudget.total = saturatingAddNonNegativeInt64(commitBudget.total, preparedInsertPublisherReserveBytes())
 	if ownedBytes > maxOwnedBytes || commitBudget.total > maxOwnedBytes-ownedBytes {
 		if retained.semanticStreamBlocks != nil {
 			resetCollectionRunTable(retained.semanticStreamBlocks)
@@ -544,9 +558,9 @@ func (p *PreparedInsertBatch) OwnedBytes() int64 {
 	return p.ownedBytes
 }
 
-// ReservedBytes includes the preparation's retained backing and estimated
-// commit headroom admitted against maxOwnedBytes. It is not heap telemetry or
-// a proven strict transient bound.
+// ReservedBytes includes retained preparation backing and conservative commit
+// and publication credit admitted against maxOwnedBytes. It is an admission
+// bound for request-owned memory, not measured heap or process RSS.
 func (p *PreparedInsertBatch) ReservedBytes() int64 {
 	if p == nil {
 		return 0

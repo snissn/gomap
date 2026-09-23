@@ -463,7 +463,7 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	// The plan-lease tests reuse compatibility configuration and fixture helpers
 	// while exercising publication ownership; they introduce no storage format.
 	{path: "TreeDB/collections/column_publish_plan_lease_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 15, occurrences: 15},
-	{path: "TreeDB/collections/column_publish_write.go", classification: typedStorageLegacyCompatibility, matchingLines: 63, occurrences: 69},
+	{path: "TreeDB/collections/column_publish_write.go", classification: typedStorageLegacyCompatibility, matchingLines: 66, occurrences: 75},
 	{path: "TreeDB/collections/column_publish_write_bench_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 36, occurrences: 38},
 	{path: "TreeDB/collections/column_publish_write_path_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 222, occurrences: 248},
 	{path: "TreeDB/collections/typed_source_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
@@ -482,7 +482,7 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	// Prepared inserts use the existing public schema configuration and
 	// compatibility error vocabulary; they introduce no new storage owner.
 	{path: "TreeDB/collections/prepared_insert.go", classification: typedStorageLegacyCompatibility, matchingLines: 12, occurrences: 13},
-	{path: "TreeDB/collections/prepared_insert_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 34, occurrences: 42},
+	{path: "TreeDB/collections/prepared_insert_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 37, occurrences: 47},
 	{path: "TreeDB/collections/column_retained_semantic_stream_raw_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 16, occurrences: 16},
 	{path: "TreeDB/collections/column_retained_vlog_placement_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 56, occurrences: 56},
 	{path: "TreeDB/collections/column_semantics.go", classification: typedStorageLegacyCompatibility, matchingLines: 34, occurrences: 34},

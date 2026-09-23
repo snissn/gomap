@@ -107,6 +107,10 @@ const (
 	leafColumnarEntriesPoolMaxCap  = 1024
 	internalBaseEntriesPoolInitCap = 256
 	internalBaseEntriesPoolMaxCap  = 1024
+	// A builder may grow an arena beyond the page size while copying full
+	// keys. Bound backing borrowed by the next builder, regardless of the
+	// size of a prior (possibly unrelated) write.
+	builderByteArenaPoolMaxCap = 64 << 10
 )
 
 var leafColumnarV2EntriesPool = sync.Pool{
@@ -1488,7 +1492,11 @@ func (b *Builder) releaseLeafColumnarV2Scratch() {
 	b.leafColumnarV2KeyBytes = 0
 	b.leafColumnarV2ValBytes = 0
 	if b.leafColumnarV2ArenaH != nil {
-		b.leafColumnarV2ArenaH.buf = b.leafColumnarV2Arena[:0]
+		if cap(b.leafColumnarV2Arena) <= builderByteArenaPoolMaxCap {
+			b.leafColumnarV2ArenaH.buf = b.leafColumnarV2Arena[:0]
+		} else {
+			b.leafColumnarV2ArenaH.buf = nil
+		}
 		leafColumnarV2ArenaPool.Put(b.leafColumnarV2ArenaH)
 		b.leafColumnarV2ArenaH = nil
 	}
@@ -1511,13 +1519,21 @@ func (b *Builder) releaseLeafColumnarPrefixV2Scratch() {
 	b.leafColumnarPrefixV2AllInline = false
 	b.leafColumnarPrefixV2AllPointer = false
 	if b.leafColumnarV2ArenaH != nil {
-		b.leafColumnarV2ArenaH.buf = b.leafColumnarV2Arena[:0]
+		if cap(b.leafColumnarV2Arena) <= builderByteArenaPoolMaxCap {
+			b.leafColumnarV2ArenaH.buf = b.leafColumnarV2Arena[:0]
+		} else {
+			b.leafColumnarV2ArenaH.buf = nil
+		}
 		leafColumnarV2ArenaPool.Put(b.leafColumnarV2ArenaH)
 		b.leafColumnarV2ArenaH = nil
 	}
 	b.leafColumnarV2Arena = nil
 	if b.leafColumnarPrefixV2ValueArenaH != nil {
-		b.leafColumnarPrefixV2ValueArenaH.buf = b.leafColumnarPrefixV2ValueArena[:0]
+		if cap(b.leafColumnarPrefixV2ValueArena) <= builderByteArenaPoolMaxCap {
+			b.leafColumnarPrefixV2ValueArenaH.buf = b.leafColumnarPrefixV2ValueArena[:0]
+		} else {
+			b.leafColumnarPrefixV2ValueArenaH.buf = nil
+		}
 		leafColumnarPrefixV2ValueArenaPool.Put(b.leafColumnarPrefixV2ValueArenaH)
 		b.leafColumnarPrefixV2ValueArenaH = nil
 	}
@@ -1539,7 +1555,11 @@ func (b *Builder) releaseInternalBaseDeltaScratch() {
 	b.internalBaseTotalKeyBytes = 0
 	b.internalBaseSharedPrefix = 0
 	if b.internalBaseArenaH != nil {
-		b.internalBaseArenaH.buf = b.internalBaseArena[:0]
+		if cap(b.internalBaseArena) <= builderByteArenaPoolMaxCap {
+			b.internalBaseArenaH.buf = b.internalBaseArena[:0]
+		} else {
+			b.internalBaseArenaH.buf = nil
+		}
 		internalBaseArenaPool.Put(b.internalBaseArenaH)
 		b.internalBaseArenaH = nil
 	}
