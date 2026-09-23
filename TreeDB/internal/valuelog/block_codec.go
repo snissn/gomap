@@ -144,6 +144,13 @@ func decodeBlockPayload(codecID uint8, payload []byte, rawLen uint32, dst []byte
 	switch BlockCodec(codecID) {
 	case BlockCodecSnappy:
 		need := int(rawLen)
+		decodedLen, err := snappy.DecodedLen(payload)
+		if err != nil {
+			return nil, err
+		}
+		if decodedLen != need {
+			return nil, ErrCorrupt
+		}
 		if cap(dst) < need {
 			dst = make([]byte, need)
 		} else {
@@ -172,12 +179,17 @@ func decodeBlockPayload(codecID uint8, payload []byte, rawLen uint32, dst []byte
 		}
 		return dst[:n], nil
 	case BlockCodecZSTD:
+		if cap(dst) < int(rawLen) {
+			dst = make([]byte, 0, int(rawLen))
+		} else {
+			dst = dst[:0:rawLen]
+		}
 		dec, err := getNoDictDecoder()
 		if err != nil {
 			return nil, err
 		}
 		defer putNoDictDecoder(dec)
-		out, err := dec.DecodeAll(payload, dst[:0])
+		out, err := dec.DecodeAll(payload, dst)
 		if err != nil {
 			return nil, err
 		}

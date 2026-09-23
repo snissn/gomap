@@ -11623,6 +11623,7 @@ type insertBatchExecutionOptions struct {
 	returnResultIDs          bool
 	insertStats              *CollectionInsertStats
 	trustedFloat32Projection *trustedFloat32Projection
+	prepared                 *PreparedInsertBatch
 }
 
 func (c *Collection) recordInsertBatchStats(stats CollectionInsertStats, execOpts insertBatchExecutionOptions) {
@@ -11970,6 +11971,19 @@ func (c *Collection) insertBatchOnceWithLockState(
 		}, execOpts)
 		return nil, nil
 	}
+	if execOpts.prepared != nil && c.writeDomain != nil {
+		// A prepared request owns credit for its own ordered commit. Draining
+		// earlier buffered work here would allocate and publish before its
+		// pre-WAL admission callback, outside that credit.
+		domain := c.writeDomain
+		domain.mu.RLock()
+		pending := domain.count != 0 || hasBufferedNoIndexTableWritesLocked(domain) ||
+			hasBufferedIndexedPendingWrites(domain) || domain.indexedAsyncFlushRunning()
+		domain.mu.RUnlock()
+		if pending {
+			return nil, fmt.Errorf("%w: buffered collection writes must drain before prepared commit", ErrPreparedInsertResourceLimit)
+		}
+	}
 	skipInitialNoIndexFlush := false
 	commandWALActive := c.commandWALActive(commandWALIntent)
 	commandWALNoIndexBufferCandidate := c.canBufferCommandWALNoIndexInsertBatch(c.meta, c.meta.Options.DocumentFormat, commandWALIntent, len(documents))
@@ -12008,7 +12022,13 @@ func (c *Collection) insertBatchOnceWithLockState(
 			snap = nil
 		}
 	}
-	catalog, err := c.catalogForSnapshot(snap)
+	var catalog *collectionCatalog
+	var err error
+	if prepared := execOpts.prepared; prepared != nil {
+		catalog, err = c.catalogForPreparedInsertSnapshot(snap, prepared.meta)
+	} else {
+		catalog, err = c.catalogForSnapshot(snap)
+	}
 	if err != nil {
 		closePlanningSnapshot()
 		return nil, err
@@ -12023,6 +12043,10 @@ func (c *Collection) insertBatchOnceWithLockState(
 	}
 	meta := catalog.meta
 	c.meta = meta
+	if prepared := execOpts.prepared; prepared != nil && !sameCollectionMeta(preparedInsertSchemaMeta(meta), prepared.meta) {
+		closePlanningSnapshot()
+		return nil, fmt.Errorf("collections: concurrent schema modification detected for %q", prepared.meta.Name)
+	}
 	if err := validateTrustedFloat32ProjectionMeta(meta, execOpts.trustedFloat32Projection); err != nil {
 		closePlanningSnapshot()
 		return nil, err
@@ -12070,6 +12094,10 @@ func (c *Collection) insertBatchOnceWithLockState(
 	indexedMemtablesEnabled := (!commandWALActive && c.shouldBufferIndexedInserts(meta)) || commandWALNoIndexBufferedMode || commandWALIndexedBufferEnabled
 	bufferIndexedInserts := (!commandWALActive && c.shouldBufferIndexedInsertBatch(meta, len(documents))) || commandWALBufferedMode
 	if indexedMemtablesEnabled && !bufferIndexedInserts {
+		if execOpts.prepared != nil {
+			closePlanningSnapshot()
+			return nil, fmt.Errorf("%w: indexed planning is outside prepared insert eligibility", ErrPreparedInsertResourceLimit)
+		}
 		closePlanningSnapshot()
 		if err := c.flushBufferedWritesWithVectorAdmissionLocked(); err != nil {
 			return nil, err
@@ -12352,6 +12380,11 @@ func (c *Collection) insertBatchOnceWithLockState(
 		}
 		defer releaseCommandWALRawStage()
 		if bufferedCommandWALIntent != nil && c.db != nil {
+			// Checkpoint teardown drains collection write domains while holding
+			// the raw publish barrier. Do not wait for that barrier while still
+			// holding this domain's mutation lock. The validator below reacquires
+			// mutation and rechecks schema, roots, and persisted conflicts.
+			unlockIfLocked()
 			unlockCommandWALRawStage = c.db.LockCommandWALStaging()
 			if err := c.drainCommandWALStageCoordinatorBeforeMutationWithHeldRawPublishLock(); err != nil {
 				closePlanningSnapshot()
@@ -12976,22 +13009,26 @@ func (c *Collection) insertBatchNoIndex(
 		Documents: len(documents),
 		Indexes:   len(c.meta.Indexes),
 	}
+	if prepared := execOpts.prepared; prepared != nil && !sameCollectionMeta(preparedInsertSchemaMeta(c.meta), prepared.meta) {
+		_ = snap.Close()
+		return nil, fmt.Errorf("collections: concurrent schema modification detected for %q", prepared.meta.Name)
+	}
 	resultIDs, err := cloneBatchDocumentIDs(ids)
 	if err != nil {
 		_ = snap.Close()
 		return nil, err
 	}
-	entries := make([]noIndexBatchEntry, len(documents))
-	for i := range documents {
-		id := resultIDs[i]
-		entries[i] = noIndexBatchEntry{
-			id:       id,
-			document: documents[i],
+	var entries []noIndexBatchEntry
+	if prepared := execOpts.prepared; prepared != nil {
+		entries = prepared.entries
+	} else {
+		entries = make([]noIndexBatchEntry, len(documents))
+		for i := range documents {
+			id := resultIDs[i]
+			entries[i] = noIndexBatchEntry{id: id, document: documents[i]}
 		}
+		sort.Slice(entries, func(i, j int) bool { return bytes.Compare(entries[i].id, entries[j].id) < 0 })
 	}
-	sort.Slice(entries, func(i, j int) bool {
-		return bytes.Compare(entries[i].id, entries[j].id) < 0
-	})
 	phaseStart := time.Now()
 	for i := 1; i < len(entries); i++ {
 		if bytes.Equal(entries[i-1].id, entries[i].id) {
@@ -13028,7 +13065,14 @@ func (c *Collection) insertBatchNoIndex(
 	if columnStoreNeedsRetainedPayloadTransform(c.meta) {
 		phaseStart = time.Now()
 		var prepared columnRetainedPayloadStorageDocuments
-		if projection := execOpts.trustedFloat32Projection; projection != nil && projection.retainedJSON != nil {
+		if execOpts.prepared != nil {
+			prepared = execOpts.prepared.retained
+			retainedDocuments = prepared.documents
+			retainedTemplateRecords = prepared.templateRecords
+			retainedSemanticStreamBlocks = prepared.semanticStreamBlocks
+			retainedDeclaredRows = prepared.declaredRows
+			retainedDeclaredRowsReady = prepared.declaredRowsReady
+		} else if projection := execOpts.trustedFloat32Projection; projection != nil && projection.retainedJSON != nil {
 			retainedByID, err := validateTrustedFloat32ProjectionRetainedJSON(ids, projection)
 			if err != nil {
 				return nil, err
@@ -13059,6 +13103,9 @@ func (c *Collection) insertBatchNoIndex(
 			retainedDeclaredRowsReady = prepared.declaredRowsReady
 		}
 		stats.RetainedPayloadPrepare = time.Since(phaseStart)
+		if execOpts.prepared != nil {
+			stats.RetainedPayloadPrepare = execOpts.prepared.prepareElapsed
+		}
 		stats.RetainedPayloadRows = len(entries)
 		if retainedDeclaredRowsReady {
 			stats.RetainedPayloadDeclaredRows = len(retainedDeclaredRows)
@@ -13128,6 +13175,12 @@ func (c *Collection) insertBatchNoIndex(
 		Iter:          iter,
 		StoragePolicy: plannerOptions.dataStoragePolicy,
 	}}
+	var materializeBudget *backenddb.OrderedRootDeltaMaterializationBudget
+	if execOpts.prepared != nil {
+		materializeBudget = &backenddb.OrderedRootDeltaMaterializationBudget{RemainingBytes: execOpts.prepared.materializeReserve}
+		ordered[0].MaterializeMaxEntries = len(entries)
+		ordered[0].MaterializeBudget = materializeBudget
+	}
 	var templateTables []memtable.Table
 	var templateIters []iterator.UnsafeIterator
 	defer func() {
@@ -13174,7 +13227,9 @@ func (c *Collection) insertBatchNoIndex(
 			return nil, err
 		}
 		streamPublishTable := retainedSemanticStreamBlocks
-		retainedSemanticStreamTables = append(retainedSemanticStreamTables, retainedSemanticStreamBlocks)
+		if execOpts.prepared == nil {
+			retainedSemanticStreamTables = append(retainedSemanticStreamTables, retainedSemanticStreamBlocks)
+		}
 		phaseStart := time.Now()
 		if pointerizedStreamTable, pointerized, pointerizeStats, err := pointerizeCollectionRunTableValuesForRootWithStats(c.db, c.meta, streamRootName, retainedSemanticStreamBlocks); err != nil {
 			return nil, err
@@ -13194,6 +13249,10 @@ func (c *Collection) insertBatchNoIndex(
 			Iter:          streamIter,
 			StoragePolicy: streamPolicy,
 		})
+		if execOpts.prepared != nil {
+			ordered[len(ordered)-1].MaterializeMaxEntries = retainedSemanticStreamBlocks.Len()
+			ordered[len(ordered)-1].MaterializeBudget = materializeBudget
+		}
 	}
 	var textTables []memtable.Table
 	var textIters []iterator.UnsafeIterator
@@ -13229,7 +13288,13 @@ func (c *Collection) insertBatchNoIndex(
 		if current == nil {
 			return nil, backenddb.ErrClosed
 		}
-		currentCatalog, refreshErr := c.catalogForSnapshot(current)
+		var currentCatalog *collectionCatalog
+		var refreshErr error
+		if execOpts.prepared != nil {
+			currentCatalog, refreshErr = c.catalogForPreparedInsertSnapshot(current, execOpts.prepared.meta)
+		} else {
+			currentCatalog, refreshErr = c.catalogForSnapshot(current)
+		}
 		if refreshErr != nil {
 			_ = current.Close()
 			return nil, refreshErr
@@ -13277,6 +13342,13 @@ func (c *Collection) insertBatchNoIndex(
 				defer func() { _ = current.Close() }()
 			}
 			newSystemRoot, rootIDs, publishMeta, publishRootNames, err = c.publishRootDeltaGroupMaybeColumn(ordered, columnWritePublishInput{
+				preparedInsert: execOpts.prepared != nil,
+				preparedTypedBatch: func() *typedColumnAdapterPreparedBatch {
+					if execOpts.prepared != nil {
+						return execOpts.prepared.typedBatch
+					}
+					return nil
+				}(),
 				meta:              c.meta,
 				catalog:           catalog,
 				baseCommitSeq:     baseCommitSeq,
@@ -13297,6 +13369,9 @@ func (c *Collection) insertBatchNoIndex(
 		})
 		stats.Publish = time.Since(publishStart)
 		if err != nil {
+			if execOpts.prepared != nil && errors.Is(err, backenddb.ErrOrderedRootDeltaMaterializationLimit) {
+				return nil, fmt.Errorf("%w: ordered root delta: %v", ErrPreparedInsertResourceLimit, err)
+			}
 			return nil, err
 		}
 		if len(rootIDs) != len(publishRootNames) {

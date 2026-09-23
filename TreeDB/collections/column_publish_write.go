@@ -2,6 +2,7 @@ package collections
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"sort"
@@ -36,6 +37,8 @@ func setColumnPhysicalAssetPreparationAfterPrepareTestHook(hook func(ColumnPubli
 }
 
 type columnWritePublishInput struct {
+	preparedInsert       bool
+	preparedTypedBatch   *typedColumnAdapterPreparedBatch
 	metadataOnly         bool
 	candidateAdmission   *typedGraphFoldAssetAdmission
 	selectStableResource func(rootpublication.StableResourceSelector) (*rootpublication.StableResourceSet, error)
@@ -226,6 +229,37 @@ func (c *Collection) publishRootDeltaGroupMaybeColumn(ordered []backenddb.Ordere
 		}
 	}
 	preflight := c.columnPublishRootDescriptorPreflight(input, rootNames, baseRootIDs)
+	var preparedLimits *backenddb.PreparedRootPublicationLimits
+	if input.preparedInsert {
+		preparedLimits = preparedInsertPublicationLimits()
+		preparedPreflight := func() error {
+			if err := checkPreparedInsertPublicationBase(c.db.PreparedRootPublicationBaseProfile()); err != nil {
+				return err
+			}
+			contextProfiles, systemProfile, err := c.profilePreparedColumnLateRoots(input, rootNames, baseRootIDs)
+			if err != nil {
+				return err
+			}
+			maxEntries, maxBytes, err := preparedInsertSystemDeltaSourceLimit(input.meta.Name, rootNames)
+			if err != nil {
+				return err
+			}
+			preparedLimits.ContextPointProfiles = contextProfiles
+			preparedLimits.SystemPointProfile = systemProfile
+			preparedLimits.MaxSystemDeltaEntries = maxEntries
+			preparedLimits.MaxSystemDeltaBytes = maxBytes
+			return nil
+		}
+		preflight = combineOrderedRootGroupPreflight(preparedPreflight, preflight)
+	}
+	var preparedSystemMetaRaw []byte
+	if input.preparedInsert {
+		preflight = combineOrderedRootGroupPreflight(preflight, func() error {
+			var err error
+			preparedSystemMetaRaw, err = c.capturePreparedColumnSystemMeta(input, rootNames)
+			return err
+		})
+	}
 	preflight = combineOrderedRootGroupPreflight(preflight, c.vectorPartitionLiveReplayPreflightV1(replaySpecs))
 	if derived != nil {
 		preflight = combineOrderedRootGroupPreflight(preflight, derived.preflight)
@@ -259,6 +293,16 @@ func (c *Collection) publishRootDeltaGroupMaybeColumn(ordered []backenddb.Ordere
 		recordColumnPublishPlanStats(input.insertStats, plan)
 		if err := derived.prepareServingPlan(plan); err != nil {
 			return nil, err
+		}
+		if input.preparedInsert {
+			if !plan.RootDelta.MutationDelta {
+				return nil, errors.New("collections: prepared manifest lost its mutation delta after command WAL append")
+			}
+			for _, mutation := range plan.RootDelta.Mutations {
+				if mutation.deleted {
+					return nil, errors.New("collections: prepared manifest closure changed after command WAL append")
+				}
+			}
 		}
 		materializeStart := time.Now()
 		columnDelta, err := plan.RootDelta.OrderedRootDeltaPublishInput()
@@ -323,7 +367,10 @@ func (c *Collection) publishRootDeltaGroupMaybeColumn(ordered []backenddb.Ordere
 		if plan.AppliedCommandLSN != ctx.AppliedCommandLSN {
 			return nil, columnPublishPlanLSNMismatchError(input.meta, ctx.AppliedCommandLSN, plan.AppliedCommandLSN)
 		}
-		iter, nextMeta, err := c.buildRootDescriptorAndColumnManifestSystemDeltaIteratorAndMetaForMeta(input.meta, input.baseCommitSeq, input.baseSystemRoot, rootNames, baseRootIDs, rootIDs, plan)
+		if input.preparedInsert && preparedSystemMetaRaw == nil {
+			return nil, errors.New("collections: prepared system metadata was not captured before command WAL")
+		}
+		iter, nextMeta, err := c.buildRootDescriptorAndColumnManifestSystemDeltaIteratorAndMetaForMetaWithPreparedRaw(input.meta, input.baseCommitSeq, input.baseSystemRoot, rootNames, baseRootIDs, rootIDs, plan, preparedSystemMetaRaw)
 		if err == nil {
 			updatedMeta = nextMeta
 		}
@@ -337,13 +384,15 @@ func (c *Collection) publishRootDeltaGroupMaybeColumn(ordered []backenddb.Ordere
 	}()
 	commitStart := time.Now()
 	if input.rawPublishLocked {
-		newSystemRoot, rootIDs, err = c.db.PublishStagedOrderedRootDeltaGroupWithPreflightCommandWALContextRootBuilderAndSystemDeltaBuilder(
-			ordered,
-			preflight,
-			input.commandWALIntent,
-			buildColumnDelta,
-			buildSystemDelta,
-		)
+		if preparedLimits != nil {
+			newSystemRoot, rootIDs, err = c.db.PublishStagedOrderedRootDeltaGroupWithPreflightCommandWALContextRootBuilderAndSystemDeltaBuilderWithPreparedLimits(
+				ordered, preflight, input.commandWALIntent, buildColumnDelta, buildSystemDelta, preparedLimits,
+			)
+		} else {
+			newSystemRoot, rootIDs, err = c.db.PublishStagedOrderedRootDeltaGroupWithPreflightCommandWALContextRootBuilderAndSystemDeltaBuilder(
+				ordered, preflight, input.commandWALIntent, buildColumnDelta, buildSystemDelta,
+			)
+		}
 	} else {
 		newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaGroupWithPreflightCommandWALContextRootBuilderAndSystemDeltaBuilder(
 			ordered,
@@ -465,6 +514,14 @@ func (c *Collection) publishRootDeltaBatchGroupMaybeColumn(ordered []backenddb.O
 		}
 	}
 	preflight = combineOrderedRootGroupPreflight(preflight, c.columnPublishRootDescriptorPreflight(input, rootNames, baseRootIDs))
+	var preparedSystemMetaRaw []byte
+	if input.preparedInsert {
+		preflight = combineOrderedRootGroupPreflight(preflight, func() error {
+			var err error
+			preparedSystemMetaRaw, err = c.capturePreparedColumnSystemMeta(input, rootNames)
+			return err
+		})
+	}
 	preflight = combineOrderedRootGroupPreflight(preflight, c.vectorPartitionLiveReplayPreflightV1(replaySpecs))
 	if derived != nil {
 		preflight = combineOrderedRootGroupPreflight(preflight, derived.preflight)
@@ -590,7 +647,10 @@ func (c *Collection) publishRootDeltaBatchGroupMaybeColumn(ordered []backenddb.O
 		if plan.AppliedCommandLSN != ctx.AppliedCommandLSN {
 			return nil, columnPublishPlanLSNMismatchError(input.meta, ctx.AppliedCommandLSN, plan.AppliedCommandLSN)
 		}
-		iter, nextMeta, err := c.buildRootDescriptorAndColumnManifestSystemDeltaIteratorAndMetaForMeta(input.meta, input.baseCommitSeq, input.baseSystemRoot, rootNames, baseRootIDs, rootIDs, plan)
+		if input.preparedInsert && preparedSystemMetaRaw == nil {
+			return nil, errors.New("collections: prepared system metadata was not captured before command WAL")
+		}
+		iter, nextMeta, err := c.buildRootDescriptorAndColumnManifestSystemDeltaIteratorAndMetaForMetaWithPreparedRaw(input.meta, input.baseCommitSeq, input.baseSystemRoot, rootNames, baseRootIDs, rootIDs, plan, preparedSystemMetaRaw)
 		if err == nil {
 			updatedMeta = nextMeta
 		}
@@ -663,6 +723,32 @@ func (c *Collection) publishRootDeltaBatchGroupMaybeColumn(ordered []backenddb.O
 	return newSystemRoot, rootIDs, updatedMeta, rootNames, nil
 }
 
+// capturePreparedColumnSystemMeta runs under the ordered publication preflight.
+// The captured value is the bounded source for the late system update, so the
+// iterator and batch publishers use the same pre-WAL admission check.
+func (c *Collection) capturePreparedColumnSystemMeta(input columnWritePublishInput, rootNames []string) ([]byte, error) {
+	if _, _, err := preparedInsertSystemDeltaSourceLimit(input.meta.Name, rootNames); err != nil {
+		return nil, err
+	}
+	snap := c.db.AcquireSnapshot()
+	if snap == nil {
+		return nil, backenddb.ErrClosed
+	}
+	defer func() { _ = snap.Close() }()
+	raw, ok, err := getPreparedSystemValue(snap, systemCollectionMetaKey(input.meta.Name), preparedInsertMaxSystemMetaJSONBytes)
+	if err != nil {
+		return nil, err
+	}
+	if !ok || len(raw) > preparedInsertMaxSystemMetaJSONBytes {
+		return nil, fmt.Errorf("%w: prepared system metadata is absent or oversized", ErrPreparedInsertResourceLimit)
+	}
+	decoded, err := decodeCollectionMeta(raw)
+	if err != nil || !sameCollectionMeta(decoded, input.meta) {
+		return nil, fmt.Errorf("%w: prepared system metadata differs from captured collection: %v", ErrPreparedInsertResourceLimit, err)
+	}
+	return raw, nil
+}
+
 func (c *Collection) columnPublishRootDescriptorPreflight(input columnWritePublishInput, rootNames []string, baseRootIDs map[string]uint64) backenddb.OrderedRootGroupPreflight {
 	return func() error {
 		if c == nil || c.db == nil {
@@ -671,11 +757,101 @@ func (c *Collection) columnPublishRootDescriptorPreflight(input columnWritePubli
 		if input.catalog == nil || input.catalog.pager != c.db.Pager() {
 			return fmt.Errorf("%w: concurrent index generation replacement detected", ErrConcurrentMutation)
 		}
-		return c.validateColumnPublishRootDescriptorPreflight(input.meta, input.baseCommitSeq, input.baseSystemRoot, rootNames, baseRootIDs)
+		if err := c.validateColumnPublishRootDescriptorPreflight(input.meta, input.baseCommitSeq, input.baseSystemRoot, rootNames, baseRootIDs, input.preparedInsert); err != nil {
+			return err
+		}
+		if input.preparedInsert {
+			if err := c.db.CheckPreparedCollectionRootDescriptorBudget(preparedInsertMaxRootDescriptors, preparedInsertMaxRootDescriptorBytes, preparedInsertMaxDescriptorRootIDs); err != nil {
+				if errors.Is(err, backenddb.ErrCollectionRootDescriptorBudget) {
+					return fmt.Errorf("%w: collection root descriptors exceed the prepared budget or have an unsupported alias topology: %v", ErrPreparedInsertResourceLimit, err)
+				}
+				return err
+			}
+			manifestRoot := baseRootIDs[collectionColumnManifestRootName(input.meta.Name)]
+			if err := c.checkPreparedInsertManifestBudget(manifestRoot, preparedInsertMaxManifestRecords, preparedInsertMaxManifestBytes); err != nil {
+				return err
+			}
+			if err := c.checkPreparedInsertManifestPurePointClosure(manifestRoot, input.meta); err != nil {
+				return err
+			}
+		}
+		return nil
 	}
 }
 
-func (c *Collection) validateColumnPublishRootDescriptorPreflight(meta CollectionMeta, expectedCommitSeq, expectedSystemRoot uint64, rootNames []string, baseRootIDs map[string]uint64) error {
+// checkPreparedInsertManifestBudget runs under the serialized publication
+// preflight, before the command WAL append. The manifest loader later clones
+// all of its inline records, so a prepared commit must reject a large existing
+// manifest before entering that allocation path. A zero root is the first
+// publication and has no existing records to inspect.
+func (c *Collection) checkPreparedInsertManifestBudget(rootID uint64, maxRecords int, maxBytes int64) error {
+	if rootID == 0 {
+		return nil
+	}
+	snap := c.db.AcquireSnapshot()
+	if snap == nil {
+		return backenddb.ErrClosed
+	}
+	defer func() { _ = snap.Close() }()
+	err := validateColumnManifestScanBudget(context.Background(), snap, rootID, maxRecords, maxBytes)
+	if errors.Is(err, ErrColumnAssetReachabilityManifestLimit) {
+		return fmt.Errorf("%w: existing column manifest exceeds %d records or %d inline key/value bytes", ErrPreparedInsertResourceLimit, maxRecords, maxBytes)
+	}
+	if errors.Is(err, ErrVectorIndexSnapshotMismatch) {
+		return fmt.Errorf("%w: existing column manifest has pointer-backed or unsupported records: %v", ErrPreparedInsertResourceLimit, err)
+	}
+	return err
+}
+
+// The captured manifest root is stable under the ordered publication lock.
+// Check the same retention and ownership normalization used after the command
+// WAL append, without constructing any new assets. Adding assets can extend
+// the set of physical references, but cannot remove a key that survives this
+// empty-assets candidate. This allows a pure-point page-output bound for the
+// prepared manifest root; unsupported historical cleanup stays on InsertBatch.
+func (c *Collection) checkPreparedInsertManifestPurePointClosure(rootID uint64, meta CollectionMeta) error {
+	if rootID == 0 {
+		return nil
+	}
+	if meta.Options.ColumnStore == nil || meta.Options.ColumnStore.ActiveManifest == nil || meta.Options.ColumnStore.AssetManager == nil ||
+		meta.Options.ColumnStore.ActiveManifest.Generation == ^uint64(0) {
+		return fmt.Errorf("%w: prepared manifest requires a current generation and asset namespace", ErrPreparedInsertResourceLimit)
+	}
+	snap := c.db.AcquireSnapshot()
+	if snap == nil {
+		return backenddb.ErrClosed
+	}
+	defer func() { _ = snap.Close() }()
+	records, err := loadColumnManifestRecordsFromRoot(snap, rootID)
+	if err != nil {
+		return err
+	}
+	return preparedInsertManifestPurePointClosure(records, meta.Options.ColumnStore.ActiveManifest.Generation+1, meta.Options.ColumnStore.AssetManager.Namespace)
+}
+
+func preparedInsertManifestPurePointClosure(records []columnManifestRecord, nextGeneration uint64, namespace string) error {
+	retained, err := retainedColumnManifestRecordsForWrite(records, nextGeneration, true, nil)
+	if err != nil {
+		return err
+	}
+	retained, err = normalizeColumnManifestSegmentOwnership(retained, nil, nextGeneration, namespace)
+	if err != nil {
+		return err
+	}
+	sortColumnManifestRecords(retained)
+	for _, old := range records {
+		if bytes.Equal(old.key, columnManifestHeaderRecordKeyBytes) {
+			continue // The header is always replaced by a PUT.
+		}
+		i := sort.Search(len(retained), func(i int) bool { return bytes.Compare(retained[i].key, old.key) >= 0 })
+		if i == len(retained) || !bytes.Equal(retained[i].key, old.key) {
+			return fmt.Errorf("%w: prepared manifest would delete key %q", ErrPreparedInsertResourceLimit, old.key)
+		}
+	}
+	return nil
+}
+
+func (c *Collection) validateColumnPublishRootDescriptorPreflight(meta CollectionMeta, expectedCommitSeq, expectedSystemRoot uint64, rootNames []string, baseRootIDs map[string]uint64, prepared bool) error {
 	if c == nil || c.db == nil {
 		return backenddb.ErrClosed
 	}
@@ -693,7 +869,13 @@ func (c *Collection) validateColumnPublishRootDescriptorPreflight(meta Collectio
 		return backenddb.ErrClosed
 	}
 	defer func() { _ = current.Close() }()
-	catalog, err := loadCollectionCatalog(current, meta.Name)
+	var catalog *collectionCatalog
+	var err error
+	if prepared {
+		catalog, err = loadPreparedInsertCatalog(current, preparedInsertSchemaMeta(meta))
+	} else {
+		catalog, err = loadCollectionCatalog(current, meta.Name)
+	}
 	if err != nil {
 		return err
 	}
@@ -1345,6 +1527,13 @@ func (c *Collection) prepareColumnPhysicalAssetRowsAtIdentityFromSources(prepare
 		if len(pendingAssets) == 0 {
 			return nil
 		}
+		// The prepared insert admits at most five scalar columns and three
+		// row-sidecar aggregate specs. Its streamed path may produce one row
+		// image, one typed image, one scalar sidecar per column, and one asset
+		// per aggregate spec. A larger result violates pre-WAL admission.
+		if input.preparedInsert && len(pendingAssets) > 10 {
+			return errors.New("collections: prepared asset count exceeded its pre-WAL source bound")
+		}
 		needsAppender := false
 		for _, asset := range pendingAssets {
 			if !asset.hasRef {
@@ -1667,7 +1856,9 @@ func (c *Collection) prepareColumnPhysicalAssetRowsAtIdentityFromSources(prepare
 			start := time.Now()
 			var build typedColumnPartImageBuildResult
 			var err error
-			if typedSource == nil {
+			if input.preparedTypedBatch != nil {
+				build, err = buildTypedColumnPartImageFromPreparedBatchWithResult(input.preparedTypedBatch, typedPartID)
+			} else if typedSource == nil {
 				build, err = buildTypedColumnPartImageForDeclaredRowsWithResult(hookInput.ColumnStore, generation, typedPartID, rows)
 			} else {
 				build, err = buildTypedColumnPartImageFromSourceWithResult(hookInput.ColumnStore, generation, typedPartID, typedSource)
@@ -2088,6 +2279,22 @@ func (c *Collection) buildRootDescriptorAndColumnManifestSystemDeltaIteratorForM
 }
 
 func (c *Collection) buildRootDescriptorAndColumnManifestSystemDeltaIteratorAndMetaForMeta(meta CollectionMeta, expectedCommitSeq, expectedSystemRoot uint64, rootNames []string, baseRootIDs map[string]uint64, rootIDs []uint64, plan ColumnPublishPlan) (iterator.UnsafeIterator, CollectionMeta, error) {
+	return c.buildRootDescriptorAndColumnManifestSystemDeltaIteratorAndMetaForMetaWithPreparedRaw(meta, expectedCommitSeq, expectedSystemRoot, rootNames, baseRootIDs, rootIDs, plan, nil)
+}
+
+func (c *Collection) buildRootDescriptorAndColumnManifestSystemDeltaIteratorAndMetaForMetaWithPreparedRaw(meta CollectionMeta, expectedCommitSeq, expectedSystemRoot uint64, rootNames []string, baseRootIDs map[string]uint64, rootIDs []uint64, plan ColumnPublishPlan, preparedSystemMetaRaw []byte) (iterator.UnsafeIterator, CollectionMeta, error) {
+	var preparedMaxEntries int
+	var preparedMaxBytes int64
+	if preparedSystemMetaRaw != nil {
+		// The identical source-shape check ran under the ordered publication
+		// lock before WAL. Check again before the post-WAL map and iterator
+		// allocations so a violated invariant cannot grow them unchecked.
+		var err error
+		preparedMaxEntries, preparedMaxBytes, err = preparedInsertSystemDeltaSourceLimit(meta.Name, rootNames)
+		if err != nil {
+			return nil, CollectionMeta{}, err
+		}
+	}
 	if len(rootIDs) != len(rootNames) {
 		return nil, CollectionMeta{}, unexpectedOrderedRootCountError(meta.Name, len(rootNames), len(rootIDs))
 	}
@@ -2115,8 +2322,10 @@ func (c *Collection) buildRootDescriptorAndColumnManifestSystemDeltaIteratorAndM
 	if plan.ManifestRootBaseID != columnBaseRoot || plan.RootDelta.BaseRootID != columnBaseRoot {
 		return nil, CollectionMeta{}, errConcurrentRootModification(meta.Name, columnRootName)
 	}
-	if err := c.validateRootDescriptorSystemDeltaForMeta(meta, expectedCommitSeq, expectedSystemRoot, rootNames, baseRootIDs); err != nil {
-		return nil, CollectionMeta{}, err
+	if preparedSystemMetaRaw == nil {
+		if err := c.validateRootDescriptorSystemDeltaForMeta(meta, expectedCommitSeq, expectedSystemRoot, rootNames, baseRootIDs); err != nil {
+			return nil, CollectionMeta{}, err
+		}
 	}
 	if rootIDs[columnRootIndex] == 0 {
 		return nil, CollectionMeta{}, errors.New("collections: column manifest root publish returned zero root")
@@ -2128,7 +2337,12 @@ func (c *Collection) buildRootDescriptorAndColumnManifestSystemDeltaIteratorAndM
 	if err != nil {
 		return nil, CollectionMeta{}, err
 	}
-	encodedMeta, err := encodeNormalizedCollectionMeta(updatedMeta)
+	var encodedMeta []byte
+	if preparedSystemMetaRaw != nil {
+		encodedMeta, err = encodePreparedColumnPublishedMeta(preparedSystemMetaRaw, meta, updatedMeta)
+	} else {
+		encodedMeta, err = encodeNormalizedCollectionMeta(updatedMeta)
+	}
 	if err != nil {
 		return nil, CollectionMeta{}, err
 	}
@@ -2142,6 +2356,15 @@ func (c *Collection) buildRootDescriptorAndColumnManifestSystemDeltaIteratorAndM
 	}
 	if err := c.addDocumentMutationGenerationUpdate(updates, updatedMeta, rootNames); err != nil {
 		return nil, CollectionMeta{}, err
+	}
+	if preparedSystemMetaRaw != nil {
+		var actualBytes int64
+		for key, value := range updates {
+			actualBytes += int64(len(key) + len(value))
+		}
+		if len(updates) > preparedMaxEntries || actualBytes > preparedMaxBytes {
+			return nil, CollectionMeta{}, fmt.Errorf("%w: prepared system delta exceeded its pre-WAL source bound", ErrPreparedInsertResourceLimit)
+		}
 	}
 	iter, err := buildSystemDeltaIterator(updates)
 	if err != nil {

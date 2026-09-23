@@ -1,6 +1,7 @@
 package bulk
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
@@ -39,7 +40,13 @@ type BuildOptions struct {
 	PackedValuePtr        bool
 	EntryRevisions        bool
 	LeafPageLog           LeafPageAppender
+	// MaxOutputPages bounds emitted pager and leaf-log pages. Zero leaves the
+	// ordinary builder unrestricted. OutputPages receives the attempted count.
+	MaxOutputPages uint64
+	OutputPages    *uint64
 }
+
+var ErrPageOutputLimit = errors.New("bulk: page output limit")
 
 // Build creates a new B-Tree from a sorted iterator.
 func Build(iter iterator.UnsafeIterator, alloc Allocator, p *pager.Pager) (uint64, error) {
@@ -49,8 +56,25 @@ func Build(iter iterator.UnsafeIterator, alloc Allocator, p *pager.Pager) (uint6
 // BuildWithOptions creates a new B-Tree from a sorted iterator with custom options.
 func BuildWithOptions(iter iterator.UnsafeIterator, alloc Allocator, p *pager.Pager, opts BuildOptions) (uint64, error) {
 	leafLog := opts.LeafPageLog
+	var outputPages uint64
+	if opts.OutputPages != nil {
+		*opts.OutputPages = 0
+	}
+	countPage := func() error {
+		if opts.MaxOutputPages != 0 && outputPages >= opts.MaxOutputPages {
+			return ErrPageOutputLimit
+		}
+		outputPages++
+		if opts.OutputPages != nil {
+			*opts.OutputPages = outputPages
+		}
+		return nil
+	}
 	if !iter.Valid() {
 		// Empty tree? Return a new empty root.
+		if err := countPage(); err != nil {
+			return 0, err
+		}
 		buf := make([]byte, page.PageSize)
 		b := newLeafBuilder(buf, opts)
 		if leafLog != nil {
@@ -58,6 +82,9 @@ func BuildWithOptions(iter iterator.UnsafeIterator, alloc Allocator, p *pager.Pa
 			n := b.Finish()
 			ptr, err := leafLog.AppendLeafPage(n.Data())
 			if err != nil {
+				return 0, err
+			}
+			if err := countPage(); err != nil {
 				return 0, err
 			}
 			return buildSingleLeafLogRoot(alloc, p, []byte{}, ptr)
@@ -231,6 +258,9 @@ func BuildWithOptions(iter iterator.UnsafeIterator, alloc Allocator, p *pager.Pa
 			key = []byte{}
 		}
 		if lvl == 0 && leafLog != nil {
+			if err := countPage(); err != nil {
+				return err
+			}
 			pendingLeafPages = append(pendingLeafPages, pendingLeafPagePromotion{
 				key:  append([]byte(nil), key...),
 				page: n.Data(),
@@ -243,6 +273,9 @@ func BuildWithOptions(iter iterator.UnsafeIterator, alloc Allocator, p *pager.Pa
 			return resetLevelBuilder(lvl)
 		}
 		childRef := page.PageChildRef(childID)
+		if err := countPage(); err != nil {
+			return err
+		}
 		if err := p.Write(childID, n.Data()); err != nil {
 			return err
 		}
@@ -298,6 +331,9 @@ func BuildWithOptions(iter iterator.UnsafeIterator, alloc Allocator, p *pager.Pa
 			key = []byte{}
 		}
 		if i == 0 && leafLog != nil {
+			if err := countPage(); err != nil {
+				return 0, err
+			}
 			pendingLeafPages = append(pendingLeafPages, pendingLeafPagePromotion{
 				key:  append([]byte(nil), key...),
 				page: n.Data(),
@@ -309,6 +345,9 @@ func BuildWithOptions(iter iterator.UnsafeIterator, alloc Allocator, p *pager.Pa
 		}
 
 		childRef := page.PageChildRef(childID)
+		if err := countPage(); err != nil {
+			return 0, err
+		}
 		if err := p.Write(childID, n.Data()); err != nil {
 			return 0, err
 		}
@@ -338,6 +377,9 @@ func BuildWithOptions(iter iterator.UnsafeIterator, alloc Allocator, p *pager.Pa
 		key := levels[0].startKey
 		if key == nil {
 			key = []byte{}
+		}
+		if err := countPage(); err != nil {
+			return 0, err
 		}
 		return buildSingleLeafLogRoot(alloc, p, key, currRef.Log)
 	}

@@ -342,6 +342,35 @@ Interpretation:
 - The checkpoint/reopen block is included because durability examples should
   cross a persisted boundary.
 
+For a no-index JSON collection configured with
+`RetainedPayloadEncoding: collections.ColumnRetainedPayloadEncodingSemanticStreamV1`,
+the caller may prepare the next batch while a single goroutine commits the
+previous one. Ownership of the ID and document buffers transfers at preparation;
+do not mutate or reuse them until `Commit` or `Abandon` returns. Pass complete,
+non-aliased ID/document allocations with no unrelated buffers retained in
+unused outer-slice slots, so the charged capacities describe the backing:
+
+```go
+prepared, err := col.PrepareInsertBatchOwned(ids, docs, 1280<<20)
+if err != nil {
+    log.Fatal(err)
+}
+defer prepared.Abandon() // harmless after Commit; releases on early return
+resultIDs, err := prepared.Commit()
+if err != nil { log.Fatal(err) }
+_ = resultIDs // returned in caller input order
+```
+
+Preparation does not make rows visible or durable. Keep one ordered committer;
+the successful `Commit` has the same WAL and publication boundary as
+`InsertBatch`. An unsupported schema returns `ErrPreparedInsertIneligible`;
+oversized or structurally limited input returns the distinct
+`ErrPreparedInsertResourceLimit`. A bounded caller must not retry the latter
+through ordinary `InsertBatch`. The example's 1.25 GiB is a conservative
+per-request admission ceiling for this lane, not measured heap use. A
+one-ahead loader must also enforce the same ceiling across its source batch,
+queued preparation, and ordered commit; see the prepared-insert memory gate.
+
 ## Runnable package benchmark
 
 Use the package benchmark when you want repeatable counters for the current

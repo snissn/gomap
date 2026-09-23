@@ -133,6 +133,7 @@ type columnRetainedPayloadStorageDocuments struct {
 	semanticStreamPrepareMetrics columnRetainedSemanticStreamV1PrepareMetrics
 	declaredRows                 []columnDeclaredRow
 	declaredRowsReady            bool
+	declaredStringBackingBytes   int64
 }
 
 func prepareColumnRetainedPayloadStorageDocuments(cfg ColumnStoreConfig, documents [][]byte, fallback templateV1Resolver) (columnRetainedPayloadStorageDocuments, error) {

@@ -2251,6 +2251,22 @@ func (m *AppendOnly) EntryBackingBytes() int64 {
 	return int64(cap(m.entries)) * int64(unsafe.Sizeof(appendOnlyEntry{}))
 }
 
+// EntryBufferCapacityBytes sums the backing capacities directly held by active
+// entry key/value slices. Callers must account for shared arenas separately;
+// this is allocation-free and does not materialize an iterator snapshot.
+func (m *AppendOnly) EntryBufferCapacityBytes() int64 {
+	if m == nil {
+		return 0
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var bytes int64
+	for i := 0; i < m.count; i++ {
+		bytes += int64(cap(m.entries[i].key)) + int64(cap(m.entries[i].value))
+	}
+	return bytes
+}
+
 // TrimEntryCapacity shrinks retained entry-slot backing while preserving active
 // entries. It is intended for maintenance boundaries after a transient ingest
 // spike has left a live append-only memtable with large unused capacity.

@@ -48,7 +48,18 @@ func getNoDictDecoder() (*zstd.Decoder, error) {
 			return dec, nil
 		}
 	}
-	return zstd.NewReader(nil)
+	// Callers cap DecodeAll's destination at the record's checked raw length.
+	// DecodeAllCapLimit rejects output growth beyond that admitted capacity.
+	// A single block decoder bounds the workspace retained by this pooled
+	// decoder. The window ceiling matches the pinned fork's default. The
+	// decoded-memory ceiling is tighter than its 64 GiB default; the default
+	// value-log record-size limit is 64 MiB.
+	return zstd.NewReader(nil,
+		zstd.WithDecodeAllCapLimit(true),
+		zstd.WithDecoderConcurrency(1),
+		zstd.WithDecoderMaxWindow(512<<20),
+		zstd.WithDecoderMaxMemory(1<<30),
+	)
 }
 
 func putNoDictDecoder(dec *zstd.Decoder) {
@@ -754,11 +765,10 @@ func decodeFramePayloadTo(header FrameHeader, payload []byte, dictLookup DictLoo
 		} else if cap(dst) < int(rawLen) {
 			dst = make([]byte, 0, rawLen)
 		} else {
-			dst = dst[:0]
+			dst = dst[:0:rawLen]
 		}
 		return decodeBlockPayload(header.Reserved, payload, rawLen, dst)
 	}
-
 	var dec *zstd.Decoder
 	var release func()
 	if header.DictID != 0 {
@@ -798,7 +808,7 @@ func decodeFramePayloadTo(header FrameHeader, payload []byte, dictLookup DictLoo
 		if cap(dst) < int(rawLen) {
 			dst = make([]byte, 0, rawLen)
 		} else {
-			dst = dst[:0]
+			dst = dst[:0:rawLen]
 		}
 	}
 	out, err := dec.DecodeAll(payload, dst)

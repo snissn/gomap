@@ -32,6 +32,139 @@ type allocatorCOWStateV1 struct {
 	ready      *sync.Cond
 }
 
+// COWPrepareProfileV1 is an allocation-free census of the live transaction
+// that PrepareCOWCandidateRetiringV1 copies before materializing a candidate.
+// It is a snapshot, not an admission limit: callers must also account for
+// retirements, pruning, and pages produced after the census.
+type COWPrepareProfileV1 struct {
+	Valid                    bool
+	HighWater                uint64
+	RetiredPages             uint64
+	AllocatedPages           uint64
+	AbandonedAppendExtents   uint64
+	ChangedChunks            uint64
+	ReplacedMetadataPages    uint64
+	BaseReservationExtents   uint64
+	BaseMetadataPages        uint64
+	LedgerOwners             uint64
+	LedgerCandidates         uint64
+	LedgerBurnedTailRanges   uint64
+	LedgerHighestReservedEnd uint64
+}
+
+// COWPrepareLimitsV1 bounds every live collection copied by prepared COW
+// materialization. Zero-valued limits are strict; callers that do not need a
+// prepared admission guard must pass nil.
+type COWPrepareLimitsV1 struct {
+	MaxHighWater                uint64
+	MaxRetiredPages             uint64
+	MaxAllocatedPages           uint64
+	MaxAbandonedAppendExtents   uint64
+	MaxChangedChunks            uint64
+	MaxReplacedMetadataPages    uint64
+	MaxBaseReservationExtents   uint64
+	MaxBaseMetadataPages        uint64
+	MaxLedgerOwners             uint64
+	MaxLedgerCandidates         uint64
+	MaxLedgerBurnedTailRanges   uint64
+	MaxLedgerHighestReservedEnd uint64
+	MaxRetirementPages          uint64
+	MaxAuxiliaryPages           uint64
+}
+
+func (a *Allocator) COWPrepareProfileV1() COWPrepareProfileV1 {
+	var profile COWPrepareProfileV1
+	if a == nil {
+		return profile
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.cowPrepareProfileLockedV1()
+}
+
+func (a *Allocator) cowPrepareProfileLockedV1() COWPrepareProfileV1 {
+	var profile COWPrepareProfileV1
+	if a.cow == nil || a.cow.txn == nil || a.cow.generation == nil {
+		return profile
+	}
+	transaction, base := a.cow.txn, a.cow.generation
+	profile.Valid = true
+	profile.HighWater = transaction.highWater
+	profile.RetiredPages = transaction.root.retiredCount
+	profile.AllocatedPages = uint64(len(transaction.allocated))
+	profile.AbandonedAppendExtents = uint64(len(transaction.abandonedAppends))
+	profile.ChangedChunks = uint64(len(transaction.changedChunks))
+	profile.ReplacedMetadataPages = uint64(len(transaction.replacedMetadata))
+	profile.BaseReservationExtents = uint64(len(base.record.Extents))
+	profile.BaseMetadataPages = uint64(len(base.metadataPages))
+	if ledger := a.cow.ledger; ledger != nil {
+		// COW preparation enters the ledger while holding a.mu. Keep the
+		// same lock order so the census sees the reservation state it uses.
+		ledger.mu.Lock()
+		profile.LedgerOwners = uint64(len(ledger.owners))
+		profile.LedgerCandidates = uint64(len(ledger.candidates))
+		profile.LedgerBurnedTailRanges = uint64(len(ledger.burnedTails))
+		for id := range ledger.owners {
+			if id == ^uint64(0) {
+				profile.LedgerHighestReservedEnd = ^uint64(0)
+			} else {
+				profile.LedgerHighestReservedEnd = max(profile.LedgerHighestReservedEnd, id+1)
+			}
+		}
+		for _, burned := range ledger.burnedTails {
+			profile.LedgerHighestReservedEnd = max(profile.LedgerHighestReservedEnd, reservationIntervalEndSaturated(burned))
+		}
+		for _, reservation := range ledger.candidates {
+			if reservation != nil && reservation.tailReserved {
+				profile.LedgerHighestReservedEnd = max(profile.LedgerHighestReservedEnd, reservationIntervalEndSaturated(reservationInterval{start: reservation.tailStart, count: reservation.tailCount}))
+			}
+		}
+		ledger.mu.Unlock()
+	}
+	return profile
+}
+
+func checkCOWPrepareLimitsV1(profile COWPrepareProfileV1, retirements []COWRetirementV1, auxiliaryPageCount int, limits *COWPrepareLimitsV1) error {
+	if limits == nil {
+		return nil
+	}
+	if !profile.Valid || profile.HighWater > limits.MaxHighWater || profile.RetiredPages > limits.MaxRetiredPages ||
+		profile.AllocatedPages > limits.MaxAllocatedPages || profile.AbandonedAppendExtents > limits.MaxAbandonedAppendExtents ||
+		profile.ChangedChunks > limits.MaxChangedChunks || profile.ReplacedMetadataPages > limits.MaxReplacedMetadataPages ||
+		profile.BaseReservationExtents > limits.MaxBaseReservationExtents || profile.BaseMetadataPages > limits.MaxBaseMetadataPages ||
+		profile.LedgerOwners > limits.MaxLedgerOwners || profile.LedgerCandidates > limits.MaxLedgerCandidates ||
+		profile.LedgerBurnedTailRanges > limits.MaxLedgerBurnedTailRanges ||
+		profile.LedgerHighestReservedEnd > limits.MaxLedgerHighestReservedEnd {
+		return fmt.Errorf("%w: COW prepare profile exceeds prepared limits", ErrGenerationFormat)
+	}
+	var retirementPages uint64
+	for i := range retirements {
+		if uint64(len(retirements[i].PageIDs)) > ^uint64(0)-retirementPages {
+			return fmt.Errorf("%w: COW retirement count overflow", ErrGenerationFormat)
+		}
+		retirementPages += uint64(len(retirements[i].PageIDs))
+	}
+	if retirementPages > limits.MaxRetirementPages || auxiliaryPageCount < 0 || uint64(auxiliaryPageCount) > limits.MaxAuxiliaryPages {
+		return fmt.Errorf("%w: COW prepare growth exceeds prepared limits", ErrGenerationFormat)
+	}
+	return nil
+}
+
+// CheckCOWPrepareProfileLimitsV1 applies the same live-profile check used
+// under the allocator lock by candidate preparation. It lets a serialized
+// command reject an already oversized base before appending its WAL record;
+// candidate preparation repeats the check to catch later growth.
+func CheckCOWPrepareProfileLimitsV1(profile COWPrepareProfileV1, limits COWPrepareLimitsV1) error {
+	return checkCOWPrepareLimitsV1(profile, nil, 0, &limits)
+}
+
+func reservationIntervalEndSaturated(interval reservationInterval) uint64 {
+	if interval.count > ^uint64(0)-interval.start {
+		return ^uint64(0)
+	}
+	return interval.start + interval.count
+}
+
 // COWRetirementV1 is one retirement set staged atomically with a COW
 // candidate. The live allocator transaction is unchanged if preparation fails
 // or the caller aborts before publication.
@@ -246,6 +379,13 @@ func (a *Allocator) PrepareCOWCandidateV1(generationID, commitSeq uint64, candid
 // materialization as one allocator transaction. The pre-prepare transaction
 // remains available for rollback until the candidate publishes.
 func (a *Allocator) PrepareCOWCandidateRetiringV1(generationID, commitSeq uint64, candidateID CandidateIDV1, capability ReuseCapability, retirements []COWRetirementV1, auxiliaryPageCount int, sink AppendPageSink) (*PreparedCOWCandidateV1, error) {
+	return a.PrepareCOWCandidateRetiringWithLimitsV1(generationID, commitSeq, candidateID, capability, retirements, auxiliaryPageCount, sink, nil)
+}
+
+// PrepareCOWCandidateRetiringWithLimitsV1 checks the prepared allocation
+// profile while holding the same allocator lock used by the subsequent clone.
+// This prevents concurrent allocator growth between admission and allocation.
+func (a *Allocator) PrepareCOWCandidateRetiringWithLimitsV1(generationID, commitSeq uint64, candidateID CandidateIDV1, capability ReuseCapability, retirements []COWRetirementV1, auxiliaryPageCount int, sink AppendPageSink, limits *COWPrepareLimitsV1) (*PreparedCOWCandidateV1, error) {
 	if auxiliaryPageCount < 0 || sink == nil {
 		return nil, ErrGenerationFormat
 	}
@@ -264,6 +404,9 @@ func (a *Allocator) PrepareCOWCandidateRetiringV1(generationID, commitSeq uint64
 			return nil, ErrCOWCandidatePrepared
 		}
 		return a.cow.prepared, nil
+	}
+	if err := checkCOWPrepareLimitsV1(a.cowPrepareProfileLockedV1(), retirements, auxiliaryPageCount, limits); err != nil {
+		return nil, err
 	}
 	rollbackTxn := a.cow.txn
 	rollbackStats := a.stats

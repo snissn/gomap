@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
 	"reflect"
 	"runtime"
 	"testing"
 
+	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -18,6 +20,135 @@ const (
 	vacuumTestDocumentKey       = "doc/u1"
 	vacuumTestDocumentValue     = "document"
 )
+
+func TestVacuumCollectCollectionEntriesFromRootWithLimits(t *testing.T) {
+	d, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = d.Close() }()
+	_, _, err = d.PublishOrderedRootGroupWithSystemBuilder([]OrderedRootPublishInput{{
+		BaseRoot:      0,
+		Iter:          mustFrozenSystemMemtable(t, "doc/u1", "document").NewIterator(nil, nil),
+		StoragePolicy: OrderedRootStoragePagerLeaves,
+	}}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		return mustFrozenRawMemtable(t, vacuumTestCollectionRootKey, encodeCollectionRootDescriptorRootID(rootIDs[0])).NewIterator(nil, nil), nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("missing snapshot")
+	}
+	defer func() { _ = snap.Close() }()
+	root := snap.state.SystemRootPageID
+	collect := func(entries int, bytes int64, roots int) ([]collectionEntry, error) {
+		return vacuumCollectCollectionEntriesFromRootWithLimits(context.Background(), snap.idx.pager, &snap.reader, root, entries, bytes, roots)
+	}
+	exactBytes := int64(len(vacuumTestCollectionRootKey) + 8)
+	got, err := collect(1, exactBytes, 1)
+	if err != nil || len(got) != 1 || string(got[0].key) != vacuumTestCollectionRootKey || len(got[0].sourceRootIDs) != 1 {
+		t.Fatalf("exact descriptor budget: entries=%v err=%v", got, err)
+	}
+	for _, tc := range []struct {
+		name           string
+		entries, roots int
+		bytes          int64
+	}{
+		{name: "entry", entries: 0, bytes: exactBytes, roots: 1},
+		{name: "bytes", entries: 1, bytes: exactBytes - 1, roots: 1},
+		{name: "root IDs", entries: 1, bytes: exactBytes, roots: 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := collect(tc.entries, tc.bytes, tc.roots); !errors.Is(err, ErrCollectionRootDescriptorBudget) {
+				t.Fatalf("bounded descriptor scan error=%v, want budget rejection", err)
+			}
+		})
+	}
+}
+
+func TestPreparedCollectionRootDescriptorBudgetRejectsPointerBeforeDecode(t *testing.T) {
+	dir := t.TempDir()
+	d := openVacuumPointerDescriptorFixture(t, vacuumPointerDescriptorOptions(dir))
+	defer func() { _ = d.Close() }()
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("missing snapshot")
+	}
+	defer func() { _ = snap.Close() }()
+	root := snap.state.SystemRootPageID
+	it, err := snap.IteratorAtRootWithOptions(root, []byte(vacuumTestCollectionRootKey), nil, IteratorOptions{Mode: IteratorModePointerProjection})
+	if err != nil || !it.Valid() {
+		t.Fatalf("pointer descriptor iterator: %v", err)
+	}
+	_, _, flags := it.UnsafeEntry()
+	if flags&node.FlagPointer == 0 {
+		t.Fatalf("descriptor flags=%x, want pointer", flags)
+	}
+	if err := it.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.CheckPreparedCollectionRootDescriptorBudget(1, 1<<20, 1); !errors.Is(err, ErrCollectionRootDescriptorBudget) {
+		t.Fatalf("pointer-backed prepared descriptor error=%v, want budget rejection", err)
+	}
+}
+
+func TestPreparedCollectionRootDescriptorBudgetRejectsAliases(t *testing.T) {
+	dir := t.TempDir()
+	d, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = d.PublishOrderedRootGroupWithSystemBuilder([]OrderedRootPublishInput{{
+		BaseRoot:      0,
+		Iter:          mustFrozenSystemMemtable(t, "doc/u1", "document").NewIterator(nil, nil),
+		StoragePolicy: OrderedRootStoragePagerLeaves,
+	}}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		encoded := encodeCollectionRootDescriptorRootID(rootIDs[0])
+		return mustFrozenRawMemtable(t,
+			"collections/root/users/primary", encoded,
+			"collections/root/users/by-email", encoded,
+		).NewIterator(nil, nil), nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.CheckPreparedCollectionRootDescriptorBudget(2, 1<<20, 2); !errors.Is(err, ErrCollectionRootDescriptorBudget) {
+		t.Fatalf("prepared aliased descriptor error=%v, want budget rejection", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatal(err)
+	}
+	d, err = Open(Options{Dir: dir, CommandWAL: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = d.Close() }()
+	payload, err := commitlog.EncodeRawKVBatchPayload([]commitlog.RawKVOperation{{
+		Op: commitlog.RawKVOpSet, Key: []byte("witness"), Value: []byte("value"),
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent, err := d.NewCommandWALIntent(commitlog.CommandKindRawKVBatch, commitlog.CommandScopeRawKV, commitlog.PayloadFormatRawKVBatchV1, payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := d.CommandWALNextLSN()
+	_, _, err = d.PublishOrderedRootDeltaGroupWithPreflightCommandWALContextAndSystemDeltaBuilder(nil,
+		func() error { return d.CheckPreparedCollectionRootDescriptorBudget(2, 1<<20, 2) }, intent,
+		func(CommandWALPublishContext, []uint64) (iterator.UnsafeIterator, error) {
+			t.Fatal("system builder ran after rejected preflight")
+			return nil, nil
+		})
+	if !errors.Is(err, ErrCollectionRootDescriptorBudget) || intent.AssignedLSN() != 0 || d.CommandWALNextLSN() != before {
+		t.Fatalf("aliased preflight error=%v assigned=%d next=%d, want rejected before LSN %d", err, intent.AssignedLSN(), d.CommandWALNextLSN(), before)
+	}
+	if err := d.commandWALPoisonedError(); err != nil {
+		t.Fatalf("pre-WAL rejection poisoned handle: %v", err)
+	}
+}
 
 func TestVacuumIndexOffline_PreservesCollectionRootFromPointerBackedDescriptor(t *testing.T) {
 	dir := t.TempDir()

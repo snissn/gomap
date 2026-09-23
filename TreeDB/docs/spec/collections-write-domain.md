@@ -192,9 +192,56 @@ benchmark-only unsupported-production mode says otherwise.
 During private planning, canonical command payloads, external refs, uniqueness
 reservations, publish inputs, and schema/index barrier state are not reachable
 from any read, scan, uniqueness check, update/delete planner, queued unit,
-publishing unit, or pending-state merge. The writer prepares and protects
-required external refs, appends the typed command WAL frame through the
-shared commit-log journal, and applies through the normal executor. In the
+publishing unit, or pending-state merge.
+
+For eligible no-secondary-index JSON collections using semantic-stream retained
+payload, `PrepareInsertBatchOwned` can move ID sorting, duplicate preflight,
+retained block encoding, and declared-row extraction ahead of the ordered
+publisher. It owns the input buffers and has no command LSN or publication
+lease. The `maxOwnedBytes` argument screens the input and partitions a separate
+credit for each retained block before workers start. Each block checks its
+raw size before encoding and its retained output before joining the prepared
+batch. Rare JSON paths grow only as values arrive rather than reserving every
+row in the block. The final capacity check rejects a prepared payload whose
+charged backing plus a commit reserve exceeds the limit; `OwnedBytes` reports
+the retained backing and `ReservedBytes` includes the commit reserve. The
+caller must transfer complete, non-aliased ID/document backing whose capacity
+describes the whole allocation, with no unrelated buffers in unused outer
+slice slots. Full-sliced views into larger allocations are outside the
+owned-byte accounting contract. The prepared token also charges an identity-free
+typed scalar batch and its stable schema copy. Before the typed batch is built,
+an additional scalar-vector/dictionary allowance is checked. Ordered commit
+reserves disjoint credit for materialization, WAL/frame/run buffers, typed
+image, row asset, sidecars, and catalog copies. These credits cover incremental
+pipeline-owned buffers; they are not heap telemetry or a bound on baseline
+pager/zipper/Manager work. The prepared path also preflights the existing
+manifest before WAL append, allowing at most 4,096 inline records and 1 MiB of
+combined key/value bytes. This whole-collection ceiling can reject a small
+batch against a sufficiently large existing collection. The
+input-derived preparation and commit reserves remain under allocation-site
+audit for encoder workspace and typed/aggregate builders; the strict
+incremental-byte gate is not yet qualified. Prepared mode rejects document IDs
+over 1,024 bytes, documents over 128 KiB, or input beyond the cursor's depth and descriptor
+limits. Prepared mode admits one to five declared columns with paths of at most
+1,024 bytes and Int64 or String values, plus an asset namespace of at most
+512 bytes. Wider schemas and other scalar types use the ordinary path because
+they currently take a full-batch extractor before the bounded cursor.
+Resource and structural limits return `ErrPreparedInsertResourceLimit`,
+which is distinct from `ErrPreparedInsertIneligible`, so a bounded caller fails
+closed by default. Unsupported collection configurations return
+`ErrPreparedInsertIneligible` and can use ordinary `InsertBatch`. A later
+`Commit` rechecks persisted conflicts and schema under the normal insert path
+before WAL admission. One caller can
+prepare batch N+1 while a single committer publishes N; neither a queued
+object nor an abandoned object is acknowledged or visible. Preparation also
+builds an identity-free typed scalar batch and finalizes its string dictionaries.
+The ordered publisher assigns the part identity and builds the typed part and
+image, then performs asset sync and root installation. GC authority stays with
+the ordered publication path. The on-disk format and replay rules are unchanged.
+
+The writer prepares and protects required external refs, appends the typed
+command WAL frame through the shared commit-log journal, and applies through the
+normal executor. In the
 durable profile, stable complete frame closure precedes visibility and success;
 the relaxed profile may lead sync as specified by the canonical matrix. WAL
 cleanup requires sealed-root coverage plus `AppliedLSN` and protection of both
