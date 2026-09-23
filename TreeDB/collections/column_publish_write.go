@@ -677,9 +677,9 @@ func (c *Collection) columnPublishRootDescriptorPreflight(input columnWritePubli
 			return err
 		}
 		if input.preparedInsert {
-			if err := c.db.CheckCollectionRootDescriptorBudget(preparedInsertMaxRootDescriptors, preparedInsertMaxRootDescriptorBytes); err != nil {
+			if err := c.db.CheckPreparedCollectionRootDescriptorBudget(preparedInsertMaxRootDescriptors, preparedInsertMaxRootDescriptorBytes, preparedInsertMaxDescriptorRootIDs); err != nil {
 				if errors.Is(err, backenddb.ErrCollectionRootDescriptorBudget) {
-					return fmt.Errorf("%w: collection root descriptors exceed %d entries or %d encoded bytes", ErrPreparedInsertResourceLimit, preparedInsertMaxRootDescriptors, preparedInsertMaxRootDescriptorBytes)
+					return fmt.Errorf("%w: collection root descriptors exceed the prepared budget or have an unsupported alias topology: %v", ErrPreparedInsertResourceLimit, err)
 				}
 				return err
 			}

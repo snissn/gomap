@@ -17,6 +17,11 @@ batch. Read-only inspection of the retained 10M Bluesky database with the
 current source found 3,127 root entries (including the identity record),
 753,928 combined key/value bytes, and no pointer-backed entries. The final
 current-head 10M run still has to revalidate the ceiling.
+The prepared catalog preflight also rejects more than 4,096 descriptor root IDs
+or nonzero aliases between descriptors, the system root, and the user root.
+This removes one known cause of candidate-wide reference projection after WAL,
+but does not prove that the publisher's exact reference delta is always
+available. Warm and first-publication paths still need an explicit witness.
 `ErrPreparedInsertResourceLimit` is distinct
 from configuration `ErrPreparedInsertIneligible`. A bounded caller must stop on
 resource rejection; only unsupported configuration may use ordinary

@@ -210,7 +210,31 @@ func (db *DB) CheckCollectionRootDescriptorBudget(maxEntries int, maxBytes int64
 	return checkCollectionRootDescriptorBudgetFromRoot(idx.pager, db.valueLogManager, root, maxEntries, maxBytes)
 }
 
+// CheckPreparedCollectionRootDescriptorBudget also excludes alias topologies
+// whose later root transition may require a full candidate projection. The
+// caller must hold the ordered-root write lock from this check through publish.
+func (db *DB) CheckPreparedCollectionRootDescriptorBudget(maxEntries int, maxBytes int64, maxRootIDs int) error {
+	if maxRootIDs <= 0 {
+		return ErrCollectionRootDescriptorBudget
+	}
+	if db == nil || db.closing.Load() {
+		return ErrClosed
+	}
+	idx := db.idx.Load()
+	if idx == nil {
+		return ErrClosed
+	}
+	db.mu.RLock()
+	root, userRoot := db.meta.SystemRootPageID, db.meta.UserRootPageID
+	db.mu.RUnlock()
+	return checkCollectionRootDescriptorBudgetFromRootWithTopology(idx.pager, db.valueLogManager, root, userRoot, maxEntries, maxBytes, maxRootIDs)
+}
+
 func checkCollectionRootDescriptorBudgetFromRoot(p *pager.Pager, reader tree.SlabReader, root uint64, maxEntries int, maxBytes int64) error {
+	return checkCollectionRootDescriptorBudgetFromRootWithTopology(p, reader, root, 0, maxEntries, maxBytes, 0)
+}
+
+func checkCollectionRootDescriptorBudgetFromRootWithTopology(p *pager.Pager, reader tree.SlabReader, root, userRoot uint64, maxEntries int, maxBytes int64, maxRootIDs int) error {
 	if maxEntries < 0 || maxBytes < 0 {
 		return ErrCollectionRootDescriptorBudget
 	}
@@ -223,7 +247,14 @@ func checkCollectionRootDescriptorBudgetFromRoot(p *pager.Pager, reader tree.Sla
 	count := 0
 	var size int64
 	var decodedSize int64
+	var rootIDsSeen map[uint64]struct{}
+	var rootIDCount int
+	var pointerScratch []byte
+	if maxRootIDs > 0 {
+		rootIDsSeen = make(map[uint64]struct{})
+	}
 	for _, prefix := range [][]byte{vacuumCollectionRootOverlayDescriptorPrefixBytes, vacuumCollectionRootDescriptorPrefixBytes} {
+		overlay := bytes.Equal(prefix, vacuumCollectionRootOverlayDescriptorPrefixBytes)
 		it := tree.New(p, reader, root).IteratorWithOptions(prefix, vacuumDescriptorPrefixEnd(prefix), tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
 		for it.Valid() {
 			key := it.UnsafeKey()
@@ -245,7 +276,7 @@ func checkCollectionRootDescriptorBudgetFromRoot(p *pager.Pager, reader tree.Sla
 					return fmt.Errorf("%w: collection root descriptor pointer has no bounded reader", ErrCollectionRootDescriptorBudget)
 				}
 				decodedLimit := maxBytes
-				if !bytes.Equal(prefix, vacuumCollectionRootOverlayDescriptorPrefixBytes) {
+				if !overlay {
 					decodedLimit = 8
 				}
 				var err error
@@ -255,7 +286,7 @@ func checkCollectionRootDescriptorBudgetFromRoot(p *pager.Pager, reader tree.Sla
 					return fmt.Errorf("%w: inspect collection root descriptor pointer: %v", ErrCollectionRootDescriptorBudget, err)
 				}
 			}
-			if (!bytes.Equal(prefix, vacuumCollectionRootOverlayDescriptorPrefixBytes) && decodedBytes != 8) || decodedBytes%8 != 0 {
+			if (!overlay && decodedBytes != 8) || decodedBytes%8 != 0 {
 				_ = it.Close()
 				return fmt.Errorf("%w: invalid decoded collection root descriptor length %d", ErrCollectionRootDescriptorBudget, decodedBytes)
 			}
@@ -264,6 +295,40 @@ func checkCollectionRootDescriptorBudgetFromRoot(p *pager.Pager, reader tree.Sla
 			if count >= maxEntries || int64(len(key)) > maxBytes-size || int64(valueBytes) > maxBytes-size-int64(len(key)) || decodedBytes > maxBytes-decodedSize-int64(len(key)) {
 				_ = it.Close()
 				return fmt.Errorf("%w: entries>%d or bytes>%d", ErrCollectionRootDescriptorBudget, maxEntries, maxBytes)
+			}
+			if rootIDsSeen != nil {
+				if flags&node.FlagPointer != 0 {
+					var err error
+					val, pointerScratch, err = vacuumCollectionRootDescriptorValue(reader, key, val, ptr, flags, pointerScratch)
+					if err != nil {
+						_ = it.Close()
+						return fmt.Errorf("%w: unsupported descriptor pointer: %v", ErrCollectionRootDescriptorBudget, err)
+					}
+					if int64(len(val)) != decodedBytes {
+						_ = it.Close()
+						return fmt.Errorf("%w: descriptor pointer decoded %d bytes, inspected %d", ErrCollectionRootDescriptorBudget, len(val), decodedBytes)
+					}
+				}
+				if len(val)/8 > maxRootIDs-rootIDCount {
+					_ = it.Close()
+					return fmt.Errorf("%w: more than %d descriptor root IDs", ErrCollectionRootDescriptorBudget, maxRootIDs)
+				}
+				rootIDCount += len(val) / 8
+				for offset := 0; offset < len(val); offset += 8 {
+					rootID := binary.BigEndian.Uint64(val[offset:])
+					if rootID == 0 {
+						continue
+					}
+					if rootID == root || rootID == userRoot {
+						_ = it.Close()
+						return fmt.Errorf("%w: descriptor aliases system or user root", ErrCollectionRootDescriptorBudget)
+					}
+					if _, exists := rootIDsSeen[rootID]; exists {
+						_ = it.Close()
+						return fmt.Errorf("%w: aliased collection root %d", ErrCollectionRootDescriptorBudget, rootID)
+					}
+					rootIDsSeen[rootID] = struct{}{}
+				}
 			}
 			count++
 			size += int64(len(key) + valueBytes)

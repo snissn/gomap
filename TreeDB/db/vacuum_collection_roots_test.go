@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"testing"
 
+	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -51,11 +52,76 @@ func TestCollectionRootDescriptorBudgetPreflightPointerBacked(t *testing.T) {
 	if err := d.CheckCollectionRootDescriptorBudget(1, wantBytes); err != nil {
 		t.Fatalf("DB preflight descriptor budget: %v", err)
 	}
+	if err := d.CheckPreparedCollectionRootDescriptorBudget(1, wantBytes, 1); err != nil {
+		t.Fatalf("prepared descriptor topology: %v", err)
+	}
+	if err := d.CheckPreparedCollectionRootDescriptorBudget(1, wantBytes, 0); !errors.Is(err, ErrCollectionRootDescriptorBudget) {
+		t.Fatalf("zero root-ID budget error=%v, want descriptor budget rejection", err)
+	}
 	if err := check(0, 1<<20); !errors.Is(err, ErrCollectionRootDescriptorBudget) {
 		t.Fatalf("entry-limit error=%v, want descriptor budget", err)
 	}
 	if err := check(1, wantBytes-1); !errors.Is(err, ErrCollectionRootDescriptorBudget) {
 		t.Fatalf("byte-limit error=%v, want descriptor budget", err)
+	}
+}
+
+func TestPreparedCollectionRootDescriptorBudgetRejectsAliases(t *testing.T) {
+	dir := t.TempDir()
+	d, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = d.PublishOrderedRootGroupWithSystemBuilder([]OrderedRootPublishInput{{
+		BaseRoot:      0,
+		Iter:          mustFrozenSystemMemtable(t, "doc/u1", "document").NewIterator(nil, nil),
+		StoragePolicy: OrderedRootStoragePagerLeaves,
+	}}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		encoded := encodeCollectionRootDescriptorRootID(rootIDs[0])
+		return mustFrozenRawMemtable(t,
+			"collections/root/users/primary", encoded,
+			"collections/root/users/by-email", encoded,
+		).NewIterator(nil, nil), nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.CheckCollectionRootDescriptorBudget(2, 1<<20); err != nil {
+		t.Fatalf("ordinary descriptor shape should remain valid: %v", err)
+	}
+	if err := d.CheckPreparedCollectionRootDescriptorBudget(2, 1<<20, 2); !errors.Is(err, ErrCollectionRootDescriptorBudget) {
+		t.Fatalf("prepared aliased descriptor error=%v, want budget rejection", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatal(err)
+	}
+	d, err = Open(Options{Dir: dir, CommandWAL: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = d.Close() }()
+	payload, err := commitlog.EncodeRawKVBatchPayload([]commitlog.RawKVOperation{{
+		Op: commitlog.RawKVOpSet, Key: []byte("witness"), Value: []byte("value"),
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent, err := d.NewCommandWALIntent(commitlog.CommandKindRawKVBatch, commitlog.CommandScopeRawKV, commitlog.PayloadFormatRawKVBatchV1, payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := d.CommandWALNextLSN()
+	_, _, err = d.PublishOrderedRootDeltaGroupWithPreflightCommandWALContextAndSystemDeltaBuilder(nil,
+		func() error { return d.CheckPreparedCollectionRootDescriptorBudget(2, 1<<20, 2) }, intent,
+		func(CommandWALPublishContext, []uint64) (iterator.UnsafeIterator, error) {
+			t.Fatal("system builder ran after rejected preflight")
+			return nil, nil
+		})
+	if !errors.Is(err, ErrCollectionRootDescriptorBudget) || intent.AssignedLSN() != 0 || d.CommandWALNextLSN() != before {
+		t.Fatalf("aliased preflight error=%v assigned=%d next=%d, want rejected before LSN %d", err, intent.AssignedLSN(), d.CommandWALNextLSN(), before)
+	}
+	if err := d.commandWALPoisonedError(); err != nil {
+		t.Fatalf("pre-WAL rejection poisoned handle: %v", err)
 	}
 }
 

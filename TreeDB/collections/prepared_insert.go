@@ -25,6 +25,7 @@ const preparedInsertMaxDocumentBytes = 128 << 10
 const preparedInsertMaxScalarColumns = 5
 const preparedInsertMaxRootDescriptors = 4096
 const preparedInsertMaxRootDescriptorBytes = 1 << 20
+const preparedInsertMaxDescriptorRootIDs = 4096
 const preparedInsertMaxManifestRecords = 4096
 const preparedInsertMaxManifestBytes = 1 << 20
 
