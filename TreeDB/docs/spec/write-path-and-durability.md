@@ -123,6 +123,14 @@ profile's WAL, asset-sync, recovery, and acknowledgment requirements in this
 matrix. Abandoning preparation cannot advance the durable frontier or grant GC
 authority over an asset.
 
+Preparation enforces finite row, document, cursor, and schema limits before
+the ordered publisher assigns an LSN. A resource-limit error must not be
+retried through ordinary `InsertBatch` by a bounded caller; an unsupported
+configuration may use ordinary insertion. The memory credit applies to
+incremental pipeline-owned input, token, WAL input, typed, and sidecar buffers.
+Existing pager, zipper, and value-log Manager publication scratch remains part
+of the baseline ordered commit and is measured separately through process RSS.
+
 These canonical profiles define the current public surface. `bench_unsafe` is
 explicitly outside the production guarantee.
 

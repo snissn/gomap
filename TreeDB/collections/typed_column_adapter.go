@@ -23,6 +23,24 @@ import (
 
 var errTypedColumnAdapterUnsupportedType = errors.New("collections: typed-column adapter unsupported type")
 
+// The production scalar granule codec is LZ4. Benchmark-relaxed overrides may
+// select ZSTD granules, whose encoder workspace is outside the prepared scalar
+// bound. Image sections can still use the production ZSTD policy.
+func preparedTypedBatchHasZSTDGranule(prepared *typedColumnAdapterPreparedBatch) bool {
+	if prepared == nil {
+		return false
+	}
+	if prepared.Options.DefaultCompression == typedcolumn.CompressionZSTD {
+		return true
+	}
+	for _, column := range prepared.Columns {
+		if column.Definition.Compression == typedcolumn.CompressionZSTD {
+			return true
+		}
+	}
+	return false
+}
+
 const (
 	typedColumnDenseParallelMinRows    = 1 << 16
 	typedColumnDenseParallelMinBlocks  = 16

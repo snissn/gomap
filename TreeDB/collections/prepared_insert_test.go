@@ -30,7 +30,7 @@ func TestPreparedInsertOverlapsOrderedCommit(t *testing.T) {
 	col := createColumnRetainedSemanticStreamCollection(t, d, "events")
 	sibling := createColumnRetainedSemanticStreamCollection(t, d, "sibling")
 	docs := [][]byte{[]byte(`{"row_id":1,"kind":"one"}`), []byte(`{"row_id":2,"kind":"two"}`)}
-	first, err := col.PrepareInsertBatchOwned([][]byte{[]byte("b")}, [][]byte{docs[0]}, 16<<20)
+	first, err := col.PrepareInsertBatchOwned([][]byte{[]byte("b")}, [][]byte{docs[0]}, 256<<20)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,7 +48,7 @@ func TestPreparedInsertOverlapsOrderedCommit(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("commit did not reach publication")
 	}
-	second, err := col.PrepareInsertBatchOwned([][]byte{[]byte("a")}, [][]byte{docs[1]}, 16<<20)
+	second, err := col.PrepareInsertBatchOwned([][]byte{[]byte("a")}, [][]byte{docs[1]}, 256<<20)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,7 +111,7 @@ func TestPreparedInsertManifestBudgetBeforeCommit(t *testing.T) {
 	if err := col.checkPreparedInsertManifestBudget(0, preparedInsertMaxManifestRecords, preparedInsertMaxManifestBytes); err != nil {
 		t.Fatalf("first publication without manifest: %v", err)
 	}
-	prepared, err := col.PrepareInsertBatchOwned([][]byte{[]byte("a")}, [][]byte{[]byte(`{"row_id":1,"kind":"one"}`)}, 16<<20)
+	prepared, err := col.PrepareInsertBatchOwned([][]byte{[]byte("a")}, [][]byte{[]byte(`{"row_id":1,"kind":"one"}`)}, 256<<20)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -144,6 +144,62 @@ func TestPreparedInsertManifestBudgetBeforeCommit(t *testing.T) {
 	}
 }
 
+func TestPreparedInsertRejectsTypedPrebuildWithoutCredit(t *testing.T) {
+	dir := t.TempDir()
+	enableColumnRetainedPlacementCommandWAL(t, dir)
+	d := openColumnRetainedPlacementDB(t, dir, backenddb.Options{})
+	defer func() { _ = d.Close() }()
+	col := createColumnRetainedSemanticStreamCollection(t, d, "events")
+	const rows = 4096
+	ids, documents := make([][]byte, rows), make([][]byte, rows)
+	for i := range ids {
+		ids[i] = []byte(fmt.Sprintf("%08d", i))
+		documents[i] = []byte(fmt.Sprintf(`{"row_id":%d,"kind":"one"}`, i))
+	}
+	before, applied := d.CommandWALNextLSN(), d.State().AppliedCommandLSN
+	prepared, err := col.PrepareInsertBatchOwned(ids, documents, 32<<20)
+	if prepared != nil || !errors.Is(err, ErrPreparedInsertResourceLimit) || !strings.Contains(err.Error(), "typed preparation") {
+		t.Fatalf("prepare=(%v,%v), want pre-typed resource rejection", prepared, err)
+	}
+	if got := d.CommandWALNextLSN(); got != before {
+		t.Fatalf("typed prebuild rejection advanced next LSN from %d to %d", before, got)
+	}
+	if got := d.State().AppliedCommandLSN; got != applied {
+		t.Fatalf("typed prebuild rejection advanced applied LSN from %d to %d", applied, got)
+	}
+	if err := d.CheckCommandWALPublishReady(); err != nil {
+		t.Fatalf("typed prebuild rejection poisoned command WAL: %v", err)
+	}
+}
+
+func TestPreparedInsertLongIDsRejectCommitReserveBeforeWAL(t *testing.T) {
+	dir := t.TempDir()
+	enableColumnRetainedPlacementCommandWAL(t, dir)
+	d := openColumnRetainedPlacementDB(t, dir, backenddb.Options{})
+	defer func() { _ = d.Close() }()
+	col := createColumnRetainedSemanticStreamCollection(t, d, "events")
+	const rows = 512
+	ids, documents := make([][]byte, rows), make([][]byte, rows)
+	for i := range ids {
+		ids[i] = append([]byte(fmt.Sprintf("%08d", i)), bytes.Repeat([]byte("x"), preparedInsertMaxIDBytes-8)...)
+		documents[i] = []byte(fmt.Sprintf(`{"row_id":%d,"kind":"long-id"}`, i))
+	}
+	before, applied := d.CommandWALNextLSN(), d.State().AppliedCommandLSN
+	prepared, err := col.PrepareInsertBatchOwned(ids, documents, 96<<20)
+	if prepared != nil || !errors.Is(err, ErrPreparedInsertResourceLimit) || !strings.Contains(err.Error(), "commit reserve") {
+		t.Fatalf("prepare=(%v,%v), want pre-WAL commit-reserve rejection", prepared, err)
+	}
+	if got := d.CommandWALNextLSN(); got != before {
+		t.Fatalf("commit-reserve rejection advanced next LSN from %d to %d", before, got)
+	}
+	if got := d.State().AppliedCommandLSN; got != applied {
+		t.Fatalf("commit-reserve rejection advanced applied LSN from %d to %d", applied, got)
+	}
+	if err := d.CheckCommandWALPublishReady(); err != nil {
+		t.Fatalf("commit-reserve rejection poisoned command WAL: %v", err)
+	}
+}
+
 func TestPreparedInsertRejectsUnfittablePrimaryKeyBeforeCommandWAL(t *testing.T) {
 	dir := t.TempDir()
 	enableColumnRetainedPlacementCommandWAL(t, dir)
@@ -170,7 +226,7 @@ func TestPreparedInsertRejectsUnfittablePrimaryKeyBeforeCommandWAL(t *testing.T)
 		t.Fatalf("unfittable primary key published row=%s, err=%v", got, err)
 	}
 	allowedID := bytes.Repeat([]byte("a"), preparedInsertMaxIDBytes)
-	allowed, err := col.PrepareInsertBatchOwned([][]byte{allowedID}, [][]byte{[]byte(`{"row_id":2,"kind":"allowed"}`)}, 16<<20)
+	allowed, err := col.PrepareInsertBatchOwned([][]byte{allowedID}, [][]byte{[]byte(`{"row_id":2,"kind":"allowed"}`)}, 256<<20)
 	if err != nil {
 		t.Fatalf("prepare maximum-length ID: %v", err)
 	}
@@ -240,14 +296,14 @@ func TestPreparedInsertSortedValuesAndReopen(t *testing.T) {
 		[]byte(`{"row_id":1,"kind":"a"}`),
 		[]byte(`{"row_id":2,"kind":"m","extra":{"nested":true}}`),
 	}
-	prepared, err := col.PrepareInsertBatchOwned(ids, docs, 16<<20)
+	prepared, err := col.PrepareInsertBatchOwned(ids, docs, 256<<20)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if prepared.OwnedBytes() <= 0 || prepared.OwnedBytes() > 16<<20 {
 		t.Fatalf("owned bytes=%d", prepared.OwnedBytes())
 	}
-	if prepared.ReservedBytes() <= prepared.OwnedBytes() || prepared.ReservedBytes() > 16<<20 {
+	if prepared.ReservedBytes() <= prepared.OwnedBytes() || prepared.ReservedBytes() > 256<<20 {
 		t.Fatalf("reservation=%d owned=%d", prepared.ReservedBytes(), prepared.OwnedBytes())
 	}
 	resultIDs, err := prepared.Commit()
@@ -328,7 +384,7 @@ func TestPreparedInsertRejectsHiddenOuterSliceOwners(t *testing.T) {
 	// cannot retain any backing. The final JSONBench batch has this shape.
 	ids, docs := make([][]byte, 1, 2), make([][]byte, 1, 2)
 	ids[0], docs[0] = id, doc
-	prepared, err := col.PrepareInsertBatchOwned(ids, docs, 16<<20)
+	prepared, err := col.PrepareInsertBatchOwned(ids, docs, 256<<20)
 	if err != nil {
 		t.Fatalf("nil-tail prepare: %v", err)
 	}
@@ -346,7 +402,7 @@ func TestPreparedInsertChargesInternedDeclaredStringOnce(t *testing.T) {
 		[]byte(`{"row_id":1,"kind":"repeated"}`),
 		[]byte(`{"row_id":2,"kind":"repeated"}`),
 	}
-	prepared, err := col.PrepareInsertBatchOwned(ids, docs, 16<<20)
+	prepared, err := col.PrepareInsertBatchOwned(ids, docs, 256<<20)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -367,7 +423,7 @@ func TestPreparedInsertAbandonBoundsAndLateConflict(t *testing.T) {
 	if _, err := col.PrepareInsertBatchOwned([][]byte{id}, [][]byte{doc}, 1); !errors.Is(err, ErrPreparedInsertResourceLimit) || errors.Is(err, ErrPreparedInsertIneligible) {
 		t.Fatalf("oversized prepare error=%v", err)
 	}
-	prepared, err := col.PrepareInsertBatchOwned([][]byte{id}, [][]byte{doc}, 16<<20)
+	prepared, err := col.PrepareInsertBatchOwned([][]byte{id}, [][]byte{doc}, 256<<20)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -384,7 +440,7 @@ func TestPreparedInsertAbandonBoundsAndLateConflict(t *testing.T) {
 	if got, err := col.Get(id); err != nil || got != nil {
 		t.Fatalf("abandoned prepare published a row: %s, %v", got, err)
 	}
-	prepared, err = col.PrepareInsertBatchOwned([][]byte{id}, [][]byte{doc}, 16<<20)
+	prepared, err = col.PrepareInsertBatchOwned([][]byte{id}, [][]byte{doc}, 256<<20)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -408,7 +464,7 @@ func TestPreparedInsertCheckpointBeforeCommitAndReopen(t *testing.T) {
 	id, doc := []byte("checkpoint-row"), []byte(`{"row_id":41,"kind":"checkpoint"}`)
 	siblingID, siblingDoc := []byte("sibling-row"), []byte(`{"row_id":42,"kind":"ordinary"}`)
 	beforeLSN := d.State().AppliedCommandLSN
-	prepared, err := col.PrepareInsertBatchOwned([][]byte{id}, [][]byte{doc}, 16<<20)
+	prepared, err := col.PrepareInsertBatchOwned([][]byte{id}, [][]byte{doc}, 256<<20)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -499,7 +555,7 @@ func TestPreparedInsertValueLogBlockPointerSurvivesReopenAndGC(t *testing.T) {
 	d := openColumnRetainedPlacementDB(t, dir, backenddb.Options{})
 	col := createColumnRetainedSemanticStreamCollection(t, d, "events")
 	ids, docs := retainedSemanticStreamDocuments(96)
-	prepared, err := col.PrepareInsertBatchOwned(ids, docs, 32<<20)
+	prepared, err := col.PrepareInsertBatchOwned(ids, docs, 256<<20)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -540,7 +596,7 @@ func TestPreparedInsertCrashRecoveryCuts(t *testing.T) {
 	if dir := os.Getenv("GOMAP_PREPARED_INSERT_CRASH_DIR"); dir != "" {
 		d := openColumnRetainedPlacementDB(t, dir, opts)
 		col := openColumnRetainedPlacementCollection(t, d, "events")
-		prepared, err := col.PrepareInsertBatchOwned([][]byte{[]byte(id)}, [][]byte{doc}, 16<<20)
+		prepared, err := col.PrepareInsertBatchOwned([][]byte{[]byte(id)}, [][]byte{doc}, 256<<20)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -644,7 +700,7 @@ func TestPreparedInsertRejectsMismatchedCapturedSchema(t *testing.T) {
 	defer func() { _ = d.Close() }()
 	col := createColumnRetainedSemanticStreamCollection(t, d, "events")
 	id := []byte("schema-row")
-	prepared, err := col.PrepareInsertBatchOwned([][]byte{id}, [][]byte{[]byte(`{"row_id":42,"kind":"one","payload":"value"}`)}, 16<<20)
+	prepared, err := col.PrepareInsertBatchOwned([][]byte{id}, [][]byte{[]byte(`{"row_id":42,"kind":"one","payload":"value"}`)}, 256<<20)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -675,7 +731,7 @@ func TestPreparedInsertRarePathsStayWithinBudget(t *testing.T) {
 		fmt.Fprintf(&document, `,"field_%d":%d`, i, i)
 	}
 	document.WriteByte('}')
-	prepared, err := col.PrepareInsertBatchOwned([][]byte{[]byte("wide")}, [][]byte{[]byte(document.String())}, 16<<20)
+	prepared, err := col.PrepareInsertBatchOwned([][]byte{[]byte("wide")}, [][]byte{[]byte(document.String())}, 256<<20)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -723,12 +779,12 @@ func TestPreparedInsertDenseHighEntropyBlock(t *testing.T) {
 	if input := preparedInsertInputBytes(ids, documents); input >= 10<<20 {
 		t.Fatalf("adversarial source input %d exceeds target source slot", input)
 	}
-	prepared, err := col.PrepareInsertBatchOwned(ids, documents, 128<<20)
+	prepared, err := col.PrepareInsertBatchOwned(ids, documents, 256<<20)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if prepared.OwnedBytes() > 128<<20 || prepared.ReservedBytes() > 128<<20 {
-		t.Fatalf("prepared charges owned=%d reserved=%d exceed 128 MiB", prepared.OwnedBytes(), prepared.ReservedBytes())
+	if prepared.OwnedBytes() > 256<<20 || prepared.ReservedBytes() > 256<<20 {
+		t.Fatalf("prepared charges owned=%d reserved=%d exceed 256 MiB", prepared.OwnedBytes(), prepared.ReservedBytes())
 	}
 	if _, err := prepared.Commit(); err != nil {
 		t.Fatal(err)
@@ -1002,7 +1058,7 @@ func TestPreparedInsertThreeAggregateSpecsRemainEligible(t *testing.T) {
 	col := openColumnRetainedPlacementCollection(t, d, meta.Name)
 	before := d.CommandWALNextLSN()
 	prepared, err := col.PrepareInsertBatchOwned([][]byte{[]byte("a")},
-		[][]byte{[]byte(`{"commit":{"collection":"app.bsky.feed.post","operation":"create"},"did":"did:one","kind":"commit","time_us":123}`)}, 32<<20)
+		[][]byte{[]byte(`{"commit":{"collection":"app.bsky.feed.post","operation":"create"},"did":"did:one","kind":"commit","time_us":123}`)}, 256<<20)
 	if err != nil {
 		t.Fatalf("three-spec target preparation: %v", err)
 	}

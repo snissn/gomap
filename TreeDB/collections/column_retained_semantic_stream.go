@@ -70,6 +70,7 @@ type columnRetainedSemanticStreamPath struct {
 type columnRetainedSemanticStreamStreams struct {
 	byKey                map[string]*columnRetainedSemanticStreamPath
 	root                 columnRetainedSemanticStreamPathNode
+	quota                *preparedSemanticStreamBlockQuota
 	maxPaths             int // zero on the ordinary path
 	maxPathBytes         int
 	maxEntries           int
@@ -83,6 +84,48 @@ type columnRetainedSemanticStreamStreams struct {
 type columnRetainedSemanticStreamPathNode struct {
 	children map[string]*columnRetainedSemanticStreamPathNode
 	stream   *columnRetainedSemanticStreamPath
+}
+
+// Each prepared worker owns a disjoint portion of the request's preparation
+// credit. Growth is charged before allocation; old slice backing is released
+// only after the replacement has been installed.
+type preparedSemanticStreamBlockQuota struct {
+	limit int64
+	used  int64
+}
+
+func (q *preparedSemanticStreamBlockQuota) reserve(n int64) bool {
+	if q == nil {
+		return true
+	}
+	if n < 0 || n > q.limit-q.used {
+		return false
+	}
+	q.used += n
+	return true
+}
+
+func (q *preparedSemanticStreamBlockQuota) release(n int64) {
+	if q == nil {
+		return
+	}
+	if n < 0 || n > q.used {
+		panic("collections: prepared stream quota release exceeds charge")
+	}
+	q.used -= n
+}
+
+// A Swiss-map insertion can briefly retain old and replacement groups. The
+// prepared path charges 1 KiB per new entry (including an empty-map group),
+// well above the pointer/string map group and control-byte backing in Go 1.26.
+const preparedSemanticStreamMapEntryReserveBytes = 1 << 10
+
+func (s *columnRetainedSemanticStreamStreams) reservePathBytes(n int64) bool {
+	if s.quota.reserve(n) {
+		return true
+	}
+	s.err = fmt.Errorf("%w: retained path growth exceeds block credit", ErrPreparedInsertResourceLimit)
+	return false
 }
 
 func newColumnRetainedSemanticStreamStreams() *columnRetainedSemanticStreamStreams {
@@ -99,8 +142,8 @@ func (s *columnRetainedSemanticStreamStreams) appendValue(path []string, row uin
 		s.err = fmt.Errorf("%w: retained block has more than %d entries", ErrPreparedInsertResourceLimit, s.maxEntries)
 		return
 	}
+	pathBytes := 0
 	if s.maxPathBytes > 0 {
-		pathBytes := 0
 		for _, segment := range path {
 			pathBytes += columnRetainedSemanticStreamDecimalSize(len(segment)) + 2 + len(segment)
 			if pathBytes > s.maxPathBytes {
@@ -116,10 +159,16 @@ func (s *columnRetainedSemanticStreamStreams) appendValue(path []string, row uin
 			return
 		}
 		if current.children == nil {
+			if !s.reservePathBytes(preparedSemanticStreamMapEntryReserveBytes) {
+				return
+			}
 			current.children = make(map[string]*columnRetainedSemanticStreamPathNode)
 		}
 		child := current.children[segment]
 		if child == nil {
+			if !s.reservePathBytes(preparedSemanticStreamMapEntryReserveBytes + int64(unsafe.Sizeof(columnRetainedSemanticStreamPathNode{}))) {
+				return
+			}
 			child = &columnRetainedSemanticStreamPathNode{}
 			current.children[segment] = child
 		}
@@ -129,6 +178,10 @@ func (s *columnRetainedSemanticStreamStreams) appendValue(path []string, row uin
 	if stream == nil {
 		if s.maxPaths > 0 && len(s.byKey) >= s.maxPaths {
 			s.err = fmt.Errorf("%w: retained block has more than %d paths", ErrPreparedInsertResourceLimit, s.maxPaths)
+			return
+		}
+		// The joined key and copied segment headers are private to this path.
+		if s.quota != nil && !s.reservePathBytes(preparedSemanticStreamMapEntryReserveBytes+2*int64(pathBytes)+int64(len(path))*int64(unsafe.Sizeof(""))+int64(unsafe.Sizeof(columnRetainedSemanticStreamPath{}))) {
 			return
 		}
 		key := columnRetainedSemanticStreamPathKey(path)
@@ -158,6 +211,9 @@ func (s *columnRetainedSemanticStreamStreams) reserveEntryHeaderGrowth(oldCap, n
 		s.err = fmt.Errorf("%w: retained entry headers need %d bytes, maximum %d", ErrPreparedInsertResourceLimit, peak, s.maxEntryHeaderBytes)
 		return false
 	}
+	if !s.reservePathBytes(allocation) {
+		return false
+	}
 	if peak > s.peakEntryHeaderBytes {
 		s.peakEntryHeaderBytes = peak
 	}
@@ -167,29 +223,33 @@ func (s *columnRetainedSemanticStreamStreams) reserveEntryHeaderGrowth(oldCap, n
 
 func (s *columnRetainedSemanticStreamStreams) appendPreparedValue(p *columnRetainedSemanticStreamPath, row uint64, raw []byte) {
 	if len(p.rawValues) == cap(p.rawValues) {
-		newCap := max(1, 2*cap(p.rawValues))
+		oldCap := cap(p.rawValues)
+		newCap := max(1, 2*oldCap)
 		if newCap > s.maxEntries {
 			newCap = s.maxEntries
 		}
-		if !s.reserveEntryHeaderGrowth(cap(p.rawValues), newCap, int(unsafe.Sizeof([]byte{}))) {
+		if !s.reserveEntryHeaderGrowth(oldCap, newCap, int(unsafe.Sizeof([]byte{}))) {
 			return
 		}
 		grown := make([][]byte, len(p.rawValues), newCap)
 		copy(grown, p.rawValues)
 		p.rawValues = grown
+		s.quota.release(int64(oldCap) * int64(unsafe.Sizeof([]byte{})))
 	}
 	if p.rows != nil {
 		if len(p.rows) == cap(p.rows) {
-			newCap := max(1, 2*cap(p.rows))
+			oldCap := cap(p.rows)
+			newCap := max(1, 2*oldCap)
 			if newCap > s.maxEntries {
 				newCap = s.maxEntries
 			}
-			if !s.reserveEntryHeaderGrowth(cap(p.rows), newCap, int(unsafe.Sizeof(uint64(0)))) {
+			if !s.reserveEntryHeaderGrowth(oldCap, newCap, int(unsafe.Sizeof(uint64(0)))) {
 				return
 			}
 			grown := make([]uint64, len(p.rows), newCap)
 			copy(grown, p.rows)
 			p.rows = grown
+			s.quota.release(int64(oldCap) * int64(unsafe.Sizeof(uint64(0))))
 		}
 		p.rows = append(p.rows, row)
 	} else if row != uint64(len(p.rawValues)) {
@@ -303,6 +363,7 @@ type columnRetainedSemanticStreamV1DeclaredPathTrie struct {
 type columnRetainedSemanticStreamV1PathSegmentInterner struct {
 	values    []string
 	segments  map[string]string
+	quota     *preparedSemanticStreamBlockQuota
 	maxValues int
 	maxBytes  int
 	usedBytes int
@@ -355,6 +416,12 @@ func (i *columnRetainedSemanticStreamV1PathSegmentInterner) intern(key []byte) s
 func (i *columnRetainedSemanticStreamV1PathSegmentInterner) admit(key []byte, values int) bool {
 	if i.maxValues > 0 && values >= i.maxValues || i.maxBytes > 0 && len(key) > i.maxBytes-i.usedBytes {
 		i.err = fmt.Errorf("%w: retained path interner exceeds prepared key budget", ErrPreparedInsertResourceLimit)
+		return false
+	}
+	// One cloned key, an old/new []string growth or Swiss-map group, and the
+	// first map conversion are all covered before string(key) allocates.
+	if !i.quota.reserve(int64(len(key)) + preparedSemanticStreamMapEntryReserveBytes) {
+		i.err = fmt.Errorf("%w: retained path interner exceeds block credit", ErrPreparedInsertResourceLimit)
 		return false
 	}
 	i.usedBytes += len(key)
@@ -626,15 +693,12 @@ func prepareColumnRetainedSemanticStreamV1StorageDocumentsWithIDsBudget(cfg Colu
 			return columnRetainedPayloadStorageDocuments{}, fmt.Errorf("%w: insufficient semantic preparation budget", ErrPreparedInsertResourceLimit)
 		}
 		for blockIdx := range blockBudgets {
-			start := blockIdx * columnRetainedSemanticStreamV1BlockRows
-			end := min(start+columnRetainedSemanticStreamV1BlockRows, len(documents))
-			var inputBytes int64
-			for i := start; i < end; i++ {
-				inputBytes = saturatingAddNonNegativeInt64(inputBytes, int64(cap(ids[i])+cap(documents[i])))
-			}
-			budget := saturatingAddNonNegativeInt64(preparedInsertAdmissionBytes(inputBytes, end-start, len(cfg.Columns)), preparedSemanticStreamEncoderReserveBytes)
-			if budget > remaining {
-				return columnRetainedPayloadStorageDocuments{}, fmt.Errorf("%w: block %d needs %d bytes, %d remain", ErrPreparedInsertResourceLimit, blockIdx, budget, remaining)
+			// Workers may run concurrently, so partition the available credit
+			// instead of granting each worker the full request limit. The
+			// block itself checks its source-derived fixed reserve before work.
+			budget := remaining / int64(len(blockBudgets)-blockIdx)
+			if budget <= 0 {
+				return columnRetainedPayloadStorageDocuments{}, fmt.Errorf("%w: no credit for retained block %d", ErrPreparedInsertResourceLimit, blockIdx)
 			}
 			blockBudgets[blockIdx] = budget
 			remaining -= budget
@@ -795,6 +859,44 @@ func columnRetainedSemanticStreamV1RunPrepareWorkers(blocks, workers int, runBlo
 	}
 }
 
+// Reserve the buffers whose maximum size follows directly from the admitted
+// source and the prepared cursor's structural ceilings. The remaining block
+// credit is debited at each new map/path/string and entry-header growth.
+func preparedSemanticStreamBlockFixedReserve(ids, documents [][]byte, columns int) int64 {
+	var sourceBytes, idBytes int64
+	maxDocumentBytes := 0
+	for i, document := range documents {
+		sourceBytes += int64(len(document))
+		idBytes += int64(len(ids[i]))
+		maxDocumentBytes = max(maxDocumentBytes, len(document))
+	}
+	// Pinned snissn/compress SpeedFastest uses 64 KiB blocks. The extra
+	// fourteen bytes cover its CRC-free frame header in MaxEncodedSize.
+	const zstdAccountingBlockBytes = 1 << 16
+	rawMaximum := sourceBytes +
+		int64(preparedSemanticStreamMaxBlockPaths*preparedSemanticStreamMaxPathBytes) +
+		int64(preparedSemanticStreamMaxBlockEntries*7) + 64
+	compressedMaximum := rawMaximum + 3*(rawMaximum/zstdAccountingBlockBytes+1) + 14
+	rawCapacity := rawMaximum + int64(columnRetainedSemanticStreamV1RawBlockScratchGrowthSlack(int(rawMaximum)))
+	// A pooled raw buffer (at most 8 MiB) can coexist with a new raw buffer;
+	// the compressed output and exact stored wrapper coexist with both.
+	outputPeak := int64(columnRetainedSemanticStreamV1RawBlockScratchMaxRetainedBytes) +
+		rawCapacity + compressedMaximum +
+		compressedMaximum + int64(len(columnRetainedSemanticStreamV1BlockZSTDMagic)+binary.MaxVarintLen64)
+	// Cursor descriptor slices can hold old and replacement backing. Nested
+	// object collector slices total at most one document's descriptor count.
+	cursorPeak := int64(preparedSemanticStreamMaxCursorDescriptors) *
+		(4*int64(unsafe.Sizeof(columnRetainedSemanticStreamV1JSONCursorNode{})) +
+			4*int64(unsafe.Sizeof(columnRetainedSemanticStreamV1JSONCursorMember{})) + 256)
+	declaredPeak := int64(len(documents))*(int64(unsafe.Sizeof(columnDeclaredRow{}))+int64(columns)*int64(unsafe.Sizeof(columnDeclaredValue{}))) +
+		idBytes + 2*int64(maxDocumentBytes)
+	locatorPeak := int64(columnRetainedSemanticStreamV1LocatorBlockArenaCapacity(len(documents))) +
+		int64(len(documents))*int64(unsafe.Sizeof([]byte{})) + sha256.Size
+	keysAndSmallObjects := int64(preparedSemanticStreamMaxBlockPaths)*2*int64(unsafe.Sizeof("")) +
+		2*preparedSemanticStreamMaxKeyBytes + 4<<10
+	return outputPeak + cursorPeak + declaredPeak + locatorPeak + keysAndSmallObjects + preparedSemanticStreamEncoderReserveBytes
+}
+
 func prepareColumnRetainedSemanticStreamV1StorageBlockWithIDs(
 	cfg ColumnStoreConfig,
 	ids, documents [][]byte,
@@ -807,6 +909,14 @@ func prepareColumnRetainedSemanticStreamV1StorageBlockWithIDs(
 	blockBudget int64,
 ) (columnRetainedSemanticStreamV1PreparedBlock, error) {
 	rows := end - start
+	var quota *preparedSemanticStreamBlockQuota
+	if blockBudget > 0 {
+		fixed := preparedSemanticStreamBlockFixedReserve(ids[start:end], documents[start:end], len(cfg.Columns))
+		if fixed > blockBudget {
+			return columnRetainedSemanticStreamV1PreparedBlock{}, fmt.Errorf("%w: retained block fixed reserve %d exceeds credit %d", ErrPreparedInsertResourceLimit, fixed, blockBudget)
+		}
+		quota = &preparedSemanticStreamBlockQuota{limit: blockBudget - fixed}
+	}
 	streamEntryCapacity := rows
 	if blockBudget > 0 {
 		// A rare path in a prepared batch must not reserve all 4096 rows.
@@ -816,6 +926,7 @@ func prepareColumnRetainedSemanticStreamV1StorageBlockWithIDs(
 	var metrics columnRetainedSemanticStreamV1PrepareMetrics
 	streams := newColumnRetainedSemanticStreamStreams()
 	if blockBudget > 0 {
+		streams.quota = quota
 		streams.maxPaths = preparedSemanticStreamMaxBlockPaths
 		streams.maxPathBytes = preparedSemanticStreamMaxPathBytes
 		streams.maxEntries = preparedSemanticStreamMaxBlockEntries
@@ -823,6 +934,7 @@ func prepareColumnRetainedSemanticStreamV1StorageBlockWithIDs(
 	}
 	pathInterner := &columnRetainedSemanticStreamV1PathSegmentInterner{}
 	if blockBudget > 0 {
+		pathInterner.quota = quota
 		pathInterner.maxValues = preparedSemanticStreamMaxInternedSegments
 		pathInterner.maxBytes = preparedSemanticStreamMaxInternedKeyBytes
 	}
@@ -834,7 +946,7 @@ func prepareColumnRetainedSemanticStreamV1StorageBlockWithIDs(
 	var declaredValues []columnDeclaredValue
 	var declaredRowIDBytes []byte
 	if rootPlan.declaredRowsReady || useSemanticParserDeclaredRows {
-		declaredStringInterner = &columnDeclaredStringInterner{}
+		declaredStringInterner = &columnDeclaredStringInterner{quota: quota}
 		declaredRows = make([]columnDeclaredRow, rows)
 		declaredValues = make([]columnDeclaredValue, rows*len(cfg.Columns))
 		declaredRowIDBytes = make([]byte, 0, columnRetainedSemanticStreamV1DeclaredRowIDArenaCapacity(ids[start:end]))
@@ -1139,6 +1251,9 @@ func collectColumnRetainedSemanticStreamV1RootFastPathDocument(cfg ColumnStoreCo
 		}
 		value, err := convertColumnDeclaredJSONParserValueWithStringInterner(col, valuesRaw[colIdx], &scratch, stringInterner)
 		if err != nil {
+			if errors.Is(err, ErrPreparedInsertResourceLimit) {
+				return nil, err
+			}
 			return nil, fmt.Errorf("%w: column[%d] %q: %v", ErrColumnDeclaredValueUnsupported, colIdx, col.Name, err)
 		}
 		values[colIdx] = value
@@ -1790,7 +1905,12 @@ func (e *columnRetainedSemanticStreamV1StoredBlockEncoder) close() {
 	if e == nil {
 		return
 	}
-	putColumnRetainedSemanticStreamV1RawBlockScratch(e.rawBlockScratch)
+	// Prepared buffers belong to their admitted request. Returning a newly
+	// allocated buffer to the process-wide pool would keep it alive after the
+	// request releases its credit.
+	if e.outputBudget == 0 {
+		putColumnRetainedSemanticStreamV1RawBlockScratch(e.rawBlockScratch)
+	}
 	e.rawBlockScratch = nil
 	if e.enc != nil {
 		e.enc.Close()
@@ -2053,6 +2173,9 @@ func collectColumnRetainedSemanticStreamV1RetainedJSONParserDocument(cfg ColumnS
 		}
 		value, err := convertColumnDeclaredJSONParserValueWithStringInterner(col, valuesRaw[colIdx], &scratch, stringInterner)
 		if err != nil {
+			if errors.Is(err, ErrPreparedInsertResourceLimit) {
+				return nil, err
+			}
 			return nil, fmt.Errorf("%w: column[%d] %q: %v", ErrColumnDeclaredValueUnsupported, colIdx, col.Name, err)
 		}
 		values[colIdx] = value

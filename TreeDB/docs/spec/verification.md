@@ -21,6 +21,14 @@ scalar type uses ordinary insertion), and
 validation), and `TestPreparedInsertThreeAggregateSpecsRemainEligible`
 (the JSONBench five-column, three-metadata-spec target stays on the prepared
 path without assigning a part identity).
+`TestPreparedInsertNearRowLimitHighEntropy`,
+`TestPreparedInsertRejectsTypedPrebuildWithoutCredit`, and
+`TestPreparedInsertLongIDsRejectCommitReserveBeforeWAL` exercise bounded
+admission at real batch cardinality and assert resource rejection before LSN
+assignment. The stream quota tests cover rare-path growth and compressed/raw
+block capacity. These focused tests establish the checked limits; the strict
+incremental-byte envelope still requires the encoder and typed/aggregate
+allocation-site audit described in the prepared-insert memory gate.
 `BenchmarkPreparedInsertPublicPath` compares ordinary, prepared serial, and
 one-ahead public insertion with the real WAL/publication path. These tests do
 not replace the JSONBench real-data load and query comparison.

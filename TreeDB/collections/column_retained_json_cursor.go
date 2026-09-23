@@ -490,6 +490,9 @@ func collectColumnRetainedSemanticStreamV1JSONCursorDocument(cfg ColumnStoreConf
 		}
 		value, err := convertColumnDeclaredJSONParserValueWithStringInterner(col, valuesRaw[colIdx], &scratch, stringInterner)
 		if err != nil {
+			if errors.Is(err, ErrPreparedInsertResourceLimit) {
+				return nil, err
+			}
 			return nil, fmt.Errorf("%w: column[%d] %q: %v", ErrColumnDeclaredValueUnsupported, colIdx, col.Name, err)
 		}
 		values[colIdx] = value

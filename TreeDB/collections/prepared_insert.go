@@ -11,7 +11,6 @@ import (
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
-	"github.com/snissn/gomap/TreeDB/internal/typedcolumn"
 )
 
 var ErrPreparedInsertIneligible = errors.New("collections: prepared insert ineligible")
@@ -44,6 +43,10 @@ const preparedInsertMaxAggregatePredicates = 3
 const preparedInsertMaxAggregatePredicateValues = 4
 const preparedInsertMaxAggregateConfigBytes = 8 << 10
 
+// The stable schema copy allocates only bounded column/sort/aggregate slices
+// and optional config structs; catalog strings remain shared immutable data.
+const preparedInsertSchemaCopyReserveBytes = 32 << 10
+
 // PreparedInsertBatch owns its input slices until Commit or Abandon. The caller
 // must not mutate or reuse IDs and documents after handing them to Prepare.
 // For byte accounting, callers must transfer complete, non-aliased backing
@@ -52,16 +55,17 @@ const preparedInsertMaxAggregateConfigBytes = 8 << 10
 // view into a larger allocation does not meet that ownership contract.
 // It owns no durable identity or asset; only Commit may publish the batch.
 type PreparedInsertBatch struct {
-	collection     *Collection
-	meta           CollectionMeta
-	ids, documents [][]byte
-	entries        []noIndexBatchEntry
-	retained       columnRetainedPayloadStorageDocuments
-	typedBatch     *typedColumnAdapterPreparedBatch
-	prepareElapsed time.Duration
-	ownedBytes     int64
-	commitReserve  int64
-	state          atomic.Uint32
+	collection         *Collection
+	meta               CollectionMeta
+	ids, documents     [][]byte
+	entries            []noIndexBatchEntry
+	retained           columnRetainedPayloadStorageDocuments
+	typedBatch         *typedColumnAdapterPreparedBatch
+	prepareElapsed     time.Duration
+	ownedBytes         int64
+	commitReserve      int64
+	materializeReserve int64
+	state              atomic.Uint32
 }
 
 // Capture only stable schema. Manifest progress grows with committed parts and
@@ -111,23 +115,82 @@ func preparedInsertUnusedOuterSlotsEmpty(ids, documents [][]byte) bool {
 // output at the same time. Reserve generous headroom before entering it, then
 // charge the actual retained backing after preparation. This is an admission
 // bound, not a prediction of the encoded size.
-func preparedInsertAdmissionBytes(inputBytes int64, rows, columns int) int64 {
-	const maxInt64 = int64(^uint64(0) >> 1)
-	if inputBytes > maxInt64/32 || int64(rows) > maxInt64/256 || columns > 0 && int64(rows) > maxInt64/int64(columns)/256 {
-		return maxInt64
-	}
-	return inputBytes*32 + int64(rows)*int64(columns)*256
+// The eligible typed prebuild borrows declared strings. Its distinct string
+// count is at most rows * columns. Four KiB per distinct value covers the
+// temporary and final dictionary maps (including old/new map growth), value
+// slices, sorted copy, and recode vector. The per-cell term covers fixed batch
+// vectors and nullable bitmaps; the fixed term covers schema/maps. This credit
+// is held only during preparation, before the token is returned.
+func preparedTypedScalarPrepareReserve(rows, columns int) int64 {
+	cells := preparedInsertMul(int64(rows), int64(columns))
+	return saturatingAddNonNegativeInt64(preparedInsertMul(4224, cells), 8<<20)
 }
 
-// Commit retains the prepared input while it clones result IDs, constructs the
-// command-WAL payload and root runs, and builds typed scalar batches and string
-// dictionaries. This estimate admits a token; it is not a proven peak bound.
-func preparedInsertCommitReserveBytes(ownedBytes int64, rows, columns int) int64 {
+// These disjoint allowances stay live together during an ordered commit:
+// result IDs, command WAL, primary/semantic runs and pointerization; ordered
+// root materialization; typed part and compressed image; row asset; fused row
+// sidecars; and bounded catalog/manifest cloning. The prepared backing is
+// charged separately. N <= 16K, C <= 5, and the row/column image codecs are
+// restricted by preparation eligibility. Existing pager, zipper, and asset
+// manager publication scratch is baseline DB work, not pipeline-owned memory.
+type preparedInsertCommitBudget struct {
+	materialization int64
+	total           int64
+}
+
+func preparedInsertCommitReserveBytes(publishedBytes, keyBytes, stringBytes int64, rows, columns, typedColumns, granules int) preparedInsertCommitBudget {
+	n := int64(rows)
+	c := int64(columns)
+	tc := int64(typedColumns)
+	g := int64(granules)
+	// The two root allowances are separate: passing the whole commit credit to
+	// the materializer would let it consume credit needed by the asset builders.
+	materialization := preparedInsertMul(3, publishedBytes)
+	materialization = saturatingAddNonNegativeInt64(materialization, preparedInsertMul(1024, n))
+	materialization = saturatingAddNonNegativeInt64(materialization, 8<<20)
+	// The command payload can coexist with old and replacement V2 frame
+	// scratch (three source-sized copies). Result IDs, pointerized run keys and
+	// inline values can add another three source-sized copies. The per-row
+	// allowance covers both pooled AppendOnly entry arrays, pointerization
+	// headers/ref slices, command-document headers and sort metadata.
+	walAndRuns := preparedInsertMul(6, publishedBytes)
+	walAndRuns = saturatingAddNonNegativeInt64(walAndRuns, preparedInsertMul(2048, n))
+	walAndRuns = saturatingAddNonNegativeInt64(walAndRuns, 8<<20)
+	// BuildColumnPart retains coded blocks, locators, marks and dictionaries;
+	// BuildColumnPartImage retains sections, a final image, and ZSTD workspace.
+	typed := int64(0)
+	if typedColumns > 0 {
+		typed = preparedInsertMul(12, stringBytes)
+		typed = saturatingAddNonNegativeInt64(typed, preparedInsertMul(1024, preparedInsertMul(n, tc)))
+		typed = saturatingAddNonNegativeInt64(typed, preparedInsertMul(4096, preparedInsertMul(g, tc+1)))
+		typed = saturatingAddNonNegativeInt64(typed, 64<<20)
+	}
+	// bytes.Buffer may hold old and replacement backing while encoding the
+	// row asset; scalar strings borrow the prepared declared-row backing.
+	rowAsset := preparedInsertMul(3, saturatingAddNonNegativeInt64(keyBytes, stringBytes))
+	rowAsset = saturatingAddNonNegativeInt64(rowAsset, preparedInsertMul(384, preparedInsertMul(n, c)))
+	rowAsset = saturatingAddNonNegativeInt64(rowAsset, 1<<20)
+	// Dictionary-code, int64, and at most three aggregate sidecar builders and
+	// their encoded assets coexist with the row and typed outputs.
+	sidecars := preparedInsertMul(1024, preparedInsertMul(n, c+3))
+	sidecars = saturatingAddNonNegativeInt64(sidecars, preparedInsertMul(6, stringBytes))
+	sidecars = saturatingAddNonNegativeInt64(sidecars, 16<<20)
+	// Pre-WAL gates cap the existing manifest and root-descriptor inputs at
+	// 4096 records and 1 MiB inline bytes each.
+	catalog := int64(16 << 20)
+	total := materialization
+	for _, allowance := range []int64{walAndRuns, typed, rowAsset, sidecars, catalog} {
+		total = saturatingAddNonNegativeInt64(total, allowance)
+	}
+	return preparedInsertCommitBudget{materialization: materialization, total: total}
+}
+
+func preparedInsertMul(a, b int64) int64 {
 	const maxInt64 = int64(^uint64(0) >> 1)
-	if ownedBytes > maxInt64/3 || int64(rows) > maxInt64/512 || columns > 0 && int64(rows) > maxInt64/int64(columns)/512 {
+	if a < 0 || b < 0 || b != 0 && a > maxInt64/b {
 		return maxInt64
 	}
-	return saturatingAddNonNegativeInt64(ownedBytes*3, int64(rows)*int64(columns)*512+8<<20)
+	return a * b
 }
 
 func preparedInsertBoundedScalarColumns(columns []ColumnStoreColumn) bool {
@@ -240,24 +303,6 @@ func preparedTypedBatchBackingBytes(prepared *typedColumnAdapterPreparedBatch) i
 	return owned
 }
 
-// The production scalar granule codec is LZ4. Benchmark-relaxed overrides may
-// select ZSTD granules, whose encoder workspace is outside the prepared scalar
-// bound. Image sections can still use the production ZSTD policy.
-func preparedTypedBatchHasZSTDGranule(prepared *typedColumnAdapterPreparedBatch) bool {
-	if prepared == nil {
-		return false
-	}
-	if prepared.Options.DefaultCompression == typedcolumn.CompressionZSTD {
-		return true
-	}
-	for _, column := range prepared.Columns {
-		if column.Definition.Compression == typedcolumn.CompressionZSTD {
-			return true
-		}
-	}
-	return false
-}
-
 // PrepareInsertBatchOwned prepares the no-index JSON semantic-stream path.
 // maxOwnedBytes limits the retained request and prepared payload. Estimated
 // headroom rejects large requests before encoding; a post-encode capacity check
@@ -348,9 +393,6 @@ func (c *Collection) PrepareInsertBatchOwned(ids, documents [][]byte, maxOwnedBy
 	if err := requireColumnStoreWriteOperationSupported(meta, ColumnPublishOperationInsert); err != nil {
 		return nil, err
 	}
-	if preparedInsertAdmissionBytes(inputBytes, len(ids), len(cfg.Columns)) > maxOwnedBytes {
-		return nil, fmt.Errorf("%w: input needs semantic preparation headroom within %d bytes", ErrPreparedInsertResourceLimit, maxOwnedBytes)
-	}
 	entries := make([]noIndexBatchEntry, len(ids))
 	for i := range ids {
 		entries[i] = noIndexBatchEntry{id: ids[i], document: documents[i]}
@@ -373,6 +415,32 @@ func (c *Collection) PrepareInsertBatchOwned(ids, documents [][]byte, maxOwnedBy
 	if err != nil {
 		return nil, err
 	}
+	// Count every retained owner before the typed builder allocates its batch and
+	// transient dictionaries. The semantic builder has finished, so its scratch
+	// credit can be reused, while these retained buffers remain live.
+	var retainedDocumentBytes int64
+	for _, document := range retained.documents {
+		retainedDocumentBytes = saturatingAddNonNegativeInt64(retainedDocumentBytes, int64(cap(document)))
+	}
+	ownedBeforeTyped := inputBytes + int64(cap(entries))*int64(unsafe.Sizeof(noIndexBatchEntry{})) +
+		int64(cap(orderedIDs)+cap(orderedDocs)+cap(retained.documents))*int64(unsafe.Sizeof([]byte{})) +
+		preparedDeclaredBackingBytes(retained.declaredRows, retained.declaredStringBackingBytes)
+	ownedBeforeTyped = saturatingAddNonNegativeInt64(ownedBeforeTyped, retainedDocumentBytes)
+	semanticBytes, err := preparedSemanticStreamBackingBytes(retained.semanticStreamBlocks)
+	if err != nil {
+		if retained.semanticStreamBlocks != nil {
+			resetCollectionRunTable(retained.semanticStreamBlocks)
+		}
+		return nil, err
+	}
+	ownedBeforeTyped = saturatingAddNonNegativeInt64(ownedBeforeTyped, semanticBytes)
+	if columnStoreHasTypedColumnPartOwners(*cfg) &&
+		(ownedBeforeTyped > maxOwnedBytes || preparedTypedScalarPrepareReserve(len(ids), len(cfg.Columns)) > maxOwnedBytes-ownedBeforeTyped) {
+		if retained.semanticStreamBlocks != nil {
+			resetCollectionRunTable(retained.semanticStreamBlocks)
+		}
+		return nil, fmt.Errorf("%w: typed preparation exceeds request credit", ErrPreparedInsertResourceLimit)
+	}
 	var typedBatch *typedColumnAdapterPreparedBatch
 	if columnStoreHasTypedColumnPartOwners(*cfg) {
 		typedBatch, err = prepareTypedColumnPartBatchFromSource(*cfg, 0, newTypedColumnDeclaredRowSource(cfg.Columns, retained.declaredRows))
@@ -391,30 +459,40 @@ func (c *Collection) PrepareInsertBatchOwned(ids, documents [][]byte, maxOwnedBy
 	}
 	// Charge backing capacities, including the semantic block arena. The caller
 	// controls the size of the one batch admitted to this preparation path.
-	ownedBytes := inputBytes + int64(cap(entries))*int64(unsafe.Sizeof(noIndexBatchEntry{})) +
-		int64(cap(orderedIDs)+cap(orderedDocs)+cap(retained.documents))*int64(unsafe.Sizeof([]byte{})) +
-		preparedDeclaredBackingBytes(retained.declaredRows, retained.declaredStringBackingBytes)
-	for _, document := range retained.documents {
-		ownedBytes += int64(cap(document))
+	ownedBytes := saturatingAddNonNegativeInt64(ownedBeforeTyped, preparedTypedBatchBackingBytes(typedBatch))
+	ownedBytes = saturatingAddNonNegativeInt64(ownedBytes, preparedInsertSchemaCopyReserveBytes)
+	var keyBytes int64
+	for _, id := range ids {
+		keyBytes += int64(len(id))
 	}
-	semanticBytes, err := preparedSemanticStreamBackingBytes(retained.semanticStreamBlocks)
-	if err != nil {
+	typedColumns, granules := 0, 0
+	if typedBatch != nil {
+		typedColumns = len(typedBatch.Columns) + 1 // include the primary ID
+		rowsPerGranule := typedBatch.Options.RowsPerGranule
+		if rowsPerGranule == 0 {
+			rowsPerGranule = typedColumnDefaultRowsPerGranule()
+		}
+		if adaptive := typedBatch.Options.AdaptiveMarkSizing; adaptive.Enabled {
+			rowsPerGranule = adaptive.MinRows
+		}
+		if rowsPerGranule < 1 {
+			rowsPerGranule = 1
+		}
+		granules = (len(ids) + rowsPerGranule - 1) / rowsPerGranule
+	}
+	publishedBytes := saturatingAddNonNegativeInt64(inputBytes, retainedDocumentBytes)
+	publishedBytes = saturatingAddNonNegativeInt64(publishedBytes, semanticBytes)
+	commitBudget := preparedInsertCommitReserveBytes(publishedBytes, keyBytes, retained.declaredStringBackingBytes,
+		len(ids), len(cfg.Columns), typedColumns, granules)
+	if ownedBytes > maxOwnedBytes || commitBudget.total > maxOwnedBytes-ownedBytes {
 		if retained.semanticStreamBlocks != nil {
 			resetCollectionRunTable(retained.semanticStreamBlocks)
 		}
-		return nil, err
-	}
-	ownedBytes += semanticBytes
-	ownedBytes += preparedTypedBatchBackingBytes(typedBatch)
-	commitReserve := preparedInsertCommitReserveBytes(ownedBytes, len(ids), len(cfg.Columns))
-	if ownedBytes > maxOwnedBytes || commitReserve > maxOwnedBytes-ownedBytes {
-		if retained.semanticStreamBlocks != nil {
-			resetCollectionRunTable(retained.semanticStreamBlocks)
-		}
-		return nil, fmt.Errorf("%w: prepared bytes %d plus commit reserve %d exceed %d", ErrPreparedInsertResourceLimit, ownedBytes, commitReserve, maxOwnedBytes)
+		return nil, fmt.Errorf("%w: prepared bytes %d plus commit reserve %d exceed %d", ErrPreparedInsertResourceLimit, ownedBytes, commitBudget.total, maxOwnedBytes)
 	}
 	return &PreparedInsertBatch{collection: c, meta: preparedInsertSchemaMeta(meta), ids: ids, documents: documents,
-		entries: entries, retained: retained, typedBatch: typedBatch, prepareElapsed: time.Since(start), ownedBytes: ownedBytes, commitReserve: commitReserve}, nil
+		entries: entries, retained: retained, typedBatch: typedBatch, prepareElapsed: time.Since(start),
+		ownedBytes: ownedBytes, commitReserve: commitBudget.total, materializeReserve: commitBudget.materialization}, nil
 }
 
 func (p *PreparedInsertBatch) OwnedBytes() int64 {

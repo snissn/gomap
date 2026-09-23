@@ -619,3 +619,34 @@ func TestPreparedSemanticStreamEntryHeadersRejectBeforeGrowth(t *testing.T) {
 		t.Fatalf("header byte cap: entries=%d err=%v", other.entries, other.err)
 	}
 }
+
+func TestPreparedSemanticStreamBlockQuotaRejectsBeforePathGrowth(t *testing.T) {
+	streams := newColumnRetainedSemanticStreamStreams()
+	streams.maxEntries = 8
+	streams.maxPaths = 8
+	streams.maxEntryHeaderBytes = 1 << 20
+	streams.quota = &preparedSemanticStreamBlockQuota{limit: 1}
+	streams.appendValue([]string{"field"}, 0, []byte("1"), 0)
+	if !errors.Is(streams.err, ErrPreparedInsertResourceLimit) {
+		t.Fatalf("path growth with no credit: %v", streams.err)
+	}
+	if streams.root.children != nil || len(streams.byKey) != 0 || streams.entries != 0 {
+		t.Fatalf("rejected growth mutated path state: children=%v paths=%d entries=%d", streams.root.children, len(streams.byKey), streams.entries)
+	}
+}
+
+func TestPreparedSemanticStreamBlockQuotaRejectsBeforeHeaderAndStringGrowth(t *testing.T) {
+	stream := &columnRetainedSemanticStreamPath{}
+	streams := newColumnRetainedSemanticStreamStreams()
+	streams.maxEntries = 8
+	streams.maxEntryHeaderBytes = 1 << 20
+	streams.quota = &preparedSemanticStreamBlockQuota{limit: 1}
+	streams.appendPreparedValue(stream, 0, []byte("1"))
+	if !errors.Is(streams.err, ErrPreparedInsertResourceLimit) || len(stream.rawValues) != 0 || cap(stream.rawValues) != 0 {
+		t.Fatalf("header growth escaped quota: err=%v len=%d cap=%d", streams.err, len(stream.rawValues), cap(stream.rawValues))
+	}
+	interner := &columnDeclaredStringInterner{quota: &preparedSemanticStreamBlockQuota{limit: 1}}
+	if value := interner.intern([]byte("value")); value != "" || !errors.Is(interner.err, ErrPreparedInsertResourceLimit) || len(interner.values) != 0 {
+		t.Fatalf("declared string growth escaped quota: value=%q err=%v entries=%d", value, interner.err, len(interner.values))
+	}
+}

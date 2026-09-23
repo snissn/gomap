@@ -410,7 +410,7 @@ Current collection data mutators:
 | Method | Current shipped contract |
 |---|---|
 | `Collection.Insert` / `InsertBatch` | Successful return means process-local visibility according to the path that executed it. Crash recovery is promised only after `Flush`, `FlushAll`, `Checkpoint`, `Close`, or a synchronous publish path covers the mutation. |
-| `Collection.PrepareInsertBatchOwned` / `PreparedInsertBatch.Commit` | Preparation owns caller buffers but has no visibility, LSN, asset, or durable acknowledgment. `Commit` consumes the object once and uses the same ordered command-WAL publication and acknowledgment as `InsertBatch`; `Abandon` releases only private memory. The caller must keep handed-off buffers unchanged until commit or abandon. |
+| `Collection.PrepareInsertBatchOwned` / `PreparedInsertBatch.Commit` | Preparation owns complete caller ID/document backings but has no visibility, LSN, asset, or durable acknowledgment. The caller keeps them unchanged until commit or abandon. `ErrPreparedInsertResourceLimit` is a fail-closed size/structural rejection; unsupported configurations return the distinct `ErrPreparedInsertIneligible`. `Commit` consumes the object once and uses the same ordered command-WAL publication and acknowledgment as `InsertBatch`; `Abandon` releases only private memory. The on-disk format, replay, and GC authority are unchanged. |
 | `Collection.Update` / `UpdateBatch` | Successful return is process-local visibility until a public persistence boundary. Callback code is not durable replay input. |
 | `Collection.Delete` / `DeleteBatch` | Successful return is process-local visibility until a public persistence boundary. |
 

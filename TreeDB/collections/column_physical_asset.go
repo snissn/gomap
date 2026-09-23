@@ -477,6 +477,8 @@ func columnDeclaredJSONParserValueSupported(valueType ColumnStoreValueType) bool
 type columnDeclaredStringInterner struct {
 	values []string
 	lookup map[string]string
+	quota  *preparedSemanticStreamBlockQuota
+	err    error
 }
 
 // Each interned string has one cloned backing even when many declared rows
@@ -504,12 +506,18 @@ func (i *columnDeclaredStringInterner) intern(value []byte) string {
 	if i == nil {
 		return string(value)
 	}
+	if i.err != nil {
+		return ""
+	}
 	if len(value) == 0 {
 		return ""
 	}
 	if i.lookup != nil {
 		if interned, ok := i.lookup[string(value)]; ok {
 			return interned
+		}
+		if !i.reserve(len(value)) {
+			return ""
 		}
 		interned := string(value)
 		i.lookup[interned] = interned
@@ -519,6 +527,9 @@ func (i *columnDeclaredStringInterner) intern(value []byte) string {
 		if interned == string(value) {
 			return interned
 		}
+	}
+	if !i.reserve(len(value)) {
+		return ""
 	}
 	interned := string(value)
 	i.values = append(i.values, interned)
@@ -530,6 +541,16 @@ func (i *columnDeclaredStringInterner) intern(value []byte) string {
 		i.values = nil
 	}
 	return interned
+}
+
+func (i *columnDeclaredStringInterner) reserve(length int) bool {
+	// The one owned string copy, old/new []string growth, and lookup map
+	// insertion or initial conversion are charged before string(value).
+	if i.quota.reserve(int64(length) + preparedSemanticStreamMapEntryReserveBytes) {
+		return true
+	}
+	i.err = fmt.Errorf("%w: declared string interner exceeds block credit", ErrPreparedInsertResourceLimit)
+	return false
 }
 
 func convertColumnDeclaredJSONParserValue(col ColumnStoreColumn, raw jsonParserIndexValue, scratch *[]byte) (columnDeclaredValue, error) {
@@ -562,6 +583,9 @@ func convertColumnDeclaredJSONParserValueWithStringInterner(col ColumnStoreColum
 			return columnDeclaredValue{}, err
 		}
 		value.String = stringInterner.intern(unescaped)
+		if stringInterner != nil && stringInterner.err != nil {
+			return columnDeclaredValue{}, stringInterner.err
+		}
 	case ColumnStoreValueFloat32Vector:
 		values, err := convertColumnJSONParserFloat32Vector(raw, columnStoreFloat32VectorElementsPerRow(col))
 		if err != nil {

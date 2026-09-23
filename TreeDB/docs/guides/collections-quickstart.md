@@ -351,7 +351,7 @@ non-aliased ID/document allocations with no unrelated buffers retained in
 unused outer-slice slots, so the charged capacities describe the backing:
 
 ```go
-prepared, err := col.PrepareInsertBatchOwned(ids, docs, 512<<20)
+prepared, err := col.PrepareInsertBatchOwned(ids, docs, 1280<<20)
 if err != nil {
     log.Fatal(err)
 }
@@ -366,7 +366,10 @@ the successful `Commit` has the same WAL and publication boundary as
 `InsertBatch`. An unsupported schema returns `ErrPreparedInsertIneligible`;
 oversized or structurally limited input returns the distinct
 `ErrPreparedInsertResourceLimit`. A bounded caller must not retry the latter
-through ordinary `InsertBatch`.
+through ordinary `InsertBatch`. The example's 1.25 GiB is a conservative
+per-request admission ceiling for this lane, not measured heap use. A
+one-ahead loader must also enforce the same ceiling across its source batch,
+queued preparation, and ordered commit; see the prepared-insert memory gate.
 
 ## Runnable package benchmark
 

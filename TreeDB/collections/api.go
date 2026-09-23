@@ -13154,7 +13154,7 @@ func (c *Collection) insertBatchNoIndex(
 	}}
 	var materializeBudget *backenddb.OrderedRootDeltaMaterializationBudget
 	if execOpts.prepared != nil {
-		materializeBudget = &backenddb.OrderedRootDeltaMaterializationBudget{RemainingBytes: execOpts.prepared.commitReserve}
+		materializeBudget = &backenddb.OrderedRootDeltaMaterializationBudget{RemainingBytes: execOpts.prepared.materializeReserve}
 		ordered[0].MaterializeMaxEntries = len(entries)
 		ordered[0].MaterializeBudget = materializeBudget
 	}
