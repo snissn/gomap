@@ -226,9 +226,11 @@ closed by default. Unsupported collection configurations return
 `Commit` rechecks persisted conflicts and schema under the normal insert path
 before WAL admission. One caller can
 prepare batch N+1 while a single committer publishes N; neither a queued
-object nor an abandoned object is acknowledged or visible. Typed part creation,
-dictionary finalization, asset sync, root installation, and GC authority remain
-in the ordered publication path. The on-disk format and replay rules are unchanged.
+object nor an abandoned object is acknowledged or visible. Preparation also
+builds an identity-free typed scalar batch and finalizes its string dictionaries.
+The ordered publisher assigns the part identity and builds the typed part and
+image, then performs asset sync and root installation. GC authority stays with
+the ordered publication path. The on-disk format and replay rules are unchanged.
 
 The writer prepares and protects required external refs, appends the typed
 command WAL frame through the shared commit-log journal, and applies through the

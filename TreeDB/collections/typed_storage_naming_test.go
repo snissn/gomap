@@ -481,8 +481,8 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	{path: "TreeDB/collections/column_retained_semantic_stream.go", classification: typedStorageLegacyCompatibility, matchingLines: 20, occurrences: 20},
 	// Prepared inserts use the existing public schema configuration and
 	// compatibility error vocabulary; they introduce no new storage owner.
-	{path: "TreeDB/collections/prepared_insert.go", classification: typedStorageLegacyCompatibility, matchingLines: 9, occurrences: 10},
-	{path: "TreeDB/collections/prepared_insert_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 8, occurrences: 12},
+	{path: "TreeDB/collections/prepared_insert.go", classification: typedStorageLegacyCompatibility, matchingLines: 10, occurrences: 11},
+	{path: "TreeDB/collections/prepared_insert_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 19, occurrences: 25},
 	{path: "TreeDB/collections/column_retained_semantic_stream_raw_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 16, occurrences: 16},
 	{path: "TreeDB/collections/column_retained_vlog_placement_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 56, occurrences: 56},
 	{path: "TreeDB/collections/column_semantics.go", classification: typedStorageLegacyCompatibility, matchingLines: 34, occurrences: 34},
@@ -600,7 +600,7 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	{path: "TreeDB/collections/typed_column_string_scan.go", classification: typedStorageLegacyCompatibility, matchingLines: 13, occurrences: 18},
 	{path: "TreeDB/collections/typed_column_string_scan_bench_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 9, occurrences: 9},
 	{path: "TreeDB/collections/typed_column_string_scan_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 13, occurrences: 14},
-	{path: "TreeDB/collections/typed_column_publication.go", classification: typedStorageLegacyCompatibility, matchingLines: 22, occurrences: 24},
+	{path: "TreeDB/collections/typed_column_publication.go", classification: typedStorageLegacyCompatibility, matchingLines: 23, occurrences: 25},
 	{path: "TreeDB/collections/typed_column_publication_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 96, occurrences: 99},
 	{path: "TreeDB/collections/typed_column_semantics_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 28, occurrences: 30},
 	{path: "TreeDB/collections/typed_storage_layout.go", classification: typedStorageLegacyCompatibility, matchingLines: 26, occurrences: 52},

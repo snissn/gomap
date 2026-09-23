@@ -18,7 +18,9 @@ commit, plus queued root-installation cuts under checkpoint),
 `TestPreparedInsertFallsBackBeforeUnboundedDeclaredRowExtraction` (unsupported
 scalar type uses ordinary insertion), and
 `TestPreparedInsertRejectsMismatchedCapturedSchema` (commit-time catalog
-validation).
+validation), and `TestPreparedInsertThreeAggregateSpecsRemainEligible`
+(the JSONBench five-column, three-metadata-spec target stays on the prepared
+path without assigning a part identity).
 `BenchmarkPreparedInsertPublicPath` compares ordinary, prepared serial, and
 one-ahead public insertion with the real WAL/publication path. These tests do
 not replace the JSONBench real-data load and query comparison.

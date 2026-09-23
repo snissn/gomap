@@ -634,8 +634,9 @@ through the public WAL/asset path. The JSONBench `-engine-prepare-depth 0/1`
 comparison holds raw-input pipeline depth constant. Record load wall time,
 engine prepare/commit overlap, allocation bytes per row, peak RSS, and durable
 storage in matched fresh-DB runs; the helper-only retained-block benchmark is
-not a throughput claim. Preparation owns caller buffers, while typed part
-construction and all durability barriers remain in ordered commit.
+not a throughput claim. Preparation owns caller buffers and an identity-free
+typed scalar batch; part/image construction and all durability barriers remain
+in ordered commit.
 
 | Symptom | What it means | Action |
 | --- | --- | --- |

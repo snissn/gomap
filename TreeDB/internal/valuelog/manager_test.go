@@ -61,6 +61,32 @@ func TestManagerRemoveSegmentIfUnpinnedNil(t *testing.T) {
 	}
 }
 
+func TestManagerCurrentSubsetNoRefreshPinsOnlyRequestedSegments(t *testing.T) {
+	manager := &Manager{files: map[uint32]*File{1: {}, 2: {}, 3: {}, 4: {}}}
+	manager.files[3].IsZombie.Store(true)
+	set := manager.CurrentSubsetNoRefresh(map[uint32]struct{}{1: {}, 2: {}, 3: {}, 99: {}})
+	if len(set.Files) != 2 || set.Files[1] == nil || set.Files[2] == nil || set.Files[3] != nil || set.Files[4] != nil {
+		t.Fatalf("subset snapshot includes unexpected files: %v", set.Files)
+	}
+	if got := manager.files[4].RefCount.Load(); got != 0 {
+		t.Fatalf("unrelated file pinned %d times", got)
+	}
+	manager.mu.Lock()
+	manager.files[5] = &File{}
+	manager.mu.Unlock()
+	if set.Files[5] != nil {
+		t.Fatal("later unrelated registration entered pinned subset")
+	}
+	if err := manager.Release(set); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []uint32{1, 2} {
+		if got := manager.files[id].RefCount.Load(); got != 0 {
+			t.Fatalf("file %d pin count after release=%d", id, got)
+		}
+	}
+}
+
 func waitForRemapIdle(t *testing.T, files ...*File) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)

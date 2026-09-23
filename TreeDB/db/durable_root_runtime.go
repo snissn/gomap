@@ -1022,7 +1022,7 @@ func (db *DB) captureRegisteredDurableValueLogResourcesV1(references map[uint32]
 	if db == nil || db.valueLogManager == nil || len(references) == 0 {
 		return nil, nil
 	}
-	set := db.valueLogManager.CurrentSetNoRefresh()
+	set := db.valueLogManager.CurrentSubsetNoRefresh(references)
 	defer func() { _ = db.valueLogManager.Release(set) }()
 	fileIDs := make([]uint32, 0, len(references))
 	for fileID := range references {

@@ -2001,6 +2001,24 @@ func (m *Manager) CurrentSetNoRefresh() *Set {
 	return m.currentSetLocked()
 }
 
+// CurrentSubsetNoRefresh pins only registered, non-zombie files named by ids.
+// Unrelated registrations cannot enlarge this snapshot. The caller releases it
+// through Release, just like CurrentSetNoRefresh.
+func (m *Manager) CurrentSubsetNoRefresh(ids map[uint32]struct{}) *Set {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	files := make(map[uint32]*File, len(ids))
+	for id := range ids {
+		if f := m.files[id]; f != nil && !f.IsZombie.Load() {
+			files[id] = f
+			f.RefCount.Add(1)
+		}
+	}
+	set := &Set{Files: files, disableReadChecksum: m.disableReadChecksum}
+	set.RefCount.Store(1)
+	return set
+}
+
 // currentSetLocked builds a ref-counted snapshot.
 // m.mu must be held (read or write).
 func (m *Manager) currentSetLocked() *Set {
