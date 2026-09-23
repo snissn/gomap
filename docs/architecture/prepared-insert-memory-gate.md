@@ -49,7 +49,10 @@ Allocation sites still requiring a pre-allocation bound or quota-aware builder:
 - `encodeStreamsWithRawLimitMeasured` checks the raw size hint before its raw
   allocation, and `encodeWithRawLimit` checks zstd's maximum output size before
   encoding. These checks still need a combined accounting of raw, compressed,
-  copied output, live stream state, and zstd workspace.
+  copied output, live stream state, and zstd workspace. The shared raw scratch
+  pool can retain four buffers of up to 8 MiB each after a prepared call; a
+  strict pipeline cap must charge that 32 MiB possible residency as shared
+  workspace or give prepared calls a separately accounted pool.
 - Ordered `Commit` retains the prepared token while
   `prepareColumnWritePublishInputBeforeCommandWAL`, typed string/int64 asset
   builders in `column_publish_write.go`, column-part/image construction, and

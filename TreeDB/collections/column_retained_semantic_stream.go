@@ -895,6 +895,7 @@ func prepareColumnRetainedSemanticStreamV1StorageBlockWithIDs(
 		}
 	}
 	metrics.BlockCollect = time.Since(collectStart)
+	checkedRawHint := 0
 	if blockBudget > 0 {
 		// The raw and stored forms coexist while the block encoder runs.
 		// Check the raw size before the encoder can allocate its raw buffer.
@@ -903,7 +904,8 @@ func prepareColumnRetainedSemanticStreamV1StorageBlockWithIDs(
 			keys = append(keys, key)
 		}
 		// The encoder may coexist with raw, compressed, and copied output.
-		if int64(columnRetainedSemanticStreamV1RawBlockSizeHint(rows, keys, streams)) > (blockBudget-preparedSemanticStreamEncoderReserveBytes)/3 {
+		checkedRawHint = columnRetainedSemanticStreamV1RawBlockSizeHint(rows, keys, streams)
+		if int64(checkedRawHint) > (blockBudget-preparedSemanticStreamEncoderReserveBytes)/3 {
 			return columnRetainedSemanticStreamV1PreparedBlock{}, fmt.Errorf("%w: retained block %d exceeds raw encoding budget", ErrPreparedInsertResourceLimit, start)
 		}
 	}
@@ -913,11 +915,13 @@ func prepareColumnRetainedSemanticStreamV1StorageBlockWithIDs(
 		return columnRetainedSemanticStreamV1PreparedBlock{}, err
 	}
 	if blockBudget > 0 {
-		// A pooled buffer can be much larger than this block. Prepared raw
-		// output takes ownership of its backing, so size it from this block's
-		// checked hint instead of inheriting unrelated pooled capacity.
-		putColumnRetainedSemanticStreamV1RawBlockScratch(storedBlockEncoder.rawBlockScratch)
-		storedBlockEncoder.rawBlockScratch = nil
+		// Reuse a pooled buffer only when its capacity fits this block's
+		// checked hint. Prepared raw output can take ownership of that backing;
+		// an unrelated larger pooled buffer must not inflate its charge.
+		if cap(storedBlockEncoder.rawBlockScratch) > checkedRawHint+columnRetainedSemanticStreamV1RawBlockScratchGrowthSlack(checkedRawHint) {
+			putColumnRetainedSemanticStreamV1RawBlockScratch(storedBlockEncoder.rawBlockScratch)
+			storedBlockEncoder.rawBlockScratch = nil
+		}
 		storedBlockEncoder.outputBudget = blockBudget
 	}
 	metrics.BlockEncoderSetup = time.Since(encoderStart)
@@ -1905,13 +1909,15 @@ func (e *columnRetainedSemanticStreamV1StoredBlockEncoder) encodeWithRawLimitBud
 	} else {
 		compressed = e.enc.EncodeAll(raw, nil)
 	}
-	out := make([]byte, 0, len(columnRetainedSemanticStreamV1BlockZSTDMagic)+binary.MaxVarintLen64+len(compressed))
+	var rawLengthHeader [binary.MaxVarintLen64]byte
+	storedLength := len(columnRetainedSemanticStreamV1BlockZSTDMagic) + binary.PutUvarint(rawLengthHeader[:], uint64(len(raw))) + len(compressed)
+	if storedLength >= len(raw) {
+		return raw, nil
+	}
+	out := make([]byte, 0, storedLength)
 	out = append(out, columnRetainedSemanticStreamV1BlockZSTDMagic...)
 	out = binary.AppendUvarint(out, uint64(len(raw)))
 	out = append(out, compressed...)
-	if len(out) >= len(raw) {
-		return raw, nil
-	}
 	return out, nil
 }
 
