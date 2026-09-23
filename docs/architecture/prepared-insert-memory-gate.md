@@ -13,7 +13,7 @@ post-preparation capacity charge. `ErrPreparedInsertResourceLimit` is distinct
 from configuration `ErrPreparedInsertIneligible`. A bounded caller must stop on
 resource rejection; only unsupported configuration may use ordinary
 `InsertBatch`. JSONBench's target lane has a 1 MiB source-line ceiling, a
-source-batch ceiling of at most 16 MiB, and one queued successor. It now holds producer and
+source-batch ceiling of at most 10 MiB, and one queued successor. It now holds producer and
 committer credits in one reservation ledger and acquires source credit before
 cloning each row; a successor source slot remains available while the depth-zero
 consumer prepares. `EnginePeakReservedBytes` reports peak reserved credit plus

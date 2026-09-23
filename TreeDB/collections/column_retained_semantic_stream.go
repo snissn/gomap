@@ -649,6 +649,12 @@ func prepareColumnRetainedSemanticStreamV1StorageDocumentsWithIDsBudget(cfg Colu
 	rootPlan, useRootFastPath := columnRetainedSemanticStreamV1RootFastPathPlanForConfig(cfg, ids, len(documents))
 	declaredPathTrie, useSemanticParserDeclaredRows := columnRetainedSemanticStreamV1DeclaredPathTrieForConfig(cfg, ids, len(documents))
 	if blockBudgets != nil {
+		// The fallback below extracts the entire declared batch before the
+		// bounded block cursor runs. Never enter it from the prepared lane,
+		// including when this helper is called without the public API guard.
+		if !useSemanticParserDeclaredRows {
+			return columnRetainedPayloadStorageDocuments{}, fmt.Errorf("%w: prepared declared rows require the bounded semantic cursor", ErrPreparedInsertIneligible)
+		}
 		// The structural cursor enforces prepared-only depth and descriptor
 		// limits. The root fast path can recurse through arbitrary nested JSON.
 		useRootFastPath = false

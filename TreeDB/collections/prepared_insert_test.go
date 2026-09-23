@@ -3,6 +3,7 @@ package collections
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -467,6 +468,96 @@ func TestPreparedInsertRarePathsStayWithinBudget(t *testing.T) {
 	}
 }
 
+func TestPreparedInsertDenseHighEntropyBlock(t *testing.T) {
+	dir := t.TempDir()
+	enableColumnRetainedPlacementCommandWAL(t, dir)
+	d := openColumnRetainedPlacementDB(t, dir, backenddb.Options{})
+	defer func() { _ = d.Close() }()
+	col := createColumnRetainedSemanticStreamCollection(t, d, "events")
+	const rows, fields = 512, 24
+	ids, documents := make([][]byte, rows), make([][]byte, rows)
+	for row := range documents {
+		ids[row] = []byte(fmt.Sprintf("entropy-%04d", row))
+		var document strings.Builder
+		fmt.Fprintf(&document, `{"row_id":%d,"kind":"entropy"`, row)
+		for field := 0; field < fields; field++ {
+			digest := sha256.Sum256([]byte(fmt.Sprintf("row-%d-field-%d", row, field)))
+			fmt.Fprintf(&document, `,"field_%02d":"%x"`, field, digest)
+		}
+		document.WriteByte('}')
+		documents[row] = []byte(document.String())
+	}
+	if input := preparedInsertInputBytes(ids, documents); input >= 10<<20 {
+		t.Fatalf("adversarial source input %d exceeds target source slot", input)
+	}
+	prepared, err := col.PrepareInsertBatchOwned(ids, documents, 128<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prepared.OwnedBytes() > 128<<20 || prepared.ReservedBytes() > 128<<20 {
+		t.Fatalf("prepared charges owned=%d reserved=%d exceed 128 MiB", prepared.OwnedBytes(), prepared.ReservedBytes())
+	}
+	if _, err := prepared.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range []int{0, rows / 2, rows - 1} {
+		got, err := col.Get(ids[row])
+		if err != nil || !bytes.Equal(got, documents[row]) {
+			t.Fatalf("dense row %d got=%d bytes err=%v", row, len(got), err)
+		}
+	}
+}
+
+func TestPreparedInsertNearRowLimitHighEntropy(t *testing.T) {
+	dir := t.TempDir()
+	enableColumnRetainedPlacementCommandWAL(t, dir)
+	d := openColumnRetainedPlacementDB(t, dir, backenddb.Options{})
+	defer func() { _ = d.Close() }()
+	col := createColumnRetainedSemanticStreamCollection(t, d, "events")
+	ids, documents := make([][]byte, preparedInsertMaxRows), make([][]byte, preparedInsertMaxRows)
+	for row := range documents {
+		ids[row] = []byte(fmt.Sprintf("entropy-%05d", row))
+		var document strings.Builder
+		fmt.Fprintf(&document, `{"row_id":%d,"kind":"entropy"`, row)
+		for field := 0; field < 4; field++ {
+			digest := sha256.Sum256([]byte(fmt.Sprintf("row-%d-field-%d", row, field)))
+			fmt.Fprintf(&document, `,"field_%02d":"%x"`, (row+field)%64, digest)
+		}
+		document.WriteByte('}')
+		documents[row] = []byte(document.String())
+	}
+	if input := preparedInsertInputBytes(ids, documents); input >= 10<<20 {
+		t.Fatalf("near-limit source input %d exceeds target source slot", input)
+	}
+	prepared, err := col.PrepareInsertBatchOwned(ids, documents, 512<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prepared.OwnedBytes() > 512<<20 || prepared.ReservedBytes() > 512<<20 {
+		t.Fatalf("prepared charges owned=%d reserved=%d exceed 512 MiB", prepared.OwnedBytes(), prepared.ReservedBytes())
+	}
+	t.Logf("near-limit input=%d charged_owned=%d estimated_reserved=%d", preparedInsertInputBytes(ids, documents), prepared.OwnedBytes(), prepared.ReservedBytes())
+	if _, err := prepared.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range []int{0, preparedInsertMaxRows / 2, preparedInsertMaxRows - 1} {
+		got, err := col.Get(ids[row])
+		if err != nil {
+			t.Fatalf("near-limit row %d Get: %v", row, err)
+		}
+		var gotObject, wantObject map[string]any
+		if err := json.Unmarshal(got, &gotObject); err != nil {
+			t.Fatal(err)
+		}
+		if err := json.Unmarshal(documents[row], &wantObject); err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(gotObject, wantObject) {
+			t.Fatalf("near-limit row %d got=%s want=%s", row, got, documents[row])
+		}
+	}
+}
+
 func TestPreparedInsertRejectsBlockPathGrowthBeforePublication(t *testing.T) {
 	dir := t.TempDir()
 	enableColumnRetainedPlacementCommandWAL(t, dir)
@@ -561,6 +652,9 @@ func TestPreparedInsertFallsBackBeforeUnboundedDeclaredRowExtraction(t *testing.
 	id, doc := []byte("bool-row"), []byte(`{"row_id":7,"active":true}`)
 	if _, err := col.PrepareInsertBatchOwned([][]byte{id}, [][]byte{doc}, 16<<20); !errors.Is(err, ErrPreparedInsertIneligible) || errors.Is(err, ErrPreparedInsertResourceLimit) {
 		t.Fatalf("unsupported declared-row parser shape prepared: %v", err)
+	}
+	if _, err := prepareColumnRetainedSemanticStreamV1StorageDocumentsWithIDsBudget(*meta.Options.ColumnStore, [][]byte{id}, [][]byte{doc}, 16<<20); !errors.Is(err, ErrPreparedInsertIneligible) {
+		t.Fatalf("budgeted helper entered unbounded declared-row extraction: %v", err)
 	}
 	if _, err := col.InsertBatch([][]byte{id}, [][]byte{doc}); err != nil {
 		t.Fatalf("ordinary fallback: %v", err)
