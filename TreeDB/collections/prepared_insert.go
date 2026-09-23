@@ -138,7 +138,7 @@ type preparedInsertCommitBudget struct {
 	total           int64
 }
 
-func preparedInsertCommitReserveBytes(publishedBytes, keyBytes, stringBytes int64, rows, columns, typedColumns, granules int) preparedInsertCommitBudget {
+func preparedInsertCommitReserveBytes(publishedBytes, keyBytes, stringBytes, rowAssetStringBytes, aggregateGroupBytes int64, rows, columns, typedColumns, granules int) preparedInsertCommitBudget {
 	n := int64(rows)
 	c := int64(columns)
 	tc := int64(typedColumns)
@@ -167,13 +167,18 @@ func preparedInsertCommitReserveBytes(publishedBytes, keyBytes, stringBytes int6
 	}
 	// bytes.Buffer may hold old and replacement backing while encoding the
 	// row asset; scalar strings borrow the prepared declared-row backing.
-	rowAsset := preparedInsertMul(3, saturatingAddNonNegativeInt64(keyBytes, stringBytes))
+	// A row-owned string is serialized once per row. Distinct interned string
+	// backing can be much smaller when many rows repeat the same value.
+	rowAsset := preparedInsertMul(3, saturatingAddNonNegativeInt64(keyBytes, rowAssetStringBytes))
 	rowAsset = saturatingAddNonNegativeInt64(rowAsset, preparedInsertMul(384, preparedInsertMul(n, c)))
 	rowAsset = saturatingAddNonNegativeInt64(rowAsset, 1<<20)
 	// Dictionary-code, int64, and at most three aggregate sidecar builders and
 	// their encoded assets coexist with the row and typed outputs.
 	sidecars := preparedInsertMul(1024, preparedInsertMul(n, c+3))
-	sidecars = saturatingAddNonNegativeInt64(sidecars, preparedInsertMul(6, stringBytes))
+	// Aggregate entry sets can serialize a group again in each granule. Charge
+	// the per-row source lengths across all specs, as well as distinct strings
+	// copied into dictionary sidecars.
+	sidecars = saturatingAddNonNegativeInt64(sidecars, preparedInsertMul(6, saturatingAddNonNegativeInt64(stringBytes, aggregateGroupBytes)))
 	sidecars = saturatingAddNonNegativeInt64(sidecars, 16<<20)
 	// Pre-WAL gates cap the existing manifest and root-descriptor inputs at
 	// 4096 records and 1 MiB inline bytes each.
@@ -183,6 +188,33 @@ func preparedInsertCommitReserveBytes(publishedBytes, keyBytes, stringBytes int6
 		total = saturatingAddNonNegativeInt64(total, allowance)
 	}
 	return preparedInsertCommitBudget{materialization: materialization, total: total}
+}
+
+// These source totals are read from the prepared declared rows without cloning
+// their strings. Each aggregate entry represents at least one source row, so
+// the sum of all encoded group-string lengths is no greater than the per-row
+// total for that aggregate, including typed-granule entry sets.
+func preparedInsertRepeatedStringBytes(cfg ColumnStoreConfig, rows []columnDeclaredRow) (rowAsset, aggregateGroups int64) {
+	for _, row := range rows {
+		if row.Deleted || len(row.Values) != len(cfg.Columns) {
+			continue
+		}
+		for colIdx, col := range cfg.Columns {
+			value := row.Values[colIdx]
+			if col.ValueType != ColumnStoreValueString || !value.Present || value.Null {
+				continue
+			}
+			if columnStoreColumnIsTypedRowAsset(col) {
+				rowAsset = saturatingAddNonNegativeInt64(rowAsset, int64(len(value.String)+len(value.StringBytes)))
+			}
+			for _, aggregate := range cfg.AggregateMetadata {
+				if aggregate.GroupColumn == col.Name {
+					aggregateGroups = saturatingAddNonNegativeInt64(aggregateGroups, int64(len(value.String)+len(value.StringBytes)))
+				}
+			}
+		}
+	}
+	return rowAsset, aggregateGroups
 }
 
 func preparedInsertMul(a, b int64) int64 {
@@ -387,6 +419,15 @@ func (c *Collection) PrepareInsertBatchOwned(ids, documents [][]byte, maxOwnedBy
 	if !preparedInsertUnusedOuterSlotsEmpty(ids, documents) {
 		return nil, fmt.Errorf("%w: unused outer-slice slots retain uncharged buffers", ErrPreparedInsertResourceLimit)
 	}
+	// The semantic builder subtracts this same batch allowance before dividing
+	// credit among block workers. Check it before allocating entries or ordered
+	// headers: 48 B/row for entries, 72 B/row for three [][]byte headers, and
+	// 8 B/row plus 1 MiB for bounded batch tables and worker bookkeeping.
+	batchHeaderCredit := saturatingAddNonNegativeInt64(inputBytes, preparedInsertMul(preparedSemanticStreamBatchHeaderBytesPerRow, int64(len(ids))))
+	batchHeaderCredit = saturatingAddNonNegativeInt64(batchHeaderCredit, preparedSemanticStreamBatchReserveBytes)
+	if batchHeaderCredit >= maxOwnedBytes {
+		return nil, fmt.Errorf("%w: batch header credit %d leaves no retained block credit under %d", ErrPreparedInsertResourceLimit, batchHeaderCredit, maxOwnedBytes)
+	}
 	if err := c.requireColumnStoreCommandWAL(meta, nil); err != nil {
 		return nil, err
 	}
@@ -482,7 +523,8 @@ func (c *Collection) PrepareInsertBatchOwned(ids, documents [][]byte, maxOwnedBy
 	}
 	publishedBytes := saturatingAddNonNegativeInt64(inputBytes, retainedDocumentBytes)
 	publishedBytes = saturatingAddNonNegativeInt64(publishedBytes, semanticBytes)
-	commitBudget := preparedInsertCommitReserveBytes(publishedBytes, keyBytes, retained.declaredStringBackingBytes,
+	rowAssetStringBytes, aggregateGroupBytes := preparedInsertRepeatedStringBytes(*cfg, retained.declaredRows)
+	commitBudget := preparedInsertCommitReserveBytes(publishedBytes, keyBytes, retained.declaredStringBackingBytes, rowAssetStringBytes, aggregateGroupBytes,
 		len(ids), len(cfg.Columns), typedColumns, granules)
 	if ownedBytes > maxOwnedBytes || commitBudget.total > maxOwnedBytes-ownedBytes {
 		if retained.semanticStreamBlocks != nil {

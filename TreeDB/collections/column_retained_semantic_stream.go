@@ -34,6 +34,7 @@ const columnRetainedSemanticStreamV1RawBlockScratchPoolSlots = 4
 const columnRetainedSemanticStreamV1PrepareMaxWorkers = 8
 const preparedSemanticStreamEncoderReserveBytes = 8 << 20
 const preparedSemanticStreamBatchReserveBytes = 1 << 20
+const preparedSemanticStreamBatchHeaderBytesPerRow = 128
 const preparedSemanticStreamMaxCursorDepth = 16
 const preparedSemanticStreamMaxCursorDescriptors = 1024
 const preparedSemanticStreamMaxBlockPaths = 1024
@@ -688,7 +689,7 @@ func prepareColumnRetainedSemanticStreamV1StorageDocumentsWithIDsBudget(cfg Colu
 		blockBudgets = make([]int64, blockCount)
 		// Reserve both retained output and transient encoder space before any
 		// block worker starts. The input itself is charged by the caller.
-		remaining := maxOwnedBytes - preparedInsertInputBytes(ids, documents) - int64(len(documents))*128 - preparedSemanticStreamBatchReserveBytes
+		remaining := maxOwnedBytes - preparedInsertInputBytes(ids, documents) - int64(len(documents))*preparedSemanticStreamBatchHeaderBytesPerRow - preparedSemanticStreamBatchReserveBytes
 		if remaining <= 0 {
 			return columnRetainedPayloadStorageDocuments{}, fmt.Errorf("%w: insufficient semantic preparation budget", ErrPreparedInsertResourceLimit)
 		}

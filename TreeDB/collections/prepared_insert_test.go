@@ -200,6 +200,76 @@ func TestPreparedInsertLongIDsRejectCommitReserveBeforeWAL(t *testing.T) {
 	}
 }
 
+func TestPreparedInsertRepeatedStringsChargeCommitBeforeWAL(t *testing.T) {
+	dir := t.TempDir()
+	enableColumnRetainedPlacementCommandWAL(t, dir)
+	d := openColumnRetainedPlacementDB(t, dir, backenddb.Options{})
+	defer func() { _ = d.Close() }()
+	meta := CollectionMeta{Name: "events", Options: CollectionOptions{DocumentFormat: DocumentFormatJSON, ColumnStore: &ColumnStoreConfig{
+		Enabled: true,
+		Columns: []ColumnStoreColumn{
+			{Name: "group", Path: "group", ValueType: ColumnStoreValueString, Owner: TypedStorageOwnerRowAsset, Dictionary: true},
+			{Name: "time_us", Path: "time_us", ValueType: ColumnStoreValueInt64, Owner: TypedStorageOwnerColumnPart},
+		},
+		AggregateMetadata: []ColumnAggregateMetadata{{Name: "by_group", GroupColumn: "group", Kind: ColumnAggregateCount}},
+		RetainedPayload:   ColumnRetainedPayloadNonColumn, RetainedPayloadEncoding: ColumnRetainedPayloadEncodingSemanticStreamV1,
+		Reconstruction: ColumnReconstructionRetainedPayloadAndColumns,
+	}}}
+	if _, err := NewCollectionManager(d).CreateCollection(&meta); err != nil {
+		t.Fatal(err)
+	}
+	col := openColumnRetainedPlacementCollection(t, d, meta.Name)
+	const rows = 128
+	group := strings.Repeat("g", 8192)
+	ids, documents := make([][]byte, rows), make([][]byte, rows)
+	for i := range ids {
+		ids[i] = []byte(fmt.Sprintf("%08d", i))
+		documents[i] = []byte(fmt.Sprintf(`{"group":"%s","time_us":%d}`, group, i))
+	}
+	prepared, err := col.PrepareInsertBatchOwned(ids, documents, 512<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rowStringBytes, groupBytes := preparedInsertRepeatedStringBytes(*meta.Options.ColumnStore, prepared.retained.declaredRows)
+	distinctBytes := prepared.retained.declaredStringBackingBytes
+	if rowStringBytes != rows*int64(len(group)) || groupBytes != rowStringBytes || distinctBytes >= rowStringBytes {
+		t.Fatalf("source bytes row=%d group=%d distinct=%d", rowStringBytes, groupBytes, distinctBytes)
+	}
+	// The previous reserve used distinct backing for both outputs. This limit
+	// lies above that old reserve but below the per-row serialization charge.
+	delta := 3*(rowStringBytes-distinctBytes) + 6*groupBytes
+	reserved := prepared.ReservedBytes()
+	if delta <= 0 || reserved <= delta {
+		t.Fatalf("reserve=%d repeated-string delta=%d", reserved, delta)
+	}
+	prepared.Abandon()
+	before, applied := d.CommandWALNextLSN(), d.State().AppliedCommandLSN
+	tightLimit := reserved - delta/2
+	if tightLimit <= reserved-delta {
+		t.Fatalf("tight limit=%d did not separate old/new reserve", tightLimit)
+	}
+	if token, err := col.PrepareInsertBatchOwned(ids, documents, tightLimit); token != nil ||
+		!errors.Is(err, ErrPreparedInsertResourceLimit) || !strings.Contains(err.Error(), "commit reserve") {
+		t.Fatalf("tight prepare=(%v,%v), want pre-WAL commit reserve rejection", token, err)
+	}
+	if got := d.CommandWALNextLSN(); got != before {
+		t.Fatalf("resource rejection advanced next LSN from %d to %d", before, got)
+	}
+	if got := d.State().AppliedCommandLSN; got != applied {
+		t.Fatalf("resource rejection advanced applied LSN from %d to %d", applied, got)
+	}
+	if err := d.CheckCommandWALPublishReady(); err != nil {
+		t.Fatalf("resource rejection poisoned command WAL: %v", err)
+	}
+	adequate, err := col.PrepareInsertBatchOwned(ids, documents, reserved)
+	if err != nil {
+		t.Fatalf("prepare with derived credit: %v", err)
+	}
+	if _, err := adequate.Commit(); err != nil {
+		t.Fatalf("commit with derived credit: %v", err)
+	}
+}
+
 func TestPreparedInsertRejectsUnfittablePrimaryKeyBeforeCommandWAL(t *testing.T) {
 	dir := t.TempDir()
 	enableColumnRetainedPlacementCommandWAL(t, dir)
@@ -389,6 +459,25 @@ func TestPreparedInsertRejectsHiddenOuterSliceOwners(t *testing.T) {
 		t.Fatalf("nil-tail prepare: %v", err)
 	}
 	prepared.Abandon()
+}
+
+func TestPreparedInsertRejectsBatchHeaderCreditBeforePreparation(t *testing.T) {
+	dir := t.TempDir()
+	enableColumnRetainedPlacementCommandWAL(t, dir)
+	d := openColumnRetainedPlacementDB(t, dir, backenddb.Options{})
+	defer func() { _ = d.Close() }()
+	col := createColumnRetainedSemanticStreamCollection(t, d, "events")
+	ids := [][]byte{[]byte("a")}
+	docs := [][]byte{[]byte(`{"row_id":1,"kind":"one"}`)}
+	limit := preparedInsertInputBytes(ids, docs) + 128*int64(len(ids)) + preparedSemanticStreamBatchReserveBytes - 1
+	beforeNext, beforeApplied := d.CommandWALNextLSN(), d.State().AppliedCommandLSN
+	prepared, err := col.PrepareInsertBatchOwned(ids, docs, limit)
+	if prepared != nil || !errors.Is(err, ErrPreparedInsertResourceLimit) || !strings.Contains(err.Error(), "batch header credit") {
+		t.Fatalf("prepare=(%v,%v), want pre-allocation batch header limit", prepared, err)
+	}
+	if next, applied := d.CommandWALNextLSN(), d.State().AppliedCommandLSN; next != beforeNext || applied != beforeApplied {
+		t.Fatalf("rejected batch advanced command WAL next/applied LSN to %d/%d from %d/%d", next, applied, beforeNext, beforeApplied)
+	}
 }
 
 func TestPreparedInsertChargesInternedDeclaredStringOnce(t *testing.T) {
