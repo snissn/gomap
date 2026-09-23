@@ -269,20 +269,47 @@ func TestPreparedInsertCheckpointBeforeCommitAndReopen(t *testing.T) {
 	if got := d.State().AppliedCommandLSN; got != beforeLSN {
 		t.Fatalf("prepare advanced command LSN from %d to %d", beforeLSN, got)
 	}
+	commitGate := make(chan struct{})
+	t.Cleanup(func() {
+		select {
+		case <-commitGate:
+		default:
+			close(commitGate)
+		}
+	})
+	commitQueued := make(chan struct{})
+	commitDone := make(chan error, 1)
+	go func() {
+		close(commitQueued)
+		<-commitGate
+		_, commitErr := prepared.Commit()
+		commitDone <- commitErr
+	}()
+	<-commitQueued
 	if _, err := sibling.InsertBatch([][]byte{siblingID}, [][]byte{siblingDoc}); err != nil {
 		t.Fatal(err)
 	}
 	if err := d.Checkpoint(); err != nil {
 		t.Fatal(err)
 	}
+	interleavedLSN := d.State().AppliedCommandLSN
+	if interleavedLSN <= beforeLSN {
+		t.Fatalf("sibling write did not advance command LSN: %d <= %d", interleavedLSN, beforeLSN)
+	}
+	select {
+	case err := <-commitDone:
+		t.Fatalf("queued prepared commit acknowledged before release: %v", err)
+	default:
+	}
 	if got, err := col.Get(id); err != nil || got != nil {
 		t.Fatalf("prepared row visible before commit: %s, %v", got, err)
 	}
-	if _, err := prepared.Commit(); err != nil {
+	close(commitGate)
+	if err := <-commitDone; err != nil {
 		t.Fatal(err)
 	}
-	if got := d.State().AppliedCommandLSN; got <= beforeLSN {
-		t.Fatalf("commit did not advance command LSN: %d <= %d", got, beforeLSN)
+	if got := d.State().AppliedCommandLSN; got <= interleavedLSN {
+		t.Fatalf("late commit did not advance command LSN: %d <= %d", got, interleavedLSN)
 	}
 	if err := d.Checkpoint(); err != nil {
 		t.Fatal(err)
