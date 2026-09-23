@@ -59,12 +59,15 @@ Allocation sites still requiring a pre-allocation bound or quota-aware builder:
   strict pipeline cap must charge that 32 MiB possible residency as shared
   workspace or give prepared calls a separately accounted pool.
 - Ordered `Commit` retains the prepared token while
-  `prepareColumnWritePublishInputBeforeCommandWAL`, typed string/int64 asset
-  builders in `column_publish_write.go`, column-part/image construction, and
-  the command-WAL/root publication in `TreeDB/db/ordered_root_publish.go`
-  allocate. The three-times-owned estimate plus row/column allowance does not
-  bound their transient buffers or auxiliary maps. These steps must stay in
-  ordered commit to preserve identity, sync, and recovery semantics.
+  `prepareColumnWritePublishInputBeforeCommandWAL`, column-part/image
+  construction, aggregate-metadata sidecars, and the command-WAL/root
+  publication in `TreeDB/db/ordered_root_publish.go` allocate. Preparation now
+  owns the identity-free typed scalar batch and finalized dictionaries; the
+  dictionary builder temporarily holds its old lookup map and values alongside
+  sorted values, recode indexes, and the final map before that retained charge.
+  The three-times-owned estimate plus row/column allowance does not bound
+  those transient buffers or auxiliary maps. Part identity, image construction,
+  and durability remain in ordered commit.
 
 The concrete ownership ledger for the eligible scalar lane is below. A bound
 must include old and replacement backing simultaneously when a slice or map
@@ -77,8 +80,26 @@ database page-cache residency or the process's total heap.
 | Prepared stream | At most 16,384 rows, five scalar columns, four 4,096-row blocks, 1,024 paths per block, 131,072 stream entries per block, and 16 MiB of per-path entry headers per block | Cursor descriptor slices, path/interner maps and trie nodes, per-path value/row slice old-plus-new capacity, declared values and string backing. The current `input*32` test is not a proof for these allocations. |
 | Stored block | Raw size hint and `zstd.Encoder.MaxEncodedSize` are checked before their large output buffers | Raw, compressed, wrapper, and returned block coexist; the pinned encoder's internal workspace and small encoder-owned dynamic buffers need a source-derived bound. The present 8 MiB workspace allowance is an estimate. |
 | Ordered insert | Prepared token remains live; IDs and document lengths are already known | Result-ID arena/slice, command document headers, the exact-sized collection command payload and V2 WAL frame, primary/stream run tables and iterator materialization, and pointerization buffers. |
-| Typed publication | At most five Int64/String columns and 16,384 prepared declared rows; existing manifest preflight allows at most 4,096 inline records and 1 MiB of key/value bytes before WAL | Adapter batch/null/default arrays, string dictionary maps/slices, sorted row order/locators, encoded granules, part sections, full image copy, manifest/sidecars, and old-plus-new backing on growth. The existing FP32 encoded-image bound does not cover this scalar transient path. The finite manifest input still needs a worst-case allocation ledger for its decoder and next-generation copies. |
+| Typed preparation and publication | At most five Int64/String columns and 16,384 prepared declared rows; existing manifest preflight allows at most 4,096 inline records and 1 MiB of key/value bytes before WAL | Preparation builds the adapter batch/null/default arrays and string dictionaries, but only charges final retained backing. Admit temporary old/new dictionary maps, sorted values, and recode arrays before growth. Commit builds sorted row order/locators, encoded granules, part sections, full image copy, manifest/sidecars, and old-plus-new backing on growth. The existing FP32 encoded-image bound does not cover this scalar transient path. The finite manifest input still needs a worst-case allocation ledger for its decoder and next-generation copies. |
 | Durable root | One ordered committer; prepared commits preflight at most 4,096 catalog root descriptors and 1 MiB each of encoded and decoded key/value bytes before WAL append | The initial primary and retained-stream iterators now share a pre-WAL materialization budget: their length hints are checked before entry-buffer reserve, each actual entry is checked before append, and the charge includes old/new pooled entry backing plus borrowed payload lengths. That budget is drawn from the **estimated** commit reserve, so it is not yet a total-memory proof. Context/system deltas, root-apply zipper/backing, root-ID slices, `vacuumCollect` old/new entries, pointer scratch, and two-pass coexistence still need a bound. Pointer-backed descriptors require an inspectable raw record/frame shape; compressed, template-coded, and compact-leaf forms fail closed before decode. |
+
+The value-log resource path has two distinct unbounded snapshots after command
+WAL append. The common `captureRegisteredDurableValueLogResourcesV1` now pins
+only referenced IDs through `Manager.CurrentSubsetNoRefresh`, so unrelated
+registrations cannot enlarge that capture. If exact reference projection
+declines, `scanCandidateValueLogReferencesWithCountsV1` still takes a full
+`CurrentSetNoRefresh` at `durable_root_runtime.go:418` and on each candidate
+rebind at `:548`; its per-segment tracker maps and root scan also need a
+ceiling. Independently, `prepareRootPublicationVisibleInstallV1` takes a full
+manager set at `root_publication_activation.go:338` and installs it as the
+visible `DBState.ValueLogSet`. A count sampled before WAL does not cap either
+snapshot because other producers can register segments without holding the
+ordered publisher's write lock. A prepared-only path needs a pinned,
+pre-admitted candidate resource set carried through scan, finalization, and
+visible installation, plus bounded additions for segments created by root
+application; a checked late snapshot could fail safely under the byte ceiling
+but would be a post-append ambiguity, not clean batch admission. Ordinary
+snapshot and GC pin semantics must remain intact.
 
 The shared credit has to cover a committing token and its reserved commit scratch
 *before* admitting its successor, with a guaranteed source slot for the depth-zero
