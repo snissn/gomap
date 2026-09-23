@@ -101,6 +101,48 @@ func TestPreparedInsertOverlapsOrderedCommit(t *testing.T) {
 	}
 }
 
+func TestPreparedInsertManifestBudgetBeforeCommit(t *testing.T) {
+	dir := t.TempDir()
+	enableColumnRetainedPlacementCommandWAL(t, dir)
+	d := openColumnRetainedPlacementDB(t, dir, backenddb.Options{})
+	defer func() { _ = d.Close() }()
+	col := createColumnRetainedSemanticStreamCollection(t, d, "events")
+	if err := col.checkPreparedInsertManifestBudget(0, preparedInsertMaxManifestRecords, preparedInsertMaxManifestBytes); err != nil {
+		t.Fatalf("first publication without manifest: %v", err)
+	}
+	prepared, err := col.PrepareInsertBatchOwned([][]byte{[]byte("a")}, [][]byte{[]byte(`{"row_id":1,"kind":"one"}`)}, 16<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := prepared.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("snapshot unavailable")
+	}
+	defer func() { _ = snap.Close() }()
+	catalog, err := col.catalogForSnapshot(snap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootID := catalog.rootID(collectionColumnManifestRootName("events"))
+	if rootID == 0 {
+		t.Fatal("committed manifest root missing")
+	}
+	if err := col.checkPreparedInsertManifestBudget(rootID, preparedInsertMaxManifestRecords, preparedInsertMaxManifestBytes); err != nil {
+		t.Fatalf("admitted manifest: %v", err)
+	}
+	for _, limit := range []struct {
+		records int
+		bytes   int64
+	}{{1, preparedInsertMaxManifestBytes}, {preparedInsertMaxManifestRecords, 1}} {
+		if err := col.checkPreparedInsertManifestBudget(rootID, limit.records, limit.bytes); !errors.Is(err, ErrPreparedInsertResourceLimit) {
+			t.Fatalf("records=%d bytes=%d err=%v, want resource limit", limit.records, limit.bytes, err)
+		}
+	}
+}
+
 func TestPreparedInsertSortedValuesAndReopen(t *testing.T) {
 	dir := t.TempDir()
 	enableColumnRetainedPlacementCommandWAL(t, dir)

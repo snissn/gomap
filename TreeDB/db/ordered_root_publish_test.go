@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/adaptive"
@@ -5397,6 +5398,9 @@ func TestOrderedRootDeltaBatchFromIterator_CollectedStableIteratorUsesViews(t *t
 }
 
 func TestOrderedRootDeltaBatchFromIteratorWithLimitsRejectsBeforeGrowth(t *testing.T) {
+	// A prior test may leave a maximal entry buffer in the large-entry pool.
+	// Budget for that existing backing so each case reaches its intended check.
+	pooledMaxBytes := int64(1<<18) * int64(unsafe.Sizeof(batch.Entry{}))
 	entries := []stableRootDeltaEntry{
 		{key: []byte("root/a"), value: []byte("value-a")},
 		{key: []byte("root/b"), value: []byte("value-b")},
@@ -5408,7 +5412,7 @@ func TestOrderedRootDeltaBatchFromIteratorWithLimitsRejectsBeforeGrowth(t *testi
 		maxBytes   int64
 	}{
 		{name: "length hint", entries: entries, maxEntries: 1, maxBytes: 1 << 20},
-		{name: "entry payload", entries: []stableRootDeltaEntry{{key: []byte("root/a"), value: bytes.Repeat([]byte("v"), 2<<20)}}, maxEntries: 1, maxBytes: 1 << 20},
+		{name: "entry payload", entries: []stableRootDeltaEntry{{key: []byte("root/a"), value: make([]byte, int(pooledMaxBytes+1<<20))}}, maxEntries: 1, maxBytes: pooledMaxBytes + 1<<20},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			iter := &stableRootDeltaIterator{entries: tc.entries}
@@ -5419,7 +5423,7 @@ func TestOrderedRootDeltaBatchFromIteratorWithLimitsRejectsBeforeGrowth(t *testi
 		})
 	}
 	iter := &stableRootDeltaIterator{entries: entries}
-	delta, err := orderedRootDeltaBatchFromIteratorWithLimits(iter, len(entries), 1<<20)
+	delta, err := orderedRootDeltaBatchFromIteratorWithLimits(iter, len(entries), pooledMaxBytes+1<<20)
 	if err != nil {
 		t.Fatalf("sufficient materialization limit: %v", err)
 	}
@@ -5430,20 +5434,25 @@ func TestOrderedRootDeltaBatchFromIteratorWithLimitsRejectsBeforeGrowth(t *testi
 }
 
 func TestOrderedRootDeltaBatchFromIteratorSharedBudget(t *testing.T) {
-	budget := &OrderedRootDeltaMaterializationBudget{RemainingBytes: 1 << 20}
-	value := bytes.Repeat([]byte("v"), 700<<10)
+	// The large-entry Batch pool may hold a 1<<18-entry backing from an
+	// unrelated test. Make the first admission independent of that history.
+	initial := int64(1<<18)*int64(unsafe.Sizeof(batch.Entry{})) + 1<<20
+	budget := &OrderedRootDeltaMaterializationBudget{RemainingBytes: initial}
 	first, err := orderedRootDeltaBatchFromIteratorWithBudget(&stableRootDeltaIterator{
-		entries: []stableRootDeltaEntry{{key: []byte("root/first"), value: value}},
+		entries: []stableRootDeltaEntry{{key: []byte("root/first"), value: []byte("v")}},
 	}, 1, budget)
 	if err != nil {
 		t.Fatalf("first materialization: %v", err)
 	}
 	defer func() { _ = first.Close() }()
-	if budget.RemainingBytes >= 1<<20 {
+	if budget.RemainingBytes >= initial {
 		t.Fatalf("shared budget was not charged: %d", budget.RemainingBytes)
 	}
+	// The second payload consumes the remaining credit before its key and
+	// entry backing, regardless of the next pooled Batch's capacity.
+	secondValue := make([]byte, int(budget.RemainingBytes))
 	second, err := orderedRootDeltaBatchFromIteratorWithBudget(&stableRootDeltaIterator{
-		entries: []stableRootDeltaEntry{{key: []byte("root/second"), value: value}},
+		entries: []stableRootDeltaEntry{{key: []byte("root/second"), value: secondValue}},
 	}, 1, budget)
 	if second != nil || !errors.Is(err, ErrOrderedRootDeltaMaterializationLimit) {
 		t.Fatalf("second=%v error=%v, want shared limit", second, err)

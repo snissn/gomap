@@ -25,9 +25,15 @@ const preparedInsertMaxDocumentBytes = 128 << 10
 const preparedInsertMaxScalarColumns = 5
 const preparedInsertMaxRootDescriptors = 4096
 const preparedInsertMaxRootDescriptorBytes = 1 << 20
+const preparedInsertMaxManifestRecords = 4096
+const preparedInsertMaxManifestBytes = 1 << 20
 
 // PreparedInsertBatch owns its input slices until Commit or Abandon. The caller
 // must not mutate or reuse IDs and documents after handing them to Prepare.
+// For byte accounting, callers must transfer complete, non-aliased backing
+// allocations: cap must describe each whole underlying ID/document allocation,
+// and unused outer-slice slots must not retain other buffers. A full-sliced
+// view into a larger allocation does not meet that ownership contract.
 // It owns no durable identity or asset; only Commit may publish the batch.
 type PreparedInsertBatch struct {
 	collection     *Collection

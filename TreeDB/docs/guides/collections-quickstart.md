@@ -346,7 +346,9 @@ For a no-index JSON collection configured with
 `RetainedPayloadEncoding: collections.ColumnRetainedPayloadEncodingSemanticStreamV1`,
 the caller may prepare the next batch while a single goroutine commits the
 previous one. Ownership of the ID and document buffers transfers at preparation;
-do not mutate or reuse them until `Commit` or `Abandon` returns:
+do not mutate or reuse them until `Commit` or `Abandon` returns. Pass complete,
+non-aliased ID/document allocations with no unrelated buffers retained in
+unused outer-slice slots, so the charged capacities describe the backing:
 
 ```go
 prepared, err := col.PrepareInsertBatchOwned(ids, docs, 512<<20)

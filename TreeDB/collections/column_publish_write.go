@@ -2,6 +2,7 @@ package collections
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"sort"
@@ -682,9 +683,37 @@ func (c *Collection) columnPublishRootDescriptorPreflight(input columnWritePubli
 				}
 				return err
 			}
+			manifestRoot := baseRootIDs[collectionColumnManifestRootName(input.meta.Name)]
+			if err := c.checkPreparedInsertManifestBudget(manifestRoot, preparedInsertMaxManifestRecords, preparedInsertMaxManifestBytes); err != nil {
+				return err
+			}
 		}
 		return nil
 	}
+}
+
+// checkPreparedInsertManifestBudget runs under the serialized publication
+// preflight, before the command WAL append. The manifest loader later clones
+// all of its inline records, so a prepared commit must reject a large existing
+// manifest before entering that allocation path. A zero root is the first
+// publication and has no existing records to inspect.
+func (c *Collection) checkPreparedInsertManifestBudget(rootID uint64, maxRecords int, maxBytes int64) error {
+	if rootID == 0 {
+		return nil
+	}
+	snap := c.db.AcquireSnapshot()
+	if snap == nil {
+		return backenddb.ErrClosed
+	}
+	defer func() { _ = snap.Close() }()
+	err := validateColumnManifestScanBudget(context.Background(), snap, rootID, maxRecords, maxBytes)
+	if errors.Is(err, ErrColumnAssetReachabilityManifestLimit) {
+		return fmt.Errorf("%w: existing column manifest exceeds %d records or %d inline key/value bytes", ErrPreparedInsertResourceLimit, maxRecords, maxBytes)
+	}
+	if errors.Is(err, ErrVectorIndexSnapshotMismatch) {
+		return fmt.Errorf("%w: existing column manifest has pointer-backed or unsupported records: %v", ErrPreparedInsertResourceLimit, err)
+	}
+	return err
 }
 
 func (c *Collection) validateColumnPublishRootDescriptorPreflight(meta CollectionMeta, expectedCommitSeq, expectedSystemRoot uint64, rootNames []string, baseRootIDs map[string]uint64) error {

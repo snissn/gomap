@@ -205,6 +205,13 @@ batch. Rare JSON paths grow only as values arrive rather than reserving every
 row in the block. The final capacity check rejects a prepared payload whose
 charged backing plus a commit reserve exceeds the limit; `OwnedBytes` reports
 the retained backing and `ReservedBytes` includes the commit reserve. The
+caller must transfer complete, non-aliased ID/document backing whose capacity
+describes the whole allocation, with no unrelated buffers in unused outer
+slice slots. Full-sliced views into larger allocations are outside the
+owned-byte accounting contract. The prepared path also preflights the existing
+manifest before WAL append, allowing at most 4,096 inline records and 1 MiB of
+combined key/value bytes. This whole-collection ceiling can reject a small
+batch against a sufficiently large existing collection. The
 input-derived preparation and commit reserves are conservative estimates, not
 a proven strict peak bound for parser maps, encoder scratch, typed part build,
 or ordered WAL/publication. Prepared mode rejects documents over 128 KiB or
