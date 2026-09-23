@@ -25,8 +25,12 @@ interned-string, and entry-header growth. Limits include 1,024 cursor
 descriptors, 1,024 paths, 131,072 entries, and 16 MiB of entry headers per
 block. Typed scalar preparation borrows the already charged declared strings;
 it checks a temporary dictionary/map allowance before building vectors and
-final dictionaries, then charges retained typed backing. Prepared raw scratch
-is not returned to the uncharged process-wide raw-buffer pool.
+final dictionaries, then charges retained typed backing. Prepared compressed
+blocks return unowned raw scratch to the process-wide pool, which retains at
+most four 8 MiB buffers. JSONBench permanently reserves that 32 MiB idle
+capacity in its shared lane ledger; in-use scratch remains charged to its
+prepared block. Raw fallback blocks take ownership of their backing and do
+not return it to the pool.
 The prepared zstd encoder appends into a nil destination. Its fixed block
 reserve includes the old and replacement destination backings at slice growth
 and the exact stored wrapper; this avoids an otherwise unused maximum-size

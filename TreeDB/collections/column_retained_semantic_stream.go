@@ -1909,12 +1909,10 @@ func (e *columnRetainedSemanticStreamV1StoredBlockEncoder) close() {
 	if e == nil {
 		return
 	}
-	// Prepared buffers belong to their admitted request. Returning a newly
-	// allocated buffer to the process-wide pool would keep it alive after the
-	// request releases its credit.
-	if e.outputBudget == 0 {
-		putColumnRetainedSemanticStreamV1RawBlockScratch(e.rawBlockScratch)
-	}
+	// The pool has four slots of at most 8 MiB. Bounded callers charge that
+	// fixed idle pool separately from the request's in-use scratch; raw block
+	// fallbacks transfer ownership to the returned block and clear this field.
+	putColumnRetainedSemanticStreamV1RawBlockScratch(e.rawBlockScratch)
 	e.rawBlockScratch = nil
 	if e.enc != nil {
 		e.enc.Close()
