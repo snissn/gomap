@@ -13152,6 +13152,12 @@ func (c *Collection) insertBatchNoIndex(
 		Iter:          iter,
 		StoragePolicy: plannerOptions.dataStoragePolicy,
 	}}
+	var materializeBudget *backenddb.OrderedRootDeltaMaterializationBudget
+	if execOpts.prepared != nil {
+		materializeBudget = &backenddb.OrderedRootDeltaMaterializationBudget{RemainingBytes: execOpts.prepared.commitReserve}
+		ordered[0].MaterializeMaxEntries = len(entries)
+		ordered[0].MaterializeBudget = materializeBudget
+	}
 	var templateTables []memtable.Table
 	var templateIters []iterator.UnsafeIterator
 	defer func() {
@@ -13220,6 +13226,10 @@ func (c *Collection) insertBatchNoIndex(
 			Iter:          streamIter,
 			StoragePolicy: streamPolicy,
 		})
+		if execOpts.prepared != nil {
+			ordered[len(ordered)-1].MaterializeMaxEntries = retainedSemanticStreamBlocks.Len()
+			ordered[len(ordered)-1].MaterializeBudget = materializeBudget
+		}
 	}
 	var textTables []memtable.Table
 	var textIters []iterator.UnsafeIterator
@@ -13324,6 +13334,9 @@ func (c *Collection) insertBatchNoIndex(
 		})
 		stats.Publish = time.Since(publishStart)
 		if err != nil {
+			if execOpts.prepared != nil && errors.Is(err, backenddb.ErrOrderedRootDeltaMaterializationLimit) {
+				return nil, fmt.Errorf("%w: ordered root delta: %v", ErrPreparedInsertResourceLimit, err)
+			}
 			return nil, err
 		}
 		if len(rootIDs) != len(publishRootNames) {

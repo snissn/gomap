@@ -5396,6 +5396,76 @@ func TestOrderedRootDeltaBatchFromIterator_CollectedStableIteratorUsesViews(t *t
 	}
 }
 
+func TestOrderedRootDeltaBatchFromIteratorWithLimitsRejectsBeforeGrowth(t *testing.T) {
+	entries := []stableRootDeltaEntry{
+		{key: []byte("root/a"), value: []byte("value-a")},
+		{key: []byte("root/b"), value: []byte("value-b")},
+	}
+	for _, tc := range []struct {
+		name       string
+		entries    []stableRootDeltaEntry
+		maxEntries int
+		maxBytes   int64
+	}{
+		{name: "length hint", entries: entries, maxEntries: 1, maxBytes: 1 << 20},
+		{name: "entry payload", entries: []stableRootDeltaEntry{{key: []byte("root/a"), value: bytes.Repeat([]byte("v"), 2<<20)}}, maxEntries: 1, maxBytes: 1 << 20},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			iter := &stableRootDeltaIterator{entries: tc.entries}
+			delta, err := orderedRootDeltaBatchFromIteratorWithLimits(iter, tc.maxEntries, tc.maxBytes)
+			if delta != nil || !errors.Is(err, ErrOrderedRootDeltaMaterializationLimit) {
+				t.Fatalf("delta=%v error=%v, want materialization limit", delta, err)
+			}
+		})
+	}
+	iter := &stableRootDeltaIterator{entries: entries}
+	delta, err := orderedRootDeltaBatchFromIteratorWithLimits(iter, len(entries), 1<<20)
+	if err != nil {
+		t.Fatalf("sufficient materialization limit: %v", err)
+	}
+	defer func() { _ = delta.Close() }()
+	if delta.Len() != len(entries) {
+		t.Fatalf("materialized %d entries, want %d", delta.Len(), len(entries))
+	}
+}
+
+func TestOrderedRootDeltaBatchFromIteratorSharedBudget(t *testing.T) {
+	budget := &OrderedRootDeltaMaterializationBudget{RemainingBytes: 1 << 20}
+	value := bytes.Repeat([]byte("v"), 700<<10)
+	first, err := orderedRootDeltaBatchFromIteratorWithBudget(&stableRootDeltaIterator{
+		entries: []stableRootDeltaEntry{{key: []byte("root/first"), value: value}},
+	}, 1, budget)
+	if err != nil {
+		t.Fatalf("first materialization: %v", err)
+	}
+	defer func() { _ = first.Close() }()
+	if budget.RemainingBytes >= 1<<20 {
+		t.Fatalf("shared budget was not charged: %d", budget.RemainingBytes)
+	}
+	second, err := orderedRootDeltaBatchFromIteratorWithBudget(&stableRootDeltaIterator{
+		entries: []stableRootDeltaEntry{{key: []byte("root/second"), value: value}},
+	}, 1, budget)
+	if second != nil || !errors.Is(err, ErrOrderedRootDeltaMaterializationLimit) {
+		t.Fatalf("second=%v error=%v, want shared limit", second, err)
+	}
+}
+
+type oversizedRootDeltaHintIterator struct {
+	*stableRootDeltaIterator
+}
+
+func (*oversizedRootDeltaHintIterator) Len() int { return 1 << 18 }
+
+func TestOrderedRootDeltaBatchFromIteratorRejectsHintBeforeReserve(t *testing.T) {
+	iter := &oversizedRootDeltaHintIterator{stableRootDeltaIterator: &stableRootDeltaIterator{
+		entries: []stableRootDeltaEntry{{key: []byte("root/a"), value: []byte("v")}},
+	}}
+	delta, err := orderedRootDeltaBatchFromIteratorWithLimits(iter, 1, 1<<20)
+	if delta != nil || !errors.Is(err, ErrOrderedRootDeltaMaterializationLimit) {
+		t.Fatalf("delta=%v error=%v, want hint limit", delta, err)
+	}
+}
+
 func TestOrderedRootDeltaBatchFromIterator_PreservesDeleteRevision(t *testing.T) {
 	source := batch.New(nil, orderedRootDeltaBatchInlineThreshold)
 	defer func() { _ = source.Close() }()

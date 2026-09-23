@@ -8,6 +8,7 @@ import (
 	"sort"
 	"sync"
 	"time"
+	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/adaptive"
@@ -37,6 +38,10 @@ var ErrOrderedRootGroupCommandWALContextNilSystemBuilder = errors.New("treedb: P
 // system delta builder passed to the batch ordered-root command-WAL context
 // publish API.
 var ErrOrderedRootDeltaBatchGroupCommandWALContextNilSystemBuilder = errors.New("treedb: PublishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDeltaBuilder: nil system builder")
+
+// ErrOrderedRootDeltaMaterializationLimit reports an iterator that cannot be
+// materialized within its caller's pre-WAL entry/backing budget.
+var ErrOrderedRootDeltaMaterializationLimit = errors.New("treedb: ordered root delta materialization limit")
 
 // ErrStorageMaintenancePlanMissing reports a maintenance ordered-root publish
 // that was called without a recognized storage-maintenance plan token.
@@ -201,6 +206,21 @@ type OrderedRootDeltaPublishInput struct {
 	BaseRoot      uint64
 	Iter          iterator.UnsafeIterator
 	StoragePolicy OrderedRootStoragePolicy
+	// Optional pre-WAL limits for the initial ordered iterator. Both must be
+	// set together. The shared budget charges entry backing (including a
+	// replaced pooled buffer) and borrowed key/value payload across all inputs
+	// that point to it. Bounded callers must supply stable iterators so
+	// materialization cannot copy into an arena.
+	MaterializeMaxEntries int
+	MaterializeBudget     *OrderedRootDeltaMaterializationBudget
+}
+
+// OrderedRootDeltaMaterializationBudget is consumed sequentially by the
+// initial ordered inputs before command WAL append. It is not a complete root
+// publisher memory limit: later context/system deltas and root apply have
+// separate allocation sites.
+type OrderedRootDeltaMaterializationBudget struct {
+	RemainingBytes int64
 }
 
 // StorageMaintenanceRootDeltaPublishInput describes a root-local physical
@@ -874,12 +894,54 @@ func orderedRootBatchPut(delta *batch.Batch, iter iterator.UnsafeIterator, borro
 }
 
 func orderedRootDeltaBatchFromIterator(iter iterator.UnsafeIterator) (*batch.Batch, error) {
+	return orderedRootDeltaBatchFromIteratorWithBudget(iter, 0, nil)
+}
+
+func orderedRootDeltaBatchFromIteratorWithLimits(iter iterator.UnsafeIterator, maxEntries int, maxBytes int64) (*batch.Batch, error) {
+	return orderedRootDeltaBatchFromIteratorWithBudget(iter, maxEntries, &OrderedRootDeltaMaterializationBudget{RemainingBytes: maxBytes})
+}
+
+func orderedRootDeltaBatchFromIteratorWithBudget(iter iterator.UnsafeIterator, maxEntries int, budget *OrderedRootDeltaMaterializationBudget) (*batch.Batch, error) {
 	if iter == nil {
 		return nil, errors.New("nil ordered root delta iterator")
 	}
+	bounded := maxEntries != 0 || budget != nil
+	if bounded {
+		if maxEntries <= 0 || budget == nil || budget.RemainingBytes <= 0 {
+			return nil, ErrOrderedRootDeltaMaterializationLimit
+		}
+		stable, stableOK := iter.(orderedRootStableUnsafeIterator)
+		hint, hintOK := iter.(orderedRootLenHintIterator)
+		if !stableOK || !stable.StableUnsafeIteratorSlices() || !hintOK || hint.Len() < 0 || hint.Len() > maxEntries {
+			return nil, ErrOrderedRootDeltaMaterializationLimit
+		}
+	}
 	delta := batch.NewRetainingLargeEntries(nil, orderedRootDeltaBatchInlineThreshold)
-	if hint, ok := iter.(orderedRootLenHintIterator); ok {
+	oldEntryCap := delta.EntriesCap()
+	if bounded {
+		// Reserve the full checked entry count up front. Appends cannot grow the
+		// entry slice even if the iterator understates its length hint. A pooled
+		// predecessor buffer and its replacement can coexist during Reserve.
+		entryCap := oldEntryCap
+		if entryCap < maxEntries {
+			entryCap = maxEntries
+		}
+		backingEntries := int64(entryCap)
+		if oldEntryCap < maxEntries {
+			backingEntries += int64(oldEntryCap)
+		}
+		if backingEntries > budget.RemainingBytes/int64(unsafe.Sizeof(batch.Entry{})) {
+			_ = delta.Close()
+			return nil, ErrOrderedRootDeltaMaterializationLimit
+		}
+		delta.Reserve(maxEntries)
+	} else if hint, ok := iter.(orderedRootLenHintIterator); ok {
 		delta.Reserve(hint.Len())
+	}
+	charged := int64(delta.EntriesCap()) * int64(unsafe.Sizeof(batch.Entry{}))
+	if bounded && delta.EntriesCap() > oldEntryCap {
+		// The replaced pooled buffer may remain live until collection.
+		charged += int64(oldEntryCap) * int64(unsafe.Sizeof(batch.Entry{}))
 	}
 	borrowEntryViews := false
 	if stable, ok := iter.(orderedRootStableUnsafeIterator); ok {
@@ -890,6 +952,15 @@ func orderedRootDeltaBatchFromIterator(iter iterator.UnsafeIterator) (*batch.Bat
 		trustedSortedUnique = trusted.OrderedUniqueUnsafeIterator()
 	}
 	for iter.Valid() {
+		if bounded {
+			value, _, _ := iter.UnsafeEntry()
+			payload := int64(len(iter.UnsafeKey())) + int64(len(value))
+			if delta.Len() >= maxEntries || payload > budget.RemainingBytes-charged {
+				_ = delta.Close()
+				return nil, ErrOrderedRootDeltaMaterializationLimit
+			}
+			charged += payload
+		}
 		if iter.IsDeleted() {
 			_, _, _, revision := iterator.UnsafeEntryWithRevision(iter)
 			var err error
@@ -913,6 +984,9 @@ func orderedRootDeltaBatchFromIterator(iter iterator.UnsafeIterator) (*batch.Bat
 	if err := iter.Error(); err != nil {
 		_ = delta.Close()
 		return nil, err
+	}
+	if bounded {
+		budget.RemainingBytes -= charged
 	}
 	return delta, nil
 }
@@ -2989,7 +3063,7 @@ func (db *DB) publishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBui
 			closeUnconsumedOrderedRootDeltaPublishIterators(inputs, nil)
 		}
 		for idx := range inputs {
-			delta, convertErr := orderedRootDeltaBatchFromIterator(inputs[idx].Iter)
+			delta, convertErr := orderedRootDeltaBatchFromIteratorWithBudget(inputs[idx].Iter, inputs[idx].MaterializeMaxEntries, inputs[idx].MaterializeBudget)
 			if convertErr != nil {
 				release()
 				return nil, nil, convertErr
