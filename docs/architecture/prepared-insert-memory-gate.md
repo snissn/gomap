@@ -5,11 +5,14 @@ eligible no-index JSON semantic-stream path, but `maxOwnedBytes` is not a strict
 peak heap or complete in-flight byte cap. The draft #4819 implementation must
 not be described or merged as satisfying that acceptance gate.
 
-The enforced checks are 16,384 rows per call, 128 KiB per document, at most
-five Int64/String declared columns, prepared
+The enforced checks are 16,384 rows per call, 1,024 bytes per document ID,
+128 KiB per document, at most five Int64/String declared columns with paths of
+at most 1,024 bytes, and a column asset namespace of at most 512 bytes. These
+schema checks run before the prepared token copies its catalog metadata. Other
+valid configurations use the ordinary write path. The prepared path also has
 JSON cursor depth/descriptor/key limits, per-block path/entry-header limits,
-pre-allocation raw/output checks, and a
-post-preparation capacity charge. Prepared commits also scan the existing
+pre-allocation raw/output checks, and a post-preparation capacity charge.
+Prepared commits also scan the existing
 column manifest before command-WAL append and reject more than 4,096 inline
 records or 1 MiB of combined key/value bytes. This is a whole-collection
 capacity ceiling for the prepared path, not merely a limit on the incoming
@@ -100,6 +103,25 @@ visible installation, plus bounded additions for segments created by root
 application; a checked late snapshot could fail safely under the byte ceiling
 but would be a post-append ambiguity, not clean batch admission. Ordinary
 snapshot and GC pin semantics must remain intact.
+The first target batch cannot evade this by requiring an exact root-apply
+reference delta: `orderedRootCollectionDescriptorTransitionsCoveredByDelta`
+returns false when there are no base descriptor entries, so the publisher can
+clear `exactValueLogRefDelta` after WAL append and enter the candidate scan.
+Any prepared-only scan optimization needs a first-publication regression and
+must prove the reader's exact segment set and recovery/GC pins, not assume that
+warm-root behavior also covers an empty root.
+The replay inline leaf writer can create or rotate a registered segment for
+each emitted outer-leaf page. In the command-WAL path, primary/context roots
+are applied after append, then the system delta is built and applied. The
+number of emitted pages is not currently admitted before WAL or limited by the
+root builders. Thus even a pinned, pre-WAL manager set cannot yet reserve a
+proven allowance for command-created segment IDs. A prepared-only publication
+profile would have to bound the inputs and relevant base-tree topology before
+append, enforce a page-output budget in the zipper, bulk builder, and leaf
+writer, and carry the pinned base set plus charged producer IDs through every
+candidate rebind and visible installation. A resource-limit failure first
+discovered by those builders after append would poison an acknowledged command;
+it cannot be the normal oversized-batch rejection path.
 
 The shared credit has to cover a committing token and its reserved commit scratch
 *before* admitting its successor, with a guaranteed source slot for the depth-zero
@@ -118,7 +140,7 @@ allocation, but the budget is still based on estimated commit headroom. Context
 and system deltas are built after WAL append; their entire worst-case credit
 must be reserved before append, rather than rejected by a later builder.
 
-A true 512 MiB total in-flight cap needs checked growth in those builders and
+A true configured total in-flight cap needs checked growth in those builders and
 a shared admission/reservation spanning the producer, prepared successor,
 committer, and waiting results. It then needs adversarial high-cardinality and
 incompressible-input tests, fault/recovery checks, and new same-head throughput

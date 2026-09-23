@@ -22,7 +22,17 @@ var ErrPreparedInsertResourceLimit = errors.New("collections: prepared insert re
 
 const preparedInsertMaxRows = 16 << 10
 const preparedInsertMaxDocumentBytes = 128 << 10
+
+// A prepared primary key must fit both a leaf entry and two separators in a
+// 4 KiB internal page. The latter gives cold publication a finite page-output
+// bound before the command WAL frame is appended.
+const preparedInsertMaxIDBytes = 1024
 const preparedInsertMaxScalarColumns = 5
+
+// Catalog validation permits longer paths and asset namespaces. Bound their
+// retained schema references before copying the prepared token's metadata.
+const preparedInsertMaxSchemaPathBytes = 1024
+const preparedInsertMaxAssetNamespaceBytes = 512
 const preparedInsertMaxRootDescriptors = 4096
 const preparedInsertMaxRootDescriptorBytes = 1 << 20
 const preparedInsertMaxDescriptorRootIDs = 4096
@@ -112,7 +122,8 @@ func preparedInsertBoundedScalarColumns(columns []ColumnStoreColumn) bool {
 	for _, column := range columns {
 		// Other scalar types take the full-batch declared-row extractor before
 		// the bounded semantic cursor runs. Keep them on ordinary InsertBatch.
-		if column.Path == "" || !columnDeclaredJSONParserValueSupported(column.ValueType) {
+		if column.Path == "" || len(column.Path) > preparedInsertMaxSchemaPathBytes ||
+			!columnDeclaredJSONParserValueSupported(column.ValueType) {
 			return false
 		}
 		switch column.ValueType {
@@ -264,7 +275,10 @@ func (c *Collection) PrepareInsertBatchOwned(ids, documents [][]byte, maxOwnedBy
 		return nil, fmt.Errorf("%w: requires no-index JSON semantic-stream column store", ErrPreparedInsertIneligible)
 	}
 	if !preparedInsertBoundedScalarColumns(cfg.Columns) {
-		return nil, fmt.Errorf("%w: prepared declared-row cursor supports one to %d nonempty Int64/String column paths", ErrPreparedInsertIneligible, preparedInsertMaxScalarColumns)
+		return nil, fmt.Errorf("%w: prepared declared-row cursor supports one to %d Int64/String column paths of at most %d bytes", ErrPreparedInsertIneligible, preparedInsertMaxScalarColumns, preparedInsertMaxSchemaPathBytes)
+	}
+	if cfg.AssetManager == nil || len(cfg.AssetManager.Namespace) > preparedInsertMaxAssetNamespaceBytes {
+		return nil, fmt.Errorf("%w: column asset namespace exceeds %d bytes", ErrPreparedInsertIneligible, preparedInsertMaxAssetNamespaceBytes)
 	}
 	// Restrict metadata fanout and spec shape before preparation. The scalar
 	// JSONBench target declares three supported aggregate specs even when timed
@@ -277,6 +291,11 @@ func (c *Collection) PrepareInsertBatchOwned(ids, documents [][]byte, maxOwnedBy
 	}
 	if len(ids) > preparedInsertMaxRows {
 		return nil, fmt.Errorf("%w: batch has %d rows, maximum %d", ErrPreparedInsertResourceLimit, len(ids), preparedInsertMaxRows)
+	}
+	for _, id := range ids {
+		if len(id) > preparedInsertMaxIDBytes {
+			return nil, fmt.Errorf("%w: document ID has %d bytes, maximum %d", ErrPreparedInsertResourceLimit, len(id), preparedInsertMaxIDBytes)
+		}
 	}
 	for _, document := range documents {
 		if len(document) > preparedInsertMaxDocumentBytes {

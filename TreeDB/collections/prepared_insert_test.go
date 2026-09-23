@@ -144,6 +144,91 @@ func TestPreparedInsertManifestBudgetBeforeCommit(t *testing.T) {
 	}
 }
 
+func TestPreparedInsertRejectsUnfittablePrimaryKeyBeforeCommandWAL(t *testing.T) {
+	dir := t.TempDir()
+	enableColumnRetainedPlacementCommandWAL(t, dir)
+	d := openColumnRetainedPlacementDB(t, dir, backenddb.Options{})
+	defer func() { _ = d.Close() }()
+	col := createColumnRetainedSemanticStreamCollection(t, d, "events")
+	id := bytes.Repeat([]byte("k"), 5000)
+	before := d.CommandWALNextLSN()
+	beforeApplied := d.State().AppliedCommandLSN
+	prepared, err := col.PrepareInsertBatchOwned([][]byte{id}, [][]byte{[]byte(`{"row_id":1,"kind":"one"}`)}, 16<<20)
+	if !errors.Is(err, ErrPreparedInsertResourceLimit) || prepared != nil {
+		t.Fatalf("prepare=(%v,%v), want resource limit before token creation", prepared, err)
+	}
+	if got := d.CommandWALNextLSN(); got != before {
+		t.Fatalf("unfittable primary key advanced command WAL next LSN from %d to %d", before, got)
+	}
+	if got := d.State().AppliedCommandLSN; got != beforeApplied {
+		t.Fatalf("unfittable primary key advanced applied LSN from %d to %d", beforeApplied, got)
+	}
+	if err := d.CheckCommandWALPublishReady(); err != nil {
+		t.Fatalf("unfittable primary key poisoned command WAL: %v", err)
+	}
+	if got, err := col.Get(id); err != nil || got != nil {
+		t.Fatalf("unfittable primary key published row=%s, err=%v", got, err)
+	}
+	allowedID := bytes.Repeat([]byte("a"), preparedInsertMaxIDBytes)
+	allowed, err := col.PrepareInsertBatchOwned([][]byte{allowedID}, [][]byte{[]byte(`{"row_id":2,"kind":"allowed"}`)}, 16<<20)
+	if err != nil {
+		t.Fatalf("prepare maximum-length ID: %v", err)
+	}
+	if _, err := allowed.Commit(); err != nil {
+		t.Fatalf("commit maximum-length ID: %v", err)
+	}
+	if got, err := col.Get(allowedID); err != nil || !bytes.Contains(got, []byte(`"allowed"`)) {
+		t.Fatalf("maximum-length ID row=%s, err=%v", got, err)
+	}
+}
+
+func TestPreparedInsertRejectsOversizedSchemaReferencesBeforeTokenCopy(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		path      string
+		namespace string
+	}{
+		{name: "column_path", path: strings.Repeat("p", preparedInsertMaxSchemaPathBytes+1)},
+		{name: "asset_namespace", path: "kind", namespace: strings.Repeat("n", 200) + "/" + strings.Repeat("n", 200) + "/" + strings.Repeat("n", preparedInsertMaxAssetNamespaceBytes-401)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			enableColumnRetainedPlacementCommandWAL(t, dir)
+			d := openColumnRetainedPlacementDB(t, dir, backenddb.Options{})
+			defer func() { _ = d.Close() }()
+			cfg := &ColumnStoreConfig{
+				Enabled: true,
+				Columns: []ColumnStoreColumn{
+					{Name: "row_id", Path: "row_id", ValueType: ColumnStoreValueInt64, Owner: TypedStorageOwnerRowAsset},
+					{Name: "kind", Path: tc.path, ValueType: ColumnStoreValueString, Owner: TypedStorageOwnerColumnPart, Nullable: true},
+				},
+				RetainedPayload: ColumnRetainedPayloadNonColumn, RetainedPayloadEncoding: ColumnRetainedPayloadEncodingSemanticStreamV1,
+				Reconstruction: ColumnReconstructionRetainedPayloadAndColumns,
+			}
+			if tc.namespace != "" {
+				cfg.AssetManager = &ColumnAssetManagerConfig{Namespace: tc.namespace}
+			}
+			meta := CollectionMeta{Name: "events", Options: CollectionOptions{DocumentFormat: DocumentFormatJSON, ColumnStore: cfg}}
+			if _, err := NewCollectionManager(d).CreateCollection(&meta); err != nil {
+				t.Fatalf("create otherwise valid collection: %v", err)
+			}
+			col := openColumnRetainedPlacementCollection(t, d, meta.Name)
+			id, doc := []byte("a"), []byte(`{"row_id":1,"kind":"one"}`)
+			before := d.CommandWALNextLSN()
+			if prepared, err := col.PrepareInsertBatchOwned([][]byte{id}, [][]byte{doc}, 16<<20); prepared != nil ||
+				!errors.Is(err, ErrPreparedInsertIneligible) || errors.Is(err, ErrPreparedInsertResourceLimit) {
+				t.Fatalf("oversized schema prepare=(%v,%v), want configuration ineligibility", prepared, err)
+			}
+			if got := d.CommandWALNextLSN(); got != before {
+				t.Fatalf("rejected schema advanced command WAL next LSN from %d to %d", before, got)
+			}
+			if _, err := col.InsertBatch([][]byte{id}, [][]byte{doc}); err != nil {
+				t.Fatalf("ordinary path for valid schema: %v", err)
+			}
+		})
+	}
+}
+
 func TestPreparedInsertSortedValuesAndReopen(t *testing.T) {
 	dir := t.TempDir()
 	enableColumnRetainedPlacementCommandWAL(t, dir)

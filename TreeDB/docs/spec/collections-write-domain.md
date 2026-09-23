@@ -214,12 +214,13 @@ combined key/value bytes. This whole-collection ceiling can reject a small
 batch against a sufficiently large existing collection. The
 input-derived preparation and commit reserves are conservative estimates, not
 a proven strict peak bound for parser maps, encoder scratch, typed part build,
-or ordered WAL/publication. Prepared mode rejects documents over 128 KiB or
-beyond the cursor's depth and descriptor limits. Prepared mode admits one to
-five declared columns with nonempty paths and Int64 or String values; wider
-schemas and other scalar types use the ordinary
-path because they currently take a full-batch extractor before the bounded
-cursor. Resource and structural limits return `ErrPreparedInsertResourceLimit`,
+or ordered WAL/publication. Prepared mode rejects document IDs over 1,024 bytes,
+documents over 128 KiB, or input beyond the cursor's depth and descriptor
+limits. Prepared mode admits one to five declared columns with paths of at most
+1,024 bytes and Int64 or String values, plus an asset namespace of at most
+512 bytes. Wider schemas and other scalar types use the ordinary path because
+they currently take a full-batch extractor before the bounded cursor.
+Resource and structural limits return `ErrPreparedInsertResourceLimit`,
 which is distinct from `ErrPreparedInsertIneligible`, so a bounded caller fails
 closed by default. Unsupported collection configurations return
 `ErrPreparedInsertIneligible` and can use ordinary `InsertBatch`. A later
