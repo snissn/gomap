@@ -786,7 +786,7 @@ func TestPreparedInsertSixScalarColumnsUseOrdinaryPath(t *testing.T) {
 	}
 }
 
-func TestPreparedInsertAggregateMetadataRejectedBeforeCommandWAL(t *testing.T) {
+func TestPreparedInsertAggregateMetadataFanoutRejectedBeforeCommandWAL(t *testing.T) {
 	dir := t.TempDir()
 	enableColumnRetainedPlacementCommandWAL(t, dir)
 	d := openColumnRetainedPlacementDB(t, dir, backenddb.Options{})
@@ -797,8 +797,13 @@ func TestPreparedInsertAggregateMetadataRejectedBeforeCommandWAL(t *testing.T) {
 			{Name: "row_id", Path: "row_id", ValueType: ColumnStoreValueInt64, Owner: TypedStorageOwnerRowAsset},
 			{Name: "kind", Path: "kind", ValueType: ColumnStoreValueString, Owner: TypedStorageOwnerColumnPart, Dictionary: true},
 		},
-		AggregateMetadata: []ColumnAggregateMetadata{{Name: "by_kind", GroupColumn: "kind", Kind: ColumnAggregateCount}},
-		RetainedPayload:   ColumnRetainedPayloadNonColumn, RetainedPayloadEncoding: ColumnRetainedPayloadEncodingSemanticStreamV1,
+		AggregateMetadata: []ColumnAggregateMetadata{
+			{Name: "by_kind_1", GroupColumn: "kind", Kind: ColumnAggregateCount},
+			{Name: "by_kind_2", GroupColumn: "kind", Kind: ColumnAggregateCount},
+			{Name: "by_kind_3", GroupColumn: "kind", Kind: ColumnAggregateCount},
+			{Name: "by_kind_4", GroupColumn: "kind", Kind: ColumnAggregateCount},
+		},
+		RetainedPayload: ColumnRetainedPayloadNonColumn, RetainedPayloadEncoding: ColumnRetainedPayloadEncodingSemanticStreamV1,
 		Reconstruction: ColumnReconstructionRetainedPayloadAndColumns,
 	}}}
 	if _, err := NewCollectionManager(d).CreateCollection(&meta); err != nil {

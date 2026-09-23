@@ -28,6 +28,10 @@ const preparedInsertMaxRootDescriptorBytes = 1 << 20
 const preparedInsertMaxDescriptorRootIDs = 4096
 const preparedInsertMaxManifestRecords = 4096
 const preparedInsertMaxManifestBytes = 1 << 20
+const preparedInsertMaxAggregateMetadata = 3
+const preparedInsertMaxAggregatePredicates = 3
+const preparedInsertMaxAggregatePredicateValues = 4
+const preparedInsertMaxAggregateConfigBytes = 8 << 10
 
 // PreparedInsertBatch owns its input slices until Commit or Abandon. The caller
 // must not mutate or reuse IDs and documents after handing them to Prepare.
@@ -114,6 +118,40 @@ func preparedInsertBoundedScalarColumns(columns []ColumnStoreColumn) bool {
 		switch column.ValueType {
 		case ColumnStoreValueInt64, ColumnStoreValueString:
 		default:
+			return false
+		}
+	}
+	return true
+}
+
+func preparedInsertBoundedAggregateMetadata(cfg ColumnStoreConfig) bool {
+	if len(cfg.AggregateMetadata) > preparedInsertMaxAggregateMetadata {
+		return false
+	}
+	configBytes := 0
+	for _, aggregate := range cfg.AggregateMetadata {
+		switch aggregate.Kind {
+		case ColumnAggregateCount, ColumnAggregateGroupHourCount, ColumnAggregateMin:
+		default:
+			return false
+		}
+		if len(aggregate.Predicates) > preparedInsertMaxAggregatePredicates {
+			return false
+		}
+		configBytes += len(aggregate.Name) + len(aggregate.Column) + len(aggregate.GroupColumn) + len(aggregate.Kind)
+		for _, predicate := range aggregate.Predicates {
+			if len(predicate.Values) > preparedInsertMaxAggregatePredicateValues {
+				return false
+			}
+			configBytes += len(predicate.Column) + len(predicate.Kind) + len(predicate.Value)
+			for _, value := range predicate.Values {
+				configBytes += len(value)
+			}
+		}
+		if configBytes > preparedInsertMaxAggregateConfigBytes {
+			return false
+		}
+		if _, ok, err := newColumnAggregateMetadataBuildSpec(cfg, aggregate); err != nil || !ok {
 			return false
 		}
 	}
@@ -228,11 +266,11 @@ func (c *Collection) PrepareInsertBatchOwned(ids, documents [][]byte, maxOwnedBy
 	if !preparedInsertBoundedScalarColumns(cfg.Columns) {
 		return nil, fmt.Errorf("%w: prepared declared-row cursor supports one to %d nonempty Int64/String column paths", ErrPreparedInsertIneligible, preparedInsertMaxScalarColumns)
 	}
-	// Aggregate and sidecar metadata assets are built after the command-WAL
-	// append. Their configured fanout is outside this preparation lane's
-	// admission envelope, so leave these collections on the ordinary path.
-	if len(cfg.AggregateMetadata) != 0 {
-		return nil, fmt.Errorf("%w: aggregate metadata is outside prepared insert admission", ErrPreparedInsertIneligible)
+	// Restrict metadata fanout and spec shape before preparation. The scalar
+	// JSONBench target declares three supported aggregate specs even when timed
+	// queries opt out of using them.
+	if !preparedInsertBoundedAggregateMetadata(*cfg) {
+		return nil, fmt.Errorf("%w: aggregate metadata is outside prepared insert eligibility", ErrPreparedInsertIneligible)
 	}
 	if maxOwnedBytes <= 0 {
 		return nil, fmt.Errorf("%w: byte limit %d", ErrPreparedInsertResourceLimit, maxOwnedBytes)
