@@ -42,6 +42,7 @@ type PreparedInsertBatch struct {
 	ids, documents [][]byte
 	entries        []noIndexBatchEntry
 	retained       columnRetainedPayloadStorageDocuments
+	typedBatch     *typedColumnAdapterPreparedBatch
 	prepareElapsed time.Duration
 	ownedBytes     int64
 	commitReserve  int64
@@ -146,6 +147,35 @@ func preparedDeclaredBackingBytes(rows []columnDeclaredRow) int64 {
 	return owned
 }
 
+// The typed batch borrows strings already owned by declaredRows. Charge its
+// separate vectors, schema slices and map buckets without counting those
+// strings a second time. Map bucket accounting remains conservative rather
+// than an exact runtime capacity measurement.
+func preparedTypedBatchBackingBytes(prepared *typedColumnAdapterPreparedBatch) int64 {
+	if prepared == nil {
+		return 0
+	}
+	const mapEntryCharge = 256
+	owned := int64(cap(prepared.Columns))*int64(unsafe.Sizeof(typedColumnAdapterColumn{})) +
+		int64(cap(prepared.Options.Fields))*int64(unsafe.Sizeof(TypedStorageField{})) +
+		int64(cap(prepared.Options.SortKey))*int64(unsafe.Sizeof(ColumnSortKey{}))
+	for _, values := range prepared.Batch.Columns {
+		owned += int64(cap(values))*8 + mapEntryCharge
+	}
+	for _, values := range prepared.Batch.Nulls {
+		owned += int64(cap(values)) + mapEntryCharge
+	}
+	for _, values := range prepared.Batch.Defaults {
+		owned += int64(cap(values)) + mapEntryCharge
+	}
+	for _, column := range prepared.Columns {
+		owned += int64(len(column.Dictionary)+len(column.ReverseDictionary))*mapEntryCharge +
+			int64(cap(column.DictionaryValuesByCode))*int64(unsafe.Sizeof(""))
+	}
+	owned += int64(len(prepared.Options.DictionaryModes)) * mapEntryCharge
+	return owned
+}
+
 // PrepareInsertBatchOwned prepares the no-index JSON semantic-stream path.
 // maxOwnedBytes limits the retained request and prepared payload. Estimated
 // headroom rejects large requests before encoding; a post-encode capacity check
@@ -198,6 +228,12 @@ func (c *Collection) PrepareInsertBatchOwned(ids, documents [][]byte, maxOwnedBy
 	if !preparedInsertBoundedScalarColumns(cfg.Columns) {
 		return nil, fmt.Errorf("%w: prepared declared-row cursor supports one to %d nonempty Int64/String column paths", ErrPreparedInsertIneligible, preparedInsertMaxScalarColumns)
 	}
+	// Aggregate and sidecar metadata assets are built after the command-WAL
+	// append. Their configured fanout is outside this preparation lane's
+	// admission envelope, so leave these collections on the ordinary path.
+	if len(cfg.AggregateMetadata) != 0 {
+		return nil, fmt.Errorf("%w: aggregate metadata is outside prepared insert admission", ErrPreparedInsertIneligible)
+	}
 	if maxOwnedBytes <= 0 {
 		return nil, fmt.Errorf("%w: byte limit %d", ErrPreparedInsertResourceLimit, maxOwnedBytes)
 	}
@@ -244,6 +280,16 @@ func (c *Collection) PrepareInsertBatchOwned(ids, documents [][]byte, maxOwnedBy
 	if err != nil {
 		return nil, err
 	}
+	var typedBatch *typedColumnAdapterPreparedBatch
+	if columnStoreHasTypedColumnPartOwners(*cfg) {
+		typedBatch, err = prepareTypedColumnPartBatchFromSource(*cfg, 0, newTypedColumnDeclaredRowSource(cfg.Columns, retained.declaredRows))
+		if err != nil {
+			if retained.semanticStreamBlocks != nil {
+				resetCollectionRunTable(retained.semanticStreamBlocks)
+			}
+			return nil, err
+		}
+	}
 	// Charge backing capacities, including the semantic block arena. The caller
 	// controls the size of the one batch admitted to this preparation path.
 	ownedBytes := inputBytes + int64(cap(entries))*int64(unsafe.Sizeof(noIndexBatchEntry{})) +
@@ -260,6 +306,7 @@ func (c *Collection) PrepareInsertBatchOwned(ids, documents [][]byte, maxOwnedBy
 		return nil, err
 	}
 	ownedBytes += semanticBytes
+	ownedBytes += preparedTypedBatchBackingBytes(typedBatch)
 	commitReserve := preparedInsertCommitReserveBytes(ownedBytes, len(ids), len(cfg.Columns))
 	if ownedBytes > maxOwnedBytes || commitReserve > maxOwnedBytes-ownedBytes {
 		if retained.semanticStreamBlocks != nil {
@@ -268,7 +315,7 @@ func (c *Collection) PrepareInsertBatchOwned(ids, documents [][]byte, maxOwnedBy
 		return nil, fmt.Errorf("%w: prepared bytes %d plus commit reserve %d exceed %d", ErrPreparedInsertResourceLimit, ownedBytes, commitReserve, maxOwnedBytes)
 	}
 	return &PreparedInsertBatch{collection: c, meta: preparedInsertSchemaMeta(meta), ids: ids, documents: documents,
-		entries: entries, retained: retained, prepareElapsed: time.Since(start), ownedBytes: ownedBytes, commitReserve: commitReserve}, nil
+		entries: entries, retained: retained, typedBatch: typedBatch, prepareElapsed: time.Since(start), ownedBytes: ownedBytes, commitReserve: commitReserve}, nil
 }
 
 func (p *PreparedInsertBatch) OwnedBytes() int64 {
@@ -292,7 +339,7 @@ func (p *PreparedInsertBatch) release() {
 	if p.retained.semanticStreamBlocks != nil {
 		resetCollectionRunTable(p.retained.semanticStreamBlocks)
 	}
-	p.ids, p.documents, p.entries, p.retained = nil, nil, nil, columnRetainedPayloadStorageDocuments{}
+	p.ids, p.documents, p.entries, p.retained, p.typedBatch = nil, nil, nil, columnRetainedPayloadStorageDocuments{}, nil
 	p.meta = CollectionMeta{}
 	p.collection = nil
 }

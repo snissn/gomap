@@ -38,6 +38,7 @@ func setColumnPhysicalAssetPreparationAfterPrepareTestHook(hook func(ColumnPubli
 
 type columnWritePublishInput struct {
 	preparedInsert       bool
+	preparedTypedBatch   *typedColumnAdapterPreparedBatch
 	metadataOnly         bool
 	candidateAdmission   *typedGraphFoldAssetAdmission
 	selectStableResource func(rootpublication.StableResourceSelector) (*rootpublication.StableResourceSet, error)
@@ -1708,7 +1709,9 @@ func (c *Collection) prepareColumnPhysicalAssetRowsAtIdentityFromSources(prepare
 			start := time.Now()
 			var build typedColumnPartImageBuildResult
 			var err error
-			if typedSource == nil {
+			if input.preparedTypedBatch != nil {
+				build, err = buildTypedColumnPartImageFromPreparedBatchWithResult(input.preparedTypedBatch, typedPartID)
+			} else if typedSource == nil {
 				build, err = buildTypedColumnPartImageForDeclaredRowsWithResult(hookInput.ColumnStore, generation, typedPartID, rows)
 			} else {
 				build, err = buildTypedColumnPartImageFromSourceWithResult(hookInput.ColumnStore, generation, typedPartID, typedSource)

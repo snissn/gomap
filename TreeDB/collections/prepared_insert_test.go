@@ -18,6 +18,7 @@ import (
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
+	"github.com/snissn/gomap/TreeDB/internal/typedcolumn"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -228,6 +229,9 @@ func TestPreparedInsertAbandonBoundsAndLateConflict(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if prepared.typedBatch == nil || prepared.typedBatch.Options.PartID != 0 {
+		t.Fatalf("typed preparation retained a publication identity: %+v", prepared.typedBatch)
+	}
 	prepared.Abandon()
 	if prepared.collection != nil || prepared.meta.Name != "" || prepared.retained.semanticStreamBlocks != nil {
 		t.Fatal("abandoned batch still retains collection or prepared buffers")
@@ -311,6 +315,21 @@ func TestPreparedInsertCheckpointBeforeCommitAndReopen(t *testing.T) {
 	if got := d.State().AppliedCommandLSN; got <= interleavedLSN {
 		t.Fatalf("late commit did not advance command LSN: %d <= %d", got, interleavedLSN)
 	}
+	typedRefs := typedColumnPartRefs1755(columnManifestAssetRefsForCollectionM12A(t, d, col))
+	if len(typedRefs) != 1 || typedRefs[0].PartID != typedColumnPartAssetPartID || typedRefs[0].Generation == 0 {
+		t.Fatalf("late-bound typed refs=%+v", typedRefs)
+	}
+	typedRaw, err := readColumnPhysicalAssetFromManager(d.ColumnAssetRootDir(), typedRefs[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	typedImage, err := typedcolumn.ParseColumnPartImage(typedRaw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if typedImage.PartID != typedRefs[0].PartID || typedImage.Rows != 1 {
+		t.Fatalf("late-bound typed image part=%d rows=%d ref=%+v", typedImage.PartID, typedImage.Rows, typedRefs[0])
+	}
 	if err := d.Checkpoint(); err != nil {
 		t.Fatal(err)
 	}
@@ -320,6 +339,9 @@ func TestPreparedInsertCheckpointBeforeCommitAndReopen(t *testing.T) {
 	d = openColumnRetainedPlacementDB(t, dir, backenddb.Options{})
 	defer func() { _ = d.Close() }()
 	col = openColumnRetainedPlacementCollection(t, d, "events")
+	if got := typedColumnPartRefs1755(columnManifestAssetRefsForCollectionM12A(t, d, col)); !reflect.DeepEqual(got, typedRefs) {
+		t.Fatalf("reopened typed refs=%+v want %+v", got, typedRefs)
+	}
 	if got, err := col.Get(id); err != nil || !bytes.Equal(got, doc) {
 		t.Fatalf("reopened committed row=%s, %v want %s", got, err, doc)
 	}
@@ -761,5 +783,37 @@ func TestPreparedInsertSixScalarColumnsUseOrdinaryPath(t *testing.T) {
 	}
 	if got, err := col.Get(id); err != nil || !bytes.Equal(got, doc) {
 		t.Fatalf("ordinary six-column row=%s, err=%v", got, err)
+	}
+}
+
+func TestPreparedInsertAggregateMetadataRejectedBeforeCommandWAL(t *testing.T) {
+	dir := t.TempDir()
+	enableColumnRetainedPlacementCommandWAL(t, dir)
+	d := openColumnRetainedPlacementDB(t, dir, backenddb.Options{})
+	defer d.Close()
+	meta := CollectionMeta{Name: "metadata", Options: CollectionOptions{DocumentFormat: DocumentFormatJSON, ColumnStore: &ColumnStoreConfig{
+		Enabled: true,
+		Columns: []ColumnStoreColumn{
+			{Name: "row_id", Path: "row_id", ValueType: ColumnStoreValueInt64, Owner: TypedStorageOwnerRowAsset},
+			{Name: "kind", Path: "kind", ValueType: ColumnStoreValueString, Owner: TypedStorageOwnerColumnPart, Dictionary: true},
+		},
+		AggregateMetadata: []ColumnAggregateMetadata{{Name: "by_kind", GroupColumn: "kind", Kind: ColumnAggregateCount}},
+		RetainedPayload:   ColumnRetainedPayloadNonColumn, RetainedPayloadEncoding: ColumnRetainedPayloadEncodingSemanticStreamV1,
+		Reconstruction: ColumnReconstructionRetainedPayloadAndColumns,
+	}}}
+	if _, err := NewCollectionManager(d).CreateCollection(&meta); err != nil {
+		t.Fatal(err)
+	}
+	col := openColumnRetainedPlacementCollection(t, d, meta.Name)
+	before := d.CommandWALNextLSN()
+	_, err := col.PrepareInsertBatchOwned([][]byte{[]byte("a")}, [][]byte{[]byte(`{"row_id":1,"kind":"a"}`)}, 16<<20)
+	if !errors.Is(err, ErrPreparedInsertIneligible) {
+		t.Fatalf("aggregate metadata prepared err=%v, want configuration ineligibility", err)
+	}
+	if got := d.CommandWALNextLSN(); got != before {
+		t.Fatalf("command WAL next LSN=%d, want unchanged %d", got, before)
+	}
+	if err := d.CheckCommandWALPublishReady(); err != nil {
+		t.Fatalf("rejected preparation poisoned command WAL: %v", err)
 	}
 }
