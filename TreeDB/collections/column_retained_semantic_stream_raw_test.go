@@ -562,7 +562,7 @@ func TestPreparedSemanticStreamStoredBlockEncodingRejectsBeforeOutputAllocation(
 		t.Fatalf("small encoding budget: %v", err)
 	}
 	maximumCompressed := encoder.enc.MaxEncodedSize(len(raw))
-	budget := int64(cap(raw) + 2*maximumCompressed + len(columnRetainedSemanticStreamV1BlockZSTDMagic) + 10)
+	budget := int64(cap(raw) + 4*maximumCompressed + 64<<10 + len(columnRetainedSemanticStreamV1BlockZSTDMagic) + 10)
 	stored, err := encoder.encodeWithRawLimitBudget(raw, len(raw), budget)
 	if err != nil {
 		t.Fatal(err)
@@ -573,6 +573,45 @@ func TestPreparedSemanticStreamStoredBlockEncodingRejectsBeforeOutputAllocation(
 	}
 	if !bytes.Equal(decoded, raw) {
 		t.Fatalf("decoded block changed: got %q want %q", decoded, raw)
+	}
+}
+
+func TestPreparedSemanticStreamMultiBlockOutputGrowthFitsReserve(t *testing.T) {
+	encoder, err := newColumnRetainedSemanticStreamV1StoredBlockEncoder()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer encoder.close()
+
+	// A multi-block incompressible stream exercises repeated EncodeAll append
+	// growth; a repetitive stream exercises the stored-wrapper branch.
+	incompressible := make([]byte, len(columnRetainedSemanticStreamV1BlockMagic)+(512<<10))
+	copy(incompressible, columnRetainedSemanticStreamV1BlockMagic)
+	seed := sha256.Sum256([]byte("prepared semantic stream output growth"))
+	for offset := len(columnRetainedSemanticStreamV1BlockMagic); offset < len(incompressible); offset += len(seed) {
+		seed = sha256.Sum256(seed[:])
+		copy(incompressible[offset:], seed[:])
+	}
+	for name, raw := range map[string][]byte{
+		"incompressible": incompressible,
+		"compressible":   append([]byte(columnRetainedSemanticStreamV1BlockMagic), bytes.Repeat([]byte(`{"field":"repeated value"}`), 16<<10)...),
+	} {
+		t.Run(name, func(t *testing.T) {
+			maximumCompressed := encoder.enc.MaxEncodedSize(len(raw))
+			compressed := encoder.enc.EncodeAll(raw, nil)
+			if len(compressed) > maximumCompressed || cap(compressed) > 2*maximumCompressed+64<<10 {
+				t.Fatalf("encoded len/cap %d/%d exceeds admitted maximum %d", len(compressed), cap(compressed), maximumCompressed)
+			}
+			budget := int64(cap(raw) + 4*maximumCompressed + 64<<10 + len(columnRetainedSemanticStreamV1BlockZSTDMagic) + 10)
+			stored, err := encoder.encodeWithRawLimitBudget(raw, len(raw), budget)
+			if err != nil {
+				t.Fatal(err)
+			}
+			decoded, err := decodeColumnRetainedSemanticStreamV1StoredBlock(stored)
+			if err != nil || !bytes.Equal(decoded, raw) {
+				t.Fatalf("stored block changed: decoded len %d, err %v", len(decoded), err)
+			}
+		})
 	}
 }
 

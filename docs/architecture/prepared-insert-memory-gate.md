@@ -27,6 +27,10 @@ block. Typed scalar preparation borrows the already charged declared strings;
 it checks a temporary dictionary/map allowance before building vectors and
 final dictionaries, then charges retained typed backing. Prepared raw scratch
 is not returned to the uncharged process-wide raw-buffer pool.
+The prepared zstd encoder appends into a nil destination. Its fixed block
+reserve includes the old and replacement destination backings at slice growth
+and the exact stored wrapper; this avoids an otherwise unused maximum-size
+output allocation. The internal encoder workspace remains an open proof term.
 
 Before creating the token, the engine reserves separate ordered-commit credit
 for initial primary/stream iterator materialization, result IDs and command

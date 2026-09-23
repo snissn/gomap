@@ -10,6 +10,9 @@ import (
 
 func BenchmarkPreparedInsertPublicPath(b *testing.B) {
 	const batches, rowsPerBatch = 4, 16000
+	// Match the JSONBench request ceiling. This benchmark has no shared
+	// source/commit ledger, so the limit applies to each token separately.
+	const requestLimit = 1280 << 20
 	for _, mode := range []string{"ordinary", "prepared_serial", "prepared_pipeline"} {
 		b.Run(mode, func(b *testing.B) {
 			b.ReportAllocs()
@@ -38,7 +41,7 @@ func BenchmarkPreparedInsertPublicPath(b *testing.B) {
 					}
 				case "prepared_serial":
 					for batch := range ids {
-						prepared, err := col.PrepareInsertBatchOwned(ids[batch], docs[batch], 512<<20)
+						prepared, err := col.PrepareInsertBatchOwned(ids[batch], docs[batch], requestLimit)
 						if err != nil {
 							b.Fatal(err)
 						}
@@ -56,7 +59,7 @@ func BenchmarkPreparedInsertPublicPath(b *testing.B) {
 							err   error
 						}, 1)
 						go func() {
-							value, err := col.PrepareInsertBatchOwned(ids[batch], docs[batch], 512<<20)
+							value, err := col.PrepareInsertBatchOwned(ids[batch], docs[batch], requestLimit)
 							ready <- struct {
 								value *PreparedInsertBatch
 								err   error

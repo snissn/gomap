@@ -879,10 +879,14 @@ func preparedSemanticStreamBlockFixedReserve(ids, documents [][]byte, columns in
 	compressedMaximum := rawMaximum + 3*(rawMaximum/zstdAccountingBlockBytes+1) + 14
 	rawCapacity := rawMaximum + int64(columnRetainedSemanticStreamV1RawBlockScratchGrowthSlack(int(rawMaximum)))
 	// A pooled raw buffer (at most 8 MiB) can coexist with a new raw buffer;
-	// the compressed output and exact stored wrapper coexist with both.
+	// an append-grown compressed output can hold old and replacement backing.
+	// Go 1.26 grows byte slices to at most twice the requested length before
+	// allocator rounding (at most 32 KiB for small objects, one 8 KiB page
+	// for large ones). Allow three encoded maxima plus 64 KiB of rounding and
+	// the exact stored wrapper while both raw buffers coexist.
 	outputPeak := int64(columnRetainedSemanticStreamV1RawBlockScratchMaxRetainedBytes) +
-		rawCapacity + compressedMaximum +
-		compressedMaximum + int64(len(columnRetainedSemanticStreamV1BlockZSTDMagic)+binary.MaxVarintLen64)
+		rawCapacity + 4*compressedMaximum + 64<<10 +
+		int64(len(columnRetainedSemanticStreamV1BlockZSTDMagic)+binary.MaxVarintLen64)
 	// Cursor descriptor slices can hold old and replacement backing. Nested
 	// object collector slices total at most one document's descriptor count.
 	cursorPeak := int64(preparedSemanticStreamMaxCursorDescriptors) *
@@ -2024,11 +2028,11 @@ func (e *columnRetainedSemanticStreamV1StoredBlockEncoder) encodeWithRawLimitBud
 	if outputBudget > 0 {
 		maximumCompressed := e.enc.MaxEncodedSize(len(raw))
 		wrapperMaximum := len(columnRetainedSemanticStreamV1BlockZSTDMagic) + binary.MaxVarintLen64 + maximumCompressed
-		peak := int64(cap(raw)) + int64(maximumCompressed) + int64(wrapperMaximum)
+		peak := int64(cap(raw)) + 3*int64(maximumCompressed) + 64<<10 + int64(wrapperMaximum)
 		if peak > outputBudget {
 			return nil, fmt.Errorf("%w: retained block output peak %d exceeds encoding budget %d", ErrPreparedInsertResourceLimit, peak, outputBudget)
 		}
-		compressed = e.enc.EncodeAll(raw, make([]byte, 0, maximumCompressed))
+		compressed = e.enc.EncodeAll(raw, nil)
 	} else {
 		compressed = e.enc.EncodeAll(raw, nil)
 	}
