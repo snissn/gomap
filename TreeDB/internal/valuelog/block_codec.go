@@ -179,9 +179,6 @@ func decodeBlockPayload(codecID uint8, payload []byte, rawLen uint32, dst []byte
 		}
 		return dst[:n], nil
 	case BlockCodecZSTD:
-		if err := checkZstdFrameContentSize(payload, rawLen); err != nil {
-			return nil, err
-		}
 		if cap(dst) < int(rawLen) {
 			dst = make([]byte, 0, int(rawLen))
 		} else {

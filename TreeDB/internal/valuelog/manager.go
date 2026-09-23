@@ -1363,6 +1363,67 @@ type PreparedReadProfile struct {
 	GroupedFrameCacheMaxBytes    int64
 }
 
+// PreparedRecordDictionaryID inspects the record prefix needed to decide
+// whether reading ptr could invoke the configured dictionary callback. It does
+// not read or allocate the record payload. Prepared publishers use this before
+// every leaf-log read so an installed-but-unused callback is admissible while a
+// dictionary-compressed source record is rejected before lookup or codec-cache
+// allocation.
+func (m *Manager) PreparedRecordDictionaryID(ptr page.ValuePtr) (uint64, error) {
+	if m == nil {
+		return 0, errors.New("valuelog: nil manager")
+	}
+	f, err := m.fileFor(ptr.FileID)
+	if err != nil {
+		return 0, err
+	}
+	return f.preparedRecordDictionaryID(ptr)
+}
+
+func (f *File) preparedRecordDictionaryID(ptr page.ValuePtr) (uint64, error) {
+	if f == nil || f.File == nil || ptr.Offset < valueLogRecordCRCPrefixBytes {
+		return 0, ErrCorrupt
+	}
+	if err := f.ensureCurrentWritableReadableFor(ptr); err != nil {
+		return 0, err
+	}
+	start := int64(ptr.Offset - valueLogRecordCRCPrefixBytes)
+	var header [HeaderSize]byte
+	if _, err := f.File.ReadAt(header[:], start); err != nil {
+		return 0, err
+	}
+	if header[4] != Version {
+		return 0, ErrCorrupt
+	}
+	valueLen := binary.LittleEndian.Uint32(header[16:20])
+	if recordSizeExceedsMax(valueLen) {
+		return 0, ErrRecordTooLarge
+	}
+	if !page.ValuePtrRecordLengthHintMatches(ptr, uint32(headerWithoutCRC)+valueLen) {
+		return 0, ErrCorrupt
+	}
+	if header[5]&recordFlagGrouped == 0 {
+		if page.ValuePtrIsGrouped(ptr) {
+			return 0, ErrCorrupt
+		}
+		return 0, nil
+	}
+	if !page.ValuePtrIsGrouped(ptr) || valueLen < FrameHeaderSize {
+		return 0, ErrCorrupt
+	}
+	var frame [FrameHeaderSize]byte
+	if _, err := f.File.ReadAt(frame[:], start+HeaderSize); err != nil {
+		return 0, err
+	}
+	if frame[0] != FrameVersion || frame[2] == 0 || frame[2] > MaxFrameK {
+		return 0, ErrCorrupt
+	}
+	if frame[1]&FrameFlagCompressed == 0 {
+		return 0, nil
+	}
+	return binary.LittleEndian.Uint64(frame[4:12]), nil
+}
+
 func (m *Manager) PreparedReadProfile() PreparedReadProfile {
 	var profile PreparedReadProfile
 	if m == nil {

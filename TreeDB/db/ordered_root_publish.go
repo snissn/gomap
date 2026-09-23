@@ -126,6 +126,7 @@ type orderedRootPublishOptions struct {
 	appendOnlyAllocation  bool
 	serialApply           bool
 	maxOutputPages        uint64
+	rejectDictionaryReads bool
 	// A prepared command-WAL system root can materialize twice on the warm
 	// path. Each batch gets a disjoint, source-admitted allowance.
 	materializeMaxEntries int
@@ -538,7 +539,7 @@ func (db *DB) orderedRootZipperForOptionsWithAllocator(idx *indexGen, opts order
 	if alloc == nil {
 		return nil, errors.New("missing allocator")
 	}
-	if db != nil && alloc == idx.allocator && db.orderedRootOptionsUseDefaultZipper(opts) {
+	if db != nil && alloc == idx.allocator && db.orderedRootOptionsUseDefaultZipper(opts) && !opts.rejectDictionaryReads {
 		return idx.zipper, nil
 	}
 	z := idx.zipper.CloneWithAllocator(alloc)
@@ -549,6 +550,12 @@ func (db *DB) orderedRootZipperForOptionsWithAllocator(idx *indexGen, opts order
 			return nil, errors.New("ordered root value-log leaf storage requires a leaf page log")
 		}
 		z.SetLeafPageLog(opts.leafPageLog)
+	}
+	if opts.rejectDictionaryReads && db != nil && db.valueLogManager != nil {
+		z.SetLeafPageReader(&preparedNoDictionaryLeafPageReader{
+			inspect:  db.valueLogManager,
+			fallback: db.leafPageReader(db.valueLogManager),
+		})
 	}
 	return z, nil
 }
@@ -3271,7 +3278,7 @@ func addOrderedRootReadOnlyPreparePhaseStats(phases *orderedRootDeltaGroupPublis
 	}
 }
 
-func (db *DB) prepareOrderedRootDeltaBatchGroupReadOnly(idx *indexGen, ordered []OrderedRootDeltaBatchPublishInput, alloc zipper.PageAllocator, phaseStats *orderedRootDeltaGroupPublishPhaseStats) error {
+func (db *DB) prepareOrderedRootDeltaBatchGroupReadOnly(idx *indexGen, ordered []OrderedRootDeltaBatchPublishInput, alloc zipper.PageAllocator, phaseStats *orderedRootDeltaGroupPublishPhaseStats, rejectDictionaryReads bool) error {
 	for orderedIdx := range ordered {
 		if !ordered[orderedIdx].PrepareReadOnly {
 			continue
@@ -3280,6 +3287,7 @@ func (db *DB) prepareOrderedRootDeltaBatchGroupReadOnly(idx *indexGen, ordered [
 		if err != nil {
 			return fmt.Errorf("treedb: ordered root read-only prepare input=%d base=%d policy=%d: %w", orderedIdx, ordered[orderedIdx].BaseRoot, ordered[orderedIdx].StoragePolicy, err)
 		}
+		opts.rejectDictionaryReads = rejectDictionaryReads
 		rootZipper, err := db.orderedRootZipperForOptionsWithAllocator(idx, opts, alloc)
 		if err != nil {
 			return fmt.Errorf("treedb: ordered root read-only prepare input=%d base=%d policy=%d: %w", orderedIdx, ordered[orderedIdx].BaseRoot, ordered[orderedIdx].StoragePolicy, err)
@@ -3314,6 +3322,7 @@ func (db *DB) applyOrderedRootDeltaBatchGroupRoots(idx *indexGen, ordered []Orde
 		opts.serialApply = serialApply
 		if profiles != nil {
 			opts.maxOutputPages = profiles[orderedIdx].OutputPages
+			opts.rejectDictionaryReads = true
 		}
 		rootID, retired, metrics, applyResult, err := db.publishOrderedRootDeltaBatchWithAllocatorResult(idx, ordered[orderedIdx].BaseRoot, ordered[orderedIdx].Delta, opts, alloc, coldBuildAlloc, ordered[orderedIdx].IncludeDeletedOnColdBuild, collectOldPointerRefs)
 		result.rootID = rootID
@@ -3470,7 +3479,7 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 	var nonSystemRetired []uint64
 	var nonSystemMetrics adaptive.Metrics
 	var touchedValueLogSegments []uint32
-	if err = db.prepareOrderedRootDeltaBatchGroupReadOnly(idx, ordered, rootTracker, &phaseStats); err != nil {
+	if err = db.prepareOrderedRootDeltaBatchGroupReadOnly(idx, ordered, rootTracker, &phaseStats, false); err != nil {
 		return 0, nil, false, err
 	}
 	phaseStart := time.Now()
@@ -3839,7 +3848,7 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(
 			db.releasePendingValueLogAppendPtrCollector(collector)
 		}
 	}()
-	if err = db.prepareOrderedRootDeltaBatchGroupReadOnly(idxGen, ordered, idxGen.allocator, &phaseStats); err != nil {
+	if err = db.prepareOrderedRootDeltaBatchGroupReadOnly(idxGen, ordered, idxGen.allocator, &phaseStats, false); err != nil {
 		return 0, nil, err
 	}
 	phaseStart := time.Now()
@@ -4219,6 +4228,7 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 	systemOpts := systemRootOrderedPublishOptions(db).withSpanNativeRoute(OrderedRootSpanNativeRouteCommandWALPublish, "command-WAL ordered-root context group system delta apply")
 	if opts.preparedLimits != nil {
 		systemOpts.serialApply = true
+		systemOpts.rejectDictionaryReads = true
 		systemOpts.maxOutputPages = opts.preparedLimits.SystemPointProfile.OutputPages
 		systemOpts.materializeMaxEntries = opts.preparedLimits.MaxSystemDeltaEntries
 		systemOpts.materializeBudget = &OrderedRootDeltaMaterializationBudget{RemainingBytes: opts.preparedLimits.MaxSystemDeltaBytes}
@@ -4240,7 +4250,7 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 			db.releasePendingValueLogAppendPtrCollector(collector)
 		}
 	}()
-	if err = db.prepareOrderedRootDeltaBatchGroupReadOnly(idxGen, allOrdered, idxGen.allocator, &phaseStats); err != nil {
+	if err = db.prepareOrderedRootDeltaBatchGroupReadOnly(idxGen, allOrdered, idxGen.allocator, &phaseStats, opts.preparedLimits != nil); err != nil {
 		return 0, nil, err
 	}
 	phaseStart := time.Now()

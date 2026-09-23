@@ -88,8 +88,12 @@ prefixes, and every collection in the live freelist COW transaction and
 reservation ledger. Warm zipper applies share one output counter across pager
 allocations and value-log leaf appends and check it before the allocation.
 Allocation sites recheck mutable counts under their own locks before
-allocating. Value-log decode checks the configured record bound before output
-allocation and rejects zstd frames without a finite content size. Any bound
+allocating. An installed value-log dictionary callback is admissible. Before
+each prepared zipper leaf read, the publisher inspects only the fixed record
+and frame prefixes and rejects a dictionary-coded source before callback or
+codec-cache allocation. No-dictionary zstd decode caps its destination at the
+admitted raw length, including streaming and multipart frames; ordinary
+dictionary and multipart decoding retains its existing behavior. Any bound
 violation after command-WAL append is a broken admission invariant;
 publication fails through the existing poison/recovery path rather than
 retrying the batch.

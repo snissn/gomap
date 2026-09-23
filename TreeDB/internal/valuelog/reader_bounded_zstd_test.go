@@ -135,6 +135,34 @@ func TestNoDictFrameDecodeAcceptsMatchingOutput(t *testing.T) {
 	}
 }
 
+func TestNoDictFrameDecodeAcceptsEncodeAllPartsOutput(t *testing.T) {
+	enc, err := zstd.NewWriter(nil, zstd.WithEncoderConcurrency(1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer enc.Close()
+
+	parts := [][]byte{
+		bytes.Repeat([]byte("first-part"), 1<<10),
+		bytes.Repeat([]byte("second-part"), 1<<9),
+		bytes.Repeat([]byte("third-part"), 1<<8),
+	}
+	want := bytes.Join(parts, nil)
+	decoded, err := decodeFramePayloadTo(
+		FrameHeader{Flags: FrameFlagCompressed},
+		enc.EncodeAllParts(parts, nil),
+		nil,
+		uint32(len(want)),
+		nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(decoded, want) {
+		t.Fatal("decoded multipart frame differs from raw input")
+	}
+}
+
 func TestSnappyBlockRejectsDeclaredLengthBeforeDecode(t *testing.T) {
 	payload := snappy.Encode(nil, bytes.Repeat([]byte("oversized"), 1<<17))
 	_, err := decodeBlockPayload(uint8(BlockCodecSnappy), payload, 32, nil)

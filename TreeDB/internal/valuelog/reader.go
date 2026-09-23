@@ -48,8 +48,8 @@ func getNoDictDecoder() (*zstd.Decoder, error) {
 			return dec, nil
 		}
 	}
-	// Callers size DecodeAll's destination to the record's checked raw length.
-	// Reject a larger frame declaration before the decoder can allocate it.
+	// Callers cap DecodeAll's destination at the record's checked raw length.
+	// DecodeAllCapLimit rejects output growth beyond that admitted capacity.
 	// A single block decoder bounds the workspace retained by this pooled
 	// decoder. The window ceiling matches the pinned fork's default. The
 	// decoded-memory ceiling is tighter than its 64 GiB default; the default
@@ -769,10 +769,6 @@ func decodeFramePayloadTo(header FrameHeader, payload []byte, dictLookup DictLoo
 		}
 		return decodeBlockPayload(header.Reserved, payload, rawLen, dst)
 	}
-	if err := checkZstdFrameContentSize(payload, rawLen); err != nil {
-		return nil, err
-	}
-
 	var dec *zstd.Decoder
 	var release func()
 	if header.DictID != 0 {
@@ -823,20 +819,6 @@ func decodeFramePayloadTo(header FrameHeader, payload []byte, dictLookup DictLoo
 		return nil, ErrCorrupt
 	}
 	return out, nil
-}
-
-// checkZstdFrameContentSize rejects frames whose output cannot be bounded from
-// their header. DecodeAll may otherwise grow dst by one full block before its
-// configured output-size check observes an unknown-size streaming frame.
-func checkZstdFrameContentSize(payload []byte, rawLen uint32) error {
-	var header zstd.Header
-	if err := header.Decode(payload); err != nil {
-		return err
-	}
-	if header.Skippable || !header.HasFCS || header.FrameContentSize != uint64(rawLen) {
-		return zstd.ErrDecoderSizeExceeded
-	}
-	return nil
 }
 
 func ReadAt(f *os.File, ptr page.ValuePtr, verifyCRC bool) ([]byte, error) {

@@ -6,7 +6,59 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/page"
 )
+
+type preparedDictionaryInspectorStub struct {
+	dictID uint64
+	err    error
+}
+
+func (s preparedDictionaryInspectorStub) PreparedRecordDictionaryID(page.ValuePtr) (uint64, error) {
+	return s.dictID, s.err
+}
+
+type preparedLeafReaderStub struct {
+	calls   int
+	toCalls int
+}
+
+func (s *preparedLeafReaderStub) ReadUnsafe(page.ValuePtr) ([]byte, error) {
+	s.calls++
+	return []byte("leaf"), nil
+}
+
+func (s *preparedLeafReaderStub) ReadUnsafeTo(_ page.ValuePtr, dst []byte) ([]byte, bool, error) {
+	s.toCalls++
+	return append(dst[:0], "leaf"...), true, nil
+}
+
+func TestPreparedNoDictionaryLeafReaderRejectsBeforeFallback(t *testing.T) {
+	fallback := &preparedLeafReaderStub{}
+	reader := &preparedNoDictionaryLeafPageReader{
+		inspect:  preparedDictionaryInspectorStub{dictID: 7},
+		fallback: fallback,
+	}
+	if _, err := reader.ReadUnsafe(page.ValuePtr{FileID: 1, Offset: 4}); !errors.Is(err, ErrPreparedRootPointProfileLimit) {
+		t.Fatalf("dictionary read error=%v, want prepared profile limit", err)
+	}
+	if fallback.calls != 0 {
+		t.Fatalf("fallback called %d times before dictionary rejection", fallback.calls)
+	}
+	if _, _, err := reader.ReadUnsafeTo(page.ValuePtr{FileID: 1, Offset: 4}, make([]byte, 0, 4)); !errors.Is(err, ErrPreparedRootPointProfileLimit) {
+		t.Fatalf("dictionary read-to error=%v, want prepared profile limit", err)
+	}
+	if fallback.toCalls != 0 {
+		t.Fatalf("fallback read-to called %d times before dictionary rejection", fallback.toCalls)
+	}
+	reader.inspect = preparedDictionaryInspectorStub{}
+	if got, err := reader.ReadUnsafe(page.ValuePtr{FileID: 1, Offset: 4}); err != nil || string(got) != "leaf" {
+		t.Fatalf("plain read got=%q err=%v", got, err)
+	}
+	if got, used, err := reader.ReadUnsafeTo(page.ValuePtr{FileID: 1, Offset: 4}, make([]byte, 0, 4)); err != nil || !used || string(got) != "leaf" {
+		t.Fatalf("plain read-to got=%q used=%t err=%v", got, used, err)
+	}
+}
 
 func TestPreparedRootPointProfileBindsWarmAndColdDeltas(t *testing.T) {
 	database, err := Open(Options{Dir: t.TempDir(), DisableBackgroundPrune: true})

@@ -30,11 +30,12 @@ const (
 // preparedInsertPublisherReserveBytes is held by the token before Prepare
 // returns. Q page images cover pager/zipper output; P resident pages cover the
 // admitted base; 512 B/page covers scan maps and root bookkeeping; 256 B/page
-// covers COW slices/maps. A no-dictionary read can hold encoded, decoded, and
-// selected-record copies together, followed by the bounded grouped-frame
-// cache. The final fixed tranche covers Manager/resource sets, descriptors,
-// builders, and slice growth. Collection/WAL/asset allocations are charged by
-// preparedInsertCommitReserveBytes separately.
+// covers COW slices/maps. The prepared leaf reader rejects a dictionary-coded
+// source record from its fixed-size prefix before callback or codec allocation;
+// encoded, decoded, and selected-record copies can otherwise coexist with the
+// bounded grouped-frame cache. The final fixed tranche covers Manager/resource
+// sets, descriptors, builders, and slice growth. Collection/WAL/asset
+// allocations are charged by preparedInsertCommitReserveBytes separately.
 func preparedInsertPublisherReserveBytes() int64 {
 	p := int64(preparedInsertPublisherMaxBasePages)
 	q := int64(preparedInsertPublisherMaxOutputPages)
@@ -87,7 +88,7 @@ func checkPreparedInsertPublicationBase(profile backenddb.PreparedRootPublicatio
 		read.GroupedFrameCacheMaxBytes < 0 || read.GroupedFrameCacheMaxBytes > preparedInsertPublisherMaxCacheBytes ||
 		read.GroupedFrameCacheEntries < 0 || read.GroupedFrameCacheEntries > 2048 ||
 		read.GroupedFrameCacheMaxRawBytes < 0 || read.GroupedFrameCacheMaxRawBytes > 1<<20 ||
-		read.HasDictionaryLookup || read.HasTemplateLookup {
+		read.HasTemplateLookup {
 		return fmt.Errorf("%w: ordered publisher base exceeds prepared admission", ErrPreparedInsertResourceLimit)
 	}
 	return nil

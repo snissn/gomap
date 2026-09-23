@@ -16,6 +16,18 @@ func acceptedPreparedPublicationBaseProfile() backenddb.PreparedRootPublicationB
 	}
 }
 
+func TestPreparedInsertPublicationBaseAllowsInstalledDictionaryLookup(t *testing.T) {
+	profile := acceptedPreparedPublicationBaseProfile()
+	profile.ValueLogRead.HasDictionaryLookup = true
+	if err := checkPreparedInsertPublicationBase(profile); err != nil {
+		t.Fatalf("installed dictionary callback with guarded prepared reads: %v", err)
+	}
+	profile.ValueLogRead.HasTemplateLookup = true
+	if err := checkPreparedInsertPublicationBase(profile); !errors.Is(err, ErrPreparedInsertResourceLimit) {
+		t.Fatalf("unguarded template callback error=%v, want prepared resource limit", err)
+	}
+}
+
 func TestPreparedInsertPublicationBaseRejectsHistoricalLeafCounts(t *testing.T) {
 	for name, mutate := range map[string]func(*backenddb.PreparedRootPublicationBaseProfile){
 		"generations": func(p *backenddb.PreparedRootPublicationBaseProfile) {

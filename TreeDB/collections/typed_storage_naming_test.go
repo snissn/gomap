@@ -343,6 +343,12 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	// Buffered retained-document reconstruction tests exercise the public
 	// compatibility configuration and typed-column value vocabulary.
 	{path: "TreeDB/collections/api_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 5, occurrences: 6},
+	// Prepared insertion validates and copies the compatibility-retained public
+	// configuration; it does not introduce a second typed-storage vocabulary.
+	{path: "TreeDB/collections/prepared_catalog.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
+	{path: "TreeDB/collections/prepared_root_profiles.go", classification: typedStorageLegacyCompatibility, matchingLines: 3, occurrences: 3},
+	{path: "TreeDB/collections/prepared_system_meta_json.go", classification: typedStorageLegacyCompatibility, matchingLines: 3, occurrences: 5},
+	{path: "TreeDB/collections/prepared_system_meta_json_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 6, occurrences: 8},
 	// RAG benchmark harness (issue #4267) consumes the public compatibility
 	// configuration API for typed-column collection setup; no new legacy
 	// terminology introduced.

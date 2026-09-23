@@ -131,6 +131,14 @@ all request-owned source, prepared, WAL, typed, sidecar, pager, zipper,
 value-log Manager, visible-install, and sealed-root publication work. The
 prepared caller must retain that credit until `Commit` returns.
 
+The prepared ordered publisher permits an installed value-log dictionary
+lookup callback, but inspects every outer-leaf record prefix before decoding.
+It rejects a dictionary-coded source before the callback or dictionary codec
+cache can allocate. This guard applies to the pre-WAL root census and the
+post-WAL read-only, caller-root, context-root, and system-root zipper paths.
+Ordinary value-log decoding keeps its existing dictionary and multipart-frame
+behavior.
+
 `PreparedInsertBatch.Commit` therefore waits through sealed-root publication
 for its exact commit sequence, including in command-WAL profiles where an
 ordinary write may acknowledge after its command-frame boundary and before

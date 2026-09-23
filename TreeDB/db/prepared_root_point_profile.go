@@ -7,12 +7,59 @@ import (
 	"math"
 
 	"github.com/snissn/gomap/TreeDB/batch"
+	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/zipper"
 )
 
 // ErrPreparedRootPointProfileLimit rejects a prepared shape before its command
 // WAL append. The ordinary ordered-root publisher does not use this profile.
 var ErrPreparedRootPointProfileLimit = errors.New("treedb: prepared root point profile limit")
+
+type preparedDictionaryRecordInspector interface {
+	PreparedRecordDictionaryID(page.ValuePtr) (uint64, error)
+}
+
+// preparedNoDictionaryLeafPageReader rejects a dictionary-coded record after
+// reading only its fixed-size header. The dictionary callback and process-wide
+// codec cache therefore cannot allocate on the prepared publication lane.
+type preparedNoDictionaryLeafPageReader struct {
+	inspect  preparedDictionaryRecordInspector
+	fallback zipper.LeafPageReader
+}
+
+func (r *preparedNoDictionaryLeafPageReader) check(ptr page.ValuePtr) error {
+	if r == nil || r.inspect == nil || r.fallback == nil {
+		return ErrPreparedRootPointProfileLimit
+	}
+	dictID, err := r.inspect.PreparedRecordDictionaryID(ptr)
+	if err != nil {
+		return err
+	}
+	if dictID != 0 {
+		return fmt.Errorf("%w: dictionary-compressed leaf record", ErrPreparedRootPointProfileLimit)
+	}
+	return nil
+}
+
+func (r *preparedNoDictionaryLeafPageReader) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
+	if err := r.check(ptr); err != nil {
+		return nil, err
+	}
+	return r.fallback.ReadUnsafe(ptr)
+}
+
+func (r *preparedNoDictionaryLeafPageReader) ReadUnsafeTo(ptr page.ValuePtr, dst []byte) ([]byte, bool, error) {
+	if err := r.check(ptr); err != nil {
+		return nil, false, err
+	}
+	if reader, ok := r.fallback.(interface {
+		ReadUnsafeTo(page.ValuePtr, []byte) ([]byte, bool, error)
+	}); ok {
+		return reader.ReadUnsafeTo(ptr, dst)
+	}
+	data, err := r.fallback.ReadUnsafe(ptr)
+	return data, false, err
+}
 
 // PreparedRootPointProfile binds a pure-put page-output allowance to one
 // captured root. PointOps and MaxKeyBytes are checked against the actual
@@ -70,6 +117,7 @@ func (db *DB) profilePreparedRootPointEntries(rootID uint64, policy OrderedRootS
 	if err != nil {
 		return PreparedRootPointProfile{}, err
 	}
+	opts.rejectDictionaryReads = true
 	z, err := db.orderedRootZipperForOptions(idx, opts)
 	if err != nil {
 		return PreparedRootPointProfile{}, err
@@ -128,6 +176,7 @@ func (db *DB) ProfilePreparedRootWholePointBudget(rootID uint64, policy OrderedR
 	if err != nil {
 		return PreparedRootPointProfile{}, err
 	}
+	opts.rejectDictionaryReads = true
 	z, err := db.orderedRootZipperForOptions(idx, opts)
 	if err != nil {
 		return PreparedRootPointProfile{}, err

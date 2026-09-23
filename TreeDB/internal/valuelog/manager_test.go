@@ -91,6 +91,43 @@ func TestManagerPreparedReadProfileReportsAdmissionInputs(t *testing.T) {
 	check(true, true, 0, 2<<20, 17)
 }
 
+func TestManagerPreparedRecordDictionaryIDReadsOnlyRecordPrefix(t *testing.T) {
+	dir := t.TempDir()
+	fileID := page.ValueLogFileID(1)
+	w, err := NewWriter(filepath.Join(dir, "value-000001.log"), fileID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dict, err := buildFallbackBenchDict(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ptrs, _, err := w.AppendFrameWithStats(9, dict, []Record{{RID: 1, Value: bytes.Repeat([]byte("dictionary payload "), 128)}})
+	if err != nil {
+		_ = w.Close()
+		t.Fatal(err)
+	}
+	plain, _, err := w.AppendFrameWithStats(0, nil, []Record{{RID: 2, Value: []byte("plain")}})
+	if err != nil {
+		_ = w.Close()
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	mgr, err := NewManager(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mgr.Close()
+	if got, err := mgr.PreparedRecordDictionaryID(ptrs[0]); err != nil || got != 9 {
+		t.Fatalf("dictionary id=%d err=%v", got, err)
+	}
+	if got, err := mgr.PreparedRecordDictionaryID(plain[0]); err != nil || got != 0 {
+		t.Fatalf("plain dictionary id=%d err=%v", got, err)
+	}
+}
+
 func TestManagerCurrentSubsetNoRefreshPinsOnlyRequestedSegments(t *testing.T) {
 	manager := &Manager{files: map[uint32]*File{1: {}, 2: {}, 3: {}, 4: {}}}
 	manager.files[3].IsZombie.Store(true)
