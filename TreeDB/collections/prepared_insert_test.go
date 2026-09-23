@@ -822,3 +822,53 @@ func TestPreparedInsertAggregateMetadataFanoutRejectedBeforeCommandWAL(t *testin
 		t.Fatalf("rejected preparation poisoned command WAL: %v", err)
 	}
 }
+
+func TestPreparedInsertThreeAggregateSpecsRemainEligible(t *testing.T) {
+	dir := t.TempDir()
+	enableColumnRetainedPlacementCommandWAL(t, dir)
+	d := openColumnRetainedPlacementDB(t, dir, backenddb.Options{})
+	defer d.Close()
+	postPredicates := []ColumnPhysicalQueryPredicate{
+		{Column: "kind", Value: "commit"},
+		{Column: "operation", Value: "create"},
+		{Column: "event", Value: "app.bsky.feed.post"},
+	}
+	q3Predicates := append([]ColumnPhysicalQueryPredicate(nil), postPredicates...)
+	q3Predicates[2] = ColumnPhysicalQueryPredicate{Column: "event", Kind: ColumnPhysicalQueryPredicateInList,
+		Values: []string{"app.bsky.feed.post", "app.bsky.feed.repost", "app.bsky.feed.like"}}
+	meta := CollectionMeta{Name: "events", Options: CollectionOptions{DocumentFormat: DocumentFormatJSON, ColumnStore: &ColumnStoreConfig{
+		Enabled: true,
+		Columns: []ColumnStoreColumn{
+			{Name: "event", Path: "commit.collection", ValueType: ColumnStoreValueString, Owner: TypedStorageOwnerColumnPart, Dictionary: true, Nullable: true},
+			{Name: "did", Path: "did", ValueType: ColumnStoreValueString, Owner: TypedStorageOwnerColumnPart, Dictionary: true, Nullable: true},
+			{Name: "kind", Path: "kind", ValueType: ColumnStoreValueString, Owner: TypedStorageOwnerColumnPart, Dictionary: true, Nullable: true},
+			{Name: "operation", Path: "commit.operation", ValueType: ColumnStoreValueString, Owner: TypedStorageOwnerColumnPart, Dictionary: true, Nullable: true},
+			{Name: "time_us", Path: "time_us", ValueType: ColumnStoreValueInt64, Owner: TypedStorageOwnerColumnPart},
+		},
+		SortKey: []ColumnSortKey{{Column: "time_us"}},
+		AggregateMetadata: []ColumnAggregateMetadata{
+			{Name: "q1", GroupColumn: "event", Kind: ColumnAggregateCount},
+			{Name: "q3", Column: "time_us", GroupColumn: "event", Kind: ColumnAggregateGroupHourCount, Predicates: q3Predicates},
+			{Name: "q5", Column: "time_us", GroupColumn: "did", Kind: ColumnAggregateMin, Predicates: postPredicates},
+		},
+		RetainedPayload: ColumnRetainedPayloadNonColumn, RetainedPayloadEncoding: ColumnRetainedPayloadEncodingSemanticStreamV1,
+		Reconstruction: ColumnReconstructionRetainedPayloadAndColumns,
+	}}}
+	if _, err := NewCollectionManager(d).CreateCollection(&meta); err != nil {
+		t.Fatal(err)
+	}
+	col := openColumnRetainedPlacementCollection(t, d, meta.Name)
+	before := d.CommandWALNextLSN()
+	prepared, err := col.PrepareInsertBatchOwned([][]byte{[]byte("a")},
+		[][]byte{[]byte(`{"commit":{"collection":"app.bsky.feed.post","operation":"create"},"did":"did:one","kind":"commit","time_us":123}`)}, 32<<20)
+	if err != nil {
+		t.Fatalf("three-spec target preparation: %v", err)
+	}
+	if prepared.typedBatch == nil || prepared.typedBatch.Options.PartID != 0 {
+		t.Fatalf("three-spec target missing identity-free typed batch: %+v", prepared.typedBatch)
+	}
+	prepared.Abandon()
+	if got := d.CommandWALNextLSN(); got != before {
+		t.Fatalf("preparation advanced command WAL next LSN from %d to %d", before, got)
+	}
+}
