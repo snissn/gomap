@@ -2127,6 +2127,49 @@ It does not claim ANN query serving. Reader pins cover only this generation's
 local cleanup lifecycle; they do not imply a query-serving or cluster-cutover
 contract.
 
+# Vector partition owner-scoped search-plan verification
+
+The #4808 intermediate owner-plan path has separate metadata-retention and
+public-open checks. `TestVectorPartitionOwnerSearchOpenPlanDoesNotRetainRemoteMembershipsV2`
+requires one local membership despite remote memberships and verifies owned
+input lifetime. `TestVectorPartitionOwnerSearchOpenPlanPreservesColocatedDomainV2`
+covers complete domain chunks, home-wins normalization and split-owner refusal.
+`TestVectorPartitionOwnerSearchOpenPlanRefusesInvalidOwnerSelectionV2` covers
+unknown owners, invalid placement and cancellation.
+
+`TestOwnerGenerationSourceOpensOnlyBoundLocalDomainV2` reaches real collection
+assets through the public generation source and checks cold/warm authority and
+remote refusal. `TestOwnerGenerationSourceRejectsDifferentStoredRootV2` and
+`TestOwnerGenerationSourcePreservesColdSourceVerificationV2` cover root/source
+drift without a live-recovery exemption.
+
+`TestVectorPartitionOwnerSearchOpenPlanAllocationGrowthV2` and
+`BenchmarkVectorPartitionOwnerSearchOpenPlanV2` measure constructor allocations
+with fixed local data and increasing remote membership input. They exclude V1
+manifest acquisition/decoding and source opening, so they do not prove bounded
+public generation loading. Full #4808 acceptance still requires remote-page-read
+refusal and allocation-growth evidence through public load/open, shard-local
+source verification, resumable import/build, recovery and reachability coverage.
+The scoped `owner-local-metadata-qualification.yml` workflow records exact-head
+Go version, focused/race checks and constructor benchmark evidence.
+
+`TestSourceShardMapDocumentTokenIdentityV2` pins exact-byte token vectors;
+`TestSourceShardMapBoundImmutableLookupV2` and
+`TestSourceShardMapRefusesIdentityCoverageDriftV2` exercise immutable lookup,
+wrong-shard refusal, epoch/collection/digest drift and complete range coverage.
+`TestSourceShardMapSameTokenRangeDoesNotAliasIDsV2` checks exact-ID duplicate
+semantics and caller input lifetime. `BenchmarkSourceShardMapResolveDocumentIDV2`
+measures the enabled token/lookup cost; map validation does not grant catalog
+authority or persist import progress.
+
+The draft `TestVectorPartitionPagedRoot*V2` cases cover the 64 KiB root codec,
+mixed inline/paged refusal, root/directory/source/placement digest bindings,
+copied root lifetime, legacy runtime/reclaim refusal and count-independent
+root decode allocation. `TestVectorPartitionLegacyByteCompatibilityProbeV2`
+uses only schema-6 APIs and the same fixture on the candidate and exact D0
+base; the hosted workflow compares binary, JSON, integrity and ready digests.
+These are format guards, not paged public-open or full P2 readiness evidence.
+
 # Vector partition V1 correctness and approximation verification
 
 The snapshot-bound V1 admission contract has disjoint exact and ANN gates. The
@@ -2565,6 +2608,8 @@ server-side authorization policy. Small selective allow-sets retain their
 truthful typed-exact route.
 This fixture lives with the final metadata child, not in a separate harness PR.
 
+
+Draft source-snapshot V2 checks in `internal/vectorpartition/source_snapshot*_v2_test.go` compare the bounded streaming Merkle accumulator with a separate small-fixture tree, exercise checkpoint resume at every chunk, reject changed identities, missing/reordered/duplicate rows, corrupt/truncated codec bytes and excessive row/ID lengths, preserve original-source ordinal provenance, and decode a bounded local chunk when the declared global source row count reaches uint64 maximum. The scoped owner-local workflow runs these tests repeatedly and under race instrumentation, and records chunk verification/decode allocations. These are codec checks only. The ordinary paged load, canonical source authority, atomic durable import, bounded build, reachability and node-local memory evidence required by #4808 remain open.
 ## Sparse catalog runtime
 
 | Invariant | Test / harness |
@@ -2583,3 +2628,29 @@ This fixture lives with the final metadata child, not in a separate harness PR.
 The 40-node inventory case is configuration/control-plane evidence, not 40 live
 machines. These local cases do not close distributed ANN, authentication, EC2
 failure-domain, or horizontal-scaling qualification in #4805/#4250/#3983.
+
+Source-map V2 pure token/coverage/codec checks live in `internal/sourcepartition`; `raftplacement` separately checks every referenced group against its resolved catalog. `TestSourceShardMapCanonicalCodecAndPriorDigestV2` freezes the pre-extraction V2 digest and refuses unknown, duplicate, changed or noncanonical encoded content. Collection-side validation of a map is not publication or source-root authority.
+
+
+Draft `TestVectorPartitionSourceImportAtomicResumeAndReplayV2` exercises public typed source import, exact and changed retry, source ordinal order across sorted typed WAL payloads, checkpoint/reopen and source-root equality. `TestVectorPartitionSourceImportRejectsGapDuplicateAndWrongOwnerV2` covers nonowner/group refusal and durable cross-range exact-ID uniqueness. `TestVectorPartitionSourceImportPublicationBoundaryV2` injects before/after-publication failure to require rows/progress/receipt atomicity and unambiguous exact retry. `TestCollectionSourceImportPayloadV2` covers bounded payload sections, truncation, frame registry and allocation-free envelope validation. These candidate tests still require exact-head hosted success. Immutable chunk retention, canonical admission and owner-only public paged load/build remain open.
+
+
+## Authenticated fixed-peer transport and operations (#4813)
+
+- `TreeDB/nativewire/peer_*_test.go`, `fixed_peer_security_v1_test.go` and
+  `vector_partition_global_connection_budget_v1_test.go`: actual TLS/control,
+  Raft, snapshot, native/shard boundaries; identity/group denial; bounded sockets,
+  bytes and proposal/snapshot lifetimes; hot-group/cold-group progress; cancellation;
+  quorum-backed readiness, drain, immutable configuration and paired-root loss.
+- `cmd/treedb-fixed-peer/operations_test.go`: plaintext refuses by default and
+  executable identity mismatch refuses before stores/network work.
+- `scripts/treedb_peer_ec2_test.py`: failure-domain/capacity/cost refusal,
+  provider inventory checks, exact plan/change-set execution, wrong-tag refusal,
+  partial-provision cleanup and idempotence. Fake-provider contract tests do not
+  establish live AWS service acceptance.
+- `.github/workflows/peer-security-qualification.yml`: exact-head focused/race
+  gates, existing retained M8 resources, replicated TLS writes/shutdown, and
+  equivalent public plaintext/TLS allocation/process-resource measurements.
+- [Fixed-peer operations](../operations/fixed-peer-ec2.md) and
+  [evidence](../evidence/peer-security-4813/README.md) distinguish generic substrate
+  conformance from #4250 multi-host performance and #3983 fault evidence.

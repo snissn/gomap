@@ -18,6 +18,7 @@ import (
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/documentservice"
 	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
+	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
 	public "github.com/snissn/gomap/TreeDB/vectorpartition"
 )
 
@@ -76,6 +77,7 @@ const (
 
 // ServerOptions configures a native-wire server.
 type ServerOptions struct {
+	PeerTransport                   *PeerTransportV1
 	Limits                          iwire.Limits
 	MaxFrameSize                    uint64
 	MaxInFlight                     int
@@ -103,6 +105,7 @@ type ServerOptions struct {
 
 // Server serves native-wire control and command frames for TreeDB.
 type Server struct {
+	peerTransport                   *PeerTransportV1
 	limits                          iwire.Limits
 	maxInFlight                     int
 	maxConnections                  int
@@ -317,6 +320,9 @@ func NewServer(opts ServerOptions) *Server {
 	defaultLimits := iwire.DefaultLimits()
 	if limits.MaxFrameSize == 0 {
 		limits.MaxFrameSize = defaultLimits.MaxFrameSize
+		if opts.PeerTransport != nil {
+			limits.MaxFrameSize = peerNativeDefaultFrameV1
+		}
 	}
 	if limits.MaxHeaderLen == 0 {
 		limits.MaxHeaderLen = defaultLimits.MaxHeaderLen
@@ -332,6 +338,11 @@ func NewServer(opts ServerOptions) *Server {
 	}
 	if limits.MaxByteVectorBytes == 0 {
 		limits.MaxByteVectorBytes = defaultLimits.MaxByteVectorBytes
+	}
+	if opts.PeerTransport != nil {
+		limits.MaxByteVectorBytes = min(limits.MaxByteVectorBytes, limits.MaxFrameSize)
+		limits.MaxSectionLen = min(limits.MaxSectionLen, limits.MaxFrameSize)
+		limits.MaxByteVectorItems = min(limits.MaxByteVectorItems, int(max(1, min(uint64(defaultLimits.MaxByteVectorItems), limits.MaxFrameSize/32))))
 	}
 	maxInFlight := opts.MaxInFlight
 	if maxInFlight <= 0 {
@@ -389,6 +400,7 @@ func NewServer(opts ServerOptions) *Server {
 		insertBatchCombineDrainYields = defaultInsertBatchCombineDrainYields
 	}
 	server := &Server{
+		peerTransport:                   opts.PeerTransport,
 		limits:                          limits,
 		maxInFlight:                     maxInFlight,
 		maxConnections:                  maxConnections,
@@ -464,6 +476,13 @@ func (s *Server) ServeConn(ctx context.Context, conn net.Conn) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	if s.peerTransport != nil {
+		var err error
+		conn, err = s.peerTransport.admission.accept(conn, "native")
+		if err != nil {
+			return err
+		}
+	}
 	if !s.registerConn(conn) {
 		_ = conn.Close()
 		return ErrServerClosed
@@ -475,6 +494,13 @@ func (s *Server) serveRegisteredConn(ctx context.Context, conn net.Conn) error {
 	logDebug("serveRegisteredConn")
 	defer s.unregisterConn(conn)
 	defer conn.Close()
+	if s.peerTransport != nil {
+		var err error
+		conn, err = s.peerTransport.accept(ctx, conn, "")
+		if err != nil {
+			return err
+		}
+	}
 
 	state := &connState{id: uint64(s.nextConn.Add(1))}
 	defer s.killCursorsForOwner(state.id)
@@ -499,8 +525,26 @@ func (s *Server) serveRegisteredConn(ctx context.Context, conn net.Conn) error {
 				return err
 			}
 		}
-		header, body, err := readFrameInto(conn, s.limits, state.readBody)
+		var work peerWorkLeaseV1
+		var admit func(uint64) error
+		if s.peerTransport != nil {
+			admit = func(uint64) error {
+				if s.limits.MaxFrameSize > 64<<20 {
+					return raftcluster.ErrAdmissionUnavailable
+				}
+				var err error
+				work, err = s.peerTransport.admission.work("native", peerRequestsV1, int64(s.limits.MaxFrameSize)*4)
+				return err
+			}
+		}
+		header, body, err := readFrameIntoAdmissionV1(conn, s.limits, state.readBody, admit)
 		if err != nil {
+			work.release()
+			if errors.Is(err, raftcluster.ErrAdmissionUnavailable) {
+				_ = conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+				_ = s.writeError(conn, header, protocolError(iwire.ErrResourceExhausted, "node request/byte admission unavailable"))
+				return err
+			}
 			if errors.Is(err, io.EOF) {
 				return nil
 			}
@@ -514,7 +558,9 @@ func (s *Server) serveRegisteredConn(ctx context.Context, conn net.Conn) error {
 			}
 			return err
 		}
-		if err := s.handleFrame(ctx, conn, state, header, body); err != nil {
+		err = s.handleFrame(ctx, conn, state, header, body)
+		work.release()
+		if err != nil {
 			if errors.Is(err, errGoaway) {
 				return nil
 			}
@@ -523,7 +569,11 @@ func (s *Server) serveRegisteredConn(ctx context.Context, conn net.Conn) error {
 			}
 			return err
 		}
-		if body != nil {
+		if s.peerTransport != nil {
+			state.readBody = nil
+			state.writeBody = retainSmallPayloadScratch(state.writeBody)
+			state.responseBody = retainSmallPayloadScratch(state.responseBody)
+		} else if body != nil {
 			state.readBody = body[:0]
 		}
 	}

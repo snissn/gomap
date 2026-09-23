@@ -1,0 +1,93 @@
+name: Peer security and global admission qualification
+
+on:
+  pull_request:
+    paths:
+      - 'TreeDB/nativewire/fixed_peer*'
+      - 'TreeDB/nativewire/peer_*'
+      - 'TreeDB/nativewire/vector_partition_global_connection_budget_v1_test.go'
+      - 'TreeDB/nativewire/vector_partition_shard_search_tcp_v1.go'
+      - 'TreeDB/nativewire/server.go'
+      - 'TreeDB/nativewire/listener.go'
+      - 'TreeDB/nativewire/client.go'
+      - 'TreeDB/nativewire/codec.go'
+      - 'cmd/treedb-fixed-peer/**'
+      - 'scripts/treedb_peer_*.py'
+      - '.github/workflows/peer-security-qualification.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  qualify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 1
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Exact source and toolchain
+        run: |
+          git rev-parse HEAD
+          go version
+      - name: Global connection and peer authorization regressions
+        run: go test ./TreeDB/nativewire -run 'Test(ManyIdleEndpointsRespectGlobalConnectionBudgetV1|PeerShard|VectorPartitionShardSearchTCP|HotGroupCannotExhaustUnrelatedGroupAdmissionV1)' -count=3 -timeout=6m -v
+      - name: Resource and TCP race checks
+        run: go test -race ./TreeDB/nativewire -run 'Test(ManyIdleEndpointsRespectGlobalConnectionBudgetV1|PeerShard|VectorPartitionShardSearchTCP|HotGroupCannotExhaustUnrelatedGroupAdmissionV1|UnknownPeerCannotSubmitOrInstallSnapshotV1|PeerSecurity|PeerCredential)' -count=1 -timeout=6m -v
+      - name: Retained serving topology guardrail
+        run: go test ./cmd/treedb_vector_partition_bench -run '^TestM8ServingResourcesRetainedTopologyV1$' -count=1 -timeout=4m -v
+      - name: Replicated admission and pipeline shutdown under race
+        run: go test -race ./TreeDB/nativewire -run '^$' -bench '^BenchmarkPeerSecurityRemoteOwnerCreateV1$/MutualTLS/Sparse$' -benchtime=10x -count=1 -timeout=4m -v
+      - name: Credential-free peer regression
+        if: ${{ !cancelled() }}
+        run: go test ./TreeDB/nativewire -run 'Test(UnknownPeerCannotSubmitOrInstallSnapshotV1|PeerSecurity|PeerCredential)' -count=3 -timeout=4m -v
+      - name: Operational command and deployment contract
+        if: ${{ !cancelled() }}
+        run: |
+          go test -race ./cmd/treedb-fixed-peer -count=1 -timeout=2m
+          python3 -m unittest discover -s scripts -p 'treedb_peer_*test.py' -v
+      - name: Formatting
+        if: ${{ !cancelled() }}
+        run: |
+          files="TreeDB/nativewire/peer_*.go TreeDB/nativewire/vector_partition_global_connection_budget_v1_test.go TreeDB/nativewire/vector_partition_shard_search_tcp_v1.go TreeDB/nativewire/fixed_peer_tcp_runtime_v1.go TreeDB/nativewire/fixed_peer_security_v1_test.go TreeDB/nativewire/fixed_peer_tcp_stream_v1.go TreeDB/nativewire/fixed_peer_sparse_catalog_v1.go TreeDB/nativewire/server.go TreeDB/nativewire/listener.go TreeDB/nativewire/client.go TreeDB/nativewire/codec.go TreeDB/nativewire/sparse_catalog_bench_test.go cmd/treedb-fixed-peer/*.go"
+          gofmt -d $files || true
+          bad=$(gofmt -l $files)
+          if [ -n "$bad" ]; then
+            for file in $bad; do
+              echo "FORMATTED_FILE_START $file"
+              gofmt "$file" | base64 -w0
+              echo
+              echo "FORMATTED_FILE_END $file"
+            done
+            exit 1
+          fi
+
+  public-path-cost:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Equivalent plaintext and authenticated durable traffic
+        run: |
+          mkdir -p peer-public-path-cost
+          git rev-parse HEAD | tee peer-public-path-cost/source.txt
+          go version | tee peer-public-path-cost/toolchain.txt
+          sha256sum TreeDB/nativewire/sparse_catalog_bench_test.go TreeDB/nativewire/peer_security_bench_test.go | tee peer-public-path-cost/harness.txt
+          go test ./TreeDB/nativewire -run '^$' -bench '^BenchmarkPeerSecurityRemoteOwnerCreateV1$/(Plain|MutualTLS)/(Sparse|Inventory40)$' -benchtime=25x -count=3 -benchmem -timeout=12m -v | tee peer-public-path-cost/measurements.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: peer-public-path-cost-${{ github.event.pull_request.head.sha || github.sha }}
+          path: peer-public-path-cost/

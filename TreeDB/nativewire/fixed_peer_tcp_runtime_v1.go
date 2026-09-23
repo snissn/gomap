@@ -65,7 +65,9 @@ type FixedPeerTCPGroupV1 struct {
 type FixedPeerTCPConfigV1 struct {
 	// ClusterID is an optional stable bootstrap identity. Empty retains the
 	// legacy exact-configuration identity. It never authorizes topology edits.
-	ClusterID                         string `json:",omitempty"`
+	ClusterID                         string             `json:",omitempty"`
+	Credentials                       *PeerCredentialsV1 `json:",omitempty"`
+	ResourceLimits                    *PeerNodeLimitsV1  `json:",omitempty"`
 	NodeID                            raftcluster.NodeID
 	DataRoot, RaftRoot, ListenAddress string
 	RaftListen                        map[raftcluster.GroupID]string
@@ -76,6 +78,7 @@ type FixedPeerTCPConfigV1 struct {
 }
 
 type FixedPeerTCPStatusV1 struct {
+	Resources                            *PeerNodeResourceStatsV1 `json:",omitempty"`
 	ClusterID, CatalogRole               string
 	NodeID                               raftcluster.NodeID
 	Address, ConfigDigest, RecoveryState string
@@ -96,21 +99,27 @@ type fixedPeerDataV1 struct {
 }
 
 type FixedPeerTCPRuntimeV1 struct {
+	diagnostics   chan struct{}
+	draining      atomic.Bool
+	closed        atomic.Bool
 	config        FixedPeerTCPConfigV1
 	client        *FixedPeerTCPClientV1
 	authority     *raftplacement.CatalogMetaAuthorityV1
 	meta          *raftcluster.CatalogMetaRaftProviderV1
 	data          map[raftcluster.GroupID]*fixedPeerDataV1
 	local, routed *raftcluster.GroupRoutedSubmitter
-	transports    []*hraft.NetworkTransport
-	server        *http.Server
-	listener      net.Listener
-	reopened      bool
-	closeOnce     sync.Once
-	closeErr      error
-	requests      chan struct{}
-	forwards      chan struct{}
-	reads         chan struct{}
+	transports    []interface {
+		Close() error
+		CloseStreams()
+	}
+	server    *http.Server
+	listener  net.Listener
+	reopened  bool
+	closeOnce sync.Once
+	closeErr  error
+	requests  chan struct{}
+	forwards  chan struct{}
+	reads     chan struct{}
 }
 
 type FixedPeerTCPClientV1 struct {
@@ -120,6 +129,9 @@ type FixedPeerTCPClientV1 struct {
 	readHTTP         *http.Client
 	addresses        map[raftcluster.NodeID]string
 	calls, readCalls chan struct{}
+	security         *peerTransportSecurityV1
+	peerTransport    *PeerTransportV1
+	ownPeerTransport bool
 }
 
 func validateFixedPeerConfigV1(c FixedPeerTCPConfigV1) (FixedPeerTCPConfigV1, string, error) {
@@ -129,6 +141,17 @@ func validateFixedPeerConfigV1(c FixedPeerTCPConfigV1) (FixedPeerTCPConfigV1, st
 		return c, "", err
 	}
 	c.Nodes = slices.Clone(c.Nodes)
+	if c.ResourceLimits != nil {
+		limits, err := normalizePeerNodeLimitsV1(*c.ResourceLimits)
+		if err != nil || c.Credentials == nil {
+			return c, "", fmt.Errorf("%w: resource limits require valid authenticated configuration", raftcluster.ErrInvalidConfig)
+		}
+		c.ResourceLimits = &limits
+	}
+	if c.Credentials != nil {
+		credentials := *c.Credentials
+		c.Credentials = &credentials
+	}
 	c.RaftListen = maps.Clone(c.RaftListen)
 	c.Catalog = cloneFixedPeerGroupV1(c.Catalog)
 	c.Groups = slices.Clone(c.Groups)
@@ -154,6 +177,9 @@ func validateFixedPeerConfigV1(c FixedPeerTCPConfigV1) (FixedPeerTCPConfigV1, st
 	addressOK := func(address string) bool {
 		addr, e := netip.ParseAddrPort(address)
 		if e != nil || addr.Addr().IsUnspecified() || addr.Addr().Is4In6() || addr.Port() == 0 || addresses[address] || addr.String() != address {
+			return false
+		}
+		if c.Credentials != nil && !addr.Addr().IsPrivate() && !addr.Addr().IsLoopback() {
 			return false
 		}
 		addresses[address] = true
@@ -251,6 +277,12 @@ func validateFixedPeerConfigV1(c FixedPeerTCPConfigV1) (FixedPeerTCPConfigV1, st
 	shared.RaftRoot = ""
 	shared.ListenAddress = ""
 	shared.RaftListen = nil
+	shared.ResourceLimits = nil
+	if shared.Credentials != nil {
+		// Bind authenticated mode in the shared identity, but never equate
+		// different nodes' local credential filenames or private keys.
+		shared.Credentials = &PeerCredentialsV1{}
+	}
 	raw, err := json.Marshal(shared)
 	if err != nil {
 		return c, "", err
@@ -263,12 +295,71 @@ func validateFixedPeerConfigV1(c FixedPeerTCPConfigV1) (FixedPeerTCPConfigV1, st
 }
 
 func NewFixedPeerTCPClientV1(config FixedPeerTCPConfigV1) (*FixedPeerTCPClientV1, error) {
+	return newFixedPeerTCPClientV1(config, nil)
+}
+
+// NewFixedPeerTCPClientWithTransportV1 attaches a control client to the node's
+// existing identity and resource ledger. Closing this client closes its idle
+// HTTP connections; the caller retains ownership of the shared transport.
+func NewFixedPeerTCPClientWithTransportV1(config FixedPeerTCPConfigV1, shared *PeerTransportV1) (*FixedPeerTCPClientV1, error) {
+	if shared == nil {
+		return nil, errPeerAuthenticationV1
+	}
+	return newFixedPeerTCPClientV1(config, shared)
+}
+
+func newFixedPeerTCPClientV1(config FixedPeerTCPConfigV1, shared *PeerTransportV1) (*FixedPeerTCPClientV1, error) {
 	c, digest, err := validateFixedPeerConfigV1(config)
 	if err != nil {
 		return nil, err
 	}
+	if shared != nil {
+		var limits PeerNodeLimitsV1
+		if c.ResourceLimits != nil {
+			limits = *c.ResourceLimits
+		}
+		limits, err = normalizePeerNodeLimitsV1(limits)
+		if err != nil || c.Credentials == nil || shared.node != c.NodeID || shared.configDigest != digest || shared.localLimits != limits {
+			return nil, raftcluster.ErrInvalidConfig
+		}
+	}
+	var security *peerTransportSecurityV1
+	var endpointNodes map[string]raftcluster.NodeID
+	if c.Credentials != nil {
+		nodes := make([]raftcluster.NodeID, len(c.Nodes))
+		endpointNodes = make(map[string]raftcluster.NodeID, len(c.Nodes))
+		for i, node := range c.Nodes {
+			nodes[i] = node.ID
+			endpointNodes[node.Address] = node.ID
+		}
+		if shared != nil {
+			security = shared.security
+		} else {
+			security, err = newPeerTransportSecurityV1(c.ClusterID, c.NodeID, *c.Credentials, nodes)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+	peerTransport := shared
+	if peerTransport == nil {
+		peerTransport, err = peerTransportFromSecurityV1(c, security, digest)
+		if err != nil {
+			return nil, err
+		}
+	}
 	newHTTPClient := func() *http.Client {
-		return &http.Client{Timeout: c.RequestTimeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }, Transport: &http.Transport{Proxy: nil, MaxConnsPerHost: 8, MaxIdleConns: fixedPeerClientInflightV1, MaxIdleConnsPerHost: 4, IdleConnTimeout: c.RequestTimeout, ResponseHeaderTimeout: c.RequestTimeout}}
+		transport := &http.Transport{Proxy: nil, MaxConnsPerHost: 8, MaxIdleConns: fixedPeerClientInflightV1, MaxIdleConnsPerHost: 4, IdleConnTimeout: c.RequestTimeout, ResponseHeaderTimeout: c.RequestTimeout}
+		if security != nil {
+			transport.DialTLSContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+				node := endpointNodes[address]
+				if network != "tcp" || node == "" {
+					return nil, raftcluster.ErrRouteTargetUnknown
+				}
+				return peerTransport.dialScope(ctx, address, node, "control")
+			}
+		}
+		return &http.Client{Timeout: c.RequestTimeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }, Transport: transport}
 	}
 	// Forwarded mutations can hold every ordinary connection while waiting for
 	// a catalog read on the same endpoint. Reads have no nested RPC dependency.
@@ -276,7 +367,7 @@ func NewFixedPeerTCPClientV1(config FixedPeerTCPConfigV1) (*FixedPeerTCPClientV1
 	for _, node := range c.Nodes {
 		addresses[node.ID] = node.Address
 	}
-	return &FixedPeerTCPClientV1{config: c, digest: digest, http: newHTTPClient(), readHTTP: newHTTPClient(), addresses: addresses, calls: make(chan struct{}, fixedPeerClientInflightV1), readCalls: make(chan struct{}, fixedPeerClientInflightV1)}, nil
+	return &FixedPeerTCPClientV1{config: c, digest: digest, http: newHTTPClient(), readHTTP: newHTTPClient(), addresses: addresses, calls: make(chan struct{}, fixedPeerClientInflightV1), readCalls: make(chan struct{}, fixedPeerClientInflightV1), security: security, peerTransport: peerTransport, ownPeerTransport: shared == nil}, nil
 }
 
 func OpenFixedPeerTCPRuntimeV1(config FixedPeerTCPConfigV1) (*FixedPeerTCPRuntimeV1, error) {
@@ -284,18 +375,23 @@ func OpenFixedPeerTCPRuntimeV1(config FixedPeerTCPConfigV1) (*FixedPeerTCPRuntim
 	if err != nil {
 		return nil, err
 	}
-	r := &FixedPeerTCPRuntimeV1{config: client.config, client: client, data: map[raftcluster.GroupID]*fixedPeerDataV1{}, requests: make(chan struct{}, 32), forwards: make(chan struct{}, 32), reads: make(chan struct{}, 32)}
+	r := &FixedPeerTCPRuntimeV1{config: client.config, client: client, data: map[raftcluster.GroupID]*fixedPeerDataV1{}, requests: make(chan struct{}, 32), forwards: make(chan struct{}, 32), reads: make(chan struct{}, 32), diagnostics: make(chan struct{}, 4)}
 	if _, hosted := r.config.RaftListen[r.config.Catalog.ID]; hosted {
 		r.authority = raftplacement.NewCatalogMetaAuthorityV1()
 	}
 	fail := func(err error) (*FixedPeerTCPRuntimeV1, error) { _ = r.Close(); return nil, err }
+	raw, _ := json.Marshal(r.config)
+	if r.config.Credentials != nil {
+		if err := preparePeerStorageV1(r.config, raw); err != nil {
+			return fail(err)
+		}
+	}
 	// Persist exact local configuration before opening any stores. A partial or
 	// modified manifest refuses startup instead of silently reusing identities.
 	if err := os.MkdirAll(r.config.RaftRoot, 0700); err != nil {
 		return fail(err)
 	}
 	manifest := filepath.Join(r.config.RaftRoot, "fixed-peer-v1.json")
-	raw, _ := json.Marshal(r.config)
 	old, err := os.ReadFile(manifest)
 	switch {
 	case err == nil:
@@ -340,20 +436,39 @@ func OpenFixedPeerTCPRuntimeV1(config FixedPeerTCPConfigV1) (*FixedPeerTCPRuntim
 		if e != nil {
 			return fail(e)
 		}
-		transport, e := newFixedPeerTCPTransportV1(listen, addr, r.config.RequestTimeout)
+		var admission *peerNodeAdmissionV1
+		if client.peerTransport != nil {
+			admission = client.peerTransport.admission
+		}
+		transport, e := newFixedPeerTCPTransportWithAdmissionV1(listen, addr, r.config.RequestTimeout, client.security, g.Peers, admission, "raft:"+string(g.ID))
 		if e != nil {
 			return fail(e)
 		}
-		r.transports = append(r.transports, transport)
+		var providerTransport hraft.Transport = transport
+		if admission != nil {
+			bounded := newPeerRaftTransportV1(transport, admission, "raft:"+string(g.ID), g.ID == r.config.Catalog.ID)
+			providerTransport = bounded
+			r.transports = append(r.transports, bounded)
+		} else {
+			r.transports = append(r.transports, transport)
+		}
 		cfg := raftcluster.Config{Dir: filepath.Join(r.config.DataRoot, string(g.ID)), ClusterDir: r.config.RaftRoot, DisableSideStores: true, NodeID: r.config.NodeID, GroupID: g.ID, Peers: g.Peers, Features: g.Features}
 		raftConfig := hraft.DefaultConfig()
 		raftConfig.HeartbeatTimeout = r.config.RaftTimeout
 		raftConfig.ElectionTimeout = r.config.RaftTimeout
 		raftConfig.LeaderLeaseTimeout = r.config.RaftTimeout
 		raftConfig.LogOutput = io.Discard
+		// Bound the existing Raft envelope to one already-bounded command.
+		// Pipelining remains HashiCorp's; snapshots retain streaming catch-up.
+		if admission != nil {
+			raftConfig.MaxAppendEntries = 1
+		}
 		bootstrap := g.BootstrapNode == r.config.NodeID
+		if r.config.Credentials != nil && r.reopened {
+			bootstrap = false
+		}
 		if i == 0 {
-			r.meta, e = raftcluster.OpenCatalogMetaRaftProviderV1(raftcluster.CatalogMetaRaftProviderOptionsV1{Cluster: cfg, State: r.authority, Transport: transport, RaftConfig: raftConfig, Bootstrap: bootstrap, ApplyTimeout: r.config.RequestTimeout})
+			r.meta, e = raftcluster.OpenCatalogMetaRaftProviderV1(raftcluster.CatalogMetaRaftProviderOptionsV1{Cluster: cfg, State: r.authority, Transport: providerTransport, RaftConfig: raftConfig, Bootstrap: bootstrap, ApplyTimeout: r.config.RequestTimeout})
 			if e != nil {
 				return fail(e)
 			}
@@ -369,7 +484,7 @@ func OpenFixedPeerTCPRuntimeV1(config FixedPeerTCPConfigV1) (*FixedPeerTCPRuntim
 		if e != nil {
 			return fail(e)
 		}
-		d.provider, e = raftcluster.OpenHashicorpRaftProvider(raftcluster.HashicorpRaftProviderOptions{Cluster: cfg, Applier: d.fsm, Transport: transport, RaftConfig: raftConfig, Bootstrap: bootstrap, ApplyTimeout: r.config.RequestTimeout})
+		d.provider, e = raftcluster.OpenHashicorpRaftProvider(raftcluster.HashicorpRaftProviderOptions{Cluster: cfg, Applier: d.fsm, Transport: providerTransport, RaftConfig: raftConfig, Bootstrap: bootstrap, ApplyTimeout: r.config.RequestTimeout})
 		if e != nil {
 			return fail(e)
 		}
@@ -377,7 +492,11 @@ func OpenFixedPeerTCPRuntimeV1(config FixedPeerTCPConfigV1) (*FixedPeerTCPRuntim
 		if e != nil {
 			return fail(e)
 		}
-		localEntries = append(localEntries, raftcluster.GroupSubmitterV1{GroupID: g.ID, Submitter: submitter})
+		var bounded raftcluster.CommandSubmitterV1 = submitter
+		if admission != nil {
+			bounded = peerBudgetSubmitterV1{SingleGroupSubmitter: submitter, admission: admission, scope: "raft:" + string(g.ID)}
+		}
+		localEntries = append(localEntries, raftcluster.GroupSubmitterV1{GroupID: g.ID, Submitter: bounded})
 	}
 	if len(localEntries) > 0 {
 		registry, e := raftcluster.NewGroupSubmitterRegistryV1(localEntries)
@@ -400,6 +519,13 @@ func OpenFixedPeerTCPRuntimeV1(config FixedPeerTCPConfigV1) (*FixedPeerTCPRuntim
 	r.listener, err = net.Listen("tcp", r.config.ListenAddress)
 	if err != nil {
 		return fail(err)
+	}
+	if client.security != nil {
+		r.listener, err = client.peerTransport.admission.listener(r.listener)
+		if err != nil {
+			return fail(err)
+		}
+		r.listener = &peerSecureListenerV1{Listener: r.listener, security: client.security, admission: client.peerTransport.admission, scope: "control"}
 	}
 	r.server = &http.Server{Handler: http.HandlerFunc(r.serve), ReadHeaderTimeout: r.config.RequestTimeout, ReadTimeout: r.config.RequestTimeout, WriteTimeout: 2 * r.config.RequestTimeout, IdleTimeout: r.config.RequestTimeout, MaxHeaderBytes: 4096}
 	go func() { _ = r.server.Serve(r.listener) }()
@@ -424,6 +550,7 @@ func (r *FixedPeerTCPRuntimeV1) Close() error {
 		return nil
 	}
 	r.closeOnce.Do(func() {
+		r.BeginDrainV1()
 		var errs []error
 		if r.server != nil {
 			ctx, cancel := context.WithTimeout(context.Background(), r.config.RequestTimeout)
@@ -436,6 +563,10 @@ func (r *FixedPeerTCPRuntimeV1) Close() error {
 		} else if r.listener != nil {
 			errs = append(errs, r.listener.Close())
 		}
+		for _, t := range r.transports {
+			errs = append(errs, t.Close())
+			t.CloseStreams()
+		}
 		if r.meta != nil {
 			errs = append(errs, r.meta.Close())
 		}
@@ -443,10 +574,6 @@ func (r *FixedPeerTCPRuntimeV1) Close() error {
 			if d.provider != nil {
 				errs = append(errs, d.provider.Close())
 			}
-		}
-		for _, t := range r.transports {
-			errs = append(errs, t.Close())
-			t.CloseStreams()
 		}
 		for _, d := range r.data {
 			if d.fsm != nil {
@@ -459,6 +586,7 @@ func (r *FixedPeerTCPRuntimeV1) Close() error {
 		if r.client != nil {
 			r.client.Close()
 		}
+		r.closed.Store(true)
 		r.closeErr = errors.Join(errs...)
 	})
 	return r.closeErr
@@ -466,6 +594,10 @@ func (r *FixedPeerTCPRuntimeV1) Close() error {
 
 func (r *FixedPeerTCPRuntimeV1) Status(ctx context.Context) (FixedPeerTCPStatusV1, error) {
 	s := FixedPeerTCPStatusV1{NodeID: r.config.NodeID, ClusterID: r.config.ClusterID, ConfigDigest: r.client.digest, CatalogRole: "consumer", RecoveryState: "new", Address: r.client.addresses[r.config.NodeID]}
+	if r.client.peerTransport != nil {
+		resources := r.client.peerTransport.ResourceStatsV1()
+		s.Resources = &resources
+	}
 	if r.meta != nil {
 		s.CatalogRole = "voter"
 		s.CatalogRaft = r.meta.RuntimeStatusV1()
@@ -609,6 +741,9 @@ type fixedPeerRequestV1 struct {
 	Route    ClusterRouteRequest
 }
 type fixedPeerReplyV1 struct {
+	Diagnostics  *FixedPeerDiagnosticsV1     `json:",omitempty"`
+	Readiness    *FixedPeerReadinessV1       `json:",omitempty"`
+	ReadProof    *raftcluster.ReadIndexProof `json:",omitempty"`
 	NodeID       raftcluster.NodeID
 	ConfigDigest string
 	Error        string
@@ -624,6 +759,8 @@ func (r *FixedPeerTCPRuntimeV1) serve(w http.ResponseWriter, request *http.Reque
 	w.Header().Set("Content-Type", "application/json")
 	reply := fixedPeerReplyV1{NodeID: r.config.NodeID, ConfigDigest: r.client.digest}
 	var err error
+	var nodeWork peerWorkLeaseV1
+	defer nodeWork.release()
 	defer func() {
 		if err != nil {
 			reply.Error = err.Error()
@@ -634,14 +771,51 @@ func (r *FixedPeerTCPRuntimeV1) serve(w http.ResponseWriter, request *http.Reque
 		}
 		_ = json.NewEncoder(w).Encode(reply)
 	}()
+	if r.client.security != nil {
+		if request.TLS == nil || len(request.TLS.VerifiedChains) == 0 || len(request.TLS.PeerCertificates) == 0 {
+			err = errPeerAuthenticationV1
+			return
+		}
+		var caller raftcluster.NodeID
+		caller, err = r.client.security.identity(request.TLS.PeerCertificates[0])
+		if err != nil {
+			return
+		}
+		if request.URL.Path == "/v1/catalog-publish" {
+			allowed := false
+			for _, member := range r.config.Catalog.Peers {
+				allowed = allowed || member.ID == caller
+			}
+			if !allowed {
+				err = errPeerAuthenticationV1
+				return
+			}
+		}
+	}
+	if r.draining.Load() && (request.URL.Path == "/v1/submit" || request.URL.Path == "/v1/forward" || request.URL.Path == "/v1/catalog-publish") {
+		err = raftcluster.ErrAdmissionUnavailable
+		return
+	}
+	if r.client.peerTransport != nil {
+		if request.ContentLength < 0 || request.ContentLength > fixedPeerMaxRPCBytesV1 {
+			err = raftcluster.ErrRouteTargetUnsupported
+			return
+		}
+		nodeWork, err = r.client.peerTransport.admission.work(peerControlScopeV1(request.URL.Path), peerRequestsV1, peerControlBytesV1(request.ContentLength))
+		if err != nil {
+			return
+		}
+	}
 	// The dependency order is ingress -> forward -> status/catalog-read. Give
 	// each stage bounded capacity so callers cannot starve their own callees.
 	requests := r.requests
 	switch request.URL.Path {
 	case "/v1/forward":
 		requests = r.forwards
-	case "/v1/status", "/v1/catalog-read", "/v1/catalog-route", "/v1/catalog-validate":
+	case "/v1/status", "/v1/catalog-read", "/v1/catalog-route", "/v1/catalog-validate", "/v1/group-read-proof":
 		requests = r.reads
+	case "/v1/readiness", "/v1/diagnostics":
+		requests = r.diagnostics
 	}
 	select {
 	case requests <- struct{}{}:
@@ -670,6 +844,26 @@ func (r *FixedPeerTCPRuntimeV1) serve(w http.ResponseWriter, request *http.Reque
 	switch request.URL.Path {
 	case "/v1/status":
 		reply.Status, err = r.Status(ctx)
+	case "/v1/diagnostics":
+		var report FixedPeerDiagnosticsV1
+		report, err = r.diagnosticsV1(ctx)
+		reply.Diagnostics = &report
+	case "/v1/readiness":
+		var report FixedPeerReadinessV1
+		report, err = r.readinessV1(ctx)
+		reply.Readiness = &report
+	case "/v1/group-read-proof":
+		group := raftcluster.GroupID(body.Metadata.ClusterRouteGroupID)
+		local := r.data[group]
+		if local == nil {
+			err = raftcluster.ErrRouteTargetUnknown
+			return
+		}
+		var proof raftcluster.ReadIndexProof
+		proof, err = local.provider.ReadIndex(ctx, raftcluster.ReadIndexBarrier{NodeID: r.config.NodeID, GroupID: group})
+		if err == nil {
+			reply.ReadProof = &proof
+		}
 	case "/v1/catalog-read":
 		reply.Catalog, err = r.localCatalogFence(ctx)
 	case "/v1/catalog-route", "/v1/catalog-validate":
@@ -698,6 +892,14 @@ func (r *FixedPeerTCPRuntimeV1) serve(w http.ResponseWriter, request *http.Reque
 		}
 		if err = r.validateCatalog(command.Record.Catalog); err != nil {
 			return
+		}
+		if r.client.peerTransport != nil {
+			work, e := r.client.peerTransport.admission.work("raft:"+string(r.config.Catalog.ID), peerProposalsV1, int64(len(body.Entry))*4)
+			if e != nil {
+				err = e
+				return
+			}
+			defer work.release()
 		}
 		_, _, err = r.meta.SubmitCatalogMetaCommandV1(ctx, body.Entry)
 		if err == nil {
@@ -761,7 +963,7 @@ func (c *FixedPeerTCPClientV1) call(ctx context.Context, node raftcluster.NodeID
 	// Read and mutation admission are independent, globally bounded per
 	// client, and have no unbounded waiter queue. Refusal precedes any send.
 	httpClient, calls := c.http, c.calls
-	if operation == "status" || operation == "catalog-read" || operation == "catalog-route" || operation == "catalog-validate" {
+	if operation == "status" || operation == "catalog-read" || operation == "catalog-route" || operation == "catalog-validate" || operation == "readiness" || operation == "diagnostics" || operation == "group-read-proof" {
 		httpClient, calls = c.readHTTP, c.readCalls
 	}
 	select {
@@ -769,6 +971,17 @@ func (c *FixedPeerTCPClientV1) call(ctx context.Context, node raftcluster.NodeID
 		defer func() { <-calls }()
 	default:
 		return reply, raftcluster.ErrAdmissionUnavailable
+	}
+	if c.peerTransport != nil {
+		bound, err := preflightPeerRequestBytesV1(body)
+		if err != nil {
+			return reply, err
+		}
+		work, err := c.peerTransport.admission.work(peerControlScopeV1(operation), peerRequestsV1, peerControlBytesV1(bound))
+		if err != nil {
+			return reply, err
+		}
+		defer work.release()
 	}
 	raw, err := json.Marshal(body)
 	if err != nil {
@@ -779,7 +992,11 @@ func (c *FixedPeerTCPClientV1) call(ctx context.Context, node raftcluster.NodeID
 	}
 	var sent atomic.Bool
 	ctx = httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{WroteRequest: func(httptrace.WroteRequestInfo) { sent.Store(true) }})
-	req, err := http.NewRequestWithContext(ctx, "POST", "http://"+address+"/v1/"+operation, bytes.NewReader(raw))
+	scheme := "http://"
+	if c.security != nil {
+		scheme = "https://"
+	}
+	req, err := http.NewRequestWithContext(ctx, "POST", scheme+address+"/v1/"+operation, bytes.NewReader(raw))
 	if err != nil {
 		return reply, err
 	}
@@ -882,12 +1099,16 @@ func (c *FixedPeerTCPClientV1) Close() {
 	if c != nil {
 		c.http.CloseIdleConnections()
 		c.readHTTP.CloseIdleConnections()
+		if c.peerTransport != nil && c.ownPeerTransport {
+			_ = c.peerTransport.Close()
+		}
 	}
 }
 
 // Preserve retry/admission-relevant sentinels; unclassified validation failures
 // remain definite rejections with their diagnostic message, not retriable codes.
 var fixedPeerErrorsV1 = []error{
+	errPeerAuthenticationV1,
 	raftcluster.ErrCommitAmbiguous, raftcluster.ErrNotLeader, raftcluster.ErrAdmissionUnavailable, raftcluster.ErrHashicorpRaftUnavailable,
 	raftcluster.ErrCommitNotProven, raftcluster.ErrLocalApplyNotRecoverable, raftcluster.ErrUnsupportedSubmitAck,
 	raftcluster.ErrMissingCatalogVersion, raftcluster.ErrCatalogVersionMismatch,

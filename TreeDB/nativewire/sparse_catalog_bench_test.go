@@ -200,6 +200,10 @@ func sparseCatalogBenchmarkConfigsV1(t testing.TB, sparse bool, inventory int) [
 }
 
 func BenchmarkSparseCatalogRemoteOwnerCreateV1(b *testing.B) {
+	benchmarkSparseCatalogRemoteOwnerCreateV1(b, nil)
+}
+
+func benchmarkSparseCatalogRemoteOwnerCreateV1(b *testing.B, configure func(testing.TB, []FixedPeerTCPConfigV1) int) {
 	for _, variant := range []struct {
 		name      string
 		sparse    bool
@@ -213,6 +217,10 @@ func BenchmarkSparseCatalogRemoteOwnerCreateV1(b *testing.B) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 			defer cancel()
 			configs := sparseCatalogBenchmarkConfigsV1(b, variant.sparse, variant.inventory)
+			publisherIndex := 3
+			if configure != nil {
+				publisherIndex = configure(b, configs)
+			}
 			processes := make([]*fixedPeerTestProcessV1, len(configs))
 			for i, config := range configs {
 				processes[i] = sparseCatalogBenchmarkProcessV1(b, config)
@@ -222,6 +230,14 @@ func BenchmarkSparseCatalogRemoteOwnerCreateV1(b *testing.B) {
 				b.Fatal(err)
 			}
 			defer client.Close()
+			publisher := client
+			if publisherIndex != 3 {
+				publisher, err = NewFixedPeerTCPClientV1(configs[publisherIndex])
+				if err != nil {
+					b.Fatal(err)
+				}
+				defer publisher.Close()
+			}
 			var leader raftcluster.NodeID
 			fixedPeerWaitV1(b, ctx, func() bool {
 				for _, peer := range configs[0].Catalog.Peers {
@@ -256,7 +272,7 @@ func BenchmarkSparseCatalogRemoteOwnerCreateV1(b *testing.B) {
 			if err != nil {
 				b.Fatal(err)
 			}
-			if _, err := client.PublishCatalog(ctx, leader, command); err != nil {
+			if _, err := publisher.PublishCatalog(ctx, leader, command); err != nil {
 				b.Fatal(err)
 			}
 			fixedPeerWaitV1(b, ctx, func() bool {

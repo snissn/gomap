@@ -1,0 +1,131 @@
+{
+  "schema_version": 1,
+  "account": "REPLACE_ACCOUNT_12_DIGITS",
+  "region": "REPLACE_REGION",
+  "run_id": "REPLACE_UNIQUE_RUN_ID",
+  "binary_architecture": "amd64",
+  "binary_sha256": "REPLACE_BINARY_SHA256",
+  "shared_config_sha256": "REPLACE_NORMALIZED_SHARED_SHA256",
+  "source_revision": "REPLACE_CLEAN_SOURCE_SHA40",
+  "expires_at": "REPLACE_UTC_TIMESTAMP",
+  "duration_hours": 2,
+  "max_cost_usd": 0,
+  "network_reserve_usd": 0,
+  "retained_storage_reserve_usd": 0,
+  "price_checked_at": "REPLACE_VERIFIED_PRICE_TIMESTAMP",
+  "expiry_role_arn": "REPLACE_SCOPED_EXPIRY_ROLE_ARN",
+  "cloudformation_role_arn": "REPLACE_SCOPED_CLOUDFORMATION_ROLE_ARN",
+  "flow_log_id": "REPLACE_ALL_TRAFFIC_FLOW_LOG_ID",
+  "peer_ports": [
+    7100,
+    7200
+  ],
+  "nodes": [
+    {
+      "node_id": "node-a",
+      "private_ip": "10.0.0.10",
+      "az": "REPLACE_AZ_FOR_node-a",
+      "az_id": "REPLACE_STABLE_AZ_ID",
+      "subnet_id": "REPLACE_SUBNET_ID",
+      "image_id": "REPLACE_PINNED_AMI_ID",
+      "image_owner_account": "REPLACE_IMAGE_OWNER_ACCOUNT",
+      "security_group_ids": [
+        "REPLACE_PEER_SECURITY_GROUP_ID"
+      ],
+      "instance_type": "REPLACE_QUALIFIED_INSTANCE_TYPE",
+      "instance_profile": "REPLACE_LEAST_PRIVILEGE_INSTANCE_PROFILE",
+      "vcpus": 2,
+      "gomaxprocs": 2,
+      "memory_bytes": 8589934592,
+      "go_memory_limit_bytes": 6442450944,
+      "inflight_bytes": 268435456,
+      "data_gib": 32,
+      "raft_gib": 16,
+      "required_data_bytes": 8589934592,
+      "required_raft_bytes": 1073741824,
+      "temp_bytes": 1073741824,
+      "required_temp_bytes": 1073741824,
+      "data_root": "/mnt/data",
+      "raft_root": "/mnt/raft",
+      "temp_root": "/mnt/temp",
+      "config_sha256": "REPLACE_NORMALIZED_LOCAL_CONFIG_SHA256",
+      "all_in_hourly_usd": 0,
+      "user_data": "REPLACE_WITH_REVIEWED_BOOTSTRAP_NO_SECRETS",
+      "config_path": "/absolute/config/node-a.json"
+    },
+    {
+      "node_id": "node-b",
+      "private_ip": "10.0.0.11",
+      "az": "REPLACE_AZ_FOR_node-b",
+      "az_id": "REPLACE_STABLE_AZ_ID",
+      "subnet_id": "REPLACE_SUBNET_ID",
+      "image_id": "REPLACE_PINNED_AMI_ID",
+      "image_owner_account": "REPLACE_IMAGE_OWNER_ACCOUNT",
+      "security_group_ids": [
+        "REPLACE_PEER_SECURITY_GROUP_ID"
+      ],
+      "instance_type": "REPLACE_QUALIFIED_INSTANCE_TYPE",
+      "instance_profile": "REPLACE_LEAST_PRIVILEGE_INSTANCE_PROFILE",
+      "vcpus": 2,
+      "gomaxprocs": 2,
+      "memory_bytes": 8589934592,
+      "go_memory_limit_bytes": 6442450944,
+      "inflight_bytes": 268435456,
+      "data_gib": 32,
+      "raft_gib": 16,
+      "required_data_bytes": 8589934592,
+      "required_raft_bytes": 1073741824,
+      "temp_bytes": 1073741824,
+      "required_temp_bytes": 1073741824,
+      "data_root": "/mnt/data",
+      "raft_root": "/mnt/raft",
+      "temp_root": "/mnt/temp",
+      "config_sha256": "REPLACE_NORMALIZED_LOCAL_CONFIG_SHA256",
+      "all_in_hourly_usd": 0,
+      "user_data": "REPLACE_WITH_REVIEWED_BOOTSTRAP_NO_SECRETS",
+      "config_path": "/absolute/config/node-b.json"
+    },
+    {
+      "node_id": "node-c",
+      "private_ip": "10.0.0.12",
+      "az": "REPLACE_AZ_FOR_node-c",
+      "az_id": "REPLACE_STABLE_AZ_ID",
+      "subnet_id": "REPLACE_SUBNET_ID",
+      "image_id": "REPLACE_PINNED_AMI_ID",
+      "image_owner_account": "REPLACE_IMAGE_OWNER_ACCOUNT",
+      "security_group_ids": [
+        "REPLACE_PEER_SECURITY_GROUP_ID"
+      ],
+      "instance_type": "REPLACE_QUALIFIED_INSTANCE_TYPE",
+      "instance_profile": "REPLACE_LEAST_PRIVILEGE_INSTANCE_PROFILE",
+      "vcpus": 2,
+      "gomaxprocs": 2,
+      "memory_bytes": 8589934592,
+      "go_memory_limit_bytes": 6442450944,
+      "inflight_bytes": 268435456,
+      "data_gib": 32,
+      "raft_gib": 16,
+      "required_data_bytes": 8589934592,
+      "required_raft_bytes": 1073741824,
+      "temp_bytes": 1073741824,
+      "required_temp_bytes": 1073741824,
+      "data_root": "/mnt/data",
+      "raft_root": "/mnt/raft",
+      "temp_root": "/mnt/temp",
+      "config_sha256": "REPLACE_NORMALIZED_LOCAL_CONFIG_SHA256",
+      "all_in_hourly_usd": 0,
+      "user_data": "REPLACE_WITH_REVIEWED_BOOTSTRAP_NO_SECRETS",
+      "config_path": "/absolute/config/node-c.json"
+    }
+  ],
+  "groups": [
+    {
+      "group_id": "catalog",
+      "voters": [
+        "node-a",
+        "node-b",
+        "node-c"
+      ]
+    }
+  ]
+}
