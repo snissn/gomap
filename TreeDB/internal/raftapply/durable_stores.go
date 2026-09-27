@@ -15,10 +15,10 @@ import (
 )
 
 const (
-	durableApplyFileVersionV1      = uint32(1)
+	durableApplyFileVersionV1      = uint32(2)
 	durableApplyFileHeaderSize     = 20
 	durableApplyFrameHeaderSize    = 16
-	durableApplyFrameVersionV1     = uint16(1)
+	durableApplyFrameVersionV1     = uint16(2)
 	durableApplyFrameKindProgress  = uint16(1)
 	durableApplyFrameKindResult    = uint16(2)
 	durableApplyProgressFileNameV1 = "apply-progress-v1.log"
@@ -228,7 +228,7 @@ func (s *DurableApplyResultStore) Len() int {
 
 func (s *DurableApplyResultStore) replayApplyResultRecord(record ApplyResultRecordV1) error {
 	if existing, ok := s.records[record.EntryID]; ok {
-		if existing.CommandDigest != record.CommandDigest {
+		if existing.CommandDigest != record.CommandDigest || existing.ExpectedCatalogVersion != record.ExpectedCatalogVersion || existing.HasExpectedCatalogVersion != record.HasExpectedCatalogVersion {
 			return codedError(raftentry.ErrorRejectedConflictV1, "raftapply: durable result metadata digest conflict for %d/%d", record.EntryID.Term, record.EntryID.Index)
 		}
 		if existing.ProgressLogicalDigestV1 != (LogicalDigestV1{}) &&
@@ -250,7 +250,7 @@ func (s *DurableApplyResultStore) replayApplyResultRecord(record ApplyResultReco
 
 func (s *DurableApplyResultStore) checkCanRecordApplyResultLocked(record ApplyResultRecordV1) error {
 	if existing, ok := s.records[record.EntryID]; ok {
-		if existing.CommandDigest != record.CommandDigest {
+		if existing.CommandDigest != record.CommandDigest || existing.ExpectedCatalogVersion != record.ExpectedCatalogVersion || existing.HasExpectedCatalogVersion != record.HasExpectedCatalogVersion {
 			return codedError(raftentry.ErrorRejectedConflictV1, "apply result digest conflict for %d/%d", record.EntryID.Term, record.EntryID.Index)
 		}
 		if existing.ProgressLogicalDigestV1 != (LogicalDigestV1{}) &&
@@ -263,7 +263,7 @@ func (s *DurableApplyResultStore) checkCanRecordApplyResultLocked(record ApplyRe
 	if len(record.IdempotencyKey) > 0 {
 		if existingID, ok := s.byKey[string(record.IdempotencyKey)]; ok {
 			existing := s.records[existingID]
-			if existing.CommandDigest != record.CommandDigest {
+			if existing.CommandDigest != record.CommandDigest || existing.ExpectedCatalogVersion != record.ExpectedCatalogVersion || existing.HasExpectedCatalogVersion != record.HasExpectedCatalogVersion {
 				return codedError(raftentry.ErrorRejectedConflictV1, "idempotency key digest conflict for %d/%d", record.EntryID.Term, record.EntryID.Index)
 			}
 		}
@@ -790,6 +790,12 @@ func encodeDurableApplyResultRecordV1(record ApplyResultRecordV1) ([]byte, error
 	dst = appendApplyEntryID(dst, record.EntryID)
 	dst = append(dst, record.CommandDigest[:]...)
 	dst = appendU64(dst, record.AppliedCommandLSN)
+	var hasExpected uint64
+	if record.HasExpectedCatalogVersion {
+		hasExpected = 1
+	}
+	dst = appendU64(dst, hasExpected)
+	dst = appendU64(dst, record.ExpectedCatalogVersion)
 	dst = appendBytes(dst, record.IdempotencyKey)
 	dst = appendBytes(dst, []byte(record.Result.Status))
 	dst = append(dst, record.Result.CommandDigest[:]...)
@@ -815,6 +821,17 @@ func decodeDurableApplyResultRecordV1(payload []byte) (ApplyResultRecordV1, erro
 		return ApplyResultRecordV1{}, err
 	}
 	lsn, err := r.u64()
+	if err != nil {
+		return ApplyResultRecordV1{}, err
+	}
+	hasExpected, err := r.u64()
+	if err != nil {
+		return ApplyResultRecordV1{}, err
+	}
+	if hasExpected > 1 {
+		return ApplyResultRecordV1{}, codedError(raftentry.ErrorMalformedEntryV1, "invalid catalog guard presence marker %d", hasExpected)
+	}
+	expected, err := r.u64()
 	if err != nil {
 		return ApplyResultRecordV1{}, err
 	}
@@ -864,11 +881,13 @@ func decodeDurableApplyResultRecordV1(payload []byte) (ApplyResultRecordV1, erro
 		return ApplyResultRecordV1{}, err
 	}
 	return ApplyResultRecordV1{
-		EntryID:                 id,
-		CommandDigest:           digest,
-		IdempotencyKey:          key,
-		AppliedCommandLSN:       lsn,
-		ProgressLogicalDigestV1: progressLogicalDigest,
+		EntryID:                   id,
+		CommandDigest:             digest,
+		IdempotencyKey:            key,
+		AppliedCommandLSN:         lsn,
+		ExpectedCatalogVersion:    expected,
+		HasExpectedCatalogVersion: hasExpected == 1,
+		ProgressLogicalDigestV1:   progressLogicalDigest,
 		Result: raftentry.ApplyResultV1{
 			Status:                 raftentry.ApplyStatusV1(status),
 			CommandDigest:          resultDigest,

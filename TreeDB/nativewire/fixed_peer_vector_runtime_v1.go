@@ -806,6 +806,13 @@ func (r *FixedPeerTCPRuntimeV1) applyVectorInsertV1(ctx context.Context, request
 	if err != nil || !ok {
 		return public.InsertResponseV1{}, errors.Join(ErrFixedPeerVectorUnavailableV1, err)
 	}
+	originalGuard, originalDigest, known, err := data.fsm.AppliedIdempotencyGuardV1(ctx, request.Request.IdempotencyKey)
+	if err != nil {
+		return public.InsertResponseV1{}, errors.Join(ErrFixedPeerVectorUnavailableV1, err)
+	}
+	if known {
+		catalogVersion = originalGuard
+	}
 	format, err := fixedPeerVectorDocumentFormatV1(r.vector.collection)
 	if err != nil {
 		return public.InsertResponseV1{}, err
@@ -813,6 +820,14 @@ func (r *FixedPeerTCPRuntimeV1) applyVectorInsertV1(ctx context.Context, request
 	entry, key, err := fixedPeerVectorInsertEntryV1(r.config.Vector.Collection.Collection, format, catalogVersion, request)
 	if err != nil {
 		return public.InsertResponseV1{}, errors.Join(ErrFixedPeerVectorDocumentV1, err)
+	}
+	if known {
+		// The fixed-peer FSM and submitter decode with the default single-group
+		// scope; route names are metadata, not their digest scope.
+		digest := raftentry.CommandDigestV1ForBytes(entry, raftentry.DecodeOptions{})
+		if digest != originalDigest {
+			return public.InsertResponseV1{}, &public.ErrorV1{Code: public.ErrorInvalidRequestV1, Err: errors.New("idempotency key conflicts with the original vector insert")}
+		}
 	}
 	base, ok := r.localRegistry.Lookup(request.OwnerGroup)
 	if !ok {

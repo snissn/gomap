@@ -355,6 +355,68 @@ func TestSingleGroupSubmitterPreservesNoRouteMetadataBehavior(t *testing.T) {
 	}
 }
 
+func TestSingleGroupSubmitterStaleVectorInsertRequiresKnownReplayV1(t *testing.T) {
+	entry := testClusterCommandEntry(t, 7)
+	conflict := errors.New("stored idempotency digest conflict")
+	for _, tc := range []struct {
+		name      string
+		shape     string
+		preCommit bool
+		known     bool
+		preErr    error
+		wantErr   error
+		preflight int
+		commit    int
+	}{
+		{name: "exact_known_replay", shape: "vector_partition_exact_id", preCommit: true, known: true, preflight: 1, commit: 1},
+		{name: "unknown_key", shape: "vector_partition_exact_id", preCommit: true, preflight: 1, wantErr: ErrCatalogVersionMismatch},
+		{name: "changed_entry", shape: "vector_partition_exact_id", preCommit: true, preErr: conflict, preflight: 1, wantErr: conflict},
+		{name: "wrong_shape", shape: "collection", preCommit: true, known: true, wantErr: ErrCatalogVersionMismatch},
+		{name: "missing_owner_callback", shape: "vector_partition_exact_id", known: true, wantErr: ErrCatalogVersionMismatch},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			commitCalls, preflightCalls, callbackCalls := 0, 0, 0
+			submitter := newTestSingleGroupSubmitter(t, SingleGroupSubmitterOptions{
+				AdmissionProvider: StaticAdmissionProvider{Status: LeaderAdmission()},
+				CommitSource: CommitSourceFunc(func(_ context.Context, req CommitCommandEntryV1Request) (CommitCommandEntryV1Result, error) {
+					commitCalls++
+					return productionCommittedResult(req, 3, uint64(commitCalls)), nil
+				}),
+				Preflight: CommandEntryPreflightFunc(func(_ context.Context, req CommandEntryPreflightRequestV1) (CommandEntryPreflightResultV1, error) {
+					preflightCalls++
+					if req.DecodedEntry.Target.CommandID != iwire.CommandInsertBatch || req.CurrentCatalogVersion != 8 {
+						t.Fatalf("unexpected preflight command/catalog: %+v", req)
+					}
+					return CommandEntryPreflightResultV1{KnownIdempotencyReplay: tc.known}, tc.preErr
+				}),
+				Applier:                &recordingClusterApplier{result: raftentry.ApplyResultV1{Status: raftentry.ApplyStatusAlreadyApplied}},
+				CatalogVersionProvider: staticCatalogVersion(8),
+			})
+			metadata := raftentry.RequestMetadataV1{AckPolicy: iwire.AckRaftCommitted, ClusterRouteShape: tc.shape}
+			var result SubmitResultV1
+			var err error
+			if tc.preCommit {
+				result, err = submitter.SubmitCommandEntryWithPreCommitV1(context.Background(), entry, metadata, func(context.Context) error {
+					callbackCalls++
+					return nil
+				})
+			} else {
+				result, err = submitter.SubmitCommandEntryV1(context.Background(), entry, metadata)
+			}
+			if tc.wantErr == nil {
+				if err != nil || !result.CommittedApplied || result.ApplyResult.Status != raftentry.ApplyStatusAlreadyApplied {
+					t.Fatalf("known replay result=%+v err=%v", result, err)
+				}
+			} else if !errors.Is(err, tc.wantErr) {
+				t.Fatalf("refusal error=%v want %v", err, tc.wantErr)
+			}
+			if preflightCalls != tc.preflight || commitCalls != tc.commit || callbackCalls != tc.commit {
+				t.Fatalf("preflight/commit/callback=%d/%d/%d want %d/%d/%d", preflightCalls, commitCalls, callbackCalls, tc.preflight, tc.commit, tc.commit)
+			}
+		})
+	}
+}
+
 func TestSingleGroupSubmitterLetsIdempotentCreateRetryReachPreflightApply(t *testing.T) {
 	entry := testClusterCreateCollectionEntry(t, 7)
 	commitCalls := 0
