@@ -1028,7 +1028,7 @@ type hashicorpRaftSnapshotV1 struct {
 	snapshot RaftSnapshotV1
 }
 
-func (s hashicorpRaftSnapshotV1) Persist(sink hraft.SnapshotSink) error {
+func (s hashicorpRaftSnapshotV1) Persist(sink hraft.SnapshotSink) (resultErr error) {
 	if sink == nil {
 		return ErrInvalidSnapshotManifest
 	}
@@ -1053,15 +1053,21 @@ func (s hashicorpRaftSnapshotV1) Persist(sink hraft.SnapshotSink) error {
 		_ = sink.Cancel()
 		return err
 	}
-	copyErr := copyHashicorpRaftSnapshotArchiveV1(sink, src)
-	closeSrcErr := src.Close()
-	if copyErr != nil {
+	// Keep the owner reader through sink completion/cancellation. Release can
+	// cancel future reads, but cannot interrupt an arbitrary blocked Sink.Write
+	// or Sink.Close; that operation retains admission until this defer runs.
+	defer func() {
+		if err := src.Close(); err != nil {
+			resultErr = errors.Join(resultErr, fmt.Errorf("raftcluster: close raft snapshot archive source: %w", err))
+		}
+	}()
+	if err := copyHashicorpRaftSnapshotArchiveV1(sink, src); err != nil {
 		_ = sink.Cancel()
-		return copyErr
+		return err
 	}
-	if closeSrcErr != nil {
+	if _, err := s.snapshot.Materialize(); err != nil {
 		_ = sink.Cancel()
-		return fmt.Errorf("raftcluster: close raft snapshot archive source: %w", closeSrcErr)
+		return err
 	}
 	if err := sink.Close(); err != nil {
 		_ = sink.Cancel()

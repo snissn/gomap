@@ -4,9 +4,13 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sync"
+	"sync/atomic"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/lockfile"
 	"github.com/snissn/gomap/TreeDB/internal/nativewire"
 	"github.com/snissn/gomap/TreeDB/internal/raftapply"
 	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
@@ -42,8 +46,9 @@ type Options struct {
 	DB      *backenddb.DB
 	Cluster raftcluster.Config
 
-	DecodeLimits nativewire.Limits
-	StoreOptions raftapply.DurableApplyStoreOptions
+	DecodeLimits          nativewire.Limits
+	StoreOptions          raftapply.DurableApplyStoreOptions
+	SnapshotCaptureLimits SnapshotCaptureLimitsV1
 
 	// SnapshotRestoreDBOptions is used when InstallRaftSnapshotV1 has to
 	// discard the current local DB handle and reopen the restored snapshot.
@@ -57,7 +62,12 @@ type Options struct {
 
 // FSM applies committed deterministic entries to one local DB.
 type FSM struct {
-	mu sync.RWMutex
+	mu                      sync.RWMutex
+	snapshotOperationActive atomic.Bool
+	snapshotCaptureLimits   SnapshotCaptureLimitsV1
+	snapshotMu              sync.Mutex
+	snapshotNamespace       *lockfile.Lock
+	snapshotOwner           raftcluster.RaftSnapshotV1
 
 	db          *backenddb.DB
 	metadataDir string
@@ -112,10 +122,28 @@ func Open(opts Options) (*FSM, error) {
 	if opts.DB == nil {
 		return nil, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "nil DB")
 	}
+	limits, err := opts.SnapshotCaptureLimits.normalized()
+	if err != nil {
+		return nil, err
+	}
 	cluster, err := raftcluster.Validate(opts.Cluster)
 	if err != nil {
 		return nil, errors.Join(codedError(raftentry.ErrorUnsafeDurabilityModeV1, "invalid raftcluster config"), err)
 	}
+	staging := raftSnapshotStagingDirV1(cluster.Layout.SnapshotDir)
+	if err := os.MkdirAll(staging, 0700); err != nil {
+		return nil, errors.Join(codedError(raftentry.ErrorUnsafeDurabilityModeV1, "create snapshot staging namespace"), err)
+	}
+	namespace, err := lockfile.Acquire(filepath.Join(cluster.Layout.SnapshotDir, "treedb-export.lock"))
+	if err != nil {
+		return nil, fmt.Errorf("raftfsm: snapshot namespace: %w", err)
+	}
+	keepNamespace := false
+	defer func() {
+		if !keepNamespace {
+			_ = namespace.Close()
+		}
+	}()
 	if err := cleanupAbandonedRaftSnapshotArchivesV1(cluster.Layout.SnapshotDir); err != nil {
 		return nil, errors.Join(codedError(raftentry.ErrorUnsafeDurabilityModeV1, "cleanup abandoned raft snapshot archives"), err)
 	}
@@ -136,8 +164,10 @@ func Open(opts Options) (*FSM, error) {
 		_ = errors.Join(progress.Close(), results.Close())
 		return nil, err
 	}
+	keepNamespace = true
 	return &FSM{
-		db:           opts.DB,
+		snapshotNamespace:     namespace,
+		snapshotCaptureLimits: limits, db: opts.DB,
 		metadataDir:  metadataDir,
 		decodeLimits: opts.DecodeLimits,
 		storeOptions: opts.StoreOptions,
@@ -155,27 +185,35 @@ func (f *FSM) Close() error {
 	if f == nil {
 		return nil
 	}
+	// Namespace ownership is independent of f.mu and of arbitrary sink work.
+	// A reader or failed cleanup retains its own lock after this FSM closes.
+	f.snapshotMu.Lock()
+	namespace := f.snapshotNamespace
+	f.snapshotNamespace = nil
+	owner := f.snapshotOwner
+	f.snapshotMu.Unlock()
+	ownerErr := owner.Release()
 	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.closed {
-		return nil
-	}
-	f.closed = true
 	var errs []error
-	if f.progress != nil {
-		errs = append(errs, f.progress.Close())
+	if !f.closed {
+		f.closed = true
+		if f.progress != nil {
+			errs = append(errs, f.progress.Close())
+		}
+		if f.results != nil {
+			errs = append(errs, f.results.Close())
+		}
+		if f.ownsDB && f.db != nil {
+			errs = append(errs, f.db.Close())
+		}
+		if f.sideDBs != nil {
+			errs = append(errs, f.sideDBs())
+			f.sideDBs = nil
+		}
 	}
-	if f.results != nil {
-		errs = append(errs, f.results.Close())
-	}
-	if f.ownsDB && f.db != nil {
-		errs = append(errs, f.db.Close())
-	}
-	if f.sideDBs != nil {
-		errs = append(errs, f.sideDBs())
-		f.sideDBs = nil
-	}
-	return errors.Join(errs...)
+	f.mu.Unlock()
+	// Repeated Close retries the retained carrier even though stores are closed.
+	return errors.Join(ownerErr, errors.Join(errs...), namespace.Close())
 }
 
 func (f *FSM) AllowsInitialIndexGapV1() bool {

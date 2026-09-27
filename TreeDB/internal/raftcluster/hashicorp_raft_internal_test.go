@@ -11,6 +11,8 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -730,4 +732,89 @@ type zeroReader struct{}
 func (zeroReader) Read(p []byte) (int, error) {
 	clear(p)
 	return len(p), nil
+}
+
+// A user-supplied sink can block without a cancellation API. The snapshot must
+// keep its reader/admission through that call, while Release remains prompt.
+type pausedOwnedSnapshotSinkV1 struct {
+	boundaryTestSnapshotSink
+	pauseClose      bool
+	entered, resume chan struct{}
+	once            sync.Once
+}
+
+func (s *pausedOwnedSnapshotSinkV1) pause() { s.once.Do(func() { close(s.entered); <-s.resume }) }
+func (s *pausedOwnedSnapshotSinkV1) Write(p []byte) (int, error) {
+	if !s.pauseClose {
+		s.pause()
+	}
+	return s.boundaryTestSnapshotSink.Write(p)
+}
+
+// Hide the embedded Buffer's ReadFrom fast path so this fixture exercises
+// the deliberately paused Write, just like the production file/network sink.
+func (s *pausedOwnedSnapshotSinkV1) ReadFrom(r io.Reader) (int64, error) {
+	return io.CopyBuffer(struct{ io.Writer }{s}, r, make([]byte, hashicorpRaftSnapshotCopyBuffer))
+}
+func (s *pausedOwnedSnapshotSinkV1) Close() error {
+	if s.pauseClose {
+		s.pause()
+	}
+	return s.boundaryTestSnapshotSink.Close()
+}
+
+func TestHashicorpRaftSnapshotPersistOwnedReaderThroughSinkCompletion(t *testing.T) {
+	for _, pauseClose := range []bool{false, true} {
+		t.Run(map[bool]string{false: "write", true: "close"}[pauseClose], func(t *testing.T) {
+			manifest := validSnapshotManifestV1()
+			path := writeRaftSnapshotArchiveFileForTest(t, validRaftSnapshotArchivePayloadWithBodyV1(t, manifest, hashicorpRaftSnapshotCopyBuffer*2))
+			var owners atomic.Int32
+			snapshot, err := NewDeferredRaftSnapshotV1(func(context.Context) (RaftSnapshotV1, error) {
+				return RaftSnapshotV1{Manifest: manifest, ArchivePath: path}, nil
+			}, func() error { return nil }, func() error { owners.Add(1); return nil })
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer snapshot.Release()
+			sink := &pausedOwnedSnapshotSinkV1{pauseClose: pauseClose, entered: make(chan struct{}), resume: make(chan struct{})}
+			sink.boundary = hashicorpRaftSnapshotBoundaryV1{Term: manifest.LastIncludedTerm, Index: manifest.LastIncludedIndex}
+			var resumeOnce sync.Once
+			resume := func() { resumeOnce.Do(func() { close(sink.resume) }) }
+			defer resume()
+			done := make(chan error, 1)
+			go func() { done <- (hashicorpRaftSnapshotV1{snapshot: snapshot}).Persist(sink) }()
+			select {
+			case <-sink.entered:
+			case <-time.After(3 * time.Second):
+				t.Fatal("sink did not pause")
+			}
+			if err := snapshot.Release(); err != nil {
+				t.Fatal(err)
+			}
+			if owners.Load() != 0 {
+				t.Fatal("blocked sink lost admission")
+			}
+			if _, err := os.Stat(path); err != nil {
+				t.Fatal("blocked sink lost archive", err)
+			}
+			resume()
+			select {
+			case err := <-done:
+				if !pauseClose && !errors.Is(err, context.Canceled) {
+					t.Fatal("write did not observe cancellation", err)
+				}
+				if pauseClose && err != nil {
+					t.Fatal("completed sink close failed", err)
+				}
+			case <-time.After(3 * time.Second):
+				t.Fatal("Persist did not finish")
+			}
+			if owners.Load() != 1 {
+				t.Fatal("Persist retained admission after completion")
+			}
+			if _, err := os.Stat(path); !os.IsNotExist(err) {
+				t.Fatal("finished sink retained archive", err)
+			}
+		})
+	}
 }

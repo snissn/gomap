@@ -1,6 +1,7 @@
 package db
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -132,8 +133,19 @@ func TestPhysicalSnapshotCutV1PreservesBothSlotsAcrossReuseAndClose(t *testing.T
 				t.Fatal(err)
 			}
 			assertWriterBlocked()
+			beforeRebind, err := os.Stat(filepath.Join(destination, indexFileName))
+			if err != nil {
+				t.Fatal(err)
+			}
 			if err := RebindDurableRootSnapshotV1(destination); err != nil {
 				t.Fatal(err)
+			}
+			afterRebind, err := os.Stat(filepath.Join(destination, indexFileName))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if afterRebind.Size() != beforeRebind.Size() {
+				t.Fatalf("rebind changed captured extent: %d -> %d", beforeRebind.Size(), afterRebind.Size())
 			}
 			for _, fallback := range []bool{false, true} {
 				if fallback {
@@ -234,4 +246,130 @@ func TestPhysicalSnapshotCutV1RefusesInvalidSourceParent(t *testing.T) {
 	if err := lock.Close(); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestPhysicalSnapshotCutV1ReadOnlyOwnership(t *testing.T) {
+	dir := t.TempDir()
+	database, err := Open(Options{Dir: dir, DisableSideStores: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, value := range []string{"warm", "older", "latest"} {
+		if err := database.SetSync([]byte("key"), []byte(value)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reader, err := Open(Options{Dir: dir, DisableSideStores: true, ReadOnly: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	active := reader.durableRoot.slot
+	cut, err := reader.CapturePhysicalSnapshotCutV1(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cut.Close()
+	if err := reader.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if writer, err := Open(Options{Dir: dir, DisableSideStores: true}); !errors.Is(err, lockfile.ErrLocked) {
+		if writer != nil {
+			_ = writer.Close()
+		}
+		t.Fatalf("cut lost shared directory lock: %v", err)
+	}
+	destination := t.TempDir()
+	output, err := os.Create(filepath.Join(destination, indexFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cut.WriteToContext(context.Background(), output); err != nil {
+		t.Fatal(err)
+	}
+	if err := output.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := RebindDurableRootSnapshotV1(destination); err != nil {
+		t.Fatal(err)
+	}
+	for _, fallback := range []bool{false, true} {
+		if fallback {
+			corruptIndexPageByte(t, destination, active)
+		}
+		restored, err := Open(Options{Dir: destination, DisableSideStores: true, ReadOnly: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := "latest"
+		if fallback {
+			want = "older"
+		}
+		if got, err := restored.Get([]byte("key")); err != nil || string(got) != want {
+			t.Fatalf("got=%q want=%q err=%v", got, want, err)
+		}
+		if err := restored.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := cut.Close(); err != nil {
+		t.Fatal(err)
+	}
+	writer, err := Open(Options{Dir: dir, DisableSideStores: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	unlocked, err := openReadOnlyNoLock(Options{Dir: dir, DisableSideStores: true, ReadOnly: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlocked.Close()
+	if unsafe, err := unlocked.CapturePhysicalSnapshotCutV1(context.Background()); err == nil {
+		_ = unsafe.Close()
+		t.Fatal("no-lock owner produced an export cut")
+	}
+}
+
+// Cancel after the first copy chunk; no source bytes or private sibling may survive.
+func TestPhysicalSnapshotCutV1RebindCancellationPreservesOriginal(t *testing.T) {
+	dir := t.TempDir()
+	original := bytes.Repeat([]byte{0x5a}, 3*64*1024)
+	path := filepath.Join(dir, indexFileName)
+	if err := os.WriteFile(path, original, 0600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	probe := &physicalCutCancelContextV1{Context: ctx, cancel: cancel}
+	if err := RebindDurableRootSnapshotLayoutWithContextV1(probe, dir, ""); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancel: %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil || !bytes.Equal(got, original) {
+		t.Fatalf("original changed: %v", err)
+	}
+	siblings, err := filepath.Glob(filepath.Join(dir, ".durable-root-rebind-*"))
+	if err != nil || len(siblings) != 0 {
+		t.Fatalf("private sibling leaked: %v %v", siblings, err)
+	}
+}
+
+type physicalCutCancelContextV1 struct {
+	context.Context
+	cancel context.CancelFunc
+	calls  int
+}
+
+func (c *physicalCutCancelContextV1) Err() error {
+	c.calls++
+	if c.calls == 3 {
+		c.cancel()
+	}
+	return c.Context.Err()
 }

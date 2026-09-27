@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -175,6 +176,7 @@ func TestRaftSnapshotV1InstallEmptyTargetPreservesDigestAndValueLogPointers(t *t
 	if err != nil {
 		t.Fatalf("ExportRaftSnapshotV1: %v", err)
 	}
+	defer snapshot.Release()
 	assertSnapshotArchiveHasNonEmptyApplyMetadata(t, readRaftSnapshotArchiveForTest(t, snapshot))
 	assertSnapshotValueLogHasFile(t, raftcluster.ValueLogDir(sourceDir))
 	sourceDigest, err := sourceFSM.LogicalDigestV1(raftapply.LogicalDigestOptionsV1{})
@@ -218,6 +220,7 @@ func TestRaftSnapshotV1InstallPreservesVectorPartitionManifestNamespace(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer snapshot.Release()
 
 	targetDir := filepath.Join(root, "target")
 	targetDB := openRaftSnapshotFSMTestDB(t, targetDir, false)
@@ -274,6 +277,7 @@ func TestRaftSnapshotV1ExportIncludesEmptyVectorPartitionNamespace(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer snapshot.Release()
 	tr := tar.NewReader(bytes.NewReader(readRaftSnapshotArchiveForTest(t, snapshot)))
 	for {
 		header, err := tr.Next()
@@ -307,6 +311,7 @@ func TestRaftSnapshotV1InstallRejectsIncompleteVectorPartitionStateBeforeReplace
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer snapshot.Release()
 	payload := readRaftSnapshotArchiveForTest(t, snapshot)
 	asset := manifest.Assets[0]
 	assetPath := filepath.ToSlash(filepath.Join(
@@ -413,7 +418,13 @@ func TestRaftSnapshotV1ExportWaitsForVectorPartitionStorageBarrier(t *testing.T)
 	}()
 	<-entered
 	exportDone := make(chan error, 1)
-	go func() { _, err := fsm.ExportRaftSnapshotV1(); exportDone <- err }()
+	go func() {
+		snapshot, err := fsm.ExportRaftSnapshotV1()
+		if err == nil {
+			err = snapshot.Release()
+		}
+		exportDone <- err
+	}()
 	select {
 	case err := <-exportDone:
 		t.Fatalf("snapshot escaped vector-partition barrier: %v", err)
@@ -467,7 +478,13 @@ func TestRaftSnapshotV1ExportDoesNotInvertVectorPartitionPublishAndApplyLocks(t 
 		applyDone <- err
 	}()
 	exportDone := make(chan error, 1)
-	go func() { _, err := fsm.ExportRaftSnapshotV1(); exportDone <- err }()
+	go func() {
+		snapshot, err := fsm.ExportRaftSnapshotV1()
+		if err == nil {
+			err = snapshot.Release()
+		}
+		exportDone <- err
+	}()
 	select {
 	case err := <-applyDone:
 		if err != nil {
@@ -550,6 +567,9 @@ func TestRaftSnapshotV1InstallExtractionDoesNotDeadlockExport(t *testing.T) {
 	targetFSM := openRaftSnapshotFSMForTest(t, targetDB, targetDir, true)
 	defer func() { _ = targetFSM.Close() }()
 	entered, release := make(chan struct{}), make(chan struct{})
+	var releaseOnce sync.Once
+	unblock := func() { releaseOnce.Do(func() { close(release) }) }
+	defer unblock()
 	raftSnapshotAfterExtractForTest = func() { close(entered); <-release }
 	defer func() { raftSnapshotAfterExtractForTest = nil }()
 	reader := openRaftSnapshotArchiveForTest(t, snapshot)
@@ -558,8 +578,23 @@ func TestRaftSnapshotV1InstallExtractionDoesNotDeadlockExport(t *testing.T) {
 	go func() { installDone <- targetFSM.InstallRaftSnapshotV1(reader) }()
 	<-entered
 	exportDone := make(chan error, 1)
-	go func() { _, err := targetFSM.ExportRaftSnapshotV1(); exportDone <- err }()
-	close(release)
+	go func() {
+		snapshot, err := targetFSM.ExportRaftSnapshotV1()
+		if err == nil {
+			err = snapshot.Release()
+		}
+		exportDone <- err
+	}()
+	select {
+	case err := <-exportDone:
+		if err == nil {
+			t.Fatal("export admitted during installation")
+		}
+	case <-time.After(3 * time.Second):
+		unblock()
+		t.Fatal("export waited instead of refusing active installation")
+	}
+	unblock()
 	select {
 	case err := <-installDone:
 		if err != nil {
@@ -568,14 +603,11 @@ func TestRaftSnapshotV1InstallExtractionDoesNotDeadlockExport(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("install deadlocked")
 	}
-	select {
-	case err := <-exportDone:
-		if err != nil {
-			t.Fatalf("export: %v", err)
-		}
-	case <-time.After(10 * time.Second):
-		t.Fatal("export deadlocked")
+	ready, err := targetFSM.ExportRaftSnapshotV1()
+	if err != nil {
+		t.Fatal("export after install", err)
 	}
+	defer ready.Release()
 }
 
 // stageRaftSnapshotReadyVectorPartitionForTest builds a ready manifest through
@@ -850,6 +882,7 @@ func TestRaftSnapshotV1InstallReplacesStaleReplica(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ExportRaftSnapshotV1: %v", err)
 	}
+	defer snapshot.Release()
 
 	targetDir := filepath.Join(root, "target")
 	targetDB := openRaftSnapshotFSMTestDB(t, targetDir, false)
@@ -888,6 +921,7 @@ func TestRaftSnapshotV1InstallReplacesStaleFormatConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ExportRaftSnapshotV1: %v", err)
 	}
+	defer snapshot.Release()
 	sourceFormatPath := filepath.Join(raftcluster.MainDBDir(sourceDir), raftSnapshotFormatConfigFileV1)
 	sourceFormat, err := os.ReadFile(sourceFormatPath)
 	if err != nil {
@@ -937,6 +971,7 @@ func TestRaftSnapshotV1InstallRejectsCorruptArchiveBeforeReplacingLiveState(t *t
 	if err != nil {
 		t.Fatalf("ExportRaftSnapshotV1: %v", err)
 	}
+	defer snapshot.Release()
 	corruptPayload := rewriteRaftSnapshotArchiveHeaderForTest(t, readRaftSnapshotArchiveForTest(t, snapshot), func(header *raftcluster.RaftSnapshotArchiveHeaderV1) {
 		header.Manifest.LogicalDigestV1 = strings.Repeat("f", 64)
 	})
@@ -974,6 +1009,7 @@ func TestRaftSnapshotV1TailReplayMatchesSourceDigest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ExportRaftSnapshotV1: %v", err)
 	}
+	defer snapshot.Release()
 	tailDoc := []byte(`{"_id":"u1","name":"after"}`)
 	tail := committedCommand(3, snapshot.Manifest.LastIncludedIndex+1, deterministicReplaceBatchEntry(t, "users", "fsm:snapshot:tail:replace", nativewire.DocumentFormatJSON, [][]byte{[]byte("u1")}, [][]byte{tailDoc}))
 	result, err := sourceFSM.ApplyCommittedEntryV1(tail)
@@ -1012,23 +1048,40 @@ func TestRaftSnapshotV1InstallReplacesSideStores(t *testing.T) {
 	root := t.TempDir()
 	sourceRoot := filepath.Join(root, "source")
 	sourceDir := filepath.Join(sourceRoot, "maindb")
-	sourceDB := openRaftSnapshotFSMTestDB(t, sourceDir, false)
-	defer func() { _ = sourceDB.Close() }()
-	sourceFSM := openRaftSnapshotFSMForTest(t, sourceDB, sourceDir, true)
-	defer func() { _ = sourceFSM.Close() }()
-	applySnapshotSourceEntries(t, sourceFSM, []byte(`{"_id":"u-large","name":"source"}`))
 	sourceDict := filepath.Join(sourceRoot, "dictdb")
-	if err := os.MkdirAll(sourceDict, 0o700); err != nil {
-		t.Fatalf("MkdirAll source dictdb: %v", err)
+	dictBackend, err := backenddb.Open(backenddb.Options{Dir: sourceDict, ChunkSize: 64 * 1024, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(sourceDict, "sentinel"), []byte("source-side-store"), 0o600); err != nil {
-		t.Fatalf("WriteFile source sentinel: %v", err)
+	dictBytes := []byte("source-side-store")
+	dictID, err := dictdb.New(dictBackend).PutDictBytes(context.Background(), dictBytes)
+	if err != nil {
+		dictBackend.Close()
+		t.Fatal(err)
 	}
+	if err := dictBackend.Close(); err != nil {
+		t.Fatal(err)
+	}
+	opts := backenddb.Options{Dir: sourceDir, CommandWAL: true, CommandWALStatsScan: true, DisableBackgroundPrune: true}
+	cleanup, err := wireRaftSnapshotSideStoreLookupsV1(sourceRoot, &opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+	sourceDB, err := backenddb.Open(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sourceDB.Close()
+	sourceFSM := openRaftSnapshotFSMForTest(t, sourceDB, sourceDir, true)
+	defer sourceFSM.Close()
+	applySnapshotSourceEntries(t, sourceFSM, []byte(`{"_id":"u-large","name":"source"}`))
 	snapshot, err := sourceFSM.ExportRaftSnapshotV1()
 	if err != nil {
 		t.Fatalf("ExportRaftSnapshotV1: %v", err)
 	}
 
+	defer snapshot.Release()
 	targetRoot := filepath.Join(root, "target")
 	targetDir := filepath.Join(targetRoot, "maindb")
 	targetDB := openRaftSnapshotFSMTestDB(t, targetDir, false)
@@ -1044,12 +1097,17 @@ func TestRaftSnapshotV1InstallReplacesSideStores(t *testing.T) {
 	}
 
 	installRaftSnapshotForTest(t, targetFSM, snapshot)
-	got, err := os.ReadFile(filepath.Join(targetRoot, "dictdb", "sentinel"))
-	if err != nil {
-		t.Fatalf("ReadFile restored side-store sentinel: %v", err)
+	if err := targetFSM.Close(); err != nil {
+		t.Fatal(err)
 	}
-	if string(got) != "source-side-store" {
-		t.Fatalf("restored side-store sentinel=%q", got)
+	restored, err := backenddb.Open(backenddb.Options{Dir: filepath.Join(targetRoot, "dictdb"), ReadOnly: true, ChunkSize: 64 * 1024})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restored.Close()
+	got, err := dictdb.New(restored).GetDictBytes(context.Background(), dictID)
+	if err != nil || !bytes.Equal(got, dictBytes) {
+		t.Fatalf("restored dictionary=%q err=%v want %q", got, err, dictBytes)
 	}
 	if _, err := os.Stat(staleTemplate); !os.IsNotExist(err) {
 		t.Fatalf("stale target side store exists after restore: err=%v", err)
@@ -1072,6 +1130,7 @@ func TestRaftSnapshotV1InstallReopensRestoredMainDBForRootLayout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ExportRaftSnapshotV1: %v", err)
 	}
+	defer snapshot.Release()
 
 	targetRoot := filepath.Join(root, "target")
 	targetDir := filepath.Join(targetRoot, "maindb")
@@ -1108,6 +1167,7 @@ func TestRaftSnapshotV1InstallPreservesFlatLayoutRaftMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ExportRaftSnapshotV1: %v", err)
 	}
+	defer snapshot.Release()
 
 	targetDir := filepath.Join(root, "target")
 	targetDB := openRaftSnapshotFSMTestDB(t, targetDir, false)
@@ -1151,6 +1211,7 @@ func TestRaftSnapshotV1InstallDisabledSideStoresDoesNotTouchParentSideStores(t *
 	if err != nil {
 		t.Fatalf("ExportRaftSnapshotV1: %v", err)
 	}
+	defer snapshot.Release()
 
 	targetParent := filepath.Join(root, "target")
 	targetDir := filepath.Join(targetParent, "maindb")

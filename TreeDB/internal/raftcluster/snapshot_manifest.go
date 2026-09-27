@@ -193,6 +193,7 @@ type RaftSnapshotV1 struct {
 	Payload     []byte
 	ArchivePath string
 	deferred    *deferredRaftSnapshotV1
+	owner       *deferredRaftSnapshotV1
 }
 
 func (s RaftSnapshotV1) Clone() RaftSnapshotV1 {
@@ -233,6 +234,9 @@ func (s RaftSnapshotV1) Validate() error {
 }
 
 func (s RaftSnapshotV1) OpenArchive() (io.ReadCloser, error) {
+	if s.owner != nil {
+		return s.owner.openArchive(s)
+	}
 	if s.deferred != nil {
 		ready, err := s.Materialize()
 		if err != nil {
@@ -257,6 +261,9 @@ func (s RaftSnapshotV1) OpenArchive() (io.ReadCloser, error) {
 }
 
 func (s RaftSnapshotV1) Release() error {
+	if s.owner != nil {
+		return s.owner.close()
+	}
 	if s.deferred != nil {
 		return s.deferred.close()
 	}

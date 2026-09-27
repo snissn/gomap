@@ -74,6 +74,23 @@ func TestSnapshotStreamingDoesNotHoldApplyForWholeArchiveV1(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal(ctx.Err())
 	}
+	admission := make(chan error, 1)
+	go func() {
+		captured, err := fsm.CaptureRaftSnapshotV1()
+		if err == nil {
+			_ = captured.Release()
+		}
+		admission <- err
+	}()
+	select {
+	case err := <-admission:
+		if err == nil {
+			t.Fatal("live materializer admitted a second capture")
+		}
+	case <-time.After(time.Second):
+		unblock()
+		t.Fatal("live capture admission waited behind materializer")
+	}
 	tail := deterministicInsertBatchEntry(t, "users", "snapshot-interference-tail", nativewire.DocumentFormatJSON, [][]byte{[]byte("tail")}, [][]byte{[]byte(`{"_id":"tail","value":1}`)})
 	applyCtx, applyCancel := context.WithTimeout(ctx, time.Second)
 	err = commit(applyCtx, tail)

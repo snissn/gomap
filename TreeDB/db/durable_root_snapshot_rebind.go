@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -31,6 +32,19 @@ func RebindDurableRootSnapshotV1(dir string) error {
 // snapshot restore before the extracted main and side-store trees receive
 // their final names. sideRoot contains dictdb/ and templatedb/ when non-empty.
 func RebindDurableRootSnapshotLayoutV1(dir, sideRoot string) error {
+	return RebindDurableRootSnapshotLayoutWithContextV1(context.Background(), dir, sideRoot)
+}
+
+// RebindDurableRootSnapshotLayoutWithContextV1 cancels between bounded copy
+// chunks, dependency records and index page operations. It mutates only a private
+// sibling and preserves the original staged extent after closing its mappings.
+func RebindDurableRootSnapshotLayoutWithContextV1(ctx context.Context, dir, sideRoot string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if dir == "" {
 		return errors.New("treedb: durable-root snapshot rebind directory is empty")
 	}
@@ -58,7 +72,26 @@ func RebindDurableRootSnapshotLayoutV1(dir, sideRoot string) error {
 	}()
 	copyErr := temporary.Chmod(info.Mode().Perm())
 	if copyErr == nil {
-		_, copyErr = io.Copy(temporary, source)
+		var buffer [64 * 1024]byte
+		for offset := int64(0); offset < info.Size(); {
+			if copyErr = ctx.Err(); copyErr != nil {
+				break
+			}
+			n := min(int64(len(buffer)), info.Size()-offset)
+			if _, copyErr = source.ReadAt(buffer[:n], offset); copyErr != nil {
+				break
+			}
+			var written int
+			written, copyErr = temporary.Write(buffer[:n])
+			if copyErr != nil {
+				break
+			}
+			if int64(written) != n {
+				copyErr = io.ErrShortWrite
+				break
+			}
+			offset += n
+		}
 	}
 	if copyErr == nil {
 		copyErr = rootpublication.SyncStableFile(temporary)
@@ -67,7 +100,33 @@ func RebindDurableRootSnapshotLayoutV1(dir, sideRoot string) error {
 	if copyErr != nil {
 		return fmt.Errorf("treedb: create stable snapshot index durable-root rebind copy: %w", copyErr)
 	}
-	if err := rebindDurableRootSnapshotFileV1(dir, sideRoot, temporaryPath); err != nil {
+	if err := rebindDurableRootSnapshotFileWithContextV1(ctx, dir, sideRoot, temporaryPath); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	// Writable pager opening rounds its private mmap backing up to chunk size.
+	// Rebinding replaces fixed-width fields only; it does not allocate pages.
+	// Drop that padding after every mapping closes, before installing the copy.
+	rebound, err := os.OpenFile(temporaryPath, os.O_RDWR, 0)
+	if err != nil {
+		return err
+	}
+	reboundInfo, extentErr := rebound.Stat()
+	if extentErr == nil && reboundInfo.Size() < info.Size() {
+		extentErr = errors.New("treedb: rebound snapshot unexpectedly shrank")
+	}
+	if extentErr == nil {
+		extentErr = rebound.Truncate(info.Size())
+	}
+	if extentErr == nil {
+		extentErr = rootpublication.SyncStableFile(rebound)
+	}
+	if err := errors.Join(extentErr, rebound.Close()); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
 		return err
 	}
 	if err := os.Rename(temporaryPath, indexPath); err != nil {
@@ -86,7 +145,7 @@ func RebindDurableRootSnapshotLayoutV1(dir, sideRoot string) error {
 	return nil
 }
 
-func rebindDurableRootSnapshotFileV1(dir, sideRoot, indexPath string) error {
+func rebindDurableRootSnapshotFileWithContextV1(ctx context.Context, dir, sideRoot, indexPath string) error {
 	file, err := os.OpenFile(indexPath, os.O_RDWR, 0)
 	if err != nil {
 		return fmt.Errorf("treedb: open snapshot index for durable-root rebind: %w", err)
@@ -96,6 +155,7 @@ func rebindDurableRootSnapshotFileV1(dir, sideRoot, indexPath string) error {
 		_ = file.Close()
 		return err
 	}
+	store.ctx = ctx
 	indexPager, err := pager.Open(indexPath, 64<<20)
 	if err != nil {
 		return errors.Join(err, file.Close())
@@ -104,7 +164,10 @@ func rebindDurableRootSnapshotFileV1(dir, sideRoot, indexPath string) error {
 		return errors.Join(operationErr, indexPager.Close(), file.Close())
 	}
 
-	selected, err := selectDurableRootV1(store, store.pageCount, nil, dependencyDirectoryStructureValidatorV2(indexPager))
+	selected, err := selectDurableRootV1(store, store.pageCount, nil, dependencyDirectoryStructureValidatorWithContextV2(ctx, indexPager))
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return closeWith(ctxErr)
+	}
 	if err != nil {
 		return closeWith(fmt.Errorf("treedb: select snapshot durable roots for identity rebind: %w", err))
 	}
@@ -131,6 +194,9 @@ func rebindDurableRootSnapshotFileV1(dir, sideRoot, indexPath string) error {
 		}
 		entries := manifest.Entries()
 		for index := range entries {
+			if err := ctx.Err(); err != nil {
+				return closeWith(err)
+			}
 			if err := rebindSnapshotManifestEntryV1(dir, sideRoot, &entries[index]); err != nil {
 				return closeWith(fmt.Errorf("treedb: rebind snapshot dependency for slot %d: %w", slot, err))
 			}
@@ -155,7 +221,7 @@ func rebindDurableRootSnapshotFileV1(dir, sideRoot, indexPath string) error {
 	for index := range plans {
 		plan := &plans[index]
 		if plan.record.Directory.RootPageID != 0 {
-			if err := rebindSnapshotDependencyDirectoryV2(dir, sideRoot, indexPager, plan.record); err != nil {
+			if err := rebindSnapshotDependencyDirectoryWithContextV2(ctx, dir, sideRoot, indexPager, plan.record); err != nil {
 				return closeWith(fmt.Errorf("treedb: rebind snapshot directory for slot %d: %w", plan.slot, err))
 			}
 		} else {
@@ -198,7 +264,7 @@ func rebindDurableRootSnapshotFileV1(dir, sideRoot, indexPath string) error {
 			return closeWith(fmt.Errorf("treedb: publish rebound snapshot meta slot %d: %w", plans[index].slot, err))
 		}
 	}
-	rebound, err := selectDurableRootV1(store, store.pageCount, nil, dependencyDirectoryStructureValidatorV2(indexPager))
+	rebound, err := selectDurableRootV1(store, store.pageCount, nil, dependencyDirectoryStructureValidatorWithContextV2(ctx, indexPager))
 	if err != nil {
 		return closeWith(fmt.Errorf("treedb: verify rebound snapshot durable roots: %w", err))
 	}
@@ -258,6 +324,7 @@ func stableSnapshotPathIdentityV1(path string, generation uint64, syncFile func(
 type snapshotIndexPageStoreV1 struct {
 	file      *os.File
 	pageCount uint64
+	ctx       context.Context
 }
 
 func newSnapshotIndexPageStoreV1(file *os.File) (*snapshotIndexPageStoreV1, error) {
@@ -278,6 +345,11 @@ func (store *snapshotIndexPageStoreV1) ReadPage(pageID uint64) ([]byte, error) {
 	if store == nil || store.file == nil || pageID >= store.pageCount {
 		return nil, io.EOF
 	}
+	if store.ctx != nil {
+		if err := store.ctx.Err(); err != nil {
+			return nil, err
+		}
+	}
 	image := make([]byte, page.PageSize)
 	_, err := store.file.ReadAt(image, int64(pageID)*int64(page.PageSize))
 	return image, err
@@ -286,6 +358,11 @@ func (store *snapshotIndexPageStoreV1) ReadPage(pageID uint64) ([]byte, error) {
 func (store *snapshotIndexPageStoreV1) WritePage(pageID uint64, image []byte) error {
 	if store == nil || store.file == nil || pageID >= store.pageCount || len(image) != page.PageSize {
 		return io.ErrShortWrite
+	}
+	if store.ctx != nil {
+		if err := store.ctx.Err(); err != nil {
+			return err
+		}
 	}
 	written, err := store.file.WriteAt(image, int64(pageID)*int64(page.PageSize))
 	if err != nil {

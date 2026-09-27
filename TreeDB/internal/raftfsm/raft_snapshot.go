@@ -68,92 +68,15 @@ var raftSnapshotSideStoreEntriesV1 = []string{
 // value-log segments, plus durable Raft apply metadata. It intentionally
 // excludes HashiCorp Raft log/stable/snapshot directories.
 func (f *FSM) ExportRaftSnapshotV1() (raftcluster.RaftSnapshotV1, error) {
-	if f == nil {
-		return raftcluster.RaftSnapshotV1{}, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "FSM is not open")
-	}
-	var snapshot raftcluster.RaftSnapshotV1
-	err := collections.WithVectorPartitionStorageBarrierV1(raftcluster.MainDBDir(f.cluster.Dir), func() error {
-		// All snapshot operations take the root barrier before f.mu. Install
-		// extracts under the barrier and then takes f.mu, so reversing this
-		// order here can deadlock export behind an in-flight install.
-		f.mu.Lock()
-		defer f.mu.Unlock()
-		var inner error
-		snapshot, inner = f.exportRaftSnapshotV1Locked()
-		return inner
-	})
-	return snapshot, err
-}
-
-func (f *FSM) exportRaftSnapshotV1Locked() (raftcluster.RaftSnapshotV1, error) {
-	if err := f.requireRaftSnapshotOpenV1(); err != nil {
-		return raftcluster.RaftSnapshotV1{}, err
-	}
-	if err := f.db.Checkpoint(); err != nil {
-		return raftcluster.RaftSnapshotV1{}, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "checkpoint before snapshot export: %v", err)
-	}
-	if err := f.syncDurableApplyMetadataForRaftSnapshotV1(); err != nil {
-		return raftcluster.RaftSnapshotV1{}, err
-	}
-	manifest, err := f.exportSnapshotManifestV1Locked(SnapshotManifestExportOptionsV1{})
+	captured, err := f.CaptureRaftSnapshotV1()
 	if err != nil {
 		return raftcluster.RaftSnapshotV1{}, err
 	}
-	header := raftcluster.NewRaftSnapshotArchiveHeaderV1(manifest)
-	headerBytes, err := raftcluster.EncodeRaftSnapshotArchiveHeaderV1(header)
+	ready, err := captured.Materialize()
 	if err != nil {
-		return raftcluster.RaftSnapshotV1{}, err
+		return raftcluster.RaftSnapshotV1{}, errors.Join(err, captured.Release())
 	}
-
-	archiveFile, archivePath, err := createRaftSnapshotArchiveFileV1(f.cluster.Layout.SnapshotDir)
-	if err != nil {
-		return raftcluster.RaftSnapshotV1{}, err
-	}
-	keepArchive := false
-	defer func() {
-		if !keepArchive {
-			_ = os.Remove(archivePath)
-		}
-	}()
-	tw := tar.NewWriter(archiveFile)
-	if err := writeRaftSnapshotFileV1(tw, raftcluster.RaftSnapshotArchiveManifestPathV1, headerBytes, 0o600); err != nil {
-		_ = archiveFile.Close()
-		return raftcluster.RaftSnapshotV1{}, err
-	}
-	if err := appendRaftSnapshotTreeDBStorageV1(tw, raftSnapshotDBPrefixV1, raftcluster.MainDBDir(f.cluster.Dir)); err != nil {
-		_ = archiveFile.Close()
-		return raftcluster.RaftSnapshotV1{}, err
-	}
-	if !f.cluster.DisableSideStores {
-		if err := appendRaftSnapshotTreeDBSideStoresV1(tw, raftSnapshotSidePrefixV1, raftcluster.MainDBDir(f.cluster.Dir)); err != nil {
-			_ = archiveFile.Close()
-			return raftcluster.RaftSnapshotV1{}, err
-		}
-	}
-	if err := appendRaftSnapshotDirV1(tw, raftSnapshotApplyPrefixV1, f.cluster.Layout.ApplyDir); err != nil {
-		_ = archiveFile.Close()
-		return raftcluster.RaftSnapshotV1{}, err
-	}
-	if err := tw.Close(); err != nil {
-		_ = archiveFile.Close()
-		return raftcluster.RaftSnapshotV1{}, fmt.Errorf("raftfsm: close snapshot archive: %w", err)
-	}
-	if err := archiveFile.Sync(); err != nil {
-		_ = archiveFile.Close()
-		return raftcluster.RaftSnapshotV1{}, fmt.Errorf("raftfsm: sync snapshot archive: %w", err)
-	}
-	if err := archiveFile.Close(); err != nil {
-		return raftcluster.RaftSnapshotV1{}, fmt.Errorf("raftfsm: close snapshot archive file: %w", err)
-	}
-	snapshot := raftcluster.RaftSnapshotV1{
-		Manifest:    manifest,
-		ArchivePath: archivePath,
-	}
-	if err := snapshot.Validate(); err != nil {
-		return raftcluster.RaftSnapshotV1{}, err
-	}
-	keepArchive = true
-	return snapshot, nil
+	return ready, nil
 }
 
 func createRaftSnapshotArchiveFileV1(snapshotDir string) (*os.File, string, error) {
@@ -192,6 +115,11 @@ func cleanupAbandonedRaftSnapshotArchivesV1(snapshotDir string) error {
 	}
 	for _, entry := range entries {
 		if entry.IsDir() {
+			if strings.HasPrefix(entry.Name(), "treedb-cut-") {
+				if err := os.RemoveAll(filepath.Join(stagingDir, entry.Name())); err != nil {
+					return fmt.Errorf("raftfsm: remove abandoned snapshot cut: %w", err)
+				}
+			}
 			continue
 		}
 		matches, err := filepath.Match(raftSnapshotArchiveGlobV1, entry.Name())
@@ -219,9 +147,11 @@ func raftSnapshotStagingDirV1(snapshotDir string) string {
 // Any caller-owned DB handle passed to Open is closed by a successful install
 // and must be recreated before direct use.
 func (f *FSM) InstallRaftSnapshotV1(reader io.Reader) error {
-	if f == nil {
-		return codedError(raftentry.ErrorUnsafeDurabilityModeV1, "FSM is not open")
+	namespace, err := f.retainSnapshotOperationV1()
+	if err != nil {
+		return codedError(raftentry.ErrorUnsafeDurabilityModeV1, "%v", err)
 	}
+	defer func() { _ = namespace.Close(); f.snapshotOperationActive.Store(false) }()
 	return collections.WithVectorPartitionStorageBarrierV1(raftcluster.MainDBDir(f.cluster.Dir), func() error { return f.installRaftSnapshotV1Locked(reader) })
 }
 func (f *FSM) installRaftSnapshotV1Locked(reader io.Reader) error {
@@ -466,6 +396,8 @@ func (f *FSM) verifyExtractedRaftSnapshotV1(manifest raftcluster.SnapshotManifes
 
 func (f *FSM) snapshotRestoreDBOptionsV1(dir string) backenddb.Options {
 	opts := f.restoreDB
+	// Restored side-store owners must register their own capture authority.
+	opts.PhysicalSnapshotSideStoreCapture = nil
 	opts.Dir = dir
 	opts.CommandWAL = true
 	opts.CommandWALStatsScan = true

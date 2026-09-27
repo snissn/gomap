@@ -107,6 +107,18 @@ func vectorPartitionCheckpointEnvelopeIdentityV1(raw []byte) (string, string, ui
 // contiguous current-epoch tail for each identity. Superseded audit epochs are
 // intentionally omitted from snapshots.
 func VectorPartitionSnapshotEntriesV1(dir *os.File) ([]VectorPartitionSnapshotEntryV1, error) {
+	return VectorPartitionSnapshotEntriesWithContextV1(context.Background(), dir)
+}
+
+// VectorPartitionSnapshotEntriesWithContextV1 retains the same bounded namespace
+// admission and checks cancellation while selecting and decoding authority.
+func VectorPartitionSnapshotEntriesWithContextV1(ctx context.Context, dir *os.File) ([]VectorPartitionSnapshotEntryV1, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if dir == nil {
 		return nil, fmt.Errorf("%w: nil lifecycle snapshot directory", ErrVectorPartitionManifestInvalid)
 	}
@@ -130,6 +142,9 @@ func VectorPartitionSnapshotEntriesV1(dir *os.File) ([]VectorPartitionSnapshotEn
 	groups := make(map[string]vectorPartitionSnapshotGroupV1)
 	seenIdentities := make([]VectorPartitionSnapshotEntryV1, 0, len(entries))
 	for _, entry := range entries {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		if entry.Type()&os.ModeSymlink != 0 {
 			return nil, fmt.Errorf("%w: lifecycle snapshot symlink %q", ErrVectorPartitionManifestInvalid, entry.Name())
 		}
@@ -161,12 +176,15 @@ func VectorPartitionSnapshotEntriesV1(dir *os.File) ([]VectorPartitionSnapshotEn
 
 	selected := make([]VectorPartitionSnapshotEntryV1, 0, len(entries))
 	for _, group := range groups {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		if group.highestEpoch == 0 {
 			return nil, fmt.Errorf("%w: lifecycle snapshot deltas without checkpoint", ErrVectorPartitionManifestInvalid)
 		}
 		checkpointSuffix := fmt.Sprintf("checkpoint.%020d.vlc", group.highestEpoch)
 		checkpointName := group.prefix + checkpointSuffix
-		raw, err := readVectorPartitionLifecycleSlotV1(dir, checkpointName, vectorPartitionLifecycleCheckpointMaxBytesV1)
+		raw, err := readVectorPartitionLifecycleSlotWithContextV1(ctx, dir, checkpointName, vectorPartitionLifecycleCheckpointMaxBytesV1)
 		if err != nil {
 			return nil, err
 		}
@@ -177,11 +195,14 @@ func VectorPartitionSnapshotEntriesV1(dir *os.File) ([]VectorPartitionSnapshotEn
 		if epoch != group.highestEpoch || vectorPartitionLifecycleNamePrefixV1(collection, index) != group.prefix {
 			return nil, fmt.Errorf("%w: lifecycle snapshot filename identity", ErrVectorPartitionManifestInvalid)
 		}
-		loaded, err := store.loadVectorPartitionLifecycleCheckpointStateFromDirV1(dir, collection, index)
+		loaded, err := store.loadVectorPartitionLifecycleCheckpointStateFromDirWithContextV1(ctx, dir, collection, index)
 		if err != nil {
 			return nil, err
 		}
 		for _, entry := range loaded.entries {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
 			if entry.epoch != group.highestEpoch {
 				continue
 			}
@@ -193,6 +214,9 @@ func VectorPartitionSnapshotEntriesV1(dir *os.File) ([]VectorPartitionSnapshotEn
 	}
 	sort.Slice(selected, func(i, j int) bool { return selected[i].Name < selected[j].Name })
 	if err := store.verifyBoundDirV1(dir); err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	return selected, nil

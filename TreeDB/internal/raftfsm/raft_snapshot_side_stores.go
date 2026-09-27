@@ -116,6 +116,21 @@ func wireRaftSnapshotDictLookupV1(rootDir string, opts *backenddb.Options, close
 		return fmt.Errorf("raftfsm: open restored dictdb: %w", err)
 	}
 	*closers = append(*closers, dictBackend.Close)
+	previousCapture := opts.PhysicalSnapshotSideStoreCapture
+	opts.PhysicalSnapshotSideStoreCapture = func(ctx context.Context, name string) (*backenddb.PhysicalSnapshotCutV1, error) {
+		if name == "dictdb" {
+			if !dictOpts.ReadOnly {
+				if err := dictBackend.Checkpoint(); err != nil {
+					return nil, err
+				}
+			}
+			return dictBackend.CapturePhysicalSnapshotCutV1(ctx)
+		}
+		if previousCapture != nil {
+			return previousCapture(ctx, name)
+		}
+		return nil, fmt.Errorf("raftfsm: snapshot side store %q has no owner", name)
+	}
 	store := dictdb.New(dictBackend)
 	opts.ValueLog.DictLookup = func(dictID uint64) ([]byte, error) {
 		return store.GetDictBytes(context.Background(), dictID)
@@ -174,6 +189,21 @@ func wireRaftSnapshotTemplateLookupV1(rootDir string, opts *backenddb.Options, c
 		return fmt.Errorf("raftfsm: open restored templatedb: %w", err)
 	}
 	*closers = append(*closers, templateBackend.Close)
+	previousCapture := opts.PhysicalSnapshotSideStoreCapture
+	opts.PhysicalSnapshotSideStoreCapture = func(ctx context.Context, name string) (*backenddb.PhysicalSnapshotCutV1, error) {
+		if name == "templatedb" {
+			if !templateReadOnly {
+				if err := templateBackend.Checkpoint(); err != nil {
+					return nil, err
+				}
+			}
+			return templateBackend.CapturePhysicalSnapshotCutV1(ctx)
+		}
+		if previousCapture != nil {
+			return previousCapture(ctx, name)
+		}
+		return nil, fmt.Errorf("raftfsm: snapshot side store %q has no owner", name)
+	}
 	store := templatedb.New(raftSnapshotTemplateBackendKVV1{db: templateBackend}, templatedb.Config{})
 	if !templateReadOnly && opts.ValueLog.TemplateMode != template.TemplateOff {
 		opts.ValueLog.TemplateStore = store
@@ -193,6 +223,7 @@ func wireRaftSnapshotTemplateLookupV1(rootDir string, opts *backenddb.Options, c
 }
 
 func scrubRaftSnapshotSideStoreOptionsV1(opts *backenddb.Options) {
+	opts.PhysicalSnapshotSideStoreCapture = nil
 	opts.IndexOuterLeavesInValueLog = false
 	opts.ValueLog.DictLookup = nil
 	opts.ValueLog.DictTrain = compression.TrainConfig{TrainBytes: -1}

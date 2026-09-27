@@ -10,6 +10,7 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/freelist"
 	"github.com/snissn/gomap/TreeDB/internal/lockfile"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -62,7 +63,18 @@ func (db *DB) CapturePhysicalSnapshotCutV1(ctx context.Context) (*PhysicalSnapsh
 	if err := db.checkWriteAdmissionLocked(); err != nil {
 		return nil, err
 	}
-	roots, err := db.captureRecoverableRootSetWithMaintenanceLockHeld(ctx)
+	var roots *RecoverableRootSet
+	var err error
+	if db.readOnly {
+		// Only an actual locked read-only owner can export an immutable physical
+		// cut. In particular, openReadOnlyNoLock is not an export authority.
+		if db.lock == nil {
+			return nil, fmt.Errorf("physical snapshot requires directory lock: %w", ErrReadOnly)
+		}
+		roots, err = db.captureRecoverableRootSetForInspectionWithMaintenanceLockHeld(ctx)
+	} else {
+		roots, err = db.captureRecoverableRootSetWithMaintenanceLockHeld(ctx)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -210,4 +222,34 @@ func (cut *PhysicalSnapshotCutV1) Close() error {
 	err = errors.Join(err, cut.directoryLock.Close())
 	cut.directoryLock = nil
 	return err
+}
+
+// CapturePhysicalSnapshotSideStoreV1 asks the registered store owner to flush
+// and capture its index. It never opens a second owner by pathname.
+func (db *DB) CapturePhysicalSnapshotSideStoreV1(ctx context.Context, name string) (*PhysicalSnapshotCutV1, error) {
+	if db == nil || db.closing.Load() {
+		return nil, ErrClosed
+	}
+	if name != "dictdb" && name != "templatedb" {
+		return nil, errors.New("treedb: invalid snapshot side-store name")
+	}
+	capture := db.physicalSnapshotSideStoreCapture
+	if capture == nil {
+		return nil, fmt.Errorf("treedb: snapshot side store %q has no registered owner", name)
+	}
+	return capture(ctx, name)
+}
+
+// ValidateStorageDirectoryV1 binds side-file discovery to the exact directory
+// containing this cut's retained index, rather than a replacement at its path.
+func (cut *PhysicalSnapshotCutV1) ValidateStorageDirectoryV1(directory *os.File) error {
+	if cut == nil {
+		return ErrClosed
+	}
+	cut.mu.Lock()
+	defer cut.mu.Unlock()
+	if cut.file == nil {
+		return ErrClosed
+	}
+	return rootpublication.ValidateStableChildLink(directory, cut.file, "index.db")
 }
