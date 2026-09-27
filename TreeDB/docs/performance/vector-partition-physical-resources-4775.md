@@ -7,12 +7,33 @@ The existing `serving-resources` CPU/allocation v1 contract is unchanged.
 Pass `-out <fresh-absolute-json> -source-checkout <clean-collector-checkout>
 -head-sha <collector-commit> -executable-sha256 <collector-binary-sha256> --`
 followed by the independently frozen `replay-m8-report` arguments. The collector
-strictly replays the old parent first, retaining its source/executable identity
-separately from the new collector's identity. It reopens the pinned assets with
-the existing attribution harness: every physical pack for the per-pack runtime,
+strictly replays the parent using the current collector runtime first, retaining
+the parent's source/executable identity separately from the collector's identity.
+The parent must pass the current report validator and retained-asset opener;
+a replay accepted only by a historical producer is insufficient. It reopens the
+pinned assets with the existing attribution harness: every physical pack for the per-pack runtime,
 or exactly one validated domain anchor for each domain graph. It records its
 own host, Go version, OS, architecture and page size. This is a new untimed
 observation, not telemetry recovered from the parent's timed process.
+
+For the #4775 campaign, collect this receipt only for the retained domain-graph
+candidate. The historical per-pack baseline is unsupported: its Vamana report
+declares 64 packs in 16 domains, but records 64 per-pack diagnostics and physical
+fanout. The current validator requires 16 domain-anchor diagnostics and one
+graph search per selected domain. Strict replay rejects that layout before
+truth/transcript replay, retained-asset replay, or the physical collector's open.
+`TestM8ProductionReportRejectsUnexercisedDataGroupV1` covers current Vamana
+multi-pack domain acceptance and physical boundary-count rejection;
+`TestM8LocalSearchFanoutIsOneGraphPerDomainV1` rejects physical fanout for a
+selected domain. The same guards apply to the 64-pack/16-domain layout.
+
+The baseline reader also mapped whole backing files while accounting only
+requested views; the current reader maps aligned ranges. A new collector cannot
+recover the baseline process's actual mapped extents or logical handles: both
+remain unknown. Candidate-only physical charges may accompany the independently
+source-specific baseline RSS/CPU/allocation receipts, but cannot support paired
+mapped-byte or handle improvement claims. This observation does not require a
+new serving campaign or a refreeze of the retained serving measurements.
 
 For each retained searcher the receipt records:
 
