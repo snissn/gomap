@@ -258,7 +258,7 @@ func TestOuterLeafReplacementManifestPreservesAppendOnlyBaseDependencyReuse(t *t
 		t.Fatalf("append-only replacement manifest candidate scans=%d want 0", scans)
 	}
 	foundCurrentLeaf, foundNewManifest := false, false
-	for _, descriptor := range captured.Descriptors() {
+	for _, descriptor := range mustStableResourceDescriptors(t, captured) {
 		switch descriptor.Kind() {
 		case rootpublication.ResourceOuterLeafLog:
 			foundCurrentLeaf = foundCurrentLeaf || descriptor.Generation() == uint64(leafLog.fileID)
@@ -270,7 +270,7 @@ func TestOuterLeafReplacementManifestPreservesAppendOnlyBaseDependencyReuse(t *t
 		}
 	}
 	if !foundCurrentLeaf || !foundNewManifest {
-		t.Fatalf("captured descriptors=%+v, want current raw leaf and replacement manifest", captured.Descriptors())
+		t.Fatalf("captured descriptors=%+v, want current raw leaf and replacement manifest", mustStableResourceDescriptors(t, captured))
 	}
 
 	plannerBase := stableContractResourceSet(t, stableContractDescriptor{
@@ -887,7 +887,7 @@ func TestRootPublicationDependencyBytesExcludesSelectedDurableClosure(t *testing
 	published, resources := makeSet(false), makeSet(true)
 	database := &DB{durableRoot: durableRootRuntimeV1{slot: 1}}
 	database.durableRoot.slotResources[1] = published
-	before := resources.Descriptors()
+	before := mustStableResourceDescriptors(t, resources)
 	got, err := database.rootPublicationDependencyBytesV1(resources)
 	if err != nil {
 		t.Fatal(err)
@@ -896,7 +896,7 @@ func TestRootPublicationDependencyBytesExcludesSelectedDurableClosure(t *testing
 	if got != added {
 		t.Fatalf("dependency debt=%d want only %d unpublished bytes", got, added)
 	}
-	if !reflect.DeepEqual(before, resources.Descriptors()) || published.Len() != 1 {
+	if !reflect.DeepEqual(before, mustStableResourceDescriptors(t, resources)) || published.Len() != 1 {
 		t.Fatal("accounting changed resource ownership")
 	}
 	// The same complete closure being visible does not make it durable. Nor

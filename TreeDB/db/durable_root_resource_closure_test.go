@@ -50,14 +50,14 @@ func TestCaptureDurableRootAppendRequirementsStayMutationLocal4366(t *testing.T)
 	if work.FinalRequirementProofFastPath != 1 || work.FinalRequirementProofFallbacks != 0 || work.FinalRequirementRecordsDecoded != 1 || work.FinalRequirementObligationsMaterialized != 0 {
 		t.Fatalf("capture work=%+v want mutation-local final requirement proof", work)
 	}
-	descriptors := candidate.Descriptors()
+	descriptors := mustStableResourceDescriptors(t, candidate)
 	if len(descriptors) != 1 {
 		t.Fatalf("candidate descriptors=%d want 1", len(descriptors))
 	}
 	if len(descriptors[0].LogicalObligations()) != len(retained)+1 {
 		t.Fatalf("candidate obligations=%d want %d", len(descriptors[0].LogicalObligations()), len(retained)+1)
 	}
-	baseDescriptors := base.Descriptors()
+	baseDescriptors := mustStableResourceDescriptors(t, base)
 	if len(baseDescriptors) != 1 {
 		t.Fatalf("visible base descriptors=%d want 1", len(baseDescriptors))
 	}
@@ -107,7 +107,7 @@ func TestCaptureDurableRootDistinctSegmentAppendAvoidsExactRequirements4371(t *t
 	if work.AggregateMembershipProbes == 0 || work.AggregateMembershipNodeVisits == 0 || work.AggregateMembershipNodeVisits > 128 || work.AggregateMembershipNodeCopies > 64 {
 		t.Fatalf("distinct append aggregate work=%+v want logarithmic membership proof and admission", work)
 	}
-	descriptors := candidate.Descriptors()
+	descriptors := mustStableResourceDescriptors(t, candidate)
 	if len(descriptors) != 2 {
 		t.Fatalf("candidate descriptors=%d want two distinct physical segments", len(descriptors))
 	}
@@ -161,7 +161,7 @@ func TestCaptureDurableRootAppendRequirementsFallbackIsLazyAndOneShot4366(t *tes
 	}
 }
 
-func TestCaptureDurableRootAppendRequirementsFallbackErrorPreservesOwnership4366(t *testing.T) {
+func TestCaptureDurableRootAppendRequirementsFallbackErrorPreservesBaseAndReleasesProducer4366(t *testing.T) {
 	database, path := openDurableRootClosureDB3928(t)
 	baseObligation := durableRootClosureObligation3928(1)
 	added := durableRootClosureObligation3928(2)
@@ -189,11 +189,16 @@ func TestCaptureDurableRootAppendRequirementsFallbackErrorPreservesOwnership4366
 	if fallbackCalls != 1 {
 		t.Fatalf("exact fallback calls=%d want 1", fallbackCalls)
 	}
-	if got := len(base.Descriptors()); got != 1 {
+	if got := len(mustStableResourceDescriptors(t, base)); got != 1 {
 		t.Fatalf("base ownership changed after fallback failure: descriptors=%d", got)
 	}
-	if got := len(producer.Descriptors()); got != 1 {
-		t.Fatalf("producer ownership changed after fallback failure: descriptors=%d", got)
+	// Capture consumes the producer on success and failure. Descriptors now
+	// correctly rejects released ownership instead of exposing stale metadata.
+	if producer.Owner() != rootpublication.ResourceOwnerReleased {
+		t.Fatalf("producer ownership after fallback failure=%v, want released", producer.Owner())
+	}
+	if descriptors, err := producer.Descriptors(); descriptors != nil || !errors.Is(err, rootpublication.ErrResourceOwnership) {
+		t.Fatalf("released producer descriptors=%v error=%v", descriptors, err)
 	}
 }
 
@@ -245,7 +250,7 @@ func TestCaptureDurableRootAppendRequirementsUseVisiblePredecessor4366(t *testin
 	if fallbackCalls != 0 || timing.FinalizeCandidateResourceWork.FinalRequirementProofFastPath != 1 {
 		t.Fatalf("visible predecessor proof fallback=%d work=%+v", fallbackCalls, timing.FinalizeCandidateResourceWork)
 	}
-	descriptors := candidate.Descriptors()
+	descriptors := mustStableResourceDescriptors(t, candidate)
 	if len(descriptors) != 1 || !slices.Equal(descriptors[0].LogicalObligations(), []rootpublication.StableLogicalObligation{planTime, queuedPredecessor, added}) {
 		t.Fatalf("visible predecessor closure=%+v want exact queued base+addition", descriptors)
 	}
@@ -284,7 +289,7 @@ func TestCaptureDurableRootAppendRequirementsProducerMismatchFallsBack4366(t *te
 	if fallbackCalls != 1 || work.FinalRequirementProofFastPath != 0 || work.FinalRequirementProofFallbacks != 1 || work.FullClosureValidations != 1 {
 		t.Fatalf("producer mismatch fallback=%d work=%+v", fallbackCalls, work)
 	}
-	descriptors := candidate.Descriptors()
+	descriptors := mustStableResourceDescriptors(t, candidate)
 	if len(descriptors) != 1 || !slices.Equal(descriptors[0].LogicalObligations(), []rootpublication.StableLogicalObligation{baseObligation, announced, unannounced}) {
 		t.Fatalf("producer mismatch closure=%+v want exact fallback result", descriptors)
 	}
@@ -323,15 +328,15 @@ func TestCaptureDurableRootAppendRequirementAlreadyRetainedIsIdempotent4366(t *t
 		candidate.Release()
 		t.Fatalf("ownership producer=%v base=%v", producer.Owner(), base.Owner())
 	}
-	descriptors := candidate.Descriptors()
+	descriptors := mustStableResourceDescriptors(t, candidate)
 	if len(descriptors) != 1 || !slices.Equal(descriptors[0].LogicalObligations(), []rootpublication.StableLogicalObligation{retained}) {
 		candidate.Release()
 		t.Fatalf("retained addition closure=%+v want exact set union", descriptors)
 	}
 	candidate.Release()
 	producer.Release()
-	if base.Owner() != rootpublication.ResourceOwnerBuilder || len(base.Descriptors()) != 1 {
-		t.Fatalf("candidate release changed visible base: owner=%v descriptors=%d", base.Owner(), len(base.Descriptors()))
+	if base.Owner() != rootpublication.ResourceOwnerBuilder || len(mustStableResourceDescriptors(t, base)) != 1 {
+		t.Fatalf("candidate release changed visible base: owner=%v descriptors=%d", base.Owner(), len(mustStableResourceDescriptors(t, base)))
 	}
 }
 
@@ -529,7 +534,7 @@ func TestCaptureDurableRootAppendMutationDiscardRetryPreservesBase3928(t *testin
 			candidate.Release()
 			t.Fatalf("capture attempt %d work=%+v want certified append-only path", attempt, work)
 		}
-		descriptors := candidate.Descriptors()
+		descriptors := mustStableResourceDescriptors(t, candidate)
 		if len(descriptors) != 1 || !slices.Equal(descriptors[0].LogicalObligations(), []rootpublication.StableLogicalObligation{baseObligation, added}) {
 			candidate.Release()
 			t.Fatalf("capture attempt %d closure=%+v want exact base+addition", attempt, descriptors)
@@ -537,7 +542,7 @@ func TestCaptureDurableRootAppendMutationDiscardRetryPreservesBase3928(t *testin
 		// Discard the first prepared closure as a stale/pre-publication failure;
 		// the second capture must be legal from the unchanged visible base.
 		candidate.Release()
-		baseDescriptors := base.Descriptors()
+		baseDescriptors := mustStableResourceDescriptors(t, base)
 		if len(baseDescriptors) != 1 || !slices.Equal(baseDescriptors[0].LogicalObligations(), []rootpublication.StableLogicalObligation{baseObligation}) {
 			t.Fatalf("base changed after discarded attempt %d: %+v", attempt, baseDescriptors)
 		}
@@ -567,7 +572,7 @@ func TestCaptureDurableRootDestructiveMutationUsesFullFallback3928(t *testing.T)
 	if work.AppendOnlyFastPath != 0 || work.DestructiveFallbacks != 1 || work.FullClosureValidations != 1 || work.RemovedObligations != 1 || work.SourceObligationsInspected == 0 {
 		t.Fatalf("destructive work=%+v want measured full fallback", work)
 	}
-	descriptors := candidate.Descriptors()
+	descriptors := mustStableResourceDescriptors(t, candidate)
 	if len(descriptors) != 1 || !slices.Equal(descriptors[0].LogicalObligations(), []rootpublication.StableLogicalObligation{keep}) {
 		t.Fatalf("destructive closure=%+v want retained obligation only", descriptors)
 	}
@@ -598,7 +603,7 @@ func TestCaptureDurableRootMixedProducerFallsBackAndValidates3928(t *testing.T) 
 	if work.AppendOnlyFastPath != 0 || work.AppendOnlyFallbacks != 1 || work.FullClosureValidations != 1 {
 		t.Fatalf("mixed producer work=%+v want fail-closed generic fallback", work)
 	}
-	descriptors := candidate.Descriptors()
+	descriptors := mustStableResourceDescriptors(t, candidate)
 	if len(descriptors) != 1 || !slices.Equal(descriptors[0].LogicalObligations(), []rootpublication.StableLogicalObligation{baseObligation, announced, unannounced}) {
 		t.Fatalf("mixed producer closure=%+v want exact validated union", descriptors)
 	}
@@ -627,7 +632,7 @@ func TestCaptureDurableRootAppendMutationOmittedRemovalFallsBack3928(t *testing.
 		t.Fatal(err)
 	}
 	defer candidate.Release()
-	descriptors := candidate.Descriptors()
+	descriptors := mustStableResourceDescriptors(t, candidate)
 	if len(descriptors) != 1 || !slices.Equal(descriptors[0].LogicalObligations(), []rootpublication.StableLogicalObligation{keep, added}) {
 		t.Fatalf("incomplete append mutation closure=%+v want exact fallback result", descriptors)
 	}
@@ -655,7 +660,7 @@ func TestCaptureDurableRootEmptyMutationCannotRetainStaleObligation3928(t *testi
 		t.Fatal(err)
 	}
 	defer candidate.Release()
-	descriptors := candidate.Descriptors()
+	descriptors := mustStableResourceDescriptors(t, candidate)
 	if len(descriptors) != 1 || !slices.Equal(descriptors[0].LogicalObligations(), []rootpublication.StableLogicalObligation{keep}) {
 		t.Fatalf("empty mutation closure=%+v want stale obligation filtered", descriptors)
 	}

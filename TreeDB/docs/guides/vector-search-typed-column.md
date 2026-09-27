@@ -45,6 +45,29 @@ reported as an error. See the [admission and ownership contract](../spec/typed-c
 
 ## Explicit mutable serving lifecycle
 
+### Immutable owner-local source V2 projections
+
+The separate source V2 path imports completed immutable shard snapshots with
+`ImportVectorPartitionSourceChunkV2`. Trusted native preparation derives source
+and ANN owner commitments for the catalog BUILD record; local completion hashes
+alone do not authorize a generation. `BuildAndStageVectorPartitionProjectionV2`
+builds one domain at a time and atomically stages the locally retained source
+and ANN directory roots. `OpenVectorPartitionPagedSourceSessionV2` verifies the
+complete local owner stream once per pinned session; `OpenDomainV2` and
+`SearchLocalV2` then retain only the selected domain and its provenance.
+
+Source ownership and ANN placement may differ. Required nonlocal source data
+must be available before graph work; this path does not fetch remote shards.
+Distributed V2 activation/search and schema7 destructive generation retirement
+remain refused. Normal failed builds clean their private output; crash orphans
+use explicit existing maintenance GC after reopen. See the
+[source and paged projection format](../spec/storage-format.md#draft-bounded-source-snapshot-v2-primitives),
+[catalog admission contract](../spec/vector-partition-raft-v1.md), and
+[verification matrix](../spec/verification.md) for current correctness and
+performance boundaries.
+
+### Mutable collection graph lifecycle
+
 Open native collection-root callers through the public TreeDB wrapper. Use
 `treedb.OptionsFor(treedb.ProfileCommandWALDurable, rootDir)` and
 `treedb.OpenBackendWithCachedLeafLogStatsAndDeferredVectorBuildMaintenance`, as

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 )
 
 // VectorPartitionLifecycleCommitterV1 is the narrow meta-Raft submission
@@ -21,6 +22,12 @@ type VectorPartitionLifecycleCommitterV1 interface {
 type VectorPartitionLifecycleCoordinatorV1 struct {
 	Authority *CatalogMetaAuthorityV1
 	Committer VectorPartitionLifecycleCommitterV1
+
+	// PrepareSourceV2 is a trusted local owner-preparation function. Production
+	// derives these aggregates from completed imports, never caller receipts.
+	PrepareSourceV2 func(context.Context, VectorPartitionLifecycleIdentityV1) ([]VectorPartitionSourceOwnerPreparationV2, error)
+	// PrepareANNV2 derives the complete intended placement stream through the trusted planner boundary.
+	PrepareANNV2 func(context.Context, VectorPartitionLifecycleIdentityV1) ([]VectorPartitionANNOwnerPreparationV2, error)
 }
 
 func (c VectorPartitionLifecycleCoordinatorV1) validateConfiguredV1() error {
@@ -44,6 +51,71 @@ func (c VectorPartitionLifecycleCoordinatorV1) Submit(ctx context.Context, comma
 	}
 	if err := ctx.Err(); err != nil {
 		return VectorPartitionLifecycleRecordV1{}, err
+	}
+	if command.Kind == VectorPartitionLifecycleBeginBuildV1 && command.Identity.SourceFormat == 2 {
+		if c.PrepareSourceV2 == nil || c.PrepareANNV2 == nil {
+			return VectorPartitionLifecycleRecordV1{}, ErrVectorPartitionLifecycleGuard
+		}
+		owners, err := c.PrepareSourceV2(ctx, command.Identity)
+		if err != nil {
+			return VectorPartitionLifecycleRecordV1{}, err
+		}
+		owners, err = canonicalSourceOwnerPreparationsV2(owners)
+		if err != nil {
+			return VectorPartitionLifecycleRecordV1{}, err
+		}
+		root, err := VectorPartitionSourceOwnerSetDigestV2(owners)
+		if err != nil {
+			return VectorPartitionLifecycleRecordV1{}, err
+		}
+		if command.Identity.SourceV2.SnapshotSetDigest != "" && command.Identity.SourceV2.SnapshotSetDigest != root {
+			return VectorPartitionLifecycleRecordV1{}, ErrVectorPartitionLifecycleConflict
+		}
+		// Caller copies may name the semantic set, but cannot certify preparation.
+		// Fresh local evidence above is authoritative and may differ by replica.
+		if len(command.SourceOwners) != 0 {
+			suppliedRoot, err := VectorPartitionSourceOwnerSetDigestV2(command.SourceOwners)
+			if err != nil || suppliedRoot != root {
+				return VectorPartitionLifecycleRecordV1{}, ErrVectorPartitionLifecycleConflict
+			}
+		}
+		command.Identity.SourceV2.SnapshotSetDigest = root
+		command.SourceOwners = owners
+		annOwners, err := c.PrepareANNV2(ctx, command.Identity)
+		if err != nil {
+			return VectorPartitionLifecycleRecordV1{}, err
+		}
+		placement, err := VectorPartitionANNOwnerSetDigestV2(annOwners)
+		if err != nil {
+			return VectorPartitionLifecycleRecordV1{}, err
+		}
+		if command.Identity.SourceV2.PlacementDigest != "" && command.Identity.SourceV2.PlacementDigest != placement {
+			return VectorPartitionLifecycleRecordV1{}, ErrVectorPartitionLifecycleConflict
+		}
+		if len(command.ANNOwners) != 0 {
+			supplied, err := VectorPartitionANNOwnerSetDigestV2(command.ANNOwners)
+			if err != nil || supplied != placement {
+				return VectorPartitionLifecycleRecordV1{}, ErrVectorPartitionLifecycleConflict
+			}
+		}
+		command.Identity.SourceV2.PlacementDigest = placement
+		command.ANNOwners = annOwners
+		command, err = canonicalVectorPartitionLifecycleCommandV1(command)
+		if err != nil {
+			return VectorPartitionLifecycleRecordV1{}, err
+		}
+		// Exact semantic retries retain the original local preparation evidence.
+		// Repreparing on another replica must not create a different generation.
+		if record, ok := c.Authority.VectorPartitionLifecycleRecordV1(command.Identity); ok && record.State != VectorPartitionLifecycleAbsentV1 {
+			required, err := canonicalVectorPartitionLifecycleGroupsV1(command.RequiredGroups)
+			if err != nil {
+				return VectorPartitionLifecycleRecordV1{}, err
+			}
+			if record.PreviousActiveGeneration != command.PreviousActiveGeneration || record.MutationEpoch != command.MutationEpoch || !reflect.DeepEqual(record.RequiredGroups, required) {
+				return VectorPartitionLifecycleRecordV1{}, ErrVectorPartitionLifecycleConflict
+			}
+			return record, nil
+		}
 	}
 	raw, err := EncodeVectorPartitionLifecycleCommandV1(command)
 	if err != nil {

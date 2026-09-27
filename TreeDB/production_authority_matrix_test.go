@@ -859,7 +859,11 @@ func validateProductionAuthorityCapture(witness productionAuthorityWitness, reso
 		return fmt.Errorf("%w: real %q producer returned no builder-owned closure", rootpublication.ErrUnresolvedResource, witness.field)
 	}
 	covered := false
-	for _, descriptor := range resources.Descriptors() {
+	descriptors, err := resources.Descriptors()
+	if err != nil {
+		return err
+	}
+	for _, descriptor := range descriptors {
 		if descriptor.Identity() == (rootpublication.StableIdentity{}) {
 			return fmt.Errorf("%w: %q descriptor has no physical identity", rootpublication.ErrUnresolvedResource, witness.field)
 		}
@@ -998,7 +1002,7 @@ func productionAuthorityWitnessFields(witnesses []productionAuthorityWitness) []
 
 func productionAuthorityCoveredFields(resources *rootpublication.StableResourceSet) []rootpublication.ReachabilityField {
 	seen := make(map[rootpublication.ReachabilityField]struct{})
-	for _, descriptor := range resources.Descriptors() {
+	for _, descriptor := range resources.PhysicalDescriptors() {
 		for _, field := range descriptor.ReachabilityFields() {
 			seen[field] = struct{}{}
 		}
@@ -1218,7 +1222,7 @@ func TestProductionAuthorityNamespaceAsymmetryVariants(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer candidate.Release()
-	descriptors := candidate.Descriptors()
+	descriptors := mustStableResourceDescriptors(t, candidate)
 	tokens := candidate.Tokens()
 	if len(descriptors) != len(tokens) || len(descriptors) == 0 {
 		t.Fatalf("full closure descriptors=%d tokens=%d", len(descriptors), len(tokens))
@@ -1562,7 +1566,7 @@ func TestProductionAuthorityRepeatedCapturePostShutdownPlateau(t *testing.T) {
 						t.Fatal(err)
 					}
 					resources = captured
-					descriptors := captured.Descriptors()
+					descriptors := mustStableResourceDescriptors(t, captured)
 					obligations := 0
 					for _, descriptor := range descriptors {
 						obligations += len(descriptor.LogicalObligations())
@@ -1627,7 +1631,7 @@ func assertProductionAuthorityReleaseToZero(t testing.TB, resources *rootpublica
 	if resources == nil {
 		t.Fatal("nil production resources")
 	}
-	descriptors := resources.Descriptors()
+	descriptors := mustStableResourceDescriptors(t, resources)
 	guard := resources.DeletionGuard()
 	before := resources.Stats(time.Now())
 	if len(descriptors) == 0 || len(before) == 0 {
@@ -1676,7 +1680,7 @@ func TestProductionAuthorityObservationsByKindAndAggregate(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			for _, descriptor := range resources.Descriptors() {
+			for _, descriptor := range mustStableResourceDescriptors(t, resources) {
 				row := byKind[descriptor.Kind()]
 				if row == nil {
 					row = &observation{}
@@ -1828,7 +1832,7 @@ func benchmarkProductionAuthorityConstruction(
 		}
 		descriptors = resources.Len()
 		obligations = 0
-		for _, descriptor := range resources.Descriptors() {
+		for _, descriptor := range mustStableResourceDescriptors(b, resources) {
 			obligations += len(descriptor.LogicalObligations())
 		}
 		producerFields = fields
@@ -1872,7 +1876,7 @@ func BenchmarkProductionAuthorityPreparedClosureCoalescing(b *testing.B) {
 
 func benchmarkProductionAuthorityPreparedClosure(b *testing.B, resources *rootpublication.StableResourceSet) {
 	obligations := 0
-	for _, descriptor := range resources.Descriptors() {
+	for _, descriptor := range mustStableResourceDescriptors(b, resources) {
 		obligations += len(descriptor.LogicalObligations())
 	}
 	b.ReportMetric(float64(resources.Len()), "descriptors")

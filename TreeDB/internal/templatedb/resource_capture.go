@@ -200,9 +200,9 @@ func validateCapturedTemplatePhysicalClosure(resources *rootpublication.StableRe
 		return fmt.Errorf("%w: template capture returned no physical closure", rootpublication.ErrUnresolvedResource)
 	}
 	var index, valueLog bool
-	for _, descriptor := range resources.Descriptors() {
-		if descriptor.Kind() != rootpublication.ResourceTemplate {
-			return fmt.Errorf("%w: template closure contains kind %q", rootpublication.ErrResourceConflict, descriptor.Kind())
+	for _, descriptor := range resources.PhysicalDescriptors() {
+		if descriptor.Kind != rootpublication.ResourceTemplate {
+			return fmt.Errorf("%w: template closure contains kind %q", rootpublication.ErrResourceConflict, descriptor.Kind)
 		}
 		switch descriptor.Digest() {
 		case templateIndexPhysicalDigest:

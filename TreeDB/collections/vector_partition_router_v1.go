@@ -217,6 +217,9 @@ func (c *Collection) BuildAndPublishVectorPartitionRouterForOfflineAssetVariantV
 }
 
 func (c *Collection) buildAndPublishVectorPartitionRouterForGraphVariantV1(ctx context.Context, building VectorPartitionManifestV1, partitions []internalrouter.RouterPartitionV1, opts VectorPartitionRouterBuildOptionsV1, expectedGraphVariant VectorPartitionLocalGraphVariantV1) (status VectorPartitionRouterBuildStatusV1, resultErr error) {
+	if err := building.requireInlineRuntimeV1(); err != nil {
+		return status, err
+	}
 	started := time.Now()
 	status.Generation = building.Generation
 	fail := func(err error) (VectorPartitionRouterBuildStatusV1, error) {
@@ -1077,6 +1080,9 @@ func (c *Collection) openVectorPartitionRouterWithContextV1(
 		}
 		manifest, err := load(ctx, store)
 		if err != nil {
+			return err
+		}
+		if err := manifest.requireInlineRuntimeV1(); err != nil {
 			return err
 		}
 		if manifest.State != "ready" ||

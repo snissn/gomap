@@ -653,21 +653,19 @@ func (c *Collection) pinRecoverableColumnAssetSegments(ctx context.Context, root
 		if rootName == "" {
 			rootName = collectionColumnManifestRootName(catalog.meta.Name)
 		}
-		if opts.MaxManifestRecords > 0 || opts.MaxManifestBytes > 0 {
+		if cfg.ActiveManifest.Format != columnSourceDirectoryFormatV2 && (opts.MaxManifestRecords > 0 || opts.MaxManifestBytes > 0) {
 			if err := validateColumnManifestScanBudget(ctx, snapshot, catalog.rootID(rootName), opts.MaxManifestRecords, opts.MaxManifestBytes); err != nil {
 				_ = snapshot.Close()
 				return err
 			}
 		}
-		view, viewErr := c.prepareColumnPhysicalScanSnapshotViewAtSnapshotWithSidecars(
-			snapshot,
-			catalog,
-			catalog.meta.Name,
-			catalog.rootID(rootName),
-			cfg,
-			true,
-			columnManifestScanAllSidecars(),
-		)
+		var view columnPhysicalScanSnapshotView
+		var viewErr error
+		if cfg.ActiveManifest.Format == columnSourceDirectoryFormatV2 {
+			view, viewErr = c.prepareColumnSourceDirectoryReachabilityAtSnapshotV2(ctx, snapshot, catalog, catalog.rootID(rootName), cfg, opts.MaxManifestRecords, opts.MaxManifestBytes)
+		} else {
+			view, viewErr = c.prepareColumnPhysicalScanSnapshotViewAtSnapshotWithSidecars(snapshot, catalog, catalog.meta.Name, catalog.rootID(rootName), cfg, true, columnManifestScanAllSidecars())
+		}
 		closeErr := snapshot.Close()
 		if viewErr != nil {
 			return fmt.Errorf("collections: capture recoverable column assets at commit_seq=%d: %w", root.CommitSeq, viewErr)

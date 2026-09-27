@@ -233,13 +233,41 @@ func (c *Coordinator) enqueueLocked(candidate *PreparedRootCandidate, supersede 
 	}
 	if candidateSet := candidate.resourceSet(); candidateSet != nil {
 		sets := make([]*StableResourceSet, 0, len(c.pending)+1)
+		var unionCount int
+		var err error
+		var previous *DurableRootTransaction
+		durable := len(candidate.durableRootGroup().members) != 0
 		for _, entry := range c.pending {
+			if durable {
+				previous, err = validatePhysicalDurabilityMember(previous, entry.candidate)
+				if err != nil {
+					break
+				}
+			}
 			if set := entry.candidate.resourceSet(); set != nil {
 				sets = append(sets, set)
 			}
 		}
 		sets = append(sets, candidateSet)
-		unionCount, err := validatedStableResourceUnionCount(sets...)
+		if err == nil && durable {
+			_, err = validatePhysicalDurabilityMember(previous, candidate)
+		}
+		if err == nil {
+			if durable && len(c.pending) == 0 {
+				// Preflight admitted this single owned transaction. A frozen set
+				// already reconciles its own physical identities, so counting it
+				// requires no borrowed publication view or pin accounting.
+				if owner := candidateSet.Owner(); owner == ResourceOwnerReleased || owner == ResourceOwnerTransferred {
+					err = ErrResourceOwnership
+				} else {
+					unionCount = candidateSet.Len()
+				}
+			} else if durable {
+				unionCount, err = physicalDurabilityCount(sets)
+			} else {
+				unionCount, err = validatedStableResourceUnionCount(sets...)
+			}
+		}
 		if err != nil {
 			c.rejectedCandidates++
 			if resourceSetConflict(err) {
@@ -322,11 +350,8 @@ func (c *Coordinator) CaptureReachability() (ReachabilitySnapshot, error) {
 	sets = append(sets, c.recoverySets...)
 	var resources *StableResourceSet
 	if len(sets) != 0 {
-		view, err := UnionStableResourceSets(sets...)
-		if err != nil {
-			return ReachabilitySnapshot{}, err
-		}
-		resources, err = CloneStableResourceSetExcludingKinds(view)
+		var err error
+		resources, err = ClonePhysicalReachabilityUnion(sets...)
 		if err != nil {
 			return ReachabilitySnapshot{}, err
 		}
@@ -1111,7 +1136,7 @@ func (c *Coordinator) resourceStatsLocked() []ResourceKindStats {
 			sets = append(sets, set)
 		}
 	}
-	union, err := UnionStableResourceSets(sets...)
+	union, err := unionStableResourceSets(stableResourceViewPhysicalPinned, sets...)
 	if err != nil {
 		return nil
 	}

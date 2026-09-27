@@ -830,7 +830,7 @@ func columnHNSWSearchPackNextCandidateSeed(start int, rowCount int, visitMarks [
 }
 
 func columnHNSWSearchPackStopsAtEmptyFrontier(version uint16) bool {
-	return version == columnHNSWSearchPackVersionV5 || version == columnHNSWSearchPackVersionV6
+	return version == columnHNSWSearchPackVersionV5 || version == columnHNSWSearchPackVersionV6 || version == columnHNSWSearchPackVersionV7
 }
 
 func columnHNSWSearchPackNextCandidateSeedWithContext(ctx context.Context, start int, rowCount int, visitMarks []uint16, visitEpoch uint16) (int, bool, error) {

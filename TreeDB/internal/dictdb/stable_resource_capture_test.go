@@ -325,15 +325,15 @@ func TestCaptureDictionaryResourcesUnionMultiplePointerIDsIsDeterministic(t *tes
 	if got := reverse.Len(); got != 2 {
 		t.Fatalf("reverse union physical resources=%d want one index and one shared value-log segment", got)
 	}
-	if !reflect.DeepEqual(forward.Descriptors(), reverse.Descriptors()) {
-		t.Fatalf("dictionary union descriptors depend on merge order:\nforward=%+v\nreverse=%+v", forward.Descriptors(), reverse.Descriptors())
+	if !reflect.DeepEqual(mustStableResourceDescriptors(t, forward), mustStableResourceDescriptors(t, reverse)) {
+		t.Fatalf("dictionary union descriptors depend on merge order:\nforward=%+v\nreverse=%+v", mustStableResourceDescriptors(t, forward), mustStableResourceDescriptors(t, reverse))
 	}
 
 	want := map[uint64][32]byte{
 		firstID:  sha256.Sum256(firstPayload),
 		secondID: sha256.Sum256(secondPayload),
 	}
-	for _, descriptor := range forward.Descriptors() {
+	for _, descriptor := range mustStableResourceDescriptors(t, forward) {
 		obligations := descriptor.LogicalObligations()
 		if len(obligations) != len(want) {
 			t.Fatalf("descriptor generation %d obligations=%d want %d", descriptor.Generation(), len(obligations), len(want))

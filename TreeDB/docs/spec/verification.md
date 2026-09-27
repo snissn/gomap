@@ -2129,29 +2129,100 @@ contract.
 
 # Vector partition owner-scoped search-plan verification
 
-The #4808 intermediate owner-plan path has separate metadata-retention and
-public-open checks. `TestVectorPartitionOwnerSearchOpenPlanDoesNotRetainRemoteMembershipsV2`
-requires one local membership despite remote memberships and verifies owned
-input lifetime. `TestVectorPartitionOwnerSearchOpenPlanPreservesColocatedDomainV2`
-covers complete domain chunks, home-wins normalization and split-owner refusal.
-`TestVectorPartitionOwnerSearchOpenPlanRefusesInvalidOwnerSelectionV2` covers
-unknown owners, invalid placement and cancellation.
+The schema-7 path uses a bounded root and immutable owner/domain directory
+pages. `TestVectorPartitionDirectoryPageV2OwnerSelectionAndRefusals` checks
+owner selection and missing, corrupt, misbound or incorrectly ordered pages;
+`TestVectorPartitionDirectoryPageV2StreamingWriterTails` covers bounded writer
+tails. The `TestVectorPartitionPagedRoot*V2` cases cover the 64 KiB root codec,
+mixed inline/paged refusal, identity/digest bindings, copied root lifetime,
+legacy runtime/reclaim refusal and count-independent root decode allocation.
 
-`TestOwnerGenerationSourceOpensOnlyBoundLocalDomainV2` reaches real collection
-assets through the public generation source and checks cold/warm authority and
-remote refusal. `TestOwnerGenerationSourceRejectsDifferentStoredRootV2` and
-`TestOwnerGenerationSourcePreservesColdSourceVerificationV2` cover root/source
-drift without a live-recovery exemption.
+`TestVectorPartitionPagedSourceSessionV2VerifiesCompletedOwner` exercises
+completed durable source imports, owner-bound source verification, source-only
+Stage, reopen and session lifetime. Its current-chunk and concurrent-traversal
+subtests check verified chunk reuse and replacement, complete identity matching,
+cancellation, independently owned returned rows and traversal-local state under
+the race detector. `TestANNOwnerCommitmentV2BindsExactCanonicalIntent`
+checks the semantic domain/member commitment independently of physical page
+layout. `TestVectorPartitionPagedGraphV2BuildStageReopen` exercises the combined
+source/ANN producer, exact retry, one colocated graph per domain, reopened local
+search and source provenance. `TestPrepareVectorPartitionSourcesV2UsesCompletedDurableOwnerImports`
+reaches these producers from the applied Raft BUILD identity and actual local
+hosting. Unsupported stable lifecycle namespace platforms must refuse before
+creating the store or retaining producer pins.
 
-`TestVectorPartitionOwnerSearchOpenPlanAllocationGrowthV2` and
-`BenchmarkVectorPartitionOwnerSearchOpenPlanV2` measure constructor allocations
-with fixed local data and increasing remote membership input. They exclude V1
-manifest acquisition/decoding and source opening, so they do not prove bounded
-public generation loading. Full #4808 acceptance still requires remote-page-read
-refusal and allocation-growth evidence through public load/open, shard-local
-source verification, resumable import/build, recovery and reachability coverage.
-The scoped `owner-local-metadata-qualification.yml` workflow records exact-head
-Go version, focused/race checks and constructor benchmark evidence.
+The source-only producer refuses nodes that also require local ANN output.
+The combined producer consumes source and ANN input once, verifies complete
+owner commitments, builds one bounded domain through the existing Vamana core,
+and stages the complete local closure. Local domain readers retain an
+independent generation pin after their parent source session closes. These
+checks do not admit distributed activation/search; those schema-7 paths remain
+refused pending the P3 contract. Destructive schema-7 generation retirement
+also remains refused before tombstone or lifecycle mutation.
+
+The older `TestVectorPartitionOwnerSearchOpenPlan*V2` and
+`TestOwnerGenerationSource*V2` cases retain intermediate owner-plan and legacy
+public-open coverage. Their constructor allocation benchmark excludes V1
+manifest acquisition/decoding and cannot establish bounded paged public open.
+Full #4808 acceptance requires complete public build/open growth and resource
+measurements, partial-build failure cleanup, snapshot/GC protection and
+current-head platform/race checks. The producer uses separate private segments
+for temporary intent and final output, with exact-identity cleanup for ordinary
+failures. It requires an active recovery-authoritative source directory before
+writing pages, so existing explicit column-asset GC can reclaim crash orphans.
+Repeated crashes without that maintenance can still accumulate disk usage.
+
+The `TestVectorPartitionPagedPrivateSegmentV2*` cases exercise process-crash
+orphan GC, rebound-child refusal, retained parent-sync debt, constructor failure
+recovery, changed frontiers and colliding write-lock stripes during shutdown.
+The combined graph case checks selected snapshot closure and active-reader GC
+protection, including corrupt transitive graph sections. Focused cleanup,
+race, native preparation and storage-name checks passed on the retained
+cleanup6 checkpoint. The legacy ConditionalTxn guard passed eight alternating
+matched pairs after optional resource metadata became lazy: 152662.5 to 152662
+bytes/op, with 281 allocations/op unchanged. Enabled DPM2 imports retain a
+measured incremental 218 allocations for continuous imports and 310 after
+reopen at the small32 boundary; these costs are separate from the passing
+canonical-directory growth bound and remain subject to allocation review.
+
+The call-local chunk repair at `f7edce49b` passed focused and race checks plus
+three independent matched processes for each of five public build/open cases.
+The 1024-row build median fell from 239.09 to 50.64 ms and 193.08 to 42.67 MB;
+cold open with 256 local rows fell from 27.69 to 2.61 ms and 23.80 to 2.88 MB.
+All five measured cases improved. `BenchmarkVectorPartitionPagedProjectionV2`
+also separates fixture setup, global-map admission, build/Stage, cold open,
+reused-session domain open and warmed local search. Remote fixture entries
+represent admitted semantic metadata, not distributed storage preparation.
+The complete matched matrix uses 32/256/1024 local rows, 0/1024/8192 remote
+metadata entries and three independent alternating processes per arm/case.
+All 216 build/open/search processes and 18 separate map-admission processes
+pass. All 36 stage time medians and all 27 build/open allocation medians
+improve; warmed local search remains 160 bytes and two allocations per call
+in every cell. Global map admission still grows with remote metadata; its
+8192-entry candidate median is 2.68 ms, 4.28 MB and 81788 allocations.
+Fixture setup metrics exclude retained session/domain preparation in warm
+cases; whole-process RSS and heap observations include it.
+
+Process RSS improves in 34 of 36 cells, but warmed search with 32 local rows
+and 1024 remote entries consistently rises from a 50344 KiB median to 62392
+KiB (+24%). This real process-peak increase remains in the original matrix.
+Three paired phase diagnostics locate the excess during the second fixture's
+import, before its changed build/open paths: live heap and heap-in-use are
+essentially equal, while anonymous resident memory differs. File-backed
+residency is similar, and queries add approximately 127 KiB in both arms.
+The candidate has lower RSS in all three single-fixture runs. These observations
+support sensitivity to preceding fixture allocation/GC history; they do not
+isolate the complete page-residency mechanism or establish a long-running RSS
+plateau. No forced GC or fixture-lifetime adjustment replaces the original
+measurement.
+
+Component performance review accepts the build/open gains with this measured
+RSS limitation; it makes no universal resident-memory improvement claim. The
+unchanged-production phase packet retains 74 authenticated receipts and 18
+successful exits at `growth-rss2` under the P2 evidence root, with manifest
+`4317f88aef8cd4d8f63f19a7c4c669cb05fde701350c8480861e035dc189ef0b`.
+Current-head platform checks and mature review remain required. These
+small-fixture results do not establish P2 readiness or distributed capacity.
 
 `TestSourceShardMapDocumentTokenIdentityV2` pins exact-byte token vectors;
 `TestSourceShardMapBoundImmutableLookupV2` and
@@ -2162,13 +2233,10 @@ semantics and caller input lifetime. `BenchmarkSourceShardMapResolveDocumentIDV2
 measures the enabled token/lookup cost; map validation does not grant catalog
 authority or persist import progress.
 
-The draft `TestVectorPartitionPagedRoot*V2` cases cover the 64 KiB root codec,
-mixed inline/paged refusal, root/directory/source/placement digest bindings,
-copied root lifetime, legacy runtime/reclaim refusal and count-independent
-root decode allocation. `TestVectorPartitionLegacyByteCompatibilityProbeV2`
-uses only schema-6 APIs and the same fixture on the candidate and exact D0
-base; the hosted workflow compares binary, JSON, integrity and ready digests.
-These are format guards, not paged public-open or full P2 readiness evidence.
+`TestVectorPartitionLegacyByteCompatibilityProbeV2` uses only schema-6 APIs
+and the same fixture on the candidate and exact D0 base; the scoped owner-local
+workflow compares binary, JSON, integrity and ready digests. The workflow also
+records exact-head Go version, focused/race checks and constructor benchmarks.
 
 # Vector partition V1 correctness and approximation verification
 
@@ -2609,7 +2677,7 @@ truthful typed-exact route.
 This fixture lives with the final metadata child, not in a separate harness PR.
 
 
-Draft source-snapshot V2 checks in `internal/vectorpartition/source_snapshot*_v2_test.go` compare the bounded streaming Merkle accumulator with a separate small-fixture tree, exercise checkpoint resume at every chunk, reject changed identities, missing/reordered/duplicate rows, corrupt/truncated codec bytes and excessive row/ID lengths, preserve original-source ordinal provenance, and decode a bounded local chunk when the declared global source row count reaches uint64 maximum. The scoped owner-local workflow runs these tests repeatedly and under race instrumentation, and records chunk verification/decode allocations. These are codec checks only. The ordinary paged load, canonical source authority, atomic durable import, bounded build, reachability and node-local memory evidence required by #4808 remain open.
+Draft source-snapshot V2 checks in `internal/vectorpartition/source_snapshot*_v2_test.go` compare the bounded streaming Merkle accumulator with a separate small-fixture tree, exercise checkpoint resume at every chunk, reject changed identities, missing/reordered/duplicate rows, corrupt/truncated codec bytes and excessive row/ID lengths, preserve original-source ordinal provenance, and decode a bounded local chunk when the declared global source row count reaches uint64 maximum. The scoped owner-local workflow runs these tests repeatedly and under race instrumentation, and records chunk verification/decode allocations. These checks establish the source codec, not whole-path boundedness. Public import and paged producer coverage is mapped separately; whole-path memory, failure cleanup and performance acceptance remain required by #4808.
 ## Sparse catalog runtime
 
 | Invariant | Test / harness |
@@ -2632,8 +2700,40 @@ failure-domain, or horizontal-scaling qualification in #4805/#4250/#3983.
 Source-map V2 pure token/coverage/codec checks live in `internal/sourcepartition`; `raftplacement` separately checks every referenced group against its resolved catalog. `TestSourceShardMapCanonicalCodecAndPriorDigestV2` freezes the pre-extraction V2 digest and refuses unknown, duplicate, changed or noncanonical encoded content. Collection-side validation of a map is not publication or source-root authority.
 
 
-Draft `TestVectorPartitionSourceImportAtomicResumeAndReplayV2` exercises public typed source import, exact and changed retry, source ordinal order across sorted typed WAL payloads, checkpoint/reopen and source-root equality. `TestVectorPartitionSourceImportRejectsGapDuplicateAndWrongOwnerV2` covers nonowner/group refusal and durable cross-range exact-ID uniqueness. `TestVectorPartitionSourceImportPublicationBoundaryV2` injects before/after-publication failure to require rows/progress/receipt atomicity and unambiguous exact retry. `TestCollectionSourceImportPayloadV2` covers bounded payload sections, truncation, frame registry and allocation-free envelope validation. These candidate tests still require exact-head hosted success. Immutable chunk retention, canonical admission and owner-only public paged load/build remain open.
+Draft `TestVectorPartitionSourceImportAtomicResumeAndReplayV2` exercises public typed source import, exact and changed retry, source ordinal order across sorted typed WAL payloads, checkpoint/reopen and source-root equality. `TestVectorPartitionSourceImportRejectsGapDuplicateAndWrongOwnerV2` covers nonowner/group refusal and durable cross-range exact-ID uniqueness. `TestVectorPartitionSourceImportPublicationBoundaryV2` injects before/after-publication failure to require rows/progress/receipt atomicity and unambiguous exact retry. `TestCollectionSourceImportPayloadV2` covers bounded payload sections, truncation, frame registry and allocation-free envelope validation. The immutable source seal and paged source session consume this durable progress. Full acceptance still requires current-head hosted success and measured public owner-only build/open bounds.
 
+
+Draft incremental source-directory coverage adds `TestVectorPartitionSourceImportUsesIncrementalDirectoryV2` (actual public-path semantic red before implementation), `TestVectorPartitionSourceImportRetainsAuthenticatedBytesAfterCheckpointV2`, `TestVectorPartitionSourceImportBoundsBeforeWALV2`, `TestVectorPartitionSourceImportRefusesLegacyMutationBeforeWALV2`, and `TestCollectionSourceImportCompleteCommandBudgetV2`. Persistent proof nodes and SCL2 rows are compared with an independent complete test tree across partial/power-of-two shapes. `BenchmarkVectorPartitionSourceImportDirectoryV2` uses the same public import with 32 versus 1024 prior chunks, reports allocation and actual directory/fallback record reads, and must not be interpreted as EC2 qualification. Directory reads alone do not establish whole-call resource bounds; public owner-load/build, source/graph lifetime and failure cleanup have separate gates.
+
+
+`TestVectorPartitionSourceImportRetainedSealAndGCV2` exercises a completed source reader held across another source revision, checkpoint, immutable seal reopen and destructive asset GC. The V2 lifecycle reader verifies the retained source directory before asset reclamation; platforms without stable relative namespaces refuse destructive GC while retaining reader/reopen coverage. `BenchmarkVectorPartitionSourceImportDirectoryV2` now reports source leaf bytes/rows, directory and fallback reads, selected DPM stream bytes/items, encoded dependency bytes and whole-call allocations. Existing logarithmic COW work and full retained dependency serialization must be analyzed separately; no constant whole-call or distributed readiness claim follows from constant directory reads.
+
+
+The opt-in `dependency_directory_v2` required format feature activates a third
+COW B-tree for physical descriptors and globally keyed logical obligations on
+new stores. `TestDependencyDirectoryV2RequiredFeature*` covers populated-V1 and
+dirty-WAL refusal, feature removal refusal, and read-write/read-only/no-lock
+reopen. `TestDependencyDirectoryV2UnknownRequiredFeaturePrecedesStorageDecode`
+requires unsupported-feature refusal before malformed root or WAL decoding,
+including `IgnoreFormatConfig`. Selected-root page bounds and ordinary page
+checksums protect directory traversal; the directory is not a Merkle commitment.
+
+`TestVectorPartitionSourceImportDependencyEncodingDoesNotScaleWithHistoryV2`
+requires persisted DPM2 and nonzero changed-record-byte and COW-page counters
+across public import plus checkpoint at 32 and 1024 prior chunks, including
+reopen and coalesced imports. Changed-record bytes include changed keys/values
+and deletion keys, not all descriptor comparison or binding work. No-op
+publication leaves mutation/page counters unchanged. Allocation, CPU and
+retained-memory comparisons remain separate performance gates.
+
+`TestDependencyDirectoryV2SealRecoveryBothSlotsAndCorruptFallback`,
+`TestDependencyDirectoryV2OldReaderSlotsAndSharedSubtreeReclamation` and
+`TestDependencyDirectoryV2RebuildPreservesBothSlots` cover streaming recovery,
+both fallback slots, retained readers and shared-page reachability.
+`TestRebindDurableRootSnapshotV1PreservesBothSlotsAndExactTargetIdentity` covers
+V1 and DPM2 staged snapshot rebinding: only fixed-width physical identity values
+change in the validated private copy; logical keys, page layout, both slots and
+lineage remain intact and affected page checksums are recomputed.
 
 ## Authenticated fixed-peer transport and operations (#4813)
 

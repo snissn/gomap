@@ -614,7 +614,7 @@ func TestCaptureStableExternalRIDFenceRequiresEveryManagerChild(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	descriptors := resources.Descriptors()
+	descriptors := mustStableResourceDescriptors(t, resources)
 	if len(descriptors) != len(children) {
 		t.Fatalf("external-RID descriptors=%d want %d", len(descriptors), len(children))
 	}
@@ -789,8 +789,8 @@ func BenchmarkStableValueLogExternalRIDFenceClosure(b *testing.B) {
 		if err != nil {
 			b.Fatal(err)
 		}
-		descriptors += uint64(len(resources.Descriptors()))
-		for _, descriptor := range resources.Descriptors() {
+		descriptors += uint64(len(mustStableResourceDescriptors(b, resources)))
+		for _, descriptor := range mustStableResourceDescriptors(b, resources) {
 			obligations += uint64(len(descriptor.LogicalObligations()))
 		}
 		for _, stats := range resources.Stats(time.Now()) {

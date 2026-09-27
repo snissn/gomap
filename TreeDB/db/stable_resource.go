@@ -104,39 +104,7 @@ func ValidateStableDictionaryResourceClosure(resources *rootpublication.StableRe
 	if resources == nil || dictID == 0 || len(dictionary) == 0 {
 		return fmt.Errorf("%w: incomplete dictionary resource closure", rootpublication.ErrUnresolvedResource)
 	}
-	digest := sha256.Sum256(dictionary)
-	expectedLength := int64(len(dictionary))
-	foundDictionaryResource := false
-	for _, descriptor := range resources.Descriptors() {
-		isDictionaryResource := false
-		for _, field := range descriptor.ReachabilityFields() {
-			if field == rootpublication.ReachabilityDictionaryGeneration {
-				isDictionaryResource = true
-				foundDictionaryResource = true
-				break
-			}
-		}
-		if !isDictionaryResource {
-			continue
-		}
-		matched := false
-		for _, obligation := range descriptor.LogicalObligations() {
-			if obligation.Generation == dictID && obligation.FileID == dictID &&
-				obligation.Offset == 0 && obligation.Length == expectedLength &&
-				obligation.Reachability == rootpublication.ReachabilityDictionaryGeneration &&
-				obligation.Digest == digest {
-				matched = true
-				break
-			}
-		}
-		if !matched {
-			return fmt.Errorf("%w: dictionary %d bytes do not match captured resource closure", rootpublication.ErrResourceConflict, dictID)
-		}
-	}
-	if !foundDictionaryResource {
-		return fmt.Errorf("%w: dictionary %d closure has no dictionary resource", rootpublication.ErrUnresolvedResource, dictID)
-	}
-	return nil
+	return validateStableEncodedResourceClosure(resources, rootpublication.ReachabilityDictionaryGeneration, dictID, int64(len(dictionary)), sha256.Sum256(dictionary))
 }
 
 // ValidateStableTemplateResourceClosure binds the immutable definition selected
@@ -155,37 +123,45 @@ func ValidateStableTemplateResourceClosure(resources *rootpublication.StableReso
 	if !validID {
 		return fmt.Errorf("%w: template %d does not identify the selected definition", rootpublication.ErrResourceConflict, templateID)
 	}
-	digest := sha256.Sum256(definition)
-	expectedLength := int64(len(definition))
-	foundTemplateResource := false
-	for _, descriptor := range resources.Descriptors() {
-		isTemplateResource := false
-		for _, field := range descriptor.ReachabilityFields() {
-			if field == rootpublication.ReachabilityTemplateGeneration {
-				isTemplateResource = true
-				foundTemplateResource = true
+	return validateStableEncodedResourceClosure(resources, rootpublication.ReachabilityTemplateGeneration, templateID, int64(len(definition)), sha256.Sum256(definition))
+}
+
+// Every relevant physical descriptor must independently contain the selected
+// immutable bytes. Streaming avoids retaining any inherited logical corpus.
+func validateStableEncodedResourceClosure(resources *rootpublication.StableResourceSet, field rootpublication.ReachabilityField, id uint64, length int64, digest [32]byte) error {
+	type key struct {
+		kind           rootpublication.ResourceKind
+		lane, resource string
+		generation     uint64
+	}
+	keyOf := func(descriptor rootpublication.StableResourcePhysicalDescriptor) key {
+		return key{descriptor.Kind, descriptor.LogicalLane(), descriptor.ResourceID(), descriptor.Generation}
+	}
+	matched := make(map[key]bool)
+	for _, descriptor := range resources.PhysicalDescriptors() {
+		for _, reachable := range descriptor.ReachabilityFields() {
+			if reachable == field {
+				matched[keyOf(descriptor)] = false
 				break
 			}
-		}
-		if !isTemplateResource {
-			continue
-		}
-		matched := false
-		for _, obligation := range descriptor.LogicalObligations() {
-			if obligation.Generation == templateID && obligation.FileID == templateID &&
-				obligation.Offset == 0 && obligation.Length == expectedLength &&
-				obligation.Reachability == rootpublication.ReachabilityTemplateGeneration &&
-				obligation.Digest == digest {
-				matched = true
-				break
-			}
-		}
-		if !matched {
-			return fmt.Errorf("%w: template %d definition does not match captured resource closure", rootpublication.ErrResourceConflict, templateID)
 		}
 	}
-	if !foundTemplateResource {
-		return fmt.Errorf("%w: template %d closure has no template resource", rootpublication.ErrUnresolvedResource, templateID)
+	if len(matched) == 0 {
+		return fmt.Errorf("%w: %s %d closure has no resource", rootpublication.ErrUnresolvedResource, field, id)
+	}
+	if err := resources.WalkLogicalObligations(func(descriptor rootpublication.StableResourcePhysicalDescriptor, obligation rootpublication.StableLogicalObligation) error {
+		physical := keyOf(descriptor)
+		if _, relevant := matched[physical]; relevant && obligation.Generation == id && obligation.FileID == id && obligation.Offset == 0 && obligation.Length == length && obligation.Reachability == field && obligation.Digest == digest {
+			matched[physical] = true
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	for _, found := range matched {
+		if !found {
+			return fmt.Errorf("%w: %s %d bytes do not match captured resource closure", rootpublication.ErrResourceConflict, field, id)
+		}
 	}
 	return nil
 }

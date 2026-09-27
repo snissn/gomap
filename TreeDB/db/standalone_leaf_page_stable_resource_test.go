@@ -50,7 +50,7 @@ func TestStandaloneStableLeafRewriteIgnoresTemplateMagicInRawPage(t *testing.T) 
 		t.Fatal("stable raw leaf append returned nil resources")
 	}
 	defer resources.Release()
-	for _, descriptor := range resources.Descriptors() {
+	for _, descriptor := range mustStableResourceDescriptors(t, resources) {
 		for _, field := range descriptor.ReachabilityFields() {
 			if field == rootpublication.ReachabilityTemplateGeneration {
 				t.Fatal("raw leaf page acquired template authority")
@@ -111,7 +111,7 @@ func TestStandaloneStableLeafRewriteMergesTemplateClosure(t *testing.T) {
 	}
 	defer resources.Release()
 	var hasTemplate, hasOuterLeaf bool
-	for _, descriptor := range resources.Descriptors() {
+	for _, descriptor := range mustStableResourceDescriptors(t, resources) {
 		for _, field := range descriptor.ReachabilityFields() {
 			switch field {
 			case rootpublication.ReachabilityTemplateGeneration:
@@ -221,7 +221,7 @@ func TestStandaloneStableLeafRewriteBatchUnionsTemplateGenerations(t *testing.T)
 	}
 	templateDescriptors := 0
 	templateIDs := make(map[uint64]bool, len(pages))
-	for _, descriptor := range resources.Descriptors() {
+	for _, descriptor := range mustStableResourceDescriptors(t, resources) {
 		for _, field := range descriptor.ReachabilityFields() {
 			if field != rootpublication.ReachabilityTemplateGeneration {
 				continue
@@ -318,7 +318,7 @@ func TestStandaloneStableLeafRewriteIgnoresRawTemplateShapedPayload(t *testing.T
 				if got := provider.captureCalls.Load(); got != 0 {
 					t.Fatalf("raw page template capture calls=%d want 0", got)
 				}
-				for _, descriptor := range resources.Descriptors() {
+				for _, descriptor := range mustStableResourceDescriptors(t, resources) {
 					for _, field := range descriptor.ReachabilityFields() {
 						if field == rootpublication.ReachabilityTemplateGeneration {
 							t.Fatalf("raw unencoded page returned template authority: %+v", descriptor)
@@ -501,7 +501,7 @@ func TestStandaloneStableLeafRewriteMergesDictionaryAndTemplateClosure(t *testin
 	}
 	defer resources.Release()
 	fields := make(map[rootpublication.ReachabilityField]bool)
-	for _, descriptor := range resources.Descriptors() {
+	for _, descriptor := range mustStableResourceDescriptors(t, resources) {
 		for _, field := range descriptor.ReachabilityFields() {
 			fields[field] = true
 		}
@@ -574,7 +574,7 @@ func TestStandaloneStableLeafRewriteCapturesOnlyEmittedDictionaryAuthority(t *te
 				t.Fatalf("dictionary capture calls=%d want 0 for emitted dictID 0", got)
 			}
 			var hasDictionary, hasTemplate bool
-			for _, descriptor := range resources.Descriptors() {
+			for _, descriptor := range mustStableResourceDescriptors(t, resources) {
 				for _, field := range descriptor.ReachabilityFields() {
 					hasDictionary = hasDictionary || field == rootpublication.ReachabilityDictionaryGeneration
 					hasTemplate = hasTemplate || field == rootpublication.ReachabilityTemplateGeneration
@@ -628,7 +628,7 @@ func TestStandaloneStableLeafRewriteBatchCapturesOnlyEmittedDictionaryAuthority(
 		t.Fatalf("dictionary capture calls=%d want 0 for emitted dictID 0", got)
 	}
 	var hasDictionary, hasTemplate bool
-	for _, descriptor := range resources.Descriptors() {
+	for _, descriptor := range mustStableResourceDescriptors(t, resources) {
 		for _, field := range descriptor.ReachabilityFields() {
 			hasDictionary = hasDictionary || field == rootpublication.ReachabilityDictionaryGeneration
 			hasTemplate = hasTemplate || field == rootpublication.ReachabilityTemplateGeneration
@@ -691,7 +691,7 @@ func TestStandaloneStableLeafRewriteLateBindsAndMergesDictionaryClosure(t *testi
 	}
 	defer resources.Release()
 	var hasDictionary, hasOuterLeaf bool
-	for _, descriptor := range resources.Descriptors() {
+	for _, descriptor := range mustStableResourceDescriptors(t, resources) {
 		for _, field := range descriptor.ReachabilityFields() {
 			switch field {
 			case rootpublication.ReachabilityDictionaryGeneration:
@@ -799,8 +799,8 @@ func BenchmarkStandaloneLeafPageStableBatchAuthority(b *testing.B) {
 		if err != nil {
 			b.Fatal(err)
 		}
-		descriptors += uint64(len(resources.Descriptors()))
-		for _, descriptor := range resources.Descriptors() {
+		descriptors += uint64(len(mustStableResourceDescriptors(b, resources)))
+		for _, descriptor := range mustStableResourceDescriptors(b, resources) {
 			obligations += uint64(len(descriptor.LogicalObligations()))
 		}
 		for _, stats := range resources.Stats(time.Now()) {
@@ -870,7 +870,7 @@ func TestStandaloneLeafPageLogStableBatchCapturesExactRotatedSegments(t *testing
 	if len(referenced) < 2 {
 		t.Fatalf("referenced segments=%d want rotation", len(referenced))
 	}
-	descriptors := resources.Descriptors()
+	descriptors := mustStableResourceDescriptors(t, resources)
 	if len(descriptors) != len(referenced) {
 		t.Fatalf("descriptors=%d referenced=%d", len(descriptors), len(referenced))
 	}

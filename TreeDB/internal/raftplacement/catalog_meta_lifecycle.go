@@ -151,6 +151,18 @@ func (a *CatalogMetaAuthorityV1) applyCommittedVectorPartitionLifecycleV1(raw []
 		a.mutationFences = make(map[vectorPartitionLifecycleServingKeyV1]vectorPartitionLifecycleMutationFenceStateV1)
 	}
 
+	if command.Kind == VectorPartitionLifecycleBeginBuildV1 && command.Identity.SourceFormat == 2 {
+		if err := validateCatalogSourceOwnersV2(a.record.Catalog, command.SourceOwners); err != nil {
+			return CatalogMetaStatusV1{}, err
+		}
+	}
+	if command.Kind == VectorPartitionLifecycleBeginBuildV1 {
+		for existing := range a.lifecycle {
+			if (existing.SourceFormat == 2 || command.Identity.SourceFormat == 2) && existing.Index == command.Identity.Index && existing.Generation == command.Identity.Generation && existing != command.Identity {
+				return CatalogMetaStatusV1{}, ErrVectorPartitionLifecycleConflict
+			}
+		}
+	}
 	identity := command.Identity
 	servingKey := vectorPartitionLifecycleServingKeyV1{Collection: identity.Index.Collection, IndexName: identity.Index.IndexName}
 	collectionBarrier := a.collectionMutationBarriers[identity.Index.Collection]
@@ -646,6 +658,16 @@ func decodeVectorPartitionLifecycleSnapshotV1(raw []byte, catalog CatalogMetaRec
 		if identity.Index.CatalogEpoch != catalog.Epoch || identity.Index.CatalogDigest != catalog.Digest {
 			return nil, nil, nil, nil, nil, ErrVectorPartitionLifecycleIdentity
 		}
+		if identity.SourceFormat == 2 {
+			if err := validateCatalogSourceOwnersV2(catalog.Catalog, record.SourceOwners); err != nil {
+				return nil, nil, nil, nil, nil, err
+			}
+		}
+		for existing := range records {
+			if (existing.SourceFormat == 2 || identity.SourceFormat == 2) && existing.Index == identity.Index && existing.Generation == identity.Generation && existing != identity {
+				return nil, nil, nil, nil, nil, ErrVectorPartitionLifecycleConflict
+			}
+		}
 		if _, duplicate := records[identity]; duplicate {
 			return nil, nil, nil, nil, nil, ErrVectorPartitionLifecycleConflict
 		}
@@ -756,7 +778,13 @@ func vectorPartitionLifecycleIdentityLessV1(a, b VectorPartitionLifecycleIdentit
 	if a.Source.SchemaHash != b.Source.SchemaHash {
 		return a.Source.SchemaHash < b.Source.SchemaHash
 	}
-	return a.Source.RowCount < b.Source.RowCount
+	if a.Source.RowCount != b.Source.RowCount {
+		return a.Source.RowCount < b.Source.RowCount
+	}
+	if a.SourceFormat != b.SourceFormat {
+		return a.SourceFormat < b.SourceFormat
+	}
+	return vectorPartitionSourceIdentityLessV2(a.SourceV2, b.SourceV2)
 }
 
 func cloneVectorPartitionLifecycleRecordsV1(source map[VectorPartitionLifecycleIdentityV1]VectorPartitionLifecycleRecordV1) map[VectorPartitionLifecycleIdentityV1]VectorPartitionLifecycleRecordV1 {
@@ -768,6 +796,8 @@ func cloneVectorPartitionLifecycleRecordsV1(source map[VectorPartitionLifecycleI
 }
 
 func cloneVectorPartitionLifecycleRecordV1(record VectorPartitionLifecycleRecordV1) VectorPartitionLifecycleRecordV1 {
+	record.SourceOwners = slices.Clone(record.SourceOwners)
+	record.ANNOwners = slices.Clone(record.ANNOwners)
 	record.RequiredGroups = slices.Clone(record.RequiredGroups)
 	record.ReadyGroups = slices.Clone(record.ReadyGroups)
 	record.CleanedGroups = slices.Clone(record.CleanedGroups)
@@ -777,7 +807,7 @@ func cloneVectorPartitionLifecycleRecordV1(record VectorPartitionLifecycleRecord
 func equalVectorPartitionLifecycleRecordV1(a, b VectorPartitionLifecycleRecordV1) bool {
 	return a.Format == b.Format && a.Revision == b.Revision && a.State == b.State && a.Identity == b.Identity &&
 		a.PreviousActiveGeneration == b.PreviousActiveGeneration && a.MutationEpoch == b.MutationEpoch &&
-		slices.Equal(a.RequiredGroups, b.RequiredGroups) && slices.Equal(a.ReadyGroups, b.ReadyGroups) &&
+		slices.Equal(a.SourceOwners, b.SourceOwners) && slices.Equal(a.ANNOwners, b.ANNOwners) && slices.Equal(a.RequiredGroups, b.RequiredGroups) && slices.Equal(a.ReadyGroups, b.ReadyGroups) &&
 		a.ReadySetDigest == b.ReadySetDigest && a.InvalidationReason == b.InvalidationReason &&
 		a.InvalidationEpoch == b.InvalidationEpoch && a.MutationConfirmed == b.MutationConfirmed &&
 		a.Aborted == b.Aborted && a.RetirementReason == b.RetirementReason &&

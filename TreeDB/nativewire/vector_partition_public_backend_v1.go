@@ -86,6 +86,9 @@ type vectorPartitionPublicPinnedSearchV1 struct {
 }
 
 func (b *VectorPartitionPublicBackendV1) PinVectorPartitionSearchSnapshotV1(ctx context.Context, options public.PinSearchSnapshotOptionsV1) (public.SearchSnapshotBackendV1, public.FastSearchEvidenceV1, error) {
+	if b != nil && b.opts.Identity.SourceFormat == 2 {
+		return nil, public.FastSearchEvidenceV1{}, raftplacement.ErrVectorPartitionLifecycleGuard
+	}
 	if b == nil || b.opts.Topology == nil || b.opts.Topology.Status().Closed {
 		return nil, public.FastSearchEvidenceV1{}, errors.New("production topology is unavailable")
 	}
@@ -119,6 +122,9 @@ func (p *vectorPartitionPublicPinnedSearchV1) Close() error {
 }
 
 func (b *VectorPartitionPublicBackendV1) coordinatorRequestV1(request public.SearchRequestV1) (VectorPartitionCoordinatorRequestV1, error) {
+	if b != nil && b.opts.Identity.SourceFormat == 2 {
+		return VectorPartitionCoordinatorRequestV1{}, raftplacement.ErrVectorPartitionLifecycleGuard
+	}
 	if b == nil || b.opts.Topology == nil || b.opts.Topology.Status().Closed {
 		return VectorPartitionCoordinatorRequestV1{}, errors.New("production topology is unavailable")
 	}

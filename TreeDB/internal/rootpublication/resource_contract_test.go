@@ -501,7 +501,7 @@ func testCloneStableResourceSetUsesExactHandlesAndIndependentPins(t *testing.T) 
 		source.Release()
 		t.Fatal(err)
 	}
-	if got := clone.Descriptors(); len(got) != 1 || got[0].Identity() != source.Descriptors()[0].Identity() {
+	if got := mustStableResourceDescriptors(t, clone); len(got) != 1 || got[0].Identity() != mustStableResourceDescriptors(t, source)[0].Identity() {
 		clone.Release()
 		source.Release()
 		t.Fatalf("clone descriptors = %+v, want exact source identity", got)
@@ -619,7 +619,7 @@ func testCloneStableResourceSetFiltersExactLogicalObligationClosure(t *testing.T
 	if err := ValidateStableResourceSetLogicalObligations(clone, requirements); err != nil {
 		t.Fatal(err)
 	}
-	descriptors := clone.Descriptors()
+	descriptors := mustStableResourceDescriptors(t, clone)
 	if len(descriptors) != 1 || len(descriptors[0].LogicalObligations()) != 1 || descriptors[0].LogicalObligations()[0] != keep {
 		t.Fatalf("filtered descriptors=%+v want only retained obligation", descriptors)
 	}
@@ -762,7 +762,7 @@ func testAppendOnlyResourceClosureCloneWorkIsBoundedByMutation(t *testing.T) {
 		visible = next
 	}
 	defer visible.Release()
-	descriptors := visible.Descriptors()
+	descriptors := mustStableResourceDescriptors(t, visible)
 	if len(descriptors) != 1 || !slices.Equal(descriptors[0].LogicalObligations(), all) {
 		t.Fatalf("final append-only closure descriptors=%+v want %d exact obligations", descriptors, len(all))
 	}
@@ -817,11 +817,11 @@ func testLogicalObligationRemovalMutationUsesExactFilter(t *testing.T) {
 	if work.AppendOnlyFastPath != 0 || work.RemovedObligations != 1 || work.SourceObligationsInspected == 0 {
 		t.Fatalf("destructive mutation work=%+v want exact full filter", work)
 	}
-	descriptors := filtered.Descriptors()
+	descriptors := mustStableResourceDescriptors(t, filtered)
 	if len(descriptors) != 1 || !slices.Equal(descriptors[0].LogicalObligations(), []StableLogicalObligation{keep}) {
 		t.Fatalf("filtered descriptors=%+v want only retained obligation", descriptors)
 	}
-	if got := source.Descriptors(); len(got) != 2 {
+	if got := mustStableResourceDescriptors(t, source); len(got) != 2 {
 		t.Fatalf("source closure changed by destructive clone: %+v", got)
 	}
 }
@@ -939,7 +939,7 @@ func TestStableResourceSetUnionsExactRIDMembershipAndExposesCoalescedDescriptor(
 				t.Fatalf("set.Len()=%d want one physical segment", got)
 			}
 
-			descriptors := set.Descriptors()
+			descriptors := mustStableResourceDescriptors(t, set)
 			if len(descriptors) != 1 {
 				t.Fatalf("descriptor count=%d want 1", len(descriptors))
 			}
@@ -974,10 +974,10 @@ func TestStableResourceSetUnionsExactRIDMembershipAndExposesCoalescedDescriptor(
 			returned[0] = 999
 			fields := descriptor.ReachabilityFields()
 			fields[0] = ReachabilityValueLogPointer
-			if got := set.Descriptors()[0].RIDs(); !slices.Equal(got, wantRIDs) {
+			if got := mustStableResourceDescriptors(t, set)[0].RIDs(); !slices.Equal(got, wantRIDs) {
 				t.Fatalf("descriptor returned-slice mutation changed set RIDs: %v", got)
 			}
-			if got := set.Descriptors()[0].ReachabilityFields(); !slices.Equal(got, []ReachabilityField{ReachabilityCommandWALExternalRIDFence}) {
+			if got := mustStableResourceDescriptors(t, set)[0].ReachabilityFields(); !slices.Equal(got, []ReachabilityField{ReachabilityCommandWALExternalRIDFence}) {
 				t.Fatalf("descriptor returned-slice mutation changed fields: %v", got)
 			}
 			fromLookup := set.FrontierFor(first.Identity(), 1).RIDs()
@@ -1026,7 +1026,7 @@ func TestStableResourceSetRejectsConflictingLogicalObligationAtomically(t *testi
 		t.Fatal(err)
 	}
 	defer set.Release()
-	descriptor := set.Descriptors()[0]
+	descriptor := mustStableResourceDescriptors(t, set)[0]
 	if descriptor.Frontier().Bytes != 4 {
 		t.Fatalf("rejected logical obligation advanced frontier=%d want 4", descriptor.Frontier().Bytes)
 	}
@@ -1080,7 +1080,7 @@ func TestStableResourceSetLargeLogicalObligationIndexRejectsConflictAtomically(t
 		t.Fatal(err)
 	}
 	defer set.Release()
-	descriptor := set.Descriptors()[0]
+	descriptor := mustStableResourceDescriptors(t, set)[0]
 	if got := len(descriptor.LogicalObligations()); got != len(obligations) {
 		t.Fatalf("logical obligations after large rejection=%d want %d", got, len(obligations))
 	}
@@ -1133,7 +1133,7 @@ func TestStableResourceSetRejectedLogicalObligationBatchDoesNotLeakEarlierAdditi
 		t.Fatal(err)
 	}
 	defer set.Release()
-	if got := set.Descriptors()[0].LogicalObligations(); len(got) != 1 || got[0] != original {
+	if got := mustStableResourceDescriptors(t, set)[0].LogicalObligations(); len(got) != 1 || got[0] != original {
 		t.Fatalf("rejected logical obligation batch mutated builder obligations: %+v", got)
 	}
 }
@@ -1176,7 +1176,7 @@ func TestStableResourceSetRejectedLargeLogicalObligationBatchDoesNotLeakEarlierA
 		t.Fatal(err)
 	}
 	defer set.Release()
-	if got := set.Descriptors()[0].LogicalObligations(); len(got) != len(original) {
+	if got := mustStableResourceDescriptors(t, set)[0].LogicalObligations(); len(got) != len(original) {
 		t.Fatalf("rejected large logical obligation batch mutated builder count=%d want %d", len(got), len(original))
 	}
 }
@@ -1803,7 +1803,7 @@ func TestMutableIndexAliasesCoalesceByPhysicalIdentity(t *testing.T) {
 	}
 	wantFields := append([]ReachabilityField(nil), fields...)
 	slices.Sort(wantFields)
-	if got := set.Descriptors()[0].ReachabilityFields(); !slices.Equal(got, wantFields) {
+	if got := mustStableResourceDescriptors(t, set)[0].ReachabilityFields(); !slices.Equal(got, wantFields) {
 		t.Fatalf("same-index DB descriptor fields=%v want %v", got, wantFields)
 	}
 }
@@ -3454,12 +3454,12 @@ func TestStableResourcePublicationDebtCoverage(t *testing.T) {
 				specs = append([]StableResourceSpec{baseSpec}, specs...)
 			}
 			candidate := makeSet(specs...)
-			before := candidate.Descriptors()
+			before := mustStableResourceDescriptors(t, candidate)
 			got, err := candidate.BytesNotCoveredBy(published)
 			if err != nil || got != tc.want {
 				t.Fatalf("debt=%d err=%v want=%d", got, err, tc.want)
 			}
-			if !reflect.DeepEqual(before, candidate.Descriptors()) {
+			if !reflect.DeepEqual(before, mustStableResourceDescriptors(t, candidate)) {
 				t.Fatal("accounting mutated the full closure")
 			}
 			if got, err := candidate.BytesNotCoveredBy(nil); err != nil || got != before[0].Frontier().Bytes {
@@ -3735,7 +3735,7 @@ func originalStableResourceUnionForTest(mode stableResourceViewMode, sets ...*St
 	}
 	sortStableResourceEntries(view.entries)
 	if len(evidenceCandidates) != 0 {
-		view.logicalMembershipEvidence = stableUnionLogicalMembershipEvidence(view.entries, evidenceCandidates)
+		view.extras = &stableResourceSetExtras{logicalMembershipEvidence: stableUnionLogicalMembershipEvidence(view.entries, evidenceCandidates)}
 	}
 	view.pinHighWater = stableResourcePinCounts(view.entries)
 	return view, nil
@@ -3765,7 +3765,7 @@ func assertSingleStableResourceUnionParity(t *testing.T, source *StableResourceS
 
 func assertStableResourceViewParity(t *testing.T, got, want *StableResourceSet) {
 	t.Helper()
-	if got.Owner() != ResourceOwnerView || got.kindViews != nil || !reflect.DeepEqual(got.entries, want.entries) || !reflect.DeepEqual(got.pinHighWater, want.pinHighWater) || !reflect.DeepEqual(got.logicalMembershipEvidence, want.logicalMembershipEvidence) {
+	if got.Owner() != ResourceOwnerView || got.kindViews != nil || !reflect.DeepEqual(got.entries, want.entries) || !reflect.DeepEqual(got.pinHighWater, want.pinHighWater) || !reflect.DeepEqual(got.logicalMembershipEvidenceLocked(), want.logicalMembershipEvidenceLocked()) {
 		t.Fatal("single union changed flat entry, pin or evidence representation")
 	}
 	for i := range got.entries {
@@ -3774,7 +3774,7 @@ func assertStableResourceViewParity(t *testing.T, got, want *StableResourceSet) 
 		}
 	}
 	now := time.Unix(123, 0)
-	if !reflect.DeepEqual(got.Descriptors(), want.Descriptors()) || !reflect.DeepEqual(got.Stats(now), want.Stats(now)) {
+	if !reflect.DeepEqual(mustStableResourceDescriptors(t, got), mustStableResourceDescriptors(t, want)) || !reflect.DeepEqual(got.Stats(now), want.Stats(now)) {
 		t.Fatal("descriptor/stat parity")
 	}
 	gm, gw, ge := got.DependencyManifestV1()
@@ -3820,7 +3820,7 @@ func TestSingleStableResourceUnionSnapshotParity(t *testing.T) {
 			}
 			got, want := assertSingleStableResourceUnionParity(t, source)
 			assertSingleStableResourceUnionParity(t, got) // canonical flat union chaining
-			before := got.Descriptors()
+			before := mustStableResourceDescriptors(t, got)
 			got.Release()
 			got.Release()
 			switch action {
@@ -3845,11 +3845,17 @@ func TestSingleStableResourceUnionSnapshotParity(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if !reflect.DeepEqual(before, got.Descriptors()) {
+			if !reflect.DeepEqual(before, mustStableResourceDescriptors(t, got)) {
 				t.Fatal("source mutation changed captured metadata")
 			}
 			assertStableResourceViewParity(t, got, want)
-			assertSingleStableResourceUnionParity(t, source)
+			if action == "merge" {
+				if union, err := UnionStableResourceSets(source); union != nil || !errors.Is(err, ErrResourceOwnership) {
+					t.Fatalf("consumed source union: %v", err)
+				}
+			} else {
+				assertSingleStableResourceUnionParity(t, source)
+			}
 		})
 	}
 	sets := duplicatePhysicalStableResourceSets(t, 3)
@@ -3870,4 +3876,35 @@ func TestSingleStableResourceUnionSnapshotParity(t *testing.T) {
 		t.Fatalf("flat fallback: %v/%v", err, wantErr)
 	}
 	assertSingleStableResourceUnionParity(t, nil)
+}
+
+func TestStableResourceSetExtrasReleasedEvidence(t *testing.T) {
+	file := writeStableResourceFixture(t, t.TempDir(), "evidence.pack", "x")
+	source := freezeAppendMutationResources(t, appendMutationResourceToken(t, file,
+		ResourceColumnAsset, "source", 1, ReachabilityColumnManifest, appendMutationTestObligation(1)))
+	defer source.Release()
+	if source.extras != nil {
+		t.Fatal("ordinary frozen set allocated optional extras")
+	}
+	// Match the parity helper's warm-cache precondition before cloning views.
+	if _, _, err := source.DependencyManifestV1(); err != nil {
+		t.Fatal(err)
+	}
+	view, err := UnionStableResourceSets(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence := view.logicalMembershipEvidenceLocked()
+	if len(evidence) == 0 {
+		t.Fatal("fixture has no logical membership evidence")
+	}
+	// Optional immutable evidence is diagnostic metadata, not a directory lease.
+	// Exercise the released-owner branch with evidence present in the sidecar.
+	source.extras = &stableResourceSetExtras{logicalMembershipEvidence: evidence}
+	source.Release()
+	got, err := UnionStableResourceSets(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertStableResourceViewParity(t, got, view)
 }

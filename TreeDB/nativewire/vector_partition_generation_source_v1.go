@@ -48,6 +48,8 @@ type CollectionVectorPartitionGenerationSourceV1 struct {
 	replicatedCollection raftplacement.CollectionRefV1
 	replicatedLifecycle  VectorPartitionReplicatedLifecycleAuthorityV1
 	offlineGraphVariant  collections.VectorPartitionLocalGraphVariantV1
+	ownerGroupID         raftcluster.GroupID
+	ownerManifestDigest  string
 
 	mu          sync.Mutex
 	entries     map[collectionVectorPartitionGenerationKeyV1]*collectionVectorPartitionGenerationCacheV1
@@ -265,6 +267,12 @@ func (s *CollectionVectorPartitionGenerationSourceV1) loadGeneration(ctx context
 		}
 		return nil, fmt.Errorf("%w: generation status: %v", ErrVectorPartitionShardSearchGenerationMismatch, err)
 	}
+	if manifest.Format == collections.VectorPartitionManifestFormatV2 || manifest.PagedRootV2 != nil {
+		return nil, collections.ErrVectorPartitionPagedRuntimeUnsupportedV2
+	}
+	if s.ownerGroupID != "" && (s.replicatedLifecycle == nil || s.offlineGraphVariant != "" || manifest.IntegrityDigest != s.ownerManifestDigest) {
+		return nil, fmt.Errorf("%w: owner generation root binding", ErrVectorPartitionShardSearchGenerationMismatch)
+	}
 	replicatedReadySetDigest, err := s.validateReplicatedLifecycle(ctx, key, manifest)
 	if err != nil {
 		authorityToken.Release()
@@ -287,7 +295,10 @@ func (s *CollectionVectorPartitionGenerationSourceV1) loadGeneration(ctx context
 		liveManifest = manifest
 	}
 	var openPlan *collections.VectorPartitionGenerationSearchOpenPlanV1
-	if s.replicatedLifecycle == nil {
+	var ownerPlan *collections.VectorPartitionGenerationOwnerSearchOpenPlanV2
+	if s.ownerGroupID != "" {
+		ownerPlan, err = collections.NewVectorPartitionGenerationOwnerSearchOpenPlanWithContextV2(ctx, manifest, string(s.ownerGroupID))
+	} else if s.replicatedLifecycle == nil {
 		openPlan, err = s.Collection.NewVectorPartitionGenerationLiveSearchOpenPlanWithContextV1(ctx, manifest)
 	} else {
 		openPlan, err = collections.NewVectorPartitionGenerationSearchOpenPlanWithContextV1(ctx, manifest)
@@ -313,6 +324,7 @@ func (s *CollectionVectorPartitionGenerationSourceV1) loadGeneration(ctx context
 		manifest:       pinnedManifest,
 		liveManifest:   liveManifest,
 		openPlan:       openPlan,
+		ownerPlan:      ownerPlan,
 		authorityToken: authorityToken,
 		pin:            pin,
 		searchers:      make(map[uint32]*collections.VectorPartitionLocalSearcherV1),
@@ -520,6 +532,7 @@ type collectionVectorPartitionGenerationCacheV1 struct {
 	manifest       VectorPartitionPinnedManifestV1
 	liveManifest   collections.VectorPartitionManifestV1
 	openPlan       *collections.VectorPartitionGenerationSearchOpenPlanV1
+	ownerPlan      *collections.VectorPartitionGenerationOwnerSearchOpenPlanV2
 	authorityToken collections.VectorPartitionActiveAuthorityTokenV1
 	pin            *collections.VectorPartitionReaderPinV1
 
@@ -582,7 +595,9 @@ func (e *collectionVectorPartitionGenerationCacheV1) openPartition(ctx context.C
 
 		var searcher *collections.VectorPartitionLocalSearcherV1
 		var err error
-		if e.liveManifest.Generation != 0 {
+		if e.ownerPlan != nil {
+			searcher, err = e.collection.OpenVectorPartitionLocalSearcherForGenerationOwnerSearchPlanWithContextV2(ctx, e.index, e.generation, partition, string(source.ownerGroupID), e.ownerPlan, e.pin)
+		} else if e.liveManifest.Generation != 0 {
 			searcher, err = e.collection.OpenVectorPartitionLocalSearcherForGenerationLiveSearchPlanWithContextV1(ctx, e.index, e.generation, partition, e.openPlan, e.pin)
 		} else if source.offlineGraphVariant != "" {
 			searcher, err = e.collection.OpenVectorPartitionLocalSearcherForGenerationOfflineVariantSearchPlanWithContextV1(ctx, e.index, e.generation, partition, e.openPlan, e.pin, source.offlineGraphVariant)

@@ -55,6 +55,8 @@ type durableRootSelectionV1 struct {
 
 type durableManifestValidatorV1 func(*rootpublication.DependencyManifestV1) (*rootpublication.StableResourceSet, error)
 
+type durableDirectoryValidatorV2 func(rootpublication.DurableRootRecordV1) (*rootpublication.StableResourceSet, error)
+
 type durableMetaCandidateV1 struct {
 	slot uint64
 	meta page.DurableMetaV1
@@ -63,7 +65,7 @@ type durableMetaCandidateV1 struct {
 // selectDurableRootV1 performs bounded recovery selection. It deliberately
 // does not recurse through the B-tree or scan value-log contents: checksummed
 // COW pages and the deterministic manifest are the recovery inventory.
-func selectDurableRootV1(source freelist.PageSource, physicalPageCount uint64, validateManifest durableManifestValidatorV1) (durableRootSelectionV1, error) {
+func selectDurableRootV1(source freelist.PageSource, physicalPageCount uint64, validateManifest durableManifestValidatorV1, directoryValidators ...durableDirectoryValidatorV2) (durableRootSelectionV1, error) {
 	if source == nil {
 		return durableRootSelectionV1{}, &NoRecoverableMetaError{SlotReasons: [2]error{errors.New("meta page source unavailable"), errors.New("meta page source unavailable")}}
 	}
@@ -101,7 +103,7 @@ func selectDurableRootV1(source freelist.PageSource, physicalPageCount uint64, v
 			reasons[candidate.slot] = fmt.Errorf("conflicting recovery generation: commit %d appears with different roots", candidate.meta.CommitSeq)
 			continue
 		}
-		selected, err := validateDurableMetaCandidateV1(source, physicalPageCount, candidate, validateManifest)
+		selected, err := validateDurableMetaCandidateV1(source, physicalPageCount, candidate, validateManifest, directoryValidators...)
 		if err == nil {
 			if priorSlot, duplicate := seenGenerations[selected.Meta.CommitSeq]; duplicate {
 				selected.resources.Release()
@@ -169,7 +171,7 @@ func readDurableMetaSlotV1(source freelist.PageSource, slot uint64) (page.Durabl
 	return meta, nil
 }
 
-func validateDurableMetaCandidateV1(source freelist.PageSource, physicalPageCount uint64, candidate durableMetaCandidateV1, validateManifest durableManifestValidatorV1) (durableRootSelectionV1, error) {
+func validateDurableMetaCandidateV1(source freelist.PageSource, physicalPageCount uint64, candidate durableMetaCandidateV1, validateManifest durableManifestValidatorV1, directoryValidators ...durableDirectoryValidatorV2) (durableRootSelectionV1, error) {
 	meta := candidate.meta
 	recordImage, err := source.ReadPage(meta.RootRecordPageID)
 	if err != nil {
@@ -195,16 +197,22 @@ func validateDurableMetaCandidateV1(source freelist.PageSource, physicalPageCoun
 	if generation.FreeCount() != record.FreelistFreeCount || generation.RetiredCount() != record.FreelistRetiredCount {
 		return durableRootSelectionV1{}, errors.New("COW freelist: count mismatch")
 	}
-	manifest, err := rootpublication.LoadDependencyManifestV1(source, record.Manifest)
-	if err != nil {
-		return durableRootSelectionV1{}, fmt.Errorf("dependency manifest: %w", err)
-	}
+	var manifest *rootpublication.DependencyManifestV1
 	var resources *rootpublication.StableResourceSet
-	if validateManifest != nil {
-		resources, err = validateManifest(manifest)
-		if err != nil {
-			return durableRootSelectionV1{}, fmt.Errorf("dependency manifest: %w", err)
+	if record.Directory.RootPageID != 0 {
+		if record.Directory.RootPageID >= record.TotalPages || len(directoryValidators) != 1 || directoryValidators[0] == nil {
+			return durableRootSelectionV1{}, errors.New("dependency directory: validator or root extent unavailable")
 		}
+		resources, err = directoryValidators[0](record)
+	} else {
+		manifest, err = rootpublication.LoadDependencyManifestV1(source, record.Manifest)
+		if err == nil && validateManifest != nil {
+			resources, err = validateManifest(manifest)
+		}
+	}
+	if err != nil {
+		resources.Release()
+		return durableRootSelectionV1{}, fmt.Errorf("dependency metadata: %w", err)
 	}
 	accepted := false
 	defer func() {

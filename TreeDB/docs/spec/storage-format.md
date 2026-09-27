@@ -134,7 +134,7 @@ batches, applies the 4,096-entry cap to all names, and verifies the ranges,
 CRC32 values, and SHA-256 digests of every asset referenced by a non-deleting
 manifest before replacing the target namespace.
 
-VPM1 uses big-endian magic `0x56504d31` and wire version `6`, bounded
+The default VPM1 uses big-endian magic `0x56504d31` and wire version `6`, bounded
 length-prefixed fields and lists, one (exactly one) router-asset frame,
 canonical ordering, and an integrity digest. Version 6 has this fixed,
 untagged order:
@@ -150,6 +150,80 @@ untagged order:
 4. exactly one router asset;
 5. counted physical-pack placement, disjoint-membership, overlap-membership,
    representative-membership, and partition-asset lists, in that order.
+
+The draft #4808 paged codec adds wire schema `7` under the same magic. Its
+header is magic, `uint32(7)`, and a big-endian `uint32` payload byte length;
+the remaining bytes are one canonical JSON `VectorPartitionManifestV1`
+envelope with format `vector_partition_paged_manifest_v2` and non-nil
+`PagedRootV2`. The entire record is capped at 64 KiB. Inline source identity,
+row/pack/domain counts, balance policy and membership/layout/asset lists must
+be empty or zero. Global BUILD source-map/snapshot-set/graph-profile identity
+is separate from local physical projection. The root binds exact placement
+SHA-256 digest (there is no separate placement epoch), canonical independent `SourceOwners`/`ANNOwners`
+sets (at most 128 each), and explicitly local source-shard, source-row,
+ANN-domain, physical-pack and membership counts. Memberships include overlap;
+they are not the source-row count. Source-only and ANN-only projections use a
+zero asset and zero counts for the absent directory side. There is one combined
+projection per collection/index/generation for all locally hosted groups.
+
+The two immutable directory assets and every physical descendant are local
+durable dependencies. VDP2 pages have magic `VDP2`, big-endian payload length,
+and canonical version-2 JSON; each page is at most 64 KiB with at most 128
+records or child references and fewer than 16 levels. Children bind generation,
+strictly ordered first/last keys, exact descendant record count, and ordinary
+asset SHA-256/checksum references. Source leaves retain sealed shard snapshot
+descriptors; metadata leaves retain explicit logical-domain declarations,
+source-scoped membership identities with home/overlap kind and persisted graph
+ordinal, and graph asset references. Each domain declares one logical pack and
+exact member count; section chunks remain physical assets of that pack. Source
+identity preserves owner, shard, snapshot
+revision/digest, ordinal and document revision. This adds no semantic Merkle
+authority: local opens stream the complete canonical owner descriptor sequence
+against the owner aggregate committed in BUILD before exposing selected rows.
+
+Stage, snapshots and GC walk the entire local physical closure; owner scope
+never filters reclamation. Prefix selection is only an open optimization.
+Root/page JSON keys/order/whitespace and nil empty-list representation must
+match canonical re-encoding; mixed formats, unknown fields, truncated/trailing
+records, wrong child ranges/counts and digest changes are refused.
+
+The schema-7 integrity digest is SHA-256 of the canonical envelope JSON with
+its `IntegrityDigest` empty. Its ready digest binds format, collection/index
+identity, generation, complete paged root and router identity in declared
+field order. The prepared local producer writes unpublished source and ANN intent pages,
+verifies complete committed owner streams and every source reference before
+graph work, builds one bounded domain at a time, and atomically stages the
+combined local roots. The explicit V7 Vamana pack binding omits legacy physical
+row references; ordinal provenance lives in the local metadata directory. A
+pinned local domain open validates the ordinal permutation and exact document
+identity before ordinal-only traversal can return source-scoped results.
+Each sequential owner-verification, graph-build or domain-open traversal reuses
+only its current verified source chunk. Misses retain full directory, completed
+snapshot and chunk-proof validation; hits still check cancellation and exact
+owner/shard/snapshot/row identity. The state belongs to the traversal, retains no
+reader or independent lease, and never becomes a session-wide cache. Its bound
+is 256 rows and 8 MiB encoded bytes plus decoded row/slice/origin overhead;
+returned rows own their mutable slices. Public point reads remain uncached.
+Legacy publication, distributed activation/search, router and reclaim APIs
+continue to refuse schema 7. A decoded root or local Stage is not READY or
+distributed activation evidence.
+
+A local build allocates at most two fresh private asset segments: temporary
+ANN intent and final reachable output. Each bounded append syncs and releases
+its producer authority. Intent readers close and the exact temporary segment
+is removed before Stage. Ordinary failed/canceled builds remove unpublished
+segments by captured parent/child identity and exact frontier; unresolved
+rollback or publication outcomes retain authority and block further publication
+until recovery. An installed-root retry repeats the idempotent lifecycle sync
+before returning success. Process-crash leftovers are canonical unreferenced
+segments reclaimed by explicit existing column-asset GC after reopen; build does
+not run a hidden global GC. Repeated process crashes require this maintenance
+and are not an automatic bounded-disk retry guarantee. Generic maintenance still
+materializes the transitive reference closure; bounded build/open and local
+failure cleanup do not invoke that path.
+
+Schema-6 encoding and hashes remain unchanged; its nil `PagedRootV2` JSON
+field is omitted. Old binaries refuse schema 7 at their version check.
 
 Each placement is a `uint32` physical pack ID plus a length-prefixed group ID.
 Disjoint and overlap memberships are 12-byte source-ordinal/physical-pack
@@ -186,6 +260,15 @@ Versions 1 through 3 and 5 are historical offline formats; version 4 remains
 the non-partitioned topology-only column-graph format. Production partition
 opens require the explicit version-6 connectivity-preserving Vamana graph
 variant and fail closed otherwise.
+
+Local source-V2 preparation uses search-pack wire version 7. It retains the
+version-6 Vamana profile and the 176-byte header, but all three legacy base
+identity fields are zero and the four physical row-reference sections are
+absent. The required membership digest binds the declared logical domain pack
+and canonical source-row identities, including home/overlap roles. Graph ordinal
+provenance resides in the immutable local metadata directory. V1 readers refuse
+version 7; a V2 decode requires the exact expected semantic membership digest.
+This local preparation format does not enable distributed V2 activation/search.
 
 The non-partitioned `column_graph` pack uses wire version 4 for
 `cosine_normalized_f32_v1`. Version 4 is topology-only: it omits the normalized
@@ -799,6 +882,50 @@ scratch copy is then opened through normal bounded recovery, and any later file
 replacement still fails exact identity validation. An ordinary filesystem copy
 does not perform this rebind and remains unrecoverable when a selected manifest
 binds copied external dependencies.
+
+### 3.3.1 Opt-in dependency directory V2
+
+The required format feature `dependency_directory_v2` selects an ordinary COW
+B-tree in `index.db` for the exact external-resource closure. Enable it only
+before a new store is initialized and while its WAL is clean. Populated V1
+stores are refused; there is no migration. Required-feature validation precedes
+root and WAL decoding in read-write, read-only and no-lock snapshot opens,
+including `IgnoreFormatConfig`. Removing the feature from an existing store is
+refused. Stores without it retain the V1 record and manifest encoding.
+
+With this feature, the durable-root record version is `2`; its magic and common
+layout remain unchanged. Bytes `176:184` hold the directory root page ID,
+`184:192` its physical-descriptor count, and `192:200` its logical-obligation
+count, all u64 LE. Bytes `200:232` are zero. A record contains exactly one closure
+representation. The directory uses normal tree pages, checksums and traversal
+bounds, limited by that record's `TotalPages`. It is not a Merkle source proof.
+
+Physical keys have prefix `1` and bind kind, logical lane, resource ID and
+resource generation independently of host file identity. Their values contain
+the canonical physical descriptor and exact logical count. Logical keys have
+prefix `2` and use the globally unique logical-obligation identity; values bind
+the physical owner and remaining exact obligation metadata. Strings are length
+prefixed and integers use the codec's little-endian representation; encoded key
+order is not the in-memory logical-obligation comparator. Duplicate logical
+identities cannot be hidden under different physical owners. Decode rejects
+noncanonical encodings, invalid ownership, unsupported pointer/tombstone flags,
+missing owner records and count mismatches.
+
+Publication applies admitted additions, removals and changed physical descriptors
+to the visible predecessor before freezing its allocator. Coalesced publication
+syncs the physical union of admitted members but seals the latest member's exact
+directory. A physical-only union is not a logical closure and cannot supply
+logical enumeration, proofs or manifests. Directory roots retain their index
+file and root-registration leases. Both recoverable meta slots and retained
+readers protect shared subtrees; changed paths retire through the existing COW
+freelist rather than treating directory pages as one contiguous allocation.
+
+Rebuild and vacuum stream the directory as a third root. Snapshot rebinding
+first validates both slots in a private staged index copy, then changes only
+fixed-width physical identity values in its leaves and recomputes checksums.
+Logical keys, record sizes, page layout, slot identity and lineage remain bound;
+a size-changing rewrite is refused. Live mapped tree pages are never modified
+by this maintenance-only operation.
 
 ### 3.4 Publication order and ownership
 
@@ -3359,3 +3486,72 @@ asset reachability resolves that specific pin only to an existing, validated,
 positive offsets-section pin with matching physical identity and scope; it never
 fabricates an extent or ignores an unknown/malformed pin. This rare cold path
 scans active pins for the companion and does not add a second registry.
+
+
+#### Draft bounded source snapshot V2 primitives
+
+The explicit V2 source identity binds collection scope, stable canonical ShardID, immutable snapshot revision, shard-local ordinal namespace, source-map epoch/digest, schema and index-definition digests, float32 little-endian encoding, dimensions, row count and rows per chunk. Snapshot revision and document revision are separate fields. Optional retained legacy ordinals also bind their original collection/index/source identity. None of these content hashes independently grants source authority.
+
+Chunks contain at most 256 rows and 8 MiB of encoded bytes, with IDs capped at 4096 bytes and Merkle proofs at 64 sibling hashes. `SCK2` contains the admitted snapshot digest, chunk index, complete contiguous rows and proof. The decoder owns its returned bytes, checks lengths before row/vector allocation, and verifies actual IDs, row revisions and vector bytes against the expected snapshot identity. Hash inputs use domain-separated V2 encodings. A valid chunk proof does not establish complete ANN-domain membership.
+
+`SAC2` is a fixed 2124-byte streaming-import checkpoint: semantic source header digest, processed chunk count, 64 accumulator slots and a domain-separated checksum. Occupancy follows the binary chunk count. Its checksum detects corruption; it is not an authority certificate. The explicit importer publishes checkpoint, exact range receipt and rows in the same durable root transaction. The codecs do not enable schema7 publication or grant source authority.
+
+
+Draft command-WAL payload format14 (`CollectionReplaceSourceByID`) encloses bounded V2 import metadata and the existing typed-row payload. Metadata binds the immutable source descriptor, source group/token range, index/vector column, chunk index, explicit original ID order, document revisions and legacy source provenance. The typed payload remains canonical in ID order. Range receipts hash the full command, including retained and non-vector typed values. The collection publishes source progress and receipt entries inside the same existing system-root transaction as row/column roots. Format10/12 behavior is unchanged. Format14 does not grant source-authority admission. Its complete command frame is capped at 768 KiB, including the fixed frame header and every metadata/typed-payload byte; metadata is capped at 64 KiB. Public import preflight caps raw input at 512 KiB before typed projection.
+
+The draft import progress representation stores a raw fixed-size `SAC2` checkpoint separately from an immutable canonical binding record (maximum 3000 bytes) and a 32-byte range receipt. All records publish in the same system-root transaction as the rows. This avoids JSON/base64 inflation overflowing a 4 KiB tree leaf; a semantic hosted failure at `0b4e822` established the need. A completed root is recomputed from the validated checkpoint instead of duplicating a full descriptor inside the progress value.
+
+
+#### Explicit incremental source directory V2
+
+Only the explicit V2 source importer creates `tcd2`, manifest version 2, in the existing collection column-manifest B-tree root. It refuses a pre-existing TCS1 manifest instead of migrating it. Default TCS1 encoding is unchanged. Older binaries reject the new format/version. Legacy mutation methods refuse it before appending a WAL command, and legacy full-scan/build readers refuse before dereferencing its records.
+
+The fixed 2252-byte `TCD2` header retains generation, row/part counts, local applied LSN, collection/schema/source-map identity, a 64-hash append frontier, semantic directory digest and full-header checksum. The semantic digest excludes local WAL position, physical part count, B-tree page IDs and physical asset addresses. Each directory leaf binds the canonical source chunk digest, immutable binding and complete command receipt. The existing row/typed-column asset codecs remain unchanged; fresh asset-reference records, directory frontier, immutable source records and source Merkle nodes append in the same ordered root publication as primary rows and row locators. Ordinary Get uses exact locator/part lookups on this explicit path.
+
+`SCL2` retains a bounded immutable source leaf before whole-snapshot sealing. Its row framing is shared with `SCK2`, but it carries the leaf digest and no serving proof. It cannot be decoded as an authenticated serving chunk. Source bytes are split into 2048-byte B-tree records, with a bounded length/digest record and immutable subtree hashes keyed by level and index. Existing COW-root reachability protects these records; they are not a separate filesystem sidecar. Snapshot readers reconstruct only the requested leaf and at most 64 sibling hashes, then verify actual IDs, revisions and FP32 bytes against the caller's independently admitted snapshot root. Import completion, durable retry and checkpoint reopen do not confer catalog authority by themselves.
+
+The existing stable-resource append certification protects prior physical assets. Its exact full-manifest fallback remains visible in import diagnostics; any use defeats a bounded per-import metadata claim and requires further qualification. Draft #4816 / #4808 now derives completed owner inputs through production preparation, binds their semantic commitments in catalog BUILD, and supports local paged source/ANN build, atomic Stage and prepared domain open. Focused cancellation, append/Stage failure, exact cleanup, crash-orphan GC and teardown ownership checks pass for the local producer. End-to-end performance and growth qualification and current-head hosted checks remain gates. Distributed schema7 activation/search and destructive generation retirement remain explicitly refused.
+
+
+At import completion, `SIS2` stores the completed snapshot digest, directory generation and semantic directory root (76 bytes) in that same system-root publication. A source reader validates the immutable seal against the retained historical directory header; later imports cannot substitute their current root for the original completion binding. This is a local commitment, not source-group authority.
+
+The directory retains one bounded active-segment ownership witness. Appends reuse an existing segment only through the existing retained-resource selector and exact parent/child identity/frontier checks; segments rotate at the existing 16 MiB limit. This reduces physical-file churn without changing pin, WAL or replay authority. The V2 GC consumer reads only asset-reference prefixes, validates complete header part/row coverage, and uses the existing recoverable-root, replay and deletion guards. Discovery refuses beyond one million asset metadata records or 64 MiB (or tighter caller bounds) before deletion. Immutable source bytes/proof pages remain protected by COW root snapshots. Legacy scan/build APIs remain refused.
+
+Public import diagnostics count actual directory reads, fallback reads, source rows/leaf bytes/proof-node writes and command payload bytes. Constant directory reads do not imply constant total storage work: DPM V1 still serializes retained logical obligations, while the opt-in DPM2 path updates a COW dependency directory. Public benchmarks distinguish changed directory key/value bytes and COW pages from total encoding/validation work, allocations and retained memory. Passing the changed-byte/page bounds alone does not establish the remaining end-to-end performance and growth gates.
+
+#### Prepared source input in the catalog BUILD record
+
+Paged source input uses the existing replicated vector-partition lifecycle
+BUILD record. Its comparable identity has source format `2`, zero legacy source
+scalars, and source-map epoch/digest, semantic owner snapshot-set root, graph
+profile digest and placement digest. V1 omits the new discriminator and zero
+V2 value, preserving its canonical encoding.
+
+BEGIN carries at most 128 owner aggregates. Each contains a catalog group,
+exact assigned shard count, semantic snapshot-set digest and local completion
+evidence digest. Source owners are independent of ANN readiness groups. The
+trusted preparation boundary opens completed durable imports, verifies stored
+source-map intervals and exact owner coverage, and hashes canonical shard-ID
+order. The semantic root excludes local directory generations, physical layout
+and WAL positions. An exact retry with different replica-local completion
+evidence keeps the original committed preparation record.
+
+BEGIN also carries at most 128 ANN-owner commitments: owner group, exact domain
+and membership counts, and the digest of its complete canonical semantic stream.
+Their canonical root is `PlacementDigest`; the owner set exactly matches ANN
+readiness groups independently of source owners. The stream orders domain IDs
+then source-owner/shard/ordinal membership, binds each domain's declared logical
+pack ID and count, and includes source snapshot revision/digest, document
+revision and home/overlap role. Physical pages and graph section boundaries do
+not contribute to this identity. A trusted planner supplies the complete stream;
+self-consistent caller hashes are insufficient. Local graph construction must
+resolve each intended member through verified source pages bound to the same
+BUILD before using it. The pack codec alone does not establish that proof.
+
+A local owner can prepare without hosting other source owners. The local
+all-owner BEGIN convenience path explicitly refuses unavailable remote owners;
+it does not implement distributed source preparation transport or claim source
+imports have source-group quorum commitment. Catalog apply checks deterministic
+identity and known groups without filesystem reads. Paged distributed activation
+and search remain refused, including forged active lifecycle records. Durable
+local preparation alone does not authorize serving.

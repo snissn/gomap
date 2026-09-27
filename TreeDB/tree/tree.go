@@ -283,6 +283,7 @@ type Tree struct {
 	leafLogViewState    leafLogPageUnsafeViewStateReader
 	leafLogVerifyMarker leafLogPageChecksumVerifyMarker
 	rootPageID          uint64
+	pageLimit           uint64
 }
 
 func New(p *pager.Pager, sr SlabReader, root uint64) *Tree {
@@ -330,9 +331,18 @@ func New(p *pager.Pager, sr SlabReader, root uint64) *Tree {
 	return t
 }
 
+// NewWithPageLimit restricts index-page reads to the selected root's durable
+// extent. A zero limit retains the ordinary tree's unrestricted pager behavior.
+func NewWithPageLimit(p *pager.Pager, sr SlabReader, root, totalPages uint64) *Tree {
+	t := New(p, sr, root)
+	t.pageLimit = totalPages
+	return t
+}
+
 // Reset re-initializes the tree with new parameters for reuse.
 func (t *Tree) Reset(p *pager.Pager, sr SlabReader, root uint64) {
 	t.pager = p
+	t.pageLimit = 0
 	t.slabReader = sr
 	if app, ok := sr.(slabUnsafeAppender); ok {
 		t.slabAppender = app
@@ -523,6 +533,9 @@ func (t *Tree) loadNodeViewWithLoadKindInto(dst *node.Node, pageID uint64, verif
 	}
 	if t.pager == nil {
 		return errors.New("missing pager")
+	}
+	if t.pageLimit != 0 && (pageID < 2 || pageID >= t.pageLimit) {
+		return fmt.Errorf("page %d outside selected root extent %d", pageID, t.pageLimit)
 	}
 	// Use Get (mmap) instead of ReadPage (Copy).
 	data, err := t.pager.Get(pageID)

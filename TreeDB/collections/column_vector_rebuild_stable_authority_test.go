@@ -60,10 +60,10 @@ func TestNextColumnPhysicalAssetSegmentAppenderWithStableResourcesRetainsFreshEx
 	if first.closeStats.FileSyncCount != 1 {
 		t.Fatalf("content syncs=%d want 1", first.closeStats.FileSyncCount)
 	}
-	if got := len(resources.Descriptors()); got != 1 {
+	if got := len(mustStableResourceDescriptors(t, resources)); got != 1 {
 		t.Fatalf("physical obligations=%d want 1 for two same-kind refs", got)
 	}
-	if got := len(resources.Descriptors()[0].LogicalObligations()); got != len(refs) {
+	if got := len(mustStableResourceDescriptors(t, resources)[0].LogicalObligations()); got != len(refs) {
 		t.Fatalf("logical obligations=%d want refs=%d", got, len(refs))
 	}
 	var namespaceSyncs uint64
@@ -236,7 +236,7 @@ func TestColumnVectorGraphRebuildStableAuthorityMatchesEveryPublishedAsset(t *te
 			uniqueSegments[ref.FileID] = struct{}{}
 		}
 		got := make(map[columnVectorStableLogicalRefKey]int, len(assets))
-		for _, descriptor := range resources.Descriptors() {
+		for _, descriptor := range mustStableResourceDescriptors(t, resources) {
 			fields := descriptor.ReachabilityFields()
 			if len(fields) != 1 || fields[0] != rootpublication.ReachabilityVectorGraphPack {
 				return fmt.Errorf("vector descriptor reachability=%v want [%s]", fields, rootpublication.ReachabilityVectorGraphPack)
@@ -253,8 +253,8 @@ func TestColumnVectorGraphRebuildStableAuthorityMatchesEveryPublishedAsset(t *te
 		if !reflect.DeepEqual(got, want) {
 			return fmt.Errorf("stable logical union=%v want published assets=%v", got, want)
 		}
-		if len(resources.Descriptors()) != len(uniqueSegments) {
-			return fmt.Errorf("physical obligations=%d want fresh segments=%d", len(resources.Descriptors()), len(uniqueSegments))
+		if len(mustStableResourceDescriptors(t, resources)) != len(uniqueSegments) {
+			return fmt.Errorf("physical obligations=%d want fresh segments=%d", len(mustStableResourceDescriptors(t, resources)), len(uniqueSegments))
 		}
 		wantPublishedSegments = len(uniqueSegments)
 		if active := registry.ActivePins(); active != baselinePins+uint64(len(uniqueSegments)) {
@@ -352,7 +352,7 @@ func TestColumnVectorGraphRebuildStableAuthorityIncludesCalibratedScalarU8Alpha(
 			return fmt.Errorf("quantized stable roles=%v want one codes and one alpha", roles)
 		}
 		gotQuantized := make(map[columnVectorStableLogicalRefKey]int, 2)
-		for _, descriptor := range resources.Descriptors() {
+		for _, descriptor := range mustStableResourceDescriptors(t, resources) {
 			for _, logical := range descriptor.LogicalObligations() {
 				key := columnVectorStableLogicalRefKey{
 					kind: logical.Kind, namespace: logical.Namespace, generation: logical.Generation,
@@ -367,7 +367,7 @@ func TestColumnVectorGraphRebuildStableAuthorityIncludesCalibratedScalarU8Alpha(
 		if !reflect.DeepEqual(gotQuantized, wantQuantized) {
 			return fmt.Errorf("stable quantized union=%v want codes+alpha=%v", gotQuantized, wantQuantized)
 		}
-		if got := len(resources.Descriptors()); got != wantSegments {
+		if got := len(mustStableResourceDescriptors(t, resources)); got != wantSegments {
 			return fmt.Errorf("physical obligations=%d want %d with separate codes and alpha segments", got, wantSegments)
 		}
 		if active := registry.ActivePins(); active != baselinePins+wantSegments {
@@ -491,7 +491,7 @@ func TestColumnVectorGraphStableAuthorityRejectsEachMissingTransitiveChild(t *te
 		_ = baselineDB.Close()
 		t.Fatalf("TakeStableResources complete closure: %v", err)
 	}
-	descriptors := resources.Descriptors()
+	descriptors := mustStableResourceDescriptors(t, resources)
 	obligations := make([]rootpublication.StableLogicalObligation, 0, len(assets))
 	for _, descriptor := range descriptors {
 		obligations = append(obligations, descriptor.LogicalObligations()...)
@@ -762,8 +762,8 @@ func BenchmarkColumnVectorGraphStableResourceCapture(b *testing.B) {
 		if err != nil {
 			b.Fatal(err)
 		}
-		descriptors += uint64(len(resources.Descriptors()))
-		for _, descriptor := range resources.Descriptors() {
+		descriptors += uint64(len(mustStableResourceDescriptors(b, resources)))
+		for _, descriptor := range mustStableResourceDescriptors(b, resources) {
 			obligations += uint64(len(descriptor.LogicalObligations()))
 		}
 		for _, stats := range resources.Stats(time.Now()) {

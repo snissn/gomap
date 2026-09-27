@@ -77,6 +77,17 @@ type rootPublicationVisibleInstallV1 struct {
 	postActivationCompleted     bool
 }
 
+// rootPublicationSealBaseV1 preserves only the publisher-time fields that
+// survive installation. Arrays are value copies; resource/candidate ownership
+// remains with the existing runtime and seal, without consulting newer DB state.
+type rootPublicationSealBaseV1 struct {
+	slotCommit    [2]uint64
+	slotResources [2]*rootpublication.StableResourceSet
+	slotMeta      [2]page.DurableMetaV1
+	slotRecord    [2]rootpublication.DurableRootRecordV1
+	ambiguous     []*durableRootPublishCandidateV1
+}
+
 // rootPublicationSealV1 freezes the exact publisher-time durable base,
 // alternate slot, dependency union, allocator prefix and index authority. A
 // pre-meta retry reuses this object byte-for-byte. If later visible work joins
@@ -86,7 +97,7 @@ type rootPublicationSealV1 struct {
 	latestSequence uint64
 	groupLength    int
 	idx            *indexGen
-	base           durableRootRuntimeV1
+	base           rootPublicationSealBaseV1
 	next           page.MetaPageBody
 	resources      *rootpublication.StableResourceSet
 	manifest       *rootpublication.DependencyManifestV1
@@ -806,6 +817,20 @@ func (db *DB) finalizeQueuedRootPublicationV1(
 		}
 	}()
 
+	baseDirectory, err := visibleBase.DependencyDirectoryV2()
+	if err != nil {
+		return post, prePublishErr(err)
+	}
+	if baseDirectory != nil {
+		bound, directoryRetired, err := db.prepareDependencyDirectoryV2(idx, next.CommitSeq, visibleBase, resources)
+		if err != nil {
+			return post, prePublishErr(fmt.Errorf("prepare queued dependency directory: %w", err))
+		}
+		resources.Release()
+		resources = bound
+		retired = append(retired, directoryRetired...)
+	}
+
 	dependencyBytes, err := db.rootPublicationDependencyBytesV1(resources)
 	if err != nil {
 		return post, prePublishErr(fmt.Errorf("account unpublished root dependencies: %w", err))
@@ -1027,9 +1052,19 @@ func (runtime *rootPublicationRuntimeV1) Prepare(ctx context.Context, candidate 
 			resources.Release()
 		}
 	}()
-	manifest, err := db.durableManifestFromResourcesV1WithStats(resources)
+	directory, err := resources.DependencyDirectoryV2()
 	if err != nil {
 		return err
+	}
+	var manifest *rootpublication.DependencyManifestV1
+	var directoryRef rootpublication.DependencyDirectoryRefV2
+	if directory != nil {
+		directoryRef = directory.Reference()
+	} else {
+		manifest, err = db.durableManifestFromResourcesV1WithStats(resources)
+		if err != nil {
+			return err
+		}
 	}
 
 	// Close drains the coordinator before index/resource teardown. Publication
@@ -1082,7 +1117,10 @@ func (runtime *rootPublicationRuntimeV1) Prepare(ctx context.Context, candidate 
 		return errors.New("missing live COW generation for root-publication seal")
 	}
 	generationID := liveGeneration.GenerationID() + 1
-	auxiliaryCount := int(manifest.PageCount()) + 1
+	auxiliaryCount := 1
+	if manifest != nil {
+		auxiliaryCount += int(manifest.PageCount())
+	}
 	var cowLimits *freelist.COWPrepareLimitsV1
 	if limits != nil {
 		cowLimits = &limits.FreelistCOW
@@ -1122,9 +1160,12 @@ func (runtime *rootPublicationRuntimeV1) Prepare(ctx context.Context, candidate 
 	next := member.next
 	next.TotalPages = generation.HighWater()
 	next.FreelistHeadID = 0
-	manifestRef, err := manifest.Reference(auxiliary[0])
-	if err != nil {
-		return err
+	var manifestRef rootpublication.DependencyManifestRefV1
+	if manifest != nil {
+		manifestRef, err = manifest.Reference(auxiliary[0])
+		if err != nil {
+			return err
+		}
 	}
 	recordPageID := auxiliary[len(auxiliary)-1]
 	if base.record.DurableSeq == ^uint64(0) {
@@ -1141,6 +1182,7 @@ func (runtime *rootPublicationRuntimeV1) Prepare(ctx context.Context, candidate 
 		AppliedCommandLSN: next.AppliedCommandLSN, LastCommitHeight: next.LastCommitHeight,
 		Freelist: generation.GenerationRef(), FreelistFreeCount: generation.FreeCount(), FreelistRetiredCount: generation.RetiredCount(),
 		Manifest:             manifestRef,
+		Directory:            directoryRef,
 		ParentRecordPageID:   base.meta.RootRecordPageID,
 		ParentCommitSeq:      base.meta.CommitSeq,
 		ParentRecordDigest:   base.meta.RootRecordDigest,
@@ -1162,7 +1204,10 @@ func (runtime *rootPublicationRuntimeV1) Prepare(ctx context.Context, candidate 
 	preparedOwned = false
 	seal := &rootPublicationSealV1{
 		latestSequence: member.next.CommitSeq, groupLength: group.Len(),
-		idx: runtime.idx, base: base, next: next, resources: resources, manifest: manifest,
+		idx: runtime.idx, base: rootPublicationSealBaseV1{
+			slotCommit: base.slotCommit, slotResources: base.slotResources,
+			slotMeta: base.slotMeta, slotRecord: base.slotRecord, ambiguous: base.ambiguous,
+		}, next: next, resources: resources, manifest: manifest,
 		prepared: prepared, prefix: prefix, token: token, record: record, meta: meta,
 		target: target,
 	}
@@ -1200,11 +1245,17 @@ func (runtime *rootPublicationRuntimeV1) materializeSeal(seal *rootPublicationSe
 		}
 	}
 	auxiliary := seal.prepared.AuxiliaryPageIDs()
-	if len(auxiliary) != int(seal.manifest.PageCount())+1 {
+	expectedAuxiliary := 1
+	if seal.manifest != nil {
+		expectedAuxiliary += int(seal.manifest.PageCount())
+	}
+	if len(auxiliary) != expectedAuxiliary {
 		return errors.New("root-publication seal auxiliary inventory changed")
 	}
-	if _, err := seal.manifest.Materialize(auxiliary[0], durablePagerSinkV1{pager: seal.idx.pager}); err != nil {
-		return err
+	if seal.manifest != nil {
+		if _, err := seal.manifest.Materialize(auxiliary[0], durablePagerSinkV1{pager: seal.idx.pager}); err != nil {
+			return err
+		}
 	}
 	recordPageID := auxiliary[len(auxiliary)-1]
 	recordImage, recordDigest, err := seal.record.EncodePage(recordPageID)
@@ -1327,17 +1378,16 @@ func (runtime *rootPublicationRuntimeV1) commitPublishedSeal(seal *rootPublicati
 			return 0, fmt.Errorf("published root seal allocator prefix diverged at member %d", i)
 		}
 	}
-	current := seal.base
-	current.meta = seal.meta
-	current.record = seal.record
-	current.manifest = seal.manifest
-	current.slot = seal.target
+	current := durableRootRuntimeV1{
+		meta: seal.meta, record: seal.record, manifest: seal.manifest, slot: seal.target,
+		slotCommit: seal.base.slotCommit, slotResources: seal.base.slotResources,
+		slotMeta: seal.base.slotMeta, slotRecord: seal.base.slotRecord, ambiguous: seal.base.ambiguous,
+	}
 	current.slotCommit[seal.target] = seal.next.CommitSeq
 	current.slotMeta[seal.target] = seal.meta
 	current.slotRecord[seal.target] = seal.record
 	previousResources := current.slotResources[seal.target]
 	current.slotResources[seal.target] = seal.resources
-	current.pending = nil
 	nextCapability, err := db.durableRootReuseCapabilityV1(current)
 	if err != nil {
 		runtime.mu.Unlock()

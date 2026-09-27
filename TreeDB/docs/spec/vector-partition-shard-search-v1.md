@@ -12,6 +12,15 @@ more logical vector partitions owned by one Raft group. The response contains
 stable IDs, authoritative FP32 cosine scores, bounded search counters, and the
 actual group read proof. It never returns full documents.
 
+Source V2 paged projections currently support trusted catalog BUILD preparation
+and local immutable build/open/search only. They do not enter this distributed
+V1 service: catalog V2 activation and native distributed search explicitly
+refuse that identity mode. A local `SearchLocalV2` result carries source
+shard/snapshot/ordinal/document-revision provenance, but it is not a substitute
+for this service's routed quorum read proof. See the
+[catalog lifecycle](vector-partition-raft-v1.md) and
+[typed-column guide](../guides/vector-search-typed-column.md#immutable-owner-local-source-v2-projections).
+
 This service is a local owner endpoint, not a coordinator:
 
 - it does not run the kRt router or scatter to several groups;

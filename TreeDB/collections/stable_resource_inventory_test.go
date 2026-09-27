@@ -1205,7 +1205,7 @@ func TestStableColumnPreparedValidationRejectsEachMissingProductionObligation(t 
 		t.Fatalf("complete production closure: %v", err)
 	}
 	logicalObligationCount := 0
-	for _, descriptor := range full.Descriptors() {
+	for _, descriptor := range mustStableResourceDescriptors(t, full) {
 		logicalObligationCount += len(descriptor.LogicalObligations())
 	}
 	if logicalObligationCount != authoritativeProductionChildCount {
@@ -1338,7 +1338,7 @@ func testStableColumnAssetTokensCoalesceCreationNamespaceInEitherOrder(t *testin
 				firstRef.Length == secondRef.Length || firstRef.Checksum == secondRef.Checksum {
 				t.Fatalf("test requires sibling logical refs in one physical segment: first=%+v second=%+v", firstRef, secondRef)
 			}
-			descriptors := set.Descriptors()
+			descriptors := mustStableResourceDescriptors(t, set)
 			if len(descriptors) != 1 {
 				t.Fatalf("descriptors=%d want one coalesced physical descriptor", len(descriptors))
 			}
@@ -1457,7 +1457,7 @@ func testStableColumnAppendSessionReturnsCoalescedPinnedAuthority(t *testing.T) 
 	if closeStats.FileSyncCount != 1 || closeStats.SyncEpochCount != 1 {
 		t.Fatalf("stable append close stats=%+v want one content sync epoch", closeStats)
 	}
-	descriptors := resources.Descriptors()
+	descriptors := mustStableResourceDescriptors(t, resources)
 	if len(descriptors) != 3 {
 		t.Fatalf("stable descriptors=%d want manifest, typed-column, and vector resource kinds", len(descriptors))
 	}
@@ -1892,8 +1892,8 @@ func benchmarkStableCentralColumnAppendSessionAuthority(b *testing.B) {
 		closeStats, resources, iterationNamespaceSyncs := appendAndClose(uint64(i + 2))
 		contentSyncs += uint64(closeStats.FileSyncCount)
 		namespaceSyncs += iterationNamespaceSyncs
-		descriptors += uint64(len(resources.Descriptors()))
-		for _, descriptor := range resources.Descriptors() {
+		descriptors += uint64(len(mustStableResourceDescriptors(b, resources)))
+		for _, descriptor := range mustStableResourceDescriptors(b, resources) {
 			logicalObligations += uint64(len(descriptor.LogicalObligations()))
 		}
 		for _, stats := range resources.Stats(time.Now()) {

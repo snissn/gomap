@@ -284,7 +284,7 @@ func TestLeafGenerationPackStablePreparedClosureTransfersExactAuthorityOnce(t *t
 		t.Fatalf("TakeStableResources: %v", err)
 	}
 	descriptors := make(map[uint64]rootpublication.StableResourceDescriptor, len(segments))
-	for _, descriptor := range resources.Descriptors() {
+	for _, descriptor := range mustStableResourceDescriptors(t, resources) {
 		if descriptor.Kind() == rootpublication.ResourceOuterLeafPack {
 			descriptors[descriptor.Generation()] = descriptor
 		}

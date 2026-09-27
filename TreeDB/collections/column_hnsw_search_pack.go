@@ -48,7 +48,9 @@ const (
 	// Version 6 identifies the connectivity-preserving flat partition-local
 	// Vamana profile. It reuses the v2 layout and binds R=64/L=256 through
 	// compatibility fields.
-	columnHNSWSearchPackVersionV6                = uint16(6)
+	columnHNSWSearchPackVersionV6 = uint16(6)
+	// Version 7 binds semantic source-V2 membership and omits legacy physical row references.
+	columnHNSWSearchPackVersionV7                = uint16(7)
 	columnHNSWCanonicalPartitionM                = 18
 	columnHNSWCanonicalPartitionEfConstruction   = 256
 	columnVamanaConnectivityPreservingPartitionM = vectorPartitionVamanaDegreeV1 / 2
@@ -172,6 +174,8 @@ type columnHNSWSearchPackBaseIdentity struct {
 }
 
 type columnHNSWSearchPackBuildInput struct {
+	// SourceV2 requires Vamana, a semantic membership digest, and no legacy base/row references.
+	SourceV2       bool
 	Rows           int
 	Dimensions     int
 	VectorStride   int
@@ -216,6 +220,9 @@ type columnHNSWSearchPackLayerInput struct {
 }
 
 type columnHNSWSearchPackDecodeOptions struct {
+	// SourceV2 requires version 7 and an exact expected semantic membership digest.
+	// The default remains the legacy physical-row binding mode.
+	SourceV2                 bool
 	ExpectedBaseIdentity     columnHNSWSearchPackBaseIdentity
 	ExpectedMembershipDigest [sha256.Size]byte
 	MaxRows                  uint64
@@ -306,6 +313,9 @@ func encodeColumnHNSWSearchPack(input columnHNSWSearchPackBuildInput) ([]byte, e
 		return nil, err
 	}
 	sectionCount := 8 + 2*len(input.AdjacencyLayers)
+	if input.SourceV2 {
+		sectionCount -= 4
+	}
 	if input.ExternalNormalizedVectors {
 		sectionCount--
 	}
@@ -369,17 +379,19 @@ func encodeColumnHNSWSearchPack(input columnHNSWSearchPackBuildInput) ([]byte, e
 			return nil, err
 		}
 	}
-	if err := appendSection(columnHNSWSearchPackSectionRowRefGeneration, 0, columnHNSWSearchPackAlignment, encodeInt64SliceLE(input.RowRefGenerations), uint64(len(input.RowRefGenerations))); err != nil {
-		return nil, err
-	}
-	if err := appendSection(columnHNSWSearchPackSectionRowRefPartID, 0, columnHNSWSearchPackAlignment, encodeInt64SliceLE(input.RowRefPartIDs), uint64(len(input.RowRefPartIDs))); err != nil {
-		return nil, err
-	}
-	if err := appendSection(columnHNSWSearchPackSectionRowRefRowIndex, 0, columnHNSWSearchPackAlignment, encodeInt64SliceLE(input.RowRefRowIndexes), uint64(len(input.RowRefRowIndexes))); err != nil {
-		return nil, err
-	}
-	if err := appendSection(columnHNSWSearchPackSectionRowRefAppliedLSN, 0, columnHNSWSearchPackAlignment, encodeInt64SliceLE(input.RowRefAppliedCommandLSN), uint64(len(input.RowRefAppliedCommandLSN))); err != nil {
-		return nil, err
+	if !input.SourceV2 {
+		if err := appendSection(columnHNSWSearchPackSectionRowRefGeneration, 0, columnHNSWSearchPackAlignment, encodeInt64SliceLE(input.RowRefGenerations), uint64(len(input.RowRefGenerations))); err != nil {
+			return nil, err
+		}
+		if err := appendSection(columnHNSWSearchPackSectionRowRefPartID, 0, columnHNSWSearchPackAlignment, encodeInt64SliceLE(input.RowRefPartIDs), uint64(len(input.RowRefPartIDs))); err != nil {
+			return nil, err
+		}
+		if err := appendSection(columnHNSWSearchPackSectionRowRefRowIndex, 0, columnHNSWSearchPackAlignment, encodeInt64SliceLE(input.RowRefRowIndexes), uint64(len(input.RowRefRowIndexes))); err != nil {
+			return nil, err
+		}
+		if err := appendSection(columnHNSWSearchPackSectionRowRefAppliedLSN, 0, columnHNSWSearchPackAlignment, encodeInt64SliceLE(input.RowRefAppliedCommandLSN), uint64(len(input.RowRefAppliedCommandLSN))); err != nil {
+			return nil, err
+		}
 	}
 	if err := appendSection(columnHNSWSearchPackSectionDocumentIDOffsets, 0, columnHNSWSearchPackAlignment, encodeUint64SliceLE(input.DocumentIDOffsets), uint64(len(input.DocumentIDOffsets))); err != nil {
 		return nil, err
@@ -434,7 +446,7 @@ func finishColumnHNSWSearchPack(raw []byte, input columnHNSWSearchPackBuildInput
 	putHNSWPackU64(raw, columnHNSWSearchPackHeaderDataOffsetOffset, dataOffset)
 	putHNSWPackU64(raw, columnHNSWSearchPackHeaderDataLengthOffset, uint64(len(raw))-dataOffset)
 	putHNSWPackU32(raw, columnHNSWSearchPackHeaderDirectoryChecksumOffset, page.Checksum(directory))
-	if version == columnHNSWSearchPackVersionV2 || version == columnHNSWSearchPackVersionV3 || version == columnHNSWSearchPackVersionV5 || version == columnHNSWSearchPackVersionV6 {
+	if version == columnHNSWSearchPackVersionV2 || version == columnHNSWSearchPackVersionV3 || version == columnHNSWSearchPackVersionV5 || version == columnHNSWSearchPackVersionV6 || version == columnHNSWSearchPackVersionV7 {
 		copy(raw[columnHNSWSearchPackHeaderMembershipDigestOffset:], input.MembershipDigest[:])
 	} else if version == columnHNSWSearchPackVersionV4 {
 		copy(raw[columnHNSWSearchPackHeaderExternalVectorDigestOffset:], input.ExternalVectorDigest[:])
@@ -443,6 +455,9 @@ func finishColumnHNSWSearchPack(raw []byte, input columnHNSWSearchPackBuildInput
 }
 
 func columnHNSWSearchPackWireLayout(input columnHNSWSearchPackBuildInput) (uint16, int) {
+	if input.SourceV2 {
+		return columnHNSWSearchPackVersionV7, columnHNSWSearchPackHeaderSizeV2
+	}
 	if input.ExternalNormalizedVectors {
 		return columnHNSWSearchPackVersionV4, columnHNSWSearchPackHeaderSizeV2
 	}
@@ -480,6 +495,9 @@ func encodeColumnHNSWSearchPackRows(input columnHNSWSearchPackBuildInput, rows [
 		fill    func([]byte) error
 	}
 	sectionCount := 8 + 2*len(input.AdjacencyLayers)
+	if input.SourceV2 {
+		sectionCount -= 4
+	}
 	if input.ExternalNormalizedVectors {
 		sectionCount--
 	}
@@ -588,17 +606,19 @@ func encodeColumnHNSWSearchPackRows(input columnHNSWSearchPackBuildInput, rows [
 			return nil, err
 		}
 	}
-	if err := planInt64(columnHNSWSearchPackSectionRowRefGeneration, input.RowRefGenerations); err != nil {
-		return nil, err
-	}
-	if err := planInt64(columnHNSWSearchPackSectionRowRefPartID, input.RowRefPartIDs); err != nil {
-		return nil, err
-	}
-	if err := planInt64(columnHNSWSearchPackSectionRowRefRowIndex, input.RowRefRowIndexes); err != nil {
-		return nil, err
-	}
-	if err := planInt64(columnHNSWSearchPackSectionRowRefAppliedLSN, input.RowRefAppliedCommandLSN); err != nil {
-		return nil, err
+	if !input.SourceV2 {
+		if err := planInt64(columnHNSWSearchPackSectionRowRefGeneration, input.RowRefGenerations); err != nil {
+			return nil, err
+		}
+		if err := planInt64(columnHNSWSearchPackSectionRowRefPartID, input.RowRefPartIDs); err != nil {
+			return nil, err
+		}
+		if err := planInt64(columnHNSWSearchPackSectionRowRefRowIndex, input.RowRefRowIndexes); err != nil {
+			return nil, err
+		}
+		if err := planInt64(columnHNSWSearchPackSectionRowRefAppliedLSN, input.RowRefAppliedCommandLSN); err != nil {
+			return nil, err
+		}
 	}
 	if err := planUint64(columnHNSWSearchPackSectionDocumentIDOffsets, 0, input.DocumentIDOffsets); err != nil {
 		return nil, err
@@ -684,6 +704,9 @@ func planColumnHNSWSearchPackStream(input columnHNSWSearchPackBuildInput) (colum
 		return columnHNSWSearchPackStreamPlan{}, err
 	}
 	sectionCount := 8 + 2*len(input.AdjacencyLayers)
+	if input.SourceV2 {
+		sectionCount -= 4
+	}
 	if input.ExternalNormalizedVectors {
 		sectionCount--
 	}
@@ -735,17 +758,19 @@ func planColumnHNSWSearchPackStream(input columnHNSWSearchPackBuildInput) (colum
 			return columnHNSWSearchPackStreamPlan{}, err
 		}
 	}
-	if err := add(columnHNSWSearchPackSectionRowRefGeneration, 0, columnHNSWSearchPackAlignment, len(input.RowRefGenerations), 8); err != nil {
-		return columnHNSWSearchPackStreamPlan{}, err
-	}
-	if err := add(columnHNSWSearchPackSectionRowRefPartID, 0, columnHNSWSearchPackAlignment, len(input.RowRefPartIDs), 8); err != nil {
-		return columnHNSWSearchPackStreamPlan{}, err
-	}
-	if err := add(columnHNSWSearchPackSectionRowRefRowIndex, 0, columnHNSWSearchPackAlignment, len(input.RowRefRowIndexes), 8); err != nil {
-		return columnHNSWSearchPackStreamPlan{}, err
-	}
-	if err := add(columnHNSWSearchPackSectionRowRefAppliedLSN, 0, columnHNSWSearchPackAlignment, len(input.RowRefAppliedCommandLSN), 8); err != nil {
-		return columnHNSWSearchPackStreamPlan{}, err
+	if !input.SourceV2 {
+		if err := add(columnHNSWSearchPackSectionRowRefGeneration, 0, columnHNSWSearchPackAlignment, len(input.RowRefGenerations), 8); err != nil {
+			return columnHNSWSearchPackStreamPlan{}, err
+		}
+		if err := add(columnHNSWSearchPackSectionRowRefPartID, 0, columnHNSWSearchPackAlignment, len(input.RowRefPartIDs), 8); err != nil {
+			return columnHNSWSearchPackStreamPlan{}, err
+		}
+		if err := add(columnHNSWSearchPackSectionRowRefRowIndex, 0, columnHNSWSearchPackAlignment, len(input.RowRefRowIndexes), 8); err != nil {
+			return columnHNSWSearchPackStreamPlan{}, err
+		}
+		if err := add(columnHNSWSearchPackSectionRowRefAppliedLSN, 0, columnHNSWSearchPackAlignment, len(input.RowRefAppliedCommandLSN), 8); err != nil {
+			return columnHNSWSearchPackStreamPlan{}, err
+		}
 	}
 	if err := add(columnHNSWSearchPackSectionDocumentIDOffsets, 0, columnHNSWSearchPackAlignment, len(input.DocumentIDOffsets), 8); err != nil {
 		return columnHNSWSearchPackStreamPlan{}, err
@@ -923,10 +948,13 @@ func decodeColumnHNSWSearchPack(raw []byte, opts columnHNSWSearchPackDecodeOptio
 		return columnHNSWSearchPack{}, fmt.Errorf("collections: bad hnsw_search_pack_v1 magic=%q", string(raw[:8]))
 	}
 	version := hnswPackU16(raw, columnHNSWSearchPackHeaderVersionOffset)
+	if (version == columnHNSWSearchPackVersionV7) != opts.SourceV2 || (opts.SourceV2 && (opts.ExpectedMembershipDigest == ([sha256.Size]byte{}) || opts.ExpectedBaseIdentity != (columnHNSWSearchPackBaseIdentity{}))) {
+		return columnHNSWSearchPack{}, errors.New("collections: search pack source binding mode mismatch")
+	}
 	headerSize := columnHNSWSearchPackHeaderSize
 	switch version {
 	case columnHNSWSearchPackVersionV1:
-	case columnHNSWSearchPackVersionV2, columnHNSWSearchPackVersionV3, columnHNSWSearchPackVersionV4, columnHNSWSearchPackVersionV5, columnHNSWSearchPackVersionV6:
+	case columnHNSWSearchPackVersionV2, columnHNSWSearchPackVersionV3, columnHNSWSearchPackVersionV4, columnHNSWSearchPackVersionV5, columnHNSWSearchPackVersionV6, columnHNSWSearchPackVersionV7:
 		headerSize = columnHNSWSearchPackHeaderSizeV2
 	default:
 		return columnHNSWSearchPack{}, fmt.Errorf("collections: unsupported hnsw_search_pack_v1 version=%d", version)
@@ -990,7 +1018,7 @@ func decodeColumnHNSWSearchPack(raw []byte, opts columnHNSWSearchPackDecodeOptio
 			hnswPackU32(raw, columnHNSWSearchPackHeaderEfConstructionOffset) != columnHNSWCanonicalPartitionEfConstruction) {
 		return columnHNSWSearchPack{}, errors.New("collections: canonical partition hnsw graph parameters mismatch")
 	}
-	if version == columnHNSWSearchPackVersionV6 &&
+	if (version == columnHNSWSearchPackVersionV6 || version == columnHNSWSearchPackVersionV7) &&
 		(hnswPackU32(raw, columnHNSWSearchPackHeaderMOffset) != columnVamanaConnectivityPreservingPartitionM ||
 			hnswPackU32(raw, columnHNSWSearchPackHeaderEfConstructionOffset) != columnVamanaConnectivityPreservingPartitionL ||
 			hnswPackU64(raw, columnHNSWSearchPackHeaderEntryOrdinalOffset) != 0 ||
@@ -1016,7 +1044,11 @@ func decodeColumnHNSWSearchPack(raw []byte, opts columnHNSWSearchPackDecodeOptio
 		ManifestChecksum:   hnswPackU64(raw, columnHNSWSearchPackHeaderBaseChecksumOffset),
 		SchemaHash:         hnswPackU64(raw, columnHNSWSearchPackHeaderBaseSchemaHashOffset),
 	}
-	if baseIdentity.ManifestGeneration == 0 || baseIdentity.ManifestChecksum == 0 || baseIdentity.SchemaHash == 0 {
+	if opts.SourceV2 {
+		if baseIdentity != (columnHNSWSearchPackBaseIdentity{}) {
+			return columnHNSWSearchPack{}, errors.New("collections: source-V2 pack carries legacy base identity")
+		}
+	} else if baseIdentity.ManifestGeneration == 0 || baseIdentity.ManifestChecksum == 0 || baseIdentity.SchemaHash == 0 {
 		return columnHNSWSearchPack{}, errors.New("collections: hnsw_search_pack_v1 missing base manifest identity")
 	}
 	if err := validateColumnHNSWSearchPackExpectedBaseIdentity(baseIdentity, opts.ExpectedBaseIdentity); err != nil {
@@ -1024,7 +1056,7 @@ func decodeColumnHNSWSearchPack(raw []byte, opts columnHNSWSearchPackDecodeOptio
 	}
 	var membershipDigest [sha256.Size]byte
 	var externalVectorDigest [sha256.Size]byte
-	if version == columnHNSWSearchPackVersionV2 || version == columnHNSWSearchPackVersionV3 || version == columnHNSWSearchPackVersionV5 || version == columnHNSWSearchPackVersionV6 {
+	if version == columnHNSWSearchPackVersionV2 || version == columnHNSWSearchPackVersionV3 || version == columnHNSWSearchPackVersionV5 || version == columnHNSWSearchPackVersionV6 || version == columnHNSWSearchPackVersionV7 {
 		copy(membershipDigest[:], raw[columnHNSWSearchPackHeaderMembershipDigestOffset:columnHNSWSearchPackHeaderSizeV2])
 		if membershipDigest == ([sha256.Size]byte{}) {
 			return columnHNSWSearchPack{}, fmt.Errorf("collections: hnsw_search_pack_v1 version %d missing membership digest", version)
@@ -1044,6 +1076,9 @@ func decodeColumnHNSWSearchPack(raw []byte, opts columnHNSWSearchPackDecodeOptio
 	dataLength := hnswPackU64(raw, columnHNSWSearchPackHeaderDataLengthOffset)
 	sectionCount32 := hnswPackU32(raw, columnHNSWSearchPackHeaderSectionCountOffset)
 	expectedSectionCount := uint32(8 + 2*layerCount32)
+	if opts.SourceV2 {
+		expectedSectionCount -= 4
+	}
 	if externalVectors {
 		expectedSectionCount--
 	}
@@ -1180,7 +1215,11 @@ func validateColumnHNSWSearchPackBuildInputMode(input columnHNSWSearchPackBuildI
 	if input.M <= 0 || input.EfConstruction <= 0 || input.EfSearch <= 0 {
 		return errors.New("collections: hnsw search pack graph parameters must be positive")
 	}
-	if input.BaseIdentity.ManifestGeneration == 0 || input.BaseIdentity.ManifestChecksum == 0 || input.BaseIdentity.SchemaHash == 0 {
+	if input.SourceV2 {
+		if !input.ConnectivityPreservingPartitionVamana || input.BaseIdentity != (columnHNSWSearchPackBaseIdentity{}) || len(input.RowRefGenerations)+len(input.RowRefPartIDs)+len(input.RowRefRowIndexes)+len(input.RowRefAppliedCommandLSN) != 0 {
+			return errors.New("collections: source-V2 pack requires semantic Vamana binding without legacy base or row references")
+		}
+	} else if input.BaseIdentity.ManifestGeneration == 0 || input.BaseIdentity.ManifestChecksum == 0 || input.BaseIdentity.SchemaHash == 0 {
 		return errors.New("collections: hnsw search pack requires base manifest identity")
 	}
 	if input.Rows == 0 {
@@ -1253,15 +1292,17 @@ func validateColumnHNSWSearchPackBuildInputMode(input columnHNSWSearchPackBuildI
 	} else if len(input.AuxiliaryNavigation.Offsets) != 0 || len(input.AuxiliaryNavigation.Neighbors) != 0 {
 		return errors.New("collections: hnsw search pack auxiliary navigation without version 3")
 	}
-	if len(input.RowRefGenerations) != input.Rows || len(input.RowRefPartIDs) != input.Rows || len(input.RowRefRowIndexes) != input.Rows || len(input.RowRefAppliedCommandLSN) != input.Rows {
-		return errors.New("collections: hnsw search pack row-ref section row counts must match")
-	}
-	for ordinal := 0; ordinal < input.Rows; ordinal++ {
-		if input.RowRefGenerations[ordinal] <= 0 || input.RowRefPartIDs[ordinal] <= 0 || input.RowRefAppliedCommandLSN[ordinal] <= 0 || input.RowRefRowIndexes[ordinal] < 0 {
-			return fmt.Errorf("collections: hnsw search pack invalid row-ref ordinal=%d", ordinal)
+	if !input.SourceV2 {
+		if len(input.RowRefGenerations) != input.Rows || len(input.RowRefPartIDs) != input.Rows || len(input.RowRefRowIndexes) != input.Rows || len(input.RowRefAppliedCommandLSN) != input.Rows {
+			return errors.New("collections: hnsw search pack row-ref section row counts must match")
 		}
-		if uint64(input.RowRefGenerations[ordinal]) > input.BaseIdentity.ManifestGeneration {
-			return fmt.Errorf("collections: hnsw search pack row-ref generation=%d exceeds base generation=%d", input.RowRefGenerations[ordinal], input.BaseIdentity.ManifestGeneration)
+		for ordinal := 0; ordinal < input.Rows; ordinal++ {
+			if input.RowRefGenerations[ordinal] <= 0 || input.RowRefPartIDs[ordinal] <= 0 || input.RowRefAppliedCommandLSN[ordinal] <= 0 || input.RowRefRowIndexes[ordinal] < 0 {
+				return fmt.Errorf("collections: hnsw search pack invalid row-ref ordinal=%d", ordinal)
+			}
+			if uint64(input.RowRefGenerations[ordinal]) > input.BaseIdentity.ManifestGeneration {
+				return fmt.Errorf("collections: hnsw search pack row-ref generation=%d exceeds base generation=%d", input.RowRefGenerations[ordinal], input.BaseIdentity.ManifestGeneration)
+			}
 		}
 	}
 	if len(input.DocumentIDOffsets) != input.Rows+1 {
@@ -1380,7 +1421,7 @@ func decodeColumnHNSWSearchPackSections(raw []byte, opts columnHNSWSearchPackDec
 		if err := validateColumnHNSWSearchPackAdjacency(layer, rows, offsets, neighbors); err != nil {
 			return err
 		}
-		if pack.Header.Version == columnHNSWSearchPackVersionV6 && layer == 0 {
+		if (pack.Header.Version == columnHNSWSearchPackVersionV6 || pack.Header.Version == columnHNSWSearchPackVersionV7) && layer == 0 {
 			if err := validateColumnVamanaPartitionGraphV1(context.Background(), offsets, neighbors); err != nil {
 				return err
 			}
@@ -1417,24 +1458,26 @@ func decodeColumnHNSWSearchPackSections(raw []byte, opts columnHNSWSearchPackDec
 		}
 		pack.AuxiliaryNavigation = columnHNSWSearchPackLayer{Offsets: offsets, Neighbors: neighbors}
 	}
-	if pack.RowRefGenerations, err = decodeColumnHNSWSearchPackInt64Section(raw, pack.Sections, columnHNSWSearchPackSectionRowRefGeneration, rows); err != nil {
-		return err
-	}
-	if pack.RowRefPartIDs, err = decodeColumnHNSWSearchPackInt64Section(raw, pack.Sections, columnHNSWSearchPackSectionRowRefPartID, rows); err != nil {
-		return err
-	}
-	if pack.RowRefRowIndexes, err = decodeColumnHNSWSearchPackInt64Section(raw, pack.Sections, columnHNSWSearchPackSectionRowRefRowIndex, rows); err != nil {
-		return err
-	}
-	if pack.RowRefAppliedLSNs, err = decodeColumnHNSWSearchPackInt64Section(raw, pack.Sections, columnHNSWSearchPackSectionRowRefAppliedLSN, rows); err != nil {
-		return err
-	}
-	for ordinal := 0; ordinal < pack.Header.Rows; ordinal++ {
-		if pack.RowRefGenerations[ordinal] <= 0 || pack.RowRefPartIDs[ordinal] <= 0 || pack.RowRefAppliedLSNs[ordinal] <= 0 || pack.RowRefRowIndexes[ordinal] < 0 {
-			return fmt.Errorf("collections: hnsw_search_pack_v1 invalid row-ref ordinal=%d", ordinal)
+	if pack.Header.Version != columnHNSWSearchPackVersionV7 {
+		if pack.RowRefGenerations, err = decodeColumnHNSWSearchPackInt64Section(raw, pack.Sections, columnHNSWSearchPackSectionRowRefGeneration, rows); err != nil {
+			return err
 		}
-		if uint64(pack.RowRefGenerations[ordinal]) > pack.Header.BaseManifestGeneration {
-			return fmt.Errorf("collections: hnsw_search_pack_v1 row-ref generation=%d exceeds base generation=%d", pack.RowRefGenerations[ordinal], pack.Header.BaseManifestGeneration)
+		if pack.RowRefPartIDs, err = decodeColumnHNSWSearchPackInt64Section(raw, pack.Sections, columnHNSWSearchPackSectionRowRefPartID, rows); err != nil {
+			return err
+		}
+		if pack.RowRefRowIndexes, err = decodeColumnHNSWSearchPackInt64Section(raw, pack.Sections, columnHNSWSearchPackSectionRowRefRowIndex, rows); err != nil {
+			return err
+		}
+		if pack.RowRefAppliedLSNs, err = decodeColumnHNSWSearchPackInt64Section(raw, pack.Sections, columnHNSWSearchPackSectionRowRefAppliedLSN, rows); err != nil {
+			return err
+		}
+		for ordinal := 0; ordinal < pack.Header.Rows; ordinal++ {
+			if pack.RowRefGenerations[ordinal] <= 0 || pack.RowRefPartIDs[ordinal] <= 0 || pack.RowRefAppliedLSNs[ordinal] <= 0 || pack.RowRefRowIndexes[ordinal] < 0 {
+				return fmt.Errorf("collections: hnsw_search_pack_v1 invalid row-ref ordinal=%d", ordinal)
+			}
+			if uint64(pack.RowRefGenerations[ordinal]) > pack.Header.BaseManifestGeneration {
+				return fmt.Errorf("collections: hnsw_search_pack_v1 row-ref generation=%d exceeds base generation=%d", pack.RowRefGenerations[ordinal], pack.Header.BaseManifestGeneration)
+			}
 		}
 	}
 	docOffsetsSection, err := columnHNSWSearchPackRequireSection(pack.Sections, columnHNSWSearchPackSectionDocumentIDOffsets, 0, rows+1, 8)

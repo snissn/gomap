@@ -1384,7 +1384,8 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 			cleanupNewPager()
 			return finalSyncErr
 		}
-		selected, selectionErr := selectDurableRootV1(newPager, newPager.PageCount(), db.validateDurableDependencyManifestV1)
+		replacementGen = newIndexGen(db.nextIndexID(), newPager, newAlloc, newZ)
+		selected, selectionErr := selectDurableRootV1(newPager, newPager.PageCount(), db.validateDurableDependencyManifestV1, db.dependencyDirectoryValidatorV2(replacementGen))
 		if selectionErr != nil {
 			unlockCutover(false)
 			cleanupNewPager()
@@ -1401,7 +1402,6 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 		nextMeta.TotalPages = selected.Record.TotalPages
 		runStats.ReplacementPagerPages = selected.Record.TotalPages
 		replacementSelection = &selected
-		replacementGen = newIndexGen(db.nextIndexID(), newPager, newAlloc, newZ)
 		replacementRuntime, err = newRootPublicationRuntimeV1(
 			db,
 			replacementGen,
