@@ -375,7 +375,8 @@ func TestPhysicalSnapshotCutV1ReadOnlyOwnership(t *testing.T) {
 	}
 }
 
-// Cancel after the first copy chunk; no source bytes or private sibling may survive.
+// Refuse unsupported namespaces before copying; on supported platforms cancel
+// after the first copy chunk. Neither path may change the source or leak a sibling.
 func TestPhysicalSnapshotCutV1RebindCancellationPreservesOriginal(t *testing.T) {
 	dir := t.TempDir()
 	original := bytes.Repeat([]byte{0x5a}, 3*64*1024)
@@ -386,8 +387,12 @@ func TestPhysicalSnapshotCutV1RebindCancellationPreservesOriginal(t *testing.T) 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	probe := &physicalCutCancelContextV1{Context: ctx, cancel: cancel}
-	if err := RebindDurableRootSnapshotLayoutWithContextV1(probe, dir, ""); !errors.Is(err, context.Canceled) {
-		t.Fatalf("cancel: %v", err)
+	var wantErr error = context.Canceled
+	if !rootpublication.StableRelativeNamespaceSupported() {
+		wantErr = ErrNamespacePersistenceUnsupported
+	}
+	if err := RebindDurableRootSnapshotLayoutWithContextV1(probe, dir, ""); !errors.Is(err, wantErr) {
+		t.Fatalf("rebind error=%v want %v", err, wantErr)
 	}
 	got, err := os.ReadFile(path)
 	if err != nil || !bytes.Equal(got, original) {
