@@ -214,9 +214,15 @@ func stablePhysicalIdentityKeyLess(left, right stablePhysicalIdentityKey) bool {
 
 func stableResourceLogicalPriority(key stableLogicalResourceKey) uint64 {
 	h := fnv.New64a()
-	writeStringHash64(h, string(key.kind))
-	writeStringHash64(h, key.lane)
-	writeStringHash64(h, key.resourceID)
+	writeString := func(value string) {
+		var raw [8]byte
+		binary.LittleEndian.PutUint64(raw[:], uint64(len(value)))
+		_, _ = h.Write(raw[:])
+		_, _ = h.Write([]byte(value))
+	}
+	writeString(string(key.kind))
+	writeString(key.lane)
+	writeString(key.resourceID)
 	var raw [8]byte
 	binary.LittleEndian.PutUint64(raw[:], key.generation)
 	_, _ = h.Write(raw[:])
@@ -225,19 +231,15 @@ func stableResourceLogicalPriority(key stableLogicalResourceKey) uint64 {
 
 func stableResourcePhysicalPriority(key stablePhysicalIdentityKey) uint64 {
 	h := fnv.New64a()
-	writeStringHash64(h, key.platform)
+	var size [8]byte
+	binary.LittleEndian.PutUint64(size[:], uint64(len(key.platform)))
+	_, _ = h.Write(size[:])
+	_, _ = h.Write([]byte(key.platform))
 	var raw [8]byte
 	binary.LittleEndian.PutUint64(raw[:], key.volumeID)
 	_, _ = h.Write(raw[:])
 	_, _ = h.Write(key.objectID[:])
 	return h.Sum64()
-}
-
-func writeStringHash64(h interface{ Write([]byte) (int, error) }, value string) {
-	var raw [8]byte
-	binary.LittleEndian.PutUint64(raw[:], uint64(len(value)))
-	_, _ = h.Write(raw[:])
-	_, _ = h.Write([]byte(value))
 }
 
 func findStableResourceLogical(root *stableResourceLogicalIndexNode, key stableLogicalResourceKey) *stableResourceEntry {
