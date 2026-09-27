@@ -203,6 +203,18 @@ func TestFixedPeerTCPSnapshotRestoreTracksCurrentCatalogVersionV1(t *testing.T) 
 			s, err := r.Status(ctx)
 			return err == nil && s.CatalogRaft.State == "Leader" && len(s.Groups) == 1 && s.Groups[0].State == "Leader"
 		})
+		if r.reopened {
+			// State=Leader is observational: restart can expose it before the
+			// leader hint/current-term apply prefix is ready. The restored
+			// data group already has a durable command, so require the real
+			// catalog/group readiness barriers before the one-shot assertions.
+			// This retries reads only; no mutation is replayed or weakened.
+			fixedPeerWaitV1(t, ctx, func() bool {
+				report, err := r.ReadinessV1(ctx)
+				return err == nil && report.Ready
+			})
+		}
+
 		return r
 	}
 	r := open()

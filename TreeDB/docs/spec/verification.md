@@ -2666,3 +2666,23 @@ both fallback slots, retained readers and shared-page reachability.
 V1 and DPM2 staged snapshot rebinding: only fixed-width physical identity values
 change in the validated private copy; logical keys, page layout, both slots and
 lineage remain intact and affected page checksums are recomputed.
+
+## Authenticated fixed-peer transport and operations (#4813)
+
+- `TreeDB/nativewire/peer_*_test.go`, `fixed_peer_security_v1_test.go` and
+  `vector_partition_global_connection_budget_v1_test.go`: actual TLS/control,
+  Raft, snapshot, native/shard boundaries; identity/group denial; bounded sockets,
+  bytes and proposal/snapshot lifetimes; hot-group/cold-group progress; cancellation;
+  quorum-backed readiness, drain, immutable configuration and paired-root loss.
+- `cmd/treedb-fixed-peer/operations_test.go`: plaintext refuses by default and
+  executable identity mismatch refuses before stores/network work.
+- `scripts/treedb_peer_ec2_test.py`: failure-domain/capacity/cost refusal,
+  provider inventory checks, exact plan/change-set execution, wrong-tag refusal,
+  partial-provision cleanup and idempotence. Fake-provider contract tests do not
+  establish live AWS service acceptance.
+- `.github/workflows/peer-security-qualification.yml`: exact-head focused/race
+  gates, existing retained M8 resources, replicated TLS writes/shutdown, and
+  equivalent public plaintext/TLS allocation/process-resource measurements.
+- [Fixed-peer operations](../operations/fixed-peer-ec2.md) and
+  [evidence](../evidence/peer-security-4813/README.md) distinguish generic substrate
+  conformance from #4250 multi-host performance and #3983 fault evidence.

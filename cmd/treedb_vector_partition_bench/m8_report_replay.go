@@ -27,60 +27,8 @@ func runReplayM8ReportV1(args []string, stdout io.Writer) error {
 // has accepted every identity, transcript and retained asset. Do not duplicate
 // that trust boundary in comparison tools.
 func replayM8ReportV1(args []string, stdout io.Writer, accepted *m8ProductionReportV1) error {
-	fs := flag.NewFlagSet("treedb_vector_partition_bench replay-m8-report", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	var root, path string
-	var pins m8ReportReplayPinsV1
-	fs.StringVar(&root, "root", "", "canonical retained root containing source, executable and all artifacts")
-	fs.StringVar(&path, "report", "", "canonical existing M8 child report JSON path below root")
-	fs.StringVar(&pins.Report, "report-sha256", "", "independently frozen report file SHA256")
-	fs.StringVar(&pins.Fixture, "fixture-sha256", "", "preregistered SHA256 of json.Marshal(fixtureManifest)")
-	fs.StringVar(&pins.Command, "command-sha256", "", "preregistered SHA256 of json.Marshal(report.Command)")
-	fs.StringVar(&pins.Executable, "executable-sha256", "", "frozen benchmark executable SHA256")
-	fs.StringVar(&pins.Variant, "variant-descriptor-sha256", "", "frozen SHA256 of canonical full m3VariantDescriptorJSONV1 bytes")
-	fs.StringVar(&pins.TruthArtifact, "truth-artifact-sha256", "", "frozen canonical truth-cache file SHA256")
-	fs.StringVar(&pins.TruthContent, "truth-content-sha256", "", "frozen canonical truth semantic SHA256")
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-	if fs.NArg() != 0 || root == "" || path == "" || !pins.valid() {
-		return errors.New("replay-m8-report requires canonical -root, -report and all seven external SHA256 pins")
-	}
-	canonicalRoot, err := m8CanonicalPathV1(root)
-	if err != nil || canonicalRoot != root {
-		return errors.New("replay root is not canonical")
-	}
-	info, err := os.Stat(root)
-	if err != nil || !info.IsDir() {
-		return errors.New("replay root is not a directory")
-	}
-	canonicalPath, err := m8QualificationContainedPathV1(root, path, "replay report")
-	if err != nil || canonicalPath != path {
-		return errors.New("replay report is not canonical and contained in root")
-	}
-	raw, err := readBoundedRegularFileV1(path, m8CompleteMeasurementMaxBytesV1)
+	root, path, pins, report, err := readM8ReportReplayV1(args)
 	if err != nil {
-		return fmt.Errorf("read replay report: %w", err)
-	}
-	if fmt.Sprintf("%x", sha256.Sum256(raw)) != pins.Report {
-		return errors.New("replay report differs from frozen digest")
-	}
-	var report m8ProductionReportV1
-	decoder := json.NewDecoder(bytes.NewReader(raw))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&report); err != nil {
-		return fmt.Errorf("decode replay report: %w", err)
-	}
-	if err := decoder.Decode(new(any)); err != io.EOF {
-		return errors.New("replay report contains trailing JSON")
-	}
-	if report.Status == "incomplete_after_measurement" || len(raw) > m8DiagnosticRetainedMaxBytesV1 && report.Config.MeasurementAccounting != m8CompleteAttemptsV1 {
-		return errors.New("replay report is incomplete or exceeds its contract byte cap")
-	}
-	// Check all cheap frozen identities before profiles, external commands, truth
-	// decoding or corpus allocation. The loaded fixture is also compared with the
-	// report by the retained-variant verifier below, before attribution replay.
-	if err := m8ReportReplayIdentityV1(report, pins); err != nil {
 		return err
 	}
 	if _, ok := m8QualificationProfilesV1(root, report.Profiles); !ok || report.Profiles.Status != "captured_production_query_and_fault_boundary" {
@@ -125,6 +73,66 @@ func replayM8ReportV1(args []string, stdout io.Writer, accepted *m8ProductionRep
 	}
 	_, err = fmt.Fprintf(stdout, "REPLAY_ACCEPTED_NOT_QUALIFICATION report_sha256=%s rows=%d\n", pins.Report, len(report.Rows))
 	return err
+}
+
+// Reading the externally pinned bytes is not replay acceptance. Cross-runtime
+// comparisons use this same reader, then require the producing binary's full
+// replay because old asset layouts cannot be opened by the current runtime.
+func readM8ReportReplayV1(args []string) (root, path string, pins m8ReportReplayPinsV1, report m8ProductionReportV1, err error) {
+	fs := flag.NewFlagSet("treedb_vector_partition_bench replay-m8-report", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	fs.StringVar(&root, "root", "", "canonical retained root containing source, executable and all artifacts")
+	fs.StringVar(&path, "report", "", "canonical existing M8 child report JSON path below root")
+	fs.StringVar(&pins.Report, "report-sha256", "", "independently frozen report file SHA256")
+	fs.StringVar(&pins.Fixture, "fixture-sha256", "", "preregistered SHA256 of json.Marshal(fixtureManifest)")
+	fs.StringVar(&pins.Command, "command-sha256", "", "preregistered SHA256 of json.Marshal(report.Command)")
+	fs.StringVar(&pins.Executable, "executable-sha256", "", "frozen benchmark executable SHA256")
+	fs.StringVar(&pins.Variant, "variant-descriptor-sha256", "", "frozen SHA256 of canonical full m3VariantDescriptorJSONV1 bytes")
+	fs.StringVar(&pins.TruthArtifact, "truth-artifact-sha256", "", "frozen canonical truth-cache file SHA256")
+	fs.StringVar(&pins.TruthContent, "truth-content-sha256", "", "frozen canonical truth semantic SHA256")
+	if err := fs.Parse(args); err != nil {
+		return root, path, pins, report, err
+	}
+	if fs.NArg() != 0 || root == "" || path == "" || !pins.valid() {
+		return root, path, pins, report, errors.New("replay-m8-report requires canonical -root, -report and all seven external SHA256 pins")
+	}
+	canonicalRoot, err := m8CanonicalPathV1(root)
+	if err != nil || canonicalRoot != root {
+		return root, path, pins, report, errors.New("replay root is not canonical")
+	}
+	info, err := os.Stat(root)
+	if err != nil || !info.IsDir() {
+		return root, path, pins, report, errors.New("replay root is not a directory")
+	}
+	canonicalPath, err := m8QualificationContainedPathV1(root, path, "replay report")
+	if err != nil || canonicalPath != path {
+		return root, path, pins, report, errors.New("replay report is not canonical and contained in root")
+	}
+	raw, err := readBoundedRegularFileV1(path, m8CompleteMeasurementMaxBytesV1)
+	if err != nil {
+		return root, path, pins, report, fmt.Errorf("read replay report: %w", err)
+	}
+	if fmt.Sprintf("%x", sha256.Sum256(raw)) != pins.Report {
+		return root, path, pins, report, errors.New("replay report differs from frozen digest")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&report); err != nil {
+		return root, path, pins, report, fmt.Errorf("decode replay report: %w", err)
+	}
+	if err := decoder.Decode(new(any)); err != io.EOF {
+		return root, path, pins, report, errors.New("replay report contains trailing JSON")
+	}
+	if report.Status == "incomplete_after_measurement" || len(raw) > m8DiagnosticRetainedMaxBytesV1 && report.Config.MeasurementAccounting != m8CompleteAttemptsV1 {
+		return root, path, pins, report, errors.New("replay report is incomplete or exceeds its contract byte cap")
+	}
+	// Check all cheap frozen identities before profiles, external commands, truth
+	// decoding or corpus allocation. The loaded fixture is also compared with the
+	// report by the retained-variant verifier below, before attribution replay.
+	if err := m8ReportReplayIdentityV1(report, pins); err != nil {
+		return root, path, pins, report, err
+	}
+	return root, path, pins, report, nil
 }
 
 func (p m8ReportReplayPinsV1) valid() bool {
