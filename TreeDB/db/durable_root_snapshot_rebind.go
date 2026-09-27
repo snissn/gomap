@@ -10,6 +10,7 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/page"
+	"github.com/snissn/gomap/TreeDB/pager"
 )
 
 // RebindDurableRootSnapshotV1 rewrites the two bounded durable-root manifests
@@ -95,11 +96,15 @@ func rebindDurableRootSnapshotFileV1(dir, sideRoot, indexPath string) error {
 		_ = file.Close()
 		return err
 	}
+	indexPager, err := pager.Open(indexPath, 64<<20)
+	if err != nil {
+		return errors.Join(err, file.Close())
+	}
 	closeWith := func(operationErr error) error {
-		return errors.Join(operationErr, file.Close())
+		return errors.Join(operationErr, indexPager.Close(), file.Close())
 	}
 
-	selected, err := selectDurableRootV1(store, store.pageCount, nil)
+	selected, err := selectDurableRootV1(store, store.pageCount, nil, dependencyDirectoryStructureValidatorV2(indexPager))
 	if err != nil {
 		return closeWith(fmt.Errorf("treedb: select snapshot durable roots for identity rebind: %w", err))
 	}
@@ -116,6 +121,10 @@ func rebindDurableRootSnapshotFileV1(dir, sideRoot, indexPath string) error {
 			continue
 		}
 		record := selected.SlotRecords[slot]
+		if record.Directory.RootPageID != 0 {
+			plans = append(plans, slotRebindV1{slot: slot, meta: selected.SlotMetas[slot], record: record})
+			continue
+		}
 		manifest, err := rootpublication.LoadDependencyManifestV1(store, record.Manifest)
 		if err != nil {
 			return closeWith(fmt.Errorf("treedb: load snapshot dependency manifest for slot %d: %w", slot, err))
@@ -145,11 +154,17 @@ func rebindDurableRootSnapshotFileV1(dir, sideRoot, indexPath string) error {
 	reboundRecordDigests := make(map[uint64][32]byte, len(plans))
 	for index := range plans {
 		plan := &plans[index]
-		manifestRef, err := plan.manifest.Materialize(plan.record.Manifest.FirstPageID, store)
-		if err != nil {
-			return closeWith(fmt.Errorf("treedb: materialize rebound snapshot dependency manifest for slot %d: %w", plan.slot, err))
+		if plan.record.Directory.RootPageID != 0 {
+			if err := rebindSnapshotDependencyDirectoryV2(dir, sideRoot, indexPager, plan.record); err != nil {
+				return closeWith(fmt.Errorf("treedb: rebind snapshot directory for slot %d: %w", plan.slot, err))
+			}
+		} else {
+			manifestRef, err := plan.manifest.Materialize(plan.record.Manifest.FirstPageID, store)
+			if err != nil {
+				return closeWith(fmt.Errorf("treedb: materialize rebound snapshot dependency manifest for slot %d: %w", plan.slot, err))
+			}
+			plan.record.Manifest = manifestRef
 		}
-		plan.record.Manifest = manifestRef
 		if digest, ok := reboundRecordDigests[plan.record.ParentRecordPageID]; ok {
 			plan.record.ParentRecordDigest = digest
 		}
@@ -162,6 +177,9 @@ func rebindDurableRootSnapshotFileV1(dir, sideRoot, indexPath string) error {
 		}
 		reboundRecordDigests[plan.meta.RootRecordPageID] = recordDigest
 		plan.meta.RootRecordDigest = recordDigest
+	}
+	if err := indexPager.Sync(); err != nil {
+		return closeWith(err)
 	}
 	// Publish each rebound slot through the sole durable-meta transaction. All
 	// dependency identities and both slots' index pages were materialized above;
@@ -180,7 +198,7 @@ func rebindDurableRootSnapshotFileV1(dir, sideRoot, indexPath string) error {
 			return closeWith(fmt.Errorf("treedb: publish rebound snapshot meta slot %d: %w", plans[index].slot, err))
 		}
 	}
-	rebound, err := selectDurableRootV1(store, store.pageCount, nil)
+	rebound, err := selectDurableRootV1(store, store.pageCount, nil, dependencyDirectoryStructureValidatorV2(indexPager))
 	if err != nil {
 		return closeWith(fmt.Errorf("treedb: verify rebound snapshot durable roots: %w", err))
 	}

@@ -119,7 +119,7 @@ func (prepared *columnVectorGraphPreparedPhysicalAsset) takeStablePreparedClosur
 	var obligations uint64
 	for _, descriptor := range descriptors {
 		fields := descriptor.ReachabilityFields()
-		if len(fields) != 1 || fields[0] != rootpublication.ReachabilityVectorGraphPack {
+		if !descriptor.LogicalObligationCountAvailable || len(fields) != 1 || fields[0] != rootpublication.ReachabilityVectorGraphPack {
 			return nil, fmt.Errorf("%w: vector graph descriptor reachability=%q", rootpublication.ErrResourceConflict, fields)
 		}
 		obligations += descriptor.LogicalObligationCount

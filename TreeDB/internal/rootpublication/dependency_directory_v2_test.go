@@ -99,7 +99,7 @@ func TestDependencyDirectoryV2PinnedPointAndStreamingChecks(t *testing.T) {
 		t.Fatal(err)
 	}
 	releases := 0
-	directory, err := NewDependencyDirectoryV2(p, DependencyDirectoryRefV2{RootPageID: 2, PhysicalCount: 1, LogicalCount: 1}, func() { releases++ })
+	directory, err := NewDependencyDirectoryV2(p, DependencyDirectoryRefV2{RootPageID: 2, PhysicalCount: 1, LogicalCount: 1}, p.PageCount(), func() { releases++ })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,7 +116,7 @@ func TestDependencyDirectoryV2PinnedPointAndStreamingChecks(t *testing.T) {
 	if _, _, found, err := directory.LookupLogical(missing); err != nil || found {
 		t.Fatalf("missing proof: %t %v", found, err)
 	}
-	wrongCount, err := NewDependencyDirectoryV2(p, DependencyDirectoryRefV2{RootPageID: 2, PhysicalCount: 1, LogicalCount: 2}, func() {})
+	wrongCount, err := NewDependencyDirectoryV2(p, DependencyDirectoryRefV2{RootPageID: 2, PhysicalCount: 1, LogicalCount: 2}, p.PageCount(), func() {})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -166,5 +166,58 @@ func TestDurableRootRecordV2DirectoryOneOf(t *testing.T) {
 	page.UpdateChecksum(image)
 	if _, err := DecodeDurableRootRecordV1(image, 33, digest); !errors.Is(err, ErrDurableRootRecordFormat) {
 		t.Fatalf("mixed image accepted: %v", err)
+	}
+}
+
+func TestDependencyDirectoryV2RejectsChildOutsideSelectedExtentAndCycles(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		child  uint64
+		extent uint64
+	}{
+		{"beyond-selected-extent", 3, 3},
+		{"cycle", 2, 4},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p, err := pager.Open(filepath.Join(t.TempDir(), "index.db"), 65536)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer p.Close()
+			if err := p.GrowTo(4); err != nil {
+				t.Fatal(err)
+			}
+			image := make([]byte, page.PageSize)
+			n := node.NewNode(image)
+			n.SetType(page.PageTypeInternal)
+			n.SetPageID(2)
+			if err := n.AddInternalChild([]byte{}, tc.child); err != nil {
+				t.Fatal(err)
+			}
+			n.UpdateChecksum()
+			if err := p.Write(2, image); err != nil {
+				t.Fatal(err)
+			}
+			leaf := make([]byte, page.PageSize)
+			ln := node.NewNode(leaf)
+			ln.SetType(page.PageTypeLeaf)
+			ln.SetPageID(3)
+			ln.UpdateChecksum()
+			if err := p.Write(3, leaf); err != nil {
+				t.Fatal(err)
+			}
+			directory, err := NewDependencyDirectoryV2(p, DependencyDirectoryRefV2{RootPageID: 2}, tc.extent, func() {})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer directory.Release()
+			obligation := StableLogicalObligation{Class: "column", Kind: "chunk", Namespace: "docs", Generation: 1, PartID: 1, FileID: 1, Length: 1, Reachability: ReachabilityColumnManifest}
+			if _, _, found, err := directory.LookupLogical(obligation); err == nil || found {
+				t.Fatalf("corrupt lookup accepted: found=%v error=%v", found, err)
+			}
+			if err := directory.Walk(nil); err == nil {
+				t.Fatal("corrupt directory walk accepted")
+			}
+		})
 	}
 }

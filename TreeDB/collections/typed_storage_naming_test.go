@@ -331,6 +331,13 @@ type typedStorageLegacyNameAllowlistEntry struct {
 }
 
 var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
+	// Source directories and import/reader paths use the retained public
+	// configuration and value types; these are compatibility names.
+	{path: "TreeDB/collections/column_source_directory_gc_v2.go", classification: typedStorageLegacyCompatibility, matchingLines: 4, occurrences: 4},
+	{path: "TreeDB/collections/column_source_directory_v2.go", classification: typedStorageLegacyCompatibility, matchingLines: 6, occurrences: 6},
+	{path: "TreeDB/collections/vector_partition_source_import_v2.go", classification: typedStorageLegacyCompatibility, matchingLines: 6, occurrences: 6},
+	{path: "TreeDB/collections/vector_partition_source_import_v2_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 3, occurrences: 3},
+	{path: "TreeDB/collections/vector_partition_source_reader_v2.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 2},
 	// Metadata mutation uses existing exported compatibility schema/value types.
 	{path: "TreeDB/collections/column_metadata_row.go", classification: typedStorageLegacyCompatibility, matchingLines: 5, occurrences: 5},
 	{path: "TreeDB/collections/column_metadata_row_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 4, occurrences: 4},
@@ -462,14 +469,14 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	{path: "TreeDB/collections/column_physical_row_reader_test.go", classification: typedStorageLegacyDeferred, matchingLines: 30, occurrences: 34},
 	{path: "TreeDB/collections/column_physical_scan.go", classification: typedStorageLegacyDeferred, matchingLines: 51, occurrences: 62},
 	{path: "TreeDB/collections/column_physical_scan_test.go", classification: typedStorageLegacyDeferred, matchingLines: 37, occurrences: 44},
-	{path: "TreeDB/collections/column_physical_visibility.go", classification: typedStorageLegacyDeferred, matchingLines: 10, occurrences: 10},
+	{path: "TreeDB/collections/column_physical_visibility.go", classification: typedStorageLegacyDeferred, matchingLines: 11, occurrences: 11},
 	{path: "TreeDB/collections/column_physical_visibility_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 6, occurrences: 6},
 	{path: "TreeDB/collections/column_publish_plan.go", classification: typedStorageLegacyCompatibility, matchingLines: 47, occurrences: 60},
 	{path: "TreeDB/collections/column_publish_plan_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 69, occurrences: 90},
 	// The plan-lease tests reuse compatibility configuration and fixture helpers
 	// while exercising publication ownership; they introduce no storage format.
 	{path: "TreeDB/collections/column_publish_plan_lease_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 15, occurrences: 15},
-	{path: "TreeDB/collections/column_publish_write.go", classification: typedStorageLegacyCompatibility, matchingLines: 66, occurrences: 75},
+	{path: "TreeDB/collections/column_publish_write.go", classification: typedStorageLegacyCompatibility, matchingLines: 69, occurrences: 78},
 	{path: "TreeDB/collections/column_publish_write_bench_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 36, occurrences: 38},
 	{path: "TreeDB/collections/column_publish_write_path_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 222, occurrences: 248},
 	{path: "TreeDB/collections/typed_source_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},

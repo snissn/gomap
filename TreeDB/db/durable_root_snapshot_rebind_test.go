@@ -10,9 +10,20 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/page"
+	"github.com/snissn/gomap/TreeDB/pager"
 )
 
 func TestRebindDurableRootSnapshotV1PreservesBothSlotsAndExactTargetIdentity(t *testing.T) {
+	for _, directory := range []bool{false, true} {
+		name := "manifest-v1"
+		if directory {
+			name = "directory-v2"
+		}
+		t.Run(name, func(t *testing.T) { testRebindDurableRootSnapshotBothSlots(t, directory) })
+	}
+}
+
+func testRebindDurableRootSnapshotBothSlots(t *testing.T, directory bool) {
 	if !rootpublication.StableRelativeNamespaceSupported() {
 		t.Skip("snapshot rebind requires durable rename and removal namespaces")
 	}
@@ -20,6 +31,35 @@ func TestRebindDurableRootSnapshotV1PreservesBothSlotsAndExactTargetIdentity(t *
 	database, err := Open(Options{Dir: source, ValueLog: ValueLogOptions{PointerThreshold: 1}})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if directory {
+		database.durablePublishMu.Lock()
+		database.rootReuseMu.Lock()
+		idx := database.idx.Load()
+		next := database.meta
+		next.CommitSeq++
+		resources, _, prepareErr := database.prepareDependencyDirectoryV2(idx, next.CommitSeq, nil, nil)
+		if prepareErr != nil {
+			t.Fatal(prepareErr)
+		}
+		candidate, prepareErr := database.prepareDurableRootCandidateV1(idx, next, nil, resources, false)
+		if prepareErr != nil {
+			t.Fatal(prepareErr)
+		}
+		published, publishErr := database.executeDurableRootCandidateV1(candidate)
+		if publishErr != nil {
+			t.Fatal(publishErr)
+		}
+		database.meta = published
+		database.rootReuseMu.Unlock()
+		database.durablePublishMu.Unlock()
+		if err := database.Close(); err != nil {
+			t.Fatal(err)
+		}
+		database, err = Open(Options{Dir: source, ValueLog: ValueLogOptions{PointerThreshold: 1}})
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 	values := [][]byte{[]byte("first-value-log-value"), []byte("second-value-log-value")}
 	pointers := appendPointersInNewSegment(t, source, 0, 1, 10_000, len(values), func(index int) []byte { return values[index] })
@@ -96,7 +136,12 @@ func TestRebindDurableRootSnapshotV1PreservesBothSlotsAndExactTargetIdentity(t *
 		_ = index.Close()
 		t.Fatal(err)
 	}
-	selected, err := selectDurableRootV1(store, store.pageCount, nil)
+	indexPager, err := pager.Open(indexPath, 65536)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer indexPager.Close()
+	selected, err := selectDurableRootV1(store, store.pageCount, nil, dependencyDirectoryStructureValidatorV2(indexPager))
 	if err != nil {
 		_ = index.Close()
 		t.Fatal(err)
@@ -107,12 +152,36 @@ func TestRebindDurableRootSnapshotV1PreservesBothSlotsAndExactTargetIdentity(t *
 	}
 	newestSlot := selected.Slot
 	olderSlot := newestSlot ^ 1
-	olderManifest, err := rootpublication.LoadDependencyManifestV1(store, selected.SlotRecords[olderSlot].Manifest)
-	if err != nil {
-		_ = index.Close()
-		t.Fatal(err)
+	var entries []rootpublication.DependencyManifestEntryV1
+	if directory {
+		record := selected.SlotRecords[olderSlot]
+		view, err := rootpublication.NewDependencyDirectoryV2(indexPager, record.Directory, record.TotalPages, func() {})
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = view.Walk(func(key, value []byte) error {
+			if uint64(len(entries)) >= record.Directory.PhysicalCount {
+				return nil
+			}
+			entry, err := rootpublication.DecodeDependencyPhysicalV2(key, value)
+			if err != nil {
+				return err
+			}
+			entries = append(entries, entry)
+			return nil
+		})
+		view.Release()
+		if err != nil {
+			t.Fatal(err)
+		}
+	} else {
+		olderManifest, err := rootpublication.LoadDependencyManifestV1(store, selected.SlotRecords[olderSlot].Manifest)
+		if err != nil {
+			_ = index.Close()
+			t.Fatal(err)
+		}
+		entries = olderManifest.Entries()
 	}
-	entries := olderManifest.Entries()
 	if len(entries) == 0 {
 		_ = index.Close()
 		t.Fatal("older rebound slot has no external dependency")

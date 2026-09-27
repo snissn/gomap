@@ -22,11 +22,11 @@ type DependencyDirectoryV2 struct {
 	release func()
 }
 
-func NewDependencyDirectoryV2(p *pager.Pager, ref DependencyDirectoryRefV2, release func()) (*DependencyDirectoryV2, error) {
-	if p == nil || ref.RootPageID < 2 || ref.PhysicalCount > ^uint64(0)-ref.LogicalCount || release == nil {
+func NewDependencyDirectoryV2(p *pager.Pager, ref DependencyDirectoryRefV2, totalPages uint64, release func()) (*DependencyDirectoryV2, error) {
+	if p == nil || ref.RootPageID < 2 || ref.RootPageID >= totalPages || totalPages > p.PageCount() || ref.PhysicalCount > ^uint64(0)-ref.LogicalCount || release == nil {
 		return nil, ErrDependencyManifestFormat
 	}
-	directory := &DependencyDirectoryV2{ref: ref, tree: tree.New(p, nil, ref.RootPageID), release: release}
+	directory := &DependencyDirectoryV2{ref: ref, tree: tree.NewWithPageLimit(p, nil, ref.RootPageID, totalPages), release: release}
 	directory.refs.Store(1)
 	return directory, nil
 }

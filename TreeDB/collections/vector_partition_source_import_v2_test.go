@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/sourcepartition"
 	"github.com/snissn/gomap/TreeDB/internal/vectorpartition"
 )
@@ -438,7 +439,7 @@ func BenchmarkVectorPartitionSourceImportDirectoryV2(b *testing.B) {
 }
 
 func TestVectorPartitionSourceImportRetainedSealAndGCV2(t *testing.T) {
-	_, d, c := openTypedMinimaCollection(t)
+	dir, d, c := openTypedMinimaCollection(t)
 	defer d.Close()
 	ownership, input := sourceImportFixtureV2(t, c, 2)
 	input.DocumentRevisions = []uint64{1, 2}
@@ -497,12 +498,37 @@ func TestVectorPartitionSourceImportRetainedSealAndGCV2(t *testing.T) {
 		t.Fatal(err)
 	}
 	stats, err = c.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{CandidateRefs: []ColumnAssetRef{candidate}})
-	if err != nil || stats.SegmentsDeleted != 1 {
+	if !rootpublication.StableRelativeNamespaceSupported() {
+		if !errors.Is(err, rootpublication.ErrNamespacePersistenceUnsupported) || stats.SegmentsDeleted != 0 {
+			t.Fatalf("unsupported destructive source GC must refuse without deletion: %+v %v", stats, err)
+		}
+	} else if err != nil || stats.SegmentsDeleted != 1 {
 		t.Fatalf("source GC after old-root release: %+v %v", stats, err)
 	}
 	got, err := current.ReadChunk(0)
 	if err != nil || string(got.Chunk.Rows[0].DocumentID) != "first-a" {
 		t.Fatalf("destructive GC lost old source bytes: %+v %v", got, err)
+	}
+	if err := current.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopenedDB := openTypedMinimaDB(t, dir)
+	defer reopenedDB.Close()
+	reopened, err := NewCollectionManager(reopenedDB).OpenCollection("minima")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reopenedReader, err := reopened.OpenVectorPartitionSourceSnapshotV2(first.Snapshot, input.IndexName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopenedReader.Close()
+	got, err = reopenedReader.ReadChunk(0)
+	if err != nil || string(got.Chunk.Rows[0].DocumentID) != "first-a" || reopenedReader.Commitment() != commitment {
+		t.Fatalf("reopen after GC lost retained source: %+v %v", got, err)
 	}
 }
 

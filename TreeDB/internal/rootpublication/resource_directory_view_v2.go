@@ -17,6 +17,9 @@ func (set *StableResourceSet) DependencyDirectoryV2() (*DependencyDirectoryV2, e
 	}
 	set.mu.Lock()
 	defer set.mu.Unlock()
+	if set.physicalOnly {
+		return nil, ErrResourceOwnership
+	}
 	if owner := ResourceOwnerState(set.owner.Load()); owner == ResourceOwnerReleased || owner == ResourceOwnerTransferred {
 		return nil, ErrResourceOwnership
 	}
@@ -48,7 +51,7 @@ func (set *StableResourceSet) DependencyDirectoryV2() (*DependencyDirectoryV2, e
 // The returned set independently owns physical pins and the supplied root lease.
 // The caller retains ownership of source and its original directory reference.
 func BindDependencyDirectoryV2(source *StableResourceSet, directory *DependencyDirectoryV2) (*StableResourceSet, error) {
-	if source == nil || directory == nil {
+	if source == nil || directory == nil || source.physicalOnly {
 		return nil, ErrResourceOwnership
 	}
 	source.mu.Lock()
@@ -316,4 +319,31 @@ func (view stableLogicalObligationView) appendDirectoryDelta(values []StableLogi
 	view.count += len(added)
 	view.commitments = commitments
 	return view, nil
+}
+
+// DependencyDirectoryBaseV2 returns the borrowed inherited root for a rebuild,
+// including closures with unsealed admitted deltas. It does not certify that
+// this root represents the closure; only DependencyDirectoryV2 does that.
+func (set *StableResourceSet) DependencyDirectoryBaseV2() (*DependencyDirectoryV2, error) {
+	if set == nil {
+		return nil, nil
+	}
+	set.mu.Lock()
+	defer set.mu.Unlock()
+	if set.physicalOnly || set.Owner() == ResourceOwnerReleased || set.Owner() == ResourceOwnerTransferred {
+		return nil, ErrResourceOwnership
+	}
+	directory := set.emptyDirectory
+	var err error
+	set.rangeEntriesLocked(func(entry *stableResourceEntry) bool {
+		if inherited := entry.logicalObligations.directory; inherited != nil {
+			if directory != nil && directory != inherited {
+				err = ErrResourceConflict
+				return false
+			}
+			directory = inherited
+		}
+		return true
+	})
+	return directory, err
 }

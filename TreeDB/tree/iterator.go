@@ -1090,6 +1090,20 @@ func (it *Iterator) IsDeleted() bool {
 	return it != nil && it.valid && it.flags&node.FlagTombstone != 0
 }
 
+// CurrentIndexLeafPageID reports the ordinary index page containing the current
+// entry. It grants no mutation authority; callers must keep the iterator's root
+// lease alive. External leaf-log pages and invalid positions return false.
+func (it *Iterator) CurrentIndexLeafPageID() (uint64, bool) {
+	if it == nil || !it.Valid() || len(it.stack) == 0 {
+		return 0, false
+	}
+	leaf := &it.stack[len(it.stack)-1]
+	if leaf.Ref.Kind != page.ChildRefPage || leaf.Node.Type() != page.PageTypeLeaf {
+		return 0, false
+	}
+	return leaf.PageID, true
+}
+
 func (it *Iterator) Domain() (start, end []byte) {
 	return it.start, it.end
 }
@@ -1099,6 +1113,9 @@ func (it *Iterator) loadNode(pageID uint64) (node.Node, error) {
 }
 
 func (it *Iterator) loadNodeRef(ref page.ChildRef) (node.Node, error) {
+	if it != nil && len(it.stack) >= maxTraversalDepth {
+		return node.Node{}, errors.New("tree traversal depth exceeded")
+	}
 	if it == nil || it.tree == nil {
 		return node.Node{}, errors.New("missing tree")
 	}

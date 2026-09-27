@@ -16,7 +16,7 @@ import (
 // base must be the visible predecessor, including queued publications. A nil
 // base is for a new directory, never an implicit migration of a populated V1 DB.
 func WalkDependencyDirectoryChangesV2(source *StableResourceSet, base *DependencyDirectoryV2, visit func(key, value []byte, deleted bool) error) (physicalCount, logicalCount uint64, err error) {
-	if source == nil || visit == nil {
+	if source == nil || visit == nil || source.physicalOnly {
 		return 0, 0, ErrResourceOwnership
 	}
 	source.mu.Lock()
@@ -92,7 +92,7 @@ func WalkDependencyDirectoryChangesV2(source *StableResourceSet, base *Dependenc
 			}
 			removed++
 		}
-		// rangeValues visits only the in-memory delta for a directory view.
+		// rangeDeltaValues visits only the in-memory delta for a directory view.
 		entry.logicalObligations.rangeDeltaValues(func(obligation StableLogicalObligation) bool {
 			key := DependencyLogicalKeyV2(obligation)
 			if _, duplicate := additions[string(key)]; duplicate {

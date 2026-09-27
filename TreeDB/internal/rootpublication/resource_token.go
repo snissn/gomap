@@ -1904,11 +1904,12 @@ type ResourceKindStats struct {
 	PendingAge   time.Duration
 	// LogicalObligationCount may exceed PendingCount when several immutable
 	// logical references share one coalesced physical pin.
-	LogicalObligationCount uint64
-	Flushes                uint64
-	FlushDuration          time.Duration
-	Syncs                  uint64
-	SyncDuration           time.Duration
+	LogicalObligationCount          uint64
+	LogicalObligationCountAvailable bool
+	Flushes                         uint64
+	FlushDuration                   time.Duration
+	Syncs                           uint64
+	SyncDuration                    time.Duration
 	// PhysicalFileSyncs counts successful producer-certified file barriers.
 	// Unlike Syncs, it does not increase when SyncThrough is skipped because an
 	// already-synced frontier covers the request.

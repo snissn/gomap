@@ -13,7 +13,7 @@ func (set *StableResourceSet) WalkLogicalObligations(visit func(StableResourcePh
 }
 
 func (set *StableResourceSet) walkLogicalObligationsLocked(visit func(StableResourcePhysicalDescriptor, StableLogicalObligation) error) error {
-	if visit == nil {
+	if visit == nil || set.physicalOnly {
 		return ErrResourceOwnership
 	}
 	if owner := ResourceOwnerState(set.owner.Load()); owner == ResourceOwnerReleased || owner == ResourceOwnerTransferred {

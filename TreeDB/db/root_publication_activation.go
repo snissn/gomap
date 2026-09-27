@@ -806,6 +806,20 @@ func (db *DB) finalizeQueuedRootPublicationV1(
 		}
 	}()
 
+	baseDirectory, err := visibleBase.DependencyDirectoryV2()
+	if err != nil {
+		return post, prePublishErr(err)
+	}
+	if baseDirectory != nil {
+		bound, directoryRetired, err := db.prepareDependencyDirectoryV2(idx, next.CommitSeq, visibleBase, resources)
+		if err != nil {
+			return post, prePublishErr(fmt.Errorf("prepare queued dependency directory: %w", err))
+		}
+		resources.Release()
+		resources = bound
+		retired = append(retired, directoryRetired...)
+	}
+
 	dependencyBytes, err := db.rootPublicationDependencyBytesV1(resources)
 	if err != nil {
 		return post, prePublishErr(fmt.Errorf("account unpublished root dependencies: %w", err))
@@ -1027,9 +1041,19 @@ func (runtime *rootPublicationRuntimeV1) Prepare(ctx context.Context, candidate 
 			resources.Release()
 		}
 	}()
-	manifest, err := db.durableManifestFromResourcesV1WithStats(resources)
+	directory, err := resources.DependencyDirectoryV2()
 	if err != nil {
 		return err
+	}
+	var manifest *rootpublication.DependencyManifestV1
+	var directoryRef rootpublication.DependencyDirectoryRefV2
+	if directory != nil {
+		directoryRef = directory.Reference()
+	} else {
+		manifest, err = db.durableManifestFromResourcesV1WithStats(resources)
+		if err != nil {
+			return err
+		}
 	}
 
 	// Close drains the coordinator before index/resource teardown. Publication
@@ -1082,7 +1106,10 @@ func (runtime *rootPublicationRuntimeV1) Prepare(ctx context.Context, candidate 
 		return errors.New("missing live COW generation for root-publication seal")
 	}
 	generationID := liveGeneration.GenerationID() + 1
-	auxiliaryCount := int(manifest.PageCount()) + 1
+	auxiliaryCount := 1
+	if manifest != nil {
+		auxiliaryCount += int(manifest.PageCount())
+	}
 	var cowLimits *freelist.COWPrepareLimitsV1
 	if limits != nil {
 		cowLimits = &limits.FreelistCOW
@@ -1122,9 +1149,12 @@ func (runtime *rootPublicationRuntimeV1) Prepare(ctx context.Context, candidate 
 	next := member.next
 	next.TotalPages = generation.HighWater()
 	next.FreelistHeadID = 0
-	manifestRef, err := manifest.Reference(auxiliary[0])
-	if err != nil {
-		return err
+	var manifestRef rootpublication.DependencyManifestRefV1
+	if manifest != nil {
+		manifestRef, err = manifest.Reference(auxiliary[0])
+		if err != nil {
+			return err
+		}
 	}
 	recordPageID := auxiliary[len(auxiliary)-1]
 	if base.record.DurableSeq == ^uint64(0) {
@@ -1141,6 +1171,7 @@ func (runtime *rootPublicationRuntimeV1) Prepare(ctx context.Context, candidate 
 		AppliedCommandLSN: next.AppliedCommandLSN, LastCommitHeight: next.LastCommitHeight,
 		Freelist: generation.GenerationRef(), FreelistFreeCount: generation.FreeCount(), FreelistRetiredCount: generation.RetiredCount(),
 		Manifest:             manifestRef,
+		Directory:            directoryRef,
 		ParentRecordPageID:   base.meta.RootRecordPageID,
 		ParentCommitSeq:      base.meta.CommitSeq,
 		ParentRecordDigest:   base.meta.RootRecordDigest,
@@ -1200,11 +1231,17 @@ func (runtime *rootPublicationRuntimeV1) materializeSeal(seal *rootPublicationSe
 		}
 	}
 	auxiliary := seal.prepared.AuxiliaryPageIDs()
-	if len(auxiliary) != int(seal.manifest.PageCount())+1 {
+	expectedAuxiliary := 1
+	if seal.manifest != nil {
+		expectedAuxiliary += int(seal.manifest.PageCount())
+	}
+	if len(auxiliary) != expectedAuxiliary {
 		return errors.New("root-publication seal auxiliary inventory changed")
 	}
-	if _, err := seal.manifest.Materialize(auxiliary[0], durablePagerSinkV1{pager: seal.idx.pager}); err != nil {
-		return err
+	if seal.manifest != nil {
+		if _, err := seal.manifest.Materialize(auxiliary[0], durablePagerSinkV1{pager: seal.idx.pager}); err != nil {
+			return err
+		}
 	}
 	recordPageID := auxiliary[len(auxiliary)-1]
 	recordImage, recordDigest, err := seal.record.EncodePage(recordPageID)

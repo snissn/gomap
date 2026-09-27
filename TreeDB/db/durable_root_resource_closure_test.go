@@ -161,7 +161,7 @@ func TestCaptureDurableRootAppendRequirementsFallbackIsLazyAndOneShot4366(t *tes
 	}
 }
 
-func TestCaptureDurableRootAppendRequirementsFallbackErrorPreservesOwnership4366(t *testing.T) {
+func TestCaptureDurableRootAppendRequirementsFallbackErrorPreservesBaseAndReleasesProducer4366(t *testing.T) {
 	database, path := openDurableRootClosureDB3928(t)
 	baseObligation := durableRootClosureObligation3928(1)
 	added := durableRootClosureObligation3928(2)
@@ -192,8 +192,13 @@ func TestCaptureDurableRootAppendRequirementsFallbackErrorPreservesOwnership4366
 	if got := len(mustStableResourceDescriptors(t, base)); got != 1 {
 		t.Fatalf("base ownership changed after fallback failure: descriptors=%d", got)
 	}
-	if got := len(mustStableResourceDescriptors(t, producer)); got != 1 {
-		t.Fatalf("producer ownership changed after fallback failure: descriptors=%d", got)
+	// Capture consumes the producer on success and failure. Descriptors now
+	// correctly rejects released ownership instead of exposing stale metadata.
+	if producer.Owner() != rootpublication.ResourceOwnerReleased {
+		t.Fatalf("producer ownership after fallback failure=%v, want released", producer.Owner())
+	}
+	if descriptors, err := producer.Descriptors(); descriptors != nil || !errors.Is(err, rootpublication.ErrResourceOwnership) {
+		t.Fatalf("released producer descriptors=%v error=%v", descriptors, err)
 	}
 }
 

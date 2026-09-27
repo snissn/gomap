@@ -3,7 +3,9 @@ package rootpublication
 import (
 	"bytes"
 	"errors"
+	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"testing"
 
@@ -68,7 +70,7 @@ func TestDependencyDirectoryV2ResourceClosureAppendAndLease(t *testing.T) {
 		t.Fatal(err)
 	}
 	releases := 0
-	directory, err := NewDependencyDirectoryV2(p, DependencyDirectoryRefV2{RootPageID: 2, PhysicalCount: physical, LogicalCount: logical}, func() { releases++ })
+	directory, err := NewDependencyDirectoryV2(p, DependencyDirectoryRefV2{RootPageID: 2, PhysicalCount: physical, LogicalCount: logical}, p.PageCount(), func() { releases++ })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,6 +79,45 @@ func TestDependencyDirectoryV2ResourceClosureAppendAndLease(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer bound.Release()
+	admit := func(entry DependencyManifestEntryV1) (*StableResourceSet, error) {
+		physical, err := token.cloneSharedPinned(entry.LogicalLane, entry.ResourceID, entry.DiagnosticPath, entry.Frontier, entry.Reachability[0], nil, nil)
+		if err != nil {
+			return nil, err
+		}
+		builder := NewStableResourceSetBuilder()
+		defer builder.Abandon()
+		if err := builder.Add(physical); err != nil {
+			physical.Release()
+			return nil, err
+		}
+		return builder.Freeze()
+	}
+	validated := 0
+	recovered, err := RecoverDependencyDirectoryV2(directory, admit, func(file *os.File, physical DependencyManifestEntryV1, got StableLogicalObligation) error {
+		if file == nil || len(physical.LogicalObligations) != 0 || (got != obligation && got != second) {
+			t.Fatal("recovery did not stream exact pinned obligation")
+		}
+		validated++
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if validated != 2 || !reflect.DeepEqual(mustStableResourceDescriptors(t, recovered), mustStableResourceDescriptors(t, bound)) {
+		t.Fatal("recovered directory contents differ")
+	}
+	recovered.rangeEntries(func(entry *stableResourceEntry) bool {
+		if entry.logicalObligations.tail != nil || entry.logicalObligations.index != nil || entry.logicalObligations.count != 2 {
+			t.Fatal("recovery retained logical corpus")
+		}
+		return true
+	})
+	recovered.Release()
+	callbackFailure := errors.New("recovery content failure")
+	failed, err := RecoverDependencyDirectoryV2(directory, admit, func(*os.File, DependencyManifestEntryV1, StableLogicalObligation) error { return callbackFailure })
+	if failed != nil || !errors.Is(err, callbackFailure) {
+		t.Fatalf("recovery callback failure: %v %v", failed, err)
+	}
 	directory.Release()
 	source.Release()
 	if releases != 0 {
@@ -126,6 +167,7 @@ func TestDependencyDirectoryV2ResourceClosureAppendAndLease(t *testing.T) {
 	if err != nil || len(removedDescriptors) != 1 || len(removedDescriptors[0].LogicalObligations()) != 1 || removedDescriptors[0].LogicalObligations()[0] != second {
 		t.Fatalf("materialized removal lost exact contents: %+v %v", removedDescriptors, err)
 	}
+	assertDependencyDirectoryRecordStreamV2(t, removed, []StableLogicalObligation{second})
 	removed.Release()
 	added := obligation
 	added.Offset, added.Digest = 8, [32]byte{3}
@@ -160,6 +202,7 @@ func TestDependencyDirectoryV2ResourceClosureAppendAndLease(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer candidate.Release()
+	assertDependencyDirectoryRecordStreamV2(t, candidate, []StableLogicalObligation{obligation, second, added})
 	writes := 0
 	physical, logical, err = WalkDependencyDirectoryChangesV2(candidate, directory, func(key, value []byte, deleted bool) error {
 		writes++
@@ -243,7 +286,7 @@ func TestDependencyDirectoryV2EmptyClosureLease(t *testing.T) {
 		t.Fatal(err)
 	}
 	releases := 0
-	directory, err := NewDependencyDirectoryV2(p, DependencyDirectoryRefV2{RootPageID: 2}, func() { releases++ })
+	directory, err := NewDependencyDirectoryV2(p, DependencyDirectoryRefV2{RootPageID: 2}, p.PageCount(), func() { releases++ })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -278,5 +321,44 @@ func TestDependencyDirectoryV2EmptyClosureLease(t *testing.T) {
 	clone.Release()
 	if releases != 1 {
 		t.Fatalf("empty directory releases=%d", releases)
+	}
+}
+
+func assertDependencyDirectoryRecordStreamV2(t *testing.T, resources *StableResourceSet, expected []StableLogicalObligation) {
+	t.Helper()
+	remaining := make(map[StableLogicalObligation]bool, len(expected))
+	for _, obligation := range expected {
+		remaining[obligation] = true
+	}
+	var previous []byte
+	physical := 0
+	if err := WalkDependencyDirectoryRecordsV2(resources, func(key, value []byte) error {
+		if previous != nil && bytes.Compare(previous, key) >= 0 {
+			t.Fatal("directory rebuild stream is not in strict encoded key order")
+		}
+		previous = append(previous[:0], key...)
+		if key[0] == dependencyPhysicalKeyV2 {
+			physical++
+			_, err := DecodeDependencyPhysicalV2(key, value)
+			return err
+		}
+		_, obligation, err := DecodeDependencyLogicalV2(key, value)
+		if err != nil {
+			return err
+		}
+		if !remaining[obligation] {
+			t.Fatalf("unexpected/duplicate streamed logical obligation: %+v", obligation)
+		}
+		delete(remaining, obligation)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if physical != resources.Len() || len(remaining) != 0 {
+		t.Fatalf("directory stream physical=%d expected=%d missing logical=%d", physical, resources.Len(), len(remaining))
+	}
+	failure := errors.New("directory rebuild visitor stopped")
+	if err := WalkDependencyDirectoryRecordsV2(resources, func(_, _ []byte) error { return failure }); !errors.Is(err, failure) {
+		t.Fatalf("directory rebuild visitor error=%v", err)
 	}
 }

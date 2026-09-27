@@ -142,13 +142,13 @@ func validateLeafPageStableResources(ptrs []page.LeafLogPtr, resources *rootpubl
 			return fmt.Errorf("%w: leaf append returned stable reachability %v", rootpublication.ErrResourceConflict, fields)
 		}
 		if fields[0] == rootpublication.ReachabilityDictionaryGeneration {
-			if descriptor.Kind != rootpublication.ResourceDictionary || descriptor.LogicalObligationCount == 0 {
+			if descriptor.Kind != rootpublication.ResourceDictionary || !descriptor.LogicalObligationCountAvailable || descriptor.LogicalObligationCount == 0 {
 				return fmt.Errorf("%w: leaf append returned incomplete dictionary authority", rootpublication.ErrUnresolvedResource)
 			}
 			continue
 		}
 		if fields[0] == rootpublication.ReachabilityTemplateGeneration {
-			if descriptor.Kind != rootpublication.ResourceTemplate || descriptor.LogicalObligationCount == 0 {
+			if descriptor.Kind != rootpublication.ResourceTemplate || !descriptor.LogicalObligationCountAvailable || descriptor.LogicalObligationCount == 0 {
 				return fmt.Errorf("%w: leaf append returned incomplete template authority", rootpublication.ErrUnresolvedResource)
 			}
 			continue

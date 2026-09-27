@@ -14,6 +14,9 @@ type StableResourceSelector struct {
 // resource set for an exact logical obligation. Indexed frozen sets use their
 // per-kind logical-resource index; flat sets retain their bounded linear form.
 func CloneStableResourceForSelector(source *StableResourceSet, selector StableResourceSelector) (*StableResourceSet, error) {
+	if source != nil && source.physicalOnly {
+		return nil, ErrResourceOwnership
+	}
 	if source == nil || selector.Kind == "" || selector.LogicalLane == "" || selector.ResourceID == "" || selector.PhysicalGeneration == 0 {
 		return nil, ErrUnresolvedResource
 	}

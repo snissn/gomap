@@ -239,7 +239,22 @@ func (c *Coordinator) enqueueLocked(candidate *PreparedRootCandidate, supersede 
 			}
 		}
 		sets = append(sets, candidateSet)
-		unionCount, err := validatedStableResourceUnionCount(sets...)
+		var unionCount int
+		var err error
+		if len(candidate.durableRootGroup().members) != 0 {
+			members := make([]*PreparedRootCandidate, 0, len(c.pending)+1)
+			for _, pending := range c.pending {
+				members = append(members, pending.candidate)
+			}
+			members = append(members, candidate)
+			var physical *StableResourceSet
+			physical, err = physicalDurabilityUnion(members)
+			if err == nil {
+				unionCount = physical.Len()
+			}
+		} else {
+			unionCount, err = validatedStableResourceUnionCount(sets...)
+		}
 		if err != nil {
 			c.rejectedCandidates++
 			if resourceSetConflict(err) {
@@ -322,11 +337,8 @@ func (c *Coordinator) CaptureReachability() (ReachabilitySnapshot, error) {
 	sets = append(sets, c.recoverySets...)
 	var resources *StableResourceSet
 	if len(sets) != 0 {
-		view, err := UnionStableResourceSets(sets...)
-		if err != nil {
-			return ReachabilitySnapshot{}, err
-		}
-		resources, err = CloneStableResourceSetExcludingKinds(view)
+		var err error
+		resources, err = ClonePhysicalReachabilityUnion(sets...)
 		if err != nil {
 			return ReachabilitySnapshot{}, err
 		}
@@ -1111,7 +1123,7 @@ func (c *Coordinator) resourceStatsLocked() []ResourceKindStats {
 			sets = append(sets, set)
 		}
 	}
-	union, err := UnionStableResourceSets(sets...)
+	union, err := unionStableResourceSets(stableResourceViewPhysicalPinned, sets...)
 	if err != nil {
 		return nil
 	}

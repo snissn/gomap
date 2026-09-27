@@ -3095,7 +3095,7 @@ func (db *DB) recover() error {
 		return db.initializeDurableRootV1(idx)
 	}
 
-	selected, err := selectDurableRootV1(p, p.PageCount(), db.validateDurableDependencyManifestV1)
+	selected, err := selectDurableRootV1(p, p.PageCount(), db.validateDurableDependencyManifestV1, db.dependencyDirectoryValidatorV2(idx))
 	if err != nil {
 		return err
 	}
