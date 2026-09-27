@@ -19,7 +19,8 @@ const formatConfigRequiredFeaturesVersion = 3
 const formatConfigDurabilityProfileVersion = 4
 
 const (
-	RequiredFeatureCommandWALV2 = "command_wal_v2"
+	RequiredFeatureCommandWALV2          = "command_wal_v2"
+	RequiredFeatureDependencyDirectoryV2 = "dependency_directory_v2"
 	// RequiredFeatureCommandWALV1 is retained as a source-compatibility alias
 	// during the pre-alpha cutover. Newly persisted configs always require V2.
 	RequiredFeatureCommandWALV1       = RequiredFeatureCommandWALV2
@@ -62,6 +63,15 @@ func (cfg FormatConfig) RequiresCommandWALV1() bool {
 }
 
 func (cfg FormatConfig) RequiresCommandWALV2() bool { return cfg.RequiresCommandWALV1() }
+
+func (cfg FormatConfig) RequiresDependencyDirectoryV2() bool {
+	for _, feature := range cfg.RequiredFeatures {
+		if normalizeFormatConfigMode(feature) == RequiredFeatureDependencyDirectoryV2 {
+			return true
+		}
+	}
+	return false
+}
 
 func formatConfigPath(dir string) string {
 	if dir == "" {
@@ -343,6 +353,10 @@ func CommandWALRequiredFeatureEnabled(dir string) (bool, error) {
 }
 
 func commandWALRequiredFeatureGate(dir string) (bool, error) {
+	return requiredFormatFeatureEnabled(dir, RequiredFeatureCommandWALV2)
+}
+
+func requiredFormatFeatureEnabled(dir, wanted string) (bool, error) {
 	path := formatConfigPath(dir)
 	if path == "" {
 		return false, errors.New("missing db dir")
@@ -379,7 +393,7 @@ func commandWALRequiredFeatureGate(dir string) (bool, error) {
 	}
 	requiresCommandWAL := false
 	for _, feature := range gate.RequiredFeatures {
-		if normalizeFormatConfigMode(feature) == RequiredFeatureCommandWALV1 {
+		if normalizeFormatConfigMode(feature) == wanted {
 			requiresCommandWAL = true
 		}
 	}
@@ -389,7 +403,8 @@ func commandWALRequiredFeatureGate(dir string) (bool, error) {
 // SaveFormatConfig writes cfg to dir/format.json atomically. A transition into
 // command_wal_v2 validates that legacy WAL state is clean; re-saving a config
 // that already requires command_wal_v2 does not re-run activation validation
-// because command-WAL segments are expected after activation.
+// because command-WAL segments are expected after activation. The incremental
+// dependency directory is a new-store opt-in and cannot be removed once saved.
 func SaveFormatConfig(dir string, cfg FormatConfig) error {
 	existing, ok, err := LoadFormatConfig(dir)
 	if err != nil {
@@ -414,6 +429,23 @@ func SaveFormatConfig(dir string, cfg FormatConfig) error {
 			if err := ValidateCommandWALActivationClean(dir); err != nil {
 				return err
 			}
+		}
+	}
+	if ok && existing.RequiresDependencyDirectoryV2() && !cfg.RequiresDependencyDirectoryV2() {
+		return fmt.Errorf("%w: cannot remove dependency_directory_v2", ErrLegacyFormatRebuildRequired)
+	}
+	if cfg.RequiresDependencyDirectoryV2() && (!ok || !existing.RequiresDependencyDirectoryV2()) {
+		// Activation is deliberately new-store only. No V1 root or WAL is
+		// decoded or rewritten as part of adding this required feature.
+		if info, err := os.Stat(filepath.Join(dir, indexFileName)); err == nil {
+			if info.Size() != 0 {
+				return fmt.Errorf("%w: dependency_directory_v2 requires a new store", ErrLegacyFormatRebuildRequired)
+			}
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+		if err := ValidateCommandWALActivationClean(dir); err != nil {
+			return err
 		}
 	}
 	return writeFormatConfig(dir, cfg)
@@ -609,8 +641,8 @@ func validateRequiredFormatFeatures(features []string) error {
 		}
 		seen[feature] = struct{}{}
 		switch feature {
-		case RequiredFeatureCommandWALV1:
-			// Current durable-prefix command WAL.
+		case RequiredFeatureCommandWALV1, RequiredFeatureDependencyDirectoryV2:
+			// Current command WAL and incremental dependency directory.
 		case legacyRequiredFeatureCommandWALV1:
 			return fmt.Errorf("%w: %s", commitlog.ErrCommandWALV1RebuildRequired, raw)
 		default:

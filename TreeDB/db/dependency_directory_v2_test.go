@@ -199,12 +199,16 @@ func TestDependencyDirectoryV2InitialEmptyAndNoop(t *testing.T) {
 		t.Fatal(err)
 	}
 	database.rootReuseMu.Lock()
+	beforeBytes, beforePages := database.durableRootDirectoryBytesEncoded.Load(), database.durableRootDirectoryPagesWritten.Load()
 	next, retired, err := database.prepareDependencyDirectoryV2(idx, 3, bound, bound)
 	database.rootReuseMu.Unlock()
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer next.Release()
+	if database.durableRootDirectoryBytesEncoded.Load() != beforeBytes || database.durableRootDirectoryPagesWritten.Load() != beforePages {
+		t.Fatal("directory no-op charged changed records or COW pages")
+	}
 	second, err := next.DependencyDirectoryV2()
 	if err != nil {
 		t.Fatal(err)

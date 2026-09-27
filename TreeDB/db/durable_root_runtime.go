@@ -2004,6 +2004,21 @@ func (db *DB) initializeDurableRootV1(idx *indexGen) error {
 		rootIDs[i] = pageID
 	}
 
+	var directoryRef rootpublication.DependencyDirectoryRefV2
+	var resources *rootpublication.StableResourceSet
+	if db.dependencyDirectoryRequiredFeature {
+		var err error
+		resources, _, err = db.prepareDependencyDirectoryV2(idx, 1, nil, nil)
+		if err != nil {
+			return err
+		}
+		defer resources.Release()
+		directory, err := resources.DependencyDirectoryV2()
+		if err != nil {
+			return err
+		}
+		directoryRef = directory.Reference()
+	}
 	base, err := freelist.NewFreelistGenerationV1(1, p.PageCount(), nil, nil)
 	if err != nil {
 		return err
@@ -2016,18 +2031,23 @@ func (db *DB) initializeDurableRootV1(idx *indexGen) error {
 	if err != nil {
 		return err
 	}
-	manifest, err := rootpublication.NewDependencyManifestV1(nil)
-	if err != nil {
-		return err
+	var manifest *rootpublication.DependencyManifestV1
+	auxiliaryCount := 1
+	if directoryRef.RootPageID == 0 {
+		manifest, err = rootpublication.NewDependencyManifestV1(nil)
+		if err != nil {
+			return err
+		}
+		auxiliaryCount++
 	}
 	var candidateID freelist.CandidateIDV1
 	binary.LittleEndian.PutUint64(candidateID[:8], 1)
-	prepared, err := idx.allocator.PrepareCOWCandidateV1(2, 1, candidateID, capability, 2, freelist.NewCandidatePageSinkV1())
+	prepared, err := idx.allocator.PrepareCOWCandidateV1(2, 1, candidateID, capability, auxiliaryCount, freelist.NewCandidatePageSinkV1())
 	if err != nil {
 		return err
 	}
 	auxiliary := prepared.AuxiliaryPageIDs()
-	if len(auxiliary) != 2 {
+	if len(auxiliary) != auxiliaryCount {
 		return errors.New("durable-root initializer did not reserve manifest and record pages")
 	}
 	generation := prepared.Candidate().Generation()
@@ -2038,24 +2058,28 @@ func (db *DB) initializeDurableRootV1(idx *indexGen) error {
 		return fmt.Errorf("write initial COW freelist pages: %w", err)
 	}
 	sink := durablePagerSinkV1{pager: p}
-	manifestRef, err := manifest.Materialize(auxiliary[0], sink)
-	if err != nil {
-		return err
+	var manifestRef rootpublication.DependencyManifestRefV1
+	if manifest != nil {
+		manifestRef, err = manifest.Materialize(auxiliary[0], sink)
+		if err != nil {
+			return err
+		}
 	}
+	recordPageID := auxiliary[len(auxiliary)-1]
 	record := rootpublication.DurableRootRecordV1{
 		CommitSeq: 1, DurableSeq: 1,
 		UserRootPageID: rootIDs[0], SystemRootPageID: rootIDs[1], TotalPages: generation.HighWater(),
 		Freelist: generation.GenerationRef(), FreelistFreeCount: generation.FreeCount(), FreelistRetiredCount: generation.RetiredCount(),
-		Manifest: manifestRef, MetaProjectionDigest: page.DurableMetaProjectionDigestV1(1, 1, auxiliary[1]),
+		Manifest: manifestRef, Directory: directoryRef, MetaProjectionDigest: page.DurableMetaProjectionDigestV1(1, 1, recordPageID),
 	}
-	recordImage, recordDigest, err := record.EncodePage(auxiliary[1])
+	recordImage, recordDigest, err := record.EncodePage(recordPageID)
 	if err != nil {
 		return err
 	}
-	if err := p.Write(auxiliary[1], recordImage); err != nil {
+	if err := p.Write(recordPageID, recordImage); err != nil {
 		return err
 	}
-	meta, err := page.NewDurableMetaV1(1, 1, auxiliary[1], recordDigest)
+	meta, err := page.NewDurableMetaV1(1, 1, recordPageID, recordDigest)
 	if err != nil {
 		return err
 	}
@@ -2075,11 +2099,18 @@ func (db *DB) initializeDurableRootV1(idx *indexGen) error {
 	if err := idx.allocator.PublishCOWCandidateV1(prepared, capability); err != nil {
 		return err
 	}
+	if resources != nil {
+		resources, err = rootpublication.CloneStableResourceSetExcludingKinds(resources)
+		if err != nil {
+			return err
+		}
+	}
 	db.installDurableRootSelectionV1(durableRootSelectionV1{
 		Slot: MetaPage0ID, Meta: meta, Record: record, Freelist: generation, Manifest: manifest,
-		SlotCommits: [2]uint64{1, 0},
-		SlotMetas:   [2]page.DurableMetaV1{meta, {}},
-		SlotRecords: [2]rootpublication.DurableRootRecordV1{record, {}},
+		SlotResources: [2]*rootpublication.StableResourceSet{resources, nil},
+		SlotCommits:   [2]uint64{1, 0},
+		SlotMetas:     [2]page.DurableMetaV1{meta, {}},
+		SlotRecords:   [2]rootpublication.DurableRootRecordV1{record, {}},
 	})
 	return nil
 }

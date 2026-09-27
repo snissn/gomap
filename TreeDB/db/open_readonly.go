@@ -26,6 +26,10 @@ func openReadOnly(opts Options) (*DB, error) {
 	if err := applyReadOnlyDefaults(&opts); err != nil {
 		return nil, err
 	}
+	requiresDependencyDirectory, err := requiredFormatFeatureEnabled(opts.Dir, RequiredFeatureDependencyDirectoryV2)
+	if err != nil {
+		return nil, err
+	}
 	NormalizeFlushAdmissionOptions(&opts)
 	if err := ensureNoLegacyMixedWALValueSegments(opts.Dir); err != nil {
 		return nil, err
@@ -87,6 +91,8 @@ func openReadOnly(opts Options) (*DB, error) {
 
 	adaptiveCtrl, inlineThreshold := resolveInlineThresholdAndAdaptive(opts)
 	db := &DB{
+		dependencyDirectoryRequiredFeature: requiresDependencyDirectory,
+
 		readOnly:                       true,
 		resolvedProfile:                opts.ResolvedProfile,
 		deprecatedProfileAlias:         opts.DeprecatedProfileAlias,
@@ -196,6 +202,10 @@ func openReadOnlyNoLock(opts Options) (*DB, error) {
 	if err := applyReadOnlyDefaults(&opts); err != nil {
 		return nil, err
 	}
+	requiresDependencyDirectory, err := requiredFormatFeatureEnabled(opts.Dir, RequiredFeatureDependencyDirectoryV2)
+	if err != nil {
+		return nil, err
+	}
 	NormalizeFlushAdmissionOptions(&opts)
 	if err := ensureNoLegacyMixedWALValueSegments(opts.Dir); err != nil {
 		return nil, err
@@ -244,6 +254,8 @@ func openReadOnlyNoLock(opts Options) (*DB, error) {
 
 	adaptiveCtrl, inlineThreshold := resolveInlineThresholdAndAdaptive(opts)
 	db := &DB{
+		dependencyDirectoryRequiredFeature: requiresDependencyDirectory,
+
 		readOnly:                       true,
 		resolvedProfile:                opts.ResolvedProfile,
 		deprecatedProfileAlias:         opts.DeprecatedProfileAlias,

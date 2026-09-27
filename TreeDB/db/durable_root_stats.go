@@ -16,6 +16,15 @@ func (db *DB) appendDurableRootStats(stats map[string]string) {
 
 	record := selected.record
 	stats["treedb.durable_root.format_version"] = "1"
+	if record.Directory.RootPageID != 0 {
+		stats["treedb.durable_root.format_version"] = "2"
+	}
+	stats["treedb.durable_root.directory.root_page"] = strconv.FormatUint(record.Directory.RootPageID, 10)
+	stats["treedb.durable_root.directory.physical_count"] = strconv.FormatUint(record.Directory.PhysicalCount, 10)
+	stats["treedb.durable_root.directory.logical_count"] = strconv.FormatUint(record.Directory.LogicalCount, 10)
+	stats["treedb.durable_root.directory_build.changed_record_bytes"] = strconv.FormatUint(db.durableRootDirectoryBytesEncoded.Load(), 10)
+	stats["treedb.durable_root.directory_build.changed_records"] = strconv.FormatUint(db.durableRootDirectoryRecordsEncoded.Load(), 10)
+	stats["treedb.durable_root.directory_build.pages_written"] = strconv.FormatUint(db.durableRootDirectoryPagesWritten.Load(), 10)
 	stats["treedb.durable_root.selected_slot"] = strconv.FormatUint(selected.slot, 10)
 	stats["treedb.durable_root.commit_seq"] = strconv.FormatUint(record.CommitSeq, 10)
 	stats["treedb.durable_root.durable_seq"] = strconv.FormatUint(record.DurableSeq, 10)

@@ -28,39 +28,19 @@ func testRebindDurableRootSnapshotBothSlots(t *testing.T, directory bool) {
 		t.Skip("snapshot rebind requires durable rename and removal namespaces")
 	}
 	source := filepath.Join(t.TempDir(), "source")
+	if directory {
+		if err := os.MkdirAll(source, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := SaveFormatConfig(source, FormatConfig{RequiredFeatures: []string{RequiredFeatureDependencyDirectoryV2}}); err != nil {
+			t.Fatal(err)
+		}
+	}
 	database, err := Open(Options{Dir: source, ValueLog: ValueLogOptions{PointerThreshold: 1}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if directory {
-		database.durablePublishMu.Lock()
-		database.rootReuseMu.Lock()
-		idx := database.idx.Load()
-		next := database.meta
-		next.CommitSeq++
-		resources, _, prepareErr := database.prepareDependencyDirectoryV2(idx, next.CommitSeq, nil, nil)
-		if prepareErr != nil {
-			t.Fatal(prepareErr)
-		}
-		candidate, prepareErr := database.prepareDurableRootCandidateV1(idx, next, nil, resources, false)
-		if prepareErr != nil {
-			t.Fatal(prepareErr)
-		}
-		published, publishErr := database.executeDurableRootCandidateV1(candidate)
-		if publishErr != nil {
-			t.Fatal(publishErr)
-		}
-		database.meta = published
-		database.rootReuseMu.Unlock()
-		database.durablePublishMu.Unlock()
-		if err := database.Close(); err != nil {
-			t.Fatal(err)
-		}
-		database, err = Open(Options{Dir: source, ValueLog: ValueLogOptions{PointerThreshold: 1}})
-		if err != nil {
-			t.Fatal(err)
-		}
-	}
+
 	values := [][]byte{[]byte("first-value-log-value"), []byte("second-value-log-value")}
 	pointers := appendPointersInNewSegment(t, source, 0, 1, 10_000, len(values), func(index int) []byte { return values[index] })
 	if err := database.RefreshValueLogSet(); err != nil {

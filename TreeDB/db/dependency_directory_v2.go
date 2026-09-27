@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"github.com/snissn/gomap/TreeDB/batch"
+	"github.com/snissn/gomap/TreeDB/internal/adaptive"
 	"github.com/snissn/gomap/TreeDB/internal/bulk"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -36,7 +37,12 @@ func (db *DB) prepareDependencyDirectoryV2(idx *indexGen, sequence uint64, baseR
 	}
 	delta := batch.New(nil, page.PageSize)
 	defer delta.Close()
+	// Count persisted changed keys/values (including deletion keys), not
+	// comparison encodings or binding checks of unchanged physical records.
+	var encodedBytes, encodedRecords uint64
 	physical, logical, err := rootpublication.WalkDependencyDirectoryChangesV2(resources, base, func(key, value []byte, deleted bool) error {
+		encodedBytes += uint64(len(key) + len(value))
+		encodedRecords++
 		if deleted {
 			return delta.Delete(key)
 		}
@@ -46,15 +52,22 @@ func (db *DB) prepareDependencyDirectoryV2(idx *indexGen, sequence uint64, baseR
 		return nil, nil, err
 	}
 	var retired []uint64
+	var metrics adaptive.Metrics
+	var pagesWritten uint64
 	if root == 0 && delta.IsEmpty() {
 		iter := newOrderedRootDeltaBatchIterator(delta, false)
 		defer iter.Close()
 		root, err = bulk.BuildWithOptions(iter, idx.allocator, idx.pager, bulk.BuildOptions{LeafPrefixCompression: true})
+		pagesWritten = 1 // The sole empty initial leaf.
 	} else {
-		root, retired, _, err = db.publishOrderedRootDeltaBatchWithAllocator(idx, root, delta, orderedRootPublishOptions{
+		root, retired, metrics, err = db.publishOrderedRootDeltaBatchWithAllocator(idx, root, delta, orderedRootPublishOptions{
 			leafPrefixCompression: true,
 		}, idx.allocator, idx.allocator, false)
+		pagesWritten = uint64(metrics.ZipperPagerLeafPagesWritten + metrics.ZipperInternalPagesWritten)
 	}
+	db.durableRootDirectoryBytesEncoded.Add(encodedBytes)
+	db.durableRootDirectoryRecordsEncoded.Add(encodedRecords)
+	db.durableRootDirectoryPagesWritten.Add(pagesWritten)
 	if err != nil {
 		return nil, nil, fmt.Errorf("apply dependency directory: %w", err)
 	}
