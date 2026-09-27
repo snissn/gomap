@@ -87,9 +87,11 @@ type VectorPartitionLifecycleSourceIdentityV1 struct {
 // VectorPartitionLifecycleIdentityV1 is the exact identity of one derived
 // generation and its immutable source.
 type VectorPartitionLifecycleIdentityV1 struct {
-	Index      VectorPartitionLifecycleIndexIdentityV1  `json:"index"`
-	Source     VectorPartitionLifecycleSourceIdentityV1 `json:"source"`
-	Generation uint64                                   `json:"generation"`
+	SourceFormat uint16                                   `json:"source_format,omitempty"`
+	SourceV2     VectorPartitionLifecycleSourceIdentityV2 `json:"source_v2,omitzero"`
+	Index        VectorPartitionLifecycleIndexIdentityV1  `json:"index"`
+	Source       VectorPartitionLifecycleSourceIdentityV1 `json:"source"`
+	Generation   uint64                                   `json:"generation"`
 }
 
 // VectorPartitionLifecycleGroupReadyV1 is one bounded group-level aggregate.
@@ -130,44 +132,46 @@ type VectorPartitionLifecycleMutationProofV1 struct {
 // record. RequiredGroups and ReadyGroups are scanned only on build/cleanup
 // transitions; steady-state guards compare fixed-size identity and digest data.
 type VectorPartitionLifecycleRecordV1 struct {
-	Format                   uint16                                 `json:"format"`
-	Revision                 uint64                                 `json:"revision"`
-	State                    VectorPartitionLifecycleStateV1        `json:"state"`
-	Identity                 VectorPartitionLifecycleIdentityV1     `json:"identity"`
-	PreviousActiveGeneration uint64                                 `json:"previous_active_generation"`
-	MutationEpoch            uint64                                 `json:"mutation_epoch"`
-	RequiredGroups           []raftcluster.GroupID                  `json:"required_groups"`
-	ReadyGroups              []VectorPartitionLifecycleGroupReadyV1 `json:"ready_groups"`
-	ReadySetDigest           string                                 `json:"ready_set_digest"`
-	InvalidationReason       string                                 `json:"invalidation_reason"`
-	InvalidationEpoch        uint64                                 `json:"invalidation_epoch"`
-	MutationConfirmed        bool                                   `json:"mutation_confirmed"`
-	Aborted                  bool                                   `json:"aborted"`
-	RetirementReason         string                                 `json:"retirement_reason"`
-	SupersededByGeneration   uint64                                 `json:"superseded_by_generation"`
-	CleanedGroups            []raftcluster.GroupID                  `json:"cleaned_groups"`
-	CleanupComplete          bool                                   `json:"cleanup_complete"`
-	LastCommandDigest        string                                 `json:"last_command_digest"`
+	SourceOwners             []VectorPartitionSourceOwnerPreparationV2 `json:"source_owners,omitempty"`
+	Format                   uint16                                    `json:"format"`
+	Revision                 uint64                                    `json:"revision"`
+	State                    VectorPartitionLifecycleStateV1           `json:"state"`
+	Identity                 VectorPartitionLifecycleIdentityV1        `json:"identity"`
+	PreviousActiveGeneration uint64                                    `json:"previous_active_generation"`
+	MutationEpoch            uint64                                    `json:"mutation_epoch"`
+	RequiredGroups           []raftcluster.GroupID                     `json:"required_groups"`
+	ReadyGroups              []VectorPartitionLifecycleGroupReadyV1    `json:"ready_groups"`
+	ReadySetDigest           string                                    `json:"ready_set_digest"`
+	InvalidationReason       string                                    `json:"invalidation_reason"`
+	InvalidationEpoch        uint64                                    `json:"invalidation_epoch"`
+	MutationConfirmed        bool                                      `json:"mutation_confirmed"`
+	Aborted                  bool                                      `json:"aborted"`
+	RetirementReason         string                                    `json:"retirement_reason"`
+	SupersededByGeneration   uint64                                    `json:"superseded_by_generation"`
+	CleanedGroups            []raftcluster.GroupID                     `json:"cleaned_groups"`
+	CleanupComplete          bool                                      `json:"cleanup_complete"`
+	LastCommandDigest        string                                    `json:"last_command_digest"`
 }
 
 // VectorPartitionLifecycleCommandV1 is a single deterministic envelope. Fields
 // irrelevant to Kind must be zero, preventing ambiguous alternate encodings.
 type VectorPartitionLifecycleCommandV1 struct {
-	Format                   uint16                                `json:"format"`
-	Kind                     VectorPartitionLifecycleCommandKindV1 `json:"kind"`
-	ExpectedRevision         uint64                                `json:"expected_revision"`
-	ExpectedState            VectorPartitionLifecycleStateV1       `json:"expected_state"`
-	Identity                 VectorPartitionLifecycleIdentityV1    `json:"identity"`
-	RequiredGroups           []raftcluster.GroupID                 `json:"required_groups"`
-	PreviousActiveGeneration uint64                                `json:"previous_active_generation"`
-	PreviousActiveRevision   uint64                                `json:"previous_active_revision"`
-	MutationEpoch            uint64                                `json:"mutation_epoch"`
-	GroupReady               VectorPartitionLifecycleGroupReadyV1  `json:"group_ready"`
-	ReadySetDigest           string                                `json:"ready_set_digest"`
-	Reason                   string                                `json:"reason"`
-	InvalidationEpoch        uint64                                `json:"invalidation_epoch"`
-	References               VectorPartitionLifecycleReferencesV1  `json:"references"`
-	GroupID                  raftcluster.GroupID                   `json:"group_id"`
+	SourceOwners             []VectorPartitionSourceOwnerPreparationV2 `json:"source_owners,omitempty"`
+	Format                   uint16                                    `json:"format"`
+	Kind                     VectorPartitionLifecycleCommandKindV1     `json:"kind"`
+	ExpectedRevision         uint64                                    `json:"expected_revision"`
+	ExpectedState            VectorPartitionLifecycleStateV1           `json:"expected_state"`
+	Identity                 VectorPartitionLifecycleIdentityV1        `json:"identity"`
+	RequiredGroups           []raftcluster.GroupID                     `json:"required_groups"`
+	PreviousActiveGeneration uint64                                    `json:"previous_active_generation"`
+	PreviousActiveRevision   uint64                                    `json:"previous_active_revision"`
+	MutationEpoch            uint64                                    `json:"mutation_epoch"`
+	GroupReady               VectorPartitionLifecycleGroupReadyV1      `json:"group_ready"`
+	ReadySetDigest           string                                    `json:"ready_set_digest"`
+	Reason                   string                                    `json:"reason"`
+	InvalidationEpoch        uint64                                    `json:"invalidation_epoch"`
+	References               VectorPartitionLifecycleReferencesV1      `json:"references"`
+	GroupID                  raftcluster.GroupID                       `json:"group_id"`
 }
 
 func EncodeVectorPartitionLifecycleCommandV1(command VectorPartitionLifecycleCommandV1) ([]byte, error) {
@@ -279,6 +283,7 @@ func ApplyVectorPartitionLifecycleCommandV1(record VectorPartitionLifecycleRecor
 			PreviousActiveGeneration: command.PreviousActiveGeneration,
 			MutationEpoch:            command.MutationEpoch,
 			RequiredGroups:           append([]raftcluster.GroupID(nil), command.RequiredGroups...),
+			SourceOwners:             append([]VectorPartitionSourceOwnerPreparationV2(nil), command.SourceOwners...),
 			ReadyGroups:              []VectorPartitionLifecycleGroupReadyV1{},
 			CleanedGroups:            []raftcluster.GroupID{},
 		}
@@ -450,6 +455,9 @@ func (r VectorPartitionLifecycleRecordV1) CanPrepare(identity VectorPartitionLif
 }
 
 func (r VectorPartitionLifecycleRecordV1) CanActivate(identity VectorPartitionLifecycleIdentityV1, previousActiveGeneration, mutationEpoch uint64) error {
+	if identity.SourceFormat == 2 {
+		return ErrVectorPartitionLifecycleGuard
+	}
 	if r.State != VectorPartitionLifecyclePreparedV1 {
 		return errors.Join(ErrVectorPartitionLifecycleGuard, fmt.Errorf("activate requires prepared state"))
 	}
@@ -466,6 +474,9 @@ func (r VectorPartitionLifecycleRecordV1) CanActivate(identity VectorPartitionLi
 }
 
 func (r VectorPartitionLifecycleRecordV1) CanSearch(proof VectorPartitionLifecycleSearchProofV1) error {
+	if proof.Identity.SourceFormat == 2 {
+		return ErrVectorPartitionLifecycleGuard
+	}
 	if r.State != VectorPartitionLifecycleActiveV1 || r.InvalidationEpoch != 0 {
 		return errors.Join(ErrVectorPartitionLifecycleGuard, fmt.Errorf("search requires non-invalidated active state"))
 	}
@@ -575,6 +586,10 @@ func canonicalVectorPartitionLifecycleCommandV1(command VectorPartitionLifecycle
 			return VectorPartitionLifecycleCommandV1{}, err
 		}
 	}
+	command.SourceOwners, err = canonicalVectorPartitionSourceOwnersV2(command.Identity, command.SourceOwners, command.Kind == VectorPartitionLifecycleBeginBuildV1)
+	if err != nil {
+		return VectorPartitionLifecycleCommandV1{}, err
+	}
 	if err := validateVectorPartitionLifecycleCommandShapeV1(command); err != nil {
 		return VectorPartitionLifecycleCommandV1{}, err
 	}
@@ -683,7 +698,7 @@ func canonicalVectorPartitionLifecycleRecordV1(record VectorPartitionLifecycleRe
 	if record.Format == 0 && record.Revision == 0 && record.State == "" &&
 		zeroVectorPartitionLifecycleIdentityV1(record.Identity) &&
 		record.PreviousActiveGeneration == 0 && record.MutationEpoch == 0 &&
-		len(record.RequiredGroups) == 0 && len(record.ReadyGroups) == 0 &&
+		len(record.SourceOwners) == 0 && len(record.RequiredGroups) == 0 && len(record.ReadyGroups) == 0 &&
 		record.ReadySetDigest == "" && record.InvalidationReason == "" &&
 		record.InvalidationEpoch == 0 && !record.Aborted &&
 		record.RetirementReason == "" && record.SupersededByGeneration == 0 &&
@@ -713,6 +728,13 @@ func canonicalVectorPartitionLifecycleRecordV1(record VectorPartitionLifecycleRe
 	record.CleanedGroups, err = canonicalVectorPartitionLifecycleGroupsAllowEmptyV1(record.CleanedGroups)
 	if err != nil {
 		return VectorPartitionLifecycleRecordV1{}, err
+	}
+	record.SourceOwners, err = canonicalVectorPartitionSourceOwnersV2(record.Identity, record.SourceOwners, true)
+	if err != nil {
+		return VectorPartitionLifecycleRecordV1{}, err
+	}
+	if record.Identity.SourceFormat == 2 && record.State == VectorPartitionLifecycleActiveV1 {
+		return VectorPartitionLifecycleRecordV1{}, ErrVectorPartitionLifecycleGuard
 	}
 	if err := validateVectorPartitionLifecycleRecordV1(record); err != nil {
 		return VectorPartitionLifecycleRecordV1{}, err
@@ -819,6 +841,12 @@ func validateCompleteVectorPartitionLifecycleReadySetV1(r VectorPartitionLifecyc
 func validateVectorPartitionLifecycleIdentityV1(identity VectorPartitionLifecycleIdentityV1) error {
 	if err := validateVectorPartitionLifecycleIndexIdentityV1(identity.Index); err != nil {
 		return err
+	}
+	if identity.SourceFormat == 2 {
+		return validateVectorPartitionSourceIdentityV2(identity)
+	}
+	if identity.SourceFormat != 0 || identity.SourceV2 != (VectorPartitionLifecycleSourceIdentityV2{}) {
+		return ErrVectorPartitionLifecycleIdentity
 	}
 	if identity.Generation == 0 || identity.Source.Generation == 0 || identity.Source.Checksum == 0 ||
 		identity.Source.SchemaHash == 0 || identity.Source.RowCount == 0 {

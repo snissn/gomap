@@ -4,17 +4,21 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"sync"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/sourcepartition"
 	"github.com/snissn/gomap/TreeDB/internal/vectorpartition"
 	"github.com/snissn/gomap/TreeDB/node"
 )
 
 // VectorPartitionSourceReaderV2 pins immutable source records in an existing
 // TreeDB snapshot. Opening it does not admit canonical source authority: the
-// caller must obtain expected from the source group's committed descriptor.
-// Each read verifies actual local row bytes against that expected root.
+// caller must bind expected to the catalog BUILD prepared-input commitment.
+// The local preparation adapter may open candidate descriptors to derive that
+// commitment. Each read verifies actual local row bytes against expected; no
+// source-group quorum or distributed serving authority is inferred here.
 type VectorPartitionSourceReaderV2 struct {
 	mu         sync.RWMutex
 	snap       *backenddb.Snapshot
@@ -22,6 +26,7 @@ type VectorPartitionSourceReaderV2 struct {
 	prefix     string
 	expected   vectorpartition.SourceSnapshotV2
 	commitment VectorPartitionSourceCommitmentV2
+	owner      sourcepartition.SourceShardV2
 }
 
 // VectorPartitionSourceCommitmentV2 identifies a locally committed immutable
@@ -67,6 +72,19 @@ func (r *VectorPartitionSourceReaderV2) Commitment() VectorPartitionSourceCommit
 		return VectorPartitionSourceCommitmentV2{}
 	}
 	return r.commitment
+}
+
+// ValidateOwnerV2 checks the persisted import binding against the exact map
+// and selected owner. A completed checksum alone does not establish ownership.
+func (r *VectorPartitionSourceReaderV2) ValidateOwnerV2(ownership sourcepartition.ResolvedSourceShardMapV2, group string) error {
+	if r == nil || group == "" || r.owner.GroupID != group || r.expected.SourceMapEpoch != ownership.Epoch() || fmt.Sprintf("%x", r.expected.SourceMapDigest) != ownership.Digest() {
+		return sourcepartition.ErrInvalidSourceShardMapV2
+	}
+	ref := ownership.Collection()
+	if r.expected.CollectionScope != ref.Database+"/"+ref.Catalog+"/"+ref.Collection {
+		return sourcepartition.ErrInvalidSourceShardMapV2
+	}
+	return ownership.ValidateShard(r.owner)
 }
 
 type VectorPartitionSourceChunkReadV2 struct {
@@ -165,7 +183,7 @@ func (c *Collection) OpenVectorPartitionSourceSnapshotV2(expected VectorPartitio
 	if header.Generation != commitment.DirectoryGeneration || header.Digest != commitment.DirectoryDigest || header.CollectionDigest != sha256.Sum256([]byte(catalog.meta.Name)) || header.SchemaDigest != expected.SchemaDigest || header.SourceMapEpoch != expected.SourceMapEpoch || header.SourceMapDigest != expected.SourceMapDigest {
 		return fail(errors.New("collections: source reader directory identity mismatch"))
 	}
-	return &VectorPartitionSourceReaderV2{snap: snap, root: root, prefix: sourceImportDirectoryPrefixV2(progressKey), expected: expected, commitment: commitment}, nil
+	return &VectorPartitionSourceReaderV2{snap: snap, root: root, prefix: sourceImportDirectoryPrefixV2(progressKey), expected: expected, commitment: commitment, owner: sourcepartition.SourceShardV2{ShardID: expected.ShardID, GroupID: record.Binding.GroupID, Start: record.Binding.Start, End: record.Binding.End}}, nil
 }
 
 func (r *VectorPartitionSourceReaderV2) Close() error {

@@ -823,6 +823,50 @@ replacement still fails exact identity validation. An ordinary filesystem copy
 does not perform this rebind and remains unrecoverable when a selected manifest
 binds copied external dependencies.
 
+### 3.3.1 Opt-in dependency directory V2
+
+The required format feature `dependency_directory_v2` selects an ordinary COW
+B-tree in `index.db` for the exact external-resource closure. Enable it only
+before a new store is initialized and while its WAL is clean. Populated V1
+stores are refused; there is no migration. Required-feature validation precedes
+root and WAL decoding in read-write, read-only and no-lock snapshot opens,
+including `IgnoreFormatConfig`. Removing the feature from an existing store is
+refused. Stores without it retain the V1 record and manifest encoding.
+
+With this feature, the durable-root record version is `2`; its magic and common
+layout remain unchanged. Bytes `176:184` hold the directory root page ID,
+`184:192` its physical-descriptor count, and `192:200` its logical-obligation
+count, all u64 LE. Bytes `200:232` are zero. A record contains exactly one closure
+representation. The directory uses normal tree pages, checksums and traversal
+bounds, limited by that record's `TotalPages`. It is not a Merkle source proof.
+
+Physical keys have prefix `1` and bind kind, logical lane, resource ID and
+resource generation independently of host file identity. Their values contain
+the canonical physical descriptor and exact logical count. Logical keys have
+prefix `2` and use the globally unique logical-obligation identity; values bind
+the physical owner and remaining exact obligation metadata. Strings are length
+prefixed and integers use the codec's little-endian representation; encoded key
+order is not the in-memory logical-obligation comparator. Duplicate logical
+identities cannot be hidden under different physical owners. Decode rejects
+noncanonical encodings, invalid ownership, unsupported pointer/tombstone flags,
+missing owner records and count mismatches.
+
+Publication applies admitted additions, removals and changed physical descriptors
+to the visible predecessor before freezing its allocator. Coalesced publication
+syncs the physical union of admitted members but seals the latest member's exact
+directory. A physical-only union is not a logical closure and cannot supply
+logical enumeration, proofs or manifests. Directory roots retain their index
+file and root-registration leases. Both recoverable meta slots and retained
+readers protect shared subtrees; changed paths retire through the existing COW
+freelist rather than treating directory pages as one contiguous allocation.
+
+Rebuild and vacuum stream the directory as a third root. Snapshot rebinding
+first validates both slots in a private staged index copy, then changes only
+fixed-width physical identity values in its leaves and recomputes checksums.
+Logical keys, record sizes, page layout, slot identity and lineage remain bound;
+a size-changing rewrite is refused. Live mapped tree pages are never modified
+by this maintenance-only operation.
+
 ### 3.4 Publication order and ownership
 
 One synchronous publication executes in this order:
@@ -3414,3 +3458,28 @@ At import completion, `SIS2` stores the completed snapshot digest, directory gen
 The directory retains one bounded active-segment ownership witness. Appends reuse an existing segment only through the existing retained-resource selector and exact parent/child identity/frontier checks; segments rotate at the existing 16 MiB limit. This reduces physical-file churn without changing pin, WAL or replay authority. The V2 GC consumer reads only asset-reference prefixes, validates complete header part/row coverage, and uses the existing recoverable-root, replay and deletion guards. Discovery refuses beyond one million asset metadata records or 64 MiB (or tighter caller bounds) before deletion. Immutable source bytes/proof pages remain protected by COW root snapshots. Legacy scan/build APIs remain refused.
 
 Public import diagnostics count actual directory reads, fallback reads, source rows/leaf bytes/proof-node writes and command payload bytes. Constant directory reads do not imply constant total storage work: the existing DPM V1 durable dependency stream includes retained logical obligations. The public benchmark reports selected stream bytes/items and encoding work as well as allocations; this retained dependency growth remains an unresolved scale requirement.
+
+#### Prepared source input in the catalog BUILD record
+
+Paged source input uses the existing replicated vector-partition lifecycle
+BUILD record. Its comparable identity has source format `2`, zero legacy source
+scalars, and source-map epoch/digest, semantic owner snapshot-set root, graph
+profile digest and placement digest. V1 omits the new discriminator and zero
+V2 value, preserving its canonical encoding.
+
+BEGIN carries at most 128 owner aggregates. Each contains a catalog group,
+exact assigned shard count, semantic snapshot-set digest and local completion
+evidence digest. Source owners are independent of ANN readiness groups. The
+trusted preparation boundary opens completed durable imports, verifies stored
+source-map intervals and exact owner coverage, and hashes canonical shard-ID
+order. The semantic root excludes local directory generations, physical layout
+and WAL positions. An exact retry with different replica-local completion
+evidence keeps the original committed preparation record.
+
+A local owner can prepare without hosting other source owners. The local
+all-owner BEGIN convenience path explicitly refuses unavailable remote owners;
+it does not implement distributed source preparation transport or claim source
+imports have source-group quorum commitment. Catalog apply checks deterministic
+identity and known groups without filesystem reads. Paged distributed activation
+and search remain refused, including forged active lifecycle records. Durable
+local preparation alone does not authorize serving.

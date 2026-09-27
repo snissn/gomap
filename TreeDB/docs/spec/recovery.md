@@ -137,8 +137,8 @@ returns `ErrLegacyFormatRebuildRequired`; callers must rebuild the DB directory.
   and meta-projection digest.
 - Sort valid candidates by descending `CommitSeq`, with slot ID as the stable
   tie-breaker.
-- Validate each candidate independently without recursing through the B-tree or
-  scanning value-log contents:
+- Validate each candidate independently without scanning user/system B-trees or
+  value-log contents:
   - load the exact durable-root-record page and verify both its page checksum
     and SHA-256 digest from the meta,
   - require its commit/durable sequences and projection digest to match the
@@ -157,6 +157,23 @@ older complete slot. If neither slot is complete, open fails with
 `ErrNoRecoverableMeta` and stable per-slot rejection reasons. Normal recovery
 never follows the parent-record chain and never repairs a candidate by combining
 fields or resources from the other slot.
+
+For an opt-in `dependency_directory_v2` store, the version-2 durable-root record
+selects the dependency B-tree instead of a contiguous V1 manifest. Recovery
+streams the selected directory under that record's page extent, validates exact
+physical identities and logical ownership/frontiers, and retains physical pins
+and bounded summaries rather than a copied logical-obligation corpus. Point
+lookups and streaming walks propagate missing/corrupt pages and bounded-depth
+failures; an I/O or decoding error is never interpreted as logical absence.
+Each fallback slot is independently validated against its own extent and root.
+An incomplete newest directory therefore permits only a complete older slot,
+never a mixture of their descriptors. Both slots and old readers retain shared
+subtrees until their leases are released.
+
+The required feature is checked before malformed root or WAL contents can be
+inspected, including read-only and no-lock snapshot entry points. An unsupported
+feature, a populated V1 store newly marked V2, or feature removal fails closed.
+Normal startup performs no V1-to-V2 conversion or directory repair.
 
 ### 2.3 State install
 

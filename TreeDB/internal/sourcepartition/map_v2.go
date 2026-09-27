@@ -115,6 +115,29 @@ func ValidateSourceShardMapV2(input SourceShardMapV2) (ResolvedSourceShardMapV2,
 func (m ResolvedSourceShardMapV2) Collection() CollectionRefV2 { return m.value.Collection }
 func (m ResolvedSourceShardMapV2) Epoch() uint64               { return m.value.Epoch }
 func (m ResolvedSourceShardMapV2) Digest() string              { return m.value.Digest }
+
+// WalkShards visits the immutable canonical map without copying its corpus.
+func (m ResolvedSourceShardMapV2) WalkShards(visit func(SourceShardV2) error) error {
+	if visit == nil || len(m.value.Shards) == 0 {
+		return ErrInvalidSourceShardMapV2
+	}
+	for _, shard := range m.value.Shards {
+		if err := visit(shard); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ValidateShard checks an exact owner/token interval using the existing ordered map.
+func (m ResolvedSourceShardMapV2) ValidateShard(shard SourceShardV2) error {
+	i := sort.Search(len(m.value.Shards), func(i int) bool { return m.value.Shards[i].End >= shard.Start })
+	if i == len(m.value.Shards) || m.value.Shards[i] != shard {
+		return ErrInvalidSourceShardMapV2
+	}
+	return nil
+}
+
 func (m ResolvedSourceShardMapV2) Copy() SourceShardMapV2 {
 	out := m.value
 	out.Shards = slices.Clone(out.Shards)
