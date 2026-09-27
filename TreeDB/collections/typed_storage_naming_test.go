@@ -412,6 +412,10 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	// The persistent vector-partition searcher consumes the compatibility-retained
 	// public collection configuration solely to reach derived typed-column assets.
 	{path: "TreeDB/collections/vector_partition_persistent_searcher_v1.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 2},
+	// The live-document proof reads the compatibility-retained configuration;
+	// its fixture uses the same public names to construct a typed-column vector.
+	{path: "TreeDB/collections/vector_partition_live_document_v1.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
+	{path: "TreeDB/collections/vector_partition_live_document_v1_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 3, occurrences: 5},
 	// #4324 replay uses the compatibility-retained typed-column configuration
 	// and value type names to fold the live carrier into document publication.
 	{path: "TreeDB/collections/vector_index_partition_live_replay_v1.go", classification: typedStorageLegacyCompatibility, matchingLines: 4, occurrences: 4},

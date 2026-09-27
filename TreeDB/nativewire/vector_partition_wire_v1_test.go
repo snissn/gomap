@@ -55,6 +55,7 @@ func TestVectorPartitionNativeWireInsertWithClusterSubmitterV1(t *testing.T) {
 	}
 	cluster := &fakeClusterSubmitter{}
 	server := NewServer(ServerOptions{ClusterSubmitter: cluster, VectorPartitionOperations: operations})
+	defer server.Close()
 	client, _, err := NewInProcessClient(t.Context(), server)
 	if err != nil {
 		t.Fatal(err)

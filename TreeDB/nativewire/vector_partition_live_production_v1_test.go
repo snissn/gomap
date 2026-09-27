@@ -374,7 +374,7 @@ func TestVectorPartitionReplicatedLivePinDoesNotBlockPublicationV1(t *testing.T)
 		Database: "default", Catalog: "default", Collection: "docs", IndexName: fixture.definition.Name,
 		IndexDefinitionDigest: collections.VectorIndexDefinitionDigestV1(fixture.definition),
 		Query:                 []float32{.9, .1}, Metric: VectorPartitionShardSearchMetricCosineV1,
-		RouterMode: collections.VectorPartitionRouterModeExactV1, RouterScoreBudget: 2, PartitionProbes: 1,
+		RouterMode: collections.VectorPartitionRouterModeExactV1, RouterScoreBudget: len(fixture.manifest.Representatives), PartitionProbes: 1,
 		Consistency: VectorPartitionShardSearchConsistencySnapshotV1, StatsMode: VectorPartitionShardSearchStatsBasicV1,
 		TopK: 1, EfSearch: 8, RequestBytesLimit: 1 << 20, CandidateBytesLimit: 8 << 20,
 		ResponseBytesLimit: 1 << 20, MergeEntriesLimit: 3,
@@ -383,7 +383,7 @@ func TestVectorPartitionReplicatedLivePinDoesNotBlockPublicationV1(t *testing.T)
 		t.Fatal(dispatchErr)
 	}
 	if !publicationCompleted {
-		t.Fatal("search failed before exercising concurrent live publication")
+		t.Fatalf("search failed before exercising concurrent live publication: %v", err)
 	}
 	var coordinatorErr *VectorPartitionCoordinatorErrorV1
 	if !errors.As(err, &coordinatorErr) || coordinatorErr.Code != VectorPartitionCoordinatorErrorGenerationMismatchV1 {
