@@ -18,6 +18,9 @@ leaf, and saves the source head and Go version from a required clean checkout.
 The `DOCUMENT_SNAPSHOT_EVIDENCE` JSON log records the measured phase; process
 profiles also include fixture population. These artifacts are not
 `unified-bench -profile-dir` outputs.
+Growth records use `source_directory_file_bytes_before_export` for the source
+directory size before export and `archive_bytes` for the streamed archive size.
+Foreground records use `archive_bytes` for the native snapshot size.
 
 ## Guardrail Check (Read Snapshot + Append-Only)
 
