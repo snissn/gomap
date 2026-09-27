@@ -242,6 +242,12 @@ func TestCapturedRaftSnapshotV1FinalizedExpiryAndInstallAdmission(t *testing.T) 
 	if err := reader.Close(); err != nil {
 		t.Fatal(err)
 	}
+	// Expiry cancels the carrier before its AfterFunc finishes owner cleanup.
+	// The last reader may close between those two steps.
+	cleanupDeadline := time.Now().Add(3 * time.Second)
+	for source.snapshotOperationActive.Load() && time.Now().Before(cleanupDeadline) {
+		time.Sleep(time.Millisecond)
+	}
 	if source.snapshotOperationActive.Load() {
 		t.Fatal("closed final reader retained admission")
 	}
