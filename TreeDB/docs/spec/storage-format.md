@@ -197,6 +197,13 @@ combined local roots. The explicit V7 Vamana pack binding omits legacy physical
 row references; ordinal provenance lives in the local metadata directory. A
 pinned local domain open validates the ordinal permutation and exact document
 identity before ordinal-only traversal can return source-scoped results.
+Each sequential owner-verification, graph-build or domain-open traversal reuses
+only its current verified source chunk. Misses retain full directory, completed
+snapshot and chunk-proof validation; hits still check cancellation and exact
+owner/shard/snapshot/row identity. The state belongs to the traversal, retains no
+reader or independent lease, and never becomes a session-wide cache. Its bound
+is 256 rows and 8 MiB encoded bytes plus decoded row/slice/origin overhead;
+returned rows own their mutable slices. Public point reads remain uncached.
 Legacy publication, distributed activation/search, router and reclaim APIs
 continue to refuse schema 7. A decoded root or local Stage is not READY or
 distributed activation evidence.
@@ -3503,7 +3510,7 @@ The fixed 2252-byte `TCD2` header retains generation, row/part counts, local app
 
 `SCL2` retains a bounded immutable source leaf before whole-snapshot sealing. Its row framing is shared with `SCK2`, but it carries the leaf digest and no serving proof. It cannot be decoded as an authenticated serving chunk. Source bytes are split into 2048-byte B-tree records, with a bounded length/digest record and immutable subtree hashes keyed by level and index. Existing COW-root reachability protects these records; they are not a separate filesystem sidecar. Snapshot readers reconstruct only the requested leaf and at most 64 sibling hashes, then verify actual IDs, revisions and FP32 bytes against the caller's independently admitted snapshot root. Import completion, durable retry and checkpoint reopen do not confer catalog authority by themselves.
 
-The existing stable-resource append certification protects prior physical assets. Its exact full-manifest fallback remains visible in import diagnostics; any use defeats a bounded per-import metadata claim and requires further qualification. Draft #4816 / #4808 now derives completed owner inputs through production preparation, binds their semantic commitments in catalog BUILD, and supports local paged source/ANN build, atomic Stage and prepared domain open. End-to-end performance and growth qualification, failure-cleanup coverage and current-head hosted checks remain gates. Distributed schema7 activation/search and destructive generation retirement remain explicitly refused.
+The existing stable-resource append certification protects prior physical assets. Its exact full-manifest fallback remains visible in import diagnostics; any use defeats a bounded per-import metadata claim and requires further qualification. Draft #4816 / #4808 now derives completed owner inputs through production preparation, binds their semantic commitments in catalog BUILD, and supports local paged source/ANN build, atomic Stage and prepared domain open. Focused cancellation, append/Stage failure, exact cleanup, crash-orphan GC and teardown ownership checks pass for the local producer. End-to-end performance and growth qualification and current-head hosted checks remain gates. Distributed schema7 activation/search and destructive generation retirement remain explicitly refused.
 
 
 At import completion, `SIS2` stores the completed snapshot digest, directory generation and semantic directory root (76 bytes) in that same system-root publication. A source reader validates the immutable seal against the retained historical directory header; later imports cannot substitute their current root for the original completion binding. This is a local commitment, not source-group authority.

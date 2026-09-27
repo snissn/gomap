@@ -2,7 +2,9 @@ package collections
 
 import (
 	"fmt"
+	"os"
 	"runtime"
+	"runtime/pprof"
 	"strconv"
 	"testing"
 
@@ -33,6 +35,33 @@ func openSourceImportScalingCollectionV2(b *testing.B, directory bool) (string, 
 		b.Fatal(err)
 	}
 	return dir, d, c
+}
+
+// writeSourceImportIntervalProfileV2 is an opt-in diagnostic. Calibration N=1
+// does not emit profiles. The before/after delta includes profile-writing work;
+// production attribution must filter stacks beneath Import/Checkpoint explicitly.
+func writeSourceImportIntervalProfileV2(b *testing.B, boundary string) {
+	b.Helper()
+	prefix := os.Getenv("TREEDB_SOURCE_IMPORT_INTERVAL_PROFILE")
+	if prefix == "" || b.N != 10 {
+		return
+	}
+	if runtime.MemProfileRate != 1 {
+		b.Fatal("interval allocation diagnostic requires -test.memprofilerate=1")
+	}
+	// MemProfile may lag by two GC cycles. Both flushes and profile writes
+	// occur outside the benchmark timer; sampling remains enabled throughout.
+	runtime.GC()
+	runtime.GC()
+	f, err := os.Create(prefix + "." + boundary + ".pprof")
+	if err != nil {
+		b.Fatal(err)
+	}
+	writeErr := pprof.Lookup("allocs").WriteTo(f, 0)
+	closeErr := f.Close()
+	if writeErr != nil || closeErr != nil {
+		b.Fatalf("interval profile: write=%v close=%v", writeErr, closeErr)
+	}
 }
 
 // The measured operation includes both public import and its checkpoint. Heap
@@ -85,6 +114,7 @@ func BenchmarkVectorPartitionSourceImportCheckpointV2(b *testing.B) {
 							var retainedBefore runtime.MemStats
 							runtime.ReadMemStats(&retainedBefore)
 							b.ReportAllocs()
+							writeSourceImportIntervalProfileV2(b, "before")
 							b.ResetTimer()
 							for i := 0; i < b.N; i++ {
 								importAt(prior + i)
@@ -93,6 +123,7 @@ func BenchmarkVectorPartitionSourceImportCheckpointV2(b *testing.B) {
 								}
 							}
 							b.StopTimer()
+							writeSourceImportIntervalProfileV2(b, "after")
 							after := d.Stats()
 							value := func(stats map[string]string, key string) uint64 {
 								v, err := strconv.ParseUint(stats[key], 10, 64)

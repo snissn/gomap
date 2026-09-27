@@ -2139,7 +2139,10 @@ legacy runtime/reclaim refusal and count-independent root decode allocation.
 
 `TestVectorPartitionPagedSourceSessionV2VerifiesCompletedOwner` exercises
 completed durable source imports, owner-bound source verification, source-only
-Stage, reopen and session lifetime. `TestANNOwnerCommitmentV2BindsExactCanonicalIntent`
+Stage, reopen and session lifetime. Its current-chunk and concurrent-traversal
+subtests check verified chunk reuse and replacement, complete identity matching,
+cancellation, independently owned returned rows and traversal-local state under
+the race detector. `TestANNOwnerCommitmentV2BindsExactCanonicalIntent`
 checks the semantic domain/member commitment independently of physical page
 layout. `TestVectorPartitionPagedGraphV2BuildStageReopen` exercises the combined
 source/ANN producer, exact retry, one colocated graph per domain, reopened local
@@ -2175,9 +2178,38 @@ recovery, changed frontiers and colliding write-lock stripes during shutdown.
 The combined graph case checks selected snapshot closure and active-reader GC
 protection, including corrupt transitive graph sections. Focused cleanup,
 race, native preparation and storage-name checks passed on the retained
-cleanup6 checkpoint. Allocation gates, complete public-path growth evidence
-and current-head platform checks remain pending; these small-fixture results
-do not establish P2 readiness or distributed capacity.
+cleanup6 checkpoint. The legacy ConditionalTxn guard passed eight alternating
+matched pairs after optional resource metadata became lazy: 152662.5 to 152662
+bytes/op, with 281 allocations/op unchanged. Enabled DPM2 imports retain a
+measured incremental 218 allocations for continuous imports and 310 after
+reopen at the small32 boundary; these costs are separate from the passing
+canonical-directory growth bound and remain subject to allocation review.
+
+The call-local chunk repair at `f7edce49b` passed focused and race checks plus
+three independent matched processes for each of five public build/open cases.
+The 1024-row build median fell from 239.09 to 50.64 ms and 193.08 to 42.67 MB;
+cold open with 256 local rows fell from 27.69 to 2.61 ms and 23.80 to 2.88 MB.
+All five measured cases improved. `BenchmarkVectorPartitionPagedProjectionV2`
+also separates fixture setup, global-map admission, build/Stage, cold open,
+reused-session domain open and warmed local search. Remote fixture entries
+represent admitted semantic metadata, not distributed storage preparation.
+The complete matched matrix uses 32/256/1024 local rows, 0/1024/8192 remote
+metadata entries and three independent alternating processes per arm/case.
+All 216 build/open/search processes and 18 separate map-admission processes
+pass. All 36 stage time medians and all 27 build/open allocation medians
+improve; warmed local search remains 160 bytes and two allocations per call
+in every cell. Global map admission still grows with remote metadata; its
+8192-entry candidate median is 2.68 ms, 4.28 MB and 81788 allocations.
+Fixture setup metrics exclude retained session/domain preparation in warm
+cases; whole-process RSS and heap observations include it.
+
+Process RSS improves in 34 of 36 cells, but warmed search with 32 local rows
+and 1024 remote entries consistently rises from a 50344 KiB median to 62392
+KiB. Post-GC live heap is effectively unchanged; this does not clear the
+process-peak regression. That observation remains under causal investigation,
+with the original matrix retained. Current-head platform checks also remain
+pending; these small-fixture results do not establish P2 readiness or
+distributed capacity.
 
 `TestSourceShardMapDocumentTokenIdentityV2` pins exact-byte token vectors;
 `TestSourceShardMapBoundImmutableLookupV2` and
