@@ -34,11 +34,7 @@ func NewPeerTransportV1(config FixedPeerTCPConfigV1) (*PeerTransportV1, error) {
 	if config.Credentials == nil {
 		return nil, errPeerAuthenticationV1
 	}
-	nodes := make([]raftcluster.NodeID, len(config.Nodes))
-	for i, node := range config.Nodes {
-		nodes[i] = node.ID
-	}
-	security, err := newPeerTransportSecurityV1(config.ClusterID, config.NodeID, *config.Credentials, nodes)
+	security, err := newPeerTransportSecurityV1(config)
 	if err != nil {
 		return nil, err
 	}

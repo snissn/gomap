@@ -74,13 +74,15 @@ func (f *peerAppendFutureV1) complete(err error) {
 
 type peerAppendPipelineV1 struct {
 	hraft.AppendPipeline
-	owner    *peerRaftTransportV1
-	mu       sync.Mutex
-	pending  map[hraft.AppendFuture]*peerAppendFutureV1
-	consumer chan hraft.AppendFuture
-	ctx      context.Context
-	cancel   context.CancelFunc
-	closed   bool
+	owner      *peerRaftTransportV1
+	mu         sync.Mutex
+	sendMu     sync.Mutex
+	registered *sync.Cond
+	pending    map[hraft.AppendFuture]*peerAppendFutureV1
+	consumer   chan hraft.AppendFuture
+	ctx        context.Context
+	cancel     context.CancelFunc
+	closed     bool
 }
 
 func (t *peerRaftTransportV1) AppendEntriesPipeline(id hraft.ServerID, target hraft.ServerAddress) (hraft.AppendPipeline, error) {
@@ -90,6 +92,7 @@ func (t *peerRaftTransportV1) AppendEntriesPipeline(id hraft.ServerID, target hr
 	}
 	ctx, cancel := context.WithCancel(t.ctx)
 	p := &peerAppendPipelineV1{AppendPipeline: underlying, owner: t, pending: make(map[hraft.AppendFuture]*peerAppendFutureV1), consumer: make(chan hraft.AppendFuture, 2), ctx: ctx, cancel: cancel}
+	p.registered = sync.NewCond(&p.mu)
 	go p.responses()
 	return p, nil
 }
@@ -99,9 +102,11 @@ func (p *peerAppendPipelineV1) AppendEntries(args *hraft.AppendEntriesRequest, r
 	if err != nil {
 		return nil, err
 	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if p.closed || p.ctx.Err() != nil {
+	// The upstream encoder needs serialized sends, but its queue handoff may
+	// block. Never hold the completion/registration mutex across that handoff.
+	p.sendMu.Lock()
+	defer p.sendMu.Unlock()
+	if p.ctx.Err() != nil {
 		work.release()
 		return nil, hraft.ErrTransportShutdown
 	}
@@ -109,6 +114,13 @@ func (p *peerAppendPipelineV1) AppendEntries(args *hraft.AppendEntriesRequest, r
 	if err != nil {
 		work.release()
 		return nil, err
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	defer p.registered.Broadcast()
+	if p.closed || p.ctx.Err() != nil {
+		work.release()
+		return nil, hraft.ErrTransportShutdown
 	}
 	future := &peerAppendFutureV1{AppendFuture: original, done: make(chan struct{}), work: work}
 	p.pending[original] = future
@@ -131,6 +143,11 @@ func (p *peerAppendPipelineV1) responses() {
 				return
 			}
 			p.mu.Lock()
+			// A fast response may arrive before AppendEntries registers its future.
+			// Waiting releases mu, so registration and shutdown can both proceed.
+			for p.pending[original] == nil && !p.closed && p.ctx.Err() == nil {
+				p.registered.Wait()
+			}
 			future := p.pending[original]
 			delete(p.pending, original)
 			p.mu.Unlock()
@@ -150,13 +167,14 @@ func (p *peerAppendPipelineV1) responses() {
 }
 
 func (p *peerAppendPipelineV1) Close() error {
-	// Close the socket before waiting for an AppendEntries write's mutex.
+	// Close the socket first to interrupt sends waiting for upstream capacity.
 	err := p.AppendPipeline.Close()
 	p.cancel()
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if !p.closed {
 		p.closed = true
+		p.registered.Broadcast()
 		for original, future := range p.pending {
 			future.complete(hraft.ErrTransportShutdown)
 			delete(p.pending, original)

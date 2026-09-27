@@ -326,16 +326,14 @@ func newFixedPeerTCPClientV1(config FixedPeerTCPConfigV1, shared *PeerTransportV
 	var security *peerTransportSecurityV1
 	var endpointNodes map[string]raftcluster.NodeID
 	if c.Credentials != nil {
-		nodes := make([]raftcluster.NodeID, len(c.Nodes))
 		endpointNodes = make(map[string]raftcluster.NodeID, len(c.Nodes))
-		for i, node := range c.Nodes {
-			nodes[i] = node.ID
+		for _, node := range c.Nodes {
 			endpointNodes[node.Address] = node.ID
 		}
 		if shared != nil {
 			security = shared.security
 		} else {
-			security, err = newPeerTransportSecurityV1(c.ClusterID, c.NodeID, *c.Credentials, nodes)
+			security, err = newPeerTransportSecurityV1(c)
 			if err != nil {
 				return nil, err
 			}

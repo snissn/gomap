@@ -64,7 +64,12 @@ func readPeerCredentialV1(path string, limit int64, private bool) ([]byte, error
 	return raw, nil
 }
 
-func newPeerTransportSecurityV1(cluster string, node raftcluster.NodeID, credentials PeerCredentialsV1, nodes []raftcluster.NodeID) (*peerTransportSecurityV1, error) {
+func newPeerTransportSecurityV1(config FixedPeerTCPConfigV1) (*peerTransportSecurityV1, error) {
+	cluster, node, credentials := config.ClusterID, config.NodeID, *config.Credentials
+	nodes := make([]raftcluster.NodeID, len(config.Nodes))
+	for i, peer := range config.Nodes {
+		nodes[i] = peer.ID
+	}
 	if cluster == "" || len(cluster) > 128 || !utf8.ValidString(cluster) || node == "" || len(node) > 128 || !utf8.ValidString(string(node)) || len(nodes) == 0 || len(nodes) > 1024 {
 		return nil, fmt.Errorf("%w: bounded explicit cluster/node inventory required for TLS", raftcluster.ErrInvalidConfig)
 	}
@@ -128,6 +133,21 @@ func newPeerTransportSecurityV1(cluster string, node raftcluster.NodeID, credent
 	local, err := security.identity(certificate.Leaf)
 	if err != nil || local != node {
 		return nil, fmt.Errorf("%w: local certificate does not name configured cluster/node", errPeerAuthenticationV1)
+	}
+	// Refuse before opening stores/listeners if any advertised local endpoint
+	// would fail the same hostname verification used by dialing peers.
+	addresses := []string{config.ListenAddress}
+	for _, address := range config.RaftListen {
+		addresses = append(addresses, address)
+	}
+	for _, address := range addresses {
+		host, _, err := net.SplitHostPort(address)
+		if err != nil {
+			return nil, errors.Join(errPeerAuthenticationV1, err)
+		}
+		if err := certificate.Leaf.VerifyHostname(host); err != nil {
+			return nil, errors.Join(errPeerAuthenticationV1, err)
+		}
 	}
 	return security, nil
 }

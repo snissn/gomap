@@ -1,5 +1,9 @@
 import copy
 import datetime as dt
+import pathlib
+import subprocess
+import sys
+import tempfile
 import unittest
 
 import treedb_peer_ec2 as deploy
@@ -68,6 +72,19 @@ class LiveInventoryAWS(FakeAWS):
 
 
 class DeploymentTests(unittest.TestCase):
+    def test_cli_malformed_json_has_single_line_error(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = pathlib.Path(directory) / 'inventory.json'
+            source.write_text('{bad json')
+            result = subprocess.run([sys.executable, deploy.__file__, 'plan', '--input', str(source), '--out', str(source)+'.out'], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 1)
+            self.assertEqual(len(result.stderr.splitlines()), 1)
+            self.assertNotIn('Traceback', result.stderr)
+        invalid = spec()
+        invalid['nodes'][0]['private_ip'] = 'not-an-ip'
+        with self.assertRaises(ValueError):
+            deploy.make_plan(invalid)
+
     def test_plan_has_persistent_pair_private_nic_and_expiry_before_compute(self):
         plan=deploy.make_plan(spec())
         deploy.verify_plan(plan)

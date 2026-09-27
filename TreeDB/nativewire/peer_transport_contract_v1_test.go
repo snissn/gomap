@@ -2,6 +2,7 @@ package nativewire
 
 import (
 	"context"
+	"errors"
 	"net"
 	"sync/atomic"
 	"testing"
@@ -111,5 +112,33 @@ func TestPeerSecurityShardBoundaryV1(t *testing.T) {
 	if wrong, err := NewAuthenticatedVectorPartitionShardSearchTCPDispatcherV1(transport, endpoints, nodes); err == nil {
 		wrong.Close()
 		t.Fatal("shard endpoint accepted a node outside its Raft group")
+	}
+}
+
+func TestPeerSecurityShardPreflightReturnsTypedErrorsV1(t *testing.T) {
+	transport, config := peerTransportFixtureV1(t)
+	defer transport.Close()
+	group := config.Groups[0].ID
+	dispatcher, err := NewAuthenticatedVectorPartitionShardSearchTCPDispatcherV1(transport, map[raftcluster.GroupID]string{group: config.ListenAddress}, map[raftcluster.GroupID]map[raftcluster.NodeID]string{group: {config.NodeID: config.ListenAddress}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dispatcher.Close()
+	for _, oversized := range []bool{false, true} {
+		request := vectorPartitionShardSearchRequestTestV1([]uint32{1})
+		request.TargetGroupID = group
+		if oversized {
+			dispatcher.maxRequestFrame = 1
+		} else {
+			request.TopK = 0
+		}
+		_, err := dispatcher.DispatchVectorPartitionShardSearchV1(context.Background(), request)
+		var typed *VectorPartitionShardSearchErrorV1
+		if !errors.As(err, &typed) || typed.Code != VectorPartitionShardSearchErrorInvalidRequestV1 || typed.GroupID != group || !errors.Is(err, raftcluster.ErrRouteTargetUnsupported) {
+			t.Fatalf("preflight lost typed request failure: %v", err)
+		}
+	}
+	if stats := transport.ResourceStatsV1(); stats.WrittenBytes != 0 {
+		t.Fatalf("preflight sent bytes: %v", stats)
 	}
 }

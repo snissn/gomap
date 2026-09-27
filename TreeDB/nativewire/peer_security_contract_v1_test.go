@@ -160,7 +160,6 @@ func TestPeerSecurityRotationReopenAndDowngradeRefusalV1(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	oldClient.Close()
 	if _, err := oldClient.Status(ctx, config.NodeID); err == nil {
 		t.Fatal("retired trust material rejoined after rotation")
 	}
@@ -196,5 +195,43 @@ func TestPeerCredentialDeadlineCannotOutliveCertificateV1(t *testing.T) {
 		t.Fatal("idle certificate expiry did not interrupt blocked read")
 	} else if timeout, ok := err.(net.Error); !ok || !timeout.Timeout() {
 		t.Fatalf("expiry error=%v", err)
+	}
+}
+
+func TestPeerSecurityLocalAdvertisedSANBeforeStoresV1(t *testing.T) {
+	for _, endpoint := range []string{"control", "catalog", "data"} {
+		t.Run(endpoint, func(t *testing.T) {
+			transport, config := peerTransportFixtureV1(t)
+			transport.Close()
+			replace := func(address string) string { return strings.Replace(address, "127.0.0.1:", "127.0.0.2:", 1) }
+			switch endpoint {
+			case "control":
+				config.ListenAddress = replace(config.ListenAddress)
+				config.Nodes[0].Address = config.ListenAddress
+			case "catalog":
+				config.Catalog.Peers[0].Address = replace(config.Catalog.Peers[0].Address)
+				config.RaftListen[config.Catalog.ID] = config.Catalog.Peers[0].Address
+			case "data":
+				config.Groups[0].Peers[0].Address = replace(config.Groups[0].Peers[0].Address)
+				config.RaftListen[config.Groups[0].ID] = config.Groups[0].Peers[0].Address
+			}
+			if peer, err := NewPeerTransportV1(config); !errors.Is(err, errPeerAuthenticationV1) {
+				if peer != nil {
+					peer.Close()
+				}
+				t.Fatalf("transport SAN mismatch accepted: %v", err)
+			}
+			if node, err := OpenFixedPeerTCPRuntimeV1(config); !errors.Is(err, errPeerAuthenticationV1) {
+				if node != nil {
+					node.Close()
+				}
+				t.Fatalf("runtime SAN mismatch accepted: %v", err)
+			}
+			for _, root := range []string{config.DataRoot, config.RaftRoot} {
+				if _, err := os.Stat(root); !os.IsNotExist(err) {
+					t.Fatalf("SAN failure touched root %s: %v", root, err)
+				}
+			}
+		})
 	}
 }

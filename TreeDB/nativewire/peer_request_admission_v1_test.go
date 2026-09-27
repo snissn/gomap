@@ -52,3 +52,30 @@ func TestPeerSecurityRequestExpansionRefusesBeforeAllocationV1(t *testing.T) {
 		t.Fatalf("unbounded JSON escaping accepted: %v", err)
 	}
 }
+
+func TestPeerSecurityDrainKeepsAdmittedForwardingV1(t *testing.T) {
+	transport, config := peerTransportFixtureV1(t)
+	defer transport.Close()
+	node := &FixedPeerTCPRuntimeV1{client: &FixedPeerTCPClientV1{peerTransport: transport}}
+	ingress, err := transport.admission.work("control-write", peerRequestsV1, 64<<10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ingress.release()
+	node.BeginDrainV1()
+	// HTTP ingress refuses new mutations; its admitted handler still needs these
+	// nested control leases to route and forward its already accepted mutation.
+	for _, scope := range []string{"control-forward", "control-read"} {
+		work, err := transport.admission.work(scope, peerRequestsV1, 64<<10)
+		if err != nil {
+			t.Fatalf("admitted %s refused during drain: %v", scope, err)
+		}
+		work.release()
+	}
+	for _, scope := range []string{"native", "shard:" + string(config.Groups[0].ID)} {
+		if work, err := transport.admission.work(scope, peerRequestsV1, 64<<10); !errors.Is(err, raftcluster.ErrAdmissionUnavailable) {
+			work.release()
+			t.Fatalf("new %s ingress accepted during drain: %v", scope, err)
+		}
+	}
+}

@@ -340,6 +340,6 @@ def main():
 
 if __name__ == "__main__":
     try: main()
-    except (Refused, KeyError, TypeError, OSError, RuntimeError, subprocess.TimeoutExpired) as error:
+    except (ValueError, KeyError, TypeError, OSError, RuntimeError, subprocess.TimeoutExpired) as error:
         print(str(error), file=sys.stderr)
         sys.exit(1)

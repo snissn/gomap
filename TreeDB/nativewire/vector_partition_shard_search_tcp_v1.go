@@ -197,11 +197,11 @@ func (d *VectorPartitionShardSearchTCPDispatcherV1) DispatchVectorPartitionShard
 	if d.peerAdmission != nil {
 		requestBytes, err := vectorPartitionCoordinatorShardRequestBytesV1(request)
 		if err != nil || requestBytes > uint64(d.maxRequestFrame) {
-			return VectorPartitionShardSearchResponseV1{}, raftcluster.ErrRouteTargetUnsupported
+			return VectorPartitionShardSearchResponseV1{}, &VectorPartitionShardSearchErrorV1{Code: VectorPartitionShardSearchErrorInvalidRequestV1, GroupID: request.TargetGroupID, Err: errors.Join(raftcluster.ErrRouteTargetUnsupported, err)}
 		}
 		bound, err := peerShardResponseFrameV1(request, d.maxResponseFrame)
 		if err != nil {
-			return VectorPartitionShardSearchResponseV1{}, err
+			return VectorPartitionShardSearchResponseV1{}, &VectorPartitionShardSearchErrorV1{Code: VectorPartitionShardSearchErrorInvalidRequestV1, GroupID: request.TargetGroupID, Err: err}
 		}
 		work, err := d.peerAdmission.work("shard:"+string(request.TargetGroupID), peerRequestsV1, int64(requestBytes)*8+int64(bound)*2)
 		if err != nil {
@@ -253,7 +253,7 @@ func (d *VectorPartitionShardSearchTCPDispatcherV1) dispatchVectorPartitionShard
 	if d.peerAdmission != nil {
 		responseFrame, err = peerShardResponseFrameV1(request, responseFrame)
 		if err != nil {
-			return VectorPartitionShardSearchResponseV1{}, err
+			return VectorPartitionShardSearchResponseV1{}, &VectorPartitionShardSearchErrorV1{Code: VectorPartitionShardSearchErrorInvalidRequestV1, GroupID: request.TargetGroupID, Err: err}
 		}
 	}
 	frame, err = readVectorPartitionShardSearchTCPResponseFrameV1(conn, responseFrame, request)

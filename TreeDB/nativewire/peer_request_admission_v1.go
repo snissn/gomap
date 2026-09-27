@@ -20,7 +20,7 @@ type peerWorkLeaseV1 struct {
 
 func (a *peerNodeAdmissionV1) work(scope string, kind int, bytes int64) (peerWorkLeaseV1, error) {
 	var work peerWorkLeaseV1
-	if a != nil && a.draining.Load() && kind == peerRequestsV1 && (scope == "native" || strings.HasPrefix(scope, "shard:") || scope == "control-write" || scope == "control-forward") {
+	if a != nil && a.draining.Load() && kind == peerRequestsV1 && (scope == "native" || strings.HasPrefix(scope, "shard:")) {
 		return work, raftcluster.ErrAdmissionUnavailable
 	}
 	var err error
