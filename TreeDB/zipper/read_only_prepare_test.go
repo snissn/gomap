@@ -2,7 +2,10 @@ package zipper
 
 import (
 	"bytes"
+	"encoding/binary"
+	"errors"
 	"fmt"
+	"math"
 	"math/rand"
 	"path/filepath"
 	"reflect"
@@ -62,6 +65,231 @@ func buildReadOnlyPrepareRootWithKeys(tb testing.TB, z *Zipper, count int) uint6
 		tb.Fatalf("build root apply: %v", err)
 	}
 	return newRootID
+}
+
+func TestReadOnlyPreparePointOutputProfileCountsTouchedOldNodes(t *testing.T) {
+	_, z := newReadOnlyPrepareZipper(t)
+	const rows = 8192
+	rootID := buildReadOnlyPrepareRootWithKeys(t, z, rows)
+	delta := batch.NewRetainingLargeEntries(panicValueReader{}, page.DefaultInlineThreshold)
+	defer func() { _ = delta.Close() }()
+	for i := 0; i < rows; i++ {
+		key := []byte(fmt.Sprintf("key-%06d", i))
+		if err := delta.Set(key, []byte("updated")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	prepared, err := z.PrepareReadOnly(rootID, delta, ReadOnlyPrepareOptions{
+		CountTouchedOldEntries: true,
+		DiscardLeafSpans:       true,
+		OmitKeys:               true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prepared.TouchedOldLeafEntries != rows {
+		t.Fatalf("old leaf entries=%d want=%d", prepared.TouchedOldLeafEntries, rows)
+	}
+	if prepared.TouchedOldLeafPages == 0 || prepared.TouchedOldPages <= prepared.TouchedOldLeafPages || prepared.TouchedOldInternalChildren == 0 || prepared.MaxTouchedDepth < 2 {
+		t.Fatalf("old internal children=%d max depth=%d", prepared.TouchedOldInternalChildren, prepared.MaxTouchedDepth)
+	}
+	if prepared.MaxTouchedKeyBytes != 10 {
+		t.Fatalf("max touched key bytes=%d", prepared.MaxTouchedKeyBytes)
+	}
+	pageBound, err := prepared.PurePointOutputPageUpperBound()
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforePages := z.pager.PageCount()
+	if _, _, _, err := z.Apply(rootID, delta); err != nil {
+		t.Fatal(err)
+	}
+	if wrote := z.pager.PageCount() - beforePages; wrote > pageBound {
+		t.Fatalf("warm emitted pager pages=%d exceeds preflight bound=%d", wrote, pageBound)
+	}
+	for _, limit := range []ReadOnlyPrepareOptions{
+		{CountTouchedOldEntries: true, DiscardLeafSpans: true, OmitKeys: true, MaxTouchedPages: 1},
+		{CountTouchedOldEntries: true, DiscardLeafSpans: true, OmitKeys: true, MaxTouchedDepth: 1},
+		{CountTouchedOldEntries: true, DiscardLeafSpans: true, OmitKeys: true, MaxTouchedOldEntries: 1},
+	} {
+		if _, err := z.PrepareReadOnly(rootID, delta, limit); !errors.Is(err, ErrReadOnlyPrepareProfileLimit) {
+			t.Fatalf("PrepareReadOnly with limit %+v error=%v want profile limit", limit, err)
+		}
+	}
+	cold, err := z.PrepareReadOnly(0, delta, ReadOnlyPrepareOptions{CountTouchedOldEntries: true, DiscardLeafSpans: true, OmitKeys: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cold.ColdBuild || cold.TouchedOldLeafPages != 0 || cold.TouchedOldLeafEntries != 0 || cold.TouchedOldInternalChildren != 0 || cold.MaxTouchedDepth != 1 {
+		t.Fatalf("cold profile=%+v", cold)
+	}
+	bound, err := cold.PurePointOutputPageUpperBound()
+	if err != nil || bound != 2*(uint64(rows)+1)+64 {
+		t.Fatalf("cold page bound=%d error=%v rows=%d", bound, err, rows)
+	}
+	beforePages = z.pager.PageCount()
+	if _, _, _, err := z.Apply(0, delta); err != nil {
+		t.Fatal(err)
+	}
+	if wrote := z.pager.PageCount() - beforePages; wrote > bound {
+		t.Fatalf("cold emitted pager pages=%d exceeds preflight bound=%d", wrote, bound)
+	}
+}
+
+func TestReadOnlyPreparePurePointOutputPageBoundFailsClosed(t *testing.T) {
+	for _, profile := range []ReadOnlyPrepareResult{
+		{PointOps: 1, MaxTouchedDepth: 1},
+		{countTouchedOldEntries: true, PointOps: 1, DeleteRanges: 1, MaxTouchedDepth: 1},
+		{countTouchedOldEntries: true, PointOps: 1, Maintenance: true, MaxTouchedDepth: 1},
+		{countTouchedOldEntries: true, PointOps: 1, MaxTouchedDepth: 1, TouchedOldLeafEntries: math.MaxUint64},
+		{countTouchedOldEntries: true, ColdBuild: true, PointOps: int(math.MaxInt), MaxTouchedDepth: 1},
+	} {
+		if _, err := profile.PurePointOutputPageUpperBound(); !errors.Is(err, ErrReadOnlyPrepareProfileLimit) {
+			t.Fatalf("profile=%+v error=%v want profile limit", profile, err)
+		}
+	}
+}
+
+func TestReadOnlyPreparePurePointOutputPageBoundDispersed16K(t *testing.T) {
+	_, z := newReadOnlyPrepareZipper(t)
+	const rows = 16 << 10
+	rootID := buildReadOnlyPrepareRootWithKeys(t, z, rows)
+	delta := batch.NewRetainingLargeEntries(panicValueReader{}, page.DefaultInlineThreshold)
+	defer func() { _ = delta.Close() }()
+	for i := 0; i < rows; i++ {
+		key := []byte(fmt.Sprintf("key-%06d", 2*i+1))
+		if err := delta.Set(key, []byte("updated")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	prepared, err := z.PrepareReadOnly(rootID, delta, ReadOnlyPrepareOptions{
+		CountTouchedOldEntries: true,
+		DiscardLeafSpans:       true,
+		OmitKeys:               true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prepared.PointOps != rows || prepared.TouchedOldLeafPages < 2 {
+		t.Fatalf("dispersed profile=%+v", prepared)
+	}
+	bound, err := prepared.PurePointOutputPageUpperBound()
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforePages := z.pager.PageCount()
+	if _, _, _, err := z.Apply(rootID, delta); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("dispersed rows=%d old leaves=%d old entries=%d old refs=%d depth=%d bound=%d emitted=%d", rows, prepared.TouchedOldLeafPages, prepared.TouchedOldLeafEntries, prepared.TouchedOldInternalChildren, prepared.MaxTouchedDepth, bound, z.pager.PageCount()-beforePages)
+	if wrote := z.pager.PageCount() - beforePages; wrote > bound {
+		t.Fatalf("dispersed emitted pager pages=%d exceeds preflight bound=%d", wrote, bound)
+	}
+}
+
+func TestReadOnlyPreparePurePointOutputPageBoundSequential16K(t *testing.T) {
+	p, z := newReadOnlyPrepareZipper(t)
+	const rows = 16 << 10
+	rootID, err := p.Alloc(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := p.Get(rootID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	empty := node.NewNode(data)
+	empty.SetPageID(rootID)
+	empty.SetType(page.PageTypeLeaf)
+	empty.UpdateChecksum()
+	for batchIndex := 0; batchIndex < 2; batchIndex++ {
+		delta := batch.NewRetainingLargeEntries(panicValueReader{}, page.DefaultInlineThreshold)
+		for i := 0; i < rows; i++ {
+			key := make([]byte, 8)
+			binary.BigEndian.PutUint64(key, uint64(batchIndex*rows+i))
+			if err := delta.Set(key, []byte("value")); err != nil {
+				t.Fatal(err)
+			}
+		}
+		prepared, err := z.PrepareReadOnly(rootID, delta, ReadOnlyPrepareOptions{
+			CountTouchedOldEntries: true,
+			DiscardLeafSpans:       true,
+			OmitKeys:               true,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		bound, err := prepared.PurePointOutputPageUpperBound()
+		if err != nil {
+			t.Fatal(err)
+		}
+		beforePages := z.pager.PageCount()
+		rootID, _, _, err = z.Apply(rootID, delta)
+		_ = delta.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		wrote := z.pager.PageCount() - beforePages
+		t.Logf("batch=%d old leaves=%d old entries=%d old refs=%d depth=%d bound=%d emitted=%d", batchIndex, prepared.TouchedOldLeafPages, prepared.TouchedOldLeafEntries, prepared.TouchedOldInternalChildren, prepared.MaxTouchedDepth, bound, wrote)
+		if wrote > bound {
+			t.Fatalf("batch %d emitted pager pages=%d exceeds preflight bound=%d", batchIndex, wrote, bound)
+		}
+	}
+}
+
+func TestReadOnlyPreparePointOutputProfileReadsTouchedOuterLeaves(t *testing.T) {
+	_, z := newReadOnlyPrepareZipper(t)
+	z.SetOuterLeavesInValueLog(true)
+	store := newMemoryLeafPageStore(z)
+	z.SetLeafPageLog(store)
+	z.SetLeafPageReader(store)
+	rootID := buildOuterLeafInternalRoot(t, z)
+
+	delta := batch.NewRetainingLargeEntries(panicValueReader{}, page.DefaultInlineThreshold)
+	defer func() { _ = delta.Close() }()
+	if err := delta.Set([]byte("key-050"), []byte("updated")); err != nil {
+		t.Fatal(err)
+	}
+	store.resetObservations()
+	prepared, err := z.PrepareReadOnly(rootID, delta, ReadOnlyPrepareOptions{
+		CountTouchedOldEntries: true,
+		DiscardLeafSpans:       true,
+		OmitKeys:               true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if store.readCalls == 0 || prepared.TouchedOldLeafEntries == 0 || prepared.TouchedOldInternalChildren == 0 || prepared.MaxTouchedDepth < 2 || prepared.MaxTouchedKeyBytes != 7 {
+		t.Fatalf("read calls=%d profile=%+v", store.readCalls, prepared)
+	}
+}
+
+func TestPurePointInternalTwoChildFitRejectsLowFill(t *testing.T) {
+	for _, mode := range []string{"plain", "base_delta", "outer_leaf"} {
+		t.Run(mode, func(t *testing.T) {
+			z := &Zipper{}
+			switch mode {
+			case "base_delta":
+				z.SetIndexInternalBaseDelta(true)
+			case "outer_leaf":
+				z.SetOuterLeavesInValueLog(true)
+			}
+			z.SetFillTargets(1_000_000, 1_000_000)
+			if !z.CanFitTwoPurePointInternalChildren(8) {
+				t.Fatal("default fill must admit two target-width keys")
+			}
+			if mode == "base_delta" && z.CanFitTwoPurePointInternalChildren(1024) {
+				t.Fatal("base-delta internal page cannot fit two 1024-byte keys and both fences")
+			}
+			z.SetFillTargets(1_000_000, 100_000)
+			if z.CanFitTwoPurePointInternalChildren(900) {
+				t.Fatal("low internal fill must reject two-child proof")
+			}
+			if z.CanFitTwoPurePointInternalChildren(page.PageSize + 1) {
+				t.Fatal("oversized key must reject two-child proof")
+			}
+		})
+	}
 }
 
 func buildReadOnlyPrepareWideBaseDeltaRoot(tb testing.TB, z *Zipper, children int) uint64 {

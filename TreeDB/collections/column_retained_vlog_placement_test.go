@@ -799,6 +799,86 @@ func TestColumnRetainedPayloadSemanticStreamV1StoredBlockEncoderRawFallbackDoesN
 	}
 }
 
+func TestPreparedSemanticStreamEncoderReturnsOnlyUnownedScratchToBoundedPool(t *testing.T) {
+	previousPool := columnRetainedSemanticStreamV1RawBlockScratchPool
+	columnRetainedSemanticStreamV1RawBlockScratchPool = make(chan []byte, columnRetainedSemanticStreamV1RawBlockScratchPoolSlots)
+	t.Cleanup(func() { columnRetainedSemanticStreamV1RawBlockScratchPool = previousPool })
+
+	_, docsA := retainedSemanticStreamDocuments(96)
+	_, docsB := retainedSemanticStreamDocumentsFrom(96, 96)
+	streamsA := retainedSemanticStreamTestStreamsFromDocuments(t, docsA)
+	streamsB := retainedSemanticStreamTestStreamsFromDocuments(t, docsB)
+
+	first, err := newColumnRetainedSemanticStreamV1StoredBlockEncoder()
+	if err != nil {
+		t.Fatal(err)
+	}
+	first.outputBudget = 64 << 20
+	block, err := first.encodeStreamsWithRawLimit(len(docsA), streamsA, maxColumnRetainedSemanticStreamV1CompressedRawBlockBytes)
+	if err != nil {
+		first.close()
+		t.Fatal(err)
+	}
+	if !bytes.HasPrefix(block, columnRetainedSemanticStreamV1BlockZSTDMagic) {
+		first.close()
+		t.Fatal("expected an independently owned compressed block")
+	}
+	blockCopy := append([]byte(nil), block...)
+	scratchCap := cap(first.rawBlockScratch)
+	if scratchCap == 0 || scratchCap > columnRetainedSemanticStreamV1RawBlockScratchMaxRetainedBytes {
+		first.close()
+		t.Fatalf("reusable scratch capacity=%d", scratchCap)
+	}
+	first.close()
+	if got := len(columnRetainedSemanticStreamV1RawBlockScratchPool); got != 1 {
+		t.Fatalf("prepared scratch pool entries=%d, want 1", got)
+	}
+
+	second, err := newColumnRetainedSemanticStreamV1StoredBlockEncoder()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cap(second.rawBlockScratch); got != scratchCap {
+		second.close()
+		t.Fatalf("reused scratch capacity=%d, want %d", got, scratchCap)
+	}
+	second.outputBudget = 64 << 20
+	if _, err := second.encodeStreamsWithRawLimit(len(docsB), streamsB, maxColumnRetainedSemanticStreamV1CompressedRawBlockBytes); err != nil {
+		second.close()
+		t.Fatal(err)
+	}
+	second.close()
+	if !bytes.Equal(block, blockCopy) {
+		t.Fatal("compressed block aliases returned scratch")
+	}
+	if got := len(columnRetainedSemanticStreamV1RawBlockScratchPool); got != 1 {
+		t.Fatalf("prepared scratch pool entries after reuse=%d, want 1", got)
+	}
+	pooled := <-columnRetainedSemanticStreamV1RawBlockScratchPool
+	if cap(pooled) > columnRetainedSemanticStreamV1RawBlockScratchMaxRetainedBytes {
+		t.Fatalf("pooled scratch capacity=%d exceeds per-slot maximum", cap(pooled))
+	}
+
+	owner, err := newColumnRetainedSemanticStreamV1StoredBlockEncoder()
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner.outputBudget = 64 << 20
+	rawBlock, err := owner.encodeStreamsWithRawLimit(len(docsA), streamsA, 1)
+	if err != nil {
+		owner.close()
+		t.Fatal(err)
+	}
+	if !bytes.HasPrefix(rawBlock, columnRetainedSemanticStreamV1BlockMagic) {
+		owner.close()
+		t.Fatal("expected raw fallback block")
+	}
+	owner.close()
+	if got := len(columnRetainedSemanticStreamV1RawBlockScratchPool); got != 0 {
+		t.Fatalf("raw block owner leaked %d scratch buffers into pool", got)
+	}
+}
+
 func TestColumnRetainedPayloadSemanticStreamV1RootFastPathPreparesDeclaredRows(t *testing.T) {
 	cfg := ColumnStoreConfig{
 		Enabled: true,

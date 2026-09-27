@@ -23,6 +23,24 @@ import (
 
 var errTypedColumnAdapterUnsupportedType = errors.New("collections: typed-column adapter unsupported type")
 
+// The production scalar granule codec is LZ4. Benchmark-relaxed overrides may
+// select ZSTD granules, whose encoder workspace is outside the prepared scalar
+// bound. Image sections can still use the production ZSTD policy.
+func preparedTypedBatchHasZSTDGranule(prepared *typedColumnAdapterPreparedBatch) bool {
+	if prepared == nil {
+		return false
+	}
+	if prepared.Options.DefaultCompression == typedcolumn.CompressionZSTD {
+		return true
+	}
+	for _, column := range prepared.Columns {
+		if column.Definition.Compression == typedcolumn.CompressionZSTD {
+			return true
+		}
+	}
+	return false
+}
+
 const (
 	typedColumnDenseParallelMinRows    = 1 << 16
 	typedColumnDenseParallelMinBlocks  = 16
@@ -289,6 +307,15 @@ type typedColumnAdapterPart struct {
 	Part       *typedcolumn.ColumnPart
 	Dictionary map[string]map[string]int64
 	Metrics    typedColumnAdapterBuildMetrics
+}
+
+// typedColumnAdapterPreparedBatch contains only schema-bound row values and
+// dictionary codes. Part construction and its durable identity stay ordered.
+type typedColumnAdapterPreparedBatch struct {
+	Options typedColumnAdapterOptions
+	Columns []typedColumnAdapterColumn
+	Batch   typedcolumn.Batch
+	Metrics typedColumnAdapterBuildMetrics
 }
 
 type typedColumnAdapterBuildMetrics struct {
@@ -693,6 +720,18 @@ func buildTypedColumnAdapterPartFromDeclaredRows(opts typedColumnAdapterOptions,
 }
 
 func buildTypedColumnAdapterPartFromSource(opts typedColumnAdapterOptions, rowSource typedColumnAdapterRowSource) (*typedColumnAdapterPart, error) {
+	prepared, err := prepareTypedColumnAdapterBatchFromSource(opts, rowSource)
+	if err != nil {
+		return nil, err
+	}
+	partID := opts.PartID
+	if partID == 0 {
+		partID = 1
+	}
+	return buildTypedColumnAdapterPartFromPreparedBatch(prepared, partID)
+}
+
+func prepareTypedColumnAdapterBatchFromSource(opts typedColumnAdapterOptions, rowSource typedColumnAdapterRowSource) (*typedColumnAdapterPreparedBatch, error) {
 	if opts.PartID == 0 {
 		opts.PartID = 1
 	}
@@ -951,6 +990,20 @@ func buildTypedColumnAdapterPartFromSource(opts typedColumnAdapterOptions, rowSo
 		return nil, err
 	}
 	metrics.DictionaryBuild += time.Since(dictionaryStart)
+	// PartID belongs to the later ordered publication, not to this token.
+	opts.PartID = 0
+	return &typedColumnAdapterPreparedBatch{Options: opts, Columns: columns, Batch: batch, Metrics: metrics}, nil
+}
+
+func buildTypedColumnAdapterPartFromPreparedBatch(prepared *typedColumnAdapterPreparedBatch, partID uint64) (*typedColumnAdapterPart, error) {
+	if prepared == nil {
+		return nil, errors.New("collections: missing prepared typed-column batch")
+	}
+	if partID == 0 {
+		return nil, errors.New("collections: missing ordered typed-column part identity")
+	}
+	opts, columns, batch, metrics := prepared.Options, prepared.Columns, prepared.Batch, prepared.Metrics
+	opts.PartID = partID
 	partBuildStart := time.Now()
 	partOpts, err := typedColumnAdapterPartOptions(opts, columns)
 	if err != nil {

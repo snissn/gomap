@@ -127,6 +127,28 @@ func NewRetainingLargeEntries(reader ValueReader, threshold int) *Batch {
 	return AcquireRetainingLargeEntries(reader, threshold)
 }
 
+// NewBoundedRetainingLargeEntries returns a fresh batch with exactly the
+// admitted entry capacity. It avoids borrowing an arbitrarily larger backing
+// from the reusable pool when the caller must account for every request-owned
+// byte before allocation.
+func NewBoundedRetainingLargeEntries(reader ValueReader, threshold, entries int) *Batch {
+	if threshold < 0 {
+		threshold = page.DefaultInlineThreshold
+	}
+	if entries < 0 {
+		entries = 0
+	}
+	return &Batch{
+		entries:         make([]Entry, 0, entries),
+		reader:          reader,
+		inlineThreshold: threshold,
+		poolKind:        batchPoolKindLargeEntries,
+		maxPoolEntries:  maxLargeEntryBatchPoolCap,
+		sorted:          true,
+		compacted:       true,
+	}
+}
+
 // Acquire returns a reusable Batch from the pool.
 func Acquire(reader ValueReader, threshold int) *Batch {
 	return acquireFromPool(&batchPool, batchPoolKindDefault, maxBatchPoolCap, reader, threshold)

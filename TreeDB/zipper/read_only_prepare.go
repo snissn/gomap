@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"math"
 	"runtime"
 	"time"
 
@@ -40,7 +41,9 @@ type ApplyOptions struct {
 	ReadOnlyPrepareWorkers int
 
 	// ParallelApplyConcurrency enables the M2 opt-in COW apply worker-pool path.
-	// Values <=1 leave the existing apply path unchanged. The effective worker
+	// A value of 1 forces the recursive apply to stay serial, including the
+	// automatic internal-node merge path. Values <=0 leave the existing apply
+	// path unchanged. The effective worker
 	// count is also bounded by GOMAXPROCS, planned leaf spans, span bytes, and the
 	// minimum work thresholds below.
 	ParallelApplyConcurrency int
@@ -134,6 +137,18 @@ type ApplyResult struct {
 // value is the normal caller-constructed form. Non-zero buffer reuse options are
 // produced by ReadOnlyPrepareResult.ReuseOptions.
 type ReadOnlyPrepareOptions struct {
+	// CountTouchedOldEntries reads touched old leaves as well as internal
+	// pages. It lets a caller bound pure-point output before writing pages.
+	// Ordinary read-only preparation leaves this false to avoid leaf-log reads.
+	CountTouchedOldEntries bool
+	// MaxTouchedPages, MaxTouchedDepth, and MaxTouchedOldEntries bound an opt-in point profile
+	// before descending into another node or accumulating another node's
+	// entries. Zero leaves the corresponding limit disabled. They have no
+	// effect unless CountTouchedOldEntries is set.
+	MaxTouchedPages      uint64
+	MaxTouchedDepth      uint32
+	MaxTouchedOldEntries uint64
+
 	// OmitKeys skips copying span boundary and first/last op key bytes for
 	// point-only plans. It is for hot-path aggregate/chunk planning that only
 	// needs op indexes/counts; callers that consume exact span bounds for future
@@ -270,6 +285,18 @@ type ReadOnlyPrepareResult struct {
 	Maintenance  bool
 	OmitKeys     bool
 	OmitOpKeys   bool
+	// TouchedOldLeafPages, TouchedOldLeafEntries, and
+	// TouchedOldInternalChildren count existing nodes and entries visited by
+	// the point plan. MaxTouchedDepth counts the root
+	// as one level, including a cold root. MaxTouchedKeyBytes covers every
+	// key in those touched nodes. These are populated only when
+	// CountTouchedOldEntries was requested.
+	TouchedOldLeafPages        uint64
+	TouchedOldPages            uint64
+	TouchedOldLeafEntries      uint64
+	TouchedOldInternalChildren uint64
+	MaxTouchedDepth            uint32
+	MaxTouchedKeyBytes         uint32
 
 	// ExactLeafSpans is true when LeafSpans fully describe the existing leaves
 	// touched by the delta. Delete-containing maintenance can merge/rebalance
@@ -282,10 +309,61 @@ type ReadOnlyPrepareResult struct {
 	LeafSpans []ReadOnlyLeafSpan
 	Metrics   adaptive.Metrics
 
-	keyArena         []byte
-	discardLeafSpans bool
-	leafSpanCallback func(ReadOnlyLeafSpan)
+	keyArena               []byte
+	discardLeafSpans       bool
+	leafSpanCallback       func(ReadOnlyLeafSpan)
+	countTouchedOldEntries bool
+	maxTouchedDepth        uint32
+	maxTouchedPages        uint64
+	maxTouchedOldEntries   uint64
 }
+
+// PurePointOutputPageUpperBound returns a conservative count of pages a
+// successful, serial pure-point apply can emit. A leaf merge emits at most
+// one page per old entry and put, plus one residual page per touched leaf.
+// Each split internal page has at least two child references when the caller's
+// two-child fit check passes. There can be one trailing singleton per touched
+// old internal page and one per fresh root level. Since every emitted page is
+// referenced by at most one parent and every touched old internal page has at
+// least one old child, total internal output is at most leaf output plus twice
+// the touched old child count plus 64 fresh root levels. The 64-level allowance
+// exceeds the binary reduction depth of any int-sized point batch. This bound
+// counts old and new level output independently of key order.
+//
+// The caller must separately verify that fresh internal pages can fit two
+// maximum-width child references and that its publish uses pure point puts,
+// serial apply, and the same root/profile. This counts output pages only; it
+// does not account for page buffers or value-log writer scratch.
+func (r ReadOnlyPrepareResult) PurePointOutputPageUpperBound() (uint64, error) {
+	if !r.countTouchedOldEntries || r.DeleteRanges != 0 || r.Maintenance || r.PointOps < 0 || r.MaxTouchedDepth == 0 {
+		return 0, ErrReadOnlyPrepareProfileLimit
+	}
+	leafPages := uint64(r.PointOps)
+	if !r.ColdBuild {
+		for _, n := range []uint64{r.TouchedOldLeafEntries, r.TouchedOldLeafPages} {
+			if leafPages > math.MaxUint64-n {
+				return 0, ErrReadOnlyPrepareProfileLimit
+			}
+			leafPages += n
+		}
+	}
+	if leafPages == math.MaxUint64 {
+		return 0, ErrReadOnlyPrepareProfileLimit
+	}
+	leafPages++ // Empty root or final residual page.
+	if leafPages > (math.MaxUint64-64)/2 {
+		return 0, ErrReadOnlyPrepareProfileLimit
+	}
+	pages := 2*leafPages + 64
+	if r.TouchedOldInternalChildren > (math.MaxUint64-pages)/2 {
+		return 0, ErrReadOnlyPrepareProfileLimit
+	}
+	return pages + 2*r.TouchedOldInternalChildren, nil
+}
+
+// ErrReadOnlyPrepareProfileLimit reports a rejected point profile before it
+// can traverse more old nodes. Callers must reject the request before WAL.
+var ErrReadOnlyPrepareProfileLimit = errors.New("zipper: read-only point profile limit")
 
 const (
 	readOnlyPrepareResultReuseLeafSpanKeepCap         = 65536
@@ -438,10 +516,11 @@ func readOnlyPrepareCeilDiv64(n, d int64) int64 {
 // The returned options must not be used while r's LeafSpans are still needed.
 func (r ReadOnlyPrepareResult) ReuseOptions() ReadOnlyPrepareOptions {
 	return ReadOnlyPrepareOptions{
-		OmitKeys:   r.OmitKeys,
-		OmitOpKeys: r.OmitOpKeys,
-		leafSpans:  clearReadOnlyLeafSpanBuffer(r.LeafSpans),
-		keyArena:   r.keyArena[:0],
+		OmitKeys:               r.OmitKeys,
+		OmitOpKeys:             r.OmitOpKeys,
+		CountTouchedOldEntries: r.countTouchedOldEntries,
+		leafSpans:              clearReadOnlyLeafSpanBuffer(r.LeafSpans),
+		keyArena:               r.keyArena[:0],
 	}
 }
 
@@ -954,6 +1033,9 @@ func (z *Zipper) ApplyWithOptions(rootID uint64, b *batch.Batch, opts ApplyOptio
 	}
 
 	applyCfg := applyRunConfig{}
+	if opts.ParallelApplyConcurrency == 1 {
+		applyCfg.maxParallelWorkers = 1
+	}
 	var oldPointerRefs PointerRefCounts
 	var oldEntriesRemoved uint64
 	if opts.CollectOldPointerRefs {
@@ -1011,12 +1093,16 @@ func (z *Zipper) PrepareReadOnly(rootID uint64, b *batch.Batch, opts ReadOnlyPre
 // op slices.
 func (z *Zipper) PrepareReadOnlyPlan(rootID uint64, ops []batch.Entry, ranges []batch.DeleteRange, opts ReadOnlyPrepareOptions) (ReadOnlyPrepareResult, error) {
 	result := ReadOnlyPrepareResult{
-		OmitKeys:         opts.OmitKeys,
-		OmitOpKeys:       opts.OmitOpKeys || opts.OmitKeys,
-		LeafSpans:        opts.leafSpans[:0],
-		keyArena:         opts.keyArena[:0],
-		discardLeafSpans: opts.DiscardLeafSpans,
-		leafSpanCallback: opts.LeafSpanCallback,
+		OmitKeys:               opts.OmitKeys,
+		OmitOpKeys:             opts.OmitOpKeys || opts.OmitKeys,
+		LeafSpans:              opts.leafSpans[:0],
+		keyArena:               opts.keyArena[:0],
+		discardLeafSpans:       opts.DiscardLeafSpans,
+		leafSpanCallback:       opts.LeafSpanCallback,
+		countTouchedOldEntries: opts.CountTouchedOldEntries,
+		maxTouchedDepth:        opts.MaxTouchedDepth,
+		maxTouchedPages:        opts.MaxTouchedPages,
+		maxTouchedOldEntries:   opts.MaxTouchedOldEntries,
 	}
 	if len(ranges) > 0 {
 		// OmitKeys is only safe for point-only planning. Delete-range overlap
@@ -1043,18 +1129,30 @@ func (z *Zipper) PrepareReadOnlyPlan(rootID uint64, ops []batch.Entry, ranges []
 	if rootID == 0 {
 		result.ColdBuild = true
 		result.ExactLeafSpans = true
+		if opts.CountTouchedOldEntries {
+			result.MaxTouchedDepth = 1
+		}
 		result.addLeafSpan(page.ChildRef{}, nil, nil, ops, 0, ranges, 0)
 		return result, nil
 	}
 
 	scratch := z.acquireApplyScratch()
 	defer z.releaseApplyScratch(scratch)
-	err := z.prepareReadOnlyRecursive(page.PageChildRef(rootID), ops, 0, ranges, 0, nil, nil, &result, scratch)
+	err := z.prepareReadOnlyRecursive(page.PageChildRef(rootID), ops, 0, ranges, 0, nil, nil, &result, scratch, 1)
 	return result, err
 }
 
-func (z *Zipper) prepareReadOnlyRecursive(ref page.ChildRef, ops []batch.Entry, opBase int, ranges []batch.DeleteRange, rangeBase int, low, high []byte, result *ReadOnlyPrepareResult, scratch *mergeScratch) error {
-	if ref.Kind == page.ChildRefLeafLog {
+func (z *Zipper) prepareReadOnlyRecursive(ref page.ChildRef, ops []batch.Entry, opBase int, ranges []batch.DeleteRange, rangeBase int, low, high []byte, result *ReadOnlyPrepareResult, scratch *mergeScratch, depth uint32) error {
+	if result.countTouchedOldEntries && result.maxTouchedDepth != 0 && depth > result.maxTouchedDepth {
+		return fmt.Errorf("%w: depth %d exceeds %d", ErrReadOnlyPrepareProfileLimit, depth, result.maxTouchedDepth)
+	}
+	if result.countTouchedOldEntries {
+		if result.TouchedOldPages == math.MaxUint64 || result.maxTouchedPages != 0 && result.TouchedOldPages >= result.maxTouchedPages {
+			return fmt.Errorf("%w: touched pages exceed %d", ErrReadOnlyPrepareProfileLimit, result.maxTouchedPages)
+		}
+		result.TouchedOldPages++
+	}
+	if ref.Kind == page.ChildRefLeafLog && !result.countTouchedOldEntries {
 		// Leaf-log child refs are only emitted for outer leaf pages. The read-only
 		// prepare pass needs the leaf boundary carried by the parent internal page,
 		// not the leaf body itself, so avoid decompressing the persistent leaf-log
@@ -1071,19 +1169,50 @@ func (z *Zipper) prepareReadOnlyRecursive(ref page.ChildRef, ops []batch.Entry, 
 	if leafScratchRef {
 		defer releaseLeafPageScratch(scratch, leafScratch)
 	}
+	if result.countTouchedOldEntries && depth > result.MaxTouchedDepth {
+		result.MaxTouchedDepth = depth
+	}
 
 	switch oldNode.Type() {
 	case page.PageTypeLeaf, 0:
+		if result.countTouchedOldEntries {
+			if result.TouchedOldLeafPages == math.MaxUint64 {
+				return ErrReadOnlyPrepareProfileLimit
+			}
+			result.TouchedOldLeafPages++
+			if result.maxTouchedOldEntries != 0 && uint64(oldNode.Count()) > result.maxTouchedOldEntries-result.TouchedOldLeafEntries-result.TouchedOldInternalChildren {
+				return fmt.Errorf("%w: touched leaf entries exceed %d", ErrReadOnlyPrepareProfileLimit, result.maxTouchedOldEntries)
+			}
+			result.TouchedOldLeafEntries += uint64(oldNode.Count())
+			for i := uint16(0); i < oldNode.Count(); i++ {
+				key, _, err := oldNode.GetLeafKeyFlagsView(i)
+				if err != nil {
+					return err
+				}
+				if uint32(len(key)) > result.MaxTouchedKeyBytes {
+					result.MaxTouchedKeyBytes = uint32(len(key))
+				}
+			}
+		}
 		result.addLeafSpan(ref, low, high, ops, opBase, ranges, rangeBase)
 		return nil
 	case page.PageTypeInternal:
 		count := oldNode.Count()
+		if result.countTouchedOldEntries {
+			if result.maxTouchedOldEntries != 0 && uint64(count) > result.maxTouchedOldEntries-result.TouchedOldLeafEntries-result.TouchedOldInternalChildren {
+				return fmt.Errorf("%w: touched node entries exceed %d", ErrReadOnlyPrepareProfileLimit, result.maxTouchedOldEntries)
+			}
+			result.TouchedOldInternalChildren += uint64(count)
+		}
 		baseDeltaInternalKeys := oldNode.InternalBaseDeltaEnabled()
 		opIdx := 0
 		for i := uint16(0); i < count; i++ {
 			key, childRef, err := oldNode.GetInternalEntryRefView(i)
 			if err != nil {
 				return err
+			}
+			if result.countTouchedOldEntries && uint32(len(key)) > result.MaxTouchedKeyBytes {
+				result.MaxTouchedKeyBytes = uint32(len(key))
 			}
 			if key == nil {
 				key = []byte{}
@@ -1149,7 +1278,7 @@ func (z *Zipper) prepareReadOnlyRecursive(ref page.ChildRef, ops []batch.Entry, 
 			if err != nil {
 				return err
 			}
-			if err := z.prepareReadOnlyRecursive(childRef, childOps, opBase+startOpIdx, ranges[rangeStart:rangeEnd], rangeBase+rangeStart, childLow, childHigh, result, scratch); err != nil {
+			if err := z.prepareReadOnlyRecursive(childRef, childOps, opBase+startOpIdx, ranges[rangeStart:rangeEnd], rangeBase+rangeStart, childLow, childHigh, result, scratch, depth+1); err != nil {
 				return err
 			}
 		}

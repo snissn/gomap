@@ -41,6 +41,9 @@ var (
 // block, avoiding per-document parser allocation while keeping all ownership
 // local to the prepare worker.
 type columnRetainedSemanticStreamV1JSONCursor struct {
+	maxDepth        int
+	maxDescriptors  int
+	maxKeyBytes     int
 	document        []byte
 	pos             int
 	nodeStack       [64]columnRetainedSemanticStreamV1JSONCursorNode
@@ -49,6 +52,20 @@ type columnRetainedSemanticStreamV1JSONCursor struct {
 	members         []columnRetainedSemanticStreamV1JSONCursorMember
 	unescapeScratch []byte
 	pathInterner    *columnRetainedSemanticStreamV1PathSegmentInterner
+}
+
+func (c *columnRetainedSemanticStreamV1JSONCursor) depthLimit() int {
+	if c.maxDepth > 0 {
+		return c.maxDepth
+	}
+	return columnRetainedSemanticStreamV1JSONCursorMaxDepth
+}
+
+func (c *columnRetainedSemanticStreamV1JSONCursor) descriptorLimit() int {
+	if c.maxDescriptors > 0 {
+		return c.maxDescriptors
+	}
+	return columnRetainedSemanticStreamV1JSONCursorMaxDescriptors
 }
 
 type columnRetainedSemanticStreamV1JSONCursorNode struct {
@@ -106,7 +123,7 @@ func (c *columnRetainedSemanticStreamV1JSONCursor) parseDocument(document []byte
 }
 
 func (c *columnRetainedSemanticStreamV1JSONCursor) parseValue(depth int, retainObject bool) (int, error) {
-	if depth > columnRetainedSemanticStreamV1JSONCursorMaxDepth {
+	if depth > c.depthLimit() {
 		return 0, errColumnRetainedSemanticStreamV1JSONCursorDepth
 	}
 	c.skipSpace()
@@ -206,7 +223,7 @@ func (c *columnRetainedSemanticStreamV1JSONCursor) parseObject(depth int) (int, 
 		if err != nil {
 			return 0, err
 		}
-		if len(c.members) >= columnRetainedSemanticStreamV1JSONCursorMaxDescriptors {
+		if len(c.members) >= c.descriptorLimit() {
 			return 0, errColumnRetainedSemanticStreamV1JSONCursorScratch
 		}
 		memberIdx := len(c.members)
@@ -377,7 +394,7 @@ func (c *columnRetainedSemanticStreamV1JSONCursor) scanNumber() error {
 }
 
 func (c *columnRetainedSemanticStreamV1JSONCursor) appendNode(valueType jsonparser.ValueType, rawStart, rawEnd, valueStart, valueEnd, firstMember int) (int, error) {
-	if len(c.nodes) >= columnRetainedSemanticStreamV1JSONCursorMaxDescriptors {
+	if len(c.nodes) >= c.descriptorLimit() {
 		return 0, errColumnRetainedSemanticStreamV1JSONCursorScratch
 	}
 	idx := len(c.nodes)
@@ -452,6 +469,9 @@ func collectColumnRetainedSemanticStreamV1JSONCursorDocument(cfg ColumnStoreConf
 	if err := cursor.collectObject(root, nil, row, streamEntryCapacity, skip, streams, declared, valuesRaw); err != nil {
 		return nil, err
 	}
+	if streams.err != nil {
+		return nil, streams.err
+	}
 	if declared == nil {
 		return nil, nil
 	}
@@ -470,6 +490,9 @@ func collectColumnRetainedSemanticStreamV1JSONCursorDocument(cfg ColumnStoreConf
 		}
 		value, err := convertColumnDeclaredJSONParserValueWithStringInterner(col, valuesRaw[colIdx], &scratch, stringInterner)
 		if err != nil {
+			if errors.Is(err, ErrPreparedInsertResourceLimit) {
+				return nil, err
+			}
 			return nil, fmt.Errorf("%w: column[%d] %q: %v", ErrColumnDeclaredValueUnsupported, colIdx, col.Name, err)
 		}
 		values[colIdx] = value
@@ -536,6 +559,9 @@ func (c *columnRetainedSemanticStreamV1JSONCursor) collectObject(nodeIdx int, pa
 	if len(values) == 0 {
 		if len(path) > 0 {
 			appendColumnRetainedSemanticStreamValueNoCopy(path, row, []byte("{}"), streamEntryCapacity, streams)
+			if streams.err != nil {
+				return streams.err
+			}
 		}
 		return nil
 	}
@@ -588,9 +614,15 @@ func (c *columnRetainedSemanticStreamV1JSONCursor) collectObject(nodeIdx int, pa
 			continue
 		}
 		appendColumnRetainedSemanticStreamValueNoCopy(nextPath, row, c.raw(node), streamEntryCapacity, streams)
+		if streams.err != nil {
+			return streams.err
+		}
 	}
 	if !retainedAny && len(path) > 0 {
 		appendColumnRetainedSemanticStreamValueNoCopy(path, row, []byte("{}"), streamEntryCapacity, streams)
+		if streams.err != nil {
+			return streams.err
+		}
 	}
 	return nil
 }
@@ -655,6 +687,9 @@ func (c *columnRetainedSemanticStreamV1JSONCursor) declaredRaw(node columnRetain
 
 func (c *columnRetainedSemanticStreamV1JSONCursor) memberKey(member columnRetainedSemanticStreamV1JSONCursorMember) (string, error) {
 	key := c.document[member.keyStart:member.keyEnd]
+	if c.maxKeyBytes > 0 && len(key) > c.maxKeyBytes {
+		return "", fmt.Errorf("%w: retained key exceeds %d bytes", ErrPreparedInsertResourceLimit, c.maxKeyBytes)
+	}
 	if bytes.IndexByte(key, '\\') >= 0 {
 		decoded, err := jsonparser.Unescape(key, c.unescapeScratch[:0])
 		if err != nil {
@@ -663,5 +698,9 @@ func (c *columnRetainedSemanticStreamV1JSONCursor) memberKey(member columnRetain
 		key = decoded
 		c.unescapeScratch = decoded[:0]
 	}
-	return c.pathInterner.intern(key), nil
+	value := c.pathInterner.intern(key)
+	if c.pathInterner.err != nil {
+		return "", c.pathInterner.err
+	}
+	return value, nil
 }
