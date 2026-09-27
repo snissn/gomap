@@ -2,6 +2,37 @@
 
 This document maps specification invariants to existing tests and harnesses.
 
+Prepared no-index JSON semantic-stream insertion is covered by
+`TestPreparedInsertOverlapsOrderedCommit` (batch N+1 prepares while N is held
+before publication, with no early acknowledgment),
+`TestPreparedInsertSortedValuesAndReopen` (caller-order IDs, sorted retained
+and typed values, caller-buffer reuse, one-shot commit, durable reopen),
+`TestPreparedInsertAbandonBoundsAndLateConflict` (oversized admission,
+abandonment, duplicate precedence, and authoritative late conflict),
+`TestPreparedInsertCheckpointBeforeCommitAndReopen` (private prepare across a
+sibling ordinary write, checkpoint, and durable reopen),
+`TestPreparedInsertValueLogBlockPointerSurvivesReopenAndGC` (persistent block
+pointer and GC reachability), `TestPreparedInsertCrashRecoveryCuts` (observed
+WAL sync before durable acknowledgment and WAL/asset/applied-LSN cuts during
+commit, plus queued root-installation cuts under checkpoint),
+`TestPreparedInsertFallsBackBeforeUnboundedDeclaredRowExtraction` (unsupported
+scalar type uses ordinary insertion), and
+`TestPreparedInsertRejectsMismatchedCapturedSchema` (commit-time catalog
+validation), and `TestPreparedInsertThreeAggregateSpecsRemainEligible`
+(the JSONBench five-column, three-metadata-spec target stays on the prepared
+path without assigning a part identity).
+`TestPreparedInsertNearRowLimitHighEntropy`,
+`TestPreparedInsertRejectsTypedPrebuildWithoutCredit`, and
+`TestPreparedInsertLongIDsRejectCommitReserveBeforeWAL` exercise bounded
+admission at real batch cardinality and assert resource rejection before LSN
+assignment. The stream quota tests cover rare-path growth and compressed/raw
+block capacity. These focused tests establish the checked limits; the strict
+incremental-byte envelope still requires the encoder and typed/aggregate
+allocation-site audit described in the prepared-insert memory gate.
+`BenchmarkPreparedInsertPublicPath` compares ordinary, prepared serial, and
+one-ahead public insertion with the real WAL/publication path. These tests do
+not replace the JSONBench real-data load and query comparison.
+
 Within-domain physical home packing: `TestDomainHomePackingKeepsCommunitiesV1`
 is the interleaved-community regression; `TestHomePackingBoundResponseAndRetainedReuseV1`
 checks bound requests, hostile responses, exact capacity and persisted homes

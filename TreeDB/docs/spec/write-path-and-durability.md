@@ -115,6 +115,38 @@ serialization locks are held.
 
 ### 0.2 Normative mode and API matrix
 
+`Collection.PrepareInsertBatchOwned` is private, identity-free work for an
+eligible JSON semantic-stream insert. Its result is not a publication state,
+command-WAL frame, or acknowledgment. Only `PreparedInsertBatch.Commit` enters
+the ordinary ordered insertion/publication path; it preserves the selected
+profile's WAL, asset-sync, recovery, and acknowledgment requirements in this
+matrix. Abandoning preparation cannot advance the durable frontier or grant GC
+authority over an asset.
+
+Preparation enforces finite row, document, cursor, and schema limits before
+the ordered publisher assigns an LSN. A resource-limit error must not be
+retried through ordinary `InsertBatch` by a bounded caller; an unsupported
+configuration may use ordinary insertion. The memory credit applies to
+all request-owned source, prepared, WAL, typed, sidecar, pager, zipper,
+value-log Manager, visible-install, and sealed-root publication work. The
+prepared caller must retain that credit until `Commit` returns.
+
+The prepared ordered publisher permits an installed value-log dictionary
+lookup callback, but inspects every outer-leaf record prefix before decoding.
+It rejects a dictionary-coded source before the callback or dictionary codec
+cache can allocate. This guard applies to the pre-WAL root census and the
+post-WAL read-only, caller-root, context-root, and system-root zipper paths.
+Ordinary value-log decoding keeps its existing dictionary and multipart-frame
+behavior.
+
+`PreparedInsertBatch.Commit` therefore waits through sealed-root publication
+for its exact commit sequence, including in command-WAL profiles where an
+ordinary write may acknowledge after its command-frame boundary and before
+root sealing. This stronger prepared completion boundary keeps the fixed
+publisher credit live through resource and manifest cloning, seal COW
+preparation, and allocator-debt prefix construction. It does not change the
+ordinary acknowledgement column in the profile matrix below.
+
 These canonical profiles define the current public surface. `bench_unsafe` is
 explicitly outside the production guarantee.
 

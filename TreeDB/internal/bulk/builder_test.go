@@ -158,6 +158,79 @@ func TestBuild(t *testing.T) {
 	}
 }
 
+// Prepared publication profiles a cold root before its WAL append, while the
+// actual first publication uses BuildWithOptions. Exercise that output path
+// with the same one-leaf-per-input plus binary-internal-page ceiling used by
+// the read-only point profile. Count both pager and outer-leaf-log pages.
+func TestBuildWithOptionsColdPreparedPageOutputCeiling(t *testing.T) {
+	for _, tc := range []struct {
+		rows       int
+		keyBytes   int
+		valueBytes int
+	}{
+		{rows: 1, keyBytes: 8, valueBytes: 5},
+		{rows: 16 << 10, keyBytes: 8, valueBytes: 5},
+		{rows: 512, keyBytes: 1024, valueBytes: 1024},
+	} {
+		t.Run(fmt.Sprintf("rows_%d_key_%d_value_%d", tc.rows, tc.keyBytes, tc.valueBytes), func(t *testing.T) {
+			p, err := pager.Open(filepath.Join(t.TempDir(), "index.db"), 65536)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer p.Close()
+			keys := make([][]byte, tc.rows)
+			values := make([][]byte, tc.rows)
+			for i := range keys {
+				keys[i] = make([]byte, tc.keyBytes)
+				binary.BigEndian.PutUint64(keys[i], uint64(i))
+				values[i] = bytes.Repeat([]byte{'v'}, tc.valueBytes)
+			}
+			leafLog := &mockBatchLeafPageLog{}
+			beforePages := p.PageCount()
+			ceiling := 2*(uint64(tc.rows)+1) + 64
+			var outputPages uint64
+			if _, err := BuildWithOptions(&mockKVIterator{keys: keys, values: values}, &MockAllocator{p: p}, p, BuildOptions{
+				LeafPageLog: leafLog, MaxOutputPages: ceiling, OutputPages: &outputPages,
+			}); err != nil {
+				t.Fatalf("cold build: %v", err)
+			}
+			emitted := p.PageCount() - beforePages + uint64(len(leafLog.pages))
+			if len(leafLog.pages) == 0 || emitted == 0 {
+				t.Fatalf("cold build emitted no leaf-log pages")
+			}
+			if outputPages != emitted {
+				t.Fatalf("counted output pages=%d, allocated/log pages=%d", outputPages, emitted)
+			}
+			t.Logf("entries=%d emitted=%d ceiling=%d", tc.rows, emitted, ceiling)
+			if emitted > ceiling {
+				t.Fatalf("cold build emitted %d pager/log pages, above %d-page ceiling", emitted, ceiling)
+			}
+		})
+	}
+}
+
+func TestBuildWithOptionsPageOutputLimitBeforeColdLeafLogAppend(t *testing.T) {
+	p, err := pager.Open(filepath.Join(t.TempDir(), "index.db"), 65536)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	keys := make([][]byte, 32)
+	values := make([][]byte, len(keys))
+	for i := range keys {
+		keys[i] = []byte(fmt.Sprintf("key-%04d", i))
+		values[i] = bytes.Repeat([]byte{'v'}, 1024)
+	}
+	leafLog := &mockBatchLeafPageLog{}
+	var outputPages uint64
+	_, err = BuildWithOptions(&mockKVIterator{keys: keys, values: values}, &MockAllocator{p: p}, p, BuildOptions{
+		LeafPageLog: leafLog, MaxOutputPages: 1, OutputPages: &outputPages,
+	})
+	if !errors.Is(err, ErrPageOutputLimit) || outputPages != 1 || len(leafLog.pages) != 0 {
+		t.Fatalf("err=%v output pages=%d appended leaf pages=%d", err, outputPages, len(leafLog.pages))
+	}
+}
+
 type mockLeafPageLog struct {
 	ptrs      []page.LeafLogPtr
 	pages     [][]byte

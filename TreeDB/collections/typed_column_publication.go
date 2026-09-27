@@ -331,23 +331,38 @@ func buildTypedColumnPartImageForDeclaredRowsWithResult(cfg ColumnStoreConfig, g
 }
 
 func buildTypedColumnPartImageFromSourceWithResult(cfg ColumnStoreConfig, generation, partID uint64, rows typedColumnAdapterRowSource) (typedColumnPartImageBuildResult, error) {
+	prepared, err := prepareTypedColumnPartBatchFromSource(cfg, partID, rows)
+	if err != nil {
+		return typedColumnPartImageBuildResult{}, err
+	}
+	return buildTypedColumnPartImageFromPreparedBatchWithResult(prepared, partID)
+}
+
+func prepareTypedColumnPartBatchFromSource(cfg ColumnStoreConfig, partID uint64, rows typedColumnAdapterRowSource) (*typedColumnAdapterPreparedBatch, error) {
 	if !columnStoreHasTypedColumnPartOwners(cfg) {
-		return typedColumnPartImageBuildResult{}, nil
+		return nil, nil
 	}
 	fields := columnStoreTypedColumnPartFields(cfg)
 	if len(fields) == 0 {
-		return typedColumnPartImageBuildResult{}, nil
+		return nil, nil
 	}
 	sortKey, err := typedColumnPartPublicationSortKey(cfg, fields)
 	if err != nil {
-		return typedColumnPartImageBuildResult{}, err
+		return nil, err
 	}
 	adapterOpts, err := typedColumnPublicationAdapterOptionsFromConfig(cfg, partID, fields, sortKey)
 	if err != nil {
-		return typedColumnPartImageBuildResult{}, err
+		return nil, err
 	}
 	adapterOpts.DictionaryModes = typedColumnPublicationDictionaryModes(fields)
-	part, err := buildTypedColumnAdapterPartFromSource(adapterOpts, rows)
+	return prepareTypedColumnAdapterBatchFromSource(adapterOpts, rows)
+}
+
+func buildTypedColumnPartImageFromPreparedBatchWithResult(prepared *typedColumnAdapterPreparedBatch, partID uint64) (typedColumnPartImageBuildResult, error) {
+	if prepared == nil {
+		return typedColumnPartImageBuildResult{}, nil
+	}
+	part, err := buildTypedColumnAdapterPartFromPreparedBatch(prepared, partID)
 	if err != nil {
 		return typedColumnPartImageBuildResult{}, err
 	}
