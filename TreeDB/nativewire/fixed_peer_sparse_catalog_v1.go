@@ -2,6 +2,7 @@ package nativewire
 
 import (
 	"fmt"
+	"reflect"
 	"slices"
 	"strings"
 	"unicode/utf8"
@@ -115,5 +116,63 @@ func preflightFixedPeerConfigV1(c FixedPeerTCPConfigV1) error {
 			return invalid("local listener map exceeds identity or byte budget")
 		}
 	}
+	if c.Vector != nil {
+		if c.Credentials != nil {
+			return invalid("authenticated vector listeners are unsupported")
+		}
+		if !preflightFixedPeerVectorInventoryV1(reflect.ValueOf(c.Vector), &budget) {
+			return invalid("vector inventory exceeds byte budget")
+		}
+	}
 	return nil
+}
+
+// Bound vector-owned containers before cloning them. The later canonical JSON
+// check remains authoritative; this conservative walk is only admission.
+func preflightFixedPeerVectorInventoryV1(value reflect.Value, budget *int) bool {
+	spend := func(bytes int) bool {
+		if bytes > *budget {
+			return false
+		}
+		*budget -= bytes
+		return true
+	}
+	switch value.Kind() {
+	case reflect.Pointer, reflect.Interface:
+		return spend(8) && (value.IsNil() || preflightFixedPeerVectorInventoryV1(value.Elem(), budget))
+	case reflect.Struct:
+		if value.NumField() > *budget/32 || !spend(32*value.NumField()) {
+			return false
+		}
+		for i := 0; i < value.NumField(); i++ {
+			if !preflightFixedPeerVectorInventoryV1(value.Field(i), budget) {
+				return false
+			}
+		}
+		return true
+	case reflect.Slice, reflect.Array:
+		if value.Len() > *budget/32 || !spend(32*value.Len()) {
+			return false
+		}
+		for i := 0; i < value.Len(); i++ {
+			if !preflightFixedPeerVectorInventoryV1(value.Index(i), budget) {
+				return false
+			}
+		}
+		return true
+	case reflect.Map:
+		if value.Len() > *budget/64 || !spend(64*value.Len()) {
+			return false
+		}
+		for iter := value.MapRange(); iter.Next(); {
+			if !preflightFixedPeerVectorInventoryV1(iter.Key(), budget) || !preflightFixedPeerVectorInventoryV1(iter.Value(), budget) {
+				return false
+			}
+		}
+		return true
+	case reflect.String:
+		return value.Len() <= *budget/6 && spend(6*value.Len())
+	default:
+		return spend(32)
+	}
 }

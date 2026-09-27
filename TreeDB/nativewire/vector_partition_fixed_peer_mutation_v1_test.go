@@ -941,6 +941,22 @@ func TestFixedPeerVectorConfigCloneRetainsValidatedSnapshotV1(t *testing.T) {
 	}
 }
 
+func TestFixedPeerVectorConfigPreflightBoundsInventoryAndRejectsUnauthenticatedListenersV1(t *testing.T) {
+	config := fixedPeerTestConfigsV1(t)[0]
+	config.Vector = &FixedPeerTCPVectorConfigV1{
+		RequestBase: VectorPartitionCoordinatorRequestV1{Query: make([]float32, fixedPeerMaxConfigBytesV1)},
+	}
+	if err := preflightFixedPeerConfigV1(config); !errors.Is(err, raftcluster.ErrInvalidConfig) || !strings.Contains(err.Error(), "vector inventory exceeds byte budget") {
+		t.Fatalf("oversized vector preflight = %v", err)
+	}
+	config.Vector.RequestBase.Query = nil
+	config.ClusterID = "vector-security-preflight"
+	config.Credentials = &PeerCredentialsV1{TrustRootsFile: "ca.pem", CertificateFile: "node.pem", PrivateKeyFile: "key.pem"}
+	if err := preflightFixedPeerConfigV1(config); !errors.Is(err, raftcluster.ErrInvalidConfig) || !strings.Contains(err.Error(), "authenticated vector listeners are unsupported") {
+		t.Fatalf("credentialed vector preflight = %v", err)
+	}
+}
+
 func TestFixedPeerVectorConfigPreflightBeforeDiskCreationV1(t *testing.T) {
 	ref := raftplacement.CollectionRefV1{Database: "default", Catalog: "default", Collection: "docs"}
 	seed := fixedPeerVectorSeedFixtureV1{
