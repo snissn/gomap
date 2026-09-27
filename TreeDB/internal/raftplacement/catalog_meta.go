@@ -611,10 +611,10 @@ func (a *CatalogMetaAuthorityV1) installCatalogMetaSnapshotV1(snapshot CatalogMe
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	// This profile has no completion/removal transition. A newer snapshot may
-	// add another group's BEGIN, but cannot erase or replace a pending authority.
+	// A newer snapshot may advance the same operation monotonically, but may
+	// not erase it, change its seed, or substitute another operation.
 	for group, pending := range a.replacements {
-		if !bytes.Equal(pending, replacements[group]) {
+		if !replicaReplacementSnapshotExtendsV1(pending, replacements[group]) {
 			return CatalogMetaStatusV1{}, ErrCatalogMetaConflict
 		}
 	}

@@ -92,13 +92,17 @@ type FixedPeerTCPGroupStatusV1 struct {
 }
 
 type fixedPeerDataV1 struct {
-	startErr      error
-	stream        *fixedPeerTCPStreamV1
-	submitter     raftcluster.CommandSubmitterV1
-	replacementID string
-	db            *backenddb.DB
-	fsm           *raftfsm.FSM
-	provider      *raftcluster.HashicorpRaftProvider
+	startErr            error
+	stream              *fixedPeerTCPStreamV1
+	submitter           raftcluster.CommandSubmitterV1
+	replacementWork     replacementNativeSlotV1
+	replacementID       string
+	replacementReceiver *replacementReceiverOwnerV1
+	prejoin             *replacementPrejoinTransportV1
+	transport           hraft.Transport
+	db                  *backenddb.DB
+	fsm                 *raftfsm.FSM
+	provider            *raftcluster.HashicorpRaftProvider
 }
 
 type FixedPeerTCPRuntimeV1 struct {
@@ -477,7 +481,7 @@ func OpenFixedPeerTCPRuntimeV1(config FixedPeerTCPConfigV1) (*FixedPeerTCPRuntim
 			}
 			continue
 		}
-		d, e := r.openDataGroupV1(cfg, providerTransport, raftConfig, bootstrap, admission)
+		d, e := r.openDataGroupV1(cfg, providerTransport, raftConfig, bootstrap, admission, nil)
 		r.data[g.ID] = d
 		if e != nil {
 			return fail(e)
@@ -567,9 +571,18 @@ func (r *FixedPeerTCPRuntimeV1) Close() error {
 		} else if r.listener != nil {
 			errs = append(errs, r.listener.Close())
 		}
+		workDone := make([]<-chan struct{}, 0, len(data))
+		for _, d := range data {
+			if done := d.cancelReplacementWorkV1(); done != nil {
+				workDone = append(workDone, done)
+			}
+		}
 		for _, t := range transports {
 			errs = append(errs, t.Close())
 			t.CloseStreams()
+		}
+		for _, done := range workDone {
+			<-done
 		}
 		if r.meta != nil {
 			errs = append(errs, r.meta.Close())
@@ -577,6 +590,12 @@ func (r *FixedPeerTCPRuntimeV1) Close() error {
 		for _, d := range data {
 			if d.provider != nil {
 				errs = append(errs, d.provider.Close())
+			}
+			if d.prejoin != nil {
+				d.prejoin.providerStopped()
+			}
+			if d.replacementReceiver != nil {
+				errs = append(errs, d.replacementReceiver.Close())
 			}
 		}
 		for _, d := range data {
@@ -758,20 +777,24 @@ type fixedPeerRequestV1 struct {
 	Route    ClusterRouteRequest
 }
 type fixedPeerReplyV1 struct {
-	Replacement  *raftplacement.ReplicaReplacementBeginV1  `json:",omitempty"`
-	Membership   *raftcluster.CommittedRaftConfigurationV1 `json:",omitempty"`
-	Diagnostics  *FixedPeerDiagnosticsV1                   `json:",omitempty"`
-	Readiness    *FixedPeerReadinessV1                     `json:",omitempty"`
-	ReadProof    *raftcluster.ReadIndexProof               `json:",omitempty"`
-	NodeID       raftcluster.NodeID
-	ConfigDigest string
-	Error        string
-	ErrorCode    string
-	RouteError   *raftcluster.RouteErrorMetadata
-	Status       FixedPeerTCPStatusV1
-	Catalog      raftplacement.CatalogMetaStatusV1
-	Submit       raftcluster.SubmitResultV1
-	Route        ClusterRouteTarget
+	ReplacementState     *raftplacement.ReplicaReplacementStateV1  `json:",omitempty"`
+	ReplacementSeed      *raftcluster.ReplacementSnapshotSeedV1    `json:",omitempty"`
+	ReplacementPending   bool                                      `json:",omitempty"`
+	ReplacementInstalled bool                                      `json:",omitempty"`
+	Replacement          *raftplacement.ReplicaReplacementBeginV1  `json:",omitempty"`
+	Membership           *raftcluster.CommittedRaftConfigurationV1 `json:",omitempty"`
+	Diagnostics          *FixedPeerDiagnosticsV1                   `json:",omitempty"`
+	Readiness            *FixedPeerReadinessV1                     `json:",omitempty"`
+	ReadProof            *raftcluster.ReadIndexProof               `json:",omitempty"`
+	NodeID               raftcluster.NodeID
+	ConfigDigest         string
+	Error                string
+	ErrorCode            string
+	RouteError           *raftcluster.RouteErrorMetadata
+	Status               FixedPeerTCPStatusV1
+	Catalog              raftplacement.CatalogMetaStatusV1
+	Submit               raftcluster.SubmitResultV1
+	Route                ClusterRouteTarget
 }
 
 func (r *FixedPeerTCPRuntimeV1) serve(w http.ResponseWriter, request *http.Request) {
@@ -800,7 +823,7 @@ func (r *FixedPeerTCPRuntimeV1) serve(w http.ResponseWriter, request *http.Reque
 		if err != nil {
 			return
 		}
-		if request.URL.Path == "/v1/catalog-publish" || strings.HasPrefix(request.URL.Path, "/v1/replacement-") && request.URL.Path != "/v1/replacement-read" {
+		if request.URL.Path == "/v1/catalog-publish" || strings.HasPrefix(request.URL.Path, "/v1/replacement-") && request.URL.Path != "/v1/replacement-read" && request.URL.Path != "/v1/replacement-cutoff" {
 			allowed := false
 			for _, member := range r.config.Catalog.Peers {
 				allowed = allowed || member.ID == caller
@@ -811,7 +834,7 @@ func (r *FixedPeerTCPRuntimeV1) serve(w http.ResponseWriter, request *http.Reque
 			}
 		}
 	}
-	if r.draining.Load() && (request.URL.Path == "/v1/submit" || request.URL.Path == "/v1/forward" || request.URL.Path == "/v1/catalog-publish" || strings.HasPrefix(request.URL.Path, "/v1/replacement-") && request.URL.Path != "/v1/replacement-read") {
+	if r.draining.Load() && (request.URL.Path == "/v1/submit" || request.URL.Path == "/v1/forward" || request.URL.Path == "/v1/catalog-publish" || strings.HasPrefix(request.URL.Path, "/v1/replacement-") && request.URL.Path != "/v1/replacement-read" && request.URL.Path != "/v1/replacement-cutoff") {
 		err = raftcluster.ErrAdmissionUnavailable
 		return
 	}
@@ -831,7 +854,7 @@ func (r *FixedPeerTCPRuntimeV1) serve(w http.ResponseWriter, request *http.Reque
 	switch request.URL.Path {
 	case "/v1/forward":
 		requests = r.forwards
-	case "/v1/status", "/v1/replacement-read", "/v1/catalog-read", "/v1/catalog-route", "/v1/catalog-validate", "/v1/group-read-proof":
+	case "/v1/status", "/v1/replacement-read", "/v1/replacement-cutoff", "/v1/catalog-read", "/v1/catalog-route", "/v1/catalog-validate", "/v1/group-read-proof":
 		requests = r.reads
 	case "/v1/readiness", "/v1/diagnostics":
 		requests = r.diagnostics
@@ -865,7 +888,7 @@ func (r *FixedPeerTCPRuntimeV1) serve(w http.ResponseWriter, request *http.Reque
 		return
 	}
 	switch request.URL.Path {
-	case "/v1/replacement-begin", "/v1/replacement-read", "/v1/replacement-prepare", "/v1/replacement-enroll":
+	case "/v1/replacement-begin", "/v1/replacement-read", "/v1/replacement-prepare", "/v1/replacement-enroll", "/v1/replacement-seed", "/v1/replacement-install", "/v1/replacement-receiver", "/v1/replacement-advance", "/v1/replacement-allow", "/v1/replacement-cutoff":
 		err = r.handleReplacementV1(ctx, request.URL.Path, body.Entry, &reply)
 	case "/v1/status":
 		reply.Status, err = r.Status(ctx)
@@ -990,7 +1013,7 @@ func (c *FixedPeerTCPClientV1) call(ctx context.Context, node raftcluster.NodeID
 	// Read and mutation admission are independent, globally bounded per
 	// client, and have no unbounded waiter queue. Refusal precedes any send.
 	httpClient, calls := c.http, c.calls
-	if operation == "status" || operation == "replacement-read" || operation == "catalog-read" || operation == "catalog-route" || operation == "catalog-validate" || operation == "readiness" || operation == "diagnostics" || operation == "group-read-proof" {
+	if operation == "status" || operation == "replacement-read" || operation == "replacement-cutoff" || operation == "catalog-read" || operation == "catalog-route" || operation == "catalog-validate" || operation == "readiness" || operation == "diagnostics" || operation == "group-read-proof" {
 		httpClient, calls = c.readHTTP, c.readCalls
 	}
 	select {

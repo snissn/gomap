@@ -18,7 +18,7 @@ import (
 
 const (
 	ReplicaReplacementBeginKindV1        = "replica-replacement-begin-v1"
-	maxReplicaReplacementCommandBytesV1  = 8 << 10
+	maxReplicaReplacementCommandBytesV1  = 24 << 10
 	maxReplicaReplacementSnapshotBytesV1 = MaxCatalogMetaGroupsV1 * maxReplicaReplacementCommandBytesV1
 )
 
@@ -146,6 +146,15 @@ func validateReplicaReplacementCatalogV1(command ReplicaReplacementBeginV1, reco
 }
 
 func (a *CatalogMetaAuthorityV1) applyCommittedReplicaReplacementV1(raw []byte, appliedIndex uint64) (CatalogMetaStatusV1, error) {
+	var envelope struct {
+		Kind string `json:"kind"`
+	}
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		return CatalogMetaStatusV1{}, err
+	}
+	if envelope.Kind == ReplicaReplacementAdvanceKindV1 {
+		return a.applyCommittedReplicaReplacementAdvanceV1(raw, appliedIndex)
+	}
 	command, err := DecodeReplicaReplacementBeginV1(raw)
 	if err != nil {
 		return CatalogMetaStatusV1{}, err
@@ -162,16 +171,18 @@ func (a *CatalogMetaAuthorityV1) applyCommittedReplicaReplacementV1(raw []byte, 
 		return CatalogMetaStatusV1{}, err
 	}
 	if existing := a.replacements[command.GroupID]; existing != nil {
-		if bytes.Equal(existing, raw) {
+		previous, err := decodeReplicaReplacementCurrentV1(existing)
+		if err == nil && sameReplicaReplacementBeginV1(previous.Begin, command) {
 			return a.statusLocked(), nil
 		}
 		return CatalogMetaStatusV1{}, ErrCatalogMetaConflict
 	}
 	for _, existing := range a.replacements {
-		previous, err := DecodeReplicaReplacementBeginV1(existing)
+		previousState, err := decodeReplicaReplacementCurrentV1(existing)
 		if err != nil {
 			return CatalogMetaStatusV1{}, err
 		}
+		previous := previousState.Begin
 		if previous.OperationID == command.OperationID || previous.ConfigDigest != command.ConfigDigest {
 			return CatalogMetaStatusV1{}, ErrCatalogMetaConflict
 		}
@@ -184,22 +195,7 @@ func (a *CatalogMetaAuthorityV1) applyCommittedReplicaReplacementV1(raw []byte, 
 		candidate[group] = value
 	}
 	candidate[command.GroupID] = bytes.Clone(raw)
-	encoded, err := encodeReplicaReplacementSnapshotV1(candidate)
-	if err != nil {
-		return CatalogMetaStatusV1{}, err
-	}
-	lifecycle, err := encodeVectorPartitionLifecycleSnapshotV1(a.lifecycle, a.mutationFences, a.collectionMutationBarriers)
-	if err != nil {
-		return CatalogMetaStatusV1{}, err
-	}
-	snapshot := CatalogMetaSnapshotV1{Format: CatalogMetaFormatV1, AppliedIndex: appliedIndex, Record: a.recordBytes, LastCommand: a.command, VectorPartitionLifecycle: lifecycle, ReplicaReplacements: encoded}
-	if raw, err := json.Marshal(snapshot); err != nil {
-		return CatalogMetaStatusV1{}, err
-	} else if len(raw) > MaxCatalogMetaSnapshotBytesV1 {
-		return CatalogMetaStatusV1{}, ErrCatalogMetaLimit
-	}
-	a.replacements, a.replacementBytes, a.applied = candidate, uint64(len(encoded)), appliedIndex
-	return a.statusLocked(), nil
+	return a.installReplicaReplacementCandidateLockedV1(candidate, appliedIndex)
 }
 
 // ReplicaReplacementBeginsV1 returns owned, bounded immutable preparation
@@ -214,9 +210,17 @@ func (a *CatalogMetaAuthorityV1) ReplicaReplacementBeginsV1() ([]ReplicaReplacem
 	if err != nil || len(raw) == 0 {
 		return nil, err
 	}
-	var commands []ReplicaReplacementBeginV1
-	if err := json.Unmarshal(raw, &commands); err != nil {
+	var values []json.RawMessage
+	if err := json.Unmarshal(raw, &values); err != nil {
 		return nil, err
+	}
+	commands := make([]ReplicaReplacementBeginV1, 0, len(values))
+	for _, value := range values {
+		state, err := decodeReplicaReplacementCurrentV1(value)
+		if err != nil {
+			return nil, err
+		}
+		commands = append(commands, state.Begin)
 	}
 	return commands, nil
 }
@@ -270,10 +274,11 @@ func decodeReplicaReplacementSnapshotV1(raw []byte, record CatalogMetaRecordV1) 
 		if err := decoder.Decode(&commandBytes); err != nil {
 			return nil, err
 		}
-		command, err := DecodeReplicaReplacementBeginV1(commandBytes)
+		state, err := decodeReplicaReplacementCurrentV1(commandBytes)
 		if err != nil {
 			return nil, err
 		}
+		command := state.Begin
 		if err := validateReplicaReplacementCatalogV1(command, record); err != nil {
 			return nil, err
 		}

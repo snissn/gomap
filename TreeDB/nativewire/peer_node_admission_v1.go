@@ -137,6 +137,42 @@ func newPeerNodeAdmissionV1(config FixedPeerTCPConfigV1) (*peerNodeAdmissionV1, 
 	return a, nil
 }
 
+// admitReplacementRaftGroupV1 reserves the normal hosted-Raft budget after
+// committed replacement authority admits a previously unhosted group. The
+// existing shard scope supplies both the anchored group inventory and limits;
+// unknown groups cannot grow this map. Registration lasts until node Close and
+// exact retries do not reserve twice. It never takes capacity from live work.
+func (a *peerNodeAdmissionV1) admitReplacementRaftGroupV1(group raftcluster.GroupID) error {
+	if a == nil {
+		return nil
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.stats.Closed || a.draining.Load() {
+		return raftcluster.ErrAdmissionUnavailable
+	}
+	source := a.scopes["shard:"+string(group)]
+	if source == nil {
+		return raftcluster.ErrInvalidConfig
+	}
+	key := "raft:" + string(group)
+	if a.scopes[key] != nil {
+		return nil
+	}
+	reserved := peerResourceAmountsV1{4, 1, 4 << 20}
+	for kind, amount := range reserved {
+		remaining := a.sharedLimits[kind] - amount
+		if remaining <= 0 || remaining < a.shared[kind] {
+			return fmt.Errorf("%w: replacement group reserve %d exhausted", raftcluster.ErrAdmissionUnavailable, kind)
+		}
+	}
+	for kind, amount := range reserved {
+		a.sharedLimits[kind] -= amount
+	}
+	a.scopes[key] = &peerResourceScopeV1{reserved: reserved, limits: source.limits}
+	return nil
+}
+
 type peerResourceLeaseV1 struct {
 	owner  *peerNodeAdmissionV1
 	scope  *peerResourceScopeV1

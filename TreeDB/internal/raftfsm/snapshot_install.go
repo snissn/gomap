@@ -1,6 +1,8 @@
 package raftfsm
 
 import (
+	"context"
+
 	"github.com/snissn/gomap/TreeDB/internal/raftapply"
 	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
 	"github.com/snissn/gomap/TreeDB/internal/raftentry"
@@ -10,15 +12,31 @@ import (
 // the exact logical state described by manifest. It does not copy snapshot
 // bytes, truncate logs, or make the node safe to serve reads.
 func (f *FSM) VerifyInstalledSnapshotManifestV1(manifest raftcluster.SnapshotManifestV1) error {
+	return f.VerifyInstalledSnapshotManifestWithContextV1(context.Background(), manifest)
+}
+
+// VerifyInstalledSnapshotManifestWithContextV1 hashes under the FSM read lock,
+// using the same bounded two-pass digest as an immutable snapshot.
+func (f *FSM) VerifyInstalledSnapshotManifestWithContextV1(ctx context.Context, manifest raftcluster.SnapshotManifestV1) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if f == nil {
 		return codedError(raftentry.ErrorUnsafeDurabilityModeV1, "FSM is not open")
 	}
 	f.mu.RLock()
 	defer f.mu.RUnlock()
-	return f.verifyInstalledSnapshotManifestV1Locked(manifest)
+	return f.verifyInstalledSnapshotManifestWithContextV1Locked(ctx, manifest)
 }
 
 func (f *FSM) verifyInstalledSnapshotManifestV1Locked(manifest raftcluster.SnapshotManifestV1) error {
+	return f.verifyInstalledSnapshotManifestWithContextV1Locked(context.Background(), manifest)
+}
+
+func (f *FSM) verifyInstalledSnapshotManifestWithContextV1Locked(ctx context.Context, manifest raftcluster.SnapshotManifestV1) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if f == nil {
 		return codedError(raftentry.ErrorUnsafeDurabilityModeV1, "FSM is not open")
 	}
@@ -54,7 +72,7 @@ func (f *FSM) verifyInstalledSnapshotManifestV1Locked(manifest raftcluster.Snaps
 	if localLSN != manifest.AppliedCommandLSN {
 		return codedError(raftentry.ErrorRejectedConflictV1, "snapshot manifest AppliedCommandLSN %d does not match local coverage %d", manifest.AppliedCommandLSN, localLSN)
 	}
-	digest, err := f.logicalDigestV1Locked(raftapply.LogicalDigestOptionsV1{
+	digest, err := raftapply.LogicalDigestV1ForSnapshotDBContext(ctx, f.db, raftapply.LogicalDigestOptionsV1{
 		ScopeRule:     f.scopeRule,
 		DatabaseScope: f.database,
 		CatalogScope:  f.catalog,

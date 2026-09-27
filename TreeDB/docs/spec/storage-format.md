@@ -3566,3 +3566,80 @@ imports have source-group quorum commitment. Catalog apply checks deterministic
 identity and known groups without filesystem reads. Paged distributed activation
 and search remain refused, including forged active lifecycle records. Durable
 local preparation alone does not authorize serving.
+
+### Replica replacement seed and receiver records (developmental)
+
+P5's bounded replacement substrate retains one current operation per catalog
+Raft group. The existing catalog snapshot carries either its canonical BEGIN
+or its canonical `replica-replacement-advance-v1` JSON value. Advance phases are
+`seeded`, `installed`, and `add-intent`; adjacent advances and exact retries are
+accepted, while changing the BEGIN or selected seed is refused. A replacement
+command is capped at 24 KiB and the existing total catalog snapshot limit still
+applies. These records bind authority and intent; applying them does not prove
+that a remote receiver installed bytes or durably applied a tail.
+
+The seed reuses a native HashiCorp `FileSnapshotStore` snapshot, retained in one
+operation-owned store so ordinary snapshot retention cannot silently select a
+newer artifact. Its identity includes the native basename ID, version, term,
+index, exact configuration index/digest, archive length/SHA-256, and TreeDB
+snapshot manifest. Native IDs containing path separators, dot/dotdot, or NUL
+are rejected before opening. Native `Open` performs a synchronous CRC pass;
+caller cancellation does not release operation ownership while that call is
+still running. Retained archive bytes and temporary copy bytes count against
+replacement admission separately from the ordinary native snapshot store.
+
+The receiver uses `replacement-receiver-v1.json` in its existing Raft group
+control directory, outside the TreeDB directory replaced during installation.
+Canonical JSON is capped at 16 KiB and binds the exact BEGIN, seed, and one of
+`prepared`, `installing`, `installed`, or `add-intent`. The fixed temporary name
+is written and synced, renamed relative to a retained parent, and the parent
+is synced. A failed publication poisons the open owner until reopen. Its
+counted lock's actual file identity must match that retained parent's lock
+entry; a rebound pathname cannot authorize writes to another directory.
+Operation IDs are logical strings and never enter receiver filenames.
+
+Before enrollment, both normal Raft RPCs and the heartbeat fast path are
+quarantined. The exact seed owns its install fence through native completion
+and durable native/FSM verification, including a lost client response. Restart
+rechecks a cached installed receipt before allowing enrollment. An unresolved
+installation without a matching recoverable snapshot remains unready.
+Persisting `add-intent` permanently closes prejoin installation and rejects
+native snapshots at or below the seed index; later ordinary native snapshots
+retain the normal transport path. This is required because the pinned native
+installer does not independently reject an older incoming applied index.
+
+These helpers and focused provider tests are a developmental checkpoint.
+Public orchestration, durable tail/promotion/removal integration, supported
+lifecycle-bearing replacement, and shard-sized recovery measurements remain
+required before a complete P5 claim. Existing lifecycle-bearing fixed-peer
+replacement continues to fail closed.
+
+#### Replacement prejoin runtime checkpoint (developmental)
+
+The supported fixed-peer replacement profile admits a preauthorized node from
+`Nodes`; it does not enroll a new global identity or change lifecycle epochs.
+The catalog coordinates BEGIN, a production-derived retained native seed,
+verified installation, and add intent. The target has no bootstrap path. Its
+native transport quarantines ordinary requests and the heartbeat fast path
+until installation has completed and add intent is durable. A permanent seed
+index floor rejects delayed seed snapshots after ordinary replication opens.
+Lifecycle-bearing fixed-peer replacement remains explicitly unsupported; this
+checkpoint does not qualify promotion, old-voter retirement, or that profile.
+
+Short control requests poll one native phase worker per hosted group. A caller
+cancellation does not release a running native call or create a second retry
+worker. Runtime shutdown cancels it and closes transport, then waits for its
+actual return before closing provider and storage. Filesystem and native CRC
+calls, and an arbitrary blocked reader, remain cooperatively cancellable rather
+than forcibly interruptible; operation lifetime is not a hard shutdown bound.
+
+One operation-owned native `FileSnapshotStore` retains the seed separately from
+automatic snapshot retention. Its directory name is the digest of canonical
+BEGIN, with only one unresolved operation allowed per group. Native metadata,
+manifest and archive bytes derive the seed commitment on recovery. Missing,
+partial or conflicting retention refuses rather than selecting another seed.
+The existing FSM file/byte/staging/lifetime ceilings are reused; the source plus
+additional retained archive count toward the staging ceiling, and the extra
+copy requires available disk before copying. Retained seeds remain persistent
+operation debt until a later qualified completion/cleanup milestone. These are
+admission ceilings and developmental tests, not measured shard capacity.

@@ -140,3 +140,24 @@ func (l *Lock) Close() error {
 	delete(processLocks, state.path)
 	return errors.Join(unlockErr, closeErr)
 }
+
+// SameFile verifies that a separately opened, parent-relative entry is the
+// exact file owned by this lock. It does not reopen the lock's pathname. This
+// lets a caller bind a retained directory handle to a pathname-acquired lock
+// before using that handle for mutation.
+func (l *Lock) SameFile(file *os.File) (bool, error) {
+	processMu.Lock()
+	defer processMu.Unlock()
+	if l == nil || l.state == nil || file == nil {
+		return false, os.ErrClosed
+	}
+	locked, err := l.state.f.Stat()
+	if err != nil {
+		return false, err
+	}
+	candidate, err := file.Stat()
+	if err != nil {
+		return false, err
+	}
+	return os.SameFile(locked, candidate), nil
+}

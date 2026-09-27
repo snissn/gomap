@@ -227,6 +227,18 @@ func VectorPartitionSnapshotEntriesWithContextV1(ctx context.Context, dir *os.Fi
 // highest checkpoint and its current tail; superseded audit epochs are never
 // valid snapshot payload.
 func ValidateVectorPartitionSnapshotNamespaceV1(root string) error {
+	return ValidateVectorPartitionSnapshotNamespaceWithContextV1(context.Background(), root)
+}
+
+// ValidateVectorPartitionSnapshotNamespaceWithContextV1 preserves exact snapshot
+// selection and asset validation while allowing cancellation between reads.
+func ValidateVectorPartitionSnapshotNamespaceWithContextV1(ctx context.Context, root string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	store, err := OpenExistingVectorPartitionStoreV1(root)
 	if errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("%w: snapshot missing vector partition namespace", ErrVectorPartitionManifestInvalid)
@@ -238,7 +250,7 @@ func ValidateVectorPartitionSnapshotNamespaceV1(root string) error {
 	if err != nil {
 		return err
 	}
-	selected, err := VectorPartitionSnapshotEntriesV1(dir)
+	selected, err := VectorPartitionSnapshotEntriesWithContextV1(ctx, dir)
 	if err != nil {
 		_ = dir.Close()
 		return err
@@ -252,18 +264,25 @@ func ValidateVectorPartitionSnapshotNamespaceV1(root string) error {
 		_ = dir.Close()
 		return fmt.Errorf("%w: snapshot namespace contains superseded lifecycle audit entries", ErrVectorPartitionManifestInvalid)
 	}
-	validateErr := validateVectorPartitionSnapshotAssetsV1(root, store, dir, selected)
+	validateErr := validateVectorPartitionSnapshotAssetsWithContextV1(ctx, root, store, dir, selected)
 	closeErr := dir.Close()
 	return errors.Join(validateErr, closeErr)
 }
 
 func validateVectorPartitionSnapshotAssetsV1(root string, store *VectorPartitionStoreV1, dir *os.File, selected []VectorPartitionSnapshotEntryV1) error {
+	return validateVectorPartitionSnapshotAssetsWithContextV1(context.Background(), root, store, dir, selected)
+}
+
+func validateVectorPartitionSnapshotAssetsWithContextV1(ctx context.Context, root string, store *VectorPartitionStoreV1, dir *os.File, selected []VectorPartitionSnapshotEntryV1) error {
 	seen := make(map[string]struct{})
 	for _, selectedEntry := range selected {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if !strings.Contains(selectedEntry.Name, ".lifecycle.checkpoint.") {
 			continue
 		}
-		raw, err := readVectorPartitionLifecycleSlotV1(dir, selectedEntry.Name, vectorPartitionLifecycleCheckpointMaxBytesV1)
+		raw, err := readVectorPartitionLifecycleSlotWithContextV1(ctx, dir, selectedEntry.Name, vectorPartitionLifecycleCheckpointMaxBytesV1)
 		if err != nil {
 			return err
 		}
@@ -276,7 +295,7 @@ func validateVectorPartitionSnapshotAssetsV1(root string, store *VectorPartition
 			continue
 		}
 		seen[identity] = struct{}{}
-		loaded, err := store.loadVectorPartitionLifecycleCheckpointStateFromDirV1(dir, collection, index)
+		loaded, err := store.loadVectorPartitionLifecycleCheckpointStateFromDirWithContextV1(ctx, dir, collection, index)
 		if err != nil {
 			return err
 		}
@@ -305,7 +324,7 @@ func validateVectorPartitionSnapshotAssetsV1(root string, store *VectorPartition
 			if namespace == "" {
 				return fmt.Errorf("%w: snapshot vector partition generation %d has no assets", ErrVectorPartitionManifestInvalid, generation)
 			}
-			if err := walkVectorPartitionManifestAssetsV2(context.Background(), filepath.Join(root, "column_assets"), namespace, *entry.Manifest, nil); err != nil {
+			if err := walkVectorPartitionManifestAssetsV2(ctx, filepath.Join(root, "column_assets"), namespace, *entry.Manifest, nil); err != nil {
 				return fmt.Errorf("%w: snapshot vector partition generation %d assets: %v", ErrVectorPartitionManifestInvalid, generation, err)
 			}
 		}

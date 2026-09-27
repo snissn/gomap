@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -17,11 +19,18 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
-// This first developmental boundary must admit a committed replacement BEGIN
-// before nonvoter enrollment and snapshot/tail promotion can be exercised. It
-// deliberately uses the real catalog Raft provider and a fresh Nodes-only spare;
-// configured member lists are not treated as actual Raft suffrage evidence.
+// This boundary uses authenticated TCP, real catalog/data providers, and a
+// fresh Nodes-only spare. An actual native snapshot must be installed before
+// nonvoter enrollment; neither configured peers nor a logs-only join is proof.
 func TestReplacementCannotVoteBeforeSnapshotAndTailReadyV1(t *testing.T) {
+	testReplacementPublicInstallV1(t, false)
+}
+
+func TestReplacementPublicInstallSurvivesCallerDeadlineV1(t *testing.T) {
+	testReplacementPublicInstallV1(t, true)
+}
+
+func testReplacementPublicInstallV1(t *testing.T, stallInstall bool) {
 	configs := fixedPeerTestConfigsV1(t)
 	address := func() string {
 		listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -54,6 +63,11 @@ func TestReplacementCannotVoteBeforeSnapshotAndTailReadyV1(t *testing.T) {
 	spareConfig.DataRoot, spareConfig.RaftRoot = filepath.Join(spareRoot, "data"), filepath.Join(spareRoot, "raft")
 	spareConfig.RaftListen = map[raftcluster.GroupID]string{}
 	configs = append(configs, spareConfig)
+	ca := newPeerCAFixtureV1(t)
+	for i := range configs {
+		configs[i].ClusterID = "replacement-conformance"
+		configs[i].Credentials = ca.issue(t, configs[i].ClusterID, string(configs[i].NodeID), time.Now().Add(-time.Hour), time.Now().Add(time.Hour))
+	}
 	runtimes := make([]*FixedPeerTCPRuntimeV1, len(configs))
 	for i, cfg := range configs {
 		runtime, err := OpenFixedPeerTCPRuntimeV1(cfg)
@@ -138,9 +152,152 @@ func TestReplacementCannotVoteBeforeSnapshotAndTailReadyV1(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Catalog election is independent of the data group's election. Snapshot
+	// capture also requires a real applied command, not a config/no-op index.
+	var source *fixedPeerDataV1
+	var sourceNode raftcluster.NodeID
+	fixedPeerWaitV1(t, ctx, func() bool {
+		id, err := client.leader(ctx, group)
+		if err != nil {
+			return false
+		}
+		for _, runtime := range runtimes[:3] {
+			if runtime.config.NodeID == id {
+				source = runtime.localDataV1(group.ID)
+				sourceNode = id
+				return true
+			}
+		}
+		return false
+	})
+	version, known, err := source.fsm.CurrentCatalogVersion(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := source.provider.CommitCommandEntryV1(ctx, raftcluster.CommitCommandEntryV1Request{NodeID: sourceNode, GroupID: group.ID, EntryBytes: fixedPeerCreateEntryV1(t, "users", version), CurrentCatalogVersion: version, HasCurrentCatalogVersion: known, SyncLocalCommandWAL: true}); err != nil {
+		t.Fatal(err)
+	}
+	if stallInstall && rootpublication.StableRelativeNamespaceSupported() {
+		seedReply, err := client.pollReplacementV1(ctx, sourceNode, "replacement-seed", begin)
+		if err != nil || seedReply.ReplacementSeed == nil {
+			t.Fatalf("prepare stalled seed: %+v %v", seedReply, err)
+		}
+		state := raftplacement.ReplicaReplacementStateV1{Begin: operation, Phase: raftplacement.ReplicaReplacementSeededV1, Seed: seedReply.ReplacementSeed}
+		if err := client.commitReplacementPhaseV1(ctx, configs[leader].NodeID, state); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := client.call(ctx, spare.ID, "replacement-prepare", fixedPeerRequestV1{Entry: begin}, true); err != nil {
+			t.Fatal(err)
+		}
+		target := runtimes[3].localDataV1(group.ID)
+		entered, release := make(chan struct{}), make(chan struct{})
+		var releaseOnce sync.Once
+		releaseInstall := func() { releaseOnce.Do(func() { close(release) }) }
+		defer releaseInstall()
+		var nativeCompletions atomic.Int32
+		target.prejoin.mu.Lock()
+		originalVerify := target.prejoin.verify
+		target.prejoin.verify = func(seed raftcluster.ReplacementSnapshotSeedV1) error {
+			nativeCompletions.Add(1)
+			close(entered)
+			<-release
+			return originalVerify(seed)
+		}
+		target.prejoin.mu.Unlock()
+		// Lose a reply even if the underlying authenticated native transport
+		// survives its own deadline. The receiver remains the only authority.
+		source.transport = replacementLostSeedReplyV1{Transport: source.transport}
+		caller, cancelCaller := context.WithCancel(ctx)
+		defer cancelCaller()
+		returned := make(chan error, 1)
+		go func() {
+			_, err := client.PrepareReplicaReplacementV1(caller, configs[leader].NodeID, operation)
+			returned <- err
+		}()
+		select {
+		case <-entered:
+		case err := <-returned:
+			t.Fatalf("install returned before native completion: %v", err)
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		}
+		// The real native FSM restore has finished; its verification/completion
+		// still owns the gate past the short control/native network timeout.
+		timer := time.NewTimer(configs[0].RequestTimeout + 100*time.Millisecond)
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			timer.Stop()
+			t.Fatal(ctx.Err())
+		}
+		cancelCaller()
+		select {
+		case err := <-returned:
+			if err == nil {
+				t.Fatal("disconnected caller reported completed preparation")
+			}
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		}
+		target.prejoin.mu.Lock()
+		inflight := target.prejoin.inflight
+		target.prejoin.mu.Unlock()
+		if !inflight {
+			t.Fatal("request timeout released native install fence")
+		}
+		before, err := source.provider.CommittedConfigurationV1(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, member := range before.Members {
+			if member.ID == spare.ID {
+				t.Fatal("target enrolled before native completion")
+			}
+		}
+		short, cancelShort := context.WithTimeout(ctx, 50*time.Millisecond)
+		_, retryErr := client.PrepareReplicaReplacementV1(short, configs[leader].NodeID, operation)
+		cancelShort()
+		if retryErr == nil || nativeCompletions.Load() != 1 {
+			t.Fatalf("retry duplicated/completed blocked install: %d %v", nativeCompletions.Load(), retryErr)
+		}
+		releaseInstall()
+		fixedPeerWaitV1(t, ctx, func() bool {
+			target.prejoin.mu.Lock()
+			defer target.prejoin.mu.Unlock()
+			return target.prejoin.phase == replacementReceiverInstalledV1 && target.prejoin.verified && !target.prejoin.inflight
+		})
+		for _, phase := range []raftplacement.ReplicaReplacementPhaseV1{raftplacement.ReplicaReplacementInstalledV1, raftplacement.ReplicaReplacementAddIntentV1} {
+			state.Phase = phase
+			if err := client.commitReplacementPhaseV1(ctx, configs[leader].NodeID, state); err != nil {
+				t.Fatal(err)
+			}
+		}
+		dataLeader, err := client.leader(ctx, group)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := client.call(ctx, dataLeader, "replacement-enroll", fixedPeerRequestV1{Entry: begin}, true); !errors.Is(err, raftcluster.ErrAdmissionUnavailable) {
+			t.Fatalf("authorized enrollment bypassed receiver cutoff: %v", err)
+		}
+
+	}
 	membership, err := client.PrepareReplicaReplacementV1(ctx, configs[leader].NodeID, operation)
+	if !rootpublication.StableRelativeNamespaceSupported() {
+		if err == nil || runtimes[3].localDataV1(group.ID) != nil {
+			t.Fatalf("unsupported namespace admitted seeded target: %v", err)
+		}
+		return
+	}
 	if err != nil {
 		t.Fatalf("prepare actual nonvoter: %v", err)
+	}
+	admission := runtimes[3].client.peerTransport.admission
+	admission.mu.Lock()
+	raftScope := admission.scopes["raft:"+string(group.ID)]
+	admitted := raftScope != nil && raftScope.reserved == (peerResourceAmountsV1{4, 1, 4 << 20})
+	admission.mu.Unlock()
+	if !admitted {
+		t.Fatal("public replacement omitted node-wide hosted Raft reserve")
 	}
 	voters, learners := 0, 0
 	for _, member := range membership.Members {
@@ -156,6 +313,38 @@ func TestReplacementCannotVoteBeforeSnapshotAndTailReadyV1(t *testing.T) {
 	if voters != 3 || learners != 1 || membership.ConfigurationIndex == 0 || membership.CommitIndex < membership.ConfigurationIndex {
 		t.Fatalf("actual committed membership=%+v", membership)
 	}
+	committed, err := runtimes[leader].authority.ReplicaReplacementStateV1(group.ID)
+	if err != nil || committed.Phase != raftplacement.ReplicaReplacementAddIntentV1 || committed.Seed == nil {
+		t.Fatalf("missing installed seed/add intent: %+v %v", committed, err)
+	}
+	target := runtimes[3].localDataV1(group.ID)
+	if target == nil || target.prejoin == nil || target.replacementReceiver == nil {
+		t.Fatal("target lacks native receiver owner")
+	}
+	target.prejoin.mu.Lock()
+	phase, verified := target.prejoin.phase, target.prejoin.verified
+	target.prejoin.mu.Unlock()
+	if phase != replacementReceiverAddIntentV1 || !verified {
+		t.Fatalf("unverified receiver enrolled: %s %v", phase, verified)
+	}
+	if _, err := client.call(ctx, committed.Seed.SourceNodeID, "replacement-install", fixedPeerRequestV1{Entry: begin}, true); !errors.Is(err, raftcluster.ErrAdmissionUnavailable) {
+		t.Fatalf("seed replay permitted after add intent: %v", err)
+	}
+	// Restart restores the durable quarantine/cutoff record rather than deriving
+	// authority from the new request. The fixed manifest remains byte-identical.
+	if err := runtimes[3].Close(); err != nil {
+		t.Fatal(err)
+	}
+	restarted, err := OpenFixedPeerTCPRuntimeV1(configs[3])
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtimes[3] = restarted
+	t.Cleanup(func() {
+		if err := restarted.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	repeated, err := client.PrepareReplicaReplacementV1(ctx, configs[leader].NodeID, operation)
 	if err != nil || repeated.ConfigurationIndex != membership.ConfigurationIndex {
 		t.Fatalf("exact prepare retry changed config: %+v %v", repeated, err)
@@ -191,9 +380,8 @@ func TestReplacementCannotVoteBeforeSnapshotAndTailReadyV1(t *testing.T) {
 	if _, err := client.PrepareReplicaReplacementV1(ctx, configs[leader].NodeID, unknown); err == nil {
 		t.Fatal("unknown global node admitted")
 	}
-	// BEGIN only authorizes preparation: it cannot publish a routing or ownership
-	// change. Subsequent implementation extends this test through installed-snapshot
-	// and durable receiver readiness, rather than inferring them here.
+	// Seeded nonvoter enrollment cannot publish a routing/ownership change.
+	// Durable tail qualification and promotion remain a subsequent milestone.
 	current, err := runtimes[leader].authority.ExportCatalogMetaSnapshotV1()
 	if err != nil {
 		t.Fatal(err)

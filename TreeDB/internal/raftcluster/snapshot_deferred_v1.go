@@ -20,6 +20,7 @@ type deferredRaftSnapshotV1 struct {
 	ctx            context.Context
 	cancel         context.CancelFunc
 	materialize    func(context.Context) (RaftSnapshotV1, error)
+	cleanupOnly    bool
 	releaseCapture func() error
 	releaseOwner   func() error
 	// result is unowned: this owner alone controls its archive's lifetime.
@@ -41,6 +42,43 @@ func NewDeferredRaftSnapshotV1(materialize func(context.Context) (RaftSnapshotV1
 	return RaftSnapshotV1{deferred: &deferredRaftSnapshotV1{ctx: ctx, cancel: cancel, materialize: materialize, releaseCapture: releaseCapture, releaseOwner: releaseOwner}}, nil
 }
 
+// NewRaftSnapshotCleanupV1 retains an installation's work and cleanup under
+// the same single owner as exports. It never represents an archive: Materialize
+// and snapshot validation refuse this carrier. RunCleanupWorkV1 owns work until
+// its actual return, so Release can cancel but cannot remove active scratch.
+func NewRaftSnapshotCleanupV1(work func(context.Context) error, cleanup, releaseOwner func() error) (RaftSnapshotV1, error) {
+	if work == nil {
+		return RaftSnapshotV1{}, ErrInvalidSnapshotManifest
+	}
+	s, err := NewDeferredRaftSnapshotV1(func(ctx context.Context) (RaftSnapshotV1, error) {
+		return RaftSnapshotV1{}, work(ctx)
+	}, cleanup, releaseOwner)
+	if err == nil {
+		s.deferred.cleanupOnly = true
+	}
+	return s, err
+}
+
+// RunCleanupWorkV1 executes a cleanup-only carrier once. A cleanup failure stays
+// reachable for RetryCleanupV1/Release; it never releases owner admission early.
+func (s RaftSnapshotV1) RunCleanupWorkV1() error {
+	d := s.deferred
+	if d == nil || !d.cleanupOnly || s.owner != nil {
+		return ErrInvalidSnapshotManifest
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.released || d.materialize == nil {
+		return ErrInvalidSnapshotManifest
+	}
+	_, d.err = d.materialize(d.ctx)
+	d.materialize = nil
+	d.err = errors.Join(d.err, d.ctx.Err())
+	d.cancel()
+	d.released = true
+	return errors.Join(d.err, d.releaseCaptureLocked(), d.finishLocked())
+}
+
 // Materialize completes deferred work exactly once. A finalized result keeps
 // its public manifest and archive path while sharing the original owner.
 func (s RaftSnapshotV1) Materialize() (RaftSnapshotV1, error) {
@@ -60,7 +98,7 @@ func (s RaftSnapshotV1) Materialize() (RaftSnapshotV1, error) {
 	d := s.deferred
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if d.released {
+	if d.released || d.cleanupOnly {
 		return RaftSnapshotV1{}, fmt.Errorf("%w: captured snapshot released", ErrInvalidSnapshotManifest)
 	}
 	if d.materialize != nil {
@@ -104,7 +142,7 @@ func (s RaftSnapshotV1) validateCapturedV1() error {
 	d := s.deferred
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if d.released {
+	if d.released || d.cleanupOnly {
 		return ErrInvalidSnapshotManifest
 	}
 	return d.err

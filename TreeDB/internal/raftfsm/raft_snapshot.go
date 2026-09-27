@@ -2,6 +2,7 @@ package raftfsm
 
 import (
 	"archive/tar"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -151,10 +152,35 @@ func (f *FSM) InstallRaftSnapshotV1(reader io.Reader) error {
 	if err != nil {
 		return codedError(raftentry.ErrorUnsafeDurabilityModeV1, "%v", err)
 	}
-	defer func() { _ = namespace.Close(); f.snapshotOperationActive.Store(false) }()
-	return collections.WithVectorPartitionStorageBarrierV1(raftcluster.MainDBDir(f.cluster.Dir), func() error { return f.installRaftSnapshotV1Locked(reader) })
+	scratch := &raftSnapshotScratchDirsV1{}
+	releaseOwner := func() error {
+		err := namespace.Close()
+		f.snapshotMu.Lock()
+		f.snapshotOwner = raftcluster.RaftSnapshotV1{}
+		f.snapshotOperationActive.Store(false)
+		f.snapshotMu.Unlock()
+		return err
+	}
+	owner, err := raftcluster.NewRaftSnapshotCleanupV1(func(ctx context.Context) error {
+		limits, err := f.snapshotCaptureLimits.normalized()
+		if err != nil {
+			return err
+		}
+		ctx, cancel := context.WithTimeout(ctx, limits.Lifetime)
+		defer cancel()
+		return collections.WithVectorPartitionStorageBarrierV1(raftcluster.MainDBDir(f.cluster.Dir), func() error {
+			return f.installRaftSnapshotV1Locked(ctx, reader, scratch, limits)
+		})
+	}, scratch.close, releaseOwner)
+	if err != nil {
+		return errors.Join(err, releaseOwner())
+	}
+	if !f.rememberSnapshotOwnerV1(owner) {
+		return errors.Join(fmt.Errorf("raftfsm: closed during install admission"), owner.Release())
+	}
+	return owner.RunCleanupWorkV1()
 }
-func (f *FSM) installRaftSnapshotV1Locked(reader io.Reader) error {
+func (f *FSM) installRaftSnapshotV1Locked(ctx context.Context, reader io.Reader, scratch *raftSnapshotScratchDirsV1, limits SnapshotCaptureLimitsV1) error {
 	if f == nil {
 		return codedError(raftentry.ErrorUnsafeDurabilityModeV1, "FSM is not open")
 	}
@@ -181,36 +207,23 @@ func (f *FSM) installRaftSnapshotV1Locked(reader io.Reader) error {
 		return codedError(raftentry.ErrorUnsafeDurabilityModeV1, "missing snapshot install directories")
 	}
 
-	scratch, err := createRaftSnapshotScratchDirsV1(mainDir, applyDir)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	created, err := createRaftSnapshotScratchDirsV1(mainDir, applyDir)
+	*scratch = created // Keep even partially created paths on constructor failure.
 	if err != nil {
 		return err
 	}
-	tmpMain := scratch.main
-	tmpApply := scratch.apply
-	tmpSide := scratch.side
-	cleanupMain := true
-	cleanupApply := true
-	cleanupSide := true
-	defer func() {
-		if cleanupMain {
-			_ = os.RemoveAll(tmpMain)
-		}
-		if cleanupSide {
-			_ = os.RemoveAll(tmpSide)
-		}
-		if cleanupApply {
-			_ = os.RemoveAll(tmpApply)
-		}
-	}()
-
-	header, err := extractRaftSnapshotArchiveV1(reader, tmpMain, tmpSide, tmpApply)
+	tmpMain, tmpApply, tmpSide := scratch.main, scratch.apply, scratch.side
+	header, err := extractRaftSnapshotArchiveWithLimitsV1(ctx, reader, tmpMain, tmpSide, tmpApply, limits)
 	if err != nil {
 		return err
 	}
 	if hook := raftSnapshotAfterExtractForTest; hook != nil {
 		hook()
 	}
-	if err := collections.ValidateVectorPartitionSnapshotNamespaceV1(tmpMain); err != nil {
+	if err := collections.ValidateVectorPartitionSnapshotNamespaceWithContextV1(ctx, tmpMain); err != nil {
 		return codedError(raftentry.ErrorRejectedConflictV1, "validate extracted vector partition lifecycle snapshot: %v", err)
 	}
 	f.mu.Lock()
@@ -224,10 +237,10 @@ func (f *FSM) installRaftSnapshotV1Locked(reader io.Reader) error {
 	if header.Manifest.GroupID != f.cluster.GroupID {
 		return codedError(raftentry.ErrorRejectedConflictV1, "snapshot archive group %q does not match FSM group %q", header.Manifest.GroupID, f.cluster.GroupID)
 	}
-	if err := rebindExtractedRaftSnapshotDurableRootsV1(tmpMain, tmpSide, f.cluster.DisableSideStores); err != nil {
+	if err := rebindExtractedRaftSnapshotDurableRootsWithContextV1(ctx, tmpMain, tmpSide, f.cluster.DisableSideStores); err != nil {
 		return codedError(raftentry.ErrorRejectedConflictV1, "rebind extracted snapshot durable roots: %v", err)
 	}
-	if err := f.verifyExtractedRaftSnapshotV1(header.Manifest, tmpMain, tmpSide, tmpApply); err != nil {
+	if err := f.verifyExtractedRaftSnapshotV1(ctx, header.Manifest, tmpMain, tmpSide, tmpApply); err != nil {
 		return err
 	}
 	if err := f.closeForRaftSnapshotRestoreV1(); err != nil {
@@ -236,7 +249,6 @@ func (f *FSM) installRaftSnapshotV1Locked(reader io.Reader) error {
 	if err := replaceSnapshotMainDBV1(mainDir, tmpMain, f.cluster.Layout.RootDir); err != nil {
 		return err
 	}
-	cleanupMain = false
 	if !f.cluster.DisableSideStores {
 		if err := replaceSnapshotSideStoresV1(mainDir, tmpSide); err != nil {
 			return err
@@ -245,20 +257,22 @@ func (f *FSM) installRaftSnapshotV1Locked(reader io.Reader) error {
 	// Entry-wise installs can change parent directory identities even though
 	// the dependency files themselves retain their handles across rename. Rebind
 	// once more in the final layout before any restored meta is reopened.
-	if err := rebindExtractedRaftSnapshotDurableRootsV1(mainDir, snapshotSideStoreRootV1(mainDir), f.cluster.DisableSideStores); err != nil {
+	if err := rebindExtractedRaftSnapshotDurableRootsWithContextV1(ctx, mainDir, snapshotSideStoreRootV1(mainDir), f.cluster.DisableSideStores); err != nil {
 		return codedError(raftentry.ErrorRejectedConflictV1, "rebind installed snapshot durable roots: %v", err)
 	}
 	if err := replaceSnapshotDirV1(applyDir, tmpApply); err != nil {
 		return err
 	}
-	cleanupApply = false
 	if err := f.reopenAfterRaftSnapshotRestoreV1(); err != nil {
 		return err
 	}
-	return f.verifyInstalledSnapshotManifestV1Locked(header.Manifest)
+	return f.verifyInstalledSnapshotManifestWithContextV1Locked(ctx, header.Manifest)
 }
 
 func rebindExtractedRaftSnapshotDurableRootsV1(mainDir, sideDir string, disableSideStores bool) error {
+	return rebindExtractedRaftSnapshotDurableRootsWithContextV1(context.Background(), mainDir, sideDir, disableSideStores)
+}
+func rebindExtractedRaftSnapshotDurableRootsWithContextV1(ctx context.Context, mainDir, sideDir string, disableSideStores bool) error {
 	if !disableSideStores {
 		// Rebinding a side store atomically replaces its index file. Do that
 		// first so the main manifest captures the side store's final identity.
@@ -270,12 +284,12 @@ func rebindExtractedRaftSnapshotDurableRootsV1(mainDir, sideDir string, disableS
 				}
 				return err
 			}
-			if err := backenddb.RebindDurableRootSnapshotV1(dir); err != nil {
+			if err := backenddb.RebindDurableRootSnapshotLayoutWithContextV1(ctx, dir, ""); err != nil {
 				return fmt.Errorf("side store %s: %w", name, err)
 			}
 		}
 	}
-	return backenddb.RebindDurableRootSnapshotLayoutV1(mainDir, sideDir)
+	return backenddb.RebindDurableRootSnapshotLayoutWithContextV1(ctx, mainDir, sideDir)
 }
 
 func (f *FSM) requireRaftSnapshotOpenV1() error {
@@ -354,7 +368,7 @@ func (f *FSM) reopenAfterRaftSnapshotRestoreV1() error {
 	return nil
 }
 
-func (f *FSM) verifyExtractedRaftSnapshotV1(manifest raftcluster.SnapshotManifestV1, mainDir, sideDir, applyDir string) error {
+func (f *FSM) verifyExtractedRaftSnapshotV1(ctx context.Context, manifest raftcluster.SnapshotManifestV1, mainDir, sideDir, applyDir string) error {
 	opts := f.snapshotRestoreDBOptionsV1(mainDir)
 	sideDBs, err := wireRaftSnapshotSideStoreLookupsV1(sideDir, &opts)
 	if err != nil {
@@ -386,12 +400,9 @@ func (f *FSM) verifyExtractedRaftSnapshotV1(manifest raftcluster.SnapshotManifes
 		storeOptions: f.storeOptions,
 		restoreDB:    f.restoreDB,
 	}
-	verifyErr := verifyFSM.verifyInstalledSnapshotManifestV1Locked(manifest)
+	verifyErr := verifyFSM.verifyInstalledSnapshotManifestWithContextV1Locked(ctx, manifest)
 	closeErr := errors.Join(progress.Close(), results.Close(), db.Close(), sideDBs())
-	if verifyErr != nil {
-		return verifyErr
-	}
-	return closeErr
+	return errors.Join(verifyErr, closeErr)
 }
 
 func (f *FSM) snapshotRestoreDBOptionsV1(dir string) backenddb.Options {
@@ -695,7 +706,24 @@ func writeRaftSnapshotFileV1(tw *tar.Writer, name string, payload []byte, mode i
 }
 
 func extractRaftSnapshotArchiveV1(reader io.Reader, mainDir, sideDir, applyDir string) (raftcluster.RaftSnapshotArchiveHeaderV1, error) {
-	tr := tar.NewReader(reader)
+	limits, err := (SnapshotCaptureLimitsV1{}).normalized()
+	if err != nil {
+		return raftcluster.RaftSnapshotArchiveHeaderV1{}, err
+	}
+	return extractRaftSnapshotArchiveWithLimitsV1(context.Background(), reader, mainDir, sideDir, applyDir, limits)
+}
+func extractRaftSnapshotArchiveWithLimitsV1(ctx context.Context, reader io.Reader, mainDir, sideDir, applyDir string, limits SnapshotCaptureLimitsV1) (raftcluster.RaftSnapshotArchiveHeaderV1, error) {
+	// Bound raw tar/PAX bytes too; the entry ceilings alone do not constrain
+	// extension records consumed internally by archive/tar. An archive that
+	// exhausts this allowance is conservatively refused, even at exact EOF.
+	overhead := int64(limits.MaxFiles)*8192 + (1 << 20) + 8192
+	if overhead > limits.MaxStagingBytes {
+		return raftcluster.RaftSnapshotArchiveHeaderV1{}, fmt.Errorf("raftfsm: snapshot install staging allowance exceeded")
+	}
+	bounded := &io.LimitedReader{R: snapshotInstallContextReaderV1{ctx: ctx, reader: reader}, N: limits.MaxStagingBytes}
+	tr := tar.NewReader(bounded)
+	entries, total := 0, int64(0)
+	paths := make(map[string]struct{})
 	var (
 		header       raftcluster.RaftSnapshotArchiveHeaderV1
 		sawHeader    bool
@@ -713,7 +741,37 @@ func extractRaftSnapshotArchiveV1(reader io.Reader, mainDir, sideDir, applyDir s
 		if tarHeader == nil {
 			continue
 		}
+		if err := ctx.Err(); err != nil {
+			return raftcluster.RaftSnapshotArchiveHeaderV1{}, err
+		}
+		entries++
+		if entries > limits.MaxFiles || tarHeader.Size < 0 || tarHeader.Size > limits.MaxBytes-total || len(tarHeader.Name) > 4096 || strings.Count(tarHeader.Name, "/") > 128 {
+			return raftcluster.RaftSnapshotArchiveHeaderV1{}, fmt.Errorf("raftfsm: snapshot install entry/byte/path limit exceeded")
+		}
+		total += tarHeader.Size
+		if total > (limits.MaxStagingBytes-overhead)/2 {
+			return raftcluster.RaftSnapshotArchiveHeaderV1{}, fmt.Errorf("raftfsm: snapshot install staging allowance exceeded")
+		}
+		// Rebinding can hold a sibling copy of an index. Charge a full second
+		// storage image conservatively, and check each possible filesystem.
+		for _, root := range []string{mainDir, sideDir, applyDir} {
+			available, err := snapshotDiskAvailableV1(root)
+			if err != nil || uint64(total+tarHeader.Size+overhead) > available {
+				return raftcluster.RaftSnapshotArchiveHeaderV1{}, errors.Join(err, fmt.Errorf("raftfsm: snapshot install disk admission failed"))
+			}
+		}
 		name := cleanSnapshotArchiveNameV1(tarHeader.Name)
+		// Charge implicit parent directories as well as explicit tar entries.
+		// The map cannot grow past the admitted independent-path ceiling.
+		for entry := name; entry != "." && entry != "/"; entry = pathpkg.Dir(entry) {
+			if _, exists := paths[entry]; exists {
+				continue
+			}
+			if len(paths) >= limits.MaxFiles {
+				return raftcluster.RaftSnapshotArchiveHeaderV1{}, fmt.Errorf("raftfsm: snapshot install path limit exceeded")
+			}
+			paths[entry] = struct{}{}
+		}
 		if name == raftcluster.RaftSnapshotArchiveManifestPathV1 {
 			if sawHeader {
 				return raftcluster.RaftSnapshotArchiveHeaderV1{}, fmt.Errorf("raftfsm: duplicate snapshot archive header")
@@ -763,6 +821,9 @@ func extractRaftSnapshotArchiveV1(reader io.Reader, mainDir, sideDir, applyDir s
 		}
 		return raftcluster.RaftSnapshotArchiveHeaderV1{}, fmt.Errorf("raftfsm: unsupported snapshot archive path %q", tarHeader.Name)
 	}
+	if bounded.N == 0 {
+		return raftcluster.RaftSnapshotArchiveHeaderV1{}, fmt.Errorf("raftfsm: snapshot archive byte limit reached")
+	}
 	if !sawHeader {
 		return raftcluster.RaftSnapshotArchiveHeaderV1{}, fmt.Errorf("raftfsm: missing snapshot archive header")
 	}
@@ -772,7 +833,7 @@ func extractRaftSnapshotArchiveV1(reader io.Reader, mainDir, sideDir, applyDir s
 	if !sawApplyFile {
 		return raftcluster.RaftSnapshotArchiveHeaderV1{}, fmt.Errorf("raftfsm: snapshot archive has no Raft apply metadata files")
 	}
-	if err := syncExtractedRaftSnapshotRootsV1(mainDir, sideDir, applyDir); err != nil {
+	if err := syncExtractedRaftSnapshotRootsWithContextV1(ctx, mainDir, sideDir, applyDir); err != nil {
 		return raftcluster.RaftSnapshotArchiveHeaderV1{}, err
 	}
 	return header, nil
@@ -848,12 +909,19 @@ func extractRaftSnapshotEntryV1(tr *tar.Reader, header *tar.Header, root, rel st
 }
 
 func syncExtractedRaftSnapshotRootsV1(roots ...string) error {
+	return syncExtractedRaftSnapshotRootsWithContextV1(context.Background(), roots...)
+}
+
+func syncExtractedRaftSnapshotRootsWithContextV1(ctx context.Context, roots ...string) error {
 	for _, root := range roots {
 		if root == "" {
 			continue
 		}
 		directories := make([]string, 0, 16)
 		if err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			if walkErr != nil {
 				return walkErr
 			}
@@ -867,6 +935,9 @@ func syncExtractedRaftSnapshotRootsV1(roots ...string) error {
 		// Children must become durable before the name that links them from their
 		// parent. WalkDir is parent-first, so synchronize in reverse order.
 		for index := len(directories) - 1; index >= 0; index-- {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			dir, err := os.Open(directories[index])
 			if err != nil {
 				return fmt.Errorf("raftfsm: open extracted snapshot namespace %q: %w", directories[index], err)
@@ -918,14 +989,11 @@ func createRaftSnapshotScratchDirsV1(mainDir, applyDir string) (raftSnapshotScra
 	}
 	tmpApply, err := os.MkdirTemp(applyParent, ".raft-snapshot-apply-*")
 	if err != nil {
-		_ = os.RemoveAll(tmpMain)
-		return raftSnapshotScratchDirsV1{}, err
+		return raftSnapshotScratchDirsV1{main: tmpMain}, err
 	}
 	tmpSide, err := os.MkdirTemp(mainParent, ".raft-snapshot-side-*")
 	if err != nil {
-		_ = os.RemoveAll(tmpMain)
-		_ = os.RemoveAll(tmpApply)
-		return raftSnapshotScratchDirsV1{}, err
+		return raftSnapshotScratchDirsV1{main: tmpMain, apply: tmpApply}, err
 	}
 	return raftSnapshotScratchDirsV1{
 		main:  tmpMain,
@@ -973,7 +1041,8 @@ func replaceSnapshotMainDBEntriesV1(destMain, srcMain, preserveRoot string) erro
 	if err := os.MkdirAll(destMain, 0o700); err != nil {
 		return err
 	}
-	defer func() { _ = os.RemoveAll(srcMain) }()
+	// The install owner retains srcMain until its retryable cleanup succeeds.
+	// Do not discard an unlink or parent-sync failure in a deferred cleanup.
 	preserveName, hasPreserveName := snapshotTopLevelPreserveNameV1(destMain, preserveRoot)
 	entries, err := os.ReadDir(destMain)
 	if err != nil {
