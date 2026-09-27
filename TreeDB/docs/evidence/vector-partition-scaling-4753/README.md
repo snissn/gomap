@@ -16,6 +16,12 @@ but does not rewrite the original D4 admission failure. Seven assets now have
 real standalone lifecycle passes; public/Raft, real250K and online-fold
 qualification remain outside the demonstrated result.
 
+The [integrated M packing comparison on landed `03a3b73dd`](integrated-packing-03a3b73dd/README.md)
+adds a later, separately frozen first-pair no-go: correctness passes, but none
+of ten packing windows reaches 1.15x QPS and seven regress in p95. Its resource
+and physical diagnostics are recorded separately; the historical results below
+retain their original source and scope. #4753 remains open.
+
 ## Frozen product and controls
 
 Candidate source is `f406ad74e7e523088197c66768e3e6be19bbecad`, full tree
