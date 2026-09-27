@@ -23,7 +23,9 @@ const (
 // DependencyPhysicalKeyV2 excludes host file identity so snapshot rebind can
 // replace physical identity values without renaming logical directory records.
 func DependencyPhysicalKeyV2(entry DependencyManifestEntryV1) []byte {
-	key := appendStringV1([]byte{dependencyPhysicalKeyV2}, string(entry.Kind))
+	key := make([]byte, 1, 1+3*4+8+len(entry.Kind)+len(entry.LogicalLane)+len(entry.ResourceID))
+	key[0] = dependencyPhysicalKeyV2
+	key = appendStringV1(key, string(entry.Kind))
 	key = appendStringV1(key, entry.LogicalLane)
 	key = appendStringV1(key, entry.ResourceID)
 	return appendU64V1(key, entry.Generation)
@@ -34,7 +36,9 @@ func DependencyPhysicalKeyV2(entry DependencyManifestEntryV1) []byte {
 // conflict with the existing record rather than create a second identity.
 func DependencyLogicalKeyV2(obligation StableLogicalObligation) []byte {
 	identity := stableLogicalObligationKey(obligation)
-	key := appendStringV1([]byte{dependencyLogicalKeyV2}, identity.class)
+	key := make([]byte, 1, 1+4*4+5*8+len(identity.class)+len(identity.kind)+len(identity.namespace)+len(identity.reachability))
+	key[0] = dependencyLogicalKeyV2
+	key = appendStringV1(key, identity.class)
 	key = appendStringV1(key, identity.kind)
 	key = appendStringV1(key, identity.namespace)
 	key = appendU64V1(key, identity.generation)
@@ -81,7 +85,8 @@ func EncodeDependencyLogicalV2(owner []byte, obligation StableLogicalObligation)
 	if err := validateStableLogicalObligation(obligation, obligation.Reachability); err != nil {
 		return nil, err
 	}
-	value := appendU32V1(nil, uint32(len(owner)))
+	value := make([]byte, 0, 4+len(owner)+4+32)
+	value = appendU32V1(value, uint32(len(owner)))
 	value = append(value, owner...)
 	value = appendU32V1(value, obligation.Checksum)
 	return append(value, obligation.Digest[:]...), nil

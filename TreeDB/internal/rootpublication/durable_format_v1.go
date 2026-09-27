@@ -410,7 +410,20 @@ func LoadDependencyManifestV1(source freelist.PageSource, ref DependencyManifest
 }
 
 func encodeDependencyManifestEntryV1(entry DependencyManifestEntryV1) []byte {
-	var out []byte
+	// Reserve the canonical record once. Directory point checks use this same
+	// codec repeatedly; growing a buffer per field creates avoidable objects.
+	rids := entry.Frontier.RIDs()
+	size := 124 + len(entry.Kind) + len(entry.LogicalLane) + len(entry.ResourceID) + len(entry.DiagnosticPath) + len(entry.Identity.Platform) + 8*len(rids)
+	for _, field := range entry.Reachability {
+		size += 4 + len(field)
+	}
+	for _, obligation := range entry.LogicalObligations {
+		size += 92 + len(obligation.Class) + len(obligation.Kind) + len(obligation.Namespace) + len(obligation.Reachability)
+	}
+	if namespace := entry.Namespace; namespace != nil {
+		size += 52 + len(namespace.ParentIdentity.Platform) + len(namespace.OldName) + len(namespace.NewName) + len(namespace.DiagnosticPath)
+	}
+	out := make([]byte, 0, size)
 	out = appendStringV1(out, string(entry.Kind))
 	out = appendStringV1(out, entry.LogicalLane)
 	out = appendStringV1(out, entry.ResourceID)
@@ -423,7 +436,6 @@ func encodeDependencyManifestEntryV1(entry DependencyManifestEntryV1) []byte {
 	out = append(out, entry.Digest[:]...)
 	out = appendU64V1(out, entry.Frontier.Bytes)
 	out = appendU64V1(out, entry.Frontier.MaxLSN)
-	rids := entry.Frontier.RIDs()
 	out = appendU32V1(out, uint32(len(rids)))
 	for _, rid := range rids {
 		out = appendU64V1(out, rid)
