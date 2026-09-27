@@ -778,6 +778,7 @@ type fixedPeerRequestV1 struct {
 	Route    ClusterRouteRequest
 }
 type fixedPeerReplyV1 struct {
+	ReplacementTail      *raftcluster.ReplacementTailV1            `json:",omitempty"`
 	ReplacementState     *raftplacement.ReplicaReplacementStateV1  `json:",omitempty"`
 	ReplacementSeed      *raftcluster.ReplacementSnapshotSeedV1    `json:",omitempty"`
 	ReplacementPending   bool                                      `json:",omitempty"`
@@ -824,7 +825,7 @@ func (r *FixedPeerTCPRuntimeV1) serve(w http.ResponseWriter, request *http.Reque
 		if err != nil {
 			return
 		}
-		if request.URL.Path == "/v1/catalog-publish" || strings.HasPrefix(request.URL.Path, "/v1/replacement-") && request.URL.Path != "/v1/replacement-read" && request.URL.Path != "/v1/replacement-cutoff" {
+		if request.URL.Path == "/v1/catalog-publish" || strings.HasPrefix(request.URL.Path, "/v1/replacement-") && request.URL.Path != "/v1/replacement-read" && request.URL.Path != "/v1/replacement-cutoff" && request.URL.Path != "/v1/replacement-tail-check" {
 			allowed := false
 			for _, member := range r.config.Catalog.Peers {
 				allowed = allowed || member.ID == caller
@@ -835,7 +836,7 @@ func (r *FixedPeerTCPRuntimeV1) serve(w http.ResponseWriter, request *http.Reque
 			}
 		}
 	}
-	if r.draining.Load() && (request.URL.Path == "/v1/submit" || request.URL.Path == "/v1/forward" || request.URL.Path == "/v1/catalog-publish" || strings.HasPrefix(request.URL.Path, "/v1/replacement-") && request.URL.Path != "/v1/replacement-read" && request.URL.Path != "/v1/replacement-cutoff") {
+	if r.draining.Load() && (request.URL.Path == "/v1/submit" || request.URL.Path == "/v1/forward" || request.URL.Path == "/v1/catalog-publish" || strings.HasPrefix(request.URL.Path, "/v1/replacement-") && request.URL.Path != "/v1/replacement-read" && request.URL.Path != "/v1/replacement-cutoff" && request.URL.Path != "/v1/replacement-tail-check") {
 		err = raftcluster.ErrAdmissionUnavailable
 		return
 	}
@@ -855,7 +856,7 @@ func (r *FixedPeerTCPRuntimeV1) serve(w http.ResponseWriter, request *http.Reque
 	switch request.URL.Path {
 	case "/v1/forward":
 		requests = r.forwards
-	case "/v1/status", "/v1/replacement-read", "/v1/replacement-cutoff", "/v1/catalog-read", "/v1/catalog-route", "/v1/catalog-validate", "/v1/group-read-proof":
+	case "/v1/status", "/v1/replacement-read", "/v1/replacement-cutoff", "/v1/replacement-tail-check", "/v1/catalog-read", "/v1/catalog-route", "/v1/catalog-validate", "/v1/group-read-proof":
 		requests = r.reads
 	case "/v1/readiness", "/v1/diagnostics":
 		requests = r.diagnostics
@@ -889,7 +890,7 @@ func (r *FixedPeerTCPRuntimeV1) serve(w http.ResponseWriter, request *http.Reque
 		return
 	}
 	switch request.URL.Path {
-	case "/v1/replacement-begin", "/v1/replacement-read", "/v1/replacement-prepare", "/v1/replacement-enroll", "/v1/replacement-seed", "/v1/replacement-install", "/v1/replacement-receiver", "/v1/replacement-advance", "/v1/replacement-allow", "/v1/replacement-cutoff":
+	case "/v1/replacement-begin", "/v1/replacement-read", "/v1/replacement-prepare", "/v1/replacement-enroll", "/v1/replacement-seed", "/v1/replacement-install", "/v1/replacement-receiver", "/v1/replacement-advance", "/v1/replacement-allow", "/v1/replacement-cutoff", "/v1/replacement-tail-check", "/v1/replacement-tail", "/v1/replacement-promotion-intent", "/v1/replacement-promote", "/v1/replacement-complete-promotion":
 		err = r.handleReplacementV1(ctx, request.URL.Path, body.Entry, &reply)
 	case "/v1/status":
 		reply.Status, err = r.Status(ctx)
@@ -942,15 +943,7 @@ func (r *FixedPeerTCPRuntimeV1) serve(w http.ResponseWriter, request *http.Reque
 		if err = r.validateCatalog(command.Record.Catalog); err != nil {
 			return
 		}
-		if r.client.peerTransport != nil {
-			work, e := r.client.peerTransport.admission.work("raft:"+string(r.config.Catalog.ID), peerProposalsV1, int64(len(body.Entry))*4)
-			if e != nil {
-				err = e
-				return
-			}
-			defer work.release()
-		}
-		_, _, err = r.meta.SubmitCatalogMetaCommandV1(ctx, body.Entry)
+		err = r.submitCatalogCommandV1(ctx, body.Entry)
 		if err == nil {
 			reply.Catalog, _ = r.authority.Status()
 		}
@@ -1014,7 +1007,7 @@ func (c *FixedPeerTCPClientV1) call(ctx context.Context, node raftcluster.NodeID
 	// Read and mutation admission are independent, globally bounded per
 	// client, and have no unbounded waiter queue. Refusal precedes any send.
 	httpClient, calls := c.http, c.calls
-	if operation == "status" || operation == "replacement-read" || operation == "replacement-cutoff" || operation == "catalog-read" || operation == "catalog-route" || operation == "catalog-validate" || operation == "readiness" || operation == "diagnostics" || operation == "group-read-proof" {
+	if operation == "status" || operation == "replacement-read" || operation == "replacement-cutoff" || operation == "replacement-tail-check" || operation == "catalog-read" || operation == "catalog-route" || operation == "catalog-validate" || operation == "readiness" || operation == "diagnostics" || operation == "group-read-proof" {
 		httpClient, calls = c.readHTTP, c.readCalls
 	}
 	select {
@@ -1162,7 +1155,7 @@ func (c *FixedPeerTCPClientV1) Close() {
 var fixedPeerErrorsV1 = []error{
 	errPeerAuthenticationV1,
 	raftcluster.ErrCommitAmbiguous, raftcluster.ErrNotLeader, raftcluster.ErrAdmissionUnavailable, raftcluster.ErrHashicorpRaftUnavailable,
-	raftcluster.ErrCommitNotProven, raftcluster.ErrLocalApplyNotRecoverable, raftcluster.ErrUnsupportedSubmitAck,
+	raftcluster.ErrReadBarrierNotSatisfied, raftcluster.ErrCommitNotProven, raftcluster.ErrLocalApplyNotRecoverable, raftcluster.ErrUnsupportedSubmitAck,
 	raftcluster.ErrMissingCatalogVersion, raftcluster.ErrCatalogVersionMismatch,
 	raftcluster.ErrRouteTargetMissing, raftcluster.ErrRouteTargetUnknown, raftcluster.ErrRouteTargetUnsupported, raftcluster.ErrRouteGroupMismatch, raftcluster.ErrRouteFanoutRequired,
 	raftcluster.ErrInvalidConfig, raftcluster.ErrUnsupportedFeature,
@@ -1196,4 +1189,21 @@ type fixedPeerRemoteRouteErrorV1 struct {
 
 func (e *fixedPeerRemoteRouteErrorV1) RouteErrorMetadata() raftcluster.RouteErrorMetadata {
 	return e.route
+}
+
+// submitCatalogCommandV1 gives every runtime catalog mutation the same existing
+// node/group proposal and copied-payload admission, including replacement phases.
+func (r *FixedPeerTCPRuntimeV1) submitCatalogCommandV1(ctx context.Context, raw []byte) error {
+	if r.meta == nil {
+		return raftplacement.ErrCatalogMetaUnavailable
+	}
+	if r.client.peerTransport != nil {
+		work, err := r.client.peerTransport.admission.work("raft:"+string(r.config.Catalog.ID), peerProposalsV1, int64(len(raw))*4)
+		if err != nil {
+			return err
+		}
+		defer work.release()
+	}
+	_, _, err := r.meta.SubmitCatalogMetaCommandV1(ctx, raw)
+	return err
 }

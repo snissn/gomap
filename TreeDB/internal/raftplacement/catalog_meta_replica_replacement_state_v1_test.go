@@ -9,6 +9,7 @@ import (
 
 	hraft "github.com/hashicorp/raft"
 	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
+	"github.com/snissn/gomap/TreeDB/internal/raftentry"
 )
 
 func TestCatalogReplicaReplacementSeedPhaseSnapshotV1(t *testing.T) {
@@ -24,8 +25,13 @@ func TestCatalogReplicaReplacementSeedPhaseSnapshotV1(t *testing.T) {
 		t.Fatalf("skip seed=%v", err)
 	}
 	restored := NewCatalogMetaAuthorityV1()
-	for i, phase := range []ReplicaReplacementPhaseV1{ReplicaReplacementSeededV1, ReplicaReplacementInstalledV1, ReplicaReplacementAddIntentV1} {
+	for i, phase := range []ReplicaReplacementPhaseV1{ReplicaReplacementSeededV1, ReplicaReplacementInstalledV1, ReplicaReplacementAddIntentV1, ReplicaReplacementPromoteIntentV1, ReplicaReplacementPromotedV1} {
 		state.Phase = phase
+		if phase == ReplicaReplacementPromoteIntentV1 {
+			digest := raftentry.CommandDigestV1{1}
+			state.Tail = &raftcluster.ReplacementTailV1{GroupID: begin.GroupID, LeaderID: begin.OldNodeID, LeaderTerm: 4, CommitIndex: 12, ConfigurationIndex: 10, Progress: raftcluster.ReplacementTailProgressV1{EntryID: raftentry.ApplyEntryID{Term: 4, Index: 11}, CommandDigest: digest, ProgressDigest: raftentry.CommandDigestV1{2}, Result: raftentry.ApplyResultV1{CommandDigest: digest, ResultDigest: raftentry.CommandDigestV1{3}}}}
+		}
+
 		encoded, err := EncodeReplicaReplacementStateV1(state)
 		if err != nil {
 			t.Fatal(err)
@@ -48,6 +54,22 @@ func TestCatalogReplicaReplacementSeedPhaseSnapshotV1(t *testing.T) {
 		got, err := restored.ReplicaReplacementStateV1(begin.GroupID)
 		if err != nil || got.Phase != phase || !raftcluster.SameReplacementSnapshotSeedV1(*got.Seed, seed) {
 			t.Fatalf("restored=%+v %v", got, err)
+		}
+		if state.Tail != nil {
+			if got.Tail == nil || *got.Tail != *state.Tail {
+				t.Fatal("snapshot lost promotion boundary")
+			}
+			changed := *state.Tail
+			changed.Progress.ProgressDigest[0] ^= 1
+			conflict := state
+			conflict.Tail = &changed
+			raw, err := EncodeReplicaReplacementStateV1(conflict)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := authority.applyCommittedCatalogMetaV1(raw, uint64(30+i)); !errors.Is(err, ErrCatalogMetaConflict) {
+				t.Fatalf("changed durable tail accepted: %v", err)
+			}
 		}
 		again, err := restored.ExportCatalogMetaSnapshotBytesV1()
 		if err != nil || !bytes.Equal(snapshot, again) {

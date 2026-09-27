@@ -3609,10 +3609,11 @@ retain the normal transport path. This is required because the pinned native
 installer does not independently reject an older incoming applied index.
 
 These helpers and focused provider tests are a developmental checkpoint.
-Public orchestration, durable tail/promotion/removal integration, supported
-lifecycle-bearing replacement, and shard-sized recovery measurements remain
-required before a complete P5 claim. Existing lifecycle-bearing fixed-peer
-replacement continues to fail closed.
+The following runtime paths provide public seeded enrollment and guarded
+promotion for the supported profile. Old-voter removal, lifecycle-bearing
+replacement, and shard-sized recovery measurements remain required before a
+complete P5 claim. Lifecycle-bearing fixed-peer replacement continues to fail
+closed.
 
 #### Replacement prejoin runtime checkpoint (developmental)
 
@@ -3624,7 +3625,8 @@ native transport quarantines ordinary requests and the heartbeat fast path
 until installation has completed and add intent is durable. A permanent seed
 index floor rejects delayed seed snapshots after ordinary replication opens.
 Lifecycle-bearing fixed-peer replacement remains explicitly unsupported; this
-checkpoint does not qualify promotion, old-voter retirement, or that profile.
+prejoin checkpoint alone does not qualify promotion, old-voter retirement, or
+that profile.
 
 Short control requests poll one native phase worker per hosted group. A caller
 cancellation does not release a running native call or create a second retry
@@ -3664,3 +3666,35 @@ unready after restart and cannot be silently replaced. Cancellation observed
 after a positively successful native future is distinct and uses normal cleanup
 handoff. These refusal rules bound retries; they do not promise automatic
 recovery from arbitrary native filesystem failures.
+
+
+#### Replacement durable-tail promotion checkpoint (developmental)
+
+After native seeded enrollment, the catalog coordinator derives a current-term
+leader fence and asks the actual target about its installed seed and durable
+command prefix. The bounded tail record binds group, leader, term, raw committed
+index, configuration index, command term/index, command digest, deterministic
+result, and the progress logical digest for that log position. The latter can
+differ from an idempotent operation's original result digest. Both FSMs require
+matching durable result/progress records and their own command-WAL coverage;
+replica-local LSNs are never compared as semantic identity. Configuration and
+no-op indices are not substituted for a command index.
+
+Only the coordinator's production reads can commit `promote-intent`; generic
+caller-supplied phase advancement refuses that phase. The native mutation
+boundary independently reads committed intent, re-proves a fresh target tail,
+and requires exact original voters plus the authorized nonvoter. `AddVoter`
+uses the nonzero observed configuration index as its CAS. Ambiguous completion
+is reconciled against committed native membership before recording `promoted`.
+The immutable proof remains in the one current per-group operation and survives
+catalog snapshot/replay. Retries restore operation-authorized peer connections
+and the target's durable receiver owner before inspecting membership; they do
+not demote or re-enroll an already promoted voter.
+
+Every runtime catalog submission, including seeded advancement and promotion,
+uses the same node/group proposal and four-times-payload byte admission. Native
+configuration inspection retains its existing bounded scan and deadline; it is
+control-path work, not a constant-time operation. Promotion retains the old voter
+and leaves catalog members and placements unchanged. It does not complete the
+replacement, clean retained seed debt, qualify lifecycle-bearing replacement,
+or establish growing-shard performance capacity.

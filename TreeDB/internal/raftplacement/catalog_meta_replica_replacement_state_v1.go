@@ -14,10 +14,12 @@ const ReplicaReplacementAdvanceKindV1 = "replica-replacement-advance-v1"
 type ReplicaReplacementPhaseV1 string
 
 const (
-	ReplicaReplacementBegunV1     ReplicaReplacementPhaseV1 = "begun"
-	ReplicaReplacementSeededV1    ReplicaReplacementPhaseV1 = "seeded"
-	ReplicaReplacementInstalledV1 ReplicaReplacementPhaseV1 = "installed"
-	ReplicaReplacementAddIntentV1 ReplicaReplacementPhaseV1 = "add-intent"
+	ReplicaReplacementBegunV1         ReplicaReplacementPhaseV1 = "begun"
+	ReplicaReplacementSeededV1        ReplicaReplacementPhaseV1 = "seeded"
+	ReplicaReplacementInstalledV1     ReplicaReplacementPhaseV1 = "installed"
+	ReplicaReplacementAddIntentV1     ReplicaReplacementPhaseV1 = "add-intent"
+	ReplicaReplacementPromoteIntentV1 ReplicaReplacementPhaseV1 = "promote-intent"
+	ReplicaReplacementPromotedV1      ReplicaReplacementPhaseV1 = "promoted"
 )
 
 // ReplicaReplacementStateV1 is one bounded current operation per group, not an
@@ -30,6 +32,7 @@ type ReplicaReplacementStateV1 struct {
 	Begin  ReplicaReplacementBeginV1              `json:"begin"`
 	Phase  ReplicaReplacementPhaseV1              `json:"phase"`
 	Seed   *raftcluster.ReplacementSnapshotSeedV1 `json:"seed,omitempty"`
+	Tail   *raftcluster.ReplacementTailV1         `json:"tail,omitempty"`
 }
 
 func replacementPhaseOrdinalV1(phase ReplicaReplacementPhaseV1) int {
@@ -42,6 +45,10 @@ func replacementPhaseOrdinalV1(phase ReplicaReplacementPhaseV1) int {
 		return 2
 	case ReplicaReplacementAddIntentV1:
 		return 3
+	case ReplicaReplacementPromoteIntentV1:
+		return 4
+	case ReplicaReplacementPromotedV1:
+		return 5
 	default:
 		return -1
 	}
@@ -53,6 +60,13 @@ func EncodeReplicaReplacementStateV1(state ReplicaReplacementStateV1) ([]byte, e
 		return nil, err
 	}
 	if replacementPhaseOrdinalV1(state.Phase) < 1 || state.Seed == nil || state.Seed.Validate() != nil || state.Seed.Manifest.GroupID != state.Begin.GroupID || state.Seed.SourceNodeID == state.Begin.NewPeer.ID {
+		return nil, ErrInvalidCatalogMeta
+	}
+	if replacementPhaseOrdinalV1(state.Phase) >= 4 {
+		if state.Tail == nil || state.Tail.Validate() != nil || state.Tail.GroupID != state.Begin.GroupID || state.Tail.Progress.EntryID.Index < state.Seed.Manifest.LastIncludedIndex || state.Tail.ConfigurationIndex <= state.Seed.ConfigurationIndex {
+			return nil, ErrInvalidCatalogMeta
+		}
+	} else if state.Tail != nil {
 		return nil, ErrInvalidCatalogMeta
 	}
 	raw, err := json.Marshal(state)
@@ -109,6 +123,9 @@ func sameReplicaReplacementBeginV1(a, b ReplicaReplacementBeginV1) bool {
 }
 func replicaReplacementStateExtendsV1(old, next ReplicaReplacementStateV1) bool {
 	if !sameReplicaReplacementBeginV1(old.Begin, next.Begin) || replacementPhaseOrdinalV1(next.Phase) < replacementPhaseOrdinalV1(old.Phase) {
+		return false
+	}
+	if old.Tail != nil && (next.Tail == nil || *old.Tail != *next.Tail) {
 		return false
 	}
 	return old.Seed == nil || next.Seed != nil && raftcluster.SameReplacementSnapshotSeedV1(*old.Seed, *next.Seed)

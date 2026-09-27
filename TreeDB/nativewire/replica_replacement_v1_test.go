@@ -23,14 +23,14 @@ import (
 // fresh Nodes-only spare. An actual native snapshot must be installed before
 // nonvoter enrollment; neither configured peers nor a logs-only join is proof.
 func TestReplacementCannotVoteBeforeSnapshotAndTailReadyV1(t *testing.T) {
-	testReplacementPublicInstallV1(t, false)
+	testReplacementPublicInstallV1(t, false, false)
 }
 
 func TestReplacementPublicInstallSurvivesCallerDeadlineV1(t *testing.T) {
-	testReplacementPublicInstallV1(t, true)
+	testReplacementPublicInstallV1(t, true, false)
 }
 
-func testReplacementPublicInstallV1(t *testing.T, stallInstall bool) {
+func testReplacementPublicInstallV1(t *testing.T, stallInstall, promote bool) {
 	configs := fixedPeerTestConfigsV1(t)
 	address := func() string {
 		listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -380,8 +380,11 @@ func testReplacementPublicInstallV1(t *testing.T, stallInstall bool) {
 	if _, err := client.PrepareReplicaReplacementV1(ctx, configs[leader].NodeID, unknown); err == nil {
 		t.Fatal("unknown global node admitted")
 	}
+	if promote {
+		testReplacementPromotionTailV1(t, ctx, client, configs, runtimes, leader, group, operation, membership)
+	}
 	// Seeded nonvoter enrollment cannot publish a routing/ownership change.
-	// Durable tail qualification and promotion remain a subsequent milestone.
+	// Promotion also retains every original voter and leaves catalog routing unchanged.
 	current, err := runtimes[leader].authority.ExportCatalogMetaSnapshotV1()
 	if err != nil {
 		t.Fatal(err)

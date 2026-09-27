@@ -27,6 +27,9 @@ func (r *FixedPeerTCPRuntimeV1) advanceReplacementV1(ctx context.Context, raw []
 	if err != nil {
 		return err
 	}
+	if next.Phase != raftplacement.ReplicaReplacementSeededV1 && next.Phase != raftplacement.ReplicaReplacementInstalledV1 && next.Phase != raftplacement.ReplicaReplacementAddIntentV1 {
+		return raftplacement.ErrCatalogMetaConflict
+	}
 	if current.Phase == next.Phase && current.Seed != nil && raftcluster.SameReplacementSnapshotSeedV1(*current.Seed, *next.Seed) {
 		reply.ReplacementState = &current
 		return nil
@@ -65,7 +68,7 @@ func (r *FixedPeerTCPRuntimeV1) advanceReplacementV1(ctx context.Context, raw []
 	default:
 		return raftplacement.ErrCatalogMetaConflict
 	}
-	if _, _, err := r.meta.SubmitCatalogMetaCommandV1(ctx, raw); err != nil {
+	if err := r.submitCatalogCommandV1(ctx, raw); err != nil {
 		return err
 	}
 	current, err = r.authority.ReplicaReplacementStateV1(next.Begin.GroupID)

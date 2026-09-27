@@ -293,6 +293,9 @@ func (r *FixedPeerTCPRuntimeV1) replacementReadV1(ctx context.Context, command r
 }
 
 func (r *FixedPeerTCPRuntimeV1) handleReplacementV1(ctx context.Context, operation string, raw []byte, reply *fixedPeerReplyV1) error {
+	if operation == "/v1/replacement-tail-check" {
+		return r.verifyReplacementTargetTailV1(ctx, raw, reply)
+	}
 	if operation == "/v1/replacement-advance" {
 		return r.advanceReplacementV1(ctx, raw, reply)
 	}
@@ -304,6 +307,16 @@ func (r *FixedPeerTCPRuntimeV1) handleReplacementV1(ctx context.Context, operati
 		return err
 	}
 	switch operation {
+	case "/v1/replacement-tail":
+		tail, err := r.replacementTailV1(ctx, command)
+		reply.ReplacementTail = &tail
+		return err
+	case "/v1/replacement-promotion-intent":
+		return r.replacementPromotionIntentV1(ctx, command, reply)
+	case "/v1/replacement-promote":
+		return r.promoteReplacementV1(ctx, command, reply)
+	case "/v1/replacement-complete-promotion":
+		return r.completeReplacementPromotionV1(ctx, command, reply)
 	case "/v1/replacement-read":
 		reply.Replacement, err = r.replacementReadV1(ctx, command)
 		if err == nil {
@@ -319,15 +332,7 @@ func (r *FixedPeerTCPRuntimeV1) handleReplacementV1(ctx context.Context, operati
 		if _, err := r.localCatalogFence(ctx); err != nil {
 			return err
 		}
-		var work peerWorkLeaseV1
-		if r.client.peerTransport != nil {
-			work, err = r.client.peerTransport.admission.work("raft:"+string(r.config.Catalog.ID), peerProposalsV1, int64(len(raw))*4)
-			if err != nil {
-				return err
-			}
-			defer work.release()
-		}
-		if _, _, err := r.meta.SubmitCatalogMetaCommandV1(ctx, raw); err != nil {
+		if err := r.submitCatalogCommandV1(ctx, raw); err != nil {
 			return err
 		}
 		reply.Replacement, err = r.replacementReadV1(ctx, command)
@@ -459,13 +464,8 @@ func (c *FixedPeerTCPClientV1) PrepareReplicaReplacementV1(ctx context.Context, 
 	if state.Seed == nil {
 		return raftcluster.CommittedRaftConfigurationV1{}, raftcluster.ErrInvalidSnapshotManifest
 	}
-	if _, err := c.call(ctx, command.NewPeer.ID, "replacement-prepare", fixedPeerRequestV1{Entry: raw}, true); err != nil {
-		return raftcluster.CommittedRaftConfigurationV1{}, fmt.Errorf("replacement target prepare: %w", err)
-	}
-	for _, peer := range group.Peers {
-		if _, err := c.call(ctx, peer.ID, "replacement-prepare", fixedPeerRequestV1{Entry: raw}, true); err != nil && peer.ID != command.OldNodeID {
-			return raftcluster.CommittedRaftConfigurationV1{}, fmt.Errorf("replacement peer prepare %s: %w", peer.ID, err)
-		}
+	if err := c.prepareReplacementPeersV1(ctx, group, command, raw); err != nil {
+		return raftcluster.CommittedRaftConfigurationV1{}, err
 	}
 	if state.Phase == raftplacement.ReplicaReplacementSeededV1 {
 		// Reconcile before sending: an earlier native response may have been lost.
@@ -537,4 +537,18 @@ func (c *FixedPeerTCPClientV1) commitReplacementPhaseV1(ctx context.Context, nod
 	}
 	_, err = c.call(ctx, node, "replacement-advance", fixedPeerRequestV1{Entry: raw}, true)
 	return err
+}
+
+// Restore operation-authorized stream membership and the receiver's existing
+// durable owner before consulting native membership after any process restart.
+func (c *FixedPeerTCPClientV1) prepareReplacementPeersV1(ctx context.Context, group FixedPeerTCPGroupV1, command raftplacement.ReplicaReplacementBeginV1, raw []byte) error {
+	if _, err := c.call(ctx, command.NewPeer.ID, "replacement-prepare", fixedPeerRequestV1{Entry: raw}, true); err != nil {
+		return fmt.Errorf("replacement target prepare: %w", err)
+	}
+	for _, peer := range group.Peers {
+		if _, err := c.call(ctx, peer.ID, "replacement-prepare", fixedPeerRequestV1{Entry: raw}, true); err != nil && peer.ID != command.OldNodeID {
+			return fmt.Errorf("replacement peer prepare %s: %w", peer.ID, err)
+		}
+	}
+	return nil
 }

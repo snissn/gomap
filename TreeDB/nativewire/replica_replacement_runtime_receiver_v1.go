@@ -55,7 +55,7 @@ func (r *FixedPeerTCPRuntimeV1) replacementReceiverCutoffV1(ctx context.Context,
 		return err
 	}
 	d := r.localDataV1(command.GroupID)
-	if state.Phase != raftplacement.ReplicaReplacementAddIntentV1 || state.Seed == nil || command.NewPeer.ID != r.config.NodeID || d == nil || d.replacementID != command.OperationID || d.prejoin == nil || d.replacementReceiver == nil {
+	if !replacementHasEnrollmentV1(state.Phase) || state.Seed == nil || command.NewPeer.ID != r.config.NodeID || d == nil || d.replacementID != command.OperationID || d.prejoin == nil || d.replacementReceiver == nil {
 		return raftcluster.ErrAdmissionUnavailable
 	}
 	owner := d.replacementReceiver
