@@ -208,7 +208,7 @@ func BenchmarkDocumentSnapshotGrowthV1(b *testing.B) {
 			reopened := openRaftSnapshotFSMForTestWithOptions(b, reopenedDB, targetDir, true, true)
 			defer reopened.Close()
 			reopenedRows := documentEvidenceCheck(b, reopened, rows, digest, applied)
-			documentEvidenceLog(b, map[string]any{"kind": "document-export-install-v1", "rows": rows, "actual_source_rows": sourceRows, "actual_installed_rows": installedRows, "actual_reopened_rows": reopenedRows, "payload_bytes_per_row": 1024, "seed": documentEvidenceSeed, "source_tree_file_bytes_before_export": sourceBytes, "archive_bytes": counted.bytes, "elapsed_ns": elapsed.Nanoseconds(), "phase_total_alloc_bytes": after.TotalAlloc - before.TotalAlloc, "phase_mallocs": after.Mallocs - before.Mallocs, "manifest": snapshot.Manifest, "reopened_verified": true, "population": "direct committed FSM entries; existing helper DisableSync=true; no consensus timing"})
+			documentEvidenceLog(b, map[string]any{"kind": "document-export-install-v1", "rows": rows, "actual_source_rows": sourceRows, "actual_installed_rows": installedRows, "actual_reopened_rows": reopenedRows, "payload_bytes_per_row": 1024, "seed": documentEvidenceSeed, "source_directory_file_bytes_before_export": sourceBytes, "archive_bytes": counted.bytes, "elapsed_ns": elapsed.Nanoseconds(), "phase_total_alloc_bytes": after.TotalAlloc - before.TotalAlloc, "phase_mallocs": after.Mallocs - before.Mallocs, "manifest": snapshot.Manifest, "reopened_verified": true, "population": "direct committed FSM entries; existing helper DisableSync=true; no consensus timing"})
 			b.ReportMetric(float64(counted.bytes), "archive-bytes")
 		})
 	}
