@@ -34,6 +34,9 @@ const (
 // barrier-before-FSM-lock ordering regression deterministic.
 var raftSnapshotAfterExtractForTest func()
 
+// raftSnapshotBeforeCopyForTest pauses archive streaming, not cut admission.
+var raftSnapshotBeforeCopyForTest func()
+
 // raftSnapshotBeforeOpenForTest makes the discovery/open boundary observable
 // to deterministic no-follow regression tests.
 var raftSnapshotBeforeOpenForTest func(string)
@@ -726,6 +729,9 @@ func appendRaftSnapshotStoragePathV1(tw *tar.Writer, archiveName, src string) er
 }
 
 func copyRaftSnapshotFileContentV1(dst io.Writer, src io.Reader, size int64) error {
+	if hook := raftSnapshotBeforeCopyForTest; hook != nil {
+		hook()
+	}
 	if size < 0 {
 		return fmt.Errorf("raftfsm: negative snapshot file size %d", size)
 	}
