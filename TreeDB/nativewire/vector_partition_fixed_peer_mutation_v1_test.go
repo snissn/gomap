@@ -3,6 +3,7 @@ package nativewire
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"math"
 	"net"
@@ -389,7 +390,7 @@ func TestVectorPartitionSystemNativeFourDaemonRemoteWriteRoutesAppliesAndBecomes
 	}
 
 	started := time.Now()
-	result, err := client.VectorInsertV1(ctx, public.InsertRequestV1{
+	insert := public.InsertRequestV1{
 		Version:        1,
 		Generation:     fixture.Generation,
 		IdempotencyKey: []byte("remote-visible-attempt-1"),
@@ -397,7 +398,8 @@ func TestVectorPartitionSystemNativeFourDaemonRemoteWriteRoutesAppliesAndBecomes
 		Vector:         []float32{0, 1},
 		Document:       []byte(`{"embedding":[0,1],"kind":"remote-visible"}`),
 		Deadline:       time.Now().Add(30 * time.Second),
-	})
+	}
+	result, err := client.VectorInsertV1(ctx, insert)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -409,6 +411,11 @@ func TestVectorPartitionSystemNativeFourDaemonRemoteWriteRoutesAppliesAndBecomes
 		t.Fatalf("mutation counters: %+v", result.Counters)
 	}
 	fixture.RequireOwnerReplication(t, ctx, result.CommitIndex)
+	t.Run("unchanged_retry", func(t *testing.T) {
+		if replay, err := client.VectorInsertV1(ctx, insert); err != nil || replay.VisibleID != result.VisibleID || !replay.ProductionConsensus || replay.LiveRevision == 0 {
+			t.Fatalf("unchanged replay result=%+v err=%v", replay, err)
+		}
+	})
 	for _, node := range []raftcluster.NodeID{"owner-1", "ingress"} {
 		t.Run("idempotency_conflict_"+string(node), func(t *testing.T) {
 			writer, err := DialContext(ctx, "tcp", fixture.configs[0].Vector.PublicAddresses[node])
@@ -445,6 +452,60 @@ func TestVectorPartitionSystemNativeFourDaemonRemoteWriteRoutesAppliesAndBecomes
 	if len(search.Neighbors) == 0 || search.Neighbors[0].ID != "remote-visible" {
 		t.Fatalf("subsequent production search did not observe routed mutation: %+v", search)
 	}
+	// Replace through the ordinary replicated document path, keeping the same
+	// vector and stable ID. Presence alone must not acknowledge the old replay.
+	submitMutation := func(command iwire.CommandID, attempt string, document []byte) {
+		t.Helper()
+		owner, err := fixture.client.Status(ctx, "owner-1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		sections := []iwire.Section{
+			{ID: iwire.SectionCommandHeader, Bytes: iwire.AppendCommandHeader(nil, iwire.CommandHeader{ID: command, Version: 1})},
+			{ID: iwire.SectionIdempotencyKey, Bytes: []byte(attempt)},
+			{ID: iwire.SectionExpectedCatalogVersion, Bytes: binary.AppendUvarint(nil, owner.Groups[0].CatalogVersion)},
+			collectionNameRef("docs"),
+			{ID: iwire.SectionDocumentIDs, Bytes: iwire.AppendByteVector(nil, insert.ID)},
+		}
+		if command != iwire.CommandDeleteBatch {
+			sections = append(sections, documentFormatSection(collections.DocumentFormatJSON), iwire.Section{ID: iwire.SectionDocuments, Bytes: iwire.AppendByteVector(nil, document)})
+		}
+		if command == iwire.CommandReplaceBatch {
+			sections = append(sections, iwire.Section{ID: iwire.SectionReplacementMode, Bytes: []byte{1}})
+		}
+		validated, err := iwire.MustV1Registry().ValidateRequestSections(sections)
+		if err != nil {
+			t.Fatal(err)
+		}
+		entry, err := iwire.AppendDeterministicEntry(nil, validated)
+		if err != nil {
+			t.Fatal(err)
+		}
+		routeRequest := ClusterRouteRequest{Database: "default", Catalog: "default", Collection: "docs", Shape: ClusterRouteShapeCollection}
+		route, err := fixture.client.Route(ctx, "owner-1", routeRequest)
+		if err != nil {
+			t.Fatal(err)
+		}
+		metadata := ClusterRequestMetadata{AckPolicy: iwire.AckRaftCommitted}
+		ApplyClusterRouteMetadata(&metadata, routeRequest, route)
+		changed, err := fixture.client.Submit(ctx, "owner-1", entry, metadata)
+		if err != nil || !changed.CommittedApplied {
+			t.Fatalf("%s result=%+v err=%v", attempt, changed, err)
+		}
+	}
+	submitMutation(iwire.CommandReplaceBatch, "replace-visible-metadata", []byte(`{"embedding":[0,1],"kind":"replacement"}`))
+	t.Run("old_retry_after_replacement", func(t *testing.T) {
+		if _, err := client.VectorInsertV1(ctx, insert); !hasPublicVectorErrorCodeV1(err, public.ErrorCommitAmbiguousV1) {
+			t.Fatalf("replaced content replay error=%v", err)
+		}
+	})
+	submitMutation(iwire.CommandDeleteBatch, "delete-visible-document", nil)
+	submitMutation(iwire.CommandInsertBatch, "reinsert-visible-document", []byte(`{"embedding":[0,1],"kind":"reinserted"}`))
+	t.Run("old_retry_after_delete_reinsert", func(t *testing.T) {
+		if _, err := client.VectorInsertV1(ctx, insert); !hasPublicVectorErrorCodeV1(err, public.ErrorCommitAmbiguousV1) {
+			t.Fatalf("reinserted content replay error=%v", err)
+		}
+	})
 	fixture.RequireNoWrongGroupMutation(t, ctx,
 		[]byte("remote-visible"), []byte("reject-stale-generation"), []byte("reject-document-mismatch"), []byte{0xff}, []byte("reject-stale-catalog"), []byte("reject-wrong-owner"),
 	)

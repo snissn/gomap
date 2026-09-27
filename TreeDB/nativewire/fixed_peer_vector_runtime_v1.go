@@ -872,17 +872,14 @@ func (r *FixedPeerTCPRuntimeV1) applyVectorInsertV1(ctx context.Context, request
 	if err != nil || ownerStatus.State != "Leader" || ownerStatus.LeaderID != r.config.NodeID || ownerStatus.RaftAppliedIndex < result.CommittedEntry.Index {
 		return public.InsertResponseV1{}, fixedPeerVectorPostCommitAmbiguousV1(errors.Join(ErrFixedPeerVectorUnavailableV1, err, errors.New("owner apply proof is incomplete")))
 	}
-	pin, err := r.vector.collection.AcquireVectorPartitionLiveSearchPinV1(r.config.Vector.Manifest)
+	live, err := r.vector.collection.ProveVectorPartitionLiveDocumentV1(ctx, r.config.Vector.Manifest, request.Request.ID, request.Request.Document)
 	if err != nil {
 		return public.InsertResponseV1{}, fixedPeerVectorPostCommitAmbiguousV1(errors.Join(ErrFixedPeerVectorUnavailableV1, err))
 	}
-	live := pin.StatusV1()
-	visibleID := string(request.Request.ID)
-	visible := pin.ContainsLiveIDV1(visibleID)
-	pin.Release()
-	if live.Generation != request.Identity.Generation || live.Revision == 0 || live.Coverage == 0 || !visible {
-		return public.InsertResponseV1{}, fixedPeerVectorPostCommitAmbiguousV1(errors.Join(ErrFixedPeerVectorUnavailableV1, errors.New("live visibility proof is incomplete")))
+	if live.Generation != request.Identity.Generation {
+		return public.InsertResponseV1{}, fixedPeerVectorPostCommitAmbiguousV1(errors.Join(ErrFixedPeerVectorUnavailableV1, errors.New("live visibility generation does not match request identity")))
 	}
+	visibleID := string(request.Request.ID)
 	forwards := uint64(0)
 	if request.Forwarded {
 		forwards = 1
