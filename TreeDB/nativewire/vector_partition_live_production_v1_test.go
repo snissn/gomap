@@ -225,7 +225,7 @@ func TestVectorPartitionLiveProductionCoordinatorMutationAndColdReloadV1(t *test
 
 	insertVectorPartitionLiveDocumentV1(t, fixture.collection, "0", []float32{1, 0})
 	inserted := search("insert", []float32{1, 0})
-	if len(inserted.Neighbors) != 1 || inserted.Neighbors[0].ID != "0" || inserted.Counters.DeltaResults != 2 || inserted.Counters.LiveDomainsSearched != 2 {
+	if len(inserted.Neighbors) != 1 || inserted.Neighbors[0].ID != "0" || inserted.Counters.DeltaResults != 1 || inserted.Counters.LiveDomainsSearched != 1 {
 		t.Fatalf("insert response=%+v", inserted)
 	}
 	insertLiveAssignments := 0
@@ -271,7 +271,7 @@ func TestVectorPartitionLiveProductionCoordinatorMutationAndColdReloadV1(t *test
 	if len(replaced.Neighbors) != 1 || replaced.Neighbors[0].ID != "0" ||
 		replaced.LiveRevision <= inserted.LiveRevision || replaced.LiveCoverage <= inserted.LiveCoverage ||
 		replaced.Counters.BaseCandidates == 0 || replaced.Counters.DeltaCandidates == 0 ||
-		replaced.Counters.DeltaResults != 2 || replaced.Counters.LiveDomainsSearched != 2 {
+		replaced.Counters.DeltaResults != 1 || replaced.Counters.LiveDomainsSearched != 1 {
 		t.Fatalf("stale nearest was admitted response=%+v", replaced)
 	}
 	replaceVectorPartitionLiveDocumentV1(t, fixture.collection, "0", []float32{0, 1})
