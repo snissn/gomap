@@ -26,6 +26,8 @@ type VectorPartitionLifecycleCoordinatorV1 struct {
 	// PrepareSourceV2 is a trusted local owner-preparation function. Production
 	// derives these aggregates from completed imports, never caller receipts.
 	PrepareSourceV2 func(context.Context, VectorPartitionLifecycleIdentityV1) ([]VectorPartitionSourceOwnerPreparationV2, error)
+	// PrepareANNV2 derives the complete intended placement stream through the trusted planner boundary.
+	PrepareANNV2 func(context.Context, VectorPartitionLifecycleIdentityV1) ([]VectorPartitionANNOwnerPreparationV2, error)
 }
 
 func (c VectorPartitionLifecycleCoordinatorV1) validateConfiguredV1() error {
@@ -51,7 +53,7 @@ func (c VectorPartitionLifecycleCoordinatorV1) Submit(ctx context.Context, comma
 		return VectorPartitionLifecycleRecordV1{}, err
 	}
 	if command.Kind == VectorPartitionLifecycleBeginBuildV1 && command.Identity.SourceFormat == 2 {
-		if c.PrepareSourceV2 == nil {
+		if c.PrepareSourceV2 == nil || c.PrepareANNV2 == nil {
 			return VectorPartitionLifecycleRecordV1{}, ErrVectorPartitionLifecycleGuard
 		}
 		owners, err := c.PrepareSourceV2(ctx, command.Identity)
@@ -79,6 +81,25 @@ func (c VectorPartitionLifecycleCoordinatorV1) Submit(ctx context.Context, comma
 		}
 		command.Identity.SourceV2.SnapshotSetDigest = root
 		command.SourceOwners = owners
+		annOwners, err := c.PrepareANNV2(ctx, command.Identity)
+		if err != nil {
+			return VectorPartitionLifecycleRecordV1{}, err
+		}
+		placement, err := VectorPartitionANNOwnerSetDigestV2(annOwners)
+		if err != nil {
+			return VectorPartitionLifecycleRecordV1{}, err
+		}
+		if command.Identity.SourceV2.PlacementDigest != "" && command.Identity.SourceV2.PlacementDigest != placement {
+			return VectorPartitionLifecycleRecordV1{}, ErrVectorPartitionLifecycleConflict
+		}
+		if len(command.ANNOwners) != 0 {
+			supplied, err := VectorPartitionANNOwnerSetDigestV2(command.ANNOwners)
+			if err != nil || supplied != placement {
+				return VectorPartitionLifecycleRecordV1{}, ErrVectorPartitionLifecycleConflict
+			}
+		}
+		command.Identity.SourceV2.PlacementDigest = placement
+		command.ANNOwners = annOwners
 		command, err = canonicalVectorPartitionLifecycleCommandV1(command)
 		if err != nil {
 			return VectorPartitionLifecycleRecordV1{}, err

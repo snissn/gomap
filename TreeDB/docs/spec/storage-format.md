@@ -230,6 +230,15 @@ the non-partitioned topology-only column-graph format. Production partition
 opens require the explicit version-6 connectivity-preserving Vamana graph
 variant and fail closed otherwise.
 
+Local source-V2 preparation uses search-pack wire version 7. It retains the
+version-6 Vamana profile and the 176-byte header, but all three legacy base
+identity fields are zero and the four physical row-reference sections are
+absent. The required membership digest binds the declared logical domain pack
+and canonical source-row identities, including home/overlap roles. Graph ordinal
+provenance resides in the immutable local metadata directory. V1 readers refuse
+version 7; a V2 decode requires the exact expected semantic membership digest.
+This local preparation format does not enable distributed V2 activation/search.
+
 The non-partitioned `column_graph` pack uses wire version 4 for
 `cosine_normalized_f32_v1`. Version 4 is topology-only: it omits the normalized
 vector section and carries a checksum-covered digest of the authoritative
@@ -3495,6 +3504,18 @@ source-map intervals and exact owner coverage, and hashes canonical shard-ID
 order. The semantic root excludes local directory generations, physical layout
 and WAL positions. An exact retry with different replica-local completion
 evidence keeps the original committed preparation record.
+
+BEGIN also carries at most 128 ANN-owner commitments: owner group, exact domain
+and membership counts, and the digest of its complete canonical semantic stream.
+Their canonical root is `PlacementDigest`; the owner set exactly matches ANN
+readiness groups independently of source owners. The stream orders domain IDs
+then source-owner/shard/ordinal membership, binds each domain's declared logical
+pack ID and count, and includes source snapshot revision/digest, document
+revision and home/overlap role. Physical pages and graph section boundaries do
+not contribute to this identity. A trusted planner supplies the complete stream;
+self-consistent caller hashes are insufficient. Local graph construction must
+resolve each intended member through verified source pages bound to the same
+BUILD before using it. The pack codec alone does not establish that proof.
 
 A local owner can prepare without hosting other source owners. The local
 all-owner BEGIN convenience path explicitly refuses unavailable remote owners;

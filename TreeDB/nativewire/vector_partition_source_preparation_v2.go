@@ -147,12 +147,15 @@ func PrepareVectorPartitionSourcesV2(ctx context.Context, identity raftplacement
 // descriptors, never verification receipts; missing owners fail closed before
 // any catalog command is submitted. ANN required groups are independent of the
 // source-map owner set. This does not activate distributed V2 reads.
-func BeginPreparedVectorPartitionBuildV2(ctx context.Context, coordinator raftplacement.VectorPartitionLifecycleCoordinatorV1, identity raftplacement.VectorPartitionLifecycleIdentityV1, ownership raftplacement.ResolvedSourceShardMapV2, owners []VectorPartitionOwnerSourceInputV2, requiredGroups []raftcluster.GroupID, previousGeneration, mutationEpoch uint64) (raftplacement.VectorPartitionLifecycleRecordV1, error) {
+func BeginPreparedVectorPartitionBuildV2(ctx context.Context, coordinator raftplacement.VectorPartitionLifecycleCoordinatorV1, identity raftplacement.VectorPartitionLifecycleIdentityV1, ownership raftplacement.ResolvedSourceShardMapV2, owners []VectorPartitionOwnerSourceInputV2, annOwners []VectorPartitionOwnerANNInputV2, requiredGroups []raftcluster.GroupID, previousGeneration, mutationEpoch uint64) (raftplacement.VectorPartitionLifecycleRecordV1, error) {
 	if identity.SourceFormat != 2 {
 		return raftplacement.VectorPartitionLifecycleRecordV1{}, raftplacement.ErrVectorPartitionLifecycleIdentity
 	}
 	coordinator.PrepareSourceV2 = func(ctx context.Context, identity raftplacement.VectorPartitionLifecycleIdentityV1) ([]raftplacement.VectorPartitionSourceOwnerPreparationV2, error) {
 		return PrepareVectorPartitionSourcesV2(ctx, identity, ownership, owners)
+	}
+	coordinator.PrepareANNV2 = func(ctx context.Context, identity raftplacement.VectorPartitionLifecycleIdentityV1) ([]raftplacement.VectorPartitionANNOwnerPreparationV2, error) {
+		return PrepareVectorPartitionANNV2(ctx, identity, annOwners)
 	}
 	return coordinator.BeginBuildV1(ctx, identity, requiredGroups, previousGeneration, mutationEpoch)
 }

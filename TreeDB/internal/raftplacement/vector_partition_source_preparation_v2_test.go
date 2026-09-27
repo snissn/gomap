@@ -22,6 +22,10 @@ func sourcePreparationFixtureV2(t *testing.T, catalog CatalogMetaRecordV1) (Vect
 	identity.Source = VectorPartitionLifecycleSourceIdentityV1{}
 	identity.SourceFormat = 2
 	identity.SourceV2 = VectorPartitionLifecycleSourceIdentityV2{SourceMapEpoch: 7, SourceMapDigest: strings.Repeat("e", 64), SnapshotSetDigest: root, GraphProfileDigest: strings.Repeat("f", 64), PlacementDigest: strings.Repeat("1", 64)}
+	identity.SourceV2.PlacementDigest, err = VectorPartitionANNOwnerSetDigestV2(annPreparationFixtureV2("group-a", "group-b"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	return identity, owners
 }
 
@@ -38,6 +42,9 @@ func TestVectorPartitionSourcePreparationV2AdmissionRetryAndRestore(t *testing.T
 	c.PrepareSourceV2 = func(context.Context, VectorPartitionLifecycleIdentityV1) ([]VectorPartitionSourceOwnerPreparationV2, error) {
 		calls++
 		return slices.Clone(owners), nil
+	}
+	c.PrepareANNV2 = func(context.Context, VectorPartitionLifecycleIdentityV1) ([]VectorPartitionANNOwnerPreparationV2, error) {
+		return annPreparationFixtureV2("group-a", "group-b"), nil
 	}
 	record, err := c.BeginBuildV1(t.Context(), identity, groups, 0, 1)
 	if err != nil {
@@ -75,6 +82,11 @@ func TestVectorPartitionSourcePreparationV2AdmissionRetryAndRestore(t *testing.T
 	if _, err := c.BeginBuildV1(t.Context(), forged, groups, 0, 1); !errors.Is(err, ErrVectorPartitionLifecycleConflict) {
 		t.Fatalf("forged root: %v", err)
 	}
+	forgedPlacement := identity
+	forgedPlacement.SourceV2.PlacementDigest = strings.Repeat("3", 64)
+	if _, err := c.BeginBuildV1(t.Context(), forgedPlacement, groups, 0, 1); !errors.Is(err, ErrVectorPartitionLifecycleConflict) {
+		t.Fatalf("forged placement root: %v", err)
+	}
 	owners[0].SnapshotSetDigest = strings.Repeat("4", 64)
 	changed := identity
 	changed.SourceV2.SnapshotSetDigest = ""
@@ -86,7 +98,7 @@ func TestVectorPartitionSourcePreparationV2AdmissionRetryAndRestore(t *testing.T
 func TestVectorPartitionSourcePreparationV2CodecAndServingRefusal(t *testing.T) {
 	_, catalog := newCatalogMetaLifecycleTestAuthorityV1(t, true)
 	identity, owners := sourcePreparationFixtureV2(t, catalog)
-	begin := VectorPartitionLifecycleCommandV1{Kind: VectorPartitionLifecycleBeginBuildV1, ExpectedState: VectorPartitionLifecycleAbsentV1, Identity: identity, RequiredGroups: []raftcluster.GroupID{"group-a", "group-b"}, SourceOwners: owners, MutationEpoch: 1}
+	begin := VectorPartitionLifecycleCommandV1{Kind: VectorPartitionLifecycleBeginBuildV1, ExpectedState: VectorPartitionLifecycleAbsentV1, Identity: identity, RequiredGroups: []raftcluster.GroupID{"group-a", "group-b"}, SourceOwners: owners, ANNOwners: annPreparationFixtureV2("group-a", "group-b"), MutationEpoch: 1}
 	record := applyVectorPartitionLifecycleTestCommandV1(t, VectorPartitionLifecycleRecordV1{}, begin)
 	for _, owner := range owners {
 		record = applyVectorPartitionLifecycleTestCommandV1(t, record, vectorPartitionLifecycleTestCommandV1(record, VectorPartitionLifecycleRecordGroupReadyV1, func(c *VectorPartitionLifecycleCommandV1) {
@@ -110,9 +122,13 @@ func TestVectorPartitionSourcePreparationV2CodecAndServingRefusal(t *testing.T) 
 		t.Fatalf("forged active snapshot: %v", err)
 	}
 	for name, mutate := range map[string]func(*VectorPartitionLifecycleCommandV1){
-		"mixed":     func(c *VectorPartitionLifecycleCommandV1) { c.Identity.Source.Generation = 1 },
-		"duplicate": func(c *VectorPartitionLifecycleCommandV1) { c.SourceOwners[1] = c.SourceOwners[0] },
-		"omitted":   func(c *VectorPartitionLifecycleCommandV1) { c.SourceOwners = c.SourceOwners[:1] },
+		"ANN missing":   func(c *VectorPartitionLifecycleCommandV1) { c.ANNOwners = nil },
+		"ANN duplicate": func(c *VectorPartitionLifecycleCommandV1) { c.ANNOwners[1] = c.ANNOwners[0] },
+		"ANN foreign":   func(c *VectorPartitionLifecycleCommandV1) { c.ANNOwners[1].GroupID = "foreign" },
+		"ANN count":     func(c *VectorPartitionLifecycleCommandV1) { c.ANNOwners[0].MembershipCount++ },
+		"mixed":         func(c *VectorPartitionLifecycleCommandV1) { c.Identity.Source.Generation = 1 },
+		"duplicate":     func(c *VectorPartitionLifecycleCommandV1) { c.SourceOwners[1] = c.SourceOwners[0] },
+		"omitted":       func(c *VectorPartitionLifecycleCommandV1) { c.SourceOwners = c.SourceOwners[:1] },
 		"extra": func(c *VectorPartitionLifecycleCommandV1) {
 			c.SourceOwners = append(c.SourceOwners, VectorPartitionSourceOwnerPreparationV2{GroupID: "group-c", ShardCount: 1, SnapshotSetDigest: strings.Repeat("7", 64), CompletionEvidenceDigest: strings.Repeat("8", 64)})
 		},
@@ -124,6 +140,7 @@ func TestVectorPartitionSourcePreparationV2CodecAndServingRefusal(t *testing.T) 
 		t.Run(name, func(t *testing.T) {
 			c := begin
 			c.SourceOwners = slices.Clone(begin.SourceOwners)
+			c.ANNOwners = slices.Clone(begin.ANNOwners)
 			mutate(&c)
 			if _, err := EncodeVectorPartitionLifecycleCommandV1(c); err == nil {
 				t.Fatal("accepted invalid preparation")
@@ -144,6 +161,10 @@ func TestVectorPartitionSourcePreparationV2SourceAndANNGroupsIndependent(t *test
 	c := VectorPartitionLifecycleCoordinatorV1{Authority: authority, Committer: &lifecycleCoordinatorCommitterV1{authority: authority, index: 1}, PrepareSourceV2: func(context.Context, VectorPartitionLifecycleIdentityV1) ([]VectorPartitionSourceOwnerPreparationV2, error) {
 		return owners, nil
 	}}
+	identity.SourceV2.PlacementDigest, _ = VectorPartitionANNOwnerSetDigestV2(annPreparationFixtureV2("group-b"))
+	c.PrepareANNV2 = func(context.Context, VectorPartitionLifecycleIdentityV1) ([]VectorPartitionANNOwnerPreparationV2, error) {
+		return annPreparationFixtureV2("group-b"), nil
+	}
 	record, err := c.BeginBuildV1(t.Context(), identity, []raftcluster.GroupID{"group-b"}, 0, 1)
 	if err != nil {
 		t.Fatal(err)
@@ -162,7 +183,8 @@ func TestVectorPartitionSourcePreparationV2SnapshotRejectsUnknownOwner(t *testin
 		t.Fatal(err)
 	}
 	identity.SourceV2.SnapshotSetDigest = root
-	record := applyVectorPartitionLifecycleTestCommandV1(t, VectorPartitionLifecycleRecordV1{}, VectorPartitionLifecycleCommandV1{Kind: VectorPartitionLifecycleBeginBuildV1, ExpectedState: VectorPartitionLifecycleAbsentV1, Identity: identity, RequiredGroups: []raftcluster.GroupID{"group-b"}, SourceOwners: owners, MutationEpoch: 1})
+	identity.SourceV2.PlacementDigest, _ = VectorPartitionANNOwnerSetDigestV2(annPreparationFixtureV2("group-b"))
+	record := applyVectorPartitionLifecycleTestCommandV1(t, VectorPartitionLifecycleRecordV1{}, VectorPartitionLifecycleCommandV1{Kind: VectorPartitionLifecycleBeginBuildV1, ExpectedState: VectorPartitionLifecycleAbsentV1, Identity: identity, RequiredGroups: []raftcluster.GroupID{"group-b"}, SourceOwners: owners, ANNOwners: annPreparationFixtureV2("group-b"), MutationEpoch: 1})
 	raw, err := encodeVectorPartitionLifecycleSnapshotV1(map[VectorPartitionLifecycleIdentityV1]VectorPartitionLifecycleRecordV1{identity: record}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -178,6 +200,10 @@ func TestVectorPartitionLocalPreparationV2ExactHostedScope(t *testing.T) {
 	coordinator := VectorPartitionLifecycleCoordinatorV1{Authority: authority, Committer: &lifecycleCoordinatorCommitterV1{authority: authority, index: 1}, PrepareSourceV2: func(context.Context, VectorPartitionLifecycleIdentityV1) ([]VectorPartitionSourceOwnerPreparationV2, error) {
 		return slices.Clone(owners), nil
 	}}
+	identity.SourceV2.PlacementDigest, _ = VectorPartitionANNOwnerSetDigestV2(annPreparationFixtureV2("group-b"))
+	coordinator.PrepareANNV2 = func(context.Context, VectorPartitionLifecycleIdentityV1) ([]VectorPartitionANNOwnerPreparationV2, error) {
+		return annPreparationFixtureV2("group-b"), nil
+	}
 	if _, err := coordinator.BeginBuildV1(t.Context(), identity, []raftcluster.GroupID{"group-b"}, 0, 1); err != nil {
 		t.Fatal(err)
 	}
@@ -203,4 +229,12 @@ func TestVectorPartitionLocalPreparationV2ExactHostedScope(t *testing.T) {
 	if _, _, _, err := authority.VectorPartitionLocalPreparationV2(t.Context(), identity, "foreign"); !errors.Is(err, ErrVectorPartitionLifecycleGuard) {
 		t.Fatalf("foreign node: %v", err)
 	}
+}
+
+func annPreparationFixtureV2(groups ...string) []VectorPartitionANNOwnerPreparationV2 {
+	out := make([]VectorPartitionANNOwnerPreparationV2, len(groups))
+	for i, g := range groups {
+		out[i] = VectorPartitionANNOwnerPreparationV2{GroupID: g, DomainCount: 1, MembershipCount: 2, MembershipDigest: strings.Repeat("9", 64)}
+	}
+	return out
 }

@@ -23,7 +23,7 @@ func preparedVectorPartitionInputV2(ctx context.Context, authority *raftplacemen
 	for i, o := range record.SourceOwners {
 		owners[i] = source.SourceOwnerCommitmentV2{GroupID: string(o.GroupID), ShardCount: o.ShardCount, SnapshotSetDigest: o.SnapshotSetDigest}
 	}
-	return collections.VectorPartitionPreparedInputV2{Generation: identity.Generation, Collection: identity.Index.Collection.Collection, IndexName: identity.Index.IndexName, IndexDefinitionDigest: identity.Index.IndexDefinitionDigest, SourceMapEpoch: identity.SourceV2.SourceMapEpoch, SourceMapDigest: identity.SourceV2.SourceMapDigest, SnapshotSetDigest: identity.SourceV2.SnapshotSetDigest, GraphProfileDigest: identity.SourceV2.GraphProfileDigest, PlacementDigest: identity.SourceV2.PlacementDigest, Owners: owners, LocalSourceOwners: localSources, LocalANNOwners: localANN}, nil
+	return collections.VectorPartitionPreparedInputV2{Generation: identity.Generation, Collection: identity.Index.Collection.Collection, IndexName: identity.Index.IndexName, IndexDefinitionDigest: identity.Index.IndexDefinitionDigest, SourceMapEpoch: identity.SourceV2.SourceMapEpoch, SourceMapDigest: identity.SourceV2.SourceMapDigest, SnapshotSetDigest: identity.SourceV2.SnapshotSetDigest, GraphProfileDigest: identity.SourceV2.GraphProfileDigest, PlacementDigest: identity.SourceV2.PlacementDigest, Owners: owners, ANNOwners: slices.Clone(record.ANNOwners), LocalSourceOwners: localSources, LocalANNOwners: localANN}, nil
 }
 
 // OpenPreparedVectorPartitionSourceV2 opens pinned local source inputs for

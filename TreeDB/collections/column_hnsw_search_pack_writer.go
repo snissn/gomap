@@ -117,6 +117,12 @@ func writeColumnHNSWSearchPackAssetWithStableAuthorityAndCanonicalVectors(assetR
 }
 
 func buildColumnHNSWSearchPackInputWithoutVectors(def VectorIndexDefinition, graph columnVectorGraphManifestSnapshot, rows []columnVectorGraphAssetRow) (columnHNSWSearchPackBuildInput, error) {
+	return buildColumnHNSWSearchPackInputBinding(def, graph, rows, false)
+}
+
+// buildColumnHNSWSearchPackInputBinding shares graph serialization while keeping
+// semantic source-V2 binding mutually exclusive with physical row references.
+func buildColumnHNSWSearchPackInputBinding(def VectorIndexDefinition, graph columnVectorGraphManifestSnapshot, rows []columnVectorGraphAssetRow, sourceV2 bool) (columnHNSWSearchPackBuildInput, error) {
 	if def.Metric != VectorMetricCosine {
 		return columnHNSWSearchPackBuildInput{}, fmt.Errorf("collections: hnsw search pack supports only metric %q, got %q", VectorMetricCosine, def.Metric)
 	}
@@ -137,9 +143,21 @@ func buildColumnHNSWSearchPackInputWithoutVectors(def VectorIndexDefinition, gra
 	if err != nil {
 		return columnHNSWSearchPackBuildInput{}, err
 	}
-	rowRefGenerations, rowRefPartIDs, rowRefRowIndexes, rowRefAppliedCommandLSNs, err := buildColumnHNSWSearchPackRowRefs(rows, graph.BaseManifestGeneration)
-	if err != nil {
-		return columnHNSWSearchPackBuildInput{}, err
+	var rowRefGenerations, rowRefPartIDs, rowRefRowIndexes, rowRefAppliedCommandLSNs []int64
+	if !sourceV2 {
+		rowRefGenerations, rowRefPartIDs, rowRefRowIndexes, rowRefAppliedCommandLSNs, err = buildColumnHNSWSearchPackRowRefs(rows, graph.BaseManifestGeneration)
+		if err != nil {
+			return columnHNSWSearchPackBuildInput{}, err
+		}
+	} else {
+		if graph.BaseManifestGeneration != 0 || graph.BaseManifestChecksum != 0 || graph.BaseSchemaHash != 0 {
+			return columnHNSWSearchPackBuildInput{}, errors.New("collections: source-V2 graph has legacy base identity")
+		}
+		for _, row := range rows {
+			if row.BaseRowRef.Generation != 0 || row.BaseRowRef.PartID != 0 || row.BaseRowRef.RowIndex != 0 || row.BaseRowRef.AppliedCommandLSN != 0 || len(row.BaseRowRef.DocumentID) != 0 {
+				return columnHNSWSearchPackBuildInput{}, errors.New("collections: source-V2 graph has legacy row reference")
+			}
+		}
 	}
 	docIDs, err := buildColumnVectorGraphDocumentIDStateBytes(rows)
 	if err != nil {
@@ -152,6 +170,7 @@ func buildColumnHNSWSearchPackInputWithoutVectors(def VectorIndexDefinition, gra
 		entryOrdinal = 0
 	}
 	return columnHNSWSearchPackBuildInput{
+		SourceV2:       sourceV2,
 		Rows:           len(rows),
 		Dimensions:     def.Dimensions,
 		VectorStride:   stride,

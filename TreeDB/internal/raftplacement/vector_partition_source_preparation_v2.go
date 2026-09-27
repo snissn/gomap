@@ -131,3 +131,38 @@ func validateCatalogSourceOwnersV2(catalog CatalogV1, owners []VectorPartitionSo
 	}
 	return nil
 }
+
+// VectorPartitionANNOwnerPreparationV2 is the bounded semantic result of trusted
+// placement preparation. Physical page layout and completion evidence are not
+// part of ANN generation identity.
+type VectorPartitionANNOwnerPreparationV2 = source.ANNOwnerCommitmentV2
+
+func VectorPartitionANNOwnerSetDigestV2(input []VectorPartitionANNOwnerPreparationV2) (string, error) {
+	owners := slices.Clone(input)
+	slices.SortFunc(owners, func(a, b VectorPartitionANNOwnerPreparationV2) int { return cmp.Compare(a.GroupID, b.GroupID) })
+	return source.ANNOwnerSetDigestV2(owners)
+}
+
+func canonicalVectorPartitionANNOwnersV2(identity VectorPartitionLifecycleIdentityV1, input []VectorPartitionANNOwnerPreparationV2, groups []raftcluster.GroupID, required bool) ([]VectorPartitionANNOwnerPreparationV2, error) {
+	if identity.SourceFormat != 2 || !required {
+		if len(input) != 0 {
+			return nil, ErrVectorPartitionLifecycleIdentity
+		}
+		return nil, nil
+	}
+	owners := slices.Clone(input)
+	slices.SortFunc(owners, func(a, b VectorPartitionANNOwnerPreparationV2) int { return cmp.Compare(a.GroupID, b.GroupID) })
+	root, err := source.ANNOwnerSetDigestV2(owners)
+	if err != nil {
+		return nil, err
+	}
+	if root != identity.SourceV2.PlacementDigest || len(groups) != len(owners) {
+		return nil, ErrVectorPartitionLifecycleIdentity
+	}
+	for i, o := range owners {
+		if o.GroupID != string(groups[i]) {
+			return nil, ErrVectorPartitionLifecycleIdentity
+		}
+	}
+	return owners, nil
+}

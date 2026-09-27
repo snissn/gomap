@@ -152,7 +152,14 @@ func TestPrepareVectorPartitionSourcesV2UsesCompletedDurableOwnerImports(t *test
 				identity.Index.IndexEpoch = 1
 				identity.Index.CatalogEpoch = status.Epoch
 				identity.Index.CatalogDigest = status.Digest
-				record, err := BeginPreparedVectorPartitionBuildV2(t.Context(), harness.LifecycleCoordinator(), identity, ownership, []VectorPartitionOwnerSourceInputV2{owner}, []raftcluster.GroupID{"group-b"}, 0, 1)
+				identity.SourceV2.PlacementDigest = ""
+				annOwner := VectorPartitionOwnerANNInputV2{GroupID: "group-b", Walk: func(ctx context.Context, visit func(source.ANNRecordV2) error) error {
+					if err := visit(source.ANNRecordV2{Domain: &source.ANNDomainV2{DomainID: 0, LogicalPackID: "pack-0", MembershipCount: 1}}); err != nil {
+						return err
+					}
+					return visit(source.ANNRecordV2{Member: &source.ANNMemberV2{Kind: "home", Source: source.ANNSourceRowIdentityV2{SourceOwner: "group-a", ShardID: selected.ShardID, SnapshotRevision: selected.SnapshotRevision, SnapshotDigest: selected.Digest, Ordinal: 1, DocumentRevision: 23}}})
+				}}
+				record, err := BeginPreparedVectorPartitionBuildV2(t.Context(), harness.LifecycleCoordinator(), identity, ownership, []VectorPartitionOwnerSourceInputV2{owner}, []VectorPartitionOwnerANNInputV2{annOwner}, []raftcluster.GroupID{"group-b"}, 0, 1)
 				if err != nil {
 					t.Fatal(err)
 				}

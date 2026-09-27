@@ -133,6 +133,7 @@ type VectorPartitionLifecycleMutationProofV1 struct {
 // transitions; steady-state guards compare fixed-size identity and digest data.
 type VectorPartitionLifecycleRecordV1 struct {
 	SourceOwners             []VectorPartitionSourceOwnerPreparationV2 `json:"source_owners,omitempty"`
+	ANNOwners                []VectorPartitionANNOwnerPreparationV2    `json:"ann_owners,omitempty"`
 	Format                   uint16                                    `json:"format"`
 	Revision                 uint64                                    `json:"revision"`
 	State                    VectorPartitionLifecycleStateV1           `json:"state"`
@@ -157,6 +158,7 @@ type VectorPartitionLifecycleRecordV1 struct {
 // irrelevant to Kind must be zero, preventing ambiguous alternate encodings.
 type VectorPartitionLifecycleCommandV1 struct {
 	SourceOwners             []VectorPartitionSourceOwnerPreparationV2 `json:"source_owners,omitempty"`
+	ANNOwners                []VectorPartitionANNOwnerPreparationV2    `json:"ann_owners,omitempty"`
 	Format                   uint16                                    `json:"format"`
 	Kind                     VectorPartitionLifecycleCommandKindV1     `json:"kind"`
 	ExpectedRevision         uint64                                    `json:"expected_revision"`
@@ -284,6 +286,7 @@ func ApplyVectorPartitionLifecycleCommandV1(record VectorPartitionLifecycleRecor
 			MutationEpoch:            command.MutationEpoch,
 			RequiredGroups:           append([]raftcluster.GroupID(nil), command.RequiredGroups...),
 			SourceOwners:             append([]VectorPartitionSourceOwnerPreparationV2(nil), command.SourceOwners...),
+			ANNOwners:                append([]VectorPartitionANNOwnerPreparationV2(nil), command.ANNOwners...),
 			ReadyGroups:              []VectorPartitionLifecycleGroupReadyV1{},
 			CleanedGroups:            []raftcluster.GroupID{},
 		}
@@ -590,6 +593,10 @@ func canonicalVectorPartitionLifecycleCommandV1(command VectorPartitionLifecycle
 	if err != nil {
 		return VectorPartitionLifecycleCommandV1{}, err
 	}
+	command.ANNOwners, err = canonicalVectorPartitionANNOwnersV2(command.Identity, command.ANNOwners, command.RequiredGroups, command.Kind == VectorPartitionLifecycleBeginBuildV1)
+	if err != nil {
+		return VectorPartitionLifecycleCommandV1{}, err
+	}
 	if err := validateVectorPartitionLifecycleCommandShapeV1(command); err != nil {
 		return VectorPartitionLifecycleCommandV1{}, err
 	}
@@ -698,7 +705,7 @@ func canonicalVectorPartitionLifecycleRecordV1(record VectorPartitionLifecycleRe
 	if record.Format == 0 && record.Revision == 0 && record.State == "" &&
 		zeroVectorPartitionLifecycleIdentityV1(record.Identity) &&
 		record.PreviousActiveGeneration == 0 && record.MutationEpoch == 0 &&
-		len(record.SourceOwners) == 0 && len(record.RequiredGroups) == 0 && len(record.ReadyGroups) == 0 &&
+		len(record.SourceOwners) == 0 && len(record.ANNOwners) == 0 && len(record.RequiredGroups) == 0 && len(record.ReadyGroups) == 0 &&
 		record.ReadySetDigest == "" && record.InvalidationReason == "" &&
 		record.InvalidationEpoch == 0 && !record.Aborted &&
 		record.RetirementReason == "" && record.SupersededByGeneration == 0 &&
@@ -730,6 +737,10 @@ func canonicalVectorPartitionLifecycleRecordV1(record VectorPartitionLifecycleRe
 		return VectorPartitionLifecycleRecordV1{}, err
 	}
 	record.SourceOwners, err = canonicalVectorPartitionSourceOwnersV2(record.Identity, record.SourceOwners, true)
+	if err != nil {
+		return VectorPartitionLifecycleRecordV1{}, err
+	}
+	record.ANNOwners, err = canonicalVectorPartitionANNOwnersV2(record.Identity, record.ANNOwners, record.RequiredGroups, true)
 	if err != nil {
 		return VectorPartitionLifecycleRecordV1{}, err
 	}

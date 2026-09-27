@@ -1262,11 +1262,19 @@ type vectorPartitionDomainAssetPayloadV1 struct {
 }
 
 func splitVectorPartitionDomainSearchPackV1(raw []byte, partition uint32, maxAssetBytes int64) ([]vectorPartitionDomainAssetPayloadV1, error) {
+	return splitVectorPartitionDomainSearchPackBinding(raw, partition, maxAssetBytes, columnHNSWSearchPackDecodeOptions{})
+}
+
+func splitVectorPartitionDomainSearchPackBinding(raw []byte, partition uint32, maxAssetBytes int64, opts columnHNSWSearchPackDecodeOptions) ([]vectorPartitionDomainAssetPayloadV1, error) {
 	if maxAssetBytes <= 0 {
 		return nil, fmt.Errorf("%w: domain asset byte cap", ErrVectorPartitionSearchUnavailable)
 	}
-	pack, _, err := decodeColumnHNSWSearchPackEnvelopeWithContext(context.Background(), raw, columnHNSWSearchPackDecodeOptions{})
-	if err != nil || pack.Header.Version != columnHNSWSearchPackVersionV6 {
+	pack, _, err := decodeColumnHNSWSearchPackEnvelopeWithContext(context.Background(), raw, opts)
+	wantVersion := columnHNSWSearchPackVersionV6
+	if opts.SourceV2 {
+		wantVersion = columnHNSWSearchPackVersionV7
+	}
+	if err != nil || pack.Header.Version != wantVersion {
 		return nil, fmt.Errorf("%w: domain Vamana pack", ErrVectorPartitionSearchUnavailable)
 	}
 	rootBytes := columnHNSWSearchPackHeaderSizeV2 + len(pack.Sections)*columnHNSWSearchPackSectionEntrySize

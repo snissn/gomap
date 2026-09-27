@@ -34,6 +34,11 @@ func TestVectorPartitionPagedSourceSessionV2VerifiesCompletedOwner(t *testing.T)
 	}
 	def := VectorIndexDefinitionDigestV1(c.Meta().VectorIndexes[0])
 	prepared := VectorPartitionPreparedInputV2{LocalSourceOwners: []string{"group-a"}, Generation: 3, Collection: c.name, IndexName: input.IndexName, IndexDefinitionDigest: def, SourceMapEpoch: ownership.Epoch(), SourceMapDigest: ownership.Digest(), SnapshotSetDigest: digest, GraphProfileDigest: strings.Repeat("a", 64), PlacementDigest: strings.Repeat("b", 64), Owners: owners}
+	prepared.ANNOwners = []source.ANNOwnerCommitmentV2{{GroupID: "group-b", DomainCount: 1, MembershipCount: 1, MembershipDigest: strings.Repeat("c", 64)}}
+	prepared.PlacementDigest, err = source.ANNOwnerSetDigestV2(prepared.ANNOwners)
+	if err != nil {
+		t.Fatal(err)
+	}
 	lease, err := d.AcquireStableResourceCaptureLease()
 	if err != nil {
 		t.Fatal(err)

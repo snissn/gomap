@@ -24,6 +24,7 @@ type VectorPartitionPreparedInputV2 struct {
 	SourceMapEpoch                                                          uint64
 	SourceMapDigest, SnapshotSetDigest, GraphProfileDigest, PlacementDigest string
 	Owners                                                                  []source.SourceOwnerCommitmentV2
+	ANNOwners                                                               []source.ANNOwnerCommitmentV2
 	LocalSourceOwners, LocalANNOwners                                       []string
 }
 
@@ -85,6 +86,10 @@ func (s *VectorPartitionPagedSourceSessionV2) verifyPreparedSourcesV2(ctx contex
 	r := m.PagedRootV2
 	if !slices.Equal(r.SourceOwners, input.LocalSourceOwners) || !slices.Equal(r.ANNOwners, input.LocalANNOwners) {
 		return fmt.Errorf("%w: complete local owner scope", ErrVectorPartitionManifestInvalid)
+	}
+	placement, err := source.ANNOwnerSetDigestV2(input.ANNOwners)
+	if err != nil || placement != input.PlacementDigest {
+		return fmt.Errorf("%w: prepared ANN placement binding", ErrVectorPartitionManifestInvalid)
 	}
 	root, err := source.SourceOwnerSetDigestV2(input.Owners)
 	if err != nil {

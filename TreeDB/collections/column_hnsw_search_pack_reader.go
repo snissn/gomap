@@ -334,7 +334,7 @@ func newColumnHNSWSearchPackPreparedViewFromSectionHandlesWithContext(ctx contex
 	if err != nil {
 		return nil, err
 	}
-	if pack.Header.Version != columnHNSWSearchPackVersionV6 {
+	if pack.Header.Version != columnHNSWSearchPackVersionV6 && pack.Header.Version != columnHNSWSearchPackVersionV7 {
 		return nil, errors.New("collections: chunked hnsw_search_pack_v1 version")
 	}
 	if err := validateColumnHNSWSearchPackChunkedGeometry(raw, pack); err != nil {
@@ -400,7 +400,7 @@ func newColumnHNSWSearchPackPreparedViewFromSectionHandlesWithContext(ctx contex
 		view.status = columnHNSWSearchPackPreparedStatusHeap
 		view.source = mappedresource.SourceHeapCopy
 	}
-	if err := view.prepareChunkedV6SectionViewsWithContext(ctx, sectionChunks, opts); err != nil {
+	if err := view.prepareChunkedVamanaSectionViewsWithContext(ctx, sectionChunks, opts); err != nil {
 		return nil, err
 	}
 	view.chunkMetaBytes = view.retainedChunkMetadataBytes()
@@ -485,12 +485,12 @@ func columnHNSWSearchPackTypedChunks[T any](chunks [][]byte, name string, view f
 	return values, nil
 }
 
-func (v *columnHNSWSearchPackPreparedView) prepareChunkedV6SectionViewsWithContext(ctx context.Context, chunks map[columnHNSWSearchPackSectionKey][][]byte, opts columnHNSWSearchPackDecodeOptions) error {
+func (v *columnHNSWSearchPackPreparedView) prepareChunkedVamanaSectionViewsWithContext(ctx context.Context, chunks map[columnHNSWSearchPackSectionKey][][]byte, opts columnHNSWSearchPackDecodeOptions) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if v == nil || v.Header.Version != columnHNSWSearchPackVersionV6 || v.Header.ExternalNormalizedVectors || v.Header.HasAuxiliaryNavigation {
-		return errors.New("collections: chunked hnsw_search_pack_v1 requires an embedded-vector V6 pack")
+	if v == nil || (v.Header.Version != columnHNSWSearchPackVersionV6 && v.Header.Version != columnHNSWSearchPackVersionV7) || v.Header.ExternalNormalizedVectors || v.Header.HasAuxiliaryNavigation {
+		return errors.New("collections: chunked hnsw_search_pack_v1 requires an embedded-vector Vamana pack")
 	}
 	rows := uint64(v.Header.Rows)
 	vectorCount, ok := checkedHNSWPackMulOK(rows, uint64(v.Header.VectorStride))
@@ -590,43 +590,46 @@ func (v *columnHNSWSearchPackPreparedView) prepareChunkedV6SectionViewsWithConte
 		}
 	}
 
-	loadInt64 := func(kind columnHNSWSearchPackSectionKind, name string) (columnHNSWSearchPackPreparedChunks[int64], []int64, error) {
-		if _, err := columnHNSWSearchPackRequireSection(v.Sections, kind, 0, rows, 8); err != nil {
-			return columnHNSWSearchPackPreparedChunks[int64]{}, nil, err
+	if v.Header.Version != columnHNSWSearchPackVersionV7 {
+		loadInt64 := func(kind columnHNSWSearchPackSectionKind, name string) (columnHNSWSearchPackPreparedChunks[int64], []int64, error) {
+			if _, err := columnHNSWSearchPackRequireSection(v.Sections, kind, 0, rows, 8); err != nil {
+				return columnHNSWSearchPackPreparedChunks[int64]{}, nil, err
+			}
+			values, err := columnHNSWSearchPackTypedChunks(sectionChunks(kind, 0), name, mappedresource.Int64View)
+			if err != nil {
+				return columnHNSWSearchPackPreparedChunks[int64]{}, nil, err
+			}
+			prepared := newColumnHNSWSearchPackPreparedChunks(values)
+			if prepared.length != rows {
+				return columnHNSWSearchPackPreparedChunks[int64]{}, nil, fmt.Errorf("collections: chunked hnsw_search_pack_v1 %s count mismatch", name)
+			}
+			if len(values) == 1 {
+				return prepared, values[0], nil
+			}
+			return prepared, nil, nil
 		}
-		values, err := columnHNSWSearchPackTypedChunks(sectionChunks(kind, 0), name, mappedresource.Int64View)
-		if err != nil {
-			return columnHNSWSearchPackPreparedChunks[int64]{}, nil, err
+		if v.rowRefGenerationChunks, v.RowRefGenerations, err = loadInt64(columnHNSWSearchPackSectionRowRefGeneration, "row_ref_generation"); err != nil {
+			return err
 		}
-		prepared := newColumnHNSWSearchPackPreparedChunks(values)
-		if prepared.length != rows {
-			return columnHNSWSearchPackPreparedChunks[int64]{}, nil, fmt.Errorf("collections: chunked hnsw_search_pack_v1 %s count mismatch", name)
+		if v.rowRefPartIDChunks, v.RowRefPartIDs, err = loadInt64(columnHNSWSearchPackSectionRowRefPartID, "row_ref_part_id"); err != nil {
+			return err
 		}
-		if len(values) == 1 {
-			return prepared, values[0], nil
+		if v.rowRefRowIndexChunks, v.RowRefRowIndexes, err = loadInt64(columnHNSWSearchPackSectionRowRefRowIndex, "row_ref_row_index"); err != nil {
+			return err
 		}
-		return prepared, nil, nil
-	}
-	if v.rowRefGenerationChunks, v.RowRefGenerations, err = loadInt64(columnHNSWSearchPackSectionRowRefGeneration, "row_ref_generation"); err != nil {
-		return err
-	}
-	if v.rowRefPartIDChunks, v.RowRefPartIDs, err = loadInt64(columnHNSWSearchPackSectionRowRefPartID, "row_ref_part_id"); err != nil {
-		return err
-	}
-	if v.rowRefRowIndexChunks, v.RowRefRowIndexes, err = loadInt64(columnHNSWSearchPackSectionRowRefRowIndex, "row_ref_row_index"); err != nil {
-		return err
-	}
-	if v.rowRefAppliedLSNChunks, v.RowRefAppliedLSNs, err = loadInt64(columnHNSWSearchPackSectionRowRefAppliedLSN, "row_ref_applied_lsn"); err != nil {
-		return err
-	}
-	for ordinal := uint64(0); ordinal < rows; ordinal++ {
-		generation, gok := v.rowRefGenerationChunks.at(ordinal)
-		partID, pok := v.rowRefPartIDChunks.at(ordinal)
-		rowIndex, rok := v.rowRefRowIndexChunks.at(ordinal)
-		appliedLSN, aok := v.rowRefAppliedLSNChunks.at(ordinal)
-		if !gok || !pok || !rok || !aok || generation <= 0 || partID <= 0 || rowIndex < 0 || appliedLSN <= 0 || uint64(generation) > v.Header.BaseManifestGeneration {
-			return fmt.Errorf("collections: chunked hnsw_search_pack_v1 invalid row-ref ordinal=%d", ordinal)
+		if v.rowRefAppliedLSNChunks, v.RowRefAppliedLSNs, err = loadInt64(columnHNSWSearchPackSectionRowRefAppliedLSN, "row_ref_applied_lsn"); err != nil {
+			return err
 		}
+		for ordinal := uint64(0); ordinal < rows; ordinal++ {
+			generation, gok := v.rowRefGenerationChunks.at(ordinal)
+			partID, pok := v.rowRefPartIDChunks.at(ordinal)
+			rowIndex, rok := v.rowRefRowIndexChunks.at(ordinal)
+			appliedLSN, aok := v.rowRefAppliedLSNChunks.at(ordinal)
+			if !gok || !pok || !rok || !aok || generation <= 0 || partID <= 0 || rowIndex < 0 || appliedLSN <= 0 || uint64(generation) > v.Header.BaseManifestGeneration {
+				return fmt.Errorf("collections: chunked hnsw_search_pack_v1 invalid row-ref ordinal=%d", ordinal)
+			}
+		}
+
 	}
 
 	if _, err := columnHNSWSearchPackRequireSection(v.Sections, columnHNSWSearchPackSectionDocumentIDOffsets, 0, rows+1, 8); err != nil {
@@ -708,14 +711,14 @@ func (v *columnHNSWSearchPackPreparedView) validateChunkedAdjacencyWithContext(c
 		if !ok {
 			return fmt.Errorf("collections: chunked hnsw_search_pack_v1 adjacency layer=%d row=%d crosses a chunk", layer, row)
 		}
-		if v.Header.Version == columnHNSWSearchPackVersionV6 && layer == 0 && len(current) > vectorPartitionVamanaDegreeV1 {
+		if (v.Header.Version == columnHNSWSearchPackVersionV6 || v.Header.Version == columnHNSWSearchPackVersionV7) && layer == 0 && len(current) > vectorPartitionVamanaDegreeV1 {
 			return fmt.Errorf("collections: connectivity-preserving partition Vamana row=%d exceeds degree=%d", row, vectorPartitionVamanaDegreeV1)
 		}
 		for i, neighbor := range current {
 			if int(neighbor) >= v.Header.Rows {
 				return fmt.Errorf("collections: chunked hnsw_search_pack_v1 adjacency layer=%d row=%d neighbor=%d outside rows", layer, row, neighbor)
 			}
-			if v.Header.Version == columnHNSWSearchPackVersionV6 && layer == 0 {
+			if (v.Header.Version == columnHNSWSearchPackVersionV6 || v.Header.Version == columnHNSWSearchPackVersionV7) && layer == 0 {
 				if int(neighbor) == row {
 					return fmt.Errorf("collections: connectivity-preserving partition Vamana row=%d has self edge", row)
 				}
@@ -731,7 +734,7 @@ func (v *columnHNSWSearchPackPreparedView) validateChunkedAdjacencyWithContext(c
 	if !ok || last != neighbors.length {
 		return fmt.Errorf("collections: chunked hnsw_search_pack_v1 adjacency layer=%d final offset", layer)
 	}
-	if v.Header.Version != columnHNSWSearchPackVersionV6 || layer != 0 || v.Header.Rows == 0 {
+	if (v.Header.Version != columnHNSWSearchPackVersionV6 && v.Header.Version != columnHNSWSearchPackVersionV7) || layer != 0 || v.Header.Rows == 0 {
 		return nil
 	}
 	seen := make([]bool, v.Header.Rows)
@@ -782,10 +785,13 @@ func decodeColumnHNSWSearchPackEnvelopeMetadataWithContext(ctx context.Context, 
 		return columnHNSWSearchPack{}, opts, fmt.Errorf("collections: bad hnsw_search_pack_v1 magic=%q", string(raw[:8]))
 	}
 	version := hnswPackU16(raw, columnHNSWSearchPackHeaderVersionOffset)
+	if (version == columnHNSWSearchPackVersionV7) != opts.SourceV2 || (opts.SourceV2 && (opts.ExpectedMembershipDigest == ([sha256.Size]byte{}) || opts.ExpectedBaseIdentity != (columnHNSWSearchPackBaseIdentity{}))) {
+		return columnHNSWSearchPack{}, opts, errors.New("collections: search pack source binding mode mismatch")
+	}
 	headerSize := columnHNSWSearchPackHeaderSize
 	switch version {
 	case columnHNSWSearchPackVersionV1:
-	case columnHNSWSearchPackVersionV2, columnHNSWSearchPackVersionV3, columnHNSWSearchPackVersionV4, columnHNSWSearchPackVersionV5, columnHNSWSearchPackVersionV6:
+	case columnHNSWSearchPackVersionV2, columnHNSWSearchPackVersionV3, columnHNSWSearchPackVersionV4, columnHNSWSearchPackVersionV5, columnHNSWSearchPackVersionV6, columnHNSWSearchPackVersionV7:
 		headerSize = columnHNSWSearchPackHeaderSizeV2
 	default:
 		return columnHNSWSearchPack{}, opts, fmt.Errorf("collections: unsupported hnsw_search_pack_v1 version=%d", version)
@@ -848,7 +854,7 @@ func decodeColumnHNSWSearchPackEnvelopeMetadataWithContext(ctx context.Context, 
 			hnswPackU32(raw, columnHNSWSearchPackHeaderEfConstructionOffset) != columnHNSWCanonicalPartitionEfConstruction) {
 		return columnHNSWSearchPack{}, opts, errors.New("collections: canonical partition hnsw graph parameters mismatch")
 	}
-	if version == columnHNSWSearchPackVersionV6 &&
+	if (version == columnHNSWSearchPackVersionV6 || version == columnHNSWSearchPackVersionV7) &&
 		(hnswPackU32(raw, columnHNSWSearchPackHeaderMOffset) != columnVamanaConnectivityPreservingPartitionM ||
 			hnswPackU32(raw, columnHNSWSearchPackHeaderEfConstructionOffset) != columnVamanaConnectivityPreservingPartitionL ||
 			hnswPackU64(raw, columnHNSWSearchPackHeaderEntryOrdinalOffset) != 0 ||
@@ -874,7 +880,11 @@ func decodeColumnHNSWSearchPackEnvelopeMetadataWithContext(ctx context.Context, 
 		ManifestChecksum:   hnswPackU64(raw, columnHNSWSearchPackHeaderBaseChecksumOffset),
 		SchemaHash:         hnswPackU64(raw, columnHNSWSearchPackHeaderBaseSchemaHashOffset),
 	}
-	if baseIdentity.ManifestGeneration == 0 || baseIdentity.ManifestChecksum == 0 || baseIdentity.SchemaHash == 0 {
+	if opts.SourceV2 {
+		if baseIdentity != (columnHNSWSearchPackBaseIdentity{}) {
+			return columnHNSWSearchPack{}, opts, errors.New("collections: source-V2 pack carries legacy base identity")
+		}
+	} else if baseIdentity.ManifestGeneration == 0 || baseIdentity.ManifestChecksum == 0 || baseIdentity.SchemaHash == 0 {
 		return columnHNSWSearchPack{}, opts, errors.New("collections: hnsw_search_pack_v1 missing base manifest identity")
 	}
 	if err := validateColumnHNSWSearchPackExpectedBaseIdentity(baseIdentity, opts.ExpectedBaseIdentity); err != nil {
@@ -882,7 +892,7 @@ func decodeColumnHNSWSearchPackEnvelopeMetadataWithContext(ctx context.Context, 
 	}
 	var membershipDigest [sha256.Size]byte
 	var externalVectorDigest [sha256.Size]byte
-	if version == columnHNSWSearchPackVersionV2 || version == columnHNSWSearchPackVersionV3 || version == columnHNSWSearchPackVersionV5 || version == columnHNSWSearchPackVersionV6 {
+	if version == columnHNSWSearchPackVersionV2 || version == columnHNSWSearchPackVersionV3 || version == columnHNSWSearchPackVersionV5 || version == columnHNSWSearchPackVersionV6 || version == columnHNSWSearchPackVersionV7 {
 		copy(membershipDigest[:], raw[columnHNSWSearchPackHeaderMembershipDigestOffset:columnHNSWSearchPackHeaderSizeV2])
 		if membershipDigest == ([sha256.Size]byte{}) {
 			return columnHNSWSearchPack{}, opts, fmt.Errorf("collections: hnsw_search_pack_v1 version %d missing membership digest", version)
@@ -902,6 +912,9 @@ func decodeColumnHNSWSearchPackEnvelopeMetadataWithContext(ctx context.Context, 
 	dataLength := hnswPackU64(raw, columnHNSWSearchPackHeaderDataLengthOffset)
 	sectionCount32 := hnswPackU32(raw, columnHNSWSearchPackHeaderSectionCountOffset)
 	expectedSectionCount := uint32(8 + 2*layerCount32)
+	if opts.SourceV2 {
+		expectedSectionCount -= 4
+	}
 	if externalVectors {
 		expectedSectionCount--
 	}
@@ -1190,7 +1203,7 @@ func (v *columnHNSWSearchPackPreparedView) prepareSectionViewsWithContext(ctx co
 		if err := validateColumnHNSWSearchPackAdjacencyWithContext(ctx, layer, rows, offsets, neighbors); err != nil {
 			return err
 		}
-		if v.Header.Version == columnHNSWSearchPackVersionV6 && layer == 0 {
+		if (v.Header.Version == columnHNSWSearchPackVersionV6 || v.Header.Version == columnHNSWSearchPackVersionV7) && layer == 0 {
 			if err := validateColumnVamanaPartitionGraphV1(ctx, offsets, neighbors); err != nil {
 				return err
 			}
@@ -1241,31 +1254,34 @@ func (v *columnHNSWSearchPackPreparedView) prepareSectionViewsWithContext(ctx co
 		}
 		v.AuxiliaryNavigation = columnHNSWSearchPackPreparedLayer{Offsets: offsets, Neighbors: neighbors}
 	}
-	if v.RowRefGenerations, err = v.int64DirectView(raw, columnHNSWSearchPackSectionRowRefGeneration, rows); err != nil {
-		return err
-	}
-	if v.RowRefPartIDs, err = v.int64DirectView(raw, columnHNSWSearchPackSectionRowRefPartID, rows); err != nil {
-		return err
-	}
-	if v.RowRefRowIndexes, err = v.int64DirectView(raw, columnHNSWSearchPackSectionRowRefRowIndex, rows); err != nil {
-		return err
-	}
-	if v.RowRefAppliedLSNs, err = v.int64DirectView(raw, columnHNSWSearchPackSectionRowRefAppliedLSN, rows); err != nil {
-		return err
-	}
-	for ordinal := 0; ordinal < v.Header.Rows; ordinal++ {
-		if ordinal&1023 == 0 {
-			if err := ctx.Err(); err != nil {
-				return err
+	if v.Header.Version != columnHNSWSearchPackVersionV7 {
+		if v.RowRefGenerations, err = v.int64DirectView(raw, columnHNSWSearchPackSectionRowRefGeneration, rows); err != nil {
+			return err
+		}
+		if v.RowRefPartIDs, err = v.int64DirectView(raw, columnHNSWSearchPackSectionRowRefPartID, rows); err != nil {
+			return err
+		}
+		if v.RowRefRowIndexes, err = v.int64DirectView(raw, columnHNSWSearchPackSectionRowRefRowIndex, rows); err != nil {
+			return err
+		}
+		if v.RowRefAppliedLSNs, err = v.int64DirectView(raw, columnHNSWSearchPackSectionRowRefAppliedLSN, rows); err != nil {
+			return err
+		}
+		for ordinal := 0; ordinal < v.Header.Rows; ordinal++ {
+			if ordinal&1023 == 0 {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+			}
+			if v.RowRefGenerations[ordinal] <= 0 || v.RowRefPartIDs[ordinal] <= 0 || v.RowRefAppliedLSNs[ordinal] <= 0 || v.RowRefRowIndexes[ordinal] < 0 {
+				return fmt.Errorf("collections: hnsw_search_pack_v1 invalid row-ref ordinal=%d", ordinal)
+			}
+			if uint64(v.RowRefGenerations[ordinal]) > v.Header.BaseManifestGeneration {
+				return fmt.Errorf("collections: hnsw_search_pack_v1 row-ref generation=%d exceeds base generation=%d", v.RowRefGenerations[ordinal], v.Header.BaseManifestGeneration)
 			}
 		}
-		if v.RowRefGenerations[ordinal] <= 0 || v.RowRefPartIDs[ordinal] <= 0 || v.RowRefAppliedLSNs[ordinal] <= 0 || v.RowRefRowIndexes[ordinal] < 0 {
-			return fmt.Errorf("collections: hnsw_search_pack_v1 invalid row-ref ordinal=%d", ordinal)
-		}
-		if uint64(v.RowRefGenerations[ordinal]) > v.Header.BaseManifestGeneration {
-			return fmt.Errorf("collections: hnsw_search_pack_v1 row-ref generation=%d exceeds base generation=%d", v.RowRefGenerations[ordinal], v.Header.BaseManifestGeneration)
-		}
 	}
+
 	docOffsetsSection, err := columnHNSWSearchPackRequireSection(v.Sections, columnHNSWSearchPackSectionDocumentIDOffsets, 0, rows+1, 8)
 	if err != nil {
 		return err
@@ -1563,7 +1579,11 @@ func (v *columnHNSWSearchPackPreparedView) validateTopologyLive() error {
 		return fmt.Errorf("collections: hnsw_search_pack_v1 prepared view invalid header rows/dims/stride=(%d,%d,%d)", v.Header.Rows, v.Header.Dimensions, v.Header.VectorStride)
 	}
 	rows := uint64(v.Header.Rows)
-	if v.levelChunks.length != rows || v.rowRefGenerationChunks.length != rows || v.rowRefPartIDChunks.length != rows || v.rowRefRowIndexChunks.length != rows || v.rowRefAppliedLSNChunks.length != rows || v.documentIDOffsetChunks.length != rows+1 {
+	rowRefs := rows
+	if v.Header.Version == columnHNSWSearchPackVersionV7 {
+		rowRefs = 0
+	}
+	if v.levelChunks.length != rows || v.rowRefGenerationChunks.length != rowRefs || v.rowRefPartIDChunks.length != rowRefs || v.rowRefRowIndexChunks.length != rowRefs || v.rowRefAppliedLSNChunks.length != rowRefs || v.documentIDOffsetChunks.length != rows+1 {
 		return fmt.Errorf("collections: hnsw_search_pack_v1 prepared view section lengths vectors=%d levels=%d rowrefs=(%d,%d,%d,%d) doc_offsets=%d rows=%d stride=%d", v.normalizedVectorChunks.length, v.levelChunks.length, v.rowRefGenerationChunks.length, v.rowRefPartIDChunks.length, v.rowRefRowIndexChunks.length, v.rowRefAppliedLSNChunks.length, v.documentIDOffsetChunks.length, v.Header.Rows, v.Header.VectorStride)
 	}
 	if len(v.AdjacencyLayers) != v.Header.AdjacencyLayerCount {

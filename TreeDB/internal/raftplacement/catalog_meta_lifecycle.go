@@ -797,6 +797,7 @@ func cloneVectorPartitionLifecycleRecordsV1(source map[VectorPartitionLifecycleI
 
 func cloneVectorPartitionLifecycleRecordV1(record VectorPartitionLifecycleRecordV1) VectorPartitionLifecycleRecordV1 {
 	record.SourceOwners = slices.Clone(record.SourceOwners)
+	record.ANNOwners = slices.Clone(record.ANNOwners)
 	record.RequiredGroups = slices.Clone(record.RequiredGroups)
 	record.ReadyGroups = slices.Clone(record.ReadyGroups)
 	record.CleanedGroups = slices.Clone(record.CleanedGroups)
@@ -806,7 +807,7 @@ func cloneVectorPartitionLifecycleRecordV1(record VectorPartitionLifecycleRecord
 func equalVectorPartitionLifecycleRecordV1(a, b VectorPartitionLifecycleRecordV1) bool {
 	return a.Format == b.Format && a.Revision == b.Revision && a.State == b.State && a.Identity == b.Identity &&
 		a.PreviousActiveGeneration == b.PreviousActiveGeneration && a.MutationEpoch == b.MutationEpoch &&
-		slices.Equal(a.SourceOwners, b.SourceOwners) && slices.Equal(a.RequiredGroups, b.RequiredGroups) && slices.Equal(a.ReadyGroups, b.ReadyGroups) &&
+		slices.Equal(a.SourceOwners, b.SourceOwners) && slices.Equal(a.ANNOwners, b.ANNOwners) && slices.Equal(a.RequiredGroups, b.RequiredGroups) && slices.Equal(a.ReadyGroups, b.ReadyGroups) &&
 		a.ReadySetDigest == b.ReadySetDigest && a.InvalidationReason == b.InvalidationReason &&
 		a.InvalidationEpoch == b.InvalidationEpoch && a.MutationConfirmed == b.MutationConfirmed &&
 		a.Aborted == b.Aborted && a.RetirementReason == b.RetirementReason &&

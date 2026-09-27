@@ -23,14 +23,7 @@ const (
 
 // VectorPartitionSourceRowIdentityV2 preserves semantic source provenance.
 // Ordinal is scoped to the exact shard snapshot, never to a global row array.
-type VectorPartitionSourceRowIdentityV2 struct {
-	SourceOwner      string
-	ShardID          string
-	SnapshotRevision uint64
-	SnapshotDigest   [sha256.Size]byte
-	Ordinal          uint64
-	DocumentRevision uint64
-}
+type VectorPartitionSourceRowIdentityV2 = source.ANNSourceRowIdentityV2
 
 // VectorPartitionDirectoryRecordV2 is one bounded leaf record. Source pages
 // contain snapshots; metadata pages contain domain members or graph assets.
