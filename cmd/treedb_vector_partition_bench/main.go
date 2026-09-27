@@ -576,6 +576,9 @@ func run(args []string, stdout io.Writer) error {
 	if len(args) > 0 && args[0] == "whole-collection-reference" {
 		return runM8WholeCollectionReferenceV1(args[1:], stdout)
 	}
+	if len(args) > 0 && args[0] == "physical-resources" {
+		return runM8PhysicalResourcesV1(args[1:], stdout)
+	}
 	if len(args) > 0 && args[0] == "serving-resources" {
 		return runM8ServingResourcesV1(args[1:], stdout)
 	}

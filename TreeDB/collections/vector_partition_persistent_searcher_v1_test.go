@@ -2156,6 +2156,7 @@ func TestVectorPartitionDomainPackMaterializesOneChunkedSearcherV1(t *testing.T)
 	if _, err := col.OpenVectorPartitionLocalSearcherForGenerationV1(def.Name, manifest.Generation, 1); !errors.Is(err, ErrVectorPartitionSearchUnavailable) {
 		t.Fatalf("non-anchor open err=%v", err)
 	}
+	assertVectorPartitionPhysicalResourcesV1(t, searcher)
 }
 
 func TestVectorPartitionDomainGraphRowCountsMatchServingMembershipsV1(t *testing.T) {
@@ -2484,6 +2485,8 @@ func TestVectorPartitionDomainPackSectionsOpenWithoutReassemblyV1(t *testing.T) 
 	if !crossed {
 		t.Fatal("chunked traversal did not follow a cross-chunk edge in the shared frontier")
 	}
+	chunkedSearcher.sectionChunks = uint64(len(payloads) - 1)
+	assertVectorPartitionPhysicalResourcesV1(t, chunkedSearcher)
 }
 
 func TestVectorPartitionDomainPackRejectsOneByteOversizeRecordV1(t *testing.T) {
