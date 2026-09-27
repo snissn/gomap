@@ -2129,29 +2129,53 @@ contract.
 
 # Vector partition owner-scoped search-plan verification
 
-The #4808 intermediate owner-plan path has separate metadata-retention and
-public-open checks. `TestVectorPartitionOwnerSearchOpenPlanDoesNotRetainRemoteMembershipsV2`
-requires one local membership despite remote memberships and verifies owned
-input lifetime. `TestVectorPartitionOwnerSearchOpenPlanPreservesColocatedDomainV2`
-covers complete domain chunks, home-wins normalization and split-owner refusal.
-`TestVectorPartitionOwnerSearchOpenPlanRefusesInvalidOwnerSelectionV2` covers
-unknown owners, invalid placement and cancellation.
+The schema-7 path uses a bounded root and immutable owner/domain directory
+pages. `TestVectorPartitionDirectoryPageV2OwnerSelectionAndRefusals` checks
+owner selection and missing, corrupt, misbound or incorrectly ordered pages;
+`TestVectorPartitionDirectoryPageV2StreamingWriterTails` covers bounded writer
+tails. The `TestVectorPartitionPagedRoot*V2` cases cover the 64 KiB root codec,
+mixed inline/paged refusal, identity/digest bindings, copied root lifetime,
+legacy runtime/reclaim refusal and count-independent root decode allocation.
 
-`TestOwnerGenerationSourceOpensOnlyBoundLocalDomainV2` reaches real collection
-assets through the public generation source and checks cold/warm authority and
-remote refusal. `TestOwnerGenerationSourceRejectsDifferentStoredRootV2` and
-`TestOwnerGenerationSourcePreservesColdSourceVerificationV2` cover root/source
-drift without a live-recovery exemption.
+`TestVectorPartitionPagedSourceSessionV2VerifiesCompletedOwner` exercises
+completed durable source imports, owner-bound source verification, source-only
+Stage, reopen and session lifetime. `TestANNOwnerCommitmentV2BindsExactCanonicalIntent`
+checks the semantic domain/member commitment independently of physical page
+layout. `TestVectorPartitionPagedGraphV2BuildStageReopen` exercises the combined
+source/ANN producer, exact retry, one colocated graph per domain, reopened local
+search and source provenance. `TestPrepareVectorPartitionSourcesV2UsesCompletedDurableOwnerImports`
+reaches these producers from the applied Raft BUILD identity and actual local
+hosting. Unsupported stable lifecycle namespace platforms must refuse before
+creating the store or retaining producer pins.
 
-`TestVectorPartitionOwnerSearchOpenPlanAllocationGrowthV2` and
-`BenchmarkVectorPartitionOwnerSearchOpenPlanV2` measure constructor allocations
-with fixed local data and increasing remote membership input. They exclude V1
-manifest acquisition/decoding and source opening, so they do not prove bounded
-public generation loading. Full #4808 acceptance still requires remote-page-read
-refusal and allocation-growth evidence through public load/open, shard-local
-source verification, resumable import/build, recovery and reachability coverage.
-The scoped `owner-local-metadata-qualification.yml` workflow records exact-head
-Go version, focused/race checks and constructor benchmark evidence.
+The source-only producer refuses nodes that also require local ANN output.
+The combined producer consumes source and ANN input once, verifies complete
+owner commitments, builds one bounded domain through the existing Vamana core,
+and stages the complete local closure. Local domain readers retain an
+independent generation pin after their parent source session closes. These
+checks do not admit distributed activation/search; those schema-7 paths remain
+refused pending the P3 contract. Destructive schema-7 generation retirement
+also remains refused before tombstone or lifecycle mutation.
+
+The older `TestVectorPartitionOwnerSearchOpenPlan*V2` and
+`TestOwnerGenerationSource*V2` cases retain intermediate owner-plan and legacy
+public-open coverage. Their constructor allocation benchmark excludes V1
+manifest acquisition/decoding and cannot establish bounded paged public open.
+Full #4808 acceptance requires complete public build/open growth and resource
+measurements, partial-build failure cleanup, snapshot/GC protection and
+current-head platform/race checks. The producer uses separate private segments
+for temporary intent and final output, with exact-identity cleanup for ordinary
+failures. It requires an active recovery-authoritative source directory before
+writing pages, so existing explicit column-asset GC can reclaim crash orphans.
+Repeated crashes without that maintenance can still accumulate disk usage.
+
+The `TestVectorPartitionPagedPrivateSegmentV2*` cases exercise process-crash
+orphan GC, rebound-child refusal, retained parent-sync debt, constructor failure
+recovery, changed frontiers and colliding write-lock stripes during shutdown.
+The combined graph case checks selected snapshot closure and active-reader GC
+protection, including corrupt transitive graph sections. Full cleanup and
+allocation validation remain pending; no P2 readiness or distributed capacity
+claim follows from codec or small-fixture success.
 
 `TestSourceShardMapDocumentTokenIdentityV2` pins exact-byte token vectors;
 `TestSourceShardMapBoundImmutableLookupV2` and
@@ -2162,13 +2186,10 @@ semantics and caller input lifetime. `BenchmarkSourceShardMapResolveDocumentIDV2
 measures the enabled token/lookup cost; map validation does not grant catalog
 authority or persist import progress.
 
-The draft `TestVectorPartitionPagedRoot*V2` cases cover the 64 KiB root codec,
-mixed inline/paged refusal, root/directory/source/placement digest bindings,
-copied root lifetime, legacy runtime/reclaim refusal and count-independent
-root decode allocation. `TestVectorPartitionLegacyByteCompatibilityProbeV2`
-uses only schema-6 APIs and the same fixture on the candidate and exact D0
-base; the hosted workflow compares binary, JSON, integrity and ready digests.
-These are format guards, not paged public-open or full P2 readiness evidence.
+`TestVectorPartitionLegacyByteCompatibilityProbeV2` uses only schema-6 APIs
+and the same fixture on the candidate and exact D0 base; the scoped owner-local
+workflow compares binary, JSON, integrity and ready digests. The workflow also
+records exact-head Go version, focused/race checks and constructor benchmarks.
 
 # Vector partition V1 correctness and approximation verification
 
@@ -2609,7 +2630,7 @@ truthful typed-exact route.
 This fixture lives with the final metadata child, not in a separate harness PR.
 
 
-Draft source-snapshot V2 checks in `internal/vectorpartition/source_snapshot*_v2_test.go` compare the bounded streaming Merkle accumulator with a separate small-fixture tree, exercise checkpoint resume at every chunk, reject changed identities, missing/reordered/duplicate rows, corrupt/truncated codec bytes and excessive row/ID lengths, preserve original-source ordinal provenance, and decode a bounded local chunk when the declared global source row count reaches uint64 maximum. The scoped owner-local workflow runs these tests repeatedly and under race instrumentation, and records chunk verification/decode allocations. These are codec checks only. The ordinary paged load, canonical source authority, atomic durable import, bounded build, reachability and node-local memory evidence required by #4808 remain open.
+Draft source-snapshot V2 checks in `internal/vectorpartition/source_snapshot*_v2_test.go` compare the bounded streaming Merkle accumulator with a separate small-fixture tree, exercise checkpoint resume at every chunk, reject changed identities, missing/reordered/duplicate rows, corrupt/truncated codec bytes and excessive row/ID lengths, preserve original-source ordinal provenance, and decode a bounded local chunk when the declared global source row count reaches uint64 maximum. The scoped owner-local workflow runs these tests repeatedly and under race instrumentation, and records chunk verification/decode allocations. These checks establish the source codec, not whole-path boundedness. Public import and paged producer coverage is mapped separately; whole-path memory, failure cleanup and performance acceptance remain required by #4808.
 ## Sparse catalog runtime
 
 | Invariant | Test / harness |
@@ -2632,10 +2653,10 @@ failure-domain, or horizontal-scaling qualification in #4805/#4250/#3983.
 Source-map V2 pure token/coverage/codec checks live in `internal/sourcepartition`; `raftplacement` separately checks every referenced group against its resolved catalog. `TestSourceShardMapCanonicalCodecAndPriorDigestV2` freezes the pre-extraction V2 digest and refuses unknown, duplicate, changed or noncanonical encoded content. Collection-side validation of a map is not publication or source-root authority.
 
 
-Draft `TestVectorPartitionSourceImportAtomicResumeAndReplayV2` exercises public typed source import, exact and changed retry, source ordinal order across sorted typed WAL payloads, checkpoint/reopen and source-root equality. `TestVectorPartitionSourceImportRejectsGapDuplicateAndWrongOwnerV2` covers nonowner/group refusal and durable cross-range exact-ID uniqueness. `TestVectorPartitionSourceImportPublicationBoundaryV2` injects before/after-publication failure to require rows/progress/receipt atomicity and unambiguous exact retry. `TestCollectionSourceImportPayloadV2` covers bounded payload sections, truncation, frame registry and allocation-free envelope validation. These candidate tests still require exact-head hosted success. Immutable chunk retention, canonical admission and owner-only public paged load/build remain open.
+Draft `TestVectorPartitionSourceImportAtomicResumeAndReplayV2` exercises public typed source import, exact and changed retry, source ordinal order across sorted typed WAL payloads, checkpoint/reopen and source-root equality. `TestVectorPartitionSourceImportRejectsGapDuplicateAndWrongOwnerV2` covers nonowner/group refusal and durable cross-range exact-ID uniqueness. `TestVectorPartitionSourceImportPublicationBoundaryV2` injects before/after-publication failure to require rows/progress/receipt atomicity and unambiguous exact retry. `TestCollectionSourceImportPayloadV2` covers bounded payload sections, truncation, frame registry and allocation-free envelope validation. The immutable source seal and paged source session consume this durable progress. Full acceptance still requires current-head hosted success and measured public owner-only build/open bounds.
 
 
-Draft incremental source-directory coverage adds `TestVectorPartitionSourceImportUsesIncrementalDirectoryV2` (actual public-path semantic red before implementation), `TestVectorPartitionSourceImportRetainsAuthenticatedBytesAfterCheckpointV2`, `TestVectorPartitionSourceImportBoundsBeforeWALV2`, `TestVectorPartitionSourceImportRefusesLegacyMutationBeforeWALV2`, and `TestCollectionSourceImportCompleteCommandBudgetV2`. Persistent proof nodes and SCL2 rows are compared with an independent complete test tree across partial/power-of-two shapes. `BenchmarkVectorPartitionSourceImportDirectoryV2` uses the same public import with 32 versus 1024 prior chunks, reports allocation and actual directory/fallback record reads, and must not be interpreted as EC2 qualification. Remote-page refusal, page/source lifecycle, canonical authority and complete public owner-load/build bounds remain open.
+Draft incremental source-directory coverage adds `TestVectorPartitionSourceImportUsesIncrementalDirectoryV2` (actual public-path semantic red before implementation), `TestVectorPartitionSourceImportRetainsAuthenticatedBytesAfterCheckpointV2`, `TestVectorPartitionSourceImportBoundsBeforeWALV2`, `TestVectorPartitionSourceImportRefusesLegacyMutationBeforeWALV2`, and `TestCollectionSourceImportCompleteCommandBudgetV2`. Persistent proof nodes and SCL2 rows are compared with an independent complete test tree across partial/power-of-two shapes. `BenchmarkVectorPartitionSourceImportDirectoryV2` uses the same public import with 32 versus 1024 prior chunks, reports allocation and actual directory/fallback record reads, and must not be interpreted as EC2 qualification. Directory reads alone do not establish whole-call resource bounds; public owner-load/build, source/graph lifetime and failure cleanup have separate gates.
 
 
 `TestVectorPartitionSourceImportRetainedSealAndGCV2` exercises a completed source reader held across another source revision, checkpoint, immutable seal reopen and destructive asset GC. The V2 lifecycle reader verifies the retained source directory before asset reclamation; platforms without stable relative namespaces refuse destructive GC while retaining reader/reopen coverage. `BenchmarkVectorPartitionSourceImportDirectoryV2` now reports source leaf bytes/rows, directory and fallback reads, selected DPM stream bytes/items, encoded dependency bytes and whole-call allocations. Existing logarithmic COW work and full retained dependency serialization must be analyzed separately; no constant whole-call or distributed readiness claim follows from constant directory reads.

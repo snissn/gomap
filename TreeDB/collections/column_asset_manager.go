@@ -883,7 +883,7 @@ func newNextColumnPhysicalAssetSegmentAppender(rootDir string, cfg ColumnStoreCo
 // fresh segment with O_EXCL while binding construction and final publication
 // authority to the exact parent and child handles. Unlike the append-session
 // constructor, this helper never falls back to an existing segment.
-func newNextColumnPhysicalAssetSegmentAppenderWithStableResources(rootDir string, cfg ColumnStoreConfig, registry *rootpublication.IdentityPinRegistry) (*columnPhysicalAssetSegmentAppender, error) {
+func newNextColumnPhysicalAssetSegmentAppenderWithStableResources(rootDir string, cfg ColumnStoreConfig, registry *rootpublication.IdentityPinRegistry, recoveryRetainers ...StableResourceCaptureRecoveryRetainer) (*columnPhysicalAssetSegmentAppender, error) {
 	if registry == nil {
 		return nil, errors.New("collections: stable fresh column physical asset allocation requires identity pin registry")
 	}
@@ -919,10 +919,16 @@ func newNextColumnPhysicalAssetSegmentAppenderWithStableResources(rootDir string
 		return nil, err
 	}
 	for {
-		appender, err := newColumnPhysicalAssetSegmentAppenderWithStableResources(rootDir, cfg, fileID, registry)
+		appender, err := newColumnPhysicalAssetSegmentAppenderWithStableResources(rootDir, cfg, fileID, registry, recoveryRetainers...)
 		if err == nil {
 			advanceColumnAssetSegmentFileIDCache(cleanSegmentDir, allocatorCache, fileID)
 			return appender, nil
+		}
+		if errors.Is(err, ErrRecoveryRequired) {
+			// A retained constructor still owns exact child rollback authority.
+			// Reserve its ID before another already-admitted producer allocates.
+			advanceColumnAssetSegmentFileIDCache(cleanSegmentDir, allocatorCache, fileID)
+			return nil, err
 		}
 		if !errors.Is(err, os.ErrExist) {
 			return nil, err
@@ -1267,7 +1273,7 @@ func (s *columnPhysicalAssetAppendSession) freshAppender() (*columnPhysicalAsset
 	if err := s.candidateAdmission.charge(0, 1); err != nil {
 		return nil, err
 	}
-	appender, err := newNextColumnPhysicalAssetSegmentAppenderWithStableResources(s.rootDir, s.cfg, s.stableRegistry)
+	appender, err := newNextColumnPhysicalAssetSegmentAppenderWithStableResources(s.rootDir, s.cfg, s.stableRegistry, s.stableRecoveryRetainer)
 	if err != nil {
 		return nil, err
 	}
@@ -1552,7 +1558,7 @@ func newColumnPhysicalAssetSegmentAppendWriterWithStableResourcesMode(rootDir st
 	return initializeColumnPhysicalAssetSegmentAppenderStableOpen(appender, parent, file, namespaceNeedsSync, created)
 }
 
-func newColumnPhysicalAssetSegmentAppenderWithStableResources(rootDir string, cfg ColumnStoreConfig, fileID uint32, registry *rootpublication.IdentityPinRegistry) (*columnPhysicalAssetSegmentAppender, error) {
+func newColumnPhysicalAssetSegmentAppenderWithStableResources(rootDir string, cfg ColumnStoreConfig, fileID uint32, registry *rootpublication.IdentityPinRegistry, recoveryRetainers ...StableResourceCaptureRecoveryRetainer) (*columnPhysicalAssetSegmentAppender, error) {
 	if registry == nil {
 		return nil, errors.New("collections: stable fresh column physical asset append requires identity pin registry")
 	}
@@ -1591,6 +1597,9 @@ func newColumnPhysicalAssetSegmentAppenderWithStableResources(rootDir string, cf
 		cfg: cfg, namespace: namespace, fileID: fileID, assetPath: assetPath,
 		lock: segmentLock, unlockLock: true, stableRegistry: registry,
 	}
+	if len(recoveryRetainers) != 0 {
+		appender.stableRecoveryRetainer = recoveryRetainers[0]
+	}
 	name := filepath.Base(assetPath)
 	file, err := rootpublication.OpenStableChildFile(parent, name, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
 	if err != nil {
@@ -1620,37 +1629,72 @@ func initializeColumnPhysicalAssetSegmentAppenderStableOpen(appender *columnPhys
 	appender.created = created
 	appender.stableParent = parent
 	appender.stableChildName = filepath.Base(appender.assetPath)
+	abort := appender.abort
+	if created && appender.stableRecoveryRetainer != nil {
+		// No caller has received this fresh output and no write has started.
+		// Reuse exact rollback, including unlink and parent-sync debt, before
+		// releasing construction authority. Legacy callers retain their GC path.
+		abort = func() error {
+			complete, rollbackErr := appender.rollbackStableAppend()
+			if complete {
+				return errors.Join(rollbackErr, appender.releaseStableRollbackRecoveryAuthority())
+			}
+			retainErr := appender.stableRecoveryRetainer.RetainStableResourceCaptureRecovery(func() error {
+				// Close waits for admitted producers before running recovery. A
+				// retained hashed stripe could block such a producer indefinitely.
+				// Reacquire without waiting; another retained hook may own it.
+				if !appender.stableRollbackUnlinked {
+					if !appender.lock.TryLock() {
+						return errors.Join(ErrRecoveryRequired, appender.releaseStableRollbackRecoveryAuthority())
+					}
+					appender.unlockLock = true
+				}
+				complete, rollbackErr := appender.rollbackStableAppend()
+				if complete {
+					rollbackErr = nil
+				}
+				return errors.Join(rollbackErr, appender.releaseStableRollbackRecoveryAuthority())
+			})
+			if retainErr == nil {
+				appender.stableRecoveryRetained = true
+				appender.releaseLock()
+			} else {
+				retainErr = errors.Join(retainErr, appender.releaseStableRollbackRecoveryAuthority())
+			}
+			return errors.Join(rollbackErr, retainErr, ErrRecoveryRequired)
+		}
+	}
 	if created {
 		if err := durabilitycut.EmitNamespace(durabilitycut.NamespaceCreate, durabilitycut.ResourceAuxiliary, appender.namespace.SegmentDir, "", appender.assetPath); err != nil {
-			return nil, errors.Join(err, appender.abort())
+			return nil, errors.Join(err, abort())
 		}
 	}
 	var err error
 	appender.stableParentIdentity, err = rootpublication.StableIdentityFromFile(parent)
 	if err != nil {
-		return nil, errors.Join(err, appender.abort())
+		return nil, errors.Join(err, abort())
 	}
 	appender.stableChildIdentity, err = rootpublication.StableIdentityFromFile(file)
 	if err != nil {
-		return nil, errors.Join(err, appender.abort())
+		return nil, errors.Join(err, abort())
 	}
 	if hook := columnAssetStableBeforeObserveHook(); hook != nil {
 		hook(parent, file, appender.stableChildName)
 	}
 	if err := appender.stableRegistry.Observe(appender.stableChildIdentity); err != nil {
-		return nil, errors.Join(err, appender.abort())
+		return nil, errors.Join(err, abort())
 	}
 	appender.stableConstructionObserved = true
 	appender.stableConstructionPin, err = appender.stableRegistry.Pin(appender.stableChildIdentity)
 	if err != nil {
-		return nil, errors.Join(err, appender.abort())
+		return nil, errors.Join(err, abort())
 	}
 	if err := rootpublication.ValidateStableChildLink(parent, file, appender.stableChildName); err != nil {
-		return nil, errors.Join(err, appender.abort())
+		return nil, errors.Join(err, abort())
 	}
 	offset, err := file.Seek(0, io.SeekEnd)
 	if err != nil {
-		return nil, errors.Join(err, appender.abort())
+		return nil, errors.Join(err, abort())
 	}
 	appender.offset = offset
 	appender.appendStart = offset
@@ -1660,7 +1704,7 @@ func initializeColumnPhysicalAssetSegmentAppenderStableOpen(appender *columnPhys
 	if !created && namespaceNeedsSync {
 		known, knownErr := appender.stableRegistry.StableNamespaceLinkKnown(parent, file, appender.stableChildName)
 		if knownErr != nil {
-			return nil, errors.Join(knownErr, appender.abort())
+			return nil, errors.Join(knownErr, abort())
 		}
 		namespaceNeedsSync = !known
 	}

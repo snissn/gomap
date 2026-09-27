@@ -200,6 +200,21 @@ identity before ordinal-only traversal can return source-scoped results.
 Legacy publication, distributed activation/search, router and reclaim APIs
 continue to refuse schema 7. A decoded root or local Stage is not READY or
 distributed activation evidence.
+
+A local build allocates at most two fresh private asset segments: temporary
+ANN intent and final reachable output. Each bounded append syncs and releases
+its producer authority. Intent readers close and the exact temporary segment
+is removed before Stage. Ordinary failed/canceled builds remove unpublished
+segments by captured parent/child identity and exact frontier; unresolved
+rollback or publication outcomes retain authority and block further publication
+until recovery. An installed-root retry repeats the idempotent lifecycle sync
+before returning success. Process-crash leftovers are canonical unreferenced
+segments reclaimed by explicit existing column-asset GC after reopen; build does
+not run a hidden global GC. Repeated process crashes require this maintenance
+and are not an automatic bounded-disk retry guarantee. Generic maintenance still
+materializes the transitive reference closure; bounded build/open and local
+failure cleanup do not invoke that path.
+
 Schema-6 encoding and hashes remain unchanged; its nil `PagedRootV2` JSON
 field is omitted. Old binaries refuse schema 7 at their version check.
 
@@ -3488,14 +3503,14 @@ The fixed 2252-byte `TCD2` header retains generation, row/part counts, local app
 
 `SCL2` retains a bounded immutable source leaf before whole-snapshot sealing. Its row framing is shared with `SCK2`, but it carries the leaf digest and no serving proof. It cannot be decoded as an authenticated serving chunk. Source bytes are split into 2048-byte B-tree records, with a bounded length/digest record and immutable subtree hashes keyed by level and index. Existing COW-root reachability protects these records; they are not a separate filesystem sidecar. Snapshot readers reconstruct only the requested leaf and at most 64 sibling hashes, then verify actual IDs, revisions and FP32 bytes against the caller's independently admitted snapshot root. Import completion, durable retry and checkpoint reopen do not confer catalog authority by themselves.
 
-The existing stable-resource append certification protects prior physical assets. Its exact full-manifest fallback remains visible in import diagnostics; any use defeats a bounded per-import metadata claim and requires further qualification. Complete page/source lifecycle qualification, canonical source-root admission, public owner-only paged ANN loading/building and schema7 runtime admission remain unfinished in draft #4816 / #4808.
+The existing stable-resource append certification protects prior physical assets. Its exact full-manifest fallback remains visible in import diagnostics; any use defeats a bounded per-import metadata claim and requires further qualification. Draft #4816 / #4808 now derives completed owner inputs through production preparation, binds their semantic commitments in catalog BUILD, and supports local paged source/ANN build, atomic Stage and prepared domain open. End-to-end performance and growth qualification, failure-cleanup coverage and current-head hosted checks remain gates. Distributed schema7 activation/search and destructive generation retirement remain explicitly refused.
 
 
 At import completion, `SIS2` stores the completed snapshot digest, directory generation and semantic directory root (76 bytes) in that same system-root publication. A source reader validates the immutable seal against the retained historical directory header; later imports cannot substitute their current root for the original completion binding. This is a local commitment, not source-group authority.
 
 The directory retains one bounded active-segment ownership witness. Appends reuse an existing segment only through the existing retained-resource selector and exact parent/child identity/frontier checks; segments rotate at the existing 16 MiB limit. This reduces physical-file churn without changing pin, WAL or replay authority. The V2 GC consumer reads only asset-reference prefixes, validates complete header part/row coverage, and uses the existing recoverable-root, replay and deletion guards. Discovery refuses beyond one million asset metadata records or 64 MiB (or tighter caller bounds) before deletion. Immutable source bytes/proof pages remain protected by COW root snapshots. Legacy scan/build APIs remain refused.
 
-Public import diagnostics count actual directory reads, fallback reads, source rows/leaf bytes/proof-node writes and command payload bytes. Constant directory reads do not imply constant total storage work: the existing DPM V1 durable dependency stream includes retained logical obligations. The public benchmark reports selected stream bytes/items and encoding work as well as allocations; this retained dependency growth remains an unresolved scale requirement.
+Public import diagnostics count actual directory reads, fallback reads, source rows/leaf bytes/proof-node writes and command payload bytes. Constant directory reads do not imply constant total storage work: DPM V1 still serializes retained logical obligations, while the opt-in DPM2 path updates a COW dependency directory. Public benchmarks distinguish changed directory key/value bytes and COW pages from total encoding/validation work, allocations and retained memory. Passing the changed-byte/page bounds alone does not establish the remaining end-to-end performance and growth gates.
 
 #### Prepared source input in the catalog BUILD record
 

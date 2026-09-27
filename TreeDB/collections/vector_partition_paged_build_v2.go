@@ -55,12 +55,18 @@ func (c *Collection) buildAndStageVectorPartitionProjectionV2(ctx context.Contex
 		return VectorPartitionManifestV1{}, err
 	}
 	var result VectorPartitionManifestV1
-	err := WithVectorPartitionStorageBarrierWithContextV1(ctx, c.db.Dir(), func() error {
+	err := WithVectorPartitionStorageBarrierWithContextV1(ctx, c.db.Dir(), func() (buildErr error) {
 		unlock := c.lockMutation()
 		defer unlock.Unlock()
 		cfg := c.meta.Options.ColumnStore
 		if cfg == nil || cfg.AssetManager == nil {
 			return errors.New("collections: paged projection requires typed asset storage")
+		}
+		// Completed source imports establish the manifest used by ordinary
+		// orphan GC after a process crash. Refuse before creating any output
+		// when that recovery authority has not been materialized.
+		if cfg.ActiveManifest == nil || cfg.ActiveManifest.Format != columnSourceDirectoryFormatV2 || cfg.RecoveryAuthoritativeManifest == nil || !columnManifestIdentityValueEqual(*cfg.ActiveManifest, *cfg.RecoveryAuthoritativeManifest) {
+			return errors.New("collections: paged projection requires active source directory manifest")
 		}
 		def, err := c.vectorPartitionRouterDefinitionV1(input.IndexName)
 		if err != nil {
@@ -100,6 +106,10 @@ func (c *Collection) buildAndStageVectorPartitionProjectionV2(ctx context.Contex
 			if err := verify(existing); err != nil {
 				return err
 			}
+			// Retry must complete the idempotent lifecycle namespace sync too.
+			if err := store.persistVerifiedVectorPartitionManifestLifecycleModeV1(existing, false); err != nil {
+				return err
+			}
 			result = existing
 			return nil
 		}
@@ -108,29 +118,68 @@ func (c *Collection) buildAndStageVectorPartitionProjectionV2(ctx context.Contex
 		}
 		root := &VectorPartitionPagedRootV2{SourceMapEpoch: input.SourceMapEpoch, SourceMapDigest: input.SourceMapDigest, SourceSnapshotSetDigest: input.SnapshotSetDigest, GraphProfileDigest: input.GraphProfileDigest, PlacementDigest: input.PlacementDigest, SourceOwners: slices.Clone(input.LocalSourceOwners)}
 		var pages uint64
-
-		appendAsset := func(raw []byte, part uint64) (VectorPartitionAssetV1, error) {
+		var output, intentSegment vectorPartitionPrivateSegmentV2
+		var stageAttempted, staged bool
+		registry := c.db.StableResourceIdentityPinRegistry()
+		storageRoot := c.db.Dir()
+		cleanup := func() error {
+			intentErr := intentSegment.remove(registry)
+			if staged {
+				return intentErr
+			}
+			if stageAttempted {
+				bound, boundErr := store.openDir()
+				if boundErr != nil {
+					return errors.Join(intentErr, boundErr)
+				}
+				installed, openErr := store.OpenWithContext(context.Background(), input.Collection, input.IndexName, input.Generation)
+				boundErr = errors.Join(store.verifyBoundDirV1(bound), bound.Close())
+				if boundErr != nil {
+					return errors.Join(intentErr, boundErr)
+				}
+				if openErr == nil {
+					if !vectorPartitionManifestCanonicalEqualV1(installed, result) {
+						return errors.Join(intentErr, fmt.Errorf("%w: ambiguous projection authority", ErrVectorPartitionManifestInvalid))
+					}
+					return intentErr // Installed roots retain output, even before namespace sync.
+				}
+				if !os.IsNotExist(openErr) {
+					return errors.Join(intentErr, openErr)
+				}
+			}
+			return errors.Join(intentErr, output.remove(registry))
+		}
+		defer func() {
+			if cleanupErr := cleanup(); cleanupErr != nil {
+				// Unresolved cleanup blocks another build in this DB lifetime.
+				// Teardown uses captured filesystem authority only, and never waits
+				// for a builder holding the barrier while seeking DB admission.
+				retainErr := lease.RetainStableResourceCaptureRecovery(func() error {
+					unlock, ok := tryVectorPartitionStorageBarrier(storageRoot)
+					if !ok {
+						return ErrRecoveryRequired
+					}
+					defer unlock()
+					return cleanup()
+				})
+				buildErr = errors.Join(buildErr, cleanupErr, retainErr, ErrRecoveryRequired)
+			}
+		}()
+		appendPrivate := func(segment *vectorPartitionPrivateSegmentV2, raw []byte, part uint64) (VectorPartitionAssetV1, error) {
 			if err := ctx.Err(); err != nil {
 				return VectorPartitionAssetV1{}, err
 			}
-			refs, resources, err := AppendColumnPhysicalAssetsWithStableResources(c.db.ColumnAssetRootDir(), *cfg, columnAssetM12ASegmentFileID, []StableColumnPhysicalAssetAppend{{Payload: raw, Kind: ColumnAssetKindTCS1HNSWSearchPack, Generation: input.Generation, PartID: part}}, c.db.StableResourceIdentityPinRegistry(), lease)
+			ref, err := segment.append(c, input.Generation, part, raw, lease)
 			if err != nil {
 				return VectorPartitionAssetV1{}, err
 			}
-			if resources == nil {
-				return VectorPartitionAssetV1{}, errors.New("collections: missing projection producer authority")
-			}
-			defer resources.Release()
-			if len(refs) != 1 {
-				return VectorPartitionAssetV1{}, errors.New("collections: projection append count")
-			}
-			if err := resources.SyncThrough(); err != nil {
-				return VectorPartitionAssetV1{}, err
-			}
 			sum := sha256.Sum256(raw)
-			return VectorPartitionAssetV1{Ref: refs[0], Bytes: uint64(len(raw)), Checksum: hex.EncodeToString(sum[:])}, nil
+			return VectorPartitionAssetV1{Ref: ref, Bytes: uint64(len(raw)), Checksum: hex.EncodeToString(sum[:])}, nil
 		}
-		emit := func(p VectorPartitionDirectoryPageV2) (VectorPartitionAssetV1, error) {
+		appendAsset := func(raw []byte, part uint64) (VectorPartitionAssetV1, error) {
+			return appendPrivate(&output, raw, part)
+		}
+		emitTo := func(segment *vectorPartitionPrivateSegmentV2, p VectorPartitionDirectoryPageV2) (VectorPartitionAssetV1, error) {
 			raw, err := EncodeVectorPartitionDirectoryPageV2(p)
 			if err != nil {
 				return VectorPartitionAssetV1{}, err
@@ -138,9 +187,12 @@ func (c *Collection) buildAndStageVectorPartitionProjectionV2(ctx context.Contex
 			pages++
 			// The existing opaque physical kind also carries router payloads. VDP2
 			// decoding, exact length, checksum, namespace and generation govern pages.
-			a, err := appendAsset(raw, pages)
+			a, err := appendPrivate(segment, raw, pages)
 			a.ID = fmt.Sprintf("directory-page-%d", pages)
 			return a, err
+		}
+		emit := func(p VectorPartitionDirectoryPageV2) (VectorPartitionAssetV1, error) {
+			return emitTo(&output, p)
 		}
 
 		root.SourceShardDirectory, err = writeVectorPartitionDirectoryV2(ctx, "source", input.Generation, func(visit func(VectorPartitionDirectoryRecordV2) error) error {
@@ -188,7 +240,9 @@ func (c *Collection) buildAndStageVectorPartitionProjectionV2(ctx context.Contex
 					}
 					return visit(VectorPartitionDirectoryRecordV2{Owner: group, DomainID: uint64(domain), Member: &record.Member.Source, MembershipKind: record.Member.Kind})
 				})
-			}, emit)
+			}, func(p VectorPartitionDirectoryPageV2) (VectorPartitionAssetV1, error) {
+				return emitTo(&intentSegment, p)
+			})
 			if err != nil {
 				return err
 			}
@@ -213,7 +267,15 @@ func (c *Collection) buildAndStageVectorPartitionProjectionV2(ctx context.Contex
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		return store.persistVerifiedVectorPartitionManifestLifecycleModeV1(result, false)
+		// Intent readers are closed once the final immutable directory is built.
+		// Remove their private segment before any lifecycle authority can install.
+		if err := intentSegment.remove(registry); err != nil {
+			return err
+		}
+		stageAttempted = true
+		err = store.persistVerifiedVectorPartitionManifestLifecycleModeV1(result, false)
+		staged = err == nil
+		return err
 	})
 	if err != nil {
 		return VectorPartitionManifestV1{}, err

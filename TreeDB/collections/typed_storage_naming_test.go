@@ -338,6 +338,7 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	{path: "TreeDB/collections/vector_partition_paged_domain_v2.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
 	{path: "TreeDB/collections/vector_partition_paged_graph_build_v2_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
 	{path: "TreeDB/collections/vector_partition_paged_build_v2.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
+	{path: "TreeDB/collections/vector_partition_paged_append_v2.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
 	{path: "TreeDB/nativewire/vector_partition_source_preparation_v2_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 5},
 	{path: "TreeDB/collections/vector_partition_paged_source_session_v2_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
 	// Source directories and import/reader paths use the retained public

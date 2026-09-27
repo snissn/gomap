@@ -6,6 +6,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"os"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -13,6 +15,7 @@ import (
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
 	"github.com/snissn/gomap/TreeDB/internal/raftplacement"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	source "github.com/snissn/gomap/TreeDB/internal/vectorpartition"
 )
 
@@ -169,31 +172,45 @@ func TestPrepareVectorPartitionSourcesV2UsesCompletedDurableOwnerImports(t *test
 				}
 				identity = record.Identity
 				appliedAuthority = harness.LeaderAuthority()
+				beforeStagePins := d.StableResourceIdentityPinRegistry().ActivePins()
 				staged, err := BuildAndStagePreparedVectorPartitionSourceV2(t.Context(), appliedAuthority, identity, "node-a", ownership, []VectorPartitionOwnerSourceInputV2{owner})
-				if err != nil {
-					t.Fatal(err)
-				}
-				if staged.State != "building" || staged.PagedRootV2.LocalSourceShardCount != 1 || len(staged.PagedRootV2.ANNOwners) != 0 {
-					t.Fatalf("source-only stage=%+v", staged)
-				}
-				if _, err := BuildAndStagePreparedVectorPartitionSourceV2(t.Context(), appliedAuthority, identity, "node-b", ownership, []VectorPartitionOwnerSourceInputV2{owner}); err == nil {
-					t.Fatal("ANN-only node staged partial source projection")
-				}
+				if runtime.GOOS != "linux" { // VCP1 anonymous exact-handle install is Linux-only.
+					if !errors.Is(err, rootpublication.ErrNamespacePersistenceUnsupported) {
+						t.Fatalf("unsupported namespace stage: %v", err)
+					}
+					if _, openErr := collections.OpenExistingVectorPartitionStoreV1(d.Dir()); !errors.Is(openErr, os.ErrNotExist) {
+						t.Fatalf("refused stage created lifecycle namespace: %v", openErr)
+					}
+					if got := d.StableResourceIdentityPinRegistry().ActivePins(); got != beforeStagePins {
+						t.Fatalf("refused stage changed physical pins: got=%d want=%d", got, beforeStagePins)
+					}
+					appliedAuthority = nil // No local stage exists to reopen below.
+				} else {
+					if err != nil {
+						t.Fatal(err)
+					}
+					if staged.State != "building" || staged.PagedRootV2.LocalSourceShardCount != 1 || len(staged.PagedRootV2.ANNOwners) != 0 {
+						t.Fatalf("source-only stage=%+v", staged)
+					}
+					if _, err := BuildAndStagePreparedVectorPartitionSourceV2(t.Context(), appliedAuthority, identity, "node-b", ownership, []VectorPartitionOwnerSourceInputV2{owner}); err == nil {
+						t.Fatal("ANN-only node staged partial source projection")
+					}
 
-				combinedIdentity = identity
-				combinedIdentity.Generation++
-				combinedIdentity.SourceV2.GraphProfileDigest = collections.VectorPartitionGraphProfileDigestV2()
-				combinedRecord, err := BeginPreparedVectorPartitionBuildV2(t.Context(), harness.LifecycleCoordinator(), combinedIdentity, ownership, []VectorPartitionOwnerSourceInputV2{owner}, []VectorPartitionOwnerANNInputV2{annOwner}, []raftcluster.GroupID{"group-b"}, 0, 1)
-				if err != nil {
-					t.Fatal(err)
-				}
-				combinedIdentity = combinedRecord.Identity
-				combined, err := BuildAndStagePreparedVectorPartitionV2(t.Context(), appliedAuthority, combinedIdentity, "node-b", ownership, []VectorPartitionOwnerSourceInputV2{owner}, []VectorPartitionOwnerANNInputV2{annOwner})
-				if err != nil {
-					t.Fatal(err)
-				}
-				if combined.PagedRootV2.LocalDomainCount != 1 || combined.PagedRootV2.LocalMembershipCount != 1 || len(combined.PagedRootV2.SourceOwners) != 1 || len(combined.PagedRootV2.ANNOwners) != 1 {
-					t.Fatalf("combined projection: %+v", combined.PagedRootV2)
+					combinedIdentity = identity
+					combinedIdentity.Generation++
+					combinedIdentity.SourceV2.GraphProfileDigest = collections.VectorPartitionGraphProfileDigestV2()
+					combinedRecord, err := BeginPreparedVectorPartitionBuildV2(t.Context(), harness.LifecycleCoordinator(), combinedIdentity, ownership, []VectorPartitionOwnerSourceInputV2{owner}, []VectorPartitionOwnerANNInputV2{annOwner}, []raftcluster.GroupID{"group-b"}, 0, 1)
+					if err != nil {
+						t.Fatal(err)
+					}
+					combinedIdentity = combinedRecord.Identity
+					combined, err := BuildAndStagePreparedVectorPartitionV2(t.Context(), appliedAuthority, combinedIdentity, "node-b", ownership, []VectorPartitionOwnerSourceInputV2{owner}, []VectorPartitionOwnerANNInputV2{annOwner})
+					if err != nil {
+						t.Fatal(err)
+					}
+					if combined.PagedRootV2.LocalDomainCount != 1 || combined.PagedRootV2.LocalMembershipCount != 1 || len(combined.PagedRootV2.SourceOwners) != 1 || len(combined.PagedRootV2.ANNOwners) != 1 {
+						t.Fatalf("combined projection: %+v", combined.PagedRootV2)
+					}
 				}
 
 			}

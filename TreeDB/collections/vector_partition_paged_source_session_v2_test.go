@@ -4,11 +4,13 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
 	"testing"
 
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	source "github.com/snissn/gomap/TreeDB/internal/vectorpartition"
 )
 
@@ -101,9 +103,22 @@ func TestVectorPartitionPagedSourceSessionV2VerifiesCompletedOwner(t *testing.T)
 		t.Fatal("released session admitted")
 	}
 	identity.DocumentRevision--
+	beforeStagePins := d.StableResourceIdentityPinRegistry().ActivePins()
 	staged, err := c.BuildAndStageVectorPartitionSourceProjectionV2(t.Context(), prepared, ownership, func(_ context.Context, visit func(string, VectorPartitionSourceSnapshotV2) error) error {
 		return visit("group-a", progress.Snapshot)
 	})
+	if !vpmNamespacePersistenceSupported() {
+		if !errors.Is(err, rootpublication.ErrNamespacePersistenceUnsupported) {
+			t.Fatalf("unsupported namespace stage: %v", err)
+		}
+		if _, openErr := OpenExistingVectorPartitionStoreV1(d.Dir()); !errors.Is(openErr, os.ErrNotExist) {
+			t.Fatalf("refused stage created lifecycle namespace: %v", openErr)
+		}
+		if got := d.StableResourceIdentityPinRegistry().ActivePins(); got != beforeStagePins {
+			t.Fatalf("refused stage changed physical pins: got=%d want=%d", got, beforeStagePins)
+		}
+		return
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
