@@ -46,7 +46,11 @@ func CloneStableResourceForSelector(source *StableResourceSet, selector StableRe
 		source.mu.Unlock()
 		return nil, ErrUnresolvedResource
 	}
-	obligation, found := findStableLogicalObligationIndex(entry.logicalObligations.index, selector.Obligation, nil)
+	obligation, found, lookupErr := entry.logicalObligations.lookup(selector.Obligation, nil)
+	if lookupErr != nil {
+		source.mu.Unlock()
+		return nil, lookupErr
+	}
 	if !found {
 		source.mu.Unlock()
 		return nil, ErrUnresolvedResource

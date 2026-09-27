@@ -442,19 +442,22 @@ type StableResourceToken struct {
 	digest             [32]byte
 	reachability       ReachabilityField
 	logicalObligations []StableLogicalObligation
-	stability          ResourceStability
-	namespace          *StableNamespaceToken
-	pinned             *os.File
-	pinnedRefs         *atomic.Int64
-	flush              resourceOperation
-	sync               resourceOperation
-	syncedFrontier     DurableFrontier
-	hasSyncedFrontier  bool
-	onRelease          func()
-	identityPin        *IdentityPin
-	owner              atomic.Uint32
-	released           atomic.Bool
-	metrics            resourceTokenMetrics
+	// directory pins the exact index generation/root backing this token's
+	// logical view. It never retains a predecessor resource set or token.
+	directory         *DependencyDirectoryV2
+	stability         ResourceStability
+	namespace         *StableNamespaceToken
+	pinned            *os.File
+	pinnedRefs        *atomic.Int64
+	flush             resourceOperation
+	sync              resourceOperation
+	syncedFrontier    DurableFrontier
+	hasSyncedFrontier bool
+	onRelease         func()
+	identityPin       *IdentityPin
+	owner             atomic.Uint32
+	released          atomic.Bool
+	metrics           resourceTokenMetrics
 }
 
 func NewStableResourceToken(spec StableResourceSpec) (*StableResourceToken, error) {
@@ -581,6 +584,10 @@ func newStableResourceToken(spec StableResourceSpec, normalized []StableLogicalO
 // cloneSharedPinned retains immutable state and its actual content certificate
 // without re-opening, re-statting, or certifying a larger requested frontier.
 func (token *StableResourceToken) cloneSharedPinned(logicalLane, resourceID, diagnosticPath string, frontier DurableFrontier, reachability ReachabilityField, logicalObligations []StableLogicalObligation, onRelease func()) (*StableResourceToken, error) {
+	return token.cloneSharedPinnedDirectory(logicalLane, resourceID, diagnosticPath, frontier, reachability, logicalObligations, token.directory, onRelease)
+}
+
+func (token *StableResourceToken) cloneSharedPinnedDirectory(logicalLane, resourceID, diagnosticPath string, frontier DurableFrontier, reachability ReachabilityField, logicalObligations []StableLogicalObligation, directory *DependencyDirectoryV2, onRelease func()) (*StableResourceToken, error) {
 	if err := token.retainPinned(); err != nil {
 		return nil, err
 	}
@@ -590,6 +597,16 @@ func (token *StableResourceToken) cloneSharedPinned(logicalLane, resourceID, dia
 			token.releasePinnedReference()
 		}
 	}()
+	if directory != nil {
+		if err := directory.Retain(); err != nil {
+			return nil, err
+		}
+		defer func() {
+			if retainedPinned {
+				directory.Release()
+			}
+		}()
+	}
 	var identityPin *IdentityPin
 	if token.identityPin != nil {
 		var err error
@@ -613,6 +630,7 @@ func (token *StableResourceToken) cloneSharedPinned(logicalLane, resourceID, dia
 		generation: token.generation, diagnosticPath: diagnosticPath,
 		identity: token.identity, frontier: cloneDurableFrontier(frontier), digest: token.digest,
 		reachability: reachability, logicalObligations: stableLogicalObligationList(logicalObligations),
+		directory: directory,
 		stability: token.stability, namespace: token.namespace, pinned: token.pinned, pinnedRefs: token.pinnedRefs,
 		flush: token.flush, sync: token.sync,
 		syncedFrontier: cloneDurableFrontier(token.syncedFrontier), hasSyncedFrontier: token.hasSyncedFrontier,
@@ -774,6 +792,9 @@ func (token *StableResourceToken) releasePinned() {
 		token.namespace.release()
 	}
 	token.identityPin.Release()
+	if token.directory != nil {
+		token.directory.Release()
+	}
 	if token.onRelease != nil {
 		token.onRelease()
 	}

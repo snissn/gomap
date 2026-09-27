@@ -119,6 +119,7 @@ type stableResourceKindView struct {
 	logical                *stableResourceLogicalIndexNode
 	physical               *stableResourcePhysicalIndexNode
 	logicalMembership      *stableLogicalObligationIndexNode
+	directory              *DependencyDirectoryV2
 	reachability           map[ReachabilityField]struct{}
 	logicalCommitments     map[ReachabilityField]stableLogicalObligationCommitment
 	logicalObligationCount int
@@ -131,18 +132,24 @@ type stableResourceKindView struct {
 // physical resource roots.
 type stableLogicalMembershipEvidence struct {
 	root                   *stableLogicalObligationIndexNode
+	directory              *DependencyDirectoryV2
 	commitments            map[ReachabilityField]stableLogicalObligationCommitment
 	logicalMembershipCount int
 	logicalObligationCount int
 }
 
 func stableLogicalMembershipEvidenceComplete(evidence stableLogicalMembershipEvidence) bool {
-	return evidence.logicalMembershipCount == evidence.logicalObligationCount && (evidence.root != nil || evidence.logicalMembershipCount == 0)
+	// Flat union evidence cannot borrow a directory without its owner index.
+	if evidence.directory != nil {
+		return false
+	}
+	return evidence.logicalMembershipCount == evidence.logicalObligationCount && (evidence.directory != nil || evidence.root != nil || evidence.logicalMembershipCount == 0)
 }
 
 func stableLogicalMembershipEvidenceFromKindView(view stableResourceKindView) stableLogicalMembershipEvidence {
 	return stableLogicalMembershipEvidence{
 		root:                   view.logicalMembership,
+		directory:              view.directory,
 		commitments:            view.logicalCommitments,
 		logicalMembershipCount: view.logicalMembershipCount,
 		logicalObligationCount: view.logicalObligationCount,
@@ -416,6 +423,16 @@ func buildStableResourceKindViews(entries []stableResourceEntry) (map[ResourceKi
 		return nil, nil
 	}
 	views := make(map[ResourceKind]stableResourceKindView)
+	directories := make(map[ResourceKind]*DependencyDirectoryV2)
+	for i := range entries {
+		entry := &entries[i]
+		if directory := entry.logicalObligations.directory; directory != nil {
+			if prior := directories[entry.token.kind]; prior != nil && prior != directory {
+				return nil, ErrResourceConflict
+			}
+			directories[entry.token.kind] = directory
+		}
+	}
 	transferred := make([]*StableResourceToken, 0, len(entries))
 	for i := range entries {
 		if err := entries[i].token.transfer(ResourceOwnerBuilder, ResourceOwnerShared); err != nil {
@@ -441,14 +458,21 @@ func buildStableResourceKindViews(entries []stableResourceEntry) (map[ResourceKi
 			entry := &chunk[i]
 			view.logical = insertFreshStableResourceLogical(view.logical, entry)
 			view.physical = insertFreshStableResourcePhysical(view.physical, entry)
-			entry.logicalObligations.rangeValues(func(obligation StableLogicalObligation) bool {
-				var admitted bool
-				view.logicalMembership, admitted = insertFreshStableLogicalMembership(view.logicalMembership, obligation)
-				if admitted {
-					view.logicalMembershipCount++
-				}
-				return true
-			})
+			if directory := entry.logicalObligations.directory; directory != nil {
+				view.directory = directory
+				// Directory counts were admitted while constructing this exact
+				// root. Retain summaries, never rebuild its membership treap.
+				view.logicalMembershipCount += entry.logicalObligations.count
+			} else {
+				entry.logicalObligations.rangeValues(func(obligation StableLogicalObligation) bool {
+					var admitted bool
+					view.logicalMembership, admitted = insertFreshStableLogicalMembership(view.logicalMembership, obligation)
+					if admitted {
+						view.logicalMembershipCount++
+					}
+					return true
+				})
+			}
 			view.logicalCommitments = addStableLogicalObligationCommitments(view.logicalCommitments, entry.logicalObligations.commitments)
 			view.logicalObligationCount += entry.logicalObligations.count
 			for field := range entry.reachability {
@@ -550,14 +574,14 @@ func stableResourceViewsConflict(target map[ResourceKind]stableResourceKindView,
 }
 
 func stableResourceViewLogicalMembershipComplete(view stableResourceKindView) bool {
-	return view.logicalMembershipCount == view.logicalObligationCount && (view.logicalMembership != nil || view.logicalMembershipCount == 0)
+	return view.logicalMembershipCount == view.logicalObligationCount && (view.directory != nil || view.logicalMembership != nil || view.logicalMembershipCount == 0)
 }
 
 // stableResourceViewsAdmitLogicalObligations proves that entry adds no logical
 // obligation already owned by another resource. A same-physical predecessor
 // may repeat its own obligations; every kind is still probed so overlap cannot
 // hide behind a different resource kind.
-func stableResourceViewsAdmitLogicalObligations(views map[ResourceKind]stableResourceKindView, entry, predecessor *stableResourceEntry, excluded map[ResourceKind]struct{}, work *StableResourceClosureWork) (bool, bool) {
+func stableResourceViewsAdmitLogicalObligations(views map[ResourceKind]stableResourceKindView, entry, predecessor *stableResourceEntry, excluded map[ResourceKind]struct{}, work *StableResourceClosureWork) (bool, bool, error) {
 	kinds := stableResourceKindsSorted(views)
 	var predecessorKind ResourceKind
 	if predecessor != nil {
@@ -567,21 +591,30 @@ func stableResourceViewsAdmitLogicalObligations(views map[ResourceKind]stableRes
 	}
 	for kind, view := range views {
 		if _, skip := excluded[kind]; !skip && !stableResourceViewLogicalMembershipComplete(view) {
-			return false, false
+			return false, false, nil
 		}
 	}
 	admissible := true
-	entry.logicalObligations.rangeValues(func(obligation StableLogicalObligation) bool {
+	var lookupErr error
+	walkErr := entry.logicalObligations.walk(func(obligation StableLogicalObligation) bool {
 		for _, kind := range kinds {
 			if _, skip := excluded[kind]; skip {
 				continue
 			}
-			existing, found := findStableLogicalObligationIndex(views[kind].logicalMembership, obligation, work)
+			existing, found, err := lookupStableLogicalMembershipV2(views[kind].logicalMembership, views[kind].directory, views[kind].logical, kind, obligation, work)
+			if err != nil {
+				lookupErr = err
+				return false
+			}
 			if !found {
 				continue
 			}
 			if predecessor != nil && predecessorKind == kind {
-				owned, ownedByPredecessor := findStableLogicalObligationIndex(predecessor.logicalObligations.index, obligation, nil)
+				owned, ownedByPredecessor, err := predecessor.logicalObligations.lookup(obligation, nil)
+				if err != nil {
+					lookupErr = err
+					return false
+				}
 				if ownedByPredecessor && owned == existing && existing == obligation {
 					continue
 				}
@@ -591,12 +624,18 @@ func stableResourceViewsAdmitLogicalObligations(views map[ResourceKind]stableRes
 		}
 		return true
 	})
-	return admissible, true
+	if walkErr != nil {
+		return false, true, walkErr
+	}
+	if lookupErr != nil {
+		return false, true, lookupErr
+	}
+	return admissible, true, nil
 }
 
-func stableLogicalMembershipEvidenceAdmits(evidence map[ResourceKind]stableLogicalMembershipEvidence, sourceKinds map[ResourceKind]uint64, entry, predecessor *stableResourceEntry, excluded map[ResourceKind]struct{}, work *StableResourceClosureWork) (bool, bool) {
+func stableLogicalMembershipEvidenceAdmits(evidence map[ResourceKind]stableLogicalMembershipEvidence, sourceKinds map[ResourceKind]uint64, entry, predecessor *stableResourceEntry, excluded map[ResourceKind]struct{}, work *StableResourceClosureWork) (bool, bool, error) {
 	if len(sourceKinds) == 0 {
-		return false, false
+		return false, false, nil
 	}
 	var predecessorKind ResourceKind
 	if predecessor != nil {
@@ -611,23 +650,32 @@ func stableLogicalMembershipEvidenceAdmits(evidence map[ResourceKind]stableLogic
 		}
 		candidate, exists := evidence[kind]
 		if !exists {
-			return false, false
+			return false, false, nil
 		}
 		if !stableLogicalMembershipEvidenceComplete(candidate) {
-			return false, false
+			return false, false, nil
 		}
 		kinds = append(kinds, kind)
 	}
 	sort.Slice(kinds, func(i, j int) bool { return kinds[i] < kinds[j] })
 	admissible := true
-	entry.logicalObligations.rangeValues(func(obligation StableLogicalObligation) bool {
+	var lookupErr error
+	walkErr := entry.logicalObligations.walk(func(obligation StableLogicalObligation) bool {
 		for _, kind := range kinds {
-			existing, found := findStableLogicalObligationIndex(evidence[kind].root, obligation, work)
+			existing, found, err := lookupStableLogicalMembershipV2(evidence[kind].root, evidence[kind].directory, nil, kind, obligation, work)
+			if err != nil {
+				lookupErr = err
+				return false
+			}
 			if !found {
 				continue
 			}
 			if predecessor != nil && predecessorKind == kind {
-				owned, ownedByPredecessor := findStableLogicalObligationIndex(predecessor.logicalObligations.index, obligation, nil)
+				owned, ownedByPredecessor, err := predecessor.logicalObligations.lookup(obligation, nil)
+				if err != nil {
+					lookupErr = err
+					return false
+				}
 				if ownedByPredecessor && owned == existing && existing == obligation {
 					continue
 				}
@@ -637,7 +685,13 @@ func stableLogicalMembershipEvidenceAdmits(evidence map[ResourceKind]stableLogic
 		}
 		return true
 	})
-	return admissible, true
+	if walkErr != nil {
+		return false, true, walkErr
+	}
+	if lookupErr != nil {
+		return false, true, lookupErr
+	}
+	return admissible, true, nil
 }
 
 // mergeDistinctStableResourceKindViews consumes both input root references on
@@ -651,6 +705,11 @@ func mergeDistinctStableResourceKindViews(target, incoming map[ResourceKind]stab
 		return target, true
 	}
 	compatible := true
+	for kind, child := range incoming {
+		if current, ok := target[kind]; ok && current.directory != nil && child.directory != nil && current.directory != child.directory {
+			return nil, false
+		}
+	}
 	rangeStableResourceKindViews(incoming, func(entry *stableResourceEntry) bool {
 		compatible = !stableResourceViewsConflict(target, entry)
 		return compatible
@@ -671,9 +730,17 @@ func mergeDistinctStableResourceKindViews(target, incoming map[ResourceKind]stab
 		logical, physical := current.logical, current.physical
 		logicalMembership := current.logicalMembership
 		logicalMembershipCount := current.logicalMembershipCount
+		directory := current.directory
+		if directory == nil {
+			directory = child.directory
+		}
 		rangeStableResourceLogicalIndex(child.logical, func(entry *stableResourceEntry) bool {
 			logical = insertStableResourceLogical(logical, entry)
 			physical = insertStableResourcePhysical(physical, entry)
+			if entry.logicalObligations.directory != nil {
+				logicalMembershipCount += entry.logicalObligations.count
+				return true
+			}
 			entry.logicalObligations.rangeValues(func(obligation StableLogicalObligation) bool {
 				var admitted bool
 				logicalMembership, admitted = insertStableLogicalMembership(logicalMembership, obligation, work)
@@ -696,6 +763,7 @@ func mergeDistinctStableResourceKindViews(target, incoming map[ResourceKind]stab
 			logical:                logical,
 			physical:               physical,
 			logicalMembership:      logicalMembership,
+			directory:              directory,
 			reachability:           reachability,
 			logicalCommitments:     addStableLogicalObligationCommitments(current.logicalCommitments, child.logicalCommitments),
 			logicalObligationCount: current.logicalObligationCount + child.logicalObligationCount,
