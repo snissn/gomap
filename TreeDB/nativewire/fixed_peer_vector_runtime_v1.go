@@ -327,6 +327,7 @@ func openFixedPeerVectorRuntimeV1(parent *FixedPeerTCPRuntimeV1) (*fixedPeerVect
 		return nil, err
 	}
 	runtime.server = NewServer(ServerOptions{VectorPartitionOperations: ops, VectorPartitionNodeConfigSHA256: parent.client.digest, ConnectionIdleTimeout: parent.config.RequestTimeout})
+	runtime.server.vectorPartitionDraining = parent.draining.Load
 	runtime.server.registry = registry
 	return runtime, nil
 }

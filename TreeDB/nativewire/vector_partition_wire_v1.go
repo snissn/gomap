@@ -249,6 +249,9 @@ func (s *Server) handleVectorPartitionCommandV1(ctx context.Context, state *conn
 	if s.vectorPartitionOperations == nil || !s.vectorPartitionOperations.Enabled() {
 		return nil, protocolError(iwire.ErrConsistencyUnavailable, "vector partition operations are unavailable")
 	}
+	if s.vectorPartitionDraining != nil && s.vectorPartitionDraining() {
+		return nil, protocolError(iwire.ErrConsistencyUnavailable, "vector partition operations are draining")
+	}
 	deadline, err := deadlineUnixNanosFromSections(cmd.Known)
 	if err != nil {
 		return nil, err

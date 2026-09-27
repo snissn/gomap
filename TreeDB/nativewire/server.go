@@ -127,6 +127,7 @@ type Server struct {
 	clusterReadCoordinator          ClusterReadCoordinator
 	vectorPartitionOperations       *public.OperationsV1
 	vectorPartitionNodeConfigSHA256 string
+	vectorPartitionDraining         func() bool
 	connectionIdleTimeout           time.Duration
 	documentService                 *documentservice.Service
 	catalogVersion                  atomic.Uint64

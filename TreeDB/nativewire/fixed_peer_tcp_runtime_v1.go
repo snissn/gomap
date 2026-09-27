@@ -855,7 +855,10 @@ func (r *FixedPeerTCPRuntimeV1) serve(w http.ResponseWriter, request *http.Reque
 			}
 		}
 	}
-	if r.draining.Load() && (request.URL.Path == "/v1/submit" || request.URL.Path == "/v1/forward" || request.URL.Path == "/v1/catalog-publish") {
+	// Vector control forwards have no authenticated continuation token in the
+	// fixed-peer vector mode. A cross-node forward arriving after owner drain
+	// must fail closed even if its public ingress began before the drain.
+	if r.draining.Load() && (request.URL.Path == "/v1/submit" || request.URL.Path == "/v1/forward" || request.URL.Path == "/v1/catalog-publish" || request.URL.Path == "/v1/vector-forward" || request.URL.Path == "/v1/vector-lifecycle") {
 		err = raftcluster.ErrAdmissionUnavailable
 		return
 	}

@@ -4,12 +4,16 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"math"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -33,6 +37,80 @@ type fixedPeerVectorReadyFixtureV1 struct {
 	configs              []FixedPeerTCPConfigV1
 	processes            []*fixedPeerTestProcessV1
 	client               *FixedPeerTCPClientV1
+}
+
+func TestFixedPeerVectorDrainRefusesFreshPublicAndControlWorkV1(t *testing.T) {
+	runtime := &FixedPeerTCPRuntimeV1{client: &FixedPeerTCPClientV1{digest: "drain-test"}}
+	started, release := make(chan struct{}), make(chan struct{})
+	defer func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	}()
+	var once sync.Once
+	service, err := public.NewServiceV1(new(vectorPartitionWireInsertBackendV1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := public.ConservativeOperationsConfigV1()
+	config.Enabled = true
+	operations, err := public.NewOperationsV1(service, config, func(context.Context) (public.OperationsHealthV1, error) {
+		once.Do(func() { close(started) })
+		<-release
+		return public.OperationsHealthV1{Ready: true}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(ServerOptions{VectorPartitionOperations: operations})
+	server.vectorPartitionDraining = runtime.draining.Load
+	defer server.Close()
+	client, _, err := NewInProcessClient(t.Context(), server)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	inFlight := make(chan error, 1)
+	go func() {
+		_, err := client.VectorStatusV1(ctx)
+		inFlight <- err
+	}()
+	select {
+	case <-started:
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	runtime.BeginDrainV1()
+	close(release)
+	if err := <-inFlight; err != nil {
+		t.Fatalf("already admitted public operation: %v", err)
+	}
+	if _, err := client.VectorStatusV1(ctx); err == nil {
+		t.Fatal("fresh public status was admitted during drain")
+	}
+	request := public.InsertRequestV1{
+		Version: 1, Generation: public.GenerationIDV1{Index: "embedding", Generation: 1},
+		IdempotencyKey: []byte("fresh-drain-attempt"), ID: []byte("fresh-drain-doc"), Vector: []float32{1},
+		Document: []byte(`{"embedding":[1]}`), Deadline: time.Now().Add(time.Second),
+	}
+	if _, err := client.VectorInsertV1(ctx, request); err == nil {
+		t.Fatal("fresh public insert was admitted during drain")
+	}
+	for _, path := range []string{"/v1/vector-forward", "/v1/vector-lifecycle"} {
+		recorder := httptest.NewRecorder()
+		runtime.serve(recorder, httptest.NewRequest(http.MethodPost, path, nil))
+		var reply fixedPeerReplyV1
+		if err := json.Unmarshal(recorder.Body.Bytes(), &reply); err != nil {
+			t.Fatal(err)
+		}
+		if reply.ErrorCode != raftcluster.ErrAdmissionUnavailable.Error() {
+			t.Fatalf("fresh control request %s during drain: %+v", path, reply)
+		}
+	}
 }
 
 func TestFixedPeerVectorSubmitErrorMarksCommittedResultAmbiguousV1(t *testing.T) {
