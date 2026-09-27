@@ -993,15 +993,20 @@ func hashicorpRaftLogEntryError(err error) error {
 }
 
 func (f hashicorpRaftFSM) Snapshot() (hraft.FSMSnapshot, error) {
-	exporter, ok := f.applier.(RaftSnapshotExporterV1)
-	if !ok {
+	var snapshot RaftSnapshotV1
+	var err error
+	if capturer, ok := f.applier.(RaftSnapshotCapturerV1); ok {
+		snapshot, err = capturer.CaptureRaftSnapshotV1()
+	} else if exporter, ok := f.applier.(RaftSnapshotExporterV1); ok {
+		snapshot, err = exporter.ExportRaftSnapshotV1()
+	} else {
 		return nil, ErrRaftSnapshotUnsupported
 	}
-	snapshot, err := exporter.ExportRaftSnapshotV1()
 	if err != nil {
 		return nil, err
 	}
-	if err := snapshot.Validate(); err != nil {
+	if err := snapshot.validateCapturedV1(); err != nil {
+		_ = snapshot.Release()
 		return nil, err
 	}
 	return hashicorpRaftSnapshotV1{snapshot: snapshot}, nil
@@ -1027,6 +1032,12 @@ func (s hashicorpRaftSnapshotV1) Persist(sink hraft.SnapshotSink) error {
 	if sink == nil {
 		return ErrInvalidSnapshotManifest
 	}
+	ready, err := s.snapshot.Materialize()
+	if err != nil {
+		_ = sink.Cancel()
+		return err
+	}
+	s.snapshot = ready
 	if err := s.snapshot.Validate(); err != nil {
 		_ = sink.Cancel()
 		return err

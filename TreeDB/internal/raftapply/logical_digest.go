@@ -40,6 +40,17 @@ func LogicalDigestV1ForDB(db *backenddb.DB, opts LogicalDigestOptionsV1) (Logica
 	return logicalDigestV1ForCollectionManager(collections.NewCommandWALReplayCollectionManager(db), opts)
 }
 
+// LogicalDigestV1ForSnapshotDB hashes an immutable staged snapshot with bounded
+// document-ID memory. Its primary-key iterator is ordered; a count pass followed
+// by a hash pass preserves the V1 count-before-record encoding. The caller must
+// prevent writes for both passes (production uses a staged read-only DB).
+func LogicalDigestV1ForSnapshotDB(db *backenddb.DB, opts LogicalDigestOptionsV1) (LogicalDigestV1, error) {
+	if db == nil {
+		return LogicalDigestV1{}, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "raftapply: nil snapshot DB")
+	}
+	return logicalDigestV1ForCollectionManagerMode(collections.NewCommandWALReplayCollectionManager(db), opts, true)
+}
+
 func (h *Harness) logicalDigestV1(opts LogicalDigestOptionsV1) (LogicalDigestV1, error) {
 	if h != nil && h.logicalDigestV1Fn != nil {
 		return h.logicalDigestV1Fn(opts)
@@ -52,6 +63,10 @@ func (h *Harness) logicalDigestV1(opts LogicalDigestOptionsV1) (LogicalDigestV1,
 }
 
 func logicalDigestV1ForCollectionManager(manager *collections.CollectionManager, opts LogicalDigestOptionsV1) (LogicalDigestV1, error) {
+	return logicalDigestV1ForCollectionManagerMode(manager, opts, false)
+}
+
+func logicalDigestV1ForCollectionManagerMode(manager *collections.CollectionManager, opts LogicalDigestOptionsV1, orderedSnapshot bool) (LogicalDigestV1, error) {
 	if manager == nil {
 		return LogicalDigestV1{}, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "raftapply: nil collection manager cannot compute logical digest")
 	}
@@ -94,9 +109,13 @@ func logicalDigestV1ForCollectionManager(manager *collections.CollectionManager,
 		if err != nil {
 			return LogicalDigestV1{}, codeCollectionApplyError(err)
 		}
-		ids := make([][]byte, 0)
+		var ids [][]byte
+		var count uint64
 		truncated, err := collection.ScanDocumentIDsFunc(maxInt(), func(id []byte) (bool, error) {
-			ids = append(ids, id)
+			count++
+			if !orderedSnapshot {
+				ids = append(ids, id)
+			}
 			return true, nil
 		})
 		if err != nil {
@@ -112,26 +131,42 @@ func logicalDigestV1ForCollectionManager(manager *collections.CollectionManager,
 		if err != nil {
 			return LogicalDigestV1{}, codeCollectionApplyError(err)
 		}
-		writeLogicalDigestU64(h, "collection-document-count", uint64(len(ids)))
+		writeLogicalDigestU64(h, "collection-document-count", count)
 		var documentScratch []byte
-		for _, id := range ids {
+		var hashed uint64
+		hashDocument := func(id []byte) (bool, error) {
+			hashed++
 			document, found, err := collection.GetInto(id, documentScratch[:0])
 			if err != nil {
-				_ = materializer.Close()
-				return LogicalDigestV1{}, codeCollectionApplyError(err)
+				return false, codeCollectionApplyError(err)
 			}
 			if !found {
-				_ = materializer.Close()
-				return LogicalDigestV1{}, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "raftapply: logical digest document %q disappeared from %q", string(id), meta.Name)
+				return false, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "raftapply: logical digest document %q disappeared from %q", string(id), meta.Name)
 			}
 			documentScratch = document
 			jsonDoc, err := materializer.StoredDocumentJSON(document)
 			if err != nil {
-				_ = materializer.Close()
-				return LogicalDigestV1{}, codeCollectionApplyError(err)
+				return false, codeCollectionApplyError(err)
 			}
 			writeLogicalDigestField(h, "collection-document-id", id)
 			writeLogicalDigestField(h, "collection-document-json", jsonDoc)
+			return true, nil
+		}
+		if orderedSnapshot {
+			truncated, err = collection.ScanDocumentIDsFunc(maxInt(), hashDocument)
+		} else {
+			for _, id := range ids {
+				if _, err = hashDocument(id); err != nil {
+					break
+				}
+			}
+		}
+		if err != nil || truncated || hashed != count {
+			_ = materializer.Close()
+			if err != nil {
+				return LogicalDigestV1{}, codeCollectionApplyError(err)
+			}
+			return LogicalDigestV1{}, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "raftapply: snapshot document count changed or truncated")
 		}
 		if err := materializer.Close(); err != nil {
 			return LogicalDigestV1{}, codeCollectionApplyError(err)

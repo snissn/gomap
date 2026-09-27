@@ -9,6 +9,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/snissn/gomap/TreeDB/internal/lockfile"
 )
 
 type physicalCutPausedWriterV1 struct {
@@ -57,6 +59,20 @@ func TestPhysicalSnapshotCutV1PreservesBothSlotsAcrossReuseAndClose(t *testing.T
 				t.Fatal(err)
 			}
 			defer cut.Close()
+			second, err := database.CapturePhysicalSnapshotCutV1(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer second.Close()
+			assertWriterBlocked := func() {
+				reopened, err := Open(Options{Dir: dir, DisableSideStores: true})
+				if reopened != nil {
+					_ = reopened.Close()
+				}
+				if !errors.Is(err, lockfile.ErrLocked) {
+					t.Fatalf("writer admitted while cut owns directory: %v", err)
+				}
+			}
 			for slot, record := range records {
 				if err := validateDurableRootLineageV1(&snapshotIndexPageStoreV1{file: cut.file, pageCount: cut.generation.HighWater()}, record); err != nil {
 					t.Fatalf("source slot %d already invalid before deferred copy: %v", slot, err)
@@ -104,6 +120,7 @@ func TestPhysicalSnapshotCutV1PreservesBothSlotsAcrossReuseAndClose(t *testing.T
 			if err := database.Close(); err != nil {
 				t.Fatal(err)
 			}
+			assertWriterBlocked()
 			unblock()
 			if err := <-done; err != nil {
 				t.Fatal(err)
@@ -114,6 +131,7 @@ func TestPhysicalSnapshotCutV1PreservesBothSlotsAcrossReuseAndClose(t *testing.T
 			if err := cut.Close(); err != nil {
 				t.Fatal(err)
 			}
+			assertWriterBlocked()
 			if err := RebindDurableRootSnapshotV1(destination); err != nil {
 				t.Fatal(err)
 			}
@@ -138,6 +156,16 @@ func TestPhysicalSnapshotCutV1PreservesBothSlotsAcrossReuseAndClose(t *testing.T
 				if err := restored.Close(); err != nil {
 					t.Fatal(err)
 				}
+			}
+			if err := second.Close(); err != nil {
+				t.Fatal(err)
+			}
+			reopened, err := Open(Options{Dir: dir, DisableSideStores: true})
+			if err != nil {
+				t.Fatalf("writer refused after last cut: %v", err)
+			}
+			if err := reopened.Close(); err != nil {
+				t.Fatal(err)
 			}
 		})
 	}
@@ -193,5 +221,17 @@ func TestPhysicalSnapshotCutV1RefusesInvalidSourceParent(t *testing.T) {
 	}
 	if database.stableIndexCaptures.Load() != 0 {
 		t.Fatal("failed cut leaked stable index lease")
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// The corrupt source need not reopen; its directory ownership must still
+	// be released after a failed capture.
+	lock, err := lockfile.Acquire(filepath.Join(dir, "LOCK"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := lock.Close(); err != nil {
+		t.Fatal(err)
 	}
 }

@@ -192,6 +192,7 @@ type RaftSnapshotV1 struct {
 	Manifest    SnapshotManifestV1
 	Payload     []byte
 	ArchivePath string
+	deferred    *deferredRaftSnapshotV1
 }
 
 func (s RaftSnapshotV1) Clone() RaftSnapshotV1 {
@@ -200,6 +201,10 @@ func (s RaftSnapshotV1) Clone() RaftSnapshotV1 {
 }
 
 func (s RaftSnapshotV1) Validate() error {
+	if s.deferred != nil {
+		_, err := s.Materialize()
+		return err
+	}
 	if err := s.Manifest.Validate(s.Manifest.Scope); err != nil {
 		return err
 	}
@@ -228,6 +233,13 @@ func (s RaftSnapshotV1) Validate() error {
 }
 
 func (s RaftSnapshotV1) OpenArchive() (io.ReadCloser, error) {
+	if s.deferred != nil {
+		ready, err := s.Materialize()
+		if err != nil {
+			return nil, err
+		}
+		return ready.OpenArchive()
+	}
 	if len(s.Payload) != 0 && s.ArchivePath != "" {
 		return nil, fmt.Errorf("%w: snapshot has both payload and archive path", ErrInvalidSnapshotManifest)
 	}
@@ -245,6 +257,9 @@ func (s RaftSnapshotV1) OpenArchive() (io.ReadCloser, error) {
 }
 
 func (s RaftSnapshotV1) Release() error {
+	if s.deferred != nil {
+		return s.deferred.close()
+	}
 	if s.ArchivePath == "" {
 		return nil
 	}

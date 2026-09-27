@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"github.com/snissn/gomap/TreeDB/freelist"
+	"github.com/snissn/gomap/TreeDB/internal/lockfile"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -18,19 +19,21 @@ import (
 // reusable pages after capture. The stable-index lease delays online vacuum;
 // ordinary writes and root publication can continue.
 //
-// The separately opened index handle remains readable through DB.Close. The
+// The separately opened index handle remains readable through DB.Close. A retained
+// directory lock prevents a new writer from reusing pages after the source closes. The
 // caller must also capture the exact external dependency files before releasing
 // its higher-level storage barrier; this object exports only index.db.
 type PhysicalSnapshotCutV1 struct {
-	mu         sync.Mutex
-	file       *os.File
-	roots      *RecoverableRootSet
-	generation *freelist.FreelistGenerationV1
-	meta       [2][page.PageSize]byte
-	parentIDs  [2]uint64
-	parents    [2][page.PageSize]byte
-	oldest     uint64
-	state      StateToken
+	mu            sync.Mutex
+	file          *os.File
+	directoryLock *lockfile.Lock
+	roots         *RecoverableRootSet
+	generation    *freelist.FreelistGenerationV1
+	meta          [2][page.PageSize]byte
+	parentIDs     [2]uint64
+	parents       [2][page.PageSize]byte
+	oldest        uint64
+	state         StateToken
 }
 
 // CapturePhysicalSnapshotCutV1 requires a completed checkpoint and refuses any
@@ -88,7 +91,11 @@ func (db *DB) CapturePhysicalSnapshotCutV1(ctx context.Context) (*PhysicalSnapsh
 	if err != nil {
 		return nil, err
 	}
-	cut := &PhysicalSnapshotCutV1{roots: roots, generation: generation, oldest: oldest, state: roots.visible}
+	directoryLock, err := db.lock.Retain()
+	if err != nil {
+		return nil, fmt.Errorf("physical snapshot directory ownership: %w", err)
+	}
+	cut := &PhysicalSnapshotCutV1{roots: roots, generation: generation, oldest: oldest, state: roots.visible, directoryLock: directoryLock}
 	err = roots.idx.pager.WithStableResourceFile(func(source *os.File) error {
 		info, err := source.Stat()
 		if err != nil {
@@ -131,7 +138,7 @@ func (db *DB) CapturePhysicalSnapshotCutV1(ctx context.Context) (*PhysicalSnapsh
 		if cut.file != nil {
 			err = errors.Join(err, cut.file.Close())
 		}
-		return nil, err
+		return nil, errors.Join(err, directoryLock.Close())
 	}
 	owned = true
 	return cut, nil
@@ -200,5 +207,7 @@ func (cut *PhysicalSnapshotCutV1) Close() error {
 	cut.file = nil
 	cut.roots.Release()
 	cut.roots = nil
+	err = errors.Join(err, cut.directoryLock.Close())
+	cut.directoryLock = nil
 	return err
 }
