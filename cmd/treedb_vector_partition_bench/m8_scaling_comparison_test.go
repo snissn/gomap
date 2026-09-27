@@ -211,7 +211,7 @@ func main() {
 	if err != nil {
 		t.Fatal(err)
 	}
-	binary := filepath.Join(root, "producer")
+	binary := filepath.Join(root, "producer.exe")
 	build := exec.Command("go", "build", "-buildvcs=true", "-o", binary, ".")
 	build.Dir = source
 	if out, err := build.CombinedOutput(); err != nil {
