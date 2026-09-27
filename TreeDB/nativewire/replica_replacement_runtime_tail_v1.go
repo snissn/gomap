@@ -11,13 +11,13 @@ import (
 )
 
 func replacementHasEnrollmentV1(phase raftplacement.ReplicaReplacementPhaseV1) bool {
-	return phase == raftplacement.ReplicaReplacementAddIntentV1 || phase == raftplacement.ReplicaReplacementPromoteIntentV1 || phase == raftplacement.ReplicaReplacementPromotedV1
+	return phase == raftplacement.ReplicaReplacementAddIntentV1 || phase == raftplacement.ReplicaReplacementPromoteIntentV1 || phase == raftplacement.ReplicaReplacementPromotedV1 || phase == raftplacement.ReplicaReplacementRemoveIntentV1 || phase == raftplacement.ReplicaReplacementRemovedV1 || phase == raftplacement.ReplicaReplacementCompletedV1
 }
 
 // Every original voter is retained in this milestone. No unrelated membership
 // transition, changed address, or unexpected extra voter can reconcile as ours.
-func (r *FixedPeerTCPRuntimeV1) validateReplacementMembershipV1(command raftplacement.ReplicaReplacementBeginV1, configuration raftcluster.CommittedRaftConfigurationV1) (bool, error) {
-	group, err := r.validateReplacementBeginV1(command)
+func (r *FixedPeerTCPRuntimeV1) validateReplacementMembershipV1(state raftplacement.ReplicaReplacementStateV1, configuration raftcluster.CommittedRaftConfigurationV1) (bool, error) {
+	group, err := r.replacementGroupV1(state, true)
 	if err != nil {
 		return false, err
 	}
@@ -31,11 +31,11 @@ func (r *FixedPeerTCPRuntimeV1) validateReplacementMembershipV1(command raftplac
 			if member.ID != peer.ID {
 				continue
 			}
-			if member.Address != peer.Address || peer.ID != command.NewPeer.ID && !member.Voter {
+			if member.Address != peer.Address || peer.ID != state.Begin.NewPeer.ID && !member.Voter {
 				return false, raftcluster.ErrInvalidConfig
 			}
 			found = true
-			if peer.ID == command.NewPeer.ID {
+			if peer.ID == state.Begin.NewPeer.ID {
 				targetVoter = member.Voter
 			}
 		}
@@ -63,7 +63,7 @@ func (r *FixedPeerTCPRuntimeV1) replacementTailV1(ctx context.Context, command r
 	if err != nil {
 		return tail, err
 	}
-	voter, err := r.validateReplacementMembershipV1(command, configuration)
+	voter, err := r.validateReplacementMembershipV1(state, configuration)
 	if err != nil || voter {
 		return tail, errors.Join(err, raftcluster.ErrAdmissionUnavailable)
 	}
@@ -155,7 +155,7 @@ func (r *FixedPeerTCPRuntimeV1) replacementPromotionIntentV1(ctx context.Context
 	if state.Phase != raftplacement.ReplicaReplacementAddIntentV1 {
 		return raftcluster.ErrAdmissionUnavailable
 	}
-	group, err := r.validateReplacementBeginV1(command)
+	group, err := r.replacementGroupV1(state, true)
 	if err != nil {
 		return err
 	}
@@ -203,7 +203,7 @@ func (r *FixedPeerTCPRuntimeV1) promoteReplacementV1(ctx context.Context, comman
 	if err != nil {
 		return err
 	}
-	voter, err := r.validateReplacementMembershipV1(command, configuration)
+	voter, err := r.validateReplacementMembershipV1(state, configuration)
 	if err != nil {
 		return err
 	}
@@ -230,7 +230,7 @@ func (r *FixedPeerTCPRuntimeV1) promoteReplacementV1(ctx context.Context, comman
 	if err != nil {
 		return err
 	}
-	voter, err = r.validateReplacementMembershipV1(command, promoted)
+	voter, err = r.validateReplacementMembershipV1(state, promoted)
 	if err != nil || !voter {
 		return errors.Join(err, raftcluster.ErrReadBarrierNotSatisfied)
 	}
@@ -252,7 +252,7 @@ func (r *FixedPeerTCPRuntimeV1) completeReplacementPromotionV1(ctx context.Conte
 	if state.Phase != raftplacement.ReplicaReplacementPromoteIntentV1 && state.Phase != raftplacement.ReplicaReplacementPromotedV1 {
 		return raftcluster.ErrAdmissionUnavailable
 	}
-	group, err := r.validateReplacementBeginV1(command)
+	group, err := r.replacementGroupV1(state, true)
 	if err != nil {
 		return err
 	}
@@ -271,7 +271,7 @@ func (r *FixedPeerTCPRuntimeV1) completeReplacementPromotionV1(ctx context.Conte
 	if observed.Membership == nil {
 		return raftcluster.ErrReadBarrierNotSatisfied
 	}
-	voter, err := r.validateReplacementMembershipV1(command, *observed.Membership)
+	voter, err := r.validateReplacementMembershipV1(state, *observed.Membership)
 	if err != nil || !voter {
 		return errors.Join(err, raftcluster.ErrReadBarrierNotSatisfied)
 	}
@@ -316,6 +316,10 @@ func (c *FixedPeerTCPClientV1) PromoteReplicaReplacementV1(ctx context.Context, 
 	}
 	if group.ID == "" {
 		return raftcluster.CommittedRaftConfigurationV1{}, raftcluster.ErrRouteTargetUnknown
+	}
+	group, err = replacementGroupPeersV1(group, *read.ReplacementState, false)
+	if err != nil {
+		return raftcluster.CommittedRaftConfigurationV1{}, err
 	}
 	if err := c.prepareReplacementPeersV1(ctx, group, command, raw); err != nil {
 		return raftcluster.CommittedRaftConfigurationV1{}, err

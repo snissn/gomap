@@ -431,6 +431,15 @@ func OpenFixedPeerTCPRuntimeV1(config FixedPeerTCPConfigV1) (*FixedPeerTCPRuntim
 		}
 		listen, hosted := r.config.RaftListen[g.ID]
 		if !hosted {
+			if i > 0 {
+				marker, err := r.captureUnopenedReplacementReceiverV1(g.ID)
+				if err != nil {
+					return fail(err)
+				}
+				if marker != nil {
+					r.data[g.ID] = marker
+				}
+			}
 			continue
 		}
 		var advertised string
@@ -762,7 +771,21 @@ type fixedPeerRemoteSubmitterV1 struct {
 }
 
 func (s fixedPeerRemoteSubmitterV1) SubmitCommandEntryV1(ctx context.Context, entry []byte, metadata raftentry.RequestMetadataV1) (raftcluster.SubmitResultV1, error) {
-	leader, err := s.runtime.client.leader(ctx, s.group)
+	// The dispatcher has already fenced these exact route members. Reuse that
+	// bounded identity set; a second catalog RPC on every write is unnecessary.
+	if !metadata.ClusterRouteKnown || metadata.ClusterRouteGroupID != string(s.group.ID) || len(metadata.ClusterRouteMembers) == 0 || len(metadata.ClusterRouteMembers) > fixedPeerMaxPeersV1 {
+		return raftcluster.SubmitResultV1{}, raftplacement.ErrCatalogMetaRouteMismatch
+	}
+	group := s.group
+	group.Peers = make([]raftcluster.Peer, 0, len(metadata.ClusterRouteMembers))
+	for _, id := range metadata.ClusterRouteMembers {
+		node := raftcluster.NodeID(id)
+		if s.runtime.client.addresses[node] == "" || slices.ContainsFunc(group.Peers, func(p raftcluster.Peer) bool { return p.ID == node }) {
+			return raftcluster.SubmitResultV1{}, raftplacement.ErrCatalogMetaRouteMismatch
+		}
+		group.Peers = append(group.Peers, raftcluster.Peer{ID: node})
+	}
+	leader, err := s.runtime.client.leader(ctx, group)
 	if err != nil {
 		return raftcluster.SubmitResultV1{}, err
 	}
@@ -782,6 +805,7 @@ type fixedPeerReplyV1 struct {
 	ReplacementState     *raftplacement.ReplicaReplacementStateV1  `json:",omitempty"`
 	ReplacementSeed      *raftcluster.ReplacementSnapshotSeedV1    `json:",omitempty"`
 	ReplacementPending   bool                                      `json:",omitempty"`
+	CurrentGroup         *FixedPeerTCPGroupV1                      `json:",omitempty"`
 	ReplacementInstalled bool                                      `json:",omitempty"`
 	Replacement          *raftplacement.ReplicaReplacementBeginV1  `json:",omitempty"`
 	Membership           *raftcluster.CommittedRaftConfigurationV1 `json:",omitempty"`
@@ -890,7 +914,7 @@ func (r *FixedPeerTCPRuntimeV1) serve(w http.ResponseWriter, request *http.Reque
 		return
 	}
 	switch request.URL.Path {
-	case "/v1/replacement-begin", "/v1/replacement-read", "/v1/replacement-prepare", "/v1/replacement-enroll", "/v1/replacement-seed", "/v1/replacement-install", "/v1/replacement-receiver", "/v1/replacement-advance", "/v1/replacement-allow", "/v1/replacement-cutoff", "/v1/replacement-tail-check", "/v1/replacement-tail", "/v1/replacement-promotion-intent", "/v1/replacement-promote", "/v1/replacement-complete-promotion":
+	case "/v1/replacement-begin", "/v1/replacement-read", "/v1/replacement-prepare", "/v1/replacement-enroll", "/v1/replacement-seed", "/v1/replacement-install", "/v1/replacement-receiver", "/v1/replacement-advance", "/v1/replacement-allow", "/v1/replacement-cutoff", "/v1/replacement-tail-check", "/v1/replacement-tail", "/v1/replacement-promotion-intent", "/v1/replacement-promote", "/v1/replacement-complete-promotion", "/v1/replacement-removal-proof", "/v1/replacement-removal-intent", "/v1/replacement-remove", "/v1/replacement-complete", "/v1/replacement-reconcile":
 		err = r.handleReplacementV1(ctx, request.URL.Path, body.Entry, &reply)
 	case "/v1/status":
 		reply.Status, err = r.Status(ctx)
@@ -916,6 +940,9 @@ func (r *FixedPeerTCPRuntimeV1) serve(w http.ResponseWriter, request *http.Reque
 		}
 	case "/v1/catalog-read":
 		reply.Catalog, err = r.localCatalogFence(ctx)
+		if err == nil && body.Metadata.ClusterRouteGroupID != "" {
+			err = r.currentReplicaGroupReplyV1(raftcluster.GroupID(body.Metadata.ClusterRouteGroupID), &reply)
+		}
 	case "/v1/catalog-route", "/v1/catalog-validate":
 		_, err = r.localCatalogFence(ctx)
 		if err != nil {
@@ -953,8 +980,16 @@ func (r *FixedPeerTCPRuntimeV1) serve(w http.ResponseWriter, request *http.Reque
 		if err = validateFixedPeerEntryRouteV1(body.Entry, body.Metadata); err != nil {
 			return
 		}
+		if r.localDataV1(raftcluster.GroupID(body.Metadata.ClusterRouteGroupID)) != nil && !slices.Contains(body.Metadata.ClusterRouteMembers, string(r.config.NodeID)) {
+			err = raftcluster.ErrRouteTargetUnknown
+			return
+		}
 		submitter := r.routed
 		if request.URL.Path == "/v1/forward" {
+			if !slices.Contains(body.Metadata.ClusterRouteMembers, string(r.config.NodeID)) {
+				err = raftcluster.ErrRouteTargetUnknown
+				return
+			}
 			r.groupsMu.RLock()
 			submitter = r.local
 			r.groupsMu.RUnlock()
@@ -980,6 +1015,11 @@ func (r *FixedPeerTCPRuntimeV1) validateCatalog(c raftplacement.CatalogV1) error
 				for _, p := range fixed.Peers {
 					expected = append(expected, p.ID)
 				}
+			}
+		}
+		if r.authority != nil {
+			if current, state, _, err := r.authority.CurrentReplicaGroupV1(g.ID); err == nil && state != nil && len(state.Peers) > 0 {
+				expected = slices.Clone(current.Members)
 			}
 		}
 		members := slices.Clone(g.Members)

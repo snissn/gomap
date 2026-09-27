@@ -714,6 +714,26 @@ func (p *HashicorpRaftProvider) SnapshotForReplacementV1(ctx context.Context) (H
 	return p.snapshotV1(ctx, true)
 }
 
+// ReplacementSnapshotReadyV1 checks the real TreeDB command snapshot boundary
+// against the latest committed native configuration. HashiCorp's non-batching
+// FSM does not advance its snapshot index for configuration-only logs, so an
+// idle replica cannot snapshot a newer configuration until a real command is
+// durably applied. This check precedes caching a replacement seed worker.
+func (p *HashicorpRaftProvider) ReplacementSnapshotReadyV1(ctx context.Context) error {
+	configuration, err := p.CommittedConfigurationV1(ctx)
+	if err != nil {
+		return err
+	}
+	progress, err := p.readIndexAppliedProgressSnapshot(ctx)
+	if err != nil {
+		return err
+	}
+	if !progress.HasApplied || progress.Index < configuration.ConfigurationIndex {
+		return fmt.Errorf("%w: replacement snapshot needs a TreeDB command after configuration index %d (have %d)", ErrReadBarrierNotSatisfied, configuration.ConfigurationIndex, progress.Index)
+	}
+	return nil
+}
+
 func (p *HashicorpRaftProvider) snapshotV1(ctx context.Context, ownCompletion bool) (HashicorpRaftSnapshotResultV1, error) {
 	if p == nil || p.raft == nil || p.logStore == nil {
 		return HashicorpRaftSnapshotResultV1{}, ErrInvalidHashicorpRaftProvider
@@ -739,9 +759,16 @@ func (p *HashicorpRaftProvider) snapshotV1(ctx context.Context, ownCompletion bo
 		// user snapshot future responds. A canceled wait alone is not that
 		// completion boundary and could release seed admission too early.
 		if err := future.Error(); err != nil {
-			// Native takeSnapshot discards sink.Cancel errors on Persist failure;
-			// even an idle FSM cannot prove those opaque native resources closed.
-			futureErr = &replacementSnapshotCleanupDebtV1{cause: errors.Join(err, ctx.Err()), future: future}
+			// This exact pinned-library refusal happens before a native sink is
+			// created. Its FSM carrier must also have finished releasing before
+			// allowing an ordinary retry. All other future errors retain opaque
+			// native ownership because sink.Cancel can discard cleanup errors.
+			carrier, ok := p.appliedProgress.(interface{ SnapshotCarrierReleasedV1() bool })
+			if ok && replacementSnapshotPreCreateConfigRefusalV1(err) && carrier.SnapshotCarrierReleasedV1() {
+				futureErr = errors.Join(ErrReadBarrierNotSatisfied, err, ctx.Err())
+			} else {
+				futureErr = &replacementSnapshotCleanupDebtV1{cause: errors.Join(err, ctx.Err()), future: future}
+			}
 		} else {
 			futureErr = ctx.Err()
 		}
@@ -749,6 +776,9 @@ func (p *HashicorpRaftProvider) snapshotV1(ctx context.Context, ownCompletion bo
 		futureErr = waitHashicorpRaftFuture(ctx, future)
 	}
 	if futureErr != nil {
+		if ownCompletion && errors.Is(futureErr, ErrReadBarrierNotSatisfied) {
+			return HashicorpRaftSnapshotResultV1{}, futureErr
+		}
 		return HashicorpRaftSnapshotResultV1{}, errors.Join(ErrHashicorpRaftUnavailable, futureErr)
 	}
 	meta, snapshot, err := future.Open()

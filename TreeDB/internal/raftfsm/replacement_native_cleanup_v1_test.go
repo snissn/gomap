@@ -12,6 +12,7 @@ import (
 	"time"
 
 	hraft "github.com/hashicorp/raft"
+	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
 	"github.com/snissn/gomap/TreeDB/internal/raftapply"
 	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
 )
@@ -122,6 +123,38 @@ func TestReplacementSnapshotNativeFailureRequiresRestartV1(t *testing.T) {
 	_, err := provider.SnapshotForReplacementV1(ctx)
 	if !raftcluster.ReplacementSnapshotCleanupRequiredV1(err) || !strings.Contains(err.Error(), denied.Error()) {
 		t.Fatalf("native future failure lost unresolved owner: %v", err)
+	}
+}
+
+func TestReplacementSnapshotConfigOnlyGapIsRetryableBeforeSinkV1(t *testing.T) {
+	fsm, provider, _ := snapshotOwnerProviderForTest(t, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	initial, err := provider.CommittedConfigurationV1(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed, err := provider.AddReplacementNonvoterV1(ctx, "node-a", raftcluster.Peer{ID: "node-b", Address: "node-b"}, initial.ConfigurationIndex)
+	if err != nil || changed.ConfigurationIndex <= initial.ConfigurationIndex {
+		t.Fatalf("committed configuration change: %+v %v", changed, err)
+	}
+	if err := provider.ReplacementSnapshotReadyV1(ctx); !errors.Is(err, raftcluster.ErrReadBarrierNotSatisfied) {
+		t.Fatalf("configuration-only gap accepted: %v", err)
+	}
+	if _, err := provider.SnapshotForReplacementV1(ctx); !errors.Is(err, raftcluster.ErrReadBarrierNotSatisfied) || raftcluster.ReplacementSnapshotCleanupRequiredV1(err) || !strings.Contains(err.Error(), "cannot take snapshot now, wait until the configuration entry") {
+		t.Fatalf("known pre-Create refusal poisoned native owner: %v", err)
+	}
+	if !fsm.SnapshotCarrierReleasedV1() {
+		t.Fatal("pre-Create refusal retained FSM carrier")
+	}
+	if _, err := provider.CommitCommandEntryV1(ctx, raftcluster.CommitCommandEntryV1Request{NodeID: "node-a", GroupID: "default", EntryBytes: deterministicInsertBatchEntry(t, "users", "after-config", iwire.DocumentFormatJSON, [][]byte{[]byte("after-config")}, [][]byte{[]byte(`{"value":1}`)}), CurrentCatalogVersion: testCatalogVersionStart, HasCurrentCatalogVersion: true, SyncLocalCommandWAL: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := provider.ReplacementSnapshotReadyV1(ctx); err != nil {
+		t.Fatalf("real command did not advance snapshot boundary: %v", err)
+	}
+	if _, err := provider.SnapshotForReplacementV1(ctx); err != nil {
+		t.Fatalf("retained native snapshot after command: %v", err)
 	}
 }
 

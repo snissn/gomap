@@ -22,6 +22,7 @@ type fixedPeerTCPStreamV1 struct {
 	cancel     context.CancelFunc
 	mu         sync.Mutex
 	closed     bool
+	generation uint64
 	conns      map[*fixedPeerTCPConnV1]struct{}
 	closeOnce  sync.Once
 	closeErr   error
@@ -68,6 +69,10 @@ func newFixedPeerTCPTransportOwnedV1(listen string, advertised net.Addr, timeout
 		Listener: listener, advertised: advertised, ctx: ctx, cancel: cancel,
 		conns: make(map[*fixedPeerTCPConnV1]struct{}), security: security, admission: admission, scope: scope, timeout: timeout,
 	}
+	stream.peerNodes = make(map[hraft.ServerAddress]raftcluster.NodeID, len(peers))
+	for _, peer := range peers {
+		stream.peerNodes[hraft.ServerAddress(peer.Address)] = peer.ID
+	}
 	if security != nil {
 		allowed := make(map[raftcluster.NodeID]bool, len(peers))
 		stream.peerNodes = make(map[hraft.ServerAddress]raftcluster.NodeID, len(peers))
@@ -82,10 +87,10 @@ func newFixedPeerTCPTransportOwnedV1(listen string, advertised net.Addr, timeout
 
 func (s *fixedPeerTCPStreamV1) Addr() net.Addr { return s.advertised }
 
-func (s *fixedPeerTCPStreamV1) track(conn net.Conn) (net.Conn, error) {
+func (s *fixedPeerTCPStreamV1) track(conn net.Conn, generation uint64) (net.Conn, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.closed {
+	if s.closed || s.generation != generation {
 		_ = conn.Close()
 		return nil, net.ErrClosed
 	}
@@ -95,22 +100,38 @@ func (s *fixedPeerTCPStreamV1) track(conn net.Conn) (net.Conn, error) {
 }
 
 func (s *fixedPeerTCPStreamV1) Accept() (net.Conn, error) {
-	conn, err := s.Listener.Accept()
-	if err != nil {
-		return nil, err
+	for {
+		s.mu.Lock()
+		generation := s.generation
+		s.mu.Unlock()
+		conn, err := s.Listener.Accept()
+		if err != nil {
+			return nil, err
+		}
+		conn, err = newPeerRaftWireConnV1(conn, s.admission, s.scope, true, s.timeout)
+		if err != nil {
+			return nil, err
+		}
+		tracked, err := s.track(conn, generation)
+		if err == nil {
+			return tracked, nil
+		}
+		s.mu.Lock()
+		closed := s.closed
+		s.mu.Unlock()
+		if closed {
+			return nil, err
+		}
+		// A removal raced this accept/handshake. Drop its old authorization and
+		// accept again rather than terminating the native transport listener.
 	}
-	conn, err = newPeerRaftWireConnV1(conn, s.admission, s.scope, true, s.timeout)
-	if err != nil {
-		return nil, err
-	}
-	return s.track(conn)
 }
 
 func (s *fixedPeerTCPStreamV1) Dial(address hraft.ServerAddress, timeout time.Duration) (net.Conn, error) {
+	s.mu.Lock()
+	generation, node := s.generation, s.peerNodes[address]
+	s.mu.Unlock()
 	if s.security != nil {
-		s.mu.Lock()
-		node := s.peerNodes[address]
-		s.mu.Unlock()
 		if node == "" {
 			return nil, errPeerAuthenticationV1
 		}
@@ -131,14 +152,14 @@ func (s *fixedPeerTCPStreamV1) Dial(address hraft.ServerAddress, timeout time.Du
 		if err != nil {
 			return nil, err
 		}
-		return s.track(conn)
+		return s.track(conn, generation)
 	}
 	dialer := net.Dialer{Timeout: timeout}
 	conn, err := dialer.DialContext(s.ctx, "tcp", string(address))
 	if err != nil {
 		return nil, err
 	}
-	return s.track(conn)
+	return s.track(conn, generation)
 }
 
 func (c *fixedPeerTCPConnV1) Close() error {
@@ -170,8 +191,8 @@ func (s *fixedPeerTCPStreamV1) Close() error {
 }
 
 // replaceAuthorizedPeersV1 installs an immutable transport identity view only
-// after the runtime has proved the exact committed replacement BEGIN. Existing
-// TLS handshakes retain their original immutable map; no map is mutated in place.
+// after the runtime proves committed replacement authority. Removal revokes all
+// tracked connections and in-flight handshakes; additions preserve live streams.
 func (s *fixedPeerTCPStreamV1) replaceAuthorizedPeersV1(peers []raftcluster.Peer) error {
 	nodes := make(map[hraft.ServerAddress]raftcluster.NodeID, len(peers))
 	allowed := make(map[raftcluster.NodeID]bool, len(peers))
@@ -180,13 +201,33 @@ func (s *fixedPeerTCPStreamV1) replaceAuthorizedPeersV1(peers []raftcluster.Peer
 		allowed[peer.ID] = true
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.closed {
+		s.mu.Unlock()
 		return net.ErrClosed
+	}
+	removed := false
+	for address, node := range s.peerNodes {
+		if nodes[address] != node {
+			removed = true
+			break
+		}
+	}
+	var connections []*fixedPeerTCPConnV1
+	if removed {
+		s.generation++
+		connections = make([]*fixedPeerTCPConnV1, 0, len(s.conns))
+		for conn := range s.conns {
+			connections = append(connections, conn)
+		}
 	}
 	s.peerNodes = nodes
 	if listener, ok := s.Listener.(*peerSecureListenerV1); ok {
 		listener.replaceAllowedV1(allowed)
 	}
-	return nil
+	s.mu.Unlock()
+	var err error
+	for _, conn := range connections {
+		err = errors.Join(err, conn.Close())
+	}
+	return err
 }

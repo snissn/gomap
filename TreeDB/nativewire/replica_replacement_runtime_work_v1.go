@@ -2,8 +2,6 @@ package nativewire
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -34,11 +32,68 @@ type replacementNativeSlotV1 struct {
 	mu     sync.Mutex
 	closed bool
 	work   *replacementNativeWorkV1
+	begin  raftplacement.ReplicaReplacementBeginV1
 }
 
-func (d *fixedPeerDataV1) replacementWorkV1(operation, phase string, work func(context.Context) (*raftcluster.ReplacementSnapshotSeedV1, error), reply *fixedPeerReplyV1) error {
+// Only a freshly fenced committed BEGIN may supersede the process-local slot.
+// The previous actual worker and every cleanup owner must have finished first.
+func (d *fixedPeerDataV1) authorizeReplacementWorkLockedV1(command raftplacement.ReplicaReplacementBeginV1) error {
+	slot := &d.replacementWork
+	if slot.closed {
+		return raftcluster.ErrAdmissionUnavailable
+	}
+	previous, _ := raftplacement.EncodeReplicaReplacementBeginV1(slot.begin)
+	wanted, err := raftplacement.EncodeReplicaReplacementBeginV1(command)
+	if err != nil {
+		return err
+	}
+	if string(previous) == string(wanted) {
+		return nil
+	}
+	if slot.begin.OperationID != "" {
+		if command.ConfigDigest != slot.begin.ConfigDigest || command.GroupID != slot.begin.GroupID || command.ExpectedEpoch <= slot.begin.ExpectedEpoch {
+			return raftplacement.ErrCatalogMetaConflict
+		}
+	}
+	if slot.work != nil {
+		if slot.begin.OperationID == "" {
+			return raftplacement.ErrCatalogMetaConflict
+		}
+		select {
+		case <-slot.work.done:
+		default:
+			return raftcluster.ErrAdmissionUnavailable
+		}
+		if slot.work.cleanupErr != nil {
+			return slot.work.cleanupErr
+		}
+	}
+	if d.fsm.SnapshotWorkReleasePendingV1() {
+		return raftcluster.ErrAdmissionUnavailable
+	}
+	slot.work, slot.begin = nil, command
+	return nil
+}
+
+func (d *fixedPeerDataV1) replacementAuthorizedWorkV1(command raftplacement.ReplicaReplacementBeginV1, phase string, work func(context.Context) (*raftcluster.ReplacementSnapshotSeedV1, error), reply *fixedPeerReplyV1) error {
 	d.replacementWork.mu.Lock()
 	defer d.replacementWork.mu.Unlock()
+	if err := d.authorizeReplacementWorkLockedV1(command); err != nil {
+		return err
+	}
+	return d.replacementWorkLockedV1(command.OperationID, phase, nil, work, reply)
+}
+
+func (d *fixedPeerDataV1) replacementAuthorizedSeedWorkV1(ctx context.Context, command raftplacement.ReplicaReplacementBeginV1, preflight func(context.Context) error, work func(context.Context) (*raftcluster.ReplacementSnapshotSeedV1, error), reply *fixedPeerReplyV1) error {
+	d.replacementWork.mu.Lock()
+	defer d.replacementWork.mu.Unlock()
+	if err := d.authorizeReplacementWorkLockedV1(command); err != nil {
+		return err
+	}
+	return d.replacementWorkLockedV1(command.OperationID, "seed", func() error { return preflight(ctx) }, work, reply)
+}
+
+func (d *fixedPeerDataV1) replacementWorkLockedV1(operation, phase string, preflight func() error, work func(context.Context) (*raftcluster.ReplacementSnapshotSeedV1, error), reply *fixedPeerReplyV1) error {
 	if d.replacementWork.closed {
 		return raftcluster.ErrAdmissionUnavailable
 	}
@@ -50,10 +105,16 @@ func (d *fixedPeerDataV1) replacementWorkV1(operation, phase string, work func(c
 		select {
 		case <-current.done:
 			if current.phase == phase {
-				reply.ReplacementSeed = current.seed
-				return current.err
+				if current.cleanupErr == nil && phase == "seed" && errors.Is(current.err, raftcluster.ErrReadBarrierNotSatisfied) && !d.fsm.SnapshotWorkReleasePendingV1() {
+					// A known pre-Create refusal owns no native sink. The next
+					// exact-operation call may prove a newer command boundary.
+					d.replacementWork.work = nil
+				} else {
+					reply.ReplacementSeed = current.seed
+					return current.err
+				}
 			}
-			if current.phase != "seed" || phase != "install" || current.err != nil {
+			if d.replacementWork.work != nil && (current.phase != "seed" || phase != "install" || current.err != nil) {
 				return raftcluster.ErrAdmissionUnavailable
 			}
 		default:
@@ -83,6 +144,12 @@ func (d *fixedPeerDataV1) replacementWorkV1(operation, phase string, work func(c
 			}
 		}
 	}
+	if preflight != nil {
+		if err := preflight(); err != nil {
+			lease.release()
+			return err
+		}
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), limits.Lifetime)
 	current = &replacementNativeWorkV1{operation: operation, phase: phase, cancel: cancel, done: make(chan struct{}), lease: lease}
 	d.replacementWork.work = current
@@ -103,6 +170,31 @@ func (d *fixedPeerDataV1) replacementWorkV1(operation, phase string, work func(c
 	}()
 	reply.ReplacementPending = true
 	return nil
+}
+
+// Check the operation-owned artifact before requiring a newer command. An
+// identical BEGIN may have copied its native seed before catalog publication
+// became ambiguous; that exact retained seed remains a valid retry source.
+func (r *FixedPeerTCPRuntimeV1) replacementSeedPreflightV1(ctx context.Context, state raftplacement.ReplicaReplacementStateV1, d *fixedPeerDataV1) error {
+	store, path, err := r.replacementSeedStoreV1(state)
+	if err != nil {
+		return err
+	}
+	metas, err := store.List()
+	if err != nil {
+		return err
+	}
+	if len(metas) != 0 {
+		return nil // the worker verifies exact seed identity and contents
+	}
+	entries, err := replacementSeedDirectoryEntriesV1(filepath.Join(path, "snapshots"))
+	if err != nil {
+		return err
+	}
+	if len(entries) != 0 {
+		return fmt.Errorf("%w: incomplete retained replacement seed", raftcluster.ErrAdmissionUnavailable)
+	}
+	return d.provider.ReplacementSnapshotReadyV1(ctx)
 }
 
 func (d *fixedPeerDataV1) cancelReplacementWorkV1() <-chan struct{} {
@@ -135,8 +227,9 @@ func (d *fixedPeerDataV1) replacementCleanupErrorV1() error {
 // The operation name is a fixed digest of canonical authority, never raw user
 // text. At most one operation directory can exist in this group's seed root;
 // unresolved artifacts from another operation cannot be aliased or overwritten.
-func (r *FixedPeerTCPRuntimeV1) replacementSeedStoreV1(command raftplacement.ReplicaReplacementBeginV1) (*hraft.FileSnapshotStore, string, error) {
-	group, err := r.validateReplacementBeginV1(command)
+func (r *FixedPeerTCPRuntimeV1) replacementSeedStoreV1(state raftplacement.ReplicaReplacementStateV1) (*hraft.FileSnapshotStore, string, error) {
+	command := state.Begin
+	group, err := r.replacementGroupV1(state, true)
 	if err != nil {
 		return nil, "", err
 	}
@@ -144,29 +237,9 @@ func (r *FixedPeerTCPRuntimeV1) replacementSeedStoreV1(command raftplacement.Rep
 	if err != nil {
 		return nil, "", err
 	}
-	raw, err := raftplacement.EncodeReplicaReplacementBeginV1(command)
-	if err != nil {
-		return nil, "", err
-	}
-	sum := sha256.Sum256(raw)
-	name := hex.EncodeToString(sum[:])
 	root := filepath.Join(cfg.Layout.GroupDir, "replacement-seed")
-	if err := os.MkdirAll(root, 0700); err != nil {
-		return nil, "", err
-	}
-	entries, err := replacementSeedDirectoryEntriesV1(root)
+	path, err := prepareReplacementSeedDirectoryV1(root, command)
 	if err != nil {
-		return nil, "", err
-	}
-	if len(entries) > 1 || len(entries) == 1 && (entries[0].Name() != name || !entries[0].IsDir() || entries[0].Type()&os.ModeSymlink != 0) {
-		return nil, "", raftplacement.ErrCatalogMetaConflict
-	}
-	path := filepath.Join(root, name)
-	if _, err := os.Lstat(path); err == nil {
-		if _, err := replacementSeedDirectoryEntriesV1(filepath.Join(path, "snapshots")); err != nil {
-			return nil, "", err
-		}
-	} else if !os.IsNotExist(err) {
 		return nil, "", err
 	}
 	store, err := hraft.NewFileSnapshotStore(path, 1, io.Discard)
@@ -189,7 +262,7 @@ func (r *FixedPeerTCPRuntimeV1) deriveReplacementSeedV1(ctx context.Context, com
 	if state.Seed != nil && state.Seed.SourceNodeID != r.config.NodeID {
 		return nil, raftcluster.ErrRouteTargetUnknown
 	}
-	store, path, err := r.replacementSeedStoreV1(command)
+	store, path, err := r.replacementSeedStoreV1(state)
 	if err != nil {
 		return nil, err
 	}
@@ -245,7 +318,7 @@ func (r *FixedPeerTCPRuntimeV1) runReplacementInstallV1(ctx context.Context, com
 	if state.Phase != raftplacement.ReplicaReplacementSeededV1 || state.Seed == nil || state.Seed.SourceNodeID != r.config.NodeID {
 		return nil, raftcluster.ErrAdmissionUnavailable
 	}
-	store, _, err := r.replacementSeedStoreV1(command)
+	store, _, err := r.replacementSeedStoreV1(state)
 	if err != nil {
 		return nil, err
 	}
@@ -273,7 +346,7 @@ func (r *FixedPeerTCPRuntimeV1) replacementReceiverStatusV1(ctx context.Context,
 		return nil
 	}
 	if !verified && phase != replacementReceiverAddIntentV1 {
-		if err := d.replacementWorkV1(command.OperationID, "verify", func(context.Context) (*raftcluster.ReplacementSnapshotSeedV1, error) {
+		if err := d.replacementAuthorizedWorkV1(command, "verify", func(context.Context) (*raftcluster.ReplacementSnapshotSeedV1, error) {
 			return state.Seed, d.prejoin.reconcileInstalled()
 		}, reply); err != nil {
 			return err

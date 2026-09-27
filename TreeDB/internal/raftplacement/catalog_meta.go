@@ -326,7 +326,7 @@ func (a *CatalogMetaAuthorityV1) applyCommittedCatalogMetaV1(raw []byte, applied
 	if a.record.Epoch != 0 && bytes.Equal(a.command, raw) {
 		return a.statusLocked(), nil
 	}
-	if len(a.replacements) != 0 {
+	if a.hasPendingReplicaReplacementLockedV1() {
 		return CatalogMetaStatusV1{}, errors.Join(ErrCatalogMetaConflict, fmt.Errorf("replica replacement is pending"))
 	}
 	if a.record.Epoch == 0 {
@@ -355,6 +355,15 @@ func (a *CatalogMetaAuthorityV1) applyCommittedCatalogMetaV1(raw []byte, applied
 		if err := a.validateVectorPartitionLifecycleCatalogTransitionLockedV1(); err != nil {
 			return CatalogMetaStatusV1{}, err
 		}
+	}
+	// Ordinary updates must preserve an exportable current replacement view.
+	// In particular, lifecycle activation cannot reinterpret completed rosters.
+	replacements, err := encodeReplicaReplacementSnapshotV1(a.replacements)
+	if err != nil {
+		return CatalogMetaStatusV1{}, err
+	}
+	if _, err := decodeReplicaReplacementSnapshotV1(replacements, command.Record); err != nil {
+		return CatalogMetaStatusV1{}, err
 	}
 	a.record = command.Record
 	a.resolved = resolved
@@ -614,7 +623,7 @@ func (a *CatalogMetaAuthorityV1) installCatalogMetaSnapshotV1(snapshot CatalogMe
 	// A newer snapshot may advance the same operation monotonically, but may
 	// not erase it, change its seed, or substitute another operation.
 	for group, pending := range a.replacements {
-		if !replicaReplacementSnapshotExtendsV1(pending, replacements[group]) {
+		if !replicaReplacementSnapshotSuccessorV1(pending, replacements[group]) {
 			return CatalogMetaStatusV1{}, ErrCatalogMetaConflict
 		}
 	}
@@ -655,7 +664,7 @@ func (a *CatalogMetaAuthorityV1) installCatalogMetaSnapshotV1(snapshot CatalogMe
 		return a.statusLocked(), nil
 	}
 	if a.record.Epoch != 0 {
-		if err := validateCatalogMetaTopologyTransitionV1(a.resolved, resolved); err != nil {
+		if err := validateReplicaReplacementSnapshotTopologyV1(a.resolved, resolved, replacements); err != nil {
 			return CatalogMetaStatusV1{}, err
 		}
 		if err := a.validateVectorPartitionLifecycleCatalogTransitionLockedV1(); err != nil {

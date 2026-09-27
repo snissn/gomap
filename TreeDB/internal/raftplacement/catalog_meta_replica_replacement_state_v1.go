@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"reflect"
 
 	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
 )
@@ -20,6 +21,9 @@ const (
 	ReplicaReplacementAddIntentV1     ReplicaReplacementPhaseV1 = "add-intent"
 	ReplicaReplacementPromoteIntentV1 ReplicaReplacementPhaseV1 = "promote-intent"
 	ReplicaReplacementPromotedV1      ReplicaReplacementPhaseV1 = "promoted"
+	ReplicaReplacementRemoveIntentV1  ReplicaReplacementPhaseV1 = "remove-intent"
+	ReplicaReplacementRemovedV1       ReplicaReplacementPhaseV1 = "removed"
+	ReplicaReplacementCompletedV1     ReplicaReplacementPhaseV1 = "completed"
 )
 
 // ReplicaReplacementStateV1 is one bounded current operation per group, not an
@@ -33,6 +37,11 @@ type ReplicaReplacementStateV1 struct {
 	Phase  ReplicaReplacementPhaseV1              `json:"phase"`
 	Seed   *raftcluster.ReplacementSnapshotSeedV1 `json:"seed,omitempty"`
 	Tail   *raftcluster.ReplacementTailV1         `json:"tail,omitempty"`
+	// Peers is current catalog membership with transport addresses. Nil means the
+	// original anchored roster; completion always persists an explicit roster.
+	Peers        []raftcluster.Peer          `json:"peers,omitempty"`
+	RemovalIndex uint64                      `json:"removal_index,omitempty"`
+	Result       *ReplicaReplacementResultV1 `json:"result,omitempty"`
 }
 
 func replacementPhaseOrdinalV1(phase ReplicaReplacementPhaseV1) int {
@@ -49,6 +58,12 @@ func replacementPhaseOrdinalV1(phase ReplicaReplacementPhaseV1) int {
 		return 4
 	case ReplicaReplacementPromotedV1:
 		return 5
+	case ReplicaReplacementRemoveIntentV1:
+		return 6
+	case ReplicaReplacementRemovedV1:
+		return 7
+	case ReplicaReplacementCompletedV1:
+		return 8
 	default:
 		return -1
 	}
@@ -59,7 +74,15 @@ func EncodeReplicaReplacementStateV1(state ReplicaReplacementStateV1) ([]byte, e
 	if err := validateReplicaReplacementBeginV1(state.Begin); err != nil {
 		return nil, err
 	}
-	if replacementPhaseOrdinalV1(state.Phase) < 1 || state.Seed == nil || state.Seed.Validate() != nil || state.Seed.Manifest.GroupID != state.Begin.GroupID || state.Seed.SourceNodeID == state.Begin.NewPeer.ID {
+	ordinal := replacementPhaseOrdinalV1(state.Phase)
+	if ordinal < 0 || validateReplicaReplacementPeersV1(state.Peers) != nil {
+		return nil, ErrInvalidCatalogMeta
+	}
+	if ordinal == 0 {
+		if state.Seed != nil {
+			return nil, ErrInvalidCatalogMeta
+		}
+	} else if state.Seed == nil || state.Seed.Validate() != nil || state.Seed.Manifest.GroupID != state.Begin.GroupID || state.Seed.SourceNodeID == state.Begin.NewPeer.ID {
 		return nil, ErrInvalidCatalogMeta
 	}
 	if replacementPhaseOrdinalV1(state.Phase) >= 4 {
@@ -67,6 +90,27 @@ func EncodeReplicaReplacementStateV1(state ReplicaReplacementStateV1) ([]byte, e
 			return nil, ErrInvalidCatalogMeta
 		}
 	} else if state.Tail != nil {
+		return nil, ErrInvalidCatalogMeta
+	}
+	if ordinal >= 6 {
+		if state.RemovalIndex <= state.Tail.ConfigurationIndex {
+			return nil, ErrInvalidCatalogMeta
+		}
+	} else if state.RemovalIndex != 0 {
+		return nil, ErrInvalidCatalogMeta
+	}
+	if ordinal >= 7 {
+		if state.Result == nil || state.Result.ConfigurationIndex <= state.RemovalIndex {
+			return nil, ErrInvalidCatalogMeta
+		}
+		if ordinal == 8 {
+			if state.Result.Epoch != state.Begin.ExpectedEpoch+1 || !validReplicaReplacementDigestV1(state.Result.Digest) || len(state.Peers) == 0 {
+				return nil, ErrInvalidCatalogMeta
+			}
+		} else if state.Result.Epoch != 0 || state.Result.Digest != "" {
+			return nil, ErrInvalidCatalogMeta
+		}
+	} else if state.Result != nil {
 		return nil, ErrInvalidCatalogMeta
 	}
 	raw, err := json.Marshal(state)
@@ -125,6 +169,9 @@ func replicaReplacementStateExtendsV1(old, next ReplicaReplacementStateV1) bool 
 	if !sameReplicaReplacementBeginV1(old.Begin, next.Begin) || replacementPhaseOrdinalV1(next.Phase) < replacementPhaseOrdinalV1(old.Phase) {
 		return false
 	}
+	if !reflect.DeepEqual(old.Peers, next.Peers) || old.RemovalIndex != 0 && old.RemovalIndex != next.RemovalIndex || old.Result != nil && (next.Result == nil || *old.Result != *next.Result) {
+		return false
+	}
 	if old.Tail != nil && (next.Tail == nil || *old.Tail != *next.Tail) {
 		return false
 	}
@@ -155,6 +202,9 @@ func (a *CatalogMetaAuthorityV1) applyCommittedReplicaReplacementAdvanceV1(raw [
 	next, err := DecodeReplicaReplacementStateV1(raw)
 	if err != nil {
 		return CatalogMetaStatusV1{}, err
+	}
+	if next.Phase == ReplicaReplacementCompletedV1 {
+		return CatalogMetaStatusV1{}, ErrCatalogMetaConflict
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()

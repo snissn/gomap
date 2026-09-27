@@ -128,6 +128,19 @@ func ReplacementSnapshotCleanupRequiredV1(err error) bool {
 	return errors.As(err, &debt)
 }
 
+// Pinned HashiCorp Raft 1.7.3 returns this exact error before calling
+// SnapshotStore.Create when the FSM snapshot index trails a committed
+// configuration entry. Other native future failures may have opened a sink,
+// whose cleanup cannot be proved by a successful second Cancel.
+func replacementSnapshotPreCreateConfigRefusalV1(err error) bool {
+	if err == nil {
+		return false
+	}
+	var config, applied uint64
+	count, scanErr := fmt.Sscanf(err.Error(), "cannot take snapshot now, wait until the configuration entry at %d has been applied (have applied %d)", &config, &applied)
+	return scanErr == nil && count == 2 && config > applied && err.Error() == fmt.Sprintf("cannot take snapshot now, wait until the configuration entry at %d has been applied (have applied %d)", config, applied)
+}
+
 // RetainReplacementSnapshotSeedV1 copies an already selected native snapshot
 // into the caller's one-operation FileSnapshotStore. The caller serializes the
 // operation, admits source+copy+temporary disk bytes, and retains its namespace

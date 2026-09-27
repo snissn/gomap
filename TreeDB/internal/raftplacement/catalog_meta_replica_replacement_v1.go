@@ -58,6 +58,12 @@ func validReplicaReplacementDigestV1(value string) bool {
 	return err == nil && len(decoded) == 32 && hex.EncodeToString(decoded) == value
 }
 
+func validReplicaReplacementAddressV1(address string) bool {
+	host, port, err := net.SplitHostPort(address)
+	number, portErr := strconv.ParseUint(port, 10, 16)
+	return err == nil && portErr == nil && number != 0 && host != "" && validReplicaReplacementStringV1(address)
+}
+
 func validateReplicaReplacementBeginV1(command ReplicaReplacementBeginV1) error {
 	if command.Format != CatalogMetaFormatV1 || command.Kind != ReplicaReplacementBeginKindV1 || command.ExpectedEpoch == 0 ||
 		!validReplicaReplacementStringV1(command.OperationID) || !validReplicaReplacementStringV1(string(command.GroupID)) ||
@@ -65,9 +71,7 @@ func validateReplicaReplacementBeginV1(command ReplicaReplacementBeginV1) error 
 		command.OldNodeID == command.NewPeer.ID || !validReplicaReplacementDigestV1(command.ConfigDigest) || !validReplicaReplacementDigestV1(command.CatalogDigest) {
 		return errors.Join(ErrInvalidCatalogMeta, fmt.Errorf("invalid replica replacement identity"))
 	}
-	host, port, err := net.SplitHostPort(command.NewPeer.Address)
-	portNumber, portErr := strconv.ParseUint(port, 10, 16)
-	if err != nil || portErr != nil || portNumber == 0 || host == "" || !validReplicaReplacementStringV1(command.NewPeer.Address) {
+	if !validReplicaReplacementAddressV1(command.NewPeer.Address) {
 		return errors.Join(ErrInvalidCatalogMeta, fmt.Errorf("invalid replica replacement address"))
 	}
 	// Capabilities come from the anchored runtime configuration, never from a
@@ -152,6 +156,9 @@ func (a *CatalogMetaAuthorityV1) applyCommittedReplicaReplacementV1(raw []byte, 
 	if err := json.Unmarshal(raw, &envelope); err != nil {
 		return CatalogMetaStatusV1{}, err
 	}
+	if envelope.Kind == ReplicaReplacementCompleteKindV1 {
+		return a.applyCommittedReplicaReplacementCompleteV1(raw, appliedIndex)
+	}
 	if envelope.Kind == ReplicaReplacementAdvanceKindV1 {
 		return a.applyCommittedReplicaReplacementAdvanceV1(raw, appliedIndex)
 	}
@@ -164,31 +171,46 @@ func (a *CatalogMetaAuthorityV1) applyCommittedReplicaReplacementV1(raw []byte, 
 	if a.record.Epoch == 0 {
 		return CatalogMetaStatusV1{}, ErrCatalogMetaUnavailable
 	}
+	// Exact latest terminal retry is read-only even though its original BEGIN
+	// fence predates completion. It never authorizes a new operation.
+	var previous ReplicaReplacementStateV1
+	if existing := a.replacements[command.GroupID]; existing != nil {
+		var err error
+		previous, err = decodeReplicaReplacementCurrentV1(existing)
+		if err != nil {
+			return CatalogMetaStatusV1{}, err
+		}
+		if sameReplicaReplacementBeginV1(previous.Begin, command) {
+			return a.statusLocked(), nil
+		}
+		if previous.Phase != ReplicaReplacementCompletedV1 {
+			return CatalogMetaStatusV1{}, ErrCatalogMetaConflict
+		}
+	}
 	if err := validateReplicaReplacementCatalogV1(command, a.record); err != nil {
 		return CatalogMetaStatusV1{}, err
 	}
 	if err := a.validateVectorPartitionLifecycleCatalogTransitionLockedV1(); err != nil {
 		return CatalogMetaStatusV1{}, err
 	}
-	if existing := a.replacements[command.GroupID]; existing != nil {
-		previous, err := decodeReplicaReplacementCurrentV1(existing)
-		if err == nil && sameReplicaReplacementBeginV1(previous.Begin, command) {
-			return a.statusLocked(), nil
-		}
-		return CatalogMetaStatusV1{}, ErrCatalogMetaConflict
-	}
 	for _, existing := range a.replacements {
-		previousState, err := decodeReplicaReplacementCurrentV1(existing)
+		state, err := decodeReplicaReplacementCurrentV1(existing)
 		if err != nil {
 			return CatalogMetaStatusV1{}, err
 		}
-		previous := previousState.Begin
-		if previous.OperationID == command.OperationID || previous.ConfigDigest != command.ConfigDigest {
+		if state.Phase != ReplicaReplacementCompletedV1 || state.Begin.OperationID == command.OperationID || state.Begin.ConfigDigest != command.ConfigDigest {
 			return CatalogMetaStatusV1{}, ErrCatalogMetaConflict
 		}
 	}
-	if len(a.replacements) >= MaxCatalogMetaGroupsV1 {
+	if previous.Phase == "" && len(a.replacements) >= MaxCatalogMetaGroupsV1 {
 		return CatalogMetaStatusV1{}, ErrCatalogMetaLimit
+	}
+	if len(previous.Peers) > 0 {
+		var err error
+		raw, err = EncodeReplicaReplacementStateV1(ReplicaReplacementStateV1{Begin: command, Phase: ReplicaReplacementBegunV1, Peers: previous.Peers})
+		if err != nil {
+			return CatalogMetaStatusV1{}, err
+		}
 	}
 	candidate := make(map[raftcluster.GroupID][]byte, len(a.replacements)+1)
 	for group, value := range a.replacements {
@@ -266,6 +288,7 @@ func decodeReplicaReplacementSnapshotV1(raw []byte, record CatalogMetaRecordV1) 
 	records := make(map[raftcluster.GroupID][]byte)
 	operationIDs := make(map[string]bool)
 	var configDigest string
+	nonterminal := 0
 	for decoder.More() {
 		if len(records) >= MaxCatalogMetaGroupsV1 {
 			return nil, ErrCatalogMetaLimit
@@ -279,8 +302,14 @@ func decodeReplicaReplacementSnapshotV1(raw []byte, record CatalogMetaRecordV1) 
 			return nil, err
 		}
 		command := state.Begin
-		if err := validateReplicaReplacementCatalogV1(command, record); err != nil {
+		if err := validateReplicaReplacementStateCatalogV1(state, record); err != nil {
 			return nil, err
+		}
+		if state.Phase != ReplicaReplacementCompletedV1 {
+			nonterminal++
+			if nonterminal > 1 {
+				return nil, ErrCatalogMetaConflict
+			}
 		}
 		if records[command.GroupID] != nil || operationIDs[command.OperationID] || (configDigest != "" && configDigest != command.ConfigDigest) {
 			return nil, ErrCatalogMetaConflict

@@ -130,20 +130,37 @@ func (r *FixedPeerTCPRuntimeV1) readinessV1(ctx context.Context) (FixedPeerReadi
 	var failures []error
 	for _, group := range r.config.Groups {
 		local := r.localDataV1(group.ID)
-		if local == nil {
-			continue
-		}
-		if local.startErr != nil {
-			failures = append(failures, local.startErr)
-			continue
-		}
 		item := FixedPeerGroupReadinessV1{GroupID: group.ID}
-		if local.replacementID != "" {
+		current, state, rosterErr := r.currentReplicaGroupV1(ctx, group.ID)
+		member := false
+		if rosterErr == nil {
+			for _, peer := range current.Peers {
+				member = member || peer.ID == r.config.NodeID
+			}
+		}
+		if local == nil && !member && rosterErr == nil {
+			continue
+		}
+		if local == nil || local.startErr != nil {
+			item.Error = "current replica has not been opened successfully"
+			report.Groups = append(report.Groups, item)
+			failures = append(failures, errors.Join(rosterErr, raftcluster.ErrReadBarrierNotSatisfied))
+			continue
+		}
+		if rosterErr != nil || !member {
+			item.Error = "local replica is absent from current committed catalog membership"
+			report.Groups = append(report.Groups, item)
+			failures = append(failures, errors.Join(rosterErr, raftcluster.ErrReadBarrierNotSatisfied))
+			continue
+		}
+		if local.replacementID != "" && (state == nil || state.Phase != raftplacement.ReplicaReplacementCompletedV1 && state.Begin.NewPeer.ID == r.config.NodeID) {
 			item.Error = "replacement snapshot and durable tail are not verified"
 			report.Groups = append(report.Groups, item)
 			failures = append(failures, raftcluster.ErrReadBarrierNotSatisfied)
 			continue
 		}
+		group = current
+
 		leader, err := r.client.leader(ctx, group)
 		item.LeaderID = leader
 		var proof raftcluster.ReadIndexProof

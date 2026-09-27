@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"time"
 
@@ -101,17 +102,18 @@ func (r *FixedPeerTCPRuntimeV1) validateReplacementBeginV1(command raftplacement
 		if raftcluster.FeatureSetRequiresV1(group.Features, raftcluster.FeatureVectorPartitionLifecycle) {
 			return FixedPeerTCPGroupV1{}, raftcluster.ErrUnsupportedFeature
 		}
-		old := false
+		// Completed rosters persist ID/address only. The replacement profile can
+		// reconstruct peer capabilities after restart only for the default set.
+		defaults := raftcluster.DefaultFeatureSet()
+		if !reflect.DeepEqual(group.Features, defaults) {
+			return FixedPeerTCPGroupV1{}, raftcluster.ErrUnsupportedFeature
+		}
 		for _, peer := range group.Peers {
-			old = old || peer.ID == command.OldNodeID
-			if peer.ID == command.NewPeer.ID || peer.Address == command.NewPeer.Address {
-				return FixedPeerTCPGroupV1{}, raftcluster.ErrInvalidConfig
+			if !reflect.DeepEqual(peer.Capabilities, defaults) {
+				return FixedPeerTCPGroupV1{}, raftcluster.ErrUnsupportedFeature
 			}
 		}
-		if !old || len(group.Peers) >= fixedPeerMaxPeersV1 {
-			return FixedPeerTCPGroupV1{}, raftcluster.ErrInvalidConfig
-		}
-		group.Peers = append(slices.Clone(group.Peers), command.NewPeer)
+
 		return group, nil
 	}
 	return FixedPeerTCPGroupV1{}, raftcluster.ErrRouteTargetUnknown
@@ -148,11 +150,11 @@ func (r *FixedPeerTCPRuntimeV1) replacementStateAuthorityV1(ctx context.Context,
 // manifest remains the global node/security anchor; it is never edited to make
 // an otherwise unknown node admissible. No operation here can create a voter.
 func (r *FixedPeerTCPRuntimeV1) prepareReplacementV1(ctx context.Context, command raftplacement.ReplicaReplacementBeginV1) error {
-	group, err := r.validateReplacementBeginV1(command)
+	state, err := r.replacementStateAuthorityV1(ctx, command)
 	if err != nil {
 		return err
 	}
-	state, err := r.replacementStateAuthorityV1(ctx, command)
+	group, err := r.replacementGroupV1(state, true)
 	if err != nil {
 		return err
 	}
@@ -161,7 +163,7 @@ func (r *FixedPeerTCPRuntimeV1) prepareReplacementV1(ctx context.Context, comman
 	if r.draining.Load() || r.closed.Load() {
 		return raftcluster.ErrAdmissionUnavailable
 	}
-	if current := r.data[group.ID]; current != nil {
+	if current := r.data[group.ID]; current != nil && current.startErr != errReplacementReceiverUnopenedV1 {
 		if current.startErr != nil {
 			return current.startErr
 		}
@@ -170,13 +172,19 @@ func (r *FixedPeerTCPRuntimeV1) prepareReplacementV1(ctx context.Context, comman
 		}
 		return current.stream.replaceAuthorizedPeersV1(group.Peers)
 	}
-	if r.config.NodeID != command.NewPeer.ID {
+	isCurrentMember := false
+	for _, peer := range group.Peers {
+		if peer.ID == r.config.NodeID && peer.ID != command.NewPeer.ID {
+			isCurrentMember = true
+		}
+	}
+	if r.config.NodeID != command.NewPeer.ID && !isCurrentMember {
 		return raftcluster.ErrRouteTargetUnknown
 	}
-	if len(r.data) >= fixedPeerMaxHostedDataGroupsV1 {
+	if r.data[group.ID] == nil && len(r.data) >= fixedPeerMaxHostedDataGroupsV1 {
 		return raftcluster.ErrAdmissionUnavailable
 	}
-	if state.Seed == nil || state.Phase == raftplacement.ReplicaReplacementBegunV1 {
+	if !isCurrentMember && (state.Seed == nil || state.Phase == raftplacement.ReplicaReplacementBegunV1) {
 		return raftcluster.ErrAdmissionUnavailable
 	}
 	var admission *peerNodeAdmissionV1
@@ -191,7 +199,12 @@ func (r *FixedPeerTCPRuntimeV1) prepareReplacementV1(ctx context.Context, comman
 	if err != nil {
 		return err
 	}
-	receiver, err := r.openAuthorizedReplacementReceiverV1(resolved, state)
+	var receiver *replacementReceiverOwnerV1
+	if isCurrentMember || state.Phase == raftplacement.ReplicaReplacementCompletedV1 {
+		receiver, err = r.openCurrentReplacementReceiverV1(resolved)
+	} else {
+		receiver, err = r.openAuthorizedReplacementReceiverV1(resolved, state)
+	}
 	if err != nil {
 		return err
 	}
@@ -201,11 +214,17 @@ func (r *FixedPeerTCPRuntimeV1) prepareReplacementV1(ctx context.Context, comman
 			_ = receiver.Close()
 		}
 	}()
-	addr, err := net.ResolveTCPAddr("tcp", command.NewPeer.Address)
+	localAddress := ""
+	for _, peer := range group.Peers {
+		if peer.ID == r.config.NodeID {
+			localAddress = peer.Address
+		}
+	}
+	addr, err := net.ResolveTCPAddr("tcp", localAddress)
 	if err != nil {
 		return err
 	}
-	transport, stream, err := newFixedPeerTCPTransportOwnedV1(command.NewPeer.Address, addr, r.config.RequestTimeout, r.client.security, group.Peers, admission, "raft:"+string(group.ID))
+	transport, stream, err := newFixedPeerTCPTransportOwnedV1(localAddress, addr, r.config.RequestTimeout, r.client.security, group.Peers, admission, "raft:"+string(group.ID))
 	if err != nil {
 		return err
 	}
@@ -236,10 +255,12 @@ func (r *FixedPeerTCPRuntimeV1) prepareReplacementV1(ctx context.Context, comman
 		r.transports = append(r.transports, closer)
 		return err
 	}
-	d.stream, d.replacementID = stream, command.OperationID
+	d.stream, d.replacementID = stream, receiver.record.Begin.OperationID
 	entries := make([]raftcluster.GroupSubmitterV1, 0, len(r.data)+1)
 	for id, current := range r.data {
-		entries = append(entries, raftcluster.GroupSubmitterV1{GroupID: id, Submitter: current.submitter})
+		if current.submitter != nil {
+			entries = append(entries, raftcluster.GroupSubmitterV1{GroupID: id, Submitter: current.submitter})
+		}
 	}
 	entries = append(entries, raftcluster.GroupSubmitterV1{GroupID: group.ID, Submitter: d.submitter})
 	registry, err := raftcluster.NewGroupSubmitterRegistryV1(entries)
@@ -307,6 +328,22 @@ func (r *FixedPeerTCPRuntimeV1) handleReplacementV1(ctx context.Context, operati
 		return err
 	}
 	switch operation {
+	case "/v1/replacement-removal-proof":
+		state, stateErr := r.replacementStateAuthorityV1(ctx, command)
+		if stateErr != nil {
+			return stateErr
+		}
+		configuration, proofErr := r.replacementRemovalProofV1(ctx, state)
+		reply.Membership = &configuration
+		return proofErr
+	case "/v1/replacement-removal-intent":
+		return r.replacementRemovalIntentV1(ctx, command, reply)
+	case "/v1/replacement-remove":
+		return r.removeReplacementV1(ctx, command, reply)
+	case "/v1/replacement-complete":
+		return r.completeReplacementV1(ctx, command, reply)
+	case "/v1/replacement-reconcile":
+		return r.reconcileReplacementV1(ctx, command)
 	case "/v1/replacement-tail":
 		tail, err := r.replacementTailV1(ctx, command)
 		reply.ReplacementTail = &tail
@@ -332,6 +369,35 @@ func (r *FixedPeerTCPRuntimeV1) handleReplacementV1(ctx context.Context, operati
 		if _, err := r.localCatalogFence(ctx); err != nil {
 			return err
 		}
+		current, previous, _, err := r.authority.CurrentReplicaGroupV1(command.GroupID)
+		if err != nil {
+			return err
+		}
+		candidate := raftplacement.ReplicaReplacementStateV1{Begin: command, Phase: raftplacement.ReplicaReplacementBegunV1}
+		if previous != nil {
+			candidate.Peers = previous.Peers
+		}
+		// Exact retries use their already committed state, including terminal
+		// rosters where the old member is deliberately no longer present.
+		var previousRaw []byte
+		if previous != nil {
+			previousRaw, _ = raftplacement.EncodeReplicaReplacementBeginV1(previous.Begin)
+		}
+		if previous != nil && string(previousRaw) == string(raw) {
+			candidate = *previous
+		}
+		group, err := r.replacementGroupV1(candidate, false)
+		if err != nil {
+			return err
+		}
+		if len(current.Members) != len(group.Peers) {
+			return raftcluster.ErrInvalidConfig
+		}
+		for _, peer := range group.Peers {
+			if !slices.Contains(current.Members, peer.ID) {
+				return raftcluster.ErrInvalidConfig
+			}
+		}
 		if err := r.submitCatalogCommandV1(ctx, raw); err != nil {
 			return err
 		}
@@ -343,21 +409,34 @@ func (r *FixedPeerTCPRuntimeV1) handleReplacementV1(ctx context.Context, operati
 			return err
 		}
 		d := r.localDataV1(command.GroupID)
-		if d == nil || d.provider == nil || d.prejoin != nil {
+		if d == nil || d.provider == nil || r.config.NodeID == command.NewPeer.ID {
+			return raftcluster.ErrRouteTargetUnknown
+		}
+		group, err := r.replacementGroupV1(state, false)
+		if err != nil {
+			return err
+		}
+		member := false
+		for _, peer := range group.Peers {
+			member = member || peer.ID == r.config.NodeID
+		}
+		if !member {
 			return raftcluster.ErrRouteTargetUnknown
 		}
 		if operation == "/v1/replacement-seed" {
 			if state.Seed != nil && state.Seed.SourceNodeID != r.config.NodeID {
 				return raftcluster.ErrRouteTargetUnknown
 			}
-			return d.replacementWorkV1(command.OperationID, "seed", func(workCtx context.Context) (*raftcluster.ReplacementSnapshotSeedV1, error) {
+			return d.replacementAuthorizedSeedWorkV1(ctx, command, func(preflightCtx context.Context) error {
+				return r.replacementSeedPreflightV1(preflightCtx, state, d)
+			}, func(workCtx context.Context) (*raftcluster.ReplacementSnapshotSeedV1, error) {
 				return r.deriveReplacementSeedV1(workCtx, command, d)
 			}, reply)
 		}
 		if state.Phase != raftplacement.ReplicaReplacementSeededV1 || state.Seed == nil || state.Seed.SourceNodeID != r.config.NodeID {
 			return raftcluster.ErrAdmissionUnavailable
 		}
-		return d.replacementWorkV1(command.OperationID, "install", func(workCtx context.Context) (*raftcluster.ReplacementSnapshotSeedV1, error) {
+		return d.replacementAuthorizedWorkV1(command, "install", func(workCtx context.Context) (*raftcluster.ReplacementSnapshotSeedV1, error) {
 			return r.runReplacementInstallV1(workCtx, command, d)
 		}, reply)
 	case "/v1/replacement-cutoff":
@@ -443,7 +522,16 @@ func (c *FixedPeerTCPClientV1) PrepareReplicaReplacementV1(ctx context.Context, 
 		return raftcluster.CommittedRaftConfigurationV1{}, errors.Join(err, raftplacement.ErrCatalogMetaUnavailable)
 	}
 	state := *read.ReplacementState
+	group, err = replacementGroupPeersV1(group, state, false)
+	if err != nil {
+		return raftcluster.CommittedRaftConfigurationV1{}, err
+	}
 	if state.Phase == raftplacement.ReplicaReplacementBegunV1 {
+		// Existing dynamic members may need their durable receiver reopened
+		// before this current group can form the quorum that produces a seed.
+		if err := c.prepareReplacementCurrentPeersV1(ctx, group, command, raw); err != nil {
+			return raftcluster.CommittedRaftConfigurationV1{}, err
+		}
 		leader, err := c.leader(ctx, group)
 		if err != nil {
 			return raftcluster.CommittedRaftConfigurationV1{}, fmt.Errorf("replacement source leader: %w", err)
@@ -545,6 +633,10 @@ func (c *FixedPeerTCPClientV1) prepareReplacementPeersV1(ctx context.Context, gr
 	if _, err := c.call(ctx, command.NewPeer.ID, "replacement-prepare", fixedPeerRequestV1{Entry: raw}, true); err != nil {
 		return fmt.Errorf("replacement target prepare: %w", err)
 	}
+	return c.prepareReplacementCurrentPeersV1(ctx, group, command, raw)
+}
+
+func (c *FixedPeerTCPClientV1) prepareReplacementCurrentPeersV1(ctx context.Context, group FixedPeerTCPGroupV1, command raftplacement.ReplicaReplacementBeginV1, raw []byte) error {
 	for _, peer := range group.Peers {
 		if _, err := c.call(ctx, peer.ID, "replacement-prepare", fixedPeerRequestV1{Entry: raw}, true); err != nil && peer.ID != command.OldNodeID {
 			return fmt.Errorf("replacement peer prepare %s: %w", peer.ID, err)

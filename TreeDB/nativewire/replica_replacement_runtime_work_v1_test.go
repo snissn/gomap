@@ -144,3 +144,48 @@ func TestReplacementNativeFailureRetainsSeedBudgetV1(t *testing.T) {
 		}
 	}
 }
+
+// The direct entry exercises worker ownership independently of catalog fixtures.
+// Production callers enter through the atomic canonical-BEGIN boundary above.
+func (d *fixedPeerDataV1) replacementWorkV1(operation, phase string, work func(context.Context) (*raftcluster.ReplacementSnapshotSeedV1, error), reply *fixedPeerReplyV1) error {
+	d.replacementWork.mu.Lock()
+	defer d.replacementWork.mu.Unlock()
+	return d.replacementWorkLockedV1(operation, phase, nil, work, reply)
+}
+
+func TestReplacementAuthorizedWorkerRejectsStalePublicationV1(t *testing.T) {
+	cfg := fixedPeerTestConfigsV1(t)[0]
+	cfg.ClusterID = "replacement-worker"
+	cfg.Credentials = peerCredentialsFixtureV1(t, cfg.ClusterID, string(cfg.NodeID))
+	runtime, err := OpenFixedPeerTCPRuntimeV1(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+	d := runtime.localDataV1(cfg.Groups[0].ID)
+	old := replacementReceiverTestBeginV1(t)
+	newer := old
+	newer.ExpectedEpoch++ // The logical operation name alone is not identity.
+	var calls atomic.Int32
+	work := func(context.Context) (*raftcluster.ReplacementSnapshotSeedV1, error) { calls.Add(1); return nil, nil }
+	var reply fixedPeerReplyV1
+	if err := d.replacementAuthorizedWorkV1(old, "verify", work, &reply); err != nil {
+		t.Fatal(err)
+	}
+	<-d.replacementWork.work.done
+	if err := d.replacementAuthorizedWorkV1(newer, "verify", work, &reply); err != nil {
+		t.Fatal(err)
+	}
+	<-d.replacementWork.work.done
+	// Simulate an old request delayed across a newer committed authorization.
+	// It must not publish work or poison the newer operation's cached result.
+	if err := d.replacementAuthorizedWorkV1(old, "verify", work, &reply); err == nil {
+		t.Fatal("stale publication accepted")
+	}
+	if err := d.replacementAuthorizedWorkV1(newer, "verify", work, &reply); err != nil {
+		t.Fatal(err)
+	}
+	if calls.Load() != 2 {
+		t.Fatalf("work repeated: %d", calls.Load())
+	}
+}

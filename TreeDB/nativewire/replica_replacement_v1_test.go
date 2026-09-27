@@ -30,7 +30,8 @@ func TestReplacementPublicInstallSurvivesCallerDeadlineV1(t *testing.T) {
 	testReplacementPublicInstallV1(t, true, false)
 }
 
-func testReplacementPublicInstallV1(t *testing.T, stallInstall, promote bool) {
+func testReplacementPublicInstallV1(t *testing.T, stallInstall, promote bool, completion ...bool) {
+	complete := len(completion) != 0 && completion[0]
 	configs := fixedPeerTestConfigsV1(t)
 	address := func() string {
 		listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -47,6 +48,11 @@ func testReplacementPublicInstallV1(t *testing.T, stallInstall, promote bool) {
 	group.Peers = append([]raftcluster.Peer{configs[0].Groups[0].Peers[0]}, group.Peers...)
 	spare := FixedPeerTCPNodeV1{ID: "replacement", Address: address()}
 	nodes := append(append([]FixedPeerTCPNodeV1(nil), configs[0].Nodes...), spare)
+	if complete {
+		for _, id := range []raftcluster.NodeID{"replacement-2", "replacement-3", "replacement-4"} {
+			nodes = append(nodes, FixedPeerTCPNodeV1{ID: id, Address: address()})
+		}
+	}
 	for i := range configs {
 		configs[i].Nodes = nodes
 		configs[i].Groups = []FixedPeerTCPGroupV1{group}
@@ -63,6 +69,15 @@ func testReplacementPublicInstallV1(t *testing.T, stallInstall, promote bool) {
 	spareConfig.DataRoot, spareConfig.RaftRoot = filepath.Join(spareRoot, "data"), filepath.Join(spareRoot, "raft")
 	spareConfig.RaftListen = map[raftcluster.GroupID]string{}
 	configs = append(configs, spareConfig)
+	if complete {
+		for _, node := range nodes[4:] {
+			extra := spareConfig
+			extra.NodeID, extra.ListenAddress = node.ID, node.Address
+			extraRoot := t.TempDir()
+			extra.DataRoot, extra.RaftRoot = filepath.Join(extraRoot, "data"), filepath.Join(extraRoot, "raft")
+			configs = append(configs, extra)
+		}
+	}
 	ca := newPeerCAFixtureV1(t)
 	for i := range configs {
 		configs[i].ClusterID = "replacement-conformance"
@@ -131,6 +146,33 @@ func testReplacementPublicInstallV1(t *testing.T, stallInstall, promote bool) {
 	// Existing public catalog commands cannot authorize membership changes. This
 	// bounded envelope is the first new operation admitted by P5's existing apply
 	// dispatcher; it carries no caller assertion of snapshot or tail readiness.
+	oldNode := raftcluster.NodeID("owner-2")
+	if complete {
+		// Catalog readiness does not imply the data group has committed a
+		// current-term leader. A follower's discovery hint is insufficient for
+		// choosing the old voter in this completion fixture.
+		var initialLeader raftcluster.NodeID
+		fixedPeerWaitV1(t, ctx, func() bool {
+			for i := range configs[:3] {
+				local := runtimes[i].localDataV1(group.ID)
+				if local == nil || local.provider == nil {
+					continue
+				}
+				committed, err := local.provider.CommittedConfigurationV1(ctx)
+				if err == nil && committed.GroupID == group.ID && committed.LeaderID == configs[i].NodeID && len(committed.Members) == len(group.Peers) {
+					initialLeader = configs[i].NodeID
+					return true
+				}
+			}
+			return false
+		})
+		for _, peer := range group.Peers {
+			if peer.ID != initialLeader {
+				oldNode = peer.ID
+				break
+			}
+		}
+	}
 	begin, err := json.Marshal(struct {
 		Format        uint16              `json:"format"`
 		Kind          string              `json:"kind"`
@@ -141,7 +183,7 @@ func testReplacementPublicInstallV1(t *testing.T, stallInstall, promote bool) {
 		GroupID       raftcluster.GroupID `json:"group_id"`
 		OldNodeID     raftcluster.NodeID  `json:"old_node_id"`
 		NewPeer       raftcluster.Peer    `json:"new_peer"`
-	}{1, "replica-replacement-begin-v1", "replace-owner-2", client.digest, record.Epoch, record.Digest, group.ID, "owner-2", raftcluster.Peer{ID: spare.ID, Address: address()}})
+	}{1, "replica-replacement-begin-v1", "replace-owner-2", client.digest, record.Epoch, record.Digest, group.ID, oldNode, raftcluster.Peer{ID: spare.ID, Address: address()}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -382,6 +424,10 @@ func testReplacementPublicInstallV1(t *testing.T, stallInstall, promote bool) {
 	}
 	if promote {
 		testReplacementPromotionTailV1(t, ctx, client, configs, runtimes, leader, group, operation, membership)
+	}
+	if complete {
+		testReplacementCompleteAndSequentialV1(t, ctx, client, configs, runtimes, group, operation)
+		return
 	}
 	// Seeded nonvoter enrollment cannot publish a routing/ownership change.
 	// Promotion also retains every original voter and leaves catalog routing unchanged.

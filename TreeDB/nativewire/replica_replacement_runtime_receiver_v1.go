@@ -3,11 +3,13 @@ package nativewire
 import (
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 
 	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
 	"github.com/snissn/gomap/TreeDB/internal/raftplacement"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
 // An existing receiver record is the only restart authority. A request cannot
@@ -74,4 +76,63 @@ func (r *FixedPeerTCPRuntimeV1) replacementReceiverCutoffV1(ctx context.Context,
 	}
 	reply.ReplacementSeed = state.Seed
 	return nil
+}
+
+var errReplacementReceiverUnopenedV1 = errors.New("nativewire: prior replacement receiver requires current membership")
+
+// Startup inspects one bounded record per configured group, without opening a
+// provider or treating the historical receiver as current membership authority.
+// Retain the marker in the existing data inventory so retirement cannot turn a
+// restarted former replica into an apparently fresh routing-only gateway.
+func (r *FixedPeerTCPRuntimeV1) captureUnopenedReplacementReceiverV1(group raftcluster.GroupID) (*fixedPeerDataV1, error) {
+	// This is the deterministic identity layout used by raftcluster.storageLayout;
+	// all path components came from the validated immutable fixed configuration.
+	dir := filepath.Join(r.config.RaftRoot, "nodes", string(r.config.NodeID), "groups", string(group))
+	if _, err := os.Lstat(filepath.Join(dir, replacementReceiverRecordNameV1)); errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	} else if err != nil {
+		return nil, err
+	}
+	record, err := r.readCurrentReplacementReceiverV1(dir, group)
+	if err != nil {
+		return nil, err
+	}
+	return &fixedPeerDataV1{startErr: errReplacementReceiverUnopenedV1, replacementID: record.Begin.OperationID}, nil
+}
+
+func (r *FixedPeerTCPRuntimeV1) readCurrentReplacementReceiverV1(dir string, group raftcluster.GroupID) (replacementReceiverRecordV1, error) {
+	parent, err := rootpublication.OpenStableParent(dir)
+	if err != nil {
+		return replacementReceiverRecordV1{}, err
+	}
+	file, err := rootpublication.OpenStableChildFile(parent, replacementReceiverRecordNameV1, os.O_RDONLY, 0)
+	if err != nil {
+		return replacementReceiverRecordV1{}, errors.Join(err, parent.Close())
+	}
+	raw, readErr := io.ReadAll(io.LimitReader(file, replacementReceiverRecordMaxBytesV1+1))
+	if err := errors.Join(readErr, file.Close(), parent.Close()); err != nil {
+		return replacementReceiverRecordV1{}, err
+	}
+	record, err := decodeReplacementReceiverRecordV1(raw)
+	if err != nil {
+		return record, err
+	}
+	if record.Begin.ConfigDigest != r.client.digest || record.Begin.GroupID != group || record.Begin.NewPeer.ID != r.config.NodeID {
+		return record, raftcluster.ErrInvalidConfig
+	}
+	return record, nil
+}
+
+// Current membership, fenced by the catalog caller, permits reopening a prior
+// receiver after later operations compact its BEGIN. Its exact durable record
+// still supplies the permanent seed floor; a request cannot replace that record.
+func (r *FixedPeerTCPRuntimeV1) openCurrentReplacementReceiverV1(cfg raftcluster.ResolvedConfig) (*replacementReceiverOwnerV1, error) {
+	record, err := r.readCurrentReplacementReceiverV1(cfg.Layout.GroupDir, cfg.GroupID)
+	if err != nil {
+		return nil, err
+	}
+	if record.Phase != replacementReceiverAddIntentV1 {
+		return nil, raftcluster.ErrAdmissionUnavailable
+	}
+	return openReplacementReceiverOwnerV1(cfg.Layout.GroupDir, record.Begin, record.Seed)
 }

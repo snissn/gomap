@@ -73,3 +73,27 @@ func (f *FSM) releaseSnapshotOperationV1() {
 		release()
 	}
 }
+
+// SnapshotWorkReleasePendingV1 reports whether an earlier replacement still
+// owns admission through failed snapshot cleanup. It does not admit new work.
+func (f *FSM) SnapshotWorkReleasePendingV1() bool {
+	if f == nil {
+		return true
+	}
+	f.snapshotMu.Lock()
+	defer f.snapshotMu.Unlock()
+	return f.snapshotWorkRelease != nil
+}
+
+// SnapshotCarrierReleasedV1 is used only after a replacement native snapshot
+// future has returned a known pre-Create refusal. The pinned Raft implementation
+// releases its FSM snapshot before completing that future. An outstanding owner
+// or cleanup callback cannot be treated as a clean pre-Create refusal.
+func (f *FSM) SnapshotCarrierReleasedV1() bool {
+	if f == nil {
+		return false
+	}
+	f.snapshotMu.Lock()
+	defer f.snapshotMu.Unlock()
+	return !f.snapshotOperationActive.Load() && f.snapshotWorkRelease == nil
+}
