@@ -18,6 +18,7 @@ import (
 )
 
 func TestReplacementSnapshotCancellationOwnsNativeCompletionV1(t *testing.T) {
+	requireRaftSnapshotExportSupportedV1(t)
 	store, err := hraft.NewFileSnapshotStore(t.TempDir(), 2, io.Discard)
 	if err != nil {
 		t.Fatal(err)
@@ -65,6 +66,7 @@ func TestReplacementSnapshotCancellationOwnsNativeCompletionV1(t *testing.T) {
 }
 
 func TestReplacementSnapshotAdmissionHandoffCleanupRetryV1(t *testing.T) {
+	requireRaftSnapshotExportSupportedV1(t)
 	fsm, provider, _ := snapshotOwnerProviderForTest(t, nil)
 	denied := errors.New("injected capture cleanup debt")
 	var fail atomic.Bool
@@ -114,6 +116,7 @@ func TestReplacementSnapshotAdmissionHandoffCleanupRetryV1(t *testing.T) {
 }
 
 func TestReplacementSnapshotNativeFailureRequiresRestartV1(t *testing.T) {
+	requireRaftSnapshotExportSupportedV1(t)
 	_, provider, _ := snapshotOwnerProviderForTest(t, nil)
 	denied := errors.New("injected native snapshot persistence failure")
 	raftSnapshotBeforeCleanupForTest = func(string) error { return denied }
@@ -127,6 +130,7 @@ func TestReplacementSnapshotNativeFailureRequiresRestartV1(t *testing.T) {
 }
 
 func TestReplacementSnapshotConfigOnlyGapIsRetryableBeforeSinkV1(t *testing.T) {
+	requireRaftSnapshotExportSupportedV1(t)
 	fsm, provider, _ := snapshotOwnerProviderForTest(t, nil)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -211,6 +215,7 @@ func (s *replacementFaultSnapshotSinkV1) Cancel() error {
 }
 
 func TestReplacementRetainedCopyCleanupProofV1(t *testing.T) {
+	requireRaftSnapshotExportSupportedV1(t)
 	_, source, opts := snapshotOwnerProviderForTest(t, nil)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

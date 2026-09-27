@@ -17,6 +17,7 @@ import (
 // Exercise HashiCorp's real runFSM loop: releasing f.mu is insufficient if
 // archive streaming still runs synchronously inside FSM.Snapshot.
 func TestSnapshotStreamingDoesNotHoldApplyForWholeArchiveV1(t *testing.T) {
+	requireRaftSnapshotExportSupportedV1(t)
 	root := t.TempDir()
 	db := openRaftSnapshotFSMTestDBWithOptions(t, filepath.Join(root, "data"), true, true)
 	defer db.Close()

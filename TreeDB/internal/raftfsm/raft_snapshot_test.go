@@ -264,6 +264,7 @@ func TestRaftSnapshotV1InstallPreservesVectorPartitionManifestNamespace(t *testi
 }
 
 func TestRaftSnapshotV1ExportIncludesEmptyVectorPartitionNamespace(t *testing.T) {
+	requireRaftSnapshotExportSupportedV1(t)
 	root := t.TempDir()
 	sourceDB := openRaftSnapshotFSMTestDB(t, root, true)
 	defer func() { _ = sourceDB.Close() }()
@@ -404,6 +405,7 @@ func TestRaftSnapshotV1InstallRejectsIncompleteVectorPartitionStateBeforeReplace
 }
 
 func TestRaftSnapshotV1ExportWaitsForVectorPartitionStorageBarrier(t *testing.T) {
+	requireRaftSnapshotExportSupportedV1(t)
 	root := t.TempDir()
 	db := openRaftSnapshotFSMTestDB(t, root, true)
 	defer func() { _ = db.Close() }()
@@ -747,6 +749,7 @@ func publishRaftSnapshotReadyVectorPartitionForTest(tb testing.TB, database *bac
 }
 
 func TestRaftSnapshotV1ExportStagesArchiveWithoutPayloadAndReleaseCleans(t *testing.T) {
+	requireRaftSnapshotExportSupportedV1(t)
 	root := t.TempDir()
 	sourceDir := filepath.Join(root, "source")
 	sourceDB := openRaftSnapshotFSMTestDB(t, sourceDir, true)
@@ -1668,6 +1671,13 @@ func requireRaftSnapshotInstallSupportedV1(tb testing.TB) {
 	tb.Helper()
 	if !rootpublication.StableRelativeNamespaceSupported() {
 		tb.Skip("Raft snapshot install requires durable rename and removal namespaces")
+	}
+}
+
+func requireRaftSnapshotExportSupportedV1(tb testing.TB) {
+	tb.Helper()
+	if !rootpublication.StableRelativeNamespaceSupported() {
+		tb.Skip("Raft snapshot export requires durable rename and removal namespaces")
 	}
 }
 

@@ -55,6 +55,16 @@ func (f *FSM) rememberSnapshotOwnerV1(snapshot raftcluster.RaftSnapshotV1) bool 
 // lifecycle metadata selection remain capture work; bulk index/archive copying
 // and the complete logical digest run later in Persist.
 func (f *FSM) CaptureRaftSnapshotV1() (result raftcluster.RaftSnapshotV1, captureErr error) {
+	if f == nil {
+		return raftcluster.RaftSnapshotV1{}, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "FSM is not open")
+	}
+	if !rootpublication.StableRelativeNamespaceSupported() {
+		return raftcluster.RaftSnapshotV1{}, codedError(
+			raftentry.ErrorUnsafeDurabilityModeV1,
+			"%w: Raft snapshot capture requires durable rename and removal namespaces",
+			rootpublication.ErrNamespacePersistenceUnsupported,
+		)
+	}
 	namespace, err := f.retainSnapshotOperationV1()
 	if err != nil {
 		return raftcluster.RaftSnapshotV1{}, err

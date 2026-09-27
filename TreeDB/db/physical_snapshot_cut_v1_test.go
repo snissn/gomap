@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/lockfile"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
 type physicalCutPausedWriterV1 struct {
@@ -137,8 +138,25 @@ func TestPhysicalSnapshotCutV1PreservesBothSlotsAcrossReuseAndClose(t *testing.T
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := RebindDurableRootSnapshotV1(destination); err != nil {
+			beforeRebindBytes, err := os.ReadFile(filepath.Join(destination, indexFileName))
+			if err != nil {
 				t.Fatal(err)
+			}
+			rebindErr := RebindDurableRootSnapshotV1(destination)
+			if !rootpublication.StableRelativeNamespaceSupported() {
+				if !errors.Is(rebindErr, ErrNamespacePersistenceUnsupported) {
+					t.Fatalf("unsupported rebind error=%v", rebindErr)
+				}
+				after, err := os.ReadFile(filepath.Join(destination, indexFileName))
+				if err != nil || !bytes.Equal(after, beforeRebindBytes) {
+					t.Fatalf("unsupported rebind changed captured index: %v", err)
+				}
+				temporary, err := filepath.Glob(filepath.Join(destination, ".durable-root-rebind-*"))
+				if err != nil || len(temporary) != 0 {
+					t.Fatalf("unsupported rebind left temporary indexes: %v %v", temporary, err)
+				}
+			} else if rebindErr != nil {
+				t.Fatal(rebindErr)
 			}
 			afterRebind, err := os.Stat(filepath.Join(destination, indexFileName))
 			if err != nil {
@@ -147,26 +165,28 @@ func TestPhysicalSnapshotCutV1PreservesBothSlotsAcrossReuseAndClose(t *testing.T
 			if afterRebind.Size() != beforeRebind.Size() {
 				t.Fatalf("rebind changed captured extent: %d -> %d", beforeRebind.Size(), afterRebind.Size())
 			}
-			for _, fallback := range []bool{false, true} {
-				if fallback {
-					corruptIndexPageByte(t, destination, active)
-				}
-				restored, err := Open(Options{Dir: destination, DisableSideStores: true, ReadOnly: true})
-				if err != nil {
-					t.Fatal(err)
-				}
-				slot, want := active, "captured"
-				if fallback {
-					slot, want = 1-active, "older"
-				}
-				if got, err := restored.Get([]byte("key")); err != nil || string(got) != want {
-					t.Fatalf("fallback=%v got=%q err=%v want=%q", fallback, got, err, want)
-				}
-				if restored.durableRoot.record.Freelist != records[slot].Freelist {
-					t.Fatal("allocator generation changed in cut")
-				}
-				if err := restored.Close(); err != nil {
-					t.Fatal(err)
+			if rootpublication.StableRelativeNamespaceSupported() {
+				for _, fallback := range []bool{false, true} {
+					if fallback {
+						corruptIndexPageByte(t, destination, active)
+					}
+					restored, err := Open(Options{Dir: destination, DisableSideStores: true, ReadOnly: true})
+					if err != nil {
+						t.Fatal(err)
+					}
+					slot, want := active, "captured"
+					if fallback {
+						slot, want = 1-active, "older"
+					}
+					if got, err := restored.Get([]byte("key")); err != nil || string(got) != want {
+						t.Fatalf("fallback=%v got=%q err=%v want=%q", fallback, got, err, want)
+					}
+					if restored.durableRoot.record.Freelist != records[slot].Freelist {
+						t.Fatal("allocator generation changed in cut")
+					}
+					if err := restored.Close(); err != nil {
+						t.Fatal(err)
+					}
 				}
 			}
 			if err := second.Close(); err != nil {
@@ -293,26 +313,45 @@ func TestPhysicalSnapshotCutV1ReadOnlyOwnership(t *testing.T) {
 	if err := output.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := RebindDurableRootSnapshotV1(destination); err != nil {
+	beforeRebindBytes, err := os.ReadFile(filepath.Join(destination, indexFileName))
+	if err != nil {
 		t.Fatal(err)
 	}
-	for _, fallback := range []bool{false, true} {
-		if fallback {
-			corruptIndexPageByte(t, destination, active)
+	rebindErr := RebindDurableRootSnapshotV1(destination)
+	if !rootpublication.StableRelativeNamespaceSupported() {
+		if !errors.Is(rebindErr, ErrNamespacePersistenceUnsupported) {
+			t.Fatalf("unsupported rebind error=%v", rebindErr)
 		}
-		restored, err := Open(Options{Dir: destination, DisableSideStores: true, ReadOnly: true})
-		if err != nil {
-			t.Fatal(err)
+		after, err := os.ReadFile(filepath.Join(destination, indexFileName))
+		if err != nil || !bytes.Equal(after, beforeRebindBytes) {
+			t.Fatalf("unsupported rebind changed captured index: %v", err)
 		}
-		want := "latest"
-		if fallback {
-			want = "older"
+		temporary, err := filepath.Glob(filepath.Join(destination, ".durable-root-rebind-*"))
+		if err != nil || len(temporary) != 0 {
+			t.Fatalf("unsupported rebind left temporary indexes: %v %v", temporary, err)
 		}
-		if got, err := restored.Get([]byte("key")); err != nil || string(got) != want {
-			t.Fatalf("got=%q want=%q err=%v", got, want, err)
-		}
-		if err := restored.Close(); err != nil {
-			t.Fatal(err)
+	} else if rebindErr != nil {
+		t.Fatal(rebindErr)
+	}
+	if rootpublication.StableRelativeNamespaceSupported() {
+		for _, fallback := range []bool{false, true} {
+			if fallback {
+				corruptIndexPageByte(t, destination, active)
+			}
+			restored, err := Open(Options{Dir: destination, DisableSideStores: true, ReadOnly: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := "latest"
+			if fallback {
+				want = "older"
+			}
+			if got, err := restored.Get([]byte("key")); err != nil || string(got) != want {
+				t.Fatalf("got=%q want=%q err=%v", got, want, err)
+			}
+			if err := restored.Close(); err != nil {
+				t.Fatal(err)
+			}
 		}
 	}
 	if err := cut.Close(); err != nil {

@@ -63,6 +63,7 @@ func snapshotOwnerProviderForTest(t *testing.T, store hraft.SnapshotStore) (*FSM
 }
 
 func TestCapturedRaftSnapshotV1ProviderCleanupFailureRemainsRetryable(t *testing.T) {
+	requireRaftSnapshotExportSupportedV1(t)
 	source, provider, opts := snapshotOwnerProviderForTest(t, nil)
 	denied := errors.New("injected stage cleanup failure")
 	var fail atomic.Bool
@@ -132,6 +133,7 @@ func (s *blockedOwnerSnapshotSinkV1) Write(p []byte) (int, error) {
 }
 
 func TestCapturedRaftSnapshotV1ProviderBlockedSinkCloseReopen(t *testing.T) {
+	requireRaftSnapshotExportSupportedV1(t)
 	fileStore, err := hraft.NewFileSnapshotStore(t.TempDir(), 2, io.Discard)
 	if err != nil {
 		t.Fatal(err)

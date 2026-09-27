@@ -84,6 +84,7 @@ func TestCapturedRaftSnapshotV1RestoresCutAndReplaysTail(t *testing.T) {
 }
 
 func TestCapturedRaftSnapshotV1AdmissionAndNeverPersistExpiry(t *testing.T) {
+	requireRaftSnapshotExportSupportedV1(t)
 	dir := t.TempDir()
 	database := openRaftSnapshotFSMTestDB(t, dir, true)
 	defer database.Close()
@@ -131,6 +132,7 @@ func TestCapturedRaftSnapshotV1AdmissionAndNeverPersistExpiry(t *testing.T) {
 }
 
 func TestCapturedRaftSnapshotV1CanceledMaterializationCleansStage(t *testing.T) {
+	requireRaftSnapshotExportSupportedV1(t)
 	dir := t.TempDir()
 	database := openRaftSnapshotFSMTestDB(t, dir, true)
 	defer database.Close()
@@ -169,6 +171,7 @@ func TestCapturedRaftSnapshotV1CanceledMaterializationCleansStage(t *testing.T) 
 }
 
 func TestCapturedRaftSnapshotV1UnregisteredSideStoreRefuses(t *testing.T) {
+	requireRaftSnapshotExportSupportedV1(t)
 	dir := t.TempDir()
 	database := openRaftSnapshotFSMTestDB(t, dir, true)
 	defer database.Close()
@@ -192,6 +195,7 @@ func TestCapturedRaftSnapshotV1UnregisteredSideStoreRefuses(t *testing.T) {
 }
 
 func TestCapturedRaftSnapshotV1FinalizedExpiryAndInstallAdmission(t *testing.T) {
+	requireRaftSnapshotExportSupportedV1(t)
 	dir := t.TempDir()
 	database := openRaftSnapshotFSMTestDB(t, dir, true)
 	defer database.Close()
@@ -253,6 +257,7 @@ func TestCapturedRaftSnapshotV1FinalizedExpiryAndInstallAdmission(t *testing.T) 
 }
 
 func TestCapturedRaftSnapshotV1SideDirectoryWithoutIndexRefusesContents(t *testing.T) {
+	requireRaftSnapshotExportSupportedV1(t)
 	for _, nonempty := range []bool{false, true} {
 		t.Run(map[bool]string{false: "empty", true: "unowned-content"}[nonempty], func(t *testing.T) {
 			dir := t.TempDir()
@@ -294,6 +299,7 @@ func TestCapturedRaftSnapshotV1SideDirectoryWithoutIndexRefusesContents(t *testi
 }
 
 func TestCapturedRaftSnapshotV1CloseRetainsNamespaceUntilReaderCloses(t *testing.T) {
+	requireRaftSnapshotExportSupportedV1(t)
 	dir := t.TempDir()
 	database := openRaftSnapshotFSMTestDB(t, dir, true)
 	defer database.Close()

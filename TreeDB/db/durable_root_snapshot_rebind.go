@@ -48,6 +48,9 @@ func RebindDurableRootSnapshotLayoutWithContextV1(ctx context.Context, dir, side
 	if dir == "" {
 		return errors.New("treedb: durable-root snapshot rebind directory is empty")
 	}
+	if !rootpublication.StableRelativeNamespaceSupported() {
+		return fmt.Errorf("%w: durable-root snapshot rebind requires durable rename and removal namespaces", rootpublication.ErrNamespacePersistenceUnsupported)
+	}
 	indexPath := filepath.Join(dir, indexFileName)
 	source, err := os.Open(indexPath)
 	if err != nil {
