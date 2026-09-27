@@ -3529,7 +3529,7 @@ func (s *columnPhysicalAssetAppendSession) existingOwnedAppender(marker columnMa
 	if err != nil {
 		return nil, err
 	}
-	descriptors := resources.Descriptors()
+	descriptors := resources.PhysicalDescriptors()
 	if len(descriptors) != 1 {
 		return nil, errors.Join(rootpublication.ErrUnresolvedResource, appender.abort())
 	}

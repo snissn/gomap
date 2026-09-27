@@ -85,7 +85,7 @@ func (directory *DependencyDirectoryV2) LookupLogical(obligation StableLogicalOb
 	}
 	entry, err := directory.LookupPhysical(owner)
 	if err != nil {
-		return nil, StableLogicalObligation{}, false, fmt.Errorf("%w: logical owner: %v", ErrDependencyManifestFormat, err)
+		return nil, StableLogicalObligation{}, false, fmt.Errorf("%w: logical owner: %w", ErrDependencyManifestFormat, err)
 	}
 	if err := dependencyLogicalOwnerV2(entry, got); err != nil {
 		return nil, StableLogicalObligation{}, false, err
@@ -143,7 +143,7 @@ func (directory *DependencyDirectoryV2) Walk(visit func(key, value []byte) error
 			}
 			entry, err := directory.LookupPhysical(owner)
 			if err != nil {
-				return fmt.Errorf("%w: logical owner: %v", ErrDependencyManifestFormat, err)
+				return fmt.Errorf("%w: logical owner: %w", ErrDependencyManifestFormat, err)
 			}
 			if err := dependencyLogicalOwnerV2(entry, obligation); err != nil {
 				return err

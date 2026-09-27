@@ -267,8 +267,8 @@ func (db *DB) prepareLeafGenerationManifestStableCandidate(candidate *leafGenera
 		builder.Abandon()
 		return nil, nil, err
 	}
-	descriptors := resources.Descriptors()
-	if len(descriptors) != 1 || descriptors[0].Kind() != rootpublication.ResourceOuterLeafManifest || descriptors[0].Generation() != candidate.ManifestRevision || descriptors[0].Digest() == ([32]byte{}) {
+	descriptors := resources.PhysicalDescriptors()
+	if len(descriptors) != 1 || descriptors[0].Kind != rootpublication.ResourceOuterLeafManifest || descriptors[0].Generation != candidate.ManifestRevision || descriptors[0].Digest() == ([32]byte{}) {
 		resources.Release()
 		return nil, nil, fmt.Errorf("%w: manifest replacement token does not match persisted revision %d", rootpublication.ErrResourceConflict, candidate.ManifestRevision)
 	}

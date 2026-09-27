@@ -111,6 +111,10 @@ func BindDependencyDirectoryV2(source *StableResourceSet, directory *DependencyD
 		return nil, err
 	}
 	if physical == 0 {
+		if err := directory.Walk(nil); err != nil {
+			bound.Release()
+			return nil, err
+		}
 		if err := directory.Retain(); err != nil {
 			bound.Release()
 			return nil, ErrResourceOwnership
@@ -233,7 +237,7 @@ func (view stableLogicalObligationView) walk(visit func(StableLogicalObligation)
 			return err
 		}
 	}
-	view.rangeValues(func(obligation StableLogicalObligation) bool {
+	view.rangeDeltaValues(func(obligation StableLogicalObligation) bool {
 		if _, removed := view.removed[stableLogicalObligationKey(obligation)]; removed {
 			return true
 		}

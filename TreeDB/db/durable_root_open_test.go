@@ -806,7 +806,7 @@ func TestCaptureRebuiltIndexDurableResourcesRetainsSelectedImmutableDependencies
 		t.Fatal(err)
 	}
 	defer captured.Release()
-	descriptors := captured.Descriptors()
+	descriptors := mustStableResourceDescriptors(t, captured)
 	if len(descriptors) != 1 || descriptors[0].Kind() != rootpublication.ResourceOuterLeafManifest {
 		t.Fatalf("rebuilt durable descriptors=%+v, want selected immutable manifest", descriptors)
 	}

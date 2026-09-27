@@ -93,7 +93,7 @@ func WalkDependencyDirectoryChangesV2(source *StableResourceSet, base *Dependenc
 			removed++
 		}
 		// rangeValues visits only the in-memory delta for a directory view.
-		entry.logicalObligations.rangeValues(func(obligation StableLogicalObligation) bool {
+		entry.logicalObligations.rangeDeltaValues(func(obligation StableLogicalObligation) bool {
 			key := DependencyLogicalKeyV2(obligation)
 			if _, duplicate := additions[string(key)]; duplicate {
 				err = fmt.Errorf("%w: duplicate logical directory addition", ErrResourceConflict)

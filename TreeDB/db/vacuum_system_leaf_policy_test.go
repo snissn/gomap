@@ -303,7 +303,7 @@ func vacuumSystemManifestFiles(t *testing.T, d *DB, allSlots bool) map[uint32]st
 			}
 		}
 		if manifest == nil {
-			t.Fatalf("slot %d has no exact manifest: selected=%d record=%+v resources=%+v manifest_mode=%v vacuum=%+v", slot, d.durableRoot.slot, record, d.durableRoot.slotResources[slot].Descriptors(), d.leafGenerationManifestStore.mode, d.VacuumOnlineStats())
+			t.Fatalf("slot %d has no exact manifest: selected=%d record=%+v resources=%+v manifest_mode=%v vacuum=%+v", slot, d.durableRoot.slot, record, mustStableResourceDescriptors(t, d.durableRoot.slotResources[slot]), d.leafGenerationManifestStore.mode, d.VacuumOnlineStats())
 		}
 		for ptr := range collectLeafRefIDsFromRoot(t, d, record.SystemRootPageID) {
 			id := page.ValueLogSegmentID(ptr.FileID)

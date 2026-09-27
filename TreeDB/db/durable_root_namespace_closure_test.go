@@ -39,7 +39,7 @@ func TestCaptureDurableRootNamespaceScopeCannotBypassAppendFallback(t *testing.T
 	if err := rootpublication.ValidateStableResourceSetLogicalObligations(candidate, durableRootClosureRequirements3928(t, a, added)); err != nil {
 		t.Fatal(err)
 	}
-	if got := base.Descriptors(); len(got) != 1 || !reflect.DeepEqual(got[0].LogicalObligations(), []rootpublication.StableLogicalObligation{a, oldB}) {
+	if got := mustStableResourceDescriptors(t, base); len(got) != 1 || !reflect.DeepEqual(got[0].LogicalObligations(), []rootpublication.StableLogicalObligation{a, oldB}) {
 		t.Fatalf("base changed: %+v", got)
 	}
 }

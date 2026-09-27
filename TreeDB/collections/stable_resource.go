@@ -532,75 +532,41 @@ func validateStableColumnResourcesMatchPreparedPolicy(assets []ColumnPreparedAss
 		}
 		return nil
 	}
-	actual := make([]rootpublication.StableLogicalObligation, 0, len(expected))
-	var actualIndex map[rootpublication.StableLogicalObligation]struct{}
-	if expectedIndex != nil {
-		actualIndex = make(map[rootpublication.StableLogicalObligation]struct{}, len(expected))
-	}
-	for _, descriptor := range resources.Descriptors() {
-		for _, obligation := range descriptor.LogicalObligations() {
-			resourceKind, _, classification, err := stableColumnAssetResourceClassification(ColumnAssetKind(obligation.Kind))
-			if err != nil {
-				return fmt.Errorf("collections: stable column obligation classification: %w", err)
-			}
-			if vectorGraphAuthority {
-				resourceKind = rootpublication.ResourceVectorGraphPack
-				if obligation.Reachability != rootpublication.ReachabilityVectorGraphPack {
-					return fmt.Errorf("collections: %w: vector graph obligation kind=%q reachability=%q", rootpublication.ErrResourceConflict, obligation.Kind, obligation.Reachability)
-				}
-			}
-			if classification != "authoritative" || resourceKind != descriptor.Kind() {
-				return fmt.Errorf("collections: %w: stable column obligation kind=%q resource_kind=%q classification=%q", rootpublication.ErrResourceConflict, obligation.Kind, descriptor.Kind(), classification)
-			}
-			if actualIndex != nil {
-				if _, duplicate := actualIndex[obligation]; duplicate {
-					return fmt.Errorf("collections: %w: duplicate stable column logical obligation %+v", rootpublication.ErrResourceConflict, obligation)
-				}
-				actualIndex[obligation] = struct{}{}
-			} else {
-				for _, existing := range actual {
-					if existing == obligation {
-						return fmt.Errorf("collections: %w: duplicate stable column logical obligation %+v", rootpublication.ErrResourceConflict, obligation)
-					}
-				}
-			}
-			actual = append(actual, obligation)
-		}
-	}
+	// Scratch space is bounded by the prepared refs; an unexpected inherited
+	// obligation fails immediately instead of growing an actual-corpus slice.
+	seen := make(map[rootpublication.StableLogicalObligation]bool, len(expected))
 	for _, obligation := range expected {
-		if actualIndex != nil {
-			if _, found := actualIndex[obligation]; !found {
-				return fmt.Errorf("collections: %w: stable column resources missing prepared obligation %+v", rootpublication.ErrUnresolvedResource, obligation)
-			}
-			continue
+		seen[obligation] = false
+	}
+	if err := resources.WalkLogicalObligations(func(descriptor rootpublication.StableResourcePhysicalDescriptor, obligation rootpublication.StableLogicalObligation) error {
+		resourceKind, _, classification, err := stableColumnAssetResourceClassification(ColumnAssetKind(obligation.Kind))
+		if err != nil {
+			return fmt.Errorf("collections: stable column obligation classification: %w", err)
 		}
-		found := false
-		for _, candidate := range actual {
-			if candidate == obligation {
-				found = true
-				break
+		if vectorGraphAuthority {
+			resourceKind = rootpublication.ResourceVectorGraphPack
+			if obligation.Reachability != rootpublication.ReachabilityVectorGraphPack {
+				return fmt.Errorf("collections: %w: vector graph obligation kind=%q reachability=%q", rootpublication.ErrResourceConflict, obligation.Kind, obligation.Reachability)
 			}
 		}
+		if classification != "authoritative" || resourceKind != descriptor.Kind {
+			return fmt.Errorf("collections: %w: stable column obligation kind=%q resource_kind=%q classification=%q", rootpublication.ErrResourceConflict, obligation.Kind, descriptor.Kind, classification)
+		}
+		found, expected := seen[obligation]
+		if !expected {
+			return fmt.Errorf("collections: %w: stable column resources contain unprepared obligation %+v", rootpublication.ErrResourceConflict, obligation)
+		}
+		if found {
+			return fmt.Errorf("collections: %w: duplicate stable column logical obligation %+v", rootpublication.ErrResourceConflict, obligation)
+		}
+		seen[obligation] = true
+		return nil
+	}); err != nil {
+		return err
+	}
+	for obligation, found := range seen {
 		if !found {
 			return fmt.Errorf("collections: %w: stable column resources missing prepared obligation %+v", rootpublication.ErrUnresolvedResource, obligation)
-		}
-	}
-	for _, obligation := range actual {
-		if expectedIndex != nil {
-			if _, found := expectedIndex[obligation]; !found {
-				return fmt.Errorf("collections: %w: stable column resources contain unprepared obligation %+v", rootpublication.ErrResourceConflict, obligation)
-			}
-			continue
-		}
-		found := false
-		for _, candidate := range expected {
-			if candidate == obligation {
-				found = true
-				break
-			}
-		}
-		if !found {
-			return fmt.Errorf("collections: %w: stable column resources contain unprepared obligation %+v", rootpublication.ErrResourceConflict, obligation)
 		}
 	}
 	return nil

@@ -275,7 +275,7 @@ func TestTypedGraphBaseAutomaticCapture(t *testing.T) {
 					calls++
 					assertTypedGraphSelectedMetadataInventory(t, assets, state.RowCount, len(def.QuantizedIndexes))
 					var obligations int
-					for _, descriptor := range resources.Descriptors() {
+					for _, descriptor := range mustStableResourceDescriptors(t, resources) {
 						obligations += len(descriptor.LogicalObligations())
 					}
 					if obligations != len(assets) {

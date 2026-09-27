@@ -259,10 +259,10 @@ func TestStableLogicalObligationAppendDiscardDoesNotPoisonRetryBase(t *testing.T
 	if err != nil {
 		t.Fatalf("retry append from unchanged base: %v", err)
 	}
-	if got := retry.slice(); len(got) != 2 || got[0] != baseObligation || got[1] != added {
+	if got := retry.deltaSlice(); len(got) != 2 || got[0] != baseObligation || got[1] != added {
 		t.Fatalf("retry obligations=%+v want exact base+addition", got)
 	}
-	if got := base.slice(); len(got) != 1 || got[0] != baseObligation {
+	if got := base.deltaSlice(); len(got) != 1 || got[0] != baseObligation {
 		t.Fatalf("base mutated by discarded candidate: %+v", got)
 	}
 }
@@ -281,13 +281,13 @@ func TestStableLogicalObligationAppendSupportsIndependentCandidateBranches(t *te
 	if err != nil {
 		t.Fatalf("right candidate: %v", err)
 	}
-	if got := left.slice(); len(got) != 2 || got[1] != leftAdded {
+	if got := left.deltaSlice(); len(got) != 2 || got[1] != leftAdded {
 		t.Fatalf("left branch=%+v", got)
 	}
-	if got := right.slice(); len(got) != 2 || got[1] != rightAdded {
+	if got := right.deltaSlice(); len(got) != 2 || got[1] != rightAdded {
 		t.Fatalf("right branch=%+v", got)
 	}
-	if got := base.slice(); len(got) != 1 || got[0] != baseObligation {
+	if got := base.deltaSlice(); len(got) != 1 || got[0] != baseObligation {
 		t.Fatalf("base changed by independent candidates: %+v", got)
 	}
 }
@@ -331,7 +331,7 @@ func TestStableLogicalObligationAppendIsExactSetUnion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := next.slice(); !slices.Equal(got, []StableLogicalObligation{retained, added}) {
+	if got := next.deltaSlice(); !slices.Equal(got, []StableLogicalObligation{retained, added}) {
 		t.Fatalf("set union=%+v want retained+added", got)
 	}
 	if next.count != 2 || next.commitments[retained.Reachability] != stableLogicalObligationCommitments([]StableLogicalObligation{retained, added})[retained.Reachability] {
@@ -397,17 +397,17 @@ func TestStableLogicalObligationMergePreservesSharedViews(t *testing.T) {
 							t.Fatal(err)
 						}
 						want := append(slices.Clone(values), tc.added...)
-						if got := target.slice(); !slices.Equal(got, want) || target.count != len(want) || !maps.Equal(target.commitments, stableLogicalObligationCommitments(want)) {
+						if got := target.deltaSlice(); !slices.Equal(got, want) || target.count != len(want) || !maps.Equal(target.commitments, stableLogicalObligationCommitments(want)) {
 							t.Fatalf("merged obligations=%+v count=%d want %+v", got, target.count, want)
 						}
 						if len(tc.added) == 0 && (target.index != before.index || target.tail != before.tail) {
 							t.Fatal("unchanged closure rebuilt retained obligations")
 						}
 					}
-					if !slices.Equal(base.slice(), values) || !maps.Equal(base.commitments, baseCommitments) {
+					if !slices.Equal(base.deltaSlice(), values) || !maps.Equal(base.commitments, baseCommitments) {
 						t.Fatal("merge mutated shared base")
 					}
-					if !slices.Equal(incoming.slice(), tc.incoming) || !maps.Equal(incoming.commitments, incomingCommitments) {
+					if !slices.Equal(incoming.deltaSlice(), tc.incoming) || !maps.Equal(incoming.commitments, incomingCommitments) {
 						t.Fatal("merge mutated incoming view")
 					}
 				})
@@ -425,7 +425,7 @@ func TestStableLogicalObligationMergeReusesExactAncestor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	detached := newStableLogicalObligationView(descendant.slice())
+	detached := newStableLogicalObligationView(descendant.deltaSlice())
 	partial := newStableLogicalObligationView([]StableLogicalObligation{first, second})
 	for _, tc := range []struct {
 		name     string
@@ -442,11 +442,11 @@ func TestStableLogicalObligationMergeReusesExactAncestor(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			target := tc.target
-			beforeTarget, beforeIncoming := target.slice(), tc.incoming.slice()
+			beforeTarget, beforeIncoming := target.deltaSlice(), tc.incoming.deltaSlice()
 			if err := mergeStableLogicalObligations(&target, tc.incoming); err != nil {
 				t.Fatal(err)
 			}
-			if !slices.Equal(target.slice(), descendant.slice()) || target.count != descendant.count || !maps.Equal(target.commitments, descendant.commitments) {
+			if !slices.Equal(target.deltaSlice(), descendant.deltaSlice()) || target.count != descendant.count || !maps.Equal(target.commitments, descendant.commitments) {
 				t.Fatal("merge changed the exact logical union")
 			}
 			if tc.wantTail != nil {
@@ -456,7 +456,7 @@ func TestStableLogicalObligationMergeReusesExactAncestor(t *testing.T) {
 			} else if target.tail == descendant.tail {
 				t.Fatal("unrelated partial-node prefix bypassed the exact union")
 			}
-			if !slices.Equal(tc.target.slice(), beforeTarget) || !slices.Equal(tc.incoming.slice(), beforeIncoming) {
+			if !slices.Equal(tc.target.deltaSlice(), beforeTarget) || !slices.Equal(tc.incoming.deltaSlice(), beforeIncoming) {
 				t.Fatal("merge changed an input view")
 			}
 		})
@@ -546,8 +546,8 @@ func TestAppendOnlyPhysicalClosureCloneExcludingKindSharesRemainingRoots(t *test
 		t.Fatal(err)
 	}
 	defer clone.Release()
-	if clone.Len() != 1 || clone.Descriptors()[0].Kind() != ResourceValueLog {
-		t.Fatalf("excluded clone descriptors=%+v want retained value-log root", clone.Descriptors())
+	if clone.Len() != 1 || mustStableResourceDescriptors(t, clone)[0].Kind() != ResourceValueLog {
+		t.Fatalf("excluded clone descriptors=%+v want retained value-log root", mustStableResourceDescriptors(t, clone))
 	}
 	if work.PhysicalRootShares != 1 || work.SourceEntriesInspected != 0 || work.CopiedEntries != 0 || work.PhysicalHandleShares != 0 || work.PhysicalHandleCopies != 0 {
 		t.Fatalf("excluded clone work=%+v want one root share and no retained-entry work", work)
@@ -633,15 +633,19 @@ func TestAppendOnlyPhysicalClosureCompositePreservesSetContractAndLastRelease(t 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if candidate.Len() != 33 || len(candidate.Descriptors()) != 33 || len(candidate.PhysicalDescriptors()) != 33 || len(candidate.Tokens()) != 33 {
-		t.Fatalf("composite set views disagree: len=%d descriptors=%d physical=%d tokens=%d", candidate.Len(), len(candidate.Descriptors()), len(candidate.PhysicalDescriptors()), len(candidate.Tokens()))
+	if candidate.Len() != 33 || len(mustStableResourceDescriptors(t, candidate)) != 33 || len(candidate.PhysicalDescriptors()) != 33 || len(candidate.Tokens()) != 33 {
+		t.Fatalf("composite set views disagree: len=%d descriptors=%d physical=%d tokens=%d", candidate.Len(), len(mustStableResourceDescriptors(t, candidate)), len(candidate.PhysicalDescriptors()), len(candidate.Tokens()))
 	}
-	physical := make(map[StableResourcePhysicalDescriptor]int)
+	type physicalKey struct {
+		Kind       ResourceKind
+		Generation uint64
+	}
+	physical := make(map[physicalKey]int)
 	for _, descriptor := range candidate.PhysicalDescriptors() {
-		physical[descriptor]++
+		physical[physicalKey{descriptor.Kind, descriptor.Generation}]++
 	}
-	for _, descriptor := range candidate.Descriptors() {
-		physical[StableResourcePhysicalDescriptor{Kind: descriptor.Kind(), Generation: descriptor.Generation()}]--
+	for _, descriptor := range mustStableResourceDescriptors(t, candidate) {
+		physical[physicalKey{Kind: descriptor.Kind(), Generation: descriptor.Generation()}]--
 	}
 	for descriptor, count := range physical {
 		if count != 0 {
@@ -826,7 +830,7 @@ func TestMergeAppendOnlyLogicalObligationsKeepsSmallBuilderLinear(t *testing.T) 
 	if candidate.indexed != nil {
 		t.Fatal("small append-only merge retained indexed state")
 	}
-	if got := candidate.entries[0].logicalObligations.slice(); !slices.Equal(got, []StableLogicalObligation{baseObligation, added}) {
+	if got := candidate.entries[0].logicalObligations.deltaSlice(); !slices.Equal(got, []StableLogicalObligation{baseObligation, added}) {
 		t.Fatalf("obligations=%+v want exact base+addition", got)
 	}
 	if err := candidate.Add(stableTokenFixture(t, dir, "other.bin", 1, 8, ReachabilityColumnManifest, "other")); err != nil {
@@ -911,7 +915,7 @@ func TestMergeAppendOnlyLogicalObligationsPhysicalCollisionIsMutationLocal(t *te
 	var got []StableLogicalObligation
 	merged.rangeEntries(func(entry *stableResourceEntry) bool {
 		if entry.token.ResourceID() == "asset" {
-			got = entry.logicalObligations.slice()
+			got = entry.logicalObligations.deltaSlice()
 		}
 		return true
 	})
@@ -995,7 +999,7 @@ func TestMergeAppendOnlyLogicalObligationsRepeatedCollisionDoesNotRetainProducer
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := merged.Descriptors(); len(got) != ownedEntries {
+	if got := mustStableResourceDescriptors(t, merged); len(got) != ownedEntries {
 		t.Fatalf("descriptors=%d want %d", len(got), ownedEntries)
 	}
 	merged.Release()
@@ -1060,7 +1064,7 @@ func TestMergeAppendOnlyLogicalObligationsMixedDistinctAndCollisionIsAtomic(t *t
 		t.Fatal(err)
 	}
 	var current, admitted *StableResourceDescriptor
-	for _, descriptor := range merged.Descriptors() {
+	for _, descriptor := range mustStableResourceDescriptors(t, merged) {
 		switch descriptor.ResourceID() {
 		case "current":
 			current = &descriptor
@@ -1330,7 +1334,7 @@ func TestMergeAppendOnlyLogicalObligationsCrossKindCollisionUsesExactFallback(t 
 	}
 	defer merged.Release()
 	kinds := map[ResourceKind]bool{}
-	for _, descriptor := range merged.Descriptors() {
+	for _, descriptor := range mustStableResourceDescriptors(t, merged) {
 		kinds[descriptor.Kind()] = true
 	}
 	if !kinds[ResourceColumnAsset] || !kinds[ResourceValueLog] || merged.Len() != stableResourceEntryLinearLookupLimit+2 {
@@ -1760,7 +1764,7 @@ func TestStableLogicalObligationPackedAliasCertificationKeepsExactMerge4371(t *t
 		t.Fatal(err)
 	}
 	defer merged.Release()
-	descriptors := merged.Descriptors()
+	descriptors := mustStableResourceDescriptors(t, merged)
 	if len(descriptors) != 1 || len(descriptors[0].LogicalObligations()) != 2 {
 		t.Fatalf("packed alias descriptors=%+v want exact coalesced obligations", descriptors)
 	}

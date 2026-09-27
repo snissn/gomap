@@ -464,7 +464,7 @@ func buildStableResourceKindViews(entries []stableResourceEntry) (map[ResourceKi
 				// root. Retain summaries, never rebuild its membership treap.
 				view.logicalMembershipCount += entry.logicalObligations.count
 			} else {
-				entry.logicalObligations.rangeValues(func(obligation StableLogicalObligation) bool {
+				entry.logicalObligations.rangeDeltaValues(func(obligation StableLogicalObligation) bool {
 					var admitted bool
 					view.logicalMembership, admitted = insertFreshStableLogicalMembership(view.logicalMembership, obligation)
 					if admitted {
@@ -741,7 +741,7 @@ func mergeDistinctStableResourceKindViews(target, incoming map[ResourceKind]stab
 				logicalMembershipCount += entry.logicalObligations.count
 				return true
 			}
-			entry.logicalObligations.rangeValues(func(obligation StableLogicalObligation) bool {
+			entry.logicalObligations.rangeDeltaValues(func(obligation StableLogicalObligation) bool {
 				var admitted bool
 				logicalMembership, admitted = insertStableLogicalMembership(logicalMembership, obligation, work)
 				if admitted {

@@ -87,8 +87,8 @@ func stableResourceSetHasKindV1(resources *rootpublication.StableResourceSet, ki
 	if resources == nil {
 		return false
 	}
-	for _, descriptor := range resources.Descriptors() {
-		if descriptor.Kind() == kind {
+	for _, descriptor := range resources.PhysicalDescriptors() {
+		if descriptor.Kind == kind {
 			return true
 		}
 	}
@@ -1170,12 +1170,8 @@ func projectRebuiltOlderRootDurableResourcesV1(source *rootpublication.StableRes
 	if source == nil {
 		return nil, true, nil
 	}
-	manifest, _, err := source.DependencyManifestV1()
-	if err != nil {
-		return nil, false, nil
-	}
-	for _, entry := range manifest.Entries() {
-		for _, field := range entry.Reachability {
+	for _, entry := range source.PhysicalDescriptors() {
+		for _, field := range entry.ReachabilityFields() {
 			policy, ok := rootpublication.StableResourcePolicyFor(field)
 			if !ok || !policy.Registerable || policy.Kind != entry.Kind {
 				return nil, false, nil
@@ -1190,11 +1186,11 @@ func projectRebuiltOlderRootDurableResourcesV1(source *rootpublication.StableRes
 }
 
 func rebuiltOlderRootIndexAuthorityV1(source *rootpublication.StableResourceSet, identity rootpublication.StableIdentity, generation uint64) bool {
-	for _, descriptor := range source.Descriptors() {
-		if descriptor.Kind() != rootpublication.ResourceIndex {
+	for _, descriptor := range source.PhysicalDescriptors() {
+		if descriptor.Kind != rootpublication.ResourceIndex {
 			continue
 		}
-		if _, ok := descriptor.Namespace(); !ok || descriptor.Generation() != generation || !rootpublication.SamePhysicalIdentity(descriptor.Identity(), identity) {
+		if _, ok := descriptor.Namespace(); !ok || descriptor.Generation != generation || !rootpublication.SamePhysicalIdentity(descriptor.Identity(), identity) {
 			return false
 		}
 	}

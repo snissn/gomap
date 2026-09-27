@@ -46,7 +46,7 @@ func TestRecoverableRootSetCloneStableResourceForExactRoot(t *testing.T) {
 	}
 	resources.Release()
 	set.resources = nil
-	if got := selected.Descriptors(); len(got) != 1 || got[0].ResourceID() != "7" {
+	if got := mustStableResourceDescriptors(t, selected); len(got) != 1 || got[0].ResourceID() != "7" {
 		selected.Release()
 		t.Fatalf("selected=%v", got)
 	}

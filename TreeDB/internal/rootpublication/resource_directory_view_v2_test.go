@@ -122,6 +122,10 @@ func TestDependencyDirectoryV2ResourceClosureAppendAndLease(t *testing.T) {
 		}
 		return true
 	})
+	removedDescriptors, err := removed.Descriptors()
+	if err != nil || len(removedDescriptors) != 1 || len(removedDescriptors[0].LogicalObligations()) != 1 || removedDescriptors[0].LogicalObligations()[0] != second {
+		t.Fatalf("materialized removal lost exact contents: %+v %v", removedDescriptors, err)
+	}
 	removed.Release()
 	added := obligation
 	added.Offset, added.Digest = 8, [32]byte{3}
@@ -172,6 +176,47 @@ func TestDependencyDirectoryV2ResourceClosureAppendAndLease(t *testing.T) {
 	entry := findStableResourceLogical(view.logical, bound.Tokens()[0].logicalKey())
 	if _, err := entry.logicalObligations.appendCertified([]StableLogicalObligation{conflicting}, nil); !errors.Is(err, ErrResourceConflict) {
 		t.Fatalf("conflicting exact key accepted: %v", err)
+	}
+	want := []StableLogicalObligation{obligation, second, added}
+	descriptors, err := candidate.Descriptors()
+	if err != nil || len(descriptors) != 1 || len(descriptors[0].LogicalObligations()) != 3 {
+		t.Fatalf("materialized inherited append: %+v %v", descriptors, err)
+	}
+	if err := ValidateStableResourceSetLogicalObligations(candidate, StableLogicalObligationRequirements{ScopedFields: []ReachabilityField{ReachabilityColumnManifest}, Obligations: want}); err != nil {
+		t.Fatal(err)
+	}
+	stop := errors.New("callback stop")
+	if err := candidate.WalkLogicalObligations(func(StableResourcePhysicalDescriptor, StableLogicalObligation) error { return stop }); !errors.Is(err, stop) {
+		t.Fatalf("callback error lost: %v", err)
+	}
+	// A malformed inherited logical value must fail even when the page checksum
+	// is valid; physical descriptors never read this page.
+	badImage := make([]byte, page.PageSize)
+	bad := node.NewNode(badImage)
+	bad.SetPageID(2)
+	bad.SetType(page.PageTypeLeaf)
+	for _, key := range keys {
+		value := records[key]
+		if key[0] == dependencyLogicalKeyV2 {
+			value = []byte{0}
+		}
+		if err := bad.AddLeafEntry([]byte(key), value, node.FlagInline, page.ValuePtr{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	bad.UpdateChecksum()
+	if err := p.Write(2, badImage); err != nil {
+		t.Fatal(err)
+	}
+	physicalOnly := candidate.PhysicalDescriptors()
+	if len(physicalOnly) != 1 || physicalOnly[0].LogicalObligationCount != 3 {
+		t.Fatalf("physical metadata depends on logical page: %+v", physicalOnly)
+	}
+	if got, err := candidate.Descriptors(); err == nil || got != nil {
+		t.Fatalf("corruption produced partial materialization: %+v %v", got, err)
+	}
+	if err := ValidateStableResourceSetLogicalObligations(candidate, StableLogicalObligationRequirements{ScopedFields: []ReachabilityField{ReachabilityColumnManifest}, Obligations: want}); err == nil {
+		t.Fatal("corrupt inherited record validated")
 	}
 	candidate.Release()
 	bound.Release()

@@ -319,8 +319,8 @@ type templateResourceDescriptorView struct {
 	obligations  []rootpublication.StableLogicalObligation
 }
 
-func templateResourceDescriptorViews(resources *rootpublication.StableResourceSet) []templateResourceDescriptorView {
-	descriptors := resources.Descriptors()
+func templateResourceDescriptorViews(t testing.TB, resources *rootpublication.StableResourceSet) []templateResourceDescriptorView {
+	descriptors := mustStableResourceDescriptors(t, resources)
 	views := make([]templateResourceDescriptorView, len(descriptors))
 	for i, descriptor := range descriptors {
 		views[i] = templateResourceDescriptorView{
@@ -414,7 +414,7 @@ func TestCaptureTemplateResourcesMultiIDCoalescesSharedPhysicalClosureDeterminis
 			t.Fatalf("iteration %d coalesced index/value-log identity pins=%d want baseline %d + 2 capture pins", i, got, baselinePins)
 		}
 		tokens := resources.Tokens()
-		descriptors := resources.Descriptors()
+		descriptors := mustStableResourceDescriptors(t, resources)
 		for descriptorIndex, descriptor := range descriptors {
 			if descriptor.Kind() != rootpublication.ResourceTemplate {
 				resources.Release()
@@ -440,7 +440,7 @@ func TestCaptureTemplateResourcesMultiIDCoalescesSharedPhysicalClosureDeterminis
 				t.Fatalf("iteration %d shared value-log frontier=%d want greatest exact record end %d", i, descriptor.Frontier().Bytes, wantFrontier)
 			}
 		}
-		views := templateResourceDescriptorViews(resources)
+		views := templateResourceDescriptorViews(t, resources)
 		if wantViews == nil {
 			wantViews = views
 		} else if !reflect.DeepEqual(views, wantViews) {
@@ -800,7 +800,7 @@ func BenchmarkCaptureTemplateResourcesMultiIDCoalesce(b *testing.B) {
 	}
 	resourcesPerOp := warm.Len()
 	logicalObligationsPerOp := 0
-	for _, descriptor := range warm.Descriptors() {
+	for _, descriptor := range mustStableResourceDescriptors(b, warm) {
 		logicalObligationsPerOp += len(descriptor.LogicalObligations())
 	}
 	pinHighWater := uint64(0)

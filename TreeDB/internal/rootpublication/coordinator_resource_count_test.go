@@ -104,7 +104,7 @@ func TestCoordinatorEnqueueRetainedClosureAllocation(t *testing.T) {
 		}
 		beforeDescriptors := make([][]StableResourceDescriptor, i+1)
 		for j := range beforeDescriptors {
-			beforeDescriptors[j] = sets[j].Descriptors()
+			beforeDescriptors[j] = mustStableResourceDescriptors(t, sets[j])
 		}
 		var before, after runtime.MemStats
 		runtime.ReadMemStats(&before)
@@ -127,7 +127,7 @@ func TestCoordinatorEnqueueRetainedClosureAllocation(t *testing.T) {
 			t.Fatalf("coalesces=%d visible=%d want %d/%d", stats.ResourceCoalesces, stats.VisibleCommitSeq, wantCoalesces, i+1)
 		}
 		for j := range beforeDescriptors {
-			if sets[j].Owner() != ResourceOwnerCoordinator || !reflect.DeepEqual(beforeDescriptors[j], sets[j].Descriptors()) {
+			if sets[j].Owner() != ResourceOwnerCoordinator || !reflect.DeepEqual(beforeDescriptors[j], mustStableResourceDescriptors(t, sets[j])) {
 				t.Fatal("enqueue changed captured resource contents or lost coordinator ownership")
 			}
 		}
@@ -281,7 +281,7 @@ func TestCoordinatorEnqueueUnionCountParity(t *testing.T) {
 						t.Fatal(err)
 					}
 					t.Cleanup(candidate.AbandonResources)
-					before := set.Descriptors()
+					before := mustStableResourceDescriptors(t, set)
 					oracle, oracleErr := UnionStableResourceSets(sets...)
 					err = coordinator.Enqueue(context.Background(), candidate)
 					if tc.rejectAt == i {
@@ -306,7 +306,7 @@ func TestCoordinatorEnqueueUnionCountParity(t *testing.T) {
 						}
 						accepted = seq
 					}
-					if !reflect.DeepEqual(before, set.Descriptors()) {
+					if !reflect.DeepEqual(before, mustStableResourceDescriptors(t, set)) {
 						t.Fatal("admission mutated source obligations/frontier")
 					}
 					if tc.rejectAt == i {

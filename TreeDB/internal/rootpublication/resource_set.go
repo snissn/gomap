@@ -257,7 +257,7 @@ func (view stableLogicalObligationView) appendCertified(values []StableLogicalOb
 		return view.appendDirectoryDelta(values, work)
 	}
 	if view.index == nil && view.count != 0 {
-		view = newStableLogicalObligationView(view.slice())
+		view = newStableLogicalObligationView(view.deltaSlice())
 	}
 	index := view.index
 	var added []StableLogicalObligation
@@ -458,7 +458,9 @@ func insertFreshStableLogicalObligationIndex(root *stableLogicalObligationIndexN
 	return root, nil
 }
 
-func (view stableLogicalObligationView) rangeValues(visit func(StableLogicalObligation) bool) {
+// rangeDeltaValues visits only producer values; inherited directory records
+// require walk or the set-level WalkLogicalObligations API.
+func (view stableLogicalObligationView) rangeDeltaValues(visit func(StableLogicalObligation) bool) {
 	if view.tail == nil || visit == nil {
 		return
 	}
@@ -475,12 +477,19 @@ func (view stableLogicalObligationView) rangeValues(visit func(StableLogicalObli
 	}
 }
 
-func (view stableLogicalObligationView) slice() []StableLogicalObligation {
+func (view stableLogicalObligationView) deltaSlice() []StableLogicalObligation {
 	if view.count == 0 {
 		return nil
 	}
-	result := make([]StableLogicalObligation, 0, view.count)
-	view.rangeValues(func(obligation StableLogicalObligation) bool {
+	capacity := view.count
+	if view.directory != nil {
+		capacity = 0
+		for node := view.tail; node != nil; node = node.parent {
+			capacity += len(node.values)
+		}
+	}
+	result := make([]StableLogicalObligation, 0, capacity)
+	view.rangeDeltaValues(func(obligation StableLogicalObligation) bool {
 		result = append(result, obligation)
 		return true
 	})
@@ -720,12 +729,34 @@ func activeEntryToken(entry stableResourceEntry) *StableResourceToken {
 }
 
 func mergeStableLogicalObligations(target *stableLogicalObligationView, incoming stableLogicalObligationView) error {
+	if target.directory != nil || incoming.directory != nil {
+		base := *target
+		if base.directory == nil {
+			base, incoming = incoming, base
+		}
+		if incoming.directory != nil {
+			if incoming.directory != base.directory || !bytes.Equal(incoming.owner, base.owner) || len(incoming.removed) != len(base.removed) {
+				return ErrResourceConflict
+			}
+			for key, value := range incoming.removed {
+				if base.removed[key] != value {
+					return ErrResourceConflict
+				}
+			}
+		}
+		next, err := base.appendDirectoryDelta(incoming.deltaSlice(), nil)
+		if err != nil {
+			return err
+		}
+		*target = next
+		return nil
+	}
 	if incoming.count == 0 {
 		return nil
 	}
 	base := *target
 	if base.index == nil && base.count != 0 {
-		base = newStableLogicalObligationView(base.slice())
+		base = newStableLogicalObligationView(base.deltaSlice())
 	}
 	// Exact tail ancestry proves containment of these immutable histories.
 	// Reuse the descendant instead of scanning its accumulated obligations.
@@ -747,7 +778,7 @@ func mergeStableLogicalObligations(target *stableLogicalObligationView, incoming
 	// payload again on each closure merge.
 	var added []StableLogicalObligation
 	var conflict error
-	incoming.rangeValues(func(obligation StableLogicalObligation) bool {
+	incoming.rangeDeltaValues(func(obligation StableLogicalObligation) bool {
 		if existing, ok := findStableLogicalObligationIndex(base.index, obligation, nil); ok {
 			if existing != obligation {
 				conflict = fmt.Errorf("%w: logical obligation %+v has conflicting immutable checksum or digest", ErrResourceConflict, stableLogicalObligationKey(obligation))
@@ -1251,7 +1282,11 @@ func mergeAppendOnlyViewEntryLinear(entries *[]stableResourceEntry, incoming sta
 		if !existing.namespaceCompatible(incoming.token) || !frontierCompatible(entry.frontier, incoming.frontier) {
 			return fmt.Errorf("%w: incompatible duplicate stable identity %+v", ErrResourceConflict, existing.identityKey())
 		}
-		entry.logicalObligations, err = entry.logicalObligations.appendCertified(incoming.logicalObligations.slice(), work)
+		if incoming.logicalObligations.directory != nil {
+			err = mergeStableLogicalObligations(&entry.logicalObligations, incoming.logicalObligations)
+		} else {
+			entry.logicalObligations, err = entry.logicalObligations.appendCertified(incoming.logicalObligations.deltaSlice(), work)
+		}
 		if err != nil {
 			return err
 		}
@@ -1276,7 +1311,7 @@ func mergeAppendOnlyViewEntryLinear(entries *[]stableResourceEntry, incoming sta
 
 func rejectDistinctLogicalObligationOverlap(entries []stableResourceEntry, incoming stableResourceEntry) error {
 	var overlapErr error
-	incoming.logicalObligations.rangeValues(func(obligation StableLogicalObligation) bool {
+	incoming.logicalObligations.rangeDeltaValues(func(obligation StableLogicalObligation) bool {
 		for i := range entries {
 			existing, found := findStableLogicalObligationIndex(entries[i].logicalObligations.index, obligation, nil)
 			if !found {
@@ -1321,9 +1356,9 @@ func cloneStableResourceEntryIntoBuilder(builder *StableResourceSetBuilder, sour
 			return err
 		}
 	}
-	cloned, err := token.cloneSharedPinned(
+	cloned, err := token.cloneSharedPinnedDirectory(
 		source.logicalLane, source.resourceID, source.diagnosticPath,
-		source.frontier, fields[0], source.logicalObligations.slice(), func() {
+		source.frontier, fields[0], source.logicalObligations.deltaSlice(), source.logicalObligations.directory, func() {
 			if registry != nil {
 				_ = registry.Unobserve(identity)
 			}
@@ -1362,6 +1397,10 @@ func cloneStableResourceEntryIntoBuilder(builder *StableResourceSetBuilder, sour
 	if len(builder.entries) > before {
 		destination.logicalObligations = source.logicalObligations
 		destination.dependencyManifestV1 = source.dependencyManifestV1
+	} else if source.logicalObligations.directory != nil {
+		if err := mergeStableLogicalObligations(&destination.logicalObligations, source.logicalObligations); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -1620,6 +1659,11 @@ func (builder *StableResourceSetBuilder) MergeAppendOnlyLogicalObligations(child
 		child.mu.Unlock()
 		builder.mu.Unlock()
 		return StableResourceClosureWork{}, ErrResourceOwnership
+	}
+	if child.emptyDirectory != nil {
+		child.mu.Unlock()
+		builder.mu.Unlock()
+		return StableResourceClosureWork{}, fmt.Errorf("%w: append-only producer is a retained directory", ErrResourceConflict)
 	}
 	if child.kindViews == nil {
 		child.mu.Unlock()
@@ -1886,7 +1930,7 @@ func certifiedAppendOnlyPhysicalCoalesce(target, incoming map[ResourceKind]stabl
 				return false
 			}
 			nextEntry := cloneStableResourceEntry(*existing)
-			nextEntry.logicalObligations, preflightErr = nextEntry.logicalObligations.appendCertified(child.logicalObligations.slice(), &work)
+			nextEntry.logicalObligations, preflightErr = nextEntry.logicalObligations.appendCertified(child.logicalObligations.deltaSlice(), &work)
 			if preflightErr != nil {
 				return false
 			}
@@ -1920,7 +1964,7 @@ func certifiedAppendOnlyPhysicalCoalesce(target, incoming map[ResourceKind]stabl
 			certified = false
 			return false
 		}
-		child.logicalObligations.rangeValues(func(obligation StableLogicalObligation) bool {
+		child.logicalObligations.rangeDeltaValues(func(obligation StableLogicalObligation) bool {
 			if view.directory != nil {
 				_, found, err := lookupStableLogicalMembershipV2(view.logicalMembership, view.directory, view.logical, child.token.kind, obligation, &work)
 				if err != nil {
@@ -2067,6 +2111,10 @@ func validateAppendOnlyProducerViews(views map[ResourceKind]stableResourceKindVi
 	seen := make(map[stableLogicalObligationIndex]StableLogicalObligation, len(desired))
 	var validateErr error
 	rangeStableResourceKindViews(views, func(entry *stableResourceEntry) bool {
+		if entry.logicalObligations.directory != nil {
+			validateErr = fmt.Errorf("%w: append-only producer contains retained directory state", ErrResourceConflict)
+			return false
+		}
 		work.SourceEntriesInspected++
 		for field := range entry.reachability {
 			if _, applies := scoped[field]; applies && entry.logicalObligations.commitments[field].count == 0 {
@@ -2074,7 +2122,7 @@ func validateAppendOnlyProducerViews(views map[ResourceKind]stableResourceKindVi
 				return false
 			}
 		}
-		entry.logicalObligations.rangeValues(func(obligation StableLogicalObligation) bool {
+		entry.logicalObligations.rangeDeltaValues(func(obligation StableLogicalObligation) bool {
 			work.SourceObligationsInspected++
 			if _, applies := scoped[obligation.Reachability]; !applies {
 				validateErr = fmt.Errorf("%w: append-only producer obligation uses unscoped field %q", ErrResourceConflict, obligation.Reachability)
@@ -2148,6 +2196,11 @@ func (builder *StableResourceSetBuilder) mergeAppendOnlyLogicalObligationsFlat(c
 	}
 	seen := make(map[stableLogicalObligationIndex]StableLogicalObligation, len(desired))
 	for _, entry := range child.entries {
+		if entry.logicalObligations.directory != nil {
+			child.mu.Unlock()
+			builder.mu.Unlock()
+			return work, ErrResourceConflict
+		}
 		for field := range entry.reachability {
 			if _, applies := scoped[field]; !applies {
 				continue
@@ -2158,7 +2211,7 @@ func (builder *StableResourceSetBuilder) mergeAppendOnlyLogicalObligationsFlat(c
 				return work, fmt.Errorf("%w: scoped reachability field %q has no logical obligations", ErrUnresolvedResource, field)
 			}
 		}
-		entry.logicalObligations.rangeValues(func(obligation StableLogicalObligation) bool {
+		entry.logicalObligations.rangeDeltaValues(func(obligation StableLogicalObligation) bool {
 			work.SourceObligationsInspected++
 			if _, applies := scoped[obligation.Reachability]; !applies {
 				err = fmt.Errorf("%w: append-only producer obligation uses unscoped field %q", ErrResourceConflict, obligation.Reachability)
@@ -2238,7 +2291,7 @@ func (builder *StableResourceSetBuilder) mergeAppendOnlyLogicalObligationsFlat(c
 				err = fmt.Errorf("%w: incompatible duplicate stable identity %+v", ErrResourceConflict, existing.identityKey())
 				break
 			}
-			incomingValues := incoming.logicalObligations.slice()
+			incomingValues := incoming.logicalObligations.deltaSlice()
 			entry.logicalObligations, err = entry.logicalObligations.appendCertified(incomingValues, &work)
 			if err != nil {
 				break
@@ -3103,23 +3156,80 @@ type StableResourceDescriptor struct {
 	namespace          *StableNamespaceDescriptor
 }
 
+// StableResourcePhysicalDescriptor is complete physical metadata and an exact
+// logical count. It owns no logical corpus or root lease.
 type StableResourcePhysicalDescriptor struct {
-	Kind       ResourceKind
-	Generation uint64
+	Kind                   ResourceKind
+	Generation             uint64
+	LogicalObligationCount uint64
+	logicalLane            string
+	resourceID             string
+	diagnosticPath         string
+	identity               StableIdentity
+	digest                 [32]byte
+	frontier               DurableFrontier
+	reachability           []ReachabilityField
+	namespace              *StableNamespaceDescriptor
 }
 
-// PhysicalDescriptors returns only fields needed for dependency routing. It
-// intentionally does not materialize logical obligations.
+func physicalDescriptorFromEntry(entry *stableResourceEntry) StableResourcePhysicalDescriptor {
+	fields := make([]ReachabilityField, 0, len(entry.reachability))
+	for field := range entry.reachability {
+		fields = append(fields, field)
+	}
+	sort.Slice(fields, func(i, j int) bool { return fields[i] < fields[j] })
+	descriptor := StableResourcePhysicalDescriptor{
+		Kind: entry.token.kind, Generation: entry.token.generation,
+		LogicalObligationCount: uint64(entry.logicalObligations.count),
+		logicalLane:            entry.logicalLane, resourceID: entry.resourceID,
+		diagnosticPath: entry.diagnosticPath, identity: entry.token.identity,
+		digest: entry.token.digest, frontier: cloneDurableFrontier(entry.frontier), reachability: fields,
+	}
+	if namespace := entry.token.namespace; namespace != nil {
+		descriptor.namespace = &StableNamespaceDescriptor{
+			ParentIdentity: namespace.parentIdentity, Operation: namespace.operation,
+			OldName: namespace.oldName, NewName: namespace.newName, DiagnosticPath: namespace.diagnosticPath,
+		}
+	}
+	return descriptor
+}
+
+// PhysicalDescriptors performs no logical directory reads.
 func (set *StableResourceSet) PhysicalDescriptors() []StableResourcePhysicalDescriptor {
 	if set == nil {
 		return nil
 	}
 	result := make([]StableResourcePhysicalDescriptor, 0, set.Len())
 	set.rangeEntries(func(entry *stableResourceEntry) bool {
-		result = append(result, StableResourcePhysicalDescriptor{Kind: entry.token.kind, Generation: entry.token.generation})
+		result = append(result, physicalDescriptorFromEntry(entry))
 		return true
 	})
 	return result
+}
+
+func (descriptor StableResourcePhysicalDescriptor) LogicalLane() string {
+	return descriptor.logicalLane
+}
+func (descriptor StableResourcePhysicalDescriptor) ResourceID() string { return descriptor.resourceID }
+func (descriptor StableResourcePhysicalDescriptor) DiagnosticPath() string {
+	return descriptor.diagnosticPath
+}
+func (descriptor StableResourcePhysicalDescriptor) Identity() StableIdentity {
+	return descriptor.identity
+}
+func (descriptor StableResourcePhysicalDescriptor) Digest() [32]byte { return descriptor.digest }
+func (descriptor StableResourcePhysicalDescriptor) Frontier() DurableFrontier {
+	return cloneDurableFrontier(descriptor.frontier)
+}
+func (descriptor StableResourcePhysicalDescriptor) RIDs() []uint64 { return descriptor.frontier.RIDs() }
+func (descriptor StableResourcePhysicalDescriptor) ReachabilityFields() []ReachabilityField {
+	return append([]ReachabilityField(nil), descriptor.reachability...)
+}
+func (descriptor StableResourcePhysicalDescriptor) Namespace() (StableNamespaceDescriptor, bool) {
+	if descriptor.namespace == nil {
+		return StableNamespaceDescriptor{}, false
+	}
+	return *descriptor.namespace, true
 }
 
 // StableNamespaceDescriptor is an immutable-by-copy recovery view of the
@@ -3259,42 +3369,40 @@ func (set *StableResourceSet) IdentityPinRegistryStats() []IdentityPinRegistrySt
 	return stats
 }
 
-// Descriptors returns immutable-by-copy views of the coalesced physical
-// obligations. Callers that need publication or recovery metadata should use
-// these views rather than representative Tokens.
-func (set *StableResourceSet) Descriptors() []StableResourceDescriptor {
+// Descriptors materializes complete logical metadata. On any read or ownership
+// failure it returns no descriptors. Publication paths should use physical
+// metadata or WalkLogicalObligations to keep scratch memory bounded.
+func (set *StableResourceSet) Descriptors() ([]StableResourceDescriptor, error) {
 	if set == nil {
-		return nil
+		return nil, nil
 	}
-	descriptors := make([]StableResourceDescriptor, 0, set.Len())
-	set.rangeEntries(func(entry *stableResourceEntry) bool {
-		fields := make([]ReachabilityField, 0, len(entry.reachability))
-		for field := range entry.reachability {
-			fields = append(fields, field)
-		}
-		sort.Slice(fields, func(i, j int) bool { return fields[i] < fields[j] })
-		logicalObligations := entry.logicalObligations.slice()
-		sort.Slice(logicalObligations, func(i, j int) bool {
-			return stableLogicalObligationLess(logicalObligations[i], logicalObligations[j])
+	set.mu.Lock()
+	defer set.mu.Unlock()
+	descriptors := make([]StableResourceDescriptor, 0)
+	positions := make(map[stableLogicalResourceKey]int)
+	set.rangeEntriesLocked(func(entry *stableResourceEntry) bool {
+		physical := physicalDescriptorFromEntry(entry)
+		positions[entry.token.logicalKey()] = len(descriptors)
+		descriptors = append(descriptors, StableResourceDescriptor{
+			kind: physical.Kind, generation: physical.Generation, logicalLane: physical.logicalLane,
+			resourceID: physical.resourceID, diagnosticPath: physical.diagnosticPath,
+			identity: physical.identity, digest: physical.digest, frontier: physical.frontier,
+			reachability: physical.reachability, namespace: physical.namespace,
 		})
-		descriptor := StableResourceDescriptor{
-			kind: entry.token.kind, logicalLane: entry.logicalLane, resourceID: entry.resourceID,
-			diagnosticPath: entry.diagnosticPath, identity: entry.token.identity, generation: entry.token.generation,
-			digest: entry.token.digest, frontier: cloneDurableFrontier(entry.frontier), reachability: fields,
-			logicalObligations: logicalObligations,
-		}
-		if namespace := entry.token.namespace; namespace != nil {
-			descriptor.namespace = &StableNamespaceDescriptor{
-				ParentIdentity: namespace.parentIdentity,
-				Operation:      namespace.operation,
-				OldName:        namespace.oldName,
-				NewName:        namespace.newName,
-				DiagnosticPath: namespace.diagnosticPath,
-			}
-		}
-		descriptors = append(descriptors, descriptor)
 		return true
 	})
+	if err := set.walkLogicalObligationsLocked(func(physical StableResourcePhysicalDescriptor, obligation StableLogicalObligation) error {
+		key := stableLogicalResourceKey{kind: physical.Kind, lane: physical.logicalLane, resourceID: physical.resourceID, generation: physical.Generation}
+		i := positions[key]
+		descriptors[i].logicalObligations = append(descriptors[i].logicalObligations, obligation)
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	for i := range descriptors {
+		values := descriptors[i].logicalObligations
+		sort.Slice(values, func(i, j int) bool { return stableLogicalObligationLess(values[i], values[j]) })
+	}
 	sort.Slice(descriptors, func(i, j int) bool {
 		left, right := descriptors[i], descriptors[j]
 		if left.kind != right.kind {
@@ -3311,7 +3419,7 @@ func (set *StableResourceSet) Descriptors() []StableResourceDescriptor {
 		}
 		return bytes.Compare(left.identity.ObjectID[:], right.identity.ObjectID[:]) < 0
 	})
-	return descriptors
+	return descriptors, nil
 }
 
 // DependencyManifestV1 builds the unchanged durable V1 stream while reusing
@@ -3320,6 +3428,9 @@ func (set *StableResourceSet) Descriptors() []StableResourceDescriptor {
 func (set *StableResourceSet) DependencyManifestV1() (*DependencyManifestV1, DependencyManifestBuildWorkV1, error) {
 	if set == nil {
 		return NewDependencyManifestV1WithWork(nil)
+	}
+	if set.hasDependencyDirectoryV2() {
+		return nil, DependencyManifestBuildWorkV1{}, fmt.Errorf("%w: V1 manifest requested for a dependency directory", ErrResourceConflict)
 	}
 	work := DependencyManifestBuildWorkV1{}
 	encoded := make([]*dependencyManifestEncodedEntryV1, 0, set.Len())
@@ -3362,7 +3473,7 @@ func dependencyManifestEntryV1FromStableResourceEntry(entry stableResourceEntry)
 	for field := range entry.reachability {
 		fields = append(fields, field)
 	}
-	logicalObligations := entry.logicalObligations.slice()
+	logicalObligations := entry.logicalObligations.deltaSlice()
 	result := DependencyManifestEntryV1{
 		Kind: entry.token.kind, LogicalLane: entry.logicalLane, ResourceID: entry.resourceID,
 		DiagnosticPath: entry.diagnosticPath, Identity: entry.token.identity, Generation: entry.token.generation,
@@ -3425,6 +3536,9 @@ func CloneStableResourceSetForLogicalObligationsWithWork(source *StableResourceS
 	if err != nil {
 		return nil, work, err
 	}
+	if source.hasDependencyDirectoryV2() {
+		return cloneDirectoryForRequirementsV2(source, requirements, requirementIndex, work, excluded...)
+	}
 	excludedKinds := make(map[ResourceKind]struct{}, len(excluded))
 	for _, kind := range excluded {
 		if kind != "" {
@@ -3480,7 +3594,7 @@ func CloneStableResourceSetForLogicalObligationsWithWork(source *StableResourceS
 				sharedObligations = entry.logicalObligations
 			} else {
 				obligations = make([]StableLogicalObligation, 0, entry.logicalObligations.count)
-				entry.logicalObligations.rangeValues(func(obligation StableLogicalObligation) bool {
+				entry.logicalObligations.rangeDeltaValues(func(obligation StableLogicalObligation) bool {
 					work.SourceObligationsInspected++
 					if obligation.Reachability != field {
 						return true
@@ -3677,7 +3791,11 @@ func CloneStableResourceSetApplyingLogicalObligationMutation(source *StableResou
 	}
 	found := make(map[StableLogicalObligation]struct{}, len(removed))
 	if source != nil {
-		for _, descriptor := range source.Descriptors() {
+		descriptors, err := source.Descriptors()
+		if err != nil {
+			return nil, work, err
+		}
+		for _, descriptor := range descriptors {
 			for _, obligation := range descriptor.LogicalObligations() {
 				if _, ok := scoped[obligation.Reachability]; !ok {
 					continue
@@ -3728,6 +3846,9 @@ func ValidateStableResourceSetLogicalObligationsWithWork(resources *StableResour
 	if len(index.scoped) == 0 {
 		return work, nil
 	}
+	if resources.hasDependencyDirectoryV2() {
+		return validateDirectoryRequirementsV2(resources, index, work)
+	}
 	actual := make(map[ReachabilityField]map[StableLogicalObligation]struct{}, len(index.scoped))
 	for field := range index.scoped {
 		actual[field] = make(map[StableLogicalObligation]struct{})
@@ -3747,7 +3868,7 @@ func ValidateStableResourceSetLogicalObligationsWithWork(resources *StableResour
 				}
 				foundForField := false
 				var visitErr error
-				entry.logicalObligations.rangeValues(func(obligation StableLogicalObligation) bool {
+				entry.logicalObligations.rangeDeltaValues(func(obligation StableLogicalObligation) bool {
 					work.SourceObligationsInspected++
 					if obligation.Reachability != field {
 						return true
@@ -4193,6 +4314,9 @@ func (set *StableResourceSet) BytesNotCoveredBy(published *StableResourceSet) (u
 }
 
 func stableResourceEntryDurablePrefix(prior, entry *stableResourceEntry) (uint64, bool) {
+	if prior != nil && (prior.logicalObligations.directory != nil || entry.logicalObligations.directory != nil) {
+		return 0, false
+	}
 	if prior == nil || prior.logicalLane != entry.logicalLane || prior.resourceID != entry.resourceID {
 		return 0, false
 	}
@@ -4212,7 +4336,7 @@ func stableResourceEntryDurablePrefix(prior, entry *stableResourceEntry) (uint64
 		}
 	}
 	exact := true
-	prior.logicalObligations.rangeValues(func(obligation StableLogicalObligation) bool {
+	prior.logicalObligations.rangeDeltaValues(func(obligation StableLogicalObligation) bool {
 		current, exists := findStableLogicalObligationIndex(entry.logicalObligations.index, obligation, nil)
 		exact = exists && current == obligation
 		return exact
@@ -4220,7 +4344,7 @@ func stableResourceEntryDurablePrefix(prior, entry *stableResourceEntry) (uint64
 	if !exact {
 		return 0, false
 	}
-	entry.logicalObligations.rangeValues(func(obligation StableLogicalObligation) bool {
+	entry.logicalObligations.rangeDeltaValues(func(obligation StableLogicalObligation) bool {
 		if previous, exists := findStableLogicalObligationIndex(prior.logicalObligations.index, obligation, nil); exists {
 			exact = previous == obligation
 			return exact
@@ -4233,6 +4357,11 @@ func stableResourceEntryDurablePrefix(prior, entry *stableResourceEntry) (uint64
 }
 
 func stableResourceEntryCoversPublication(prior, entry *stableResourceEntry) bool {
+	if prior != nil && (prior.logicalObligations.directory != nil || entry.logicalObligations.directory != nil) {
+		if prior.logicalObligations.directory != entry.logicalObligations.directory || prior.logicalObligations.tail != entry.logicalObligations.tail || len(prior.logicalObligations.removed) != 0 || len(entry.logicalObligations.removed) != 0 {
+			return false
+		}
+	}
 	if prior == nil || prior.logicalLane != entry.logicalLane || prior.resourceID != entry.resourceID {
 		return false
 	}
@@ -4259,7 +4388,7 @@ func stableResourceEntryCoversPublication(prior, entry *stableResourceEntry) boo
 		return true
 	}
 	covered := true
-	entry.logicalObligations.rangeValues(func(obligation StableLogicalObligation) bool {
+	entry.logicalObligations.rangeDeltaValues(func(obligation StableLogicalObligation) bool {
 		previous, exists := findStableLogicalObligationIndex(prior.logicalObligations.index, obligation, nil)
 		covered = exists && previous == obligation
 		return covered

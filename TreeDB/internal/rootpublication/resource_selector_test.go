@@ -48,7 +48,7 @@ func TestCloneStableResourceForSelector(t *testing.T) {
 		selected.Release()
 		t.Fatalf("selected after source release: %v", err)
 	}
-	descriptors := selected.Descriptors()
+	descriptors := mustStableResourceDescriptors(t, selected)
 	if len(descriptors) != 1 {
 		t.Fatalf("descriptors=%d want 1", len(descriptors))
 	}

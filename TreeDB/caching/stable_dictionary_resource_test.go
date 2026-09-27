@@ -78,7 +78,7 @@ func TestStableValueLogAppendMergesReusedDictionaryClosure(t *testing.T) {
 	}
 	defer resources.Release()
 	var hasDictionary, hasOuterLeaf bool
-	for _, descriptor := range resources.Descriptors() {
+	for _, descriptor := range mustStableResourceDescriptors(t, resources) {
 		for _, field := range descriptor.ReachabilityFields() {
 			switch field {
 			case rootpublication.ReachabilityDictionaryGeneration:

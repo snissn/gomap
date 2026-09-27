@@ -766,7 +766,7 @@ type columnAssetReachabilityInput struct {
 	unknownSources     map[ColumnAssetRef][]ColumnAssetReachabilitySource
 	sourceCounts       ColumnAssetReachabilitySourceStats
 	mappedResources    ColumnAssetReachabilityMappedResourceStats
-	ownedSegments      map[uint32]rootpublication.StableResourceDescriptor
+	ownedSegments      map[uint32]rootpublication.StableResourcePhysicalDescriptor
 	quarantineSegments map[uint32]int64
 	pinStateIncomplete bool
 }

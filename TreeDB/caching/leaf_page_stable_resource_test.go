@@ -54,7 +54,7 @@ func TestCachingLeafPageLogStableBatchPinsExactRawSegment(t *testing.T) {
 	if len(ptrs) != len(pages) {
 		t.Fatalf("pointer count=%d want %d", len(ptrs), len(pages))
 	}
-	descriptors := resources.Descriptors()
+	descriptors := mustStableResourceDescriptors(t, resources)
 	if len(descriptors) != 1 {
 		t.Fatalf("resource count=%d want 1", len(descriptors))
 	}
@@ -160,7 +160,7 @@ func TestCachingLeafPageLogStablePreparedBatchCapturesEveryReferencedSegment(t *
 	if len(referenced) < 2 {
 		t.Fatalf("batch referenced %d segments; test did not exercise rotation", len(referenced))
 	}
-	descriptors := resources.Descriptors()
+	descriptors := mustStableResourceDescriptors(t, resources)
 	if len(descriptors) != len(referenced) {
 		t.Fatalf("captured descriptors=%d referenced segments=%d", len(descriptors), len(referenced))
 	}
@@ -319,7 +319,7 @@ func TestCachingLeafPageLogStableCaptureExcludesFollowingConcurrentRotation(t *t
 	if ordinary.ptr.FileID == stable.ptr.FileID {
 		t.Fatalf("ordinary append did not rotate: stable=%d ordinary=%d", stable.ptr.FileID, ordinary.ptr.FileID)
 	}
-	descriptors := stable.resources.Descriptors()
+	descriptors := mustStableResourceDescriptors(t, stable.resources)
 	if len(descriptors) != 1 || uint32(descriptors[0].Generation()) != stable.ptr.ValueLogFileID() {
 		t.Fatalf("stable descriptors=%v want only file_id=%d", descriptors, stable.ptr.ValueLogFileID())
 	}
@@ -399,7 +399,7 @@ func TestCachingLeafPageLogStableCertifiesRelaxedOrdinaryRotationBeforeAppend(t 
 	if second.FileID == first.FileID {
 		t.Fatalf("ordinary rotation did not advance leaf segment: first=%d second=%d", first.FileID, second.FileID)
 	}
-	descriptors := secondResources.Descriptors()
+	descriptors := mustStableResourceDescriptors(t, secondResources)
 	if len(descriptors) != 1 || descriptors[0].Generation() != uint64(second.ValueLogFileID()) {
 		t.Fatalf("retry resources=%v want exact generation %d", descriptors, second.ValueLogFileID())
 	}

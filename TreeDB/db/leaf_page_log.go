@@ -135,35 +135,35 @@ func validateLeafPageStableResources(ptrs []page.LeafLogPtr, resources *rootpubl
 			required[generation] = minimumBytes
 		}
 	}
-	descriptors := resources.Descriptors()
+	descriptors := resources.PhysicalDescriptors()
 	for _, descriptor := range descriptors {
 		fields := descriptor.ReachabilityFields()
 		if len(fields) != 1 {
 			return fmt.Errorf("%w: leaf append returned stable reachability %v", rootpublication.ErrResourceConflict, fields)
 		}
 		if fields[0] == rootpublication.ReachabilityDictionaryGeneration {
-			if descriptor.Kind() != rootpublication.ResourceDictionary || len(descriptor.LogicalObligations()) == 0 {
+			if descriptor.Kind != rootpublication.ResourceDictionary || descriptor.LogicalObligationCount == 0 {
 				return fmt.Errorf("%w: leaf append returned incomplete dictionary authority", rootpublication.ErrUnresolvedResource)
 			}
 			continue
 		}
 		if fields[0] == rootpublication.ReachabilityTemplateGeneration {
-			if descriptor.Kind() != rootpublication.ResourceTemplate || len(descriptor.LogicalObligations()) == 0 {
+			if descriptor.Kind != rootpublication.ResourceTemplate || descriptor.LogicalObligationCount == 0 {
 				return fmt.Errorf("%w: leaf append returned incomplete template authority", rootpublication.ErrUnresolvedResource)
 			}
 			continue
 		}
-		if fields[0] != rootpublication.ReachabilityOuterLeafRawPointer || descriptor.Kind() != rootpublication.ResourceOuterLeafLog {
-			return fmt.Errorf("%w: leaf append returned unsupported stable kind %q reachability %v", rootpublication.ErrResourceConflict, descriptor.Kind(), fields)
+		if fields[0] != rootpublication.ReachabilityOuterLeafRawPointer || descriptor.Kind != rootpublication.ResourceOuterLeafLog {
+			return fmt.Errorf("%w: leaf append returned unsupported stable kind %q reachability %v", rootpublication.ErrResourceConflict, descriptor.Kind, fields)
 		}
-		minimumBytes, ok := required[descriptor.Generation()]
+		minimumBytes, ok := required[descriptor.Generation]
 		if !ok {
-			return fmt.Errorf("%w: leaf append returned unreferenced stable generation %d", rootpublication.ErrResourceConflict, descriptor.Generation())
+			return fmt.Errorf("%w: leaf append returned unreferenced stable generation %d", rootpublication.ErrResourceConflict, descriptor.Generation)
 		}
 		if descriptor.Frontier().Bytes < minimumBytes {
-			return fmt.Errorf("%w: leaf append stable generation %d frontier %d does not cover pointer end %d", rootpublication.ErrUnresolvedResource, descriptor.Generation(), descriptor.Frontier().Bytes, minimumBytes)
+			return fmt.Errorf("%w: leaf append stable generation %d frontier %d does not cover pointer end %d", rootpublication.ErrUnresolvedResource, descriptor.Generation, descriptor.Frontier().Bytes, minimumBytes)
 		}
-		delete(required, descriptor.Generation())
+		delete(required, descriptor.Generation)
 	}
 	if len(required) != 0 {
 		return fmt.Errorf("%w: leaf append omitted stable generations %v", rootpublication.ErrUnresolvedResource, required)
