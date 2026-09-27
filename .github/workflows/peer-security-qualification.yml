@@ -80,6 +80,7 @@ jobs:
           go-version-file: go.mod
           cache: false
       - name: Equivalent plaintext and authenticated durable traffic
+        shell: bash
         run: |
           mkdir -p peer-public-path-cost
           git rev-parse HEAD | tee peer-public-path-cost/source.txt

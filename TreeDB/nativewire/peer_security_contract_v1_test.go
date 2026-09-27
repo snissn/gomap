@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -170,6 +171,35 @@ func TestPeerSecurityRotationReopenAndDowngradeRefusalV1(t *testing.T) {
 	defer newClient.Close()
 	if status, err := newClient.Status(ctx, config.NodeID); err != nil || status.RecoveryState != "reopened" {
 		t.Fatalf("rotated credential did not rejoin exact store identity: %+v error=%v", status, err)
+	}
+	// Trust the replacement server while explicitly presenting the retired
+	// certificate. Force its selection even though the server advertises only
+	// the replacement CA, so this proves server-side client rejection too.
+	var verifiedServer atomic.Bool
+	retiredTransport := &http.Transport{TLSClientConfig: &tls.Config{
+		MinVersion: tls.VersionTLS13,
+		RootCAs:    newClient.security.roots,
+		GetClientCertificate: func(*tls.CertificateRequestInfo) (*tls.Certificate, error) {
+			return &oldClient.security.certificate, nil
+		},
+		VerifyConnection: func(tls.ConnectionState) error {
+			verifiedServer.Store(true)
+			return nil
+		},
+	}}
+	defer retiredTransport.CloseIdleConnections()
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://"+config.ListenAddress+"/v1/status", strings.NewReader("{}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("X-TreeDB-Node", string(config.NodeID))
+	request.Header.Set("X-TreeDB-Config", newClient.digest)
+	response, err := (&http.Client{Transport: retiredTransport}).Do(request)
+	if response != nil {
+		response.Body.Close()
+	}
+	if !verifiedServer.Load() || err == nil {
+		t.Fatalf("retired client certificate must fail after replacement server verification: verified=%v error=%v", verifiedServer.Load(), err)
 	}
 	if err := runtime.Close(); err != nil {
 		t.Fatal(err)
