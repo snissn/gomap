@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -19,12 +20,14 @@ import (
 // another worker, and Close keeps stores alive through its actual return. The
 // durable catalog/receiver state, not this process-local result, authorizes work.
 type replacementNativeWorkV1 struct {
-	operation string
-	phase     string
-	cancel    context.CancelFunc
-	done      chan struct{}
-	seed      *raftcluster.ReplacementSnapshotSeedV1
-	err       error
+	operation  string
+	phase      string
+	cancel     context.CancelFunc
+	done       chan struct{}
+	seed       *raftcluster.ReplacementSnapshotSeedV1
+	err        error
+	lease      peerWorkLeaseV1
+	cleanupErr error
 }
 
 type replacementNativeSlotV1 struct {
@@ -65,13 +68,38 @@ func (d *fixedPeerDataV1) replacementWorkV1(operation, phase string, work func(c
 	if err != nil {
 		return err
 	}
+	var lease peerWorkLeaseV1
+	if phase == "seed" {
+		if transport, ok := d.transport.(*peerRaftTransportV1); ok {
+			bytes, err := transport.snapshotBytes(0)
+			if err != nil {
+				return err
+			}
+			lease, err = transport.admission.work(transport.scope, peerSnapshotsV1, bytes)
+			if err != nil {
+				// Saturation is a retryable admission refusal, not this operation's
+				// cached terminal result. Polls above never acquire another lease.
+				return err
+			}
+		}
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), limits.Lifetime)
-	current = &replacementNativeWorkV1{operation: operation, phase: phase, cancel: cancel, done: make(chan struct{})}
+	current = &replacementNativeWorkV1{operation: operation, phase: phase, cancel: cancel, done: make(chan struct{}), lease: lease}
 	d.replacementWork.work = current
 	go func() {
 		defer close(current.done)
 		defer cancel()
 		current.seed, current.err = work(ctx)
+		if phase == "seed" {
+			if raftcluster.ReplacementSnapshotCleanupRequiredV1(current.err) {
+				// Keep the opaque native owner in err and its budget until process
+				// restart. Close reports this debt; it cannot prove native cleanup.
+				current.cleanupErr = current.err
+			} else {
+				current.cleanupErr = d.fsm.HandoffSnapshotWorkReleaseV1(current.lease.release)
+				current.err = errors.Join(current.err, current.cleanupErr)
+			}
+		}
 	}()
 	reply.ReplacementPending = true
 	return nil
@@ -86,6 +114,22 @@ func (d *fixedPeerDataV1) cancelReplacementWorkV1() <-chan struct{} {
 	}
 	d.replacementWork.work.cancel()
 	return d.replacementWork.work.done
+}
+
+// Called after actual worker completion; an unresolved native owner is not
+// released by runtime Close or a later poll. Process restart is required.
+func (d *fixedPeerDataV1) replacementCleanupErrorV1() error {
+	d.replacementWork.mu.Lock()
+	defer d.replacementWork.mu.Unlock()
+	if work := d.replacementWork.work; work != nil {
+		select {
+		case <-work.done:
+			return work.cleanupErr
+		default:
+			return raftcluster.ErrAdmissionUnavailable
+		}
+	}
+	return nil
 }
 
 // The operation name is a fixed digest of canonical authority, never raw user
@@ -179,7 +223,7 @@ func (r *FixedPeerTCPRuntimeV1) deriveReplacementSeedV1(ctx context.Context, com
 	if len(entries) != 0 {
 		return nil, fmt.Errorf("%w: incomplete retained replacement seed", raftcluster.ErrAdmissionUnavailable)
 	}
-	selected, err := d.provider.Snapshot(ctx)
+	selected, err := d.provider.SnapshotForReplacementV1(ctx)
 	if err != nil {
 		return nil, err
 	}

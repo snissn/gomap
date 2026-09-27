@@ -703,6 +703,18 @@ type HashicorpRaftSnapshotResultV1 struct {
 // Snapshot asks HashiCorp Raft to persist an FSM snapshot and compact logs
 // according to the active Raft configuration.
 func (p *HashicorpRaftProvider) Snapshot(ctx context.Context) (HashicorpRaftSnapshotResultV1, error) {
+	return p.snapshotV1(ctx, false)
+}
+
+// SnapshotForReplacementV1 keeps the operation's admission through the native
+// snapshot future's actual completion, including its deferred FSM Release.
+// Cancellation prevents subsequent reads/copying but cannot interrupt a native
+// sink or filesystem call. The caller must retain its worker through return.
+func (p *HashicorpRaftProvider) SnapshotForReplacementV1(ctx context.Context) (HashicorpRaftSnapshotResultV1, error) {
+	return p.snapshotV1(ctx, true)
+}
+
+func (p *HashicorpRaftProvider) snapshotV1(ctx context.Context, ownCompletion bool) (HashicorpRaftSnapshotResultV1, error) {
 	if p == nil || p.raft == nil || p.logStore == nil {
 		return HashicorpRaftSnapshotResultV1{}, ErrInvalidHashicorpRaftProvider
 	}
@@ -721,8 +733,23 @@ func (p *HashicorpRaftProvider) Snapshot(ctx context.Context) (HashicorpRaftSnap
 		return HashicorpRaftSnapshotResultV1{}, errors.Join(ErrHashicorpRaftUnavailable, lastBeforeErr)
 	}
 	future := p.raft.Snapshot()
-	if err := waitHashicorpRaftFuture(ctx, future); err != nil {
-		return HashicorpRaftSnapshotResultV1{}, errors.Join(ErrHashicorpRaftUnavailable, err)
+	var futureErr error
+	if ownCompletion {
+		// Pinned HashiCorp takeSnapshot releases its FSM carrier before the
+		// user snapshot future responds. A canceled wait alone is not that
+		// completion boundary and could release seed admission too early.
+		if err := future.Error(); err != nil {
+			// Native takeSnapshot discards sink.Cancel errors on Persist failure;
+			// even an idle FSM cannot prove those opaque native resources closed.
+			futureErr = &replacementSnapshotCleanupDebtV1{cause: errors.Join(err, ctx.Err()), future: future}
+		} else {
+			futureErr = ctx.Err()
+		}
+	} else {
+		futureErr = waitHashicorpRaftFuture(ctx, future)
+	}
+	if futureErr != nil {
+		return HashicorpRaftSnapshotResultV1{}, errors.Join(ErrHashicorpRaftUnavailable, futureErr)
 	}
 	meta, snapshot, err := future.Open()
 	if err != nil {

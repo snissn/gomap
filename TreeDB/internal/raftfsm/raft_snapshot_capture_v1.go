@@ -65,10 +65,7 @@ func (f *FSM) CaptureRaftSnapshotV1() (result raftcluster.RaftSnapshotV1, captur
 	releaseOwner := func() error {
 		cancel()
 		err := namespace.Close()
-		f.snapshotMu.Lock()
-		f.snapshotOwner = raftcluster.RaftSnapshotV1{}
-		f.snapshotOperationActive.Store(false)
-		f.snapshotMu.Unlock()
+		f.releaseSnapshotOperationV1()
 		return err
 	}
 	defer func() {

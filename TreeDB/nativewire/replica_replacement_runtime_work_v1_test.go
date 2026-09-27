@@ -13,6 +13,8 @@ import (
 
 func TestReplacementNativeWorkerOwnsActualReturnV1(t *testing.T) {
 	cfg := fixedPeerTestConfigsV1(t)[0]
+	cfg.ClusterID = "replacement-worker"
+	cfg.Credentials = peerCredentialsFixtureV1(t, cfg.ClusterID, string(cfg.NodeID))
 	runtime, err := OpenFixedPeerTCPRuntimeV1(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -33,6 +35,23 @@ func TestReplacementNativeWorkerOwnsActualReturnV1(t *testing.T) {
 		<-release
 		return nil, ctx.Err()
 	}
+	transport, ok := d.transport.(*peerRaftTransportV1)
+	if !ok {
+		t.Fatal("missing node admission transport")
+	}
+	saturated, err := transport.admission.work(transport.scope, peerSnapshotsV1, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer saturated.release()
+	var refused fixedPeerReplyV1
+	if err := d.replacementWorkV1("op", "seed", work, &refused); !errors.Is(err, raftcluster.ErrAdmissionUnavailable) {
+		t.Fatalf("saturated seed admission: %v", err)
+	}
+	if d.replacementWork.work != nil || calls.Load() != 0 {
+		t.Fatal("saturation cached or launched work")
+	}
+	saturated.release()
 	var first fixedPeerReplyV1
 	if err := d.replacementWorkV1("op", "seed", work, &first); err != nil || !first.ReplacementPending {
 		t.Fatalf("first: %+v %v", first, err)
@@ -45,6 +64,9 @@ func TestReplacementNativeWorkerOwnsActualReturnV1(t *testing.T) {
 		if err := d.replacementWorkV1("op", "seed", work, &poll); err != nil || !poll.ReplacementPending {
 			t.Fatalf("poll: %+v %v", poll, err)
 		}
+	}
+	if stats := runtime.PeerTransportV1().ResourceStatsV1(); stats.Current[peerSnapshotsV1] != 1 {
+		t.Fatalf("poll acquired duplicate seed admission: %+v", stats)
 	}
 	var conflict fixedPeerReplyV1
 	if err := d.replacementWorkV1("different", "seed", work, &conflict); err == nil {
@@ -70,5 +92,55 @@ func TestReplacementNativeWorkerOwnsActualReturnV1(t *testing.T) {
 	}
 	if !errors.Is(d.replacementWork.work.err, context.Canceled) {
 		t.Fatalf("worker error=%v", d.replacementWork.work.err)
+	}
+	if stats := runtime.PeerTransportV1().ResourceStatsV1(); stats.Current[peerSnapshotsV1] != 0 {
+		t.Fatalf("completed canceled work retained clean admission: %+v", stats)
+	}
+}
+
+func TestReplacementNativeFailureRetainsSeedBudgetV1(t *testing.T) {
+	cfg := fixedPeerTestConfigsV1(t)[0]
+	cfg.ClusterID = "replacement-worker"
+	cfg.Credentials = peerCredentialsFixtureV1(t, cfg.ClusterID, string(cfg.NodeID))
+	runtime, err := OpenFixedPeerTCPRuntimeV1(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+	d := runtime.localDataV1(cfg.Groups[0].ID)
+	if d == nil {
+		t.Fatal("missing hosted group")
+	}
+	// This fresh group has no applied application command. Its submitted native
+	// snapshot future cannot produce a valid cut. The replacement boundary
+	// conservatively retains ownership for an opaque native future failure.
+	var calls atomic.Int32
+	work := func(ctx context.Context) (*raftcluster.ReplacementSnapshotSeedV1, error) {
+		calls.Add(1)
+		_, err := d.provider.SnapshotForReplacementV1(ctx)
+		return nil, err
+	}
+	var reply fixedPeerReplyV1
+	if err := d.replacementWorkV1("poisoned", "seed", work, &reply); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-d.replacementWork.work.done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("native future did not complete")
+	}
+	if err := d.replacementWorkV1("poisoned", "seed", work, &reply); !raftcluster.ReplacementSnapshotCleanupRequiredV1(err) {
+		t.Fatalf("native failure lost poisoned owner: %v", err)
+	}
+	if calls.Load() != 1 {
+		t.Fatal("poll repeated poisoned work")
+	}
+	for i := 0; i < 2; i++ {
+		if err := runtime.Close(); !raftcluster.ReplacementSnapshotCleanupRequiredV1(err) {
+			t.Fatalf("Close forgot unresolved native owner: %v", err)
+		}
+		if stats := runtime.PeerTransportV1().ResourceStatsV1(); stats.Current[peerSnapshotsV1] != 1 {
+			t.Fatalf("Close released unknown native cleanup: %+v", stats)
+		}
 	}
 }

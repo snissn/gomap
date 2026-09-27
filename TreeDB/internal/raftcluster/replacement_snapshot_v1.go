@@ -106,6 +106,28 @@ func SameReplacementSnapshotSeedV1(a, b ReplacementSnapshotSeedV1) bool {
 	return replacementSnapshotSeedsEqualV1(a, b)
 }
 
+// replacementSnapshotCleanupDebtV1 retains opaque native ownership when the
+// pinned library cannot prove cleanup. FileSnapshotSink marks itself closed
+// before Flush/Sync/Close; another Cancel returning nil is not a cleanup proof.
+// This failure requires process restart, not an in-process retry/release.
+type replacementSnapshotCleanupDebtV1 struct {
+	cause  error
+	future hraft.Future
+	sink   hraft.SnapshotSink
+}
+
+func (e *replacementSnapshotCleanupDebtV1) Error() string {
+	return "raftcluster: replacement snapshot cleanup requires process restart: " + e.cause.Error()
+}
+func (e *replacementSnapshotCleanupDebtV1) Unwrap() error { return e.cause }
+
+// ReplacementSnapshotCleanupRequiredV1 distinguishes unresolved native resource
+// ownership from ordinary cancellation after positively completed native work.
+func ReplacementSnapshotCleanupRequiredV1(err error) bool {
+	var debt *replacementSnapshotCleanupDebtV1
+	return errors.As(err, &debt)
+}
+
 // RetainReplacementSnapshotSeedV1 copies an already selected native snapshot
 // into the caller's one-operation FileSnapshotStore. The caller serializes the
 // operation, admits source+copy+temporary disk bytes, and retains its namespace
@@ -176,7 +198,9 @@ func (p *HashicorpRaftProvider) RetainReplacementSnapshotSeedV1(ctx context.Cont
 	closed := false
 	defer func() {
 		if !closed {
-			err = errors.Join(err, sink.Cancel())
+			if cleanupErr := sink.Cancel(); cleanupErr != nil {
+				err = &replacementSnapshotCleanupDebtV1{cause: errors.Join(err, cleanupErr), sink: sink}
+			}
 		}
 	}()
 	hash := sha256.New()
@@ -191,10 +215,12 @@ func (p *HashicorpRaftProvider) RetainReplacementSnapshotSeedV1(ctx context.Cont
 	if err := ctx.Err(); err != nil {
 		return seed, err
 	}
-	if err := sink.Close(); err != nil {
-		return seed, err
-	}
+	// A failed native Close has already changed its closed bit. Retain that
+	// opaque owner; deferred Cancel must not mistake idempotent nil for cleanup.
 	closed = true
+	if err := sink.Close(); err != nil {
+		return seed, &replacementSnapshotCleanupDebtV1{cause: err, sink: sink}
+	}
 	copyMeta := *meta
 	copyMeta.ID = sink.ID()
 	return replacementSnapshotSeedFromMetaV1(&copyMeta, selected.Manifest, hex.EncodeToString(hash.Sum(nil)))

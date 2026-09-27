@@ -3643,3 +3643,24 @@ additional retained archive count toward the staging ceiling, and the extra
 copy requires available disk before copying. Retained seeds remain persistent
 operation debt until a later qualified completion/cleanup milestone. These are
 admission ceilings and developmental tests, not measured shard capacity.
+
+Creating seed work acquires the existing node-wide snapshot/stream-buffer
+budget once; polling acquires no additional lease, and saturation does not
+cache a terminal operation result. The replacement-specific snapshot call waits
+for the native future's actual completion, including its deferred FSM release.
+After all native reads and copy calls return, known FSM cleanup debt retains the
+lease through the existing snapshot owner. Idle cleanup releases it immediately;
+concurrent capture completion and handoff serialize on the same owner slot.
+
+An opaque native failure has a stricter boundary. The pinned native snapshot
+sink marks itself closed before flushing, syncing and closing its file, and the
+native snapshot loop can discard cancellation-cleanup errors. Therefore an
+unsuccessful submitted native future, retained-copy Close, or retained-copy
+Cancel with unknown cleanup retains the poisoned seed owner and node budget.
+Close reports the original unresolved failure; another Cancel returning nil is
+not evidence of cleanup. This hard failure requires **process restart** to clear
+possible native handles. Persistent partial seed artifacts remain explicitly
+unready after restart and cannot be silently replaced. Cancellation observed
+after a positively successful native future is distinct and uses normal cleanup
+handoff. These refusal rules bound retries; they do not promise automatic
+recovery from arbitrary native filesystem failures.

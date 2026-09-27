@@ -68,6 +68,7 @@ type FSM struct {
 	snapshotMu              sync.Mutex
 	snapshotNamespace       *lockfile.Lock
 	snapshotOwner           raftcluster.RaftSnapshotV1
+	snapshotWorkRelease     func()
 
 	db          *backenddb.DB
 	metadataDir string

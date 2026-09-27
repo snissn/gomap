@@ -155,10 +155,7 @@ func (f *FSM) InstallRaftSnapshotV1(reader io.Reader) error {
 	scratch := &raftSnapshotScratchDirsV1{}
 	releaseOwner := func() error {
 		err := namespace.Close()
-		f.snapshotMu.Lock()
-		f.snapshotOwner = raftcluster.RaftSnapshotV1{}
-		f.snapshotOperationActive.Store(false)
-		f.snapshotMu.Unlock()
+		f.releaseSnapshotOperationV1()
 		return err
 	}
 	owner, err := raftcluster.NewRaftSnapshotCleanupV1(func(ctx context.Context) error {

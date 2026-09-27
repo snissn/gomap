@@ -620,6 +620,7 @@ func (r *FixedPeerTCPRuntimeV1) Close() error {
 		if d.fsm != nil {
 			cleanup = append(cleanup, d.fsm.Close())
 		}
+		cleanup = append(cleanup, d.replacementCleanupErrorV1())
 	}
 	r.groupsMu.RUnlock()
 	return errors.Join(r.closeErr, errors.Join(cleanup...))
