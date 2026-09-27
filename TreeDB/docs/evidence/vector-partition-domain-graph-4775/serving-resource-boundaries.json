@@ -1,0 +1,3645 @@
+{
+  "status": "IN_PROGRESS_NOT_QUALIFICATION",
+  "observations": [
+    {
+      "arm": "perpack",
+      "external_block": 1,
+      "report_path": "/home/mikers/gomap-4775-domain-1cde6b84b/serving/perpack-block1/vector_partition_m8_c6dcbcf0c038_17cf159e5480.json",
+      "report_sha256": "c3afd8b81ba21a2b075c41287fb3c391edcab53a219260bad9a99f0dfe1293a6",
+      "untimed_resource_boundary": {
+        "selected_partitions": 64,
+        "ef_search": 96,
+        "wall_clock_nanos": 3175960501,
+        "observed_maxima": {
+          "requests": 4,
+          "rpcs": 4,
+          "retries": 0,
+          "redirects": 0,
+          "request_bytes": 14268,
+          "candidate_bytes": 5197504,
+          "response_bytes": 26752,
+          "merge_entries": 640,
+          "shard_partitions": 16,
+          "shard_request_bytes": 3567,
+          "shard_candidate_bytes": 1312128,
+          "shard_response_bytes": 6688,
+          "local_score_calls": 87355
+        }
+      },
+      "resources": {
+        "persistent_asset_bytes": 332174736,
+        "shard_generation_bytes": 5078606,
+        "variant_descriptor_bytes": 5032,
+        "persistent_asset_cap_bytes": 2147483648,
+        "partition_loads": [
+          1641,
+          1638,
+          1641,
+          1641,
+          1641,
+          1641,
+          1638,
+          1641,
+          1641,
+          1641,
+          1641,
+          1638,
+          1641,
+          1641,
+          1638,
+          1641,
+          1641,
+          1641,
+          1641,
+          1638,
+          397,
+          397,
+          397,
+          394,
+          1640,
+          1641,
+          1641,
+          1639,
+          1638,
+          1641,
+          1641,
+          1641,
+          1641,
+          1638,
+          1641,
+          1641,
+          1640,
+          1641,
+          1641,
+          1639,
+          1641,
+          1638,
+          1641,
+          1641,
+          1641,
+          1641,
+          1641,
+          1638,
+          1640,
+          1641,
+          1641,
+          1639,
+          1641,
+          1638,
+          1641,
+          1641,
+          1641,
+          1641,
+          1641,
+          1638,
+          1641,
+          1641,
+          1641,
+          1638
+        ],
+        "peak_rss_bytes": 1946157056,
+        "peak_rss_cap_bytes": 4294967296,
+        "peak_rss_measured": true,
+        "peak_rss_scope": "process lifetime through preflight, warmup, measured query, endpoint-loss fault, and post-measurement attribution boundaries; includes retained top-k coordinator results and cached truth-membership attribution mappings",
+        "overlap_memberships": 0,
+        "max_partition_load": 1641,
+        "balance_hard_cap": 1875,
+        "mmap_status": "not_captured_by_m8_runner; retained M3/M5 artifacts own mapped-pack evidence",
+        "limit_comparisons": [
+          {
+            "name": "persistent_asset_bytes",
+            "configured": 2147483648,
+            "observed": 337258374,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "process_peak_rss",
+            "configured": 4294967296,
+            "observed": 1946157056,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_selected_partitions",
+            "configured": 256,
+            "observed": 64,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_groups",
+            "configured": 64,
+            "observed": 4,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_requests",
+            "configured": 256,
+            "observed": 4,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_concurrent_requests_across_clients",
+            "configured": 256,
+            "observed": 128,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_rpcs_across_shard_requests",
+            "configured": 8,
+            "observed": 4,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_retries_across_shard_requests",
+            "configured": 4,
+            "observed": 0,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_redirects_across_shard_requests",
+            "configured": 4,
+            "observed": 0,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_router_score_calls",
+            "configured": 1000000,
+            "observed": 256,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_local_score_calls",
+            "configured": 16000000,
+            "observed": 87355,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_query_bytes",
+            "configured": 16384,
+            "observed": 3072,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_top_k",
+            "configured": 256,
+            "observed": 10,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_ef_search",
+            "configured": 4096,
+            "observed": 4096,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_partitions_per_request",
+            "configured": 32,
+            "observed": 16,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_identity_bytes",
+            "configured": 4096,
+            "observed": 176,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_stable_id_bytes",
+            "configured": 4096,
+            "observed": 10,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_merge_entries",
+            "configured": 65536,
+            "observed": 640,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_request_bytes",
+            "configured": 4194304,
+            "observed": 14372,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_candidate_bytes",
+            "configured": 134217728,
+            "observed": 5197504,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_response_bytes",
+            "configured": 67108864,
+            "observed": 26752,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_wall_clock",
+            "configured": 30000000000,
+            "observed": 3175960501,
+            "unit": "nanoseconds",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_dimensions",
+            "configured": 4096,
+            "observed": 768,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_query_bytes",
+            "configured": 16384,
+            "observed": 3072,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_partitions",
+            "configured": 32,
+            "observed": 16,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_top_k",
+            "configured": 256,
+            "observed": 10,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_ef_search",
+            "configured": 4096,
+            "observed": 4096,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_identity_bytes",
+            "configured": 4096,
+            "observed": 176,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_stable_id_bytes",
+            "configured": 4096,
+            "observed": 10,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_request_bytes",
+            "configured": 65536,
+            "observed": 3593,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_candidate_bytes",
+            "configured": 134217728,
+            "observed": 1312128,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_response_bytes",
+            "configured": 67108864,
+            "observed": 6688,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          }
+        ]
+      }
+    },
+    {
+      "arm": "domain",
+      "external_block": 1,
+      "report_path": "/home/mikers/gomap-4775-domain-1cde6b84b/serving/domain-block1/vector_partition_m8_1cde6b84b4a2_1f045798aa3f.json",
+      "report_sha256": "b7e63d3aa82f58c6d0daab7785eb1f3b15335b058c300f2e2c3b7e245632af92",
+      "untimed_resource_boundary": {
+        "selected_partitions": 16,
+        "ef_search": 96,
+        "wall_clock_nanos": 1637927290,
+        "observed_maxima": {
+          "requests": 4,
+          "rpcs": 4,
+          "retries": 0,
+          "redirects": 0,
+          "request_bytes": 14076,
+          "candidate_bytes": 2697344,
+          "response_bytes": 8128,
+          "merge_entries": 160,
+          "shard_partitions": 4,
+          "shard_request_bytes": 3519,
+          "shard_candidate_bytes": 704704,
+          "shard_response_bytes": 2032,
+          "local_score_calls": 43682
+        }
+      },
+      "resources": {
+        "persistent_asset_bytes": 332784856,
+        "shard_generation_bytes": 5078606,
+        "variant_descriptor_bytes": 5034,
+        "persistent_asset_cap_bytes": 2147483648,
+        "partition_loads": [
+          1641,
+          1638,
+          1641,
+          1641,
+          1641,
+          1641,
+          1638,
+          1641,
+          1641,
+          1641,
+          1641,
+          1638,
+          1641,
+          1641,
+          1638,
+          1641,
+          1641,
+          1641,
+          1641,
+          1638,
+          397,
+          397,
+          397,
+          394,
+          1640,
+          1641,
+          1641,
+          1639,
+          1638,
+          1641,
+          1641,
+          1641,
+          1641,
+          1638,
+          1641,
+          1641,
+          1640,
+          1641,
+          1641,
+          1639,
+          1641,
+          1638,
+          1641,
+          1641,
+          1641,
+          1641,
+          1641,
+          1638,
+          1640,
+          1641,
+          1641,
+          1639,
+          1641,
+          1638,
+          1641,
+          1641,
+          1641,
+          1641,
+          1641,
+          1638,
+          1641,
+          1641,
+          1641,
+          1638
+        ],
+        "peak_rss_bytes": 1951498240,
+        "peak_rss_cap_bytes": 4294967296,
+        "peak_rss_measured": true,
+        "peak_rss_scope": "process lifetime through preflight, warmup, measured query, endpoint-loss fault, and post-measurement attribution boundaries; includes retained top-k coordinator results and cached truth-membership attribution mappings",
+        "overlap_memberships": 0,
+        "max_partition_load": 1641,
+        "balance_hard_cap": 1875,
+        "mmap_status": "not_captured_by_m8_runner; retained M3/M5 artifacts own mapped-pack evidence",
+        "limit_comparisons": [
+          {
+            "name": "persistent_asset_bytes",
+            "configured": 2147483648,
+            "observed": 337868496,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "process_peak_rss",
+            "configured": 4294967296,
+            "observed": 1951498240,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_selected_partitions",
+            "configured": 256,
+            "observed": 16,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_groups",
+            "configured": 64,
+            "observed": 4,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_requests",
+            "configured": 256,
+            "observed": 4,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_concurrent_requests_across_clients",
+            "configured": 256,
+            "observed": 128,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_rpcs_across_shard_requests",
+            "configured": 8,
+            "observed": 4,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_retries_across_shard_requests",
+            "configured": 4,
+            "observed": 0,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_redirects_across_shard_requests",
+            "configured": 4,
+            "observed": 0,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_router_score_calls",
+            "configured": 1000000,
+            "observed": 256,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_local_score_calls",
+            "configured": 16000000,
+            "observed": 43682,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_query_bytes",
+            "configured": 16384,
+            "observed": 3072,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_top_k",
+            "configured": 256,
+            "observed": 10,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_ef_search",
+            "configured": 4096,
+            "observed": 4096,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_partitions_per_request",
+            "configured": 32,
+            "observed": 4,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_identity_bytes",
+            "configured": 4096,
+            "observed": 176,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_stable_id_bytes",
+            "configured": 4096,
+            "observed": 10,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_merge_entries",
+            "configured": 65536,
+            "observed": 160,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_request_bytes",
+            "configured": 4194304,
+            "observed": 14180,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_candidate_bytes",
+            "configured": 134217728,
+            "observed": 2697344,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_response_bytes",
+            "configured": 67108864,
+            "observed": 8128,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_wall_clock",
+            "configured": 30000000000,
+            "observed": 1637927290,
+            "unit": "nanoseconds",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_dimensions",
+            "configured": 4096,
+            "observed": 768,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_query_bytes",
+            "configured": 16384,
+            "observed": 3072,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_partitions",
+            "configured": 32,
+            "observed": 4,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_top_k",
+            "configured": 256,
+            "observed": 10,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_ef_search",
+            "configured": 4096,
+            "observed": 4096,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_identity_bytes",
+            "configured": 4096,
+            "observed": 176,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_stable_id_bytes",
+            "configured": 4096,
+            "observed": 10,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_request_bytes",
+            "configured": 65536,
+            "observed": 3545,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_candidate_bytes",
+            "configured": 134217728,
+            "observed": 707904,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_response_bytes",
+            "configured": 67108864,
+            "observed": 2032,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          }
+        ]
+      }
+    },
+    {
+      "arm": "perpack",
+      "external_block": 2,
+      "report_path": "/home/mikers/gomap-4775-domain-1cde6b84b/serving/perpack-block2/vector_partition_m8_c6dcbcf0c038_a6a00ee4eabe.json",
+      "report_sha256": "a64124de8d86a3e1f507bcc46669a87254e1d6b3872317fa4269d6fda1b4d275",
+      "untimed_resource_boundary": {
+        "selected_partitions": 64,
+        "ef_search": 96,
+        "wall_clock_nanos": 3335783665,
+        "observed_maxima": {
+          "requests": 4,
+          "rpcs": 4,
+          "retries": 0,
+          "redirects": 0,
+          "request_bytes": 14268,
+          "candidate_bytes": 5197504,
+          "response_bytes": 26752,
+          "merge_entries": 640,
+          "shard_partitions": 16,
+          "shard_request_bytes": 3567,
+          "shard_candidate_bytes": 1312128,
+          "shard_response_bytes": 6688,
+          "local_score_calls": 87355
+        }
+      },
+      "resources": {
+        "persistent_asset_bytes": 332174736,
+        "shard_generation_bytes": 5078606,
+        "variant_descriptor_bytes": 5032,
+        "persistent_asset_cap_bytes": 2147483648,
+        "partition_loads": [
+          1641,
+          1638,
+          1641,
+          1641,
+          1641,
+          1641,
+          1638,
+          1641,
+          1641,
+          1641,
+          1641,
+          1638,
+          1641,
+          1641,
+          1638,
+          1641,
+          1641,
+          1641,
+          1641,
+          1638,
+          397,
+          397,
+          397,
+          394,
+          1640,
+          1641,
+          1641,
+          1639,
+          1638,
+          1641,
+          1641,
+          1641,
+          1641,
+          1638,
+          1641,
+          1641,
+          1640,
+          1641,
+          1641,
+          1639,
+          1641,
+          1638,
+          1641,
+          1641,
+          1641,
+          1641,
+          1641,
+          1638,
+          1640,
+          1641,
+          1641,
+          1639,
+          1641,
+          1638,
+          1641,
+          1641,
+          1641,
+          1641,
+          1641,
+          1638,
+          1641,
+          1641,
+          1641,
+          1638
+        ],
+        "peak_rss_bytes": 1948172288,
+        "peak_rss_cap_bytes": 4294967296,
+        "peak_rss_measured": true,
+        "peak_rss_scope": "process lifetime through preflight, warmup, measured query, endpoint-loss fault, and post-measurement attribution boundaries; includes retained top-k coordinator results and cached truth-membership attribution mappings",
+        "overlap_memberships": 0,
+        "max_partition_load": 1641,
+        "balance_hard_cap": 1875,
+        "mmap_status": "not_captured_by_m8_runner; retained M3/M5 artifacts own mapped-pack evidence",
+        "limit_comparisons": [
+          {
+            "name": "persistent_asset_bytes",
+            "configured": 2147483648,
+            "observed": 337258374,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "process_peak_rss",
+            "configured": 4294967296,
+            "observed": 1948172288,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_selected_partitions",
+            "configured": 256,
+            "observed": 64,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_groups",
+            "configured": 64,
+            "observed": 4,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_requests",
+            "configured": 256,
+            "observed": 4,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_concurrent_requests_across_clients",
+            "configured": 256,
+            "observed": 128,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_rpcs_across_shard_requests",
+            "configured": 8,
+            "observed": 4,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_retries_across_shard_requests",
+            "configured": 4,
+            "observed": 0,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_redirects_across_shard_requests",
+            "configured": 4,
+            "observed": 0,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_router_score_calls",
+            "configured": 1000000,
+            "observed": 256,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_local_score_calls",
+            "configured": 16000000,
+            "observed": 87355,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_query_bytes",
+            "configured": 16384,
+            "observed": 3072,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_top_k",
+            "configured": 256,
+            "observed": 10,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_ef_search",
+            "configured": 4096,
+            "observed": 4096,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_partitions_per_request",
+            "configured": 32,
+            "observed": 16,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_identity_bytes",
+            "configured": 4096,
+            "observed": 176,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_stable_id_bytes",
+            "configured": 4096,
+            "observed": 10,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_merge_entries",
+            "configured": 65536,
+            "observed": 640,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_request_bytes",
+            "configured": 4194304,
+            "observed": 14372,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_candidate_bytes",
+            "configured": 134217728,
+            "observed": 5197504,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_response_bytes",
+            "configured": 67108864,
+            "observed": 26752,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_wall_clock",
+            "configured": 30000000000,
+            "observed": 3335783665,
+            "unit": "nanoseconds",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_dimensions",
+            "configured": 4096,
+            "observed": 768,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_query_bytes",
+            "configured": 16384,
+            "observed": 3072,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_partitions",
+            "configured": 32,
+            "observed": 16,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_top_k",
+            "configured": 256,
+            "observed": 10,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_ef_search",
+            "configured": 4096,
+            "observed": 4096,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_identity_bytes",
+            "configured": 4096,
+            "observed": 176,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_stable_id_bytes",
+            "configured": 4096,
+            "observed": 10,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_request_bytes",
+            "configured": 65536,
+            "observed": 3593,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_candidate_bytes",
+            "configured": 134217728,
+            "observed": 1312128,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_response_bytes",
+            "configured": 67108864,
+            "observed": 6688,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          }
+        ]
+      }
+    },
+    {
+      "arm": "domain",
+      "external_block": 2,
+      "report_path": "/home/mikers/gomap-4775-domain-1cde6b84b/serving/domain-block2/vector_partition_m8_1cde6b84b4a2_5374239f4bd2.json",
+      "report_sha256": "23fb507da0782afa7296b74575eb2cd8805de4628a4df39a7519514b97fda604",
+      "untimed_resource_boundary": {
+        "selected_partitions": 16,
+        "ef_search": 96,
+        "wall_clock_nanos": 1710956486,
+        "observed_maxima": {
+          "requests": 4,
+          "rpcs": 4,
+          "retries": 0,
+          "redirects": 0,
+          "request_bytes": 14076,
+          "candidate_bytes": 2697344,
+          "response_bytes": 8128,
+          "merge_entries": 160,
+          "shard_partitions": 4,
+          "shard_request_bytes": 3519,
+          "shard_candidate_bytes": 704704,
+          "shard_response_bytes": 2032,
+          "local_score_calls": 43682
+        }
+      },
+      "resources": {
+        "persistent_asset_bytes": 332784856,
+        "shard_generation_bytes": 5078606,
+        "variant_descriptor_bytes": 5034,
+        "persistent_asset_cap_bytes": 2147483648,
+        "partition_loads": [
+          1641,
+          1638,
+          1641,
+          1641,
+          1641,
+          1641,
+          1638,
+          1641,
+          1641,
+          1641,
+          1641,
+          1638,
+          1641,
+          1641,
+          1638,
+          1641,
+          1641,
+          1641,
+          1641,
+          1638,
+          397,
+          397,
+          397,
+          394,
+          1640,
+          1641,
+          1641,
+          1639,
+          1638,
+          1641,
+          1641,
+          1641,
+          1641,
+          1638,
+          1641,
+          1641,
+          1640,
+          1641,
+          1641,
+          1639,
+          1641,
+          1638,
+          1641,
+          1641,
+          1641,
+          1641,
+          1641,
+          1638,
+          1640,
+          1641,
+          1641,
+          1639,
+          1641,
+          1638,
+          1641,
+          1641,
+          1641,
+          1641,
+          1641,
+          1638,
+          1641,
+          1641,
+          1641,
+          1638
+        ],
+        "peak_rss_bytes": 1952354304,
+        "peak_rss_cap_bytes": 4294967296,
+        "peak_rss_measured": true,
+        "peak_rss_scope": "process lifetime through preflight, warmup, measured query, endpoint-loss fault, and post-measurement attribution boundaries; includes retained top-k coordinator results and cached truth-membership attribution mappings",
+        "overlap_memberships": 0,
+        "max_partition_load": 1641,
+        "balance_hard_cap": 1875,
+        "mmap_status": "not_captured_by_m8_runner; retained M3/M5 artifacts own mapped-pack evidence",
+        "limit_comparisons": [
+          {
+            "name": "persistent_asset_bytes",
+            "configured": 2147483648,
+            "observed": 337868496,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "process_peak_rss",
+            "configured": 4294967296,
+            "observed": 1952354304,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_selected_partitions",
+            "configured": 256,
+            "observed": 16,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_groups",
+            "configured": 64,
+            "observed": 4,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_requests",
+            "configured": 256,
+            "observed": 4,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_concurrent_requests_across_clients",
+            "configured": 256,
+            "observed": 128,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_rpcs_across_shard_requests",
+            "configured": 8,
+            "observed": 4,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_retries_across_shard_requests",
+            "configured": 4,
+            "observed": 0,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_redirects_across_shard_requests",
+            "configured": 4,
+            "observed": 0,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_router_score_calls",
+            "configured": 1000000,
+            "observed": 256,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_local_score_calls",
+            "configured": 16000000,
+            "observed": 43682,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_query_bytes",
+            "configured": 16384,
+            "observed": 3072,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_top_k",
+            "configured": 256,
+            "observed": 10,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_ef_search",
+            "configured": 4096,
+            "observed": 4096,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_partitions_per_request",
+            "configured": 32,
+            "observed": 4,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_identity_bytes",
+            "configured": 4096,
+            "observed": 176,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_stable_id_bytes",
+            "configured": 4096,
+            "observed": 10,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_merge_entries",
+            "configured": 65536,
+            "observed": 160,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_request_bytes",
+            "configured": 4194304,
+            "observed": 14180,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_candidate_bytes",
+            "configured": 134217728,
+            "observed": 2697344,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_response_bytes",
+            "configured": 67108864,
+            "observed": 8128,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_wall_clock",
+            "configured": 30000000000,
+            "observed": 1710956486,
+            "unit": "nanoseconds",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_dimensions",
+            "configured": 4096,
+            "observed": 768,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_query_bytes",
+            "configured": 16384,
+            "observed": 3072,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_partitions",
+            "configured": 32,
+            "observed": 4,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_top_k",
+            "configured": 256,
+            "observed": 10,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_ef_search",
+            "configured": 4096,
+            "observed": 4096,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_identity_bytes",
+            "configured": 4096,
+            "observed": 176,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_stable_id_bytes",
+            "configured": 4096,
+            "observed": 10,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_request_bytes",
+            "configured": 65536,
+            "observed": 3545,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_candidate_bytes",
+            "configured": 134217728,
+            "observed": 707904,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_response_bytes",
+            "configured": 67108864,
+            "observed": 2032,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          }
+        ]
+      }
+    },
+    {
+      "arm": "perpack",
+      "external_block": 3,
+      "report_path": "/home/mikers/gomap-4775-domain-1cde6b84b/serving/perpack-block3/vector_partition_m8_c6dcbcf0c038_f548209af178.json",
+      "report_sha256": "bee8f69190369a09b58a6dd4950055d1d26b8ab7c3305729661efa77b780506c",
+      "untimed_resource_boundary": {
+        "selected_partitions": 64,
+        "ef_search": 96,
+        "wall_clock_nanos": 3269197866,
+        "observed_maxima": {
+          "requests": 4,
+          "rpcs": 4,
+          "retries": 0,
+          "redirects": 0,
+          "request_bytes": 14268,
+          "candidate_bytes": 5197504,
+          "response_bytes": 26752,
+          "merge_entries": 640,
+          "shard_partitions": 16,
+          "shard_request_bytes": 3567,
+          "shard_candidate_bytes": 1312128,
+          "shard_response_bytes": 6688,
+          "local_score_calls": 87355
+        }
+      },
+      "resources": {
+        "persistent_asset_bytes": 332174736,
+        "shard_generation_bytes": 5078606,
+        "variant_descriptor_bytes": 5032,
+        "persistent_asset_cap_bytes": 2147483648,
+        "partition_loads": [
+          1641,
+          1638,
+          1641,
+          1641,
+          1641,
+          1641,
+          1638,
+          1641,
+          1641,
+          1641,
+          1641,
+          1638,
+          1641,
+          1641,
+          1638,
+          1641,
+          1641,
+          1641,
+          1641,
+          1638,
+          397,
+          397,
+          397,
+          394,
+          1640,
+          1641,
+          1641,
+          1639,
+          1638,
+          1641,
+          1641,
+          1641,
+          1641,
+          1638,
+          1641,
+          1641,
+          1640,
+          1641,
+          1641,
+          1639,
+          1641,
+          1638,
+          1641,
+          1641,
+          1641,
+          1641,
+          1641,
+          1638,
+          1640,
+          1641,
+          1641,
+          1639,
+          1641,
+          1638,
+          1641,
+          1641,
+          1641,
+          1641,
+          1641,
+          1638,
+          1641,
+          1641,
+          1641,
+          1638
+        ],
+        "peak_rss_bytes": 1949331456,
+        "peak_rss_cap_bytes": 4294967296,
+        "peak_rss_measured": true,
+        "peak_rss_scope": "process lifetime through preflight, warmup, measured query, endpoint-loss fault, and post-measurement attribution boundaries; includes retained top-k coordinator results and cached truth-membership attribution mappings",
+        "overlap_memberships": 0,
+        "max_partition_load": 1641,
+        "balance_hard_cap": 1875,
+        "mmap_status": "not_captured_by_m8_runner; retained M3/M5 artifacts own mapped-pack evidence",
+        "limit_comparisons": [
+          {
+            "name": "persistent_asset_bytes",
+            "configured": 2147483648,
+            "observed": 337258374,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "process_peak_rss",
+            "configured": 4294967296,
+            "observed": 1949331456,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_selected_partitions",
+            "configured": 256,
+            "observed": 64,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_groups",
+            "configured": 64,
+            "observed": 4,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_requests",
+            "configured": 256,
+            "observed": 4,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_concurrent_requests_across_clients",
+            "configured": 256,
+            "observed": 128,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_rpcs_across_shard_requests",
+            "configured": 8,
+            "observed": 4,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_retries_across_shard_requests",
+            "configured": 4,
+            "observed": 0,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_redirects_across_shard_requests",
+            "configured": 4,
+            "observed": 0,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_router_score_calls",
+            "configured": 1000000,
+            "observed": 256,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_local_score_calls",
+            "configured": 16000000,
+            "observed": 87355,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_query_bytes",
+            "configured": 16384,
+            "observed": 3072,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_top_k",
+            "configured": 256,
+            "observed": 10,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_ef_search",
+            "configured": 4096,
+            "observed": 4096,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_partitions_per_request",
+            "configured": 32,
+            "observed": 16,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_identity_bytes",
+            "configured": 4096,
+            "observed": 176,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_stable_id_bytes",
+            "configured": 4096,
+            "observed": 10,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_merge_entries",
+            "configured": 65536,
+            "observed": 640,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_request_bytes",
+            "configured": 4194304,
+            "observed": 14372,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_candidate_bytes",
+            "configured": 134217728,
+            "observed": 5197504,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_response_bytes",
+            "configured": 67108864,
+            "observed": 26752,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_wall_clock",
+            "configured": 30000000000,
+            "observed": 3269197866,
+            "unit": "nanoseconds",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_dimensions",
+            "configured": 4096,
+            "observed": 768,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_query_bytes",
+            "configured": 16384,
+            "observed": 3072,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_partitions",
+            "configured": 32,
+            "observed": 16,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_top_k",
+            "configured": 256,
+            "observed": 10,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_ef_search",
+            "configured": 4096,
+            "observed": 4096,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_identity_bytes",
+            "configured": 4096,
+            "observed": 176,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_stable_id_bytes",
+            "configured": 4096,
+            "observed": 10,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_request_bytes",
+            "configured": 65536,
+            "observed": 3593,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_candidate_bytes",
+            "configured": 134217728,
+            "observed": 1312128,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_response_bytes",
+            "configured": 67108864,
+            "observed": 6688,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          }
+        ]
+      }
+    },
+    {
+      "arm": "domain",
+      "external_block": 3,
+      "report_path": "/home/mikers/gomap-4775-domain-1cde6b84b/serving/domain-block3/vector_partition_m8_1cde6b84b4a2_9d2ca320f3f7.json",
+      "report_sha256": "7979b21ad0418d3f5df29d485bbd6d06d6d1016bfd8fa4214624076f9a2bf5dc",
+      "untimed_resource_boundary": {
+        "selected_partitions": 16,
+        "ef_search": 96,
+        "wall_clock_nanos": 1728052270,
+        "observed_maxima": {
+          "requests": 4,
+          "rpcs": 4,
+          "retries": 0,
+          "redirects": 0,
+          "request_bytes": 14076,
+          "candidate_bytes": 2697344,
+          "response_bytes": 8128,
+          "merge_entries": 160,
+          "shard_partitions": 4,
+          "shard_request_bytes": 3519,
+          "shard_candidate_bytes": 704704,
+          "shard_response_bytes": 2032,
+          "local_score_calls": 43682
+        }
+      },
+      "resources": {
+        "persistent_asset_bytes": 332784856,
+        "shard_generation_bytes": 5078606,
+        "variant_descriptor_bytes": 5034,
+        "persistent_asset_cap_bytes": 2147483648,
+        "partition_loads": [
+          1641,
+          1638,
+          1641,
+          1641,
+          1641,
+          1641,
+          1638,
+          1641,
+          1641,
+          1641,
+          1641,
+          1638,
+          1641,
+          1641,
+          1638,
+          1641,
+          1641,
+          1641,
+          1641,
+          1638,
+          397,
+          397,
+          397,
+          394,
+          1640,
+          1641,
+          1641,
+          1639,
+          1638,
+          1641,
+          1641,
+          1641,
+          1641,
+          1638,
+          1641,
+          1641,
+          1640,
+          1641,
+          1641,
+          1639,
+          1641,
+          1638,
+          1641,
+          1641,
+          1641,
+          1641,
+          1641,
+          1638,
+          1640,
+          1641,
+          1641,
+          1639,
+          1641,
+          1638,
+          1641,
+          1641,
+          1641,
+          1641,
+          1641,
+          1638,
+          1641,
+          1641,
+          1641,
+          1638
+        ],
+        "peak_rss_bytes": 1954996224,
+        "peak_rss_cap_bytes": 4294967296,
+        "peak_rss_measured": true,
+        "peak_rss_scope": "process lifetime through preflight, warmup, measured query, endpoint-loss fault, and post-measurement attribution boundaries; includes retained top-k coordinator results and cached truth-membership attribution mappings",
+        "overlap_memberships": 0,
+        "max_partition_load": 1641,
+        "balance_hard_cap": 1875,
+        "mmap_status": "not_captured_by_m8_runner; retained M3/M5 artifacts own mapped-pack evidence",
+        "limit_comparisons": [
+          {
+            "name": "persistent_asset_bytes",
+            "configured": 2147483648,
+            "observed": 337868496,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "process_peak_rss",
+            "configured": 4294967296,
+            "observed": 1954996224,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_selected_partitions",
+            "configured": 256,
+            "observed": 16,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_groups",
+            "configured": 64,
+            "observed": 4,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_requests",
+            "configured": 256,
+            "observed": 4,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_concurrent_requests_across_clients",
+            "configured": 256,
+            "observed": 128,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_rpcs_across_shard_requests",
+            "configured": 8,
+            "observed": 4,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_retries_across_shard_requests",
+            "configured": 4,
+            "observed": 0,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_redirects_across_shard_requests",
+            "configured": 4,
+            "observed": 0,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_router_score_calls",
+            "configured": 1000000,
+            "observed": 256,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_local_score_calls",
+            "configured": 16000000,
+            "observed": 43682,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_query_bytes",
+            "configured": 16384,
+            "observed": 3072,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_top_k",
+            "configured": 256,
+            "observed": 10,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_ef_search",
+            "configured": 4096,
+            "observed": 4096,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_partitions_per_request",
+            "configured": 32,
+            "observed": 4,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_identity_bytes",
+            "configured": 4096,
+            "observed": 176,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_stable_id_bytes",
+            "configured": 4096,
+            "observed": 10,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_merge_entries",
+            "configured": 65536,
+            "observed": 160,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_request_bytes",
+            "configured": 4194304,
+            "observed": 14180,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_candidate_bytes",
+            "configured": 134217728,
+            "observed": 2697344,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_response_bytes",
+            "configured": 67108864,
+            "observed": 8128,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_wall_clock",
+            "configured": 30000000000,
+            "observed": 1728052270,
+            "unit": "nanoseconds",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_dimensions",
+            "configured": 4096,
+            "observed": 768,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_query_bytes",
+            "configured": 16384,
+            "observed": 3072,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_partitions",
+            "configured": 32,
+            "observed": 4,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_top_k",
+            "configured": 256,
+            "observed": 10,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_ef_search",
+            "configured": 4096,
+            "observed": 4096,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_identity_bytes",
+            "configured": 4096,
+            "observed": 176,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_stable_id_bytes",
+            "configured": 4096,
+            "observed": 10,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_request_bytes",
+            "configured": 65536,
+            "observed": 3545,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_candidate_bytes",
+            "configured": 134217728,
+            "observed": 707904,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_response_bytes",
+            "configured": 67108864,
+            "observed": 2032,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          }
+        ]
+      }
+    },
+    {
+      "arm": "perpack",
+      "external_block": 4,
+      "report_path": "/home/mikers/gomap-4775-domain-1cde6b84b/serving/perpack-block4/vector_partition_m8_c6dcbcf0c038_88291cee6711.json",
+      "report_sha256": "7fcd24a504e7fdc8f8ff1f3f0a599af836c8542c534be4f389ee85b3ffbef564",
+      "untimed_resource_boundary": {
+        "selected_partitions": 64,
+        "ef_search": 96,
+        "wall_clock_nanos": 3262473886,
+        "observed_maxima": {
+          "requests": 4,
+          "rpcs": 4,
+          "retries": 0,
+          "redirects": 0,
+          "request_bytes": 14268,
+          "candidate_bytes": 5197504,
+          "response_bytes": 26752,
+          "merge_entries": 640,
+          "shard_partitions": 16,
+          "shard_request_bytes": 3567,
+          "shard_candidate_bytes": 1312128,
+          "shard_response_bytes": 6688,
+          "local_score_calls": 87355
+        }
+      },
+      "resources": {
+        "persistent_asset_bytes": 332174736,
+        "shard_generation_bytes": 5078606,
+        "variant_descriptor_bytes": 5032,
+        "persistent_asset_cap_bytes": 2147483648,
+        "partition_loads": [
+          1641,
+          1638,
+          1641,
+          1641,
+          1641,
+          1641,
+          1638,
+          1641,
+          1641,
+          1641,
+          1641,
+          1638,
+          1641,
+          1641,
+          1638,
+          1641,
+          1641,
+          1641,
+          1641,
+          1638,
+          397,
+          397,
+          397,
+          394,
+          1640,
+          1641,
+          1641,
+          1639,
+          1638,
+          1641,
+          1641,
+          1641,
+          1641,
+          1638,
+          1641,
+          1641,
+          1640,
+          1641,
+          1641,
+          1639,
+          1641,
+          1638,
+          1641,
+          1641,
+          1641,
+          1641,
+          1641,
+          1638,
+          1640,
+          1641,
+          1641,
+          1639,
+          1641,
+          1638,
+          1641,
+          1641,
+          1641,
+          1641,
+          1641,
+          1638,
+          1641,
+          1641,
+          1641,
+          1638
+        ],
+        "peak_rss_bytes": 1948467200,
+        "peak_rss_cap_bytes": 4294967296,
+        "peak_rss_measured": true,
+        "peak_rss_scope": "process lifetime through preflight, warmup, measured query, endpoint-loss fault, and post-measurement attribution boundaries; includes retained top-k coordinator results and cached truth-membership attribution mappings",
+        "overlap_memberships": 0,
+        "max_partition_load": 1641,
+        "balance_hard_cap": 1875,
+        "mmap_status": "not_captured_by_m8_runner; retained M3/M5 artifacts own mapped-pack evidence",
+        "limit_comparisons": [
+          {
+            "name": "persistent_asset_bytes",
+            "configured": 2147483648,
+            "observed": 337258374,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "process_peak_rss",
+            "configured": 4294967296,
+            "observed": 1948467200,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_selected_partitions",
+            "configured": 256,
+            "observed": 64,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_groups",
+            "configured": 64,
+            "observed": 4,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_requests",
+            "configured": 256,
+            "observed": 4,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_concurrent_requests_across_clients",
+            "configured": 256,
+            "observed": 128,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_rpcs_across_shard_requests",
+            "configured": 8,
+            "observed": 4,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_retries_across_shard_requests",
+            "configured": 4,
+            "observed": 0,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_redirects_across_shard_requests",
+            "configured": 4,
+            "observed": 0,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_router_score_calls",
+            "configured": 1000000,
+            "observed": 256,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_local_score_calls",
+            "configured": 16000000,
+            "observed": 87355,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_query_bytes",
+            "configured": 16384,
+            "observed": 3072,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_top_k",
+            "configured": 256,
+            "observed": 10,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_ef_search",
+            "configured": 4096,
+            "observed": 4096,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_partitions_per_request",
+            "configured": 32,
+            "observed": 16,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_identity_bytes",
+            "configured": 4096,
+            "observed": 176,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_stable_id_bytes",
+            "configured": 4096,
+            "observed": 10,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_merge_entries",
+            "configured": 65536,
+            "observed": 640,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_request_bytes",
+            "configured": 4194304,
+            "observed": 14372,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_candidate_bytes",
+            "configured": 134217728,
+            "observed": 5197504,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_response_bytes",
+            "configured": 67108864,
+            "observed": 26752,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_wall_clock",
+            "configured": 30000000000,
+            "observed": 3262473886,
+            "unit": "nanoseconds",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_dimensions",
+            "configured": 4096,
+            "observed": 768,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_query_bytes",
+            "configured": 16384,
+            "observed": 3072,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_partitions",
+            "configured": 32,
+            "observed": 16,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_top_k",
+            "configured": 256,
+            "observed": 10,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_ef_search",
+            "configured": 4096,
+            "observed": 4096,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_identity_bytes",
+            "configured": 4096,
+            "observed": 176,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_stable_id_bytes",
+            "configured": 4096,
+            "observed": 10,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_request_bytes",
+            "configured": 65536,
+            "observed": 3593,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_candidate_bytes",
+            "configured": 134217728,
+            "observed": 1312128,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_response_bytes",
+            "configured": 67108864,
+            "observed": 6688,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          }
+        ]
+      }
+    },
+    {
+      "arm": "domain",
+      "external_block": 4,
+      "report_path": "/home/mikers/gomap-4775-domain-1cde6b84b/serving/domain-block4/vector_partition_m8_1cde6b84b4a2_dd0f22051e43.json",
+      "report_sha256": "558375dc0cb6f95e2dd5aeeec103534a2b3b21beae143f1e43f715a1ca4d7365",
+      "untimed_resource_boundary": {
+        "selected_partitions": 16,
+        "ef_search": 96,
+        "wall_clock_nanos": 1824318875,
+        "observed_maxima": {
+          "requests": 4,
+          "rpcs": 4,
+          "retries": 0,
+          "redirects": 0,
+          "request_bytes": 14076,
+          "candidate_bytes": 2697344,
+          "response_bytes": 8128,
+          "merge_entries": 160,
+          "shard_partitions": 4,
+          "shard_request_bytes": 3519,
+          "shard_candidate_bytes": 704704,
+          "shard_response_bytes": 2032,
+          "local_score_calls": 43682
+        }
+      },
+      "resources": {
+        "persistent_asset_bytes": 332784856,
+        "shard_generation_bytes": 5078606,
+        "variant_descriptor_bytes": 5034,
+        "persistent_asset_cap_bytes": 2147483648,
+        "partition_loads": [
+          1641,
+          1638,
+          1641,
+          1641,
+          1641,
+          1641,
+          1638,
+          1641,
+          1641,
+          1641,
+          1641,
+          1638,
+          1641,
+          1641,
+          1638,
+          1641,
+          1641,
+          1641,
+          1641,
+          1638,
+          397,
+          397,
+          397,
+          394,
+          1640,
+          1641,
+          1641,
+          1639,
+          1638,
+          1641,
+          1641,
+          1641,
+          1641,
+          1638,
+          1641,
+          1641,
+          1640,
+          1641,
+          1641,
+          1639,
+          1641,
+          1638,
+          1641,
+          1641,
+          1641,
+          1641,
+          1641,
+          1638,
+          1640,
+          1641,
+          1641,
+          1639,
+          1641,
+          1638,
+          1641,
+          1641,
+          1641,
+          1641,
+          1641,
+          1638,
+          1641,
+          1641,
+          1641,
+          1638
+        ],
+        "peak_rss_bytes": 1951715328,
+        "peak_rss_cap_bytes": 4294967296,
+        "peak_rss_measured": true,
+        "peak_rss_scope": "process lifetime through preflight, warmup, measured query, endpoint-loss fault, and post-measurement attribution boundaries; includes retained top-k coordinator results and cached truth-membership attribution mappings",
+        "overlap_memberships": 0,
+        "max_partition_load": 1641,
+        "balance_hard_cap": 1875,
+        "mmap_status": "not_captured_by_m8_runner; retained M3/M5 artifacts own mapped-pack evidence",
+        "limit_comparisons": [
+          {
+            "name": "persistent_asset_bytes",
+            "configured": 2147483648,
+            "observed": 337868496,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "process_peak_rss",
+            "configured": 4294967296,
+            "observed": 1951715328,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_selected_partitions",
+            "configured": 256,
+            "observed": 16,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_groups",
+            "configured": 64,
+            "observed": 4,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_requests",
+            "configured": 256,
+            "observed": 4,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_concurrent_requests_across_clients",
+            "configured": 256,
+            "observed": 128,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_rpcs_across_shard_requests",
+            "configured": 8,
+            "observed": 4,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_retries_across_shard_requests",
+            "configured": 4,
+            "observed": 0,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_redirects_across_shard_requests",
+            "configured": 4,
+            "observed": 0,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_router_score_calls",
+            "configured": 1000000,
+            "observed": 256,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_local_score_calls",
+            "configured": 16000000,
+            "observed": 43682,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_query_bytes",
+            "configured": 16384,
+            "observed": 3072,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_top_k",
+            "configured": 256,
+            "observed": 10,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_ef_search",
+            "configured": 4096,
+            "observed": 4096,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_partitions_per_request",
+            "configured": 32,
+            "observed": 4,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_identity_bytes",
+            "configured": 4096,
+            "observed": 176,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_stable_id_bytes",
+            "configured": 4096,
+            "observed": 10,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_merge_entries",
+            "configured": 65536,
+            "observed": 160,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_request_bytes",
+            "configured": 4194304,
+            "observed": 14180,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_candidate_bytes",
+            "configured": 134217728,
+            "observed": 2697344,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_response_bytes",
+            "configured": 67108864,
+            "observed": 8128,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_wall_clock",
+            "configured": 30000000000,
+            "observed": 1824318875,
+            "unit": "nanoseconds",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_dimensions",
+            "configured": 4096,
+            "observed": 768,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_query_bytes",
+            "configured": 16384,
+            "observed": 3072,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_partitions",
+            "configured": 32,
+            "observed": 4,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_top_k",
+            "configured": 256,
+            "observed": 10,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_ef_search",
+            "configured": 4096,
+            "observed": 4096,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_identity_bytes",
+            "configured": 4096,
+            "observed": 176,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_stable_id_bytes",
+            "configured": 4096,
+            "observed": 10,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_request_bytes",
+            "configured": 65536,
+            "observed": 3545,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_candidate_bytes",
+            "configured": 134217728,
+            "observed": 707904,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_response_bytes",
+            "configured": 67108864,
+            "observed": 2032,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          }
+        ]
+      }
+    },
+    {
+      "arm": "perpack",
+      "external_block": 5,
+      "report_path": "/home/mikers/gomap-4775-domain-1cde6b84b/serving/perpack-block5/vector_partition_m8_c6dcbcf0c038_9c183c5493ac.json",
+      "report_sha256": "13ff8b7f6a96e4e0d8cf87fb4fdf93cc7fe3f6f60f8c79c18107efe8f3ff7161",
+      "untimed_resource_boundary": {
+        "selected_partitions": 64,
+        "ef_search": 96,
+        "wall_clock_nanos": 3222461196,
+        "observed_maxima": {
+          "requests": 4,
+          "rpcs": 4,
+          "retries": 0,
+          "redirects": 0,
+          "request_bytes": 14268,
+          "candidate_bytes": 5197504,
+          "response_bytes": 26752,
+          "merge_entries": 640,
+          "shard_partitions": 16,
+          "shard_request_bytes": 3567,
+          "shard_candidate_bytes": 1312128,
+          "shard_response_bytes": 6688,
+          "local_score_calls": 87355
+        }
+      },
+      "resources": {
+        "persistent_asset_bytes": 332174736,
+        "shard_generation_bytes": 5078606,
+        "variant_descriptor_bytes": 5032,
+        "persistent_asset_cap_bytes": 2147483648,
+        "partition_loads": [
+          1641,
+          1638,
+          1641,
+          1641,
+          1641,
+          1641,
+          1638,
+          1641,
+          1641,
+          1641,
+          1641,
+          1638,
+          1641,
+          1641,
+          1638,
+          1641,
+          1641,
+          1641,
+          1641,
+          1638,
+          397,
+          397,
+          397,
+          394,
+          1640,
+          1641,
+          1641,
+          1639,
+          1638,
+          1641,
+          1641,
+          1641,
+          1641,
+          1638,
+          1641,
+          1641,
+          1640,
+          1641,
+          1641,
+          1639,
+          1641,
+          1638,
+          1641,
+          1641,
+          1641,
+          1641,
+          1641,
+          1638,
+          1640,
+          1641,
+          1641,
+          1639,
+          1641,
+          1638,
+          1641,
+          1641,
+          1641,
+          1641,
+          1641,
+          1638,
+          1641,
+          1641,
+          1641,
+          1638
+        ],
+        "peak_rss_bytes": 1949081600,
+        "peak_rss_cap_bytes": 4294967296,
+        "peak_rss_measured": true,
+        "peak_rss_scope": "process lifetime through preflight, warmup, measured query, endpoint-loss fault, and post-measurement attribution boundaries; includes retained top-k coordinator results and cached truth-membership attribution mappings",
+        "overlap_memberships": 0,
+        "max_partition_load": 1641,
+        "balance_hard_cap": 1875,
+        "mmap_status": "not_captured_by_m8_runner; retained M3/M5 artifacts own mapped-pack evidence",
+        "limit_comparisons": [
+          {
+            "name": "persistent_asset_bytes",
+            "configured": 2147483648,
+            "observed": 337258374,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "process_peak_rss",
+            "configured": 4294967296,
+            "observed": 1949081600,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_selected_partitions",
+            "configured": 256,
+            "observed": 64,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_groups",
+            "configured": 64,
+            "observed": 4,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_requests",
+            "configured": 256,
+            "observed": 4,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_concurrent_requests_across_clients",
+            "configured": 256,
+            "observed": 128,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_rpcs_across_shard_requests",
+            "configured": 8,
+            "observed": 4,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_retries_across_shard_requests",
+            "configured": 4,
+            "observed": 0,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_redirects_across_shard_requests",
+            "configured": 4,
+            "observed": 0,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_router_score_calls",
+            "configured": 1000000,
+            "observed": 256,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_local_score_calls",
+            "configured": 16000000,
+            "observed": 87355,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_query_bytes",
+            "configured": 16384,
+            "observed": 3072,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_top_k",
+            "configured": 256,
+            "observed": 10,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_ef_search",
+            "configured": 4096,
+            "observed": 4096,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_partitions_per_request",
+            "configured": 32,
+            "observed": 16,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_identity_bytes",
+            "configured": 4096,
+            "observed": 176,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_stable_id_bytes",
+            "configured": 4096,
+            "observed": 10,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_merge_entries",
+            "configured": 65536,
+            "observed": 640,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_request_bytes",
+            "configured": 4194304,
+            "observed": 14372,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_candidate_bytes",
+            "configured": 134217728,
+            "observed": 5197504,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_response_bytes",
+            "configured": 67108864,
+            "observed": 26752,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_wall_clock",
+            "configured": 30000000000,
+            "observed": 3222461196,
+            "unit": "nanoseconds",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_dimensions",
+            "configured": 4096,
+            "observed": 768,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_query_bytes",
+            "configured": 16384,
+            "observed": 3072,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_partitions",
+            "configured": 32,
+            "observed": 16,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_top_k",
+            "configured": 256,
+            "observed": 10,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_ef_search",
+            "configured": 4096,
+            "observed": 4096,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_identity_bytes",
+            "configured": 4096,
+            "observed": 176,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_stable_id_bytes",
+            "configured": 4096,
+            "observed": 10,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_request_bytes",
+            "configured": 65536,
+            "observed": 3593,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_candidate_bytes",
+            "configured": 134217728,
+            "observed": 1312128,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_response_bytes",
+            "configured": 67108864,
+            "observed": 6688,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          }
+        ]
+      }
+    },
+    {
+      "arm": "domain",
+      "external_block": 5,
+      "report_path": "/home/mikers/gomap-4775-domain-1cde6b84b/serving/domain-block5/vector_partition_m8_1cde6b84b4a2_39b378214ab2.json",
+      "report_sha256": "321e7f4acf53285ce1b18352002f09490568260429994028b5f757b8fcee223f",
+      "untimed_resource_boundary": {
+        "selected_partitions": 16,
+        "ef_search": 96,
+        "wall_clock_nanos": 1834786783,
+        "observed_maxima": {
+          "requests": 4,
+          "rpcs": 4,
+          "retries": 0,
+          "redirects": 0,
+          "request_bytes": 14076,
+          "candidate_bytes": 2697344,
+          "response_bytes": 8128,
+          "merge_entries": 160,
+          "shard_partitions": 4,
+          "shard_request_bytes": 3519,
+          "shard_candidate_bytes": 704704,
+          "shard_response_bytes": 2032,
+          "local_score_calls": 43682
+        }
+      },
+      "resources": {
+        "persistent_asset_bytes": 332784856,
+        "shard_generation_bytes": 5078606,
+        "variant_descriptor_bytes": 5034,
+        "persistent_asset_cap_bytes": 2147483648,
+        "partition_loads": [
+          1641,
+          1638,
+          1641,
+          1641,
+          1641,
+          1641,
+          1638,
+          1641,
+          1641,
+          1641,
+          1641,
+          1638,
+          1641,
+          1641,
+          1638,
+          1641,
+          1641,
+          1641,
+          1641,
+          1638,
+          397,
+          397,
+          397,
+          394,
+          1640,
+          1641,
+          1641,
+          1639,
+          1638,
+          1641,
+          1641,
+          1641,
+          1641,
+          1638,
+          1641,
+          1641,
+          1640,
+          1641,
+          1641,
+          1639,
+          1641,
+          1638,
+          1641,
+          1641,
+          1641,
+          1641,
+          1641,
+          1638,
+          1640,
+          1641,
+          1641,
+          1639,
+          1641,
+          1638,
+          1641,
+          1641,
+          1641,
+          1641,
+          1641,
+          1638,
+          1641,
+          1641,
+          1641,
+          1638
+        ],
+        "peak_rss_bytes": 1951752192,
+        "peak_rss_cap_bytes": 4294967296,
+        "peak_rss_measured": true,
+        "peak_rss_scope": "process lifetime through preflight, warmup, measured query, endpoint-loss fault, and post-measurement attribution boundaries; includes retained top-k coordinator results and cached truth-membership attribution mappings",
+        "overlap_memberships": 0,
+        "max_partition_load": 1641,
+        "balance_hard_cap": 1875,
+        "mmap_status": "not_captured_by_m8_runner; retained M3/M5 artifacts own mapped-pack evidence",
+        "limit_comparisons": [
+          {
+            "name": "persistent_asset_bytes",
+            "configured": 2147483648,
+            "observed": 337868496,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "process_peak_rss",
+            "configured": 4294967296,
+            "observed": 1951752192,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_selected_partitions",
+            "configured": 256,
+            "observed": 16,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_groups",
+            "configured": 64,
+            "observed": 4,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_requests",
+            "configured": 256,
+            "observed": 4,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_concurrent_requests_across_clients",
+            "configured": 256,
+            "observed": 128,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_rpcs_across_shard_requests",
+            "configured": 8,
+            "observed": 4,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_retries_across_shard_requests",
+            "configured": 4,
+            "observed": 0,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_redirects_across_shard_requests",
+            "configured": 4,
+            "observed": 0,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_router_score_calls",
+            "configured": 1000000,
+            "observed": 256,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_local_score_calls",
+            "configured": 16000000,
+            "observed": 43682,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_query_bytes",
+            "configured": 16384,
+            "observed": 3072,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_top_k",
+            "configured": 256,
+            "observed": 10,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_ef_search",
+            "configured": 4096,
+            "observed": 4096,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_partitions_per_request",
+            "configured": 32,
+            "observed": 4,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_identity_bytes",
+            "configured": 4096,
+            "observed": 176,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_stable_id_bytes",
+            "configured": 4096,
+            "observed": 10,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_merge_entries",
+            "configured": 65536,
+            "observed": 160,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_request_bytes",
+            "configured": 4194304,
+            "observed": 14180,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_candidate_bytes",
+            "configured": 134217728,
+            "observed": 2697344,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_response_bytes",
+            "configured": 67108864,
+            "observed": 8128,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "coordinator_wall_clock",
+            "configured": 30000000000,
+            "observed": 1834786783,
+            "unit": "nanoseconds",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_dimensions",
+            "configured": 4096,
+            "observed": 768,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_query_bytes",
+            "configured": 16384,
+            "observed": 3072,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_partitions",
+            "configured": 32,
+            "observed": 4,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_top_k",
+            "configured": 256,
+            "observed": 10,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_ef_search",
+            "configured": 4096,
+            "observed": 4096,
+            "unit": "count",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_identity_bytes",
+            "configured": 4096,
+            "observed": 176,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_stable_id_bytes",
+            "configured": 4096,
+            "observed": 10,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_request_bytes",
+            "configured": 65536,
+            "observed": 3545,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_candidate_bytes",
+            "configured": 134217728,
+            "observed": 707904,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          },
+          {
+            "name": "shard_response_bytes",
+            "configured": 67108864,
+            "observed": 2032,
+            "unit": "bytes",
+            "enforced": true,
+            "passed": true
+          }
+        ]
+      }
+    }
+  ]
+}

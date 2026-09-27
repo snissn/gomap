@@ -1,0 +1,182 @@
+[
+  {
+    "arm": "perpack",
+    "external_block": 1,
+    "projection_pin_sha256": "41ca8c8a2e66fd7d6025a3ec253e514569d309c39a8272e0628ac03ea1b8febb",
+    "provenance": {
+      "kind": "derived_observed_comparator_child_replay",
+      "originals_sha256": {
+        "/home/mikers/gomap-4775-domain-1cde6b84b/harness/bin/treedb_vector_partition_bench": "dc5b0bb160844a24fe82143b01520a0d1f9b1842d88612489381feec654c2a09",
+        "/home/mikers/gomap-4775-domain-1cde6b84b/harness/source/cmd/treedb_vector_partition_bench/m8_scaling_comparison.go": "dd3090fca97af366e3f066fb6ac4911cc65f62a357b1b4862a270a52caafb038",
+        "/home/mikers/gomap-4775-domain-1cde6b84b/comparison/block1/plan.json": "4e0aa3f1ef5e0f14663a9dd67cddbdb7471426980f480375fe549a665713d900",
+        "/home/mikers/gomap-4775-domain-1cde6b84b/comparison/block1/command.json": "3ef83ffbe5ef0fd208fe674ca550052b0495f4c8f215ff2948013568f8a901b7",
+        "/home/mikers/gomap-4775-domain-1cde6b84b/comparison/block1/result.json": "216384a24aa4c4a296b69f56245eb391a7f11aa966f0832cf0e23e9a652810c1",
+        "/home/mikers/gomap-4775-domain-1cde6b84b/comparison/block1/exit-status.txt": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+        "/home/mikers/gomap-4775-domain-1cde6b84b/project-block1-replays-v2.py": "c3a43b628c0c6f016740f1ab2caf1162ae3f7f554b3bd4b9916040f994366f05"
+      },
+      "origin": "Receipt bytes copied verbatim from replay_receipts. Command follows the observed frozen comparator invocation. Exit 0 is derived from successful cmd.Run and exact acceptance validation in the pinned comparator; it is not separately captured child telemetry."
+    }
+  },
+  {
+    "arm": "domain",
+    "external_block": 1,
+    "projection_pin_sha256": "1ca7aff9178f61e3d665f5bb5cf8ce1a82b15390bd09ad458922c053c5d70a11",
+    "provenance": {
+      "kind": "derived_observed_comparator_child_replay",
+      "originals_sha256": {
+        "/home/mikers/gomap-4775-domain-1cde6b84b/harness/bin/treedb_vector_partition_bench": "dc5b0bb160844a24fe82143b01520a0d1f9b1842d88612489381feec654c2a09",
+        "/home/mikers/gomap-4775-domain-1cde6b84b/harness/source/cmd/treedb_vector_partition_bench/m8_scaling_comparison.go": "dd3090fca97af366e3f066fb6ac4911cc65f62a357b1b4862a270a52caafb038",
+        "/home/mikers/gomap-4775-domain-1cde6b84b/comparison/block1/plan.json": "4e0aa3f1ef5e0f14663a9dd67cddbdb7471426980f480375fe549a665713d900",
+        "/home/mikers/gomap-4775-domain-1cde6b84b/comparison/block1/command.json": "3ef83ffbe5ef0fd208fe674ca550052b0495f4c8f215ff2948013568f8a901b7",
+        "/home/mikers/gomap-4775-domain-1cde6b84b/comparison/block1/result.json": "216384a24aa4c4a296b69f56245eb391a7f11aa966f0832cf0e23e9a652810c1",
+        "/home/mikers/gomap-4775-domain-1cde6b84b/comparison/block1/exit-status.txt": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+        "/home/mikers/gomap-4775-domain-1cde6b84b/project-block1-replays-v2.py": "c3a43b628c0c6f016740f1ab2caf1162ae3f7f554b3bd4b9916040f994366f05"
+      },
+      "origin": "Receipt bytes copied verbatim from replay_receipts. Command follows the observed frozen comparator invocation. Exit 0 is derived from successful cmd.Run and exact acceptance validation in the pinned comparator; it is not separately captured child telemetry."
+    }
+  },
+  {
+    "arm": "perpack",
+    "external_block": 2,
+    "projection_pin_sha256": "722b2d799032279f1cbc17ffe32351a47c33305cea3add1ca09fdfafdaf81197",
+    "provenance": {
+      "kind": "derived_observed_comparator_child_replay",
+      "originals_sha256": {
+        "/home/mikers/gomap-4775-domain-1cde6b84b/harness/bin/treedb_vector_partition_bench": "dc5b0bb160844a24fe82143b01520a0d1f9b1842d88612489381feec654c2a09",
+        "/home/mikers/gomap-4775-domain-1cde6b84b/harness/source/cmd/treedb_vector_partition_bench/m8_scaling_comparison.go": "dd3090fca97af366e3f066fb6ac4911cc65f62a357b1b4862a270a52caafb038",
+        "/home/mikers/gomap-4775-domain-1cde6b84b/comparison/block2/plan.json": "2b97da75c74a1a3a8cbf9858997227a5a7e9abe59b9ae6c4216467d07894591a",
+        "/home/mikers/gomap-4775-domain-1cde6b84b/comparison/block2/command.json": "0d95d2f353fd4f8833d64e8f62c85d58133d30012641bfe98451b264ffde9320",
+        "/home/mikers/gomap-4775-domain-1cde6b84b/comparison/block2/result.json": "b815f949f45b1cfa87f63ef452fa4e90b43add9842f1d0d5b4ba35ab6bf6d6f8",
+        "/home/mikers/gomap-4775-domain-1cde6b84b/comparison/block2/exit-status.txt": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+        "/home/mikers/gomap-4775-domain-1cde6b84b/project-later-replays.py": "6ce606bd30fe789a2208470a2cea05e6d949ebfd4aaef3356fce5f7fe807bec1"
+      },
+      "origin": "Receipt bytes copied verbatim from replay_receipts. Command follows the observed frozen comparator invocation. Exit 0 is derived from successful cmd.Run and exact acceptance validation in the pinned comparator; it is not separately captured child telemetry."
+    }
+  },
+  {
+    "arm": "domain",
+    "external_block": 2,
+    "projection_pin_sha256": "fec33d136a46f9f392d476ce84d362c40008297b8ed11e6eca7ca9bd2bcb63a2",
+    "provenance": {
+      "kind": "derived_observed_comparator_child_replay",
+      "originals_sha256": {
+        "/home/mikers/gomap-4775-domain-1cde6b84b/harness/bin/treedb_vector_partition_bench": "dc5b0bb160844a24fe82143b01520a0d1f9b1842d88612489381feec654c2a09",
+        "/home/mikers/gomap-4775-domain-1cde6b84b/harness/source/cmd/treedb_vector_partition_bench/m8_scaling_comparison.go": "dd3090fca97af366e3f066fb6ac4911cc65f62a357b1b4862a270a52caafb038",
+        "/home/mikers/gomap-4775-domain-1cde6b84b/comparison/block2/plan.json": "2b97da75c74a1a3a8cbf9858997227a5a7e9abe59b9ae6c4216467d07894591a",
+        "/home/mikers/gomap-4775-domain-1cde6b84b/comparison/block2/command.json": "0d95d2f353fd4f8833d64e8f62c85d58133d30012641bfe98451b264ffde9320",
+        "/home/mikers/gomap-4775-domain-1cde6b84b/comparison/block2/result.json": "b815f949f45b1cfa87f63ef452fa4e90b43add9842f1d0d5b4ba35ab6bf6d6f8",
+        "/home/mikers/gomap-4775-domain-1cde6b84b/comparison/block2/exit-status.txt": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+        "/home/mikers/gomap-4775-domain-1cde6b84b/project-later-replays.py": "6ce606bd30fe789a2208470a2cea05e6d949ebfd4aaef3356fce5f7fe807bec1"
+      },
+      "origin": "Receipt bytes copied verbatim from replay_receipts. Command follows the observed frozen comparator invocation. Exit 0 is derived from successful cmd.Run and exact acceptance validation in the pinned comparator; it is not separately captured child telemetry."
+    }
+  },
+  {
+    "arm": "perpack",
+    "external_block": 3,
+    "projection_pin_sha256": "35a6c91a42f270d12b3f9748b4334d82e3a50af8cf9cf43d0df820b213740ef9",
+    "provenance": {
+      "kind": "derived_observed_comparator_child_replay",
+      "originals_sha256": {
+        "/home/mikers/gomap-4775-domain-1cde6b84b/harness/bin/treedb_vector_partition_bench": "dc5b0bb160844a24fe82143b01520a0d1f9b1842d88612489381feec654c2a09",
+        "/home/mikers/gomap-4775-domain-1cde6b84b/harness/source/cmd/treedb_vector_partition_bench/m8_scaling_comparison.go": "dd3090fca97af366e3f066fb6ac4911cc65f62a357b1b4862a270a52caafb038",
+        "/home/mikers/gomap-4775-domain-1cde6b84b/comparison/block3/plan.json": "2ae729086589e3ee56f3de22289f28b9b5c3c660649d3c6791c298e6b34739a8",
+        "/home/mikers/gomap-4775-domain-1cde6b84b/comparison/block3/command.json": "1ab68e73bce74687a935ff12107e2577e4af2dfadf42778a334f54fc204caa19",
+        "/home/mikers/gomap-4775-domain-1cde6b84b/comparison/block3/result.json": "adc3ae20fbed7a97a03fae9d2bba3e74f9fc1086ca40b1ba63dbbef56bbb16f6",
+        "/home/mikers/gomap-4775-domain-1cde6b84b/comparison/block3/exit-status.txt": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+        "/home/mikers/gomap-4775-domain-1cde6b84b/project-later-replays.py": "6ce606bd30fe789a2208470a2cea05e6d949ebfd4aaef3356fce5f7fe807bec1"
+      },
+      "origin": "Receipt bytes copied verbatim from replay_receipts. Command follows the observed frozen comparator invocation. Exit 0 is derived from successful cmd.Run and exact acceptance validation in the pinned comparator; it is not separately captured child telemetry."
+    }
+  },
+  {
+    "arm": "domain",
+    "external_block": 3,
+    "projection_pin_sha256": "188580a21d9b001e00aa2ae7126674a182fb39a6386c5525668a9eb89d1ba736",
+    "provenance": {
+      "kind": "derived_observed_comparator_child_replay",
+      "originals_sha256": {
+        "/home/mikers/gomap-4775-domain-1cde6b84b/harness/bin/treedb_vector_partition_bench": "dc5b0bb160844a24fe82143b01520a0d1f9b1842d88612489381feec654c2a09",
+        "/home/mikers/gomap-4775-domain-1cde6b84b/harness/source/cmd/treedb_vector_partition_bench/m8_scaling_comparison.go": "dd3090fca97af366e3f066fb6ac4911cc65f62a357b1b4862a270a52caafb038",
+        "/home/mikers/gomap-4775-domain-1cde6b84b/comparison/block3/plan.json": "2ae729086589e3ee56f3de22289f28b9b5c3c660649d3c6791c298e6b34739a8",
+        "/home/mikers/gomap-4775-domain-1cde6b84b/comparison/block3/command.json": "1ab68e73bce74687a935ff12107e2577e4af2dfadf42778a334f54fc204caa19",
+        "/home/mikers/gomap-4775-domain-1cde6b84b/comparison/block3/result.json": "adc3ae20fbed7a97a03fae9d2bba3e74f9fc1086ca40b1ba63dbbef56bbb16f6",
+        "/home/mikers/gomap-4775-domain-1cde6b84b/comparison/block3/exit-status.txt": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+        "/home/mikers/gomap-4775-domain-1cde6b84b/project-later-replays.py": "6ce606bd30fe789a2208470a2cea05e6d949ebfd4aaef3356fce5f7fe807bec1"
+      },
+      "origin": "Receipt bytes copied verbatim from replay_receipts. Command follows the observed frozen comparator invocation. Exit 0 is derived from successful cmd.Run and exact acceptance validation in the pinned comparator; it is not separately captured child telemetry."
+    }
+  },
+  {
+    "arm": "perpack",
+    "external_block": 4,
+    "projection_pin_sha256": "4399b7d9d6753e0a66d665a07aa9826f4f0d8d231ad2bda8b88318e1fc146e91",
+    "provenance": {
+      "kind": "derived_observed_comparator_child_replay",
+      "originals_sha256": {
+        "/home/mikers/gomap-4775-domain-1cde6b84b/harness/bin/treedb_vector_partition_bench": "dc5b0bb160844a24fe82143b01520a0d1f9b1842d88612489381feec654c2a09",
+        "/home/mikers/gomap-4775-domain-1cde6b84b/harness/source/cmd/treedb_vector_partition_bench/m8_scaling_comparison.go": "dd3090fca97af366e3f066fb6ac4911cc65f62a357b1b4862a270a52caafb038",
+        "/home/mikers/gomap-4775-domain-1cde6b84b/comparison/block4/plan.json": "63c4adf9790626a874296b8c19d1f89e28b2ed11159900d8d6a29fe8927c37ed",
+        "/home/mikers/gomap-4775-domain-1cde6b84b/comparison/block4/command.json": "f1fc55d8ee02c1e888c11cc77fa6526cb8d0718858b56aec9cdda382ec47d051",
+        "/home/mikers/gomap-4775-domain-1cde6b84b/comparison/block4/result.json": "5ef6b7a6665efaaa5cb74e9b3b5d6657e9852ff12781d40a78293ea3c08981f8",
+        "/home/mikers/gomap-4775-domain-1cde6b84b/comparison/block4/exit-status.txt": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+        "/home/mikers/gomap-4775-domain-1cde6b84b/project-later-replays.py": "6ce606bd30fe789a2208470a2cea05e6d949ebfd4aaef3356fce5f7fe807bec1"
+      },
+      "origin": "Receipt bytes copied verbatim from replay_receipts. Command follows the observed frozen comparator invocation. Exit 0 is derived from successful cmd.Run and exact acceptance validation in the pinned comparator; it is not separately captured child telemetry."
+    }
+  },
+  {
+    "arm": "domain",
+    "external_block": 4,
+    "projection_pin_sha256": "267b46b6b6ccb8aab46d36efcb7ff550268e2293dce4f7d3b770b943400ae374",
+    "provenance": {
+      "kind": "derived_observed_comparator_child_replay",
+      "originals_sha256": {
+        "/home/mikers/gomap-4775-domain-1cde6b84b/harness/bin/treedb_vector_partition_bench": "dc5b0bb160844a24fe82143b01520a0d1f9b1842d88612489381feec654c2a09",
+        "/home/mikers/gomap-4775-domain-1cde6b84b/harness/source/cmd/treedb_vector_partition_bench/m8_scaling_comparison.go": "dd3090fca97af366e3f066fb6ac4911cc65f62a357b1b4862a270a52caafb038",
+        "/home/mikers/gomap-4775-domain-1cde6b84b/comparison/block4/plan.json": "63c4adf9790626a874296b8c19d1f89e28b2ed11159900d8d6a29fe8927c37ed",
+        "/home/mikers/gomap-4775-domain-1cde6b84b/comparison/block4/command.json": "f1fc55d8ee02c1e888c11cc77fa6526cb8d0718858b56aec9cdda382ec47d051",
+        "/home/mikers/gomap-4775-domain-1cde6b84b/comparison/block4/result.json": "5ef6b7a6665efaaa5cb74e9b3b5d6657e9852ff12781d40a78293ea3c08981f8",
+        "/home/mikers/gomap-4775-domain-1cde6b84b/comparison/block4/exit-status.txt": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+        "/home/mikers/gomap-4775-domain-1cde6b84b/project-later-replays.py": "6ce606bd30fe789a2208470a2cea05e6d949ebfd4aaef3356fce5f7fe807bec1"
+      },
+      "origin": "Receipt bytes copied verbatim from replay_receipts. Command follows the observed frozen comparator invocation. Exit 0 is derived from successful cmd.Run and exact acceptance validation in the pinned comparator; it is not separately captured child telemetry."
+    }
+  },
+  {
+    "arm": "perpack",
+    "external_block": 5,
+    "projection_pin_sha256": "00918202079ba9556a12f91cedb47a2cb507724afc4ad165e10bea94009d9e71",
+    "provenance": {
+      "kind": "derived_observed_comparator_child_replay",
+      "originals_sha256": {
+        "/home/mikers/gomap-4775-domain-1cde6b84b/harness/bin/treedb_vector_partition_bench": "dc5b0bb160844a24fe82143b01520a0d1f9b1842d88612489381feec654c2a09",
+        "/home/mikers/gomap-4775-domain-1cde6b84b/harness/source/cmd/treedb_vector_partition_bench/m8_scaling_comparison.go": "dd3090fca97af366e3f066fb6ac4911cc65f62a357b1b4862a270a52caafb038",
+        "/home/mikers/gomap-4775-domain-1cde6b84b/comparison/block5/plan.json": "370cbfb6542ba3c220fa6ff5a806cb27207b77f535e2525491ae4cccb849dc78",
+        "/home/mikers/gomap-4775-domain-1cde6b84b/comparison/block5/command.json": "05f78673587b964b629b828fc43f9f56270fc34b2ca179fb6b5d0a7e2c1833a9",
+        "/home/mikers/gomap-4775-domain-1cde6b84b/comparison/block5/result.json": "efa5caaa5f6586519606575702877b8984f00a37305143e0430992fa9f91bd46",
+        "/home/mikers/gomap-4775-domain-1cde6b84b/comparison/block5/exit-status.txt": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+        "/home/mikers/gomap-4775-domain-1cde6b84b/project-later-replays.py": "6ce606bd30fe789a2208470a2cea05e6d949ebfd4aaef3356fce5f7fe807bec1"
+      },
+      "origin": "Receipt bytes copied verbatim from replay_receipts. Command follows the observed frozen comparator invocation. Exit 0 is derived from successful cmd.Run and exact acceptance validation in the pinned comparator; it is not separately captured child telemetry."
+    }
+  },
+  {
+    "arm": "domain",
+    "external_block": 5,
+    "projection_pin_sha256": "dc676b34824d19ed2e66a466512d4e235ac5e38693ccb8c9dd5661855db01f28",
+    "provenance": {
+      "kind": "derived_observed_comparator_child_replay",
+      "originals_sha256": {
+        "/home/mikers/gomap-4775-domain-1cde6b84b/harness/bin/treedb_vector_partition_bench": "dc5b0bb160844a24fe82143b01520a0d1f9b1842d88612489381feec654c2a09",
+        "/home/mikers/gomap-4775-domain-1cde6b84b/harness/source/cmd/treedb_vector_partition_bench/m8_scaling_comparison.go": "dd3090fca97af366e3f066fb6ac4911cc65f62a357b1b4862a270a52caafb038",
+        "/home/mikers/gomap-4775-domain-1cde6b84b/comparison/block5/plan.json": "370cbfb6542ba3c220fa6ff5a806cb27207b77f535e2525491ae4cccb849dc78",
+        "/home/mikers/gomap-4775-domain-1cde6b84b/comparison/block5/command.json": "05f78673587b964b629b828fc43f9f56270fc34b2ca179fb6b5d0a7e2c1833a9",
+        "/home/mikers/gomap-4775-domain-1cde6b84b/comparison/block5/result.json": "efa5caaa5f6586519606575702877b8984f00a37305143e0430992fa9f91bd46",
+        "/home/mikers/gomap-4775-domain-1cde6b84b/comparison/block5/exit-status.txt": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+        "/home/mikers/gomap-4775-domain-1cde6b84b/project-later-replays.py": "6ce606bd30fe789a2208470a2cea05e6d949ebfd4aaef3356fce5f7fe807bec1"
+      },
+      "origin": "Receipt bytes copied verbatim from replay_receipts. Command follows the observed frozen comparator invocation. Exit 0 is derived from successful cmd.Run and exact acceptance validation in the pinned comparator; it is not separately captured child telemetry."
+    }
+  }
+]
