@@ -156,12 +156,15 @@ func (s *VectorPartitionPagedSourceSessionV2) OpenDomainV2(ctx context.Context, 
 	if view.Header.Version != columnHNSWSearchPackVersionV7 || view.Header.Rows != len(members) || view.Header.Dimensions != def.Dimensions || view.Header.M != columnVamanaConnectivityPreservingPartitionM || view.Header.EfConstruction != columnVamanaConnectivityPreservingPartitionL || view.Header.EfSearch != def.EfSearch {
 		return nil, fmt.Errorf("%w: prepared graph profile", ErrVectorPartitionManifestInvalid)
 	}
-	for ordinal, member := range members {
-		row, readErr := s.readSourceRowV2(ctx, member.Source)
+	// Resolve source rows in canonical membership order, while checking the
+	// complete graph-ordinal permutation established above.
+	var current vectorPartitionSourceCurrentChunkV2
+	for _, record := range records {
+		row, readErr := s.readSourceRowWithCurrentChunkV2(ctx, *record.Member, &current)
 		if readErr != nil {
 			return nil, readErr
 		}
-		id, ok := view.documentIDForOrdinal(ordinal)
+		id, ok := view.documentIDForOrdinal(int(record.GraphOrdinal))
 		if !ok || !bytes.Equal(id, row.DocumentID) {
 			return nil, fmt.Errorf("%w: graph ordinal document provenance", ErrVectorPartitionManifestInvalid)
 		}

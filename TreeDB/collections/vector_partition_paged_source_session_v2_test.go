@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
@@ -17,10 +18,17 @@ import (
 func TestVectorPartitionPagedSourceSessionV2VerifiesCompletedOwner(t *testing.T) {
 	_, d, c := openSourceImportDirectoryCollectionV2(t)
 	defer d.Close()
-	ownership, input := sourceImportFixtureV2(t, c, 2)
+	ownership, input := sourceImportFixtureV2(t, c, 4)
 	input.DocumentRevisions = []uint64{91, 37}
 	ids, retained, columns := sourceImportRowsV2("a", "b")
 	progress, err := c.ImportVectorPartitionSourceChunkV2(ownership, input, ids, retained, columns)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input.ChunkIndex = 1
+	input.DocumentRevisions = []uint64{55, 66}
+	ids, retained, columns = sourceImportRowsV2("c", "d")
+	progress, err = c.ImportVectorPartitionSourceChunkV2(ownership, input, ids, retained, columns)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,7 +79,7 @@ func TestVectorPartitionPagedSourceSessionV2VerifiesCompletedOwner(t *testing.T)
 		t.Fatal(err)
 	}
 	root.ID = "vector_partition_source_root_v2"
-	m := VectorPartitionManifestV1{Format: VectorPartitionManifestFormatV2, State: "building", Collection: c.name, IndexName: input.IndexName, IndexDefinitionDigest: def, Generation: 3, PagedRootV2: &VectorPartitionPagedRootV2{SourceMapEpoch: ownership.Epoch(), SourceMapDigest: ownership.Digest(), SourceSnapshotSetDigest: digest, GraphProfileDigest: prepared.GraphProfileDigest, PlacementDigest: prepared.PlacementDigest, SourceOwners: []string{"group-a"}, LocalSourceShardCount: 1, LocalSourceRowCount: 2, SourceShardDirectory: root}}
+	m := VectorPartitionManifestV1{Format: VectorPartitionManifestFormatV2, State: "building", Collection: c.name, IndexName: input.IndexName, IndexDefinitionDigest: def, Generation: 3, PagedRootV2: &VectorPartitionPagedRootV2{SourceMapEpoch: ownership.Epoch(), SourceMapDigest: ownership.Digest(), SourceSnapshotSetDigest: digest, GraphProfileDigest: prepared.GraphProfileDigest, PlacementDigest: prepared.PlacementDigest, SourceOwners: []string{"group-a"}, LocalSourceShardCount: 1, LocalSourceRowCount: 4, SourceShardDirectory: root}}
 	m.Canonicalize()
 	session := &VectorPartitionPagedSourceSessionV2{collection: c, manifest: m, ownership: ownership, snapshot: d.AcquireSnapshot()}
 	defer session.Close()
@@ -85,6 +93,78 @@ func TestVectorPartitionPagedSourceSessionV2VerifiesCompletedOwner(t *testing.T)
 			t.Fatalf("selected row=%+v err=%v", row, err)
 		}
 	}
+	t.Run("current_chunk", func(t *testing.T) {
+		session.mu.RLock()
+		defer session.mu.RUnlock()
+		var current vectorPartitionSourceCurrentChunkV2
+		read := func(ctx context.Context, id VectorPartitionSourceRowIdentityV2) (source.SourceRowV2, error) {
+			return session.readSourceRowWithCurrentChunkV2(ctx, id, &current)
+		}
+		row, err := read(t.Context(), identity)
+		if err != nil {
+			t.Fatal(err)
+		}
+		first := &current.chunk.Rows[0]
+		row.DocumentID[0] = 'z'
+		row.Values[0] = 999
+		row, err = read(t.Context(), identity)
+		if err != nil || string(row.DocumentID) != "b" || row.Values[0] == 999 || &current.chunk.Rows[0] != first {
+			t.Fatalf("hit ownership/reuse row=%+v err=%v", row, err)
+		}
+		canceled, cancel := context.WithCancel(t.Context())
+		cancel()
+		if _, err := read(canceled, identity); !errors.Is(err, context.Canceled) {
+			t.Fatalf("hit cancellation: %v", err)
+		}
+		next := identity
+		next.Ordinal, next.DocumentRevision = 2, 55
+		row, err = read(t.Context(), next)
+		if err != nil || string(row.DocumentID) != "c" || current.chunk.Index != 1 || &current.chunk.Rows[0] == first {
+			t.Fatalf("chunk miss row=%+v err=%v", row, err)
+		}
+		for _, mutate := range []func(*VectorPartitionSourceRowIdentityV2){
+			func(v *VectorPartitionSourceRowIdentityV2) { v.SourceOwner = "foreign" },
+			func(v *VectorPartitionSourceRowIdentityV2) { v.ShardID = "foreign" },
+			func(v *VectorPartitionSourceRowIdentityV2) { v.SnapshotRevision++ },
+			func(v *VectorPartitionSourceRowIdentityV2) { v.SnapshotDigest[0] ^= 1 },
+			func(v *VectorPartitionSourceRowIdentityV2) { v.Ordinal = 4 },
+			func(v *VectorPartitionSourceRowIdentityV2) { v.DocumentRevision++ },
+		} {
+			if _, err := read(t.Context(), next); err != nil {
+				t.Fatal(err)
+			}
+			bad := next
+			mutate(&bad)
+			if _, err := read(t.Context(), bad); err == nil {
+				t.Fatalf("changed identity admitted: %+v", bad)
+			}
+		}
+		current = vectorPartitionSourceCurrentChunkV2{}
+		if _, err := read(canceled, identity); !errors.Is(err, context.Canceled) || current.snapshot != nil {
+			t.Fatalf("miss cancellation: %v", err)
+		}
+	})
+	t.Run("concurrent_traversals", func(t *testing.T) {
+		var wg sync.WaitGroup
+		for range 4 {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				session.mu.RLock()
+				defer session.mu.RUnlock()
+				var current vectorPartitionSourceCurrentChunkV2
+				for range 4 {
+					row, err := session.readSourceRowWithCurrentChunkV2(t.Context(), identity, &current)
+					if err != nil || string(row.DocumentID) != "b" {
+						t.Errorf("concurrent row=%+v err=%v", row, err)
+						return
+					}
+					row.DocumentID[0] = 'z'
+				}
+			}()
+		}
+		wg.Wait()
+	})
 	identity.DocumentRevision++
 	if _, err := session.ReadSourceRowV2(t.Context(), identity); err == nil {
 		t.Fatal("wrong document revision admitted")
@@ -96,8 +176,17 @@ func TestVectorPartitionPagedSourceSessionV2VerifiesCompletedOwner(t *testing.T)
 	if err := session.verifyPreparedSourcesV2(t.Context(), changed); err == nil {
 		t.Fatal("forged owner count admitted")
 	}
+	var releasedCurrent vectorPartitionSourceCurrentChunkV2
+	valid := identity
+	valid.DocumentRevision--
+	if _, err := session.readSourceRowWithCurrentChunkV2(t.Context(), valid, &releasedCurrent); err != nil {
+		t.Fatal(err)
+	}
 	if err := session.Close(); err != nil {
 		t.Fatal(err)
+	}
+	if _, err := session.readSourceRowWithCurrentChunkV2(t.Context(), valid, &releasedCurrent); err == nil {
+		t.Fatal("released session reused a proved chunk")
 	}
 	if _, err := session.ReadSourceRowV2(t.Context(), identity); err == nil {
 		t.Fatal("released session admitted")

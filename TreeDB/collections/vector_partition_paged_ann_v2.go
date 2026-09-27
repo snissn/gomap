@@ -19,6 +19,7 @@ func (s *VectorPartitionPagedSourceSessionV2) verifyANNIntentV2(ctx context.Cont
 		}
 		return nil
 	}
+	var current vectorPartitionSourceCurrentChunkV2
 	var acc *source.ANNOwnerAccumulatorV2
 	var expected source.ANNOwnerCommitmentV2
 	var domain uint64
@@ -83,7 +84,7 @@ func (s *VectorPartitionPagedSourceSessionV2) verifyANNIntentV2(ctx context.Cont
 			if err := acc.AddMember(source.ANNMemberV2{Source: *r.Member, Kind: r.MembershipKind}); err != nil {
 				return err
 			}
-			_, err := s.ReadSourceRowV2(ctx, *r.Member)
+			_, err := s.readSourceRowWithCurrentChunkV2(ctx, *r.Member, &current)
 			return err
 		}
 		return nil

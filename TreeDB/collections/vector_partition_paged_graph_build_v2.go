@@ -27,6 +27,7 @@ func (s *VectorPartitionPagedSourceSessionV2) buildVectorPartitionANNDirectoryV2
 		return VectorPartitionAssetV1{}, 0, 0, 0, fmt.Errorf("%w: unsupported prepared graph profile", ErrVectorPartitionManifestInvalid)
 	}
 	def.M, def.EfConstruction = columnVamanaConnectivityPreservingPartitionM, columnVamanaConnectivityPreservingPartitionL
+	var current vectorPartitionSourceCurrentChunkV2
 	var domains, members, assets uint64
 	root, err := writeVectorPartitionDirectoryV2(ctx, "metadata", input.Generation, func(visit func(VectorPartitionDirectoryRecordV2) error) error {
 		var declaration *source.ANNDomainV2
@@ -50,7 +51,7 @@ func (s *VectorPartitionPagedSourceSessionV2) buildVectorPartitionANNDirectoryV2
 				return err
 			}
 			for i, r := range records {
-				row, err := s.ReadSourceRowV2(ctx, *r.Member)
+				row, err := s.readSourceRowWithCurrentChunkV2(ctx, *r.Member, &current)
 				if err != nil {
 					return err
 				}
@@ -67,7 +68,8 @@ func (s *VectorPartitionPagedSourceSessionV2) buildVectorPartitionANNDirectoryV2
 					return fmt.Errorf("%w: domain working bytes", ErrVectorPartitionManifestInvalid)
 				}
 				workBytes += rowBytes
-				rows = append(rows, columnVectorGraphAssetRow{ID: slices.Clone(row.DocumentID), Vector: slices.Clone(row.Values)})
+				// The current-chunk reader returns independently owned row slices.
+				rows = append(rows, columnVectorGraphAssetRow{ID: row.DocumentID, Vector: row.Values})
 				if err := acc.AddMember(source.ANNMemberV2{Source: *r.Member, Kind: r.MembershipKind}); err != nil {
 					return err
 				}

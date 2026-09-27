@@ -223,13 +223,42 @@ func (s *VectorPartitionPagedSourceSessionV2) ReadSourceRowV2(ctx context.Contex
 	return s.readSourceRowV2(ctx, identity)
 }
 
+// vectorPartitionSourceCurrentChunkV2 belongs to one sequential traversal, never
+// to the session. It retains one proved chunk, capped by the source codec at 256
+// rows and 8 MiB encoded bytes, plus decoded row/slice/origin overhead. It owns no
+// reader or lease; the traversal must hold the session lock or builder lease.
+type vectorPartitionSourceCurrentChunkV2 struct {
+	snapshot *backenddb.Snapshot
+	owner    string
+	expected VectorPartitionSourceSnapshotV2
+	chunk    source.SourceChunkV2
+}
+
 // readSourceRowV2 requires the session read lock or an unpublished builder lease.
 func (s *VectorPartitionPagedSourceSessionV2) readSourceRowV2(ctx context.Context, identity VectorPartitionSourceRowIdentityV2) (source.SourceRowV2, error) {
+	return s.readSourceRowWithCurrentChunkV2(ctx, identity, nil)
+}
+
+func (s *VectorPartitionPagedSourceSessionV2) readSourceRowWithCurrentChunkV2(ctx context.Context, identity VectorPartitionSourceRowIdentityV2, current *vectorPartitionSourceCurrentChunkV2) (source.SourceRowV2, error) {
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return source.SourceRowV2{}, err
+		}
+	}
 	if s.snapshot == nil {
 		return source.SourceRowV2{}, backenddb.ErrClosed
 	}
 	if _, ok := slices.BinarySearch(s.verifiedOwners, identity.SourceOwner); !ok {
 		return source.SourceRowV2{}, fmt.Errorf("%w: source owner is not local", ErrVectorPartitionManifestInvalid)
+	}
+	if current != nil && current.snapshot == s.snapshot && current.owner == identity.SourceOwner &&
+		current.expected.ShardID == identity.ShardID && current.expected.SnapshotRevision == identity.SnapshotRevision &&
+		current.expected.Digest == identity.SnapshotDigest && current.expected.RowsPerChunk != 0 &&
+		current.chunk.Index == identity.Ordinal/uint64(current.expected.RowsPerChunk) {
+		return selectedVectorPartitionSourceRowV2(current.expected, current.chunk, identity, true)
+	}
+	if current != nil {
+		*current = vectorPartitionSourceCurrentChunkV2{}
 	}
 	key := vectorPartitionDirectoryOwnerPrefixV2(identity.SourceOwner) + identity.ShardID + "\x00"
 	var expected *VectorPartitionSourceSnapshotV2
@@ -262,13 +291,30 @@ func (s *VectorPartitionPagedSourceSessionV2) readSourceRowV2(ctx context.Contex
 	if err != nil {
 		return source.SourceRowV2{}, err
 	}
+	if current != nil {
+		*current = vectorPartitionSourceCurrentChunkV2{snapshot: s.snapshot, owner: identity.SourceOwner, expected: *expected, chunk: chunk.Chunk}
+	}
+	return selectedVectorPartitionSourceRowV2(*expected, chunk.Chunk, identity, current != nil)
+}
+
+// selectedVectorPartitionSourceRowV2 never exposes slices owned by current-chunk
+// state; callers may retain or mutate the returned row independently.
+func selectedVectorPartitionSourceRowV2(expected VectorPartitionSourceSnapshotV2, chunk source.SourceChunkV2, identity VectorPartitionSourceRowIdentityV2, copyRow bool) (source.SourceRowV2, error) {
 	offset := identity.Ordinal % uint64(expected.RowsPerChunk)
-	if offset >= uint64(len(chunk.Chunk.Rows)) {
+	if identity.Ordinal >= expected.RowCount || offset >= uint64(len(chunk.Rows)) {
 		return source.SourceRowV2{}, fmt.Errorf("%w: selected source ordinal", ErrVectorPartitionManifestInvalid)
 	}
-	row := chunk.Chunk.Rows[offset]
+	row := chunk.Rows[offset]
 	if row.LocalOrdinal != identity.Ordinal || row.DocumentRevision != identity.DocumentRevision || expected.Digest == ([sha256.Size]byte{}) {
 		return source.SourceRowV2{}, fmt.Errorf("%w: selected document revision", ErrVectorPartitionManifestInvalid)
+	}
+	if copyRow {
+		row.DocumentID = slices.Clone(row.DocumentID)
+		row.Values = slices.Clone(row.Values)
+		if row.LegacyOrigin != nil {
+			origin := *row.LegacyOrigin
+			row.LegacyOrigin = &origin
+		}
 	}
 	return row, nil
 }
