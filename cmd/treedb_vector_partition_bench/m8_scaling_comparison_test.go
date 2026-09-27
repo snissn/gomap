@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -77,6 +78,179 @@ func TestM8ScalingComparisonCompleteBlocksV1(t *testing.T) {
 			mutate(&r)
 			if _, err := m8CompareScalingPairV1(pair, r, r, "", ""); err == nil {
 				t.Fatal("invalid comparison admitted")
+			}
+		})
+	}
+}
+
+func TestM8ScalingDomainGraphRuntimeV1(t *testing.T) {
+	base, candidate := testM8ScalingReportV1(), testM8ScalingReportV1()
+	for i, r := range []*m8ProductionReportV1{&base, &candidate} {
+		r.HeadSHA = strings.Repeat(string(rune('a'+i)), 40)
+		r.BaseSHA = r.HeadSHA
+		r.ExecutableSHA256 = strings.Repeat(string(rune('c'+i)), 64)
+		r.Config.Partitions, r.Variant.Partitions = 8, 8
+		r.Config.PacksPerDomain = []int{2, 2, 2, 2}
+		r.Variant.ShardPlan.PacksPerDomain = 2
+		r.Variant.ArtifactSHA256 = strings.Repeat("e", 64)
+		r.Variant.ShardGenerationDigest = strings.Repeat("f", 64)
+		for j := range r.Rows {
+			row := &r.Rows[j]
+			searches := row.Probes * (2 - i)
+			row.Attribution.LocalHNSWSearches = uint64(searches * row.Samples)
+			row.Attribution.LocalHNSWSearchesByQuery = make([]uint32, row.Samples)
+			for q := range row.Attribution.LocalHNSWSearchesByQuery {
+				row.Attribution.LocalHNSWSearchesByQuery[q] = uint32(searches)
+			}
+			if i == 1 {
+				row.QPS *= 1.2
+			}
+		}
+	}
+	pair := m8ScalingPairV1{Name: "domain", Kind: "domain_graph_runtime", Baseline: "base", Candidate: "candidate", BaselineProbes: 1, CandidateProbes: 1}
+	result, err := m8CompareScalingPairV1(pair, base, candidate, "", "")
+	if err != nil || len(result.Blocks) != 10 || !result.AllMatchedQuality || !result.AllQPS15Percent || !result.AllP95NoRegression {
+		t.Fatalf("cross-runtime result=%+v err=%v", result, err)
+	}
+	raw, err := json.Marshal(candidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, mutate := range map[string]func(*m8ProductionReportV1){
+		"same_runtime": func(r *m8ProductionReportV1) {
+			r.BaseSHA, r.HeadSHA, r.ExecutableSHA256 = base.BaseSHA, base.HeadSHA, base.ExecutableSHA256
+		},
+		"missing_source":     func(r *m8ProductionReportV1) { r.HeadSHA = "" },
+		"changed_membership": func(r *m8ProductionReportV1) { r.Variant.ShardGenerationDigest = strings.Repeat("0", 64) },
+		"changed_parent":     func(r *m8ProductionReportV1) { r.Variant.ArtifactSHA256 = strings.Repeat("0", 64) },
+		"changed_fixture":    func(r *m8ProductionReportV1) { r.Dataset.QueryOrdinalOffset++ },
+		"changed_host":       func(r *m8ProductionReportV1) { r.Host.CPUModel = "another host" },
+		"changed_budget":     func(r *m8ProductionReportV1) { r.Config.LocalScoreBudget++ },
+		"still_per_pack":     func(r *m8ProductionReportV1) { r.Rows[0].Attribution = base.Rows[0].Attribution },
+		"missing_window":     func(r *m8ProductionReportV1) { r.Rows = r.Rows[1:] },
+	} {
+		t.Run(name, func(t *testing.T) {
+			var bad m8ProductionReportV1
+			if err := json.Unmarshal(raw, &bad); err != nil {
+				t.Fatal(err)
+			}
+			mutate(&bad)
+			if _, err := m8CompareScalingPairV1(pair, base, bad, "", ""); err == nil {
+				t.Fatal("invalid runtime comparison admitted")
+			}
+		})
+	}
+	candidate.Rows[0].Status = "timeout"
+	result, err = m8CompareScalingPairV1(pair, base, candidate, "", "")
+	if err != nil || len(result.Blocks) != 10 || result.AllMatchedQuality || result.AllQPS15Percent || result.AllP95NoRegression {
+		t.Fatalf("failed window hidden: %+v %v", result, err)
+	}
+}
+
+func TestM8ScalingRuntimeRefusesUnboundExecutableV1(t *testing.T) {
+	report, pins := testM8ReportReplayPinsV1(t)
+	root, err := m8CanonicalPathV1(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, "report.json")
+	raw, err := json.Marshal(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	pins.Report = fmt.Sprintf("%x", sha256.Sum256(raw))
+	args := testM8ReportReplayArgsV1(root, path, pins)[1:]
+	for _, runtime := range []m8ScalingReplayRuntimeV1{
+		{},
+		{HeadSHA: report.HeadSHA, Executable: "/bin/true", ExecutableSHA256: pins.Executable},
+		{HeadSHA: report.HeadSHA, Executable: report.Command[0], ExecutableSHA256: pins.Executable},
+	} {
+		if _, _, err := m8ReplayScalingRuntimeV1(args, runtime); err == nil || !strings.Contains(err.Error(), "frozen clean producing binary") {
+			t.Fatalf("unbound executable admitted or wrong refusal: %v", err)
+		}
+	}
+}
+
+func TestM8ScalingProducingRuntimeReceiptV1(t *testing.T) {
+	root, err := m8CanonicalPathV1(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, _ := testM8QualificationGitCheckoutV1(t, root)
+	// This clean tiny producer tests the subprocess protocol, not retained-data
+	// acceptance. The actual producer's strict replay has separate tests.
+	for name, content := range map[string]string{
+		"go.mod": "module github.com/snissn/gomap/cmd/treedb_vector_partition_bench\n\ngo 1.26\n",
+		"main.go": `package main
+import ("fmt"; "os"; "strings")
+func main() {
+ if os.Args[1] != "replay-m8-report" { os.Exit(2) }
+ if os.Getenv("M8_TEST_REPLAY_MODE") == "fail" { os.Exit(3) }
+ if os.Getenv("M8_TEST_REPLAY_MODE") == "overflow" { fmt.Print(strings.Repeat("x", 8192)); return }
+ if os.Getenv("M8_TEST_REPLAY_MODE") == "wrong" { fmt.Println("REPLAY_ACCEPTED_NOT_QUALIFICATION"); return }
+ for i, arg := range os.Args {
+  if arg == "-report-sha256" { fmt.Printf("REPLAY_ACCEPTED_NOT_QUALIFICATION report_sha256=%s rows=0\n", os.Args[i+1]) }
+  if arg == "-report" && os.Getenv("M8_TEST_REPLAY_MODE") == "mutate" { os.WriteFile(os.Args[i+1], []byte("changed"), 0600) }
+ }
+}
+`,
+	} {
+		if err := os.WriteFile(filepath.Join(source, name), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, args := range [][]string{{"add", "."}, {"commit", "-qm", "test producer"}} {
+		if out, err := exec.Command("git", append([]string{"-C", source}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git: %v: %s", err, out)
+		}
+	}
+	head, err := exec.Command("git", "-C", source, "rev-parse", "HEAD").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	binary := filepath.Join(root, "producer")
+	build := exec.Command("go", "build", "-buildvcs=true", "-o", binary, ".")
+	build.Dir = source
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build producer: %v: %s", err, out)
+	}
+	report, pins := testM8ReportReplayPinsV1(t)
+	report.HeadSHA, report.Variant.HeadSHA = strings.TrimSpace(string(head)), strings.TrimSpace(string(head))
+	pins.Executable, err = m8BenchmarkExecutableSHA256V1(binary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	report.ExecutableSHA256, report.Variant.ExecutableSHA256 = pins.Executable, pins.Executable
+	report.Command[0] = binary
+	command, _ := json.Marshal(report.Command)
+	descriptor, err := m3VariantDescriptorJSONV1(*report.Variant)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pins.Command, pins.Variant = fmt.Sprintf("%x", sha256.Sum256(command)), fmt.Sprintf("%x", sha256.Sum256(descriptor))
+	raw, err := json.Marshal(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pins.Report = fmt.Sprintf("%x", sha256.Sum256(raw))
+	path := filepath.Join(root, "report.json")
+	runtime := m8ScalingReplayRuntimeV1{HeadSHA: report.HeadSHA, Executable: binary, ExecutableSHA256: pins.Executable}
+	for _, mode := range []string{"valid", "fail", "wrong", "overflow", "mutate"} {
+		t.Run(mode, func(t *testing.T) {
+			t.Setenv("M8_TEST_REPLAY_MODE", mode)
+			if err := os.WriteFile(path, raw, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			_, receipt, err := m8ReplayScalingRuntimeV1(testM8ReportReplayArgsV1(root, path, pins)[1:], runtime)
+			if mode == "valid" {
+				if err != nil || !strings.Contains(receipt, pins.Report) {
+					t.Fatalf("valid receipt: %q %v", receipt, err)
+				}
+			} else if err == nil {
+				t.Fatal("invalid producing-runtime result accepted")
 			}
 		})
 	}
