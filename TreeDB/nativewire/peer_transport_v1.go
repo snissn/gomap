@@ -103,11 +103,12 @@ func (p *PeerTransportV1) ProbeShardEndpointV1(ctx context.Context, endpoint str
 	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	work, err := p.admission.work("shard:"+string(group), peerRequestsV1, 64<<10)
+	work, err := p.admission.request(ctx, "shard:"+string(group), 64<<10, peerRequestDescendantV1)
 	if err != nil {
 		return identity, err
 	}
 	defer work.release()
+	ctx = work.ctx
 	conn, err := p.dialScope(ctx, endpoint, node, "shard:"+string(group))
 	if err != nil {
 		return identity, err

@@ -1,13 +1,14 @@
 package nativewire
 
 import (
+	"context"
 	"encoding/binary"
 	"io"
 
 	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
 )
 
-func readPeerShardFrameV1(reader io.Reader, maxFrame uint32, admission *peerNodeAdmissionV1, scope string) (vectorPartitionShardSearchTCPFrameV1, peerWorkLeaseV1, error) {
+func readPeerShardFrameV1(ctx context.Context, reader io.Reader, maxFrame uint32, admission *peerNodeAdmissionV1, scope string) (vectorPartitionShardSearchTCPFrameV1, peerWorkLeaseV1, error) {
 	var work peerWorkLeaseV1
 	if admission == nil {
 		frame, err := readVectorPartitionShardSearchTCPFrameV1(reader, maxFrame)
@@ -23,7 +24,10 @@ func readPeerShardFrameV1(reader io.Reader, maxFrame uint32, admission *peerNode
 	}
 	// Charge the encoded input and bounded decoder expansion before allocation.
 	var err error
-	work, err = admission.work(scope, peerRequestsV1, int64(size)*8+(64<<10))
+	// Authentication and group authorization precede this read. During drain,
+	// inbound shard RPCs remain dependency traffic: the wire carries no trusted
+	// originating-request capability, so new authenticated RPCs can also run.
+	work, err = admission.request(ctx, scope, int64(size)*8+(64<<10), peerRequestInternalV1)
 	if err != nil {
 		return vectorPartitionShardSearchTCPFrameV1{}, work, err
 	}

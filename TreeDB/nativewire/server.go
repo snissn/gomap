@@ -533,7 +533,7 @@ func (s *Server) serveRegisteredConn(ctx context.Context, conn net.Conn) error {
 					return raftcluster.ErrAdmissionUnavailable
 				}
 				var err error
-				work, err = s.peerTransport.admission.work("native", peerRequestsV1, int64(s.limits.MaxFrameSize)*4)
+				work, err = s.peerTransport.admission.request(ctx, "native", int64(s.limits.MaxFrameSize)*4, peerRequestIngressV1)
 				return err
 			}
 		}
@@ -558,7 +558,11 @@ func (s *Server) serveRegisteredConn(ctx context.Context, conn net.Conn) error {
 			}
 			return err
 		}
-		err = s.handleFrame(ctx, conn, state, header, body)
+		requestCtx := ctx
+		if work.ctx != nil {
+			requestCtx = work.ctx
+		}
+		err = s.handleFrame(requestCtx, conn, state, header, body)
 		work.release()
 		if err != nil {
 			if errors.Is(err, errGoaway) {

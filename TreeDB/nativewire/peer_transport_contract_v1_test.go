@@ -65,7 +65,10 @@ func TestPeerSecurityNativeBoundaryV1(t *testing.T) {
 	}
 }
 
-func TestPeerSecurityShardBoundaryV1(t *testing.T) {
+func TestPeerSecurityShardBoundaryV1(t *testing.T)        { testPeerSecurityShardBoundaryV1(t, false) }
+func TestPeerSecurityShardDependencyDrainV1(t *testing.T) { testPeerSecurityShardBoundaryV1(t, true) }
+
+func testPeerSecurityShardBoundaryV1(t *testing.T, draining bool) {
 	transport, config := peerTransportFixtureV1(t)
 	defer transport.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -84,6 +87,15 @@ func TestPeerSecurityShardBoundaryV1(t *testing.T) {
 		}),
 	}
 	go func() { _ = server.Serve(ctx, listener) }()
+	caller := transport
+	if draining {
+		transport.admission.beginDrain()
+		caller, err = NewPeerTransportV1(config)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer caller.Close()
+	}
 	endpoints := map[raftcluster.GroupID]string{config.Groups[0].ID: listener.Addr().String()}
 	plain, err := NewVectorPartitionShardSearchTCPDispatcherV1(endpoints)
 	if err != nil {
@@ -96,8 +108,27 @@ func TestPeerSecurityShardBoundaryV1(t *testing.T) {
 	if err == nil || calls.Load() != 0 {
 		t.Fatalf("unauthenticated shard reached handler: calls=%d err=%v", calls.Load(), err)
 	}
+	// A TLS-authenticated frame cannot name a different group, including
+	// while authenticated internal dependencies are admitted during drain.
+	wrongGroup, err := caller.dialScope(ctx, listener.Addr().String(), config.NodeID, "shard:"+string(config.Groups[0].ID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deadline, ok := ctx.Deadline(); ok {
+		_ = wrongGroup.SetDeadline(deadline)
+	}
+	invalid := request
+	invalid.TargetGroupID = "another-group"
+	err = writeVectorPartitionShardSearchTCPFrameV1(wrongGroup, vectorPartitionShardSearchTCPFrameV1{Request: &invalid}, vectorPartitionShardSearchTCPMaxFrameBytesV1)
+	if err == nil {
+		_, err = readVectorPartitionShardSearchTCPFrameV1(wrongGroup, vectorPartitionShardSearchTCPMaxFrameBytesV1)
+	}
+	_ = wrongGroup.Close()
+	if err == nil || calls.Load() != 0 {
+		t.Fatalf("wrong-group frame reached handler: calls=%d err=%v", calls.Load(), err)
+	}
 	nodes := map[raftcluster.GroupID]map[raftcluster.NodeID]string{config.Groups[0].ID: {config.NodeID: listener.Addr().String()}}
-	secure, err := NewAuthenticatedVectorPartitionShardSearchTCPDispatcherV1(transport, endpoints, nodes)
+	secure, err := NewAuthenticatedVectorPartitionShardSearchTCPDispatcherV1(caller, endpoints, nodes)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,7 +140,7 @@ func TestPeerSecurityShardBoundaryV1(t *testing.T) {
 		t.Fatalf("authorized shard calls=%d", calls.Load())
 	}
 	nodes[config.Groups[0].ID] = map[raftcluster.NodeID]string{"another-node": listener.Addr().String()}
-	if wrong, err := NewAuthenticatedVectorPartitionShardSearchTCPDispatcherV1(transport, endpoints, nodes); err == nil {
+	if wrong, err := NewAuthenticatedVectorPartitionShardSearchTCPDispatcherV1(caller, endpoints, nodes); err == nil {
 		wrong.Close()
 		t.Fatal("shard endpoint accepted a node outside its Raft group")
 	}

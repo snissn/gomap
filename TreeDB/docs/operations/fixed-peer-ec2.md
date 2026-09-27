@@ -30,8 +30,13 @@ traffic admission. A running process, open port, known leader, historical succes
 or ANN capability alone is insufficient. Empty data groups stay unready until
 initialized by a real durable command through their authoritative path.
 
-SIGTERM/SIGINT begins drain, refuses new public work, drains bounded HTTP work,
-then closes sockets/providers/stores. Preserve commit ambiguity for mutations
+SIGTERM/SIGINT begins drain and refuses fresh public/native ingress and fresh
+local outbound work. Already admitted descendants may finish within their
+originating request lifetime. Authenticated inbound shard RPCs, consensus and
+observational control remain available during this wait; newly arriving internal
+shard RPCs are also accepted because the wire has no continuation authority.
+After at most `RequestTimeout`, shutdown freezes admission, cancels remaining
+requests and closes sockets/providers/stores. Preserve commit ambiguity for mutations
 already sent. Never retry an ambiguous mutation as a fresh operation; use its
 existing exact durable idempotency identity.
 

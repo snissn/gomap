@@ -176,9 +176,18 @@ fresh empty storage without deployment inventory; restore/replacement must follo
 the external volume identity and backup runbook. A partial first initialization
 also fails closed. Consumers need only their persistent Raft/config root.
 
-`BeginDrainV1` refuses new public mutations/native/shard work while preserving
-consensus and observational control operations; `Close` drains HTTP and interrupts
-all owned streams before provider shutdown. Readiness obtains a fresh catalog
+`BeginDrainV1` refuses fresh public/native ingress and capability-free local
+outbound work. Descendants of an admitted request retain a private, process-local,
+owner-bound capability only until that originating request ends. HTTP forwarding
+uses this same lifetime rule. Authenticated inbound shard RPCs remain available
+as internal dependency traffic during drain, including newly arriving RPCs: the
+receiver cannot distinguish continuations without new wire authority. No such
+wire capability is introduced. TLS identity, group authorization, read proofs,
+framing and resource bounds remain enforced. Consensus and observational control
+operations remain available. `Close` waits for admitted request lifetimes for at
+most `RequestTimeout`, then atomically freezes admission, cancels remaining work
+and interrupts owned streams before provider shutdown. Forced transport close
+cancels immediately without waiting for handlers. Readiness obtains a fresh catalog
 fence and a leader ReadIndex proof for each locally hosted data group, and checks
 local durable/consensus applied progress. It is never a reusable read capability
 or proof that an ANN generation is ready. A group with no durable applied command

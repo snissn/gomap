@@ -550,10 +550,17 @@ func (r *FixedPeerTCPRuntimeV1) Close() error {
 	r.closeOnce.Do(func() {
 		r.BeginDrainV1()
 		var errs []error
+		ctx, cancel := context.WithTimeout(context.Background(), r.config.RequestTimeout)
+		defer cancel()
+		if r.client != nil && r.client.peerTransport != nil {
+			err := r.client.peerTransport.admission.drainRequests(ctx)
+			errs = append(errs, err)
+			if err != nil {
+				_ = r.client.peerTransport.Close()
+			}
+		}
 		if r.server != nil {
-			ctx, cancel := context.WithTimeout(context.Background(), r.config.RequestTimeout)
 			err := r.server.Shutdown(ctx)
-			cancel()
 			if err != nil {
 				_ = r.server.Close()
 			}
@@ -799,7 +806,7 @@ func (r *FixedPeerTCPRuntimeV1) serve(w http.ResponseWriter, request *http.Reque
 			err = raftcluster.ErrRouteTargetUnsupported
 			return
 		}
-		nodeWork, err = r.client.peerTransport.admission.work(peerControlScopeV1(request.URL.Path), peerRequestsV1, peerControlBytesV1(request.ContentLength))
+		nodeWork, err = r.client.peerTransport.admission.request(request.Context(), peerControlScopeV1(request.URL.Path), peerControlBytesV1(request.ContentLength), peerControlRequestModeV1(request.URL.Path, peerRequestIngressV1))
 		if err != nil {
 			return
 		}
@@ -826,7 +833,11 @@ func (r *FixedPeerTCPRuntimeV1) serve(w http.ResponseWriter, request *http.Reque
 		err = raftcluster.ErrInvalidConfig
 		return
 	}
-	ctx, cancel := context.WithTimeout(request.Context(), r.config.RequestTimeout)
+	requestCtx := request.Context()
+	if nodeWork.ctx != nil {
+		requestCtx = nodeWork.ctx
+	}
+	ctx, cancel := context.WithTimeout(requestCtx, r.config.RequestTimeout)
 	defer cancel()
 	var body fixedPeerRequestV1
 	decoder := json.NewDecoder(http.MaxBytesReader(w, request.Body, fixedPeerMaxRPCBytesV1))
@@ -975,11 +986,12 @@ func (c *FixedPeerTCPClientV1) call(ctx context.Context, node raftcluster.NodeID
 		if err != nil {
 			return reply, err
 		}
-		work, err := c.peerTransport.admission.work(peerControlScopeV1(operation), peerRequestsV1, peerControlBytesV1(bound))
+		work, err := c.peerTransport.admission.request(ctx, peerControlScopeV1(operation), peerControlBytesV1(bound), peerControlRequestModeV1(operation, peerRequestDescendantV1))
 		if err != nil {
 			return reply, err
 		}
 		defer work.release()
+		ctx = work.ctx
 	}
 	raw, err := json.Marshal(body)
 	if err != nil {

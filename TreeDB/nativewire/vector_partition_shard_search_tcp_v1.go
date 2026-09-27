@@ -203,11 +203,12 @@ func (d *VectorPartitionShardSearchTCPDispatcherV1) DispatchVectorPartitionShard
 		if err != nil {
 			return VectorPartitionShardSearchResponseV1{}, &VectorPartitionShardSearchErrorV1{Code: VectorPartitionShardSearchErrorInvalidRequestV1, GroupID: request.TargetGroupID, Err: err}
 		}
-		work, err := d.peerAdmission.work("shard:"+string(request.TargetGroupID), peerRequestsV1, int64(requestBytes)*8+int64(bound)*2)
+		work, err := d.peerAdmission.request(ctx, "shard:"+string(request.TargetGroupID), int64(requestBytes)*8+int64(bound)*2, peerRequestDescendantV1)
 		if err != nil {
 			return VectorPartitionShardSearchResponseV1{}, &VectorPartitionShardSearchErrorV1{Code: VectorPartitionShardSearchErrorGroupUnavailableV1, GroupID: request.TargetGroupID, Err: err}
 		}
 		defer work.release()
+		ctx = work.ctx
 	}
 	for attempt := 0; ; attempt++ {
 		response, err := d.dispatchVectorPartitionShardSearchOnceV1(ctx, request)
@@ -540,7 +541,7 @@ func (s VectorPartitionShardSearchTCPServerV1) serveOneFrameV1(ctx context.Conte
 	if s.PeerTransport != nil {
 		admission = s.PeerTransport.admission
 	}
-	frame, work, err := readPeerShardFrameV1(conn, maxFrame, admission, "shard:"+string(s.PeerGroupID))
+	frame, work, err := readPeerShardFrameV1(ctx, conn, maxFrame, admission, "shard:"+string(s.PeerGroupID))
 	defer work.release()
 	_ = conn.SetReadDeadline(time.Time{})
 	if err != nil {
@@ -586,6 +587,9 @@ func (s VectorPartitionShardSearchTCPServerV1) serveOneFrameV1(ctx context.Conte
 			return true
 		}
 		defer response.release()
+	}
+	if work.ctx != nil {
+		ctx = work.ctx
 	}
 	requestCtx, cancel := vectorPartitionShardSearchTCPRequestContextV1(ctx, frame.Request.DeadlineUnixNano)
 	stopPeerMonitor := vectorPartitionShardSearchTCPMonitorPeerDisconnectV1(conn, requestCtx, cancel)

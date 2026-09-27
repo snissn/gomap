@@ -53,21 +53,25 @@ type peerResourceScopeV1 struct {
 }
 
 type peerNodeAdmissionV1 struct {
-	mu           sync.Mutex
-	limits       peerResourceAmountsV1
-	sharedLimits peerResourceAmountsV1
-	shared       peerResourceAmountsV1
-	scopes       map[string]*peerResourceScopeV1
-	stats        PeerNodeResourceStatsV1
-	conns        map[*peerNodeConnV1]struct{}
-	listeners    map[*peerNodeListenerV1]struct{}
-	ctx          context.Context
-	cancel       context.CancelFunc
-	read         atomic.Uint64
-	written      atomic.Uint64
-	network      map[string]*peerIPBytesV1
-	unknown      peerIPBytesV1
-	draining     atomic.Bool
+	mu             sync.Mutex
+	limits         peerResourceAmountsV1
+	sharedLimits   peerResourceAmountsV1
+	shared         peerResourceAmountsV1
+	scopes         map[string]*peerResourceScopeV1
+	stats          PeerNodeResourceStatsV1
+	conns          map[*peerNodeConnV1]struct{}
+	listeners      map[*peerNodeListenerV1]struct{}
+	ctx            context.Context
+	cancel         context.CancelFunc
+	read           atomic.Uint64
+	written        atomic.Uint64
+	network        map[string]*peerIPBytesV1
+	unknown        peerIPBytesV1
+	draining       atomic.Bool
+	requestMu      sync.Mutex
+	requests       map[*peerRequestLifetimeV1]struct{}
+	requestChanged chan struct{}
+	requestsFrozen bool
 }
 
 func normalizePeerNodeLimitsV1(value PeerNodeLimitsV1) (PeerNodeLimitsV1, error) {
@@ -127,6 +131,8 @@ func newPeerNodeAdmissionV1(config FixedPeerTCPConfigV1) (*peerNodeAdmissionV1, 
 		}
 	}
 	a.ctx, a.cancel = context.WithCancel(context.Background())
+	a.requests = make(map[*peerRequestLifetimeV1]struct{})
+	a.requestChanged = make(chan struct{})
 	a.network = peerNetworkInventoryV1(config)
 	return a, nil
 }
@@ -248,6 +254,7 @@ func (a *peerNodeAdmissionV1) close() error {
 	if a == nil {
 		return nil
 	}
+	a.freezeRequests()
 	a.mu.Lock()
 	if a.stats.Closed {
 		a.mu.Unlock()

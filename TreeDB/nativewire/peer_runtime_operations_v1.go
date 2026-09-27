@@ -71,13 +71,13 @@ type FixedPeerReadinessV1 struct {
 }
 
 // BeginDrainV1 refuses new public work while leaving consensus/control reads
-// available for already admitted work and orchestration. Close performs the
-// existing bounded HTTP drain and then closes all shared transport resources.
+// and authenticated shard dependencies available. Close waits for admitted
+// request lifetimes, bounded by RequestTimeout, then freezes and closes resources.
 func (r *FixedPeerTCPRuntimeV1) BeginDrainV1() {
 	if r != nil {
 		r.draining.Store(true)
 		if r.client != nil && r.client.peerTransport != nil {
-			r.client.peerTransport.admission.draining.Store(true)
+			r.client.peerTransport.admission.beginDrain()
 		}
 	}
 }

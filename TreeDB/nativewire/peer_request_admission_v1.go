@@ -14,15 +14,14 @@ import (
 const peerNativeDefaultFrameV1 = 1 << 20
 
 type peerWorkLeaseV1 struct {
-	request peerResourceLeaseV1
-	bytes   peerResourceLeaseV1
+	request  peerResourceLeaseV1
+	bytes    peerResourceLeaseV1
+	lifetime *peerRequestLifetimeV1
+	ctx      context.Context
 }
 
 func (a *peerNodeAdmissionV1) work(scope string, kind int, bytes int64) (peerWorkLeaseV1, error) {
 	var work peerWorkLeaseV1
-	if a != nil && a.draining.Load() && kind == peerRequestsV1 && (scope == "native" || strings.HasPrefix(scope, "shard:")) {
-		return work, raftcluster.ErrAdmissionUnavailable
-	}
 	var err error
 	work.request, err = a.acquire(scope, kind, 1)
 	if err != nil {
@@ -36,7 +35,12 @@ func (a *peerNodeAdmissionV1) work(scope string, kind int, bytes int64) (peerWor
 	return work, nil
 }
 
-func (w *peerWorkLeaseV1) release() { w.bytes.release(); w.request.release() }
+func (w *peerWorkLeaseV1) release() {
+	w.bytes.release()
+	w.request.release()
+	w.lifetime.release()
+	w.lifetime = nil
+}
 
 func peerControlScopeV1(operation string) string {
 	switch strings.TrimPrefix(operation, "/v1/") {
@@ -48,6 +52,17 @@ func peerControlScopeV1(operation string) string {
 		return "control-forward"
 	default:
 		return "control-write"
+	}
+}
+
+// Read and diagnostic control operations stay available as dependencies while
+// draining. Forwarding and writes require a live local originating request.
+func peerControlRequestModeV1(operation string, ordinary peerRequestModeV1) peerRequestModeV1 {
+	switch peerControlScopeV1(operation) {
+	case "control-read", "control-diagnostics":
+		return peerRequestInternalV1
+	default:
+		return ordinary
 	}
 }
 

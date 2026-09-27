@@ -56,26 +56,27 @@ func TestPeerSecurityRequestExpansionRefusesBeforeAllocationV1(t *testing.T) {
 func TestPeerSecurityDrainKeepsAdmittedForwardingV1(t *testing.T) {
 	transport, config := peerTransportFixtureV1(t)
 	defer transport.Close()
-	node := &FixedPeerTCPRuntimeV1{client: &FixedPeerTCPClientV1{peerTransport: transport}}
-	ingress, err := transport.admission.work("control-write", peerRequestsV1, 64<<10)
+	a := transport.admission
+	ingress, err := a.request(context.Background(), "control-write", 64<<10, peerRequestIngressV1)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer ingress.release()
-	node.BeginDrainV1()
-	// HTTP ingress refuses new mutations; its admitted handler still needs these
-	// nested control leases to route and forward its already accepted mutation.
-	for _, scope := range []string{"control-forward", "control-read"} {
-		work, err := transport.admission.work(scope, peerRequestsV1, 64<<10)
+	a.beginDrain()
+	for _, scope := range []string{"control-forward", "control-read", "native", "shard:" + string(config.Groups[0].ID)} {
+		work, err := a.request(ingress.ctx, scope, 64<<10, peerRequestDescendantV1)
 		if err != nil {
-			t.Fatalf("admitted %s refused during drain: %v", scope, err)
+			t.Fatalf("admitted %s refused: %v", scope, err)
 		}
 		work.release()
-	}
-	for _, scope := range []string{"native", "shard:" + string(config.Groups[0].ID)} {
-		if work, err := transport.admission.work(scope, peerRequestsV1, 64<<10); !errors.Is(err, raftcluster.ErrAdmissionUnavailable) {
+		if work, err := a.request(context.Background(), scope, 64<<10, peerRequestDescendantV1); !errors.Is(err, raftcluster.ErrAdmissionUnavailable) {
 			work.release()
-			t.Fatalf("new %s ingress accepted during drain: %v", scope, err)
+			t.Fatalf("fresh %s accepted: %v", scope, err)
 		}
+	}
+	// A capability never authorizes fresh ingress, even on its owning transport.
+	if work, err := a.request(ingress.ctx, "native", 1, peerRequestIngressV1); !errors.Is(err, raftcluster.ErrAdmissionUnavailable) {
+		work.release()
+		t.Fatalf("fresh ingress reused capability: %v", err)
 	}
 }
