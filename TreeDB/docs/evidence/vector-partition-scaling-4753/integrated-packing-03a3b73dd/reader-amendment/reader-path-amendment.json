@@ -1,0 +1,22 @@
+{
+  "recorded_at": "2026-09-27T13:37:42.550730+00:00",
+  "cause": "Original resource reader failed exec go: executable file not found in PATH while decoding pprof. Original raw producer completed0.",
+  "scope": "Reader environment and fresh output names only. Both resource observations retain original source/runtime/commands/outputs. Physical wrapper points to equivalent v2 parent inventory; its binary and observation command are unchanged.",
+  "preserve": "Original one resource reader failure and output paths remain immutable. No original measurement manifest or wrapper edited.",
+  "source": "03a3b73dd2fc6888e603307df5c3a00f0a879342",
+  "runtime_sha256": "82ddef839768660957f3face5c15197b93e0020708703b4653f8708f93e456f6",
+  "reader_sha256": "28124dd40f9c96bb879c730218e55611c856a83ee4de0c165f586ad6007a5db1",
+  "original_measurement_manifest_sha256": "952bff48b2a333388a06451c3708503c78dfbe5d004a75c2496d6b05b3d5dc49",
+  "prospective_commands": [
+    "f-resource-read-v2.sh one 1",
+    "f-resource-read-v2.sh multi 1",
+    "f-physical-v2.sh prepare one",
+    "f-physical-v2.sh prepare multi",
+    "f-physical-v2.sh run one",
+    "f-physical-v2.sh run multi",
+    "f-physical-v2.sh read one",
+    "f-physical-v2.sh read multi",
+    "f-preserve.sh"
+  ],
+  "status": "PREPARED_NOT_RUN_REQUIRES_ROOT_REVIEW_AND_ADMISSION"
+}

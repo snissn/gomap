@@ -1,0 +1,344 @@
+{
+  "status": "COMPARISON_REDUCED_NOT_QUALIFICATION",
+  "plan_sha256": "97904e24570e326a0e2154fff846b5c38c85d9480af5f36f1714d28b27b71bfe",
+  "scope": "same frozen source/runtime, profiled native TCP boundary; five complete blocks at c1/c32, C256/EF96/top10/recall>=.95; all report rows retained, raw attempts in pinned reports; CPU/source-host admission and full F envelope remain external obligations; not predecessor or ordinary-HNSW comparison",
+  "replay_receipts": {
+    "multi": "REPLAY_ACCEPTED_NOT_QUALIFICATION report_sha256=6cef1d951678c76d458350ac7c1c5c4927cd514158d3c045f3acd7ecfe7ae850 rows=20\n",
+    "one": "REPLAY_ACCEPTED_NOT_QUALIFICATION report_sha256=90590747150b494e134b5bafe7362d88327af7922299533b5e403d364bab4c3c rows=20\n"
+  },
+  "logical_membership_digests": {
+    "multi": "36bee3befe9e258617d364d860a740affc7a633a5b65fe8591383c6afec68403",
+    "one": "36bee3befe9e258617d364d860a740affc7a633a5b65fe8591383c6afec68403"
+  },
+  "pairs": [
+    {
+      "pair": {
+        "name": "multi-v-one",
+        "kind": "logical_packing",
+        "baseline": "one",
+        "candidate": "multi",
+        "baseline_probes": 5,
+        "candidate_probes": 5
+      },
+      "blocks": [
+        {
+          "repetition": 0,
+          "concurrency": 1,
+          "baseline_row": 0,
+          "candidate_row": 0,
+          "matched_quality": true,
+          "qps_ratio": 0.9938489835912148,
+          "p95_ratio": 1.006080334355823
+        },
+        {
+          "repetition": 0,
+          "concurrency": 32,
+          "baseline_row": 1,
+          "candidate_row": 1,
+          "matched_quality": true,
+          "qps_ratio": 0.9906041592778657,
+          "p95_ratio": 0.9959419272425023
+        },
+        {
+          "repetition": 1,
+          "concurrency": 1,
+          "baseline_row": 7,
+          "candidate_row": 7,
+          "matched_quality": true,
+          "qps_ratio": 1.0003768351534519,
+          "p95_ratio": 0.9935293020789806
+        },
+        {
+          "repetition": 1,
+          "concurrency": 32,
+          "baseline_row": 6,
+          "candidate_row": 6,
+          "matched_quality": true,
+          "qps_ratio": 0.9906602346738126,
+          "p95_ratio": 1.0196210101497234
+        },
+        {
+          "repetition": 2,
+          "concurrency": 1,
+          "baseline_row": 8,
+          "candidate_row": 8,
+          "matched_quality": true,
+          "qps_ratio": 0.9958546086907449,
+          "p95_ratio": 1.004596558156416
+        },
+        {
+          "repetition": 2,
+          "concurrency": 32,
+          "baseline_row": 9,
+          "candidate_row": 9,
+          "matched_quality": true,
+          "qps_ratio": 0.9849359700211027,
+          "p95_ratio": 1.047669623134853
+        },
+        {
+          "repetition": 3,
+          "concurrency": 1,
+          "baseline_row": 15,
+          "candidate_row": 15,
+          "matched_quality": true,
+          "qps_ratio": 0.9984566382542536,
+          "p95_ratio": 1.0048482733973085
+        },
+        {
+          "repetition": 3,
+          "concurrency": 32,
+          "baseline_row": 14,
+          "candidate_row": 14,
+          "matched_quality": true,
+          "qps_ratio": 0.9957606777328908,
+          "p95_ratio": 0.9791654753779552
+        },
+        {
+          "repetition": 4,
+          "concurrency": 1,
+          "baseline_row": 16,
+          "candidate_row": 16,
+          "matched_quality": true,
+          "qps_ratio": 0.9933279906388712,
+          "p95_ratio": 1.0136476890918242
+        },
+        {
+          "repetition": 4,
+          "concurrency": 32,
+          "baseline_row": 17,
+          "candidate_row": 17,
+          "matched_quality": true,
+          "qps_ratio": 0.9808937650465418,
+          "p95_ratio": 1.012463667445462
+        }
+      ],
+      "all_matched_quality": true,
+      "all_qps_at_least_1_15x": false,
+      "all_p95_no_regression": false
+    },
+    {
+      "pair": {
+        "name": "one-selected-v-exhaustive",
+        "kind": "selected_exhaustive",
+        "baseline": "one",
+        "candidate": "one",
+        "baseline_probes": 16,
+        "candidate_probes": 5
+      },
+      "blocks": [
+        {
+          "repetition": 0,
+          "concurrency": 1,
+          "baseline_row": 2,
+          "candidate_row": 0,
+          "matched_quality": true,
+          "qps_ratio": 2.2598990777345076,
+          "p95_ratio": 0.4830542097139086
+        },
+        {
+          "repetition": 0,
+          "concurrency": 32,
+          "baseline_row": 3,
+          "candidate_row": 1,
+          "matched_quality": true,
+          "qps_ratio": 2.7941694388087424,
+          "p95_ratio": 0.3764730832810849
+        },
+        {
+          "repetition": 1,
+          "concurrency": 1,
+          "baseline_row": 5,
+          "candidate_row": 7,
+          "matched_quality": true,
+          "qps_ratio": 2.2545767746937724,
+          "p95_ratio": 0.4867134931666933
+        },
+        {
+          "repetition": 1,
+          "concurrency": 32,
+          "baseline_row": 4,
+          "candidate_row": 6,
+          "matched_quality": true,
+          "qps_ratio": 2.768219879948306,
+          "p95_ratio": 0.3595999523526176
+        },
+        {
+          "repetition": 2,
+          "concurrency": 1,
+          "baseline_row": 10,
+          "candidate_row": 8,
+          "matched_quality": true,
+          "qps_ratio": 2.2253447836505664,
+          "p95_ratio": 0.48689027472519864
+        },
+        {
+          "repetition": 2,
+          "concurrency": 32,
+          "baseline_row": 11,
+          "candidate_row": 9,
+          "matched_quality": true,
+          "qps_ratio": 2.7879405045601615,
+          "p95_ratio": 0.36447642986378126
+        },
+        {
+          "repetition": 3,
+          "concurrency": 1,
+          "baseline_row": 13,
+          "candidate_row": 15,
+          "matched_quality": true,
+          "qps_ratio": 2.2392832875283877,
+          "p95_ratio": 0.48728088151076704
+        },
+        {
+          "repetition": 3,
+          "concurrency": 32,
+          "baseline_row": 12,
+          "candidate_row": 14,
+          "matched_quality": true,
+          "qps_ratio": 2.7573589566728494,
+          "p95_ratio": 0.379686286233021
+        },
+        {
+          "repetition": 4,
+          "concurrency": 1,
+          "baseline_row": 18,
+          "candidate_row": 16,
+          "matched_quality": true,
+          "qps_ratio": 2.234024714170166,
+          "p95_ratio": 0.48844883757499785
+        },
+        {
+          "repetition": 4,
+          "concurrency": 32,
+          "baseline_row": 19,
+          "candidate_row": 17,
+          "matched_quality": true,
+          "qps_ratio": 2.818536917377729,
+          "p95_ratio": 0.38420434050338625
+        }
+      ],
+      "all_matched_quality": true,
+      "all_qps_at_least_1_15x": true,
+      "all_p95_no_regression": true
+    },
+    {
+      "pair": {
+        "name": "multi-selected-v-exhaustive",
+        "kind": "selected_exhaustive",
+        "baseline": "multi",
+        "candidate": "multi",
+        "baseline_probes": 16,
+        "candidate_probes": 5
+      },
+      "blocks": [
+        {
+          "repetition": 0,
+          "concurrency": 1,
+          "baseline_row": 2,
+          "candidate_row": 0,
+          "matched_quality": true,
+          "qps_ratio": 2.2288565487995187,
+          "p95_ratio": 0.4830253239048541
+        },
+        {
+          "repetition": 0,
+          "concurrency": 32,
+          "baseline_row": 3,
+          "candidate_row": 1,
+          "matched_quality": true,
+          "qps_ratio": 2.7900799337784314,
+          "p95_ratio": 0.36416620968301644
+        },
+        {
+          "repetition": 1,
+          "concurrency": 1,
+          "baseline_row": 5,
+          "candidate_row": 7,
+          "matched_quality": true,
+          "qps_ratio": 2.2397009031302493,
+          "p95_ratio": 0.48849421403846444
+        },
+        {
+          "repetition": 1,
+          "concurrency": 32,
+          "baseline_row": 4,
+          "candidate_row": 6,
+          "matched_quality": true,
+          "qps_ratio": 2.7717234150506163,
+          "p95_ratio": 0.36602228499612965
+        },
+        {
+          "repetition": 2,
+          "concurrency": 1,
+          "baseline_row": 10,
+          "candidate_row": 8,
+          "matched_quality": true,
+          "qps_ratio": 2.231353081149916,
+          "p95_ratio": 0.48803875751541775
+        },
+        {
+          "repetition": 2,
+          "concurrency": 32,
+          "baseline_row": 11,
+          "candidate_row": 9,
+          "matched_quality": true,
+          "qps_ratio": 2.7592932289614867,
+          "p95_ratio": 0.36964529919253386
+        },
+        {
+          "repetition": 3,
+          "concurrency": 1,
+          "baseline_row": 13,
+          "candidate_row": 15,
+          "matched_quality": true,
+          "qps_ratio": 2.234121891181467,
+          "p95_ratio": 0.483470614941304
+        },
+        {
+          "repetition": 3,
+          "concurrency": 32,
+          "baseline_row": 12,
+          "candidate_row": 14,
+          "matched_quality": true,
+          "qps_ratio": 2.700761095776939,
+          "p95_ratio": 0.37575114769971574
+        },
+        {
+          "repetition": 4,
+          "concurrency": 1,
+          "baseline_row": 18,
+          "candidate_row": 16,
+          "matched_quality": true,
+          "qps_ratio": 2.21252664159911,
+          "p95_ratio": 0.4989230123293537
+        },
+        {
+          "repetition": 4,
+          "concurrency": 32,
+          "baseline_row": 19,
+          "candidate_row": 17,
+          "matched_quality": true,
+          "qps_ratio": 2.7274061555739646,
+          "p95_ratio": 0.3727552431436254
+        }
+      ],
+      "all_matched_quality": true,
+      "all_qps_at_least_1_15x": true,
+      "all_p95_no_regression": true
+    }
+  ],
+  "projection": {
+    "original_result_sha256": "08b0aa9d8bab328c50cce96c17a90214910192b196e2dc050476dade96009b46",
+    "omitted": "report_projections only; complete authenticated original result and raw reports retained at declared LAN paths",
+    "actual_process_exit": 0,
+    "outer_performance_gate_exit": 1,
+    "qualification": "NO_GO_REQUIRED_PACKING_GATE",
+    "external_pairs_measured": 1,
+    "external_pairs_unmeasured": [
+      2,
+      3,
+      4,
+      5
+    ]
+  }
+}
